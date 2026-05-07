@@ -1,6 +1,6 @@
 # Stage 1 PR 3 — `KeyEngine` extraction — design
 
-**Status.** Round 3 (in-flight). Stage 1 PR 3 of the seven-trait
+**Status.** Round 4 closed; M3a pre-flight pending. Stage 1 PR 3 of the seven-trait
 extraction chain pinned in
 [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
 §8.1, named explicitly as PR 3 in
@@ -174,25 +174,48 @@ required adversarial review to surface.
     for the Pattern-6 disposition table. §1.1 Phase 0c prose
     grew Sub-bundle G mention. Round trajectory updated to
     mark Round 3 substantive content complete.
-- **Round 4+ (forthcoming).** Substantive Round-3 content
-  is complete; Round-4+ work focuses on the handle-model
-  emergent attack surface that Round 3 surfaced as
-  deferral candidates: A6 (handle-table memory-pressure
-  / §7.10), A7 (handle unforgeability / §7.12), handle
-  persistence across wallet restart (§7.11 four-option-space),
-  and Pattern-5 cluster (handle-table concurrency quality /
-  §7.13 with explicit timing-channel analysis). Round 4 also
-  ratifies or amends Round-3 dispositions that may surface
-  pushback (e.g., §7.11's Round-3 lean toward option (1) for
-  V3.0). Per
+- **Round 4 (closed).** Round 4 produced the migration-planning
+  artifact set rather than closing the handle-model emergent
+  surface that Round 3 deferred. Specifically: the
+  architectural-inheritance discipline anchor
+  ([`.cursor/rules/16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)),
+  the workspace surface audit
+  ([`docs/design/STAGE_1_PR_3_MIGRATION_AUDIT.md`](STAGE_1_PR_3_MIGRATION_AUDIT.md)),
+  and the operational migration plan
+  ([`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](STAGE_1_PR_3_MIGRATION_PLAN.md))
+  for the 5-PR M3a–M3e sequence the audit's findings shape,
+  plus a continuity-of-discipline coda in §3.1.2 framing the
+  migration as the same discipline already operative in
+  `rust/shekyl-oxide/` applied retroactively to wallet-side state
+  inherited from `wallet2.h::struct transfer_details`.
+
+  **What Round 4 deliberately deferred.** The handle-model
+  emergent attack surface that Round 3 surfaced as deferral
+  candidates remains open: A6 (handle-table memory-pressure /
+  §7.10), A7 (handle unforgeability / §7.12), handle persistence
+  across wallet restart (§7.11 four-option-space), and Pattern-5
+  cluster (handle-table concurrency quality / §7.13 with explicit
+  timing-channel analysis). Closing those is M3a-pre-flight work
+  per the migration plan §3.1, not Round-4 work — separating the
+  "what we're migrating and how" planning concern from the "what
+  the new shape's open questions resolve to" implementation
+  concern keeps each PR's review surface bounded.
+
+- **M3a pre-flight (forthcoming).** Per the migration plan, M3a's
+  pre-flight investigation closes §7.10–§7.13 dispositions
+  (concurrent-access shape; handle-derivation formula and its
+  coupling to §7.11's persistence disposition; memory-pressure
+  bound). The migration plan §3.1 currently defers these to
+  M3a pre-flight rather than over-specifying them; M3a's PR will
+  amend the migration plan to cite the closures. Per
   [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)'s
   4–6-rounds-before-implementation rule for crypto-critical
-  trait migrations, PR 3 cannot cut a feat branch until at
-  least Round 4's acceptance signal lands; the substrate
-  Round 3 produced (the four-pattern checklist; the
-  Trust-class A/B classification; the Pattern-7 escalation
-  rule) is forward-template content for PR 4–7 regardless of
-  Round-4+ outcomes on the handle-model emergent surface.
+  trait migrations, M3a does not cut a feat branch until the
+  pre-flight closes the deferred questions; the substrate
+  Round 3 produced (the four-pattern checklist; the Trust-class
+  A/B classification; the Pattern-7 escalation rule) is
+  forward-template content for PR 4–7 regardless of how the
+  handle-model emergent surface resolves.
 
 The long-form draft history will live ephemerally in
 `.cursor/plans/stage_1_pr_3_plan_*.plan.md`; this document is the
