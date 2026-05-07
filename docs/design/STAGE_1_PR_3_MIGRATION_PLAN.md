@@ -53,9 +53,29 @@ and refers to the umbrella work covered by `STAGE_1_PR_3_KEY_ENGINE.md`.
 > repairs, and explicitly-coordinated work that the migration plan
 > annotates as compatible.
 >
-> **Freeze duration.** Best estimate per audit §6.6: M3a–M3d land
-> within 5 working days. M3e (docs) lands the same day or next.
-> Total freeze: ~5–7 working days. Updated as PRs land.
+> **Freeze duration.** Two estimates, with contingency:
+>
+> - **Best-case: 5–7 working days.** Assumes each PR lands without
+>   review-cycle blockers, no pre-flight findings expand scope, and
+>   the M3b source-switch surfaces no unexpected refactor concerns.
+>   This is the floor of the discipline ceiling in `06-branching.mdc`'s
+>   short-lived-branch target, not a likely outcome.
+> - **Realistic: 8–12 working days.** Assumes one PR surfaces an
+>   unexpected concern during pre-flight or review (a not-uncommon
+>   experience across Stage 1 — PR 2's review cycle ran multiple
+>   weeks). Sized for the migration to absorb one substantive blocker
+>   without invalidating the freeze.
+>
+> **Per-PR contingency.** If any single PR is blocked beyond
+> 5 working days from open to merge, the migration plan re-evaluates
+> at that PR's blocker boundary: pause and assess (drop the freeze,
+> let other work proceed while the blocker is resolved) versus
+> continue (extend the freeze with a documented justification). The
+> default disposition at the threshold is pause-and-assess; continuing
+> requires explicit rationale captured in the assessment note.
+>
+> Updated as PRs land. Headline duration in this notice tracks the
+> realistic estimate; the best-case is recorded for reference.
 >
 > **Lift condition.** M3d merges (the property-activating PR);
 > M3e is doc-only and can land in parallel with the freeze lift.
@@ -510,7 +530,25 @@ can land any time between M3a and M3d without blocking the path.
 See top-of-document FREEZE NOTICE. Restated for completeness:
 
 - **Window.** M3a opens → M3d merges. (M3e is exempt; doc-only.)
-- **Estimated duration.** 5–7 working days per audit §6.
+- **Estimated duration.**
+  - Best-case: 5–7 working days. Floor of the
+    `06-branching.mdc` short-lived-branch ceiling, conditional on
+    no PR surfacing an unexpected blocker.
+  - Realistic: 8–12 working days. Sized to absorb one substantive
+    blocker (review-cycle questions, pre-flight scope expansion, or
+    refactor surprises during M3b's source-switch) without
+    invalidating the freeze. Stage 1 PR 2 ran multiple weeks; the
+    realistic estimate reflects that experience.
+  - Headline tracking: this section and the FREEZE NOTICE track
+    the realistic estimate. Best-case is recorded for reference and
+    used to evaluate progress, not as the planning baseline.
+- **Per-PR contingency.** If any single PR is blocked beyond
+  5 working days from open to merge, re-evaluate at that boundary:
+  pause-and-assess (drop the freeze; allow `dev` to proceed while the
+  blocker is resolved) is the default; continuing requires explicit
+  rationale recorded in the assessment note. The pause-and-assess
+  default reflects that a blocked migration PR holding up `dev` has
+  worse compounding cost than a temporary freeze lift.
 - **Lift condition.** M3d merges to `dev`.
 - **Exemptions.** Critical security fixes; CI infrastructure repairs.
 - **Authoring discipline.** Per `06-branching.mdc`, no contributor

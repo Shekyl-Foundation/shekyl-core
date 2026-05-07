@@ -256,12 +256,23 @@ tables.
 5. **M3e scope is documentation-only** (design-doc realignment plus
    `CHANGELOG.md` per `91-documentation-after-plans.mdc`).
 
-6. **`dev` branch freeze duration.** M3a–M3d are short; with the
-   audit confirming bounded scope, freeze duration estimates from
-   earlier rounds (multi-week) should be revisited. Best estimate now:
-   M3a–M3d land within the 5-working-day target of `06-branching.mdc`'s
-   short-lived-branch discipline if sequenced without cross-PR
-   coordination overhead.
+6. **`dev` branch freeze duration.** M3a–M3d are individually
+   short, and the audit's bounded-scope finding rules out the
+   multi-week estimates from earlier design rounds. The migration
+   plan §5.1 carries the operational framing; for reference, the
+   audit's estimates feeding it are:
+   - **Best-case: 5–7 working days.** M3a–M3d land within the
+     `06-branching.mdc` short-lived-branch target, conditional on
+     no PR surfacing an unexpected blocker during pre-flight or
+     review.
+   - **Realistic: 8–12 working days.** Absorbs one substantive
+     blocker. Stage 1 PR 2's multi-week review cycle is the
+     baseline experience this estimate reflects.
+   The 5-working-day target of `06-branching.mdc` is a discipline
+   ceiling per individual PR, not a likely aggregate timeline for a
+   multi-PR sequence. Treating it as the headline freeze duration
+   compresses what's realistic; the migration plan's framing avoids
+   that compression.
 
 7. **Forward-template content for PR 4–7.** "Audit secret-field
    write/read symmetry before assuming migration cost" is a reusable
