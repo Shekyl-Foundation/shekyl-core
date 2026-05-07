@@ -2949,7 +2949,8 @@ synchronous entry points to retain.
 ### 6.1 Trait declaration
 
 Per §4 above. `pub(crate) trait KeyEngine: Send + Sync + 'static`
-with five methods. Declared in
+with four methods (`account_public_address`, `derive_subaddress`,
+`try_claim_output`, `sign_transaction`). Declared in
 `rust/shekyl-engine-core/src/engine/traits/key.rs`; re-exported from
 `traits/mod.rs`; consumed via `K: KeyEngine` bound.
 
