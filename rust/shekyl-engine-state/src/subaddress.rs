@@ -11,9 +11,20 @@
 //! account level". The primary address is `SubaddressIndex(0)`; user-derived
 //! subaddresses run `1..u32::MAX`. The `0` value is **not** reserved on this
 //! type — primary and derived addresses both come from the same derivation
-//! function (see `shekyl_scanner::view_pair::ViewPair::subaddress_derivation`)
-//! to avoid a special-case code path. Callers that want to test "this is the
-//! primary address" use `idx.get() == 0`.
+//! function (see
+//! [`shekyl_crypto_pq::subaddress::subaddress_derivation_scalar`]) to avoid a
+//! special-case code path. Callers that want to test "this is the primary
+//! address" use `idx.get() == 0`.
+//!
+//! ## Canonical-bytes accessor
+//!
+//! [`SubaddressIndex::to_canonical_bytes`] returns the 4-byte little-endian
+//! encoding consumed by Shekyl's classical Edwards-curve subaddress
+//! derivation. Per rule 18 (`.cursor/rules/18-type-placement.mdc`),
+//! state-shaped types whose serialization is cryptographically load-bearing
+//! carry a single canonical-bytes accessor at the type definition;
+//! cryptographic functions take pre-converted bytes rather than depending on
+//! the wallet-state owner.
 //!
 //! ## Wire shape
 //!
@@ -67,6 +78,17 @@ impl SubaddressIndex {
     /// `idx.get() == 0`.
     pub const fn is_primary(&self) -> bool {
         self.0 == 0
+    }
+
+    /// 4-byte little-endian canonical encoding for cryptographic input.
+    ///
+    /// This encoding is the contract that Shekyl's classical Edwards-curve
+    /// subaddress derivation in `shekyl-crypto-pq` relies on; changing it
+    /// would invalidate every previously-derived subaddress key. Per rule 18,
+    /// the byte-layout discipline lives here (one place); cryptographic
+    /// functions take pre-converted bytes rather than the typed index.
+    pub const fn to_canonical_bytes(&self) -> [u8; 4] {
+        self.0.to_le_bytes()
     }
 }
 
@@ -138,5 +160,19 @@ mod tests {
         assert_eq!(idx.get(), 7);
         let raw: u32 = idx.into();
         assert_eq!(raw, 7);
+    }
+
+    #[test]
+    fn canonical_bytes_is_le_u32() {
+        assert_eq!(SubaddressIndex::PRIMARY.to_canonical_bytes(), [0, 0, 0, 0]);
+        assert_eq!(SubaddressIndex::new(1).to_canonical_bytes(), [1, 0, 0, 0]);
+        assert_eq!(
+            SubaddressIndex::new(0x0403_0201).to_canonical_bytes(),
+            [1, 2, 3, 4]
+        );
+        assert_eq!(
+            SubaddressIndex::new(u32::MAX).to_canonical_bytes(),
+            [0xff, 0xff, 0xff, 0xff]
+        );
     }
 }

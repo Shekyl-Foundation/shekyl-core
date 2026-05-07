@@ -12,7 +12,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, EdwardsPoint, Scalar};
 
-use shekyl_oxide::primitives::keccak256_to_scalar;
+use shekyl_crypto_pq::subaddress as crypto_subaddress;
 
 use crate::SubaddressIndex;
 
@@ -84,42 +84,18 @@ impl ViewPair {
         &self.ml_kem_dk
     }
 
-    /// Subaddress key-derivation scalar `m_i`.
+    /// Public `(spend, view)` point pair for a subaddress.
     ///
-    /// **Genesis-locked.** Defined as
-    ///
-    /// ```text
-    /// m_i = keccak256_to_scalar( "shekyl-subaddr-v1\0" || view_scalar_le32 || idx_le32 )
-    /// ```
-    ///
-    /// where `view_scalar_le32` is the 32-byte little-endian canonical
-    /// encoding of the private view scalar, and `idx_le32` is the
-    /// 32-bit little-endian encoding of the flat subaddress index.
-    /// Applied symmetrically for every index, including the primary
-    /// (`idx == 0`); there is no special-case primary derivation,
-    /// matching the flat-namespace decision (see
-    /// `docs/V3_WALLET_DECISION_LOG.md`, "Subaddress hierarchy").
-    ///
-    /// The domain-separation tag is the project-consistent
-    /// `b"shekyl-…"` prefix used throughout `shekyl-oxide`; the `-v1`
-    /// suffix is reserved for a future post-genesis derivation change
-    /// (gated on a hard fork) and is not a backward-compat dial.
-    pub(crate) fn subaddress_derivation(&self, index: SubaddressIndex) -> Scalar {
-        keccak256_to_scalar(Zeroizing::new(
-            [
-                b"shekyl-subaddr-v1\0".as_slice(),
-                Zeroizing::new(self.view.to_bytes()).as_slice(),
-                &index.get().to_le_bytes(),
-            ]
-            .concat(),
-        ))
-    }
-
+    /// Thin call-through to
+    /// [`shekyl_crypto_pq::subaddress::subaddress_keys`], the canonical home
+    /// for Shekyl's classical Edwards-curve subaddress derivation per
+    /// `STAGE_1_PR_3_KEY_ENGINE.md` Commit 4a. The cryptographic spec
+    /// (genesis-locked domain tag, scalar/index encoding) lives with the
+    /// primitive; this method only adapts the typed [`SubaddressIndex`]
+    /// argument to the canonical-bytes shape via
+    /// [`SubaddressIndex::to_canonical_bytes`].
     pub(crate) fn subaddress_keys(&self, index: SubaddressIndex) -> (EdwardsPoint, EdwardsPoint) {
-        let scalar = self.subaddress_derivation(index);
-        let spend = self.spend + (&scalar * ED25519_BASEPOINT_TABLE);
-        let view = self.view.deref() * spend;
-        (spend, view)
+        crypto_subaddress::subaddress_keys(&self.view, &self.spend, &index.to_canonical_bytes())
     }
 }
 

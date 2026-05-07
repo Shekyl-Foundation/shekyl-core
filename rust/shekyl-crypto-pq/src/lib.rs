@@ -60,6 +60,7 @@ pub mod multisig;
 pub mod multisig_receiving;
 pub mod output;
 pub mod signature;
+pub mod subaddress;
 pub mod wallet_envelope;
 pub mod wallet_state;
 

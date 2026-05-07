@@ -2912,6 +2912,7 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-fcmp",
  "shekyl-generators",
+ "shekyl-primitives",
  "thiserror",
  "x25519-dalek",
  "zeroize",

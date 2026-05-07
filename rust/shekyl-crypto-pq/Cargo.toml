@@ -64,6 +64,16 @@ argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+# `keccak256_to_scalar` for the classical Edwards-curve component of Shekyl
+# subaddress derivation (`crate::subaddress`), relocated from `shekyl-scanner`
+# per `STAGE_1_PR_3_KEY_ENGINE.md` Commit 4a so the path from KeyEngine trait
+# surface to the cryptographic primitive is stateless end-to-end (no
+# intermediate `ViewPair` state-bearing object). The derivation is
+# Shekyl-genesis-locked; the structural similarity to upstream Monero's
+# subaddress derivation is intentional but is not a Monero-compatibility
+# shim — see `crate::subaddress`'s "Distinction from classical-Monero"
+# section and `60-no-monero-legacy.mdc`.
+shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
 # Typed wallet-state JSON ser/des (WALLET_FILE_FORMAT_V1 region 2). Versioned
 # by `state_schema_version`; mismatched version refuses to load, never silently
 # migrates. JSON field names are the wire format; see wallet_state.rs.
