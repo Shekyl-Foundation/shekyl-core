@@ -9,12 +9,30 @@
 //! `(account, address)` two-level hierarchy as in wallet2 — see
 //! `docs/V3_WALLET_DECISION_LOG.md` entry "Subaddress hierarchy: flat, no
 //! account level". The primary address is `SubaddressIndex(0)`; user-derived
-//! subaddresses run `1..u32::MAX`. The `0` value is **not** reserved on this
-//! type — primary and derived addresses both come from the same derivation
-//! function (see
-//! [`shekyl_crypto_pq::subaddress::subaddress_derivation_scalar`]) to avoid a
-//! special-case code path. Callers that want to test "this is the primary
-//! address" use `idx.get() == 0`.
+//! subaddresses run `1..u32::MAX`.
+//!
+//! ## Primary special case
+//!
+//! `PRIMARY` (`SubaddressIndex(0)`) names the wallet's *base* address —
+//! the keys packed into `AllKeysBlob::classical_address_bytes` directly
+//! by [`shekyl_crypto_pq::account::rederive_account`] (`version || spend_pk
+//! || view_pk`, where `spend_pk = D` and `view_pk = a*G`). This is the
+//! address all senders see when paying "the wallet" without selecting a
+//! subaddress.
+//!
+//! For `idx >= 1`, the per-index derivation
+//! [`shekyl_crypto_pq::subaddress::subaddress_keys`] produces a derived
+//! spend key `D + m_i * G` (where `m_i` is the per-subaddress scalar
+//! from [`shekyl_crypto_pq::subaddress::subaddress_derivation_scalar`]).
+//! That derivation is mathematically defined for `idx == 0` as well, but
+//! the resulting `D + m_0 * G` is a **different point** from the wallet's
+//! base spend key `D` and is **not** what the encoded primary address
+//! refers to. `KeyEngine` implementors special-case `idx.is_primary()`
+//! and return the base account keys; cryptographic call sites that take
+//! `idx.to_canonical_bytes()` directly (e.g., per-subaddress KEM-keypair
+//! derivation, which is wallet-keyed and per-index) treat `idx == 0` as
+//! a regular index. Callers that want to test "this is the primary
+//! address" use [`Self::is_primary`].
 //!
 //! ## Canonical-bytes accessor
 //!

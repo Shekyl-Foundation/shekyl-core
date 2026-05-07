@@ -140,14 +140,18 @@ struct LocalKeysState {
     /// compressed Ed25519 point bytes) → [`SubaddressIndex`] that
     /// produces it.
     ///
-    /// Pre-populated at construction with the primary subaddress
-    /// (`SubaddressIndex::PRIMARY` ↔ `AllKeysBlob::spend_pk`).
-    /// `KeyEngine::derive_subaddress` calls insert additional entries
-    /// lazily as the orchestrator derives them; outputs to
-    /// not-yet-derived subaddresses surface as `OutputClaimResult::NotMine`
-    /// (the wallet's contract is "claim outputs to subaddresses you've
-    /// derived"; a not-yet-derived subaddress is, by construction, not
-    /// expected to receive outputs).
+    /// Pre-populated at construction with the primary address
+    /// (`SubaddressIndex::PRIMARY` ↔ `AllKeysBlob::spend_pk` —
+    /// the bare account spend key `D`, matching what
+    /// `account.rs::rederive_account` packs into
+    /// `classical_address_bytes`). For `idx >= 1`,
+    /// `KeyEngine::derive_subaddress` inserts additional entries
+    /// lazily as the orchestrator derives them via the per-index
+    /// derivation `D + m_i * G`; outputs to not-yet-derived
+    /// subaddresses surface as `OutputClaimResult::NotMine`
+    /// (the wallet's contract is "claim outputs to subaddresses
+    /// you've derived"; a not-yet-derived subaddress is, by
+    /// construction, not expected to receive outputs).
     subaddress_registry: HashMap<[u8; 32], SubaddressIndex>,
 }
 
@@ -278,13 +282,31 @@ impl KeyEngine for LocalKeys {
     ) -> Result<SubaddressFor, Self::Error> {
         match purpose {
             SubaddressPurpose::Audit => {
-                let (spend_point, view_point) = subaddress_keys(
-                    &self.derived.view_scalar,
-                    &self.derived.spend_public,
-                    &idx.to_canonical_bytes(),
-                );
-                let spend_pk = spend_point.compress().to_bytes();
-                let view_pk = view_point.compress().to_bytes();
+                // PRIMARY is the wallet's base address — the encoded
+                // `classical_address_bytes` packs `version || spend_pk || view_pk`
+                // directly from `AllKeysBlob`'s base keys (per
+                // `shekyl_crypto_pq::account::rederive_account`), and the
+                // reverse-lookup registry pre-registers `keys.spend_pk` against
+                // `SubaddressIndex::PRIMARY` at construction. Returning the base
+                // account keys here keeps `derive_subaddress(PRIMARY, _)`
+                // consistent with both the encoded address and the registry;
+                // routing PRIMARY through `subaddress_keys` would compute
+                // `D + m_0*G`, a different point that does not match either.
+                //
+                // Subaddresses for `idx >= 1` follow the per-index derivation.
+                let (spend_pk, view_pk) = if idx.is_primary() {
+                    (self.keys.spend_pk, self.keys.view_pk)
+                } else {
+                    let (spend_point, view_point) = subaddress_keys(
+                        &self.derived.view_scalar,
+                        &self.derived.spend_public,
+                        &idx.to_canonical_bytes(),
+                    );
+                    (
+                        spend_point.compress().to_bytes(),
+                        view_point.compress().to_bytes(),
+                    )
+                };
 
                 self.state
                     .write()
@@ -494,6 +516,56 @@ mod tests {
         // less likely).
         assert_ne!(pair.spend_pk, [0u8; 32]);
         assert_ne!(pair.view_pk, [0u8; 32]);
+    }
+
+    /// `derive_subaddress(PRIMARY, Audit)` returns the wallet's base
+    /// account keys — the same `(spend_pk, view_pk)` packed into
+    /// `AllKeysBlob::classical_address_bytes`. Without the
+    /// `is_primary()` special-case in
+    /// [`LocalKeys::derive_subaddress`], the routing through
+    /// `subaddress_keys` would compute `(D + m_0*G, a*(D + m_0*G))`,
+    /// which is not what the encoded primary address refers to and not
+    /// what the reverse-lookup registry holds against
+    /// `SubaddressIndex::PRIMARY`. This test pins the contract.
+    #[test]
+    fn derive_subaddress_primary_audit_returns_base_account_keys() {
+        let keys = LocalKeys::from_test_seed(TEST_SEED);
+
+        let base_spend_pk = keys.keys.spend_pk;
+        let base_view_pk = keys.keys.view_pk;
+
+        // The bare-account spend key matches the encoded primary address.
+        let encoded = &keys.account_public_address.classical_address_bytes;
+        assert_eq!(&encoded[1..33], &base_spend_pk[..]);
+        assert_eq!(&encoded[33..65], &base_view_pk[..]);
+
+        let SubaddressFor::Audit(pair) = keys
+            .derive_subaddress(SubaddressIndex::PRIMARY, SubaddressPurpose::Audit)
+            .expect("audit derivation is real-impl for PRIMARY")
+        else {
+            panic!("audit purpose must return SubaddressFor::Audit");
+        };
+        assert_eq!(
+            pair.spend_pk, base_spend_pk,
+            "PRIMARY's spend_pk must match the wallet's base spend key D"
+        );
+        assert_eq!(
+            pair.view_pk, base_view_pk,
+            "PRIMARY's view_pk must match the wallet's base view key a*G"
+        );
+
+        // And it must differ from the per-index derivation `D + m_0*G`
+        // — confirming the special-case is load-bearing.
+        let (derived_spend_point, _) = subaddress_keys(
+            &keys.derived.view_scalar,
+            &keys.derived.spend_public,
+            &SubaddressIndex::PRIMARY.to_canonical_bytes(),
+        );
+        let derived_spend_pk = derived_spend_point.compress().to_bytes();
+        assert_ne!(
+            pair.spend_pk, derived_spend_pk,
+            "PRIMARY's audit keys must NOT match the idx=0 per-index derivation"
+        );
     }
 
     #[test]

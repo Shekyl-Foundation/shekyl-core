@@ -64,14 +64,27 @@
 //! where `view_scalar_le32` is the 32-byte little-endian canonical encoding
 //! of the private view scalar, and `idx_le32` is the 4-byte little-endian
 //! encoding of the flat subaddress index (per
-//! `shekyl_engine_state::SubaddressIndex::to_canonical_bytes`). The
-//! derivation is symmetric across every index, including the primary
-//! (`idx == 0`) — see `docs/V3_WALLET_DECISION_LOG.md`, "Subaddress
-//! hierarchy".
+//! `shekyl_engine_state::SubaddressIndex::to_canonical_bytes`). The math is
+//! defined for every index — see `docs/V3_WALLET_DECISION_LOG.md`,
+//! "Subaddress hierarchy".
 //!
 //! The `-v1` domain-separation suffix is reserved for a future post-genesis
 //! derivation change gated on a hard fork; it is not a backward-compatibility
 //! dial.
+//!
+//! ## Primary address is not the `idx == 0` derivation
+//!
+//! Despite the math being defined for `idx == 0`, the wallet's primary
+//! address is the **bare account keys** `(D, a*G)`, not the `idx == 0`
+//! derivation `(D + m_0*G, a*(D + m_0*G))`. Senders paying "the wallet"
+//! target the base spend key `D` packed into
+//! `AllKeysBlob::classical_address_bytes` by [`crate::account::rederive_account`].
+//! `KeyEngine::derive_subaddress` enforces this contract by special-casing
+//! `SubaddressIndex::PRIMARY` and returning the base account keys directly;
+//! `subaddress_keys` is the per-index derivation primitive for `idx >= 1`.
+//! See [`subaddress_keys`]'s "The primary address is *not* this derivation"
+//! section and `shekyl_engine_state::SubaddressIndex`'s "Primary special
+//! case" section for the cross-cutting rationale.
 
 use core::ops::Deref;
 
@@ -111,15 +124,31 @@ pub fn subaddress_derivation_scalar(view_scalar: &Scalar, idx_le_bytes: &[u8; 4]
 ///
 /// Returns
 ///
-/// * `spend = D + m_i * G` where `D` is the wallet's primary public spend
+/// * `spend = D + m_i * G` where `D` is the wallet's base public spend
 ///   point and `m_i` is the per-subaddress scalar from
 ///   [`subaddress_derivation_scalar`], and
 /// * `view = a * spend` where `a` is the wallet's private view scalar.
 ///
-/// The primary address (`idx == 0`) follows the same derivation: `m_0` is
-/// non-zero and the resulting `spend` differs from the bare `D` — this is
-/// the flat-namespace decision (see `docs/V3_WALLET_DECISION_LOG.md`,
-/// "Subaddress hierarchy").
+/// # The primary address is *not* this derivation
+///
+/// Calling this function with `idx_le_bytes = [0u8; 4]` is mathematically
+/// well-defined and produces `(D + m_0 * G, a * (D + m_0 * G))` — but
+/// **this is not the wallet's primary address.** The encoded primary
+/// address (per [`crate::account::rederive_account`]) carries the bare
+/// account keys `(D, a*G)`; senders paying "the wallet" target `D`.
+///
+/// `KeyEngine` implementors enforce this contract by special-casing
+/// `SubaddressIndex::PRIMARY` and returning the base account keys
+/// directly; this function is the per-index derivation primitive for
+/// `idx >= 1`. Cryptographic call sites that operate on the
+/// canonical-bytes form of the index (e.g., per-subaddress KEM-keypair
+/// derivation, where every index is wallet-keyed and the value at
+/// `idx == 0` is a distinct keypair from `idx == 1`) treat `idx == 0`
+/// as a regular index — that is correct for *those* derivations
+/// because they do not collapse into the bare account keys.
+///
+/// See `shekyl_engine_state::SubaddressIndex`'s "Primary special case"
+/// section for the cross-cutting rationale.
 pub fn subaddress_keys(
     view_scalar: &Zeroizing<Scalar>,
     spend_public: &EdwardsPoint,
