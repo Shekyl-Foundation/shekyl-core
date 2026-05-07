@@ -35,7 +35,14 @@ blake2 = "0.10"
 # so we keep the feature set minimal.
 bip39 = { version = "2.2.2", default-features = false, features = ["std"] }
 shekyl-address = { path = "../shekyl-address" }
-sha3 = "0.10"
+# `zeroize` feature activates `Sha3State: ZeroizeOnDrop` (sha3 0.10.9+)
+# so the cSHAKE / SHA-3 sponge state is wiped on drop. Required by the
+# `derive_output_handle` cSHAKE256 invocation per
+# `STAGE_1_PR_3_KEY_ENGINE.md` §7.12 and `35-secure-memory.mdc`'s
+# structural-memwipe rule. The Zeroize impl lives on sha3's private
+# `Sha3State`; wipe-on-drop reaches public types (`CShake256`, etc.)
+# via Drop-glue cascade through their `Sha3State` field.
+sha3 = { version = "0.10", features = ["zeroize"] }
 # Wallet-file envelope (WALLET_FILE_FORMAT_V1).
 #
 # Argon2id is the OWASP 2024 recommended password-stretching primitive; we
