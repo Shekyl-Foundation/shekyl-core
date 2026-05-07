@@ -330,7 +330,15 @@ pub(crate) struct SubaddressKeyPair {
 /// M3b's deterministic-handle pathway replaces this field with
 /// `source_ciphertext: HybridCiphertext` and derives the bundle
 /// internally inside the implementor.
-#[derive(Debug)]
+///
+/// # `Debug` is redacted
+///
+/// `Debug` is implemented manually (not derived) because
+/// [`Self::source_secrets`] carries `Zeroizing<…>` fields whose
+/// `Debug` impl prints the raw secret bytes. Per
+/// `35-secure-memory.mdc`, secret-bearing types must redact in
+/// `Debug` output; `SourceSecretsBundle`'s manual impl does the
+/// per-field redaction and this type's manual impl delegates to it.
 #[non_exhaustive]
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct TxInputSigningContext {
@@ -346,6 +354,19 @@ pub(crate) struct TxInputSigningContext {
     ///
     /// [`TransferDetails`]: shekyl_engine_state::TransferDetails
     pub source_secrets: SourceSecretsBundle,
+}
+
+// CLIPPY: omitted fields would require redacting transitively; the manual
+// impl below redacts via `source_secrets`'s own redacted Debug, and prints
+// the non-secret `handle` directly.
+#[allow(clippy::missing_fields_in_debug)]
+impl std::fmt::Debug for TxInputSigningContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TxInputSigningContext")
+            .field("handle", &self.handle)
+            .field("source_secrets", &self.source_secrets)
+            .finish()
+    }
 }
 
 /// Transitional secrets bundle for the M3a `sign_transaction` bridge.
@@ -389,9 +410,17 @@ pub(crate) struct TxInputSigningContext {
 /// [`TxToSign`] message shapes, not in this bundle — they are not
 /// secrets.
 ///
+/// # `Debug` is redacted
+///
+/// Every field except [`Self::output_index`] is secret. `Debug` is
+/// implemented manually (not derived) because
+/// `Zeroizing<T>: Debug` delegates to `T: Debug`, which would print
+/// raw secret bytes. Per `35-secure-memory.mdc`, secret-bearing
+/// types redact `Debug` output rather than risk leaking via traces,
+/// panic messages, or `dbg!()` calls.
+///
 /// [`TransferDetails`]: shekyl_engine_state::TransferDetails
 /// [`shekyl_tx_builder::sign_transaction`]: shekyl_tx_builder::sign_transaction
-#[derive(Debug)]
 #[non_exhaustive]
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct SourceSecretsBundle {
@@ -411,6 +440,21 @@ pub(crate) struct SourceSecretsBundle {
     /// Output index within the containing transaction. Binds the PQC
     /// key derivation to a specific output position.
     pub output_index: u64,
+}
+
+// CLIPPY: secret-bearing fields are intentionally redacted; `output_index`
+// is the only non-secret field and is printed verbatim.
+#[allow(clippy::missing_fields_in_debug)]
+impl std::fmt::Debug for SourceSecretsBundle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceSecretsBundle")
+            .field("spend_key_x", &"[REDACTED]")
+            .field("spend_key_y", &"[REDACTED]")
+            .field("commitment_mask", &"[REDACTED]")
+            .field("combined_ss", &"[REDACTED]")
+            .field("output_index", &self.output_index)
+            .finish()
+    }
 }
 
 /// Input to [`KeyEngine::sign_transaction`].
@@ -693,4 +737,103 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
         &self,
         tx: &TxToSign,
     ) -> impl std::future::Future<Output = Result<TxSignatures, Self::Error>> + Send;
+}
+
+#[cfg(test)]
+mod tests {
+    //! Redaction tests for the secret-bearing message shapes.
+    //!
+    //! Per `35-secure-memory.mdc`, secret-bearing types must redact
+    //! `Debug` output to prevent secret material from leaking through
+    //! traces, panic messages, or `dbg!()` calls. `Zeroizing<T>: Debug`
+    //! delegates to `T: Debug`, so deriving `Debug` on a struct that
+    //! holds a `Zeroizing<[u8; N]>` field would print the raw secret
+    //! bytes — exactly the failure mode these tests guard against.
+    //!
+    //! Each secret field is filled with a distinct sentinel byte; the
+    //! rendered string is expected to redact the field entirely. The
+    //! `Zeroizing<…>`-derived `Debug` would render bytes either as
+    //! `[171, 171, …]` (decimal) or as the slice's `Debug` form, both
+    //! of which contain the decimal repr of the sentinel byte. We
+    //! assert the decimal repr does not appear.
+    //!
+    //! Hex reprs (`ab`/`AB`) are deliberately not asserted against —
+    //! `OutputHandle`'s own truncated `Debug` impl emits the first
+    //! two bytes of its (deterministically-derived but non-secret)
+    //! handle as hex, which can collide with sentinel hex by chance.
+    //! Decimal-repr assertion is sufficient to catch the failure
+    //! mode the rule names.
+    use super::*;
+    use shekyl_crypto_pq::handle::derive_output_handle;
+
+    /// Sentinel bytes chosen so their decimal reprs (171, 205, 239)
+    /// are 3-digit numbers unlikely to collide with field metadata
+    /// (`output_index: 7`, struct names, formatter punctuation).
+    const SENTINEL_X: u8 = 0xAB; // 171
+    const SENTINEL_Y: u8 = 0xCD; // 205
+    const SENTINEL_MASK: u8 = 0xEF; // 239
+    const SENTINEL_SS: u8 = 0xBC; // 188
+
+    fn sentinel_bundle() -> SourceSecretsBundle {
+        SourceSecretsBundle {
+            spend_key_x: Zeroizing::new([SENTINEL_X; 32]),
+            spend_key_y: Zeroizing::new([SENTINEL_Y; 32]),
+            commitment_mask: Zeroizing::new([SENTINEL_MASK; 32]),
+            combined_ss: Zeroizing::new(vec![SENTINEL_SS; 64]),
+            output_index: 7,
+        }
+    }
+
+    fn sentinel_handle() -> shekyl_crypto_pq::handle::OutputHandle {
+        derive_output_handle(&[0u8; 32], &[0u8; 32], 0)
+    }
+
+    fn assert_no_decimal_leak_of_byte(rendered: &str, byte: u8) {
+        let dec = format!("{byte}");
+        assert!(
+            !rendered.contains(&dec),
+            "secret-byte sentinel 0x{byte:02x} (decimal {dec}) must not appear in: {rendered}"
+        );
+    }
+
+    fn assert_all_sentinels_redacted(rendered: &str) {
+        assert_no_decimal_leak_of_byte(rendered, SENTINEL_X);
+        assert_no_decimal_leak_of_byte(rendered, SENTINEL_Y);
+        assert_no_decimal_leak_of_byte(rendered, SENTINEL_MASK);
+        assert_no_decimal_leak_of_byte(rendered, SENTINEL_SS);
+    }
+
+    #[test]
+    fn source_secrets_bundle_debug_redacts_every_secret_field() {
+        let rendered = format!("{:?}", sentinel_bundle());
+        assert!(rendered.contains("[REDACTED]"), "rendered = {rendered}");
+        assert!(rendered.contains("output_index: 7"));
+        assert_all_sentinels_redacted(&rendered);
+    }
+
+    #[test]
+    fn tx_input_signing_context_debug_redacts_via_source_secrets() {
+        let ctx = TxInputSigningContext {
+            handle: sentinel_handle(),
+            source_secrets: sentinel_bundle(),
+        };
+        let rendered = format!("{ctx:?}");
+        assert!(rendered.contains("[REDACTED]"), "rendered = {rendered}");
+        assert_all_sentinels_redacted(&rendered);
+    }
+
+    #[test]
+    fn tx_to_sign_debug_redacts_via_inputs() {
+        let tx = TxToSign {
+            inputs: vec![TxInputSigningContext {
+                handle: sentinel_handle(),
+                source_secrets: sentinel_bundle(),
+            }],
+            outputs: vec![],
+            fcmp_plus_plus_context: FcmpPlusPlusContext {},
+        };
+        let rendered = format!("{tx:?}");
+        assert!(rendered.contains("[REDACTED]"), "rendered = {rendered}");
+        assert_all_sentinels_redacted(&rendered);
+    }
 }
