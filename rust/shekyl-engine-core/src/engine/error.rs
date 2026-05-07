@@ -387,6 +387,30 @@ pub enum KeyError {
     },
 }
 
+// --- KeyEngine runtime ops -------------------------------------------------
+
+/// Failures during runtime
+/// [`KeyEngine`](super::traits::key::KeyEngine) operations (signing,
+/// hybrid decapsulation, ECDH, subaddress derivation). Distinct from
+/// [`KeyError`], which scopes wallet-open / derivation failures.
+///
+/// Cross-trait coordination failures (e.g., concurrent key rotation
+/// invalidating an in-progress signing attempt) do **not** appear
+/// here per the §3.2 negative-space framing in
+/// `docs/design/STAGE_1_PR_3_KEY_ENGINE.md` — they accumulate on a
+/// future cross-trait error type when concrete triggers materialize.
+///
+/// # Empty starter shape
+///
+/// Variants accrete from the implementor's actual failure modes
+/// during M3a Commit 4's `LocalKeys` work. Per §7.2 of
+/// `STAGE_1_PR_3_KEY_ENGINE.md`, this mirrors PR 2's `LedgerError`
+/// introduction: variants land at implementation time, not
+/// speculatively in the spec round.
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum KeyEngineError {}
+
 // --- IO --------------------------------------------------------------------
 
 /// Failures at the wallet's IO boundary: filesystem, daemon RPC,

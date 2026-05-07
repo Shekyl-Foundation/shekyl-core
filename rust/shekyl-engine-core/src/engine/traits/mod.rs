@@ -29,14 +29,24 @@
 //! cancellation classification per §3.4.3 and the §1.6 documentation
 //! discipline — that are easier to apply uniformly when the surfaces
 //! are colocated. Per-trait files under `engine/traits/` keep each
-//! surface independently reviewable while the colocation lets §6.1
-//! `Mock*` test-support implementors find their contract in one place.
+//! surface independently reviewable while the colocation lets each
+//! trait's contract sit alongside its siblings rather than scattered
+//! across implementor crates.
+//!
+//! Per the §6.4 no-Mock test-substrate decision, the trait
+//! implementors used in tests are the production types
+//! (`LocalLedger`, `LocalKeys`, etc.) configured through their
+//! `from_test_seed` / fixture constructors — **not** generated
+//! `Mock*` shims. The surfaces colocate to make the shared trait
+//! contract one read away from each test, not to support a
+//! `Mock*`-based test substrate.
 //!
 //! [`Engine<S>`]: super::Engine
 //! [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`]: ../../../../../docs/V3_ENGINE_TRAIT_BOUNDARIES.md
 //! [`docs/FOLLOWUPS.md`]: ../../../../../docs/FOLLOWUPS.md
 
 pub(crate) mod daemon;
+pub(crate) mod key;
 pub(crate) mod ledger;
 
 pub(crate) use daemon::{DaemonEngine, FeeEstimates, TxSubmitOutcome};

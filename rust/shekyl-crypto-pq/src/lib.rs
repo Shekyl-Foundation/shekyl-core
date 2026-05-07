@@ -53,6 +53,7 @@ pub mod derivation;
 pub mod error;
 pub mod handle;
 pub mod kem;
+pub mod key_image;
 pub mod keys;
 pub mod montgomery;
 pub mod multisig;
