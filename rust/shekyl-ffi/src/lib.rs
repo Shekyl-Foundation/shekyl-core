@@ -1502,14 +1502,14 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
         tree_depth,
     };
 
-    let mut key_images = Vec::with_capacity(ki_count);
+    let mut key_images: Vec<shekyl_fcmp::proof::KeyImage> = Vec::with_capacity(ki_count);
     let mut pseudo_outs = Vec::with_capacity(po_count);
     let mut pqc_hashes = Vec::with_capacity(pqc_hash_count);
 
     for i in 0..ki_count {
         let mut ki = [0u8; 32];
         ki.copy_from_slice(&ki_bytes[i * 32..(i + 1) * 32]);
-        key_images.push(ki);
+        key_images.push(shekyl_fcmp::proof::KeyImage::from_canonical_bytes(ki));
 
         let mut po = [0u8; 32];
         po.copy_from_slice(&po_bytes[i * 32..(i + 1) * 32]);
