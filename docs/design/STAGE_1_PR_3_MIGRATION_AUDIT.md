@@ -299,38 +299,53 @@ tables.
    wholesale; if that premise changes, the audit must be re-run.
 
 3. **Provenance of the secret-carrying pattern: the C++ `wallet2`
-   struct, not `monero-oxide`.** Earlier audit drafts asserted the
-   pattern was inherited from `monero-oxide`'s `transfer_details`.
-   A concrete spot-check against the fork at
-   `monero-oxide/shekyl-oxide/wallet/src/output.rs:91–95` shows the
-   `monero-oxide` analogue (`pub(crate) struct OutputData`) carries
-   only `key: EdwardsPoint`, `key_offset: Scalar`, and
-   `commitment: Commitment` — no HKDF-derived per-output secrets,
-   no combined-shared-secret. Intermediate scan-time secrets are
-   derived and discarded; only the final spend-relevant scalar is
-   persisted.
+   struct, with no Rust intermediary in the workspace.** An earlier
+   audit draft asserted that a "spot-check against `monero-oxide`'s
+   `transfer_details`" showed an alternative Rust pattern available
+   to the workspace as precedent. That framing is incorrect and is
+   retracted.
 
-   The pattern Shekyl's Rust `TransferDetails` exhibits is inherited
-   from the C++ `wallet2` struct, not from `monero-oxide`.
-   Specifically, `src/wallet/wallet2.h:327–453` defines
-   `struct transfer_details` carrying `m_mask` (Pedersen commitment
-   mask), `m_y` (HKDF-derived T-component scalar), `m_k_amount`
-   (HKDF-derived amount key), and `m_combined_shared_secret` (KEM
-   combined secret) — the same shape Shekyl's Rust mirrored when the
-   data model was first ported.
+   What the workspace actually contains:
 
-   This refines the structural-drift framing rather than weakening
-   it: the inheritance chain is `wallet2.h` → Shekyl-Rust
-   `TransferDetails`, with `monero-oxide` representing a cleaner
-   alternative the port could have followed but didn't. The
-   migration moves Shekyl's Rust toward a pattern that is closer in
-   shape to `monero-oxide`'s persistence-of-final-scalars-only, with
-   handle indirection layered on top per Round 3's design. Far from
-   undermining the architectural-inheritance rule, this strengthens
-   the rule's primary statement: there was a designed-cleaner Rust
-   alternative available throughout, and `wallet2.h`'s shape was
-   inherited regardless. The migration is the rule's discipline
-   applied retroactively to that inheritance.
+   - **`rust/shekyl-oxide/`** vendors a specific subset of upstream
+     `monero-oxide` — proof-system primitives (`fcmps`, `bulletproofs`,
+     `helioselene`, `divisors`, `generalized-bulletproofs`,
+     `fcmp/fcmp++`), transaction wire format (`primitives`,
+     top-level `shekyl-oxide`), I/O and generator helpers, and the
+     RPC shim (`rpc`, `rpc/simple-request`). Wallet-side state
+     is **not** vendored. The `shekyl-oxide/wallet/` subtree exists
+     only in the standalone upstream clone outside `shekyl-core` and
+     is not part of Shekyl's compiled workspace.
+   - The C++ `src/wallet/wallet2.h:327–453` defines
+     `struct transfer_details` carrying `m_mask` (Pedersen commitment
+     mask), `m_y` (HKDF-derived T-component scalar), `m_k_amount`
+     (HKDF-derived amount key), and `m_combined_shared_secret` (KEM
+     combined secret). This shape was ported to Shekyl's Rust
+     `engine-state` crate directly, with no Rust intermediary.
+
+   The provenance of `TransferDetails`'s secret-carrying shape is
+   the C++ struct in `wallet2.h`, ported into Rust within
+   `shekyl-core` itself. There is no workspace-internal Rust
+   precedent the port could have followed; the inheritance is
+   single-step from C++.
+
+   The architectural-inheritance rule's primary application stands:
+   `TransferDetails` carries derived per-output secrets that
+   contradict `36-secret-locality.mdc`'s "engine owns secrets"
+   discipline; the migration is the rule's primary statement applied
+   to that inheritance. The case does not depend on a Rust-side
+   precedent — the C++ structural-drift evidence is sufficient.
+
+   The continuity-of-discipline observation worth pinning is
+   different from the previous draft's precedent claim: `shekyl-oxide`
+   itself is the artifact of Shekyl's discipline applied to upstream
+   proof-system code (legacy proof types removed; FCMP++ and PQC
+   added; `#![deny(unsafe_code)]` enforced; `RELEASE-BLOCKER` items
+   tracked per `SHEKYL_READINESS.md`). The `TransferDetails`
+   migration extends that same discipline — already operative in the
+   vendored proof-system surfaces — to wallet-side state inherited
+   from `wallet2.h`. The migration is continuity-of-discipline
+   across the codebase, not novel-discipline-introduction.
 
 4. **Snapshot stability.** Audit holds against
    `chore/spec-stage-1-pr3-keyengine-round` HEAD `ffcaa62e9`. If `dev`
