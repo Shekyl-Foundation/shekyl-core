@@ -1,7 +1,7 @@
 # Stage 1 PR 3 — Migration Plan
 
-**Status.** Operational plan for the Stage 1 PR 3 architectural-
-inheritance migration (M3a–M3e). Companion document to
+**Status.** Operational plan for the Stage 1 PR 3 architectural-inheritance
+migration (M3a–M3e). Companion document to
 `STAGE_1_PR_3_KEY_ENGINE.md` (design rationale) and
 `STAGE_1_PR_3_MIGRATION_AUDIT.md` (workspace surface audit).
 **Scope.** Operational details — per-PR scope, dependencies, schema
@@ -100,8 +100,8 @@ The wallet-side state in `shekyl-core` was ported from C++
 `wallet2.h::struct transfer_details` without the same discipline pass.
 `TransferDetails`'s secret-bearing fields are the residue of that
 direct port. This migration applies the discipline already operative
-in `shekyl-oxide` to wallet-side state — the same architectural-
-inheritance disposition (`16-architectural-inheritance.mdc`) the
+in `shekyl-oxide` to wallet-side state — the same architectural-inheritance
+disposition (`16-architectural-inheritance.mdc`) the
 `shekyl-oxide` rebuild applied to upstream proof-system code,
 applied retroactively to the part of the codebase where it hadn't
 been applied yet.
@@ -112,8 +112,8 @@ continuity-of-discipline operation, not novel surface work. (2) It
 sets a forward expectation: per-trait PRs 4–7 will likely surface
 similar continuity-of-discipline opportunities, where wallet-side
 state ported from C++ benefits from the same discipline already
-operative in vendored proof-system surfaces. The architectural-
-inheritance check during pre-flight investigations should ask
+operative in vendored proof-system surfaces. The architectural-inheritance
+check during pre-flight investigations should ask
 "is this the C++-port residue or the discipline-already-applied
 shape?" and apply the rule accordingly.
 
@@ -165,8 +165,8 @@ The migration is not blocked by the cutover and the cutover removes
 paths the migration deliberately does not touch. The two workstreams
 are independent and complementary.
 
-The `transfer_native` exclusion (row 2) is per the architectural-
-inheritance rule's "inherited code with a deletion target doesn't get
+The `transfer_native` exclusion (row 2) is per the architectural-inheritance
+rule's "inherited code with a deletion target doesn't get
 migrated; it gets deleted" disposition (`16-architectural-inheritance.mdc`
 §"When to migrate vs. when to keep"). Migrating `transfer_native`
 would mean migrating a path whose only forward state is deletion.
@@ -246,8 +246,8 @@ bounded.
   selection (cap, eviction trigger, orchestrator-pinning) is M3a
   pre-flight work; couples to the §7.13 concurrent-access shape.
 - v31 multisig pre-flight verification: confirm the audit's §4
-  structural-alignment finding still holds at HEAD; produce a one-
-  line confirmation comment in the PR description.
+  structural-alignment finding still holds at HEAD; produce a one-line
+  confirmation comment in the PR description.
 - Initial test substrate: unit tests for `LocalKeys::from_test_seed`
   determinism plus the test surface that the §7.10–§7.13 closures
   produce (e.g., concurrent-insert correctness for the chosen
@@ -329,8 +329,8 @@ files edited including re-exports.
   bridge-impl fallback live.)
 - Switch `LocalKeys::sign_transaction`'s primary secret source from
   `TransferDetails`'s secret fields to `HandleTable` lookups, with
-  `TransferDetails` as transitional fallback (selected by feature-
-  detection, not feature flag — if the handle resolves, use it; else
+  `TransferDetails` as transitional fallback (selected by feature-detection,
+  not feature flag — if the handle resolves, use it; else
   fall through to `TransferDetails`).
 - Test fixtures in `rust/shekyl-scanner/src/tests.rs:77, 855, 1037`
   rewrite to exercise the engine-mediated flow.
@@ -385,8 +385,8 @@ site moved; one new property test.
   2. Populates a `LocalKeys` instance with handles for the inputs.
   3. Calls `KeyEngine::sign_transaction(tx_prefix_hash, &handles, ...)`.
   4. Verifies the resulting `SignedProofs` against the existing
-     `tx_builder::sign_transaction` test-vector outputs (byte-
-     identical signatures, commitments, proofs).
+     `tx_builder::sign_transaction` test-vector outputs (byte-identical
+     signatures, commitments, proofs).
 - This validates the handle→secret resolution path produces output
   indistinguishable from the legacy direct-secret path. It is the
   property-test that the audit-bounded migration relies on.
@@ -474,8 +474,8 @@ the fallback without the byte-identical-derivation property test
 having validated the engine path is unsafe.
 
 **Schema state at PR boundary.** `TransferDetails` carries
-`source_ciphertext` + `output_handle` instead of the five secret-
-bearing fields. Bridge impl exclusively uses `HandleTable`.
+`source_ciphertext` + `output_handle` instead of the five secret-bearing
+fields. Bridge impl exclusively uses `HandleTable`.
 
 **Property delivery.** **"Secrets confined to engine" activates.**
 Orchestrator-side `TransferDetails` no longer carries derived
@@ -510,8 +510,8 @@ change is the bridge impl's fallback removal (~50 lines).
 
 - Update `docs/design/STAGE_1_PR_3_KEY_ENGINE.md` to reflect
   post-migration architecture as the operative design (Round 3's
-  handle-indirected workflow becomes the sole architecture; pre-
-  migration framing moves to a "history" section or is deleted).
+  handle-indirected workflow becomes the sole architecture; pre-migration
+  framing moves to a "history" section or is deleted).
 - Update `docs/design/STAGE_1_PR_3_MIGRATION_AUDIT.md` snapshot
   reference to the post-M3d HEAD.
 - Update `docs/CHANGELOG.md` per `91-documentation-after-plans.mdc`
@@ -547,12 +547,12 @@ operative one before docs realign to it).
 
 **Success criteria.**
 
-- All documentation is internally consistent against the post-
-  migration architecture.
+- All documentation is internally consistent against the post-migration
+  architecture.
 - No reference to removed `TransferDetails` fields exists outside
   git history.
-- `CHANGELOG.md` has a complete record of the migration's user-
-  visible effects (zero, since RPC contract is migration-transparent
+- `CHANGELOG.md` has a complete record of the migration's user-visible
+  effects (zero, since RPC contract is migration-transparent
   per audit §2.5; the CHANGELOG entries note this explicitly).
 
 **Estimated review surface.** Doc-only; depends on `KEY_ENGINE.md`'s
@@ -663,8 +663,8 @@ See top-of-document FREEZE NOTICE. Restated for completeness:
 - **Lift condition.** M3d merges to `dev`.
 - **Exemptions.** Critical security fixes; CI infrastructure repairs.
 - **Authoring discipline.** Per `06-branching.mdc`, no contributor
-  pushes to `dev` during the freeze without explicit migration-plan-
-  compatible coordination. Each PR opens against `dev` HEAD at the
+  pushes to `dev` during the freeze without explicit migration-plan-compatible
+  coordination. Each PR opens against `dev` HEAD at the
   time of opening; no rebase-onto-`dev` cycles needed if the freeze
   holds.
 
