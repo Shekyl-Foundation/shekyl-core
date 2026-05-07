@@ -209,22 +209,62 @@ mod tests {
         assert_eq!(sub_view, view.deref() * sub_spend);
     }
 
-    /// Behavior-preservation: this test pins the byte-exact derivation so a
-    /// future refactor that changes the domain tag, scalar encoding, or
-    /// index encoding fails closed. The expected scalar is captured at
-    /// implementation time; cryptographic correctness rests on
-    /// `keccak256_to_scalar` and `shekyl-primitives`' own test coverage.
+    /// Hard-coded known-answer vector for `subaddress_derivation_scalar`.
+    ///
+    /// The expected scalar bytes are pinned to the actual cryptographic
+    /// output captured at implementation time. This is a **true tripwire**:
+    /// any change inside `keccak256_to_scalar` (algorithm swap, output
+    /// encoding change), the `SUBADDR_DERIVATION_DOMAIN` constant, the
+    /// scalar canonical encoding, or the index little-endian convention
+    /// fails this test. Cryptographic correctness of the underlying
+    /// keccak primitive rests on `shekyl-primitives`' own coverage; this
+    /// test pins the composed function's output bytes.
+    ///
+    /// Inputs:
+    /// * `view = Scalar::from(0x0102_0304_0506_0708u64)`
+    /// * `idx  = 1u32.to_le_bytes()` (i.e. `[0x01, 0x00, 0x00, 0x00]`)
+    ///
+    /// Updating this vector requires explicit review per
+    /// `30-cryptography.mdc` — vectors define consensus and cannot
+    /// drift silently.
     #[test]
     fn derivation_scalar_pinned_vector() {
         let view = Scalar::from(0x0102_0304_0506_0708u64);
         let idx = 1u32.to_le_bytes();
         let got = subaddress_derivation_scalar(&view, &idx);
 
-        // Locked vector — recompute via the same primitive directly to
-        // guard against a `keccak256_to_scalar` swap or domain-tag drift.
+        const EXPECTED_BYTES: [u8; 32] = [
+            0x88, 0x94, 0xa9, 0x64, 0xc3, 0xbb, 0xbc, 0xa0, 0x05, 0x74, 0xe3, 0x12, 0x50, 0xec,
+            0x54, 0xd6, 0xa1, 0x7f, 0xb1, 0x45, 0x9d, 0x94, 0x89, 0x17, 0xbf, 0xd8, 0x53, 0xe1,
+            0xf3, 0x81, 0x72, 0x00,
+        ];
+        assert_eq!(got.to_bytes(), EXPECTED_BYTES);
+    }
+
+    /// Formula-lock companion to [`derivation_scalar_pinned_vector`].
+    ///
+    /// Recomputes the expected scalar via the same composition this
+    /// module documents (`SUBADDR_DERIVATION_DOMAIN || view_le32 || idx_le4`)
+    /// using the underlying `keccak256_to_scalar` primitive directly.
+    /// This catches refactors of `subaddress_derivation_scalar`'s
+    /// internal composition (e.g., re-ordered concatenation, dropped
+    /// domain tag, swapped scalar encoding) without depending on the
+    /// hard-coded expected bytes — the two tests fail in different
+    /// classes of regression and together pin both the spec and the
+    /// implementation against drift.
+    ///
+    /// This test will pass even if `keccak256_to_scalar` itself
+    /// changes, because both sides re-run the same primitive — that
+    /// is what [`derivation_scalar_pinned_vector`] guards against.
+    #[test]
+    fn derivation_scalar_locks_composition_formula() {
+        let view = Scalar::from(0x0102_0304_0506_0708u64);
+        let idx = 1u32.to_le_bytes();
+        let got = subaddress_derivation_scalar(&view, &idx);
+
         let expected = keccak256_to_scalar(Zeroizing::new(
             [
-                b"shekyl-subaddr-v1\0".as_slice(),
+                SUBADDR_DERIVATION_DOMAIN,
                 Zeroizing::new(view.to_bytes()).as_slice(),
                 idx.as_slice(),
             ]
