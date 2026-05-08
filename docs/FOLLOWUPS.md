@@ -486,6 +486,35 @@ citing in a review.
 
 ## V3.1 — audit response and stressnet gates
 
+- **Rules-queue: elevate the public-material typed-wrapper exclusion
+  into a workspace-wide rule.** Probable home:
+  `.cursor/rules/18-type-placement.mdc` (in-queue draft), with the
+  public-material exclusion as a sub-clause. The rule statement,
+  drawn from
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §3.5's closure subsection: *typed wrappers attach to
+  identity-bearing primitives where rule-grounded; uniformity-driven
+  wrapping of public material is*
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)*'s
+  "while we're here is the enemy."* Rationale: the
+  `chore/allkeysblob-zeroize-realignment` chore's "Out of scope"
+  section pinned a five-reason `ml_kem_ek` exclusion (rule reach,
+  audit boundary, no type-confusion partner, FFI-uniformity-cuts-the-
+  wrong-way, permanent type-system signal collision). Future "wrap
+  THIS public byte array too" arguments will recapitulate the same
+  five points; the §3.5 closure pins the disposition for that
+  specific decision but is a per-PR document rather than a workspace-
+  wide discipline anchor. Elevating into the rules corpus lets
+  future similar decisions cite precedent without re-deriving the
+  five points each time. Cross-references: `KEY_ENGINE.md` §3.5
+  closure subsection;
+  [`35-secure-memory.mdc:21-22`](../.cursor/rules/35-secure-memory.mdc)
+  (the secrets-only reach this rule sub-clauses);
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  ("while we're here is the enemy"). Target: V3.1 (the rules-queue
+  work's expected landing window; bumps to V3.x if 18-type-placement
+  defers).
+
 - **`derive_output_handle` Python reference script.** Stage 1 PR 3
   M3a commit 2 lands the Rust implementation of `derive_output_handle`
   (cSHAKE256, per `STAGE_1_PR_3_KEY_ENGINE.md` §7.12) with self-generated

@@ -2315,6 +2315,12 @@ because each is too small to warrant its own:
    `Drop`" back to "implementor's `ZeroizeOnDrop` derive" once
    Phase 0e lands.
 
+   **Closure note (post-M3a).** Phase 0e closed via
+   `chore/allkeysblob-zeroize-realignment` *after* M3a rather than
+   pre-PR-3-cut as originally sequenced; Q9.3's precondition is now
+   literally true. The substrate-change rationale is recorded in
+   §3.5's closure subsection.
+
 **Reasoning for visibility (recorded verbatim).**
 
 > 1. **The `LedgerEngine` precedent is load-bearing.** Same
@@ -2422,6 +2428,70 @@ This adds another preparatory PR to PR 3's count. The trajectory
 cost is real — but the discipline has consistently produced this
 trade across Stage 1, and PR 3's substrate-quality benefit is the
 same as PR 2's.
+
+#### Closed (post-M3a, post-Phase-0)
+
+Closed via `chore/allkeysblob-zeroize-realignment`. The closure
+landing path differs from the originally-specified "lands first /
+before PR 3 cuts" framing; the framing is **substrate-change**, not
+extension:
+
+- §3.5 was specced when `AllKeysBlob` carried raw `[u8; N]` fields;
+  `derive(Zeroize, ZeroizeOnDrop)` would have taken on that
+  substrate directly (the "5–10 lines" diff estimate above).
+- The intervening `chore/allkeysblob-typed-wrappers-monero-sweep`
+  (merged into `dev` between M3a's design rounds and execution)
+  wrapped `spend_sk` / `view_sk` in typed newtypes (closing the
+  inheritance audit's secret-flow finding) but left `ml_kem_dk`
+  as the residual raw secret-bearing array. The residual array
+  was load-bearing for the planned derive: `ZeroizeOnDrop` is
+  only available when every field's type composes with the
+  derive macro, and a raw `[u8; ML_KEM_768_DK_LEN]` field made
+  the derive a literal one-liner that no longer matched the
+  surrounding typed-wrapper substrate.
+- This Phase 0 chore re-anchors §3.5's load-bearing goal
+  (Q9.3 precondition true; `AllKeysBlob: ZeroizeOnDrop` literally
+  implemented) to the post-sweep substrate. Three rule-grounded
+  edits each closing an audit finding cited to a rule:
+  - **F1 / `35-secure-memory.mdc:21-22`.** Wrap `ml_kem_dk` in a
+    `MlKem768DecapKey` typed newtype (last raw secret-bearing
+    array on `AllKeysBlob`).
+  - **F2 / `35-secure-memory.mdc:23-25`.** Replace the manual
+    `Drop` impl (which the design doc above characterized as
+    "documenting the lie") with `#[derive(Zeroize, ZeroizeOnDrop)]`.
+  - **F3 / §7.5.** Delete the unused `Clone` derive (zero
+    `.clone()` callers workspace-wide; locked by
+    `cargo build --workspace --all-targets`).
+- The work-shape adapted to the post-sweep state rather than
+  extended from the original 5–10-line plan; the underlying
+  goal that mattered was the spec assertion becoming true, not
+  the literal text of "delete manual Drop, add derive."
+
+This is why the chore landed post-M3a rather than the
+originally-specified pre-M3a sequencing: the typed-wrapper sweep
+merge inadvertently invalidated §3.5's original direct-derive
+shape, and §3.5's *goal* was the load-bearing claim while the
+*work-shape* was the implementation detail. The discipline-drift
+is recorded here so future readers can locate the cause rather
+than reconstructing it from git archaeology.
+
+`ml_kem_ek` deliberately remains raw `[u8; ML_KEM_768_EK_LEN]` —
+public encap key, outside `35-secure-memory.mdc:21-22`'s reach as
+public material. Wrapping it would be uniformity-driven
+completionism without rule grounding (per
+`15-deletion-and-debt.mdc`'s "while we're here is the enemy") and
+would create a permanent type-system signal collision (`Zeroize`
+semantics on a public type as a distractor for any future
+grep-for-secrets audit). Full five-reason disposition pinned in
+the chore's PR description against re-litigation.
+
+The "**Phase 0e ↔ Phase 0d coupled-pair landing (disposition α)**"
+narrative below in §5 is **historical**: Phase 0d landed in its
+originally-specified slot pre-M3a, with Q9.3's cross-reference
+pointing at the manual `Drop` workaround. That language now
+becomes literally accurate against §3.5's closure: Q9.3's
+precondition is true, and Phase 0d's reference resolves cleanly
+to the post-Phase-0e state. No further spec amendment needed.
 
 ---
 
@@ -2851,8 +2921,10 @@ X?" review questions.
   the trait surface no longer exposes `SignDomain`.
 
 The Q9.1 / Q9.2 / Q9.3 dispositions retain their stated
-conclusions; Q9.3's underlying precondition becomes literally true
-once Phase 0e lands.
+conclusions. Q9.3's underlying precondition (`AllKeysBlob:
+ZeroizeOnDrop` literally implemented) is now true post-Phase-0e
+closure (see §3.5 closure subsection); the disposition needs no
+further spec amendment.
 
 ---
 
@@ -2864,7 +2936,7 @@ Five preparatory PRs; landing order:
 
 | PR | Subject | Type | Why this order |
 |---|---|---|---|
-| 0e | `AllKeysBlob` `ZeroizeOnDrop` migration | Code (`shekyl-crypto-pq`) | Lands first so Q9.3's precondition holds when Phase 0d's spec amendment cross-references it. |
+| 0e | `AllKeysBlob` `ZeroizeOnDrop` migration | Code (`shekyl-crypto-pq`) | Originally planned to land first so Q9.3's precondition holds when Phase 0d's spec amendment cross-references it. **Closed post-M3a** via `chore/allkeysblob-zeroize-realignment` rather than pre-PR-3-cut; the substrate-change rationale is recorded in §3.5's closure subsection. Phase 0d's cross-reference language resolves cleanly to the post-Phase-0e state without further amendment. |
 | 0 | Hybrid-framework reconciliation (sign/decap rewrite + Ed25519/EdwardsPoint removal) | Doc-only spec | Largest scope; lands second so subsequent additive amendments build against post-Phase-0 §2.1. |
 | 0b | `KeyError` / `KeyEngineError` split | Doc-only spec | Second-largest; lands after Phase 0 because Phase 0's hybrid-rewrite changes some method signatures whose error variants `KeyEngineError` will eventually carry. |
 | 0c | Missing-type definitions (`AccountPublicAddress`, `SignDomain`, `SubaddressPublic`, hybrid renames) | Doc-only spec | Lands after Phases 0 + 0b because the type definitions reference the post-amendment trait surface. |
@@ -4118,6 +4190,28 @@ disposition rather than just "investigate."
 
 The audit is **not** a PR 3 blocker. PR 3's trait surface uses
 `&self` exclusively and does not require `AllKeysBlob: Clone`.
+
+#### Closed (post-M3a, post-Phase-0)
+
+Closed via `chore/allkeysblob-zeroize-realignment` commit 4. Audit
+performed against `dev` tip; outcome was the "no justification
+surfaces" branch:
+
+- `rg 'AllKeysBlob.*\.clone\(\)|\.clone\(\).*AllKeysBlob' rust/`
+  returned zero matches against `AllKeysBlob`. (One `.clone()`
+  call in `shekyl-ffi/src/lib.rs:5134` matched a broader regex
+  but is on a `Vec<u8>` witness blob in a Bulletproof+ test,
+  unrelated to `AllKeysBlob`.)
+- Every `AllKeysBlob` call site is move-by-value
+  (`LocalKeys::from_keys_blob`, `lifecycle::Engine::new`) or
+  borrow-by-reference (`RefreshDriver::build_scanner_from_keys`,
+  `Engine::keys`, `copy_blob_to_ffi`); no caller assumes `Clone`.
+- The `traits/key.rs:581` doc-comment ("Not Clone — implementors
+  wrap `AllKeysBlob`") becomes literally enforced.
+
+The locking gate is `cargo build --workspace --all-targets`,
+which compiles every `#[cfg(test)]` block in addition to
+production code; it is clean post-removal.
 
 ---
 
