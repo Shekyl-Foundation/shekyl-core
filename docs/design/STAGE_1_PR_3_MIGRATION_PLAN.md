@@ -561,6 +561,84 @@ engine" not yet active (orchestrator-side copies remain).
 **Estimated review surface.** ~360 lines net; one production write
 site moved; one new property test.
 
+#### §3.2.1 Pre-flight reconciliation (added 2026-05-08)
+
+Pre-flight investigation per
+[`STAGE_1_PR_3_M3B_PREFLIGHT.md`](./STAGE_1_PR_3_M3B_PREFLIGHT.md)
+surfaced three substantive refinements to §3.2's estimate that
+land at Phase 2 entry. Recording here as the canonical reference
+for reviewers reading commit messages and the M3b PR description.
+
+**Refinement 1 — Two-layer derivation-primitive split (D1).** §3.2
+named the re-decap derivation primitive without specifying its
+shape. Applying `18-type-placement.mdc` during pre-flight produced
+a two-layer split:
+
+- **Layer 1 (transform-shaped):**
+  `shekyl_crypto_pq::output::recover_combined_ss(view_x25519_sk,
+  view_ed_sk, ml_kem_dk, source_ciphertext) -> SharedSecret`. Pure,
+  sync, no engine context. Lives in `shekyl-crypto-pq` because it
+  is defined by what it computes.
+- **Layer 2 (state-shaped):**
+  `LocalKeys::derive_source_secrets_bundle(source_ciphertext,
+  output_index, subaddress_idx) -> Result<SourceSecretsBundle,
+  KeyEngineError>`. Composes Layer 1's output with the engine-owned
+  `b` (spend secret) and `m_i` (subaddress derivation scalar).
+  Lives in `shekyl-engine-core::engine::local_keys` because it is
+  defined by who owns the result.
+
+**Refinement 2 — Scanner reroute lives at the orchestrator layer
+(§3 of pre-flight doc).** §3.2's "scanner emits `OutputClaim` to
+`KeyEngine::try_claim_output`" framing is operationally infeasible
+inside `shekyl-scanner::process_scanned_outputs` because:
+
+- `shekyl-scanner` does not depend on `shekyl-engine-core`
+  (dependency direction is engine-core → scanner via
+  `LedgerIndexesExt`).
+- `KeyEngine` is `pub(crate)` to `shekyl-engine-core` per the M3a
+  Round 4a visibility decision.
+- `process_scanned_outputs` is sync and called from ~30 sites;
+  forcing it `async` would cascade into every test/bench fixture.
+
+**Disposition.** The reroute lives at the orchestrator layer in
+`shekyl-engine-core::engine::merge`. A new async sibling helper
+(`populate_engine_handle_fields`) runs after the existing sync
+`apply_scan_result_to_state` body and populates
+`td.source_ciphertext` / `td.output_handle` via
+`KeyEngine::try_claim_output`. The sync/async split is a
+**permanent intentional pattern**, not transitional drift; both
+have legitimate consumers (the sync substrate serves the
+bookkeeping pipeline; the async sibling layers engine integration).
+
+**Refinement 3 — Test-fixture estimate revision (§4 of pre-flight
+doc).** §3.2 estimated ~150 lines of test fixture rewrites in
+`shekyl-scanner/src/tests.rs`. Pre-flight investigation revealed
+that legacy fields stay populated transitionally and the engine
+post-pass is exercised via real `LocalKeys` integration tests
+(`engine-core/tests/byte_identical_derivation.rs`), not via the
+synthetic `wrap_recovered`/`mock_output` fixtures. Revised
+estimate: ~10–20 lines.
+
+**Total estimate revision.**
+
+| Source | Net lines |
+|---|---|
+| Plan §3.2 estimate | ~360 |
+| Pre-flight estimate | ~500–550 |
+| Delta | +140–190 |
+| Drivers | D1 two-layer split (+~60); engine post-pass scaffolding (+~80–100); schema-derive plumbing in `shekyl-crypto-pq` (+~10) |
+| Offsets | Test-fixture estimate revision (−~130–140) |
+| Net delta | +70–130 |
+| Cumulative-diff guardrail | 600 net lines |
+| Margin | ~50–100 lines |
+
+**The plan estimate of ~360 was grounded in framing-level estimates
+from design rounds that did not include the two-layer split or the
+engine post-pass shape specifics. The pre-flight investigation
+worked as intended in surfacing these specifics before drafting.**
+The 600-line ceiling holds; the realistic estimate of 500–550 is
+well within scope.
+
 ---
 
 ### §3.3 M3c — additive test caller
