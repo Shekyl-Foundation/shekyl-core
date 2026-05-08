@@ -100,7 +100,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use sha2::Sha512;
 use sha3::{Digest, Sha3_256};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use fips203::ml_kem_768;
 use fips203::traits::{KeyGen, SerDes};
@@ -433,8 +433,30 @@ pub fn ml_kem_keypair_from_d_z(
 ///
 /// Layout is frozen at v1. Do not add, remove, or reorder fields without
 /// bumping the derivation version and the KAT manifest hash.
+///
+/// # Wipe-on-drop
+///
+/// Per `.cursor/rules/35-secure-memory.mdc:23-25` ("Prefer the
+/// derived `Zeroize`/`ZeroizeOnDrop` form over hand-written `Drop`
+/// impls"), the struct derives `Zeroize + ZeroizeOnDrop`. The
+/// generated `Drop::drop` calls `self.zeroize()`, which calls
+/// `.zeroize()` on every field once. Field-drop-glue then re-invokes
+/// each field's destructor independently — for fields that are
+/// themselves `ZeroizeOnDrop` (`spend_sk`, `view_sk`, `ml_kem_dk`),
+/// that destructor calls `.zeroize()` again on already-zero bytes.
+/// The resulting double-wipe is the standard zeroize-crate
+/// composition pattern: idempotent, harmless, and the price of
+/// uniform field-level wipe coverage. See chore plan §"Risk and
+/// mitigation" if a future contributor encounters the pattern in a
+/// grep of `ZeroizeOnDrop`-bearing types.
+///
+/// Public-key fields (`spend_pk`, `view_pk`, `ml_kem_ek`, `x25519_pk`,
+/// `pqc_public_key`, `classical_address_bytes`) are zeroized for
+/// uniform write patterns even though they hold no secret material;
+/// this maintains the constant-time-on-error discipline the manual
+/// `Drop` previously enforced.
 #[repr(C)]
-#[derive(Clone)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct AllKeysBlob {
     // --- public side (plain-text portion of the wallet) ------------------
     /// Ed25519 spend public key.
@@ -513,27 +535,6 @@ impl AllKeysBlob {
     }
 }
 
-impl Drop for AllKeysBlob {
-    fn drop(&mut self) {
-        // `self.spend_sk` (SpendSecret) and `self.view_sk` (ViewSecret)
-        // wipe via field-drop-glue: their `ZeroizeOnDrop` impls run after
-        // this manual `drop` returns. Calling `.zeroize()` here would be
-        // redundant.
-        self.ml_kem_dk.zeroize();
-        // Public fields do not need zeroization but we clear them for
-        // uniform write patterns and to avoid accidental reuse of stale
-        // public material that the caller may consider authoritative.
-        // `SpendPublicKey` / `ViewPublicKey` impl `Zeroize` (without
-        // `ZeroizeOnDrop`, which would conflict with their `Copy` impl).
-        self.spend_pk.zeroize();
-        self.view_pk.zeroize();
-        self.ml_kem_ek.fill(0);
-        self.x25519_pk.zeroize();
-        self.pqc_public_key.fill(0);
-        self.classical_address_bytes.zeroize();
-    }
-}
-
 // --- end-to-end derivation flows --------------------------------------------
 
 /// Rederive every key from an existing 64-byte master seed. This is the
@@ -574,8 +575,8 @@ pub fn rederive_account(
     // X25519 public via birational. Failure here means the view scalar
     // produced an identity or low-order Ed25519 point; the probability is
     // cryptographically negligible but we surface it cleanly. On error,
-    // `blob` is dropped here, which zeroes its secret fields via
-    // `AllKeysBlob::drop`.
+    // `blob` is dropped here, which zeroes every field via
+    // `AllKeysBlob`'s derived `ZeroizeOnDrop`.
     let x25519_pk = montgomery::ed25519_pk_to_x25519_pk(blob.view_pk.as_canonical_bytes())?;
     blob.x25519_pk.copy_from_slice(&x25519_pk);
 

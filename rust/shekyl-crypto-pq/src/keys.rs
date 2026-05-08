@@ -34,9 +34,10 @@
 //! for use as identity-bearing values in registries (e.g. the subaddress
 //! registry's `HashMap<SpendPublicKey, SubaddressIndex>` in
 //! `shekyl-engine-core`'s `LocalKeys`); they implement `Zeroize` (so
-//! the surrounding `AllKeysBlob::drop` can wipe them for the same
-//! uniform-write-pattern reason raw `[u8; 32]` fields had) but not
-//! `ZeroizeOnDrop` (which would conflict with `Copy`).
+//! the surrounding `AllKeysBlob`'s derived `ZeroizeOnDrop` calls
+//! `.zeroize()` on them as part of the uniform field-wipe pattern raw
+//! `[u8; 32]` fields had) but not `ZeroizeOnDrop` (which would conflict
+//! with `Copy`).
 //!
 //! All four wrappers are `#[repr(transparent)]` so the bit-for-bit
 //! FFI layout invariant between [`crate::account::AllKeysBlob`] and
@@ -233,8 +234,10 @@ impl MlKem768DecapKey {
 /// Half of the wallet's public account identity (paired with
 /// [`ViewPublicKey`] in the classical address). Public material —
 /// no wipe-on-drop discipline applies, but a [`Zeroize`] impl is
-/// provided so the surrounding [`crate::account::AllKeysBlob::drop`]
-/// can clear public fields for uniform write patterns.
+/// provided so the surrounding [`crate::account::AllKeysBlob`]
+/// derives `ZeroizeOnDrop`, which calls `.zeroize()` on every field
+/// (including this one) at drop time as part of its uniform field-wipe
+/// pattern.
 ///
 /// # Hygiene properties
 ///
@@ -252,9 +255,9 @@ impl MlKem768DecapKey {
 ///   identifier even in unsanitised log streams.
 /// - **`Zeroize` (without `ZeroizeOnDrop`).** `ZeroizeOnDrop`
 ///   would imply `Drop`, which is incompatible with `Copy`;
-///   the surrounding `AllKeysBlob::drop` calls `.zeroize()`
-///   explicitly to maintain the uniform-write-pattern hygiene
-///   the raw `[u8; 32]` field had.
+///   the surrounding `AllKeysBlob` derives `ZeroizeOnDrop`,
+///   which calls `.zeroize()` on this field at drop time as
+///   part of its uniform field-wipe pattern.
 ///
 /// # FFI layout invariant
 ///
