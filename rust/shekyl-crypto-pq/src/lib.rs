@@ -51,12 +51,16 @@ pub mod account;
 pub mod bip39;
 pub mod derivation;
 pub mod error;
+pub mod handle;
 pub mod kem;
+pub mod key_image;
+pub mod keys;
 pub mod montgomery;
 pub mod multisig;
 pub mod multisig_receiving;
 pub mod output;
 pub mod signature;
+pub mod subaddress;
 pub mod wallet_envelope;
 pub mod wallet_state;
 

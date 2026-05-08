@@ -107,6 +107,7 @@ use fips203::traits::{KeyGen, SerDes};
 
 use crate::bip39;
 use crate::kem::{ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN};
+use crate::keys::ViewSecret;
 use crate::montgomery;
 use crate::CryptoError;
 
@@ -457,7 +458,13 @@ pub struct AllKeysBlob {
     pub spend_sk: [u8; 32],
     /// Ed25519 view secret scalar, in canonical 32-byte little-endian form.
     /// Also used (unclamped) as the Montgomery scalar at ECDH sites.
-    pub view_sk: [u8; 32],
+    ///
+    /// Wrapped in [`ViewSecret`](crate::keys::ViewSecret) for type-system
+    /// protection and structural wipe-on-drop. `#[repr(transparent)]`
+    /// on `ViewSecret` preserves the bit-for-bit FFI layout invariant
+    /// with `shekyl_ffi::ShekylAllKeysBlob.view_sk: [u8; 32]`. Read
+    /// the canonical bytes via `view_sk.as_canonical_bytes()`.
+    pub view_sk: ViewSecret,
     /// ML-KEM-768 decap (secret) key, 2400 bytes. Rederived on every wallet
     /// open; persisted only via the master seed.
     pub ml_kem_dk: [u8; ML_KEM_768_DK_LEN],
@@ -475,7 +482,7 @@ impl AllKeysBlob {
             pqc_public_key: [0u8; PQC_PUBLIC_KEY_BYTES],
             classical_address_bytes: [0u8; CLASSICAL_ADDRESS_BYTES],
             spend_sk: [0u8; 32],
-            view_sk: [0u8; 32],
+            view_sk: ViewSecret::from_bytes([0u8; 32]),
             ml_kem_dk: [0u8; ML_KEM_768_DK_LEN],
         }
     }
@@ -484,7 +491,9 @@ impl AllKeysBlob {
 impl Drop for AllKeysBlob {
     fn drop(&mut self) {
         self.spend_sk.zeroize();
-        self.view_sk.zeroize();
+        // `self.view_sk` (ViewSecret) wipes via field-drop-glue: its
+        // `ZeroizeOnDrop` impl runs after this manual `drop` returns.
+        // Calling `.zeroize()` here would be redundant.
         self.ml_kem_dk.zeroize();
         // Public fields do not need zeroization but we clear them for
         // uniform write patterns and to avoid accidental reuse of stale
@@ -531,7 +540,7 @@ pub fn rederive_account(
     // Ed25519 view
     let view_wide = derive_view_wide(master_seed, net, fmt);
     let view_scalar = wide_reduce_to_scalar(&view_wide);
-    blob.view_sk.copy_from_slice(view_scalar.as_bytes());
+    blob.view_sk = ViewSecret::from_bytes(*view_scalar.as_bytes());
     let view_pub_edw = curve25519_dalek::constants::ED25519_BASEPOINT_TABLE * &view_scalar;
     let view_pub_compressed = view_pub_edw.compress();
     blob.view_pk.copy_from_slice(view_pub_compressed.as_bytes());
@@ -753,7 +762,10 @@ mod tests {
         assert_eq!(blob1.pqc_public_key, blob2.pqc_public_key);
         assert_eq!(blob1.classical_address_bytes, blob2.classical_address_bytes);
         assert_eq!(blob1.spend_sk, blob2.spend_sk);
-        assert_eq!(blob1.view_sk, blob2.view_sk);
+        assert_eq!(
+            blob1.view_sk.as_canonical_bytes(),
+            blob2.view_sk.as_canonical_bytes(),
+        );
         assert_eq!(blob1.ml_kem_dk, blob2.ml_kem_dk);
     }
 

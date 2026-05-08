@@ -1266,8 +1266,15 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
     // no-op on canonical input but `from_bytes_mod_order` is
     // documented as the safe choice for round-tripping serialized
     // scalars and it costs nothing on the canonical path.
-    let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(keys.view_sk));
-    let x25519_sk: Zeroizing<[u8; 32]> = Zeroizing::new(keys.view_sk);
+    // `view_sk` is a `ViewSecret` newtype; deref the canonical bytes
+    // for both consumers. Copying the bytes once into Zeroizing<[u8; 32]>
+    // is the same hygiene as before — the temporary copies are
+    // immediately consumed by the Zeroizing wrappers and the
+    // ViewSecret itself wipes on its own drop.
+    let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(
+        *keys.view_sk.as_canonical_bytes(),
+    ));
+    let x25519_sk: Zeroizing<[u8; 32]> = Zeroizing::new(*keys.view_sk.as_canonical_bytes());
     let ml_kem_dk: Zeroizing<Vec<u8>> = Zeroizing::new(keys.ml_kem_dk.to_vec());
 
     let view_pair = ViewPair::new(spend_pub, view_scalar, x25519_sk, ml_kem_dk).map_err(|e| {

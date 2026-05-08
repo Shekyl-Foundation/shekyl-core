@@ -283,6 +283,202 @@
   cbindgen sibling, full migration in V3.0). Audit-quality artifact
   for the August external review.
 
+- **`KeyEngine` trait surface and `LocalKeys` in-process implementor
+  introduced (Stage 1 PR 3 — M3a; the third trait-boundaries PR per
+  [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.3).** The M3a slice of the five-PR Stage-1 PR 3 migration
+  (M3a–M3e per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3) lands as `pub(crate)` on `shekyl-engine-core`. M3a is the
+  architectural foundation against which the "secrets confined to
+  engine" structural property activates at M3d's merge; M3a itself
+  delivers no user-visible behavior change. The trait owns
+  `AllKeysBlob` privately and exposes a workflow-shape surface
+  (no per-output secret material crosses the trait boundary).
+
+  - **`pub(crate) trait KeyEngine`** in
+    [`engine::traits::key`](../rust/shekyl-engine-core/src/engine/traits/key.rs).
+    Four workflow-shaped methods per
+    [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+    §4: `account_public_address(&self) -> &AccountPublicAddress`
+    (sync borrowed read); `derive_subaddress(&self, idx,
+    purpose) -> Result<SubaddressFor, Self::Error>` (sync, two
+    purposes — `Audit` returns the classical Edwards-curve
+    `(spend_pk, view_pk)` pair, `Recipient` returns the encoded
+    address + hybrid KEM PK pair); `try_claim_output(&self,
+    input) -> impl Future<Output = Result<OutputClaimResult,
+    Self::Error>> + Send` (async; bundles X25519 view-tag
+    pre-filter, hybrid decap, HKDF chain, key-image computation,
+    deterministic `OutputHandle` derivation behind a single trait
+    boundary); `sign_transaction(&self, tx) -> impl
+    Future<Output = Result<TxSignatures, Self::Error>> + Send`
+    (async; resolves per-input handles to per-output spending
+    material and produces hybrid signatures + FCMP++ witnesses).
+    The associated `type Error: Into<KeyEngineError>` lets
+    orchestration code propagate uniform errors regardless of
+    implementor.
+  - **`pub(crate) struct LocalKeys`** in
+    [`engine::local_keys`](../rust/shekyl-engine-core/src/engine/local_keys.rs).
+    Owns `AllKeysBlob` privately; caches `AccountPublicAddress`
+    and pre-computes `(view_scalar, spend_public)` cryptographic
+    forms at construction; guards a reverse-lookup subaddress
+    registry under `RwLock` (the `LocalLedger` precedent for
+    `&self` async with synchronous interior mutation). Real
+    implementations of `account_public_address`,
+    `derive_subaddress(_, Audit)`, and `try_claim_output`;
+    named-infrastructure-gap stubs for
+    `derive_subaddress(_, Recipient)` and `sign_transaction`.
+    Constructors: `from_keys_blob(keys, network)` (production)
+    and `#[cfg(test)] from_test_seed(seed)` (raw32 testnet
+    derivation for unit/integration fixtures); 11 tests cover
+    cached-address stability, audit-derivation determinism,
+    recipient-stub validation, claim happy path, deterministic-
+    handle property, varying `tx_hash`, other-wallet rejection,
+    unregistered-subaddress rejection, register-then-claim
+    sequence, and `sign_transaction` stub validation.
+  - **Two named-infrastructure-gap `KeyEngineError` variants:**
+    `RecipientSubaddressKemKeygenNotImplemented` (per-subaddress
+    hybrid X25519+ML-KEM-768 keygen,
+    `shekyl_crypto_pq::subaddress::derive_subaddress_kem_keypair`,
+    is unbuilt; lands per
+    [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+    §6.4 / §3.1.3) and `SignTransactionTraitSurfaceIncomplete`
+    (`TxToSign`'s public-on-chain per-input data and FCMP++
+    tree-branch context are PR-5-pinned forward-declared; the
+    bridge to `shekyl_tx_builder::sign_transaction` lands when
+    the `PendingTxEngine` PR finalizes the shape). Both variants
+    are `#[non_exhaustive]`-shaped accretions; existing call
+    sites stay source-compatible as the surface evolves.
+  - **`OutputHandle` newtype + `derive_output_handle`** in
+    [`shekyl_crypto_pq::handle`](../rust/shekyl-crypto-pq/src/handle.rs).
+    16-byte opaque reference deterministically derived via
+    cSHAKE256 over `view_secret || tx_hash || output_index_le8`
+    with customization `"shekyl/output-handle-v1"` per
+    [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+    §7.12. The deterministic-handle pathway (Round 4 pre-flight
+    closure of §7.11=(3)) replaces the originally-considered
+    cached `HandleTable` data structure: re-derivation at spend
+    time is cheap (one cSHAKE256 invocation) and dissolves the
+    A6 (memory pressure) and Pattern-5 (concurrent-access)
+    Round-3 attack-surface clusters by construction. Reference
+    vectors locked in the module's test substrate.
+  - **`KeyImage` newtype** in
+    [`shekyl_crypto_pq::key_image`](../rust/shekyl-crypto-pq/src/key_image.rs).
+    32-byte canonical compressed Ed25519 encoding of `I = x ·
+    H_p(O)`; the per-output public on-chain double-spend
+    identifier. Carries the same privacy-correlation discipline
+    as `OutputHandle` (truncated `Debug` exposing the first two
+    bytes only; no `Display`; no `Zeroize` because key images are
+    publicly derivable from on-chain data). Per
+    [`.cursor/rules/18-type-placement.mdc`](../.cursor/rules/18-type-placement.mdc),
+    `KeyImage` is **transform-shaped** — defined by its
+    derivation function — so it lives with the function rather
+    than with any state-shaped consumer that happens to store it.
+  - **`ViewSecret` newtype** in
+    [`shekyl_crypto_pq::keys`](../rust/shekyl-crypto-pq/src/keys.rs).
+    `#[repr(transparent)]` 32-byte wrapper preserving the
+    bit-for-bit FFI layout invariant with
+    `shekyl_ffi::ShekylAllKeysBlob.view_sk: [u8; 32]`. Manual
+    truncated `Debug`; structural `ZeroizeOnDrop`. Wraps
+    `AllKeysBlob::view_sk`; downstream call sites consume the
+    canonical bytes via `.as_canonical_bytes()`. The remaining
+    `AllKeysBlob` typed-wrapper migration (`spend_sk` →
+    `SpendSecret`, `view_pk` → `ViewPublicKey`, `spend_pk` →
+    `SpendPublicKey`) lands as a separate short-lived branch
+    between M3a and M3b.
+  - **Subaddress derivation primitives relocated to
+    [`shekyl_crypto_pq::subaddress`](../rust/shekyl-crypto-pq/src/subaddress.rs).**
+    Classical Edwards-curve `subaddress_derivation_scalar` and
+    `subaddress_keys` (formerly methods on
+    `shekyl_scanner::ViewPair`) move to a dedicated module per the
+    path-stateless discipline (extension to the stateless-actor
+    framing): paths from trait surface to cryptographic primitive
+    must be stateless end-to-end, not just at their endpoints.
+    The module is positioned to also house the future
+    `derive_subaddress_kem_keypair` (per-subaddress hybrid X25519
+    + ML-KEM-768 keygen, §6.4) when its infrastructure lands —
+    the canonical home for **all** Shekyl subaddress derivation.
+    `ViewPair::subaddress_keys` is preserved as a thin call-
+    through; `ViewPair::subaddress_derivation` was deleted (no
+    live caller after the relocation, per
+    [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)).
+    `SubaddressIndex::to_canonical_bytes` accessor and the
+    `PRIMARY` constant added to
+    [`shekyl_engine_state::SubaddressIndex`](../rust/shekyl-engine-state/src/subaddress.rs)
+    per
+    [`.cursor/rules/18-type-placement.mdc`](../.cursor/rules/18-type-placement.mdc):
+    state-shaped types whose serialization is cryptographically
+    load-bearing carry a single canonical-bytes accessor at the
+    type definition; the cryptographic functions take pre-converted
+    bytes rather than the typed index.
+  - **`SourceSecretsBundle` transitional contract type** in
+    [`engine::traits::key`](../rust/shekyl-engine-core/src/engine/traits/key.rs).
+    Documents the per-input secret material
+    `KeyEngine::sign_transaction` needs — `(spend_key_x,
+    spend_key_y, commitment_mask, combined_ss, output_index)`,
+    each `Zeroizing`-wrapped — independent of where the secrets
+    originate. The bundle's *shape* is stable across the migration
+    (M3a populates from `TransferDetails`'s legacy fields; M3b+
+    derives internally from `(view_secret, source_ciphertext,
+    output_index)`); only the *source* evolves. Localizing the
+    M3b churn to bundle-population sites (rather than across the
+    trait surface and every implementor) is the load-bearing
+    property of this transitional field.
+
+  Property-delivery framing: M3a alone does not activate the
+  "secrets confined to engine" property — `TransferDetails`
+  still carries its 5 secret-bearing fields, and the bridge
+  reads from them transitionally. The property activates at
+  M3d's merge per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §4.1, when those fields are deleted. M3a is what makes the
+  activation possible: the `KeyEngine` trait is the boundary the
+  property eventually attaches to, and the deterministic
+  `OutputHandle` is the stateless-shape that replaces a per-call
+  handle table by re-deriving spending material at spend time.
+
+  Post-merge fix-ups against the M3a PR's review feedback (PR #32
+  Copilot review, landed before merge):
+
+  - **Redacted `Debug` on secret-bearing message shapes.**
+    `SourceSecretsBundle`, `TxInputSigningContext`, and `TxToSign`
+    each now carry a manual `Debug` impl (no `derive(Debug)`)
+    redacting the four `Zeroizing<…>` secret fields under
+    `[REDACTED]`. Per `35-secure-memory.mdc`, `Zeroizing<T>: Debug`
+    delegates to `T: Debug`, so deriving `Debug` on a secret-bearing
+    struct prints raw secret bytes through `tracing` fields, panic
+    backtraces, or `dbg!()` calls. Three new sentinel-byte tests in
+    `engine::traits::key::tests` pin the redaction.
+  - **PRIMARY special-cased in `derive_subaddress(_, Audit)`.**
+    The encoded primary address packs the wallet's *base* keys
+    (`spend_pk = D`, `view_pk = a*G`) into `classical_address_bytes`
+    directly, and the reverse-lookup registry pre-registers
+    `keys.spend_pk` against `SubaddressIndex::PRIMARY`. The trait
+    method previously routed `PRIMARY` through `subaddress_keys`,
+    returning `(D + m_0*G, a*(D + m_0*G))` — a different point that
+    matched neither the encoded address nor the registry. Special-
+    casing `idx.is_primary()` to return the base account keys
+    aligns the trait with the encoded address; for `idx >= 1`, the
+    per-index derivation is unchanged. New
+    `derive_subaddress_primary_audit_returns_base_account_keys`
+    test pins the contract; docstrings on
+    `shekyl_engine_state::SubaddressIndex`,
+    `shekyl_crypto_pq::subaddress`, and the `subaddress_keys`
+    primitive itself updated to spell out the special-case truth.
+  - **Hard-coded pinned vector for `subaddress_derivation_scalar`.**
+    The prior `derivation_scalar_pinned_vector` test re-ran the
+    same `keccak256_to_scalar` primitive on both sides of the
+    equality, so any drift inside that primitive flowed through
+    both arms. Replaced with a true known-answer test (32-byte
+    expected vector hard-coded for
+    `(view = 0x0102_0304_0506_0708, idx = 1)`) plus a renamed
+    formula-lock companion test that retains the prior coverage.
+    The pair fails in different classes of regression and pins
+    both the spec output bytes and the implementation composition.
+  - **Type-placement rule corrected.** `.cursor/rules/18-type-placement.mdc`
+    named `SubaddressIndex`'s home as `shekyl-engine-core` (twice);
+    the type actually lives in `shekyl-engine-state`. Updated.
+
 - **`LedgerEngine` trait extracted; `Engine<S, D>` parameterized
   over `L: LedgerEngine` with default `LocalLedger` (Stage 1 PR 2,
   the second trait-boundaries PR per

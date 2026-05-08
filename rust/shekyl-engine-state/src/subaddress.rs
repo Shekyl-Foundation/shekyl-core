@@ -9,11 +9,40 @@
 //! `(account, address)` two-level hierarchy as in wallet2 — see
 //! `docs/V3_WALLET_DECISION_LOG.md` entry "Subaddress hierarchy: flat, no
 //! account level". The primary address is `SubaddressIndex(0)`; user-derived
-//! subaddresses run `1..u32::MAX`. The `0` value is **not** reserved on this
-//! type — primary and derived addresses both come from the same derivation
-//! function (see `shekyl_scanner::view_pair::ViewPair::subaddress_derivation`)
-//! to avoid a special-case code path. Callers that want to test "this is the
-//! primary address" use `idx.get() == 0`.
+//! subaddresses run `1..u32::MAX`.
+//!
+//! ## Primary special case
+//!
+//! `PRIMARY` (`SubaddressIndex(0)`) names the wallet's *base* address —
+//! the keys packed into `AllKeysBlob::classical_address_bytes` directly
+//! by [`shekyl_crypto_pq::account::rederive_account`] (`version || spend_pk
+//! || view_pk`, where `spend_pk = D` and `view_pk = a*G`). This is the
+//! address all senders see when paying "the wallet" without selecting a
+//! subaddress.
+//!
+//! For `idx >= 1`, the per-index derivation
+//! [`shekyl_crypto_pq::subaddress::subaddress_keys`] produces a derived
+//! spend key `D + m_i * G` (where `m_i` is the per-subaddress scalar
+//! from [`shekyl_crypto_pq::subaddress::subaddress_derivation_scalar`]).
+//! That derivation is mathematically defined for `idx == 0` as well, but
+//! the resulting `D + m_0 * G` is a **different point** from the wallet's
+//! base spend key `D` and is **not** what the encoded primary address
+//! refers to. `KeyEngine` implementors special-case `idx.is_primary()`
+//! and return the base account keys; cryptographic call sites that take
+//! `idx.to_canonical_bytes()` directly (e.g., per-subaddress KEM-keypair
+//! derivation, which is wallet-keyed and per-index) treat `idx == 0` as
+//! a regular index. Callers that want to test "this is the primary
+//! address" use [`Self::is_primary`].
+//!
+//! ## Canonical-bytes accessor
+//!
+//! [`SubaddressIndex::to_canonical_bytes`] returns the 4-byte little-endian
+//! encoding consumed by Shekyl's classical Edwards-curve subaddress
+//! derivation. Per rule 18 (`.cursor/rules/18-type-placement.mdc`),
+//! state-shaped types whose serialization is cryptographically load-bearing
+//! carry a single canonical-bytes accessor at the type definition;
+//! cryptographic functions take pre-converted bytes rather than depending on
+//! the wallet-state owner.
 //!
 //! ## Wire shape
 //!
@@ -67,6 +96,17 @@ impl SubaddressIndex {
     /// `idx.get() == 0`.
     pub const fn is_primary(&self) -> bool {
         self.0 == 0
+    }
+
+    /// 4-byte little-endian canonical encoding for cryptographic input.
+    ///
+    /// This encoding is the contract that Shekyl's classical Edwards-curve
+    /// subaddress derivation in `shekyl-crypto-pq` relies on; changing it
+    /// would invalidate every previously-derived subaddress key. Per rule 18,
+    /// the byte-layout discipline lives here (one place); cryptographic
+    /// functions take pre-converted bytes rather than the typed index.
+    pub const fn to_canonical_bytes(&self) -> [u8; 4] {
+        self.0.to_le_bytes()
     }
 }
 
@@ -138,5 +178,19 @@ mod tests {
         assert_eq!(idx.get(), 7);
         let raw: u32 = idx.into();
         assert_eq!(raw, 7);
+    }
+
+    #[test]
+    fn canonical_bytes_is_le_u32() {
+        assert_eq!(SubaddressIndex::PRIMARY.to_canonical_bytes(), [0, 0, 0, 0]);
+        assert_eq!(SubaddressIndex::new(1).to_canonical_bytes(), [1, 0, 0, 0]);
+        assert_eq!(
+            SubaddressIndex::new(0x0403_0201).to_canonical_bytes(),
+            [1, 2, 3, 4]
+        );
+        assert_eq!(
+            SubaddressIndex::new(u32::MAX).to_canonical_bytes(),
+            [0xff, 0xff, 0xff, 0xff]
+        );
     }
 }

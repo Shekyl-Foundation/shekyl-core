@@ -1213,10 +1213,11 @@ is a `HybridKemPublicKey` carrying both the X25519 and ML-KEM-768
 public-key components per-subaddress index:
 
 - **X25519 component.** Derives per-index from the view secret
-  per the existing classical-Monero subaddress derivation
+  per the existing classical Edwards-curve subaddress derivation
   machinery (the same path that produces the classical
   spend / view subaddress key pair). No new primitive needed;
-  the derivation is already in the workspace.
+  the derivation is already in the workspace
+  (`shekyl_crypto_pq::subaddress::subaddress_keys`).
 - **ML-KEM-768 component.** Derives via deterministic ML-KEM-768
   keygen, where the keygen RNG is replaced by an HKDF-derived
   byte stream:
@@ -1292,7 +1293,7 @@ completion prose).**
 > The Round-3 commit 3b lands the per-subaddress `kem_pk`
 > derivation specification: `RecipientSubaddress.kem_pk` is a
 > `HybridKemPublicKey` whose X25519 component derives per-index
-> via classical-Monero subaddress derivation and whose
+> via classical Edwards-curve subaddress derivation and whose
 > ML-KEM-768 component derives via deterministic ML-KEM-768
 > keygen seeded by `HKDF-Expand(view_secret, "shekyl/
 > subaddr-mlkem-keygen-v1" || subaddress_index_le_bytes)`. The
@@ -1344,10 +1345,10 @@ The four findings landed by commit 3c:
   not pin the constant's value. Disposition: pin
   `VIEW_TAG_BYTES = 1` (matching the existing `u8` shape in
   `shekyl-crypto-pq::derivation::derive_view_tag_x25519`'s
-  return type and `shekyl-scanner::shared_key::SharedKey::view_tag`'s
-  field); the 1-byte width is consistent with classical Monero's
-  view-tag width and bounds the false-positive rate the
-  pre-filter trades for the pre-filter's cheap-path benefit.
+  return type and   `shekyl-scanner::shared_key::SharedKey::view_tag`'s
+  field); the 1-byte width is Shekyl's chosen view-tag width
+  and bounds the false-positive rate the pre-filter trades
+  for the pre-filter's cheap-path benefit.
 - **A5 → ζ — Method-to-domain binding via marker trait.**
   Cross-domain signature reuse prevention via per-domain HKDF
   chains (the impl's `SignDomain` enumeration) is currently
@@ -1748,7 +1749,7 @@ the trait surface's parameters and return types.
 | `HandleTable` | `pub(crate) struct HandleTable { /* concurrent-access shape pinned in Round 4 */ }` | Workflow-internal state owned by `LocalKeys`. Maps `OutputHandle` → per-output secret material (`output_secret_key`, `amount_blinding_factor`) for outputs the wallet has claimed but not yet spent. Lives behind interior mutability (the `KeyEngine` trait is `&self` async; concurrent `try_claim_output` calls insert; `sign_transaction` looks up). The exact concurrent-access shape (sharded `RwLock`, lock-free hashmap, fair-queued single-writer, etc.) is **Round 4 work**; the shape selection couples to A6 (memory-pressure attack surface) and the Round-3 Pattern-5 cluster (cross-call state correlation as side-channel). The trait surface is unchanged regardless of inner shape. |
 | `SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT` | `pub(crate) const SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT: &[u8] = b"shekyl/subaddr-mlkem-keygen-v1";` | HKDF-Expand info-string prefix for the per-subaddress ML-KEM-768 keygen path (per §3.1.3). The `-v1` suffix is the versioning axis: a future hard fork that migrates the derivation (e.g., V4 lattice-only swap from ML-KEM-768 to a successor primitive) bumps the suffix and lives alongside the v1 path until the migration completes. The constant is `pub(crate)` because it's consumed inside `derive_subaddress`'s impl (and the symmetric recipient-side spend path that resolves an output against the same per-index ML-KEM secret); no trait-surface caller observes it. Consumed in conjunction with `subaddress_index_le_bytes` to form the full HKDF info string per the §3.1.3 byte-layout. |
 | `derive_subaddress_kem_keypair` (workflow-internal primitive) | `pub(crate) fn derive_subaddress_kem_keypair(view_secret: &ViewSecret, idx: SubaddressIndex) -> (HybridKemPublicKey, ZeroizingMlKemSecretKey)` (or signature pinned at impl time) | Deterministic per-subaddress ML-KEM-768 keypair derivation per §3.1.3. Workflow-internal; lives in `shekyl-crypto-pq` (or, if cleaner, in a `LocalKeys`-private module that re-exports the underlying ML-KEM-768 KeyGen against an HKDF-seeded byte stream). Consumed by `derive_subaddress(_, SubaddressPurpose::Recipient)` to populate `RecipientSubaddress.kem_pk` (returning the public component) and by `try_claim_output`'s impl to recover the per-subaddress ML-KEM SK during hybrid decap (re-deriving the keypair from view secret + the candidate index). The `ZeroizingMlKemSecretKey` return wrap (or equivalent) is per `35-secure-memory.mdc`'s structural-memwipe rule for SK material. The exact return-tuple shape, name, and module location are pinned at PR 3 implementation time; the §3.1.3 spec pins the inputs, the byte-layout of the HKDF info string, and the output-keypair determinism. |
-| `VIEW_TAG_BYTES` (A4 disposition) | `pub(crate) const VIEW_TAG_BYTES: usize = 1;` | Width of the on-wire view tag (`ViewTag(pub(crate) [u8; VIEW_TAG_BYTES])` per §3.3 Sub-bundle B). Pinned at `1` to match `shekyl-crypto-pq::derivation::derive_view_tag_x25519`'s `u8` return type and `shekyl-scanner::shared_key::SharedKey::view_tag`'s field shape. The 1-byte width is consistent with classical Monero's view-tag width; it bounds the false-positive rate of the X25519-only pre-filter to 2⁻⁸ per output, which is the chosen trade-off between filter selectivity and on-wire bloat. The constant is `pub(crate)` because it's consumed inside `try_claim_output`'s pre-filter machinery; no trait-surface caller observes it directly (the `ViewTag` newtype hides the width). Pinning the value at the spec level closes the A4 spec-silent junction (Round 3 §3.1.4 finding) so cross-version verifiers and future maintainers reading the spec alone share the same width as the impl. The `-v1` framing for view-tag derivation lives at the salt level (`HKDF_SALT_VIEW_TAG_X25519 = b"shekyl-view-tag-x25519-v1"`), not at the constant; a future migration that widens the tag would bump the salt suffix and the `VIEW_TAG_BYTES` value together as a coupled spec amendment. |
+| `VIEW_TAG_BYTES` (A4 disposition) | `pub(crate) const VIEW_TAG_BYTES: usize = 1;` | Width of the on-wire view tag (`ViewTag(pub(crate) [u8; VIEW_TAG_BYTES])` per §3.3 Sub-bundle B). Pinned at `1` to match `shekyl-crypto-pq::derivation::derive_view_tag_x25519`'s `u8` return type and `shekyl-scanner::shared_key::SharedKey::view_tag`'s field shape. The 1-byte width is Shekyl's chosen view-tag width; it bounds the false-positive rate of the X25519-only pre-filter to 2⁻⁸ per output, which is the chosen trade-off between filter selectivity and on-wire bloat. The constant is `pub(crate)` because it's consumed inside `try_claim_output`'s pre-filter machinery; no trait-surface caller observes it directly (the `ViewTag` newtype hides the width). Pinning the value at the spec level closes the A4 spec-silent junction (Round 3 §3.1.4 finding) so cross-version verifiers and future maintainers reading the spec alone share the same width as the impl. The `-v1` framing for view-tag derivation lives at the salt level (`HKDF_SALT_VIEW_TAG_X25519 = b"shekyl-view-tag-x25519-v1"`), not at the constant; a future migration that widens the tag would bump the salt suffix and the `VIEW_TAG_BYTES` value together as a coupled spec amendment. |
 | `OUTPUT_DERIVE_HKDF_REGISTRY` (A3 reference, not a Rust item) | The canonical HKDF salt + label registry living in `shekyl-crypto-pq::derivation`: `HKDF_SALT_OUTPUT_DERIVE = b"shekyl-output-derive-v1"`, `HKDF_SALT_VIEW_TAG_X25519 = b"shekyl-view-tag-x25519-v1"`, `SALT_KEM_DERIVE_V1 = b"shekyl-output-kem-v1"`; per-secret labels `shekyl-output-x`, `shekyl-output-y`, `shekyl-output-mask`, `shekyl-output-amount-key`, `shekyl-output-view-tag-combined`, `shekyl-output-amount-tag`, `shekyl-pqc-output`, `shekyl-pqc-ed25519`, `shekyl-view-tag-x25519`. | Per-output HKDF chain that `try_claim_output`'s impl uses to derive output-spending secrets, view-tag-combined cross-check, amount key, ML-DSA seed, and Ed25519-PQC seed. The spec's pre-Round-3 framing said "HKDF chain" without pinning the binding; A3's disposition (Round 3 §3.1.4) is to **reference the canonical registry** rather than restate it here. The single source of truth is `shekyl-crypto-pq::derivation` (alongside `tools/reference/derive_output_secrets.py` and the locked `docs/test_vectors/PQC_OUTPUT_SECRETS.json`); `KeyEngine`'s impl consumes those constants directly. **Per-output uniqueness argument:** the wargaming pass framed the concern as "cross-output replay needs explicit `tx_context_hash` binding"; this was overspecified. The actual binding is via `combined_ss = X25519(eph_sk, view_pk) ‖ ML-KEM-Decap(kem_sk, ct)` which is per-output-unique by construction (each output has a unique X25519 ephemeral and unique ML-KEM ciphertext). The `output_index_le64` byte-suffix on every label provides intra-tx separation; the per-output `combined_ss` provides cross-tx and cross-output separation. No `tx_context_hash` is required; the registry's existing salt + label + index-suffix layout already binds the full context. **Future-proofing:** a future hard fork that bundles a tx-level context (e.g., binding the FCMP++ root hash into the per-output derivation) would be a coupled `-v2` salt + label migration (the `-v1` suffixes are the versioning axis) and lives alongside the v1 path until the migration completes. The trait surface absorbs the migration through the impl; the trait's contract is unchanged. |
 | `SignsInDomain` (A5 → ζ) | `pub(crate) trait SignsInDomain { const DOMAIN: SignDomain; }` | Marker trait pinning the cryptographic domain a workflow-internal signing operation operates in. Implemented by per-domain unit-struct markers (`SignTransactionDomain`, `OutputSecretDerivationDomain`, `FcmpPlusPlusWitnessDomain`, `MlKemChallengeDomain`); each marker's `impl SignsInDomain` sets `const DOMAIN` to the matching `SignDomain` variant. Consumed by the workflow-internal `derive_signing_key<D: SignsInDomain>` primitive (and by future per-domain HKDF-context-derivation sites) — the type parameter forces the call site to name the domain, and the impl's HKDF context derivation reads `D::DOMAIN` to drive per-domain salt selection. Cross-domain reuse becomes a deliberate inspection-visible action: a future maintainer copying `sign_transaction`'s body to add `sign_governance_proposal` must change the type parameter to a new marker (introducing `SignGovernanceDomain` against the existing `SignDomain` enum), or reuse `SignTransactionDomain` against a non-transaction-signing call (an inspection-visible mismatch a reviewer flags). Compile-time enforcement of a load-bearing security property at minimal cost (~10–15 LOC for the trait + four markers); the discipline transfers from convention (every call site asserts) to type system (rustc enforces). The trait + markers are `pub(crate)` because no trait-surface caller observes them; they live entirely behind `LocalKeys`'s impl boundary. The `#[non_exhaustive]` on `SignDomain` (existing) keeps the enum extensible; new domains added per Q9.2's additive-amendment discipline land alongside their per-domain marker structs. |
 | `SignTransactionDomain` / `OutputSecretDerivationDomain` / `FcmpPlusPlusWitnessDomain` / `MlKemChallengeDomain` (A5 → ζ markers) | `pub(crate) struct SignTransactionDomain;` (and three siblings) with `impl SignsInDomain for SignTransactionDomain { const DOMAIN: SignDomain = SignDomain::TransactionSignature; }` (and three siblings, each binding to its matching `SignDomain` variant) | The four per-domain markers, one per `SignDomain` variant. Unit structs with no runtime cost; the `const DOMAIN` is monomorphized at compile time. Each call site that consumes `derive_signing_key<D: SignsInDomain>(...)` instantiates with the appropriate marker, naming the domain at the call site rather than passing it as a runtime argument. Stage 4's multisig variants (multisig witness, partial signature, etc.) add new `SignDomain` variants and corresponding new markers additively, per Q9.2's `#[non_exhaustive]` disposition. PR 4–7 trait extractions that introduce new signing workflows (e.g., a `PendingTxEngine`-internal partial-signature path) follow the same pattern: a new `SignDomain` variant, a new marker, the new workflow's impl uses the marker. |
@@ -1880,7 +1881,7 @@ pub struct ViewTag(pub(crate) [u8; VIEW_TAG_BYTES]);
 `VIEW_TAG_BYTES` row, A4 disposition Round 3 §3.1.4). The
 1-byte width matches `shekyl-crypto-pq::derivation::derive_view_tag_x25519`'s
 `u8` return type and `shekyl-scanner::shared_key::SharedKey::view_tag`'s
-field shape; consistent with classical Monero's view-tag width;
+field shape; Shekyl's chosen view-tag width;
 bounds the X25519-only pre-filter false-positive rate to 2⁻⁸
 per output. The `[u8; N]` shape rather than a typed hash output
 is intentional — view tags are short publicly-comparable
@@ -2114,7 +2115,7 @@ pub struct RecipientSubaddress {
     /// subaddress_index)`:
     ///
     /// - **X25519 component.** Derives per-index from the view
-    ///   secret per the existing classical-Monero subaddress
+    ///   secret per the existing classical Edwards-curve subaddress
     ///   derivation machinery — the same path that produces
     ///   `SubaddressKeyPair { spend_pk, view_pk }` under the
     ///   `Audit` purpose. No new primitive needed.
@@ -2449,9 +2450,9 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// trait method returning a borrowed reference (`&AccountPublicAddress`)
     /// rather than an owned message, because address material is
     /// not bound to any per-call context. See §7 for the
-    /// account-address-stability assumption (today's classical-Monero
-    /// behavior; PQC schemes with key-rotation properties may
-    /// re-open this in V3.x).
+    /// account-address-stability assumption (today's classical
+    /// Edwards-curve behavior; PQC schemes with key-rotation
+    /// properties may re-open this in V3.x).
     fn account_public_address(&self) -> &AccountPublicAddress;
 
     /// Derive a subaddress for a specific purpose.
@@ -2472,9 +2473,10 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     ///
     /// **Recipient purpose — derivation cost.** The X25519
     /// component of `kem_pk` derives via the existing
-    /// classical-Monero subaddress-derivation machinery (cheap;
-    /// scalar arithmetic). The ML-KEM-768 component derives via
-    /// deterministic keygen seeded by `HKDF-Expand(view_secret,
+    /// classical Edwards-curve subaddress-derivation machinery
+    /// (cheap; scalar arithmetic). The ML-KEM-768 component
+    /// derives via deterministic keygen seeded by
+    /// `HKDF-Expand(view_secret,
     /// SUBADDR_MLKEM_KEYGEN_HKDF_CONTEXT ||
     /// subaddress_index_le_bytes)` — see §3.1.3 / §3.3 Sub-bundle A
     /// for the byte-layout. Total cost is dominated by ML-KEM-768
@@ -3519,10 +3521,11 @@ need V3.x churn. (L2.1, L2.3)
 ### 7.8 Account-address stability assumption
 
 `account_public_address` returns `&AccountPublicAddress` with a
-"stable for wallet lifetime" doc-comment. **This is a classical-Monero
-assumption, not a structural necessity.** PQC schemes with
-key-rotation properties (e.g., forward-secure signature schemes)
-might not have a stable account-address concept in the same form.
+"stable for wallet lifetime" doc-comment. **This is a classical
+Edwards-curve assumption (Ed25519 keys do not rotate), not a
+structural necessity.** PQC schemes with key-rotation properties
+(e.g., forward-secure signature schemes) might not have a stable
+account-address concept in the same form.
 
 The disposition for V3.0 / V3.x: keep the assumption explicit
 and acknowledge it as an assumption rather than a property. If
@@ -3537,7 +3540,7 @@ signature.
 
 The lens this surfaced under: (L4.2). The acknowledgement here
 is not a forward-looking commitment to a particular V3.x shape;
-it's a record that the PR 3 trait's classical-Monero-shaped
+it's a record that the PR 3 trait's classical Edwards-curve-shaped
 account-address contract is one of several places where V3.x
 PQC evolution may surface trait churn.
 

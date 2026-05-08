@@ -519,7 +519,12 @@ fn copy_blob_to_ffi(src: &AllKeysBlob, dst: &mut ShekylAllKeysBlob) {
     dst.pqc_public_key = src.pqc_public_key;
     dst.classical_address_bytes = src.classical_address_bytes;
     dst.spend_sk = src.spend_sk;
-    dst.view_sk = src.view_sk;
+    // `src.view_sk` is `ViewSecret` (a `#[repr(transparent)]` newtype
+    // wrapping `[u8; 32]`); deref the canonical bytes to copy into
+    // the C-layout `[u8; 32]` field. Layout-compat between
+    // `AllKeysBlob` and `ShekylAllKeysBlob` is asserted by the
+    // `size_of::<...>()` test below.
+    dst.view_sk = *src.view_sk.as_canonical_bytes();
     dst.ml_kem_dk = src.ml_kem_dk;
 }
 
