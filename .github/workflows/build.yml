@@ -40,6 +40,14 @@ jobs:
       - uses: actions/checkout@v5
       - name: reject eprintln!/dbg!/println! in production Rust
         run: |
+          # Strip line-comments (`//`, `///`, `//!`) before grepping so
+          # doc-comments referencing the macros for *educational* reasons
+          # — e.g. `/// would print bytes via dbg!() calls` — do not trip
+          # the lint. The script's intent is "no debug-macro *invocations*
+          # in production code"; a literal call requires `macro!(` and is
+          # uneditable through comment text. False negatives from a
+          # `dbg!(` substring inside a string literal are accepted as a
+          # contrived corner case.
           FOUND=0
           for f in $(find rust/shekyl-*/src -name '*.rs' \
                      ! -name 'build.rs' ! -name 'main.rs' ! -path '*/examples/*' \
@@ -47,9 +55,11 @@ jobs:
             TEST_LINE=$(grep -n '#\[cfg(test)\]' "$f" | head -1 | cut -d: -f1)
             if [ -n "$TEST_LINE" ]; then
               HITS=$(head -n "$((TEST_LINE - 1))" "$f" \
-                     | grep -n 'eprintln!\|dbg!\|println!' || true)
+                     | sed 's|//.*||' \
+                     | grep -n 'eprintln!(\|dbg!(\|println!(' || true)
             else
-              HITS=$(grep -n 'eprintln!\|dbg!\|println!' "$f" || true)
+              HITS=$(sed 's|//.*||' "$f" \
+                     | grep -n 'eprintln!(\|dbg!(\|println!(' || true)
             fi
             if [ -n "$HITS" ]; then
               echo "$f:"
