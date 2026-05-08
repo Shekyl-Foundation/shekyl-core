@@ -24,13 +24,14 @@
 //!
 //! - [`ViewSecret`] — view-secret scalar (gates view-only access).
 //! - [`SpendSecret`] — spend-secret scalar (gates spend authority).
+//! - [`MlKem768DecapKey`] — ML-KEM-768 decap (secret) key.
 //! - [`SpendPublicKey`] — Ed25519 spend public key (account identity).
 //! - [`ViewPublicKey`] — Ed25519 view public key (account identity).
 //!
-//! Secret wrappers (`ViewSecret`, `SpendSecret`) carry
-//! `Zeroize + ZeroizeOnDrop` and forbid `Copy`. Public-key wrappers
-//! (`SpendPublicKey`, `ViewPublicKey`) carry `Copy + Eq + Hash` for use
-//! as identity-bearing values in registries (e.g. the subaddress
+//! Secret wrappers (`ViewSecret`, `SpendSecret`, `MlKem768DecapKey`)
+//! carry `Zeroize + ZeroizeOnDrop` and forbid `Copy`. Public-key
+//! wrappers (`SpendPublicKey`, `ViewPublicKey`) carry `Copy + Eq + Hash`
+//! for use as identity-bearing values in registries (e.g. the subaddress
 //! registry's `HashMap<SpendPublicKey, SubaddressIndex>` in
 //! `shekyl-engine-core`'s `LocalKeys`); they implement `Zeroize` (so
 //! the surrounding `AllKeysBlob::drop` can wipe them for the same
@@ -45,6 +46,8 @@
 use std::fmt;
 
 use zeroize::{Zeroize, ZeroizeOnDrop};
+
+use crate::kem::ML_KEM_768_DK_LEN;
 
 /// The wallet's view-secret scalar, 32 canonical little-endian bytes.
 ///
@@ -159,6 +162,67 @@ impl SpendSecret {
     /// Borrow the canonical 32-byte representation for cryptographic
     /// input. See type-level "Canonical-bytes contract" doc-comment.
     pub fn as_canonical_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+/// The wallet's ML-KEM-768 decapsulation (secret) key, 2400 bytes
+/// in the FIPS 203 canonical encoding.
+///
+/// This is the post-quantum half of the wallet's hybrid view-side
+/// secret material: `(view_sk, ml_kem_dk)` together gate ECDH+KEM
+/// decapsulation of every output's hybrid shared secret. Holding
+/// `ViewSecret` alone is insufficient for view-only access on the
+/// PQC-augmented chain; `MlKem768DecapKey` is required.
+///
+/// # Hygiene properties
+///
+/// Mirrors [`ViewSecret`] / [`SpendSecret`]:
+///
+/// - **No `Copy`.** Compiler-emitted copies of a 2400-byte secret
+///   would defeat wipe-on-drop discipline; `Clone` is opt-in by
+///   callers.
+/// - **`Zeroize + ZeroizeOnDrop`.** Inner bytes wipe at drop time.
+/// - **No `Debug`.** Manual or derived `Debug` on a 2400-byte
+///   secret would format the bytes; callers needing to inspect
+///   bytes for debugging must explicitly route through
+///   `as_canonical_bytes()` and accept responsibility for what
+///   they do with the result.
+///
+/// # Canonical-bytes contract
+///
+/// `as_canonical_bytes()` returns the 2400-byte FIPS 203
+/// decapsulation-key encoding. Cryptographic functions
+/// (e.g. [`crate::output::recover_output_secret`]) take
+/// `&[u8]` and rely on this representation being stable across
+/// every call site. See `.cursor/rules/18-type-placement.mdc`
+/// for the discipline.
+///
+/// # FFI layout invariant
+///
+/// `#[repr(transparent)]` guarantees `MlKem768DecapKey` has
+/// identical memory layout to its inner `[u8; ML_KEM_768_DK_LEN]`.
+/// This preserves the bit-for-bit compatibility invariant between
+/// [`crate::account::AllKeysBlob`] and `shekyl_ffi::ShekylAllKeysBlob`
+/// asserted at the latter's `size_of::<...>()` test.
+#[repr(transparent)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+pub struct MlKem768DecapKey([u8; ML_KEM_768_DK_LEN]);
+
+impl MlKem768DecapKey {
+    /// Construct from raw bytes.
+    ///
+    /// `pub(crate)` because the only legitimate construction sites
+    /// are inside this crate (key derivation in `account.rs`,
+    /// wallet-file open paths in `wallet_envelope.rs`).
+    pub(crate) fn from_bytes(bytes: [u8; ML_KEM_768_DK_LEN]) -> Self {
+        Self(bytes)
+    }
+
+    /// Borrow the canonical 2400-byte FIPS 203 representation for
+    /// cryptographic input. See type-level "Canonical-bytes
+    /// contract" doc-comment.
+    pub fn as_canonical_bytes(&self) -> &[u8; ML_KEM_768_DK_LEN] {
         &self.0
     }
 }
@@ -303,6 +367,20 @@ mod tests {
         let bytes = [0x99u8; 32];
         let secret = SpendSecret::from_bytes(bytes);
         assert_eq!(secret.as_canonical_bytes(), &bytes);
+    }
+
+    #[test]
+    fn ml_kem_768_decap_key_round_trip_canonical_bytes() {
+        let bytes = [0x55u8; ML_KEM_768_DK_LEN];
+        let dk = MlKem768DecapKey::from_bytes(bytes);
+        assert_eq!(dk.as_canonical_bytes(), &bytes);
+    }
+
+    #[test]
+    fn ml_kem_768_decap_key_clone_produces_equal_canonical_bytes() {
+        let dk = MlKem768DecapKey::from_bytes([0xa3u8; ML_KEM_768_DK_LEN]);
+        let cloned = dk.clone();
+        assert_eq!(dk.as_canonical_bytes(), cloned.as_canonical_bytes());
     }
 
     #[test]
