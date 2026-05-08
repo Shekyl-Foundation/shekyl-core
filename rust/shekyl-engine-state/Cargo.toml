@@ -29,6 +29,10 @@ postcard = { version = "1", features = ["alloc"] }
 postcard-schema = { version = "0.2", default-features = false, features = ["derive", "use-std"] }
 
 shekyl-address = { path = "../shekyl-address" }
+# `KeyImage` newtype consumed by `TransferDetails::key_image` for
+# type-system protection at the engine-state boundary; serialization
+# is `#[serde(transparent)]` so the on-disk format is unchanged.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-staking = { path = "../shekyl-staking" }
 

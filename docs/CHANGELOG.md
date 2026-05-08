@@ -283,6 +283,194 @@
   cbindgen sibling, full migration in V3.0). Audit-quality artifact
   for the August external review.
 
+- **`AllKeysBlob` and `KeyImage` typed-wrapper sweep (between Stage 1
+  PR 3 M3a and M3b; short-lived sweep branch off the M3a PR head per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3 "Landing notes (M3a closed)").** Closes the deferred-from-M3a
+  typed-wrapper migration that the M3a `ViewSecret` work pre-announced
+  in `shekyl-crypto-pq::keys`'s "near-term workstream" docstring.
+  Three new newtypes plus two API extensions, no consensus or wire
+  format changes (every wrapper is `#[repr(transparent)]`; serde
+  formats use `#[serde(transparent)]`).
+
+  **`shekyl-crypto-pq::keys` newtypes:**
+  - **`SpendSecret`** — secret-bearing scalar mirroring `ViewSecret`'s
+    discipline exactly: `#[repr(transparent)]`, `Clone + Zeroize +
+    ZeroizeOnDrop`, no `Copy`, no `Debug`, `pub(crate) fn from_bytes`,
+    `as_canonical_bytes()` accessor for raw-byte consumers at the
+    boundary.
+  - **`SpendPublicKey` / `ViewPublicKey`** — public-key identity
+    values: `Copy + PartialEq + Eq + Hash + PartialOrd + Ord +
+    Zeroize` for use as registry keys (`LocalKeys`'s
+    `HashMap<SpendPublicKey, SubaddressIndex>` reverse-lookup
+    registry); manual truncated `Debug` matching `KeyImage`'s
+    privacy-correlation discipline (first two bytes only); `pub fn
+    from_canonical_bytes` constructor — engine boundaries outside this
+    crate (`shekyl-engine-core::engine::local_keys::derive_subaddress`)
+    are legitimate construction sites, mirroring `KeyImage`'s pattern.
+    No `ZeroizeOnDrop` because that conflicts with `Copy` (Rust trait
+    coherence rule); the surrounding `AllKeysBlob::drop` clears these
+    public fields explicitly via `.zeroize()` for the same uniform-
+    write-pattern reason raw `[u8; 32]` fields had.
+
+  **`AllKeysBlob` field migration:**
+  - `spend_pk: [u8; 32]` → `spend_pk: SpendPublicKey`
+  - `view_pk:  [u8; 32]` → `view_pk:  ViewPublicKey`
+  - `spend_sk: [u8; 32]` → `spend_sk: SpendSecret`
+  - `view_sk: ViewSecret` (already typed in M3a Commit 2; unchanged)
+
+  The `Drop` implementation simplifies: `spend_sk` and `view_sk` now
+  wipe via field-drop-glue (`ZeroizeOnDrop`), only public-key +
+  composite fields remain in the manual zeroization block. The
+  `#[repr(transparent)]` invariant continues to be asserted by
+  `shekyl-ffi`'s `size_of::<...>()` test against
+  `ShekylAllKeysBlob`.
+
+  **`shekyl-crypto-pq::key_image::KeyImage` API extensions:**
+  - Now derives `Zeroize`, `Serialize`, `Deserialize`, with
+    `#[serde(transparent)]`. Wire format remains byte-identical to
+    `[u8; 32]`.
+  - `Zeroize` (without `ZeroizeOnDrop`, which would conflict with
+    `Copy`) lets containers that hold a `KeyImage` alongside genuinely-
+    secret material (`shekyl_engine_state::TransferDetails`,
+    `shekyl_scanner::RecoveredWalletOutput`) wipe every field on
+    `Drop` for uniform-write-pattern hygiene — the same `Copy +
+    Zeroize` pairing the new public-key newtypes use. The manual
+    `Debug` and absence-of-`Display` privacy discipline is unchanged.
+
+  **`KeyImage` call-site sweep across the workspace:**
+  - **`shekyl-engine-state::TransferDetails.key_image`:** `Option<[u8;
+    32]>` → `Option<KeyImage>`. The on-disk and postcard-schema
+    layouts are preserved by `KeyImage`'s `#[serde(transparent)]`.
+    `TransferDetails::zeroize` continues to wipe the field; `Zeroize`
+    on `KeyImage` removes the special-case `Option`-then-bytes
+    accessor previously needed at the wipe site.
+  - **`shekyl-engine-state::LedgerIndexes.key_images`:** `HashMap<[u8;
+    32], usize>` → `HashMap<KeyImage, usize>`. Method signatures on
+    `mark_spent`, `unmark_spent`, `detect_spends`, `set_key_image`,
+    `freeze_by_key_image`, `thaw_by_key_image` updated to take
+    `&KeyImage` / `KeyImage` / `&[KeyImage]`. The `[0u8; 32]` filter
+    on rebuild/ingest is removed: the runtime-scanner path always
+    produces a real key image, and `Option<KeyImage>` already encodes
+    "not yet computed" — sentinel-byte gating was redundant in the
+    on-disk path. (See FOLLOWUPS for the matching deferred promotion
+    of `RecoveredWalletOutput.key_image` to `Option<KeyImage>` in
+    V3.1.)
+  - **`shekyl-scanner::RecoveredWalletOutput.key_image`:** `[u8; 32]`
+    → `KeyImage` with `#[zeroize(skip)]`. The boundary in
+    `ledger_ext.rs` retains a `[0u8; 32]` test-fixture filter so
+    `RecoveredWalletOutput::new_for_test`'s zero placeholder maps to
+    `td.key_image = None` (preserving the offline-derivation /
+    `set_key_image` fill-in semantics view-only wallets rely on); a
+    FOLLOWUPS V3.1 entry tracks promoting the field itself to
+    `Option<KeyImage>` and deleting the boundary filter.
+  - **`shekyl-engine-core::scan::KeyImageObserved.key_image`:** `[u8;
+    32]` → `KeyImage`. Constructor sites in `refresh.rs`'s per-block
+    input-walk wrap raw bytes via `KeyImage::from_canonical_bytes`.
+  - **`shekyl-proofs::reserve_proof::{ReserveOutputEntry,
+    VerifiedReserveOutput}.key_image`:** `[u8; 32]` → `KeyImage`. The
+    192-byte per-output wire layout is unchanged — the proof's
+    `write_per_output` consumes via `key_image.as_bytes()` and the
+    verifier wraps the on-wire bytes back into `KeyImage` at the
+    return boundary.
+  - **`shekyl-engine-core::multisig::v31::prover::ProverInputProof.key_image`:**
+    `[u8; 32]` → `KeyImage`. `signable_bytes()` consumes via
+    `key_image.as_bytes()`; serde wire format unchanged.
+  - **`shekyl-engine-core::multisig::v31::counter_proof::CounterProof.consumed_inputs`:**
+    `Vec<[u8; 32]>` → `Vec<KeyImage>`; `CounterProofChainView::is_tracked_unspent`
+    signature updated to take `&KeyImage`.
+  - **`shekyl-engine-core::engine::traits::key::SubaddressKeyPair`:**
+    `spend_pk` / `view_pk` typed as `SpendPublicKey` / `ViewPublicKey`.
+  - **`shekyl-engine-rpc::handlers::parse_key_image`:** now returns
+    `KeyImage` (constructor site at the wallet-RPC boundary).
+  - All `[u8; 32]` test fixtures across `shekyl-engine-state`,
+    `shekyl-engine-core` (including bench fixtures and adversarial
+    multisig tests), and `shekyl-scanner` updated to construct
+    `KeyImage::from_canonical_bytes(...)` explicitly.
+
+  **Cascade closure (verify API + tests).** Final pass on the
+  cascade — the public verifier surface and the last test-helper
+  seams:
+  - **`shekyl-fcmp::proof::verify`:** `key_images: &[[u8; 32]]` →
+    `&[KeyImage]`. `pseudo_outs: &[[u8; 32]]` stays raw — pseudo-
+    output commitments are a different concept, and the type-system
+    protection is specifically for the key-image slot. The verifier
+    consumes typed inputs via `.as_bytes()` exactly once at the
+    point where the function downcasts to the upstream FCMP++
+    library's byte-shaped API. New `shekyl-fcmp` regular dependency
+    on `shekyl-crypto-pq` (cycle-free: `shekyl-crypto-pq` references
+    `shekyl-fcmp` only as a `[dev-dependencies]` entry). The type is
+    re-exported as `pub use shekyl_crypto_pq::key_image::KeyImage`
+    from `shekyl-fcmp::proof` so callers (fuzz harnesses) can name
+    it without taking a direct dep.
+  - **`shekyl-ffi::lib`'s `shekyl_fcmp_verify` marshaling:** rebuilds
+    `Vec<KeyImage>` via `KeyImage::from_canonical_bytes` from the
+    C-supplied `*const u8` buffer; `pseudo_outs` marshaling is
+    unchanged.
+  - **`shekyl-fcmp` fuzz targets** (`fuzz_tx_deserialize_fcmp_type7`,
+    `fuzz_fcmp_proof_deserialize`) updated their key-image
+    generators to `Vec<KeyImage>` since they call `verify` directly.
+  - **`shekyl-engine-core::engine::refresh::tests::make_block_with_spending_tx`:**
+    `key_image: [u8; 32]` → `key_image: KeyImage`; the typed value
+    is unwrapped via `.as_bytes()` exactly once at the
+    `Input::ToKey { key_image: CompressedPoint(...) }` construction
+    site (the on-wire `CompressedPoint` is the raw-byte boundary).
+  - **`shekyl-ffi/tests/signing_round_trip::ScannedSecrets.key_image`:**
+    intentionally remains `[u8; 32]`. This is a C-ABI scratch
+    buffer: `shekyl_scan_and_recover` writes via
+    `key_image.as_mut_ptr()` and the bytes are re-handed to a later
+    FFI call via `.as_ptr()`. The C ABI is the authoritative raw-
+    byte boundary on both sides; wrapping in `KeyImage` here would
+    inject `from_canonical_bytes` / `as_bytes` shuffles at every
+    seam without adding type protection. A doc-comment on the
+    struct records the rationale.
+
+  **Property-delivery framing.** This sweep is structural — no
+  consensus rule, no wire format, no FFI layout changes. The
+  type-system protection is the deliverable: every secret-bearing
+  32-byte field and every per-output `KeyImage` field now refuses
+  accidental cross-wiring through Rust's nominal type system, which
+  is what M3d's "secrets confined to engine" property is later
+  going to lean on. M3a alone landed `ViewSecret` and the
+  `KeyEngine` trait; this sweep extends the typed-wrapper coverage
+  to every remaining call site so M3b–M3e don't have to revisit
+  the same surface.
+
+- **Monero-reference rename for Shekyl-genesis primitives (sweep
+  branch follow-on; analogous to M3a Commit 5's `classical-Monero`
+  → `classical Edwards-curve` rename per `60-no-monero-legacy.mdc`).**
+  Three call sites in Shekyl-first crates framed Shekyl-genesis-locked
+  primitives as Monero-side artifacts; reframed to put Shekyl
+  primary, with the upstream/CryptoNote provenance noted as
+  context rather than ownership.
+
+  - `rust/shekyl-ffi/Cargo.toml` description: `"FFI bridge between
+    C++ Monero core and Rust modules"` → `"FFI bridge between
+    Shekyl's C++ core and Shekyl's Rust crates"`. The C++ daemon is
+    Shekyl's (forked-and-renamed); the FFI does not bridge to
+    upstream Monero.
+  - `rust/shekyl-crypto-pq/src/derivation.rs` test-helper varint
+    comment: `// Monero varint encoding` → "Shekyl wire varint
+    (7-bit continuation, CryptoNote-style; same shape as upstream
+    Monero's varint, but Shekyl-genesis-locked)". The varint format
+    is the standard 7-bit-continuation shape inherited from
+    CryptoNote, not a Monero-specific construct.
+  - `rust/shekyl-crypto-hash/src/lib.rs` module doc-comment:
+    `Keccak-256 hashing matching Monero/Shekyl's cn_fast_hash` →
+    `Keccak-256 hashing for Shekyl's cn_fast_hash primitive
+    (byte-identical to upstream Monero's; that compatibility is
+    incidental to the genesis-locked Shekyl spec, not a
+    Monero-compatibility requirement)`.
+
+  Out of scope: legitimate provenance pointers (`monero-oxide`'s
+  `hash_to_point`, fork-attribution license headers in
+  `shekyl-scanner`, "Monero mainnet" empirical comparisons,
+  `60-no-monero-legacy.mdc` exclusion notices documenting what
+  Shekyl deliberately rejects from Monero) are preserved as-is —
+  those describe the fork relationship correctly. The earlier
+  M3a Commit 5 sweep cleared the design-doc misframings; this
+  pass closes the remaining Rust-side residue.
+
 - **`KeyEngine` trait surface and `LocalKeys` in-process implementor
   introduced (Stage 1 PR 3 — M3a; the third trait-boundaries PR per
   [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)

@@ -38,13 +38,33 @@
 //!   backtraces, or trace logs reveals 16 bits of differentiation
 //!   (sufficient to disambiguate two specific values during
 //!   debugging) without exposing the full 256-bit identifier.
-//! - **No `Zeroize`** — a `KeyImage` is publicly derivable from
-//!   on-chain data and the spend secret; the secret is the
-//!   wipe-on-drop concern, not the public derivative.
+//! - **`Zeroize` (without `ZeroizeOnDrop`).** A `KeyImage` is
+//!   publicly derivable from on-chain data and the spend secret —
+//!   it is **not itself a wipe-on-drop concern**. But containers
+//!   that hold a `KeyImage` alongside genuinely-secret material
+//!   (`shekyl_engine_state::TransferDetails`,
+//!   `shekyl_scanner::RecoveredWalletOutput`) wipe every field on
+//!   `Drop` for uniform-write-pattern hygiene; providing
+//!   `Zeroize` (without `ZeroizeOnDrop`, which would conflict with
+//!   `Copy`) lets those containers `.zeroize()` the inner bytes
+//!   without a special-case raw-bytes accessor at the wipe site.
+//!   The `Copy + Zeroize` pairing matches the pattern used by
+//!   [`crate::keys::SpendPublicKey`] / [`crate::keys::ViewPublicKey`].
+//!
+//! # Wire format
+//!
+//! `Serialize` / `Deserialize` are provided with
+//! `#[serde(transparent)]` so the wire format is byte-identical to
+//! `[u8; 32]`. This preserves `TransferDetails`' on-disk and
+//! postcard-schema layouts when its `key_image` field migrates from
+//! `Option<[u8; 32]>` to `Option<KeyImage>`.
 //!
 //! [`.cursor/rules/18-type-placement.mdc`]: ../../../../../.cursor/rules/18-type-placement.mdc
 
 use std::fmt;
+
+use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 /// Per-output key image `I = x · H_p(O)`.
 ///
@@ -64,7 +84,8 @@ use std::fmt;
 /// arbitrary 32-byte array."
 ///
 /// [`OutputClaim`]: shekyl_engine_core::engine::traits::key::OutputClaim
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Zeroize, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct KeyImage([u8; 32]);
 
 impl KeyImage {

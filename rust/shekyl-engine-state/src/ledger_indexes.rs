@@ -38,6 +38,7 @@
 
 use std::collections::HashMap;
 
+use shekyl_crypto_pq::key_image::KeyImage;
 use tracing::warn;
 use zeroize::Zeroize;
 
@@ -66,11 +67,11 @@ use crate::{
 /// [`LedgerBlock`] change, not a [`LedgerIndexes`] change, and bumps
 /// [`crate::ledger_block::LEDGER_BLOCK_VERSION`].
 pub struct LedgerIndexes {
-    /// Map from key image bytes to the [`LedgerBlock::transfers`]
+    /// Map from per-output [`KeyImage`] to the [`LedgerBlock::transfers`]
     /// index of the enote that owns it. Populated as the scanner
     /// observes outputs and as `set_key_image` lands offline-derived
     /// images for view-only wallets.
-    pub(crate) key_images: HashMap<[u8; 32], usize>,
+    pub(crate) key_images: HashMap<KeyImage, usize>,
     /// Map from output public-key bytes (compressed Edwards point)
     /// to the [`LedgerBlock::transfers`] index. Used by
     /// [`Self::ingest_block`] to detect the burning bug — a future
@@ -109,10 +110,8 @@ impl LedgerIndexes {
         for (idx, td) in ledger.transfers.iter().enumerate() {
             let pub_key_bytes = td.key.compress().to_bytes();
             indexes.pub_keys.insert(pub_key_bytes, idx);
-            if let Some(ki) = &td.key_image {
-                if *ki != [0u8; 32] {
-                    indexes.key_images.insert(*ki, idx);
-                }
+            if let Some(ki) = td.key_image {
+                indexes.key_images.insert(ki, idx);
             }
         }
         indexes
@@ -153,9 +152,7 @@ impl LedgerIndexes {
             let idx = ledger.transfers.len();
             self.pub_keys.insert(pub_key_bytes, idx);
             if let Some(ki) = td.key_image {
-                if ki != [0u8; 32] {
-                    self.key_images.insert(ki, idx);
-                }
+                self.key_images.insert(ki, idx);
             }
             ledger.transfers.push(td);
             added += 1;
@@ -180,7 +177,7 @@ impl LedgerIndexes {
     pub fn mark_spent(
         &self,
         ledger: &mut LedgerBlock,
-        key_image: &[u8; 32],
+        key_image: &KeyImage,
         spent_height: u64,
     ) -> bool {
         if let Some(&idx) = self.key_images.get(key_image) {
@@ -206,7 +203,7 @@ impl LedgerIndexes {
     /// must be returned to the spendable pool. Without this, they
     /// become phantom-spent and the wallet's usable balance shrinks
     /// permanently.
-    pub fn unmark_spent(&self, ledger: &mut LedgerBlock, key_images: &[[u8; 32]]) -> usize {
+    pub fn unmark_spent(&self, ledger: &mut LedgerBlock, key_images: &[KeyImage]) -> usize {
         let mut unmarked = 0;
         for ki in key_images {
             if let Some(&idx) = self.key_images.get(ki) {
@@ -233,7 +230,7 @@ impl LedgerIndexes {
         &self,
         ledger: &mut LedgerBlock,
         block_height: u64,
-        key_images: &[[u8; 32]],
+        key_images: &[KeyImage],
     ) -> usize {
         let mut spent_count = 0;
         for ki in key_images {
@@ -251,7 +248,7 @@ impl LedgerIndexes {
         &mut self,
         ledger: &mut LedgerBlock,
         transfer_idx: usize,
-        key_image: [u8; 32],
+        key_image: KeyImage,
     ) {
         if let Some(td) = ledger.transfers.get_mut(transfer_idx) {
             if td.key_image.is_some() {
@@ -268,7 +265,7 @@ impl LedgerIndexes {
     }
 
     /// Freeze an output by its key image.
-    pub fn freeze_by_key_image(&self, ledger: &mut LedgerBlock, key_image: &[u8; 32]) -> bool {
+    pub fn freeze_by_key_image(&self, ledger: &mut LedgerBlock, key_image: &KeyImage) -> bool {
         if let Some(&idx) = self.key_images.get(key_image) {
             return ledger.freeze(idx);
         }
@@ -276,7 +273,7 @@ impl LedgerIndexes {
     }
 
     /// Thaw an output by its key image.
-    pub fn thaw_by_key_image(&self, ledger: &mut LedgerBlock, key_image: &[u8; 32]) -> bool {
+    pub fn thaw_by_key_image(&self, ledger: &mut LedgerBlock, key_image: &KeyImage) -> bool {
         if let Some(&idx) = self.key_images.get(key_image) {
             return ledger.thaw(idx);
         }
@@ -357,7 +354,7 @@ impl LedgerIndexes {
             if idx >= ledger.transfers.len() {
                 return Err(format!(
                     "key_images[{}] = {} out of bounds (len={})",
-                    hex::encode(ki),
+                    hex::encode(ki.as_bytes()),
                     idx,
                     ledger.transfers.len()
                 ));
@@ -367,15 +364,15 @@ impl LedgerIndexes {
                 Some(td_ki) => {
                     return Err(format!(
                         "key_images[{}] -> transfers[{}] but transfer has key_image={}",
-                        hex::encode(ki),
+                        hex::encode(ki.as_bytes()),
                         idx,
-                        hex::encode(td_ki)
+                        hex::encode(td_ki.as_bytes())
                     ))
                 }
                 None => {
                     return Err(format!(
                         "key_images[{}] -> transfers[{}] but transfer has no key_image",
-                        hex::encode(ki),
+                        hex::encode(ki.as_bytes()),
                         idx
                     ))
                 }
@@ -502,7 +499,11 @@ mod tests {
         transfer::SPENDABLE_AGE,
     };
 
-    fn mk_transfer(seed: u8, block_height: u64, key_image: Option<[u8; 32]>) -> TransferDetails {
+    fn ki(b: u8) -> KeyImage {
+        KeyImage::from_canonical_bytes([b; 32])
+    }
+
+    fn mk_transfer(seed: u8, block_height: u64, key_image: Option<KeyImage>) -> TransferDetails {
         TransferDetails {
             tx_hash: [seed; 32],
             internal_output_index: u64::from(seed),
@@ -534,9 +535,9 @@ mod tests {
     #[test]
     fn rebuild_from_ledger_recovers_indexes() {
         let transfers = vec![
-            mk_transfer(1, 100, Some([0xAA; 32])),
+            mk_transfer(1, 100, Some(ki(0xAA))),
             mk_transfer(2, 110, None),
-            mk_transfer(3, 120, Some([0xBB; 32])),
+            mk_transfer(3, 120, Some(ki(0xBB))),
         ];
         let ledger = LedgerBlock::new(
             transfers,
@@ -547,8 +548,8 @@ mod tests {
 
         assert_eq!(indexes.key_images.len(), 2);
         assert_eq!(indexes.pub_keys.len(), 3);
-        assert_eq!(indexes.key_images.get(&[0xAA; 32]).copied(), Some(0));
-        assert_eq!(indexes.key_images.get(&[0xBB; 32]).copied(), Some(2));
+        assert_eq!(indexes.key_images.get(&ki(0xAA)).copied(), Some(0));
+        assert_eq!(indexes.key_images.get(&ki(0xBB)).copied(), Some(2));
         indexes
             .check_invariants(&ledger)
             .expect("rebuilt indexes are consistent");
@@ -563,13 +564,13 @@ mod tests {
             &mut ledger,
             100,
             [0xCC; 32],
-            vec![mk_transfer(1, 100, Some([0xAA; 32]))],
+            vec![mk_transfer(1, 100, Some(ki(0xAA)))],
         );
         assert_eq!(added, 1);
         assert_eq!(ledger.tip.synced_height, 100);
         assert_eq!(ledger.tip.tip_hash, Some([0xCC; 32]));
         assert_eq!(ledger.transfers.len(), 1);
-        assert_eq!(indexes.key_images.get(&[0xAA; 32]).copied(), Some(0));
+        assert_eq!(indexes.key_images.get(&ki(0xAA)).copied(), Some(0));
         indexes.check_invariants(&ledger).expect("after ingest");
     }
 
@@ -580,8 +581,8 @@ mod tests {
 
         // Two transfers with the same `key` (same compressed bytes) —
         // the second is dropped under the burning-bug guard.
-        let t1 = mk_transfer(1, 100, Some([0xAA; 32]));
-        let t2 = mk_transfer(1, 110, Some([0xBB; 32]));
+        let t1 = mk_transfer(1, 100, Some(ki(0xAA)));
+        let t2 = mk_transfer(1, 110, Some(ki(0xBB)));
         let added = indexes.ingest_block(&mut ledger, 110, [0; 32], vec![t1, t2]);
         assert_eq!(added, 1);
         assert_eq!(ledger.transfers.len(), 1);
@@ -595,13 +596,13 @@ mod tests {
             &mut ledger,
             100,
             [0; 32],
-            vec![mk_transfer(1, 100, Some([0xAA; 32]))],
+            vec![mk_transfer(1, 100, Some(ki(0xAA)))],
         );
 
-        assert!(indexes.mark_spent(&mut ledger, &[0xAA; 32], 200));
+        assert!(indexes.mark_spent(&mut ledger, &ki(0xAA), 200));
         assert!(ledger.transfers[0].spent);
 
-        let unmarked = indexes.unmark_spent(&mut ledger, &[[0xAA; 32]]);
+        let unmarked = indexes.unmark_spent(&mut ledger, &[ki(0xAA)]);
         assert_eq!(unmarked, 1);
         assert!(!ledger.transfers[0].spent);
     }
@@ -614,13 +615,13 @@ mod tests {
             &mut ledger,
             100,
             [0xAA; 32],
-            vec![mk_transfer(1, 100, Some([0x10; 32]))],
+            vec![mk_transfer(1, 100, Some(ki(0x10)))],
         );
         indexes.ingest_block(
             &mut ledger,
             200,
             [0xBB; 32],
-            vec![mk_transfer(2, 200, Some([0x20; 32]))],
+            vec![mk_transfer(2, 200, Some(ki(0x20)))],
         );
         assert_eq!(ledger.transfers.len(), 2);
 
@@ -628,8 +629,8 @@ mod tests {
         assert_eq!(ledger.transfers.len(), 1);
         assert_eq!(ledger.tip.synced_height, 100);
         assert_eq!(ledger.tip.tip_hash, Some([0xAA; 32]));
-        assert!(indexes.key_images.contains_key(&[0x10; 32]));
-        assert!(!indexes.key_images.contains_key(&[0x20; 32]));
+        assert!(indexes.key_images.contains_key(&ki(0x10)));
+        assert!(!indexes.key_images.contains_key(&ki(0x20)));
     }
 
     #[test]
@@ -638,10 +639,9 @@ mod tests {
         let mut indexes = LedgerIndexes::empty();
         indexes.ingest_block(&mut ledger, 100, [0; 32], vec![mk_transfer(1, 100, None)]);
 
-        indexes.set_key_image(&mut ledger, 0, [0xAA; 32]);
-        assert_eq!(ledger.transfers[0].key_image, Some([0xAA; 32]));
-        // Second call is a no-op.
-        indexes.set_key_image(&mut ledger, 0, [0xBB; 32]);
-        assert_eq!(ledger.transfers[0].key_image, Some([0xAA; 32]));
+        indexes.set_key_image(&mut ledger, 0, ki(0xAA));
+        assert_eq!(ledger.transfers[0].key_image, Some(ki(0xAA)));
+        indexes.set_key_image(&mut ledger, 0, ki(0xBB));
+        assert_eq!(ledger.transfers[0].key_image, Some(ki(0xAA)));
     }
 }

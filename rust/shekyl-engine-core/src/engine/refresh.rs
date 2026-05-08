@@ -1026,7 +1026,9 @@ pub(crate) async fn produce_scan_result<R: Rpc>(
             if let Input::ToKey { key_image, .. } | Input::StakeClaim { key_image, .. } = input {
                 spent_key_images.push(KeyImageObserved {
                     block_height: h,
-                    key_image: key_image.0,
+                    key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
+                        key_image.0,
+                    ),
                 });
             }
         }
@@ -1036,7 +1038,9 @@ pub(crate) async fn produce_scan_result<R: Rpc>(
                 {
                     spent_key_images.push(KeyImageObserved {
                         block_height: h,
-                        key_image: key_image.0,
+                        key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
+                            key_image.0,
+                        ),
                     });
                 }
             }
@@ -1248,7 +1252,7 @@ fn consistent_against_range(
 /// the scanner's local copies do the same when this `Scanner` is
 /// dropped at the end of the refresh attempt.
 fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> {
-    let spend_pub = CompressedEdwardsY::from_slice(&keys.spend_pk)
+    let spend_pub = CompressedEdwardsY::from_slice(keys.spend_pk.as_canonical_bytes())
         .map_err(|e| {
             RefreshError::Io(IoError::Scanner {
                 detail: format!("AllKeysBlob.spend_pk is not a valid CompressedEdwardsY: {e}"),
@@ -1266,11 +1270,12 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
     // no-op on canonical input but `from_bytes_mod_order` is
     // documented as the safe choice for round-tripping serialized
     // scalars and it costs nothing on the canonical path.
-    // `view_sk` is a `ViewSecret` newtype; deref the canonical bytes
-    // for both consumers. Copying the bytes once into Zeroizing<[u8; 32]>
-    // is the same hygiene as before — the temporary copies are
-    // immediately consumed by the Zeroizing wrappers and the
-    // ViewSecret itself wipes on its own drop.
+    // `view_sk` is a `ViewSecret` newtype and `spend_sk` is a
+    // `SpendSecret` newtype; deref the canonical bytes at the boundary.
+    // Copying the bytes once into `Zeroizing<[u8; 32]>` is the same
+    // hygiene as before — the temporary copies are immediately
+    // consumed by the `Zeroizing` wrappers and the typed wrappers
+    // themselves wipe on their own drop.
     let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(
         *keys.view_sk.as_canonical_bytes(),
     ));
@@ -1283,7 +1288,7 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
         })
     })?;
 
-    let spend_secret: Zeroizing<[u8; 32]> = Zeroizing::new(keys.spend_sk);
+    let spend_secret: Zeroizing<[u8; 32]> = Zeroizing::new(*keys.spend_sk.as_canonical_bytes());
     Ok(Scanner::new(view_pair, spend_secret))
 }
 
@@ -2227,7 +2232,7 @@ mod tests {
     fn make_block_with_spending_tx(
         height: u64,
         parent_hash: [u8; 32],
-        key_image: [u8; 32],
+        key_image: shekyl_crypto_pq::key_image::KeyImage,
     ) -> ScannableBlock {
         let header = BlockHeader {
             hardfork_version: 1,
@@ -2253,7 +2258,7 @@ mod tests {
             inputs: vec![Input::ToKey {
                 amount: None,
                 key_offsets: vec![],
-                key_image: CompressedPoint(key_image),
+                key_image: CompressedPoint(*key_image.as_bytes()),
             }],
             outputs: vec![],
             extra: vec![],
@@ -2477,10 +2482,12 @@ mod tests {
     #[tokio::test]
     async fn key_image_collected_from_non_miner_input() {
         let key_image_bytes = [0xAB; 32];
+        let key_image =
+            shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(key_image_bytes);
         // chain[0] = genesis at h=0; chain[1] = spending tx at h=1.
         let genesis = make_synthetic_block(0, [0u8; 32]);
         let parent_h0 = genesis.block.hash();
-        let spending = make_block_with_spending_tx(1, parent_h0, key_image_bytes);
+        let spending = make_block_with_spending_tx(1, parent_h0, key_image);
         let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, vec![genesis, spending]);
         let mut scanner = dummy_scanner();
         let snapshot = snapshot_at_height_zero();
@@ -2503,7 +2510,7 @@ mod tests {
         assert_eq!(result.spent_key_images.len(), 1);
         let observed = &result.spent_key_images[0];
         assert_eq!(observed.block_height, 1);
-        assert_eq!(observed.key_image, key_image_bytes);
+        assert_eq!(observed.key_image.as_bytes(), &key_image_bytes);
     }
 
     // ── Reorg detection tests ──────────────────────────────────
@@ -3359,11 +3366,11 @@ mod refresh_driver_tests {
         result.spent_key_images = vec![
             crate::scan::KeyImageObserved {
                 block_height: 5,
-                key_image: [9; 32],
+                key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([9; 32]),
             },
             crate::scan::KeyImageObserved {
                 block_height: 7,
-                key_image: [8; 32],
+                key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes([8; 32]),
             },
         ];
         result.stake_events = vec![/* StakeEvent::Accrual omitted: test only counts */];

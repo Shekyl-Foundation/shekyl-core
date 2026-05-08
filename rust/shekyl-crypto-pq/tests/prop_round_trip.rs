@@ -91,7 +91,11 @@ fn run_round_trip(
     assert_ne!(secrets.y, [0u8; 32], "y must not be zero");
     assert_ne!(secrets.z, [0u8; 32], "z must not be zero");
     assert_ne!(secrets.k_amount, [0u8; 32], "k_amount must not be zero");
-    assert_ne!(ki_result.key_image, [0u8; 32], "key_image must not be zero");
+    assert_ne!(
+        ki_result.key_image.as_bytes(),
+        &[0u8; 32],
+        "key_image must not be zero"
+    );
 
     RoundTripResult {
         output_key: out.output_key,
@@ -113,7 +117,7 @@ struct RoundTripResult {
     y: [u8; 32],
     z: [u8; 32],
     k_amount: [u8; 32],
-    key_image: [u8; 32],
+    key_image: shekyl_crypto_pq::key_image::KeyImage,
     amount: u64,
 }
 
@@ -162,7 +166,7 @@ fn amount_zero_round_trip() {
     assert_eq!(result.amount, 0, "zero-amount output should round-trip");
     eprintln!(
         "[Gate 1] amount=0 round-trip passed: key_image={}",
-        hex::encode(result.key_image)
+        hex::encode(result.key_image.as_bytes())
     );
 }
 
@@ -175,6 +179,6 @@ fn amount_max_round_trip() {
     assert_eq!(result.amount, u64::MAX);
     eprintln!(
         "[Gate 1] amount=MAX round-trip passed: key_image={}",
-        hex::encode(result.key_image)
+        hex::encode(result.key_image.as_bytes())
     );
 }

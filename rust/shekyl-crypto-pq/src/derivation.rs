@@ -922,7 +922,9 @@ mod tests {
         let mut buf = Vec::with_capacity(8 + 32 + 10);
         buf.extend_from_slice(b"shekyl_y");
         buf.extend_from_slice(derivation);
-        // Monero varint encoding
+        // Shekyl wire varint (7-bit continuation, CryptoNote-style; same shape
+        // as upstream Monero's varint, but Shekyl-genesis-locked — see
+        // `60-no-monero-legacy.mdc`).
         let mut idx = output_index;
         loop {
             let byte = (idx & 0x7F) as u8;

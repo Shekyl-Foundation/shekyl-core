@@ -65,7 +65,9 @@ fn sample_transfer(seed: u64) -> TransferDetails {
         payment_id: Some(PaymentId([lo; 8])),
         spent: false,
         spent_height: None,
-        key_image: Some([lo ^ 0xFF; 32]),
+        key_image: Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
+            [lo ^ 0xFF; 32],
+        )),
         staked: false,
         stake_tier: 0,
         stake_lock_until: 0,

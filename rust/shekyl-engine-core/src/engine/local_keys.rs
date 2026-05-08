@@ -98,7 +98,7 @@ use zeroize::Zeroizing;
 use shekyl_address::Network;
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::handle::derive_output_handle;
-use shekyl_crypto_pq::key_image::KeyImage;
+use shekyl_crypto_pq::keys::{SpendPublicKey, ViewPublicKey};
 use shekyl_crypto_pq::output::{compute_output_key_image, scan_output_recover};
 use shekyl_crypto_pq::subaddress::subaddress_keys;
 use shekyl_engine_state::SubaddressIndex;
@@ -136,9 +136,8 @@ struct DerivedScalars {
 /// `LocalLedger` precedent — the lock's job is to serialize the
 /// engine's mutable bookkeeping, not to gate per-field reads.
 struct LocalKeysState {
-    /// Reverse-lookup table: recovered spend key `B'` (32-byte
-    /// compressed Ed25519 point bytes) → [`SubaddressIndex`] that
-    /// produces it.
+    /// Reverse-lookup table: recovered spend key `B'` (typed
+    /// [`SpendPublicKey`]) → [`SubaddressIndex`] that produces it.
     ///
     /// Pre-populated at construction with the primary address
     /// (`SubaddressIndex::PRIMARY` ↔ `AllKeysBlob::spend_pk` —
@@ -152,7 +151,7 @@ struct LocalKeysState {
     /// (the wallet's contract is "claim outputs to subaddresses
     /// you've derived"; a not-yet-derived subaddress is, by
     /// construction, not expected to receive outputs).
-    subaddress_registry: HashMap<[u8; 32], SubaddressIndex>,
+    subaddress_registry: HashMap<SpendPublicKey, SubaddressIndex>,
 }
 
 /// The M3a in-process [`KeyEngine`] implementor.
@@ -210,7 +209,7 @@ impl LocalKeys {
         let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(
             *keys.view_sk.as_canonical_bytes(),
         ));
-        let spend_public = CompressedEdwardsY(keys.spend_pk)
+        let spend_public = CompressedEdwardsY(*keys.spend_pk.as_canonical_bytes())
             .decompress()
             .expect("AllKeysBlob::spend_pk decompresses (rederive_account guarantees canonicity)");
 
@@ -255,10 +254,11 @@ impl LocalKeys {
         Self::from_keys_blob(blob, Network::Testnet)
     }
 
-    /// Reverse-lookup helper: given the recovered spend key bytes
-    /// returned by `scan_output_recover`, return the matching
-    /// [`SubaddressIndex`] if any.
-    fn lookup_subaddress(&self, recovered_spend: &[u8; 32]) -> Option<SubaddressIndex> {
+    /// Reverse-lookup helper: given the recovered spend public key
+    /// returned by `scan_output_recover` (constructed as a typed
+    /// [`SpendPublicKey`] at the engine boundary), return the
+    /// matching [`SubaddressIndex`] if any.
+    fn lookup_subaddress(&self, recovered_spend: &SpendPublicKey) -> Option<SubaddressIndex> {
         self.state
             .read()
             .expect("LocalKeys lock not poisoned")
@@ -303,8 +303,8 @@ impl KeyEngine for LocalKeys {
                         &idx.to_canonical_bytes(),
                     );
                     (
-                        spend_point.compress().to_bytes(),
-                        view_point.compress().to_bytes(),
+                        SpendPublicKey::from_canonical_bytes(spend_point.compress().to_bytes()),
+                        ViewPublicKey::from_canonical_bytes(view_point.compress().to_bytes()),
                     )
                 };
 
@@ -358,10 +358,9 @@ impl KeyEngine for LocalKeys {
         // miss means the recovered key matches no derived subaddress
         // — surface as `NotMine` (the wallet only claims outputs sent
         // to subaddresses it has derived).
-        if self
-            .lookup_subaddress(&recovered.recovered_spend_key)
-            .is_none()
-        {
+        let recovered_spend_pk =
+            SpendPublicKey::from_canonical_bytes(recovered.recovered_spend_key);
+        if self.lookup_subaddress(&recovered_spend_pk).is_none() {
             return Ok(OutputClaimResult::NotMine);
         }
 
@@ -375,12 +374,12 @@ impl KeyEngine for LocalKeys {
         let Ok(ki_result) = compute_output_key_image(
             &recovered.combined_ss,
             input.output_index,
-            &self.keys.spend_sk,
+            self.keys.spend_sk.as_canonical_bytes(),
             &hp_bytes,
         ) else {
             return Ok(OutputClaimResult::NotMine);
         };
-        let key_image = KeyImage::from_canonical_bytes(ki_result.key_image);
+        let key_image = ki_result.key_image;
 
         // Stage 4: deterministic OutputHandle derivation. cSHAKE256
         // keyed by the view secret; same `(view_secret, tx_hash,
@@ -467,7 +466,7 @@ mod tests {
             &TEST_TX_KEY_SECRET,
             &keys.keys.x25519_pk,
             &keys.keys.ml_kem_ek,
-            &keys.keys.spend_pk,
+            keys.keys.spend_pk.as_canonical_bytes(),
             amount,
             output_index,
         )
@@ -514,8 +513,8 @@ mod tests {
         // Spend and view bytes are 32 bytes each; non-zero (the primary
         // would be zero only on a degenerate seed, and idx=7 is even
         // less likely).
-        assert_ne!(pair.spend_pk, [0u8; 32]);
-        assert_ne!(pair.view_pk, [0u8; 32]);
+        assert_ne!(pair.spend_pk.as_canonical_bytes(), &[0u8; 32]);
+        assert_ne!(pair.view_pk.as_canonical_bytes(), &[0u8; 32]);
     }
 
     /// `derive_subaddress(PRIMARY, Audit)` returns the wallet's base
@@ -536,8 +535,8 @@ mod tests {
 
         // The bare-account spend key matches the encoded primary address.
         let encoded = &keys.account_public_address.classical_address_bytes;
-        assert_eq!(&encoded[1..33], &base_spend_pk[..]);
-        assert_eq!(&encoded[33..65], &base_view_pk[..]);
+        assert_eq!(&encoded[1..33], base_spend_pk.as_canonical_bytes());
+        assert_eq!(&encoded[33..65], base_view_pk.as_canonical_bytes());
 
         let SubaddressFor::Audit(pair) = keys
             .derive_subaddress(SubaddressIndex::PRIMARY, SubaddressPurpose::Audit)
@@ -561,7 +560,8 @@ mod tests {
             &keys.derived.spend_public,
             &SubaddressIndex::PRIMARY.to_canonical_bytes(),
         );
-        let derived_spend_pk = derived_spend_point.compress().to_bytes();
+        let derived_spend_pk =
+            SpendPublicKey::from_canonical_bytes(derived_spend_point.compress().to_bytes());
         assert_ne!(
             pair.spend_pk, derived_spend_pk,
             "PRIMARY's audit keys must NOT match the idx=0 per-index derivation"
@@ -747,7 +747,7 @@ mod tests {
             &TEST_TX_KEY_SECRET,
             &keys.keys.x25519_pk,
             &keys.keys.ml_kem_ek,
-            &pair.spend_pk,
+            pair.spend_pk.as_canonical_bytes(),
             777,
             0,
         )

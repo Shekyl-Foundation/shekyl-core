@@ -156,6 +156,17 @@ fn construct_output_ffi(
     result
 }
 
+/// Scratch buffer for the `shekyl_scan_and_recover` FFI roundtrip.
+///
+/// `key_image` stays `[u8; 32]` (not `KeyImage`) because this is a
+/// boundary-internal scratch buffer: the C ABI fills the field via a
+/// raw `*mut u8` write at `key_image.as_mut_ptr()`, and the bytes are
+/// re-handed to a C-side FFI call via `.as_ptr()` later in the same
+/// test. Wrapping in `KeyImage` here would inject a
+/// `from_canonical_bytes` / `as_bytes` shuffle at every FFI seam
+/// without adding type protection — the C ABI is the authoritative
+/// raw-byte boundary on both sides. Engine-side storage and the
+/// `shekyl_fcmp::proof::verify` API both use the typed `KeyImage`.
 #[allow(dead_code)]
 struct ScannedSecrets {
     ho: [u8; 32],
