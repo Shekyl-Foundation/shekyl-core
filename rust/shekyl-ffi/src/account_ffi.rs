@@ -512,13 +512,14 @@ impl ShekylAllKeysBlob {
 /// Copy every field from an internal `AllKeysBlob` into the C-layout
 /// counterpart. Both types have identical field order/types.
 ///
-/// The four `#[repr(transparent)]` 32-byte newtypes on `AllKeysBlob`
-/// (`SpendPublicKey`, `ViewPublicKey`, `SpendSecret`, `ViewSecret`)
-/// each deref through their canonical-bytes accessor to copy into the
-/// C-layout `[u8; 32]` field. Layout-compat between `AllKeysBlob` and
-/// `ShekylAllKeysBlob` is asserted by the `size_of::<...>()` test
-/// below; the per-field copy here is the auditable boundary at which
-/// the typed value is converted to raw bytes for the FFI consumer.
+/// The five `#[repr(transparent)]` newtypes on `AllKeysBlob`
+/// (`SpendPublicKey`, `ViewPublicKey`, `SpendSecret`, `ViewSecret`,
+/// `MlKem768DecapKey`) each deref through their canonical-bytes
+/// accessor to copy into the corresponding C-layout `[u8; N]` field.
+/// Layout-compat between `AllKeysBlob` and `ShekylAllKeysBlob` is
+/// asserted by the `size_of::<...>()` test below; the per-field copy
+/// here is the auditable boundary at which the typed value is
+/// converted to raw bytes for the FFI consumer.
 fn copy_blob_to_ffi(src: &AllKeysBlob, dst: &mut ShekylAllKeysBlob) {
     dst.spend_pk = *src.spend_pk.as_canonical_bytes();
     dst.view_pk = *src.view_pk.as_canonical_bytes();
@@ -528,7 +529,7 @@ fn copy_blob_to_ffi(src: &AllKeysBlob, dst: &mut ShekylAllKeysBlob) {
     dst.classical_address_bytes = src.classical_address_bytes;
     dst.spend_sk = *src.spend_sk.as_canonical_bytes();
     dst.view_sk = *src.view_sk.as_canonical_bytes();
-    dst.ml_kem_dk = src.ml_kem_dk;
+    dst.ml_kem_dk = *src.ml_kem_dk.as_canonical_bytes();
 }
 
 /// Zero every field of a caller-provided blob. Used on all error paths.

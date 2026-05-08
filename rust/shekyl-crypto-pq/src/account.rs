@@ -107,7 +107,7 @@ use fips203::traits::{KeyGen, SerDes};
 
 use crate::bip39;
 use crate::kem::{ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN};
-use crate::keys::{SpendPublicKey, SpendSecret, ViewPublicKey, ViewSecret};
+use crate::keys::{MlKem768DecapKey, SpendPublicKey, SpendSecret, ViewPublicKey, ViewSecret};
 use crate::montgomery;
 use crate::CryptoError;
 
@@ -483,7 +483,16 @@ pub struct AllKeysBlob {
     pub view_sk: ViewSecret,
     /// ML-KEM-768 decap (secret) key, 2400 bytes. Rederived on every wallet
     /// open; persisted only via the master seed.
-    pub ml_kem_dk: [u8; ML_KEM_768_DK_LEN],
+    ///
+    /// Wrapped in [`MlKem768DecapKey`](crate::keys::MlKem768DecapKey) for
+    /// type-system protection and structural wipe-on-drop, per the
+    /// `35-secure-memory.mdc:21-22` "wrap secret scalars and key bytes"
+    /// mandate. `#[repr(transparent)]` preserves the bit-for-bit FFI
+    /// layout invariant with
+    /// `shekyl_ffi::ShekylAllKeysBlob.ml_kem_dk: [u8; ML_KEM_768_DK_LEN]`.
+    /// Read the canonical 2400-byte FIPS 203 representation via
+    /// `ml_kem_dk.as_canonical_bytes()`.
+    pub ml_kem_dk: MlKem768DecapKey,
 }
 
 impl AllKeysBlob {
@@ -499,7 +508,7 @@ impl AllKeysBlob {
             classical_address_bytes: [0u8; CLASSICAL_ADDRESS_BYTES],
             spend_sk: SpendSecret::from_bytes([0u8; 32]),
             view_sk: ViewSecret::from_bytes([0u8; 32]),
-            ml_kem_dk: [0u8; ML_KEM_768_DK_LEN],
+            ml_kem_dk: MlKem768DecapKey::from_bytes([0u8; ML_KEM_768_DK_LEN]),
         }
     }
 }
@@ -574,7 +583,7 @@ pub fn rederive_account(
     let d_z = derive_kem_d_z(master_seed, net, fmt);
     let (ek, dk) = ml_kem_keypair_from_d_z(&d_z)?;
     blob.ml_kem_ek.copy_from_slice(&ek);
-    blob.ml_kem_dk.copy_from_slice(dk.as_slice());
+    blob.ml_kem_dk = MlKem768DecapKey::from_bytes(*dk);
 
     // Composite fields
     blob.pqc_public_key[..32].copy_from_slice(&blob.x25519_pk);
@@ -786,7 +795,10 @@ mod tests {
             blob1.view_sk.as_canonical_bytes(),
             blob2.view_sk.as_canonical_bytes(),
         );
-        assert_eq!(blob1.ml_kem_dk, blob2.ml_kem_dk);
+        assert_eq!(
+            blob1.ml_kem_dk.as_canonical_bytes(),
+            blob2.ml_kem_dk.as_canonical_bytes(),
+        );
     }
 
     #[test]
