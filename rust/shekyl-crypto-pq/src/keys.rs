@@ -39,7 +39,7 @@
 //! `[u8; 32]` fields had) but not `ZeroizeOnDrop` (which would conflict
 //! with `Copy`).
 //!
-//! All four wrappers are `#[repr(transparent)]` so the bit-for-bit
+//! All five wrappers are `#[repr(transparent)]` so the bit-for-bit
 //! FFI layout invariant between [`crate::account::AllKeysBlob`] and
 //! `shekyl_ffi::ShekylAllKeysBlob` is preserved (asserted by the
 //! latter's `size_of::<...>()` test).

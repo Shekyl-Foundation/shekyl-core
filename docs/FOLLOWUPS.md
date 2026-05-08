@@ -492,11 +492,12 @@ citing in a review.
   public-material exclusion as a sub-clause. The rule statement,
   drawn from
   [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
-  §3.5's closure subsection: *typed wrappers attach to
+  §3.5's closure subsection: _typed wrappers attach to
   identity-bearing primitives where rule-grounded; uniformity-driven
-  wrapping of public material is*
-  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)*'s
-  "while we're here is the enemy."* Rationale: the
+  wrapping of public material is the wrapper-shape recapitulation of
+  `15-deletion-and-debt.mdc`'s "while we're here is the enemy."_
+  (See [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  for the parent rule.) Rationale: the
   `chore/allkeysblob-zeroize-realignment` chore's "Out of scope"
   section pinned a five-reason `ml_kem_ek` exclusion (rule reach,
   audit boundary, no type-confusion partner, FFI-uniformity-cuts-the-

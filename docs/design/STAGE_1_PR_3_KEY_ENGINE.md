@@ -2475,15 +2475,44 @@ shape, and §3.5's *goal* was the load-bearing claim while the
 is recorded here so future readers can locate the cause rather
 than reconstructing it from git archaeology.
 
-`ml_kem_ek` deliberately remains raw `[u8; ML_KEM_768_EK_LEN]` —
-public encap key, outside `35-secure-memory.mdc:21-22`'s reach as
-public material. Wrapping it would be uniformity-driven
-completionism without rule grounding (per
-`15-deletion-and-debt.mdc`'s "while we're here is the enemy") and
-would create a permanent type-system signal collision (`Zeroize`
-semantics on a public type as a distractor for any future
-grep-for-secrets audit). Full five-reason disposition pinned in
-the chore's PR description against re-litigation.
+`ml_kem_ek` deliberately remains raw `[u8; ML_KEM_768_EK_LEN]`.
+Public encap key, broadcast in the address; outside
+`35-secure-memory.mdc:21-22`'s reach as public material. Wrapping
+it would be uniformity-driven completionism without rule grounding
+(per `15-deletion-and-debt.mdc`'s "while we're here is the enemy")
+and would create a permanent type-system signal collision
+(`Zeroize` semantics on a public type as a distractor for any
+future grep-for-secrets audit). Five-reason disposition recorded
+inline against re-litigation:
+
+1. **Rule reach.** [`35-secure-memory.mdc:21–22`](../../.cursor/rules/35-secure-memory.mdc)
+   names "secret scalars and key bytes." `ml_kem_ek` is the public
+   encap key, broadcast in the address. The rule explicitly does
+   not reach.
+2. **Audit boundary.** F1's wording ("`ml_kem_dk` is the *last*
+   raw secret-bearing array") explicitly excludes `ml_kem_ek` from
+   the secret-bearing inventory.
+3. **No type-confusion partner.** Nothing else in the workspace is
+   shaped like `ml_kem_ek` (1184 bytes); the type-system protection
+   argument that motivates `SpendPublicKey` vs `ViewPublicKey`
+   (both 32 bytes, both Ed25519 points, distinguishable only by
+   role) does not apply.
+4. **FFI uniformity cuts the wrong way.** The FFI mirror keeps raw
+   arrays for both fields and the `size_of` test holds; wrapping
+   `ek` on the Rust side would add a conversion step at
+   `copy_blob_to_ffi`, not remove one.
+5. **Permanent type-system signal collision.** A `Zeroize`-bearing
+   wrapper on public material trains future readers (and any
+   grep-for-`ZeroizeOnDrop`-as-worry-list audit) that the type has
+   wipe semantics. True signal for `MlKem768DecapKey`; false
+   signal for any `MlKem768EncapKey` analog. The signal cost is
+   permanent and cross-PR.
+
+Per [`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)'s
+"while we're here is the enemy": bounded cost is necessary but not
+sufficient; rule-grounded justification with a concrete failure
+mode prevented is the second half. Wrapping `ml_kem_ek` has
+bounded cost without the second half.
 
 The "**Phase 0e ↔ Phase 0d coupled-pair landing (disposition α)**"
 narrative below in §5 is **historical**: Phase 0d landed in its

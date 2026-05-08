@@ -510,13 +510,17 @@ impl ShekylAllKeysBlob {
 }
 
 /// Copy every field from an internal `AllKeysBlob` into the C-layout
-/// counterpart. Both types have identical field order/types.
+/// counterpart. The two structs are layout-compatible (same field
+/// order and byte layout) but not type-identical: `AllKeysBlob`
+/// uses `#[repr(transparent)]` newtypes around the cryptographic
+/// material (`SpendPublicKey`, `ViewPublicKey`, `SpendSecret`,
+/// `ViewSecret`, `MlKem768DecapKey`) for type-system protection on
+/// the Rust side, while `ShekylAllKeysBlob` uses raw `[u8; N]` arrays
+/// for the C ABI.
 ///
-/// The five `#[repr(transparent)]` newtypes on `AllKeysBlob`
-/// (`SpendPublicKey`, `ViewPublicKey`, `SpendSecret`, `ViewSecret`,
-/// `MlKem768DecapKey`) each deref through their canonical-bytes
-/// accessor to copy into the corresponding C-layout `[u8; N]` field.
-/// Layout-compat between `AllKeysBlob` and `ShekylAllKeysBlob` is
+/// The five `#[repr(transparent)]` newtypes each deref through
+/// their canonical-bytes accessor to copy into the corresponding
+/// C-layout `[u8; N]` field. The byte-level layout-compatibility is
 /// asserted by the `size_of::<...>()` test below; the per-field copy
 /// here is the auditable boundary at which the typed value is
 /// converted to raw bytes for the FFI consumer.

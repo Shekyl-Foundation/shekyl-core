@@ -446,9 +446,10 @@ pub fn ml_kem_keypair_from_d_z(
 /// that destructor calls `.zeroize()` again on already-zero bytes.
 /// The resulting double-wipe is the standard zeroize-crate
 /// composition pattern: idempotent, harmless, and the price of
-/// uniform field-level wipe coverage. See chore plan §"Risk and
-/// mitigation" if a future contributor encounters the pattern in a
-/// grep of `ZeroizeOnDrop`-bearing types.
+/// uniform field-level wipe coverage. A future grep of
+/// `ZeroizeOnDrop`-bearing types will land on this pattern; the
+/// inline description above is the locatable record of its
+/// intentionality.
 ///
 /// Public-key fields (`spend_pk`, `view_pk`, `ml_kem_ek`, `x25519_pk`,
 /// `pqc_public_key`, `classical_address_bytes`) are zeroized for

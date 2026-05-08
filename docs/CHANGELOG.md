@@ -56,9 +56,11 @@
   (per `15-deletion-and-debt.mdc`'s "while we're here is the enemy")
   and would create a permanent type-system signal collision
   (`Zeroize` semantics on a public type as a distractor for any
-  future grep-for-secrets audit). Five-reason disposition pinned in
-  the chore's PR description and §3.5's closure subsection against
-  re-litigation.
+  future grep-for-secrets audit). Five-reason disposition recorded
+  inline at
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §3.5's "Closed (post-M3a, post-Phase-0)" subsection
+  against re-litigation.
 
   **Closure-path narrative.** The originally-specified §3.5 sequencing
   was "Phase 0e lands first, before PR 3 cuts." The actual landing
