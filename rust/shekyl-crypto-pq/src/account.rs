@@ -455,8 +455,24 @@ pub fn ml_kem_keypair_from_d_z(
 /// uniform write patterns even though they hold no secret material;
 /// this maintains the constant-time-on-error discipline the manual
 /// `Drop` previously enforced.
+///
+/// # Not `Clone`
+///
+/// `Clone` on a struct that holds the wallet's spend/view/decap
+/// secrets requires explicit justification per
+/// `.cursor/rules/30-cryptography.mdc` and `35-secure-memory.mdc:26-28`.
+/// The audit performed for `KEY_ENGINE.md` §7.5 surfaced zero
+/// production `.clone()` callers workspace-wide (verified across
+/// production code and `#[cfg(test)]` blocks via
+/// `cargo build --workspace --all-targets`); the trait is not derived.
+/// Engine-side ownership flows through `LocalKeys::from_keys_blob`,
+/// which moves the blob into the engine's private state — see the
+/// `traits/key.rs` doc-comment ("Not Clone — implementors wrap
+/// `AllKeysBlob`"). If a future call site needs `Clone`, the
+/// disposition reverts to a documented `Clone` retention with
+/// explicit justification rather than reflex re-derivation.
 #[repr(C)]
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct AllKeysBlob {
     // --- public side (plain-text portion of the wallet) ------------------
     /// Ed25519 spend public key.
