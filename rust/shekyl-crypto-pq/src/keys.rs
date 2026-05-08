@@ -12,7 +12,7 @@
 //! - Encapsulates the raw bytes (private field; no `Copy`).
 //! - Implements `Zeroize + ZeroizeOnDrop` so wipe-on-drop is structural,
 //!   not per-call-site discipline (see `.cursor/rules/35-secure-memory.mdc`).
-//! - Exposes a `to_canonical_bytes()` / `as_canonical_bytes()` accessor —
+//! - Exposes an `as_canonical_bytes()` accessor (`-> &[u8; N]`) —
 //!   the single auditable boundary at which the typed value is converted
 //!   into raw bytes for cryptographic input. Cryptographic functions in
 //!   this crate take `&[u8; N]` primitives, not the typed values, so the
@@ -194,7 +194,7 @@ impl SpendSecret {
 ///
 /// `as_canonical_bytes()` returns the 2400-byte FIPS 203
 /// decapsulation-key encoding. Cryptographic functions
-/// (e.g. [`crate::output::recover_output_secret`]) take
+/// (e.g. [`crate::output::scan_output_recover`]) take
 /// `&[u8]` and rely on this representation being stable across
 /// every call site. See `.cursor/rules/18-type-placement.mdc`
 /// for the discipline.

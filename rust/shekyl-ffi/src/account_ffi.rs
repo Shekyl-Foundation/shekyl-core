@@ -477,9 +477,16 @@ pub unsafe extern "C" fn shekyl_ml_kem_chacha_seed_trace(
 /// Caller (C++ `account_keys`) owns an mlock'd region of this size; Rust
 /// fills it in place. On any error the entire struct is zeroed.
 ///
-/// This type must be layout-compatible with `AllKeysBlob` bit-for-bit.
-/// Both are `#[repr(C)]` with the same field order and types; see the
-/// `static_assert`-style check in the `struct_layout_matches` test.
+/// This type must be layout-compatible with `AllKeysBlob` bit-for-bit:
+/// same field order and same byte layout per field. The Rust side
+/// uses `#[repr(transparent)]` newtypes (`SpendPublicKey`,
+/// `ViewPublicKey`, `SpendSecret`, `ViewSecret`, `MlKem768DecapKey`)
+/// around the cryptographic material for type-system protection,
+/// while this struct uses raw `[u8; N]` arrays for the C ABI; both
+/// are `#[repr(C)]` and the size invariant is asserted by the
+/// `struct_layout_matches` test below (which checks `size_of` —
+/// alignment and per-field offsets are not directly asserted but
+/// follow from `#[repr(C)]` field-order equivalence).
 #[repr(C)]
 pub struct ShekylAllKeysBlob {
     pub spend_pk: [u8; 32],
@@ -518,11 +525,15 @@ impl ShekylAllKeysBlob {
 /// the Rust side, while `ShekylAllKeysBlob` uses raw `[u8; N]` arrays
 /// for the C ABI.
 ///
-/// The five `#[repr(transparent)]` newtypes each deref through
-/// their canonical-bytes accessor to copy into the corresponding
-/// C-layout `[u8; N]` field. The byte-level layout-compatibility is
-/// asserted by the `size_of::<...>()` test below; the per-field copy
-/// here is the auditable boundary at which the typed value is
+/// The five `#[repr(transparent)]` newtypes each expose their
+/// inner bytes through `as_canonical_bytes()` (no `Deref` impl —
+/// access is explicit), and the resulting `&[u8; N]` is dereffed
+/// and copied into the corresponding C-layout `[u8; N]` field. The
+/// `size_of::<AllKeysBlob>() == size_of::<ShekylAllKeysBlob>()`
+/// invariant is asserted by `struct_layout_matches` below; field
+/// alignment and per-field offsets are not directly asserted but
+/// follow from `#[repr(C)]` + matched field order. The per-field
+/// copy here is the auditable boundary at which the typed value is
 /// converted to raw bytes for the FFI consumer.
 fn copy_blob_to_ffi(src: &AllKeysBlob, dst: &mut ShekylAllKeysBlob) {
     dst.spend_pk = *src.spend_pk.as_canonical_bytes();

@@ -499,9 +499,9 @@ citing in a review.
   (See [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
   for the parent rule.) Rationale: the
   `chore/allkeysblob-zeroize-realignment` chore's "Out of scope"
-  section pinned a five-reason `ml_kem_ek` exclusion (rule reach,
-  audit boundary, no type-confusion partner, FFI-uniformity-cuts-the-
-  wrong-way, permanent type-system signal collision). Future "wrap
+  section pinned a five-reason `ml_kem_ek` exclusion (rule reach;
+  audit boundary; no type-confusion partner; FFI uniformity cutting
+  the wrong way; permanent type-system signal collision). Future "wrap
   THIS public byte array too" arguments will recapitulate the same
   five points; the §3.5 closure pins the disposition for that
   specific decision but is a per-PR document rather than a workspace-
