@@ -465,7 +465,21 @@ impl std::fmt::Debug for SourceSecretsBundle {
 /// (`PendingTxEngine`)** alongside that trait's transaction-build
 /// workflow; the shape declared here is PR-3-side stub adequate for
 /// trait extraction but not for actual transaction construction.
-#[derive(Debug)]
+///
+/// # `Debug` is redacted
+///
+/// `Debug` is implemented manually (not derived) because
+/// [`Self::inputs`] is a `Vec<TxInputSigningContext>` and each
+/// element carries `source_secrets: SourceSecretsBundle` (secret-
+/// bearing). Today the redacted `Debug` impls on
+/// [`TxInputSigningContext`] and [`SourceSecretsBundle`] make a
+/// *derived* `TxToSign: Debug` transitively safe, but the
+/// composition is fragile: a future maintainer changing the inner
+/// types' `Debug` impls would silently widen the leak surface
+/// through `TxToSign`. Per `35-secure-memory.mdc`, every shape that
+/// is secret-bearing by composition redacts at the top level too —
+/// defence-in-depth that does not depend on inner-type discipline
+/// holding for all time.
 #[non_exhaustive]
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct TxToSign {
@@ -477,6 +491,25 @@ pub(crate) struct TxToSign {
     /// FCMP++ transaction-level context (reference block, anchor
     /// data, etc.). Pinned in PR 5.
     pub fcmp_plus_plus_context: FcmpPlusPlusContext,
+}
+
+// CLIPPY: `inputs` redacts as a whole at the top level — defence in
+// depth that does not depend on the inner types' `Debug` impls
+// remaining redacted across maintenance. The fixed `[REDACTED]` token
+// matches the convention used by `SourceSecretsBundle` and the
+// secret-bearing newtypes in `shekyl-crypto-pq`. Input count is not
+// secret (transaction input counts are publicly observable on-chain),
+// but we omit it from the rendered output to keep the redaction
+// pattern uniform with the other secret-shape impls.
+#[allow(clippy::missing_fields_in_debug)]
+impl std::fmt::Debug for TxToSign {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TxToSign")
+            .field("inputs", &"[REDACTED]")
+            .field("outputs", &self.outputs)
+            .field("fcmp_plus_plus_context", &self.fcmp_plus_plus_context)
+            .finish()
+    }
 }
 
 /// Per-output signing context. **Forward declaration; pinned in PR 5
