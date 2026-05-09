@@ -101,7 +101,9 @@ use shekyl_crypto_pq::derivation::derive_output_secrets;
 use shekyl_crypto_pq::handle::derive_output_handle;
 use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::keys::{SpendPublicKey, ViewPublicKey};
-use shekyl_crypto_pq::output::{compute_output_key_image, recover_combined_ss, scan_output_recover};
+use shekyl_crypto_pq::output::{
+    compute_output_key_image, recover_combined_ss, scan_output_recover,
+};
 use shekyl_crypto_pq::subaddress::{subaddress_derivation_scalar, subaddress_keys};
 use shekyl_engine_state::SubaddressIndex;
 use shekyl_oxide::generators::hash_to_point;
@@ -1108,9 +1110,8 @@ mod tests {
 
             for &subaddress_idx in &subaddress_indices {
                 // Hand-composed legacy bundle: spend_key_x = ho + b + m_i.
-                let ho_scalar: Scalar =
-                    Option::from(Scalar::from_canonical_bytes(recovered.ho))
-                        .expect("ho from wide_reduce is canonical");
+                let ho_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(recovered.ho))
+                    .expect("ho from wide_reduce is canonical");
                 let b_scalar: Scalar =
                     Scalar::from_bytes_mod_order(*keys.keys.spend_sk.as_canonical_bytes());
                 let m_i: Scalar = subaddress_derivation_scalar(
