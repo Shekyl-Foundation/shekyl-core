@@ -516,6 +516,31 @@ citing in a review.
   work's expected landing window; bumps to V3.x if 18-type-placement
   defers).
 
+- **`fips203` interior `into_bytes()` Copy on the ML-KEM-768 decap-key
+  flow.** `shekyl_crypto_pq::account::ml_kem_keypair_from_d_z`
+  produces an `MlKem768DecapKey` from `fips203`'s typed
+  `DecapsulationKey` via `dk.into_bytes()`. The upstream API returns
+  the 2400-byte canonical encoding by value, briefly producing a
+  stack-resident `[u8; ML_KEM_768_DK_LEN]` outside any `Zeroize`
+  wrapper before `Zeroizing::new(...)` moves it. Under `--release`
+  the move *typically* gets RVO'd to the return-value slot (no
+  separate temporary), but this is not guaranteed — `--debug`
+  builds, panic unwind paths, and unfortunate codegen all leave the
+  raw stack slot alive until the function returns and the frame is
+  reused. Resolution path: either (a) `fips203` exposes an
+  `encode_into(&mut [u8; ML_KEM_768_DK_LEN])` API on
+  `DecapsulationKey` (upstream PR), or (b) Shekyl-side wrapper that
+  constructs `MlKem768DecapKey` from `fips203`'s typed form without
+  going through `into_bytes` (potentially via `unsafe` over
+  `#[repr(transparent)]` if `fips203` documents that guarantee).
+  Cross-references:
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §3.5 closure;
+  [`.cursor/rules/35-secure-memory.mdc`](../.cursor/rules/35-secure-memory.mdc)
+  §21–22; PR #33 round-4 Copilot finding closure narrative
+  (Option D: typed wrapper from producer to consumer; this entry
+  is what Option D *did not* fix). Target: V3.1.
+
 - **`derive_output_handle` Python reference script.** Stage 1 PR 3
   M3a commit 2 lands the Rust implementation of `derive_output_handle`
   (cSHAKE256, per `STAGE_1_PR_3_KEY_ENGINE.md` §7.12) with self-generated

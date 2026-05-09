@@ -49,7 +49,7 @@
 
 use std::fmt;
 
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::kem::ML_KEM_768_DK_LEN;
 
@@ -214,13 +214,60 @@ impl SpendSecret {
 pub struct MlKem768DecapKey([u8; ML_KEM_768_DK_LEN]);
 
 impl MlKem768DecapKey {
-    /// Construct from raw bytes.
+    /// Construct a zero-filled decap-key wrapper.
+    ///
+    /// Used by `AllKeysBlob::zeroed()` to produce the all-zero
+    /// default state at the start of every fill and on every error
+    /// path (constant-time write pattern). The 2400 zero bytes are
+    /// not a secret; this entry is deliberately separate from
+    /// [`Self::from_zeroizing`] so that the only path carrying real
+    /// secret-bearing bytes through the type system is the one
+    /// holding the source already inside `Zeroize` discipline.
+    pub(crate) fn zero() -> Self {
+        Self([0u8; ML_KEM_768_DK_LEN])
+    }
+
+    /// Construct from a `Zeroizing`-wrapped byte buffer, taking
+    /// ownership of the source.
+    ///
+    /// The argument's `Zeroizing<[u8; N]>` wrapper is consumed; the
+    /// inner bytes are written into a fresh `MlKem768DecapKey`'s
+    /// `ZeroizeOnDrop`-bearing buffer via `copy_from_slice`. The
+    /// source `Zeroizing` is then dropped, which wipes its inner
+    /// stack slot. Both the source and the destination remain
+    /// inside `Zeroize` discipline through the hand-off; no
+    /// untracked stack temporary of the 2400-byte secret is
+    /// materialised at the construction site.
+    ///
+    /// This is the only legitimate construction path for a decap
+    /// key produced by in-crate key derivation (e.g.
+    /// [`crate::account::ml_kem_keypair_from_d_z`]) — the producer
+    /// hands the typed wrapper directly to the consumer rather
+    /// than handing back raw `Zeroizing<[u8; N]>` and asking every
+    /// call site to repeat the wrapping decision. Per
+    /// `.cursor/rules/35-secure-memory.mdc:21-22` and the
+    /// typed-wrapper discipline of
+    /// `.cursor/rules/18-type-placement.mdc`.
     ///
     /// `pub(crate)` because the only legitimate construction sites
     /// are inside this crate (key derivation in `account.rs`,
     /// wallet-file open paths in `wallet_envelope.rs`).
-    pub(crate) fn from_bytes(bytes: [u8; ML_KEM_768_DK_LEN]) -> Self {
-        Self(bytes)
+    //
+    // `clippy::needless_pass_by_value` is denied workspace-wide
+    // because the lint is sound for ordinary value parameters.
+    // For this constructor the by-value parameter is the security
+    // property: consuming the `Zeroizing` wrapper guarantees its
+    // `Drop` (which wipes the inner buffer) runs at the end of
+    // `from_zeroizing`, not at some arbitrary later point in the
+    // caller's lifetime. Taking `&Zeroizing<[u8; N]>` would let the
+    // caller retain a still-readable copy of the secret after the
+    // hand-off, which is exactly what this API is designed to
+    // prevent. Per `.cursor/rules/35-secure-memory.mdc:21-22`.
+    #[allow(clippy::needless_pass_by_value)]
+    pub(crate) fn from_zeroizing(z: Zeroizing<[u8; ML_KEM_768_DK_LEN]>) -> Self {
+        let mut out = Self([0u8; ML_KEM_768_DK_LEN]);
+        out.0.copy_from_slice(z.as_ref());
+        out
     }
 
     /// Borrow the canonical 2400-byte FIPS 203 representation for
@@ -378,13 +425,13 @@ mod tests {
     #[test]
     fn ml_kem_768_decap_key_round_trip_canonical_bytes() {
         let bytes = [0x55u8; ML_KEM_768_DK_LEN];
-        let dk = MlKem768DecapKey::from_bytes(bytes);
+        let dk = MlKem768DecapKey::from_zeroizing(Zeroizing::new(bytes));
         assert_eq!(dk.as_canonical_bytes(), &bytes);
     }
 
     #[test]
     fn ml_kem_768_decap_key_clone_produces_equal_canonical_bytes() {
-        let dk = MlKem768DecapKey::from_bytes([0xa3u8; ML_KEM_768_DK_LEN]);
+        let dk = MlKem768DecapKey::from_zeroizing(Zeroizing::new([0xa3u8; ML_KEM_768_DK_LEN]));
         let cloned = dk.clone();
         assert_eq!(dk.as_canonical_bytes(), cloned.as_canonical_bytes());
     }

@@ -23,9 +23,16 @@
     `as_canonical_bytes()` accessor). Sweeps eight in-Rust read sites
     (`account.rs`'s field/zeroed/rederive/test, `local_keys.rs:344`,
     `refresh.rs:1283`, `account_ffi.rs:531`); the FFI mirror keeps
-    raw `[u8; ML_KEM_768_DK_LEN]` and the bit-for-bit `size_of`
-    invariant is preserved by `#[repr(transparent)]` (asserted by
-    `account_ffi::tests::struct_layout_matches`).
+    raw `[u8; ML_KEM_768_DK_LEN]` and the bit-for-bit layout
+    invariant (size, alignment, per-field offsets) is preserved by
+    `#[repr(transparent)]` and asserted directly by
+    `account_ffi::tests::struct_layout_matches`. The producer
+    [`crate::account::ml_kem_keypair_from_d_z`] returns the typed
+    `MlKem768DecapKey` directly (constructed via `from_zeroizing`
+    consuming a `Zeroizing<[u8; N]>` source) — the secret travels
+    through the type system from producer to consumer without any
+    call site materialising an untracked stack `Copy` of the
+    2400-byte buffer between them.
   - **F2 / `35-secure-memory.mdc:23–25`.** `AllKeysBlob` migrated
     from a hand-written `Drop` impl (which the design doc itself
     characterized as "documenting the lie" — the spec asserted

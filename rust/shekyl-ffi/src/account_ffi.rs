@@ -442,7 +442,7 @@ pub unsafe extern "C" fn shekyl_kem_keypair_from_master_seed(
         return false;
     };
     write_out(ek_out_ptr, &ek, ML_KEM_768_EK_LEN);
-    write_out(dk_out_ptr, dk.as_slice(), ML_KEM_768_DK_LEN);
+    write_out(dk_out_ptr, dk.as_canonical_bytes(), ML_KEM_768_DK_LEN);
     true
 }
 
