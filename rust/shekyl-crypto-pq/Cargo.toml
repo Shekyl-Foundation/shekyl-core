@@ -79,6 +79,17 @@ shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
 # migrates. JSON field names are the wire format; see wallet_state.rs.
 serde_json = "1"
 
+# Postcard schema reflection for `HybridCiphertext` and `OutputHandle`.
+# `STAGE_1_PR_3_M3B_PREFLIGHT.md` §2 D3 (disposition α, confirmed
+# 2026-05-08): rather than mirror these workspace-owned types in
+# `shekyl-engine-state`'s `TransferDetailsSchema`, derive `Schema` directly
+# on the types here so the mirror references them as themselves. Same pin
+# as `shekyl-engine-state`'s direct-dep (`0.2`, derive + use-std). Adds
+# zero new third-party crates to the transitive tree (proc-macro2 / quote
+# / syn are already pulled in via `serde_derive` / `thiserror` /
+# `zeroize_derive`).
+postcard-schema = { version = "0.2", default-features = false, features = ["derive", "use-std"] }
+
 [dev-dependencies]
 hex = "0.4"
 shekyl-fcmp = { path = "../shekyl-fcmp" }

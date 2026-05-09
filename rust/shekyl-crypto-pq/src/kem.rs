@@ -57,7 +57,16 @@ impl std::fmt::Debug for HybridKemSecretKey {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// On-chain hybrid X25519 + ML-KEM-768 ciphertext.
+///
+/// Public on-chain data (broadcast in the transaction's `tx_extra`); not
+/// secret. Serialized via `serde` (raw 32-byte X25519 component +
+/// length-prefixed ML-KEM ciphertext bytes) and reflected via
+/// `postcard_schema::Schema` so consumers like
+/// `shekyl_engine_state::TransferDetails` can persist the value through
+/// their existing `postcard` + `postcard-schema` plumbing without an
+/// intermediate mirror struct.
+#[derive(Debug, Clone, Serialize, Deserialize, postcard_schema::Schema)]
 pub struct HybridCiphertext {
     pub x25519: [u8; 32],
     pub ml_kem: Vec<u8>,
