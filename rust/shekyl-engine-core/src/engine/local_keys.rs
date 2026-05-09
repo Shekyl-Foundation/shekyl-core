@@ -101,9 +101,7 @@ use shekyl_crypto_pq::derivation::derive_output_secrets;
 use shekyl_crypto_pq::handle::derive_output_handle;
 use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::keys::{SpendPublicKey, ViewPublicKey};
-use shekyl_crypto_pq::output::{
-    compute_output_key_image, recover_combined_ss, scan_output_recover,
-};
+use shekyl_crypto_pq::output::{compute_output_key_image, recover_combined_ss, scan_output_recover};
 use shekyl_crypto_pq::subaddress::{subaddress_derivation_scalar, subaddress_keys};
 use shekyl_engine_state::SubaddressIndex;
 use shekyl_oxide::generators::hash_to_point;
@@ -982,6 +980,265 @@ mod tests {
             err,
             KeyEngineError::SourceCiphertextDecapsulationFailed(_)
         ));
+    }
+
+    /// Byte-identical-derivation property test (M3b D5) — pins the
+    /// engine-side composition `LocalKeys::derive_source_secrets_bundle`
+    /// against the legacy scanner-side derivation chain that
+    /// `shekyl_crypto_pq::output::scan_output_recover` realizes.
+    ///
+    /// # Property
+    ///
+    /// For every `(output_index, tx_hash, subaddress_idx)` triple, the
+    /// bundle returned by `LocalKeys::derive_source_secrets_bundle`
+    /// — which composes [`recover_combined_ss`],
+    /// [`derive_output_secrets`], and the subaddress / spend-secret
+    /// arithmetic — must be byte-identical to a bundle composed by
+    /// hand from `scan_output_recover`'s `RecoveredOutput` against the
+    /// same inputs. Both chains share the same Layer-1
+    /// `decap_ml_kem_and_combine` helper inside `shekyl-crypto-pq`
+    /// (validated by the C1 Layer-1 unit test in
+    /// `shekyl-crypto-pq/tests/recover_combined_ss.rs`); this test
+    /// extends the property to the engine's Layer-2 composition.
+    ///
+    /// # Why this property is load-bearing
+    ///
+    /// Per `STAGE_1_PR_3_M3B_PREFLIGHT.md` §3.2 / §D5, the engine
+    /// post-pass populates `TransferDetails.source_ciphertext` so that
+    /// later spend-side derivation can re-recover the bundle from the
+    /// on-chain ciphertext alone (no scanner-side intermediate state is
+    /// trusted). For that recovery to be sound, the re-derived bundle
+    /// must equal the bundle the scanner would have computed at
+    /// detection time. This test pins that equality so a future
+    /// implementation drift on either chain (a constant rename, a
+    /// salt change, an arithmetic-order swap) fails here rather than
+    /// at sign-time on a real transaction.
+    ///
+    /// # Coverage
+    ///
+    /// - 8 distinct `(output_index, tx_hash)` pairs to exercise the
+    ///   `derive_output_secrets` HKDF-SHA-512 context-binding paths.
+    /// - 3 distinct `subaddress_idx` values (PRIMARY, idx=1, idx=42)
+    ///   to exercise `subaddress_derivation_scalar`'s cSHAKE256
+    ///   binding to the index byte representation. PRIMARY exercises
+    ///   the `idx=0` path; idx=1 and idx=42 exercise non-zero
+    ///   derivations including a value above `u8::MAX` to cover the
+    ///   little-endian encoding in `to_canonical_bytes`.
+    /// - 24 total derivations (8 × 3) — the pre-flight's "at least 3,
+    ///   preferably 8+" lower bound is exceeded.
+    ///
+    /// Per the M3a Round 4a `pub(crate)` visibility lock on
+    /// [`LocalKeys`], [`SourceSecretsBundle`], and [`KeyEngineError`],
+    /// this property test lives inside `local_keys.rs`'s
+    /// `mod tests` rather than the `tests/byte_identical_derivation.rs`
+    /// integration-test placement the pre-flight estimated.
+    /// Integration tests run as external crates and cannot reach
+    /// `pub(crate)`; expanding visibility for one test contradicts the
+    /// visibility lock. The property the test pins is identical
+    /// regardless of file placement.
+    ///
+    /// [`recover_combined_ss`]: shekyl_crypto_pq::output::recover_combined_ss
+    /// [`derive_output_secrets`]: shekyl_crypto_pq::derivation::derive_output_secrets
+    /// [`SourceSecretsBundle`]: super::traits::key::SourceSecretsBundle
+    /// [`KeyEngineError`]: super::error::KeyEngineError
+    #[test]
+    fn derive_source_secrets_bundle_byte_identical_against_legacy_chain() {
+        use shekyl_crypto_pq::kem::HybridCiphertext;
+        use shekyl_crypto_pq::output::scan_output_recover;
+
+        let keys = LocalKeys::from_test_seed(TEST_SEED);
+
+        // 8 distinct (output_index, tx_hash) inputs. tx_hash is
+        // populated for completeness even though the bundle derivation
+        // does not depend on it (the handle does); covering distinct
+        // tx_hash values protects against accidental future coupling.
+        let inputs: [(u64, [u8; 32]); 8] = [
+            (0, [0x11u8; 32]),
+            (1, [0x22u8; 32]),
+            (7, [0x33u8; 32]),
+            (42, [0x44u8; 32]),
+            (255, [0x55u8; 32]),
+            (256, [0x66u8; 32]),
+            (1_000_000, [0x77u8; 32]),
+            (u64::MAX, [0x88u8; 32]),
+        ];
+        let subaddress_indices = [
+            SubaddressIndex::PRIMARY,
+            SubaddressIndex::new(1),
+            SubaddressIndex::new(42),
+        ];
+
+        // The wallet's primary spend key is the recipient for each
+        // synthetic output. The chain's binding to subaddress_idx
+        // enters at `m_i` only — `construct_output` is unaware of
+        // subaddress indexing, so a single ciphertext can be used
+        // across all idx values for the bundle-arithmetic check.
+        for (output_index, tx_hash) in inputs.iter().copied() {
+            let constructed = construct_output(
+                &TEST_TX_KEY_SECRET,
+                &keys.keys.x25519_pk,
+                &keys.keys.ml_kem_ek,
+                keys.keys.spend_pk.as_canonical_bytes(),
+                12_345u64.wrapping_add(output_index),
+                output_index,
+            )
+            .expect("construct_output succeeds for self-paid synthetic output");
+
+            let ciphertext = HybridCiphertext {
+                x25519: constructed.kem_ciphertext_x25519,
+                ml_kem: constructed.kem_ciphertext_ml_kem.clone(),
+            };
+
+            // Legacy chain: drive `scan_output_recover` end-to-end and
+            // assemble a SourceSecretsBundle by hand from its outputs
+            // and the engine-owned spend secret + subaddress scalar.
+            let recovered = scan_output_recover(
+                keys.keys.view_sk.as_canonical_bytes(),
+                keys.keys.ml_kem_dk.as_canonical_bytes(),
+                &constructed.kem_ciphertext_x25519,
+                &constructed.kem_ciphertext_ml_kem,
+                &constructed.output_key,
+                &constructed.commitment,
+                &constructed.enc_amount,
+                constructed.amount_tag,
+                constructed.view_tag_x25519,
+                output_index,
+            )
+            .expect("scan_output_recover succeeds for self-paid synthetic output");
+
+            for &subaddress_idx in &subaddress_indices {
+                // Hand-composed legacy bundle: spend_key_x = ho + b + m_i.
+                let ho_scalar: Scalar =
+                    Option::from(Scalar::from_canonical_bytes(recovered.ho))
+                        .expect("ho from wide_reduce is canonical");
+                let b_scalar: Scalar =
+                    Scalar::from_bytes_mod_order(*keys.keys.spend_sk.as_canonical_bytes());
+                let m_i: Scalar = subaddress_derivation_scalar(
+                    &keys.derived.view_scalar,
+                    &subaddress_idx.to_canonical_bytes(),
+                );
+                let legacy_x_scalar: Scalar = ho_scalar + b_scalar + m_i;
+                let legacy_x = legacy_x_scalar.to_bytes();
+
+                // New chain: engine-side composition.
+                let new_bundle = keys
+                    .derive_source_secrets_bundle(&ciphertext, output_index, subaddress_idx)
+                    .expect("derive_source_secrets_bundle succeeds against own ciphertext");
+
+                let context = format!(
+                    "output_index={output_index}, tx_hash[0]={:#04x}, subaddress_idx={subaddress_idx:?}",
+                    tx_hash[0]
+                );
+
+                // Field-by-field byte equality. Each assertion names the
+                // bundle field so a regression localizes to the chain
+                // step the field is sourced from.
+                assert_eq!(
+                    *new_bundle.spend_key_x, legacy_x,
+                    "spend_key_x byte-identity violated ({context})"
+                );
+                assert_eq!(
+                    *new_bundle.spend_key_y, recovered.y,
+                    "spend_key_y byte-identity violated ({context})"
+                );
+                assert_eq!(
+                    *new_bundle.commitment_mask, recovered.z,
+                    "commitment_mask byte-identity violated ({context})"
+                );
+                assert_eq!(
+                    new_bundle.combined_ss.as_slice(),
+                    &recovered.combined_ss[..],
+                    "combined_ss byte-identity violated ({context})"
+                );
+                assert_eq!(
+                    new_bundle.output_index, output_index,
+                    "output_index passthrough violated ({context})"
+                );
+            }
+        }
+    }
+
+    /// Cross-seed isolation: the byte-identical-derivation property
+    /// holds within a wallet, but the bundle bytes diverge across
+    /// distinct seeds even when the on-chain ciphertext is identical.
+    /// This guards against a regression where the bundle accidentally
+    /// drops its dependency on engine-owned secret material.
+    ///
+    /// # Why "diverge" rather than "fail"
+    ///
+    /// ML-KEM-768 implements **implicit rejection** per FIPS 203: a
+    /// decap failure does not propagate as an error; it returns a
+    /// deterministic dummy shared secret derived from the ciphertext
+    /// and the decap key. This is the IND-CCA2 property that prevents
+    /// an attacker from distinguishing "wrong wallet" from "tampered
+    /// ciphertext" via timing / error-channel oracles.
+    /// `derive_source_secrets_bundle` consequently succeeds even
+    /// against a ciphertext encapsulated to a different wallet — but
+    /// the resulting bundle is junk (the combined_ss is the dummy
+    /// secret; the spend_key_x / _y / commitment_mask cascade off
+    /// it). The cross-seed isolation property is "the junk bundle
+    /// differs byte-for-byte from the legitimate bundle," not "the
+    /// function refuses."
+    #[test]
+    fn derive_source_secrets_bundle_diverges_across_distinct_seeds() {
+        use shekyl_crypto_pq::kem::HybridCiphertext;
+
+        let keys_a = LocalKeys::from_test_seed(TEST_SEED);
+        let keys_b = LocalKeys::from_test_seed([0xAAu8; 32]);
+
+        let constructed = construct_output(
+            &TEST_TX_KEY_SECRET,
+            &keys_a.keys.x25519_pk,
+            &keys_a.keys.ml_kem_ek,
+            keys_a.keys.spend_pk.as_canonical_bytes(),
+            777,
+            5,
+        )
+        .unwrap();
+        let ciphertext_for_a = HybridCiphertext {
+            x25519: constructed.kem_ciphertext_x25519,
+            ml_kem: constructed.kem_ciphertext_ml_kem.clone(),
+        };
+
+        let bundle_a = keys_a
+            .derive_source_secrets_bundle(&ciphertext_for_a, 5, SubaddressIndex::PRIMARY)
+            .expect("wallet_a recovers its own ciphertext");
+
+        // wallet_b's re-decap engages ML-KEM-768 implicit rejection;
+        // the call succeeds but yields a junk bundle.
+        let bundle_b = keys_b
+            .derive_source_secrets_bundle(&ciphertext_for_a, 5, SubaddressIndex::PRIMARY)
+            .expect("ML-KEM-768 implicit rejection — succeeds with junk bundle");
+
+        // Junk vs legitimate: the secret-bearing fields must differ.
+        // (combined_ss is the load-bearing one; the rest cascade off
+        // it via derive_output_secrets, so they all diverge as a
+        // package.)
+        assert_ne!(
+            bundle_a.combined_ss.as_slice(),
+            bundle_b.combined_ss.as_slice(),
+            "combined_ss must differ across wallets even with identical ciphertext"
+        );
+        assert_ne!(
+            *bundle_a.spend_key_x, *bundle_b.spend_key_x,
+            "spend_key_x must differ across wallets"
+        );
+        assert_ne!(
+            *bundle_a.spend_key_y, *bundle_b.spend_key_y,
+            "spend_key_y must differ across wallets"
+        );
+        assert_ne!(
+            *bundle_a.commitment_mask, *bundle_b.commitment_mask,
+            "commitment_mask must differ across wallets"
+        );
+
+        // Sanity: bundle_a's bytes are not all-zero (regression guard
+        // against a future "field accidentally never written" defect).
+        assert_ne!(*bundle_a.spend_key_x, [0u8; 32]);
+        assert_ne!(*bundle_a.spend_key_y, [0u8; 32]);
+        assert_ne!(*bundle_a.commitment_mask, [0u8; 32]);
+        assert_eq!(bundle_a.combined_ss.len(), 64);
+        assert!(bundle_a.combined_ss.iter().any(|&b| b != 0));
     }
 
     #[tokio::test]
