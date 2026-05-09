@@ -639,6 +639,269 @@ worked as intended in surfacing these specifics before drafting.**
 The 600-line ceiling holds; the realistic estimate of 500–550 is
 well within scope.
 
+#### Landing notes (M3b closed)
+
+M3b landed on `feat/stage-1-pr3-m3b` as ten commits (one of which
+was a mechanical rustfmt fix between substantive commits) cut off
+`dev` at `647f82d59`. Three structural divergences from the
+pre-flight (§3.2.1) estimate are recorded against the discipline
+that drove each.
+
+**Sub-commit breakdown.**
+
+1. *`crypto-pq: extract recover_combined_ss re-decap primitive (M3b D1 Layer 1)`*
+   — extracts the X25519 + ML-KEM-768 + HKDF-SHA-512 re-decap chain
+   from `scan_output_recover`'s prefix into a public `pub fn
+   recover_combined_ss(view_x25519_sk, ml_kem_dk, kem_ct_x25519,
+   kem_ct_ml_kem) -> Result<SharedSecret, CryptoError>`. Refactors
+   `scan_output_recover` to call the new fn for compositional
+   clarity (the inline X25519 ECDH is preserved so view-tag
+   pre-filter still short-circuits before the more expensive ML-KEM
+   decap). New `tests/recover_combined_ss.rs` (~196 lines, 5 tests)
+   pins Layer-1 byte-identity at the primitive boundary.
+2. *`crypto-pq: derive Schema + transparent serde on OutputHandle and HybridCiphertext (M3b D3 α)`*
+   — `postcard-schema` direct dep added to `shekyl-crypto-pq` for
+   Disposition Q1's α path. `Schema` derive on `HybridCiphertext`,
+   `Schema` + transparent `Serialize`/`Deserialize` on `OutputHandle`.
+   Enables the schema additions in commit 4. Pin matches the
+   existing `shekyl-engine-state` direct-dep pin per
+   `17-dependency-discipline.mdc`.
+3. *`engine-core: add SourceCiphertextDecapsulationFailed to KeyEngineError (M3b D6)`*
+   — the named-failure-mode variant for re-decap rejection.
+   Pre-flight defaulted to "unit variant"; landed shape is
+   `SourceCiphertextDecapsulationFailed(#[from] CryptoError)` so
+   audit logs see whether the rejection was at the X25519 (low-order
+   point), the ML-KEM-768 (decap failure), or the input-shape
+   (invalid key material) layer. The `#[from]` is load-bearing for
+   the re-decap call site's `?` operator in commit 6.
+4. *`engine-state: extend TransferDetails with source_ciphertext + output_handle`*
+   — `TransferDetails` schema extension (D3); both fields are
+   `Option<…>` to keep the bridge-impl fallback live during the
+   transitional window per §3.2's "feature-detection, not
+   feature-flag" framing. `Zeroize` impl skips the new fields
+   (public on-chain residue + deterministic handle, not secret).
+   `LEDGER_BLOCK_VERSION` + `WALLET_LEDGER_FORMAT_VERSION` bumped
+   2 → 3; both schema snapshots regenerated. `TransferDetails`
+   initializers updated across 11 sites in `shekyl-engine-state`
+   (benches, invariants, ledger_indexes), `shekyl-engine-core`
+   (benches), and `shekyl-scanner` (`ledger_ext.rs::from_wallet_output`).
+5. *`engine-core: swap TxInputSigningContext source_secrets for ciphertext`*
+   — `TxInputSigningContext` field swap (D2): drops
+   `source_secrets: SourceSecretsBundle` (the by-value secret
+   carrier that contradicted the engine-confined-secrets property)
+   in favor of `source_ciphertext: HybridCiphertext` + `output_index:
+   u64`. `Debug` impl simplified; redaction tests updated. `LocalKeys`
+   consumers in `try_claim_output` are unaffected (use `OutputDetectionInput`,
+   not `TxInputSigningContext`); `sign_transaction`'s stub body
+   unaffected.
+6. *`engine-core: derive_source_secrets_bundle on LocalKeys (M3b D1 Layer 2)`*
+   — Layer 2 of the D1 split: `pub(crate) fn
+   derive_source_secrets_bundle(&self, source_ciphertext: &HybridCiphertext,
+   output_index: u64, subaddress_idx: SubaddressIndex) ->
+   Result<SourceSecretsBundle, KeyEngineError>` composes Layer 1's
+   `recover_combined_ss` with `derive_output_secrets` and the
+   engine-owned `b` (spend secret) and `m_i` (subaddress derivation
+   scalar). Two smoke tests; the comprehensive byte-identical
+   property test lands at commit 8.
+7. *`scanner: preserve OutputDetectionInput residue on RecoveredWalletOutput`*
+   (was C9 in pre-flight; reordered to land before C7) — the
+   pre-flight estimated this as "may be no-op" but inspection
+   revealed `RecoveredWalletOutput` was discarding the
+   `source_ciphertext`, `view_tag`, `enc_amount`, and `amount_tag`
+   on-chain residue at construction time. Without this commit, the
+   engine post-pass at commit 8 has no `HybridCiphertext` to use
+   for the handle derivation. Reordered to land first per
+   bisection-friendliness; the engine post-pass commit then
+   compiles against the populated residue without a forward
+   reference.
+8. *`engine-core: orchestrator-side handle population post-pass (M3b §3 reroute)`*
+   — the actual scanner-reroute equivalent (Q2's δ disposition).
+   `Engine::apply_scan_result` becomes `collect → merge → populate`
+   inside one `LocalLedger` write guard: `collect_detection_residue`
+   builds a `HashMap<(tx_hash, internal_output_index),
+   HybridCiphertext>` from the `ScanResult`'s new transfers;
+   `apply_scan_result_to_state` performs the existing sync
+   bookkeeping merge; `populate_engine_handle_fields` walks the
+   freshly-merged `TransferDetails` and binds each to its
+   `source_ciphertext` + deterministic `output_handle` from the
+   residue map. Atomic against external readers — concurrent reads
+   either see pre-merge or post-population, never an intermediate
+   state. Idempotent. Four unit tests in `engine::merge::tests`
+   (positive, selectivity, idempotency, empty-residue).
+9. *`engine-core: rustfmt merge.rs after C7b residue tests landed`*
+   — mechanical fmt-only fix to `merge.rs:979,1083` that escaped
+   commit 8's package-wide format pass. The chained
+   `.as_ref().expect(...)` reformatted across multiple lines once
+   the surrounding expression depth crossed `rustfmt`'s line-break
+   threshold. Standalone per `15-deletion-and-debt.mdc`'s
+   scope-per-commit discipline.
+10. *`engine-core: byte-identical-derivation property test (M3b D5)`*
+    — two unit tests in `local_keys.rs::tests`: (a)
+    `derive_source_secrets_bundle_byte_identical_against_legacy_chain`
+    exercises 24 derivations (8 distinct (output_index, tx_hash)
+    pairs × 3 subaddress indices — PRIMARY, idx=1, idx=42) asserting
+    field-by-field byte-identity against a hand-rolled bundle from
+    `scan_output_recover`'s `RecoveredOutput`; (b)
+    `derive_source_secrets_bundle_diverges_across_distinct_seeds`
+    exercises cross-seed isolation, with the test docstring pinning
+    that ML-KEM-768 implicit rejection (FIPS 203) means a wrong-wallet
+    decap *succeeds* with a junk bundle rather than refusing — the
+    isolation property is "junk bundle differs byte-for-byte," not
+    "function refuses."
+
+(Sub-commit 11 is this docs commit.)
+
+**Divergence 1 — Test placement.** Pre-flight (§D5 / §5 commit
+table line 8) named the test file
+`rust/shekyl-engine-core/tests/byte_identical_derivation.rs`
+(integration test). Actual placement: two unit tests inside
+`rust/shekyl-engine-core/src/engine/local_keys.rs`'s `mod tests`.
+The deviation is driven by the M3a Round 4a `pub(crate)` lock on
+`LocalKeys`, `SourceSecretsBundle`, and `KeyEngineError`. Integration
+tests run as external crates and cannot reach `pub(crate)` items;
+expanding visibility — or adding a `__test_internals` re-export
+module — for one test contradicts the visibility lock and inflates
+the public API surface for no proportional benefit. Located
+alongside the C6 smoke tests, the property is identical regardless
+of file placement. The deviation is recorded inline in the test
+docstring so a future maintainer can re-locate to `tests/` if the
+visibility lock relaxes (e.g. at the V3.2 wallet-RPC cutover when
+`KeyEngine` widens to `pub`); tracked in `docs/FOLLOWUPS.md` § V3.2
+as "M3b property-test re-location."
+
+**Divergence 2 — C7→C7a/C7b commit reorder.** Pre-flight estimated
+C9 (`scanner: process_scanned_outputs preserves OutputDetectionInput
+residue`) as "~0–10 lines, may be no-op." Actual: C9 was load-bearing
+for C7's engine post-pass — `RecoveredWalletOutput` was discarding
+the `source_ciphertext` / `view_tag` / `enc_amount` / `amount_tag`
+on-chain residue at construction time. Reordered C9 to land as C7a
+(scanner residue plumbing, ~73-line delta in `shekyl-scanner/src/scan.rs`)
+before the renamed C7b (orchestrator post-pass), preserving
+bisection-friendliness — every commit leaves the workspace
+`cargo check`-green and each commit's body matches its subject.
+The reorder is honest about the layering: the engine post-pass
+needs structured input, and the scanner is the only producer.
+
+**Divergence 3 — Engine post-pass placement; sync helper, async-ready
+surface.** Pre-flight Q2's δ disposition framed
+`populate_engine_handle_fields` as "async sibling helper" assuming
+`self.keys.try_claim_output(...)` flows through `KeyEngine`. That
+requires wiring `LocalKeys` onto `Engine`, which `from_keys_blob`'s
+own dead-code marker pins to M3c+. Rather than scope-creep that
+wiring into M3b, M3b derived the handle directly via the public
+`derive_output_handle` primitive (mathematically equivalent — same
+`(view_secret, tx_hash, output_index)` cSHAKE256 binding — and the
+view secret is already on `Engine.keys: AllKeysBlob`). The helper
+stays sync; the async signature flips when M3c+ wires `LocalKeys`.
+The `# Synchronous body, async-ready surface` doc-comment on
+`populate_engine_handle_fields` pins the trajectory so a future
+maintainer doesn't re-litigate it. M3b's architectural property
+(every output the scanner ingests has a deterministic handle on its
+`TransferDetails`) is delivered without the audit's "engine sole
+authority on handles" framing — that property activates at M3d per
+§3.4 below.
+
+**Files actually touched.**
+
+- New: `rust/shekyl-crypto-pq/tests/recover_combined_ss.rs` (~196
+  lines).
+- Edit: `rust/shekyl-crypto-pq/Cargo.toml` (+`postcard-schema`
+  direct dep).
+- Edit: `rust/shekyl-crypto-pq/src/output.rs` (+`recover_combined_ss`,
+  refactored `scan_output_recover` body).
+- Edit: `rust/shekyl-crypto-pq/src/handle.rs` (`Schema` + transparent
+  serde derives on `OutputHandle`).
+- Edit: `rust/shekyl-crypto-pq/src/kem.rs` (`Schema` derive on
+  `HybridCiphertext`).
+- Edit: `rust/shekyl-engine-core/src/engine/error.rs`
+  (+`SourceCiphertextDecapsulationFailed(#[from] CryptoError)`).
+- Edit: `rust/shekyl-engine-core/src/engine/local_keys.rs`
+  (+`derive_source_secrets_bundle` + 4 tests including the byte-
+  identical property test).
+- Edit: `rust/shekyl-engine-core/src/engine/merge.rs` (+engine
+  post-pass: `collect_detection_residue`,
+  `populate_engine_handle_fields`, 4 tests).
+- Edit: `rust/shekyl-engine-core/src/engine/traits/key.rs`
+  (`TxInputSigningContext` field swap).
+- Edit: `rust/shekyl-engine-state/src/transfer.rs` (+`source_ciphertext`,
+  `output_handle` `Option<…>` fields; schema; Zeroize-skip on new
+  non-secret fields).
+- Edit: `rust/shekyl-engine-state/src/ledger_block.rs`
+  (`LEDGER_BLOCK_VERSION` 2→3).
+- Edit: `rust/shekyl-engine-state/src/wallet_ledger.rs`
+  (`WALLET_LEDGER_FORMAT_VERSION` 2→3).
+- Edit: `rust/shekyl-engine-state/schemas/{ledger_block,wallet_ledger}.snap`
+  (regenerated; ~+498 lines combined — generated artifacts).
+- Edit: `rust/shekyl-scanner/src/scan.rs`
+  (+4 residue fields on `RecoveredWalletOutput` + accessors).
+- Edit: `rust/shekyl-scanner/src/tests.rs` (3 fixtures updated for
+  the new fields).
+- Edit: `rust/shekyl-scanner/src/ledger_ext.rs` (+`source_ciphertext:
+  None`, `output_handle: None` initialization).
+- Edit: ~9 sites across `shekyl-engine-state` and `shekyl-engine-core`
+  benches / invariants / ledger_indexes for `TransferDetails`
+  initializer updates.
+
+**Net diff stat.** ~+2109 / −147 across 27 files, ~+1962 net. Of
+which ~+498 is the regenerated schema snapshots (load-bearing
+generated artifacts; a manual write of the same content would still
+land identically). Net code lines: ~+1465 — over the pre-flight's
+500–550 estimate and over the original 600-line guardrail. The
+overage drivers:
+
+- Comprehensive doc-comments on `populate_engine_handle_fields`,
+  `derive_source_secrets_bundle`, the byte-identical property test,
+  and the C7b commit's design rationale (~+200 lines of doc-comments
+  total — the source-of-truth pinning that prevents re-litigation
+  per `16-architectural-inheritance.mdc` §"Continuous discipline as
+  inheritance prevention").
+- Engine post-pass test substrate (4 unit tests, ~+200 lines) that
+  was sized as ~60–100 lines in the pre-flight.
+- Byte-identical property test substrate (260 lines vs the
+  pre-flight's ~120-line estimate) due to the 24-derivation sweep
+  and the cross-seed isolation test (the second test was not in
+  the pre-flight estimate).
+
+The overage is honest expansion of the test substrate and the
+in-source design-rationale documentation; not a scope expansion of
+the production code paths. The pre-flight's `~50–100 lines margin`
+framing fell on the wrong side; future per-PR estimates should
+budget more generously for in-source discipline-pinning
+doc-comments at architectural-inheritance-load-bearing surfaces.
+
+**Property delivery.** Partial (per §3.2 "Property delivery").
+Engine cache populated for every output the scanner ingests; both
+`TransferDetails.source_ciphertext` and `TransferDetails.output_handle`
+are populated post-merge. The legacy secret-bearing fields remain
+populated transitionally to keep the bridge-impl fallback live;
+"secrets confined to engine" is not yet active. M3d removes the
+legacy fields and the orchestrator-side copies they hold.
+
+**Discipline-application notes.** Two recurrence-pattern instances
+worth recording for the V3.x post-mortem:
+
+- **Sync/async architectural-integrity-now.** The engine post-pass
+  could have been wrapped in `async fn` from M3b to anticipate
+  M3c+'s `KeyEngine::try_claim_output` integration. Per
+  `16-architectural-inheritance.mdc` §"The cost-benefit-defer-to-later
+  anti-pattern," the architectural-integrity-now disposition for
+  M3b was: keep the helper sync because the cryptographic primitive
+  (`derive_output_handle`) is sync, and let the `async` upgrade
+  happen at M3c+ when the integration shape forces it. The
+  alternative — wrap in `async` now for "future-proofing" — would
+  cascade `.await` chains through `Engine::apply_scan_result`'s
+  callers without delivering any property M3b ships. The
+  doc-comment on `populate_engine_handle_fields` captures the
+  trajectory.
+- **Test-fixture honesty.** The pre-flight's ~10–20 lines for
+  test-fixture rewrites was approximately correct (3 fixtures
+  updated for the new `RecoveredWalletOutput` fields, ~21 lines).
+  But the pre-flight underestimated the new test-substrate
+  required to exercise the engine post-pass (4 unit tests in
+  `merge.rs`) and the byte-identical property (2 unit tests in
+  `local_keys.rs`). Test substrate scales with the property
+  surface, not with the call-site count.
+
 ---
 
 ### §3.3 M3c — additive test caller

@@ -11,6 +11,30 @@ citing in a review.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **M3b byte-identical-derivation property test re-location
+  (target: V3.2 wallet-RPC cutover, contingent on `KeyEngine`
+  visibility relaxation).** Stage 1 PR 3 — M3b's
+  byte-identical-derivation property test (`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md`
+  §D5) was specified as an integration test at
+  `rust/shekyl-engine-core/tests/byte_identical_derivation.rs` but
+  landed as two unit tests in
+  `rust/shekyl-engine-core/src/engine/local_keys.rs`'s `mod tests`.
+  The deviation is forced by the M3a Round 4a `pub(crate)` lock on
+  `LocalKeys`, `SourceSecretsBundle`, and `KeyEngineError`:
+  integration tests run as external crates and cannot reach
+  `pub(crate)` items. The property the test pins is identical
+  regardless of placement; the location is purely a visibility
+  artifact. When the V3.2 wallet-RPC cutover widens `KeyEngine` to
+  `pub` (per `STAGE_1_PR_3_KEY_ENGINE.md` §4.4 trait visibility
+  evolution), the property test should be re-located to the
+  pre-flight's planned `tests/byte_identical_derivation.rs`
+  integration-test placement so it exercises the same surface
+  external consumers will exercise. Target: V3.2, alongside the
+  `wallet_rpc_server` Rust cutover that drives the visibility
+  widening. The deviation is recorded inline in the test docstring
+  so a future maintainer cross-referencing the pre-flight finds the
+  tracking link.
+
 - **`RecoveredWalletOutput.key_image`: promote to `Option<KeyImage>`
   (target: V3.1).** Today the field is typed `KeyImage` and the test
   helper `RecoveredWalletOutput::new_for_test` produces a zero
