@@ -1183,8 +1183,7 @@ mod tests {
             stored_ct_a.x25519, sentinel_ct.x25519,
             "pre-populated source_ciphertext must not be overwritten"
         );
-        let derived_handle_a =
-            derive_output_handle(&view_secret, &tx_hash_a, internal_idx_a);
+        let derived_handle_a = derive_output_handle(&view_secret, &tx_hash_a, internal_idx_a);
         assert_eq!(
             td_a.output_handle.expect("output_handle filled"),
             derived_handle_a,
