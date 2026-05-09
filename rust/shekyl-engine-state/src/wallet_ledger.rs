@@ -56,10 +56,15 @@ use crate::{
 
 /// Bundle-level `format_version`.
 ///
-/// V3.0 ships `2`. Version `1` (pre-flat-namespace) carried a
+/// V3.0 ships `3`. Version `1` (pre-flat-namespace) carried a
 /// two-field `SubaddressIndex { account, address }`, a separate
 /// `SubaddressLabels::primary` slot, and an `account_tags` map inside
-/// `BookkeepingBlock`. Each per-block bump (`LEDGER_BLOCK_VERSION`,
+/// `BookkeepingBlock`. Version `2` flattened those structures.
+/// Version `3` extends [`crate::transfer::TransferDetails`] with two
+/// optional non-secret fields — `source_ciphertext: Option<HybridCiphertext>`
+/// and `output_handle: Option<OutputHandle>` — to support the M3b
+/// orchestrator-side handle population pass; pre-M3b records carry
+/// `None` in both. Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
 /// the on-disk bundle *bytes* themselves shift whenever any nested
@@ -70,7 +75,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 2;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 3;
 
 /// The `.wallet`-side ledger bundle: the four typed blocks + a
 /// bundle-level `format_version`.

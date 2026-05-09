@@ -83,6 +83,19 @@ impl TransferDetailsExt for TransferDetails {
             y: None,
             z: None,
             k_amount: None,
+            // M3b deterministic-handle pathway: populated by the
+            // orchestrator-side post-pass in
+            // `shekyl_engine_core::engine::merge` (commit 7), not by the
+            // scanner itself. The scanner produces the handle's input
+            // material (`tx_hash`, `internal_output_index`) but the
+            // `view_secret` it would need to invoke
+            // `derive_output_handle` lives in the engine, by design.
+            // Leaving these as `None` here keeps `shekyl-scanner` free
+            // of view-key access and lets the orchestrator populate the
+            // fields after merging the per-block scan results into the
+            // ledger.
+            source_ciphertext: None,
+            output_handle: None,
             eligible_height: block_height + SPENDABLE_AGE,
             frozen: false,
             fcmp_precomputed_path: None,

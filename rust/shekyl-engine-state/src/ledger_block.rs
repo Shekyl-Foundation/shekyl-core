@@ -51,17 +51,34 @@ use crate::{error::WalletLedgerError, subaddress::SubaddressIndex, transfer::Tra
 
 /// Schema version of the ledger block.
 ///
-/// V3.0 ships version `2`. Version `1` (pre-flat-namespace) carried a
-/// two-field `SubaddressIndex { account, address }` inside every
-/// `TransferDetails`; the flatten to `SubaddressIndex(u32)` reaches
-/// `LedgerBlock`'s on-disk bytes through the `transfers` vec, so the
-/// bump catches stale fixtures even though no on-disk ledgers exist
-/// yet (Shekyl is pre-genesis — `rm -rf ~/.shekyl` is the migration
-/// path per `.cursor/rules/15-deletion-and-debt.mdc`). Any field
-/// addition / removal / renaming inside the block, or any transitive
-/// change in a nested type's serialized shape, bumps this; loads that
-/// see a different version refuse rather than migrate.
-pub const LEDGER_BLOCK_VERSION: u32 = 2;
+/// V3.0 ships version `3`. Versions `2` and `1` are documented for
+/// audit-trail purposes:
+///
+/// - Version `1` (pre-flat-namespace) carried a two-field
+///   `SubaddressIndex { account, address }` inside every
+///   `TransferDetails`; the flatten to `SubaddressIndex(u32)` reaches
+///   `LedgerBlock`'s on-disk bytes through the `transfers` vec, which
+///   bumped the version to `2`.
+/// - Version `2` was the pre-M3b shape: each `TransferDetails`
+///   persisted `combined_shared_secret`, `ho`, `y`, `z`, `k_amount`
+///   inline as the canonical re-derivation source.
+/// - Version `3` (this version) adds
+///   `TransferDetails::source_ciphertext` and
+///   `TransferDetails::output_handle`, the M3b deterministic-handle
+///   pathway's persisted state. The pre-M3b secret-bearing fields
+///   remain alongside the new fields transitionally; M3c's
+///   `TxInputSigningContext` swap (per
+///   `STAGE_1_PR_3_MIGRATION_PLAN.md` §3.3) flips the source of truth
+///   to the new fields, and M3d/M3e remove the legacy fields,
+///   triggering further version bumps each time.
+///
+/// Any field addition / removal / renaming inside the block, or any
+/// transitive change in a nested type's serialized shape, bumps this;
+/// loads that see a different version refuse rather than migrate, per
+/// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
+/// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
+/// the migration path).
+pub const LEDGER_BLOCK_VERSION: u32 = 3;
 
 /// Maximum number of `(height, hash)` pairs the scanner should keep in
 /// [`ReorgBlocks`]. The value is informational — the persistence layer
@@ -429,6 +446,8 @@ mod tests {
             y: Some(Zeroizing::new([seed.wrapping_add(3); 32])),
             z: Some(Zeroizing::new([seed.wrapping_add(4); 32])),
             k_amount: Some(Zeroizing::new([seed.wrapping_add(5); 32])),
+            source_ciphertext: None,
+            output_handle: None,
             eligible_height: 100 + SPENDABLE_AGE,
             frozen: false,
             fcmp_precomputed_path: None,

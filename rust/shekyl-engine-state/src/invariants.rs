@@ -428,6 +428,8 @@ mod tests {
             y: None,
             z: None,
             k_amount: None,
+            source_ciphertext: None,
+            output_handle: None,
             eligible_height: block_height + SPENDABLE_AGE,
             frozen: false,
             fcmp_precomputed_path: None,

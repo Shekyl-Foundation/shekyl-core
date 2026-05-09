@@ -54,6 +54,8 @@ fn synthetic_transfer(seed: u64, height: u64) -> TransferDetails {
         y: None,
         z: None,
         k_amount: None,
+        source_ciphertext: None,
+        output_handle: None,
         eligible_height: height + SPENDABLE_AGE,
         frozen: false,
         fcmp_precomputed_path: None,

@@ -526,6 +526,8 @@ mod tests {
             y: Some(Zeroizing::new([0; 32])),
             z: Some(Zeroizing::new([0; 32])),
             k_amount: Some(Zeroizing::new([0; 32])),
+            source_ciphertext: None,
+            output_handle: None,
             eligible_height: block_height + SPENDABLE_AGE,
             frozen: false,
             fcmp_precomputed_path: None,
