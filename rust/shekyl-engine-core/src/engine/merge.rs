@@ -979,7 +979,10 @@ mod tests {
             .iter()
             .find(|t| t.tx_hash == tx_hash && t.internal_output_index == internal_idx)
             .expect("merged transfer still present");
-        let stored_ct = td.source_ciphertext.as_ref().expect("source_ciphertext set");
+        let stored_ct = td
+            .source_ciphertext
+            .as_ref()
+            .expect("source_ciphertext set");
         assert_eq!(stored_ct.x25519, ct.x25519);
         assert_eq!(stored_ct.ml_kem, ct.ml_kem);
 
@@ -1083,7 +1086,10 @@ mod tests {
             .iter()
             .find(|t| t.tx_hash == tx_hash && t.internal_output_index == internal_idx)
             .expect("merged transfer present");
-        let stored_ct = td.source_ciphertext.as_ref().expect("source_ciphertext set");
+        let stored_ct = td
+            .source_ciphertext
+            .as_ref()
+            .expect("source_ciphertext set");
         // Stable on the first ciphertext.
         assert_eq!(stored_ct.x25519, ct1.x25519);
     }
