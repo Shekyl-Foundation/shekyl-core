@@ -533,15 +533,32 @@ impl ShekylAllKeysBlob {
 /// per-field copy here is the auditable boundary at which the
 /// typed value is converted to raw bytes for the FFI consumer.
 fn copy_blob_to_ffi(src: &AllKeysBlob, dst: &mut ShekylAllKeysBlob) {
+    // Public fields: assigned by value. No `Zeroize` discipline applies
+    // (public material; constant-time write pattern is the only
+    // property to preserve, which both forms satisfy).
     dst.spend_pk = *src.spend_pk.as_canonical_bytes();
     dst.view_pk = *src.view_pk.as_canonical_bytes();
     dst.ml_kem_ek = src.ml_kem_ek;
     dst.x25519_pk = src.x25519_pk;
     dst.pqc_public_key = src.pqc_public_key;
     dst.classical_address_bytes = src.classical_address_bytes;
-    dst.spend_sk = *src.spend_sk.as_canonical_bytes();
-    dst.view_sk = *src.view_sk.as_canonical_bytes();
-    dst.ml_kem_dk = *src.ml_kem_dk.as_canonical_bytes();
+
+    // Secret fields: written via `copy_from_slice` so the source bytes
+    // go directly from the typed wrapper's `as_canonical_bytes()`
+    // borrow into the destination buffer (memcpy-shaped) without an
+    // intermediate `[u8; N]` Copy on the stack outside any `Zeroize`
+    // discipline. Per `.cursor/rules/35-secure-memory.mdc:21-22`. The
+    // load-bearing case is `ml_kem_dk` (2400 bytes — long enough that
+    // a stack temporary persists across the function and is observable
+    // by post-return memory reuse); `spend_sk` / `view_sk` use the
+    // same idiom for discipline consistency rather than because the
+    // 32-byte temps are individually load-bearing.
+    dst.spend_sk
+        .copy_from_slice(src.spend_sk.as_canonical_bytes());
+    dst.view_sk
+        .copy_from_slice(src.view_sk.as_canonical_bytes());
+    dst.ml_kem_dk
+        .copy_from_slice(src.ml_kem_dk.as_canonical_bytes());
 }
 
 /// Zero every field of a caller-provided blob. Used on all error paths.
