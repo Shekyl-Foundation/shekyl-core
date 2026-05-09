@@ -26,7 +26,7 @@ use shekyl_oxide::{
 use shekyl_rpc::ScannableBlock;
 
 use shekyl_crypto_pq::{
-    kem::ML_KEM_768_CT_LEN,
+    kem::{HybridCiphertext, ML_KEM_768_CT_LEN},
     key_image::KeyImage,
     output::{compute_output_key_image, scan_output_recover},
 };
@@ -43,6 +43,17 @@ const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
 /// and key image so that `TransferDetails` can be fully populated without
 /// re-derivation. Implements `ZeroizeOnDrop` — secrets are wiped when this
 /// struct leaves scope.
+///
+/// In addition to the secret residue, the struct preserves the **public
+/// on-chain residue** the engine post-pass needs to reconstruct an
+/// `OutputDetectionInput` (per
+/// `docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md` §3): the per-output
+/// hybrid ciphertext, view tag, encrypted amount, and amount tag. These
+/// fields are **non-secret** (structurally public on-chain data) and
+/// skip wipe via `#[zeroize(skip)]`, matching the `key_image` /
+/// `amount` discipline. They are scoped `pub(crate)` so the scanner
+/// can produce them, while the orchestrator reads them via the
+/// dedicated accessors below.
 #[derive(ZeroizeOnDrop)]
 pub struct RecoveredWalletOutput {
     pub(crate) base: WalletOutput,
@@ -62,6 +73,21 @@ pub struct RecoveredWalletOutput {
     /// Recovered amount from KEM decryption.
     #[zeroize(skip)]
     pub(crate) amount: u64,
+    /// Per-output hybrid ciphertext (X25519 || ML-KEM-768). Public
+    /// on-chain residue. The engine post-pass re-decapsulates against
+    /// it to produce the deterministic `OutputHandle`.
+    #[zeroize(skip)]
+    pub(crate) source_ciphertext: HybridCiphertext,
+    /// One-byte view tag carried in the on-chain output. Public.
+    #[zeroize(skip)]
+    pub(crate) view_tag: u8,
+    /// Encrypted amount bytes from `RctSignaturesBase::encrypted_amounts`.
+    /// Public on-chain residue.
+    #[zeroize(skip)]
+    pub(crate) enc_amount: [u8; 8],
+    /// One-byte amount tag carried alongside `enc_amount`. Public.
+    #[zeroize(skip)]
+    pub(crate) amount_tag: u8,
 }
 
 impl Zeroize for RecoveredWalletOutput {
@@ -72,10 +98,10 @@ impl Zeroize for RecoveredWalletOutput {
         self.z.zeroize();
         self.k_amount.zeroize();
         self.combined_shared_secret.zeroize();
-        // `self.key_image` is public on-chain data, not secret.
-        // `self.amount` is structurally non-secret as well.
-        // Both deliberately skip wipe per the field-level
-        // `#[zeroize(skip)]` discipline above.
+        // `self.key_image`, `self.amount`, `self.source_ciphertext`,
+        // `self.view_tag`, `self.enc_amount`, `self.amount_tag` are
+        // public on-chain data, not secret — they deliberately skip
+        // wipe per the field-level `#[zeroize(skip)]` discipline above.
     }
 }
 
@@ -104,6 +130,25 @@ impl RecoveredWalletOutput {
     pub fn amount(&self) -> u64 {
         self.amount
     }
+    /// The public on-chain hybrid ciphertext (X25519 || ML-KEM-768)
+    /// preserved from scan time. Consumed by the engine post-pass in
+    /// `shekyl-engine-core::engine::merge` to reconstruct
+    /// `OutputDetectionInput` and call `KeyEngine::try_claim_output`.
+    pub fn source_ciphertext(&self) -> &HybridCiphertext {
+        &self.source_ciphertext
+    }
+    /// One-byte view tag carried in the on-chain output.
+    pub fn view_tag(&self) -> u8 {
+        self.view_tag
+    }
+    /// Encrypted amount bytes from `RctSignaturesBase::encrypted_amounts`.
+    pub fn enc_amount(&self) -> &[u8; 8] {
+        &self.enc_amount
+    }
+    /// One-byte amount tag carried alongside `enc_amount`.
+    pub fn amount_tag(&self) -> u8 {
+        self.amount_tag
+    }
 
     #[cfg(any(test, feature = "test-utils"))]
     pub fn new_for_test(base: WalletOutput, amount: u64) -> Self {
@@ -116,6 +161,17 @@ impl RecoveredWalletOutput {
             combined_shared_secret: Zeroizing::new([0u8; 64]),
             key_image: KeyImage::from_canonical_bytes([0u8; 32]),
             amount,
+            // Synthetic test fixtures don't exercise the engine
+            // post-pass; empty residue is fine — `try_claim_output`
+            // would reject these inputs as `NotMine`, leaving
+            // `td.{source_ciphertext, output_handle} = None`.
+            source_ciphertext: HybridCiphertext {
+                x25519: [0u8; 32],
+                ml_kem: Vec::new(),
+            },
+            view_tag: 0,
+            enc_amount: [0u8; 8],
+            amount_tag: 0,
         }
     }
 }
@@ -351,6 +407,13 @@ impl InternalScanner {
                 combined_shared_secret: Zeroizing::new(recovered.combined_ss),
                 key_image,
                 amount,
+                source_ciphertext: HybridCiphertext {
+                    x25519: *ct_x25519,
+                    ml_kem: ct_ml_kem.to_vec(),
+                },
+                view_tag: view_tag_on_chain,
+                enc_amount,
+                amount_tag: amount_tag_on_chain,
             });
         }
 

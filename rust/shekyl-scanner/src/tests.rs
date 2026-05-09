@@ -77,6 +77,13 @@ pub(crate) mod staking {
             combined_shared_secret: Zeroizing::new([0u8; 64]),
             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
             amount,
+            source_ciphertext: shekyl_crypto_pq::kem::HybridCiphertext {
+                x25519: [0u8; 32],
+                ml_kem: Vec::new(),
+            },
+            view_tag: 0,
+            enc_amount: [0u8; 8],
+            amount_tag: 0,
         }
     }
 
@@ -855,6 +862,13 @@ mod ledger_proptest {
             combined_shared_secret: Zeroizing::new([0u8; 64]),
             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
             amount,
+            source_ciphertext: shekyl_crypto_pq::kem::HybridCiphertext {
+                x25519: [0u8; 32],
+                ml_kem: Vec::new(),
+            },
+            view_tag: 0,
+            enc_amount: [0u8; 8],
+            amount_tag: 0,
         }
     }
 
@@ -1037,6 +1051,13 @@ mod sync_bookkeeping {
             combined_shared_secret: Zeroizing::new([0u8; 64]),
             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
             amount,
+            source_ciphertext: shekyl_crypto_pq::kem::HybridCiphertext {
+                x25519: [0u8; 32],
+                ml_kem: Vec::new(),
+            },
+            view_tag: 0,
+            enc_amount: [0u8; 8],
+            amount_tag: 0,
         }
     }
 
