@@ -15,10 +15,13 @@
 //! - Exposes an `as_canonical_bytes()` accessor (`-> &[u8; N]`) —
 //!   the single auditable boundary at which the typed value is converted
 //!   into raw bytes for cryptographic input. Cryptographic functions in
-//!   this crate take `&[u8; N]` primitives, not the typed values, so the
-//!   crate stays consumable by callers that have raw bytes (FFI, wallet
-//!   envelope deserialization) without forcing them through the typed
-//!   wrapper.
+//!   this crate take primitive byte shapes — `&[u8; N]` for fixed-size
+//!   material (e.g. Ed25519 32-byte scalars) and `&[u8]` where the API
+//!   is intentionally slice-based (e.g. [`crate::output::scan_output_recover`]
+//!   accepts `ml_kem_dk: &[u8]` and `kem_ct_ml_kem: &[u8]`) — not the
+//!   typed values themselves. The crate stays consumable by callers
+//!   that have raw bytes (FFI, wallet envelope deserialization) without
+//!   forcing them through the typed wrapper.
 //!
 //! Houses the `AllKeysBlob` secret- and public-key wrappers:
 //!

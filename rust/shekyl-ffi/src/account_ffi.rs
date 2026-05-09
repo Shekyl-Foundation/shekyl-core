@@ -483,10 +483,9 @@ pub unsafe extern "C" fn shekyl_ml_kem_chacha_seed_trace(
 /// `ViewPublicKey`, `SpendSecret`, `ViewSecret`, `MlKem768DecapKey`)
 /// around the cryptographic material for type-system protection,
 /// while this struct uses raw `[u8; N]` arrays for the C ABI; both
-/// are `#[repr(C)]` and the size invariant is asserted by the
-/// `struct_layout_matches` test below (which checks `size_of` —
-/// alignment and per-field offsets are not directly asserted but
-/// follow from `#[repr(C)]` field-order equivalence).
+/// are `#[repr(C)]` and the layout invariant (size, alignment, and
+/// each field's offset) is asserted directly by the
+/// `struct_layout_matches` test below.
 #[repr(C)]
 pub struct ShekylAllKeysBlob {
     pub spend_pk: [u8; 32],
@@ -529,12 +528,10 @@ impl ShekylAllKeysBlob {
 /// inner bytes through `as_canonical_bytes()` (no `Deref` impl —
 /// access is explicit), and the resulting `&[u8; N]` is dereffed
 /// and copied into the corresponding C-layout `[u8; N]` field. The
-/// `size_of::<AllKeysBlob>() == size_of::<ShekylAllKeysBlob>()`
-/// invariant is asserted by `struct_layout_matches` below; field
-/// alignment and per-field offsets are not directly asserted but
-/// follow from `#[repr(C)]` + matched field order. The per-field
-/// copy here is the auditable boundary at which the typed value is
-/// converted to raw bytes for the FFI consumer.
+/// full layout invariant (size, alignment, and each field's offset)
+/// is asserted directly by `struct_layout_matches` below. The
+/// per-field copy here is the auditable boundary at which the
+/// typed value is converted to raw bytes for the FFI consumer.
 fn copy_blob_to_ffi(src: &AllKeysBlob, dst: &mut ShekylAllKeysBlob) {
     dst.spend_pk = *src.spend_pk.as_canonical_bytes();
     dst.view_pk = *src.view_pk.as_canonical_bytes();
@@ -745,17 +742,53 @@ pub unsafe extern "C" fn shekyl_account_public_address_check(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::size_of;
+    use std::mem::{align_of, offset_of, size_of};
 
+    /// FFI ABI invariant: `ShekylAllKeysBlob` and `AllKeysBlob` must be
+    /// bit-for-bit interchangeable across the C/Rust boundary. The Rust
+    /// side uses `#[repr(transparent)]` newtypes around five fields
+    /// (`SpendPublicKey`, `ViewPublicKey`, `SpendSecret`, `ViewSecret`,
+    /// `MlKem768DecapKey`); the C side uses raw `[u8; N]` arrays. With
+    /// `#[repr(C)]` on both structs and matched field order, the byte
+    /// layout must be identical — `size_of`, `align_of`, and each
+    /// field's `offset_of!` are checked here so the invariant is
+    /// actually asserted (not merely claimed).
     #[test]
     fn struct_layout_matches() {
-        // The C-facing and Rust-facing blob types must agree on size and
-        // alignment; their field order is also identical by construction.
         assert_eq!(
             size_of::<ShekylAllKeysBlob>(),
             size_of::<AllKeysBlob>(),
-            "ShekylAllKeysBlob and AllKeysBlob must be bit-for-bit compatible"
+            "ShekylAllKeysBlob and AllKeysBlob must agree on size"
         );
+        assert_eq!(
+            align_of::<ShekylAllKeysBlob>(),
+            align_of::<AllKeysBlob>(),
+            "ShekylAllKeysBlob and AllKeysBlob must agree on alignment"
+        );
+
+        macro_rules! assert_offset_eq {
+            ($field:ident) => {
+                assert_eq!(
+                    offset_of!(ShekylAllKeysBlob, $field),
+                    offset_of!(AllKeysBlob, $field),
+                    concat!(
+                        "field `",
+                        stringify!($field),
+                        "` must occupy the same offset in both blobs"
+                    )
+                );
+            };
+        }
+
+        assert_offset_eq!(spend_pk);
+        assert_offset_eq!(view_pk);
+        assert_offset_eq!(ml_kem_ek);
+        assert_offset_eq!(x25519_pk);
+        assert_offset_eq!(pqc_public_key);
+        assert_offset_eq!(classical_address_bytes);
+        assert_offset_eq!(spend_sk);
+        assert_offset_eq!(view_sk);
+        assert_offset_eq!(ml_kem_dk);
     }
 
     /// Pin the FFI re-export of `CLASSICAL_ADDRESS_BYTES` to the
