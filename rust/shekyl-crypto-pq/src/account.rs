@@ -100,14 +100,14 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use sha2::Sha512;
 use sha3::{Digest, Sha3_256};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use fips203::ml_kem_768;
 use fips203::traits::{KeyGen, SerDes};
 
 use crate::bip39;
 use crate::kem::{ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN};
-use crate::keys::{SpendPublicKey, SpendSecret, ViewPublicKey, ViewSecret};
+use crate::keys::{MlKem768DecapKey, SpendPublicKey, SpendSecret, ViewPublicKey, ViewSecret};
 use crate::montgomery;
 use crate::CryptoError;
 
@@ -404,22 +404,42 @@ pub fn ml_kem_chacha_seed_from_d_z(d_z: &[u8; 64]) -> [u8; 32] {
 }
 
 /// Produce an ML-KEM-768 `(ek, dk)` pair deterministically from a
-/// 64-byte `d_z`. The output is byte-identical on every run with the same
-/// input; this is the property that makes wallet rederivation possible.
+/// 64-byte `d_z`. The output is byte-identical on every run with the
+/// same input; this is the property that makes wallet rederivation
+/// possible.
 ///
-/// On success the decap key is written into the caller-provided
-/// `Zeroizing` buffer.
+/// The decap key is returned as the typed [`MlKem768DecapKey`]
+/// wrapper. The wrapper carries `Zeroize + ZeroizeOnDrop`; consumers
+/// receive the secret already inside the typed-wrapper discipline of
+/// `.cursor/rules/18-type-placement.mdc` rather than as raw bytes
+/// they must individually wrap. Per `35-secure-memory.mdc:21-22`,
+/// this keeps the decap-key flow within `Zeroize` coverage from
+/// producer to consumer without any call site materialising an
+/// untracked `[u8; ML_KEM_768_DK_LEN]` Copy.
+///
+/// **Known interior temporary (FOLLOWUP, V3.1).** Inside this
+/// function, `dk.into_bytes()` is the upstream `fips203` API and
+/// returns the 2400-byte representation by value, briefly producing
+/// a stack-resident `[u8; ML_KEM_768_DK_LEN]` outside any `Zeroize`
+/// wrapper. The subsequent `MlKem768DecapKey::from_zeroizing(...)`
+/// move *typically* gets RVO'd to the return-value slot under
+/// `--release`, but this is not guaranteed in `--debug` builds.
+/// Closing this gap requires either an `encode_into(&mut [u8; N])`
+/// API on `fips203`'s `DecapsulationKey` or a Shekyl-side wrapper
+/// that constructs the decap key from `fips203`'s typed form
+/// without going through `into_bytes`. Tracked in
+/// `docs/FOLLOWUPS.md` under V3.1.
 pub fn ml_kem_keypair_from_d_z(
     d_z: &[u8; 64],
-) -> Result<([u8; ML_KEM_768_EK_LEN], Zeroizing<[u8; ML_KEM_768_DK_LEN]>), CryptoError> {
+) -> Result<([u8; ML_KEM_768_EK_LEN], MlKem768DecapKey), CryptoError> {
     let chacha_seed = ml_kem_chacha_seed_from_d_z(d_z);
     let mut rng = ChaCha20Rng::from_seed(chacha_seed);
     let (ek, dk) = ml_kem_768::KG::try_keygen_with_rng(&mut rng)
         .map_err(|e| CryptoError::KeyGenerationFailed(format!("ML-KEM-768 keygen: {e}")))?;
 
     let ek_bytes: [u8; ML_KEM_768_EK_LEN] = ek.into_bytes();
-    let dk_bytes: [u8; ML_KEM_768_DK_LEN] = dk.into_bytes();
-    Ok((ek_bytes, Zeroizing::new(dk_bytes)))
+    let dk_zeroizing: Zeroizing<[u8; ML_KEM_768_DK_LEN]> = Zeroizing::new(dk.into_bytes());
+    Ok((ek_bytes, MlKem768DecapKey::from_zeroizing(dk_zeroizing)))
 }
 
 // --- AllKeysBlob: the C-layout struct crossed over FFI -----------------------
@@ -433,8 +453,47 @@ pub fn ml_kem_keypair_from_d_z(
 ///
 /// Layout is frozen at v1. Do not add, remove, or reorder fields without
 /// bumping the derivation version and the KAT manifest hash.
+///
+/// # Wipe-on-drop
+///
+/// Per `.cursor/rules/35-secure-memory.mdc:23-25` ("Prefer the
+/// derived `Zeroize`/`ZeroizeOnDrop` form over hand-written `Drop`
+/// impls"), the struct derives `Zeroize + ZeroizeOnDrop`. The
+/// generated `Drop::drop` calls `self.zeroize()`, which calls
+/// `.zeroize()` on every field once. Field-drop-glue then re-invokes
+/// each field's destructor independently — for fields that are
+/// themselves `ZeroizeOnDrop` (`spend_sk`, `view_sk`, `ml_kem_dk`),
+/// that destructor calls `.zeroize()` again on already-zero bytes.
+/// The resulting double-wipe is the standard zeroize-crate
+/// composition pattern: idempotent, harmless, and the price of
+/// uniform field-level wipe coverage. A future grep of
+/// `ZeroizeOnDrop`-bearing types will land on this pattern; the
+/// inline description above is the locatable record of its
+/// intentionality.
+///
+/// Public-key fields (`spend_pk`, `view_pk`, `ml_kem_ek`, `x25519_pk`,
+/// `pqc_public_key`, `classical_address_bytes`) are zeroized for
+/// uniform write patterns even though they hold no secret material;
+/// this maintains the constant-time-on-error discipline the manual
+/// `Drop` previously enforced.
+///
+/// # Not `Clone`
+///
+/// `Clone` on a struct that holds the wallet's spend/view/decap
+/// secrets requires explicit justification per
+/// `.cursor/rules/30-cryptography.mdc` and `35-secure-memory.mdc:26-28`.
+/// The audit performed for `KEY_ENGINE.md` §7.5 surfaced zero
+/// production `.clone()` callers workspace-wide (verified across
+/// production code and `#[cfg(test)]` blocks via
+/// `cargo build --workspace --all-targets`); the trait is not derived.
+/// Engine-side ownership flows through `LocalKeys::from_keys_blob`,
+/// which moves the blob into the engine's private state — see the
+/// `traits/key.rs` doc-comment ("Not Clone — implementors wrap
+/// `AllKeysBlob`"). If a future call site needs `Clone`, the
+/// disposition reverts to a documented `Clone` retention with
+/// explicit justification rather than reflex re-derivation.
 #[repr(C)]
-#[derive(Clone)]
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct AllKeysBlob {
     // --- public side (plain-text portion of the wallet) ------------------
     /// Ed25519 spend public key.
@@ -483,7 +542,16 @@ pub struct AllKeysBlob {
     pub view_sk: ViewSecret,
     /// ML-KEM-768 decap (secret) key, 2400 bytes. Rederived on every wallet
     /// open; persisted only via the master seed.
-    pub ml_kem_dk: [u8; ML_KEM_768_DK_LEN],
+    ///
+    /// Wrapped in [`MlKem768DecapKey`](crate::keys::MlKem768DecapKey) for
+    /// type-system protection and structural wipe-on-drop, per the
+    /// `35-secure-memory.mdc:21-22` "wrap secret scalars and key bytes"
+    /// mandate. `#[repr(transparent)]` preserves the bit-for-bit FFI
+    /// layout invariant with
+    /// `shekyl_ffi::ShekylAllKeysBlob.ml_kem_dk: [u8; ML_KEM_768_DK_LEN]`.
+    /// Read the canonical 2400-byte FIPS 203 representation via
+    /// `ml_kem_dk.as_canonical_bytes()`.
+    pub ml_kem_dk: MlKem768DecapKey,
 }
 
 impl AllKeysBlob {
@@ -499,29 +567,8 @@ impl AllKeysBlob {
             classical_address_bytes: [0u8; CLASSICAL_ADDRESS_BYTES],
             spend_sk: SpendSecret::from_bytes([0u8; 32]),
             view_sk: ViewSecret::from_bytes([0u8; 32]),
-            ml_kem_dk: [0u8; ML_KEM_768_DK_LEN],
+            ml_kem_dk: MlKem768DecapKey::zero(),
         }
-    }
-}
-
-impl Drop for AllKeysBlob {
-    fn drop(&mut self) {
-        // `self.spend_sk` (SpendSecret) and `self.view_sk` (ViewSecret)
-        // wipe via field-drop-glue: their `ZeroizeOnDrop` impls run after
-        // this manual `drop` returns. Calling `.zeroize()` here would be
-        // redundant.
-        self.ml_kem_dk.zeroize();
-        // Public fields do not need zeroization but we clear them for
-        // uniform write patterns and to avoid accidental reuse of stale
-        // public material that the caller may consider authoritative.
-        // `SpendPublicKey` / `ViewPublicKey` impl `Zeroize` (without
-        // `ZeroizeOnDrop`, which would conflict with their `Copy` impl).
-        self.spend_pk.zeroize();
-        self.view_pk.zeroize();
-        self.ml_kem_ek.fill(0);
-        self.x25519_pk.zeroize();
-        self.pqc_public_key.fill(0);
-        self.classical_address_bytes.zeroize();
     }
 }
 
@@ -565,16 +612,19 @@ pub fn rederive_account(
     // X25519 public via birational. Failure here means the view scalar
     // produced an identity or low-order Ed25519 point; the probability is
     // cryptographically negligible but we surface it cleanly. On error,
-    // `blob` is dropped here, which zeroes its secret fields via
-    // `AllKeysBlob::drop`.
+    // `blob` is dropped here, which zeroes every field via
+    // `AllKeysBlob`'s derived `ZeroizeOnDrop`.
     let x25519_pk = montgomery::ed25519_pk_to_x25519_pk(blob.view_pk.as_canonical_bytes())?;
     blob.x25519_pk.copy_from_slice(&x25519_pk);
 
-    // ML-KEM-768 deterministic keygen
+    // ML-KEM-768 deterministic keygen. `dk` is already the typed
+    // wrapper (`MlKem768DecapKey`); move it directly into the blob
+    // field — no `*dk` deref, no untracked `[u8; ML_KEM_768_DK_LEN]`
+    // Copy on the stack between producer and consumer.
     let d_z = derive_kem_d_z(master_seed, net, fmt);
     let (ek, dk) = ml_kem_keypair_from_d_z(&d_z)?;
     blob.ml_kem_ek.copy_from_slice(&ek);
-    blob.ml_kem_dk.copy_from_slice(dk.as_slice());
+    blob.ml_kem_dk = dk;
 
     // Composite fields
     blob.pqc_public_key[..32].copy_from_slice(&blob.x25519_pk);
@@ -754,7 +804,7 @@ mod tests {
         let (ek1, dk1) = ml_kem_keypair_from_d_z(&d_z).unwrap();
         let (ek2, dk2) = ml_kem_keypair_from_d_z(&d_z).unwrap();
         assert_eq!(ek1, ek2);
-        assert_eq!(dk1.as_slice(), dk2.as_slice());
+        assert_eq!(dk1.as_canonical_bytes(), dk2.as_canonical_bytes());
     }
 
     #[test]
@@ -786,7 +836,10 @@ mod tests {
             blob1.view_sk.as_canonical_bytes(),
             blob2.view_sk.as_canonical_bytes(),
         );
-        assert_eq!(blob1.ml_kem_dk, blob2.ml_kem_dk);
+        assert_eq!(
+            blob1.ml_kem_dk.as_canonical_bytes(),
+            blob2.ml_kem_dk.as_canonical_bytes(),
+        );
     }
 
     #[test]

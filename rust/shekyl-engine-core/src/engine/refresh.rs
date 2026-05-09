@@ -1280,7 +1280,8 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
         *keys.view_sk.as_canonical_bytes(),
     ));
     let x25519_sk: Zeroizing<[u8; 32]> = Zeroizing::new(*keys.view_sk.as_canonical_bytes());
-    let ml_kem_dk: Zeroizing<Vec<u8>> = Zeroizing::new(keys.ml_kem_dk.to_vec());
+    let ml_kem_dk: Zeroizing<Vec<u8>> =
+        Zeroizing::new(keys.ml_kem_dk.as_canonical_bytes().to_vec());
 
     let view_pair = ViewPair::new(spend_pub, view_scalar, x25519_sk, ml_kem_dk).map_err(|e| {
         RefreshError::Io(IoError::Scanner {

@@ -4,6 +4,93 @@
 
 ### Added
 
+- **Stage 1 PR 3 — Phase 0: `AllKeysBlob` zeroize-discipline
+  realignment** (`chore/allkeysblob-zeroize-realignment`; closes
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §3.5 (Phase 0e) and §7.5). Three rule-grounded edits that landed
+  together as a focused chore PR before the M3b implementation, each
+  closing an audit finding cited to a rule with a concrete failure
+  mode prevented:
+
+  - **F1 / `35-secure-memory.mdc:21–22`.** `AllKeysBlob.ml_kem_dk`
+    (the ML-KEM-768 decap secret key, 2400 bytes) was the lone
+    unwrapped secret-bearing array on the struct; wrapped in a new
+    `MlKem768DecapKey` typed newtype in
+    [`rust/shekyl-crypto-pq/src/keys.rs`](../rust/shekyl-crypto-pq/src/keys.rs)
+    that mirrors the established `ViewSecret` / `SpendSecret` shape
+    (`#[repr(transparent)]`, `Clone + Zeroize + ZeroizeOnDrop`, no
+    `Copy`, no `Debug`, `pub(crate)` constructor, public
+    `as_canonical_bytes()` accessor). Sweeps eight in-Rust read sites
+    (`account.rs`'s field/zeroed/rederive/test, `local_keys.rs:344`,
+    `refresh.rs:1283`, `account_ffi.rs:531`); the FFI mirror keeps
+    raw `[u8; ML_KEM_768_DK_LEN]` and the bit-for-bit layout
+    invariant (size, alignment, per-field offsets) is preserved by
+    `#[repr(transparent)]` and asserted directly by
+    `account_ffi::tests::struct_layout_matches`. The producer
+    [`crate::account::ml_kem_keypair_from_d_z`] returns the typed
+    `MlKem768DecapKey` directly (constructed via `from_zeroizing`
+    consuming a `Zeroizing<[u8; N]>` source) — the secret travels
+    through the type system from producer to consumer without any
+    call site materialising an untracked stack `Copy` of the
+    2400-byte buffer between them.
+  - **F2 / `35-secure-memory.mdc:23–25`.** `AllKeysBlob` migrated
+    from a hand-written `Drop` impl (which the design doc itself
+    characterized as "documenting the lie" — the spec asserted
+    `AllKeysBlob: ZeroizeOnDrop` while the trait was not implemented)
+    to `#[derive(Zeroize, ZeroizeOnDrop)]`. With every field now
+    `Zeroize`-bearing (typed wrappers + zeroize-crate blanket impls
+    on `[u8; N]`), the structural condition for the derive holds
+    and the manual impl is replaced wholesale. The derived
+    `Drop::drop` calls `self.zeroize()` once on every field;
+    field-drop-glue then re-invokes each `ZeroizeOnDrop` field's
+    destructor independently — an idempotent double-wipe documented
+    in the struct rust-doc so future `ZeroizeOnDrop`-grep audits do
+    not mistake the pattern for a discipline violation.
+  - **F3 / `KEY_ENGINE.md` §7.5.** `AllKeysBlob: Clone` derive deleted.
+    Workspace audit (`rg 'AllKeysBlob.*\.clone\(\)'` + per-call-site
+    read; `cargo build --workspace --all-targets` is the locking
+    gate that compiles every `#[cfg(test)]` block) surfaced zero
+    callers in production *or* test code; per `30-cryptography.mdc`
+    and `35-secure-memory.mdc:26-28`, `Clone` on a secret-bearing
+    struct requires explicit justification, and none surfaced. The
+    `traits/key.rs:581` doc-comment ("Not Clone — implementors wrap
+    `AllKeysBlob`") becomes literally enforced.
+
+  **`ml_kem_ek` deliberately stays raw `[u8; ML_KEM_768_EK_LEN]`.**
+  Public encap key, broadcast in the address; outside
+  `35-secure-memory.mdc:21–22`'s reach as public material. Wrapping
+  it would be uniformity-driven completionism without rule grounding
+  (per `15-deletion-and-debt.mdc`'s "while we're here is the enemy")
+  and would create a permanent type-system signal collision
+  (`Zeroize` semantics on a public type as a distractor for any
+  future grep-for-secrets audit). Five-reason disposition recorded
+  inline at
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §3.5's "Closed (post-M3a, post-Phase-0)" subsection
+  against re-litigation.
+
+  **Closure-path narrative.** The originally-specified §3.5 sequencing
+  was "Phase 0e lands first, before PR 3 cuts." The actual landing
+  was post-M3a, via this chore. The deviation is **substrate-change**,
+  not extension: §3.5 was specced when `AllKeysBlob` carried raw
+  `[u8; N]` fields (where `derive(ZeroizeOnDrop)` would have been a
+  literal one-line addition). The intervening
+  `chore/allkeysblob-typed-wrappers-monero-sweep` (which closed the
+  inheritance audit's `spend_sk` / `view_sk` secret-flow finding)
+  left `ml_kem_dk` as the residual raw secret-bearing array, which
+  prevented the parent derive from taking. This chore re-anchors
+  §3.5's load-bearing goal (Q9.3 precondition true; `AllKeysBlob:
+  ZeroizeOnDrop` literally implemented) to the post-sweep substrate;
+  the work-shape adapted to the post-sweep state rather than
+  extended from the original 5–10-line plan.
+
+  Property-delivery framing: structural — no consensus rule, no
+  wire format, no FFI layout changes. The deliverable is rule
+  alignment between code and spec on the `AllKeysBlob` zeroize
+  discipline, restoring the precondition that Q9.3 / Phase 0d's
+  cross-reference language now resolves cleanly against. M3b cuts
+  off the post-merge `dev` tip with the precondition true.
+
 - **Single-source-of-truth JSON authority for the consensus-affecting
   constant subset: `config/consensus_constants.json`.** Mirrors the
   existing `config/economics_params.json` pattern. The JSON is the

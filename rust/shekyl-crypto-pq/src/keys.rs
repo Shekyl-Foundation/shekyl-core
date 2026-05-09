@@ -12,39 +12,46 @@
 //! - Encapsulates the raw bytes (private field; no `Copy`).
 //! - Implements `Zeroize + ZeroizeOnDrop` so wipe-on-drop is structural,
 //!   not per-call-site discipline (see `.cursor/rules/35-secure-memory.mdc`).
-//! - Exposes a `to_canonical_bytes()` / `as_canonical_bytes()` accessor —
+//! - Exposes an `as_canonical_bytes()` accessor (`-> &[u8; N]`) —
 //!   the single auditable boundary at which the typed value is converted
 //!   into raw bytes for cryptographic input. Cryptographic functions in
-//!   this crate take `&[u8; N]` primitives, not the typed values, so the
-//!   crate stays consumable by callers that have raw bytes (FFI, wallet
-//!   envelope deserialization) without forcing them through the typed
-//!   wrapper.
+//!   this crate take primitive byte shapes — `&[u8; N]` for fixed-size
+//!   material (e.g. Ed25519 32-byte scalars) and `&[u8]` where the API
+//!   is intentionally slice-based (e.g. [`crate::output::scan_output_recover`]
+//!   accepts `ml_kem_dk: &[u8]` and `kem_ct_ml_kem: &[u8]`) — not the
+//!   typed values themselves. The crate stays consumable by callers
+//!   that have raw bytes (FFI, wallet envelope deserialization) without
+//!   forcing them through the typed wrapper.
 //!
 //! Houses the `AllKeysBlob` secret- and public-key wrappers:
 //!
 //! - [`ViewSecret`] — view-secret scalar (gates view-only access).
 //! - [`SpendSecret`] — spend-secret scalar (gates spend authority).
+//! - [`MlKem768DecapKey`] — ML-KEM-768 decap (secret) key.
 //! - [`SpendPublicKey`] — Ed25519 spend public key (account identity).
 //! - [`ViewPublicKey`] — Ed25519 view public key (account identity).
 //!
-//! Secret wrappers (`ViewSecret`, `SpendSecret`) carry
-//! `Zeroize + ZeroizeOnDrop` and forbid `Copy`. Public-key wrappers
-//! (`SpendPublicKey`, `ViewPublicKey`) carry `Copy + Eq + Hash` for use
-//! as identity-bearing values in registries (e.g. the subaddress
+//! Secret wrappers (`ViewSecret`, `SpendSecret`, `MlKem768DecapKey`)
+//! carry `Zeroize + ZeroizeOnDrop` and forbid `Copy`. Public-key
+//! wrappers (`SpendPublicKey`, `ViewPublicKey`) carry `Copy + Eq + Hash`
+//! for use as identity-bearing values in registries (e.g. the subaddress
 //! registry's `HashMap<SpendPublicKey, SubaddressIndex>` in
 //! `shekyl-engine-core`'s `LocalKeys`); they implement `Zeroize` (so
-//! the surrounding `AllKeysBlob::drop` can wipe them for the same
-//! uniform-write-pattern reason raw `[u8; 32]` fields had) but not
-//! `ZeroizeOnDrop` (which would conflict with `Copy`).
+//! the surrounding `AllKeysBlob`'s derived `ZeroizeOnDrop` calls
+//! `.zeroize()` on them as part of the uniform field-wipe pattern raw
+//! `[u8; 32]` fields had) but not `ZeroizeOnDrop` (which would conflict
+//! with `Copy`).
 //!
-//! All four wrappers are `#[repr(transparent)]` so the bit-for-bit
+//! All five wrappers are `#[repr(transparent)]` so the bit-for-bit
 //! FFI layout invariant between [`crate::account::AllKeysBlob`] and
 //! `shekyl_ffi::ShekylAllKeysBlob` is preserved (asserted by the
 //! latter's `size_of::<...>()` test).
 
 use std::fmt;
 
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+
+use crate::kem::ML_KEM_768_DK_LEN;
 
 /// The wallet's view-secret scalar, 32 canonical little-endian bytes.
 ///
@@ -163,14 +170,124 @@ impl SpendSecret {
     }
 }
 
+/// The wallet's ML-KEM-768 decapsulation (secret) key, 2400 bytes
+/// in the FIPS 203 canonical encoding.
+///
+/// This is the post-quantum half of the wallet's hybrid view-side
+/// secret material: `(view_sk, ml_kem_dk)` together gate ECDH+KEM
+/// decapsulation of every output's hybrid shared secret. Holding
+/// `ViewSecret` alone is insufficient for view-only access on the
+/// PQC-augmented chain; `MlKem768DecapKey` is required.
+///
+/// # Hygiene properties
+///
+/// Mirrors [`ViewSecret`] / [`SpendSecret`]:
+///
+/// - **No `Copy`.** Compiler-emitted copies of a 2400-byte secret
+///   would defeat wipe-on-drop discipline; `Clone` is opt-in by
+///   callers.
+/// - **`Zeroize + ZeroizeOnDrop`.** Inner bytes wipe at drop time.
+/// - **No `Debug`.** Manual or derived `Debug` on a 2400-byte
+///   secret would format the bytes; callers needing to inspect
+///   bytes for debugging must explicitly route through
+///   `as_canonical_bytes()` and accept responsibility for what
+///   they do with the result.
+///
+/// # Canonical-bytes contract
+///
+/// `as_canonical_bytes()` returns the 2400-byte FIPS 203
+/// decapsulation-key encoding. Cryptographic functions
+/// (e.g. [`crate::output::scan_output_recover`]) take
+/// `&[u8]` and rely on this representation being stable across
+/// every call site. See `.cursor/rules/18-type-placement.mdc`
+/// for the discipline.
+///
+/// # FFI layout invariant
+///
+/// `#[repr(transparent)]` guarantees `MlKem768DecapKey` has
+/// identical memory layout to its inner `[u8; ML_KEM_768_DK_LEN]`.
+/// This preserves the bit-for-bit compatibility invariant between
+/// [`crate::account::AllKeysBlob`] and `shekyl_ffi::ShekylAllKeysBlob`
+/// asserted at the latter's `size_of::<...>()` test.
+#[repr(transparent)]
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+pub struct MlKem768DecapKey([u8; ML_KEM_768_DK_LEN]);
+
+impl MlKem768DecapKey {
+    /// Construct a zero-filled decap-key wrapper.
+    ///
+    /// Used by `AllKeysBlob::zeroed()` to produce the all-zero
+    /// default state at the start of every fill and on every error
+    /// path (constant-time write pattern). The 2400 zero bytes are
+    /// not a secret; this entry is deliberately separate from
+    /// [`Self::from_zeroizing`] so that the only path carrying real
+    /// secret-bearing bytes through the type system is the one
+    /// holding the source already inside `Zeroize` discipline.
+    pub(crate) fn zero() -> Self {
+        Self([0u8; ML_KEM_768_DK_LEN])
+    }
+
+    /// Construct from a `Zeroizing`-wrapped byte buffer, taking
+    /// ownership of the source.
+    ///
+    /// The argument's `Zeroizing<[u8; N]>` wrapper is consumed; the
+    /// inner bytes are written into a fresh `MlKem768DecapKey`'s
+    /// `ZeroizeOnDrop`-bearing buffer via `copy_from_slice`. The
+    /// source `Zeroizing` is then dropped, which wipes its inner
+    /// stack slot. Both the source and the destination remain
+    /// inside `Zeroize` discipline through the hand-off; no
+    /// untracked stack temporary of the 2400-byte secret is
+    /// materialised at the construction site.
+    ///
+    /// This is the only legitimate construction path for a decap
+    /// key produced by in-crate key derivation (e.g.
+    /// [`crate::account::ml_kem_keypair_from_d_z`]) — the producer
+    /// hands the typed wrapper directly to the consumer rather
+    /// than handing back raw `Zeroizing<[u8; N]>` and asking every
+    /// call site to repeat the wrapping decision. Per
+    /// `.cursor/rules/35-secure-memory.mdc:21-22` and the
+    /// typed-wrapper discipline of
+    /// `.cursor/rules/18-type-placement.mdc`.
+    ///
+    /// `pub(crate)` because the only legitimate construction sites
+    /// are inside this crate (key derivation in `account.rs`,
+    /// wallet-file open paths in `wallet_envelope.rs`).
+    //
+    // `clippy::needless_pass_by_value` is denied workspace-wide
+    // because the lint is sound for ordinary value parameters.
+    // For this constructor the by-value parameter is the security
+    // property: consuming the `Zeroizing` wrapper guarantees its
+    // `Drop` (which wipes the inner buffer) runs at the end of
+    // `from_zeroizing`, not at some arbitrary later point in the
+    // caller's lifetime. Taking `&Zeroizing<[u8; N]>` would let the
+    // caller retain a still-readable copy of the secret after the
+    // hand-off, which is exactly what this API is designed to
+    // prevent. Per `.cursor/rules/35-secure-memory.mdc:21-22`.
+    #[allow(clippy::needless_pass_by_value)]
+    pub(crate) fn from_zeroizing(z: Zeroizing<[u8; ML_KEM_768_DK_LEN]>) -> Self {
+        let mut out = Self([0u8; ML_KEM_768_DK_LEN]);
+        out.0.copy_from_slice(z.as_ref());
+        out
+    }
+
+    /// Borrow the canonical 2400-byte FIPS 203 representation for
+    /// cryptographic input. See type-level "Canonical-bytes
+    /// contract" doc-comment.
+    pub fn as_canonical_bytes(&self) -> &[u8; ML_KEM_768_DK_LEN] {
+        &self.0
+    }
+}
+
 /// The wallet's Ed25519 spend public key, 32-byte canonical
 /// compressed encoding.
 ///
 /// Half of the wallet's public account identity (paired with
 /// [`ViewPublicKey`] in the classical address). Public material —
 /// no wipe-on-drop discipline applies, but a [`Zeroize`] impl is
-/// provided so the surrounding [`crate::account::AllKeysBlob::drop`]
-/// can clear public fields for uniform write patterns.
+/// provided so the surrounding [`crate::account::AllKeysBlob`]
+/// derives `ZeroizeOnDrop`, which calls `.zeroize()` on every field
+/// (including this one) at drop time as part of its uniform field-wipe
+/// pattern.
 ///
 /// # Hygiene properties
 ///
@@ -188,9 +305,9 @@ impl SpendSecret {
 ///   identifier even in unsanitised log streams.
 /// - **`Zeroize` (without `ZeroizeOnDrop`).** `ZeroizeOnDrop`
 ///   would imply `Drop`, which is incompatible with `Copy`;
-///   the surrounding `AllKeysBlob::drop` calls `.zeroize()`
-///   explicitly to maintain the uniform-write-pattern hygiene
-///   the raw `[u8; 32]` field had.
+///   the surrounding `AllKeysBlob` derives `ZeroizeOnDrop`,
+///   which calls `.zeroize()` on this field at drop time as
+///   part of its uniform field-wipe pattern.
 ///
 /// # FFI layout invariant
 ///
@@ -303,6 +420,20 @@ mod tests {
         let bytes = [0x99u8; 32];
         let secret = SpendSecret::from_bytes(bytes);
         assert_eq!(secret.as_canonical_bytes(), &bytes);
+    }
+
+    #[test]
+    fn ml_kem_768_decap_key_round_trip_canonical_bytes() {
+        let bytes = [0x55u8; ML_KEM_768_DK_LEN];
+        let dk = MlKem768DecapKey::from_zeroizing(Zeroizing::new(bytes));
+        assert_eq!(dk.as_canonical_bytes(), &bytes);
+    }
+
+    #[test]
+    fn ml_kem_768_decap_key_clone_produces_equal_canonical_bytes() {
+        let dk = MlKem768DecapKey::from_zeroizing(Zeroizing::new([0xa3u8; ML_KEM_768_DK_LEN]));
+        let cloned = dk.clone();
+        assert_eq!(dk.as_canonical_bytes(), cloned.as_canonical_bytes());
     }
 
     #[test]

@@ -486,6 +486,61 @@ citing in a review.
 
 ## V3.1 — audit response and stressnet gates
 
+- **Rules-queue: elevate the public-material typed-wrapper exclusion
+  into a workspace-wide rule.** Probable home:
+  `.cursor/rules/18-type-placement.mdc` (in-queue draft), with the
+  public-material exclusion as a sub-clause. The rule statement,
+  drawn from
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §3.5's closure subsection: _typed wrappers attach to
+  identity-bearing primitives where rule-grounded; uniformity-driven
+  wrapping of public material is the wrapper-shape recapitulation of
+  `15-deletion-and-debt.mdc`'s "while we're here is the enemy."_
+  (See [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  for the parent rule.) Rationale: the
+  `chore/allkeysblob-zeroize-realignment` chore's "Out of scope"
+  section pinned a five-reason `ml_kem_ek` exclusion (rule reach;
+  audit boundary; no type-confusion partner; FFI uniformity cutting
+  the wrong way; permanent type-system signal collision). Future "wrap
+  THIS public byte array too" arguments will recapitulate the same
+  five points; the §3.5 closure pins the disposition for that
+  specific decision but is a per-PR document rather than a workspace-
+  wide discipline anchor. Elevating into the rules corpus lets
+  future similar decisions cite precedent without re-deriving the
+  five points each time. Cross-references: `KEY_ENGINE.md` §3.5
+  closure subsection;
+  [`35-secure-memory.mdc:21-22`](../.cursor/rules/35-secure-memory.mdc)
+  (the secrets-only reach this rule sub-clauses);
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  ("while we're here is the enemy"). Target: V3.1 (the rules-queue
+  work's expected landing window; bumps to V3.x if 18-type-placement
+  defers).
+
+- **`fips203` interior `into_bytes()` Copy on the ML-KEM-768 decap-key
+  flow.** `shekyl_crypto_pq::account::ml_kem_keypair_from_d_z`
+  produces an `MlKem768DecapKey` from `fips203`'s typed
+  `DecapsulationKey` via `dk.into_bytes()`. The upstream API returns
+  the 2400-byte canonical encoding by value, briefly producing a
+  stack-resident `[u8; ML_KEM_768_DK_LEN]` outside any `Zeroize`
+  wrapper before `Zeroizing::new(...)` moves it. Under `--release`
+  the move *typically* gets RVO'd to the return-value slot (no
+  separate temporary), but this is not guaranteed — `--debug`
+  builds, panic unwind paths, and unfortunate codegen all leave the
+  raw stack slot alive until the function returns and the frame is
+  reused. Resolution path: either (a) `fips203` exposes an
+  `encode_into(&mut [u8; ML_KEM_768_DK_LEN])` API on
+  `DecapsulationKey` (upstream PR), or (b) Shekyl-side wrapper that
+  constructs `MlKem768DecapKey` from `fips203`'s typed form without
+  going through `into_bytes` (potentially via `unsafe` over
+  `#[repr(transparent)]` if `fips203` documents that guarantee).
+  Cross-references:
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §3.5 closure;
+  [`.cursor/rules/35-secure-memory.mdc`](../.cursor/rules/35-secure-memory.mdc)
+  §21–22; PR #33 round-4 Copilot finding closure narrative
+  (Option D: typed wrapper from producer to consumer; this entry
+  is what Option D *did not* fix). Target: V3.1.
+
 - **`derive_output_handle` Python reference script.** Stage 1 PR 3
   M3a commit 2 lands the Rust implementation of `derive_output_handle`
   (cSHAKE256, per `STAGE_1_PR_3_KEY_ENGINE.md` §7.12) with self-generated

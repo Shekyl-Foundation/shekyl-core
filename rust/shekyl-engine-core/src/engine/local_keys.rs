@@ -341,7 +341,7 @@ impl KeyEngine for LocalKeys {
         // rejection maps to `NotMine` rather than a structural error.
         let Ok(recovered) = scan_output_recover(
             self.keys.view_sk.as_canonical_bytes(),
-            &self.keys.ml_kem_dk,
+            self.keys.ml_kem_dk.as_canonical_bytes(),
             &input.ciphertext.x25519,
             &input.ciphertext.ml_kem,
             &input.output_key,
