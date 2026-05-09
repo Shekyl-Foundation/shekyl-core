@@ -162,9 +162,17 @@ impl RecoveredWalletOutput {
             key_image: KeyImage::from_canonical_bytes([0u8; 32]),
             amount,
             // Synthetic test fixtures don't exercise the engine
-            // post-pass; empty residue is fine — `try_claim_output`
-            // would reject these inputs as `NotMine`, leaving
-            // `td.{source_ciphertext, output_handle} = None`.
+            // post-pass: residue is carried through `RecoveredWalletOutput`
+            // → `DetectedTransfer` → `ScanResult` for the post-pass
+            // (`engine::merge::populate_engine_handle_fields`) to
+            // populate `td.source_ciphertext` and derive
+            // `td.output_handle`, but the in-tree tests that
+            // construct `RecoveredWalletOutput` via `new_for_test`
+            // assert on accumulator/balance behaviour, not on these
+            // residue fields. Empty defaults are fine; future tests
+            // that DO assert on the engine post-pass should populate
+            // real ciphertext bytes so the derived `output_handle`
+            // is meaningful.
             source_ciphertext: HybridCiphertext {
                 x25519: [0u8; 32],
                 ml_kem: Vec::new(),

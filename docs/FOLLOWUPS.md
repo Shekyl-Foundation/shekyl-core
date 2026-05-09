@@ -11,6 +11,52 @@ citing in a review.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **`populate_engine_handle_fields` O(n) → O(k) per scan
+  (target: V3.1).** Stage 1 PR 3 — M3b's engine post-pass at
+  `rust/shekyl-engine-core/src/engine/merge.rs::populate_engine_handle_fields`
+  scans `ledger.transfers` linearly on every `apply_scan_result`
+  invocation, even though only `result.new_transfers.len()` entries
+  can match the residue map. As the ledger grows, this is O(n) per
+  scan (per-block during refresh), giving an O(n²) refresh-from-genesis
+  shape on a wallet with `n` historical transfers. Real-world impact:
+  for a wallet with 100k transfers, a refresh that touches every
+  block does ~100k × n_blocks linear scans. The fix is to thread
+  insertion indices (or a `(tx_hash, internal_output_index) →
+  transfer_idx` index) through `apply_scan_result_to_state`'s
+  return value so the post-pass can update in O(k) where k is the
+  number of new transfers per scan. M3b deferred this per
+  `15-deletion-and-debt.mdc`'s "while we're here is the enemy"
+  rule — the change touches the merge pipeline's return shape and
+  is a separate refactor concern from M3b's source-secrets
+  derivation reroute. Surfaced by Copilot review on PR #34. Target:
+  V3.1 (alongside the `transfer_details` Rust migration, which is
+  already touching `TransferDetails` and the merge pipeline).
+
+- **`scripts/bench/compare.py`: treat baseline=0 as informational,
+  not fail (target: V3.1).** The CI bench gate at
+  `scripts/bench/compare.py:218–219` computes `delta_pct = inf` when
+  the rolling baseline records `instructions=0` for an entry but
+  the PR-side capture is non-zero, and `verdict_for("hot_path_bench",
+  inf)` returns `fail`. This contradicts the protocol intent
+  documented in `docs/benchmarks/README.md`: "An entry present in
+  the PR but not the baseline is informational; the first merge to
+  `dev` seeds it into the rolling baseline." The current logic
+  treats baseline-present-with-zero as a real measurement rather
+  than as missing data. Surfaced when M3b's PR #34 hit `+inf%`
+  fail verdicts on `hot_path_bench_ledger_postcard_{serialize,
+  deserialize}/with_setup_{0,1,2}` against a `bench-baseline`
+  branch (refreshed at `647f82d59`) where those six entries have
+  `instructions=0` in `baseline.iai.snapshot` (likely Valgrind
+  timed out or crashed during baseline capture for the larger
+  `with_setup_2` (10k transfers) runs, and the snapshot wrote
+  zeros for the entire group). The fix is to extend
+  `compare.py:218–219` to emit `verdict = "info"` (not `"fail"`)
+  when `base_val == 0` and `pr_val > 0`, mirroring the
+  added-in-PR informational path. The post-merge `update-baseline`
+  job will then capture real numbers, and subsequent PRs gate
+  normally. Target: V3.1, as a focused CI-cleanup PR with no
+  workspace code changes.
+
 - **M3b byte-identical-derivation property test re-location
   (target: V3.2 wallet-RPC cutover, contingent on `KeyEngine`
   visibility relaxation).** Stage 1 PR 3 — M3b's

@@ -30,7 +30,10 @@
 //!    M3b's downstream Layer 2 byte-identity test
 //!    (`engine-core/tests/byte_identical_derivation.rs`) builds on this.
 
-use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT as G, scalar::Scalar};
+use curve25519_dalek::{
+    constants::{ED25519_BASEPOINT_POINT as G, X25519_BASEPOINT},
+    scalar::Scalar,
+};
 
 use shekyl_crypto_pq::error::CryptoError;
 use shekyl_crypto_pq::kem::{
@@ -179,9 +182,17 @@ fn low_order_x25519_ephemeral_rejected() {
 fn invalid_ml_kem_dk_length_rejected() {
     let (_, sk) = random_keypair();
     let dummy_ml_ct = vec![0u8; ML_KEM_768_CT_LEN];
-    let kem_ct_x25519 = (G * Scalar::random(&mut rand::rngs::OsRng))
-        .to_montgomery()
-        .0;
+    // Use the X25519 Montgomery basepoint directly so the constructed
+    // u-coordinate is unambiguously a prime-order Montgomery point.
+    // An Edwards-basepoint scalar multiple converted via
+    // `to_montgomery()` is also prime-order (the Edwards basepoint
+    // generates the prime-order subgroup; the Edwards→Montgomery
+    // isogeny preserves prime-order images), but using the X25519
+    // basepoint directly aligns the test fixture with the production
+    // primitive's domain and removes the Edwards→Montgomery
+    // bookkeeping from the test's invariant chain.
+    let scalar = Scalar::random(&mut rand::rngs::OsRng);
+    let kem_ct_x25519 = (scalar * X25519_BASEPOINT).to_bytes();
 
     // Truncated decap key: same prefix bytes, missing tail.
     let mut short_dk = sk.ml_kem.clone();

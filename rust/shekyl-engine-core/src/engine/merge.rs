@@ -516,15 +516,24 @@ fn populate_engine_handle_fields(
         let Some(ciphertext) = residue.get(&key) else {
             continue;
         };
-        if td.source_ciphertext.is_some() && td.output_handle.is_some() {
-            continue;
+        // Per-field idempotency: respect already-populated values
+        // independently. Skipping only when *both* are `Some` would
+        // overwrite a partial population, contradicting the "leaves
+        // populated fields untouched" contract above. The two fields
+        // are derived from disjoint inputs (`source_ciphertext` from
+        // residue; `output_handle` from cSHAKE256 over the view
+        // secret + tx_hash + index), so partial-population is
+        // possible if a future caller writes one without the other.
+        if td.source_ciphertext.is_none() {
+            td.source_ciphertext = Some(ciphertext.clone());
         }
-        td.source_ciphertext = Some(ciphertext.clone());
-        td.output_handle = Some(derive_output_handle(
-            view_secret,
-            &td.tx_hash,
-            td.internal_output_index,
-        ));
+        if td.output_handle.is_none() {
+            td.output_handle = Some(derive_output_handle(
+                view_secret,
+                &td.tx_hash,
+                td.internal_output_index,
+            ));
+        }
     }
 }
 
@@ -1075,7 +1084,8 @@ mod tests {
 
         // Second call with a different ciphertext for the same key
         // must not overwrite — the helper's idempotency contract is
-        // "skip if both fields are populated."
+        // per-field: each `Option` field is set only when `None`.
+        // Both fields populated by call 1 ⇒ both skipped by call 2.
         let ct2 = ciphertext_for_seed(0xBB);
         let mut residue2 = HashMap::new();
         residue2.insert((tx_hash, internal_idx), ct2);
@@ -1092,6 +1102,114 @@ mod tests {
             .expect("source_ciphertext set");
         // Stable on the first ciphertext.
         assert_eq!(stored_ct.x25519, ct1.x25519);
+    }
+
+    #[test]
+    fn populate_engine_handle_fields_respects_partial_population() {
+        // Per-field idempotency: each `Option` field is populated only
+        // when its current value is `None`. A transfer that already
+        // has `source_ciphertext` set but `output_handle` still `None`
+        // must have only `output_handle` filled in by the post-pass —
+        // and vice versa. This is the tighter contract that the
+        // function-level docs describe ("leaves populated fields
+        // untouched"); without it, a reader who pre-populated one
+        // field would see the other field's write silently clobber
+        // their value when the helper happens to also populate the
+        // first.
+        let (mut ledger, mut indexes) = empty_state();
+        let output_a = make_recovered_output(0x55, 5);
+        let tx_hash_a = output_a.wallet_output().transaction();
+        let internal_idx_a = output_a.wallet_output().index_in_transaction();
+        let output_b = make_recovered_output(0x66, 6);
+        let tx_hash_b = output_b.wallet_output().transaction();
+        let internal_idx_b = output_b.wallet_output().index_in_transaction();
+        let result = ScanResult {
+            processed_height_range: 1..2,
+            parent_hash: None,
+            block_hashes: vec![(1, [0x11; 32])],
+            new_transfers: vec![
+                DetectedTransfer {
+                    block_height: 1,
+                    output: output_a,
+                },
+                DetectedTransfer {
+                    block_height: 1,
+                    output: output_b,
+                },
+            ],
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
+
+        // Pre-populate one field on each transfer with a sentinel
+        // value that the post-pass must NOT overwrite. Use distinct
+        // sentinels per transfer so a misdirected overwrite is
+        // visible regardless of iteration order.
+        let sentinel_ct = ciphertext_for_seed(0xEE);
+        let sentinel_handle = derive_output_handle(&[0xCC; 32], &[0xCC; 32], 0xCC);
+        for td in &mut ledger.transfers {
+            if td.tx_hash == tx_hash_a && td.internal_output_index == internal_idx_a {
+                // Transfer A: source_ciphertext pre-populated, output_handle still None.
+                td.source_ciphertext = Some(sentinel_ct.clone());
+                td.output_handle = None;
+            } else if td.tx_hash == tx_hash_b && td.internal_output_index == internal_idx_b {
+                // Transfer B: output_handle pre-populated, source_ciphertext still None.
+                td.source_ciphertext = None;
+                td.output_handle = Some(sentinel_handle);
+            }
+        }
+
+        let view_secret = [0xAAu8; 32];
+        let real_ct_a = ciphertext_for_seed(0x55);
+        let real_ct_b = ciphertext_for_seed(0x66);
+        let mut residue = HashMap::new();
+        residue.insert((tx_hash_a, internal_idx_a), real_ct_a.clone());
+        residue.insert((tx_hash_b, internal_idx_b), real_ct_b.clone());
+        populate_engine_handle_fields(&mut ledger, &view_secret, &residue);
+
+        let td_a = ledger
+            .transfers()
+            .iter()
+            .find(|t| t.tx_hash == tx_hash_a && t.internal_output_index == internal_idx_a)
+            .expect("transfer A present");
+        // A: source_ciphertext kept (sentinel, not real_ct_a); output_handle filled.
+        let stored_ct_a = td_a
+            .source_ciphertext
+            .as_ref()
+            .expect("source_ciphertext stable");
+        assert_eq!(
+            stored_ct_a.x25519, sentinel_ct.x25519,
+            "pre-populated source_ciphertext must not be overwritten"
+        );
+        let derived_handle_a =
+            derive_output_handle(&view_secret, &tx_hash_a, internal_idx_a);
+        assert_eq!(
+            td_a.output_handle.expect("output_handle filled"),
+            derived_handle_a,
+            "output_handle must be derived for the previously-None field"
+        );
+
+        let td_b = ledger
+            .transfers()
+            .iter()
+            .find(|t| t.tx_hash == tx_hash_b && t.internal_output_index == internal_idx_b)
+            .expect("transfer B present");
+        // B: output_handle kept (sentinel, not derived); source_ciphertext filled.
+        assert_eq!(
+            td_b.output_handle.expect("output_handle stable"),
+            sentinel_handle,
+            "pre-populated output_handle must not be overwritten"
+        );
+        let stored_ct_b = td_b
+            .source_ciphertext
+            .as_ref()
+            .expect("source_ciphertext filled");
+        assert_eq!(
+            stored_ct_b.x25519, real_ct_b.x25519,
+            "source_ciphertext must be filled for the previously-None field"
+        );
     }
 
     #[test]
