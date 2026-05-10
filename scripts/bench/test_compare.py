@@ -69,13 +69,29 @@ def _run_compare(baseline: dict[str, Any], pr: dict[str, Any]) -> tuple[int, dic
     with tempfile.TemporaryDirectory() as d:
         bp = pathlib.Path(d) / "baseline.json"
         pp = pathlib.Path(d) / "pr.json"
-        bp.write_text(json.dumps(baseline))
-        pp.write_text(json.dumps(pr))
-        proc = subprocess.run(
-            [sys.executable, str(SCRIPT_PATH), "--baseline", str(bp), "--pr", str(pp)],
-            capture_output=True,
-            text=True,
-        )
+        # Explicit utf-8: pathlib defaults to locale encoding, which
+        # surprises on Windows runners and on minimal C-locale CI
+        # images.
+        bp.write_text(json.dumps(baseline), encoding="utf-8")
+        pp.write_text(json.dumps(pr), encoding="utf-8")
+        # Hard timeout so a future bug in `compare.py` (e.g., a
+        # change that accidentally reads from stdin) cannot stall
+        # the test job indefinitely. 30s is generous — a cold
+        # Python startup plus this comparator's purely-in-memory
+        # routing has historically completed in <100ms.
+        try:
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT_PATH), "--baseline", str(bp), "--pr", str(pp)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise AssertionError(
+                f"compare.py exceeded 30s timeout: {exc}. "
+                "If a legitimate change makes the comparator slower, "
+                "raise the timeout deliberately rather than removing it."
+            ) from exc
         report = json.loads(proc.stdout) if proc.stdout else {}
         return proc.returncode, report
 

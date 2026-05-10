@@ -62,6 +62,23 @@ from typing import Any
 SCHEMA_VERSION_IN = "shekyl_rust_v0"
 SCHEMA_VERSION_OUT = "shekyl_rust_v0_compare_v1"
 
+# Schema-evolution policy for `SCHEMA_VERSION_OUT`:
+#
+#   - **Additive** changes (new keys in `summary`, new bucket lists,
+#     new diagnostic fields on existing buckets) are made *without*
+#     bumping the version string. Consumers — `post_comment.py` and
+#     any future tooling — are expected to tolerate unknown keys.
+#     Adding the `baseline_zero` summary bucket (2026-05) is the
+#     canonical example.
+#   - **Breaking** changes (renamed keys, changed semantics for
+#     existing keys, removed fields) bump `_v1` to `_v2` and force
+#     all consumers to update their version pin in lockstep.
+#
+# Consumers MUST treat unknown keys as informational and not fail on
+# them. The strict version check in `post_comment.py` is for catching
+# accidentally-passed *non-compare* JSON, not for gating additive
+# evolution.
+
 # Threshold table — see `docs/MID_REWIRE_HARDENING.md` §3.3, §4.1, and
 # `docs/design/STAGE_0_HARNESS.md` §4.3 (engine_trait_bench_*). The
 # thresholds are intentionally round-numbered and percentage-of-
@@ -218,35 +235,18 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
 
         base_val = b["metrics"][GATE_METRIC]
         pr_val = p["metrics"][GATE_METRIC]
-        # `baseline = 0` while `pr > 0` is data we cannot meaningfully
-        # gate on. The bench-baseline branch's `baseline.iai.snapshot`
-        # has been observed (2026-05-09 refresh from `647f82d5`)
-        # carrying `instructions = 0` for benches that the prior nine
-        # baselines measured at ~4.4M / 44M / 444M instructions, with
-        # no causal code change between snapshots and iai-callgrind's
-        # own run summary reporting `6 without regressions; 0
-        # regressed; 6 benchmarks finished`. The capture itself ran
-        # to completion; what produced zero is unknown (runner-image
-        # drift, iai-callgrind-runner version skew, build-flag drift,
-        # or a transient anomaly in the measurement layer are all
-        # candidates). The investigation branch is
-        # `chore/investigate-bench-baseline-flake-2026-05-09`.
+        # `(base = 0, pr > 0)` is a baseline-side capture anomaly:
+        # not gateable (division by zero), not a real "added in PR"
+        # (the entry exists on both sides). Routes to a distinct
+        # `baseline_zero` bucket — informational, not gating, with
+        # the PR-side value preserved for diagnosis. See
+        # `docs/investigation/2026-05-09-bench-baseline-flake.md`
+        # for the originating incident, root-cause status, and the
+        # producer-side guard in `capture_rust_baseline.sh` that
+        # prevents new bad captures from being committed.
         #
-        # Until the root cause is understood, the comparator routes
-        # the `(base = 0, pr > 0)` case into a distinct
-        # `baseline_zero` bucket — informational, not gating, and
-        # rendered by `post_comment.py` under its own labeled section
-        # so the anomaly surfaces to reviewers rather than being
-        # silently masked under the "new in PR" label. The post-merge
-        # `update-baseline` job re-captures from the next push to
-        # `dev`; if the next refresh produces real numbers, the
-        # anomaly was a transient flake and self-heals; if zeros
-        # persist, the investigation has a fresh signal to bisect.
-        #
-        # The `(base = 0, pr = 0)` case is preserved as a 0% delta
-        # `ok` — both sides report nothing-meaningful, which is
-        # informationally equivalent to a no-op and matches prior
-        # behavior.
+        # `(base = 0, pr = 0)` is preserved as a 0% delta `ok` —
+        # informationally a no-op, matches prior behavior.
         if base_val == 0 and pr_val != 0:
             baseline_zero.append(
                 {"full_id": full_id, "class": cls, "pr": pr_val}
