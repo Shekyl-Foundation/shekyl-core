@@ -559,12 +559,25 @@ fn populate_engine_handle_fields(
     // `LedgerIndexes::handle_reorg` ran), and they remain valid for
     // the post-pass because the same write guard owns
     // `ledger.transfers` between `apply_scan_result_to_state`'s
-    // return and this call. The bounds check at `ledger.transfers[i]`
-    // is defense-in-depth.
+    // return and this call.
+    //
+    // Caller-supplied invariant: every index in `inserted` is in
+    // bounds for `ledger.transfers`. The `apply_scan_result_to_state`
+    // construction site enforces this; the `debug_assert!` below
+    // pins the contract for any future caller that constructs
+    // `inserted` independently. Out-of-bounds indices fail loud at
+    // the indexing site below rather than silently skipping — a
+    // silent skip would leave engine-derived fields un-populated
+    // for transfers the caller intended to process, an
+    // audit-invisible corruption.
     //
     // Closes FOLLOWUPS V3.0 entry "populate_engine_handle_fields
     // O(n) → O(k) per scan" — see PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md
     // §1 for the historical O(n × B) refresh shape this fixes.
+    debug_assert!(
+        inserted.iter().all(|&i| i < ledger.transfers.len()),
+        "populate_engine_handle_fields: every inserted index must be in bounds for ledger.transfers",
+    );
     for &i in inserted {
         let td = &mut ledger.transfers[i];
         let key = (td.tx_hash, td.internal_output_index);
