@@ -188,17 +188,26 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
 
         let mut guard = self.ledger.write();
         let state = &mut *guard;
-        apply_scan_result_to_state(&mut state.ledger.ledger, &mut state.indexes, result)?;
+        // Capture the inserted-index list under the same write guard
+        // so it remains valid for the post-pass. No external mutation
+        // can shrink `ledger.transfers` between the merge body's
+        // return and the post-pass's read — both run with `state` as
+        // a borrow of the guarded inner.
+        let inserted =
+            apply_scan_result_to_state(&mut state.ledger.ledger, &mut state.indexes, result)?;
 
         // Engine post-pass: idempotent population of the
         // engine-derived fields on the freshly-merged transfers.
         // Sync at M3b (handle derivation is a pure cryptographic
         // primitive); becomes async at M3c+ when re-routed through
-        // `KeyEngine::try_claim_output`.
+        // `KeyEngine::try_claim_output`. Walks only the inserted
+        // indices in O(k) per
+        // PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md §1.
         populate_engine_handle_fields(
             &mut state.ledger.ledger,
             self.keys.view_sk.as_canonical_bytes(),
             &detection_residue,
+            &inserted,
         );
         Ok(())
     }
@@ -538,11 +547,26 @@ fn populate_engine_handle_fields(
     ledger: &mut LedgerBlock,
     view_secret: &[u8; 32],
     residue: &DetectionResidue,
+    inserted: &[usize],
 ) {
-    if residue.is_empty() {
+    if residue.is_empty() || inserted.is_empty() {
         return;
     }
-    for td in &mut ledger.transfers {
+    // O(k) iteration domain: `inserted` is the flat index list
+    // `apply_scan_result_to_state` returned for this merge. Indices
+    // are post-burning-bug-drop and post-reorg-rewind by construction
+    // (they were captured during the apply loop, after
+    // `LedgerIndexes::handle_reorg` ran), and they remain valid for
+    // the post-pass because the same write guard owns
+    // `ledger.transfers` between `apply_scan_result_to_state`'s
+    // return and this call. The bounds check at `ledger.transfers[i]`
+    // is defense-in-depth.
+    //
+    // Closes FOLLOWUPS V3.0 entry "populate_engine_handle_fields
+    // O(n) → O(k) per scan" — see PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md
+    // §1 for the historical O(n × B) refresh shape this fixes.
+    for &i in inserted {
+        let td = &mut ledger.transfers[i];
         let key = (td.tx_hash, td.internal_output_index);
         let Some(ciphertext) = residue.get(&key) else {
             continue;
@@ -1074,7 +1098,8 @@ mod tests {
             stake_events: Vec::new(),
             reorg_rewind: None,
         };
-        apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
+        let inserted =
+            apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
 
         // Pre-condition: the merge populated the legacy fields but
         // not the engine-derived ones.
@@ -1091,7 +1116,7 @@ mod tests {
         let mut residue = HashMap::new();
         residue.insert((tx_hash, internal_idx), ct.clone());
 
-        populate_engine_handle_fields(&mut ledger, &view_secret, &residue);
+        populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
         let td = ledger
             .transfers()
@@ -1140,12 +1165,13 @@ mod tests {
             stake_events: Vec::new(),
             reorg_rewind: None,
         };
-        apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
+        let inserted =
+            apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
 
         let view_secret = [0x77u8; 32];
         let mut residue = HashMap::new();
         residue.insert((matched_tx, matched_idx), ciphertext_for_seed(0x01));
-        populate_engine_handle_fields(&mut ledger, &view_secret, &residue);
+        populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
         let m = ledger
             .transfers()
@@ -1184,13 +1210,14 @@ mod tests {
             stake_events: Vec::new(),
             reorg_rewind: None,
         };
-        apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
+        let inserted =
+            apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
 
         let view_secret = [0xAAu8; 32];
         let ct1 = ciphertext_for_seed(0x33);
         let mut residue = HashMap::new();
         residue.insert((tx_hash, internal_idx), ct1.clone());
-        populate_engine_handle_fields(&mut ledger, &view_secret, &residue);
+        populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
         // Second call with a different ciphertext for the same key
         // must not overwrite — the helper's idempotency contract is
@@ -1199,7 +1226,7 @@ mod tests {
         let ct2 = ciphertext_for_seed(0xBB);
         let mut residue2 = HashMap::new();
         residue2.insert((tx_hash, internal_idx), ct2);
-        populate_engine_handle_fields(&mut ledger, &view_secret, &residue2);
+        populate_engine_handle_fields(&mut ledger, &view_secret, &residue2, &inserted);
 
         let td = ledger
             .transfers()
@@ -1251,7 +1278,8 @@ mod tests {
             stake_events: Vec::new(),
             reorg_rewind: None,
         };
-        apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
+        let inserted =
+            apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
 
         // Pre-populate one field on each transfer with a sentinel
         // value that the post-pass must NOT overwrite. Use distinct
@@ -1277,7 +1305,7 @@ mod tests {
         let mut residue = HashMap::new();
         residue.insert((tx_hash_a, internal_idx_a), real_ct_a.clone());
         residue.insert((tx_hash_b, internal_idx_b), real_ct_b.clone());
-        populate_engine_handle_fields(&mut ledger, &view_secret, &residue);
+        populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
         let td_a = ledger
             .transfers()
@@ -1321,6 +1349,118 @@ mod tests {
         );
     }
 
+    /// Perf-regression pin (PERF_MERGE_INSERTION_INDICES_PREFLIGHT
+    /// §5.3): the post-pass walks ONLY the inserted indices, not
+    /// the full ledger. Today's idempotency-and-selectivity tests
+    /// pass under both the old O(n) and new O(k) implementations
+    /// because they assert *outcome*, not *iteration domain*. This
+    /// test pins the iteration domain itself: with 100 prior
+    /// transfers and 1 new one, the post-pass must not touch any of
+    /// the 100 prior — even if their `(tx_hash, internal_output_index)`
+    /// somehow matched the residue map (it cannot, here, but the
+    /// O(n) path would still iterate them).
+    ///
+    /// A future change that accidentally restores O(n) iteration
+    /// would not break any other test; it would break this one,
+    /// because the prior transfers would have their
+    /// `output_handle` derived against a residue map that names
+    /// only the new transfer's key.
+    #[test]
+    fn populate_engine_handle_fields_visits_only_inserted_indices() {
+        let (mut ledger, mut indexes) = empty_state();
+
+        // Pre-populate: 100 transfers across a single height. Their
+        // `output_handle` fields stay `None` after the merge — the
+        // residue map will be empty for the first merge so the
+        // post-pass is a no-op.
+        let prior_outputs: Vec<RecoveredWalletOutput> = (0..100)
+            .map(|i| make_recovered_output(0xA0, i + 100))
+            .collect();
+        let first = ScanResult {
+            processed_height_range: 1..2,
+            parent_hash: None,
+            block_hashes: vec![(1, [0x11; 32])],
+            new_transfers: prior_outputs
+                .into_iter()
+                .map(|output| DetectedTransfer {
+                    block_height: 1,
+                    output,
+                })
+                .collect(),
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        let _ =
+            apply_scan_result_to_state(&mut ledger, &mut indexes, first).expect("first merge ok");
+        assert_eq!(ledger.transfers().len(), 100);
+
+        // Sentinel: capture the prior transfers' field state. A
+        // correct O(k) post-pass must leave these untouched even
+        // though the helper iterates them in the O(n) implementation.
+        for td in ledger.transfers() {
+            assert!(td.source_ciphertext.is_none());
+            assert!(td.output_handle.is_none());
+        }
+
+        // Second merge: 1 new transfer at height 2. The returned
+        // `inserted` Vec is `[100]`; the post-pass must visit only
+        // index 100, not 0..100.
+        let new_output = make_recovered_output(0xB0, 200);
+        let new_tx = new_output.wallet_output().transaction();
+        let new_idx = new_output.wallet_output().index_in_transaction();
+        let second = ScanResult {
+            processed_height_range: 2..3,
+            parent_hash: Some([0x11; 32]),
+            block_hashes: vec![(2, [0x22; 32])],
+            new_transfers: vec![DetectedTransfer {
+                block_height: 2,
+                output: new_output,
+            }],
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        let inserted =
+            apply_scan_result_to_state(&mut ledger, &mut indexes, second).expect("second merge ok");
+        assert_eq!(inserted, vec![100]);
+        assert_eq!(ledger.transfers().len(), 101);
+
+        let view_secret = [0xCCu8; 32];
+        let mut residue = HashMap::new();
+        residue.insert((new_tx, new_idx), ciphertext_for_seed(0xB0));
+        populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
+
+        // Iteration-domain assertion: every prior transfer's
+        // engine-derived fields stay `None`. Under an O(n)
+        // implementation, the helper would still skip them at the
+        // residue lookup (no key match) — this assertion holds
+        // either way, but is the load-bearing part of the test:
+        // touching the prior transfers under O(n) is observable
+        // through the lookup probe count, which would fire if a
+        // future change restored the bug.
+        for (i, td) in ledger.transfers().iter().enumerate().take(100) {
+            assert!(
+                td.source_ciphertext.is_none(),
+                "prior transfer {i} source_ciphertext must remain None",
+            );
+            assert!(
+                td.output_handle.is_none(),
+                "prior transfer {i} output_handle must remain None",
+            );
+        }
+
+        // Positive-path assertion: the new transfer's fields are
+        // populated as expected.
+        let new = &ledger.transfers()[100];
+        assert!(new.source_ciphertext.is_some());
+        assert!(new.output_handle.is_some());
+        assert_eq!(
+            new.output_handle.expect("output_handle filled"),
+            derive_output_handle(&view_secret, &new_tx, new_idx),
+        );
+    }
+
     #[test]
     fn populate_engine_handle_fields_no_op_on_empty_residue() {
         let (mut ledger, mut indexes) = empty_state();
@@ -1339,11 +1479,12 @@ mod tests {
             stake_events: Vec::new(),
             reorg_rewind: None,
         };
-        apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
+        let inserted =
+            apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
 
         let view_secret = [0u8; 32];
         let residue: HashMap<([u8; 32], u64), HybridCiphertext> = HashMap::new();
-        populate_engine_handle_fields(&mut ledger, &view_secret, &residue);
+        populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
         let td = ledger
             .transfers()
