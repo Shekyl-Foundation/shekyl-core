@@ -73,33 +73,54 @@ citing in a review.
   Python file, no workspace code changes. Lands before any
   subsequent PR that hits the bench gate. Pre-RC1.
 
-- **M3b byte-identical-derivation property test re-location
-  (trigger: `KeyEngine` widens from `pub(crate)` to `pub`;
-  pre-RC1).** Stage 1 PR 3 — M3b's byte-identical-derivation
-  property test (`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md`
-  §D5) was specified as an integration test at
-  `rust/shekyl-engine-core/tests/byte_identical_derivation.rs`
-  but landed as two unit tests in
-  `rust/shekyl-engine-core/src/engine/local_keys.rs`'s `mod tests`.
-  The deviation is forced by the M3a Round 4a `pub(crate)` lock
-  on `LocalKeys`, `SourceSecretsBundle`, and `KeyEngineError`:
-  integration tests run as external crates and cannot reach
-  `pub(crate)` items. The property the test pins is identical
-  regardless of placement; the location is purely a visibility
-  artifact.
+- **Stage 1 PR 3 engine-property test re-location (trigger:
+  `KeyEngine` widens from `pub(crate)` to `pub`; pre-RC1).** Two
+  Stage 1 PR 3 property tests landed as unit tests in
+  `rust/shekyl-engine-core/src/engine/local_keys.rs`'s `mod tests`
+  rather than the integration-test placement their pre-flights
+  specified, both forced by the same M3a Round 4a `pub(crate)`
+  lock on `KeyEngine`, `LocalKeys`, `SourceSecretsBundle`, and
+  `KeyEngineError`: integration tests run as external crates and
+  cannot reach `pub(crate)` items. The properties the tests pin
+  are identical regardless of placement; the locations are purely
+  visibility artifacts.
+
+  **Tests covered by this entry.**
+
+  - *M3b D5 — byte-identical bundle-derivation test.*
+    `derive_source_secrets_bundle_byte_identical_against_legacy_chain`
+    (and its peer
+    `derive_source_secrets_bundle_byte_identical_against_legacy_chain_subaddress`).
+    Pre-flight specification:
+    `docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md` §D5
+    (`rust/shekyl-engine-core/tests/byte_identical_derivation.rs`).
+    Pins bundle-byte identity between engine and legacy
+    derivation paths field-by-field.
+  - *M3c-via-C — engine-bundle end-to-end signing test.*
+    `engine_derived_bundle_signs_through_tx_builder_end_to_end`.
+    Pre-flight specification:
+    `docs/design/STAGE_1_PR_3_M3C_PREFLIGHT.md` §2.1 (Option C
+    disposition; `rust/shekyl-engine-core/tests/` integration
+    placement, suggested name `key_engine_sign_e2e.rs`). Pins
+    end-to-end recovery-correctness through
+    `tx_builder::sign_transaction` plus BP+ / FCMP++ verifier
+    acceptance — the property M3d's removal of the legacy
+    bundle-derivation fallback depends on.
 
   **Trigger condition.** When `KeyEngine` widens from
   `pub(crate)` to `pub` (per `STAGE_1_PR_3_KEY_ENGINE.md` §4.4
   trait visibility evolution — driven by whichever pre-RC PR
   needs to reach `KeyEngine` from outside `shekyl-engine-core`,
   e.g., the `wallet_rpc_server` Rust cutover or any other
-  consumer crate), the property test should be re-located to the
-  pre-flight's planned `tests/byte_identical_derivation.rs`
-  integration-test placement so it exercises the same surface
-  external consumers will exercise. The deviation is recorded
-  inline in the test docstring so a future maintainer
-  cross-referencing the pre-flight finds the tracking link.
-  Pre-RC1.
+  consumer crate), both property tests should be re-located to
+  their pre-flights' planned integration-test placements so they
+  exercise the same surface external consumers will exercise. The
+  re-location is one PR covering both tests (not two separate
+  PRs): the visibility flip is the trigger for both, and bundling
+  them keeps the migration-tail discipline cost bounded. The
+  deviations are recorded inline in each test docstring so a
+  future maintainer cross-referencing either pre-flight finds the
+  tracking link. Pre-RC1.
 
 - **`RecoveredWalletOutput.key_image`: promote to `Option<KeyImage>`
   (target: V3.1).** Today the field is typed `KeyImage` and the test

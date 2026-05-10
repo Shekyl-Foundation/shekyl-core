@@ -4,6 +4,121 @@
 
 ### Added
 
+- **Stage 1 PR 3 — M3c: additive end-to-end engine-bundle signing
+  test** (`feat/stage-1-pr3-m3c`; one pre-flight commit + two
+  implementation commits + one cross-reference commit cut off `dev`
+  at `ea1df2539`). Lands the validation milestone per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3.3 (with §3.3.1 cross-reference to the implementation
+  disposition) and the pre-flight in
+  [`docs/design/STAGE_1_PR_3_M3C_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3C_PREFLIGHT.md)
+  §2.1 (Option C disposition; §2.1.1 Trim-1 amendment). Property
+  delivery: **complete for the bundle → SpendInput → SignedProofs
+  cryptographic chain at the `tx_builder::sign_transaction`
+  surface** — the precondition M3d depends on for removing the
+  legacy `TransferDetails`-secret-bearing-fields fallback.
+
+  - **New unit test:**
+    `engine_derived_bundle_signs_through_tx_builder_end_to_end`,
+    inline in `rust/shekyl-engine-core/src/engine/local_keys.rs`'s
+    `mod tests` as a peer to M3b D5. Constructs a `LocalKeys` from
+    `TEST_SEED`; for each of 9 fixtures (3 input counts {1, 2, 3}
+    × 3 subaddress indices {PRIMARY, (0, 1), (1, 0)}) synthesizes
+    *n_in* outputs paid to `subaddress_keys(idx)` for every idx
+    (including PRIMARY — see the test docstring's
+    relationship-to-M3b-D5 section for why bare primary spend keys
+    cannot recover here); recovers each output via
+    `scan_output_recover` to compose a hand-derived legacy bundle;
+    derives the engine bundle via
+    `LocalKeys::derive_source_secrets_bundle`; asserts engine and
+    legacy `SpendInput`s are byte-identical field-by-field at the
+    input layer (12 fields per input including per-`leaf_chunk`-
+    entry equality); calls `tx_builder::sign_transaction(...)`
+    *once* on the engine path; asserts BP+ deserializes via
+    `Bulletproof::read_plus` and verifies via
+    `Bulletproof::verify` against un-cofactored output commitment
+    points; asserts FCMP++ verifies via
+    `shekyl_fcmp::proof::verify` against engine-derived key
+    images, the proof's pseudo-outputs, the synthetic h_pqc Selene
+    scalars, the synthetic single-leaf-chunk tree root, and the
+    same `signable_tx_hash` passed to the prover; asserts
+    `reference_block` and `tree_depth` echo unchanged.
+  - **Inline cryptographic tree-fixture helpers.** Replicates the
+    recipe from `shekyl-fcmp::proof::tests::prove_verify_roundtrip`
+    inline in `local_keys.rs::tests` (single-leaf chunk; depth = 1;
+    `tree_root = SELENE_HASH_INIT + multiexp_vartime` over Selene
+    generators × leaf scalars; h_pqc derived deterministically via
+    `dalek_ff_group::FieldElement::wide_reduce` for
+    reproducibility; recipient `output_index` offset by `n_in + 100`
+    to avoid the input/output commitment-mask collision that
+    collapses FCMP++'s rerandomization scalar to zero in
+    single-input/single-output sweeps with shared `combined_ss`).
+    Helpers: `build_synthetic_single_chunk_tree_root`,
+    `make_synthetic_h_pqc_bytes`, `make_recipient_output_info`,
+    `compute_test_key_image`. New `[dev-dependencies]` on
+    `shekyl-tx-builder`, `shekyl-fcmp`, `shekyl-bulletproofs`,
+    `shekyl-fcmp-plus-plus`, `shekyl-generators`, `shekyl-io`,
+    `shekyl-primitives`, `multiexp`, `ec-divisors`, `ciphersuite`,
+    `helioselene`, `dalek-ff-group`, `rand_core` per
+    `17-dependency-discipline.mdc`.
+  - **Layered framing.** The test docstring records three layers:
+    Layer 1 — cryptographic chain `bundle → SpendInput →
+    tx_builder::sign_transaction → BP+ verify + FCMP++ verify`
+    (this test's scope); Layer 2 — `KeyEngine::sign_transaction`
+    trait method (PR-5+ scope; today returns
+    `KeyEngineError::SignTransactionTraitSurfaceIncomplete` because
+    `TxToSign`'s `outputs` and `fcmp_plus_plus_context` are
+    PR-5-pinned forward-declared stubs); Layer 3 — orchestrator-
+    engine message envelope / actor mailbox (PR-5+ scope;
+    cryptographic chain in Layer 1 is invariant under that
+    decision). The test docstring also records the relationship to
+    M3b D5 as intentional layered coverage (M3b D5 pins bundle-
+    byte identity without exercising recovery; M3c-via-C pins
+    recovery-correctness which forces the recipient subaddress
+    consistency M3b D5 doesn't enforce — the two pin complementary
+    properties at adjacent layers).
+  - **Trim-1 disposition (post-implementation amendment).** An
+    earlier draft issued a parallel sign call with legacy-derived
+    `SpendInput`s for `commitments` / `enc_amounts` byte-equality
+    at the signer-output layer. Pre-flight review surfaced that
+    `SpendInput` byte-equality at the input layer is strictly
+    stronger (subsumes the original property by signer
+    determinism, and additionally guards regressions in
+    `SpendInput` fields irrelevant to commitments / enc_amounts
+    but relevant to signature behavior or future field additions).
+    Substituting the parallel sign call for input-layer byte-
+    equality + sign-once on the engine path halves the test
+    runtime (32s → 17.65s debug; 12s → 6.87s release). Pre-flight
+    §2.1.1 records the discovery and names it as a forward
+    template: implementation may strengthen pre-flight properties
+    post-implementation; weakening requires explicit revisit. The
+    named coverage gap (workspace sole-coverage of
+    `tx_builder::sign_transaction` end-to-end success goes from
+    2× to 1×) is named-and-accepted given M3d removes the legacy
+    bundle-derivation chain entirely; the engine path is the
+    load-bearing path going forward and the redundant second
+    exercise of the same signer would only have decaying value.
+    Workspace-coverage note: pre-PR-3 this end-to-end success path
+    had **0×** coverage anywhere (`shekyl-tx-builder/src/tests.rs`
+    only validation-error paths; `transfer_e2e[_iai].rs` benches
+    explicitly elide full sign pending a checked-in tree-fixture;
+    `shekyl-fcmp::proof::tests::prove_verify_roundtrip` exercises
+    FCMP++ in isolation only; FFI / engine-rpc are production
+    callers without in-file tests; BP+ fuzz target only fuzzes BP+
+    in isolation). Post-Trim-1 the test is the workspace's sole
+    end-to-end successful-execution coverage of
+    `tx_builder::sign_transaction`.
+  - **Migration plan + FOLLOWUPS updates.**
+    `STAGE_1_PR_3_MIGRATION_PLAN.md` §3.3.1 records the Option C
+    disposition + Trim-1 amendment so a reader of the original
+    §3.3 wording reaches the implementation-side disposition in
+    one hop. `docs/FOLLOWUPS.md`'s M3b-D5 re-location entry is
+    refactored to cover both M3b D5 and M3c-via-C under the same
+    `KeyEngine`-widens-to-`pub` trigger (one re-location PR
+    bundles both tests; the visibility flip is the trigger for
+    both, and bundling them keeps the migration-tail discipline
+    cost bounded).
+
 - **Stage 1 PR 3 — M3b: scanner reroute + bridge source switch**
   (`feat/stage-1-pr3-m3b`; ten substantive commits + one mechanical
   rustfmt fix + one docs commit cut off `dev` at `647f82d59` on
