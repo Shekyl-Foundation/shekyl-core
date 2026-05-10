@@ -93,6 +93,46 @@ citing in a review.
   `.cursor/rules/19-validation-surface-discipline.mdc`. See
   `docs/design/PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md` §9.3.
 
+- **P3: `apply_scan_result_to_state` allocates `Vec<usize>` even
+  for trait-impl callers that discard it (trigger: PR 4 /
+  `RefreshEngine` extraction; pre-RC1).** PR #37 (perf interim)
+  changed `apply_scan_result_to_state`'s return from `()` to
+  `Vec<usize>` so the engine post-pass can walk inserted indices
+  in O(k). The two trait-impl callers
+  (`LocalLedger::apply_scan_result`,
+  `EngineFixture::apply_scan_result`) discard the Vec via
+  `.map(|_| ())` to preserve the `LedgerEngine::apply_scan_result`
+  trait signature `Result<(), _>`. The discard wastes
+  `Vec::with_capacity(new_transfers.len())` allocation per merge
+  on those paths — at most ~100 entries per typical refresh
+  batch, so ~hundreds of bytes at sub-Hz frequency.
+
+  **Severity.** P3 — measurable but negligible perf cost
+  (~hundreds of bytes per refresh batch). Surfaced by Copilot
+  PR #37 review as a candidate factoring (separate
+  `apply_scan_result_to_state_no_indices` variant or a generic
+  sink parameter).
+
+  **Why not fold into PR #37.** The discard sites are
+  architectural shims awaiting PR 4. PR 4 will resolve the
+  async-path-skip P1 by either (a) routing the post-pass through
+  the trait dispatch (Vec gets used → optimization is dead code),
+  or (b) removing the trait impl's `apply_scan_result` entirely
+  (optimization is irrelevant). Optimizing the shim now is the
+  cost-benefit-defer-to-later anti-pattern's inverse: doing
+  incremental work now that PR 4 reshapes anyway. Per
+  `.cursor/rules/16-architectural-inheritance.mdc`, the fix
+  rides with PR 4's reshape.
+
+  **Disposition.** Defer to PR 4. If PR 4's α/β/γ producer-redesign
+  Round 1 chooses a pattern that retains the discard shape (i.e.,
+  the trait method continues to return `()`), revisit this entry
+  as a separate factoring PR. Otherwise the entry closes when
+  PR 4 lands.
+
+  **Originating context.** Copilot PR #37 review (second pass,
+  2026-05-10), comment ID 3215308856 on `merge.rs:336`.
+
 - **`scripts/bench/compare.py`: treat baseline=0 as informational,
   not fail (trigger: cut chore PR off `dev` immediately; pre-RC1).**
   The CI bench gate at `scripts/bench/compare.py:218–219` computes
