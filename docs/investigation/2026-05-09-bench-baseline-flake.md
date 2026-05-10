@@ -194,7 +194,47 @@ This was a wrong recommendation by `17-dependency-discipline.mdc`'s
 standard ("when any of those claims is wrong, the recommendation
 is wrong"); the retraction is recorded here rather than buried.
 
-### 3.2 What's left as candidate
+### 3.2 Specific concerns checked at user request
+
+A user-driven follow-up asked whether the diff between
+`82397c50f06e` and `647f82d59` introduces threading, memory-
+management primitives, miswrapped types, or data-shape changes
+that could plausibly affect the measurement. The diff in question
+is the AllKeysBlob zeroize realignment (PR #33; 10 commits;
+touches 8 files).
+
+| Concern | Finding |
+|---|---|
+| New threading / `Send`/`Sync` / `Mutex` / `Arc` / `RwLock` / `spawn` | None. Diff is structural; no concurrency primitives added. |
+| New `unsafe` blocks | None added. Existing unsafe paths unchanged. |
+| New `mem::transmute` / `mem::forget` / `Box::from_raw` / raw pointer manipulation | None added. |
+| Miswrapped primitive | `MlKem768DecapKey` is `#[repr(transparent)]` over the same `[u8; ML_KEM_768_DK_LEN]` it replaces. Layout-identical. The wrapper adds type-system protection without changing memory representation. |
+| Data-shape change reaching the bench's exercised path | None. `TransferDetails` field set is unchanged across the diff; `WalletLedger` structure unchanged. The bench synthesizes transfers with `combined_shared_secret`/`ho`/`y`/`z`/`k_amount` set to `None`, so the PQC-secret-bearing fields aren't exercised. AllKeysBlob does not appear in `TransferDetails`, `WalletLedger`, the bench file's imports, or `shekyl-engine-state`'s re-exports. |
+| New `Drop` glue in the bench binary | AllKeysBlob's hand-written `Drop` was replaced by `derive(ZeroizeOnDrop)`, but AllKeysBlob isn't pulled into the bench's link graph. The bench binary doesn't carry AllKeysBlob's Drop glue. |
+| C++ in the bench's link image | None. Pure Rust path: curve25519-dalek, zeroize, postcard, serde. The C++ pipeline doesn't reach this bench. |
+
+**Indirect effect that survives the survey**: shekyl-engine-state
+re-compiles transitively when shekyl-crypto-pq's `rmeta` hash
+changes. The bench binary gets re-emitted with potentially
+different symbol layout, inlining decisions, and linker ICF
+outcomes. This is mechanically plausible but unprovable from the
+artifacts available, and the selectivity argument below
+constrains it sharply.
+
+**Selectivity**: in the bad-baseline run, `ledger_iai`'s 6 entries
+recorded zero while `balance_iai`'s 3 entries (same run, same
+workspace, same `with_setup` macro pattern, same `TransferDetails`
+input type) recorded real numbers. Each `benches/*.rs` compiles
+to its own binary (Cargo's bench-target convention), so cross-
+target ICF cannot fold a balance_iai wrapper with a ledger_iai
+wrapper. Within `ledger_iai` itself, the two wrapper functions
+(serialize and deserialize) have structurally different bodies
+(different parameter types, different return types, different
+methods called on the bench input) — not ICF-foldable in normal
+operation. Whatever the cause is, it's confined to one bench-
+target binary's instrumentation in one specific run.
+
+### 3.3 What's left as candidate
 
 Eliminations in §2 leave the residue: the measurement layer
 (iai-callgrind / Valgrind / Callgrind / runner host) returned
@@ -229,7 +269,7 @@ because root-cause attribution on a flake we can't reproduce on
 demand has diminishing returns; the disposition (§4) doesn't
 require knowing the cause.
 
-### 3.3 Project-trajectory context (still load-bearing for §4)
+### 3.4 Project-trajectory context (still load-bearing for §4)
 
 Independent of the issue-#19 retraction, the upstream project
 trajectory is:
@@ -257,7 +297,7 @@ trajectory grounds; flake mitigation, if any, is incidental.
 
 ## 4. Disposition options
 
-The disposition is now framed by §3.3's project-trajectory point,
+The disposition is now framed by §3.4's project-trajectory point,
 not by the (withdrawn) issue-#19 attribution. The upgrade is
 justified independently of root-cause attribution.
 
