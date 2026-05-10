@@ -1364,20 +1364,28 @@ mod tests {
 
     /// Perf-regression pin (PERF_MERGE_INSERTION_INDICES_PREFLIGHT
     /// §5.3): the post-pass walks ONLY the inserted indices, not
-    /// the full ledger. Today's idempotency-and-selectivity tests
-    /// pass under both the old O(n) and new O(k) implementations
-    /// because they assert *outcome*, not *iteration domain*. This
-    /// test pins the iteration domain itself: with 100 prior
-    /// transfers and 1 new one, the post-pass must not touch any of
-    /// the 100 prior — even if their `(tx_hash, internal_output_index)`
-    /// somehow matched the residue map (it cannot, here, but the
-    /// O(n) path would still iterate them).
+    /// the full ledger.
+    ///
+    /// The test pins iteration domain by constructing a residue
+    /// map whose keys deliberately match BOTH the new transfer
+    /// AND the 100 prior transfers (the priors all share
+    /// `(tx_hash=[0xA0;32], internal_output_index=0)` per
+    /// `make_recovered_output`'s constructor shape). Under an
+    /// O(n) implementation, the helper would visit every transfer
+    /// and the residue lookup would succeed for the priors,
+    /// populating their `source_ciphertext` and `output_handle`.
+    /// Under the O(k) implementation, the helper visits only
+    /// `inserted` (which is `[100]`), so the prior transfers stay
+    /// untouched regardless of whether the residue would have
+    /// matched them.
     ///
     /// A future change that accidentally restores O(n) iteration
-    /// would not break any other test; it would break this one,
-    /// because the prior transfers would have their
-    /// `output_handle` derived against a residue map that names
-    /// only the new transfer's key.
+    /// would visit the priors and populate their fields against
+    /// the matching residue entry, breaking this test. This is
+    /// the load-bearing distinction Copilot review of PR #37
+    /// flagged in the original test design — earlier residue
+    /// shape (key only the new transfer) admitted O(n)
+    /// regressions silently.
     #[test]
     fn populate_engine_handle_fields_visits_only_inserted_indices() {
         let (mut ledger, mut indexes) = empty_state();
@@ -1442,24 +1450,37 @@ mod tests {
         let view_secret = [0xCCu8; 32];
         let mut residue = HashMap::new();
         residue.insert((new_tx, new_idx), ciphertext_for_seed(0xB0));
+        // Prior-key residue entry: the 100 priors all share
+        // `(tx_hash=[0xA0;32], internal_output_index=0)` per
+        // `make_recovered_output`'s constructor (seed and the
+        // `internal_output_index = 0` arg are constant across
+        // the priors; they differ only in `global_index`, which
+        // is not part of the residue lookup key). A single
+        // residue insert matches all 100 priors. Under O(n) the
+        // post-pass would iterate them and populate against this
+        // entry; under O(k) the post-pass never visits them.
+        residue.insert(([0xA0; 32], 0), ciphertext_for_seed(0xA0));
         populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
         // Iteration-domain assertion: every prior transfer's
-        // engine-derived fields stay `None`. Under an O(n)
-        // implementation, the helper would still skip them at the
-        // residue lookup (no key match) — this assertion holds
-        // either way, but is the load-bearing part of the test:
-        // touching the prior transfers under O(n) is observable
-        // through the lookup probe count, which would fire if a
-        // future change restored the bug.
+        // engine-derived fields stay `None` despite the residue
+        // map carrying a key (`([0xA0;32], 0)`) that matches all
+        // 100 of them. Under an O(n) implementation, the helper
+        // would visit the priors and the residue lookup would
+        // succeed, populating their fields. Under O(k), the
+        // helper never visits indices 0..100, so the residue
+        // match is unreachable. This is the load-bearing
+        // distinguishing assertion (Copilot PR #37 review): an
+        // O(n) regression breaks here directly, without relying
+        // on lookup-probe-count side effects.
         for (i, td) in ledger.transfers().iter().enumerate().take(100) {
             assert!(
                 td.source_ciphertext.is_none(),
-                "prior transfer {i} source_ciphertext must remain None",
+                "prior transfer {i} source_ciphertext must remain None (O(k) iteration domain)",
             );
             assert!(
                 td.output_handle.is_none(),
-                "prior transfer {i} output_handle must remain None",
+                "prior transfer {i} output_handle must remain None (O(k) iteration domain)",
             );
         }
 
