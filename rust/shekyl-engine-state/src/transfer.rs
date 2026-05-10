@@ -10,7 +10,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use curve25519_dalek::{EdwardsPoint, Scalar};
 
-use shekyl_crypto_pq::key_image::KeyImage;
+use shekyl_crypto_pq::{handle::OutputHandle, kem::HybridCiphertext, key_image::KeyImage};
 use shekyl_oxide::primitives::Commitment;
 
 use crate::{
@@ -101,6 +101,45 @@ pub struct TransferDetails {
     /// HKDF-derived amount encryption key.
     #[serde(with = "opt_zeroizing_bytes_32", default)]
     pub k_amount: Option<Zeroizing<[u8; 32]>>,
+
+    // ── M3b deterministic-handle pathway (per `STAGE_1_PR_3_M3B_PREFLIGHT.md`) ──
+    /// On-chain hybrid X25519 + ML-KEM-768 ciphertext from the source
+    /// transaction.
+    ///
+    /// **Non-secret** (broadcast in the transaction's `tx_extra`); persisted
+    /// so the engine's deterministic-handle pathway (commit 6:
+    /// `LocalKeys::derive_source_secrets_bundle`) can re-derive
+    /// `combined_ss` and the per-output secrets without trusting the
+    /// upstream `combined_shared_secret` / `ho` / `y` / `z` / `k_amount`
+    /// fields above. Once the orchestrator-side post-pass (commit 7)
+    /// always populates this field for newly-scanned outputs, M3c will
+    /// flip `TxInputSigningContext` to consume `(source_ciphertext,
+    /// output_handle, output_index)` exclusively and the Option-wrapped
+    /// secret-bearing fields above become deletable in M3d/M3e.
+    ///
+    /// `Option` for transitional shape: pre-M3b-scanned outputs stored
+    /// under `LEDGER_BLOCK_VERSION = 2` lack this field and are
+    /// re-populated lazily on first spend (or, with `--rescan`, eagerly
+    /// during a clean re-scan).
+    #[serde(default)]
+    pub source_ciphertext: Option<HybridCiphertext>,
+
+    /// Deterministic 16-byte output handle
+    /// (`shekyl_crypto_pq::handle::derive_output_handle(view_secret,
+    /// tx_hash, output_index)`).
+    ///
+    /// **Non-secret** under the threat model where `view_secret` is held
+    /// (handles are publicly-derivable from view material; see
+    /// `OutputHandle`'s "Non-secret status" doc). Persisted as a memo of
+    /// the cSHAKE256 derivation so the orchestrator can use the handle
+    /// as a stable opaque identifier in cross-engine bookkeeping
+    /// (`HashMap<OutputHandle, _>`) without re-deriving from the view
+    /// secret on every lookup.
+    ///
+    /// `Option` for transitional shape, same as `source_ciphertext`
+    /// above.
+    #[serde(default)]
+    pub output_handle: Option<OutputHandle>,
 
     /// Block height at which the output becomes spendable (inserted into curve tree).
     /// `block_height + SPENDABLE_AGE`. The daemon has no tree path for immature
@@ -208,6 +247,12 @@ struct TransferDetailsSchema {
     y: Option<Vec<u8>>,
     z: Option<Vec<u8>>,
     k_amount: Option<Vec<u8>>,
+    // Non-secret on-chain payloads; reference the workspace types
+    // directly (their `postcard_schema::Schema` derives lock the wire
+    // shape from the source side per
+    // `STAGE_1_PR_3_M3B_PREFLIGHT.md` §2 D3 disposition α).
+    source_ciphertext: Option<HybridCiphertext>,
+    output_handle: Option<OutputHandle>,
     eligible_height: u64,
     frozen: bool,
     fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
@@ -244,6 +289,13 @@ impl Zeroize for TransferDetails {
         self.y.zeroize();
         self.z.zeroize();
         self.k_amount.zeroize();
+        // `source_ciphertext` and `output_handle` (M3b) are non-secret —
+        // see the field docs above. `HybridCiphertext` is on-chain
+        // public data; `OutputHandle` is publicly-derivable from any
+        // view secret and is correlation-sensitive only at the boundary
+        // (logs / RPC) per its "Privacy-correlation note". Neither is
+        // wiped here; doing so would require giving them `Zeroize` impls
+        // we deliberately omit at the source.
         self.eligible_height.zeroize();
         self.frozen.zeroize();
         if let Some(ref mut path) = self.fcmp_precomputed_path {
@@ -303,6 +355,8 @@ mod tests {
             y: None,
             z: None,
             k_amount: None,
+            source_ciphertext: None,
+            output_handle: None,
             eligible_height: 110,
             frozen: false,
             fcmp_precomputed_path: None,

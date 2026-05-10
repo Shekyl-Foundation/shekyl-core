@@ -35,29 +35,31 @@
 //! frame, zeroized on drop. See [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`]
 //! §3.1.1 for the structural rationale.
 //!
-//! # `SourceSecretsBundle` is transitional
+//! # Trait surface carries ciphertexts; secrets stay engine-internal
 //!
-//! [`TxInputSigningContext::source_secrets`] is a transitional bridge
-//! field for M3a. The bundle's *shape* documents the contract — what
-//! per-input secrets [`KeyEngine::sign_transaction`] needs from the
-//! caller — and is stable across the migration. The bundle's *source*
-//! evolves:
-//!
-//! - **M3a (this commit's bridge):** the orchestrator populates the
-//!   bundle from [`TransferDetails`]'s existing secret-bearing fields
-//!   before `sign_transaction` is called. The trait method extracts the
-//!   secrets from the bundle and routes them into
-//!   [`shekyl_tx_builder::sign_transaction`].
-//! - **M3b+ (deterministic-handle pathway):** the orchestrator passes a
-//!   `source_ciphertext: HybridCiphertext` instead, and the
-//!   implementor derives the bundle internally from `(view_secret,
-//!   source_ciphertext, output_index)`. The trait surface changes
-//!   (field rename); the bundle's shape stays stable.
+//! Per the M3b field swap (per
+//! [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`] §3.2 / preflight D2),
+//! [`TxInputSigningContext`] carries
+//! [`source_ciphertext: HybridCiphertext`](TxInputSigningContext::source_ciphertext)
+//! and [`output_index: u64`](TxInputSigningContext::output_index)
+//! instead of a populated `SourceSecretsBundle`. The orchestrator
+//! supplies the on-chain hybrid ciphertext for each input; the
+//! implementor reconstructs the per-input secret material internally
+//! via [`recover_combined_ss`] (Layer 1) composed with the engine-owned
+//! spend-secret material in
+//! `LocalKeys::derive_source_secrets_bundle`
+//! (Layer 2; lands in M3b commit 6). The bundle's *shape* documents
+//! the contract that
+//! [`shekyl_tx_builder::sign_transaction`] consumes; it stays stable
+//! across the migration even though it no longer crosses the trait
+//! boundary at all.
 //!
 //! Localizing the M3b churn to bundle-population sites — rather than
-//! to the trait signature and every implementor — is the M3a /
-//! M3b sequencing's load-bearing property. See
+//! to the trait signature and every implementor — is the M3a / M3b
+//! sequencing's load-bearing property. See
 //! [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`] §3.1 / §3.2.
+//!
+//! [`recover_combined_ss`]: shekyl_crypto_pq::output::recover_combined_ss
 //!
 //! [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`]: ../../../../../docs/design/STAGE_1_PR_3_KEY_ENGINE.md
 //! [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`]: ../../../../../docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md
@@ -317,29 +319,44 @@ pub(crate) struct SubaddressKeyPair {
 ///
 /// References the per-output spending capability via [`Self::handle`]
 /// — the opaque handle returned by an earlier
-/// [`KeyEngine::try_claim_output`] call — and carries the transitional
-/// [`Self::source_secrets`] bundle through which the orchestrator
-/// supplies the per-input secret material today. **The exact field
-/// shape is pinned in PR 5** (`PendingTxEngine`); PR 3 forward-
-/// declares with the constraint that one field is `handle:
-/// OutputHandle`.
+/// [`KeyEngine::try_claim_output`] call — and supplies the public
+/// on-chain hybrid ciphertext + output position the implementor needs
+/// to reconstruct the per-input secret material from
+/// engine-internal spend-secret state. **The exact field shape is
+/// pinned in PR 5** (`PendingTxEngine`); PR 3 forward-declares with
+/// the constraint that one field is `handle: OutputHandle`.
 ///
-/// # `source_secrets` is transitional
+/// # No secrets at the trait boundary
 ///
-/// See the module-level docstring's "`SourceSecretsBundle` is
-/// transitional" section. M3a's bridge consumes the bundle directly;
-/// M3b's deterministic-handle pathway replaces this field with
-/// `source_ciphertext: HybridCiphertext` and derives the bundle
-/// internally inside the implementor.
+/// Per the module-level docstring (and the M3b field swap, plan
+/// §3.2 / preflight D2), this type carries only public on-chain
+/// material:
 ///
-/// # `Debug` is redacted
+/// - [`Self::handle`] is a deterministic 16-byte opaque identifier
+///   per `STAGE_1_PR_3_KEY_ENGINE.md` §7.12.
+/// - [`Self::source_ciphertext`] is the on-chain hybrid X25519 +
+///   ML-KEM-768 ciphertext the scanner detected for the output;
+///   ciphertexts are public.
+/// - [`Self::output_index`] is the output's position within its
+///   transaction; public.
 ///
-/// `Debug` is implemented manually (not derived) because
-/// [`Self::source_secrets`] carries `Zeroizing<…>` fields whose
-/// `Debug` impl prints the raw secret bytes. Per
-/// `35-secure-memory.mdc`, secret-bearing types must redact in
-/// `Debug` output; `SourceSecretsBundle`'s manual impl does the
-/// per-field redaction and this type's manual impl delegates to it.
+/// The bundle of derived per-input secrets is computed inside the
+/// implementor's [`KeyEngine::sign_transaction`] body — it never
+/// crosses the trait boundary. This is the "secrets confined to the
+/// engine" structural property the trait was designed to deliver.
+///
+/// # `Debug` is manually implemented
+///
+/// `Debug` is implemented manually (not derived) as defence in
+/// depth: PR 5's `sign_transaction` body may re-acquire
+/// secret-bearing fields on this surface (e.g., `y_blind` for output
+/// construction); having the manual impl in place from M3b means
+/// re-establishing the redaction discipline at PR 5 is a one-field
+/// change rather than a derive-to-manual rewrite. Today the manual
+/// impl renders the public fields verbatim; per
+/// `35-secure-memory.mdc`'s "redact at composition boundaries" rule,
+/// any future secret-bearing field gets a `[REDACTED]` placeholder
+/// inline.
 #[non_exhaustive]
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct TxInputSigningContext {
@@ -347,52 +364,58 @@ pub(crate) struct TxInputSigningContext {
     /// Resolved by `sign_transaction`'s impl against the implementor's
     /// workflow-internal handle table.
     pub handle: OutputHandle,
-    /// **Transitional bridge field.** The orchestrator populates this
-    /// from [`TransferDetails`]'s secret-bearing fields before
-    /// `sign_transaction` is called. M3b replaces this field with
-    /// `source_ciphertext: HybridCiphertext` and derives the bundle
-    /// inside the implementor.
+    /// On-chain hybrid X25519 + ML-KEM-768 ciphertext for this input.
+    /// Re-decapped inside the implementor (via
+    /// [`recover_combined_ss`]) to reconstruct the combined shared
+    /// secret without crossing the trait boundary.
     ///
-    /// [`TransferDetails`]: shekyl_engine_state::TransferDetails
-    pub source_secrets: SourceSecretsBundle,
+    /// Public on-chain data; not secret.
+    ///
+    /// [`recover_combined_ss`]: shekyl_crypto_pq::output::recover_combined_ss
+    pub source_ciphertext: HybridCiphertext,
+    /// Output position within the containing transaction. Binds the
+    /// engine-internal PQC key derivation to a specific output
+    /// (matches `SpendInput::output_index` in `shekyl-tx-builder`).
+    /// Public on-chain data.
+    pub output_index: u64,
 }
 
-// CLIPPY: omitted fields would require redacting transitively; the manual
-// impl below redacts via `source_secrets`'s own redacted Debug, and prints
-// the non-secret `handle` directly.
+// CLIPPY: future-proofed for PR 5's potential re-acquisition of secret-bearing
+// fields — keep `default_field_values = false`-style explicit field rendering
+// rather than `derive(Debug)` so adding a `[REDACTED]` placeholder later is a
+// one-line change.
 #[allow(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for TxInputSigningContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TxInputSigningContext")
             .field("handle", &self.handle)
-            .field("source_secrets", &self.source_secrets)
+            .field("source_ciphertext", &self.source_ciphertext)
+            .field("output_index", &self.output_index)
             .finish()
     }
 }
 
-/// Transitional secrets bundle for the M3a `sign_transaction` bridge.
+/// Engine-internal secrets bundle for `sign_transaction`.
 ///
 /// **Documents the contract** — these are the per-input secret
 /// materials [`KeyEngine::sign_transaction`] needs to produce a
-/// signature against an FCMP++ input. The shape stays stable across
-/// the migration; only the *source* of these materials evolves:
-///
-/// - **M3a (this commit's bridge):** populated from
-///   [`TransferDetails`]'s existing secret-bearing fields by the
-///   orchestrator before `sign_transaction` is called.
-/// - **M3b+ (deterministic-handle pathway):** populated by deriving
-///   from `(view_secret, source_ciphertext, output_index)` per the
-///   engine's internal derivation chain. M3b removes the
-///   `TransferDetails`-side population sites and replaces with
-///   `source_ciphertext`-driven derivation.
+/// signature against an FCMP++ input. Post-M3b this bundle never
+/// crosses the trait boundary; it is a Layer-2 derivation result
+/// returned by `LocalKeys::derive_source_secrets_bundle`
+/// (composed from the Layer-1 [`recover_combined_ss`] primitive
+/// and the engine-owned spend-secret material) and consumed by
+/// the implementor's `sign_transaction` body before being dropped
+/// (and zeroized) when the body returns.
 ///
 /// Future signing implementors (Ledger hardware, multisig, future
-/// PQ-aware variants) all consume the same bundle shape — the bundle
-/// defines *what* secrets are needed without coupling to *where*
-/// they originate. Localizing the M3b churn to the bundle-population
-/// logic — rather than spreading it across the trait surface and
-/// every implementor — is the load-bearing property of this
-/// transitional field.
+/// PQ-aware variants) all compose the same bundle shape internally
+/// — the bundle defines *what* secrets are needed without coupling
+/// to *where* they originate. Localizing the M3b churn to the
+/// bundle-population logic — rather than spreading it across the
+/// trait surface and every implementor — is the load-bearing
+/// property of this engine-internal type.
+///
+/// [`recover_combined_ss`]: shekyl_crypto_pq::output::recover_combined_ss
 ///
 /// # Field correspondence with `shekyl_tx_builder::SpendInput`
 ///
@@ -467,20 +490,19 @@ impl std::fmt::Debug for SourceSecretsBundle {
 /// workflow; the shape declared here is PR-3-side stub adequate for
 /// trait extraction but not for actual transaction construction.
 ///
-/// # `Debug` is redacted
+/// # `Debug` redacts inputs as defence in depth
 ///
-/// `Debug` is implemented manually (not derived) because
-/// [`Self::inputs`] is a `Vec<TxInputSigningContext>` and each
-/// element carries `source_secrets: SourceSecretsBundle` (secret-
-/// bearing). Today the redacted `Debug` impls on
-/// [`TxInputSigningContext`] and [`SourceSecretsBundle`] make a
-/// *derived* `TxToSign: Debug` transitively safe, but the
-/// composition is fragile: a future maintainer changing the inner
-/// types' `Debug` impls would silently widen the leak surface
-/// through `TxToSign`. Per `35-secure-memory.mdc`, every shape that
-/// is secret-bearing by composition redacts at the top level too —
-/// defence-in-depth that does not depend on inner-type discipline
-/// holding for all time.
+/// `Debug` is implemented manually (not derived). Post-M3b
+/// [`TxInputSigningContext`] no longer carries any secret-bearing
+/// fields (the field swap moved per-input secrets entirely into the
+/// implementor's stack frame), so a derived `Debug` would be safe
+/// today. Per the M3b preflight D2 disposition, the manual impl
+/// stays — and continues to render `inputs` as a single
+/// `[REDACTED]` token regardless — because PR 5 may re-acquire
+/// secret-bearing fields on the per-input shape (e.g., `y_blind`
+/// for output construction). Redaction at the composition boundary
+/// per `35-secure-memory.mdc` does not depend on inner-type
+/// discipline holding across maintenance.
 #[non_exhaustive]
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct TxToSign {
@@ -845,29 +867,69 @@ mod tests {
         assert_all_sentinels_redacted(&rendered);
     }
 
+    /// Public, non-secret hybrid ciphertext fixture for the
+    /// post-M3b `TxInputSigningContext` shape. Sentinels here are
+    /// not redacted in the rendered output (the values are
+    /// public on-chain bytes); they are deliberately distinct from
+    /// `SENTINEL_*` above so a future regression that confuses a
+    /// secret byte for a public byte fails the redaction asserts.
+    fn sentinel_ciphertext() -> shekyl_crypto_pq::kem::HybridCiphertext {
+        shekyl_crypto_pq::kem::HybridCiphertext {
+            x25519: [0x11; 32],
+            ml_kem: vec![0x22; 8],
+        }
+    }
+
     #[test]
-    fn tx_input_signing_context_debug_redacts_via_source_secrets() {
+    fn tx_input_signing_context_debug_renders_public_fields() {
+        // Post-M3b: `TxInputSigningContext` carries only public on-chain
+        // material. The manual `Debug` impl renders all three fields
+        // verbatim; secret-byte sentinels MUST NOT appear (because the
+        // type does not own any secret-bearing fields).
         let ctx = TxInputSigningContext {
             handle: sentinel_handle(),
-            source_secrets: sentinel_bundle(),
+            source_ciphertext: sentinel_ciphertext(),
+            output_index: 7,
         };
         let rendered = format!("{ctx:?}");
-        assert!(rendered.contains("[REDACTED]"), "rendered = {rendered}");
+        assert!(
+            rendered.contains("output_index: 7"),
+            "output_index missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("source_ciphertext"),
+            "source_ciphertext label missing: {rendered}"
+        );
         assert_all_sentinels_redacted(&rendered);
     }
 
     #[test]
-    fn tx_to_sign_debug_redacts_via_inputs() {
+    fn tx_to_sign_debug_redacts_inputs_as_defence_in_depth() {
+        // Per M3b preflight D2: `TxToSign` keeps the `inputs:
+        // [REDACTED]` blanket redaction even though the post-M3b
+        // `TxInputSigningContext` no longer carries secrets.
+        // Rationale: PR 5 may re-acquire secret-bearing fields on
+        // the per-input shape; pre-establishing the redaction
+        // discipline is cheaper than re-establishing it later.
         let tx = TxToSign {
             inputs: vec![TxInputSigningContext {
                 handle: sentinel_handle(),
-                source_secrets: sentinel_bundle(),
+                source_ciphertext: sentinel_ciphertext(),
+                output_index: 7,
             }],
             outputs: vec![],
             fcmp_plus_plus_context: FcmpPlusPlusContext {},
         };
         let rendered = format!("{tx:?}");
-        assert!(rendered.contains("[REDACTED]"), "rendered = {rendered}");
-        assert_all_sentinels_redacted(&rendered);
+        assert!(
+            rendered.contains("[REDACTED]"),
+            "TxToSign must redact inputs, rendered = {rendered}"
+        );
+        // The blanket redaction also hides the public output_index
+        // value carried inside `inputs`; this is intentional.
+        assert!(
+            !rendered.contains("output_index: 7"),
+            "blanket redaction must hide nested fields: {rendered}"
+        );
     }
 }

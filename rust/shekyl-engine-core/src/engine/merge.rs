@@ -74,8 +74,9 @@
 //! the [`super::LocalLedger`] write guard and calls the helper
 //! against the guarded `(LedgerBlock, LedgerIndexes)` pair.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
+use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
 
@@ -148,10 +149,58 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
     /// every event. Per-event errors do not currently exist —
     /// every `LedgerIndexes` mutator the merge calls is infallible
     /// once both invariants have been verified.
+    ///
+    /// # M3b engine post-pass
+    ///
+    /// Per `docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md` §3 (disposition
+    /// (δ), permanent sync/async split), the body is two stages
+    /// inside one critical section:
+    ///
+    /// 1. **Sync bookkeeping merge** — the existing
+    ///    [`apply_scan_result_to_state`] body, unchanged. Maintains
+    ///    the in-crate tests / `LocalLedger::apply_scan_result`
+    ///    callers that exercise the bookkeeping pipeline without
+    ///    engine context.
+    /// 2. **Engine handle population** — [`populate_engine_handle_fields`]
+    ///    walks the freshly-merged transfers and fills
+    ///    `td.source_ciphertext` / `td.output_handle` from the
+    ///    `RecoveredWalletOutput` residue (collected before the
+    ///    merge consumes the [`ScanResult`]). This is the audit's
+    ///    "engine post-pass" — the orchestrator-side equivalent of
+    ///    the migration plan's "scanner emits `OutputClaim` to
+    ///    `KeyEngine::try_claim_output`" framing.
+    ///
+    /// The two stages are atomic against external readers because
+    /// they share the same [`super::LocalLedger`] write guard — a
+    /// concurrent reader either sees the pre-merge ledger or the
+    /// post-population ledger, never an intermediate state with
+    /// freshly-merged transfers whose `output_handle` field is
+    /// transiently `None`.
     pub fn apply_scan_result(&self, result: ScanResult) -> Result<(), RefreshError> {
+        // §3 reroute (M3b): pre-collect the public on-chain residue
+        // from the scan result *before* `apply_scan_result_to_state`
+        // consumes it. The post-pass below uses this map to bind
+        // each freshly-merged `TransferDetails` to its source
+        // ciphertext and to populate the deterministic
+        // `OutputHandle`. The map is `Hash`-keyed because lookup
+        // ordering is not required.
+        let detection_residue = collect_detection_residue(&result);
+
         let mut guard = self.ledger.write();
         let state = &mut *guard;
-        apply_scan_result_to_state(&mut state.ledger.ledger, &mut state.indexes, result)
+        apply_scan_result_to_state(&mut state.ledger.ledger, &mut state.indexes, result)?;
+
+        // Engine post-pass: idempotent population of the
+        // engine-derived fields on the freshly-merged transfers.
+        // Sync at M3b (handle derivation is a pure cryptographic
+        // primitive); becomes async at M3c+ when re-routed through
+        // `KeyEngine::try_claim_output`.
+        populate_engine_handle_fields(
+            &mut state.ledger.ledger,
+            self.keys.view_sk.as_canonical_bytes(),
+            &detection_residue,
+        );
+        Ok(())
     }
 }
 
@@ -372,6 +421,118 @@ fn apply_stake_events(indexes: &mut LedgerIndexes, events: Vec<StakeEvent>) {
             StakeEvent::Accrual { height, record } => {
                 indexes.insert_accrual(height, record);
             }
+        }
+    }
+}
+
+/// Pre-collected public on-chain residue from a [`ScanResult`]'s
+/// detected transfers, keyed by `(tx_hash, internal_output_index)`.
+///
+/// This is the side-channel the engine post-pass
+/// ([`populate_engine_handle_fields`]) consumes after
+/// [`apply_scan_result_to_state`] has destructured the
+/// [`ScanResult`]. The key matches the corresponding fields on
+/// [`shekyl_engine_state::TransferDetails`] post-merge.
+type DetectionResidue = HashMap<([u8; 32], u64), HybridCiphertext>;
+
+/// Build a [`DetectionResidue`] map from a [`ScanResult`]'s detected
+/// transfers before they are consumed by
+/// [`apply_scan_result_to_state`].
+///
+/// The on-chain hybrid ciphertext is preserved on each
+/// [`shekyl_scanner::RecoveredWalletOutput`] per the M3b scanner
+/// residue plumbing; this helper just lifts it into a lookup table
+/// keyed by `(tx_hash, internal_output_index)`. Both fields are
+/// public on-chain values.
+fn collect_detection_residue(result: &ScanResult) -> DetectionResidue {
+    let mut map = HashMap::with_capacity(result.new_transfers.len());
+    for dt in &result.new_transfers {
+        let wo = dt.output.wallet_output();
+        map.insert(
+            (wo.transaction(), wo.index_in_transaction()),
+            dt.output.source_ciphertext().clone(),
+        );
+    }
+    map
+}
+
+/// Engine post-pass for the M3b scanner reroute (per
+/// `docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md` §3).
+///
+/// Populates `td.source_ciphertext` and `td.output_handle` on each
+/// freshly-merged `TransferDetails` whose
+/// `(tx_hash, internal_output_index)` matches an entry in `residue`.
+///
+/// **Idempotent.** Transfers whose fields are already populated
+/// (e.g., a prior merge that observed the same outputs, or the M3d
+/// fallback path before legacy fields are dropped) are left
+/// untouched.
+///
+/// # Synchronous body, async-ready surface
+///
+/// At M3b the post-pass derives the [`shekyl_crypto_pq::handle::OutputHandle`]
+/// directly via the public cryptographic primitive
+/// [`derive_output_handle`] — a stateless pure function that requires
+/// only `(view_secret, tx_hash, output_index)`. No
+/// [`super::traits::KeyEngine`] instance is needed; no `.await` chain
+/// is introduced. The orchestrator-side handle population property
+/// M3b ships (every output the scanner ingests has a deterministic
+/// handle on its `TransferDetails`) is delivered by the cryptographic
+/// primitive directly.
+///
+/// M3c+ wires `LocalKeys` onto `Engine` and re-routes this helper
+/// through [`super::traits::KeyEngine::try_claim_output`] — at that
+/// point the helper signature becomes `async fn` and
+/// [`Engine::apply_scan_result`] takes the corresponding `.await`.
+/// The two-step trajectory is intentional: M3b's architectural
+/// property (the orchestrator persists handles) does not require the
+/// audit's "engine sole authority on handles" framing to activate,
+/// which lands at M3d. See `STAGE_1_PR_3_MIGRATION_PLAN.md` §3.4.
+///
+/// # Permanent sync/async split
+///
+/// Per `STAGE_1_PR_3_M3B_PREFLIGHT.md` §3 disposition (δ), the
+/// engine post-pass is layered atop the existing sync
+/// [`apply_scan_result_to_state`] body rather than absorbed into it.
+/// Both halves have legitimate consumers: the sync substrate serves
+/// the bookkeeping pipeline (in-crate tests,
+/// [`LocalLedger::apply_scan_result`](super::local_ledger::LocalLedger)
+/// where engine integration is not in scope); the engine post-pass
+/// layers handle population on top. The split is **load-bearing and
+/// intentional**, not a transitional shape pending convergence — a
+/// future maintainer reading "why two helpers?" finds the
+/// load-bearing answer here rather than re-litigating it as
+/// transitional drift.
+fn populate_engine_handle_fields(
+    ledger: &mut LedgerBlock,
+    view_secret: &[u8; 32],
+    residue: &DetectionResidue,
+) {
+    if residue.is_empty() {
+        return;
+    }
+    for td in &mut ledger.transfers {
+        let key = (td.tx_hash, td.internal_output_index);
+        let Some(ciphertext) = residue.get(&key) else {
+            continue;
+        };
+        // Per-field idempotency: respect already-populated values
+        // independently. Skipping only when *both* are `Some` would
+        // overwrite a partial population, contradicting the "leaves
+        // populated fields untouched" contract above. The two fields
+        // are derived from disjoint inputs (`source_ciphertext` from
+        // residue; `output_handle` from cSHAKE256 over the view
+        // secret + tx_hash + index), so partial-population is
+        // possible if a future caller writes one without the other.
+        if td.source_ciphertext.is_none() {
+            td.source_ciphertext = Some(ciphertext.clone());
+        }
+        if td.output_handle.is_none() {
+            td.output_handle = Some(derive_output_handle(
+                view_secret,
+                &td.tx_hash,
+                td.internal_output_index,
+            ));
         }
     }
 }
@@ -758,5 +919,328 @@ mod tests {
         };
         let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
         assert!(matches!(err, RefreshError::MalformedScanResult { .. }));
+    }
+
+    // ── Engine post-pass (M3b §3 reroute) ──────────────────────────────
+
+    use std::collections::HashMap;
+
+    use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
+
+    use super::populate_engine_handle_fields;
+
+    fn ciphertext_for_seed(seed: u8) -> HybridCiphertext {
+        let mut x25519 = [0u8; 32];
+        x25519[0] = seed;
+        x25519[31] = 0xC1;
+        // The post-pass treats the ciphertext as opaque bytes — it
+        // does not re-decap at M3b. Use a non-empty `ml_kem` so the
+        // round-trip preserves the structural shape under postcard
+        // serialization downstream.
+        HybridCiphertext {
+            x25519,
+            ml_kem: vec![seed; 16],
+        }
+    }
+
+    #[test]
+    fn populate_engine_handle_fields_sets_both_fields_on_match() {
+        // Seed the ledger via a real merge, then run the post-pass
+        // against a residue map that matches the merged transfer.
+        let (mut ledger, mut indexes) = empty_state();
+        let output = make_recovered_output(0xAA, 7);
+        let tx_hash = output.wallet_output().transaction();
+        let internal_idx = output.wallet_output().index_in_transaction();
+
+        let result = ScanResult {
+            processed_height_range: 1..2,
+            parent_hash: None,
+            block_hashes: vec![(1, [0x11; 32])],
+            new_transfers: vec![DetectedTransfer {
+                block_height: 1,
+                output,
+            }],
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
+
+        // Pre-condition: the merge populated the legacy fields but
+        // not the engine-derived ones.
+        let td = ledger
+            .transfers()
+            .iter()
+            .find(|t| t.tx_hash == tx_hash && t.internal_output_index == internal_idx)
+            .expect("merged transfer present");
+        assert!(td.source_ciphertext.is_none());
+        assert!(td.output_handle.is_none());
+
+        let view_secret = [0x55u8; 32];
+        let ct = ciphertext_for_seed(0xAA);
+        let mut residue = HashMap::new();
+        residue.insert((tx_hash, internal_idx), ct.clone());
+
+        populate_engine_handle_fields(&mut ledger, &view_secret, &residue);
+
+        let td = ledger
+            .transfers()
+            .iter()
+            .find(|t| t.tx_hash == tx_hash && t.internal_output_index == internal_idx)
+            .expect("merged transfer still present");
+        let stored_ct = td
+            .source_ciphertext
+            .as_ref()
+            .expect("source_ciphertext set");
+        assert_eq!(stored_ct.x25519, ct.x25519);
+        assert_eq!(stored_ct.ml_kem, ct.ml_kem);
+
+        let stored_handle = td.output_handle.as_ref().expect("output_handle set");
+        let expected_handle = derive_output_handle(&view_secret, &tx_hash, internal_idx);
+        assert_eq!(*stored_handle, expected_handle);
+    }
+
+    #[test]
+    fn populate_engine_handle_fields_skips_unmatched_transfers() {
+        // Two merged transfers; the residue map matches only one. The
+        // unmatched transfer's engine-derived fields stay `None`.
+        let (mut ledger, mut indexes) = empty_state();
+        let matched = make_recovered_output(0x01, 1);
+        let matched_tx = matched.wallet_output().transaction();
+        let matched_idx = matched.wallet_output().index_in_transaction();
+        let unmatched = make_recovered_output(0x02, 2);
+        let unmatched_tx = unmatched.wallet_output().transaction();
+        let unmatched_idx = unmatched.wallet_output().index_in_transaction();
+
+        let result = ScanResult {
+            processed_height_range: 1..2,
+            parent_hash: None,
+            block_hashes: vec![(1, [0x11; 32])],
+            new_transfers: vec![
+                DetectedTransfer {
+                    block_height: 1,
+                    output: matched,
+                },
+                DetectedTransfer {
+                    block_height: 1,
+                    output: unmatched,
+                },
+            ],
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
+
+        let view_secret = [0x77u8; 32];
+        let mut residue = HashMap::new();
+        residue.insert((matched_tx, matched_idx), ciphertext_for_seed(0x01));
+        populate_engine_handle_fields(&mut ledger, &view_secret, &residue);
+
+        let m = ledger
+            .transfers()
+            .iter()
+            .find(|t| t.tx_hash == matched_tx && t.internal_output_index == matched_idx)
+            .expect("matched transfer present");
+        assert!(m.source_ciphertext.is_some());
+        assert!(m.output_handle.is_some());
+
+        let u = ledger
+            .transfers()
+            .iter()
+            .find(|t| t.tx_hash == unmatched_tx && t.internal_output_index == unmatched_idx)
+            .expect("unmatched transfer present");
+        assert!(u.source_ciphertext.is_none());
+        assert!(u.output_handle.is_none());
+    }
+
+    #[test]
+    fn populate_engine_handle_fields_is_idempotent() {
+        // A second invocation against an already-populated transfer
+        // does not overwrite the existing fields.
+        let (mut ledger, mut indexes) = empty_state();
+        let output = make_recovered_output(0x33, 3);
+        let tx_hash = output.wallet_output().transaction();
+        let internal_idx = output.wallet_output().index_in_transaction();
+        let result = ScanResult {
+            processed_height_range: 1..2,
+            parent_hash: None,
+            block_hashes: vec![(1, [0x11; 32])],
+            new_transfers: vec![DetectedTransfer {
+                block_height: 1,
+                output,
+            }],
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
+
+        let view_secret = [0xAAu8; 32];
+        let ct1 = ciphertext_for_seed(0x33);
+        let mut residue = HashMap::new();
+        residue.insert((tx_hash, internal_idx), ct1.clone());
+        populate_engine_handle_fields(&mut ledger, &view_secret, &residue);
+
+        // Second call with a different ciphertext for the same key
+        // must not overwrite — the helper's idempotency contract is
+        // per-field: each `Option` field is set only when `None`.
+        // Both fields populated by call 1 ⇒ both skipped by call 2.
+        let ct2 = ciphertext_for_seed(0xBB);
+        let mut residue2 = HashMap::new();
+        residue2.insert((tx_hash, internal_idx), ct2);
+        populate_engine_handle_fields(&mut ledger, &view_secret, &residue2);
+
+        let td = ledger
+            .transfers()
+            .iter()
+            .find(|t| t.tx_hash == tx_hash && t.internal_output_index == internal_idx)
+            .expect("merged transfer present");
+        let stored_ct = td
+            .source_ciphertext
+            .as_ref()
+            .expect("source_ciphertext set");
+        // Stable on the first ciphertext.
+        assert_eq!(stored_ct.x25519, ct1.x25519);
+    }
+
+    #[test]
+    fn populate_engine_handle_fields_respects_partial_population() {
+        // Per-field idempotency: each `Option` field is populated only
+        // when its current value is `None`. A transfer that already
+        // has `source_ciphertext` set but `output_handle` still `None`
+        // must have only `output_handle` filled in by the post-pass —
+        // and vice versa. This is the tighter contract that the
+        // function-level docs describe ("leaves populated fields
+        // untouched"); without it, a reader who pre-populated one
+        // field would see the other field's write silently clobber
+        // their value when the helper happens to also populate the
+        // first.
+        let (mut ledger, mut indexes) = empty_state();
+        let output_a = make_recovered_output(0x55, 5);
+        let tx_hash_a = output_a.wallet_output().transaction();
+        let internal_idx_a = output_a.wallet_output().index_in_transaction();
+        let output_b = make_recovered_output(0x66, 6);
+        let tx_hash_b = output_b.wallet_output().transaction();
+        let internal_idx_b = output_b.wallet_output().index_in_transaction();
+        let result = ScanResult {
+            processed_height_range: 1..2,
+            parent_hash: None,
+            block_hashes: vec![(1, [0x11; 32])],
+            new_transfers: vec![
+                DetectedTransfer {
+                    block_height: 1,
+                    output: output_a,
+                },
+                DetectedTransfer {
+                    block_height: 1,
+                    output: output_b,
+                },
+            ],
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
+
+        // Pre-populate one field on each transfer with a sentinel
+        // value that the post-pass must NOT overwrite. Use distinct
+        // sentinels per transfer so a misdirected overwrite is
+        // visible regardless of iteration order.
+        let sentinel_ct = ciphertext_for_seed(0xEE);
+        let sentinel_handle = derive_output_handle(&[0xCC; 32], &[0xCC; 32], 0xCC);
+        for td in &mut ledger.transfers {
+            if td.tx_hash == tx_hash_a && td.internal_output_index == internal_idx_a {
+                // Transfer A: source_ciphertext pre-populated, output_handle still None.
+                td.source_ciphertext = Some(sentinel_ct.clone());
+                td.output_handle = None;
+            } else if td.tx_hash == tx_hash_b && td.internal_output_index == internal_idx_b {
+                // Transfer B: output_handle pre-populated, source_ciphertext still None.
+                td.source_ciphertext = None;
+                td.output_handle = Some(sentinel_handle);
+            }
+        }
+
+        let view_secret = [0xAAu8; 32];
+        let real_ct_a = ciphertext_for_seed(0x55);
+        let real_ct_b = ciphertext_for_seed(0x66);
+        let mut residue = HashMap::new();
+        residue.insert((tx_hash_a, internal_idx_a), real_ct_a.clone());
+        residue.insert((tx_hash_b, internal_idx_b), real_ct_b.clone());
+        populate_engine_handle_fields(&mut ledger, &view_secret, &residue);
+
+        let td_a = ledger
+            .transfers()
+            .iter()
+            .find(|t| t.tx_hash == tx_hash_a && t.internal_output_index == internal_idx_a)
+            .expect("transfer A present");
+        // A: source_ciphertext kept (sentinel, not real_ct_a); output_handle filled.
+        let stored_ct_a = td_a
+            .source_ciphertext
+            .as_ref()
+            .expect("source_ciphertext stable");
+        assert_eq!(
+            stored_ct_a.x25519, sentinel_ct.x25519,
+            "pre-populated source_ciphertext must not be overwritten"
+        );
+        let derived_handle_a = derive_output_handle(&view_secret, &tx_hash_a, internal_idx_a);
+        assert_eq!(
+            td_a.output_handle.expect("output_handle filled"),
+            derived_handle_a,
+            "output_handle must be derived for the previously-None field"
+        );
+
+        let td_b = ledger
+            .transfers()
+            .iter()
+            .find(|t| t.tx_hash == tx_hash_b && t.internal_output_index == internal_idx_b)
+            .expect("transfer B present");
+        // B: output_handle kept (sentinel, not derived); source_ciphertext filled.
+        assert_eq!(
+            td_b.output_handle.expect("output_handle stable"),
+            sentinel_handle,
+            "pre-populated output_handle must not be overwritten"
+        );
+        let stored_ct_b = td_b
+            .source_ciphertext
+            .as_ref()
+            .expect("source_ciphertext filled");
+        assert_eq!(
+            stored_ct_b.x25519, real_ct_b.x25519,
+            "source_ciphertext must be filled for the previously-None field"
+        );
+    }
+
+    #[test]
+    fn populate_engine_handle_fields_no_op_on_empty_residue() {
+        let (mut ledger, mut indexes) = empty_state();
+        let output = make_recovered_output(0x44, 4);
+        let tx_hash = output.wallet_output().transaction();
+        let internal_idx = output.wallet_output().index_in_transaction();
+        let result = ScanResult {
+            processed_height_range: 1..2,
+            parent_hash: None,
+            block_hashes: vec![(1, [0x11; 32])],
+            new_transfers: vec![DetectedTransfer {
+                block_height: 1,
+                output,
+            }],
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
+
+        let view_secret = [0u8; 32];
+        let residue: HashMap<([u8; 32], u64), HybridCiphertext> = HashMap::new();
+        populate_engine_handle_fields(&mut ledger, &view_secret, &residue);
+
+        let td = ledger
+            .transfers()
+            .iter()
+            .find(|t| t.tx_hash == tx_hash && t.internal_output_index == internal_idx)
+            .expect("merged transfer present");
+        assert!(td.source_ciphertext.is_none());
+        assert!(td.output_handle.is_none());
     }
 }

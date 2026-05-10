@@ -272,6 +272,125 @@ pub fn construct_output(
     })
 }
 
+/// Re-decapsulate a hybrid X25519 + ML-KEM-768 ciphertext, returning the
+/// 64-byte combined shared secret.
+///
+/// This is the cryptographic re-decap primitive that the engine's
+/// deterministic-handle pathway (per `STAGE_1_PR_3_KEY_ENGINE.md` §7.12 and
+/// `STAGE_1_PR_3_MIGRATION_PLAN.md` §3.2) calls to re-derive output secrets
+/// from a stored [`crate::kem::HybridCiphertext`] plus the wallet's private
+/// view material — without re-running the scan-time ownership confirmations
+/// (Edwards-curve `O ?= ho*G + B + y*T` verification, amount-tag check,
+/// commitment verification, PQC keypair regeneration). Those steps are
+/// scan-time-only and have no purpose on the re-decap path for outputs the
+/// wallet has already determined to be its own.
+///
+/// # Security properties
+///
+/// - **Low-order Montgomery rejection.** `kem_ct_x25519` is treated as
+///   attacker-controlled (it arrived from `tx_extra` on a network
+///   transaction); without the explicit low-order check,
+///   `view_scalar * low_order_point` would leak `view_scalar mod 8`.
+/// - **Constant-time scalar mult.** `curve25519-dalek`'s
+///   `Scalar * MontgomeryPoint` is constant-time by construction.
+/// - **Standardised primitives.** ML-KEM-768 decapsulation is FIPS-203
+///   (`fips203` crate); HKDF combine is HKDF-SHA-512 with the canonical
+///   [`KEM_DOMAIN_SALT`] (the project's pinned domain separator for hybrid
+///   KEM secret combination, defined in [`crate::kem`]).
+///
+/// [`KEM_DOMAIN_SALT`]: crate::kem::KEM_DOMAIN_SALT
+/// - **Output is `Zeroize`-bearing.** [`SharedSecret`] wipes its 64-byte
+///   inner buffer on drop.
+///
+/// # Inputs
+///
+/// - `view_x25519_sk`: the wallet's X25519 view secret (per the project's
+///   view-key derivation, this is the Ed25519 view secret reduced mod ℓ;
+///   the X25519 secret is the same scalar).
+/// - `ml_kem_dk`: the wallet's ML-KEM-768 decapsulation key
+///   (`ML_KEM_768_DK_LEN` bytes; longer/shorter inputs are rejected).
+/// - `kem_ct_x25519`: the on-chain X25519 ephemeral public key (32 bytes;
+///   network-attacker-controlled).
+/// - `kem_ct_ml_kem`: the on-chain ML-KEM-768 ciphertext
+///   (`ML_KEM_768_CT_LEN` bytes; longer/shorter inputs are rejected).
+///
+/// # Errors
+///
+/// Returns [`CryptoError::LowOrderPoint`] if `kem_ct_x25519` is a low-order
+/// Montgomery point.
+/// Returns [`CryptoError::InvalidKeyMaterial`] if `ml_kem_dk` is the wrong
+/// length.
+/// Returns [`CryptoError::DecapsulationFailed`] for malformed
+/// `kem_ct_ml_kem`, malformed decap key bytes, or ML-KEM-768 decap rejection.
+///
+/// # Companion: [`scan_output_recover`]
+///
+/// `scan_output_recover` runs the full scan pipeline (view-tag pre-filter,
+/// re-decap, output-secrets derivation, Edwards-curve verification, amount
+/// decryption, PQC keypair regeneration). Its X25519+ML-KEM+combine
+/// sub-chain is exactly this function's body — internally,
+/// `scan_output_recover` and `recover_combined_ss` share a private
+/// `decap_ml_kem_and_combine` helper in this module so that any future
+/// change to the chain lands in one place.
+pub fn recover_combined_ss(
+    view_x25519_sk: &[u8; 32],
+    ml_kem_dk: &[u8],
+    kem_ct_x25519: &[u8; 32],
+    kem_ct_ml_kem: &[u8],
+) -> Result<SharedSecret, CryptoError> {
+    let view_scalar = Scalar::from_bytes_mod_order(*view_x25519_sk);
+    let eph_mont = MontgomeryPoint(*kem_ct_x25519);
+
+    if crate::montgomery::is_low_order_montgomery(&eph_mont) {
+        return Err(CryptoError::LowOrderPoint);
+    }
+
+    let x25519_raw_ss = view_scalar * eph_mont;
+
+    decap_ml_kem_and_combine(&x25519_raw_ss.0, ml_kem_dk, kem_ct_ml_kem)
+}
+
+/// ML-KEM-768 decapsulation followed by HKDF-SHA-512 combine with a
+/// caller-provided X25519 ECDH output.
+///
+/// Internal helper for the X25519 + ML-KEM + combine chain shared between
+/// [`recover_combined_ss`] and [`scan_output_recover`]. Kept private to
+/// `output.rs` so the chain has a single canonical implementation; public
+/// callers go through [`recover_combined_ss`].
+fn decap_ml_kem_and_combine(
+    x25519_ss: &[u8; 32],
+    ml_kem_dk: &[u8],
+    kem_ct_ml_kem: &[u8],
+) -> Result<SharedSecret, CryptoError> {
+    if ml_kem_dk.len() != ML_KEM_768_DK_LEN {
+        return Err(CryptoError::InvalidKeyMaterial);
+    }
+    if kem_ct_ml_kem.len() != ML_KEM_768_CT_LEN {
+        return Err(CryptoError::DecapsulationFailed(
+            "invalid ML-KEM ciphertext length".into(),
+        ));
+    }
+
+    let dk_bytes: [u8; ML_KEM_768_DK_LEN] = ml_kem_dk
+        .try_into()
+        .map_err(|_| CryptoError::InvalidKeyMaterial)?;
+    let dk = ml_kem_768::DecapsKey::try_from_bytes(dk_bytes)
+        .map_err(|e| CryptoError::DecapsulationFailed(format!("invalid decap key: {e}")))?;
+
+    let ct_bytes: [u8; ML_KEM_768_CT_LEN] = kem_ct_ml_kem
+        .try_into()
+        .map_err(|_| CryptoError::DecapsulationFailed("invalid ciphertext".into()))?;
+    let ct = ml_kem_768::CipherText::try_from_bytes(ct_bytes)
+        .map_err(|e| CryptoError::DecapsulationFailed(format!("invalid ciphertext: {e}")))?;
+
+    let ml_ss = dk
+        .try_decaps(&ct)
+        .map_err(|e| CryptoError::DecapsulationFailed(format!("ML-KEM-768 decaps: {e}")))?;
+    let ml_ss_bytes = Zeroizing::new(ml_ss.into_bytes());
+
+    combine_shared_secrets(x25519_ss, &*ml_ss_bytes)
+}
+
 /// Scan an output to determine ownership and recover secrets.
 ///
 /// Returns `Err` for outputs that don't belong to this key, or for
@@ -499,34 +618,17 @@ pub fn scan_output_recover(
         ));
     }
 
-    // --- Full KEM decapsulation ---
-    if ml_kem_dk.len() != ML_KEM_768_DK_LEN {
-        return Err(CryptoError::InvalidKeyMaterial);
-    }
-    if kem_ct_ml_kem.len() != ML_KEM_768_CT_LEN {
-        return Err(CryptoError::DecapsulationFailed(
-            "invalid ML-KEM ciphertext length".into(),
-        ));
-    }
-
-    let dk_bytes: [u8; ML_KEM_768_DK_LEN] = ml_kem_dk
-        .try_into()
-        .map_err(|_| CryptoError::InvalidKeyMaterial)?;
-    let dk = ml_kem_768::DecapsKey::try_from_bytes(dk_bytes)
-        .map_err(|e| CryptoError::DecapsulationFailed(format!("invalid decap key: {e}")))?;
-
-    let ct_bytes: [u8; ML_KEM_768_CT_LEN] = kem_ct_ml_kem
-        .try_into()
-        .map_err(|_| CryptoError::DecapsulationFailed("invalid ciphertext".into()))?;
-    let ct = ml_kem_768::CipherText::try_from_bytes(ct_bytes)
-        .map_err(|e| CryptoError::DecapsulationFailed(format!("invalid ciphertext: {e}")))?;
-
-    let ml_ss = dk
-        .try_decaps(&ct)
-        .map_err(|e| CryptoError::DecapsulationFailed(format!("ML-KEM-768 decaps: {e}")))?;
-    let ml_ss_bytes = Zeroizing::new(ml_ss.into_bytes());
-
-    let combined_ss: SharedSecret = combine_shared_secrets(&x25519_raw_ss.0, &*ml_ss_bytes)?;
+    // --- Full KEM decapsulation + HKDF combine ---
+    //
+    // Delegated to [`decap_ml_kem_and_combine`] so that this chain has one
+    // canonical implementation shared with [`recover_combined_ss`] (the engine's
+    // re-decap entry point on the deterministic-handle pathway). The inline
+    // X25519 ECDH above is kept (rather than calling `recover_combined_ss`
+    // directly) so that view-tag rejection short-circuits before the more
+    // expensive ML-KEM decap, preserving the scan-time fast-path the legacy
+    // pipeline relied on.
+    let combined_ss: SharedSecret =
+        decap_ml_kem_and_combine(&x25519_raw_ss.0, ml_kem_dk, kem_ct_ml_kem)?;
 
     // --- Output secrets derivation ---
     let secrets: OutputSecrets = derive_output_secrets(&combined_ss.0, output_index);

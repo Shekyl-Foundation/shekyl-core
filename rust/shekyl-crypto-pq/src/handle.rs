@@ -58,6 +58,7 @@
 //! typed wrapper, while typed call sites still get the wrapper's
 //! wipe-on-drop hygiene.
 
+use serde::{Deserialize, Serialize};
 use sha3::digest::core_api::CoreWrapper;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{CShake256, CShake256Core};
@@ -106,7 +107,30 @@ pub const OUTPUT_HANDLE_LEN: usize = 16;
 /// This module's manual `Debug` impl prints a 2-byte truncation to
 /// preserve debuggability without leaking the full correlation
 /// surface; the type does not derive `Display`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// # Wire format
+///
+/// `Serialize` / `Deserialize` (and the `postcard_schema::Schema`
+/// reflection) carry the 16 inner bytes transparently — i.e. the on-disk
+/// shape is exactly `[u8; 16]`, not a struct wrapper around it. This
+/// keeps `OutputHandle` and `[u8; 16]` byte-for-byte interchangeable in
+/// `postcard` (and any other `serde`-driven format). Per
+/// `STAGE_1_PR_3_M3B_PREFLIGHT.md` §2 D3 (disposition α), persisting
+/// types like `shekyl_engine_state::TransferDetails` reference
+/// `OutputHandle` directly rather than a mirror struct.
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    postcard_schema::Schema,
+)]
+#[serde(transparent)]
 pub struct OutputHandle([u8; OUTPUT_HANDLE_LEN]);
 
 impl OutputHandle {

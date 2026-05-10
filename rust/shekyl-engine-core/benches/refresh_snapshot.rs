@@ -77,6 +77,8 @@ fn sample_transfer(seed: u64) -> TransferDetails {
         y: Some(Zeroizing::new([lo.wrapping_add(3); 32])),
         z: Some(Zeroizing::new([lo.wrapping_add(4); 32])),
         k_amount: Some(Zeroizing::new([lo.wrapping_add(5); 32])),
+        source_ciphertext: None,
+        output_handle: None,
         eligible_height: 100 + SPENDABLE_AGE,
         frozen: false,
         fcmp_precomputed_path: None,

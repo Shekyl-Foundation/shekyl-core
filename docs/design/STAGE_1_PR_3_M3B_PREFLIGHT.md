@@ -1,6 +1,21 @@
 # Stage 1 PR 3 — M3b pre-flight investigation
 
-**Status.** Read-only investigation. No code changes proposed yet.
+**Status.** **EXECUTED 2026-05-09.** M3b landed on
+`feat/stage-1-pr3-m3b` as 10 commits cut off `dev` at `647f82d59`.
+The Phase-2 dispositions in §2 / §3 / §5 below were carried
+forward to implementation; the **Landing notes (M3b closed)**
+sub-section in
+[`STAGE_1_PR_3_MIGRATION_PLAN.md`](./STAGE_1_PR_3_MIGRATION_PLAN.md)
+§3.2 records the divergences from the pre-flight estimate and the
+discipline-grounded refinements that surfaced during execution. This
+document is preserved as the audit trail of the Phase-1
+investigation; subsequent maintainers should read the migration
+plan's M3b landing notes for the actual landed state.
+
+---
+
+**Original status (preserved for audit).** Read-only investigation.
+No code changes proposed yet.
 This document surfaces findings, disposes the open design questions
 flagged for M3b, and identifies the remaining open question that
 requires user disposition before Phase 2 begins.

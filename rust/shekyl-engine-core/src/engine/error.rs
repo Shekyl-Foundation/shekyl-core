@@ -449,6 +449,40 @@ pub(crate) enum KeyEngineError {
         "recipient-context subaddress derivation requires per-subaddress hybrid KEM keygen (shekyl_crypto_pq::subaddress::derive_subaddress_kem_keypair, not yet implemented)"
     )]
     RecipientSubaddressKemKeygenNotImplemented,
+
+    /// The deterministic-handle re-decap path (`LocalKeys::derive_source_secrets_bundle`,
+    /// Layer 2 of M3b D1 per `STAGE_1_PR_3_M3B_PREFLIGHT.md` §2)
+    /// failed to recover `combined_ss` from the persisted
+    /// [`shekyl_crypto_pq::kem::HybridCiphertext`] using the wallet's
+    /// view material.
+    ///
+    /// The expected operational case for this variant is **none**: the
+    /// re-decap path is invoked only on outputs the wallet has already
+    /// scanned and persisted as its own, so the ciphertext, view
+    /// secret, and ML-KEM decap key all came from the same wallet's
+    /// own state. A failure here implies storage corruption (the
+    /// `TransferDetails.source_ciphertext` no longer matches the bytes
+    /// originally written), key-engine state corruption (the wallet's
+    /// view material has drifted), or — in the worst case — a
+    /// malicious local actor who tampered with the persisted ledger.
+    /// The variant is **loud, not silent**: surfaces as a typed error
+    /// so the caller can refuse to construct a `TxToSign` against the
+    /// affected output rather than silently fall back to derivation
+    /// from suspect intermediate state.
+    ///
+    /// Carries the inner [`shekyl_crypto_pq::CryptoError`] so the
+    /// caller (and audit logs) can see whether the failure was a
+    /// low-order Montgomery rejection
+    /// ([`shekyl_crypto_pq::CryptoError::LowOrderPoint`]),
+    /// an invalid decap-key length
+    /// ([`shekyl_crypto_pq::CryptoError::InvalidKeyMaterial`]), or
+    /// an ML-KEM-768 decap rejection
+    /// ([`shekyl_crypto_pq::CryptoError::DecapsulationFailed`]).
+    /// All three indicate the same operational class (corrupted /
+    /// tampered persisted state) but the inner detail names which
+    /// step rejected the input.
+    #[error("source ciphertext re-decapsulation failed: {0}")]
+    SourceCiphertextDecapsulationFailed(#[from] shekyl_crypto_pq::CryptoError),
 }
 
 // --- IO --------------------------------------------------------------------

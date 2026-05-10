@@ -4,6 +4,137 @@
 
 ### Added
 
+- **Stage 1 PR 3 — M3b: scanner reroute + bridge source switch**
+  (`feat/stage-1-pr3-m3b`; ten substantive commits + one mechanical
+  rustfmt fix + one docs commit cut off `dev` at `647f82d59` on
+  2026-05-09). Lands the `KeyEngine`-mediated source-secrets
+  derivation path per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3.2 and the pre-flight dispositions in
+  [`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3B_PREFLIGHT.md)
+  §2 / §3 / §5. Property delivery: **partial** — every output the
+  scanner ingests now carries a deterministic `OutputHandle` and the
+  `HybridCiphertext` it was decapsulated from on its
+  `TransferDetails`; the legacy secret-bearing `TransferDetails`
+  fields remain populated transitionally to keep the bridge-impl
+  fallback live until M3d removes them.
+
+  - **Two-layer derivation primitive split (D1).**
+    `shekyl_crypto_pq::output::recover_combined_ss(view_x25519_sk,
+    ml_kem_dk, kem_ct_x25519, kem_ct_ml_kem) -> Result<SharedSecret,
+    CryptoError>` (Layer 1, transform-shaped, in `shekyl-crypto-pq`)
+    extracts the X25519 + ML-KEM-768 + HKDF-SHA-512 re-decap chain
+    from `scan_output_recover`'s prefix; `LocalKeys::derive_source_secrets_bundle(
+    source_ciphertext, output_index, subaddress_idx) ->
+    Result<SourceSecretsBundle, KeyEngineError>` (Layer 2, state-shaped,
+    in `shekyl-engine-core::engine::local_keys`) composes Layer 1's
+    output with the engine-owned `b` (spend secret) and `m_i`
+    (subaddress derivation scalar). Placement per
+    `18-type-placement.mdc`: transform-shaped lives with its
+    function; state-shaped lives with its owner.
+  - **`TransferDetails` schema extension (D3).** Two `Option<…>`
+    fields — `source_ciphertext: Option<HybridCiphertext>` (the
+    on-chain hybrid X25519 + ML-KEM-768 ciphertext the scanner
+    detected) and `output_handle: Option<OutputHandle>` (the
+    deterministic 16-byte handle from cSHAKE256 keyed by the view
+    secret). `Zeroize` impl skips the new non-secret fields per
+    `35-secure-memory.mdc`'s redaction discipline. Both fields land
+    behind an `Option` so the bridge-impl fallback is feature-detected
+    (presence of `source_ciphertext` ↔ primary path; `None` ↔ legacy
+    field path). `LEDGER_BLOCK_VERSION` and
+    `WALLET_LEDGER_FORMAT_VERSION` bumped 2 → 3; both schema
+    snapshots regenerated. The new fields' wire stability is
+    locked by extending the `postcard` round-trip test;
+    `postcard-schema = "0.2"` added as a direct dep on
+    `shekyl-crypto-pq` per `17-dependency-discipline.mdc` (matches
+    the existing `shekyl-engine-state` direct-dep pin).
+  - **`TxInputSigningContext` field swap (D2).** Drops
+    `source_secrets: SourceSecretsBundle` (the by-value secret
+    carrier that contradicted the engine-confined-secrets property)
+    in favor of `source_ciphertext: HybridCiphertext` +
+    `output_index: u64`. The trait-surface input is now the public
+    on-chain ciphertext; the engine derives the secrets internally
+    via `LocalKeys::derive_source_secrets_bundle`. `Debug` impl
+    simplified; redaction tests updated.
+  - **Engine post-pass at the orchestrator layer (Q2 δ disposition).**
+    `Engine::apply_scan_result` becomes a three-step body inside
+    one `LocalLedger` write guard: `collect_detection_residue`
+    (pre-collects a `HashMap<(tx_hash, internal_output_index),
+    HybridCiphertext>` from the `ScanResult`'s new transfers) →
+    `apply_scan_result_to_state` (the existing sync bookkeeping
+    merge, unchanged) → `populate_engine_handle_fields` (walks the
+    freshly-merged `TransferDetails` and binds each to its
+    `source_ciphertext` + deterministic `output_handle` from the
+    residue map). Atomic against external readers — concurrent
+    reads either see pre-merge or post-population, never an
+    intermediate state. Idempotent. The sync helper is async-ready
+    by design: M3b derives the handle directly via
+    `shekyl_crypto_pq::handle::derive_output_handle` (a synchronous
+    pure function that requires only `(view_secret, tx_hash,
+    output_index)`); M3c+ wires `LocalKeys` onto `Engine` and
+    re-routes the helper through `KeyEngine::try_claim_output`,
+    at which point the helper signature becomes `async fn` and
+    `Engine::apply_scan_result` takes the corresponding `.await`.
+    The two-step trajectory is intentional and pinned in the
+    helper's doc-comment; M3b's architectural property (every
+    output gets a deterministic handle) does not require the
+    audit's "engine sole authority on handles" framing to activate,
+    which lands at M3d.
+  - **Scanner residue plumbing.** `RecoveredWalletOutput` extended
+    with four public on-chain residue fields (`source_ciphertext:
+    HybridCiphertext`, `view_tag: u8`, `enc_amount: [u8; 8]`,
+    `amount_tag: u8`, all `#[zeroize(skip)]` per the type's
+    redaction discipline) so the engine post-pass has the structured
+    input it needs. The pre-flight estimated this commit as "~0–10
+    lines, may be no-op," but inspection revealed
+    `RecoveredWalletOutput` was discarding the on-chain residue at
+    construction time. Reordered to land before the engine post-pass
+    commit so each commit leaves the workspace
+    `cargo check`-green; the layering is honest about producer
+    (scanner) and consumer (engine).
+  - **Named failure mode (D6).**
+    `KeyEngineError::SourceCiphertextDecapsulationFailed(#[from]
+    CryptoError)` for re-decap rejection. The variant carries the
+    inner `CryptoError` so audit logs distinguish whether the
+    rejection was at the X25519 layer (`LowOrderPoint`), the
+    ML-KEM-768 layer (`DecapsulationFailed`), or the input-shape
+    layer (`InvalidKeyMaterial`); all three indicate the same
+    operational class (corrupted or tampered persisted state) but
+    name which step rejected the input. The expected operational
+    case for this variant is **none** — re-decap runs only on
+    outputs the wallet itself scanned and persisted; a failure
+    implies storage corruption or malicious local actor.
+  - **Byte-identical-derivation property test (D5).** Two unit
+    tests in `local_keys.rs::tests`: (a) `derive_source_secrets_bundle_byte_identical_against_legacy_chain`
+    asserts field-by-field byte-equality between the new
+    Layer 2 chain (`derive_source_secrets_bundle`) and a hand-rolled
+    bundle from `scan_output_recover`'s `RecoveredOutput` across 24
+    derivations (8 distinct (output_index, tx_hash) pairs × 3
+    subaddress indices — PRIMARY, idx=1, idx=42); (b)
+    `derive_source_secrets_bundle_diverges_across_distinct_seeds`
+    exercises cross-seed isolation. The second test's docstring
+    pins a subtle property: ML-KEM-768 implements implicit
+    rejection per FIPS 203, so a wrong-wallet decap *succeeds* with
+    a junk bundle (the IND-CCA2 oracle defense); the isolation
+    property is "junk bundle differs byte-for-byte," not "function
+    refuses." Located alongside C6's smoke tests in
+    `local_keys.rs::tests` rather than the pre-flight's planned
+    `tests/byte_identical_derivation.rs` integration test, due to
+    the M3a Round 4a `pub(crate)` lock on `LocalKeys`,
+    `SourceSecretsBundle`, and `KeyEngineError`; tracked for
+    re-location in `docs/FOLLOWUPS.md` § V3.2 if the visibility
+    lock relaxes at the wallet-RPC cutover.
+
+  Property-delivery framing: structural — no consensus rule, no
+  wire format on-chain, no FFI layout changes. The `TransferDetails`
+  schema bumps `WALLET_LEDGER_FORMAT_VERSION` from 2 to 3, which is
+  a wallet-state schema change handled by the pre-V3-launch
+  `rm -rf ~/.shekyl` migration path per `15-deletion-and-debt.mdc`
+  (no in-Shekyl format-detection code; pre-genesis users have no
+  real state to preserve). M3c–M3e land the additive test caller
+  (M3c), the legacy-fallback removal (M3d), and the audit closure
+  (M3e).
+
 - **Stage 1 PR 3 — Phase 0: `AllKeysBlob` zeroize-discipline
   realignment** (`chore/allkeysblob-zeroize-realignment`; closes
   [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)

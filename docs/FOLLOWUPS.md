@@ -11,6 +11,96 @@ citing in a review.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **`populate_engine_handle_fields` O(n) → O(k) per scan
+  (trigger: immediate post-M3b interim PR; pre-RC1).** Stage 1
+  PR 3 — M3b's engine post-pass at
+  `rust/shekyl-engine-core/src/engine/merge.rs::populate_engine_handle_fields`
+  scans `ledger.transfers` linearly on every `apply_scan_result`
+  invocation, even though only `result.new_transfers.len()`
+  entries can match the residue map. As the ledger grows, this is
+  O(n) per scan, giving an O(n × B) refresh shape (B batches × N
+  total transfers). Cost today: ~50 ns/lookup × N × B. Negligible
+  at <10k transfers; ~5 s added to refresh at 100k transfers;
+  user-visible at 1M. The fix is to thread insertion indices out
+  of the merge pipeline so the post-pass updates in O(k) where k
+  is the number of new transfers per scan.
+
+  **Why not in M3b.** Surfaced by Copilot review on PR #34. The
+  fix changes the return type of
+  `LedgerIndexes::ingest_block` (`shekyl-engine-state`) and
+  `LedgerIndexesExt::process_scanned_outputs`
+  (`shekyl-scanner`) from `usize` to `Range<usize>`, and the
+  return type of
+  `apply_scan_result_to_state` (`shekyl-engine-core`) from
+  `Result<(), RefreshError>` to
+  `Result<Vec<usize>, RefreshError>`. That's a trait-surface
+  change in `shekyl-scanner::LedgerIndexesExt` plus ~16
+  mechanical test call-site updates. Per `90-commits.mdc`'s
+  scope-per-commit and the M3b PR's stated scope (source-secrets
+  derivation reroute), the trait-surface change is its own
+  reviewable concern.
+
+  **Disposition.** Land as the immediate next PR after M3b
+  merges to `dev` — `perf(engine): merge pipeline returns
+  insertion indices`. Estimate: ~150 net code lines + ~16
+  mechanical test fixture updates. Pre-RC1.
+
+- **`scripts/bench/compare.py`: treat baseline=0 as informational,
+  not fail (trigger: cut chore PR off `dev` immediately; pre-RC1).**
+  The CI bench gate at `scripts/bench/compare.py:218–219` computes
+  `delta_pct = inf` when the rolling baseline records
+  `instructions=0` for an entry but the PR-side capture is
+  non-zero, and `verdict_for("hot_path_bench", inf)` returns
+  `fail`. This contradicts the protocol intent documented in
+  `docs/benchmarks/README.md`: "An entry present in the PR but
+  not the baseline is informational; the first merge to `dev`
+  seeds it into the rolling baseline." The current logic treats
+  baseline-present-with-zero as a real measurement rather than
+  as missing data. Surfaced when M3b's PR #34 hit `+inf%` fail
+  verdicts on `hot_path_bench_ledger_postcard_{serialize,
+  deserialize}/with_setup_{0,1,2}` against a `bench-baseline`
+  branch (refreshed at `647f82d59`) where those six entries have
+  `instructions=0` in `baseline.iai.snapshot` (likely Valgrind
+  timed out during baseline capture for the larger
+  `with_setup_2` (10k transfers) runs, and the snapshot wrote
+  zeros for the entire group).
+
+  **Disposition.** Cut a focused chore PR off `dev` —
+  `chore(bench): treat baseline=0 as informational in compare.py`
+  — extending `compare.py:218–219` to emit `verdict = "info"` (not
+  `"fail"`) when `base_val == 0` and `pr_val > 0`, mirroring the
+  added-in-PR informational path. Estimate: ~5 lines in one
+  Python file, no workspace code changes. Lands before any
+  subsequent PR that hits the bench gate. Pre-RC1.
+
+- **M3b byte-identical-derivation property test re-location
+  (trigger: `KeyEngine` widens from `pub(crate)` to `pub`;
+  pre-RC1).** Stage 1 PR 3 — M3b's byte-identical-derivation
+  property test (`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md`
+  §D5) was specified as an integration test at
+  `rust/shekyl-engine-core/tests/byte_identical_derivation.rs`
+  but landed as two unit tests in
+  `rust/shekyl-engine-core/src/engine/local_keys.rs`'s `mod tests`.
+  The deviation is forced by the M3a Round 4a `pub(crate)` lock
+  on `LocalKeys`, `SourceSecretsBundle`, and `KeyEngineError`:
+  integration tests run as external crates and cannot reach
+  `pub(crate)` items. The property the test pins is identical
+  regardless of placement; the location is purely a visibility
+  artifact.
+
+  **Trigger condition.** When `KeyEngine` widens from
+  `pub(crate)` to `pub` (per `STAGE_1_PR_3_KEY_ENGINE.md` §4.4
+  trait visibility evolution — driven by whichever pre-RC PR
+  needs to reach `KeyEngine` from outside `shekyl-engine-core`,
+  e.g., the `wallet_rpc_server` Rust cutover or any other
+  consumer crate), the property test should be re-located to the
+  pre-flight's planned `tests/byte_identical_derivation.rs`
+  integration-test placement so it exercises the same surface
+  external consumers will exercise. The deviation is recorded
+  inline in the test docstring so a future maintainer
+  cross-referencing the pre-flight finds the tracking link.
+  Pre-RC1.
+
 - **`RecoveredWalletOutput.key_image`: promote to `Option<KeyImage>`
   (target: V3.1).** Today the field is typed `KeyImage` and the test
   helper `RecoveredWalletOutput::new_for_test` produces a zero
