@@ -618,6 +618,168 @@ mod tests {
         (input, amount)
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    // M3c-via-C inline test fixtures
+    //
+    // Helpers used by `engine_derived_bundle_signs_through_tx_builder_end_to_end`
+    // to build a verifier-acceptable single-leaf-chunk FCMP++ tree at
+    // `tree_depth = 1`. Mirrors the construction in
+    // `shekyl-fcmp/src/proof.rs::tests::prove_verify_roundtrip`
+    // field-for-field; that test is the source of truth for the recipe
+    // and any drift here surfaces as a verifier rejection in the M3c
+    // test rather than a silent miscompare.
+    //
+    // Inlined per `STAGE_1_PR_3_M3C_PREFLIGHT.md` §3.1 (R1) — the
+    // shekyl-fcmp/tx-builder test fixtures are crate-private
+    // `#[cfg(test)]` and unreachable from `shekyl-engine-core`'s test
+    // tree; promoting them is out of scope for an additive test caller.
+    // ─────────────────────────────────────────────────────────────────
+
+    /// Build the synthetic single-leaf-chunk Selene tree root for a
+    /// `tree_depth = 1` FCMP++ proof. The tree is the leaf chunk
+    /// itself (no branch layers); the root is `SELENE_HASH_INIT +
+    /// multiexp(generators, [O.x, I.x, C.x, h_pqc] for each leaf)`.
+    ///
+    /// Inputs are the leaf-chunk entries in the same order they appear
+    /// in `SpendInput.leaf_chunk` and `ProveInput.leaf_chunk_outputs`.
+    /// `h_pqc` bytes must be canonical Selene scalar encodings (use
+    /// [`make_synthetic_h_pqc_bytes`]).
+    #[allow(dead_code)] // consumed by M3c-via-C test added in the next commit
+    fn build_synthetic_single_chunk_tree_root(
+        leaves: &[(EdwardsPoint, EdwardsPoint, EdwardsPoint, [u8; 32])],
+    ) -> [u8; 32] {
+        use ciphersuite::{
+            group::{ff::PrimeField, GroupEncoding},
+            Ciphersuite,
+        };
+        use dalek_ff_group::EdwardsPoint as DfgEdwardsPoint;
+        use ec_divisors::DivisorCurve;
+        use helioselene::Selene;
+        use multiexp::multiexp_vartime;
+        use shekyl_fcmp_plus_plus::SELENE_FCMP_GENERATORS;
+        use shekyl_generators::SELENE_HASH_INIT;
+
+        let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
+        let mut terms: Vec<(<Selene as ciphersuite::Ciphersuite>::F, _)> =
+            Vec::with_capacity(leaves.len() * 4);
+
+        let mut g_idx = 0usize;
+        for (o, i, c, h_pqc) in leaves {
+            let o_dfg = DfgEdwardsPoint(*o);
+            let i_dfg = DfgEdwardsPoint(*i);
+            let c_dfg = DfgEdwardsPoint(*c);
+            terms.push((
+                <DfgEdwardsPoint as DivisorCurve>::to_xy(o_dfg)
+                    .expect("output_key is on-curve")
+                    .0,
+                generators[g_idx],
+            ));
+            g_idx += 1;
+            terms.push((
+                <DfgEdwardsPoint as DivisorCurve>::to_xy(i_dfg)
+                    .expect("key_image_gen is on-curve")
+                    .0,
+                generators[g_idx],
+            ));
+            g_idx += 1;
+            terms.push((
+                <DfgEdwardsPoint as DivisorCurve>::to_xy(c_dfg)
+                    .expect("commitment is on-curve")
+                    .0,
+                generators[g_idx],
+            ));
+            g_idx += 1;
+            let h_pqc_field: <Selene as Ciphersuite>::F =
+                Option::from(<Selene as Ciphersuite>::F::from_repr(*h_pqc))
+                    .expect("h_pqc bytes must be canonical Selene scalar");
+            terms.push((h_pqc_field, generators[g_idx]));
+            g_idx += 1;
+        }
+
+        let root_point: <Selene as ciphersuite::Ciphersuite>::G =
+            *SELENE_HASH_INIT + multiexp_vartime(&terms);
+        root_point.to_bytes()
+    }
+
+    /// Generate a canonical Selene scalar's byte representation for
+    /// use as an `h_pqc` leaf field, derived deterministically from
+    /// `seed`. The byte expansion goes through `Field25519::wide_reduce`
+    /// so the result is guaranteed to round-trip through `from_repr`
+    /// regardless of `seed`. The returned bytes do not need to be a
+    /// real `H(pqc_pk)` for the M3c-via-C test — the FCMP++ verifier
+    /// accepts any consistent `h_pqc` value because the proof binds
+    /// `pqc_pk_hashes` as a public input rather than re-deriving it
+    /// from a real PQC public key.
+    ///
+    /// Determinism is intentional: tests should be reproducible, and
+    /// the property M3c pins is invariant under the specific h_pqc
+    /// values chosen.
+    #[allow(dead_code)] // consumed by M3c-via-C test added in the next commit
+    fn make_synthetic_h_pqc_bytes(seed: u64) -> [u8; 32] {
+        use ciphersuite::group::ff::PrimeField;
+        let mut buf = [0u8; 64];
+        buf[..8].copy_from_slice(&seed.to_le_bytes());
+        // Splash the seed across the high half too so adjacent seeds
+        // produce well-separated field elements (avoids accidental
+        // structural correlation when the 9-fixture sweep runs).
+        buf[32..40].copy_from_slice(&seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).to_le_bytes());
+        // `wide_reduce` is `Field25519`'s inherent constructor (not on
+        // the `Field` trait); calling through `<Selene as Ciphersuite>::F`
+        // does not resolve. The Selene scalar field IS `Field25519`.
+        let h_pqc_field = dalek_ff_group::FieldElement::wide_reduce(buf);
+        h_pqc_field.to_repr()
+    }
+
+    /// Build a recipient `OutputInfo` record by constructing a fresh
+    /// output to the wallet's primary address (so the
+    /// `(commitment_mask, amount, enc_amount)` triple is internally
+    /// consistent and the resulting Pedersen commitment is on-curve).
+    /// The recipient identity does not matter for what M3c-via-C pins
+    /// — the test only exercises `tx_builder::sign_transaction`'s
+    /// output-side wiring (commitment construction, BP+ range proof,
+    /// ECDH-encoded amount echo).
+    #[allow(dead_code)] // consumed by M3c-via-C test added in the next commit
+    fn make_recipient_output_info(
+        keys: &LocalKeys,
+        amount: u64,
+        output_index: u64,
+    ) -> shekyl_tx_builder::types::OutputInfo {
+        use shekyl_tx_builder::types::OutputInfo;
+
+        let constructed = construct_output(
+            &TEST_TX_KEY_SECRET,
+            &keys.keys.x25519_pk,
+            &keys.keys.ml_kem_ek,
+            keys.keys.spend_pk.as_canonical_bytes(),
+            amount,
+            output_index,
+        )
+        .expect("construct_output succeeds for synthetic recipient");
+        OutputInfo {
+            dest_key: constructed.output_key,
+            amount,
+            commitment_mask: constructed.z,
+            enc_amount: {
+                let mut enc = [0u8; 9];
+                enc[..8].copy_from_slice(&constructed.enc_amount);
+                enc[8] = constructed.amount_tag;
+                enc
+            },
+        }
+    }
+
+    /// Compute the Ed25519 key image `L = I * x` for the verifier's
+    /// public input. Mirrors `shekyl_crypto_pq::output::compute_output_key_image`
+    /// without going through `OutputClaim` so the test can assemble
+    /// the verifier inputs directly from the engine bundle.
+    #[allow(dead_code)] // consumed by M3c-via-C test added in the next commit
+    fn compute_test_key_image(output_key: [u8; 32], spend_key_x: [u8; 32]) -> [u8; 32] {
+        let i_point = shekyl_generators::biased_hash_to_point(output_key);
+        let x_scalar = Scalar::from_canonical_bytes(spend_key_x)
+            .expect("spend_key_x from bundle is canonical");
+        (i_point * x_scalar).compress().to_bytes()
+    }
+
     #[test]
     fn account_public_address_returns_cached_material() {
         let keys = LocalKeys::from_test_seed(TEST_SEED);

@@ -113,6 +113,34 @@ rand_chacha = "0.3"
 # affect the production crate graph.
 hkdf = "0.12"
 sha2 = "0.10"
+# Stage 1 PR 3 M3c-via-C dev-deps. The
+# `engine_derived_bundle_signs_through_tx_builder_end_to_end` test
+# (in `engine::local_keys::tests`) drives an engine-derived
+# `SourceSecretsBundle` through `tx_builder::sign_transaction`
+# end-to-end, asserting verifier acceptance plus deterministic-
+# component byte-identity against a hand-composed legacy bundle.
+# Per `STAGE_1_PR_3_M3C_PREFLIGHT.md` Option C disposition: the
+# trait method `KeyEngine::sign_transaction` is currently a
+# named-gap stub (`TxToSign.outputs` and `.fcmp_plus_plus_context`
+# are PR-5-pinned forward-declares); the test bypasses the trait
+# surface and calls `tx_builder::sign_transaction` directly. All
+# entries below are existing workspace path-deps (no novel third-
+# party additions); `shekyl-fcmp` is currently `optional = true`
+# in production `[dependencies]` for the multisig feature only,
+# the unconditional dev-dep does not alter the production crate
+# graph.
+shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
+shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
+shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
+shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
+multiexp = "0.4"
+ec-divisors = { path = "../shekyl-oxide/crypto/divisors", features = ["ed25519"] }
+ciphersuite = "0.4"
+helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
+dalek-ff-group = "0.5"
 
 [[bench]]
 name = "multisig_v31"
