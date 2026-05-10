@@ -11,39 +11,127 @@ citing in a review.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **`populate_engine_handle_fields` O(n) → O(k) per scan
-  (trigger: immediate post-M3b interim PR; pre-RC1).** Stage 1
-  PR 3 — M3b's engine post-pass at
-  `rust/shekyl-engine-core/src/engine/merge.rs::populate_engine_handle_fields`
-  scans `ledger.transfers` linearly on every `apply_scan_result`
-  invocation, even though only `result.new_transfers.len()`
-  entries can match the residue map. As the ledger grows, this is
-  O(n) per scan, giving an O(n × B) refresh shape (B batches × N
-  total transfers). Cost today: ~50 ns/lookup × N × B. Negligible
-  at <10k transfers; ~5 s added to refresh at 100k transfers;
-  user-visible at 1M. The fix is to thread insertion indices out
-  of the merge pipeline so the post-pass updates in O(k) where k
-  is the number of new transfers per scan.
+- **P1 (latent): refresh post-pass skipped on async path —
+  `populate_engine_handle_fields` does not run when refresh
+  dispatches through `LedgerEngine::apply_scan_result` (trigger:
+  PR 4 / `RefreshEngine` extraction; **hard precondition: PR 4
+  lands before any binary integrates `RefreshHandle`**;
+  pre-RC1).** `run_refresh_task` in
+  `rust/shekyl-engine-core/src/engine/refresh.rs:1634` calls
+  `g.ledger.apply_scan_result(result).await` (trait dispatch per
+  §5 commit-7 of M3b's pre-flight, which keeps the dispatch
+  generic over `LocalLedger` / `MockLedger` for the §5.2 hybrid
+  retry test). The trait method returns `Result<(), _>`, discarding
+  the inserted-indices `Vec<usize>` produced by
+  `apply_scan_result_to_state`. The engine post-pass
+  (`populate_engine_handle_fields`) lives above the trait per
+  M3b's "engine post-pass at the orchestrator layer" disposition —
+  consumers of `LedgerEngine` other than the engine have no use
+  for the post-pass, so the trait surface stays bookkeeping-only.
+  The two decisions together skip the post-pass on the production
+  async refresh path: newly-merged transfers do not get their
+  `output_handle` / `source_ciphertext` populated.
 
-  **Why not in M3b.** Surfaced by Copilot review on PR #34. The
-  fix changes the return type of
-  `LedgerIndexes::ingest_block` (`shekyl-engine-state`) and
-  `LedgerIndexesExt::process_scanned_outputs`
-  (`shekyl-scanner`) from `usize` to `Range<usize>`, and the
-  return type of
-  `apply_scan_result_to_state` (`shekyl-engine-core`) from
-  `Result<(), RefreshError>` to
-  `Result<Vec<usize>, RefreshError>`. That's a trait-surface
-  change in `shekyl-scanner::LedgerIndexesExt` plus ~16
-  mechanical test call-site updates. Per `90-commits.mdc`'s
-  scope-per-commit and the M3b PR's stated scope (source-secrets
-  derivation reroute), the trait-surface change is its own
-  reviewable concern.
+  **Severity.** P1 *latent*. Correctness-breaking but currently
+  dormant: as of `dev` tip `86626beed`, no Shekyl binary calls
+  `start_refresh`. The gap becomes live the moment any binary
+  integrates `RefreshHandle` and relies on post-merge transfers
+  having their engine-handle fields populated.
 
-  **Disposition.** Land as the immediate next PR after M3b
-  merges to `dev` — `perf(engine): merge pipeline returns
-  insertion indices`. Estimate: ~150 net code lines + ~16
-  mechanical test fixture updates. Pre-RC1.
+  **Disposition.** Defer to PR 4 (`RefreshEngine` extraction). The
+  architecturally clean fix requires settling the producer/consumer
+  pattern (α streaming / β internal batching / γ consumer-driven
+  per the PR 4 design doc seed) — exactly the surface PR 4's
+  Round 1 decides. A surgical fix in the perf interim PR would
+  pre-commit PR 4 to a pattern, inverting the
+  cost-benefit-defer-to-later anti-pattern (per
+  `.cursor/rules/16-architectural-inheritance.mdc`).
+
+  **Hard precondition.** PR 4 must land before any binary
+  integrates `RefreshHandle`. Treating this as a rule-grade
+  precondition (rather than a "we'll get to it") is what makes
+  the deferral discipline-grade per
+  `.cursor/rules/15-deletion-and-debt.mdc`'s "deferred without a
+  named home is the failure mode" framing. A binary that
+  integrates `RefreshHandle` before this entry resolves is itself
+  a rule violation. Recorded against PR 4's design doc seed
+  (`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`) as Round 1
+  required scope.
+
+  **Originating context.** Surfaced during the
+  `perf/merge-insertion-indices` interim PR (commit `b9b0704b7`,
+  which added `.map(|_| ())` to `LocalLedger::apply_scan_result`
+  to preserve the trait signature when the underlying merge body
+  began returning `Vec<usize>`). The `.map(|_| ())` made the
+  silent skip explicit; the explicitness is why it surfaced. See
+  `docs/design/PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md` §9.2
+  for the full trace.
+
+- **P2: wallet-birthday plumbing not wired into producer
+  start-height (trigger: PR 4 / `RefreshEngine` extraction;
+  pre-RC1).** `refresh_from_block_height` and `skip_to_height`
+  exist in the Rust prefs/state layer
+  (`rust/shekyl-engine-prefs/`) but are not threaded into the
+  producer's start-height calculation. A wallet restored from seed
+  with a non-zero birthday scans every block from genesis,
+  ignoring the birthday hint.
+
+  **Severity.** P2 — performance regression for restored-from-seed
+  wallets only. No correctness impact; the scan finds the same
+  outputs, just slower.
+
+  **Disposition.** Defer to PR 4. The producer's start-height is
+  precisely the surface PR 4's α/β/γ Round 1 will reshape. Wiring
+  the birthday through the current producer lands plumbing PR 4's
+  reshape discards. Recorded against PR 4's design doc seed as
+  Round 1 required scope.
+
+  **Originating context.** Surfaced alongside the async-path-skip
+  finding during `perf/merge-insertion-indices` pre-flight; both
+  items were originally bundled as "M3b.1" before being unbundled
+  into per-validation-surface scopes per
+  `.cursor/rules/19-validation-surface-discipline.mdc`. See
+  `docs/design/PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md` §9.3.
+
+- **P3: `apply_scan_result_to_state` allocates `Vec<usize>` even
+  for trait-impl callers that discard it (trigger: PR 4 /
+  `RefreshEngine` extraction; pre-RC1).** PR #37 (perf interim)
+  changed `apply_scan_result_to_state`'s return from `()` to
+  `Vec<usize>` so the engine post-pass can walk inserted indices
+  in O(k). The two trait-impl callers
+  (`LocalLedger::apply_scan_result`,
+  `EngineFixture::apply_scan_result`) discard the Vec via
+  `.map(|_| ())` to preserve the `LedgerEngine::apply_scan_result`
+  trait signature `Result<(), _>`. The discard wastes
+  `Vec::with_capacity(new_transfers.len())` allocation per merge
+  on those paths — at most ~100 entries per typical refresh
+  batch, so ~hundreds of bytes at sub-Hz frequency.
+
+  **Severity.** P3 — measurable but negligible perf cost
+  (~hundreds of bytes per refresh batch). Surfaced by Copilot
+  PR #37 review as a candidate factoring (separate
+  `apply_scan_result_to_state_no_indices` variant or a generic
+  sink parameter).
+
+  **Why not fold into PR #37.** The discard sites are
+  architectural shims awaiting PR 4. PR 4 will resolve the
+  async-path-skip P1 by either (a) routing the post-pass through
+  the trait dispatch (Vec gets used → optimization is dead code),
+  or (b) removing the trait impl's `apply_scan_result` entirely
+  (optimization is irrelevant). Optimizing the shim now is the
+  cost-benefit-defer-to-later anti-pattern's inverse: doing
+  incremental work now that PR 4 reshapes anyway. Per
+  `.cursor/rules/16-architectural-inheritance.mdc`, the fix
+  rides with PR 4's reshape.
+
+  **Disposition.** Defer to PR 4. If PR 4's α/β/γ producer-redesign
+  Round 1 chooses a pattern that retains the discard shape (i.e.,
+  the trait method continues to return `()`), revisit this entry
+  as a separate factoring PR. Otherwise the entry closes when
+  PR 4 lands.
+
+  **Originating context.** Copilot PR #37 review (second pass,
+  2026-05-10), comment ID 3215308856 on `merge.rs:336`.
 
 - **`scripts/bench/compare.py`: treat baseline=0 as informational,
   not fail (trigger: cut chore PR off `dev` immediately; pre-RC1).**

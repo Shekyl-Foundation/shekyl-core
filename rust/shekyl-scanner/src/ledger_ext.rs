@@ -31,6 +31,8 @@
 //! `use shekyl_scanner::{TransferDetailsExt, LedgerBlockExt, LedgerIndexesExt};`
 //! is the canonical import.
 
+use std::ops::Range;
+
 use zeroize::Zeroizing;
 
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes, TransferDetails, SPENDABLE_AGE};
@@ -110,16 +112,24 @@ pub trait LedgerIndexesExt {
     ///
     /// Populates PQC fields (`ho`, `y`, `z`, `k_amount`, `combined_shared_secret`,
     /// `key_image`) from the [`RecoveredWalletOutput`](crate::scan::RecoveredWalletOutput)
-    /// and advances the blockchain view by exactly one entry — even when the block
-    /// contains zero outputs for this wallet. Returns the number of new transfers
-    /// added (duplicates from the burning-bug guard are dropped).
+    /// and advances the blockchain view by exactly one entry — even when
+    /// the block contains zero outputs for this wallet.
+    ///
+    /// Returns the contiguous range of `ledger.transfers` indices into
+    /// which accepted transfers were appended (`start..start + accepted`).
+    /// Burning-bug duplicates dropped under the guard contract narrow
+    /// the range. The range is the natural shape for the engine
+    /// post-pass at `engine::merge::populate_engine_handle_fields` —
+    /// it allows O(k) iteration over freshly appended transfers
+    /// rather than O(n) scan of the full ledger. Propagates the inner
+    /// [`LedgerIndexes::ingest_block`] return verbatim.
     fn process_scanned_outputs(
         &mut self,
         ledger: &mut LedgerBlock,
         block_height: u64,
         block_hash: [u8; 32],
         outputs: Timelocked,
-    ) -> usize;
+    ) -> Range<usize>;
 }
 
 impl LedgerIndexesExt for LedgerIndexes {
@@ -129,7 +139,7 @@ impl LedgerIndexesExt for LedgerIndexes {
         block_height: u64,
         block_hash: [u8; 32],
         outputs: Timelocked,
-    ) -> usize {
+    ) -> Range<usize> {
         let outputs = outputs.into_inner();
         let mut batch = Vec::with_capacity(outputs.len());
 

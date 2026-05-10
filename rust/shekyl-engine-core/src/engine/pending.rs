@@ -598,8 +598,9 @@ mod tests {
     ) {
         let timelocked = Timelocked::from_vec(outputs);
         let block_hash = [u8::try_from(block_height & 0xFF).unwrap(); 32];
-        let added = indexes.process_scanned_outputs(ledger, block_height, block_hash, timelocked);
-        assert!(added > 0 || ledger.transfer_count() == 0);
+        let inserted_range =
+            indexes.process_scanned_outputs(ledger, block_height, block_hash, timelocked);
+        assert!(!inserted_range.is_empty() || ledger.transfer_count() == 0);
         for h in (block_height + 1)..=final_height {
             let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
             let _ =
