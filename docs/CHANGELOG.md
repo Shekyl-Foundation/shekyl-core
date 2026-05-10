@@ -182,6 +182,39 @@
   both-zero-stays-ok, added-in-pr-distinct-from-baseline-zero);
   stdlib-only, runs via `python3 scripts/bench/test_compare.py`.
 
+- **Bench-capture producer guard rejects `instructions=0` rows at
+  source so the anomaly cannot reach `bench-baseline` again.**
+  Paired defense-in-depth with the consumer-side `baseline_zero`
+  bucket (above): the consumer routes around already-corrupted
+  baseline data; the producer prevents new corruption from being
+  written. Implemented in
+  [`scripts/bench/capture_rust_baseline.sh`](../scripts/bench/capture_rust_baseline.sh)
+  inside the JSON-assembly heredoc, post-parse / pre-write: any iai
+  entry with `metrics.instructions == 0` causes the script to
+  exit `2` with a structured error that lists the offending
+  `(crate, bench_target, group, function, run_id)` tuples and
+  points operators at `docs/investigation/2026-05-09-bench-baseline-flake.md`.
+  The canonical `shekyl_rust_v0.json` is **not** written when the
+  guard trips, so the prior good `bench-baseline` content is
+  preserved across both pipeline arms — `update-baseline` (push to
+  `dev`) and `capture-pr` (per-PR baseline). The raw stdout
+  snapshot at `shekyl_rust_v0.iai.snapshot` is still written
+  unconditionally as bisection evidence, and a diagnostic side-file
+  at `shekyl_rust_v0.json.flake.json` carries the parsed envelope
+  plus a `flake` block enumerating the zero entries — investigators
+  can `gh run download`-style fetch it without re-running the
+  harness. Bypass: `SHEKYL_BENCH_ALLOW_ZERO=1` skips the check
+  with a loud `WARNING` line for local debugging of the capture-zero
+  phenomenon itself; CI workflows must not set this. Validated
+  with three smoke-tests against the heredoc body in isolation:
+  mixed-healthy-and-zero rejects with exit 2 and writes only the
+  flake side-file; bypass env var allows write-through with the
+  warning; clean capture flows normally with no flake side-file.
+  The guard's error message frames a workflow rerun as the
+  expected operator response, matching the empirically observed
+  flake rate (the same runner class typically produces a healthy
+  capture on retry).
+
 - **`account_base::generate(...)` no longer hardcodes `FAKECHAIN`;
   the legacy 3-arg overload is deleted entirely and every caller
   spells its network out explicitly.**
