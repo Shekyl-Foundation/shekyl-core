@@ -38,7 +38,7 @@ tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }
 proptest = "1"
 
 # Hardening-pass commit 2 (`docs/MID_REWIRE_HARDENING.md` §3.2):
-# criterion + iai-callgrind harness for the `scan_block_K` path.
+# criterion + gungraun harness for the `scan_block_K` path.
 # Benches exercise `LedgerIndexes::process_scanned_outputs` — the
 # scanner's non-crypto bookkeeping path — over K synthetic owned
 # outputs built via the crate's own `test-utils` constructors,
@@ -50,9 +50,12 @@ proptest = "1"
 # Uses `dev-dependencies` self-dep pattern to enable the `test-utils`
 # feature during bench compilation without leaking it into the crate's
 # default feature set.
+#
+# Migrated 2026-05-09 from `iai-callgrind = "0.16"` per
+# `docs/investigation/2026-05-09-bench-baseline-flake.md` §5.
 shekyl-scanner = { path = ".", features = ["test-utils"] }
 criterion = { version = "0.5", features = ["html_reports"] }
-iai-callgrind = "0.16"
+gungraun = "0.18"
 
 [[bench]]
 name = "scan_block"

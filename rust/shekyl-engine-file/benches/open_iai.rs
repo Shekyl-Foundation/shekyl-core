@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to `benches/open.rs`.
+//! gungraun companion to `benches/open.rs`.
 //!
 //! Runs a cold `WalletFile::open` under Valgrind's Callgrind
 //! with the KAT Argon2 profile (`m_log2 = 0x08` = 256 KiB, t=1, p=1).
@@ -16,7 +16,7 @@
 
 use std::path::PathBuf;
 
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use std::hint::black_box;
 use tempfile::TempDir;
 

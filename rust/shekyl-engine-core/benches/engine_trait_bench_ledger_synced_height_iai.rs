@@ -92,7 +92,7 @@
 
 use std::hint::black_box;
 
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use tempfile::TempDir;
 
 use shekyl_engine_core::{Engine, SoloSigner};

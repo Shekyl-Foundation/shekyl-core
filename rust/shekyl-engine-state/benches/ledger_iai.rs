@@ -3,20 +3,20 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to `benches/ledger.rs`.
+//! gungraun companion to `benches/ledger.rs`.
 //!
 //! Same workload (build a `WalletLedger` with N synthetic transfers,
 //! round-trip through postcard) measured via Valgrind's Callgrind for
 //! deterministic instruction-count metrics. This is the Tier-1 metric
 //! the CI gate in `docs/MID_REWIRE_HARDENING.md` §3.3 will enforce.
 //!
-//! Requires `cargo install iai-callgrind-runner` and a working Valgrind
+//! Requires `cargo install gungraun-runner` and a working Valgrind
 //! install. The criterion sibling bench (`ledger.rs`) is the
 //! wall-clock story; this file is the "same machine, two runs,
 //! agree to the instruction" story.
 
 use curve25519_dalek::Scalar;
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use std::hint::black_box;
 
 use shekyl_engine_state::{

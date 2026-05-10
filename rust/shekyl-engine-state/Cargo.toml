@@ -42,12 +42,16 @@ proptest = "1"
 
 # Hardening-pass commit 2 (`docs/MID_REWIRE_HARDENING.md` §3.2): criterion for
 # wall-clock metrics on the two engine-state hot paths (`ledger`, `balance`),
-# and iai-callgrind for deterministic instruction-count metrics mirroring the
+# and gungraun for deterministic instruction-count metrics mirroring the
 # same hot paths (suffix `_iai`). The criterion harness runs on any host;
-# iai-callgrind requires Valgrind plus `cargo install iai-callgrind-runner`
-# and is the metric the §3.3 CI gate enforces against.
+# gungraun requires Valgrind plus `cargo install gungraun-runner` and is
+# the metric the §3.3 CI gate enforces against. Migrated 2026-05-09 from
+# `iai-callgrind = "0.16"` per
+# `docs/investigation/2026-05-09-bench-baseline-flake.md` §5; bench-target
+# files retain the `_iai` suffix as a stable identifier even though the
+# underlying crate has renamed.
 criterion = { version = "0.5", features = ["html_reports"] }
-iai-callgrind = "0.16"
+gungraun = "0.18"
 
 # Used only by `benches/balance.rs` — the canonical `BalanceSummary::compute`
 # lives in the scanner crate; the bench lives in `shekyl-engine-state` because

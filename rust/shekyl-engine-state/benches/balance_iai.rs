@@ -3,14 +3,14 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! iai-callgrind companion to `benches/balance.rs`.
+//! gungraun companion to `benches/balance.rs`.
 //!
 //! Same workload (build N synthetic `TransferDetails`, compute
 //! `BalanceSummary`) measured via Valgrind's Callgrind for
 //! deterministic instruction-count metrics. Tier-1 CI gate input.
 
 use curve25519_dalek::Scalar;
-use iai_callgrind::{library_benchmark, library_benchmark_group, main};
+use gungraun::{library_benchmark, library_benchmark_group, main};
 use std::hint::black_box;
 
 use shekyl_engine_state::{transfer::SPENDABLE_AGE, TransferDetails};
