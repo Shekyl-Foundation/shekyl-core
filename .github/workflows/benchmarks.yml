@@ -9,7 +9,7 @@
 # Two triggers, three jobs:
 #
 #   pull_request → dev
-#     - capture-pr:       runs the Rust iai-callgrind harness on the PR
+#     - capture-pr:       runs the Rust gungraun harness on the PR
 #                         head, uploads `shekyl_rust_v0.json` as an
 #                         artifact.
 #     - compare:          fetches `bench-baseline/baseline.json`, runs
@@ -34,13 +34,17 @@
 #                         it does not yet exist. Never merges into
 #                         `dev` or `main`.
 #
-# Implementation scope: **Rust + iai-callgrind only** (Tier 1).
+# Implementation scope: **Rust + gungraun only** (Tier 1).
 # C++ Google Benchmark + Rust criterion wall-clock are Tier-2 and
 # deferred per `docs/MID_REWIRE_HARDENING.md` §3.3 implementation
 # notes / §6.1 upgrade path. Criterion numbers are still captured
 # into the same envelope (by `scripts/bench/capture_rust_baseline.sh`)
 # and rendered as informational rows in the PR comment, but the gate
-# only trips on iai `instructions`.
+# only trips on gungraun `instructions`. The bench-target file
+# names retain the `_iai` suffix as a stable identifier (the suffix
+# was originally derived from the iai-callgrind crate name, which
+# was forked to gungraun from 0.17.0 onward; see
+# `docs/investigation/2026-05-09-bench-baseline-flake.md` §5).
 #
 # Mid-rewire warning window (2k.c): when the sentinel file
 # `docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active` is present, the
@@ -135,13 +139,15 @@ jobs:
           key: bench-rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: bench-rust-${{ runner.os }}-
 
-      - name: install iai-callgrind-runner
+      - name: install gungraun-runner
         run: |
           # Pin to the lib-side version declared in the bench crates'
-          # Cargo.toml (0.16.x today); SemVer-compatible patch drift
-          # is fine, but we do not want a surprise 0.17 slipping in
-          # and breaking the handshake protocol.
-          cargo install iai-callgrind-runner --version '^0.16' --locked
+          # Cargo.toml (0.18.x today); SemVer-compatible patch drift
+          # is fine, but we do not want a surprise 0.19 slipping in
+          # and breaking the handshake protocol. Migrated 2026-05-09
+          # from `iai-callgrind-runner ^0.16` per
+          # `docs/investigation/2026-05-09-bench-baseline-flake.md` §5.
+          cargo install gungraun-runner --version '^0.18' --locked
 
       - name: capture baseline
         run: ./scripts/bench/capture_rust_baseline.sh
@@ -353,7 +359,7 @@ jobs:
           # Build the bench binary as an ordinary `--release` binary
           # (not under valgrind) so samply can sample it. The bench
           # harness defines `#[library_benchmark]` entry points; the
-          # resulting binary, when run without the iai-callgrind
+          # resulting binary, when run without the gungraun
           # protocol env, exits after a trivial handshake. That's
           # enough for samply to attach; for deeper profiles we
           # invoke it with cargo criterion instead.
@@ -406,8 +412,8 @@ jobs:
           key: bench-rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: bench-rust-${{ runner.os }}-
 
-      - name: install iai-callgrind-runner
-        run: cargo install iai-callgrind-runner --version '^0.16' --locked
+      - name: install gungraun-runner
+        run: cargo install gungraun-runner --version '^0.18' --locked
 
       - name: capture baseline
         run: ./scripts/bench/capture_rust_baseline.sh
@@ -436,8 +442,13 @@ jobs:
           **Tip file:**
           - \`baseline.json\` — \`shekyl_rust_v0\`-schema envelope
             captured on a GitHub-hosted \`ubuntu-latest\` runner.
-          - \`baseline.iai.snapshot\` — raw iai-callgrind stdout
-            corresponding to the same capture.
+          - \`baseline.iai.snapshot\` — raw gungraun stdout
+            corresponding to the same capture. (The \`.iai\`
+            suffix is retained as a stable filename even though
+            the underlying crate has been renamed from
+            iai-callgrind to gungraun; the snapshot is a
+            human-readable text artifact and the parser reads
+            both formats unchanged.)
 
           Current source commit: \`${CAPTURE_SOURCE_SHA}\`.
           MD

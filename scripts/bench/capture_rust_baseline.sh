@@ -9,7 +9,13 @@
 #
 # Outputs (all overwritten atomically at the end):
 #   docs/benchmarks/shekyl_rust_v0.json           structured envelope
-#   docs/benchmarks/shekyl_rust_v0.iai.snapshot   raw iai-callgrind stdout
+#   docs/benchmarks/shekyl_rust_v0.iai.snapshot   raw gungraun stdout
+#
+# (The `.iai.snapshot` filename is retained as a stable identifier
+# even though the underlying crate has been renamed from
+# iai-callgrind to gungraun. The snapshot is plain text with the
+# same line shape, and downstream parsers/consumers read both formats
+# unchanged.)
 #
 # This script is run by humans, not CI. The CI workflow (commit 3.3)
 # runs a similar capture path optimized for per-PR comparison; this
@@ -19,9 +25,9 @@
 # Requires:
 #   - rustup-managed toolchain (see rust-toolchain.toml)
 #   - valgrind (>= 3.22 recommended) on PATH
-#   - iai-callgrind-runner on PATH (cargo install iai-callgrind-runner)
+#   - gungraun-runner on PATH (cargo install gungraun-runner)
 #   - python3 (for JSON assembly; jq-only would be painful given the
-#     iai-callgrind stdout parse)
+#     gungraun stdout parse)
 
 set -euo pipefail
 
@@ -47,10 +53,10 @@ need() {
 }
 need cargo
 need valgrind
-need iai-callgrind-runner
+need gungraun-runner
 need python3
 
-# ---- benches: crate : criterion-target : iai-callgrind-target [: features] -
+# ---- benches: crate : criterion-target : gungraun-target [: features] ------
 #
 # Row format is `:`-delimited:
 #
@@ -85,7 +91,7 @@ BENCHES=(
 )
 
 # Clean criterion output so the envelope reflects this run only.
-# iai-callgrind output is regenerated on every run; no cleanup needed.
+# gungraun output is regenerated on every run; no cleanup needed.
 rm -rf "${RUST_ROOT}/target/criterion"
 
 # ---- criterion runs (wall-clock, Tier-2) -----------------------------------
@@ -104,7 +110,7 @@ for row in "${BENCHES[@]}"; do
   )
 done
 
-# ---- iai-callgrind runs (instruction counts, Tier-1) -----------------------
+# ---- gungraun runs (instruction counts, Tier-1) ----------------------------
 
 IAI_STDOUT_TMP="$(mktemp)"
 trap 'rm -f "${IAI_STDOUT_TMP}"' EXIT
@@ -116,14 +122,19 @@ for row in "${BENCHES[@]}"; do
     FEATURE_ARGS=(--features "${FEATURES}")
   fi
   echo
-  echo "[capture_rust_baseline] iai       : ${CRATE}::${IAI_BENCH}${FEATURES:+ (features=${FEATURES})}"
+  echo "[capture_rust_baseline] gungraun  : ${CRATE}::${IAI_BENCH}${FEATURES:+ (features=${FEATURES})}"
   {
     printf '\n==== %s::%s ====\n' "${CRATE}" "${IAI_BENCH}"
     (
       cd "${RUST_ROOT}"
-      # iai-callgrind colors its output. Disabling via env keeps the
-      # snapshot and the parser input plain-text.
+      # gungraun colors its output. Disabling via env keeps the
+      # snapshot and the parser input plain-text. The
+      # `IAI_CALLGRIND_COLOR` env var name is preserved by gungraun
+      # for backward compatibility with iai-callgrind 0.16.x scripts;
+      # `GUNGRAUN_COLOR` is the modern alias and we set both so that
+      # neither a stale runner nor a fresh runner colors its output.
       IAI_CALLGRIND_COLOR=never \
+      GUNGRAUN_COLOR=never \
         cargo bench -p "${CRATE}" "${FEATURE_ARGS[@]}" --bench "${IAI_BENCH}"
     )
   } | tee -a "${IAI_STDOUT_TMP}"
@@ -138,19 +149,19 @@ CPU_MODEL="$(awk -F': ' '/^model name/ {print $2; exit}' /proc/cpuinfo 2>/dev/nu
 RUSTC_VER="$(rustc --version 2>/dev/null || echo 'unknown')"
 CARGO_VER="$(cargo --version 2>/dev/null || echo 'unknown')"
 VALGRIND_VER="$(valgrind --version 2>/dev/null || echo 'unknown')"
-# `iai-callgrind-runner --version` exits 1 when the lib-side version is
-# not embedded as a protocol handshake (see iai-callgrind CLI entry), so
+# `gungraun-runner --version` exits 1 when the lib-side version is
+# not embedded as a protocol handshake (see gungraun CLI entry), so
 # we use `cargo install --list` as the authoritative source for the
 # installed runner version. Fall back to the runner's own error line
 # (which does spell out its version) and finally to "unknown".
-IAI_RUNNER_VER="$(cargo install --list 2>/dev/null \
-    | awk '/^iai-callgrind-runner / {sub(/:$/, "", $2); print $2; exit}')"
-if [[ -z "${IAI_RUNNER_VER}" ]]; then
-    IAI_RUNNER_VER="$(iai-callgrind-runner --version 2>&1 \
-        | sed -n 's/.*iai-callgrind-runner (\([^)]*\)).*/\1/p' \
+GUNGRAUN_RUNNER_VER="$(cargo install --list 2>/dev/null \
+    | awk '/^gungraun-runner / {sub(/:$/, "", $2); print $2; exit}')"
+if [[ -z "${GUNGRAUN_RUNNER_VER}" ]]; then
+    GUNGRAUN_RUNNER_VER="$(gungraun-runner --version 2>&1 \
+        | sed -n 's/.*gungraun-runner (\([^)]*\)).*/\1/p' \
         | head -n1)"
 fi
-IAI_RUNNER_VER="${IAI_RUNNER_VER:-unknown}"
+GUNGRAUN_RUNNER_VER="${GUNGRAUN_RUNNER_VER:-unknown}"
 
 # Commit the raw iai snapshot before JSON assembly so a downstream
 # failure still leaves a useful text artifact on disk.
@@ -163,7 +174,7 @@ echo "[capture_rust_baseline] wrote ${OUT_IAI_SNAP}"
 
 export RUST_ROOT IAI_STDOUT_TMP OUT_JSON \
   GIT_REV GIT_DIRTY KERNEL CPU_MODEL \
-  RUSTC_VER CARGO_VER VALGRIND_VER IAI_RUNNER_VER
+  RUSTC_VER CARGO_VER VALGRIND_VER GUNGRAUN_RUNNER_VER
 
 python3 - <<'PY'
 import json
@@ -212,7 +223,7 @@ if criterion_root.exists():
         }
         criterion_entries.append(entry)
 
-# ── 2. Parse iai-callgrind stdout ─────────────────────────────────────────
+# ── 2. Parse gungraun stdout ──────────────────────────────────────────────
 #
 # Sections are separated by our own `==== <crate>::<bench> ====` markers
 # so we know which crate owns each iai entry. Within a section:
@@ -226,8 +237,9 @@ if criterion_root.exists():
 #     Estimated Cycles:<n>|...
 
 iai_text = iai_stdout_path.read_text(errors="replace")
-# Defensive ANSI strip: even with IAI_CALLGRIND_COLOR=never, nothing on
-# PATH should be coloring; this keeps the parser robust.
+# Defensive ANSI strip: even with IAI_CALLGRIND_COLOR=never +
+# GUNGRAUN_COLOR=never, nothing on PATH should be coloring; this
+# keeps the parser robust.
 iai_text = re.sub(r"\x1b\[[0-9;]*m", "", iai_text)
 
 section_marker = re.compile(
@@ -284,6 +296,7 @@ for i in range(len(section_starts) - 1):
 
 # ── 3. Envelope ───────────────────────────────────────────────────────────
 
+runner_ver = os.environ["GUNGRAUN_RUNNER_VER"]
 envelope = {
     "schema_version": "shekyl_rust_v0",
     "captured_on": {
@@ -294,9 +307,22 @@ envelope = {
         "rustc_version": os.environ["RUSTC_VER"],
         "cargo_version": os.environ["CARGO_VER"],
         "valgrind_version": os.environ["VALGRIND_VER"],
-        "iai_callgrind_runner_version": os.environ["IAI_RUNNER_VER"],
+        # Both keys carry the same value during the gungraun
+        # transition. The `iai_callgrind_runner_version` alias is
+        # kept for one release cycle so any external consumer of
+        # `bench-baseline/baseline.json` that still keys on the
+        # legacy field doesn't break silently. Drop the alias once
+        # `chore/investigate-bench-baseline-flake-2026-05-09` has
+        # landed and bench-baseline has been regenerated under
+        # gungraun. Tracked in `docs/FOLLOWUPS.md`.
+        "iai_callgrind_runner_version": runner_ver,
+        "gungraun_runner_version": runner_ver,
     },
     "criterion": criterion_entries,
+    # Section name kept as `iai_callgrind` for one release cycle for
+    # the same reason as the metadata-field alias above. The data
+    # shape is unchanged; only the producer crate renamed. Tracked
+    # in `docs/FOLLOWUPS.md`.
     "iai_callgrind": iai_entries,
 }
 
