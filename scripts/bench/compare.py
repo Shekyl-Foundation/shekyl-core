@@ -194,6 +194,12 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
     unrouted: list[str] = []
     missing_in_pr: list[str] = []
     added_in_pr: list[str] = []
+    # `baseline_zero` carries `{full_id, class, pr}` (not just full_id)
+    # so the renderer can surface the PR-side measurement alongside
+    # the anomaly notice. The other buckets above are
+    # `list[str]`-shaped because the missing side has no value to
+    # carry; here the PR side has a real number.
+    baseline_zero: list[dict[str, Any]] = []
 
     for full_id in sorted(set(base_iai) | set(pr_iai)):
         b = base_iai.get(full_id)
@@ -212,11 +218,42 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
 
         base_val = b["metrics"][GATE_METRIC]
         pr_val = p["metrics"][GATE_METRIC]
-        # 0-instruction benches (theoretical; we have none) would
-        # divide by zero; guard it so the comparator cannot crash on
-        # a future schema where an empty-input bench lands.
+        # `baseline = 0` while `pr > 0` is data we cannot meaningfully
+        # gate on. The bench-baseline branch's `baseline.iai.snapshot`
+        # has been observed (2026-05-09 refresh from `647f82d5`)
+        # carrying `instructions = 0` for benches that the prior nine
+        # baselines measured at ~4.4M / 44M / 444M instructions, with
+        # no causal code change between snapshots and iai-callgrind's
+        # own run summary reporting `6 without regressions; 0
+        # regressed; 6 benchmarks finished`. The capture itself ran
+        # to completion; what produced zero is unknown (runner-image
+        # drift, iai-callgrind-runner version skew, build-flag drift,
+        # or a transient anomaly in the measurement layer are all
+        # candidates). The investigation branch is
+        # `chore/investigate-bench-baseline-flake-2026-05-09`.
+        #
+        # Until the root cause is understood, the comparator routes
+        # the `(base = 0, pr > 0)` case into a distinct
+        # `baseline_zero` bucket — informational, not gating, and
+        # rendered by `post_comment.py` under its own labeled section
+        # so the anomaly surfaces to reviewers rather than being
+        # silently masked under the "new in PR" label. The post-merge
+        # `update-baseline` job re-captures from the next push to
+        # `dev`; if the next refresh produces real numbers, the
+        # anomaly was a transient flake and self-heals; if zeros
+        # persist, the investigation has a fresh signal to bisect.
+        #
+        # The `(base = 0, pr = 0)` case is preserved as a 0% delta
+        # `ok` — both sides report nothing-meaningful, which is
+        # informationally equivalent to a no-op and matches prior
+        # behavior.
+        if base_val == 0 and pr_val != 0:
+            baseline_zero.append(
+                {"full_id": full_id, "class": cls, "pr": pr_val}
+            )
+            continue
         if base_val == 0:
-            delta_pct = 0.0 if pr_val == 0 else float("inf")
+            delta_pct = 0.0
         else:
             delta_pct = (pr_val - base_val) / base_val
 
@@ -281,6 +318,7 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
         "unrouted": unrouted,
         "missing_in_pr": missing_in_pr,
         "added_in_pr": added_in_pr,
+        "baseline_zero": baseline_zero,
     }
     counts["has_fail"] = counts["fail"] > 0 or bool(missing_in_pr)
     counts["has_warn"] = counts["warn"] > 0
@@ -361,7 +399,12 @@ def main() -> int:
             if s["missing_in_pr"]
             else ""
         )
-        + (f", {len(s['added_in_pr'])} added in PR" if s["added_in_pr"] else ""),
+        + (f", {len(s['added_in_pr'])} added in PR" if s["added_in_pr"] else "")
+        + (
+            f", {len(s['baseline_zero'])} baseline-zero anomaly"
+            if s["baseline_zero"]
+            else ""
+        ),
         file=sys.stderr,
     )
 

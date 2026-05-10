@@ -61,6 +61,7 @@ def _fmt_verdict_badge(verdict: str) -> str:
         "info": "info",
         "added": "added",
         "missing": "**missing**",
+        "baseline_zero": "_baseline=0_",
     }.get(verdict, verdict)
 
 
@@ -108,6 +109,19 @@ def render(report: dict[str, Any], profile_artifact_url: str | None) -> str:
         lines.append(
             f"- **New in PR (informational):** "
             f"{len(summary['added_in_pr'])} entries — see table."
+        )
+    if summary.get("baseline_zero"):
+        lines.append(
+            f"- **Baseline anomaly (informational, not gated):** "
+            f"{len(summary['baseline_zero'])} entries had "
+            f"`instructions=0` on the `bench-baseline` branch while "
+            f"the PR-side capture recorded real numbers. Cause "
+            f"unknown (under investigation on "
+            f"`chore/investigate-bench-baseline-flake-2026-05-09`); "
+            f"the post-merge `update-baseline` job re-captures from "
+            f"the next push to `dev` and the next refresh either "
+            f"clears the anomaly or persists it for the investigation "
+            f"to bisect against. See table."
         )
     if summary["unrouted"]:
         lines.append(
@@ -162,6 +176,15 @@ def render(report: dict[str, Any], profile_artifact_url: str | None) -> str:
         lines.append(
             f"| {_fmt_verdict_badge('added')} | `{fid}` | "
             f"(new) | — | — | — |"
+        )
+    for entry in summary.get("baseline_zero", []):
+        lines.append(
+            f"| {_fmt_verdict_badge('baseline_zero')} "
+            f"| `{entry['full_id']}` "
+            f"| {entry['class']} "
+            f"| 0 "
+            f"| {entry['pr']:,} "
+            f"| (no baseline) |"
         )
 
     lines.append("")
