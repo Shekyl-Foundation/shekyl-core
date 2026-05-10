@@ -93,9 +93,18 @@ def render(report: dict[str, Any], profile_artifact_url: str | None) -> str:
     lines.append(MARKER)
     lines.append(f"## shekyl benchmarks — `{status_icon}`")
     lines.append("")
+    # `gated_total` is the explicit name for "entries that produced a
+    # gate verdict" (= ok + warn + fail). Falls back to `total` for
+    # back-compat with older `compare.py` outputs that pre-date the
+    # `gated_total` field. The "gated entries" label disambiguates
+    # against `baseline_zero` entries — those are compared but routed
+    # to a non-gating bucket below — so the count's relationship to
+    # the ok/warn/fail breakdown is unambiguous regardless of whether
+    # `baseline_zero` is empty.
+    gated_total = summary.get("gated_total", summary["total"])
     lines.append(
         f"- **iai-callgrind (gated, metric: `instructions`):** "
-        f"{summary['total']} entries — "
+        f"{gated_total} gated entries — "
         f"{summary['ok']} ok / {summary['warn']} warn / "
         f"{summary['fail']} fail"
     )

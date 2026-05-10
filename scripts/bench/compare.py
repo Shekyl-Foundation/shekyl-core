@@ -28,12 +28,29 @@
 #       "criterion_entries": [...],
 #       "summary": {
 #         "total": 15,
+#         "gated_total": 15,
 #         "ok": 15, "warn": 0, "fail": 0,
 #         "has_fail": false,
 #         "has_warn": false,
-#         "unrouted": []
+#         "unrouted": [],
+#         "baseline_zero": []
 #       }
 #     }
+#
+# `total` and `gated_total` semantics:
+#   - `gated_total` is the explicit name: number of iai entries that
+#     produced a gate verdict (ok + warn + fail). This is what the
+#     headline phrase "X gated entries" in `post_comment.py` reflects.
+#   - `total` retains the same numeric value as `gated_total` for
+#     back-compat with consumers written before `baseline_zero`
+#     existed. The intent is "entries that fed the gate," not "gross
+#     entries compared on both sides." When `baseline_zero` is
+#     non-empty, gross-entries-compared = `gated_total +
+#     len(baseline_zero)`; consumers needing that figure should
+#     compute it explicitly rather than reading it from `total`.
+#   - Both fields are kept in sync. Future schema evolution may
+#     deprecate `total` in favor of `gated_total` once consumers
+#     migrate; the deprecation is a v2 concern, not a v1 amendment.
 #
 # Exit code:
 #   0 — no fails. warn entries are reported but do not exit nonzero.
@@ -310,8 +327,16 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
+    # `gated_total` is the explicit name for "entries that produced a
+    # gate verdict." `total` keeps the same value for back-compat per
+    # the schema-evolution policy above; new renderers / consumers
+    # should prefer `gated_total`. When `baseline_zero` is non-empty,
+    # gross-entries-compared = `gated_total + len(baseline_zero)`;
+    # consumers needing that figure compute it explicitly.
+    gated_total = len(iai_entries)
     counts = {
-        "total": len(iai_entries),
+        "total": gated_total,
+        "gated_total": gated_total,
         "ok": sum(1 for e in iai_entries if e["verdict"] == "ok"),
         "warn": sum(1 for e in iai_entries if e["verdict"] == "warn"),
         "fail": sum(1 for e in iai_entries if e["verdict"] == "fail"),
@@ -388,10 +413,12 @@ def main() -> int:
             f.write(out_text + "\n")
 
     # Concise stderr summary so humans tailing CI logs get the TL;DR
-    # without having to parse the JSON.
+    # without having to parse the JSON. "gated entries" is the
+    # explicit label so the count's relationship to ok/warn/fail is
+    # unambiguous when `baseline_zero` is non-empty.
     s = report["summary"]
     print(
-        f"[compare] {s['total']} iai entries: "
+        f"[compare] {s['gated_total']} gated iai entries: "
         f"{s['ok']} ok, {s['warn']} warn, {s['fail']} fail"
         + (f", {len(s['unrouted'])} unrouted" if s["unrouted"] else "")
         + (

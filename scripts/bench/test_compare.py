@@ -201,6 +201,17 @@ class CompareTest(unittest.TestCase):
         self.assertEqual(len(report["entries"]), 1)
         self.assertEqual(report["entries"][0]["verdict"], "ok")
 
+        # `total` and `gated_total` reflect "entries that produced a
+        # gate verdict" (= ok + warn + fail), NOT "gross entries
+        # compared." When `baseline_zero` is non-empty, this means
+        # `total < len(baseline) entries` — that's the intended
+        # semantics and the headline phrase "X gated entries" in
+        # `post_comment.py` reflects it. Pin the relationship so a
+        # future renderer change can't silently confuse the two.
+        self.assertEqual(s["total"], 1)
+        self.assertEqual(s["gated_total"], 1)
+        self.assertEqual(s["gated_total"], s["ok"] + s["warn"] + s["fail"])
+
     def test_real_regression_still_fails(self) -> None:
         # Regression guard: the baseline-anomaly accommodation must
         # not silence real regressions. A hot_path entry with valid
