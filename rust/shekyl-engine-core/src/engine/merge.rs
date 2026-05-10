@@ -1366,26 +1366,28 @@ mod tests {
     /// §5.3): the post-pass walks ONLY the inserted indices, not
     /// the full ledger.
     ///
-    /// The test pins iteration domain by constructing a residue
-    /// map whose keys deliberately match BOTH the new transfer
-    /// AND the 100 prior transfers (the priors all share
-    /// `(tx_hash=[0xA0;32], internal_output_index=0)` per
-    /// `make_recovered_output`'s constructor shape). Under an
-    /// O(n) implementation, the helper would visit every transfer
-    /// and the residue lookup would succeed for the priors,
-    /// populating their `source_ciphertext` and `output_handle`.
-    /// Under the O(k) implementation, the helper visits only
-    /// `inserted` (which is `[100]`), so the prior transfers stay
-    /// untouched regardless of whether the residue would have
-    /// matched them.
+    /// The test pins iteration domain by reading the prior
+    /// transfers' `(tx_hash, internal_output_index)` keys from
+    /// the ledger after the first merge, then building a residue
+    /// map that matches BOTH every prior AND the new transfer.
+    /// Under an O(n) implementation, the helper would visit
+    /// every transfer and the residue lookup would succeed for
+    /// every prior, populating their `source_ciphertext` and
+    /// `output_handle`. Under the O(k) implementation, the
+    /// helper visits only `inserted` (which is `[100]`), so the
+    /// prior transfers stay untouched regardless of whether the
+    /// residue would have matched them.
     ///
     /// A future change that accidentally restores O(n) iteration
     /// would visit the priors and populate their fields against
-    /// the matching residue entry, breaking this test. This is
-    /// the load-bearing distinction Copilot review of PR #37
-    /// flagged in the original test design — earlier residue
-    /// shape (key only the new transfer) admitted O(n)
-    /// regressions silently.
+    /// the matching residue entries, breaking this test. This is
+    /// the load-bearing distinction Copilot's two PR #37 reviews
+    /// flagged: the original residue (key only the new transfer)
+    /// admitted O(n) regressions silently; the second iteration
+    /// (single hard-coded prior key) coupled the test to
+    /// `make_recovered_output`'s internal shape; this third
+    /// iteration reads keys from observed ledger state, decoupling
+    /// the test from helper internals.
     #[test]
     fn populate_engine_handle_fields_visits_only_inserted_indices() {
         let (mut ledger, mut indexes) = empty_state();
@@ -1450,29 +1452,42 @@ mod tests {
         let view_secret = [0xCCu8; 32];
         let mut residue = HashMap::new();
         residue.insert((new_tx, new_idx), ciphertext_for_seed(0xB0));
-        // Prior-key residue entry: the 100 priors all share
-        // `(tx_hash=[0xA0;32], internal_output_index=0)` per
-        // `make_recovered_output`'s constructor (seed and the
-        // `internal_output_index = 0` arg are constant across
-        // the priors; they differ only in `global_index`, which
-        // is not part of the residue lookup key). A single
-        // residue insert matches all 100 priors. Under O(n) the
-        // post-pass would iterate them and populate against this
-        // entry; under O(k) the post-pass never visits them.
-        residue.insert(([0xA0; 32], 0), ciphertext_for_seed(0xA0));
+        // Prior-key residue entries: read the ACTUAL prior
+        // transfers' `(tx_hash, internal_output_index)` keys from
+        // the ledger after the first merge, rather than relying
+        // on `make_recovered_output`'s internal shape (Copilot
+        // PR #37 review finding: the test would silently stop
+        // validating O(k) if that helper changed its `tx_hash`
+        // or `internal_output_index` defaults). Build the
+        // residue from observed state: every prior transfer
+        // gets a residue entry. Under O(n), every prior matches
+        // and gets populated; under O(k), priors are never
+        // visited so the residue match is unreachable.
+        let prior_keys: Vec<([u8; 32], u64)> = ledger
+            .transfers()
+            .iter()
+            .take(100)
+            .map(|td| (td.tx_hash, td.internal_output_index))
+            .collect();
+        for (i, key) in prior_keys.iter().enumerate() {
+            residue.insert(*key, ciphertext_for_seed(u8::try_from(i & 0xFF).unwrap()));
+        }
         populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
         // Iteration-domain assertion: every prior transfer's
         // engine-derived fields stay `None` despite the residue
-        // map carrying a key (`([0xA0;32], 0)`) that matches all
-        // 100 of them. Under an O(n) implementation, the helper
-        // would visit the priors and the residue lookup would
-        // succeed, populating their fields. Under O(k), the
-        // helper never visits indices 0..100, so the residue
-        // match is unreachable. This is the load-bearing
-        // distinguishing assertion (Copilot PR #37 review): an
-        // O(n) regression breaks here directly, without relying
-        // on lookup-probe-count side effects.
+        // map carrying entries for every one of their
+        // `(tx_hash, internal_output_index)` keys (built above
+        // by reading observed ledger state, decoupling the test
+        // from `make_recovered_output`'s internal shape). Under
+        // an O(n) implementation, the helper would visit the
+        // priors and the residue lookup would succeed for each,
+        // populating their fields. Under O(k), the helper never
+        // visits indices 0..100, so the residue match is
+        // unreachable. This is the load-bearing distinguishing
+        // assertion (Copilot PR #37 review): an O(n) regression
+        // breaks here directly, without relying on
+        // lookup-probe-count side effects.
         for (i, td) in ledger.transfers().iter().enumerate().take(100) {
             assert!(
                 td.source_ciphertext.is_none(),
