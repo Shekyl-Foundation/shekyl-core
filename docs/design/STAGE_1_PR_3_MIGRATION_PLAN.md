@@ -906,6 +906,23 @@ worth recording for the V3.x post-mortem:
 
 ### §3.3 M3c — additive test caller
 
+> **§3.3-rides-with-M3c exception to `91-documentation-after-plans.mdc`.**
+> The §3.3 revision documenting M3c's actual disposition (Option C:
+> bypass the stubbed `KeyEngine::sign_transaction` and directly call
+> `tx_builder::sign_transaction` with engine-derived
+> `SourceSecretsBundle`s) **lands in the M3c PR itself**, not in
+> M3e's documentation closeout. The general rule
+> (`.cursor/rules/91-documentation-after-plans.mdc`) is that
+> documentation updates follow plan execution; this specific case is
+> the exception, because the §3.3 revision **is the rationale the
+> M3c PR review depends on**. Without the revision in the same PR,
+> each reviewer independently re-derives "why isn't this what the
+> plan said," and the migration's discipline budget pays for the
+> re-derivation N times. Pinning the exception here in the plan
+> rather than relying on M3c's PR description ensures the M3c PR
+> doesn't accidentally ship without the §3.3 revision (per the
+> 2026-05-10 user direction).
+
 **Title.** `test(engine): exercise KeyEngine::sign_transaction end-to-end`
 
 **Scope.**
