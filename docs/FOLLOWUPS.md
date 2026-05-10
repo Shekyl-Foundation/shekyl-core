@@ -11,6 +11,88 @@ citing in a review.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **P1 (latent): refresh post-pass skipped on async path —
+  `populate_engine_handle_fields` does not run when refresh
+  dispatches through `LedgerEngine::apply_scan_result` (trigger:
+  PR 4 / `RefreshEngine` extraction; **hard precondition: PR 4
+  lands before any binary integrates `RefreshHandle`**;
+  pre-RC1).** `run_refresh_task` in
+  `rust/shekyl-engine-core/src/engine/refresh.rs:1634` calls
+  `g.ledger.apply_scan_result(result).await` (trait dispatch per
+  §5 commit-7 of M3b's pre-flight, which keeps the dispatch
+  generic over `LocalLedger` / `MockLedger` for the §5.2 hybrid
+  retry test). The trait method returns `Result<(), _>`, discarding
+  the inserted-indices `Vec<usize>` produced by
+  `apply_scan_result_to_state`. The engine post-pass
+  (`populate_engine_handle_fields`) lives above the trait per
+  M3b's "engine post-pass at the orchestrator layer" disposition —
+  consumers of `LedgerEngine` other than the engine have no use
+  for the post-pass, so the trait surface stays bookkeeping-only.
+  The two decisions together skip the post-pass on the production
+  async refresh path: newly-merged transfers do not get their
+  `output_handle` / `source_ciphertext` populated.
+
+  **Severity.** P1 *latent*. Correctness-breaking but currently
+  dormant: as of `dev` tip `86626beed`, no Shekyl binary calls
+  `start_refresh`. The gap becomes live the moment any binary
+  integrates `RefreshHandle` and relies on post-merge transfers
+  having their engine-handle fields populated.
+
+  **Disposition.** Defer to PR 4 (`RefreshEngine` extraction). The
+  architecturally clean fix requires settling the producer/consumer
+  pattern (α streaming / β internal batching / γ consumer-driven
+  per the PR 4 design doc seed) — exactly the surface PR 4's
+  Round 1 decides. A surgical fix in the perf interim PR would
+  pre-commit PR 4 to a pattern, inverting the
+  cost-benefit-defer-to-later anti-pattern (per
+  `.cursor/rules/16-architectural-inheritance.mdc`).
+
+  **Hard precondition.** PR 4 must land before any binary
+  integrates `RefreshHandle`. Treating this as a rule-grade
+  precondition (rather than a "we'll get to it") is what makes
+  the deferral discipline-grade per
+  `.cursor/rules/15-deletion-and-debt.mdc`'s "deferred without a
+  named home is the failure mode" framing. A binary that
+  integrates `RefreshHandle` before this entry resolves is itself
+  a rule violation. Recorded against PR 4's design doc seed
+  (`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`) as Round 1
+  required scope.
+
+  **Originating context.** Surfaced during the
+  `perf/merge-insertion-indices` interim PR (commit `b9b0704b7`,
+  which added `.map(|_| ())` to `LocalLedger::apply_scan_result`
+  to preserve the trait signature when the underlying merge body
+  began returning `Vec<usize>`). The `.map(|_| ())` made the
+  silent skip explicit; the explicitness is why it surfaced. See
+  `docs/design/PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md` §9.2
+  for the full trace.
+
+- **P2: wallet-birthday plumbing not wired into producer
+  start-height (trigger: PR 4 / `RefreshEngine` extraction;
+  pre-RC1).** `refresh_from_block_height` and `skip_to_height`
+  exist in the Rust prefs/state layer
+  (`rust/shekyl-engine-prefs/`) but are not threaded into the
+  producer's start-height calculation. A wallet restored from seed
+  with a non-zero birthday scans every block from genesis,
+  ignoring the birthday hint.
+
+  **Severity.** P2 — performance regression for restored-from-seed
+  wallets only. No correctness impact; the scan finds the same
+  outputs, just slower.
+
+  **Disposition.** Defer to PR 4. The producer's start-height is
+  precisely the surface PR 4's α/β/γ Round 1 will reshape. Wiring
+  the birthday through the current producer lands plumbing PR 4's
+  reshape discards. Recorded against PR 4's design doc seed as
+  Round 1 required scope.
+
+  **Originating context.** Surfaced alongside the async-path-skip
+  finding during `perf/merge-insertion-indices` pre-flight; both
+  items were originally bundled as "M3b.1" before being unbundled
+  into per-validation-surface scopes per
+  `.cursor/rules/19-validation-surface-discipline.mdc`. See
+  `docs/design/PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md` §9.3.
+
 - **`scripts/bench/compare.py`: treat baseline=0 as informational,
   not fail (trigger: cut chore PR off `dev` immediately; pre-RC1).**
   The CI bench gate at `scripts/bench/compare.py:218–219` computes

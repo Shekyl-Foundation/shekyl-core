@@ -587,6 +587,105 @@ specific layer without untangling unrelated changes.
 
 ## §9 What this pre-flight does NOT address
 
+### §9.1 Scope clarification — this PR is the O(k) refactor only
+
+An earlier conversation framed "M3b.1" as a bundle of three items:
+the `populate_engine_handle_fields` O(k) refactor, the
+async-path-skip fix, and wallet-birthday plumbing. This pre-flight
+covers only the first item. The other two are deferred to PR 4
+(`RefreshEngine`) per §9.2 and §9.3 below, with named homes and
+explicit preconditions per `15-deletion-and-debt.mdc` "deferred
+without a named home is the failure mode" discipline.
+
+The unbundling is a deliberate choice: each of the three items is
+its own validation surface (per the discipline recorded in
+`.cursor/rules/19-validation-surface-discipline.mdc`), and bundling
+them would conflate three independent reviews. The deferrals are
+discipline-grade rather than open-ended.
+
+### §9.2 Async-path-skip fix — deferred to PR 4 (P1 latent gap)
+
+`run_refresh_task` in `rust/shekyl-engine-core/src/engine/refresh.rs`
+at line 1634 dispatches the merge through
+`g.ledger.apply_scan_result(result).await` — the `LedgerEngine`
+trait surface — rather than through `Engine::apply_scan_result` (the
+sync wrapper that runs the post-pass). The trait dispatch is
+deliberate per §5 commit-7 of M3b's pre-flight (lets
+`Engine<S, D, MockLedger>` flow through the same refresh path that
+`Engine<S, D, LocalLedger>` uses, foundation for the §5.2 hybrid
+retry test). The post-pass placement is deliberate per M3b's
+"engine post-pass at the orchestrator layer" disposition (post-pass
+runs above the trait, not inside it, because consumers other than
+the engine have no use for the post-pass).
+
+The two decisions together produce the gap: the production async
+refresh path bypasses the post-pass entirely. Newly-merged transfers
+on this path do not get their `output_handle` and
+`source_ciphertext` fields populated.
+
+**Severity.** P1 *latent* — the gap is correctness-breaking but
+becomes live only when a binary integrates `RefreshHandle` and
+relies on post-merge transfers having their engine-handle fields
+populated. As of `dev` tip `86626beed`, no Shekyl binary calls
+`start_refresh`; the gap is currently dormant.
+
+**Why not fold into this PR.** The architecturally clean fix
+requires resolving the trait-vs-orchestrator post-pass placement
+question. The two surgical options that exist — extending the
+trait return to `Result<Vec<usize>, _>` and running the post-pass
+in `run_refresh_task`, or routing refresh through the sync
+`Engine::apply_scan_result` and accepting the loss of trait
+dispatch — both pre-commit PR 4 to a producer/consumer pattern
+that PR 4's design Round 1 is supposed to settle (the α/β/γ choice
+per the PR 4 design doc seed). Fixing here lands a band-aid PR 4
+either undoes or builds around. Per
+`16-architectural-inheritance.mdc`'s
+"cost-benefit-defer-to-later" recurrence pattern: doing
+incremental architecture-shaping work *now* that PR 4 has to
+unwind is the inverse failure mode of deferring structural work.
+Neither is acceptable; the discipline is to land the structural
+fix in PR 4.
+
+**Named home and precondition.** PR 4 (`RefreshEngine` extraction).
+**Hard precondition: PR 4 must land before any binary integrates
+`RefreshHandle`.** The FOLLOWUPS V3.0 entry pinning this is the
+discipline-grade artifact; a binary integrating `RefreshHandle`
+before PR 4 lands is itself a rule violation under
+`15-deletion-and-debt.mdc`'s named-home requirement.
+
+### §9.3 Wallet-birthday plumbing — deferred to PR 4
+
+`refresh_from_block_height` and `skip_to_height` exist in the
+prefs/state layer (`rust/shekyl-engine-prefs/`) but are not wired
+into the producer's start-height calculation. A wallet with a
+non-zero birthday currently scans every block from genesis,
+ignoring the birthday hint.
+
+**Severity.** P2 — performance regression for restored-from-seed
+wallets only. No correctness impact; the scan finds the same
+outputs, just slower.
+
+**Why PR 4.** The producer's start-height is precisely the surface
+PR 4's α/β/γ Round 1 decision will reshape. Wiring the birthday
+through the current producer would land plumbing PR 4's reshape
+discards.
+
+**Named home.** PR 4 (`RefreshEngine` extraction), producer
+redesign Round 1.
+
+### §9.4 Trait-surface and grouping decisions
+
+- **`LedgerEngine::apply_scan_result` trait surface.** Could thread
+  `Vec<usize>` through the trait return, but the only consumer
+  benefiting from it (the engine post-pass) lives in the engine
+  layer above the trait — under the M3b design. PR 4 may revisit
+  this when settling the consumer pattern; recorded as R6 above
+  and as part of §9.2's deferral.
+- **Per-block index grouping (R5).** Not currently needed; recorded
+  for future consumers.
+
+### §9.5 Items on independent timelines (unchanged from prior draft)
+
 - **`KeyEngine::sign_transaction` async re-route (M3c+).** Independent
   of this perf interim PR; sequenced behind PR 5
   (`PendingTxEngine`) per
@@ -596,14 +695,8 @@ specific layer without untangling unrelated changes.
   Separately scheduled per
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md);
   PR 4’s design doc lands as a peer to this pre-flight while M3c–M3e
-  finish, per the user’s 2026-05-10 sequencing decision.
-- **`LedgerEngine::apply_scan_result` trait surface.** Could thread
-  `Vec<usize>` through the trait return, but the only consumer
-  benefiting from it (the engine post-pass) lives in the engine
-  layer above the trait. Threading through the trait would be
-  scope creep for zero current benefit. Recorded as R6 above.
-- **Per-block index grouping (R5).** Not currently needed; recorded
-  for future consumers.
+  finish, per the user’s 2026-05-10 sequencing decision. PR 4
+  absorbs §9.2 and §9.3 above.
 
 These remain on their independent timelines.
 
