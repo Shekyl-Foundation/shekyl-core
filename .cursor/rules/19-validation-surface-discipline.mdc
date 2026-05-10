@@ -1,0 +1,170 @@
+# Validation surface, not feature topic, is the unit
+
+When evaluating whether to bundle two pieces of work into one PR, one
+commit, one design round, or one migration milestone, the bundling
+decision is made against **validation surfaces**, not against
+**feature topics**. Two items that happen to be "about" the same
+feature topic (refresh, key handling, the fee market, the multisig
+protocol) are not therefore the same unit of work; what makes them
+the same unit is whether they share a validation surface — the
+conclusion a reviewer must reach about correctness, the property a
+test must pin, the contract an audit must verify.
+
+This rule names the guard so it does not have to be re-derived
+under deadline pressure.
+
+## The guard
+
+Before bundling work items, name the validation surface each item
+delivers separately. Then check whether the proposed bundle:
+
+1. **Collapses two surfaces into one** — i.e., the bundled review
+   actually exercises both surfaces with one validation. Bundling is
+   correct.
+2. **Removes redundant work** — i.e., one item's validation makes
+   the other item's validation trivial or implied. Bundling is
+   correct.
+3. **Conflates two surfaces under a shared topic** — i.e., the items
+   share a feature topic but require independent validation against
+   independent properties. Bundling is *incorrect*; each item should
+   be its own scope.
+
+If the answer is (3), unbundle. The cost of unbundling is N PRs
+instead of 1; the cost of bundling-when-(3) is reviewer attention
+spent re-deriving "what does this PR actually validate" for each
+sub-item, with the failure mode that one sub-item's bug masks
+under another sub-item's test.
+
+## Recurring temptation patterns
+
+The bundling temptation is strongest in these shapes:
+
+- **"They're all about X."** Multiple items share a feature topic
+  (refresh, FCMP++, the staking pipeline, the address format). The
+  topic-level coherence creates an aesthetic case for bundling.
+  The validation surfaces are usually independent.
+- **"They touch the same file."** Multiple items modify the same
+  module or crate. File adjacency creates a logistical case for
+  bundling. The validation surfaces are usually independent.
+- **"They land in the same window."** Multiple items fit a single
+  release calendar slot. Calendar adjacency creates a scheduling
+  case for bundling. The validation surfaces are usually
+  independent.
+- **"They unblock the same downstream PR."** Multiple items are
+  preconditions for the same later PR. Dependency adjacency creates
+  a critical-path case for bundling. The validation surfaces are
+  usually independent.
+
+In each case, the bundling case is real but operates on a different
+axis than validation. Bundle on the validation axis only when the
+validation surface is shared.
+
+## Worked examples
+
+### Pre-genesis: the "M3b.1 bundle" (perf interim PR)
+
+An earlier conversation framed three items as a single bundle:
+the `populate_engine_handle_fields` O(n)→O(k) refactor, the
+async-path-skip fix, and wallet-birthday plumbing. The shared
+feature topic was "refresh pipeline." Applying the guard:
+
+- **O(k) refactor.** Validation surface: the post-pass walks
+  `inserted` rather than the full ledger. Property: O(k)
+  instruction count; test: 100 unrelated transfers + 1 new
+  insert exercises only the inserted index.
+- **Async-path-skip fix.** Validation surface: the post-pass runs
+  on the async refresh path. Property: post-merge transfers have
+  their `output_handle` populated. Test: drive `start_refresh` and
+  assert merged transfers have populated handles.
+- **Wallet-birthday plumbing.** Validation surface: the producer's
+  start-height honors `refresh_from_block_height`. Property: a
+  wallet with a non-zero birthday does not scan blocks before it.
+  Test: set birthday to height N, drive refresh, assert no block
+  below N is scanned.
+
+Three independent properties, three independent tests. Bundling
+under "refresh pipeline" is the (3) case; the items unbundle
+correctly into the perf interim PR (item 1) and PR 4 deferrals
+(items 2 and 3) per `docs/FOLLOWUPS.md`'s V3.0 entries.
+
+### Pre-genesis: PR 4 design round 1 (likely)
+
+PR 4's α/β/γ producer-redesign question will tempt bundling on
+the topic "refresh." Items in the temptation surface:
+
+- The α/β/γ consumer-pattern decision.
+- Wallet-birthday plumbing.
+- FMD design discussion.
+- Bandwidth FOLLOWUP.
+- The async-path-skip fix.
+
+All five are "about refresh." Validation surfaces:
+
+- Consumer pattern: a contract about how `RefreshEngine` exposes
+  scan results to consumers.
+- Birthday plumbing: a property about which blocks are scanned.
+- FMD design: a privacy property about scan-on-third-party-server.
+- Bandwidth: a perf/economics tradeoff about producer batching.
+- Async-skip: a correctness property about post-merge transfer
+  state.
+
+Each is its own validation surface. The consumer-pattern decision
+shapes the others (it constrains how birthday/FMD/bandwidth/skip
+plumbing is structured), but it does not validate them. PR 4's
+Round 1 settles the consumer pattern; subsequent PR 4 rounds (or
+follow-up PRs) deliver the dependent items, each as its own
+validation surface.
+
+## How to apply the guard during PR pre-flight
+
+1. **Enumerate the items.** Even when the PR appears to address one
+   topic, decompose into the validation surfaces it actually
+   delivers.
+2. **Name each surface.** What property does this surface establish?
+   What test pins it? What audit finding does it close?
+3. **Check the surfaces against each other.** Is each surface
+   independent? Or does one surface's validation imply another's?
+4. **Decide the unit.** Bundle independent surfaces only when the
+   bundle's review can validate all surfaces with one pass. Unbundle
+   otherwise.
+
+The PR pre-flight template (per
+`docs/design/PR_PREFLIGHT_TEMPLATE.md`, when one exists) should
+include a "Validation surfaces" section enumerating the surfaces
+the PR delivers and explicitly justifying any bundling.
+
+## Related rules
+
+- **`15-deletion-and-debt.mdc`** — "deferred without a named home is
+  the failure mode." This rule is the upstream filter that prevents
+  bundling-as-a-substitute-for-deferral; the validation-surface
+  guard is the downstream filter that prevents
+  bundling-as-aesthetic-coherence.
+- **`16-architectural-inheritance.mdc`** — the
+  cost-benefit-defer-to-later anti-pattern. Bundling sometimes
+  expresses itself as "let's get all of X done at once" — when X is
+  multiple validation surfaces, that's the same shape this rule
+  catches in a different mode.
+- **`90-commits.mdc`** — scope per commit. The validation-surface
+  guard applies at PR scope; the scope-per-commit rule applies at
+  commit scope. They are the same discipline at different
+  granularities.
+
+## Lifecycle note
+
+This rule was named on 2026-05-10 in response to the M3b.1 bundle
+unbundling, but the discipline it records predates the rule. Prior
+applications of the guard:
+
+- M3b's own pre-flight unbundled the post-pass design from the
+  trait-dispatch design despite both being "about refresh."
+- The PR 5 / PR 4 / M3c sequencing decision rejected Strategy C
+  ("bundle PR 5 with M3c because both close the migration loop")
+  on the grounds that they validate against different surfaces.
+- The PR 35 Copilot-feedback bundle was accepted on the grounds
+  that it shared the validation surface (the bench compare path's
+  schema additivity) — correct application of the guard, not a
+  failure of it.
+
+The rule formalizes the discipline so subsequent applications do
+not re-derive the framing each time.
