@@ -1173,6 +1173,27 @@ citing in a review.
   security closure merits being surfaced in the active alpha
   cycle rather than deferred to V3.2's Rust-cutover grab-bag.
 
+- **Drop `iai_callgrind` legacy aliases from the bench JSON
+  envelope.** The 2026-05-09 gungraun migration
+  (`docs/investigation/2026-05-09-bench-baseline-flake.md` §6.3)
+  shipped `scripts/bench/capture_rust_baseline.sh` emitting
+  *both* the legacy keys (`iai_callgrind_runner_version` field
+  in `captured_on`, `iai_callgrind` top-level section name) and
+  the modern keys (`gungraun_runner_version`, no section rename
+  yet) for one release cycle so that any external consumer of
+  `bench-baseline/baseline.json` keyed on the legacy fields
+  doesn't break silently. **Trigger:** once `bench-baseline` has
+  been regenerated under gungraun and one release cycle (or
+  roughly 4–6 weeks of CI operation, whichever is longer) has
+  elapsed without consumer breakage, drop the legacy alias
+  field and rename the top-level `iai_callgrind` section to
+  `gungraun`. Scope: ~10 lines in
+  `scripts/bench/capture_rust_baseline.sh`,
+  `scripts/bench/compare.py`, and `scripts/bench/post_comment.py`
+  (the consumers that read the section name). No behavioral
+  change; the data shape is unchanged. Target: V3.1+ (after the
+  next 4–6 weeks of post-gungraun bench-gate operation).
+
 ---
 
 ## V3.1+ — Legacy C++ → Rust rewrite scope

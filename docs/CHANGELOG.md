@@ -285,6 +285,56 @@
   `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`, slated for
   the sibling branch `fix/legacy-account-generate-network-guard`.
 
+### Changed
+
+- **Bench harness migrated from `iai-callgrind 0.16.x` to
+  `gungraun 0.18.x`** on
+  `chore/investigate-bench-baseline-flake-2026-05-09`. The
+  upstream crate was renamed and forked from version 0.17.0
+  onward; iai-callgrind 0.16.x is unmaintained at this point.
+  Per
+  [`docs/investigation/2026-05-09-bench-baseline-flake.md`](./investigation/2026-05-09-bench-baseline-flake.md)
+  §5, the upgrade was executed on **trajectory grounds** (legacy
+  version, supported upstream renamed; flake-fix is speculative
+  incidental, not the load-bearing reason). The dependency
+  rename is mechanical: macros (`library_benchmark`,
+  `library_benchmark_group`, `main`, `benches::with_setup`,
+  `black_box`) keep their public API; the migration is purely a
+  crate-name and module-path rename. Bench-target filenames
+  retain the `_iai` suffix as a stable identifier (the suffix is
+  no longer bound to any crate name) so that the manifest, the
+  `compare.py` class routing, the manifest's row stems, and the
+  `bench-baseline` snapshot keys all continue to resolve.
+
+  Touched surfaces: 5 `Cargo.toml` files (`shekyl-engine-state`,
+  `shekyl-engine-core`, `shekyl-engine-file`, `shekyl-scanner`,
+  `shekyl-tx-builder` — all `[dev-dependencies]`), 7 bench files
+  (the seven `benches/*_iai.rs` across the same five crates plus
+  the engine-trait pair in `shekyl-engine-core`),
+  `.github/workflows/benchmarks.yml` (both `cargo install` steps
+  and the doc-comments), and
+  `scripts/bench/capture_rust_baseline.sh` (preflight runner
+  binary check, `GUNGRAUN_COLOR=never` alongside the legacy
+  `IAI_CALLGRIND_COLOR=never`, version-detection block, JSON
+  envelope's `captured_on` block).
+
+  Compatibility surface: the JSON envelope emitted by
+  `capture_rust_baseline.sh` carries both
+  `iai_callgrind_runner_version` (legacy alias) and
+  `gungraun_runner_version` (modern key) for one release cycle,
+  and the top-level `iai_callgrind` section name is preserved.
+  Trigger for alias removal — once `bench-baseline` has been
+  regenerated under gungraun and 4–6 weeks of CI operation have
+  elapsed without consumer breakage — is tracked in
+  [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md) under "V3.1.x —
+  dependency migrations". Verification: `cargo update --dry-run`
+  resolves cleanly to gungraun v0.18.2 (lib + macros + runner
+  trio); `cargo bench --no-run` succeeds for all seven `_iai`
+  bench targets. Bench-baseline regeneration disposition is
+  documented at
+  [`docs/investigation/2026-05-09-bench-baseline-flake.md`](./investigation/2026-05-09-bench-baseline-flake.md)
+  §6.1.
+
 ### Removed
 
 - **Monero-era keys-file fixtures and unconditionally-skipped

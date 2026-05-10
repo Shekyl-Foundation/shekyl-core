@@ -402,44 +402,88 @@ Combining the two: the detective work pays back in understanding,
 not in landing a fix that helps anyone. Better spent on the
 migration.
 
-## 5. Recommendation
+## 5. Recommendation (executed)
 
-Execute **Option A (gungraun 0.18.x upgrade)** on this same
-investigation branch (per the user's "doc + fix on this branch"
-direction); the doc lands first establishing the context, the
-upgrade lands next as separate commits. The upgrade is recommended
-on trajectory grounds (legacy version, supported upstream renamed),
-not on flake-fix grounds — the latter is speculative.
+**Option A (gungraun 0.18.x upgrade)** has been executed on this
+branch per the user's "doc + fix on this branch" direction. The
+upgrade landed as two commits on top of the three documentation
+commits:
 
-PR shape:
+- `bench: migrate from iai-callgrind 0.16 to gungraun 0.18` —
+  five `Cargo.toml` edits and seven bench-file import edits;
+  `cargo update --dry-run` resolves cleanly to gungraun v0.18.2
+  (lib + macros + runner all on 0.18.2 / 0.8.0); `cargo bench
+  --no-run` succeeds for all seven `_iai` bench targets.
+- `ci(bench): wire workflow + capture script to gungraun-runner`
+  — both `cargo install iai-callgrind-runner` invocations in
+  `benchmarks.yml` switched to `cargo install gungraun-runner
+  --version '^0.18' --locked`; `scripts/bench/capture_rust_baseline.sh`
+  preflight + version-detection + python-heredoc updated; the
+  JSON envelope's `captured_on` block emits both the legacy
+  `iai_callgrind_runner_version` field and the new
+  `gungraun_runner_version` field for one release cycle of
+  consumer-side compatibility.
 
-- Branch: `chore/investigate-bench-baseline-flake-2026-05-09`
-  (this branch).
-- Doc commit (already landed): the investigation note in this
-  file.
-- Upgrade commits (next): five Cargo.toml edits, bench-file import
-  changes, CI workflow update, capture-script update, and
-  `bench-baseline` regeneration approach.
-- Pre-flight executed during the upgrade: verify `library_benchmark`
-  / `library_benchmark_group` / `main!` macro signatures are
-  source-compatible; if any compile breaks, factor into scope.
+The macro API surface (`library_benchmark`, `library_benchmark_group`,
+`main`, `benches::with_setup`, `black_box`) was source-compatible —
+no bench-file structural changes were needed. Bench-target
+filenames retain the `_iai` suffix as a stable identifier so the
+manifest, `compare.py` class routing, and bench-baseline snapshot
+keys all continue to resolve.
 
-Until the upgrade merges and a fresh baseline is captured under
-gungraun, PR #35's `baseline_zero` bucket holds the gate open
-without compromising the signal — the anomaly remains visible to
+The upgrade was executed on trajectory grounds (legacy version,
+supported upstream renamed), not on flake-fix grounds — the
+latter remains speculative until a post-merge baseline refresh
+either clears the anomaly or persists it. Until that data lands,
+PR #35's `baseline_zero` bucket holds the gate open without
+compromising the signal — the anomaly remains visible to
 reviewers via its own labeled section, but doesn't false-fail
 unrelated PRs.
 
 ## 6. Open follow-ups
 
-- `bench-baseline` regeneration after upgrade — coordinate with
-  whoever drives the `update-baseline` job to ensure the baseline
-  branch doesn't carry stale 0.16.x snapshot format after the
-  upgrade. Simplest path: delete the current `bench-baseline`
-  branch and let the post-merge `update-baseline` job recreate it
-  from the next dev push under gungraun.
+### 6.1 `bench-baseline` regeneration (post-merge)
+
+The current `bench-baseline` branch carries snapshots produced by
+iai-callgrind 0.16.1. After this branch merges to dev, the next
+push to dev will trigger the `ci/benchmarks` workflow's
+`update-baseline` job, which will:
+
+1. Run `scripts/bench/capture_rust_baseline.sh` under the new
+   gungraun-runner.
+2. Push the resulting `baseline.json` + `baseline.iai.snapshot` to
+   the `bench-baseline` branch.
+
+The workflow already handles both the "branch exists" and "branch
+doesn't exist" cases (the orphan-seed path is in
+`benchmarks.yml::push updated baseline to bench-baseline branch`).
+Two viable dispositions:
+
+- **Disposition 1 — let it overwrite (default).** Do nothing; the
+  next dev push overwrites the bench-baseline tip with a fresh
+  gungraun snapshot. The 0.16.x-captured prior tip becomes
+  unreachable from the branch ref but is still in the reflog and
+  can be recovered if needed. This is the simpler path and the one
+  the workflow naturally drives.
+
+- **Disposition 2 — explicit reset (cleaner audit trail).**
+  Manually push an annotated tag at the current bench-baseline tip
+  (`archive/bench-baseline-2026-05-09-pre-gungraun`) before merge,
+  then delete the branch and let the post-merge `update-baseline`
+  re-seed the orphan branch fresh. This is per `06-branching.mdc`
+  rule 5 ("never delete a branch without explicit confirmation
+  from the user, ideally after tagging the HEAD as
+  `archive/<branch-name>-<date>`"), so it requires user
+  authorization. It produces a cleaner audit trail at the cost of
+  one extra step.
+
+Disposition 1 is the default for this branch's merge unless the
+user prefers Disposition 2 explicitly.
+
+### 6.2 What the next baseline tells us
+
 - If the next gungraun-captured baseline still produces
-  `instructions=0` for some entries, this document's §3.2
+  `instructions=0` for some entries, this document's §3.3
   candidate list re-opens with fresh evidence: the cause survives
   the upgrade, narrowing the candidate space toward
   runner-host-side or Callgrind-side rather than the wrapper-
@@ -448,6 +492,24 @@ unrelated PRs.
   across multiple refreshes, the project-trajectory move was the
   right call regardless of whether we ever pin down which
   specific gungraun rework was load-bearing for our case.
+- If the next gungraun-captured baseline is clean for ~3–5
+  refreshes and then a flake reappears, the `baseline_zero` bucket
+  will catch it informationally; PR #35's machinery is the long-
+  term safety net even if the flake persists post-upgrade.
+
+### 6.3 Field-rename cleanup (one release cycle out)
+
+The capture script's JSON envelope currently emits both the legacy
+key (`iai_callgrind_runner_version`) and the new key
+(`gungraun_runner_version`) for one release cycle to keep any
+external consumer of `bench-baseline/baseline.json` from breaking
+silently if it was keyed on the legacy field. Same rationale for
+the top-level `iai_callgrind` section name (left unchanged).
+
+Trigger: once `bench-baseline` has been regenerated under
+gungraun and one release cycle (or roughly 4–6 weeks of CI
+operation, whichever is longer) has elapsed without consumer
+breakage, drop the legacy alias. Tracked in `docs/FOLLOWUPS.md`.
 
 ## 7. Citations
 
