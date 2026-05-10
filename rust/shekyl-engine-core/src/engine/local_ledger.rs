@@ -260,6 +260,13 @@ impl LedgerEngine for LocalLedger {
     async fn apply_scan_result(&self, scan_result: ScanResult) -> Result<(), RefreshError> {
         let mut guard = self.write();
         let state = &mut *guard;
+        // The trait surface is bookkeeping-only: trait-public callers
+        // do not run the engine post-pass, so the inserted-index list
+        // returned by `apply_scan_result_to_state` (used by the
+        // engine post-pass at `populate_engine_handle_fields` for
+        // O(k) iteration) has no consumer here. Discard via
+        // `.map(|_| ())` to keep the trait surface stable.
         apply_scan_result_to_state(&mut state.ledger.ledger, &mut state.indexes, scan_result)
+            .map(|_| ())
     }
 }

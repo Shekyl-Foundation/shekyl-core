@@ -210,11 +210,30 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
 ///
 /// `pub(crate)`: callers outside `shekyl-engine-core` go through
 /// [`Engine::apply_scan_result`].
+///
+/// On success, returns the flat list of `ledger.transfers` indices
+/// into which freshly-scanned transfers were appended across every
+/// height in `result.processed_height_range`. The list is the
+/// concatenation of the per-height [`LedgerIndexes::ingest_block`]
+/// ranges; its length is the total accepted-transfer count after
+/// burning-bug duplicates are dropped, and its entries are
+/// monotonically increasing. The engine post-pass at
+/// [`populate_engine_handle_fields`] uses this list to walk only the
+/// freshly-merged transfers (O(k)) rather than the entire ledger
+/// (O(n)) — closing the FOLLOWUPS V3.0 entry on
+/// `populate_engine_handle_fields` cost.
+///
+/// The empty-range fast path returns `Ok(Vec::new())`. Trait-impl
+/// wrappers that don't run the engine post-pass
+/// (`LocalLedger::apply_scan_result`,
+/// `EngineFixture::apply_scan_result`) discard the Vec via
+/// `.map(|_| ())` at their respective call sites — the trait surface
+/// stays `Result<(), RefreshError>`.
 pub(crate) fn apply_scan_result_to_state(
     ledger: &mut LedgerBlock,
     indexes: &mut LedgerIndexes,
     result: ScanResult,
-) -> Result<(), RefreshError> {
+) -> Result<Vec<usize>, RefreshError> {
     let synced = ledger.height();
 
     // Start-height invariant. When `reorg_rewind` is present the
@@ -297,8 +316,15 @@ pub(crate) fn apply_scan_result_to_state(
             });
         }
         apply_stake_events(indexes, stake_events);
-        return Ok(());
+        return Ok(Vec::new());
     }
+
+    // Pre-size the inserted-index list against the upper-bound
+    // `new_transfers.len()`. Burning-bug duplicates dropped at
+    // `LedgerIndexes::ingest_block` narrow the actual count; the
+    // pre-sized capacity keeps the allocation hot-path-friendly even
+    // when no duplicates fire.
+    let mut inserted = Vec::with_capacity(new_transfers.len());
 
     // --- Producer-contract gate ----------------------------------------
     //
@@ -383,7 +409,12 @@ pub(crate) fn apply_scan_result_to_state(
 
         let outputs = transfers_by_height.remove(&h).unwrap_or_default();
         let timelocked = Timelocked::from_vec(outputs);
-        let _added = indexes.process_scanned_outputs(ledger, h, block_hash, timelocked);
+        let inserted_range = indexes.process_scanned_outputs(ledger, h, block_hash, timelocked);
+        // Per-height ranges are contiguous suffixes of
+        // `ledger.transfers`, monotonically advancing across the loop
+        // (each iteration appends, never reorders). Flattening to a
+        // Vec gives the post-pass an O(k) iteration domain.
+        inserted.extend(inserted_range);
 
         if let Some(kis) = key_images_by_height.remove(&h) {
             let _spent = indexes.detect_spends(ledger, h, &kis);
@@ -412,7 +443,7 @@ pub(crate) fn apply_scan_result_to_state(
 
     apply_stake_events(indexes, stake_events);
 
-    Ok(())
+    Ok(inserted)
 }
 
 fn apply_stake_events(indexes: &mut LedgerIndexes, events: Vec<StakeEvent>) {
@@ -725,6 +756,85 @@ mod tests {
         apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("spend merge ok");
         assert!(ledger.transfers()[0].spent);
         assert_eq!(ledger.transfers()[0].spent_height, Some(3));
+    }
+
+    /// Cross-batch invariant pin (PERF_MERGE_INSERTION_INDICES_PREFLIGHT
+    /// §5.2): a multi-height `ScanResult` with k₁ + k₂ new transfers
+    /// produces an inserted-indices Vec of length k₁ + k₂ whose
+    /// entries are monotonically increasing and disjoint from any
+    /// prior-merge indices. The post-pass at
+    /// `populate_engine_handle_fields` consumes this Vec to walk only
+    /// the freshly-merged transfers in O(k) rather than scanning the
+    /// full ledger in O(n).
+    #[test]
+    fn apply_scan_result_to_state_returns_indices_of_new_transfers() {
+        let (mut ledger, mut indexes) = empty_state();
+
+        // First merge: 3 new transfers across two heights (2 at h=1,
+        // 1 at h=2). Returned Vec must be the 3 freshly appended
+        // indices, monotonically increasing.
+        let first = ScanResult {
+            processed_height_range: 1..3,
+            parent_hash: None,
+            block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32])],
+            new_transfers: vec![
+                DetectedTransfer {
+                    block_height: 1,
+                    output: make_recovered_output(1, 100),
+                },
+                DetectedTransfer {
+                    block_height: 1,
+                    output: make_recovered_output(2, 101),
+                },
+                DetectedTransfer {
+                    block_height: 2,
+                    output: make_recovered_output(3, 102),
+                },
+            ],
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        let inserted =
+            apply_scan_result_to_state(&mut ledger, &mut indexes, first).expect("first merge ok");
+        assert_eq!(inserted, vec![0, 1, 2]);
+        assert_eq!(ledger.transfers().len(), 3);
+
+        // Second merge: 1 transfer at h=3 over a tip claiming the
+        // previous merge's hash. Returned Vec must reflect the
+        // post-prior-merge offset (start at 3, not 0).
+        let second = ScanResult {
+            processed_height_range: 3..4,
+            parent_hash: Some([0x22; 32]),
+            block_hashes: vec![(3, [0x33; 32])],
+            new_transfers: vec![DetectedTransfer {
+                block_height: 3,
+                output: make_recovered_output(4, 103),
+            }],
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        let inserted =
+            apply_scan_result_to_state(&mut ledger, &mut indexes, second).expect("second merge ok");
+        assert_eq!(inserted, vec![3]);
+        assert_eq!(ledger.transfers().len(), 4);
+
+        // Third merge: no new transfers, just an empty bookkeeping
+        // advance. Returned Vec is empty.
+        let third = ScanResult {
+            processed_height_range: 4..5,
+            parent_hash: Some([0x33; 32]),
+            block_hashes: vec![(4, [0x44; 32])],
+            new_transfers: Vec::new(),
+            spent_key_images: Vec::new(),
+            stake_events: Vec::new(),
+            reorg_rewind: None,
+        };
+        let inserted =
+            apply_scan_result_to_state(&mut ledger, &mut indexes, third).expect("third merge ok");
+        assert!(inserted.is_empty());
+        assert_eq!(ledger.transfers().len(), 4);
     }
 
     #[test]

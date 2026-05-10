@@ -804,7 +804,11 @@ impl LedgerEngine for MockLedger {
             });
         }
         let state = &mut *state;
+        // Mirror `LocalLedger::apply_scan_result` — the trait surface
+        // is bookkeeping-only; the inserted-index list has no
+        // consumer here.
         apply_scan_result_to_state(&mut state.ledger.ledger, &mut state.indexes, scan_result)
+            .map(|_| ())
     }
 }
 
