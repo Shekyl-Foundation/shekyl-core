@@ -487,6 +487,30 @@
   `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`, slated for
   the sibling branch `fix/legacy-account-generate-network-guard`.
 
+### Performance
+
+- **Refresh post-pass cost drops from O(n × B) to O(k × B).** The
+  engine post-pass at
+  `shekyl-engine-core::engine::merge::populate_engine_handle_fields`
+  previously scanned the full `ledger.transfers` Vec on every
+  `Engine::apply_scan_result` invocation, even though only
+  `result.new_transfers.len()` entries can match the residue map.
+  At a 100k-transfer ledger refreshed across 1k batches with
+  k≈10 new transfers per batch, the post-pass alone executed
+  ~10⁸ HashMap probes against `residue` that found nothing —
+  ~5 s of refresh-time wallclock. The merge pipeline now threads
+  the inserted-index list out of `LedgerIndexes::ingest_block`
+  (now `Range<usize>`), through `LedgerIndexesExt::process_scanned_outputs`
+  (now `Range<usize>`) and `apply_scan_result_to_state` (now
+  `Result<Vec<usize>, RefreshError>`); the post-pass walks only
+  the freshly-merged indices. Trait-impl wrappers
+  (`LocalLedger::apply_scan_result`,
+  `EngineFixture::apply_scan_result`) discard the Vec via
+  `.map(|_| ())` so the orchestrator-public surface is
+  unchanged. Closes the FOLLOWUPS V3.0 entry
+  *"`populate_engine_handle_fields` O(n) → O(k) per scan"*.
+  Pre-flight: `docs/design/PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md`.
+
 ### Removed
 
 - **Monero-era keys-file fixtures and unconditionally-skipped

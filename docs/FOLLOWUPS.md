@@ -11,40 +11,6 @@ citing in a review.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **`populate_engine_handle_fields` O(n) → O(k) per scan
-  (trigger: immediate post-M3b interim PR; pre-RC1).** Stage 1
-  PR 3 — M3b's engine post-pass at
-  `rust/shekyl-engine-core/src/engine/merge.rs::populate_engine_handle_fields`
-  scans `ledger.transfers` linearly on every `apply_scan_result`
-  invocation, even though only `result.new_transfers.len()`
-  entries can match the residue map. As the ledger grows, this is
-  O(n) per scan, giving an O(n × B) refresh shape (B batches × N
-  total transfers). Cost today: ~50 ns/lookup × N × B. Negligible
-  at <10k transfers; ~5 s added to refresh at 100k transfers;
-  user-visible at 1M. The fix is to thread insertion indices out
-  of the merge pipeline so the post-pass updates in O(k) where k
-  is the number of new transfers per scan.
-
-  **Why not in M3b.** Surfaced by Copilot review on PR #34. The
-  fix changes the return type of
-  `LedgerIndexes::ingest_block` (`shekyl-engine-state`) and
-  `LedgerIndexesExt::process_scanned_outputs`
-  (`shekyl-scanner`) from `usize` to `Range<usize>`, and the
-  return type of
-  `apply_scan_result_to_state` (`shekyl-engine-core`) from
-  `Result<(), RefreshError>` to
-  `Result<Vec<usize>, RefreshError>`. That's a trait-surface
-  change in `shekyl-scanner::LedgerIndexesExt` plus ~16
-  mechanical test call-site updates. Per `90-commits.mdc`'s
-  scope-per-commit and the M3b PR's stated scope (source-secrets
-  derivation reroute), the trait-surface change is its own
-  reviewable concern.
-
-  **Disposition.** Land as the immediate next PR after M3b
-  merges to `dev` — `perf(engine): merge pipeline returns
-  insertion indices`. Estimate: ~150 net code lines + ~16
-  mechanical test fixture updates. Pre-RC1.
-
 - **`scripts/bench/compare.py`: treat baseline=0 as informational,
   not fail (trigger: cut chore PR off `dev` immediately; pre-RC1).**
   The CI bench gate at `scripts/bench/compare.py:218–219` computes
