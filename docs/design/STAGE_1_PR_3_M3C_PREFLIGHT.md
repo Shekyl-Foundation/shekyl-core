@@ -181,18 +181,75 @@ as a peer to M3b D5. It:
    ciphertext).
 4. Constructs matching `OutputInfo` records (recipient
    commitments + encrypted amounts).
-5. Calls `tx_builder::sign_transaction(...)` and asserts:
+5. Asserts that the engine-derived `SpendInput` is byte-identical
+   field-by-field to a hand-composed legacy `SpendInput` sourced
+   from `scan_output_recover` + hand-composed `(ho + b + m_i)` (the
+   same legacy chain M3b D5 uses). Then calls
+   `tx_builder::sign_transaction(...)` *once* on the engine-derived
+   inputs and asserts:
    - **(a)** Returns `Ok(SignedProofs)`.
-   - **(b)** `commitments` and `enc_amounts` are byte-identical to
-     a parallel call constructed from a hand-derived legacy bundle
-     (using `scan_output_recover` + hand-composed `(ho + b + m_i)`
-     — the same legacy chain M3b D5 uses).
+   - **(b)** `SpendInput` byte-identical between engine and legacy
+     bundle-derivation paths; sign-once on the engine path; verify
+     acceptance.
    - **(c)** A verifier (`shekyl_fcmp::proof::verify` and
      `shekyl_bulletproofs::Bulletproof::verify_plus`) accepts the
      proofs.
-6. The test asserts these properties for at least 3 distinct
-   `(output_index, subaddress_index)` combinations to surface any
-   parameter-coupling regression.
+6. The test asserts these properties for at least 9 distinct
+   `(n_in, subaddress_index)` combinations (3 input counts × 3
+   subaddress indices) to surface single-axis subaddress-derivation
+   regressions, multi-input aggregation regressions, and cross-axis
+   interactions between the two.
+
+#### §2.1.1 Trim-1 disposition (post-implementation amendment)
+
+The §2.1 step 5(b) wording above was tightened from "byte-identical
+to a parallel call" to "SpendInput byte-identical between engine and
+legacy bundle-derivation paths; sign-once on the engine path;
+verify acceptance" during implementation, after the parallel-sign-
+call structure was measured to dominate the test's runtime
+(parallel sign in ~32s debug; sign-once + SpendInput byte-equality
+in ~17s debug, ~7s release). The substitution is **strictly
+stronger** at the property level:
+
+- **Original (parallel sign).** Engine and legacy
+  `SpendInput`s feed the same `tx_builder::sign_transaction`; the
+  test asserts the deterministic outputs (`commitments`,
+  `enc_amounts`) are byte-equal between the two sign calls. This
+  pins the property *both `SpendInput`s arrive at the same
+  `OutputInfo` derivations* via the indirect route of
+  `OutputInfo`-deterministic signer-output components.
+- **Trim 1 (SpendInput byte-equality + sign-once).** Engine and
+  legacy `SpendInput`s are byte-compared field-by-field at the
+  input layer (`output_key`, `commitment`, `amount`, `spend_key_x`,
+  `spend_key_y`, `commitment_mask`, `h_pqc`, `combined_ss`,
+  `output_index`, all `leaf_chunk` entries, `c1_layers`,
+  `c2_layers`). `sign_transaction` is called once on the engine
+  path; verifier acceptance is asserted on the resulting proofs.
+  This pins byte-equality at the `SpendInput` layer (the input to
+  `sign_transaction`), which combined with the determinism of
+  `sign_transaction`'s `OutputInfo → commitments` mapping implies
+  the original property as a corollary, AND additionally guards
+  against `SpendInput`s that differ in fields irrelevant to
+  commitments / enc_amounts but relevant to signature behavior or
+  future field additions.
+
+**Named coverage gap.** Trim 1 reduces the workspace's coverage of
+`tx_builder::sign_transaction`'s end-to-end success path from 2× to
+1× (this test was the workspace's sole such coverage even before
+Trim 1; see the test docstring's "Workspace-coverage note"). The
+1× reduction is named-and-accepted given M3d removes the legacy
+bundle-derivation chain entirely; the engine path is the load-
+bearing path going forward and the redundant second exercise of
+the same signer would only have decaying value.
+
+**Forward template.** When implementation surfaces a strictly-
+stronger test at lower cost than the pre-flight wording specified,
+the pre-flight gets amended to reflect the discovered property.
+Pre-flight wording is the means; the property tested is the end.
+Strengthening a pre-flight property post-implementation requires
+the kind of amendment recorded in this section; weakening a
+pre-flight property requires explicit revisit of the original
+disposition.
 
 ### §2.2 Why this is the right validation milestone
 

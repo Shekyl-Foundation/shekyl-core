@@ -644,7 +644,6 @@ mod tests {
     /// in `SpendInput.leaf_chunk` and `ProveInput.leaf_chunk_outputs`.
     /// `h_pqc` bytes must be canonical Selene scalar encodings (use
     /// [`make_synthetic_h_pqc_bytes`]).
-    #[allow(dead_code)] // consumed by M3c-via-C test added in the next commit
     fn build_synthetic_single_chunk_tree_root(
         leaves: &[(EdwardsPoint, EdwardsPoint, EdwardsPoint, [u8; 32])],
     ) -> [u8; 32] {
@@ -714,7 +713,6 @@ mod tests {
     /// Determinism is intentional: tests should be reproducible, and
     /// the property M3c pins is invariant under the specific h_pqc
     /// values chosen.
-    #[allow(dead_code)] // consumed by M3c-via-C test added in the next commit
     fn make_synthetic_h_pqc_bytes(seed: u64) -> [u8; 32] {
         use ciphersuite::group::ff::PrimeField;
         let mut buf = [0u8; 64];
@@ -738,7 +736,6 @@ mod tests {
     /// — the test only exercises `tx_builder::sign_transaction`'s
     /// output-side wiring (commitment construction, BP+ range proof,
     /// ECDH-encoded amount echo).
-    #[allow(dead_code)] // consumed by M3c-via-C test added in the next commit
     fn make_recipient_output_info(
         keys: &LocalKeys,
         amount: u64,
@@ -772,7 +769,6 @@ mod tests {
     /// public input. Mirrors `shekyl_crypto_pq::output::compute_output_key_image`
     /// without going through `OutputClaim` so the test can assemble
     /// the verifier inputs directly from the engine bundle.
-    #[allow(dead_code)] // consumed by M3c-via-C test added in the next commit
     fn compute_test_key_image(output_key: [u8; 32], spend_key_x: [u8; 32]) -> [u8; 32] {
         let i_point = shekyl_generators::biased_hash_to_point(output_key);
         let x_scalar = Scalar::from_canonical_bytes(spend_key_x)
@@ -1316,6 +1312,604 @@ mod tests {
                 assert_eq!(
                     new_bundle.output_index, output_index,
                     "output_index passthrough violated ({context})"
+                );
+            }
+        }
+    }
+
+    /// End-to-end M3c-via-C: drive an engine-derived
+    /// [`SourceSecretsBundle`] through `tx_builder::sign_transaction`
+    /// and assert the resulting `SignedProofs` is verifier-acceptable
+    /// at every level.
+    ///
+    /// # What this test pins
+    ///
+    /// **Layer 1 — cryptographic chain (this test's scope).** The
+    /// pipeline `engine bundle → SpendInput → tx_builder ::
+    /// sign_transaction → BP+ verify + FCMP++ verify` succeeds
+    /// end-to-end, and the engine-derived `SpendInput` is byte-
+    /// identical (field-by-field) to a hand-composed legacy
+    /// `SpendInput` sourced from `scan_output_recover` plus
+    /// `(ho + b + m_i)` (the same legacy chain M3b D5 uses). This is
+    /// the load-bearing property the M3a [`KeyEngine`] decoupling
+    /// claims: the engine's bundle is sufficient to drive the
+    /// existing tx-builder cryptographic pipeline without any
+    /// information loss versus the legacy chain.
+    ///
+    /// SpendInput byte-equality at the input layer is strictly
+    /// stronger than `commitments` / `enc_amounts` byte-equality at
+    /// the signer-output layer: the latter follows from the former
+    /// plus `tx_builder::sign_transaction`'s deterministic
+    /// `OutputInfo → commitments` mapping, while the former
+    /// additionally catches a class of regressions where two
+    /// `SpendInput`s differ in fields that don't affect commitments /
+    /// enc_amounts but do affect future signature behavior or future
+    /// field additions.
+    ///
+    /// # What this test does NOT pin
+    ///
+    /// **Layer 2 — `KeyEngine::sign_transaction` trait method.** The
+    /// trait-surface contract (engine-state ownership inside the
+    /// async impl, error mapping, pre/post-condition discipline) is
+    /// PR-5 scope — `TxToSign.outputs` and
+    /// `TxToSign.fcmp_plus_plus_context` are currently named-gap
+    /// stubs and the trait method returns
+    /// [`KeyEngineError::SignTransactionTraitSurfaceIncomplete`].
+    /// This test bypasses the trait surface and calls
+    /// [`tx_builder::sign_transaction`] directly per
+    /// `STAGE_1_PR_3_M3C_PREFLIGHT.md` §2 (Option C).
+    ///
+    /// **Layer 3 — message envelope / actor mailbox.** The
+    /// orchestrator-engine boundary is per-trait function calls in
+    /// PR 3; whether PR 6+ promotes the boundary to actor messaging
+    /// is an architectural decision orthogonal to the cryptographic
+    /// property pinned here. The cryptographic chain in Layer 1 is
+    /// invariant under that decision: bundle → SpendInput →
+    /// SignedProofs is the same data flow whether each step is a
+    /// function call, a trait method, an awaitable Future, or a
+    /// message.
+    ///
+    /// # Relationship to M3b D5
+    ///
+    /// `derive_source_secrets_bundle_byte_identical_against_legacy_chain`
+    /// (M3b D5) and this test pin complementary properties at
+    /// adjacent layers — this is intentional layered coverage, not
+    /// redundant or asymmetric coverage.
+    ///
+    /// M3b D5 verifies bundle-byte identity (engine bundle ≡ legacy
+    /// bundle field-by-field). It does not exercise recovery — its
+    /// synthetic outputs are paid to the wallet's bare primary
+    /// spend key, so the bundle's `spend_key_x = ho + b + m_i`
+    /// cannot recover the on-chain `O = (ho + b)*G + y*T`. The
+    /// mismatch is invisible at the byte-identity layer and
+    /// irrelevant to what M3b D5 claims.
+    ///
+    /// M3c-via-C (this test) verifies recovery-correctness end-to-
+    /// end through `tx_builder::sign_transaction` and the BP+ /
+    /// FCMP++ verifiers. Recovery requires the bundle's spend
+    /// scalars to actually open the on-chain output, which forces
+    /// the recipient to be `subaddress_keys(idx)` for *every* idx
+    /// including PRIMARY (see the `recipient_spend_pk` derivation
+    /// below for why M3b D5's bare-`spend_pk` shortcut would not
+    /// work here).
+    ///
+    /// A regression that affects only bundle bytes surfaces in
+    /// M3b D5; a regression that affects only the bundle →
+    /// SpendInput → SignedProofs end-to-end chain surfaces here.
+    /// The two together pin the bundle layer's property at both
+    /// the contract level (byte-identity) and the consumption level
+    /// (verifier acceptance).
+    ///
+    /// # Workspace-coverage note
+    ///
+    /// This test is currently the workspace's sole end-to-end
+    /// successful-execution coverage of `tx_builder::sign_transaction`.
+    /// `shekyl-tx-builder/src/tests.rs` covers only validation-error
+    /// paths (every call asserts `Err(...)`); the
+    /// `transfer_e2e.rs` / `transfer_e2e_iai.rs` benches explicitly
+    /// elide the full sign because the FCMP++ tree-fixture is not
+    /// checked in (their scope-note documents this gap). The
+    /// `shekyl-fcmp::proof::tests::prove_verify_roundtrip` test
+    /// exercises FCMP++ prove + verify directly, bypassing the
+    /// BP+ / cofactor / amount-encryption / pseudo-output-balancing
+    /// pipeline that `sign_transaction` composes. This test's
+    /// engine-path call is what closes that gap until M3d lands the
+    /// trait-surface call site that subsumes it.
+    ///
+    /// An earlier draft of this test (superseded during pre-flight
+    /// review by the Trim-1 disposition documented in
+    /// `STAGE_1_PR_3_M3C_PREFLIGHT.md` §2.1.1) issued a parallel
+    /// sign call with legacy-derived `SpendInput`s for a stricter
+    /// `commitments` / `enc_amounts` byte-equality check at the
+    /// signer-output layer. That structure has been replaced by
+    /// SpendInput byte-equality at the input layer (strictly stronger
+    /// property; ~45% runtime reduction). The trade-off accepted:
+    /// the workspace now has 1× coverage of `sign_transaction`'s
+    /// success path (this test's engine call) instead of 2× (engine +
+    /// legacy parallel). The 1× reduction is named-and-accepted
+    /// given M3d removes the legacy bundle-derivation chain entirely;
+    /// the engine path is the load-bearing path going forward and
+    /// the redundant second exercise of the same signer would only
+    /// have decaying value.
+    ///
+    /// # Test fixture sweep
+    ///
+    /// 9 combinations: `n_in ∈ {1, 2, 3}` × `subaddress_idx ∈
+    /// {PRIMARY, 1, 42}`. For each combination the test:
+    ///
+    /// 1. Constructs `n_in` outputs paid to `subaddress_keys(idx)`
+    ///    (every recipient — including PRIMARY — uses the
+    ///    `subaddress_keys` derivation because the bundle composition
+    ///    bakes `m_i` in additively for every idx, so the recipient
+    ///    must include `m_i * G` for `O = (ho + b + m_i) * G + y * T`
+    ///    to recover with `bundle.spend_key_x = ho + b + m_i`).
+    /// 2. Recovers each output via `scan_output_recover` and composes
+    ///    a hand-derived legacy bundle for the parallel-path call.
+    /// 3. Derives the engine bundle via
+    ///    [`derive_source_secrets_bundle`].
+    /// 4. Builds a single-leaf-chunk Selene tree at `tree_depth = 1`
+    ///    containing all `n_in` entries (each engine SpendInput
+    ///    references the same chunk, with its own
+    ///    `(output_key, commitment)` selecting which entry it is
+    ///    spending). `h_pqc` values come from
+    ///    [`make_synthetic_h_pqc_bytes`] — synthetic-but-canonical
+    ///    Selene scalars; the FCMP++ verifier accepts any consistent
+    ///    `h_pqc` because `pqc_pk_hashes` is a public input rather
+    ///    than re-derived from a real PQC public key in-circuit.
+    /// 5. Asserts engine `SpendInput` byte-identity vs the hand-
+    ///    composed legacy `SpendInput` field-by-field at the input
+    ///    layer.
+    /// 6. Calls [`tx_builder::sign_transaction`] *once* on the engine
+    ///    path with the assembled outputs, fee, and `TreeContext`.
+    /// 7. Asserts:
+    ///    - **Functional success.** The sign call returns `Ok(_)`.
+    ///    - **Verifier acceptance.** The engine-path
+    ///      `bulletproof_plus` deserializes via
+    ///      `Bulletproof::read_plus` and verifies via
+    ///      `Bulletproof::verify` against the un-cofactored output
+    ///      commitment points; the engine-path `fcmp_proof` verifies
+    ///      via `shekyl_fcmp::proof::verify` against the engine-
+    ///      derived key images, the proof's pseudo-outputs, the
+    ///      synthetic `h_pqc` Selene scalars, the synthetic single-
+    ///      leaf-chunk tree root, and the same `signable_tx_hash`
+    ///      passed to the prover.
+    ///    - **Echo-passthrough.** `reference_block` and `tree_depth`
+    ///      from the input `TreeContext` are echoed unchanged in
+    ///      `SignedProofs`.
+    ///
+    /// # Why the test lives here, not in `tests/`
+    ///
+    /// Same reason as
+    /// [`derive_source_secrets_bundle_byte_identical_against_legacy_chain`]:
+    /// [`LocalKeys`], [`SourceSecretsBundle`], and the
+    /// `Zeroizing<...>` field accessors are `pub(crate)` per the M3a
+    /// Round 4a visibility lock. Integration tests run as external
+    /// crates and cannot reach `pub(crate)`; expanding visibility
+    /// for one test contradicts the lock. The
+    /// [`docs/FOLLOWUPS.md`] amendment in this PR's final commit
+    /// co-locates the re-location of this test with the M3b D5
+    /// re-location at the "`KeyEngine` widens to `pub`" trigger.
+    ///
+    /// [`derive_source_secrets_bundle`]: super::traits::key::KeyEngine::derive_source_secrets_bundle
+    /// [`KeyEngine`]: super::traits::key::KeyEngine
+    /// [`KeyEngineError::SignTransactionTraitSurfaceIncomplete`]: super::error::KeyEngineError::SignTransactionTraitSurfaceIncomplete
+    /// [`LocalKeys`]: super::local_keys::LocalKeys
+    /// [`SourceSecretsBundle`]: super::traits::key::SourceSecretsBundle
+    /// [`tx_builder::sign_transaction`]: shekyl_tx_builder::sign::sign_transaction
+    #[test]
+    #[allow(non_snake_case)]
+    fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
+        use rand_core::OsRng;
+        use shekyl_bulletproofs::Bulletproof;
+        use shekyl_crypto_pq::kem::HybridCiphertext;
+        use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
+        use shekyl_fcmp::PqcLeafScalar;
+        use shekyl_io::CompressedPoint;
+        use shekyl_primitives::Commitment;
+        use shekyl_tx_builder::{sign_transaction, LeafEntry, SpendInput, TreeContext};
+
+        let keys = LocalKeys::from_test_seed(TEST_SEED);
+
+        let n_in_values: [usize; 3] = [1, 2, 3];
+        let subaddress_indices = [
+            SubaddressIndex::PRIMARY,
+            SubaddressIndex::new(1),
+            SubaddressIndex::new(42),
+        ];
+
+        let tree_depth: u8 = 1;
+        let signable_tx_hash = [0xC3u8; 32];
+        let reference_block = [0xD4u8; 32];
+        let fee: u64 = 1_000;
+
+        for &n_in in &n_in_values {
+            for &subaddress_idx in &subaddress_indices {
+                let context = format!("n_in={n_in}, subaddress_idx={}", subaddress_idx.get());
+
+                // Recipient = subaddress_keys(idx). Used uniformly for
+                // every idx including PRIMARY: the bundle composition
+                // adds m_i additively for every idx (per
+                // `derive_source_secrets_bundle` step 4 docstring),
+                // so the recipient must include m_i * G for
+                // `O = (ho + b + m_i)*G + y*T` to recover with
+                // `bundle.spend_key_x = ho + b + m_i`.
+                let (recipient_point, _) = subaddress_keys(
+                    &keys.derived.view_scalar,
+                    &keys.derived.spend_public,
+                    &subaddress_idx.to_canonical_bytes(),
+                );
+                let recipient_spend_pk = recipient_point.compress().to_bytes();
+
+                // ── Build inputs ───────────────────────────────────
+                let mut input_amounts: Vec<u64> = Vec::with_capacity(n_in);
+                let mut leaf_chunk: Vec<LeafEntry> = Vec::with_capacity(n_in);
+                let mut engine_bundles: Vec<_> = Vec::with_capacity(n_in);
+                let mut legacy_bundles: Vec<_> = Vec::with_capacity(n_in);
+                let mut combined_ss_inputs: Vec<Vec<u8>> = Vec::with_capacity(n_in);
+
+                for input_idx in 0..n_in {
+                    let output_index = input_idx as u64;
+                    let amount = 100_000u64 + 50_000 * output_index;
+                    input_amounts.push(amount);
+
+                    let constructed = construct_output(
+                        &TEST_TX_KEY_SECRET,
+                        &keys.keys.x25519_pk,
+                        &keys.keys.ml_kem_ek,
+                        &recipient_spend_pk,
+                        amount,
+                        output_index,
+                    )
+                    .expect("construct_output succeeds for synthetic recipient");
+
+                    let ciphertext = HybridCiphertext {
+                        x25519: constructed.kem_ciphertext_x25519,
+                        ml_kem: constructed.kem_ciphertext_ml_kem.clone(),
+                    };
+
+                    // Legacy chain (parallel): scan_output_recover →
+                    // hand-composed (ho + b + m_i). Same recipe as
+                    // `derive_source_secrets_bundle_byte_identical_against_legacy_chain`.
+                    let recovered = scan_output_recover(
+                        keys.keys.view_sk.as_canonical_bytes(),
+                        keys.keys.ml_kem_dk.as_canonical_bytes(),
+                        &constructed.kem_ciphertext_x25519,
+                        &constructed.kem_ciphertext_ml_kem,
+                        &constructed.output_key,
+                        &constructed.commitment,
+                        &constructed.enc_amount,
+                        constructed.amount_tag,
+                        constructed.view_tag_x25519,
+                        output_index,
+                    )
+                    .expect("scan_output_recover succeeds for self-paid synthetic output");
+                    let ho_scalar: Scalar =
+                        Option::from(Scalar::from_canonical_bytes(recovered.ho))
+                            .expect("ho from wide_reduce is canonical");
+                    let b_scalar: Scalar =
+                        Scalar::from_bytes_mod_order(*keys.keys.spend_sk.as_canonical_bytes());
+                    let m_i: Scalar = subaddress_derivation_scalar(
+                        &keys.derived.view_scalar,
+                        &subaddress_idx.to_canonical_bytes(),
+                    );
+                    let legacy_x_bytes = (ho_scalar + b_scalar + m_i).to_bytes();
+                    let legacy_y_bytes = recovered.y;
+                    let legacy_z_bytes = recovered.z;
+                    let legacy_combined_ss = recovered.combined_ss;
+
+                    // Engine chain.
+                    let engine_bundle = keys
+                        .derive_source_secrets_bundle(&ciphertext, output_index, subaddress_idx)
+                        .expect("engine derive_source_secrets_bundle must succeed");
+
+                    // Self-check: re-assert M3b D5 byte-identity at
+                    // the bundle layer so a regression here is
+                    // attributed correctly (engine bundle vs legacy
+                    // chain) before the verifier disposition fires.
+                    assert_eq!(
+                        *engine_bundle.spend_key_x, legacy_x_bytes,
+                        "engine vs legacy spend_key_x mismatch ({context}, input={input_idx})"
+                    );
+                    assert_eq!(
+                        *engine_bundle.spend_key_y, legacy_y_bytes,
+                        "engine vs legacy spend_key_y mismatch ({context}, input={input_idx})"
+                    );
+                    assert_eq!(
+                        *engine_bundle.commitment_mask, legacy_z_bytes,
+                        "engine vs legacy commitment_mask mismatch ({context}, input={input_idx})"
+                    );
+                    assert_eq!(
+                        engine_bundle.combined_ss.as_slice(),
+                        &legacy_combined_ss[..],
+                        "engine vs legacy combined_ss mismatch ({context}, input={input_idx})"
+                    );
+
+                    // Build leaf chunk entry. Each entry's
+                    // `key_image_gen` MUST equal `biased_hash_to_point(O)`
+                    // because tx_builder recomputes it that way
+                    // internally (`compute_key_image_gen`) and the
+                    // FCMP++ in-circuit constraint binds the leaf-
+                    // stored value to the prover's claim.
+                    let h_pqc = make_synthetic_h_pqc_bytes(
+                        (n_in as u64) * 1_000_000
+                            + u64::from(subaddress_idx.get()) * 1_000
+                            + (input_idx as u64),
+                    );
+                    leaf_chunk.push(LeafEntry {
+                        output_key: constructed.output_key,
+                        key_image_gen: shekyl_generators::biased_hash_to_point(
+                            constructed.output_key,
+                        )
+                        .compress()
+                        .to_bytes(),
+                        commitment: constructed.commitment,
+                        h_pqc,
+                    });
+
+                    legacy_bundles.push((
+                        legacy_x_bytes,
+                        legacy_y_bytes,
+                        legacy_z_bytes,
+                        legacy_combined_ss,
+                    ));
+                    combined_ss_inputs.push(engine_bundle.combined_ss.to_vec());
+                    engine_bundles.push(engine_bundle);
+                }
+
+                // Compute the synthetic single-leaf-chunk tree root
+                // from the assembled chunk.
+                let tree_leaves: Vec<_> = leaf_chunk
+                    .iter()
+                    .map(|e| {
+                        let o = CompressedEdwardsY(e.output_key)
+                            .decompress()
+                            .expect("output_key is on-curve");
+                        let i = CompressedEdwardsY(e.key_image_gen)
+                            .decompress()
+                            .expect("key_image_gen is on-curve");
+                        let c = CompressedEdwardsY(e.commitment)
+                            .decompress()
+                            .expect("commitment is on-curve");
+                        (o, i, c, e.h_pqc)
+                    })
+                    .collect();
+                let tree_root = build_synthetic_single_chunk_tree_root(&tree_leaves);
+                let tree = TreeContext {
+                    reference_block,
+                    tree_root,
+                    tree_depth,
+                };
+
+                // ── Build SpendInputs ───────────────────────────────
+                let mk_spendinput = |i: usize,
+                                     spend_key_x: [u8; 32],
+                                     spend_key_y: [u8; 32],
+                                     commitment_mask: [u8; 32],
+                                     combined_ss: Vec<u8>|
+                 -> SpendInput {
+                    SpendInput {
+                        output_key: leaf_chunk[i].output_key,
+                        commitment: leaf_chunk[i].commitment,
+                        amount: input_amounts[i],
+                        spend_key_x,
+                        spend_key_y,
+                        commitment_mask,
+                        h_pqc: leaf_chunk[i].h_pqc,
+                        combined_ss,
+                        output_index: i as u64,
+                        leaf_chunk: leaf_chunk.clone(),
+                        c1_layers: vec![],
+                        c2_layers: vec![],
+                    }
+                };
+
+                let engine_inputs: Vec<SpendInput> = engine_bundles
+                    .iter()
+                    .enumerate()
+                    .map(|(i, b)| {
+                        mk_spendinput(
+                            i,
+                            *b.spend_key_x,
+                            *b.spend_key_y,
+                            *b.commitment_mask,
+                            combined_ss_inputs[i].clone(),
+                        )
+                    })
+                    .collect();
+
+                let legacy_inputs: Vec<SpendInput> = legacy_bundles
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (x, y, z, ss))| mk_spendinput(i, *x, *y, *z, ss.to_vec()))
+                    .collect();
+
+                // ── SpendInput byte-equality (input layer) ──────────
+                //
+                // Field-by-field equality between engine-derived and
+                // legacy-derived SpendInputs. This is strictly stronger
+                // than the post-Trim-1-superseded `commitments` /
+                // `enc_amounts` byte-equality at the signer-output
+                // layer: byte-equality at the SpendInput layer plus
+                // the determinism of `tx_builder::sign_transaction`'s
+                // `OutputInfo → commitments` mapping implies output-
+                // layer byte-equality, AND additionally guards
+                // against a class of regressions where two SpendInputs
+                // differ in fields that don't affect commitments /
+                // enc_amounts but do affect signature behavior or
+                // future field additions. See the Trim-1 disposition
+                // note in the docstring's "Workspace-coverage note"
+                // section.
+                assert_eq!(
+                    engine_inputs.len(),
+                    legacy_inputs.len(),
+                    "engine vs legacy SpendInput vec length mismatch ({context})"
+                );
+                for (i, (e, l)) in engine_inputs.iter().zip(legacy_inputs.iter()).enumerate() {
+                    assert_eq!(
+                        e.output_key, l.output_key,
+                        "SpendInput.output_key mismatch ({context}, input={i})"
+                    );
+                    assert_eq!(
+                        e.commitment, l.commitment,
+                        "SpendInput.commitment mismatch ({context}, input={i})"
+                    );
+                    assert_eq!(
+                        e.amount, l.amount,
+                        "SpendInput.amount mismatch ({context}, input={i})"
+                    );
+                    assert_eq!(
+                        e.spend_key_x, l.spend_key_x,
+                        "SpendInput.spend_key_x mismatch ({context}, input={i})"
+                    );
+                    assert_eq!(
+                        e.spend_key_y, l.spend_key_y,
+                        "SpendInput.spend_key_y mismatch ({context}, input={i})"
+                    );
+                    assert_eq!(
+                        e.commitment_mask, l.commitment_mask,
+                        "SpendInput.commitment_mask mismatch ({context}, input={i})"
+                    );
+                    assert_eq!(
+                        e.h_pqc, l.h_pqc,
+                        "SpendInput.h_pqc mismatch ({context}, input={i})"
+                    );
+                    assert_eq!(
+                        e.combined_ss, l.combined_ss,
+                        "SpendInput.combined_ss mismatch ({context}, input={i})"
+                    );
+                    assert_eq!(
+                        e.output_index, l.output_index,
+                        "SpendInput.output_index mismatch ({context}, input={i})"
+                    );
+                    assert_eq!(
+                        e.leaf_chunk.len(),
+                        l.leaf_chunk.len(),
+                        "SpendInput.leaf_chunk length mismatch ({context}, input={i})"
+                    );
+                    for (j, (ec, lc)) in e.leaf_chunk.iter().zip(l.leaf_chunk.iter()).enumerate() {
+                        assert_eq!(
+                            ec.output_key, lc.output_key,
+                            "leaf_chunk[{j}].output_key mismatch ({context}, input={i})"
+                        );
+                        assert_eq!(
+                            ec.key_image_gen, lc.key_image_gen,
+                            "leaf_chunk[{j}].key_image_gen mismatch ({context}, input={i})"
+                        );
+                        assert_eq!(
+                            ec.commitment, lc.commitment,
+                            "leaf_chunk[{j}].commitment mismatch ({context}, input={i})"
+                        );
+                        assert_eq!(
+                            ec.h_pqc, lc.h_pqc,
+                            "leaf_chunk[{j}].h_pqc mismatch ({context}, input={i})"
+                        );
+                    }
+                    assert_eq!(
+                        e.c1_layers, l.c1_layers,
+                        "SpendInput.c1_layers mismatch ({context}, input={i})"
+                    );
+                    assert_eq!(
+                        e.c2_layers, l.c2_layers,
+                        "SpendInput.c2_layers mismatch ({context}, input={i})"
+                    );
+                }
+
+                // ── Build outputs (one self-paid output sweeping all funds minus fee) ──
+                //
+                // The recipient output's `output_index` is shifted by
+                // an offset large enough to never collide with any
+                // input's `output_index` in the sweep. Without the
+                // offset, when the input and output share the same
+                // (combined_ss, output_index) the HKDF-derived
+                // commitment masks are equal, and FCMP++'s
+                // rerandomization scalar `r_c = a_i - z_in` collapses
+                // to zero (single-input/single-output case), which
+                // surfaces as `ScalarDecompositionFailed` from the
+                // upstream prover. The collision is a fixture quirk,
+                // not a property failure: in production each output
+                // uses an ephemeral tx-key so input/output combined_ss
+                // differ even at matching indices.
+                let input_total: u64 = input_amounts.iter().sum();
+                let output_total = input_total - fee;
+                let recipient_output_index: u64 = (n_in as u64) + 100;
+                let outputs = vec![make_recipient_output_info(
+                    &keys,
+                    output_total,
+                    recipient_output_index,
+                )];
+
+                // ── Sign engine path (sole sign call; legacy parallel
+                //    sign call removed per the Trim-1 disposition) ───
+                let signed_engine =
+                    sign_transaction(signable_tx_hash, &engine_inputs, &outputs, fee, &tree)
+                        .unwrap_or_else(|e| {
+                            panic!("engine-bundle sign_transaction must succeed ({context}): {e:?}")
+                        });
+
+                // ── Echo-passthrough ────────────────────────────────
+                assert_eq!(
+                    signed_engine.reference_block, reference_block,
+                    "reference_block echo violated ({context})"
+                );
+                assert_eq!(
+                    signed_engine.tree_depth, tree_depth,
+                    "tree_depth echo violated ({context})"
+                );
+
+                // ── Verifier acceptance: Bulletproof+ ───────────────
+                // BP+ verify takes the un-cofactored commitment
+                // points (`mask*G + amount*H` without the factor-8
+                // multiplication tx_builder applies for the
+                // SignedProofs.commitments echo). Recompute from
+                // OutputInfo to ensure we feed the right shape.
+                let bp_commitments: Vec<CompressedPoint> = outputs
+                    .iter()
+                    .map(|out| {
+                        let mask = Scalar::from_canonical_bytes(out.commitment_mask)
+                            .expect("commitment_mask from OutputInfo is canonical");
+                        let c = Commitment::new(mask, out.amount);
+                        CompressedPoint::from(c.calculate().compress().to_bytes())
+                    })
+                    .collect();
+                let bp = Bulletproof::read_plus(&mut signed_engine.bulletproof_plus.as_slice())
+                    .unwrap_or_else(|e| panic!("bulletproof_plus deserializes ({context}): {e:?}"));
+                let mut rng = OsRng;
+                assert!(
+                    bp.verify(&mut rng, &bp_commitments),
+                    "BP+ verifier must accept engine-signed range proof ({context})"
+                );
+
+                // ── Verifier acceptance: FCMP++ ─────────────────────
+                let key_images: Vec<KeyImage> = engine_inputs
+                    .iter()
+                    .map(|inp| {
+                        KeyImage::from_canonical_bytes(compute_test_key_image(
+                            inp.output_key,
+                            inp.spend_key_x,
+                        ))
+                    })
+                    .collect();
+                let pqc_pk_hashes: Vec<PqcLeafScalar> = engine_inputs
+                    .iter()
+                    .map(|inp| PqcLeafScalar(inp.h_pqc))
+                    .collect();
+                let proof = ShekylFcmpProof {
+                    data: signed_engine.fcmp_proof.clone(),
+                    num_inputs: u32::try_from(n_in).expect("n_in is bounded by the [1, 3] sweep"),
+                    tree_depth,
+                };
+                let result = verify(
+                    &proof,
+                    &key_images,
+                    &signed_engine.pseudo_outs,
+                    &pqc_pk_hashes,
+                    &tree.tree_root,
+                    tree.tree_depth,
+                    signable_tx_hash,
+                );
+                assert!(
+                    matches!(result, Ok(true)),
+                    "FCMP++ verifier must accept engine-signed proof ({context}): {result:?}"
                 );
             }
         }
