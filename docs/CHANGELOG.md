@@ -144,6 +144,44 @@
 
 ### Fixed
 
+- **CI bench gate no longer false-fails on `baseline=0` capture
+  anomalies; the anomaly is surfaced as informational rather than
+  silenced.** Discovered on PR #34: the `bench-baseline` branch's
+  most-recent refresh (from dev-tip `647f82d5`) recorded
+  `instructions=0` for six `hot_path_bench_ledger_postcard_*`
+  entries that the prior nine baselines measured at ~4.4M / 44M /
+  444M instructions each, with no causal code change between
+  snapshots and iai-callgrind's own run summary embedded in
+  `baseline.iai.snapshot` reporting `6 without regressions; 0
+  regressed; 6 benchmarks finished` — the capture ran to
+  completion. Cause is unknown (runner-image drift,
+  iai-callgrind-runner version skew, build-flag drift, or a
+  transient anomaly in the measurement layer are all candidates);
+  investigation lives on
+  `chore/investigate-bench-baseline-flake-2026-05-09`.
+  [`scripts/bench/compare.py`](../scripts/bench/compare.py) now
+  routes `(base_val == 0 && pr_val != 0)` into a distinct
+  `baseline_zero` bucket — informational, not gating — that
+  preserves the PR-side measurement for diagnosis.
+  [`scripts/bench/post_comment.py`](../scripts/bench/post_comment.py)
+  renders the bucket under its own header line ("Baseline anomaly
+  (informational, not gated)") and table rows with a `_baseline=0_`
+  verdict badge distinct from `ok` / `FAIL` / `added` / `missing`,
+  so the anomaly surfaces to reviewers rather than being silently
+  masked under the "new in PR" label. The post-merge
+  `update-baseline` job re-captures from the next push to `dev`;
+  if the next refresh produces real numbers the anomaly was
+  transient and self-heals, if zeros persist the investigation
+  branch has a fresh signal. Regression guards: real regressions
+  still trip `fail` (validated with a +39% hot_path fixture); the
+  `(base=0, pr=0)` edge case is preserved as a 0% delta `ok`
+  rather than getting routed away. Lock-down:
+  [`scripts/bench/test_compare.py`](../scripts/bench/test_compare.py)
+  pins the routing logic with four regression tests
+  (baseline-zero-bucket, real-regression-still-fails,
+  both-zero-stays-ok, added-in-pr-distinct-from-baseline-zero);
+  stdlib-only, runs via `python3 scripts/bench/test_compare.py`.
+
 - **`account_base::generate(...)` no longer hardcodes `FAKECHAIN`;
   the legacy 3-arg overload is deleted entirely and every caller
   spells its network out explicitly.**
