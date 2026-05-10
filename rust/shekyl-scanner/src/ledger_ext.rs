@@ -155,7 +155,13 @@ impl LedgerIndexesExt for LedgerIndexes {
             batch.push(td);
         }
 
+        // PERF_MERGE_INSERTION_INDICES_PREFLIGHT commit 1 transition:
+        // `ingest_block` now returns `Range<usize>` of accepted
+        // indices. The trait's `usize` return is preserved here for
+        // commit-1 bisect cleanliness; commit 2 promotes the trait
+        // surface to `Range<usize>` and removes this `.len()` adapter.
         self.ingest_block(ledger, block_height, block_hash, batch)
+            .len()
     }
 }
 

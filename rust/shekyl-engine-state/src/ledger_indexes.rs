@@ -37,6 +37,7 @@
 //! is exposed here.
 
 use std::collections::HashMap;
+use std::ops::Range;
 
 use shekyl_crypto_pq::key_image::KeyImage;
 use tracing::warn;
@@ -128,16 +129,29 @@ impl LedgerIndexes {
     /// `ledger.reorg_blocks` exactly once — even when the block
     /// contains zero outputs for this wallet.
     ///
-    /// Returns the number of transfers accepted (duplicates from the
-    /// burning-bug guard are silently dropped with a `warn!`).
+    /// Returns the contiguous range of `ledger.transfers` indices into
+    /// which accepted transfers were appended. The range's start is
+    /// captured before any insert; accepted transfers occupy
+    /// `start..start + accepted`. Burning-bug duplicates dropped under
+    /// the guard contract narrow the range — submitting two transfers
+    /// where one is rejected returns a length-1 range, not length 2.
+    /// An empty `transfers` argument or a batch of all-duplicates
+    /// returns an empty range (`start..start`).
+    ///
+    /// The range is the natural shape for the engine post-pass at
+    /// `engine::merge::populate_engine_handle_fields` — it allows
+    /// O(k) iteration over freshly appended transfers rather than
+    /// O(n) scan of the full ledger. The shape is mechanically
+    /// flattenable to `Vec<usize>` via [`Range::collect`] / [`Iterator::collect`]
+    /// at higher layers (see `apply_scan_result_to_state`).
     pub fn ingest_block(
         &mut self,
         ledger: &mut LedgerBlock,
         block_height: u64,
         block_hash: [u8; 32],
         transfers: Vec<TransferDetails>,
-    ) -> usize {
-        let mut added = 0;
+    ) -> Range<usize> {
+        let start = ledger.transfers.len();
         for td in transfers {
             let pub_key_bytes = td.key.compress().to_bytes();
             if self.pub_keys.contains_key(&pub_key_bytes) {
@@ -155,8 +169,8 @@ impl LedgerIndexes {
                 self.key_images.insert(ki, idx);
             }
             ledger.transfers.push(td);
-            added += 1;
         }
+        let end = ledger.transfers.len();
 
         ledger.tip.synced_height = block_height;
         ledger.tip.tip_hash = Some(block_hash);
@@ -167,7 +181,7 @@ impl LedgerIndexes {
             "invariant violated after ingest_block: {}",
             self.check_invariants(ledger).unwrap_err()
         );
-        added
+        start..end
     }
 
     /// Mark an output as spent by its key image.
@@ -562,13 +576,13 @@ mod tests {
         let mut ledger = LedgerBlock::empty();
         let mut indexes = LedgerIndexes::empty();
 
-        let added = indexes.ingest_block(
+        let inserted = indexes.ingest_block(
             &mut ledger,
             100,
             [0xCC; 32],
             vec![mk_transfer(1, 100, Some(ki(0xAA)))],
         );
-        assert_eq!(added, 1);
+        assert_eq!(inserted, 0..1);
         assert_eq!(ledger.tip.synced_height, 100);
         assert_eq!(ledger.tip.tip_hash, Some([0xCC; 32]));
         assert_eq!(ledger.transfers.len(), 1);
@@ -582,12 +596,52 @@ mod tests {
         let mut indexes = LedgerIndexes::empty();
 
         // Two transfers with the same `key` (same compressed bytes) —
-        // the second is dropped under the burning-bug guard.
+        // the second is dropped under the burning-bug guard. The
+        // returned range has length 1 (accepted count), not 2
+        // (submitted count).
         let t1 = mk_transfer(1, 100, Some(ki(0xAA)));
         let t2 = mk_transfer(1, 110, Some(ki(0xBB)));
-        let added = indexes.ingest_block(&mut ledger, 110, [0; 32], vec![t1, t2]);
-        assert_eq!(added, 1);
+        let inserted = indexes.ingest_block(&mut ledger, 110, [0; 32], vec![t1, t2]);
+        assert_eq!(inserted, 0..1);
         assert_eq!(ledger.transfers.len(), 1);
+    }
+
+    /// Burning-bug duplicate-drop pin (PERF_MERGE_INSERTION_INDICES_PREFLIGHT
+    /// §5.1 / G6): the returned range reflects accepted-transfer
+    /// indices, not submitted-transfer indices, and its `start`
+    /// reflects the ledger's pre-batch size — the engine post-pass at
+    /// `merge::populate_engine_handle_fields` indexes into the freshly
+    /// appended slice and must not visit prior-merge transfers.
+    #[test]
+    fn ingest_block_returns_range_of_accepted_indices() {
+        let mut ledger = LedgerBlock::empty();
+        let mut indexes = LedgerIndexes::empty();
+
+        // Pre-populate: a single accepted transfer at index 0 from a
+        // prior merge. The next batch's range must start at 1.
+        let prior = indexes.ingest_block(
+            &mut ledger,
+            100,
+            [0x11; 32],
+            vec![mk_transfer(1, 100, Some(ki(0x10)))],
+        );
+        assert_eq!(prior, 0..1);
+
+        // Submit a 2-transfer batch where transfer 2 is a duplicate of
+        // transfer 1's `key`. The burning-bug guard drops transfer 2;
+        // the returned range covers only transfer 1 at index 1.
+        let t1 = mk_transfer(2, 200, Some(ki(0x20)));
+        let t2 = mk_transfer(2, 210, Some(ki(0x21))); // duplicate `key`
+        let inserted = indexes.ingest_block(&mut ledger, 200, [0x22; 32], vec![t1, t2]);
+        assert_eq!(inserted, 1..2);
+        assert_eq!(inserted.len(), 1);
+        assert_eq!(ledger.transfers.len(), 2);
+
+        // An empty submission returns an empty range whose start
+        // equals the current ledger size.
+        let empty = indexes.ingest_block(&mut ledger, 300, [0x33; 32], vec![]);
+        assert_eq!(empty, 2..2);
+        assert!(empty.is_empty());
     }
 
     #[test]
