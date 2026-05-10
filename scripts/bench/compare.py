@@ -28,12 +28,29 @@
 #       "criterion_entries": [...],
 #       "summary": {
 #         "total": 15,
+#         "gated_total": 15,
 #         "ok": 15, "warn": 0, "fail": 0,
 #         "has_fail": false,
 #         "has_warn": false,
-#         "unrouted": []
+#         "unrouted": [],
+#         "baseline_zero": []
 #       }
 #     }
+#
+# `total` and `gated_total` semantics:
+#   - `gated_total` is the explicit name: number of iai entries that
+#     produced a gate verdict (ok + warn + fail). This is what the
+#     headline phrase "X gated entries" in `post_comment.py` reflects.
+#   - `total` retains the same numeric value as `gated_total` for
+#     back-compat with consumers written before `baseline_zero`
+#     existed. The intent is "entries that fed the gate," not "gross
+#     entries compared on both sides." When `baseline_zero` is
+#     non-empty, gross-entries-compared = `gated_total +
+#     len(baseline_zero)`; consumers needing that figure should
+#     compute it explicitly rather than reading it from `total`.
+#   - Both fields are kept in sync. Future schema evolution may
+#     deprecate `total` in favor of `gated_total` once consumers
+#     migrate; the deprecation is a v2 concern, not a v1 amendment.
 #
 # Exit code:
 #   0 — no fails. warn entries are reported but do not exit nonzero.
@@ -61,6 +78,23 @@ from typing import Any
 
 SCHEMA_VERSION_IN = "shekyl_rust_v0"
 SCHEMA_VERSION_OUT = "shekyl_rust_v0_compare_v1"
+
+# Schema-evolution policy for `SCHEMA_VERSION_OUT`:
+#
+#   - **Additive** changes (new keys in `summary`, new bucket lists,
+#     new diagnostic fields on existing buckets) are made *without*
+#     bumping the version string. Consumers — `post_comment.py` and
+#     any future tooling — are expected to tolerate unknown keys.
+#     Adding the `baseline_zero` summary bucket (2026-05) is the
+#     canonical example.
+#   - **Breaking** changes (renamed keys, changed semantics for
+#     existing keys, removed fields) bump `_v1` to `_v2` and force
+#     all consumers to update their version pin in lockstep.
+#
+# Consumers MUST treat unknown keys as informational and not fail on
+# them. The strict version check in `post_comment.py` is for catching
+# accidentally-passed *non-compare* JSON, not for gating additive
+# evolution.
 
 # Threshold table — see `docs/MID_REWIRE_HARDENING.md` §3.3, §4.1, and
 # `docs/design/STAGE_0_HARNESS.md` §4.3 (engine_trait_bench_*). The
@@ -194,6 +228,12 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
     unrouted: list[str] = []
     missing_in_pr: list[str] = []
     added_in_pr: list[str] = []
+    # `baseline_zero` carries `{full_id, class, pr}` (not just full_id)
+    # so the renderer can surface the PR-side measurement alongside
+    # the anomaly notice. The other buckets above are
+    # `list[str]`-shaped because the missing side has no value to
+    # carry; here the PR side has a real number.
+    baseline_zero: list[dict[str, Any]] = []
 
     for full_id in sorted(set(base_iai) | set(pr_iai)):
         b = base_iai.get(full_id)
@@ -212,11 +252,25 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
 
         base_val = b["metrics"][GATE_METRIC]
         pr_val = p["metrics"][GATE_METRIC]
-        # 0-instruction benches (theoretical; we have none) would
-        # divide by zero; guard it so the comparator cannot crash on
-        # a future schema where an empty-input bench lands.
+        # `(base = 0, pr > 0)` is a baseline-side capture anomaly:
+        # not gateable (division by zero), not a real "added in PR"
+        # (the entry exists on both sides). Routes to a distinct
+        # `baseline_zero` bucket — informational, not gating, with
+        # the PR-side value preserved for diagnosis. See
+        # `docs/investigation/2026-05-09-bench-baseline-flake.md`
+        # for the originating incident, root-cause status, and the
+        # producer-side guard in `capture_rust_baseline.sh` that
+        # prevents new bad captures from being committed.
+        #
+        # `(base = 0, pr = 0)` is preserved as a 0% delta `ok` —
+        # informationally a no-op, matches prior behavior.
+        if base_val == 0 and pr_val != 0:
+            baseline_zero.append(
+                {"full_id": full_id, "class": cls, "pr": pr_val}
+            )
+            continue
         if base_val == 0:
-            delta_pct = 0.0 if pr_val == 0 else float("inf")
+            delta_pct = 0.0
         else:
             delta_pct = (pr_val - base_val) / base_val
 
@@ -273,14 +327,23 @@ def compare(baseline: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
             }
         )
 
+    # `gated_total` is the explicit name for "entries that produced a
+    # gate verdict." `total` keeps the same value for back-compat per
+    # the schema-evolution policy above; new renderers / consumers
+    # should prefer `gated_total`. When `baseline_zero` is non-empty,
+    # gross-entries-compared = `gated_total + len(baseline_zero)`;
+    # consumers needing that figure compute it explicitly.
+    gated_total = len(iai_entries)
     counts = {
-        "total": len(iai_entries),
+        "total": gated_total,
+        "gated_total": gated_total,
         "ok": sum(1 for e in iai_entries if e["verdict"] == "ok"),
         "warn": sum(1 for e in iai_entries if e["verdict"] == "warn"),
         "fail": sum(1 for e in iai_entries if e["verdict"] == "fail"),
         "unrouted": unrouted,
         "missing_in_pr": missing_in_pr,
         "added_in_pr": added_in_pr,
+        "baseline_zero": baseline_zero,
     }
     counts["has_fail"] = counts["fail"] > 0 or bool(missing_in_pr)
     counts["has_warn"] = counts["warn"] > 0
@@ -350,10 +413,12 @@ def main() -> int:
             f.write(out_text + "\n")
 
     # Concise stderr summary so humans tailing CI logs get the TL;DR
-    # without having to parse the JSON.
+    # without having to parse the JSON. "gated entries" is the
+    # explicit label so the count's relationship to ok/warn/fail is
+    # unambiguous when `baseline_zero` is non-empty.
     s = report["summary"]
     print(
-        f"[compare] {s['total']} iai entries: "
+        f"[compare] {s['gated_total']} gated iai entries: "
         f"{s['ok']} ok, {s['warn']} warn, {s['fail']} fail"
         + (f", {len(s['unrouted'])} unrouted" if s["unrouted"] else "")
         + (
@@ -361,7 +426,12 @@ def main() -> int:
             if s["missing_in_pr"]
             else ""
         )
-        + (f", {len(s['added_in_pr'])} added in PR" if s["added_in_pr"] else ""),
+        + (f", {len(s['added_in_pr'])} added in PR" if s["added_in_pr"] else "")
+        + (
+            f", {len(s['baseline_zero'])} baseline-zero anomaly"
+            if s["baseline_zero"]
+            else ""
+        ),
         file=sys.stderr,
     )
 

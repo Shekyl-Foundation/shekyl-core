@@ -282,7 +282,112 @@ for i in range(len(section_starts) - 1):
     if current is not None:
         iai_entries.append(current)
 
-# ── 3. Envelope ───────────────────────────────────────────────────────────
+# ── 3. Producer-side capture guard ────────────────────────────────────────
+#
+# Reject captures with `instructions == 0` rows before they are
+# written to the canonical `shekyl_rust_v0.json` path. Such rows have
+# been observed (2026-05-09; see
+# `docs/investigation/2026-05-09-bench-baseline-flake.md`) on
+# GitHub-hosted ubuntu-latest runners with no causal code change and
+# iai-callgrind's own run summary reporting "N without regressions".
+# Root cause is unknown; what is known is that committing the
+# resulting envelope to the `bench-baseline` branch persists the
+# corruption across every subsequent PR's compare run, and that
+# rerunning the workflow typically succeeds.
+#
+# The guard runs after `iai_entries` is fully assembled and BEFORE
+# the canonical OUT_JSON is written, so a flaked capture leaves the
+# previous (good) bench-baseline content untouched. The raw stdout
+# snapshot at OUT_IAI_SNAP was already written above and is
+# preserved as evidence regardless.
+#
+# A diagnostic side-file is written at OUT_JSON + ".flake.json" so
+# investigators can `git fetch` the artifact / inspect locally
+# without re-running the harness. The flake side-file is
+# deliberately not the canonical OUT_JSON path because the rest of
+# the pipeline (artifact upload, bench-baseline push, compare.py)
+# treats OUT_JSON as authoritative; emitting the bad data there
+# would defeat the guard.
+#
+# Bypass: set `SHEKYL_BENCH_ALLOW_ZERO=1` to skip the check (intended
+# only for local debugging of the capture-zero phenomenon itself).
+# CI workflows must not set this.
+
+zero_entries = [
+    e for e in iai_entries
+    if e.get("metrics", {}).get("instructions", -1) == 0
+]
+allow_zero = os.environ.get("SHEKYL_BENCH_ALLOW_ZERO", "") == "1"
+
+if zero_entries and not allow_zero:
+    flake_path = pathlib.Path(str(out_json) + ".flake.json")
+    flake_envelope = {
+        "schema_version": "shekyl_rust_v0",
+        "captured_on": {
+            "git_rev": os.environ["GIT_REV"],
+            "git_dirty": os.environ["GIT_DIRTY"],
+            "kernel": os.environ["KERNEL"],
+            "cpu_model": os.environ["CPU_MODEL"],
+            "rustc_version": os.environ["RUSTC_VER"],
+            "cargo_version": os.environ["CARGO_VER"],
+            "valgrind_version": os.environ["VALGRIND_VER"],
+            "iai_callgrind_runner_version": os.environ["IAI_RUNNER_VER"],
+        },
+        "criterion": criterion_entries,
+        "iai_callgrind": iai_entries,
+        "flake": {
+            "kind": "instructions_zero",
+            "zero_count": len(zero_entries),
+            "zero_entries": [
+                {
+                    "crate": e.get("crate"),
+                    "bench_target": e.get("bench_target"),
+                    "group": e.get("group"),
+                    "function": e.get("function"),
+                    "run_id": e.get("run_id"),
+                }
+                for e in zero_entries
+            ],
+        },
+    }
+    flake_path.parent.mkdir(parents=True, exist_ok=True)
+    flake_path.write_text(json.dumps(flake_envelope, indent=2) + "\n",
+                          encoding="utf-8")
+
+    print(
+        f"[capture_rust_baseline] REJECTED: {len(zero_entries)} of "
+        f"{len(iai_entries)} iai entries reported instructions=0",
+        file=sys.stderr,
+    )
+    for e in zero_entries:
+        print(
+            f"[capture_rust_baseline]   zero: "
+            f"{e.get('crate')}/{e.get('bench_target')}/"
+            f"{e.get('group')}/{e.get('function')}/{e.get('run_id')}",
+            file=sys.stderr,
+        )
+    print(
+        f"[capture_rust_baseline] canonical {out_json.name} NOT written; "
+        f"diagnostic envelope at {flake_path}",
+        file=sys.stderr,
+    )
+    print(
+        "[capture_rust_baseline] this is a known transient capture "
+        "anomaly; rerun the workflow to retry. Investigation: "
+        "docs/investigation/2026-05-09-bench-baseline-flake.md",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
+if zero_entries and allow_zero:
+    print(
+        f"[capture_rust_baseline] WARNING: {len(zero_entries)} iai "
+        f"entries reported instructions=0; SHEKYL_BENCH_ALLOW_ZERO=1 "
+        f"is set, proceeding anyway (CI must not set this)",
+        file=sys.stderr,
+    )
+
+# ── 4. Envelope ───────────────────────────────────────────────────────────
 
 envelope = {
     "schema_version": "shekyl_rust_v0",
@@ -301,7 +406,8 @@ envelope = {
 }
 
 out_json.parent.mkdir(parents=True, exist_ok=True)
-out_json.write_text(json.dumps(envelope, indent=2) + "\n")
+out_json.write_text(json.dumps(envelope, indent=2) + "\n",
+                    encoding="utf-8")
 print(f"[capture_rust_baseline] wrote {out_json}")
 print(f"[capture_rust_baseline]   criterion entries: {len(criterion_entries)}")
 print(f"[capture_rust_baseline]   iai entries      : {len(iai_entries)}")
