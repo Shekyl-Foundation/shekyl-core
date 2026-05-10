@@ -142,8 +142,9 @@ impl LedgerIndexes {
     /// `engine::merge::populate_engine_handle_fields` — it allows
     /// O(k) iteration over freshly appended transfers rather than
     /// O(n) scan of the full ledger. The shape is mechanically
-    /// flattenable to `Vec<usize>` via [`Range::collect`] / [`Iterator::collect`]
-    /// at higher layers (see `apply_scan_result_to_state`).
+    /// flattenable to `Vec<usize>` via `(start..end).collect::<Vec<_>>()`
+    /// (which dispatches through [`Iterator::collect`]) at higher
+    /// layers (see `apply_scan_result_to_state`).
     pub fn ingest_block(
         &mut self,
         ledger: &mut LedgerBlock,
