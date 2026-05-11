@@ -671,7 +671,7 @@ rationale is at its strongest here**: every key operation should
 inline into one audited compilation unit.
 
 **Stage 1 surface (post-M3 migration; source of truth at
-[`rust/shekyl-engine-core/src/engine/traits/key.rs:616`](../rust/shekyl-engine-core/src/engine/traits/key.rs)).**
+[`rust/shekyl-engine-core/src/engine/traits/key.rs:616`](../rust/shekyl-engine-core/src/engine/traits/key.rs#L616)).**
 
 ```rust
 pub(crate) trait KeyEngine: Send + Sync + 'static {

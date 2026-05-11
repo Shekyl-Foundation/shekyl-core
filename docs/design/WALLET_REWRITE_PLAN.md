@@ -55,7 +55,7 @@ isProject: false
 
 ## Locked design (from prior plans, do not re-litigate)
 
-- **Wallet file format:** v1 split-file envelope (`.wallet.keys` + `.wallet`) per [docs/WALLET_FILE_FORMAT_V1.md](docs/WALLET_FILE_FORMAT_V1.md). Stance Minimum-Leak AAD, two-level KEK (DK → file_kek → wrap_key), capability-discriminated region 1, Poly1305 cross-file binding via `state_tag_of_seed_block`. Region 1 write-once; region 2 free to rewrite. Already landed in `rust/shekyl-crypto-pq/src/wallet_envelope.rs` + `rust/shekyl-engine-file/`.
+- **Wallet file format:** v1 split-file envelope (`.wallet.keys` + `.wallet`) per [docs/WALLET_FILE_FORMAT_V1.md](../WALLET_FILE_FORMAT_V1.md). Stance Minimum-Leak AAD, two-level KEK (DK → file_kek → wrap_key), capability-discriminated region 1, Poly1305 cross-file binding via `state_tag_of_seed_block`. Region 1 write-once; region 2 free to rewrite. Already landed in `rust/shekyl-crypto-pq/src/wallet_envelope.rs` + `rust/shekyl-engine-file/`.
 - **Key signature:** master_seed_64 → HKDF with `shekyl-master-derive-v1-<network>-<format>` salt → wide-reduce Ed25519 scalars → ML-KEM-768 via SHA3-256(`shekyl-mlkem-chacha-seed` || d_z) → ChaCha20Rng. BIP-39 mainnet/stagenet (passphrase opt-in only), raw 32-byte seed testnet/fakechain. Already landed in `rust/shekyl-crypto-pq` per [stabilize_key_signature_15d8e48a](../plans/stabilize_key_signature_15d8e48a.plan.md).
 - **Transaction shape:** `RCTTypeFcmpPlusPlusPqc` only (and `RCTTypeNull` for coinbase). FCMP++ membership proofs from genesis, hybrid PQC (Ed25519 + ML-DSA-65) on signing, ML-KEM-768 in addresses.
 - **Multisig:** modified FROST scaffold lives behind `shekyl-wallet-core/multisig` feature; full V3.1 ship-readiness is a separate plan. The Rust wallet API is shaped FROST-aware from day 1 so V3.1 is a feature flip, not a refactor.
@@ -68,7 +68,7 @@ This is "we're pretty far, tbh." The phase plan below assumes this baseline. Dis
 
 - [shekyl-engine-state](rust/shekyl-engine-state/): `TransferDetails`, `RuntimeWalletState`, `SubaddressIndex`, `PaymentId`, `StakerPoolState`, `LedgerBlock`, `BookkeepingBlock`, `TxMetaBlock`, `SyncStateBlock`, `WalletLedger` aggregator. Postcard round-trip proptests in place.
 - [shekyl-engine-file](rust/shekyl-engine-file/): orchestrator with `Wallet::{create,open,save,change_password,verify_password}`. Advisory locking, atomic tmp→fsync→rename→fsync-parent. Per-block ledger payload framing.
-- [shekyl-engine-prefs](rust/shekyl-engine-prefs/): plaintext-with-HMAC user prefs (layer 2 of [WALLET_PREFS.md](docs/WALLET_PREFS.md)).
+- [shekyl-engine-prefs](rust/shekyl-engine-prefs/): plaintext-with-HMAC user prefs (layer 2 of [WALLET_PREFS.md](../WALLET_PREFS.md)).
 - [shekyl-scanner](rust/shekyl-scanner/): chain scan, output identification, key-image computation.
 - [shekyl-tx-builder](rust/shekyl-tx-builder/): BP+ range proofs, FCMP++ sign, hybrid PQC auth. `transfer_e2e_1in_2out` benched.
 - [shekyl-proofs](rust/shekyl-proofs/): tx_proof, reserve_proof.

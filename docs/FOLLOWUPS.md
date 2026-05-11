@@ -1444,6 +1444,23 @@ sustainability is unaffected by the recalibration.
   superseding deletion of the C++ surface entirely (the migration is
   a stepping stone; the deletion is the destination). Target: V3.1.
 
+- **`WALLET_REWRITE_PLAN.md` systemic broken relative-link sweep.**
+  The file lives at `docs/design/WALLET_REWRITE_PLAN.md`; ~34 relative
+  links use bare `](rust/...)` and `](docs/...)` paths which resolve
+  to `docs/design/rust/...` / `docs/design/docs/...` and are broken.
+  The two links Copilot flagged during PR #40 review (`docs/WALLET_FILE_FORMAT_V1.md`
+  at L58 and `docs/WALLET_PREFS.md` at L71) were repaired inline as
+  mode-2 mechanical-residue per the rule-15 trinary calibration
+  (surface-during-review + bounded scope per the two specific lines);
+  the broader file-wide sweep is mode-3 structural-tangent (doc-wide
+  link audit; deserves its own bounded pre-flight) and is deferred
+  here. The sweep is mechanical (each link is a single-path-prefix
+  edit: `](rust/` → `](../../rust/` and `](docs/` → `](../`). Target:
+  V3.1, paired with the broader `docs/` link-correctness pass that
+  the V3.1 audit-response work surfaces. Cross-references: PR #40
+  Copilot review (commit `5ab5b43a2`, discussion thread
+  `r3221693336` and adjacent comments).
+
 ---
 
 ## V3.1.x — dependency migrations
@@ -2869,7 +2886,7 @@ reference.
 Retained for citation in review; each links to the canonical record.
 
 - **Stage 1 PR 3 architectural-inheritance migration: "secrets confined
-  to engine" property activated at M3d (May 11, 2026).** The
+  to engine" property activated at M3d (2026-05-11).** The
   headline property of the
   [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
   M3-series (see §3.4 / §3.4.1) — orchestrator-side `TransferDetails`
@@ -2924,7 +2941,7 @@ Retained for citation in review; each links to the canonical record.
   surfaced by the M3-series (M3b/M3c/M3d) and remains open as V3.1
   rules-queue work.
 
-- **`42-serialization-policy.mdc` rule realignment (M3e, May 11, 2026).**
+- **`42-serialization-policy.mdc` rule realignment (M3e, 2026-05-11).**
   The rule's `globs` frontmatter and body text carried 11 stale path
   references to `rust/shekyl-wallet-state/**` / `rust/shekyl-wallet-file/**`
   (renamed to `shekyl-engine-state` / `shekyl-engine-file` prior to the

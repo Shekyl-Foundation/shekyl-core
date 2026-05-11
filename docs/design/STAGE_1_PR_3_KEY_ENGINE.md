@@ -17,7 +17,7 @@ handle pathway; M3c: `SignedProofs` byte-identity test; M3d: schema
 cleanup + "secrets confined to engine" property activation; M3e:
 documentation realignment). The trait surface pinned in §4 is the
 operative design; the source-of-truth implementation is at
-[`rust/shekyl-engine-core/src/engine/traits/key.rs:616`](../../rust/shekyl-engine-core/src/engine/traits/key.rs)
+[`rust/shekyl-engine-core/src/engine/traits/key.rs:616`](../../rust/shekyl-engine-core/src/engine/traits/key.rs#L616)
 with the post-migration method shape (`account_public_address`,
 `derive_subaddress`, `try_claim_output`, `sign_transaction`). The
 rounds 1–4 trajectory and the amendment bundles in §3 are

@@ -131,6 +131,8 @@
     discoverability via single `rg` invocation and by surface
     during the M3e preflight's D5 audit.
 
+### Removed
+
 - **Stage 1 PR 3 — M3d: legacy secret-bearing fields removed from
   `TransferDetails`** (`feat/stage-1-pr3-m3d`; one pre-flight commit +
   one pre-flight-review-amendment commit + four implementation
