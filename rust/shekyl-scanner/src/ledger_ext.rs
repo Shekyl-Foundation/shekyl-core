@@ -82,22 +82,24 @@ impl TransferDetailsExt for TransferDetails {
             stake_tier,
             stake_lock_until,
             last_claimed_height: 0,
-            combined_shared_secret: None,
-            ho: None,
-            y: None,
-            z: None,
-            k_amount: None,
             // M3b deterministic-handle pathway: populated by the
             // orchestrator-side post-pass in
-            // `shekyl_engine_core::engine::merge` (commit 7), not by the
-            // scanner itself. The scanner produces the handle's input
-            // material (`tx_hash`, `internal_output_index`) but the
-            // `view_secret` it would need to invoke
-            // `derive_output_handle` lives in the engine, by design.
-            // Leaving these as `None` here keeps `shekyl-scanner` free
-            // of view-key access and lets the orchestrator populate the
-            // fields after merging the per-block scan results into the
-            // ledger.
+            // `shekyl_engine_core::engine::merge::populate_engine_handle_fields`,
+            // not by the scanner itself. The scanner produces the
+            // handle's input material (`tx_hash`,
+            // `internal_output_index`) but the `view_secret` it would
+            // need to invoke `derive_output_handle` lives in the
+            // engine, by design. Leaving these as `None` here keeps
+            // `shekyl-scanner` free of view-key access and lets the
+            // orchestrator populate the fields after merging the
+            // per-block scan results into the ledger.
+            //
+            // Post-M3d (per `STAGE_1_PR_3_M3D_PREFLIGHT.md` §3.3),
+            // these are the only Option-valued fields on
+            // `TransferDetails` aside from `key_image` and the
+            // engine-management metadata; the legacy
+            // `combined_shared_secret` / `ho` / `y` / `z` / `k_amount`
+            // fields were removed in the schema migration.
             source_ciphertext: None,
             output_handle: None,
             eligible_height: block_height + SPENDABLE_AGE,

@@ -78,7 +78,7 @@ use crate::{error::WalletLedgerError, subaddress::SubaddressIndex, transfer::Tra
 /// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
 /// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
 /// the migration path).
-pub const LEDGER_BLOCK_VERSION: u32 = 3;
+pub const LEDGER_BLOCK_VERSION: u32 = 4;
 
 /// Maximum number of `(height, hash)` pairs the scanner should keep in
 /// [`ReorgBlocks`]. The value is informational — the persistence layer
@@ -416,15 +416,17 @@ mod tests {
     use super::*;
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
     use proptest::prelude::*;
+    use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
     use shekyl_oxide::primitives::Commitment;
-    use zeroize::Zeroizing;
 
     use crate::{payment_id::PaymentId, subaddress::SubaddressIndex, transfer::SPENDABLE_AGE};
 
     fn sample_transfer(seed: u8) -> TransferDetails {
+        let tx_hash = [seed; 32];
+        let internal_output_index = u64::from(seed);
         TransferDetails {
-            tx_hash: [seed; 32],
-            internal_output_index: u64::from(seed),
+            tx_hash,
+            internal_output_index,
             global_output_index: 1_000 + u64::from(seed),
             block_height: 100,
             key: ED25519_BASEPOINT_POINT,
@@ -441,13 +443,21 @@ mod tests {
             stake_tier: 0,
             stake_lock_until: 0,
             last_claimed_height: 0,
-            combined_shared_secret: Some(Zeroizing::new([seed.wrapping_add(1); 64])),
-            ho: Some(Zeroizing::new([seed.wrapping_add(2); 32])),
-            y: Some(Zeroizing::new([seed.wrapping_add(3); 32])),
-            z: Some(Zeroizing::new([seed.wrapping_add(4); 32])),
-            k_amount: Some(Zeroizing::new([seed.wrapping_add(5); 32])),
-            source_ciphertext: None,
-            output_handle: None,
+            // Post-M3d: per-output secrets are no longer persisted on
+            // `TransferDetails`; the M3b deterministic-handle pathway
+            // (`source_ciphertext`, `output_handle`) carries the
+            // load-bearing Option-valued fields that the round-trip
+            // test exercises. Using non-trivial seeded values here so
+            // every roundtrip assertion is meaningful.
+            source_ciphertext: Some(HybridCiphertext {
+                x25519: [seed.wrapping_add(1); 32],
+                ml_kem: vec![seed.wrapping_add(2); 1088],
+            }),
+            output_handle: Some(derive_output_handle(
+                &[seed.wrapping_add(3); 32],
+                &tx_hash,
+                internal_output_index,
+            )),
             eligible_height: 100 + SPENDABLE_AGE,
             frozen: false,
             fcmp_precomputed_path: None,
@@ -495,7 +505,12 @@ mod tests {
         );
 
         // Snapshot representative fields *before* round-tripping. The
-        // originals are then consumed by `to_postcard_bytes`.
+        // originals are then consumed by `to_postcard_bytes`. Post-M3d
+        // (per `STAGE_1_PR_3_M3D_PREFLIGHT.md` §3.3): the legacy
+        // secret-bearing fields have been removed from the schema; the
+        // load-bearing Option-valued shape is now carried by the M3b
+        // deterministic-handle pathway fields (`source_ciphertext`,
+        // `output_handle`).
         let originals: Vec<_> = block
             .transfers
             .iter()
@@ -506,11 +521,8 @@ mod tests {
                     t.global_output_index,
                     t.amount(),
                     t.key_image,
-                    t.ho.as_deref().copied(),
-                    t.y.as_deref().copied(),
-                    t.z.as_deref().copied(),
-                    t.k_amount.as_deref().copied(),
-                    t.combined_shared_secret.as_deref().copied(),
+                    t.source_ciphertext.clone(),
+                    t.output_handle,
                 )
             })
             .collect();
@@ -525,11 +537,15 @@ mod tests {
             assert_eq!(t.global_output_index, orig.2);
             assert_eq!(t.amount(), orig.3);
             assert_eq!(t.key_image, orig.4);
-            assert_eq!(t.ho.as_deref().copied(), orig.5);
-            assert_eq!(t.y.as_deref().copied(), orig.6);
-            assert_eq!(t.z.as_deref().copied(), orig.7);
-            assert_eq!(t.k_amount.as_deref().copied(), orig.8);
-            assert_eq!(t.combined_shared_secret.as_deref().copied(), orig.9);
+            assert_eq!(
+                t.source_ciphertext.as_ref().map(|c| &c.x25519),
+                orig.5.as_ref().map(|c| &c.x25519)
+            );
+            assert_eq!(
+                t.source_ciphertext.as_ref().map(|c| c.ml_kem.as_slice()),
+                orig.5.as_ref().map(|c| c.ml_kem.as_slice())
+            );
+            assert_eq!(t.output_handle, orig.6);
         }
     }
 

@@ -6,7 +6,7 @@
 //! Extended transfer details with Shekyl staking and PQC fields.
 
 use serde::{Deserialize, Serialize};
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroize;
 
 use curve25519_dalek::{EdwardsPoint, Scalar};
 
@@ -15,10 +15,7 @@ use shekyl_oxide::primitives::Commitment;
 
 use crate::{
     payment_id::PaymentId,
-    serde_helpers::{
-        commitment_bytes, edwards_point_bytes, opt_zeroizing_bytes_32, opt_zeroizing_bytes_64,
-        scalar_bytes,
-    },
+    serde_helpers::{commitment_bytes, edwards_point_bytes, scalar_bytes},
     subaddress::SubaddressIndex,
 };
 
@@ -42,17 +39,29 @@ pub struct FcmpPrecomputedPath {
 /// Extended transfer details combining base output data with Shekyl-specific fields.
 ///
 /// This is the Shekyl-native transfer record, extended from the monero-oxide output
-/// shape with PQC and staking metadata. All HKDF-derived secrets are stored
-/// explicitly (not re-derived on demand) to avoid label-drift bugs between
-/// scan-time and sign-time.
+/// shape with PQC and staking metadata. Per-output spend secrets (HKDF-derived
+/// `ho`, `y`, `z`, `k_amount`, `combined_shared_secret`) are deliberately
+/// **not** persisted on this struct: they are re-derived inside the engine from
+/// `(view_secret, source_ciphertext)` at signing time per
+/// `STAGE_1_PR_3_KEY_ENGINE.md` §7.10–§7.12. The orchestrator-side
+/// `TransferDetails` carries only the public on-chain residue
+/// (`source_ciphertext`) plus the wallet-private opaque identifier
+/// (`output_handle`) needed to look the output up. See
+/// `docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md` §3.3 for the
+/// "secrets confined to engine" property delivered at M3d.
 ///
 /// ### Deliberately NOT `Clone`
 ///
-/// Cloning a `TransferDetails` would duplicate its `Zeroizing<[u8; N]>` secrets into
-/// a second heap allocation that the compiler has no way to track. If a caller
-/// legitimately needs two copies (e.g. a snapshot for a signing round), they must
-/// `Serialize` into a `Zeroizing<Vec<u8>>` plaintext buffer and `Deserialize` back —
-/// the process is explicit about the secret-handling boundary.
+/// Although `TransferDetails` no longer holds raw `Zeroizing<[u8; N]>` secret
+/// material after M3d, cloning it would still duplicate the wallet-private
+/// `OutputHandle` (a wallet-state-correlating identifier per its
+/// `Privacy-correlation note`) into a second allocation the compiler can't
+/// track. Forcing serialize-then-deserialize round-tripping keeps every
+/// copy's lifetime explicit at the call site — the same boundary discipline
+/// that motivated the original ban remains binding for the post-M3d
+/// schema. If a caller legitimately needs two copies (e.g. a snapshot for a
+/// signing round), they must `Serialize` into a buffer and `Deserialize`
+/// back; the process is explicit about the boundary.
 #[derive(Serialize, Deserialize)]
 pub struct TransferDetails {
     // ── Base output data (from scanner) ──
@@ -85,42 +94,34 @@ pub struct TransferDetails {
     /// Local claim watermark: the `to_height` of the last successful claim.
     pub last_claimed_height: u64,
 
-    // ── PQC / KEM-derived secrets (populated at scan time) ──
-    /// 64-byte combined shared secret from KEM decapsulation (X25519 || ML-KEM).
-    #[serde(with = "opt_zeroizing_bytes_64", default)]
-    pub combined_shared_secret: Option<Zeroizing<[u8; 64]>>,
-    /// HKDF-derived scalar: `x = ho + b` gives the discrete log of O w.r.t. G.
-    #[serde(with = "opt_zeroizing_bytes_32", default)]
-    pub ho: Option<Zeroizing<[u8; 32]>>,
-    /// HKDF-derived T-component scalar for FCMP++ SAL.
-    #[serde(with = "opt_zeroizing_bytes_32", default)]
-    pub y: Option<Zeroizing<[u8; 32]>>,
-    /// HKDF-derived Pedersen commitment mask: `C = z*G + amount*H`.
-    #[serde(with = "opt_zeroizing_bytes_32", default)]
-    pub z: Option<Zeroizing<[u8; 32]>>,
-    /// HKDF-derived amount encryption key.
-    #[serde(with = "opt_zeroizing_bytes_32", default)]
-    pub k_amount: Option<Zeroizing<[u8; 32]>>,
-
     // ── M3b deterministic-handle pathway (per `STAGE_1_PR_3_M3B_PREFLIGHT.md`) ──
+    //
+    // These two fields replaced the five per-output secret fields
+    // (`combined_shared_secret`, `ho`, `y`, `z`, `k_amount`) at M3d. The
+    // engine re-derives the secrets from `(view_secret, source_ciphertext)`
+    // at signing time; the orchestrator-resident `TransferDetails` carries
+    // only the inputs to that re-derivation plus the handle that names the
+    // output.
     /// On-chain hybrid X25519 + ML-KEM-768 ciphertext from the source
     /// transaction.
     ///
-    /// **Non-secret** (broadcast in the transaction's `tx_extra`); persisted
-    /// so the engine's deterministic-handle pathway (commit 6:
-    /// `LocalKeys::derive_source_secrets_bundle`) can re-derive
-    /// `combined_ss` and the per-output secrets without trusting the
-    /// upstream `combined_shared_secret` / `ho` / `y` / `z` / `k_amount`
-    /// fields above. Once the orchestrator-side post-pass (commit 7)
-    /// always populates this field for newly-scanned outputs, M3c will
-    /// flip `TxInputSigningContext` to consume `(source_ciphertext,
-    /// output_handle, output_index)` exclusively and the Option-wrapped
-    /// secret-bearing fields above become deletable in M3d/M3e.
+    /// **Non-secret** (broadcast in the transaction's `tx_extra`). The
+    /// engine's deterministic-handle pathway
+    /// (`shekyl_engine_core::engine::local_keys::LocalKeys::derive_source_secrets_bundle`)
+    /// consumes this field to re-derive `combined_ss` and the per-output
+    /// secrets at signing time. Post-M3d, the orchestrator-side
+    /// `TransferDetails` schema no longer carries those derived secrets;
+    /// `source_ciphertext` is the single load-bearing input.
     ///
-    /// `Option` for transitional shape: pre-M3b-scanned outputs stored
-    /// under `LEDGER_BLOCK_VERSION = 2` lack this field and are
-    /// re-populated lazily on first spend (or, with `--rescan`, eagerly
-    /// during a clean re-scan).
+    /// `Option` for transitional shape: pre-M3b-scanned outputs lack
+    /// this field and are re-populated by the engine post-pass at
+    /// `engine::merge::populate_engine_handle_fields` after the
+    /// scanned block is merged into the ledger. In a v4 store
+    /// (`LEDGER_BLOCK_VERSION >= 4`, post-M3d) the engine post-pass
+    /// runs unconditionally, so every persisted transfer carries
+    /// `Some(...)`; the `Option` wrapping is retained because
+    /// `from_wallet_output` constructs the record before the engine
+    /// post-pass populates the field.
     #[serde(default)]
     pub source_ciphertext: Option<HybridCiphertext>,
 
@@ -128,13 +129,17 @@ pub struct TransferDetails {
     /// (`shekyl_crypto_pq::handle::derive_output_handle(view_secret,
     /// tx_hash, output_index)`).
     ///
-    /// **Non-secret** under the threat model where `view_secret` is held
-    /// (handles are publicly-derivable from view material; see
-    /// `OutputHandle`'s "Non-secret status" doc). Persisted as a memo of
-    /// the cSHAKE256 derivation so the orchestrator can use the handle
-    /// as a stable opaque identifier in cross-engine bookkeeping
-    /// (`HashMap<OutputHandle, _>`) without re-deriving from the view
-    /// secret on every lookup.
+    /// **Non-secret** in the cryptographic sense (cSHAKE256 with a
+    /// secret keying input is a PRF and discloses no view-secret
+    /// material), but **wallet-private derivable** — only a holder of
+    /// the wallet's `view_secret` can reproduce a handle. See
+    /// `OutputHandle`'s "Non-secret status" and "Privacy-correlation
+    /// note" docs; the handle is wallet-state-correlating and is not
+    /// surfaced through public boundaries (logs, RPC, public errors).
+    /// Persisted as a memo of the cSHAKE256 derivation so the
+    /// orchestrator can use the handle as a stable opaque identifier
+    /// in cross-engine bookkeeping (`HashMap<OutputHandle, _>`)
+    /// without re-deriving from the view secret on every lookup.
     ///
     /// `Option` for transitional shape, same as `source_ciphertext`
     /// above.
@@ -237,16 +242,6 @@ struct TransferDetailsSchema {
     stake_tier: u8,
     stake_lock_until: u64,
     last_claimed_height: u64,
-    // Each of the five secret fields is `Option<Zeroizing<[u8; N]>>`
-    // serialized as `Option<bytes>` via the `opt_zeroizing_bytes_*`
-    // helpers. The `Zeroizing` wrapper is a zero-cost in-memory decoration;
-    // it does NOT change the wire format, so it does not appear in the
-    // schema.
-    combined_shared_secret: Option<Vec<u8>>,
-    ho: Option<Vec<u8>>,
-    y: Option<Vec<u8>>,
-    z: Option<Vec<u8>>,
-    k_amount: Option<Vec<u8>>,
     // Non-secret on-chain payloads; reference the workspace types
     // directly (their `postcard_schema::Schema` derives lock the wire
     // shape from the source side per
@@ -284,18 +279,18 @@ impl Zeroize for TransferDetails {
         self.stake_tier.zeroize();
         self.stake_lock_until.zeroize();
         self.last_claimed_height.zeroize();
-        self.combined_shared_secret.zeroize();
-        self.ho.zeroize();
-        self.y.zeroize();
-        self.z.zeroize();
-        self.k_amount.zeroize();
-        // `source_ciphertext` and `output_handle` (M3b) are non-secret —
-        // see the field docs above. `HybridCiphertext` is on-chain
-        // public data; `OutputHandle` is publicly-derivable from any
-        // view secret and is correlation-sensitive only at the boundary
-        // (logs / RPC) per its "Privacy-correlation note". Neither is
-        // wiped here; doing so would require giving them `Zeroize` impls
-        // we deliberately omit at the source.
+        // `source_ciphertext` and `output_handle` are non-secret — see
+        // the field docs above. `HybridCiphertext` is on-chain public
+        // data; `OutputHandle` is wallet-private-derivable from any
+        // view secret and is correlation-sensitive only at the
+        // boundary (logs / RPC) per its "Privacy-correlation note".
+        // Neither is wiped here; doing so would require giving them
+        // `Zeroize` impls we deliberately omit at the source. Per-output
+        // spend secrets formerly held on this struct (M3a–M3c era's
+        // `combined_shared_secret`, `ho`, `y`, `z`, `k_amount`) were
+        // removed in M3d; the engine re-derives them from
+        // `(view_secret, source_ciphertext)` and wipes them inside
+        // its own boundary.
         self.eligible_height.zeroize();
         self.frozen.zeroize();
         if let Some(ref mut path) = self.fcmp_precomputed_path {
@@ -350,11 +345,6 @@ mod tests {
             stake_tier: 0,
             stake_lock_until: 0,
             last_claimed_height: 0,
-            combined_shared_secret: None,
-            ho: None,
-            y: None,
-            z: None,
-            k_amount: None,
             source_ciphertext: None,
             output_handle: None,
             eligible_height: 110,
@@ -376,27 +366,43 @@ mod tests {
     }
 
     #[test]
-    fn postcard_roundtrip_with_secrets() {
+    fn postcard_roundtrip_with_handle_fields() {
+        // Post-M3d (per `STAGE_1_PR_3_M3D_PREFLIGHT.md` §3.3), the
+        // `TransferDetails` schema no longer carries the five legacy
+        // secret-bearing fields (`combined_shared_secret`, `ho`, `y`,
+        // `z`, `k_amount`); the engine re-derives the secrets from
+        // `(view_secret, source_ciphertext)` at signing time. The
+        // load-bearing Option-valued fields that this round-trip needs
+        // to pin are the M3b deterministic-handle pathway memos
+        // (`source_ciphertext`, `output_handle`) plus the long-standing
+        // `key_image` / spend-state shape — same coverage shape as the
+        // pre-M3d `postcard_roundtrip_with_secrets` test, retargeted at
+        // the surviving Option-valued fields.
         let mut td = sample();
-        td.ho = Some(Zeroizing::new([1u8; 32]));
-        td.y = Some(Zeroizing::new([2u8; 32]));
-        td.z = Some(Zeroizing::new([3u8; 32]));
-        td.k_amount = Some(Zeroizing::new([4u8; 32]));
-        td.combined_shared_secret = Some(Zeroizing::new([5u8; 64]));
+        td.source_ciphertext = Some(HybridCiphertext {
+            x25519: [0xA5; 32],
+            ml_kem: vec![0xC3; 1088],
+        });
+        td.output_handle = Some(shekyl_crypto_pq::handle::derive_output_handle(
+            &[0x77; 32],
+            &td.tx_hash,
+            td.internal_output_index,
+        ));
         td.key_image = Some(KeyImage::from_canonical_bytes([7u8; 32]));
         td.spent = true;
         td.spent_height = Some(200);
 
         let bytes = postcard::to_allocvec(&td).unwrap();
         let back: TransferDetails = postcard::from_bytes(&bytes).unwrap();
-        assert_eq!(td.ho.as_deref(), back.ho.as_deref());
-        assert_eq!(td.y.as_deref(), back.y.as_deref());
-        assert_eq!(td.z.as_deref(), back.z.as_deref());
-        assert_eq!(td.k_amount.as_deref(), back.k_amount.as_deref());
         assert_eq!(
-            td.combined_shared_secret.as_deref(),
-            back.combined_shared_secret.as_deref()
+            td.source_ciphertext.as_ref().map(|c| &c.x25519),
+            back.source_ciphertext.as_ref().map(|c| &c.x25519)
         );
+        assert_eq!(
+            td.source_ciphertext.as_ref().map(|c| c.ml_kem.as_slice()),
+            back.source_ciphertext.as_ref().map(|c| c.ml_kem.as_slice())
+        );
+        assert_eq!(td.output_handle, back.output_handle);
         assert_eq!(td.key_image, back.key_image);
         assert_eq!(td.spent, back.spent);
         assert_eq!(td.spent_height, back.spent_height);
