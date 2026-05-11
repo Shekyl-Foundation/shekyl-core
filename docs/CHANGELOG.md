@@ -2,6 +2,105 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **Stage 1 PR 3 — M3d: legacy secret-bearing fields removed from
+  `TransferDetails`** (`feat/stage-1-pr3-m3d`; one pre-flight commit +
+  one pre-flight-review-amendment commit + four implementation
+  commits cut off `dev` post-M3c). Activates the **"secrets confined
+  to engine" property** for the orchestrator/engine boundary per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3.4 (and §3.4.1's M3d landing-notes cross-reference),
+  [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
+  §3.3, and the audit migration table at
+  [`docs/design/STAGE_1_PR_3_MIGRATION_AUDIT.md`](./design/STAGE_1_PR_3_MIGRATION_AUDIT.md)
+  §2.1 row 1 (now marked "Removed at M3d (landed 2026-05-11)").
+
+  - **Schema change:** five `Option<Zeroizing<[u8; N]>>` fields
+    deleted from `shekyl_engine_state::TransferDetails`:
+    `combined_shared_secret` (64 bytes), `ho`, `y`, `z`, `k_amount`
+    (32 bytes each). Corresponding entries in the
+    `TransferDetailsSchema` mirror struct, the `impl Zeroize for
+    TransferDetails` block, and the
+    `rust/shekyl-engine-state/.zeroize-allowlist` schema-mirror
+    entries were removed in the same commit.
+  - **Version bumps (paired per the in-source rule at
+    `rust/shekyl-engine-state/src/wallet_ledger.rs:67`):**
+    `LEDGER_BLOCK_VERSION`: 3 → 4; `WALLET_LEDGER_FORMAT_VERSION`:
+    3 → 4. The `wallet_ledger.rs` docstring is the authoritative
+    in-source statement of the pairing rule ("Each per-block bump
+    implies a `WALLET_LEDGER_FORMAT_VERSION` bump") — the
+    workspace-wide rule `.cursor/rules/42-serialization-policy.mdc`
+    still carries pre-rename `shekyl-wallet-state` /
+    `shekyl-wallet-file` path references (tracked as a focused
+    FOLLOWUP for path-rename realignment). Per the workspace's
+    `15-deletion-and-debt.mdc` "no in-Shekyl migration code" rule,
+    v4 stores refuse v3 loads rather than migrate; pre-genesis
+    users `rm -rf ~/.shekyl` and re-sync.
+  - **Property activated:** orchestrator-side `TransferDetails` no
+    longer carries derived per-output secrets. The engine
+    re-derives them inside its signing-session boundary from
+    `(view_secret, source_ciphertext)` via
+    `LocalKeys::derive_source_secrets_bundle` (per
+    `STAGE_1_PR_3_KEY_ENGINE.md` §7.10–§7.12) and wipes them on
+    drop. Orchestrator memory disclosure no longer exposes
+    output-secret material; capability disclosure is unchanged
+    (per Round 3 §7.10 / §7.11 framing).
+  - **Snapshot regeneration:** the two `.snap` files that
+    transitively serialize `TransferDetails`
+    (`schemas/ledger_block.snap`, `schemas/wallet_ledger.snap`)
+    drift; the three others
+    (`bookkeeping_block.snap`, `tx_meta_block.snap`,
+    `sync_state_block.snap`) are unchanged, confirming
+    pre-flight invariant 8 (snapshot universe verification).
+  - **Production write-site removed:** the five
+    `td.<field> = Some(Zeroizing::new(...))` write lines at
+    `shekyl-scanner/src/ledger_ext.rs::process_scanned_outputs`
+    deleted; the M3b deterministic-handle pathway
+    (`source_ciphertext`, `output_handle` populated by
+    `engine::merge::populate_engine_handle_fields`) is the only
+    write path post-M3d.
+  - **Test/bench fixture rewrites:**
+    `shekyl-engine-state` (`transfer.rs::tests`, `ledger_block.rs::tests`,
+    `ledger_indexes.rs::tests`, `invariants.rs::tests`, four
+    `benches/*.rs`),
+    `shekyl-scanner::balance.rs::tests`, and the engine-core
+    bench fixtures
+    (`benches/common/engine_fixture.rs`,
+    `benches/refresh_snapshot.rs`) updated to the post-M3d shape.
+    Where the prior fixtures populated the five legacy secrets,
+    the replacement populates `source_ciphertext` (via direct
+    `HybridCiphertext` construction) and `output_handle` (via
+    `shekyl_crypto_pq::handle::derive_output_handle`) so
+    `Option`-valued roundtrip / snapshot benches continue
+    exercising non-default payloads representative of post-M3d
+    transfers. The `postcard_roundtrip_with_secrets` test was
+    renamed to `postcard_roundtrip_with_handle_fields`.
+  - **Documentation cleanup (carve-out per
+    `91-documentation-after-plans.mdc`):** the past-tensing edits
+    to `STAGE_1_PR_3_KEY_ENGINE.md` §3.5 ("residue of that direct
+    port" paragraph), `STAGE_1_PR_3_MIGRATION_AUDIT.md` §2.1 row 1
+    (five legacy-field disposition column), and
+    `docs/benchmarks/shekyl_rust_v0.manifest.md` (the two §3
+    paragraphs referencing the five legacy fields) landed in
+    M3d's final docs commit alongside the plan §3.4 amendment.
+    The broader M3e doc sweep remains scope-bounded to whole-doc
+    realignment.
+
+  - **Commit decomposition (five commits, matching pre-flight's
+    planned count but with a different load distribution):** the
+    per-commit-CI-green gate forced consolidation of pre-flight
+    commits 1 + 3 plus the scanner's `from_wallet_output` cleanup
+    into a single cross-crate schema-migration commit (commit 2);
+    a fifth slot was reused for a small bench-fixture-fix commit
+    (commit 4) feature-gating two `shekyl_crypto_pq` imports under
+    `bench-internals` in the engine-core common bench fixture
+    after `cargo clippy --all-targets` surfaced them as unused
+    when included from the default-feature `synced_height` bench
+    pair. See plan §3.4.1 for the forward-template framing
+    (pre-flight wording may strengthen during implementation if
+    the underlying property is preserved).
+
 ### Added
 
 - **Stage 1 PR 3 — M3c: additive end-to-end engine-bundle signing

@@ -1071,15 +1071,30 @@ coverage in the workspace.
   schema at M3b; M3d removes the legacy fields they superseded.)
 - Update `Zeroize` / `Drop` impls; update postcard schema; update
   serde helpers.
-- Remove the bridge impl's legacy-`TransferDetails`-fallback path
-  in `LocalKeys::sign_transaction`. Post-M3d, the deterministic
-  handle path (re-derive from `(view_secret, source_ciphertext)`)
-  is the only secret source.
 - Rewrite test/bench fixtures per audit §2.4 (10 sites).
 - Update the scanner's `TransferDetailsExt::populate_*` helpers in
   `ledger_ext.rs` to drop the legacy-field writes (the write site
   moved to engine in M3b; the helper now populates
   `source_ciphertext` and `output_handle` only).
+
+> **Original-scope bullet removed at M3d landing.** The original §3.4
+> scope list above contained a fourth bullet: *"Remove the bridge
+> impl's legacy-`TransferDetails`-fallback path in
+> `LocalKeys::sign_transaction`. Post-M3d, the deterministic handle
+> path (re-derive from `(view_secret, source_ciphertext)`) is the
+> only secret source."* Per the M3d pre-flight investigation (§2 D1)
+> that bullet was vacuous against the actual workspace state: at
+> the start of M3d, `LocalKeys::sign_transaction` is a non-functional
+> stub returning `KeyEngineError::SignTransactionTraitSurfaceIncomplete`
+> (landed in M3a Round 4a). The "fallback path" the bullet calls for
+> removing does not exist — there is no signing-method body in
+> `LocalKeys` to host either a fallback or a primary path. See
+> §3.4.1 below for the full divergence note. The bullet has been
+> deleted under
+> [`.cursor/rules/15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)'s
+> "default: delete" rule applied to plan wording itself: the plan
+> §3.4 now reflects what executed; the divergence note is the audit
+> trail.
 
 **Files touched (estimated).**
 
@@ -1134,6 +1149,104 @@ per Round 3 §7.10/§7.11 framing).
 **Estimated review surface.** ~225 lines net (mostly deletes with
 small additions for the new fields). The largest single per-file
 change is the bridge impl's fallback removal (~50 lines).
+
+#### §3.4.1 Post-implementation cross-reference (M3d landing)
+
+The §3.4 wording above predates two structural facts and one
+discipline-application discovery that surfaced during the M3d
+pre-flight investigation. The disposition is recorded in
+[`STAGE_1_PR_3_M3D_PREFLIGHT.md`](./STAGE_1_PR_3_M3D_PREFLIGHT.md);
+this section names the deltas so a reader of §3.4 reaches the
+authoritative implementation-side wording in one hop.
+
+**Structural deltas (pre-flight §2 D1, §3.2).**
+
+- **No bridge-impl fallback to remove.** `LocalKeys::sign_transaction`
+  has been a non-functional stub since M3a Round 4a's workflow-shape
+  pivot (returns `KeyEngineError::SignTransactionTraitSurfaceIncomplete`
+  unconditionally). The original §3.4 Scope bullet calling for
+  "Remove the bridge impl's legacy-`TransferDetails`-fallback path in
+  `LocalKeys::sign_transaction`" had no code referent at M3d's start;
+  it has been deleted from §3.4 per the "delete-and-annotate"
+  disposition anchored to
+  [`.cursor/rules/15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)
+  rather than annotated-around per M3c §3.3.1's precedent. The
+  asymmetry: §3.3.1 retained the original §3.3 wording because the
+  refinements were of *means* (Option C disposition vs the original
+  parallel-sign call); §3.4 deletes the vacuous bullet because the
+  original §3.4 wording named a *code change* (fallback removal)
+  that doesn't exist. Retaining the original would preserve a lie
+  in the canonical migration plan.
+
+- **PR-5 ≠ M3e.** The original §3.4 implied the signing-method body
+  lands at M3d (after fallback removal). In the executed migration,
+  the signing-method body is the scope of a downstream PR known as
+  **PR-5** in `STAGE_1_PR_3_KEY_ENGINE.md` (the `PendingTxEngine`
+  trait-extraction PR, separate from M3a–M3e). **M3e** is the docs-
+  realignment commit of *this* migration; PR-5 is the trait-surface
+  completion in the broader Stage 1 plan. The migration's M3a–M3e
+  is structurally complete at M3e; PR-5 is downstream Stage 1 work.
+
+**Discipline-application deltas (pre-flight §3.2, §4 commit 5).**
+
+- **Documentation cleanup folded into M3d's commit 5.** Per pre-flight
+  §3.2's discipline carve-out, M3d's docs commit lands three
+  past-tensing edits (`STAGE_1_PR_3_KEY_ENGINE.md` §3.5,
+  `STAGE_1_PR_3_MIGRATION_AUDIT.md` §2.1 row 1, and the
+  `docs/benchmarks/shekyl_rust_v0.manifest.md` two-paragraph
+  reference) in addition to this plan-§3.4 amendment, the
+  CHANGELOG entry, and the FOLLOWUPS close. The broader M3e doc
+  sweep remains scope-bounded to the *whole-doc* realignment
+  (Round 3 workflow becomes the sole architecture; pre-migration
+  framing moves to a "history" section); the targeted post-tensing
+  M3d performs is "leave the file in good shape after edit" per
+  `91-documentation-after-plans.mdc`.
+
+- **Five-commit decomposition (matching pre-flight's planned five,
+  but with a different load distribution).** The pre-flight §4 commit
+  table envisaged five commits (scanner-write-removal; engine-state-
+  schema-only; engine-state-consumer-fixes-only; engine-core-benches;
+  docs). At implementation time the per-commit-CI-green gate
+  (pre-flight §6) forced consolidation of the *schema-bearing*
+  commits: the scanner's `from_wallet_output` initializes the legacy
+  fields with `None`, which had to stay until the schema was removed;
+  and engine-state's own consumer sites (`ledger_block.rs`,
+  `ledger_indexes.rs`, `invariants.rs`, four `benches/*.rs`) all
+  reference the legacy fields, so they had to update in the same
+  commit as the schema removal. The pre-flight's commits 1 + 3 plus
+  the scanner's `from_wallet_output` cleanup landed as a single
+  cross-crate commit 2; engine-core benches remained a separate
+  commit 3 (feature-gated under `bench-internals`, out of the default
+  CI gate's compile surface). The fifth commit — a small bench-
+  fixture-fix commit gating two `shekyl_crypto_pq` imports
+  (`derive_output_handle`, `HybridCiphertext`) under the
+  `bench-internals` feature in `benches/common/engine_fixture.rs` —
+  is necessary because the engine-core common bench-fixture module
+  is included from the *default*-feature `engine_trait_bench_ledger_synced_height{,_iai}`
+  pair, which surfaces unused-import lints under `cargo clippy
+  --all-targets`. Commit 3 left the imports unguarded; commit 4
+  fixes the regression so per-commit-CI-green re-holds at the tip.
+  This is the same forward-template pattern named at §3.3.1
+  (pre-flight wording may strengthen / consolidate during
+  implementation if the underlying property is preserved; weakening
+  requires explicit revisit).
+
+**Success-criteria refinements (pre-flight §6).**
+
+The original §3.4 success-criteria bullet for the `git grep` regex
+(`combined_shared_secret|\.ho\b|\.k_amount`) tightened to add
+word-boundary safety on the prefix (`\bcombined_shared_secret\b|\.ho\b|\.k_amount\b`),
+and the pre-flight added per-commit-boundary CI gates not present
+in the original: `cargo fmt --all -- --check`, `cargo clippy --all-targets
+-- -D warnings`, no new `#[allow(dead_code)]` / `#[cfg(...)]` /
+`TODO` / `FIXME`, and `Cargo.lock` unchanged. The "all 145+ tests"
+gate refined to "test count change documented in commit 2's
+message; CI green at every commit." Actual landing: 1063 workspace
+tests pass (excluding C++-FFI bins that require external
+infrastructure).
+
+Per [`STAGE_1_PR_3_M3D_PREFLIGHT.md`](./STAGE_1_PR_3_M3D_PREFLIGHT.md)
+§2, §3, §4, §6, and §10 (Terminology).
 
 ---
 

@@ -504,15 +504,13 @@ impl Drop for LedgerIndexes {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
-    use shekyl_oxide::primitives::Commitment;
-    use zeroize::Zeroizing;
-
     use crate::{
         ledger_block::{BlockchainTip, LedgerBlock, ReorgBlocks},
         subaddress::SubaddressIndex,
         transfer::SPENDABLE_AGE,
     };
+    use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+    use shekyl_oxide::primitives::Commitment;
 
     fn ki(b: u8) -> KeyImage {
         KeyImage::from_canonical_bytes([b; 32])
@@ -536,11 +534,6 @@ mod tests {
             stake_tier: 0,
             stake_lock_until: 0,
             last_claimed_height: 0,
-            combined_shared_secret: Some(Zeroizing::new([0; 64])),
-            ho: Some(Zeroizing::new([0; 32])),
-            y: Some(Zeroizing::new([0; 32])),
-            z: Some(Zeroizing::new([0; 32])),
-            k_amount: Some(Zeroizing::new([0; 32])),
             source_ciphertext: None,
             output_handle: None,
             eligible_height: block_height + SPENDABLE_AGE,

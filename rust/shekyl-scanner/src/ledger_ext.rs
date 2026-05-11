@@ -33,8 +33,6 @@
 
 use std::ops::Range;
 
-use zeroize::Zeroizing;
-
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes, TransferDetails, SPENDABLE_AGE};
 
 use crate::{
@@ -46,9 +44,13 @@ pub trait TransferDetailsExt {
     /// Create a `TransferDetails` from a scanned [`WalletOutput`] at a given block height.
     ///
     /// Automatically populates staking fields if the output carries `StakingMeta`.
-    /// `stake_lock_until` is computed as `block_height + tier_lock_blocks`. PQC
-    /// fields (`ho`, `y`, `z`, `k_amount`, `combined_shared_secret`) are left
-    /// `None` and must be populated by the caller after KEM recovery.
+    /// `stake_lock_until` is computed as `block_height + tier_lock_blocks`. The
+    /// M3b deterministic-handle pathway fields (`source_ciphertext`,
+    /// `output_handle`) are left `None`; they are populated by the engine
+    /// post-pass at `shekyl_engine_core::engine::merge::populate_engine_handle_fields`
+    /// after the scanned block is merged into the ledger. The scanner does
+    /// not hold the `view_secret` required by `derive_output_handle`, by
+    /// design.
     fn from_wallet_output(output: &WalletOutput, block_height: u64) -> Self;
 }
 
@@ -80,22 +82,28 @@ impl TransferDetailsExt for TransferDetails {
             stake_tier,
             stake_lock_until,
             last_claimed_height: 0,
-            combined_shared_secret: None,
-            ho: None,
-            y: None,
-            z: None,
-            k_amount: None,
             // M3b deterministic-handle pathway: populated by the
             // orchestrator-side post-pass in
-            // `shekyl_engine_core::engine::merge` (commit 7), not by the
-            // scanner itself. The scanner produces the handle's input
-            // material (`tx_hash`, `internal_output_index`) but the
-            // `view_secret` it would need to invoke
-            // `derive_output_handle` lives in the engine, by design.
-            // Leaving these as `None` here keeps `shekyl-scanner` free
-            // of view-key access and lets the orchestrator populate the
-            // fields after merging the per-block scan results into the
-            // ledger.
+            // `shekyl_engine_core::engine::merge::populate_engine_handle_fields`,
+            // not by the scanner itself. The scanner produces the
+            // handle's input material (`tx_hash`,
+            // `internal_output_index`) but the `view_secret` it would
+            // need to invoke `derive_output_handle` lives in the
+            // engine, by design. Leaving these as `None` here keeps
+            // `shekyl-scanner` free of view-key access and lets the
+            // orchestrator populate the fields after merging the
+            // per-block scan results into the ledger.
+            //
+            // Post-M3d (per `STAGE_1_PR_3_M3D_PREFLIGHT.md` §3.3),
+            // the five legacy per-output secret fields
+            // (`combined_shared_secret`, `ho`, `y`, `z`, `k_amount`)
+            // were removed in the schema migration; `source_ciphertext`
+            // and `output_handle` are the only inputs the engine needs
+            // to re-derive the spend material at signing time. Other
+            // `Option`-valued fields on `TransferDetails` (`subaddress`,
+            // `payment_id`, `spent_height`, `key_image`,
+            // `fcmp_precomputed_path`) exist for unrelated reasons and
+            // are unaffected by this construction site.
             source_ciphertext: None,
             output_handle: None,
             eligible_height: block_height + SPENDABLE_AGE,
@@ -110,10 +118,14 @@ pub trait LedgerIndexesExt {
     /// Process scanned outputs from a block, adding new transfers to the
     /// [`LedgerBlock`] and the lookup indexes maintained here.
     ///
-    /// Populates PQC fields (`ho`, `y`, `z`, `k_amount`, `combined_shared_secret`,
-    /// `key_image`) from the [`RecoveredWalletOutput`](crate::scan::RecoveredWalletOutput)
-    /// and advances the blockchain view by exactly one entry — even when
-    /// the block contains zero outputs for this wallet.
+    /// Populates the `TransferDetails.key_image` field from the
+    /// [`RecoveredWalletOutput`](crate::scan::RecoveredWalletOutput) when
+    /// a non-sentinel value is present, and advances the blockchain view
+    /// by exactly one entry — even when the block contains zero outputs
+    /// for this wallet. Per-output secrets (HKDF-derived `ho`, `y`, `z`,
+    /// `k_amount`, `combined_shared_secret`) are intentionally not
+    /// persisted in `TransferDetails` post-M3d; they are re-derived from
+    /// `(view_secret, source_ciphertext)` by the engine at spend time.
     ///
     /// Returns the contiguous range of `ledger.transfers` indices into
     /// which accepted transfers were appended (`start..start + accepted`).
@@ -145,11 +157,6 @@ impl LedgerIndexesExt for LedgerIndexes {
 
         for output in outputs {
             let mut td = TransferDetails::from_wallet_output(output.wallet_output(), block_height);
-            td.ho = Some(Zeroizing::new(*output.ho()));
-            td.y = Some(Zeroizing::new(*output.y()));
-            td.z = Some(Zeroizing::new(*output.z()));
-            td.k_amount = Some(Zeroizing::new(*output.k_amount()));
-            td.combined_shared_secret = Some(Zeroizing::new(*output.combined_shared_secret()));
             // The zero-bytes value is the test-fixture sentinel for "no
             // key image computed yet" (`RecoveredWalletOutput::new_for_test`).
             // The runtime scanner path always computes a real image, so a

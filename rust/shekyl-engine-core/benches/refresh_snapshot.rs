@@ -35,6 +35,8 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
 use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+use shekyl_crypto_pq::handle::derive_output_handle;
+use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_engine_core::__bench_internals::LedgerSnapshot;
 use shekyl_engine_state::{
     payment_id::PaymentId,
@@ -43,19 +45,28 @@ use shekyl_engine_state::{
     BlockchainTip, LedgerBlock, ReorgBlocks,
 };
 use shekyl_oxide::primitives::Commitment;
-use zeroize::Zeroizing;
 
 /// Mirrors `shekyl-engine-state::ledger_block::tests::sample_transfer`
 /// — the canonical "lightweight transfer for tests" shape. Reproduced
 /// here because the test helper is `cfg(test)` inside a different
-/// crate. Keep this in lockstep if the test helper grows new fields:
-/// drift between bench and test would let snapshot-cost regressions
-/// hide behind shape mismatches.
+/// crate. Keep this in lockstep with `engine_fixture::sample_transfer`
+/// (and the engine-state test helper) if the source shape grows new
+/// fields: drift between bench and test would let snapshot-cost
+/// regressions hide behind shape mismatches.
+///
+/// Post-M3d (per `STAGE_1_PR_3_M3D_PREFLIGHT.md` §3.3): the
+/// per-output secret-bearing fields were removed; the bench fixture
+/// now populates the M3b deterministic-handle pathway memos
+/// (`source_ciphertext` ≈ 1088-byte ML-KEM ciphertext + 32-byte
+/// X25519 share; `output_handle` = 16-byte cSHAKE256 derivative)
+/// so the bench reflects realistic post-M3d transfer payload sizes.
 fn sample_transfer(seed: u64) -> TransferDetails {
     let lo = (seed & 0xff) as u8;
+    let tx_hash = [lo; 32];
+    let internal_output_index = seed;
     TransferDetails {
-        tx_hash: [lo; 32],
-        internal_output_index: seed,
+        tx_hash,
+        internal_output_index,
         global_output_index: 1_000 + seed,
         block_height: 100,
         key: ED25519_BASEPOINT_POINT,
@@ -72,13 +83,15 @@ fn sample_transfer(seed: u64) -> TransferDetails {
         stake_tier: 0,
         stake_lock_until: 0,
         last_claimed_height: 0,
-        combined_shared_secret: Some(Zeroizing::new([lo.wrapping_add(1); 64])),
-        ho: Some(Zeroizing::new([lo.wrapping_add(2); 32])),
-        y: Some(Zeroizing::new([lo.wrapping_add(3); 32])),
-        z: Some(Zeroizing::new([lo.wrapping_add(4); 32])),
-        k_amount: Some(Zeroizing::new([lo.wrapping_add(5); 32])),
-        source_ciphertext: None,
-        output_handle: None,
+        source_ciphertext: Some(HybridCiphertext {
+            x25519: [lo.wrapping_add(1); 32],
+            ml_kem: vec![lo.wrapping_add(2); 1088],
+        }),
+        output_handle: Some(derive_output_handle(
+            &[lo.wrapping_add(3); 32],
+            &tx_hash,
+            internal_output_index,
+        )),
         eligible_height: 100 + SPENDABLE_AGE,
         frozen: false,
         fcmp_precomputed_path: None,

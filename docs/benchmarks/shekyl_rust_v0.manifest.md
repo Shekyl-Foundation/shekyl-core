@@ -113,11 +113,16 @@ directly comparable across N.
   Ed25519 basepoint table. Golden-ratio-derived stride so adjacent
   seeds do not alias.
 - `commitment = Commitment::new(Scalar::ONE, 1_000 + seed)`.
-- All optional `Zeroizing`/HKDF fields (`combined_shared_secret`,
-  `ho`, `y`, `z`, `k_amount`, `fcmp_precomputed_path`, `subaddress`,
-  `payment_id`, `spent_height`, `key_image`) are `None`. See
-  **Known gaps** §1 below for the reasoning and the delta-against-C++
-  implication.
+- All remaining optional fields (`source_ciphertext`,
+  `output_handle`, `fcmp_precomputed_path`, `subaddress`,
+  `payment_id`, `spent_height`, `key_image`) are `None`. The
+  legacy `Zeroizing`/HKDF fields (`combined_shared_secret`,
+  `ho`, `y`, `z`, `k_amount`) were removed from the
+  `TransferDetails` schema at M3d (per
+  `STAGE_1_PR_3_MIGRATION_AUDIT.md` §2.1 row 1); the engine
+  re-derives them from `(view_secret, source_ciphertext)` at
+  signing time. See **Known gaps** §1 below for the post-M3d
+  reasoning and the delta-against-C++ implication.
 - `spent = false`, `staked = (seed & 0b11) == 0`,
   `stake_tier = (seed & 0x3) as u8`,
   `stake_lock_until = height + 100`,
@@ -703,17 +708,27 @@ The v0 baseline is explicit about what it does not measure:
    `fcmp_plus_plus_membership_proof`, bump the manifest to
    `shekyl_rust_v1`. Not blocking the hardening pass; tracked as a
    follow-up in the commit-2 changelog entry.
-2. **Zeroizing/HKDF secret fields in the ledger postcard.**
-   `hot_path_bench_ledger_postcard_roundtrip` sets all optional
-   `combined_shared_secret` / `ho` / `y` / `z` / `k_amount` /
-   `fcmp_precomputed_path` fields to `None`, so the measured cost is
-   the "cold-sync transfer" shape (newly scanned, secrets not yet
-   hydrated). The "hot-spend transfer" shape with all secret fields
-   `Some(..)` adds ~3× bytes per transfer and a matching postcard
-   cost; deferring to a follow-up bench is acceptable because the
-   hot-spend shape is rare (only transfers actively being spent are
-   in that state) and the cold-sync shape is what dominates wallet
-   startup.
+2. **Post-M3d handle-pathway shape in the ledger postcard.**
+   `hot_path_bench_ledger_postcard_roundtrip` sets the optional
+   `source_ciphertext` / `output_handle` / `fcmp_precomputed_path`
+   fields to `None`, so the measured cost is the "cold-sync
+   transfer" shape (newly scanned, handle pathway not yet
+   populated by the engine post-pass). The "fully-populated
+   transfer" shape (`source_ciphertext = Some(HybridCiphertext)`
+   adds ~1120 bytes/transfer of ML-KEM ciphertext + X25519 share +
+   handle bytes; `output_handle = Some(OutputHandle)` adds 16 bytes)
+   reflects what a v4-store transfer actually carries post-M3d,
+   and the matching postcard cost grows accordingly. Deferring
+   the fully-populated-shape bench to a follow-up is acceptable
+   because the cold-sync shape is what dominates wallet startup,
+   and the post-M3d
+   `engine-core/benches/refresh_snapshot.rs::sample_transfer`
+   already pins the fully-populated shape for the
+   refresh-snapshot benchmark (which is the load-bearing path
+   for that workload). The legacy `combined_shared_secret` / `ho`
+   / `y` / `z` / `k_amount` shape this gap originally referred to
+   was removed from `TransferDetails` at M3d (per
+   `STAGE_1_PR_3_MIGRATION_AUDIT.md` §2.1 row 1).
 3. **ML-DSA-65 hedged-randomized production sign path.** The iai-
    callgrind half of `crypto_bench_transfer_e2e_1in_2out` measures
    the FIPS 204 `try_sign_with_seed` + `try_keygen_with_rng`

@@ -112,11 +112,6 @@ rust/shekyl-engine-state/src/transfer.rs|key: Vec<u8>
 rust/shekyl-engine-state/src/transfer.rs|key_offset: Vec<u8>
 rust/shekyl-engine-state/src/transfer.rs|commitment: Vec<u8>
 rust/shekyl-engine-state/src/transfer.rs|key_image: Option<[u8; 32]>
-rust/shekyl-engine-state/src/transfer.rs|combined_shared_secret: Option<Vec<u8>>
-rust/shekyl-engine-state/src/transfer.rs|ho: Option<Vec<u8>>
-rust/shekyl-engine-state/src/transfer.rs|y: Option<Vec<u8>>
-rust/shekyl-engine-state/src/transfer.rs|z: Option<Vec<u8>>
-rust/shekyl-engine-state/src/transfer.rs|k_amount: Option<Vec<u8>>
 
 # ── tx_meta_block.rs ──────────────────────────────────────────────────
 #

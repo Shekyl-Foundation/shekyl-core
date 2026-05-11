@@ -715,6 +715,77 @@ citing in a review.
   work's expected landing window; bumps to V3.x if 18-type-placement
   defers).
 
+- **Rules-queue: elevate the plan-vs-state-divergence pattern into a
+  workspace-wide rule.** Probable home:
+  `.cursor/rules/19-plan-vs-state-divergence.mdc` (in-queue draft, sibling
+  to `18-type-placement.mdc`), or folded into the `18-type-placement.mdc`
+  rules-queue work as a sub-clause. The rule statement, drawn from the
+  recurrence pattern across Stage 1 PR 3's M3a–M3d sub-PRs:
+  _plan-document wording predates substrate changes; pre-flights catch
+  divergences by re-anchoring to current state; the surgical shape is to
+  deliver the underlying property at the PR-3 sub-PR boundary, and to
+  amend the plan-document wording in the landing-notes commit by
+  deleting vacuous bullets rather than annotating around them (per
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  "default: delete" applied to plan-document text)._ The pattern's
+  recurrence: M3b sub-commit 11 (test-placement divergence under the M3a
+  Round 4a `pub(crate)` lock), M3c commit 3 (`SignedProofs` byte-identity
+  divergence under `OsRng`-driven signing), and M3d commit 5 (the
+  "remove fallback" bullet's vacuousness against the PR-5-pinned stub).
+  All three share one root cause: the migration plan was written before
+  the M3a Round 4a workflow-shape pivot (per
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §2.1.1), which deferred the bridge impl past every subsequent PR; the
+  surgical shape is consistent across all three. The framework-
+  attribution observation is captured in
+  [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
+  §11 with cross-references to the three precedents; future similar PRs
+  (likely candidates: PR-3's M3e docs-realignment commit; future per-trait
+  extraction PRs' pre-flight passes) can cite the precedent without
+  re-deriving the discipline each time. Cross-references:
+  [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
+  §2 D1 + §11;
+  [`docs/design/STAGE_1_PR_3_M3C_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3C_PREFLIGHT.md)
+  §2.1.1 (Trim-1 disposition);
+  [`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3B_PREFLIGHT.md)
+  §D5 (test-placement divergence);
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3.3.1 (M3c landing-notes cross-reference) and §3.4.1 (M3d landing-notes
+  cross-reference, landed 2026-05-11);
+  [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  ("default: delete" applied to plan-document text);
+  [`.cursor/rules/16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  ("pre-flight literal vs underlying property", "what does this deliver
+  against the threat model?"). Target: V3.1 (the rules-queue work's
+  expected landing window; co-lands or sequences against
+  `18-type-placement.mdc`).
+
+- **Rules realignment: `42-serialization-policy.mdc` pre-rename paths.**
+  The rule's `globs` frontmatter (lines 3–5) and its body text (~13 path
+  references in the intro paragraph, the "The pairing" table, the
+  "Mechanical enforcement → Schema snapshot" subsection, the
+  "Mechanical enforcement → Zeroizing-field grep" subsection, and the
+  "Procedure for an intentional schema change" section) still cite
+  `rust/shekyl-wallet-state/**` / `rust/shekyl-wallet-file/**`. Those
+  crates were renamed to `shekyl-engine-state` / `shekyl-engine-file`
+  prior to the M3 sub-PRs. Two consequences: (1) the stale `globs` field
+  prevents the rule from auto-applying to any current file under the
+  workspace's `rust/shekyl-engine-state/` or `rust/shekyl-engine-file/`
+  trees, defeating the rule's intended reach; (2) any document that
+  cites the rule (e.g., M3d's CHANGELOG `### Removed` entry, since
+  redirected to an in-source citation at
+  `rust/shekyl-engine-state/src/wallet_ledger.rs:67`) propagates
+  reader-confusion downstream. The realignment is mechanical:
+  `s/shekyl-wallet-state/shekyl-engine-state/g`,
+  `s/shekyl-wallet-file/shekyl-engine-file/g` against the rule body and
+  frontmatter, then verify no other `42-serialization-policy.mdc`
+  citations propagate residue. Surfaced by Copilot review of PR #39
+  (M3d) on the CHANGELOG citation; held to a focused follow-up per
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  ("while we're here is the enemy") rather than folded into M3d.
+  Target: V3.0 (small mechanical pass; pairs naturally with M3e
+  documentation realignment or with the next rules-queue PR).
+
 - **`fips203` interior `into_bytes()` Copy on the ML-KEM-768 decap-key
   flow.** `shekyl_crypto_pq::account::ml_kem_keypair_from_d_z`
   produces an `MlKem768DecapKey` from `fips203`'s typed
@@ -2524,6 +2595,61 @@ reference.
 ## Recently resolved (audit trail)
 
 Retained for citation in review; each links to the canonical record.
+
+- **Stage 1 PR 3 architectural-inheritance migration: "secrets confined
+  to engine" property activated at M3d (May 11, 2026).** The
+  headline property of the
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  M3-series (see §3.4 / §3.4.1) — orchestrator-side `TransferDetails`
+  no longer carries derived per-output secrets — activated with the
+  M3d landing on `feat/stage-1-pr3-m3d`. The five legacy
+  `Option<Zeroizing<…>>` fields (`combined_shared_secret`, `ho`, `y`,
+  `z`, `k_amount`) were removed from
+  `rust/shekyl-engine-state/src/transfer.rs::TransferDetails` and its
+  postcard schema mirror; the engine re-derives the spend material
+  inside the signing-session boundary from `(view_secret,
+  source_ciphertext)` via `LocalKeys::derive_source_secrets_bundle`
+  per [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §7.10–§7.12.
+
+  **Scope and audit trail.** Five-PR sequence (M3a–M3e) per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3.1–§3.5; M3d activates the property, M3e remains for the
+  documentation-realignment-of-the-whole. Audit table in
+  [`docs/design/STAGE_1_PR_3_MIGRATION_AUDIT.md`](./design/STAGE_1_PR_3_MIGRATION_AUDIT.md)
+  §2.1 row 1 marks the five legacy fields "Removed at M3d (landed
+  2026-05-11)". `LEDGER_BLOCK_VERSION` and
+  `WALLET_LEDGER_FORMAT_VERSION` both bumped 3 → 4; two `.snap`
+  schema snapshots regenerated; `.zeroize-allowlist` cleaned. Per-PR
+  pre-flight investigations:
+  [`STAGE_1_PR_3_M3A_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3A_PREFLIGHT.md),
+  [`STAGE_1_PR_3_M3B_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3B_PREFLIGHT.md),
+  [`STAGE_1_PR_3_M3C_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3C_PREFLIGHT.md),
+  [`STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md).
+
+  **Threat-model delta.** Orchestrator compromise no longer discloses
+  output-secret material (capability disclosure via `AllKeysBlob`
+  remains an engine-confined property per Round 3 §7.10–§7.11).
+  Discipline anchors:
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  (the rule whose "what does this deliver against the threat model?"
+  framing the migration was designed against),
+  [`35-secure-memory.mdc`](../.cursor/rules/35-secure-memory.mdc),
+  [`36-secret-locality.mdc`](../.cursor/rules/36-secret-locality.mdc).
+
+  **Residue tracked elsewhere.** The Rust-side schema cleanup
+  completes here; the parallel C++ `transfer_details` consumer
+  cutover (a separate work item) remains tracked at V3.1 above
+  ("Migrate C++ `transfer_details` consumers to
+  `shekyl-engine-state::TransferDetails`"). The two are
+  distinguished by the
+  [`20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+  boundary: M3d closes the Rust-side property; the V3.1 entry closes
+  the C++-side migration. The framework-attribution rules-queue entry
+  ("Rules-queue: elevate the plan-vs-state-divergence pattern into a
+  workspace-wide rule" above) is the third discipline-discovery
+  surfaced by the M3-series (M3b/M3c/M3d) and remains open as V3.1
+  rules-queue work.
 
 - **`apply_scan_result` strict-contract enforcement (April 27, 2026).**
   PR #16 Copilot review surfaced two defensive-coding gaps in
