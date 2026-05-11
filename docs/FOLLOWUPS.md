@@ -7,6 +7,42 @@ target version; items without one get one within 30 days or get closed as
 audit trail is retained at the bottom for items whose resolution is worth
 citing in a review.
 
+## Queue structure
+
+The follow-up queue is two queues that share a file but not a risk profile.
+The split is load-bearing, not cosmetic; the section headers below reflect
+it explicitly.
+
+- **V3.0 pre-genesis queue** is load-bearing. Each item must land before
+  genesis cut. Each item carries fixed per-PR overhead (pre-flight + review
+  + CI); accumulation compounds the pre-genesis trajectory cost. The
+  V3.0 queue's growth rate against resolution rate determines whether
+  the discipline pattern is sustainable. When V3.0 items hide inside a
+  long undifferentiated list, accumulation looks manageable when it is
+  not. Items here are reviewed for "does this still need to land before
+  genesis?" on every queue pass; structural deferral (V3.0 → V3.1+)
+  requires an explicit decision and a brief rationale.
+
+- **V3.1+ post-genesis queue** is a sustainable backlog. Items are
+  well-anchored to precedent PRs; re-derivation cost is low; no
+  near-term deadline compounds. The queue can grow indefinitely without
+  pre-genesis cost. Items here include rules-queue work (consolidated
+  as 1–2 PRs per §11.3 of
+  [`docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)),
+  post-genesis architecture work (wallet-RPC cutover, `KeyImage`
+  `Option`-promotion, `transfer_details` C++ → Rust migration), and
+  structural design passes that warrant their own pre-flight
+  (non-`Clone` ban re-evaluation).
+
+The calibration shift recorded at the M3e boundary (per
+[`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+§11) bends the V3.0 queue's accumulation trajectory: closing PRs in a
+migration series fold their own mechanical residue (path renames,
+comment-level rationale rewrites, doc-string past-tensing) rather than
+deferring it; only genuinely structural items that don't fit the
+closing PR's scope are tracked in V3.0 FOLLOWUPS. The V3.1+ queue's
+sustainability is unaffected by the recalibration.
+
 ---
 
 ## V3.0 — wallet stack greenfield Rust rewrite
@@ -490,21 +526,31 @@ citing in a review.
   rolled into the V3.1 audit-response cleanup batch.
 
 - **Stage 2 — `KeyEngine` migration to actor.** Migrate key material
-  + signing operations from a composed field on `Engine<S>` (post-
-  rename name) into a true actor with its own task and message
-  protocol. The `KeyEngine` actor owns `AllKeysBlob` privately;
-  exposes `sign(payload) -> Signature`,
-  `derive_subaddress(idx) -> Subaddress`, and view-key scan
-  operations via message channels; never reveals raw key material
-  outside its own task. Validates the actor pattern on the
-  smallest, cleanest subsystem (per the three-grounds defense in
-  the 2026-04-27 actor-architecture decision-log entry — smallest
-  internal state, cleanest privacy boundary, framework friction
-  surfaces with bounded blast radius). Sets up the
-  view-key-vs-spend-key separation as a Stage 4 sub-decision. Tests
-  `kameo` (the framework choice locked at Stage 2) against a real
-  subsystem; if framework limitations surface here, the cost of
-  switching is bounded because only one actor exists.
+  + signing operations from a composed field on `Engine<S>` into a
+  true actor with its own task and message protocol. The
+  `KeyEngine` actor owns `AllKeysBlob` privately; exposes the
+  post-M3 trait surface (`account_public_address`,
+  `derive_subaddress(idx, purpose) -> SubaddressFor`,
+  `try_claim_output(input) -> OutputClaimResult`,
+  `sign_transaction(tx) -> TxSignatures` — per
+  `rust/shekyl-engine-core/src/engine/traits/key.rs:616`) via
+  message channels; never reveals raw key material outside its
+  own task. The "no secret material crosses the trait boundary"
+  property activated by the M3-series (per
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §3.1.2 handle-indirected workflow contract) survives the
+  Stage-1-to-actor transition by construction — the trait surface
+  is unchanged; Stage 2 swaps the in-process composition for an
+  actor-mailbox dispatcher without touching method signatures.
+  Validates the actor pattern on the smallest, cleanest subsystem
+  (per the three-grounds defense in the 2026-04-27
+  actor-architecture decision-log entry — smallest internal state,
+  cleanest privacy boundary, framework friction surfaces with
+  bounded blast radius). Sets up the view-key-vs-spend-key
+  separation as a Stage 4 sub-decision. Tests `kameo` (the
+  framework choice locked at Stage 2) against a real subsystem;
+  if framework limitations surface here, the cost of switching is
+  bounded because only one actor exists.
 
   *Blocks on:* Stage 1 actor-friendly trait boundaries (the
   framework-agnostic refactor that lands between Branch 2 closing
@@ -825,31 +871,102 @@ citing in a review.
   Target: V3.1 (the rules-queue work's expected landing window;
   co-lands or sequences against `18-type-placement.mdc`).
 
-- **Rules realignment: `42-serialization-policy.mdc` pre-rename paths.**
-  The rule's `globs` frontmatter (lines 3–5) and its body text (~13 path
-  references in the intro paragraph, the "The pairing" table, the
-  "Mechanical enforcement → Schema snapshot" subsection, the
-  "Mechanical enforcement → Zeroizing-field grep" subsection, and the
-  "Procedure for an intentional schema change" section) still cite
-  `rust/shekyl-wallet-state/**` / `rust/shekyl-wallet-file/**`. Those
-  crates were renamed to `shekyl-engine-state` / `shekyl-engine-file`
-  prior to the M3 sub-PRs. Two consequences: (1) the stale `globs` field
-  prevents the rule from auto-applying to any current file under the
-  workspace's `rust/shekyl-engine-state/` or `rust/shekyl-engine-file/`
-  trees, defeating the rule's intended reach; (2) any document that
-  cites the rule (e.g., M3d's CHANGELOG `### Removed` entry, since
-  redirected to an in-source citation at
-  `rust/shekyl-engine-state/src/wallet_ledger.rs:67`) propagates
-  reader-confusion downstream. The realignment is mechanical:
-  `s/shekyl-wallet-state/shekyl-engine-state/g`,
-  `s/shekyl-wallet-file/shekyl-engine-file/g` against the rule body and
-  frontmatter, then verify no other `42-serialization-policy.mdc`
-  citations propagate residue. Surfaced by Copilot review of PR #39
-  (M3d) on the CHANGELOG citation; held to a focused follow-up per
+- **Rules-queue: encode the rule-15 trinary reading
+  (in-scope-substantive / in-scope-mechanical-residue /
+  out-of-scope-structural-tangent) in
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc).**
+  The current rule reads as binary: "in-scope" vs "while we're here is
+  the enemy." That binary calibration was over-strict against
+  mechanical residue of substrate changes — work that is mechanically
+  derivable from the just-finished substrate change, bounded, directly
+  traceable, and surfaced during the substrate-change PR's review.
+  The M3-series surfaced the pattern concretely (M3e's D5: 19-file /
+  82-occurrence path-rename residue from the
+  `shekyl-wallet-state` → `shekyl-engine-state` /
+  `shekyl-wallet-file` → `shekyl-engine-file` rename that pre-dated the
+  M3 sub-PRs); reading the rule strictly would defer mode-2 residue
+  indefinitely, generating exactly the V3.0-queue accumulation pattern
+  the M3e preflight §11.1 records. The calibration shift, recorded in
+  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  §11.1, distinguishes three modes:
+
+  - **Mode 1: in-scope substantive.** Direct PR-scope work; lands in
+    the PR.
+  - **Mode 2: in-scope mechanical-residue.** Mechanically derivable
+    from the substrate change; bounded; directly traceable; surfaced
+    in the substrate-change PR's review window. Folds into the
+    closing PR rather than deferring. The discriminating tests are
+    derivability + boundedness + traceability + surface-during-review.
+  - **Mode 3: out-of-scope structural-tangent.** Independent design
+    decisions; new properties; scope expansion. Defers to its own PR
+    with its own pre-flight.
+
+  The rule text amendment, drawn from the §11.1 calibration shift:
+  _mechanical residue of the just-finished substrate change folds
+  inline; structural design passes get their own pre-flight._ Three
+  worked examples for the rule body: M3e D5 (path-rename residue,
+  mode-2), the §19 plan-vs-state-divergence pattern (mode-2 across
+  M3a → M3d sub-PRs), the non-`Clone` ban re-evaluation (mode-3 →
+  warrants its own design pass).
+
+  **Pairing with `18-type-placement.mdc` and `19-plan-vs-state-divergence.mdc`.**
+  The rule-15 calibration consolidates with the §18 and §19 rules-queue
+  drafts because all three address discipline calibration rather than
+  net-new rule content. Probable consolidation shape: one
+  rules-corpus PR landing `15-deletion-and-debt.mdc` amendment +
+  `18-type-placement.mdc` (public-material exclusion sub-clause) +
+  `19-plan-vs-state-divergence.mdc` (or sub-clause of 18).
+  Cross-references:
+  [`docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  §11.1 (trinary reading), §11.3 (rules-queue consolidation guidance);
+  M3e D5 disposition (the concrete mode-2 precedent);
   [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
-  ("while we're here is the enemy") rather than folded into M3d.
-  Target: V3.0 (small mechanical pass; pairs naturally with M3e
-  documentation realignment or with the next rules-queue PR).
+  (the parent rule to amend);
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  ("what does this deliver against the threat model?" — the
+  framework anchor that the trinary reading operationalizes).
+  Target: V3.1 (rules-queue work's expected landing window; consolidates
+  with §18 and §19 entries).
+
+- **Rules-queue: consolidate the rules-queue itself into 1–2 PRs.**
+  The rules-queue is now ~6 deep (the §18 public-material exclusion;
+  the stateless-actor preference; the §19 plan-vs-state-divergence
+  pattern + the comment-level extension; the enumeration-claim
+  brittleness forward-template; the rule-15 trinary reading;
+  the non-`Clone` ban re-evaluation as a design pass). Six queued
+  rule artifacts shipping as six PRs is six times the per-PR overhead
+  (pre-flight + review + CI) without proportional review benefit for
+  pure-documentation work. Pure-docs commits don't have meaningful
+  intermediate compile boundaries; consolidation preserves bisection
+  granularity (the commits inside the consolidated PR are still
+  small), reduces context-switching across reviews, and ships the
+  rules as a coherent corpus rather than scattering them. The
+  consolidation target, per
+  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  §11.3:
+
+  - **PR 1: rules-corpus consolidation** (likely 4–6 commits, one per
+    rule artifact). Lands `15-deletion-and-debt.mdc` trinary-reading
+    amendment, `18-type-placement.mdc` (public-material exclusion
+    sub-clause), `19-plan-vs-state-divergence.mdc` (or folded into §18),
+    enumeration-claim brittleness forward-template (folded into §19
+    or its own sub-rule), and the stateless-actor preference rule.
+  - **PR 2 (optional): non-`Clone` ban design pass.** Cuts only if
+    the design pass's scope warrants its own pre-flight (three
+    dimensions per the non-`Clone` ban FOLLOWUP entry below).
+    Otherwise, the design pass's outcome can be encoded in PR 1's
+    `18-type-placement.mdc` body.
+
+  The discipline anchor: rules-queue overhead is dominated by per-PR
+  fixed cost, not per-rule marginal cost. Consolidation amortizes the
+  fixed cost across the queue. The current scattered shape — implied
+  by the per-entry V3.1 targets without an explicit consolidation
+  pin — would land each rule as its own PR by default; the
+  consolidation pin reverses the default. Cross-references:
+  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  §11.3; the §18, §19, and rule-15-trinary-reading FOLLOWUPS above.
+  Target: V3.1 (queue-internal coordination decision; lands as the
+  rules-queue's first PR or as a planning artifact ahead of it).
 
 - **Non-`Clone` ban on `TransferDetails` — post-M3d structural
   re-evaluation.** M3d Finding 5 (PR #39 round-2 Copilot review, commit
@@ -2769,8 +2886,9 @@ Retained for citation in review; each links to the canonical record.
 
   **Scope and audit trail.** Five-PR sequence (M3a–M3e) per
   [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
-  §3.1–§3.5; M3d activates the property, M3e remains for the
-  documentation-realignment-of-the-whole. Audit table in
+  §3.1–§3.5; M3d activated the property and M3e completed the
+  documentation-realignment-of-the-whole (M3-series complete,
+  2026-05-11). Audit table in
   [`docs/design/STAGE_1_PR_3_MIGRATION_AUDIT.md`](./design/STAGE_1_PR_3_MIGRATION_AUDIT.md)
   §2.1 row 1 marks the five legacy fields "Removed at M3d (landed
   2026-05-11)". `LEDGER_BLOCK_VERSION` and
@@ -2805,6 +2923,27 @@ Retained for citation in review; each links to the canonical record.
   workspace-wide rule" above) is the third discipline-discovery
   surfaced by the M3-series (M3b/M3c/M3d) and remains open as V3.1
   rules-queue work.
+
+- **`42-serialization-policy.mdc` rule realignment (M3e, May 11, 2026).**
+  The rule's `globs` frontmatter and body text carried 11 stale path
+  references to `rust/shekyl-wallet-state/**` / `rust/shekyl-wallet-file/**`
+  (renamed to `shekyl-engine-state` / `shekyl-engine-file` prior to the
+  M3 sub-PRs); the stale `globs` field prevented the rule from
+  auto-applying to any current file under the workspace's renamed
+  trees, defeating the rule's intended reach. Closed by M3e's commit 3
+  via mechanical rename
+  (`s/shekyl-wallet-state/shekyl-engine-state/g`,
+  `s/shekyl-wallet-file/shekyl-engine-file/g` against the rule body
+  and frontmatter). Surfaced by Copilot review of PR #39 (M3d) on the
+  CHANGELOG citation; originally held to a focused follow-up per
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  ("while we're here is the enemy") then folded into M3e per the
+  rule-15 trinary-reading calibration shift recorded in
+  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  §11.1 — the realignment is mode-2 mechanical-residue (mechanically
+  derivable from the substrate rename; directly traceable; bounded;
+  surfaced inside M3e's review window) and folds into the closing PR
+  rather than deferring.
 
 - **`apply_scan_result` strict-contract enforcement (April 27, 2026).**
   PR #16 Copilot review surfaced two defensive-coding gaps in
