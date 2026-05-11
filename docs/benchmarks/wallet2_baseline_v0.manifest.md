@@ -71,7 +71,7 @@ the inner loop is dead-code-eliminated to nothing.
 **Apples-to-oranges against Rust.** The Rust `balance_compute_N`
 benchmark iterates the same `TransferDetails`-equivalent structure
 with `Zeroize`-on-drop semantics and `#[inline]` hints from
-`shekyl-wallet-state`. The Rust path additionally calls
+`shekyl-engine-state`. The Rust path additionally calls
 `WalletLedger::check_invariants()` on the input fixture once (outside
 the hot loop). The per-transfer costs are expected to be comparable.
 
@@ -136,7 +136,7 @@ The one-bench v0 baseline is honest about what it does not measure:
 
 1. **Cold-open Argon2id / KDF cost**: not captured on this tree in
    C++. The Rust harness in commit 3.2 captures it directly via the
-   `shekyl-wallet-file` AEAD open path.
+   `shekyl-engine-file` AEAD open path.
 2. **Cache-format regressions**: not captured on this tree in C++.
    The Rust harness captures these through the postcard ledger roundtrip
    plus the wallet-file AEAD roundtrip.

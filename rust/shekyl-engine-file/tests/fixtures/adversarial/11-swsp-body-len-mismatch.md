@@ -7,7 +7,7 @@ BSD-3-Clause
 
 # 11 — SWSP `body_len` disagrees with trailing bytes
 
-**Layer:** payload / SWSP (`shekyl-wallet-file::payload`)
+**Layer:** payload / SWSP (`shekyl-engine-file::payload`)
 **Test:** `swsp_body_len_mismatch_is_refused`
 **Expected refusal:** `WalletFileError::Payload(PayloadError::BodyLenMismatch)`
 

@@ -7,7 +7,7 @@ BSD-3-Clause
 
 # 09 — SWSP frame with wrong magic inside region 2 plaintext
 
-**Layer:** payload / SWSP (`shekyl-wallet-file::payload`)
+**Layer:** payload / SWSP (`shekyl-engine-file::payload`)
 **Test:** `swsp_bad_magic_in_region2_is_refused`
 **Expected refusal:** `WalletFileError::Payload(PayloadError::BadMagic)`
 

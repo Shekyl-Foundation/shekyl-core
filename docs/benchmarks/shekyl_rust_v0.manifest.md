@@ -75,7 +75,7 @@ Naming convention:
 
 ## 1. `hot_path_bench_ledger_postcard_roundtrip`
 
-**Crate.** `shekyl-wallet-state`.
+**Crate.** `shekyl-engine-state`.
 **Binaries.** `benches/ledger.rs` (criterion), `benches/ledger_iai.rs`
 (iai-callgrind).
 
@@ -158,14 +158,14 @@ cross-stack delta is attempted.
 
 ## 2. `hot_path_bench_balance_compute`
 
-**Crate.** `shekyl-wallet-state` (criterion + iai), with
+**Crate.** `shekyl-engine-state` (criterion + iai), with
 `shekyl-scanner` as a dev-dep.
 **Binaries.** `benches/balance.rs`, `benches/balance_iai.rs`.
 
 **What it measures.** `BalanceSummary::compute(&transfers,
 current_height)` over `N ∈ {100, 1000, 10000}`. The canonical
 balance implementation lives in `shekyl-scanner`; the bench is hosted
-in `shekyl-wallet-state` because the `TransferDetails` fixture
+in `shekyl-engine-state` because the `TransferDetails` fixture
 builder is already there and duplicating it would split the
 source-of-truth for the synthetic transfer shape.
 
@@ -228,7 +228,7 @@ over the same logical transfer shape. **Documented asymmetries:**
 
 ## 3. `crypto_bench_wallet_open_cold`
 
-**Crate.** `shekyl-wallet-file`.
+**Crate.** `shekyl-engine-file`.
 **Binaries.** `benches/open.rs` (criterion, production KDF),
 `benches/open_iai.rs` (iai-callgrind, KAT KDF).
 

@@ -32,11 +32,11 @@ shekyl-scanner
 ├── extra.rs         # Transaction extra field parsing (extended with PQC tags)
 ├── view_pair.rs     # ViewPair with X25519 + ML-KEM decapsulation keys
 ├── output.rs        # WalletOutput representation
-├── transfer.rs      # Re-export shim for shekyl_wallet_state::TransferDetails
+├── transfer.rs      # Re-export shim for shekyl_engine_state::TransferDetails
 │                    # (canonical type, with staking + PQC + FCMP++ fields)
 ├── ledger_ext.rs    # Scanner-side extension traits for LedgerBlock + LedgerIndexes
 │                    # (TransferDetailsExt, LedgerIndexesExt, LedgerBlockExt). The
-│                    # canonical persisted/runtime split lives in shekyl-wallet-state.
+│                    # canonical persisted/runtime split lives in shekyl-engine-state.
 ├── balance.rs       # Balance computation with staking categories
 ├── coin_select.rs   # Coin selection for transaction building
 ├── staker_pool.rs   # Staker pool accrual data for reward estimation

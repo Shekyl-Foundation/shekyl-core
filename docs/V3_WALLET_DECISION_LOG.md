@@ -1,11 +1,15 @@
 # V3 Wallet Decision Log
 
 **Append-only.** Every binding architectural decision for the Shekyl V3
-wallet stack — `shekyl-wallet-core`, `shekyl-wallet-file`,
-`shekyl-wallet-state`, `shekyl-scanner`, `shekyl-tx-builder`,
-`shekyl-proofs`, `shekyl-cli`, `shekyl-wallet-rpc`, and the GUI/mobile
+wallet stack — `shekyl-engine-core`, `shekyl-engine-file`,
+`shekyl-engine-state`, `shekyl-scanner`, `shekyl-tx-builder`,
+`shekyl-proofs`, `shekyl-cli`, `shekyl-engine-rpc`, and the GUI/mobile
 wallets that consume them — gets one entry here, dated, with a rationale
-that survives the chat log it was decided in.
+that survives the chat log it was decided in. (Pre-rename crate names
+in earlier dated entries are preserved per the append-only discipline;
+see the 2026-04-27 "`Wallet<S>` renamed to `Engine<S>`: privacy-correct
+framing for the local artifact" entry for the canonical rename mapping
+that retired `shekyl-wallet-*` in favor of `shekyl-engine-*`.)
 
 The point is anti-rewrite-the-history defense. Twelve months from now,
 when someone (you, a successor maintainer, a code reviewer) asks "why

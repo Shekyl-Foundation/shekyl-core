@@ -69,8 +69,8 @@ This script:
 1. Wipes `rust/target/criterion` so the envelope reflects this run
    only.
 2. Runs each of the five criterion harnesses
-   (`shekyl-wallet-state::{ledger, balance}`,
-   `shekyl-wallet-file::open`, `shekyl-scanner::scan_block`,
+   (`shekyl-engine-state::{ledger, balance}`,
+   `shekyl-engine-file::open`, `shekyl-scanner::scan_block`,
    `shekyl-tx-builder::transfer_e2e`) with `--noplot`.
 3. Runs each of the five iai-callgrind sibling harnesses, teeing
    the stdout to the snapshot file as sections are produced so a

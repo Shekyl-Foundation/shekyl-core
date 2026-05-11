@@ -8,7 +8,7 @@ BSD-3-Clause
 # Adversarial wallet-file corpus
 
 This directory documents the adversarial corpus exercised by
-`rust/shekyl-wallet-file/tests/adversarial_corpus.rs`. Each attack row
+`rust/shekyl-engine-file/tests/adversarial_corpus.rs`. Each attack row
 below is reproduced in-process by the matching test function; the
 `.md` files in this directory narrate the *shape* of the malformed
 input and the exact typed refusal the orchestrator must surface.
@@ -74,14 +74,14 @@ input:
 1. **Envelope** (`shekyl-crypto-pq::wallet_envelope`) — magic,
    version, AEAD tag, and the `(mode, cap_content_len)` shape
    check. Rows 1–8, 16.
-2. **Payload / SWSP** (`shekyl-wallet-file::payload`) — frame magic,
+2. **Payload / SWSP** (`shekyl-engine-file::payload`) — frame magic,
    `payload_version`, declared `body_len`. Rows 9–11.
 3. **Wallet ledger** (`shekyl-engine-state::wallet_ledger` +
    `invariants`) — bundle `format_version`, per-block
    `block_version`, postcard decode, cross-block invariant gate.
    Rows 12–15.
 
-The orchestrator (`shekyl-wallet-file::handle`) must preserve this
+The orchestrator (`shekyl-engine-file::handle`) must preserve this
 layering end-to-end: a refusal that originates at the envelope layer
 must surface as `WalletFileError::Envelope`, a SWSP refusal as
 `WalletFileError::Payload`, and a ledger refusal as

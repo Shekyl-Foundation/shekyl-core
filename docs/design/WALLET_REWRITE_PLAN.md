@@ -55,7 +55,7 @@ isProject: false
 
 ## Locked design (from prior plans, do not re-litigate)
 
-- **Wallet file format:** v1 split-file envelope (`.wallet.keys` + `.wallet`) per [docs/WALLET_FILE_FORMAT_V1.md](docs/WALLET_FILE_FORMAT_V1.md). Stance Minimum-Leak AAD, two-level KEK (DK → file_kek → wrap_key), capability-discriminated region 1, Poly1305 cross-file binding via `state_tag_of_seed_block`. Region 1 write-once; region 2 free to rewrite. Already landed in `rust/shekyl-crypto-pq/src/wallet_envelope.rs` + `rust/shekyl-wallet-file/`.
+- **Wallet file format:** v1 split-file envelope (`.wallet.keys` + `.wallet`) per [docs/WALLET_FILE_FORMAT_V1.md](../WALLET_FILE_FORMAT_V1.md). Stance Minimum-Leak AAD, two-level KEK (DK → file_kek → wrap_key), capability-discriminated region 1, Poly1305 cross-file binding via `state_tag_of_seed_block`. Region 1 write-once; region 2 free to rewrite. Already landed in `rust/shekyl-crypto-pq/src/wallet_envelope.rs` + `rust/shekyl-engine-file/`.
 - **Key signature:** master_seed_64 → HKDF with `shekyl-master-derive-v1-<network>-<format>` salt → wide-reduce Ed25519 scalars → ML-KEM-768 via SHA3-256(`shekyl-mlkem-chacha-seed` || d_z) → ChaCha20Rng. BIP-39 mainnet/stagenet (passphrase opt-in only), raw 32-byte seed testnet/fakechain. Already landed in `rust/shekyl-crypto-pq` per [stabilize_key_signature_15d8e48a](../plans/stabilize_key_signature_15d8e48a.plan.md).
 - **Transaction shape:** `RCTTypeFcmpPlusPlusPqc` only (and `RCTTypeNull` for coinbase). FCMP++ membership proofs from genesis, hybrid PQC (Ed25519 + ML-DSA-65) on signing, ML-KEM-768 in addresses.
 - **Multisig:** modified FROST scaffold lives behind `shekyl-wallet-core/multisig` feature; full V3.1 ship-readiness is a separate plan. The Rust wallet API is shaped FROST-aware from day 1 so V3.1 is a feature flip, not a refactor.
@@ -66,23 +66,23 @@ This is "we're pretty far, tbh." The phase plan below assumes this baseline. Dis
 
 ### Already landed in `rust/`
 
-- [shekyl-wallet-state](rust/shekyl-wallet-state/): `TransferDetails`, `RuntimeWalletState`, `SubaddressIndex`, `PaymentId`, `StakerPoolState`, `LedgerBlock`, `BookkeepingBlock`, `TxMetaBlock`, `SyncStateBlock`, `WalletLedger` aggregator. Postcard round-trip proptests in place.
-- [shekyl-wallet-file](rust/shekyl-wallet-file/): orchestrator with `Wallet::{create,open,save,change_password,verify_password}`. Advisory locking, atomic tmp→fsync→rename→fsync-parent. Per-block ledger payload framing.
-- [shekyl-wallet-prefs](rust/shekyl-wallet-prefs/): plaintext-with-HMAC user prefs (layer 2 of [WALLET_PREFS.md](docs/WALLET_PREFS.md)).
+- [shekyl-engine-state](rust/shekyl-engine-state/): `TransferDetails`, `RuntimeWalletState`, `SubaddressIndex`, `PaymentId`, `StakerPoolState`, `LedgerBlock`, `BookkeepingBlock`, `TxMetaBlock`, `SyncStateBlock`, `WalletLedger` aggregator. Postcard round-trip proptests in place.
+- [shekyl-engine-file](rust/shekyl-engine-file/): orchestrator with `Wallet::{create,open,save,change_password,verify_password}`. Advisory locking, atomic tmp→fsync→rename→fsync-parent. Per-block ledger payload framing.
+- [shekyl-engine-prefs](rust/shekyl-engine-prefs/): plaintext-with-HMAC user prefs (layer 2 of [WALLET_PREFS.md](../WALLET_PREFS.md)).
 - [shekyl-scanner](rust/shekyl-scanner/): chain scan, output identification, key-image computation.
 - [shekyl-tx-builder](rust/shekyl-tx-builder/): BP+ range proofs, FCMP++ sign, hybrid PQC auth. `transfer_e2e_1in_2out` benched.
 - [shekyl-proofs](rust/shekyl-proofs/): tx_proof, reserve_proof.
 - [shekyl-staking](rust/shekyl-staking/), [shekyl-economics](rust/shekyl-economics/): consensus and fee maths.
 - [shekyl-daemon-rpc](rust/shekyl-daemon-rpc/): client to `shekyld`.
-- [shekyl-cli](rust/shekyl-cli/), [shekyl-wallet-rpc](rust/shekyl-wallet-rpc/): scaffolded crates, not yet binary-complete.
+- [shekyl-cli](rust/shekyl-cli/), [shekyl-engine-rpc](rust/shekyl-engine-rpc/): scaffolded crates, not yet binary-complete.
 - [shekyl-ffi](rust/shekyl-ffi/) typed wallet-ledger surface ([wallet_ledger_ffi.rs](rust/shekyl-ffi/src/wallet_ledger_ffi.rs)) — kept as the SHKW1 contract; the C++ side that consumed it is deleted in this plan.
 
 ### Gap
 
 - **Wallet domain API:** `shekyl-wallet-core` has stake/unstake/claim transaction builders, but no `Wallet` orchestrator type that composes file + state + prefs + scanner + tx-builder + RPC client into one cohesive surface for binaries to consume. This is the heart of the rewrite.
 - **CLI feature parity:** `shekyl-cli` exists but does not yet implement the daily-use command set.
-- **RPC feature parity:** `shekyl-wallet-rpc` exists but does not yet implement the JSON-RPC method set the GUI/mobile clients will eventually depend on.
-- **Wallet flows:** wallet creation (generate / restore-from-bip39 / restore-from-raw / restore-from-view-key / watch-only / hardware-offload), open with password rotation, lost-state rescan path are partially in [shekyl-wallet-file](rust/shekyl-wallet-file/) but not exposed as a clean `Wallet::*` API.
+- **RPC feature parity:** `shekyl-engine-rpc` exists but does not yet implement the JSON-RPC method set the GUI/mobile clients will eventually depend on.
+- **Wallet flows:** wallet creation (generate / restore-from-bip39 / restore-from-raw / restore-from-view-key / watch-only / hardware-offload), open with password rotation, lost-state rescan path are partially in [shekyl-engine-file](rust/shekyl-engine-file/) but not exposed as a clean `Wallet::*` API.
 - **C++ deletion:** `wallet2.cpp` (~6500 LoC), `wallet2_ffi.cpp`, `wallet/api/` (Qt-API surface used by GUI today), `simplewallet/` (~10 kLoC), `wallet_rpc_server*.cpp` are still in tree. CMake still builds them.
 - **monero-oxide vendor sync:** verify the vendored tree matches the upstream commit we want for the wallet stack's needs (`shekyl-primitives`, `shekyl-generators`, `shekyl-io`, `shekyl-fcmp-plus-plus`, `shekyl-bulletproofs`, `shekyl-rpc`, `helioselene`, `ec-divisors`, `generalized-bulletproofs`). Don't un-pin in this plan.
 
@@ -92,7 +92,7 @@ This is "we're pretty far, tbh." The phase plan below assumes this baseline. Dis
 flowchart TB
     subgraph Bins[Binaries]
       Cli["shekyl-cli (replaces simplewallet)"]
-      Rpc["shekyl-wallet-rpc (replaces wallet_rpc_server)"]
+      Rpc["shekyl-engine-rpc (replaces wallet_rpc_server)"]
     end
 
     subgraph Api[Domain]
@@ -100,9 +100,9 @@ flowchart TB
     end
 
     subgraph State[State + IO]
-      WFile["shekyl-wallet-file (envelope + atomic IO)"]
-      WState["shekyl-wallet-state (WalletLedger types)"]
-      WPrefs["shekyl-wallet-prefs (plaintext+HMAC prefs)"]
+      WFile["shekyl-engine-file (envelope + atomic IO)"]
+      WState["shekyl-engine-state (WalletLedger types)"]
+      WPrefs["shekyl-engine-prefs (plaintext+HMAC prefs)"]
     end
 
     subgraph Net[Network]
@@ -292,9 +292,9 @@ The crate is `shekyl-wallet-core`; the type is `Wallet`. The naming collision wi
 
 ```rust
 pub struct Wallet {
-    file: shekyl_wallet_file::WalletFile,       // envelope + payload IO
+    file: shekyl_engine_file::WalletFile,       // envelope + payload IO
     keys: AccountKeys,                          // identity (master seed, derived scalars)
-    ledger: WalletLedger,                       // shekyl-wallet-state aggregator
+    ledger: WalletLedger,                       // shekyl-engine-state aggregator
     prefs: WalletPrefs,                         // plaintext+HMAC user prefs
     daemon: DaemonRpcClient,                    // shekyl-daemon-rpc
     capability: CapabilityMode,                 // FULL / VIEW_ONLY / HARDWARE_OFFLOAD
@@ -306,7 +306,7 @@ Composition, not inheritance. No god-object. Each member's mutability + locking 
 
 ### `RuntimeWalletState` audit
 
-`shekyl-wallet-state::RuntimeWalletState` was named that way during the wallet-state-promotion plan to disambiguate from `WalletMetadata`. With a top-level `Wallet` orchestrator now present, the "runtime" qualifier no longer disambiguates anything — it's just the in-memory representation of `WalletLedger`. Phase 1 includes a five-minute audit deciding among:
+`shekyl-engine-state::RuntimeWalletState` was named that way during the wallet-state-promotion plan to disambiguate from `WalletMetadata`. With a top-level `Wallet` orchestrator now present, the "runtime" qualifier no longer disambiguates anything — it's just the in-memory representation of `WalletLedger`. Phase 1 includes a five-minute audit deciding among:
 
 1. Keep as-is (aesthetically inconsistent, mechanically fine).
 2. Rename to a final name (the transitional `pub use ... as WalletState` alias was scheduled for deletion in 2n anyway).
@@ -319,7 +319,7 @@ Default lean: option 3 unless the audit surfaces a behavioral distinction. Which
 - **Address book:** *Why now?* Daily-use convenience for "who is this address?". *Can we do better?* It's a privacy hazard if labels correlate addresses; type the field as `LocalLabel(Zeroizing<String>)` and document that labels never cross the FFI or RPC boundary unredacted. Carry forward, hardened.
 - **`tx_keys` storage:** *Why now?* `get_tx_proof`. *Can we do better?* Re-derive per-call from view secret + tx pubkey when we have it; only persist when the user has requested an explicit proof artifact. Open question — answer empirically by checking the tx_proof derivation in [shekyl-proofs](rust/shekyl-proofs/).
 - **`tx_notes`:** *Why now?* User memory aid. *Can we do better?* Same locality discipline as labels; never on the wire.
-- **Integrated addresses / payment IDs: dropped.** Locked in. Integrated addresses are a Monero compatibility wart — they exist because Monero had no subaddresses originally and needed a way to attach a payment ID to "send to this address." Subaddresses solved that; modern Monero only carries them for backwards compatibility with old exchange integrations. Shekyl is pre-launch with zero users depending on payment IDs by definition. `TxRequest` has no `payment_id` field. The `PaymentId` type stays in `shekyl-wallet-state` only as long as the on-disk schema requires it; it gets removed at the next schema bump. If a future exchange complains, the answer is "subaddresses give per-recipient tracking with stronger privacy properties than payment IDs ever did." Decision binding for Phase 2a.
+- **Integrated addresses / payment IDs: dropped.** Locked in. Integrated addresses are a Monero compatibility wart — they exist because Monero had no subaddresses originally and needed a way to attach a payment ID to "send to this address." Subaddresses solved that; modern Monero only carries them for backwards compatibility with old exchange integrations. Shekyl is pre-launch with zero users depending on payment IDs by definition. `TxRequest` has no `payment_id` field. The `PaymentId` type stays in `shekyl-engine-state` only as long as the on-disk schema requires it; it gets removed at the next schema bump. If a future exchange complains, the answer is "subaddresses give per-recipient tracking with stronger privacy properties than payment IDs ever did." Decision binding for Phase 2a.
 - **Subaddress account vs subaddress:** wallet2 has a two-level "account / subaddress" hierarchy. Most users use one account. *Drop the account level entirely?* Ship one flat subaddress namespace per wallet; revisit if exchanges need account separation.
 - **Hot-wallet view-key auto-import on receive:** wallet2 has a thing where receiving on a new subaddress auto-creates the entry. *Keep* — usability win with no privacy cost.
 - **Background sync:** wallet2's "background sync" feature is an attempt at decoupled scan from foreground. *Replace with structured concurrency:* `tokio::spawn` a scan task whose lifecycle is tied to the `Wallet` handle; cancellation on drop is type-enforced.

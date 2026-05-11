@@ -7,7 +7,7 @@ BSD-3-Clause
 
 # 10 — SWSP frame with a future `payload_version`
 
-**Layer:** payload / SWSP (`shekyl-wallet-file::payload`)
+**Layer:** payload / SWSP (`shekyl-engine-file::payload`)
 **Test:** `swsp_future_payload_version_is_refused`
 **Expected refusal:** `WalletFileError::Payload(PayloadError::UnsupportedPayloadVersion)`
 

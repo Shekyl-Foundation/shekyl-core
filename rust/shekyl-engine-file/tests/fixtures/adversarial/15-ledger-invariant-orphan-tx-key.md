@@ -8,7 +8,7 @@ BSD-3-Clause
 # 15 — Ledger violates `INV_TX_KEYS_NO_ORPHANS`
 
 **Layer:** wallet-ledger / invariants
-(`shekyl-wallet-state::invariants`)
+(`shekyl-engine-state::invariants`)
 **Test:** `ledger_invariant_orphan_tx_key_is_refused`
 **Expected refusal:** `WalletFileError::Ledger(WalletLedgerError::InvariantFailed)`
 

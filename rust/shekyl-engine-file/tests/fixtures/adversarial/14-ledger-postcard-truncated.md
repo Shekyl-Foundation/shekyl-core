@@ -7,7 +7,7 @@ BSD-3-Clause
 
 # 14 — Truncated postcard body inside a valid SWSP frame
 
-**Layer:** wallet-ledger (`shekyl-wallet-state::wallet_ledger`)
+**Layer:** wallet-ledger (`shekyl-engine-state::wallet_ledger`)
 **Test:** `ledger_postcard_truncated_is_refused`
 **Expected refusal:** `WalletFileError::Ledger(WalletLedgerError::Postcard)`
 
