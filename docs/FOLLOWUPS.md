@@ -742,7 +742,68 @@ citing in a review.
   §11 with cross-references to the three precedents; future similar PRs
   (likely candidates: PR-3's M3e docs-realignment commit; future per-trait
   extraction PRs' pre-flight passes) can cite the precedent without
-  re-deriving the discipline each time. Cross-references:
+  re-deriving the discipline each time.
+
+  **Code-comment-level extension (surfaced 2026-05-11 by M3d PR #39
+  round-2 Copilot review; commit `ad7f6ba7a`).** The same root pattern
+  surfaces at the code-comment-rationale surface, not just at the
+  plan-document surface. The §19 rule's "plan wording predates substrate
+  changes" framing generalizes to any explanatory text authored
+  against a substrate that subsequently changes, including doc-comment
+  rationales for type-system decisions. When the §19 artifact cuts,
+  fold this extension in as a sub-clause: **the rules-queue rule
+  applies to code-level rationale comments, not just migration plan
+  documents.** Same root pattern, different surface; one rule covers
+  both. Two precedents from M3d's round-2 review:
+
+  1. **`TransferDetails`' non-`Clone` rationale (M3d Finding 5;
+     `transfer.rs::TransferDetails` doc).** The pre-M3d "`Zeroizing`
+     second allocation the compiler can't track" rationale was
+     load-bearing under the pre-M3d substrate (the schema carried
+     `Option<Zeroizing<[u8; N]>>` secret fields whose duplication
+     would have bypassed the drop-time zeroization discipline). M3d
+     changed the substrate (removed those fields); the rationale
+     became vacuous; the discipline (the no-`Clone` ban itself)
+     survived but needed re-anchoring against the post-M3d substrate.
+     Carrying forward the original framing — as the pre-rewrite
+     comment did — is the comment-level equivalent of an
+     annotate-around shape: preserves the stale framing. The rewrite
+     in `ad7f6ba7a` is delete-and-annotate at the comment level
+     (acknowledge the pre-M3d framing no longer applies; re-anchor to
+     the two distinct still-load-bearing reasons under the post-M3d
+     substrate). Same surgical shape as D1's delete-and-annotate
+     applied to plan §3.4: substrate moves → rationale moves with it
+     or gets rewritten.
+
+  2. **Enumeration-claim brittle-shape (M3d Finding 4;
+     `ledger_ext.rs::from_wallet_output` comment).** Comments
+     asserting field-set completeness ("X is the only `Option` field
+     aside from Y", "the only N fields are …") are an attractive
+     nuisance: high authoring value (concise framing of what's
+     present), low maintenance reliability (decays silently as the
+     struct grows). The pre-rewrite comment was the broken shape (a
+     factually-wrong enumeration). Three forward-template remediation
+     shapes worth pinning in the §19 artifact: **(a)** regenerate by
+     code-gen from the type definition; **(b)** replace with
+     non-enumerating framing ("among other `Option` fields, X and Y
+     are the load-bearing inputs"); **(c)** carry a doc-comment-side
+     test that fails when the enumeration goes stale. The
+     `ad7f6ba7a` rewrite is shape (b): drops the enumeration claim,
+     focuses on the load-bearing content (X and Y are the inputs;
+     other fields exist for unrelated reasons), and explicitly
+     enumerates the "unrelated reasons" fields so a reader doesn't
+     have to count them.
+
+  Both extensions pair under one rule: **comment-level discipline
+  patterns surfaced by M3d's review-response.** The §19 artifact's
+  rule statement, extended: _explanatory text (plan documents, code
+  rationale comments, type-system decision docs) predates the
+  substrate it was authored against; substrate changes that
+  invalidate the explanation's load-bearing premise demand
+  rewrite-or-delete of the explanation, not retention with the
+  premise carried forward as stale framing._
+
+  Cross-references:
   [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
   §2 D1 + §11;
   [`docs/design/STAGE_1_PR_3_M3C_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3C_PREFLIGHT.md)
@@ -756,9 +817,13 @@ citing in a review.
   ("default: delete" applied to plan-document text);
   [`.cursor/rules/16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
   ("pre-flight literal vs underlying property", "what does this deliver
-  against the threat model?"). Target: V3.1 (the rules-queue work's
-  expected landing window; co-lands or sequences against
-  `18-type-placement.mdc`).
+  against the threat model?"); M3d PR #39 round-2 Copilot review
+  thread (rewrite commit `ad7f6ba7a` is the authoritative on-tree
+  artifact for the round-2 dispositions, including Finding 5's
+  rationale rewrite in `rust/shekyl-engine-state/src/transfer.rs` and
+  Finding 4's comment rewrite in `rust/shekyl-scanner/src/ledger_ext.rs`).
+  Target: V3.1 (the rules-queue work's expected landing window;
+  co-lands or sequences against `18-type-placement.mdc`).
 
 - **Rules realignment: `42-serialization-policy.mdc` pre-rename paths.**
   The rule's `globs` frontmatter (lines 3–5) and its body text (~13 path
@@ -785,6 +850,96 @@ citing in a review.
   ("while we're here is the enemy") rather than folded into M3d.
   Target: V3.0 (small mechanical pass; pairs naturally with M3e
   documentation realignment or with the next rules-queue PR).
+
+- **Non-`Clone` ban on `TransferDetails` — post-M3d structural
+  re-evaluation.** M3d Finding 5 (PR #39 round-2 Copilot review, commit
+  `ad7f6ba7a`) rewrote the rationale for `TransferDetails`' non-`Clone`
+  status because the pre-M3d framing ("`Zeroizing` second allocation
+  the compiler can't track") was load-bearing under the pre-M3d
+  substrate (the schema carried `Option<Zeroizing<[u8; N]>>` secret
+  fields) and became vacuous post-M3d (those fields were removed). The
+  rewrite re-anchored the ban to two distinct, still-load-bearing
+  reasons: (1) privacy-correlation discipline on `OutputHandle`
+  (forcing duplication through a serialize/deserialize ceremony keeps
+  each handle's flow visible at the call site); (2) snapshotting-
+  explicit discipline (engine bookkeeping that legitimately needs two
+  views of a `TransferDetails` should make that intent visible rather
+  than hide it behind an implicit `Clone`). The rewrite landed the
+  disciplinary conclusion forward; the standalone design pass is to
+  re-evaluate whether the two reasons are the right framing under the
+  post-M3d substrate, or whether a tighter framing exists. Three
+  dimensions worth surfacing in the design pass's pre-flight when it
+  cuts:
+
+  1. **Type-level vs use-level discipline.** Both the privacy-
+     correlation and snapshotting-explicit framings are partly about
+     how callers use the type, partly about properties inherent to
+     the type. A purely type-level rationale would anchor to something
+     like "`TransferDetails` is the canonical reference to a single
+     output; duplication creates ambiguous source-of-truth that
+     conflicts with the ledger's append-only model." Use-level
+     rationale is plausibly enforceable via Clippy lints rather than
+     type-system prohibition. The choice affects whether the ban is
+     structurally permanent or transitionally helpful pending better
+     tooling. Worth being explicit about which level the design pass
+     anchors to.
+
+  2. **Which load-bearing concern does the `OutputHandle` property
+     motivate?** The privacy-correlation framing is two-step: (i)
+     `OutputHandle` is privacy-correlating in principle (correlation
+     requires `view_secret` knowledge but the property exists at the
+     type), (ii) therefore the containing type's replication should
+     be structurally explicit. Step (ii) doesn't strictly follow from
+     step (i) on its own — explicit serialization vs implicit
+     `Clone` both create in-memory replicas that could leak through
+     the same vectors. The actual load-bearing link is **chokepoint
+     visibility**: explicit serialization concentrates replication at
+     audited points; implicit `Clone` diffuses it across the
+     codebase. If that's the discipline, the framing tightens from
+     "privacy-correlation discipline" to "privacy-correlating data
+     flows audit-via-chokepoints; no-`Clone` is the mechanism." Same
+     conclusion, more precise about which property is doing which
+     work.
+
+  3. **Why `TransferDetails` specifically vs other wallet-state
+     types?** Snapshotting-explicit discipline is general-purpose; if
+     it's load-bearing for `TransferDetails`, why not `LedgerBlock`,
+     `WalletLedger`, `ScanResult`? Either it's
+     `TransferDetails`-specific for reasons not yet articulated
+     (e.g., it's the only type that flows across the orchestrator-
+     engine boundary regularly), or it's a general principle that's
+     been selectively applied. The design pass should surface the
+     asymmetry — either justify the specific application with type-
+     level reasoning, or generalize the rule across the wallet-state
+     type family. The latter is a bigger scope; the former requires
+     explicit justification.
+
+  **V3.0-vs-V3.1 disposition.** If the design pass lands as V3.0, it
+  cuts before genesis with the answer locked in (whichever
+  disciplinary framing it adopts becomes the canonical rationale for
+  the schema's lifetime). If V3.1, the current rewrite carries through
+  to genesis with the rationale anchored to the two reasons (privacy-
+  correlation + snapshotting-explicit) and the design pass refines
+  later. Both are defensible; this entry forces the decision rather
+  than letting it drift past genesis as un-named technical debt.
+  Cross-references:
+  `rust/shekyl-engine-state/src/transfer.rs::TransferDetails` doc
+  (post-`ad7f6ba7a` rewrite is the entry-point text the design pass
+  refines);
+  [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
+  §3.3 (post-M3d engine-confined-secrets property delivery framing,
+  which makes the `Option`-secret-field memory-safety rationale
+  vacuous);
+  [`.cursor/rules/16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  ("what does this deliver against the threat model?" — the design
+  pass should re-derive the answer under the post-M3d substrate
+  rather than carry the pre-M3d rationale forward);
+  the §19 rules-queue entry above (this design pass is itself an
+  instance of the §19 pattern at the type-decision-rationale level —
+  substrate moved, rationale needs re-anchoring or rewriting). Target:
+  V3.0 (preferred — locks the framing pre-genesis) or V3.1 (acceptable
+  fallback — current rewrite holds in the interim). Trigger: M3d PR
+  #39 round-2 Copilot Finding 5 disposition pass.
 
 - **`fips203` interior `into_bytes()` Copy on the ML-KEM-768 decap-key
   flow.** `shekyl_crypto_pq::account::ml_kem_keypair_from_d_z`
