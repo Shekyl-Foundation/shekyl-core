@@ -101,21 +101,22 @@ data-flow rerouting happens at this single point.
 
 ### §2.3 Production read sites of secret fields
 
-**None.** Outside `rust/shekyl-engine-state/src/transfer.rs` (the schema
-itself) and `rust/shekyl-scanner/src/ledger_ext.rs:125–129` (the write
-site), no production code reads the `combined_shared_secret`, `ho`, `y`,
-`z`, or `k_amount` fields of `TransferDetails`. The orchestrator
-persists them but does not consume them; signing flows through wallet2
-which carries its own copies.
+**None.** Pre-M3d: outside `rust/shekyl-engine-state/src/transfer.rs`
+(the schema itself) and `rust/shekyl-scanner/src/ledger_ext.rs:125–129`
+(the write site), no production code read the `combined_shared_secret`,
+`ho`, `y`, `z`, or `k_amount` fields of `TransferDetails`. The
+orchestrator persisted them but did not consume them; signing flowed
+through wallet2 which carried its own copies. **Post-M3d (landed
+2026-05-11): the fields no longer exist on `TransferDetails`.**
 
-This is the audit's strongest finding for migration-cost bounding: **the
-secret-bearing fields on `TransferDetails` are write-only from
-production code's perspective.** Removing them in M3d affects no
-production read site. The compile-time fallout is confined to:
+This was the audit's strongest finding for migration-cost bounding:
+**the secret-bearing fields on `TransferDetails` were write-only from
+production code's perspective.** Removing them at M3d affected no
+production read site. The compile-time fallout was confined to:
 
-- The schema (`transfer.rs`) — M3d edits.
-- The write site (`ledger_ext.rs`) — M3b reroutes.
-- Test/bench fixtures (see §2.4) — M3d cleans up.
+- The schema (`transfer.rs`) — edited at M3d.
+- The write site (`ledger_ext.rs`) — rerouted at M3b.
+- Test/bench fixtures (see §2.4) — cleaned up at M3d.
 
 ### §2.4 Test- and bench-only secret-field touches
 
