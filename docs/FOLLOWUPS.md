@@ -760,6 +760,32 @@ citing in a review.
   expected landing window; co-lands or sequences against
   `18-type-placement.mdc`).
 
+- **Rules realignment: `42-serialization-policy.mdc` pre-rename paths.**
+  The rule's `globs` frontmatter (lines 3–5) and its body text (~13 path
+  references in the intro paragraph, the "The pairing" table, the
+  "Mechanical enforcement → Schema snapshot" subsection, the
+  "Mechanical enforcement → Zeroizing-field grep" subsection, and the
+  "Procedure for an intentional schema change" section) still cite
+  `rust/shekyl-wallet-state/**` / `rust/shekyl-wallet-file/**`. Those
+  crates were renamed to `shekyl-engine-state` / `shekyl-engine-file`
+  prior to the M3 sub-PRs. Two consequences: (1) the stale `globs` field
+  prevents the rule from auto-applying to any current file under the
+  workspace's `rust/shekyl-engine-state/` or `rust/shekyl-engine-file/`
+  trees, defeating the rule's intended reach; (2) any document that
+  cites the rule (e.g., M3d's CHANGELOG `### Removed` entry, since
+  redirected to an in-source citation at
+  `rust/shekyl-engine-state/src/wallet_ledger.rs:67`) propagates
+  reader-confusion downstream. The realignment is mechanical:
+  `s/shekyl-wallet-state/shekyl-engine-state/g`,
+  `s/shekyl-wallet-file/shekyl-engine-file/g` against the rule body and
+  frontmatter, then verify no other `42-serialization-policy.mdc`
+  citations propagate residue. Surfaced by Copilot review of PR #39
+  (M3d) on the CHANGELOG citation; held to a focused follow-up per
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  ("while we're here is the enemy") rather than folded into M3d.
+  Target: V3.0 (small mechanical pass; pairs naturally with M3e
+  documentation realignment or with the next rules-queue PR).
+
 - **`fips203` interior `into_bytes()` Copy on the ML-KEM-768 decap-key
   flow.** `shekyl_crypto_pq::account::ml_kem_keypair_from_d_z`
   produces an `MlKem768DecapKey` from `fips203`'s typed

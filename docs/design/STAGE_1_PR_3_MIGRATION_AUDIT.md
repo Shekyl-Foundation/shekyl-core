@@ -78,7 +78,16 @@ spend time per the cSHAKE256 handle derivation in design doc §7.12.
 
 ### §2.1 Schema
 
-| Field | File:Line | Class |
+**Note on the `File:Line` column.** The line numbers below were captured
+against `dev` at the M3d cut-base (`e6efaf5b5`, post-M3c merge, pre-M3d
+start). They do **not** track the post-M3d tree — at the current tip the
+lines they once pointed to host the `key_image` / handle-pathway docs
+that took their place. Treat the column as a verifiable
+"pre-removal location" anchor (resolve via
+`git show e6efaf5b5:rust/shekyl-engine-state/src/transfer.rs`); the
+**Class** column carries the M3d-landing disposition.
+
+| Field | File:Line (pre-M3d, at `e6efaf5b5`) | Class |
 |---|---|---|
 | `combined_shared_secret: Option<Zeroizing<[u8; 64]>>` | `rust/shekyl-engine-state/src/transfer.rs:86` | **Removed at M3d (landed 2026-05-11)** |
 | `ho: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:89` | **Removed at M3d (landed 2026-05-11)** |
@@ -92,9 +101,14 @@ M3d adds `source_ciphertext: HybridCiphertext` and
 
 ### §2.2 Production write sites
 
-| Site | File:Line | Class | Disposition | PR |
+The `File:Line` column carries the same pre-M3d-state caveat as §2.1
+(captured against `dev` at `e6efaf5b5`); resolve via
+`git show e6efaf5b5:<path>` if line-level verification is needed. The
+**Site** column names the symbol that survives the line-number drift.
+
+| Site | File:Line (pre-M3d, at `e6efaf5b5`) | Class | Disposition | PR |
 |---|---|---|---|---|
-| Scanner output ingestion | `rust/shekyl-scanner/src/ledger_ext.rs:125–129` | Production | Reroute: scanner emits `OutputClaim` to `KeyEngine::try_claim_output`; engine returns the deterministic `OutputHandle` (per design doc §7.12); orchestrator persists `TransferDetails` with `source_ciphertext + output_handle` (M3b adds the new fields alongside the legacy ones; M3d removes the legacy fields) | M3b / M3d |
+| `LedgerIndexesExt::process_scanned_outputs` (scanner output ingestion) | `rust/shekyl-scanner/src/ledger_ext.rs:125–129` | Production | Reroute: scanner emits `OutputClaim` to `KeyEngine::try_claim_output`; engine returns the deterministic `OutputHandle` (per design doc §7.12); orchestrator persists `TransferDetails` with `source_ciphertext + output_handle` (M3b adds the new fields alongside the legacy ones; M3d removes the legacy fields) | M3b / M3d |
 
 **Production write sites of secret fields: exactly one.** The migration's
 data-flow rerouting happens at this single point.
@@ -102,12 +116,15 @@ data-flow rerouting happens at this single point.
 ### §2.3 Production read sites of secret fields
 
 **None.** Pre-M3d: outside `rust/shekyl-engine-state/src/transfer.rs`
-(the schema itself) and `rust/shekyl-scanner/src/ledger_ext.rs:125–129`
-(the write site), no production code read the `combined_shared_secret`,
-`ho`, `y`, `z`, or `k_amount` fields of `TransferDetails`. The
-orchestrator persisted them but did not consume them; signing flowed
-through wallet2 which carried its own copies. **Post-M3d (landed
-2026-05-11): the fields no longer exist on `TransferDetails`.**
+(the schema itself) and `LedgerIndexesExt::process_scanned_outputs` in
+`rust/shekyl-scanner/src/ledger_ext.rs` (the write site enumerated in
+§2.2; resolve to the pre-removal line range via
+`git show e6efaf5b5:rust/shekyl-scanner/src/ledger_ext.rs`), no
+production code read the `combined_shared_secret`, `ho`, `y`, `z`, or
+`k_amount` fields of `TransferDetails`. The orchestrator persisted them
+but did not consume them; signing flowed through wallet2 which carried
+its own copies. **Post-M3d (landed 2026-05-11): the fields no longer
+exist on `TransferDetails`.**
 
 This was the audit's strongest finding for migration-cost bounding:
 **the secret-bearing fields on `TransferDetails` were write-only from

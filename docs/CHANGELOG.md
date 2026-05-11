@@ -24,12 +24,19 @@
     TransferDetails` block, and the
     `rust/shekyl-engine-state/.zeroize-allowlist` schema-mirror
     entries were removed in the same commit.
-  - **Version bumps (paired per `42-serialization-policy.mdc`):**
+  - **Version bumps (paired per the in-source rule at
+    `rust/shekyl-engine-state/src/wallet_ledger.rs:67`):**
     `LEDGER_BLOCK_VERSION`: 3 → 4; `WALLET_LEDGER_FORMAT_VERSION`:
-    3 → 4. Per the workspace's `15-deletion-and-debt.mdc`
-    "no in-Shekyl migration code" rule, v4 stores refuse v3 loads
-    rather than migrate; pre-genesis users `rm -rf ~/.shekyl` and
-    re-sync.
+    3 → 4. The `wallet_ledger.rs` docstring is the authoritative
+    in-source statement of the pairing rule ("Each per-block bump
+    implies a `WALLET_LEDGER_FORMAT_VERSION` bump") — the
+    workspace-wide rule `.cursor/rules/42-serialization-policy.mdc`
+    still carries pre-rename `shekyl-wallet-state` /
+    `shekyl-wallet-file` path references (tracked as a focused
+    FOLLOWUP for path-rename realignment). Per the workspace's
+    `15-deletion-and-debt.mdc` "no in-Shekyl migration code" rule,
+    v4 stores refuse v3 loads rather than migrate; pre-genesis
+    users `rm -rf ~/.shekyl` and re-sync.
   - **Property activated:** orchestrator-side `TransferDetails` no
     longer carries derived per-output secrets. The engine
     re-derives them inside its signing-session boundary from
