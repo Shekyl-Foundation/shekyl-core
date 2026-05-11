@@ -177,8 +177,6 @@
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
-use shekyl_crypto_pq::handle::derive_output_handle;
-use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
     CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, SoloSigner,
@@ -194,8 +192,20 @@ use tempfile::TempDir;
 // `engine_trait_bench_ledger_synced_height{,_iai}.rs` pair (which
 // does *not* require `bench-internals`) compiles cleanly when this
 // shared module is included from those targets.
+//
+// `derive_output_handle` and `HybridCiphertext` are M3d-additions
+// (per `STAGE_1_PR_3_M3D_PREFLIGHT.md` §3.2 carve-out: bench
+// fixtures populate the `source_ciphertext` + `output_handle` shape
+// the post-pass produces, replacing the five legacy
+// `Option<Zeroizing<…>>` fields the schema removed). They live only
+// inside `sample_transfer`'s body, which is itself feature-gated
+// below, so the imports gate on the same feature.
 #[cfg(feature = "bench-internals")]
 use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+#[cfg(feature = "bench-internals")]
+use shekyl_crypto_pq::handle::derive_output_handle;
+#[cfg(feature = "bench-internals")]
+use shekyl_crypto_pq::kem::HybridCiphertext;
 #[cfg(feature = "bench-internals")]
 use shekyl_engine_core::__bench_internals::engine_local_ledger_for_bench;
 #[cfg(feature = "bench-internals")]
@@ -207,7 +217,7 @@ use shekyl_engine_state::{
 };
 #[cfg(feature = "bench-internals")]
 use shekyl_oxide::primitives::Commitment;
-#[cfg(feature = "bench-internals")]
+
 /// Bench-fixture password. Bench-only; never written to disk outside
 /// the temp directory the fixture cleans up on drop.
 const BENCH_PASSWORD: &[u8] = b"shekyl-bench-fixture-password";
