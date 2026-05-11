@@ -1118,8 +1118,15 @@ across the vendored crates; `RELEASE-BLOCKER` items tracked per
 ported from C++ `wallet2.h::struct transfer_details` directly into
 `shekyl-core`'s Rust without the same discipline pass. The
 secret-bearing fields on `TransferDetails`
-(`combined_shared_secret`, `ho`, `y`, `z`, `k_amount`) are the
-residue of that direct port.
+(`combined_shared_secret`, `ho`, `y`, `z`, `k_amount`) **were** the
+residue of that direct port; they were removed in M3d (per
+`STAGE_1_PR_3_M3D_PREFLIGHT.md` §3.3 / `STAGE_1_PR_3_MIGRATION_AUDIT.md`
+§2.1 row 1). Post-M3d, the orchestrator-side `TransferDetails`
+carries only the deterministic-handle pathway memos
+(`source_ciphertext`, `output_handle`); the engine re-derives the
+spend material from `(view_secret, source_ciphertext)` at signing
+time, scoped to the signing-session lifetime, and wipes it on
+drop.
 
 The architectural-inheritance disposition
 (`16-architectural-inheritance.mdc` §"The inherited-architecture

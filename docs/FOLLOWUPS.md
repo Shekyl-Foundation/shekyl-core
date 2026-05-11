@@ -750,8 +750,8 @@ citing in a review.
   [`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3B_PREFLIGHT.md)
   §D5 (test-placement divergence);
   [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
-  §3.3.1 (M3c landing-notes cross-reference) and §3.4 (M3d landing-notes
-  cross-reference, pending merge);
+  §3.3.1 (M3c landing-notes cross-reference) and §3.4.1 (M3d landing-notes
+  cross-reference, landed 2026-05-11);
   [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
   ("default: delete" applied to plan-document text);
   [`.cursor/rules/16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
@@ -2569,6 +2569,61 @@ reference.
 ## Recently resolved (audit trail)
 
 Retained for citation in review; each links to the canonical record.
+
+- **Stage 1 PR 3 architectural-inheritance migration: "secrets confined
+  to engine" property activated at M3d (May 11, 2026).** The
+  headline property of the
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  M3-series (see §3.4 / §3.4.1) — orchestrator-side `TransferDetails`
+  no longer carries derived per-output secrets — activated with the
+  M3d landing on `feat/stage-1-pr3-m3d`. The five legacy
+  `Option<Zeroizing<…>>` fields (`combined_shared_secret`, `ho`, `y`,
+  `z`, `k_amount`) were removed from
+  `rust/shekyl-engine-state/src/transfer.rs::TransferDetails` and its
+  postcard schema mirror; the engine re-derives the spend material
+  inside the signing-session boundary from `(view_secret,
+  source_ciphertext)` via `LocalKeys::derive_source_secrets_bundle`
+  per [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §7.10–§7.12.
+
+  **Scope and audit trail.** Five-PR sequence (M3a–M3e) per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3.1–§3.5; M3d activates the property, M3e remains for the
+  documentation-realignment-of-the-whole. Audit table in
+  [`docs/design/STAGE_1_PR_3_MIGRATION_AUDIT.md`](./design/STAGE_1_PR_3_MIGRATION_AUDIT.md)
+  §2.1 row 1 marks the five legacy fields "Removed at M3d (landed
+  2026-05-11)". `LEDGER_BLOCK_VERSION` and
+  `WALLET_LEDGER_FORMAT_VERSION` both bumped 3 → 4; two `.snap`
+  schema snapshots regenerated; `.zeroize-allowlist` cleaned. Per-PR
+  pre-flight investigations:
+  [`STAGE_1_PR_3_M3A_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3A_PREFLIGHT.md),
+  [`STAGE_1_PR_3_M3B_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3B_PREFLIGHT.md),
+  [`STAGE_1_PR_3_M3C_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3C_PREFLIGHT.md),
+  [`STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md).
+
+  **Threat-model delta.** Orchestrator compromise no longer discloses
+  output-secret material (capability disclosure via `AllKeysBlob`
+  remains an engine-confined property per Round 3 §7.10–§7.11).
+  Discipline anchors:
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  (the rule whose "what does this deliver against the threat model?"
+  framing the migration was designed against),
+  [`35-secure-memory.mdc`](../.cursor/rules/35-secure-memory.mdc),
+  [`36-secret-locality.mdc`](../.cursor/rules/36-secret-locality.mdc).
+
+  **Residue tracked elsewhere.** The Rust-side schema cleanup
+  completes here; the parallel C++ `transfer_details` consumer
+  cutover (a separate work item) remains tracked at V3.1 above
+  ("Migrate C++ `transfer_details` consumers to
+  `shekyl-engine-state::TransferDetails`"). The two are
+  distinguished by the
+  [`20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+  boundary: M3d closes the Rust-side property; the V3.1 entry closes
+  the C++-side migration. The framework-attribution rules-queue entry
+  ("Rules-queue: elevate the plan-vs-state-divergence pattern into a
+  workspace-wide rule" above) is the third discipline-discovery
+  surfaced by the M3-series (M3b/M3c/M3d) and remains open as V3.1
+  rules-queue work.
 
 - **`apply_scan_result` strict-contract enforcement (April 27, 2026).**
   PR #16 Copilot review surfaced two defensive-coding gaps in

@@ -1,12 +1,54 @@
 # Stage 1 PR 3 — M3d pre-flight investigation
 
-**Status.** Read-only investigation. No code changes proposed yet.
-This document re-anchors M3d against its actual structural state on
-`dev` post-M3c (PR #38 merged at `e6efaf5b5`), surfaces one named
+**Status.** **EXECUTED 2026-05-11.** M3d landed on
+`feat/stage-1-pr3-m3d` as 5 implementation commits (plus this
+pre-flight commit and one pre-flight-review amendment commit) cut
+off `dev` at `e6efaf5b5`. The Phase-2 dispositions in §2 / §3 / §6
+below were carried forward to implementation, with one structural
+refinement surfaced during execution and recorded in
+`STAGE_1_PR_3_MIGRATION_PLAN.md` §3.4.1 ("Post-implementation
+cross-reference"):
+
+1. **Five-commit load redistribution.** §4's commit table envisaged
+   five commits (scanner-write-removal; engine-state-schema-only;
+   engine-state-consumer-fixes-only; engine-core-benches; docs).
+   At implementation time the per-commit-CI-green gate (§6) forced
+   consolidation of the schema-bearing commits: removing the schema
+   fields in one commit while leaving engine-state-internal
+   consumers referencing them would have failed compile-gate; the
+   scanner's `from_wallet_output` initializing the fields with
+   `None` had to stay live until the schema was removed. The
+   pre-flight's commits 1 + 3 plus the scanner's
+   `from_wallet_output` cleanup merged into a single cross-crate
+   commit 2; engine-core benches remained a separate commit 3
+   (feature-gated under `bench-internals`, out of default CI's
+   compile surface). The fifth commit slot was reused for a
+   small bench-fixture-fix commit (commit 4) gating two
+   `shekyl_crypto_pq` imports under `bench-internals` in
+   `benches/common/engine_fixture.rs` — commit 3 left them
+   unguarded, but the common module is included from default-feature
+   `engine_trait_bench_ledger_synced_height{,_iai}` benches and
+   the imports surfaced as unused-import errors under
+   `cargo clippy --all-targets`. Commit 5 (docs) closed the
+   landing. The final shape is the same number of commits the
+   pre-flight envisaged; the load distribution differs.
+   This is the same forward-template pattern named at
+   M3c §3.3.1 (pre-flight wording may strengthen / consolidate
+   during implementation if the underlying property is preserved;
+   weakening requires explicit revisit).
+
+The structural deltas surfaced by the M3d pre-flight review
+(§2 D1 wording + framework-attribution observation; §6 success-
+criteria tightening) were absorbed in the pre-flight-amendment
+commit before implementation began; they are reflected throughout
+the document below.
+
+This document re-anchored M3d against its actual structural state on
+`dev` post-M3c (PR #38 merged at `e6efaf5b5`), surfaced one named
 divergence between the
 [`STAGE_1_PR_3_MIGRATION_PLAN.md`](./STAGE_1_PR_3_MIGRATION_PLAN.md)
-§3.4 wording and what is implementable today, and disposes the
-remaining open design questions before Phase 2 begins.
+§3.4 wording and what was implementable, and disposed the remaining
+open design questions before Phase 2 began.
 
 **Branch.** `feat/stage-1-pr3-m3d` off `dev` at `e6efaf5b5` (post
 M3c/PR #38 merge). Pre-flight commits land here before

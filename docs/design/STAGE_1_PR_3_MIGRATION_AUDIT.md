@@ -80,11 +80,11 @@ spend time per the cSHAKE256 handle derivation in design doc §7.12.
 
 | Field | File:Line | Class |
 |---|---|---|
-| `combined_shared_secret: Option<Zeroizing<[u8; 64]>>` | `rust/shekyl-engine-state/src/transfer.rs:86` | Removed in M3d |
-| `ho: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:89` | Removed in M3d |
-| `y: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:92` | Removed in M3d |
-| `z: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:95` | Removed in M3d |
-| `k_amount: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:98` | Removed in M3d |
+| `combined_shared_secret: Option<Zeroizing<[u8; 64]>>` | `rust/shekyl-engine-state/src/transfer.rs:86` | **Removed at M3d (landed 2026-05-11)** |
+| `ho: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:89` | **Removed at M3d (landed 2026-05-11)** |
+| `y: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:92` | **Removed at M3d (landed 2026-05-11)** |
+| `z: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:95` | **Removed at M3d (landed 2026-05-11)** |
+| `k_amount: Option<Zeroizing<[u8; 32]>>` | `rust/shekyl-engine-state/src/transfer.rs:98` | **Removed at M3d (landed 2026-05-11)** |
 
 M3d adds `source_ciphertext: HybridCiphertext` and
 `output_handle: OutputHandle` in their place (final field set per
