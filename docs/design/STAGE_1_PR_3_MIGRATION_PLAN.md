@@ -969,6 +969,89 @@ but the precondition for trusting M3d's removal of fallback paths.
 **Estimated review surface.** ~250 lines added; minimal
 cross-crate friction.
 
+#### §3.3.1 Post-implementation cross-reference (Option C disposition)
+
+The §3.3 wording above predates two structural facts that surfaced
+during M3a/M3b execution and one runtime/coverage discovery that
+surfaced during M3c implementation. The disposition is recorded in
+[`STAGE_1_PR_3_M3C_PREFLIGHT.md`](./STAGE_1_PR_3_M3C_PREFLIGHT.md);
+this section names the deltas so a reader of §3.3 reaches the
+authoritative implementation-side wording in one hop.
+
+**Structural deltas (pre-flight §1, §2).**
+
+- **Trait method is a non-functional stub.**
+  `KeyEngine::sign_transaction` returns
+  `KeyEngineError::SignTransactionTraitSurfaceIncomplete`
+  unconditionally because `TxToSign`'s `outputs` and
+  `fcmp_plus_plus_context` are PR-5-pinned forward-declared stubs
+  (see §3.1 Divergence 3). M3c cannot exercise the trait method
+  end-to-end; the bridge to `tx_builder::sign_transaction` lands in
+  PR 5. The pre-flight's Option C disposition pins the property
+  M3c was designed to validate at the surface where it is reachable
+  today — direct call from engine-derived bundles to
+  `tx_builder::sign_transaction` — bypassing the trait stub.
+- **`pub(crate)` lock forces unit-test placement.** The `tests/`
+  integration-test placement in §3.3 is unreachable: `KeyEngine`,
+  `LocalKeys`, and `SourceSecretsBundle` are all `pub(crate)` per
+  the M3a Round 4a discipline lock. The test lands inline in
+  `rust/shekyl-engine-core/src/engine/local_keys.rs::tests` as a
+  peer to M3b D5's bundle-byte-identity test. Re-location to
+  `tests/` is co-located with M3b D5's re-location at the
+  "`KeyEngine` widens to `pub`" trigger (see `docs/FOLLOWUPS.md`).
+- **Sign is non-deterministic.** `tx_builder::sign_transaction`
+  calls `OsRng` internally for BP+ pseudo-output blindings, the
+  BP+ proof, and the FCMP++ proof. The §3.3 success-criterion line
+  "*Test produces byte-identical `SignedProofs` to the legacy
+  path*" is unreachable at this surface. The pre-flight refines
+  the property to deterministic-component byte-identity plus
+  verifier-acceptance for the randomized components.
+
+**Runtime/coverage delta (pre-flight §2.1.1, Trim-1 disposition).**
+
+- **SpendInput byte-equality + sign-once supersedes parallel sign.**
+  Implementation surfaced that `SpendInput` byte-equality at the
+  input layer is strictly stronger than `commitments` /
+  `enc_amounts` byte-equality at the signer-output layer (the
+  latter follows from the former by signer determinism; the former
+  additionally guards against `SpendInput` field drift irrelevant
+  to commitments / enc_amounts but relevant to signature behavior
+  or future field additions). Substituting the parallel sign call
+  for input-layer byte-equality + sign-once on the engine path
+  halves the test runtime (32s → 17s debug; 12s → 7s release).
+  The named coverage gap (workspace sole-coverage of
+  `tx_builder::sign_transaction` end-to-end success goes from 2× to
+  1×) is accepted given M3d removes the legacy bundle-derivation
+  chain entirely. Pre-flight §2.1.1 records the discovery and
+  names it as a forward template: implementation may strengthen
+  pre-flight properties post-implementation; weakening requires
+  explicit revisit of the original disposition.
+
+**Updated dispositions.**
+
+- *Test name.* `engine_derived_bundle_signs_through_tx_builder_end_to_end`
+  (peer to M3b D5 in `local_keys.rs::tests`).
+- *Fixture sweep.* 9 fixtures (3 input counts × 3 subaddress
+  indices) — orthogonal coverage of n_in pseudo-output-blinding and
+  subaddress-derivation axes plus their cross-axis interaction.
+- *Success criteria.* (a) `Ok(SignedProofs)`; (b) engine `SpendInput`
+  byte-identical field-by-field to a hand-composed legacy
+  `SpendInput`; (c) BP+ verifies via
+  `Bulletproof::read_plus` + `Bulletproof::verify`; FCMP++ verifies
+  via `shekyl_fcmp::proof::verify`; `reference_block` and
+  `tree_depth` echo unchanged.
+- *Review surface.* ~700 LOC including inline cryptographic
+  tree-fixture construction (replicating the recipe from
+  `shekyl-fcmp::proof::tests::prove_verify_roundtrip`), not the
+  ~250 LOC originally estimated.
+
+The validation property M3d depends on (the precondition for
+removing the legacy bundle-derivation fallback) is unchanged in
+substance: M3b D5 + M3c-via-C together pin the full cryptographic-
+derivation chain end-to-end, with the engine path now load-bearing
+for `tx_builder::sign_transaction`'s sole successful end-to-end
+coverage in the workspace.
+
 ---
 
 ### §3.4 M3d — schema cleanup; property activates
