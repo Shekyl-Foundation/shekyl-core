@@ -1,6 +1,39 @@
 # Stage 1 PR 3 — M3c pre-flight investigation
 
-**Status.** Read-only investigation. No code changes proposed yet.
+**Status.** **EXECUTED 2026-05-10.** M3c landed on
+`feat/stage-1-pr3-m3c` as 6 commits cut off `dev` at `ea1df2539`,
+opened as [PR #38](https://github.com/Shekyl-Foundation/shekyl-core/pull/38).
+The Phase-2 dispositions in §2 / §5 / §6 below were carried
+forward to implementation, with two refinements that surfaced
+during execution and are recorded in `STAGE_1_PR_3_MIGRATION_PLAN.md`
+§3.3.1 ("Post-implementation cross-reference"):
+
+1. **Trim-1 disposition.** §2.1 step 5(b) was reworked from a
+   parallel-`sign_transaction`-with-deterministic-component-byte-
+   identity property to a `SpendInput`-byte-identity property
+   plus a single engine-path `sign_transaction` call. The
+   `SpendInput`-layer property is strictly stronger than the
+   signer-output-layer property at lower runtime cost; the
+   named coverage gap (legacy `sign_transaction` end-to-end
+   execution) is documented in the test docstring and accepted
+   given M3d's trajectory.
+2. **Runtime-budget reality update.** §2.4 R3 and §6 (c) were
+   updated post-implementation when measured runtime came in
+   ~17.65 s debug / ~6.87 s release, ~290× over the
+   pre-implementation `~60 ms` estimate. The estimate undercounted
+   FCMP++ membership-proof cost by ~2 orders of magnitude and the
+   sweep-size cost by 3×.
+
+Subsequent maintainers should read the migration plan's M3c
+landing notes (§3.3.1) for the actual landed state. This
+document is preserved as the audit trail of the Phase-1
+investigation; the §1–§7 body below was written before
+implementation and is the basis the dispositions above modify.
+
+---
+
+**Original status (preserved for audit).** Read-only investigation.
+No code changes proposed yet.
 This document re-anchors M3c against its actual structural state on
 `dev` post-M3b/PR-#34, and disposes the divergence between the
 [`STAGE_1_PR_3_MIGRATION_PLAN.md`](./STAGE_1_PR_3_MIGRATION_PLAN.md)

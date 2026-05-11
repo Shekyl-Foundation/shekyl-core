@@ -1566,7 +1566,6 @@ mod tests {
                 let mut leaf_chunk: Vec<LeafEntry> = Vec::with_capacity(n_in);
                 let mut engine_bundles: Vec<_> = Vec::with_capacity(n_in);
                 let mut legacy_bundles: Vec<_> = Vec::with_capacity(n_in);
-                let mut combined_ss_inputs: Vec<Vec<u8>> = Vec::with_capacity(n_in);
 
                 for input_idx in 0..n_in {
                     let output_index = input_idx as u64;
@@ -1673,7 +1672,6 @@ mod tests {
                         legacy_z_bytes,
                         legacy_combined_ss,
                     ));
-                    combined_ss_inputs.push(engine_bundle.combined_ss.to_vec());
                     engine_bundles.push(engine_bundle);
                 }
 
@@ -1728,12 +1726,21 @@ mod tests {
                     .iter()
                     .enumerate()
                     .map(|(i, b)| {
+                        // Read `combined_ss` directly out of the
+                        // `Zeroizing`-wrapped engine bundle into the
+                        // `SpendInput` (which itself zeroizes
+                        // `combined_ss` on `Drop` per
+                        // `tx_builder::types::SpendInput::drop`). No
+                        // intermediate unprotected `Vec<u8>` lingers
+                        // for the test's lifetime — addresses Copilot
+                        // review on PR #38 against the prior
+                        // `combined_ss_inputs: Vec<Vec<u8>>` shape.
                         mk_spendinput(
                             i,
                             *b.spend_key_x,
                             *b.spend_key_y,
                             *b.commitment_mask,
-                            combined_ss_inputs[i].clone(),
+                            b.combined_ss.to_vec(),
                         )
                     })
                     .collect();
@@ -1851,7 +1858,13 @@ mod tests {
                 // uses an ephemeral tx-key so input/output combined_ss
                 // differ even at matching indices.
                 let input_total: u64 = input_amounts.iter().sum();
-                let output_total = input_total - fee;
+                let output_total = input_total.checked_sub(fee).unwrap_or_else(|| {
+                    panic!(
+                        "fixture invariant violated: input_total ({input_total}) < fee ({fee}) \
+                         ({context}); a future fixture-table edit must keep \
+                         `sum(input_amounts) >= fee`"
+                    )
+                });
                 let recipient_output_index: u64 = (n_in as u64) + 100;
                 let outputs = vec![make_recipient_output_info(
                     &keys,
