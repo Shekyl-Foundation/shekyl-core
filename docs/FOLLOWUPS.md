@@ -715,6 +715,51 @@ citing in a review.
   work's expected landing window; bumps to V3.x if 18-type-placement
   defers).
 
+- **Rules-queue: elevate the plan-vs-state-divergence pattern into a
+  workspace-wide rule.** Probable home:
+  `.cursor/rules/19-plan-vs-state-divergence.mdc` (in-queue draft, sibling
+  to `18-type-placement.mdc`), or folded into the `18-type-placement.mdc`
+  rules-queue work as a sub-clause. The rule statement, drawn from the
+  recurrence pattern across Stage 1 PR 3's M3a–M3d sub-PRs:
+  _plan-document wording predates substrate changes; pre-flights catch
+  divergences by re-anchoring to current state; the surgical shape is to
+  deliver the underlying property at the PR-3 sub-PR boundary, and to
+  amend the plan-document wording in the landing-notes commit by
+  deleting vacuous bullets rather than annotating around them (per
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  "default: delete" applied to plan-document text)._ The pattern's
+  recurrence: M3b sub-commit 11 (test-placement divergence under the M3a
+  Round 4a `pub(crate)` lock), M3c commit 3 (`SignedProofs` byte-identity
+  divergence under `OsRng`-driven signing), and M3d commit 5 (the
+  "remove fallback" bullet's vacuousness against the PR-5-pinned stub).
+  All three share one root cause: the migration plan was written before
+  the M3a Round 4a workflow-shape pivot (per
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §2.1.1), which deferred the bridge impl past every subsequent PR; the
+  surgical shape is consistent across all three. The framework-
+  attribution observation is captured in
+  [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
+  §11 with cross-references to the three precedents; future similar PRs
+  (likely candidates: PR-3's M3e docs-realignment commit; future per-trait
+  extraction PRs' pre-flight passes) can cite the precedent without
+  re-deriving the discipline each time. Cross-references:
+  [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
+  §2 D1 + §11;
+  [`docs/design/STAGE_1_PR_3_M3C_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3C_PREFLIGHT.md)
+  §2.1.1 (Trim-1 disposition);
+  [`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3B_PREFLIGHT.md)
+  §D5 (test-placement divergence);
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3.3.1 (M3c landing-notes cross-reference) and §3.4 (M3d landing-notes
+  cross-reference, pending merge);
+  [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  ("default: delete" applied to plan-document text);
+  [`.cursor/rules/16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  ("pre-flight literal vs underlying property", "what does this deliver
+  against the threat model?"). Target: V3.1 (the rules-queue work's
+  expected landing window; co-lands or sequences against
+  `18-type-placement.mdc`).
+
 - **`fips203` interior `into_bytes()` Copy on the ML-KEM-768 decap-key
   flow.** `shekyl_crypto_pq::account::ml_kem_keypair_from_d_z`
   produces an `MlKem768DecapKey` from `fips203`'s typed
