@@ -23,7 +23,9 @@
     inline in `rust/shekyl-engine-core/src/engine/local_keys.rs`'s
     `mod tests` as a peer to M3b D5. Constructs a `LocalKeys` from
     `TEST_SEED`; for each of 9 fixtures (3 input counts {1, 2, 3}
-    × 3 subaddress indices {PRIMARY, (0, 1), (1, 0)}) synthesizes
+    × 3 subaddress indices {`PRIMARY`, `SubaddressIndex::new(1)`,
+    `SubaddressIndex::new(42)`} — `SubaddressIndex` is a flat
+    `u32`, not a `(major, minor)` pair) synthesizes
     *n_in* outputs paid to `subaddress_keys(idx)` for every idx
     (including PRIMARY — see the test docstring's
     relationship-to-M3b-D5 section for why bare primary spend keys

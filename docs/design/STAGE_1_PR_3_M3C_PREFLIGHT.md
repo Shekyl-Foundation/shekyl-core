@@ -330,11 +330,28 @@ fallback path. Option C delivers exactly that evidence:
   failure path). The risk is essentially zero, but pinning the
   test as
   *flaky-must-not-flake* is the discipline.
-- **R3 — Performance.** `tx_builder::sign_transaction` end-to-end
-  is ~20 ms (per
-  `shekyl-tx-builder/benches/transfer_e2e.rs`). The test runs at
-  ~3 distinct fixtures × ~1 sign call each = ~60 ms. Within the
-  migration plan’s `<1 s` budget for M3c (§3.3 success criteria).
+- **R3 — Performance.** Pre-implementation estimate (this section
+  as originally drafted): `tx_builder::sign_transaction` end-to-end
+  ~20 ms per call, sweep ~3 fixtures × 1 sign call = ~60 ms;
+  within the migration plan’s `<1 s` budget. **Measured reality
+  (post-Trim-1; see §2.1.1):** the FCMP++ membership-proof
+  cost (membership-proof costs ≫ BP+ + signing in this end-to-end
+  shape; `transfer_e2e[_iai].rs` benches explicitly elide this
+  cost) plus the 9-fixture sweep (3 × 3, not 3 × 1 — see §3.1.1
+  for the orthogonal-coverage rationale) push the wall-clock to
+  ~17.65 s debug / ~6.87 s release. The pre-implementation
+  estimate undercounted the FCMP++ proof cost by ~2 orders of
+  magnitude and the sweep by 3× (the actual sweep is the 9-fixture
+  orthogonal matrix per §2.1 step 6). The migration-plan `<1 s`
+  budget is unmet and revised in §6 (c) below; the runtime is
+  named-and-accepted given the property pinned (workspace’s sole
+  end-to-end successful-execution coverage of
+  `tx_builder::sign_transaction`) is load-bearing for M3d. The
+  Trim-1 disposition (§2.1.1) halved the Trim-1-precursor runtime
+  (32 s debug / 12 s release) by removing the redundant parallel
+  sign call; further reduction (Trim 3 — slow-tests feature gate)
+  is held in reserve and not deployed speculatively at the
+  post-Trim-1 runtime — see §2.1.1.
 - **R4 — `pub(crate)` reach.** All required types
   (`SourceSecretsBundle`, `LocalKeys::derive_source_secrets_bundle`,
   `keys.keys.x25519_pk`, etc.) are reachable from inside
@@ -395,14 +412,32 @@ Mapped from
 [`STAGE_1_PR_3_MIGRATION_PLAN.md`](./STAGE_1_PR_3_MIGRATION_PLAN.md)
 §3.3’s original criteria, refined per §1.3:
 
-- [ ] **§3.3 (a) revised.** Test passes against ≥3 synthetic
-      tx_builder-vector fixtures (1-input / 2-input / 3-input).
-- [ ] **§3.3 (b) revised.** `SignedProofs.commitments` and
-      `SignedProofs.enc_amounts` are byte-identical to a legacy-
-      path parallel call; randomized components verify.
-- [ ] **§3.3 (c) preserved.** Test runs in <1 s.
-- [ ] Cross-reference appended to migration plan §3.3.
-- [ ] CHANGELOG and FOLLOWUPS updated.
+- [x] **§3.3 (a) revised.** Test passes against ≥9 synthetic
+      tx_builder-vector fixtures (3 input counts × 3 subaddress
+      indices, orthogonal sweep — see §2.1 step 6 for the cross-
+      axis-coverage rationale).
+- [x] **§3.3 (b) revised + Trim-1 amended.** Engine-derived
+      `SpendInput` is byte-identical field-by-field to a hand-
+      composed legacy `SpendInput` at the input layer; sign-once on
+      the engine path; randomized components verify (BP+ via
+      `Bulletproof::read_plus` + `Bulletproof::verify`; FCMP++ via
+      `shekyl_fcmp::proof::verify`). See §2.1.1 for why this is
+      strictly stronger than the original signer-output-layer
+      byte-identity criterion.
+- [x] **§3.3 (c) revised.** Original budget `<1 s` was a pre-
+      implementation estimate that undercounted FCMP++ membership-
+      proof cost by ~2 orders of magnitude (see R3 above). Revised
+      budget: ≤25 s debug / ≤10 s release on the workspace's CI
+      runner class. Measured (post-Trim-1): ~17.65 s debug / ~6.87 s
+      release — within budget. Named-and-accepted as the cost of
+      the workspace's sole end-to-end successful-execution coverage
+      of `tx_builder::sign_transaction`; further reduction is
+      available behind the Trim-3 slow-tests feature gate (held in
+      reserve per §2.1.1). If a future fixture expansion pushes the
+      runtime materially past the revised budget (>25 s debug),
+      revisit Trim 3 deployment as a complement.
+- [x] Cross-reference appended to migration plan §3.3.
+- [x] CHANGELOG and FOLLOWUPS updated.
 
 The first criterion in the migration plan ("Test passes against ≥3
 existing `tx-builder` test vectors") is interpreted as "≥3

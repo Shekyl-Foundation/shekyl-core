@@ -644,6 +644,16 @@ mod tests {
     /// in `SpendInput.leaf_chunk` and `ProveInput.leaf_chunk_outputs`.
     /// `h_pqc` bytes must be canonical Selene scalar encodings (use
     /// [`make_synthetic_h_pqc_bytes`]).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `SELENE_FCMP_GENERATORS.generators.g_bold_slice()`
+    /// has fewer than `leaves.len() * 4` entries (the helper consumes
+    /// 4 generators per leaf — one each for `O.x`, `I.x`, `C.x`, and
+    /// `h_pqc`). The assertion is a defensive guard against future
+    /// fixture-expansion regressions; the current 9-fixture sweep
+    /// (`n_in ∈ {1, 2, 3}`) tops out at 12 generator indices, well
+    /// within the FCMP++ generator-slice capacity.
     fn build_synthetic_single_chunk_tree_root(
         leaves: &[(EdwardsPoint, EdwardsPoint, EdwardsPoint, [u8; 32])],
     ) -> [u8; 32] {
@@ -659,8 +669,19 @@ mod tests {
         use shekyl_generators::SELENE_HASH_INIT;
 
         let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
+        let needed = leaves.len() * 4;
+        assert!(
+            generators.len() >= needed,
+            "SELENE_FCMP_GENERATORS.g_bold_slice() has {} entries; \
+             single-leaf-chunk tree-root construction needs {} (4 per leaf, \
+             {} leaves). Increase the generator slice or shrink the leaf \
+             count before adding fixtures past this bound.",
+            generators.len(),
+            needed,
+            leaves.len(),
+        );
         let mut terms: Vec<(<Selene as ciphersuite::Ciphersuite>::F, _)> =
-            Vec::with_capacity(leaves.len() * 4);
+            Vec::with_capacity(needed);
 
         let mut g_idx = 0usize;
         for (o, i, c, h_pqc) in leaves {
