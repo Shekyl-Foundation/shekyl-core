@@ -177,6 +177,8 @@
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
+use shekyl_crypto_pq::handle::derive_output_handle;
+use shekyl_crypto_pq::kem::HybridCiphertext;
 use shekyl_crypto_pq::wallet_envelope::KdfParams;
 use shekyl_engine_core::{
     CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams, SoloSigner,
@@ -206,8 +208,6 @@ use shekyl_engine_state::{
 #[cfg(feature = "bench-internals")]
 use shekyl_oxide::primitives::Commitment;
 #[cfg(feature = "bench-internals")]
-use zeroize::Zeroizing;
-
 /// Bench-fixture password. Bench-only; never written to disk outside
 /// the temp directory the fixture cleans up on drop.
 const BENCH_PASSWORD: &[u8] = b"shekyl-bench-fixture-password";
@@ -460,13 +460,27 @@ pub fn drop_balance_fixture(
 /// the two bench files if the test helper grows new fields: drift
 /// between bench fixtures and test helpers would let regressions
 /// hide behind shape mismatches.
+///
+/// Post-M3d (per `STAGE_1_PR_3_M3D_PREFLIGHT.md` §3.3), the per-output
+/// secret-bearing fields (`combined_shared_secret`, `ho`, `y`, `z`,
+/// `k_amount`) are no longer persisted on `TransferDetails`; the
+/// engine re-derives them at signing time from `(view_secret,
+/// source_ciphertext)`. The bench fixture populates
+/// `source_ciphertext` (a ~1088-byte ML-KEM ciphertext + 32-byte
+/// X25519 share) and `output_handle` (16-byte cSHAKE256 derivative)
+/// so the snapshot workload reflects realistic post-M3d transfer
+/// sizes — the dominant non-default Option payload shifts from
+/// ~192 bytes/transfer of secret material to ~1120 bytes/transfer
+/// of handle-pathway material.
 #[cfg(feature = "bench-internals")]
 #[allow(dead_code)]
 fn sample_transfer(seed: u64) -> TransferDetails {
     let lo = (seed & 0xff) as u8;
+    let tx_hash = [lo; 32];
+    let internal_output_index = seed;
     TransferDetails {
-        tx_hash: [lo; 32],
-        internal_output_index: seed,
+        tx_hash,
+        internal_output_index,
         global_output_index: 1_000 + seed,
         block_height: 100,
         key: ED25519_BASEPOINT_POINT,
@@ -483,13 +497,15 @@ fn sample_transfer(seed: u64) -> TransferDetails {
         stake_tier: 0,
         stake_lock_until: 0,
         last_claimed_height: 0,
-        combined_shared_secret: Some(Zeroizing::new([lo.wrapping_add(1); 64])),
-        ho: Some(Zeroizing::new([lo.wrapping_add(2); 32])),
-        y: Some(Zeroizing::new([lo.wrapping_add(3); 32])),
-        z: Some(Zeroizing::new([lo.wrapping_add(4); 32])),
-        k_amount: Some(Zeroizing::new([lo.wrapping_add(5); 32])),
-        source_ciphertext: None,
-        output_handle: None,
+        source_ciphertext: Some(HybridCiphertext {
+            x25519: [lo.wrapping_add(1); 32],
+            ml_kem: vec![lo.wrapping_add(2); 1088],
+        }),
+        output_handle: Some(derive_output_handle(
+            &[lo.wrapping_add(3); 32],
+            &tx_hash,
+            internal_output_index,
+        )),
         eligible_height: 100 + SPENDABLE_AGE,
         frozen: false,
         fcmp_precomputed_path: None,
