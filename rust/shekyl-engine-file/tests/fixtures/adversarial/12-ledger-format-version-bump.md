@@ -7,7 +7,7 @@ BSD-3-Clause
 
 # 12 — `WalletLedger.format_version` bumped to an unknown value
 
-**Layer:** wallet-ledger (`shekyl-wallet-state::wallet_ledger`)
+**Layer:** wallet-ledger (`shekyl-engine-state::wallet_ledger`)
 **Test:** `ledger_format_version_bump_is_refused`
 **Expected refusal:** `WalletFileError::Ledger(WalletLedgerError::UnsupportedFormatVersion)`
 

@@ -2,7 +2,124 @@
 
 ## [Unreleased]
 
-### Removed
+### Changed
+
+- **Stage 1 PR 3 — M3e: documentation realignment to post-M3d
+  architecture** (`feat/stage-1-pr3-m3e`; one pre-flight commit + one
+  pre-flight-amendment commit + three substantive doc commits cut off
+  `dev` post-M3d). Closes the M3-series migration of `TransferDetails`
+  per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3.5 (M3e — documentation realignment-of-the-whole) and
+  [`docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  §6 (Success criteria). The M3-series (M3a–M3e) is complete; the
+  "secrets confined to engine" property activated by M3d is now
+  reflected throughout the design-doc and rules-corpus surfaces.
+
+  - **Design-doc realignment.**
+    [`KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md) carries a
+    post-migration status banner and past-tensed forward-looking
+    framing in §1.1, §1.2, §5.2; open questions in §7 are annotated
+    per-question with `[Closed at M3<X>; see <ref>]` or `[Remains
+    open / Forward-looking record]` while preserving original
+    framing as historical record.
+    [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+    replaces the pre-migration `KeyEngine` trait block with the
+    post-M3 4-method shape (`account_public_address`,
+    `derive_subaddress`, `try_claim_output`, `sign_transaction` per
+    `rust/shekyl-engine-core/src/engine/traits/key.rs:616`),
+    refactors the per-method classification table and retry-safety
+    enumeration, and updates 13 scattered narrative references to
+    `sign_with_spend` → `sign_transaction` while preserving the
+    "Round 2 dispositions" section's original Q9.1/Q9.2/Q9.3
+    framings as historical record.
+    [`MIGRATION_AUDIT.md`](./design/STAGE_1_PR_3_MIGRATION_AUDIT.md)
+    gains a post-M3 status banner clarifying that the audit's
+    commit hashes (`ffcaa62e9` and `e6efaf5b5`) are immutable
+    historical anchors and are not to be refreshed to post-M3d
+    state. The discrepancy between the M3e preflight's D2 count
+    (claimed "0 references to old `KeyEngine` method names outside
+    the trait block") and the actual surface (17 references found)
+    is documented in the commit message; the surface was classified
+    as mode-2 mechanical-residue under the rule-15 trinary reading
+    (per
+    [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+    §11.1) and swept inline rather than deferred.
+  - **Rules realignment.**
+    [`.cursor/rules/42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc)
+    underwent a mechanical rename of all 11 stale crate-path
+    references (`shekyl-wallet-state` → `shekyl-engine-state`;
+    `shekyl-wallet-file` → `shekyl-engine-file`) across the `globs`
+    frontmatter, intro paragraph, pairing table, mechanical
+    enforcement subsections, and procedure section. The stale
+    `globs` field previously prevented the rule from auto-applying
+    to any file under the workspace's renamed crate trees; the
+    realignment restores the auto-application surface. Closes the
+    M3d-surfaced rule-realignment FOLLOWUP (relocated to the
+    "Recently resolved (audit trail)" section in
+    [`FOLLOWUPS.md`](./FOLLOWUPS.md)).
+  - **FOLLOWUPS structuring.**
+    [`FOLLOWUPS.md`](./FOLLOWUPS.md) gains a "Queue structure"
+    preamble that splits the queue into V3.0 pre-genesis
+    (load-bearing; per-PR overhead compounds the pre-genesis
+    trajectory) and V3.1+ post-genesis (sustainable backlog)
+    queues. The Stage 2 `KeyEngine`-actor entry is updated to
+    reflect the post-M3 trait surface. Two new V3.1 rules-queue
+    entries are added: "Encode the rule-15 trinary reading in
+    `15-deletion-and-debt.mdc`" (codifying the M3e §11.1
+    calibration shift that distinguishes in-scope mechanical-
+    residue from out-of-scope structural-tangent) and
+    "Consolidate the rules-queue itself into 1–2 PRs" (pinning the
+    consolidation target from M3e §11.3 against the current
+    six-deep rules-queue accumulation).
+  - **Path-rename residue sweep.** The 34-occurrence path-rename
+    residue surfaced by the M3d → M3e D5 audit (path-rename
+    surface across 12 files) was swept inline per the rule-15
+    trinary-reading calibration shift. Per-category disposition:
+
+    - **Active narrative documents updated** (current-state
+      references, no append-only constraint): 8 adversarial test
+      fixture markdown files + their README; 2 crate-internal
+      READMEs (`shekyl-engine-state/fuzz`, `shekyl-scanner`); 3
+      benchmark prose documents (`benchmarks/README.md`,
+      `shekyl_rust_v0.manifest.md`,
+      `wallet2_baseline_v0.manifest.md`); the
+      `V3_WALLET_DECISION_LOG.md` intro paragraph only (dated
+      entries preserved per append-only discipline); and the
+      `WALLET_REWRITE_PLAN.md` current-state architecture
+      descriptions (Mermaid diagrams, inventory section, gap
+      section, locked-design section, code-block comment, narrative
+      paragraphs at §3.2 and Phase 1 audit; PR-0.X sections
+      preserved as historical PR descriptions).
+    - **References preserved as historical anchors** (49
+      occurrences across 6 files):
+      [`CHANGELOG.md`](./CHANGELOG.md) (6 occurrences: rename-event
+      entries plus this M3d entry's historical reference to the
+      pre-realignment rule state, which this M3e entry now closes);
+      [`FOLLOWUPS.md`](./FOLLOWUPS.md) (8 occurrences across
+      historical audit-trail entries plus the new M3e entries that
+      reference the rename event);
+      [`V3_WALLET_DECISION_LOG.md`](./V3_WALLET_DECISION_LOG.md)
+      (16 occurrences across dated decision-log entries protected
+      by the file's append-only discipline);
+      [`WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
+      (6 occurrences inside PR-0.X historical descriptions);
+      [`shekyl_rust_v0.json`](./benchmarks/shekyl_rust_v0.json) (10
+      occurrences; captured baseline pinned to `git_rev` anchor
+      `a2bf417e4b7985ed2097dc5d3fb53affef306d1a`); and
+      [`shekyl_rust_v0.iai.snapshot`](./benchmarks/shekyl_rust_v0.iai.snapshot)
+      (3 occurrences; historical iai-callgrind capture). Refreshing
+      these would falsify their respective historical anchors.
+
+    The trinary-reading calibration anchors the sweep: substrate-
+    change mechanical-residue (the rename was the substrate
+    change; the path references inside active documents are its
+    residue) folds into the closing PR; historical anchors and
+    append-only entries are preserved by construction. The
+    discriminating tests (derivability + boundedness + traceability
+    + surface-during-review) are satisfied by the sweep's
+    discoverability via single `rg` invocation and by surface
+    during the M3e preflight's D5 audit.
 
 - **Stage 1 PR 3 — M3d: legacy secret-bearing fields removed from
   `TransferDetails`** (`feat/stage-1-pr3-m3d`; one pre-flight commit +

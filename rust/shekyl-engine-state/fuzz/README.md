@@ -5,7 +5,7 @@ All rights reserved.
 BSD-3-Clause
 -->
 
-# `shekyl-wallet-state` fuzz harness
+# `shekyl-engine-state` fuzz harness
 
 Coverage-guided fuzzing of the region-2 payload parser
 ([`WalletLedger::from_postcard_bytes`]). This is the
@@ -33,7 +33,7 @@ integration as a nightly sidecar job.
 ## Invocation
 
 ```bash
-cd rust/shekyl-wallet-state/fuzz
+cd rust/shekyl-engine-state/fuzz
 cargo +nightly fuzz run region2_parser
 ```
 

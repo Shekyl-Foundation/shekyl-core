@@ -36,7 +36,7 @@ shekyl-scanner
 │                    # (canonical type, with staking + PQC + FCMP++ fields)
 ├── ledger_ext.rs    # Scanner-side extension traits for LedgerBlock + LedgerIndexes
 │                    # (TransferDetailsExt, LedgerIndexesExt, LedgerBlockExt). The
-│                    # canonical persisted/runtime split lives in shekyl-wallet-state.
+│                    # canonical persisted/runtime split lives in shekyl-engine-state.
 ├── balance.rs       # Balance computation with staking categories
 ├── coin_select.rs   # Coin selection for transaction building
 ├── staker_pool.rs   # Staker pool accrual data for reward estimation

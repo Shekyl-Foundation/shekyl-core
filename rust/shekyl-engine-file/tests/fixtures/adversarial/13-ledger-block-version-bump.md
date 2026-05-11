@@ -7,7 +7,7 @@ BSD-3-Clause
 
 # 13 — Per-block `block_version` bumped to an unknown value
 
-**Layer:** wallet-ledger (`shekyl-wallet-state::wallet_ledger`)
+**Layer:** wallet-ledger (`shekyl-engine-state::wallet_ledger`)
 **Test:** `ledger_block_version_bump_is_refused`
 **Expected refusal:** `WalletFileError::Ledger(WalletLedgerError::UnsupportedBlockVersion)`
 
