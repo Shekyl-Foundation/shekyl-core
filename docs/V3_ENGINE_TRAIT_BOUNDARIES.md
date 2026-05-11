@@ -670,70 +670,103 @@ through this trait surface only. **The §1.3 inlining-for-audit
 rationale is at its strongest here**: every key operation should
 inline into one audited compilation unit.
 
-**Stage 1 surface.**
+**Stage 1 surface (post-M3 migration; source of truth at
+[`rust/shekyl-engine-core/src/engine/traits/key.rs:616`](../rust/shekyl-engine-core/src/engine/traits/key.rs)).**
 
 ```rust
-pub trait KeyEngine {
-    type Error: Into<KeyError>;
+pub(crate) trait KeyEngine: Send + Sync + 'static {
+    type Error: Into<KeyEngineError>;
 
-    /// Public address material for this engine's account. Cheap;
-    /// does not touch secrets. Stable for the wallet's lifetime.
+    /// Account-level public address material. Cheap; does not
+    /// touch secrets. Stable for the wallet's lifetime — the
+    /// only trait method returning a borrowed reference rather
+    /// than an owned message, because address material is not
+    /// bound to any per-call context.
     fn account_public_address(&self) -> &AccountPublicAddress;
 
-    /// Sign an Ed25519 challenge with the spend secret. The
-    /// `domain` argument selects the HKDF context (output-secret
-    /// derivation, multisig witness, etc.) so this trait cannot
-    /// be coerced into a generic signing oracle.
-    async fn sign_with_spend(
+    /// Derive a subaddress for a specific purpose
+    /// (`SubaddressPurpose::Recipient` returns
+    /// `SubaddressFor::Recipient(RecipientSubaddress { encoded,
+    /// kem_pk })`; `SubaddressPurpose::Audit` returns
+    /// `SubaddressFor::Audit(SubaddressKeyPair { spend_pk, view_pk })`).
+    /// Deterministic in `(view_secret, subaddress_index, purpose)`.
+    fn derive_subaddress(
         &self,
-        domain: SignDomain,
-        message: &[u8],
-    ) -> Result<Ed25519Signature, Self::Error>;
+        idx: SubaddressIndex,
+        purpose: SubaddressPurpose,
+    ) -> Result<SubaddressFor, Self::Error>;
 
-    /// Compute the view-side ECDH shared secret for an output's
-    /// transaction-key. Used by the scanner; never returns the
-    /// raw view scalar.
-    async fn view_ecdh(
+    /// Workflow: try to claim an on-chain output for this wallet.
+    /// Bundles X25519 view-tag pre-filter + hybrid decap + HKDF
+    /// chain + key-image computation + handle-table insertion
+    /// behind a single trait boundary. Returns
+    /// `OutputClaimResult::Mine(OutputClaim { handle, key_image,
+    /// amount_atomic_units })` on detection or
+    /// `OutputClaimResult::NotMine` on rejection. **No secret
+    /// material crosses the trait boundary** — the orchestrator
+    /// receives only an opaque `OutputHandle` plus non-secret
+    /// on-chain metadata.
+    fn try_claim_output(
         &self,
-        tx_pub_key: &EdwardsPoint,
-    ) -> Result<SharedSecret, Self::Error>;
+        input: &OutputDetectionInput,
+    ) -> impl std::future::Future<Output = Result<OutputClaimResult, Self::Error>> + Send;
 
-    /// ML-KEM-768 decapsulate against an incoming output's
-    /// encapsulated key. Returns the shared secret only; the
-    /// decap key itself does not leave the implementor.
-    async fn ml_kem_decapsulate(
+    /// Workflow: sign a fully-prepared transaction. Each
+    /// `TxInputSigningContext` references its per-output spending
+    /// capability via `handle: OutputHandle` (returned by an
+    /// earlier `try_claim_output` call); the implementor resolves
+    /// the handle internally to recover the per-output spending
+    /// material needed to produce the per-input signature.
+    fn sign_transaction(
         &self,
-        enc_key: &MlKemEncapsulation,
-    ) -> Result<MlKemSharedSecret, Self::Error>;
-
-    /// Derive a subaddress public-key triple. Pure derivation;
-    /// reads the view secret but produces only public material.
-    fn derive_subaddress_public(
-        &self,
-        index: SubaddressIndex,
-    ) -> Result<SubaddressPublic, Self::Error>;
+        tx: &TxToSign,
+    ) -> impl std::future::Future<Output = Result<TxSignatures, Self::Error>> + Send;
 }
 ```
 
-**Round 2 dispositions.**
+**Round 2 dispositions (post-M3 reframing).** The original
+Round-2 dispositions targeted the pre-migration primitive-shape
+trait (`sign_with_spend`, `view_ecdh`, `ml_kem_decapsulate`,
+`derive_subaddress_public`); Stage 1 PR 3's Round 2 substantive
+workflow-shape pivot (commits `1c20fb7ee`, `3e3cb292c` —
+see [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+"Round trajectory") replaced those primitives with the
+workflow-shape methods above (`try_claim_output`,
+`sign_transaction`), and Round 3 added the handle-indirected
+contract that ensures no secret material crosses the trait
+boundary. The pre-migration Q9.1/Q9.2/Q9.3 dispositions are
+preserved here for the design-trajectory record; their
+post-M3 analogues live in
+[`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+§7.14 (Pattern-6 replay/idempotency contract) and the
+source-trait docstrings.
 
 - **Q9.1 (signing async-ness): closed.** `sign_with_spend`,
-  `view_ecdh`, `ml_kem_decapsulate` are `async fn`. Stage 1
-  implementations against `AllKeysBlob` are pure-CPU and return
-  ready futures; Stage 4 actor implementations cross a task
-  boundary. The trait is async to avoid breaking the surface at
-  Stage 4. Pure-derivation methods (`account_public_address`,
-  `derive_subaddress_public`) stay sync — they don't touch a
-  task boundary even at Stage 4.
+  `view_ecdh`, `ml_kem_decapsulate` were `async fn` in the
+  pre-migration surface. **Post-M3 analogue:** the workflow-shape
+  methods `try_claim_output` and `sign_transaction` are
+  RPIT-`Future` returning (compatible with `async fn` in trait
+  but written explicitly to bound the future with `Send`);
+  pure-derivation methods (`account_public_address`,
+  `derive_subaddress`) stay sync.
 - **Q9.2 (`SignDomain` enumeration): closed `#[non_exhaustive]`.**
-  V3.0 enumerates the four current domains (output-secret
-  derivation, transaction signature, FCMP++ witness, ml-kem
-  challenge); Stage 4 adds multisig witness / partial signature
-  variants additively without re-opening the trait.
+  V3.0 enumerated four domains (output-secret derivation,
+  transaction signature, FCMP++ witness, ml-kem challenge);
+  Stage 4 adds multisig witness / partial signature variants
+  additively without re-opening the trait. **Post-M3 placement:**
+  `SignDomain` is no longer a trait-level concept; per the
+  workflow-shape pivot, HKDF domain separation lives inside
+  `LocalKeys` via the `SignsInDomain` marker trait + per-domain
+  markers (see [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §3.1.4 / Sub-bundle A).
 - **Q9.3 (explicit `wipe()` method): closed no.** `AllKeysBlob:
   ZeroizeOnDrop`; the Stage 4 actor's `Drop` inherits the wipe.
   The trait contract is "the implementor zeroizes on drop and on
-  process-explicit lock"; no method is needed.
+  process-explicit lock"; no method is needed. **Post-M3 status:**
+  unchanged. The `AllKeysBlob` `ZeroizeOnDrop` migration landed
+  via `chore/allkeysblob-zeroize-realignment` (post-M3a,
+  Phase 0e closure per [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §5.1).
 
 ### 2.2 `LedgerEngine`
 
@@ -2481,7 +2514,7 @@ or two-phase the read/write transition.
 actually requires: calls that don't logically conflict still
 serialize because they all go through the outer lock.
 `engine.daemon.get_fee_estimates()` and
-`engine.keys.sign_with_spend(…)` could in principle run
+`engine.keys.sign_transaction(…)` could in principle run
 concurrently — they share no state — but Stage 1's outer lock
 serializes them anyway. The over-serialization is invisible to
 correctness; it just leaves performance on the table.
@@ -2710,13 +2743,13 @@ sequencing redundant but correct.
 // Operations on different traits with no shared state can run
 // concurrently — Stage 1 serializes them via the outer lock as
 // overhead; Stage 4 actually runs them in parallel.
-let (fee_estimates, signature) = tokio::join!(
+let (fee_estimates, signatures) = tokio::join!(
     engine.daemon.get_fee_estimates(),
-    engine.keys.sign_with_spend(domain, message),
+    engine.keys.sign_transaction(&tx),
 );
 ```
 
-`get_fee_estimates` and `sign_with_spend` target different traits
+`get_fee_estimates` and `sign_transaction` target different traits
 with no shared state. Concurrent execution is safe at both stages
 — Stage 1 serializes them but that's overhead, not correctness;
 Stage 4 actually runs them in parallel through separate
@@ -2731,7 +2764,7 @@ explicit justification in the PR description. The justification
 documents what would happen at Stage 4 when the operations
 actually overlap — specifically, whether the joined operations
 share state (like the `apply` + `save_state` example above) or
-are independent (like the `fee_estimates` + `sign_with_spend`
+are independent (like the `fee_estimates` + `sign_transaction`
 example).
 
 This is a code-review checklist item, not a lint. Lighter than
@@ -2860,7 +2893,7 @@ This is a real semantic gap, and it informs the discipline:
   (per §7's four-checkpoint discipline).
 - **Operations whose side effects are idempotent or whose
   post-drop continuation is acceptable** can rely on drop
-  semantics. `KeyEngine::sign_with_spend` is acceptable to drop —
+  semantics. `KeyEngine::sign_transaction` is acceptable to drop —
   even if the signature gets computed by the actor, the
   signature itself has no external side effect (it's not sent
   anywhere; the reply just gets discarded).
@@ -3070,7 +3103,7 @@ participates in.
 **Long-running operations (Round 4b — Item 8 carry-forward).**
 The natural counter-question to this rejection is: what about
 operations that genuinely take long enough to need progress
-reporting? The canonical V3.x case is `KeyEngine::sign_with_spend`
+reporting? The canonical V3.x case is `KeyEngine::sign_transaction`
 if FCMP++ proof generation becomes user-perceptible at scale (the
 target sub-second per single-output proof is revisable on
 benchmark data per §10.4.2). The answer is: **long-running trait
@@ -3112,10 +3145,9 @@ not the cancellation surface; the token is).
 | Trait | Method | Async/Sync | Idempotent? | Cancel class |
 |---|---|---|---|---|
 | `KeyEngine` | `account_public_address` | sync | yes (read-only) | n/a |
-| `KeyEngine` | `derive_subaddress_public` | sync | yes (deterministic; pure derivation) | n/a |
-| `KeyEngine` | `sign_with_spend` | async | no (RNG-driven; each call yields a fresh signature) | **a** (no observable side effect outside the returned signature; signing-then-not-using is invisible to others) |
-| `KeyEngine` | `view_ecdh` | async | yes (deterministic ECDH; same `tx_pub_key` → same shared secret) | **a** |
-| `KeyEngine` | `ml_kem_decapsulate` | async | yes (deterministic decap; same encapsulation → same shared secret) | **a** |
+| `KeyEngine` | `derive_subaddress` | sync | yes (deterministic in `(view_secret, subaddress_index, purpose)`; pure derivation) | n/a |
+| `KeyEngine` | `try_claim_output` | async | **conditionally** — `NotMine` is fully idempotent; `Mine` re-binds the same `OutputHandle` deterministically under the M3b+ handle pathway (`handle = cSHAKE256(view_secret \|\| tx_hash \|\| output_index)`) | **b** (post-M3b workflow-internal handle-table insertion on `Mine`; deterministic handle so re-call observes the existing entry) |
+| `KeyEngine` | `sign_transaction` | async | **implementation-defined per replay-rejection contract** (Pattern-6 cluster, [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md) §7.14) — committed direction is replay-rejection at handle resolution | **a** (no observable side effect outside the returned signature material; signing-then-not-using is invisible to others) |
 | `LedgerEngine` | `synced_height` | sync | yes (read-only) | n/a |
 | `LedgerEngine` | `snapshot` | sync | yes (read-only; returns owned snapshot) | n/a |
 | `LedgerEngine` | `balance` | sync | yes (read-only) | n/a |
@@ -3153,10 +3185,16 @@ logic concrete safety properties:
 - `submit_transaction` and `PendingTxEngine::submit`: retry is
   safe; the daemon de-duplicates by tx hash.
 - Read-only methods: trivially retry-safe.
-- `sign_with_spend`, `produce_scan_result`,
-  `PendingTxEngine::build`, `rotate_password`: retry is
-  *semantically distinct* from the original call (different
-  signature, different scan window, different reservation,
+- `sign_transaction`: retry is **rejected at handle resolution**
+  per the post-M3 replay-rejection contract — consumed handles
+  are gone from the table, so a re-call against the same
+  `TxToSign` fails handle resolution. Callers distinguish
+  "broadcast succeeded but acknowledgment lost" (no retry;
+  rebuild with replacement inputs) from "signing failed before
+  any state change" (retry admissible against fresh handles).
+- `produce_scan_result`, `PendingTxEngine::build`,
+  `rotate_password`: retry is *semantically distinct* from the
+  original call (different scan window, different reservation,
   different password). Callers must reason about the operation's
   effect, not just its result.
 
@@ -3765,9 +3803,14 @@ ceremony, which today add ~50–200 ms per test.
   against same starting `synced_height` → same outcome; advanced
   height → `RefreshError::ConcurrentMutation`); `MockDaemon::submit_transaction`
   produces the daemon's tx-hash dedup behavior so retry-safety
-  semantics match production; `MockKey::sign_with_spend` consumes
+  semantics match production; `MockKey::sign_transaction` consumes
   RNG bytes from its seeded `ChaCha20Rng` so signature shapes are
   deterministic given the same inputs but distinct across calls.
+  (Post-M3 note: PR 3 shipped without a `MockKey` type per
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §6.4's no-Mock substrate; the contract-fidelity discipline
+  applies to the surviving `Mock*` types for traits where the
+  Mock-X pattern persists at V3.0 baseline.)
   Tests that assume a `Mock*` returns arbitrary plausible values
   fail to test the production code's behavior — they test the
   test harness's behavior. The contract-fidelity discipline
@@ -4729,7 +4772,7 @@ the Component 3 economic specification in
 
 #### 10.4.2 FCMP++ progress trigger (target: V3.x — evidence-gated)
 
-*Description.* If `KeyEngine::sign_with_spend`'s FCMP++
+*Description.* If `KeyEngine::sign_transaction`'s FCMP++
 proof generation becomes user-perceptible at V3.x (current
 target sub-second per single-output proof, revisable on
 benchmark data), `KeyEngine` grows an in-band progress

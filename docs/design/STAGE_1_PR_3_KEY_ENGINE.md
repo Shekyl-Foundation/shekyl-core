@@ -10,6 +10,23 @@ extraction chain pinned in
 [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](STAGE_1_PR_2_LEDGER_ENGINE.md)
 §2.2 ("PR 3 (`KeyEngine` per §8.1)").
 
+**Post-migration status banner (M3-series complete, 2026-05-11).**
+Stage 1 PR 3's M3a–M3e sub-PRs landed against `dev` (M3a: feat
+branch + Phase 0/0b/0c/0d/0e spec amendments; M3b: deterministic
+handle pathway; M3c: `SignedProofs` byte-identity test; M3d: schema
+cleanup + "secrets confined to engine" property activation; M3e:
+documentation realignment). The trait surface pinned in §4 is the
+operative design; the source-of-truth implementation is at
+[`rust/shekyl-engine-core/src/engine/traits/key.rs:616`](../../rust/shekyl-engine-core/src/engine/traits/key.rs)
+with the post-migration method shape (`account_public_address`,
+`derive_subaddress`, `try_claim_output`, `sign_transaction`). The
+rounds 1–4 trajectory and the amendment bundles in §3 are
+preserved as the design-trajectory record (audit trail of how the
+architecture was arrived at); §4 plus the source trait are the
+current contract. The open-questions section §7 carries per-question
+annotations recording M3-series closures and forward-looking
+records (per M3e preflight Q3 disposition).
+
 This document is the durable in-repo design contract for PR 3's spec
 amendments and substantive implementation. It mirrors
 [`STAGE_1_PR_2_LEDGER_ENGINE.md`](STAGE_1_PR_2_LEDGER_ENGINE.md)'s
@@ -242,13 +259,13 @@ durable equivalent.
 
 ### 1.1 Phases 0–0d — spec amendments (doc-only, prerequisite)
 
-Five amendment bundles to
+Five amendment bundles landed against
 [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
-§2.1, each landing as a single-commit PR against `dev` per
-PR 2's amendment-shape precedent (PRs #22, #23, #25). Two of the
-five (Phases 0 and 0b) are non-additive and re-open §2.1 for a new
-round per §8.2's closing clause; three (Phases 0c, 0d, 0e) are
-additive and absorb under §8.2's two-commit form.
+§2.1, each as a single-commit PR against `dev` per PR 2's
+amendment-shape precedent (PRs #22, #23, #25). Two of the five
+(Phases 0 and 0b) were non-additive and re-opened §2.1 for a new
+round per §8.2's closing clause; three (Phases 0c, 0d, 0e) were
+additive and absorbed under §8.2's two-commit form.
 
 | Phase | Subject | Shape | §7 status |
 |---|---|---|---|
@@ -265,9 +282,9 @@ sequencing.
 
 ### 1.2 Phase 1 — implementation
 
-Phase 1 lands the post-Phase-0d §2.1 trait surface and
-parameterizes `Engine<S, D, L>` over a fourth type parameter
-`K: KeyEngine`:
+Phase 1 (the M3a–M3e sub-PR series, 2026-04 – 2026-05) landed the
+post-Phase-0d §2.1 trait surface and parameterized `Engine<S, D, L>`
+over a fourth type parameter `K: KeyEngine`:
 
 - **Trait surface.** `pub(crate) trait KeyEngine: Send + Sync +
   'static` with four methods (post-amendment shape in §4);
@@ -3010,9 +3027,12 @@ realignment subsection of this design doc if it triggers.
 
 ### 5.2 PR 3 feat branch
 
-Cuts off `dev` after Phase 0d lands. Mirrors PR 2's
-`feat/stage-1-ledger-engine` shape; commit count budget (subject
-to Round 2 refinement):
+Cut off `dev` after Phase 0d landed. Mirrored PR 2's
+`feat/stage-1-ledger-engine` shape; the commit-count budget below
+describes the shipped M3a–M3e series (subject to Round 2
+refinement at the time of authoring; the actual shipped sub-PR
+decomposition lives in `STAGE_1_PR_3_MIGRATION_PLAN.md` §3 and
+the M3a–M3e pre-flight documents):
 
 1. Trait declaration in `engine/traits/key.rs`.
 2. `LocalKeys` implementing aggregate, with both `from_seed`
@@ -3070,6 +3090,14 @@ synchronous entry points to retain.
 ---
 
 ## 6. What PR 3 implements (scope)
+
+**Scope-status note (post-M3e).** The scope enumerated below
+shipped across the M3a–M3e sub-PR series; each subsection
+describes the design contract as authored, which the
+implementation honors. The source-of-truth trait lives at
+[`rust/shekyl-engine-core/src/engine/traits/key.rs:616`](../../rust/shekyl-engine-core/src/engine/traits/key.rs);
+`STAGE_1_PR_3_MIGRATION_PLAN.md` §3 records the per-sub-PR
+landing trajectory.
 
 ### 6.1 Trait declaration
 
@@ -3543,6 +3571,9 @@ introduces it then.
 
 ### 7.2 `KeyEngineError` starter shape
 
+**[Closed at M3a; see `rust/shekyl-engine-core/src/engine/traits/key.rs`
+`KeyEngineError` definition.]** The original framing is preserved below.
+
 Empty per §3.2 and PR 2's `LedgerError` precedent. Round 2
 reviewer may surface concrete variants worth seeding once Phase 1
 implementation surfaces the workflow methods' actual failure
@@ -3552,6 +3583,11 @@ Variants land at implementation time, not speculatively in the
 spec round.
 
 ### 7.3 `LocalKeys` wrapper shape
+
+**[Closed at M3a; see `rust/shekyl-engine-core/src/engine/key/local.rs`
+`LocalKeys` definition.]** The original framing is preserved below;
+the shipped shape pins `LocalKeys` around the `AllKeysBlob` aggregate
+per `35-secure-memory.mdc`'s wipe-on-drop discipline.
 
 Several viable shapes (`LocalKeys(AllKeysBlob)` newtype;
 `LocalKeys { keys: AllKeysBlob }` struct; `LocalKeys(Box<AllKeysBlob>)`
@@ -3567,6 +3603,11 @@ fixtures (per §6.4's no-Mock test-substrate pattern).
 
 ### 7.4 Cross-trait error type
 
+**[Closed; no concrete trigger surfaced in Round 2+ or during the
+M3a–M3e implementation series. M3-series shipped without a
+cross-trait error type; the contingent Phase-0f was never required.]**
+The original framing is preserved below.
+
 Per §3.2's negative-space framing, the cross-trait runtime error
 candidate (concurrent key rotation invalidating an in-progress
 signing attempt) doesn't have a concrete trigger at PR 3 cut-point.
@@ -3574,6 +3615,12 @@ If Round 2 surfaces a concrete trigger, the design doc adds a
 Phase-0f for the cross-trait error type.
 
 ### 7.6 Multisig surface — additive vs. separate trait
+
+**[Remains open; forward-looking record. Disposition deferred to
+the Stage 2 multisig design pass per
+[`docs/design/PQC_MULTISIG.md`](PQC_MULTISIG.md). M3-series did
+not engage the multisig surface; the PR 3 trait shipped without
+it.]** The original framing is preserved below.
 
 Does the multisig surface accrete onto `KeyEngine` additively
 (per §8.2's additive-amendment discipline), or get its own
@@ -3599,6 +3646,13 @@ Round 2+ may surface a preferred disposition; PR 3 ships without
 multisig surface either way. (L1.4)
 
 ### 7.7 V3.x full-PQC trait churn acknowledgement
+
+**[Forward-looking record; not a closing-PR scope question.
+Acknowledges the structural delta the V4 lattice-only transition
+will produce against the post-M3 hybrid-transitional trait. No
+M3-series disposition because the work is gated on external NIST
+lattice standardization; tracked under V4 in `docs/FOLLOWUPS.md`.]**
+The original framing is preserved below.
 
 The current trait is **hybrid-transitional**. A future
 full-PQC-only world re-opens §2.1 again per §8.2's closing
@@ -3627,6 +3681,13 @@ trait surface); only the hybrid-rooted names inside Sub-bundle B
 need V3.x churn. (L2.1, L2.3)
 
 ### 7.8 Account-address stability assumption
+
+**[Forward-looking record; not a closing-PR scope question. The
+classical-Edwards-curve stability assumption shipped intact in
+M3-series; this entry records the assumption's contingency on
+V3.x / V4 PQC key-rotation schemes for future-reader benefit. No
+M3-series disposition because no concrete trigger surfaced.]**
+The original framing is preserved below.
 
 `account_public_address` returns `&AccountPublicAddress` with a
 "stable for wallet lifetime" doc-comment. **This is a classical

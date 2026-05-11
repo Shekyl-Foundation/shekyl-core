@@ -14,6 +14,20 @@ their respective PR targets.
 **Snapshot.** Workspace state at `chore/spec-stage-1-pr3-keyengine-round`
 HEAD = `ffcaa62e9` (commit landing `16-architectural-inheritance.mdc`).
 
+**Post-M3 status banner (M3a–M3e landed, 2026-05-11).** The audit's
+dispositions have been realized across the M3a–M3e sub-PR series; the
+**Class** and **Disposition** columns reflect the landed state. The
+`ffcaa62e9` audit-snapshot anchor and the `e6efaf5b5` M3d-cut-base
+anchor (used for the §2.1 / §2.2 / §2.3 pre-removal `File:Line`
+references) remain as verifiable historical snapshots — resolve via
+`git show <hash>:<path>` for line-level verification. The anchors are
+**not** refreshed to the post-M3d tree because the audit's frame is
+pre-M3d-state-as-baseline with M3d-landing dispositions in the
+**Class** column; refreshing would erase the audit's pre-removal
+verifiability. Post-M3 readers consulting the live tree should read
+the source at the symbols named in the **Site** column rather than
+the line numbers, which drifted at M3d.
+
 The audit's headline finding: **the migration surface is markedly smaller
 than the per-PR scope tables in earlier rounds estimated**, and **the
 additive caller PR (M3c) is not a migration of an existing path** — there
