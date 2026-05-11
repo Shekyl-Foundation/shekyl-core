@@ -95,11 +95,15 @@ impl TransferDetailsExt for TransferDetails {
             // per-block scan results into the ledger.
             //
             // Post-M3d (per `STAGE_1_PR_3_M3D_PREFLIGHT.md` §3.3),
-            // these are the only Option-valued fields on
-            // `TransferDetails` aside from `key_image` and the
-            // engine-management metadata; the legacy
-            // `combined_shared_secret` / `ho` / `y` / `z` / `k_amount`
-            // fields were removed in the schema migration.
+            // the five legacy per-output secret fields
+            // (`combined_shared_secret`, `ho`, `y`, `z`, `k_amount`)
+            // were removed in the schema migration; `source_ciphertext`
+            // and `output_handle` are the only inputs the engine needs
+            // to re-derive the spend material at signing time. Other
+            // `Option`-valued fields on `TransferDetails` (`subaddress`,
+            // `payment_id`, `spent_height`, `key_image`,
+            // `fcmp_precomputed_path`) exist for unrelated reasons and
+            // are unaffected by this construction site.
             source_ciphertext: None,
             output_handle: None,
             eligible_height: block_height + SPENDABLE_AGE,

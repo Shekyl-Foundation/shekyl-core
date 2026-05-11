@@ -52,16 +52,35 @@ pub struct FcmpPrecomputedPath {
 ///
 /// ### Deliberately NOT `Clone`
 ///
-/// Although `TransferDetails` no longer holds raw `Zeroizing<[u8; N]>` secret
-/// material after M3d, cloning it would still duplicate the wallet-private
-/// `OutputHandle` (a wallet-state-correlating identifier per its
-/// `Privacy-correlation note`) into a second allocation the compiler can't
-/// track. Forcing serialize-then-deserialize round-tripping keeps every
-/// copy's lifetime explicit at the call site — the same boundary discipline
-/// that motivated the original ban remains binding for the post-M3d
-/// schema. If a caller legitimately needs two copies (e.g. a snapshot for a
-/// signing round), they must `Serialize` into a buffer and `Deserialize`
-/// back; the process is explicit about the boundary.
+/// The original (pre-M3d) ban was motivated by `Zeroizing<[u8; N]>` secret
+/// fields whose duplication would have bypassed the explicit
+/// drop-time-zeroization discipline. M3d removed those fields, so the
+/// memory-safety framing no longer applies — `OutputHandle` is `Copy`
+/// (a 16-byte transparent newtype over `[u8; OUTPUT_HANDLE_LEN]`) and
+/// `TransferDetails`' remaining fields are ordinary plain data.
+///
+/// The ban is retained post-M3d for **two distinct, still-load-bearing
+/// reasons**:
+///
+/// 1. **Privacy-correlation discipline on `OutputHandle`.** The handle is
+///    cryptographically non-secret (cSHAKE256 with a secret keying input
+///    is a PRF), but per its `Privacy-correlation note` it is
+///    wallet-state-correlating — only a holder of the wallet's
+///    `view_secret` can reproduce a handle, and possession of two handles
+///    that share a wallet origin links them. Forcing every duplication
+///    through a serialize/deserialize ceremony keeps each handle's flow
+///    visible at the call site and prevents accidental proliferation of
+///    correlation-sensitive identifiers through bare `.clone()` calls.
+/// 2. **Snapshotting-explicit discipline.** Engine bookkeeping that
+///    legitimately needs two views of a `TransferDetails` (e.g. a
+///    pre-/post-snapshot for a signing round) should make that intent
+///    visible in the code rather than hide it behind an implicit clone.
+///    Forcing `Serialize` into a buffer and `Deserialize` back keeps
+///    every snapshot's lifetime and intent explicit at the call site.
+///
+/// If a caller legitimately needs two copies, they must `Serialize` into
+/// a buffer and `Deserialize` back; the process is explicit about the
+/// boundary.
 #[derive(Serialize, Deserialize)]
 pub struct TransferDetails {
     // ── Base output data (from scanner) ──
