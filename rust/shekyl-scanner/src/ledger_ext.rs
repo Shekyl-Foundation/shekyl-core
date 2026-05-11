@@ -33,8 +33,6 @@
 
 use std::ops::Range;
 
-use zeroize::Zeroizing;
-
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes, TransferDetails, SPENDABLE_AGE};
 
 use crate::{
@@ -46,9 +44,13 @@ pub trait TransferDetailsExt {
     /// Create a `TransferDetails` from a scanned [`WalletOutput`] at a given block height.
     ///
     /// Automatically populates staking fields if the output carries `StakingMeta`.
-    /// `stake_lock_until` is computed as `block_height + tier_lock_blocks`. PQC
-    /// fields (`ho`, `y`, `z`, `k_amount`, `combined_shared_secret`) are left
-    /// `None` and must be populated by the caller after KEM recovery.
+    /// `stake_lock_until` is computed as `block_height + tier_lock_blocks`. The
+    /// M3b deterministic-handle pathway fields (`source_ciphertext`,
+    /// `output_handle`) are left `None`; they are populated by the engine
+    /// post-pass at `shekyl_engine_core::engine::merge::populate_engine_handle_fields`
+    /// after the scanned block is merged into the ledger. The scanner does
+    /// not hold the `view_secret` required by `derive_output_handle`, by
+    /// design.
     fn from_wallet_output(output: &WalletOutput, block_height: u64) -> Self;
 }
 
@@ -110,10 +112,14 @@ pub trait LedgerIndexesExt {
     /// Process scanned outputs from a block, adding new transfers to the
     /// [`LedgerBlock`] and the lookup indexes maintained here.
     ///
-    /// Populates PQC fields (`ho`, `y`, `z`, `k_amount`, `combined_shared_secret`,
-    /// `key_image`) from the [`RecoveredWalletOutput`](crate::scan::RecoveredWalletOutput)
-    /// and advances the blockchain view by exactly one entry — even when
-    /// the block contains zero outputs for this wallet.
+    /// Populates the `TransferDetails.key_image` field from the
+    /// [`RecoveredWalletOutput`](crate::scan::RecoveredWalletOutput) when
+    /// a non-sentinel value is present, and advances the blockchain view
+    /// by exactly one entry — even when the block contains zero outputs
+    /// for this wallet. Per-output secrets (HKDF-derived `ho`, `y`, `z`,
+    /// `k_amount`, `combined_shared_secret`) are intentionally not
+    /// persisted in `TransferDetails` post-M3d; they are re-derived from
+    /// `(view_secret, source_ciphertext)` by the engine at spend time.
     ///
     /// Returns the contiguous range of `ledger.transfers` indices into
     /// which accepted transfers were appended (`start..start + accepted`).
@@ -145,11 +151,6 @@ impl LedgerIndexesExt for LedgerIndexes {
 
         for output in outputs {
             let mut td = TransferDetails::from_wallet_output(output.wallet_output(), block_height);
-            td.ho = Some(Zeroizing::new(*output.ho()));
-            td.y = Some(Zeroizing::new(*output.y()));
-            td.z = Some(Zeroizing::new(*output.z()));
-            td.k_amount = Some(Zeroizing::new(*output.k_amount()));
-            td.combined_shared_secret = Some(Zeroizing::new(*output.combined_shared_secret()));
             // The zero-bytes value is the test-fixture sentinel for "no
             // key image computed yet" (`RecoveredWalletOutput::new_for_test`).
             // The runtime scanner path always computes a real image, so a
