@@ -518,15 +518,32 @@ underneath has migrated.
 The M3d preflight learned that doc-only PRs allow tighter commit
 boundaries than schema-bearing PRs (no per-commit CI compile gate).
 **Amended 2026-05-11** — the original six-commit decomposition
-collapsed to four (preflight + three substantive) per the user's Q2
-disposition: pure-docs commits don't have meaningful intermediate
-compile boundaries, so granular splits optimize for audit-trail
-granularity without bisection benefit; four commits ship the same
-scope with cleaner review surface.
+collapsed to four logical units (preflight + three substantive) per
+the user's Q2 disposition: pure-docs commits don't have meaningful
+intermediate compile boundaries, so granular splits optimize for
+audit-trail granularity without bisection benefit; four logical
+units ship the same scope with cleaner review surface.
+
+**Plan-vs-state divergence (recorded post-execution, 2026-05-11).**
+The "four logical units" framing held as the **planned** decomposition;
+the on-tree reality landed **six actual commits** because the preflight
+logical unit landed across three commits (the original preflight at
+`82693bab7`, a forward-templates capture at `4b931b1b5` that landed
+review-response artifacts between the original preflight and the
+amendment cycle, and the amendment commit at `1f9a7ad59`) rather
+than the two-commit shape this table anticipated. The three
+substantive commits landed as planned (`8e6780062`, `582c19caf`,
+`c61f0d38f`). This is itself an instance of the §19 plan-vs-state-
+divergence pattern at the commit-history level — the plan-document
+wording predated the as-landed commit history; the surgical shape
+is to record the divergence post-execution rather than rewrite the
+plan as if it had predicted the forward-templates capture. The four-
+logical-unit framing remains the operative review surface; the
+six-actual-commit reality is the audit-trail surface.
 
 | # | Commit | Files touched | Rationale |
 |---|---|---|---|
-| 1 | `docs(stage-1-pr3-m3e): pre-flight investigation (doc realignment PR)` (landed at `82693bab7`) + the **amendment commit** landing this §11 / §3.1 / §4 / §8 revision | `docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md` (this file) | Original preflight locks scope; amendment commit records the user's Q1/Q2/Q3 dispositions and the §11 calibration framework shift. |
+| 1 | `docs(stage-1-pr3-m3e): pre-flight investigation (doc realignment PR)` (landed at `82693bab7`) + the forward-templates capture at `4b931b1b5` (M3d round-2 review-response artifacts) + the **amendment commit** at `1f9a7ad59` landing this §11 / §3.1 / §4 / §8 revision | `docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md` (this file); `docs/FOLLOWUPS.md` (forward-templates capture) | Original preflight locks scope; forward-templates capture records the §19 comment-level extension and the non-`Clone` ban design pass FOLLOWUPS surfaced by M3d round-2 Copilot review; amendment commit records the user's Q1/Q2/Q3 dispositions and the §11 calibration framework shift. Three commits landing the "preflight + review-response + amendment" logical unit. |
 | 2 | `docs(stage-1-pr3-m3e): post-migration design-doc realignment (KEY_ENGINE + V3_ENGINE_TRAIT_BOUNDARIES + MIGRATION_AUDIT)` | `docs/design/STAGE_1_PR_3_KEY_ENGINE.md`, `docs/V3_ENGINE_TRAIT_BOUNDARIES.md`, `docs/design/STAGE_1_PR_3_MIGRATION_AUDIT.md` | D1 (α) + D2 + plan §3.5 bullet 2: status-banner preface + targeted past-tensing in KEY_ENGINE.md; trait-listing update at V3_ENGINE_TRAIT_BOUNDARIES.md ~L676; MIGRATION_AUDIT.md snapshot ref refresh. All three are the "post-migration design-doc state" logical unit — same review attention; doc-only commits without per-commit compile gates. |
 | 3 | `docs(stage-1-pr3-m3e): 42-serialization rule realignment + FOLLOWUPS closures + V3.0/V3.1 queue split` | `.cursor/rules/42-serialization-policy.mdc`, `docs/FOLLOWUPS.md` | D3 + D4 (α): rule path realignment; FOLLOWUPS surgical edits (L492 Stage 2 entry; L2599 close-record past-tense; L763 rule-realignment FOLLOWUP closure-relocation); plus §19 rules-queue entry extensions (rule-15 trinary reading + rules-queue consolidation guidance per §11 below); plus V3.0 / V3.1 queue section-header split per §11.2. |
 | 4 | `docs(stage-1-pr3-m3e): workspace-wide path-rename residue sweep + CHANGELOG M3e entry` | 19 files / 82 occurrences across `docs/FOLLOWUPS.md`, `docs/V3_WALLET_DECISION_LOG.md`, `docs/design/WALLET_REWRITE_PLAN.md`, benchmark artifacts, test fixture READMEs; plus `docs/CHANGELOG.md` | D5 (γ): per-category sweep (rename current-state refs; preserve historical / audit-trail / baseline-command refs). Plus the M3e CHANGELOG `### Changed` entry under `[Unreleased]` per plan §3.5 / `91-documentation-after-plans.mdc`, recording the doc realignment, the rule path-realignment, the FOLLOWUPS realignment, the path-rename sweep with per-category counts, and the rule-15 calibration framework shift. |

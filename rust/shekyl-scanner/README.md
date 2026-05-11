@@ -32,7 +32,7 @@ shekyl-scanner
 ├── extra.rs         # Transaction extra field parsing (extended with PQC tags)
 ├── view_pair.rs     # ViewPair with X25519 + ML-KEM decapsulation keys
 ├── output.rs        # WalletOutput representation
-├── transfer.rs      # Re-export shim for shekyl_wallet_state::TransferDetails
+├── transfer.rs      # Re-export shim for shekyl_engine_state::TransferDetails
 │                    # (canonical type, with staking + PQC + FCMP++ fields)
 ├── ledger_ext.rs    # Scanner-side extension traits for LedgerBlock + LedgerIndexes
 │                    # (TransferDetailsExt, LedgerIndexesExt, LedgerBlockExt). The

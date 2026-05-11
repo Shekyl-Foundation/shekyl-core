@@ -5,9 +5,19 @@
 ### Changed
 
 - **Stage 1 PR 3 — M3e: documentation realignment to post-M3d
-  architecture** (`feat/stage-1-pr3-m3e`; one pre-flight commit + one
-  pre-flight-amendment commit + three substantive doc commits cut off
-  `dev` post-M3d). Closes the M3-series migration of `TransferDetails`
+  architecture** (`feat/stage-1-pr3-m3e`; six commits cut off `dev`
+  post-M3d, landing the four logical units planned at amendment-cycle
+  time per
+  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  §4: the "preflight + review-response + amendment" logical unit
+  landed across three actual commits — original preflight at
+  `82693bab7`, forward-templates capture at `4b931b1b5`, amendment
+  at `1f9a7ad59` — followed by three substantive commits at
+  `8e6780062` / `582c19caf` / `c61f0d38f`. The plan-vs-state
+  divergence between the four-logical-unit framing and the six-actual-
+  commit landing is recorded inline in §4 of the preflight as an
+  instance of the §19 plan-vs-state-divergence pattern at the commit-
+  history level). Closes the M3-series migration of `TransferDetails`
   per
   [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
   §3.5 (M3e — documentation realignment-of-the-whole) and

@@ -292,7 +292,7 @@ The crate is `shekyl-wallet-core`; the type is `Wallet`. The naming collision wi
 
 ```rust
 pub struct Wallet {
-    file: shekyl_wallet_file::WalletFile,       // envelope + payload IO
+    file: shekyl_engine_file::WalletFile,       // envelope + payload IO
     keys: AccountKeys,                          // identity (master seed, derived scalars)
     ledger: WalletLedger,                       // shekyl-engine-state aggregator
     prefs: WalletPrefs,                         // plaintext+HMAC user prefs
