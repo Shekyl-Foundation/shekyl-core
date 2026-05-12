@@ -840,14 +840,96 @@ sustainability is unaffected by the recalibration.
      enumerates the "unrelated reasons" fields so a reader doesn't
      have to count them.
 
-  Both extensions pair under one rule: **comment-level discipline
-  patterns surfaced by M3d's review-response.** The §19 artifact's
-  rule statement, extended: _explanatory text (plan documents, code
-  rationale comments, type-system decision docs) predates the
-  substrate it was authored against; substrate changes that
-  invalidate the explanation's load-bearing premise demand
-  rewrite-or-delete of the explanation, not retention with the
-  premise carried forward as stale framing._
+  **Commit-history-level extension (surfaced 2026-05-11 by PR #40's
+  Copilot review and the post-PR-#40 audit; commits `82693bab7`
+  through `1f9a7ad59`).** The same root pattern surfaces at the
+  commit-decomposition surface of doc-only PRs. Plan-document
+  wording — including the M3e preflight's own §4 commit-decomposition
+  table — predates the *forward-templates capture* and
+  *amendment-bundle* commits that surface during late-round Copilot
+  review or user-disposition messaging; planned-but-executed-as-N
+  commits diverge from the actual on-tree commit count as the PR
+  accumulates review-response artifacts. When the §19 artifact
+  cuts, fold this extension in as a third sub-clause: **the rules-
+  queue rule applies to commit-history-level decompositions, not
+  just plan-document text or code-rationale comments.** Same root
+  pattern, different surface.
+
+  The PR #40 instance, on-tree: the M3e preflight's §4 commit table
+  documented **four logical units** (preflight + design-doc
+  realignment + rules+FOLLOWUPS realignment + path-rename sweep);
+  the on-tree history at preflight-amendment time documented
+  **six actual commits**; the final merged history landed **eight
+  actual commits** (six + two Copilot review-response commits
+  added during PR #40's review cycles):
+
+  1. `82693bab7` — original preflight (M3e §4 commit 1, logical
+     unit "preflight + review-response + amendment").
+  2. `4b931b1b5` — forward-templates capture for M3d round-2
+     Copilot review artifacts (§19 comment-level extension; non-
+     `Clone` ban design-pass FOLLOWUP) — landed as part of
+     logical unit 1 but is its own commit because the M3d round-2
+     dispositions surfaced after the original preflight.
+  3. `1f9a7ad59` — amendment commit recording the user's Q1/Q2/Q3
+     dispositions and the §11 calibration framework shift — same
+     logical unit 1.
+  4. `8e6780062` — substantive design-doc realignment cluster
+     (M3e §4 commit 2, logical unit "post-migration design-doc
+     state": KEY_ENGINE.md, V3_ENGINE_TRAIT_BOUNDARIES.md,
+     MIGRATION_AUDIT.md).
+  5. `582c19caf` — rule realignment and FOLLOWUPS structuring
+     (M3e §4 commit 3, logical unit "42-serialization rule + V3.0/V3.1
+     queue split").
+  6. `c61f0d38f` — path-rename residue sweep + CHANGELOG entry
+     (M3e §4 commit 4, mode-2 mechanical-residue per the rule-15
+     trinary calibration).
+  7. `5ab5b43a2` — Copilot round-1 review-response (CHANGELOG
+     count, commit-count narrative ambiguity, WALLET_REWRITE_PLAN.md
+     L295 mechanical-residue) — beyond the preflight's planned
+     count.
+  8. `67be1c0b3` — Copilot round-2 review-response (heading
+     taxonomy, line anchors, date format normalization,
+     WALLET_REWRITE_PLAN.md L58/L71 narrow link fix) — beyond
+     the preflight's planned count.
+
+  The surgical shape (per the §19 amendment commit `1f9a7ad59`'s
+  own §4 row 1 update): annotate the divergence post-execution in
+  the preflight's commit-decomposition table by enumerating the
+  actual commits inside the logical unit, rather than restructuring
+  the four-logical-unit framing. The four-logical-unit framing
+  remains the operative review surface; the eight-actual-commit
+  reality is the audit-trail surface. The divergence-amendment
+  amendment is itself a sub-instance of the §19 pattern: the
+  preflight's `1f9a7ad59` amendment was written when the on-tree
+  reality was 6 commits; the final two Copilot review-response
+  commits surfaced after the amendment but follow the same
+  surgical shape (enumerate the actual commits; preserve the
+  logical-unit framing).
+
+  The discipline anchor: planned-N-commit decomposition is a
+  prediction made at pre-flight authoring time about how the PR
+  will execute; review-response artifacts (forward-templates
+  captures, amendment-bundle commits) are surfaced after authoring
+  and add commits the plan didn't anticipate. The §19 amendment
+  shape applies: deliver the underlying property (the logical-unit
+  decomposition serves review attention), and amend the plan's
+  literal commit-count to match the on-tree reality. The literal
+  count is the means; the logical-unit framing is the end. Future
+  multi-commit doc-only PRs should expect 1-2 review-response
+  commits beyond the planned count and budget the preflight's §4
+  table to accommodate that divergence.
+
+  All three extensions pair under one rule: **discipline patterns
+  surfaced by M-series review-response.** The §19 artifact's rule
+  statement, extended: _explanatory text (plan documents, code
+  rationale comments, type-system decision docs) and plan-vs-state
+  commit-decomposition predict the PR's shape against the substrate
+  at authoring time; substrate changes that invalidate the
+  prediction's load-bearing premise — whether the premise is a
+  rationale's substrate-state assumption, an enumeration's
+  field-set assumption, or a plan's commit-count assumption —
+  demand rewrite-or-delete of the prediction, not retention with
+  the premise carried forward as stale framing._
 
   Cross-references:
   [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
@@ -867,9 +949,18 @@ sustainability is unaffected by the recalibration.
   thread (rewrite commit `ad7f6ba7a` is the authoritative on-tree
   artifact for the round-2 dispositions, including Finding 5's
   rationale rewrite in `rust/shekyl-engine-state/src/transfer.rs` and
-  Finding 4's comment rewrite in `rust/shekyl-scanner/src/ledger_ext.rs`).
-  Target: V3.1 (the rules-queue work's expected landing window;
-  co-lands or sequences against `18-type-placement.mdc`).
+  Finding 4's comment rewrite in `rust/shekyl-scanner/src/ledger_ext.rs`);
+  M3e PR #40 commit-history (`82693bab7` original preflight →
+  `1f9a7ad59` amendment, plus three substantive commits
+  `8e6780062`/`582c19caf`/`c61f0d38f`, plus two Copilot
+  review-response commits `5ab5b43a2`/`67be1c0b3` — the
+  commit-history-level instance at the 4-vs-6-vs-8 plan-state
+  divergence);
+  [`docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  §4 (amended commit-decomposition table) and §11 (the calibration
+  shift recording the divergence pattern as forward-template
+  content). Target: V3.1 (the rules-queue work's expected landing
+  window; co-lands or sequences against `18-type-placement.mdc`).
 
 - **Rules-queue: encode the rule-15 trinary reading
   (in-scope-substantive / in-scope-mechanical-residue /
@@ -909,6 +1000,36 @@ sustainability is unaffected by the recalibration.
   M3a → M3d sub-PRs), the non-`Clone` ban re-evaluation (mode-3 →
   warrants its own design pass).
 
+  **Applied-disposition table (PR #40, two review-response cycles).**
+  The trinary calibration was applied iteratively across PR #40's
+  Copilot review cycles (round 1 = commits before merge, surfaced
+  by Copilot; round 2 = commits before merge, second pass) and the
+  post-merge audit. Eight dispositions on-tree, classified by mode:
+
+  | # | Round | Finding | Mode | Disposition |
+  | --- | --- | --- | --- | --- |
+  | 1 | R1-F1 | M3e preflight §4 commit-count narrative ambiguity (4 logical vs 5 implied vs 6 actual) | 1 (substantive) | Updated narrative + table; added §11 plan-vs-state divergence section pinning the framework-level pattern. |
+  | 2 | R1-F2 | CHANGELOG entry stated "5 commits" against 6 actual | 1 (substantive) | Rewrote CHANGELOG entry with 6 commit hashes; cross-referenced preflight's §11 divergence record. |
+  | 3 | R1-F3 | `WALLET_REWRITE_PLAN.md` L295 missed path-rename (`shekyl_wallet_file::WalletFile`) | 2 (mechanical-residue) | Folded inline per D5 sweep's mode-2 classification; same substrate as M3e D5 (workspace-wide path-rename residue from the same pre-M3 rename event). |
+  | 4 | R1-F3-adj | Agent-identified `shekyl-scanner/README.md` L35 `shekyl_wallet_state::TransferDetails` (caught during F3 verification) | 2 (mechanical-residue) | Folded inline; surface-during-review test passed; bounded scope (one additional line); same substrate as F3. |
+  | 5 | R2-F1 | CHANGELOG heading taxonomy regression (M3d entry under `### Changed` instead of `### Removed`) | 1 (substantive) | Inserted `### Removed` heading restoring Keep-a-Changelog taxonomy; corrected categorization without changing entry content. |
+  | 6 | R2-F2 + R2-F4 | Missing `#L616` line anchors on `key.rs:616` URLs in `STAGE_1_PR_3_KEY_ENGINE.md:20` and `V3_ENGINE_TRAIT_BOUNDARIES.md:674` | 1 (substantive) | Added `#L616` to both URLs; matches the documented link-text. |
+  | 7 | R2-F3 | `WALLET_REWRITE_PLAN.md` L58 + L71 pre-existing broken relative links (`docs/X.md` resolves to `docs/design/docs/X.md`) | 2 (mechanical-residue, narrow scope) + 3 (structural-tangent, broad scope) | Two-specific-line fix folded inline per Rule 15's "leave the file in good shape" carve-out (mode-2; bounded; surface-during-review). The broader 34-occurrence systemic broken-link pattern deferred to a new V3.1 FOLLOWUP (mode-3; warrants its own bounded pre-flight; doc-wide link audit). |
+  | 8 | R2-F5 | Date-format inconsistency (prose "May 11, 2026" vs ISO `2026-05-11`) | 1 (substantive) | Normalized both occurrences to ISO format; project-wide convention. |
+
+  The table's discriminating value: mode-2 mechanical-residue
+  (entries 3, 4, and the bounded part of 7) folded inline without
+  manufacturing per-PR overhead; mode-3 structural-tangent (the
+  broad part of 7) deferred to its own bounded pre-flight rather
+  than ballooning PR #40's scope. The 8-disposition shape concretely
+  demonstrates the trinary calibration in operation: same root
+  rule applied to substrate-related residue (fold inline) vs
+  unrelated structural pattern (defer with traceability), with
+  the discriminating test (derivability + boundedness + traceability
+  + surface-during-review) yielding clean classifications. When the
+  rule-15 trinary-reading amendment cuts, this table provides the
+  worked-examples surface for the rule body.
+
   **Pairing with `18-type-placement.mdc` and `19-plan-vs-state-divergence.mdc`.**
   The rule-15 calibration consolidates with the §18 and §19 rules-queue
   drafts because all three address discipline calibration rather than
@@ -920,6 +1041,12 @@ sustainability is unaffected by the recalibration.
   [`docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
   §11.1 (trinary reading), §11.3 (rules-queue consolidation guidance);
   M3e D5 disposition (the concrete mode-2 precedent);
+  PR #40 applied-disposition table above (eight on-tree applications
+  of the trinary calibration across two review-response cycles + a
+  post-merge audit; the worked-examples surface for the rule body);
+  [`docs/design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md)
+  §1.3 (the V3.1-prep extension surfacing where the applied
+  dispositions get pinned);
   [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
   (the parent rule to amend);
   [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
@@ -967,6 +1094,72 @@ sustainability is unaffected by the recalibration.
   §11.3; the §18, §19, and rule-15-trinary-reading FOLLOWUPS above.
   Target: V3.1 (queue-internal coordination decision; lands as the
   rules-queue's first PR or as a planning artifact ahead of it).
+
+- **Rules-queue: encode the pre-flight-FOLLOWUP-scope discipline.**
+  FOLLOWUPS accumulates entries with "resolve at X" close-conditions
+  (where X is a PR ID, trait, feature, or milestone). When a PR
+  matching one of those close-conditions executes without actively
+  pulling those entries into its pre-flight scope, the entries
+  orphan — filed but never claimed by the PRs they target. The
+  FOLLOWUP discipline becomes one-sided: items go in but don't come
+  out at the boundaries that were named as their resolution points.
+
+  The precedent: L353-379 of this file (the per-bench frozen-baseline
+  FOLLOWUP from Stage 0 PR-2) names "the trait-introducing per-trait
+  PR's merge SHA" as the resolution point for each of four deferred
+  bench slots. The M3-series (M3a–M3e) was the KeyEngine trait-
+  introducing PR per Stage 1's §8.1 chain, and four sub-PRs landed
+  without claiming the L353-379 KeyEngine slot. M3a's pre-flight
+  didn't grep this file for entries naming "KeyEngine trait-introducing
+  PR" as their resolution point; M3b–M3e's pre-flights didn't catch
+  it because their scope was M-series-specific work, not M-series-
+  mandated FOLLOWUP closures. The post-PR-#40 audit (2026-05-11)
+  surfaced the L353-379 KeyEngine slot as still-open; the
+  `chore/stage-1-pr3-closeout` PR satisfies the KeyEngine slot
+  retroactively. The pattern was caught only because the audit
+  explicitly enumerated open FOLLOWUPS by close-condition match,
+  which is what every per-trait PR's pre-flight should have done.
+
+  The forward-template: pre-flight checklists should include an
+  explicit grep step against this file (`docs/FOLLOWUPS.md`) for
+  entries naming the current PR (by ID, trait, feature, or
+  milestone) as their resolution point. The grep takes seconds; the
+  retroactive close-out PR took days. The fixed overhead of one
+  grep at pre-flight time is dominated by the per-FOLLOWUP fixed
+  cost of authoring a retroactive close-out PR when the orphaned
+  entry surfaces post-merge in a downstream audit.
+
+  This lemma generalizes the §19 pattern at a higher abstraction:
+  §19 catches plan-document text predating substrate changes, and
+  the comment-level and commit-history-level extensions catch the
+  same pattern at adjacent surfaces. The pre-flight-FOLLOWUP-scope
+  discipline catches FOLLOWUP-resolution-point bindings not actively
+  claimed by their target PRs. Both are instances of "commitments
+  to future work that go stale or unclaimed when their target
+  boundary arrives." The §19 artifact's body is the natural home
+  for this rule, with the framing: _explanatory text and binding
+  commitments (plan documents, code rationale comments, commit
+  decompositions, FOLLOWUP-resolution-point bindings) predict or
+  schedule work against the substrate at authoring time; substrate
+  changes that invalidate the prediction's load-bearing premise —
+  or boundary changes that activate the commitment's trigger —
+  demand active reconciliation at the boundary, not retention of
+  the prediction as stale framing or implicit orphaning of the
+  commitment._
+
+  Cross-references: L353-379 of this file (the surfacing
+  precedent); the rule-15 trinary-reading FOLLOWUP above (the
+  V3.1 rules-queue work this folds into); the §19
+  plan-vs-state-divergence FOLLOWUP (the parent pattern this is
+  the higher-abstraction instance of); the rules-queue-
+  consolidation FOLLOWUP above (this folds into the V3.1 rules-
+  corpus PR's scope);
+  [`docs/design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md)
+  §2 D3 + §6.7 (the closeout PR's discipline binding language
+  satisfying the KeyEngine slot of L353-379, written explicitly
+  so future trait-introducing PRs inherit the pattern). Target:
+  V3.1 (rules-queue work; folds into the V3.1 rules-corpus PR's
+  scope per the consolidation FOLLOWUP above).
 
 - **Non-`Clone` ban on `TransferDetails` — post-M3d structural
   re-evaluation.** M3d Finding 5 (PR #39 round-2 Copilot review, commit
