@@ -2,7 +2,73 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Stage 1 PR 3 — close-out: `engine_trait_bench_key_account_public_address`
+  pair** (`chore/stage-1-pr3-closeout`, 2026-05-12). Introduces the
+  criterion + iai-callgrind sibling pair for the
+  `KeyEngine::account_public_address` trait method, classified under
+  the `engine_trait_bench_*` threshold class via `compare.py`'s
+  `classify()` function-name routing. The fixture is `Box<LocalKeys>`
+  rather than the canonical `(Box<Engine<...>>, TempDir)` shape per
+  the substrate-forced divergence documented in
+  [`STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md)
+  §1.2 — `Engine` does not yet hold a `LocalKeys` field;
+  orchestrator integration is `KeyEngine` PR-5 territory per
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §2.1.1 (Round 4a workflow-shape pivot). Workload class is
+  **trivial pure-read** (cached `AccountPublicAddress` borrow);
+  iai-callgrind is the load-bearing signal because criterion
+  `median_ns` reflects optimizer amortization across the iteration
+  loop (§4.4 hoisting caveat). The bench-internals visibility
+  expansion adds `LocalKeys` and `AccountPublicAddress` to the
+  `pub` surface following the exact precedent of `LocalLedger` at
+  Stage 1 PR 2 — name-only expansion; fields stay private,
+  constructors stay `pub(crate)` outside the bench-internals gate.
+  `LocalKeys::from_test_seed` becomes `pub` under
+  `#[cfg(any(test, feature = "bench-internals"))]` matching
+  `LocalLedger::populate_for_bench`'s gating. Closes three of four
+  deferred-bench slots from [`FOLLOWUPS.md`](./FOLLOWUPS.md)'s
+  Stage-1-performance-baseline entry; two EconomicsEngine slots
+  remain pinned to that PR.
+
 ### Changed
+
+- **Stage 1 PR 3 — close-out: `STAGE_1_PR_*` design-doc past-tensing
+  + plan-vs-state-divergence rules-queue input sharpening**
+  (`chore/stage-1-pr3-closeout`, 2026-05-12). Three-commit close-out
+  PR consolidating audit findings from PR #40 under the trinary
+  rule-15 reading per
+  [`STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md):
+  - **A1 commit (mechanical past-tensing sweep)**: reconciled
+    17-reference enumeration across
+    [`STAGE_0_HARNESS.md`](./design/STAGE_0_HARNESS.md),
+    [`STAGE_1_PR_1_DAEMON_ENGINE.md`](./design/STAGE_1_PR_1_DAEMON_ENGINE.md),
+    and [`STAGE_1_PR_2_LEDGER_ENGINE.md`](./design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+    to 13 in-scope references; `PERFORMANCE_BASELINE.md`'s four
+    references were deferred to the A2 commit which rewrites those
+    sections wholesale. Mode-2 closing-out residue under the trinary
+    rule-15 reading, swept inline rather than deferred.
+  - **B1+B2 + lemma commit (rules-queue input sharpening for V3.1)**:
+    extends `FOLLOWUPS.md` §19 (plan-vs-state-divergence) with the
+    commit-history-level fourth-precedent instance (PR #40's
+    4-vs-6-vs-8 commit divergence between planned logical units,
+    pre-review commit count, and final merged commit count). Extends
+    the rule-15 trinary entry with PR #40's applied-disposition
+    table (eight dispositions across two review-response cycles,
+    classified by mode 1/2/3). Adds a new V3.1 entry — "Rules-queue:
+    encode the pre-flight-FOLLOWUP-scope discipline" — generalizing
+    the recurrence that FOLLOWUP items naming target PRs as
+    resolution points orphan when target pre-flights don't claim
+    them; cites L353-379 KeyEngine slot's M-series-wide skip as
+    precedent.
+  - **A2 commit (KeyEngine bench introduction)**: see the "Added"
+    section above for full detail.
+  - **C1-C3 audit verifications (recorded in PR description)**:
+    `TransferDetails` field removal structurally complete; M3-series
+    naming sweep complete (preserved-as-history or false-positive);
+    `42-serialization-policy.mdc` stale globs closed in M3e. Three
+    clean-as-found invariants from PR #40's audit pass.
 
 - **Stage 1 PR 3 — M3e: documentation realignment to post-M3d
   architecture** (`feat/stage-1-pr3-m3e`; six commits cut off `dev`

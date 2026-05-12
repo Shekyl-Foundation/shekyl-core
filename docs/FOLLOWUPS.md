@@ -378,6 +378,41 @@ sustainability is unaffected by the recalibration.
   populated by their introducing per-trait PRs; the first Stage 1
   PR review consumes the document. Target: V3.0, pre-Stage-1-PRs.
 
+  **Partial-close note (close-out PR, 2026-05-12).** Three of the
+  four deferred-bench slots have landed:
+  - `engine_trait_bench_ledger_balance` — landed at Stage 1 PR 2
+    (LedgerEngine PR, merged 2026-05-05).
+  - `engine_trait_bench_key_account_public_address` — landed at
+    this close-out PR (`chore/stage-1-pr3-closeout`, 2026-05-12),
+    folded inline under the trinary rule-15 reading
+    (mode-2 mechanical residue of the M3-series KeyEngine work; see
+    §19's "Applied-disposition table (PR #40, two review-response
+    cycles)" for the calibration anchor). The bench is a
+    criterion + iai-callgrind pair classified under the
+    `engine_trait_bench_*` threshold class via the `compare.py`
+    `classify()` function-name routing (per
+    `STAGE_0_HARNESS.md` §3.3.1) despite the substrate-forced
+    fixture-shape divergence to `Box<LocalKeys>` documented in
+    `STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md` §1.2. Baseline transcription
+    to `PERFORMANCE_BASELINE.md` deferred to first CI
+    workflow_dispatch capture under N=3 invariance.
+
+  Remaining slots:
+  - `engine_trait_bench_economics_current_emission` — pinned to
+    the EconomicsEngine PR (Stage 1 PR-equivalent for the
+    economics trait surface).
+  - `engine_trait_bench_economics_parameters_snapshot` — same PR
+    as above.
+
+  Entry stays open until both EconomicsEngine slots populate; close-
+  condition is unchanged. Forward-template lesson for the rules-
+  queue work in the V3.1+ post-genesis queue: this entry was missed
+  by every M-series sub-PR's pre-flight because no pre-flight
+  grepped FOLLOWUPS for entries naming its own merge as a
+  resolution point; see the new V3.1 "pre-flight-FOLLOWUP-scope
+  discipline" entry for the lemma that generalizes from this
+  recurrence.
+
 - **Stage 1 retroactive Mock-X cleanup: `MockLedger` →
   `LocalLedger::from_test_blocks(...)` + `FaultInjecting<LocalLedger>`.**
   Stage 1 PR 3 (`KeyEngine`) Round 2 review surfaced that the
