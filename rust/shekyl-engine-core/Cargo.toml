@@ -197,6 +197,26 @@ name = "engine_trait_bench_ledger_balance_iai"
 harness = false
 required-features = ["bench-internals"]
 
+# Stage 1 PR 3 close-out: trivial pure-read `KeyEngine::
+# account_public_address` pair. Workload class is "trivial pure-read"
+# (returns a borrow into a cached `AccountPublicAddress` field on
+# `LocalKeys` with no per-call derivation); iai-callgrind is the
+# load-bearing signal because criterion `median_ns` reflects
+# optimizer amortization across the iteration loop. The fixture is
+# `Box<LocalKeys>` rather than `(Box<Engine<...>>, TempDir)` per the
+# substrate-forced divergence documented in the close-out PR's
+# pre-flight §1.2 — `Engine` does not yet hold a `LocalKeys` field;
+# orchestrator integration is `KeyEngine` PR-5 territory.
+[[bench]]
+name = "engine_trait_bench_key_account_public_address"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_key_account_public_address_iai"
+harness = false
+required-features = ["bench-internals"]
+
 [features]
 default = []
 multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "serde_json", "hex", "chacha20poly1305", "hkdf", "sha2"]

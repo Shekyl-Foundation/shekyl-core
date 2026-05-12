@@ -159,11 +159,33 @@ struct LocalKeysState {
     subaddress_registry: HashMap<SpendPublicKey, SubaddressIndex>,
 }
 
-/// The M3a in-process [`KeyEngine`] implementor.
+/// The M3a in-process `KeyEngine` implementor.
 ///
 /// See the module-level docstring for the structural rationale.
+///
+/// **Visibility.** `pub` for the same reason
+/// [`super::local_ledger::LocalLedger`] is `pub`: the bench surface
+/// (gated behind `bench-internals`) names this type as the
+/// `KeyEngine` implementor in the
+/// `engine_trait_bench_key_account_public_address{,_iai}` pair.
+/// Field access remains private; method access on the type is
+/// `pub(crate)` for inherent methods and gated by the `pub(crate)
+/// trait KeyEngine` for trait methods.
+///
+/// **Constructor scope.** In production builds (without the
+/// `bench-internals` feature enabled), the type has no public
+/// constructor — `from_keys_blob` is `pub(crate)` and the
+/// test/bench helper [`LocalKeys::from_test_seed`] is gated by
+/// `#[cfg(any(test, feature = "bench-internals"))]`. When the
+/// `bench-internals` feature IS enabled (an internal-use-only
+/// feature flag, gated for benches), the `from_test_seed`
+/// constructor becomes `pub` to let the bench compilation unit
+/// build a deterministic fixture. This pattern matches
+/// [`super::local_ledger::LocalLedger::populate_for_bench`]
+/// exactly: bench-only `pub` widening under a feature flag the
+/// public API contract explicitly disclaims.
 #[allow(dead_code)] // M3a wires the implementor; orchestrator integration lands in M3c+.
-pub(crate) struct LocalKeys {
+pub struct LocalKeys {
     /// Wallet key material. `AllKeysBlob` is `ZeroizeOnDrop` so this
     /// field is wiped on drop.
     keys: AllKeysBlob,
@@ -249,8 +271,18 @@ impl LocalKeys {
     /// a deterministic [`LocalKeys`] suitable for unit tests; the
     /// resulting wallet is not usable on mainnet (raw-seed format is
     /// rejected on mainnet at the derivation layer).
-    #[cfg(test)]
-    pub(crate) fn from_test_seed(seed: [u8; 32]) -> Self {
+    ///
+    /// Also available to bench targets via the `bench-internals` feature
+    /// (`#[cfg(any(test, feature = "bench-internals"))]`) so the
+    /// `engine_trait_bench_key_account_public_address{,_iai}` pair can
+    /// construct a `LocalKeys` fixture without widening the production
+    /// surface. Same Path-A discipline as
+    /// `benches/common/engine_fixture.rs` applies: bench targets reuse
+    /// the test constructor through a narrow feature gate, but the
+    /// constructor stays `pub(crate)` and the visibility expansion is
+    /// confined to the `bench-internals` feature.
+    #[cfg(any(test, feature = "bench-internals"))]
+    pub fn from_test_seed(seed: [u8; 32]) -> Self {
         use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
 
         let (_master_seed, blob) =

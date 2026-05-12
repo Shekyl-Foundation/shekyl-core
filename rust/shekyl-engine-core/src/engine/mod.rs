@@ -633,3 +633,63 @@ pub fn engine_balance_for_bench(
     use crate::engine::traits::LedgerEngine;
     engine.ledger.balance()
 }
+
+/// Project a wallet's account public address through the
+/// `KeyEngine::account_public_address` trait method (the trait is
+/// `pub(crate)` so rustdoc intra-doc links to it from a `pub`
+/// item would render as private-link warnings; plain backticks
+/// throughout match the convention used in the bench files'
+/// module-level docstrings), dispatched on a standalone
+/// [`local_keys::LocalKeys`] fixture. See
+/// [`crate::__bench_internals::engine_account_public_address_for_bench`]
+/// for the public-facing wrapper and the use-site rationale.
+///
+/// # Why this takes `&LocalKeys` and not `&Engine<...>`
+///
+/// `Engine<S, D, L>` holds `keys: AllKeysBlob` (the wallet key
+/// material) but does not yet hold the `KeyEngine`-implementing
+/// [`local_keys::LocalKeys`] as a field — that orchestrator
+/// integration is `KeyEngine` PR-5 territory per
+/// `docs/design/STAGE_1_PR_3_KEY_ENGINE.md` §2.1.1 (the Round 4a
+/// workflow-shape pivot). The post-M3-series state preserves
+/// `LocalKeys` as the `KeyEngine` implementor
+/// (`#[allow(dead_code)]` per the orchestrator-integration
+/// deferral) without wiring it into the `Engine` struct.
+///
+/// Given the substrate, the bench fixture is a standalone
+/// `Box<LocalKeys>` rather than the unified
+/// `(Box<Engine<SoloSigner, DaemonClient, LocalLedger>>, TempDir)`
+/// shape the LedgerEngine bench uses. This divergence from the
+/// canonical `engine_trait_bench_*` fixture shape is forced by the
+/// substrate, not chosen for convenience; it is documented in the
+/// bench module's file-level docstring and in the close-out PR's
+/// pre-flight §1.2.
+///
+/// The bench still classifies under the `engine_trait_bench_*`
+/// threshold class via the function-name routing discipline (per
+/// `STAGE_0_HARNESS.md` §3.3.1's `classify()` rule, which routes on
+/// the `#[library_benchmark]` function name, not on fixture shape).
+///
+/// # Why this returns `usize` rather than `&AccountPublicAddress`
+///
+/// The natural return type of the trait method is
+/// `&AccountPublicAddress`, but that type is `pub(crate)` — exposing
+/// it through this `pub fn`'s signature would widen the crate's
+/// public API beyond the `bench-internals` gate. The helper instead
+/// returns a `usize` summary (the sum of both field byte-lengths),
+/// which is a primitive `pub` type. The trait call itself is
+/// preserved against compiler elision by the internal
+/// `std::hint::black_box(...)` around the address reference; the
+/// returned length sum is a small additional load (two `Vec::len()`
+/// metadata reads — the field bytes themselves are not touched) that
+/// gives the criterion / iai-callgrind bench loops something
+/// observable to consume so the bench function's overall result is
+/// not elided. The measurement surface is unchanged from the natural
+/// shape; only the API-widening footprint differs (zero added types
+/// in `__bench_internals`).
+#[cfg(feature = "bench-internals")]
+pub fn engine_account_public_address_for_bench(keys: &local_keys::LocalKeys) -> usize {
+    use crate::engine::traits::key::KeyEngine;
+    let addr = std::hint::black_box(keys.account_public_address());
+    addr.pqc_public_key.len() + addr.classical_address_bytes.len()
+}

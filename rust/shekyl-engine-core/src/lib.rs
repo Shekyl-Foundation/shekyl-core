@@ -44,7 +44,11 @@ mod tests;
 #[cfg(feature = "bench-internals")]
 #[doc(hidden)]
 pub mod __bench_internals {
+    pub use crate::engine::local_keys::LocalKeys;
     pub use crate::engine::local_ledger::LocalLedger;
     pub use crate::engine::refresh::LedgerSnapshot;
-    pub use crate::engine::{engine_balance_for_bench, engine_local_ledger_for_bench};
+    pub use crate::engine::{
+        engine_account_public_address_for_bench, engine_balance_for_bench,
+        engine_local_ledger_for_bench,
+    };
 }

@@ -346,8 +346,8 @@ Stage 0 disposition:**
 
 | Hot path | Bench file (criterion) | Bench file (iai-callgrind) | iai `#[library_benchmark]` function | Stage 0 disposition |
 |---|---|---|---|---|
-| `KeyEngine::account_public_address` | `benches/engine_trait_bench_key_account_public_address.rs` | `benches/engine_trait_bench_key_account_public_address_iai.rs` | `engine_trait_bench_key_account_public_address` | Deferred to KeyEngine PR |
-| `LedgerEngine::balance` | `benches/engine_trait_bench_ledger_balance.rs` | `benches/engine_trait_bench_ledger_balance_iai.rs` | `engine_trait_bench_ledger_balance` | Deferred to LedgerEngine PR |
+| `KeyEngine::account_public_address` | `benches/engine_trait_bench_key_account_public_address.rs` | `benches/engine_trait_bench_key_account_public_address_iai.rs` | `engine_trait_bench_key_account_public_address` | Shipped at the M-series close-out (`chore/stage-1-pr3-closeout`, 2026-05-12) following the M3-series KeyEngine PR (PR #40, 2026-05-11) |
+| `LedgerEngine::balance` | `benches/engine_trait_bench_ledger_balance.rs` | `benches/engine_trait_bench_ledger_balance_iai.rs` | `engine_trait_bench_ledger_balance` | Shipped at Stage 1 PR 2 (LedgerEngine PR) |
 | `LedgerEngine::synced_height` | `benches/engine_trait_bench_ledger_synced_height.rs` | `benches/engine_trait_bench_ledger_synced_height_iai.rs` | `engine_trait_bench_ledger_synced_height` | Stage-0-frozen |
 | `EconomicsEngine::current_emission` | `benches/engine_trait_bench_economics_current_emission.rs` | `benches/engine_trait_bench_economics_current_emission_iai.rs` | `engine_trait_bench_economics_current_emission` | Deferred to EconomicsEngine PR |
 | `EconomicsEngine::parameters_snapshot` | `benches/engine_trait_bench_economics_parameters_snapshot.rs` | `benches/engine_trait_bench_economics_parameters_snapshot_iai.rs` | `engine_trait_bench_economics_parameters_snapshot` | Deferred to EconomicsEngine PR |
@@ -407,19 +407,24 @@ Concretely:
   iai-callgrind `instructions` and criterion `median_ns` numbers
   and freezes them.
 - **`engine_trait_bench_ledger_balance`**: frozen baseline
-  captured at the **LedgerEngine PR's** merge SHA. The workload
-  exists as a unit today (linear walk over `transfers`), but a
-  representative measurement requires a state-populated fixture
-  with thousands of `transfers`; that fixture in turn requires
-  MockDaemon-driven scan infrastructure introduced by **Stage 1
-  PR 1** (DaemonEngine, per §6.1 of the trait spec). The
-  LedgerEngine PR introduces the bench alongside the
-  `LedgerEngine::balance` trait method and freezes the baseline
-  at that PR's merge SHA against a state-populated fixture.
+  captured at the LedgerEngine PR's merge SHA (Stage 1 PR 2,
+  PR #26, landed 2026-05-05). The workload existed as a unit (linear walk
+  over `transfers`), but representative measurement required a
+  state-populated fixture with thousands of `transfers`; that
+  fixture in turn required MockDaemon-driven scan infrastructure
+  introduced by Stage 1 PR 1 (DaemonEngine, per §6.1 of the trait
+  spec). The LedgerEngine PR introduced the bench alongside the
+  `LedgerEngine::balance` trait method and froze the baseline at
+  that PR's merge SHA against a state-populated fixture.
 - **`engine_trait_bench_key_account_public_address`**: frozen
-  baseline captured at the **KeyEngine PR's** merge SHA. The
-  workload first exists as a unit when the `KeyEngine` trait
-  method is introduced; the per-trait PR introduces both.
+  baseline captured at the M-series close-out PR's merge SHA
+  (`chore/stage-1-pr3-closeout`, 2026-05-12) following the
+  M3-series KeyEngine PR (PR #40, 2026-05-11). The workload first
+  existed as a unit when the `KeyEngine` trait method was
+  introduced at M3a; the bench was deferred from the introducing
+  PR per L353-379 of `docs/FOLLOWUPS.md` and shipped at the
+  close-out PR alongside the discipline-binding partial-close
+  annotation.
 - **`engine_trait_bench_economics_current_emission` and
   `engine_trait_bench_economics_parameters_snapshot`**: frozen
   baselines captured at the **EconomicsEngine PR's** merge SHA.
@@ -1584,8 +1589,18 @@ matures and as the surface under measurement changes:
   Their gap-checks surface trait-specific gaps:
   trait-method-dispatch overhead vs. the predicted model;
   fixture-state-population shape gaps (LedgerEngine PR's
-  `balance` fixture); fixture-construction gaps for new
-  trait surfaces (KeyEngine PR's account-address fixture).
+  `balance` fixture, landed at Stage 1 PR 2); fixture-construction
+  gaps for new trait surfaces (KeyEngine PR's account-address
+  fixture, satisfied at the M-series close-out PR via a new
+  dedicated `build_local_keys_fixture` returning `Box<LocalKeys>`
+  per the trivial-pure-read workload class; the fixture-shape
+  divergence from the canonical `(Box<Engine<...>>, TempDir)` shape
+  is substrate-forced because `Engine<S, D, L>` does not yet hold
+  a `LocalKeys` field — orchestrator integration is `KeyEngine`
+  PR-5 territory per `STAGE_1_PR_3_KEY_ENGINE.md` §2.1.1's Round 4a
+  workflow-shape pivot. The bench still classifies under the
+  `engine_trait_bench_*` threshold class via the `compare.py`
+  `classify()` function-name routing per §3.3.1).
   The substrate's accumulated rules apply by default; the
   per-trait PR's gap-check focuses on the trait's
   incremental surface.
@@ -1724,6 +1739,16 @@ PR 4 = EconomicsEngine. The one-rule shape produces a uniform
 "first measurement at the introducing PR; cumulative delta from
 there" pattern for every bench:
 
+> [Illustrative hypothetical preserved as template per
+> `STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md` §2 D2. The actual Stage 1
+> unfolding matches this example through PR 3 (PR 1 = DaemonEngine
+> landed; PR 2 = LedgerEngine landed; PR 3 = KeyEngine landed at
+> the M3-series, 2026-05-11). PR 4 = EconomicsEngine remains
+> upstream. Past-tensing the example would falsify its illustrative
+> shape — the discipline framework illustrated here is template
+> content for any future trait-extraction PR, not a record of what
+> happened.]
+
 - **`engine_trait_bench_ledger_synced_height`** (frozen at Stage
   0 PR-2's SHA). PR 1 cites cumulative delta against PR-2's SHA;
   PR 2 cites the running cumulative; PR 3 and PR 4 likewise.
@@ -1811,10 +1836,16 @@ benches are deferred"). Explicit assignment:
   representative size). The bench's frozen baseline is captured
   at the LedgerEngine PR's merge SHA per §4.5's per-bench-SHA
   disposition.
-- **KeyEngine PR** introduces
+- **KeyEngine PR** (landed at the M3-series, 2026-05-11) deferred
   `engine_trait_bench_key_account_public_address` (criterion +
-  iai-callgrind sibling) along with the trait method. The bench's
-  frozen baseline is captured at the KeyEngine PR's merge SHA.
+  iai-callgrind sibling) per L353-379 of `docs/FOLLOWUPS.md`; the
+  bench was introduced at the M-series close-out PR
+  (`chore/stage-1-pr3-closeout`, 2026-05-12) and its frozen
+  baseline captured at that PR's merge SHA. The discipline binding
+  ("bench-with-method") was relaxed for this slot specifically per
+  the close-out PR's pre-flight §2 D3 rationale; future trait-
+  introducing PRs are expected to satisfy the discipline at the
+  introducing PR.
 - **EconomicsEngine PR** introduces both
   `engine_trait_bench_economics_current_emission` and
   `engine_trait_bench_economics_parameters_snapshot` (criterion +

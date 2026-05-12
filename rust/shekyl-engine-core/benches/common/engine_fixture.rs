@@ -463,6 +463,96 @@ pub fn drop_balance_fixture(
 ) {
 }
 
+/// Deterministic 32-byte seed for the `LocalKeys` bench fixture.
+///
+/// Pattern `byte[i] = (i * 11 + 3) mod 256` — non-zero, non-trivial,
+/// and orthogonal to [`fixed_seed`] (the 64-byte master-seed pattern
+/// the `Engine` fixture uses). The `i as u8` cast is exact because
+/// `i < 32 < 256`. Distinct constants keep the two fixtures' identity
+/// material non-aliased, which matters only if a future bench
+/// compares engine-side and key-side outputs against each other.
+#[cfg(feature = "bench-internals")]
+#[allow(dead_code)]
+const LOCAL_KEYS_BENCH_SEED: [u8; 32] = {
+    let mut s = [0u8; 32];
+    let mut i: u8 = 0;
+    while i < 32 {
+        s[i as usize] = i.wrapping_mul(11).wrapping_add(3);
+        i += 1;
+    }
+    s
+};
+
+/// Build a fixture for the `KeyEngine` bench family — a heap-
+/// allocated [`LocalKeys`] derived from the deterministic
+/// [`LOCAL_KEYS_BENCH_SEED`].
+///
+/// # Why the fixture is `Box<LocalKeys>` rather than `Box<Engine<...>>`
+///
+/// `Engine<S, D, L>` does not (yet) hold a `LocalKeys` field —
+/// orchestrator integration of the `KeyEngine` implementor is the
+/// `KeyEngine` PR-5 territory per
+/// `docs/design/STAGE_1_PR_3_KEY_ENGINE.md` §2.1.1 (the Round 4a
+/// workflow-shape pivot). The post-M3-series `Engine` keeps
+/// `keys: AllKeysBlob` (the wallet key material) while the
+/// `KeyEngine` implementor [`LocalKeys`] exists alongside but is
+/// not field-wired yet (`#[allow(dead_code)]` on the type).
+///
+/// The substrate forces the divergence from the unified
+/// `(Box<Engine<SoloSigner, DaemonClient, LocalLedger>>, TempDir)`
+/// shape `engine_trait_bench_ledger_balance` uses; the bench still
+/// classifies under the `engine_trait_bench_*` threshold class via
+/// the `compare.py` function-name routing (per `STAGE_0_HARNESS.md`
+/// §3.3.1, `classify()` routes on function name, not fixture
+/// shape). The divergence is documented in this fixture's
+/// docstring (here) and in the close-out PR's pre-flight §1.2.
+///
+/// # Boundary rule (iai-callgrind)
+///
+/// `LocalKeys` is significantly larger than the §4.2 64-byte
+/// cutoff (the type carries an `AllKeysBlob` plus state-shaped
+/// fields and a subaddress-registry `RwLock`). The
+/// `Box<LocalKeys>` shape moves only an 8-byte pointer across the
+/// bench-function boundary, matching the established discipline
+/// for the engine-trait bench family.
+///
+/// # No `TempDir` needed
+///
+/// Unlike [`build_engine_fixture`] / [`build_engine_fixture_with_balance`],
+/// the `KeyEngine` bench does not touch the filesystem — `LocalKeys`
+/// is purely in-memory (no `WalletFile`, no advisory lock, no
+/// wallet-state directory). The fixture is `Box<LocalKeys>`
+/// without a guard tuple.
+///
+/// # Drop order, panics
+///
+/// `LocalKeys::Drop` zeroizes the contained `AllKeysBlob` secrets
+/// (per the type's `ZeroizeOnDrop` discipline). No filesystem
+/// teardown needed. Panics if
+/// [`LocalKeys::from_test_seed`] panics (only on internal
+/// `generate_account_from_raw_seed` failure, which is deterministic
+/// on a healthy build).
+#[cfg(feature = "bench-internals")]
+#[allow(dead_code)]
+pub fn build_local_keys_fixture() -> Box<shekyl_engine_core::__bench_internals::LocalKeys> {
+    Box::new(
+        shekyl_engine_core::__bench_internals::LocalKeys::from_test_seed(LOCAL_KEYS_BENCH_SEED),
+    )
+}
+
+/// Teardown for the `LocalKeys` bench fixture; mirrors
+/// [`drop_fixture`].
+///
+/// `LocalKeys::Drop` zeroizes the contained `AllKeysBlob` secrets;
+/// taking ownership here is sufficient to schedule that work
+/// outside the iai-callgrind measured region (the symmetry rule
+/// per `STAGE_0_HARNESS.md` §4.2). The criterion sibling does not
+/// invoke this teardown because criterion's `b.iter` amortizes
+/// drop cost across iterations.
+#[cfg(feature = "bench-internals")]
+#[allow(dead_code)]
+pub fn drop_local_keys_fixture(_fixture: Box<shekyl_engine_core::__bench_internals::LocalKeys>) {}
+
 /// Mirrors `shekyl-engine-state::ledger_block::tests::sample_transfer`
 /// — the canonical "lightweight transfer for tests" shape. Reproduced
 /// here (and in `refresh_snapshot.rs`) because the test helper is
