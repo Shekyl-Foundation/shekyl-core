@@ -111,16 +111,8 @@ pub(crate) type Address = ShekylAddress;
 /// than an owned message, because address material is not bound to
 /// any per-call context.
 #[derive(Clone, Debug)]
-///
-/// **Visibility.** `pub` for the same reason
-/// [`super::super::local_keys::LocalKeys`] is `pub`: the bench
-/// surface (gated behind `bench-internals`) names this type as the
-/// return value of `KeyEngine::account_public_address` in the
-/// `engine_trait_bench_key_account_public_address{,_iai}` pair.
-/// All fields are public material (no secrets); external visibility
-/// is benign.
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
-pub struct AccountPublicAddress {
+pub(crate) struct AccountPublicAddress {
     /// ML-KEM-768 public key (1216 bytes per FIPS 203).
     pub pqc_public_key: Vec<u8>,
     /// Encoded classical address bytes.

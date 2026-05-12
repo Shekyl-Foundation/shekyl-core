@@ -170,10 +170,20 @@ struct LocalKeysState {
 /// `engine_trait_bench_key_account_public_address{,_iai}` pair.
 /// Field access remains private; method access on the type is
 /// `pub(crate)` for inherent methods and gated by the `pub(crate)
-/// trait KeyEngine` for trait methods. External callers can name
-/// the type but cannot construct it (no public constructor in
-/// production builds) or call its methods. The visibility expansion
-/// is name-only.
+/// trait KeyEngine` for trait methods.
+///
+/// **Constructor scope.** In production builds (without the
+/// `bench-internals` feature enabled), the type has no public
+/// constructor — `from_keys_blob` is `pub(crate)` and the
+/// test/bench helper [`LocalKeys::from_test_seed`] is gated by
+/// `#[cfg(any(test, feature = "bench-internals"))]`. When the
+/// `bench-internals` feature IS enabled (an internal-use-only
+/// feature flag, gated for benches), the `from_test_seed`
+/// constructor becomes `pub` to let the bench compilation unit
+/// build a deterministic fixture. This pattern matches
+/// [`super::local_ledger::LocalLedger::populate_for_bench`]
+/// exactly: bench-only `pub` widening under a feature flag the
+/// public API contract explicitly disclaims.
 #[allow(dead_code)] // M3a wires the implementor; orchestrator integration lands in M3c+.
 pub struct LocalKeys {
     /// Wallet key material. `AllKeysBlob` is `ZeroizeOnDrop` so this

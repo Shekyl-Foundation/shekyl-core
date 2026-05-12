@@ -80,14 +80,20 @@ would falsify its illustrative shape).
   boundary-rule fixture per `STAGE_0_HARNESS.md §4.2`. Expected
   post-fixture instructions: **trivial pure-read range** (likely
   ~10-50 instructions per call after optimizer amortization, since
-  `account_public_address(0, 0)` returns a derived value that's
-  cached per-engine).
+  `KeyEngine::account_public_address` returns a cached
+  `&AccountPublicAddress` reference without per-call derivation).
 - **`__bench_internals` re-export.** New
-  `engine_account_public_address_for_bench(engine, account, subaddress)`
-  helper in `shekyl-engine-core::__bench_internals` mirroring the
-  existing `engine_balance_for_bench` pattern (KeyEngine is
-  `pub(crate)`, so the bench compilation unit can't reach it without
-  a public re-export shim).
+  `engine_account_public_address_for_bench(&LocalKeys) -> usize` helper
+  in `shekyl-engine-core::__bench_internals` (returns the sum of both
+  address-field byte-lengths to keep the trait-call observable without
+  widening `AccountPublicAddress` to `pub`). The helper takes
+  `&LocalKeys` rather than `&Engine<...>` because `KeyEngine::
+  account_public_address` is a parameterless trait method on the
+  implementor (`LocalKeys`), and the orchestrator does not yet hold
+  `LocalKeys` as an `Engine` field — that orchestrator integration is
+  PR-5 territory per `STAGE_1_PR_3_KEY_ENGINE.md` §2.1.1. KeyEngine is
+  `pub(crate)`, so the bench compilation unit can't reach the trait
+  method directly without a public shim.
 - **`Cargo.toml` registration.** New `[[bench]]` entries for both
   files in `rust/shekyl-engine-core/Cargo.toml` matching the
   existing `engine_trait_bench_ledger_balance` registration pattern

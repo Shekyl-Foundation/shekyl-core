@@ -105,7 +105,7 @@ use common::engine_fixture::{build_local_keys_fixture, drop_local_keys_fixture};
     teardown = drop_local_keys_fixture
 )]
 fn engine_trait_bench_key_account_public_address(fixture: Box<LocalKeys>) -> Box<LocalKeys> {
-    let _ = black_box(engine_account_public_address_for_bench(&fixture));
+    black_box(engine_account_public_address_for_bench(&fixture));
     fixture
 }
 

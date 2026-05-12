@@ -1591,9 +1591,16 @@ matures and as the surface under measurement changes:
   fixture-state-population shape gaps (LedgerEngine PR's
   `balance` fixture, landed at Stage 1 PR 2); fixture-construction
   gaps for new trait surfaces (KeyEngine PR's account-address
-  fixture, satisfied at the M-series close-out PR by reuse of
-  `build_engine_fixture_with_default_balance` per the trivial-
-  pure-read workload class).
+  fixture, satisfied at the M-series close-out PR via a new
+  dedicated `build_local_keys_fixture` returning `Box<LocalKeys>`
+  per the trivial-pure-read workload class; the fixture-shape
+  divergence from the canonical `(Box<Engine<...>>, TempDir)` shape
+  is substrate-forced because `Engine<S, D, L>` does not yet hold
+  a `LocalKeys` field — orchestrator integration is `KeyEngine`
+  PR-5 territory per `STAGE_1_PR_3_KEY_ENGINE.md` §2.1.1's Round 4a
+  workflow-shape pivot. The bench still classifies under the
+  `engine_trait_bench_*` threshold class via the `compare.py`
+  `classify()` function-name routing per §3.3.1).
   The substrate's accumulated rules apply by default; the
   per-trait PR's gap-check focuses on the trait's
   incremental surface.

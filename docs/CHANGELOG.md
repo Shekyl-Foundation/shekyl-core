@@ -21,14 +21,17 @@
   iai-callgrind is the load-bearing signal because criterion
   `median_ns` reflects optimizer amortization across the iteration
   loop (§4.4 hoisting caveat). The bench-internals visibility
-  expansion adds `LocalKeys` and `AccountPublicAddress` to the
-  `pub` surface following the exact precedent of `LocalLedger` at
-  Stage 1 PR 2 — name-only expansion; fields stay private,
-  constructors stay `pub(crate)` outside the bench-internals gate.
-  `LocalKeys::from_test_seed` becomes `pub` under
-  `#[cfg(any(test, feature = "bench-internals"))]` matching
-  `LocalLedger::populate_for_bench`'s gating. Closes three of four
-  deferred-bench slots from [`FOLLOWUPS.md`](./FOLLOWUPS.md)'s
+  expansion adds only `LocalKeys` to the `pub` surface (following
+  the exact precedent of `LocalLedger` at Stage 1 PR 2 — name-only
+  expansion; fields stay private). `LocalKeys::from_test_seed`
+  becomes `pub` under `#[cfg(any(test, feature = "bench-internals"))]`
+  matching `LocalLedger::populate_for_bench`'s gating.
+  `AccountPublicAddress` stays `pub(crate)` — the bench helper
+  returns a primitive `usize` summary (sum of address-field
+  byte-lengths) rather than the natural `&AccountPublicAddress`
+  return type, sidestepping the API-widening Copilot's PR review
+  flagged. Closes three of four deferred-bench slots from
+  [`FOLLOWUPS.md`](./FOLLOWUPS.md)'s
   Stage-1-performance-baseline entry; two EconomicsEngine slots
   remain pinned to that PR.
 

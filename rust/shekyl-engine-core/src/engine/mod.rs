@@ -649,9 +649,9 @@ pub fn engine_balance_for_bench(
 /// integration is `KeyEngine` PR-5 territory per
 /// `docs/design/STAGE_1_PR_3_KEY_ENGINE.md` §2.1.1 (the Round 4a
 /// workflow-shape pivot). The post-M3-series state preserves
-/// `LocalKeys` as the `KeyEngine` implementor (`pub(crate)`,
-/// `#[allow(dead_code)]` per the orchestrator-integration deferral)
-/// without wiring it into the `Engine` struct.
+/// `LocalKeys` as the `KeyEngine` implementor
+/// (`#[allow(dead_code)]` per the orchestrator-integration
+/// deferral) without wiring it into the `Engine` struct.
 ///
 /// Given the substrate, the bench fixture is a standalone
 /// `Box<LocalKeys>` rather than the unified
@@ -666,10 +666,24 @@ pub fn engine_balance_for_bench(
 /// threshold class via the function-name routing discipline (per
 /// `STAGE_0_HARNESS.md` §3.3.1's `classify()` rule, which routes on
 /// the `#[library_benchmark]` function name, not on fixture shape).
+///
+/// # Why this returns `usize` rather than `&AccountPublicAddress`
+///
+/// The natural return type of the trait method is
+/// `&AccountPublicAddress`, but that type is `pub(crate)` — exposing
+/// it through this `pub fn`'s signature would widen the crate's
+/// public API beyond the `bench-internals` gate. The helper instead
+/// returns a `usize` summary (the sum of both field byte-lengths),
+/// which is a primitive `pub` type. The trait call is preserved
+/// against compiler elision by the internal `black_box(...)` around
+/// the address reference; the returned length forces both `Vec<u8>`
+/// fields to be touched, preventing partial-field elision. The
+/// measurement surface is unchanged from the natural shape; only
+/// the API-widening footprint differs (zero added types in
+/// `__bench_internals`).
 #[cfg(feature = "bench-internals")]
-pub fn engine_account_public_address_for_bench(
-    keys: &local_keys::LocalKeys,
-) -> &traits::key::AccountPublicAddress {
+pub fn engine_account_public_address_for_bench(keys: &local_keys::LocalKeys) -> usize {
     use crate::engine::traits::key::KeyEngine;
-    keys.account_public_address()
+    let addr = std::hint::black_box(keys.account_public_address());
+    addr.pqc_public_key.len() + addr.classical_address_bytes.len()
 }
