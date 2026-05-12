@@ -260,7 +260,11 @@ analog; the deltas are visible. PRs 3 onward (the §8.1 chain —
 critical-path; `RefreshEngine` and `PendingTxEngine` on it) are
 expected to follow the same template with trait-specific deltas.
 By PR 7 the per-trait template is fully canonized and deviations
-require explicit reasoning.
+require explicit reasoning. [Post-merge: PR 3 / `KeyEngine` landed
+at the M3-series (2026-05-11) with the template inherited and
+trait-specific deltas surfaced in the architectural-inheritance
+migration sub-PRs M3a–M3e; remaining: `PersistenceEngine`,
+`EconomicsEngine`, `RefreshEngine`, `PendingTxEngine`.]
 
 **Per-trait PR spec-drift expectation (lifecycle, not just
 pre-flight).** PR 2's lifecycle surfaced **three** spec drifts that
@@ -300,9 +304,18 @@ Future per-trait PRs should expect the same. PR 3 (`KeyEngine` per
 ([`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc)'s
 "ask why is this here" discipline applied to the trait under
 extraction); surfacing 1–2 small spec drifts somewhere in the
-lifecycle is the **expected outcome**, not a defect. The discovery
-points to actively check, in roughly ascending cost-of-late-
-detection order:
+lifecycle is the **expected outcome**, not a defect. [Post-merge:
+PR 3 / `KeyEngine` landed at the M3-series (2026-05-11) and
+surfaced exactly this pattern at a higher density than the PR 2
+forecast — the M3-series produced an architectural-inheritance
+migration (M3a–M3e) and the pre-flight-FOLLOWUP-scope discipline
+lemma surfaced post-merge by PR #40's audit; the "1-2 small spec
+drifts" forecast underestimated the per-trait variance for
+cryptographic surfaces per `16-architectural-inheritance.mdc`
+density-expectations guidance. Future per-trait PRs on
+cryptographic surfaces should budget proportionally more spec-drift
+discovery than non-cryptographic ones.] The discovery points to
+actively check, in roughly ascending cost-of-late-detection order:
 
 1. **Pre-flight type-existence and signature check.** Every type
    and method in the trait surface resolves to an existing crate
@@ -407,6 +420,8 @@ Phase 0 amendment confirms the reservation tracker is owned by
 `PendingTxEngine`; tracker migration into `LocalPendingTx` lands
 when that PR ships (Stage 1 PR 4-ish per §8.1's `KeyEngine` /
 `LedgerEngine` / `DaemonEngine` → `PendingTxEngine` chain).
+[Post-merge: `KeyEngine` / `LedgerEngine` / `DaemonEngine` portion
+of the chain landed; `PendingTxEngine` remains upstream.]
 
 PR 2 leaves `Engine`'s `reservations: BTreeMap<…>` and
 `next_reservation_id: u64` as flat fields. PR 2 does not touch

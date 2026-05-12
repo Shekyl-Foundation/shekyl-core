@@ -195,7 +195,7 @@ These assertions exercise: success path (1), daemon-observed-the-submission sema
 
 Only checkpoint (c) is committed as the per-PR delta. Checkpoints (a) and (b) are development-time discipline that gives clean attribution if a regression appears (if (b) shows non-trivial cost, type-parameterization is the source; if (b) is clean and (c) shows cost, interior mutability is the source). Confirm no path at checkpoint (c) crosses the 10% justification threshold.
 
-Expected outcome: deltas near 0% on `KeyEngine`/`LedgerEngine`/`EconomicsEngine` paths (DaemonEngine extraction doesn't change them); `DaemonEngine`-path benches don't exist yet (those land when `LedgerEngine`/etc. extractions add them via subsequent Stage 1 PRs).
+Expected outcome: deltas near 0% on `KeyEngine`/`LedgerEngine`/`EconomicsEngine` paths (DaemonEngine extraction doesn't change them); `DaemonEngine`-path benches don't exist yet (those land when `LedgerEngine`/etc. extractions add them via subsequent Stage 1 PRs). [Post-merge: this expectation held. `LedgerEngine`-path bench landed at Stage 1 PR 2 (LedgerEngine PR); `KeyEngine`-path bench landed at the M-series close-out PR (`chore/stage-1-pr3-closeout`, 2026-05-12) following the M3-series KeyEngine PR (PR #40, 2026-05-11); `EconomicsEngine`-path benches remain upstream.]
 
 **11. `CHANGELOG.md` [Unreleased] entry.** [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — add a one-line entry under [Unreleased] / Internal naming `DaemonEngine` trait extraction as the first Stage 1 PR.
 
