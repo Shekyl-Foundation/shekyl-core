@@ -635,8 +635,11 @@ pub fn engine_balance_for_bench(
 }
 
 /// Project a wallet's account public address through the
-/// [`KeyEngine::account_public_address`](traits::KeyEngine::account_public_address)
-/// trait method, dispatched on a standalone
+/// `KeyEngine::account_public_address` trait method (the trait is
+/// `pub(crate)` so rustdoc intra-doc links to it from a `pub`
+/// item would render as private-link warnings; plain backticks
+/// throughout match the convention used in the bench files'
+/// module-level docstrings), dispatched on a standalone
 /// [`local_keys::LocalKeys`] fixture. See
 /// [`crate::__bench_internals::engine_account_public_address_for_bench`]
 /// for the public-facing wrapper and the use-site rationale.
@@ -674,13 +677,16 @@ pub fn engine_balance_for_bench(
 /// it through this `pub fn`'s signature would widen the crate's
 /// public API beyond the `bench-internals` gate. The helper instead
 /// returns a `usize` summary (the sum of both field byte-lengths),
-/// which is a primitive `pub` type. The trait call is preserved
-/// against compiler elision by the internal `black_box(...)` around
-/// the address reference; the returned length forces both `Vec<u8>`
-/// fields to be touched, preventing partial-field elision. The
-/// measurement surface is unchanged from the natural shape; only
-/// the API-widening footprint differs (zero added types in
-/// `__bench_internals`).
+/// which is a primitive `pub` type. The trait call itself is
+/// preserved against compiler elision by the internal
+/// `std::hint::black_box(...)` around the address reference; the
+/// returned length sum is a small additional load (two `Vec::len()`
+/// metadata reads — the field bytes themselves are not touched) that
+/// gives the criterion / iai-callgrind bench loops something
+/// observable to consume so the bench function's overall result is
+/// not elided. The measurement surface is unchanged from the natural
+/// shape; only the API-widening footprint differs (zero added types
+/// in `__bench_internals`).
 #[cfg(feature = "bench-internals")]
 pub fn engine_account_public_address_for_bench(keys: &local_keys::LocalKeys) -> usize {
     use crate::engine::traits::key::KeyEngine;

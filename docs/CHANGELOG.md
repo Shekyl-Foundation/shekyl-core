@@ -30,10 +30,11 @@
   returns a primitive `usize` summary (sum of address-field
   byte-lengths) rather than the natural `&AccountPublicAddress`
   return type, sidestepping the API-widening Copilot's PR review
-  flagged. Closes three of four deferred-bench slots from
-  [`FOLLOWUPS.md`](./FOLLOWUPS.md)'s
-  Stage-1-performance-baseline entry; two EconomicsEngine slots
-  remain pinned to that PR.
+  flagged. Closes two of four deferred-bench slots from
+  [`FOLLOWUPS.md`](./FOLLOWUPS.md)'s Stage-1-performance-baseline
+  entry (`ledger_balance` previously satisfied at Stage 1 PR 2,
+  `key_account_public_address` here); two EconomicsEngine slots
+  remain pinned to the EconomicsEngine trait-introducing PR.
 
 ### Changed
 

@@ -67,21 +67,28 @@ would falsify its illustrative shape).
 `STAGE_0_HARNESS.md §3.3.1`. Replication shape:
 
 - **Criterion file (`engine_trait_bench_key_account_public_address.rs`).**
-  Same harness shape (criterion_group / criterion_main); same
-  `__bench_internals` re-export pattern (calls `engine_account_public_address_for_bench(&engine, 0, 0)`
-  via a re-export to be added in `shekyl-engine-core::__bench_internals`);
-  same `mod common;` fixture pattern. Workload class **trivial pure-read**
-  per `PERFORMANCE_BASELINE.md §"Bench: engine_trait_bench_key_account_public_address"`
-  (the address is stable across iterations; criterion `median_ns`
-  reflects optimizer amortization).
+  Same harness shape (criterion_group / criterion_main); calls
+  `engine_account_public_address_for_bench(&keys)` via a new
+  `__bench_internals` re-export (the helper takes `&LocalKeys`, not
+  `&Engine<...>` — see the `__bench_internals` bullet below for the
+  substrate-divergence rationale); same `mod common;` fixture pattern.
+  Workload class **trivial pure-read** per `PERFORMANCE_BASELINE.md
+  §"Bench: engine_trait_bench_key_account_public_address"` (the address
+  is stable across iterations; criterion `median_ns` reflects optimizer
+  amortization).
 - **iai-callgrind sibling file (`engine_trait_bench_key_account_public_address_iai.rs`).**
   Same `library_benchmark` / `library_benchmark_group` / `main!`
-  shape; same `Box<Engine<SoloSigner, DaemonClient, LocalLedger>>`
-  boundary-rule fixture per `STAGE_0_HARNESS.md §4.2`. Expected
-  post-fixture instructions: **trivial pure-read range** (likely
-  ~10-50 instructions per call after optimizer amortization, since
-  `KeyEngine::account_public_address` returns a cached
-  `&AccountPublicAddress` reference without per-call derivation).
+  shape; fixture is `Box<LocalKeys>` (substrate-forced divergence
+  from the canonical `(Box<Engine<...>>, TempDir)` shape — see the
+  `__bench_internals` bullet below). Boundary-rule discipline per
+  `STAGE_0_HARNESS.md §4.2` is preserved: any fixture field exceeding
+  64 bytes goes behind `Box<T>`; `LocalKeys` is substantially larger
+  than 64 bytes, so `Box<LocalKeys>` moves only an 8-byte pointer at
+  the bench-function boundary. Expected post-fixture instructions:
+  **trivial pure-read range** (likely ~10-50 instructions per call
+  after optimizer amortization, since `KeyEngine::account_public_address`
+  returns a cached `&AccountPublicAddress` reference without per-call
+  derivation).
 - **`__bench_internals` re-export.** New
   `engine_account_public_address_for_bench(&LocalKeys) -> usize` helper
   in `shekyl-engine-core::__bench_internals` (returns the sum of both

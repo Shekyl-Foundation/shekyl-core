@@ -159,7 +159,7 @@ struct LocalKeysState {
     subaddress_registry: HashMap<SpendPublicKey, SubaddressIndex>,
 }
 
-/// The M3a in-process [`KeyEngine`] implementor.
+/// The M3a in-process `KeyEngine` implementor.
 ///
 /// See the module-level docstring for the structural rationale.
 ///

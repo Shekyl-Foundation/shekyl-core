@@ -378,7 +378,7 @@ sustainability is unaffected by the recalibration.
   populated by their introducing per-trait PRs; the first Stage 1
   PR review consumes the document. Target: V3.0, pre-Stage-1-PRs.
 
-  **Partial-close note (close-out PR, 2026-05-12).** Three of the
+  **Partial-close note (close-out PR, 2026-05-12).** Two of the
   four deferred-bench slots have landed:
   - `engine_trait_bench_ledger_balance` — landed at Stage 1 PR 2
     (LedgerEngine PR, merged 2026-05-05).
