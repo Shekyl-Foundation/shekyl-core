@@ -815,6 +815,95 @@
   findings — none argue for β or γ. They argue for a more
   carefully-specified α. Doc-only; no Rust or C++ code touched.
 
+- **Stage 1 PR 4 — Round 2 reframe contract-pin refinements:
+  concurrent-emit clarification, producer-panic-safety property,
+  and test-as-canonical-reference pin.** Same-day follow-up to
+  the Round 2 reframe follow-up (immediately-following bullet)
+  that closes three smaller remaining holes before Phase 0
+  closes. None re-open the reframe; each closes a class of
+  drift / failure-mode that would otherwise propagate to the
+  V3.x consumer-actor PR.
+
+  **Concurrent-emit clarification on the non-blocking pin
+  (§5.4.6 + `DiagnosticSink` docstring).** The `Send + Sync`
+  bound permits concurrent `emit` from multiple tasks; the
+  non-blocking contract **holds under concurrent emission**,
+  not merely per call. Serializing internal synchronization
+  that admits unbounded contention — `Mutex<VecDeque<_>>`,
+  `RwLock`-wrapped state, any shared mutable structure without
+  bounded-wait guarantees — violates the contract even when
+  each `emit` call returns promptly in isolation. Conforming
+  implementations use lock-free queueing (`crossbeam::queue::ArrayQueue`,
+  `flume` non-blocking sends), atomic counters, or sharded
+  mailboxes. Forecloses a class of implementation that
+  type-checks against the literal per-call non-blocking
+  property and still re-introduces the producer-liveness
+  hazard at scale — load-bearing under any future
+  producer-side parallelism shape or Stage 4 actor-mesh
+  topology where multiple `LocalRefresh` instances share a
+  sink.
+
+  **Producer-panic-safety property and Round 4 `PanickingSink`
+  test deliverable (§5.4.6).** The non-blocking pin closes the
+  producer-liveness hazard from a *blocking* `emit`. It does
+  not close the adjacent hazard from a *panicking* `emit` —
+  a buggy or third-party sink implementation that panics
+  (null pointer dereference in a logger, allocator failure in
+  a metrics consumer, panic-on-overflow in an aggregator)
+  propagates unwind through the producer's call stack while
+  the `Scanner` (holding spend material) is live across the
+  `emit` call. **Pinning "MUST NOT panic" on `emit` as a hard
+  trait contract is rejected** — it is unenforceable at the
+  type system and pushes development cost onto every sink
+  author for limited gain. The load-bearing property lives on
+  the producer side: any panic propagating out of `emit`
+  results in a predictable refresh-attempt failure with
+  `Scanner` cleanly zeroized via `Drop`, no leaked half-state,
+  and the cancellation token consistently in either
+  fired-or-not state. **Phase 1 test deliverable:** the
+  `AssertionSink` coherence property test grows a
+  `PanickingSink` variant that panics on configured event
+  variants; the test asserts (a) `Scanner` is dropped before
+  the panic crosses the producer frame (visible via a
+  `Zeroize` observer wrapper in the test harness), (b) no
+  inconsistent producer state remains observable after the
+  unwind, and (c) the panic propagates without `Drop`-chain
+  corruption or double-panic. Round 4 commit-decomposition
+  pass records this alongside the `AssertionSink` coherence
+  test as a Phase 1 deliverable.
+
+  **Test-as-canonical-reference pin on the coherence contract
+  (§5.4.6 + `DiagnosticSink` docstring).** When the
+  `AssertionSink` coherence property test lands in Round 4 it
+  becomes **executable documentation of what coherence means**.
+  If a future implementer reads §5.4.6 prose and is uncertain
+  about an edge case (e.g., "does a `ScanProgress` emission
+  count toward coherence for a `MalformedScanResult` return?"
+  or "do two distinct error-class events from the same scan
+  span count as one emission or two?"), the test's behavior is
+  the authoritative answer. Prose ambiguities resolve against
+  test behavior, not the other way around; if the test is
+  wrong, the test is fixed and the prose follows, never the
+  reverse. Per
+  [`19-validation-surface-discipline.mdc`](../.cursor/rules/19-validation-surface-discipline.mdc),
+  the property test is one of the validation surfaces for the
+  coherence rule; naming it as authoritative makes prose / test
+  drift impossible without explicit re-examination — a future
+  PR landing prose changes to the coherence contract is
+  required to re-examine the test, and vice versa.
+
+  **§5.5 work-list amendments and §8 Round 4 deliverable
+  update.** New work-list rows record the four-part
+  contract-pin bundle (`non-blocking` + concurrent-emit
+  clarification + coherence + canonical-reference) and the
+  producer-panic-safety Round 4 test deliverable. §8's
+  "Remaining for Round 4" prose names the paired
+  `AssertionSink` (coherence) and `PanickingSink`
+  (panic-safety) test deliverables as Phase 1 test-design
+  outputs.
+
+  Doc-only; no Rust or C++ code touched.
+
 - **Stage 1 PR 4 — Round 2 reframe follow-up: `DiagnosticSink`
   contract pins and §5.4.8 refinements.** Follow-up to the
   Round 2 reframe (immediately-following bullet) that pins
