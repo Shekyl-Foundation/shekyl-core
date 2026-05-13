@@ -2793,6 +2793,64 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.x — staker archival and visualization ship
 
+- **`RefreshEngine` mid-scan reorg-abort at checkpoint 3 (Stage 1
+  PR 4 R5 deferral).** Round 2 of
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R5 deferred the discipline-budget question of whether
+  the producer's checkpoint 3 should poll daemon tip per
+  cancellation check and abort the attempt early on observed
+  reorg. Today's checkpoint 3 catches cancellation but not
+  reorg-during-scan; an adversarial daemon can sustain
+  O(window) wasted scan work per back-to-back reorg until peer
+  rotation triggers. Cost of the V3.0-time mitigation is one
+  daemon `get_height` poll per checkpoint-3 hit (~per-block,
+  ~10K+ extra RPCs/wallet-day in steady-state) plus an
+  extension to
+  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §7's checkpoint discipline. **Trigger:** *if hostile-daemon
+  work-amplification scenarios become measurable in V3.0 RC
+  stabilization or post-genesis production telemetry, R5
+  extends checkpoint 3 with one tip-poll per checkpoint-3 hit
+  and §7's discipline grows accordingly.* Until the trigger
+  fires, the existing peer-rotation contract on
+  `DaemonEngine` (PR 1) is the live mitigation. Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.5 (reorg-amplification adversarial scenario), §5.4.7 R5
+  (Round 2 deferral),
+  [`engine/refresh.rs:980 / :1140 / :1186`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  (current checkpoint-3 cancel-only sites).
+
+- **`RefreshEngine` (c) split-producer/recoverer view-material
+  shape (Stage 1 PR 4 R4 deferral).** Round 2 of
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R4 landed (a-instance-scoped) for V3.0 — the producer
+  holds view + spend material in a `ViewMaterial` captured at
+  `LocalRefresh::new`. The (c) shape — producer emits view-tag-
+  matched candidates; orchestrator does final hybrid-decap and
+  key-image computation via `KeyEngine` before
+  `apply_scan_result` — is the threat-model-cleanest answer
+  (the producer holds **only** view material) but requires
+  changing
+  [`Scanner`'s output shape](../rust/shekyl-scanner/src/scan.rs)
+  to emit candidates rather than recovered outputs and changing
+  `ScanResult`'s wire shape to carry that intermediate stage.
+  **Trigger:** *if HW-wallet-backed signing or a post-V3
+  threat-model refinement requires producer-side spend-key
+  isolation*; in that case the (c) migration becomes
+  load-bearing and lifts the `Scanner` + `ScanResult` shape
+  changes alongside. Until then, the (a-instance-scoped) shape
+  is the operative answer; the producer's spend-key holding is
+  bounded to `LocalRefresh`'s lifetime and zeroized on drop
+  via `Scanner`'s `ZeroizeOnDrop`. Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §3.1 (master-secret-isolation framing), §5.4.3 R4 (Round 1
+  review pass surfacing), §5.4.7 R4 (Round 2 disposition with
+  (c) deferral),
+  [`engine/refresh.rs:1254`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  (`build_scanner_from_keys`),
+  [`shekyl-scanner/src/scan.rs:506`](../rust/shekyl-scanner/src/scan.rs)
+  (`Scanner::new`).
+
 - **Sync refresh wrapper generalization over `L: LedgerEngine`.**
   Stage 1 PR 2 generalized `Engine::start_refresh` and the
   producer task `run_refresh_task` over `L: LedgerEngine` —

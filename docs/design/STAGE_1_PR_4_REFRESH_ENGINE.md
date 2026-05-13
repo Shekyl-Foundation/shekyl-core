@@ -1,20 +1,30 @@
 # Stage 1 PR 4 — `RefreshEngine` extraction — design
 
-**Status.** **DRAFT — Round 1 closed; Round 1 review pass closed
-(2026-05-12).** Round 1's load-bearing question (§5 producer
-redesign) settled to **α — preserved current shape** per §5.4
-below. The Round 1 review pass (this same date) corrected §3.1's
+**Status.** **DRAFT — Round 1, Round 1 review pass, and Round 2
+closed (2026-05-12).** Round 1's load-bearing question (§5
+producer redesign) settled to **α — preserved current shape**
+per §5.4. The Round 1 review pass (same date) corrected §3.1's
 materially-wrong "no secret-touching surface" framing to
 master-secret isolation routed through R4, surfaced four
-additional residual questions (R4 view-material flow, R5 mid-scan
-reorg-abort, R6 `RefreshError::ConcurrentMutation` boundary,
-R7 `ScanResult` atomicity-under-cancellation) per §5.4.3, and
-recorded the three call-mode invocation-overhead constraint
-(§5.4.4) and the four adversarial scenarios under α (§5.4.5).
-**The α-disposition stands; the review pass argues for a
-more carefully-specified α, not for β or γ.** The seed framing
-(Round 1 opening) is preserved below as the question-shape
-Round 1 evaluated against. This document was opened in parallel with the
+additional residual questions (R4 view-material flow, R5
+mid-scan reorg-abort, R6 `RefreshError::ConcurrentMutation`
+boundary, R7 `ScanResult` atomicity-under-cancellation) per
+§5.4.3, and recorded the three call-mode invocation-overhead
+constraint (§5.4.4), the four adversarial scenarios under α
+(§5.4.5), and the trait-surface contract pins (§5.4.6).
+**Round 2 (same date) settled all seven residuals** per §5.4.7:
+R1 carries snapshot-ID-pinning into PR 5; R2 stays as the §2.2
+note; R3 is a confirmation (types already publicly re-exported);
+R4 lands as **(a-instance-scoped)** — `LocalRefresh::new(view_material:
+ViewMaterial)` with one Scanner held for the instance's
+lifetime; R5 defers to V3.x FOLLOWUPS; R6 keeps the existing
+`MalformedScanResult { reason: &'static str }` shape, excludes
+`ConcurrentMutation` / `AlreadyRunning` from the producer trait
+error, and keeps `ReorgTooDeep` as Ok-with-rewind merge-layer
+detection; R7 pins atomicity in §2.3 prose. **The α-disposition
+stands; the more-carefully-specified-α frame is now closed.**
+The seed framing (Round 1 opening) is preserved below as the
+question-shape Round 1 evaluated against. This document was opened in parallel with the
 M3c–M3e tail of Stage 1 PR 3 per the 2026-05-10 sequencing
 decision recorded in
 [`STAGE_1_PR_3_MIGRATION_PLAN.md`](./STAGE_1_PR_3_MIGRATION_PLAN.md)
@@ -257,18 +267,24 @@ question per §16 is answered above (§3.1). The standard
 per-trait pre-flight checklist:
 
 - [x] Threat-model alignment (§3.1; corrected in Round 1 review
-      pass — master-secret isolation framing, R4-conditional).
+      pass — master-secret isolation framing, R4-resolved in
+      Round 2 to (a-instance-scoped)).
 - [x] Architectural-inheritance audit (§3.2).
 - [x] Producer-redesign decision (§5.4 — α, Round 1, 2026-05-12).
 - [x] Round 1 review pass (§5.4.3 R4–R7, §5.4.4 call modes,
       §5.4.5 adversarial scenarios, §5.4.6 contract pins,
       2026-05-12).
-- [ ] Phase 0 spec amendments identified (§4 — populated by
-      Round 1 review pass; Round 2 resolves R3 / R4 / R5 / R6 then
-      finalizes).
+- [x] Round 2 dispositions (§5.4.7 — R2 / R3 / R4 / R5 / R6 / R7
+      settled; R1 working hypothesis carried into PR 5,
+      2026-05-12).
+- [x] Phase 0 spec amendments identified (§4 — populated by
+      Round 1 review pass; Round 2 finalized against the
+      resolved residuals).
 - [ ] Phase 1 commit decomposition (§6 — pending Round 4;
-      sequencing depends on R4 per §5.4.4 invocation-overhead
-      constraint).
+      under (a-instance-scoped) the per-attempt scanner
+      construction moves into `LocalRefresh::new` and the
+      per-call setup cost drops, satisfying the §5.4.4
+      invocation-overhead constraint by construction).
 
 ---
 
@@ -282,52 +298,61 @@ rounds progress; this section is the holding place.
 Round 1 review pass populated this list against the seed's
 "likely empty under α" framing).**
 
-- **Phase 0a — Trait-surface contract pins.**
+- **Phase 0a — Trait-surface contract pins** in
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
-  §2.3 prose amendments per §5.4.6:
-  - `Send + Sync + 'static` bound on `R: RefreshEngine`.
-  - Progress-channel trust-boundary pin (consumers must be
-    inside the wallet trust boundary).
+  §2.3 / §7 prose:
+  - `Send + Sync + 'static` bound on `R: RefreshEngine`
+    (§5.4.6).
+  - Progress-channel trust-boundary pin — consumers must be
+    inside the wallet trust boundary (§5.4.6).
   - `ScanResult` atomicity-under-cancellation contract per R7
     — a `produce_scan_result` call returns either a `ScanResult`
     covering the full span it scanned, or
     `RefreshError::Cancelled`; no partial-span `ScanResult`.
-  - `LedgerSnapshot` value-typed contract per §5.4.5 (cheap
-    clone is honest; type carries no shared state).
+    Confirmed against the existing implementation (cancel
+    checks at
+    [`engine/refresh.rs:980 / :1140 / :1186`](../../rust/shekyl-engine-core/src/engine/refresh.rs)).
+  - `LedgerSnapshot` value-typed contract per §5.4.5 — confirmed
+    against the type definition at
+    [`engine/refresh.rs:147–156`](../../rust/shekyl-engine-core/src/engine/refresh.rs);
+    cheap clone is honest because the type carries no shared
+    state.
+  - **`ViewMaterial` type definition** per §5.4.7 R4
+    (a-instance-scoped): public `Zeroize + ZeroizeOnDrop` type
+    carrying `{ spend_pub: EdwardsPoint, view_scalar:
+    Zeroizing<Scalar>, x25519_sk: Zeroizing<[u8; 32]>,
+    ml_kem_dk: Zeroizing<Vec<u8>>, spend_secret:
+    Zeroizing<[u8; 32]> }`. Pinned at the trait surface so
+    Stage 4 actor implementors and any future `RefreshEngine`
+    impl share the constructor shape.
 
   Phase 0a was projected "likely empty under α" by the seed;
-  the Round 1 review pass populates it against the
-  more-carefully-specified-α frame.
-- **Phase 0b — `RefreshOptions` / `RefreshProgress` /
-  view-material shape.** The current shapes
-  ([`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs))
-  are inherent types; PR 4 decides whether they move to a
-  `shekyl-engine-core::refresh` public module or stay
-  crate-private (R3). The R4 disposition (view-material flow)
-  determines the constructor shape: under (a-attempt-scoped),
-  `LocalRefresh::new()` is parameterless and the keys flow
-  through the orchestrator's existing `Engine` read-guard; under
-  (a-instance-scoped), `LocalRefresh::new(view_descriptor:
-  ViewMaterial)` captures keys at construction; under (c),
-  `LocalRefresh::new()` is parameterless but `ScanResult`'s
-  shape changes to carry view-tag-matched candidates rather than
-  recovered outputs. Phase 0b's spec-amendment scope depends on
-  R3 + R4's combined disposition.
-- **Phase 0c — `RefreshError` variant set.** Per R6:
-  `Cancelled`, `DaemonError(D::Error)`, `ScannerContractViolation
-  { kind, evidence }`, `ReorgTooDeep { fork_height, max_rewind }`.
-  `ConcurrentMutation` is **excluded** from the producer's error
-  type — orchestrator-internal translation of `LedgerEngine`
-  errors. The `evidence` field carries an attacker-bounded
-  shape per §5.4.5 (memory-amplifier mitigation): bounded array
-  or no-owned-allocation enum.
-- **Phase 0d (conditional, R5-gated) — Checkpoint 3 extension
-  for mid-scan reorg-abort.** Adds one daemon `get_height` poll
-  per checkpoint-3 hit; aborts the current attempt early on
-  observed reorg.
-  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
-  §7 amendment; only lands if Round 2 disposes R5 = "extend".
-  Discipline-budget-gated per §5.4.3 R5.
+  the Round 1 review pass populated it; Round 2 finalized.
+- **Phase 0b — `LocalRefresh::new(view_material: ViewMaterial)`
+  constructor + flat-crate-root export.** Under §5.4.7 R4
+  (a-instance-scoped), the constructor takes `ViewMaterial`;
+  the existing `RefreshOptions` / `RefreshProgress` /
+  `RefreshSummary` re-exports per
+  [`lib.rs:25–30`](../../rust/shekyl-engine-core/src/lib.rs)
+  cover the consumer surface — §5.4.7 R3 is a confirmation,
+  not a promotion. `ViewMaterial` exports under the same flat
+  convention.
+- **Phase 0c — `RefreshEngineError` (promoted from
+  `ProduceError`).** Per §5.4.7 R6: variants `Cancelled`,
+  `Io(IoError)`, `MalformedScanResult { reason: &'static str }`.
+  `Self::Error: Into<RefreshError>` in the trait surface;
+  orchestrator's `RefreshError` adds `ConcurrentMutation`,
+  `AlreadyRunning` at the merge layer. `ReorgTooDeep` stays
+  as Ok-with-rewind merge-layer detection per the §1.5
+  actor-identity reasoning. The byzantine-daemon variant
+  keeps the existing `&'static str` reason — strictly bounded;
+  no attacker-controlled bytes; richer evidence is a V3.x
+  diagnostic refinement.
+- **Phase 0d — explicitly empty under Round 2.** The
+  Round 1-review-pass conditional candidate "checkpoint 3
+  extension for mid-scan reorg-abort" is **not landing in
+  PR 4**; §5.4.7 R5 deferred to V3.x FOLLOWUPS. Phase 0d
+  retired from this PR's scope.
 
 ---
 
@@ -406,14 +431,15 @@ strategies each project differently onto its trait surface:
 2026-05-10 sequencing, that is when M3e closes — currently
 estimated ~2026-05-15 to 2026-05-20.
 
-### §5.3 Recommendation track (post-Round-1)
+### §5.3 Recommendation track (post-Round-2)
 
-Round 1 settled α (§5.4); the post-Round-1 schedule is therefore
-narrower than the seed projected. The original four-round
-sequencing assumed Round 1 would only *frame* the question; in
-practice Round 1 converged on α directly, so Rounds 2–4 compress
-to the residual questions R1 / R2 / R3 plus Phase-0 / Phase-1
-mechanics.
+Round 1 settled α (§5.4); the Round 1 review pass surfaced R4–R7
+plus the §5.4.4 / §5.4.5 / §5.4.6 substance; **Round 2 settled
+all seven residuals (§5.4.7).** The remaining trajectory is now
+narrower than the seed or Round 1 review pass projected: PR 5's
+design rounds carry R1's working hypothesis (snapshot-ID pinning)
+forward, and Round 4 is the only design round PR 4 needs before
+Phase 0 lands.
 
 - **Round 1 (closed, 2026-05-12).** Disposition α per §5.4. Four
   criteria evaluated: PR 4 extraction cleanliness; PR 5 two-phase
@@ -421,20 +447,30 @@ mechanics.
   tracker reorg surfacing; Stage 4 actor compatibility. The
   validation-surface guard in
   [`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc)
-  (named on `dev`; visible to PR 4 once the branch syncs)
   rejects bundling β/γ into PR 4 because they share the feature
   topic “refresh” without sharing PR 4's validation surface.
-- **Round 2 (next).** Resolve **R2** (β internal-batching: V3.x
-  FOLLOWUPS entry vs. §2.2 note) and **R3** (`RefreshOptions` /
-  `RefreshProgress` public-module promotion, §4 Phase 0b);
-  enumerate Phase 0 amendments now α has scoped them.
-- **Round 3.** PR 5 interface contract review — settle **R1**
-  (`PendingTxEngine::build` behaviour during a long refresh:
-  `RefreshInProgress` error vs. block-until-merge vs.
-  build-against-current-snapshot). PR 5's design rounds open
-  with R1's disposition as input.
-- **Round 4.** Phase 0 commit decomposition; §6 review checklist
-  filled in; Phase 1 commit list pinned.
+- **Round 1 review pass (closed, 2026-05-12).** Corrected §3.1's
+  threat-model framing; surfaced R4 (load-bearing — view-material
+  flow) / R5 (discipline-budget — mid-scan reorg-abort) / R6
+  (hygiene — variant set) / R7 (load-bearing — atomicity); added
+  §5.4.4 call modes, §5.4.5 adversarial scenarios, §5.4.6
+  contract pins.
+- **Round 2 (closed, 2026-05-12).** Settled R2 / R3 / R4 / R5 /
+  R6 / R7 per §5.4.7. R1 carries forward to PR 5 with snapshot-ID
+  pinning as the working hypothesis.
+- **Round 3 (deferred to PR 5).** R1 lands in PR 5's design
+  rounds; PR 4 does not need a separate Round 3. The α-disposition
+  remains *provisionally load-bearing* per the original Round 1
+  framing — if PR 5's R1 resolution requires γ for correctness,
+  PR 4 re-opens; otherwise PR 4 advances directly to Round 4.
+- **Round 4.** Phase 0 commit decomposition (against the
+  Round 2-finalized §4 candidates); §6 review checklist filled in;
+  Phase 1 commit list pinned. Sequencing under (a-instance-scoped)
+  R4 is straightforward — `LocalRefresh::new(view_material:
+  ViewMaterial)` is the new shape; Phase 1's first commit
+  introduces the `ViewMaterial` type and the constructor; the
+  per-attempt scanner build moves out of `run_refresh_task` and
+  into `LocalRefresh`'s state.
 
 The convergence-in-Round-1 outcome is the discovery-cadence
 framing in
@@ -882,6 +918,240 @@ against and Stage 4 has the property to wrap around.
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
   §2.3 prose amendment in Phase 0a.
 
+### §5.4.7 Round 2 dispositions — R2–R7 settled (2026-05-12)
+
+Round 2 closes all seven residuals from §5.4.3 plus the §5.4.6
+trait-contract pins. PR 4's design surface is now Phase-0-ready;
+Round 4 carries the commit decomposition.
+
+#### R1 — `PendingTxEngine::build` during long refresh
+
+**Disposition.** Carry forward to PR 5's design rounds with
+**build-against-current-snapshot + snapshot-ID pinning** as the
+working hypothesis. Reservation tracker carries a snapshot ID
+per reservation; submit path becomes a CAS against
+`current_snapshot == reservation.snapshot_id`. PR 5 opens with
+this hypothesis and looks for a reason to reject it; the
+α-disposition's *provisionally load-bearing* status (per §5.3)
+remains the re-evaluation gate.
+
+PR 4 does not land R1 — it is a PR 5 surface. Naming the working
+hypothesis here exists so PR 5's design opens with the
+correctness-preserving shape rather than re-litigating the
+three sub-options.
+
+#### R2 — β internal-batching refinement
+
+**Disposition.** Leave as the §2.2 "future scaling refinement"
+note. Do **not** promote β to FOLLOWUPS yet.
+
+**Rationale.** The V3.0 bandwidth FOLLOWUP entry already names
+α's bandwidth cost; it does not prescribe β as the remediation.
+V3.0 RC stabilization profiles cold-sync bandwidth empirically;
+if the profile shows β is the right shape, promote then.
+Promoting β prematurely overspecifies the remediation before
+the cost-benefit is measured — alternatives include daemon-side
+prefix-matching, view-tag pre-filter improvements, or wallet-side
+prune-by-birthday — and "FOLLOWUPS without a named trigger
+becomes a graveyard" per
+[`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc).
+The §2.2 note remains the named home.
+
+#### R3 — `RefreshOptions` / `RefreshProgress` public-module promotion
+
+**Disposition.** Confirmation, not discovery: the types are
+**already crate-publicly re-exported** from `shekyl_engine_core`
+([`lib.rs:25–30`](../../rust/shekyl-engine-core/src/lib.rs))
+at the flat crate root, matching the `DaemonEngine` /
+`LedgerEngine` convention. Stage 4's `kameo` actor implementor
+imports them via `use shekyl_engine_core::{RefreshOptions,
+RefreshProgress};` exactly as a Stage 1 caller does today.
+
+**Phase 0b scope.** Confirmation that the existing exports
+cover `RefreshEngine`'s consumer surface; no new module
+promotion required. The R4 (a-instance-scoped) disposition
+introduces a new `ViewMaterial` type whose export status lands
+in Phase 0b: public-typed, `Zeroize + ZeroizeOnDrop`, exported
+under the same flat-at-crate-root convention. No new
+`shekyl_engine_core::refresh` namespace.
+
+The §3.3 "discovery cadence" framing applied to PR 4 — Round 2's
+confirmation-shape on R3 is the predicted outcome per
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)'s
+"audits are increasingly likely to be confirmations as the
+discipline's coverage extends." The pre-Stage-1 export
+discipline already covers PR 4's needs.
+
+#### R4 — view-material flow to the producer (load-bearing)
+
+**Disposition.** **(a-instance-scoped).**
+`LocalRefresh::new(view_material: ViewMaterial)` captures the
+view-and-spend material at construction; the `Scanner` is built
+once at `LocalRefresh::new` and held for the instance's
+lifetime; per-attempt cost drops to `(snapshot.clone() +
+daemon.get_height() + per-block fetch+scan)` — no per-attempt
+scanner construction.
+
+**`ViewMaterial` shape (Phase 0a).** A new public type in
+`shekyl_engine_core` carrying:
+
+```rust
+pub struct ViewMaterial {
+    pub spend_pub: EdwardsPoint,
+    pub view_scalar: Zeroizing<Scalar>,
+    pub x25519_sk: Zeroizing<[u8; 32]>,
+    pub ml_kem_dk: Zeroizing<Vec<u8>>,
+    pub spend_secret: Zeroizing<[u8; 32]>,
+}
+```
+
+These are exactly the fields `build_scanner_from_keys`
+([`engine/refresh.rs:1254`](../../rust/shekyl-engine-core/src/engine/refresh.rs))
+extracts from `&AllKeysBlob` today. `ViewMaterial` is `Zeroize +
+ZeroizeOnDrop` by construction (every field is already
+`Zeroizing<…>` or a public point). The orchestrator's
+`Engine<S>` constructs `ViewMaterial` from `AllKeysBlob` under
+its existing key read-guard and passes it to
+`LocalRefresh::new`.
+
+**Wallet-lock semantics.** The wallet's lock state machine
+already drops `LocalRefresh` on lock (the orchestrator owns
+the handle); under (a-instance-scoped), drop runs the
+`Zeroize` chain on `ViewMaterial`'s wrapped fields plus the
+`Scanner`'s internal `ZeroizeOnDrop`. The "graceful-cancel
+window" the user named is bounded by the cancellation+join
+time of any in-flight refresh attempt — the same window
+already exists today inside `run_refresh_task`'s scanner
+ownership; (a-instance-scoped) makes it explicit at the type
+level rather than wider.
+
+**Stage 4 actor envelope.** `LocalRefresh`'s actor body holds
+the keys; the actor's mailbox messages carry no secrets.
+`kameo`'s envelope crosses the trust boundary cleanly:
+`Tell { ProduceScanResult { snapshot, opts } } → Reply<…>`.
+
+**(c) split-producer/recoverer deferred to V3.x.** The (c)
+shape — producer emits view-tag-matched candidates; orchestrator
+does final hybrid-decap + key-image computation — is the
+threat-model-cleanest answer but requires changing `Scanner`'s
+output shape and the `ScanResult` wire shape. **Trigger for
+V3.x reconsideration:** *if HW-wallet-backed signing or a
+post-V3 threat-model refinement requires producer-side
+spend-key isolation*; in that case the (c) migration becomes
+load-bearing and the existing FOLLOWUPS entry below tracks the
+deferral.
+
+**(b) per-call rejected.** Crosses the trait boundary every
+call; hostile to actor migration per the Stage 4 envelope
+analysis.
+
+#### R5 — mid-scan reorg-abort at checkpoint 3
+
+**Disposition.** Defer to V3.x FOLLOWUPS.
+
+**Rationale.** Checkpoint 3 fires per-block in the in-loop
+cancel checks at
+[`engine/refresh.rs:980 / :1140 / :1186`](../../rust/shekyl-engine-core/src/engine/refresh.rs).
+Adding a daemon `get_height` poll to each fires per-block;
+at steady-state poll cadence (10–30 s, ~2 blocks/poll, ~10K
+polls/wallet-day), the cost is on the order of 10K+ extra
+RPCs/wallet-day. The reorg-amplification attack vector is
+mitigated at a higher layer by PR 1's `DaemonEngine` peer-
+rotation contract — a daemon producing back-to-back reorgs
+is a peer-ban candidate. The discipline-budget cost of
+extending §7's checkpoint discipline to cover reorg-detected-
+during-scan abort + retry semantics is non-trivial; pre-genesis
+the work-amplification attack is conditional on an attacker
+controlling the user's daemon, which the wallet already
+mitigates by rotation.
+
+**FOLLOWUPS V3.x trigger.** *If hostile-daemon work-
+amplification scenarios become measurable in V3.0 RC
+stabilization or post-genesis production telemetry, R5
+extends checkpoint 3 with one tip-poll per checkpoint-3 hit
+and §7's discipline grows accordingly.* See
+[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.x entry added in
+this commit.
+
+#### R6 — `RefreshError::ConcurrentMutation` boundary + variant set
+
+**Disposition.** Promote the existing crate-internal
+`ProduceError`
+([`engine/refresh.rs:202`](../../rust/shekyl-engine-core/src/engine/refresh.rs))
+to a public `RefreshEngineError` (or co-locate as a
+`pub enum` within `shekyl_engine_core::engine::refresh`); use
+it as `RefreshEngine::Error: Into<RefreshError>`. Variant set:
+
+- `Cancelled` — checkpoints 2 / 3 fired; orchestrator does
+  not retry.
+- `Io(IoError)` — daemon failure post-conversion via
+  `D::Error: Into<IoError>`. The `D::Error → IoError`
+  conversion happens inside `LocalRefresh`; the trait error
+  type is **not** generic over `D`, preserving the existing
+  `Self::Error: Into<DomainError>` pattern shared with
+  `LedgerEngine` / `KeyEngine`.
+- `MalformedScanResult { reason: &'static str }` — the
+  byzantine-daemon path. **Kept name + payload from the
+  existing
+  [`RefreshError`](../../rust/shekyl-engine-core/src/engine/error.rs)
+  shape.** The `&'static str` reason is strictly bounded —
+  no attacker-controlled bytes; compile-time-fixed strings
+  are the strongest form of memory-amplifier mitigation per
+  §5.4.5. Round 2 declines the user's proposed
+  `ScannerContractViolation { kind, evidence }` rename — the
+  richer-diagnostic shape is a V3.x telemetry refinement if
+  peer-ban logic genuinely needs structured `kind`; pre-V3
+  the simpler bounded shape suffices.
+
+**Excluded from producer trait error.**
+
+- `ConcurrentMutation { wallet, result }` — orchestrator-
+  internal; generated by `LedgerEngine::apply_scan_result`
+  at the merge gate, translated by `run_refresh_task` into
+  the orchestrator-side `RefreshError`. Producer never emits.
+- `AlreadyRunning` — orchestrator-internal; refresh-handle
+  racing concern, not a producer concern.
+- `ReorgTooDeep { fork_height, max_rewind }` — Round 2 keeps
+  the existing **Ok-with-rewind** shape from
+  [`find_fork_point`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  (lines 1148–1156): the producer returns `Ok(h+1)` when
+  walking past the reorg window; the merge layer surfaces
+  deep-reorg via wallet-side rewind-too-deep limits, per the
+  §1.5 actor-identity reasoning ("snapshot-disagreement is a
+  refresh-loop concern, not a ledger-internal concern"). The
+  user's proposed `ReorgTooDeep` producer variant would
+  duplicate the merge-side detection. **Disposition:** keep
+  current shape; revisit only if V3.x merge-layer detection
+  proves load-bearingly insufficient.
+
+The cleanly-split shape (producer trait error = subset of
+existing `RefreshError`) lands as a Phase 0c spec amendment
+to
+[`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
+§3.5; Phase 1's commit decomposition lifts `ProduceError` to
+its public name.
+
+#### R7 — `ScanResult` atomicity-under-cancellation contract
+
+**Disposition.** Pin the contract in
+[`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
+§2.3 prose: *a `produce_scan_result` call returns either a
+`ScanResult` covering the full span it scanned, or
+`RefreshError::Cancelled`. No partial-span `ScanResult`.*
+
+**Already true in the existing implementation** per the cancel
+checks at
+[`engine/refresh.rs:980 / :1140 / :1186`](../../rust/shekyl-engine-core/src/engine/refresh.rs);
+the contract pin prevents future drift. Phase 0a prose
+amendment.
+
+#### Trait-surface contract pins (§5.4.6) — confirmed
+
+- `Send + Sync + 'static` bound on `R: RefreshEngine` lands as
+  Phase 0a §2.3 amendment.
+- `Progress`-channel trust-boundary pin lands as Phase 0a §2.3
+  prose; consumers must be inside the wallet trust boundary.
+
 ### §5.5 Work-list — refresh-adjacent items and where they live
 
 This table enumerates every refresh-adjacent work item PR 4's
@@ -902,15 +1172,17 @@ for PR 4's scope: every item has a named home.
 | View-tag pre-filter (operational today) | already live | [`REFRESH_DESIGN_LANDSCAPE.md`](./REFRESH_DESIGN_LANDSCAPE.md) §3 (cites [`STAGE_1_PR_3_KEY_ENGINE.md`](./STAGE_1_PR_3_KEY_ENGINE.md) §3.1.1) |
 | Refresh bandwidth tradeoff under α | V3.0 (RC stabilization) | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 (entry added in this commit) |
 | Pruning-vocabulary disambiguation | reference | [`REFRESH_DESIGN_LANDSCAPE.md`](./REFRESH_DESIGN_LANDSCAPE.md) §7 sidebar |
-| `PendingTxEngine::build` behaviour during long refresh (R1) | V3.0 (PR 5 design rounds) | §5.4.3 R1; settled in PR 5 design doc once that branch opens. Working hypothesis: build-against-current-snapshot with snapshot-ID pinning (Round 1 review pass). |
-| `RefreshOptions` / `RefreshProgress` public-module promotion (R3) | V3.0 (Round 2) | §5.4.3 R3; §4 Phase 0b candidate |
-| View-material flow to the producer (R4) | V3.0 (Round 2) | §5.4.3 R4; §4 Phase 0a / 0b candidate; affects `LocalRefresh::new` constructor shape and Stage 4 actor envelope |
-| Mid-scan reorg-abort at checkpoint 3 (R5) | V3.0 if Round 2 = "extend"; otherwise V3.x | §5.4.3 R5; §5.4.5 reorg-amplification scenario; §4 Phase 0d (conditional) — discipline-budget-gated |
-| `RefreshError::ConcurrentMutation` boundary (R6) | V3.0 (Round 2) | §5.4.3 R6; §4 Phase 0c — variant set audit, `ConcurrentMutation` excluded from producer trait error |
-| `ScanResult` atomicity-under-cancellation contract (R7) | V3.0 (Round 2) | §5.4.3 R7; §4 Phase 0a — already true in `engine/refresh.rs`, pinned in trait contract |
-| Three call modes (cold open / steady-state / post-submit) — invocation-overhead constraint | V3.0 (Round 4 commit decomposition) | §5.4.4 — Phase 1 must not introduce per-call setup that the inherent method did not have |
-| Adversarial daemon scenarios under α (reorg amplification, view-tag DoS, withholding, snapshot poisoning, evidence amplifier) | V3.0 (Round 2 / R5 / Phase 0c) | §5.4.5; mitigations folded into R5 (reorg-abort), R6 (`evidence` bounding), and Phase 0a (`LedgerSnapshot` value-typed pin) |
-| Trait-surface contract pins (`Send + Sync + 'static` on `R`; Progress-channel trust boundary) | V3.0 (Round 2; §4 Phase 0a) | §5.4.6; not residuals (no choose-between-options shape), but trait-contract prose amendments |
+| `PendingTxEngine::build` behaviour during long refresh (R1) | V3.0 (PR 5 design rounds) | §5.4.7 R1; carried into PR 5 with **build-against-current-snapshot + snapshot-ID pinning** as the working hypothesis |
+| `RefreshOptions` / `RefreshProgress` public-module promotion (R3) | **closed (Round 2)** | §5.4.7 R3 — confirmation: types already publicly re-exported at flat crate root; no module promotion |
+| View-material flow to the producer (R4) | **closed (Round 2)** | §5.4.7 R4 — disposition **(a-instance-scoped)**: `LocalRefresh::new(view_material: ViewMaterial)`; `ViewMaterial` type lands in Phase 0a |
+| Mid-scan reorg-abort at checkpoint 3 (R5) | V3.x | §5.4.7 R5 — deferred to FOLLOWUPS V3.x; trigger: hostile-daemon work-amplification measurable in RC stabilization or production telemetry |
+| `RefreshError::ConcurrentMutation` boundary (R6) | **closed (Round 2)** | §5.4.7 R6 — promote `ProduceError` to `pub`; `Cancelled` / `Io(IoError)` / `MalformedScanResult { reason: &'static str }`; `ConcurrentMutation`, `AlreadyRunning`, `ReorgTooDeep` excluded |
+| `ScanResult` atomicity-under-cancellation contract (R7) | **closed (Round 2)** | §5.4.7 R7 — already true in `engine/refresh.rs`; pinned in §2.3 prose (Phase 0a) |
+| Three call modes (cold open / steady-state / post-submit) — invocation-overhead constraint | V3.0 (Round 4 commit decomposition) | §5.4.4 — under (a-instance-scoped) the per-attempt scanner construction moves into `LocalRefresh::new`, satisfying the constraint by construction |
+| Adversarial daemon scenarios under α (reorg amplification, view-tag DoS, withholding, snapshot poisoning, evidence amplifier) | mostly closed (Round 2); reorg amplification deferred via R5 | §5.4.5; mitigations: R5 (V3.x deferral), R6 keeps `&'static str` evidence (strictly bounded), Phase 0a `LedgerSnapshot` value-typed confirmation |
+| Trait-surface contract pins (`Send + Sync + 'static` on `R`; Progress-channel trust boundary) | **closed (Round 2)** | §5.4.6; both pinned as Phase 0a prose amendments |
+| (c) split-producer/recoverer view-material shape (R4 deferral) | V3.x | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.x entry added in this commit; trigger: HW-wallet-backed signing or post-V3 threat-model refinement requires producer-side spend-key isolation |
+| `ViewMaterial` type definition (R4 — Phase 0a) | V3.0 (Round 4 / Phase 0a) | §5.4.7 R4 — public type in `shekyl_engine_core` carrying spend-pub + view-scalar + x25519-sk + ml-kem-dk + spend-secret; `Zeroize + ZeroizeOnDrop` |
 
 The table is designed to be read row-by-row as the decision-trail
 artifact for each refresh-adjacent item; reviewers landing PR 4's
@@ -951,35 +1223,37 @@ rounds resume after M3e closes.
 Round 1 closed the §5 producer-redesign disposition (α, §5.4).
 The Round 1 review pass (same date) corrected §3.1 and surfaced
 R4–R7 plus the §5.4.4 call-mode constraint, the §5.4.5 adversarial
-scenarios, and the §5.4.6 trait-surface contract pins. The
-remaining fenceposts the round-by-round revisions fill in:
+scenarios, and the §5.4.6 trait-surface contract pins. **Round 2
+(same date) settled R2 / R3 / R4 / R5 / R6 / R7 per §5.4.7.**
+Only Round 4 remains as PR-4-internal work.
 
-- §5.4.3 R1 (`PendingTxEngine::build` behaviour during long
-  refresh) — settled by PR 5's design rounds; α is *provisionally
-  load-bearing* until R1 resolves per §5.3's re-evaluation gate.
-  Working hypothesis: build-against-current-snapshot with
-  snapshot-ID pinning.
-- §5.4.3 R2 (β internal-batching: V3.x FOLLOWUPS entry vs. §2.2
-  note) — Round 2 disposition.
-- §5.4.3 R3 (`RefreshOptions` / `RefreshProgress` public-module
-  promotion) — Round 2 disposition; §4 Phase 0b candidate.
-- §5.4.3 R4 (view-material flow: constructor-bound vs. per-call
-  vs. split-producer/recoverer) — Round 2 disposition; §4
-  Phase 0a / 0b candidate. Required for §3.1's threat-model
-  framing to be literally true.
-- §5.4.3 R5 (mid-scan reorg-abort at checkpoint 3) — Round 2
-  disposition; §4 Phase 0d candidate (conditional). Discipline-budget
-  gated.
-- §5.4.3 R6 (`RefreshError::ConcurrentMutation` boundary) —
-  Round 2 disposition; §4 Phase 0c. Hygiene.
-- §5.4.3 R7 (`ScanResult` atomicity-under-cancellation contract)
-  — Round 2 prose amendment to
-  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
-  §2.3; §4 Phase 0a. Already true in
-  [`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs);
-  pinning the contract prevents future drift.
-- §4 Phase 0 amendments — populated by Round 1 review pass;
-  Round 2 finalizes against R3 / R4 / R5 / R6 dispositions.
-- §6 review checklist — depends on §4 and §6 commit decomposition.
-- §7 commit decomposition for Phase 1 — Round 4. Sequencing
-  depends on R4 per §5.4.4 invocation-overhead constraint.
+**Carried into PR 5.**
+
+- §5.4.7 R1 (`PendingTxEngine::build` behaviour during long
+  refresh) — PR 5's design rounds open with
+  *build-against-current-snapshot + snapshot-ID pinning* as the
+  working hypothesis. The α-disposition remains *provisionally
+  load-bearing*; if PR 5's R1 resolution requires γ for
+  correctness, PR 4 re-opens.
+
+**Deferred to V3.x FOLLOWUPS (named homes in
+[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)).**
+
+- §5.4.7 R5 (mid-scan reorg-abort at checkpoint 3) — V3.x
+  trigger: hostile-daemon work-amplification measurable in
+  V3.0 RC stabilization or post-genesis production telemetry.
+- §5.4.7 R4 (c) split-producer/recoverer — V3.x trigger:
+  HW-wallet-backed signing or post-V3 threat-model refinement
+  requires producer-side spend-key isolation.
+
+**Remaining for Round 4.**
+
+- §6 review checklist — fills in once Phase 0 commit
+  decomposition is known.
+- §7 commit decomposition for Phase 1 — under §5.4.7 R4
+  (a-instance-scoped) the first commit introduces `ViewMaterial`
+  and the constructor; the per-attempt scanner build moves out
+  of `run_refresh_task` and into `LocalRefresh`'s state. The
+  §5.4.4 invocation-overhead constraint is satisfied by
+  construction (no per-call setup added beyond what the
+  inherent method had).

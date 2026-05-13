@@ -815,6 +815,115 @@
   findings — none argue for β or γ. They argue for a more
   carefully-specified α. Doc-only; no Rust or C++ code touched.
 
+- **Stage 1 PR 4 — Round 2 dispositions: R2 / R3 / R4 / R5 / R6 /
+  R7 settled.** Same-day follow-up to the Round 1 review pass
+  above. Round 2 closes all seven residuals named by Round 1 +
+  the review pass; the more-carefully-specified-α frame is now
+  closed and PR 4's design surface is Phase-0-ready.
+
+  - **R1 — `PendingTxEngine::build` during long refresh.**
+    Carried into PR 5's design rounds as the working hypothesis
+    *build-against-current-snapshot + snapshot-ID pinning* — the
+    reservation tracker carries a snapshot ID per reservation;
+    the submit path becomes a CAS against
+    `current_snapshot == reservation.snapshot_id`. Of the three
+    sub-options, the only one that gives the reservation tracker
+    monotone snapshot semantics + low-latency UI without
+    serializing user input behind background work.
+  - **R2 — β internal-batching.** Stays as the §2.2 "future
+    scaling refinement" note; not promoted to FOLLOWUPS. The V3.0
+    bandwidth FOLLOWUP entry already names α's bandwidth cost;
+    V3.0 RC stabilization profiles cold-sync; if β is the right
+    remediation, promote then. Premature promotion overspecifies
+    against alternatives (daemon-side prefix matching, view-tag
+    pre-filter improvements, wallet-side prune-by-birthday).
+  - **R3 — `RefreshOptions` / `RefreshProgress` public-module
+    promotion.** Confirmation, not discovery: `RefreshOptions`,
+    `RefreshProgress`, `RefreshSummary`, `RefreshHandle`,
+    `RefreshReorgEvent`, `RefreshPhase` are already crate-publicly
+    re-exported from
+    [`shekyl_engine_core/src/lib.rs:25–30`](../rust/shekyl-engine-core/src/lib.rs)
+    at the flat crate root, matching the `DaemonEngine` /
+    `LedgerEngine` convention. Stage 4's `kameo` actor implementor
+    imports them as Stage 1 callers do today; no module promotion
+    needed.
+  - **R4 — view-material flow to the producer (load-bearing).**
+    Disposition: **(a-instance-scoped)** —
+    `LocalRefresh::new(view_material: ViewMaterial)`. New public
+    `Zeroize + ZeroizeOnDrop` type carrying `{ spend_pub,
+    view_scalar, x25519_sk, ml_kem_dk, spend_secret }` — exactly
+    the fields `build_scanner_from_keys` extracts from
+    `&AllKeysBlob` today. One `Scanner` held for `LocalRefresh`'s
+    lifetime; per-attempt cost drops to snapshot+daemon RPC
+    (no scanner construction). Stage 4 actor mailbox carries no
+    secrets. Wallet-lock semantics drop `LocalRefresh` and
+    zeroize via the existing `ZeroizeOnDrop` chain.
+    **(c) split-producer/recoverer deferred to V3.x FOLLOWUPS**
+    with trigger "HW-wallet-backed signing or post-V3 threat-
+    model refinement requires producer-side spend-key isolation."
+    (b) per-call rejected (hostile to actor migration).
+  - **R5 — mid-scan reorg-abort at checkpoint 3.** Deferred to
+    V3.x FOLLOWUPS. The per-checkpoint-3-hit `get_height` RPC
+    cost (~per-block; ~10K+/wallet-day in steady-state) is
+    non-trivial; the reorg-amplification attack is mitigated at
+    a higher layer by PR 1's `DaemonEngine` peer-rotation
+    contract; the discipline-budget cost of extending §7's
+    checkpoint discipline is non-trivial. **Trigger for V3.x:**
+    "hostile-daemon work-amplification scenarios become
+    measurable in V3.0 RC stabilization or post-genesis
+    production telemetry."
+  - **R6 — `RefreshError::ConcurrentMutation` boundary + variant
+    set.** Promote the existing crate-internal `ProduceError`
+    ([`engine/refresh.rs:202`](../rust/shekyl-engine-core/src/engine/refresh.rs))
+    to public `RefreshEngineError`; use it as
+    `RefreshEngine::Error: Into<RefreshError>`. Variant set:
+    `Cancelled`, `Io(IoError)`, `MalformedScanResult { reason:
+    &'static str }` — the existing name and bounded payload are
+    kept; the user-proposed `ScannerContractViolation { kind,
+    evidence }` rename declined for V3.0 since `&'static str` is
+    the strictest possible memory-amplifier-mitigation bound.
+    **Excluded** from producer trait error: `ConcurrentMutation`
+    (orchestrator-internal merge-gate concern), `AlreadyRunning`
+    (orchestrator-internal handle-racing concern), `ReorgTooDeep`
+    (kept as Ok-with-rewind merge-layer detection per §1.5
+    actor-identity reasoning). The trait/orchestrator split is
+    a Phase 0c spec amendment.
+  - **R7 — `ScanResult` atomicity-under-cancellation contract.**
+    Pinned in
+    [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §2.3 / §7 prose: a `produce_scan_result` call returns either
+    a `ScanResult` covering the full span scanned, or
+    `RefreshError::Cancelled`; no partial-span `ScanResult`.
+    Already true in the existing implementation per the cancel
+    checks at
+    [`engine/refresh.rs:980 / :1140 / :1186`](../rust/shekyl-engine-core/src/engine/refresh.rs);
+    the contract pin prevents future drift.
+
+  **§4 Phase 0 finalized.** Phase 0a: trait-surface contract
+  pins (`Send + Sync + 'static` on `R`; Progress-channel trust
+  boundary; `ScanResult` atomicity per R7; `LedgerSnapshot`
+  value-typed contract; `ViewMaterial` type definition per R4).
+  Phase 0b: `LocalRefresh::new(view_material: ViewMaterial)`
+  constructor + flat-crate-root export of `ViewMaterial`.
+  Phase 0c: `RefreshEngineError` promotion per R6. Phase 0d:
+  retired (R5 deferred).
+
+  **Two new V3.x FOLLOWUPS entries** in
+  [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md): R5 mid-scan reorg-abort
+  deferral; R4 (c) split-producer/recoverer deferral. Both have
+  named triggers per
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc).
+
+  **Trajectory after Round 2.** Only Round 4 remains as
+  PR-4-internal work (Phase 0 commit decomposition + §6 review
+  checklist). PR 5's design rounds carry R1 forward with the
+  snapshot-ID-pinning working hypothesis. The α-disposition's
+  *provisionally load-bearing* status remains the re-evaluation
+  gate: if PR 5's R1 resolution requires γ for correctness,
+  PR 4 re-opens; otherwise PR 4 advances directly to Round 4.
+
+  Doc-only; no Rust or C++ code touched.
+
 ### Fixed
 
 - **CI bench gate no longer false-fails on `baseline=0` capture
