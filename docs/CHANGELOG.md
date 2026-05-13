@@ -815,6 +815,86 @@
   findings — none argue for β or γ. They argue for a more
   carefully-specified α. Doc-only; no Rust or C++ code touched.
 
+- **Stage 1 PR 4 — Round 2 close-out: Phase 0c
+  `InternalInvariantViolation` + Phase 0e `DaemonOp` /
+  `ProtocolErrorKind` seed enums.** Same-day follow-up to
+  the Round 2 reframe contract-pin refinements
+  (immediately-following bullet) that resolves two items
+  the refinements had flagged as "Round 4 vs Round 2
+  hygiene" questions. Both worth settling in Round 2
+  because of downstream impact: deferring to Round 4
+  re-opens a phase Round 2 was supposed to close.
+
+  **Phase 0c amendment — `InternalInvariantViolation
+  { context: &'static str }` on the orchestrator-side
+  `RefreshError` enum.** Resolves the §5.4.7 R6
+  "(a) extend `ConcurrentMutation` or (b) introduce
+  `InternalInvariantViolation`" cleanup pin at the design
+  layer, not Round 4 commit-decomposition. The retry-loop
+  call sites at
+  [`engine/refresh.rs:1672–1680`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  and `:2055–2065` are **state-machine invariant
+  violations** ("loop body itself is broken" per the
+  existing site comments), not retry-budget exhaustion.
+  Conflating both into `ConcurrentMutation` would route
+  "wallet under sustained merge contention" (back off and
+  retry) and "wallet hit an internal bug" (report and
+  stop) through the same variant; downstream consumers
+  (`PeerReputationActor`, telemetry, user-facing error
+  surface) need the structural distinction. `&'static
+  str` for `context` is appropriate at this site —
+  compile-time-fixed developer content, not attacker-
+  influenced data; the memory-amplifier and log-
+  exfiltration vectors the producer-trait unit-variant
+  discipline closes do not apply. The variant also bounds
+  future migrations: future "state machine reached a
+  should-never-happen path" findings route here. **Round 4
+  migration target**: the two call sites migrate from
+  `MalformedScanResult { reason: "..." }` to
+  `InternalInvariantViolation { context: "..." }`; existing
+  reason strings become `context` values.
+
+  **Phase 0e seed enums — `DaemonOp` and `ProtocolErrorKind`
+  initial variant sets, audited against the producer's
+  actual call-site surface.** Two ground-truth findings:
+
+  - `DaemonOp` narrows to two variants per the
+    [`engine/refresh.rs`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    audit. The producer issues exactly two daemon RPCs:
+    `daemon.get_height()` (tip fetch; lines 1480 / 1958)
+    and `rpc.get_scannable_block_by_number(...)` (per-block
+    fetch; line 1190). Under FCMP++ with view-tag
+    pre-filtering, `get_scannable_block_by_number` returns
+    the full per-block payload; no separate `GetBlocks` /
+    `GetTransactions` / `GetOutputs` / `GetChainHashes`
+    are issued. `GetFeeEstimates` and `SubmitTransaction`
+    are `PendingTxEngine`-issued (PR 5), not refresh-issued.
+  - `ProtocolErrorKind` is **fresh-defined**, not a
+    re-export of upstream `shekyl_rpc::RpcError`. Upstream
+    `RpcError` is a flat enum carrying `String` payloads
+    in three of its eight variants (`InternalError(String)`
+    / `ConnectionError(String)` / `InvalidNode(String)`)
+    and is not a bounded re-export candidate. The producer
+    must classify upstream into the bounded enum at the
+    `RefreshDiagnostic`-emission boundary; the `String`
+    payload elision is the load-bearing classification
+    step per §5.4.7 R6's memory-amplifier closure.
+    Initial variant set seeded against the call-site-
+    reachable subset for the refresh producer:
+    `{ ConnectionError, InternalError, InvalidNode,
+    InvalidTransaction, PrunedTransaction }`. The other
+    upstream variants (`TransactionsNotFound`, `InvalidFee`,
+    `InvalidPriority`) are not reachable from refresh-issued
+    RPCs.
+
+  Round 4 commit-decomposition re-audits both seeds (the
+  audit may surface additional reachable variants the seed
+  missed, or paths the seed listed that aren't actually
+  reachable); the audit is authoritative. The seeds serve
+  as design-doc completeness and as an audit checklist.
+
+  Doc-only; no Rust or C++ code touched.
+
 - **Stage 1 PR 4 — Round 2 reframe contract-pin refinements:
   concurrent-emit clarification, producer-panic-safety property,
   and test-as-canonical-reference pin.** Same-day follow-up to

@@ -1,7 +1,9 @@
 # Stage 1 PR 4 — `RefreshEngine` extraction — design
 
 **Status.** **DRAFT — Round 1, Round 1 review pass, Round 2,
-Round 2 reframe, and Round 2 reframe follow-up (contract pins)
+Round 2 reframe, Round 2 reframe follow-up (contract pins),
+and Round 2 close-out (Phase 0c `InternalInvariantViolation`
+plus Phase 0e `DaemonOp` / `ProtocolErrorKind` seed enums)
 closed (2026-05-13).** Round 1's load-bearing
 question (§5 producer redesign) settled to **α — preserved
 current shape** per §5.4. The Round 1 review pass (2026-05-12)
@@ -95,7 +97,62 @@ emission/return coherence prose names the property test as
 making prose / test drift impossible without explicit
 re-examination. None of these re-open the reframe; they
 tighten its load-bearing contracts so the V3.x consumer-actor
-PR has the constraints it needs to design against. This document was opened in parallel with the
+PR has the constraints it needs to design against.
+
+A Round 2 close-out pass on the same day resolves two items
+the contract-pin refinements had flagged as "Round 4 vs
+Round 2 hygiene" questions, both worth settling in Round 2
+because of their downstream impact. **First, the Phase 0c
+amendment**: the orchestrator-side `RefreshError` enum gains
+`InternalInvariantViolation { context: &'static str }`,
+resolving the §5.4.7 R6 "(a) extend `ConcurrentMutation` or
+(b) introduce `InternalInvariantViolation`" cleanup pin at
+the design layer rather than at Round 4 commit-decomposition.
+The disposition is **(b)** because the retry-loop call sites
+at
+[`engine/refresh.rs:1672–1680`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+and
+[`:2055–2065`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+are state-machine invariant violations ("loop body itself is
+broken"), not retry-budget exhaustion; conflating both into
+`ConcurrentMutation` would route "wallet under sustained
+merge contention" and "wallet hit an internal bug" through
+the same variant, denying downstream consumers
+(`PeerReputationActor`, telemetry, user-facing error surface)
+the structural distinction they need to respond correctly.
+`&'static str` is appropriate at the orchestrator-internal
+site because the field carries compile-time-fixed developer
+content, not attacker-influenced data — the memory-amplifier
+and log-exfiltration vectors the producer-trait unit-variant
+discipline closes do not apply here. The variant also bounds
+future migrations: future "state machine reached a path
+marked should-never-happen" findings route here, not into
+`MalformedScanResult` or `ConcurrentMutation`. **Second, the
+Phase 0e seed enums**: `DaemonOp` and `ProtocolErrorKind`
+initial variant sets are seeded against the producer's
+actual call-site surface, with two ground-truth audit
+findings. `DaemonOp` narrows to two variants
+(`GetHeight`, `GetScannableBlockByNumber`) per the
+[`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+audit — the producer issues exactly these two daemon RPCs;
+`GetFeeEstimates` / `SubmitTransaction` belong to
+`PendingTxEngine`, not the refresh producer.
+`ProtocolErrorKind` is **fresh-defined**, not a re-export of
+upstream
+[`shekyl_rpc::RpcError`](../../rust/shekyl-oxide/shekyl-oxide/rpc/src/lib.rs);
+upstream `RpcError` carries `String` payloads in three of
+its eight variants and is not a bounded re-export candidate,
+so the producer must **classify upstream into a bounded
+enum at the diagnostic-emission boundary** before emitting.
+The `String` payload elision is the load-bearing
+classification step per §5.4.7 R6's memory-amplifier
+closure. Round 4 commit-decomposition re-audits the producer
+call sites and confirms the seed (the audit may surface
+additional reachable upstream variants the seed missed, or
+paths the seed listed that aren't actually reachable; the
+audit is authoritative).
+
+This document was opened in parallel with the
 M3c–M3e tail of Stage 1 PR 3 per the 2026-05-10 sequencing
 decision recorded in
 [`STAGE_1_PR_3_MIGRATION_PLAN.md`](./STAGE_1_PR_3_MIGRATION_PLAN.md)
@@ -373,9 +430,28 @@ per-trait pre-flight checklist:
 - [x] Round 2 dispositions (§5.4.7 — R2 / R3 / R4 / R5 / R6 / R7
       settled; R1 working hypothesis carried into PR 5,
       2026-05-12).
+- [x] Round 2 reframe (§5.4.7 R5 / R6 / §5.4.8 — two-channel
+      diagnostic-stream seam supersedes R5 "extend
+      checkpoint 3" and R6 `MalformedScanResult { reason }`
+      dispositions, 2026-05-13).
+- [x] Round 2 reframe follow-up — contract pins (§5.4.6 /
+      §5.4.7 R6 / §5.4.8 — `DiagnosticSink::emit`
+      non-blocking + emission/return coherence + recursive
+      trust-boundary + restart-amnesia detection
+      discipline, 2026-05-13).
+- [x] Round 2 reframe contract-pin refinements (§5.4.6 /
+      `DiagnosticSink` docstring — concurrent-emit
+      clarification + producer-panic-safety property +
+      test-as-canonical-reference, 2026-05-13).
+- [x] Round 2 close-out (§4 Phase 0c amendment —
+      `InternalInvariantViolation { context: &'static str
+      }`; §4 Phase 0e seeds — `DaemonOp` /
+      `ProtocolErrorKind` initial variant sets against the
+      call-site audit, 2026-05-13).
 - [x] Phase 0 spec amendments identified (§4 — populated by
       Round 1 review pass; Round 2 finalized against the
-      resolved residuals).
+      resolved residuals; Round 2 close-out extends Phase 0c
+      and seeds Phase 0e enums).
 - [ ] Phase 1 commit decomposition (§6 — pending Round 4;
       under (a-instance-scoped) the per-attempt scanner
       construction moves into `LocalRefresh::new` and the
@@ -434,21 +510,81 @@ Round 1 review pass populated this list against the seed's
   not a promotion. `ViewMaterial` exports under the same flat
   convention.
 - **Phase 0c — unit-variant `RefreshError` as trait error
-  (Round 2 reframe).** Per §5.4.7 R6 reframe: trait-level
-  `RefreshError` is **unit-variant-only** — `Cancelled` /
-  `Io` / `MalformedScanResult` — with no payload of any kind.
-  The synchronous trait return is the structural-branch
-  signal; the rich diagnostic information moves to Phase 0e
-  below. `Self::Error: Into<RefreshError>` in the trait
-  surface; orchestrator's existing `RefreshError` enum is
-  retained for backward compatibility (it adds
-  `ConcurrentMutation`, `AlreadyRunning` at the merge layer,
-  and carries `&'static str` reason content on its
-  `MalformedScanResult` variant constructed orchestrator-side
-  from the unit-variant trait tag plus orchestrator context —
-  no attacker-controlled trait payload). `ReorgTooDeep` stays
-  as Ok-with-rewind merge-layer detection per the §1.5
-  actor-identity reasoning.
+  (Round 2 reframe) + `InternalInvariantViolation` on the
+  orchestrator-side enum (Round 2 close-out, 2026-05-13).**
+  Per §5.4.7 R6 reframe: trait-level `RefreshError` is
+  **unit-variant-only** — `Cancelled` / `Io` /
+  `MalformedScanResult` — with no payload of any kind. The
+  synchronous trait return is the structural-branch signal;
+  the rich diagnostic information moves to Phase 0e below.
+  `Self::Error: Into<RefreshError>` in the trait surface;
+  orchestrator's existing `RefreshError` enum is retained
+  for backward compatibility and **extended with one new
+  variant**:
+
+  ```rust
+  pub enum RefreshError {
+      // From the trait surface (unit-variant; no payload):
+      Cancelled,
+      Io(IoError),
+      MalformedScanResult { reason: &'static str },  // orchestrator-constructed; &'static str OK at this site
+      // Orchestrator-side merge / retry layer:
+      ConcurrentMutation,
+      AlreadyRunning,
+      // Round 2 close-out (2026-05-13):
+      InternalInvariantViolation { context: &'static str },
+  }
+  ```
+
+  **Why `InternalInvariantViolation` is its own variant, not
+  an extension of `ConcurrentMutation`.** The two retry-loop
+  call sites at
+  [`engine/refresh.rs:1672–1680`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  and
+  [`:2055–2065`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  are **not** retry-budget exhaustion; the existing comments
+  at those sites are explicit: *"falling through with `None`
+  would mean the loop body itself is broken, which we
+  surface as `MalformedScanResult` so audit reads a typed
+  contract failure rather than silent retry exhaustion."*
+  The unreached-invariant case is structurally distinct from
+  the retry-budget-exhausted case (which is a legitimate
+  `ConcurrentMutation` exhaustion, properly retryable at a
+  higher level). Routing both through `ConcurrentMutation`
+  would conflate "wallet is under sustained merge contention
+  — back off and retry the user action" with "wallet hit
+  an internal state-machine bug — please report and stop";
+  downstream consumers (telemetry; future
+  `PeerReputationActor`; future user-facing error surface)
+  need different responses for the two cases. The variant
+  separation is correctness-preserving, not stylistic.
+
+  **Why `context: &'static str` is appropriate at this
+  site.** The unit-variant discipline on the producer trait
+  surface (Phase 0c trait-level `RefreshError`) was about
+  closing the memory-amplifier and log-exfiltration vectors
+  on attacker-influenced data per §5.4.7 R6. Neither vector
+  applies to `InternalInvariantViolation::context`: the
+  field is **compile-time-fixed developer content** at the
+  orchestrator-internal call site — no daemon input flows
+  in, no attacker-controllable string ever lands here. The
+  `&'static str` preserves the existing developer-diagnostic
+  content from the two current call sites (the comments
+  cited above) as the migration target without information
+  loss.
+
+  **Future-proofing.** Any future orchestrator-internal
+  "state machine reached a path the developer marked as
+  'should never happen'" path routes here, not through
+  `MalformedScanResult` or `ConcurrentMutation`. The
+  variant exists categorically — the retry-loop-exhaustion
+  sites are the immediate Round 4 migration target, but
+  the variant bounds future migrations: future similar
+  findings have a structurally-correct home rather than
+  re-litigating where they belong.
+
+  `ReorgTooDeep` stays as Ok-with-rewind merge-layer
+  detection per the §1.5 actor-identity reasoning.
 - **Phase 0d — retired (Round 2 reframe).** The Round 1-review-pass
   conditional candidate "checkpoint 3 extension for
   mid-scan reorg-abort" is **not landing in PR 4** and **not
@@ -486,6 +622,85 @@ Round 1 review pass populated this list against the seed's
     V3.x's actor-mesh PR.
   - Flat-crate-root export under the existing
     `shekyl_engine_core` convention (R3 pattern).
+
+  **Initial variant sets (Round 2 close-out seeding,
+  2026-05-13; design-doc-completeness gain per the
+  `#[non_exhaustive]` additive-growth discipline; Round 4
+  commit-decomposition audit confirms).**
+
+  `DaemonOp` — narrowed by the call-site audit. The producer
+  issues exactly two daemon RPCs per
+  [`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs):
+  `daemon.get_height()` (lines 1480 / 1958; tip fetch at
+  top-of-attempt and post-tip-fetch fork detection) and
+  `rpc.get_scannable_block_by_number(...)` (line 1190;
+  per-block fetch of the scannable payload). No separate
+  `GetBlocks` plural, no `GetTransactions`, no `GetOutputs`,
+  no `GetChainHashes` — under FCMP++ with view-tag
+  pre-filtering, the scannable-block RPC returns the full
+  per-block payload the producer needs. Variants:
+
+  ```rust
+  #[non_exhaustive]
+  pub enum DaemonOp {
+      GetHeight,
+      GetScannableBlockByNumber,
+  }
+  ```
+
+  `GetFeeEstimates` and `SubmitTransaction` (the two
+  `DaemonEngine`-extension methods on
+  [`engine/traits/daemon.rs`](../../rust/shekyl-engine-core/src/engine/traits/daemon.rs))
+  are **not** producer-issued and therefore not part of
+  the refresh-producer's `DaemonOp` surface; they belong
+  to PR 5's `PendingTxEngine`. If a future PR extends the
+  diagnostic stream to cover `PendingTxEngine` ops, it
+  either grows `DaemonOp` additively per `#[non_exhaustive]`
+  or defines its own per-engine `DaemonOp` analogue.
+
+  `ProtocolErrorKind` — fresh-define (not re-export), seeded
+  against the call-site-reachable upstream
+  [`shekyl_rpc::RpcError`](../../rust/shekyl-oxide/shekyl-oxide/rpc/src/lib.rs)
+  subset. The upstream `RpcError` is a flat enum carrying
+  `String` payloads in three of its eight variants
+  (`InternalError(String)` / `ConnectionError(String)` /
+  `InvalidNode(String)`), which makes it not a bounded
+  re-export candidate — the producer must **classify
+  upstream into a bounded enum at the diagnostic-emission
+  boundary** before emitting. The classification responsibility
+  lives on the producer, not on `DaemonEngine`. Variants
+  (call-site-reachable for the refresh producer; the audit
+  refines):
+
+  ```rust
+  #[non_exhaustive]
+  pub enum ProtocolErrorKind {
+      ConnectionError,       // RpcError::ConnectionError; transport failure
+      InternalError,         // RpcError::InternalError; daemon-side failure (string payload elided)
+      InvalidNode,           // RpcError::InvalidNode; daemon protocol violation
+      InvalidTransaction,    // RpcError::InvalidTransaction; transaction within scannable block malformed
+      PrunedTransaction,     // RpcError::PrunedTransaction; pruned transaction in scannable block (unsupported)
+  }
+  ```
+
+  `RpcError::TransactionsNotFound` / `InvalidFee` /
+  `InvalidPriority` are **not** reachable from refresh-issued
+  RPCs (`get_height` / `get_scannable_block_by_number`);
+  they surface on transaction-explicit-fetch / fee /
+  priority paths owned by `PendingTxEngine`. If those paths
+  ever produce `RefreshDiagnostic` events the variant set
+  grows additively. The string-payload elision is the
+  load-bearing classification step — `String` payloads must
+  not flow into the diagnostic stream per §5.4.7 R6's
+  memory-amplifier-vector closure.
+
+  **Round 4 audit confirms.** The variant sets above are
+  Round-2-design-doc-completeness seeds, not Round-4-audit
+  outputs. Round 4 commit decomposition re-audits the
+  producer's actual call sites (the audit may surface
+  additional reachable `RpcError` variants the seed missed,
+  or paths the seed listed that aren't actually reachable);
+  the audit is authoritative.
 
 ---
 
@@ -1827,25 +2042,55 @@ composition.
     residual is produced by daemon data the apply loop
     consumed).
 
-  **Non-daemon-attributable variants — Round 4
-  cleanup-required.** The current
+  **Non-daemon-attributable variants — Round 2 close-out
+  resolved (2026-05-13).** The current
   [`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
   retry-loop call sites also use `MalformedScanResult {
   reason: "...retry loop exited without an observed
-  ConcurrentMutation" }` (lines 1678–1680, 2061–2064) for
+  ConcurrentMutation" }` (lines 1672–1680, 2055–2065) for
   an orchestrator-internal state-machine exhaustion
-  failure that is **not** daemon-attributable. Under the
-  Round 2 reframe these no longer fit `MalformedScanResult`'s
-  "peer rotation decision needed" structural branch; the
-  Round 4 commit-decomposition pass either (a) routes
-  these through the orchestrator-side error path
-  (`RefreshError::ConcurrentMutation` exhaustion variant
-  with internal-state-machine semantics), or (b)
-  introduces an `InternalInvariantViolation` orchestrator
-  variant. **Not** a Phase 0e blocker — the call sites are
-  orchestrator-side, not on the producer trait surface —
-  but pinned here so Round 4 has the cleanup item
-  recorded.
+  failure that is **not** daemon-attributable. The
+  existing comments at those sites are explicit:
+  *"falling through with `None` would mean the loop body
+  itself is broken, which we surface as
+  `MalformedScanResult` so audit reads a typed contract
+  failure rather than silent retry exhaustion."* This is
+  a **state-machine invariant violation** — the
+  "should-never-happen" path the loop took where neither
+  the retry success nor the `ConcurrentMutation` signal it
+  was retrying against was observed — not a retry-budget
+  exhaustion (which is the legitimate
+  `last_concurrent_mutation` case that exhausts cleanly
+  through the orchestrator's `ConcurrentMutation` path).
+
+  Under the Round 2 reframe these no longer fit
+  `MalformedScanResult`'s "peer rotation decision needed"
+  structural branch. **Round 2 close-out resolves the
+  disposition: route through
+  `RefreshError::InternalInvariantViolation { context:
+  &'static str }`** (Phase 0c amendment, 2026-05-13). The
+  alternative of extending `ConcurrentMutation` to carry
+  the unreached-invariant case was rejected because it
+  conflates two semantically distinct failure modes
+  (retry-budget exhaustion vs. state-machine invariant
+  violation) into one variant — downstream consumers
+  (telemetry, future `PeerReputationActor`, future
+  user-facing error surface) need different responses for
+  the two cases (merge-contention back-off vs.
+  wallet-bug report-and-stop). The variant separation is
+  correctness-preserving routing, not stylistic
+  decomposition. See Phase 0c (§4) for the full rationale.
+
+  **Round 4 commit-decomposition migration target.** The
+  two call sites at
+  [`engine/refresh.rs:1678–1680`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  and
+  [`:2061–2064`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  migrate from `MalformedScanResult { reason: "..." }` to
+  `InternalInvariantViolation { context: "..." }` with
+  the existing reason strings becoming the `context`
+  values. No structural ambiguity at the commit-author's
+  desk; the disposition is resolved at the design layer.
 
   **`#[non_exhaustive]` discipline.** The `RefreshDiagnostic`,
   `MalformedKind`, `DaemonOp`, and `ProtocolErrorKind` enums
@@ -2208,8 +2453,9 @@ for PR 4's scope: every item has a named home.
 | `RefreshOptions` / `RefreshProgress` public-module promotion (R3) | **closed (Round 2)** | §5.4.7 R3 — confirmation: types already publicly re-exported at flat crate root; no module promotion |
 | View-material flow to the producer (R4) | **closed (Round 2)** | §5.4.7 R4 — disposition **(a-instance-scoped)**: `LocalRefresh::new(view_material: ViewMaterial)`; `ViewMaterial` type lands in Phase 0a |
 | Mid-scan reorg-abort at checkpoint 3 (R5) | **retired by composition (Round 2 reframe)** | §5.4.7 R5 (reframe) — resolved by `ReorgAmplificationDetector` actor consuming `RefreshDiagnostic::ReorgObserved` events; producer's §7 checkpoint discipline does not grow; consumer-actor implementation deferred to V3.x actor-mesh PR. Supersedes Round 2's first-pass "defer + extend checkpoint 3" disposition |
-| `RefreshError` shape (R6) | **reframed (Round 2 reframe)** | §5.4.7 R6 (reframe) — two-channel: unit-variant `RefreshError` (`Cancelled` / `Io` / `MalformedScanResult`; no payload) + `RefreshDiagnostic` event stream + `DiagnosticSink` trait. Supersedes Round 2's first-pass `MalformedScanResult { reason: &'static str }` disposition; closes the memory-amplifier vector by construction |
+| `RefreshError` shape (R6) | **reframed (Round 2 reframe) + close-out (2026-05-13)** | §5.4.7 R6 (reframe) — two-channel: unit-variant trait `RefreshError` (`Cancelled` / `Io` / `MalformedScanResult`; no payload) + `RefreshDiagnostic` event stream + `DiagnosticSink` trait. Orchestrator-side enum extends with `InternalInvariantViolation { context: &'static str }` per the Round 2 close-out (Phase 0c amendment) — separates state-machine invariant violation from retry-budget exhaustion (vs. conflating into `ConcurrentMutation`). Supersedes Round 2's first-pass `MalformedScanResult { reason: &'static str }` disposition; closes the memory-amplifier vector by construction; Round 4 cleanup target resolved at the design layer |
 | `RefreshDiagnostic` + `DiagnosticSink` (Round 2 reframe; Phase 0e) | V3.0 (Phase 0e) | §5.4.7 R6 (reframe), §4 Phase 0e — enum + trait + `produce_scan_result` signature change; Stage 1 sinks: `NoopDiagnosticSink`, `TracingDiagnosticSink` |
+| `DaemonOp` + `ProtocolErrorKind` initial variant sets (Round 2 close-out seeding, 2026-05-13) | V3.0 (Phase 0e seed; Round 4 audit confirms) | §4 Phase 0e — `DaemonOp` narrowed to `{ GetHeight, GetScannableBlockByNumber }` by call-site audit against `engine/refresh.rs` (producer issues exactly these two RPCs); `ProtocolErrorKind` fresh-defined (not a re-export — upstream `shekyl_rpc::RpcError` carries `String` payloads in 3/8 variants and is not bounded) and seeded against call-site-reachable upstream subset: `{ ConnectionError, InternalError, InvalidNode, InvalidTransaction, PrunedTransaction }`. `String` payload elision is the load-bearing producer-side classification step (per §5.4.7 R6 memory-amplifier closure). Round 4 commit-decomposition audit is authoritative |
 | Diagnostic-stream attack surfaces (peer-reputation fingerprint; PeerId stability under Tor/I2P; rotation-timing side-channel; covert-channel; mailbox saturation) | V3.0 trait pin + V3.x consumer-side enforcement | §5.4.8 (Round 2 reframe) — mitigation pins land in Phase 0a / Phase 0e prose; consumer-side enforcement (in-memory-only reputation, jittered rotation, projection-only cross-boundary consumers, bounded mailboxes) lands in V3.x actor-mesh PR |
 | `ReorgAmplificationDetector` consumer actor | V3.x | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.x entry added in this commit; trigger: when Stage 4 actor mesh stabilizes |
 | `PeerReputationActor` consumer actor (fail2ban-style intra-session) | V3.x | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.x entry added in this commit; trigger: when Stage 4 actor mesh stabilizes; per §5.4.8 #1 mitigation pin (in-memory only, drop on wallet close) |
@@ -2267,7 +2513,16 @@ scenarios, and the §5.4.6 trait-surface contract pins. Round 2
 (2026-05-12) settled R1 / R2 / R3 / R4 / R7 cleanly. **Round 2
 reframe (2026-05-13) supersedes Round 2's R5 and R6 dispositions**
 with the two-channel actor-mesh shape (§5.4.7 R5 reframe, R6
-reframe, §5.4.8 attack surfaces). Only Round 4 remains as
+reframe, §5.4.8 attack surfaces). The Round 2 reframe follow-up
+(2026-05-13) pinned the `DiagnosticSink` contract pins
+(non-blocking, emission/return coherence, recursive
+trust-boundary, restart-amnesia); the contract-pin
+refinements (2026-05-13) added
+concurrent-emit, producer-panic-safety, and test-as-canonical-
+reference. **Round 2 close-out (2026-05-13)** extends Phase 0c
+with `InternalInvariantViolation { context: &'static str }` and
+seeds Phase 0e's `DaemonOp` / `ProtocolErrorKind` initial variant
+sets against the call-site audit. Only Round 4 remains as
 PR-4-internal work.
 
 **Carried into PR 5.**
@@ -2319,3 +2574,20 @@ PR-4-internal work.
   robustness across panicking `emit` calls (`Scanner`
   zeroization, cancellation-token consistency, unwind
   without corruption).
+- §7 retry-loop-exhaustion call-site migration — the two
+  call sites at
+  [`engine/refresh.rs:1678–1680`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  and
+  [`:2061–2064`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  migrate from `MalformedScanResult { reason: "..." }` to
+  `InternalInvariantViolation { context: "..." }` per the
+  Round 2 close-out Phase 0c amendment. The existing reason
+  strings become the `context` values; no structural
+  ambiguity at the commit-author's desk.
+- §7 producer-side classification of upstream
+  `shekyl_rpc::RpcError` into `ProtocolErrorKind` — the
+  classification site is at the `RefreshDiagnostic`-emission
+  boundary inside `LocalRefresh::produce_scan_result`; the
+  call-site audit confirms the seed `ProtocolErrorKind`
+  variant set (or refines it). String payloads from upstream
+  must not flow into the diagnostic stream.
