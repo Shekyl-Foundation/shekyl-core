@@ -815,6 +815,122 @@
   findings — none argue for β or γ. They argue for a more
   carefully-specified α. Doc-only; no Rust or C++ code touched.
 
+- **Stage 1 PR 4 — Round 2 reframe follow-up: `DiagnosticSink`
+  contract pins and §5.4.8 refinements.** Follow-up to the
+  Round 2 reframe (immediately-following bullet) that pins
+  load-bearing contracts the V3.x consumer-actor PR would
+  otherwise have to re-derive from first principles, and
+  tightens two §5.4.8 attack-surface dispositions whose
+  Round 2 framing was correct but underspecified.
+
+  **Two contract pins added at §5.4.6 / §5.4.7 R6 / Phase 0e
+  docstring.**
+  - **Non-blocking `emit` contract.** `DiagnosticSink::emit`
+    MUST NOT block. Implementations use `try_send`-shaped
+    semantics; on a full bounded channel, unavailable
+    consumer, or any other back-pressure condition, `emit`
+    drops the event silently and returns promptly. Pinned
+    to close the producer-liveness hazard: a blocked sink
+    would pin the producer at the emission call holding the
+    Scanner's spend material and would block observation of
+    the cancellation token at checkpoints 2 and 3 —
+    defeating both the §5.4.4 invocation-overhead
+    constraint and the §3.1 wallet-lock-latency property.
+    Without the trait-surface pin, a hostile or buggy
+    consumer-actor sink in V3.x can introduce the hazard
+    post-hoc with no structural reason for the consumer-
+    actor author to know they did.
+  - **Emission/return coherence contract.** `RefreshEngine`
+    implementations MUST emit at least one corresponding
+    `RefreshDiagnostic` event to the sink for every
+    non-`Cancelled` `RefreshError` returned, before
+    returning the error. Pinned to close the silent-error
+    failure mode (orchestrator rotates peer with no
+    telemetry; reputation actor blind) and the phantom-error
+    failure mode (telemetry attributes a defect to a peer
+    but the wallet then merges that peer's scan result as
+    authoritative). Both fail open at the type-system
+    level; only a contract pin closes them. Phase 1
+    delivers a property-test CI invariant: an
+    `AssertionSink` wraps `LocalRefresh` and asserts
+    coherence on fuzzed inputs (Round 4 test-design
+    deliverable).
+
+  **§5.4.8 #1 — restart-amnesia named explicitly as a
+  deliberate threat-model consequence.** The no-persistence
+  posture is correct privacy-first, but an adversary who can
+  observe or trigger wallet restarts (process kill,
+  RPC-daemon restart, scheduled rotation, OOM, user
+  quit-and-restart cycles) can rate-limit hostile behavior
+  to evade reputation accumulation. **Pinned forward to the
+  V3.x consumer-actor PR design:** detection logic is
+  **coarse-window-based**, not credit-history-based; no
+  "trust accumulation" over time. Forecloses the
+  evasion-via-restart-cycle and the dual evasion-via-trust-
+  accumulation patterns. Binding on `PeerReputationActor`
+  and `ViewTagAnomalyDetector` design.
+
+  **§5.4.8 #4 — trust-boundary framing re-phrased
+  recursively.** The current text targeted obvious
+  network-bound consumers (analytics, crash reporters,
+  remote tracing); the subtler case is the *in-process
+  aggregator-republisher* — a consumer in-process by
+  topology but trust-boundary-crossing by publication
+  (metrics-export actors with HTTP endpoints, debug UI
+  actors over IPC, logger actors writing files collected by
+  remote infrastructure, developer-mode flags dumping to
+  off-host log collectors). The principle reframed: full-
+  fidelity events flow only to actors whose **external
+  surface is itself inside the wallet trust boundary,
+  recursively**. The recursion creates a continuous audit
+  obligation that binds on every PR touching the consumer-
+  actor topology, anchored procedurally to
+  `19-validation-surface-discipline.mdc`.
+
+  **Phase 0e seed — `MalformedKind` initial variants
+  recorded.** Six daemon-attributable variants
+  (`NonEmptyForEmptyRange`, `RangeLengthMismatch`,
+  `RangeMembershipViolation`, `DuplicateHeight`,
+  `MissingHeightEntry`, `ResidualAfterApply`) covering the
+  current `MalformedScanResult { reason: &'static str }`
+  call sites in `engine/merge.rs` and `engine/refresh.rs`,
+  so the unit-variant migration has a straightforward
+  mapping at Round 4 commit decomposition. Non-daemon-
+  attributable call sites (the retry-loop-exhaustion
+  reasons in `engine/refresh.rs:1678–1680` and
+  `:2061–2064`) are flagged for Round 4 cleanup — they
+  don't belong on `MalformedScanResult`'s "peer rotation
+  decision needed" structural branch.
+
+  **Variant-ordering / serialization forward-note.** Under
+  the §5.4.6 / §5.4.8 #4 in-process trust-boundary pin, the
+  diagnostic stream is not serialized to any stable external
+  format and variant ordering is not load-bearing; the
+  `#[non_exhaustive]` attribute preserves additive evolution.
+  The note exists for a hypothetical future PR that records
+  diagnostic streams to disk for test replay — at that
+  point, on-disk-format stability becomes load-bearing and
+  the additive-evolution discipline acquires a backward-
+  compatibility constraint. **No PR 4 action required;** the
+  note is forward-recorded so the future PR has the
+  constraint named.
+
+  **FOLLOWUPS amendments.**
+  - Added `ViewTagAnomalyDetector` V3.x entry with the
+    explicit producer-side dependency: before the detector
+    lands, the producer must grow a `ViewTagFalsePositive
+    { observed_rate, expected_rate }` (or equivalent)
+    variant. `#[non_exhaustive]` makes the addition
+    additive without trait-surface revision.
+  - Extended the diagnostic-stream spec-doc FOLLOWUPS entry
+    (`docs/design/REFRESH_DIAGNOSTIC_STREAM.md`) to record
+    the four binding contract pins (non-blocking,
+    coherence, recursive trust-boundary, restart-amnesia
+    detection discipline) as load-bearing spec content that
+    consumer-actor PRs reference rather than re-deriving.
+
+  Doc-only; no Rust or C++ code touched.
+
 - **Stage 1 PR 4 — Round 2 reframe: diagnostic-stream seam
   supersedes Round 2 first-pass R5 / R6 dispositions.** This
   bullet supersedes the immediately-following bullet's R5 and

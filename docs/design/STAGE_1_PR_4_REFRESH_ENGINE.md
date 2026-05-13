@@ -1,7 +1,8 @@
 # Stage 1 PR 4 — `RefreshEngine` extraction — design
 
 **Status.** **DRAFT — Round 1, Round 1 review pass, Round 2,
-and Round 2 reframe closed (2026-05-13).** Round 1's load-bearing
+Round 2 reframe, and Round 2 reframe follow-up (contract pins)
+closed (2026-05-13).** Round 1's load-bearing
 question (§5 producer redesign) settled to **α — preserved
 current shape** per §5.4. The Round 1 review pass (2026-05-12)
 corrected §3.1's materially-wrong "no secret-touching surface"
@@ -46,7 +47,31 @@ seam now (modest additional surface — one parameter, one enum,
 one trait) and defers only the consumer implementations,
 unlocking composable security policies, fail2ban-style
 intra-session mitigation, pattern-based recovery, and natural
-R5 resolution in V3.x without re-opening PR 4's trait surface. This document was opened in parallel with the
+R5 resolution in V3.x without re-opening PR 4's trait surface.
+
+The same-day follow-up pass (recorded in §5.4.6 / §5.4.7 R6 /
+§5.4.8 amendments) pins **two load-bearing contracts** that
+the V3.x consumer-actor PR would otherwise have to re-derive
+from first principles: (1) `DiagnosticSink::emit` is
+non-blocking (closes the producer-liveness hazard a hostile
+or buggy consumer sink could otherwise introduce), and (2)
+emission/return coherence (closes the silent-error and
+phantom-error failure modes the unit-variant trait return
+cannot rule out at the type-system level). The follow-up
+also names restart-amnesia as a deliberate threat-model
+consequence pinned forward to the consumer-actor PR's design
+discipline (coarse-window detection, not credit-history-based),
+broadens the §5.4.8 #4 trust-boundary framing to recursively
+include in-process aggregator-republisher actors, and seeds
+the Phase 0e `MalformedKind` initial variant set against the
+existing daemon-attributable
+[`MalformedScanResult { reason: &'static str }`](../../rust/shekyl-engine-core/src/engine/merge.rs)
+call sites. The doc captures the kind of pins that get
+caught at external-audit time if not pinned now —
+"what happens if `emit` blocks?" and "what guarantees
+correspondence between the synchronous error and the
+diagnostic event?" are auditor questions the design answers
+ahead of time rather than post-hoc. This document was opened in parallel with the
 M3c–M3e tail of Stage 1 PR 3 per the 2026-05-10 sequencing
 decision recorded in
 [`STAGE_1_PR_3_MIGRATION_PLAN.md`](./STAGE_1_PR_3_MIGRATION_PLAN.md)
@@ -1054,19 +1079,90 @@ against and Stage 4 has the property to wrap around.
 
   **Pin.** The trait contract states that
   `DiagnosticSink::emit` consumers handling full-fidelity
-  events **must** be inside the wallet trust boundary. PR 4
-  refuses to design the diagnostic-stream surface around the
-  case where they are not. Stage 4's actor topology design
-  must respect this; the trait-contract pin exists so Stage 4
-  cannot accidentally cross the boundary by routing
-  `RefreshDiagnostic` events through a less-trusted actor
-  (e.g., a remote crash reporter, a telemetry pipeline with
-  network sinks, or a tracing infrastructure with off-host
-  storage).
+  events **must** be inside the wallet trust boundary,
+  **recursively** — see §5.4.8 #4 for the recursive framing
+  that closes the in-process-aggregator-republisher hazard.
+  PR 4 refuses to design the diagnostic-stream surface
+  around the case where they are not. Stage 4's actor
+  topology design must respect this; the trait-contract pin
+  exists so Stage 4 cannot accidentally cross the boundary
+  by routing `RefreshDiagnostic` events through a
+  less-trusted actor (e.g., a remote crash reporter, a
+  telemetry pipeline with network sinks, a tracing
+  infrastructure with off-host storage, or an in-process
+  actor that re-exports diagnostic state via a
+  trust-boundary-crossing surface).
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
   §2.3 prose amendment in Phase 0a. Enforceable by review,
   not by the type system — Stage 4's review checklist
   includes the per-consumer trust-boundary audit.
+- **`DiagnosticSink::emit` non-blocking pin (Round 2 reframe
+  follow-up).** `DiagnosticSink::emit` **MUST NOT block** the
+  calling task. Implementations use `try_send`-shaped
+  semantics; on a full bounded channel, an unavailable
+  consumer, or any other back-pressure condition, `emit`
+  drops the event silently and returns promptly. The drop
+  policy is the implementation's choice per §5.4.8 #5's
+  taxonomy. **Rationale (pre-flight, per
+  [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+  "what does this deliver against the threat model?").**
+  Without the pin, a hostile or buggy consumer-actor sink
+  implementation in V3.x can saturate its mailbox and pin
+  the producer at the emission call. The producer holds the
+  `Scanner`'s spend material across the pin, and the
+  cancellation token at checkpoints 2 and 3 is not observed
+  for the duration of the block. This compromises both the
+  §5.4.4 invocation-overhead constraint and the §3.1
+  wallet-lock-latency property — a blocked producer is a
+  producer that cannot honor the four-checkpoint discipline.
+  Pinning the non-blocking contract at the trait surface
+  closes the hazard before any consumer-actor PR can
+  introduce it. Phase 0e docstring amendment on the
+  `DiagnosticSink` trait definition; binding on all V3.x
+  consumer-actor sink implementations.
+- **Emission/return coherence pin (Round 2 reframe
+  follow-up).** `RefreshEngine` implementations **MUST**
+  emit at least one corresponding `RefreshDiagnostic` event
+  to the sink for every non-`Cancelled` `RefreshError`
+  returned from `produce_scan_result`, **before** returning
+  the error. The diagnostic event carries the structured
+  information that the unit-variant error elides;
+  consumer actors rely on this coherence to attribute
+  synchronous errors to their detection context. **Failure
+  modes the pin closes** (both fail open at the type-system
+  level, both are silent without the pin):
+  - **Silent error.** Implementation returns
+    `Err(RefreshError::MalformedScanResult)` without
+    emitting `RefreshDiagnostic::DaemonMalformed`.
+    Orchestrator rotates peer per the structural branch
+    table; reputation actor never learns what triggered
+    the rotation; recovery actor sees no pattern;
+    observability is blind. The unit-variant trait return
+    is *only* useful to the orchestrator when it is paired
+    with the structured event the diagnostic stream
+    carries.
+  - **Phantom error.** Implementation emits
+    `DaemonMalformed` but returns `Ok(scan_result)`.
+    Reputation actor decrements peer trust; orchestrator
+    merges the scan result; the wallet treats a peer the
+    reputation system considers untrustworthy as
+    authoritative for the merge. The diagnostic event is
+    *only* meaningful to consumer actors when it is paired
+    with the synchronous outcome it attributes itself to.
+
+  **Round 4 / Phase 1 candidate.** A property-test-shaped CI
+  invariant wraps `LocalRefresh` with an `AssertionSink`
+  that records every `emit` call; the test asserts coherence
+  on fuzzed inputs — for each `produce_scan_result` call,
+  any non-`Cancelled` `Err` return is preceded by at least
+  one corresponding `RefreshDiagnostic` emission, and no
+  `RefreshDiagnostic::DaemonMalformed` (or other
+  error-class-attributed) event is followed by an `Ok`
+  return. The property is enforceable by review and by the
+  property test; the type system cannot enforce it
+  directly. Phase 0a §2.3 prose pin; Phase 1 test design
+  records the property-test invariant as a Round-4
+  commit-decomposition deliverable.
 
 ### §5.4.7 Round 2 dispositions — R2–R7 settled (2026-05-12)
 
@@ -1398,13 +1494,49 @@ pub enum RefreshDiagnostic {
 /// logger), each subscribing to the events it cares about
 /// with its own per-consumer trust posture.
 ///
+/// **Non-blocking contract (§5.4.6 pin).** `emit` **MUST NOT
+/// block** the calling task. Implementations use
+/// `try_send`-shaped semantics: on a full bounded channel,
+/// an unavailable consumer, or any other back-pressure
+/// condition, `emit` drops the event silently and returns
+/// promptly. The drop policy per consumer is the
+/// implementation's choice (per §5.4.8 #5's bounded-
+/// mailbox-with-overflow-policy taxonomy: drop-oldest for
+/// diagnostics consumers; aggregate-on-overflow for
+/// reputation; event-sequence-aware drop for recovery), but
+/// the producer-side guarantee is that the sink cannot
+/// compromise producer liveness regardless of which
+/// consumer is misbehaving. **Rationale.** A blocked `emit`
+/// would pin the producer task at the emission call site
+/// holding the `Scanner`'s spend material, and would block
+/// observation of the cancellation token at checkpoints 2
+/// and 3 — defeating both the §5.4.4 invocation-overhead
+/// constraint and the §3.1 wallet-lock-latency property.
+/// The non-blocking contract closes this hazard at the
+/// trait surface so no consumer-actor implementation can
+/// introduce it post-hoc.
+///
 /// **Trust-boundary contract (§3.1, §5.4.6 pin).** Sink
 /// implementations route full-fidelity events only to
 /// in-process consumers inside the wallet trust boundary.
-/// Cross-process or network-bound consumers receive only
-/// projection types that have been explicitly sanitized at
-/// the boundary. This is the production/debug-log-separation
-/// principle applied at the messaging layer.
+/// Cross-process or network-bound consumers — *including
+/// in-process aggregator-republisher actors whose external
+/// surface crosses the boundary*, per §5.4.8 #4 — receive
+/// only projection types that have been explicitly
+/// sanitized at the boundary. This is the production/debug-
+/// log-separation principle applied at the messaging layer.
+///
+/// **Emission/return coherence contract (§5.4.6 pin).**
+/// `RefreshEngine` implementations **MUST** emit at least
+/// one corresponding `RefreshDiagnostic` event to the sink
+/// for every non-`Cancelled` `RefreshError` returned from
+/// `produce_scan_result`, *before* returning the error.
+/// The diagnostic event carries the structured information
+/// that the unit-variant error elides; consumer actors
+/// rely on this coherence to attribute synchronous errors
+/// to their detection context. See §5.4.7 R6 for the
+/// silent-error and phantom-error failure modes this
+/// closes.
 pub trait DiagnosticSink: Send + Sync + 'static {
     fn emit(&self, event: RefreshDiagnostic);
 }
@@ -1494,15 +1626,79 @@ composition.
   `TracingDiagnosticSink` (route to `tracing::event!`)
   satisfy Stage 1; the actor-mesh sink lands in V3.x.
 
+  **`MalformedKind` initial variant set (Phase 0e seed).**
+  The variants below cover the daemon-attributable
+  `MalformedScanResult` call sites currently in
+  [`engine/merge.rs`](../../rust/shekyl-engine-core/src/engine/merge.rs)
+  (the merge-gate contract-violation checks) and
+  [`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  (the producer-side `find_fork_point` / scan-loop
+  contract checks). Each variant corresponds to a current
+  `reason: &'static str` cluster, so the unit-variant
+  migration has a straightforward mapping:
+  - `NonEmptyForEmptyRange` — `block_hashes` /
+    `new_transfers` / `spent_key_images` non-empty for an
+    empty `processed_height_range`.
+  - `RangeLengthMismatch` — `processed_height_range`
+    length exceeds `usize`, or `block_hashes` length
+    disagrees with the range length.
+  - `RangeMembershipViolation` — `block_hashes` /
+    `new_transfers` / `spent_key_images` entry outside
+    `processed_height_range`.
+  - `DuplicateHeight` — `block_hashes` contains a
+    duplicate height entry.
+  - `MissingHeightEntry` — `block_hashes` missing an entry
+    for a processed height.
+  - `ResidualAfterApply` — `block_hashes` /
+    `new_transfers` / `spent_key_images` left residual
+    entries after the per-height apply loop (apply-loop
+    invariant violation, daemon-attributable since the
+    residual is produced by daemon data the apply loop
+    consumed).
+
+  **Non-daemon-attributable variants — Round 4
+  cleanup-required.** The current
+  [`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  retry-loop call sites also use `MalformedScanResult {
+  reason: "...retry loop exited without an observed
+  ConcurrentMutation" }` (lines 1678–1680, 2061–2064) for
+  an orchestrator-internal state-machine exhaustion
+  failure that is **not** daemon-attributable. Under the
+  Round 2 reframe these no longer fit `MalformedScanResult`'s
+  "peer rotation decision needed" structural branch; the
+  Round 4 commit-decomposition pass either (a) routes
+  these through the orchestrator-side error path
+  (`RefreshError::ConcurrentMutation` exhaustion variant
+  with internal-state-machine semantics), or (b)
+  introduces an `InternalInvariantViolation` orchestrator
+  variant. **Not** a Phase 0e blocker — the call sites are
+  orchestrator-side, not on the producer trait surface —
+  but pinned here so Round 4 has the cleanup item
+  recorded.
+
+  **`#[non_exhaustive]` discipline.** The `RefreshDiagnostic`,
+  `MalformedKind`, `DaemonOp`, and `ProtocolErrorKind` enums
+  are all `#[non_exhaustive]` so the V3.x consumer-actor PR
+  can grow the variant set additively. The
+  `ViewTagAnomalyDetector` is the immediate forward-driver:
+  before the detector lands, the producer's per-block scan
+  loop must grow a `ViewTagFalsePositive { observed_rate,
+  expected_rate }` (or equivalent) variant — see the
+  `ViewTagAnomalyDetector` FOLLOWUPS entry added in this
+  commit for the explicit producer-side dependency.
+
 Phase 1's commit decomposition (Round 4) sequences these
 amendments: the unit-variant `RefreshError` and the
 `DiagnosticSink` parameter on `produce_scan_result` land in
 the same commit as a coupled signature change; the
 `RefreshDiagnostic` enum's initial variant set lands
-adjacent; the consumer-side actors (`PeerReputationActor`,
-`RecoveryActor`, `ReorgAmplificationDetector`) land in the
-V3.x actor-mesh PR per the FOLLOWUPS entries added in this
-commit.
+adjacent; the property-test invariant for the emission/return
+coherence pin (per §5.4.6) lands as a Round-4
+test-design deliverable wrapped with an `AssertionSink`;
+the consumer-side actors (`PeerReputationActor`,
+`RecoveryActor`, `ReorgAmplificationDetector`,
+`ViewTagAnomalyDetector`) land in the V3.x actor-mesh PR
+per the FOLLOWUPS entries added in this commit.
 
 #### R7 — `ScanResult` atomicity-under-cancellation contract
 
@@ -1567,6 +1763,53 @@ across sessions" disposition; the conflict is genuine, and
 **privacy-first wins** per the priority hierarchy. Shekyl's
 fail2ban is intra-session and resets on close.
 
+**Restart-amnesia is deliberate (name the threat-model
+consequence forward to the consumer-actor PR).** The
+no-persistence-across-sessions stance is the correct
+privacy posture, but the consequence — *the reputation
+threat model resets on every wallet restart* — is itself
+an attack surface. An adversary who can observe or trigger
+wallet restarts (process kill, RPC-daemon restart in
+hosted-wallet topologies, scheduled rotation in service
+deployments, OOM-killer in resource-constrained
+environments, user-initiated quit-and-restart cycles) can
+**rate-limit hostile behavior to evade reputation
+accumulation**. The evasion pattern is simple: behave well
+for the first portion of the session; attack in the second
+portion; restart; repeat. Cross-session reputation memory
+would catch this; intra-session memory cannot.
+
+**Mitigation pin for the consumer-actor PR design.** The
+`PeerReputationActor`'s threshold logic **must** be designed
+against this evasion pattern from the start. The pinned
+design constraint:
+
+- **Coarse-window-based detection**, not credit-history-based.
+  The actor's threshold is driven by event-rate within
+  bounded recent windows (per-minute, per-block-batch,
+  per-bounded-rolling-window), not by accumulated trust
+  credits or per-peer behavioral history. Coarse-window
+  detection bounds the adversary's evasion benefit by the
+  window size: an attacker who restarts every N minutes
+  gets to mount attacks with a duty cycle of at most
+  `attack_window / (good_window + attack_window + restart_overhead)`,
+  and the per-restart cost (re-bootstrap connections,
+  re-fetch state, re-trigger user attention if visible)
+  bounds the realistic restart frequency.
+- **No "trust accumulation" over time.** A peer that has
+  behaved well for the entire session does not earn
+  privileged status. The actor's response policy treats
+  good and bad behavior symmetrically inside the
+  detection window; long-running good behavior does not
+  reduce the threshold sensitivity for incoming bad
+  behavior. This forecloses the dual evasion pattern
+  ("behave well long enough to earn trust, then attack").
+
+The constraint binds at consumer-actor PR design review.
+PR 4 pins it forward; the V3.x design rounds enumerate the
+window parameters and threshold curves against the
+restart-amnesia model as a load-bearing input.
+
 #### 2. `PeerId` stability in mixed-anonymity contexts
 
 **Threat.** Per
@@ -1624,22 +1867,65 @@ network path (analytics, crash reporter, even tracing
 infrastructure with remote sinks), the stream is a potential
 exfiltration channel. Hostile telemetry consumers can
 amplify wallet-state observations into a high-bandwidth
-side channel — exactly the kind of property the §3.1 master-
-secret-isolation framing tries to prevent.
+side channel — exactly the kind of property the §3.1
+master-secret-isolation framing tries to prevent.
 
-**Mitigation pin (trait contract, §5.4.6).** Full-fidelity
-`RefreshDiagnostic` events flow only to **in-process** actors
-inside the wallet trust boundary. Cross-process or network-
-bound consumers receive only **projection types** that have
-been explicitly sanitized at the boundary — counts and
-aggregates, not events. This is the same principle as
-production/debug log separation, enforced at the messaging
-layer rather than the logging layer.
+The obvious case is direct network egress. The subtler — and
+more failure-prone in practice — case is the **in-process
+aggregator-republisher**: a consumer actor that is in-process
+by topology but whose *external surface* crosses the trust
+boundary by publication. Examples that look in-process at
+first glance:
 
-The trait-contract pin is enforceable by review (consumer
-actors are reviewed against this rule) but not by the type
-system; Stage 4's actor topology design must respect it.
-Phase 0a §2.3 prose amendment pins the rule so future
+- A metrics-export actor that collects counters in-process
+  and exposes them via a Prometheus or OpenTelemetry HTTP
+  endpoint.
+- A debug-UI actor that reflects diagnostic state to a
+  developer pane via an IPC channel (Unix socket, named
+  pipe, local-only TCP).
+- A logger actor that writes to a log file the user (or
+  another process) reads, especially when the file is
+  collected by remote logging infrastructure.
+- A developer-mode flag that dumps diagnostic state to
+  stdout / stderr / structured-event-collector outputs
+  that route off-host in deployment.
+
+Each of these is in-process at the message-passing layer
+but trust-boundary-crossing at the publication layer.
+Subscribing to the full-fidelity stream from inside the
+process is not the safety property; what matters is what
+the actor *does* with what it observes.
+
+**Mitigation pin (trait contract, §5.4.6) — phrased
+recursively.** Full-fidelity `RefreshDiagnostic` events flow
+only to actors **whose external surface is itself inside the
+wallet trust boundary, recursively**. An actor's external
+surface includes every channel by which it republishes,
+aggregates-and-exports, persists, or otherwise makes
+observable to a different trust principal anything derived
+from the events it consumes. If any such surface crosses
+the trust boundary, the actor receives only **projection
+types** that have been explicitly sanitized at the producer
+or at a sanitization-actor boundary in front of it — counts
+and aggregates, not events; opaque token IDs, not peer
+identifiers; bounded enums, not free-form strings.
+
+**The recursion matters operationally.** Adding a new
+consumer actor in V3.x — or extending an existing actor's
+external surface — creates the obligation to audit the
+actor's complete external surface against this rule. The
+audit is not a one-time check at PR 4 review time; it is a
+continuous obligation that binds on every PR that touches
+the consumer-actor topology. Stage 4's review checklist
+includes the per-consumer recursive trust-boundary audit;
+[`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc)
+is the procedural anchor for the audit cadence (the
+audit-against-this-rule is one validation surface among the
+rule's others).
+
+The trait-contract pin is enforceable by review, not by the
+type system; Stage 4's actor topology design must respect
+it. Phase 0a §2.3 prose amendment pins the rule so future
 implementations cannot accidentally cross it.
 
 #### 5. Mailbox saturation as DoS
@@ -1687,6 +1973,36 @@ input. The
 relaxing this discipline in the V3.x PR: the emergent-behaviour
 audit must run even if each individual mitigation is
 audit-clean.
+
+#### Cross-cutting: variant ordering and serialization (forward-note)
+
+Under the §5.4.6 / §5.4.8 #4 in-process trust-boundary pin,
+the diagnostic stream is **not serialized** to any stable
+external format. `RefreshDiagnostic` flows between actors as
+in-process values; sanitized projections crossing the trust
+boundary are typed differently and have their own
+serialization-stability concerns. **Variant-ordering inside
+the `RefreshDiagnostic` enum is therefore not load-bearing**
+under PR 4's surface; the `#[non_exhaustive]` attribute
+preserves future additive evolution without serialization
+breakage. **No action required at PR 4.**
+
+The forward-note is recorded only because the property
+becomes load-bearing under one specific future PR shape:
+**if a future PR ever wants to record diagnostic streams to
+disk for test replay** (deterministic CI repro of
+actor-mesh emergent-behaviour scenarios; cross-build
+reproducibility of consumer-actor responses to recorded
+adversarial inputs; debugging-tool snapshots), variant
+order becomes part of the on-disk format and the additive-
+evolution discipline acquires a backward-compatibility
+constraint. That future PR re-reads this note and either
+(a) freezes the variant ordering, (b) uses a stable
+discriminant scheme (e.g., string-typed variant tags
+serialized separately), or (c) recognizes that the on-disk
+format is a separate type with its own evolution rules.
+None of these are PR 4 work; the note exists so the future
+PR has the constraint named ahead of time.
 
 ### §5.5 Work-list — refresh-adjacent items and where they live
 

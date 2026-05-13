@@ -2879,6 +2879,51 @@ one place to confirm each item's relationship to the wallet stack.
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.7 R6 reframe, §5.4.8 #5 (mailbox-saturation DoS).
 
+- **`ViewTagAnomalyDetector` consumer actor (Stage 1 PR 4
+  reframe; view-tag-DoS composition mitigation).** PR 4's
+  Round 2 reframe of
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.5 names view-tag DoS (an adversarial daemon crafting
+  blocks with high false-positive view-tag rates to force
+  trial-decrypt on each output) as an implementation-level
+  scenario that the trait surface does not address directly,
+  but that admits a composition-side mitigation via the
+  diagnostic stream. `ViewTagAnomalyDetector` consumes a
+  `RefreshDiagnostic::ViewTagFalsePositive { observed_rate,
+  expected_rate }` (or equivalent) event variant, maintains
+  per-peer / per-block-batch false-positive-rate windows,
+  and signals cancellation when the rate exceeds threshold.
+  Same shape as `ReorgAmplificationDetector`'s R5
+  resolution.
+
+  **Producer-side dependency (binding on this entry).** The
+  variant the detector consumes is **not** in PR 4's Phase
+  0e seed variant set — the existing
+  [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  scan loop does not yet have an observation point that
+  measures view-tag false-positive rate against expected.
+  Before `ViewTagAnomalyDetector` lands, the producer must
+  grow the observation point and emit the new event variant.
+  The `RefreshDiagnostic` enum's `#[non_exhaustive]`
+  attribute lets the variant land additively without trait-
+  surface revision; the work is a producer-side scan-loop
+  amendment plus a Phase 0e variant addition. **Trigger:**
+  *when Stage 4 actor mesh stabilizes; producer-side
+  observation point lands as a coordinated prerequisite.*
+
+  **Mitigation pin (§5.4.8 #1 / #2 / #3).** The detector
+  shares the `PeerReputationActor`'s constraints:
+  in-memory-only state, coarse-window detection (not
+  credit-history-based — see the restart-amnesia note in
+  the `PeerReputationActor` entry), aggressive decay
+  calibrated to transport-rotation cadence, jittered
+  rotation actions. Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.5 (view-tag DoS scenario), §5.4.7 R6 reframe
+  (diagnostic-stream contract; non-blocking + coherence
+  pins are binding), §5.4.8 #1 (restart-amnesia design
+  constraint).
+
 - **Diagnostic-stream specification document
   (`docs/design/REFRESH_DIAGNOSTIC_STREAM.md`, V3.x).** PR 4's
   Round 2 reframe of
@@ -2887,18 +2932,56 @@ one place to confirm each item's relationship to the wallet stack.
   trait contract; the implementation-side spec doc captures
   the variant taxonomy, consumer-actor design space,
   mailbox-policy templates, the trust-boundary discipline
-  (in-process-only for full-fidelity; projection-only across
-  trust boundaries), and the emergent-behaviour analysis
-  framework when multiple consumers coexist (§5.4.8
-  "Cross-cutting" note). **Trigger:** *when the first V3.x
-  consumer actor (`ReorgAmplificationDetector`,
-  `PeerReputationActor`, or `RecoveryActor`) enters design
-  rounds.* The doc seeds with PR 4's §5.4.7 R6 / §5.4.8
-  content and grows additively as consumers are designed.
-  Cross-references:
+  (in-process-only for full-fidelity, recursively per §5.4.8
+  #4 — including in-process aggregator-republisher actors
+  whose external surface crosses the boundary; projection-only
+  across trust boundaries), and the emergent-behaviour
+  analysis framework when multiple consumers coexist
+  (§5.4.8 "Cross-cutting" note).
+
+  **Load-bearing contract pins (binding on every V3.x
+  consumer-actor PR sink implementation).** The spec doc
+  records the following as binding constraints, derived
+  from PR 4's §5.4.6 / §5.4.7 R6 / §5.4.8 content:
+
+  - **Non-blocking `emit` contract.** `DiagnosticSink::emit`
+    MUST NOT block; implementations use `try_send`-shaped
+    semantics with silent drop on back-pressure. Rationale:
+    a blocked sink pins the producer holding spend material
+    across the emission call and defeats the §3.1 wallet-
+    lock-latency property by blocking cancellation-token
+    observation at checkpoints 2 and 3.
+  - **Emission/return coherence contract.** `RefreshEngine`
+    implementations MUST emit at least one corresponding
+    `RefreshDiagnostic` event for every non-`Cancelled`
+    `RefreshError` returned, before returning the error.
+    The pin closes the silent-error and phantom-error
+    failure modes that the unit-variant trait return
+    cannot rule out at the type-system level.
+  - **Recursive trust-boundary.** Full-fidelity events flow
+    only to actors whose external surface is itself inside
+    the wallet trust boundary, recursively. Adding a new
+    consumer or extending an existing consumer's external
+    surface triggers a per-consumer recursive trust-boundary
+    audit at the touching PR's review.
+  - **Restart-amnesia is deliberate (consumer-actor design
+    constraint).** Detection logic is coarse-window-based,
+    not credit-history-based; no "trust accumulation" over
+    time. Forecloses adversary evasion via wallet-restart
+    cycles. Binding on `PeerReputationActor` and
+    `ViewTagAnomalyDetector` design rounds in particular.
+
+  **Trigger:** *when the first V3.x consumer actor
+  (`ReorgAmplificationDetector`, `PeerReputationActor`,
+  `RecoveryActor`, or `ViewTagAnomalyDetector`) enters
+  design rounds.* The doc seeds with PR 4's §5.4.6 / §5.4.7
+  R6 / §5.4.8 content and grows additively as consumers are
+  designed. Cross-references:
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-  §5.4.7 R6 reframe (trait contract definition), §5.4.8
-  (attack-surface enumeration with mitigation pins).
+  §5.4.6 (trait-surface contract pins, including the four
+  pins recorded above), §5.4.7 R6 reframe (trait contract
+  definition), §5.4.8 (attack-surface enumeration with
+  mitigation pins).
 
 - **`RefreshEngine` (c) split-producer/recoverer view-material
   shape (Stage 1 PR 4 R4 deferral).** Round 2 of
