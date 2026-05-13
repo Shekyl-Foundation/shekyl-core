@@ -1,30 +1,52 @@
 # Stage 1 PR 4 — `RefreshEngine` extraction — design
 
-**Status.** **DRAFT — Round 1, Round 1 review pass, and Round 2
-closed (2026-05-12).** Round 1's load-bearing question (§5
-producer redesign) settled to **α — preserved current shape**
-per §5.4. The Round 1 review pass (same date) corrected §3.1's
-materially-wrong "no secret-touching surface" framing to
-master-secret isolation routed through R4, surfaced four
-additional residual questions (R4 view-material flow, R5
+**Status.** **DRAFT — Round 1, Round 1 review pass, Round 2,
+and Round 2 reframe closed (2026-05-13).** Round 1's load-bearing
+question (§5 producer redesign) settled to **α — preserved
+current shape** per §5.4. The Round 1 review pass (2026-05-12)
+corrected §3.1's materially-wrong "no secret-touching surface"
+framing to master-secret isolation routed through R4, surfaced
+four additional residual questions (R4 view-material flow, R5
 mid-scan reorg-abort, R6 `RefreshError::ConcurrentMutation`
 boundary, R7 `ScanResult` atomicity-under-cancellation) per
 §5.4.3, and recorded the three call-mode invocation-overhead
 constraint (§5.4.4), the four adversarial scenarios under α
-(§5.4.5), and the trait-surface contract pins (§5.4.6).
-**Round 2 (same date) settled all seven residuals** per §5.4.7:
-R1 carries snapshot-ID-pinning into PR 5; R2 stays as the §2.2
-note; R3 is a confirmation (types already publicly re-exported);
-R4 lands as **(a-instance-scoped)** — `LocalRefresh::new(view_material:
-ViewMaterial)` with one Scanner held for the instance's
-lifetime; R5 defers to V3.x FOLLOWUPS; R6 keeps the existing
-`MalformedScanResult { reason: &'static str }` shape, excludes
-`ConcurrentMutation` / `AlreadyRunning` from the producer trait
-error, and keeps `ReorgTooDeep` as Ok-with-rewind merge-layer
-detection; R7 pins atomicity in §2.3 prose. **The α-disposition
-stands; the more-carefully-specified-α frame is now closed.**
-The seed framing (Round 1 opening) is preserved below as the
-question-shape Round 1 evaluated against. This document was opened in parallel with the
+(§5.4.5), and the trait-surface contract pins (§5.4.6). Round 2
+(2026-05-12) settled R1 / R2 / R3 / R4 / R7 cleanly per §5.4.7;
+R5 was deferred and R6 chose `MalformedScanResult { reason:
+&'static str }`. **Round 2 reframe (2026-05-13) supersedes
+Round 2's R5 and R6 dispositions** with the two-channel
+actor-mesh shape: synchronous trait return `RefreshError`
+becomes **unit-variant-only** (`Cancelled` / `Io` /
+`MalformedScanResult`; no payload of any kind), and a parallel
+**`RefreshDiagnostic` event stream emitted via `DiagnosticSink`**
+fans out to specialized consumer actors with per-consumer trust
+posture and sanitization rules. The reframe dissolves R5 by
+composition (a `ReorgAmplificationDetector` actor consumes
+`ReorgObserved` events and signals cancellation back to the
+orchestrator) rather than extending §7's checkpoint discipline.
+§5.4.8 honestly enumerates five new attack surfaces the
+diagnostic-stream seam introduces (peer-reputation fingerprint;
+PeerId stability under Tor/I2P; rotation-timing side-channel;
+diagnostic-stream covert channel; mailbox-saturation DoS) and
+names mitigations for each. **The α-disposition still holds;
+R1 / R2 / R3 / R4 / R7 from Round 2 still hold; R5 retires by
+composition; R6 reframes to the two-channel shape.** The seed
+framing (Round 1 opening) is preserved below as the
+question-shape Round 1 evaluated against.
+
+The reframe is also the recurrence pattern named by
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+under "the cost-benefit-defer-to-later anti-pattern" working
+against itself: Round 2's first pass landed
+"defer R5 + bounded-`&'static str` for R6" — the conventional
+cost-benefit-defer answer; the reframe is the
+architectural-integrity-now answer that lays the diagnostic-stream
+seam now (modest additional surface — one parameter, one enum,
+one trait) and defers only the consumer implementations,
+unlocking composable security policies, fail2ban-style
+intra-session mitigation, pattern-based recovery, and natural
+R5 resolution in V3.x without re-opening PR 4's trait surface. This document was opened in parallel with the
 M3c–M3e tail of Stage 1 PR 3 per the 2026-05-10 sequencing
 decision recorded in
 [`STAGE_1_PR_3_MIGRATION_PLAN.md`](./STAGE_1_PR_3_MIGRATION_PLAN.md)
@@ -225,15 +247,13 @@ PR 4's check completes here.
   §3.1.2): the trait's contract is "the orchestrator never
   observes derived per-output secrets."
 
-  **Open question — view-material flow (R4).** *Where* the
-  view-and-spend material enters the producer is the load-bearing R4
-  question per §5.4.3 below. Three shapes (constructor-bound on
-  `LocalRefresh::new`; per-call in `RefreshOptions`;
-  split-producer/recoverer with key-image computation routed
-  through `KeyEngine`) project differently onto the Stage 4
-  actor envelope. R4 disposition lands in Round 2 and feeds
-  Phase 0 directly; until R4 is settled, the master-secret-isolation
-  property is conditional on R4's pick.
+  **R4 settled (Round 2, §5.4.7).** View-material flow lands as
+  (a-instance-scoped): `LocalRefresh::new(view_material:
+  ViewMaterial)` captures view-and-spend material at construction;
+  the Scanner is held for `LocalRefresh`'s lifetime and zeroized
+  on drop via the existing `ZeroizeOnDrop` chain. The master-
+  secret-isolation property is now unconditional under the
+  Round 2 disposition.
 
   **Per `30-cryptography.mdc` and `35-secure-memory.mdc`.** The
   Scanner's stack-frame materials (`view_scalar`, `x25519_sk`,
@@ -244,6 +264,33 @@ PR 4's check completes here.
   surface does not expose timing-observable operations.
   Adversarial-input considerations against the constant-time
   framing are recorded in §5.4.5 below.
+
+- **Two-channel error surface (Round 2 reframe; §5.4.7 R6,
+  §5.4.8).** PR 4 separates the synchronous trait return from
+  the actor-mesh diagnostic stream. The synchronous return
+  (`RefreshError`) is **unit-variant-only** — no string, no
+  evidence, no payload — so the orchestrator's branch table is
+  structural (cancel-propagate / retry-with-backoff / peer-
+  rotation) and the §5.4.5 memory-amplifier vector is closed
+  by construction. The parallel `RefreshDiagnostic` event stream
+  emitted via `DiagnosticSink` carries the rich structured
+  information consumed by specialized actors (peer-reputation,
+  recovery, telemetry, logger) with per-consumer trust posture
+  and sanitization rules.
+
+  **Threat-model property added by the diagnostic-stream seam.**
+  Full-fidelity `RefreshDiagnostic` events stay **inside the
+  wallet trust boundary** — in-process, inter-actor. Cross-
+  process or network-bound consumers receive only **projection
+  types** that have been explicitly sanitized at the boundary.
+  This is the same principle as production/debug log separation,
+  applied at the messaging layer; it is pinned in §5.4.6 as a
+  trait contract so Stage 4's actor topology design cannot
+  accidentally route full-fidelity events through a less-trusted
+  actor (e.g., a remote UI process, a crash reporter with a
+  network sink, or a tracing infrastructure with off-host
+  storage). §5.4.8 enumerates the five attack surfaces this seam
+  introduces and names mitigations for each.
 
 ### §3.2 Architectural-inheritance audit
 
@@ -337,22 +384,59 @@ Round 1 review pass populated this list against the seed's
   cover the consumer surface — §5.4.7 R3 is a confirmation,
   not a promotion. `ViewMaterial` exports under the same flat
   convention.
-- **Phase 0c — `RefreshEngineError` (promoted from
-  `ProduceError`).** Per §5.4.7 R6: variants `Cancelled`,
-  `Io(IoError)`, `MalformedScanResult { reason: &'static str }`.
-  `Self::Error: Into<RefreshError>` in the trait surface;
-  orchestrator's `RefreshError` adds `ConcurrentMutation`,
-  `AlreadyRunning` at the merge layer. `ReorgTooDeep` stays
+- **Phase 0c — unit-variant `RefreshError` as trait error
+  (Round 2 reframe).** Per §5.4.7 R6 reframe: trait-level
+  `RefreshError` is **unit-variant-only** — `Cancelled` /
+  `Io` / `MalformedScanResult` — with no payload of any kind.
+  The synchronous trait return is the structural-branch
+  signal; the rich diagnostic information moves to Phase 0e
+  below. `Self::Error: Into<RefreshError>` in the trait
+  surface; orchestrator's existing `RefreshError` enum is
+  retained for backward compatibility (it adds
+  `ConcurrentMutation`, `AlreadyRunning` at the merge layer,
+  and carries `&'static str` reason content on its
+  `MalformedScanResult` variant constructed orchestrator-side
+  from the unit-variant trait tag plus orchestrator context —
+  no attacker-controlled trait payload). `ReorgTooDeep` stays
   as Ok-with-rewind merge-layer detection per the §1.5
-  actor-identity reasoning. The byzantine-daemon variant
-  keeps the existing `&'static str` reason — strictly bounded;
-  no attacker-controlled bytes; richer evidence is a V3.x
-  diagnostic refinement.
-- **Phase 0d — explicitly empty under Round 2.** The
-  Round 1-review-pass conditional candidate "checkpoint 3
-  extension for mid-scan reorg-abort" is **not landing in
-  PR 4**; §5.4.7 R5 deferred to V3.x FOLLOWUPS. Phase 0d
-  retired from this PR's scope.
+  actor-identity reasoning.
+- **Phase 0d — retired (Round 2 reframe).** The Round 1-review-pass
+  conditional candidate "checkpoint 3 extension for
+  mid-scan reorg-abort" is **not landing in PR 4** and **not
+  deferred as an open capability** — it retires by
+  composition. R5 resolves via a `ReorgAmplificationDetector`
+  actor consuming `RefreshDiagnostic::ReorgObserved` events
+  (Phase 0e) and signalling cancellation back through the
+  existing checkpoint-3 plumbing; the producer's checkpoint
+  discipline does not grow. Phase 0d struck.
+- **Phase 0e (new — Round 2 reframe) — `RefreshDiagnostic` +
+  `DiagnosticSink` + `produce_scan_result` signature change.**
+  Per §5.4.7 R6 reframe and §5.4.8 attack-surface
+  enumeration:
+  - `RefreshDiagnostic` enum (`#[non_exhaustive]`) with
+    Stage 1 seed variants (`DaemonMalformed { kind:
+    MalformedKind }`, `DaemonTimeout { op, elapsed }`,
+    `DaemonProtocolError { kind }`, `ReorgObserved {
+    fork_height, depth }`, `ScanProgress { height, candidates
+    }`) and supporting bounded enums (`MalformedKind`,
+    `DaemonOp`, `ProtocolErrorKind`); peer-attribution
+    fields deferred until the future PR grows PR 1's
+    `DaemonEngine` peer-aware surface.
+  - `DiagnosticSink` trait (`Send + Sync + 'static`; one
+    `emit(&self, event: RefreshDiagnostic)` method);
+    trait-contract pin per §5.4.6 / §5.4.8 #4 (in-process
+    only for full-fidelity; projection types cross trust
+    boundaries).
+  - `produce_scan_result` signature gains `diagnostics: &dyn
+    DiagnosticSink` parameter (runtime-dispatch; per-call;
+    locked now so Stage 4 does not re-rev the trait or widen
+    `LocalRefresh::new`).
+  - Stage 1 sink impls: `NoopDiagnosticSink` (drop everything)
+    and `TracingDiagnosticSink` (route to `tracing::event!`);
+    the production sink driving the actor mesh lands in
+    V3.x's actor-mesh PR.
+  - Flat-crate-root export under the existing
+    `shekyl_engine_core` convention (R3 pattern).
 
 ---
 
@@ -795,6 +879,23 @@ cost; option (a-instance-scoped) reduces per-call setup at the
 cost of holding view material across the `LocalRefresh`'s
 entire lifetime. Round 4 Phase 1 sequencing depends on R4.
 
+**Round 2 reframe — `DiagnosticSink` per-call parameter is
+cost-neutral.** The R6 reframe adds `diagnostics: &dyn
+DiagnosticSink` to `produce_scan_result`'s signature. The
+added per-call cost is one stack-pushed reference and one
+vtable indirection per `sink.emit(event)` call site — both
+negligible against the per-block scan envelope. In Stage 1
+with `NoopDiagnosticSink`, the compiler can devirtualize and
+elide the calls; in Stage 4 with the actor-mesh sink, the
+per-event overhead is dominated by the `tokio::sync::mpsc`
+send. **The invocation-overhead constraint above is
+preserved under the reframe** — no per-call setup is added
+beyond the parameter pass, and the steady-state poll mode's
+~10K-calls/wallet-day envelope absorbs the parameter pass
+trivially. Round 2 disposition R4 (a-instance-scoped) already
+moves the per-attempt scanner construction out of the
+per-call hot path; the reframe does not reintroduce it.
+
 #### §5.4.5 Adversarial scenarios under α
 
 Four scenarios where a malicious daemon — the most common
@@ -812,11 +913,17 @@ implementor cannot drift away from the existing mitigations.
   to completion against the now-stale chain, returns a
   `ScanResult`, the merge gate detects mismatch, retries.
   Attacker can sustain O(window) wasted work per reorg,
-  indefinitely. **Mitigation.** R5 above — extend
-  checkpoint 3 to poll daemon tip and abort-early on
-  observed-reorg-during-scan. Round 2 disposition; trade-off
-  is extra daemon RPC cost vs. hostile-daemon work
-  amplification.
+  indefinitely. **Mitigation (Round 2 reframe — resolved by
+  composition).** R5 retires here; a `ReorgAmplificationDetector`
+  actor subscribing to `RefreshDiagnostic::ReorgObserved`
+  events (Phase 0e) maintains windowed reorg counts and
+  signals cancellation back through the existing
+  `CancellationToken` checkpoint-3 plumbing. The producer's
+  §7 checkpoint discipline does not grow; the detection logic
+  lives in one actor. Implementation deferred to the V3.x
+  actor-mesh PR; trait-surface seam lands in PR 4. See
+  §5.4.7 R5 and §5.4.8 #1 (peer-reputation fingerprint), #3
+  (rotation-timing side-channel) for related mitigations.
 - **View-tag DoS.** View tags are limited entropy (8 bits in
   the X25519 view-tag pre-filter per
   [`STAGE_1_PR_3_KEY_ENGINE.md`](./STAGE_1_PR_3_KEY_ENGINE.md)
@@ -842,17 +949,27 @@ implementor cannot drift away from the existing mitigations.
   adversarial input), but the operational property "the
   producer's per-block compute is bounded under adversarial
   daemons" is a separate concern not delivered by the trait
-  shape itself.
+  shape itself. **Round 2 reframe** opens a composition-side
+  mitigation: high false-positive view-tag rates surface as a
+  `RefreshDiagnostic` projection (rate of `ScanProgress`
+  variants with high `candidates` per block); a future
+  consumer actor (likely the `RecoveryActor` or a dedicated
+  `ViewTagAnomalyDetector`) can apply threshold logic and
+  signal cancellation, same shape as R5's resolution. PR 4
+  pins the seam; the detector lands in V3.x.
 - **Withholding / partial responses.** Daemon returns
   `tip = H` but withholds blocks `[H-k, H]`. Producer's
   behaviour depends on the daemon RPC — does it timeout,
-  return empty, return error? The `DaemonError(D::Error)`
-  mapping per R6 must be specific enough that the orchestrator
-  can distinguish "daemon transient failure" (retry) from
-  "daemon byzantine" (rotate peer). PR 1's `DaemonEngine`
-  trait should already specify this; PR 4 inherits it without
+  return empty, return error? Under the Round 2 reframe, the
+  producer emits `RefreshDiagnostic::DaemonTimeout { op, elapsed }`
+  or `RefreshDiagnostic::DaemonProtocolError { kind }` for
+  consumer-side analysis; the synchronous trait return is
+  `RefreshError::Io` (unit variant). PR 1's `DaemonEngine`
+  trait specifies the RPC semantics; PR 4 inherits without
   re-litigating. Round 2 confirms PR 1's specification covers
-  the withholding case.
+  the withholding case; the diagnostic-stream variants give
+  consumer actors the temporal context to distinguish
+  "transient" from "byzantine."
 - **Snapshot poisoning via `LedgerSnapshot`.** The producer
   reads `LedgerSnapshot` for reorg-window descriptors. If
   `LedgerSnapshot::clone` exposes any pointer-shared state,
@@ -865,17 +982,22 @@ implementor cannot drift away from the existing mitigations.
   framing is honest: clones are deep in spirit because the
   type carries no shared state. Round 2 confirms the property
   holds under R4 (no R4 sub-option introduces shared state).
-- **`ScannerContractViolation.evidence` as memory amplifier.**
-  Per R6's variant set, the byzantine-daemon path returns
-  `ScannerContractViolation { kind, evidence }`. The `evidence`
-  field is attacker-influenceable (the daemon controls the
-  malformed data the violation cites). **Constraint.**
-  `evidence` must be small and bounded — Round 2's Phase 0c
-  audit pins the maximum size; an attacker who could choose
-  unbounded `evidence` would have a memory-amplification
-  vector. Pre-decision: `evidence: [u8; N]` with `N ≤ 64`, or
-  `enum EvidenceKind` with no variant carrying owned `Vec` /
-  `String`.
+- **Memory-amplifier vector — closed by Round 2 reframe.**
+  Round 1 review pass surfaced this as a concern under the
+  proposed `ScannerContractViolation { kind, evidence }`
+  variant: attacker-controlled `evidence` payload, even if
+  bounded, is a memory-amplification surface. **The Round 2
+  reframe closes the vector by construction:** the
+  synchronous `RefreshError` is unit-variant-only (no
+  payload, ever), and the `RefreshDiagnostic` stream's
+  byzantine-daemon variant carries only a bounded enum
+  (`MalformedKind`) with no attacker-controlled bytes. Stream
+  consumers see typed-and-bounded events; the orchestrator's
+  synchronous branch table sees variant tags. There is **no
+  attacker-controlled-payload surface anywhere** in PR 4's
+  trait or diagnostic-stream contract. §5.4.8 #5
+  (mailbox-saturation DoS) addresses the related rate-control
+  concern.
 
 #### §5.4.6 Trait-surface contract pins (Phase 0a candidates)
 
@@ -897,10 +1019,11 @@ against and Stage 4 has the property to wrap around.
   parameter before the actor wrap forces the issue.
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
   §2.3 amendment in Phase 0a.
-- **Progress-channel trust-boundary pin.** The
-  `RefreshProgress` channel surfaced in §2.3 carries
-  `view_tag_matches_per_block`, `owned_candidates_observed`,
-  and `current_height` (per the existing
+- **Progress-channel trust-boundary pin (Round 1 review pass;
+  generalized by Round 2 reframe).** The `RefreshProgress`
+  channel surfaced in §2.3 carries `view_tag_matches_per_block`,
+  `owned_candidates_observed`, and `current_height` (per the
+  existing
   [`RefreshProgress`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
   shape). In single-process Stage 1 wallets this is a non-issue;
   in Stage 4's actor model, the consumer of the `Progress`
@@ -909,14 +1032,41 @@ against and Stage 4 has the property to wrap around.
   rate.
 
   **Pin.** The trait contract states that `Progress` consumers
-  **must** be inside the wallet trust boundary. PR 4 refuses
-  to design the trait around the case where they are not.
-  Stage 4's actor topology design must respect this; the
-  trait-contract pin exists so Stage 4 cannot accidentally
-  cross the boundary by routing `Progress` through a
-  less-trusted actor (e.g., a remote UI process).
+  **must** be inside the wallet trust boundary. Under the
+  Round 2 reframe, the `RefreshProgress` watch channel becomes
+  the UI-consumer projection of `RefreshDiagnostic::ScanProgress`;
+  the pin generalizes to the broader diagnostic-stream
+  trust-boundary pin below.
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
   §2.3 prose amendment in Phase 0a.
+- **Diagnostic-stream trust-boundary pin (Round 2 reframe).**
+  The `DiagnosticSink` contract surfaced in §5.4.7 R6 carries
+  the full structured `RefreshDiagnostic` event stream —
+  richer than `RefreshProgress` (`DaemonMalformed`,
+  `DaemonTimeout`, `DaemonProtocolError`, `ReorgObserved`, and
+  the variants that grow as the actor mesh's consumer
+  patterns surface). Per §3.1 / §5.4.8 #4, sink implementations
+  route full-fidelity events only to in-process consumers
+  inside the wallet trust boundary; cross-process or network-
+  bound consumers receive only **projection types** that have
+  been explicitly sanitized at the boundary. The Progress-channel
+  pin above is a specific case of this broader pin.
+
+  **Pin.** The trait contract states that
+  `DiagnosticSink::emit` consumers handling full-fidelity
+  events **must** be inside the wallet trust boundary. PR 4
+  refuses to design the diagnostic-stream surface around the
+  case where they are not. Stage 4's actor topology design
+  must respect this; the trait-contract pin exists so Stage 4
+  cannot accidentally cross the boundary by routing
+  `RefreshDiagnostic` events through a less-trusted actor
+  (e.g., a remote crash reporter, a telemetry pipeline with
+  network sinks, or a tracing infrastructure with off-host
+  storage).
+  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.3 prose amendment in Phase 0a. Enforceable by review,
+  not by the type system — Stage 4's review checklist
+  includes the per-consumer trust-boundary audit.
 
 ### §5.4.7 Round 2 dispositions — R2–R7 settled (2026-05-12)
 
@@ -1045,65 +1195,264 @@ deferral.
 call; hostile to actor migration per the Stage 4 envelope
 analysis.
 
-#### R5 — mid-scan reorg-abort at checkpoint 3
+#### R5 — mid-scan reorg-abort: composition via `ReorgAmplificationDetector` (Round 2 reframe supersedes deferral)
 
-**Disposition.** Defer to V3.x FOLLOWUPS.
+**Disposition.** **Resolved by composition** under the
+two-channel reframe (R6 below). R5 does **not** extend §7's
+checkpoint discipline and does **not** defer to V3.x as an
+open capability; it retires here, with the consumer
+implementation deferred to the V3.x actor-mesh PR that wires
+the diagnostic-stream consumers.
 
-**Rationale.** Checkpoint 3 fires per-block in the in-loop
-cancel checks at
+**The previous Round 2 disposition is superseded.** Round 2's
+first pass (2026-05-12) read "defer R5 to V3.x; trigger:
+hostile-daemon work-amplification measurable in V3.0 RC
+stabilization or post-genesis production telemetry; if the
+trigger fires, R5 extends checkpoint 3 with one tip-poll per
+checkpoint-3 hit and §7's discipline grows accordingly." That
+disposition is the cost-benefit-defer-to-later anti-pattern
+per
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc) —
+it weighed immediate cost (per-block RPC + §7 amendment)
+against deferred benefit (capability gained only after
+empirical telemetry shows the need) and chose deferral. The
+reframe is the architectural-integrity-now answer: lay the
+seam now, defer only the consumer implementation.
+
+**How composition resolves R5.** Under the R6 two-channel
+shape, the producer emits structured `ReorgObserved` events
+to `DiagnosticSink` whenever `find_fork_point` detects a
+fork during scanning. A `ReorgAmplificationDetector` actor
+subscribes to the diagnostic stream, maintains a windowed
+count of `ReorgObserved` events per peer (or per attempt, in
+peer-less Stage 1), applies a threshold-based response
+(rate-limit → cancel → peer-rotate via `PeerReputationActor`),
+and signals cancellation back to the orchestrator via the
+existing `CancellationToken` plumbing that checkpoint 3
+already honors.
+
+The producer's checkpoint 3 stays cancel-only — exactly its
+current shape per
 [`engine/refresh.rs:980 / :1140 / :1186`](../../rust/shekyl-engine-core/src/engine/refresh.rs).
-Adding a daemon `get_height` poll to each fires per-block;
-at steady-state poll cadence (10–30 s, ~2 blocks/poll, ~10K
-polls/wallet-day), the cost is on the order of 10K+ extra
-RPCs/wallet-day. The reorg-amplification attack vector is
-mitigated at a higher layer by PR 1's `DaemonEngine` peer-
-rotation contract — a daemon producing back-to-back reorgs
-is a peer-ban candidate. The discipline-budget cost of
-extending §7's checkpoint discipline to cover reorg-detected-
-during-scan abort + retry semantics is non-trivial; pre-genesis
-the work-amplification attack is conditional on an attacker
-controlling the user's daemon, which the wallet already
-mitigates by rotation.
+No per-checkpoint-3 RPC. No §7 amendment. The capability is
+added by composition of the actor mesh's consumers; the
+producer's discipline budget does not grow.
 
-**FOLLOWUPS V3.x trigger.** *If hostile-daemon work-
-amplification scenarios become measurable in V3.0 RC
-stabilization or post-genesis production telemetry, R5
-extends checkpoint 3 with one tip-poll per checkpoint-3 hit
-and §7's discipline grows accordingly.* See
-[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.x entry added in
-this commit.
+**Why this is better than the deferred shape.**
 
-#### R6 — `RefreshError::ConcurrentMutation` boundary + variant set
+1. **§7's discipline stays minimal.** Adding "checkpoint 3
+   polls daemon tip" to the existing four-checkpoint
+   discipline grows the contract every producer
+   implementation must respect, every CI test must cover,
+   and every audit must re-read. The composition shape
+   keeps §7's discipline at four checkpoints and confines
+   the reorg-detection logic to one actor.
+2. **Future capability is unconditional, not trigger-gated.**
+   The deferred shape required telemetry showing the need
+   before R5 could land. The composition shape lands R5's
+   *seam* now; whether to actually wire the
+   `ReorgAmplificationDetector` actor in V3.0 vs V3.x is a
+   separate decision that can be made on policy grounds
+   (security default = wire it; pragmatism = wait for the
+   actor-mesh PR), not on telemetry grounds.
+3. **R5 generalizes.** The detector pattern (consume events,
+   maintain state, signal cancellation) is reusable for
+   other adversarial patterns — view-tag DoS (§5.4.5),
+   withholding (§5.4.5), and any future class the actor
+   mesh's diagnostic-stream pattern surfaces. The
+   "extend checkpoint 3" shape generalized only to "extend
+   checkpoint 3 again for the next pattern."
 
-**Disposition.** Promote the existing crate-internal
-`ProduceError`
-([`engine/refresh.rs:202`](../../rust/shekyl-engine-core/src/engine/refresh.rs))
-to a public `RefreshEngineError` (or co-locate as a
-`pub enum` within `shekyl_engine_core::engine::refresh`); use
-it as `RefreshEngine::Error: Into<RefreshError>`. Variant set:
+**FOLLOWUPS V3.x entry (consumer-side).** The
+`ReorgAmplificationDetector` actor implementation, the
+windowing and threshold policy, and the integration with
+`PeerReputationActor` for peer rotation land in the V3.x
+actor-mesh PR. **Trigger:** *when Stage 4 actor mesh
+stabilizes;* no telemetry gate. The previous "extend
+checkpoint 3" FOLLOWUPS entry from Round 2's first pass is
+**withdrawn** and replaced in
+[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) by the
+`ReorgAmplificationDetector` entry added in this commit.
 
-- `Cancelled` — checkpoints 2 / 3 fired; orchestrator does
-  not retry.
-- `Io(IoError)` — daemon failure post-conversion via
-  `D::Error: Into<IoError>`. The `D::Error → IoError`
-  conversion happens inside `LocalRefresh`; the trait error
-  type is **not** generic over `D`, preserving the existing
-  `Self::Error: Into<DomainError>` pattern shared with
-  `LedgerEngine` / `KeyEngine`.
-- `MalformedScanResult { reason: &'static str }` — the
-  byzantine-daemon path. **Kept name + payload from the
-  existing
-  [`RefreshError`](../../rust/shekyl-engine-core/src/engine/error.rs)
-  shape.** The `&'static str` reason is strictly bounded —
-  no attacker-controlled bytes; compile-time-fixed strings
-  are the strongest form of memory-amplifier mitigation per
-  §5.4.5. Round 2 declines the user's proposed
-  `ScannerContractViolation { kind, evidence }` rename — the
-  richer-diagnostic shape is a V3.x telemetry refinement if
-  peer-ban logic genuinely needs structured `kind`; pre-V3
-  the simpler bounded shape suffices.
+#### R6 — `RefreshError` shape: two-channel actor-mesh seam (Round 2 reframe supersedes the `MalformedScanResult { reason }` disposition)
 
-**Excluded from producer trait error.**
+**Disposition.** **Two channels.** The synchronous trait
+return and the actor-mesh diagnostic stream are different
+artifacts with different consumers and different security
+properties. PR 4 lands **both** channels — defining the
+trait-level shape that supports composable security policies
+without committing to the consumer implementations.
+
+**The previous Round 2 disposition is superseded.** Round 2's
+first pass (2026-05-12) kept `MalformedScanResult { reason:
+&'static str }` and chose between bounded-`&'static str` vs.
+the user-proposed `ScannerContractViolation { kind, evidence }`.
+Both shapes assume a synchronous function-call graph where
+the error is a single isolated event and the payload question
+is "what does this caller branch on." In an actor-mesh fabric
+the error is a stream event with temporal context, and the
+same event routes to multiple consumers with different
+security properties per consumer. **Neither
+`MalformedScanResult { reason }` nor `ScannerContractViolation
+{ kind, evidence }` is the right shape** — both are still
+designed for the synchronous frame.
+
+##### Channel 1 — synchronous trait return `RefreshError` (unit variants only)
+
+```rust
+/// Synchronous trait return.
+///
+/// What the orchestrator branches on, right now, in the
+/// synchronous moment after `produce_scan_result` returns.
+/// The branch table is structural — each variant maps to one
+/// disposition; the response is structural ("rotate" / "retry"
+/// / "cancel") rather than data-dependent.
+///
+/// **Unit variants only.** No string, no evidence, no payload
+/// of any kind. Unit-variant-only is sufficient and the only
+/// safe shape against the §5.4.5 memory-amplifier concern —
+/// there is no attacker-controlled data anywhere on the
+/// producer trait error surface.
+pub enum RefreshError {
+    /// Checkpoints 2 / 3 fired. Orchestrator propagates
+    /// cancellation; does not retry.
+    Cancelled,
+    /// Daemon I/O failure. Orchestrator retries with backoff
+    /// per the existing retry-policy contract.
+    Io,
+    /// Producer-side contract violation: scanner emitted a
+    /// `ScanResult` whose shape disagrees with itself, or
+    /// daemon returned malformed data that the scanner
+    /// could not consume. Orchestrator does not retry —
+    /// re-running against the same daemon produces the same
+    /// violation — and signals to peer-rotation logic.
+    MalformedScanResult,
+}
+```
+
+The decision needs zero information beyond the variant tag
+because the response is structural, not data-dependent. The
+orchestrator's branch table is three rows; each row maps to
+one disposition.
+
+##### Channel 2 — diagnostic stream `RefreshDiagnostic` + `DiagnosticSink`
+
+```rust
+/// Actor-system diagnostic stream.
+///
+/// What fans out to specialized actors, each with its own
+/// trust posture and its own sanitization rule. Full-fidelity
+/// events stay in-process per the §3.1 / §5.4.6 trust-boundary
+/// pin; persisted or exported projections are lossy by design.
+///
+/// Variants below are the Phase 0e seed set; the enum is
+/// `#[non_exhaustive]` so the variant set can grow additively
+/// as the actor-mesh consumers mature. Peer attribution
+/// (a `PeerId` field per variant) is deferred to the future
+/// PR that grows PR 1's `DaemonEngine` peer-aware surface;
+/// Stage 1 emits variants without peer attribution.
+#[non_exhaustive]
+pub enum RefreshDiagnostic {
+    /// Producer detected an inconsistency in daemon-returned
+    /// data — typed for telemetry, not for orchestrator
+    /// branching. `kind` enumerates distinguishable defect
+    /// classes named at the call site (the previous
+    /// `MalformedScanResult.reason: &'static str` content,
+    /// now routed via the stream rather than the synchronous
+    /// return).
+    DaemonMalformed { kind: MalformedKind },
+    /// Daemon RPC took longer than the producer's per-op
+    /// budget. `op` names the RPC; `elapsed` is the observed
+    /// time. Consumed by retry-policy and peer-reputation
+    /// actors.
+    DaemonTimeout { op: DaemonOp, elapsed: Duration },
+    /// Daemon returned a response that violates the RPC
+    /// protocol contract (e.g., field type mismatch, length
+    /// constraints, version mismatch). Distinct from
+    /// `DaemonMalformed`: this is RPC-layer; that is
+    /// scan-content-layer.
+    DaemonProtocolError { kind: ProtocolErrorKind },
+    /// Producer's `find_fork_point` walked back from chain
+    /// tip and detected a fork at `fork_height` with `depth`
+    /// blocks rewound. The natural input for the
+    /// `ReorgAmplificationDetector` actor per R5's composition
+    /// resolution.
+    ReorgObserved { fork_height: u64, depth: u32 },
+    /// Per-block scan progress. Subsumes the existing
+    /// `RefreshProgress` watch-channel content; the existing
+    /// `RefreshProgress`-via-`tokio::sync::watch` stays as
+    /// the UI-consumer projection of this stream variant
+    /// (latest-value semantics, lossy-by-design), preserving
+    /// the existing UI surface without rework. Stage 4's
+    /// projector actor replaces direct watch-channel
+    /// publication with stream-based emission.
+    ScanProgress { height: u64, candidates: u32 },
+}
+
+/// Sink for `RefreshDiagnostic` events.
+///
+/// In Stage 1, the sink is a no-op or a simple tracing
+/// emitter. In Stage 4, the sink is the entry point to the
+/// actor mesh — a typed channel sender feeding specialized
+/// consumer actors (peer-reputation, recovery, telemetry,
+/// logger), each subscribing to the events it cares about
+/// with its own per-consumer trust posture.
+///
+/// **Trust-boundary contract (§3.1, §5.4.6 pin).** Sink
+/// implementations route full-fidelity events only to
+/// in-process consumers inside the wallet trust boundary.
+/// Cross-process or network-bound consumers receive only
+/// projection types that have been explicitly sanitized at
+/// the boundary. This is the production/debug-log-separation
+/// principle applied at the messaging layer.
+pub trait DiagnosticSink: Send + Sync + 'static {
+    fn emit(&self, event: RefreshDiagnostic);
+}
+```
+
+**Producer trait signature change.** `produce_scan_result`
+adds a `diagnostics: &dyn DiagnosticSink` parameter (per-call;
+runtime-dispatch). The choice of `dyn` rather than a generic
+`S: DiagnosticSink` is deliberate: the sink is a runtime-swap
+surface in Stage 4 (different sinks for different test
+contexts, different log scopes, different actor topologies),
+and one vtable indirection per call is cheap against the
+per-call work envelope. **The signature is locked now** so
+Stage 4's actor wiring does not have to widen
+`LocalRefresh::new` or rev the trait.
+
+##### What this shape unlocks (deferred consumers; PR 4 lands only the seam)
+
+- **Fail2ban-style intra-session mitigation.** A
+  `PeerReputationActor` subscribes to `RefreshDiagnostic`,
+  maintains per-peer event history with decay, applies
+  threshold-based graduated response (rate-limit → temp-ban
+  → rotate). PR 1's `DaemonEngine` peer-rotation contract
+  becomes the *output* of this actor rather than the
+  orchestrator's primary decision logic. The orchestrator
+  gets the unit-variant trait return for the synchronous
+  moment; the rotation policy lives in the reputation actor
+  and can grow without polluting the trait surface.
+- **Pattern-based recovery.** A `RecoveryActor` watches for
+  sequences like "`DaemonMalformed` at block H from peer A
+  → re-request block H from peer B → cross-check with peer
+  C." This is Byzantine-fault-tolerance-flavored recovery
+  driven by the event stream's temporal structure, not by
+  single error events. The recovery actor can require
+  N-of-M agreement on contested data without any change to
+  the producer.
+- **R5 dissolved by composition** (per §5.4.7 R5 above).
+- **R5 trigger becomes a natural projection.** What Round 2's
+  first pass named as "telemetry counter to gate the V3.x
+  decision" becomes a natural projection of the diagnostic
+  stream rather than a separately-maintained counter — more
+  granular, no trait-surface leakage.
+
+The pattern: capability we'd otherwise spend on bespoke logic
+at the producer becomes a property of the actor mesh's
+composition.
+
+##### Excluded from the synchronous trait error
 
 - `ConcurrentMutation { wallet, result }` — orchestrator-
   internal; generated by `LedgerEngine::apply_scan_result`
@@ -1111,25 +1460,49 @@ it as `RefreshEngine::Error: Into<RefreshError>`. Variant set:
   the orchestrator-side `RefreshError`. Producer never emits.
 - `AlreadyRunning` — orchestrator-internal; refresh-handle
   racing concern, not a producer concern.
-- `ReorgTooDeep { fork_height, max_rewind }` — Round 2 keeps
-  the existing **Ok-with-rewind** shape from
+- `ReorgTooDeep { fork_height, max_rewind }` — kept as
+  Ok-with-rewind merge-layer detection per
   [`find_fork_point`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
-  (lines 1148–1156): the producer returns `Ok(h+1)` when
-  walking past the reorg window; the merge layer surfaces
-  deep-reorg via wallet-side rewind-too-deep limits, per the
-  §1.5 actor-identity reasoning ("snapshot-disagreement is a
-  refresh-loop concern, not a ledger-internal concern"). The
-  user's proposed `ReorgTooDeep` producer variant would
-  duplicate the merge-side detection. **Disposition:** keep
-  current shape; revisit only if V3.x merge-layer detection
-  proves load-bearingly insufficient.
+  (lines 1148–1156); reorg-amplification detection moves to
+  `ReorgAmplificationDetector` per R5's composition
+  resolution above.
 
-The cleanly-split shape (producer trait error = subset of
-existing `RefreshError`) lands as a Phase 0c spec amendment
-to
-[`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
-§3.5; Phase 1's commit decomposition lifts `ProduceError` to
-its public name.
+##### Phase 0c / 0e scope
+
+- **Phase 0c — unit-variant `RefreshError`.** Three variants;
+  no payload; `Self::Error: Into<RefreshError>` in the trait
+  surface (orchestrator's existing `RefreshError` enum is
+  *retained* — `Cancelled` / `Io(IoError)` /
+  `MalformedScanResult { reason: &'static str }` /
+  `ConcurrentMutation` / `AlreadyRunning` — and grows the
+  trait-error→orchestrator-error conversion per the
+  exclusion list above). The conversion drops payload at
+  the trait boundary; the orchestrator's `RefreshError`
+  reason content is for backward-compat synchronous-API
+  callers and is constructed orchestrator-side from the
+  variant tag plus orchestrator context, not from
+  attacker-controlled trait payload.
+- **Phase 0e (new) — `RefreshDiagnostic` enum + `DiagnosticSink`
+  trait + `produce_scan_result` signature change.** Variant
+  set per the Phase 0e seed above; `MalformedKind`,
+  `DaemonOp`, `ProtocolErrorKind` are bounded enums (no
+  attacker-controlled bytes). Stage 1's `LocalRefresh`
+  emits a minimal subset of variants (`ScanProgress`,
+  `DaemonMalformed`); the remaining variants land as the
+  scan logic grows the corresponding observation points.
+  A trivial `NoopDiagnosticSink` (drop everything) and a
+  `TracingDiagnosticSink` (route to `tracing::event!`)
+  satisfy Stage 1; the actor-mesh sink lands in V3.x.
+
+Phase 1's commit decomposition (Round 4) sequences these
+amendments: the unit-variant `RefreshError` and the
+`DiagnosticSink` parameter on `produce_scan_result` land in
+the same commit as a coupled signature change; the
+`RefreshDiagnostic` enum's initial variant set lands
+adjacent; the consumer-side actors (`PeerReputationActor`,
+`RecoveryActor`, `ReorgAmplificationDetector`) land in the
+V3.x actor-mesh PR per the FOLLOWUPS entries added in this
+commit.
 
 #### R7 — `ScanResult` atomicity-under-cancellation contract
 
@@ -1145,12 +1518,175 @@ checks at
 the contract pin prevents future drift. Phase 0a prose
 amendment.
 
-#### Trait-surface contract pins (§5.4.6) — confirmed
+#### Trait-surface contract pins (§5.4.6) — confirmed and extended by Round 2 reframe
 
 - `Send + Sync + 'static` bound on `R: RefreshEngine` lands as
   Phase 0a §2.3 amendment.
 - `Progress`-channel trust-boundary pin lands as Phase 0a §2.3
   prose; consumers must be inside the wallet trust boundary.
+- **Diagnostic-stream trust-boundary pin (Round 2 reframe).**
+  `DiagnosticSink` implementations route full-fidelity
+  `RefreshDiagnostic` events only to in-process consumers
+  inside the wallet trust boundary; cross-process or network-
+  bound consumers receive only projection types explicitly
+  sanitized at the boundary. Phase 0a §2.3 prose amendment.
+  The Progress-channel pin above becomes a specific case of
+  this broader pin (the `RefreshProgress` watch channel is
+  the UI-consumer projection of `RefreshDiagnostic::ScanProgress`).
+
+### §5.4.8 Diagnostic-stream attack surfaces (Round 2 reframe; honestly enumerated)
+
+The R6 two-channel reframe introduces a new public surface —
+`RefreshDiagnostic` events flowing through `DiagnosticSink` to
+specialized consumer actors. This is **not free**; the
+reframe lands here only because the additional surface is
+**structural, not informational** — PR 4 defines a channel,
+not a leak through it. The five attack surfaces below are
+each named with a mitigation pinnable now (so Stage 4's actor
+mesh has the constraints to design against) and a deferred
+implementation (the consumer-actor PR).
+
+#### 1. Peer reputation as fingerprint
+
+**Threat.** A persistent peer-reputation database is a
+deanonymization surface: "this wallet has interacted with
+these daemons over time" leaks linkability across sessions
+and is structurally adjacent to the privacy-first commitment
+in [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) §2.
+
+**Mitigation pin (binding on all V3.x consumer actors).** The
+`PeerReputationActor`'s state is **in-memory only**, scoped
+to the wallet session; drop on wallet close. **No persistence
+beyond the wallet session.** A coarse-grained current-state-only
+persistence ("daemon X banned until time T") is the most
+that may persist, and only if a future review explicitly
+justifies the relaxation — V3.x default is no persistence.
+
+This conflicts with classical fail2ban's "remember bad actors
+across sessions" disposition; the conflict is genuine, and
+**privacy-first wins** per the priority hierarchy. Shekyl's
+fail2ban is intra-session and resets on close.
+
+#### 2. `PeerId` stability in mixed-anonymity contexts
+
+**Threat.** Per
+[`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md), daemon
+connections over Tor/I2P intentionally lack stable peer
+identifiers from the wallet's perspective. The `PeerId` field
+in `RefreshDiagnostic`'s peer-attributing variants (when the
+future-PR adds it) has different semantics depending on
+transport: for direct connections, it is a network endpoint;
+over Tor, a circuit-scoped opaque identifier; over I2P,
+similar. The `PeerReputationActor`'s correctness depends on
+what `PeerId` actually identifies — and the answer varies
+per transport.
+
+**Mitigation pin.** `PeerId` is a **transport-defined opaque
+token**, not a stable identity. Reputation decay must be
+aggressive enough that transport-rotated identifiers do not
+persist as ghost-reputation; the decay constant is calibrated
+to the transport's circuit-rotation cadence (Tor: ~10 min;
+I2P: similar). The trait contract for `PeerId` (defined by
+the future PR that grows PR 1's `DaemonEngine` peer-aware
+surface) **must** include this opaque-token guarantee.
+Stage 1's `RefreshDiagnostic` variants omit peer attribution
+entirely; the variant set grows additively when `PeerId` lands.
+
+#### 3. Peer rotation as side-channel
+
+**Threat.** A daemon under adversary control can observe
+whether the wallet rotated away from it by re-establishing
+connections to peers it might also control. If rotation
+timing reveals information ("rotated 50 ms after I sent
+malformed block X"), the rotation behavior itself is
+observable and gives the adversary a high-bandwidth covert
+signal back from the wallet.
+
+**Mitigation pin.** Rotation actions emitted by the
+`PeerReputationActor` are **temporally decoupled** from
+event-receipt times: jittered rotation, batched decisions,
+and an actor-internal scheduler that decouples
+event-observation-time from rotation-action-time. The jitter
+parameters and batching window land in the consumer-actor
+PR; the trait contract for the rotation signal must accept
+delayed action without re-issuing on the same observation.
+
+This applies in both the synchronous and actor-mesh models,
+but the actor mesh makes it easier to implement properly —
+the temporal decoupling is internal to the
+`PeerReputationActor` and does not leak through the
+producer's API.
+
+#### 4. Diagnostic stream as covert channel
+
+**Threat.** If any consumer of `RefreshDiagnostic` has a
+network path (analytics, crash reporter, even tracing
+infrastructure with remote sinks), the stream is a potential
+exfiltration channel. Hostile telemetry consumers can
+amplify wallet-state observations into a high-bandwidth
+side channel — exactly the kind of property the §3.1 master-
+secret-isolation framing tries to prevent.
+
+**Mitigation pin (trait contract, §5.4.6).** Full-fidelity
+`RefreshDiagnostic` events flow only to **in-process** actors
+inside the wallet trust boundary. Cross-process or network-
+bound consumers receive only **projection types** that have
+been explicitly sanitized at the boundary — counts and
+aggregates, not events. This is the same principle as
+production/debug log separation, enforced at the messaging
+layer rather than the logging layer.
+
+The trait-contract pin is enforceable by review (consumer
+actors are reviewed against this rule) but not by the type
+system; Stage 4's actor topology design must respect it.
+Phase 0a §2.3 prose amendment pins the rule so future
+implementations cannot accidentally cross it.
+
+#### 5. Mailbox saturation as DoS
+
+**Threat.** Rich diagnostic events emitted at high rate (a
+hostile daemon spamming malformed blocks; a chain with a
+genuine surge in scan-relevant activity) could saturate an
+actor's mailbox, with the usual back-pressure / drop / OOM
+trichotomy. A hostile daemon controlling the
+`RefreshDiagnostic` event rate can trigger OOM in the consumer
+actors if the mailbox is unbounded.
+
+**Mitigation pin.** Consumer mailboxes are **bounded** with
+explicit overflow policies:
+
+- **Diagnostics consumers** (telemetry, logger): drop-oldest-on-overflow.
+  Losing forensic detail is acceptable; losing process liveness is not.
+- **Reputation consumer** (`PeerReputationActor`):
+  aggregate-on-overflow — preserve per-peer event counts,
+  drop per-event detail. The threshold logic depends on
+  counts, not individual events.
+- **Recovery consumer** (`RecoveryActor`): event-sequence-aware
+  drop policy; preserve enough temporal structure to detect
+  pattern matches; drop redundant within-pattern events.
+
+The bounded-mailbox property is a consumer-side contract,
+not a producer-side one; the producer emits at its natural
+rate, the sink dispatches to consumer mailboxes, each
+consumer's mailbox enforces its own policy. The trait
+contract for `DiagnosticSink` does **not** promise delivery;
+it promises emission attempt. Phase 0e seed text records
+this so consumers cannot assume lossless delivery.
+
+#### Cross-cutting: actor-mesh emergent behaviour
+
+The five surfaces above are individually mitigable; the
+emergent-behaviour question — *do the mitigations compose
+correctly when all five are active simultaneously* — is a
+V3.x actor-mesh-PR review concern, not a PR 4 concern. PR 4
+pins the constraints; the emergent-behaviour analysis is
+deferred to the implementation PR with the constraints as
+input. The
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+"audits-are-clean-so-compress" anti-pattern guards against
+relaxing this discipline in the V3.x PR: the emergent-behaviour
+audit must run even if each individual mitigation is
+audit-clean.
 
 ### §5.5 Work-list — refresh-adjacent items and where they live
 
@@ -1175,8 +1711,14 @@ for PR 4's scope: every item has a named home.
 | `PendingTxEngine::build` behaviour during long refresh (R1) | V3.0 (PR 5 design rounds) | §5.4.7 R1; carried into PR 5 with **build-against-current-snapshot + snapshot-ID pinning** as the working hypothesis |
 | `RefreshOptions` / `RefreshProgress` public-module promotion (R3) | **closed (Round 2)** | §5.4.7 R3 — confirmation: types already publicly re-exported at flat crate root; no module promotion |
 | View-material flow to the producer (R4) | **closed (Round 2)** | §5.4.7 R4 — disposition **(a-instance-scoped)**: `LocalRefresh::new(view_material: ViewMaterial)`; `ViewMaterial` type lands in Phase 0a |
-| Mid-scan reorg-abort at checkpoint 3 (R5) | V3.x | §5.4.7 R5 — deferred to FOLLOWUPS V3.x; trigger: hostile-daemon work-amplification measurable in RC stabilization or production telemetry |
-| `RefreshError::ConcurrentMutation` boundary (R6) | **closed (Round 2)** | §5.4.7 R6 — promote `ProduceError` to `pub`; `Cancelled` / `Io(IoError)` / `MalformedScanResult { reason: &'static str }`; `ConcurrentMutation`, `AlreadyRunning`, `ReorgTooDeep` excluded |
+| Mid-scan reorg-abort at checkpoint 3 (R5) | **retired by composition (Round 2 reframe)** | §5.4.7 R5 (reframe) — resolved by `ReorgAmplificationDetector` actor consuming `RefreshDiagnostic::ReorgObserved` events; producer's §7 checkpoint discipline does not grow; consumer-actor implementation deferred to V3.x actor-mesh PR. Supersedes Round 2's first-pass "defer + extend checkpoint 3" disposition |
+| `RefreshError` shape (R6) | **reframed (Round 2 reframe)** | §5.4.7 R6 (reframe) — two-channel: unit-variant `RefreshError` (`Cancelled` / `Io` / `MalformedScanResult`; no payload) + `RefreshDiagnostic` event stream + `DiagnosticSink` trait. Supersedes Round 2's first-pass `MalformedScanResult { reason: &'static str }` disposition; closes the memory-amplifier vector by construction |
+| `RefreshDiagnostic` + `DiagnosticSink` (Round 2 reframe; Phase 0e) | V3.0 (Phase 0e) | §5.4.7 R6 (reframe), §4 Phase 0e — enum + trait + `produce_scan_result` signature change; Stage 1 sinks: `NoopDiagnosticSink`, `TracingDiagnosticSink` |
+| Diagnostic-stream attack surfaces (peer-reputation fingerprint; PeerId stability under Tor/I2P; rotation-timing side-channel; covert-channel; mailbox saturation) | V3.0 trait pin + V3.x consumer-side enforcement | §5.4.8 (Round 2 reframe) — mitigation pins land in Phase 0a / Phase 0e prose; consumer-side enforcement (in-memory-only reputation, jittered rotation, projection-only cross-boundary consumers, bounded mailboxes) lands in V3.x actor-mesh PR |
+| `ReorgAmplificationDetector` consumer actor | V3.x | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.x entry added in this commit; trigger: when Stage 4 actor mesh stabilizes |
+| `PeerReputationActor` consumer actor (fail2ban-style intra-session) | V3.x | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.x entry added in this commit; trigger: when Stage 4 actor mesh stabilizes; per §5.4.8 #1 mitigation pin (in-memory only, drop on wallet close) |
+| `RecoveryActor` consumer actor (pattern-based recovery / Byzantine-fault-tolerance) | V3.x | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.x entry added in this commit; trigger: when Stage 4 actor mesh stabilizes |
+| `RefreshDiagnostic` peer-attribution variant extension (gated by PR 1 `DaemonEngine` peer-aware surface) | V3.x | Stage 1 emits peer-less variants; the `RefreshDiagnostic` enum's `#[non_exhaustive]` attribute lets PR 1's peer-aware DaemonEngine surface land with additive variant additions per §5.4.8 #2 |
 | `ScanResult` atomicity-under-cancellation contract (R7) | **closed (Round 2)** | §5.4.7 R7 — already true in `engine/refresh.rs`; pinned in §2.3 prose (Phase 0a) |
 | Three call modes (cold open / steady-state / post-submit) — invocation-overhead constraint | V3.0 (Round 4 commit decomposition) | §5.4.4 — under (a-instance-scoped) the per-attempt scanner construction moves into `LocalRefresh::new`, satisfying the constraint by construction |
 | Adversarial daemon scenarios under α (reorg amplification, view-tag DoS, withholding, snapshot poisoning, evidence amplifier) | mostly closed (Round 2); reorg amplification deferred via R5 | §5.4.5; mitigations: R5 (V3.x deferral), R6 keeps `&'static str` evidence (strictly bounded), Phase 0a `LedgerSnapshot` value-typed confirmation |
@@ -1221,11 +1763,14 @@ rounds resume after M3e closes.
 ## §8 What this document does not yet resolve
 
 Round 1 closed the §5 producer-redesign disposition (α, §5.4).
-The Round 1 review pass (same date) corrected §3.1 and surfaced
+The Round 1 review pass (2026-05-12) corrected §3.1 and surfaced
 R4–R7 plus the §5.4.4 call-mode constraint, the §5.4.5 adversarial
-scenarios, and the §5.4.6 trait-surface contract pins. **Round 2
-(same date) settled R2 / R3 / R4 / R5 / R6 / R7 per §5.4.7.**
-Only Round 4 remains as PR-4-internal work.
+scenarios, and the §5.4.6 trait-surface contract pins. Round 2
+(2026-05-12) settled R1 / R2 / R3 / R4 / R7 cleanly. **Round 2
+reframe (2026-05-13) supersedes Round 2's R5 and R6 dispositions**
+with the two-channel actor-mesh shape (§5.4.7 R5 reframe, R6
+reframe, §5.4.8 attack surfaces). Only Round 4 remains as
+PR-4-internal work.
 
 **Carried into PR 5.**
 
@@ -1239,9 +1784,14 @@ Only Round 4 remains as PR-4-internal work.
 **Deferred to V3.x FOLLOWUPS (named homes in
 [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)).**
 
-- §5.4.7 R5 (mid-scan reorg-abort at checkpoint 3) — V3.x
-  trigger: hostile-daemon work-amplification measurable in
-  V3.0 RC stabilization or post-genesis production telemetry.
+- §5.4.7 R5 (reframe) — `ReorgAmplificationDetector` consumer
+  actor; trigger: when Stage 4 actor mesh stabilizes. **The
+  previous "extend checkpoint 3" deferral is withdrawn and
+  replaced** with the composition disposition.
+- §5.4.7 R6 (reframe) — `PeerReputationActor`, `RecoveryActor`,
+  and a possible `ViewTagAnomalyDetector` consumer actor; the
+  diagnostic-stream spec doc capturing the contract for future
+  consumers; all triggered by Stage 4 actor mesh stabilization.
 - §5.4.7 R4 (c) split-producer/recoverer — V3.x trigger:
   HW-wallet-backed signing or post-V3 threat-model refinement
   requires producer-side spend-key isolation.
@@ -1254,6 +1804,10 @@ Only Round 4 remains as PR-4-internal work.
   (a-instance-scoped) the first commit introduces `ViewMaterial`
   and the constructor; the per-attempt scanner build moves out
   of `run_refresh_task` and into `LocalRefresh`'s state. The
-  §5.4.4 invocation-overhead constraint is satisfied by
-  construction (no per-call setup added beyond what the
-  inherent method had).
+  Round 2 reframe adds two coupled signature changes (Phase 0c
+  unit-variant `RefreshError`; Phase 0e `DiagnosticSink`
+  parameter on `produce_scan_result`) that land in the same
+  commit as a coupled trait-surface change; the `RefreshDiagnostic`
+  enum's initial variant set lands adjacent. The §5.4.4
+  invocation-overhead constraint is satisfied by construction
+  (no per-call setup added beyond the parameter passes).

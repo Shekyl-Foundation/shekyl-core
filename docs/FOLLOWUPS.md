@@ -2793,32 +2793,112 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.x — staker archival and visualization ship
 
-- **`RefreshEngine` mid-scan reorg-abort at checkpoint 3 (Stage 1
-  PR 4 R5 deferral).** Round 2 of
+- **`ReorgAmplificationDetector` consumer actor (Stage 1 PR 4 R5
+  composition home; supersedes the Round 2 first-pass "extend
+  checkpoint 3" deferral).** PR 4's Round 2 reframe of
   [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-  §5.4.7 R5 deferred the discipline-budget question of whether
-  the producer's checkpoint 3 should poll daemon tip per
-  cancellation check and abort the attempt early on observed
-  reorg. Today's checkpoint 3 catches cancellation but not
-  reorg-during-scan; an adversarial daemon can sustain
-  O(window) wasted scan work per back-to-back reorg until peer
-  rotation triggers. Cost of the V3.0-time mitigation is one
-  daemon `get_height` poll per checkpoint-3 hit (~per-block,
-  ~10K+ extra RPCs/wallet-day in steady-state) plus an
-  extension to
-  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
-  §7's checkpoint discipline. **Trigger:** *if hostile-daemon
-  work-amplification scenarios become measurable in V3.0 RC
-  stabilization or post-genesis production telemetry, R5
-  extends checkpoint 3 with one tip-poll per checkpoint-3 hit
-  and §7's discipline grows accordingly.* Until the trigger
-  fires, the existing peer-rotation contract on
-  `DaemonEngine` (PR 1) is the live mitigation. Cross-references:
+  §5.4.7 R5 resolved the reorg-amplification scenario by
+  composition under the two-channel error/diagnostic shape:
+  the producer emits `RefreshDiagnostic::ReorgObserved`
+  events to `DiagnosticSink` whenever `find_fork_point`
+  detects a fork during scanning; a `ReorgAmplificationDetector`
+  actor consumes those events, maintains a windowed
+  reorg-count (per peer once PR 1's `DaemonEngine` peer-aware
+  surface lands, per attempt otherwise), and signals
+  cancellation back to the orchestrator via the existing
+  `CancellationToken` checkpoint-3 plumbing. The producer's
+  §7 checkpoint discipline does not grow. **Trigger:** *when
+  Stage 4 actor mesh stabilizes.* No telemetry gate; the
+  consumer-side implementation is policy-driven, not
+  evidence-driven. **Note:** this entry replaces the Round 2
+  first-pass deferral "if hostile-daemon work-amplification
+  scenarios become measurable… R5 extends checkpoint 3 with
+  one tip-poll per checkpoint-3 hit and §7's discipline grows
+  accordingly" — the reframe withdraws the extend-checkpoint-3
+  path and lands the composition seam in PR 4 instead.
+  Cross-references:
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-  §5.4.5 (reorg-amplification adversarial scenario), §5.4.7 R5
-  (Round 2 deferral),
+  §5.4.5 (reorg-amplification adversarial scenario), §5.4.7
+  R5 reframe, §5.4.7 R6 reframe (two-channel shape), §5.4.8
+  attack-surface enumeration,
   [`engine/refresh.rs:980 / :1140 / :1186`](../rust/shekyl-engine-core/src/engine/refresh.rs)
-  (current checkpoint-3 cancel-only sites).
+  (current checkpoint-3 cancel-only sites, preserved
+  unchanged).
+
+- **`PeerReputationActor` consumer actor (Stage 1 PR 4 R6
+  reframe; intra-session fail2ban-style mitigation).** PR 4's
+  Round 2 reframe of
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 introduced the diagnostic-stream seam; the
+  `PeerReputationActor` is the natural fail2ban-style consumer.
+  Subscribes to `RefreshDiagnostic`, maintains per-peer event
+  history with decay, applies threshold-based graduated
+  response (rate-limit → temp-ban → rotate). PR 1's
+  `DaemonEngine` peer-rotation contract becomes the *output*
+  of this actor rather than the orchestrator's primary
+  decision logic. **Hard mitigation pin (§5.4.8 #1):**
+  state is **in-memory only**, scoped to the wallet session;
+  drop on wallet close. **No persistence beyond the wallet
+  session** unless a future review explicitly justifies a
+  coarse-grained current-state-only relaxation (e.g.,
+  "daemon X banned until time T") on review grounds — V3.x
+  default is no persistence. Conflicts with classical
+  fail2ban's "remember bad actors across sessions"
+  disposition; privacy-first per
+  [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) §2
+  wins. **Rotation-timing pin (§5.4.8 #3):** jittered
+  rotation, batched decisions, decoupled
+  event-observation-time from rotation-action-time. **PeerId
+  pin (§5.4.8 #2):** depends on PR 1 growing a peer-aware
+  `DaemonEngine` surface; `PeerId` must be transport-defined
+  opaque tokens with decay calibrated to circuit-rotation
+  cadence. **Trigger:** *when Stage 4 actor mesh stabilizes
+  and PR 1's peer-aware DaemonEngine surface lands.*
+  Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 reframe, §5.4.8 attack-surface enumeration
+  (1, 2, 3),
+  [`ANONYMITY_NETWORKS.md`](ANONYMITY_NETWORKS.md) (peer-
+  identity-under-Tor/I2P framing).
+
+- **`RecoveryActor` consumer actor (Stage 1 PR 4 R6 reframe;
+  pattern-based recovery / Byzantine-fault-tolerance).** PR 4's
+  Round 2 reframe of
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 also enables pattern-based recovery as a
+  consumer-actor pattern. `RecoveryActor` watches for
+  sequences like `DaemonMalformed { block_height = H }` from
+  peer A → re-request block H from peer B → cross-check
+  with peer C → apply if N-of-M agree. Byzantine-fault-tolerance
+  recovery driven by the event stream's temporal structure,
+  not by single error events. **Mailbox-policy pin (§5.4.8
+  #5):** event-sequence-aware drop policy preserves enough
+  temporal structure to detect pattern matches; drops
+  redundant within-pattern events. **Trigger:** *when Stage 4
+  actor mesh stabilizes.* Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 reframe, §5.4.8 #5 (mailbox-saturation DoS).
+
+- **Diagnostic-stream specification document
+  (`docs/design/REFRESH_DIAGNOSTIC_STREAM.md`, V3.x).** PR 4's
+  Round 2 reframe of
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 defines the `RefreshDiagnostic` / `DiagnosticSink`
+  trait contract; the implementation-side spec doc captures
+  the variant taxonomy, consumer-actor design space,
+  mailbox-policy templates, the trust-boundary discipline
+  (in-process-only for full-fidelity; projection-only across
+  trust boundaries), and the emergent-behaviour analysis
+  framework when multiple consumers coexist (§5.4.8
+  "Cross-cutting" note). **Trigger:** *when the first V3.x
+  consumer actor (`ReorgAmplificationDetector`,
+  `PeerReputationActor`, or `RecoveryActor`) enters design
+  rounds.* The doc seeds with PR 4's §5.4.7 R6 / §5.4.8
+  content and grows additively as consumers are designed.
+  Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 reframe (trait contract definition), §5.4.8
+  (attack-surface enumeration with mitigation pins).
 
 - **`RefreshEngine` (c) split-producer/recoverer view-material
   shape (Stage 1 PR 4 R4 deferral).** Round 2 of

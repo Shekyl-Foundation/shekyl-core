@@ -815,6 +815,171 @@
   findings — none argue for β or γ. They argue for a more
   carefully-specified α. Doc-only; no Rust or C++ code touched.
 
+- **Stage 1 PR 4 — Round 2 reframe: diagnostic-stream seam
+  supersedes Round 2 first-pass R5 / R6 dispositions.** This
+  bullet supersedes the immediately-following bullet's R5 and
+  R6 dispositions per the
+  [Round 2 reframe section](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R5 reframe / §5.4.7 R6 reframe / §5.4.8. The
+  immediately-following bullet's R1 / R2 / R3 / R4 / R7
+  dispositions are unchanged and still hold.
+
+  **Why the reframe.** Round 2's first-pass R5 (defer to V3.x
+  with telemetry trigger) and R6 (keep `MalformedScanResult {
+  reason: &'static str }`) reasoned about `RefreshEngine` in a
+  synchronous function-call graph where the error is a single
+  isolated event and the payload question is "what does this
+  caller branch on." The design target is an actor-mesh fabric
+  (Stage 4) where the error is a stream event with temporal
+  context, and the same event routes to multiple consumers
+  with different security properties per consumer. The
+  first-pass disposition is the cost-benefit-defer-to-later
+  anti-pattern per
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc);
+  the reframe is the architectural-integrity-now answer —
+  lay the seam now, defer only the consumer implementations.
+
+  **The two-channel shape (R6 reframe).** The synchronous
+  trait return and the actor-mesh diagnostic stream are
+  different artifacts with different consumers and different
+  security properties; they get different types.
+  - **Channel 1: synchronous trait return `RefreshError` —
+    unit variants only.** Three variants: `Cancelled`, `Io`,
+    `MalformedScanResult`. **No string, no evidence, no
+    payload of any kind.** The orchestrator's branch table is
+    structural (cancel-propagate / retry-with-backoff /
+    peer-rotation); the decision needs zero information
+    beyond the variant tag. **Closes the memory-amplifier
+    vector by construction** — there is no attacker-controlled
+    data anywhere on the producer trait error surface.
+  - **Channel 2: `RefreshDiagnostic` event stream emitted via
+    `DiagnosticSink`.** Rich structured events fan out to
+    specialized consumer actors with per-consumer trust
+    posture and sanitization rules. `produce_scan_result`
+    gains a `diagnostics: &dyn DiagnosticSink` parameter
+    (per-call; runtime-dispatch; locked now so Stage 4
+    doesn't re-rev the trait). Stage 1 emits a minimal seed
+    variant set (`DaemonMalformed { kind: MalformedKind }`,
+    `DaemonTimeout { op, elapsed }`, `DaemonProtocolError
+    { kind }`, `ReorgObserved { fork_height, depth }`,
+    `ScanProgress { height, candidates }`); Stage 1 sinks
+    are `NoopDiagnosticSink` / `TracingDiagnosticSink`; the
+    actor-mesh sink lands in V3.x. The enum is
+    `#[non_exhaustive]` so the variant set grows additively
+    with PR 1's peer-aware `DaemonEngine` surface and
+    future-PR consumer patterns.
+  - **Sanitization is a property of the consumer, not the
+    stream.** Full-fidelity events stay in-process per the
+    §3.1 / §5.4.6 trust-boundary pin (extended from the
+    Progress-channel pin to the broader diagnostic-stream
+    pin); persisted or exported projections are lossy by
+    design.
+
+  **R5 dissolved by composition (R5 reframe).** The
+  reorg-amplification scenario resolves via a
+  `ReorgAmplificationDetector` consumer actor that subscribes
+  to `RefreshDiagnostic::ReorgObserved` events, maintains a
+  windowed count, and signals cancellation back through the
+  existing `CancellationToken` checkpoint-3 plumbing. **The
+  producer's §7 checkpoint discipline does not grow.** No
+  per-checkpoint-3 daemon RPC; no §7 amendment. The
+  capability is added by composition of the actor mesh's
+  consumers; the implementation deferred to the V3.x
+  actor-mesh PR. **Trigger is policy-driven, not
+  evidence-driven** — the previous "if hostile-daemon
+  work-amplification scenarios become measurable" gate is
+  withdrawn.
+
+  **What the reframe unlocks (consumer-side; deferred
+  implementations).** Fail2ban-style intra-session mitigation
+  via `PeerReputationActor` (per-peer event history with
+  decay; threshold-based graduated response); pattern-based
+  recovery via `RecoveryActor` (Byzantine-fault-tolerance-flavored
+  N-of-M agreement on contested data); reorg-amplification
+  detection via `ReorgAmplificationDetector` (R5's natural
+  home); future variant additions as the consumer-pattern
+  surfaces mature.
+
+  **Five new attack surfaces honestly enumerated (§5.4.8).**
+  The reframe is not free; the diagnostic-stream seam
+  introduces five attack surfaces, each with a mitigation
+  pinnable now and a deferred consumer-actor implementation.
+  - **Peer-reputation fingerprint** → in-memory only, scoped
+    to wallet session, drop on close. Privacy-first wins
+    over classical fail2ban's cross-session memory.
+  - **`PeerId` stability under Tor/I2P** → `PeerId` is a
+    transport-defined opaque token; decay calibrated to
+    circuit-rotation cadence; Stage 1 variants omit peer
+    attribution entirely until PR 1's peer-aware
+    `DaemonEngine` surface lands.
+  - **Rotation-timing side-channel** → jittered rotation,
+    batched decisions, temporal decoupling of
+    event-observation-time from rotation-action-time inside
+    the `PeerReputationActor`.
+  - **Diagnostic stream as covert channel** → trait-contract
+    pin (§5.4.6 / §3.1): full-fidelity events flow only to
+    in-process consumers inside the wallet trust boundary;
+    cross-process or network-bound consumers receive only
+    explicitly-sanitized projection types.
+  - **Mailbox saturation as DoS** → bounded consumer
+    mailboxes with explicit overflow policies (drop-oldest
+    for diagnostics consumers; aggregate-on-overflow for
+    reputation; event-sequence-aware drop for recovery).
+    Producer-side: emit at natural rate; lossless delivery
+    is not promised.
+
+  **Phase 0 finalized under the reframe.**
+  - Phase 0a: trait-surface contract pins + `ViewMaterial`
+    type definition (R4) + diagnostic-stream trust-boundary
+    pin (Round 2 reframe).
+  - Phase 0b: `LocalRefresh::new(view_material: ViewMaterial)`
+    constructor + flat-crate-root exports (R3 confirmation +
+    `ViewMaterial`).
+  - Phase 0c: **reframed** — unit-variant `RefreshError`
+    (`Cancelled` / `Io` / `MalformedScanResult`; no payload).
+    Orchestrator-side `RefreshError` retained with
+    backward-compat content constructed orchestrator-side;
+    no attacker-controlled trait payload.
+  - Phase 0d: **retired** — R5 resolves by composition, not
+    by deferral.
+  - Phase 0e (**new**): `RefreshDiagnostic` enum +
+    `DiagnosticSink` trait + `produce_scan_result` signature
+    change (`diagnostics: &dyn DiagnosticSink` parameter).
+    Stage 1 sinks: `NoopDiagnosticSink`, `TracingDiagnosticSink`.
+
+  **FOLLOWUPS amended.** The previous Round 2 "extend
+  checkpoint 3" V3.x FOLLOWUPS entry is **withdrawn** and
+  replaced by the `ReorgAmplificationDetector` entry. Three
+  new V3.x FOLLOWUPS entries added: `PeerReputationActor`
+  (with §5.4.8 #1 / #2 / #3 mitigation pins binding on the
+  implementation), `RecoveryActor`, and
+  `docs/design/REFRESH_DIAGNOSTIC_STREAM.md` spec doc (seeded
+  by PR 4's §5.4.7 R6 / §5.4.8 content; grows additively as
+  consumers are designed).
+
+  **Trajectory after the reframe.** Only Round 4 remains as
+  PR-4-internal work (Phase 0 commit decomposition + §6
+  review checklist); PR 5's design rounds carry R1 forward
+  with the snapshot-ID-pinning working hypothesis. The
+  α-disposition's *provisionally load-bearing* status remains
+  the re-evaluation gate.
+
+  **Meta-observation recorded.** The reframe is the
+  recurrence pattern named by
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  "the cost-benefit-defer-to-later anti-pattern" working
+  against itself — Round 2's first pass defaulted to deferral
+  and minimal-surface; the architectural-integrity-now answer
+  was to lay the structural seam (one parameter, one enum,
+  one trait) and defer only the consumer implementations.
+  The compounded benefit is what
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  "continuous discipline as inheritance prevention" framing
+  predicts: the seam landed now removes the need for V3.x to
+  re-litigate the trait surface.
+
+  Doc-only; no Rust or C++ code touched.
+
 - **Stage 1 PR 4 — Round 2 dispositions: R2 / R3 / R4 / R5 / R6 /
   R7 settled.** Same-day follow-up to the Round 1 review pass
   above. Round 2 closes all seven residuals named by Round 1 +
