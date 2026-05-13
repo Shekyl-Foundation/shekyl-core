@@ -448,6 +448,13 @@ per-trait pre-flight checklist:
       }`; §4 Phase 0e seeds — `DaemonOp` /
       `ProtocolErrorKind` initial variant sets against the
       call-site audit, 2026-05-13).
+- [x] §5.5 work-list hygiene — P3
+      (`apply_scan_result_to_state` `Vec<usize>`-discard at
+      trait-impl call sites) row added against the dev-side
+      FOLLOWUPS entry that landed via PR #37 (`0a0d46b38`,
+      2026-05-10) during the design branch's pre-M3-tail
+      window. Closes the work-list-vs-FOLLOWUPS audit
+      delta before the design branch lands onto `dev`.
 - [x] Phase 0 spec amendments identified (§4 — populated by
       Round 1 review pass; Round 2 finalized against the
       resolved residuals; Round 2 close-out extends Phase 0c
@@ -2443,6 +2450,7 @@ for PR 4's scope: every item has a named home.
 | α/β/γ producer-redesign decision (Round 1 closed: α) | V3.0 | §5.4 (this doc) |
 | Async-path-skip post-pass (P1 *latent*) | V3.0 | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 (recorded on `dev` 2026-05-10; entry titled “P1 (latent): refresh post-pass skipped on async path”) |
 | Wallet-birthday plumbing into producer start-height (P2) | V3.0 | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 (recorded on `dev` 2026-05-10; entry titled “P2: wallet-birthday plumbing not wired into producer start-height”) |
+| Trait-impl `apply_scan_result` `Vec<usize>`-discard (P3) | V3.0 (closed by Round 3 / Round 4 trait-surface enumeration) | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 (recorded on `dev` 2026-05-10 via PR #37 commit `0a0d46b38`; entry titled “P3: `apply_scan_result_to_state` allocates `Vec<usize>` even for trait-impl callers that discard it”). PR #37 reshaped the merge pipeline so `LedgerIndexes::ingest_block`, `process_scanned_outputs`, and `apply_scan_result_to_state` carry insertion-index ranges (`Range<usize>` and `Vec<usize>`); the two trait-impl call sites (`LocalLedger::apply_scan_result`, `EngineFixture::apply_scan_result`) currently discard the `Vec` to preserve `LedgerEngine::apply_scan_result`'s unit-result trait signature. PR 4's trait-surface enumeration (Round 3 / Round 4) decides between two shapes that both close P3: (a) `LedgerEngine::apply_scan_result` grows to surface the insertion-range carryout, in which case the `Vec` is consumed and the optimization is dead code; (b) `RefreshEngine` owns the merge post-pass directly and `LedgerEngine::apply_scan_result` is removed, in which case the discard sites disappear with the trait method. Under α (Round 1) plus the (a-instance-scoped) view-material disposition (Round 2 R4), both shapes remain candidates — the choice falls out of Round 3's trait-surface enumeration against the post-M3e tree |
 | β internal-batching refinement | V3.x (R2) | §2.2 (out-of-scope note) + this table; promotion to FOLLOWUPS pending Round 2 R2 disposition |
 | FMD (fuzzy message detection) — negative result for V3.0 | V4 research | [`REFRESH_DESIGN_LANDSCAPE.md`](./REFRESH_DESIGN_LANDSCAPE.md) §4 |
 | OMR (oblivious message retrieval) — negative result for V3.0 | V3.x research | [`REFRESH_DESIGN_LANDSCAPE.md`](./REFRESH_DESIGN_LANDSCAPE.md) §5 |

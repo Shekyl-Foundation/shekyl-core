@@ -815,6 +815,31 @@
   findings — none argue for β or γ. They argue for a more
   carefully-specified α. Doc-only; no Rust or C++ code touched.
 
+- **Stage 1 PR 4 — §5.5 work-list hygiene: P3
+  `apply_scan_result_to_state` `Vec<usize>`-discard row
+  added.** Single-row addition to the
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.5 work-list against the dev-side FOLLOWUPS entry
+  ("P3: `apply_scan_result_to_state` allocates `Vec<usize>`
+  even for trait-impl callers that discard it") that landed
+  via PR #37 (commit `0a0d46b38`, 2026-05-10) during the
+  design branch's pre-M3-tail window. The design branch was
+  cut at `9e53c82fa` (pre-PR-#37); PR #37 reshaped the merge
+  pipeline (`LedgerIndexes::ingest_block`,
+  `process_scanned_outputs`, `apply_scan_result_to_state`
+  carry insertion-index ranges) and added P3 to FOLLOWUPS as
+  a PR 4-triggered deferral. The work-list row closes the
+  audit delta between the design doc's enumeration and the
+  dev-side FOLLOWUPS state before the design branch lands
+  onto `dev`. P3's disposition under α (Round 1) plus
+  (a-instance-scoped) view-material (Round 2 R4) remains
+  Round 3 / Round 4 trait-surface enumeration: either
+  `LedgerEngine::apply_scan_result` grows to surface the
+  insertion-range carryout (Vec consumed, optimization dead
+  code) or `RefreshEngine` owns the post-pass directly and
+  the trait method is removed (discard sites disappear).
+  Doc-only; no Rust or C++ code touched.
+
 - **Stage 1 PR 4 — Round 2 close-out: Phase 0c
   `InternalInvariantViolation` + Phase 0e `DaemonOp` /
   `ProtocolErrorKind` seed enums.** Same-day follow-up to
