@@ -688,6 +688,765 @@
   full-migration follow-up for the remaining `SHEKYL_*` fail-closed-
   on-misuse constants (~40) stays as FOLLOWUPS V3.0.
 
+### Documentation
+
+- **Stage 1 PR 4 — PR #42 Copilot review-pass disposition:
+  two typos, one stale work-list row, two CHANGELOG link
+  retargets, one CHANGELOG ordering correction.** Six
+  findings surfaced by `copilot-pull-request-reviewer` on
+  PR #42's design-branch open. Validated each at source;
+  five fixes landed verbatim, one fixed in the
+  opposite-direction-from-Copilot-suggested (CHANGELOG
+  ordering — Copilot suggested oldest-first; the file's
+  established `[Unreleased]` convention is newest-first
+  within substantive groupings, so the §5.5 hygiene entry
+  moved to the **top** of the PR 4 cluster rather than to
+  the bottom). Concrete dispositions:
+  - Typo `Forecloseing` → `Foreclosing` in
+    [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    §5.4.6 (R6 reframe, concurrent-emit pin discussion).
+  - Typo `dispositon` → `disposition` in
+    [`REFRESH_DESIGN_LANDSCAPE.md`](./design/REFRESH_DESIGN_LANDSCAPE.md)
+    §6 (bandwidth/pruning interplay paragraph).
+  - §5.5 work-list row for β internal-batching updated
+    from pre-Round-2 staleness (`V3.x (R2)` /
+    "promotion to FOLLOWUPS pending Round 2 R2 disposition")
+    to the settled Round 2 R2 disposition (**closed —
+    kept as §2.2 future-scaling note; not promoted to
+    FOLLOWUPS yet; revisit if V3.0 RC stabilization
+    bandwidth profiling identifies β as the remediation
+    over alternatives**).
+  - Two CHANGELOG citation links retargeted from
+    self-references to
+    [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    over to the actual
+    [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+    source. The link **text** named the source file; the
+    link **target** pointed to the design doc. Audit
+    readers couldn't follow the citation to code; that
+    misled the audit trail.
+  - PR 4 CHANGELOG cluster reordered so the newest commit
+    (§5.5 hygiene) sits at the top, matching the file's
+    `[Unreleased]` newest-first convention. The Round 1
+    chronological pair (disposition above review pass) is
+    preserved as a narrative — moving them to the bottom
+    of the cluster would have required two cross-reference
+    rewrites (`above` → `below`) for marginal benefit;
+    the minimal-invasive disposition is correct here. The
+    Round 2 sub-cluster was already newest-first; only the
+    §5.5 hygiene's position needed correction. PR #42
+    test plan updated to describe the resolved layout.
+  Doc-only; no Rust or C++ code touched.
+
+- **Stage 1 PR 4 — §5.5 work-list hygiene: P3
+  `apply_scan_result_to_state` `Vec<usize>`-discard row
+  added.** Single-row addition to the
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.5 work-list against the dev-side FOLLOWUPS entry
+  ("P3: `apply_scan_result_to_state` allocates `Vec<usize>`
+  even for trait-impl callers that discard it") that landed
+  via PR #37 (commit `0a0d46b38`, 2026-05-10) during the
+  design branch's pre-M3-tail window. The design branch was
+  cut at `9e53c82fa` (pre-PR-#37); PR #37 reshaped the merge
+  pipeline (`LedgerIndexes::ingest_block`,
+  `process_scanned_outputs`, `apply_scan_result_to_state`
+  carry insertion-index ranges) and added P3 to FOLLOWUPS as
+  a PR 4-triggered deferral. The work-list row closes the
+  audit delta between the design doc's enumeration and the
+  dev-side FOLLOWUPS state before the design branch lands
+  onto `dev`. P3's disposition under α (Round 1) plus
+  (a-instance-scoped) view-material (Round 2 R4) remains
+  Round 3 / Round 4 trait-surface enumeration: either
+  `LedgerEngine::apply_scan_result` grows to surface the
+  insertion-range carryout (Vec consumed, optimization dead
+  code) or `RefreshEngine` owns the post-pass directly and
+  the trait method is removed (discard sites disappear).
+  Doc-only; no Rust or C++ code touched.
+
+- **Stage 1 PR 4 — Round 1 disposition: α (preserved current
+  shape) for the `RefreshEngine` producer-redesign question.**
+  Doc-only commit on `feat/stage-1-pr4-refresh-engine-design`
+  (off `dev` at `9e53c82fa`). Closes the load-bearing open
+  question
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5 named in the seed; α is the disposition because it satisfies
+  all four review criteria — PR 4 extraction cleanliness, PR 5
+  two-phase build/submit/discard contract over reorg events,
+  reservation-tracker reorg surfacing, Stage 4 actor-migration
+  compatibility — without forcing additional discipline into the
+  per-trait PR or its consumers. β (internal batching) and γ
+  (consumer-driven streaming) are separated as independent
+  validation surfaces per
+  [`19-validation-surface-discipline.mdc`](../.cursor/rules/19-validation-surface-discipline.mdc)
+  (named on `dev` 2026-05-10) and recorded as residual questions
+  R2 (β as V3.x FOLLOWUPS) and a hypothetical follow-up PR (γ
+  if R1's PR 5 design surfaces correctness need).
+
+  - Adds [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    §5.4 (Round 1 disposition with four-criteria rationale and
+    R1 / R2 / R3 residuals) and §5.5 (work-list table for every
+    refresh-adjacent item with its target version and "where
+    documented" pointer); marks the producer-redesign decision
+    complete on §3.3's pre-flight checklist; rewrites §5.3's
+    rounds trajectory to reflect Round 1's convergence on α and
+    the resulting compression of Rounds 2–4.
+  - Adds [`docs/design/REFRESH_DESIGN_LANDSCAPE.md`](./design/REFRESH_DESIGN_LANDSCAPE.md):
+    refresh-design-space substrate covering the privacy-by-default
+    precondition (§2), the operational view-tag pre-filter from
+    [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+    §3.1.1 (§3), FMD as a V4 research direction (§4 — negative
+    result for V3.0), OMR as a V3.x research direction (§5 —
+    negative result for V3.0), and the pruning-vocabulary
+    sidebar (§7) disambiguating daemon-side
+    `--prune-blockchain` / archival `--no-prune` / RPC-server
+    prune / wallet-side prune-by-birthday / prune-by-skip-to-height.
+  - Adds a V3.0 [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md) entry
+    ("Refresh bandwidth tradeoff under α") naming the cost-benefit
+    artifact PR 4's α-disposition consumed; entry pinned to V3.0
+    RC stabilization (per the user's 2026-05-12 sequencing
+    decision) so the cold-sync bandwidth tradeoff is load-bearing
+    on RC stabilization rather than open-ended on the post-genesis
+    backlog.
+
+  Doc-only; no Rust or C++ code touched. Branch posture:
+  `feat/stage-1-pr4-refresh-engine-design` stays on `dev`-rooted
+  doc-only commits until M3e closes per
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)'s
+  branch policy.
+
+- **Stage 1 PR 4 — Round 1 review pass: more carefully-specified
+  α (view-material flow, atomicity, error taxonomy).** Same-day
+  follow-up to the Round 1 disposition above. The review pass
+  corrected
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §3.1's materially-wrong "no secret-touching surface" framing
+  to **master-secret isolation** routed through R4 — the existing
+  producer
+  ([`engine/refresh.rs:1254`](../rust/shekyl-engine-core/src/engine/refresh.rs))
+  builds a `Scanner` carrying both the view secret (X25519
+  view-tag pre-filter + hybrid-decap chain) and the spend secret
+  (key-image computation) per attempt, so the load-bearing
+  threat-model property is "no per-output derived secrets cross
+  the trait surface," not "no secrets." The review pass
+  surfaced four additional residual questions and three
+  trait-contract observations:
+
+  - **R4 — view-material flow** (constructor-bound vs. per-call
+    vs. split-producer/recoverer). Load-bearing; affects
+    `LocalRefresh::new` constructor shape and Stage 4 actor
+    envelope. §4 Phase 0a / 0b candidate. Round 2 disposition.
+  - **R5 — mid-scan reorg-abort at checkpoint 3**. Mitigation
+    for the reorg-amplification adversarial scenario (§5.4.5).
+    Trade-off: extra daemon RPC cost vs. hostile-daemon work
+    amplification. §4 Phase 0d (conditional). Discipline-budget
+    gated. Round 2 disposition.
+  - **R6 — `RefreshError::ConcurrentMutation` boundary**. Pinned
+    as orchestrator-internal translation of `LedgerEngine`
+    errors; **excluded** from `RefreshEngine::produce_scan_result`'s
+    error type. §4 Phase 0c variant set: `Cancelled`,
+    `DaemonError(D::Error)`, `ScannerContractViolation { kind,
+    evidence }`, `ReorgTooDeep { fork_height, max_rewind }`.
+    Round 2 hygiene disposition.
+  - **R7 — `ScanResult` atomicity-under-cancellation contract**.
+    Confirmed against the existing implementation (cancel
+    checks at lines 980 / 1140 / 1186 return `Cancelled`
+    immediately; partial state drops via the function frame).
+    Pinned in the trait contract per
+    [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §2.3 / §7. §4 Phase 0a candidate.
+  - Refines **R1**'s working hypothesis to
+    *build-against-current-snapshot with snapshot-ID pinning*
+    — the reservation tracker carries a snapshot ID per
+    reservation; the submit path becomes a CAS against
+    `current_snapshot == reservation.snapshot_id`. PR 5's
+    design rounds open with this as the working hypothesis.
+
+  **§5.4.4 three-call-mode constraint.** Cold open / restore,
+  steady-state poll (~10–30 s), and post-submit confirmation
+  have very different cost and cancellation profiles; per-call
+  setup must be near-zero for steady-state. Phase 1's commit
+  decomposition (Round 4) must not introduce per-call setup
+  the inherent method did not have.
+
+  **§5.4.5 adversarial scenarios under α.** Four daemon-attack
+  vectors recorded with their dispositions: reorg amplification
+  (mitigation = R5), view-tag DoS (Scanner implementation
+  property; constant-time framing assumes non-adversarial input
+  rates), withholding / partial responses (inherited from PR 1's
+  `DaemonEngine` contract), snapshot poisoning via
+  `LedgerSnapshot` (confirmed value-typed at lines 147–156),
+  and `ScannerContractViolation.evidence` as memory-amplifier
+  vector (bounded shape required).
+
+  **§5.4.6 trait-surface contract pins.** `Send + Sync + 'static`
+  bound on `R: RefreshEngine` (Stage 4 `kameo` actor wrap
+  predicate); `Progress`-channel trust-boundary pin (consumers
+  must be inside the wallet trust boundary; refused as a design
+  question if not).
+
+  The α-disposition holds against all of the review pass'
+  findings — none argue for β or γ. They argue for a more
+  carefully-specified α. Doc-only; no Rust or C++ code touched.
+
+- **Stage 1 PR 4 — Round 2 close-out: Phase 0c
+  `InternalInvariantViolation` + Phase 0e `DaemonOp` /
+  `ProtocolErrorKind` seed enums.** Same-day follow-up to
+  the Round 2 reframe contract-pin refinements
+  (immediately-following bullet) that resolves two items
+  the refinements had flagged as "Round 4 vs Round 2
+  hygiene" questions. Both worth settling in Round 2
+  because of downstream impact: deferring to Round 4
+  re-opens a phase Round 2 was supposed to close.
+
+  **Phase 0c amendment — `InternalInvariantViolation
+  { context: &'static str }` on the orchestrator-side
+  `RefreshError` enum.** Resolves the §5.4.7 R6
+  "(a) extend `ConcurrentMutation` or (b) introduce
+  `InternalInvariantViolation`" cleanup pin at the design
+  layer, not Round 4 commit-decomposition. The retry-loop
+  call sites at
+  [`engine/refresh.rs:1672–1680`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  and `:2055–2065` are **state-machine invariant
+  violations** ("loop body itself is broken" per the
+  existing site comments), not retry-budget exhaustion.
+  Conflating both into `ConcurrentMutation` would route
+  "wallet under sustained merge contention" (back off and
+  retry) and "wallet hit an internal bug" (report and
+  stop) through the same variant; downstream consumers
+  (`PeerReputationActor`, telemetry, user-facing error
+  surface) need the structural distinction. `&'static
+  str` for `context` is appropriate at this site —
+  compile-time-fixed developer content, not attacker-
+  influenced data; the memory-amplifier and log-
+  exfiltration vectors the producer-trait unit-variant
+  discipline closes do not apply. The variant also bounds
+  future migrations: future "state machine reached a
+  should-never-happen path" findings route here. **Round 4
+  migration target**: the two call sites migrate from
+  `MalformedScanResult { reason: "..." }` to
+  `InternalInvariantViolation { context: "..." }`; existing
+  reason strings become `context` values.
+
+  **Phase 0e seed enums — `DaemonOp` and `ProtocolErrorKind`
+  initial variant sets, audited against the producer's
+  actual call-site surface.** Two ground-truth findings:
+
+  - `DaemonOp` narrows to two variants per the
+    [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+    audit. The producer issues exactly two daemon RPCs:
+    `daemon.get_height()` (tip fetch; lines 1480 / 1958)
+    and `rpc.get_scannable_block_by_number(...)` (per-block
+    fetch; line 1190). Under FCMP++ with view-tag
+    pre-filtering, `get_scannable_block_by_number` returns
+    the full per-block payload; no separate `GetBlocks` /
+    `GetTransactions` / `GetOutputs` / `GetChainHashes`
+    are issued. `GetFeeEstimates` and `SubmitTransaction`
+    are `PendingTxEngine`-issued (PR 5), not refresh-issued.
+  - `ProtocolErrorKind` is **fresh-defined**, not a
+    re-export of upstream `shekyl_rpc::RpcError`. Upstream
+    `RpcError` is a flat enum carrying `String` payloads
+    in three of its eight variants (`InternalError(String)`
+    / `ConnectionError(String)` / `InvalidNode(String)`)
+    and is not a bounded re-export candidate. The producer
+    must classify upstream into the bounded enum at the
+    `RefreshDiagnostic`-emission boundary; the `String`
+    payload elision is the load-bearing classification
+    step per §5.4.7 R6's memory-amplifier closure.
+    Initial variant set seeded against the call-site-
+    reachable subset for the refresh producer:
+    `{ ConnectionError, InternalError, InvalidNode,
+    InvalidTransaction, PrunedTransaction }`. The other
+    upstream variants (`TransactionsNotFound`, `InvalidFee`,
+    `InvalidPriority`) are not reachable from refresh-issued
+    RPCs.
+
+  Round 4 commit-decomposition re-audits both seeds (the
+  audit may surface additional reachable variants the seed
+  missed, or paths the seed listed that aren't actually
+  reachable); the audit is authoritative. The seeds serve
+  as design-doc completeness and as an audit checklist.
+
+  Doc-only; no Rust or C++ code touched.
+
+- **Stage 1 PR 4 — Round 2 reframe contract-pin refinements:
+  concurrent-emit clarification, producer-panic-safety property,
+  and test-as-canonical-reference pin.** Same-day follow-up to
+  the Round 2 reframe follow-up (immediately-following bullet)
+  that closes three smaller remaining holes before Phase 0
+  closes. None re-open the reframe; each closes a class of
+  drift / failure-mode that would otherwise propagate to the
+  V3.x consumer-actor PR.
+
+  **Concurrent-emit clarification on the non-blocking pin
+  (§5.4.6 + `DiagnosticSink` docstring).** The `Send + Sync`
+  bound permits concurrent `emit` from multiple tasks; the
+  non-blocking contract **holds under concurrent emission**,
+  not merely per call. Serializing internal synchronization
+  that admits unbounded contention — `Mutex<VecDeque<_>>`,
+  `RwLock`-wrapped state, any shared mutable structure without
+  bounded-wait guarantees — violates the contract even when
+  each `emit` call returns promptly in isolation. Conforming
+  implementations use lock-free queueing (`crossbeam::queue::ArrayQueue`,
+  `flume` non-blocking sends), atomic counters, or sharded
+  mailboxes. Forecloses a class of implementation that
+  type-checks against the literal per-call non-blocking
+  property and still re-introduces the producer-liveness
+  hazard at scale — load-bearing under any future
+  producer-side parallelism shape or Stage 4 actor-mesh
+  topology where multiple `LocalRefresh` instances share a
+  sink.
+
+  **Producer-panic-safety property and Round 4 `PanickingSink`
+  test deliverable (§5.4.6).** The non-blocking pin closes the
+  producer-liveness hazard from a *blocking* `emit`. It does
+  not close the adjacent hazard from a *panicking* `emit` —
+  a buggy or third-party sink implementation that panics
+  (null pointer dereference in a logger, allocator failure in
+  a metrics consumer, panic-on-overflow in an aggregator)
+  propagates unwind through the producer's call stack while
+  the `Scanner` (holding spend material) is live across the
+  `emit` call. **Pinning "MUST NOT panic" on `emit` as a hard
+  trait contract is rejected** — it is unenforceable at the
+  type system and pushes development cost onto every sink
+  author for limited gain. The load-bearing property lives on
+  the producer side: any panic propagating out of `emit`
+  results in a predictable refresh-attempt failure with
+  `Scanner` cleanly zeroized via `Drop`, no leaked half-state,
+  and the cancellation token consistently in either
+  fired-or-not state. **Phase 1 test deliverable:** the
+  `AssertionSink` coherence property test grows a
+  `PanickingSink` variant that panics on configured event
+  variants; the test asserts (a) `Scanner` is dropped before
+  the panic crosses the producer frame (visible via a
+  `Zeroize` observer wrapper in the test harness), (b) no
+  inconsistent producer state remains observable after the
+  unwind, and (c) the panic propagates without `Drop`-chain
+  corruption or double-panic. Round 4 commit-decomposition
+  pass records this alongside the `AssertionSink` coherence
+  test as a Phase 1 deliverable.
+
+  **Test-as-canonical-reference pin on the coherence contract
+  (§5.4.6 + `DiagnosticSink` docstring).** When the
+  `AssertionSink` coherence property test lands in Round 4 it
+  becomes **executable documentation of what coherence means**.
+  If a future implementer reads §5.4.6 prose and is uncertain
+  about an edge case (e.g., "does a `ScanProgress` emission
+  count toward coherence for a `MalformedScanResult` return?"
+  or "do two distinct error-class events from the same scan
+  span count as one emission or two?"), the test's behavior is
+  the authoritative answer. Prose ambiguities resolve against
+  test behavior, not the other way around; if the test is
+  wrong, the test is fixed and the prose follows, never the
+  reverse. Per
+  [`19-validation-surface-discipline.mdc`](../.cursor/rules/19-validation-surface-discipline.mdc),
+  the property test is one of the validation surfaces for the
+  coherence rule; naming it as authoritative makes prose / test
+  drift impossible without explicit re-examination — a future
+  PR landing prose changes to the coherence contract is
+  required to re-examine the test, and vice versa.
+
+  **§5.5 work-list amendments and §8 Round 4 deliverable
+  update.** New work-list rows record the four-part
+  contract-pin bundle (`non-blocking` + concurrent-emit
+  clarification + coherence + canonical-reference) and the
+  producer-panic-safety Round 4 test deliverable. §8's
+  "Remaining for Round 4" prose names the paired
+  `AssertionSink` (coherence) and `PanickingSink`
+  (panic-safety) test deliverables as Phase 1 test-design
+  outputs.
+
+  Doc-only; no Rust or C++ code touched.
+
+- **Stage 1 PR 4 — Round 2 reframe follow-up: `DiagnosticSink`
+  contract pins and §5.4.8 refinements.** Follow-up to the
+  Round 2 reframe (immediately-following bullet) that pins
+  load-bearing contracts the V3.x consumer-actor PR would
+  otherwise have to re-derive from first principles, and
+  tightens two §5.4.8 attack-surface dispositions whose
+  Round 2 framing was correct but underspecified.
+
+  **Two contract pins added at §5.4.6 / §5.4.7 R6 / Phase 0e
+  docstring.**
+  - **Non-blocking `emit` contract.** `DiagnosticSink::emit`
+    MUST NOT block. Implementations use `try_send`-shaped
+    semantics; on a full bounded channel, unavailable
+    consumer, or any other back-pressure condition, `emit`
+    drops the event silently and returns promptly. Pinned
+    to close the producer-liveness hazard: a blocked sink
+    would pin the producer at the emission call holding the
+    Scanner's spend material and would block observation of
+    the cancellation token at checkpoints 2 and 3 —
+    defeating both the §5.4.4 invocation-overhead
+    constraint and the §3.1 wallet-lock-latency property.
+    Without the trait-surface pin, a hostile or buggy
+    consumer-actor sink in V3.x can introduce the hazard
+    post-hoc with no structural reason for the consumer-
+    actor author to know they did.
+  - **Emission/return coherence contract.** `RefreshEngine`
+    implementations MUST emit at least one corresponding
+    `RefreshDiagnostic` event to the sink for every
+    non-`Cancelled` `RefreshError` returned, before
+    returning the error. Pinned to close the silent-error
+    failure mode (orchestrator rotates peer with no
+    telemetry; reputation actor blind) and the phantom-error
+    failure mode (telemetry attributes a defect to a peer
+    but the wallet then merges that peer's scan result as
+    authoritative). Both fail open at the type-system
+    level; only a contract pin closes them. Phase 1
+    delivers a property-test CI invariant: an
+    `AssertionSink` wraps `LocalRefresh` and asserts
+    coherence on fuzzed inputs (Round 4 test-design
+    deliverable).
+
+  **§5.4.8 #1 — restart-amnesia named explicitly as a
+  deliberate threat-model consequence.** The no-persistence
+  posture is correct privacy-first, but an adversary who can
+  observe or trigger wallet restarts (process kill,
+  RPC-daemon restart, scheduled rotation, OOM, user
+  quit-and-restart cycles) can rate-limit hostile behavior
+  to evade reputation accumulation. **Pinned forward to the
+  V3.x consumer-actor PR design:** detection logic is
+  **coarse-window-based**, not credit-history-based; no
+  "trust accumulation" over time. Forecloses the
+  evasion-via-restart-cycle and the dual evasion-via-trust-
+  accumulation patterns. Binding on `PeerReputationActor`
+  and `ViewTagAnomalyDetector` design.
+
+  **§5.4.8 #4 — trust-boundary framing re-phrased
+  recursively.** The current text targeted obvious
+  network-bound consumers (analytics, crash reporters,
+  remote tracing); the subtler case is the *in-process
+  aggregator-republisher* — a consumer in-process by
+  topology but trust-boundary-crossing by publication
+  (metrics-export actors with HTTP endpoints, debug UI
+  actors over IPC, logger actors writing files collected by
+  remote infrastructure, developer-mode flags dumping to
+  off-host log collectors). The principle reframed: full-
+  fidelity events flow only to actors whose **external
+  surface is itself inside the wallet trust boundary,
+  recursively**. The recursion creates a continuous audit
+  obligation that binds on every PR touching the consumer-
+  actor topology, anchored procedurally to
+  `19-validation-surface-discipline.mdc`.
+
+  **Phase 0e seed — `MalformedKind` initial variants
+  recorded.** Six daemon-attributable variants
+  (`NonEmptyForEmptyRange`, `RangeLengthMismatch`,
+  `RangeMembershipViolation`, `DuplicateHeight`,
+  `MissingHeightEntry`, `ResidualAfterApply`) covering the
+  current `MalformedScanResult { reason: &'static str }`
+  call sites in `engine/merge.rs` and `engine/refresh.rs`,
+  so the unit-variant migration has a straightforward
+  mapping at Round 4 commit decomposition. Non-daemon-
+  attributable call sites (the retry-loop-exhaustion
+  reasons in `engine/refresh.rs:1678–1680` and
+  `:2061–2064`) are flagged for Round 4 cleanup — they
+  don't belong on `MalformedScanResult`'s "peer rotation
+  decision needed" structural branch.
+
+  **Variant-ordering / serialization forward-note.** Under
+  the §5.4.6 / §5.4.8 #4 in-process trust-boundary pin, the
+  diagnostic stream is not serialized to any stable external
+  format and variant ordering is not load-bearing; the
+  `#[non_exhaustive]` attribute preserves additive evolution.
+  The note exists for a hypothetical future PR that records
+  diagnostic streams to disk for test replay — at that
+  point, on-disk-format stability becomes load-bearing and
+  the additive-evolution discipline acquires a backward-
+  compatibility constraint. **No PR 4 action required;** the
+  note is forward-recorded so the future PR has the
+  constraint named.
+
+  **FOLLOWUPS amendments.**
+  - Added `ViewTagAnomalyDetector` V3.x entry with the
+    explicit producer-side dependency: before the detector
+    lands, the producer must grow a `ViewTagFalsePositive
+    { observed_rate, expected_rate }` (or equivalent)
+    variant. `#[non_exhaustive]` makes the addition
+    additive without trait-surface revision.
+  - Extended the diagnostic-stream spec-doc FOLLOWUPS entry
+    (`docs/design/REFRESH_DIAGNOSTIC_STREAM.md`) to record
+    the four binding contract pins (non-blocking,
+    coherence, recursive trust-boundary, restart-amnesia
+    detection discipline) as load-bearing spec content that
+    consumer-actor PRs reference rather than re-deriving.
+
+  Doc-only; no Rust or C++ code touched.
+
+- **Stage 1 PR 4 — Round 2 reframe: diagnostic-stream seam
+  supersedes Round 2 first-pass R5 / R6 dispositions.** This
+  bullet supersedes the immediately-following bullet's R5 and
+  R6 dispositions per the
+  [Round 2 reframe section](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R5 reframe / §5.4.7 R6 reframe / §5.4.8. The
+  immediately-following bullet's R1 / R2 / R3 / R4 / R7
+  dispositions are unchanged and still hold.
+
+  **Why the reframe.** Round 2's first-pass R5 (defer to V3.x
+  with telemetry trigger) and R6 (keep `MalformedScanResult {
+  reason: &'static str }`) reasoned about `RefreshEngine` in a
+  synchronous function-call graph where the error is a single
+  isolated event and the payload question is "what does this
+  caller branch on." The design target is an actor-mesh fabric
+  (Stage 4) where the error is a stream event with temporal
+  context, and the same event routes to multiple consumers
+  with different security properties per consumer. The
+  first-pass disposition is the cost-benefit-defer-to-later
+  anti-pattern per
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc);
+  the reframe is the architectural-integrity-now answer —
+  lay the seam now, defer only the consumer implementations.
+
+  **The two-channel shape (R6 reframe).** The synchronous
+  trait return and the actor-mesh diagnostic stream are
+  different artifacts with different consumers and different
+  security properties; they get different types.
+  - **Channel 1: synchronous trait return `RefreshError` —
+    unit variants only.** Three variants: `Cancelled`, `Io`,
+    `MalformedScanResult`. **No string, no evidence, no
+    payload of any kind.** The orchestrator's branch table is
+    structural (cancel-propagate / retry-with-backoff /
+    peer-rotation); the decision needs zero information
+    beyond the variant tag. **Closes the memory-amplifier
+    vector by construction** — there is no attacker-controlled
+    data anywhere on the producer trait error surface.
+  - **Channel 2: `RefreshDiagnostic` event stream emitted via
+    `DiagnosticSink`.** Rich structured events fan out to
+    specialized consumer actors with per-consumer trust
+    posture and sanitization rules. `produce_scan_result`
+    gains a `diagnostics: &dyn DiagnosticSink` parameter
+    (per-call; runtime-dispatch; locked now so Stage 4
+    doesn't re-rev the trait). Stage 1 emits a minimal seed
+    variant set (`DaemonMalformed { kind: MalformedKind }`,
+    `DaemonTimeout { op, elapsed }`, `DaemonProtocolError
+    { kind }`, `ReorgObserved { fork_height, depth }`,
+    `ScanProgress { height, candidates }`); Stage 1 sinks
+    are `NoopDiagnosticSink` / `TracingDiagnosticSink`; the
+    actor-mesh sink lands in V3.x. The enum is
+    `#[non_exhaustive]` so the variant set grows additively
+    with PR 1's peer-aware `DaemonEngine` surface and
+    future-PR consumer patterns.
+  - **Sanitization is a property of the consumer, not the
+    stream.** Full-fidelity events stay in-process per the
+    §3.1 / §5.4.6 trust-boundary pin (extended from the
+    Progress-channel pin to the broader diagnostic-stream
+    pin); persisted or exported projections are lossy by
+    design.
+
+  **R5 dissolved by composition (R5 reframe).** The
+  reorg-amplification scenario resolves via a
+  `ReorgAmplificationDetector` consumer actor that subscribes
+  to `RefreshDiagnostic::ReorgObserved` events, maintains a
+  windowed count, and signals cancellation back through the
+  existing `CancellationToken` checkpoint-3 plumbing. **The
+  producer's §7 checkpoint discipline does not grow.** No
+  per-checkpoint-3 daemon RPC; no §7 amendment. The
+  capability is added by composition of the actor mesh's
+  consumers; the implementation deferred to the V3.x
+  actor-mesh PR. **Trigger is policy-driven, not
+  evidence-driven** — the previous "if hostile-daemon
+  work-amplification scenarios become measurable" gate is
+  withdrawn.
+
+  **What the reframe unlocks (consumer-side; deferred
+  implementations).** Fail2ban-style intra-session mitigation
+  via `PeerReputationActor` (per-peer event history with
+  decay; threshold-based graduated response); pattern-based
+  recovery via `RecoveryActor` (Byzantine-fault-tolerance-flavored
+  N-of-M agreement on contested data); reorg-amplification
+  detection via `ReorgAmplificationDetector` (R5's natural
+  home); future variant additions as the consumer-pattern
+  surfaces mature.
+
+  **Five new attack surfaces honestly enumerated (§5.4.8).**
+  The reframe is not free; the diagnostic-stream seam
+  introduces five attack surfaces, each with a mitigation
+  pinnable now and a deferred consumer-actor implementation.
+  - **Peer-reputation fingerprint** → in-memory only, scoped
+    to wallet session, drop on close. Privacy-first wins
+    over classical fail2ban's cross-session memory.
+  - **`PeerId` stability under Tor/I2P** → `PeerId` is a
+    transport-defined opaque token; decay calibrated to
+    circuit-rotation cadence; Stage 1 variants omit peer
+    attribution entirely until PR 1's peer-aware
+    `DaemonEngine` surface lands.
+  - **Rotation-timing side-channel** → jittered rotation,
+    batched decisions, temporal decoupling of
+    event-observation-time from rotation-action-time inside
+    the `PeerReputationActor`.
+  - **Diagnostic stream as covert channel** → trait-contract
+    pin (§5.4.6 / §3.1): full-fidelity events flow only to
+    in-process consumers inside the wallet trust boundary;
+    cross-process or network-bound consumers receive only
+    explicitly-sanitized projection types.
+  - **Mailbox saturation as DoS** → bounded consumer
+    mailboxes with explicit overflow policies (drop-oldest
+    for diagnostics consumers; aggregate-on-overflow for
+    reputation; event-sequence-aware drop for recovery).
+    Producer-side: emit at natural rate; lossless delivery
+    is not promised.
+
+  **Phase 0 finalized under the reframe.**
+  - Phase 0a: trait-surface contract pins + `ViewMaterial`
+    type definition (R4) + diagnostic-stream trust-boundary
+    pin (Round 2 reframe).
+  - Phase 0b: `LocalRefresh::new(view_material: ViewMaterial)`
+    constructor + flat-crate-root exports (R3 confirmation +
+    `ViewMaterial`).
+  - Phase 0c: **reframed** — unit-variant `RefreshError`
+    (`Cancelled` / `Io` / `MalformedScanResult`; no payload).
+    Orchestrator-side `RefreshError` retained with
+    backward-compat content constructed orchestrator-side;
+    no attacker-controlled trait payload.
+  - Phase 0d: **retired** — R5 resolves by composition, not
+    by deferral.
+  - Phase 0e (**new**): `RefreshDiagnostic` enum +
+    `DiagnosticSink` trait + `produce_scan_result` signature
+    change (`diagnostics: &dyn DiagnosticSink` parameter).
+    Stage 1 sinks: `NoopDiagnosticSink`, `TracingDiagnosticSink`.
+
+  **FOLLOWUPS amended.** The previous Round 2 "extend
+  checkpoint 3" V3.x FOLLOWUPS entry is **withdrawn** and
+  replaced by the `ReorgAmplificationDetector` entry. Three
+  new V3.x FOLLOWUPS entries added: `PeerReputationActor`
+  (with §5.4.8 #1 / #2 / #3 mitigation pins binding on the
+  implementation), `RecoveryActor`, and
+  `docs/design/REFRESH_DIAGNOSTIC_STREAM.md` spec doc (seeded
+  by PR 4's §5.4.7 R6 / §5.4.8 content; grows additively as
+  consumers are designed).
+
+  **Trajectory after the reframe.** Only Round 4 remains as
+  PR-4-internal work (Phase 0 commit decomposition + §6
+  review checklist); PR 5's design rounds carry R1 forward
+  with the snapshot-ID-pinning working hypothesis. The
+  α-disposition's *provisionally load-bearing* status remains
+  the re-evaluation gate.
+
+  **Meta-observation recorded.** The reframe is the
+  recurrence pattern named by
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  "the cost-benefit-defer-to-later anti-pattern" working
+  against itself — Round 2's first pass defaulted to deferral
+  and minimal-surface; the architectural-integrity-now answer
+  was to lay the structural seam (one parameter, one enum,
+  one trait) and defer only the consumer implementations.
+  The compounded benefit is what
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  "continuous discipline as inheritance prevention" framing
+  predicts: the seam landed now removes the need for V3.x to
+  re-litigate the trait surface.
+
+  Doc-only; no Rust or C++ code touched.
+
+- **Stage 1 PR 4 — Round 2 dispositions: R2 / R3 / R4 / R5 / R6 /
+  R7 settled.** Same-day follow-up to the Round 1 review pass
+  above. Round 2 closes all seven residuals named by Round 1 +
+  the review pass; the more-carefully-specified-α frame is now
+  closed and PR 4's design surface is Phase-0-ready.
+
+  - **R1 — `PendingTxEngine::build` during long refresh.**
+    Carried into PR 5's design rounds as the working hypothesis
+    *build-against-current-snapshot + snapshot-ID pinning* — the
+    reservation tracker carries a snapshot ID per reservation;
+    the submit path becomes a CAS against
+    `current_snapshot == reservation.snapshot_id`. Of the three
+    sub-options, the only one that gives the reservation tracker
+    monotone snapshot semantics + low-latency UI without
+    serializing user input behind background work.
+  - **R2 — β internal-batching.** Stays as the §2.2 "future
+    scaling refinement" note; not promoted to FOLLOWUPS. The V3.0
+    bandwidth FOLLOWUP entry already names α's bandwidth cost;
+    V3.0 RC stabilization profiles cold-sync; if β is the right
+    remediation, promote then. Premature promotion overspecifies
+    against alternatives (daemon-side prefix matching, view-tag
+    pre-filter improvements, wallet-side prune-by-birthday).
+  - **R3 — `RefreshOptions` / `RefreshProgress` public-module
+    promotion.** Confirmation, not discovery: `RefreshOptions`,
+    `RefreshProgress`, `RefreshSummary`, `RefreshHandle`,
+    `RefreshReorgEvent`, `RefreshPhase` are already crate-publicly
+    re-exported from
+    [`shekyl_engine_core/src/lib.rs:25–30`](../rust/shekyl-engine-core/src/lib.rs)
+    at the flat crate root, matching the `DaemonEngine` /
+    `LedgerEngine` convention. Stage 4's `kameo` actor implementor
+    imports them as Stage 1 callers do today; no module promotion
+    needed.
+  - **R4 — view-material flow to the producer (load-bearing).**
+    Disposition: **(a-instance-scoped)** —
+    `LocalRefresh::new(view_material: ViewMaterial)`. New public
+    `Zeroize + ZeroizeOnDrop` type carrying `{ spend_pub,
+    view_scalar, x25519_sk, ml_kem_dk, spend_secret }` — exactly
+    the fields `build_scanner_from_keys` extracts from
+    `&AllKeysBlob` today. One `Scanner` held for `LocalRefresh`'s
+    lifetime; per-attempt cost drops to snapshot+daemon RPC
+    (no scanner construction). Stage 4 actor mailbox carries no
+    secrets. Wallet-lock semantics drop `LocalRefresh` and
+    zeroize via the existing `ZeroizeOnDrop` chain.
+    **(c) split-producer/recoverer deferred to V3.x FOLLOWUPS**
+    with trigger "HW-wallet-backed signing or post-V3 threat-
+    model refinement requires producer-side spend-key isolation."
+    (b) per-call rejected (hostile to actor migration).
+  - **R5 — mid-scan reorg-abort at checkpoint 3.** Deferred to
+    V3.x FOLLOWUPS. The per-checkpoint-3-hit `get_height` RPC
+    cost (~per-block; ~10K+/wallet-day in steady-state) is
+    non-trivial; the reorg-amplification attack is mitigated at
+    a higher layer by PR 1's `DaemonEngine` peer-rotation
+    contract; the discipline-budget cost of extending §7's
+    checkpoint discipline is non-trivial. **Trigger for V3.x:**
+    "hostile-daemon work-amplification scenarios become
+    measurable in V3.0 RC stabilization or post-genesis
+    production telemetry."
+  - **R6 — `RefreshError::ConcurrentMutation` boundary + variant
+    set.** Promote the existing crate-internal `ProduceError`
+    ([`engine/refresh.rs:202`](../rust/shekyl-engine-core/src/engine/refresh.rs))
+    to public `RefreshEngineError`; use it as
+    `RefreshEngine::Error: Into<RefreshError>`. Variant set:
+    `Cancelled`, `Io(IoError)`, `MalformedScanResult { reason:
+    &'static str }` — the existing name and bounded payload are
+    kept; the user-proposed `ScannerContractViolation { kind,
+    evidence }` rename declined for V3.0 since `&'static str` is
+    the strictest possible memory-amplifier-mitigation bound.
+    **Excluded** from producer trait error: `ConcurrentMutation`
+    (orchestrator-internal merge-gate concern), `AlreadyRunning`
+    (orchestrator-internal handle-racing concern), `ReorgTooDeep`
+    (kept as Ok-with-rewind merge-layer detection per §1.5
+    actor-identity reasoning). The trait/orchestrator split is
+    a Phase 0c spec amendment.
+  - **R7 — `ScanResult` atomicity-under-cancellation contract.**
+    Pinned in
+    [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §2.3 / §7 prose: a `produce_scan_result` call returns either
+    a `ScanResult` covering the full span scanned, or
+    `RefreshError::Cancelled`; no partial-span `ScanResult`.
+    Already true in the existing implementation per the cancel
+    checks at
+    [`engine/refresh.rs:980 / :1140 / :1186`](../rust/shekyl-engine-core/src/engine/refresh.rs);
+    the contract pin prevents future drift.
+
+  **§4 Phase 0 finalized.** Phase 0a: trait-surface contract
+  pins (`Send + Sync + 'static` on `R`; Progress-channel trust
+  boundary; `ScanResult` atomicity per R7; `LedgerSnapshot`
+  value-typed contract; `ViewMaterial` type definition per R4).
+  Phase 0b: `LocalRefresh::new(view_material: ViewMaterial)`
+  constructor + flat-crate-root export of `ViewMaterial`.
+  Phase 0c: `RefreshEngineError` promotion per R6. Phase 0d:
+  retired (R5 deferred).
+
+  **Two new V3.x FOLLOWUPS entries** in
+  [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md): R5 mid-scan reorg-abort
+  deferral; R4 (c) split-producer/recoverer deferral. Both have
+  named triggers per
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc).
+
+  **Trajectory after Round 2.** Only Round 4 remains as
+  PR-4-internal work (Phase 0 commit decomposition + §6 review
+  checklist). PR 5's design rounds carry R1 forward with the
+  snapshot-ID-pinning working hypothesis. The α-disposition's
+  *provisionally load-bearing* status remains the re-evaluation
+  gate: if PR 5's R1 resolution requires γ for correctness,
+  PR 4 re-opens; otherwise PR 4 advances directly to Round 4.
+
+  Doc-only; no Rust or C++ code touched.
+
 ### Fixed
 
 - **CI bench gate no longer false-fails on `baseline=0` capture

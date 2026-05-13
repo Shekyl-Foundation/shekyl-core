@@ -47,6 +47,68 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Refresh bandwidth tradeoff under α — round-trip-bound block
+  fetches on cold sync (trigger: PR 4 Round 1 disposition;
+  V3.0 RC stabilization).** Stage 1 PR 4 (`RefreshEngine`
+  extraction) Round 1 disposed to **α — preserved current shape**
+  per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4. α retains the existing serial-fetch-serial-scan shape
+  from
+  [`rust/shekyl-engine-core/src/engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs):
+  each block costs one daemon RPC round-trip; cold-sync against
+  a remote daemon is round-trip-bound rather than
+  throughput-bound. β-style internal batching (parallel fetch +
+  serial scan; sliding-window prefetch) amortizes this but is
+  correctly out-of-scope for PR 4 per
+  [`19-validation-surface-discipline.mdc`](../.cursor/rules/19-validation-surface-discipline.mdc) —
+  it shares the feature topic "refresh" with α/β/γ but does not
+  share the producer-redesign decision's validation surface
+  (β's surface is amortized round-trip latency; α/β/γ's surface
+  is the consumer pattern's contract shape).
+
+  **Severity.** UX-grade on cold-sync against remote daemons
+  (LAN-local or co-resident daemon round-trips are sub-millisecond
+  and amortize out under any reasonable scan cost; remote
+  daemon round-trips dominate when each is on the order of tens
+  of milliseconds and the wallet is fetching tens of thousands
+  of blocks). Not a correctness property — α produces the same
+  `ScanResult` β/γ would, just over more wall-clock time.
+
+  **Disposition.** This entry is the cost-benefit-analysis
+  artifact PR 4 Round 1's α-disposition consumed; recording it
+  in V3.0 makes the tradeoff load-bearing on RC stabilization
+  rather than open-ended on the post-genesis backlog. Pre-RC1
+  work: profile cold-sync bandwidth against the Foundation
+  reference daemon (per the multi-source archival disposition
+  elsewhere in this file). If the cold-sync experience is
+  unacceptable on commodity remote-daemon configurations,
+  escalate to β as a follow-up PR (own scope, own validation
+  surface, own design rounds — not retroactive amendment to
+  PR 4). The pruning-vocabulary disambiguation in
+  [`docs/design/REFRESH_DESIGN_LANDSCAPE.md`](./design/REFRESH_DESIGN_LANDSCAPE.md)
+  §7 is the reference for which prune-shape (β internal batching
+  vs. wallet-side prune-by-birthday vs. daemon-side
+  `--prune-blockchain` vs. archival `--no-prune`) applies to
+  which segment of the cold-sync cost.
+
+  **Originating context.** PR 4 Round 1 disposition commit on
+  `feat/stage-1-pr4-refresh-engine-design` (this commit). The
+  validation-surface guard rule on `dev` cites α/β as a
+  worked-example surface separation for exactly this entry;
+  PR 4 Round 1 §5.4.2 records the rule citation as the
+  primary reason β/γ are independent surfaces, not bundled
+  into PR 4.
+
+  **Cross-references.**
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4 (α disposition), §5.5 (work-list table);
+  [`docs/design/REFRESH_DESIGN_LANDSCAPE.md`](./design/REFRESH_DESIGN_LANDSCAPE.md)
+  §6 (the producer-pattern axis), §7 (pruning vocabulary).
+
+  **Target.** V3.0, RC stabilization window (or earlier
+  follow-up PR if cold-sync profile escalates the disposition).
+
 - **P1 (latent): refresh post-pass skipped on async path —
   `populate_engine_handle_fields` does not run when refresh
   dispatches through `LedgerEngine::apply_scan_result` (trigger:
@@ -2730,6 +2792,227 @@ one place to confirm each item's relationship to the wallet stack.
 ---
 
 ## V3.x — staker archival and visualization ship
+
+- **`ReorgAmplificationDetector` consumer actor (Stage 1 PR 4 R5
+  composition home; supersedes the Round 2 first-pass "extend
+  checkpoint 3" deferral).** PR 4's Round 2 reframe of
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R5 resolved the reorg-amplification scenario by
+  composition under the two-channel error/diagnostic shape:
+  the producer emits `RefreshDiagnostic::ReorgObserved`
+  events to `DiagnosticSink` whenever `find_fork_point`
+  detects a fork during scanning; a `ReorgAmplificationDetector`
+  actor consumes those events, maintains a windowed
+  reorg-count (per peer once PR 1's `DaemonEngine` peer-aware
+  surface lands, per attempt otherwise), and signals
+  cancellation back to the orchestrator via the existing
+  `CancellationToken` checkpoint-3 plumbing. The producer's
+  §7 checkpoint discipline does not grow. **Trigger:** *when
+  Stage 4 actor mesh stabilizes.* No telemetry gate; the
+  consumer-side implementation is policy-driven, not
+  evidence-driven. **Note:** this entry replaces the Round 2
+  first-pass deferral "if hostile-daemon work-amplification
+  scenarios become measurable… R5 extends checkpoint 3 with
+  one tip-poll per checkpoint-3 hit and §7's discipline grows
+  accordingly" — the reframe withdraws the extend-checkpoint-3
+  path and lands the composition seam in PR 4 instead.
+  Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.5 (reorg-amplification adversarial scenario), §5.4.7
+  R5 reframe, §5.4.7 R6 reframe (two-channel shape), §5.4.8
+  attack-surface enumeration,
+  [`engine/refresh.rs:980 / :1140 / :1186`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  (current checkpoint-3 cancel-only sites, preserved
+  unchanged).
+
+- **`PeerReputationActor` consumer actor (Stage 1 PR 4 R6
+  reframe; intra-session fail2ban-style mitigation).** PR 4's
+  Round 2 reframe of
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 introduced the diagnostic-stream seam; the
+  `PeerReputationActor` is the natural fail2ban-style consumer.
+  Subscribes to `RefreshDiagnostic`, maintains per-peer event
+  history with decay, applies threshold-based graduated
+  response (rate-limit → temp-ban → rotate). PR 1's
+  `DaemonEngine` peer-rotation contract becomes the *output*
+  of this actor rather than the orchestrator's primary
+  decision logic. **Hard mitigation pin (§5.4.8 #1):**
+  state is **in-memory only**, scoped to the wallet session;
+  drop on wallet close. **No persistence beyond the wallet
+  session** unless a future review explicitly justifies a
+  coarse-grained current-state-only relaxation (e.g.,
+  "daemon X banned until time T") on review grounds — V3.x
+  default is no persistence. Conflicts with classical
+  fail2ban's "remember bad actors across sessions"
+  disposition; privacy-first per
+  [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) §2
+  wins. **Rotation-timing pin (§5.4.8 #3):** jittered
+  rotation, batched decisions, decoupled
+  event-observation-time from rotation-action-time. **PeerId
+  pin (§5.4.8 #2):** depends on PR 1 growing a peer-aware
+  `DaemonEngine` surface; `PeerId` must be transport-defined
+  opaque tokens with decay calibrated to circuit-rotation
+  cadence. **Trigger:** *when Stage 4 actor mesh stabilizes
+  and PR 1's peer-aware DaemonEngine surface lands.*
+  Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 reframe, §5.4.8 attack-surface enumeration
+  (1, 2, 3),
+  [`ANONYMITY_NETWORKS.md`](ANONYMITY_NETWORKS.md) (peer-
+  identity-under-Tor/I2P framing).
+
+- **`RecoveryActor` consumer actor (Stage 1 PR 4 R6 reframe;
+  pattern-based recovery / Byzantine-fault-tolerance).** PR 4's
+  Round 2 reframe of
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 also enables pattern-based recovery as a
+  consumer-actor pattern. `RecoveryActor` watches for
+  sequences like `DaemonMalformed { block_height = H }` from
+  peer A → re-request block H from peer B → cross-check
+  with peer C → apply if N-of-M agree. Byzantine-fault-tolerance
+  recovery driven by the event stream's temporal structure,
+  not by single error events. **Mailbox-policy pin (§5.4.8
+  #5):** event-sequence-aware drop policy preserves enough
+  temporal structure to detect pattern matches; drops
+  redundant within-pattern events. **Trigger:** *when Stage 4
+  actor mesh stabilizes.* Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 reframe, §5.4.8 #5 (mailbox-saturation DoS).
+
+- **`ViewTagAnomalyDetector` consumer actor (Stage 1 PR 4
+  reframe; view-tag-DoS composition mitigation).** PR 4's
+  Round 2 reframe of
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.5 names view-tag DoS (an adversarial daemon crafting
+  blocks with high false-positive view-tag rates to force
+  trial-decrypt on each output) as an implementation-level
+  scenario that the trait surface does not address directly,
+  but that admits a composition-side mitigation via the
+  diagnostic stream. `ViewTagAnomalyDetector` consumes a
+  `RefreshDiagnostic::ViewTagFalsePositive { observed_rate,
+  expected_rate }` (or equivalent) event variant, maintains
+  per-peer / per-block-batch false-positive-rate windows,
+  and signals cancellation when the rate exceeds threshold.
+  Same shape as `ReorgAmplificationDetector`'s R5
+  resolution.
+
+  **Producer-side dependency (binding on this entry).** The
+  variant the detector consumes is **not** in PR 4's Phase
+  0e seed variant set — the existing
+  [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  scan loop does not yet have an observation point that
+  measures view-tag false-positive rate against expected.
+  Before `ViewTagAnomalyDetector` lands, the producer must
+  grow the observation point and emit the new event variant.
+  The `RefreshDiagnostic` enum's `#[non_exhaustive]`
+  attribute lets the variant land additively without trait-
+  surface revision; the work is a producer-side scan-loop
+  amendment plus a Phase 0e variant addition. **Trigger:**
+  *when Stage 4 actor mesh stabilizes; producer-side
+  observation point lands as a coordinated prerequisite.*
+
+  **Mitigation pin (§5.4.8 #1 / #2 / #3).** The detector
+  shares the `PeerReputationActor`'s constraints:
+  in-memory-only state, coarse-window detection (not
+  credit-history-based — see the restart-amnesia note in
+  the `PeerReputationActor` entry), aggressive decay
+  calibrated to transport-rotation cadence, jittered
+  rotation actions. Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.5 (view-tag DoS scenario), §5.4.7 R6 reframe
+  (diagnostic-stream contract; non-blocking + coherence
+  pins are binding), §5.4.8 #1 (restart-amnesia design
+  constraint).
+
+- **Diagnostic-stream specification document
+  (`docs/design/REFRESH_DIAGNOSTIC_STREAM.md`, V3.x).** PR 4's
+  Round 2 reframe of
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 defines the `RefreshDiagnostic` / `DiagnosticSink`
+  trait contract; the implementation-side spec doc captures
+  the variant taxonomy, consumer-actor design space,
+  mailbox-policy templates, the trust-boundary discipline
+  (in-process-only for full-fidelity, recursively per §5.4.8
+  #4 — including in-process aggregator-republisher actors
+  whose external surface crosses the boundary; projection-only
+  across trust boundaries), and the emergent-behaviour
+  analysis framework when multiple consumers coexist
+  (§5.4.8 "Cross-cutting" note).
+
+  **Load-bearing contract pins (binding on every V3.x
+  consumer-actor PR sink implementation).** The spec doc
+  records the following as binding constraints, derived
+  from PR 4's §5.4.6 / §5.4.7 R6 / §5.4.8 content:
+
+  - **Non-blocking `emit` contract.** `DiagnosticSink::emit`
+    MUST NOT block; implementations use `try_send`-shaped
+    semantics with silent drop on back-pressure. Rationale:
+    a blocked sink pins the producer holding spend material
+    across the emission call and defeats the §3.1 wallet-
+    lock-latency property by blocking cancellation-token
+    observation at checkpoints 2 and 3.
+  - **Emission/return coherence contract.** `RefreshEngine`
+    implementations MUST emit at least one corresponding
+    `RefreshDiagnostic` event for every non-`Cancelled`
+    `RefreshError` returned, before returning the error.
+    The pin closes the silent-error and phantom-error
+    failure modes that the unit-variant trait return
+    cannot rule out at the type-system level.
+  - **Recursive trust-boundary.** Full-fidelity events flow
+    only to actors whose external surface is itself inside
+    the wallet trust boundary, recursively. Adding a new
+    consumer or extending an existing consumer's external
+    surface triggers a per-consumer recursive trust-boundary
+    audit at the touching PR's review.
+  - **Restart-amnesia is deliberate (consumer-actor design
+    constraint).** Detection logic is coarse-window-based,
+    not credit-history-based; no "trust accumulation" over
+    time. Forecloses adversary evasion via wallet-restart
+    cycles. Binding on `PeerReputationActor` and
+    `ViewTagAnomalyDetector` design rounds in particular.
+
+  **Trigger:** *when the first V3.x consumer actor
+  (`ReorgAmplificationDetector`, `PeerReputationActor`,
+  `RecoveryActor`, or `ViewTagAnomalyDetector`) enters
+  design rounds.* The doc seeds with PR 4's §5.4.6 / §5.4.7
+  R6 / §5.4.8 content and grows additively as consumers are
+  designed. Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.6 (trait-surface contract pins, including the four
+  pins recorded above), §5.4.7 R6 reframe (trait contract
+  definition), §5.4.8 (attack-surface enumeration with
+  mitigation pins).
+
+- **`RefreshEngine` (c) split-producer/recoverer view-material
+  shape (Stage 1 PR 4 R4 deferral).** Round 2 of
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R4 landed (a-instance-scoped) for V3.0 — the producer
+  holds view + spend material in a `ViewMaterial` captured at
+  `LocalRefresh::new`. The (c) shape — producer emits view-tag-
+  matched candidates; orchestrator does final hybrid-decap and
+  key-image computation via `KeyEngine` before
+  `apply_scan_result` — is the threat-model-cleanest answer
+  (the producer holds **only** view material) but requires
+  changing
+  [`Scanner`'s output shape](../rust/shekyl-scanner/src/scan.rs)
+  to emit candidates rather than recovered outputs and changing
+  `ScanResult`'s wire shape to carry that intermediate stage.
+  **Trigger:** *if HW-wallet-backed signing or a post-V3
+  threat-model refinement requires producer-side spend-key
+  isolation*; in that case the (c) migration becomes
+  load-bearing and lifts the `Scanner` + `ScanResult` shape
+  changes alongside. Until then, the (a-instance-scoped) shape
+  is the operative answer; the producer's spend-key holding is
+  bounded to `LocalRefresh`'s lifetime and zeroized on drop
+  via `Scanner`'s `ZeroizeOnDrop`. Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §3.1 (master-secret-isolation framing), §5.4.3 R4 (Round 1
+  review pass surfacing), §5.4.7 R4 (Round 2 disposition with
+  (c) deferral),
+  [`engine/refresh.rs:1254`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  (`build_scanner_from_keys`),
+  [`shekyl-scanner/src/scan.rs:506`](../rust/shekyl-scanner/src/scan.rs)
+  (`Scanner::new`).
 
 - **Sync refresh wrapper generalization over `L: LedgerEngine`.**
   Stage 1 PR 2 generalized `Engine::start_refresh` and the
