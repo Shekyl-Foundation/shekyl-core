@@ -741,6 +741,80 @@
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)'s
   branch policy.
 
+- **Stage 1 PR 4 — Round 1 review pass: more carefully-specified
+  α (view-material flow, atomicity, error taxonomy).** Same-day
+  follow-up to the Round 1 disposition above. The review pass
+  corrected
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §3.1's materially-wrong "no secret-touching surface" framing
+  to **master-secret isolation** routed through R4 — the existing
+  producer
+  ([`engine/refresh.rs:1254`](../rust/shekyl-engine-core/src/engine/refresh.rs))
+  builds a `Scanner` carrying both the view secret (X25519
+  view-tag pre-filter + hybrid-decap chain) and the spend secret
+  (key-image computation) per attempt, so the load-bearing
+  threat-model property is "no per-output derived secrets cross
+  the trait surface," not "no secrets." The review pass
+  surfaced four additional residual questions and three
+  trait-contract observations:
+
+  - **R4 — view-material flow** (constructor-bound vs. per-call
+    vs. split-producer/recoverer). Load-bearing; affects
+    `LocalRefresh::new` constructor shape and Stage 4 actor
+    envelope. §4 Phase 0a / 0b candidate. Round 2 disposition.
+  - **R5 — mid-scan reorg-abort at checkpoint 3**. Mitigation
+    for the reorg-amplification adversarial scenario (§5.4.5).
+    Trade-off: extra daemon RPC cost vs. hostile-daemon work
+    amplification. §4 Phase 0d (conditional). Discipline-budget
+    gated. Round 2 disposition.
+  - **R6 — `RefreshError::ConcurrentMutation` boundary**. Pinned
+    as orchestrator-internal translation of `LedgerEngine`
+    errors; **excluded** from `RefreshEngine::produce_scan_result`'s
+    error type. §4 Phase 0c variant set: `Cancelled`,
+    `DaemonError(D::Error)`, `ScannerContractViolation { kind,
+    evidence }`, `ReorgTooDeep { fork_height, max_rewind }`.
+    Round 2 hygiene disposition.
+  - **R7 — `ScanResult` atomicity-under-cancellation contract**.
+    Confirmed against the existing implementation (cancel
+    checks at lines 980 / 1140 / 1186 return `Cancelled`
+    immediately; partial state drops via the function frame).
+    Pinned in the trait contract per
+    [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §2.3 / §7. §4 Phase 0a candidate.
+  - Refines **R1**'s working hypothesis to
+    *build-against-current-snapshot with snapshot-ID pinning*
+    — the reservation tracker carries a snapshot ID per
+    reservation; the submit path becomes a CAS against
+    `current_snapshot == reservation.snapshot_id`. PR 5's
+    design rounds open with this as the working hypothesis.
+
+  **§5.4.4 three-call-mode constraint.** Cold open / restore,
+  steady-state poll (~10–30 s), and post-submit confirmation
+  have very different cost and cancellation profiles; per-call
+  setup must be near-zero for steady-state. Phase 1's commit
+  decomposition (Round 4) must not introduce per-call setup
+  the inherent method did not have.
+
+  **§5.4.5 adversarial scenarios under α.** Four daemon-attack
+  vectors recorded with their dispositions: reorg amplification
+  (mitigation = R5), view-tag DoS (Scanner implementation
+  property; constant-time framing assumes non-adversarial input
+  rates), withholding / partial responses (inherited from PR 1's
+  `DaemonEngine` contract), snapshot poisoning via
+  `LedgerSnapshot` (confirmed value-typed at lines 147–156),
+  and `ScannerContractViolation.evidence` as memory-amplifier
+  vector (bounded shape required).
+
+  **§5.4.6 trait-surface contract pins.** `Send + Sync + 'static`
+  bound on `R: RefreshEngine` (Stage 4 `kameo` actor wrap
+  predicate); `Progress`-channel trust-boundary pin (consumers
+  must be inside the wallet trust boundary; refused as a design
+  question if not).
+
+  The α-disposition holds against all of the review pass'
+  findings — none argue for β or γ. They argue for a more
+  carefully-specified α. Doc-only; no Rust or C++ code touched.
+
 ### Fixed
 
 - **CI bench gate no longer false-fails on `baseline=0` capture
