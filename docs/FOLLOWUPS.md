@@ -47,6 +47,68 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Refresh bandwidth tradeoff under α — round-trip-bound block
+  fetches on cold sync (trigger: PR 4 Round 1 disposition;
+  V3.0 RC stabilization).** Stage 1 PR 4 (`RefreshEngine`
+  extraction) Round 1 disposed to **α — preserved current shape**
+  per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4. α retains the existing serial-fetch-serial-scan shape
+  from
+  [`rust/shekyl-engine-core/src/engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs):
+  each block costs one daemon RPC round-trip; cold-sync against
+  a remote daemon is round-trip-bound rather than
+  throughput-bound. β-style internal batching (parallel fetch +
+  serial scan; sliding-window prefetch) amortizes this but is
+  correctly out-of-scope for PR 4 per
+  [`19-validation-surface-discipline.mdc`](../.cursor/rules/19-validation-surface-discipline.mdc) —
+  it shares the feature topic "refresh" with α/β/γ but does not
+  share the producer-redesign decision's validation surface
+  (β's surface is amortized round-trip latency; α/β/γ's surface
+  is the consumer pattern's contract shape).
+
+  **Severity.** UX-grade on cold-sync against remote daemons
+  (LAN-local or co-resident daemon round-trips are sub-millisecond
+  and amortize out under any reasonable scan cost; remote
+  daemon round-trips dominate when each is on the order of tens
+  of milliseconds and the wallet is fetching tens of thousands
+  of blocks). Not a correctness property — α produces the same
+  `ScanResult` β/γ would, just over more wall-clock time.
+
+  **Disposition.** This entry is the cost-benefit-analysis
+  artifact PR 4 Round 1's α-disposition consumed; recording it
+  in V3.0 makes the tradeoff load-bearing on RC stabilization
+  rather than open-ended on the post-genesis backlog. Pre-RC1
+  work: profile cold-sync bandwidth against the Foundation
+  reference daemon (per the multi-source archival disposition
+  elsewhere in this file). If the cold-sync experience is
+  unacceptable on commodity remote-daemon configurations,
+  escalate to β as a follow-up PR (own scope, own validation
+  surface, own design rounds — not retroactive amendment to
+  PR 4). The pruning-vocabulary disambiguation in
+  [`docs/design/REFRESH_DESIGN_LANDSCAPE.md`](./design/REFRESH_DESIGN_LANDSCAPE.md)
+  §7 is the reference for which prune-shape (β internal batching
+  vs. wallet-side prune-by-birthday vs. daemon-side
+  `--prune-blockchain` vs. archival `--no-prune`) applies to
+  which segment of the cold-sync cost.
+
+  **Originating context.** PR 4 Round 1 disposition commit on
+  `feat/stage-1-pr4-refresh-engine-design` (this commit). The
+  validation-surface guard rule on `dev` cites α/β as a
+  worked-example surface separation for exactly this entry;
+  PR 4 Round 1 §5.4.2 records the rule citation as the
+  primary reason β/γ are independent surfaces, not bundled
+  into PR 4.
+
+  **Cross-references.**
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4 (α disposition), §5.5 (work-list table);
+  [`docs/design/REFRESH_DESIGN_LANDSCAPE.md`](./design/REFRESH_DESIGN_LANDSCAPE.md)
+  §6 (the producer-pattern axis), §7 (pruning vocabulary).
+
+  **Target.** V3.0, RC stabilization window (or earlier
+  follow-up PR if cold-sync profile escalates the disposition).
+
 - **P1 (latent): refresh post-pass skipped on async path —
   `populate_engine_handle_fields` does not run when refresh
   dispatches through `LedgerEngine::apply_scan_result` (trigger:

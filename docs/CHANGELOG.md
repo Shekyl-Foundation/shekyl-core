@@ -688,6 +688,59 @@
   full-migration follow-up for the remaining `SHEKYL_*` fail-closed-
   on-misuse constants (~40) stays as FOLLOWUPS V3.0.
 
+### Documentation
+
+- **Stage 1 PR 4 — Round 1 disposition: α (preserved current
+  shape) for the `RefreshEngine` producer-redesign question.**
+  Doc-only commit on `feat/stage-1-pr4-refresh-engine-design`
+  (off `dev` at `9e53c82fa`). Closes the load-bearing open
+  question
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5 named in the seed; α is the disposition because it satisfies
+  all four review criteria — PR 4 extraction cleanliness, PR 5
+  two-phase build/submit/discard contract over reorg events,
+  reservation-tracker reorg surfacing, Stage 4 actor-migration
+  compatibility — without forcing additional discipline into the
+  per-trait PR or its consumers. β (internal batching) and γ
+  (consumer-driven streaming) are separated as independent
+  validation surfaces per
+  [`19-validation-surface-discipline.mdc`](../.cursor/rules/19-validation-surface-discipline.mdc)
+  (named on `dev` 2026-05-10) and recorded as residual questions
+  R2 (β as V3.x FOLLOWUPS) and a hypothetical follow-up PR (γ
+  if R1's PR 5 design surfaces correctness need).
+
+  - Adds [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    §5.4 (Round 1 disposition with four-criteria rationale and
+    R1 / R2 / R3 residuals) and §5.5 (work-list table for every
+    refresh-adjacent item with its target version and "where
+    documented" pointer); marks the producer-redesign decision
+    complete on §3.3's pre-flight checklist; rewrites §5.3's
+    rounds trajectory to reflect Round 1's convergence on α and
+    the resulting compression of Rounds 2–4.
+  - Adds [`docs/design/REFRESH_DESIGN_LANDSCAPE.md`](./design/REFRESH_DESIGN_LANDSCAPE.md):
+    refresh-design-space substrate covering the privacy-by-default
+    precondition (§2), the operational view-tag pre-filter from
+    [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+    §3.1.1 (§3), FMD as a V4 research direction (§4 — negative
+    result for V3.0), OMR as a V3.x research direction (§5 —
+    negative result for V3.0), and the pruning-vocabulary
+    sidebar (§7) disambiguating daemon-side
+    `--prune-blockchain` / archival `--no-prune` / RPC-server
+    prune / wallet-side prune-by-birthday / prune-by-skip-to-height.
+  - Adds a V3.0 [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md) entry
+    ("Refresh bandwidth tradeoff under α") naming the cost-benefit
+    artifact PR 4's α-disposition consumed; entry pinned to V3.0
+    RC stabilization (per the user's 2026-05-12 sequencing
+    decision) so the cold-sync bandwidth tradeoff is load-bearing
+    on RC stabilization rather than open-ended on the post-genesis
+    backlog.
+
+  Doc-only; no Rust or C++ code touched. Branch posture:
+  `feat/stage-1-pr4-refresh-engine-design` stays on `dev`-rooted
+  doc-only commits until M3e closes per
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)'s
+  branch policy.
+
 ### Fixed
 
 - **CI bench gate no longer false-fails on `baseline=0` capture
