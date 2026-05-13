@@ -690,6 +690,79 @@
 
 ### Documentation
 
+- **Stage 1 PR 4 — PR #42 Copilot review-pass disposition:
+  two typos, one stale work-list row, two CHANGELOG link
+  retargets, one CHANGELOG ordering correction.** Six
+  findings surfaced by `copilot-pull-request-reviewer` on
+  PR #42's design-branch open. Validated each at source;
+  five fixes landed verbatim, one fixed in the
+  opposite-direction-from-Copilot-suggested (CHANGELOG
+  ordering — Copilot suggested oldest-first; the file's
+  established `[Unreleased]` convention is newest-first
+  within substantive groupings, so the §5.5 hygiene entry
+  moved to the **top** of the PR 4 cluster rather than to
+  the bottom). Concrete dispositions:
+  - Typo `Forecloseing` → `Foreclosing` in
+    [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    §5.4.6 (R6 reframe, concurrent-emit pin discussion).
+  - Typo `dispositon` → `disposition` in
+    [`REFRESH_DESIGN_LANDSCAPE.md`](./design/REFRESH_DESIGN_LANDSCAPE.md)
+    §6 (bandwidth/pruning interplay paragraph).
+  - §5.5 work-list row for β internal-batching updated
+    from pre-Round-2 staleness (`V3.x (R2)` /
+    "promotion to FOLLOWUPS pending Round 2 R2 disposition")
+    to the settled Round 2 R2 disposition (**closed —
+    kept as §2.2 future-scaling note; not promoted to
+    FOLLOWUPS yet; revisit if V3.0 RC stabilization
+    bandwidth profiling identifies β as the remediation
+    over alternatives**).
+  - Two CHANGELOG citation links retargeted from
+    self-references to
+    [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    over to the actual
+    [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+    source. The link **text** named the source file; the
+    link **target** pointed to the design doc. Audit
+    readers couldn't follow the citation to code; that
+    misled the audit trail.
+  - PR 4 CHANGELOG cluster reordered so the newest commit
+    (§5.5 hygiene) sits at the top, matching the file's
+    `[Unreleased]` newest-first convention. The Round 1
+    chronological pair (disposition above review pass) is
+    preserved as a narrative — moving them to the bottom
+    of the cluster would have required two cross-reference
+    rewrites (`above` → `below`) for marginal benefit;
+    the minimal-invasive disposition is correct here. The
+    Round 2 sub-cluster was already newest-first; only the
+    §5.5 hygiene's position needed correction. PR #42
+    test plan updated to describe the resolved layout.
+  Doc-only; no Rust or C++ code touched.
+
+- **Stage 1 PR 4 — §5.5 work-list hygiene: P3
+  `apply_scan_result_to_state` `Vec<usize>`-discard row
+  added.** Single-row addition to the
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.5 work-list against the dev-side FOLLOWUPS entry
+  ("P3: `apply_scan_result_to_state` allocates `Vec<usize>`
+  even for trait-impl callers that discard it") that landed
+  via PR #37 (commit `0a0d46b38`, 2026-05-10) during the
+  design branch's pre-M3-tail window. The design branch was
+  cut at `9e53c82fa` (pre-PR-#37); PR #37 reshaped the merge
+  pipeline (`LedgerIndexes::ingest_block`,
+  `process_scanned_outputs`, `apply_scan_result_to_state`
+  carry insertion-index ranges) and added P3 to FOLLOWUPS as
+  a PR 4-triggered deferral. The work-list row closes the
+  audit delta between the design doc's enumeration and the
+  dev-side FOLLOWUPS state before the design branch lands
+  onto `dev`. P3's disposition under α (Round 1) plus
+  (a-instance-scoped) view-material (Round 2 R4) remains
+  Round 3 / Round 4 trait-surface enumeration: either
+  `LedgerEngine::apply_scan_result` grows to surface the
+  insertion-range carryout (Vec consumed, optimization dead
+  code) or `RefreshEngine` owns the post-pass directly and
+  the trait method is removed (discard sites disappear).
+  Doc-only; no Rust or C++ code touched.
+
 - **Stage 1 PR 4 — Round 1 disposition: α (preserved current
   shape) for the `RefreshEngine` producer-redesign question.**
   Doc-only commit on `feat/stage-1-pr4-refresh-engine-design`
@@ -815,31 +888,6 @@
   findings — none argue for β or γ. They argue for a more
   carefully-specified α. Doc-only; no Rust or C++ code touched.
 
-- **Stage 1 PR 4 — §5.5 work-list hygiene: P3
-  `apply_scan_result_to_state` `Vec<usize>`-discard row
-  added.** Single-row addition to the
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-  §5.5 work-list against the dev-side FOLLOWUPS entry
-  ("P3: `apply_scan_result_to_state` allocates `Vec<usize>`
-  even for trait-impl callers that discard it") that landed
-  via PR #37 (commit `0a0d46b38`, 2026-05-10) during the
-  design branch's pre-M3-tail window. The design branch was
-  cut at `9e53c82fa` (pre-PR-#37); PR #37 reshaped the merge
-  pipeline (`LedgerIndexes::ingest_block`,
-  `process_scanned_outputs`, `apply_scan_result_to_state`
-  carry insertion-index ranges) and added P3 to FOLLOWUPS as
-  a PR 4-triggered deferral. The work-list row closes the
-  audit delta between the design doc's enumeration and the
-  dev-side FOLLOWUPS state before the design branch lands
-  onto `dev`. P3's disposition under α (Round 1) plus
-  (a-instance-scoped) view-material (Round 2 R4) remains
-  Round 3 / Round 4 trait-surface enumeration: either
-  `LedgerEngine::apply_scan_result` grows to surface the
-  insertion-range carryout (Vec consumed, optimization dead
-  code) or `RefreshEngine` owns the post-pass directly and
-  the trait method is removed (discard sites disappear).
-  Doc-only; no Rust or C++ code touched.
-
 - **Stage 1 PR 4 — Round 2 close-out: Phase 0c
   `InternalInvariantViolation` + Phase 0e `DaemonOp` /
   `ProtocolErrorKind` seed enums.** Same-day follow-up to
@@ -857,7 +905,7 @@
   `InternalInvariantViolation`" cleanup pin at the design
   layer, not Round 4 commit-decomposition. The retry-loop
   call sites at
-  [`engine/refresh.rs:1672–1680`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  [`engine/refresh.rs:1672–1680`](../rust/shekyl-engine-core/src/engine/refresh.rs)
   and `:2055–2065` are **state-machine invariant
   violations** ("loop body itself is broken" per the
   existing site comments), not retry-budget exhaustion.
@@ -884,7 +932,7 @@
   actual call-site surface.** Two ground-truth findings:
 
   - `DaemonOp` narrows to two variants per the
-    [`engine/refresh.rs`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
     audit. The producer issues exactly two daemon RPCs:
     `daemon.get_height()` (tip fetch; lines 1480 / 1958)
     and `rpc.get_scannable_block_by_number(...)` (per-block

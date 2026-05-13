@@ -330,7 +330,7 @@ is the intended remediation: prune-by-birthday for the cold-sync
 prefix (where birthday plumbing already exists at the prefs
 layer per the P2 FOLLOWUP), β-style internal batching for the
 post-birthday range (which prune-by-birthday cannot reduce
-further without losing on-chain coverage). Round 2 R2 dispositon
+further without losing on-chain coverage). Round 2 R2 disposition
 revisits whether β's deferral is the long-term answer or whether
 a different prune-shape refinement is preferable.
 
