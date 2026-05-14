@@ -2925,19 +2925,50 @@ one place to confirm each item's relationship to the wallet stack.
   constraint).
 
 - **Diagnostic-stream specification document
-  (`docs/design/REFRESH_DIAGNOSTIC_STREAM.md`, V3.x).** PR 4's
-  Round 2 reframe of
+  (`docs/design/DIAGNOSTIC_STREAM.md`, V3.x; renamed in
+  PR 5 Round 2 segment 2g — was
+  `REFRESH_DIAGNOSTIC_STREAM.md`).** PR 4's Round 2 reframe
+  of
   [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.7 R6 defines the `RefreshDiagnostic` / `DiagnosticSink`
-  trait contract; the implementation-side spec doc captures
-  the variant taxonomy, consumer-actor design space,
-  mailbox-policy templates, the trust-boundary discipline
-  (in-process-only for full-fidelity, recursively per §5.4.8
-  #4 — including in-process aggregator-republisher actors
-  whose external surface crosses the boundary; projection-only
-  across trust boundaries), and the emergent-behaviour
-  analysis framework when multiple consumers coexist
-  (§5.4.8 "Cross-cutting" note).
+  trait contract; PR 5's Round 1 + Round 2 segments 2b–2f
+  extend the pattern to `PendingTxDiagnostic` /
+  `DiscardReason` / `SubmitError` / `SubmitErrorKind` per
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0.2 + §5.0.2.1 + §5.0.3. The implementation-side spec
+  doc captures the variant taxonomy, consumer-actor design
+  space, mailbox-policy templates, the trust-boundary
+  discipline (in-process-only for full-fidelity, recursively
+  per §5.4.8 #4 — including in-process aggregator-republisher
+  actors whose external surface crosses the boundary;
+  projection-only across trust boundaries), and the
+  emergent-behaviour analysis framework when multiple
+  consumers coexist (§5.4.8 "Cross-cutting" note).
+
+  **Segment-2g rename rationale.** The contracts at §5.0.3
+  are general properties of any `DiagnosticSink`-shaped seam
+  (non-blocking emit, emission/return coherence, recursive
+  trust boundary, restart-amnesia detection, producer
+  panic-safety, concurrent emit); they apply to PR 4's
+  `RefreshDiagnostic` and PR 5's `PendingTxDiagnostic`
+  identically. A single `DIAGNOSTIC_STREAM.md` doc with a
+  shared-contracts-at-the-top + per-stream-sections
+  structure is the lower cross-reference cost shape than a
+  parent-and-children factoring. The factoring discipline
+  remains available retroactively if growth justifies.
+
+  **Doc structure (V3.x introduction PR).** The doc opens
+  with the shared contract bullets from PR 4 §5.4.6 /
+  §5.4.7 R6 / §5.4.8 and PR 5 §5.0.3 (a single set; the
+  contracts are identical). Per-stream sections follow:
+  `RefreshDiagnostic` (PR 4 variant taxonomy + emission-
+  site discipline); `PendingTxDiagnostic` + `DiscardReason`
+  (PR 5 variant taxonomy + emission-site discipline; R8
+  / R9 closure dispositions);
+  `LedgerDiagnostic` (Phase 0g variant pending the
+  consumer-actor PR per PR 5 segment-2g introduction-PR
+  disposition). V3.x consumer-actor PRs extend per-stream
+  sections additively as new variants land.
 
   **Load-bearing contract pins (binding on every V3.x
   consumer-actor PR sink implementation).** The spec doc

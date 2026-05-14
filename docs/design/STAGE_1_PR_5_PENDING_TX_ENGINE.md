@@ -1,18 +1,28 @@
 # Stage 1 PR 5 — `PendingTxEngine` extraction — design
 
-**Status.** **Round 1 closed (2026-05-13); Round 2 in progress
-— segments 2a (audit-readiness), 2b (R11 signing-actor split
-reframe to (b); R14 reservation extensibility seam), 2c
-(closure-rule and lens-applicability refinements paired with
-R13 / R15 / R16 / R17 named with dispositions), 2d
-(R2 + R12 co-disposition; Phase 0c truly collapses;
-`SnapshotId` opacity closed as 16-byte content-addressed
-digest), 2e (R8 `ReservationTTLActor` composition closure;
-`DiscardReason::TTLAutoDiscard` variant pin), and 2f
-(R9 two-stage submit-flow closure with daemon-side
-authority for Finding 2 ambiguous outcomes; `SubmitError` +
+**Status.** **Round 1 closed (2026-05-13); Round 2 closed
+(2026-05-14) — all seven segments landed: 2a (audit-readiness),
+2b (R11 signing-actor split reframe to (b); R14 reservation
+extensibility seam), 2c (closure-rule and lens-applicability
+refinements paired with R13 / R15 / R16 / R17 named with
+dispositions), 2d (R2 + R12 co-disposition; Phase 0c truly
+collapses; `SnapshotId` opacity closed as 16-byte content-
+addressed digest), 2e (R8 `ReservationTTLActor` composition
+closure; `DiscardReason::TTLAutoDiscard` variant pin), 2f
+(R9 two-stage submit-flow closure with daemon-side authority
+for Finding 2 ambiguous outcomes; `SubmitError` +
 `SubmitErrorKind` enum pins; sink-binding constructor-bound
-closure for Finding 4) landed (2026-05-14).** This
+closure for Finding 4), and 2g (Round 2 close-out: §4 Phase 0
+binding-form enumeration including new Phase 0h `Signer` /
+0i `OutputSelector` / 0j `FeeEstimator` / 0k
+`SubmissionStrategyActor` topology slot; `SnapshotId` hash
+primitive pinned as SHA-256/128-bit truncation under existing
+`sha2 = "0.10"` workspace dep; §5.0.3 diagnostic-stream-doc
+generalization closed as (a) rename to
+`DIAGNOSTIC_STREAM.md`; §6 review checklist filled with all
+binding-check / test-substrate / call-site-sweep items).
+Round 3 (commit decomposition + Phase 1 commit list) is the
+next forward step.** This
 document was opened as a seed immediately after Stage 1 PR 4's
 design substrate landed on `dev` (merge commit `6de8335d5`,
 PR #42). Round 1 closes here in one round — not deferred to
@@ -606,32 +616,116 @@ Phase 0 doc-only spec amendments precede Phase 1 implementation
 per the PR 2 / PR 3 / PR 4 precedent. Round 1's disposition
 (§5.5 — shape (1) under the §5.0 actor-mesh framing) closes the
 R1-dependence on these candidates; the surviving set is below.
-Round 2 finalizes Phase 0 enumeration (binding type-signature
-detail; cross-trait amendment review; review-checklist gate
-for §6).
+Round 2 segment 2g finalizes Phase 0 enumeration (binding
+type-signature detail; cross-trait amendment review;
+review-checklist gate for §6).
 
-**Currently identified candidates (post-Round-1).**
+**Status (after Round 2 segments 2b–2g).** All Phase 0
+candidates pin their type-signature shape. Phase 0c is removed.
+Four additional candidates — Phase 0h (`Signer`), Phase 0i
+(`OutputSelector`), Phase 0j (`FeeEstimator`), Phase 0k
+(`SubmissionStrategyActor` topology slot) — land from
+segment-2b / segment-2c residual closures. Phase 0 is closed for
+design purposes; Phase 1 commit decomposition proceeds against
+this enumeration in Round 3.
 
-- **Phase 0a — `SubmitError::SnapshotInvalidated` variant
-  extension.** Add `SubmitError::SnapshotInvalidated {
-  reservation_snapshot: SnapshotId, current_snapshot: SnapshotId }`
-  to the §2.4 spec. Surface unchanged from the seed projection.
-- **Phase 0b — `SnapshotId` public type.** New opaque
-  identifier type `SnapshotId` lands in `shekyl-engine-core`
-  (or as part of the §2.2 `LedgerEngine` surface). The type's
-  shape — opaque content-addressed digest vs height-bearing —
-  is the R2 disposition (recursive trust boundary applies
-  per §5.4 R2; in-process consumers see full token,
-  cross-boundary consumers see projection types).
-- **Phase 0c — REMOVED at the trait surface under §5.0
-  (R12 closed (a) in segment 2d; Phase 0c truly collapses).**
-  The seed projected a cross-trait synchronous-query amendment
-  to `LedgerEngine` (`current_snapshot_id() -> SnapshotId`) as
-  a load-bearing amendment. Under the actor-mesh framing,
-  snapshot identity flows through the diagnostic-stream
-  surface as a `LedgerDiagnostic::SnapshotMerged` event
-  (Phase 0g) for actor consumers; Stage 1's `LocalPendingTx`
-  derives `SnapshotId` from `LedgerEngine::snapshot()` (the
+**Currently identified candidates (post-Round-1; finalized in
+segment 2g).**
+
+- **Phase 0a — `SubmitError` enum + `SubmitErrorKind` enum
+  in §2.4 spec (binding form pinned in segment 2f).** Both
+  `#[non_exhaustive]`. The `SnapshotInvalidated` variant is
+  the original Phase 0a content from the seed projection;
+  `DaemonRejected { kind: SubmitErrorKind }` is the segment-2f
+  R9 closure. Binding signature:
+
+  ```rust
+  #[non_exhaustive]
+  pub enum SubmitError {
+      SnapshotInvalidated {
+          reservation_snapshot: SnapshotId,
+          current_snapshot: SnapshotId,
+      },
+      DaemonRejected { kind: SubmitErrorKind },
+  }
+
+  #[non_exhaustive]
+  pub enum SubmitErrorKind {
+      DoubleSpend,
+      FeeTooLow,
+      Malformed,
+      DaemonTimeout,
+      DaemonUnavailable,
+  }
+  ```
+
+  Lives in `shekyl-engine-core::engine::pending_tx` (or the
+  module that hosts the `PendingTxEngine` trait surface;
+  Phase 1 review pins the precise location).
+
+- **Phase 0b — `SnapshotId` opaque type + hash primitive
+  (binding form pinned in segment 2g per R2's segment-2d
+  closure).** New opaque identifier type lands in
+  `shekyl-engine-core` alongside the `LedgerEngine` surface
+  it derives from. Binding signature:
+
+  ```rust
+  pub struct SnapshotId([u8; 16]);
+
+  impl From<&LedgerSnapshot> for SnapshotId {
+      fn from(snapshot: &LedgerSnapshot) -> Self { /* … */ }
+  }
+  ```
+
+  **Hash primitive (segment-2g closure).** SHA-256 truncated
+  to the first 128 bits, with input domain-separated by a
+  fixed prefix (e.g., `b"shekyl-snapshot-id-v1"`). Selection
+  rationale:
+
+  - `sha2 = "0.10"` is already a workspace dependency of
+    `shekyl-engine-core` per
+    [`rust/shekyl-engine-core/Cargo.toml`](../../rust/shekyl-engine-core/Cargo.toml)
+    (line 115); the
+    [`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)
+    workspace-state rule prefers reuse of an existing
+    dependency over adding a new one.
+  - 128-bit collision resistance gives ~2⁶⁴ classical work
+    and ~2³² quantum work (Grover-doubled width); both are
+    adequate for a wallet-internal comparison token whose
+    only adversary surface is daemon-controlled
+    `LedgerSnapshot` construction. The token is not
+    consensus-bound and does not appear on-chain.
+  - Domain-separation via a versioned prefix forecloses
+    hash collisions with other wallet-internal hashes over
+    similar input shapes. The "v1" tag in the prefix permits
+    a future migration to SHA-3 or BLAKE3 in V3.x without a
+    cross-stage rebuild (V3.0 wallets and V3.x wallets
+    interoperate at the wire-format level; `SnapshotId` is
+    a wallet-internal token that does not cross the wire).
+  - PQC alignment: SHA-2 is post-quantum-safe for collision
+    resistance with Grover-doubled width; the analogous
+    SHA-3 / Keccak choice would require pulling in a new
+    workspace dependency without a load-bearing security
+    delta against this threat model.
+
+  Recursive trust boundary applies per §5.4 R2: in-process
+  consumers see the full 16-byte token; cross-boundary
+  consumers receive projection types (the
+  cross-boundary-projection implementation lands in the V3.x
+  consumer-actor PR that introduces the first cross-boundary
+  `SnapshotId` consumer; the discipline is documented per PR
+  4 §5.4.8 #4's recursive-trust-boundary rule).
+
+- **Phase 0c — REMOVED at the trait surface (R12 closed (a)
+  in segment 2d; Phase 0c truly collapses; finalized in
+  segment 2g).** The seed projected a cross-trait
+  synchronous-query amendment to `LedgerEngine`
+  (`current_snapshot_id() -> SnapshotId`) as a load-bearing
+  amendment. Under the actor-mesh framing, snapshot identity
+  flows through the diagnostic-stream surface as a
+  `LedgerDiagnostic::SnapshotMerged` event (Phase 0g) for
+  actor consumers; Stage 1's `LocalPendingTx` derives
+  `SnapshotId` from `LedgerEngine::snapshot()` (the
   pre-existing trait method) per §5.4 R12 (a)'s segment-2d
   closure. **Net effect: the trait-surface load-bearing
   coupling the seed projected does not exist** — neither at
@@ -639,67 +733,287 @@ for §6).
   additive event-surface amendment (Phase 0g) carries
   snapshot identity to actor consumers; the existing
   `LedgerEngine::snapshot()` carries it to Stage 1's
-  synchronous trait-call consumer.
-- **Phase 0d — `Reservation` struct extension.** The
-  reservation record carries a `snapshot_id: SnapshotId` field.
-  This is a `LocalPendingTx`-internal extension if `Reservation`
-  is crate-private; a §2.4 surface amendment if `Reservation`
-  is publicly exposed. Surface unchanged from the seed
-  projection.
-- **Phase 0e — reservation-lifecycle prose pin in §2.4.**
-  Pin the build/submit/discard atomicity contract and the
-  snapshot-invalidation disposition under §5.0:
-  - `submit`'s staleness check is a **field comparison in the
-    actor's message handler** (Stage 4) or under the trait's
-    `&self` mutation discipline (Stage 1); not a CAS in the
-    contract sense.
+  synchronous trait-call consumer. **No Phase 1 commit
+  decomposition entry for Phase 0c**; the slot is closed
+  for design purposes.
+
+- **Phase 0d — `Reservation` struct shape (binding form
+  pinned in segment 2g; incorporates R14 extensibility
+  seam from segment 2b).** Binding signature:
+
+  ```rust
+  pub struct Reservation {
+      pub id: ReservationId,
+      pub snapshot_id: SnapshotId,
+      pub outputs: Vec<SelectedOutput>,
+      pub tx_bytes: Vec<u8>,
+      pub extensions: Vec<ReservationExtension>,
+  }
+
+  #[non_exhaustive]
+  pub enum ReservationExtension {
+      // Empty variant set in V3.0 per R14's segment-2b
+      // closure. V3.x consumer-actor PRs add variants
+      // (CoinjoinState, HtlcParams, TimelockedSubmission,
+      // MultiStageState, ComposedReservation) additively
+      // without a V3.0 trait revision.
+  }
+  ```
+
+  **Field-name discipline** (segment-2g confirmation per
+  segment-2b §5.4 R14): `extensions: Vec<ReservationExtension>`
+  matches the `RefreshDiagnostic` / `PendingTxDiagnostic`
+  extensibility-pattern conventions. **`#[non_exhaustive]`
+  attribute placement** is on `ReservationExtension`
+  (the variant-extending enum), not on `Reservation` itself
+  (whose field set is fully exhaustive at V3.0; additions
+  come through `extensions`'s variant set, not through
+  field-adding edits). Lives in
+  `shekyl-engine-core::engine::pending_tx` or a sibling
+  module per Phase 1 location review.
+
+- **Phase 0e — Reservation lifecycle prose in §2.4
+  (binding form pinned in segment 2g; incorporates R5 +
+  R9 segment-2f + R10 dissolution).** Pin the
+  build/submit/discard atomicity contract and the
+  snapshot-invalidation + daemon-rejection dispositions
+  under §5.0:
+
+  - `submit`'s staleness check is a **field comparison in
+    the actor's message handler** (Stage 4) or under the
+    trait's `&self` mutation discipline (Stage 1); not a CAS
+    in the contract sense.
   - On staleness mismatch, `submit` emits
     `PendingTxDiagnostic::SubmitSnapshotInvalidated` and
-    replies `SubmitError::SnapshotInvalidated`; the reservation
-    auto-releases on this failure (lazy auto-discard policy
-    per §5.4 R5); consumer rebuilds against the new snapshot.
+    replies `SubmitError::SnapshotInvalidated`; the
+    reservation auto-releases on this failure (lazy
+    auto-discard policy per §5.4 R5); consumer rebuilds
+    against the new snapshot.
+  - **(segment-2f addition)** On daemon round-trip
+    completion with rejection, the per-error-class
+    disposition table per §5.4 R9 applies; the actor's
+    internal `ReservationState` machine
+    (`Active | SubmitPendingDaemonAck | Resolved`) drives
+    the transitions; Finding 2's daemon-side authority
+    disposition keeps timed-out / unavailable reservations
+    in `SubmitPendingDaemonAck` until consumer-explicit
+    `discard(id, ConsumerExplicit)` or R8 TTL safety-net
+    fires.
   - Concurrent `build` / `submit` / `discard` semantics are
     delivered by the actor's mailbox FIFO (Stage 4) or by
-    `&self` interior mutability under `Mutex<ReservationTracker>`
-    (Stage 1). Both satisfy the trait contract; the
-    "messages process serially per actor instance" property
-    is the actor-system invariant per §5.4 R10's dissolution.
-- **(NEW) Phase 0f — `PendingTxDiagnostic` enum +
-  `DiagnosticSink` parameter on `LocalPendingTx`.** Parallel
-  to PR 4's Phase 0e diagnostic-stream seam. Adds the
-  `PendingTxDiagnostic` enum (definition in §5.0.2), the
-  `DiscardReason` enum, and the `&dyn DiagnosticSink`
-  parameter on `LocalPendingTx::new` (constructor-bound,
-  matching PR 4's preference). Constructor-vs-per-method
-  shape is jointly disposed with R11 in Round 2. The
-  cross-cutting `DiagnosticSink` contracts from PR 4 §5.4.6
-  / §5.4.7 R6 reframe / §5.4.8 (non-blocking emit, recursive
-  trust boundary, restart-amnesia detection, panic safety,
-  concurrent emit, emission/return coherence) bind to PR 5
-  verbatim per §5.0.3.
-- **(NEW) Phase 0g — `LedgerDiagnostic::SnapshotMerged`
-  variant addition.** Cross-trait but **additive only**;
-  lives entirely in the diagnostic-stream surface, not in
-  `LedgerEngine`'s trait surface. Replaces Phase 0c. The
-  `LedgerDiagnostic` enum (analogous to `RefreshDiagnostic`)
-  is the parent surface; `SnapshotMerged { new: SnapshotId,
-  prior: SnapshotId, height: BlockHeight }` is the variant
-  PR 5 needs. Round 2 disposes whether PR 5 introduces the
-  `LedgerDiagnostic` enum (no `LedgerEngine` consumer in
-  Stage 1 yet) or whether `LedgerEngine` grows it on its
-  own follow-up PR (PR 5 deferring the variant to a stub
-  spec entry pending the consumer-introducing PR).
+    `&self` interior mutability under
+    `Mutex<ReservationTracker>` (Stage 1). Both satisfy
+    the trait contract; the "messages process serially per
+    actor instance" property is the actor-system invariant
+    per §5.4 R10's dissolution.
 
-**Net Phase 0 change vs. seed projection.** One amendment
-removed (0c — load-bearing cross-trait synchronous query); two
-added (0f, 0g — additive diagnostic-stream surface). Surface
-complexity stays roughly the same; the cross-trait coupling
-moves from synchronous query (load-bearing surface) to event
-emission (additive surface). Cleaner per
+- **Phase 0f — `PendingTxDiagnostic` enum +
+  constructor-bound `DiagnosticSink` parameter on
+  `LocalPendingTx` (binding form pinned in segment 2g;
+  incorporates R14 extensibility pattern + segment-2f sink-
+  binding closure).** Parallel to PR 4's Phase 0e
+  diagnostic-stream seam. Binding signature pinned in
+  §5.0.2 (`PendingTxDiagnostic` variant set,
+  `DiscardReason` variant set including segment-2e
+  `TTLAutoDiscard`). Constructor-vs-per-method shape
+  **closed as constructor-bound** in segment 2f per
+  §5.0.2.1's five-point rationale (engine-identity coupling;
+  Stage 4 actor wiring alignment; call-site cleanliness;
+  runtime-swap surface preserved via sink-side indirection;
+  no load-bearing reason for per-method override in
+  production engines).
+
+  Cross-cutting `DiagnosticSink` contracts (non-blocking
+  emit, emission/return coherence, recursive trust boundary,
+  restart-amnesia detection, producer panic-safety,
+  concurrent emit) bind to PR 5 verbatim per §5.0.3.
+
+- **Phase 0g — `LedgerDiagnostic::SnapshotMerged`
+  variant addition (binding form pinned in segment 2g).**
+  Cross-trait but **additive only**; lives entirely in
+  the diagnostic-stream surface, not in `LedgerEngine`'s
+  trait surface. Replaces Phase 0c. The `LedgerDiagnostic`
+  enum (analogous to `RefreshDiagnostic`) is the parent
+  surface; `SnapshotMerged { new: SnapshotId, prior:
+  SnapshotId, height: BlockHeight }` is the variant PR 5
+  needs.
+
+  **Introduction-PR disposition (segment-2g closure).**
+  PR 5 defers the `LedgerDiagnostic` enum introduction
+  to a follow-up `LedgerEngine`-side PR. Rationale:
+
+  - PR 5 has no V3.0 in-process consumer of
+    `LedgerDiagnostic::SnapshotMerged` — Stage 1's
+    `LocalPendingTx` derives `SnapshotId` synchronously
+    from `LedgerEngine::snapshot()` (segment-2d R12 (a)
+    closure); the event-stream consumer is Stage 4's
+    `PendingTxActor`, which is not introduced in PR 5.
+  - PR 5 introducing the `LedgerDiagnostic` enum
+    speculatively (without a consumer) violates the
+    [`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)
+    "code with no live caller" default-delete rule.
+  - The natural introduction site is the V3.x
+    consumer-actor PR that introduces the first
+    `LedgerDiagnostic` consumer (likely Stage 4's
+    `PendingTxActor` migration PR, or whichever
+    consumer-actor lands first). The variant set is
+    additive to PR 4's diagnostic-stream pattern and
+    inherits the same `DiagnosticSink` contract bindings
+    per §5.0.3.
+
+  PR 5 records the variant **as a stub spec entry** in the
+  follow-up PR's design doc (FOLLOWUPS entry); no Phase 1
+  commit decomposition entry in PR 5 itself. This preserves
+  the option without speculative introduction.
+
+- **Phase 0h — `Signer` trait surface (binding form pinned
+  in segment 2g per R11 (b) segment-2b closure).** Binding
+  signature:
+
+  ```rust
+  pub trait Signer: Send + Sync {
+      type Error: Debug + Display + Send + Sync + 'static;
+
+      fn sign(
+          &self,
+          message: &[u8],
+          // Additional Shekyl-specific signing inputs
+          // pinned at Phase 1 (FCMP++ membership-proof
+          // witness, hybrid-PQC signing context, etc.).
+      ) -> Result<Signature, Self::Error>;
+  }
+  ```
+
+  **Implementation locus.** `LocalSigner` is the V3.0
+  software-key implementation; `HardwareSigner` is the V3.x
+  HW-wallet implementation (per the FOLLOWUPS entry from
+  segment 2b). The trait shape is narrow per the
+  segment-2b discipline (sole purpose = signing; the
+  spend-secret never escapes the `Signer` instance).
+  Stage 1 consumption: `LocalPendingTx<S: Signer>` with
+  `signer: Arc<S>` (constructor-bound). Stage 4
+  consumption: `PendingTxActor` with `signer:
+  ActorRef<SigningActor>` (spawn-time DI).
+
+  **Phase 1 deferral.** The precise `sign()` method
+  signature (additional Shekyl-specific witness inputs)
+  is finalized at Phase 1 commit-decomposition review;
+  the trait-existence and the spend-secret-locality
+  contract are the segment-2g pin.
+
+- **Phase 0i — `OutputSelector` trait surface (binding form
+  pinned in segment 2g per R13 segment-2c closure).**
+  Binding signature:
+
+  ```rust
+  pub trait OutputSelector: Send + Sync {
+      fn select_outputs(
+          &self,
+          candidates: &[OutputCandidate],
+          target: Amount,
+      ) -> Result<SelectedOutputs, SelectionError>;
+  }
+  ```
+
+  **Implementation locus.** `Wallet2GreedySelector` is the
+  V3.0 default implementation (matches wallet2 carryover);
+  V3.x alternative implementations
+  (`RandomizedSelector`, `EntropyMaximizingSelector`)
+  land per the FOLLOWUPS R13 entry. The trait shape is
+  narrow (single method); selection-algorithm details are
+  the impl's responsibility, not the trait surface's.
+  Stage 1 consumption: `LocalPendingTx<S: Signer, O:
+  OutputSelector>` with `output_selector: Arc<O>`
+  (constructor-bound). Stage 4 consumption: `PendingTxActor`
+  with `output_selector: Arc<dyn OutputSelector>` (spawn-time
+  DI per segment-2c R13's actor-topology note).
+
+- **Phase 0j — `FeeEstimator` trait surface (binding form
+  pinned in segment 2g per R16 segment-2c closure +
+  segment-2d V3.0-lift evaluation).** Binding signature:
+
+  ```rust
+  pub trait FeeEstimator: Send + Sync {
+      fn estimate_fee(
+          &self,
+          tx_size: usize,
+          priority: FeePriority,
+      ) -> Result<Amount, FeeEstimationError>;
+  }
+
+  #[non_exhaustive]
+  pub enum FeePriority {
+      Low,
+      Normal,
+      High,
+  }
+  ```
+
+  **Implementation locus.** `DaemonRecommendationEstimator`
+  is the V3.0 default implementation (asks the daemon
+  via `DaemonEngine::get_fee_estimates`); `ExplicitFeeEstimator`
+  is a V3.0 alternative for wallet-UI / API explicit-fee
+  workflows; `WalletSideEstimator` is the V3.x privacy-
+  enhancing implementation analyzing `LedgerEngine`
+  historical block-fee distribution (per segment-2d V3.0-
+  lift evaluation, R16 (c) does not lift to V3.0; lands as
+  a coordinated `LedgerEngine` + `FeeEstimator` PR in V3.x).
+  Stage 1 consumption: `LocalPendingTx<S: Signer, O:
+  OutputSelector, F: FeeEstimator>` with `fee_estimator:
+  Arc<F>` (constructor-bound). Stage 4 consumption:
+  `PendingTxActor` with `fee_estimator: Arc<dyn
+  FeeEstimator>` (spawn-time DI).
+
+- **Phase 0k — `SubmissionStrategyActor` topology slot
+  (binding form pinned in segment 2g per R15 segment-2c
+  closure).** **Not a trait surface amendment** —
+  `SubmissionStrategyActor` is a Stage 4 actor-topology
+  pin between `PendingTxActor` and `DaemonEngine`. Per
+  segment-2c §5.4 R15:
+
+  ```text
+  PendingTxActor — submit msg → SubmissionStrategyActor
+       │                           │ (apply strategy)
+       │                           ▼
+       │                       DaemonEngine actor
+       │                           │ (broadcast)
+       │                           ▼
+       │                       (network)
+  ```
+
+  **V3.0 disposition.** Stage 1's `LocalPendingTx` calls
+  `DaemonEngine::submit_tx()` directly with **no
+  intermediate actor**; the `DirectStrategy` is implicit
+  in the direct call. The actor-topology slot is reserved
+  but unoccupied at V3.0; the trait surface does not
+  grow. V3.x consumer-actor PRs land the
+  `SubmissionStrategyActor` itself with the strategy
+  taxonomy (`DirectStrategy`, `JitteredSubmissionStrategy`,
+  `CircuitRotationStrategy`, `BroadcastStrategy`,
+  `BatchedStrategy`) per the FOLLOWUPS R15 entry.
+
+  **No Phase 1 commit decomposition entry for Phase 0k**;
+  this is a forward-looking documentation pin rather than a
+  V3.0 trait / type addition. The slot's existence is the
+  Phase 0 deliverable; the actor's introduction is V3.x
+  work.
+
+**Net Phase 0 change vs. seed projection (segment-2g final
+summary).** One amendment removed (0c — load-bearing
+cross-trait synchronous query); two diagnostic-stream
+amendments added (0f, 0g — additive surface); four
+trait-/topology-seam amendments added (0h `Signer`, 0i
+`OutputSelector`, 0j `FeeEstimator`, 0k
+`SubmissionStrategyActor` topology slot). Surface complexity
+grows on the V3.0 trait-parameter side
+(`LocalPendingTx<S, O, F>`) but contracts on the cross-trait
+synchronous-coupling side (Phase 0c removed). The structural
+trade is exactly the
 [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
-— the load-bearing surface contraction is exactly the kind of
-structural cleanup the rule's continuous-discipline corollary
-predicts.
+continuous-discipline corollary: structural cleanup of
+load-bearing surfaces at small additive cost on per-engine
+type parameters; V3.x consumer-actor PRs inherit the
+seams without trait revision.
 
 ---
 
@@ -956,14 +1270,53 @@ bind here verbatim — they're general properties of any
   fired-or-not state. Round 4 test deliverable; not a hard
   trait contract on consumer implementations.
 
-**Generalization question (Round 2 disposition).**
-PR 4's FOLLOWUPS named `docs/design/REFRESH_DIAGNOSTIC_STREAM.md`
-as the spec doc. Now that the contracts are used by both PR 4
-and PR 5, options are: (a) rename to `DIAGNOSTIC_STREAM.md`
-(general); or (b) factor a parent
-`DIAGNOSTIC_STREAM_CONTRACTS.md` that PR 4's and PR 5's
-specific stream docs inherit from. Doc-only work; Round 2
-disposition.
+**Generalization question (closed in Round 2 segment 2g
+as (a) — rename to `DIAGNOSTIC_STREAM.md`).** PR 4's
+FOLLOWUPS named `docs/design/REFRESH_DIAGNOSTIC_STREAM.md`
+as the spec doc; the contracts are used by both PR 4 and
+PR 5. Two options were evaluated:
+
+- **(a) Rename to `DIAGNOSTIC_STREAM.md` (general).** Single
+  doc; shared `DiagnosticSink` contracts live at the top;
+  per-stream sections (`RefreshDiagnostic` from PR 4,
+  `PendingTxDiagnostic` from PR 5, `LedgerDiagnostic`
+  pending the Phase 0g consumer PR) document the variant
+  taxonomy and emission-site discipline for each stream.
+  V3.x consumer-actor design rounds extend the per-stream
+  sections additively.
+- **(b) Factor a parent `DIAGNOSTIC_STREAM_CONTRACTS.md`
+  that per-stream docs inherit from.** Parent doc carries
+  the shared contracts; per-stream docs reference the
+  parent and document only the per-stream taxonomy.
+  Stronger separation of concerns; more cross-references
+  to maintain.
+
+**Closes as (a)** — rename to `DIAGNOSTIC_STREAM.md`
+(general). Rationale: the spec doc is a V3.x deferred
+deliverable (no V3.0 PR introduces it; per the FOLLOWUPS
+entry's "Trigger: when the first V3.x consumer actor enters
+design rounds"). At V3.x introduction time, the contracts
+shared between streams are already enumerated and modest in
+volume (six bullets per §5.0.3); the per-stream taxonomies
+are larger volume. A single doc with shared-then-per-stream
+structure carries the substrate at lower cross-reference
+cost than (b)'s parent-and-children factoring. The
+factoring discipline can be applied retroactively if the
+single doc grows beyond the threshold where a parent doc
+adds clarity rather than friction; segment-2g closes the
+question with (a) as the V3.x introduction shape.
+
+**Segment-2g actions.**
+
+- The FOLLOWUPS entry titled "Diagnostic-stream
+  specification document
+  (`docs/design/REFRESH_DIAGNOSTIC_STREAM.md`, V3.x)" is
+  amended in segment-2g to rename the planned doc to
+  `docs/design/DIAGNOSTIC_STREAM.md`. The doc itself does
+  not yet exist; only the planned name changes.
+- The trigger remains "when the first V3.x consumer actor
+  enters design rounds"; the V3.x introduction PR creates
+  the doc with shared-then-per-stream structure.
 
 #### §5.0.4 Why the lens lands in Round 1, not Round 2
 
@@ -2797,63 +3150,207 @@ create — neither holds here.
   parameter) and 0g (`LedgerDiagnostic::SnapshotMerged`
   variant) added.
 
-**What Round 2 carries.** R2 (`SnapshotId` opacity / projection
-types — closed in segment 2d as opaque 16-byte content-
-addressed digest with projection-type discipline preserved-as-
-pattern) and R12 (Stage 1 `current_snapshot` acquisition
-mechanism — closed in segment 2d as (a) content-derived
-`SnapshotId` from existing `LedgerSnapshot` data; Phase 0c
-truly collapses); R8 (`ReservationTTLActor` composition closure
-— closed in segment 2e; V3.0 ships diagnostic-stream seam
-complete with `DiscardReason::TTLAutoDiscard` variant pin
-added; V3.x lands `ReservationTTLActor` as consumer actor;
-existing FOLLOWUPS entry amended with segment-2e closure-
-status confirmation); R9 (two-stage submit flow with explicit
-`SubmitPendingDaemonAck` intermediate state; daemon-side
-authority disposition for Finding 2 ambiguous outcomes;
-`SubmitError` + `SubmitErrorKind` enum pins —
-closed in segment 2f; existing `SubmitFailureAnalyzer`
-FOLLOWUPS entry amended; new `TimeoutResolverActor`
-FOLLOWUPS entry added for Finding 2 ergonomic complement);
-sink-binding constructor-bound closure (Finding 4 — closed
-in segment 2f via §5.0.2.1 under PR 4 §3.4.5 / R4 (a)
-consistency);
-criterion-5 prose strengthening (contract-dependency-on-
-refresh-quiescence framing — landed in segment 2a); R11
-(signing-actor split — closed in segment 2b as (b); HW-wallet
-integration in V3.x plugs into existing architecture); R14
-(`Reservation` extensibility seam — closed in segment 2b);
-R13 / R15 / R16 / R17 (output-selection / submission-strategy
-/ fee-estimation / event-sourced-recovery — named with
-V3.0-vs-V3.x dispositions in segment 2c; V3.0 ships seams +
-privacy-default carryovers under `OutputSelector` /
-`SubmissionStrategyActor` / `FeeEstimator` / refined
-diagnostic-stream contract; V3.x lands alternative impls /
-privacy strategies / wallet-side estimator / encrypted-
-persistence consumer); R16 conditional V3.0 lift evaluated in
-segment 2d — `LedgerBlock` does not carry per-block fee data
-today; the V3.0 lift would require a storage-layout amendment,
-**so R16 conservative V3.x default holds**; §5.0.4
-lens-applicability discipline + §7 closure-rule strengthening
-(landed in segment 2c); sink-binding decoupling (closed in
-segment 2f as constructor-bound; PR 4 §3.4.5 / R4 (a)
-consistency; rationale in §5.0.2.1); plus Phase 0
-enumeration and the cross-cutting `DiagnosticSink`
-contract-doc generalization (§5.0.3 — segment 2g).
+**What Round 2 carried (final inventory; closed
+2026-05-14).** Seven segments landed across two days
+(2026-05-13 → 2026-05-14), covering all named residuals and
+the Phase 0 binding-form enumeration:
+
+- **Segment 2a — audit-readiness.** Criterion-5 prose
+  strengthening (contract-dependency-on-refresh-quiescence
+  framing); §5.3 threat-model anchor explicit defense
+  (adversary-controlled-daemon-as-design-center); §5.5
+  scorecard rationale clarification (criteria 4 / 5
+  distinct-consequences framing).
+- **Segment 2b — R11 + R14 architectural-integrity-now.**
+  R11 closed as (b) signing-actor split from Stage 1
+  (`Signer` trait + `LocalSigner` + Stage 4
+  `SigningActor`); R14 closed as `Reservation::extensions:
+  Vec<ReservationExtension>` extensibility seam
+  (`#[non_exhaustive]` empty V3.0 variant set). FOLLOWUPS
+  R11 entry replaced with HW-wallet integration entry.
+- **Segment 2c — closure-rule + lens-applicability +
+  R13 / R15 / R16 / R17.** §5.0.4 lens-applicability
+  discipline (three structural conditions); §7
+  closure-rule strengthening (wargaming-surface-known-at-
+  closure-time qualifier; new-shapes reopen Round N);
+  R13 closed under `OutputSelector` trait seam (V3.0
+  wallet2-greedy; V3.x alternatives); R15 closed under
+  `SubmissionStrategyActor` topology slot (V3.0
+  `DirectStrategy`; V3.x privacy strategies); R16 closed
+  under `FeeEstimator` trait seam (V3.0
+  daemon-recommendation-with-override; V3.x
+  wallet-side estimator); R17 closed as drop-on-close
+  V3.0 default with V3.x encrypted-persistence consumer
+  option.
+- **Segment 2d — R2 + R12 co-disposition.** R12 closed
+  as (a) content-derived `SnapshotId` from existing
+  `LedgerSnapshot` fields; R2 closed as opaque 16-byte
+  content-addressed digest with projection-type
+  discipline preserved-as-pattern; Phase 0c truly
+  collapses; R16 conditional V3.0 lift evaluated and
+  rejected (LedgerBlock carries no per-block fee data;
+  conservative V3.x default holds).
+- **Segment 2e — R8 + `DiscardReason::TTLAutoDiscard`.**
+  R8 closed as `ReservationTTLActor` consumer-actor
+  composition (V3.0 ships diagnostic-stream seam complete;
+  V3.x lands actor); `DiscardReason::TTLAutoDiscard`
+  variant added; R5 ↔ R8 coherence verified.
+- **Segment 2f — R9 + Finding 2 + Finding 4.** R9 closed
+  as two-stage submit flow with explicit internal
+  `ReservationState` machine (`Active |
+  SubmitPendingDaemonAck | Resolved`); Finding 2 closed
+  as (B) daemon-side authority for ambiguous outcomes;
+  Finding 4 closed as constructor-bound `DiagnosticSink`
+  via §5.0.2.1; `SubmitError` + `SubmitErrorKind` enums
+  pinned; R5 ↔ R8 ↔ R9 coherence verified; existing
+  `SubmitFailureAnalyzer` FOLLOWUPS entry amended; new
+  `TimeoutResolverActor` FOLLOWUPS entry added.
+- **Segment 2g — Round 2 close-out.** §4 Phase 0
+  binding-form enumeration finalized (Phase 0a–0g
+  binding-pinned; new Phase 0h `Signer` / 0i
+  `OutputSelector` / 0j `FeeEstimator` / 0k
+  `SubmissionStrategyActor` topology slot from
+  segment-2b / segment-2c closures); `SnapshotId` hash
+  primitive pinned (SHA-256/128-bit truncation under
+  existing `sha2 = "0.10"` workspace dep with
+  versioned domain-separation prefix); §5.0.3
+  diagnostic-stream-doc generalization closed as (a)
+  rename to `DIAGNOSTIC_STREAM.md` (FOLLOWUPS amended);
+  §6 review checklist filled with binding-check /
+  test-substrate / call-site-sweep enumerations.
 
 **What Round 3 carries.** Commit decomposition + Phase 1
 commit list (per the PR 1 / PR 2 / PR 3 / PR 4 precedent).
+Substrate: this document at segment-2g close-out (Round 2
+final form); §4 Phase 0 enumeration; §6 review checklist;
+PR 4 Round 3 confirmation per §5.2.
 
 ---
 
-## §6 Review checklist (Round 2 task)
+## §6 Review checklist (filled in Round 2 segment 2g)
 
-Filled in during Round 2 once Phase 0 enumeration completes.
-The shape mirrors PR 4's §6: binding-check matrix against the
-spec, test-substrate preservation list, call-site sweep audit,
-PR 4 Round 3 input bundle (now resolved as confirmation per
-§5.2; the bundle is this document plus PR 4's corresponding
-follow-up commit recording the "α confirmed" disposition).
+Shape mirrors PR 4's §6. Round 2 closes here; Round 3 (commit
+decomposition) consumes this checklist as the substrate
+deliverable for Phase 1 commit decomposition.
+
+**Binding-check matrix against the §2.4 spec (segment-2g
+finalization).**
+
+- [x] Trait surface methods (`build` / `submit` / `discard`
+  / `outstanding`) — unchanged across Round 2 segments
+  per §5.0.1's invariance pin. Trait-parameter additions
+  (`S: Signer`, `O: OutputSelector`, `F: FeeEstimator`)
+  affect the engine type, not the trait surface itself.
+- [x] `SubmitError` + `SubmitErrorKind` enum surfaces — Phase
+  0a binding form pinned in segment 2f; both
+  `#[non_exhaustive]`; `SnapshotInvalidated` and
+  `DaemonRejected { kind }` variants enumerated.
+- [x] `SnapshotId` opaque type, SHA-256/128-bit truncation,
+  domain-separation prefix — Phase 0b binding form pinned in
+  segment 2g; hash primitive rationale recorded per
+  dependency-discipline (already-workspace `sha2 = "0.10"`).
+- [x] `Reservation` struct shape with `extensions:
+  Vec<ReservationExtension>` (R14 extensibility seam) —
+  Phase 0d binding form pinned in segment 2g per
+  segment-2b R14 closure; `ReservationExtension` enum
+  is `#[non_exhaustive]` with empty V3.0 variant set.
+- [x] Reservation-lifecycle prose with R5 / R9 / R10
+  closure cross-references — Phase 0e binding form
+  pinned in segment 2g.
+- [x] `PendingTxDiagnostic` enum + constructor-bound
+  `DiagnosticSink` parameter — Phase 0f binding form
+  pinned in segment 2g per segment-2f §5.0.2.1
+  sink-binding closure (Finding 4).
+- [x] `LedgerDiagnostic::SnapshotMerged` variant —
+  Phase 0g pinned as deferred-to-consumer-PR per
+  segment-2g introduction-PR disposition.
+- [x] `Signer` trait surface (R11 (b) segment-2b closure)
+  — Phase 0h binding form pinned in segment 2g.
+- [x] `OutputSelector` trait surface (R13 segment-2c
+  closure) — Phase 0i binding form pinned in segment 2g.
+- [x] `FeeEstimator` trait surface + `FeePriority` enum
+  (R16 segment-2c closure with segment-2d V3.0-lift
+  evaluation) — Phase 0j binding form pinned in
+  segment 2g.
+- [x] `SubmissionStrategyActor` topology slot (R15
+  segment-2c closure) — Phase 0k pinned in segment 2g
+  as actor-topology pin (V3.x introduction).
+- [x] `DiscardReason` enum with `TTLAutoDiscard` variant
+  (R8 segment-2e closure) — pinned in §5.0.2 enum
+  sketch.
+
+**Test-substrate preservation list (segment-2g enumeration).**
+
+- [x] `LocalPendingTx::build` / `submit` / `discard` /
+  `outstanding` unit-test coverage — Phase 1 confirms
+  test surfaces match V3.0 trait-parameter additions
+  (`S: Signer`, `O: OutputSelector`, `F: FeeEstimator`).
+- [x] Property-test infrastructure for diagnostic-stream
+  emission/return coherence — `AssertionSink` /
+  `PanickingSink` pair per PR 4's canonical pattern;
+  Phase 1 introduces the PR-5-side equivalents under
+  §5.0.3 contract pins.
+- [x] Stage 4 `PendingTxActor` migration test fixtures —
+  not introduced in PR 5; deferred to Stage 4 actor-
+  migration PR per §5.0.1 invariance pin.
+- [x] R9 per-error-class disposition coverage — Phase 1
+  confirms each daemon-response class
+  (`Accepted` / `AlreadyInMempool` / `DoubleSpend` /
+  `FeeTooLow` / `Malformed` / `Timeout` / `NetworkError`)
+  has corresponding state-transition test coverage per
+  segment-2f's per-error-class disposition table.
+- [x] Finding-2 `SubmitPendingDaemonAck` daemon-side
+  authority coverage — Phase 1 confirms test surfaces
+  exercise the consumer-explicit-resolution path
+  (timeout → `discard(id, ConsumerExplicit)`) and the
+  R8 TTL safety-net path (timeout → TTL fires →
+  `Discarded { reason: TTLAutoDiscard }`; deferred until
+  V3.x `ReservationTTLActor` lands, per segment-2e).
+
+**Call-site sweep audit (segment-2g enumeration; Phase 1
+performs the sweep).**
+
+- [x] `PendingTxDiagnostic::BuildSucceeded` emitted at
+  `build`-success path in `LocalPendingTx::build` /
+  `PendingTxActor::handle_build` (R8 segment-2e
+  deliverable 1; Phase 1 confirms).
+- [x] `PendingTxDiagnostic::Discarded { reason:
+  SnapshotRotationAutoDiscard }` emitted at `submit`'s
+  snapshot-mismatch path (R5 lazy-discard semantics;
+  Phase 1 confirms).
+- [x] `PendingTxDiagnostic::Discarded { reason:
+  DaemonRejectedTerminal }` emitted on `DoubleSpend`
+  daemon-rejection per R9 segment-2f per-error-class
+  table (Phase 1 confirms).
+- [x] `PendingTxDiagnostic::SubmitFailed { kind: ... }`
+  emitted for all `SubmitErrorKind` variants per R9
+  segment-2f per-error-class table (Phase 1 confirms).
+- [x] `PendingTxDiagnostic::SubmitAttempted` emitted
+  on submit-handler entry; `SubmitSucceeded` /
+  `SubmitFailed` emitted on `SubmitCompleted`
+  self-message arrival per R9 segment-2f self-
+  continuation pattern (Phase 1 confirms).
+- [x] No emission paths bypass the sink — every
+  `&self` mutation event has an emit at the call
+  site per §5.0.3 emission/return-coherence
+  contract.
+
+**PR 4 Round 3 input bundle (segment-2g final form).**
+Resolved as confirmation per §5.2 — the bundle is **this
+document** (PR 5 STAGE_1 design at segment-2g close-out)
+plus PR 4's corresponding follow-up commit on its design
+doc recording the "α confirmed" disposition. No further
+PR-4-side design work is unblocked by PR 5 closing Round 2;
+PR 4 Round 3 proceeds independently against the bundle.
+
+**Round 3 readiness (segment-2g gate).** All §4 Phase 0
+candidates are binding-pinned at the type-signature level
+(0a–0k); §6 review checklist is filled; FOLLOWUPS amended
+for the segment-2g `DIAGNOSTIC_STREAM.md` rename. Round 3
+(commit decomposition + Phase 1 commit list) is ready to
+proceed against the §4 enumeration. Round 3 produces the
+Phase 1 commit-decomposition deliverable per the
+PR 1 / PR 2 / PR 3 / PR 4 precedent.
 
 ---
 
@@ -3284,28 +3781,70 @@ work, by round:
     daemon-side authority disposition. Cross-references the
     R8 `ReservationTTLActor` safety-net role.
 
-**Round 2 — pending.**
-
-- **Segment 2g — Round 2 close-out.**
-  - §4 Phase 0 final enumeration (binding type-signature
-    detail for 0a / 0b / 0d / 0e / 0f / 0g; cross-trait
-    amendment review; final disposition of 0c per R12). The
-    `Reservation` shape pins the segment-2b R14 `extensions`
-    field and `#[non_exhaustive]` `ReservationExtension` enum
-    stub. The `Signer` trait surface pins the segment-2b R11
-    (b) signing-isolation discipline. The `OutputSelector` /
-    `SubmissionStrategyActor` / `FeeEstimator` seam slots
-    (segment-2c R13 / R15 / R16) are pinned at the trait /
-    actor-topology level.
-  - Cross-cutting `DiagnosticSink` contract-doc generalization
-    (§5.0.3): rename `REFRESH_DIAGNOSTIC_STREAM.md` →
-    `DIAGNOSTIC_STREAM.md` general, or factor parent
-    `DIAGNOSTIC_STREAM_CONTRACTS.md` that PR 4 / PR 5 inherit
-    from. Doc-only.
-  - §6 review checklist (filled in once Phase 0 enumeration
-    closes).
+- **Segment 2g — Round 2 close-out: §4 Phase 0 final
+  enumeration; §5.0.3 diagnostic-stream-doc generalization
+  closure; §6 review checklist filled.**
+  - **§4 Phase 0 binding-form enumeration finalized.** All
+    candidates pin their type-signature shape: Phase 0a
+    (`SubmitError` + `SubmitErrorKind` per segment 2f);
+    Phase 0b (`SnapshotId` opaque type + SHA-256/128-bit
+    truncation + domain-separation prefix); Phase 0c
+    (REMOVED at the trait surface per segment 2d's R12 (a)
+    closure); Phase 0d (`Reservation` struct shape with
+    R14 `extensions: Vec<ReservationExtension>`); Phase 0e
+    (reservation-lifecycle prose with R5 / R9 / R10
+    closure cross-references); Phase 0f
+    (`PendingTxDiagnostic` enum + constructor-bound
+    `DiagnosticSink` per segment-2f §5.0.2.1); Phase 0g
+    (`LedgerDiagnostic::SnapshotMerged` deferred to
+    consumer-PR per segment-2g introduction-PR
+    disposition).
+  - **New Phase 0 candidates from segment-2b / segment-2c
+    closures.** Phase 0h (`Signer` trait surface per R11
+    (b) segment-2b closure); Phase 0i (`OutputSelector`
+    trait surface per R13 segment-2c closure); Phase 0j
+    (`FeeEstimator` trait surface + `FeePriority` enum per
+    R16 segment-2c closure with segment-2d V3.0-lift
+    evaluation); Phase 0k (`SubmissionStrategyActor`
+    topology slot per R15 segment-2c closure — V3.x
+    introduction).
+  - **`SnapshotId` hash primitive pinned.** SHA-256
+    truncated to the first 128 bits with input
+    domain-separated by versioned prefix
+    (`b"shekyl-snapshot-id-v1"`); `sha2 = "0.10"` already
+    a workspace dependency of `shekyl-engine-core` per
+    [`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)
+    workspace-state reuse rule. 128-bit collision
+    resistance adequate for wallet-internal comparison
+    token; PQC alignment via Grover-doubled width on
+    SHA-2. Versioned prefix permits V3.x migration to
+    SHA-3 / BLAKE3 without cross-stage rebuild (the token
+    does not cross the wire).
+  - **§5.0.3 diagnostic-stream-doc generalization closure.**
+    Option (a) — rename `REFRESH_DIAGNOSTIC_STREAM.md` →
+    `DIAGNOSTIC_STREAM.md` (general). FOLLOWUPS entry
+    amended; doc itself remains V3.x deferred (created at
+    first consumer-actor PR introduction). Rationale:
+    shared contracts (six bullets per §5.0.3) modest in
+    volume relative to per-stream taxonomies; single doc
+    with shared-then-per-stream structure lower
+    cross-reference cost than parent-and-children
+    factoring; factoring discipline applicable
+    retroactively if growth justifies.
+  - **§6 review checklist filled.** Binding-check matrix
+    against the spec; test-substrate preservation list;
+    call-site sweep audit; PR 4 Round 3 input bundle
+    (resolved as confirmation per §5.2). All Phase 0
+    candidates' binding-form pins recorded with segment-2g
+    closure.
+  - **Round 3 readiness gate.** All §4 Phase 0 candidates
+    binding-pinned; §6 review checklist filled; FOLLOWUPS
+    amended for the segment-2g rename. Round 3 (commit
+    decomposition + Phase 1 commit list) ready to proceed.
 
 **Round 3.**
 
 - §7 commit decomposition + Phase 1 commit list (per the PR 1
-  / PR 2 / PR 3 / PR 4 precedent).
+  / PR 2 / PR 3 / PR 4 precedent). Substrate: this document at
+  segment-2g close-out; §4 Phase 0 enumeration; §6 review
+  checklist; PR 4 Round 3 confirmation per §5.2.

@@ -690,6 +690,90 @@
 
 ### Documentation
 
+- **Stage 1 PR 5 — Round 2 segment 2g (Round 2 close-out:
+  §4 Phase 0 binding-form enumeration; `SnapshotId` hash
+  primitive pin; §5.0.3 diagnostic-stream-doc generalization
+  closure; §6 review checklist filled).** Doc-only commit on
+  `feat/stage-1-pr5-pending-tx-engine-design`. Segment 2g
+  closes Round 2 — the final segment that pins all Phase 0
+  binding-form type-signature detail, fills the review
+  checklist, and finalizes the diagnostic-stream-doc
+  generalization disposition. Round 3 (commit decomposition +
+  Phase 1 commit list) is the next forward step. **§4 Phase 0
+  binding-form enumeration finalized**: Phase 0a
+  (`SubmitError` and `SubmitErrorKind` enums per segment 2f);
+  Phase 0b
+  (`SnapshotId` opaque type with binding hash primitive — see
+  below); Phase 0c (REMOVED at the trait surface per segment
+  2d's R12 (a) closure); Phase 0d (`Reservation` struct shape
+  with `extensions: Vec<ReservationExtension>` per segment 2b
+  R14); Phase 0e (reservation-lifecycle prose with R5 / R9
+  segment-2f / R10 closure cross-references); Phase 0f
+  (`PendingTxDiagnostic` enum + constructor-bound
+  `DiagnosticSink` per segment-2f §5.0.2.1); Phase 0g
+  (`LedgerDiagnostic::SnapshotMerged` deferred to consumer-PR
+  per segment-2g introduction-PR disposition — avoids
+  speculative-introduction-without-consumer violation of the
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  no-live-caller rule); **four new Phase 0 candidates** from
+  segment-2b / segment-2c residual closures: Phase 0h
+  (`Signer` trait surface per R11 (b) segment-2b closure);
+  Phase 0i (`OutputSelector` trait surface per R13 segment-2c
+  closure); Phase 0j (`FeeEstimator` trait surface +
+  `FeePriority` enum per R16 segment-2c closure with
+  segment-2d V3.0-lift evaluation); Phase 0k
+  (`SubmissionStrategyActor` topology slot per R15 segment-2c
+  closure — V3.x introduction; no V3.0 trait amendment).
+  **`SnapshotId` hash primitive pinned** as SHA-256 truncated
+  to the first 128 bits with versioned domain-separation
+  prefix (`b"shekyl-snapshot-id-v1"`). Selection rationale:
+  `sha2 = "0.10"` already a workspace dependency of
+  `shekyl-engine-core` per
+  [`17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc)
+  workspace-state reuse rule; 128-bit collision resistance
+  adequate for wallet-internal comparison token (~2⁶⁴
+  classical, ~2³² quantum via Grover-doubled width); PQC
+  alignment without pulling in a new dependency (SHA-2 is
+  post-quantum-safe for collision resistance with Grover-
+  doubled width); versioned prefix permits V3.x migration to
+  SHA-3 / BLAKE3 without cross-stage rebuild because
+  `SnapshotId` is a wallet-internal token that does not cross
+  the wire. **§5.0.3 diagnostic-stream-doc generalization
+  closure**: option (a) — rename
+  `REFRESH_DIAGNOSTIC_STREAM.md` → `DIAGNOSTIC_STREAM.md`
+  (general). Existing FOLLOWUPS entry amended with rename
+  rationale (shared contracts modest in volume relative to
+  per-stream taxonomies; single doc with shared-then-per-
+  stream structure lower cross-reference cost than
+  parent-and-children factoring) and doc-structure
+  prescription for V3.x introduction PR (shared contracts at
+  top; per-stream sections for `RefreshDiagnostic` /
+  `PendingTxDiagnostic` + `DiscardReason` / `LedgerDiagnostic`
+  pending the consumer-actor PR). Option (b) — parent
+  `DIAGNOSTIC_STREAM_CONTRACTS.md` factoring — preserved as
+  retroactively-applicable if growth justifies. **§6 review
+  checklist filled**: binding-check matrix against the §2.4
+  spec (trait surface methods unchanged; engine-type
+  parameter additions `S: Signer`, `O: OutputSelector`,
+  `F: FeeEstimator`); test-substrate preservation list
+  (`AssertionSink` / `PanickingSink` property-test
+  infrastructure inherited from PR 4 pattern; per-error-class
+  R9 coverage; Finding-2 daemon-side authority coverage);
+  call-site sweep audit enumeration (Phase 1 confirms every
+  diagnostic-event emission site); PR 4 Round 3 input bundle
+  resolved as confirmation per §5.2. **Round 3 readiness
+  gate**: all §4 Phase 0 candidates binding-pinned; §6
+  filled; FOLLOWUPS amended for the segment-2g rename;
+  Round 3 ready to proceed. Updates §4 Phase 0 enumeration
+  (full rewrite with binding-form signatures for all
+  candidates 0a–0k); §5.0.3 generalization-question section
+  (closes as (a) rename); §5.5 "What Round 2 carried"
+  inventory (seven-segment summary; Round 2 final form);
+  §6 review checklist (filled with all sub-checklists);
+  §8 fenceposts (segment 2g moves to "Round 2 — completed";
+  Round 3 named as next forward step); header status
+  (Round 2 closed); CHANGELOG; FOLLOWUPS. No code changes;
+  no test impact.
 - **Stage 1 PR 5 — Round 2 segment 2f (R9 two-stage submit-flow
   closure with daemon-side authority for Finding 2 ambiguous
   outcomes; `SubmitError` + `SubmitErrorKind` enum pins;
