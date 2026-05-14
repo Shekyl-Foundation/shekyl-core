@@ -1,17 +1,39 @@
 # Stage 1 PR 5 — `PendingTxEngine` extraction — design
 
-**Status.** **Round 1 closed (2026-05-13) — actor-mesh reframe +
-shape (1) disposition.** This document was opened as a seed
-immediately after Stage 1 PR 4's design substrate landed on
-`dev` (merge commit `6de8335d5`, PR #42). Round 1 closes here
-in one round — not deferred to Round 2 — because the
-actor-mesh lens that PR 4 established in its Round 2 reframe
-exhausts the wargaming surface of PR 5's load-bearing first
-question. Shapes (2) and (3) fail criterion 5
+**Status.** **Round 1 closed (2026-05-13); Round 2 in progress
+— segment 2a (audit-readiness) landed (2026-05-14).** This
+document was opened as a seed immediately after Stage 1 PR 4's
+design substrate landed on `dev` (merge commit `6de8335d5`,
+PR #42). Round 1 closes here in one round — not deferred to
+Round 2 — because the actor-mesh lens that PR 4 established in
+its Round 2 reframe exhausts the wargaming surface of PR 5's
+load-bearing first question. Shapes (2) and (3) fail criterion 5
 (adversarial-daemon resistance) on **structural** grounds under
 the actor framing, not contingent grounds; no fourth shape
 survives the framing. See §5.0 (the reframe) and §5.5 (the
 disposition).
+
+**Round 2 segment 2a (2026-05-14) — audit-readiness.** The
+post-R1-closure adversarial review surfaced a steelman attack
+on §5.3 criterion 5: shapes (2)/(3) could be implemented via
+stream subscription rather than synchronous query, avoiding the
+"cross-actor liveness query" framing the criterion-5 prose
+relied on. Segment 2a reframes the rejection ground from
+"cross-actor liveness query" to **"contract dependency on
+refresh quiescence at any point in the build/submit flow"** —
+the load-bearing property is the contract dependency, not the
+observation mechanism, and the daemon controls the underlying
+signal regardless of which channel observes it. Threat-model
+anchor strengthened to make the adversary-controlled-daemon
+case the **expected deployment** (not a hardened edge case); §5.5
+scorecard rationale clarified to distinguish criteria 4/5's
+shared underlying mechanism from their distinct consequence axes
+(implementation-creating-vulnerability vs. threat-model-
+exercising-vulnerability). The R1 disposition still holds; the
+strengthening sharpens the audit-blocking defense without
+reopening the disposition. Lands ahead of the R-residual
+dispositions per the audit-blocking sequencing decision so
+audit-prep does not sequence behind R2 / R8 / R9 / R11 / R12.
 
 Subsequent revisions land each design round inline (the
 precedent set by PR 3's
@@ -716,23 +738,30 @@ complete and retries.
   usage is poor — refresh polls happen every ~10–30 seconds,
   and any user action initiated during the poll window fails.
 - **Cons (structural-ground-3 fatal — adversarial-daemon DoS by
-  construction).** Implementing `RefreshInProgress` requires
-  `PendingTxActor` to query `RefreshActor`'s state ("is a
-  refresh attempt in flight?"). That query is the DoS surface:
-  an adversarial daemon controls refresh duration (RPC latency,
-  response timing, withholding response completion); it can
-  keep one refresh perpetually "in flight" via slow drip-feed
-  responses, indefinitely blocking every user `submit` attempt
-  with `SendError::RefreshInProgress`. Single-peer DoS of the
-  entire transaction-submission flow — structural under the
-  actor-mesh framing because the cross-actor query *is* the
-  attack surface. Privacy wallets routinely connect to daemons
-  under adversary control (Tor-routed daemons, hosted-wallet
-  operators, mixed-trust deployments per
+  construction).** (2)'s contract makes the build/submit flow
+  **dependent on refresh quiescence** — `build` cannot proceed
+  while a refresh is in flight, so the contract requires
+  observing refresh state somewhere. The standard
+  implementation has `PendingTxActor` query `RefreshActor`'s
+  state ("is a refresh attempt in flight?"); a stream-
+  subscription steelman has it observe `RefreshDiagnostic`
+  events instead (see §5.3 criterion 5). **Both deliver the
+  same DoS:** an adversarial daemon controls refresh duration
+  (RPC latency, response timing, withholding response
+  completion); it can keep one refresh perpetually "in flight"
+  via slow drip-feed responses, indefinitely blocking every
+  user `submit` attempt with `SendError::RefreshInProgress`.
+  Single-peer DoS of the entire transaction-submission flow —
+  structural under the actor-mesh framing because the
+  **contract dependency on refresh quiescence** is the attack
+  surface, not any specific observation mechanism. Privacy
+  wallets routinely connect to daemons under adversary control
+  (Tor-routed daemons, hosted-wallet operators, mixed-trust
+  deployments per
   [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md)); the
-  build/submit flow must not serialize behind refresh
-  quiescence for the wallet to remain usable in those threat
-  models. **Rejected on criterion 5 (§5.3).**
+  build/submit flow must not depend on refresh quiescence for
+  the wallet to remain usable in those threat models.
+  **Rejected on criterion 5 (§5.3).**
 
 #### (3) Block-until-merge at build (rejected)
 
@@ -747,15 +776,20 @@ reading the snapshot. No error variant; just latency.
   PR 4 §5.4.4's three-call-mode constraint. Forecloses concurrent
   build-during-refresh entirely.
 - **Cons (structural-ground-3 fatal — same DoS as (2)
-  delivered as silent hang).** Implementing block-until-merge
-  also requires `PendingTxActor` to depend on `RefreshActor`'s
-  liveness (await its completion). The DoS surface is identical
-  to (2): adversarial daemon keeps refresh "in flight" via
-  drip-feed responses; `build` waits indefinitely. Worse user
-  experience than (2) (no error to act on, just a perpetual
-  spinner) and identical structural DoS by construction — the
-  cross-actor liveness dependency is the attack surface.
-  **Rejected on criterion 5 (§5.3).**
+  delivered as silent hang).** (3)'s contract has the same
+  **dependency on refresh quiescence** as (2), realized as a
+  wait rather than an error. The standard implementation has
+  `PendingTxActor` await `RefreshActor`'s completion; a
+  stream-subscription steelman has it await an
+  `AttemptCompleted` event from `RefreshDiagnostic` (see §5.3
+  criterion 5). Both stall identically: adversarial daemon
+  keeps refresh "in flight" via drip-feed responses; `build`
+  waits indefinitely regardless of which mechanism observes
+  quiescence. Worse user experience than (2) (no error to act
+  on, just a perpetual spinner) and identical structural DoS
+  by construction — the **contract dependency on refresh
+  quiescence** is the attack surface, not the await mechanism
+  specifically. **Rejected on criterion 5 (§5.3).**
 
 ### §5.2 Implications for PR 4 (resolved as confirmation)
 
@@ -823,34 +857,86 @@ Round 1's disposition is evaluated against:
      "the actor's own state-comparison in the message handler"
      rather than a CAS — the mailbox FIFO is the serialization
      point. (1) passes by construction; (2) and (3) fail
-     because their `RefreshActor`-state query crosses an actor
-     boundary that the mailbox cannot serialize without
-     introducing the structural-ground-3 DoS surface.
+     because their **contract dependency on refresh quiescence**
+     (criterion 5) creates a structural cross-actor coupling
+     the actor mesh cannot serialize without re-introducing the
+     DoS surface — regardless of which observation mechanism
+     (synchronous query, stream-subscription bool, mailbox
+     await) realizes the contract.
 5. **Adversarial-daemon resistance (load-bearing-by-construction
    under §5.0).** Does the chosen shape survive a hostile
    daemon attempting to DoS the transaction-submission flow?
    Under the §5.0 actor-mesh framing this is **structural**, not
-   contingent: the DoS surface is the cross-actor liveness query
-   itself. Shapes (2) and (3) *require*
-   `PendingTxActor` to query `RefreshActor`'s state ("is a
-   refresh in flight?" / "has the refresh completed?") to
-   implement their respective contracts; under hostile daemon
-   control of refresh duration, that query stalls indefinitely
-   and the build/submit flow stalls with it. Shape (1) under
-   the actor mesh has *no such query* — `PendingTxActor` knows
-   what it knows from the diagnostic stream
-   (`LedgerDiagnostic::SnapshotMerged`), and the build/submit
-   flow proceeds against whatever the most-recently-merged
-   snapshot is regardless of `RefreshActor`'s liveness.
+   contingent: the DoS surface is **contract dependency on
+   refresh quiescence at any point in the build/submit flow**.
+   Shapes (2) and (3) both build their contract on the property
+   "no work proceeds while refresh is in flight" — (2) at the
+   build stage as an explicit error; (3) at the build stage as
+   a silent wait — and the daemon controls refresh duration.
+   The *standard implementation* of either contract has
+   `PendingTxActor` query `RefreshActor`'s state directly ("is a
+   refresh in flight?" / "has the refresh completed?"); under
+   hostile daemon control of refresh duration that query stalls
+   indefinitely and the build/submit flow stalls with it.
 
-   **Threat-model anchor.** Privacy wallets routinely connect
-   to daemons under adversary control (Tor-routed daemons,
-   hosted-wallet operators, mixed-trust deployments per
-   [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md)); the
-   build/submit flow must not serialize behind refresh
-   quiescence for the wallet to remain usable in those threat
-   models. Per
-   [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) §1
+   **Steelman defense — stream-subscription implementation.**
+   A reviewer may steelman (2)/(3) by observing that
+   `PendingTxActor` need not synchronously query `RefreshActor`
+   — it can subscribe to PR 4's `RefreshDiagnostic` stream
+   (`AttemptStarted` / `AttemptCompleted` events), maintain a
+   `refresh_in_flight: bool` push-driven from those events, and
+   gate `build` on the bool flipping false (for (3)) or return
+   `RefreshInProgress` while true (for (2)). The steelman
+   avoids the cross-actor query mechanism entirely. **It still
+   fails criterion 5.** The daemon controls when
+   `AttemptCompleted` fires (by controlling RPC response
+   completion timing); the bool stays `true` indefinitely under
+   drip-feed responses; the build (or submit, in any contract
+   that gates on quiescence) stalls regardless of which
+   mechanism observes quiescence. The load-bearing property is
+   the **contract's dependency on refresh quiescence**, not the
+   specific machinery that observes it. Synchronous query,
+   push-driven bool from a diagnostic stream, mailbox await,
+   polling at fixed intervals, or any other mechanism that
+   delivers the "refresh has reached a quiescent state" signal
+   carries the same daemon-controllable failure mode — because
+   the daemon controls the underlying signal, not the
+   observation channel.
+
+   Shape (1) under the actor mesh has *no such dependency* in
+   either build or submit. `PendingTxActor` knows the
+   most-recently-merged snapshot identity from the diagnostic
+   stream (`LedgerDiagnostic::SnapshotMerged`); the build/submit
+   flow proceeds against whatever that identity is regardless
+   of whether `RefreshActor` is currently making forward
+   progress. Submit-time staleness is detected by field
+   comparison in the actor's message handler (the §5.5 ground 2
+   "the CAS isn't a CAS" property), not by waiting for refresh
+   to declare itself quiescent. The decoupling is
+   **contract-level**, not implementation-level — no shape (1)
+   implementation, by any mechanism, depends on knowing whether
+   refresh is in flight.
+
+   **Threat-model anchor (explicit defense).** Shekyl treats the
+   daemon as outside the wallet's trust boundary by **design
+   choice**, not as a hardened edge case. The Tor/I2P-first
+   deployment posture per
+   [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) means
+   wallets routinely connect to daemons under adversary control
+   — anonymous-network exit operators, hosted-wallet
+   deployments, mixed-trust environments where the daemon
+   operator's identity and posture are unknown. The
+   adversary-controlled-daemon case is the **expected
+   deployment**, not an exception that the design tolerates.
+   Designs that admit structural single-peer DoS of transaction
+   submission are therefore rejected as **structurally
+   incompatible with the project's primary deployment model** —
+   the rejection is not "we can tolerate this in some
+   deployments and harden against it in others"; it is "this
+   contract shape contradicts the deployment model the design
+   serves."
+
+   Per [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) §1
    (security and quantum resilience as preconditions), a shape
    that admits structural single-peer DoS of transaction
    submission is rejected even when its UX is good and its
@@ -858,7 +944,8 @@ Round 1's disposition is evaluated against:
    defeats (2) and (3) under the actor framing — the criterion
    is satisfied by construction by (1), and Round 1's wargaming
    has no fourth-shape escape route that doesn't reintroduce
-   the cross-actor liveness query.
+   the contract dependency on refresh quiescence at some point
+   in the build/submit flow.
 
 ### §5.4 Residuals (some dissolved by §5.0; rest deferred to Rounds 2+)
 
@@ -1206,13 +1293,22 @@ the actor-mesh framing, shape (1) wins on:
    serialization point; mailbox FIFO orders concurrent calls.
    R3 / R10 dissolve; R5's trait-surface aspect dissolves.
 3. **Adversarial-daemon resistance is structural.** The DoS
-   surface in (2) and (3) is the cross-actor liveness query
-   itself — `PendingTxActor` querying `RefreshActor` whether
-   refresh is in flight or has completed. Shape (1) under the
-   actor mesh has no such query. Hostile daemon control of
-   refresh duration cannot block the build/submit flow because
-   the build/submit flow does not depend on refresh
-   termination.
+   surface in (2) and (3) is the **contract dependency on
+   refresh quiescence at any point in the build/submit flow**,
+   not the cross-actor query mechanism specifically. The
+   standard implementation queries `RefreshActor` for liveness;
+   the stream-subscription steelman observes
+   `RefreshDiagnostic::AttemptCompleted` for the same signal;
+   both deliver daemon-controllable stalls because the
+   load-bearing property is the contract dependency, not the
+   observation channel (the daemon controls the underlying
+   signal, not the channel that observes it; see §5.3
+   criterion 5 for the full steelman defense). Shape (1) under
+   the actor mesh has no such dependency in either build or
+   submit; `PendingTxActor` operates against the
+   most-recently-merged snapshot regardless of refresh
+   liveness. The decoupling is contract-level, not
+   implementation-level.
 
 **Five-criteria scorecard.**
 
@@ -1224,10 +1320,34 @@ the actor-mesh framing, shape (1) wins on:
 | 4. Stage 4 actor-migration compatibility      | ✓   | ✗   | ✗   |
 | 5. Adversarial-daemon resistance (structural) | ✓   | ✗   | ✗   |
 
-(2) and (3) fail criterion 4 because their `RefreshActor`-state
-query introduces the structural-ground-3 DoS surface across the
-actor boundary; criterion 5 is the same property re-evaluated
-against the threat model.
+(2) and (3) fail criteria 4 and 5 on a **shared underlying
+mechanism** — the contract dependency on refresh quiescence in
+their build/submit flow — but score **distinct consequences**,
+not double-counting:
+
+- **Criterion 4 (implementation-feasibility / actor-migration
+  compatibility)** is failed because the dependency creates a
+  structural cross-actor coupling the actor mesh cannot
+  serialize without re-introducing the DoS surface — regardless
+  of which observation mechanism (synchronous query, stream
+  subscription, mailbox await) realizes the contract. The
+  property scored is "the implementation creates the
+  vulnerability."
+- **Criterion 5 (threat-model-survival / adversarial-daemon
+  resistance)** is failed because the resulting DoS surface is
+  exercised by Shekyl's primary deployment threat model — the
+  adversary-controlled daemon per the §5.3 threat-model anchor.
+  The property scored is "the threat model exercises the
+  vulnerability."
+
+The shared mechanism is one structural property; the criteria
+evaluate distinct axes of consequence (implementation-creating-
+vulnerability vs. threat-model-exercising-vulnerability). Both
+✗s are correctly scored against (2) and (3); failing one
+without the other would be possible only if the implementation
+created a vulnerability the threat model didn't exercise, or the
+threat model exercised a vulnerability the implementation didn't
+create — neither holds here.
 
 **What lands as Round 1 substrate (this commit).**
 
@@ -1323,7 +1443,8 @@ submit-time staleness is a field comparison, not a CAS;
 adversarial-daemon resistance is structural by construction.
 Shapes (2) and (3) fail criterion 5 (§5.3) by construction
 under the framing; no fourth shape escape route exists that
-doesn't reintroduce the cross-actor liveness query.
+doesn't reintroduce the contract dependency on refresh
+quiescence at some point in the build/submit flow.
 Per the §7 closure rule, Round 1 closes here.
 
 Delaying the disposition to Round 2 in spite of the closed
@@ -1339,44 +1460,95 @@ the closure rule forecloses that default.
 Round 1 closes the load-bearing question (§5.5). Remaining
 work, by round:
 
-**Round 2.**
+**Round 2 — completed.**
 
-- §5.4 R2 (`SnapshotId` opacity / projection types disposition;
-  Phase 0b detail). **Co-disposes with R12** in the same Round 2
-  commit; both are `SnapshotId`-adjacent and benefit from joint
-  review against the actual `LedgerSnapshot` shape.
-- §5.4 R12 (Stage 1 `current_snapshot` acquisition mechanism;
-  three options enumerated). On disposition: mechanically soften
-  §5.5 ground-1 prose (drop "pending R12" qualifier on (a);
-  reword for (b)/(c) as needed) and §4 Phase 0c prose (mirror
-  the same softening). Co-disposes with R2.
-- §5.4 R8 (`ReservationTTLActor` composition; V3.x FOLLOWUPS
-  entry).
-- §5.4 R9 (two-stage submit flow; intermediate-state shape;
-  per-error-class disposition; mailbox-ordering vs daemon-side
-  authority for terminal-rejection visibility).
-- §5.4 R11 (signing-actor split; V3.x FOLLOWUPS entry; **also
-  decouple sink-binding from R11** — constructor-bound under
-  PR 4 §3.4.5 / R4 (a) consistency, independent of R11's
-  spend-material disposition).
-- **Criterion 5 prose strengthening (§5.3).** Reframe from
-  "cross-actor liveness query" (current text) to
-  "contract-dependency-on-refresh-quiescence" — closes the
-  steelman attack that shapes (2)/(3) could be implemented via
-  stream subscription with no synchronous query. The structural
-  property is independence from refresh quiescence as a contract
-  property, not the absence of a synchronous query as an
-  implementation property.
-- §4 Phase 0 final enumeration (binding type-signature detail
-  for 0a / 0b / 0d / 0e / 0f / 0g; cross-trait amendment
-  review; final disposition of 0c per R12).
-- Cross-cutting `DiagnosticSink` contract-doc generalization
-  (§5.0.3): rename `REFRESH_DIAGNOSTIC_STREAM.md` →
-  `DIAGNOSTIC_STREAM.md` general, or factor parent
-  `DIAGNOSTIC_STREAM_CONTRACTS.md` that PR 4 / PR 5 inherit
-  from. Doc-only.
-- §6 review checklist (filled in once Phase 0 enumeration
-  closes).
+- **Segment 2a — audit-readiness commit (items 3 / 4 / 5 from
+  the post-R1-closure adversarial-review outcomes summary).**
+  - **Item 4 (audit-blocking): §5.3 criterion 5 strengthening.**
+    Reframed from "cross-actor liveness query" to **"contract
+    dependency on refresh quiescence at any point in the
+    build/submit flow"**; documents the stream-subscription
+    steelman implementation of (2)/(3) and explains why it
+    still fails (the daemon controls the underlying signal, not
+    the channel that observes it; the load-bearing property is
+    the contract dependency, not the observation mechanism).
+    Lands ahead of the R-residual dispositions per the
+    audit-blocking sequencing decision so audit-prep does not
+    sequence behind R2 / R8 / R9 / R11 / R12.
+  - **Item 5: §5.3 threat-model anchor explicit defense.**
+    Adversary-controlled-daemon-as-design-center made explicit
+    (not citation-only); references
+    [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) plus
+    the structural property "daemon outside the wallet's trust
+    boundary by design choice"; rejection of single-peer-DoS
+    contracts framed as "structurally incompatible with the
+    project's primary deployment model" (not "tolerated in some
+    deployments and hardened in others").
+  - **Item 3: §5.5 scorecard rationale clarification.**
+    One-line note expanded into structured prose explaining
+    criteria 4 and 5 share underlying mechanism (contract
+    dependency on refresh quiescence) but score distinct
+    consequences (criterion 4 = implementation-creating-
+    vulnerability; criterion 5 = threat-model-exercising-
+    vulnerability). Closes the double-counting attack.
+  - **Propagation: §5.1 (2)/(3) prose + §5.5 ground 3.**
+    Updated to use the contract-dependency reframe consistently
+    with §5.3's strengthened framing — the standard
+    implementation and stream-subscription steelman share the
+    same fatal property, and the prose says so explicitly.
+
+**Round 2 — pending.**
+
+- **Segment 2b — closure-rule + lens-applicability refinements
+  (items 1 / 2 from the outcomes summary).**
+  - **Item 1: §5.0.4 lens-applicability tempering.** "The lens
+    compounds across PRs" → "compounds across PRs whose
+    structure admits it; future PRs test applicability rather
+    than presume it."
+  - **Item 2: §7 closure-rule refinement (with §5.0.4
+    cross-reference).** Document the fourth-shape hybrid tested
+    during Round 1 closure review (snapshot-ID pinning at build
+    paired with refresh-quiescence-wait at submit) and its
+    rejection on criterion 5; pin "Round-N closes when the
+    wargaming surface known at closure time is exhausted; new
+    shapes surfacing in Round-N+1 reopen Round N rather than
+    slipping past closure." Forward-template content for the
+    V3.1 rules-queue PR (closure-rule scope qualifier;
+    lens-applicability discipline) noted in CHANGELOG.
+- **Segments 2c — R-residual dispositions (normal cadence,
+  one commit per residual cluster).**
+  - §5.4 R2 (`SnapshotId` opacity / projection types
+    disposition; Phase 0b detail) **+ R12 (Stage 1
+    `current_snapshot` acquisition mechanism)** — co-disposed
+    in one commit; both are `SnapshotId`-adjacent and benefit
+    from joint review against the actual `LedgerSnapshot`
+    shape. On R12 disposition: mechanically soften §5.5
+    ground-1 prose (drop "pending R12" qualifier on (a);
+    reword for (b)/(c) as needed) and §4 Phase 0c prose
+    (mirror the same softening).
+  - §5.4 R8 (`ReservationTTLActor` composition; V3.x
+    FOLLOWUPS entry detail — entry exists; commit pins the
+    compositional contract).
+  - §5.4 R9 (two-stage submit flow; intermediate-state shape;
+    per-error-class disposition; mailbox-ordering vs
+    daemon-side authority for terminal-rejection visibility —
+    Finding 2 from the prior adversarial pass).
+  - §5.4 R11 (signing-actor split; V3.x FOLLOWUPS entry; **also
+    decouple sink-binding from R11** — constructor-bound under
+    PR 4 §3.4.5 / R4 (a) consistency, independent of R11's
+    spend-material disposition; Finding 4 from the prior
+    adversarial pass).
+- **Segment 2d — Round 2 close-out.**
+  - §4 Phase 0 final enumeration (binding type-signature
+    detail for 0a / 0b / 0d / 0e / 0f / 0g; cross-trait
+    amendment review; final disposition of 0c per R12).
+  - Cross-cutting `DiagnosticSink` contract-doc generalization
+    (§5.0.3): rename `REFRESH_DIAGNOSTIC_STREAM.md` →
+    `DIAGNOSTIC_STREAM.md` general, or factor parent
+    `DIAGNOSTIC_STREAM_CONTRACTS.md` that PR 4 / PR 5 inherit
+    from. Doc-only.
+  - §6 review checklist (filled in once Phase 0 enumeration
+    closes).
 
 **Round 3.**
 

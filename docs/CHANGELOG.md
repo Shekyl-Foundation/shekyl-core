@@ -690,6 +690,106 @@
 
 ### Documentation
 
+- **Stage 1 PR 5 — Round 2 segment 2a (audit-readiness): §5.3
+  criterion 5 strengthening + threat-model anchor explicit
+  defense + §5.5 scorecard rationale clarification.** Doc-only
+  commit on `feat/stage-1-pr5-pending-tx-engine-design`. The
+  post-Round-1-closure adversarial review surfaced five
+  refinements for Round 2; segment 2a lands the three audit-
+  relevant items (3 / 4 / 5 from the outcomes summary) in one
+  commit ahead of the R-residual dispositions per the
+  audit-blocking sequencing decision so audit-prep does not
+  sequence behind R2 / R8 / R9 / R11 / R12.
+
+  - **Item 4 (audit-blocking) — §5.3 criterion 5 strengthening.**
+    Reframes the rejection ground for shapes (2)/(3) from
+    "cross-actor liveness query" to **"contract dependency on
+    refresh quiescence at any point in the build/submit flow."**
+    Documents the stream-subscription steelman implementation
+    (PR 4 `RefreshDiagnostic::AttemptStarted` /
+    `AttemptCompleted` events push-driving a
+    `refresh_in_flight: bool` rather than a synchronous query)
+    and explains why it still fails: the daemon controls when
+    `AttemptCompleted` fires, the bool stays `true`
+    indefinitely under drip-feed responses, and the build (or
+    submit) stalls regardless of which mechanism observes
+    quiescence. The load-bearing property is the contract
+    dependency, not the observation channel — synchronous
+    query, push-driven bool, mailbox await, polling, or any
+    other mechanism delivering the "quiescent" signal carries
+    the same daemon-controllable failure mode.
+
+  - **Item 5 — §5.3 threat-model anchor explicit defense.**
+    Adversary-controlled-daemon-as-design-center made explicit
+    (not citation-only). References
+    [`ANONYMITY_NETWORKS.md`](./ANONYMITY_NETWORKS.md) plus
+    the structural property "daemon outside the wallet's trust
+    boundary by **design choice**, not as a hardened edge
+    case." The Tor/I2P-first deployment posture means
+    adversary-controlled daemons are the **expected
+    deployment**, not an exception. Designs that admit
+    structural single-peer DoS of transaction submission are
+    rejected as **structurally incompatible with the project's
+    primary deployment model** — the rejection is not "we can
+    tolerate this in some deployments and harden against it in
+    others"; it is "this contract shape contradicts the
+    deployment model the design serves."
+
+  - **Item 3 — §5.5 scorecard rationale clarification.**
+    One-line clarification expanded into structured prose
+    explaining criteria 4 and 5 share **underlying mechanism**
+    (the contract dependency on refresh quiescence) but score
+    **distinct consequences**: criterion 4
+    (implementation-feasibility / actor-migration
+    compatibility) evaluates "the implementation creates the
+    vulnerability"; criterion 5 (threat-model-survival /
+    adversarial-daemon resistance) evaluates "the threat model
+    exercises the vulnerability." Both ✗s correctly scored;
+    the shared mechanism is one structural property; the
+    criteria evaluate distinct consequence axes; not
+    double-counting.
+
+  - **Propagation: §5.1 (2)/(3) + §5.5 ground 3.** Updated to
+    use the contract-dependency reframe consistently with §5.3's
+    strengthened framing. The standard implementation and
+    stream-subscription steelman share the same fatal property
+    (contract dependency on refresh quiescence); the prose says
+    so explicitly; the rejection ground is named as
+    "contract-level, not implementation-level."
+
+  - **Header status + §8 Round 2 fenceposts updated.** Header
+    acquires a Round 2 segment 2a paragraph documenting what
+    landed and why the audit-blocking sequencing puts items
+    3/4/5 ahead of the R-residual dispositions. §8 restructured
+    into "Round 2 — completed" / "Round 2 — pending"
+    sub-sections with segment 2a marked completed and segments
+    2b/2c/2d enumerated as pending.
+
+  R1 disposition still holds — the strengthening sharpens the
+  audit-blocking defense without reopening the disposition.
+  Segments 2b (closure-rule + lens-applicability), 2c
+  (R2/R12, R8, R9, R11 dispositions), and 2d (Phase 0
+  enumeration + close-out) follow at normal cadence.
+
+  **V3.1 rules-queue inputs (forward-template content).** Two
+  patterns this adversarial pass surfaced belong in the
+  consolidated rules-queue PR alongside the §19 /
+  rule-15-trinary / pre-flight-FOLLOWUP-scope items already
+  queued from PR #41 Commit 2: (i) **closure-rule scope
+  qualifier** ("Round-N closes when the wargaming surface
+  known at closure time is exhausted; new shapes surfacing in
+  Round-N+1 reopen Round N rather than slipping past
+  closure"), generalizes from PR 5's specific instance to any
+  project-wide design discipline using round-by-round
+  wargaming closure; (ii) **lens-applicability discipline**
+  ("project-wide design lenses compound across PRs whose
+  structure admits the lens; future per-trait PRs test
+  applicability rather than presume it"), tempers PR 4
+  §5.4.6 / PR 5 §5.0.4's projection without weakening the
+  institutional payoff claim. Both land in segment 2b's
+  doc edits to §5.0.4 and §7; the V3.1 rules-queue PR will
+  consolidate them with the other queued inputs.
+
 - **Stage 1 PR 5 — PR #43 Copilot review-pass disposition: two
   R12-enumeration-consistency findings.** Doc-only follow-up
   commit on `feat/stage-1-pr5-pending-tx-engine-design`.
