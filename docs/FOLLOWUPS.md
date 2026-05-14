@@ -3192,26 +3192,28 @@ one place to confirm each item's relationship to the wallet stack.
   composition-side counterpart that detects patterns across
   failures rather than reacting to single events.
 
-  **Segment-2f closure status (2026-05-14).** R9 closed in
+  **Segment-2f closure status (2026-05-14; variant-name
+  corrections in Copilot-fix follow-up).** R9 closed in
   Round 2 segment 2f with two-stage submit flow + internal
   `ReservationState` machine + daemon-side authority
   disposition for Finding 2 ambiguous outcomes. The
   analyzer's shape is **unchanged by segment 2f**; the
   `PendingTxDiagnostic` events it subscribes to
-  (`SubmitFailed`, `SnapshotInvalidated`) are the same;
-  `SubmitErrorKind` now pinned as `DoubleSpend | FeeTooLow
-  | Malformed | DaemonTimeout | DaemonUnavailable` per
-  segment 2f. The analyzer subscribes to all five kinds; the
-  pattern-detection bullets below remain accurate (with
-  `DaemonTimeout` / `DaemonUnavailable` covering the
-  segment-2f "Timeout" disposition).
+  (`SubmitFailed`, `SubmitSnapshotInvalidated`) are the
+  same; `SubmitErrorKind` now pinned as
+  `DoubleSpend | FeeTooLow | Malformed | DaemonTimeout |
+  DaemonUnavailable` per segment 2f. The analyzer subscribes
+  to all five kinds; the pattern-detection bullets below
+  remain accurate (with `DaemonTimeout` / `DaemonUnavailable`
+  covering the segment-2f "Timeout" disposition).
   `SubmitFailureAnalyzer` subscribes to
   `PendingTxDiagnostic::SubmitFailed` and
-  `SubmitSnapshotInvalidated` events; detects patterns:
-  - **Many `SnapshotInvalidated` in a row** → adversarial
-    reorg-churn signal; surfaces to `PeerReputationActor` (via
-    cross-actor signal or shared event consumption) for
-    rotation-policy input.
+  `PendingTxDiagnostic::SubmitSnapshotInvalidated` events;
+  detects patterns:
+  - **Many `SubmitSnapshotInvalidated` in a row** →
+    adversarial reorg-churn signal; surfaces to
+    `PeerReputationActor` (via cross-actor signal or shared
+    event consumption) for rotation-policy input.
   - **Recurring `SubmitFailed { kind: FeeTooLow }`** → fee
     estimator drift signal; surfaces to a fee-estimator actor
     (when one exists) or to user-facing UI as a fee-update
@@ -3220,9 +3222,14 @@ one place to confirm each item's relationship to the wallet stack.
     wallet-side bug or daemon-byzantine path; logs loudly
     (subject to recursive trust-boundary discipline) and may
     trigger error-reporting if per-consumer policy allows.
-  - **Recurring `SubmitFailed { kind: Timeout }`** → daemon
+  - **Recurring `SubmitFailed { kind: DaemonTimeout }` or
+    `SubmitFailed { kind: DaemonUnavailable }`** → daemon
     transient failure or peer-rotation candidate; signals
-    `PeerReputationActor` for graduated response.
+    `PeerReputationActor` for graduated response. (Both
+    ambiguous-failure kinds carry the same operational
+    signal under daemon-side authority disposition per
+    segment 2f; the analyzer treats them as a single
+    pattern source.)
 
   **Hard mitigation pins (binding).**
   - **Recursive trust boundary per PR 4 §5.4.8 #4 (binding).**
@@ -3262,13 +3269,39 @@ one place to confirm each item's relationship to the wallet stack.
 
   - Subscribes to `PendingTxDiagnostic::SubmitFailed { kind:
     DaemonTimeout | DaemonUnavailable }` events.
-  - Subscribes to `LedgerDiagnostic::SnapshotMerged` events
-    (cross-stream correlation: did the timed-out tx actually
-    land on chain?).
-  - On observing the timed-out `tx_hash` in a merged
-    snapshot → calls `discard(id, ConsumerExplicit)` to
-    release the reservation entry (the on-chain tx is now
-    the authoritative record).
+  - **Chain-observation mechanism (design owned by the
+    V3.x consumer-actor PR; Copilot-fix follow-up note).**
+    To determine whether the timed-out `tx_hash` landed on
+    chain, the actor needs a mechanism that
+    `LedgerDiagnostic::SnapshotMerged { new, prior, height }`
+    does **not** provide on its own — `SnapshotMerged`
+    carries snapshot identity and height, not transaction
+    hashes per Phase 0g binding. The V3.x consumer-actor
+    PR will design the correlation mechanism as one of:
+    - An **additive `LedgerDiagnostic` variant** (e.g.,
+      `LedgerDiagnostic::TransactionConfirmed { tx_hash,
+      height }`) emitted by the `LedgerEngine` when a
+      previously-pending transaction lands on chain. The
+      `TimeoutResolverActor` subscribes to this new variant
+      directly.
+    - An **additive `LedgerEngine` chain-query accessor**
+      (e.g., `LedgerEngine::tx_in_chain(tx_hash) ->
+      Result<Option<BlockHeight>>`) that the resolver
+      polls on each `SnapshotMerged` event to check
+      whether the timed-out tx has landed.
+    - **Both** (event-driven for low-latency notification;
+      polling for catch-up after restart-amnesia).
+
+    Pinning the mechanism in PR 5 would overspecify a V3.x
+    consumer-actor that doesn't ship in V3.0; the
+    `LedgerEngine` and `LedgerDiagnostic` surfaces have
+    their own additive-extension discipline that the
+    consumer-actor PR composes against.
+  - On observing the timed-out `tx_hash` in chain state
+    (by whichever mechanism the V3.x PR pins) → calls
+    `discard(id, ConsumerExplicit)` to release the
+    reservation entry (the on-chain tx is now the
+    authoritative record).
   - On observing **no** chain landing after a configurable
     grace period (default: N blocks ≈ M minutes; consumer-
     policy-configurable) → calls `discard(id,

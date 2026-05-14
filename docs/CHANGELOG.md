@@ -690,6 +690,157 @@
 
 ### Documentation
 
+- **Stage 1 PR 5 — address PR #43 Copilot review findings,
+  Round 2 (post-Round-2-close follow-up cycle).** Doc-only
+  commit on `feat/stage-1-pr5-pending-tx-engine-design`.
+  Addresses nine additional Copilot review findings surfaced
+  against the Round-2-close-out commit (`b85edec9a`), the
+  first Copilot-fix commit (`871efa40c`), and the Round-1
+  CHANGELOG entries. The fixes consolidate hash-primitive
+  dependency-discipline correctness, cryptographic-security-
+  rationale framing, sink-binding shape alignment across
+  segments, variant-name alignment in V3.x FOLLOWUPS entries,
+  and architectural soundness of the V3.x `TimeoutResolverActor`
+  correlation contract.
+  - **Findings A + E + H — `SnapshotId` hash primitive
+    correction (covers three Copilot comments on §4
+    Phase 0b, §5.4 R2 sketch, CHANGELOG segment-2g entry,
+    §5.5 Round 2 summary, and the doc header).**
+    Segment-2g's prior binding pinned `SnapshotId` to
+    SHA-256 via `sha2 = "0.10"`, citing
+    `rust/shekyl-engine-core/Cargo.toml` line 115 as the
+    workspace-state-reuse anchor. That citation was a
+    dependency-discipline error:
+    [`Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+    line 115 is in `[dev-dependencies]` (test-only), and
+    the production `sha2` at line 33 is `optional = true`
+    (gated behind a feature flag). The Copilot-fix
+    follow-up switches the primitive to
+    `shekyl-crypto-hash::cn_fast_hash` (Keccak-256, original
+    padding) — `shekyl-crypto-hash` is an unconditional
+    `[dependencies]` entry per Cargo.toml line 28, the
+    consensus-audited Keccak primitive Shekyl already uses
+    throughout its codebase. Strictly better disposition
+    against the
+    [`17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc)
+    workspace-state reuse rule against the actual
+    production-dependency graph. The §5.4 R2 sketch also
+    still showed a prior `blake3::hash` form from
+    segment-2d's open-shape-not-primitive disposition; the
+    sketch is updated to the binding `cn_fast_hash` form.
+
+    The security rationale is also reframed. Segment-2g's
+    prior framing was "128-bit collision resistance gives
+    ~2⁶⁴ classical work and ~2³² quantum work via Grover-
+    doubled width." Two errors: (i) Grover's algorithm
+    gives 2^(n/2) work against **preimage** attacks, not
+    collision attacks — quantum collision is governed by
+    BHT (Brassard–Høyer–Tapp), ~2^(n/3) ≈ 2⁴³ for 128-bit
+    outputs; (ii) the use-case framing is incorrect —
+    `SnapshotId` is a wallet-internal equality token over
+    a bounded snapshot population, not a collision-
+    resistance primitive against arbitrary inputs.
+
+    Corrected framing: **second-preimage resistance over
+    bounded snapshot population**. The wallet observes
+    ≪ 2⁴⁰ snapshots over its operational lifetime
+    (≤ ~10⁷ snapshots over 100 years; one snapshot per
+    refresh merge). Classical second-preimage on 128-bit
+    truncated hash is ~2¹²⁸ work; quantum Grover second-
+    preimage is ~2⁶⁴ work — large but bounded under
+    aggressive quantum-adversary assumptions. The impact
+    bound under successful attack is also constrained: a
+    daemon-forged colliding `LedgerSnapshot` merely makes
+    the wallet submit a tx valid against the prior
+    snapshot; the daemon could have rejected the tx anyway
+    via `DoubleSpend` if the prior snapshot's outputs are
+    now spent on-chain. No consensus violation; no wallet-
+    state corruption that refresh cannot reconcile. The
+    versioned domain-separation prefix
+    (`b"shekyl-snapshot-id-v1"`) permits V3.x migration to
+    a wider output or different hash family without cross-
+    stage rebuild.
+
+    Sites updated: `docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`
+    §4 Phase 0b binding, §5.4 R2 sketch + prose, §5.5
+    Round 2 summary, §6 review-checklist `SnapshotId` item,
+    and the header status block; this CHANGELOG segment-2g
+    entry with a Copilot-fix forward-pointer.
+  - **Finding B — §5.4 R2 cross-reference to rejected option
+    (b).** §5.4 R2 prose referenced
+    `DIAGNOSTIC_STREAM_CONTRACTS.md` (the parent-doc
+    factoring option (b) considered in §5.0.3), but
+    segment 2g's diagnostic-stream-doc generalization
+    closed as **option (a) — rename
+    `REFRESH_DIAGNOSTIC_STREAM.md` →
+    `DIAGNOSTIC_STREAM.md`**. The cross-reference is
+    updated to the chosen doc name with the closure
+    rationale.
+  - **Finding F — `&dyn DiagnosticSink` vs
+    `Arc<dyn DiagnosticSink>` inconsistency.** §5.0.2.1
+    (the segment-2f sink-binding-closure section) used the
+    earlier `&dyn DiagnosticSink` form when the closure
+    section itself pins `Arc<dyn DiagnosticSink>`; this is
+    corrected for self-consistency. The Round-1-close
+    CHANGELOG entry's `&dyn DiagnosticSink` description
+    receives a forward-pointer noting that segment 2f
+    tightened the form to `Arc<dyn>` for reference-shape
+    ergonomics during R11 closure (the earlier wording
+    remains historically accurate at Round 1 close).
+  - **Findings C + D — V3.x FOLLOWUPS
+    `SubmitFailureAnalyzer` variant-name alignment.** The
+    `SubmitFailureAnalyzer` FOLLOWUPS entry referenced
+    `SnapshotInvalidated` in two places and
+    `SubmitFailed { kind: Timeout }` in one place; the
+    binding variant names per segment 2f / Phase 0a /
+    Phase 0f are `SubmitSnapshotInvalidated` and
+    `SubmitFailed { kind: DaemonTimeout | DaemonUnavailable }`
+    respectively. All three sites updated; the timeout
+    bullet is also expanded to cover both ambiguous-failure
+    variants per segment-2f's daemon-side authority
+    disposition (both carry the same operational signal for
+    pattern-detection purposes).
+  - **Finding G — `TimeoutResolverActor` chain-observation
+    correlation contract architectural mismatch.** The
+    `TimeoutResolverActor` FOLLOWUPS entry described
+    subscribing to `LedgerDiagnostic::SnapshotMerged` to
+    observe whether the timed-out `tx_hash` landed on
+    chain — but `SnapshotMerged` is pinned by Phase 0g as
+    `{ new: SnapshotId, prior: SnapshotId, height:
+    BlockHeight }` and carries no `tx_hash` field, so the
+    actor cannot implement the correlation from the stated
+    event stream. The §5.4 R9 disposition prose carried the
+    same mismatch. Disposition: soften both prose surfaces
+    to defer the chain-observation mechanism to the V3.x
+    consumer-actor PR's own design — the actor needs
+    either (i) an additive `LedgerDiagnostic` variant
+    carrying tx-confirmation payloads, or (ii) an additive
+    `LedgerEngine` chain-query accessor, or (iii) both
+    (event-driven for low-latency notification, polling
+    for restart-amnesia catch-up). Pinning the mechanism
+    in PR 5 would overspecify a V3.x consumer-actor that
+    doesn't ship in V3.0; the `LedgerEngine` and
+    `LedgerDiagnostic` surfaces have their own additive-
+    extension discipline that the consumer-actor PR
+    composes against. Wallet-correctness is preserved by
+    R8's `ReservationTTLActor` safety net regardless of
+    when `TimeoutResolverActor` lands.
+  - **Finding I — PR #43 title + description scope
+    correction.** The PR title and body still framed PR
+    #43 as a Round-1-only doc-only PR with three commits,
+    but the branch now contains all seven Round 2 segments
+    (segments 2a–2g) plus two Copilot-review follow-up
+    commits. PR metadata updated to reflect the actual
+    Round 1 + Round 2 closed scope, with the seven-segment
+    summary and Phase 0 binding enumeration mirroring the
+    design doc's §5.5 closure. The earlier "Round 1 only,
+    Round 2 out of scope" wording is replaced.
+
+  **Markdownlint baseline parity confirmed** after edits
+  (no new violations introduced). Round 2 remains closed;
+  Round 3 (commit decomposition + Phase 1 commit list) is
+  the next forward step pending user authorization.
+
 - **Stage 1 PR 5 — address PR #43 Copilot review findings
   (Round 2 close-out follow-up).** Doc-only commit on
   `feat/stage-1-pr5-pending-tx-engine-design`. Addresses three
@@ -795,21 +946,38 @@
   segment-2d V3.0-lift evaluation); Phase 0k
   (`SubmissionStrategyActor` topology slot per R15 segment-2c
   closure — V3.x introduction; no V3.0 trait amendment).
-  **`SnapshotId` hash primitive pinned** as SHA-256 truncated
-  to the first 128 bits with versioned domain-separation
-  prefix (`b"shekyl-snapshot-id-v1"`). Selection rationale:
-  `sha2 = "0.10"` already a workspace dependency of
-  `shekyl-engine-core` per
+  **`SnapshotId` hash primitive pinned** as Keccak-256 via
+  `shekyl-crypto-hash::cn_fast_hash` (original padding,
+  consensus-audited) truncated to the first 128 bits with
+  versioned domain-separation prefix
+  (`b"shekyl-snapshot-id-v1"`). *(Forward-pointer: the
+  Copilot-fix follow-up entry below revised this binding from
+  segment-2g's prior `sha2`-based form to the Keccak-based
+  form. The prior `sha2` citation referenced
+  `rust/shekyl-engine-core/Cargo.toml` line 115, which is in
+  `[dev-dependencies]` and therefore unavailable to production
+  code; the production `sha2` at line 33 is `optional = true`.
+  `shekyl-crypto-hash` is the consensus-audited Keccak
+  primitive already unconditional in `shekyl-engine-core`
+  production deps at line 28 — the strictly better
+  dependency-discipline disposition.)* Selection rationale
+  (revised form): `shekyl-crypto-hash` is an unconditional
+  `[dependencies]` entry per
   [`17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc)
-  workspace-state reuse rule; 128-bit collision resistance
-  adequate for wallet-internal comparison token (~2⁶⁴
-  classical, ~2³² quantum via Grover-doubled width); PQC
-  alignment without pulling in a new dependency (SHA-2 is
-  post-quantum-safe for collision resistance with Grover-
-  doubled width); versioned prefix permits V3.x migration to
-  SHA-3 / BLAKE3 without cross-stage rebuild because
-  `SnapshotId` is a wallet-internal token that does not cross
-  the wire. **§5.0.3 diagnostic-stream-doc generalization
+  workspace-state reuse rule against the actual
+  production-dependency graph; security framing reset from
+  collision-resistance / Grover-doubled-width (technically
+  incorrect — Grover applies to preimage, not collision;
+  quantum collision is governed by BHT, ~2⁴³ for 128 bits)
+  to **second-preimage resistance over bounded snapshot
+  population** (wallet observes ≪ 2⁴⁰ snapshots over its
+  operational lifetime; classical second-preimage ~2¹²⁸
+  work; quantum Grover second-preimage ~2⁶⁴ work; impact
+  bound by adversary-controlled-daemon design-center per
+  §5.3); versioned prefix permits V3.x migration to a wider
+  output or different hash family without cross-stage
+  rebuild because `SnapshotId` is a wallet-internal token
+  that does not cross the wire. **§5.0.3 diagnostic-stream-doc generalization
   closure**: option (a) — rename
   `REFRESH_DIAGNOSTIC_STREAM.md` → `DIAGNOSTIC_STREAM.md`
   (general). Existing FOLLOWUPS entry amended with rename
@@ -1510,7 +1678,12 @@
   surface adds a `&dyn DiagnosticSink` parameter on
   `LocalPendingTx::new` (constructor-bound, matching PR 4
   §3.1 / R4 preference; constructor-vs-per-method shape jointly
-  disposed with R11 in Round 2). The cross-cutting
+  disposed with R11 in Round 2). *(Forward-pointer: Round 2
+  segment 2f tightened the constructor parameter from
+  `&dyn DiagnosticSink` to `Arc<dyn DiagnosticSink>` for
+  reference-shape ergonomics during the R11 closure; see the
+  segment-2f and segment-2g CHANGELOG entries below for the
+  final binding form.)* The cross-cutting
   `DiagnosticSink` contracts from PR 4 §5.4.6 / §5.4.7 R6
   reframe / §5.4.8 (non-blocking emit, recursive trust boundary,
   restart-amnesia detection, panic safety, concurrent emit,

@@ -16,8 +16,13 @@ closure for Finding 4), and 2g (Round 2 close-out: §4 Phase 0
 binding-form enumeration including new Phase 0h `Signer` /
 0i `OutputSelector` / 0j `FeeEstimator` / 0k
 `SubmissionStrategyActor` topology slot; `SnapshotId` hash
-primitive pinned as SHA-256/128-bit truncation under existing
-`sha2 = "0.10"` workspace dep; §5.0.3 diagnostic-stream-doc
+primitive pinned as Keccak-256/128-bit truncation via
+`shekyl-crypto-hash::cn_fast_hash` (revised from segment-2g's
+prior `sha2`-based binding in the Copilot-fix follow-up for
+dependency-discipline correctness — `sha2` at Cargo.toml line
+115 is dev-deps-only, production at line 33 is `optional =
+true`; `shekyl-crypto-hash` is unconditional in production
+deps at line 28); §5.0.3 diagnostic-stream-doc
 generalization closed as (a) rename to
 `DIAGNOSTIC_STREAM.md`; §6 review checklist filled with all
 binding-check / test-substrate / call-site-sweep items).
@@ -672,7 +677,9 @@ segment 2g).**
 
 - **Phase 0b — `SnapshotId` opaque type + hash primitive
   (binding form pinned in segment 2g per R2's segment-2d
-  closure).** New opaque identifier type lands in
+  closure; revised in Copilot-fix follow-up for
+  dependency-discipline correctness and security-rationale
+  framing).** New opaque identifier type lands in
   `shekyl-engine-core` alongside the `LedgerEngine` surface
   it derives from. Binding signature:
 
@@ -684,36 +691,98 @@ segment 2g).**
   }
   ```
 
-  **Hash primitive (segment-2g closure).** SHA-256 truncated
-  to the first 128 bits, with input domain-separated by a
-  fixed prefix (e.g., `b"shekyl-snapshot-id-v1"`). Selection
-  rationale:
+  **Hash primitive (segment-2g closure; revised in
+  Copilot-fix follow-up).** Keccak-256 (original padding,
+  `shekyl-crypto-hash::cn_fast_hash`) truncated to the first
+  128 bits, with input domain-separated by a fixed prefix
+  (e.g., `b"shekyl-snapshot-id-v1"`). Selection rationale:
 
-  - `sha2 = "0.10"` is already a workspace dependency of
+  - **Dependency-discipline correctness
+    (Copilot-fix follow-up).** `shekyl-crypto-hash` is an
+    **unconditional** `[dependencies]` entry in
     `shekyl-engine-core` per
     [`rust/shekyl-engine-core/Cargo.toml`](../../rust/shekyl-engine-core/Cargo.toml)
-    (line 115); the
+    line 28; no feature flag, no `optional = true`, no
+    dev-only gating. The Copilot-fix predecessor for this
+    segment cited `sha2 = "0.10"` at line 115 as workspace-
+    available, but line 115 is in `[dev-dependencies]`
+    (test-only), and the production `sha2` at line 33 is
+    `optional = true` (gated behind a feature flag).
+    Switching the binding to `shekyl-crypto-hash::cn_fast_hash`
+    satisfies the
     [`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)
-    workspace-state rule prefers reuse of an existing
-    dependency over adding a new one.
-  - 128-bit collision resistance gives ~2⁶⁴ classical work
-    and ~2³² quantum work (Grover-doubled width); both are
-    adequate for a wallet-internal comparison token whose
-    only adversary surface is daemon-controlled
-    `LedgerSnapshot` construction. The token is not
-    consensus-bound and does not appear on-chain.
-  - Domain-separation via a versioned prefix forecloses
+    workspace-state reuse rule against the actual
+    production-dependency graph rather than a misread of
+    the Cargo.toml.
+  - **Reuse of audit-scope primitive.** `cn_fast_hash` is
+    Shekyl's consensus-critical `cn_fast_hash` primitive
+    used throughout the codebase. Reusing it for
+    `SnapshotId` derivation keeps the hash-primitive surface
+    in `shekyl-engine-core` to a single audited
+    construction.
+  - **Bounded-population security framing
+    (Copilot-fix follow-up; corrects prior collision-
+    resistance / Grover-doubled-width framing).**
+    `SnapshotId` is a **wallet-internal equality token over
+    a bounded snapshot population**, not a consensus-bound
+    or arbitrary-input hash. The relevant security property
+    is **second-preimage resistance** (can an
+    adversary-controlled daemon construct a `LedgerSnapshot`
+    whose hash equals a target?), not collision resistance
+    against arbitrary inputs. At 128-bit truncation:
+    - **Classical second-preimage:** ~2¹²⁸ work (full output
+      space).
+    - **Quantum second-preimage (Grover):** ~2⁶⁴ work —
+      large but bounded under aggressive quantum-adversary
+      assumptions.
+    - **Bounded-population safety:** the wallet observes
+      ≪ 2⁴⁰ snapshots over its operational lifetime
+      (one snapshot per refresh merge; ≈ one per ~30s
+      during sync, ≈ one per ~2 min during normal
+      operation; ≤ ~10⁷ snapshots over 100 years).
+      Even framed as a generic collision primitive, the
+      probabilistic-collision risk on uniformly-distributed
+      128-bit outputs at this population is ~10⁻²⁵ —
+      orders of magnitude below any practical security
+      threshold.
+    - **Impact bound under successful attack:** the wallet's
+      submit-staleness check passes incorrectly against a
+      daemon-injected snapshot replacement; the wallet
+      submits a tx valid against the prior snapshot; the
+      daemon could have rejected the tx anyway via
+      `DoubleSpend` if the prior snapshot's outputs are now
+      spent on-chain. No consensus violation; no wallet-
+      state corruption that refresh cannot reconcile. The
+      threat is bounded under the adversary-controlled-
+      daemon design-center per §5.3.
+
+    The prior segment-2g framing ("128-bit collision
+    resistance gives ~2⁶⁴ classical work and ~2³² quantum
+    work (Grover-doubled width)") applied Grover bounds
+    to collision resistance, which is technically incorrect
+    — Grover gives 2^(n/2) preimage attack work; collision
+    on 128-bit truncated hashes is governed by birthday
+    bound (~2⁶⁴ classical) and BHT (~2⁴³ quantum). The
+    bounded-population framing avoids the misclassification
+    by anchoring the security claim to the actual use case
+    (equality-token comparison over a small finite
+    population) rather than a generic
+    cryptographic-collision-resistance threshold.
+  - **Versioned prefix for V3.x migration.** Domain-
+    separation via `b"shekyl-snapshot-id-v1"` forecloses
     hash collisions with other wallet-internal hashes over
-    similar input shapes. The "v1" tag in the prefix permits
-    a future migration to SHA-3 or BLAKE3 in V3.x without a
-    cross-stage rebuild (V3.0 wallets and V3.x wallets
-    interoperate at the wire-format level; `SnapshotId` is
-    a wallet-internal token that does not cross the wire).
-  - PQC alignment: SHA-2 is post-quantum-safe for collision
-    resistance with Grover-doubled width; the analogous
-    SHA-3 / Keccak choice would require pulling in a new
-    workspace dependency without a load-bearing security
-    delta against this threat model.
+    similar input shapes. The "v1" tag permits V3.x
+    migration to a wider output (e.g., 256-bit) or a
+    different hash family without a cross-stage rebuild
+    (V3.0 wallets and V3.x wallets interoperate at the
+    wire-format level; `SnapshotId` is a wallet-internal
+    token that does not cross the wire).
+  - **PQC alignment posture.** Keccak (the basis of SHA-3)
+    is post-quantum-secure with the same Grover/BHT bounds
+    as any hash function of comparable output width.
+    Reusing `cn_fast_hash` does not introduce a new
+    PQC-load-bearing primitive; the V3.x migration path is
+    preserved via the version prefix.
 
   Recursive trust boundary applies per §5.4 R2: in-process
   consumers see the full 16-byte token; cross-boundary
@@ -1178,8 +1247,8 @@ pub enum SubmitErrorKind {
 
 ##### §5.0.2.1 Sink-binding closure (segment 2f; Finding 4)
 
-The trait surface adds a `&dyn DiagnosticSink` parameter to
-`LocalPendingTx::new` — **constructor-bound, closed in
+The trait surface adds an `Arc<dyn DiagnosticSink>` parameter
+to `LocalPendingTx::new` — **constructor-bound, closed in
 segment 2f**. The constructor-vs-per-method question is the
 prior adversarial-review Finding 4 from
 [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)'s
@@ -1790,33 +1859,42 @@ to Round 2 with the dispositions framed below.
 
   impl From<&LedgerSnapshot> for SnapshotId {
       fn from(snapshot: &LedgerSnapshot) -> Self {
-          // Domain-separated hash over deterministic fields.
-          // Hash function aligned with PR 4 / PR 5
-          // diagnostic-stream / engine-core hashing
-          // discipline; truncated to 16 bytes (128-bit
-          // collision resistance is sufficient for snapshot
-          // identity given the bounded snapshot population
-          // — one snapshot per refresh attempt).
-          let digest = blake3::hash(&[
-              SHEKYL_SNAPSHOT_ID_DOMAIN_SEP,
-              &snapshot.synced_height.to_le_bytes(),
-              snapshot.reorg_blocks.canonical_bytes(),
-          ].concat());
+          // Domain-separated Keccak-256 over deterministic
+          // fields, truncated to 16 bytes. The primitive
+          // (`shekyl_crypto_hash::cn_fast_hash`) is the
+          // engine-core's audited Keccak construction;
+          // 128-bit truncation is sufficient because
+          // `SnapshotId` is an equality token over a
+          // bounded snapshot population (one snapshot per
+          // refresh merge; ≪ 2⁴⁰ over wallet lifetime)
+          // rather than a collision-resistance primitive
+          // against arbitrary adversarial inputs.
+          let mut buf = Vec::new();
+          buf.extend_from_slice(SHEKYL_SNAPSHOT_ID_DOMAIN_SEP);
+          buf.extend_from_slice(&snapshot.synced_height.to_le_bytes());
+          buf.extend_from_slice(snapshot.reorg_blocks.canonical_bytes());
+          let digest = shekyl_crypto_hash::cn_fast_hash(&buf);
           let mut id = [0u8; 16];
-          id.copy_from_slice(&digest.as_bytes()[..16]);
+          id.copy_from_slice(&digest[..16]);
           SnapshotId(id)
       }
   }
   ```
 
-  The exact hash function (Blake3 vs. Keccak-256 vs. domain-
-  separated SHA-3) is pinned at Phase 0 review (segment 2g)
-  per §3.1 PQC-discipline alignment with the engine's hash
-  selection; the segment-2d disposition is the **shape**
-  (16-byte content-addressed digest), not the specific hash
-  primitive. Truncation to 128 bits is sufficient because the
-  snapshot population is bounded (one snapshot per refresh
-  attempt; ≪ 2⁶⁴ over wallet lifetime).
+  The hash primitive is pinned at Phase 0 review (segment 2g
+  per §4 Phase 0b binding; revised in Copilot-fix follow-up
+  for dependency-discipline correctness) as
+  `shekyl_crypto_hash::cn_fast_hash` (Keccak-256, original
+  padding) — `shekyl-crypto-hash` is an unconditional
+  `[dependencies]` entry in `shekyl-engine-core` per
+  [`rust/shekyl-engine-core/Cargo.toml`](../../rust/shekyl-engine-core/Cargo.toml)
+  line 28; the segment-2d disposition is the **shape**
+  (16-byte content-addressed digest), and segment-2g pins
+  the **primitive** (Keccak-256 with 128-bit truncation).
+  Truncation to 128 bits is sufficient because `SnapshotId`
+  is a wallet-internal equality token over a bounded
+  snapshot population — see §4 Phase 0b for the full
+  bounded-population security framing.
 
   **Determinism is required by staleness detection.** Two
   reservations built against the same snapshot share the
@@ -1867,10 +1945,10 @@ to Round 2 with the dispositions framed below.
   block-height info through every reservation envelope and
   every actor message — a fingerprint surface that the
   opaque-digest shape closes by construction. The opaque-
-  digest cost (one Blake3 call per snapshot merge; one
-  comparison per `submit` handler invocation) is bounded;
-  the height-bearing simplification is not worth the
-  privacy cost.
+  digest cost (one `cn_fast_hash` call per snapshot merge;
+  one comparison per `submit` handler invocation) is
+  bounded; the height-bearing simplification is not worth
+  the privacy cost.
 
   **Phase 0 implication (segment 2d).** §4 Phase 0b pins
   `SnapshotId` as `pub struct SnapshotId([u8; 16])` (opaque
@@ -1883,7 +1961,9 @@ to Round 2 with the dispositions framed below.
   2g) confirms the digest size, the hash primitive
   selection per §3.1 PQC alignment, and the projection-type
   pattern in the doc-only generalization of
-  `DIAGNOSTIC_STREAM_CONTRACTS.md`.
+  `DIAGNOSTIC_STREAM.md` (segment-2g closure of the
+  generalization question selected option (a) — rename
+  `REFRESH_DIAGNOSTIC_STREAM.md` → `DIAGNOSTIC_STREAM.md`).
 - **R3 — Build-during-refresh-during-reorg interaction
   (dissolved by §5.0).** Under the actor mesh, mailbox FIFO
   orders these structurally. Sequence at `PendingTxActor`'s
@@ -2261,12 +2341,21 @@ to Round 2 with the dispositions framed below.
   - **(B) Daemon-side authority.** Timeout keeps the
     reservation in `SubmitPendingDaemonAck`; outputs stay
     reserved; consumer (or V3.x `TimeoutResolverActor`)
-    explicitly resolves after chain-state observation
-    (e.g., observes `tx_hash` in `LedgerDiagnostic::SnapshotMerged`
-    → calls `discard(id, ConsumerExplicit)` to release; or
-    observes no chain landing after grace period → calls
-    `discard(id, ConsumerExplicit)` to retry from rebuild).
-    R8's `ReservationTTLActor` provides the safety net for
+    explicitly resolves after chain-state observation —
+    the resolver consults the ledger to determine whether
+    the timed-out tx landed on chain and then calls
+    `discard(id, ConsumerExplicit)` (release on landing) or
+    `discard(id, ConsumerExplicit)` after a grace period
+    (release to retry on non-landing). The **exact
+    chain-observation mechanism** (additive
+    `LedgerDiagnostic` variant carrying tx-confirmation
+    payloads, an additive `LedgerEngine` chain-query
+    accessor, or a hybrid of both) is part of the V3.x
+    consumer-actor PR's own design — Phase 0g's
+    `LedgerDiagnostic::SnapshotMerged { new, prior, height }`
+    variant deliberately carries no `tx_hash` and is
+    insufficient on its own for this correlation. R8's
+    `ReservationTTLActor` provides the safety net for
     forgotten resolutions: per-state TTL configuration permits
     shorter TTL on `SubmitPendingDaemonAck` than on `Active`
     (V3.x deliverable; segment-2e variant pin
@@ -2288,10 +2377,16 @@ to Round 2 with the dispositions framed below.
   (the failure mode where (B) would dominate (A)/(C) on
   operational hygiene). Consumer-explicit resolution preserves
   the wallet's authority to decide based on chain observation;
-  cross-stream correlation (`SubmitFailed{Timeout}` event +
-  `LedgerDiagnostic::SnapshotMerged` with the tx hash) is the
-  composition-side hook the V3.x `TimeoutResolverActor`
-  consumes.
+  the composition-side hook the V3.x `TimeoutResolverActor`
+  consumes is the conjunction of (i) the
+  `SubmitFailed { kind: DaemonTimeout | DaemonUnavailable }`
+  event and (ii) a chain-observation mechanism for the
+  timed-out `tx_hash` that the V3.x consumer-actor PR will
+  design (additive `LedgerDiagnostic` variant carrying
+  tx-confirmation payloads, additive `LedgerEngine`
+  chain-query accessor, or both — `SnapshotMerged` carries
+  `{new, prior, height}` only and is insufficient on its own
+  for this correlation per Phase 0g binding).
 
   **Why (A) is not a `00-mission.mdc` priority-1 violation
   on its face.** The wallet-side double-spend hazard surfaces
@@ -3276,9 +3371,12 @@ the Phase 0 binding-form enumeration:
   `OutputSelector` / 0j `FeeEstimator` / 0k
   `SubmissionStrategyActor` topology slot from
   segment-2b / segment-2c closures); `SnapshotId` hash
-  primitive pinned (SHA-256/128-bit truncation under
-  existing `sha2 = "0.10"` workspace dep with
-  versioned domain-separation prefix); §5.0.3
+  primitive pinned (Keccak-256/128-bit truncation via
+  `shekyl-crypto-hash::cn_fast_hash` — unconditional
+  workspace dep — with versioned domain-separation prefix;
+  revised in Copilot-fix follow-up from segment-2g's prior
+  `sha2`-based binding for dependency-discipline
+  correctness); §5.0.3
   diagnostic-stream-doc generalization closed as (a)
   rename to `DIAGNOSTIC_STREAM.md` (FOLLOWUPS amended);
   §6 review checklist filled with binding-check /
@@ -3310,10 +3408,15 @@ finalization).**
   0a binding form pinned in segment 2f; both
   `#[non_exhaustive]`; `SnapshotInvalidated` and
   `DaemonRejected { kind }` variants enumerated.
-- [x] `SnapshotId` opaque type, SHA-256/128-bit truncation,
-  domain-separation prefix — Phase 0b binding form pinned in
-  segment 2g; hash primitive rationale recorded per
-  dependency-discipline (already-workspace `sha2 = "0.10"`).
+- [x] `SnapshotId` opaque type, Keccak-256/128-bit truncation
+  via `shekyl-crypto-hash::cn_fast_hash`, domain-separation
+  prefix — Phase 0b binding form pinned in segment 2g; hash
+  primitive rationale recorded per dependency-discipline
+  (`shekyl-crypto-hash` is unconditional `[dependencies]` in
+  `shekyl-engine-core` per Cargo.toml line 28); security
+  rationale framed as second-preimage resistance over bounded
+  snapshot population (revised in Copilot-fix follow-up from
+  prior collision-resistance / Grover-doubled-width framing).
 - [x] `Reservation` struct shape with `extensions:
   Vec<ReservationExtension>` (R14 extensibility seam) —
   Phase 0d binding form pinned in segment 2g per
@@ -3873,17 +3976,38 @@ work, by round:
     evaluation); Phase 0k (`SubmissionStrategyActor`
     topology slot per R15 segment-2c closure — V3.x
     introduction).
-  - **`SnapshotId` hash primitive pinned.** SHA-256
+  - **`SnapshotId` hash primitive pinned (revised in
+    Copilot-fix follow-up).** Keccak-256 via
+    `shekyl-crypto-hash::cn_fast_hash` (original padding)
     truncated to the first 128 bits with input
     domain-separated by versioned prefix
-    (`b"shekyl-snapshot-id-v1"`); `sha2 = "0.10"` already
-    a workspace dependency of `shekyl-engine-core` per
+    (`b"shekyl-snapshot-id-v1"`). `shekyl-crypto-hash` is
+    an **unconditional** `[dependencies]` entry in
+    `shekyl-engine-core` per Cargo.toml line 28, satisfying
     [`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)
-    workspace-state reuse rule. 128-bit collision
-    resistance adequate for wallet-internal comparison
-    token; PQC alignment via Grover-doubled width on
-    SHA-2. Versioned prefix permits V3.x migration to
-    SHA-3 / BLAKE3 without cross-stage rebuild (the token
+    workspace-state reuse against the actual
+    production-dependency graph. The prior segment-2g
+    binding cited `sha2 = "0.10"` at Cargo.toml line 115
+    as workspace-available, but line 115 is in
+    `[dev-dependencies]` (test-only); the production
+    `sha2` at line 33 is `optional = true`. The
+    Copilot-fix follow-up switches the primitive to the
+    consensus-audited `cn_fast_hash` already unconditional
+    in production deps. Security rationale reframed from
+    "128-bit collision resistance / Grover-doubled width
+    on SHA-2" (technically incorrect — Grover applies to
+    preimage, not collision; quantum collision is governed
+    by BHT, ~2⁴³ for 128 bits) to **second-preimage
+    resistance over bounded snapshot population** (wallet
+    observes ≪ 2⁴⁰ snapshots over its operational
+    lifetime; classical second-preimage ~2¹²⁸ work;
+    quantum Grover second-preimage ~2⁶⁴ work; impact bound
+    by adversary-controlled-daemon design-center per
+    §5.3 — daemon-forged snapshot collision merely makes
+    the wallet submit a tx valid against the prior
+    snapshot, no consensus violation). Versioned prefix
+    permits V3.x migration to a wider output or different
+    hash family without cross-stage rebuild (the token
     does not cross the wire).
   - **§5.0.3 diagnostic-stream-doc generalization closure.**
     Option (a) — rename `REFRESH_DIAGNOSTIC_STREAM.md` →
