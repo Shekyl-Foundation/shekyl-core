@@ -2,10 +2,12 @@
 
 **Status.** **Round 1 closed (2026-05-13); Round 2 in progress
 — segments 2a (audit-readiness), 2b (R11 signing-actor split
-reframe to (b); R14 reservation extensibility seam), and 2c
+reframe to (b); R14 reservation extensibility seam), 2c
 (closure-rule and lens-applicability refinements paired with
-R13 / R15 / R16 / R17 named with dispositions) landed
-(2026-05-14).** This
+R13 / R15 / R16 / R17 named with dispositions), and 2d
+(R2 + R12 co-disposition; Phase 0c truly collapses;
+`SnapshotId` opacity closed as 16-byte content-addressed
+digest) landed (2026-05-14).** This
 document was opened as a seed immediately after Stage 1 PR 4's
 design substrate landed on `dev` (merge commit `6de8335d5`,
 PR #42). Round 1 closes here in one round — not deferred to
@@ -119,6 +121,59 @@ seam-design implications. The R1 disposition still holds;
 segment 2c is discipline-strengthening + opportunity-surface
 naming work that compounds project-wide design discipline
 without reopening the load-bearing question.
+
+**Round 2 segment 2d (2026-05-14) — R2 + R12 co-disposition;
+Phase 0c truly collapses; `SnapshotId` opacity closed as
+16-byte content-addressed digest.** Segment 2d closes the two
+remaining `SnapshotId`-adjacent residuals against the actual
+shape of the `LedgerSnapshot` substrate landed in PR 2.
+**R12 closes as (a)** — content-derived `SnapshotId` from
+existing `LedgerSnapshot` data. The substrate inspection
+confirms `LedgerSnapshot` (per
+[`rust/shekyl-engine-core/src/engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+ll. 147–166)
+carries `synced_height: u64` and `reorg_blocks: ReorgBlocks`
+— both deterministic by construction; sufficient for content-
+addressed derivation without a `LedgerEngine` trait amendment.
+Stage 1's `LocalPendingTx` derives `SnapshotId` from the
+existing `LedgerEngine::snapshot()` trait method (returning
+`LedgerSnapshot`); Stage 4's `PendingTxActor` receives
+identical `SnapshotId` values via `LedgerDiagnostic::SnapshotMerged`
+events emitted at merge time inside `LedgerEngine` using
+the same digest function. **Phase 0c truly collapses** —
+the §5.5 ground-1 "(pending R12)" qualifier is mechanically
+softened, the §4 Phase 0c "(pending R12)" qualifier is
+dropped, and ground 1 becomes closure-confirmed alongside
+grounds 2 and 3. **R2 closes as opaque 16-byte content-
+addressed digest**: `pub struct SnapshotId([u8; 16])`,
+computed as a domain-separated hash over `LedgerSnapshot`'s
+deterministic fields (specific hash primitive pinned at
+Phase 0 review (segment 2g) per §3.1 PQC-discipline
+alignment with the engine's hash selection). Determinism is
+**required** by §5.0's submit-handler field-comparison
+contract; the height-leak side-channel that a height-bearing
+`SnapshotId` would carry into every reservation envelope and
+actor message is closed by construction. **Projection-type
+discipline preserved-as-pattern**: no V3.0 PR 5 call-site
+introduces a cross-trust-boundary `SnapshotId` or
+`SnapshotMerged` consumer, so the projection-type
+implementation lands in the V3.x consumer-actor PR that
+introduces the first cross-boundary consumer; the discipline
+itself is documented per PR 4 §5.4.8 #4's recursive-trust-
+boundary rule. **R16 conditional V3.0 lift evaluation
+(segment 2c trigger)**: `LedgerBlock` (per
+[`rust/shekyl-engine-state/src/ledger_block.rs`](../../rust/shekyl-engine-state/src/ledger_block.rs))
+carries no per-block fee data today; lifting R16 (c) to V3.0
+would require either a storage-layout amendment (persistence-
+layer migration) or an unbounded historical-block walk per
+estimator call. **Neither is bounded cost**, so R16's
+conservative segment-2c default holds; R16 (c) lands in V3.x
+behind a coordinated `LedgerEngine` + `FeeEstimator` PR. The
+R1 disposition still holds; segment 2d is the segment-2c
+follow-through (closure-rule operational discipline applied
+to the conditional-V3.0-lift surface) plus the
+`SnapshotId`-substrate co-disposition the §8 fenceposts
+sequenced for this slot.
 
 Subsequent revisions land each design round inline (the
 precedent set by PR 3's
@@ -440,27 +495,22 @@ for §6).
   per §5.4 R2; in-process consumers see full token,
   cross-boundary consumers see projection types).
 - **Phase 0c — REMOVED at the trait surface under §5.0
-  (pending R12).** The seed projected a cross-trait
-  synchronous-query amendment to `LedgerEngine`
-  (`current_snapshot_id() -> SnapshotId`) as a load-bearing
-  amendment. Under the actor-mesh framing, snapshot identity
-  flows through the diagnostic-stream surface as a
-  `LedgerDiagnostic::SnapshotMerged` event (Phase 0g) for
-  actor consumers. The trait-surface load-bearing coupling
-  is unnecessary; the additive event-surface amendment
-  replaces it. **Net effect: load-bearing surface coupling
-  collapses to additive-only event-surface coupling at the
-  trait surface.** R12 (§5.4) carries the qualifier for
-  Stage 1's `LocalPendingTx` implementation: the working
-  hypothesis (R12 (a)) is content-derived `SnapshotId` from
-  existing `LedgerSnapshot` data — Phase 0c truly collapses.
-  If R12 closes to (b), Stage 1 subscribes to
-  `LedgerDiagnostic` (no trait amendment, slight
-  implementation-symmetry cost). If R12 closes to (c),
-  `LedgerEngine` grows a small additive accessor — Phase 0c
-  is partially restored, but at additive-only cost (read-only,
-  idempotent), not the load-bearing coupling the original
-  Phase 0c projected. Round 2 closes R12 alongside R2.
+  (R12 closed (a) in segment 2d; Phase 0c truly collapses).**
+  The seed projected a cross-trait synchronous-query amendment
+  to `LedgerEngine` (`current_snapshot_id() -> SnapshotId`) as
+  a load-bearing amendment. Under the actor-mesh framing,
+  snapshot identity flows through the diagnostic-stream
+  surface as a `LedgerDiagnostic::SnapshotMerged` event
+  (Phase 0g) for actor consumers; Stage 1's `LocalPendingTx`
+  derives `SnapshotId` from `LedgerEngine::snapshot()` (the
+  pre-existing trait method) per §5.4 R12 (a)'s segment-2d
+  closure. **Net effect: the trait-surface load-bearing
+  coupling the seed projected does not exist** — neither at
+  V3.0 nor in any V3.x trajectory currently named. The
+  additive event-surface amendment (Phase 0g) carries
+  snapshot identity to actor consumers; the existing
+  `LedgerEngine::snapshot()` carries it to Stage 1's
+  synchronous trait-call consumer.
 - **Phase 0d — `Reservation` struct extension.** The
   reservation record carries a `snapshot_id: SnapshotId` field.
   This is a `LocalPendingTx`-internal extension if `Reservation`
@@ -1151,46 +1201,120 @@ later. The remaining residuals (R2 / R8 / R9 / R11 / R12) carry
 to Round 2 with the dispositions framed below.
 
 - **R2 — `SnapshotId` opacity and side-channel implications
-  (Round 2; Phase 0b candidate).** Height-bearing `SnapshotId`
-  (e.g., `pub struct SnapshotId(pub u64)` carrying block height)
-  is simpler but leaks block-height info into every reservation
-  and every actor envelope. Opaque `SnapshotId` (e.g., a 16-byte
-  digest of the snapshot's content) requires `LedgerEngine` to
-  maintain an internal mapping but closes the height-leak
-  side-channel.
+  (closed in Round 2 segment 2d; Phase 0b detail).**
+  Height-bearing `SnapshotId` (e.g., `pub struct SnapshotId(pub
+  u64)` carrying block height) is simpler but leaks block-height
+  info into every reservation and every actor envelope. Opaque
+  `SnapshotId` (a content-addressed digest of `LedgerSnapshot`
+  state) closes the height-leak side-channel and requires no
+  `LedgerEngine`-side mapping (the digest is content-addressed
+  so identity is equality on the digest, not lookup through a
+  table).
 
-  **Subtlety to pin in Round 2.** A content-addressed `SnapshotId`
-  (hash of `LedgerSnapshot` state) is deterministic per snapshot
-  by construction — two reservations built against the same
-  snapshot share the same `SnapshotId`. This is *required* by
-  staleness detection (the snapshot identity must be deterministic
-  for the field comparison in §5.0's message handler to work)
-  but it is itself a side-channel: any consumer of multiple
-  reservations can correlate "these N reservations are pinned
-  to the same snapshot," observable as "user constructed N
-  transactions during a single ~30s polling window." Within
-  trust boundary (orchestrator, in-process actors), this is
-  fine and even useful (UI can batch-display reservations by
-  snapshot for context). Across trust boundary in the recursive
-  sense per PR 4 §5.4.8 #4 (logs that get pasted, telemetry
+  **Disposition (closed as opaque content-addressed digest).**
+  V3.0 ships `SnapshotId` as a **16-byte content-addressed
+  digest** computed from the deterministic fields of
+  `LedgerSnapshot` (per §5.4 R12 (a)):
+
+  ```rust
+  pub struct SnapshotId([u8; 16]);
+
+  impl From<&LedgerSnapshot> for SnapshotId {
+      fn from(snapshot: &LedgerSnapshot) -> Self {
+          // Domain-separated hash over deterministic fields.
+          // Hash function aligned with PR 4 / PR 5
+          // diagnostic-stream / engine-core hashing
+          // discipline; truncated to 16 bytes (128-bit
+          // collision resistance is sufficient for snapshot
+          // identity given the bounded snapshot population
+          // — one snapshot per refresh attempt).
+          let digest = blake3::hash(&[
+              SHEKYL_SNAPSHOT_ID_DOMAIN_SEP,
+              &snapshot.synced_height.to_le_bytes(),
+              snapshot.reorg_blocks.canonical_bytes(),
+          ].concat());
+          let mut id = [0u8; 16];
+          id.copy_from_slice(&digest.as_bytes()[..16]);
+          SnapshotId(id)
+      }
+  }
+  ```
+
+  The exact hash function (Blake3 vs. Keccak-256 vs. domain-
+  separated SHA-3) is pinned at Phase 0 review (segment 2g)
+  per §3.1 PQC-discipline alignment with the engine's hash
+  selection; the segment-2d disposition is the **shape**
+  (16-byte content-addressed digest), not the specific hash
+  primitive. Truncation to 128 bits is sufficient because the
+  snapshot population is bounded (one snapshot per refresh
+  attempt; ≪ 2⁶⁴ over wallet lifetime).
+
+  **Determinism is required by staleness detection.** Two
+  reservations built against the same snapshot share the
+  same `SnapshotId` (the digest is deterministic per
+  snapshot). This is **required** by `submit`'s field-
+  comparison handler under §5.0 (the snapshot identity must
+  be deterministic for the comparison to detect staleness);
+  it is also a side-channel for in-process consumers that
+  aggregate reservations.
+
+  **Side-channel posture.** Within trust boundary
+  (orchestrator, in-process actors), `SnapshotId`-correlation
+  across reservations is fine and even useful — the UI can
+  batch-display reservations by snapshot for context, and
+  the staleness-detection contract benefits from the
+  determinism. Across trust boundary in the recursive sense
+  per PR 4 §5.4.8 #4 (logs that get pasted, telemetry
   exports, debug UIs with off-host surfaces, any in-process
-  consumer that aggregates and republishes), it leaks
-  transaction-rate timing.
+  consumer that aggregates and republishes), the deterministic
+  identity leaks transaction-rate timing — observable as
+  "user constructed N transactions during a single ~30s
+  polling window."
 
-  **Mitigation principle (carry forward from PR 4 §5.4.8 #4).**
-  Full `SnapshotId` flows only to in-process consumers whose
-  external surface is itself within the trust boundary; projection
-  types (e.g., a per-reservation opaque random handle that
+  **Projection-type discipline (preserved-as-pattern; no V3.0
+  named cross-boundary consumer).** The full `SnapshotId`
+  flows only to in-process consumers whose external surface
+  is itself within the trust boundary. **For cross-trust-
+  boundary consumers, the prescribed pattern is projection
+  types** — a per-reservation opaque random handle that
   internally maps to a `SnapshotId` for staleness detection,
-  distinct per reservation even when the underlying snapshot is
-  identical) cross the trust boundary for consumers that
-  publish or persist. The same recursive-trust-boundary discipline
+  distinct per reservation even when the underlying snapshot
+  is identical. The same recursive-trust-boundary discipline
   applies to `LedgerDiagnostic::SnapshotMerged { new, prior,
-  height }`'s `height` field; in-process consumers see the full
-  event, cross-boundary consumers see a projection that elides
-  height. Round 2 disposition lands the projection-type shape
-  if any cross-boundary consumer is named in Phase 1's call-site
-  sweep.
+  height }`'s `height` field: in-process consumers see the
+  full event, cross-boundary consumers see a projection that
+  elides height. **No V3.0 PR 5 call-site introduces a
+  cross-trust-boundary `SnapshotId` or `SnapshotMerged`
+  consumer**, so the projection-type implementation is
+  preserved-as-pattern (the discipline is documented; the
+  code lands in the V3.x consumer-actor PR that introduces
+  the first cross-boundary consumer). Phase 1 call-site
+  sweep (Round 3) confirms no cross-boundary consumer is
+  named at V3.0 ship time.
+
+  **Why opaque-digest over height-bearing.** Per
+  [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) §2
+  (privacy is the product), the height-bearing shape leaks
+  block-height info through every reservation envelope and
+  every actor message — a fingerprint surface that the
+  opaque-digest shape closes by construction. The opaque-
+  digest cost (one Blake3 call per snapshot merge; one
+  comparison per `submit` handler invocation) is bounded;
+  the height-bearing simplification is not worth the
+  privacy cost.
+
+  **Phase 0 implication (segment 2d).** §4 Phase 0b pins
+  `SnapshotId` as `pub struct SnapshotId([u8; 16])` (opaque
+  content-addressed digest); Phase 0g pins
+  `LedgerDiagnostic::SnapshotMerged { new: SnapshotId,
+  prior: SnapshotId, height: BlockHeight }` (the `height`
+  field is in-trust-boundary-only data; cross-boundary
+  consumers receive a projection via the V3.x consumer-
+  actor PR that introduces them). Phase 0 review (segment
+  2g) confirms the digest size, the hash primitive
+  selection per §3.1 PQC alignment, and the projection-type
+  pattern in the doc-only generalization of
+  `DIAGNOSTIC_STREAM_CONTRACTS.md`.
 - **R3 — Build-during-refresh-during-reorg interaction
   (dissolved by §5.0).** Under the actor mesh, mailbox FIFO
   orders these structurally. Sequence at `PendingTxActor`'s
@@ -1486,64 +1610,81 @@ to Round 2 with the dispositions framed below.
   R-residual dispositions are subject to the same architectural-
   integrity-now discipline as load-bearing questions.
 - **R12 — Stage 1 `current_snapshot` acquisition mechanism
-  (Round 2; co-disposes with R2).** §5.0.1's `LocalPendingTx`
-  sketch shows `ledger: L` "for `current_snapshot` reads in
-  Stage 1." The §5.5 ground-1 claim that "Phase 0c collapses"
-  is true at the trait surface — the trait does not require
-  `LedgerEngine::current_snapshot_id()` because actor consumers
-  receive snapshot identity via `LedgerDiagnostic::SnapshotMerged`
-  (Phase 0g). It is **silent** about Stage 1's actual mechanism.
-  Three options:
+  (closed in Round 2 segment 2d as (a) — content-derived
+  `SnapshotId` from existing `LedgerSnapshot` data).** §5.0.1's
+  `LocalPendingTx` sketch shows `ledger: L` "for
+  `current_snapshot` reads in Stage 1." The §5.5 ground-1
+  claim that "Phase 0c collapses" is true at the trait surface —
+  the trait does not require `LedgerEngine::current_snapshot_id()`
+  because actor consumers receive snapshot identity via
+  `LedgerDiagnostic::SnapshotMerged` (Phase 0g). Round 1 left
+  Stage 1's mechanism unspecified pending Round 2's
+  inspection of the actual `LedgerSnapshot` shape.
 
-  - **(a) Content-derived `SnapshotId` from existing
-    `LedgerSnapshot` data (working hypothesis).** Stage 1 calls
-    the existing `LedgerEngine` surface to obtain a
-    `LedgerSnapshot` (or borrows one in the existing pattern),
-    computes a content-addressed `SnapshotId` from the
-    snapshot's deterministic fields, and uses it in the
-    reservation. No new `LedgerEngine` trait surface; no
-    cross-trait coupling beyond what already exists. **Phase 0c
-    truly collapses** in this disposition. Round 2 confirms by
-    inspecting `LedgerSnapshot`'s actual shape (in
-    `engine_trait_bench` substrate and the current
-    `engine/refresh.rs` consumption sites) for sufficient
-    deterministic state.
+  **Disposition (closed as (a)).** `LedgerSnapshot` —
+  per [`rust/shekyl-engine-core/src/engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  ll. 147–166 — carries
+  exactly the deterministic state R12 (a) needs:
 
-  - **(b) Stage 1 subscribes to the `LedgerDiagnostic` stream.**
-    Stage 1 implementation symmetric with Stage 4 — both
-    maintain `current_snapshot` from `SnapshotMerged` events.
-    Implementation cost: Stage 1's `LocalPendingTx` grows the
-    diagnostic-stream consumer surface (one more `Arc<dyn
-    DiagnosticStreamConsumer>` field, or it implements the
-    consumer trait directly). Phase 0c still collapses, at
-    modest implementation-symmetry cost.
+  ```rust
+  // LedgerSnapshot (pre-existing, PR 2 substrate)
+  pub struct LedgerSnapshot {
+      pub(crate) synced_height: u64,
+      pub(crate) reorg_blocks: ReorgBlocks,
+      // (ReorgBlocks: Vec<(u64, [u8; 32])>)
+  }
+  ```
 
-  - **(c) `LedgerEngine` grows a small surface accessor
-    (Phase 0c partially restored).** If `LedgerSnapshot`'s
-    state is insufficient for content-addressed derivation
-    (e.g., the snapshot doesn't carry the discriminating
-    state, or the fields are non-deterministic across reads),
-    `LedgerEngine` grows a surface like
-    `current_snapshot_id() -> SnapshotId` whose return is
-    derived once at merge time and cached. Cost: a small
-    cross-trait amendment, but **additive only** — the
-    accessor is read-only and idempotent; not the load-bearing
-    coupling the original Phase 0c projected.
+  Both fields are deterministic given the ledger state at
+  snapshot time; `LedgerSnapshot::from_ledger(&LedgerBlock)`
+  is the existing constructor. Stage 1's `LocalPendingTx`
+  acquires `current_snapshot` by:
 
-  **Why Round 1's disposition does not depend on R12.** Grounds
-  2 and 3 (§5.1 / §5.5) are independently sufficient: the
-  actor-mesh serialization-via-mailbox property and the
-  cross-actor-liveness-query DoS surface defeat shapes (2)/(3)
-  regardless of which option (a)/(b)/(c) closes for Stage 1.
-  Ground 1 is **expected confirmation, not load-bearing**;
-  R12's three options range from "true collapse" through
-  "implementation-symmetric collapse" to "additive-only
-  partial restoration," none of which reopens shapes (2)/(3).
+  ```rust
+  // Stage 1: LocalPendingTx::build (sketch)
+  fn build(&self, intent: BuildIntent) -> Result<Reservation, BuildError> {
+      let snapshot = self.ledger.snapshot();          // existing trait method
+      let snapshot_id = SnapshotId::from(&snapshot);  // R2: opaque digest
+      // ... construct reservation against snapshot, stamp snapshot_id
+  }
+  ```
 
-  **Round 2 task.** Co-dispose with R2 (`SnapshotId` opacity)
-  in the same Round 2 commit; both questions are
-  `SnapshotId`-adjacent and benefit from joint review against
-  the actual `LedgerSnapshot` shape.
+  No new `LedgerEngine` trait surface; no cross-trait
+  coupling beyond what `LedgerEngine::snapshot()` already
+  provides. **Phase 0c truly collapses.**
+
+  **Why (b) and (c) are rejected.** (b) (Stage 1 subscribes
+  to the diagnostic stream) adds implementation-symmetry
+  cost without architectural payoff — Stage 1's `&self`
+  trait-call pattern reads `current_snapshot` synchronously
+  through `LedgerEngine::snapshot()`; the stream-subscription
+  pattern is the right shape for Stage 4 (where the actor
+  is event-driven by construction) but not for Stage 1.
+  (c) (`LedgerEngine` grows a `current_snapshot_id()`
+  accessor) is unnecessary because `LedgerSnapshot`'s
+  existing fields are sufficient for content-addressed
+  derivation; adding the accessor would be a cross-trait
+  amendment for a property that derives from already-
+  available state.
+
+  **Stage 4 alignment.** Stage 4's `PendingTxActor` maintains
+  `current_snapshot: SnapshotId` in actor state, updated
+  from `LedgerDiagnostic::SnapshotMerged { new, prior, height
+  }` events. The Stage 4 `SnapshotId` is the **same digest
+  function** applied at merge time inside `LedgerEngine`
+  before emitting the event (so Stage 1 and Stage 4 produce
+  identical `SnapshotId` values for identical `LedgerSnapshot`
+  state). The digest function is documented in §5.4 R2 below.
+
+  **§5.5 ground-1 prose softening.** The "pending R12"
+  qualifier on ground 1 is dropped (§5.5 segment 2d
+  edit); ground 1 is now closure-confirmed: Phase 0c
+  collapses cleanly, R12 (a) is the chosen mechanism, no
+  trait amendment.
+
+  **§4 Phase 0c prose softening.** "(pending R12)" qualifier
+  dropped (§4 segment 2d edit); Phase 0c is REMOVED at the
+  trait surface — full stop.
 - **R14 — `Reservation` extensibility seam (closed in Round 2
   segment 2b; near-zero cost; forecloses V3.x trait revision).**
   The current `Reservation` shape (reservation-id +
@@ -1846,11 +1987,27 @@ to Round 2 with the dispositions framed below.
   already carry it); the estimator itself requires
   fee-distribution analysis logic (statistical methods,
   fee-band selection, time-window selection). Phase 0 review
-  (segment 2d) bounds the cost. **If the `LedgerEngine`
-  accessor cost is bounded and the estimator implementation
-  is already feasible at V3.0 review time, R16 may lift to
-  ship (c) at V3.0; the segment-2c disposition is the
-  conservative default.**
+  (segment 2d) bounds the cost.
+
+  **Conditional V3.0 lift evaluation (segment 2d).**
+  `LedgerBlock` (per
+  [`rust/shekyl-engine-state/src/ledger_block.rs`](../../rust/shekyl-engine-state/src/ledger_block.rs))
+  carries `block_version`, `transfers: Vec<TransferDetails>`,
+  `tip: BlockchainTip`, `reorg_blocks: ReorgBlocks` —
+  **no per-block fee data**. Adding a historical-block-fee
+  accessor to `LedgerEngine` requires either (i) extending
+  `LedgerBlock`'s persisted shape to carry fee-distribution
+  summary per block (storage-layout amendment; persistence-
+  layer migration; Phase 0 / Phase 1 spec amendment) or (ii)
+  walking historical confirmed transactions per estimator
+  call (CPU cost on every fee estimation; potentially
+  unbounded depending on fee-window depth). Neither is
+  bounded cost in the segment-2c sense. **R16 (c) does not
+  lift to V3.0; the conservative segment-2c default holds.**
+  V3.x lifts (c) when the storage-layout amendment is
+  scoped under its own design pass and lands as a
+  coordinated `LedgerEngine` + `FeeEstimator` PR. The
+  FOLLOWUPS entry remains the V3.x trigger surface.
 
   **Phase 0 implication.** `LocalPendingTx<S: Signer, O:
   OutputSelector, F: FeeEstimator>` (Stage 1) gains the
@@ -1989,23 +2146,21 @@ rounds saved against the original projection.
 **Rationale (the three structural grounds, restated).** Under
 the actor-mesh framing, shape (1) wins on:
 
-1. **Phase 0c collapses at the trait surface (pending R12).** No
-   cross-trait synchronous-query amendment to `LedgerEngine` is
-   required by the trait contract; actor consumers receive
-   snapshot identity through `LedgerDiagnostic::SnapshotMerged`
-   events (additive surface, not load-bearing surface). Phase 0g
-   is the resulting amendment. **R12 (§5.4) carries forward the
-   honest qualifier:** Stage 1's `LocalPendingTx` mechanism for
-   acquiring `current_snapshot` is unspecified in this
-   disposition. Working hypothesis (R12 (a)) is content-derived
-   `SnapshotId` from existing `LedgerSnapshot` data — Phase 0c
-   truly collapses. Fallback dispositions (R12 (b) Stage 1
-   subscribes to the stream; R12 (c) `LedgerEngine` grows a
-   small additive accessor) preserve the trait-surface property
-   at modestly higher cost. **The disposition does not depend
-   on R12's outcome** — grounds 2 and 3 are independently
-   sufficient; ground 1 is expected confirmation, not
-   load-bearing.
+1. **Phase 0c collapses at the trait surface (R12 closed (a)
+   in segment 2d).** No cross-trait synchronous-query amendment
+   to `LedgerEngine` is required by the trait contract; actor
+   consumers receive snapshot identity through
+   `LedgerDiagnostic::SnapshotMerged` events (additive surface,
+   not load-bearing surface; Phase 0g) and Stage 1's
+   `LocalPendingTx` derives `SnapshotId` from
+   `LedgerEngine::snapshot()` (existing trait method; per §5.4
+   R12 (a)'s segment-2d closure). The working hypothesis
+   confirmed: `LedgerSnapshot` carries `synced_height +
+   reorg_blocks` — sufficient deterministic state for content-
+   addressed `SnapshotId` derivation per §5.4 R2's segment-2d
+   closure (opaque 16-byte digest). **Phase 0c truly collapses;
+   no qualifier remains.** Ground 1 is now closure-confirmed
+   alongside grounds 2 and 3.
 2. **The CAS isn't a CAS.** Submit-time staleness is a field
    comparison in the actor's message handler; the actor is the
    serialization point; mailbox FIFO orders concurrent calls.
@@ -2087,30 +2242,35 @@ create — neither holds here.
   prose qualified by R12 pending Round 2 confirmation).
 - §5.5 (this section; Round 1 disposition + scorecard).
 - §4 Phase 0 candidates updated (§4 below): 0c removed at the
-  trait surface (pending R12); 0f (`PendingTxDiagnostic` +
-  `DiagnosticSink` parameter) and 0g
-  (`LedgerDiagnostic::SnapshotMerged` variant) added.
+  trait surface (R12 closed (a) in segment 2d; Phase 0c truly
+  collapses); 0f (`PendingTxDiagnostic` + `DiagnosticSink`
+  parameter) and 0g (`LedgerDiagnostic::SnapshotMerged`
+  variant) added.
 
 **What Round 2 carries.** R2 (`SnapshotId` opacity / projection
-types) and R12 (Stage 1 `current_snapshot` acquisition
-mechanism) co-disposed in the same Round 2 commit (both
-`SnapshotId`-adjacent); R12's outcome triggers a small
-mechanical softening of §5.5 ground-1 prose (drop the "pending
-R12" qualifier on (a), reword for (b)/(c) as needed); R8
-(`ReservationTTLActor` composition + V3.x FOLLOWUPS), R9
-(two-stage submit flow + intermediate state); criterion-5
-prose strengthening (contract-dependency-on-refresh-quiescence
-framing — landed in segment 2a); R11 (signing-actor split —
-closed in segment 2b as (b); HW-wallet integration in V3.x
-plugs into existing architecture); R14 (`Reservation`
-extensibility seam — closed in segment 2b); R13 / R15 / R16 /
-R17 (output-selection / submission-strategy / fee-estimation /
-event-sourced-recovery — named with V3.0-vs-V3.x dispositions
-in segment 2c; V3.0 ships seams + privacy-default carryovers
-under `OutputSelector` / `SubmissionStrategyActor` /
-`FeeEstimator` / refined diagnostic-stream contract; V3.x
-lands alternative impls / privacy strategies / wallet-side
-estimator / encrypted-persistence consumer); §5.0.4
+types — closed in segment 2d as opaque 16-byte content-
+addressed digest with projection-type discipline preserved-as-
+pattern) and R12 (Stage 1 `current_snapshot` acquisition
+mechanism — closed in segment 2d as (a) content-derived
+`SnapshotId` from existing `LedgerSnapshot` data; Phase 0c
+truly collapses); R8 (`ReservationTTLActor` composition + V3.x
+FOLLOWUPS), R9 (two-stage submit flow + intermediate state);
+criterion-5 prose strengthening (contract-dependency-on-
+refresh-quiescence framing — landed in segment 2a); R11
+(signing-actor split — closed in segment 2b as (b); HW-wallet
+integration in V3.x plugs into existing architecture); R14
+(`Reservation` extensibility seam — closed in segment 2b);
+R13 / R15 / R16 / R17 (output-selection / submission-strategy
+/ fee-estimation / event-sourced-recovery — named with
+V3.0-vs-V3.x dispositions in segment 2c; V3.0 ships seams +
+privacy-default carryovers under `OutputSelector` /
+`SubmissionStrategyActor` / `FeeEstimator` / refined
+diagnostic-stream contract; V3.x lands alternative impls /
+privacy strategies / wallet-side estimator / encrypted-
+persistence consumer); R16 conditional V3.0 lift evaluated in
+segment 2d — `LedgerBlock` does not carry per-block fee data
+today; the V3.0 lift would require a storage-layout amendment,
+**so R16 conservative V3.x default holds**; §5.0.4
 lens-applicability discipline + §7 closure-rule strengthening
 (landed in segment 2c); sink-binding decoupling (now
 independent of R11 per segment-2b (b) closure; segment 2f);
@@ -2386,18 +2546,58 @@ work, by round:
     forward-template content for the eventual rules-queue
     consolidation PR).
 
+- **Segment 2d — R2 + R12 co-disposition; Phase 0c truly
+  collapses; `SnapshotId` opacity closed as 16-byte
+  content-addressed digest.**
+  - **R12 closed as (a) — content-derived `SnapshotId` from
+    existing `LedgerSnapshot` data.** Substrate inspection of
+    `rust/shekyl-engine-core/src/engine/refresh.rs` ll. 147–166
+    (linked from §5.4 R12) confirmed `LedgerSnapshot` carries
+    `synced_height: u64` and `reorg_blocks: ReorgBlocks`
+    (deterministic by construction; sufficient for
+    content-addressed derivation). Stage 1's `LocalPendingTx`
+    derives `SnapshotId` from `LedgerEngine::snapshot()`
+    (existing trait method); Stage 4's `PendingTxActor` receives
+    identical `SnapshotId` values via
+    `LedgerDiagnostic::SnapshotMerged` events using the same
+    digest function. No `LedgerEngine` trait amendment.
+  - **R2 closed as opaque 16-byte content-addressed digest.**
+    `pub struct SnapshotId([u8; 16])`; computed as a
+    domain-separated hash over `LedgerSnapshot`'s
+    deterministic fields. Specific hash primitive pinned at
+    Phase 0 review (segment 2g) per §3.1 PQC-discipline
+    alignment. Truncation to 128 bits sufficient given
+    bounded snapshot population. Determinism required by
+    §5.0's submit-handler field-comparison contract;
+    height-leak side-channel closed by construction.
+  - **§5.5 ground-1 prose softening.** "(pending R12)"
+    qualifier on ground 1 dropped; ground 1 is now
+    closure-confirmed (Phase 0c truly collapses; R12 (a)
+    is the chosen mechanism; no trait amendment needed).
+  - **§4 Phase 0c prose softening.** "(pending R12)"
+    qualifier dropped; Phase 0c is REMOVED at the trait
+    surface — full stop.
+  - **Projection-type discipline preserved-as-pattern.**
+    No V3.0 PR 5 call-site introduces a cross-trust-
+    boundary `SnapshotId` or `SnapshotMerged` consumer;
+    the projection-type implementation lands in the V3.x
+    consumer-actor PR that introduces the first
+    cross-boundary consumer (the discipline itself is
+    documented per PR 4 §5.4.8 #4's recursive-trust-
+    boundary rule).
+  - **R16 conditional V3.0 lift evaluation.** `LedgerBlock`
+    carries no per-block fee data today; lifting R16 (c) to
+    V3.0 would require either a storage-layout amendment
+    (persistence-layer migration) or an unbounded
+    historical-block walk per estimator call — neither is
+    bounded cost. **R16 (c) does not lift to V3.0**; the
+    conservative segment-2c default holds; R16 (c) lands
+    in V3.x behind a coordinated `LedgerEngine` +
+    `FeeEstimator` PR. The R16 §5.4 entry is amended with
+    the segment-2d evaluation outcome.
+
 **Round 2 — pending.**
 
-- **Segment 2d — R2 + R12 co-disposition.**
-  - §5.4 R2 (`SnapshotId` opacity / projection types
-    disposition; Phase 0b detail) **+ R12 (Stage 1
-    `current_snapshot` acquisition mechanism)** — co-disposed
-    in one commit; both are `SnapshotId`-adjacent and benefit
-    from joint review against the actual `LedgerSnapshot`
-    shape. On R12 disposition: mechanically soften §5.5
-    ground-1 prose (drop "pending R12" qualifier on (a);
-    reword for (b)/(c) as needed) and §4 Phase 0c prose
-    (mirror the same softening).
 - **Segment 2e — R8 disposition.**
   - §5.4 R8 (`ReservationTTLActor` composition; V3.x
     FOLLOWUPS entry detail — entry exists; commit pins the

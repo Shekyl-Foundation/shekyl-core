@@ -690,6 +690,55 @@
 
 ### Documentation
 
+- **Stage 1 PR 5 — Round 2 segment 2d (R2 + R12 co-disposition;
+  Phase 0c truly collapses; `SnapshotId` opacity closed as
+  16-byte content-addressed digest).** Doc-only commit on
+  `feat/stage-1-pr5-pending-tx-engine-design`. Segment 2d
+  closes the two remaining `SnapshotId`-adjacent residuals
+  against the actual shape of the `LedgerSnapshot` substrate
+  landed in PR 2. **R12 closes as (a)** — content-derived
+  `SnapshotId` from existing `LedgerSnapshot` data; substrate
+  inspection confirmed `LedgerSnapshot` carries
+  `synced_height: u64` + `reorg_blocks: ReorgBlocks`
+  (deterministic by construction; sufficient for content-
+  addressed derivation). Stage 1's `LocalPendingTx` derives
+  `SnapshotId` from `LedgerEngine::snapshot()` (existing trait
+  method); Stage 4's `PendingTxActor` receives identical
+  values via `LedgerDiagnostic::SnapshotMerged` events using
+  the same digest function. No `LedgerEngine` trait amendment;
+  Phase 0c truly collapses. **R2 closes as opaque 16-byte
+  content-addressed digest** (`pub struct SnapshotId([u8;
+  16])`); domain-separated hash over `LedgerSnapshot`'s
+  deterministic fields; specific hash primitive pinned at
+  Phase 0 review (segment 2g) per §3.1 PQC-discipline
+  alignment. Determinism required by §5.0's submit-handler
+  field-comparison contract; height-leak side-channel closed
+  by construction. **§5.5 ground-1 prose softening** — drop
+  "(pending R12)" qualifier; ground 1 is now closure-confirmed
+  alongside grounds 2 and 3. **§4 Phase 0c prose softening**
+  — drop "(pending R12)" qualifier; Phase 0c is REMOVED at the
+  trait surface, full stop. **Projection-type discipline
+  preserved-as-pattern** — no V3.0 PR 5 call-site introduces a
+  cross-trust-boundary `SnapshotId` or `SnapshotMerged`
+  consumer; the projection-type implementation lands in the
+  V3.x consumer-actor PR per PR 4 §5.4.8 #4's recursive-
+  trust-boundary discipline. **R16 conditional V3.0 lift
+  evaluation** (segment-2c trigger): `LedgerBlock` carries no
+  per-block fee data today; lifting R16 (c) to V3.0 would
+  require either a storage-layout amendment (persistence-
+  layer migration) or an unbounded historical-block walk per
+  estimator call — neither is bounded cost; **R16 (c) does
+  not lift to V3.0**, the conservative segment-2c default
+  holds, and R16 (c) lands in V3.x behind a coordinated
+  `LedgerEngine` + `FeeEstimator` PR. The R1 disposition
+  still holds; segment 2d is segment-2c follow-through
+  (closure-rule operational discipline applied to the
+  conditional-V3.0-lift surface) plus the
+  `SnapshotId`-substrate co-disposition the §8 fenceposts
+  sequenced for this slot. Updates §5.4 R2, §5.4 R12, §5.4
+  R16, §4 Phase 0c, §5.5 ground 1, §5.5 "What Round 2
+  carries" inventory, §8 fenceposts, header status, and
+  CHANGELOG. No code changes; no test impact.
 - **Stage 1 PR 5 — Round 2 segment 2c (closure-rule and
   lens-applicability refinements paired with R13 / R15 / R16 /
   R17 named with dispositions).** Doc-only commit on
