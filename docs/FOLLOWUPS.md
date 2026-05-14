@@ -3015,21 +3015,54 @@ one place to confirm each item's relationship to the wallet stack.
   (`Scanner::new`).
 
 - **`ReservationTTLActor` consumer actor (Stage 1 PR 5 R8
-  composition home; reservation TTL / leak prevention).** PR 5's
-  Round 1 reframe of
+  composition home; reservation TTL / leak prevention; closure
+  amended in segment 2e).** PR 5's Round 1 reframe of
   [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §5.4 R8 reframed reservation TTL / leak prevention as a
   composition-side disposition under the §5.0 actor-mesh
-  framing. `ReservationTTLActor` subscribes to
+  framing; segment 2e (2026-05-14) closed R8 by pinning all
+  V3.0 deliverables (including the new
+  `DiscardReason::TTLAutoDiscard` variant) so the V3.x
+  consumer-actor PR is additive-only — no V3.x trait revision,
+  no V3.x enum revision, no V3.x consumer-side breaking change
+  per [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  continuous-discipline corollary.
+  `ReservationTTLActor` subscribes to
   `PendingTxDiagnostic::BuildSucceeded` events from
   `PendingTxActor`'s diagnostic-stream surface, maintains
   in-memory per-reservation age tracking, emits
-  `PendingTxDiagnostic::ReservationOutstanding { age }`
-  warnings on stale reservations, and signals `PendingTxActor`
-  (via mailbox message) to auto-discard if policy permits. Same
+  `PendingTxDiagnostic::ReservationOutstanding { reservation_id,
+  age }` warnings on stale reservations, and signals
+  `PendingTxActor` (via `AutoDiscardMessage { reservation_id }`
+  mailbox message) to auto-discard if TTL policy permits;
+  `PendingTxActor` then emits `Discarded { reason:
+  TTLAutoDiscard }` (the variant added in segment 2e). Same
   shape as PR 4's `PeerReputationActor` / `RecoveryActor`
   consumer-actor pattern — the `PendingTxEngine` trait surface
   stays minimal; the capability composes.
+
+  **V3.0 deliverables (pinned at segment-2e closure).**
+  PR 5 ships: (1) `PendingTxDiagnostic::BuildSucceeded`
+  emitted at the `build`-success path in `LocalPendingTx::build`
+  / `PendingTxActor::handle_build` (Phase 1 call-site review
+  confirms); (2) `PendingTxDiagnostic::Discarded { reason:
+  SnapshotRotationAutoDiscard }` emitted at `submit`'s
+  snapshot-mismatch path (R5's lazy-discard semantics); (3)
+  `PendingTxDiagnostic::ReservationOutstanding` variant exists
+  in the `#[non_exhaustive]` enum (no V3.0 emitter; V3.x
+  `ReservationTTLActor` is the first emitter); (4) **new in
+  segment 2e:** `DiscardReason::TTLAutoDiscard` variant in the
+  `#[non_exhaustive] DiscardReason` set so V3.x's
+  `ReservationTTLActor` can trigger `Discarded { reason:
+  TTLAutoDiscard }` without a V3.x enum revision.
+
+  **R5 ↔ R8 coherence (segment 2e verification).** R5's
+  `SnapshotRotationAutoDiscard` is the reactive cleanup path
+  (cleanup-on-use); R8's `TTLAutoDiscard` is the proactive
+  complement (age-based policy on never-used reservations).
+  Both share the `DiscardReason`/`Discarded` event
+  infrastructure; downstream consumers see a unified
+  `Discarded` event stream with discriminated reasons.
 
   **Hard mitigation pins (binding on this entry).**
   - **Restart-amnesia per PR 4 §5.4.8 #1 (binding on PR 5 too).**

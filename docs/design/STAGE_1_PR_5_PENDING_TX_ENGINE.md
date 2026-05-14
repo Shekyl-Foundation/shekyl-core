@@ -4,10 +4,12 @@
 — segments 2a (audit-readiness), 2b (R11 signing-actor split
 reframe to (b); R14 reservation extensibility seam), 2c
 (closure-rule and lens-applicability refinements paired with
-R13 / R15 / R16 / R17 named with dispositions), and 2d
+R13 / R15 / R16 / R17 named with dispositions), 2d
 (R2 + R12 co-disposition; Phase 0c truly collapses;
 `SnapshotId` opacity closed as 16-byte content-addressed
-digest) landed (2026-05-14).** This
+digest), and 2e (R8 `ReservationTTLActor` composition closure;
+`DiscardReason::TTLAutoDiscard` variant pin) landed
+(2026-05-14).** This
 document was opened as a seed immediately after Stage 1 PR 4's
 design substrate landed on `dev` (merge commit `6de8335d5`,
 PR #42). Round 1 closes here in one round — not deferred to
@@ -174,6 +176,54 @@ follow-through (closure-rule operational discipline applied
 to the conditional-V3.0-lift surface) plus the
 `SnapshotId`-substrate co-disposition the §8 fenceposts
 sequenced for this slot.
+
+**Round 2 segment 2e (2026-05-14) — R8 `ReservationTTLActor`
+composition closure; `DiscardReason::TTLAutoDiscard` variant
+pin.** Round 1 already reframed R8 (reservation TTL / leak
+prevention) as `ReservationTTLActor` consumer-actor
+composition under the §5.0 actor-mesh framing — same shape as
+PR 4's `PeerReputationActor` / `RecoveryActor` pattern.
+Segment 2e closes R8 by pinning **all V3.0 deliverables**
+explicitly so V3.x's `ReservationTTLActor` introduction is
+additive-only — no V3.x trait revision, no V3.x enum revision,
+no V3.x consumer-side breaking change. The V3.0 deliverables:
+(1) `PendingTxDiagnostic::BuildSucceeded` emitted at the
+`build`-success path in `LocalPendingTx::build` /
+`PendingTxActor::handle_build` (Phase 1 call-site review
+confirms); (2) `PendingTxDiagnostic::Discarded { reason:
+SnapshotRotationAutoDiscard }` emitted at `submit`'s
+snapshot-mismatch path (R5's lazy-discard semantics); (3)
+`PendingTxDiagnostic::ReservationOutstanding` variant exists
+in the `#[non_exhaustive]` enum (no V3.0 emitter;
+`ReservationTTLActor` is the first V3.x emitter); (4) **new
+in segment 2e:** `DiscardReason::TTLAutoDiscard` variant added
+to the `#[non_exhaustive]` `DiscardReason` set so V3.x's
+`ReservationTTLActor` can trigger `PendingTxActor` to emit
+`Discarded { reason: TTLAutoDiscard }` without a V3.x enum
+revision. R5 ↔ R8 coherence verified: R5's `SnapshotRotationAutoDiscard`
+is the reactive cleanup path (cleanup-on-use); R8's
+`TTLAutoDiscard` is the proactive complement (age-based
+policy on never-used reservations). Both share the
+`DiscardReason`/`Discarded` event infrastructure;
+downstream consumers see a unified `Discarded` event stream
+with discriminated reasons. The continuous-discipline
+corollary of
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+applies: the V3.x consumer-actor PR does not get to revise
+the V3.0 diagnostic-stream surface; segment 2e pins all V3.0
+deliverables so V3.x is additive-only. **Hard mitigation
+pins inherited verbatim from PR 4 §5.4.8** (restart-amnesia
+per item 1; recursive trust boundary per item 4; bounded
+mailbox per item 5) bind on the V3.x consumer-actor PR via
+§5.0.3 — no PR 5 amendments needed; the contracts are
+general. The existing
+`ReservationTTLActor` FOLLOWUPS entry is amended with the
+segment-2e `DiscardReason::TTLAutoDiscard` variant pin and
+closure-status confirmation. The R1 disposition still holds;
+segment 2e is residual-closure work that finalizes R8's
+disposition for design purposes. Phase 1 call-site sweep
+(Round 3 commit decomposition) confirms emission discipline
+for V3.0 deliverables 1 and 2.
 
 Subsequent revisions land each design round inline (the
 precedent set by PR 3's
@@ -691,6 +741,8 @@ pub enum DiscardReason {
     ConsumerExplicit,
     SnapshotRotationAutoDiscard,   // R5 lazy-discard variant
     DaemonRejectedTerminal,        // R9 disposition
+    TTLAutoDiscard,                // R8 segment-2e variant (V3.x emitter:
+                                   // ReservationTTLActor; no V3.0 emitter)
 }
 ```
 
@@ -1367,38 +1419,145 @@ to Round 2 with the dispositions framed below.
 - **R7 — `Send + Sync + 'static` bound on `P` (Phase 0a
   candidate).** Stage 4 wraps `LocalPendingTx` in a `kameo`
   actor; the bound has to be on the `P` generic parameter.
-- **R8 — Reservation TTL / leak prevention (reframed as
-  TTL-actor composition; Round 2 + V3.x FOLLOWUPS).** What
-  happens to reservations that are neither submitted nor
-  discarded? Under shape (1), staleness detection at submit
-  invalidates reservations at snapshot rotation, but rotation
-  only happens when refresh merges new state. A wallet that has
-  finished refreshing and sits idle (user reviewing the
-  constructed tx, considering whether to send) holds reservations
-  indefinitely against the same snapshot. A consumer that
-  crashes or has a bug between build and discard leaks the
-  reservation outright. The threat-model property the tracker
-  delivers (monotonicity, wallet-layer double-spend defence)
-  interacts here: leaked reservations are output-locking the
-  wallet against legitimate alternative uses.
+- **R8 — Reservation TTL / leak prevention (closed in Round 2
+  segment 2e as `ReservationTTLActor` consumer-actor
+  composition; V3.0 ships the diagnostic-stream seam complete;
+  V3.x lands the actor).** What happens to reservations that
+  are neither submitted nor discarded? Under shape (1),
+  staleness detection at submit invalidates reservations at
+  snapshot rotation, but rotation only happens when refresh
+  merges new state. A wallet that has finished refreshing and
+  sits idle (user reviewing the constructed tx, considering
+  whether to send) holds reservations indefinitely against the
+  same snapshot. A consumer that crashes or has a bug between
+  build and discard leaks the reservation outright. The
+  threat-model property the tracker delivers (monotonicity,
+  wallet-layer double-spend defence) interacts here: leaked
+  reservations are output-locking the wallet against legitimate
+  alternative uses.
 
   **Reframed disposition under §5.0.** A `ReservationTTLActor`
   subscribes to `PendingTxDiagnostic::BuildSucceeded` events,
   maintains in-memory per-reservation age tracking, emits
-  `ReservationOutstanding { age }` warnings on stale
-  reservations, signals `PendingTxActor` (via mailbox message)
-  to auto-discard if policy permits. Same shape as PR 4's
-  `PeerReputationActor` / `RecoveryActor` consumer-actor
-  pattern. The trait surface stays minimal; the capability
-  composes. Restart-amnesia constraint per PR 4 §5.4.8 #1
-  binds: in-memory only, drop on wallet close.
+  `PendingTxDiagnostic::ReservationOutstanding { reservation_id,
+  age }` warnings on stale reservations, signals
+  `PendingTxActor` (via `AutoDiscardMessage { reservation_id }`
+  mailbox message) to auto-discard if TTL policy permits. Same
+  shape as PR 4's `PeerReputationActor` / `RecoveryActor`
+  consumer-actor pattern. The trait surface stays minimal; the
+  capability composes.
 
-  **Round 2 disposition for PR 5.** Trait-side: confirm that
-  `PendingTxDiagnostic::ReservationOutstanding` and
-  `Discarded { reason: SnapshotRotationAutoDiscard }` events
-  are emitted from the right call sites. **V3.x FOLLOWUPS:**
-  `ReservationTTLActor` consumer-actor entry, same shape as
-  PR 4's V3.x consumer-actor entries.
+  **Disposition (closed in segment 2e).** Same architectural-
+  integrity-now discipline as PR 4's consumer-actor pattern
+  (`PeerReputationActor` / `RecoveryActor`): V3.0 lands the
+  diagnostic-stream seam **complete with all variants needed
+  by V3.x**; V3.x lands the consumer actor without any V3.x
+  trait or enum revision. The pattern is described in PR 4
+  §5.4.7 R6 reframe and binds verbatim here.
+
+  **V3.0 deliverables (segment 2e closure).** PR 5 ships:
+
+  1. **`PendingTxDiagnostic::BuildSucceeded { reservation_id,
+     snapshot_id, outputs_count }`** — emitted at the
+     `build`-success path in `LocalPendingTx::build` /
+     `PendingTxActor::handle_build` immediately after the
+     reservation is recorded in `ReservationTracker` /
+     `reservations` HashMap and before the reply is sent. Phase
+     1 call-site review (Round 3) confirms emission discipline.
+  2. **`PendingTxDiagnostic::Discarded { reservation_id,
+     reason: SnapshotRotationAutoDiscard }`** — emitted at
+     `submit`'s snapshot-mismatch path (R5's lazy-discard
+     semantics) when the field-comparison handler detects a
+     stale reservation. The reservation auto-releases on this
+     event; `submit` returns `SubmitError::SnapshotInvalidated`
+     to the consumer.
+  3. **`PendingTxDiagnostic::ReservationOutstanding {
+     reservation_id, age }` variant exists in the
+     `#[non_exhaustive]` enum** but is **not emitted in V3.0**
+     — `ReservationTTLActor` is the only intended emitter, and
+     it lands in V3.x. The variant existing pre-V3.0 means
+     V3.x's `ReservationTTLActor` introduction does not require
+     a `PendingTxDiagnostic` enum revision; per PR 4 §5.4.8 #6
+     the consumer-side discipline ("treat unknown variants as
+     `_ => ignore`") makes the emission-introduction additive.
+  4. **`DiscardReason::TTLAutoDiscard` variant pin (segment 2e
+     addition).** The current `#[non_exhaustive] enum
+     DiscardReason` set (`ConsumerExplicit`,
+     `SnapshotRotationAutoDiscard`, `DaemonRejectedTerminal`)
+     does not name TTL-triggered discards. Segment 2e adds
+     `TTLAutoDiscard` so V3.x's `ReservationTTLActor` can
+     trigger `PendingTxActor` to emit `Discarded { reason:
+     TTLAutoDiscard }` events without a V3.x `DiscardReason`
+     enum revision. The variant exists pre-V3.0; no V3.0
+     emitter; V3.x `ReservationTTLActor` is the first emitter.
+
+  **Hard mitigation pins (binding on the V3.x consumer-actor
+  PR per PR 4 §5.4.8).** Inherited verbatim via §5.0.3:
+
+  - **Restart-amnesia per PR 4 §5.4.8 #1.** `ReservationTTLActor`
+    state is in-memory only, scoped to the wallet session;
+    drop on wallet close. No persistence beyond the wallet
+    session. (Note: R17's segment-2c refinement permits
+    user-controlled opt-in encrypted persistence for
+    long-running deployments; the TTL actor's age-tracking
+    state is a candidate for that persistence consumer when
+    R17's V3.x implementation lands.)
+  - **Recursive trust boundary per PR 4 §5.4.8 #4.**
+    `ReservationOutstanding` warnings carry `reservation_id`
+    and `age`; cross-boundary consumers receive projected
+    events that elide `reservation_id` (or use opaque
+    per-event handles per R2's projection-type discipline
+    when the V3.x cross-boundary consumer-actor PR lands).
+  - **Bounded mailbox per PR 4 §5.4.8 #5.** A consumer with
+    per-reservation-age tracking unbounded against a
+    reservation-spam scenario is itself an OOM surface;
+    drop-oldest-on-overflow with aggregate age-band counts
+    preserves the warning function at scale.
+
+  **R5 ↔ R8 coherence (segment 2e verification).** R5's lazy
+  auto-discard at submit time (`SnapshotRotationAutoDiscard`)
+  is the **reactive** cleanup path — reservations against
+  rotated snapshots get cleaned up when the consumer tries to
+  use them. R8's `ReservationTTLActor` is the **proactive**
+  complement — reservations that *never get used at all*
+  (idle wallet; consumer crash; build-but-never-submit bug)
+  get cleaned up by age-based policy. The two are
+  architecturally distinct (R5 lives in `PendingTxActor`'s
+  `submit` handler; R8 lives in a separate consumer actor)
+  but use the same `DiscardReason`/`Discarded` event
+  infrastructure. R5 emits `SnapshotRotationAutoDiscard`; R8
+  emits (via `AutoDiscardMessage` round-trip to
+  `PendingTxActor`) `TTLAutoDiscard`. Downstream consumers
+  see a unified `Discarded` event stream with discriminated
+  reasons.
+
+  **Why architectural-integrity-now for V3.0 even though the
+  actor lives in V3.x.** Per
+  [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)'s
+  continuous-discipline corollary, the V3.x consumer-actor PR
+  does not get to revise the V3.0 diagnostic-stream surface;
+  the surface needs to be complete at V3.0 ship time.
+  Segment 2e's closure pins **all V3.0 deliverables**
+  (emission call sites for 1 and 2; variant existence for 3;
+  variant addition for 4) so V3.x's `ReservationTTLActor`
+  introduction is **additive only** — no trait revision, no
+  enum revision, no consumer-side breaking change. Identical
+  pattern to PR 4's `PeerReputationActor` consumer-actor
+  shape.
+
+  **V3.x trigger.** *When Stage 4 actor mesh stabilizes* —
+  same trigger as PR 4's V3.x consumer-actor entries. The
+  trigger gates land together because the consumer-actor
+  pattern requires the actor-system runtime to land first
+  (kameo wiring, mailbox infrastructure, supervisor tree).
+
+  **FOLLOWUPS update.** Segment 2e amends the existing
+  `ReservationTTLActor` FOLLOWUPS entry with the
+  `DiscardReason::TTLAutoDiscard` variant pin (new V3.0
+  deliverable per segment 2e closure) and confirms the
+  segment-2e closure status. No new FOLLOWUPS entry is
+  needed; the existing entry's Round 1 reframe already names
+  the consumer-actor shape and the inherited contracts.
 - **R9 — Daemon-side submit failure → reservation state
   (reframed as two-stage submit flow; Round 2).** R4 covers the
   staleness-fails case (snapshot-invalidated → auto-release →
@@ -2253,8 +2412,13 @@ addressed digest with projection-type discipline preserved-as-
 pattern) and R12 (Stage 1 `current_snapshot` acquisition
 mechanism — closed in segment 2d as (a) content-derived
 `SnapshotId` from existing `LedgerSnapshot` data; Phase 0c
-truly collapses); R8 (`ReservationTTLActor` composition + V3.x
-FOLLOWUPS), R9 (two-stage submit flow + intermediate state);
+truly collapses); R8 (`ReservationTTLActor` composition closure
+— closed in segment 2e; V3.0 ships diagnostic-stream seam
+complete with `DiscardReason::TTLAutoDiscard` variant pin
+added; V3.x lands `ReservationTTLActor` as consumer actor;
+existing FOLLOWUPS entry amended with segment-2e closure-
+status confirmation); R9 (two-stage submit flow +
+intermediate state);
 criterion-5 prose strengthening (contract-dependency-on-
 refresh-quiescence framing — landed in segment 2a); R11
 (signing-actor split — closed in segment 2b as (b); HW-wallet
@@ -2596,12 +2760,51 @@ work, by round:
     `FeeEstimator` PR. The R16 §5.4 entry is amended with
     the segment-2d evaluation outcome.
 
+- **Segment 2e — R8 `ReservationTTLActor` composition closure;
+  `DiscardReason::TTLAutoDiscard` variant pin.**
+  - **R8 closed as `ReservationTTLActor` consumer-actor
+    composition** following PR 4's `PeerReputationActor` /
+    `RecoveryActor` pattern. V3.0 ships the diagnostic-stream
+    seam complete; V3.x lands the actor with no V3.x trait /
+    enum revision required (architectural-integrity-now per
+    [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)).
+  - **V3.0 deliverables (segment 2e closure).**
+    `PendingTxDiagnostic::BuildSucceeded` emitted at the
+    `build`-success path (Phase 1 call-site review confirms);
+    `PendingTxDiagnostic::Discarded { reason:
+    SnapshotRotationAutoDiscard }` emitted at `submit`'s
+    snapshot-mismatch path (R5's lazy-discard semantics);
+    `PendingTxDiagnostic::ReservationOutstanding` variant
+    exists in the `#[non_exhaustive]` enum (no V3.0 emitter;
+    V3.x `ReservationTTLActor` is the first emitter).
+  - **New variant pin (segment 2e addition).**
+    `DiscardReason::TTLAutoDiscard` added to the
+    `#[non_exhaustive]` `DiscardReason` set so V3.x's
+    `ReservationTTLActor` can trigger `PendingTxActor` to
+    emit `Discarded { reason: TTLAutoDiscard }` events without
+    a V3.x enum revision. No V3.0 emitter; V3.x
+    `ReservationTTLActor` is the first emitter. Pinned in
+    §5.0.2 enum sketch.
+  - **R5 ↔ R8 coherence verified.** R5's
+    `SnapshotRotationAutoDiscard` is the reactive cleanup
+    path (cleanup-on-use); R8's `TTLAutoDiscard` is the
+    proactive complement (age-based policy on never-used
+    reservations). Both share the `DiscardReason`/`Discarded`
+    event infrastructure; downstream consumers see a unified
+    `Discarded` event stream with discriminated reasons.
+  - **Hard mitigation pins inherited verbatim from PR 4
+    §5.4.8** (restart-amnesia per #1; recursive trust boundary
+    per #4; bounded mailbox per #5) bind on the V3.x
+    consumer-actor PR via §5.0.3 — no PR 5 amendments needed.
+  - **FOLLOWUPS amendment.** Existing `ReservationTTLActor`
+    consumer-actor entry amended with the segment-2e
+    `DiscardReason::TTLAutoDiscard` variant pin and
+    closure-status confirmation. No new entry; the existing
+    entry's Round 1 reframe already names the consumer-actor
+    shape and the inherited contracts.
+
 **Round 2 — pending.**
 
-- **Segment 2e — R8 disposition.**
-  - §5.4 R8 (`ReservationTTLActor` composition; V3.x
-    FOLLOWUPS entry detail — entry exists; commit pins the
-    compositional contract).
 - **Segment 2f — R9 disposition + sink-binding decouple from
   R11.**
   - §5.4 R9 (two-stage submit flow; intermediate-state shape;

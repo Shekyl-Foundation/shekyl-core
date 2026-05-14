@@ -690,6 +690,52 @@
 
 ### Documentation
 
+- **Stage 1 PR 5 — Round 2 segment 2e (R8 `ReservationTTLActor`
+  composition closure; `DiscardReason::TTLAutoDiscard` variant
+  pin).** Doc-only commit on
+  `feat/stage-1-pr5-pending-tx-engine-design`. Segment 2e closes
+  R8 (reservation TTL / leak prevention) by pinning all V3.0
+  deliverables explicitly so V3.x's `ReservationTTLActor`
+  introduction is additive-only — no V3.x trait revision, no
+  V3.x enum revision, no V3.x consumer-side breaking change per
+  the
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  continuous-discipline corollary. The Round 1 reframe already
+  named `ReservationTTLActor` as the consumer-actor composition
+  shape (same pattern as PR 4's `PeerReputationActor` /
+  `RecoveryActor`); segment 2e pins the V3.0 deliverables: (1)
+  `PendingTxDiagnostic::BuildSucceeded` emitted at the
+  `build`-success path in `LocalPendingTx::build` /
+  `PendingTxActor::handle_build` (Phase 1 call-site review
+  confirms); (2) `PendingTxDiagnostic::Discarded { reason:
+  SnapshotRotationAutoDiscard }` emitted at `submit`'s
+  snapshot-mismatch path (R5's lazy-discard semantics); (3)
+  `PendingTxDiagnostic::ReservationOutstanding` variant exists
+  in the `#[non_exhaustive]` enum (no V3.0 emitter; V3.x
+  `ReservationTTLActor` is the first emitter); (4) **new in
+  segment 2e:** `DiscardReason::TTLAutoDiscard` variant added
+  to the `#[non_exhaustive] DiscardReason` set so V3.x's
+  `ReservationTTLActor` can trigger `PendingTxActor` to emit
+  `Discarded { reason: TTLAutoDiscard }` events without a V3.x
+  enum revision. **R5 ↔ R8 coherence verified** — R5's
+  `SnapshotRotationAutoDiscard` is the reactive cleanup path
+  (cleanup-on-use); R8's `TTLAutoDiscard` is the proactive
+  complement (age-based policy on never-used reservations);
+  both share the `DiscardReason`/`Discarded` event
+  infrastructure. **Hard mitigation pins inherited verbatim
+  from PR 4 §5.4.8** (restart-amnesia per #1; recursive trust
+  boundary per #4; bounded mailbox per #5) bind on the V3.x
+  consumer-actor PR via §5.0.3 — no PR 5 amendments needed.
+  Existing `ReservationTTLActor` FOLLOWUPS entry amended with
+  segment-2e closure-status confirmation and the new
+  `DiscardReason::TTLAutoDiscard` variant pin; no new
+  FOLLOWUPS entry needed. The R1 disposition still holds;
+  segment 2e is residual-closure work that finalizes R8's
+  disposition for design purposes. Updates §5.0.2 `DiscardReason`
+  enum sketch (adds `TTLAutoDiscard` variant); §5.4 R8 (closure
+  prose); §5.5 "What Round 2 carries" inventory; §8 fenceposts;
+  header status; CHANGELOG; FOLLOWUPS. No code changes; no test
+  impact.
 - **Stage 1 PR 5 — Round 2 segment 2d (R2 + R12 co-disposition;
   Phase 0c truly collapses; `SnapshotId` opacity closed as
   16-byte content-addressed digest).** Doc-only commit on
