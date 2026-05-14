@@ -690,6 +690,70 @@
 
 ### Documentation
 
+- **Stage 1 PR 5 — Round 2 segment 2f (R9 two-stage submit-flow
+  closure with daemon-side authority for Finding 2 ambiguous
+  outcomes; `SubmitError` + `SubmitErrorKind` enum pins;
+  sink-binding constructor-bound closure for Finding 4).**
+  Doc-only commit on `feat/stage-1-pr5-pending-tx-engine-design`.
+  Segment 2f closes the last residual on the load-bearing
+  submit path and the constructor-vs-per-method sink-binding
+  question, leaving only Round 2 close-out work for segment 2g.
+  **R9 closure** pins the two-stage submit flow with explicit
+  internal `ReservationState` machine (`Active |
+  SubmitPendingDaemonAck | Resolved`); trait surface unchanged
+  (`outstanding()` counts `Active + SubmitPendingDaemonAck`).
+  Self-continuation message pattern pinned: `PendingTxActor`
+  defers reply until `SubmitCompleted` self-message arrives,
+  preserving mailbox throughput. Per-error-class disposition
+  table pins state-transition + diagnostic-event-sequence +
+  trait-return tuples for `Accepted` / `AlreadyInMempool` /
+  `DoubleSpend` / `FeeTooLow` / `Malformed` / `Timeout` /
+  `NetworkError`. **Finding 2 closes as (B) — daemon-side
+  authority**: on `Timeout` or `DaemonUnavailable`, reservation
+  stays in `SubmitPendingDaemonAck`; consumer-explicit
+  `discard(id, ConsumerExplicit)` is the resolution path; R8's
+  `ReservationTTLActor` (per-state TTL with shorter TTL on
+  `SubmitPendingDaemonAck`) is the safety net for forgotten
+  resolutions. (A) actor-state authority rejected because the
+  phantom-spent-output window violates the monotonicity
+  property the tracker delivers per §3.4.5 (the same "consumer
+  checking does work the trait should be doing structurally"
+  anti-pattern PR 4 named). **`SubmitError` + `SubmitErrorKind`
+  enums** pinned in §5.0.2 (both `#[non_exhaustive]`):
+  `SubmitError = SnapshotInvalidated{..} | DaemonRejected{kind:
+  SubmitErrorKind}`; `SubmitErrorKind = DoubleSpend | FeeTooLow
+  | Malformed | DaemonTimeout | DaemonUnavailable`. **R5 ↔ R8
+  ↔ R9 coherence verified** — reactive cleanup
+  (`SnapshotRotationAutoDiscard`), proactive cleanup
+  (`TTLAutoDiscard`), and daemon-authority cleanup
+  (`DaemonRejectedTerminal`) share the
+  `DiscardReason`/`Discarded` event infrastructure. **No new
+  `PendingTxDiagnostic` variants needed** (existing variant set
+  sufficient for R9 state machine); **no new trait surface
+  methods needed** (`discard(id, ConsumerExplicit)` is
+  sufficient for consumer-explicit resolution of Finding-2
+  ambiguity; `resolve_pending(id, chain_observation)` preserved
+  as a V3.x ergonomic-API candidate). **Sink-binding closure
+  (Finding 4)**: new §5.0.2.1 pins `LocalPendingTx::new(...,
+  sink: Arc<dyn DiagnosticSink>, ...)` as constructor-bound
+  under PR 4 §3.4.5 / R4 (a) consistency. R11's segment-2b
+  closure as (b) made the sink-binding question independent of
+  spend-material disposition; the two close separately.
+  Rationale: engine-identity coupling (1-to-1 mapping load-
+  bearing at the type level); Stage 4 actor wiring alignment
+  (spawn-time DI); call-site cleanliness; runtime-swap surface
+  preserved via sink-side indirection; no load-bearing reason
+  for per-method override in production engines. Existing
+  `SubmitFailureAnalyzer` FOLLOWUPS entry amended with
+  segment-2f closure status; new `TimeoutResolverActor`
+  FOLLOWUPS entry added naming the V3.x ergonomic-complement
+  surface for Finding 2's daemon-side authority disposition.
+  Updates §5.0.2 (`SubmitError` + `SubmitErrorKind` enum
+  sketches); new §5.0.2.1 (sink-binding closure rationale);
+  §5.4 R9 (closure prose with state-transition table); §5.5
+  "What Round 2 carries" inventory; §8 fenceposts (segment 2f
+  moves to "Round 2 — completed"); header status; CHANGELOG;
+  FOLLOWUPS. No code changes; no test impact.
 - **Stage 1 PR 5 — Round 2 segment 2e (R8 `ReservationTTLActor`
   composition closure; `DiscardReason::TTLAutoDiscard` variant
   pin).** Doc-only commit on

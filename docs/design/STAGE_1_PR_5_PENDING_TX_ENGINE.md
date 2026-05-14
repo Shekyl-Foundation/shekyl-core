@@ -7,9 +7,12 @@ reframe to (b); R14 reservation extensibility seam), 2c
 R13 / R15 / R16 / R17 named with dispositions), 2d
 (R2 + R12 co-disposition; Phase 0c truly collapses;
 `SnapshotId` opacity closed as 16-byte content-addressed
-digest), and 2e (R8 `ReservationTTLActor` composition closure;
-`DiscardReason::TTLAutoDiscard` variant pin) landed
-(2026-05-14).** This
+digest), 2e (R8 `ReservationTTLActor` composition closure;
+`DiscardReason::TTLAutoDiscard` variant pin), and 2f
+(R9 two-stage submit-flow closure with daemon-side
+authority for Finding 2 ambiguous outcomes; `SubmitError` +
+`SubmitErrorKind` enum pins; sink-binding constructor-bound
+closure for Finding 4) landed (2026-05-14).** This
 document was opened as a seed immediately after Stage 1 PR 4's
 design substrate landed on `dev` (merge commit `6de8335d5`,
 PR #42). Round 1 closes here in one round — not deferred to
@@ -224,6 +227,82 @@ segment 2e is residual-closure work that finalizes R8's
 disposition for design purposes. Phase 1 call-site sweep
 (Round 3 commit decomposition) confirms emission discipline
 for V3.0 deliverables 1 and 2.
+
+**Round 2 segment 2f (2026-05-14) — R9 two-stage submit-flow
+closure with daemon-side authority for Finding 2 ambiguous
+outcomes; `SubmitError` + `SubmitErrorKind` enum pins;
+sink-binding constructor-bound closure for Finding 4.**
+Segment 2f closes the last residual on the load-bearing
+submit path and the constructor-vs-per-method sink-binding
+question, leaving only Round 2 close-out work for segment 2g.
+**R9 closure** pins the two-stage submit flow with explicit
+internal `ReservationState` machine (`Active |
+SubmitPendingDaemonAck | Resolved`) — trait-surface
+unchanged; `outstanding()` counts `Active` +
+`SubmitPendingDaemonAck`. Per-error-class disposition table
+pins state-transition + diagnostic-event-sequence + trait-
+return tuples for `Accepted` / `AlreadyInMempool` /
+`DoubleSpend` / `FeeTooLow` / `Malformed` / `Timeout` /
+`NetworkError` outcomes. **Finding 2 closes as (B) —
+daemon-side authority for ambiguous outcomes**: on `Timeout`
+or `DaemonUnavailable`, the reservation stays in
+`SubmitPendingDaemonAck`; the wallet does not assume a
+resolution it cannot verify; consumer-explicit `discard(id,
+ConsumerExplicit)` is the resolution path; R8's
+`ReservationTTLActor` (via per-state TTL configuration with
+shorter TTL on `SubmitPendingDaemonAck` than on `Active`) is
+the safety net for forgotten resolutions. (A) (actor-state
+authority on timeout) is rejected because the phantom-spent-
+output window violates the monotonicity property the tracker
+delivers per §3.4.5; deferring the safety to the daemon's
+`DoubleSpend` rejection is the same anti-pattern as
+"consumer's checking does work the trait should be doing
+structurally" identified in PR 4. (C) (bounded grace period)
+is rejected for the same reason on a bounded window.
+**`SubmitError` and `SubmitErrorKind` enums** pinned in
+§5.0.2 (both `#[non_exhaustive]`): `SubmitError` =
+`SnapshotInvalidated{ reservation_snapshot, current_snapshot }`
+| `DaemonRejected{ kind: SubmitErrorKind }`;
+`SubmitErrorKind` = `DoubleSpend | FeeTooLow | Malformed |
+DaemonTimeout | DaemonUnavailable`. **Self-continuation
+message pattern** pinned: `PendingTxActor` defers reply
+until `SubmitCompleted` self-message arrives, preserving
+mailbox throughput and making the intermediate state
+explicit in the actor's state machine. **R5 ↔ R8 ↔ R9
+coherence** verified: R5's reactive cleanup
+(`SnapshotRotationAutoDiscard`), R8's proactive cleanup
+(`TTLAutoDiscard`), and R9's daemon-authority cleanup
+(`DaemonRejectedTerminal`) share the
+`DiscardReason`/`Discarded` event infrastructure; downstream
+consumers see a unified `Discarded` event stream with
+discriminated reasons covering all three closure paths. **No
+new `PendingTxDiagnostic` variants needed** — the existing
+variant set (`SubmitAttempted`, `SubmitSucceeded`,
+`SubmitFailed{kind}`, `Discarded{reason}`) is sufficient to
+observe the full R9 state machine. **No new trait surface
+methods needed** — `discard(id, ConsumerExplicit)` is
+sufficient for consumer-explicit resolution of Finding-2
+ambiguity cases; `resolve_pending(id, chain_observation)`
+preserved as a V3.x ergonomic-API candidate.
+**Sink-binding closure (Finding 4)**: §5.0.2.1 pins
+constructor-bound `LocalPendingTx::new(..., sink: Arc<dyn
+DiagnosticSink>, ...)` under PR 4 §3.4.5 / R4 (a)
+consistency; R11's segment-2b closure as (b) makes the
+sink-binding question independent of spend-material
+disposition; the two close separately. Rationale: engine-
+identity coupling (1-to-1 mapping load-bearing at the type
+level), Stage 4 actor wiring alignment (spawn-time DI),
+call-site cleanliness, runtime-swap surface preserved via
+sink-side indirection. Existing `SubmitFailureAnalyzer`
+FOLLOWUPS entry amended with segment-2f closure status; new
+`TimeoutResolverActor` FOLLOWUPS entry added naming the V3.x
+ergonomic-complement surface for Finding 2's daemon-side
+authority disposition. The R1 disposition still holds;
+segment 2f is residual-closure work that finalizes R9's
+disposition and pins Finding 4 for design purposes. Phase 1
+call-site sweep (Round 3 commit decomposition) confirms
+emission discipline for all V3.0 deliverables. Only Round 2
+close-out (segment 2g) remains.
 
 Subsequent revisions land each design round inline (the
 precedent set by PR 3's
@@ -744,20 +823,98 @@ pub enum DiscardReason {
     TTLAutoDiscard,                // R8 segment-2e variant (V3.x emitter:
                                    // ReservationTTLActor; no V3.0 emitter)
 }
+
+// R9 segment-2f closure: SubmitError + SubmitErrorKind pinned.
+// Returned from `submit(reservation_id)` per the trait surface.
+
+#[non_exhaustive]
+pub enum SubmitError {
+    // R5: pre-daemon staleness check failed; reservation
+    // auto-released; consumer rebuilds against the new snapshot.
+    SnapshotInvalidated {
+        reservation_snapshot: SnapshotId,
+        current_snapshot: SnapshotId,
+    },
+    // R9: daemon round-trip completed with an error; `kind`
+    // discriminates the per-error-class disposition per
+    // §5.4 R9's state-transition table.
+    DaemonRejected { kind: SubmitErrorKind },
+}
+
+#[non_exhaustive]
+pub enum SubmitErrorKind {
+    DoubleSpend,         // R9: terminal; outputs genuinely gone
+    FeeTooLow,           // R9: outputs released to pool; consumer rebuilds
+    Malformed,           // R9: outputs released; bug surfaces diagnostically
+    DaemonTimeout,       // R9 Finding 2: ambiguous; reservation stays
+                         // in SubmitPendingDaemonAck (daemon-side
+                         // authority); consumer-explicit discard
+                         // resolves; R8 TTL is the safety net
+    DaemonUnavailable,   // R9 Finding 2: ambiguous; same disposition
+                         // as DaemonTimeout
+}
 ```
 
+##### §5.0.2.1 Sink-binding closure (segment 2f; Finding 4)
+
 The trait surface adds a `&dyn DiagnosticSink` parameter to
-`LocalPendingTx::new` (constructor-bound, matches PR 4's
-preference per §3.1 spend-secret locality with R4-equivalent
-reasoning) or per-method (per-call dispatch is also fine —
-runtime-swap surface preserved either way). R11's segment-2b
-closure (as (b) — separate `LocalSigner` / `SigningActor`)
-makes the sink-binding question independent of the spend-
-material disposition: `LocalPendingTx<S: Signer>` /
-`PendingTxActor` is the sink-binding-host regardless of where
-spend material lives. Segment 2f closes the constructor-vs-per-
-method shape independently; the working disposition is
-constructor-bound under PR 4 §3.4.5 / R4 (a) consistency.
+`LocalPendingTx::new` — **constructor-bound, closed in
+segment 2f**. The constructor-vs-per-method question is the
+prior adversarial-review Finding 4 from
+[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)'s
+post-R1-closure pass; R11's segment-2b closure (as (b) —
+separate `LocalSigner` / `SigningActor`) makes the sink-binding
+question independent of the spend-material disposition, so the
+two close separately. Segment 2f closes the constructor-vs-per-
+method shape as **constructor-bound** under PR 4
+§3.4.5 / R4 (a) consistency.
+
+**Why constructor-bound, not per-method.**
+
+1. **Engine-identity coupling.** The sink is part of the
+   engine instance's identity — one `LocalPendingTx` /
+   `PendingTxActor` per wallet session, one
+   `DiagnosticSink` consumer per engine. Constructor-binding
+   makes this 1-to-1 mapping load-bearing at the type level;
+   per-method dispatch admits arbitrary consumer plumbing
+   that obscures the mapping.
+2. **Stage 4 actor wiring alignment.** Stage 4's
+   `PendingTxActor` is spawned with its `DiagnosticSink`
+   consumer at spawn time (spawn-time DI); per-method
+   dispatch in Stage 1 would create a Stage-1-vs-Stage-4
+   shape mismatch that the actor-migration would have to
+   bridge. Constructor-binding aligns the two stages by
+   construction.
+3. **Call-site cleanliness.** Per-method dispatch requires
+   every consumer call site (`build`, `submit`, `discard`,
+   `outstanding`) to thread the sink through; constructor-
+   binding scopes the sink to the engine's internals where
+   the emission discipline lives.
+4. **Runtime-swap surface preserved.** Constructor-binding
+   does not foreclose runtime sink swapping — consumers that
+   need to swap sinks construct a new engine instance (or
+   wrap the sink in a runtime-swappable indirection that the
+   engine sees as a single `Arc<dyn DiagnosticSink>`). The
+   per-method-dispatch argument relied on this concern; the
+   indirection-at-the-sink shape covers it without admitting
+   per-method coupling.
+5. **No load-bearing reason for per-method override.** A
+   per-method override pattern is the right shape when
+   different call sites observe different consumer surfaces
+   (e.g., a "build" debugger that doesn't see "submit"
+   events) — but this is a debugging-tooling shape, not a
+   production-engine shape. For production, one sink per
+   engine instance is the load-bearing pattern; debugging
+   tooling implements its own indirection.
+
+**Disposition (closed in segment 2f).** Stage 1's
+`LocalPendingTx::new` takes `sink: Arc<dyn DiagnosticSink>` as
+a constructor parameter; the engine carries it as a field and
+emits through it from internal call sites. R11's `signer:
+Arc<S>` field and `sink: Arc<dyn DiagnosticSink>` field are
+**both** constructor-bound; the two are independent. Stage 4's
+`PendingTxActor` mirrors the shape at spawn time per the actor
+DI pattern.
 
 #### §5.0.3 Cross-cutting `DiagnosticSink` contracts
 
@@ -1559,51 +1716,285 @@ to Round 2 with the dispositions framed below.
   needed; the existing entry's Round 1 reframe already names
   the consumer-actor shape and the inherited contracts.
 - **R9 — Daemon-side submit failure → reservation state
-  (reframed as two-stage submit flow; Round 2).** R4 covers the
+  (closed in Round 2 segment 2f as two-stage submit flow with
+  intermediate `SubmitPendingDaemonAck` state; daemon-side
+  authority disposition for ambiguous outcomes; per-error-class
+  state-transition table pinned).** R4 covers the
   staleness-fails case (snapshot-invalidated → auto-release →
   rebuild). It does **not** cover the staleness-passes-but-
   daemon-rejects case: `submit` consumed the reservation and the
   daemon returned `AlreadyInMempool` / `DoubleSpend` /
-  `FeeTooLow` / `Malformed` / timeout.
+  `FeeTooLow` / `Malformed` / timeout / network-error.
 
   **Reframed flow under §5.0.** `PendingTxActor` receives
   `SubmitMessage`, performs the staleness field-comparison,
   sends `SubmitTxMessage` to `DaemonEngine` actor, awaits the
-  reply (or uses ask-with-continuation pattern). The
-  reservation state during the daemon round-trip is
-  `submitted-pending-daemon-ack` — an intermediate state that
-  must be explicit in the actor's state machine.
+  reply via the **self-continuation pattern** (`PendingTxActor`
+  emits a deferred `SubmitCompleted { id, daemon_result }`
+  message to its own mailbox upon daemon reply; the original
+  `SubmitMessage` reply is sent then). The reservation state
+  during the daemon round-trip is `SubmitPendingDaemonAck` — an
+  intermediate state that **must** be explicit in the actor's
+  internal state machine (not the trait surface).
 
-  Per-error-class semantics:
-  - `AlreadyInMempool` — the tx is already known; treat as
-    success and emit `PendingTxDiagnostic::SubmitSucceeded`
-    (idempotent).
-  - `DoubleSpend` — the outputs are genuinely gone; the
-    tracker's "available" view is wrong and needs refresh;
-    emit `Discarded { reason: DaemonRejectedTerminal }`.
-  - `FeeTooLow` — the consumer may want to retry with higher
-    fee; the outputs should be available again; emit
-    `SubmitFailed { kind: FeeTooLow }` and **release the
-    reservation** to the available pool.
-  - `Malformed` — wallet-side bug or daemon-byzantine path;
-    reservation releases but the bug surfaces diagnostically
-    (`SubmitFailed { kind: Malformed }` plus producer-side
-    `InternalInvariantViolation` if the malformation is
-    wallet-attributable).
-  - Timeout — genuinely ambiguous; the tx may or may not have
-    landed. Conservative disposition: do not auto-retry; force
-    operator to query before resubmitting; reservation stays in
-    `submitted-pending-daemon-ack` state.
+  **Three-state internal state machine (closed in segment 2f).**
 
-  **Round 2 disposition.** Three intermediate-state options:
-  (a) block the `PendingTxActor` mailbox during daemon
-  round-trip (simple, throughput-limiting);
-  (b) **intermediate-state with self-continuation message
-  (`SubmitCompleted { id, daemon_result }`) — preserves
-  throughput, makes the intermediate state explicit, handles
-  daemon timeouts cleanly;** working disposition.
-  (c) one outstanding daemon-submit at a time with queue
-  (compromise).
+  ```rust
+  // Internal to LocalPendingTx / PendingTxActor; NOT a trait
+  // surface property. The trait surface exposes outstanding()
+  // which counts reservations in {Active, SubmitPendingDaemonAck}
+  // (both reserve outputs).
+  enum ReservationState {
+      Active,                    // build successful; submit not started
+      SubmitPendingDaemonAck,    // submit started; awaiting daemon reply
+      Resolved,                  // terminal: succeeded, discarded, or
+                                 // released (entry is removed from the
+                                 // tracker; the variant is named for
+                                 // exposition only)
+  }
+  ```
+
+  Trait surface unchanged: `outstanding()` counts reservations
+  in `Active | SubmitPendingDaemonAck`; resolved reservations
+  are removed from the tracker. The state machine is **invisible
+  to consumers** except through observing
+  `PendingTxDiagnostic::SubmitAttempted` (state entered
+  `SubmitPendingDaemonAck`) and `SubmitSucceeded` / `SubmitFailed`
+  / `SubmitSnapshotInvalidated` / `Discarded` (state exited to
+  `Resolved`). The internal state is not enumerated through
+  the trait surface because no consumer use case requires
+  externally distinguishing `Active` from
+  `SubmitPendingDaemonAck` — `outstanding()`'s aggregate count
+  is the load-bearing query.
+
+  **Per-error-class disposition (closed in segment 2f).** All
+  daemon responses map to a single trait-return + diagnostic-
+  event-sequence + internal state-transition tuple. Each
+  bullet below carries (1) **trait return**, (2) **diagnostic
+  event sequence**, (3) **internal state transition**.
+
+  - **`Accepted`** —
+    `Ok(SubmitSuccess { tx_hash })`;
+    `SubmitAttempted` → `SubmitSucceeded`;
+    → `Resolved` (entry removed from tracker).
+  - **`AlreadyInMempool`** —
+    `Ok(SubmitSuccess { tx_hash })` (idempotent);
+    `SubmitAttempted` → `SubmitSucceeded`;
+    → `Resolved` (entry removed from tracker).
+  - **`DoubleSpend`** —
+    `Err(SubmitError::DaemonRejected { kind: DoubleSpend })`;
+    `SubmitAttempted` → `SubmitFailed{DoubleSpend}` →
+    `Discarded{DaemonRejectedTerminal}`;
+    → `Resolved` (outputs genuinely gone; output-state
+    subtlety below).
+  - **`FeeTooLow`** —
+    `Err(SubmitError::DaemonRejected { kind: FeeTooLow })`;
+    `SubmitAttempted` → `SubmitFailed{FeeTooLow}`;
+    → `Resolved` (outputs released to the available pool;
+    consumer rebuilds with higher fee).
+  - **`Malformed`** —
+    `Err(SubmitError::DaemonRejected { kind: Malformed })`;
+    `SubmitAttempted` → `SubmitFailed{Malformed}`
+    (+ producer-side `InternalInvariantViolation` if the
+    malformation is wallet-attributable);
+    → `Resolved` (outputs released; bug surfaces
+    diagnostically; consumer should not auto-retry).
+  - **`Timeout`** —
+    `Err(SubmitError::DaemonRejected { kind: DaemonTimeout })`;
+    `SubmitAttempted` → `SubmitFailed{DaemonTimeout}`;
+    **stays in `SubmitPendingDaemonAck`** (see Finding 2
+    below — daemon-side authority for ambiguous outcomes).
+  - **`Network error`** —
+    `Err(SubmitError::DaemonRejected { kind: DaemonUnavailable })`;
+    `SubmitAttempted` → `SubmitFailed{DaemonUnavailable}`;
+    **stays in `SubmitPendingDaemonAck`** (see Finding 2
+    below — same daemon-side authority disposition as
+    Timeout).
+
+  **DoubleSpend output-state subtlety.** On `DoubleSpend`, the
+  outputs are genuinely gone (spent on-chain in some other tx
+  the wallet doesn't yet know about). The tracker discards the
+  reservation, but the wallet's view of "available outputs" is
+  stale until next refresh. Consumers must refresh before
+  attempting to spend other outputs that overlap. V3.x
+  consumer-actor (`SubmitFailureAnalyzer`) can auto-trigger
+  `RefreshActor::request_refresh()` on `DoubleSpend`
+  observation; for V3.0, consumer-explicit refresh is the
+  disposition.
+
+  **Finding 2 closure — daemon-side authority for ambiguous
+  outcomes.** Timeout and `DaemonUnavailable` are the
+  load-bearing ambiguity cases: the daemon may have accepted
+  the tx (and the response was lost in transit) or rejected
+  it (and the rejection was lost) — the wallet cannot
+  determine ground truth from its own state. Three options
+  were evaluated:
+
+  - **(A) Actor-state authority on timeout.** Treat timeout as
+    `Resolved` immediately; release outputs back to pool.
+    **Risk:** phantom-spent-output window between timeout and
+    next refresh — if the tx actually landed, the wallet's
+    available pool says "outputs available" but they're
+    on-chain; next consumer-side spend may wallet-double-spend
+    (which the daemon will then reject as `DoubleSpend`).
+    Refresh cleans up the state eventually, but the window is
+    user-visible (UI may show an output as "spendable" then
+    abruptly "spent").
+  - **(B) Daemon-side authority.** Timeout keeps the
+    reservation in `SubmitPendingDaemonAck`; outputs stay
+    reserved; consumer (or V3.x `TimeoutResolverActor`)
+    explicitly resolves after chain-state observation
+    (e.g., observes `tx_hash` in `LedgerDiagnostic::SnapshotMerged`
+    → calls `discard(id, ConsumerExplicit)` to release; or
+    observes no chain landing after grace period → calls
+    `discard(id, ConsumerExplicit)` to retry from rebuild).
+    R8's `ReservationTTLActor` provides the safety net for
+    forgotten resolutions: per-state TTL configuration permits
+    shorter TTL on `SubmitPendingDaemonAck` than on `Active`
+    (V3.x deliverable; segment-2e variant pin
+    `DiscardReason::TTLAutoDiscard` covers this case).
+  - **(C) Bounded grace period.** Timeout keeps reservation
+    in `SubmitPendingDaemonAck` for N blocks (e.g., 20 blocks
+    ≈ 40 minutes); after grace, auto-resolves to `Resolved`
+    (release outputs). Phantom-spent window still exists during
+    grace period; only the bound differs from (A).
+
+  **Closes as (B) — daemon-side authority.** Rationale: the
+  daemon is the wallet-external source of truth on chain
+  state; the wallet's actor-state must not assume a resolution
+  it cannot verify. The phantom-spent-output window of (A)/(C)
+  is a wallet-side double-spend hazard that violates the
+  threat-model property the tracker delivers
+  (monotonicity; wallet-layer double-spend defence per
+  §3.4.5). R8's TTL safety net handles forgotten resolutions
+  (the failure mode where (B) would dominate (A)/(C) on
+  operational hygiene). Consumer-explicit resolution preserves
+  the wallet's authority to decide based on chain observation;
+  cross-stream correlation (`SubmitFailed{Timeout}` event +
+  `LedgerDiagnostic::SnapshotMerged` with the tx hash) is the
+  composition-side hook the V3.x `TimeoutResolverActor`
+  consumes.
+
+  **Why (A) is not a `00-mission.mdc` priority-1 violation
+  on its face.** The wallet-side double-spend hazard surfaces
+  only when consumer behaves badly (spends from the same
+  output pool without refreshing). The daemon's `DoubleSpend`
+  rejection on the *second* attempt is the safety net.
+  However, per
+  [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)'s
+  threat-model anchoring discipline, "the daemon's safety net
+  is doing work the wallet should be doing structurally" is
+  the same anti-pattern as PR 4's "the consumer's checking
+  is doing work the trait should be doing structurally."
+  Choosing (B) closes the structural property the threat
+  model needs; (A) would defer it to consumer behavior + a
+  daemon-side check we can't guarantee under
+  adversarial-daemon framing.
+
+  **`SubmitError` + `SubmitErrorKind` enum pins (segment 2f
+  closure).** Pinned in §5.0.2; both are `#[non_exhaustive]`
+  for future-additive variants:
+
+  ```rust
+  #[non_exhaustive]
+  pub enum SubmitError {
+      // R5: pre-daemon staleness check failed; reservation
+      // auto-released; consumer rebuilds against new snapshot.
+      SnapshotInvalidated {
+          reservation_snapshot: SnapshotId,
+          current_snapshot: SnapshotId,
+      },
+      // R9: daemon-round-trip completed with an error; kind
+      // discriminates the per-error-class disposition above.
+      DaemonRejected { kind: SubmitErrorKind },
+  }
+
+  #[non_exhaustive]
+  pub enum SubmitErrorKind {
+      DoubleSpend,         // R9: terminal; outputs genuinely gone
+      FeeTooLow,           // R9: outputs released to pool
+      Malformed,           // R9: outputs released; bug surfaces
+      DaemonTimeout,       // R9 Finding 2: ambiguous; stays in
+                           // SubmitPendingDaemonAck
+      DaemonUnavailable,   // R9 Finding 2: ambiguous; stays in
+                           // SubmitPendingDaemonAck
+  }
+  ```
+
+  **R5 ↔ R8 ↔ R9 coherence (segment 2f verification).** All
+  three residuals share the `DiscardReason`/`Discarded` event
+  infrastructure pinned in §5.0.2:
+
+  - **R5 (reactive cleanup-on-use)** — `submit`'s pre-daemon
+    staleness check fails → `Discarded { reason:
+    SnapshotRotationAutoDiscard }`. Wallet-internal authority
+    (the wallet sees the snapshot rotated; no daemon round-trip
+    needed).
+  - **R8 (proactive cleanup-on-age)** — V3.x
+    `ReservationTTLActor` observes per-reservation age →
+    sends `AutoDiscardMessage` → `PendingTxActor` emits
+    `Discarded { reason: TTLAutoDiscard }`. Wallet-internal
+    authority (the wallet sees age threshold exceeded). R8's
+    per-state TTL config covers Finding 2's safety net
+    (shorter TTL on `SubmitPendingDaemonAck`).
+  - **R9 (daemon-authority cleanup-on-rejection)** — daemon
+    rejects definitively (`DoubleSpend`) → `Discarded { reason:
+    DaemonRejectedTerminal }`. Wallet defers to daemon
+    authority for terminal-rejection visibility (Finding 2
+    closure).
+
+  Downstream consumers see a unified `Discarded` event stream
+  with discriminated reasons covering all three closure paths.
+
+  **Why no new `PendingTxDiagnostic` variants needed in
+  segment 2f.** The existing variant set (`SubmitAttempted`,
+  `SubmitSucceeded`, `SubmitFailed{kind}`, `Discarded{reason}`)
+  is sufficient to observe the full R9 state machine. The
+  intermediate `SubmitPendingDaemonAck` state is observed via
+  the **absence** of a terminating event after
+  `SubmitAttempted` (per PR 4's emission/return-coherence
+  contract pinned in §5.0.3); consumers that need explicit
+  visibility implement their own per-reservation state
+  tracking. No `SubmitPending` variant is added because it
+  would duplicate `SubmitAttempted`'s semantics; no
+  `SubmitTimedOut` distinct from `SubmitFailed{DaemonTimeout}`
+  is needed because the `kind` discriminator already carries
+  the Finding-2 disposition signal.
+
+  **No new trait surface methods needed in segment 2f.**
+  `discard(id, ConsumerExplicit)` is sufficient for consumer-
+  explicit resolution of Finding-2 ambiguity cases (Timeout /
+  Unavailable). A `resolve_pending(id, chain_observation)`
+  method would be a thin wrapper around `discard` with no
+  new semantic; preserved as a V3.x ergonomic-API candidate
+  if consumer telemetry surfaces the boilerplate.
+
+  **V3.0 deliverables (segment 2f closure).** PR 5 ships:
+
+  1. **`SubmitError` + `SubmitErrorKind` enums** in §5.0.2
+     (both `#[non_exhaustive]`).
+  2. **Per-error-class state-transition discipline** as
+     pinned in the table above; emission discipline (Phase 1
+     call-site review).
+  3. **Self-continuation message pattern** for daemon
+     round-trip (`PendingTxActor` defers reply until
+     `SubmitCompleted` self-message arrives).
+  4. **Daemon-side authority disposition** for Timeout /
+     Unavailable: reservation stays in `SubmitPendingDaemonAck`;
+     consumer-explicit `discard(id, ConsumerExplicit)` is the
+     resolution path; R8's TTL is the safety net for
+     forgotten resolutions.
+  5. **`SubmitFailureAnalyzer`-readiness**: all events that
+     V3.x's `SubmitFailureAnalyzer` consumes are emitted from
+     the right call sites (Phase 1 confirms).
+
+  **V3.x deferrals.** Existing `SubmitFailureAnalyzer`
+  consumer-actor FOLLOWUPS entry is amended with segment-2f
+  closure status; no new FOLLOWUPS entry needed (the analyzer
+  shape is already pinned). `TimeoutResolverActor` (Finding 2
+  ergonomic complement) is a V3.x consumer-actor candidate;
+  segment 2f adds a brief FOLLOWUPS entry naming this
+  surface.
 - **R10 — Concurrent build/submit/discard on the same
   reservation (dissolved by §5.0).** Under the actor mesh,
   mailbox FIFO is the contract. Two concurrent `submit(id)`
@@ -2417,8 +2808,16 @@ truly collapses); R8 (`ReservationTTLActor` composition closure
 complete with `DiscardReason::TTLAutoDiscard` variant pin
 added; V3.x lands `ReservationTTLActor` as consumer actor;
 existing FOLLOWUPS entry amended with segment-2e closure-
-status confirmation); R9 (two-stage submit flow +
-intermediate state);
+status confirmation); R9 (two-stage submit flow with explicit
+`SubmitPendingDaemonAck` intermediate state; daemon-side
+authority disposition for Finding 2 ambiguous outcomes;
+`SubmitError` + `SubmitErrorKind` enum pins —
+closed in segment 2f; existing `SubmitFailureAnalyzer`
+FOLLOWUPS entry amended; new `TimeoutResolverActor`
+FOLLOWUPS entry added for Finding 2 ergonomic complement);
+sink-binding constructor-bound closure (Finding 4 — closed
+in segment 2f via §5.0.2.1 under PR 4 §3.4.5 / R4 (a)
+consistency);
 criterion-5 prose strengthening (contract-dependency-on-
 refresh-quiescence framing — landed in segment 2a); R11
 (signing-actor split — closed in segment 2b as (b); HW-wallet
@@ -2436,10 +2835,11 @@ segment 2d — `LedgerBlock` does not carry per-block fee data
 today; the V3.0 lift would require a storage-layout amendment,
 **so R16 conservative V3.x default holds**; §5.0.4
 lens-applicability discipline + §7 closure-rule strengthening
-(landed in segment 2c); sink-binding decoupling (now
-independent of R11 per segment-2b (b) closure; segment 2f);
-plus Phase 0 enumeration and the cross-cutting
-`DiagnosticSink` contract-doc generalization (§5.0.3).
+(landed in segment 2c); sink-binding decoupling (closed in
+segment 2f as constructor-bound; PR 4 §3.4.5 / R4 (a)
+consistency; rationale in §5.0.2.1); plus Phase 0
+enumeration and the cross-cutting `DiagnosticSink`
+contract-doc generalization (§5.0.3 — segment 2g).
 
 **What Round 3 carries.** Commit decomposition + Phase 1
 commit list (per the PR 1 / PR 2 / PR 3 / PR 4 precedent).
@@ -2803,23 +3203,89 @@ work, by round:
     entry's Round 1 reframe already names the consumer-actor
     shape and the inherited contracts.
 
+- **Segment 2f — R9 two-stage submit-flow closure with
+  daemon-side authority for Finding 2 ambiguous outcomes;
+  `SubmitError` + `SubmitErrorKind` enum pins; sink-binding
+  constructor-bound closure for Finding 4.**
+  - **R9 closed as two-stage submit flow** with explicit
+    internal `ReservationState` machine (`Active |
+    SubmitPendingDaemonAck | Resolved`). Trait surface
+    unchanged; `outstanding()` counts `Active +
+    SubmitPendingDaemonAck` (both reserve outputs). The
+    state machine is invisible to consumers except through
+    the diagnostic stream's `SubmitAttempted` (state entered)
+    and `SubmitSucceeded` / `SubmitFailed` /
+    `SubmitSnapshotInvalidated` / `Discarded` (state exited).
+  - **Self-continuation message pattern** pinned:
+    `PendingTxActor` defers reply until `SubmitCompleted`
+    self-message arrives, preserving mailbox throughput and
+    making the intermediate state explicit in the actor's
+    state machine without blocking concurrent message
+    processing.
+  - **Per-error-class disposition table** pins state-
+    transition + diagnostic-event-sequence + trait-return
+    tuples for all daemon-response classes (`Accepted`,
+    `AlreadyInMempool`, `DoubleSpend`, `FeeTooLow`,
+    `Malformed`, `Timeout`, `NetworkError`).
+  - **Finding 2 closes as (B) — daemon-side authority for
+    ambiguous outcomes.** On `Timeout` or `DaemonUnavailable`,
+    reservation stays in `SubmitPendingDaemonAck`; the wallet
+    does not assume a resolution it cannot verify; consumer-
+    explicit `discard(id, ConsumerExplicit)` is the resolution
+    path; R8's `ReservationTTLActor` (via per-state TTL
+    configuration with shorter TTL on `SubmitPendingDaemonAck`)
+    is the safety net for forgotten resolutions. (A)
+    actor-state authority on timeout is rejected because the
+    phantom-spent-output window violates the monotonicity
+    property the tracker delivers per §3.4.5; deferring the
+    safety to the daemon's `DoubleSpend` rejection is the same
+    "consumer's checking does work the trait should be doing
+    structurally" anti-pattern PR 4 named. (C) bounded grace
+    period is rejected on the same grounds with bounded
+    window.
+  - **`SubmitError` + `SubmitErrorKind` enum pins** in §5.0.2
+    (both `#[non_exhaustive]`). `SubmitError =
+    SnapshotInvalidated{..} | DaemonRejected{kind:
+    SubmitErrorKind}`; `SubmitErrorKind = DoubleSpend |
+    FeeTooLow | Malformed | DaemonTimeout | DaemonUnavailable`.
+  - **R5 ↔ R8 ↔ R9 coherence verified.** R5's reactive
+    cleanup (`SnapshotRotationAutoDiscard`), R8's proactive
+    cleanup (`TTLAutoDiscard`), and R9's daemon-authority
+    cleanup (`DaemonRejectedTerminal`) share the
+    `DiscardReason`/`Discarded` event infrastructure;
+    downstream consumers see a unified `Discarded` event
+    stream with discriminated reasons.
+  - **No new `PendingTxDiagnostic` variants needed.** The
+    existing variant set is sufficient for the R9 state
+    machine; segment 2f adds enum variants only to
+    `SubmitErrorKind`.
+  - **No new trait surface methods needed.** `discard(id,
+    ConsumerExplicit)` is sufficient for consumer-explicit
+    resolution of Finding-2 ambiguity cases.
+    `resolve_pending(id, chain_observation)` preserved as a
+    V3.x ergonomic-API candidate if consumer telemetry
+    surfaces the boilerplate.
+  - **Sink-binding closure (Finding 4).** §5.0.2.1 pins
+    `LocalPendingTx::new(..., sink: Arc<dyn DiagnosticSink>,
+    ...)` as constructor-bound under PR 4 §3.4.5 / R4 (a)
+    consistency. R11's segment-2b closure as (b) makes the
+    sink-binding question independent of spend-material
+    disposition; the two close separately. Rationale:
+    engine-identity coupling (1-to-1 mapping load-bearing at
+    the type level); Stage 4 actor wiring alignment
+    (spawn-time DI); call-site cleanliness; runtime-swap
+    surface preserved via sink-side indirection; no
+    load-bearing reason for per-method override in
+    production engines.
+  - **FOLLOWUPS amendments.** Existing `SubmitFailureAnalyzer`
+    consumer-actor entry amended with segment-2f closure
+    status; new `TimeoutResolverActor` entry added naming the
+    V3.x ergonomic-complement surface for Finding 2's
+    daemon-side authority disposition. Cross-references the
+    R8 `ReservationTTLActor` safety-net role.
+
 **Round 2 — pending.**
 
-- **Segment 2f — R9 disposition + sink-binding decouple from
-  R11.**
-  - §5.4 R9 (two-stage submit flow; intermediate-state shape;
-    per-error-class disposition; mailbox-ordering vs
-    daemon-side authority for terminal-rejection visibility —
-    Finding 2 from the prior adversarial pass).
-  - §5.0.2 sink-binding decouple from R11 — constructor-bound
-    under PR 4 §3.4.5 / R4 (a) consistency, independent of
-    R11's spend-material disposition (closed as (b) in segment
-    2b); Finding 4 from the prior adversarial pass. Note that
-    R11's segment-2b closure leaves the sink-binding question
-    independent because (b)'s `LocalPendingTx<S: Signer>` /
-    `PendingTxActor` is the sink-binding-host regardless of
-    whether spend material is held by `LocalPendingTx` or by
-    `LocalSigner`.
 - **Segment 2g — Round 2 close-out.**
   - §4 Phase 0 final enumeration (binding type-signature
     detail for 0a / 0b / 0d / 0e / 0f / 0g; cross-trait

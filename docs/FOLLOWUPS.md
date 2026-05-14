@@ -3111,6 +3111,20 @@ one place to confirm each item's relationship to the wallet stack.
   per-error-class disposition; the analyzer is the
   composition-side counterpart that detects patterns across
   failures rather than reacting to single events.
+
+  **Segment-2f closure status (2026-05-14).** R9 closed in
+  Round 2 segment 2f with two-stage submit flow + internal
+  `ReservationState` machine + daemon-side authority
+  disposition for Finding 2 ambiguous outcomes. The
+  analyzer's shape is **unchanged by segment 2f**; the
+  `PendingTxDiagnostic` events it subscribes to
+  (`SubmitFailed`, `SnapshotInvalidated`) are the same;
+  `SubmitErrorKind` now pinned as `DoubleSpend | FeeTooLow
+  | Malformed | DaemonTimeout | DaemonUnavailable` per
+  segment 2f. The analyzer subscribes to all five kinds; the
+  pattern-detection bullets below remain accurate (with
+  `DaemonTimeout` / `DaemonUnavailable` covering the
+  segment-2f "Timeout" disposition).
   `SubmitFailureAnalyzer` subscribes to
   `PendingTxDiagnostic::SubmitFailed` and
   `SubmitSnapshotInvalidated` events; detects patterns:
@@ -3149,6 +3163,80 @@ one place to confirm each item's relationship to the wallet stack.
   (per-error-class semantics);
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.7 R6 reframe (`PeerReputationActor` cross-reference).
+
+- **`TimeoutResolverActor` consumer actor (Stage 1 PR 5 R9
+  Finding 2 composition; ergonomic complement for daemon-
+  side authority disposition; V3.x).** PR 5's Round 2
+  segment 2f closure of
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R9 closed Finding 2 (mailbox-ordering vs daemon-side
+  authority for terminal-rejection visibility) as
+  **daemon-side authority**: on `SubmitErrorKind::DaemonTimeout`
+  or `DaemonUnavailable`, the reservation stays in
+  `SubmitPendingDaemonAck`; consumer-explicit `discard(id,
+  ConsumerExplicit)` is the resolution path; R8's
+  `ReservationTTLActor` is the safety net for forgotten
+  resolutions. `TimeoutResolverActor` is the V3.x ergonomic
+  complement that automates the consumer-side resolution
+  loop:
+
+  - Subscribes to `PendingTxDiagnostic::SubmitFailed { kind:
+    DaemonTimeout | DaemonUnavailable }` events.
+  - Subscribes to `LedgerDiagnostic::SnapshotMerged` events
+    (cross-stream correlation: did the timed-out tx actually
+    land on chain?).
+  - On observing the timed-out `tx_hash` in a merged
+    snapshot → calls `discard(id, ConsumerExplicit)` to
+    release the reservation entry (the on-chain tx is now
+    the authoritative record).
+  - On observing **no** chain landing after a configurable
+    grace period (default: N blocks ≈ M minutes; consumer-
+    policy-configurable) → calls `discard(id,
+    ConsumerExplicit)` to release outputs back to the pool;
+    consumer's rebuild loop picks up.
+
+  **Why V3.x, not V3.0.** Segment 2f's daemon-side authority
+  disposition is wallet-correct without the resolver actor —
+  R8's `ReservationTTLActor` already covers forgotten
+  resolutions via per-state TTL configuration with shorter
+  TTL on `SubmitPendingDaemonAck`. The `TimeoutResolverActor`
+  is **operational ergonomics**, not a wallet-correctness
+  primitive; deferring it to V3.x preserves V3.0's "do less,
+  do it right" posture and lets the actor's design land
+  alongside `SubmitFailureAnalyzer` once Stage 4 actor mesh
+  stabilizes.
+
+  **Hard mitigation pins (binding).**
+  - **Recursive trust boundary per PR 4 §5.4.8 #4 (binding).**
+    `TimeoutResolverActor` operates in-process on the
+    wallet's own reservation IDs and tx hashes; cross-
+    boundary projections (e.g., telemetry that a particular
+    reservation timed out and was resolved by chain
+    observation) drop `reservation_id` / `tx_hash`
+    correlation surface and emit only aggregate counts.
+  - **Restart-amnesia per PR 4 §5.4.8 #1 (binding).** The
+    actor's grace-period timers are in-memory only;
+    restart drops them. R8's `ReservationTTLActor` is the
+    durable safety net (per-state TTLs run on the
+    restart-amnesia substrate too — they're event-driven
+    via timestamp comparison against the reservation's age,
+    not wall-clock timers).
+  - **Recursive consumer-policy.** Grace-period duration is
+    consumer-policy-configurable; default values are sized
+    conservatively (longer than typical reorg-depth + mempool
+    propagation delay) to minimize false-resolution risk.
+
+  **Trigger:** *when Stage 4 actor mesh stabilizes;
+  `LedgerDiagnostic::SnapshotMerged` (PR 4) is a
+  prerequisite for the chain-observation correlation path.*
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0.2 (`SubmitErrorKind` variant set; `DaemonTimeout` /
+  `DaemonUnavailable`), §5.4 R9 (Finding 2 daemon-side
+  authority closure; segment-2f V3.x deliverable named the
+  V3.x ergonomic-API candidate `resolve_pending(id,
+  chain_observation)`); R8 `ReservationTTLActor` entry above
+  (safety-net role).
 
 - **`ReservationAuditActor` consumer actor (Stage 1 PR 5 §5.0.2
   composition; in-memory wallet-action audit log).** Subscribes
