@@ -3058,19 +3058,68 @@ one place to confirm each item's relationship to the wallet stack.
   no V3.x enum revision, no V3.x consumer-side breaking change
   per [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
   continuous-discipline corollary.
-  `ReservationTTLActor` subscribes to
-  `PendingTxDiagnostic::BuildSucceeded` events from
-  `PendingTxActor`'s diagnostic-stream surface, maintains
-  in-memory per-reservation age tracking, emits
-  `PendingTxDiagnostic::ReservationOutstanding { reservation_id,
-  age }` warnings on stale reservations, and signals
-  `PendingTxActor` (via `AutoDiscardMessage { reservation_id }`
-  mailbox message) to auto-discard if TTL policy permits;
-  `PendingTxActor` then emits `Discarded { reason:
-  TTLAutoDiscard }` (the variant added in segment 2e). Same
-  shape as PR 4's `PeerReputationActor` / `RecoveryActor`
-  consumer-actor pattern — the `PendingTxEngine` trait surface
-  stays minimal; the capability composes.
+  `ReservationTTLActor` subscribes to **both
+  reservation-creation events and reservation-terminal
+  events** on `PendingTxActor`'s diagnostic-stream surface,
+  maintains in-memory per-reservation age tracking, emits
+  `PendingTxDiagnostic::ReservationOutstanding {
+  reservation_id, age }` warnings on stale reservations, and
+  signals `PendingTxActor` (via `AutoDiscardMessage {
+  reservation_id }` mailbox message) to auto-discard if TTL
+  policy permits; `PendingTxActor` then emits `Discarded {
+  reason: TTLAutoDiscard }` (the variant added in segment
+  2e). Same shape as PR 4's `PeerReputationActor` /
+  `RecoveryActor` consumer-actor pattern — the
+  `PendingTxEngine` trait surface stays minimal; the
+  capability composes.
+
+  **Subscription contract (Copilot-fix follow-up refinement
+  to segment-2e closure).** Subscribing only to
+  `BuildSucceeded` would leak closed reservations into the
+  actor's in-memory map forever, producing stale
+  `ReservationOutstanding` warnings on already-terminated
+  reservations and spurious `AutoDiscardMessage` round-trips
+  to `PendingTxActor`. The complete subscription contract:
+
+  - **`PendingTxDiagnostic::BuildSucceeded { reservation_id,
+    snapshot_id, outputs_count }`** — insert
+    `{reservation_id → started_at}` into the in-memory
+    age-tracking map (tracking-start transition).
+  - **`PendingTxDiagnostic::SubmitSucceeded { reservation_id,
+    tx_hash }`** — remove `reservation_id` from the
+    age-tracking map (terminal — reservation consumed by
+    submit).
+  - **`PendingTxDiagnostic::Discarded { reservation_id,
+    reason }`** — remove `reservation_id` from the
+    age-tracking map regardless of `reason`. Covers
+    `ConsumerExplicit`, `SnapshotRotationAutoDiscard`,
+    `DaemonRejectedTerminal` (R9 segment-2f), and
+    `TTLAutoDiscard` (the actor's own auto-discard fires;
+    self-cleanup).
+
+  **What `SubmitFailed` does *not* close.** Per segment-2f
+  R9's two-stage submit flow (Finding-2 daemon-side
+  authority disposition), `SubmitFailed` on
+  `DaemonTimeout` / `DaemonUnavailable` keeps the
+  reservation in `SubmitPendingDaemonAck` — the
+  reservation is still outstanding, still output-locking,
+  and still ages. The TTL actor **does not** remove the
+  reservation on `SubmitFailed`; terminal cleanup is only
+  `SubmitSucceeded` or `Discarded` per the contract above.
+  Optional V3.x refinement: the actor may subscribe to
+  `SubmitAttempted` to apply a shorter TTL on
+  `SubmitPendingDaemonAck`-state reservations (the
+  daemon-side ambiguity window has a different
+  policy-acceptable age than a never-attempted
+  reservation); this is a V3.x consumer-actor policy
+  choice, not a V3.0 diagnostic-stream-surface requirement.
+
+  **Memory-bound property.** With the full subscription
+  contract above, the actor's age-tracking map is bounded
+  by the count of currently-outstanding reservations
+  (i.e., `PendingTxActor::outstanding()`'s return value),
+  not by the cumulative count of all reservations the
+  wallet has ever created.
 
   **V3.0 deliverables (pinned at segment-2e closure).**
   PR 5 ships: (1) `PendingTxDiagnostic::BuildSucceeded`

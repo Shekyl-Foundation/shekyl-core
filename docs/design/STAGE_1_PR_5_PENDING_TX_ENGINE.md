@@ -597,16 +597,23 @@ M3-tail precedent) and PR 5's design rounds extend.
 
 The "what does this trait deliver against the threat model?"
 question per §16 is answered above (§3.1). The standard
-per-trait pre-flight checklist:
+per-trait pre-flight checklist (status updated through
+segment 2g):
 
 - [x] Threat-model alignment (§3.1).
 - [x] Architectural-inheritance audit projection (§3.2).
-- [ ] R1 disposition (§5 — pending design rounds).
-- [ ] Phase 0 spec amendments identified (§4 — pending §5
-      resolution).
-- [ ] Phase 1 commit decomposition (§6 — pending §5 resolution).
-- [ ] PR 4 Round 3 input bundle (§5.4 disposition + rationale
-      packaged for PR 4 Round 3 consumption).
+- [x] R1 disposition (§5 — closed in Round 1 as shape (1)
+      build-against-current-snapshot + snapshot-ID pinning
+      under the §5.0 actor-mesh framing; see §5.5).
+- [x] Phase 0 spec amendments identified (§4 — closed in
+      Round 2 segment 2g with binding-form type-signature
+      detail for all candidates 0a–0k).
+- [ ] Phase 1 commit decomposition (§6 — Round 3 task;
+      §6 review checklist filled in segment 2g as substrate).
+- [x] PR 4 Round 3 input bundle (resolved as confirmation
+      per §5.2; the bundle is this document at segment-2g
+      close-out plus PR 4's corresponding follow-up commit
+      recording the "α confirmed" disposition).
 
 ---
 
@@ -1947,15 +1954,73 @@ to Round 2 with the dispositions framed below.
   alternative uses.
 
   **Reframed disposition under §5.0.** A `ReservationTTLActor`
-  subscribes to `PendingTxDiagnostic::BuildSucceeded` events,
-  maintains in-memory per-reservation age tracking, emits
-  `PendingTxDiagnostic::ReservationOutstanding { reservation_id,
-  age }` warnings on stale reservations, signals
-  `PendingTxActor` (via `AutoDiscardMessage { reservation_id }`
-  mailbox message) to auto-discard if TTL policy permits. Same
-  shape as PR 4's `PeerReputationActor` / `RecoveryActor`
-  consumer-actor pattern. The trait surface stays minimal; the
-  capability composes.
+  subscribes to **both reservation-creation events and
+  reservation-terminal events** on the `PendingTxDiagnostic`
+  stream, maintains in-memory per-reservation age tracking,
+  emits `PendingTxDiagnostic::ReservationOutstanding {
+  reservation_id, age }` warnings on stale reservations,
+  signals `PendingTxActor` (via `AutoDiscardMessage {
+  reservation_id }` mailbox message) to auto-discard if TTL
+  policy permits. Same shape as PR 4's
+  `PeerReputationActor` / `RecoveryActor` consumer-actor
+  pattern. The trait surface stays minimal; the capability
+  composes.
+
+  **Subscription contract (segment-2e closure; refined in
+  Copilot-fix follow-up).** The actor's diagnostic-stream
+  subscription is **not** `BuildSucceeded`-only — that
+  shape would leak closed reservations into the actor's
+  in-memory map forever, producing stale
+  `ReservationOutstanding` warnings on already-terminated
+  reservations and spurious `AutoDiscardMessage` round-trips
+  to `PendingTxActor`. The complete subscription contract:
+
+  - **`PendingTxDiagnostic::BuildSucceeded { reservation_id,
+    snapshot_id, outputs_count }`** — insert
+    `{reservation_id → started_at: Instant::now()}` into
+    the in-memory age-tracking map. Transition: "tracking
+    started."
+  - **`PendingTxDiagnostic::SubmitSucceeded { reservation_id,
+    tx_hash }`** — remove `reservation_id` from the
+    age-tracking map. Transition: "terminal — reservation
+    consumed by submit."
+  - **`PendingTxDiagnostic::Discarded { reservation_id,
+    reason }`** — remove `reservation_id` from the
+    age-tracking map regardless of `reason`. Covers
+    `ConsumerExplicit` (consumer called `discard`),
+    `SnapshotRotationAutoDiscard` (R5 lazy-discard at submit
+    time), `DaemonRejectedTerminal` (R9 terminal rejection
+    per segment-2f's per-error-class table), and
+    `TTLAutoDiscard` (the actor's own auto-discard fires;
+    self-cleanup). Transition: "terminal — reservation
+    released."
+
+  **What `SubmitFailed` does *not* close.** Per segment-2f
+  R9's two-stage submit flow, `SubmitFailed` is emitted on
+  daemon timeout / network errors where the reservation
+  goes to `SubmitPendingDaemonAck` and remains
+  outstanding (Finding 2 daemon-side authority). The TTL
+  actor **does not** remove the reservation from its
+  tracking map on `SubmitFailed`; the reservation is still
+  output-locking and still ages. The terminal cleanup
+  happens only on `SubmitSucceeded` or `Discarded` per the
+  contract above. Optional V3.x refinement: the actor may
+  subscribe to `SubmitAttempted` to apply a shorter TTL on
+  reservations that enter `SubmitPendingDaemonAck` (the
+  daemon-side ambiguity window has a different
+  policy-acceptable age than a never-attempted reservation);
+  this is a V3.x consumer-actor policy choice, not a V3.0
+  diagnostic-stream-surface requirement.
+
+  **Memory-bound property.** With the full subscription
+  contract above, the actor's age-tracking map is bounded
+  by the count of currently-outstanding reservations (i.e.,
+  `PendingTxActor::outstanding()`'s return value), not by
+  the cumulative count of all reservations the wallet has
+  ever created. Per PR 4 §5.4.8 #5 (bounded mailbox)
+  applied to the actor's internal state, the map is
+  monotonically bounded by the wallet's actual reservation
+  rate, with terminal events providing the cleanup signal.
 
   **Disposition (closed in segment 2e).** Same architectural-
   integrity-now discipline as PR 4's consumer-actor pattern

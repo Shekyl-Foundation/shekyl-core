@@ -690,6 +690,77 @@
 
 ### Documentation
 
+- **Stage 1 PR 5 — address PR #43 Copilot review findings
+  (Round 2 close-out follow-up).** Doc-only commit on
+  `feat/stage-1-pr5-pending-tx-engine-design`. Addresses three
+  Copilot review findings surfaced against the Round 2
+  segments and segment 2g close-out:
+  - **Finding 1 — §3.3 pre-flight checklist staleness
+    (raised against b85edec9a, line 609 of design doc;
+    re-raised on the same line).** The pre-flight checklist at
+    §3.3 still marked R1 disposition / Phase 0 spec
+    amendments / PR 4 Round 3 input bundle as pending, even
+    though Round 1 closed those items (R1 in §5.5; Phase 0 in
+    segment 2g §4; PR 4 Round 3 bundle as confirmation per
+    §5.2 + §6). **Fix**: marked R1 / Phase 0 / PR 4 Round 3
+    items as `[x]` with cross-references to the closure
+    sections; Phase 1 commit decomposition remains `[ ]`
+    pending Round 3.
+  - **Finding 2 — R8 `ReservationTTLActor` subscription
+    contract incomplete (raised against 2f177a0c3, line
+    987 of design doc).** Segment 2e's R8 closure named only
+    `PendingTxDiagnostic::BuildSucceeded` as the actor's
+    subscription, with no terminal events. This would leak
+    closed reservations into the actor's in-memory
+    age-tracking map indefinitely, producing stale
+    `ReservationOutstanding` warnings on already-terminated
+    reservations and spurious `AutoDiscardMessage` round-trips
+    to `PendingTxActor`. **Fix**: §5.4 R8 prose expanded with
+    a full subscription contract section pinning
+    `BuildSucceeded` (insert), `SubmitSucceeded` (remove —
+    terminal success), and `Discarded` (remove regardless of
+    `reason` — covers all four `DiscardReason` variants
+    including the segment-2f `DaemonRejectedTerminal` and
+    the segment-2e `TTLAutoDiscard` self-cleanup). Explicit
+    "what `SubmitFailed` does *not* close" note per
+    segment-2f R9's two-stage submit-flow + Finding-2
+    daemon-side authority disposition: `SubmitFailed` on
+    `DaemonTimeout` / `DaemonUnavailable` keeps the
+    reservation in `SubmitPendingDaemonAck` and the actor
+    keeps tracking. Memory-bound property pinned:
+    actor's map size is bounded by
+    `PendingTxActor::outstanding()`, not by cumulative
+    reservation count.
+  - **Finding 3 — FOLLOWUPS `ReservationTTLActor` entry has
+    the same subscription gap (raised against 2f177a0c3,
+    FOLLOWUPS line 3029).** Identical finding to Finding 2,
+    in the FOLLOWUPS entry rather than the design doc.
+    **Fix**: same subscription-contract expansion applied to
+    the FOLLOWUPS entry; cross-reference to the design-doc
+    §5.4 R8 closure preserved.
+  - **Finding 4 — CHANGELOG Round 1 close entry residuals
+    count predates R12 (raised against b85edec9a, CHANGELOG
+    line 1449).** The Round 1 close entry says "four carry to
+    Round 2; one new (R11)"; R12 was added in a subsequent
+    Round 1 follow-up commit (the immediately-following
+    CHANGELOG entry). **Fix**: added a parenthetical
+    forward-pointer to the Round 1 close entry noting R12's
+    addition in the follow-up; preserves the entry's
+    historical accuracy at commit time while resolving the
+    in-isolation reader's apparent inconsistency. The
+    follow-up entry's existing R12 documentation is
+    unchanged.
+
+  No segment-2g substrate is revised; all four fixes are
+  contract-clarification / status-update edits. Round 3
+  readiness gate per segment 2g §8 fenceposts is unaffected.
+  Updates docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md (§3.3
+  checklist; §5.4 R8 subscription-contract subsection);
+  docs/FOLLOWUPS.md (`ReservationTTLActor` entry subscription-
+  contract subsection); docs/CHANGELOG.md (this entry +
+  forward-pointer note on the Round 1 close entry). No code
+  changes; no test impact.
+
 - **Stage 1 PR 5 — Round 2 segment 2g (Round 2 close-out:
   §4 Phase 0 binding-form enumeration; `SnapshotId` hash
   primitive pin; §5.0.3 diagnostic-stream-doc generalization
@@ -1447,6 +1518,11 @@
 
   **Residuals (§5.4).** Five residuals dissolve by composition
   under §5.0; four carry to Round 2; one new (R11) surfaces.
+  (R12 — Stage 1 `current_snapshot` acquisition mechanism — was
+  identified in a subsequent Round 1 follow-up commit and added
+  to the Round 2 carry list; see the immediately-following
+  Round 1 follow-up changelog entry. Round 2 thus carries five
+  residuals in total: R2 / R8 / R9 / R11 / R12.)
   - **Dissolved by §5.0:** R3 (build-during-refresh-during-reorg
     — mailbox FIFO orders structurally), R5-trait-surface-aspect
     (outstanding-reservations-on-rotation policy is local to
