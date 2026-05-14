@@ -38,6 +38,47 @@
 
 ### Changed
 
+- **Stage 1 PR 4 — Round 3 confirmation
+  (α confirmed by PR 5 Round 1's actor-mesh-framed disposition)**
+  (`feat/stage-1-pr4-round-3-confirmation`, 2026-05-14). Single-commit
+  doc-only Round 3 closure on
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md).
+  PR 5 Round 1's disposition under the actor-mesh framing (per
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0 / §5.2 / §5.5) confirmed shape (1) — *snapshot-ID pinning* —
+  with the reservation tracker holding monotone semantics under
+  PR 4's α; PR 4 advances directly to Round 4 (commit decomposition
+  + Phase 1 commit list). The
+  *provisionally-load-bearing* qualifier on Round 1's α
+  (per §5.3 / §5.4.7 R1 / §8) is closed; the re-evaluation gate
+  collapsed without firing. Four housekeeping items land alongside
+  the closure: (1) §3.1 acknowledges the V3.0 *dual spend-material
+  holder* state — `LocalRefresh` / `Scanner` (PR 4 R4 (a),
+  inheritance-asymmetry justification) and `LocalSigner` (PR 5 R11
+  (b), architectural-integrity-now justification), convergent to
+  one holder via R4 (c) in V3.x; (2) §8 / FOLLOWUPS R4 (c) entry
+  cross-references PR 5 R11 (b)'s `Signer` trait substrate as the
+  V3.x migration target — the R4 (c) migration becomes *"`Scanner`
+  stops holding spend material; delegates key-image generation
+  via the existing `Signer` trait"* rather than designing the
+  split from scratch, shrinking the V3.x cost to a producer-side
+  shape change (no architectural change); (3) the
+  `REFRESH_DIAGNOSTIC_STREAM.md` → `DIAGNOSTIC_STREAM.md` rename
+  housekeeping was already covered by PR 5 segment 2g — no PR 4
+  doc references remain to sweep (confirmed by `rg`); (4) §5.4.8
+  #1's drop-on-close-by-default rule is acknowledged as
+  project-wide rather than refresh-specific per PR 5 R17's
+  closure — V3.0 ships drop-on-close across all diagnostic
+  streams; per-stream wallet-internal encrypted-persistence
+  opt-in is a V3.x refinement evaluated at the diagnostic-stream
+  spec doc. The discovery-cadence prediction in
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  ("PR 4 onward's audits are increasingly likely to be
+  confirmations") holds at the Round 1 / Round 3 boundary on the
+  load-bearing question; the Round 2 reframe and PR 5 R11 (b)'s
+  reframe are the two structural-density events that surfaced
+  inside this PR's design rounds.
+
 - **Stage 1 PR 3 — close-out: `STAGE_1_PR_*` design-doc past-tensing
   + plan-vs-state-divergence rules-queue input sharpening**
   (`chore/stage-1-pr3-closeout`, 2026-05-12). Three-commit close-out

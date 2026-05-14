@@ -2,9 +2,11 @@
 
 **Status.** **DRAFT — Round 1, Round 1 review pass, Round 2,
 Round 2 reframe, Round 2 reframe follow-up (contract pins),
-and Round 2 close-out (Phase 0c `InternalInvariantViolation`
-plus Phase 0e `DaemonOp` / `ProtocolErrorKind` seed enums)
-closed (2026-05-13).** Round 1's load-bearing
+Round 2 close-out (Phase 0c `InternalInvariantViolation`
+plus Phase 0e `DaemonOp` / `ProtocolErrorKind` seed enums,
+2026-05-13), and Round 3 confirmation (α confirmed by PR 5
+Round 1's disposition under the actor-mesh framing,
+2026-05-14) closed.** Round 1's load-bearing
 question (§5 producer redesign) settled to **α — preserved
 current shape** per §5.4. The Round 1 review pass (2026-05-12)
 corrected §3.1's materially-wrong "no secret-touching surface"
@@ -151,6 +153,28 @@ call sites and confirms the seed (the audit may surface
 additional reachable upstream variants the seed missed, or
 paths the seed listed that aren't actually reachable; the
 audit is authoritative).
+
+A Round 3 confirmation pass (2026-05-14) closes the
+*provisionally-load-bearing* qualifier on Round 1's
+α-disposition. PR 5 Round 1's disposition under the
+actor-mesh framing (per
+[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+§5.0 / §5.2 / §5.5) confirms shape (1) — *snapshot-ID
+pinning* — with the reservation tracker holding **monotone
+semantics** under PR 4's α: the actor's mailbox FIFO is the
+serialization point, `LedgerDiagnostic::SnapshotMerged` events
+drive `PendingTxActor`'s `current_snapshot` field, and
+staleness detection is a field comparison in the
+submit-message handler rather than a cross-actor synchronous
+query. The re-evaluation gate is **not exercised**; α is
+confirmed and PR 4 advances directly to Round 4 (commit
+decomposition + Phase 1 commit list). Round 3's substantive
+content is therefore a housekeeping pass: §3.1's threat-model
+framing acknowledges PR 5 R11 (b)'s dual-holder context;
+§5.3, §5.4.7 R1, §5.4.8 #1, and §8 record the closure and the
+broadened diagnostic-stream contract scope; §8 / FOLLOWUPS R4
+(c) entries cross-reference the PR 5 R11 (b) `Signer` trait
+substrate that reduces the V3.x R4 (c) migration cost.
 
 This document was opened in parallel with the
 M3c–M3e tail of Stage 1 PR 3 per the 2026-05-10 sequencing
@@ -360,6 +384,37 @@ PR 4's check completes here.
   on drop via the existing `ZeroizeOnDrop` chain. The master-
   secret-isolation property is now unconditional under the
   Round 2 disposition.
+
+  **R4 (a) plus PR 5 R11 (b) — V3.0 dual-holder framing
+  (Round 3 acknowledgment, 2026-05-14).** PR 5 Round 2
+  segment 2b's R11 reframe lands `LocalSigner` /
+  `SigningActor` as a separate spend-material holder (per
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R11). V3.0 therefore has **two spend-material
+  holders**: `LocalRefresh` / `Scanner` via PR 4 R4 (a)
+  (justified by inheritance-asymmetry — `Scanner` pre-existed
+  in C++ carrying view + spend material; the producer-side
+  split-the-state migration would have lifted `Scanner`'s
+  output shape and `ScanResult`'s wire shape inside this PR's
+  scope), and `LocalSigner` via PR 5 R11 (b) (justified by
+  architectural-integrity-now — `LocalSigner` is greenfield
+  Rust with no inherited shape to absorb, so the split is the
+  *cost-asymmetric* answer in the opposite direction).
+  The two holders converge to one in V3.x: PR 4 R4 (c)
+  (split-producer/recoverer) migrates the producer to hold
+  **only view material** by emitting view-tag-matched
+  candidates and delegating final hybrid-decap + key-image
+  computation outside the producer; PR 5 R11 (b)'s `Signer`
+  trait substrate is the target shape — `LocalSigner` /
+  `SigningActor` becomes the sole holder once R4 (c) lifts.
+  The §3.1 threat-model property (master-secret isolation:
+  per-output derived secrets do not cross the trait surface
+  to the orchestrator) holds for both holders independently
+  in V3.0 — `LocalRefresh` zeroizes via `Scanner`'s
+  `ZeroizeOnDrop` at attempt end; `LocalSigner` zeroizes via
+  `Zeroizing<[u8; 32]>` on `spend_secret`. The V3.0
+  two-holder state is named, tracked, and convergent; §5.4.7
+  R4 and §8 / FOLLOWUPS R4 (c) record the migration target.
 
   **Per `30-cryptography.mdc` and `35-secure-memory.mdc`.** The
   Scanner's stack-frame materials (`view_scalar`, `x25519_sk`,
@@ -813,11 +868,26 @@ Phase 0 lands.
 - **Round 2 (closed, 2026-05-12).** Settled R2 / R3 / R4 / R5 /
   R6 / R7 per §5.4.7. R1 carries forward to PR 5 with snapshot-ID
   pinning as the working hypothesis.
-- **Round 3 (deferred to PR 5).** R1 lands in PR 5's design
-  rounds; PR 4 does not need a separate Round 3. The α-disposition
-  remains *provisionally load-bearing* per the original Round 1
-  framing — if PR 5's R1 resolution requires γ for correctness,
-  PR 4 re-opens; otherwise PR 4 advances directly to Round 4.
+- **Round 3 (closed, 2026-05-14) — confirmation-shape.**
+  PR 5 Round 1's disposition under the actor-mesh framing
+  (per
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0 / §5.2 / §5.5) confirms shape (1) — *snapshot-ID
+  pinning*. The reservation tracker holds **monotone
+  semantics** under PR 4's α: actor mailbox FIFO is the
+  serialization point; `LedgerDiagnostic::SnapshotMerged`
+  events drive `PendingTxActor`'s `current_snapshot` field;
+  staleness detection is a field comparison in the
+  submit-message handler. Shapes (2) and (3)
+  (refresh-quiescence-and-reject; defer-build-until-refresh-
+  quiescent) failed criterion 5 (adversarial-daemon
+  resistance) on **structural** grounds under the framing —
+  any contract dependency on refresh quiescence at any
+  point in the build/submit flow is daemon-controllable —
+  not contingent grounds; no fourth shape survived the
+  framing. α's *provisionally-load-bearing* qualifier is
+  therefore **closed**; the re-evaluation gate collapsed
+  without firing. PR 4 advances directly to Round 4.
 - **Round 4.** Phase 0 commit decomposition (against the
   Round 2-finalized §4 candidates); §6 review checklist filled in;
   Phase 1 commit list pinned. Sequencing under (a-instance-scoped)
@@ -840,14 +910,31 @@ outcome, not a weak round.
 
 The architectural-integrity-now disposition from
 [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
-remains the operative governance: Round 3 evaluates whether PR 5
-needs γ for **correctness** (not convenience). If R1's resolution
-surfaces that the reservation tracker cannot deliver its
-correctness property under α, the disposition reverts and PR 4
-re-opens to γ at higher cost than landing γ in Round 1 would have
-been. Round 1's α-disposition is therefore *provisionally
-load-bearing* — the rounds budget Round 3 carries is the
-re-evaluation gate.
+was the operative governance for the re-evaluation gate:
+Round 3 would have evaluated whether PR 5 needs γ for
+**correctness** (not convenience), and the disposition
+would have reverted if R1's resolution surfaced that the
+reservation tracker could not deliver its correctness
+property under α. **PR 5 Round 1's disposition under the
+actor-mesh framing confirmed α** (per
+[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+§5.0 / §5.5): the reservation tracker's monotone semantics
+hold; the field-comparison staleness check in the
+submit-message handler delivers correctness without γ; the
+structural-rejection of shapes (2) and (3) on criterion 5
+closes the wargaming surface under the framing. Round 1's
+α-disposition is therefore **confirmed, not provisional**,
+and the re-evaluation gate collapsed without firing. The
+discovery-cadence prediction in
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+("PR 4 onward's audits are increasingly likely to be
+confirmations") holds at the Round 1 / Round 3 boundary on
+the load-bearing question; the Round 2 reframe and PR 5
+R11 (b)'s reframe are the two structural-density events
+that surfaced inside this PR's design rounds (the
+cost-benefit-defer-to-later anti-pattern surfacing once at
+the load-bearing-question level, then again at the residual-
+disposition level).
 
 ### §5.4 Round 1 disposition — α (2026-05-12)
 
@@ -970,10 +1057,14 @@ follow-up PR respectively) with their own validation surfaces.
   open with snapshot-ID pinning as the working hypothesis and
   look for a reason to reject it, not the other way around.
   The α-disposition's *provisionally load-bearing* status (per
-  §5.3) means R1's resolution can re-open α — if the
-  reservation tracker's correctness property cannot hold under
-  any sub-option, the rounds budget reverts to γ — but
-  snapshot-ID pinning makes that revert unlikely.
+  §5.3) was the re-evaluation gate — R1's resolution could
+  have re-opened α if the reservation tracker's correctness
+  property had not held under any sub-option. **PR 5 Round 1
+  closed R1 under shape (1) (snapshot-ID pinning) under the
+  actor-mesh framing** (per
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0 / §5.2 / §5.5); the gate closed without firing and α
+  is confirmed.
 - **R2 — β internal-batching refinement.** Promote to a V3.x
   FOLLOWUPS entry, or leave as the §2.2 “future scaling
   refinement” note. The new V3.0 bandwidth FOLLOWUP entry (added
@@ -1532,10 +1623,17 @@ Round 4 carries the commit decomposition.
 **build-against-current-snapshot + snapshot-ID pinning** as the
 working hypothesis. Reservation tracker carries a snapshot ID
 per reservation; submit path becomes a CAS against
-`current_snapshot == reservation.snapshot_id`. PR 5 opens with
-this hypothesis and looks for a reason to reject it; the
-α-disposition's *provisionally load-bearing* status (per §5.3)
-remains the re-evaluation gate.
+`current_snapshot == reservation.snapshot_id`. **Closed in
+PR 5 Round 1 (2026-05-14)** under the actor-mesh framing: the
+mailbox FIFO is the serialization point,
+`LedgerDiagnostic::SnapshotMerged` events drive the
+`current_snapshot` field on `PendingTxActor`, and the
+staleness check is a field comparison in the submit-message
+handler. The α-disposition's *provisionally load-bearing*
+status (per §5.3) is **closed**; α is confirmed and the
+re-evaluation gate collapsed without firing. Cross-reference:
+[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+§5.0 / §5.2 / §5.5.
 
 PR 4 does not land R1 — it is a PR 5 surface. Naming the working
 hypothesis here exists so PR 5's design opens with the
@@ -2190,6 +2288,23 @@ persistence ("daemon X banned until time T") is the most
 that may persist, and only if a future review explicitly
 justifies the relaxation — V3.x default is no persistence.
 
+**Round 3 acknowledgment (2026-05-14) — scope broadened by
+PR 5 R17.** The drop-on-close-by-default rule pinned here is
+not refresh-specific. PR 5 Round 2 segment 2c closed R17
+(*pending-tx event-sourced recovery*) with the same default
+applied at the diagnostic-stream-contract level — V3.0 ships
+the drop-on-close default across **all** diagnostic streams
+in the engine mesh (`RefreshDiagnostic`, `PendingTxDiagnostic`,
+`LedgerDiagnostic`, and the future consumer-actor streams),
+with **per-stream wallet-internal encrypted-persistence
+opt-in** as a V3.x refinement evaluated at the diagnostic-
+stream spec doc (`docs/design/DIAGNOSTIC_STREAM.md`, V3.x).
+See
+[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+§5.4 R17 for the project-wide framing; the per-stream V3.x
+opt-in is evaluated against the cross-cutting recursive-
+trust-boundary discipline in §5.4.8 #4.
+
 This conflicts with classical fail2ban's "remember bad actors
 across sessions" disposition; the conflict is genuine, and
 **privacy-first wins** per the priority hierarchy. Shekyl's
@@ -2533,14 +2648,18 @@ seeds Phase 0e's `DaemonOp` / `ProtocolErrorKind` initial variant
 sets against the call-site audit. Only Round 4 remains as
 PR-4-internal work.
 
-**Carried into PR 5.**
+**Carried into PR 5 and closed in PR 5 Round 1.**
 
 - §5.4.7 R1 (`PendingTxEngine::build` behaviour during long
-  refresh) — PR 5's design rounds open with
-  *build-against-current-snapshot + snapshot-ID pinning* as the
-  working hypothesis. The α-disposition remains *provisionally
-  load-bearing*; if PR 5's R1 resolution requires γ for
-  correctness, PR 4 re-opens.
+  refresh) — **closed in PR 5 Round 1 (2026-05-14)** as
+  *build-against-current-snapshot + snapshot-ID pinning*
+  under the actor-mesh framing (per
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0 / §5.2 / §5.5). The α-disposition's
+  *provisionally-load-bearing* qualifier is closed; α is
+  confirmed and the re-evaluation gate collapsed without
+  firing. Round 3 (this section) records the confirmation;
+  PR 4 advances directly to Round 4.
 
 **Deferred to V3.x FOLLOWUPS (named homes in
 [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)).**
@@ -2555,7 +2674,18 @@ PR-4-internal work.
   consumers; all triggered by Stage 4 actor mesh stabilization.
 - §5.4.7 R4 (c) split-producer/recoverer — V3.x trigger:
   HW-wallet-backed signing or post-V3 threat-model refinement
-  requires producer-side spend-key isolation.
+  requires producer-side spend-key isolation. **Round 3
+  acknowledgment (2026-05-14):** PR 5 Round 2 segment 2b's
+  R11 (b) reframe landed the `Signer` trait infrastructure
+  (`LocalSigner` Stage 1 / `SigningActor` Stage 4) as a sole
+  spend-material holder, per
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R11. The V3.x R4 (c) migration becomes *"Scanner
+  stops holding spend material; delegates key-image
+  generation to the existing `Signer` trait"* rather than
+  designing the split from scratch — the spend-key-isolated
+  actor target shape already exists in the codebase. See
+  the FOLLOWUPS R4 (c) entry for the updated migration cost.
 
 **Remaining for Round 4.**
 

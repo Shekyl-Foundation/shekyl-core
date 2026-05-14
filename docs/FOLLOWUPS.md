@@ -3015,7 +3015,8 @@ one place to confirm each item's relationship to the wallet stack.
   mitigation pins).
 
 - **`RefreshEngine` (c) split-producer/recoverer view-material
-  shape (Stage 1 PR 4 R4 deferral).** Round 2 of
+  shape (Stage 1 PR 4 R4 deferral; migration cost reduced by
+  PR 5 R11 (b)).** Round 2 of
   [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.7 R4 landed (a-instance-scoped) for V3.0 — the producer
   holds view + spend material in a `ViewMaterial` captured at
@@ -3035,11 +3036,41 @@ one place to confirm each item's relationship to the wallet stack.
   changes alongside. Until then, the (a-instance-scoped) shape
   is the operative answer; the producer's spend-key holding is
   bounded to `LocalRefresh`'s lifetime and zeroized on drop
-  via `Scanner`'s `ZeroizeOnDrop`. Cross-references:
+  via `Scanner`'s `ZeroizeOnDrop`.
+
+  **Migration cost update (PR 4 Round 3, 2026-05-14).** PR 5
+  Round 2 segment 2b landed `LocalSigner` (Stage 1) /
+  `SigningActor` (Stage 4) as a sole spend-material holder
+  with a narrow `Signer` trait surface (`sign_tx(&self, tx:
+  TransactionToSign) -> Result<SignedTransaction,
+  SignerError>`), per [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R11 (closed as (b) — separate-signing-actor from
+  Stage 1). The R4 (c) V3.x migration target therefore
+  becomes *"`Scanner` stops holding spend material; delegates
+  key-image generation via the existing `Signer` trait"*
+  rather than designing the spend-key-isolated actor from
+  scratch. The migration's V3.x cost shrinks to:
+  (i) extending the `Signer` trait surface with a
+  `key_image(&self, output: &OutputCandidate) -> KeyImage`
+  method (or, more conservatively, exposing key-image
+  generation through the existing `sign_tx` shape if the
+  signing-actor's API permits); (ii) reshaping `Scanner`'s
+  output type to emit `OutputCandidate` rather than
+  `RecoveredOutput`; (iii) reshaping `ScanResult` to carry
+  the candidate intermediate stage and reshaping the merge
+  gate at `Engine::apply_scan_result` to call into the
+  `Signer` for the final key-image computation. The
+  *architectural* cost was paid in PR 5 R11 (b); V3.x cost
+  is the producer-side shape change, not the spend-key-
+  isolated actor design. Cross-references:
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-  §3.1 (master-secret-isolation framing), §5.4.3 R4 (Round 1
-  review pass surfacing), §5.4.7 R4 (Round 2 disposition with
-  (c) deferral),
+  §3.1 (master-secret-isolation framing; dual-holder V3.0
+  acknowledgment added in Round 3), §5.4.3 R4 (Round 1 review
+  pass surfacing), §5.4.7 R4 (Round 2 disposition with
+  (c) deferral), §8 (Round 3 R4 (c) cross-reference);
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R11 (segment 2b reframe to (b)), §5.4 R11 cross-
+  reference to PR 4 R4 (c) (segment 2b mutual cross-link);
   [`engine/refresh.rs:1254`](../rust/shekyl-engine-core/src/engine/refresh.rs)
   (`build_scanner_from_keys`),
   [`shekyl-scanner/src/scan.rs:506`](../rust/shekyl-scanner/src/scan.rs)
