@@ -690,6 +690,181 @@
 
 ### Documentation
 
+- **Stage 1 PR 5 — Round 1 close: actor-mesh reframe + shape (1)
+  disposition (snapshot-ID pinning).** Doc-only commit on
+  `feat/stage-1-pr5-pending-tx-engine-design` (off `dev` at
+  PR-#42 merge `6de8335d5`). Closes the load-bearing open
+  question
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5 in **one round** rather than the seed's
+  three-to-four-rounds projection because the §5.0 actor-mesh
+  framing exhausts the wargaming surface in this round per the
+  §7 closure rule. Shape (1) — build-against-current-snapshot +
+  snapshot-ID pinning — wins on **structural** grounds; shapes
+  (2) and (3) fail criterion 5 (adversarial-daemon resistance)
+  by construction under the actor framing; no fourth shape
+  survives. **Two rounds saved against the seed projection.**
+
+  **The §5.0 actor-mesh reframe.** PR 4's Round 2 reframe
+  established a project-wide design lens: the trait surface is
+  the synchronous decision point that consumers branch on; the
+  rich semantic surface lives on the diagnostic-stream seam
+  (`DiagnosticSink` parameter; typed event enum). PR 5 inherits
+  the lens from Round 1 — the cost-benefit-defer-to-later
+  anti-pattern PR 4 named has its cure now structurally
+  available per
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc),
+  applied at the load-bearing question rather than discovered
+  in Round 2+.
+
+  **Three structural grounds shape (1) wins on (§5.1).**
+  - **Phase 0c collapses (§5.5 ground 1).** Under the seed's
+    synchronous framing, `LedgerEngine` had to grow
+    `current_snapshot_id() -> SnapshotId` so
+    `PendingTxEngine::build` could read it inline. Under the
+    actor framing, snapshot identity flows through the
+    diagnostic-stream surface as
+    `LedgerDiagnostic::SnapshotMerged { new, prior, height }`
+    events emitted at the merge gate's normal operation. Phase
+    0c (load-bearing cross-trait surface coupling) collapses to
+    Phase 0g (additive event-variant amendment).
+  - **The CAS isn't a CAS (§5.5 ground 2).** Under the actor
+    mesh, `submit` is a mailbox message; the actor processes
+    one message at a time; "check `reservation.snapshot_id`
+    against `current_snapshot`" is a **field comparison in the
+    message handler**, not a compare-and-swap. There is no
+    concurrency to swap against — the actor is the
+    serialization point. R3 / R10 dissolve as trait-surface
+    contract questions.
+  - **Adversarial-daemon resistance is structural (§5.5 ground
+    3, criterion 5).** Under the actor mesh, `PendingTxActor`
+    is decoupled from `RefreshActor`'s liveness by mailbox.
+    Hostile daemon stalling refresh keeps `RefreshActor` busy
+    in `produce_scan_result`; `PendingTxActor`'s mailbox
+    continues processing build/submit/discard against the
+    most-recently-merged snapshot regardless. **Shapes (2) and
+    (3) require `PendingTxActor` to query `RefreshActor`'s
+    state**, which is what creates the DoS surface; shape (1)
+    has no such query. Per
+    [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) §1
+    (security as precondition) and
+    [`ANONYMITY_NETWORKS.md`](./ANONYMITY_NETWORKS.md) (adversary-
+    controlled daemons in privacy-wallet topologies), a shape
+    that admits structural single-peer DoS of transaction
+    submission is rejected even when its UX and trait surface
+    are otherwise minimal.
+
+  **Five-criteria scorecard (§5.5).** Shape (1) passes all five;
+  (2)/(3) pass criteria 1–3 but fail criteria 4 (Stage 4
+  actor-migration compatibility — their cross-actor query
+  introduces the DoS surface) and 5 (adversarial-daemon
+  resistance, structurally).
+
+  **Implications for PR 4 (§5.2 — resolved as confirmation).**
+  PR 4 §5.3 deferred PR 4 Round 3 to PR 5 R1. Resolution: PR 4
+  α confirms; the "provisionally load-bearing" qualifier on
+  PR 4 §5.3's α is withdrawn. PR 4 Round 3 is a
+  **confirmation-shape round**, not a re-evaluation round —
+  α holds and PR 4 advances directly to Round 4 (commit
+  decomposition + Phase 1 commit list). No γ-style
+  consumer-driven refresh-progress streaming is required: under
+  the actor framing, `PendingTxActor` already gets
+  refresh-progress state push-driven from the diagnostic stream;
+  γ becomes a redundant pattern the framing makes superfluous.
+
+  **The diagnostic-stream seam for PR 5 (§5.0.2).** Parallel to
+  PR 4's `RefreshDiagnostic`, PR 5 defines `PendingTxDiagnostic`
+  (`#[non_exhaustive]`) carrying `BuildSucceeded` /
+  `BuildFailed` / `SubmitAttempted` / `SubmitSucceeded` /
+  `SubmitFailed` / `SubmitSnapshotInvalidated` / `Discarded` /
+  `ReservationOutstanding` plus the `DiscardReason` enum
+  (`#[non_exhaustive]`: `ConsumerExplicit` /
+  `SnapshotRotationAutoDiscard` (R5 lazy-discard) /
+  `DaemonRejectedTerminal` (R9 terminal disposition)). The trait
+  surface adds a `&dyn DiagnosticSink` parameter on
+  `LocalPendingTx::new` (constructor-bound, matching PR 4
+  §3.1 / R4 preference; constructor-vs-per-method shape jointly
+  disposed with R11 in Round 2). The cross-cutting
+  `DiagnosticSink` contracts from PR 4 §5.4.6 / §5.4.7 R6
+  reframe / §5.4.8 (non-blocking emit, recursive trust boundary,
+  restart-amnesia detection, panic safety, concurrent emit,
+  emission/return coherence) bind verbatim per §5.0.3.
+
+  **Residuals (§5.4).** Five residuals dissolve by composition
+  under §5.0; four carry to Round 2; one new (R11) surfaces.
+  - **Dissolved by §5.0:** R3 (build-during-refresh-during-reorg
+    — mailbox FIFO orders structurally), R5-trait-surface-aspect
+    (outstanding-reservations-on-rotation policy is local to
+    `PendingTxActor`, not a trait-surface question), R10
+    (concurrent build/submit/discard — mailbox FIFO is the
+    actor-system contract).
+  - **Carry to Round 2:** R2 (`SnapshotId` opacity / projection
+    types; recursive trust boundary), R8 (reservation TTL /
+    leak prevention — reframed as `ReservationTTLActor`
+    composition + V3.x FOLLOWUPS), R9 (daemon-side submit
+    failure — reframed as two-stage submit flow with
+    intermediate `submitted-pending-daemon-ack` state and
+    self-continuation message), R11 (signing-actor split — new
+    under §5.0; Stage 1 keeps option (a) instance-scoped per
+    PR 4 R4; V3.x FOLLOWUPS for option (b) `SigningActor`
+    isolation, same trigger as PR 4 R4 deferred-(c) HW-wallet
+    integration).
+  - **Retained but lower-priority hygiene:** R4 (discard
+    semantics under invalidation), R5-policy-aspect, R6
+    (`outstanding()` semantics), R7 (`Send + Sync + 'static`
+    on `P`).
+
+  **Phase 0 net change (§4).** One amendment removed: 0c
+  (load-bearing cross-trait synchronous query →
+  `LedgerEngine`). Two added: 0f (`PendingTxDiagnostic` enum +
+  `DiagnosticSink` parameter on `LocalPendingTx`); 0g
+  (`LedgerDiagnostic::SnapshotMerged` variant addition —
+  cross-trait but additive only, lives in the diagnostic-stream
+  surface not in `LedgerEngine`'s trait surface). **Net effect:
+  load-bearing surface coupling collapses to additive-only
+  event-surface coupling**, which is exactly the kind of
+  structural cleanup
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  continuous-discipline corollary predicts.
+
+  **V3.x FOLLOWUPS landed in this commit.**
+  - `ReservationTTLActor` consumer actor (closes R8 by
+    composition; subscribes to `BuildSucceeded` / `Discarded`
+    events; restart-amnesia constraint per PR 4 §5.4.8 #1).
+  - `SubmitFailureAnalyzer` consumer actor (subscribes to
+    `SubmitFailed` / `SubmitSnapshotInvalidated`; pattern
+    detection — many `SnapshotInvalidated` in a row →
+    adversarial reorg-churn; recurring `FeeTooLow` → fee
+    estimator drift; recursive trust boundary applies).
+  - `ReservationAuditActor` consumer actor (subscribes to all
+    `PendingTxDiagnostic` events; in-memory wallet-action audit
+    log; falls under recursive trust boundary discipline if it
+    persists or exports — projections only).
+  - `SigningActor` migration entry (R11 option (b); Stage 4
+    spend-secret isolation; same HW-wallet-trigger language as
+    PR 4 R4 deferred-(c)).
+
+  **Cross-cutting `DiagnosticSink` contract-doc generalization
+  (Round 2 disposition).** The contracts are now used by both
+  PR 4 and PR 5; they are cross-cutting design invariants.
+  PR 4's FOLLOWUPS named `docs/design/REFRESH_DIAGNOSTIC_STREAM.md`
+  as the spec doc; Round 2 disposes whether to rename to
+  `DIAGNOSTIC_STREAM.md` (general) or factor a parent
+  `DIAGNOSTIC_STREAM_CONTRACTS.md` that PR 4 / PR 5 inherit
+  from. Doc-only.
+
+  Doc-only; no Rust or C++ code touched. Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0 (actor-mesh framing as Round 1 substrate), §5.1
+  (three-shape comparison under the lens), §5.2 (PR 4 α
+  confirmed), §5.3 (five criteria), §5.4 (residuals), §5.5
+  (Round 1 disposition + scorecard);
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.6 / §5.4.7 R6 reframe / §5.4.8 (the cross-cutting
+  `DiagnosticSink` contracts inherited by PR 5);
+  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.4 (PR 5's binding trait surface — unchanged by Round 1).
+
 - **Stage 1 PR 4 — PR #42 Copilot review-pass disposition:
   two typos, one stale work-list row, two CHANGELOG link
   retargets, one CHANGELOG ordering correction.** Six

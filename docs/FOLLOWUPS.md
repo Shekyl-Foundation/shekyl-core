@@ -3014,6 +3014,200 @@ one place to confirm each item's relationship to the wallet stack.
   [`shekyl-scanner/src/scan.rs:506`](../rust/shekyl-scanner/src/scan.rs)
   (`Scanner::new`).
 
+- **`ReservationTTLActor` consumer actor (Stage 1 PR 5 R8
+  composition home; reservation TTL / leak prevention).** PR 5's
+  Round 1 reframe of
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R8 reframed reservation TTL / leak prevention as a
+  composition-side disposition under the §5.0 actor-mesh
+  framing. `ReservationTTLActor` subscribes to
+  `PendingTxDiagnostic::BuildSucceeded` events from
+  `PendingTxActor`'s diagnostic-stream surface, maintains
+  in-memory per-reservation age tracking, emits
+  `PendingTxDiagnostic::ReservationOutstanding { age }`
+  warnings on stale reservations, and signals `PendingTxActor`
+  (via mailbox message) to auto-discard if policy permits. Same
+  shape as PR 4's `PeerReputationActor` / `RecoveryActor`
+  consumer-actor pattern — the `PendingTxEngine` trait surface
+  stays minimal; the capability composes.
+
+  **Hard mitigation pins (binding on this entry).**
+  - **Restart-amnesia per PR 4 §5.4.8 #1 (binding on PR 5 too).**
+    State is **in-memory only**, scoped to the wallet session;
+    drop on wallet close. No persistence beyond the wallet
+    session. Privacy-first per
+    [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) §2.
+  - **Recursive trust boundary per PR 4 §5.4.8 #4 (binding on
+    PR 5 too).** Full-fidelity events flow only to actors whose
+    external surface is itself within the wallet trust boundary,
+    recursively. `ReservationTTLActor`'s warnings are
+    operational-state events about reservation age — they
+    must not flow to off-host loggers, telemetry, or debug UIs
+    with IPC channels without first projecting away
+    `reservation_id` / `snapshot_id` correlation surface.
+  - **Bounded mailbox per PR 4 §5.4.8 #5.** A consumer with a
+    per-reservation-age tracking surface unbounded against a
+    reservation-spam scenario (consumer with a build/discard
+    bug spawning reservations at high rate) is itself an OOM
+    surface. Drop-oldest-on-overflow policy with aggregate
+    age-band counts preserves the warning function at scale.
+
+  **Round 2 disposition for PR 5 (trait-side dependency).**
+  Confirm that `PendingTxDiagnostic::BuildSucceeded` /
+  `ReservationOutstanding` / `Discarded { reason:
+  SnapshotRotationAutoDiscard }` events are emitted from the
+  right call sites; the variant set in PR 5 §5.0.2 is
+  `#[non_exhaustive]` so future variants land additively
+  without trait revision.
+
+  **Trigger:** *when Stage 4 actor mesh stabilizes.*
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0 (actor-mesh framing), §5.0.2 (`PendingTxDiagnostic`
+  variant set), §5.0.3 (cross-cutting `DiagnosticSink`
+  contracts), §5.4 R8 (reframed disposition);
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.6 / §5.4.7 R6 reframe / §5.4.8 (the cross-cutting
+  contracts inherited verbatim).
+
+- **`SubmitFailureAnalyzer` consumer actor (Stage 1 PR 5 R9
+  composition; pattern detection on submit failures).** PR 5's
+  Round 1 reframe of
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R9 named the daemon-side submit-failure path and the
+  per-error-class disposition; the analyzer is the
+  composition-side counterpart that detects patterns across
+  failures rather than reacting to single events.
+  `SubmitFailureAnalyzer` subscribes to
+  `PendingTxDiagnostic::SubmitFailed` and
+  `SubmitSnapshotInvalidated` events; detects patterns:
+  - **Many `SnapshotInvalidated` in a row** → adversarial
+    reorg-churn signal; surfaces to `PeerReputationActor` (via
+    cross-actor signal or shared event consumption) for
+    rotation-policy input.
+  - **Recurring `SubmitFailed { kind: FeeTooLow }`** → fee
+    estimator drift signal; surfaces to a fee-estimator actor
+    (when one exists) or to user-facing UI as a fee-update
+    suggestion.
+  - **Recurring `SubmitFailed { kind: Malformed }`** →
+    wallet-side bug or daemon-byzantine path; logs loudly
+    (subject to recursive trust-boundary discipline) and may
+    trigger error-reporting if per-consumer policy allows.
+  - **Recurring `SubmitFailed { kind: Timeout }`** → daemon
+    transient failure or peer-rotation candidate; signals
+    `PeerReputationActor` for graduated response.
+
+  **Hard mitigation pins (binding).**
+  - **Recursive trust boundary per PR 4 §5.4.8 #4 (binding).**
+    Per-failure-kind counts and per-peer correlation are
+    in-process-only; cross-boundary projections drop
+    `reservation_id` / `tx_hash` correlation surface and emit
+    only aggregate counts per error-class.
+  - **Restart-amnesia per PR 4 §5.4.8 #1 (binding).** Pattern
+    detection is coarse-window-based; no persistence across
+    wallet restarts.
+
+  **Trigger:** *when Stage 4 actor mesh stabilizes;
+  `PeerReputationActor` (PR 4 R6) is a coordinated
+  prerequisite for the rotation-policy signal path.*
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0.2 (`PendingTxDiagnostic` variant set), §5.4 R9
+  (per-error-class semantics);
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 reframe (`PeerReputationActor` cross-reference).
+
+- **`ReservationAuditActor` consumer actor (Stage 1 PR 5 §5.0.2
+  composition; in-memory wallet-action audit log).** Subscribes
+  to all `PendingTxDiagnostic` events and maintains an
+  in-memory wallet-action audit log: build / submit / discard
+  events with timestamps and outcomes. Useful for UI
+  transaction-history view; useful for forensic investigation
+  when a wallet exhibits unexpected behaviour.
+
+  **Hard mitigation pins (binding).**
+  - **Recursive trust boundary per PR 4 §5.4.8 #4 (binding —
+    most load-bearing on this entry).** Full-fidelity audit
+    log carries `reservation_id` / `snapshot_id` / `tx_hash`
+    correlation surfaces. **Persistence beyond wallet session
+    requires explicit threat-model review** — the audit log
+    is exactly the kind of state an adversary with file-system
+    access wants to read. Default disposition: in-memory only.
+    Persistence path requires either (a) projection to a
+    coarse-grained per-day transaction count export (UI
+    history shape) or (b) full encrypted-at-rest storage with
+    explicit threat-model justification.
+  - **Restart-amnesia per PR 4 §5.4.8 #1 (binding under default
+    in-memory disposition).** Audit log resets on wallet
+    restart unless persistence is explicitly enabled per the
+    review above.
+  - **Mailbox saturation per PR 4 §5.4.8 #5.** Audit log is a
+    bounded ring buffer with drop-oldest-on-overflow; the UI
+    transaction-history view shows the most-recent-N entries.
+
+  **Trigger:** *when Stage 4 actor mesh stabilizes; UI history
+  view in scope.*
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0.2 (`PendingTxDiagnostic` variant set), §5.0.3
+  (cross-cutting `DiagnosticSink` contracts);
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.8 #4 (recursive trust-boundary discipline).
+
+- **`PendingTxEngine` (b) signing-actor split (Stage 1 PR 5 R11
+  deferral; Stage 4+ spend-secret isolation).** PR 5's Round 1
+  reframe of
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R11 surfaced the signing-actor split question under the
+  §5.0 actor-mesh framing. For Stage 1, option (a) — the
+  `PendingTxActor` holds spend material directly, bound at
+  `LocalPendingTx::new` — is the operative shape (consistent
+  with PR 4 R4's instance-scoped pattern; spend material crosses
+  the trait boundary the same way it crosses today's
+  `Engine<S>` boundary). Option (b) — a separate `SigningActor`
+  with `PendingTxActor` delegating sign requests via mailbox
+  message — is the stricter threat-model shape that reduces the
+  signing surface to a single actor whose only job is signing.
+
+  **The (b) shape's properties.**
+  - **Easier to audit.** `SigningActor`'s code surface is
+    bounded — accept signed-message envelopes, return signed
+    bytes, zeroize on drop. The auditor's question "where can
+    the spend secret leak?" has one answer.
+  - **Easier to isolate.** A future kernel-level-isolation
+    deployment (process-per-actor, capability-based mailbox
+    routing) reduces the spend-secret-bearing process to one.
+  - **Easier to swap for HW-wallet integration.** Replacing
+    `SigningActor`'s implementation with a HW-wallet-backed
+    one isolates the change to one actor.
+
+  **Trigger (binding).** *Same trigger as PR 4 R4 deferred-(c):
+  if HW-wallet-backed signing or a post-V3 threat-model
+  refinement requires producer-side spend-key isolation, the
+  (b) migration becomes load-bearing and lifts alongside.* Until
+  then, the (a) shape is the operative answer; the
+  `PendingTxActor`'s spend-key holding is bounded to its
+  lifetime and zeroized on drop via the existing zeroization
+  discipline.
+
+  **Implementation-side dependency on PR 4 R4 trajectory.** PR 4
+  R4 deferred-(c) and PR 5 R11 (b) share infrastructure: both
+  require the spend-secret-bearing actor to be addressable via
+  mailbox from an actor that holds only public material. A
+  coordinated migration that lifts both
+  `RefreshEngine`-(c)-split-producer/recoverer and
+  `PendingTxEngine`-(b)-signing-actor at the same trigger is
+  efficient; lifting them independently doubles the
+  scan-loop / signing-loop API revisions.
+
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §3.1 (spend-secret-locality framing), §5.0 (actor-mesh
+  framing as substrate), §5.4 R11 (Round 1 surfacing with (a) /
+  (b) options), §5.5 (Round 1 disposition);
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §3.1, §5.4.7 R4 (Round 2 disposition with (c) deferral).
+
 - **Sync refresh wrapper generalization over `L: LedgerEngine`.**
   Stage 1 PR 2 generalized `Engine::start_refresh` and the
   producer task `run_refresh_task` over `L: LedgerEngine` —
