@@ -1,7 +1,9 @@
 # Stage 1 PR 5 — `PendingTxEngine` extraction — design
 
 **Status.** **Round 1 closed (2026-05-13); Round 2 in progress
-— segment 2a (audit-readiness) landed (2026-05-14).** This
+— segments 2a (audit-readiness) and 2b (R11 signing-actor split
+reframe to (b); R14 reservation extensibility seam) landed
+(2026-05-14).** This
 document was opened as a seed immediately after Stage 1 PR 4's
 design substrate landed on `dev` (merge commit `6de8335d5`,
 PR #42). Round 1 closes here in one round — not deferred to
@@ -34,6 +36,43 @@ strengthening sharpens the audit-blocking defense without
 reopening the disposition. Lands ahead of the R-residual
 dispositions per the audit-blocking sequencing decision so
 audit-prep does not sequence behind R2 / R8 / R9 / R11 / R12.
+
+**Round 2 segment 2b (2026-05-14) — R11 signing-actor split
+reframe + R14 reservation extensibility seam.** Round 1 closed
+R11 with a working disposition leaning (a) — `PendingTxActor`
+holds spend material, "matches PR 4 R4's instance-scoped
+pattern" — with shape (b) (separate `SigningActor`) deferred to
+V3.x with the HW-wallet trigger. Segment 2b's adversarial review
+identified the disposition as the **cost-benefit-defer-to-later
+anti-pattern recurring in a residual** per
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc):
+the cost-asymmetry argument that justified PR 4 R4's tactical (a)
+(Scanner already existed in C++ holding view + spend material;
+restructuring Scanner was the deferral trigger) does **not**
+apply to PR 5 R11, because PR 5 is opening the trait surface
+and `LocalPendingTx` does not yet exist — the choice between
+(a) and (b) is the same cost either way; we are designing one
+or the other from scratch, not moving from one to the other.
+R4-consistency cuts the other way: PR 4 R4's (a) explicitly
+named (c) as the long-term shape with the HW-wallet trigger;
+PR 5 R11 lands that long-term shape from the start. Segment 2b
+closes R11 as **(b) — `LocalSigner` (Stage 1) / `SigningActor`
+(Stage 4) is the sole holder of spend material; `LocalPendingTx`
+/ `PendingTxActor` delegates via a narrow `Signer` trait /
+mailbox surface**. HW-wallet integration in V3.x plugs into the
+existing architecture as an alternative `Signer` impl
+(substitution, not refactor); the V3.x FOLLOWUPS entry tracking
+the (b) deferral is replaced by an entry tracking HW-wallet
+integration. Segment 2b also lands **R14 — reservation
+extensibility seam (`extensions: Vec<ReservationExtension>` with
+`#[non_exhaustive]` enum)** as bounded-cost optionality
+preservation against V3.x reservation-richness use cases
+(coinjoin, atomic swap, time-locked, multi-stage, composable);
+same pattern as the diagnostic-stream extensibility seams
+PR 4 / PR 5 already established. The R1 disposition still
+holds; segment 2b is residual-disposition work that applies the
+PR 3 / PR 4 architectural-integrity-now discipline at the
+R-residual level rather than at the load-bearing question.
 
 Subsequent revisions land each design round inline (the
 precedent set by PR 3's
@@ -485,10 +524,13 @@ stages without trait revision:
 
 ```rust
 // Stage 1: LocalPendingTx (in-process, &self, interior mutability)
-struct LocalPendingTx {
+struct LocalPendingTx<S: Signer> {
     inner: Mutex<ReservationTracker>,
     sink: Arc<dyn DiagnosticSink>,
     ledger: L,                 // for current_snapshot reads in Stage 1
+    signer: Arc<S>,            // §5.4 R11 (b): sole holder of spend
+                               // material; LocalPendingTx never holds
+                               // spend_secret directly
 }
 
 // Stage 4: PendingTxActor (push-driven from diagnostic stream)
@@ -497,6 +539,9 @@ struct PendingTxActor {
                                           // LedgerDiagnostic::SnapshotMerged
     reservations: HashMap<ReservationId, Reservation>,
     sink: Arc<dyn DiagnosticSink>,        // emits PendingTxDiagnostic
+    signer: ActorRef<SigningActor>,       // §5.4 R11 (b): sole holder
+                                          // of spend material; never
+                                          // held by PendingTxActor
     // No mutex: mailbox FIFO is the serialization point.
 }
 ```
@@ -505,6 +550,16 @@ The `Mutex<ReservationTracker>` from §2.4 Round 3 is a Stage 1
 implementation detail — it satisfies the `&self` trait surface
 under in-process call-graph semantics. The Stage 4 actor doesn't
 need it because mailbox-FIFO is the serialization point.
+
+The `signer` field is the §5.4 R11 (b) signing-actor-split
+substrate (closed in segment 2b): spend material lives in a
+single component (`LocalSigner` / `SigningActor`) whose sole job
+is signing; `LocalPendingTx` / `PendingTxActor` constructs
+transaction bytes and delegates signing via a narrow `Signer`
+trait surface (Stage 1) / mailbox surface (Stage 4). HW-wallet
+integration in V3.x is a `Signer`-impl substitution
+(`HardwareSigner`) against the same boundary; no architectural
+change.
 
 #### §5.0.2 The diagnostic-stream seam for `PendingTxEngine`
 
@@ -547,9 +602,14 @@ The trait surface adds a `&dyn DiagnosticSink` parameter to
 `LocalPendingTx::new` (constructor-bound, matches PR 4's
 preference per §3.1 spend-secret locality with R4-equivalent
 reasoning) or per-method (per-call dispatch is also fine —
-runtime-swap surface preserved either way). Round 2 disposes
-the constructor-vs-per-method shape jointly with R11 (the
-signing-actor split question).
+runtime-swap surface preserved either way). R11's segment-2b
+closure (as (b) — separate `LocalSigner` / `SigningActor`)
+makes the sink-binding question independent of the spend-
+material disposition: `LocalPendingTx<S: Signer>` /
+`PendingTxActor` is the sink-binding-host regardless of where
+spend material lives. Segment 2f closes the constructor-vs-per-
+method shape independently; the working disposition is
+constructor-bound under PR 4 §3.4.5 / R4 (a) consistency.
 
 #### §5.0.3 Cross-cutting `DiagnosticSink` contracts
 
@@ -1147,53 +1207,152 @@ to Round 2 with the dispositions framed below.
   pinning because the actor-system invariant pins it
   transitively. **No Round 2 disposition required**; PR 5
   Phase 0e prose pins this under §5.0.
-- **R11 — Signing-actor split (new under §5.0; Round 2 + V3.x
-  FOLLOWUPS).** §3.1 spend-secret-locality says the spend
-  secret enters `LocalPendingTx`'s signing path at submit time.
-  Under the actor mesh, two options:
+- **R11 — Signing-actor split (closed in Round 2 segment 2b as
+  (b); HW-wallet integration in V3.x plugs into existing
+  architecture).** §3.1 spend-secret-locality says the spend
+  secret enters the signing path at submit time. Round 1's
+  working disposition leaned (a) — `PendingTxActor` holds
+  spend material, "matches PR 4 R4's instance-scoped pattern" —
+  with shape (b) (separate `SigningActor`) deferred to V3.x with
+  the HW-wallet trigger. Segment 2b's adversarial review
+  identified the cost-asymmetry argument that justified PR 4 R4's
+  tactical (a) does **not** apply to PR 5 R11; (b) is the
+  architectural-integrity-now answer.
+
+  **Disposition (closed as (b)).** `LocalPendingTx` /
+  `PendingTxActor` does not hold spend material. Spend material
+  lives in a separate `LocalSigner` (Stage 1) / `SigningActor`
+  (Stage 4) construct that exposes a narrow signing surface:
 
   ```rust
-  // (a) PendingTxActor holds spend material, like LocalRefresh
-  //     under PR 4 R4
-  struct PendingTxActor {
-      spend_material: ScannerSecrets,  // bound at
-                                       // LocalPendingTx::new
-                                       // (R4-equivalent)
-      // ...
+  // Stage 1: LocalSigner is the sole holder of spend material
+  trait Signer: Send + Sync {
+      fn sign_tx(
+          &self,
+          tx: TransactionToSign,
+      ) -> Result<SignedTransaction, SignerError>;
   }
 
-  // (b) Separate SigningActor; PendingTxActor delegates
-  struct PendingTxActor {
-      signing_actor: ActorRef<SigningActor>,
-      // ...
+  struct LocalSigner {
+      spend_secret: Zeroizing<[u8; 32]>,
   }
+
+  impl Signer for LocalSigner { /* signs with spend_secret */ }
+
+  // LocalPendingTx delegates to the Signer; never holds spend material
+  struct LocalPendingTx<S: Signer> {
+      inner: Mutex<ReservationTracker>,
+      sink: Arc<dyn DiagnosticSink>,
+      ledger: L,
+      signer: Arc<S>,            // sole holder of spend material
+  }
+
+  // Stage 4: SigningActor is a direct port of LocalSigner
   struct SigningActor {
       spend_secret: Zeroizing<[u8; 32]>,
-      // sole holder of spend material; replies to sign requests
+  }
+
+  struct PendingTxActor {
+      current_snapshot: SnapshotId,
+      reservations: HashMap<ReservationId, Reservation>,
+      sink: Arc<dyn DiagnosticSink>,
+      signer: ActorRef<SigningActor>, // sole holder of spend material
   }
   ```
 
-  (a) is consistent with PR 4 R4's instance-scoped pattern; the
-  spend secret lives with the trait that uses it.
+  The `PendingTxEngine` trait surface does **not** change to
+  accommodate this — the `Signer` is internal to the
+  implementation, not part of the trait. Same property the
+  existing `ledger: L` field has in §5.0.1.
 
-  (b) is the stricter threat-model shape: `PendingTxActor`
-  never holds the spend secret; it constructs the transaction
-  bytes, sends them to `SigningActor` for signing, receives
-  signed bytes back. The signing surface is reduced to a single
-  actor whose only job is signing — easier to audit, easier to
-  isolate, easier to swap for HW-wallet integration in V3.x
-  (which is exactly PR 4 R4's deferred-(c) trigger condition
-  per
+  **The cost-asymmetry argument decomposed.** PR 4 R4 chose
+  (a-instance-scoped) because Stage 1's spend-secret-flow
+  architecture was already tied to (a)-equivalent: the existing
+  `Scanner` held view + spend material, and moving to (c)
+  required restructuring `Scanner` itself. The cost of
+  restructuring was the deferral trigger. PR 5 is opening the
+  trait surface; there is no existing `LocalPendingTx` structure
+  to move from. The choice between (a) and (b) is the same cost
+  either way; we are designing one or the other from scratch,
+  not moving from one to the other. The "moves-not-rewrites"
+  framing that justified PR 4 R4's (a) is upside-down for PR 5
+  R11.
+
+  **R4-consistency cuts the other way.** PR 4 R4's (a)
+  disposition explicitly named (c) as the long-term shape with
+  the HW-wallet trigger. Citing R4 as precedent for R11's (a)
+  settlement compounds the deferral across both engines and
+  makes the eventual V3.x migration more expensive (two engines
+  need to migrate instead of one). The discipline-correct read:
+  PR 4 R4 stays as it is (already landed under inheritance-
+  pattern cost asymmetry); PR 5 R11 lands the architecturally-
+  clean shape from the start because the inheritance-pattern
+  cost asymmetry does not apply here.
+
+  **HW wallets are core, not edge.** Per
+  [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) §1,
+  security is precondition, not optimization. Hardware-backed
+  secure-storage paths (trezor / ledger / YubiKey-class) are
+  dominant for privacy-conscious users; foundation release-key
+  signing already uses hardware-backed key storage. Designing
+  the trait surface so spend material never enters
+  `PendingTxActor` is the threat-model-correct shape; deferring
+  it to V3.x treats the architecturally-cleaner shape as an
+  optimization rather than the baseline.
+
+  **Audit-surface narrowing.** Under (b), spend material lives
+  in one actor whose sole job is signing. The audit question
+  "where can the spend secret leak?" has one answer; the
+  actor's surface is a small message vocabulary
+  (`SignTx { tx_bytes, view } -> SignedTx`), one state field
+  (`spend_secret`), one lifetime contract (lives with the
+  wallet, zeroizes on lock). Under (a), spend material lives in
+  `PendingTxActor` alongside reservation-tracker state, fee
+  estimation, output selection, and daemon-submission
+  orchestration — audit scope expands to cover all of it.
+  (a) is not just less HW-wallet-ready; it is a larger audit
+  surface for spend-material protection.
+
+  **Stage 4 actor migration cost asymmetry.** Splitting an
+  existing actor (the V3.x trajectory if (a) lands at Stage 1)
+  is harder than designing actors split (the Stage 1 trajectory
+  if (b) lands now): message types change, state ownership
+  changes, downstream consumers of the original actor's events
+  change. Doing this once in PR 5 design rounds is bounded;
+  doing it as a post-Stage-4 migration is multi-engine refactor
+  work with cross-actor implications.
+
+  **HW-wallet integration in V3.x.** Plugs into the existing
+  architecture as an alternative `Signer` implementation
+  (`HardwareSigner` delegating to the device); no architectural
+  change. PR 4 R4's V3.x deferred-(c) (split-producer/recoverer
+  for view-tag matching vs. final hybrid-decap, per
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./STAGE_1_PR_4_REFRESH_ENGINE.md)
-  §5.4.7 R4).
+  §5.4.7 R4) benefits from PR 5 R11 (b)'s `SigningActor`
+  infrastructure: the spend-key-isolated actor R4 (c) needs has
+  a precedent and a target shape in PR 5's `SigningActor`; the
+  V3.x R4-(c) migration becomes simpler.
 
-  **Round 2 disposition for PR 5.** For Stage 1, (a) is the
-  moves-not-rewrites path (the spend material crosses the
-  trait boundary the same way it crosses today's `Engine<S>`
-  boundary). For Stage 4+, (b) is the long-term shape and
-  matches the trajectory R4 already pinned. **V3.x FOLLOWUPS:**
-  `SigningActor` migration entry with the same HW-wallet-trigger
-  language R4 used.
+  **FOLLOWUPS update.** The pre-segment-2b V3.x entry tracking
+  the PR 5 R11 (b) deferral is replaced by a V3.x entry
+  tracking HW-wallet integration as a `Signer`-impl
+  substitution (no architectural change required at the
+  trigger).
+
+  **Round 1's (a)-leaning disposition was the cost-benefit-
+  defer-to-later anti-pattern recurring in a residual.** Per
+  [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+  §The "cost-benefit-defer-to-later" anti-pattern: when
+  conventional cost-benefit analysis recommends incremental work
+  and architectural-integrity analysis recommends structural
+  work, the default disposition for security-load-bearing work
+  is fix structurally now unless the cost is genuinely
+  prohibitive. R11's reframe is a PR-5-internal instance of the
+  discipline that PR 3 / PR 4 established at the load-bearing
+  question; segment 2b applies it at the residual-disposition
+  level so future per-engine PRs inherit the precedent that
+  R-residual dispositions are subject to the same architectural-
+  integrity-now discipline as load-bearing questions.
 - **R12 — Stage 1 `current_snapshot` acquisition mechanism
   (Round 2; co-disposes with R2).** §5.0.1's `LocalPendingTx`
   sketch shows `ledger: L` "for `current_snapshot` reads in
@@ -1253,6 +1412,74 @@ to Round 2 with the dispositions framed below.
   in the same Round 2 commit; both questions are
   `SnapshotId`-adjacent and benefit from joint review against
   the actual `LedgerSnapshot` shape.
+- **R14 — `Reservation` extensibility seam (closed in Round 2
+  segment 2b; near-zero cost; forecloses V3.x trait revision).**
+  The current `Reservation` shape (reservation-id +
+  snapshot-id + selected-outputs + tx-bytes) is the
+  wallet2-flat-record shape carried forward. Under V3.x,
+  reservations could be richer primitives:
+
+  - Coinjoin coordination state (counterparty commitment,
+    partial signatures).
+  - Atomic-swap HTLC parameters.
+  - Time-locked submission metadata.
+  - Multi-stage state machines (waiting-for-counterparty →
+    waiting-for-confirmation → confirmed).
+  - Composable reservations (escrow patterns).
+
+  None of these are V3.0 features. Adding an `extensions:
+  Vec<ReservationExtension>` seam to `Reservation` now — with
+  an empty initial variant set on `ReservationExtension`,
+  marked `#[non_exhaustive]` — costs almost nothing and
+  forecloses a V3.x trait revision. Future variants extend
+  additively without breaking V3.0 wallets that don't
+  understand them.
+
+  ```rust
+  pub struct Reservation {
+      pub id: ReservationId,
+      pub snapshot_id: SnapshotId,
+      pub outputs: Vec<SelectedOutput>,
+      pub tx_bytes: Vec<u8>,
+      pub extensions: Vec<ReservationExtension>, // empty in V3.0
+  }
+
+  #[non_exhaustive]
+  pub enum ReservationExtension {
+      // V3.x variants land here (CoinjoinState, HtlcParams,
+      // TimelockedSubmission, MultiStageState,
+      // ComposedReservation). PR-5-side: none in V3.0.
+  }
+  ```
+
+  **Same pattern as the diagnostic-stream extensibility seams.**
+  `RefreshDiagnostic` (PR 4) and `PendingTxDiagnostic` (PR 5)
+  are both `#[non_exhaustive]` — the V3.0 variant set is the
+  shipping minimum; V3.x adds variants additively without
+  breaking V3.0 consumers. R14 extends this discipline to
+  `Reservation`'s value-data shape: V3.0 ships the minimum
+  field set with the extensibility hook; V3.x consumer-actor
+  PRs populate variants. Round 2 hygiene; small cost; large
+  optionality preservation.
+
+  **Phase 0 implication (segment 2b).** §4 Phase 0 enumeration
+  pins the `Reservation` shape with the `extensions` field and
+  the `#[non_exhaustive]` enum stub. The variant set is empty
+  at V3.0; the variants land in V3.x consumer-actor PRs. Phase
+  0 review (segment 2g) confirms the field-name discipline
+  (`extensions: Vec<ReservationExtension>` matching the
+  `RefreshDiagnostic` / `PendingTxDiagnostic` extensibility-
+  pattern conventions) and the `#[non_exhaustive]`
+  attribute placement.
+
+  **R14 is name-only-architectural-integrity-now (R11's
+  light-cost twin).** Where R11 reframe's (b) closure is
+  load-bearing security work, R14's extensibility seam is
+  optionality preservation that V3.0 should not pay deferred
+  trait-revision cost to skip. The discipline-budget cost of
+  segment 2b combining the two is bounded; the architectural-
+  integrity-now payoff is asymmetric (R11 large; R14 small)
+  but both lift in the same commit slot.
 
 ### §5.5 Round 1 disposition — shape (1), actor-mesh framing
 
@@ -1380,10 +1607,17 @@ mechanism) co-disposed in the same Round 2 commit (both
 mechanical softening of §5.5 ground-1 prose (drop the "pending
 R12" qualifier on (a), reword for (b)/(c) as needed); R8
 (`ReservationTTLActor` composition + V3.x FOLLOWUPS), R9
-(two-stage submit flow + intermediate state), R11
-(signing-actor split for V3.x); criterion-5 prose
-strengthening (contract-dependency-on-refresh-quiescence
-framing); sink-binding decoupling from R11 in §5.0.2; plus
+(two-stage submit flow + intermediate state); criterion-5
+prose strengthening (contract-dependency-on-refresh-quiescence
+framing — landed in segment 2a); R11 (signing-actor split —
+closed in segment 2b as (b); HW-wallet integration in V3.x
+plugs into existing architecture); R14 (`Reservation`
+extensibility seam — closed in segment 2b); R13 / R15 / R16 /
+R17 (output-selection / submission-strategy / fee-estimation /
+event-sourced-recovery — surfaced in segment 2b adversarial
+review; named with V3.0-vs-V3.x dispositions in segment 2c);
+sink-binding decoupling (now independent of R11 per segment-2b
+(b) closure; segment 2f); plus
 Phase 0 enumeration and the cross-cutting `DiagnosticSink`
 contract-doc generalization (§5.0.3).
 
@@ -1497,10 +1731,48 @@ work, by round:
     implementation and stream-subscription steelman share the
     same fatal property, and the prose says so explicitly.
 
+- **Segment 2b — R11 signing-actor split reframe + R14
+  reservation extensibility seam.**
+  - **R11 reframe to (b) (architectural-integrity-now).** §5.4
+    R11 prose replaced; closure on (b) as the Stage 1
+    disposition (separate `LocalSigner` / `SigningActor`;
+    `LocalPendingTx` / `PendingTxActor` never holds spend
+    material). Cost-asymmetry argument decomposed (PR 4 R4's
+    moves-not-rewrites cost asymmetry does not apply to PR 5
+    R11 because `LocalPendingTx` is being designed fresh, not
+    moved); R4-consistency reversal documented; HW-wallet-as-
+    core-not-edge ground per `00-mission.mdc` §1; audit-surface
+    narrowing; Stage 4 actor-migration cost asymmetry. §5.0.1
+    sketches updated to add `signer: Arc<S>` (Stage 1) and
+    `signer: ActorRef<SigningActor>` (Stage 4) fields plus
+    explanatory prose.
+  - **R14 reservation extensibility seam.** §5.4 R14 entry
+    added; `Reservation` shape gains `extensions:
+    Vec<ReservationExtension>` field; `ReservationExtension`
+    enum is `#[non_exhaustive]` with empty V3.0 variant set;
+    same pattern as `RefreshDiagnostic` / `PendingTxDiagnostic`
+    extensibility seams. Forecloses V3.x trait revision when
+    coinjoin / atomic-swap / time-locked / multi-stage /
+    composable reservation variants land in V3.x consumer-
+    actor PRs.
+  - **FOLLOWUPS update.** V3.x `PendingTxEngine` (b)
+    signing-actor-split deferral entry replaced with HW-wallet
+    integration entry (`Signer`-impl substitution against the
+    existing architecture; no architectural change required at
+    the trigger).
+  - **Discipline note (forward-template).** R11's reframe is
+    the architectural-integrity-now discipline applied at the
+    residual-disposition level — R-residual dispositions
+    inherit the same architectural-integrity-now discipline
+    that PR 3 / PR 4 established at the load-bearing question.
+    Future per-engine PRs read PR 5's R11 reframe as substrate
+    when R-residual dispositions surface the same anti-pattern.
+
 **Round 2 — pending.**
 
-- **Segment 2b — closure-rule + lens-applicability refinements
-  (items 1 / 2 from the outcomes summary).**
+- **Segment 2c — closure-rule and lens-applicability
+  refinements paired with R13 / R15 / R16 / R17 named with
+  dispositions.**
   - **Item 1: §5.0.4 lens-applicability tempering.** "The lens
     compounds across PRs" → "compounds across PRs whose
     structure admits it; future PRs test applicability rather
@@ -1515,8 +1787,66 @@ work, by round:
     slipping past closure." Forward-template content for the
     V3.1 rules-queue PR (closure-rule scope qualifier;
     lens-applicability discipline) noted in CHANGELOG.
-- **Segments 2c — R-residual dispositions (normal cadence,
-  one commit per residual cluster).**
+  - **R13 — output selection algorithm as a first-class privacy
+    decision.** Wallet-side privacy decision (which outputs to
+    spend, in what order, against which change addresses); not
+    addressed by FCMP++ replacing ring signatures. Options:
+    (a) wallet2-greedy carryover (deterministic, inherits
+    correlation weakness); (b) randomized selection with
+    bounded variance (defeats deterministic correlation);
+    (c) entropy-maximizing selection (V3.x research territory).
+    **Disposition: V3.0 ships (a) under an `OutputSelector`
+    trait-parameter seam; (b) / (c) land in V3.x consumer-actor
+    PRs as alternative `OutputSelector` impls.** Phase 0
+    implication: `OutputSelector` trait parameter on
+    `LocalPendingTx` / `PendingTxActor` so the algorithm is
+    swappable without trait revision.
+  - **R15 — submission strategy as a composable actor.** Direct-
+    to-daemon submission inherited from wallet2 leaves
+    transaction-network-entry-point timing / routing as wallet-
+    layer privacy weaknesses against traffic analysis. Insert
+    `SubmissionStrategyActor` between `PendingTxActor` and
+    `DaemonEngine`; default Stage 1 strategy is direct-to-daemon
+    (matches wallet2 behavior); V3.x consumer-actor PRs land
+    privacy-enhancing strategies (`JitteredSubmissionStrategy`,
+    `CircuitRotationStrategy`, `BroadcastStrategy`,
+    `BatchedStrategy`). **Disposition: V3.0 ships the seam (the
+    intermediate actor in the submit path) with `DirectStrategy`
+    as the default; V3.x consumer-actor PRs land privacy-
+    enhancing strategies.** Phase 0 implication: submit path's
+    actor topology pins the `SubmissionStrategyActor` slot so
+    V3.x strategies plug in without architectural change.
+  - **R16 — wallet-side fee estimation.** Daemon-recommended
+    fees produce a "wallets-following-daemon-recommendations"
+    on-chain fingerprint a malicious daemon can exploit.
+    Estimator that analyzes historical block fee distribution
+    from `LedgerEngine` state directly decouples wallet fee
+    from daemon recommendation. **Disposition: V3.0 ships
+    daemon-recommendation-with-explicit-override (compatibility
+    minimum); V3.x ships wallet-side estimator under a
+    `FeeEstimator` trait-parameter seam.** Phase 0 implication:
+    `build`'s fee parameter shape accommodates explicit-fee-
+    with-strategy-pluggability so V3.x estimator plugs in
+    without trait revision; `LedgerEngine` may need a small
+    additive surface (historical block fee distribution) — Phase
+    0 review tracks this; if the cost is bounded the surface
+    lands at V3.0.
+  - **R17 — event-sourced recovery as user-controlled
+    tradeoff.** Refines the diagnostic-stream restart-amnesia
+    contract (PR 4 §5.4.8 #1) from "in-memory only, drop on
+    close" to "in-memory only by default; user-controlled
+    encrypted persistence opt-in for crash recovery is
+    permitted if the consumer is entirely within the wallet's
+    own encrypted-state surface (no leak across trust
+    boundaries)." **Disposition: V3.0 ships the default (drop-
+    on-close); V3.x optionally ships an encrypted-persistence
+    consumer for institutional / long-running / multi-day
+    transaction-construction deployments.** Cross-references PR
+    4 §5.4.8 #1 to mirror the contract refinement; the contract
+    pin is updated to permit wallet-internal encrypted
+    persistence consumers without weakening the recursive-
+    trust-boundary discipline.
+- **Segment 2d — R2 + R12 co-disposition.**
   - §5.4 R2 (`SnapshotId` opacity / projection types
     disposition; Phase 0b detail) **+ R12 (Stage 1
     `current_snapshot` acquisition mechanism)** — co-disposed
@@ -1526,22 +1856,36 @@ work, by round:
     ground-1 prose (drop "pending R12" qualifier on (a);
     reword for (b)/(c) as needed) and §4 Phase 0c prose
     (mirror the same softening).
+- **Segment 2e — R8 disposition.**
   - §5.4 R8 (`ReservationTTLActor` composition; V3.x
     FOLLOWUPS entry detail — entry exists; commit pins the
     compositional contract).
+- **Segment 2f — R9 disposition + sink-binding decouple from
+  R11.**
   - §5.4 R9 (two-stage submit flow; intermediate-state shape;
     per-error-class disposition; mailbox-ordering vs
     daemon-side authority for terminal-rejection visibility —
     Finding 2 from the prior adversarial pass).
-  - §5.4 R11 (signing-actor split; V3.x FOLLOWUPS entry; **also
-    decouple sink-binding from R11** — constructor-bound under
-    PR 4 §3.4.5 / R4 (a) consistency, independent of R11's
-    spend-material disposition; Finding 4 from the prior
-    adversarial pass).
-- **Segment 2d — Round 2 close-out.**
+  - §5.0.2 sink-binding decouple from R11 — constructor-bound
+    under PR 4 §3.4.5 / R4 (a) consistency, independent of
+    R11's spend-material disposition (closed as (b) in segment
+    2b); Finding 4 from the prior adversarial pass. Note that
+    R11's segment-2b closure leaves the sink-binding question
+    independent because (b)'s `LocalPendingTx<S: Signer>` /
+    `PendingTxActor` is the sink-binding-host regardless of
+    whether spend material is held by `LocalPendingTx` or by
+    `LocalSigner`.
+- **Segment 2g — Round 2 close-out.**
   - §4 Phase 0 final enumeration (binding type-signature
     detail for 0a / 0b / 0d / 0e / 0f / 0g; cross-trait
-    amendment review; final disposition of 0c per R12).
+    amendment review; final disposition of 0c per R12). The
+    `Reservation` shape pins the segment-2b R14 `extensions`
+    field and `#[non_exhaustive]` `ReservationExtension` enum
+    stub. The `Signer` trait surface pins the segment-2b R11
+    (b) signing-isolation discipline. The `OutputSelector` /
+    `SubmissionStrategyActor` / `FeeEstimator` seam slots
+    (segment-2c R13 / R15 / R16) are pinned at the trait /
+    actor-topology level.
   - Cross-cutting `DiagnosticSink` contract-doc generalization
     (§5.0.3): rename `REFRESH_DIAGNOSTIC_STREAM.md` →
     `DIAGNOSTIC_STREAM.md` general, or factor parent

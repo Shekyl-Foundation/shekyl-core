@@ -690,6 +690,89 @@
 
 ### Documentation
 
+- **Stage 1 PR 5 — Round 2 segment 2b (R11 signing-actor split
+  reframe to (b); R14 reservation extensibility seam).**
+  Doc-only commit on `feat/stage-1-pr5-pending-tx-engine-design`.
+  The post-Round-1-closure adversarial review's primary finding
+  surfaced an architectural-integrity-now item that the Round 1
+  R11 working disposition deferred under PR 4 R4-consistency
+  grounds; segment 2b reframes R11 to (b) — separate
+  `LocalSigner` / `SigningActor` from Stage 1 — and adds R14 as
+  a near-zero-cost reservation extensibility seam in the same
+  commit.
+
+  - **R11 reframe to (b) (architectural-integrity-now).** §5.4
+    R11 prose replaced. Round 1's working disposition leaned
+    (a) — `PendingTxActor` holds spend material, "matches PR 4
+    R4's instance-scoped pattern" — with shape (b) (separate
+    `SigningActor`) deferred to V3.x with the HW-wallet
+    trigger. The cost-asymmetry argument that justified PR 4
+    R4's tactical (a) (Scanner already existed in C++ holding
+    view + spend material; restructuring Scanner was the
+    deferral trigger) does **not** apply to PR 5 R11: PR 5 is
+    opening the trait surface; `LocalPendingTx` does not yet
+    exist; the choice between (a) and (b) is the same cost
+    either way (we are designing one or the other from scratch,
+    not moving from one to the other). R4-consistency cuts the
+    other way: PR 4 R4's (a) explicitly named (c) as the
+    long-term shape with the HW-wallet trigger; PR 5 R11 lands
+    that long-term shape from the start. HW wallets are core,
+    not edge, per `00-mission.mdc` §1; designing the trait
+    surface so spend material never enters `PendingTxActor` is
+    the threat-model-correct shape; deferring it to V3.x treats
+    the architecturally-cleaner shape as an optimization rather
+    than the baseline. Audit surface narrows under (b) (one
+    actor whose sole job is signing); Stage 4 actor-migration
+    cost is asymmetric (splitting an existing actor is harder
+    than designing actors split). §5.0.1 sketches updated to
+    add `signer: Arc<S>` (Stage 1) and `signer:
+    ActorRef<SigningActor>` (Stage 4) fields plus prose pinning
+    the spend-material-locality discipline.
+
+  - **R14 reservation extensibility seam.** New §5.4 R14 entry.
+    `Reservation` shape gains an `extensions:
+    Vec<ReservationExtension>` field; `ReservationExtension` is
+    `#[non_exhaustive]` with empty V3.0 variant set; same
+    extensibility pattern as `RefreshDiagnostic` /
+    `PendingTxDiagnostic`. Forecloses V3.x trait revision when
+    coinjoin / atomic-swap / time-locked / multi-stage /
+    composable reservation variants land in V3.x consumer-actor
+    PRs. Round 2 hygiene at near-zero cost; large optionality
+    preservation.
+
+  - **FOLLOWUPS update.** The pre-segment-2b
+    `PendingTxEngine`-(b)-signing-actor-split V3.x deferral
+    entry in [`FOLLOWUPS.md`](./FOLLOWUPS.md) is replaced by
+    a V3.x entry tracking HW-wallet integration as a
+    `Signer`-impl substitution against the existing
+    architecture. PR 4 R4 V3.x deferred-(c)
+    (split-producer/recoverer for view-tag matching vs. final
+    hybrid-decap) remains V3.x-deferred but benefits from PR 5
+    R11 (b)'s `SigningActor` infrastructure: the spend-key-
+    isolated actor R4 (c) needs has a precedent in PR 5's
+    `SigningActor`; lifting R4 (c) at the V3.x trigger becomes
+    simpler.
+
+  - **Discipline note (forward-template).** R11's reframe is
+    the architectural-integrity-now discipline applied at the
+    residual-disposition level — R-residual dispositions
+    inherit the same architectural-integrity-now discipline
+    that PR 3 / PR 4 established at the load-bearing question.
+    The cost-benefit-defer-to-later anti-pattern per
+    `16-architectural-inheritance.mdc` recurred in a residual
+    disposition rather than a load-bearing question; segment
+    2b's reframe makes future per-engine PRs subject to the
+    same discipline at the R-residual level.
+
+  - **Header status + §8 fenceposts updated.** Header acquires
+    a Round 2 segment 2b paragraph documenting the R11 reframe
+    rationale and the R14 extensibility seam. §8 fenceposts:
+    segment 2b moves to "Round 2 — completed" with a per-item
+    breakdown; pending segments renumber as 2c (closure-rule +
+    lens-applicability + R13 / R15 / R16 / R17 named with
+    dispositions), 2d (R2 + R12 co-disposition), 2e (R8), 2f
+    (R9 + sink-binding decouple from R11), 2g (close-out).
+
 - **Stage 1 PR 5 — Round 2 segment 2a (audit-readiness): §5.3
   criterion 5 strengthening + threat-model anchor explicit
   defense + §5.5 scorecard rationale clarification.** Doc-only

@@ -3154,59 +3154,52 @@ one place to confirm each item's relationship to the wallet stack.
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.8 #4 (recursive trust-boundary discipline).
 
-- **`PendingTxEngine` (b) signing-actor split (Stage 1 PR 5 R11
-  deferral; Stage 4+ spend-secret isolation).** PR 5's Round 1
-  reframe of
+- **HW-wallet integration as a `Signer`-impl substitution
+  (Stage 1 PR 5 R11 (b) substrate; V3.x).** PR 5's Round 2
+  segment 2b reframe of
   [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
-  §5.4 R11 surfaced the signing-actor split question under the
-  §5.0 actor-mesh framing. For Stage 1, option (a) — the
-  `PendingTxActor` holds spend material directly, bound at
-  `LocalPendingTx::new` — is the operative shape (consistent
-  with PR 4 R4's instance-scoped pattern; spend material crosses
-  the trait boundary the same way it crosses today's
-  `Engine<S>` boundary). Option (b) — a separate `SigningActor`
-  with `PendingTxActor` delegating sign requests via mailbox
-  message — is the stricter threat-model shape that reduces the
-  signing surface to a single actor whose only job is signing.
+  §5.4 R11 closed the signing-actor split question as **(b) —
+  separate `SigningActor` from Stage 1**: `LocalPendingTx` /
+  `PendingTxActor` does not hold spend material;
+  `LocalSigner` / `SigningActor` is the sole holder. The trait
+  surface and the architecture are designed to accept HW-wallet
+  integration at the trigger as a `Signer`-impl substitution
+  (`HardwareSigner`), not a refactor.
 
-  **The (b) shape's properties.**
-  - **Easier to audit.** `SigningActor`'s code surface is
-    bounded — accept signed-message envelopes, return signed
-    bytes, zeroize on drop. The auditor's question "where can
-    the spend secret leak?" has one answer.
-  - **Easier to isolate.** A future kernel-level-isolation
-    deployment (process-per-actor, capability-based mailbox
-    routing) reduces the spend-secret-bearing process to one.
-  - **Easier to swap for HW-wallet integration.** Replacing
-    `SigningActor`'s implementation with a HW-wallet-backed
-    one isolates the change to one actor.
+  **What V3.x lands.** A `HardwareSigner: Signer` impl that
+  delegates `sign_tx` to a hardware device (trezor / ledger /
+  YubiKey-class secure-storage path); wallet-side wiring to
+  select the impl at startup based on user configuration; UX
+  for device prompting / unlock / confirmation flows during
+  signing. None of these change the `PendingTxEngine` trait
+  surface or the actor topology; the existing `LocalSigner` is
+  swapped for `HardwareSigner` at construction time.
 
-  **Trigger (binding).** *Same trigger as PR 4 R4 deferred-(c):
-  if HW-wallet-backed signing or a post-V3 threat-model
-  refinement requires producer-side spend-key isolation, the
-  (b) migration becomes load-bearing and lifts alongside.* Until
-  then, the (a) shape is the operative answer; the
-  `PendingTxActor`'s spend-key holding is bounded to its
-  lifetime and zeroized on drop via the existing zeroization
-  discipline.
+  **Trigger.** HW-wallet implementation availability and
+  integration scope (UX, device-API library selection,
+  hardware-specific edge cases). The architectural cost was
+  paid in PR 5 segment 2b; V3.x cost is implementation +
+  integration work, not architectural change.
 
-  **Implementation-side dependency on PR 4 R4 trajectory.** PR 4
-  R4 deferred-(c) and PR 5 R11 (b) share infrastructure: both
-  require the spend-secret-bearing actor to be addressable via
-  mailbox from an actor that holds only public material. A
-  coordinated migration that lifts both
-  `RefreshEngine`-(c)-split-producer/recoverer and
-  `PendingTxEngine`-(b)-signing-actor at the same trigger is
-  efficient; lifting them independently doubles the
-  scan-loop / signing-loop API revisions.
+  **Relationship to PR 4 R4 V3.x deferred-(c).** PR 4 R4's V3.x
+  deferred-(c) (split-producer/recoverer for view-tag matching
+  vs. final hybrid-decap) benefits from PR 5 R11 (b)'s
+  `SigningActor` infrastructure: the spend-key-isolated actor
+  R4 (c) needs has a precedent and a target shape in PR 5's
+  `SigningActor`; lifting PR 4 R4 (c) at the V3.x trigger
+  becomes simpler because the spend-key-isolation shape
+  already exists in the codebase.
 
   Cross-references:
   [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §3.1 (spend-secret-locality framing), §5.0 (actor-mesh
-  framing as substrate), §5.4 R11 (Round 1 surfacing with (a) /
-  (b) options), §5.5 (Round 1 disposition);
+  framing as substrate), §5.0.1 (Stage 1 / Stage 4
+  `signer`-field substrate), §5.4 R11 (Round 2 segment 2b
+  closure as (b)), §5.5 (Round 1 disposition);
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-  §3.1, §5.4.7 R4 (Round 2 disposition with (c) deferral).
+  §3.1, §5.4.7 R4 (Round 2 disposition with (c) deferral —
+  remains V3.x-deferred; PR 5 R11 (b) provides the
+  spend-key-isolation precedent for the eventual lift).
 
 - **Sync refresh wrapper generalization over `L: LedgerEngine`.**
   Stage 1 PR 2 generalized `Engine::start_refresh` and the
