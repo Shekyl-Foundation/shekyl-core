@@ -2925,19 +2925,50 @@ one place to confirm each item's relationship to the wallet stack.
   constraint).
 
 - **Diagnostic-stream specification document
-  (`docs/design/REFRESH_DIAGNOSTIC_STREAM.md`, V3.x).** PR 4's
-  Round 2 reframe of
+  (`docs/design/DIAGNOSTIC_STREAM.md`, V3.x; renamed in
+  PR 5 Round 2 segment 2g — was
+  `REFRESH_DIAGNOSTIC_STREAM.md`).** PR 4's Round 2 reframe
+  of
   [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.7 R6 defines the `RefreshDiagnostic` / `DiagnosticSink`
-  trait contract; the implementation-side spec doc captures
-  the variant taxonomy, consumer-actor design space,
-  mailbox-policy templates, the trust-boundary discipline
-  (in-process-only for full-fidelity, recursively per §5.4.8
-  #4 — including in-process aggregator-republisher actors
-  whose external surface crosses the boundary; projection-only
-  across trust boundaries), and the emergent-behaviour
-  analysis framework when multiple consumers coexist
-  (§5.4.8 "Cross-cutting" note).
+  trait contract; PR 5's Round 1 + Round 2 segments 2b–2f
+  extend the pattern to `PendingTxDiagnostic` /
+  `DiscardReason` / `SubmitError` / `SubmitErrorKind` per
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0.2 + §5.0.2.1 + §5.0.3. The implementation-side spec
+  doc captures the variant taxonomy, consumer-actor design
+  space, mailbox-policy templates, the trust-boundary
+  discipline (in-process-only for full-fidelity, recursively
+  per §5.4.8 #4 — including in-process aggregator-republisher
+  actors whose external surface crosses the boundary;
+  projection-only across trust boundaries), and the
+  emergent-behaviour analysis framework when multiple
+  consumers coexist (§5.4.8 "Cross-cutting" note).
+
+  **Segment-2g rename rationale.** The contracts at §5.0.3
+  are general properties of any `DiagnosticSink`-shaped seam
+  (non-blocking emit, emission/return coherence, recursive
+  trust boundary, restart-amnesia detection, producer
+  panic-safety, concurrent emit); they apply to PR 4's
+  `RefreshDiagnostic` and PR 5's `PendingTxDiagnostic`
+  identically. A single `DIAGNOSTIC_STREAM.md` doc with a
+  shared-contracts-at-the-top + per-stream-sections
+  structure is the lower cross-reference cost shape than a
+  parent-and-children factoring. The factoring discipline
+  remains available retroactively if growth justifies.
+
+  **Doc structure (V3.x introduction PR).** The doc opens
+  with the shared contract bullets from PR 4 §5.4.6 /
+  §5.4.7 R6 / §5.4.8 and PR 5 §5.0.3 (a single set; the
+  contracts are identical). Per-stream sections follow:
+  `RefreshDiagnostic` (PR 4 variant taxonomy + emission-
+  site discipline); `PendingTxDiagnostic` + `DiscardReason`
+  (PR 5 variant taxonomy + emission-site discipline; R8
+  / R9 closure dispositions);
+  `LedgerDiagnostic` (Phase 0g variant pending the
+  consumer-actor PR per PR 5 segment-2g introduction-PR
+  disposition). V3.x consumer-actor PRs extend per-stream
+  sections additively as new variants land.
 
   **Load-bearing contract pins (binding on every V3.x
   consumer-actor PR sink implementation).** The spec doc
@@ -3013,6 +3044,546 @@ one place to confirm each item's relationship to the wallet stack.
   (`build_scanner_from_keys`),
   [`shekyl-scanner/src/scan.rs:506`](../rust/shekyl-scanner/src/scan.rs)
   (`Scanner::new`).
+
+- **`ReservationTTLActor` consumer actor (Stage 1 PR 5 R8
+  composition home; reservation TTL / leak prevention; closure
+  amended in segment 2e).** PR 5's Round 1 reframe of
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R8 reframed reservation TTL / leak prevention as a
+  composition-side disposition under the §5.0 actor-mesh
+  framing; segment 2e (2026-05-14) closed R8 by pinning all
+  V3.0 deliverables (including the new
+  `DiscardReason::TTLAutoDiscard` variant) so the V3.x
+  consumer-actor PR is additive-only — no V3.x trait revision,
+  no V3.x enum revision, no V3.x consumer-side breaking change
+  per [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  continuous-discipline corollary.
+  `ReservationTTLActor` subscribes to **both
+  reservation-creation events and reservation-terminal
+  events** on `PendingTxActor`'s diagnostic-stream surface,
+  maintains in-memory per-reservation age tracking, emits
+  `PendingTxDiagnostic::ReservationOutstanding {
+  reservation_id, age }` warnings on stale reservations, and
+  signals `PendingTxActor` (via `AutoDiscardMessage {
+  reservation_id }` mailbox message) to auto-discard if TTL
+  policy permits; `PendingTxActor` then emits `Discarded {
+  reason: TTLAutoDiscard }` (the variant added in segment
+  2e). Same shape as PR 4's `PeerReputationActor` /
+  `RecoveryActor` consumer-actor pattern — the
+  `PendingTxEngine` trait surface stays minimal; the
+  capability composes.
+
+  **Subscription contract (Copilot-fix follow-up refinement
+  to segment-2e closure).** Subscribing only to
+  `BuildSucceeded` would leak closed reservations into the
+  actor's in-memory map forever, producing stale
+  `ReservationOutstanding` warnings on already-terminated
+  reservations and spurious `AutoDiscardMessage` round-trips
+  to `PendingTxActor`. The complete subscription contract:
+
+  - **`PendingTxDiagnostic::BuildSucceeded { reservation_id,
+    snapshot_id, outputs_count }`** — insert
+    `{reservation_id → started_at}` into the in-memory
+    age-tracking map (tracking-start transition).
+  - **`PendingTxDiagnostic::SubmitSucceeded { reservation_id,
+    tx_hash }`** — remove `reservation_id` from the
+    age-tracking map (terminal — reservation consumed by
+    submit).
+  - **`PendingTxDiagnostic::Discarded { reservation_id,
+    reason }`** — remove `reservation_id` from the
+    age-tracking map regardless of `reason`. Covers
+    `ConsumerExplicit`, `SnapshotRotationAutoDiscard`,
+    `DaemonRejectedTerminal` (R9 segment-2f), and
+    `TTLAutoDiscard` (the actor's own auto-discard fires;
+    self-cleanup).
+
+  **What `SubmitFailed` does *not* close.** Per segment-2f
+  R9's two-stage submit flow (Finding-2 daemon-side
+  authority disposition), `SubmitFailed` on
+  `DaemonTimeout` / `DaemonUnavailable` keeps the
+  reservation in `SubmitPendingDaemonAck` — the
+  reservation is still outstanding, still output-locking,
+  and still ages. The TTL actor **does not** remove the
+  reservation on `SubmitFailed`; terminal cleanup is only
+  `SubmitSucceeded` or `Discarded` per the contract above.
+  Optional V3.x refinement: the actor may subscribe to
+  `SubmitAttempted` to apply a shorter TTL on
+  `SubmitPendingDaemonAck`-state reservations (the
+  daemon-side ambiguity window has a different
+  policy-acceptable age than a never-attempted
+  reservation); this is a V3.x consumer-actor policy
+  choice, not a V3.0 diagnostic-stream-surface requirement.
+
+  **Memory-bound property.** With the full subscription
+  contract above, the actor's age-tracking map is bounded
+  by the count of currently-outstanding reservations
+  (i.e., `PendingTxActor::outstanding()`'s return value),
+  not by the cumulative count of all reservations the
+  wallet has ever created.
+
+  **V3.0 deliverables (pinned at segment-2e closure).**
+  PR 5 ships: (1) `PendingTxDiagnostic::BuildSucceeded`
+  emitted at the `build`-success path in `LocalPendingTx::build`
+  / `PendingTxActor::handle_build` (Phase 1 call-site review
+  confirms); (2) `PendingTxDiagnostic::Discarded { reason:
+  SnapshotRotationAutoDiscard }` emitted at `submit`'s
+  snapshot-mismatch path (R5's lazy-discard semantics); (3)
+  `PendingTxDiagnostic::ReservationOutstanding` variant exists
+  in the `#[non_exhaustive]` enum (no V3.0 emitter; V3.x
+  `ReservationTTLActor` is the first emitter); (4) **new in
+  segment 2e:** `DiscardReason::TTLAutoDiscard` variant in the
+  `#[non_exhaustive] DiscardReason` set so V3.x's
+  `ReservationTTLActor` can trigger `Discarded { reason:
+  TTLAutoDiscard }` without a V3.x enum revision.
+
+  **R5 ↔ R8 coherence (segment 2e verification).** R5's
+  `SnapshotRotationAutoDiscard` is the reactive cleanup path
+  (cleanup-on-use); R8's `TTLAutoDiscard` is the proactive
+  complement (age-based policy on never-used reservations).
+  Both share the `DiscardReason`/`Discarded` event
+  infrastructure; downstream consumers see a unified
+  `Discarded` event stream with discriminated reasons.
+
+  **Hard mitigation pins (binding on this entry).**
+  - **Restart-amnesia per PR 4 §5.4.8 #1 (binding on PR 5 too).**
+    State is **in-memory only**, scoped to the wallet session;
+    drop on wallet close. No persistence beyond the wallet
+    session. Privacy-first per
+    [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) §2.
+  - **Recursive trust boundary per PR 4 §5.4.8 #4 (binding on
+    PR 5 too).** Full-fidelity events flow only to actors whose
+    external surface is itself within the wallet trust boundary,
+    recursively. `ReservationTTLActor`'s warnings are
+    operational-state events about reservation age — they
+    must not flow to off-host loggers, telemetry, or debug UIs
+    with IPC channels without first projecting away
+    `reservation_id` / `snapshot_id` correlation surface.
+  - **Bounded mailbox per PR 4 §5.4.8 #5.** A consumer with a
+    per-reservation-age tracking surface unbounded against a
+    reservation-spam scenario (consumer with a build/discard
+    bug spawning reservations at high rate) is itself an OOM
+    surface. Drop-oldest-on-overflow policy with aggregate
+    age-band counts preserves the warning function at scale.
+
+  **Round 2 disposition for PR 5 (trait-side dependency).**
+  Confirm that `PendingTxDiagnostic::BuildSucceeded` /
+  `ReservationOutstanding` / `Discarded { reason:
+  SnapshotRotationAutoDiscard }` events are emitted from the
+  right call sites; the variant set in PR 5 §5.0.2 is
+  `#[non_exhaustive]` so future variants land additively
+  without trait revision.
+
+  **Trigger:** *when Stage 4 actor mesh stabilizes.*
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0 (actor-mesh framing), §5.0.2 (`PendingTxDiagnostic`
+  variant set), §5.0.3 (cross-cutting `DiagnosticSink`
+  contracts), §5.4 R8 (reframed disposition);
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.6 / §5.4.7 R6 reframe / §5.4.8 (the cross-cutting
+  contracts inherited verbatim).
+
+- **`SubmitFailureAnalyzer` consumer actor (Stage 1 PR 5 R9
+  composition; pattern detection on submit failures).** PR 5's
+  Round 1 reframe of
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R9 named the daemon-side submit-failure path and the
+  per-error-class disposition; the analyzer is the
+  composition-side counterpart that detects patterns across
+  failures rather than reacting to single events.
+
+  **Segment-2f closure status (2026-05-14; variant-name
+  corrections in Copilot-fix follow-up).** R9 closed in
+  Round 2 segment 2f with two-stage submit flow + internal
+  `ReservationState` machine + daemon-side authority
+  disposition for Finding 2 ambiguous outcomes. The
+  analyzer's shape is **unchanged by segment 2f**; the
+  `PendingTxDiagnostic` events it subscribes to
+  (`SubmitFailed`, `SubmitSnapshotInvalidated`) are the
+  same; `SubmitErrorKind` now pinned as
+  `DoubleSpend | FeeTooLow | Malformed | DaemonTimeout |
+  DaemonUnavailable` per segment 2f. The analyzer subscribes
+  to all five kinds; the pattern-detection bullets below
+  remain accurate (with `DaemonTimeout` / `DaemonUnavailable`
+  covering the segment-2f "Timeout" disposition).
+  `SubmitFailureAnalyzer` subscribes to
+  `PendingTxDiagnostic::SubmitFailed` and
+  `PendingTxDiagnostic::SubmitSnapshotInvalidated` events;
+  detects patterns:
+  - **Many `SubmitSnapshotInvalidated` in a row** →
+    adversarial reorg-churn signal; surfaces to
+    `PeerReputationActor` (via cross-actor signal or shared
+    event consumption) for rotation-policy input.
+  - **Recurring `SubmitFailed { kind: FeeTooLow }`** → fee
+    estimator drift signal; surfaces to a fee-estimator actor
+    (when one exists) or to user-facing UI as a fee-update
+    suggestion.
+  - **Recurring `SubmitFailed { kind: Malformed }`** →
+    wallet-side bug or daemon-byzantine path; logs loudly
+    (subject to recursive trust-boundary discipline) and may
+    trigger error-reporting if per-consumer policy allows.
+  - **Recurring `SubmitFailed { kind: DaemonTimeout }` or
+    `SubmitFailed { kind: DaemonUnavailable }`** → daemon
+    transient failure or peer-rotation candidate; signals
+    `PeerReputationActor` for graduated response. (Both
+    ambiguous-failure kinds carry the same operational
+    signal under daemon-side authority disposition per
+    segment 2f; the analyzer treats them as a single
+    pattern source.)
+
+  **Hard mitigation pins (binding).**
+  - **Recursive trust boundary per PR 4 §5.4.8 #4 (binding).**
+    Per-failure-kind counts and per-peer correlation are
+    in-process-only; cross-boundary projections drop
+    `reservation_id` / `tx_hash` correlation surface and emit
+    only aggregate counts per error-class.
+  - **Restart-amnesia per PR 4 §5.4.8 #1 (binding).** Pattern
+    detection is coarse-window-based; no persistence across
+    wallet restarts.
+
+  **Trigger:** *when Stage 4 actor mesh stabilizes;
+  `PeerReputationActor` (PR 4 R6) is a coordinated
+  prerequisite for the rotation-policy signal path.*
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0.2 (`PendingTxDiagnostic` variant set), §5.4 R9
+  (per-error-class semantics);
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 reframe (`PeerReputationActor` cross-reference).
+
+- **`TimeoutResolverActor` consumer actor (Stage 1 PR 5 R9
+  Finding 2 composition; ergonomic complement for daemon-
+  side authority disposition; V3.x).** PR 5's Round 2
+  segment 2f closure of
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R9 closed Finding 2 (mailbox-ordering vs daemon-side
+  authority for terminal-rejection visibility) as
+  **daemon-side authority**: on `SubmitErrorKind::DaemonTimeout`
+  or `DaemonUnavailable`, the reservation stays in
+  `SubmitPendingDaemonAck`; consumer-explicit `discard(id,
+  ConsumerExplicit)` is the resolution path; R8's
+  `ReservationTTLActor` is the safety net for forgotten
+  resolutions. `TimeoutResolverActor` is the V3.x ergonomic
+  complement that automates the consumer-side resolution
+  loop:
+
+  - Subscribes to `PendingTxDiagnostic::SubmitFailed { kind:
+    DaemonTimeout | DaemonUnavailable }` events.
+  - **Chain-observation mechanism (design owned by the
+    V3.x consumer-actor PR; Copilot-fix follow-up note).**
+    To determine whether the timed-out `tx_hash` landed on
+    chain, the actor needs a mechanism that
+    `LedgerDiagnostic::SnapshotMerged { new, prior, height }`
+    does **not** provide on its own — `SnapshotMerged`
+    carries snapshot identity and height, not transaction
+    hashes per Phase 0g binding. The V3.x consumer-actor
+    PR will design the correlation mechanism as one of:
+    - An **additive `LedgerDiagnostic` variant** (e.g.,
+      `LedgerDiagnostic::TransactionConfirmed { tx_hash,
+      height }`) emitted by the `LedgerEngine` when a
+      previously-pending transaction lands on chain. The
+      `TimeoutResolverActor` subscribes to this new variant
+      directly.
+    - An **additive `LedgerEngine` chain-query accessor**
+      (e.g., `LedgerEngine::tx_in_chain(tx_hash) ->
+      Result<Option<BlockHeight>>`) that the resolver
+      polls on each `SnapshotMerged` event to check
+      whether the timed-out tx has landed.
+    - **Both** (event-driven for low-latency notification;
+      polling for catch-up after restart-amnesia).
+
+    Pinning the mechanism in PR 5 would overspecify a V3.x
+    consumer-actor that doesn't ship in V3.0; the
+    `LedgerEngine` and `LedgerDiagnostic` surfaces have
+    their own additive-extension discipline that the
+    consumer-actor PR composes against.
+  - On observing the timed-out `tx_hash` in chain state
+    (by whichever mechanism the V3.x PR pins) → calls
+    `discard(id, ConsumerExplicit)` to release the
+    reservation entry (the on-chain tx is now the
+    authoritative record).
+  - On observing **no** chain landing after a configurable
+    grace period (default: N blocks ≈ M minutes; consumer-
+    policy-configurable) → calls `discard(id,
+    ConsumerExplicit)` to release outputs back to the pool;
+    consumer's rebuild loop picks up.
+
+  **Why V3.x, not V3.0.** Segment 2f's daemon-side authority
+  disposition is wallet-correct without the resolver actor —
+  R8's `ReservationTTLActor` already covers forgotten
+  resolutions via per-state TTL configuration with shorter
+  TTL on `SubmitPendingDaemonAck`. The `TimeoutResolverActor`
+  is **operational ergonomics**, not a wallet-correctness
+  primitive; deferring it to V3.x preserves V3.0's "do less,
+  do it right" posture and lets the actor's design land
+  alongside `SubmitFailureAnalyzer` once Stage 4 actor mesh
+  stabilizes.
+
+  **Hard mitigation pins (binding).**
+  - **Recursive trust boundary per PR 4 §5.4.8 #4 (binding).**
+    `TimeoutResolverActor` operates in-process on the
+    wallet's own reservation IDs and tx hashes; cross-
+    boundary projections (e.g., telemetry that a particular
+    reservation timed out and was resolved by chain
+    observation) drop `reservation_id` / `tx_hash`
+    correlation surface and emit only aggregate counts.
+  - **Restart-amnesia per PR 4 §5.4.8 #1 (binding).** The
+    actor's grace-period timers are in-memory only;
+    restart drops them. R8's `ReservationTTLActor` is the
+    durable safety net (per-state TTLs run on the
+    restart-amnesia substrate too — they're event-driven
+    via timestamp comparison against the reservation's age,
+    not wall-clock timers).
+  - **Recursive consumer-policy.** Grace-period duration is
+    consumer-policy-configurable; default values are sized
+    conservatively (longer than typical reorg-depth + mempool
+    propagation delay) to minimize false-resolution risk.
+
+  **Trigger:** *when Stage 4 actor mesh stabilizes;
+  `LedgerDiagnostic::SnapshotMerged` (PR 4) is a
+  prerequisite for the chain-observation correlation path.*
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0.2 (`SubmitErrorKind` variant set; `DaemonTimeout` /
+  `DaemonUnavailable`), §5.4 R9 (Finding 2 daemon-side
+  authority closure; segment-2f V3.x deliverable named the
+  V3.x ergonomic-API candidate `resolve_pending(id,
+  chain_observation)`); R8 `ReservationTTLActor` entry above
+  (safety-net role).
+
+- **`ReservationAuditActor` consumer actor (Stage 1 PR 5 §5.0.2
+  composition; in-memory wallet-action audit log).** Subscribes
+  to all `PendingTxDiagnostic` events and maintains an
+  in-memory wallet-action audit log: build / submit / discard
+  events with timestamps and outcomes. Useful for UI
+  transaction-history view; useful for forensic investigation
+  when a wallet exhibits unexpected behaviour.
+
+  **Hard mitigation pins (binding).**
+  - **Recursive trust boundary per PR 4 §5.4.8 #4 (binding —
+    most load-bearing on this entry).** Full-fidelity audit
+    log carries `reservation_id` / `snapshot_id` / `tx_hash`
+    correlation surfaces. **Persistence beyond wallet session
+    requires explicit threat-model review** — the audit log
+    is exactly the kind of state an adversary with file-system
+    access wants to read. Default disposition: in-memory only.
+    Persistence path requires either (a) projection to a
+    coarse-grained per-day transaction count export (UI
+    history shape) or (b) full encrypted-at-rest storage with
+    explicit threat-model justification.
+  - **Restart-amnesia per PR 4 §5.4.8 #1 (binding under default
+    in-memory disposition).** Audit log resets on wallet
+    restart unless persistence is explicitly enabled per the
+    review above.
+  - **Mailbox saturation per PR 4 §5.4.8 #5.** Audit log is a
+    bounded ring buffer with drop-oldest-on-overflow; the UI
+    transaction-history view shows the most-recent-N entries.
+
+  **Trigger:** *when Stage 4 actor mesh stabilizes; UI history
+  view in scope.*
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0.2 (`PendingTxDiagnostic` variant set), §5.0.3
+  (cross-cutting `DiagnosticSink` contracts);
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.8 #4 (recursive trust-boundary discipline).
+
+- **HW-wallet integration as a `Signer`-impl substitution
+  (Stage 1 PR 5 R11 (b) substrate; V3.x).** PR 5's Round 2
+  segment 2b reframe of
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R11 closed the signing-actor split question as **(b) —
+  separate `SigningActor` from Stage 1**: `LocalPendingTx` /
+  `PendingTxActor` does not hold spend material;
+  `LocalSigner` / `SigningActor` is the sole holder. The trait
+  surface and the architecture are designed to accept HW-wallet
+  integration at the trigger as a `Signer`-impl substitution
+  (`HardwareSigner`), not a refactor.
+
+  **What V3.x lands.** A `HardwareSigner: Signer` impl that
+  delegates `sign_tx` to a hardware device (trezor / ledger /
+  YubiKey-class secure-storage path); wallet-side wiring to
+  select the impl at startup based on user configuration; UX
+  for device prompting / unlock / confirmation flows during
+  signing. None of these change the `PendingTxEngine` trait
+  surface or the actor topology; the existing `LocalSigner` is
+  swapped for `HardwareSigner` at construction time.
+
+  **Trigger.** HW-wallet implementation availability and
+  integration scope (UX, device-API library selection,
+  hardware-specific edge cases). The architectural cost was
+  paid in PR 5 segment 2b; V3.x cost is implementation +
+  integration work, not architectural change.
+
+  **Relationship to PR 4 R4 V3.x deferred-(c).** PR 4 R4's V3.x
+  deferred-(c) (split-producer/recoverer for view-tag matching
+  vs. final hybrid-decap) benefits from PR 5 R11 (b)'s
+  `SigningActor` infrastructure: the spend-key-isolated actor
+  R4 (c) needs has a precedent and a target shape in PR 5's
+  `SigningActor`; lifting PR 4 R4 (c) at the V3.x trigger
+  becomes simpler because the spend-key-isolation shape
+  already exists in the codebase.
+
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §3.1 (spend-secret-locality framing), §5.0 (actor-mesh
+  framing as substrate), §5.0.1 (Stage 1 / Stage 4
+  `signer`-field substrate), §5.4 R11 (Round 2 segment 2b
+  closure as (b)), §5.5 (Round 1 disposition);
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §3.1, §5.4.7 R4 (Round 2 disposition with (c) deferral —
+  remains V3.x-deferred; PR 5 R11 (b) provides the
+  spend-key-isolation precedent for the eventual lift).
+
+- **Output-selection alternatives under `OutputSelector` trait
+  seam (Stage 1 PR 5 R13 substrate; V3.x).** PR 5 segment 2c
+  named the output-selection algorithm as a first-class privacy
+  decision and closed the disposition as **V3.0 ships
+  wallet2-greedy carryover under an `OutputSelector` trait-
+  parameter seam**; the seam is the architectural-integrity-
+  now item, the algorithm choice is the V3.0-vs-V3.x decision.
+  V3.x lands alternative `OutputSelector` impls:
+  - `RandomizedSelector` — Knuth-shuffle within
+    size-constrained candidates; defeats deterministic-
+    correlation between reservations against the same
+    available output set.
+  - `EntropyMaximizingSelector` — optimize for output-set
+    ambiguity under FCMP++ semantics (output age,
+    transaction-graph distance, ring-membership
+    plausibility); V3.x research territory.
+
+  **Trigger.** Privacy-research outcomes (alternative
+  selection algorithms validated under FCMP++ adversarial
+  models); UX requirements (e.g., GUI "privacy mode"
+  toggles); operational telemetry surfacing
+  selection-correlation observable on-chain. None of these
+  are V3.0 blockers; the seam preserves V3.0 shipping date
+  while V3.x research advances.
+
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R13 (segment 2c disposition);
+  [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) §2
+  (privacy-as-product anchor).
+
+- **Submission-strategy actors under
+  `SubmissionStrategyActor` seam (Stage 1 PR 5 R15 substrate;
+  V3.x).** PR 5 segment 2c named submission-time observability
+  as a wallet-layer privacy weakness and closed the
+  disposition as **V3.0 ships the
+  `SubmissionStrategyActor` seam (intermediate actor in the
+  submit path between `PendingTxActor` and `DaemonEngine`)
+  with `DirectStrategy` as the V3.0 default** (matches
+  wallet2 behavior; no privacy regression at V3.0 ship
+  time). V3.x lands privacy-enhancing submission-strategy
+  actors:
+  - `JitteredSubmissionStrategy` — randomized delay within
+    a configurable window; defeats single-event timing
+    correlation.
+  - `CircuitRotationStrategy` — request new Tor circuit
+    before submission; separates submission-event identity
+    from prior-connection identity.
+  - `BroadcastStrategy` — submit through multiple peers
+    simultaneously; defeats single-peer-eavesdrop
+    attribution.
+  - `BatchedStrategy` — coordinate submission timing with
+    other Shekyl wallets through a coordination layer;
+    defeats per-wallet timing correlation by reducing the
+    population of submitters at any single timing window.
+
+  **Trigger.** Anonymity-network deployment maturity
+  (Shekyl-native Tor / Lokinet / I2P integration validated
+  against the threat model); coordination-layer research
+  (BatchedStrategy requires multi-wallet coordination
+  infrastructure that does not yet exist); user-
+  configuration UX for strategy selection.
+
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R15 (segment 2c disposition);
+  [`ANONYMITY_NETWORKS.md`](ANONYMITY_NETWORKS.md)
+  (threat-model anchor).
+
+- **Wallet-side fee estimator (`WalletSideEstimator`) under
+  `FeeEstimator` trait seam (Stage 1 PR 5 R16 substrate;
+  V3.x with conditional V3.0 lift).** PR 5 segment 2c named
+  daemon-recommended fees as a wallet-fingerprint exploit
+  surface against an adversary-controlled daemon and closed
+  the disposition as **V3.0 ships
+  daemon-recommendation-with-explicit-override under a
+  `FeeEstimator` trait-parameter seam** (default
+  `DaemonRecommendationEstimator`; explicit override
+  available via `ExplicitFeeEstimator` for explicit-fee
+  workflows). V3.x lands `WalletSideEstimator` analyzing
+  `LedgerEngine` historical block fee distribution
+  directly; decouples wallet fee from daemon
+  recommendation entirely; every wallet computes fees from
+  the same chain-state inputs and produces statistically-
+  indistinguishable outputs.
+
+  **Conditional V3.0 lift.** If Phase 0 review (Stage 1
+  PR 5 segment 2d) confirms the `LedgerEngine`
+  historical-block-fee-distribution accessor cost is
+  bounded and the estimator implementation is feasible at
+  V3.0 review time, R16 (c) lifts to V3.0 ship.
+  Segment-2c default is the conservative disposition;
+  the lift is a discipline-driven amendment, not a
+  reopening.
+
+  **Trigger (V3.x default).** `LedgerEngine` historical-
+  block-fee-distribution accessor cost confirmed bounded;
+  fee-estimation algorithm validated against on-chain
+  fingerprint analysis; fee-band-selection UX validated.
+  None are V3.0 blockers under the segment-2c
+  disposition; the seam preserves V3.0 shipping date.
+
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R16 (segment 2c disposition);
+  [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) §2
+  (privacy-as-product anchor).
+
+- **Encrypted-persistence `PersistenceConsumerActor` for
+  long-running deployments (Stage 1 PR 5 R17 substrate;
+  V3.x).** PR 5 segment 2c refined the diagnostic-stream
+  restart-amnesia contract (PR 4 §5.4.8 #1) from
+  "in-memory only, drop on close" to "in-memory only by
+  default; user-controlled encrypted-persistence opt-in is
+  permitted if the persistence consumer's surface is
+  entirely within the wallet's own encrypted-state surface
+  (no cross-trust-boundary leak per PR 4 §5.4.8 #4)."
+  V3.0 ships the privacy-first default (drop-on-close);
+  V3.x optionally lands a `PersistenceConsumerActor`
+  whose surface is the wallet's own encrypted storage,
+  enabling crash-recovery via stream replay for
+  institutional / long-running / multi-day transaction-
+  construction deployments.
+
+  **Trigger.** Institutional / long-running deployment
+  requirements (foundation treasury, multi-day tx
+  workflows, mining-wallet long-uptime operation);
+  wallet-storage encryption layer matures (wallet master
+  key derivation surface, key-rotation discipline);
+  user-configuration UX for persistence opt-in. None are
+  V3.0 blockers; the contract refinement at V3.0
+  preserves the V3.x option without committing to it.
+
+  **Architectural posture.** No V3.0 trait-surface change
+  required; the `DiagnosticSink` registration surface
+  already accepts arbitrary in-process consumers per
+  PR 4 §5.4.6 / §5.4.7 R6 reframe. The contract pin's
+  refinement narrows the persistence prohibition to
+  cross-boundary persistence specifically, which PR 4
+  §5.4.8 #4 (recursive-trust-boundary discipline) already
+  governs.
+
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R17 (segment 2c disposition);
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.8 #1 (restart-amnesia rule; refined by R17),
+  §5.4.8 #4 (recursive-trust-boundary discipline;
+  unchanged).
 
 - **Sync refresh wrapper generalization over `L: LedgerEngine`.**
   Stage 1 PR 2 generalized `Engine::start_refresh` and the
