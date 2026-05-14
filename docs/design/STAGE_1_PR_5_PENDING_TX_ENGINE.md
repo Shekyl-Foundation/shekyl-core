@@ -426,7 +426,7 @@ in one round per the §7 closure rule: shapes (2) and (3) fail
 criterion 5 (adversarial-daemon resistance) on **structural**
 grounds under the actor framing, not contingent grounds; no
 fourth shape survives the framing. R3 / R5 / R10 dissolve by
-composition under §5.0; R2 / R8 / R9 / R11 carry to Round 2.
+composition under §5.0; R2 / R8 / R9 / R11 / R12 carry to Round 2.
 
 ### §5.0 Actor-mesh framing (Round 1 substrate)
 
@@ -1290,7 +1290,7 @@ under the §5.0 actor-mesh framing. Subsequent revisions land
 round-by-round inline (the PR 3 / PR 4 precedent).
 
 **Revised estimate post-Round-1 close.** Round 2 disposes
-residuals (R2 / R8 / R9 / R11) and finalizes Phase 0
+residuals (R2 / R8 / R9 / R11 / R12) and finalizes Phase 0
 enumeration; Round 3 does commit decomposition + Phase 1
 commit list. **Two rounds saved against the seed's
 three-to-four projection** because the §5.0 reframe exhausts
