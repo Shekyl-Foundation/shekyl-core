@@ -690,6 +690,24 @@
 
 ### Documentation
 
+- **Stage 1 PR 5 — PR #43 Copilot review-pass disposition: two
+  R12-enumeration-consistency findings.** Doc-only follow-up
+  commit on `feat/stage-1-pr5-pending-tx-engine-design`.
+  `copilot-pull-request-reviewer` surfaced two valid findings
+  on PR #43, both at the same audit-time question ("does R12
+  appear in every Round 2 residual enumeration?"): §5.1 closure
+  summary at line 429 ("R3 / R5 / R10 dissolve by composition
+  under §5.0; R2 / R8 / R9 / R11 carry to Round 2") and §7
+  discipline budget revised estimate at line 1294 ("Round 2
+  disposes residuals (R2 / R8 / R9 / R11)"). Both omitted R12
+  despite the surrounding sections (§1, §5.2, §5.4, §5.5 "What
+  Round 2 carries", §8 fenceposts) consistently including it.
+  Both fixed verbatim per Copilot's suggestions; defensive sweep
+  via grep confirmed all six R-residual enumerations now
+  consistently carry R12, and the four "what dissolves"
+  enumerations correctly remain on R3 / R5 / R10. Doc-only;
+  no Rust or C++ code touched.
+
 - **Stage 1 PR 5 — Round 1 follow-up: R12 (Stage 1
   `current_snapshot` acquisition mechanism) added; §5.5 ground-1
   prose softened against implicit overclaim.** Doc-only follow-up
