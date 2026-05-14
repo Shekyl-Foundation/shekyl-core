@@ -690,6 +690,149 @@
 
 ### Documentation
 
+- **Stage 1 PR 5 — Round 2 segment 2c (closure-rule and
+  lens-applicability refinements paired with R13 / R15 / R16 /
+  R17 named with dispositions).** Doc-only commit on
+  `feat/stage-1-pr5-pending-tx-engine-design`. Segment 2c lands
+  two project-wide discipline refinements (lens-applicability
+  structural-conditions test; closure-rule wargaming-surface-
+  known-at-closure-time qualifier) alongside four named-with-
+  disposition R-residuals (R13 output-selection algorithm; R15
+  submission-strategy as composable actor; R16 wallet-side fee
+  estimation; R17 event-sourced recovery as user-controlled
+  tradeoff). All four R-residuals close their V3.0 vs V3.x
+  decisions with seam-design implications for Phase 0
+  (`OutputSelector` / `SubmissionStrategyActor` / `FeeEstimator`
+  / refined diagnostic-stream contract).
+
+  **§5.0.4 lens-applicability discipline.** Section expanded
+  with structured "Lens-applicability discipline" subsection
+  establishing three structural conditions that govern when
+  the actor-mesh lens applies to a per-engine extraction:
+  (1) trait surface mediates state-mutation across actors,
+  (2) adversarial review surfaces a cross-actor liveness or
+  quiescence dependency, (3) Stage 4 actor-migration target
+  is non-trivial. Per-engine PR pre-flights test
+  applicability rather than presume it; the lens compounds
+  across PRs **whose structure admits it**, not uniformly.
+  Closure-rule cross-reference and fourth-shape adversarial-
+  test record (Round 1 closure-review log: (1)-build paired
+  with (3)-submit hybrid tested and rejected on criterion 5).
+  Forward-template content for V3.1 rules-queue PR.
+
+  **§7 closure-rule strengthening.** Restructured into
+  "Closure rule (strengthened)" + "Round 1 closure rule
+  (applied to PR 5)". General rule pinned: Round-N closes
+  when the wargaming surface **known at closure time** is
+  genuinely exhausted; new shapes surfacing in Round-N+1
+  reopen Round N rather than slipping past closure (the
+  closure rule pins what was known, not what could ever be
+  known). Lens-applicability cross-reference: closure rule's
+  "exhausted" criterion is satisfied differently depending
+  on whether the lens applies. Round 1 fourth-shape
+  closure-review test recorded as instance of the
+  strengthened rule. Forward-template content for V3.1
+  rules-queue PR.
+
+  **§5.4 R13 — output selection algorithm.** Added with
+  threat-model framing (deterministic-correlation, change-
+  reuse, order-leak independent of FCMP++ ring semantics);
+  options enumerated; disposition closed as V3.0 ships
+  wallet2-greedy under `OutputSelector` trait-parameter seam
+  (`LocalPendingTx<S: Signer, O: OutputSelector>`); V3.x
+  lands `RandomizedSelector` / `EntropyMaximizingSelector`
+  alternatives.
+
+  **§5.4 R15 — submission strategy as composable actor.**
+  Added with threat-model framing
+  (transaction-network-entry-point timing / routing as
+  wallet-layer privacy weakness against
+  `ANONYMITY_NETWORKS.md` adversary); options enumerated;
+  disposition closed as V3.0 ships `SubmissionStrategyActor`
+  seam with `DirectStrategy` default; V3.x lands
+  `JitteredSubmissionStrategy` / `CircuitRotationStrategy` /
+  `BroadcastStrategy` / `BatchedStrategy`.
+
+  **§5.4 R16 — wallet-side fee estimation.** Added with
+  threat-model framing (daemon-recommendation on-chain
+  fingerprint exploitable by malicious daemon per §5.3
+  threat-model anchor); options enumerated; disposition
+  closed as V3.0 ships
+  daemon-recommendation-with-explicit-override under
+  `FeeEstimator` trait seam; V3.x lands `WalletSideEstimator`
+  analyzing `LedgerEngine` historical block fee
+  distribution. **Conditional V3.0 lift** noted: if
+  segment-2d Phase 0 review confirms bounded `LedgerEngine`-
+  accessor cost, R16 (c) lifts to V3.0.
+
+  **§5.4 R17 — event-sourced recovery as user-controlled
+  tradeoff.** Added with threat-model framing (PR 4 §5.4.8
+  #1 restart-amnesia rule's privacy property =
+  diagnostic-event persistence does not leak across trust
+  boundaries; refinement narrows prohibition to
+  cross-boundary persistence specifically); options
+  enumerated; disposition closed as V3.0 ships PR 4 §5.4.8
+  #1 carryover (drop-on-close); V3.x optionally lands
+  encrypted-persistence consumer for institutional /
+  long-running / multi-day workflows. Diagnostic-stream
+  contract pin refined: in-memory-by-default plus
+  permitted user-controlled encrypted-persistence opt-in
+  for consumers entirely within wallet's own
+  encrypted-state surface (no cross-trust-boundary leak per
+  PR 4 §5.4.8 #4).
+
+  **FOLLOWUPS update.** Four V3.x entries added (output-
+  selection alternatives under `OutputSelector` trait seam;
+  submission-strategy actors under `SubmissionStrategyActor`
+  seam; wallet-side fee estimator under `FeeEstimator`
+  trait seam; encrypted-persistence
+  `PersistenceConsumerActor` for long-running deployments).
+  Each names the V3.x trigger and the seam-design
+  implication that segment 2c lands at V3.0.
+
+  **What Round 2 carries (§5.5).** Inventory updated to
+  reflect R13 / R15 / R16 / R17 named-with-dispositions in
+  segment 2c; §5.0.4 lens-applicability discipline + §7
+  closure-rule strengthening landed in segment 2c; pending
+  segments (2d / 2e / 2f / 2g) unchanged in scope.
+
+  **§8 fenceposts.** Segment 2c moved from "Round 2 —
+  pending" to "Round 2 — completed" with structured prose
+  (six sub-bullets: §5.0.4 + §7 + R13 + R15 + R16 + R17 +
+  CHANGELOG forward-template note).
+
+  **V3.1 rules-queue inputs (forward-template content).**
+  Two forward-template patterns this segment surfaces
+  belong in the consolidated V3.1 rules-queue PR:
+  - **Closure-rule wargaming-surface-known-at-closure-time
+    qualifier.** "Round-N closes when the wargaming surface
+    known at closure time is genuinely exhausted; new shapes
+    surfacing in Round-N+1 reopen Round N rather than
+    slipping past closure." Lift to a project-wide
+    `16-architectural-inheritance.mdc` amendment (or
+    standalone closure-discipline rule) when the rules-
+    queue PR consolidates.
+  - **Lens-applicability structural-conditions test.** The
+    actor-mesh lens compounds across PRs whose structure
+    admits it (three conditions: (1) trait mediates
+    state-mutation across actors; (2) adversarial review
+    surfaces cross-actor liveness/quiescence dependency;
+    (3) Stage 4 actor-migration target non-trivial). Per-
+    engine PR pre-flights test applicability rather than
+    presume it. Lift to `16-architectural-inheritance.mdc`
+    or a new `discipline.mdc` rule when the rules-queue PR
+    consolidates.
+
+  **Discipline note (forward-template).** Segment 2c is
+  discipline-strengthening + opportunity-surface naming
+  work that compounds project-wide design discipline
+  without reopening the load-bearing question. Where
+  segment 2a was audit-readiness and segment 2b was
+  architectural-integrity-now at the residual level (R11),
+  segment 2c lifts the project-wide pattern that makes
+  future per-engine PR pre-flights answer the same
+  questions methodically rather than adversarially.
+
 - **Stage 1 PR 5 — Round 2 segment 2b (R11 signing-actor split
   reframe to (b); R14 reservation extensibility seam).**
   Doc-only commit on `feat/stage-1-pr5-pending-tx-engine-design`.

@@ -1,8 +1,10 @@
 # Stage 1 PR 5 — `PendingTxEngine` extraction — design
 
 **Status.** **Round 1 closed (2026-05-13); Round 2 in progress
-— segments 2a (audit-readiness) and 2b (R11 signing-actor split
-reframe to (b); R14 reservation extensibility seam) landed
+— segments 2a (audit-readiness), 2b (R11 signing-actor split
+reframe to (b); R14 reservation extensibility seam), and 2c
+(closure-rule and lens-applicability refinements paired with
+R13 / R15 / R16 / R17 named with dispositions) landed
 (2026-05-14).** This
 document was opened as a seed immediately after Stage 1 PR 4's
 design substrate landed on `dev` (merge commit `6de8335d5`,
@@ -73,6 +75,50 @@ PR 4 / PR 5 already established. The R1 disposition still
 holds; segment 2b is residual-disposition work that applies the
 PR 3 / PR 4 architectural-integrity-now discipline at the
 R-residual level rather than at the load-bearing question.
+
+**Round 2 segment 2c (2026-05-14) — closure-rule and
+lens-applicability refinements + R13 / R15 / R16 / R17 named
+with dispositions.** Segment 2c lands two project-wide
+discipline refinements alongside four named-with-disposition
+R-residuals. **§5.0.4 lens-applicability discipline**
+establishes three structural conditions that govern when the
+actor-mesh lens applies to a per-engine extraction (trait
+surface mediates state-mutation across actors; adversarial
+review surfaces a cross-actor liveness or quiescence
+dependency; Stage 4 actor-migration target is non-trivial);
+the lens compounds across PRs **whose structure admits it**,
+not uniformly — per-engine PR pre-flights test applicability
+rather than presume it. The Round 1 closure-review fourth-
+shape adversarial test ((1)-build paired with (3)-submit
+hybrid; rejected on criterion 5 because the contract
+dependency on refresh quiescence moves from build-and-submit
+to submit-only without dissolving) is recorded as the worked
+example of "the contract dependency moves but doesn't
+dissolve" under the lens. **§7 closure-rule strengthening**
+pins "Round-N closes when the wargaming surface **known at
+closure time** is genuinely exhausted; new shapes surfacing
+in Round-N+1 reopen Round N rather than slipping past
+closure" — the closure rule pins what was known at closure
+time, not what could ever be known, and explicit reopening
+is the discipline-correct response to new candidate shapes.
+**R13 / R15 / R16 / R17 named with dispositions**: R13
+(output selection algorithm) closes V3.0 ships wallet2-greedy
+under `OutputSelector` trait seam; R15 (submission strategy
+as composable actor) closes V3.0 ships
+`SubmissionStrategyActor` seam with `DirectStrategy`
+default; R16 (wallet-side fee estimation) closes V3.0 ships
+daemon-recommendation-with-explicit-override under
+`FeeEstimator` trait seam (with conditional V3.0 lift to (c)
+if Phase 0 review confirms bounded `LedgerEngine`-accessor
+cost); R17 (event-sourced recovery) closes V3.0 ships PR 4
+§5.4.8 #1 carryover (drop-on-close) with diagnostic-stream
+contract-pin refinement permitting wallet-internal
+encrypted-persistence opt-in (V3.x). All four V3.x
+deferrals get FOLLOWUPS entries with named V3.x triggers and
+seam-design implications. The R1 disposition still holds;
+segment 2c is discipline-strengthening + opportunity-surface
+naming work that compounds project-wide design discipline
+without reopening the load-bearing question.
 
 Subsequent revisions land each design round inline (the
 precedent set by PR 3's
@@ -668,11 +714,97 @@ design tool. PR 5 takes one round because the lens is now
 available — applying it at the load-bearing question is the
 architectural-integrity-now disposition per
 [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc),
-not a deferral candidate. The §7 closure rule ("Round 1
-closes when the wargaming surface is genuinely exhausted")
-governs: the framing exhausts the surface in one round, and
-delaying the disposition to Round 2 would be the
+not a deferral candidate. The §7 closure rule ("Round-N
+closes when the wargaming surface known at closure time is
+exhausted") governs: the framing exhausts the surface in one
+round, and delaying the disposition to Round 2 would be the
 cost-benefit-defer-to-later anti-pattern the rule forecloses.
+
+**Lens-applicability discipline (segment 2c).** The
+actor-mesh lens compounds across PRs **whose structure
+admits it**; future per-engine PRs test applicability rather
+than presume it. Three structural conditions make the lens
+applicable to a per-engine extraction:
+
+1. **The trait surface mediates state-mutation across actors.**
+   `RefreshEngine` (PR 4) and `PendingTxEngine` (PR 5) both
+   mediate state mutation between an actor that produces
+   data and an actor that consumes it; the lens reframes
+   that mediation as message-passing-with-stream-side-effects
+   rather than synchronous-call-with-shared-state. Engines
+   whose trait surface is purely-functional (no actor mediation;
+   e.g., a pure cryptographic primitive trait) do not admit
+   the lens — synchronous call signatures are the right shape
+   and the lens does not improve them.
+2. **The trait carries a contract whose adversarial review
+   surfaces a cross-actor liveness or quiescence dependency.**
+   PR 5 R1's three structural grounds (Phase 0c collapses; the
+   CAS isn't a CAS; adversarial-daemon resistance is structural)
+   are all **lens-surfaced** properties — the synchronous
+   framing's shapes (2)/(3) carry hidden cross-actor
+   dependencies the lens makes visible. Engines whose
+   adversarial review surfaces no cross-actor-dependency
+   structural property do not benefit from the lens; the
+   lens has nothing to surface that the synchronous framing
+   doesn't already make visible.
+3. **The Stage 4 actor-migration target is non-trivial.** The
+   lens's primary payoff is forward-compatibility with the
+   Stage 4 actor mesh. Engines whose Stage 4 shape is
+   "co-located with another actor" or "no Stage 4 actor at
+   all" derive less value from the lens; the lens may still
+   be applicable but its payoff is bounded. The expected
+   pattern: high-density lens applicability where Shekyl's
+   threat-model surfaces concentrate (signing, refresh,
+   ledger, daemon orchestration); low-density applicability
+   where threat-model surfaces are sparse (config-loading,
+   telemetry-emission, pure-utility).
+
+**Test, don't presume.** Per-engine PR pre-flights ask:
+"Does this trait surface satisfy conditions (1) / (2) / (3)?
+If yes, the lens is the appropriate framing tool. If no,
+the synchronous framing is correct." The discipline is
+structural, not stylistic — the lens is a tool for engines
+whose structure admits it, not a uniform house style.
+
+**Closure-rule cross-reference.** Lens applicability and the
+§7 closure rule co-govern when a per-engine PR Round 1 closes
+on a disposition vs. defers. The lens **exhausts** the
+wargaming surface for engines that admit it (PR 5 R1 is the
+instance); the closure rule **lands** the disposition once
+the surface is genuinely exhausted. For engines that don't
+admit the lens, the closure rule still governs but the
+exhaustion criterion is the synchronous framing's wargaming
+surface, not the lens's. Round-1-closes-here is the discipline
+the lens **enables** for engines that admit it; engines that
+don't admit the lens still close Round 1 on adversarial review
+of the synchronous framing's shapes, just over a different
+wargaming surface.
+
+**Fourth-shape adversarial test (Round 1 closure-review
+record).** During Round 1's closure review, one hybrid shape
+was tested as a candidate fourth: **(1)-build paired with
+(3)-submit** — snapshot-ID pinning at build time, with
+`submit` waiting for refresh quiescence before validating
+staleness. The hybrid was rejected on criterion 5: the
+contract dependency on refresh quiescence at the submit
+step is the same fatal property that defeats shape (3) at
+its own submit step. The hybrid's only difference from (3)
+is moving the contract dependency from build-and-submit to
+submit-only; it does not eliminate the dependency. A
+hostile daemon stalling refresh during a `submit` call
+delivers the same DoS surface as shape (3). The hybrid is
+documented here so future per-engine PR pre-flights have a
+worked example of what "the contract dependency moves but
+doesn't dissolve" looks like under the lens. Shape (1)
+under the actor mesh — `submit`'s field-comparison handler
+runs against `current_snapshot` regardless of refresh
+liveness — is the only shape that eliminates the dependency
+at both build and submit.
+
+The fourth-shape test exhausts the wargaming surface
+known at Round 1 closure time. New shapes that surface in
+Round 2 (or later rounds) reopen Round 1 rather than
+slipping past closure — see §7 for the general statement.
 
 ### §5.1 The question (re-evaluated under §5.0)
 
@@ -1480,6 +1612,365 @@ to Round 2 with the dispositions framed below.
   segment 2b combining the two is bounded; the architectural-
   integrity-now payoff is asymmetric (R11 large; R14 small)
   but both lift in the same commit slot.
+- **R13 — Output selection algorithm as a first-class privacy
+  decision (named with disposition in Round 2 segment 2c;
+  V3.0 ships wallet2-greedy under `OutputSelector` trait
+  seam; V3.x lands alternatives).** `ReservationTracker`
+  carries forward an output-selection algorithm wallet2
+  designed under classical CryptoNote ring-signature
+  semantics. Wallet-side output selection — which outputs
+  to spend, in what order, against which change addresses —
+  is a **first-class privacy decision** that survives FCMP++:
+  full-chain membership replaces decoy-ring sampling, but
+  output-set entropy (selection determinism, change-address
+  reuse, selection-order-leak) is independent of ring
+  semantics and remains a wallet-side privacy property.
+
+  **Threat model.** Deterministic selection enables
+  correlation between reservations against the same available
+  set ("two reservations selecting the same outputs in the
+  same order against the same available outputs reveal the
+  same wallet"); subaddress-reuse-for-change creates linkable
+  outputs ("reservations sharing a change address are likely
+  the same wallet"); selection order leaks information about
+  the wallet's internal output-list ordering ("ordering
+  reveals scan-order, balance-rebalancing, or recent-output
+  preference"). Per
+  [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) §2
+  (privacy is the product), output-selection-algorithm
+  weaknesses are not "performance optimizations deferred to
+  V3.x" — they are wallet-layer privacy decisions whose
+  trait-surface seam should be designed in at V3.0 even if
+  the V3.0 default carries forward the wallet2 algorithm.
+
+  **Options.**
+  - (a) **Carry forward wallet2's algorithm** (greedy
+    largest-fits-amount + subaddress preference). Inherits
+    the deterministic-correlation / change-reuse / order-leak
+    weaknesses; cheap; no V3.0 architectural cost beyond the
+    seam.
+  - (b) **Randomized selection with bounded variance**
+    (Knuth-shuffle within size-constrained candidates).
+    Defeats deterministic correlation; the bounded variance
+    keeps fee predictability; modest implementation
+    complexity.
+  - (c) **Entropy-maximizing selection** (optimize for
+    output-set ambiguity under FCMP++ semantics — output
+    age, transaction-graph distance, ring-membership
+    plausibility). V3.x research territory but
+    architecturally fittable.
+
+  **Disposition.** **V3.0 ships (a) — wallet2-greedy carryover —
+  under an `OutputSelector` trait-parameter seam.** (b) and
+  (c) land in V3.x consumer-actor PRs as alternative
+  `OutputSelector` impls. The architectural-cost asymmetry
+  per §5.0.4 lens-applicability discipline: designing the
+  seam at V3.0 is near-zero cost; designing it post-V3.x
+  requires migrating every `LocalPendingTx` /
+  `PendingTxActor` construction site (the seam is on
+  the engine type's parameterization, not on the trait
+  surface itself). The seam is the architectural-integrity-
+  now item; the algorithm choice is the V3.0-vs-V3.x decision.
+
+  **Phase 0 implication.** `LocalPendingTx<S: Signer, O:
+  OutputSelector>` (Stage 1) and `PendingTxActor`'s
+  spawn-time-bound `output_selector: Arc<dyn OutputSelector>`
+  (Stage 4) carry the seam. The `OutputSelector` trait
+  surface mirrors the `Signer` trait shape per R11 (b) — a
+  narrow trait method (`fn select_outputs(&self, candidates:
+  &[OutputCandidate], target: Amount) -> SelectedOutputs`)
+  with Stage 1 / Stage 4 implementations that share the
+  trait. Phase 0 review (segment 2g) confirms the trait
+  shape and the type-parameter / actor-field placement.
+
+  **V3.x trigger.** Privacy-research outcomes (alternative
+  selection algorithms validated under FCMP++ adversarial
+  models); UX requirements (e.g., "privacy mode" toggles
+  surfacing in the GUI); operational telemetry surfacing
+  selection-correlation observable on-chain. None of these
+  are V3.0 blockers; the seam preserves V3.0 shipping date
+  while V3.x research advances.
+
+  **FOLLOWUPS entry.** "Output selection algorithm
+  alternatives under `OutputSelector` trait seam" target
+  V3.x; cross-references this entry.
+- **R15 — Submission strategy as a composable actor (named
+  with disposition in Round 2 segment 2c; V3.0 ships
+  `DirectStrategy` under `SubmissionStrategyActor` seam;
+  V3.x lands privacy strategies).** Direct-to-daemon
+  submission inherited from wallet2 leaves transaction-
+  network-entry-point timing and routing as wallet-layer
+  privacy weaknesses against traffic analysis. The wallet
+  decides **when** to submit (immediately? randomized
+  delay? Tor-circuit-aligned?), **through which transport**
+  (current daemon connection? rotate circuit first?
+  broadcast through multiple peers?), **in what order**
+  (FIFO? randomized to defeat traffic analysis? batched
+  with other wallets?) — wallet2 makes none of these
+  choices; it submits when called, through the current
+  connection, in call order.
+
+  **Threat model.** Per
+  [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md) and
+  the §5.3 threat-model anchor (adversary-controlled daemon
+  is design-center), submission-time observability is a
+  primary attribution surface: a network adversary observing
+  transaction-entry-point timing can correlate wallet
+  identity (via the daemon connection) with transaction
+  identity (via the submitted tx). Wallet2's direct-to-
+  daemon submission collapses the two correlations into a
+  single observable event; privacy-enhancing strategies
+  separate them.
+
+  **Options.**
+  - (a) **Direct-to-daemon submission** (wallet2 carryover).
+    Submits when called, through the current connection,
+    in call order. Cheapest; matches wallet2 behavior; the
+    privacy weakness is the design-center.
+  - (b) **Submission strategies as composable actors.**
+    `PendingTxActor`'s submit message handler does not
+    forward to `DaemonEngine` directly; it forwards to a
+    `SubmissionStrategyActor` between them. The strategy
+    actor applies whatever timing / routing / ordering
+    discipline is configured.
+
+  **Disposition.** **V3.0 ships (b)'s seam — the intermediate
+  `SubmissionStrategyActor` slot in the submit path — with
+  `DirectStrategy` as the default V3.0 strategy** (matches
+  wallet2 behavior; no privacy regression at V3.0 ship time).
+  V3.x consumer-actor PRs land privacy-enhancing strategies:
+  - `JitteredSubmissionStrategy` — randomized delay within a
+    configurable window; defeats single-event timing
+    correlation.
+  - `CircuitRotationStrategy` — request new Tor circuit
+    before submission; separates submission-event identity
+    from prior-connection identity.
+  - `BroadcastStrategy` — submit through multiple peers
+    simultaneously; defeats single-peer-eavesdrop attribution.
+  - `BatchedStrategy` — coordinate submission timing with
+    other Shekyl wallets through a coordination layer;
+    defeats per-wallet timing correlation by reducing the
+    population of submitters at any single timing window.
+
+  **Phase 0 implication.** Submit path's actor topology
+  pins the `SubmissionStrategyActor` slot:
+
+  ```text
+  PendingTxActor — submit msg → SubmissionStrategyActor
+       │                           │
+       │                           │ (apply strategy)
+       │                           ▼
+       │                       DaemonEngine actor
+       │                           │
+       │                           │ (broadcast)
+       │                           ▼
+       │                       (network)
+  ```
+
+  The trait surface does not grow; the composition surface
+  does. `SubmissionStrategyActor` is itself an actor that
+  consumes `PendingTxDiagnostic::SubmitAttempted` events and
+  forwards `Submit` messages to `DaemonEngine`. Each V3.x
+  strategy is a separate actor consuming the same diagnostic
+  stream; configuration switches which strategy is bound at
+  wallet startup. Same compositional pattern as PR 4's V3.x
+  consumer actors (`PeerReputationActor`, `RecoveryActor`,
+  etc.).
+
+  **V3.x trigger.** Anonymity-network deployment maturity
+  (e.g., Shekyl-native Tor / Lokinet / I2P integration
+  validated against the threat model); coordination-layer
+  research (BatchedStrategy requires multi-wallet
+  coordination infrastructure that does not yet exist);
+  user-configuration UX for strategy selection.
+
+  **FOLLOWUPS entry.** "Submission-strategy actors under
+  `SubmissionStrategyActor` seam (`JitteredSubmissionStrategy`,
+  `CircuitRotationStrategy`, `BroadcastStrategy`,
+  `BatchedStrategy`)" target V3.x; cross-references this
+  entry.
+- **R16 — Wallet-side fee estimation (named with disposition
+  in Round 2 segment 2c; V3.0 ships daemon-recommendation-
+  with-explicit-override under `FeeEstimator` trait seam;
+  V3.x lands wallet-side estimator).** Wallet2 asks the
+  daemon for fee estimates and uses them. This is a
+  **fingerprint**: every wallet that takes the daemon's
+  recommendation produces transactions with daemon-influenced
+  fee values; a malicious daemon can identify "wallets
+  following my recommendations" vs "wallets making
+  independent decisions" by observing on-chain fee patterns.
+
+  **Threat model.** Per the §5.3 threat-model anchor
+  (adversary-controlled daemon is design-center), fee
+  estimation is a wallet-side decision the daemon should
+  not influence. A wallet-side fee estimator analyzing
+  historical block fee distribution from `LedgerEngine`
+  state directly decouples wallet fee from daemon
+  recommendation; every wallet computes fees from the same
+  chain-state inputs and produces statistically-
+  indistinguishable outputs. Per
+  [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) §2
+  (privacy is the product), fee-fingerprinting is a privacy
+  weakness whose seam should be designed in at V3.0.
+
+  **Options.**
+  - (a) **Daemon-recommendation carryover** (wallet2). Cheap;
+    inherits the fingerprint.
+  - (b) **Daemon-recommendation with explicit override.**
+    `build`'s fee parameter accepts either "daemon-recommended"
+    (passed through) or an explicit fee value; the wallet
+    UI / API can drive the override from any source. V3.0-
+    feasible.
+  - (c) **Wallet-side estimator analyzing historical block
+    fee distribution from `LedgerEngine` state.** Decouples
+    fee from daemon recommendation entirely; requires a
+    `LedgerEngine` accessor for historical block fee
+    distribution (small additive surface) plus the estimator
+    itself. V3.x architectural cost is bounded but non-zero.
+
+  **Disposition.** **V3.0 ships (b) — daemon-recommendation
+  with explicit override — under a `FeeEstimator` trait-
+  parameter seam.** The `FeeEstimator` trait abstracts over
+  "where the fee comes from"; V3.0 default is
+  `DaemonRecommendationEstimator` (asks the daemon, returns
+  the value); the wallet UI / API can substitute an
+  `ExplicitFeeEstimator` at construction time for explicit-
+  fee workflows. (c) — `WalletSideEstimator` analyzing
+  historical block fee distribution — lands in V3.x as an
+  alternative `FeeEstimator` impl.
+
+  **Why not (c) at V3.0?** The architectural cost is bounded
+  but non-trivial: `LedgerEngine` needs a historical-block-
+  fee-distribution accessor (small additive surface, plus
+  storage cost for block-fee history if the snapshot doesn't
+  already carry it); the estimator itself requires
+  fee-distribution analysis logic (statistical methods,
+  fee-band selection, time-window selection). Phase 0 review
+  (segment 2d) bounds the cost. **If the `LedgerEngine`
+  accessor cost is bounded and the estimator implementation
+  is already feasible at V3.0 review time, R16 may lift to
+  ship (c) at V3.0; the segment-2c disposition is the
+  conservative default.**
+
+  **Phase 0 implication.** `LocalPendingTx<S: Signer, O:
+  OutputSelector, F: FeeEstimator>` (Stage 1) gains the
+  `FeeEstimator` parameter; `PendingTxActor`'s spawn-time-
+  bound `fee_estimator: Arc<dyn FeeEstimator>` (Stage 4)
+  carries the seam. The trait surface (`fn estimate_fee(&self,
+  tx_size: usize, priority: FeePriority) -> Amount`) is
+  narrow; V3.0 default impl is `DaemonRecommendationEstimator`;
+  V3.x adds `WalletSideEstimator`. Phase 0 review (segment 2g)
+  confirms the trait shape; segment 2d's R2 / R12 disposition
+  may surface `LedgerEngine`-accessor amendments that R16
+  (c) at V3.0 would benefit from.
+
+  **V3.x trigger.** `LedgerEngine` historical-block-fee-
+  distribution accessor cost confirmed bounded (Phase 0
+  review or V3.x amendment); fee-estimation algorithm
+  validated against on-chain fingerprint analysis;
+  fee-band-selection UX validated. None of these are V3.0
+  blockers; the seam preserves V3.0 shipping date while
+  V3.x research advances.
+
+  **FOLLOWUPS entry.** "Wallet-side fee estimator
+  (`WalletSideEstimator`) under `FeeEstimator` trait seam"
+  target V3.x; cross-references this entry. **Conditional
+  V3.0 lift** noted: if Phase 0 review confirms bounded
+  cost, R16 (c) lifts to V3.0.
+- **R17 — Event-sourced recovery as user-controlled tradeoff
+  (named with disposition in Round 2 segment 2c; V3.0
+  default drop-on-close; V3.x optional encrypted persistence
+  consumer; refines the diagnostic-stream restart-amnesia
+  contract).** PR 4 §5.4.8 #1's restart-amnesia rule
+  (in-memory only, drop on close) is a privacy default:
+  applied to PR 5, `PendingTxDiagnostic` events do not
+  persist; wallet crash mid-transaction loses reservation
+  state entirely. For most use cases (steady-state wallet
+  operation), this is correct. For a class of users
+  (long-running mining wallets; institutional custody;
+  multi-day transaction-construction workflows; foundation
+  treasury operations) crash-recovery is a real concern;
+  "lose all pending transactions on crash" is operationally
+  unacceptable.
+
+  **Threat model.** The restart-amnesia rule's privacy
+  property is **diagnostic events do not leak across trust
+  boundaries via persistence**; the rule was originally
+  written against the threat that any persistence creates
+  a leak surface (logs that get pasted, telemetry exports,
+  debug UIs with off-host surfaces). The threat-model
+  refinement: **persistence is a leak only when the
+  persistence surface is outside the wallet's encrypted-state
+  surface**. Persistence to a consumer entirely within the
+  wallet's own encrypted-state surface (the wallet's own
+  storage, encrypted under the wallet master key) is
+  **not** a cross-trust-boundary leak per PR 4 §5.4.8 #4's
+  recursive-trust-boundary discipline.
+
+  **Options.**
+  - (a) **Restart-amnesia default (PR 4 §5.4.8 #1
+    carryover).** In-memory only, drop on close. Privacy-
+    first; crash-recoverability lost.
+  - (b) **Optional encrypted persistence opt-in.** Default
+    off; user (or wallet UI) can enable encrypted persistence
+    of `PendingTxDiagnostic` events for crash recovery via
+    stream replay. The encryption key is the wallet master
+    key; the persistence layer is the wallet's own storage;
+    nothing leaks across trust boundaries.
+  - (c) **Persistence-by-default with explicit opt-out.**
+    Crash-recoverability-first; privacy-default reversed.
+    Rejected: contradicts the privacy-as-product commitment
+    per `00-mission.mdc` §2 — privacy is never a setting,
+    let alone a default-off setting.
+
+  **Disposition.** **V3.0 ships (a) — restart-amnesia default
+  — preserving the privacy-first posture inherited from
+  PR 4 §5.4.8 #1.** (b) — optional encrypted persistence
+  consumer — lands in V3.x as an opt-in user-controlled
+  tradeoff for the institutional / long-running use cases.
+  (c) is rejected.
+
+  **Diagnostic-stream contract refinement (segment 2c).**
+  PR 4 §5.4.8 #1's contract pin updates from "in-memory only,
+  drop on close" to:
+
+  > **In-memory only by default; drop on close.** User-
+  > controlled encrypted-persistence opt-in is permitted if
+  > the persistence consumer's surface is entirely within
+  > the wallet's own encrypted-state surface (no
+  > cross-trust-boundary leak per §5.4.8 #4). The default
+  > is privacy-first; the opt-in is the user's tradeoff.
+
+  Cross-references PR 4 §5.4.8 #1 to mirror the contract
+  refinement; the contract pin is updated to permit
+  wallet-internal encrypted-persistence consumers without
+  weakening the recursive-trust-boundary discipline. PR 4
+  §5.4.8 #4 (recursive-trust-boundary discipline) is
+  unchanged; this refinement narrows the persistence
+  prohibition to cross-boundary persistence specifically,
+  which §5.4.8 #4 already governs.
+
+  **Phase 0 implication.** No V3.0 trait-surface change;
+  the `PendingTxDiagnostic` stream's contract is
+  refined-not-restructured. V3.x adds a
+  `PersistenceConsumerActor` whose surface is the wallet's
+  own encrypted storage; the `DiagnosticSink` registration
+  surface already accepts arbitrary in-process consumers
+  (per PR 4 §5.4.6 / §5.4.7 R6 reframe), so no architectural
+  change is required at the V3.x trigger.
+
+  **V3.x trigger.** Institutional / long-running deployment
+  requirements (foundation treasury, multi-day tx workflows);
+  wallet-storage encryption layer matures (wallet master
+  key derivation surface, key-rotation discipline);
+  user-configuration UX for persistence opt-in. None of
+  these are V3.0 blockers; the contract refinement at V3.0
+  preserves the V3.x option without committing to it.
+
+  **FOLLOWUPS entry.** "Encrypted-persistence
+  `PersistenceConsumerActor` for institutional / long-
+  running wallet deployments" target V3.x; cross-references
+  this entry and PR 4 §5.4.8 #1 contract refinement.
 
 ### §5.5 Round 1 disposition — shape (1), actor-mesh framing
 
@@ -1614,12 +2105,17 @@ closed in segment 2b as (b); HW-wallet integration in V3.x
 plugs into existing architecture); R14 (`Reservation`
 extensibility seam — closed in segment 2b); R13 / R15 / R16 /
 R17 (output-selection / submission-strategy / fee-estimation /
-event-sourced-recovery — surfaced in segment 2b adversarial
-review; named with V3.0-vs-V3.x dispositions in segment 2c);
-sink-binding decoupling (now independent of R11 per segment-2b
-(b) closure; segment 2f); plus
-Phase 0 enumeration and the cross-cutting `DiagnosticSink`
-contract-doc generalization (§5.0.3).
+event-sourced-recovery — named with V3.0-vs-V3.x dispositions
+in segment 2c; V3.0 ships seams + privacy-default carryovers
+under `OutputSelector` / `SubmissionStrategyActor` /
+`FeeEstimator` / refined diagnostic-stream contract; V3.x
+lands alternative impls / privacy strategies / wallet-side
+estimator / encrypted-persistence consumer); §5.0.4
+lens-applicability discipline + §7 closure-rule strengthening
+(landed in segment 2c); sink-binding decoupling (now
+independent of R11 per segment-2b (b) closure; segment 2f);
+plus Phase 0 enumeration and the cross-cutting
+`DiagnosticSink` contract-doc generalization (§5.0.3).
 
 **What Round 3 carries.** Commit decomposition + Phase 1
 commit list (per the PR 1 / PR 2 / PR 3 / PR 4 precedent).
@@ -1659,33 +2155,69 @@ as one cohesive unit** — they are inseparable substrate for
 each other. Subsequent residual dispositions (R2 / R8 / R9 /
 R11 / R12) land round-by-round in Round 2.
 
-**Round 1 closure rule (applied).** Round 1 closes when the
-wargaming surface is genuinely exhausted, not on a schedule.
-The "enumerate-now-dispose-Round-2" default exists because
-PR 5's R1 has cascading effect on PR 4 Round 3 and the
-wargaming surface is broader than PR 4 Round 1's (which
-converged at α because architectural-inheritance discipline
-made α structurally obvious). The default is not a mandate:
-if Round 1's wargaming closes with no surviving alternative
-under adversarial review, landing the disposition in Round 1
-is honest, not premature.
+**Closure rule (strengthened in segment 2c).** Round-N closes
+when the wargaming surface **known at closure time** is
+genuinely exhausted, not on a schedule. The
+"enumerate-now-dispose-Round-N+1" default exists for surfaces
+broad enough that Round-N's review may not cover every
+alternative; the default is not a mandate. If Round N's
+wargaming closes with no surviving alternative under
+adversarial review (the wargaming surface is genuinely
+exhausted), landing the disposition in Round N is honest, not
+premature. Delaying in that case is the
+cost-benefit-defer-to-later anti-pattern per
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc).
 
-The §5.0 actor-mesh framing exhausts the wargaming surface
-in this round on **three structural grounds** (§5.1): the
-cross-trait synchronous query collapses (Phase 0c → 0g);
-submit-time staleness is a field comparison, not a CAS;
-adversarial-daemon resistance is structural by construction.
-Shapes (2) and (3) fail criterion 5 (§5.3) by construction
-under the framing; no fourth shape escape route exists that
+**New shapes surfacing in Round-N+1 reopen Round N.** A new
+candidate shape that surfaces during Round-N+1's adversarial
+review (or later) is not a closure-rule violation; it is a
+signal that Round N's wargaming surface was incomplete.
+Reopening Round N is the discipline-correct response —
+re-evaluate the disposition against the expanded surface,
+re-close if the new shape fails the criteria, otherwise
+revisit. The closure rule pins **what was known at closure
+time**, not **what could ever be known**; new shapes are
+allowed to reopen but must reopen explicitly rather than
+slipping past closure as quiet revisions.
+
+**Lens-applicability cross-reference.** The closure rule's
+"genuinely exhausted" criterion is satisfied differently
+depending on whether the lens applies. For engines that
+admit the actor-mesh lens (per §5.0.4 conditions 1 / 2 / 3),
+Round 1 exhaustion is the lens's wargaming surface; for
+engines that do not, Round 1 exhaustion is the synchronous
+framing's wargaming surface. The closure rule governs both
+cases; lens applicability shapes what "exhaustion" means in
+each.
+
+**Round 1 closure rule (applied to PR 5).** PR 5's R1 has
+cascading effect on PR 4 Round 3 and the wargaming surface
+is broader than PR 4 Round 1's (which converged at α because
+architectural-inheritance discipline made α structurally
+obvious). The §5.0 actor-mesh framing exhausts the
+wargaming surface in this round on **three structural
+grounds** (§5.1): the cross-trait synchronous query collapses
+(Phase 0c → 0g); submit-time staleness is a field comparison,
+not a CAS; adversarial-daemon resistance is structural by
+construction. Shapes (2) and (3) fail criterion 5 (§5.3) by
+construction under the framing.
+
+**Round 1 fourth-shape closure-review test (segment 2c).**
+During Round 1's closure review, one hybrid shape was
+tested as a candidate fourth — (1)-build paired with
+(3)-submit — and rejected on criterion 5 (§5.0.4 records
+the worked test). The hybrid's contract dependency on
+refresh quiescence moves from build-and-submit to
+submit-only without dissolving; the rejection demonstrates
+the wargaming surface was exhausted at closure time. No
+fourth shape escape route exists under the framing that
 doesn't reintroduce the contract dependency on refresh
 quiescence at some point in the build/submit flow.
-Per the §7 closure rule, Round 1 closes here.
 
-Delaying the disposition to Round 2 in spite of the closed
-wargaming surface would be the cost-benefit-defer-to-later
-anti-pattern per
-[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc);
-the closure rule forecloses that default.
+Per the closure rule (strengthened above), Round 1 closes
+here. Delaying the disposition to Round 2 in spite of the
+closed wargaming surface would be the cost-benefit-defer-to-
+later anti-pattern; the closure rule forecloses that default.
 
 ---
 
@@ -1768,84 +2300,94 @@ work, by round:
     Future per-engine PRs read PR 5's R11 reframe as substrate
     when R-residual dispositions surface the same anti-pattern.
 
-**Round 2 — pending.**
-
 - **Segment 2c — closure-rule and lens-applicability
   refinements paired with R13 / R15 / R16 / R17 named with
   dispositions.**
-  - **Item 1: §5.0.4 lens-applicability tempering.** "The lens
-    compounds across PRs" → "compounds across PRs whose
-    structure admits it; future PRs test applicability rather
-    than presume it."
-  - **Item 2: §7 closure-rule refinement (with §5.0.4
-    cross-reference).** Document the fourth-shape hybrid tested
-    during Round 1 closure review (snapshot-ID pinning at build
-    paired with refresh-quiescence-wait at submit) and its
-    rejection on criterion 5; pin "Round-N closes when the
-    wargaming surface known at closure time is exhausted; new
-    shapes surfacing in Round-N+1 reopen Round N rather than
-    slipping past closure." Forward-template content for the
-    V3.1 rules-queue PR (closure-rule scope qualifier;
-    lens-applicability discipline) noted in CHANGELOG.
-  - **R13 — output selection algorithm as a first-class privacy
-    decision.** Wallet-side privacy decision (which outputs to
-    spend, in what order, against which change addresses); not
-    addressed by FCMP++ replacing ring signatures. Options:
-    (a) wallet2-greedy carryover (deterministic, inherits
-    correlation weakness); (b) randomized selection with
-    bounded variance (defeats deterministic correlation);
-    (c) entropy-maximizing selection (V3.x research territory).
-    **Disposition: V3.0 ships (a) under an `OutputSelector`
-    trait-parameter seam; (b) / (c) land in V3.x consumer-actor
-    PRs as alternative `OutputSelector` impls.** Phase 0
-    implication: `OutputSelector` trait parameter on
-    `LocalPendingTx` / `PendingTxActor` so the algorithm is
-    swappable without trait revision.
-  - **R15 — submission strategy as a composable actor.** Direct-
-    to-daemon submission inherited from wallet2 leaves
-    transaction-network-entry-point timing / routing as wallet-
-    layer privacy weaknesses against traffic analysis. Insert
-    `SubmissionStrategyActor` between `PendingTxActor` and
-    `DaemonEngine`; default Stage 1 strategy is direct-to-daemon
-    (matches wallet2 behavior); V3.x consumer-actor PRs land
-    privacy-enhancing strategies (`JitteredSubmissionStrategy`,
-    `CircuitRotationStrategy`, `BroadcastStrategy`,
-    `BatchedStrategy`). **Disposition: V3.0 ships the seam (the
-    intermediate actor in the submit path) with `DirectStrategy`
-    as the default; V3.x consumer-actor PRs land privacy-
-    enhancing strategies.** Phase 0 implication: submit path's
-    actor topology pins the `SubmissionStrategyActor` slot so
-    V3.x strategies plug in without architectural change.
-  - **R16 — wallet-side fee estimation.** Daemon-recommended
-    fees produce a "wallets-following-daemon-recommendations"
-    on-chain fingerprint a malicious daemon can exploit.
-    Estimator that analyzes historical block fee distribution
-    from `LedgerEngine` state directly decouples wallet fee
-    from daemon recommendation. **Disposition: V3.0 ships
-    daemon-recommendation-with-explicit-override (compatibility
-    minimum); V3.x ships wallet-side estimator under a
-    `FeeEstimator` trait-parameter seam.** Phase 0 implication:
-    `build`'s fee parameter shape accommodates explicit-fee-
-    with-strategy-pluggability so V3.x estimator plugs in
-    without trait revision; `LedgerEngine` may need a small
-    additive surface (historical block fee distribution) — Phase
-    0 review tracks this; if the cost is bounded the surface
-    lands at V3.0.
+  - **§5.0.4 lens-applicability discipline.** Section
+    expanded with structured "Lens-applicability discipline"
+    subsection establishing three structural conditions
+    that govern when the actor-mesh lens applies to a
+    per-engine extraction (trait surface mediates state-
+    mutation across actors; adversarial review surfaces a
+    cross-actor liveness or quiescence dependency; Stage 4
+    actor-migration target is non-trivial). Per-engine PR
+    pre-flights test applicability rather than presume it.
+    The lens compounds across PRs **whose structure admits
+    it**, not uniformly. Closure-rule cross-reference and
+    fourth-shape adversarial-test record (Round 1
+    closure-review log: (1)-build paired with (3)-submit
+    hybrid tested and rejected on criterion 5).
+  - **§7 closure-rule strengthening.** Restructured into
+    "Closure rule (strengthened)" + "Round 1 closure rule
+    (applied to PR 5)". General rule pinned: Round-N closes
+    when the wargaming surface **known at closure time** is
+    genuinely exhausted; new shapes surfacing in Round-N+1
+    reopen Round N rather than slipping past closure
+    (the closure rule pins what was known, not what could
+    ever be known). Lens-applicability cross-reference
+    (closure rule's "exhausted" criterion is satisfied
+    differently depending on whether the lens applies).
+    Round 1 fourth-shape closure-review test recorded as
+    instance of the strengthened rule.
+  - **R13 — output selection algorithm.** §5.4 R13 entry
+    added; threat model framed (deterministic correlation,
+    change-reuse, order-leak independent of FCMP++ ring
+    semantics); options enumerated; disposition closed as
+    V3.0 ships wallet2-greedy under `OutputSelector`
+    trait-parameter seam (`LocalPendingTx<S: Signer, O:
+    OutputSelector>`); V3.x lands randomized / entropy-
+    maximizing alternatives as alternative `OutputSelector`
+    impls. Phase 0 implication: trait parameter on engine
+    type; trait shape narrow (`fn select_outputs(...)
+    -> SelectedOutputs`).
+  - **R15 — submission strategy as a composable actor.**
+    §5.4 R15 entry added; threat model framed
+    (transaction-network-entry-point timing / routing as
+    wallet-layer privacy weakness against
+    `ANONYMITY_NETWORKS.md` adversary); options enumerated;
+    disposition closed as V3.0 ships
+    `SubmissionStrategyActor` seam with `DirectStrategy`
+    default (matches wallet2 behavior, no V3.0 privacy
+    regression); V3.x lands `JitteredSubmissionStrategy` /
+    `CircuitRotationStrategy` / `BroadcastStrategy` /
+    `BatchedStrategy`. Phase 0 implication: submit-path
+    actor topology pins the intermediate-actor slot.
+  - **R16 — wallet-side fee estimation.** §5.4 R16 entry
+    added; threat model framed (daemon-recommendation
+    on-chain fingerprint exploitable by malicious daemon
+    per §5.3 threat-model anchor); options enumerated;
+    disposition closed as V3.0 ships
+    daemon-recommendation-with-explicit-override under
+    `FeeEstimator` trait seam; V3.x lands
+    `WalletSideEstimator` analyzing `LedgerEngine`
+    historical block fee distribution. **Conditional V3.0
+    lift** noted: if Phase 0 review (segment 2d) confirms
+    bounded `LedgerEngine`-accessor cost, R16 (c) may lift
+    to V3.0; segment-2c default is conservative.
   - **R17 — event-sourced recovery as user-controlled
-    tradeoff.** Refines the diagnostic-stream restart-amnesia
-    contract (PR 4 §5.4.8 #1) from "in-memory only, drop on
-    close" to "in-memory only by default; user-controlled
-    encrypted persistence opt-in for crash recovery is
-    permitted if the consumer is entirely within the wallet's
-    own encrypted-state surface (no leak across trust
-    boundaries)." **Disposition: V3.0 ships the default (drop-
-    on-close); V3.x optionally ships an encrypted-persistence
-    consumer for institutional / long-running / multi-day
-    transaction-construction deployments.** Cross-references PR
-    4 §5.4.8 #1 to mirror the contract refinement; the contract
-    pin is updated to permit wallet-internal encrypted
-    persistence consumers without weakening the recursive-
-    trust-boundary discipline.
+    tradeoff.** §5.4 R17 entry added; threat model framed
+    (PR 4 §5.4.8 #1 restart-amnesia rule's privacy
+    property = persistence does not leak across trust
+    boundaries; refinement narrows prohibition to
+    cross-boundary persistence specifically); options
+    enumerated; disposition closed as V3.0 ships PR 4
+    §5.4.8 #1 carryover (drop-on-close); V3.x optionally
+    lands encrypted-persistence consumer for institutional
+    / long-running / multi-day workflows. Diagnostic-
+    stream contract pin refined: in-memory-by-default
+    plus permitted user-controlled encrypted-persistence
+    opt-in for consumers entirely within wallet's own
+    encrypted-state surface (no cross-trust-boundary leak
+    per PR 4 §5.4.8 #4).
+  - **CHANGELOG forward-template note.** Closure-rule
+    "wargaming-surface-known-at-closure-time" qualifier and
+    lens-applicability structural-conditions discipline
+    flagged as V3.1 rules-queue inputs (consolidated
+    forward-template content for the eventual rules-queue
+    consolidation PR).
+
+**Round 2 — pending.**
+
 - **Segment 2d — R2 + R12 co-disposition.**
   - §5.4 R2 (`SnapshotId` opacity / projection types
     disposition; Phase 0b detail) **+ R12 (Stage 1

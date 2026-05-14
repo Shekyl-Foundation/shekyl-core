@@ -3201,6 +3201,156 @@ one place to confirm each item's relationship to the wallet stack.
   remains V3.x-deferred; PR 5 R11 (b) provides the
   spend-key-isolation precedent for the eventual lift).
 
+- **Output-selection alternatives under `OutputSelector` trait
+  seam (Stage 1 PR 5 R13 substrate; V3.x).** PR 5 segment 2c
+  named the output-selection algorithm as a first-class privacy
+  decision and closed the disposition as **V3.0 ships
+  wallet2-greedy carryover under an `OutputSelector` trait-
+  parameter seam**; the seam is the architectural-integrity-
+  now item, the algorithm choice is the V3.0-vs-V3.x decision.
+  V3.x lands alternative `OutputSelector` impls:
+  - `RandomizedSelector` — Knuth-shuffle within
+    size-constrained candidates; defeats deterministic-
+    correlation between reservations against the same
+    available output set.
+  - `EntropyMaximizingSelector` — optimize for output-set
+    ambiguity under FCMP++ semantics (output age,
+    transaction-graph distance, ring-membership
+    plausibility); V3.x research territory.
+
+  **Trigger.** Privacy-research outcomes (alternative
+  selection algorithms validated under FCMP++ adversarial
+  models); UX requirements (e.g., GUI "privacy mode"
+  toggles); operational telemetry surfacing
+  selection-correlation observable on-chain. None of these
+  are V3.0 blockers; the seam preserves V3.0 shipping date
+  while V3.x research advances.
+
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R13 (segment 2c disposition);
+  [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) §2
+  (privacy-as-product anchor).
+
+- **Submission-strategy actors under
+  `SubmissionStrategyActor` seam (Stage 1 PR 5 R15 substrate;
+  V3.x).** PR 5 segment 2c named submission-time observability
+  as a wallet-layer privacy weakness and closed the
+  disposition as **V3.0 ships the
+  `SubmissionStrategyActor` seam (intermediate actor in the
+  submit path between `PendingTxActor` and `DaemonEngine`)
+  with `DirectStrategy` as the V3.0 default** (matches
+  wallet2 behavior; no privacy regression at V3.0 ship
+  time). V3.x lands privacy-enhancing submission-strategy
+  actors:
+  - `JitteredSubmissionStrategy` — randomized delay within
+    a configurable window; defeats single-event timing
+    correlation.
+  - `CircuitRotationStrategy` — request new Tor circuit
+    before submission; separates submission-event identity
+    from prior-connection identity.
+  - `BroadcastStrategy` — submit through multiple peers
+    simultaneously; defeats single-peer-eavesdrop
+    attribution.
+  - `BatchedStrategy` — coordinate submission timing with
+    other Shekyl wallets through a coordination layer;
+    defeats per-wallet timing correlation by reducing the
+    population of submitters at any single timing window.
+
+  **Trigger.** Anonymity-network deployment maturity
+  (Shekyl-native Tor / Lokinet / I2P integration validated
+  against the threat model); coordination-layer research
+  (BatchedStrategy requires multi-wallet coordination
+  infrastructure that does not yet exist); user-
+  configuration UX for strategy selection.
+
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R15 (segment 2c disposition);
+  [`ANONYMITY_NETWORKS.md`](ANONYMITY_NETWORKS.md)
+  (threat-model anchor).
+
+- **Wallet-side fee estimator (`WalletSideEstimator`) under
+  `FeeEstimator` trait seam (Stage 1 PR 5 R16 substrate;
+  V3.x with conditional V3.0 lift).** PR 5 segment 2c named
+  daemon-recommended fees as a wallet-fingerprint exploit
+  surface against an adversary-controlled daemon and closed
+  the disposition as **V3.0 ships
+  daemon-recommendation-with-explicit-override under a
+  `FeeEstimator` trait-parameter seam** (default
+  `DaemonRecommendationEstimator`; explicit override
+  available via `ExplicitFeeEstimator` for explicit-fee
+  workflows). V3.x lands `WalletSideEstimator` analyzing
+  `LedgerEngine` historical block fee distribution
+  directly; decouples wallet fee from daemon
+  recommendation entirely; every wallet computes fees from
+  the same chain-state inputs and produces statistically-
+  indistinguishable outputs.
+
+  **Conditional V3.0 lift.** If Phase 0 review (Stage 1
+  PR 5 segment 2d) confirms the `LedgerEngine`
+  historical-block-fee-distribution accessor cost is
+  bounded and the estimator implementation is feasible at
+  V3.0 review time, R16 (c) lifts to V3.0 ship.
+  Segment-2c default is the conservative disposition;
+  the lift is a discipline-driven amendment, not a
+  reopening.
+
+  **Trigger (V3.x default).** `LedgerEngine` historical-
+  block-fee-distribution accessor cost confirmed bounded;
+  fee-estimation algorithm validated against on-chain
+  fingerprint analysis; fee-band-selection UX validated.
+  None are V3.0 blockers under the segment-2c
+  disposition; the seam preserves V3.0 shipping date.
+
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R16 (segment 2c disposition);
+  [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) §2
+  (privacy-as-product anchor).
+
+- **Encrypted-persistence `PersistenceConsumerActor` for
+  long-running deployments (Stage 1 PR 5 R17 substrate;
+  V3.x).** PR 5 segment 2c refined the diagnostic-stream
+  restart-amnesia contract (PR 4 §5.4.8 #1) from
+  "in-memory only, drop on close" to "in-memory only by
+  default; user-controlled encrypted-persistence opt-in is
+  permitted if the persistence consumer's surface is
+  entirely within the wallet's own encrypted-state surface
+  (no cross-trust-boundary leak per PR 4 §5.4.8 #4)."
+  V3.0 ships the privacy-first default (drop-on-close);
+  V3.x optionally lands a `PersistenceConsumerActor`
+  whose surface is the wallet's own encrypted storage,
+  enabling crash-recovery via stream replay for
+  institutional / long-running / multi-day transaction-
+  construction deployments.
+
+  **Trigger.** Institutional / long-running deployment
+  requirements (foundation treasury, multi-day tx
+  workflows, mining-wallet long-uptime operation);
+  wallet-storage encryption layer matures (wallet master
+  key derivation surface, key-rotation discipline);
+  user-configuration UX for persistence opt-in. None are
+  V3.0 blockers; the contract refinement at V3.0
+  preserves the V3.x option without committing to it.
+
+  **Architectural posture.** No V3.0 trait-surface change
+  required; the `DiagnosticSink` registration surface
+  already accepts arbitrary in-process consumers per
+  PR 4 §5.4.6 / §5.4.7 R6 reframe. The contract pin's
+  refinement narrows the persistence prohibition to
+  cross-boundary persistence specifically, which PR 4
+  §5.4.8 #4 (recursive-trust-boundary discipline) already
+  governs.
+
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R17 (segment 2c disposition);
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.8 #1 (restart-amnesia rule; refined by R17),
+  §5.4.8 #4 (recursive-trust-boundary discipline;
+  unchanged).
+
 - **Sync refresh wrapper generalization over `L: LedgerEngine`.**
   Stage 1 PR 2 generalized `Engine::start_refresh` and the
   producer task `run_refresh_task` over `L: LedgerEngine` —
