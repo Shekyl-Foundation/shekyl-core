@@ -19,9 +19,14 @@ precedent set by PR 3's
 PR 4's
 [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./STAGE_1_PR_4_REFRESH_ENGINE.md),
 each of which grew round-by-round to its current shape). Round 2
-disposes residuals R2 / R8 / R9 / R11 plus Phase 0 enumeration;
-Round 3 does commit decomposition. R3 / R5 / R10 dissolved by
-composition under §5.0 (see §5.4 for per-residual rationale).
+disposes residuals R2 / R8 / R9 / R11 / R12 plus Phase 0
+enumeration (R12 was added as a post-closure follow-up to §5.4 to
+qualify §5.5 ground 1 — Stage 1's `current_snapshot` acquisition
+mechanism is unspecified in Round 1's substrate; the disposition
+does not depend on R12's outcome but the prose was sharpened
+against the implicit overclaim); Round 3 does commit
+decomposition. R3 / R5 / R10 dissolved by composition under §5.0
+(see §5.4 for per-residual rationale).
 
 **Branch.** `feat/stage-1-pr5-pending-tx-engine-design` off `dev`
 at `6de8335d5` (PR-#42 merge — post-M3e, post-PR-#37 perf,
@@ -327,16 +332,28 @@ for §6).
   is the R2 disposition (recursive trust boundary applies
   per §5.4 R2; in-process consumers see full token,
   cross-boundary consumers see projection types).
-- **Phase 0c — REMOVED under §5.0.** The seed projected a
-  cross-trait synchronous query amendment to `LedgerEngine`
-  (`current_snapshot_id() -> SnapshotId`). Under the
-  actor-mesh framing, snapshot identity flows through the
-  diagnostic-stream surface as a `LedgerDiagnostic::SnapshotMerged`
-  event (Phase 0g). The cross-trait synchronous query is
-  unnecessary; the additive event-surface amendment replaces
-  it. **Net effect: load-bearing surface coupling collapses
-  to additive-only event-surface coupling.** Phase 0c is
-  withdrawn.
+- **Phase 0c — REMOVED at the trait surface under §5.0
+  (pending R12).** The seed projected a cross-trait
+  synchronous-query amendment to `LedgerEngine`
+  (`current_snapshot_id() -> SnapshotId`) as a load-bearing
+  amendment. Under the actor-mesh framing, snapshot identity
+  flows through the diagnostic-stream surface as a
+  `LedgerDiagnostic::SnapshotMerged` event (Phase 0g) for
+  actor consumers. The trait-surface load-bearing coupling
+  is unnecessary; the additive event-surface amendment
+  replaces it. **Net effect: load-bearing surface coupling
+  collapses to additive-only event-surface coupling at the
+  trait surface.** R12 (§5.4) carries the qualifier for
+  Stage 1's `LocalPendingTx` implementation: the working
+  hypothesis (R12 (a)) is content-derived `SnapshotId` from
+  existing `LedgerSnapshot` data — Phase 0c truly collapses.
+  If R12 closes to (b), Stage 1 subscribes to
+  `LedgerDiagnostic` (no trait amendment, slight
+  implementation-symmetry cost). If R12 closes to (c),
+  `LedgerEngine` grows a small additive accessor — Phase 0c
+  is partially restored, but at additive-only cost (read-only,
+  idempotent), not the load-bearing coupling the original
+  Phase 0c projected. Round 2 closes R12 alongside R2.
 - **Phase 0d — `Reservation` struct extension.** The
   reservation record carries a `snapshot_id: SnapshotId` field.
   This is a `LocalPendingTx`-internal extension if `Reservation`
@@ -773,7 +790,7 @@ follows directly:
   the framing makes superfluous.
 
 **Round 1 closure.** Round 1 closes here; Round 2 carries
-residuals R2 / R8 / R9 / R11 plus Phase 0 enumeration.
+residuals R2 / R8 / R9 / R11 / R12 plus Phase 0 enumeration.
 
 ### §5.3 Five-criteria rationale (PR 4 precedent + adversarial-daemon extension)
 
@@ -851,8 +868,8 @@ actor-mesh framing — the same pattern as PR 4 §5.4.7 R5
 actor). The dissolution is principled, not optimistic: each
 dissolved residual is a question the actor-mesh framing makes
 **superfluous by construction**, not a question deferred to
-later. The remaining residuals (R2 / R8 / R9 / R11) carry to
-Round 2 with the dispositions framed below.
+later. The remaining residuals (R2 / R8 / R9 / R11 / R12) carry
+to Round 2 with the dispositions framed below.
 
 - **R2 — `SnapshotId` opacity and side-channel implications
   (Round 2; Phase 0b candidate).** Height-bearing `SnapshotId`
@@ -1090,6 +1107,65 @@ Round 2 with the dispositions framed below.
   matches the trajectory R4 already pinned. **V3.x FOLLOWUPS:**
   `SigningActor` migration entry with the same HW-wallet-trigger
   language R4 used.
+- **R12 — Stage 1 `current_snapshot` acquisition mechanism
+  (Round 2; co-disposes with R2).** §5.0.1's `LocalPendingTx`
+  sketch shows `ledger: L` "for `current_snapshot` reads in
+  Stage 1." The §5.5 ground-1 claim that "Phase 0c collapses"
+  is true at the trait surface — the trait does not require
+  `LedgerEngine::current_snapshot_id()` because actor consumers
+  receive snapshot identity via `LedgerDiagnostic::SnapshotMerged`
+  (Phase 0g). It is **silent** about Stage 1's actual mechanism.
+  Three options:
+
+  - **(a) Content-derived `SnapshotId` from existing
+    `LedgerSnapshot` data (working hypothesis).** Stage 1 calls
+    the existing `LedgerEngine` surface to obtain a
+    `LedgerSnapshot` (or borrows one in the existing pattern),
+    computes a content-addressed `SnapshotId` from the
+    snapshot's deterministic fields, and uses it in the
+    reservation. No new `LedgerEngine` trait surface; no
+    cross-trait coupling beyond what already exists. **Phase 0c
+    truly collapses** in this disposition. Round 2 confirms by
+    inspecting `LedgerSnapshot`'s actual shape (in
+    `engine_trait_bench` substrate and the current
+    `engine/refresh.rs` consumption sites) for sufficient
+    deterministic state.
+
+  - **(b) Stage 1 subscribes to the `LedgerDiagnostic` stream.**
+    Stage 1 implementation symmetric with Stage 4 — both
+    maintain `current_snapshot` from `SnapshotMerged` events.
+    Implementation cost: Stage 1's `LocalPendingTx` grows the
+    diagnostic-stream consumer surface (one more `Arc<dyn
+    DiagnosticStreamConsumer>` field, or it implements the
+    consumer trait directly). Phase 0c still collapses, at
+    modest implementation-symmetry cost.
+
+  - **(c) `LedgerEngine` grows a small surface accessor
+    (Phase 0c partially restored).** If `LedgerSnapshot`'s
+    state is insufficient for content-addressed derivation
+    (e.g., the snapshot doesn't carry the discriminating
+    state, or the fields are non-deterministic across reads),
+    `LedgerEngine` grows a surface like
+    `current_snapshot_id() -> SnapshotId` whose return is
+    derived once at merge time and cached. Cost: a small
+    cross-trait amendment, but **additive only** — the
+    accessor is read-only and idempotent; not the load-bearing
+    coupling the original Phase 0c projected.
+
+  **Why Round 1's disposition does not depend on R12.** Grounds
+  2 and 3 (§5.1 / §5.5) are independently sufficient: the
+  actor-mesh serialization-via-mailbox property and the
+  cross-actor-liveness-query DoS surface defeat shapes (2)/(3)
+  regardless of which option (a)/(b)/(c) closes for Stage 1.
+  Ground 1 is **expected confirmation, not load-bearing**;
+  R12's three options range from "true collapse" through
+  "implementation-symmetric collapse" to "additive-only
+  partial restoration," none of which reopens shapes (2)/(3).
+
+  **Round 2 task.** Co-dispose with R2 (`SnapshotId` opacity)
+  in the same Round 2 commit; both questions are
+  `SnapshotId`-adjacent and benefit from joint review against
+  the actual `LedgerSnapshot` shape.
 
 ### §5.5 Round 1 disposition — shape (1), actor-mesh framing
 
@@ -1101,18 +1177,30 @@ and (3) fail criterion 5 (§5.3) on **structural** grounds
 rather than contingent grounds, and no fourth shape survives
 the framing. The rounds budget for PR 5 compresses against
 the seed's three-to-four-rounds projection: Round 2 disposes
-the surviving residuals (R2 / R8 / R9 / R11) and enumerates
+the surviving residuals (R2 / R8 / R9 / R11 / R12) and enumerates
 Phase 0 amendments; Round 3 does commit decomposition. Two
 rounds saved against the original projection.
 
 **Rationale (the three structural grounds, restated).** Under
 the actor-mesh framing, shape (1) wins on:
 
-1. **Phase 0c collapses.** No cross-trait synchronous query
-   amendment to `LedgerEngine`; snapshot identity flows through
-   `LedgerDiagnostic::SnapshotMerged` events (additive surface,
-   not load-bearing surface). Phase 0g is the resulting
-   amendment.
+1. **Phase 0c collapses at the trait surface (pending R12).** No
+   cross-trait synchronous-query amendment to `LedgerEngine` is
+   required by the trait contract; actor consumers receive
+   snapshot identity through `LedgerDiagnostic::SnapshotMerged`
+   events (additive surface, not load-bearing surface). Phase 0g
+   is the resulting amendment. **R12 (§5.4) carries forward the
+   honest qualifier:** Stage 1's `LocalPendingTx` mechanism for
+   acquiring `current_snapshot` is unspecified in this
+   disposition. Working hypothesis (R12 (a)) is content-derived
+   `SnapshotId` from existing `LedgerSnapshot` data — Phase 0c
+   truly collapses. Fallback dispositions (R12 (b) Stage 1
+   subscribes to the stream; R12 (c) `LedgerEngine` grows a
+   small additive accessor) preserve the trait-surface property
+   at modestly higher cost. **The disposition does not depend
+   on R12's outcome** — grounds 2 and 3 are independently
+   sufficient; ground 1 is expected confirmation, not
+   load-bearing.
 2. **The CAS isn't a CAS.** Submit-time staleness is a field
    comparison in the actor's message handler; the actor is the
    serialization point; mailbox FIFO orders concurrent calls.
@@ -1156,18 +1244,28 @@ against the threat model.
   under §5.0).
 - §5.4 (residuals: R3 / R5-trait-surface-aspect / R10 dissolved;
   R2 / R4 / R5-policy-aspect / R6 / R7 retained; R8 / R9
-  reframed; R11 added).
+  reframed; R11 added; R12 added — Stage 1 `current_snapshot`
+  acquisition mechanism, with three options enumerated; ground-1
+  prose qualified by R12 pending Round 2 confirmation).
 - §5.5 (this section; Round 1 disposition + scorecard).
-- §4 Phase 0 candidates updated (§4 below): 0c removed; 0f
-  (`PendingTxDiagnostic` + `DiagnosticSink` parameter) and 0g
+- §4 Phase 0 candidates updated (§4 below): 0c removed at the
+  trait surface (pending R12); 0f (`PendingTxDiagnostic` +
+  `DiagnosticSink` parameter) and 0g
   (`LedgerDiagnostic::SnapshotMerged` variant) added.
 
 **What Round 2 carries.** R2 (`SnapshotId` opacity / projection
-types), R8 (`ReservationTTLActor` composition + V3.x
-FOLLOWUPS), R9 (two-stage submit flow + intermediate state),
-R11 (signing-actor split for V3.x); plus Phase 0 enumeration
-and the cross-cutting `DiagnosticSink` contract-doc
-generalization (§5.0.3).
+types) and R12 (Stage 1 `current_snapshot` acquisition
+mechanism) co-disposed in the same Round 2 commit (both
+`SnapshotId`-adjacent); R12's outcome triggers a small
+mechanical softening of §5.5 ground-1 prose (drop the "pending
+R12" qualifier on (a), reword for (b)/(c) as needed); R8
+(`ReservationTTLActor` composition + V3.x FOLLOWUPS), R9
+(two-stage submit flow + intermediate state), R11
+(signing-actor split for V3.x); criterion-5 prose
+strengthening (contract-dependency-on-refresh-quiescence
+framing); sink-binding decoupling from R11 in §5.0.2; plus
+Phase 0 enumeration and the cross-cutting `DiagnosticSink`
+contract-doc generalization (§5.0.3).
 
 **What Round 3 carries.** Commit decomposition + Phase 1
 commit list (per the PR 1 / PR 2 / PR 3 / PR 4 precedent).
@@ -1205,7 +1303,7 @@ written analysis between commits, not by live design sessions.
 **This commit lands Round 1's disposition + the §5.0 reframe
 as one cohesive unit** — they are inseparable substrate for
 each other. Subsequent residual dispositions (R2 / R8 / R9 /
-R11) land round-by-round in Round 2.
+R11 / R12) land round-by-round in Round 2.
 
 **Round 1 closure rule (applied).** Round 1 closes when the
 wargaming surface is genuinely exhausted, not on a schedule.
@@ -1244,15 +1342,34 @@ work, by round:
 **Round 2.**
 
 - §5.4 R2 (`SnapshotId` opacity / projection types disposition;
-  Phase 0b detail).
+  Phase 0b detail). **Co-disposes with R12** in the same Round 2
+  commit; both are `SnapshotId`-adjacent and benefit from joint
+  review against the actual `LedgerSnapshot` shape.
+- §5.4 R12 (Stage 1 `current_snapshot` acquisition mechanism;
+  three options enumerated). On disposition: mechanically soften
+  §5.5 ground-1 prose (drop "pending R12" qualifier on (a);
+  reword for (b)/(c) as needed) and §4 Phase 0c prose (mirror
+  the same softening). Co-disposes with R2.
 - §5.4 R8 (`ReservationTTLActor` composition; V3.x FOLLOWUPS
   entry).
 - §5.4 R9 (two-stage submit flow; intermediate-state shape;
-  per-error-class disposition).
-- §5.4 R11 (signing-actor split; V3.x FOLLOWUPS entry).
+  per-error-class disposition; mailbox-ordering vs daemon-side
+  authority for terminal-rejection visibility).
+- §5.4 R11 (signing-actor split; V3.x FOLLOWUPS entry; **also
+  decouple sink-binding from R11** — constructor-bound under
+  PR 4 §3.4.5 / R4 (a) consistency, independent of R11's
+  spend-material disposition).
+- **Criterion 5 prose strengthening (§5.3).** Reframe from
+  "cross-actor liveness query" (current text) to
+  "contract-dependency-on-refresh-quiescence" — closes the
+  steelman attack that shapes (2)/(3) could be implemented via
+  stream subscription with no synchronous query. The structural
+  property is independence from refresh quiescence as a contract
+  property, not the absence of a synchronous query as an
+  implementation property.
 - §4 Phase 0 final enumeration (binding type-signature detail
   for 0a / 0b / 0d / 0e / 0f / 0g; cross-trait amendment
-  review).
+  review; final disposition of 0c per R12).
 - Cross-cutting `DiagnosticSink` contract-doc generalization
   (§5.0.3): rename `REFRESH_DIAGNOSTIC_STREAM.md` →
   `DIAGNOSTIC_STREAM.md` general, or factor parent

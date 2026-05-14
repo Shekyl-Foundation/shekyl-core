@@ -690,6 +690,74 @@
 
 ### Documentation
 
+- **Stage 1 PR 5 — Round 1 follow-up: R12 (Stage 1
+  `current_snapshot` acquisition mechanism) added; §5.5 ground-1
+  prose softened against implicit overclaim.** Doc-only follow-up
+  commit on `feat/stage-1-pr5-pending-tx-engine-design`. Round 1
+  review surfaced one R1-adjacent finding the closure commit
+  implicitly overclaimed: §5.0.1's `LocalPendingTx` sketch holds
+  `ledger: L` "for `current_snapshot` reads in Stage 1," but
+  §5.5's first structural ground claimed Phase 0c collapses
+  without naming Stage 1's actual snapshot-acquisition mechanism.
+  Adding R12 names the three options without resolving them
+  (deferred to Round 2 alongside R2's `SnapshotId` opacity
+  disposition); the §5.5 ground-1 prose is softened from
+  "Phase 0c collapses" to "Phase 0c collapses at the trait
+  surface (pending R12)" to match the mechanism uncertainty.
+
+  **Three options enumerated in R12 (no resolution).**
+  - **(a) Content-derived `SnapshotId` from existing
+    `LedgerSnapshot` data (working hypothesis).** Stage 1 reads
+    snapshot identity via existing `LedgerEngine` /
+    `LedgerSnapshot` surface; computes content-addressed ID
+    locally. **Phase 0c truly collapses** in this disposition;
+    no new trait surface.
+  - **(b) Stage 1 subscribes to the `LedgerDiagnostic` stream.**
+    Stage 1 implementation symmetric with Stage 4; modest
+    implementation-symmetry cost in `LocalPendingTx`. Phase 0c
+    still collapses at the trait surface.
+  - **(c) `LedgerEngine` grows a small additive accessor.**
+    Phase 0c partially restored, but **additive only** — read-
+    only and idempotent; not the load-bearing coupling the
+    original Phase 0c projected.
+
+  Round 2 confirms by inspecting `LedgerSnapshot`'s actual
+  shape against the working hypothesis. Disposition's outcome
+  triggers a small mechanical softening of §5.5 ground-1 prose
+  (drop "pending R12" qualifier on (a); reword for (b)/(c) as
+  needed) and the matching §4 Phase 0c hedge.
+
+  **Round 1 disposition unchanged.** Grounds 2 and 3 (CAS-isn't-CAS
+  / adversarial-daemon-resistance-as-structural) are
+  **independently sufficient** to defeat shapes (2) and (3) under
+  the actor-mesh framing per
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.5. Ground 1 is expected confirmation, not load-bearing for
+  the disposition.
+
+  **Findings deferred to Round 2 (review-pass scoping).**
+  - Finding 2 — mailbox-ordering vs daemon-side authority for
+    R9 (terminal-rejection visibility): R9 contract clarification
+    in Round 2.
+  - Finding 3 — criterion 5 strengthening from "cross-actor
+    liveness query" framing to "contract-dependency-on-refresh-
+    quiescence" framing: closes a steelman attack ("but you
+    could implement (2) via stream subscription, no synchronous
+    query") without changing the disposition. Round 2 prose pass.
+  - Finding 4 — sink-binding decoupling from R11 in §5.0.2:
+    constructor-bound is the right answer on PR 4 §3.1 / R4
+    consistency grounds, independent of R11's spend-material
+    disposition. Round 2 hygiene.
+
+  This is the architectural-integrity-now disposition per
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  applied to documentation honesty: cheap residual addition +
+  one prose softening preserves the discipline against the
+  cost-benefit-defer-to-later anti-pattern (the Round 2 commit
+  would otherwise have to correct an overclaim that lived in
+  the Round 1 commit's prose). Doc-only; no Rust or C++ code
+  touched.
+
 - **Stage 1 PR 5 — Round 1 close: actor-mesh reframe + shape (1)
   disposition (snapshot-ID pinning).** Doc-only commit on
   `feat/stage-1-pr5-pending-tx-engine-design` (off `dev` at
