@@ -38,6 +38,74 @@
 
 ### Changed
 
+- **Stage 1 PR 4 — Round 4 review pass meta-review amendment
+  (review of F1–F9 disposition substrate; three additional
+  findings F11–F13 dispositioned without reopening
+  Round 1–4)** (`feat/stage-1-pr4-round-4`, 2026-05-15).
+  Doc-only meta-review of the F1–F9 disposition substrate
+  itself, asking "do the dispositions create new attack
+  surface or leave under-specifications that would surface
+  at Phase 1 commit-authoring as substrate decisions?" Three
+  additional findings emerged, each targeting an under-
+  specification *introduced by* an F1–F9 disposition rather
+  than a substrate decision Rounds 1–4 settled; none reopens
+  a Round 1–4 disposition; the F1–F9 dispositions remain
+  unchanged. **F11 (per-transaction cancellation safe-point
+  pin; meta-review of F2).** F2's five-checkpoint discipline
+  pinned *that* a per-transaction cancellation check fires
+  but did not pin *where* in the per-transaction body. F11
+  pins the check fires *between* transactions, *after* the
+  prior iteration's `Zeroizing<…>`-wrapped per-output
+  materials have left scope, *before* the next transaction's
+  view-tag / hybrid-decap / key-image derivation begins
+  (forbidding mid-derivation firing that would defeat F2's
+  lock-latency property by exposing partial-derivation
+  state on the unwound stack to memory-disclosure
+  adversaries). C7's `AssertionSink` / coherence-pair test
+  substrate gains a safe-point fixture asserting no partial-
+  derivation state at the observed cancellation point.
+  **F12 (cross-emitter ordering contract-gap; meta-review
+  of F4).** F4's seventh contract pin (per-emitter FIFO
+  preserved; cross-emitter ordering undefined) is enforced
+  procedurally; consumer-actor authors who depend on
+  cross-emitter arrival order produce code that compiles
+  cleanly, passes per-emitter FIFO tests, and silently
+  misbehaves under reordering at audit. F12 closes the gap
+  at the discipline level (V3.0: §5.4.6 amendment binding
+  consumer actors to derive cross-emitter ordering from
+  causal-context fields like `SnapshotId`, `ReservationId`
+  + version, `BlockHeight`) and at the lint level (V3.1+:
+  scope-extending the FOLLOWUPS F5 entry to a unified
+  `diagnostic_consumer_discipline` lint covering both
+  recursive-trust-boundary and cross-emitter-ordering misuse
+  sub-scopes). PR 5 §5.0.3 carries the parallel amendment.
+  **F13 (`SuppressedRateLimit` field-shape pin; meta-review
+  of F6).** F6 added the `SuppressedRateLimit` variant
+  without pinning its field shape; counts, timestamps, and
+  original-event payloads are each attacker-relevant signal
+  (counts are a covert channel back from the producer's
+  internal state; timestamps add scheduling side-channels;
+  payloads defeat the projection-type discipline). F13
+  pins the variant carries `class: SuppressedClass` only,
+  where `SuppressedClass` is a project-defined
+  `#[non_exhaustive]` enum at the same crate-root scope
+  with arms one-per-rate-limited event class; consumer
+  actors derive the suppression count from absence-of-
+  further-events within the attempt boundary. C2's
+  `SuppressedClass` enum addition lifts the flat-crate-root
+  re-export list from eight items to nine. The
+  implementation-branch authorization continues to hold;
+  the meta-review amendment shapes Phase 1's substrate
+  without reopening it or extending its scope. The
+  meta-review pattern itself is recorded as a forward-
+  template under
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  "audits-are-clean-so-compress" anti-pattern framing:
+  clean F1–F9 dispositions invite declaring victory; the
+  discipline asks whether the dispositions themselves
+  carry the property they claim before implementation cuts
+  against them.
+
 - **Stage 1 PR 4 — Round 4 review pass
   (adversarial review of post-Round-4 substrate; nine
   findings dispositioned)**

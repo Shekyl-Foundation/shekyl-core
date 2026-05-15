@@ -356,6 +356,40 @@ across PR 4's `RefreshDiagnostic` and PR 5's
 change; both hardenings refine contract pins and
 attack-surface dispositions without restructuring.
 
+**PR 4 Round 4 review pass meta-review amendment — derived
+hardening (2026-05-15).** PR 4's meta-review of its own
+F1–F9 disposition substrate (full writeup at PR 4 §5.4.9
+"Meta-review amendment — F11–F13") produced one finding
+that binds to PR 5 by carryover: **F12 cross-emitter
+ordering enforcement-gap amendment**. F4's seventh contract
+pin is enforced procedurally; consumer-actor authors who
+depend on cross-emitter arrival order produce code that
+compiles cleanly, passes per-emitter FIFO tests, and
+silently misbehaves under reordering at audit. F12 closes
+the gap by binding consumer actors to derive cross-emitter
+ordering from explicit causal-context fields carried inside
+the events themselves (`SnapshotId`, `ReservationId` plus
+version, `BlockHeight`); the V3.1+ FOLLOWUPS lint
+(scope-extended from F5 to a unified
+`diagnostic_consumer_discipline` lint) flags consumer-actor
+code that branches on relative arrival timing of events
+from distinct emitters without first constraining ordering
+via a causal-context field. The §5.0.3 per-emitter FIFO
+pin gains an "Enforcement-gap amendment (F12, 2026-05-15;
+symmetric with PR 4 §5.4.6 amendment)" subsection naming
+the binding discipline. F11 (per-transaction cancellation
+safe-point pin) and F13 (`SuppressedRateLimit` field-shape
+pin) do not bind to PR 5 by carryover — F11 targets PR 4's
+per-block scan loop, which has no PR 5 analog (the `Signer`
+trait per §5.4 R11 (b) does not iterate per-transaction
+inside the synchronous trait surface); F13 targets PR 4's
+`SuppressedRateLimit` variant, which is a `RefreshDiagnostic`
+addition not mirrored in PR 5's `PendingTxDiagnostic`
+taxonomy at this round. PR 5 may surface analogous pins at
+its own pre-implementation review pass; tracking is
+orthogonal. No PR 5 trait surface change; the hardening
+refines the §5.0.3 contract pin without restructuring.
+
 Subsequent revisions land each design round inline (the
 precedent set by PR 3's
 [`STAGE_1_PR_3_KEY_ENGINE.md`](./STAGE_1_PR_3_KEY_ENGINE.md) and
@@ -1383,7 +1417,8 @@ bind here verbatim — they're general properties of any
   fired-or-not state. Round 4 test deliverable; not a hard
   trait contract on consumer implementations.
 - **Per-emitter FIFO ordering (PR 4 Round 4 review pass F4,
-  2026-05-15).** Events emitted by a single emitter (one
+  2026-05-15; F12 enforcement-gap amendment, 2026-05-15).**
+  Events emitted by a single emitter (one
   `LocalRefresh` instance, one `LocalPendingTx` instance)
   arrive at the sink in emission order; cross-emitter
   ordering is undefined. Implementations satisfy the
@@ -1394,11 +1429,30 @@ bind here verbatim — they're general properties of any
   Pinned here to bind PR 5's `PendingTxDiagnostic` stream
   symmetrically with PR 4's `RefreshDiagnostic` stream;
   see PR 4 §5.4.6 / §5.4.9 F4 for the full disposition
-  reasoning. Consumer-actor PRs (V3.x) that need
-  cross-emitter ordering must derive it from explicit
-  causal-context fields in the events themselves
-  (e.g., `SnapshotId` pinning), not from sink-observed
-  arrival order.
+  reasoning. **Enforcement-gap amendment (F12, 2026-05-15;
+  symmetric with PR 4 §5.4.6 amendment).** The cross-
+  emitter-undefined half is procedurally enforced, not
+  type-system enforced — a V3.x consumer-actor author
+  who depends on cross-emitter arrival order writes code
+  that compiles cleanly and passes per-emitter FIFO tests,
+  then deadlocks or misbehaves under reordering at audit.
+  The discipline that closes the gap: **consumer actors
+  that need cross-emitter ordering MUST derive it from
+  explicit causal-context fields carried inside the
+  events themselves** — `SnapshotId` for ledger-rooted
+  ordering (also load-bearing for PR 5's reservation-
+  pinning per §5.0); `ReservationId` plus per-reservation
+  monotone version counters for reservation-rooted
+  ordering; `BlockHeight` for chain-rooted ordering. Sink-
+  observed arrival order is *not* a causal-context source
+  under the contract. The V3.x consumer-actor PR
+  template's CI-lint deliverable (FOLLOWUPS F5 entry,
+  scope-extended by F12) covers attempted cross-emitter-
+  ordering reliance: the lint flags consumer-actor code
+  that branches on the relative timing of events from
+  distinct emitters without first constraining ordering
+  via a causal-context field. See PR 4 §5.4.8 #4 V3.x
+  forward-template item 4 for the lint's full scope.
 
 **Generalization question (closed in Round 2 segment 2g
 as (a) — rename to `DIAGNOSTIC_STREAM.md`).** PR 4's

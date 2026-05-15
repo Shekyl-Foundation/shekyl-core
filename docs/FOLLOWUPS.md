@@ -3637,55 +3637,97 @@ one place to confirm each item's relationship to the wallet stack.
   [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §5.4 R17 (post-F1-carryover hardened disposition).
 
-- **Diagnostic-stream consumer-actor PR aggregator-
-  republisher CI lint (Stage 1 PR 4 Round 4 review pass
-  F5 forward-template, 2026-05-15; V3.1+).** PR 4 §5.4.8
-  #4's recursive trust-boundary pin requires that
-  full-fidelity diagnostic events flow only to actors
-  whose external surface is itself within the trust
-  boundary, **recursively**. Procedural enforcement
-  (per-PR review checklist; per-consumer-actor PR
-  external-surface audit) is the V3.0 disposition;
-  the F5 forward-template names a future CI-lint
-  enforcement: a static check that verifies any consumer
-  binding to a `DiagnosticSink` either (i) declares no
-  external surface, or (ii) declares its external surface
-  carries projection-typed events only, never
-  full-fidelity event types from the stream taxonomies.
+- **Diagnostic-stream consumer-actor PR `diagnostic_consumer_discipline`
+  CI lint (Stage 1 PR 4 Round 4 review pass F5 forward-
+  template, 2026-05-15; scope-extended by F12 amendment,
+  2026-05-15; V3.1+).** PR 4 §5.4.8 #4's recursive trust-
+  boundary pin and §5.4.6's per-emitter FIFO contract pin
+  together impose two consumer-actor disciplines that are
+  type-system-unenforceable at V3.0: (i) full-fidelity
+  diagnostic events flow only to actors whose external
+  surface is itself within the trust boundary, **recursively**;
+  (ii) consumer actors that need cross-emitter ordering
+  derive it from explicit causal-context fields in the
+  events (`SnapshotId`, `ReservationId` plus version,
+  `BlockHeight`), not from sink-observed arrival order.
+  Procedural enforcement (per-PR review checklist;
+  per-consumer-actor PR external-surface audit) is the V3.0
+  disposition; this entry queues the V3.1+ CI-lint
+  enforcement covering both disciplines as a single
+  `diagnostic_consumer_discipline` clippy-style check.
+
+  **F5 sub-scope (recursive trust-boundary).** Static check
+  that verifies any consumer binding to a `DiagnosticSink`
+  either (i) declares no external surface, or (ii) declares
+  its external surface carries projection-typed events only,
+  never full-fidelity event types from the stream taxonomies.
+  Detection shape: pattern-match on consumer-actor types
+  implementing `DiagnosticSink` *and* `Write` /
+  `serde::Serialize` / network-export / log-collection
+  surfaces; require explicit `#[allow(diagnostic_external_surface)]`
+  attribute with an inline rationale comment.
+
+  **F12 sub-scope (cross-emitter ordering misuse).** Static
+  check that verifies consumer-actor event-handler bodies
+  do not branch on the relative arrival timing of events
+  from distinct emitters without first constraining
+  ordering via an explicit causal-context field. Detection
+  shape: pattern-match on event-handler bodies that compare
+  timestamps or use sink-observed arrival order across
+  events whose emitter identity differs (statically-
+  determinable from the event-class taxonomy plus the
+  consumer's subscription set); flag such patterns and
+  require either (a) a causal-context field added to the
+  relevant event class with a matching update to the
+  consumer's ordering derivation, or (b) explicit
+  `#[allow(diagnostic_cross_emitter_ordering)]` with an
+  inline rationale comment naming why per-emitter-only
+  ordering is sufficient at this site.
 
   **Why a CI lint, not just a review process.** A
   procedural check requires every reviewer to apply the
-  recursive-trust-boundary discipline at every consumer-
-  actor PR; the discipline survives only as long as
-  reviewer rigor holds. A CI lint moves the discipline
-  from reviewer-rigor-dependent to enforced-by-default,
-  consistent with
+  recursive-trust-boundary discipline and the cross-emitter
+  causal-context discipline at every consumer-actor PR;
+  both disciplines survive only as long as reviewer rigor
+  holds. A CI lint moves both from reviewer-rigor-dependent
+  to enforced-by-default, consistent with
   [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
   "discipline operates with continuous coverage" framing.
   The lint becomes load-bearing as the consumer-actor
   ecosystem grows beyond what a single reviewer can hold
-  in working memory.
+  in working memory; the F12 sub-scope catches a class of
+  bug (deadlock or misbehave-under-reordering) that audit
+  finds late and that CI catches immediately.
 
   **Implementation candidates.** A `clippy` lint targeting
   consumer constructors (`fn new(..., sink: Arc<dyn
   DiagnosticSink>)`); a per-crate `#[deny(...)]` directive
-  with a project-defined `non_projected_event_publish` lint;
-  a CI script over `cargo expand` output looking for
+  with a project-defined `diagnostic_consumer_discipline`
+  lint; a CI script over `cargo expand` output looking for
   full-fidelity event types crossing IPC / log / metrics
-  boundary types.
+  boundary types and for cross-emitter timing comparisons
+  in event-handler bodies.
 
   **Trigger.** When the second consumer actor enters
   design rounds (`ReorgAmplificationDetector` and
   `PeerReputationActor` together exhaust the single-
   consumer case where reviewer attention is sufficient;
-  the multi-consumer case is where the CI lint pays back).
+  the multi-consumer case is where the CI lint pays back —
+  per F12, the cross-emitter sub-scope specifically
+  activates because two consumers with distinct
+  subscription sets create the substrate the misuse
+  pattern needs).
 
   Cross-references:
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.8 #4 (recursive trust-boundary pin + V3.x forward-
-  template), §5.4.9 F5 (review-pass disposition);
-  consumer-actor PR template (FOLLOWUPS entry above).
-  Target: V3.1+.
+  template, items 1–4 including F12 cross-emitter
+  scope-extension), §5.4.6 7th contract pin (per-emitter
+  FIFO + cross-emitter undefined + F12 enforcement-gap
+  amendment), §5.4.9 F5 (recursive-trust-boundary
+  review-pass disposition), §5.4.9 F12 (cross-emitter
+  contract-gap meta-finding); consumer-actor PR template
+  (FOLLOWUPS entry above). Target: V3.1+.
 
 - **Diagnostic-stream specification document — projection-
   type formalization per event class (Stage 1 PR 4 Round 4

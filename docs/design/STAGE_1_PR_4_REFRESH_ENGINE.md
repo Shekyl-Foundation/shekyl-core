@@ -7,9 +7,12 @@ plus Phase 0e `DaemonOp` / `ProtocolErrorKind` seed enums,
 2026-05-13), Round 3 confirmation (α confirmed by PR 5
 Round 1's disposition under the actor-mesh framing,
 2026-05-14), Round 4 (commit decomposition + Phase 1
-commit list, 2026-05-14), and Round 4 review pass
+commit list, 2026-05-14), Round 4 review pass
 (adversarial review of the post-Round-4 substrate before
-Phase 1 cuts; nine findings dispositioned, 2026-05-15)
+Phase 1 cuts; nine findings dispositioned, 2026-05-15),
+and Round 4 review pass meta-review amendment (review of the
+F1–F9 disposition substrate; three additional findings
+F11–F13 dispositioned without reopening Round 1–4, 2026-05-15)
 closed.** Round 1's load-bearing question (§5 producer
 redesign) settled to **α — preserved current shape** per
 §5.4. The Round 1 review pass (2026-05-12)
@@ -343,12 +346,21 @@ The PR must preserve, by name:
   `Engine<S>`; checkpoint 2 (post-tip-fetch), checkpoint 3
   (mid-scan, between blocks), and **checkpoint 5 (per-transaction,
   inside the per-block scan loop)** belong to
-  `RefreshEngine::produce_scan_result`. The per-transaction
-  checkpoint 5 bounds wallet-lock-latency content-independently
-  under adversarial daemon block crafting; pre-Round-4-review-pass
-  the discipline was four-checkpoint and the lock-latency bound was
-  per-block (content-dependent). This split is part of the
-  contract.
+  `RefreshEngine::produce_scan_result`. **Checkpoint 5 fires at a
+  pinned safe point** (Round 4 review pass amendment, 2026-05-15;
+  see §5.4.9 F11): between consecutive per-transaction iterations
+  of the scan loop, **before** the next transaction's view-tag
+  / hybrid-decap / key-image derivation begins, **after** the
+  prior iteration's `Zeroizing<…>`-wrapped per-output materials
+  have left scope. Firing checkpoint 5 mid-derivation (between
+  view-tag pre-filter and hybrid-decap, or between hybrid-decap
+  and key-image) is forbidden — the partial-derivation state
+  exposes secrets that the safe-point pin keeps off the unwound
+  stack. The per-transaction checkpoint 5 bounds wallet-lock-
+  latency content-independently under adversarial daemon block
+  crafting; pre-Round-4-review-pass the discipline was four-
+  checkpoint and the lock-latency bound was per-block (content-
+  dependent). This split is part of the contract.
 - The `RefreshError::ConcurrentMutation` retry loop semantics from
   [`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs).
   The orchestrator owns the retry; the producer is one attempt.
@@ -457,7 +469,21 @@ PR 4's check completes here.
   scan window. The bound holds for typical and pathological
   blocks alike. The pre-Round-4-review-pass "tens of ms typical"
   framing (correct for typical blocks; broken under adversarial
-  block crafting) is retired.
+  block crafting) is retired. **Checkpoint-5 safe-point pin
+  (Round 4 review pass amendment, 2026-05-15; see §5.4.9 F11).**
+  The "per-transaction scan window" the bound names is
+  measured from one safe-point firing to the next — the check
+  fires *between* per-transaction derivations, *after* the
+  prior iteration's per-output secrets leave scope, *before*
+  the next iteration loads its materials. The threat-model
+  property the bound delivers therefore refines: not just
+  "spend-secret residency capped at single-transaction scan
+  time" but specifically "no per-output derived secret is
+  resident on the stack at the moment cancellation is
+  observed." Mid-derivation firing (between view-tag pre-filter
+  and hybrid-decap; between hybrid-decap and key-image
+  computation) would defeat this property and is forbidden by
+  the safe-point pin.
 - **Master-secret isolation (corrected per Round 1 review pass).**
   The seed's earlier framing ("does not touch `KeyEngine`, does
   not derive secrets, does not hold output secrets") was
@@ -1796,6 +1822,27 @@ against and Stage 4 has the property to wrap around.
   and `PendingTxDiagnostic`. Phase 0e docstring amendment on
   `DiagnosticSink::emit`, naming both halves explicitly so V3.x
   consumer-actor PRs cannot re-derive the contract inconsistently.
+  **Enforcement gap and causal-context discipline (Round 4
+  review pass amendment, 2026-05-15; F12).** The cross-emitter-
+  undefined half is procedurally enforced, not type-system
+  enforced — a V3.x consumer-actor author who depends on
+  cross-emitter arrival order writes code that compiles cleanly
+  and passes per-emitter FIFO tests, then deadlocks or
+  misbehaves under reordering at audit. The discipline that
+  closes the gap: **consumer actors that need cross-emitter
+  ordering MUST derive it from explicit causal-context fields
+  carried inside the events themselves** — `SnapshotId` for
+  ledger-rooted ordering, `ReservationId` plus per-reservation
+  monotone version counters for reservation-rooted ordering,
+  `BlockHeight` for chain-rooted ordering. Sink-observed arrival
+  order is *not* a causal-context source under the contract.
+  The V3.x consumer-actor PR template's CI-lint deliverable
+  (FOLLOWUPS F5 entry, scope-extended by F12) covers
+  *attempted* cross-emitter-ordering reliance: the lint flags
+  consumer-actor code that branches on the relative timing of
+  events from distinct emitters without first constraining
+  ordering via a causal-context field. See §5.4.8 #4's V3.x
+  forward-template for the lint's full scope.
 
 ### §5.4.7 Round 2 dispositions — R2–R7 settled (2026-05-12)
 
@@ -2750,6 +2797,29 @@ aggregator/republisher consumer PR).**
    first aggregator/republisher consumer PR; subsequent PRs
    inherit it. See FOLLOWUPS for the V3.1+ entry naming the
    lint as the trigger.
+4. **Cross-emitter ordering misuse coverage (Round 4 review
+   pass amendment, 2026-05-15; F12 scope-extension of the
+   F5 lint).** The same V3.x lint also covers consumer-actor
+   code that branches on the relative arrival timing of
+   events from distinct emitters without first constraining
+   ordering via an explicit causal-context field
+   (`SnapshotId`, `ReservationId` + version, `BlockHeight`,
+   etc.). The diagnostic-stream contract pin (§5.4.6 7th pin
+   per F4) declares cross-emitter ordering undefined; the
+   lint catches code that depends on it anyway. Detection
+   shape: pattern-match on consumer-actor event-handler
+   bodies that compare timestamps or use sink-observed
+   arrival order across events whose emitter identity
+   differs (statically-determinable from the event-class
+   taxonomy plus the consumer's subscription set). The lint
+   flags such patterns and requires either (a) a causal-
+   context field added to the relevant event class with a
+   matching update to the consumer's ordering derivation, or
+   (b) explicit `#[allow(diagnostic_cross_emitter_ordering)]`
+   with an inline rationale comment naming why per-emitter-
+   only ordering is sufficient at this site. The lint
+   subsumes the F5 external-surface lint as a single
+   `diagnostic_consumer_discipline` clippy-style check.
 
 The V3.x forward-template strengthens the recursive-trust-
 boundary discipline from procedural to CI-enforced at the
@@ -2828,6 +2898,59 @@ ban the peer based on the notice alone) without forcing the
 consumer to process the full flood. The variant is added under
 `#[non_exhaustive]` per §5.4.8 forward-note (additive variant
 growth is supported by the trait contract).
+
+**Field-shape pin (Round 4 review pass amendment, 2026-05-15;
+F13).** The variant carries **only** `class: SuppressedClass`
+where `SuppressedClass` is a small project-defined enum naming
+the suppressed event class (`SuppressedClass::DaemonMalformed`,
+`SuppressedClass::DaemonTimeout`, `SuppressedClass::DaemonProtocolError`,
+`SuppressedClass::ReorgObserved`, `SuppressedClass::ScanProgress`).
+The variant **MUST NOT** carry:
+
+- A **count** of suppressed events (e.g., `count: u32`). The
+  attacker who triggered the rate-limit learns from the count
+  exactly how many of their flood events the budget swallowed,
+  giving them a covert channel back from the producer's
+  internal state. The reputation actor's stateful decision
+  ("ban this peer") needs *that the limit was hit*, not *how
+  many events were suppressed*; the count is signal-free for
+  the consumer's correctness obligation and is signal-rich for
+  the attacker's reconnaissance.
+- A **timestamp** or **timing field** (`first_suppressed_at`,
+  `window_elapsed`, etc.). Timing fields would carry the same
+  attacker-reconnaissance shape as the count plus a side-
+  channel into the producer's emission-loop scheduling.
+- The **original event payload** that triggered suppression
+  (e.g., `last_suppressed_event: RefreshDiagnostic`). This
+  would defeat the projection-type discipline (per F9) by
+  carrying full-fidelity event content past the rate-limit
+  boundary that was meant to suppress it.
+
+**What consumers infer from absence.** Consumer actors that
+need a count derive it from *the absence of further events of
+the suppressed class within the same attempt boundary*: the
+attempt-end signal (the `produce_scan_result` future
+completing, observable from the orchestrator side via
+`ScanResult` or `RefreshError`) plus the `SuppressedRateLimit`
+notice tells the consumer "between the notice and the attempt
+end, no further events of that class were emitted by this
+producer." For finer-grained rate-limit telemetry the
+project would add a separate operator-only diagnostic surface
+(metrics, not `DiagnosticSink`) with its own threat-model
+disposition; the diagnostic stream is not that surface.
+
+**Why a class enum and not a discriminant integer or string.**
+A discriminant integer couples the projection contract to the
+`RefreshDiagnostic` variant ordering (a new variant changes
+older variants' discriminants under default Rust enum layout,
+breaking consumer pattern-matches against the integer); a
+string is a free-form attacker-influencable surface that
+contradicts §5.4.8 #4's projection-type discipline. A
+small project-defined `SuppressedClass` enum is stable across
+`RefreshDiagnostic`'s additive variant growth (each new
+adversarial-class variant gains a matching `SuppressedClass`
+arm under `#[non_exhaustive]`) and is constructively
+attacker-uninfluencable.
 
 **Implementation cost.** O(num\_event\_classes) `u32` counters
 on the producer; one branch per emission. Producer-internal
@@ -3032,11 +3155,18 @@ substrate (the post-Round-4 design doc, before Phase 1 cuts).
 Reviewer 1 focused on residual feature-commitment surfaces and
 contract-pin tightening; Reviewer 2 focused on diagnostic-stream
 attack surfaces and the encrypted-cache resilience adjacency.
-Together they surfaced **nine actionable findings** and a tenth
-that collapsed into the first under shared substrate. This
-section records each finding with the reviewer attribution, the
-attack analysis, the disposition reasoning, and a pointer to
-the inline edit that landed the disposition.
+Together they surfaced **nine actionable findings** (F1–F9) and
+a tenth (F10) that collapsed into the first under shared
+substrate. A subsequent **meta-review amendment (2026-05-15)
+of the F1–F9 dispositions themselves** surfaced three additional
+findings (F11–F13) targeting under-specifications introduced by
+the F1–F9 disposition substrate rather than new attack vectors
+against the pre-review-pass substrate. The combined disposition
+total is **twelve actionable findings** with thirteen recorded
+attribution slots (F10 collapsed). This section records each
+finding with reviewer attribution, attack analysis, disposition
+reasoning, and a pointer to the inline edit that landed the
+disposition.
 
 The review pass is a Round 4 deliverable, not a fresh round. It
 captures the thought process behind each finding's disposition
@@ -3054,6 +3184,17 @@ findings reopened a prior round (Round 1 / Round 2 / Round 2
 reframe / Round 3 dispositions all hold); the dispositions
 land at Round 4's substrate level (contract pins, attack-surface
 enumerations, commit-list refinements).
+
+**Meta-review amendment cross-reference.** The F11–F13 amendment
+applies the same review-pass discipline to the F1–F9 substrate
+that F1–F9 applied to the pre-review-pass substrate. The closure
+rule's reopening mechanism is the explicit substrate; the
+amendment does not constitute "Round 5" because none of F11–F13
+reopens a Round 1–4 disposition (each targets an under-
+specification *introduced by* an F1–F9 disposition, not a
+substrate decision Rounds 1–4 settled). The amendment is
+recorded inline at §5.4.9 below the F10 disposition; the
+F1–F9 disposition rationale is unchanged.
 
 #### F1 — R17 encrypted-persistence opt-in language hardening (Reviewer 1, expanded by Reviewer 2)
 
@@ -3619,6 +3760,272 @@ entry; conditional reopening only" preserves the in-memory-only
 default as structurally final at V3.0; F10 requires no separate
 action.
 
+---
+
+#### Meta-review amendment — F11–F13 (2026-05-15)
+
+The F1–F9 dispositions themselves were reviewed against the
+same adversarial discipline that surfaced them. The meta-review
+asked: "do the F1–F9 dispositions create new attack surface, or
+do they leave new under-specifications that would surface at
+Phase 1 commit-authoring as substrate decisions rather than
+mechanical translations?" Three findings (F11–F13) emerged.
+Each targets an under-specification *introduced by* an F1–F9
+disposition; none reopens a Round 1–4 substrate decision.
+
+The amendment lands in the same review-pass section because the
+findings are structurally meta-review of F1–F9, not a separate
+review pass against a substrate that doesn't yet exist (the
+post-F1–F9 substrate is exactly what the meta-review reviewed).
+The discipline-application shape is per
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)'s
+"audits-are-clean-so-compress" anti-pattern: the F1–F9 review
+pass produced clean dispositions; the temptation is to declare
+victory and proceed; the discipline is to ask whether the
+dispositions themselves carry the property they claim before
+the implementation cuts against them. F11–F13 is the answer to
+that question, recorded as it is rather than left for Phase 1
+commit-authoring to discover under time pressure.
+
+#### F11 — Per-transaction cancellation safe-point pin (meta-review of F2)
+
+**The under-specification.** F2's five-checkpoint discipline
+pins *that* a per-transaction cancellation check fires inside
+the per-block scan loop body (per §3.1 §2.3 / §7 / §7.X C4
+post-F2 edits). It does *not* pin *where* in the per-transaction
+body the check fires. The implementation is free to place the
+check at any point inside the per-transaction iteration —
+between view-tag pre-filter and hybrid-decap; between hybrid-
+decap and key-image computation; at the iteration's tail —
+and all placements satisfy the literal text of the F2 pin.
+
+**Adversarial relevance (the load-bearing one).** The four-
+checkpoint-to-five-checkpoint promotion exists because §3.1's
+wallet-lock-latency property needs the per-transaction-bounded
+spend-secret residency to hold under adversarial daemon block
+crafting (per F2 disposition rationale). If the check fires
+*mid-derivation* — between view-tag pre-filter and hybrid-decap
+when the X25519 ephemeral and `ml_kem_dk` are loaded but the
+hybrid-shared-secret hasn't been derived; between hybrid-decap
+and key-image when the per-output derived secrets are on the
+stack but key-image hasn't computed — the cancellation observes
+the producer with secret material on the unwound stack frame.
+Stack unwinding runs `Drop` impls (so `Zeroizing<…>` fires),
+but during the brief window between observation and `Drop`
+completion a memory-disclosure adversary (concurrent process
+on the same OS; Spectre-style speculative-read; coredump
+triggered by the cancellation handler; kernel-side memory
+introspection) sees secrets that the safe-point-pinned firing
+keeps off the unwound stack entirely. F2's lock-latency
+property *implicitly* assumed safe-point firing; the meta-
+review surfaces the assumption and elevates it to a binding
+pin.
+
+**Disposition: accept; pin the safe point at "between
+transactions, before next-tx secret load."** The check fires
+at the top of the per-transaction iteration, *after* the prior
+iteration's `Zeroizing<…>`-wrapped per-output materials have
+been dropped at the iteration's scope exit, *before* the next
+iteration's view-tag / hybrid-decap / key-image derivation
+begins. Mid-derivation firing is forbidden by the contract,
+and the C7 `AssertionSink` / coherence-pair test substrate
+gains a safe-point fixture that constructs an adversarial
+cancellation token firing during a synthesized per-transaction
+iteration and asserts the producer's stack-effect-trace
+contains no partial-derivation state at the observed
+cancellation point.
+
+**Inline edits applied.**
+
+- §3.1 §2.3 cancellation-checkpoint paragraph — checkpoint 5
+  safe-point pin added (between transactions, before next-tx
+  secret load; mid-derivation firing forbidden).
+- §3.1 "Cancellation discipline preserved" bullet — refined
+  the "single-transaction scan window" framing to specify
+  that the window is measured between safe-point firings and
+  that no per-output derived secret is resident on the stack
+  at the moment cancellation is observed.
+- §7.X C4 commit description — extended the "Inner
+  cancellation check" bullet with the binding safe-point
+  firing site, the implementation shape (check as first
+  statement inside the per-transaction loop body, with
+  iteration-local material declared after the check), the
+  C7 safe-point fixture deliverable, and the explicit
+  prohibition on mid-derivation firing.
+
+#### F12 — Cross-emitter ordering contract-gap (meta-review of F4)
+
+**The under-specification.** F4's seventh contract pin (per-
+emitter FIFO ordering preserved; cross-emitter ordering
+undefined) is enforced procedurally, not at the type system.
+A V3.x consumer-actor author writes code that:
+
+```rust
+match (peer_rotation_event, malformed_event) {
+    (Some(rot), Some(mal)) if rot.observed_at < mal.observed_at => { ... }
+    _ => { ... }
+}
+```
+
+— compiles cleanly, passes per-emitter FIFO tests (each event
+arrived in its emitter's order), and silently misbehaves under
+reordering at audit. The pattern is `mal` and `rot` come from
+distinct emitters (a `RefreshDiagnostic`-emitting refresh task
+and a `LedgerDiagnostic`-emitting ledger task, say); F4 says
+their relative arrival order is undefined; the consumer's
+branch implicitly assumes it isn't.
+
+**Adversarial relevance.** The same attack class F4 documented
+(adversary-influenced reordering shaping consumer-actor
+conclusions) reaches the consumer via a different shape: not
+through the sink itself relaxing the FIFO contract, but
+through the consumer-actor author depending on a contract that
+F4 explicitly disclaimed. F4's V3.0 disposition (procedural
+enforcement; no V3.x consumer-actor exists in V3.0) holds for
+V3.0 because no aggregator/republisher consumer ships in V3.0
+and `TracingDiagnosticSink` doesn't branch on cross-event
+timing. The exposure is V3.x consumer-actor authors who
+re-derive the contract from the prose and miss the cross-
+emitter half.
+
+**Disposition: accept; close the gap at the discipline level
+and at the V3.x lint level.** Two-part disposition:
+
+1. **Discipline-level close (V3.0 binding).** The §5.4.6
+   seventh contract pin gains an "enforcement gap and causal-
+   context discipline" amendment naming explicitly that
+   consumer actors needing cross-emitter ordering MUST derive
+   it from explicit causal-context fields carried inside the
+   events themselves (`SnapshotId` for ledger-rooted ordering,
+   `ReservationId` plus per-reservation monotone version
+   counters for reservation-rooted ordering, `BlockHeight`
+   for chain-rooted ordering). Sink-observed arrival order is
+   *not* a causal-context source under the contract.
+2. **CI-lint scope-extension (V3.1+).** The FOLLOWUPS F5 entry
+   (V3.1+ consumer-actor PR aggregator-republisher CI lint)
+   is scope-extended to cover cross-emitter ordering misuse
+   as a sub-scope of the same `diagnostic_consumer_discipline`
+   lint. Detection shape: pattern-match on consumer-actor
+   event-handler bodies that compare timestamps or use sink-
+   observed arrival order across events whose emitter
+   identity differs (statically-determinable from the event-
+   class taxonomy plus the consumer's subscription set).
+   The lint flags such patterns and requires either a
+   causal-context field added to the relevant event class or
+   explicit `#[allow(diagnostic_cross_emitter_ordering)]`
+   with an inline rationale comment.
+
+**Why discipline-level close in V3.0 rather than CI-lint
+in V3.0.** No V3.0 consumer hits the cross-emitter case; the
+lint pays back when the second consumer enters design rounds.
+The discipline-level close in V3.0 establishes the contract
+clearly so the V3.1+ lint has clean text to pattern-match
+against, and so PR-1 of the consumer-actor era doesn't have
+to re-derive the contract from F4's pre-amendment text.
+
+**Inline edits applied.**
+
+- §5.4.6 seventh contract pin — extended with "enforcement
+  gap and causal-context discipline" amendment naming the
+  procedural-vs-type-system gap, the binding requirement to
+  use causal-context fields for cross-emitter ordering, and
+  the cross-reference to the V3.1+ lint.
+- §5.4.8 #4 V3.x forward-template — added item 4
+  "Cross-emitter ordering misuse coverage" to the lint
+  requirements, with detection shape and `#[allow(...)]`
+  attribute pattern.
+- `docs/FOLLOWUPS.md` F5 entry — rewritten as the unified
+  `diagnostic_consumer_discipline` lint covering both the
+  F5 sub-scope (recursive trust-boundary) and the F12
+  sub-scope (cross-emitter ordering misuse), with the F12
+  rationale and detection shape recorded.
+- PR 5 §5.0.3 (carryover edit) — adds the parallel
+  enforcement-gap amendment so the symmetric pin in PR 5
+  carries the same binding discipline.
+
+#### F13 — `SuppressedRateLimit` field-shape pin (meta-review of F6)
+
+**The under-specification.** F6's `SuppressedRateLimit` variant
+addition pinned the variant exists and that the producer emits
+it once-per-class-per-attempt when the per-class budget is
+exceeded. It did not pin *what fields the variant carries*. The
+implementation is free to add `count: u32`, `first_suppressed_at:
+Instant`, `last_suppressed_event: Box<RefreshDiagnostic>`, or
+any other field, and all field shapes satisfy the literal text
+of the F6 pin.
+
+**Adversarial relevance.** Each candidate field carries
+attacker-relevant signal:
+
+- A **count** of suppressed events tells the attacker who
+  triggered the rate-limit *exactly how many of their flood
+  events the budget swallowed* — a covert channel back from
+  the producer's internal state. The reputation actor's
+  stateful decision ("ban this peer") needs *that the limit
+  was hit*, not *how many events were suppressed*; the count
+  is signal-free for the consumer's correctness obligation
+  and is signal-rich for the attacker's reconnaissance.
+- A **timestamp** or **timing field** carries the same
+  attacker-reconnaissance shape as the count plus a side-
+  channel into the producer's emission-loop scheduling.
+- The **original event payload** that triggered suppression
+  defeats the projection-type discipline (per F9) by carrying
+  full-fidelity event content past the rate-limit boundary
+  that was meant to suppress it.
+
+**Disposition: accept; pin the variant carries `class:
+SuppressedClass` only, no count, no timing, no payload.**
+`SuppressedClass` is a project-defined `#[non_exhaustive]`
+enum at the same crate-root scope as `RefreshDiagnostic` with
+arms one-per-rate-limited event class (`SuppressedClass::DaemonMalformed`,
+`SuppressedClass::DaemonTimeout`, `SuppressedClass::DaemonProtocolError`,
+`SuppressedClass::ReorgObserved`, `SuppressedClass::ScanProgress`).
+Future per-class additions to `RefreshDiagnostic` add a
+matching arm to `SuppressedClass` under both enums'
+`#[non_exhaustive]` attribute.
+
+Consumer actors that need a count derive it from *the absence
+of further events of the suppressed class within the same
+attempt boundary*: the attempt-end signal (the
+`produce_scan_result` future completing, observable from the
+orchestrator side via `ScanResult` or `RefreshError`) plus
+the `SuppressedRateLimit` notice tells the consumer "between
+the notice and the attempt end, no further events of that
+class were emitted by this producer." For finer-grained
+rate-limit telemetry the project would add a separate
+operator-only diagnostic surface (metrics, not
+`DiagnosticSink`) with its own threat-model disposition; the
+diagnostic stream is not that surface.
+
+**Why a class enum and not a discriminant integer or string.**
+A discriminant integer couples the projection contract to the
+`RefreshDiagnostic` variant ordering (a new variant changes
+older variants' discriminants under default Rust enum layout,
+breaking consumer pattern-matches against the integer); a
+string is a free-form attacker-influenceable surface that
+contradicts §5.4.8 #4's projection-type discipline. A small
+project-defined `SuppressedClass` enum is stable across
+`RefreshDiagnostic`'s additive variant growth and is
+constructively attacker-uninfluenceable.
+
+**Inline edits applied.**
+
+- §5.4.8 #5 — added "Field-shape pin (Round 4 review pass
+  amendment, 2026-05-15; F13)" subsection naming the binding
+  field shape (`class: SuppressedClass` only), the explicit
+  prohibition on count / timestamp / original-payload fields
+  with the attacker-reconnaissance rationale per field, the
+  consumer-side derivation for absence-of-further-events
+  count inference, and the rationale for the class enum
+  shape over discriminant integers or strings.
+- §7.X C2 commit description — extended the
+  `SuppressedRateLimit` variant description with the
+  `SuppressedClass` enum addition (Phase 0e Phase 1 enum
+  addition; project-defined `#[non_exhaustive]` enum at the
+  same crate-root scope; arms one-per-rate-limited event
+  class). Updated the flat-crate-root re-export list from
+  eight items to nine to include `SuppressedClass`.
+
 #### Considered and not elevated
 
 Reviewer 1's "considered-and-not-elevated" list (view-tag-timing
@@ -3636,7 +4043,8 @@ disposition; Phase 1 inherits them in their current form.
 
 #### Round 4 review pass closure
 
-Nine actionable findings, nine dispositions, all inline edits
+**F1–F9 close (initial review pass, 2026-05-15).** Nine
+actionable findings, nine dispositions, all inline edits
 applied to §3.1, §5.4.6, §5.4.8 (#1, #4, #5; new #6 / #7), §6,
 §7, §7.X (C2 / C4 commit descriptions), and the parallel PR 5
 sections (§5.0.3, §5.4 R17, status banner). FOLLOWUPS records
@@ -3645,16 +4053,35 @@ lint (F5) and diagnostic-stream projection-type formalization
 (F9). CHANGELOG records the review pass under `[Unreleased]` /
 `Changed`.
 
-**Round 4 closure rule (re-applied).** The review pass is the
-explicit reopening mechanism the closure rule (PR 5 §7) admits.
-None of the nine findings reopened a prior round (Round 1 / 2 /
-2 reframe / 3 dispositions all hold); the dispositions land at
-Round 4's substrate level (contract pins, attack-surface
-enumerations, commit-list refinements). Round 4 re-closes here;
-the implementation branch (`feat/stage-1-pr4-refresh-engine`)
-cuts off the post-Round-4-review-pass dev tip per the §6
-Round 4 readiness gate (which the review-pass dispositions
-re-confirm in their final state).
+**F11–F13 close (meta-review amendment, 2026-05-15).** Three
+additional findings on the F1–F9 disposition substrate, three
+dispositions, all inline edits applied to §3.1 §2.3
+cancellation-checkpoint paragraph, §3.1 "Cancellation
+discipline preserved" bullet, §5.4.6 seventh contract pin
+(F4 enforcement-gap amendment), §5.4.8 #4 V3.x forward-template
+(item 4 cross-emitter sub-scope), §5.4.8 #5 (field-shape pin
+subsection), §7.X C2 (SuppressedClass enum addition; nine-item
+re-export list), §7.X C4 (safe-point firing site; C7 fixture
+deliverable). FOLLOWUPS F5 entry rewritten as the unified
+`diagnostic_consumer_discipline` lint covering both F5 and F12
+sub-scopes. PR 5 §5.0.3 carryover edit lands the parallel F12
+enforcement-gap amendment. CHANGELOG `[Unreleased]` / `Changed`
+gains a meta-review amendment entry distinct from the F1–F9
+close.
+
+**Round 4 closure rule (re-applied).** The review pass and its
+meta-review amendment are both explicit reopening mechanisms
+the closure rule (PR 5 §7) admits. None of F1–F13 reopened a
+prior round (Round 1 / 2 / 2 reframe / 3 dispositions all hold);
+F1–F9 dispositions land at Round 4's substrate level (contract
+pins, attack-surface enumerations, commit-list refinements);
+F11–F13 dispositions land at the F1–F9 substrate level (under-
+specification closures introduced by the F1–F9 disposition
+shapes). Round 4 re-closes here; the implementation branch
+(`feat/stage-1-pr4-refresh-engine`) cuts off the post-meta-
+review dev tip per the §6 Round 4 readiness gate (which the
+review-pass and meta-review dispositions re-confirm in their
+final state).
 
 **Forward-template — review-pass discipline.** The Round 4
 review pass is itself a forward-template artifact: per-engine
@@ -4148,11 +4575,11 @@ Lands the Phase 0e diagnostic-stream substrate:
   `pub struct TracingDiagnosticSink` (Stage 1 sink impls);
   `TracingDiagnosticSink` routes to `tracing::event!` at
   `Level::INFO` per the §5.4.7 R6 reframe disposition.
-- Flat-crate-root re-exports of all eight public items
+- Flat-crate-root re-exports of all nine public items
   (`RefreshDiagnostic`, `DiagnosticSink`, `MalformedKind`,
-  `DaemonOp`, `ProtocolErrorKind`, `SuppressedRateLimit`
-  variant tag wrapper if exposed, `NoopDiagnosticSink`,
-  `TracingDiagnosticSink`).
+  `DaemonOp`, `ProtocolErrorKind`, `SuppressedClass`,
+  `NoopDiagnosticSink`, `TracingDiagnosticSink`, plus the
+  `SuppressedRateLimit` variant on `RefreshDiagnostic` itself).
 - **Per-class projections in `TracingDiagnosticSink::emit`
   (Round 4 review pass, 2026-05-15; F9).**
   `TracingDiagnosticSink` does **not** route the full
@@ -4165,13 +4592,30 @@ Lands the Phase 0e diagnostic-stream substrate:
   bucketed `candidates` for `ScanProgress` with `height`
   elided). The projection per variant is documented inline
   next to the variant's `emit` arm.
-- **`SuppressedRateLimit { class: <variant tag> }` variant
+- **`SuppressedRateLimit { class: SuppressedClass }` variant
   added to `RefreshDiagnostic` (Round 4 review pass,
-  2026-05-15; F6).** The producer emits this variant once
-  per attempt per event class when the per-class emission
-  budget is exceeded (per §5.4.8 #5); consumers interpret
-  it as "the producer hit the rate limit on this class" and
-  make stateful decisions accordingly.
+  2026-05-15; F6; field-shape pinned by F13 amendment,
+  2026-05-15).** The producer emits this variant once per
+  attempt per event class when the per-class emission budget
+  is exceeded (per §5.4.8 #5); consumers interpret it as
+  "the producer hit the rate limit on this class" and make
+  stateful decisions accordingly. **`SuppressedClass`
+  enum (Phase 0e Phase 1 enum addition).** Project-defined
+  `#[non_exhaustive]` enum at the same crate-root scope as
+  `RefreshDiagnostic` with arms one-per-rate-limited event
+  class (`SuppressedClass::DaemonMalformed`,
+  `SuppressedClass::DaemonTimeout`,
+  `SuppressedClass::DaemonProtocolError`,
+  `SuppressedClass::ReorgObserved`,
+  `SuppressedClass::ScanProgress`). The variant carries
+  *only* `class: SuppressedClass` — no count, no timing
+  field, no original-event payload — per §5.4.8 #5's F13
+  field-shape pin (preventing the suppressed-event count
+  from becoming an attacker covert channel back from the
+  producer's internal state). Future per-class additions
+  to `RefreshDiagnostic` add a matching arm to
+  `SuppressedClass` under both enums' `#[non_exhaustive]`
+  attribute.
 
 C2 introduces no production consumers yet; the substrate
 sits ready for C4 to wire `produce_scan_result` against it.
@@ -4220,14 +4664,33 @@ Introduces the `RefreshEngine`-implementing aggregate:
   events emitted at the audited call sites enumerated in
   §6's call-site sweep.
 - **Inner cancellation check (Round 4 review pass, 2026-05-15;
-  F2).** The per-block scan loop body adds a per-transaction
-  cancellation check (`token.is_cancelled()` → return
-  `RefreshError::Cancelled` on hit). On hit the producer
-  discards in-flight per-block partial state; `Scanner`'s
-  `ZeroizeOnDrop` chain handles the per-block materials.
-  Cost: ~1–3 ns per transaction; preserves §3.1 sub-block
-  lock-latency property under adversarial daemon block
-  crafting.
+  F2; safe-point pin from F11 amendment, 2026-05-15).** The
+  per-block scan loop body adds a per-transaction cancellation
+  check (`token.is_cancelled()` → return `RefreshError::Cancelled`
+  on hit). **Safe-point firing site (binding).** The check fires
+  at the top of the per-transaction scan-loop iteration, **after**
+  the prior iteration's `Zeroizing<…>`-wrapped per-output
+  materials have been dropped at the iteration's scope exit, and
+  **before** the next transaction's view-tag / hybrid-decap /
+  key-image derivation begins. Implementation shape: place the
+  check as the first statement inside the per-transaction loop
+  body, with the iteration-local per-output material declared
+  *after* the check (so the prior iteration's drops have
+  completed by the time the check observes the token). Mid-
+  derivation firing (between view-tag pre-filter and hybrid-decap
+  call; between hybrid-decap and key-image computation) is
+  forbidden by the §3.1 / §2.3 cancellation-checkpoint contract;
+  C7's `AssertionSink` / coherence-pair test substrate gains
+  a safe-point fixture (per §6 Test-substrate-preservation
+  list) that constructs an adversarial cancellation token
+  firing during a synthesized per-transaction iteration and
+  asserts the producer's stack-effect-trace contains no
+  partial-derivation state at the observed cancellation point.
+  On hit the producer discards in-flight per-block partial
+  state; `Scanner`'s `ZeroizeOnDrop` chain handles the
+  per-block materials. Cost: ~1–3 ns per transaction;
+  preserves §3.1 sub-block lock-latency property under
+  adversarial daemon block crafting.
 - **Producer-side per-class emission rate budget (Round 4
   review pass, 2026-05-15; F6).** `LocalRefresh::produce_scan_result`
   tracks `O(num_event_classes)` `u32` counters for per-attempt
@@ -4570,3 +5033,47 @@ CI-lint enforcement and the F9 diagnostic-stream
 spec-doc projection-type formalization. The implementation
 branch authorization holds; the review pass shapes Phase 1's
 substrate without reopening it.
+
+**Closed in Round 4 review pass meta-review amendment
+(2026-05-15).** A second-pass adversarial review of the
+F1–F9 disposition substrate itself (full writeup at §5.4.9
+"Meta-review amendment — F11–F13") produced **three
+additional actionable findings** — F11 (per-transaction
+cancellation safe-point pin: meta-review of F2), F12
+(cross-emitter ordering contract-gap: meta-review of F4),
+and F13 (`SuppressedRateLimit` field-shape pin: meta-review
+of F6). Each targets an under-specification *introduced by*
+an F1–F9 disposition rather than a substrate decision Rounds
+1–4 settled; none reopens a Round 1–4 disposition; the
+F1–F9 dispositions remain unchanged. **F11** pins the
+per-transaction inner cancellation check fires *between*
+transactions, *after* the prior iteration's per-output
+materials have left scope, *before* the next transaction's
+secret derivation begins (forbidding mid-derivation firing
+that would defeat F2's lock-latency property). **F12** closes
+the cross-emitter ordering enforcement gap at the discipline
+level (V3.0: consumer actors deriving cross-emitter ordering
+from causal-context fields) and at the lint level (V3.1+:
+extending the FOLLOWUPS F5 lint to a unified
+`diagnostic_consumer_discipline` lint covering both
+recursive-trust-boundary and cross-emitter-ordering misuse
+sub-scopes). **F13** pins `SuppressedRateLimit { class:
+SuppressedClass }` carries class only — no count, no
+timestamp, no original-event payload — preventing the
+suppressed-event count from becoming an attacker covert
+channel back from the producer's internal state. The §7.X
+commit decomposition absorbs the meta-review hardening: C2
+adds the `SuppressedClass` enum (project-defined
+`#[non_exhaustive]`; nine-item flat-crate-root re-export
+list); C4 extends the inner cancellation check description
+with the binding safe-point firing site and the C7 fixture
+deliverable; C7 gains the safe-point-firing assertion
+fixture for `AssertionSink` / coherence-pair tests. The
+FOLLOWUPS F5 entry is rewritten as the unified
+`diagnostic_consumer_discipline` lint covering both F5 and
+F12 sub-scopes. PR 5 §5.0.3 carries a parallel F12
+enforcement-gap amendment so the symmetric pin in PR 5
+carries the same binding discipline. The implementation
+branch authorization continues to hold; the meta-review
+amendment shapes Phase 1's substrate without reopening it
+or extending its scope.
