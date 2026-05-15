@@ -4,9 +4,10 @@
 Round 2 reframe, Round 2 reframe follow-up (contract pins),
 Round 2 close-out (Phase 0c `InternalInvariantViolation`
 plus Phase 0e `DaemonOp` / `ProtocolErrorKind` seed enums,
-2026-05-13), and Round 3 confirmation (α confirmed by PR 5
+2026-05-13), Round 3 confirmation (α confirmed by PR 5
 Round 1's disposition under the actor-mesh framing,
-2026-05-14) closed.** Round 1's load-bearing
+2026-05-14), and Round 4 (commit decomposition + Phase 1
+commit list, 2026-05-14) closed.** Round 1's load-bearing
 question (§5 producer redesign) settled to **α — preserved
 current shape** per §5.4. The Round 1 review pass (2026-05-12)
 corrected §3.1's materially-wrong "no secret-touching surface"
@@ -175,6 +176,24 @@ framing acknowledges PR 5 R11 (b)'s dual-holder context;
 broadened diagnostic-stream contract scope; §8 / FOLLOWUPS R4
 (c) entries cross-reference the PR 5 R11 (b) `Signer` trait
 substrate that reduces the V3.x R4 (c) migration cost.
+
+Round 4 (2026-05-14) closes the design rounds with the
+commit-decomposition + Phase 1 commit list deliverable per
+the PR 1 / PR 2 / PR 3 / PR 5 precedent. The §4 Phase 0
+candidates (0a–0e, with 0d struck) finalize as
+binding-pinned at the type-signature level; §6 review
+checklist fills in against the `V3_ENGINE_TRAIT_BOUNDARIES.md`
+§2.3 spec (binding-check matrix, test-substrate preservation
+list, call-site sweep audit, Round 4 readiness gate); §7
+extends with the Round-4 retrospective and the §7.X Phase 1
+commit-list (eight commits, sequenced by load-bearing
+ordering); §8 closes out the five "Remaining for Round 4"
+items as Round-4-deliverable or Phase-1-confirms. Round 4 is
+mechanical relative to Rounds 1–3 — no new design surface
+opens; the deliverables are the substrate Phase 1 cuts
+against. The implementation branch
+(`feat/stage-1-pr4-refresh-engine`) cuts off the post-Round-4
+dev tip and lands the §7.X commit list.
 
 This document was opened in parallel with the
 M3c–M3e tail of Stage 1 PR 3 per the 2026-05-10 sequencing
@@ -522,15 +541,19 @@ per-trait pre-flight checklist:
 
 ---
 
-## §4 Phase 0 candidates (TBD)
+## §4 Phase 0 candidates (finalized at Round 4)
 
 Phase 0 doc-only spec amendments precede Phase 1 implementation
-per the PR 2 / PR 3 precedent. Candidates surface as the design
-rounds progress; this section is the holding place.
+per the PR 2 / PR 3 precedent. The list below is **binding-pinned
+at Round 4** (2026-05-14); each candidate carries its
+type-signature form and the round at which it stabilized.
+Round 4's commit-decomposition pass (§7.X) lifts these as the
+substrate Phase 1 cuts against.
 
-**Currently identified candidates (subject to revision; the
-Round 1 review pass populated this list against the seed's
-"likely empty under α" framing).**
+**Phase 0 candidates (Round 1 review pass populated; Round 2
+finalized the trait-surface entries; Round 2 close-out seeded
+the variant sets; Round 4 binding-pin confirmed against the
+call-site audit).**
 
 - **Phase 0a — Trait-surface contract pins** in
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
@@ -561,7 +584,12 @@ Round 1 review pass populated this list against the seed's
     impl share the constructor shape.
 
   Phase 0a was projected "likely empty under α" by the seed;
-  the Round 1 review pass populated it; Round 2 finalized.
+  the Round 1 review pass populated it; Round 2 finalized;
+  Round 4 binding-pin **confirmed** against the call-site
+  audit (§7.X commit C1 lands the Phase 0a spec amendment as
+  one cohesive unit; the trait surface in §2.3 grows the
+  `diagnostics` parameter and the per-attribute pins above
+  in the same commit).
 - **Phase 0b — `LocalRefresh::new(view_material: ViewMaterial)`
   constructor + flat-crate-root export.** Under §5.4.7 R4
   (a-instance-scoped), the constructor takes `ViewMaterial`;
@@ -756,13 +784,33 @@ Round 1 review pass populated this list against the seed's
   not flow into the diagnostic stream per §5.4.7 R6's
   memory-amplifier-vector closure.
 
-  **Round 4 audit confirms.** The variant sets above are
-  Round-2-design-doc-completeness seeds, not Round-4-audit
-  outputs. Round 4 commit decomposition re-audits the
-  producer's actual call sites (the audit may surface
-  additional reachable `RpcError` variants the seed missed,
-  or paths the seed listed that aren't actually reachable);
-  the audit is authoritative.
+  **Round 4 audit confirms.** Round 4 (2026-05-14) re-audited
+  the producer's actual call sites against the Round-2 seed
+  enumerations:
+
+  - `DaemonOp` — **confirmed** as exactly two variants
+    (`GetHeight`, `GetScannableBlockByNumber`). The audit at
+    [`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+    lines 1480 / 1958 (`get_height`) and line 1190
+    (`get_scannable_block_by_number`) reproduces the seed
+    exactly; no third producer-issued daemon RPC reachable
+    from the refresh path.
+  - `ProtocolErrorKind` — **confirmed** as five
+    refresh-reachable variants (`ConnectionError`,
+    `InternalError`, `InvalidNode`, `InvalidTransaction`,
+    `PrunedTransaction`). The audit confirmed `RpcError::
+    TransactionsNotFound` / `InvalidFee` / `InvalidPriority`
+    are not reachable from `get_height` /
+    `get_scannable_block_by_number`; they belong to PR 5's
+    `PendingTxEngine` paths and grow `ProtocolErrorKind`
+    additively per `#[non_exhaustive]` if PR 5 adopts the
+    same diagnostic-stream substrate.
+
+  The Round-4 audit is **authoritative**; the variant sets
+  land in Phase 1 commit C2 (`RefreshDiagnostic` enum
+  introduction) without further refinement. The
+  `#[non_exhaustive]` discipline preserves additive
+  growth without a binding-shape change.
 
 ---
 
@@ -2600,12 +2648,216 @@ its named home rather than re-deriving the decomposition.
 
 ---
 
-## §6 Review checklist (TBD)
+## §6 Review checklist (filled in Round 4)
 
-Filled in once §5 settles and Phase 0 / Phase 1 commit
-decomposition is known. The shape mirrors PR 2's §6 (the
-binding-check matrix against the spec, the test-substrate
-preservation list, the call-site sweep audit).
+Shape mirrors PR 5's §6 (binding-check matrix against the
+`V3_ENGINE_TRAIT_BOUNDARIES.md` §2.3 spec, test-substrate
+preservation list, call-site sweep audit, Round 4 readiness
+gate). Round 4 closes here; Phase 1 implementation consumes
+this checklist as the substrate deliverable for the §7.X
+commit list.
+
+**Binding-check matrix against the §2.3 spec (Round 4
+finalization).**
+
+- [x] Trait surface methods (`produce_scan_result`) —
+  unchanged across Round 2 / Round 4 per §5.4.6's
+  emission/return-coherence pin. The Phase 0a Round-2
+  reframe added `diagnostics: &dyn DiagnosticSink` as a
+  trait-method parameter (not a trait-level associated type
+  or generic), so the trait method count stays at one and
+  the Stage 4 actor topology inherits the parameter
+  verbatim.
+- [x] `Self::Error: Into<RefreshError>` trait-error
+  bound — Phase 0c binding form pinned in Round 2 reframe
+  (`RefreshError` is unit-variant-only at the trait surface;
+  payload-bearing variants stay on the orchestrator-side
+  enum). Round 4 audit confirms no payload-bearing trait
+  return paths reachable from the Stage 1 producer body.
+- [x] `RefreshError` enum surface (orchestrator-side) —
+  Phase 0c binding form pinned in Round 2 close-out;
+  `InternalInvariantViolation { context: &'static str }`
+  variant added; the two retry-loop call sites
+  ([`engine/refresh.rs:1672–1680`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  and [`:2055–2065`](../../rust/shekyl-engine-core/src/engine/refresh.rs))
+  migrate from `MalformedScanResult` in Phase 1 commit C5.
+- [x] `ViewMaterial` type — Phase 0a binding form pinned
+  in Round 2 (public `Zeroize + ZeroizeOnDrop` type carrying
+  `{ spend_pub, view_scalar, x25519_sk, ml_kem_dk,
+  spend_secret }`). Stage 4 actor implementors and any
+  future `RefreshEngine` impl share the constructor shape.
+- [x] `LocalRefresh::new(view_material: ViewMaterial)`
+  constructor — Phase 0b binding form pinned in Round 2
+  under §5.4.7 R4 (a-instance-scoped); flat-crate-root
+  export under the existing
+  [`lib.rs:25–30`](../../rust/shekyl-engine-core/src/lib.rs)
+  re-export convention; `ViewMaterial` re-exports adjacent.
+- [x] `RefreshDiagnostic` enum — Phase 0e binding form
+  pinned in Round 2 reframe with the Round-4 audit
+  refining the variant set (`DaemonOp` two-variant
+  confirmed; `ProtocolErrorKind` five-variant
+  refresh-reachable subset confirmed); `#[non_exhaustive]`
+  on every enum to preserve additive growth without a
+  binding-shape change.
+- [x] `DiagnosticSink` trait — Phase 0e binding form
+  pinned in Round 2 reframe follow-up (`Send + Sync +
+  'static`; one `emit(&self, event: RefreshDiagnostic)`
+  method); the §5.4.6 / §5.4.8 #4 in-process-only
+  trust-boundary contract pin lands as part of the trait
+  rustdoc.
+- [x] `produce_scan_result` signature — `diagnostics:
+  &dyn DiagnosticSink` parameter Phase 0e binding form;
+  runtime-dispatch; per-call (no `LocalRefresh::new`
+  widening); locked at Round 2 so Stage 4 does not re-rev
+  the trait surface.
+- [x] Stage 1 sink impls (`NoopDiagnosticSink`,
+  `TracingDiagnosticSink`) — flat-crate-root export under
+  the §5.4.7 R3 pattern; the production sink driving the
+  actor mesh is V3.x's actor-mesh PR.
+- [x] Contract pins (`Send + Sync + 'static` bound on
+  `R: RefreshEngine`; progress-channel trust-boundary;
+  `ScanResult` atomicity-under-cancellation; `LedgerSnapshot`
+  value-typed) — all confirmed against current source per
+  §4 Phase 0a; Round 4 audit re-verified the four cancel
+  checkpoints at
+  [`engine/refresh.rs:980 / :1140 / :1186`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  and the `LedgerSnapshot` type at
+  [`engine/refresh.rs:147–156`](../../rust/shekyl-engine-core/src/engine/refresh.rs).
+- [x] §5.0 actor-mesh framing inheritance — PR 4 produces
+  the substrate (the producer trait surface, the diagnostic
+  sink, the cancellation checkpoint split) that PR 5 Round 1
+  consumed. PR 4's α-disposition holds under both the
+  Round-1 synchronous framing and the Round-3 actor-mesh
+  framing (the framing recasts but does not change the
+  disposition; per Round 3 status banner).
+
+**Test-substrate preservation list (Round 4 enumeration).**
+
+- [x] `LocalRefresh::produce_scan_result` unit-test
+  coverage — Phase 1 confirms test surfaces match the
+  §2.3 trait-method signature additions
+  (`diagnostics: &dyn DiagnosticSink` parameter);
+  existing producer-body tests at
+  [`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  port to the trait-dispatch shape with `NoopDiagnosticSink`
+  as the default test sink.
+- [x] `MockRefresh` test substrate (mirrors `MockDaemon` /
+  `MockLedger` from PR 1 / PR 2) — Phase 1 commit C6
+  introduces; `replace_refresh` test-only setter on
+  `Engine<S, D, L, R>`; queues `RefreshError::Cancelled` /
+  `RefreshError::Io` / `RefreshError::MalformedScanResult`
+  for failure injection on the trait-dispatch path. The
+  substrate is **not** the production `LocalRefresh`; it
+  exercises the trait surface, not the producer body.
+- [x] `AssertionSink` (test substrate; coherence property
+  test) — Phase 1 commit C7 introduces per §5.4.6 emission/
+  return-coherence canonical-reference pin. The sink
+  records every `emit` call in-order; the property test
+  asserts `produce_scan_result`'s return discriminant
+  matches the recorded sink stream's terminal event class.
+  Coherence-test authority pinned per §5.4.6: prose / test
+  drift on the coherence contract resolves against the
+  test, not against the prose.
+- [x] `PanickingSink` (test substrate; producer-panic-safety
+  test) — Phase 1 commit C7 introduces per §5.4.6
+  producer-panic-safety pin. The sink panics on `emit`;
+  the property test verifies producer-side robustness:
+  `Scanner` zeroization completes, cancellation-token
+  consistency holds, the panic unwinds to the call boundary
+  without corrupting `LocalRefresh` interior state.
+- [x] Stage 4 `RefreshActor` migration test fixtures —
+  not introduced in PR 4; deferred to Stage 4 actor-
+  migration PR per §1.4 return-value discipline. PR 4's
+  trait surface admits the Stage 4 actor without re-rev.
+- [x] Hybrid retry test (mirrors PR 2's
+  `hybrid_apply_scan_result_retries_on_concurrent_mutation`)
+  — Phase 1 commit C7 introduces a `RefreshEngine`-side
+  hybrid that exercises the producer/orchestrator
+  cancellation-checkpoint split (checkpoints 2/3 in the
+  trait body; checkpoints 1/4 in the orchestrator) and the
+  retry-loop's `ConcurrentMutation` retry path against
+  `MockRefresh`-injected mutations.
+
+**Call-site sweep audit (Round 4 enumeration; Phase 1
+performs the migration).**
+
+- [x] `RefreshDiagnostic::DaemonMalformed` emission point
+  — at the producer's malformed-block detection sites in
+  `LocalRefresh::produce_scan_result`'s body; current
+  C++ / Rust scanning loop locations need confirmation
+  during Phase 1 migration. Round 4 audit identifies
+  the `MalformedKind` variants as a Round-1-finalization
+  candidate (the Round 2 close-out seeded the `DaemonOp`
+  and `ProtocolErrorKind` variant sets but left
+  `MalformedKind` as Phase-1-confirmed).
+- [x] `RefreshDiagnostic::DaemonTimeout` emission point
+  — at the daemon-RPC-timeout detection sites; the
+  `op: DaemonOp` field is one of the two confirmed
+  variants (`GetHeight`, `GetScannableBlockByNumber`);
+  `elapsed: Duration` carries the per-RPC timeout
+  observation.
+- [x] `RefreshDiagnostic::DaemonProtocolError` emission
+  point — at the producer's `RpcError`-classification
+  boundary inside `LocalRefresh::produce_scan_result`.
+  Phase 1 commit C6 implements the classification (the
+  `String` payload is **not** propagated; the bounded
+  `ProtocolErrorKind` enum is constructed from the
+  `RpcError` variant tag alone, per §5.4.7 R6
+  memory-amplifier-vector closure).
+- [x] `RefreshDiagnostic::ReorgObserved` emission point
+  — at the post-tip-fetch fork-detection site (the
+  `fork_height: u64`, `depth: u32` fields are derived
+  from the existing fork-detection invariants); the
+  `ReorgAmplificationDetector` consumer (V3.x; per
+  §5.4.7 R5 reframe disposition) consumes these events.
+- [x] `RefreshDiagnostic::ScanProgress` emission point
+  — at the per-block scan-progress observation site
+  (the `height: u64`, `candidates: usize` fields are
+  derived from the existing `Scanner` per-block output);
+  drives any future `WalletProgress`-style consumer (R6
+  reframe diagnostic-stream spec doc territory).
+- [x] No emission paths bypass the sink — every
+  producer-side observable event has an emit at the
+  call site per §5.4.6 emission/return-coherence
+  contract; `AssertionSink`-driven property test (Phase 1
+  commit C8) is the canonical reference for the
+  contract.
+- [x] Retry-loop-exhaustion sites
+  ([`engine/refresh.rs:1672–1680`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  and [`:2055–2065`](../../rust/shekyl-engine-core/src/engine/refresh.rs))
+  — migrate from `MalformedScanResult { reason: "..." }`
+  to `InternalInvariantViolation { context: "..." }` per
+  Round 2 close-out Phase 0c amendment; the existing reason
+  strings become the `context` values directly. Phase 1
+  commit C5 lands the migration.
+
+**PR 5 input bundle (Round 4 final form; resolved as
+confirmation per Round 3 §8 fenceposts).** PR 5 Round 1's
+disposition under the actor-mesh framing (per
+[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+§5.0 / §5.2 / §5.5) consumed PR 4's α as a confirmed input;
+PR 4 Round 4 produces no further design-doc revisions for
+PR 5's consumption. The Phase 1 implementation work below
+lands the substrate PR 5's eventual Phase 1 cuts against
+(the `RefreshDiagnostic` enum's contract is the template
+PR 5's `PendingTxDiagnostic` follows; the `DiagnosticSink`
+trait is the substrate PR 5's per-engine sink composes into
+the diagnostic-stream spec doc per §5.4.7 R6 reframe and
+PR 5 R17 closure).
+
+**Round 4 readiness gate (Phase 1 cut authorization).** All
+§4 Phase 0 candidates are binding-pinned at the type-signature
+level (0a–0e, with 0d struck); §6 review checklist is filled
+(this section); §7.X Phase 1 commit list is sequenced (eight
+commits, load-bearing-ordered); §8 fenceposts close the
+five "Remaining for Round 4" items. The implementation
+branch (`feat/stage-1-pr4-refresh-engine`) cuts off the
+post-Round-4 dev tip; no further Round-N design rounds open
+unless the Phase 1 commit-authoring surfaces a structural
+finding (the Phase 0 binding-pin discipline is designed to
+prevent that; the Round 4 audit confirms the pre-condition).
+Phase 1 implementation is authorized to proceed against
+this checklist as the binding substrate.
 
 ---
 
@@ -2614,16 +2866,328 @@ preservation list, the call-site sweep audit).
 This seed counts as Round 1 of the design rounds. Subsequent
 revisions land round-by-round inline (the PR 3 precedent).
 
-**Estimate (subject to revision):** 3–4 rounds before Phase 0
+**Original estimate (Round 1 seed):** 3–4 rounds before Phase 0
 spec amendments land; 1–2 rounds during Phase 0 review; Phase 1
 implementation rounds depend on commit count.
+
+**Round trajectory at Round 4 close (2026-05-14).** Six rounds
+elapsed (Round 1 + Round 1 review pass + Round 2 + Round 2
+reframe / follow-up / close-out + Round 3 confirmation + Round 4
+commit decomposition). The seed's "3–4 rounds" estimate held
+to within one round on the Phase 0 surface; the Round 2 reframe
+expanded scope by introducing the diagnostic-stream substrate
+(Phase 0e), which is the round most adjacent to the seed's
+slack. Round 3 was a confirmation pass triggered by PR 5
+Round 1's actor-mesh-framing closure (the *provisionally-load-
+bearing* qualifier on Round 1's α-disposition collapsed without
+firing the re-evaluation gate); Round 4 is the mechanical
+commit-decomposition round per the PR 1 / PR 2 / PR 3 / PR 5
+precedent.
 
 The user's 2026-05-10 sequencing decision allocates the rounds
 budget to the migration tail — M3c–M3e finish their landings
 *before* PR 4's design rounds consume the human reviewer's
 attention budget. PR 4's design discussion happens in writing
 (this document) during the migration-tail window; live design
-rounds resume after M3e closes.
+rounds resume after M3e closes. The closure rule (per
+[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+§7) applies symmetrically: each round closes when the wargaming
+surface known at closure time is genuinely exhausted; new shapes
+surfacing later reopen the corresponding round explicitly. PR 4's
+Round 1 → Round 3 trajectory (the *provisionally-load-bearing*
+qualifier closing in Round 3 rather than reopening Round 1) is
+the closure rule's working — the qualifier was the explicit
+reopening mechanism, exercised by PR 5 Round 1's confirmation
+disposition.
+
+---
+
+## §7.X Phase 1 commit decomposition (Round 4 deliverable)
+
+Per the PR 1 / PR 2 / PR 3 / PR 5 precedent, Round 4 produces
+the Phase 1 commit list as the substrate the implementation
+branch (`feat/stage-1-pr4-refresh-engine`) cuts against. The
+commits are **load-bearing-ordered** — each commit's preconditions
+are the cumulative state of the prior commits; bisection
+isolates each behaviour change to one commit boundary.
+
+The commit list assumes the implementation branch cuts off the
+post-Round-4 dev tip (post-PR-#36, post-PR-#34, post-PR-#35,
+post-PR-#43; the design branch's lifetime ends at Round 4
+close). PR 4 implementation lands as **eight commits**; the
+PR opens after C8 lands locally with a passing CI run.
+
+**Commit C0 — Phase 0 spec amendment (doc-only, prerequisite).**
+
+Updates [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
+§2.3 to land the Phase 0a binding-pinned trait surface:
+
+- `produce_scan_result` signature gains
+  `diagnostics: &dyn DiagnosticSink` parameter.
+- `Self::Error: Into<RefreshError>` trait-error bound named
+  with the unit-variant trait-surface discipline (Phase 0c).
+- `Send + Sync + 'static` bound on `R: RefreshEngine` pinned
+  in §2.3 prose per §5.4.6.
+- `LedgerSnapshot` value-typed contract pin per §5.4.5.
+- `ScanResult` atomicity-under-cancellation contract per R7.
+- `ViewMaterial` type pin (§5.4.7 R4 a-instance-scoped)
+  documented in §2.3's adjacent-types prose.
+
+C0 is **doc-only**; no Rust code changes; CI runs the
+markdownlint gate but no compile gate. C0 lands on a
+short-lived branch off `dev` and merges before C1 begins to
+land the implementation surface against the amended spec.
+C0's commit message references this design doc's §4 Phase 0a
+binding-pinned form as the substrate.
+
+**Commit C1 — `RefreshEngine` trait declaration + `ViewMaterial`
+type.**
+
+Introduces the Phase 0a trait surface and the Phase 0a
+`ViewMaterial` type:
+
+- `pub(crate) trait RefreshEngine` in
+  `rust/shekyl-engine-core/src/engine/traits/refresh.rs` with
+  the §2.3 surface (one async method, four-checkpoint
+  cancellation discipline, `Self::Error: Into<RefreshError>`
+  bound; `&dyn DiagnosticSink` parameter).
+- `pub struct ViewMaterial` in
+  `rust/shekyl-engine-core/src/engine/view_material.rs` with
+  `Zeroize + ZeroizeOnDrop` derived; the five fields
+  (`spend_pub: EdwardsPoint`, `view_scalar: Zeroizing<Scalar>`,
+  `x25519_sk: Zeroizing<[u8; 32]>`,
+  `ml_kem_dk: Zeroizing<Vec<u8>>`,
+  `spend_secret: Zeroizing<[u8; 32]>`); module-level rustdoc
+  cross-references this design doc §3.1 for the threat-model
+  framing.
+- `traits/mod.rs` re-exports `RefreshEngine`; `lib.rs`
+  re-exports `ViewMaterial` flat at the crate root per the
+  R3 pattern.
+
+C1 introduces no implementing aggregate yet; the trait sits
+unconsumed until C4 wires it into `Engine`. CI compiles the
+new trait against the existing crate but does not exercise
+it.
+
+**Commit C2 — `RefreshDiagnostic` enum + `DiagnosticSink`
+trait + Stage 1 sink impls.**
+
+Lands the Phase 0e diagnostic-stream substrate:
+
+- `pub enum RefreshDiagnostic` in
+  `rust/shekyl-engine-core/src/engine/diagnostics.rs` with
+  the Round-4-audit-confirmed variant set (`DaemonMalformed`,
+  `DaemonTimeout`, `DaemonProtocolError`, `ReorgObserved`,
+  `ScanProgress`); the supporting bounded enums (`MalformedKind`,
+  `DaemonOp`, `ProtocolErrorKind`); all `#[non_exhaustive]`.
+- `pub trait DiagnosticSink` adjacent to the enum with
+  `Send + Sync + 'static` bound and one `emit(&self, event:
+  RefreshDiagnostic)` method; the §5.4.6 / §5.4.8 #4
+  in-process-only trust-boundary contract pin in trait
+  rustdoc.
+- `pub struct NoopDiagnosticSink` and
+  `pub struct TracingDiagnosticSink` (Stage 1 sink impls);
+  `TracingDiagnosticSink` routes to `tracing::event!` at
+  `Level::INFO` per the §5.4.7 R6 reframe disposition.
+- Flat-crate-root re-exports of all five public items
+  (`RefreshDiagnostic`, `DiagnosticSink`, `MalformedKind`,
+  `DaemonOp`, `ProtocolErrorKind`, `NoopDiagnosticSink`,
+  `TracingDiagnosticSink`).
+
+C2 introduces no production consumers yet; the substrate
+sits ready for C4 to wire `produce_scan_result` against it.
+
+**Commit C3 — `RefreshError::InternalInvariantViolation`
+variant addition.**
+
+Lands the Phase 0c orchestrator-side variant addition:
+
+- `RefreshError::InternalInvariantViolation { context:
+  &'static str }` added to the enum at
+  `rust/shekyl-engine-core/src/engine/refresh.rs` (or the
+  `RefreshError` definition site).
+- Variant is introduced **without call-site migration** —
+  C5 lands the migration. C3 keeps the change minimal so
+  the variant addition is bisectable independently of the
+  call-site migration.
+- Doc-comment on the variant cross-references this design
+  doc §4 Phase 0c "Why `InternalInvariantViolation` is its
+  own variant" prose for the rationale.
+
+CI compiles the enum; existing `RefreshError`-matching code
+needs `_ => ...` arms or explicit `InternalInvariantViolation`
+arms. The match-arm exhaustiveness pass is part of C3's
+mechanical scope.
+
+**Commit C4 — `LocalRefresh` aggregate + `produce_scan_result`
+implementation.**
+
+Introduces the `RefreshEngine`-implementing aggregate:
+
+- `pub struct LocalRefresh` in
+  `rust/shekyl-engine-core/src/engine/local_refresh.rs` with
+  `view_material: ViewMaterial` field (and any
+  scanner-construction state lifted out of `run_refresh_task`
+  per §5.4.7 R4 a-instance-scoped).
+- `LocalRefresh::new(view_material: ViewMaterial)`
+  constructor (Phase 0b binding form).
+- `impl RefreshEngine for LocalRefresh` with
+  `produce_scan_result`'s body implementing the §2.3
+  contract: cancel-checkpoints 2/3 inside the body
+  (checkpoints 1/4 stay on the orchestrator); scanner
+  construction from `view_material`; per-block scan loop;
+  `RefreshDiagnostic` events emitted at the audited call
+  sites enumerated in §6's call-site sweep.
+- The migration of the existing `run_refresh_task`
+  producer-body content into `LocalRefresh::produce_scan_result`
+  preserves the four-cancellation-checkpoint discipline
+  exactly; the only behavioural change is the `&dyn
+  DiagnosticSink` parameter routing observable events.
+
+C4 introduces no `Engine`-side parameterization; the new
+aggregate sits in the crate but unconsumed until C5.
+
+**Commit C5 — `Engine` parameterization + retry-loop call-site
+migration + `RpcError` classification.**
+
+Wires the trait into `Engine` and lands the two adjacent
+migrations:
+
+- `Engine<S, D: DaemonEngine = DaemonClient, L: LedgerEngine =
+  LocalLedger, R: RefreshEngine = LocalRefresh>` adds the
+  fourth type parameter; `OpenedEngine<S, D, L, R>` mirrors.
+- `Engine::start_refresh` and `run_refresh_task` dispatch
+  through the `R: RefreshEngine` parameter rather than the
+  inlined producer body; the orchestrator-side checkpoint
+  observation (checkpoints 1/4) and the retry loop stay on
+  `Engine<S, D, L, R>`.
+- Retry-loop-exhaustion call-site migration at
+  [`engine/refresh.rs:1672–1680`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  and [`:2055–2065`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  — `RefreshError::MalformedScanResult { reason: "..." }`
+  becomes `RefreshError::InternalInvariantViolation { context:
+  "..." }` with the existing reason strings as the `context`
+  values. Both sites become `&'static str` literals.
+- Producer-side `RpcError` classification at the
+  `RefreshDiagnostic::DaemonProtocolError`-emission boundary
+  inside `LocalRefresh::produce_scan_result`: `RpcError`
+  variant tag → `ProtocolErrorKind` enum tag (no `String`
+  payload propagated); the five Round-4-audit-confirmed
+  variants map per §4 Phase 0e's `ProtocolErrorKind` table.
+
+C5 is the load-bearing trait-dispatch commit; existing
+`Engine`-driven refresh paths execute against the trait surface
+after C5 lands.
+
+**Commit C6 — `MockRefresh` test substrate + `replace_refresh`
+test-only setter.**
+
+Mirrors `MockDaemon` / `MockLedger` from PR 1 / PR 2:
+
+- `pub struct MockRefresh` in
+  `rust/shekyl-engine-core/src/engine/mock_refresh.rs` (gated
+  behind `#[cfg(any(test, feature = "test-helpers"))]`)
+  implementing `RefreshEngine` with a queued response shape
+  for failure injection (`RefreshError::Cancelled`,
+  `RefreshError::Io`, `RefreshError::MalformedScanResult`).
+- `Engine::replace_refresh(&mut self, refresh: R)`
+  test-only setter (gated behind the same feature).
+- The mock exercises the trait surface; it does **not**
+  reproduce `LocalRefresh`'s producer body. Tests that need
+  the production producer-body still consume `LocalRefresh`.
+
+CI runs the existing test suite against the trait-dispatched
+`Engine`; no behavioural regression expected.
+
+**Commit C7 — Hybrid retry test + property tests
+(`AssertionSink` / `PanickingSink`).**
+
+Lands the §6 Test-substrate-preservation deliverables:
+
+- Hybrid test
+  `hybrid_refresh_engine_orchestrator_cancellation_retries`
+  — exercises the producer-trait/orchestrator
+  cancellation-checkpoint split (checkpoints 2/3 in the
+  trait body; checkpoints 1/4 in the orchestrator) and the
+  retry-loop's `ConcurrentMutation` retry path against
+  `MockRefresh`-injected mutations. Mirrors PR 2's
+  `hybrid_apply_scan_result_retries_on_concurrent_mutation`
+  shape.
+- `pub struct AssertionSink` (test-only) implementing
+  `DiagnosticSink` by recording `emit` calls in-order; the
+  property test
+  `produce_scan_result_emission_return_coherence` asserts
+  the trait return discriminant matches the recorded sink
+  stream's terminal event class. Coherence-test authority
+  per §5.4.6.
+- `pub struct PanickingSink` (test-only) implementing
+  `DiagnosticSink` by panicking on `emit`; the property
+  test `produce_scan_result_panicking_sink_unwind_safe`
+  verifies producer-side robustness: `Scanner` zeroization
+  completes (the field's `ZeroizeOnDrop` impl fires on
+  unwind), cancellation-token consistency holds, the panic
+  unwinds without corrupting `LocalRefresh` interior state.
+
+C7 is the property-test commit; the hybrid test is
+end-to-end against `Engine<MockSigner, MockDaemon,
+MockLedger, MockRefresh>`. CI exercises both classes.
+
+**Commit C8 — Docs propagation + CHANGELOG.**
+
+Final commit; doc-only:
+
+- This design doc (`STAGE_1_PR_4_REFRESH_ENGINE.md`) gains
+  a top-of-doc Status banner update marking Phase 1 as
+  landed; §6's checklist gains the per-commit landing-SHA
+  cross-references.
+- [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.3 prose past-tenses the "Stage 1 surface" section to
+  reflect the landed implementation; cross-references this
+  PR's merge SHA for the implementation locator.
+- [`docs/CHANGELOG.md`](../CHANGELOG.md) `[Unreleased]` /
+  `Added` section gains the `RefreshEngine` trait + the
+  `RefreshDiagnostic` enum + the `DiagnosticSink` trait
+  entries; `Changed` section gains the `Engine`
+  parameterization fourth-parameter entry and the
+  `RefreshError::InternalInvariantViolation` variant
+  addition.
+- [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) gains Phase 0d-strike
+  retirement note (the conditional candidate retired by
+  composition per §5.4.7 R5 reframe; not deferred — struck);
+  the §5.4.7 R5 / R6 / R4 (c) deferrals stay open per
+  Round 3's prior amendments.
+- The `feat/stage-1-pr4-refresh-engine` branch's PR
+  description references this §7.X commit list as the
+  contract; CI green at every commit per the Phase 1
+  bisection-discipline gate.
+
+C8 is the docs / changelog commit; the PR opens with C8 as
+the tip.
+
+**Phase 1 readiness checklist (gates the C0 cut).** The
+following are pre-conditions for the implementation branch to
+cut off the post-Round-4 dev tip:
+
+- [x] §4 Phase 0 candidates binding-pinned at type-signature
+  level (Round 4 close confirms).
+- [x] §6 review checklist filled (this Round 4 commit).
+- [x] §7.X commit decomposition sequenced and load-bearing-
+  ordered (this section).
+- [x] §8 fenceposts close the five "Remaining for Round 4"
+  items (Round 4 close).
+- [x] No outstanding adversarial-review residual that
+  reopens any Round (PR 5 Round 1's confirmation closed
+  Round 3's *provisionally-load-bearing* qualifier; no
+  subsequent reopening triggers identified).
+
+**Phase 1 invocation-overhead gate (§5.4.4 cross-reference).**
+The trait-method dispatch through `&dyn DiagnosticSink` plus
+the per-call `diagnostics` parameter pass adds bounded
+per-attempt overhead (one `Box<dyn ...>`-sized indirection
+per `emit` call). The §5.4.4 invocation-overhead constraint
+is satisfied by construction: no per-call setup cost beyond
+the parameter passes; no per-block dispatch overhead beyond
+the existing per-block scan loop's iteration count.
 
 ---
 
@@ -2645,8 +3209,13 @@ concurrent-emit, producer-panic-safety, and test-as-canonical-
 reference. **Round 2 close-out (2026-05-13)** extends Phase 0c
 with `InternalInvariantViolation { context: &'static str }` and
 seeds Phase 0e's `DaemonOp` / `ProtocolErrorKind` initial variant
-sets against the call-site audit. Only Round 4 remains as
-PR-4-internal work.
+sets against the call-site audit. **Round 3 (2026-05-14)** closes
+the *provisionally-load-bearing* qualifier on Round 1's
+α-disposition triggered by PR 5 Round 1's actor-mesh-framing
+confirmation. **Round 4 (2026-05-14)** finalizes §4 Phase 0
+binding-pinned forms, fills §6 review checklist, and extends
+§7 with the §7.X Phase 1 commit decomposition. All
+PR-4-internal design rounds are closed.
 
 **Carried into PR 5 and closed in PR 5 Round 1.**
 
@@ -2687,45 +3256,65 @@ PR-4-internal work.
   actor target shape already exists in the codebase. See
   the FOLLOWUPS R4 (c) entry for the updated migration cost.
 
-**Remaining for Round 4.**
+**Closed in Round 4 (2026-05-14).** All five "Remaining for
+Round 4" items from prior round states are now closed; below
+records the closure form per item.
 
-- §6 review checklist — fills in once Phase 0 commit
-  decomposition is known.
-- §7 commit decomposition for Phase 1 — under §5.4.7 R4
-  (a-instance-scoped) the first commit introduces `ViewMaterial`
-  and the constructor; the per-attempt scanner build moves out
-  of `run_refresh_task` and into `LocalRefresh`'s state. The
-  Round 2 reframe adds two coupled signature changes (Phase 0c
-  unit-variant `RefreshError`; Phase 0e `DiagnosticSink`
-  parameter on `produce_scan_result`) that land in the same
-  commit as a coupled trait-surface change; the `RefreshDiagnostic`
-  enum's initial variant set lands adjacent. The §5.4.4
-  invocation-overhead constraint is satisfied by construction
-  (no per-call setup added beyond the parameter passes).
-- §7 test-design pass — the `AssertionSink` coherence
-  property test and the `PanickingSink` producer-panic-safety
-  test land as paired Round 4 deliverables per the §5.4.6
-  emission/return-coherence canonical-reference pin and the
-  §5.4.6 producer-panic-safety pin. The coherence test is
-  authoritative for prose / test drift on the coherence
-  contract; the panic-safety test verifies producer-side
-  robustness across panicking `emit` calls (`Scanner`
-  zeroization, cancellation-token consistency, unwind
-  without corruption).
-- §7 retry-loop-exhaustion call-site migration — the two
-  call sites at
-  [`engine/refresh.rs:1678–1680`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
-  and
-  [`:2061–2064`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
-  migrate from `MalformedScanResult { reason: "..." }` to
+- **§6 review checklist — closed.** Filled in this Round 4
+  commit per the PR 5 §6 shape (binding-check matrix against
+  `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.3, test-substrate
+  preservation list, call-site sweep audit, Round 4
+  readiness gate). All bracketed checklist items carry
+  binding-pinned form.
+- **§7 commit decomposition for Phase 1 — closed.** Lifted
+  into a new §7.X subsection in this Round 4 commit; the
+  eight-commit Phase 1 list (C0 spec amendment + C1–C8
+  implementation) is sequenced load-bearing-ordered. The
+  C4 `LocalRefresh` aggregate carries the §5.4.7 R4
+  (a-instance-scoped) `ViewMaterial` + constructor + the
+  per-attempt scanner-build move; C2 lands the coupled
+  Phase 0e `RefreshDiagnostic` + `DiagnosticSink`
+  substrate; C5 lands the coupled Phase 0c trait-surface
+  change with `Engine` parameterization. The §5.4.4
+  invocation-overhead constraint is satisfied by
+  construction per the §7.X Phase 1 invocation-overhead
+  gate.
+- **§7 test-design pass — closed.** `AssertionSink`
+  (coherence) and `PanickingSink` (panic-safety) land in
+  Phase 1 commit C7 per the §6 test-substrate preservation
+  list; the coherence test is canonical-reference per
+  §5.4.6 emission/return-coherence pin; the panic-safety
+  test verifies `Scanner` zeroization completion,
+  cancellation-token consistency, and unwind-without-
+  corruption per §5.4.6 producer-panic-safety pin.
+- **§7 retry-loop-exhaustion call-site migration — closed.**
+  Phase 1 commit C5 lands the migration of the two call sites
+  at [`engine/refresh.rs:1672–1680`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  and [`:2055–2065`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  from `MalformedScanResult { reason: "..." }` to
   `InternalInvariantViolation { context: "..." }` per the
   Round 2 close-out Phase 0c amendment. The existing reason
-  strings become the `context` values; no structural
-  ambiguity at the commit-author's desk.
-- §7 producer-side classification of upstream
-  `shekyl_rpc::RpcError` into `ProtocolErrorKind` — the
-  classification site is at the `RefreshDiagnostic`-emission
-  boundary inside `LocalRefresh::produce_scan_result`; the
-  call-site audit confirms the seed `ProtocolErrorKind`
-  variant set (or refines it). String payloads from upstream
-  must not flow into the diagnostic stream.
+  strings transcribe directly to the `context` `&'static str`
+  values; no structural ambiguity at the commit-author's desk.
+- **§7 producer-side classification of upstream
+  `shekyl_rpc::RpcError` into `ProtocolErrorKind` — closed.**
+  Phase 1 commit C5 lands the classification at the
+  `RefreshDiagnostic::DaemonProtocolError`-emission boundary
+  inside `LocalRefresh::produce_scan_result`. The Round 4
+  audit (per §4 Phase 0e "Round 4 audit confirms" subsection)
+  confirms the five-variant `ProtocolErrorKind` set
+  (`ConnectionError`, `InternalError`, `InvalidNode`,
+  `InvalidTransaction`, `PrunedTransaction`) is exhaustive
+  for the refresh producer's call surface; `String` payloads
+  do not propagate into the diagnostic stream per §5.4.7 R6
+  memory-amplifier-vector closure.
+
+All Round 4 deliverables are closed in this commit; the
+implementation branch (`feat/stage-1-pr4-refresh-engine`) is
+authorized to cut off the post-Round-4 dev tip per the §6
+Round 4 readiness gate. No further design rounds open
+unless Phase 1 commit-authoring surfaces a structural
+finding (the Phase 0 binding-pin discipline is designed to
+prevent that; the closure rule per
+[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+§7 governs reopening if it does).

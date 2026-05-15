@@ -38,6 +38,43 @@
 
 ### Changed
 
+- **Stage 1 PR 4 — Round 4 close
+  (commit decomposition + Phase 1 commit list)**
+  (`feat/stage-1-pr4-round-4`, 2026-05-14). Single-commit
+  doc-only Round 4 close on
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  per the PR 1 / PR 2 / PR 3 / PR 5 precedent. §4 Phase 0
+  candidates (0a–0e, with 0d struck) finalize as
+  binding-pinned at the type-signature level; Round 4 audit
+  confirms `DaemonOp` two-variant and `ProtocolErrorKind`
+  five-variant refresh-reachable subset against the producer's
+  actual call sites. §6 review checklist fills in following
+  PR 5's shape (binding-check matrix against
+  `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.3, test-substrate
+  preservation list, call-site sweep audit, Round 4 readiness
+  gate authorizing Phase 1 cut). §7 extends with the Round-4
+  retrospective + a new §7.X Phase 1 commit decomposition
+  subsection — eight load-bearing-ordered commits (C0 doc-only
+  spec amendment + C1 trait declaration + `ViewMaterial` type;
+  C2 `RefreshDiagnostic` + `DiagnosticSink` + Stage 1 sink
+  impls; C3 `RefreshError::InternalInvariantViolation` variant
+  addition; C4 `LocalRefresh` aggregate + producer-body
+  migration; C5 `Engine` parameterization + retry-loop call-site
+  migration + `RpcError` classification; C6 `MockRefresh` test
+  substrate + `replace_refresh`; C7 hybrid retry test +
+  `AssertionSink` / `PanickingSink` property tests; C8 docs +
+  CHANGELOG). §8 closes out the five "Remaining for Round 4"
+  items (each marked Round-4-deliverable or
+  Phase-1-commit-target) and updates the round trajectory
+  banner — all PR-4-internal design rounds are closed.
+  Implementation branch (`feat/stage-1-pr4-refresh-engine`)
+  is authorized to cut off the post-Round-4 dev tip per the
+  §6 Round 4 readiness gate; no further design rounds open
+  unless Phase 1 commit-authoring surfaces a structural
+  finding (the closure rule per
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §7 governs reopening if it does).
+
 - **Stage 1 PR 4 — Round 3 confirmation
   (α confirmed by PR 5 Round 1's actor-mesh-framed disposition)**
   (`feat/stage-1-pr4-round-3-confirmation`, 2026-05-14). Single-commit
