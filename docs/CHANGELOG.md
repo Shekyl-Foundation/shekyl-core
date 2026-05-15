@@ -38,6 +38,84 @@
 
 ### Changed
 
+- **Stage 1 PR 4 — Round 4 review pass
+  (adversarial review of post-Round-4 substrate; nine
+  findings dispositioned)**
+  (`feat/stage-1-pr4-round-4-review`, 2026-05-15). Doc-only
+  pre-implementation adversarial review of the post-Round-4
+  substrate before Phase 1 cuts. Two reviewers exercised
+  the diagnostic-stream seam, the encrypted-persistence
+  opt-in language at PR 4 §5.4.8 #1, and the resilience
+  surface from a hostile-daemon perspective; the pass
+  produced **nine actionable findings**, all dispositioned
+  and applied as substrate hardening rather than reopening
+  any Round 1–4 question. Full writeup at PR 4 §5.4.9.
+  Findings cluster across three threat-model surfaces.
+  **Feature-soft-commitment hardening (F1, F7).** F1
+  rewrites the §5.4.8 #1 R17 encrypted-persistence opt-in
+  language from "V3.x evaluates" to a hard rejection at
+  V3.0 with strict conditional reopening criteria (six
+  attack vectors named: crypto code-path expansion,
+  deserialization-on-startup, metadata side-channel,
+  cross-wallet correlation, adversary-controlled DoS,
+  forensic-artifact); F7 adds a parallel new §5.4.8 #6
+  rejecting "encrypted cache for RPC recovery" V3.x
+  candidates at V3.0 under symmetric criteria. PR 5
+  §5.4 R17 carries the F1 hardening symmetrically;
+  the FOLLOWUPS `PersistenceConsumerActor` entry is
+  rewritten as a conditional-reopening bookmark with no
+  version target. **Checkpoint-discipline tightening (F2).**
+  §3.1 wallet-lock-latency property refines from
+  "single-block scan time, typically tens of ms" to
+  "per-transaction scan time, sub-block-bounded; millisecond-
+  scale even under adversarial daemon block crafting"; §7
+  checkpoint discipline extends from four to **five**
+  checkpoints with a per-transaction inner cancellation
+  check inside the per-block scan loop (closing the
+  adversarial-block-crafting / extended-spend-secret-
+  residency vector). **Diagnostic-stream contract
+  pinning (F3, F4, F5, F6, F8, F9).** F3 pins
+  `AssertionSink` / `PanickingSink` as permanent CI
+  regression coverage rather than one-shot landing tests;
+  F4 adds a **seventh contract pin** at §5.4.6
+  (per-emitter FIFO ordering preserved; cross-emitter
+  ordering undefined) — the same pin lands symmetrically
+  in PR 5 §5.0.3; F5 strengthens §5.4.8 #4's
+  aggregator-republisher recursive-leak framing with a
+  V3.x forward-template (per-consumer external-surface
+  audit, projection-or-rejection, future CI-lint
+  enforcement) and gets a new V3.1+ FOLLOWUPS entry
+  (consumer-actor-PR aggregator-republisher CI lint);
+  F6 adds a producer-side per-class emission rate budget
+  to §5.4.8 #5 (per-block ceilings per event class plus a
+  `RefreshDiagnostic::SuppressedRateLimit` variant); F8
+  adds a new §5.4.8 #7 acknowledging emit-timing variance
+  as a microarchitectural side-channel residual with a
+  Phase 1 implementation note for bounded-variance
+  lock-free queues; F9 adds a §6 projection-type audit
+  per event class with explicit V3.0 per-class projections
+  for `TracingDiagnosticSink` and gets a new V3.x
+  FOLLOWUPS entry (diagnostic-stream spec-doc projection-
+  type formalization). The §7.X commit decomposition
+  absorbs the substrate hardening: C2 carries the
+  `SuppressedRateLimit` variant + per-class projections +
+  7th contract pin; C4 carries the per-transaction inner
+  cancellation check + producer-side per-class emission
+  rate budget enforcement; C7 carries `AssertionSink` /
+  `PanickingSink` as permanent CI fixtures. The
+  α-disposition still holds; all Round 1–4 dispositions
+  still hold; the review pass hardens contract pins and
+  attack-surface dispositions without reopening any
+  design question. Implementation-branch authorization
+  (per §6 Round 4 readiness gate) is unchanged;
+  Phase 1 cuts against the hardened substrate. The
+  review-pass shape is recorded as a forward-template
+  artifact under
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  "discovery cadence" framing — substrate hardening ahead
+  of implementation is reusable for PR 5+ pre-implementation
+  substrate review.
+
 - **Stage 1 PR 4 — Round 4 close
   (commit decomposition + Phase 1 commit list)**
   (`feat/stage-1-pr4-round-4`, 2026-05-14). Single-commit

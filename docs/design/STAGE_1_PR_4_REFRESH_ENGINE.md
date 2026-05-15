@@ -6,10 +6,13 @@ Round 2 close-out (Phase 0c `InternalInvariantViolation`
 plus Phase 0e `DaemonOp` / `ProtocolErrorKind` seed enums,
 2026-05-13), Round 3 confirmation (α confirmed by PR 5
 Round 1's disposition under the actor-mesh framing,
-2026-05-14), and Round 4 (commit decomposition + Phase 1
-commit list, 2026-05-14) closed.** Round 1's load-bearing
-question (§5 producer redesign) settled to **α — preserved
-current shape** per §5.4. The Round 1 review pass (2026-05-12)
+2026-05-14), Round 4 (commit decomposition + Phase 1
+commit list, 2026-05-14), and Round 4 review pass
+(adversarial review of the post-Round-4 substrate before
+Phase 1 cuts; nine findings dispositioned, 2026-05-15)
+closed.** Round 1's load-bearing question (§5 producer
+redesign) settled to **α — preserved current shape** per
+§5.4. The Round 1 review pass (2026-05-12)
 corrected §3.1's materially-wrong "no secret-touching surface"
 framing to master-secret isolation routed through R4, surfaced
 four additional residual questions (R4 view-material flow, R5
@@ -195,6 +198,62 @@ against. The implementation branch
 (`feat/stage-1-pr4-refresh-engine`) cuts off the post-Round-4
 dev tip and lands the §7.X commit list.
 
+The **Round 4 review pass (2026-05-15)** is an adversarial
+review of the post-Round-4 substrate before Phase 1
+implementation cuts. Two reviewers exercised the
+diagnostic-stream seam, the encrypted-persistence opt-in
+language at §5.4.8 #1, and the resilience surface from an
+attacker's perspective (hostile-daemon wargaming, restart
+orchestration, covert-channel composition). The pass produced
+**nine actionable findings**, all dispositioned and applied
+inline as substrate hardening rather than reopening any
+Round 1–4 question:
+**F1** rewrites the R17 encrypted-persistence opt-in language
+from "V3.x evaluates" to a hard rejection at V3.0 with
+strict conditional reopening criteria (six attack vectors
+named: crypto code-path expansion, deserialization-on-startup,
+metadata side-channel, cross-wallet correlation, DoS,
+forensic-artifact);
+**F2** refines the §3.1 wallet-lock-latency property from
+"single-block scan time, typically tens of ms" to
+"per-transaction scan time, sub-block-bounded; millisecond-
+scale even under adversarial daemon block crafting" and
+extends §7's checkpoint discipline from four to **five**
+checkpoints (adding an inner per-transaction cancellation
+check inside the per-block scan loop);
+**F3** pins `AssertionSink` and `PanickingSink` as
+permanent CI regression coverage rather than one-shot
+landing tests;
+**F4** adds a **seventh contract pin** at §5.4.6
+(per-emitter FIFO ordering preserved; cross-emitter ordering
+undefined);
+**F5** strengthens §5.4.8 #4's aggregator-republisher
+recursive-leak framing with a V3.x forward-template
+(per-consumer external-surface audit, projection-or-rejection,
+future CI-lint enforcement);
+**F6** adds a producer-side per-class emission rate budget
+to §5.4.8 #5 (per-block ceilings per event class plus a
+`SuppressedRateLimit` variant);
+**F7** adds a new §5.4.8 #6 explicitly rejecting the
+"encrypted cache for RPC recovery" V3.x candidate at V3.0
+under the same conditional-reopening discipline as F1;
+**F8** adds a new §5.4.8 #7 acknowledging emit-timing variance
+as a microarchitectural side-channel residual with a Phase 1
+implementation note for bounded-variance lock-free queues;
+**F9** adds a §6 projection-type audit per event class with
+explicit V3.0 per-class projections for `TracingDiagnosticSink`.
+The full review-pass writeup with reviewer attribution,
+attack-vector analysis, and disposition reasoning lives at
+**§5.4.9**. The pass is recorded as a forward-template artifact
+under [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)'s
+"discovery cadence" framing — a substrate harden ahead of
+implementation cuts is cheaper than a post-implementation
+re-design, and the review-pass shape is reusable for PR 5+'s
+pre-implementation substrate review. The α-disposition still
+holds; all Round 1–4 dispositions still hold; the review pass
+hardens contract pins and attack-surface dispositions without
+opening a new design question.
+
 This document was opened in parallel with the
 M3c–M3e tail of Stage 1 PR 3 per the 2026-05-10 sequencing
 decision recorded in
@@ -276,12 +335,19 @@ The PR must preserve, by name:
   ⇒ `LedgerEngine::apply_scan_result` audited mutation chain.
   `RefreshEngine::produce_scan_result` is the **producer**; it
   must not bypass the merge gate.
-- The four-checkpoint cancellation discipline pinned at
+- The cancellation-checkpoint discipline pinned at
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
-  §2.3 / §7. Checkpoints 1 (top-of-attempt) and 4 (pre-merge)
-  belong to the orchestrator on `Engine<S>`; checkpoints 2
-  (post-tip-fetch) and 3 (mid-scan, between blocks) belong to
-  `RefreshEngine::produce_scan_result`. This split is part of the
+  §2.3 / §7. **Five checkpoints** (Round 4 review pass, 2026-05-15;
+  promoted from four; see §5.4.9 F2): checkpoint 1 (top-of-attempt)
+  and checkpoint 4 (pre-merge) belong to the orchestrator on
+  `Engine<S>`; checkpoint 2 (post-tip-fetch), checkpoint 3
+  (mid-scan, between blocks), and **checkpoint 5 (per-transaction,
+  inside the per-block scan loop)** belong to
+  `RefreshEngine::produce_scan_result`. The per-transaction
+  checkpoint 5 bounds wallet-lock-latency content-independently
+  under adversarial daemon block crafting; pre-Round-4-review-pass
+  the discipline was four-checkpoint and the lock-latency bound was
+  per-block (content-dependent). This split is part of the
   contract.
 - The `RefreshError::ConcurrentMutation` retry loop semantics from
   [`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs).
@@ -311,9 +377,10 @@ Three timeframes:
 2. **`LocalRefresh` implementor.** A struct wrapping the existing
    producer logic from
    [`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
-   (`run_refresh_task` and the four-checkpoint discipline within
-   it). The implementor owns the producer-side scan-cursor state
-   per §2.3's ownership clause.
+   (`run_refresh_task` and the five-checkpoint cancellation
+   discipline within it; promoted from four by Round 4 review
+   pass F2 — see §5.4.9 F2). The implementor owns the producer-
+   side scan-cursor state per §2.3's ownership clause.
 3. **Engine generic parameter.** `Engine<S, D, L, R: RefreshEngine
    = LocalRefresh>` per the §2.3 generic-parameter pattern (Round
    3's “parameterize over `R`” disposition matching PR 1's `D`,
@@ -323,10 +390,16 @@ Three timeframes:
    `Engine<S>`, calling
    `self.refresh.produce_scan_result(...)` against the trait
    instead of the inline producer body.
-5. **Cancellation-token plumbing.** No semantic change; the
-   orchestrator-owned checkpoints (1 and 4) stay where they are,
-   and the producer-owned checkpoints (2 and 3) move into the
-   `LocalRefresh::produce_scan_result` body verbatim.
+5. **Cancellation-token plumbing.** No semantic change at the
+   trait surface from the §2.3 split; the orchestrator-owned
+   checkpoints (1 and 4) stay where they are, and the producer-
+   owned checkpoints (2, 3, and 5) move into the
+   `LocalRefresh::produce_scan_result` body. Checkpoint 5 (the
+   per-transaction inner cancellation check inside the per-block
+   scan loop) is the new pin from Round 4 review pass F2 (see
+   §5.4.9 F2); its emission semantics are otherwise identical to
+   checkpoints 2 and 3 (poll cancellation token, return
+   `RefreshError::Cancelled` if fired).
 
 ### §2.2 Out-of-scope
 
@@ -371,8 +444,20 @@ PR 4's check completes here.
 - **Cancellation discipline preserved.** §2.3 / §7 split is
   load-bearing; PR 4 codifies it but does not re-litigate it.
   Threat-model property: a cancelled refresh stops at one of the
-  four documented checkpoints, not arbitrarily — reviewed in
-  M3-tail's CI tests.
+  **five** documented checkpoints, not arbitrarily — reviewed in
+  M3-tail's CI tests. **Wallet-lock-latency property (Round 4
+  review pass refinement; see §5.4.9 F2).** The lock-latency
+  bound is **per-transaction scan time** (sub-block-bounded;
+  millisecond-scale even under adversarial daemon block crafting),
+  not per-block scan time. Checkpoint 5 (between transactions
+  within a block; §7) bounds lock-latency content-independently:
+  an adversarial daemon serving a maximally-hostile block
+  (large block, high view-tag-match rate) cannot extend
+  spend-secret residency-in-memory beyond the single-transaction
+  scan window. The bound holds for typical and pathological
+  blocks alike. The pre-Round-4-review-pass "tens of ms typical"
+  framing (correct for typical blocks; broken under adversarial
+  block crafting) is retired.
 - **Master-secret isolation (corrected per Round 1 review pass).**
   The seed's earlier framing ("does not touch `KeyEngine`, does
   not derive secrets, does not hold output secrets") was
@@ -1602,6 +1687,25 @@ against and Stage 4 has the property to wrap around.
   amendment on the `DiagnosticSink` trait definition,
   pointing to the test as the canonical reference for
   coherence semantics.
+
+  **Permanent CI regression coverage pin (Round 4 review pass,
+  2026-05-15; F3).** `AssertionSink` is **permanent CI
+  regression coverage**, not a one-shot Phase 1 deliverable.
+  Every PR touching any `RefreshEngine` implementation MUST
+  continue to pass the `AssertionSink` property test. A test
+  failure is a **contract violation**, not a "test failure to
+  investigate" — the implementation either satisfies the
+  coherence contract, or the design doc is updated with explicit
+  re-pin language and the test follows. The discipline shifts
+  the test's role from "tests we ship" to "the executable
+  definition of the contract." Phase 1's CI configuration
+  records the test as part of the standard `cargo test` pass for
+  `shekyl-engine-core`; future PR-template language in
+  [`90-commits.mdc`](../../.cursor/rules/90-commits.mdc) for
+  PRs touching `RefreshEngine` references this pin as a
+  reviewer-checkpoint item. See §5.4.9 F3 for the adversarial
+  rationale (silent-error-path detection by behavior-fingerprinting
+  attacker) the pin closes long-term.
 - **Producer-panic-safety property (Round 2 reframe
   contract-pin refinements, 2026-05-13). Not a sink
   contract pin — a producer-side robustness property and
@@ -1658,6 +1762,40 @@ against and Stage 4 has the property to wrap around.
   a contract pin; phrasing it here so the Round 4
   test-design pass has the property pre-specified rather
   than re-deriving it at test-authoring time.
+
+  **Permanent CI regression coverage pin (Round 4 review pass,
+  2026-05-15; F3).** `PanickingSink` is **permanent CI
+  regression coverage**, parallel to the `AssertionSink` pin
+  above. Every PR touching any `RefreshEngine` implementation
+  MUST continue to pass the `PanickingSink` panic-safety
+  property test. The producer-side robustness property is the
+  contract; the test is its executable definition. See §5.4.9
+  F3 for the rationale.
+- **Per-emitter FIFO ordering pin (Round 4 review pass, 2026-05-15;
+  F4).** `DiagnosticSink::emit` MUST preserve **per-emitter FIFO
+  ordering**: events emitted by a single producer task arrive at
+  any given consumer in the order they were emitted.
+  **Cross-emitter ordering is undefined**: events emitted
+  concurrently by different producer tasks may interleave
+  arbitrarily; consumer actors MUST NOT rely on cross-emitter
+  ordering for correctness. **Rationale (per §5.4.9 F4).** A
+  peer-reputation actor that depends on event ordering
+  ("`MalformedScanResult` observed before peer rotation") makes
+  decisions on temporal context; if ordering is not pinned, an
+  adversary-influenced reordering (concurrent-emit racing under
+  specific timing windows) can shape consumer-actor conclusions.
+  Per-emitter FIFO is naturally satisfied by single-emitter
+  mailbox structures (`crossbeam::channel`, `flume`,
+  `tokio::sync::mpsc`); the pin does not constrain implementation
+  choice, only ordering semantics. Cross-emitter ordering is
+  explicitly disclaimed because preserving it would require
+  global serialization at the sink, contradicting the
+  concurrent-emit pin and re-introducing the producer-liveness
+  hazard. PR 5 §5.0.3 carries a parallel pin so the
+  diagnostic-stream contract is symmetric across `RefreshDiagnostic`
+  and `PendingTxDiagnostic`. Phase 0e docstring amendment on
+  `DiagnosticSink::emit`, naming both halves explicitly so V3.x
+  consumer-actor PRs cannot re-derive the contract inconsistently.
 
 ### §5.4.7 Round 2 dispositions — R2–R7 settled (2026-05-12)
 
@@ -2336,22 +2474,70 @@ persistence ("daemon X banned until time T") is the most
 that may persist, and only if a future review explicitly
 justifies the relaxation — V3.x default is no persistence.
 
-**Round 3 acknowledgment (2026-05-14) — scope broadened by
-PR 5 R17.** The drop-on-close-by-default rule pinned here is
-not refresh-specific. PR 5 Round 2 segment 2c closed R17
-(*pending-tx event-sourced recovery*) with the same default
-applied at the diagnostic-stream-contract level — V3.0 ships
-the drop-on-close default across **all** diagnostic streams
-in the engine mesh (`RefreshDiagnostic`, `PendingTxDiagnostic`,
-`LedgerDiagnostic`, and the future consumer-actor streams),
-with **per-stream wallet-internal encrypted-persistence
-opt-in** as a V3.x refinement evaluated at the diagnostic-
-stream spec doc (`docs/design/DIAGNOSTIC_STREAM.md`, V3.x).
+**Round 4 review pass — R17 hardening (2026-05-15; F1; replaces
+the Round 3 acknowledgment).** The drop-on-close-by-default
+rule pinned here is not refresh-specific. PR 5 Round 2
+segment 2c closed R17 (*pending-tx event-sourced recovery*)
+with the same default applied at the diagnostic-stream-contract
+level. The Round 3 acknowledgment of this scope-broadening
+admitted "per-stream wallet-internal encrypted-persistence
+opt-in as a V3.x refinement," which the Round 4 review pass
+identifies as a soft commitment with substantial unreviewed
+attack surface (the cost-benefit-defer-to-later anti-pattern
+applied to a feature commitment per §5.4.9 F1).
+
+**Hardened disposition (binding on V3.0; Round 4 review pass,
+2026-05-15).** **Drop-on-close is structurally final at V3.0
+across all diagnostic streams in the engine mesh
+(`RefreshDiagnostic`, `PendingTxDiagnostic`, `LedgerDiagnostic`,
+and any future consumer-actor streams). Persistence of
+diagnostic events is rejected.** The rejection covers in-process
+encrypted persistence as much as any other shape — the
+attack-surface analysis (per §5.4.9 F1's six vectors:
+master-key code-path expansion, deserialization-on-startup,
+metadata side-channel, cross-wallet correlation amplification,
+adversary-controlled DoS, forensic-artifact primitive) does not
+distinguish between cross-trust-boundary and within-trust-boundary
+persistence — the surfaces materialize regardless of whether
+the persisted bytes leave the wallet's encrypted-state surface.
+
+**V3.x reopens this question only under all of:**
+
+(a) **Demonstrated production use case from real deployments**,
+    not anticipated demand. "We might want this someday" is
+    not a use case; "this specific institutional deployment
+    repeatedly hits this specific operational failure mode"
+    is.
+(b) **Full threat-model review at evaluation time**, including
+    the six vectors named above, with each vector's mitigation
+    explicitly designed and evaluated. The review's output is
+    a design-doc round, not a feature-PR description.
+(c) **Explicit `AUDIT_SCOPE.md` amendment** if adopted,
+    bringing the persistence layer into audit scope. The
+    persistence layer is then audited as a key-material-handling
+    surface alongside transaction signing.
+(d) **Explicit acknowledgment that the privacy-first default
+    discipline supersedes ergonomic-recovery considerations**
+    except where (a)–(c) demonstrate the case. The privacy-first
+    posture is not negotiable on ergonomic grounds.
+
+**No V3.x schedule entry; conditional reopening only.** The
+distinction matters: a V3.x schedule entry shapes contributor
+expectations toward "we'll ship this in V3.x"; a conditional
+reopen shapes them toward "we won't ship this unless conditions
+(a)–(d) are met." The former is a soft commitment; the latter
+is a hard rejection with a path-to-reopen the feature only
+earns by demonstrating need against the threat model.
+
 See
 [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)
-§5.4 R17 for the project-wide framing; the per-stream V3.x
-opt-in is evaluated against the cross-cutting recursive-
-trust-boundary discipline in §5.4.8 #4.
+§5.4 R17 for the parallel hardening on the
+`PendingTxDiagnostic` stream side; the two sections are
+symmetric. The retired Round 3 acknowledgment language ("V3.x
+refinement evaluated at the diagnostic-stream spec doc") is
+preserved in the design-doc git history; the retired language
+is not preserved inline because it carries the soft commitment
+the hardening retires.
 
 This conflicts with classical fail2ban's "remember bad actors
 across sessions" disposition; the conflict is genuine, and
@@ -2523,6 +2709,54 @@ type system; Stage 4's actor topology design must respect
 it. Phase 0a §2.3 prose amendment pins the rule so future
 implementations cannot accidentally cross it.
 
+**Round 4 review pass — V3.x forward-template (2026-05-15;
+F5).** The V3.0 mitigation is procedural (review checklist) and
+**sufficient at V3.0 because no aggregator/republisher consumer
+exists in V3.0** — the only consumers are `NoopDiagnosticSink`
+and `TracingDiagnosticSink`, both project-controlled and
+covered by F9's per-class projection-type audit. The recursive-
+leak hazard surfaces only when V3.x adds aggregator-style
+consumers (metrics-export actors with HTTP endpoints, debug-UI
+actors with IPC, log-collection actors). The §5.4.9 F5
+adversarial review identifies that procedural mitigation is
+weaker than CI-enforced mitigation and that the discipline
+should compound at the V3.x consumer-actor PR template level.
+
+**V3.x forward-template requirements (binding on the first
+aggregator/republisher consumer PR).**
+
+1. **Per-consumer external-surface audit.** Each new
+   consumer-actor PR enumerates the actor's complete external
+   surface — every channel by which the actor can publish,
+   aggregate-and-export, persist, or otherwise make
+   observable to a different trust principal anything
+   derived from the events it consumes. The enumeration is a
+   PR-description deliverable; the review checklist verifies
+   completeness against the actor's source code.
+2. **Projection-or-rejection at every external-surface
+   boundary.** For each external surface, the audit specifies
+   either (i) the projection type and projection function
+   sanitizing full-fidelity events to the surface's permitted
+   shape, or (ii) the rejection — the actor explicitly does
+   not export data derived from full-fidelity events on this
+   surface.
+3. **CI-lint enforcement (V3.x consumer-actor PR template
+   target).** A lint or static analysis flags consumer-actor
+   types implementing `DiagnosticSink` and also implementing
+   `Write`, `serde::Serialize`, network export, or other
+   trust-boundary-crossing surfaces, requiring an explicit
+   `#[allow(diagnostic_external_surface)]` attribute with an
+   inline rationale comment. The lint is a deliverable of the
+   first aggregator/republisher consumer PR; subsequent PRs
+   inherit it. See FOLLOWUPS for the V3.1+ entry naming the
+   lint as the trigger.
+
+The V3.x forward-template strengthens the recursive-trust-
+boundary discipline from procedural to CI-enforced at the
+moment the discipline starts mattering operationally.
+Pre-V3.x, the procedural mitigation suffices; post-V3.x, the
+CI lint catches mistakes the review would otherwise miss.
+
 #### 5. Mailbox saturation as DoS
 
 **Threat.** Rich diagnostic events emitted at high rate (a
@@ -2553,6 +2787,198 @@ consumer's mailbox enforces its own policy. The trait
 contract for `DiagnosticSink` does **not** promise delivery;
 it promises emission attempt. Phase 0e seed text records
 this so consumers cannot assume lossless delivery.
+
+**Round 4 review pass — producer-side per-class emission rate
+budget (2026-05-15; F6).** The consumer-side bounded-mailbox-
+with-overflow pin closes the OOM hazard but does **not** close
+the saturation-attack on stateful consumers (per §5.4.9 F6
+adversarial scenario): an attacker-controlled daemon flooding
+malformed blocks at the producer's natural rate forces
+stateful consumers (the `PeerReputationActor`'s overflow path,
+specifically) into a state that prevents legitimate decisions
+(e.g., "the reputation actor never sticks a peer-ban"). The
+defense-in-depth answer is a **producer-side per-class
+emission rate budget**, complementing the consumer-side
+overflow policy.
+
+**The producer-side pin (Round 4 review pass).** The
+producer (`LocalRefresh::produce_scan_result`) MUST track a
+per-event-class emission counter for each refresh attempt.
+Each `RefreshDiagnostic` variant has a per-attempt-and-per-block
+emission ceiling proportional to the natural per-block rate of
+the variant:
+
+- **`ScanProgress`** — at most one per block scanned (natural
+  per-block rate; ceiling matches reality).
+- **`DaemonMalformed`, `DaemonTimeout`, `DaemonProtocolError`,
+  `ReorgObserved`** — at most one per block scanned per class
+  (adversarial events; one-per-class-per-block bounds the
+  attack surface without losing signal).
+- **(Future variants)** — each variant pinned with a
+  per-block ceiling at variant-introduction time.
+
+**Suppression-notice variant (Phase 1 enum addition).** When
+a per-class budget is exceeded, the producer emits a single
+`RefreshDiagnostic::SuppressedRateLimit { class: <variant tag> }`
+notice and stops emitting that class for the remainder of the
+attempt. Consumer actors interpret the notice as "the producer
+hit the rate limit on this class within this attempt" — adequate
+signal for stateful decisions (the `PeerReputationActor` can
+ban the peer based on the notice alone) without forcing the
+consumer to process the full flood. The variant is added under
+`#[non_exhaustive]` per §5.4.8 forward-note (additive variant
+growth is supported by the trait contract).
+
+**Implementation cost.** O(num\_event\_classes) `u32` counters
+on the producer; one branch per emission. Producer-internal
+property; does not change trait surface; lands in §7.X C4
+commit body.
+
+**Why producer-side, not consumer-side.** Consumer-side
+overflow policies (drop-oldest, drop-newest, aggregate)
+respond to events that have already been emitted by the
+producer; the producer's emission cost (`emit` call, per-class
+counter increment, bounded-channel send) is incurred regardless.
+Producer-side rate-limiting bounds the producer's emission
+cost as well, preserving the §5.4.4 invocation-overhead
+property under adversarial daemon control. Defense in depth
+because consumer-side policies vary by consumer; producer-side
+rate-limiting establishes a ceiling all consumers can rely on.
+
+#### 6. Encrypted cache for RPC recovery (V3.x candidate; structurally rejected at V3.0)
+
+**Round 4 review pass surface (2026-05-15; F7).** A
+hypothetical "encrypted RPC cache for recovery" — caching
+RPC responses (tip height, scannable blocks, transaction
+acceptance status) across wallet restarts to avoid re-fetching
+from the daemon — has been raised as an adjacent feature to
+the encrypted-persistence question (F1) but at a different
+target. F1 covers diagnostic-event persistence; F7 covers
+RPC-response persistence. The two are structurally adjacent
+but distinct: F1's events flow through `DiagnosticSink`; F7's
+data flows through `DaemonEngine` RPC paths.
+
+**Threat-model adjacency to F1.** F7 inherits the same
+attack-surface family as F1 (§5.4.9 F1 enumeration):
+master-key code-path expansion (cache encryption requires
+master-key derivation); deserialization-on-startup
+(decrypt-and-replay on wallet open is a deserialization
+path); metadata side-channel (cache write/read timing leaks
+restart correlation); cross-wallet correlation amplification
+(persisted RPC responses correlate across wallets exposed
+to the same daemon); persistence as adversary-controlled DoS
+(disk-fill, cache poisoning); forensic-attack primitive
+(persistent on-disk artifact under encryption is still
+information-bearing).
+
+**Adversarial scenario (per §5.4.9 F7).** An attacker who
+can trigger frequent wallet restarts (process kill, OOM,
+hosted-wallet rotation, user quit/restart) drives the cache
+write/read pattern under attacker-influenced conditions.
+The cache becomes a persistent side-channel: an attacker
+who forces a restart right after a high-value output is
+scanned drives the next restart's cache write to leak
+timing or content-hash signal correlating with the high-value
+event. A weak nonce or single global key admits cache
+poisoning across restarts; the wallet loads poisoned data
+and either crashes or accepts a malformed `ScanResult`
+that bypasses the merge gate.
+
+**Hardened disposition (binding on V3.0; parallel to F1's
+R17 hardening).** **V3.0 ships no encrypted RPC cache for
+recovery; the feature is structurally rejected.** V3.0's
+recovery path on restart is **re-fetch from the daemon**
+(re-establishing peer connections, re-scanning from the
+last-merged height, re-validating against on-chain state).
+This is the privacy-first default; it is also the
+attack-surface-minimal default.
+
+**V3.x reopens this question only under all of:**
+
+(a) **Demonstrated production use case from real deployments**
+    — the operational failure mode the cache is intended to
+    address must be observed in production, not anticipated.
+(b) **Full threat-model review at evaluation time**, including
+    the six vectors above plus RPC-cache-specific surfaces
+    (cache invalidation on reorg; per-RPC-method nonce
+    derivation; cache poisoning under attacker-controlled
+    daemon).
+(c) **Per-RPC-method nonce derivation, key rotation on
+    password change, cache invalidation on reorg, and
+    constant-time cache reads** are all design-doc-level
+    pinned requirements before implementation. Half-mitigations
+    (e.g., a single global key) are unacceptable.
+(d) **Explicit `AUDIT_SCOPE.md` amendment** if adopted,
+    bringing the RPC-cache layer into audit scope as a
+    key-material-handling surface.
+
+**No V3.x schedule entry; conditional reopening only.**
+Same shape as F1; the rejection is structural at V3.0 and
+the path-to-reopen is bounded by demonstrated need against
+the threat model.
+
+**Cross-reference.** F1's R17 hardening covers the
+diagnostic-event persistence target; F7 covers the
+RPC-response persistence target. Both rejections share the
+attack-surface family; both V3.x reopening conditions are
+parallel. The two together close the in-process-encrypted-
+persistence question across the two adjacent surfaces with
+consistent discipline.
+
+#### 7. Emit-timing variance residual (acknowledged microarchitectural side-channel)
+
+**Round 4 review pass surface (2026-05-15; F8).** Even with
+lock-free queues, the exact moment `emit` returns can leak
+whether the event was dropped or queued (cache-line
+contention, branch-predictor side-channel, queue-internal
+state-dependent latency). An attacker with nanosecond-resolution
+timing observation on the producer can measure response-time
+variance and infer event-class emission rate or hot-output
+detection.
+
+**Acknowledged-as-residual disposition.** The microarchitectural
+side-channel is **real but disproportionate to V3.0's threat
+model**:
+
+- **Constant-time `emit` is hard.** Lock-free queues have
+  variable latency by construction; bounding the variance
+  requires either pre-allocating worst-case queue depth
+  (memory cost; bounded by V3.x consumer-actor mailbox
+  sizing decisions) or padding with timing-noise (bounded-
+  variance loop adds non-trivial overhead and doesn't fully
+  close the side-channel).
+- **Realistic exposure analysis.** The producer-side `emit`
+  timing variance contributes nanoseconds of jitter to the
+  per-block scan time. Block-level scan time has natural
+  variance much larger than this (per-block ML-KEM-768
+  decapsulation cost dominates; network jitter on the
+  daemon RPC path adds milliseconds). Whether the attacker
+  can extract signal from the noise floor depends on the
+  attacker's observation channel; for V3.0's primary
+  deployment threat model (Tor/I2P-routed daemon
+  connections), the network-jitter noise floor swamps the
+  microarchitectural signal.
+- **V3.x microarchitectural-side-channel hardening** is its
+  own design surface — full mitigation requires constant-time
+  `emit`, constant-time queue insertion, and likely
+  scheduler isolation. None of this is V3.0-cheap; the
+  cost-benefit at V3.0 lands on "acknowledge as residual."
+
+**Phase 1 implementation note (§7.X C2).** The
+`DiagnosticSink` implementations bundled with PR 4
+(`NoopDiagnosticSink`, `TracingDiagnosticSink`) and any
+Phase 1 internal queueing use a **bounded-variance lock-free
+queue** (e.g., `crossbeam::queue::ArrayQueue` with
+pre-allocated capacity) to bound worst-case `emit` variance
+without claiming constant-time. This is best-effort
+mitigation, not a hard property; the residual is named
+explicitly so future microarchitectural-side-channel hardening
+work can locate it.
+
+**FOLLOWUPS entry.** Not added — the residual is bounded by
+V3.0's threat-model anchor and the V3.x mitigation surface is
+its own design topic. If V3.x microarchitectural-side-channel
+work cuts, the FOLLOWUP is generated at that point.
 
 #### Cross-cutting: actor-mesh emergent behaviour
 
@@ -2598,6 +3024,650 @@ serialized separately), or (c) recognizes that the on-disk
 format is a separate type with its own evolution rules.
 None of these are PR 4 work; the note exists so the future
 PR has the constraint named ahead of time.
+
+### §5.4.9 Round 4 review pass — adversarial review of the post-Round-4 substrate (2026-05-15)
+
+Two reviewers ran adversarial reviews against the Round 4 close
+substrate (the post-Round-4 design doc, before Phase 1 cuts).
+Reviewer 1 focused on residual feature-commitment surfaces and
+contract-pin tightening; Reviewer 2 focused on diagnostic-stream
+attack surfaces and the encrypted-cache resilience adjacency.
+Together they surfaced **nine actionable findings** and a tenth
+that collapsed into the first under shared substrate. This
+section records each finding with the reviewer attribution, the
+attack analysis, the disposition reasoning, and a pointer to
+the inline edit that landed the disposition.
+
+The review pass is a Round 4 deliverable, not a fresh round. It
+captures the thought process behind each finding's disposition
+so future readers (Phase 1 reviewers; auditors; future-PR
+authors weighing similar trade-offs) can reconstruct why each
+inline edit took the form it did rather than only what it says.
+
+**Closure-rule cross-reference.** Per
+[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+§7's strengthened closure rule, the review pass is the
+explicit reopening mechanism for any finding that surfaces
+after a round closes — Round 4 reopens via the review pass,
+disposes the findings inline, and re-closes. None of the
+findings reopened a prior round (Round 1 / Round 2 / Round 2
+reframe / Round 3 dispositions all hold); the dispositions
+land at Round 4's substrate level (contract pins, attack-surface
+enumerations, commit-list refinements).
+
+#### F1 — R17 encrypted-persistence opt-in language hardening (Reviewer 1, expanded by Reviewer 2)
+
+**Source.** Both reviewers converged on the same anti-pattern.
+Reviewer 1 raised the diagnostic-event-persistence side directly
+(R17's V3.x "wallet-internal encrypted-persistence opt-in"
+language); Reviewer 2 raised the structurally adjacent
+encrypted-cache-for-RPC-recovery side (different target, same
+attack-surface family). F1 covers the diagnostic-event side; F7
+covers the RPC-cache side with parallel framing.
+
+**Reviewer 1's six attack vectors against the V3.x opt-in.**
+
+1. **Crypto code-path expansion via persistence triggers.**
+   Persisted events require encryption with a key derived from
+   the wallet master key. New code-path touching master-key
+   material outside transaction signing — exactly the surface
+   that historically introduces nonce-reuse, weak-KDF-parameter,
+   and IV-collision bugs. An adversary who can force high-volume
+   event emission (hostile daemon producing many malformed
+   blocks) drives this path under pathological conditions
+   specifically to probe for these failures.
+2. **Deserialization-on-startup as exploit primitive.**
+   Encrypted-persistence-for-crash-recovery means decrypt-and-
+   replay on wallet open. Replay is a deserialization path;
+   deserialization paths from disk are notoriously fertile for
+   vulnerabilities. Even with verified encryption, post-decrypt
+   structured-event parsing is an attack surface — if attacker
+   has any path to influence persisted content (the bug-class
+   above plus an attacker-influenced event field), they have a
+   deserialization-on-startup primitive that runs **before** the
+   wallet is fully verified.
+3. **Metadata side-channel.** "Encrypted" protects content but
+   not metadata. File sizes, write timing, write patterns, IO
+   syscall patterns are all observable to anyone with
+   filesystem-adjacent access (multi-user systems, backup
+   snapshots, swap files, `/proc` inspection). Write rate
+   during refresh correlates with wallet activity; write
+   patterns during transaction submission correlate with
+   transaction construction. The encrypted-persistence file
+   becomes a wallet-activity signal that exists **only because
+   we added persistence**.
+4. **Cross-wallet correlation amplification.** Two wallets
+   running the same software, exposed to the same daemon,
+   produce statistically-correlatable persistence patterns.
+   An adversary with filesystem access to multiple wallets
+   (institutional-adversary backup-stealing; multi-user system;
+   cloud backup compromise) can correlate them across the
+   persisted artifacts. Without persistence, this correlation
+   surface doesn't exist.
+5. **Persistence as adversary-controlled DoS.** Adversary
+   causes high event volume → high write pressure → disk fills
+   → wallet writes fail → wallet enters error state, or
+   corrupts in specific ways that crash subsequent opens. The
+   drop-on-close default neutralizes this entire class; the
+   opt-in restores it.
+6. **Forensic-attack primitive against seized wallets.**
+   Persistent diagnostic events on disk are exactly what
+   forensic analysts want from a seized device. Even if
+   encrypted, their existence is information ("this wallet was
+   active during these time windows"). The drop-on-close
+   default produces no on-disk artifact; the opt-in produces
+   one whose mere existence is informative.
+
+**My analysis.** All six vectors are real and individually
+load-bearing; A1 (master-key code-path expansion) is the
+strongest because it directly creates new key-material handling
+outside the audited transaction-signing path. A2
+(deserialization-on-startup) is historically the most-exploited
+class in this family (the Pickle, Marshalling, BSON-deserializer
+bug catalogues span decades).
+
+The current §5.4.8 #1 Round 3 acknowledgment paragraph reads as
+a soft commitment to evaluate ("V3.x evaluates per-stream
+wallet-internal encrypted-persistence opt-in"). This is the
+*cost-benefit-defer-to-later* anti-pattern per
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+applied to a feature commitment: deferring the disposition feels
+safe ("we'll think about it later") but the deferral itself
+isn't free — it shapes contributor and reviewer expectations
+about what the project is going to ship. The
+architectural-integrity-now disposition is to walk back the
+soft commitment to a hard rejection with conditional-reopen
+language: V3.0 ships drop-on-close as structurally final;
+persistence of diagnostic events is rejected; V3.x reopens this
+question only under explicit conditions that shift the burden
+of proof onto the would-be feature.
+
+**Disposition: accept.** Replace the §5.4.8 #1 Round 3
+acknowledgment paragraph with the hard-rejection-plus-conditional-
+reopen shape. The reopening conditions: (a) demonstrated
+production use case from real deployments (not anticipated
+demand); (b) full threat-model review at evaluation time
+including all six vectors above; (c) explicit `AUDIT_SCOPE.md`
+amendment if adopted; (d) acknowledgment that privacy-first
+default supersedes ergonomic-recovery considerations except
+where (a)–(c) are demonstrated. **No V3.x schedule entry**;
+conditional reopening only.
+
+Apply the same change symmetrically to PR 5 §5.4 R17 (the two
+sections cross-reference each other; if one is hardened and the
+other isn't, the asymmetry confuses readers and creates
+plan-vs-state divergence per
+[`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc)
+adjacent §19 pattern).
+
+**Inline edits applied.**
+
+- §5.4.8 #1 — Round 3 acknowledgment paragraph replaced with
+  hard-rejection-plus-conditional-reopen language.
+- PR 5 §5.4 R17 — disposition prose replaced with parallel
+  hard-rejection language; the contract-refinement paragraph
+  retired.
+- PR 5 status banner — the "encrypted-persistence opt-in
+  (V3.x)" language in the closure summary updated to reflect
+  the hardening.
+
+#### F2 — Lock-latency content-dependence + 5-checkpoint discipline (Reviewer 1)
+
+**Adversarial scenario.** User locks wallet under perceived
+threat (laptop seized, knock at door, sudden security event).
+Pre-positioned hostile daemon serves a maximally-hostile block
+(large block, high view-tag-match rate). Lock fires; cancellation
+token sets; checkpoint 3 fires at block boundaries (between
+blocks), not within a single block's scan loop. Spend secret
+remains in memory for seconds while the current block's scan
+loop completes. Memory dump (debugger, hibernation, process
+inspection) during this window retrieves the spend secret.
+
+**My analysis.** The §3.1 lock-latency property bound is
+**content-dependent** under the current four-checkpoint
+discipline. Concretely:
+
+- The expensive operation in the per-block scan loop is the
+  ML-KEM-768 hybrid decapsulation, triggered per
+  view-tag-matched output (~100µs each on commodity hardware).
+- A pathological block crafted by an adversarial daemon —
+  maximum block size with maximum view-tag-match rate, possibly
+  thousands of matches per block — extends single-block scan
+  time to ~100ms or more.
+- The §3.1 "tens of ms typical" bound holds for typical blocks
+  but does **not** hold for adversarial blocks; the adversary
+  controls the bound's content-dependence.
+
+**Cost analysis for the mitigation.** Inner cancellation check
+at per-transaction granularity adds one atomic load + branch
+per transaction (~1–3 ns per check). For a typical block with
+~50 transactions, ~50–150 ns added per block. For pathological
+blocks with ~1000 transactions, ~1–3 µs added per block. This
+is sub-microsecond per block and **negligible against the
+per-transaction work cost** (microseconds to milliseconds per
+transaction depending on view-tag-match count). The cost
+argument for the inner check is structurally absent.
+
+**Granularity choice: per-transaction vs per-output.** Per-output
+granularity adds checks inside the inner-most decapsulation loop
+(more overhead; harder to reason about timing-side-channel
+implications). Per-transaction granularity is at a natural
+boundary in the block-scan loop. The lock-latency upper bound
+under per-transaction granularity is "max time to scan one
+transaction's outputs" — milliseconds at most, even
+pathologically (a transaction with 16 outputs, all view-tag-
+matched, costs ~16 × 100µs = 1.6 ms). Per-transaction is the
+right granularity.
+
+**Atomicity-under-cancellation contract.** The current contract
+(§7) says `produce_scan_result` returns either a full
+`ScanResult` covering its scanned span or `RefreshError::
+Cancelled`; no partial-span `ScanResult`. The inner check
+preserves this — on cancellation, the producer discards
+in-flight per-block partial state and returns `Cancelled`.
+`Scanner`'s `ZeroizeOnDrop` chain handles the per-block
+materials; `ViewMaterial`'s `ZeroizeOnDrop` handles the
+attempt-scoped materials.
+
+**Disposition: accept.** Add a fifth checkpoint at per-transaction
+granularity inside checkpoint 3's per-block scan loop. The §7
+four-checkpoint discipline becomes a five-checkpoint discipline:
+checkpoint 3 (between blocks; existing) and checkpoint 5
+(between transactions within a block; new) collectively bound
+lock-latency to per-transaction scan time, content-independent
+under adversarial daemon control.
+
+The architectural-integrity-now disposition wins decisively
+here: cost is sub-microsecond; benefit is content-independent
+lock-latency bound under adversarial control; the "accept the
+content-dependent bound with named justification" alternative
+is the cost-benefit-defer-to-later anti-pattern with no
+substantive cost to defer against.
+
+**Inline edits applied.**
+
+- §3.1 lock-latency property — refined from "single-block
+  scan time, typically tens of ms" to "single-transaction scan
+  time, sub-block-bounded; per-transaction worst case
+  millisecond-scale even under adversarial daemon block
+  crafting."
+- §7 four-checkpoint discipline — promoted to five-checkpoint
+  with the new checkpoint 5 (between transactions within a
+  block) named and the rationale recorded.
+- §6 binding-check matrix — updated to reflect the
+  five-checkpoint contract.
+- §7.X C4 commit description — updated to specify that the
+  `produce_scan_result` body implements both the existing
+  per-block checkpoint 3 and the new per-transaction
+  checkpoint 5.
+
+#### F3 — `AssertionSink` / `PanickingSink` as permanent CI regression coverage (Reviewer 1)
+
+**The contract gap.** The current §5.4.6 framing reads as a
+one-shot Round 4 / Phase 1 deliverable: "the property test lands
+in Round 4." This is correct for Phase 1 timing but understates
+the contract's status. Coherence is not a property the
+implementation satisfies once at Phase 1 cut; it is a property
+the implementation **must continue to satisfy** across all
+future changes. The `AssertionSink` test is the canonical
+reference for what coherence means; if a future implementer
+breaks the test, the implementation is wrong, not the test.
+
+**Adversarial relevance.** An implementation bug introduces a
+silent-error path: returns `Err(MalformedScanResult)` without
+emitting `RefreshDiagnostic::DaemonMalformed`. The bug is
+invisible at the trait surface (return type matches; sink
+emission is `&self`-side and the type system doesn't enforce
+"emit-then-return" sequencing). Downstream consumers see fewer
+events than the error rate implies. An adversary fingerprinting
+wallet behavior by varying daemon responses can detect this
+drift and target the silent path specifically — knowing the
+wallet retries without alerting the reputation actor.
+
+**My analysis.** The fix is a contract-clarification, not a
+code change. Pinning `AssertionSink` and `PanickingSink` as
+**permanent CI regression coverage** shifts their discipline
+status from "tests we ship" to "tests that define the contract."
+Practical implication: an implementation change that breaks
+either test isn't "a test failure to investigate" — it's "a
+contract violation that requires either fixing the
+implementation or getting explicit re-pin from the design
+doc." This is a meaningfully stronger discipline than ambient
+test-passing.
+
+The same reasoning applies to `PanickingSink`: the
+producer-panic-safety property must continue to hold across
+future changes; the test is the canonical reference for what
+panic-safety means at the producer-side robustness layer.
+
+**Disposition: accept.** Land a §5.4.6 prose addition pinning
+both as **permanent CI regression coverage** binding on every
+PR touching `RefreshEngine` implementations. The pin is a
+prose-level change to the existing contract pin paragraphs.
+
+**Inline edits applied.**
+
+- §5.4.6 emission/return coherence pin — extended with
+  "permanent CI regression coverage" framing; explicit
+  statement that breaking the test is a contract violation,
+  not a test-failure-to-investigate.
+- §5.4.6 producer-panic-safety property — same extension
+  applied to `PanickingSink`.
+
+#### F4 — Per-emitter FIFO ordering as seventh contract pin (Reviewer 1)
+
+**Contract gap.** The §5.0.3 / §5.4.6 contract pins enumerate
+non-blocking, panic-safety, concurrent-emit, recursive
+trust-boundary, restart-amnesia, and emission/return coherence
+— six pins. They do **not** pin event ordering guarantees.
+
+**Adversarial relevance.** A peer-reputation actor that depends
+on event ordering ("`MalformedScanResult` observed before peer
+rotation") makes decisions on temporal context. If the sink
+doesn't preserve ordering, the reputation actor sees events in
+reordered form; if the reordering is adversary-influenceable
+(e.g., via concurrent emit racing under specific timing
+windows), the attacker can shape what the reputation actor
+concludes.
+
+**My analysis.** The right pin is **per-emitter FIFO ordering
+preserved; cross-emitter ordering is undefined; consumers
+must not rely on cross-emitter ordering**. This is restrictive
+enough to be implementable cheaply (a single-emitter mailbox
+is naturally FIFO; the contract requires the sink not to
+reorder events from a single emitter, but admits any
+cross-emitter interleaving) and clear enough that downstream
+consumer-actor PRs know what they can assume.
+
+**Placement.** Reviewer 1 named §5.0.3 (PR 5's contract
+section). The diagnostic-stream contract is project-wide; PR 4
+§5.4.6 carries the same six pins for `RefreshDiagnostic`. The
+seventh pin lands in **both** §5.0.3 and §5.4.6 to preserve
+symmetry — the eventual `DIAGNOSTIC_STREAM.md` spec doc (V3.x)
+will lift the contract to a single project-wide statement; for
+V3.0, the per-engine-design-doc symmetry is the substitute.
+
+**Disposition: accept.** Land the seventh contract pin in PR 4
+§5.4.6 and PR 5 §5.0.3 with parallel wording.
+
+**Inline edits applied.**
+
+- PR 4 §5.4.6 — seventh contract pin added (per-emitter FIFO
+  ordering preserved; cross-emitter ordering undefined).
+- PR 5 §5.0.3 — same pin added with parallel wording.
+
+#### F5 — Aggregator-republisher recursive-leak V3.x forward-template (Reviewer 2 A1)
+
+**Reviewer 2's break.** An in-process aggregator-republisher
+actor (metrics-export actor with Prometheus/OpenTelemetry HTTP
+endpoint, debug-UI actor with IPC channel, logger actor writing
+to a remote-collected log file) subscribes to the full stream,
+aggregates, and republishes a sanitized projection over a
+trust-boundary-crossing surface. The aggregator is in-process,
+so it receives full events; the projection it republishes
+crosses the boundary. Attacker reads the projection (or log
+file) and reconstructs timing/rate information.
+
+**My analysis.** The §5.4.8 #4 recursive-trust-boundary pin
+already names this hazard. The substantive question is whether
+the V3.0 mitigation is sufficient and what V3.x needs to add.
+
+**For V3.0:** the only consumers are `NoopDiagnosticSink` and
+`TracingDiagnosticSink`, both project-controlled. The
+`TracingDiagnosticSink` routes to `tracing::event!`, which is a
+trust-boundary-relevant surface — what it logs is the
+projection. F9 (projection-type audit) covers this for V3.0.
+**Aggregator/republisher consumers do not exist in V3.0**;
+the recursive-leak hazard surfaces only when V3.x adds them.
+
+**For V3.x:** procedural mitigation (Stage 4 review checklist,
+per-PR audit) is what we have today. Reviewer 2 is right that
+this is weaker than type-level or CI-level enforcement.
+
+- **Type-level enforcement** is hard. Rust can't statically
+  distinguish "this consumer exports to disk" from "this
+  consumer keeps data in-process." A marker-trait approach
+  (`InProcessOnly`) would constrain consumer types but the
+  marker can be added by mistake; it's a *requires-discipline*
+  type, not a *enforces-discipline* type.
+- **CI-level enforcement** is plausible. A lint that flags
+  consumer-actor types implementing `DiagnosticSink` and also
+  implementing `Write` / network export, requiring an explicit
+  `#[allow(...)]` with rationale. This is V3.x consumer-actor-PR
+  template work — the lint lands when the first consumer-actor
+  PR introduces an aggregator/republisher.
+
+**Disposition: accept-as-FOLLOWUP.** Strengthen §5.4.8 #4 with
+explicit V3.x forward-template language requiring per-consumer
+external-surface audit; add a FOLLOWUP entry naming the V3.x
+lint or static-analysis target (binding on the first
+aggregator/republisher consumer PR).
+
+**Inline edits applied.**
+
+- §5.4.8 #4 — strengthened with V3.x forward-template (each
+  new aggregator/republisher consumer must explicitly audit
+  its external surface; V3.0 procedural mitigation is
+  sufficient because no aggregator/republisher consumer
+  exists in V3.0).
+- FOLLOWUPS — V3.1+ entry: "Diagnostic-stream
+  aggregator-republisher CI lint" with trigger "first
+  consumer-actor PR introducing an aggregator or republisher."
+
+#### F6 — Producer-side per-class emission rate budget (Reviewer 2 A2)
+
+**Reviewer 2's break.** Attacker floods with crafted malformed
+blocks that trigger `DaemonMalformed` + `ReorgObserved` at the
+maximum producer rate (one per block, or one per scanned output
+in pathological view-tag cases). Even with drop-oldest-on-overflow,
+consumer actors must process the rate of events. If the bounded
+mailbox is sized for "normal" traffic, the attacker forces the
+reputation actor into "aggregate-on-overflow" continuously,
+effectively resetting reputation every window and preventing
+any peer-ban from sticking. Wallet stays connected to the
+malicious peer.
+
+**My analysis.** The mailbox-saturation pin at §5.4.8 #5
+addresses bounded mailbox + overflow policy on the consumer
+side. Reviewer 2 wants producer-side rate-limiting as well —
+defense in depth.
+
+**Refinement on the rate-limit shape.** Reviewer 2's specific
+proposal ("≤ 1 event per block scanned") is too coarse:
+`ScanProgress` is intentionally per-block (one progress update
+per block scanned is the natural emission rate). The better
+framing is **per-class per-block budget**: each event class has
+a per-block emission ceiling; on overflow within a class, a
+single suppression notice fires (e.g., `RefreshDiagnostic::
+SuppressedRateLimit { class: DaemonOp::... }`) and the producer
+stops emitting that class for the remainder of the attempt. The
+reputation actor can then make a single decision based on "we
+hit the rate limit on `DaemonMalformed` events" rather than
+"we observed N/sec `DaemonMalformed` events" — which is
+adequate signal for peer-ban with bounded actor cost.
+
+**Implementation cost.** O(num\_event\_classes) counters on the
+producer (single-digit number of classes; trivial). One branch
+per emission. Producer-internal property; doesn't change trait
+surface; lands in §7.X C4 commit body.
+
+**Disposition: accept-with-refinement.** Land §5.4.8 #5
+strengthening with per-block per-class emission budget on the
+producer; pin as contract not just implementation choice; Phase 1
+implements in C4. The suppression-notice variant lands as a
+Phase 1 deliverable (it's a `RefreshDiagnostic` enum variant,
+covered by `#[non_exhaustive]` additive growth).
+
+**Inline edits applied.**
+
+- §5.4.8 #5 — extended with producer-side per-class emission
+  rate budget pin; suppression-notice variant named as a
+  Phase 1 enum addition.
+- §7.X C4 commit description — updated to specify producer-side
+  per-class counter tracking and suppression-notice emission on
+  budget exceeded.
+
+#### F7 — Encrypted-cache-for-RPC-recovery V3.x rejection (Reviewer 2 A3)
+
+**Reviewer 2's break.** A hypothetical "encrypted RPC cache for
+recovery" feature (cache RPC responses across wallet restarts to
+avoid re-fetching from the daemon) introduces structurally
+adjacent attack surfaces to F1. Attacker triggers frequent
+wallet restarts (process kill, OOM, hosted-wallet rotation,
+user quit/restart). The encrypted cache becomes a persistent
+side-channel: write/read timing leaks restart correlation; a
+single global key or weak nonce admits cache poisoning;
+per-restart cache writes leak which outputs the wallet cared
+about.
+
+**My analysis.** This is structurally adjacent to F1 but a
+distinct target — RPC-response cache vs diagnostic-event
+persistence. Same attack-surface family (deserialization,
+key-derivation, side-channel, forensic artifact). The
+hardening shape is the same: structural rejection at V3.0 +
+conditional reopen under explicit conditions. The attack
+vectors map closely (master-key code-path expansion;
+deserialization-on-startup; metadata side-channel; cross-wallet
+correlation; persistence as DoS; forensic primitive); the
+target differs but the response should be the same.
+
+**Disposition: accept-with-extension.** Land a new §5.4.8 #6
+that names the encrypted-cache-for-RPC-recovery surface
+explicitly with parallel hardening to F1 — V3.0 rejected;
+V3.x reopens only under (a)–(d) conditions extended for the
+RPC-cache target (per-RPC nonces, key rotation on password
+change, cache invalidation on reorg, constant-time access).
+
+The §5.4.8 numbering grows from five surfaces to seven (#1–#5
+existing + #6 RPC cache + #7 emit-timing residual from F8).
+
+**Inline edits applied.**
+
+- §5.4.8 #6 (new) — encrypted-cache-for-RPC-recovery attack
+  surface with structural V3.0 rejection + conditional reopen.
+
+#### F8 — Emit-timing variance residual (Reviewer 2 A4)
+
+**Reviewer 2's break.** Even with lock-free queues, the exact
+moment `emit` returns can leak whether the event was dropped or
+queued (cache-line contention, branch-predictor side-channel).
+Attacker measures response-time variance from the producer to
+infer claim rate or hot outputs.
+
+**My analysis.** Real microarchitectural side-channel; real
+constraint; disproportionate to V3.0 threat model.
+
+- **Constant-time `emit` is hard.** Lock-free queues have
+  variable latency by design; bounding the variance requires
+  either pre-allocating worst-case queue depth (memory cost)
+  or padding with timing-noise (bounded-variance loop). Both
+  add complexity without closing the side-channel completely.
+- **Realistic exposure.** Producer-side `emit` timing variance
+  contributes nanoseconds of jitter to per-block scan time.
+  Block-level scan time has natural variance much larger than
+  this (per-block ML-KEM-768 decapsulation cost dominates).
+  Whether the attacker can extract signal from the noise floor
+  is the question; the realistic answer is "probably not at
+  V3.0's primary deployment threat model" (Tor/I2P-routed
+  daemon connections add network jitter that swamps
+  microarchitectural timing).
+- **V3.x microarchitectural-side-channel hardening** is its
+  own design surface — full mitigation requires constant-time
+  emit, constant-time queue insertion, and likely scheduler
+  isolation. None of this is cheap; V3.0's cost-benefit lands
+  on "acknowledge as residual."
+
+**Disposition: acknowledge-as-residual.** Land a new §5.4.8 #7
+that names the emit-timing variance residual; Phase 1 emit
+implementation should use a bounded-variance lock-free queue
+(e.g., `crossbeam::queue::ArrayQueue` with pre-allocated
+capacity) to bound the worst-case variance without claiming
+constant-time. The residual is named so future microarchitectural-
+side-channel hardening work can locate it; not a V3.0 mitigation
+target.
+
+**Inline edits applied.**
+
+- §5.4.8 #7 (new) — emit-timing variance residual
+  acknowledgment; Phase 1 implementation note pinning
+  bounded-variance lock-free queue.
+
+#### F9 — Projection-type audit per event class (Reviewer 2 A5)
+
+**Reviewer 2's gap.** §5.4.8 #4 requires sanitized projections
+for cross-boundary consumers but doesn't pin what "sanitized"
+means for each event class. Does `ScanProgress { height,
+candidates }` leak block-height timing? Yes — `height` is a
+direct correlation between wallet activity and on-chain
+timing; `candidates` is a wallet-fingerprint signal (how many
+view-tag matches per block, distinctive across wallets).
+
+**My analysis.** This is V3.0-relevant because
+`TracingDiagnosticSink` ships in V3.0 and routes to
+`tracing::event!`. What `TracingDiagnosticSink` logs is the
+projection; if it logs the full `RefreshDiagnostic` `Debug`
+impl, it leaks every field. The default implementation needs to
+explicitly choose what fields to log per event class — not
+"emit `Debug`-formatted everything."
+
+**Per-class projection candidates (Phase 1 starting points; the
+full projection definition lands in V3.x's diagnostic-stream
+spec doc).**
+
+- `DaemonMalformed { kind: MalformedKind }` — log `kind`
+  variant tag only; no per-occurrence detail.
+- `DaemonTimeout { op: DaemonOp, elapsed: Duration }` — log
+  `op` variant tag and bucketed `elapsed` (sub-100ms /
+  100ms-1s / >1s); not raw duration.
+- `DaemonProtocolError { kind: ProtocolErrorKind }` — log
+  `kind` variant tag only; the bounded enum already excludes
+  `String` payloads per §5.4.7 R6 closure.
+- `ReorgObserved { fork_height: u64, depth: u32 }` — log
+  bucketed `depth` (1 / 2-10 / >10); no `fork_height`
+  (correlates with chain timing).
+- `ScanProgress { height: u64, candidates: usize }` — log
+  bucketed `candidates` (none / few / many) with rate-limited
+  emission; no `height` (correlates with wallet activity rate).
+
+**Disposition: accept.** Land an addition to §6 review checklist
+requiring per-class projection definition; defer full projection
+formalization to V3.x diagnostic-stream spec doc; for V3.0,
+`TracingDiagnosticSink` implements the per-class projections
+above as the V3.0 default. FOLLOWUP entry for the V3.x spec
+doc work covering the formalization.
+
+**Inline edits applied.**
+
+- §6 review checklist — projection-type audit item added per
+  event class.
+- §7.X C2 commit description — `TracingDiagnosticSink`
+  implementation must implement per-class projections (not
+  `Debug`-formatted everything); explicit projection-per-class
+  enumeration lifted into the C2 description.
+- FOLLOWUPS — V3.x entry: "Diagnostic-stream projection-type
+  formalization in `DIAGNOSTIC_STREAM.md`" with trigger
+  "first V3.x cross-boundary consumer beyond
+  `TracingDiagnosticSink`."
+
+#### F10 — Keep in-memory-only default for V3.0 (Reviewer 2)
+
+**Disposition: covered by F1.** Reviewer 2's recommendation to
+"keep the in-memory-only default for reputation and diagnostics;
+do not relax it in V3.0 even based on demand" is the same
+disposition F1's R17 hardening lands. F1's "no V3.x schedule
+entry; conditional reopening only" preserves the in-memory-only
+default as structurally final at V3.0; F10 requires no separate
+action.
+
+#### Considered and not elevated
+
+Reviewer 1's "considered-and-not-elevated" list (view-tag-timing
+side-channel; ConcurrentMutation retry-loop amplification;
+PeerId stability under forced transport rotation; mailbox
+saturation overflow-policy details; reorg-replay resource
+exhaustion; supply-chain compromise of V3.x consumer actors;
+memory dump while running; SnapshotId 128-bit truncation
+collision) is validated as correctly classified — each item is
+either Monero-family-inherited (AUDIT_SCOPE.md territory),
+already-pinned in §5.4.8 #2 / #5, V3.x consumer-actor-PR
+territory, platform-deployment territory, or a PR 5 disposition
+that holds for its use case. None require Round 4 review-pass
+disposition; Phase 1 inherits them in their current form.
+
+#### Round 4 review pass closure
+
+Nine actionable findings, nine dispositions, all inline edits
+applied to §3.1, §5.4.6, §5.4.8 (#1, #4, #5; new #6 / #7), §6,
+§7, §7.X (C2 / C4 commit descriptions), and the parallel PR 5
+sections (§5.0.3, §5.4 R17, status banner). FOLLOWUPS records
+the V3.1+ entries for consumer-actor-PR aggregator-republisher
+lint (F5) and diagnostic-stream projection-type formalization
+(F9). CHANGELOG records the review pass under `[Unreleased]` /
+`Changed`.
+
+**Round 4 closure rule (re-applied).** The review pass is the
+explicit reopening mechanism the closure rule (PR 5 §7) admits.
+None of the nine findings reopened a prior round (Round 1 / 2 /
+2 reframe / 3 dispositions all hold); the dispositions land at
+Round 4's substrate level (contract pins, attack-surface
+enumerations, commit-list refinements). Round 4 re-closes here;
+the implementation branch (`feat/stage-1-pr4-refresh-engine`)
+cuts off the post-Round-4-review-pass dev tip per the §6
+Round 4 readiness gate (which the review-pass dispositions
+re-confirm in their final state).
+
+**Forward-template — review-pass discipline.** The Round 4
+review pass is itself a forward-template artifact: per-engine
+PR pre-flights for Phase 1 cuts of subsequent engines (PR 5,
+the eventual `MempoolEngine` / `WalletEngine` extractions)
+should ask "does the Round 4 substrate need a review pass
+before Phase 1 cuts?" The review pass's value compounds with
+the lens-applicability discipline (PR 5 §5.0.4) and the closure
+rule (PR 5 §7) — together they form the discipline cluster
+that makes per-engine PRs robust against late-surfacing
+adversarial findings without re-opening rounds gratuitously.
+
+---
 
 ### §5.5 Work-list — refresh-adjacent items and where they live
 
@@ -2718,11 +3788,30 @@ finalization).**
   `R: RefreshEngine`; progress-channel trust-boundary;
   `ScanResult` atomicity-under-cancellation; `LedgerSnapshot`
   value-typed) — all confirmed against current source per
-  §4 Phase 0a; Round 4 audit re-verified the four cancel
+  §4 Phase 0a. **Round 4 review pass (2026-05-15; F2)**
+  promotes the cancel-checkpoint discipline from four to
+  **five** to bound lock-latency content-independently under
+  adversarial daemon block crafting. The four existing
   checkpoints at
   [`engine/refresh.rs:980 / :1140 / :1186`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
-  and the `LedgerSnapshot` type at
-  [`engine/refresh.rs:147–156`](../../rust/shekyl-engine-core/src/engine/refresh.rs).
+  remain (checkpoints 1, 2, 3, 4); the new **checkpoint 5**
+  (between transactions within a per-block scan loop) lands
+  in Phase 1 commit C4 inside `LocalRefresh::produce_scan_result`.
+  See §7 for the discipline statement.
+- [x] Contract pins (Round 4 review pass additions, F3 + F4)
+  — `AssertionSink` / `PanickingSink` pinned as **permanent
+  CI regression coverage** per §5.4.6; **per-emitter FIFO
+  ordering** pinned as the seventh `DiagnosticSink::emit`
+  contract (per-emitter FIFO preserved; cross-emitter ordering
+  undefined). Both pin Phase 0e docstring amendments on
+  `DiagnosticSink::emit`; both confirmed in Round 4 review
+  pass §5.4.9.
+- [x] Contract pins (Round 4 review pass additions, F1, F6,
+  F7) — drop-on-close persistence-rejection (F1) hardened at
+  §5.4.8 #1; producer-side per-class emission rate budget (F6)
+  added at §5.4.8 #5; encrypted-cache-for-RPC-recovery
+  structural rejection (F7) added at §5.4.8 #6. All three
+  confirmed in Round 4 review pass §5.4.9.
 - [x] §5.0 actor-mesh framing inheritance — PR 4 produces
   the substrate (the producer trait surface, the diagnostic
   sink, the cancellation checkpoint split) that PR 5 Round 1
@@ -2845,19 +3934,69 @@ trait is the substrate PR 5's per-engine sink composes into
 the diagnostic-stream spec doc per §5.4.7 R6 reframe and
 PR 5 R17 closure).
 
+**Projection-type audit per event class (Round 4 review pass,
+2026-05-15; F9).** Every cross-boundary `RefreshDiagnostic`
+consumer MUST define an explicit projection type per event
+class, sanitized for the consumer's external surface. The
+audit is binding on V3.0 because `TracingDiagnosticSink` ships
+as a V3.0 cross-boundary consumer (routes to `tracing::event!`,
+which is a trust-boundary-relevant logging surface). Default
+`Debug`-formatted emission is **not acceptable** — `Debug`
+leaks every field including those whose presence in
+cross-boundary logs is a wallet-fingerprint or
+on-chain-correlation signal.
+
+**V3.0 per-class projections (Phase 1 commit C2 deliverables).**
+`TracingDiagnosticSink` implements the following per-class
+projections in its `emit` method; the projections are documented
+inline next to each variant's definition.
+
+- [x] **`DaemonMalformed { kind }`** — log `kind` variant
+  tag only.
+- [x] **`DaemonTimeout { op, elapsed }`** — log `op` variant
+  tag and bucketed `elapsed` (`<100ms` / `100ms-1s` / `>1s`);
+  not the raw duration.
+- [x] **`DaemonProtocolError { kind }`** — log `kind`
+  variant tag only (the bounded enum already excludes
+  `String` payloads per §5.4.7 R6 closure).
+- [x] **`ReorgObserved { fork_height, depth }`** — log
+  bucketed `depth` (`1` / `2-10` / `>10`); **not**
+  `fork_height` (correlates with chain timing).
+- [x] **`ScanProgress { height, candidates }`** — log
+  bucketed `candidates` (`none` / `few` / `many`); **not**
+  `height` (correlates with wallet activity rate);
+  rate-limited per §5.4.8 #5 producer-side budget.
+- [x] **`SuppressedRateLimit { class }`** — log `class`
+  variant tag only (the variant exists to signal
+  rate-limited suppression; logging it requires no
+  sanitization).
+
+**FOLLOWUP for V3.x diagnostic-stream spec doc.** The
+formalization of per-class projection types lifts to the
+`docs/design/DIAGNOSTIC_STREAM.md` spec doc when it cuts
+(per PR 5 §5.0.3 segment-2g closure). V3.x cross-boundary
+consumers beyond `TracingDiagnosticSink` (analytics actors,
+metrics-export actors) inherit the spec doc's per-class
+projection definitions; the V3.0 `TracingDiagnosticSink`
+implementations seed the spec doc's content.
+
 **Round 4 readiness gate (Phase 1 cut authorization).** All
 §4 Phase 0 candidates are binding-pinned at the type-signature
 level (0a–0e, with 0d struck); §6 review checklist is filled
 (this section); §7.X Phase 1 commit list is sequenced (eight
 commits, load-bearing-ordered); §8 fenceposts close the
-five "Remaining for Round 4" items. The implementation
-branch (`feat/stage-1-pr4-refresh-engine`) cuts off the
-post-Round-4 dev tip; no further Round-N design rounds open
-unless the Phase 1 commit-authoring surfaces a structural
-finding (the Phase 0 binding-pin discipline is designed to
-prevent that; the Round 4 audit confirms the pre-condition).
-Phase 1 implementation is authorized to proceed against
-this checklist as the binding substrate.
+five "Remaining for Round 4" items; **Round 4 review pass
+(§5.4.9) closed with nine findings dispositioned and inline
+edits applied**. The implementation branch
+(`feat/stage-1-pr4-refresh-engine`) cuts off the
+post-Round-4-review-pass dev tip; no further Round-N design
+rounds open unless the Phase 1 commit-authoring surfaces a
+structural finding (the Phase 0 binding-pin discipline plus
+the review-pass discipline together prevent that; the Round 4
+audit confirms the pre-condition; the review pass extends the
+substrate to cover the late-surfacing adversarial findings).
+Phase 1 implementation is authorized to proceed against this
+checklist as the binding substrate.
 
 ---
 
@@ -2870,19 +4009,37 @@ revisions land round-by-round inline (the PR 3 precedent).
 spec amendments land; 1–2 rounds during Phase 0 review; Phase 1
 implementation rounds depend on commit count.
 
-**Round trajectory at Round 4 close (2026-05-14).** Six rounds
-elapsed (Round 1 + Round 1 review pass + Round 2 + Round 2
-reframe / follow-up / close-out + Round 3 confirmation + Round 4
-commit decomposition). The seed's "3–4 rounds" estimate held
-to within one round on the Phase 0 surface; the Round 2 reframe
-expanded scope by introducing the diagnostic-stream substrate
-(Phase 0e), which is the round most adjacent to the seed's
-slack. Round 3 was a confirmation pass triggered by PR 5
-Round 1's actor-mesh-framing closure (the *provisionally-load-
-bearing* qualifier on Round 1's α-disposition collapsed without
-firing the re-evaluation gate); Round 4 is the mechanical
+**Round trajectory at Round 4 close (2026-05-14) and Round 4
+review pass close (2026-05-15).** Seven rounds elapsed: Round 1,
+the Round 1 review pass, Round 2, the Round 2 reframe and
+follow-up and close-out, Round 3 confirmation, Round 4 commit
+decomposition, and the Round 4 review pass. The seed's
+"3–4 rounds" estimate held to within one round on the Phase 0
+surface plus two adversarial review passes (Round 1 review
+pass and Round 4 review pass). The Round 2 reframe expanded
+scope by introducing the diagnostic-stream substrate (Phase 0e),
+which is the round most adjacent to the seed's slack. Round 3
+was a confirmation pass triggered by PR 5 Round 1's actor-mesh-
+framing closure (the *provisionally-load-bearing* qualifier on
+Round 1's α-disposition collapsed without firing the
+re-evaluation gate); Round 4 is the mechanical
 commit-decomposition round per the PR 1 / PR 2 / PR 3 / PR 5
-precedent.
+precedent; **Round 4 review pass (2026-05-15) is the
+adversarial review of the post-Round-4 substrate before Phase 1
+cuts** (per §5.4.9: nine findings dispositioned with inline
+edits applied across §3.1, §5.4.6, §5.4.8 #1 / #4 / #5 plus new
+§5.4.8 #6 / #7, §6, §7, §7.X, and the parallel PR 5 sections).
+
+The review pass shape is itself a forward-template artifact:
+per-engine PR pre-flights for subsequent engines (PR 5's
+Phase 1 cut, eventual `MempoolEngine` / `WalletEngine`
+extractions) should ask "does the Round-N substrate need a
+review pass before Phase 1 cuts?" The review pass's value
+compounds with the lens-applicability discipline (PR 5 §5.0.4)
+and the closure rule (PR 5 §7) — together they form the
+discipline cluster that makes per-engine PRs robust against
+late-surfacing adversarial findings without re-opening rounds
+gratuitously.
 
 The user's 2026-05-10 sequencing decision allocates the rounds
 budget to the migration tail — M3c–M3e finish their landings
@@ -2948,9 +4105,11 @@ Introduces the Phase 0a trait surface and the Phase 0a
 
 - `pub(crate) trait RefreshEngine` in
   `rust/shekyl-engine-core/src/engine/traits/refresh.rs` with
-  the §2.3 surface (one async method, four-checkpoint
-  cancellation discipline, `Self::Error: Into<RefreshError>`
-  bound; `&dyn DiagnosticSink` parameter).
+  the §2.3 surface (one async method, five-checkpoint
+  cancellation discipline per §7 (promoted from four by
+  Round 4 review pass F2 — see §5.4.9 F2),
+  `Self::Error: Into<RefreshError>` bound;
+  `&dyn DiagnosticSink` parameter).
 - `pub struct ViewMaterial` in
   `rust/shekyl-engine-core/src/engine/view_material.rs` with
   `Zeroize + ZeroizeOnDrop` derived; the five fields
@@ -2989,10 +4148,30 @@ Lands the Phase 0e diagnostic-stream substrate:
   `pub struct TracingDiagnosticSink` (Stage 1 sink impls);
   `TracingDiagnosticSink` routes to `tracing::event!` at
   `Level::INFO` per the §5.4.7 R6 reframe disposition.
-- Flat-crate-root re-exports of all five public items
+- Flat-crate-root re-exports of all eight public items
   (`RefreshDiagnostic`, `DiagnosticSink`, `MalformedKind`,
-  `DaemonOp`, `ProtocolErrorKind`, `NoopDiagnosticSink`,
+  `DaemonOp`, `ProtocolErrorKind`, `SuppressedRateLimit`
+  variant tag wrapper if exposed, `NoopDiagnosticSink`,
   `TracingDiagnosticSink`).
+- **Per-class projections in `TracingDiagnosticSink::emit`
+  (Round 4 review pass, 2026-05-15; F9).**
+  `TracingDiagnosticSink` does **not** route the full
+  `RefreshDiagnostic` `Debug` impl to `tracing::event!`; it
+  routes the per-class projections enumerated in §6's
+  projection-type-audit subsection (variant tag only for
+  `DaemonMalformed` / `DaemonProtocolError` /
+  `SuppressedRateLimit`; bucketed `elapsed` for
+  `DaemonTimeout`; bucketed `depth` for `ReorgObserved`;
+  bucketed `candidates` for `ScanProgress` with `height`
+  elided). The projection per variant is documented inline
+  next to the variant's `emit` arm.
+- **`SuppressedRateLimit { class: <variant tag> }` variant
+  added to `RefreshDiagnostic` (Round 4 review pass,
+  2026-05-15; F6).** The producer emits this variant once
+  per attempt per event class when the per-class emission
+  budget is exceeded (per §5.4.8 #5); consumers interpret
+  it as "the producer hit the rate limit on this class" and
+  make stateful decisions accordingly.
 
 C2 introduces no production consumers yet; the substrate
 sits ready for C4 to wire `produce_scan_result` against it.
@@ -3033,16 +4212,41 @@ Introduces the `RefreshEngine`-implementing aggregate:
   constructor (Phase 0b binding form).
 - `impl RefreshEngine for LocalRefresh` with
   `produce_scan_result`'s body implementing the §2.3
-  contract: cancel-checkpoints 2/3 inside the body
-  (checkpoints 1/4 stay on the orchestrator); scanner
-  construction from `view_material`; per-block scan loop;
-  `RefreshDiagnostic` events emitted at the audited call
-  sites enumerated in §6's call-site sweep.
+  contract: cancel-checkpoints 2/3/5 inside the body
+  (checkpoints 1/4 stay on the orchestrator; **checkpoint 5
+  is the per-transaction inner check** added by Round 4
+  review pass §5.4.9 F2); scanner construction from
+  `view_material`; per-block scan loop; `RefreshDiagnostic`
+  events emitted at the audited call sites enumerated in
+  §6's call-site sweep.
+- **Inner cancellation check (Round 4 review pass, 2026-05-15;
+  F2).** The per-block scan loop body adds a per-transaction
+  cancellation check (`token.is_cancelled()` → return
+  `RefreshError::Cancelled` on hit). On hit the producer
+  discards in-flight per-block partial state; `Scanner`'s
+  `ZeroizeOnDrop` chain handles the per-block materials.
+  Cost: ~1–3 ns per transaction; preserves §3.1 sub-block
+  lock-latency property under adversarial daemon block
+  crafting.
+- **Producer-side per-class emission rate budget (Round 4
+  review pass, 2026-05-15; F6).** `LocalRefresh::produce_scan_result`
+  tracks `O(num_event_classes)` `u32` counters for per-attempt
+  per-class emission tally. On each emission the producer
+  increments the class counter; when the per-block ceiling
+  (one-per-class-per-block for adversarial event classes;
+  one-per-block for `ScanProgress`) is exceeded, the
+  producer emits a single `SuppressedRateLimit { class:
+  <variant tag> }` notice and stops emitting that class
+  for the remainder of the attempt. Implementation: a
+  `[u32; NUM_DIAG_CLASSES]` array on `LocalRefresh::emit_state`
+  (per-attempt scratch), reset at attempt start.
 - The migration of the existing `run_refresh_task`
   producer-body content into `LocalRefresh::produce_scan_result`
-  preserves the four-cancellation-checkpoint discipline
-  exactly; the only behavioural change is the `&dyn
-  DiagnosticSink` parameter routing observable events.
+  preserves the **five-cancellation-checkpoint discipline**
+  (per the Round 4 review-pass-promoted contract); the
+  behavioural changes are the `&dyn DiagnosticSink`
+  parameter routing observable events, the per-transaction
+  inner check, and the per-class emission counter tracking.
 
 C4 introduces no `Engine`-side parameterization; the new
 aggregate sits in the crate but unconsumed until C5.
@@ -3146,16 +4350,21 @@ Final commit; doc-only:
   PR's merge SHA for the implementation locator.
 - [`docs/CHANGELOG.md`](../CHANGELOG.md) `[Unreleased]` /
   `Added` section gains the `RefreshEngine` trait + the
-  `RefreshDiagnostic` enum + the `DiagnosticSink` trait
-  entries; `Changed` section gains the `Engine`
-  parameterization fourth-parameter entry and the
-  `RefreshError::InternalInvariantViolation` variant
+  `RefreshDiagnostic` enum (including the
+  `SuppressedRateLimit` variant added by Round 4 review pass
+  F6) + the `DiagnosticSink` trait entries (with the
+  per-emitter FIFO ordering pin per F4); `Changed` section
+  gains the `Engine` parameterization fourth-parameter entry
+  and the `RefreshError::InternalInvariantViolation` variant
   addition.
 - [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) gains Phase 0d-strike
   retirement note (the conditional candidate retired by
   composition per §5.4.7 R5 reframe; not deferred — struck);
   the §5.4.7 R5 / R6 / R4 (c) deferrals stay open per
-  Round 3's prior amendments.
+  Round 3's prior amendments. **Round 4 review pass V3.1+
+  entries** also referenced: the consumer-actor-PR
+  aggregator-republisher CI lint (F5) and the diagnostic-stream
+  spec doc per-class projection-type formalization (F9).
 - The `feat/stage-1-pr4-refresh-engine` branch's PR
   description references this §7.X commit list as the
   contract; CI green at every commit per the Phase 1
@@ -3318,3 +4527,46 @@ finding (the Phase 0 binding-pin discipline is designed to
 prevent that; the closure rule per
 [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./STAGE_1_PR_5_PENDING_TX_ENGINE.md)
 §7 governs reopening if it does).
+
+**Closed in Round 4 review pass (2026-05-15).** A
+pre-implementation adversarial review of the post-Round-4
+substrate (full writeup at §5.4.9) produced **nine
+actionable findings** — all dispositioned and applied
+inline as substrate hardening rather than reopening any
+Round 1–4 question. The findings cluster across three
+threat-model surfaces: **feature-soft-commitment hardening**
+(F1 R17 encrypted-persistence opt-in rewrite to hard
+rejection with conditional reopening; F7 new §5.4.8 #6
+"encrypted cache for RPC recovery" V3.x candidate
+structurally rejected at V3.0 under symmetric criteria),
+**checkpoint-discipline tightening** (F2 §3.1 lock-latency
+property refined to per-transaction sub-block bound; §7
+checkpoint discipline extended from four to **five**
+checkpoints with the per-transaction inner cancellation
+check), and **diagnostic-stream contract pinning** (F3
+`AssertionSink` / `PanickingSink` pinned as permanent CI
+regression coverage; F4 seventh contract pin
+"per-emitter FIFO ordering preserved; cross-emitter ordering
+undefined"; F5 §5.4.8 #4 V3.x forward-template for
+aggregator-republisher recursive-leak mitigation; F6
+producer-side per-class emission rate budget at §5.4.8 #5
+plus the `SuppressedRateLimit` variant; F8 emit-timing
+microarchitectural side-channel residual at §5.4.8 #7;
+F9 §6 projection-type audit per event class with explicit
+V3.0 per-class projections for `TracingDiagnosticSink`).
+The α-disposition still holds; all Round 1–4 dispositions
+still hold; the review pass hardens contract pins and
+attack-surface dispositions. The §7.X commit decomposition
+absorbs the substrate hardening: C2 carries the
+`SuppressedRateLimit` variant + per-class projections + 7th
+contract pin; C4 carries the per-transaction inner
+cancellation check + producer-side per-class emission rate
+budget enforcement; C7 carries `AssertionSink` /
+`PanickingSink` as permanent CI fixtures rather than
+landing-only tests; C8 carries the `CHANGELOG` entry
+documenting the contract pins. New V3.1+ FOLLOWUPS entries
+queue the F5 consumer-actor-PR aggregator-republisher
+CI-lint enforcement and the F9 diagnostic-stream
+spec-doc projection-type formalization. The implementation
+branch authorization holds; the review pass shapes Phase 1's
+substrate without reopening it.

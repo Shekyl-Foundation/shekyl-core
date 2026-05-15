@@ -141,6 +141,11 @@ seam-design implications. The R1 disposition still holds;
 segment 2c is discipline-strengthening + opportunity-surface
 naming work that compounds project-wide design discipline
 without reopening the load-bearing question.
+**(Note: R17's "permitting wallet-internal encrypted-
+persistence opt-in (V3.x)" framing is hardened by PR 4
+Round 4 review pass F1 (2026-05-15) — see the carryover
+note in the Round 4 review-pass-derived hardenings paragraph
+below.)**
 
 **Round 2 segment 2d (2026-05-14) — R2 + R12 co-disposition;
 Phase 0c truly collapses; `SnapshotId` opacity closed as
@@ -318,6 +323,38 @@ disposition and pins Finding 4 for design purposes. Phase 1
 call-site sweep (Round 3 commit decomposition) confirms
 emission discipline for all V3.0 deliverables. Only Round 2
 close-out (segment 2g) remains.
+
+**PR 4 Round 4 review pass — derived hardenings (2026-05-15).**
+PR 4's pre-implementation adversarial review pass (full
+writeup at PR 4 §5.4.9) produced two findings that bind to
+PR 5 by carryover, applied here as substrate hardening
+without reopening any PR 5 round. **F1 R17 hardening**:
+the segment-2c R17 disposition's "wallet-internal
+encrypted-persistence opt-in (V3.x)" framing is hardened
+to a structural rejection at V3.0 with conditional
+reopening per PR 4 §5.4.9 F1's six-attack-vector enumeration
+(crypto code-path expansion, deserialization-on-startup,
+metadata side-channel, cross-wallet correlation,
+adversary-controlled DoS, forensic-artifact). Reopening
+requires all of (a) demonstrated production use case from
+real V3.0 deployments, (b) full threat-model review, (c)
+explicit `AUDIT_SCOPE.md` amendment, (d) acknowledgment of
+privacy-first default supremacy. The previously-planned
+`PersistenceConsumerActor` V3.x FOLLOWUPS entry is
+rewritten as a conditional-reopening bookmark with no
+version target. See §5.4 R17's "Hardened disposition
+(PR 4 Round 4 review pass F1 carryover)" subsection for
+the full text. **F4 seventh contract pin**: the §5.0.3
+cross-cutting `DiagnosticSink` contracts gain a
+per-emitter FIFO ordering pin (per-emitter ordering
+preserved; cross-emitter ordering undefined; consumer
+actors derive cross-emitter ordering from explicit
+causal-context fields like `SnapshotId`, not from
+sink-observed arrival order). The pin binds symmetrically
+across PR 4's `RefreshDiagnostic` and PR 5's
+`PendingTxDiagnostic` streams. No PR 5 trait surface
+change; both hardenings refine contract pins and
+attack-surface dispositions without restructuring.
 
 Subsequent revisions land each design round inline (the
 precedent set by PR 3's
@@ -1345,6 +1382,23 @@ bind here verbatim — they're general properties of any
   and the cancellation token consistently in either
   fired-or-not state. Round 4 test deliverable; not a hard
   trait contract on consumer implementations.
+- **Per-emitter FIFO ordering (PR 4 Round 4 review pass F4,
+  2026-05-15).** Events emitted by a single emitter (one
+  `LocalRefresh` instance, one `LocalPendingTx` instance)
+  arrive at the sink in emission order; cross-emitter
+  ordering is undefined. Implementations satisfy the
+  per-emitter half by construction (single-thread emission
+  per engine instance plus FIFO queue or mailbox); the
+  cross-emitter half is explicitly undefined so consumer
+  actors do not rely on cross-emitter temporal context.
+  Pinned here to bind PR 5's `PendingTxDiagnostic` stream
+  symmetrically with PR 4's `RefreshDiagnostic` stream;
+  see PR 4 §5.4.6 / §5.4.9 F4 for the full disposition
+  reasoning. Consumer-actor PRs (V3.x) that need
+  cross-emitter ordering must derive it from explicit
+  causal-context fields in the events themselves
+  (e.g., `SnapshotId` pinning), not from sink-observed
+  arrival order.
 
 **Generalization question (closed in Round 2 segment 2g
 as (a) — rename to `DIAGNOSTIC_STREAM.md`).** PR 4's
@@ -2132,9 +2186,11 @@ to Round 2 with the dispositions framed below.
      — `ReservationTTLActor` is the only intended emitter, and
      it lands in V3.x. The variant existing pre-V3.0 means
      V3.x's `ReservationTTLActor` introduction does not require
-     a `PendingTxDiagnostic` enum revision; per PR 4 §5.4.8 #6
-     the consumer-side discipline ("treat unknown variants as
-     `_ => ignore`") makes the emission-introduction additive.
+     a `PendingTxDiagnostic` enum revision; per PR 4 §5.4.8
+     "Cross-cutting: variant ordering and serialization
+     (forward-note)" the `#[non_exhaustive]` additive-evolution
+     discipline makes the emission-introduction additive at the
+     consumer side.
   4. **`DiscardReason::TTLAutoDiscard` variant pin (segment 2e
      addition).** The current `#[non_exhaustive] enum
      DiscardReason` set (`ConsumerExplicit`,
@@ -3146,51 +3202,119 @@ to Round 2 with the dispositions framed below.
   **Disposition.** **V3.0 ships (a) — restart-amnesia default
   — preserving the privacy-first posture inherited from
   PR 4 §5.4.8 #1.** (b) — optional encrypted persistence
-  consumer — lands in V3.x as an opt-in user-controlled
-  tradeoff for the institutional / long-running use cases.
-  (c) is rejected.
+  consumer — was originally noted as a V3.x "user-controlled
+  tradeoff" candidate; **PR 4 Round 4 review pass F1
+  (2026-05-15) hardens that disposition to a structural
+  rejection at V3.0 with conditional reopening.** (c) is
+  rejected.
 
-  **Diagnostic-stream contract refinement (segment 2c).**
-  PR 4 §5.4.8 #1's contract pin updates from "in-memory only,
-  drop on close" to:
+  **Hardened disposition (PR 4 Round 4 review pass F1
+  carryover, 2026-05-15).** Drop-on-close (in-memory only)
+  is **structurally final at V3.0** for the
+  `PendingTxDiagnostic` stream. The "V3.x optional
+  encrypted-persistence consumer" framing — though
+  defensible at PR 5 Round 2 segment-2c authoring time —
+  understated the attack surface adding any persistence
+  layer would create. The PR 4 review pass enumerated six
+  attack vectors against an encrypted-persistence opt-in
+  for diagnostic events (full enumeration at PR 4 §5.4.8 #1
+  / §5.4.9 F1; abbreviated here): (1) crypto code-path
+  expansion via persistence triggers (new code paths
+  touching master-key material outside transaction signing,
+  exercised under attacker-driven high-volume event
+  emission to probe for nonce-reuse, weak-KDF, or
+  IV-collision bugs); (2) deserialization-on-startup as
+  exploit primitive (decrypt-and-replay during wallet open
+  is a deserialization path before the wallet is fully
+  verified; if any attacker-influenced field reaches the
+  persisted artifact, the path becomes a startup-time exploit
+  primitive); (3) metadata side-channel (file sizes, write
+  timing, write patterns observable to filesystem-adjacent
+  observers — multi-user systems, backup snapshots, swap
+  files, `/proc` inspection — making the encrypted artifact
+  a wallet-activity signal that exists only because we
+  added persistence); (4) cross-wallet correlation
+  amplification (statistically-correlatable persistence
+  patterns across wallets exposed to the same daemon enable
+  institutional-adversary backup-stealing or cloud-backup-
+  compromise correlation that drop-on-close forecloses
+  entirely); (5) persistence as adversary-controlled DoS
+  (high-rate event emission → high write pressure → disk
+  fills or wallet enters error state, neutralized by
+  drop-on-close); (6) forensic-attack primitive against
+  seized wallets (persistent diagnostic events on disk are
+  exactly what forensic analysts want from a seized device;
+  even encrypted, their existence is information about when
+  the wallet was active, an artifact drop-on-close does not
+  produce). The conventional "we'll evaluate it in V3.x"
+  framing was a soft commitment that shaped reviewer and
+  contributor expectations toward an opt-in shipping; the
+  honest disposition is a hard rejection that walks the
+  expectation back.
 
-  > **In-memory only by default; drop on close.** User-
-  > controlled encrypted-persistence opt-in is permitted if
-  > the persistence consumer's surface is entirely within
-  > the wallet's own encrypted-state surface (no
-  > cross-trust-boundary leak per §5.4.8 #4). The default
-  > is privacy-first; the opt-in is the user's tradeoff.
+  **V3.x reopening criteria (symmetric with PR 4 §5.4.8 #1
+  / §5.4.9 F1).** Reopening the encrypted-persistence
+  question for `PendingTxDiagnostic` requires **all** of:
+  (a) demonstrated production use case surfaced from real
+  V3.0 deployments (not anticipated demand); (b) full
+  threat-model review at the time of evaluation, including
+  the metadata side-channel, cross-wallet correlation,
+  deserialization-on-startup, and forensic-artifact attack
+  vectors enumerated above; (c) explicit
+  `AUDIT_SCOPE.md` amendment if adopted, with the
+  persistence layer brought into audit scope; (d)
+  acknowledgment that the privacy-first default discipline
+  per `00-mission.mdc` §2 supersedes
+  ergonomic-recovery considerations except in cases where
+  (a)–(c) demonstrate the case. **No V3.x schedule entry;
+  conditional reopening only.** The previous segment-2c
+  refinement to the diagnostic-stream contract pin
+  ("user-controlled encrypted-persistence opt-in is
+  permitted if the persistence consumer's surface is
+  entirely within the wallet's own encrypted-state
+  surface") is **withdrawn**; PR 4 §5.4.8 #1's contract
+  pin reverts to the structural drop-on-close rule.
 
-  Cross-references PR 4 §5.4.8 #1 to mirror the contract
-  refinement; the contract pin is updated to permit
-  wallet-internal encrypted-persistence consumers without
-  weakening the recursive-trust-boundary discipline. PR 4
-  §5.4.8 #4 (recursive-trust-boundary discipline) is
-  unchanged; this refinement narrows the persistence
-  prohibition to cross-boundary persistence specifically,
-  which §5.4.8 #4 already governs.
+  **Diagnostic-stream contract pin (post-F1 hardening).**
+  PR 4 §5.4.8 #1's pin reads:
+
+  > **In-memory only; drop on close.** Diagnostic events
+  > (`RefreshDiagnostic`, `PendingTxDiagnostic`, and any
+  > future stream) MUST NOT persist across wallet restart.
+  > Persistence is structurally rejected at V3.0; reopening
+  > requires the four-pronged criteria of PR 4 §5.4.9 F1.
+  > The privacy-first default discipline supersedes
+  > ergonomic-recovery considerations.
 
   **Phase 0 implication.** No V3.0 trait-surface change;
   the `PendingTxDiagnostic` stream's contract is
-  refined-not-restructured. V3.x adds a
-  `PersistenceConsumerActor` whose surface is the wallet's
-  own encrypted storage; the `DiagnosticSink` registration
-  surface already accepts arbitrary in-process consumers
-  (per PR 4 §5.4.6 / §5.4.7 R6 reframe), so no architectural
-  change is required at the V3.x trigger.
+  hardened-not-restructured. The original segment-2c plan
+  to ship a `PersistenceConsumerActor` in V3.x is
+  withdrawn; if the four-pronged criteria are met later,
+  the V3.x consumer-actor PR re-derives the actor shape
+  under the threat-model review (b) requires.
 
-  **V3.x trigger.** Institutional / long-running deployment
-  requirements (foundation treasury, multi-day tx workflows);
-  wallet-storage encryption layer matures (wallet master
-  key derivation surface, key-rotation discipline);
-  user-configuration UX for persistence opt-in. None of
-  these are V3.0 blockers; the contract refinement at V3.0
-  preserves the V3.x option without committing to it.
+  **V3.x trigger (revised).** None on the schedule. The
+  conditional reopening is gated on demonstrated production
+  use case (a) — not anticipated demand. The previous
+  trigger language ("Institutional / long-running deployment
+  requirements; wallet-storage encryption layer matures;
+  user-configuration UX for persistence opt-in") is
+  **withdrawn**; those are interesting *consequences* of a
+  reopening but not *triggers* for one. The trigger is the
+  use case; the consequences are downstream design work
+  the reopening would carry.
 
-  **FOLLOWUPS entry.** "Encrypted-persistence
-  `PersistenceConsumerActor` for institutional / long-
-  running wallet deployments" target V3.x; cross-references
-  this entry and PR 4 §5.4.8 #1 contract refinement.
+  **FOLLOWUPS entry (revised).** The previously-planned
+  "Encrypted-persistence `PersistenceConsumerActor` for
+  institutional / long-running wallet deployments" V3.x
+  entry is rewritten as a **conditional-reopening
+  bookmark**, not a scheduled deliverable. The bookmark
+  cross-references PR 4 §5.4.8 #1 / §5.4.9 F1 and PR 5
+  §5.4 R17 (this entry) for the four-pronged criteria; it
+  carries no version target and is closed automatically if
+  V3.0 deployments do not surface the criterion-(a) use
+  case within the V3.0 + V3.1 window.
 
 ### §5.5 Round 1 disposition — shape (1), actor-mesh framing
 
