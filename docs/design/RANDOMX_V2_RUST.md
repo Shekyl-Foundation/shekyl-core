@@ -682,6 +682,29 @@ This means:
   epoch transitions after the early-block window closes. Off-by-one
   errors in this function are consensus errors.
 
+- The bitwise-mask form `& !(SEEDHASH_EPOCH_BLOCKS - 1)` silently
+  produces the wrong answer if `SEEDHASH_EPOCH_BLOCKS` is ever set to
+  a non-power-of-2 value. At 2048 the constant is a power of 2; a
+  future change to a non-power-of-2 would be a consensus fork without
+  a compiler error. The constant declaration therefore carries a
+  compile-time assertion next to it:
+
+  ```rust
+  pub const SEEDHASH_EPOCH_BLOCKS: u64 = 2048;
+  pub const SEEDHASH_EPOCH_LAG: u64 = 64;
+
+  const _: () = assert!(
+      SEEDHASH_EPOCH_BLOCKS.is_power_of_two(),
+      "SEEDHASH_EPOCH_BLOCKS must be a power of 2 — the bitwise-mask \
+       form in seedheight() depends on it. Changing this constant to \
+       a non-power-of-2 value silently changes consensus."
+  );
+  ```
+
+  The assertion is a `const _` rather than a runtime `assert!` so the
+  build breaks at compile time if a future contributor changes the
+  constant without revisiting the formula.
+
 - If the C++ caller is deleted in a future migration (call-site moves
   to Rust), the early-block branch above is the only correct mapping.
   The helper is not a "convenience"; it is the protocol rule.
@@ -710,6 +733,19 @@ Semantics:
   or `out_hash32` is null. `out_hash32` is **not** written.
 - `ERR_DATA_TOO_LARGE (-2)`: `data_len` exceeds the verifier's
   hashing-blob bound. `out_hash32` is **not** written.
+
+The `data` / `data_len` pairing is defined explicitly to avoid
+ambiguity at the boundary:
+
+- `data == NULL && data_len == 0` is **valid** (treated as an empty
+  input). Returns `OK` if `seedhash32` and `out_hash32` are non-null.
+- `data == NULL && data_len > 0` is **invalid**. Returns `ERR_NULL_PTR`.
+- `data != NULL && data_len == 0` is **valid** (the pointer is
+  ignored; treated as empty input).
+- `data != NULL && data_len > 0` is the normal case. The bytes
+  `[data, data + data_len)` must be readable by the callee.
+
+Continuing the error-code semantics:
 - `ERR_CACHE_DERIVE_FAILED (-3)`: cache derivation could not complete
   (allocation failure or panic caught in the FFI shim). `out_hash32` is
   **not** written.
@@ -892,3 +928,16 @@ The review log records which rounds had external reviewers and which
 did not, so the audit trail is honest rather than performative. It
 also tracks which gates are satisfied by inherited external review
 (via non-divergence) versus by Shekyl-direct external review.
+
+### 23.1 Pattern-promotion follow-up
+
+The pattern in this section — explicit per-gate calibration of
+"waivable to self-review" vs "not waivable," combined with the
+inherited-vs-direct external-review distinction in the release-time
+gate — is reusable. If it survives Phase 0 review here, the
+disposition is to promote it to a workspace-wide rule (probable home:
+`.cursor/rules/24-reviewer-discipline.mdc`) so other consensus-
+critical work inherits the same calibration instead of re-inventing
+it under each plan. A FOLLOWUPS entry in the V3.1 rules-queue tracks
+this promotion; the rule artifact itself is the rules-queue PR's
+deliverable, not Phase 0's.

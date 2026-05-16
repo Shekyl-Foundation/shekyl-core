@@ -1,6 +1,6 @@
 ---
 name: RandomX v2 Rust port
-overview: Port Shekyl's PoW from Monero's RandomX v1 (C) to RandomX v2 (Rust pure-software verifier + C library compiled only as the miner) via the Shekyl-Foundation fork. No backward compatibility. The C-for-mining / Rust-for-verification split is permanent. Per 18-type-placement.mdc, Cache/Dataset/Hash are transform-shaped (defined by their derivation function); memoization is a transparent function-level memo inside shekyl-ffi, invisible to C++ callers. No prewarm: lazy derivation on first use is honest about the cost (~150ms hit once per ~2.8 days, below human perception threshold for one-off events). Phase 0 produces both the primary design doc and a pre-vetted v1 fallback. Track A (design + submodule + isolated Rust verifier crate) starts now; Phase 2 is gated on external v2 algorithm review; Track B (FFI wiring + legacy deletion) is gated on wallet V3.2 cutover. Phase 3 (cutover, likely split 3a/3b/3c) replaces all C implementation files; Phase 4 deletes the C++ IPowSchema/pow_registry and the entire shekyl-consensus crate to remove speculative-scaffolding rule violations on both sides.
+overview: Port Shekyl's PoW from Monero's RandomX v1 (C) to RandomX v2 (Rust pure-software verifier + C library compiled only as the miner) via the Shekyl-Foundation fork (non-divergent from upstream tevador/RandomX at pin aaafe71; Monero is the parallel production deployer and v1->v2 delta audit funder per RANDOMX_V2_RUST.md §1.4). No backward compatibility. The C-for-mining / Rust-for-verification split is permanent. Per 18-type-placement.mdc, Cache/Dataset/Hash are transform-shaped (defined by their derivation function); memoization is a transparent function-level memo inside shekyl-ffi, invisible to C++ callers. No prewarm: lazy derivation on first use is honest about the cost (~150ms hit once per ~2.8 days, below human perception threshold for one-off events). Phase 0 produces both the primary design doc and a pre-vetted v1 fallback. Track A (design + submodule + isolated Rust verifier crate) starts now and proceeds in parallel with Monero's audit; Phase 2 is NOT gated on external algorithm review (the algorithm-review gate is release-time, not Phase-2 time, per RANDOMX_V2_RUST.md §1.4). Track B (FFI wiring + legacy deletion) is gated on wallet V3.2 cutover. Phase 3 (cutover, likely split 3a/3b/3c) replaces all C implementation files; Phase 4 deletes the C++ IPowSchema/pow_registry and the entire shekyl-consensus crate to remove speculative-scaffolding rule violations on both sides. Release gate: Monero deployment-experience window plus completed delta audit without contraindicating findings; v1 unpin-and-revert (default 102f8acf) is the late-binding fallback.
 todos:
   - id: phase0-design
     content: "Track A / Phase 0: Write docs/design/RANDOMX_V2_RUST.md AND docs/design/RANDOMX_V1_FALLBACK.md. Cover: (a) permanent C-JIT-for-mining / Rust-interpreter-for-verification split; (b) derived-first design per 18-type-placement.mdc; (c) memoization inside shekyl-ffi only (no prewarm; lazy derivation with documented perception-threshold rationale); (d) 1-function FFI surface (hash), with seedheight as discretionary Phase 3 addition; (e) v2 algorithm review prerequisites and spec-as-source-of-truth doctrine; (f) interpreter performance target (≤3.0× C light-VM-JIT) + concrete initial-sync wall-time delta (~4 hours per current math) for review ratification; (g) structural isolation invariants with specific v2 C library export symbol list AND companion 'shekyl-pow-randomx never uses #[no_mangle]' invariant; (h) consensus constants become typed const, env-var overrides deleted entirely; (i) Grover-bound argument for PoW surviving lattice transition; (j) v1 fallback (depth calibrated to algorithm-review confidence; honest framing, not theater); (k) cncrypto PUBLIC link survey results; (l) what irreducibly stays state and where. Pass 4-6 review rounds before any code lands."
@@ -9,7 +9,7 @@ todos:
     content: "Track A / Phase 1: Add external/randomx-v2 submodule pointing at Shekyl-Foundation/RandomX v2 fork at a pinned commit (rename, not reuse, of external/randomx); add BUILD_RANDOMX_V2_MINER_LIB CMake option (default OFF for daemon, ON for miner); no consumer changes yet. Can proceed in parallel with v2 algorithm review."
     status: pending
   - id: algorithm-review-gate
-    content: "Track A gate before Phase 2: external v2 algorithm review must complete and conclude 'fit for production' per Phase 0 RANDOMX_V2_RUST.md criteria. If review fails, execute the RANDOMX_V1_FALLBACK.md plan instead of starting Phase 2."
+    content: "Track A release-time gate (NOT a Phase 2 blocker): the Monero-funded v1->v2 delta audit completes without contraindicating findings AND Monero's parallel production deployment has had meaningful observation-window exposure. Per RANDOMX_V2_RUST.md §1.4, Phase 2 implementation proceeds in parallel — the verifier is faithful spec implementation, not an algorithm-soundness decision, and Shekyl inherits Monero's audit byte-for-byte via the non-divergent fork pin (§1.1). If the audit surfaces a blocker before Shekyl's release, unpin to pre-PR-#317 (default 102f8acf, already in external/randomx) and ship v1 per RANDOMX_V1_FALLBACK.md §1's late-binding trigger criteria."
     status: pending
   - id: phase2a-argon2d
     content: "Track A / Phase 2a: Add rust/shekyl-pow-randomx crate scaffold to rust/Cargo.toml; implement Argon2d primitive used by Cache::derive; vector parity against spec test vectors."
@@ -42,7 +42,7 @@ todos:
     content: "Track B / Phase 4: Pure abstraction cleanup (no implementation files left to delete; Phase 3 handled those). Delete pow_schema.h (IPowSchema), pow_registry.{h,cpp}, the RX_BLOCK_VERSION constant, and any major_version branching in PoW selection (the switch itself, not just its branches); delete the entire rust/shekyl-consensus crate per 70-modular-consensus.mdc, folding BlockHeader/ChainState/Difficulty/ConsensusError into shekyl-pow-randomx, deleting ConsensusProof trait + ConsensusRegistry, removing the CONSENSUS_REGISTRY static and shekyl_rust_init consensus registration from shekyl-ffi; resolve wallet_rpc_payments.cpp PoW touchpoint per Phase 0 decision; update unit tests."
     status: pending
   - id: phase5-docs
-    content: "Track B / Phase 5: Update USER_GUIDE, SHEKYLD_PREREQUISITES, DOCUMENTATION_TODOS_AND_PQC, DESIGN_CONCEPTS, CHANGELOG, FOLLOWUPS per 91-documentation-after-plans.mdc; close RandomX v2 follow-ups."
+    content: "Track B / Phase 5: Update USER_GUIDE, SHEKYLD_PREREQUISITES, DOCUMENTATION_TODOS_AND_PQC, DESIGN_CONCEPTS, CHANGELOG, FOLLOWUPS per 91-documentation-after-plans.mdc. Close any RandomX v2 follow-ups this plan introduces along the way. This plan is primarily fresh debt clearance — IPowSchema/pow_registry, shekyl-consensus, RPC payments, and the rx-slow-hash.c stateful core were not previously tracked in FOLLOWUPS — so Phase 5 is mostly forward-looking close-records and any forward obligations the plan creates (notably the §22 Guix forward-looking entry), not closure of a pre-existing queue."
     status: pending
 isProject: false
 ---
@@ -56,33 +56,44 @@ Three independent gates govern when phases land.
 
 **Wallet-migration gate (Track B).** The wallet migration is actively churning `rust/shekyl-ffi/src/lib.rs`, [src/shekyl/shekyl_ffi.h](src/shekyl/shekyl_ffi.h), `rust/Cargo.toml` and [rust/Cargo.lock](rust/Cargo.lock) (43 lockfile commits in 30 days). The wallet does not compute PoW. Conceptually orthogonal; the contention is FFI/Cargo.lock plumbing and reviewer bandwidth.
 
-**Algorithm-review gate (Track A intra-track).** Phase 2 cannot begin until external review of the **v2 algorithm itself** concludes "fit for production." Phase 1 (submodule swap, no consumers) can proceed in parallel because it's reversible at zero cost.
+**Algorithm-review gate (release-time, not intra-track).** Per `RANDOMX_V2_RUST.md` §1.4, the v2 algorithm-review gate is **release-time**, not before Phase 2. Phase 2 is faithful spec implementation against a stable spec — not an algorithm-soundness decision — so gating it on external review would either delay or duplicate effort. Monero is the parallel v2 deployer and v1→v2 delta audit funder, and the Shekyl-Foundation fork is non-divergent from upstream (§1.1), so Monero's audit covers Shekyl's pinned code byte-for-byte without coordination. Implementation work (Phases 1-4) proceeds in parallel; the gate fires before genesis release (§1.4: Monero production-deployment observation window plus completed delta audit without contraindicating findings). If the gate fails, the fork pin is bumped to a pre-PR-#317 commit (default `102f8acf`, already in `external/randomx`) and v1 ships per `RANDOMX_V1_FALLBACK.md` §1's late-binding triggers.
 
 **Performance-target gate (Track A intra-track).** Phase 2 benchmarks must hit Phase 0 budgets before Phase 3 starts. The C library's light-VM-JIT path is what daemons use today; the Rust pure-software interpreter will be ~2-3× slower per hash. Per-hash slowdown dominates initial-sync wall-time delta (~4 hours over 600k blocks at 3× ratio); cache-derivation overhead is noise (~44s).
 
 ```mermaid
 flowchart LR
-  subgraph TrackA [Track A]
+  subgraph TrackA [Track A - parallel with Monero audit]
     P0[Phase 0: Two design docs<br/>RANDOMX_V2_RUST.md<br/>RANDOMX_V1_FALLBACK.md]
     P1[Phase 1: external/randomx-v2 submodule<br/>+ BUILD_RANDOMX_V2_MINER_LIB gate]
-    AR{v2 algorithm review passes?}
     P2[Phase 2: shekyl-pow-randomx<br/>transform-shaped Cache/Vm/Hash<br/>CacheStore utility type<br/>two crate-level invariants<br/>sub-PRs 2a-2g]
     PG{Perf targets met?}
-    FB[Execute RANDOMX_V1_FALLBACK.md]
   end
   subgraph TrackB [Track B - gated on wallet V3.2]
     P3[Phase 3 (likely 3a/3b/3c)<br/>Wire 1-2 fn FFI surface<br/>rewire C++ callers<br/>delete lifecycle calls<br/>delete C implementation files<br/>CI invariants]
     P4[Phase 4: Delete abstractions<br/>IPowSchema/pow_registry<br/>shekyl-consensus crate<br/>version-gate switch]
     P5[Phase 5: Docs + CHANGELOG]
   end
-  P0 --> P1 --> AR
-  AR -- yes --> P2 --> PG
-  AR -- no --> FB
+  subgraph Release [Release gate - external dependencies]
+    MonAudit[Monero-funded v1->v2 delta audit:<br/>completed, no contraindicating findings]
+    MonDeploy[Monero v2 production deployment:<br/>observation window elapsed]
+    AR{Release gate satisfied?}
+    FB[Unpin to 102f8acf<br/>ship v1 per RANDOMX_V1_FALLBACK.md]
+    REL[Genesis release]
+  end
+  P0 --> P1 --> P2 --> PG
   PG -- no --> P2
   WG{Wallet V3.2 landed on dev?}
   PG -- yes --> WG
-  WG -- yes --> P3 --> P4 --> P5
+  WG -- yes --> P3 --> P4 --> P5 --> AR
+  MonAudit --> AR
+  MonDeploy --> AR
+  AR -- yes --> REL
+  AR -- no --> FB
 ```
+
+Note that `MonAudit` and `MonDeploy` are external to Shekyl's control;
+they run in parallel with the entire Phase 0→Phase 5 sequence.
+Shekyl's implementation work never blocks waiting for them.
 
 ## Permanent architectural decisions
 
@@ -192,7 +203,7 @@ Two design documents, **both** required before Phase 1.
 
 2. **Hybrid architecture and the C/Rust split.** Cite Decision #1. No FOLLOWUP entry for porting the JIT to Rust later.
 
-3. **v2 algorithm review prerequisites.** Identify (a) who is reviewing the v2 algorithm itself, on what timeline, with what "fit for production" criteria, and (b) **who else is deploying RandomX v2 in production.** If Shekyl is the sole deployer, the review carries the full audit burden alone and the fallback doc (next section) is more load-bearing; if there is even one other deployer with mainnet exposure, that materially changes the risk calculation and may permit a placeholder-depth fallback. Commit to **Phase 2 not starting until review concludes positively.** Reference RANDOMX_V1_FALLBACK.md for the negative case.
+3. **v2 algorithm review status and release-gate framing.** Records (a) the algorithm-review situation — **Monero is funding the v1→v2 delta audit** and is the other production deployer of upstream RandomX v2 (PR #317); the Shekyl-Foundation fork is non-divergent (`RANDOMX_V2_RUST.md` §1.1) so the audit's scope covers Shekyl's pinned code byte-for-byte; and (b) the **release-time** (not Phase-2-time) framing of the algorithm-review gate. Phase 2 is faithful spec implementation against a stable spec, not an algorithm-soundness decision; gating Phase 2 on external review would either delay implementation behind work Shekyl does not control or duplicate Monero's audit for no security gain. Per `RANDOMX_V2_RUST.md` §1.4 the gate fires before genesis release (Monero deployment-experience window plus completed audit without contraindicating findings). Reference `RANDOMX_V1_FALLBACK.md` for the late-binding unpin-and-revert fallback if the release-time gate fails.
 
 4. **Spec-as-source-of-truth doctrine.** Rust verifier implemented from spec; C reference is cross-check; spec wins on disagreement.
 
@@ -249,19 +260,24 @@ Sections required regardless of depth:
 
 Pass review rounds calibrated to confidence assessment. Markdown only — zero merge surface against wallet work.
 
-## Track A — Phase 1 (parallel with v2 algorithm review)
+## Track A — Phase 1 (parallel with Monero audit)
 
-- Add [external/randomx-v2](external/randomx-v2) as a new submodule pointing at Shekyl-Foundation/RandomX v2 fork at a pinned commit. Do not repoint `external/randomx`; the two coexist until Phase 3.
+- Add [external/randomx-v2](external/randomx-v2) as a new submodule pointing at Shekyl-Foundation/RandomX v2 fork at a pinned commit (`aaafe71` at Phase 0 close). Do not repoint `external/randomx`; the two coexist until Phase 3.
 - Add `BUILD_RANDOMX_V2_MINER_LIB` CMake option (default `OFF` for daemon, `ON` for miner). Default-OFF means daemon builds get nothing new.
 - One PR, scoped to submodule add + CMake.
 
-Reversibility: if v2 algorithm review fails, revert by removing the submodule and CMake option. Zero damage.
+Reversibility: if the release-time algorithm-review gate fails (Monero's audit or production deployment surfaces a blocker before Shekyl's release), Phase 1 is **not** reverted — the fallback per `RANDOMX_V1_FALLBACK.md` §1 keeps the submodule infrastructure in place and bumps the fork pin to a pre-PR-#317 commit (default `102f8acf`, already reachable in the existing `external/randomx` history). If Phase 1 needs to be undone for a different reason (e.g., the fork URL changes), removing the submodule and CMake option is mechanical.
 
-## Track A — Algorithm-review gate
+## Release-time algorithm-review gate (runs in parallel with all implementation phases)
 
-Before Phase 2 starts: external v2 algorithm review per Phase 0 §3 has concluded "fit for production." If review fails, execute `RANDOMX_V1_FALLBACK.md`.
+Per `RANDOMX_V2_RUST.md` §1.4 the v2 algorithm-review gate is **release-time**, not before Phase 2. It fires before genesis release with two release-checklist conditions:
 
-## Track A — Phase 2 (gated on algorithm review)
+1. **Monero-funded v1→v2 delta audit completed without contraindicating findings.** Shekyl inherits this audit via fork non-divergence (§1.1); no Shekyl-direct audit coordination is required.
+2. **Monero's parallel production deployment has had meaningful observation-window exposure** (specific duration recorded in the release checklist before genesis; target: at least one full epoch transition cycle plus a conservative incident-detection window).
+
+Both conditions run **in parallel** with Phases 0–5. Shekyl's implementation never blocks waiting for them. If either condition fails before release, **unpin to a pre-PR-#317 commit** (default `102f8acf`, already in `external/randomx`) and ship v1 per `RANDOMX_V1_FALLBACK.md` §1's late-binding triggers. The unpin is a submodule SHA change plus a verifier toggle, not a re-implementation.
+
+## Track A — Phase 2 (parallel with Monero audit; spec-stable)
 
 Add `rust/shekyl-pow-randomx/` as a new workspace member in [rust/Cargo.toml](rust/Cargo.toml). Crate is not yet wired to `shekyl-ffi` or C++.
 
@@ -358,12 +374,12 @@ Update:
 - [docs/DOCUMENTATION_TODOS_AND_PQC.md](docs/DOCUMENTATION_TODOS_AND_PQC.md) (close RandomX v2 row).
 - [docs/DESIGN_CONCEPTS.md](docs/DESIGN_CONCEPTS.md) (cite the permanent architectural decisions; note `shekyl-consensus` crate deletion; cite `18-type-placement.mdc` as the rule that shaped the verifier API; cite Decision #6 for why no prewarm).
 - [docs/CHANGELOG.md](docs/CHANGELOG.md).
-- [docs/FOLLOWUPS.md](docs/FOLLOWUPS.md) (close RandomX v2 items; **do not** add a "Rust-port the JIT later" item — Decision #1 is permanent; **do not** add a "consider prewarm" item — Decision #6 is permanent).
+- [docs/FOLLOWUPS.md](docs/FOLLOWUPS.md) — close any RandomX v2 follow-ups this plan introduces along the way (notably: confirm the §22 Guix forward-looking entry was filed at Phase 0 close, and amend or close it once Guix integration lands). **Note this plan is primarily fresh debt clearance**: `IPowSchema`/`pow_registry`, `shekyl-consensus`, RPC payments, and the `rx-slow-hash.c` stateful core were not previously tracked in FOLLOWUPS, so the queue's pre-existing accumulation/resolution trajectory is unaffected by this work. The Phase 5 FOLLOWUPS pass is therefore mostly forward-looking close-records of obligations the plan itself creates, not closure of pre-existing items. **Do not** add a "Rust-port the JIT later" item — Decision #1 is permanent; **do not** add a "consider prewarm" item — Decision #6 is permanent.
 
 ## Risk acknowledgments
 
 - **Consensus-critical.** A bug here is a hard-fork crisis. Every Track B PR needs differential-test green, both CI invariants green, initial-sync wall-time CI green, and at least one reviewer who is not the author.
-- **v2 algorithm posture is the largest unstated risk.** Phase 0 gates Phase 2 on external review.
+- **v2 algorithm posture is the largest external dependency.** Mitigated by (a) fork non-divergence inheriting Monero's audit byte-for-byte, (b) Monero deploying v2 in parallel as the other production network, and (c) the release-time gate (not Phase-2 gate, per `RANDOMX_V2_RUST.md` §1.4) that fires before genesis with explicit unpin-and-revert fallback to v1 at `102f8acf` if either Monero's audit or its production deployment surfaces a blocker.
 - **Per-call Vm allocation cost** is empirically untested at plan creation time. Phase 2f benchmark gates Phase 3; if allocation dominates, opt-in `VmPool` lands inside Phase 2f.
 - **State-statelessness and ABI-cleanliness invariants are load-bearing.** Phase 2f's two crate-level invariant tests are mechanical enforcement of Decisions #4–#6. If a future contributor removes, weakens, or marks them allow-failure, the principles silently revert to honor-system. Treat any PR that touches them as architectural.
 - **Long-running work.** Track A alone is multi-PR over weeks; Track B starts months out. Each sub-PR within `06-branching.mdc` limits; Phase 3's 3a/3b/3c split is the explicit acknowledgement.

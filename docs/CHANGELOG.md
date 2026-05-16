@@ -19,6 +19,50 @@
 
 ### Changed
 
+- **RandomX v2 Phase 0 — plan-vs-design-doc drift fix and four smaller items**
+  (`feat/randomx-v2-phase0-design`, 2026-05-16). The previous round
+  moved the algorithm-review gate from "before Phase 2" to release-
+  time in [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §1.4,
+  but [`RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md) still
+  carried the old Phase-2-gate framing in six places: frontmatter
+  `algorithm-review-gate` todo, frontmatter `overview` text,
+  frontmatter `phase5-docs` todo, body §"Algorithm-review gate
+  (Track A intra-track)", body §"Track A — Algorithm-review gate",
+  body §"Track A — Phase 2 (gated on algorithm review)" title, body
+  §"Risk acknowledgments" v2-algorithm-posture entry, and the
+  mermaid diagram. This commit aligns the plan with the design doc:
+  the gate is release-time, Phase 2 proceeds in parallel with
+  Monero's audit, and the mermaid diagram redrawn so the release
+  gate sits after Phase 5 with `MonAudit`/`MonDeploy` as parallel
+  external inputs that don't block Track A or Track B.
+  Also folds in four smaller items from the same review pass:
+  (a) [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §16 gains
+  a `const _: () = assert!(...)` compile-time assertion that
+  `SEEDHASH_EPOCH_BLOCKS.is_power_of_two()`, because the
+  `& !(SEEDHASH_EPOCH_BLOCKS - 1)` mask in the `seedheight()`
+  formula silently produces the wrong consensus result if the
+  constant is ever changed to a non-power-of-2. (b) §17 adds an
+  explicit four-case table for the `data` / `data_len` pairing so
+  the `data == NULL && data_len == 0` empty-input case is no longer
+  ambiguous at the FFI boundary. (c) §23 gains §23.1 recording the
+  per-gate reviewer-discipline calibration pattern as a candidate
+  for promotion to `.cursor/rules/24-reviewer-discipline.mdc`. (d)
+  Two new V3.1 FOLLOWUPS entries in
+  [`FOLLOWUPS.md`](./FOLLOWUPS.md): one tracking the §22 Guix
+  reproducible-build obligation pickup (fires when Guix integration
+  lands; closes when the Guix-integration design doc rewrites §22
+  to point at the actual manifest), and one tracking the §23.1
+  reviewer-discipline rule promotion (sibling to the existing
+  rules-queue entries).
+  Softens the previous round's framing: the RandomX v2 work is
+  primarily **fresh debt clearance** (`IPowSchema`/`pow_registry`,
+  `shekyl-consensus`, RPC payments, and the `rx-slow-hash.c`
+  stateful core were not previously tracked in FOLLOWUPS), so the
+  Phase 5 FOLLOWUPS pass is mostly forward-looking close-records
+  rather than closure of pre-existing items. The V3.0 pre-genesis
+  queue's accumulation/resolution trajectory is unaffected by this
+  work.
+
 - **RandomX v2 Phase 0 — algorithm-review gate moves from Phase-2 to release**
   (`feat/randomx-v2-phase0-design`, 2026-05-16). Rewrites
   [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §1.4 to record
