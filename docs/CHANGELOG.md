@@ -38,6 +38,293 @@
 
 ### Changed
 
+- **Stage 1 PR 4 — Round 4 review pass meta-review amendment
+  (review of F1–F9 disposition substrate; three additional
+  findings F11–F13 dispositioned without reopening
+  Round 1–4)** (`feat/stage-1-pr4-round-4`, 2026-05-15).
+  Doc-only meta-review of the F1–F9 disposition substrate
+  itself, asking "do the dispositions create new attack
+  surface or leave under-specifications that would surface
+  at Phase 1 commit-authoring as substrate decisions?" Three
+  additional findings emerged, each targeting an under-
+  specification *introduced by* an F1–F9 disposition rather
+  than a substrate decision Rounds 1–4 settled; none reopens
+  a Round 1–4 disposition; the F1–F9 dispositions remain
+  unchanged. **F11 (per-transaction cancellation safe-point
+  pin; meta-review of F2).** F2's five-checkpoint discipline
+  pinned *that* a per-transaction cancellation check fires
+  but did not pin *where* in the per-transaction body. F11
+  pins the check fires *between* transactions, *after* the
+  prior iteration's `Zeroizing<…>`-wrapped per-output
+  materials have left scope, *before* the next transaction's
+  view-tag / hybrid-decap / key-image derivation begins
+  (forbidding mid-derivation firing that would defeat F2's
+  lock-latency property by exposing partial-derivation
+  state on the unwound stack to memory-disclosure
+  adversaries). C7's `AssertionSink` / coherence-pair test
+  substrate gains a safe-point fixture asserting no partial-
+  derivation state at the observed cancellation point.
+  **F12 (cross-emitter ordering contract-gap; meta-review
+  of F4).** F4's seventh contract pin (per-emitter FIFO
+  preserved; cross-emitter ordering undefined) is enforced
+  procedurally; consumer-actor authors who depend on
+  cross-emitter arrival order produce code that compiles
+  cleanly, passes per-emitter FIFO tests, and silently
+  misbehaves under reordering at audit. F12 closes the gap
+  at the discipline level (V3.0: §5.4.6 amendment binding
+  consumer actors to derive cross-emitter ordering from
+  causal-context fields like `SnapshotId`, `ReservationId`
+  + version, `BlockHeight`) and at the lint level (V3.1+:
+  scope-extending the FOLLOWUPS F5 entry to a unified
+  `diagnostic_consumer_discipline` lint covering both
+  recursive-trust-boundary and cross-emitter-ordering misuse
+  sub-scopes). PR 5 §5.0.3 carries the parallel amendment.
+  **F13 (`SuppressedRateLimit` field-shape pin; meta-review
+  of F6).** F6 added the `SuppressedRateLimit` variant
+  without pinning its field shape; counts, timestamps, and
+  original-event payloads are each attacker-relevant signal
+  (counts are a covert channel back from the producer's
+  internal state; timestamps add scheduling side-channels;
+  payloads defeat the projection-type discipline). F13
+  pins the variant carries `class: SuppressedClass` only,
+  where `SuppressedClass` is a project-defined
+  `#[non_exhaustive]` enum at the same crate-root scope
+  with arms one-per-rate-limited event class; consumer
+  actors derive the suppression count from absence-of-
+  further-events within the attempt boundary. C2's
+  `SuppressedClass` enum addition lifts the flat-crate-root
+  re-export list from eight items to nine. The
+  implementation-branch authorization continues to hold;
+  the meta-review amendment shapes Phase 1's substrate
+  without reopening it or extending its scope. The
+  meta-review pattern itself is recorded as a forward-
+  template under
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  "audits-are-clean-so-compress" anti-pattern framing:
+  clean F1–F9 dispositions invite declaring victory; the
+  discipline asks whether the dispositions themselves
+  carry the property they claim before implementation cuts
+  against them.
+
+  **Post-amendment sub-pins (F11-S, F12-S, F13-S, 2026-05-15).**
+  A third-pass review of the F11–F13 dispositions themselves
+  surfaced three Phase-1-author-aware sub-pins. Each sharpens
+  the corresponding F-finding's disposition without reopening
+  it; none reopens a Round 1–4 substrate decision; none
+  reopens an F1–F9 disposition. The recursive structure
+  (review pass → meta-review → post-amendment) is the
+  closure rule's reopening mechanism operating at each level
+  of the substrate hierarchy. **F13-S
+  (`SuppressedRateLimit` emission-cadence sub-pin; the
+  substantive one).** F13's field-shape pin (carries class
+  only) closed the payload covert channel but left the
+  emission-cadence covert channel open: if the producer
+  emits one notice per suppression-fire, an attacker
+  reconstructs suppression frequency by counting notice
+  arrivals in their own emit-arrival timeline regardless of
+  payload shape. F13-S pins emission cadence at "at most one
+  `SuppressedRateLimit { class }` per class per attempt" —
+  the producer's per-attempt `emit_state` carries a per-class
+  `notice_emitted: bool` latch, cleared at attempt start,
+  never cleared mid-attempt; subsequent in-class budget
+  exceedances drop events but do not emit further notices.
+  Cross-attempt cadence (attacker forcing many attempts via
+  `ConcurrentMutation`-driven retries) is bounded at the
+  orchestrator's existing retry-loop policy layer; no
+  producer-side state survives across attempts (the
+  zeroization scope for `ViewMaterial` and `Scanner`
+  forecloses producer-side cross-attempt state). **F11-S
+  (per-output safe-point escalation criterion).** F11's
+  per-transaction safe-point closes the mid-derivation
+  residency window for typical transactions but may not hold
+  under hostile transactions carrying many outputs (FCMP++
+  permits some upper bound; the §3.1 lock-latency property's
+  content-independence becomes content-dependent if
+  `recover_outputs_in_tx`'s per-output cost grows linearly
+  with output count above the lock-latency target). F11-S
+  pins the escalation criterion: Phase 1 commit-author
+  verifies against benchmarked cost on reference hardware
+  and against the protocol-parameter upper bound on outputs
+  per transaction; if worst-case per-tx scan time exceeds the
+  §3.1 lock-latency target, the safe-point escalates to
+  per-output granularity (check between consecutive per-output
+  decap iterations). The C4 commit message records the
+  measurement and the chosen granularity. **F12-S
+  (`diagnostic_consumer_discipline` lint conceptual
+  unification).** F12's unification is at the contract level
+  (one named discipline, two related properties); the
+  implementation strategy follows each property's nature (F5
+  sub-scope likely as a compile-time trait-bound or `clippy`
+  lint over consumer constructors; F12 sub-scope likely as an
+  AST-level pattern-match over event-handler bodies). F12-S
+  pins the conceptual-not-monolithic clarification in the
+  FOLLOWUPS entry, foreclosing a future "the lint doesn't
+  exist as a single pass" finding from invalidating a
+  multi-check implementation that delivers the unified
+  discipline. The post-amendment pattern compounds the
+  closure-rule discipline (PR 5 §7): each level closes the
+  wargaming surface known at its own closure time;
+  reopening is explicit at the level of the surface that
+  surfaced. The implementation-branch authorization continues
+  to hold; the sub-pins shape Phase 1's substrate without
+  reopening it or extending its scope.
+
+- **Stage 1 PR 4 — Round 4 review pass
+  (adversarial review of post-Round-4 substrate; nine
+  findings dispositioned)**
+  (`feat/stage-1-pr4-round-4-review`, 2026-05-15). Doc-only
+  pre-implementation adversarial review of the post-Round-4
+  substrate before Phase 1 cuts. Two reviewers exercised
+  the diagnostic-stream seam, the encrypted-persistence
+  opt-in language at PR 4 §5.4.8 #1, and the resilience
+  surface from a hostile-daemon perspective; the pass
+  produced **nine actionable findings**, all dispositioned
+  and applied as substrate hardening rather than reopening
+  any Round 1–4 question. Full writeup at PR 4 §5.4.9.
+  Findings cluster across three threat-model surfaces.
+  **Feature-soft-commitment hardening (F1, F7).** F1
+  rewrites the §5.4.8 #1 R17 encrypted-persistence opt-in
+  language from "V3.x evaluates" to a hard rejection at
+  V3.0 with strict conditional reopening criteria (six
+  attack vectors named: crypto code-path expansion,
+  deserialization-on-startup, metadata side-channel,
+  cross-wallet correlation, adversary-controlled DoS,
+  forensic-artifact); F7 adds a parallel new §5.4.8 #6
+  rejecting "encrypted cache for RPC recovery" V3.x
+  candidates at V3.0 under symmetric criteria. PR 5
+  §5.4 R17 carries the F1 hardening symmetrically;
+  the FOLLOWUPS `PersistenceConsumerActor` entry is
+  rewritten as a conditional-reopening bookmark with no
+  version target. **Checkpoint-discipline tightening (F2).**
+  §3.1 wallet-lock-latency property refines from
+  "single-block scan time, typically tens of ms" to
+  "per-transaction scan time, sub-block-bounded; millisecond-
+  scale even under adversarial daemon block crafting"; §7
+  checkpoint discipline extends from four to **five**
+  checkpoints with a per-transaction inner cancellation
+  check inside the per-block scan loop (closing the
+  adversarial-block-crafting / extended-spend-secret-
+  residency vector). **Diagnostic-stream contract
+  pinning (F3, F4, F5, F6, F8, F9).** F3 pins
+  `AssertionSink` / `PanickingSink` as permanent CI
+  regression coverage rather than one-shot landing tests;
+  F4 adds a **seventh contract pin** at §5.4.6
+  (per-emitter FIFO ordering preserved; cross-emitter
+  ordering undefined) — the same pin lands symmetrically
+  in PR 5 §5.0.3; F5 strengthens §5.4.8 #4's
+  aggregator-republisher recursive-leak framing with a
+  V3.x forward-template (per-consumer external-surface
+  audit, projection-or-rejection, future CI-lint
+  enforcement) and gets a new V3.1+ FOLLOWUPS entry
+  (consumer-actor-PR aggregator-republisher CI lint);
+  F6 adds a producer-side per-class emission rate budget
+  to §5.4.8 #5 (per-block ceilings per event class plus a
+  `RefreshDiagnostic::SuppressedRateLimit` variant); F8
+  adds a new §5.4.8 #7 acknowledging emit-timing variance
+  as a microarchitectural side-channel residual with a
+  Phase 1 implementation note for bounded-variance
+  lock-free queues; F9 adds a §6 projection-type audit
+  per event class with explicit V3.0 per-class projections
+  for `TracingDiagnosticSink` and gets a new V3.x
+  FOLLOWUPS entry (diagnostic-stream spec-doc projection-
+  type formalization). The §7.X commit decomposition
+  absorbs the substrate hardening: C2 carries the
+  `SuppressedRateLimit` variant + per-class projections +
+  7th contract pin; C4 carries the per-transaction inner
+  cancellation check + producer-side per-class emission
+  rate budget enforcement; C7 carries `AssertionSink` /
+  `PanickingSink` as permanent CI fixtures. The
+  α-disposition still holds; all Round 1–4 dispositions
+  still hold; the review pass hardens contract pins and
+  attack-surface dispositions without reopening any
+  design question. Implementation-branch authorization
+  (per §6 Round 4 readiness gate) is unchanged;
+  Phase 1 cuts against the hardened substrate. The
+  review-pass shape is recorded as a forward-template
+  artifact under
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  "discovery cadence" framing — substrate hardening ahead
+  of implementation is reusable for PR 5+ pre-implementation
+  substrate review.
+
+- **Stage 1 PR 4 — Round 4 close
+  (commit decomposition + Phase 1 commit list)**
+  (`feat/stage-1-pr4-round-4`, 2026-05-14). Single-commit
+  doc-only Round 4 close on
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  per the PR 1 / PR 2 / PR 3 / PR 5 precedent. §4 Phase 0
+  candidates (0a–0e, with 0d struck) finalize as
+  binding-pinned at the type-signature level; Round 4 audit
+  confirms `DaemonOp` two-variant and `ProtocolErrorKind`
+  five-variant refresh-reachable subset against the producer's
+  actual call sites. §6 review checklist fills in following
+  PR 5's shape (binding-check matrix against
+  `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.3, test-substrate
+  preservation list, call-site sweep audit, Round 4 readiness
+  gate authorizing Phase 1 cut). §7 extends with the Round-4
+  retrospective + a new §7.X Phase 1 commit decomposition
+  subsection — eight load-bearing-ordered commits (C0 doc-only
+  spec amendment + C1 trait declaration + `ViewMaterial` type;
+  C2 `RefreshDiagnostic` + `DiagnosticSink` + Stage 1 sink
+  impls; C3 `RefreshError::InternalInvariantViolation` variant
+  addition; C4 `LocalRefresh` aggregate + producer-body
+  migration; C5 `Engine` parameterization + retry-loop call-site
+  migration + `RpcError` classification; C6 `MockRefresh` test
+  substrate + `replace_refresh`; C7 hybrid retry test +
+  `AssertionSink` / `PanickingSink` property tests; C8 docs +
+  CHANGELOG). §8 closes out the five "Remaining for Round 4"
+  items (each marked Round-4-deliverable or
+  Phase-1-commit-target) and updates the round trajectory
+  banner — all PR-4-internal design rounds are closed.
+  Implementation branch (`feat/stage-1-pr4-refresh-engine`)
+  is authorized to cut off the post-Round-4 dev tip per the
+  §6 Round 4 readiness gate; no further design rounds open
+  unless Phase 1 commit-authoring surfaces a structural
+  finding (the closure rule per
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §7 governs reopening if it does).
+
+- **Stage 1 PR 4 — Round 3 confirmation
+  (α confirmed by PR 5 Round 1's actor-mesh-framed disposition)**
+  (`feat/stage-1-pr4-round-3-confirmation`, 2026-05-14). Single-commit
+  doc-only Round 3 closure on
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md).
+  PR 5 Round 1's disposition under the actor-mesh framing (per
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0 / §5.2 / §5.5) confirmed shape (1) — *snapshot-ID pinning* —
+  with the reservation tracker holding monotone semantics under
+  PR 4's α; PR 4 advances directly to Round 4 (commit decomposition
+  + Phase 1 commit list). The
+  *provisionally-load-bearing* qualifier on Round 1's α
+  (per §5.3 / §5.4.7 R1 / §8) is closed; the re-evaluation gate
+  collapsed without firing. Four housekeeping items land alongside
+  the closure: (1) §3.1 acknowledges the V3.0 *dual spend-material
+  holder* state — `LocalRefresh` / `Scanner` (PR 4 R4 (a),
+  inheritance-asymmetry justification) and `LocalSigner` (PR 5 R11
+  (b), architectural-integrity-now justification), convergent to
+  one holder via R4 (c) in V3.x; (2) §8 / FOLLOWUPS R4 (c) entry
+  cross-references PR 5 R11 (b)'s `Signer` trait substrate as the
+  V3.x migration target — the R4 (c) migration becomes *"`Scanner`
+  stops holding spend material; delegates key-image generation
+  via the existing `Signer` trait"* rather than designing the
+  split from scratch, shrinking the V3.x cost to a producer-side
+  shape change (no architectural change); (3) the
+  `REFRESH_DIAGNOSTIC_STREAM.md` → `DIAGNOSTIC_STREAM.md` rename
+  housekeeping was already covered by PR 5 segment 2g — no PR 4
+  doc references remain to sweep (confirmed by `rg`); (4) §5.4.8
+  #1's drop-on-close-by-default rule is acknowledged as
+  project-wide rather than refresh-specific per PR 5 R17's
+  closure — V3.0 ships drop-on-close across all diagnostic
+  streams; per-stream wallet-internal encrypted-persistence
+  opt-in is a V3.x refinement evaluated at the diagnostic-stream
+  spec doc. The discovery-cadence prediction in
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  ("PR 4 onward's audits are increasingly likely to be
+  confirmations") holds at the Round 1 / Round 3 boundary on the
+  load-bearing question; the Round 2 reframe and PR 5 R11 (b)'s
+  reframe are the two structural-density events that surfaced
+  inside this PR's design rounds.
+
 - **Stage 1 PR 3 — close-out: `STAGE_1_PR_*` design-doc past-tensing
   + plan-vs-state-divergence rules-queue input sharpening**
   (`chore/stage-1-pr3-closeout`, 2026-05-12). Three-commit close-out
