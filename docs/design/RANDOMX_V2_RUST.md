@@ -37,9 +37,19 @@ exists as a **pin-and-audit-trail** so that Shekyl can:
 - Carry Shekyl-specific build or packaging changes that upstream
   would not accept.
 
-Today the fork carries no divergent code; this is the "disposable
-fork" disposition from `10-shekyl-first.mdc` — useful for control,
-deletable when the cost exceeds the value.
+**Non-divergence is a load-bearing strategic posture, not an
+accident.** Staying non-divergent is what lets Shekyl inherit Monero's
+production v2 deployment experience and the Monero-funded v2 audit
+(see §1.4) by simply repointing the pin. Any Shekyl-specific patch on
+top of upstream would forfeit that inheritance — upstream fixes would
+no longer apply cleanly, and audit findings would need re-verification
+against the patched code. The fork therefore stays vanilla until
+there is a specific named reason to diverge, and that reason has to
+clear the same review bar as any other consensus change.
+
+This is the "disposable fork" disposition from
+`10-shekyl-first.mdc` — useful for control, deletable when the cost
+exceeds the value.
 
 ### 1.2 Pinned source
 
@@ -89,7 +99,9 @@ VM-instruction-mix and prefetch tweaks. That bounds the Phase 0
 algorithm-review scope: review the v1→v2 delta, not RandomX from
 scratch.
 
-### 1.4 Algorithm-review status
+### 1.4 Algorithm-review status and release-time gating
+
+#### Inherited v1 audits
 
 The fork's `audits/` directory carries the four 2019 audits of
 RandomX v1:
@@ -100,8 +112,8 @@ RandomX v1:
 - Quarkslab
 
 These cover v1 and are not invalidated by the v2 delta because v2 does
-not change primitives. They are **not** an audit of v2. The Phase 2
-gate requires independent review of the v1→v2 delta specifically:
+not change primitives. They are **not** an audit of v2. v2 needs its
+own independent review of the v1→v2 delta:
 
 - Does CFROUND throttling preserve the randomness-uniformity argument?
 - Does the F/E AES-mix change the ASIC-resistance argument in either
@@ -109,16 +121,83 @@ gate requires independent review of the v1→v2 delta specifically:
 - Does the prefetch-lookahead change introduce a side-channel that v1
   did not have?
 
-Phase 0 must answer:
+#### Monero is the parallel deployer and audit funder
 
-1. Who, besides Shekyl, deploys upstream RandomX v2 today? (e.g. has
-   Monero or another network activated PR #317?)
-2. Is anyone — Shekyl, upstream, or third-party — willing to fund or
-   perform the v1→v2 delta review before Phase 2?
+The two questions earlier rounds left open ("who else deploys v2?"
+and "who funds the delta review?") both resolve to **Monero**:
 
-If both answers are "no," [`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md)
-is the recovery path — a v1 pin at a pre-PR-#317 commit of the same
-fork, against four already-completed audits.
+- **Deployment.** Monero is in the process of deploying upstream
+  RandomX v2 (PR #317). Their production rollout — including miner
+  ecosystem adaptation, pool software updates, and real-world
+  hashrate behavior — runs in parallel with Shekyl's implementation
+  work.
+- **Audit.** Monero is funding the v1→v2 delta audit. Because Shekyl
+  is non-divergent from upstream (§1.1), that audit's scope covers
+  Shekyl's pinned code byte-for-byte. Shekyl inherits the result
+  without paying for or coordinating the audit.
+
+#### Shekyl's parallel-build, release-gate posture
+
+Shekyl is **not waiting** on Monero. Implementation work proceeds in
+parallel:
+
+- **Phase 0** (design docs) — independent of Monero.
+- **Phase 1** (submodule, build flag) — independent of Monero.
+- **Phase 2** (Rust verifier crate) — independent of Monero, because
+  the spec at the pinned commit is stable and v2's primitives are
+  unchanged. The verifier can be implemented, tested against spec
+  vectors, and differentially compared to the C reference without
+  any Monero-side action.
+- **Phase 3 / Phase 4** (FFI cutover, legacy deletion) — independent
+  of Monero, gated only by the Track B wallet-V3.2 prerequisite.
+
+The dependency on Monero is **release-time**, not
+implementation-time. Before Shekyl's mainnet release:
+
+1. Monero's v2 production deployment must have had meaningful
+   exposure (specific duration recorded in the release checklist;
+   target: at least one full epoch transition cycle plus a
+   conservative observation window for incident detection).
+2. The Monero-funded v1→v2 delta audit must have completed without
+   findings that contraindicate v2 for genesis under
+   `00-mission.mdc` commitment #1.
+
+If either condition fails — Monero finds a v2 issue in production, or
+the audit surfaces a delta-specific weakness — Shekyl's recovery is
+straightforward: **unpin to a pre-PR-#317 commit on the same fork
+(default `102f8acf`) and ship v1 at genesis** per
+[`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md). Because the fork
+has not diverged and the verifier code is structured around the v1+v2
+spec (which is the same `doc/specs.md` with v2 deltas marked inline),
+the unpin is a submodule SHA change plus a `#[cfg]`-style switch in
+the verifier, not a re-implementation.
+
+This is what the non-divergence posture buys: the v1 fallback is a
+late-binding, unpin-and-revert operation, not a "stop everything and
+start over" project.
+
+#### What this means for the Phase 2 gate
+
+The previous draft listed an algorithm-review gate **before Phase 2**
+("external v2 algorithm review must complete and conclude fit-for-
+production"). That gate is **removed**. It was the wrong place to gate
+because:
+
+- Phase 2 produces a Rust verifier whose correctness is established
+  against the spec and the C reference; it does not assume v2 is
+  cryptographically sound, it just faithfully implements v2.
+- Gating Phase 2 on Monero's audit completion would either (a) delay
+  Shekyl's implementation behind external work Shekyl does not
+  control, or (b) force Shekyl to commission its own audit ahead of
+  Monero's, duplicating effort for no security gain given the
+  non-divergence posture.
+
+The gate moves to **release** (Phase 5+, before mainnet), where it
+becomes the explicit release-checklist item described above. Phase 4
+deletion of `IPowSchema`/`pow_registry` still proceeds before release
+because that work is reversible at the unpin point: switching to v1
+fallback does not re-introduce dispatch scaffolding, since v1-only
+shipping is still a single-algorithm deployment.
 
 ## 2. Permanent C/Rust Split
 
@@ -785,11 +864,19 @@ Discipline applied to this work:
   is unavailable. Self-review rounds use a written, dated review note
   in `docs/design/RANDOMX_V2_REVIEW_LOG.md` and a minimum 24-hour
   sleep-on-it gap between the review note and the resulting edits.
-- The algorithm-review gate before Phase 2 is **not** waivable to
-  self-review. External cryptographic review of the v2 algorithm is a
-  hard precondition for Phase 2 per `00-mission.mdc` commitment #1.
-  If no external reviewer is available, the plan falls back to
-  `RANDOMX_V1_FALLBACK.md`.
+- The **release-time** v2 algorithm-review gate (see §1.4) is **not**
+  waivable to self-review. External cryptographic review of the v1→v2
+  delta is a hard precondition for genesis release per `00-mission.mdc`
+  commitment #1. The gate is satisfied by the Monero-funded delta
+  audit because Shekyl is non-divergent from upstream (§1.1); Shekyl
+  inherits the audit result without performing it. If the audit
+  surfaces a contraindicating finding, Shekyl unpins to a pre-PR-#317
+  commit and ships v1 per `RANDOMX_V1_FALLBACK.md`.
+- Phase 2 (Rust verifier implementation) has **no external-review
+  gate** because it is faithful implementation against a stable spec,
+  not an algorithm-soundness decision. Spec-vector and differential
+  testing make the implementation's correctness mechanically
+  verifiable.
 - The differential-test harness gate before Phase 3 requires an
   external reviewer for the test design itself, because a
   self-reviewed differential harness against a self-implemented
@@ -797,6 +884,11 @@ Discipline applied to this work:
 - Phase 4 (legacy deletion) requires an external reviewer because the
   deletion is irreversible at branch level and touches consensus
   surface.
+- The release-time gate from §1.4 — Monero deployment-experience
+  observation window plus completed delta audit — is the final
+  external-review checkpoint before genesis.
 
 The review log records which rounds had external reviewers and which
-did not, so the audit trail is honest rather than performative.
+did not, so the audit trail is honest rather than performative. It
+also tracks which gates are satisfied by inherited external review
+(via non-divergence) versus by Shekyl-direct external review.

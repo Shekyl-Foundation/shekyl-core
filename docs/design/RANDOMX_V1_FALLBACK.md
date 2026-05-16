@@ -14,31 +14,49 @@ and C miner split, still no CryptoNight and no version dispatch.
 
 ## 1. Trigger Criteria
 
-This fallback is invoked if any Phase 0 review finding makes RandomX v2
-unfit for production before implementation begins.
+This fallback is **late-binding**: it may be invoked at any point
+between Phase 0 and the genesis release in response to a specific
+finding that makes RandomX v2 the wrong genesis primitive under
+`00-mission.mdc` commitment #1 (security and quantum resilience are
+preconditions). Because Shekyl is non-divergent from upstream
+tevador/RandomX (`RANDOMX_V2_RUST.md` §1.1) and Monero is the
+parallel production deployer and audit funder (§1.4), the fallback
+is an **unpin-and-revert** operation rather than a "stop and restart"
+project — switch the submodule SHA to a pre-PR-#317 commit (default
+`102f8acf`, already in the existing `external/randomx` submodule) and
+toggle the verifier to its v1 spec branch.
 
 Trigger classes:
 
-- **Algorithm-review failure.** External review finds a material v2
-  design weakness in the cache construction, VM opcode mix, AES /
-  SuperScalarHash changes, or ASIC-resistance argument.
-- **Specification failure.** The v2 spec is incomplete enough that a
-  Rust verifier cannot be implemented from it without treating the C
-  reference as source of truth.
-- **Reference-implementation failure.** The v2 C fork diverges from its
-  spec, has unresolved consensus-affecting ambiguity, or lacks enough
-  stable vectors to support independent implementation.
-- **Deployment-confidence failure.** Shekyl is the only known deployer
-  and cannot obtain sufficient independent review before the V3 genesis
-  deadline.
-- **Performance failure.** Early v2 interpreter benchmarking indicates
-  that the Phase 0 performance target in `RANDOMX_V2_RUST.md` cannot be
-  met without reintroducing verifier-side JIT or hidden state.
+- **Algorithm-review failure.** The Monero-funded v1→v2 delta audit
+  finds a material weakness in CFROUND throttling, the F/E AES mix,
+  the program-size change, the prefetch-lookahead change, or any
+  resulting ASIC-resistance or randomness-uniformity argument.
+- **Production-deployment failure.** Monero's parallel production
+  deployment of v2 surfaces an issue — unexpected ASIC viability,
+  hashrate-vs-difficulty pathology, regional centralization,
+  consensus-affecting bug, or any other production-only finding —
+  before Shekyl's release date.
+- **Specification failure.** The v2 spec at the pinned commit is
+  incomplete enough that a Rust verifier cannot be implemented from
+  it without treating the C reference as source of truth.
+- **Reference-implementation failure.** The upstream v2 C reference
+  has unresolved consensus-affecting ambiguity, lacks enough stable
+  test vectors to support independent implementation, or carries a
+  bug that the Rust port would otherwise inherit.
+- **Performance failure.** Phase 2 interpreter benchmarking
+  indicates that the performance target in `RANDOMX_V2_RUST.md` §8
+  cannot be met without reintroducing verifier-side JIT or hidden
+  state.
+- **Inheritance failure.** Monero diverges from `tevador/RandomX`
+  (or `tevador/RandomX` itself diverges in a way Monero does not
+  follow) such that Shekyl's non-divergent posture no longer maps to
+  either a deployed network or a current audit scope, and Shekyl
+  cannot bridge that gap before release.
 
-The fallback is **not** triggered by inconvenience, review cost, or the
-mere existence of open questions. It is triggered by a specific finding
-that makes v2 the wrong genesis primitive under `00-mission.mdc`
-commitment #1 (security and quantum resilience are preconditions).
+The fallback is **not** triggered by inconvenience, review cost, or
+the mere existence of open questions. It is triggered by a specific
+finding that meets one of the classes above.
 
 ## 2. What Shipping v1 Means
 

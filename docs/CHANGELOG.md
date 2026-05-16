@@ -19,6 +19,37 @@
 
 ### Changed
 
+- **RandomX v2 Phase 0 — algorithm-review gate moves from Phase-2 to release**
+  (`feat/randomx-v2-phase0-design`, 2026-05-16). Rewrites
+  [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §1.4 to record
+  that the two Phase-0 open questions ("who else deploys v2?" and
+  "who funds the v1→v2 delta audit?") both resolve to **Monero**.
+  Monero is in the process of deploying upstream RandomX v2 (PR #317)
+  in parallel with Shekyl's implementation, and is funding the delta
+  audit. Because Shekyl is non-divergent from upstream (§1.1) the
+  audit's scope covers Shekyl's pinned code byte-for-byte; Shekyl
+  inherits the audit result without coordinating it. The
+  previously-listed "algorithm-review gate before Phase 2" is
+  **removed** — Phase 2 is faithful spec implementation, not an
+  algorithm-soundness decision, and gating it on external work
+  Shekyl does not control would either delay or duplicate effort.
+  §1.4 introduces the explicit **release-time gate**: before genesis,
+  Monero's production v2 deployment must have had meaningful
+  observation-window exposure AND the Monero-funded delta audit must
+  have completed without contraindicating findings. §1.1 records
+  that non-divergence is a load-bearing strategic posture — what
+  buys Shekyl audit inheritance and the unpin-and-revert v1 fallback
+  — not an accident. §23 reviewer-discipline updated to reflect the
+  release-time gate and to distinguish inherited external review
+  (via non-divergence) from Shekyl-direct external review.
+  [`RANDOMX_V1_FALLBACK.md`](./design/RANDOMX_V1_FALLBACK.md) §1
+  reframes the fallback as **late-binding** (any time between Phase
+  0 and release), unpin-to-`102f8acf` rather than stop-and-restart,
+  with explicit Production-deployment-failure and Inheritance-
+  failure trigger classes added to the existing list. Plan todo
+  `algorithm-review-gate` rewritten from a Phase-2 blocker to a
+  release-time gate that runs in parallel with implementation work.
+
 - **RandomX v2 Phase 0 — fork relationship and pinned source recorded**
   (`feat/randomx-v2-phase0-design`, 2026-05-16). Rewrites
   [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §1 from a
