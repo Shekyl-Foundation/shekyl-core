@@ -83,6 +83,24 @@ Phase 2 test hierarchy:
 - Differential success is necessary but not sufficient; spec-vector
   success remains the canonical correctness condition.
 
+Test-vector provenance is recorded per primitive in Phase 2:
+
+- If the v2 spec ships canonical vectors, those are the vectors checked
+  in and committed under `rust/shekyl-pow-randomx/tests/vectors/spec/`.
+  Each vector file records the spec section it derives from.
+- If the spec defines a primitive but ships no vectors, vectors are
+  generated from the C reference at the pinned fork commit, checked in
+  under `rust/shekyl-pow-randomx/tests/vectors/reference/`, and labelled
+  as derived. A derived vector that disagrees with a later spec update
+  is treated as a C-reference bug, not a Rust-port bug.
+- The differential corpus in
+  `rust/shekyl-pow-randomx-difftest/` is generated, not checked in, so
+  its inputs are reproducible from a fixed RNG seed.
+
+This split keeps the "spec wins over C" rule mechanical: spec vectors
+fail loudly if the Rust port matches the C reference but diverges from
+the spec.
+
 ## 4. Derived-First Design
 
 Per [`18-type-placement.mdc`](../../.cursor/rules/18-type-placement.mdc),
@@ -232,6 +250,24 @@ Per-PR CI uses a synthetic benchmark of 1024 hashes at fixed seedhashes
 and fixed inputs, checking the median Rust/C ratio. Full 600k-block sync
 timing is a release-gate test, not per-PR CI.
 
+Pre-genesis, the 600k-block release-gate test cannot run against a real
+Shekyl chain because that chain does not yet exist. Phase 0 records the
+substitute used until genesis:
+
+- A synthetic chain harness deterministically generates 600,000 block
+  headers with valid seedhash transitions every 2048 blocks, fixed
+  hashing-blob sizes, and a fixed RNG seed.
+- The harness lives under `tests/release_gates/randomx_v2_sync/` and
+  reuses the same FFI entry point the daemon uses.
+- The harness replaces the real chain for the release-gate metric;
+  once a Shekyl stressnet or mainnet of comparable length exists, the
+  release-gate switches to that and the synthetic harness becomes a
+  regression test only.
+
+The release-gate threshold is wall-time-over-baseline, not absolute
+wall time, so the synthetic harness comparison stays valid across
+hardware changes.
+
 ## 9. Environment and Consensus Constants
 
 No Monero-era RandomX env vars carry forward.
@@ -316,12 +352,255 @@ Phase 3 cannot.
 
 ## 15. `wallet_rpc_payments.cpp` Disposition
 
-`src/wallet/wallet_rpc_payments.cpp` is the one wallet-tree file known
-to touch PoW-era hashing. Phase 0 review must decide whether the feature
-is still part of Shekyl's roadmap:
+A targeted grep across `src/wallet/` for `rx_*`, `randomx_*`,
+`cn_slow_hash`, `rx_slow_hash`, and `RX_BLOCK_VERSION` returns exactly
+one file:
 
-- If yes, Phase 4 rewrites it to call the v2 verifier.
-- If no, Phase 4 deletes the feature along with the legacy PoW surface.
+- `src/wallet/wallet_rpc_payments.cpp:156` (`if (major_version >= RX_BLOCK_VERSION)`)
+- `src/wallet/wallet_rpc_payments.cpp:158` (`crypto::rx_slow_hash(...)`)
+- `src/wallet/wallet_rpc_payments.cpp:163` (`crypto::cn_slow_hash(...)`)
+
+Phase 0 review must decide whether the wallet-side mining-payments
+feature is still part of Shekyl's roadmap:
+
+- If yes, Phase 4 rewrites it to call the v2 verifier and drops the
+  `RX_BLOCK_VERSION` and `cn_slow_hash` branches (Monero-era dispatch
+  is dead per `60-no-monero-legacy.mdc`).
+- If no, Phase 4 deletes the file along with the legacy PoW surface.
 
 This is not deferred to implementation; the answer is recorded before
-Track B begins.
+Track B begins. The grep above is rerun in Track B's gate check as
+mechanical evidence that no new wallet-tree PoW touchpoint has appeared
+in the meantime.
+
+## 16. Genesis-Block Seedhash Handling
+
+Inherited C `rx_seedheight(height)` returns `0` for any
+`height <= SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG` (≤ 2112 at
+defaults `2048 + 64`); the C++ caller then resolves seed_height 0 to
+`block_hash(0)`, the genesis block hash. The verifier does not see a
+"genesis special case"; it sees a 32-byte seedhash that happens to be
+the genesis block hash for the first 2113 blocks.
+
+This means:
+
+- The FFI contract is unchanged. `shekyl_pow_randomx_v2_hash` accepts
+  any 32 bytes as seedhash. Early-block correctness is the caller's
+  responsibility.
+- The optional `seedheight(height) -> u64` helper, if exported in
+  Phase 3 (see §5), must reproduce the early-block branch exactly:
+
+  ```rust
+  pub fn seedheight(height: u64) -> u64 {
+      if height <= SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG {
+          0
+      } else {
+          (height - SEEDHASH_EPOCH_LAG - 1) & !(SEEDHASH_EPOCH_BLOCKS - 1)
+      }
+  }
+  ```
+
+  A spec-vector test for `seedheight` is required across the
+  boundaries `0`, `SEEDHASH_EPOCH_BLOCKS`,
+  `SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG`,
+  `SEEDHASH_EPOCH_BLOCKS + SEEDHASH_EPOCH_LAG + 1`, and the first two
+  epoch transitions after the early-block window closes. Off-by-one
+  errors in this function are consensus errors.
+
+- If the C++ caller is deleted in a future migration (call-site moves
+  to Rust), the early-block branch above is the only correct mapping.
+  The helper is not a "convenience"; it is the protocol rule.
+
+`SEEDHASH_EPOCH_BLOCKS` and `SEEDHASH_EPOCH_LAG` are typed constants in
+`shekyl-pow-randomx::consensus`. They are not env-var-overridable per
+§9.
+
+## 17. FFI Error-Code Taxonomy
+
+`shekyl_pow_randomx_v2_hash` returns `i32`. Codes are stable across
+versions; new codes append, existing codes never re-mean.
+
+```c
+#define SHEKYL_POW_RANDOMX_V2_OK                      0
+#define SHEKYL_POW_RANDOMX_V2_ERR_NULL_PTR           -1
+#define SHEKYL_POW_RANDOMX_V2_ERR_DATA_TOO_LARGE     -2
+#define SHEKYL_POW_RANDOMX_V2_ERR_CACHE_DERIVE_FAILED -3
+#define SHEKYL_POW_RANDOMX_V2_ERR_INTERNAL           -4
+```
+
+Semantics:
+
+- `OK (0)`: `out_hash32` was written; caller must use it.
+- `ERR_NULL_PTR (-1)`: any of `seedhash32`, `data` (when `data_len > 0`),
+  or `out_hash32` is null. `out_hash32` is **not** written.
+- `ERR_DATA_TOO_LARGE (-2)`: `data_len` exceeds the verifier's
+  hashing-blob bound. `out_hash32` is **not** written.
+- `ERR_CACHE_DERIVE_FAILED (-3)`: cache derivation could not complete
+  (allocation failure or panic caught in the FFI shim). `out_hash32` is
+  **not** written.
+- `ERR_INTERNAL (-4)`: a Rust panic crossed the FFI boundary and was
+  caught. `out_hash32` is **not** written. This code is a CI failure
+  signal during development; in release it returns the code and logs
+  via the standard FFI logging hook.
+
+Failure discipline:
+
+- All failure paths run in time independent of `seedhash32` and `data`
+  contents.
+- On any non-zero return, `out_hash32` is untouched; callers must not
+  use it (in particular, must not treat zeroed memory as the hash).
+- No error code maps to "fall back to a different algorithm." There is
+  no other algorithm.
+
+The constants are emitted alongside the function prototype in
+`src/shekyl/shekyl_ffi.h`. Adding a code is a Phase-3-or-later change
+that requires a doc update here.
+
+## 18. Thread-Safety Contract
+
+`shekyl_pow_randomx_v2_hash` is callable concurrently from multiple
+threads. The contract is:
+
+- The function is reentrant. Two concurrent calls with disjoint
+  `out_hash32` buffers and disjoint `data` buffers must produce the
+  same results they would produce serially.
+- Concurrent calls must not race on internal caches. The internal
+  `CacheStore` in `shekyl-ffi` is `Send + Sync` and synchronizes
+  access; a concurrent cache miss for the same seedhash deduplicates
+  to a single derivation under lock.
+- Callers must not pass overlapping `data` and `out_hash32`. Passing
+  the same `out_hash32` from two threads is undefined.
+- The function does not block on I/O, does not take Rust async
+  futures, and does not call back into C++ during execution.
+
+Consequence for the daemon caller: block-verification threads may call
+the function in parallel without external locking. The first call on a
+new seedhash pays the derivation cost; subsequent concurrent calls on
+the same seedhash wait briefly behind the in-flight derivation and
+then proceed.
+
+`shekyl-pow-randomx` itself is trivially `Sync` because it has no
+module-level state (§7.2). Thread-safety lives at the `shekyl-ffi`
+boundary where the memo lives.
+
+## 19. `block.major_version` After PoW Dispatch Deletion
+
+Deleting `IPowSchema`/`pow_registry` removes `block.major_version`
+from the PoW dispatch path, but the field itself stays — it is the
+consensus hard-fork version and is used by non-PoW subsystems.
+
+Survey of `block.major_version` consumers as of Phase 0:
+
+- Block-header serialization and difficulty selection.
+- Consensus-rule selection in `Blockchain::validate_block` and
+  transaction-version checks.
+- RPC responses that surface the active hard-fork version.
+
+None of these is a PoW dispatch. The Phase 4 deletion is narrow:
+
+- Delete every read of `block.major_version` that selects between
+  CryptoNight, RandomX v1, and RandomX v2 paths.
+- Delete every read that gates on `RX_BLOCK_VERSION`.
+- Keep every read that participates in hard-fork rule selection.
+
+Phase 3b's deleted-call audit
+(`docs/design/RANDOMX_V2_PHASE3B_AUDIT.md`, created in Phase 3b)
+records each `block.major_version` reference as either "kept (hard-fork
+rule)" or "deleted (PoW dispatch)" with the file and line.
+
+The field is not renamed in this work. A `block.major_version` →
+`block.hf_version` rename is a separate scope-limited PR if the
+working group wants it.
+
+## 20. License and Attribution
+
+`shekyl-pow-randomx` is licensed BSD-3-Clause, matching the
+workspace-wide license decision for Shekyl-authored Rust crates. The
+crate-level `//!` doc header records:
+
+- Copyright notice per `92-copyright-header.mdc`.
+- A short paragraph naming the RandomX v2 fork the code derives its
+  algorithm from and the commit pinned in Phase 1.
+- A pointer to `docs/design/RANDOMX_V2_RUST.md` and the v2 spec.
+
+The Rust code is an independent re-implementation, not a translation of
+the C source, so it carries Shekyl copyright. The Phase 0 review checks
+this section for accuracy against the fork's actual license before any
+code lands.
+
+If the v2 fork's license is incompatible with BSD-3-Clause distribution
+of a clean-room re-implementation (no copied code, only algorithm),
+Phase 0 review flags it and the plan returns to algorithm-review gate
+before Phase 2 begins.
+
+## 21. MSRV
+
+`rust/Cargo.toml` currently declares no `rust-version`, and the
+repository has no `rust-toolchain.toml`. Before Phase 2 begins, the
+workspace pins an MSRV in one of those two locations.
+
+Phase 0 proposal:
+
+- Pin MSRV to the version that lets the symbol-isolation CI grep be
+  written against `#[unsafe(no_mangle)]` rather than the older
+  `#[no_mangle]` form, so the grep cannot be defeated by renaming the
+  attribute syntax.
+- Track the workspace edition decision. If the workspace upgrades
+  from edition 2021 to edition 2024 before Phase 2,
+  `shekyl-pow-randomx` adopts edition 2024 in the same PR so that
+  `unsafe(no_mangle)` is enforced rather than merely linted.
+
+The MSRV bump itself is a separate workspace-scoped PR per
+`06-branching.mdc`; this design doc does not perform it. The §7.2
+invariant grep must cover both `#[no_mangle]` and `#[unsafe(no_mangle)]`
+forms until the MSRV bump lands.
+
+## 22. Guix Reproducible-Build Impact
+
+There is no `contrib/guix/` manifest in the repository today, and no
+file matching `*guix*` exists in the tree. Reproducible-build via Guix
+is not present-day infrastructure; it is forward work.
+
+When Guix infrastructure lands, the v2 work creates these obligations:
+
+- `external/randomx-v2` needs a pinned source hash in the Guix manifest
+  alongside its commit pin.
+- The `BUILD_RANDOMX_V2_MINER_LIB` flag becomes a reproducible build
+  variant — daemon-only builds and miner-bundle builds are separate
+  reproducible artifacts.
+- `shekyl-pow-randomx` Rust dependencies are vendored or pinned in the
+  same manifest, with no network access at build time.
+
+The Guix-integration design doc is the right place to encode this; this
+section exists so the v2 plan does not silently break a future Guix
+integration. If Guix integration lands during the lifetime of Track A
+or Track B, this section is rewritten to point at the actual manifest.
+
+## 23. Reviewer Discipline Under Solo-Architect Reality
+
+This section acknowledges the project's review reality. Shekyl pre-launch
+operates with a small core team; the formal "at least one reviewer who
+is not the author" rule is aspirational for some rounds and binding for
+others.
+
+Discipline applied to this work:
+
+- Phase 0 review rounds may be self-review when an external reviewer
+  is unavailable. Self-review rounds use a written, dated review note
+  in `docs/design/RANDOMX_V2_REVIEW_LOG.md` and a minimum 24-hour
+  sleep-on-it gap between the review note and the resulting edits.
+- The algorithm-review gate before Phase 2 is **not** waivable to
+  self-review. External cryptographic review of the v2 algorithm is a
+  hard precondition for Phase 2 per `00-mission.mdc` commitment #1.
+  If no external reviewer is available, the plan falls back to
+  `RANDOMX_V1_FALLBACK.md`.
+- The differential-test harness gate before Phase 3 requires an
+  external reviewer for the test design itself, because a
+  self-reviewed differential harness against a self-implemented
+  verifier reduces to a self-consistency check.
+- Phase 4 (legacy deletion) requires an external reviewer because the
+  deletion is irreversible at branch level and touches consensus
+  surface.
+
+The review log records which rounds had external reviewers and which
+did not, so the audit trail is honest rather than performative.

@@ -17,6 +17,31 @@
   records the explicit v1-from-genesis recovery path if v2 algorithm
   review fails before Phase 2.
 
+### Changed
+
+- **RandomX v2 Phase 0 — Round 1 review-feedback revisions**
+  (`feat/randomx-v2-phase0-design`, 2026-05-16). Expands
+  [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) with new sections
+  §16 (genesis-block seedhash handling, including the `rx_seedheight`
+  early-block branch and a canonical Rust `seedheight()` form), §17
+  (FFI error-code taxonomy with stable negative codes), §18 (thread-
+  safety contract for `shekyl_pow_randomx_v2_hash`), §19
+  (`block.major_version` field disposition after PoW dispatch
+  deletion), §20 (BSD-3-Clause licensing and attribution), §21 (MSRV
+  pin proposal and `#[no_mangle]` / `#[unsafe(no_mangle)]` grep
+  coverage), §22 (Guix reproducible-build forward-looking impact), and
+  §23 (reviewer discipline under the project's solo-architect reality).
+  Tightens §3 with test-vector provenance rules (`tests/vectors/spec/`
+  vs `tests/vectors/reference/`), §8 with the synthetic pre-genesis
+  600k-block release-gate harness, and §15 with a checked-in grep
+  result narrowing wallet-tree PoW touchpoints to
+  `wallet_rpc_payments.cpp:156/158/163`.
+  [`RANDOMX_V1_FALLBACK.md`](./design/RANDOMX_V1_FALLBACK.md) §2
+  records the upstream-`tevador/RandomX`-vs-Shekyl-fork v1 source
+  choice and the `BUILD_RANDOMX_V2_MINER_LIB` rename, §4 fixes the
+  cross-reference to `RANDOMX_V2_RUST.md` §1, §6 corrects the same
+  cross-reference, and §7 mirrors the reviewer-discipline section.
+
 - **Stage 1 PR 3 — close-out: `engine_trait_bench_key_account_public_address`
   pair** (`chore/stage-1-pr3-closeout`, 2026-05-12). Introduces the
   criterion + iai-callgrind sibling pair for the

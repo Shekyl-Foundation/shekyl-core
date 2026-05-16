@@ -63,12 +63,23 @@ Kept from the v2 plan:
 
 Changed from the v2 plan:
 
-- Phase 1 pins upstream or forked RandomX v1 source instead of
-  `external/randomx-v2`.
-- `BUILD_RANDOMX_V2_MINER_LIB` becomes a v1 miner-library gate, named
-  during fallback review to avoid encoding v2 in the build flag.
+- Phase 1 pins a RandomX v1 source. The fallback review picks one of
+  two paths, recorded explicitly so the choice is not implicit:
+  - **Upstream `tevador/RandomX`** at a named tag. Smallest deviation
+    from the most-reviewed v1 implementation; relies on the upstream
+    repository remaining accessible and patchable for security fixes.
+  - **Shekyl-Foundation v1 fork** at a named commit. Used if the
+    fallback also wants Shekyl-controlled patch authority over v1
+    (e.g. to apply targeted hardening that upstream has not merged).
+  The default is upstream-pinned unless fallback review identifies a
+  specific v1 change Shekyl needs that upstream will not accept.
+- `BUILD_RANDOMX_V2_MINER_LIB` is renamed to a v1-neutral flag during
+  fallback review (proposed: `BUILD_RANDOMX_MINER_LIB`) so the build
+  flag does not encode an algorithm version that does not exist in the
+  fallback.
 - Phase 2 implements the v1 opcode set and v1 cache/dataset derivation.
-- Differential harness compares Rust v1 against the v1 C reference.
+- Differential harness compares Rust v1 against the v1 C reference at
+  the pinned source.
 - `RANDOMX_FLAG_V2` is irrelevant and omitted.
 - Any v2-specific security or ASIC-resistance claim is removed from the
   release narrative.
@@ -91,8 +102,11 @@ legacy dispatch scaffolding.
 
 ## 4. What Shekyl Gives Up by Falling Back
 
-This section is filled after `RANDOMX_V2_RUST.md` §1.3 is filled. It
-must name the exact v2 improvements Shekyl would defer by shipping v1.
+This section is filled after `RANDOMX_V2_RUST.md` §1 ("Why RandomX v2")
+is filled — specifically the three Phase 0 review items there: the
+pinned fork commit, the spec section citations, and the list of v2
+deployers besides Shekyl. It must name the exact v2 improvements Shekyl
+would defer by shipping v1.
 
 Expected categories:
 
@@ -138,6 +152,26 @@ This fallback doc has two possible review depths:
   `RANDOMX_V2_RUST.md` before Phase 1 proceeds.
 
 The review team chooses the depth in Phase 0 after answering
-`RANDOMX_V2_RUST.md` §3's deployer and reviewer questions. The middle
+`RANDOMX_V2_RUST.md` §1's deployer and reviewer questions. The middle
 position — a shallow fallback document despite low v2 confidence — is
 explicitly rejected because it would not help if invoked.
+
+## 7. Reviewer Discipline Under Solo-Architect Reality
+
+Mirrors `RANDOMX_V2_RUST.md` §23. The fallback inherits the same
+reviewer-discipline constraints:
+
+- Self-review rounds are permitted on routine sections with the
+  written-note + 24-hour sleep-on-it discipline.
+- The decision to invoke this fallback (rather than delay genesis to
+  pursue v2 further) is **not** waivable to self-review. It requires
+  an external reviewer because shipping v1 instead of v2 is a
+  genesis-locked consensus decision.
+- A v1 algorithm-review gate is not required because v1 already has
+  Trail of Bits coverage and mainnet exposure (§3). Reviewer attention
+  in fallback mode concentrates on the Rust v1 verifier port itself
+  and on the differential harness against the pinned v1 C reference.
+
+The same `docs/design/RANDOMX_V2_REVIEW_LOG.md` records fallback
+review activity; entries are tagged `[v1-fallback]` so the audit trail
+distinguishes v2 review work from fallback-mode review work.
