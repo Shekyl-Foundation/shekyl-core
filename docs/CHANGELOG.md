@@ -38,6 +38,104 @@
 
 ### Changed
 
+- **Stage 1 PR 4 — Round-4-close amendment
+  (substrate-completeness; `MalformedKind` Round-4
+  audit-confirm; §5.5 work-list table sweep; C2 re-export
+  count tightening; C4 F11-S `shekyl-protocol-spec`
+  dependency one-liner)** (`feat/stage-1-pr4-round-4`,
+  2026-05-15). Doc-only amendment landing the last
+  Phase-1-author-vs-substrate gap before the implementation
+  branch cut. **The substrate-completeness gap:** §6's
+  binding-check matrix had `MalformedKind` flagged as
+  Phase-1-confirmed where the parallel `DaemonOp` and
+  `ProtocolErrorKind` variant sets were Round-4
+  audit-confirmed against the call-site sweep — the gap
+  was the unresolved substrate-vs-author boundary, not the
+  variant set itself (the Round 2 close-out's six-variant
+  seed was concrete and call-site-derived). The Round-4
+  audit-confirm walked `MalformedScanResult { reason }`
+  call sites in `engine/merge.rs` and `engine/refresh.rs`
+  at the post-sub-pin tip: thirteen `engine/merge.rs`
+  production constructions map cleanly onto the six seeded
+  `MalformedKind` variants (`NonEmptyForEmptyRange` /
+  `RangeLengthMismatch` / `RangeMembershipViolation` /
+  `DuplicateHeight` / `MissingHeightEntry` /
+  `ResidualAfterApply`); every seeded variant has at least
+  one matching call site; no merge-layer `reason` string
+  fell outside the seed. The seed is **binding as-is**; C2
+  commit-author does mechanical translation against the
+  per-variant call-site lists in §5.4.7 R6 rather than
+  re-deriving the variant set. The audit also surfaced one
+  refresh-side refinement: a third `MalformedScanResult`
+  site at `engine/refresh.rs:614–616` (`RefreshHandle::join`
+  oneshot-channel failure) joins the two known retry-loop
+  fall-through sites in the §5.4.7 R6 "Round 4
+  commit-decomposition migration target" — all three
+  migrate to `RefreshError::InternalInvariantViolation`
+  rather than `MalformedKind`; the join site is
+  structurally identical (orchestrator-internal state-
+  machine invariant violation, not daemon-attributable);
+  the migration target paragraph now enumerates all three.
+  **Prose hygiene items absorbed in the same commit.** The
+  §5.5 work-list table's "Adversarial daemon scenarios"
+  row carried stale R5 / R6 / evidence-amplifier
+  mitigation phrasing the §5.4.7 R5 and R6 reframes had
+  superseded (R5 reframe is `ReorgAmplificationDetector`
+  retired-by-composition, not "V3.x deferral"; R6 reframe
+  is two-channel actor-mesh shape carrying no
+  `&'static str` evidence on the trait surface; the
+  evidence-amplifier vector is closed-by-construction
+  under the unit-variant return); the row is rewritten
+  against the reframes. The C2 commit description's
+  flat-crate-root re-export count statement double-counted
+  the `SuppressedRateLimit` variant as a separate top-level
+  re-export ("nine public items"); variants are exported
+  with their enum under Rust's standard semantics, so the
+  count is **eight** (`RefreshDiagnostic`, `DiagnosticSink`,
+  `MalformedKind`, `DaemonOp`, `ProtocolErrorKind`,
+  `SuppressedClass`, `NoopDiagnosticSink`,
+  `TracingDiagnosticSink`). The §5.4.9 F13 amendment text's
+  count ("from eight items to nine to include
+  `SuppressedClass`") is correspondingly corrected to "from
+  seven items to eight to include `SuppressedClass`"; the
+  §8 fencepost line "nine-item flat-crate-root re-export
+  list" is corrected to "eight-item". The C2 description
+  gains a clarifying note that `SuppressedRateLimit` is
+  exported with its enum. **C4 F11-S verification
+  deliverable gains a protocol-spec dependency one-liner.**
+  F11-S's per-output safe-point escalation criterion
+  depends on the FCMP++ per-tx output upper bound for the
+  worst-case per-tx scan time calculation. If
+  `shekyl-protocol-spec` pins a concrete bound (e.g., "max
+  16 outputs per transaction at current consensus
+  height"), the verification is a mechanical multiply
+  against measured per-output cost. If the spec does not
+  pin a concrete cap — e.g., outputs-per-transaction is
+  bounded only by block-weight limit divided by minimum-
+  output-size — the worst-case input is the block-weight-
+  derived bound (hundreds to thousands of outputs), and the
+  Phase 1 commit-author defaults to **per-output escalation
+  without further measurement** and records the rationale
+  ("`shekyl-protocol-spec` does not pin a per-tx output
+  cap; per-output escalation chosen by default") in the C4
+  commit message. This forecloses the failure mode of the
+  commit-author spending cycles looking for a bound the
+  spec does not provide. **None of these reopen any
+  F1–F13 disposition, any F11-S–F13-S sub-pin, or any
+  Round 1–4 substrate decision.** The recursive structure
+  (review pass → meta-review → post-amendment sub-pins →
+  Round-4-close amendment for substrate-completeness) is
+  the closure rule's reopening mechanism operating at the
+  substrate-completeness layer; the amendment closes the
+  last Phase-1-author-vs-substrate gap before the
+  implementation branch cut. The implementation-branch
+  authorization continues to hold; the amendment shapes
+  Phase 1's substrate (in particular, C2's commit-author
+  performs mechanical translation against the Round-4
+  audit-confirmed `MalformedKind` call-site list rather
+  than re-deriving the variant set) without reopening or
+  extending scope.
+
 - **Stage 1 PR 4 — Round 4 review pass meta-review amendment
   (review of F1–F9 disposition substrate; three additional
   findings F11–F13 dispositioned without reopening

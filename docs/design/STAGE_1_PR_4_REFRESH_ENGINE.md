@@ -13,12 +13,18 @@ Phase 1 cuts; nine findings dispositioned, 2026-05-15),
 Round 4 review pass meta-review amendment (review of the
 F1–F9 disposition substrate; three additional findings
 F11–F13 dispositioned without reopening Round 1–4, 2026-05-15),
-and Round 4 review pass meta-review post-amendment sub-pins
+Round 4 review pass meta-review post-amendment sub-pins
 (review of F11–F13 dispositions; three Phase-1-author-aware
 sub-pins F11-S / F12-S / F13-S sharpening the dispositions
 without reopening F1–F9 or Round 1–4; F13-S substantively
 closes the `SuppressedRateLimit` emission-cadence covert
-channel, 2026-05-15) closed.** Round 1's load-bearing question (§5 producer
+channel, 2026-05-15), and Round-4-close amendment
+(substrate-completeness — `MalformedKind` Round-4
+audit-confirm against the call-site sweep parallel to
+`DaemonOp` / `ProtocolErrorKind`; §5.5 work-list table
+stale-prose sweep against the R5 / R6 reframes; C2
+re-export count tightening; C4 F11-S `shekyl-protocol-spec`
+dependency one-liner, 2026-05-15) closed.** Round 1's load-bearing question (§5 producer
 redesign) settled to **α — preserved current shape** per
 §5.4. The Round 1 review pass (2026-05-12)
 corrected §3.1's materially-wrong "no secret-touching surface"
@@ -2355,44 +2361,96 @@ composition.
   `TracingDiagnosticSink` (route to `tracing::event!`)
   satisfy Stage 1; the actor-mesh sink lands in V3.x.
 
-  **`MalformedKind` initial variant set (Phase 0e seed).**
-  The variants below cover the daemon-attributable
-  `MalformedScanResult` call sites currently in
+  **`MalformedKind` initial variant set (Phase 0e seed;
+  Round-4 audit-confirmed, 2026-05-15).** The variants below
+  cover the daemon-attributable `MalformedScanResult` call
+  sites currently in
   [`engine/merge.rs`](../../rust/shekyl-engine-core/src/engine/merge.rs)
-  (the merge-gate contract-violation checks) and
+  (the merge-gate contract-violation checks). The
   [`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
-  (the producer-side `find_fork_point` / scan-loop
-  contract checks). Each variant corresponds to a current
-  `reason: &'static str` cluster, so the unit-variant
-  migration has a straightforward mapping:
+  `MalformedScanResult` constructions are **not** in this
+  seed: tip has three such sites (`RefreshHandle::join`,
+  `run_refresh_task` retry-loop fall-through,
+  `Engine::refresh` retry-loop fall-through), and all three
+  are orchestrator-internal state-machine invariant
+  violations whose disposition is
+  `RefreshError::InternalInvariantViolation`, not
+  `DaemonMalformed { kind: MalformedKind }`
+  — see "Non-daemon-attributable variants" below. The
+  Round-4 audit-confirm pattern parallels the Round 2
+  close-out's `DaemonOp` and `ProtocolErrorKind` audits:
+  the seed is the binding variant set against the tip
+  call-site sweep. Each variant corresponds to a current
+  `reason: &'static str` cluster at the audit-confirmed
+  call sites listed below, so the unit-variant migration
+  has a straightforward mapping:
   - `NonEmptyForEmptyRange` — `block_hashes` /
     `new_transfers` / `spent_key_images` non-empty for an
-    empty `processed_height_range`.
+    empty `processed_height_range`. Call sites:
+    [`engine/merge.rs:313–315`](../../rust/shekyl-engine-core/src/engine/merge.rs),
+    [`:318–319`](../../rust/shekyl-engine-core/src/engine/merge.rs),
+    [`:323–324`](../../rust/shekyl-engine-core/src/engine/merge.rs).
   - `RangeLengthMismatch` — `processed_height_range`
     length exceeds `usize`, or `block_hashes` length
-    disagrees with the range length.
+    disagrees with the range length. Call sites:
+    [`engine/merge.rs:355–356`](../../rust/shekyl-engine-core/src/engine/merge.rs),
+    [`:359–360`](../../rust/shekyl-engine-core/src/engine/merge.rs).
   - `RangeMembershipViolation` — `block_hashes` /
     `new_transfers` / `spent_key_images` entry outside
-    `processed_height_range`.
+    `processed_height_range`. Call sites:
+    [`engine/merge.rs:367–368`](../../rust/shekyl-engine-core/src/engine/merge.rs),
+    [`:381–382`](../../rust/shekyl-engine-core/src/engine/merge.rs),
+    [`:395–396`](../../rust/shekyl-engine-core/src/engine/merge.rs).
   - `DuplicateHeight` — `block_hashes` contains a
-    duplicate height entry.
+    duplicate height entry. Call site:
+    [`engine/merge.rs:372–373`](../../rust/shekyl-engine-core/src/engine/merge.rs).
   - `MissingHeightEntry` — `block_hashes` missing an entry
-    for a processed height.
+    for a processed height. Call site:
+    [`engine/merge.rs:414–415`](../../rust/shekyl-engine-core/src/engine/merge.rs)
+    (defensive residue check; reaches only on validation
+    drift).
   - `ResidualAfterApply` — `block_hashes` /
     `new_transfers` / `spent_key_images` left residual
     entries after the per-height apply loop (apply-loop
     invariant violation, daemon-attributable since the
     residual is produced by daemon data the apply loop
-    consumed).
+    consumed). Call sites:
+    [`engine/merge.rs:438–439`](../../rust/shekyl-engine-core/src/engine/merge.rs),
+    [`:443–444`](../../rust/shekyl-engine-core/src/engine/merge.rs),
+    [`:448–449`](../../rust/shekyl-engine-core/src/engine/merge.rs).
+
+  **Round-4 audit-confirm summary.** Thirteen `merge.rs`
+  production constructions map cleanly onto the six seeded
+  variants; every seeded variant has at least one matching
+  call site; no merge-layer `reason` string fell outside the
+  seed. The seed is binding as-is — no variants to add, no
+  variants to remove. The C2 commit author translates each
+  seeded variant to its enum arm against the call-site
+  list above; no substrate verification at the commit-author
+  desk.
 
   **Non-daemon-attributable variants — Round 2 close-out
-  resolved (2026-05-13).** The current
+  resolved (2026-05-13); third site added by Round-4
+  audit-confirm (2026-05-15).** The current
   [`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
-  retry-loop call sites also use `MalformedScanResult {
-  reason: "...retry loop exited without an observed
-  ConcurrentMutation" }` (lines 1672–1680, 2055–2065) for
-  an orchestrator-internal state-machine exhaustion
-  failure that is **not** daemon-attributable. The
+  retry-loop call sites use `MalformedScanResult { reason:
+  "...retry loop exited without an observed
+  ConcurrentMutation" }` (`run_refresh_task` at
+  [`:1678–1679`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  and `Engine::refresh` at
+  [`:2062–2063`](../../rust/shekyl-engine-core/src/engine/refresh.rs))
+  for an orchestrator-internal state-machine exhaustion
+  failure that is **not** daemon-attributable. The Round-4
+  audit-confirm surfaced a third site of the same class —
+  `RefreshHandle::join` at
+  [`:614–616`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  uses `MalformedScanResult { reason: "RefreshHandle::join:
+  producer task dropped completion sender without delivery"
+  }` for a oneshot-channel orchestration failure (producer
+  task panicked / was dropped without completing). The
+  failure mode is structurally identical: an orchestrator
+  invariant the wallet author can act on, not a daemon
+  attribution. All three sites share the migration target. The
   existing comments at those sites are explicit:
   *"falling through with `None` would mean the loop body
   itself is broken, which we surface as
@@ -2425,15 +2483,24 @@ composition.
   decomposition. See Phase 0c (§4) for the full rationale.
 
   **Round 4 commit-decomposition migration target.** The
-  two call sites at
-  [`engine/refresh.rs:1678–1680`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
-  and
-  [`:2061–2064`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
-  migrate from `MalformedScanResult { reason: "..." }` to
-  `InternalInvariantViolation { context: "..." }` with
-  the existing reason strings becoming the `context`
-  values. No structural ambiguity at the commit-author's
-  desk; the disposition is resolved at the design layer.
+  three call sites at
+  [`engine/refresh.rs:614–616`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  (`RefreshHandle::join` oneshot-channel failure; surfaced by
+  the Round-4 audit-confirm, 2026-05-15),
+  [`:1678–1679`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  (`run_refresh_task` retry-loop fall-through), and
+  [`:2062–2063`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+  (`Engine::refresh` retry-loop fall-through) migrate from
+  `MalformedScanResult { reason: "..." }` to
+  `InternalInvariantViolation { context: "..." }` with the
+  existing reason strings becoming the `context` values. The
+  join-site reason string is *"RefreshHandle::join: producer
+  task dropped completion sender without delivery"* — it is a
+  state-machine invariant violation of the same class as the
+  two retry-loop sites: an orchestrator path the wallet code
+  asserted unreachable that the runtime observed reached. No
+  structural ambiguity at the commit-author's desk; the
+  disposition is resolved at the design layer.
 
   **`#[non_exhaustive]` discipline.** The `RefreshDiagnostic`,
   `MalformedKind`, `DaemonOp`, and `ProtocolErrorKind` enums
@@ -4083,7 +4150,13 @@ constructively attacker-uninfluenceable.
   addition; project-defined `#[non_exhaustive]` enum at the
   same crate-root scope; arms one-per-rate-limited event
   class). Updated the flat-crate-root re-export list from
-  eight items to nine to include `SuppressedClass`.
+  seven items to eight to include `SuppressedClass`. (The
+  count statement was re-tightened by the Round-4-close
+  amendment 2026-05-15, which corrected an earlier wording
+  artifact that double-counted the `SuppressedRateLimit`
+  variant as a separate re-export; variants are exported
+  with their enum under Rust's standard semantics. See the
+  amendment record below.)
 
 ---
 
@@ -4414,7 +4487,7 @@ for PR 4's scope: every item has a named home.
 | `RefreshDiagnostic` peer-attribution variant extension (gated by PR 1 `DaemonEngine` peer-aware surface) | V3.x | Stage 1 emits peer-less variants; the `RefreshDiagnostic` enum's `#[non_exhaustive]` attribute lets PR 1's peer-aware DaemonEngine surface land with additive variant additions per §5.4.8 #2 |
 | `ScanResult` atomicity-under-cancellation contract (R7) | **closed (Round 2)** | §5.4.7 R7 — already true in `engine/refresh.rs`; pinned in §2.3 prose (Phase 0a) |
 | Three call modes (cold open / steady-state / post-submit) — invocation-overhead constraint | V3.0 (Round 4 commit decomposition) | §5.4.4 — under (a-instance-scoped) the per-attempt scanner construction moves into `LocalRefresh::new`, satisfying the constraint by construction |
-| Adversarial daemon scenarios under α (reorg amplification, view-tag DoS, withholding, snapshot poisoning, evidence amplifier) | mostly closed (Round 2); reorg amplification deferred via R5 | §5.4.5; mitigations: R5 (V3.x deferral), R6 keeps `&'static str` evidence (strictly bounded), Phase 0a `LedgerSnapshot` value-typed confirmation |
+| Adversarial daemon scenarios under α (reorg amplification, view-tag DoS, withholding, snapshot poisoning, evidence amplifier) | mostly closed (Round 2 reframe); reorg amplification retired-by-composition into `ReorgAmplificationDetector` consumer (V3.x) | §5.4.5; mitigations: R5 reframe (retired-by-composition into the V3.x `ReorgAmplificationDetector` consumer, not "V3.x deferral"), R6 reframe (two-channel actor-mesh shape — unit-variant synchronous return carries **no** `&'static str` evidence on the trait surface; full-fidelity classification routes through the `RefreshDiagnostic` event stream per §5.4.8), evidence-amplifier closed-by-construction under the unit-variant trait return (no attacker-controlled payload anywhere on `RefreshError`), Phase 0a `LedgerSnapshot` value-typed confirmation |
 | Trait-surface contract pins (`Send + Sync + 'static` on `R`; Progress-channel trust boundary) | **closed (Round 2)** | §5.4.6; both pinned as Phase 0a prose amendments |
 | `DiagnosticSink::emit` non-blocking + concurrent-emit clarification + emission/return coherence + canonical-reference-to-test (contract pins) | **closed (Round 2 reframe + contract-pin refinements)** | §5.4.6 / §5.4.7 R6; pinned in trait docstring and §5.4.6 prose; concurrent-emit clarification forecloses `Mutex<VecDeque<_>>`-class implementations; canonical-reference pin makes the Round 4 `AssertionSink` property test authoritative for coherence semantics per [`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc) |
 | Producer-panic-safety property (Round 4 `PanickingSink` test deliverable) | V3.0 (Round 4 / Phase 1 test design) | §5.4.6 (producer-side property; **not** a sink trait contract — pinning "MUST NOT panic" on `emit` is unenforceable and pushes burden onto sink authors for limited gain). Test wraps `LocalRefresh` with a `PanickingSink` variant; asserts `Scanner` zeroizes via `Drop`, cancellation token in well-defined fired-or-not state, unwind without corruption |
@@ -4584,11 +4657,25 @@ performs the migration).**
   — at the producer's malformed-block detection sites in
   `LocalRefresh::produce_scan_result`'s body; current
   C++ / Rust scanning loop locations need confirmation
-  during Phase 1 migration. Round 4 audit identifies
-  the `MalformedKind` variants as a Round-1-finalization
-  candidate (the Round 2 close-out seeded the `DaemonOp`
-  and `ProtocolErrorKind` variant sets but left
-  `MalformedKind` as Phase-1-confirmed).
+  during Phase 1 migration. **Round-4 audit-confirmed
+  (2026-05-15)** the six-variant `MalformedKind` seed
+  against the tip call-site sweep parallel to the
+  `DaemonOp` and `ProtocolErrorKind` audit-confirms:
+  thirteen `engine/merge.rs` production constructions map
+  cleanly onto the six seeded variants
+  (`NonEmptyForEmptyRange` / `RangeLengthMismatch` /
+  `RangeMembershipViolation` / `DuplicateHeight` /
+  `MissingHeightEntry` / `ResidualAfterApply`); every
+  seeded variant has at least one matching call site; no
+  merge-layer `reason` string fell outside the seed. The
+  three `engine/refresh.rs` `MalformedScanResult` sites
+  (`RefreshHandle::join`, two retry-loop fall-throughs)
+  are orchestrator-internal and route through
+  `RefreshError::InternalInvariantViolation` per §5.4.7
+  R6's "Round 4 commit-decomposition migration target."
+  The seed is binding as-is; C2 commit-author does
+  mechanical translation against the call-site list in
+  §5.4.7 R6.
 - [x] `RefreshDiagnostic::DaemonTimeout` emission point
   — at the daemon-RPC-timeout detection sites; the
   `op: DaemonOp` field is one of the two confirmed
@@ -4858,11 +4945,13 @@ Lands the Phase 0e diagnostic-stream substrate:
   `pub struct TracingDiagnosticSink` (Stage 1 sink impls);
   `TracingDiagnosticSink` routes to `tracing::event!` at
   `Level::INFO` per the §5.4.7 R6 reframe disposition.
-- Flat-crate-root re-exports of all nine public items
+- Flat-crate-root re-exports of all eight public items
   (`RefreshDiagnostic`, `DiagnosticSink`, `MalformedKind`,
   `DaemonOp`, `ProtocolErrorKind`, `SuppressedClass`,
-  `NoopDiagnosticSink`, `TracingDiagnosticSink`, plus the
-  `SuppressedRateLimit` variant on `RefreshDiagnostic` itself).
+  `NoopDiagnosticSink`, `TracingDiagnosticSink`). The
+  `SuppressedRateLimit` variant on `RefreshDiagnostic` is
+  exported with the enum under Rust's standard variant-with-
+  enum export semantics (not a separate top-level re-export).
 - **Per-class projections in `TracingDiagnosticSink::emit`
   (Round 4 review pass, 2026-05-15; F9).**
   `TracingDiagnosticSink` does **not** route the full
@@ -5006,6 +5095,28 @@ Introduces the `RefreshEngine`-implementing aggregate:
   measurement and the chosen granularity per the
   audit-trail discipline; the choice is bisectable
   against the C4 commit boundary.
+  **Protocol-spec dependency note (Round-4-close
+  amendment, 2026-05-15).** The
+  [`shekyl-protocol-spec`](../../docs/) lookup for the
+  per-tx output upper bound is load-bearing for the
+  F11-S criterion: a concrete bound (e.g., "max 16
+  outputs per transaction at current consensus height")
+  makes the verification a mechanical multiply against
+  measured per-output cost. **If the protocol spec does
+  not pin a concrete per-tx output cap** — e.g., if
+  outputs-per-transaction is bounded only by the
+  block-weight limit divided by minimum-output-size —
+  the worst-case input is the block-weight-derived
+  bound, which is hundreds to thousands of outputs.
+  In that case the Phase 1 commit-author **defaults to
+  per-output escalation** without further measurement
+  (the larger worst-case input makes per-transaction
+  granularity unreliable by construction) and records
+  the rationale ("`shekyl-protocol-spec` does not pin a
+  per-tx output cap; per-output escalation chosen by
+  default") in the C4 commit message. This forecloses
+  the failure mode of the commit-author spending cycles
+  looking for a bound that the spec does not provide.
 - **Producer-side per-class emission rate budget (Round 4
   review pass, 2026-05-15; F6; emission-cadence pin from
   F13 sub-pin amendment, 2026-05-15).**
@@ -5402,8 +5513,10 @@ suppressed-event count from becoming an attacker covert
 channel back from the producer's internal state. The §7.X
 commit decomposition absorbs the meta-review hardening: C2
 adds the `SuppressedClass` enum (project-defined
-`#[non_exhaustive]`; nine-item flat-crate-root re-export
-list); C4 extends the inner cancellation check description
+`#[non_exhaustive]`; eight-item flat-crate-root re-export
+list; see Round-4-close amendment 2026-05-15 for the count
+re-tightening that corrected the earlier wording artifact);
+C4 extends the inner cancellation check description
 with the binding safe-point firing site and the C7 fixture
 deliverable; C7 gains the safe-point-firing assertion
 fixture for `AssertionSink` / coherence-pair tests. The
@@ -5468,3 +5581,92 @@ sub-pins shape Phase 1's substrate (in particular, C4's
 commit-message audit-trail deliverable for the F11-S
 benchmark measurement) without reopening it or extending
 its scope.
+
+**Round-4-close amendment (substrate-completeness;
+2026-05-15).** A read of the post-sub-pin substrate against
+the §6 Round 4 readiness gate surfaced one substrate-
+completeness gap (the `MalformedKind` variant set was
+Phase-1-confirmed where the parallel `DaemonOp` and
+`ProtocolErrorKind` sets were Round-4 audit-confirmed
+against the call-site sweep) and two prose hygiene items
+(the §5.5 work-list table's "Adversarial daemon scenarios"
+row carried stale R5 / R6 / evidence-amplifier mitigation
+phrasing that the §5.4.7 R5 and R6 reframes had
+superseded; the C2 commit description and the §5.4.9 F13
+amendment text counted the `SuppressedRateLimit` variant
+as a separate top-level re-export, double-counting against
+Rust's variant-with-enum export semantics). The amendment
+is a single doc-only commit absorbing all three; it
+reopens no F1–F13 disposition, no F11-S–F13-S sub-pin, and
+no Round 1–4 substrate decision. The recursive structure
+(review pass → meta-review → post-amendment sub-pins →
+close-amendment for substrate-completeness) is the
+closure rule's reopening mechanism operating at the
+substrate-completeness layer; the amendment closes the
+last Phase-1-author-vs-substrate gap before the
+implementation branch cut. The implementation branch
+authorization continues to hold; the amendment shapes
+Phase 1's substrate (in particular, C2's commit-author
+performs mechanical translation against the Round-4
+audit-confirmed `MalformedKind` call-site list rather
+than re-deriving the variant set) without reopening or
+extending scope. Inline edits applied:
+
+- §5.4.7 R6 (Phase 0e seed text) — added Round-4
+  audit-confirm clause (six-variant seed binding as-is;
+  thirteen `engine/merge.rs` constructions mapped onto
+  the seed; per-variant call-site enumeration with
+  file:line citations parallel to the `DaemonOp` and
+  `ProtocolErrorKind` audit-confirms); doc-drift fix
+  (removed the stale "currently in `engine/refresh.rs`
+  (`find_fork_point` / scan-loop)" framing; tip has no
+  `MalformedScanResult` constructions on fork/scan paths
+  in `refresh.rs`).
+- §5.4.7 R6 (Round 4 commit-decomposition migration
+  target) — added the third `engine/refresh.rs:614–616`
+  `RefreshHandle::join` site (oneshot-channel
+  orchestration failure of the same state-machine
+  invariant-violation class as the two retry-loop
+  fall-through sites; surfaced by the Round-4
+  audit-confirm walk of `MalformedScanResult` call
+  sites). Migration target paragraph updated to
+  enumerate all three sites.
+- §6 Review checklist — `MalformedKind` entry rewritten
+  parallel to `DaemonOp` and `ProtocolErrorKind`
+  (Round-4 audit-confirmed; seed binding as-is; C2
+  commit-author does mechanical translation against
+  the call-site list in §5.4.7 R6).
+- §5.5 Work-list table — "Adversarial daemon scenarios"
+  row mitigation phrasing rewritten against the §5.4.7
+  R5 reframe (`ReorgAmplificationDetector` consumer is
+  retired-by-composition, not "V3.x deferral") and R6
+  reframe (two-channel actor-mesh shape carries no
+  `&'static str` evidence on the trait surface; the
+  evidence-amplifier vector is closed-by-construction
+  under the unit-variant return).
+- §7.X C2 commit description — flat-crate-root re-export
+  count corrected from "nine public items" (which
+  double-counted the `SuppressedRateLimit` variant) to
+  "eight public items" with a clarifying note that the
+  variant is exported with its enum under Rust's
+  standard semantics.
+- §5.4.9 F13 amendment text — count correction
+  ("from seven items to eight to include `SuppressedClass`",
+  not "from eight items to nine"); cross-reference to
+  this Round-4-close amendment record.
+- §8 fencepost line — "eight-item flat-crate-root
+  re-export list" (was "nine-item"); cross-reference
+  to this Round-4-close amendment record.
+- §7.X C4 commit description (F11-S verification
+  deliverable) — added one-paragraph protocol-spec
+  dependency note: if `shekyl-protocol-spec` does not
+  pin a concrete per-tx output cap, the Phase 1
+  commit-author defaults to per-output escalation and
+  records the rationale in the C4 commit message; this
+  forecloses the failure mode of the commit-author
+  spending cycles looking for a bound the spec does not
+  provide.
+
+CHANGELOG `[Unreleased]` / `Changed` gains a Round-4-close
+amendment entry distinct from the F1–F9 close, the F11–F13
+meta-review amendment, and the F11-S–F13-S sub-pins close.
