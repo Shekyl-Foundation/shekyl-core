@@ -67,23 +67,32 @@ Kept from the v2 plan:
 
 Changed from the v2 plan:
 
-- Phase 1 pins a RandomX v1 source. The fallback review picks one of
-  two paths, recorded explicitly so the choice is not implicit:
-  - **Upstream `tevador/RandomX`** at a named tag. Smallest deviation
-    from the most-reviewed v1 implementation; relies on the upstream
-    repository remaining accessible and patchable for security fixes.
-  - **Shekyl-Foundation v1 fork** at a named commit. Used if the
-    fallback also wants Shekyl-controlled patch authority over v1
-    (e.g. to apply targeted hardening that upstream has not merged).
-  The default is upstream-pinned unless fallback review identifies a
-  specific v1 change Shekyl needs that upstream will not accept.
+- Phase 1 pins a RandomX v1 source. Because the
+  `Shekyl-Foundation/RandomX` fork tracks upstream `tevador/RandomX`
+  and the v2 algorithm landed at upstream PR #317 (commit `bb6ed2c`,
+  per `RANDOMX_V2_RUST.md` §1.2), v1 lives at any pre-PR-#317 commit
+  on the same fork. The fallback default is **pin
+  `Shekyl-Foundation/RandomX` at `102f8acf`** (`bump benchmark
+  version to 1.2.1`), which is what the existing
+  `shekyl-core/external/randomx` submodule already points at, and is
+  reachable from the fork without a separate upstream remote. Picking
+  the fork-with-Shekyl-control pin over a direct upstream pin gives
+  Shekyl patch authority for backported security fixes without giving
+  up upstream compatibility.
+  An alternative — pinning `tevador/RandomX` directly at the same
+  commit hash — is equivalent in code content and rejected only
+  because it gives up Shekyl's pin-and-audit-trail control point.
+- `external/randomx-v2` is **not** added in fallback mode; the
+  existing `external/randomx` submodule stays at its v1-era pin and
+  Phase 1 is reduced to "confirm the existing pin is the right
+  commit and document it in the design doc."
 - `BUILD_RANDOMX_V2_MINER_LIB` is renamed to a v1-neutral flag during
   fallback review (proposed: `BUILD_RANDOMX_MINER_LIB`) so the build
   flag does not encode an algorithm version that does not exist in the
   fallback.
 - Phase 2 implements the v1 opcode set and v1 cache/dataset derivation.
 - Differential harness compares Rust v1 against the v1 C reference at
-  the pinned source.
+  the pinned commit.
 - `RANDOMX_FLAG_V2` is irrelevant and omitted.
 - Any v2-specific security or ASIC-resistance claim is removed from the
   release narrative.
@@ -91,10 +100,18 @@ Changed from the v2 plan:
 ## 3. Why v1 Is a Safe Fallback
 
 RandomX v1 has the longest production track record in this design
-space. It has:
+space. Four independent 2019 audits cover v1 and ship in the fork's
+own `audits/` directory at the pinned v1 commit
+(`Shekyl-Foundation/RandomX/audits/`):
 
-- Trail of Bits review history.
-- Monero mainnet exposure.
+- Report-TrailOfBits.pdf
+- Report-X41.pdf
+- Report-Kudelski.pdf
+- Report-Quarkslab.pdf
+
+Additional v1 properties:
+
+- Monero mainnet exposure since 2019-11-30 activation.
 - Broad miner and pool ecosystem support.
 - Known CPU-friendly design goals and operational behavior.
 
@@ -103,6 +120,10 @@ require compatibility with historical CryptoNight, old Monero hard fork
 versions, or RandomX transition windows. The implementation can still be
 cleaner than inherited Monero code because it is v1 **without** Monero's
 legacy dispatch scaffolding.
+
+The fallback's review burden is concentrated on the Rust v1 verifier
+port and its differential harness against the v1 C reference at the
+pinned commit; the algorithm itself does not require a new audit.
 
 ## 4. What Shekyl Gives Up by Falling Back
 

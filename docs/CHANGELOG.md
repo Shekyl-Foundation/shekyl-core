@@ -19,6 +19,35 @@
 
 ### Changed
 
+- **RandomX v2 Phase 0 — fork relationship and pinned source recorded**
+  (`feat/randomx-v2-phase0-design`, 2026-05-16). Rewrites
+  [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §1 from a
+  forward-looking "Shekyl-controlled divergence" framing to the
+  empirical picture: the `Shekyl-Foundation/RandomX` fork tracks
+  upstream `tevador/RandomX` without divergence; RandomX v2 is the
+  upstream tevador algorithm landed in PR #317 (commit `bb6ed2c`);
+  the fork's pinned commit is `aaafe71` ("Prepare v2.0.1 release",
+  2026-05-10) and the in-workspace research checkout lives at
+  `/home/torvaldsl/shekyl/RandomX/`. §1.3 distills the four concrete
+  v1→v2 changes from the fork's `doc/design_v2.md` (CFROUND
+  throttling, F/E AES mix replacing XOR, program-size 256→384,
+  two-iteration dataset prefetch lookahead) and their ~130-165 %
+  efficiency improvement on Zen 3/4/5 silicon. §1.4 records the
+  algorithm-review status: the four 2019 audits in the fork's
+  `audits/` directory (Trail of Bits, X41, Kudelski, Quarkslab) cover
+  v1 and bound the Phase 2 review scope to the v1→v2 delta rather
+  than RandomX from scratch. §3 names the three normative spec files
+  (`doc/specs.md`, `doc/design_v2.md`, `doc/configuration.md`) as the
+  Rust port's source-of-truth references. §11 records that the
+  current `external/randomx` submodule is at v1-era `102f8acf` and
+  Phase 1 adds `external/randomx-v2` at `aaafe71` as a **new**
+  submodule alongside it (not a repoint) so the v1→v2 swap is a
+  single reviewable commit later. [`RANDOMX_V1_FALLBACK.md`](./design/RANDOMX_V1_FALLBACK.md)
+  §2 records that v1 lives at any pre-PR-#317 commit on the same
+  fork (default fallback pin: `102f8acf`, already in the existing
+  submodule), and §3 records that the four 2019 audits already ship
+  in the fork's `audits/` directory at the pinned v1 commit.
+
 - **RandomX v2 Phase 0 — RPC-payments disposition resolved to delete**
   (`feat/randomx-v2-phase0-design`, 2026-05-16). Rewrites
   [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §15 from the

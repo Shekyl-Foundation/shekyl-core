@@ -15,28 +15,110 @@ CryptoNight, no RandomX v1 dispatch, and no `RX_BLOCK_VERSION` gate.
 
 ## 1. Why RandomX v2
 
-The RandomX v2 fork is a Shekyl-controlled divergence from upstream
-RandomX v1. Phase 1 adds it as `external/randomx-v2` rather than
-repointing `external/randomx`; the rename is load-bearing because it
-makes the fork boundary and pin discipline visible in the tree.
+### 1.1 The fork relationship
 
-The v2 specification source is the fork's `doc/design_v2.md` at the
-commit pinned during Phase 1. This document intentionally leaves the
-exact commit as a Phase 0 review item:
+RandomX v2 is an **upstream tevador algorithm**, not a Shekyl-only
+variant. The bulk v2 change landed in upstream
+[`tevador/RandomX` PR #317](https://github.com/tevador/RandomX/pull/317)
+(merge commit `bb6ed2c`). Subsequent commits are tweaks, RISC-V vector
+support, ARM64 JIT fixes, and the `v2.0.1` release-prep commit at
+`aaafe71` (2026-05-10).
 
-- **Pinned fork commit:** TBD after v2 algorithm review.
-- **Spec section citations:** TBD after the pinned commit is selected.
-- **v2 deployers besides Shekyl:** TBD during review.
+Shekyl vendors v2 through the `Shekyl-Foundation/RandomX` fork at
+<https://github.com/Shekyl-Foundation/RandomX>. As of Phase 0 the fork
+tracks upstream `master` without divergence — its commit log matches
+upstream PR-numbered history (`#329`, `#326`, `#324`, …). The fork
+exists as a **pin-and-audit-trail** so that Shekyl can:
 
-Phase 0 must answer two questions before Phase 2 begins:
+- Pin a known commit independent of upstream history rewrites or
+  branch deletions.
+- Apply targeted hardening or backport security fixes if upstream
+  becomes unresponsive.
+- Carry Shekyl-specific build or packaging changes that upstream
+  would not accept.
 
-1. What concrete problem does v2 solve that RandomX v1 does not?
-2. Who, besides Shekyl, is reviewing or deploying this v2 algorithm?
+Today the fork carries no divergent code; this is the "disposable
+fork" disposition from `10-shekyl-first.mdc` — useful for control,
+deletable when the cost exceeds the value.
 
-If Shekyl is the only deployer, Shekyl owns the full review burden for
-the v2 algorithm, the v2 spec, the C reference, and the Rust port.
-That makes [`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md) a real
-contingency, not paperwork.
+### 1.2 Pinned source
+
+- **Pinned fork commit:** `aaafe71` (`Prepare v2.0.1 release (#329)`,
+  2026-05-10) on `Shekyl-Foundation/RandomX` `master`.
+- **v2 algorithm-introducing commit:** `bb6ed2c` (upstream PR #317,
+  `RandomX v2`) — reachable from the pinned commit.
+- **In-workspace research checkout:** `/home/torvaldsl/shekyl/RandomX/`
+  is a sibling clone of the fork used during Phase 0 for reading
+  audits, specs, and design rationale. It is **not** the submodule the
+  daemon builds against. Phase 1 adds `external/randomx-v2` as the
+  build-time submodule at the same pin.
+- **Current `external/randomx` submodule (v1-era):** pinned at
+  `102f8acf` (`bump benchmark version to 1.2.1`), reachable from the
+  pre-PR-#317 history of the same fork. This submodule is dropped by
+  Phase 4 once the v2 verifier rewires the daemon.
+
+### 1.3 What v2 changes vs v1 (concretely)
+
+From `doc/design_v2.md` in the fork at the pinned commit:
+
+1. **CFROUND throttling.** v1's CFROUND changed the FP rounding mode
+   every main-loop iteration, costing up to 10% of hashrate on Ryzen
+   CPUs because x86 was not designed for that frequency of rounding-
+   mode flips. v2 throttles CFROUND to roughly every 16th execution.
+2. **AES tweak.** v2 mixes the F and E registers with AES instead of
+   XOR (spec §4.6.2 step 10). This roughly doubles AES per hash
+   (using a previously-idle gap), puts AES inside the main loop so a
+   specialized scratchpad-only AES circuit no longer suffices, and
+   improves scratchpad entropy.
+3. **Program size 256 → 384 instructions.** Since v1 shipped in 2019,
+   CPU clocks and IPC have improved much faster than DRAM latency.
+   Larger programs give the CPU more useful work to do while waiting
+   on memory.
+4. **Two-iteration dataset prefetch lookahead** (the `mp` register,
+   defined alongside `ma` in `doc/specs.md`). Complements the program-
+   size increase by hiding more DRAM latency.
+
+The reported net effect on Zen 3 / Zen 4 / Zen 5 CPUs is roughly
+98 %–110 % of v1 hashrate but **~130 %–165 % of "VM+AES work per
+Joule"**. v2 is ~1.5× heavier per program, so similar wall-time
+hashrate translates to more useful computation per watt.
+
+None of these changes touch the underlying cryptographic primitives
+(Argon2d cache derivation, Blake2b finalization, AES-NI). They are
+VM-instruction-mix and prefetch tweaks. That bounds the Phase 0
+algorithm-review scope: review the v1→v2 delta, not RandomX from
+scratch.
+
+### 1.4 Algorithm-review status
+
+The fork's `audits/` directory carries the four 2019 audits of
+RandomX v1:
+
+- Trail of Bits
+- X41 D-SEC
+- Kudelski Security
+- Quarkslab
+
+These cover v1 and are not invalidated by the v2 delta because v2 does
+not change primitives. They are **not** an audit of v2. The Phase 2
+gate requires independent review of the v1→v2 delta specifically:
+
+- Does CFROUND throttling preserve the randomness-uniformity argument?
+- Does the F/E AES-mix change the ASIC-resistance argument in either
+  direction?
+- Does the prefetch-lookahead change introduce a side-channel that v1
+  did not have?
+
+Phase 0 must answer:
+
+1. Who, besides Shekyl, deploys upstream RandomX v2 today? (e.g. has
+   Monero or another network activated PR #317?)
+2. Is anyone — Shekyl, upstream, or third-party — willing to fund or
+   perform the v1→v2 delta review before Phase 2?
+
+If both answers are "no," [`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md)
+is the recovery path — a v1 pin at a pre-PR-#317 commit of the same
+fork, against four already-completed audits.
 
 ## 2. Permanent C/Rust Split
 
@@ -71,6 +153,23 @@ CI (§7).
 The Rust verifier is implemented from the v2 spec, not from the C
 implementation. The C reference is a cross-check. If the spec and C
 reference disagree, the spec wins and the C fork receives a bug report.
+Since the fork tracks upstream `tevador/RandomX`, the spec-vs-C bug
+report flows upstream (with a CC to the Shekyl-Foundation fork
+maintainer).
+
+The spec at the pinned fork commit (§1.2) lives in three files:
+
+- `doc/specs.md` — the canonical algorithm spec, with v1+v2 deltas
+  marked inline (e.g. "RandomX v2: `mp` is a name alias for `ma`",
+  "RandomX v2: `f0 = AES encrypt of f0 with e0 as key`, …").
+- `doc/design_v2.md` — the v2-specific rationale (CFROUND throttling,
+  F/E AES mix, program size, prefetch lookahead, performance tables).
+- `doc/configuration.md` — the parameter table showing v1 vs v2 values
+  (e.g. `RANDOMX_PROGRAM_SIZE: v1=256, v2=384`).
+
+These three files are the Rust port's normative reference. The Rust
+port cites them by §number; review must verify those citations are
+stable at the pinned commit before Phase 2.
 
 This avoids the failure mode where the Rust port matches the C library
 while both diverge from the specification.
@@ -305,8 +404,10 @@ calculation used by the release checklist.
 ## 11. `cncrypto` PUBLIC Link Survey
 
 Current `src/crypto/CMakeLists.txt` links `randomx` as a `PUBLIC`
-dependency of `cncrypto`. That means downstream consumers can receive
-`randomx_*` symbols transitively.
+dependency of `cncrypto`. The currently-linked `external/randomx`
+submodule is pinned at `102f8acf` (v1-era, per §1.2). Downstream
+consumers can receive `randomx_*` symbols transitively from that v1
+library today.
 
 Known direct `cncrypto` consumers from the Phase 0 survey:
 
@@ -315,9 +416,19 @@ Known direct `cncrypto` consumers from the Phase 0 survey:
 - `src/device_trezor/CMakeLists.txt` (`device_trezor`)
 - `tests/CMakeLists.txt` (`shekyl-wallet-crypto-bench`)
 
-Phase 3c may drop the C `randomx` link from `cncrypto` only after these
-consumers are confirmed not to use `randomx_*` directly or are rewired
-to the new FFI path.
+Phase 1 adds `external/randomx-v2` at `aaafe71` as a **new** submodule
+alongside the existing `external/randomx`; it does not repoint the
+existing one. Keeping the two submodules visible during the cutover
+makes the v1→v2 swap a single reviewable commit later, and protects
+against accidental v1-vs-v2 cross-linking during Phase 3.
+
+Phase 3c may drop the C `randomx` link from `cncrypto` (and delete
+the `external/randomx` submodule entirely) only after these consumers
+are confirmed not to use `randomx_*` directly or are rewired to the
+new FFI path. The v2 miner library at `external/randomx-v2` is gated
+behind `BUILD_RANDOMX_V2_MINER_LIB=ON` and is never linked into
+`cncrypto`; daemon verification reaches RandomX only through the
+`shekyl-ffi` C ABI.
 
 ## 12. What Stays State
 
