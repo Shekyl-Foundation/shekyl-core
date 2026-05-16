@@ -57,11 +57,15 @@ exceeds the value.
   2026-05-10) on `Shekyl-Foundation/RandomX` `master`.
 - **v2 algorithm-introducing commit:** `bb6ed2c` (upstream PR #317,
   `RandomX v2`) — reachable from the pinned commit.
-- **In-workspace research checkout:** `/home/torvaldsl/shekyl/RandomX/`
-  is a sibling clone of the fork used during Phase 0 for reading
-  audits, specs, and design rationale. It is **not** the submodule the
-  daemon builds against. Phase 1 adds `external/randomx-v2` as the
-  build-time submodule at the same pin.
+- **Phase 0 reference clone:** during Phase 0, contributors may keep a
+  sibling clone of `Shekyl-Foundation/RandomX` (alongside `shekyl-core/`)
+  at the same pin for reading audits, specs, and design rationale
+  without round-tripping through the submodule. The location is
+  contributor-local convention, not part of the build. The build-time
+  artifact is the submodule Phase 1 adds at `external/randomx-v2`,
+  pinned to the same commit (`aaafe71`). Contributors who prefer not to
+  keep a sibling clone can browse the fork at
+  https://github.com/Shekyl-Foundation/RandomX at the pinned commit.
 - **Current `external/randomx` submodule (v1-era):** pinned at
   `102f8acf` (`bump benchmark version to 1.2.1`), reachable from the
   pre-PR-#317 history of the same fork. This submodule is dropped by
@@ -488,12 +492,34 @@ submodule is pinned at `102f8acf` (v1-era, per §1.2). Downstream
 consumers can receive `randomx_*` symbols transitively from that v1
 library today.
 
-Known direct `cncrypto` consumers from the Phase 0 survey:
+Known direct `cncrypto` consumers from the Phase 0 survey (each
+`target_link_libraries(... cncrypto)` call site verified):
 
+- `src/common/CMakeLists.txt` (`common`, PUBLIC) — **load-bearing**:
+  `common` sits below most subsystems, so any subsystem that links
+  `common` transitively receives `cncrypto`'s exports including any
+  `randomx_*` symbols re-exported through the `randomx` PUBLIC link.
+- `src/cryptonote_basic/CMakeLists.txt` (`cryptonote_format_utils_basic`
+  PUBLIC, and `cryptonote_basic` PUBLIC)
+- `src/cryptonote_core/CMakeLists.txt` (`cryptonote_core` PUBLIC)
+- `src/daemon/CMakeLists.txt` (`daemon`)
+- `src/fcmp/CMakeLists.txt` (two targets PUBLIC: `fcmp` and the
+  `monero_fcmp_pp_crypto` adapter)
 - `src/crypto/wallet/CMakeLists.txt` (`wallet-crypto`)
-- `tests/crypto/CMakeLists.txt` (`cncrypto-tests`)
-- `src/device_trezor/CMakeLists.txt` (`device_trezor`)
+- `src/device_trezor/CMakeLists.txt` (`device_trezor` PUBLIC)
 - `tests/CMakeLists.txt` (`shekyl-wallet-crypto-bench`)
+
+Note that `tests/crypto/CMakeLists.txt`'s `cncrypto-tests` target does
+**not** itself link `cncrypto` directly; it links `common`, which
+transitively pulls in `cncrypto`. The test name is historical; it
+exercises the `cncrypto` interface through the transitive link.
+
+This list is the Phase 3 link-drop checklist. Each consumer must be
+verified to either (a) not use any `randomx_*` symbol directly, or (b)
+be rewired to the new FFI path, before the `randomx` PUBLIC link can be
+dropped from `cncrypto`. The breadth of the list — particularly
+`common` — explains why Phase 3 must finalize the consumer-by-consumer
+audit before Phase 3c's link drop, not assume zero direct consumers.
 
 Phase 1 adds `external/randomx-v2` at `aaafe71` as a **new** submodule
 alongside the existing `external/randomx`; it does not repoint the
@@ -747,8 +773,21 @@ ambiguity at the boundary:
 
 Continuing the error-code semantics:
 - `ERR_CACHE_DERIVE_FAILED (-3)`: cache derivation could not complete
-  (allocation failure or panic caught in the FFI shim). `out_hash32` is
-  **not** written.
+  due to a **VM-level failure or Rust panic caught at the FFI shim**.
+  `out_hash32` is **not** written. This code does **not** cover
+  allocation failure: the cache-derivation allocation path uses
+  infallible allocation APIs (`Box::new_zeroed_slice`,
+  `vec![0u8; N].into_boxed_slice()`) per the Phase 2e plan, which call
+  `handle_alloc_error` and abort the process on OOM rather than return
+  an error. A daemon that cannot allocate 256 MB for the cache cannot
+  continue regardless of which RandomX path runs; mapping OOM to a
+  return code would be dishonest because the FFI shim never sees the
+  return-from-allocator that would let it construct one. If a future
+  caller needs OOM-recoverable cache derivation (e.g., a wallet-side
+  cold path that wants to surface the failure), the disposition is
+  V3.x work: rewrite cache derivation to use `Box::try_new_zeroed_slice`
+  / `Vec::try_reserve_exact`, add an `ERR_CACHE_ALLOC_FAILED (-5)`
+  taxonomy entry, and tighten this code's semantics accordingly.
 - `ERR_INTERNAL (-4)`: a Rust panic crossed the FFI boundary and was
   caught. `out_hash32` is **not** written. This code is a CI failure
   signal during development; in release it returns the code and logs
@@ -815,7 +854,7 @@ None of these is a PoW dispatch. The Phase 4 deletion is narrow:
 - Keep every read that participates in hard-fork rule selection.
 
 Phase 3b's deleted-call audit
-(`docs/design/RANDOMX_V2_PHASE3B_AUDIT.md`, created in Phase 3b)
+(`docs/design/RANDOMX_V2_PHASE_3B_DELETED_CALL_AUDIT.md`, created in Phase 3b)
 records each `block.major_version` reference as either "kept (hard-fork
 rule)" or "deleted (PoW dispatch)" with the file and line.
 

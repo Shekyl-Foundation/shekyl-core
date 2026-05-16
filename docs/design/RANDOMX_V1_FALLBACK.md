@@ -1,9 +1,16 @@
 # RandomX v1 fallback — contingency design
 
-**Status.** **DRAFT — Round 0 (initial draft, 2026-05-16).** Companion
-to [`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md). This document is
-insurance, not the preferred path. It is invoked only if Phase 0 review
-concludes RandomX v2 is not ready for Shekyl genesis.
+**Status.** **DRAFT — Round 0 (initial draft, 2026-05-16; status block
+revised 2026-05-16 to match §1's late-binding framing).** Companion to
+[`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md). This document is
+insurance, not the preferred path. Invocation is **late-binding** per
+§1: it may be invoked any time between Phase 0 and the genesis release
+in response to a specific finding that makes RandomX v2 the wrong
+genesis primitive under `00-mission.mdc` commitment #1. The release-
+time algorithm-review gate per
+[`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §1.4 is the most common
+trigger, but not the only one — Monero's parallel production
+deployment or audit may surface a blocker at any earlier point.
 
 **Preferred path.** RandomX v2, Rust verifier, C miner.
 
