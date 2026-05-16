@@ -4012,6 +4012,68 @@ reference.
   `ciphersuite`'s internals. If upstream `ciphersuite` upgrades to
   `dalek-ff-group` 0.5, remove the gate.
 
+- **`sha2` 0.10.x has no `zeroize` feature; HKDF-SHA256 sponge-state
+  residency is documented-acceptance per the reversion-clause
+  discipline.** Phase 0 Mission Audit Lens D, finding D-6 (per
+  [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).
+  Audit-at-source verification confirmed `sha2` 0.10.x has no
+  `zeroize` feature or optional dep at all — in contrast to sibling
+  `sha3` 0.10.x, which carries `zeroize` as an optional dep and which
+  `shekyl-crypto-pq` already enables. HKDF-SHA256 derivation of
+  secret material via the workspace's `hkdf` consumers
+  (`shekyl-crypto-pq`, `shekyl-engine-prefs`, `shekyl-proofs`) leaves
+  a per-call residency window in the sha2 sponge state (~32 bytes per
+  `Sha256` instance). The derived material itself is held in
+  `Zeroizing<…>` by the caller; no shekyl-side wrapper.
+
+  *Rejected alternatives.* **(a)** Upstream-contribute `zeroize`
+  feature to RustCrypto `sha2` is the right long-term answer and is
+  pursued as a separate non-blocking workstream; not gating Shekyl
+  audit closure on upstream review timeline. **(b)** A shekyl-side
+  wrapper around `Sha256` with `Drop` overwrite breaks the upstream
+  abstraction boundary, introduces version-bump fragility (sha2's
+  internal layout could shift across minor versions in ways the
+  wrapper depends on), and delivers marginal exposure reduction
+  (~32 bytes vs D-10's Argon2id 64 MiB buffer concern, which is the
+  real-volume risk and is addressed separately via D-10's
+  zeroize-feature enablement on `argon2`).
+
+  *Reversion criteria* (either suffices to reopen the disposition;
+  both named explicitly so future audit cannot mistake the
+  disposition for a hard refusal — mirroring the `AllKeysBlob`
+  Not-Clone precedent at
+  [`rust/shekyl-crypto-pq/src/account.rs:480-494`](../rust/shekyl-crypto-pq/src/account.rs)
+  and the
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §5.4.8 #1 reject-with-reopening precedent):
+
+  1. **Upstream `sha2` adds a `zeroize` feature** (in any minor or
+     major version). The workspace declarations in `shekyl-crypto-pq`,
+     `shekyl-engine-prefs`, and `shekyl-proofs` adopt
+     `features = ["zeroize"]` and this disposition closes as fixed.
+  2. **A specific exposure pathway is identified that elevates the
+     residency window beyond the per-call sponge state.** Examples:
+     a fault-injection, memory-snapshot, or other attack model that
+     can observe the sponge state after `finalize()` returns under
+     conditions reachable by the threat model. The pathway must be
+     specific (named threat vector plus memory-locality analysis),
+     not speculative.
+
+  *Cross-references.*
+  [`.cursor/rules/17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc)
+  §3 "Property existence" — `sha2` is the canonical example of a
+  security-load-bearing dep whose property is absent at source,
+  surfaced by audit-at-source verification rather than training-data
+  recall. Sibling reversion-clause entry: V3.0 queue `Hybrid* secret
+  types: Vec<u8> for fixed-size scalars`. The dependency-discipline
+  lens surfaced three concentrated instances of the reversion-clause
+  pattern (D-6 sha2 acceptance criteria, D-19 directional disposition
+  for `Box<fips204::ml_dsa_65::PrivateKey>`, the D-1 /
+  D-fips204-discipline naming-pattern amendment to rule 17); the
+  meta-pattern is hardening into project-wide substrate across
+  altitudes (type-derivation, design-round closure, work-item
+  placement, dependency-discipline).
+
 - **`shekyl-daemon-rpc/src/main.rs` uses `eprintln!` intentionally.**
   The standalone binary is a stub that exits with an error. No logging
   framework is initialized at that point. When standalone mode is
