@@ -19,6 +19,27 @@
 
 ### Changed
 
+- **RandomX v2 Phase 0 — RPC-payments disposition resolved to delete**
+  (`feat/randomx-v2-phase0-design`, 2026-05-16). Rewrites
+  [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §15 from the
+  open "rewrite or delete" question to an explicit **delete** decision
+  with the rationale recorded (no users pre-genesis per
+  `60-no-monero-legacy.mdc`; the feature shipped with essentially zero
+  Monero production adoption; a future monetization story is better
+  designed fresh against 2026+ options than inherited from 2020). Adds
+  §15.4 with the concrete deletion checklist — five `rpc_payment*`
+  files plus `wallet_rpc_payments.cpp` plus a functional test deleted
+  whole, surgical hook removal across `core_rpc_server`,
+  `bootstrap_daemon`, `node_rpc_proxy`, `wallet2`, `wallet_args`,
+  `wallet_rpc_helpers`, `wallet_rpc_server`, the daemon CLI command
+  files, `cryptonote_config.h`, and the two CMakeLists — so Phase 4
+  inherits a checklist rather than a question. Tightens Phase 4 scope
+  materially: the v2 verifier FFI export is consumed by daemon block
+  verification only, with no wallet wiring.
+  [`RANDOMX_V1_FALLBACK.md`](./design/RANDOMX_V1_FALLBACK.md) §2
+  records the deletion as algorithm-independent and inherits the same
+  checklist under fallback.
+
 - **RandomX v2 Phase 0 — Round 1 review-feedback revisions**
   (`feat/randomx-v2-phase0-design`, 2026-05-16). Expands
   [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) with new sections

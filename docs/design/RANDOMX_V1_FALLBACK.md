@@ -60,6 +60,10 @@ Kept from the v2 plan:
 - Phase 3b deleted-call audit doc.
 - Phase 4 deletion of `IPowSchema`, `pow_registry`, and the
   speculative `shekyl-consensus` crate.
+- Phase 4 deletion of the RPC-payments feature in full per
+  `RANDOMX_V2_RUST.md` §15. The decision is algorithm-independent —
+  Shekyl deletes RPC payments whether the genesis algorithm is v2 or
+  v1 — so the same deletion checklist applies under fallback.
 
 Changed from the v2 plan:
 

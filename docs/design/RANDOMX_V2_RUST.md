@@ -350,7 +350,25 @@ has landed on `dev` and the FFI mega-header has been quiet for one to
 two weeks. Phase 0 and Phase 1 can proceed in parallel with wallet work;
 Phase 3 cannot.
 
-## 15. `wallet_rpc_payments.cpp` Disposition
+## 15. RPC Payments Disposition — Delete
+
+**Phase 0 decision: delete the RPC-payments feature in its entirety.**
+This is recorded as a deliberate Shekyl-choice, not deferred to Phase 4
+implementation discretion.
+
+### 15.1 What RPC payments was
+
+Monero's RPC-payments feature (shipped ~0.17, 2020-2021) allowed a
+daemon operator to require RPC clients to submit RandomX work as
+"payment" before serving requests. The intended use case was making
+public-node operation economically rational: instead of free-riders
+DDoS'ing public daemons, clients would pay via PoW, with credits
+tracked per-client per-session. Wallets calling a payment-enabled
+remote daemon had to compute RandomX themselves to pay for their
+queries, which is why `src/wallet/wallet_rpc_payments.cpp` imports the
+PoW machinery into the wallet tree.
+
+### 15.2 Evidence the wallet-tree PoW touchpoint is unique
 
 A targeted grep across `src/wallet/` for `rx_*`, `randomx_*`,
 `cn_slow_hash`, `rx_slow_hash`, and `RX_BLOCK_VERSION` returns exactly
@@ -360,18 +378,85 @@ one file:
 - `src/wallet/wallet_rpc_payments.cpp:158` (`crypto::rx_slow_hash(...)`)
 - `src/wallet/wallet_rpc_payments.cpp:163` (`crypto::cn_slow_hash(...)`)
 
-Phase 0 review must decide whether the wallet-side mining-payments
-feature is still part of Shekyl's roadmap:
+Deleting RPC payments removes the entire wallet-tree PoW surface in a
+single sweep. The grep above is rerun in Track B's gate check as
+mechanical evidence that no new wallet-tree PoW touchpoint has
+appeared in the meantime.
 
-- If yes, Phase 4 rewrites it to call the v2 verifier and drops the
-  `RX_BLOCK_VERSION` and `cn_slow_hash` branches (Monero-era dispatch
-  is dead per `60-no-monero-legacy.mdc`).
-- If no, Phase 4 deletes the file along with the legacy PoW surface.
+### 15.3 Why delete (rather than rewrite)
 
-This is not deferred to implementation; the answer is recorded before
-Track B begins. The grep above is rerun in Track B's gate check as
-mechanical evidence that no new wallet-tree PoW touchpoint has appeared
-in the meantime.
+1. **Pre-genesis, there are no users.** Per `60-no-monero-legacy.mdc`
+   the default is delete and there is no transitional concern.
+2. **The feature shipped and saw essentially zero production adoption
+   in Monero.** Reasons that carry forward to Shekyl: most users run
+   their own daemon and never hit the payment path; public-node
+   operators who want monetization prefer other mechanisms (Tor hidden
+   services with donations, rate limiting, or accepting load); client-
+   side friction is real (PoW capability now required) while the
+   client benefit is zero (work done for the operator's privilege of
+   serving); light and mobile wallets struggle to support it; credits
+   don't survive session boundaries cleanly; the threat model — "I
+   want to charge non-mining clients" — conflicts with the audience
+   most likely to be running a privacy-preserving public node.
+3. **If Shekyl ever wants a public-RPC monetization story, it is
+   better designed fresh than inherited.** The space has changed since
+   2020 — Lightning-style payment channels, Tor hidden services with
+   built-in rate limiting, OAuth-style API keys, and pay-per-call HTTP
+   services all exist now. Carrying a barely-used 2020 design forward
+   forecloses better options without buying anything.
+
+### 15.4 Concrete deletion surface
+
+Phase 4 inherits this checklist. Files that exist solely to support
+RPC payments and are deleted whole:
+
+- `src/rpc/rpc_payment.h`
+- `src/rpc/rpc_payment.cpp`
+- `src/rpc/rpc_payment_signature.h`
+- `src/rpc/rpc_payment_signature.cpp`
+- `src/rpc/rpc_payment_costs.h`
+- `src/wallet/wallet_rpc_payments.cpp` (the wallet PoW touchpoint)
+- `tests/functional_tests/rpc_payment.py`
+
+Files that touch RPC payments but stay; surgical edits remove the
+payment hooks, types, RPC endpoints, CLI commands, and config fields:
+
+- `src/rpc/CMakeLists.txt` — drop the `rpc_payment*` translation units.
+- `src/rpc/core_rpc_server.{h,cpp}` — remove `GET_RPC_PAYMENT_*` /
+  `RPC_ACCESS_*` endpoints and their dispatch entries.
+- `src/rpc/bootstrap_daemon.{h,cpp}` — drop client-side payment
+  handling for upstream bootstrap daemons.
+- `src/cryptonote_config.h` — drop RPC-payment-related constants.
+- `src/daemon/rpc_command_executor.{h,cpp}`,
+  `src/daemon/command_parser_executor.{h,cpp}`,
+  `src/daemon/command_server.cpp` — remove `rpc_payments`,
+  `change_rpc_pay`, and related daemon CLI commands.
+- `src/wallet/CMakeLists.txt` — drop `wallet_rpc_payments.cpp` from
+  the wallet library.
+- `src/wallet/wallet2.{h,cpp}`, `src/wallet/wallet_args.{h,cpp}`,
+  `src/wallet/wallet_errors.h`,
+  `src/wallet/wallet_rpc_helpers.h`,
+  `src/wallet/wallet_rpc_server.cpp`,
+  `src/wallet/node_rpc_proxy.{h,cpp}` — remove client-id /
+  payment-secret fields, `--rpc-payment-*` CLI flags, payment error
+  types, and the proxy's payment-credit accounting.
+
+Phase 0 review confirms this list against the tree before Phase 4
+begins; new daemon or wallet code merged in the interim is added here.
+
+### 15.5 Phase 4 scope implication
+
+The original "rewrite or delete" framing left Phase 4 with the larger
+scope (rewrite the file to call the v2 verifier, update its tests,
+maintain a feature with no users). The delete decision tightens Phase
+4 to: drop the files above, drop the dispatch entries, drop the CLI
+flags, done. No v2 verifier wiring is needed for the wallet tree;
+Phase 3's FFI export is consumed by daemon-side block verification
+only.
+
+A future RPC-monetization design — if Shekyl ever wants one — gets
+its own design doc and is reviewed on its own merits, against 2026+
+options rather than 2020 ones.
 
 ## 16. Genesis-Block Seedhash Handling
 
