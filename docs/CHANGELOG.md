@@ -4,6 +4,19 @@
 
 ### Added
 
+- **RandomX v2 Rust port — Phase 0 design docs**
+  (`feat/randomx-v2-phase0-design`, 2026-05-16). Adds
+  [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) and
+  [`RANDOMX_V1_FALLBACK.md`](./design/RANDOMX_V1_FALLBACK.md) as the
+  pre-implementation review substrate for the RandomX v2 Rust verifier
+  track. The primary design pins the permanent C-miner / Rust-verifier
+  split, derived-first verifier architecture under
+  `18-type-placement.mdc`, the one-function FFI target, no-prewarm
+  disposition, performance budgets, C-library symbol-isolation
+  invariant, and the wallet V3.2 gate before Track B. The fallback doc
+  records the explicit v1-from-genesis recovery path if v2 algorithm
+  review fails before Phase 2.
+
 - **Stage 1 PR 3 — close-out: `engine_trait_bench_key_account_public_address`
   pair** (`chore/stage-1-pr3-closeout`, 2026-05-12). Introduces the
   criterion + iai-callgrind sibling pair for the
