@@ -10,10 +10,15 @@ Round 1's disposition under the actor-mesh framing,
 commit list, 2026-05-14), Round 4 review pass
 (adversarial review of the post-Round-4 substrate before
 Phase 1 cuts; nine findings dispositioned, 2026-05-15),
-and Round 4 review pass meta-review amendment (review of the
+Round 4 review pass meta-review amendment (review of the
 F1–F9 disposition substrate; three additional findings
-F11–F13 dispositioned without reopening Round 1–4, 2026-05-15)
-closed.** Round 1's load-bearing question (§5 producer
+F11–F13 dispositioned without reopening Round 1–4, 2026-05-15),
+and Round 4 review pass meta-review post-amendment sub-pins
+(review of F11–F13 dispositions; three Phase-1-author-aware
+sub-pins F11-S / F12-S / F13-S sharpening the dispositions
+without reopening F1–F9 or Round 1–4; F13-S substantively
+closes the `SuppressedRateLimit` emission-cadence covert
+channel, 2026-05-15) closed.** Round 1's load-bearing question (§5 producer
 redesign) settled to **α — preserved current shape** per
 §5.4. The Round 1 review pass (2026-05-12)
 corrected §3.1's materially-wrong "no secret-touching surface"
@@ -2952,6 +2957,52 @@ adversarial-class variant gains a matching `SuppressedClass`
 arm under `#[non_exhaustive]`) and is constructively
 attacker-uninfluencable.
 
+**Emission-cadence sub-pin (Round 4 review pass meta-review
+post-amendment, 2026-05-15; F13 sub-pin).** The field-shape
+pin closes the payload covert channel; the **emission-cadence
+covert channel** is closed by a separate producer-internal
+discipline. Without this sub-pin, an attacker triggers a flood
+in class X, observes the resulting `SuppressedRateLimit
+{ class: X }` notice, waits, triggers another flood, observes
+a second notice, and reconstructs suppression frequency by
+counting notice-arrival timestamps in their own emit-arrival
+timeline. The class-only payload is signal-free; the
+**emission cadence is the side-channel**. The discipline that
+closes it: the producer emits **at most one
+`SuppressedRateLimit { class: X }` event per class per
+attempt**. Subsequent in-class suppressions within the same
+attempt are absorbed silently — the producer's per-attempt
+`emit_state` carries a per-class flag transitioning from
+"emitting" to "suppressed (notice sent)" exactly once;
+subsequent in-class emission attempts increment the per-class
+counter (bounded by the per-block ceiling tracking) but do
+not emit further notices. Consumer actors interpret the
+notice as "this class had rate-limited activity at some point
+in this attempt" — once per attempt per class, with class as
+the only discriminant on payload *and* on cadence.
+
+**Cross-attempt cadence is a separate layer-up question.** An
+attacker who can force many attempts to run in close
+succession (e.g., by triggering `RefreshError::ConcurrentMutation`
+to drive orchestrator-side retries) observes one notice per
+attempt per class, yielding *attempt-rate* as a residual
+side-channel. This is bounded by the orchestrator's existing
+retry-loop policy (per `engine/refresh.rs` retry semantics:
+attempt count is capped, retry backoff is bounded), which
+itself is sized against the threat model the
+`ConcurrentMutation` retry was originally designed for.
+Tightening the cross-attempt cadence further would require
+producer state that survives across `produce_scan_result`
+invocations — directly contradicting the per-attempt
+producer-state-isolation property (the producer is
+constructed fresh per attempt; per-attempt state is the
+zeroization scope for the `ViewMaterial` and `Scanner`).
+The cross-attempt threat is therefore deliberately
+addressed at the orchestrator-side retry-loop layer, not
+the producer-side notice cadence layer; pin recorded so
+future audit cannot mistake the layer-up disposition for
+an oversight.
+
 **Implementation cost.** O(num\_event\_classes) `u32` counters
 on the producer; one branch per emission. Producer-internal
 property; does not change trait surface; lands in §7.X C4
@@ -3161,12 +3212,20 @@ substrate. A subsequent **meta-review amendment (2026-05-15)
 of the F1–F9 dispositions themselves** surfaced three additional
 findings (F11–F13) targeting under-specifications introduced by
 the F1–F9 disposition substrate rather than new attack vectors
-against the pre-review-pass substrate. The combined disposition
-total is **twelve actionable findings** with thirteen recorded
-attribution slots (F10 collapsed). This section records each
-finding with reviewer attribution, attack analysis, disposition
-reasoning, and a pointer to the inline edit that landed the
-disposition.
+against the pre-review-pass substrate. A further **post-
+amendment review (2026-05-15) of the F11–F13 dispositions
+themselves** surfaced three sub-pins (F11-S, F12-S, F13-S)
+sharpening F11/F12/F13 with Phase-1-author-aware observations
+that the disposition language admits but the discipline does
+not — F13-S is the substantive one (closes the emission-cadence
+covert channel the F13 field-shape pin left open). The combined
+disposition total is **twelve actionable findings plus three
+sub-pins** with thirteen recorded primary-attribution slots
+(F10 collapsed) and three sub-pin attribution slots. This
+section records each finding with reviewer attribution, attack
+analysis, disposition reasoning, and a pointer to the inline
+edit that landed the disposition; sub-pins are recorded after
+the F11–F13 amendment block.
 
 The review pass is a Round 4 deliverable, not a fresh round. It
 captures the thought process behind each finding's disposition
@@ -4026,6 +4085,206 @@ constructively attacker-uninfluenceable.
   class). Updated the flat-crate-root re-export list from
   eight items to nine to include `SuppressedClass`.
 
+---
+
+#### Post-amendment sub-pins — F11-S, F12-S, F13-S (2026-05-15)
+
+A post-amendment review of the F11–F13 dispositions surfaced
+three Phase-1-author-aware observations: F13's field-shape pin
+left an emission-cadence covert channel; F11's per-transaction
+safe-point granularity may not hold under hostile-output-count
+transactions; F12's "unified lint" likely decomposes to two
+related checks at the implementation level. Each is a sub-pin
+on the corresponding F-finding — sharpening the disposition
+without reopening it. None reopens a Round 1–4 substrate
+decision; none reopens an F1–F9 disposition; each lands inline
+at the disposition's existing site rather than as a new finding
+number.
+
+The substantive one is **F13-S**. F11-S and F12-S are smaller —
+F11-S is an implementation-discipline note Phase 1 commit-author
+applies against benchmarked cost; F12-S is a forward-template
+clarification preventing a future "the lint isn't monolithic"
+finding from invalidating a multi-check implementation that
+delivers the unified discipline.
+
+##### F13-S — `SuppressedRateLimit` emission-cadence sub-pin
+
+**The covert channel F13 didn't close.** The field-shape pin
+closes the payload covert channel (no count, no timestamp, no
+payload). The **emission-cadence covert channel** is independent:
+if the producer emits one `SuppressedRateLimit { class: X }` per
+suppression-fire, the attacker reconstructs suppression frequency
+by counting notice arrivals in their own emit-arrival timeline —
+even though each notice payload carries no information. The
+class-only payload is signal-free; the emission cadence is the
+side-channel.
+
+**The attack path (worked example).**
+
+- T=0    : Attacker triggers 100 events in class X within 1s.
+- T=0.1s : Producer rate-limits; 95 events suppressed; emits one
+  `SuppressedRateLimit { class: X }`.
+- T=0.5s : Attacker triggers 200 more events in class X.
+- T=0.6s : Producer rate-limits; 195 suppressed; emits another
+  `SuppressedRateLimit { class: X }` (under a per-block or
+  per-suppression-fire emission cadence).
+
+The attacker's two-notice arrival timeline reveals attack
+spacing, suppression frequency, and (with calibration runs)
+even per-block ceiling values — recovering exactly the
+information the field-shape pin's prohibition on count was
+designed to deny.
+
+**Disposition: pin emission cadence at "at most one per class
+per attempt."** The producer's per-attempt `emit_state` carries
+a per-class `notice_emitted: bool` flag (cleared at attempt
+start, never cleared mid-attempt). When per-block ceiling is
+first exceeded for a class within an attempt — *and only if*
+`notice_emitted` is false for that class — the producer emits
+the notice and sets `notice_emitted = true`. Subsequent
+in-class budget exceedances within the same attempt drop the
+would-be event (per the per-block ceiling rule) but **do not
+emit further notices**. The flag is the latch that closes the
+emission-cadence covert channel.
+
+**Cross-attempt cadence (acknowledged residual at orchestrator
+layer).** An attacker forcing many attempts via
+`ConcurrentMutation`-driven retries observes one notice per
+attempt per class, yielding *attempt-rate* as a residual side-
+channel. This is bounded at the orchestrator's existing
+retry-loop policy layer (per `engine/refresh.rs` retry semantics:
+attempt count is capped, retry backoff is bounded). Tightening
+the cross-attempt cadence further would require producer state
+that survives across `produce_scan_result` invocations,
+contradicting the per-attempt producer-state-isolation
+property (`ViewMaterial` and `Scanner` are zeroized at attempt
+end). The cross-attempt threat is therefore deliberately
+addressed at the orchestrator-side retry-loop layer, not the
+producer-side notice cadence layer; pin recorded so future
+audit cannot mistake the layer-up disposition for an oversight.
+
+**Inline edits applied.**
+
+- §5.4.8 #5 — appended "Emission-cadence sub-pin (Round 4
+  review pass meta-review post-amendment, 2026-05-15; F13
+  sub-pin)" subsection naming the at-most-one-per-class-per-
+  attempt latch discipline and the cross-attempt layer-up
+  disposition.
+- §7.X C4 commit description — restructured the per-class
+  emission rate budget bullet to enumerate the per-attempt
+  state shape explicitly (per-class per-block `u32` counter
+  for ceiling check + per-class `notice_emitted: bool`
+  latch for cadence pin); pinned the "subsequent budget
+  exceedances drop events but do not emit further notices"
+  invariant; cross-referenced §5.4.8 #5's emission-cadence
+  sub-pin for the cross-attempt-cadence layer-up
+  disposition.
+
+##### F11-S — Per-output safe-point escalation criterion
+
+**The hostile-output-count gap.** F11's per-transaction
+safe-point closes the mid-derivation residency window for
+typical transactions (1–10 outputs; per-tx scan time well
+under the §3.1 millisecond-scale lock-latency target). For
+hostile transactions carrying many outputs (FCMP++ permits
+some upper bound; the exact bound is a Phase-1-author
+verification target against the protocol parameters), the
+per-transaction safe-point still leaves an N-output-derivation
+residency window for spend-derived secrets. If
+`recover_outputs_in_tx`'s per-output cost grows linearly with
+output count, a maximum-output-count hostile transaction
+extends per-tx scan time proportionally — the §3.1 lock-
+latency property's content-independence (which the five-
+checkpoint discipline was designed to deliver) becomes
+content-dependent again.
+
+**Disposition: pin the escalation criterion, defer the
+measurement to Phase 1 commit-author.** Phase 1 commit author
+has the visibility to assess this against actual benchmarked
+cost on reference hardware and against the protocol-parameter
+upper bound on outputs per transaction. The criterion is
+binding: if worst-case per-tx scan time under maximum-output-
+count hostile transactions exceeds the §3.1 millisecond-scale
+lock-latency target, the safe-point escalates to per-output
+granularity (check fires between consecutive per-output decap
+iterations within the per-tx loop, with the same safe-point
+semantics — after prior per-output material drops; before next
+per-output material loads). Per-output granularity imposes
+~1–3 ns × num_outputs per-tx cost (negligible against the
+per-output decap cost itself). The §3.1 lock-latency
+property's content-independence holds under either granularity
+*provided the criterion is satisfied*.
+
+**Why defer rather than escalate by default.** Per-output
+granularity has a real readability cost (the inner check
+sits inside two nested loops rather than one), and the
+typical-case per-tx scan time is well under the lock-latency
+target — the typical-case escalation is unnecessary. Phase 1
+commit-author makes the call against benchmarked cost; the
+choice is recorded in the C4 commit message and bisectable
+against the C4 commit boundary.
+
+**Inline edits applied.**
+
+- §7.X C4 commit description — added "Per-output escalation
+  criterion (F11 sub-pin amendment, 2026-05-15)" bullet
+  enumerating the verification deliverable (FCMP++
+  per-tx output upper bound; benchmarked
+  `recover_outputs_in_tx` per-output cost), the binding
+  disposition criterion (escalate to per-output if worst-case
+  per-tx scan time exceeds §3.1 lock-latency target), and
+  the audit-trail discipline (Phase 1 commit message
+  records measurement and chosen granularity).
+
+##### F12-S — `diagnostic_consumer_discipline` lint conceptual unification
+
+**The implementation-strategy clarification.** F12's
+unification of the F5 sub-scope (recursive trust-boundary;
+sanitized-projection-required for cross-boundary consumers)
+and the F12 sub-scope (cross-emitter ordering forbidden
+without explicit causal-context derivation) is at the
+contract level — one named discipline,
+`diagnostic_consumer_discipline`, two related properties.
+The implementation strategy follows each property's nature:
+F5 is a type-level property (likely realized as a compile-
+time trait-bound or `clippy` lint over consumer constructors);
+F12 is a code-pattern property (likely realized as an AST-
+level pattern-match over event-handler bodies comparing
+timestamps or arrival order across distinct emitters). These
+probably end up as two related checks under one configuration
+namespace rather than one literal lint pass.
+
+**Disposition: pin the conceptual-not-monolithic clarification
+in the FOLLOWUPS entry.** The unification is at the contract
+level (one named discipline, two related properties); the
+implementation strategy follows the property's nature (one
+type-level check + one AST-level check is a valid factoring
+that delivers the unified contract). Pinned here so a future
+"the lint doesn't exist as a single pass" finding cannot
+retroactively invalidate a multi-check implementation.
+
+**Why pin this now rather than at V3.1+ implementation time.**
+The V3.1+ consumer-actor PR's lint-author needs the contract-
+level intent clear at the moment they cut the implementation,
+not after they've spent design rounds defending a multi-check
+factoring against "the FOLLOWUPS entry says lint." Forecloses
+the recurrence pattern named in
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+where a procedural-discipline pin gets read as an
+implementation-architecture pin and forces the implementer
+to re-litigate the factoring.
+
+**Inline edits applied.**
+
+- `docs/FOLLOWUPS.md` `diagnostic_consumer_discipline` lint
+  entry — added "The lint is conceptual, not necessarily
+  monolithic (Stage 1 PR 4 Round 4 review pass meta-review
+  post-amendment, 2026-05-15; F12 sub-pin)" paragraph naming
+  the contract-level vs implementation-level distinction
+  and the two-checks-under-one-namespace factoring as a
+  valid satisfaction of the unified discipline.
+
 #### Considered and not elevated
 
 Reviewer 1's "considered-and-not-elevated" list (view-tag-timing
@@ -4069,19 +4328,43 @@ enforcement-gap amendment. CHANGELOG `[Unreleased]` / `Changed`
 gains a meta-review amendment entry distinct from the F1–F9
 close.
 
-**Round 4 closure rule (re-applied).** The review pass and its
-meta-review amendment are both explicit reopening mechanisms
-the closure rule (PR 5 §7) admits. None of F1–F13 reopened a
-prior round (Round 1 / 2 / 2 reframe / 3 dispositions all hold);
-F1–F9 dispositions land at Round 4's substrate level (contract
-pins, attack-surface enumerations, commit-list refinements);
-F11–F13 dispositions land at the F1–F9 substrate level (under-
+**F11-S / F12-S / F13-S close (post-amendment sub-pins,
+2026-05-15).** Three Phase-1-author-aware sub-pins on the
+F11–F13 dispositions, three sub-dispositions, all inline edits
+applied to §5.4.8 #5 (F13-S emission-cadence sub-pin), §7.X C4
+(F11-S per-output escalation criterion bullet; F13-S per-class
+state shape and notice-emitted latch invariant), and FOLLOWUPS
+`diagnostic_consumer_discipline` lint entry (F12-S
+conceptual-not-monolithic clarification). F13-S is the
+substantive sub-pin (closes the emission-cadence covert channel
+the F13 field-shape pin left open); F11-S is an implementation-
+discipline note Phase 1 commit-author applies against
+benchmarked cost; F12-S is a forward-template clarification
+preventing a future "the lint isn't monolithic" finding from
+invalidating a multi-check implementation. CHANGELOG
+`[Unreleased]` / `Changed` extends the meta-review amendment
+entry with the three sub-pins.
+
+**Round 4 closure rule (re-applied).** The review pass, the
+meta-review amendment, and the post-amendment sub-pins are all
+explicit reopening mechanisms the closure rule (PR 5 §7)
+admits. None of F1–F13 nor F11-S–F13-S reopened a prior round
+(Round 1 / 2 / 2 reframe / 3 dispositions all hold); F1–F9
+dispositions land at Round 4's substrate level (contract pins,
+attack-surface enumerations, commit-list refinements); F11–F13
+dispositions land at the F1–F9 substrate level (under-
 specification closures introduced by the F1–F9 disposition
-shapes). Round 4 re-closes here; the implementation branch
-(`feat/stage-1-pr4-refresh-engine`) cuts off the post-meta-
-review dev tip per the §6 Round 4 readiness gate (which the
-review-pass and meta-review dispositions re-confirm in their
-final state).
+shapes); F11-S–F13-S sub-pins land at the F11–F13 substrate
+level (sharpening the dispositions without reopening them).
+The recursive structure (review pass → meta-review →
+post-amendment) is the closure rule's reopening mechanism
+operating at each level; each level closes the wargaming
+surface known at its own closure time and reopens explicitly
+when a new shape surfaces. Round 4 re-closes here; the
+implementation branch (`feat/stage-1-pr4-refresh-engine`)
+cuts off the post-sub-pin dev tip per the §6 Round 4 readiness
+gate (which the review-pass, meta-review, and post-amendment
+dispositions re-confirm in their final state).
 
 **Forward-template — review-pass discipline.** The Round 4
 review pass is itself a forward-template artifact: per-engine
@@ -4664,7 +4947,9 @@ Introduces the `RefreshEngine`-implementing aggregate:
   events emitted at the audited call sites enumerated in
   §6's call-site sweep.
 - **Inner cancellation check (Round 4 review pass, 2026-05-15;
-  F2; safe-point pin from F11 amendment, 2026-05-15).** The
+  F2; safe-point pin from F11 amendment, 2026-05-15;
+  per-output escalation criterion from F11 sub-pin
+  amendment, 2026-05-15).** The
   per-block scan loop body adds a per-transaction cancellation
   check (`token.is_cancelled()` → return `RefreshError::Cancelled`
   on hit). **Safe-point firing site (binding).** The check fires
@@ -4691,18 +4976,71 @@ Introduces the `RefreshEngine`-implementing aggregate:
   per-block materials. Cost: ~1–3 ns per transaction;
   preserves §3.1 sub-block lock-latency property under
   adversarial daemon block crafting.
+- **Per-output escalation criterion (F11 sub-pin amendment,
+  2026-05-15).** The per-transaction safe-point granularity
+  is sufficient *if* per-transaction `recover_outputs_in_tx`
+  cost is bounded sub-millisecond independent of per-output
+  count. Phase 1 commit author MUST verify this against the
+  actual benchmarked cost: enumerate the FCMP++ per-tx
+  output upper bound (against
+  [`shekyl-protocol-spec`](../../docs/) protocol parameters
+  for the maximum legal output count per transaction at
+  current consensus height), measure
+  `recover_outputs_in_tx`'s per-output marginal cost on the
+  Phase 1 author's reference hardware, and compute the
+  worst-case per-tx scan time under maximum-output-count
+  hostile transactions. **Disposition criterion (binding):**
+  if worst-case per-tx scan time exceeds the §3.1 sub-block
+  lock-latency target (millisecond-scale under adversarial
+  daemon block crafting), the safe-point granularity
+  **escalates to per-output** — the inner check fires
+  between consecutive per-output decap iterations within
+  the per-tx loop, with the same safe-point semantics
+  (after prior per-output material drops; before next
+  per-output material loads). Per-output-granularity
+  imposes ~1–3 ns × num_outputs per-tx cost (negligible
+  against the per-output decap cost itself). The §3.1
+  lock-latency property's content-independence holds
+  under either granularity provided the criterion is
+  satisfied. Phase 1 commit-message records the
+  measurement and the chosen granularity per the
+  audit-trail discipline; the choice is bisectable
+  against the C4 commit boundary.
 - **Producer-side per-class emission rate budget (Round 4
-  review pass, 2026-05-15; F6).** `LocalRefresh::produce_scan_result`
-  tracks `O(num_event_classes)` `u32` counters for per-attempt
-  per-class emission tally. On each emission the producer
-  increments the class counter; when the per-block ceiling
-  (one-per-class-per-block for adversarial event classes;
-  one-per-block for `ScanProgress`) is exceeded, the
-  producer emits a single `SuppressedRateLimit { class:
-  <variant tag> }` notice and stops emitting that class
-  for the remainder of the attempt. Implementation: a
-  `[u32; NUM_DIAG_CLASSES]` array on `LocalRefresh::emit_state`
-  (per-attempt scratch), reset at attempt start.
+  review pass, 2026-05-15; F6; emission-cadence pin from
+  F13 sub-pin amendment, 2026-05-15).**
+  `LocalRefresh::produce_scan_result` tracks per-attempt
+  per-class emission state (`O(num_event_classes)` entries on
+  `LocalRefresh::emit_state`, per-attempt scratch, reset at
+  attempt start). Each entry carries (a) a `u32` per-class
+  per-block emission counter (cleared at block boundary) for
+  the per-block ceiling check, and (b) a per-class
+  `notice_emitted: bool` flag (cleared at attempt start, never
+  cleared mid-attempt) for the per-attempt
+  emission-cadence pin. **Per-block ceiling check.** On each
+  emission attempt, the per-block counter is incremented; when
+  the per-block ceiling (one-per-class-per-block for adversarial
+  event classes; one-per-block for `ScanProgress`) is exceeded,
+  the would-be event is dropped (no payload emitted).
+  **Per-attempt notice emission (F13 sub-pin).** When the
+  per-block ceiling is first exceeded for a class within an
+  attempt — *and only if* `notice_emitted` is false for that
+  class — the producer emits a single
+  `SuppressedRateLimit { class: SuppressedClass::<C> }`
+  notice and sets `notice_emitted = true` for that class.
+  Subsequent in-class budget exceedances within the same
+  attempt drop the would-be event (per the per-block ceiling
+  rule) but **do not emit further notices** — the
+  `notice_emitted` flag is the latch that closes the
+  emission-cadence covert channel. Cross-attempt cadence
+  (an attacker forcing many attempts via
+  `ConcurrentMutation`-driven retries) is bounded at the
+  orchestrator's existing retry-loop policy layer per
+  §5.4.8 #5's emission-cadence-sub-pin "cross-attempt
+  cadence is a separate layer-up question" framing; no
+  producer-side state survives across attempts (the
+  zeroization scope for `ViewMaterial` and `Scanner`
+  forecloses producer-side cross-attempt state).
 - The migration of the existing `run_refresh_task`
   producer-body content into `LocalRefresh::produce_scan_result`
   preserves the **five-cancellation-checkpoint discipline**
@@ -5077,3 +5415,56 @@ carries the same binding discipline. The implementation
 branch authorization continues to hold; the meta-review
 amendment shapes Phase 1's substrate without reopening it
 or extending its scope.
+
+**Closed in Round 4 review pass meta-review post-amendment
+sub-pins (2026-05-15).** A third-pass review of the F11–F13
+dispositions themselves (full writeup at §5.4.9
+"Post-amendment sub-pins — F11-S, F12-S, F13-S") produced
+**three Phase-1-author-aware sub-pins** — F11-S (per-output
+safe-point escalation criterion), F12-S
+(`diagnostic_consumer_discipline` lint conceptual
+unification), F13-S (`SuppressedRateLimit` emission-cadence
+sub-pin). Each sharpens the corresponding F-finding's
+disposition without reopening it; none reopens a Round 1–4
+disposition; none reopens an F1–F13 disposition. **F13-S is
+the substantive sub-pin**: F13's field-shape pin (carries
+class only) closed the payload covert channel but left the
+emission-cadence covert channel open — if the producer
+emits one notice per suppression-fire, an attacker
+reconstructs suppression frequency by counting notice
+arrivals in their own emit-arrival timeline regardless of
+payload shape. F13-S pins emission cadence at "at most one
+`SuppressedRateLimit { class }` per class per attempt" via
+a per-class `notice_emitted: bool` latch on the producer's
+per-attempt `emit_state`; cross-attempt cadence is bounded
+at the orchestrator's existing retry-loop policy layer
+(producer-side cross-attempt state is foreclosed by the
+zeroization scope for `ViewMaterial` and `Scanner`). **F11-S**
+pins the per-output safe-point escalation criterion: Phase 1
+commit-author verifies `recover_outputs_in_tx`'s benchmarked
+per-output cost on reference hardware against the FCMP++
+protocol-parameter upper bound on outputs per transaction; if
+worst-case per-tx scan time exceeds the §3.1 lock-latency
+target, the safe-point escalates to per-output granularity
+(check between consecutive per-output decap iterations).
+The C4 commit message records the measurement and the chosen
+granularity, bisectable against the C4 commit boundary.
+**F12-S** pins the conceptual-not-monolithic clarification
+in the FOLLOWUPS `diagnostic_consumer_discipline` lint
+entry: the unification is at the contract level (one named
+discipline, two related properties); the implementation
+strategy follows each property's nature (F5 sub-scope as a
+type-level check + F12 sub-scope as an AST-level pattern
+check is a valid factoring delivering the unified contract).
+The §7.X commit decomposition absorbs the post-amendment
+hardening: C4 carries the F11-S verification deliverable
+and the F13-S `notice_emitted: bool` latch invariant; the
+FOLLOWUPS entry carries the F12-S clarification. The
+recursive structure (review pass → meta-review → post-
+amendment) is the closure rule's reopening mechanism
+operating at each level of the substrate hierarchy. The
+implementation-branch authorization continues to hold; the
+sub-pins shape Phase 1's substrate (in particular, C4's
+commit-message audit-trail deliverable for the F11-S
+benchmark measurement) without reopening it or extending
+its scope.

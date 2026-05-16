@@ -3708,6 +3708,26 @@ one place to confirm each item's relationship to the wallet stack.
   boundary types and for cross-emitter timing comparisons
   in event-handler bodies.
 
+  **The lint is conceptual, not necessarily monolithic
+  (Stage 1 PR 4 Round 4 review pass meta-review post-
+  amendment, 2026-05-15; F12 sub-pin).** The unification is
+  at the contract level (one named discipline,
+  `diagnostic_consumer_discipline`, two related properties
+  it enforces), not necessarily at the implementation-pass
+  level. The F5 sub-scope (recursive trust-boundary) is a
+  type-level property — likely realized as a compile-time
+  trait-bound or `clippy` lint over consumer constructors;
+  the F12 sub-scope (cross-emitter ordering misuse) is a
+  code-pattern property — likely realized as an AST-level
+  pattern-match over event-handler bodies. The V3.1+
+  consumer-actor PR may land them as two related checks
+  under one configuration namespace rather than as a
+  single literal lint pass; either factoring satisfies the
+  contract. Pinned here so a future "the lint doesn't
+  exist as a single pass" finding cannot retroactively
+  invalidate a multi-check implementation that delivers
+  the unified discipline.
+
   **Trigger.** When the second consumer actor enters
   design rounds (`ReorgAmplificationDetector` and
   `PeerReputationActor` together exhaust the single-
