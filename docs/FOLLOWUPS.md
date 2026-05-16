@@ -824,6 +824,70 @@ sustainability is unaffected by the recalibration.
   Engine architecture: actor model with staged migration* §"RPC
   boundary model under actor architecture"; `docs/V3_STAKER_ARCHIVAL.md`.
 
+- **`Hybrid*` secret types: `Vec<u8>` for fixed-size scalars —
+  refactor to `[u8; N]` (sequencing trigger: Cluster 2 PR A
+  lands `from_zeroizing` constructors; Lens D ml-dsa upstream
+  API check informs idiomatic landing).** The `HybridSecretKey`
+  struct (`rust/shekyl-crypto-pq/src/signature.rs:31-36`) and
+  adjacent Classification-C Hybrid types per the Phase 0 Mission
+  Audit Cluster 2.5 sub-investigation carry fixed-size scalars
+  (Ed25519 secret = 32 bytes, ML-DSA-65 SK = 4032 bytes) as
+  `Vec<u8>` rather than `[u8; N]`. Three structural costs:
+
+  1. **Field-level `Vec<u8>::clone()` inside `sign()`.** Per
+     `rust/shekyl-crypto-pq/src/signature.rs:265-275`, the sign
+     path does `secret_key.ed25519.clone().try_into()` and
+     `secret_key.ml_dsa.clone().try_into()` to materialize fixed-
+     size arrays for the underlying crypto primitives. Fixed-size
+     storage at the struct level consumes the bytes directly
+     without the clone-and-try_into dance.
+  2. **`Vec<u8>::zeroize` zeroes the heap allocation but does
+     not shrink-and-realloc.** The wipe semantics are weaker
+     than fixed-array `Zeroize` because intermediate
+     reallocations during construction can leave fragments. Fixed-
+     array storage (stack for Ed25519's 32 bytes; `Box<[u8; N]>`
+     for ML-DSA's 4032 bytes if stack residency is undesirable)
+     tightens the wipe contract.
+  3. **Misalignment with `MlKem768DecapKey` canonical-post-
+     discipline pattern.** `MlKem768DecapKey::from_zeroizing(Zeroizing<[u8;
+     ML_KEM_768_DK_LEN]>)` is the canonical shape established in
+     PR #33; `HybridSecretKey`'s `Vec<u8>` shape predates that
+     discipline and hasn't been swept forward. Convergence on the
+     `from_zeroizing` pattern across all secret-bearing types is
+     the discipline goal.
+
+  *Disposition.* Pre-genesis V3.0 refactor. Migration is one PR's
+  scope (struct definition change + `sign()` inline-update +
+  call-site refactor at construction sites). The Cluster 2.5
+  classification has already verified zero `HybridSecretKey::clone()`
+  callers, bounding the call-site refactor scope.
+
+  *Sequencing.* After Cluster 2 PR A (`shekyl-crypto-pq`) lands
+  the `from_zeroizing` constructors for `SpendSecret` /
+  `ViewSecret`; the `Vec`→array refactor reuses the same pattern.
+  Lens D's ml-dsa upstream API check confirms whether the
+  upstream `ml_dsa::SigningKey` type exposes a `from_zeroizing`-
+  shaped constructor or whether a bridging helper is needed
+  (informs the idiomatic landing site).
+
+  *Reversion criterion* (per
+  `.cursor/rules/21-reversion-clause-discipline.mdc`). If Lens D
+  surfaces that the ml-dsa upstream crate's API is structurally
+  incompatible with the `from_zeroizing(Zeroizing<[u8; N]>)`
+  shape (e.g., the upstream type holds private state that can't
+  be reconstructed from raw bytes without a public constructor),
+  the disposition reverts to documenting the `Vec<u8>` retention
+  with explicit rationale citing the upstream API constraint,
+  rather than forcing an awkward bridge. The reversion is named
+  here at write time; future re-evaluation requires no
+  re-derivation of the rationale.
+
+  *Audit-doc link.* Surfaced during PR 4 Round-4-close + Phase 0
+  Mission Audit B-3 sub-investigation (Cluster 2.5 Clone-derive
+  walk; Hybrid* policy gap finding). Not in current Cluster 2
+  PR A's mechanical scope; warrants separate PR for the `sign()`
+  refactor surface.
+
 ---
 
 ## V3.1 — audit response and stressnet gates
