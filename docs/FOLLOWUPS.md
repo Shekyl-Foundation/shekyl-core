@@ -4304,7 +4304,7 @@ reference.
   `ciphersuite`'s internals. If upstream `ciphersuite` upgrades to
   `dalek-ff-group` 0.5, remove the gate.
 
-- **`sha2` 0.10.x has no `zeroize` feature; HKDF-SHA256 sponge-state
+- **`sha2` 0.10.x has no `zeroize` feature; HKDF-SHA256 chaining-state
   residency is documented-acceptance per the reversion-clause
   discipline.** Phase 0 Mission Audit Lens D, finding D-6 (per
   [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).
@@ -4314,9 +4314,12 @@ reference.
   `shekyl-crypto-pq` already enables. HKDF-SHA256 derivation of
   secret material via the workspace's `hkdf` consumers
   (`shekyl-crypto-pq`, `shekyl-engine-prefs`, `shekyl-proofs`) leaves
-  a per-call residency window in the sha2 sponge state (~32 bytes per
-  `Sha256` instance). The derived material itself is held in
-  `Zeroizing<…>` by the caller; no shekyl-side wrapper.
+  a per-call residency window in the SHA-256 internal chaining state
+  (~32 bytes per `Sha256` instance; SHA-256 is Merkle–Damgård, not a
+  sponge — the residency is the eight 32-bit chaining words plus the
+  block buffer, not Keccak-style absorb/squeeze state). The derived
+  material itself is held in `Zeroizing<…>` by the caller; no
+  shekyl-side wrapper.
 
   *Rejected alternatives.* **(a)** Upstream-contribute `zeroize`
   feature to RustCrypto `sha2` is the right long-term answer and is
@@ -4344,12 +4347,12 @@ reference.
      `shekyl-engine-prefs`, and `shekyl-proofs` adopt
      `features = ["zeroize"]` and this disposition closes as fixed.
   2. **A specific exposure pathway is identified that elevates the
-     residency window beyond the per-call sponge state.** Examples:
-     a fault-injection, memory-snapshot, or other attack model that
-     can observe the sponge state after `finalize()` returns under
-     conditions reachable by the threat model. The pathway must be
-     specific (named threat vector plus memory-locality analysis),
-     not speculative.
+     residency window beyond the per-call SHA-256 chaining state.**
+     Examples: a fault-injection, memory-snapshot, or other attack
+     model that can observe the chaining state after `finalize()`
+     returns under conditions reachable by the threat model. The
+     pathway must be specific (named threat vector plus
+     memory-locality analysis), not speculative.
 
   *Cross-references.*
   [`.cursor/rules/17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc)

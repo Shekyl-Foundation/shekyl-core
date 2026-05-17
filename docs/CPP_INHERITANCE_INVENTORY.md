@@ -39,7 +39,14 @@ file-level disposition only.
 
 ## Categorization framework
 
-Each inherited C++ file falls into exactly one of four categories:
+Each inherited C++ file has a single category at any given time; the
+per-section tables below list files by their primary entry point. Files
+that exist only as siblings of a listed file (paired `.c`/`.h`, paired
+`.cpp`/`.h`, paired `.{c,h}` shorthand, `_stub` / template / generated
+variants of a primary file, and contents of explicitly-named
+directories) inherit the category of their primary file unless this
+inventory states otherwise. See the "Inventory convention" subsection
+below for the exhaustive rules; the four categories are:
 
 | Category | Disposition | Driving workstream | Status |
 | --- | --- | --- | --- |
@@ -53,6 +60,41 @@ post-Shekyl-first architecture), not **transient** (what state the file
 is in today). A file's category does not change because of a single PR's
 edit; it changes only when a workstream completes the work that moves
 the file across the boundary.
+
+## Inventory convention
+
+The per-section tables list files by their **primary entry point** (the
+file that carries the function definitions, the type declarations, or
+the public symbols a category consumer cites). Sibling files inherit
+the primary file's category unless this inventory states otherwise:
+
+- **Header/source pairs.** A row listing `foo.c` covers `foo.h` (and
+  vice versa). A row using `foo.{c,h}` or `foo.{cpp,h}` shorthand
+  covers both files explicitly.
+- **Generated / template / stub variants.** A row listing
+  `foo.c` covers `foo_template.h`, `foo_template.S`, `foo_stub.c`,
+  and any compiler-emitted variants used by the primary file.
+- **Directories.** A row listing `crypto_ops_builder/` covers every
+  file in the directory.
+- **Component-hash extras.** For CryptoNight component hashes (Blake,
+  Groestl, JH, Skein), the `hash-extra-<name>.c` wrapper inherits the
+  category of the primary component-hash file.
+
+A file that is **not** a sibling of any listed file, and which is
+functionally distinct (its own algorithm, library, or interface), gets
+its own row. The Phase 0 audit's PR #46 review surfaced four such
+files that warranted explicit rows: `aesb.c` and `oaes_lib.{c,h}` +
+`oaes_config.h` (CryptoNight AES primitives + OpenSSL AES port),
+`rx-slow-hash.c` (RandomX slow-hash), and `bulletproofs_plus.cc`
+(BulletproofPlus parallel C++ implementation; see F.C++-3's
+"bulletproofs_plus re-verification" sub-section for the
+categorization-corrective note this triggered).
+
+Files in `src/crypto/` and `src/fcmp/` that are pure utility headers
+shared across the kept-set (e.g., `c_threads.h`, `duration.h`,
+`generic-ops.h`, `hash-ops.h`, `initializer.h`) inherit F.C++-2 by
+default; if a workstream needs to migrate or delete any of these,
+the workstream's PR adds an explicit row.
 
 ## F.C++-1 — Pending deletion
 
@@ -68,14 +110,17 @@ algorithm replacement also lands with this workstream.
 | --- | --- | --- |
 | [`src/crypto/slow-hash.c`](../src/crypto/slow-hash.c) | CryptoNight slow hash core | 2 MiB scratchpad never zeroized in inherited code (Lens C C-4/C-5 stop-gap-then-deletion context); see also [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md) 32-bit-fallback gating |
 | [`src/crypto/pow_cryptonight.cpp`](../src/crypto/pow_cryptonight.cpp) | CryptoNight PoW driver | Routed via the modular PoW schema interface per [`docs/DOCUMENTATION_TODOS_AND_PQC.md`](./DOCUMENTATION_TODOS_AND_PQC.md) §1.10; delete the driver, registration falls out by reference |
-| `src/crypto/CryptonightR_JIT.h`, `CryptonightR_JIT_stub.c` | CryptoNight JIT compiler | Untested 32-bit fallback per [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md) |
+| `src/crypto/aesb.c` | AES block primitives used by CryptoNight slow-hash | Cited only from CryptoNight paths; no consumer outside the deletion set |
+| `src/crypto/oaes_lib.{c,h}`, `oaes_config.h` | OpenSSL AES library port (CryptoNight dependency) | Cited only from CryptoNight paths; the entire OAES surface is CryptoNight-private and deletes with the rest of the set |
+| `src/crypto/CryptonightR_JIT.{c,h}`, `CryptonightR_JIT_stub.c`, `CryptonightR_template.{h,S}` | CryptoNight JIT compiler + code-generation template | Untested 32-bit fallback per [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md); JIT main, stub, and template all delete together |
 | `src/crypto/variant2_int_sqrt.h` | CryptoNight variant-2 integer sqrt helper | Used only by `slow-hash.c` |
 | `src/crypto/variant4_random_math.h` | CryptoNight variant-4 random-math helper | Used only by `slow-hash.c` |
-| `src/crypto/blake256.h` | Blake256 (CryptoNight component hash) | Not used outside CryptoNight chain |
+| `src/crypto/blake256.{c,h}` | Blake256 (CryptoNight component hash) | Not used outside CryptoNight chain |
 | `src/crypto/groestl.{c,h}`, `groestl_tables.h` | Groestl (CryptoNight component hash) | Not used outside CryptoNight chain |
-| `src/crypto/jh.c` | JH (CryptoNight component hash) | Not used outside CryptoNight chain |
-| `src/crypto/skein_port.h` | Skein (CryptoNight component hash) | Not used outside CryptoNight chain |
-| `src/crypto/hash-extra-blake.c`, `hash-extra-groestl.c`, `hash-extra-jh.c` | CryptoNight component-hash extras | Bundled with their respective component-hash files |
+| `src/crypto/jh.{c,h}` | JH (CryptoNight component hash) | Not used outside CryptoNight chain |
+| `src/crypto/skein.c`, `skein_port.h` | Skein (CryptoNight component hash) | Not used outside CryptoNight chain |
+| `src/crypto/hash-extra-blake.c`, `hash-extra-groestl.c`, `hash-extra-jh.c`, `hash-extra-skein.c` | CryptoNight component-hash extras | Bundled with their respective component-hash files |
+| [`src/fcmp/bulletproofs.{cc,h}`](../src/fcmp/bulletproofs.cc) | Legacy (non-plus) Bulletproof — already empty stub | `.cc` is `#include "bulletproofs.h"` only ("Legacy (non-plus) Bulletproof implementation removed. Use bulletproofs_plus.cc for BulletproofPlus."); per [`60-no-monero-legacy.mdc`](../.cursor/rules/60-no-monero-legacy.mdc) Rule 60, `RCTTypeBulletproof` is removed at consensus and the stub files become deletion residue |
 
 **Workstream attribution.** A-4/A-5/A-7/A-8 PoW workstream (paired with
 RandomX-v2-from-genesis + LWMA-1 difficulty replacement). Per
@@ -99,12 +144,14 @@ handles the F.C++-1 deletion set).
 
 | File | Inherited role | Why kept at V3.0 |
 | --- | --- | --- |
-| [`src/crypto/keccak.c`](../src/crypto/keccak.c) | Keccak-f[1600] permutation | `cn_fast_hash` + general Keccak hashing; load-bearing for transitional period; subsumed by Rust `shekyl-crypto-pq` long-term |
-| [`src/crypto/hash.{c,h}`](../src/crypto/hash.c) | General hash API | Wallet2 + tx_extra + serialization consumers; transitional substrate |
-| [`src/crypto/crypto.cpp`](../src/crypto/crypto.cpp), [`src/crypto/crypto-ops.{c,h}`](../src/crypto/crypto-ops.c), `src/crypto/crypto_ops_builder/` | Bernstein ed25519 ref10 implementation | Constant-time by design; widely-audited upstream; used by C++ crypto path; mirror of Rust `curve25519-dalek` ed25519 surface |
-| `src/crypto/generators.h` | Group generators (Ed25519 G, H, T) | Shared between C++ and Rust via FFI; canonical generator constants |
-| [`src/crypto/pow_randomx.cpp`](../src/crypto/pow_randomx.cpp), [`src/crypto/pow_registry.cpp`](../src/crypto/pow_registry.cpp) | RandomX PoW driver + registry | Paired with A-4/A-5/A-7/A-8 PoW workstream; load-bearing for V3.0 RandomX-v2-from-genesis ship |
-| [`src/crypto/random.c`](../src/crypto/random.c) | CSPRNG source (`/dev/urandom` + `CryptGenRandom`) | Lens F F.8 verified: production randomness routes through this on the C++ side; corresponds to Rust `OsRng` discipline |
+| [`src/crypto/keccak.{c,h}`](../src/crypto/keccak.c) | Keccak-f[1600] permutation | `cn_fast_hash` + general Keccak hashing; load-bearing for transitional period; subsumed by Rust `shekyl-crypto-pq` long-term |
+| [`src/crypto/hash.{c,h}`](../src/crypto/hash.c), `hash-ops.h` | General hash API | Wallet2 + tx_extra + serialization consumers; transitional substrate |
+| [`src/crypto/crypto.{cpp,h}`](../src/crypto/crypto.cpp), [`src/crypto/crypto-ops.{c,h}`](../src/crypto/crypto-ops.c), `crypto-ops-data.c`, `src/crypto/crypto_ops_builder/` | Bernstein ed25519 ref10 implementation + precomputed tables | Constant-time by design; widely-audited upstream; used by C++ crypto path; mirror of Rust `curve25519-dalek` ed25519 surface |
+| `src/crypto/generators.{cpp,h}` | Group generators (Ed25519 G, H, T) | Shared between C++ and Rust via FFI; canonical generator constants |
+| [`src/crypto/pow_randomx.cpp`](../src/crypto/pow_randomx.cpp), [`src/crypto/pow_registry.{cpp,h}`](../src/crypto/pow_registry.cpp), `pow_schema.h` | RandomX PoW driver + registry + interface schema | Paired with A-4/A-5/A-7/A-8 PoW workstream; load-bearing for V3.0 RandomX-v2-from-genesis ship; `pow_schema.h` survives the CryptoNight-driver deletion as the modular PoW interface |
+| `src/crypto/rx-slow-hash.c` | RandomX slow-hash wrapper (RandomX backing for `cn_slow_hash`-shaped callers) | Paired with `pow_randomx.cpp`; load-bearing for RandomX-v2-from-genesis; kept alongside the rest of the RandomX path |
+| [`src/crypto/random.{c,h}`](../src/crypto/random.c) | CSPRNG source (`/dev/urandom` + `CryptGenRandom`) | Lens F F.8 verified: production randomness routes through this on the C++ side; corresponds to Rust `OsRng` discipline |
+| `src/crypto/c_threads.h`, `duration.h`, `generic-ops.h`, `initializer.h` | C utility headers (threading shims, timing primitives, generic-operator macros, constructor-priority macros) | Used across the kept-set; no replacement warranted at V3.0; deletion would require auditing every cross-component consumer |
 
 **Workstream attribution.** Optional docstring sweep folded into
 A-4/A-5/A-7/A-8 PoW workstream. The files themselves stay at V3.0;
@@ -128,6 +175,7 @@ files when it completes.
 | --- | --- | --- |
 | [`src/crypto/chacha.{h,cpp}`](../src/crypto/chacha.h) | ChaCha20 stream cipher (used by wallet2 encrypt/decrypt) | B-3 architectural workstream: Rust handles encrypt/decrypt of on-disk blob with master key Rust holds internally; the C++ `chacha::generate_chacha_key` + `chacha::chacha_encrypt` / `chacha_decrypt` surfaces cease to exist when wallet2 cluster + B-3 land |
 | [`src/crypto/hmac-keccak.{h,c}`](../src/crypto/hmac-keccak.h) | HMAC-Keccak (used by ChaCha cipher integrity check) | Subsumed alongside `chacha.{h,cpp}` when B-3 lands; verify usage during the wallet2-cluster pre-flight to confirm no non-wallet2 callers |
+| [`src/fcmp/bulletproofs_plus.cc`](../src/fcmp/bulletproofs_plus.cc), [`src/fcmp/multiexp.{cc,h}`](../src/fcmp/multiexp.cc) | C++ BulletproofPlus prover/verifier (parallel implementation) + multi-exponentiation support | **Tentative categorization pending re-verification** — see "bulletproofs_plus re-verification" subsection below. Active C++ callers exist (`wallet2.cpp:10036`, `device_trezor/protocol.cpp:700`, `rctSigs.cpp:326,135,142`); the F.C++-4 entry for `bulletproofs_plus.h` framed it as Rust-FFI-routed, but the call graph shows the `.cc` is the live implementation those sites call. Disposition lands when the per-call-site walk confirms FCMP++-vs-pre-FCMP++ scope and whether a Rust-side replacement is intended at V3.0 or V3.1+ |
 
 **Workstream attribution.** B-3 architectural workstream + wallet2
 cluster (Lens B + C dispositions). The C-4/C-5 stop-gap context applies:
@@ -136,6 +184,53 @@ V3.1 B-3 architectural workstream collapses the file set entirely. PR
 descriptions for both PRs must record this subsumption so reviewers and
 future auditors don't double-count the work or get confused by the
 eventual collapse.
+
+### `bulletproofs_plus` re-verification (inventory-triggered finding)
+
+The F.C++-4 entry for [`src/fcmp/bulletproofs_plus.h`](../src/fcmp/bulletproofs_plus.h)
+(below) describes the file as Rust-FFI-routed: "Type declaration
+consumed by `rctSigs.cpp`; underlying proof generation/verification
+routes through Rust `shekyl-proofs` / `crypto/generalized-bulletproofs`."
+This claim was surfaced during PR #46 Copilot review as needing
+verification, because [`src/fcmp/bulletproofs_plus.cc`](../src/fcmp/bulletproofs_plus.cc)
+exists as a ~1000-line C++ implementation with active callers:
+
+- [`src/wallet/wallet2.cpp:10036`](../src/wallet/wallet2.cpp) calls
+  `rct::bulletproof_plus_PROVE`.
+- [`src/device_trezor/trezor/protocol.cpp:700`](../src/device_trezor/trezor/protocol.cpp)
+  calls `bulletproof_plus_PROVE` and (line 720)
+  `rct::bulletproof_plus_VERIFY`.
+- [`src/fcmp/rctSigs.cpp:135,142,326`](../src/fcmp/rctSigs.cpp) calls
+  `bulletproof_plus_VERIFY` and `bulletproof_plus_PROVE` (the
+  `make_dummy_bulletproof_plus` at lines 53-81 is the
+  transaction-construction-shape stand-in the F.C++-4 entry referred to,
+  not the actual prove/verify path).
+
+These call sites resolve to the symbols defined in
+`bulletproofs_plus.cc` (line 502, etc.), not to a Rust-FFI shim. The
+re-verification disposition: a follow-up per-call-site walk must
+determine (a) which call sites belong to the FCMP++ transaction path
+(where Rust BulletproofPlus is intended to be the canonical
+implementation) versus pre-FCMP++ residue (where the C++ path is
+legitimately the implementation), (b) whether a Rust-side replacement
+for the C++ prover/verifier is in scope for V3.0 (alongside the
+wallet2 cluster + B-3 workstream) or V3.1+, and (c) accordingly
+whether `bulletproofs_plus.{cc,h}` belongs in F.C++-1 (delete
+post-call-site-migration), F.C++-3 (transitional with the rest of the
+wallet2-cluster surface), or remains in F.C++-4 (correct
+categorization once the per-call-site walk confirms FFI routing).
+Until then, the entry above lists the file tentatively in F.C++-3 as
+the conservative choice, and the F.C++-4 entry for `bulletproofs_plus.h`
+carries a cross-reference back to this subsection.
+
+The re-verification was prompted by PR #46 Copilot review and is the
+canonical example of how this inventory's "exhaustive per-file
+disposition" claim must be defended against categorization-by-shape
+errors (the `.h` looked like a forward declaration consumed by Rust
+because the F.C++-4 entry was written in that frame; the call graph
+reveals a parallel-C++ implementation). Future audits citing this
+inventory should treat F.C++-4 entries as conditional on FFI-routing
+evidence at the call sites, not on the file's structural shape.
 
 ## F.C++-4 — Keep (Rust-FFI wrapper, verified routing)
 
@@ -149,7 +244,7 @@ construction surfaces that remain in C++ at V3.0.
 | --- | --- | --- |
 | [`src/fcmp/rctSigs.{cpp,h}`](../src/fcmp/rctSigs.cpp) | FCMP++ signature construction + verification (Rust `shekyl-fcmp` / `shekyl-proofs`) | Confirmed Rust-FFI wrapper: `#include "shekyl/shekyl_ffi.h"` at `rctSigs.cpp:40`; `make_dummy_bulletproof_plus` is a transaction-construction-shape stand-in pattern, not a parallel implementation |
 | [`src/fcmp/rctOps.{cpp,h}`](../src/fcmp/rctOps.cpp), [`src/fcmp/rctTypes.{cpp,h}`](../src/fcmp/rctTypes.cpp), [`src/fcmp/rctCryptoOps.c`](../src/fcmp/rctCryptoOps.c) | RingCT data types + crypto-ops wrappers | Supporting layer for `rctSigs.{cpp,h}`; same Rust-FFI consumer status |
-| [`src/fcmp/bulletproofs_plus.h`](../src/fcmp/bulletproofs_plus.h) | Bulletproofs+ proof shape declaration | Type declaration consumed by `rctSigs.cpp`; underlying proof generation/verification routes through Rust `shekyl-proofs` / `crypto/generalized-bulletproofs` |
+| [`src/fcmp/bulletproofs_plus.h`](../src/fcmp/bulletproofs_plus.h) | Bulletproofs+ proof shape declaration | **Re-verification pending** — see F.C++-3's "bulletproofs_plus re-verification" subsection above. The `make_dummy_bulletproof_plus` pattern in `rctSigs.cpp` is the transaction-construction-shape stand-in this row originally described, but `bulletproof_plus_PROVE` / `bulletproof_plus_VERIFY` call sites resolve to the C++ implementation in `bulletproofs_plus.cc`, not a Rust-FFI shim. Categorization re-evaluated when the per-call-site walk lands |
 
 **Workstream attribution.** None (no migration work scheduled). These
 files stay as Rust-FFI consumers as long as the transaction-construction
