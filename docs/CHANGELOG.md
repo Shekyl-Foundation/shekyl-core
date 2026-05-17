@@ -90,7 +90,9 @@
   genesis-audit reviewers (5 RPC structs + desc calc +
   log line + utility struct all look semantically live
   without reading FCMP++ disambiguators). Bisectable,
-  mechanical, no architectural implications. Diff:
+  mechanical, no architectural implications. Production-
+  source diff (excluding this CHANGELOG entry, which adds
+  ~70 lines of documentation delta):
   `4 files changed, 4 insertions(+), 19 deletions(-)`.
   Not RingCT proper — `rct::*` types, output commitments,
   Bulletproofs+ range proofs, and the wider RCT machinery
