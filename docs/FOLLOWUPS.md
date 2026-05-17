@@ -824,6 +824,362 @@ sustainability is unaffected by the recalibration.
   Engine architecture: actor model with staged migration* §"RPC
   boundary model under actor architecture"; `docs/V3_STAKER_ARCHIVAL.md`.
 
+- **`Hybrid*` secret types: `Vec<u8>` for fixed-size scalars —
+  refactor to `[u8; N]` (sequencing trigger: Cluster 2 PR A
+  lands `from_zeroizing` constructors; Lens D ml-dsa upstream
+  API check informs idiomatic landing).** The `HybridSecretKey`
+  struct (`rust/shekyl-crypto-pq/src/signature.rs:31-36`) and
+  adjacent Classification-C Hybrid types per the Phase 0 Mission
+  Audit Cluster 2.5 sub-investigation carry fixed-size scalars
+  (Ed25519 secret = 32 bytes, ML-DSA-65 SK = 4032 bytes) as
+  `Vec<u8>` rather than `[u8; N]`. Three structural costs:
+
+  1. **Field-level `Vec<u8>::clone()` inside `sign()`.** Per
+     `rust/shekyl-crypto-pq/src/signature.rs:265-275`, the sign
+     path does `secret_key.ed25519.clone().try_into()` and
+     `secret_key.ml_dsa.clone().try_into()` to materialize fixed-
+     size arrays for the underlying crypto primitives. Fixed-size
+     storage at the struct level consumes the bytes directly
+     without the clone-and-try_into dance.
+  2. **`Vec<u8>::zeroize` zeroes the heap allocation but does
+     not shrink-and-realloc.** The wipe semantics are weaker
+     than fixed-array `Zeroize` because intermediate
+     reallocations during construction can leave fragments. Fixed-
+     array storage (stack for Ed25519's 32 bytes; `Box<[u8; N]>`
+     for ML-DSA's 4032 bytes if stack residency is undesirable)
+     tightens the wipe contract.
+  3. **Misalignment with `MlKem768DecapKey` canonical-post-
+     discipline pattern.** `MlKem768DecapKey::from_zeroizing(Zeroizing<[u8;
+     ML_KEM_768_DK_LEN]>)` is the canonical shape established in
+     PR #33; `HybridSecretKey`'s `Vec<u8>` shape predates that
+     discipline and hasn't been swept forward. Convergence on the
+     `from_zeroizing` pattern across all secret-bearing types is
+     the discipline goal.
+
+  *Disposition.* Pre-genesis V3.0 refactor. Migration is one PR's
+  scope (struct definition change + `sign()` inline-update +
+  call-site refactor at construction sites). The Cluster 2.5
+  classification has already verified zero `HybridSecretKey::clone()`
+  callers, bounding the call-site refactor scope.
+
+  *Sequencing.* After Cluster 2 PR A (`shekyl-crypto-pq`) lands
+  the `from_zeroizing` constructors for `SpendSecret` /
+  `ViewSecret`; the `Vec`→array refactor reuses the same pattern.
+  Lens D's ml-dsa upstream API check confirms whether the
+  upstream `ml_dsa::SigningKey` type exposes a `from_zeroizing`-
+  shaped constructor or whether a bridging helper is needed
+  (informs the idiomatic landing site).
+
+  *Reversion criterion* (per
+  `.cursor/rules/21-reversion-clause-discipline.mdc`). If Lens D
+  surfaces that the ml-dsa upstream crate's API is structurally
+  incompatible with the `from_zeroizing(Zeroizing<[u8; N]>)`
+  shape (e.g., the upstream type holds private state that can't
+  be reconstructed from raw bytes without a public constructor),
+  the disposition reverts to documenting the `Vec<u8>` retention
+  with explicit rationale citing the upstream API constraint,
+  rather than forcing an awkward bridge. The reversion is named
+  here at write time; future re-evaluation requires no
+  re-derivation of the rationale.
+
+  *Audit-doc link.* Surfaced during PR 4 Round-4-close + Phase 0
+  Mission Audit B-3 sub-investigation (Cluster 2.5 Clone-derive
+  walk; Hybrid* policy gap finding). Not in current Cluster 2
+  PR A's mechanical scope; warrants separate PR for the `sign()`
+  refactor surface.
+
+- **Difficulty algorithm: replace inherited CryptoNote cut-windowed
+  average with LWMA-1 (sequencing trigger: A-4/A-5/A-7/A-8 PoW
+  workstream PR; pre-genesis).** The inherited difficulty algorithm
+  at [`src/cryptonote_basic/difficulty.cpp:122-163,203-240`](../src/cryptonote_basic/difficulty.cpp)
+  is the original CryptoNote cut-windowed average (sort timestamps;
+  cut 60 outliers per `DIFFICULTY_CUT`; compute time_span vs
+  total_work; scale by target_seconds). Parameters live in
+  [`src/cryptonote_config.h:82-95`](../src/cryptonote_config.h)
+  (`DIFFICULTY_TARGET_V2 = 120`, `DIFFICULTY_WINDOW = 720`,
+  `DIFFICULTY_LAG = 15 // !!!`, `DIFFICULTY_CUT = 60`,
+  `DIFFICULTY_BLOCKS_COUNT = DIFFICULTY_WINDOW + DIFFICULTY_LAG`).
+  Replacement target is LWMA-1 (Linear Weighted Moving Average,
+  zawy12 canonical implementation per the
+  [`zawy12/difficulty-algorithms`](https://github.com/zawy12/difficulty-algorithms)
+  reference repository), implemented in Rust per `20-rust-vs-cpp-policy`
+  rule #2 (difficulty algorithm defines a cryptographic contract
+  that other code consumes → Rust).
+
+  **Three primary rationales aligned with the mission hierarchy
+  per [`.cursor/rules/00-mission.mdc`](../.cursor/rules/00-mission.mdc):**
+
+  1. **Commitment 1 (security): no regression; defensive parity.**
+     The difficulty algorithm is PoW-input-independent (operates
+     on timestamps + cumulative difficulties only); LWMA-1's
+     security posture against timestamp-manipulation attacks is
+     well-characterized through ~8 years of real-world deployment
+     (Masari, multiple Monero forks, smaller CPU-mineable
+     projects) and through the simulation tooling in the canonical
+     zawy12 repository (hundreds of thousands of historical-data
+     blocks). The replacement does not weaken the PQC posture
+     (orthogonal to the difficulty surface) and does not weaken
+     timestamp-attack resistance.
+  2. **Commitment 2 (privacy): material side-benefit.** LWMA-1's
+     linear weighting introduces natural jitter in block intervals
+     compared to smoother algorithms (e.g., ASERT). For a
+     privacy-focused chain where transactions are broadcast over
+     anonymity networks (Tor, I2P), more variable block production
+     adds natural obfuscation against statistical timing attacks
+     that correlate broadcast-time with block-find-time. This is
+     a recognized DAA-design side-effect rather than a primary
+     LWMA goal, but it aligns with mission commitment 2's "privacy
+     is the product" framing — the inherent noise is privacy
+     surface that costs nothing else.
+  3. **Commitment 3 (outlast the team): mature substrate, low
+     reasoning load.** LWMA-1 is a 2017-vintage algorithm with
+     extensive post-2017 community testing (LWMA-2/3/4 were
+     evaluated and found not consistently superior; LWMA-1 remains
+     the recommended baseline as of 2025-2026). Simpler than
+     exponential algorithms (ASERT, EMA variants) to reason about,
+     debug, and audit — which matters disproportionately for an
+     unknown future maintainer who inherits the codebase. The
+     zawy12 reference repository is still actively referenced in
+     2025-2026 papers and projects (including post-quantum
+     experiments), so the canonical source remains a maintained
+     dependency-of-knowledge rather than a frozen reference.
+
+  **Tuning parameters (specific values pending PoW PR scope):**
+
+  | Parameter | Inherited (CryptoNote) | LWMA-1 candidate range | Notes |
+  | --- | --- | --- | --- |
+  | `N` (window) | `DIFFICULTY_WINDOW = 720` (24h at 120s) | 60–120 blocks (2–4h at 120s) | LWMA-1's fast-response design benefits from shorter windows; final value tuned during PoW PR against simulation data |
+  | Difficulty clamp | None | Max 3× change per block (zawy12 standard) | Prevents runaway adjustments on adversarial timestamps |
+  | Target block time | `DIFFICULTY_TARGET_V2 = 120s` | Inherit 120s | No coupling to algorithm choice; PoW PR may revisit independently |
+  | Outlier cut (`DIFFICULTY_CUT`) | 60 timestamps | n/a — not part of LWMA-1 | LWMA-1 handles timestamp manipulation via clamp + weighting, not via outlier excision |
+  | Lag (`DIFFICULTY_LAG`) | 15 blocks (carries `// !!!` warning) | n/a — not part of LWMA-1 | Disappears with algorithm replacement |
+
+  **Alternatives considered and rejected, with reversion criteria
+  per [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc):**
+
+  - **LWMA-2 / LWMA-3 / LWMA-4.** Community testing across multiple
+    coins did not establish consistent superiority over LWMA-1;
+    later variants introduced complexity (additional weighting
+    schemes, more aggressive adjustments) that produced oscillation
+    artifacts in some hashrate regimes. Rejected because LWMA-1
+    delivers the load-bearing properties with lower reasoning
+    load. *Reversion criterion:* if a Shekyl-specific simulation
+    against the canonical zawy12 tooling demonstrates LWMA-2+ has
+    materially better behavior under Shekyl's specific hashrate
+    profile (CPU-only RandomX v2; small-chain bootstrap regime),
+    reopen the disposition.
+  - **ASERT (Absolutely Scheduled Exponentially Rising Targets).**
+    Theoretically smoother long-term stability; strong deployment
+    record on Bitcoin Cash; respected in DAA literature. Rejected
+    for Shekyl-specific reasons: (a) ASERT's smoothness reduces
+    the privacy-jitter side-benefit material to commitment 2
+    above; (b) LWMA-1's faster response to hashrate changes is
+    better-shaped for the small-chain bootstrap regime where CPU
+    miners join and leave on short timescales; (c) ASERT's
+    exponential math raises the reasoning-load floor for future
+    maintainers more than LWMA-1's linear-weighted average does.
+    *Reversion criterion:* if Shekyl's hashrate volatility damps
+    to long-term equilibrium (post-bootstrap stable regime; e.g.,
+    several years post-genesis with consistent CPU miner
+    participation), and the privacy-jitter benefit is no longer
+    load-bearing (e.g., transaction-broadcast timing analysis is
+    mitigated by other privacy mechanisms), revisit ASERT for its
+    long-term stability advantages.
+  - **Keep inherited CryptoNote cut-windowed algorithm.** Rejected
+    per [`.cursor/rules/16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc):
+    inherited algorithm carries three Lens E findings
+    (`DIFFICULTY_TARGET_V1` Rule-60 residue per E.4-C-1;
+    `DIFFICULTY_LAG = 15 // !!!` warning marker per E.4-C-2;
+    Rule-75 rationale-documentation gap per E.4-C-3). Replacement
+    subsumes E.4-C-1 and E.4-C-2 (V1 parameter and LAG marker
+    both disappear when the algorithm is replaced) and transforms
+    E.4-C-3 into a forward-template requirement on the new Rust
+    implementation (rationale + bounds-for-safe-adjustment docs
+    per Rule 75; matches the canonical positive-reference shape
+    of [`rust/shekyl-economics/build.rs`](../rust/shekyl-economics/build.rs)).
+    *Reversion criterion (named for completeness):* if the LWMA-1
+    Rust implementation surfaces a structural defect against
+    Shekyl's specific PoW threat model that the inherited
+    algorithm doesn't share, revisit the keep-vs-replace decision.
+
+  *Disposition.* Replace pre-genesis as part of the
+  A-4/A-5/A-7/A-8 PoW workstream PR (RandomX v2 + LWMA-1 paired
+  decisions; same workstream landing on `dev` shortly). New Rust
+  implementation in `shekyl-consensus` per the
+  `20-rust-vs-cpp-policy` rule #2 routing. Forward-template
+  requirement: the new implementation must carry per-constant
+  rationale + bounds-for-safe-adjustment docs per Rule 75, ideally
+  via the build-time-codegen pattern from `shekyl-economics` /
+  `shekyl-staking` for tuning parameters that may need future
+  community consensus to adjust.
+
+  *Sequencing.* Lands with the PoW PR (paired with RandomX v2
+  from genesis per `docs/DOCUMENTATION_TODOS_AND_PQC.md` §1.10
+  and Phase 0 Mission Audit Lens A finding A-8). The pre-genesis
+  Rule-60 residue cleanup for `cryptonote_config.h` DIFFICULTY_*
+  V1 parameters (Lens E finding E.4-C-1) folds into the same
+  PR by definition (V1 parameters disappear when the algorithm
+  is replaced); the `DIFFICULTY_LAG // !!!` semantic verification
+  (E.4-C-2) also folds in by definition (LAG is CryptoNote-
+  specific). The Rule 75 rationale-doc forward-template (E.4-C-3)
+  applies to the new implementation's constants, not to the
+  inherited constants being deleted.
+
+  *Three-timeframe verification per [`.cursor/rules/05-system-thinking.mdc`](../.cursor/rules/05-system-thinking.mdc).*
+
+  - **Now (V3.0 genesis):** LWMA-1's fast hashrate response is the
+    right shape for small-chain bootstrap; privacy-jitter side-
+    benefit is most-valuable when anonymity-set is smallest.
+  - **Mining era end (~30 years):** LWMA-1's simplicity + mature
+    real-world data lower the reasoning load for difficulty-
+    adjustment review by maintainers who may not be the original
+    team. Algorithm is PoW-independent so survives any future
+    PoW change.
+  - **Post-quantum era (V4):** difficulty algorithm operates on
+    timestamps + cumulative difficulties only — no cryptographic
+    primitives in the computation path — so LWMA-1 transitions
+    cleanly when the PoW itself transitions to PQ-secure
+    primitives. The reversion criteria above name what would
+    trigger re-evaluation; nothing about the V4 transition itself
+    triggers them.
+
+  *Cross-references.*
+  [`docs/DOCUMENTATION_TODOS_AND_PQC.md`](./DOCUMENTATION_TODOS_AND_PQC.md)
+  §1.10 (paired RandomX-from-genesis pin);
+  [`src/cryptonote_basic/difficulty.cpp:122-163,203-240`](../src/cryptonote_basic/difficulty.cpp)
+  (inherited algorithm being replaced);
+  [`src/cryptonote_config.h:82-95`](../src/cryptonote_config.h)
+  (inherited tuning constants being deleted);
+  [`rust/shekyl-economics/build.rs`](../rust/shekyl-economics/build.rs)
+  (positive-reference forward-template for build-time-codegen
+  tunable-parameter discipline per Rule 75);
+  [`zawy12/difficulty-algorithms`](https://github.com/zawy12/difficulty-algorithms)
+  (canonical reference implementation + simulation tooling);
+  [`.cursor/rules/05-system-thinking.mdc`](../.cursor/rules/05-system-thinking.mdc)
+  (three-timeframe analysis);
+  [`.cursor/rules/16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  (inherited-code disposition rule);
+  [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+  (named reversion criteria for LWMA-2+ and ASERT);
+  [`.cursor/rules/75-system-autonomy.mdc`](../.cursor/rules/75-system-autonomy.mdc)
+  (no manual difficulty resets in normal operation;
+  per-parameter rationale + bounds discipline).
+
+  *Audit-doc link.* Pinned during Phase 0 Mission Audit Lens E
+  (E.4-C/D/E parallel-batch closure phase). The LWMA-1 design
+  decision subsumes E.4-C-1 and E.4-C-2 disposition work into the
+  PoW PR scope rather than treating those as separate cleanup
+  items, and transforms E.4-C-3 from a remediation finding into
+  a forward-template requirement on the replacement
+  implementation. Pre-PR pin lets the PoW PR author inherit the
+  full design substrate (tuning ranges + rationale + alternatives
+  rejected with reversion criteria) without re-deriving it at PR
+  open time.
+
+- **`fips204` features-list discipline: drop `default-rng` and
+  unused parameter sets (sequencing trigger: Cluster 2 PR A —
+  `shekyl-crypto-pq` `Box<fips204::ml_dsa_65::PrivateKey>`
+  refactor; pre-genesis).** The current
+  [`rust/shekyl-crypto-pq/Cargo.toml`](../rust/shekyl-crypto-pq/Cargo.toml)
+  pin is `fips204 = "0.4.6"` without an explicit `features` list,
+  which implicitly enables `default-rng` plus the `ml-dsa-44` and
+  `ml-dsa-87` parameter sets that Shekyl does not consume. Phase 0
+  Mission Audit Lens D originally classified this under
+  D-fips204-discipline as Cargo.toml-only δ-trivial scope alongside
+  D-9 / D-10 / D-13 (drop `default-rng`; pin
+  `features = ["ml-dsa-65"]`).
+
+  **Pre-flight finding (Batch α PR 1 implementation).**
+  `rust/shekyl-crypto-pq/src/signature.rs:243` calls
+  `fips204::ml_dsa_65::try_keygen()` and `signature.rs:285` calls
+  `private_key.try_sign(message, &[])`. Both convenience
+  surfaces are gated by `#[cfg(feature = "default-rng")]` in
+  `fips204 v0.4.6` per inspection of
+  `~/.cargo/registry/src/.../fips204-0.4.6/src/lib.rs` and
+  `src/traits.rs`. Dropping `default-rng` from the features list
+  without first refactoring the consumption sites to the
+  explicit-RNG variants (`try_keygen_with_rng(rng)` and
+  `try_sign_with_rng(rng, msg, ctx)`) would break compilation.
+  The Cargo.toml-only framing is therefore wrong for this
+  finding; the real change is consumption-site + Cargo.toml.
+
+  **Revised disposition.** Defer to Cluster 2 PR A
+  (`shekyl-crypto-pq` ML-DSA-65 + `SpendSecret` / `ViewSecret`
+  workstream; D-19 directional disposition `Box<fips204::ml_dsa_65::PrivateKey>`).
+  Cluster 2 PR A already touches `signature.rs` for the D-19
+  refactor; folding the `default-rng` drop into the same PR
+  preserves bisect coherence (one PR covers all
+  `signature.rs` + `fips204` consumption-site discipline edits)
+  and keeps Batch α PR 1 strictly Cargo.toml + rules in scope.
+  Two-step within Cluster 2 PR A: (a) refactor `signature.rs`
+  keygen + sign sites to take an `&mut R: CryptoRngCore`
+  parameter, threading the workspace-canonical CSPRNG choice; (b)
+  set `fips204 = { version = "0.4.6", default-features = false,
+  features = ["ml-dsa-65"] }` and verify clean build.
+
+  **Meta-observation: rule 17 §4 verification gap.** Per
+  [`.cursor/rules/17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc) §4
+  ("Feature-flag plumbing"), the audit-time check that the
+  explicit features list does not include `default-rng` is
+  necessary but not sufficient; the load-bearing check is whether
+  consumption sites depend on `#[cfg(feature = "...")]`-gated
+  surfaces of the dependency. The Lens D audit performed the
+  enumerate-explicit-features check correctly and concluded
+  `default-rng` was unused; pre-flight implementation surfaced
+  the consumption-site dependency that the explicit-features
+  check missed. **Discipline refinement (pin):** rule 17 §4
+  verification should call out consumption-site cfg-gate trace
+  as an explicit check, not as an implicit consequence of
+  enumerating features. Future Lens D-style dependency-discipline
+  audits should `git grep -nE '(fips204|fips203|ml_dsa|ml_kem)' rust/`
+  (or the equivalent per-dep query) and trace each call to the
+  upstream `#[cfg(...)]` gate before classifying a feature as
+  drop-safe. Worth folding into the next 17-rule edit cycle as a
+  protocol clarification under §4.
+
+  **Batch α PR 1 scope reduction.** This deferral reduces Batch α
+  PR 1's scope from 6 items to 5: D-9 `bip39 features = ["zeroize"]`,
+  D-10 `argon2 features = ["zeroize"]`, D-13 `chacha20 features = ["zeroize"]`,
+  F.5-A rule example name correction, F.5-B rule glob cleanup.
+  The D-fips204-discipline item migrates to Cluster 2 PR A's scope
+  per the two-step above. Batch α PR 1 commit message references
+  this entry by anchor so the deferral is bisect-locatable.
+
+  *Reversion criterion* (per
+  [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).
+  If Cluster 2 PR A's scope shifts to not touch `signature.rs`
+  (e.g., the D-19 directional disposition reverts or the PR is
+  split across multiple PRs that don't include the keygen/sign
+  refactor), this deferral fires and the work surfaces as a
+  separate ~1-day PR (signature.rs RNG-parameterization refactor +
+  fips204 features-list edit + workspace CSPRNG threading
+  verification). The reversion is named at write time; future
+  re-evaluation requires no re-derivation of the rationale.
+
+  **Cross-references.**
+  [`rust/shekyl-crypto-pq/Cargo.toml`](../rust/shekyl-crypto-pq/Cargo.toml)
+  (target features-list edit);
+  [`rust/shekyl-crypto-pq/src/signature.rs`](../rust/shekyl-crypto-pq/src/signature.rs)
+  (consumption-site refactor target);
+  [`.cursor/rules/17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc) §4
+  (verification protocol — pending §4 refinement on
+  consumption-site cfg-gate trace);
+  [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+  (named-reversion shape);
+  the Hybrid `Vec<u8>`→fixed-size FOLLOWUP entry above
+  (D-19 directional disposition for `Box<fips204::ml_dsa_65::PrivateKey>`,
+  the sibling Cluster 2 PR A scope item that absorbs this
+  deferral).
+
+  *Audit-doc link.* Surfaced during Phase 0 Mission Audit Batch α
+  PR 1 pre-flight implementation (Lens D δ-trivial scope
+  refinement). Revises the original Lens D disposition for
+  D-fips204-discipline from Cargo.toml-only δ-trivial to
+  consumption-site + Cargo.toml, deferred to Cluster 2 PR A. The
+  rule 17 §4 verification gap is the substrate-evolution observation
+  the deferral surfaces; rule 17 amendment cycle is the natural home
+  for §4 protocol clarification.
+
 ---
 
 ## V3.1 — audit response and stressnet gates
@@ -4206,6 +4562,148 @@ reference.
   abstractions (`<Ed25519 as Ciphersuite>::G`, etc.). Never reach into
   `ciphersuite`'s internals. If upstream `ciphersuite` upgrades to
   `dalek-ff-group` 0.5, remove the gate.
+
+- **`sha2` 0.10.x has no `zeroize` feature; HKDF-SHA256 chaining-state
+  residency is documented-acceptance per the reversion-clause
+  discipline.** Phase 0 Mission Audit Lens D, finding D-6 (per
+  [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).
+  Audit-at-source verification confirmed `sha2` 0.10.x has no
+  `zeroize` feature or optional dep at all — in contrast to sibling
+  `sha3` 0.10.x, which carries `zeroize` as an optional dep and which
+  `shekyl-crypto-pq` already enables. HKDF-SHA256 derivation of
+  secret material via the workspace's `hkdf` consumers
+  (`shekyl-crypto-pq`, `shekyl-engine-prefs`, `shekyl-proofs`) leaves
+  a per-call residency window in the SHA-256 internal chaining state
+  (~32 bytes per `Sha256` instance; SHA-256 is Merkle–Damgård, not a
+  sponge — the residency is the eight 32-bit chaining words plus the
+  block buffer, not Keccak-style absorb/squeeze state). The derived
+  material itself is held in `Zeroizing<…>` by the caller; no
+  shekyl-side wrapper.
+
+  *Rejected alternatives.* **(a)** Upstream-contribute `zeroize`
+  feature to RustCrypto `sha2` is the right long-term answer and is
+  pursued as a separate non-blocking workstream; not gating Shekyl
+  audit closure on upstream review timeline. **(b)** A shekyl-side
+  wrapper around `Sha256` with `Drop` overwrite breaks the upstream
+  abstraction boundary, introduces version-bump fragility (sha2's
+  internal layout could shift across minor versions in ways the
+  wrapper depends on), and delivers marginal exposure reduction
+  (~32 bytes vs D-10's Argon2id 64 MiB buffer concern, which is the
+  real-volume risk and is addressed separately via D-10's
+  zeroize-feature enablement on `argon2`).
+
+  *Reversion criteria* (either suffices to reopen the disposition;
+  both named explicitly so future audit cannot mistake the
+  disposition for a hard refusal — mirroring the `AllKeysBlob`
+  Not-Clone precedent at
+  [`rust/shekyl-crypto-pq/src/account.rs:480-494`](../rust/shekyl-crypto-pq/src/account.rs)
+  and the
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §5.4.8 #1 reject-with-reopening precedent):
+
+  1. **Upstream `sha2` adds a `zeroize` feature** (in any minor or
+     major version). The workspace declarations in `shekyl-crypto-pq`,
+     `shekyl-engine-prefs`, and `shekyl-proofs` adopt
+     `features = ["zeroize"]` and this disposition closes as fixed.
+  2. **A specific exposure pathway is identified that elevates the
+     residency window beyond the per-call SHA-256 chaining state.**
+     Examples: a fault-injection, memory-snapshot, or other attack
+     model that can observe the chaining state after `finalize()`
+     returns under conditions reachable by the threat model. The
+     pathway must be specific (named threat vector plus
+     memory-locality analysis), not speculative.
+
+  *Cross-references.*
+  [`.cursor/rules/17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc)
+  §3 "Property existence" — `sha2` is the canonical example of a
+  security-load-bearing dep whose property is absent at source,
+  surfaced by audit-at-source verification rather than training-data
+  recall. Sibling reversion-clause entry: V3.0 queue `Hybrid* secret
+  types: Vec<u8> for fixed-size scalars`. The dependency-discipline
+  lens surfaced three concentrated instances of the reversion-clause
+  pattern (D-6 sha2 acceptance criteria, D-19 directional disposition
+  for `Box<fips204::ml_dsa_65::PrivateKey>`, the D-1 /
+  D-fips204-discipline naming-pattern amendment to rule 17); the
+  meta-pattern is hardening into project-wide substrate across
+  altitudes (type-derivation, design-round closure, work-item
+  placement, dependency-discipline).
+
+- **F.8-sub: exhaustive constant-time + secret-handling spot-check
+  deferred with three named triggers per reversion-clause
+  discipline.** Phase 0 Mission Audit Lens F, finding F.8 categorical
+  verification (per
+  [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+  and
+  [`.cursor/rules/30-cryptography.mdc`](../.cursor/rules/30-cryptography.mdc)
+  §"Constant-time and trusted randomness"). The Lens F categorical
+  verification confirmed (a) zero production CSPRNG-bypass uses
+  (`thread_rng` / `StdRng` / `SeedableRng::seed_from` / `rand::random`
+  absent from production code; 3 bench/test uses all properly
+  justified inline); (b) CSPRNG sources verified across Rust
+  (`OsRng`) and C++ (`/dev/urandom` on Unix per
+  [`src/crypto/random.c:70-72`](../src/crypto/random.c) and
+  `CryptGenRandom` on Windows per the same file's Win32 branch); and
+  (c) `subtle::ConstantTimeEq` usage concentrated where load-bearing
+  (shekyl-oxide crypto crates + `shekyl-engine-prefs/src/io.rs` for
+  HMAC tag verification). The categorical verification is sufficient
+  for V3.0 audit-readiness.
+
+  *Exhaustive verification scope deferred.* A per-site walk for
+  (1) any production comparison of secret/auth bytes that bypasses
+  `subtle::ConstantTimeEq` in favor of bare `==` on byte arrays, and
+  (2) any production `log::error!` / `format!` / `Display for
+  SecretType` site that could exfiltrate secret material through
+  log/error paths, is **deferred** as exhaustive-verification work
+  that doesn't gate V3.0 audit closure.
+
+  *Trigger criteria* (any one suffices to fire F.8-sub work; all
+  three named explicitly so future audit cannot mistake the
+  disposition for indefinite deferral — mirroring the
+  acceptance-criteria precedent established by the D-6 `sha2`
+  no-`zeroize` entry above ("`sha2` 0.10.x has no `zeroize`
+  feature — accept-with-reversion-clause + parallel upstream
+  workstream")):
+
+  1. **External audit feedback.** If the V3.0 external audit
+     surfaces a constant-time-comparison concern at any specific
+     site, F.8-sub's methodology becomes the response artifact:
+     walk the site's call surface, walk adjacent comparison sites
+     under the same crate, document each as compliant or remediate.
+  2. **New cryptographic primitive landing.** Any V3.x addition
+     that introduces new secret-comparison or secret-formatting
+     surfaces (new PQC primitive when V4 lattice-only NIST
+     standardization closes; hardware-wallet integration per the
+     V3.x C-1 disposition; FROST signing implementation per the
+     B-3 Site 3 canonical-protocol-shape pin) triggers F.8-sub
+     against the new surface as a per-PR pre-flight check.
+  3. **Discipline-drift signal.** If a future PR review surfaces a
+     single instance of `==` on secret material or `format!` on a
+     secret-bearing type in production code, F.8-sub broadens to
+     the surrounding crate to confirm the instance is isolated
+     (not the visible tip of a larger discipline-drift pattern).
+
+  *Why this shape vs. exhaustive-now.* Exhaustive constant-time
+  walks return diminishing security per unit auditor-attention once
+  the categorical disciplines are verified (CSPRNG source, type-
+  enforced `subtle::ConstantTimeEq` at known load-bearing sites).
+  The Lens F substrate-compounding observation applies: per-site
+  walks that don't have a triggering signal produce mostly
+  verification-confirmations rather than novel findings. The three
+  named triggers cover the cases where per-site work is actually
+  load-bearing (specific audit feedback, specific new-surface
+  landing, specific drift signal) without spending pre-genesis
+  audit-attention on speculative walks.
+
+  *Cross-references.*
+  [`.cursor/rules/30-cryptography.mdc`](../.cursor/rules/30-cryptography.mdc)
+  §"Constant-time and trusted randomness" (the rule being deferred
+  to triggers rather than exhaustively verified now);
+  [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+  (deferral shape: rejected-with-named-reopening-criteria);
+  [`docs/CPP_INHERITANCE_INVENTORY.md`](./CPP_INHERITANCE_INVENTORY.md)
+  (C++ secret-handling-adjacent files inventoried; trigger 2's
+  "new cryptographic primitive" includes the F.C++-3 keep-
+  transitional set when those files are migrated to Rust).
 
 - **`shekyl-daemon-rpc/src/main.rs` uses `eprintln!` intentionally.**
   The standalone binary is a stub that exits with an error. No logging
