@@ -50,8 +50,10 @@ explicit domain separator string and version suffix:
 - `"shekyl-outbound-tx-proof-v1"` for outbound proofs
 - `"shekyl-reserve-proof-dleq-v1"` for reserve proof DLEQs
 
-The version suffix is how V4 cleanly invalidates V3 hashes. Forgetting the
-version means a future protocol upgrade can't safely change the construction.
+The version suffix is how a future protocol upgrade cleanly invalidates the
+prior version's hashes (e.g., a `-v2` increment from the `-v1` examples above).
+Forgetting the version means a future protocol upgrade can't safely change the
+construction.
 
 ## Memwipe is structural, not manual
 
