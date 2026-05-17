@@ -96,6 +96,73 @@
   stable only against the Phase 2 pinned-spec revision);
   (n) updates Phase 4 work-item count from 11 to the actual 14.
 
+  *Round 4 review update (2026-05-17):* (a) pivots the FFI ABI for
+  difficulty values from `u128` / `__uint128_t` to canonical
+  little-endian `[u8; 16]` byte arrays (`DAA_LWMA1.md` §6.1 and
+  plan Phase 3). Rationale: Rust's `u128` C ABI was unsound on
+  several targets until rustc 1.77 (March 2024) and remains a
+  target-portability footgun on uncommon platforms; for a
+  consensus-critical surface that's unacceptable. Explicit byte
+  arrays match the FCMP++ and KEM-derivation FFI precedent already
+  in the workspace and immunize the boundary against
+  target-dependent ABI surprises. C++ consumers memcpy between
+  their native `uint128_t` and the canonical-LE buffer at every
+  call site so the endianness assumption is a deliberate checkpoint
+  rather than an implicit invariant.
+  (b) **Consensus-correctness fix to §8.1 test vectors.** The
+  Round 3 vector "perfectly stable hashrate produces
+  `next_D == avg_D` (within rounding)" was mathematically wrong:
+  with `solvetime[i] == T` for all `i`, the formula yields
+  `next_D == avg_D * 99 / 100` — a deliberate 1 % downward bias,
+  which is the point of the `99/200` factor per §5.3 step 7's
+  derivation. The Round 3 expectation invited three implementer
+  failure paths (relax tolerance to absorb the 1 % shift; remove
+  the bias from the algorithm to satisfy the test; misread
+  "rounding" as ±1 %). Round 4 replaces all `≈`-shaped vectors
+  with concrete numerical tuples: stable hashrate → `0.99 * avg_D`,
+  2× hashrate increase → `1.98 * avg_D`, 2× hashrate decrease →
+  `0.495 * avg_D`, minimum-L floor (all solvetimes == 1) →
+  `~10.01 * avg_D`. Tuples are derived analytically from §5.3
+  and force the Phase 1 implementer to confront the bias at
+  design time, not at debug time. Also corrects an off-by-one in
+  §2.6's "first N+1 blocks" framing (canonical's `height < N`
+  short-circuit covers N blocks, not N+1; the Shekyl FFI
+  `chain_height < N` translation puts blocks `1..=N` in the
+  short-circuit per the new §5.6 validator consumer contract).
+  (c) Adds `DAA_LWMA1.md` §5.6 "Validator consumer contract:
+  `chain_height → header.difficulty`" specifying the off-by-one
+  mapping between the DAA function's `chain_height` parameter
+  (predecessor's height) and the block-being-validated's height,
+  plus the per-block disposition: block 0 (genesis) is exempt;
+  blocks `1..=N` carry `GENESIS_DIFFICULTY`; blocks `≥ N+1` are
+  algorithm-computed. Pre-empts the Phase 4 reviewer's first
+  question.
+  (d) **Closes all Phase 0 open questions.** `GENESIS_DIFFICULTY =
+  100` and `N = 90` are ratified zawy12 canonical with reversion
+  triggers in §10 covering simulation-driven change; the
+  "Shekyl-empirical RandomX v2 single-CPU measurement" alternative
+  referenced a measurement that cannot exist until RandomX v2
+  ships and is functionally identical to the §10 reversion trigger
+  already in place. Phase 2 cross-check harness language closed as
+  C++ test target (the canonical reference is C++; consuming
+  it directly is simpler than Rust-side vendoring; the alternative
+  was a cosmetic preference). Build.rs location (Option A) and
+  JSON-key naming (`daa_*` algorithm-version-free) were already
+  closed in Round 3 and are restated for completeness. No open
+  questions are carried into Phase 1; the design-rounds-in-
+  implementation-PR anti-pattern is closed at Phase 0.
+  (e) Adds three LWMA1_() disambiguation anchors to `DAA_LWMA1.md`
+  §3 and plan Phase 2: byte-offset range, first-line, last-line.
+  zawy12 Issue #3 contains four LWMA reference functions
+  (`LWMA1_/2_/3_/4_`); §5.3's "Issue #3, lines N–M" citations are
+  otherwise ambiguous and would break Phase 2 cross-check at the
+  smallest upstream reordering.
+  (f) Reframes `T = 120 s` as Shekyl's chosen target block time
+  (zawy12 LWMA-1 recommends 60–120 s for CPU-mineable chains)
+  rather than "inherited from CryptoNote `DIFFICULTY_TARGET_V2`."
+  The numerical value matches; the source-of-truth is the JSON
+  authority `daa_target_seconds`, not the inherited `#define`.
+
 - **`07-consensus-atomic-cutovers.mdc` — named exception to
   branching policy for consensus-atomic cutovers**
   (`feat/consensus-atomic-cutovers-rule`, 2026-05-17). New rule

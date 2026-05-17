@@ -9,10 +9,10 @@ todos:
     content: "Phase 1: Add rust/shekyl-difficulty crate to rust/Cargo.toml workspace members as a leaf crate (zero internal workspace deps per DAA_LWMA1.md §2.1). Create rust/shekyl-difficulty/Cargo.toml (Shekyl Foundation copyright; BSD-3-Clause; no_std-compatible if practical, #![deny(unsafe_code)] crate-level). Extend config/consensus_constants.json with algorithm-version-free keys daa_{window_n=90, target_seconds=120, ftl_seconds=540, mtp_window=11, genesis_difficulty=100} per the JSON-authority pattern in DAA_LWMA1.md §4 (the algorithm-version flavor lives in src/lwma1.rs, not in symbol names). Extend cmake/generate_consensus_constants.py to emit SHEKYL_DAA_* constexpr symbols. Add rust/shekyl-difficulty/build.rs reading the JSON and emitting consensus_constants_generated.rs to OUT_DIR (Round 3 closed Option A; extending shekyl-engine-core/build.rs is rejected as it breaks the leaf-crate property). Create src/lib.rs re-exporting lwma1::lwma1_next, is_timestamp_below_ftl, is_above_mtp; src/consts.rs include!'ing the generated file and re-exporting N/T_SECONDS/FTL_SECONDS/MTP_WINDOW/GENESIS_DIFFICULTY (Round 3 disposition: bias factor 99/200, solvetime clamp 6, min-L floor 1/20 appear as bare integer literals inside src/lwma1.rs, NOT as named consts in src/consts.rs; matches canonical zawy12 verbatim per DAA_LWMA1.md §4); src/lwma1.rs (canonical implementation per DAA_LWMA1.md §5.3). Write unit tests against the §8.1 synthetic test corpus including the §5.3 step 8 overflow-boundary paired vectors AND the new §8.1 solvetime[1] -T-offset regression vector. PR cannot merge if cargo test, cargo clippy --all-targets -- -D warnings, or cargo fmt --check fails per 45-rust-lint-checks.mdc."
     status: pending
   - id: phase2-cross-check-harness
-    content: "Phase 2: Add tests/difficulty/lwma1_cross_check.cpp harness that builds the zawy12 LWMA1_() C++ reference (extracted to tests/difficulty/zawy12_lwma1_reference.h with explicit SPDX-License-Identifier: MIT header per Round 3 disposition; derived from the pinned-spec revision) and asserts byte-equality between Rust output and C++ reference output across the §8.1 input corpus. CI runs the harness; failure fails CI. Also: commit docs/design/refs/zawy12_issue_3_lwma1.md as the pinned spec revision (raw issue body via GitHub REST API, immune to rendering-side drift)."
+    content: "Phase 2: Add tests/difficulty/lwma1_cross_check.cpp harness (C++ test target per Round 4 disposition; canonical reference is C++, consuming it directly is simpler than Rust-side vendoring) that builds the zawy12 LWMA1_() C++ reference (extracted to tests/difficulty/zawy12_lwma1_reference.h with explicit SPDX-License-Identifier: MIT header per Round 3 disposition; derived from the pinned-spec revision) and asserts byte-equality between Rust output and C++ reference output across the §8.1 input corpus. CI runs the harness; failure fails CI. Commit docs/design/refs/zawy12_issue_3_lwma1.md as the pinned spec revision (raw issue body via GitHub REST API, immune to rendering-side drift). Record three LWMA1_() disambiguation anchors in the same file or a sibling .lwma1-anchors.json: (a) byte-offset range [offset_start, offset_end) within the pinned .body containing the LWMA1_() function, (b) the literal first line of LWMA1_(), (c) the literal last line. The issue contains four LWMA reference functions; without these anchors, Phase 2 maintainers cannot disambiguate the LWMA1_() boundaries from LWMA2_/3_/4_ when the upstream author reorders content."
     status: pending
   - id: phase3-ffi-wire-up
-    content: "Phase 3: Export shekyl_difficulty_lwma1_next from rust/shekyl-ffi/src/lib.rs per DAA_LWMA1.md §6.1 (i32 return; out_next_difficulty *mut u128; ERR_NULL_PTR / ERR_INVALID_COUNT / ERR_OVERFLOW / ERR_INTERNAL taxonomy). Add the declaration to src/shekyl/shekyl_ffi.h. Generate or hand-maintain the bindings per 25-rust-architecture.mdc. PR delivers the FFI surface; the daemon does NOT yet consume it (still on inherited next_difficulty)."
+    content: "Phase 3: Export shekyl_difficulty_lwma1_next from rust/shekyl-ffi/src/lib.rs per DAA_LWMA1.md §6.1 (i32 return; cum_difficulties: *const [u8; 16]; out_next_difficulty: *mut [u8; 16] — Round 4 pivoted from u128 to canonical-LE byte arrays per the FCMP++/KEM-derivation precedent; rationale: Rust u128 C ABI was target-dependent until rustc 1.77 and remains a footgun on uncommon targets, unacceptable for a consensus-critical surface; ERR_NULL_PTR / ERR_INVALID_COUNT / ERR_OVERFLOW / ERR_INTERNAL taxonomy). Add the declaration to src/shekyl/shekyl_ffi.h with const uint8_t (*)[16] types. Hand-maintain the bindings per 25-rust-architecture.mdc. PR delivers the FFI surface; the daemon does NOT yet consume it (still on inherited next_difficulty)."
     status: pending
   - id: phase4-cpp-cutover
     content: "Phase 4 (14 work items, deliberate atomic-cutover exception to 06-branching.mdc; rationale: FTL and MTP value changes cannot stage behind alias #defines without weakening consensus integrity in the intermediate state). Rewire Blockchain::get_difficulty_for_next_block() (blockchain.cpp:~965), Blockchain::check_difficulty_checkpoints() (~1021), Blockchain::get_next_difficulty_for_alternative_chain() (~1325) to shekyl_difficulty_lwma1_next. DELETE src/cryptonote_basic/difficulty.{h,cpp}. Delete the 6 inherited DIFFICULTY_* #defines (DIFFICULTY_TARGET_V1, DIFFICULTY_TARGET_V2, DIFFICULTY_WINDOW, DIFFICULTY_LAG with // !!! warning, DIFFICULTY_CUT, DIFFICULTY_BLOCKS_COUNT, DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN) from src/cryptonote_config.h. Rewire ~14 DIFFICULTY_TARGET_V2 consumers across 9 files (enumerated in DAA_LWMA1.md §9.7; preserves RPC contract per §9.8) to SHEKYL_DAA_TARGET_SECONDS from shekyl/consensus_constants_generated.h. Delete CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT; rewire 2 FTL consumers (enumerated in §9.5) to SHEKYL_DAA_FTL_SECONDS — consensus-rule value change 7200 → 540 takes effect here. Delete BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW; rewire 9 MTP consumers (enumerated in §9.6) to SHEKYL_DAA_MTP_WINDOW — consensus-rule value change 60 → 11 takes effect here. Delete tests/difficulty/{difficulty.cpp, gen_wide_data.py, generate-data}. Add symbol-isolation CI invariant: nm shekyld must not contain T|U next_difficulty_64|next_difficulty|check_difficulty_checkpoints (per DAA_LWMA1.md §7.1). Add no-C-ABI invariant on shekyl-difficulty per §7.2. Add no-orphaned-magic-numbers CI invariant: git grep on post-Phase-4 tree returns zero hits for CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT, BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW, DIFFICULTY_TARGET_V[12], DIFFICULTY_WINDOW, DIFFICULTY_LAG, DIFFICULTY_CUT, DIFFICULTY_BLOCKS_COUNT, DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN. Add RPC-contract regression test asserting daemon.get_info().block_target == 120 post-cutover. Audit and rewire wallet-side DIFFICULTY_TARGET_V2 consumers (wallet2.cpp:181/182/5975/11548, wallet_rpc_server.cpp:163). Update unit tests and docs."
@@ -372,6 +372,36 @@ record. Pinning the raw `.body` (not GitHub's rendered HTML)
 immunizes the audit trail against rendering-side changes that don't
 affect spec meaning.
 
+**LWMA1_() disambiguation anchors.** The pinned issue body contains
+**four** reference functions (`LWMA1_()`, `LWMA2_()`, `LWMA3_()`,
+`LWMA4_()`); every `DAA_LWMA1.md` §5.3 citation that reads
+"Issue #3, LWMA-1 reference, lines N–M" is otherwise ambiguous
+between them. Phase 2 records three anchors alongside the pinned
+body, in a sibling `docs/design/refs/zawy12_issue_3_lwma1.anchors.json`:
+
+```json
+{
+  "lwma1_byte_offset_start": 0,
+  "lwma1_byte_offset_end": 0,
+  "lwma1_first_line": "",
+  "lwma1_last_line": "",
+  "pinned_body_sha256": "",
+  "captured_at_utc": ""
+}
+```
+
+The four fields are populated at Phase 2 PR time by inspecting the
+pinned `.body` and recording (a) the byte-offset range
+`[start, end)` that contains the entire `LWMA1_()` function
+definition (signature line through closing brace), (b) the literal
+first line of the function (verbatim, for grep-anchor recovery),
+(c) the literal last line, and (d) the SHA-256 of the pinned
+`.body` from which the anchors were derived. Together these pin
+`LWMA1_()` against upstream reordering or insertions.
+
+`DAA_LWMA1.md` §5.3's "lines N–M" citations resolve against the
+LWMA1_() byte-offset range, not against the full `.body`.
+
 **Cross-check harness.** Add
 `tests/difficulty/lwma1_cross_check.cpp` that builds the canonical
 `LWMA1_()` C++ function (extracted from the pinned spec revision;
@@ -424,20 +454,48 @@ mechanical.
 Four work items: add the FFI export, declare the header, add
 error-code constants, and verify panic safety.
 
-**Add the FFI export** in `rust/shekyl-ffi/src/lib.rs`:
+**Add the FFI export** in `rust/shekyl-ffi/src/lib.rs`. The
+difficulty type at the ABI boundary is `[u8; 16]` little-endian
+per `DAA_LWMA1.md` §6.1 (Rust `u128` C-ABI soundness was target-
+dependent until rustc 1.77 and remains a footgun on uncommon
+targets; explicit byte arrays match the FCMP++ / KEM-derivation
+precedent and immunize the consensus-critical surface against
+target-portability failures):
 
 ```rust
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn shekyl_difficulty_lwma1_next(
     timestamps: *const u64,
-    cum_difficulties: *const u128,
+    cum_difficulties: *const [u8; 16],
     count: usize,
     chain_height: u64,
-    out_next_difficulty: *mut u128,
+    out_next_difficulty: *mut [u8; 16],
 ) -> i32 {
+    // Decode cum_difficulties[i] via ptr::read_unaligned +
+    // u128::from_le_bytes; encode out_next_difficulty via
+    // u128::to_le_bytes + ptr::write_unaligned. Unaligned access
+    // is intentional: the C side's uint128_t buffer may not be
+    // 16-byte-aligned on all targets.
     // ... per DAA_LWMA1.md §6.1
 }
 ```
+
+The C-side declaration is:
+
+```c
+int32_t shekyl_difficulty_lwma1_next(
+    const uint64_t *timestamps,
+    const uint8_t (*cum_difficulties)[16],
+    size_t count,
+    uint64_t chain_height,
+    uint8_t (*out_next_difficulty)[16]);
+```
+
+C++ callers with a native `uint128_t`-typed buffer **must memcpy**
+into and out of the `[u8; 16]` representation explicitly (not
+reinterpret-cast) so the endianness assumption is a deliberate
+checkpoint at the call site, not an implicit
+target-dependent invariant.
 
 The export sits inside the `shekyl-ffi` crate's single `unsafe`
 surface per `25-rust-architecture.mdc`. The `shekyl-difficulty`
@@ -671,39 +729,65 @@ Update:
 | FTL/MTP migration leaves chain in non-canonical intermediate state | Phase 4 migrates all three together; never split across PRs | Phase 4 is atomic; partial-revert is not a supported state |
 | Pre-design sketch in `rust/shekyl-difficulty/src/lwma1.rs` accidentally becomes the implementation | Sketch deleted in this PR (commit `91c6dc44c`) per `15-deletion-and-debt.mdc`; §2.4 divergence catalogue retained as design record only; Phase 1 starts from empty crate directory | N/A — sketch no longer exists on disk |
 
-## Open questions for Phase 0 review
+## Phase 0 dispositions (formerly open questions)
 
-1. **GENESIS_DIFFICULTY = 100 (proposed).** Ratify or replace with a
-   Shekyl-specific value derived from RandomX v2 single-CPU
-   hashrate measurements at the v2 fork pin (`aaafe71`).
-2. **N = 90 (zawy12 canonical for T=120).** Ratify or run a
-   Shekyl-specific sensitivity analysis on the §8.3 simulated-
-   history corpus to confirm 90 is optimal under Shekyl's expected
-   bootstrap-regime hashrate volatility.
-3. **Phase 2 cross-check harness as Rust integration test vs. C++
-   test target.** The current proposal places it in
-   `tests/difficulty/` as a C++ target so it consumes the canonical
-   C++ reference directly. A Rust integration test in
-   `rust/shekyl-difficulty/tests/` that vendors the C++ reference
-   via a `build.rs` is the alternative; the trade-off is whether
-   the canonical C++ reference is easier to consume from C++ or
-   from Rust.
+Round 4 closes the remaining Phase 0 questions. Carrying open
+questions out of Phase 0 into Phase 1 is the design-rounds-in-
+implementation-PR anti-pattern; if Phase 1 re-litigates ratified
+values, Phase 0 hasn't done its job. The dispositions below have
+defensible Phase-0-closeable answers and are now ratified.
 
-### Resolved during Round 3 (no longer open)
-
-- **Build.rs location** — closed as Option A (a new
+- **`GENESIS_DIFFICULTY = 100` — ratified.** Source: zawy12
+  canonical example value for new CPU-mineable chains. The
+  "Shekyl-specific value derived from RandomX v2 single-CPU
+  measurements at the v2 fork pin" alternative referenced a
+  measurement that does not exist and cannot exist until
+  RandomX v2 is implemented and a CPU-only hashrate sample is
+  collected — ratifying-pending-measurement is functionally
+  identical to "100 with a documented reversion trigger," which
+  is what `DAA_LWMA1.md` §10's reversion clause already provides.
+  First-week-of-testnet recalibration, if observed hashrate
+  differs materially from canonical assumptions, lands as a
+  sibling PR with its own design-doc justification, not as a
+  Phase 0 unknown.
+- **`N = 90` — ratified.** Source: zawy12 canonical recommendation
+  for `T = 120 s` chains, anchored against ~8 years of deployment
+  experience on CPU-mineable chains with comparable hashrate
+  profiles. The "Shekyl-specific sensitivity analysis on
+  bootstrap-regime hashrate volatility" alternative requires
+  assumed-hashrate inputs we don't have either; the canonical
+  value carries more deployment evidence than any pre-genesis
+  Shekyl simulation could provide. `DAA_LWMA1.md` §10's reversion
+  clause covers the case where post-genesis simulation reveals
+  a materially better `N`.
+- **Build.rs location — ratified as Option A** (a new
   `rust/shekyl-difficulty/build.rs`) per `DAA_LWMA1.md` §2.1's
   leaf-crate property and §4's source-of-truth pipeline. Option B
-  (extending `shekyl-engine-core/build.rs`) is rejected because it
-  introduces a workspace-internal dep purely to consume generated
-  constants.
-- **JSON key naming** — closed as the algorithm-version-free shape
-  `daa_window_n` / `daa_target_seconds` / `daa_ftl_seconds` /
-  `daa_mtp_window` / `daa_genesis_difficulty` per `DAA_LWMA1.md`
-  §4 ("Algorithm-version-free naming"). The matching C++ symbols
-  are `SHEKYL_DAA_*`. Rationale: if §10's reversion clause ever
-  fires, the JSON keys and consumer symbols should not have to
-  change in lockstep with the algorithm body.
+  (extending `shekyl-engine-core/build.rs`) is rejected because
+  it introduces a workspace-internal dep purely to consume
+  generated constants. If Phase 1 finds Option A creates real
+  duplication pain, that's a Phase 1 review-item, not a Phase 0
+  unknown. (Closed in Round 3; restated for completeness.)
+- **JSON key / C++ symbol naming — ratified as
+  algorithm-version-free**: `daa_window_n` /
+  `daa_target_seconds` / `daa_ftl_seconds` / `daa_mtp_window` /
+  `daa_genesis_difficulty`, with matching `SHEKYL_DAA_*`
+  generated symbols. Per `DAA_LWMA1.md` §4 ("Algorithm-version-free
+  naming"). The cost-of-rename analysis (algorithm-version-tagged
+  names force a downstream rename across every consumer if §10's
+  reversion clause fires) closes this in favor of the
+  version-free shape. (Closed in Round 3; restated for
+  completeness.)
+- **Phase 2 cross-check harness language — ratified as C++ test
+  target** (`tests/difficulty/lwma1_cross_check.cpp`). The
+  canonical reference is C++; consuming it directly is simpler
+  than vendoring it into Rust via `build.rs`. The "Rust
+  integration test" alternative's only argument was "harness
+  lives in the consumer crate's directory tree," which is a
+  cosmetic preference, not a property the threat model needs.
+  The C++ test-target approach also makes the cross-check
+  available to C++ reviewers without a Rust toolchain at audit
+  time.
 
 ## Cross-references
 

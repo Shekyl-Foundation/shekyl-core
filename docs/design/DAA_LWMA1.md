@@ -422,16 +422,25 @@ three together (DAA function, FTL predicate, MTP predicate).
 ### 2.6 No genesis difficulty "guess" — start at a single ratified constant
 
 The canonical LWMA-1 reference includes a `difficulty_guess`
-parameter that hard-codes difficulty for the first `N+1` blocks
+parameter that hard-codes difficulty for the first `N` blocks
 after fork or genesis (line 107 of the canonical implementation:
 `if (height >= FORK_HEIGHT && height < FORK_HEIGHT + N) { return
-difficulty_guess; }`). Shekyl adopts this pattern verbatim with one
-constraint: **a single ratified constant**, not a runtime parameter.
+difficulty_guess; }` — canonical's `height` is the block being
+validated, so `height < N` means blocks at heights `0..N-1`).
+Shekyl adopts this pattern verbatim with one constraint:
+**a single ratified constant**, not a runtime parameter. The
+consumer-side mapping from canonical's framing
+(`height < N` → `difficulty_guess`) to Shekyl's FFI framing
+(`chain_height < N` → `GENESIS_DIFFICULTY`) is spelled out
+explicitly in §5.6.
 
-The constant is named `GENESIS_DIFFICULTY` and is typed as a `u64`
-const in `shekyl-difficulty/src/lib.rs`. Its candidate value is
-**100** (one hundred) — the canonical zawy12 example value — with
-the rationale that:
+The constant is named `GENESIS_DIFFICULTY` and is typed as a `u128`
+const in `shekyl-difficulty/src/consts.rs` (matching the difficulty-
+type discipline in §11; the value is small but the type lines up
+with `next_difficulty`'s codomain so no widening conversion appears
+at the consumer call site). Its value is **100** (one hundred) —
+the canonical zawy12 example value, ratified in Round 4 — with the
+rationale that:
 
 - Genesis difficulty must be low enough that a single CPU on the
   network can produce blocks at roughly the target rate.
@@ -441,9 +450,18 @@ the rationale that:
 - Per the canonical zawy12 example for new chains, 100 is the
   appropriate order of magnitude for a CPU-mineable launch.
 
-The value is **proposed**, not final — Phase 0 review ratifies
-either 100 or a Shekyl-specific value derived from RandomX v2 single-
-CPU hashrate measurements at the v2 fork pin.
+The value is **ratified** per `DAA_LWMA1_PLAN.md` "Phase 0
+dispositions." The alternative considered in Round 3 — a
+Shekyl-specific value derived from RandomX v2 single-CPU hashrate
+measurements at the v2 fork pin — referenced a measurement that
+does not exist and cannot exist until RandomX v2 is implemented
+and a CPU-only hashrate sample is collected. Ratifying-pending-
+measurement is functionally identical to "100 with a documented
+reversion trigger," which §10's reversion clause already provides.
+First-week-of-testnet recalibration, if observed hashrate
+differs materially from canonical assumptions, lands as a sibling
+PR with its own design-doc justification, not as a Phase 0
+unknown.
 
 ### 2.7 The DAA is a primitive, not an actor
 
@@ -516,11 +534,38 @@ wrapper inside the verifier crate.
   Phase 2 of [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) lands the
   pin file.
 - **Reference implementation:** the `LWMA1_()` C++ function defined
-  inside zawy12 Issue #3 (lines 76–136 of the raw `.body` at the
-  pinned revision; line numbers refer to the raw Markdown, which
-  matches the line numbers in the rendered view as of the design-
-  doc pin date). Used as a cross-check only; the Rust implementation
-  is written from the textual spec per §2.3.
+  inside zawy12 Issue #3. The issue contains **four** reference
+  functions (`LWMA1_()`, `LWMA2_()`, `LWMA3_()`, `LWMA4_()`);
+  cross-references to "Issue #3, lines N–M" are otherwise
+  ambiguous between them.
+  Phase 2 of [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) records
+  three disambiguation anchors in `docs/design/refs/zawy12_issue_3_lwma1.md`
+  alongside the raw `.body`:
+
+  1. **Byte-offset range** `[offset_start, offset_end)` within the
+     pinned raw `.body` that contains the entire `LWMA1_()`
+     function definition (signature, body, closing brace). Computed
+     at Phase 2 PR time via the raw `.body` SHA-256-anchored pin.
+     All later citations in this design doc that read "Issue #3,
+     LWMA-1 reference, lines N–M" are interpreted as lines N–M
+     *within this byte-offset range*, not within the full `.body`.
+  2. **First-line anchor**: the literal first line of `LWMA1_()`
+     (currently
+     `LWMA1_(timestamps, cumulative_difficulties, T, N, height,...) {`
+     at the design-doc pin date; recorded verbatim at Phase 2 PR
+     time so a future maintainer can grep it).
+  3. **Last-line anchor**: the literal last line (the function's
+     closing `}` plus any trailing comment), recorded verbatim.
+
+  These anchors together pin `LWMA1_()` against future
+  upstream-author edits that add or reorder content in the
+  issue. Used as a cross-check only; the Rust implementation is
+  written from the textual spec per §2.3.
+
+  All §5.3 "lines N–M" citations in this design doc resolve
+  against the LWMA1_() byte-offset range above, not against the
+  full pinned `.body`.
+
 - **Simulation tooling:** zawy12's `difficulty-algorithms` repository
   contains historical-data simulators used to derive test-vector
   corpora. Specific corpus selection is described in §8.
@@ -530,12 +575,12 @@ wrapper inside the verifier crate.
 | Parameter | Symbol | Shekyl V3.0 value | Source / rationale |
 | --- | --- | --- | --- |
 | Window size | `N` | **90** | zawy12 canonical recommendation for `T = 120 s` chains (Issue #3, line 84) |
-| Target block time | `T` | **120 s** | Inherited from CryptoNote `DIFFICULTY_TARGET_V2`; unchanged. Orthogonal to DAA choice. |
+| Target block time | `T` | **120 s** | Shekyl's chosen target block time per zawy12 LWMA-1's recommended range (60–120 s for CPU-mineable chains). The numerical value happens to match the inherited C++ `DIFFICULTY_TARGET_V2 = 120`, but Shekyl's source-of-truth is the JSON authority `daa_target_seconds` per §4, not the inherited `#define`. The inherited define is deleted at Phase 4 per §9.2. |
 | Solvetime clamp factor | k_st | **6** (i.e., individual solvetimes capped at `6*T`) | zawy12 canonical |
 | Minimum-L floor coefficient | k_L | **1/20** (i.e., `L_min = N*N*T/20`) | zawy12 canonical |
 | Bias factor numerator | b_num | **99** | zawy12 canonical (Issue #3, LWMA-1 reference line 127, unchanged since 2017–2018; derivation in §5.3 step 7) |
 | Bias factor denominator | b_den | **200** | zawy12 canonical (same line; `200 = 2 * 100` per the derivation in §5.3 step 7, not a separate tunable) |
-| Genesis difficulty | `D₀` | **100** (proposed) | §2.6 — Phase 0 ratifies |
+| Genesis difficulty | `D₀` | **100** | zawy12 canonical example for new CPU-mineable chains. Ratified in Round 4 per `DAA_LWMA1_PLAN.md` "Phase 0 dispositions"; first-week-of-testnet recalibration, if observed CPU hashrate differs materially from canonical assumptions, lands as a sibling PR with its own design-doc justification, not as a Phase 0 unknown. |
 | Block future time limit | FTL | **`N * T / 20` = 540 s** | zawy12 canonical hard requirement (Issue #3 lines 85, 91); tightens inherited `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT = 7200 s` |
 | Median time past window | MTP | **11** | zawy12 LWMA-1 canonical; tightens inherited `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW = 60` back to the CryptoNote-original 11 (Monero widened to 60; LWMA-1 doesn't need the widening per §2.5) |
 
@@ -913,12 +958,91 @@ weakened. The two checks plus the `6*T` solvetime clamp together
 constitute the timestamp-attack defense surface; none of the three
 is replaceable.
 
+### 5.6 Validator consumer contract: `chain_height → header.difficulty`
+
+The DAA function returns `next_difficulty` given
+`(chain_height, timestamps, cumulative_difficulties)`. The
+block-header validator's contract — what value of
+`header.difficulty` is *accepted* for the block at a given height —
+is **defined by the DAA function applied at the predecessor's
+chain_height**. Spelling this out explicitly because §2.6 ratifies
+the constant but the consumer mapping is the surface a Phase 4
+reviewer audits, and leaving it implicit invites off-by-one bugs.
+
+The block being validated sits at height `h`. The validator
+computes its expected difficulty as
+`lwma1_next(chain_height = h-1, count, timestamps, cum_difficulties)`
+and asserts `header.difficulty == expected`. The three regimes:
+
+| Block height `h` | `chain_height = h-1` | Path inside `lwma1_next` | Expected `header.difficulty` |
+| --- | --- | --- | --- |
+| `0` (genesis) | n/a | not invoked | hard-coded in genesis-block construction; **not** subject to DAA verification |
+| `1..=N` (blocks 1 through 90) | `0..=N-1` (0 through 89) | §5.3 step 1 short-circuit | `GENESIS_DIFFICULTY` (== 100 per §4) |
+| `>= N+1` (blocks 91 onwards) | `>= N` (90 onwards) | §5.3 steps 2–8 | `lwma1_next(h-1, N+1, ts[h-N-1..=h-1], cd[h-N-1..=h-1])` |
+
+Three consequences worth surfacing:
+
+- **First algorithm-computed block is block N+1 (== 91 for Shekyl
+  V3.0).** Block N (== 90) still inherits `GENESIS_DIFFICULTY`
+  because its predecessor's `chain_height = N-1` is still in the
+  short-circuit range. The "the first N+1 blocks share genesis
+  difficulty" framing is the consumer-contract restatement of
+  §5.3 step 1's `chain_height < N` boundary.
+- **Genesis block (height 0) is exempt.** Its `difficulty` field
+  is part of the genesis-block hash and is written by the
+  genesis-block construction code, not by the DAA. The validator
+  may additionally assert `genesis.difficulty == GENESIS_DIFFICULTY`
+  for symmetry with the rest of the chain, but this is a
+  defense-in-depth check, not a consensus rule — the consensus
+  rule is the genesis-block hash itself, which is already fixed
+  at genesis-block-construction time.
+- **The FFI `chain_height` parameter is the predecessor's height,
+  not the block-being-validated's height.** The off-by-one between
+  "height of the block whose difficulty I am about to validate"
+  (== `h`) and "chain_height at the moment I am computing that
+  difficulty" (== `h-1`) is the most common consumer-side error
+  class and must be reviewed at every Phase 4 call site. The
+  `Blockchain::get_difficulty_for_next_block()` consumer
+  (§9.4) already operates on the "next block" framing, so the
+  off-by-one is absorbed naturally; the
+  `get_next_difficulty_for_alternative_chain()` consumer requires
+  explicit attention because the alternate-chain branch may
+  compute `chain_height` from the alt-chain's tip rather than the
+  main chain's.
+
 ## 6. FFI surface
 
 Per `40-ffi-discipline.mdc`, all exports return `i32` error codes;
 output values reach the caller through out-parameters.
 
 ### 6.1 The one committed export
+
+**Difficulty type at the ABI boundary: `[u8; 16]` little-endian.**
+The FFI exchanges 128-bit difficulty values as fixed-size 16-byte
+little-endian byte arrays, **not** as Rust `u128` / C `__uint128_t`.
+Rationale per `17-dependency-discipline.mdc`'s property-existence
+discipline and Round 4 review:
+
+- The Rust `u128` C ABI was **unsound on several targets** until
+  Rust 1.77 (released March 2024); the `improper_ctypes` lint
+  flagged it as undefined behavior up to that point, and the
+  underlying ABI mismatch survives on uncommon targets even on
+  current Rust. See [rust-lang/rust#54341](https://github.com/rust-lang/rust/issues/54341)
+  and [RFC 3535](https://github.com/rust-lang/rfcs/pull/3535).
+  The unsoundness is real on i686-pc-windows-gnu, sparc64,
+  powerpc64le, and others where the C-side ABI for 128-bit
+  integers disagrees with Rust's representation. For a
+  **consensus-critical** FFI surface, a target-dependent
+  soundness footgun is unacceptable.
+- The boring-safe disposition is explicit byte arrays. Both sides
+  serialize/deserialize at the ABI boundary; the in-memory
+  representation on either side is unconstrained.
+- This matches the FCMP++ and KEM-derivation FFI surfaces already
+  in the workspace, which exchange field elements and scalars as
+  fixed-size byte arrays for the same target-portability reason.
+- Endianness convention: **little-endian**, matching `u128::to_le_bytes`
+  on Rust and the canonical encoding of 128-bit integers across
+  the workspace's serialization layer.
 
 ```c
 // Compute next difficulty per LWMA-1.
@@ -927,8 +1051,15 @@ output values reach the caller through out-parameters.
 //   timestamps          - pointer to count u64 timestamps in chain order,
 //                         oldest first; index 0 is the oldest, index
 //                         count-1 is the chain tip
-//   cum_difficulties    - pointer to count u128 cumulative-difficulty
-//                         values matching timestamps in order
+//   cum_difficulties    - pointer to count 16-byte little-endian
+//                         cumulative-difficulty values matching
+//                         timestamps in order. Each entry is the
+//                         canonical LE encoding of the corresponding
+//                         u128 cumulative difficulty. C callers with a
+//                         native uint128_t-typed buffer must memcpy
+//                         into this representation explicitly (rather
+//                         than reinterpret-casting), per the
+//                         endianness-checkpoint discipline.
 //   count               - number of entries in each array.
 //                         - If chain_height >= N: count MUST equal N+1
 //                           (== 91 for Shekyl V3.0); ERR_INVALID_COUNT
@@ -944,8 +1075,9 @@ output values reach the caller through out-parameters.
 //                         genesis short-circuit per §5.3 step 1; the
 //                         transition from short-circuit to algorithm
 //                         fires at chain_height == N.
-//   out_next_difficulty - pointer to u128 receiving the next-difficulty
-//                         output on success
+//   out_next_difficulty - pointer to a 16-byte buffer receiving the
+//                         canonical little-endian encoding of the
+//                         next-difficulty u128 output on success.
 //
 // Returns:
 //   0  - OK; out_next_difficulty written
@@ -959,11 +1091,34 @@ output values reach the caller through out-parameters.
 //                      not written)
 int32_t shekyl_difficulty_lwma1_next(
     const uint64_t *timestamps,
-    const __uint128_t *cum_difficulties,
+    const uint8_t (*cum_difficulties)[16],
     size_t count,
     uint64_t chain_height,
-    __uint128_t *out_next_difficulty);
+    uint8_t (*out_next_difficulty)[16]);
 ```
+
+The Rust-side export signature mirrors this:
+
+```rust
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn shekyl_difficulty_lwma1_next(
+    timestamps: *const u64,
+    cum_difficulties: *const [u8; 16],
+    count: usize,
+    chain_height: u64,
+    out_next_difficulty: *mut [u8; 16],
+) -> i32 {
+    // ...
+    // Reads cum_difficulties[i] via core::ptr::read_unaligned
+    // followed by u128::from_le_bytes; writes out_next_difficulty
+    // via u128::to_le_bytes followed by core::ptr::write_unaligned.
+}
+```
+
+The unaligned read/write is intentional: the C side's
+`uint128_t` buffer may not be 16-byte-aligned on all targets,
+and the canonical-LE-byte-array view is alignment-free by
+construction.
 
 ### 6.2 Discretionary additions (deferred to V3.x unless Phase 4 finds need)
 
@@ -987,11 +1142,13 @@ both sides, generated from the single JSON authority.
   problem (which one wins on disagreement?).
 - Per-step pseudocode helpers. The algorithm is one function at the
   spec level; the FFI mirrors that.
-- Difficulty conversion / packing helpers. Difficulty is already
-  `u128` end-to-end at the FFI boundary; the inherited
-  `boost::multiprecision::uint128_t` C++ type is a `__uint128_t`-
-  compatible at the FFI ABI per the existing `crypto::hash` packing
-  precedent.
+- Difficulty conversion / packing helpers. Difficulty is `u128`
+  end-to-end at the consensus level on both sides; only the ABI
+  representation differs (`[u8; 16]` LE per §6.1's discipline).
+  The C++ side memcpys between its native `uint128_t` and the
+  16-byte LE buffer at the call site; the Rust side uses
+  `u128::{to_le_bytes, from_le_bytes}`. No general-purpose packing
+  helper is exposed across the FFI.
 
 ## 7. Isolation invariants
 
@@ -1032,28 +1189,76 @@ Three test-vector tiers, each gating a specific PR:
 ### 8.1 Unit tests (Phase 1 gate)
 
 Author-derived synthetic vectors covering the algorithm's structural
-properties:
+properties. All expected values below are stated as **concrete
+numerical tuples**, not as `≈` shapes — the bias factor `99/200`
+introduces a deliberate `99/100` downward correction (per §5.3
+step 7 derivation), and `≈`-shaped expectations invite three failure
+paths at implementation time: (a) "fix" the test by relaxing the
+tolerance to absorb the 1 % shift (wrong); (b) "fix" the algorithm
+by removing the bias to make the test pass (wrong); or (c) declare
+"within rounding" covers a 1 % shift when it actually covers a
+±1-unit shift (wrong). Concrete tuples force the implementer to
+confront the bias at design time, not at debug time.
 
-- Genesis short-circuit (chain_height < N returns
-  `GENESIS_DIFFICULTY` verbatim).
-- Perfectly stable hashrate (`solvetime[i] = T` for all i)
-  produces `next_D == avg_D` (within rounding).
-- Sudden 2× hashrate increase (`solvetime[i] = T/2` for all i)
-  produces `next_D ≈ 2 * avg_D`.
-- Sudden 2× hashrate decrease (`solvetime[i] = 2*T`) produces
-  `next_D ≈ avg_D / 2`.
-- Solvetime clamp engagement (single `solvetime[N] = 100*T`)
-  produces output bounded by the `6*T`-clamped contribution.
-- Minimum-L floor engagement (all very fast solvetimes) produces
-  output bounded by the floor.
-- Out-of-sequence timestamp normalization (`timestamps[i+1] <
-  timestamps[i]`) produces a valid `next_D` rather than panicking
-  or returning zero.
-- Bias factor direction (the `99/200` correction biases output
-  toward stability, not toward variance). Specifically: a stable-
-  hashrate input with `solvetime[i] == T` produces `next_D` within
-  `±2%` of `avg_D`, not `±100%`; this catches the `200/99`
-  direction-inversion bug class flagged in §5.3 step 7.
+The vectors below use Shekyl V3.0 parameters (`N = 90`, `T = 120`,
+`GENESIS_DIFFICULTY = 100`).
+
+- **Genesis short-circuit.** `chain_height < N` returns
+  `GENESIS_DIFFICULTY` verbatim. Specifically: for any
+  `chain_height ∈ {0, 1, ..., 89}` and any `(timestamps,
+  cum_difficulties)` input (including null), the output is
+  exactly `100`.
+- **Perfectly stable hashrate.** `solvetime[i] == T == 120` for
+  all `i in 1..=N`, `cum_difficulties` arithmetic-progressing by
+  a constant `d_step` such that `avg_D == d_step` over the
+  window. Expected output: **`next_D == avg_D * 99 / 100`**
+  (deliberate downward bias per §5.3 step 7 derivation, **not**
+  `next_D == avg_D`). For `avg_D == 1_000_000` this is exactly
+  `990_000`. The 1 % bias is the design intent of the `99/200`
+  factor — a test asserting `next_D == avg_D` would falsely fail
+  on a correct implementation and falsely pass on an
+  implementation that silently removed the bias factor.
+- **Sudden 2× hashrate increase.** `solvetime[i] == T/2 == 60`
+  for all `i`. With `L = 60 * N * (N+1) / 2`, the formula yields
+  **`next_D == avg_D * 99 / 50 == avg_D * 198 / 100`** (a `1.98×`
+  rise, not `2×`; the bias factor pulls the response slightly
+  below the naive proportional response). For `avg_D == 1_000_000`
+  this is exactly `1_980_000`.
+- **Sudden 2× hashrate decrease.** `solvetime[i] == 2*T == 240`
+  for all `i`. With `L = 240 * N * (N+1) / 2`, the formula yields
+  **`next_D == avg_D * 99 / 200`** (a `0.495×` drop, not `0.5×`).
+  For `avg_D == 1_000_000` this is exactly `495_000`.
+- **Solvetime clamp engagement.** Single
+  `solvetime[N] = 100 * T = 12_000` with all other solvetimes at
+  `T`. The clamp truncates the outlier at `6*T = 720`; the
+  expected output is computed against a clamped-solvetime vector,
+  not against the raw vector. Test vector includes both the
+  pre-clamp expected (had the clamp not fired — should fail) and
+  the post-clamp expected (correct).
+- **Minimum-L floor engagement.** All `solvetime[i] = 1` (the
+  out-of-sequence-normalization floor). `L_raw = N*(N+1)/2 = 4_095`
+  is far below `N*N*T/20 = 48_600`; the floor fires, `L` becomes
+  `48_600`. Expected
+  `next_D == avg_D * N * (N+1) * T * 99 / (200 * N*N*T/20)
+          == avg_D * (N+1) * 99 * 20 / (200 * N)
+          == avg_D * (N+1) * 99 / (10 * N)`. For `N = 90`,
+  `avg_D = 1_000_000`, this is exactly `1_000_000 * 91 * 99 / 900
+  == 1_000_000 * 9009 / 900 == 10_010_000`. The ~10× rise reflects
+  the floor's job: extremely fast solvetimes signal a dramatic
+  hashrate increase, and the algorithm responds proportionally
+  (bounded by the floor, not unbounded).
+- **Out-of-sequence timestamp normalization.** `timestamps[i+1] <
+  timestamps[i]` for one or more `i`. Test vector asserts (a) no
+  panic, (b) no zero output, (c) the output matches the
+  algorithm run with the corresponding `solvetime[i] = 1`
+  substitution per §5.3 step 2.
+- **Bias factor direction sanity.** Stable-hashrate input with
+  `solvetime[i] == T` produces output **below** `avg_D` (per the
+  stable-hashrate vector above). A `200/99` direction inversion
+  per §5.3 step 7 would produce `avg_D * 100 / 99 ≈ 1.0101 * avg_D`
+  — output *above* `avg_D`. A test vector that asserts the
+  output's relationship to `avg_D` is `<`, not `==` or `>`,
+  catches the inversion bug class.
 - **Overflow-guard boundary** (per §5.3 step 8). Two paired vectors:
   one with `avg_D` immediately below `2_000_000 * N * N * T =
   1_944_000_000` (unguarded branch); one with `avg_D` immediately
