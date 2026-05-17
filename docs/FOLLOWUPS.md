@@ -828,6 +828,59 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1 — audit response and stressnet gates
 
+- **RandomX v2 — Guix reproducible-build obligation pickup (trigger:
+  Guix integration design pass lands).** When Guix infrastructure
+  arrives, the RandomX v2 work creates the obligations recorded in
+  [`docs/design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §22:
+  pin the `external/randomx-v2` source hash in the Guix manifest at
+  the same commit as the git submodule (`aaafe71` at Phase 0 close);
+  make `BUILD_RANDOMX_V2_MINER_LIB` a reproducible-build variant so
+  daemon-only and miner-bundle builds are separate reproducible
+  artifacts; vendor or pin `shekyl-pow-randomx` Rust dependencies in
+  the same manifest with no build-time network access. This entry
+  exists because §22 is forward-looking — Guix isn't present today —
+  and the obligation can only fire when someone re-reads §22 at
+  Guix-integration time. The Guix-integration design doc rewrites
+  §22 to point at the actual manifest paths and closes this entry.
+  Target: V3.1 if Guix integration lands then; bumps to V3.x
+  otherwise. Cross-reference:
+  [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §22.
+
+- **Rules-queue: elevate per-gate reviewer-discipline calibration
+  into a workspace-wide rule (trigger: RandomX v2 Phase 0 review
+  signs off on `RANDOMX_V2_RUST.md` §23).** Probable home:
+  `.cursor/rules/24-reviewer-discipline.mdc`. The rule statement,
+  drawn from §23.1 of the RandomX v2 design doc: _consensus-critical
+  plans calibrate each external-review gate explicitly — which are
+  waivable to self-review (with the written-note + 24-hour
+  sleep-on-it discipline) and which are not — and distinguish
+  inherited external review (via fork non-divergence or upstream
+  dependency tracking) from Shekyl-direct external review in the
+  audit trail._ Rationale: pre-launch, Shekyl operates with a small
+  core team. No workspace rule today codifies an "at least one
+  reviewer who is not the author" requirement — `06-branching.mdc`
+  governs branch flow and release operations but does not define a
+  reviewer-count rule, and `.cursor/rules/` has no
+  `24-reviewer-discipline.mdc` yet. The "non-author reviewer"
+  requirement is currently an aspirational project convention,
+  applied per-PR by the author's discipline; the RandomX v2 plan
+  names that convention explicitly so the audit trail records when
+  it was satisfied and when it was waived to self-review. Promoting
+  to a rule formalizes the convention and adds the per-gate
+  calibration on top, so other consensus-critical work (PQC
+  primitives, FCMP++, staking) reuses the same shape without
+  re-deriving it. The RandomX v2 plan demonstrates the calibration
+  works (Phase 2 implementation has no external-review gate; the
+  release-time algorithm-review gate does; the latter is inherited
+  via Monero's audit). Cross-references:
+  [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §23 (the
+  per-gate calibration list), §23.1 (the promotion disposition);
+  [`06-branching.mdc`](../.cursor/rules/06-branching.mdc) (the
+  adjacent branch-and-release rule the new rule sits alongside —
+  not the source of the reviewer-count requirement, which the new
+  rule introduces). Target: V3.1 (sibling to the other rules-queue
+  entries in this section).
+
 - **Rules-queue: elevate the public-material typed-wrapper exclusion
   into a workspace-wide rule.** Probable home:
   `.cursor/rules/18-type-placement.mdc` (in-queue draft), with the
