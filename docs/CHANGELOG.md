@@ -219,14 +219,21 @@
   `DAA_LWMA1_PLAN.md`** Phase 4 (four criteria: consensus-rule
   boundary; structural indivisibility; surface enumerated in
   advance; documented disposition citing the criteria). The
-  class is drafted, not yet ratified — ratification is a
-  sibling PR amending `06-branching.mdc` to land the criteria
-  before Phase 4 opens. The drafting-here disposition serves
-  both the "ratify before Phase 4" and "defer with criteria
-  named in the design doc" paths per `21-reversion-clause-
-  discipline.mdc`'s named-criteria discipline. Phase 4's
-  exception is auditable against the class's four criteria
-  mechanically, not against LWMA-1-specific precedent.
+  class was drafted here as four criteria; the sibling PR
+  `feat/consensus-atomic-cutovers-rule` ratifies the criteria
+  as `.cursor/rules/07-consensus-atomic-cutovers.mdc` with
+  refinements absorbed during Round 6 review: criterion 2 is
+  reframed as "indivisible under flag decomposition" (the
+  generalization-friendly definition that distinguishes the
+  LWMA-1 case from flag-decomposable migrations like RandomX v2
+  Phase 3), criterion 4 adds a required reviewer-map and
+  rollback procedure, and a "what this is not" section
+  disqualifies convenience/velocity/reviewer-bandwidth/
+  retroactive-citation as justifications. Phase 4's section in
+  this plan now invokes the ratified rule by name and maps each
+  criterion to LWMA-1 Phase 4 specifically. Phase 4's exception
+  is auditable against the class's four criteria mechanically,
+  not against LWMA-1-specific precedent.
 
 - **`07-consensus-atomic-cutovers.mdc` — named exception to
   branching policy for consensus-atomic cutovers**

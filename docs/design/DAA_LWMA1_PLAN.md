@@ -568,71 +568,75 @@ surface) or (b) silently change behavior at the alias *definition*
 (equivalent to atomic-cutover but split across two PRs for no
 benefit). The only honest shape is one PR.
 
-**Acknowledged tension with `06-branching.mdc`.** The branch
-policy's 5-working-day / 10-commit guidance is a defense against
-unreviewable PRs accumulating. Phase 4 is a deliberate exception
-on consensus-atomicity grounds: the work cannot be split across
-two PRs without weakening consensus integrity in the intermediate
-state.
+**Phase 4 invokes `07-consensus-atomic-cutovers.mdc`.** The
+branch policy's 5-working-day / 10-commit guidance in
+`06-branching.mdc` is a defense against unreviewable PRs
+accumulating. Phase 4 invokes the named exception class
+`07-consensus-atomic-cutovers.mdc`, which carves out a
+small class of consensus-atomic cutovers from the splitting
+guidance. The exception's four objectively-testable criteria
+each apply here; the Phase 4 PR description repeats this
+mapping verbatim so the invocation is auditable at PR-open
+rather than by reference:
 
-**The "consensus-atomic cutover" exception class.** Round 5
-review names this carve-out as a *class*, not as a per-PR
-favor. The class's triggering criteria, drafted here so a
-future `06-branching.mdc` amendment PR has the text ready:
+1. **Consensus-rule boundary (criterion 1).** Yes. The PR
+   changes the FTL value (`7200 s → 540 s`), the MTP window
+   (`60 → 11`), and the difficulty-computation algorithm
+   itself. All three are consensus-rule values/behavior that
+   correctly-implementing nodes must reproduce byte-identically
+   on the same input; a validator running the old FTL or MTP
+   would reach different acceptance conclusions on the same
+   block header than one running the new values.
+2. **Indivisible under flag decomposition (criterion 2).** Yes.
+   The candidate flag-decomposition for the algorithm body
+   (introduce LWMA-1 behind a flag default off; flip; delete
+   the old path) would produce a consensus-safe intermediate
+   only if the FTL and MTP values were *also* flagged in
+   lockstep with the algorithm — but FTL and MTP are
+   consensus-rule *constants* whose values must agree across
+   all nodes regardless of which code path they call. A "flag"
+   for a consensus-rule constant does not exist in any
+   meaningful sense; both nodes have to agree on the same FTL
+   and MTP at the same height. The only way to flag them is to
+   define the consensus-event itself (which-height-flips), and
+   that consensus-event is exactly what Phase 4 ratifies. The
+   decomposition collapses into the single PR.
+3. **Surface enumerated in advance (criterion 3).** Yes.
+   `DAA_LWMA1.md` §§9.4–9.7 enumerate every consensus-affecting
+   symbol, file, and constant being changed, with line numbers
+   and consumer counts derived from `git grep` at design-doc
+   PR-open time. The Phase 4 PR description repeats the
+   enumeration verbatim and links to the §§9.4–9.7 anchors.
+4. **Disposition documented in PR (criterion 4).** Yes — the
+   Phase 4 PR description cites `07-consensus-atomic-cutovers.mdc`
+   by name; lists criteria 1–4 with one-sentence justifications
+   per criterion (lifted from this section); includes a
+   reviewer-map subsection partitioning the diff into
+   *consensus-affecting* (the three `Blockchain` call sites
+   from §9.4, the three FTL/MTP/algorithm `#define` deletions
+   from §9.2, plus the generated-header pickup), *mechanical*
+   (the 14 `DIFFICULTY_TARGET_V2` consumer rewires from §9.7,
+   no logic change, only the source-of-value moves from
+   `#define` to generated-header), and *deletion* (the
+   `difficulty.{h,cpp}` pair); and includes a rollback
+   procedure naming the specific files (the inverse of the
+   reviewer-map's diff) and the order in which they would be
+   reverted if consensus breaks post-merge.
 
-1. **Consensus-rule boundary.** The PR touches a consensus-rule
-   value or behavior where partial application leaves the chain
-   in a non-canonical state — one in which validators reach
-   different conclusions about the same block depending on
-   which subset of the cutover they have applied.
-2. **Structural indivisibility.** The work cannot be split
-   across two or more PRs without producing an intermediate
-   consensus configuration that no node should run. This is
-   stricter than "would be inconvenient to split"; the test is
-   whether the intermediate state is itself a defensible
-   consensus configuration.
-3. **Surface enumerated in advance.** The affected files,
-   constants, and call sites are enumerated in the design
-   document referenced by the PR (here: `DAA_LWMA1.md`
-   §§9.4–9.7), not discovered at PR time. Enumeration-in-advance
-   bounds the review surface; absence of enumeration disqualifies
-   the exception.
-4. **Documented disposition.** The PR description cites the
-   exception class explicitly, names which design-doc
-   enumeration bounds the surface, and asserts the partial-
-   application failure mode the atomicity prevents.
-
-Per `21-reversion-clause-discipline.mdc`'s named-criteria
-discipline: the exception class is auditable mechanically
-("does this PR meet criteria 1–4?") rather than by precedent
-("we did it for LWMA-1, can we do it again?"). Phase 4 of this
-plan invokes the exception class against criteria 1 (FTL/MTP
-value changes are consensus-rule values), 2 (alias-period
-intermediate states are either preserve-old-values-across-rewire
-or silently-change-at-definition — neither is a defensible
-consensus configuration), 3 (`DAA_LWMA1.md` §§9.4–9.7 enumerate
-the surface in advance), and 4 (this paragraph in this plan).
-
-Phase 4 is bounded under the class: the rewires are mechanical
-(textual against the §§9.4–9.7 enumeration), the deletions are
-file-level (the difficulty.{h,cpp} pair and three `#define`s
-listed in §9.2), and the work-item ceiling is fixed at the 14
-items below (no scope creep within the PR). RandomX v2's Phase
-3 sub-PR split (3a/3b/3c per `RANDOMX_V2_PLAN.md`) is the right
-shape for that migration because its surfaces *are* separable —
-the consensus-atomic class does not engage for it; the LWMA-1
-Phase 4 is.
-
-**Ratification.** The exception class is **drafted, not yet
-ratified.** Ratification is a sibling PR amending
-`06-branching.mdc` (or its successor rule) to land the criteria
-above as a named carve-out before Phase 4 opens; the cost is
-~50 lines of rule text plus one `CHANGELOG.md` entry. If
-ratification is deferred and Phase 4 opens against the criteria
-in their drafted state, the Phase 4 PR description must cite
-this plan section as the criteria source so a future audit can
-trace the exception back to its named test rather than to
-LWMA-1-specific precedent erosion.
+Phase 4's scope is bounded by the criterion-3 enumeration: the
+work-item ceiling is fixed at the 14 items below (no scope
+creep within the PR; "while we're here" additions break the
+exception per criterion 3 per `15-deletion-and-debt.mdc`).
+RandomX v2's Phase 3 sub-PR split (3a/3b/3c per
+`RANDOMX_V2_PLAN.md`) does *not* invoke the same exception:
+criterion 2 is not met for it (the algorithm-body cutover is
+flag-decomposable: 3a adds the FFI swap behind a flag default
+on while the legacy path remains buildable; 3b removes the flag
+and finishes the rewire; 3c performs the implementation
+deletions; each sub-PR plausibly fits the 5-day / 10-commit
+ceiling). `07-consensus-atomic-cutovers.mdc`'s history-of-application
+section records RandomX v2 Phase 3 explicitly as a case
+**evaluated and not approved**.
 
 Fourteen work items, all in this PR (numbered for the work-item
 count audit; counts match `DAA_LWMA1.md` §§9.1–9.7):
