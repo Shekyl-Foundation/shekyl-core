@@ -328,9 +328,14 @@ Semantics:
 - `shekyl-ffi` may memoize derived caches internally across calls.
   `shekyl-pow-randomx` itself does not hold module-level state.
 
-`seedheight(height) -> u64` is discretionary. Phase 3 may add it only if
-the C++ caller survey proves the call cannot be eliminated or moved to a
-Rust caller cleanly.
+`shekyl_pow_randomx_v2_seedheight(height: u64, out_seedheight: *mut u64) -> i32`
+is discretionary. Phase 3 may add it only if the C++ caller survey
+proves the call cannot be eliminated or moved to a Rust caller
+cleanly. The export shape matches `shekyl_pow_randomx_v2_hash`: an
+`i32` error code is returned, the computed seed height is written
+through the `out_seedheight` out-parameter on success. This
+preserves `40-ffi-discipline.mdc`'s uniform return-shape rule so the
+discretionary export does not introduce a second ABI shape.
 
 Explicitly not exported:
 
@@ -396,8 +401,13 @@ equivalent `dumpbin /symbols` check. The check must not become a broad
 
 All C ABI lives in `shekyl-ffi` and uses the
 `shekyl_pow_randomx_v2_*` prefix. The verifier crate never defines
-`#[no_mangle]`, `#[unsafe(no_mangle)]`, or exported `extern "C"` Rust
-functions.
+`#[no_mangle]`, `#[unsafe(no_mangle)]`, `#[export_name = "..."]`,
+`#[unsafe(export_name = "...")]`, or exported `extern "C" fn` Rust
+functions. The CI grep in
+[`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) Phase 2f enforces this
+mechanically; the design-doc surface and the CI surface name the same
+patterns so a future contributor cannot weaken one without touching
+the other.
 
 The verifier crate also forbids module-level runtime-mutable state.
 Immutable tables are allowed; `static mut`, `Mutex`, `RwLock`, `OnceCell`,
@@ -493,26 +503,47 @@ consumers can receive `randomx_*` symbols transitively from that v1
 library today.
 
 Known direct `cncrypto` consumers from the Phase 0 survey (each
-`target_link_libraries(... cncrypto)` call site verified):
+`target_link_libraries(... cncrypto)` call site verified at the
+pinned tree state; targets that obtain `cncrypto` transitively
+through `common` are **not** in this list):
+
+Production `src/` targets:
 
 - `src/common/CMakeLists.txt` (`common`, PUBLIC) — **load-bearing**:
   `common` sits below most subsystems, so any subsystem that links
   `common` transitively receives `cncrypto`'s exports including any
   `randomx_*` symbols re-exported through the `randomx` PUBLIC link.
+- `src/blockchain_db/CMakeLists.txt` (`blockchain_db`, PUBLIC)
+- `src/checkpoints/CMakeLists.txt` (`checkpoints`, PUBLIC)
 - `src/cryptonote_basic/CMakeLists.txt` (`cryptonote_format_utils_basic`
   PUBLIC, and `cryptonote_basic` PUBLIC)
 - `src/cryptonote_core/CMakeLists.txt` (`cryptonote_core` PUBLIC)
 - `src/daemon/CMakeLists.txt` (`daemon`)
-- `src/fcmp/CMakeLists.txt` (two targets PUBLIC: `fcmp` and the
-  `monero_fcmp_pp_crypto` adapter)
-- `src/crypto/wallet/CMakeLists.txt` (`wallet-crypto`)
+- `src/device/CMakeLists.txt` (`device`, PUBLIC)
 - `src/device_trezor/CMakeLists.txt` (`device_trezor` PUBLIC)
+- `src/fcmp/CMakeLists.txt` (two targets PUBLIC: `fcmp_basic` and
+  `fcmp`)
+- `src/crypto/wallet/CMakeLists.txt` (`wallet-crypto`)
+- `src/wallet/CMakeLists.txt` (`wallet_rpc_server`)
+
+Test targets:
+
 - `tests/CMakeLists.txt` (`shekyl-wallet-crypto-bench`)
+- `tests/wallet_bench/CMakeLists.txt` (`shekyl-wallet-bench`)
+- `tests/daemon_tests/CMakeLists.txt`
+- `tests/functional_tests/CMakeLists.txt` (`functional_tests`,
+  `make_test_signature`)
+- `tests/hash/CMakeLists.txt` (`hash-tests`)
+- `tests/performance_tests/CMakeLists.txt` (`performance_tests`)
 
 Note that `tests/crypto/CMakeLists.txt`'s `cncrypto-tests` target does
 **not** itself link `cncrypto` directly; it links `common`, which
 transitively pulls in `cncrypto`. The test name is historical; it
-exercises the `cncrypto` interface through the transitive link.
+exercises the `cncrypto` interface through the transitive link. Other
+test executables in the tree that don't appear above (e.g.,
+`tests/difficulty`, `tests/fuzz/*`, `tests/net_load_tests`,
+`tests/trezor`) also pick up `cncrypto` transitively rather than
+directly and are out of the Phase 3 link-drop *direct* surface.
 
 This list is the Phase 3 link-drop checklist. Each consumer must be
 verified to either (a) not use any `randomx_*` symbol directly, or (b)
@@ -520,6 +551,10 @@ be rewired to the new FFI path, before the `randomx` PUBLIC link can be
 dropped from `cncrypto`. The breadth of the list — particularly
 `common` — explains why Phase 3 must finalize the consumer-by-consumer
 audit before Phase 3c's link drop, not assume zero direct consumers.
+Phase 3 re-runs the survey (`rg target_link_libraries.*cncrypto
+--type cmake` plus manual reading of multi-line `target_link_libraries`
+calls) immediately before Phase 3c lands so any consumer added in
+the interim is caught.
 
 Phase 1 adds `external/randomx-v2` at `aaafe71` as a **new** submodule
 alongside the existing `external/randomx`; it does not repoint the
@@ -640,6 +675,13 @@ payment hooks, types, RPC endpoints, CLI commands, and config fields:
 - `src/rpc/CMakeLists.txt` — drop the `rpc_payment*` translation units.
 - `src/rpc/core_rpc_server.{h,cpp}` — remove `GET_RPC_PAYMENT_*` /
   `RPC_ACCESS_*` endpoints and their dispatch entries.
+- `src/rpc/core_rpc_ffi.cpp` — drop the JSON-RPC dispatch entries
+  that register `rpc_access_info`, `rpc_access_submit_nonce`,
+  `rpc_access_pay`, `rpc_access_tracking`, `rpc_access_data`, and
+  `rpc_access_account` (the `DJRPC_WE("rpc_access_*", ...)` lines).
+- `src/rpc/core_rpc_server_commands_defs.h` — delete the
+  `COMMAND_RPC_ACCESS_*` request/response struct definitions that
+  back those dispatch entries.
 - `src/rpc/bootstrap_daemon.{h,cpp}` — drop client-side payment
   handling for upstream bootstrap daemons.
 - `src/cryptonote_config.h` — drop RPC-payment-related constants.
@@ -656,6 +698,13 @@ payment hooks, types, RPC endpoints, CLI commands, and config fields:
   `src/wallet/node_rpc_proxy.{h,cpp}` — remove client-id /
   payment-secret fields, `--rpc-payment-*` CLI flags, payment error
   types, and the proxy's payment-credit accounting.
+
+Test runner surface:
+
+- `tests/functional_tests/functional_tests_rpc.py` — remove
+  `'rpc_payment'` from `DEFAULT_TESTS` (currently in the default
+  list at line 13). Without this edit, the functional-test runner
+  would call into the deleted Python test file.
 
 Phase 0 review confirms this list against the tree before Phase 4
 begins; new daemon or wallet code merged in the interim is added here.
@@ -772,26 +821,37 @@ ambiguity at the boundary:
   `[data, data + data_len)` must be readable by the callee.
 
 Continuing the error-code semantics:
+
 - `ERR_CACHE_DERIVE_FAILED (-3)`: cache derivation could not complete
-  due to a **VM-level failure or Rust panic caught at the FFI shim**.
-  `out_hash32` is **not** written. This code does **not** cover
-  allocation failure: the cache-derivation allocation path uses
-  infallible allocation APIs (`Box::new_zeroed_slice`,
-  `vec![0u8; N].into_boxed_slice()`) per the Phase 2e plan, which call
-  `handle_alloc_error` and abort the process on OOM rather than return
-  an error. A daemon that cannot allocate 256 MB for the cache cannot
-  continue regardless of which RandomX path runs; mapping OOM to a
-  return code would be dishonest because the FFI shim never sees the
-  return-from-allocator that would let it construct one. If a future
-  caller needs OOM-recoverable cache derivation (e.g., a wallet-side
-  cold path that wants to surface the failure), the disposition is
-  V3.x work: rewrite cache derivation to use `Box::try_new_zeroed_slice`
-  / `Vec::try_reserve_exact`, add an `ERR_CACHE_ALLOC_FAILED (-5)`
+  due to a **VM-level failure during the Argon2d / SuperScalarHash
+  derivation pass** (e.g., a `debug_assert` that fires only in
+  debug builds and is caught by the FFI shim, or an internal
+  pre-condition the verifier declines to silently paper over).
+  `out_hash32` is **not** written. This code does **not** cover Rust
+  panics — those are uniformly mapped to `ERR_INTERNAL (-4)` per the
+  next bullet — and does **not** cover allocation failure, because
+  the cache-derivation allocation path uses infallible allocation
+  APIs (`Box::new_zeroed_slice`, `vec![0u8; N].into_boxed_slice()`)
+  per the Phase 2e plan, which call `handle_alloc_error` and abort
+  the process on OOM rather than return an error. A daemon that
+  cannot allocate 256 MB for the cache cannot continue regardless of
+  which RandomX path runs; mapping OOM to a return code would be
+  dishonest because the FFI shim never sees the return-from-allocator
+  that would let it construct one. If a future caller needs
+  OOM-recoverable cache derivation (e.g., a wallet-side cold path
+  that wants to surface the failure), the disposition is V3.x work:
+  rewrite cache derivation to use `Box::try_new_zeroed_slice` /
+  `Vec::try_reserve_exact`, add an `ERR_CACHE_ALLOC_FAILED (-5)`
   taxonomy entry, and tighten this code's semantics accordingly.
 - `ERR_INTERNAL (-4)`: a Rust panic crossed the FFI boundary and was
-  caught. `out_hash32` is **not** written. This code is a CI failure
-  signal during development; in release it returns the code and logs
-  via the standard FFI logging hook.
+  caught (`std::panic::catch_unwind` at the shim). `out_hash32` is
+  **not** written. This is the single stable code for "the Rust
+  side panicked"; `ERR_CACHE_DERIVE_FAILED` covers structured
+  failure paths the Rust code returned deliberately, while
+  `ERR_INTERNAL` covers the unstructured panic-unwind path. The
+  two are disjoint at the FFI shim by construction. This code is a
+  CI failure signal during development; in release it returns the
+  code and logs via the standard FFI logging hook.
 
 Failure discipline:
 
@@ -929,9 +989,17 @@ or Track B, this section is rewritten to point at the actual manifest.
 ## 23. Reviewer Discipline Under Solo-Architect Reality
 
 This section acknowledges the project's review reality. Shekyl pre-launch
-operates with a small core team; the formal "at least one reviewer who
-is not the author" rule is aspirational for some rounds and binding for
-others.
+operates with a small core team. No workspace rule today codifies an
+"at least one reviewer who is not the author" requirement —
+`06-branching.mdc` governs branch flow and release operations but does
+not define a reviewer-count rule, and `.cursor/rules/` has no
+`24-reviewer-discipline.mdc` yet (its promotion is tracked as a V3.1
+follow-up in [`FOLLOWUPS.md`](../FOLLOWUPS.md)). The
+"non-author reviewer" requirement is therefore an **aspirational
+project convention** that this design doc names explicitly so the
+audit trail records when the convention was satisfied and when it
+was waived to self-review, rather than relying on a rule that does
+not yet exist.
 
 Discipline applied to this work:
 

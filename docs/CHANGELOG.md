@@ -18,15 +18,141 @@
   the one-function FFI target, no-prewarm disposition, performance
   budgets, C-library symbol-isolation invariant, and the wallet V3.2
   gate before Track B. The Grover-bound argument scaffold is recorded
-  in [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §9; the
+  in [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §10; the
   concrete release-checklist target-range calculation is explicitly
-  deferred to Phase 0 review per §9's closing sentence rather than
+  deferred to Phase 0 review per §10's closing sentence rather than
   shipped in this PR. The fallback doc records the late-binding
   unpin-and-revert recovery path (`102f8acf` pin plus verifier
   toggle) for any time between Phase 0 and genesis release if the
   algorithm-review gate fails per `RANDOMX_V2_RUST.md` §1.4.
 
 ### Changed
+
+- **RandomX v2 Phase 0 — Copilot PR #45 Round 2 findings addressed
+  (5 inline + 16 low-confidence suppressed)**
+  (`feat/randomx-v2-phase0-design`, 2026-05-17). Round 2 of
+  Copilot's inline review surfaced 5 inline comments and 16
+  low-confidence suppressed findings against the four design
+  documents. Triage and disposition follow; all 21 were accepted
+  with fixes (no rejections). The findings clustered into seven
+  themes:
+
+  1. **Error-taxonomy ambiguity** (RUST.md:776, PLAN.md:290).
+     `ERR_CACHE_DERIVE_FAILED` and `ERR_INTERNAL` both claimed
+     coverage of "Rust panic caught at FFI shim," making the
+     taxonomy ambiguous for implementers. Resolved by assigning
+     panics uniformly to `ERR_INTERNAL (-4)` via
+     `catch_unwind` at the shim, while
+     `ERR_CACHE_DERIVE_FAILED (-3)` covers only structured
+     VM-level failures the derivation deliberately returns
+     (e.g., debug_assert paths). The two codes are now disjoint
+     by construction; the PLAN.md §2e prose mirrors the §17
+     taxonomy verbatim so future drift is impossible.
+
+  2. **Reviewer-rule misattribution** (RUST.md:934, FOLLOWUPS
+     reviewer-discipline rules-queue entry). Both entries cited
+     `.cursor/rules/06-branching.mdc` as the source of an "at
+     least one reviewer who is not the author" rule. Verified
+     against the file: `06-branching.mdc` governs branch flow
+     and release operations and contains no reviewer-count
+     rule. Rewrote both to acknowledge the requirement is an
+     aspirational project convention, not a codified rule, and
+     to record that the V3.1 `24-reviewer-discipline.mdc`
+     rules-queue entry is the *introducing* rule rather than a
+     promotion of an existing one.
+
+  3. **`cncrypto` PUBLIC-link survey gaps** (RUST.md:499,
+     PLAN.md:338/402, CHANGELOG.md:98). The Round 1 survey
+     expansion (from 4 to 9 targets) was still incomplete and
+     misnamed `monero_fcmp_pp_crypto`. Re-ran the survey
+     against the pinned tree: corrected `monero_fcmp_pp_crypto`
+     → `fcmp_basic` (with `fcmp` as the second `src/fcmp/`
+     target); added `src/blockchain_db/`, `src/checkpoints/`,
+     `src/device/`, and `src/wallet/` (wallet_rpc_server) to
+     the production-`src/` direct-consumer list; added
+     `tests/wallet_bench/`, `tests/daemon_tests/`,
+     `tests/functional_tests/` (two targets), `tests/hash/`,
+     and `tests/performance_tests/` to the test-target list.
+     Total direct-consumer count grew from 9 to 19 (13
+     production + 6 test). Also clarified the §10 vs §11
+     citation in PLAN.md: the survey is RUST.md §11, not §10
+     (§10 is the Grover-bound section); two PLAN.md references
+     corrected.
+
+  4. **Phase 3c / Phase 4 ordering hazard** (PLAN.md:338).
+     Phase 3c deletes `slow-hash.c` / `rx-slow-hash.c` / 
+     `pow_cryptonight.cpp` together, but `src/cryptonote_basic/miner.cpp`
+     still declares `slow_hash_allocate_state` / 
+     `slow_hash_free_state` `extern "C"` and
+     `src/cryptonote_basic/cryptonote_format_utils.cpp` still
+     calls `crypto::rx_slow_hash` and `crypto::cn_slow_hash`
+     (PoW and KDF). Phase 4 was scheduled to remove these
+     callers, so the intermediate state between 3c-landed and
+     4-landed would not build. Added an explicit ordering
+     precondition: Phase 3c assumes §15 (RPC payments delete)
+     and Phase 4 (version-gate + IPowSchema deletion) have
+     already cleared the `miner.cpp` and `cryptonote_format_utils.cpp`
+     call sites; if any caller remains at 3c open-time, the
+     ordering is to pull that caller's removal forward into
+     the 3c PR. Also noted that
+     `cryptonote_format_utils.cpp`'s `cn_slow_hash` calls at
+     lines 1465/1473 are non-PoW KDFs that need a Rust-side
+     replacement before 3c — a Phase 4 deliverable.
+
+  5. **RPC-payments §15.4 incompleteness** (RUST.md:642). The
+     deletion checklist omitted three surfaces:
+     `src/rpc/core_rpc_ffi.cpp` (registers the six
+     `rpc_access_*` JSON-RPC dispatch entries),
+     `src/rpc/core_rpc_server_commands_defs.h` (defines the
+     `COMMAND_RPC_ACCESS_*` request/response structs), and
+     `tests/functional_tests/functional_tests_rpc.py` (includes
+     `'rpc_payment'` in `DEFAULT_TESTS` at line 13). All three
+     added to the checklist.
+
+  6. **Section-number drift** (CHANGELOG.md:23 inline + multiple
+     §10 vs §11 references in PLAN.md). The May-16 changelog
+     said "Grover-bound argument scaffold is recorded in
+     `RANDOMX_V2_RUST.md` §9," but the actual section is §10
+     (§9 is "Environment and Consensus Constants"). The
+     PLAN.md Phase 3c step and its corresponding Risk
+     acknowledgement said "Phase 0 §10 PUBLIC-link survey"
+     where the survey is RUST.md §11. All corrected to RUST.md
+     §10 (Grover) and §11 (cncrypto) respectively.
+
+  7. **Smaller items.** (a) `#[export_name]` CI grep
+     extended in PLAN.md §2f to cover both bare and
+     `#[unsafe(export_name = "...")]` forms, mirroring the
+     existing `no_mangle` pattern; the RUST.md §7.2 prose now
+     names both spellings explicitly so the design doc and the
+     CI grep cite the same patterns. (b) PLAN.md §6 "5 hours
+     of baseline PoW work" rewritten to match RUST.md §8's
+     canonical numbers: 2-hour C baseline (12 ms × 600k),
+     4-hour delta at 3.0× ratio, 6-hour Rust-target total.
+     (c) PLAN.md §9 Grover "√2 speedup" corrected to "square-
+     root speedup against unstructured preimage search, ~2²⁵⁶
+     → ~2¹²⁸" matching RUST.md §10. (d) PLAN.md §15
+     "rewrite or delete" reframed as the resolved-to-delete
+     disposition. (e) PLAN.md §5 (and RUST.md §5)
+     `seedheight(height) -> u64` discretionary export
+     reshaped to the same `i32`-return + out-parameter
+     discipline as the committed hash export, per
+     `40-ffi-discipline.mdc`. (f) FALLBACK.md §2's
+     "`external/randomx-v2` is not added in fallback mode"
+     framing split into pre-Phase-1 and post-Phase-1 cases so
+     §1's late-binding framing is honored. (g) FALLBACK.md §4
+     "filled after RUST.md §1" placeholder replaced with the
+     concrete list of v2-deferred improvements drawn from
+     RUST.md §1.3 (CFROUND throttling, F/E AES mix, program
+     size, prefetch lookahead, efficiency-per-watt aggregate).
+     (h) CHANGELOG.md May-16 entry's "six places" replaced
+     with "eight places" so the count matches the
+     enumeration that follows.
+
+  Files touched: `docs/CHANGELOG.md`,
+  `docs/design/RANDOMX_V2_PLAN.md`,
+  `docs/design/RANDOMX_V2_RUST.md`,
+  `docs/design/RANDOMX_V1_FALLBACK.md`,
+  `docs/FOLLOWUPS.md`.
 
 - **RandomX v2 Phase 0 — Copilot PR-review-bot findings triaged and addressed (PR #45)**
   (`feat/randomx-v2-phase0-design`, 2026-05-16). Copilot's inline
@@ -141,7 +267,7 @@
   moved the algorithm-review gate from "before Phase 2" to release-
   time in [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §1.4,
   but [`RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md) still
-  carried the old Phase-2-gate framing in six places: frontmatter
+  carried the old Phase-2-gate framing in eight places: frontmatter
   `algorithm-review-gate` todo, frontmatter `overview` text,
   frontmatter `phase5-docs` todo, body §"Algorithm-review gate
   (Track A intra-track)", body §"Track A — Algorithm-review gate",
@@ -218,9 +344,12 @@
   empirical picture: the `Shekyl-Foundation/RandomX` fork tracks
   upstream `tevador/RandomX` without divergence; RandomX v2 is the
   upstream tevador algorithm landed in PR #317 (commit `bb6ed2c`);
-  the fork's pinned commit is `aaafe71` ("Prepare v2.0.1 release",
-  2026-05-10) and the in-workspace research checkout lives at
-  `/home/torvaldsl/shekyl/RandomX/`. §1.3 distills the four concrete
+  and the fork's pinned commit is `aaafe71` ("Prepare v2.0.1
+  release", 2026-05-10). (The original draft of §1.2 named a
+  contributor-local sibling-clone path; that path was removed in
+  the same review round per the portable-path rule, see the later
+  Changed entry. The path is intentionally not quoted here either.)
+  §1.3 distills the four concrete
   v1→v2 changes from the fork's `doc/design_v2.md` (CFROUND
   throttling, F/E AES mix replacing XOR, program-size 256→384,
   two-iteration dataset prefetch lookahead) and their ~130-165 %

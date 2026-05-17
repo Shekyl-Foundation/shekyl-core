@@ -107,10 +107,28 @@ Changed from the v2 plan:
   An alternative — pinning `tevador/RandomX` directly at the same
   commit hash — is equivalent in code content and rejected only
   because it gives up Shekyl's pin-and-audit-trail control point.
-- `external/randomx-v2` is **not** added in fallback mode; the
-  existing `external/randomx` submodule stays at its v1-era pin and
-  Phase 1 is reduced to "confirm the existing pin is the right
-  commit and document it in the design doc."
+- `external/randomx-v2` disposition depends on **when** the fallback
+  fires:
+  - **Pre-Phase-1 trigger.** If fallback is invoked before Phase 1
+    lands (e.g., the v1→v2 delta spec ships malformed and Phase 0
+    rejects v2 outright), `external/randomx-v2` is never added; the
+    existing `external/randomx` submodule stays at its v1-era pin
+    (`102f8acf`) and Phase 1 is reduced to "confirm the existing pin
+    is the right commit and document it in the design doc."
+  - **Post-Phase-1 / late-binding trigger.** If fallback is invoked
+    after Phase 1 has already added `external/randomx-v2` (the
+    common case per §1's late-binding framing — e.g., Monero's
+    audit surfaces a delta-specific blocker while Phase 2 is in
+    flight), the v2 submodule is **kept in place** as the pin-and-
+    audit-trail control point and a separate fallback commit toggles
+    the verifier to its v1 spec branch. The v2 submodule may stay
+    on the tree as inert artifact until release-prep deletes it, or
+    may be removed in a follow-up cleanup commit if the team
+    decides v2 is not coming back; the trigger PR does not couple
+    the v2-submodule removal decision to the algorithm switch.
+    The build itself reaches v1 through `external/randomx` (already
+    at `102f8acf`), so no submodule-add work is required at fallback
+    time.
 - `BUILD_RANDOMX_V2_MINER_LIB` is renamed to a v1-neutral flag during
   fallback review (proposed: `BUILD_RANDOMX_MINER_LIB`) so the build
   flag does not encode an algorithm version that does not exist in the
@@ -152,22 +170,60 @@ pinned commit; the algorithm itself does not require a new audit.
 
 ## 4. What Shekyl Gives Up by Falling Back
 
-This section is filled after `RANDOMX_V2_RUST.md` §1 ("Why RandomX v2")
-is filled — specifically the three Phase 0 review items there: the
-pinned fork commit, the spec section citations, and the list of v2
-deployers besides Shekyl. It must name the exact v2 improvements Shekyl
-would defer by shipping v1.
+`RANDOMX_V2_RUST.md` §1.3 distills the v1→v2 delta from
+`doc/design_v2.md` in the pinned fork. Each of those changes is
+something Shekyl forfeits by shipping v1 at genesis. The list is:
 
-Expected categories:
+1. **CFROUND throttling.** v1 changes the FP rounding mode every
+   main-loop iteration; this costs up to ~10% of hashrate on Ryzen
+   CPUs because x86 was not designed for that frequency of rounding-
+   mode flips. v2 throttles CFROUND to roughly every 16th execution.
+   By shipping v1 Shekyl keeps the per-iteration rounding-mode cost
+   and the corresponding Ryzen-class hashrate penalty.
+2. **AES tweak (F/E mix with AES instead of XOR; `doc/specs.md`
+   §4.6.2 step 10).** v2 roughly doubles AES per hash (using a
+   previously-idle gap in the dispatch), pulls AES inside the main
+   loop so a specialized scratchpad-only AES circuit no longer
+   suffices for an ASIC, and improves scratchpad entropy. Shekyl
+   gives up the ASIC-resistance refinement and the entropy
+   improvement on the v1 fallback path.
+3. **Program size 256 → 384 instructions.** Since v1 shipped in
+   2019, CPU clocks and IPC have improved much faster than DRAM
+   latency. v2's larger programs give the CPU more useful work to
+   do while waiting on memory. Falling back to v1 leaves the
+   2019-era 256-instruction program size in place and forfeits the
+   "more compute per memory stall" property v2 was designed for.
+4. **Two-iteration dataset prefetch lookahead (`mp` register,
+   defined alongside `ma` in `doc/specs.md`).** Complements the
+   program-size increase by hiding more DRAM latency. Shekyl gives
+   up the additional latency-hiding on the v1 path.
+5. **The ~130–165% "VM+AES work per Joule" efficiency gain on
+   Zen 3/4/5** that the v2 design rationale documents (net hashrate
+   stays in the 98%–110% band of v1; the gain is in *useful
+   computation per watt*, not in raw hashrate). On v1 fallback,
+   network-wide computational efficiency-per-watt is the v1-era
+   number, not the v2-era one.
 
-- ASIC-resistance refinements claimed by the v2 opcode mix.
-- Cache/dataset construction changes.
-- Any JIT or interpreter hardening introduced only in the v2 fork.
-- Any ecosystem or mining-performance implication of remaining on v1.
+What Shekyl does **not** give up by falling back:
 
-If v2's claimed improvements are vague or not review-supported, this
-section records that too. The fallback should not describe an imaginary
-loss; it should describe the actual delta established by review.
+- **Cryptographic primitives.** v2 does not change Argon2d (cache
+  derivation), Blake2b (finalization), or AES-NI (round
+  primitives); the v1 path uses the same primitives at the same
+  parameters. There is no audit-surface difference at the primitive
+  level.
+- **Audit posture for v1.** Four 2019 audits (Trail of Bits, X41,
+  Kudelski, Quarkslab) cover v1; Shekyl inherits those byte-for-byte
+  via the fork's `audits/` directory at the pinned v1 commit.
+- **Mining-ecosystem compatibility.** xmrig, SRBMiner, and the
+  pool-software stack all support v1 directly; the ecosystem
+  doesn't need to learn a new algorithm.
+
+The fallback narrative therefore concentrates on the four design-v2
+changes listed above (and the efficiency-per-watt aggregate they
+produce) rather than on imagined cryptographic weaknesses in v1.
+If the fallback fires because Monero's delta audit finds a specific
+weakness in one of these four changes, this section is updated to
+record which v2 improvement turned out to be the wrong trade.
 
 ## 5. Re-evaluation Trigger
 
