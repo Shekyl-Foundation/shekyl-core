@@ -3,7 +3,7 @@ name: LWMA-1 difficulty adjustment migration
 overview: "Replace Shekyl's inherited CryptoNote cut-windowed-average DAA (src/cryptonote_basic/difficulty.cpp, DIFFICULTY_WINDOW=720, DIFFICULTY_LAG=15-with-warning, DIFFICULTY_CUT=60) with LWMA-1 (zawy12 canonical, N=90 for T=120s) implemented as a Rust crate shekyl-difficulty per 20-rust-vs-cpp-policy.mdc rule 2. Genesis-time landing per 16-architectural-inheritance.mdc pre-genesis discount and 60-no-monero-legacy.mdc no-version-dispatch rule. Sibling track to RANDOMX_V2_PLAN.md but independent: LWMA-1 and RandomX v2 are math-orthogonal (DAA operates on (timestamps, cum_difficulties); PoW changes the hash function), no wallet V3.2 gate applies, no Monero release-time audit dependency. FTL (BLOCK_FUTURE_TIME_LIMIT = N*T/20 = 540s) and MTP (BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW = 11) are co-tuned per zawy12 canonical requirements. Phase 0 produces two design docs (DAA_LWMA1.md + this plan). Implementation cascades through Phase 1 (crate scaffold + spec-vector tests), Phase 2 (canonical-reference cross-check harness), Phase 3 (FFI wire-up in shekyl-ffi), Phase 4 (C++ cutover and inherited-DAA deletion). Each phase is a separate PR per 06-branching.mdc."
 todos:
   - id: phase0-design
-    content: "Phase 0: Write docs/design/DAA_LWMA1.md AND docs/design/DAA_LWMA1_PLAN.md. Cover: (a) inherited CryptoNote DAA disposition (delete-not-gate) per 60-no-monero-legacy.mdc and 16-architectural-inheritance.mdc; (b) Rust-implementation decision per 20-rust-vs-cpp-policy.mdc rule 2 (cryptographic contract); (c) Shekyl-specific parameter selection (N=90, T=120s, GENESIS_DIFFICULTY=100 proposed, FTL=N*T/20=540s, MTP=11); (d) canonical zawy12 LWMA-1 algorithm spec with overflow guards; (e) FFI surface (1 function, i32 error code, u128 out-param); (f) test-vector strategy (synthetic unit + canonical-reference cross-check + simulated-history corpus); (g) C++ deletion surface (difficulty.{h,cpp}, DIFFICULTY_* constants, tests/difficulty/, FTL/MTP migration); (h) sketch disposition (on-disk rust/shekyl-difficulty/src/lwma1.rs is NOT canonical and is preserved illustratively only); (i) alternatives considered (LWMA-2/3/4, ASERT, retuned-cut-windowed, SMA) with reversion clauses per 21-reversion-clause-discipline.mdc; (j) reviewer-discipline framing (no external algorithm-review gate; zawy12 canonical is audit-of-record). Pass 4-6 review rounds before any code lands."
+    content: "Phase 0: Write docs/design/DAA_LWMA1.md AND docs/design/DAA_LWMA1_PLAN.md. Cover: (a) inherited CryptoNote DAA disposition (delete-not-gate) per 60-no-monero-legacy.mdc and 16-architectural-inheritance.mdc; (b) Rust-implementation decision per 20-rust-vs-cpp-policy.mdc rule 2 (cryptographic contract); (c) Shekyl-specific parameter selection (N=90, T=120s, GENESIS_DIFFICULTY=100 proposed, FTL=N*T/20=540s, MTP=11); (d) canonical zawy12 LWMA-1 algorithm spec with overflow guards; (e) FFI surface (1 function, i32 error code, u128 out-param); (f) test-vector strategy (synthetic unit + canonical-reference cross-check + simulated-history corpus); (g) C++ deletion surface (difficulty.{h,cpp}, DIFFICULTY_* constants, tests/difficulty/, FTL/MTP migration); (h) sketch disposition (pre-design rust/shekyl-difficulty/src/lwma1.rs is NOT canonical and was deleted during Phase 0; divergence catalogue retained in DAA_LWMA1.md §2.4 as the design record of why each shape is rejected); (i) alternatives considered (LWMA-2/3/4, ASERT, retuned-cut-windowed, SMA) with reversion clauses per 21-reversion-clause-discipline.mdc; (j) reviewer-discipline framing (no external algorithm-review gate; zawy12 canonical is audit-of-record). Pass 4-6 review rounds before any code lands."
     status: pending
   - id: phase1-crate-scaffold
     content: "Phase 1: Add rust/shekyl-difficulty crate to rust/Cargo.toml workspace members. Create rust/shekyl-difficulty/Cargo.toml (Shekyl Foundation copyright; BSD-3-Clause; no_std-compatible if practical, #![deny(unsafe_code)] crate-level). Create src/lib.rs re-exporting lwma1::lwma1_next, src/consts.rs (typed const N=90, T_SECONDS=120, GENESIS_DIFFICULTY=100, FTL_SECONDS=540, MTP_WINDOW=11), src/lwma1.rs (canonical implementation per DAA_LWMA1.md §5.3). Write unit tests against the §8.1 synthetic test corpus. PR cannot merge if cargo test, cargo clippy --all-targets -- -D warnings, or cargo fmt --check fails per 45-rust-lint-checks.mdc."
@@ -107,10 +107,13 @@ materially weakened by the wrong FTL.
 
 ### 5. Sketch is not the implementation
 
-Per `DAA_LWMA1.md` §2.4, the on-disk `rust/shekyl-difficulty/src/lwma1.rs`
-sketch is preserved illustratively but does not become the
-implementation. Phase 1 writes the implementation fresh against the
-design doc.
+Per `DAA_LWMA1.md` §2.4, the pre-design Rust sketch that existed at
+`rust/shekyl-difficulty/src/lwma1.rs` was **deleted** during Phase 0
+(2026-05-17). The divergence catalogue is preserved in
+`DAA_LWMA1.md` §2.4 as the design record of why each non-canonical
+shape is rejected, not as a description of any committed source.
+Phase 1 starts from an empty crate directory and writes the
+implementation fresh against the design doc.
 
 ## Phase 0 (this PR)
 
@@ -428,7 +431,7 @@ Update:
 | Wrong N, T, FTL, or MTP value | Phase 0 review ratification; values are typed `const` | Pre-genesis: change const + re-test. Post-genesis: hard fork. |
 | LWMA-1 unsuitable for actual Shekyl hashrate profile | §10 reversion clause names criteria; §8.3 corpus stress-tests Shekyl-specific scenarios | Pre-genesis: new design doc per §10. Post-genesis: hard fork. |
 | FTL/MTP migration leaves chain in non-canonical intermediate state | Phase 4 migrates all three together; never split across PRs | Phase 4 is atomic; partial-revert is not a supported state |
-| Sketch in `rust/shekyl-difficulty/src/lwma1.rs` accidentally becomes the implementation | §2.5 explicit non-inheritance; Phase 1 writes fresh | N/A — caught at Phase 1 review |
+| Pre-design sketch in `rust/shekyl-difficulty/src/lwma1.rs` accidentally becomes the implementation | Sketch deleted in Phase 0 (2026-05-17); §2.4 divergence catalogue retained as design record only; Phase 1 starts from empty crate directory | N/A — sketch no longer exists on disk |
 
 ## Open questions for Phase 0 review
 

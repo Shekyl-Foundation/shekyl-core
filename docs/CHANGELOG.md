@@ -27,11 +27,13 @@
   RandomX v2 but **independent**: math-orthogonal (DAA operates on
   `(timestamps, cum_difficulties)`; PoW changes the hash function),
   no wallet V3.2 gate applies, no Monero release-time audit dependency.
-  The on-disk `rust/shekyl-difficulty/src/lwma1.rs` sketch is explicitly
+  A pre-design `rust/shekyl-difficulty/src/lwma1.rs` sketch is explicitly
   documented as **not** canonical (different formula, missing `6*T`
   solvetime clamp, missing `N*N*T/20` minimum-L floor, missing `99/200`
-  bias factor) and is preserved illustratively only; Phase 1 writes the
-  implementation fresh against the design doc's §5.3 algorithm spec.
+  bias factor) and was **deleted** during Phase 0 so Phase 1 starts from
+  an empty crate directory; the divergence catalogue is retained in
+  `DAA_LWMA1.md` §2.4 as the design record of why each non-canonical
+  shape is rejected.
   Reversion clauses per `21-reversion-clause-discipline.mdc` cover
   LWMA-2/3/4 and ASERT reopening criteria.
 

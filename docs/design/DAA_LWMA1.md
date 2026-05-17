@@ -267,10 +267,17 @@ reference.
 This is the same doctrine as the RandomX v2 plan's "Spec Is the
 Source of Truth" framing (`RANDOMX_V2_RUST.md` §3).
 
-### 4. The on-disk `rust/shekyl-difficulty/src/lwma1.rs` sketch is not the canonical implementation
+### 4. The pre-design sketch is not the canonical implementation
 
-A pre-design sketch exists at `rust/shekyl-difficulty/src/lwma1.rs`
-(untracked at design-doc time). Concrete divergences from zawy12
+A pre-design Rust sketch existed at
+`rust/shekyl-difficulty/src/lwma1.rs` during early Phase 0
+reconnaissance. It was deleted (Phase 0, 2026-05-17) before any
+implementation work began so that Phase 1 starts from an empty crate
+directory and is written fresh against this design doc's §5.3
+algorithm specification. The divergences below are recorded as the
+design rationale for why the sketch did not become the
+implementation — they are an explicit anti-pattern catalogue, not a
+description of any committed code. Concrete divergences from zawy12
 canonical LWMA-1:
 
 - Sketch uses a `clamp_factor` max-change-per-block parameter (3× by
@@ -292,12 +299,14 @@ canonical LWMA-1:
 - Sketch's test vectors are author-authored, not derived from the
   zawy12 simulator output on historical data.
 
-**Disposition.** The sketch is preserved locally as illustrative
-during Phase 0 review of this design doc but is **not** the
-starting point for the eventual implementation crate (PR B in
+**Disposition.** The sketch was **deleted** during Phase 0 so that
+no on-disk pre-design code can accidentally become the starting
+point for the implementation crate (PR B in
 [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md)). PR B writes the
-implementation fresh against this design doc's §6 algorithm
-specification and §8 test-vector strategy.
+implementation fresh against this design doc's §5.3 algorithm
+specification and §8 test-vector strategy. The divergence catalogue
+above is preserved here as the design record of why each non-canonical
+shape is rejected; it is not a description of any committed source.
 
 ### 5. FTL and MTP are co-tuned with N
 
