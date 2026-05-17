@@ -7,7 +7,6 @@ globs:
   - rust/monero-oxide/**
   - src/crypto/**
   - src/fcmp/**
-  - src/ringct/**
 ---
 
 # Cryptography rules
@@ -48,7 +47,7 @@ Every Fiat-Shamir challenge, signature hash, and HKDF derivation includes an
 explicit domain separator string and version suffix:
 
 - `"shekyl-output-derive-v1"` for output secret derivation
-- `"shekyl-outbound-tx-proof-v3"` for outbound proofs
+- `"shekyl-outbound-tx-proof-v1"` for outbound proofs
 - `"shekyl-reserve-proof-dleq-v1"` for reserve proof DLEQs
 
 The version suffix is how V4 cleanly invalidates V3 hashes. Forgetting the

@@ -33,7 +33,14 @@ blake2 = "0.10"
 # The `rand` feature would pull a transitive `rand` dependency; we do not use
 # random-mnemonic generation (all entropy flows through OsRng in our own FFI)
 # so we keep the feature set minimal.
-bip39 = { version = "2.2.2", default-features = false, features = ["std"] }
+#
+# The `zeroize` feature derives `Zeroize` + `ZeroizeOnDrop` on `Mnemonic` and
+# `Seed` (gated upstream by `#[cfg_attr(feature = "zeroize", derive(...))]`),
+# so the mnemonic entropy and the 64-byte BIP-39 seed are wiped on drop per
+# `35-secure-memory.mdc`'s structural-memwipe rule. Required by every wallet
+# creation/restore path that materializes seed bytes (Phase 0 Mission Audit
+# Lens D D-9).
+bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroize"] }
 shekyl-address = { path = "../shekyl-address" }
 # `zeroize` feature activates `Sha3State: ZeroizeOnDrop` (sha3 0.10.9+)
 # so the cSHAKE / SHA-3 sponge state is wiped on drop. Required by the
@@ -52,7 +59,14 @@ sha3 = { version = "0.10", features = ["zeroize"] }
 # don't use `password-hash` (PHC string format) because we embed our own
 # KDF parameters in the wallet file header rather than in an external
 # phc-string.
-argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+#
+# The `zeroize` feature activates `impl Zeroize for Block`, wiping the
+# Argon2id working buffer (64 MiB at our parameter choice) on drop rather
+# than leaving password-derived material resident in process memory until
+# allocator reuse or process exit. Required per `35-secure-memory.mdc`'s
+# structural-memwipe rule on every wallet open/close cycle (Phase 0 Mission
+# Audit Lens D D-10).
+argon2 = { version = "0.5", default-features = false, features = ["alloc", "zeroize"] }
 # XChaCha20-Poly1305 AEAD with a 192-bit nonce (chosen so per-write random
 # nonces are collision-safe for the entire lifetime of a wallet file).
 # Used for:
