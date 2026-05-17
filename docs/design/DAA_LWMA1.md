@@ -224,22 +224,46 @@ These decisions are made now and locked. Any future proposal to
 reverse them must start with a new design doc that addresses the
 rationale below.
 
-### 2.1 Rust implementation, from genesis
+### 2.1 Rust implementation, from genesis; leaf crate
 
 Per `20-rust-vs-cpp-policy.mdc` rule 2 (Rust if any of: defines a
 cryptographic contract that other code consumes), the DAA is a
-cryptographic-contract surface — the verifier, the validator, and the
-wallet all consume the same `next_difficulty(timestamps[],
-cumulative_difficulties[], target_seconds) -> next_difficulty`
+cryptographic-contract surface — the validator and the miner all
+consume the same `next_difficulty(timestamps[],
+cumulative_difficulties[], chain_height) -> next_difficulty`
 contract. Rust enforces the contract at the type system; C++
 enforces it in documentation. The type-system enforcement is the
 correct disposition.
 
 The Rust crate is **`shekyl-difficulty`**, a new workspace member
-under `rust/`. It is a sibling of `shekyl-pow-randomx` (the eventual
-RandomX v2 verifier crate per `RANDOMX_V2_RUST.md`), not a child;
-DAA and PoW are math-orthogonal surfaces and the crate-level
-separation reflects that.
+under `rust/`. It is a **leaf crate**: it has zero internal
+workspace dependencies; only `shekyl-ffi` depends on it (to export
+the C ABI per §6). It is a sibling, at the leaf level, of the
+existing computation-primitive crates `shekyl-consensus` (where
+RandomX-related Rust code lives today) and `shekyl-fcmp` (FCMP++
+proofs). It is **not** a child of either — DAA, PoW, and proof
+verification are math-orthogonal surfaces, and the crate-level
+separation reflects that. The planned `shekyl-pow-randomx`
+verifier crate (per `RANDOMX_V2_RUST.md`) will also be a leaf
+crate; the two will be siblings at the workspace level when both
+land.
+
+The dependency direction is unidirectional and worth stating
+explicitly because it matters for `25-rust-architecture.mdc`'s
+layering discipline:
+
+```text
+C++ Blockchain  ──(FFI)──>  shekyl-ffi  ──(rust dep)──>  shekyl-difficulty
+                                                              │
+                                                              └─> (no internal deps)
+```
+
+`shekyl-difficulty` does not depend on `shekyl-ffi`,
+`shekyl-engine-state`, `shekyl-consensus`, or any other workspace
+crate. It uses only `core`/`std` and (optionally) workspace-shared
+utility crates like `thiserror` (see
+[`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) "Phase 1 — `shekyl-difficulty`
+crate scaffold").
 
 ### 2.2 Single algorithm path, no version dispatch
 
@@ -337,8 +361,35 @@ the FTL constant and the MTP constant are part of the LWMA-1
 landing. The version-1 inherited values are wrong-by-construction
 once LWMA-1 is in place.
 
+**Both predicates and both constants live in `shekyl-difficulty`.**
+The crate exports, in addition to `lwma1_next`:
+
+- `pub fn is_timestamp_below_ftl(incoming: u64, local_clock: u64)
+   -> bool` — returns true when `incoming - local_clock <=
+   FTL_SECONDS`, with saturating subtraction; consensus-rejection
+   logic is the consumer's job, this predicate just answers the
+   question.
+- `pub fn is_above_mtp(incoming: u64, previous_11: &[u64; 11])
+   -> bool` — returns true when `incoming` is strictly greater than
+   the median of `previous_11`.
+
+These are predicates rather than value-producing transforms, but
+per `18-type-placement.mdc` predicates are just transforms whose
+codomain is `bool` — same shape, same crate.
+
+The disposition to co-locate FTL/MTP with the DAA (rather than
+pre-extracting them into a separate `shekyl-timestamp-validation`
+crate) follows `70-modular-consensus.mdc`'s rule against
+speculative scaffolding: there is no second consumer of these
+predicates today, and extracting before a second consumer exists
+produces an empty abstraction that future maintainers cannot
+attribute to a concrete need. If a non-DAA consumer of FTL/MTP
+later emerges, the predicates extract then — the cost of moving
+two functions is much smaller than the cost of carrying a
+speculative crate.
+
 Phase 4 of [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) covers all
-three together.
+three together (DAA function, FTL predicate, MTP predicate).
 
 ### 2.6 No genesis difficulty "guess" — start at a single ratified constant
 
@@ -365,6 +416,48 @@ the rationale that:
 The value is **proposed**, not final — Phase 0 review ratifies
 either 100 or a Shekyl-specific value derived from RandomX v2 single-
 CPU hashrate measurements at the v2 fork pin.
+
+### 2.7 The DAA is a primitive, not an actor
+
+Per `18-type-placement.mdc`'s transform-vs-state dichotomy, the
+LWMA-1 DAA is **transform-shaped**: the value `next_difficulty` is
+defined by the function `lwma1_next(timestamps,
+cumulative_difficulties, chain_height) -> u128`, not by any
+actor's allocation policy or progression record. Anyone with the
+function's inputs can recompute the value; the inputs are public,
+consensus-deterministic, and on-chain.
+
+The lens applied to the question "where does this live?" returns:
+
+> Transform-shaped types live in the crate of their defining
+> function. (`18-type-placement.mdc` §"Where each shape lives".)
+
+— so `lwma1_next` lives in `shekyl-difficulty`, and `Difficulty`
+itself is just `u128` (no newtype required; the inherited
+`difficulty_type` is already a 128-bit unsigned integer per the
+existing C++ codebase per §11).
+
+**No `DifficultyEngine` actor wrapper.** Wrapping `lwma1_next` in a
+`DifficultyEngine` actor would be the architectural-inheritance
+anti-pattern flagged by `16-architectural-inheritance.mdc`:
+Monero's `cryptonote::Blockchain` is stateful (owns the chain DB,
+the difficulty cache, the difficulty lock) and the DAA is a method
+on it; carrying that C++ ergonomic shape into Rust would invert
+the transform-vs-state dichotomy without delivering any property
+the threat model needs. `shekyl-difficulty` exports a **free
+function** plus the typed consensus constants (§4) and the FTL/MTP
+predicates (§2.5 and §5.5) — nothing more.
+
+The shape the actor paradigm calls for at the next level up — a
+stateless block-validator actor that assembles inputs from a
+chain-state owner and calls `lwma1_next` — is the **consumer**'s
+responsibility, not the DAA crate's. The consumer disposition is
+recorded in §17 (chain-state ownership).
+
+This is the same shape the planned `shekyl-pow-randomx` crate is
+specified to have per `RANDOMX_V2_RUST.md` §6: pure-derivation
+verifier primitive, no module-level mutable state, no actor
+wrapper inside the verifier crate.
 
 ## 3. Spec source pin and reference clone
 
@@ -418,9 +511,67 @@ CPU hashrate measurements at the v2 fork pin.
 | Block future time limit | FTL | **`N * T / 20` = 540 s** | zawy12 canonical hard requirement (Issue #3 lines 85, 91) |
 | Median time past window | MTP | **11** | zawy12 canonical; Cryptonote default unchanged |
 
-All values become typed `const` in `shekyl-difficulty/src/consts.rs`
-per `RANDOMX_V2_RUST.md` §9's "typed const, not env var" disposition.
-No env-var overrides; consensus constants are not runtime-tunable.
+All values become typed `pub const` in
+`shekyl-difficulty/src/consts.rs` per `RANDOMX_V2_RUST.md` §9's
+"typed const, not env var" disposition. No env-var overrides;
+consensus constants are not runtime-tunable.
+
+**Source-of-truth pattern: `config/consensus_constants.json`.**
+The five numeric constants — `N`, `T_SECONDS`, `FTL_SECONDS`,
+`MTP_WINDOW`, `GENESIS_DIFFICULTY` — are added to the existing
+JSON authority at `config/consensus_constants.json`, alongside the
+`fcmp_reference_block_*_age` and `rct_type_fcmp_plus_plus_pqc`
+keys already there. This matches the project's preferred
+constant-drift-prevention pattern documented in
+[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) (the "Full migration of
+remaining `SHEKYL_*` FFI constants to the JSON-authority pattern"
+entry) and the audit trail at
+[`docs/audit_trail/2026-05-ffi-constant-drift-audit.md`](../audit_trail/2026-05-ffi-constant-drift-audit.md).
+
+Concretely, the LWMA-1 keys to add (final naming a Phase 1 review
+item, but proposed shape for review):
+
+```json
+{
+  "daa_lwma1_window_n": 90,
+  "daa_lwma1_target_seconds": 120,
+  "daa_lwma1_ftl_seconds": 540,
+  "daa_lwma1_mtp_window": 11,
+  "daa_lwma1_genesis_difficulty": 100
+}
+```
+
+The two derived/canonical constants — `b_num = 99`, `b_den = 200`,
+`k_st = 6`, `k_L_num = 1`, `k_L_den = 20` — are **not** JSON-keyed.
+They are zawy12-canonical fixed values (per §5.3 step 7's
+derivation), not Shekyl tunables, and they live as inline
+constants in the algorithm body in `shekyl-difficulty/src/lwma1.rs`
+so that the formula reads against the canonical reference verbatim.
+JSON-keying them would falsely imply they are independently
+tunable.
+
+The cross-language generation pipeline is the existing one:
+
+- **Rust side.** Either `rust/shekyl-difficulty/build.rs` (new) or
+  an extension of `rust/shekyl-engine-core/build.rs` (existing)
+  reads the JSON and emits `consensus_constants_generated.rs` into
+  `OUT_DIR`. `shekyl-difficulty/src/consts.rs` `include!`s the
+  generated file. Phase 1 selects which build.rs to use — adding
+  a build.rs to a leaf crate is preferred (keeps the generation
+  scoped to the consumer), but piggybacking the existing one is
+  acceptable if the keys are few.
+- **C++ side.** `cmake/generate_consensus_constants.py` is
+  extended with the same five keys, emitting them as `#define
+  SHEKYL_DAA_LWMA1_*` (or equivalent typed `constexpr`) into the
+  generated `shekyl/consensus_constants_generated.h`. The C++ side
+  consumes the generated header; no hand-maintained `#define` for
+  any LWMA-1 numeric constant.
+- **`shekyl_ffi.h`.** Hand-maintained per
+  `25-rust-architecture.mdc` (the rule permits "cbindgen or
+  hand-maintained"; the project's current pattern is
+  hand-maintained); numeric constants are sourced from the
+  generated header, not duplicated. No `cbindgen.toml` is added
+  by this PR.
 
 Per `75-system-autonomy.mdc`, every tunable has a documented rationale
 for its default and bounds for safe adjustment. The "safe adjustment
@@ -760,10 +911,14 @@ int32_t shekyl_difficulty_lwma1_next(
 None at Phase 0. The DAA surface is structurally a single function;
 exposing the `GENESIS_DIFFICULTY` constant, the parameter values, or
 intermediate computation steps as separate exports adds attack
-surface without delivering caller value. The C++ side imports the
-single function above and consumes the canonical constants via
-header re-declarations from `shekyl-difficulty/src/consts.rs`
-(generated via `cbindgen` per `25-rust-architecture.mdc`).
+surface without delivering caller value. The C++ side consumes the
+numeric consensus constants (N, T, FTL, MTP, GENESIS_DIFFICULTY) via
+the **generated header** `shekyl/consensus_constants_generated.h`,
+which is emitted from `config/consensus_constants.json` by
+`cmake/generate_consensus_constants.py` (per §4's source-of-truth
+pattern). The C++ side does **not** call into Rust to read these
+values at runtime; the consensus constants live at compile time on
+both sides, generated from the single JSON authority.
 
 ### 6.3 Explicitly NOT exported
 
@@ -1093,6 +1248,66 @@ The C++ deletion surface (§9) removes ~250 lines of
 Boost remains in the build via other consumers; no Boost
 disposition follows from this PR.
 
+## 17. Chain-state ownership and the consumer-side actor
+
+The DAA crate exports `lwma1_next` and the FTL/MTP predicates per
+§2.7. **It does not own the chain-state read** that produces the
+`timestamps[0..=N]` and `cumulative_difficulties[0..=N]` inputs.
+That read is the consumer's responsibility. The disposition for
+"who is the consumer?" depends on where daemon-side chain state
+lives:
+
+**Today and through Phase 4 (this DAA migration's scope).** The
+chain-state owner is C++ `cryptonote::Blockchain` (in
+`src/cryptonote_core/blockchain.{h,cpp}`), backed by the
+`BlockchainDB` LMDB store. `Blockchain` assembles the `N+1`
+timestamps and cumulative-difficulty values from its own DB and
+calls `shekyl_difficulty_lwma1_next` over FFI per §6. No Rust
+state-read crate is involved; the DAA crate is a primitive at the
+end of an FFI call, not part of an actor topology on the Rust
+side.
+
+**Post-V3.0 (out of this PR's scope).** When daemon-side chain
+state migrates to Rust — a workspace-level concern that does not
+yet have a design doc — the consumer becomes a stateless Rust
+**block-validator actor**. The validator's shape, following the
+pattern established by the wallet-side `STAGE_1_*` engine
+extractions (DaemonEngine, LedgerEngine, RefreshEngine in
+[`docs/design/STAGE_1_PR_*`](./STAGE_1_PR_1_DAEMON_ENGINE.md)),
+is:
+
+1. Receives `(block_header, parent_chain_handle)` from its caller.
+2. Asks the chain-state-owning crate (let's call it
+   `shekyl-chain-state` for the purposes of this paragraph; the
+   actual name and shape are out of scope) for the last `N+1`
+   timestamps and cumulative-difficulty values.
+3. Calls `shekyl_difficulty::lwma1_next` on the assembled inputs.
+4. Calls `shekyl_difficulty::is_timestamp_below_ftl` and
+   `is_above_mtp` on the incoming timestamp.
+5. Returns a validation verdict.
+
+The validator holds no state; the chain-state crate holds the
+state; the DAA crate holds the transform. This is the three-way
+separation `18-type-placement.mdc` and the actor paradigm exist
+to enforce.
+
+**Today's `shekyl-engine-state` is wallet-side, not daemon-side.**
+The existing `shekyl-engine-state` crate (per
+`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md` and similar) owns
+wallet `TransferDetails`, `RuntimeWalletState`, `StakerPoolState`,
+and the persisted wallet-ledger blocks — not daemon-side chain
+data. The future daemon-side chain-state crate is a separate
+workspace member, not an extension of `shekyl-engine-state`.
+
+**No speculation in this PR.** Per
+`70-modular-consensus.mdc`'s rule against speculative
+scaffolding, this design doc does not propose a name, shape, or
+API for the future daemon-side chain-state crate. The disposition
+is: `shekyl-difficulty` exports a transform; when the chain-state
+crate exists, it consumes the transform; the transform's signature
+(§6.1) is stable across that transition. No changes to
+`shekyl-difficulty` are anticipated when the Rust validator lands.
+
 ## Cross-references
 
 - [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) — phased plan.
@@ -1101,9 +1316,20 @@ disposition follows from this PR.
   shape. §3 spec-as-source-of-truth, §7 isolation invariants, §9
   consensus-constant typing, §13 explicit non-goals, §23 reviewer
   discipline are the patterns this doc mirrors.
+- [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md), entry "Full migration of
+  remaining `SHEKYL_*` FFI constants to the JSON-authority
+  pattern" — the consensus_constants.json pattern this doc adopts
+  for the LWMA-1 numeric constants (§4).
+- [`docs/audit_trail/2026-05-ffi-constant-drift-audit.md`](../audit_trail/2026-05-ffi-constant-drift-audit.md)
+  — audit that motivated the JSON-authority pattern.
+- [`STAGE_1_PR_1_DAEMON_ENGINE.md`](./STAGE_1_PR_1_DAEMON_ENGINE.md)
+  and sibling `STAGE_1_PR_*` docs — wallet-side engine-extraction
+  pattern referenced by §17.
 - [`zawy12/difficulty-algorithms#3`](https://github.com/zawy12/difficulty-algorithms/issues/3)
   — canonical LWMA-1 specification and reference.
-- `.cursor/rules/00-mission.mdc`, `16-architectural-inheritance.mdc`,
-  `20-rust-vs-cpp-policy.mdc`, `21-reversion-clause-discipline.mdc`,
+- `.cursor/rules/00-mission.mdc`, `15-deletion-and-debt.mdc`,
+  `16-architectural-inheritance.mdc`, `17-dependency-discipline.mdc`,
+  `18-type-placement.mdc`, `19-validation-surface-discipline.mdc`,
+  `20-rust-vs-cpp-policy.mdc`, `25-rust-architecture.mdc`,
   `40-ffi-discipline.mdc`, `60-no-monero-legacy.mdc`,
-  `75-system-autonomy.mdc`.
+  `70-modular-consensus.mdc`, `75-system-autonomy.mdc`.

@@ -37,6 +37,23 @@
   Reversion clauses per `21-reversion-clause-discipline.mdc` cover
   LWMA-2/3/4 and ASERT reopening criteria.
 
+  *Round 2 review update (2026-05-17):* (a) reframes `shekyl-difficulty`
+  as a **leaf crate** with zero internal workspace dependencies per
+  `18-type-placement.mdc`, with FFI exposure routed through `shekyl-ffi`
+  (`DAA_LWMA1.md` §2.1); (b) records the explicit "DAA is a primitive,
+  not an actor" disposition (`DAA_LWMA1.md` §2.7) — `lwma1_next` is a
+  free function plus typed constants plus the FTL/MTP predicates, no
+  `DifficultyEngine` actor wrapper; (c) pivots the consensus-constants
+  source-of-truth from a `cbindgen` handwave to the existing
+  `config/consensus_constants.json` JSON-authority pattern documented
+  in `docs/FOLLOWUPS.md` and the 2026-05-05 FFI constant-drift audit
+  (`DAA_LWMA1.md` §4, plan Phase 1 task); (d) adds a chain-state-
+  ownership disposition (`DAA_LWMA1.md` §17) acknowledging that
+  daemon-side LMDB chain state remains in C++ `Blockchain` through
+  Phase 4 and that no Rust crate owns daemon-side chain state today;
+  the future Rust validator actor will consume the same DAA transform
+  without changes to the DAA crate.
+
 - **`07-consensus-atomic-cutovers.mdc` — named exception to
   branching policy for consensus-atomic cutovers**
   (`feat/consensus-atomic-cutovers-rule`, 2026-05-17). New rule

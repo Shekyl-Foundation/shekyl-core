@@ -6,7 +6,7 @@ todos:
     content: "Phase 0: Write docs/design/DAA_LWMA1.md AND docs/design/DAA_LWMA1_PLAN.md. Cover: (a) inherited CryptoNote DAA disposition (delete-not-gate) per 60-no-monero-legacy.mdc and 16-architectural-inheritance.mdc; (b) Rust-implementation decision per 20-rust-vs-cpp-policy.mdc rule 2 (cryptographic contract); (c) Shekyl-specific parameter selection (N=90, T=120s, GENESIS_DIFFICULTY=100 proposed, FTL=N*T/20=540s, MTP=11); (d) canonical zawy12 LWMA-1 algorithm spec with overflow guards; (e) FFI surface (1 function, i32 error code, u128 out-param); (f) test-vector strategy (synthetic unit + canonical-reference cross-check + simulated-history corpus); (g) C++ deletion surface (difficulty.{h,cpp}, DIFFICULTY_* constants, tests/difficulty/, FTL/MTP migration); (h) sketch disposition (pre-design rust/shekyl-difficulty/src/lwma1.rs is NOT canonical and was deleted during Phase 0; divergence catalogue retained in DAA_LWMA1.md §2.4 as the design record of why each shape is rejected); (i) alternatives considered (LWMA-2/3/4, ASERT, retuned-cut-windowed, SMA) with reversion clauses per 21-reversion-clause-discipline.mdc; (j) reviewer-discipline framing (no external algorithm-review gate; zawy12 canonical is audit-of-record). Pass 4-6 review rounds before any code lands."
     status: pending
   - id: phase1-crate-scaffold
-    content: "Phase 1: Add rust/shekyl-difficulty crate to rust/Cargo.toml workspace members. Create rust/shekyl-difficulty/Cargo.toml (Shekyl Foundation copyright; BSD-3-Clause; no_std-compatible if practical, #![deny(unsafe_code)] crate-level). Create src/lib.rs re-exporting lwma1::lwma1_next, src/consts.rs (typed const N=90, T_SECONDS=120, GENESIS_DIFFICULTY=100, FTL_SECONDS=540, MTP_WINDOW=11), src/lwma1.rs (canonical implementation per DAA_LWMA1.md §5.3). Write unit tests against the §8.1 synthetic test corpus. PR cannot merge if cargo test, cargo clippy --all-targets -- -D warnings, or cargo fmt --check fails per 45-rust-lint-checks.mdc."
+    content: "Phase 1: Add rust/shekyl-difficulty crate to rust/Cargo.toml workspace members as a leaf crate (zero internal workspace deps per DAA_LWMA1.md §2.1). Create rust/shekyl-difficulty/Cargo.toml (Shekyl Foundation copyright; BSD-3-Clause; no_std-compatible if practical, #![deny(unsafe_code)] crate-level). Extend config/consensus_constants.json with daa_lwma1_{window_n=90, target_seconds=120, ftl_seconds=540, mtp_window=11, genesis_difficulty=100} per the JSON-authority pattern in DAA_LWMA1.md §4 and FOLLOWUPS.md. Extend cmake/generate_consensus_constants.py to emit the matching C++ symbols. Add rust/shekyl-difficulty/build.rs reading the JSON and emitting consensus_constants_generated.rs to OUT_DIR (preferred; or extend rust/shekyl-engine-core/build.rs as Option B). Create src/lib.rs re-exporting lwma1::lwma1_next, is_timestamp_below_ftl, is_above_mtp; src/consts.rs include!'ing the generated file and re-exporting N/T_SECONDS/FTL_SECONDS/MTP_WINDOW/GENESIS_DIFFICULTY plus the canonical-fixed BIAS_NUMERATOR=99/BIAS_DENOMINATOR=200/SOLVETIME_CLAMP_FACTOR=6/MIN_L_FLOOR=1/20 (NOT JSON-keyed per DAA_LWMA1.md §4); src/lwma1.rs (canonical implementation per DAA_LWMA1.md §5.3). Write unit tests against the §8.1 synthetic test corpus including the §5.3 step 8 overflow-boundary paired vectors. PR cannot merge if cargo test, cargo clippy --all-targets -- -D warnings, or cargo fmt --check fails per 45-rust-lint-checks.mdc."
     status: pending
   - id: phase2-cross-check-harness
     content: "Phase 2: Add tests/difficulty/lwma1_cross_check.cpp harness that builds the zawy12 LWMA1_() C++ reference (committed at docs/design/refs/zawy12_issue_3_lwma1.md per DAA_LWMA1.md §3) and asserts byte-equality between Rust output and C++ reference output across the §8.1 input corpus. CI runs the harness; failure fails CI. Also: commit docs/design/refs/zawy12_issue_3_lwma1.md as the pinned spec revision (hash-anchored against future GitHub edits)."
@@ -15,7 +15,7 @@ todos:
     content: "Phase 3: Export shekyl_difficulty_lwma1_next from rust/shekyl-ffi/src/lib.rs per DAA_LWMA1.md §6.1 (i32 return; out_next_difficulty *mut u128; ERR_NULL_PTR / ERR_INVALID_COUNT / ERR_OVERFLOW / ERR_INTERNAL taxonomy). Add the declaration to src/shekyl/shekyl_ffi.h. Generate or hand-maintain the bindings per 25-rust-architecture.mdc. PR delivers the FFI surface; the daemon does NOT yet consume it (still on inherited next_difficulty)."
     status: pending
   - id: phase4-cpp-cutover
-    content: "Phase 4: Rewire Blockchain::get_difficulty_for_next_block() (blockchain.cpp:~965), Blockchain::check_difficulty_checkpoints() (~1021), and Blockchain::get_next_difficulty_for_alternative_chain() (~1325) to call shekyl_difficulty_lwma1_next. DELETE src/cryptonote_basic/difficulty.{h,cpp}. Delete DIFFICULTY_TARGET_V1, DIFFICULTY_WINDOW, DIFFICULTY_LAG (the // !!! constant), DIFFICULTY_CUT, DIFFICULTY_BLOCKS_COUNT, DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN from src/cryptonote_config.h. Rename DIFFICULTY_TARGET_V2 to BLOCK_TARGET_SECONDS and move to shekyl-difficulty const home. Replace BLOCK_FUTURE_TIME_LIMIT* and BLOCK_FUTURE_TIME_LIMIT_V2 with FTL_SECONDS=540 from shekyl-difficulty consts. Keep BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW=11 (MTP) but move to typed-const home. Delete tests/difficulty/{difficulty.cpp, gen_wide_data.py, generate-data}. Add symbol-isolation CI invariant: nm shekyld must not contain T|U next_difficulty_64|next_difficulty|check_difficulty_checkpoints (per DAA_LWMA1.md §7.1). Update unit tests and docs."
+    content: "Phase 4: Rewire Blockchain::get_difficulty_for_next_block() (blockchain.cpp:~965), Blockchain::check_difficulty_checkpoints() (~1021), and Blockchain::get_next_difficulty_for_alternative_chain() (~1325) to call shekyl_difficulty_lwma1_next. DELETE src/cryptonote_basic/difficulty.{h,cpp}. Delete DIFFICULTY_TARGET_V1, DIFFICULTY_WINDOW, DIFFICULTY_LAG (the // !!! constant), DIFFICULTY_CUT, DIFFICULTY_BLOCKS_COUNT, DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN from src/cryptonote_config.h. DELETE DIFFICULTY_TARGET_V2 outright (do NOT rename); rewire consumers to SHEKYL_DAA_LWMA1_TARGET_SECONDS from the generated shekyl/consensus_constants_generated.h (extended in Phase 1). DELETE BLOCK_FUTURE_TIME_LIMIT and BLOCK_FUTURE_TIME_LIMIT_V2; rewire consumers to SHEKYL_DAA_LWMA1_FTL_SECONDS. DELETE BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW; rewire consumers to SHEKYL_DAA_LWMA1_MTP_WINDOW. Delete tests/difficulty/{difficulty.cpp, gen_wide_data.py, generate-data}. Add symbol-isolation CI invariant: nm shekyld must not contain T|U next_difficulty_64|next_difficulty|check_difficulty_checkpoints (per DAA_LWMA1.md §7.1). Add no-orphaned-magic-numbers CI invariant: git grep on the post-Phase-4 tree returns zero hits for BLOCK_FUTURE_TIME_LIMIT, BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW, DIFFICULTY_TARGET_V[12]. Update unit tests and docs."
     status: pending
   - id: phase5-docs
     content: "Phase 5: Update docs/USER_GUIDE.md, docs/SHEKYLD_PREREQUISITES.md, docs/DESIGN_CONCEPTS.md (or equivalents), docs/CHANGELOG.md per 91-documentation-after-plans.mdc. Close any DAA_LWMA1 follow-ups this plan introduces. Cross-reference the rule promotion 24-reviewer-discipline.mdc if it has landed by then."
@@ -64,7 +64,7 @@ flowchart LR
   R1 -- no --> P1
   R1 -- yes --> P3
   P3[Phase 3: shekyl_difficulty_lwma1_next<br/>FFI surface + header] --> P4
-  P4[Phase 4: C++ cutover<br/>delete difficulty.{h,cpp}<br/>delete DIFFICULTY_* constants<br/>FTL/MTP migration<br/>rewire 3 blockchain.cpp call sites] --> P5
+  P4[Phase 4: C++ cutover<br/>delete difficulty.{h,cpp}<br/>delete DIFFICULTY_* and BLOCK_FUTURE_TIME_LIMIT*<br/>consume LWMA-1 constants from generated header<br/>rewire 3 blockchain.cpp call sites] --> P5
   P5[Phase 5: Docs + CHANGELOG]
 ```
 
@@ -201,19 +201,28 @@ version = "0.1.0"
 edition = "2024"
 license = "BSD-3-Clause"
 description = "Shekyl LWMA-1 difficulty-adjustment algorithm"
+build = "build.rs"
 
 [dependencies]
-# No runtime dependencies. The algorithm body is pure Rust, std-only,
-# and operates on u128 arithmetic with no external math/util crates.
+# No runtime workspace dependencies (leaf-crate property per
+# DAA_LWMA1.md §2.1). The algorithm body is pure Rust, std-only,
+# u128 arithmetic, no external math/util crates.
 #
 # Phase 1 reviewer note: workspace-level configuration is inherited
-# normally and is NOT a violation of the "no deps" property:
+# normally and is NOT a violation of the leaf-crate property:
 #   - [lints] section is inherited from rust/Cargo.toml workspace
 #   - [profile.*] tuning is inherited from the workspace
 #   - thiserror may be added if the Lwma1Error taxonomy benefits from
 #     derive-based error types; thiserror is already a workspace dep
 #     used by shekyl-crypto-pq and shekyl-fcmp, so no new supply-chain
 #     surface is added. The decision is deferred to Phase 1 review.
+
+[build-dependencies]
+# serde_json is used by the existing shekyl-engine-core/build.rs to
+# parse config/consensus_constants.json; same dep is reused here.
+# This is a build-time dep only, not a runtime dep — does not break
+# the leaf-crate property at runtime.
+serde_json = "1"
 ```
 
 **Crate library.** Create `rust/shekyl-difficulty/src/lib.rs`:
@@ -231,17 +240,82 @@ pub use crate::consts::{N, T_SECONDS, GENESIS_DIFFICULTY,
     FTL_SECONDS, MTP_WINDOW};
 ```
 
-**Typed consensus constants.** Create
-`rust/shekyl-difficulty/src/consts.rs`:
+**Typed consensus constants — sourced from
+`config/consensus_constants.json`.** Per `DAA_LWMA1.md` §4, the
+numeric consensus constants live in the project's JSON authority
+to prevent C++/Rust drift (per the
+[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) "Full migration of remaining
+`SHEKYL_*` FFI constants to the JSON-authority pattern" entry, and
+the [`docs/audit_trail/2026-05-ffi-constant-drift-audit.md`](../audit_trail/2026-05-ffi-constant-drift-audit.md)
+audit that motivated it).
+
+Three concrete work items in this PR:
+
+1. **Extend `config/consensus_constants.json`** with the five
+   LWMA-1 keys (final naming a Phase 1 review item):
+
+   ```json
+   {
+     "daa_lwma1_window_n": 90,
+     "daa_lwma1_target_seconds": 120,
+     "daa_lwma1_ftl_seconds": 540,
+     "daa_lwma1_mtp_window": 11,
+     "daa_lwma1_genesis_difficulty": 100
+   }
+   ```
+
+2. **Generate Rust constants.** Two options; pick one in Phase 1
+   review:
+
+   - **Option A (preferred):** add
+     `rust/shekyl-difficulty/build.rs` mirroring the shape of
+     `rust/shekyl-engine-core/build.rs`. Reads the JSON,
+     emits `consensus_constants_generated.rs` to `OUT_DIR`,
+     `src/consts.rs` `include!`s it. Keeps generation scoped to
+     the consumer crate.
+   - **Option B:** extend `rust/shekyl-engine-core/build.rs` to
+     emit the LWMA-1 keys; `shekyl-difficulty` adds
+     `shekyl-engine-core` as a workspace dep solely to consume the
+     generated constants. **Cost:** breaks the leaf-crate property
+     per `DAA_LWMA1.md` §2.1. Option A is preferred unless review
+     surfaces a reason to centralize.
+
+3. **Extend `cmake/generate_consensus_constants.py`** to emit the
+   matching C++ symbols (`SHEKYL_DAA_LWMA1_WINDOW_N`, etc., as
+   `constexpr` in `shekyl/consensus_constants_generated.h`).
+
+The resulting `src/consts.rs` is short:
 
 ```rust
-pub const N: u64 = 90;
-pub const T_SECONDS: u64 = 120;
-pub const GENESIS_DIFFICULTY: u128 = 100;
-pub const FTL_SECONDS: u64 = N * T_SECONDS / 20;  // = 540
-pub const MTP_WINDOW: u64 = 11;
+//! Typed consensus constants for LWMA-1.
+//!
+//! Numeric values are generated from config/consensus_constants.json
+//! via build.rs; see DAA_LWMA1.md §4 and FOLLOWUPS.md (JSON-authority
+//! pattern). The canonical-derivation constants below (BIAS_NUMERATOR,
+//! BIAS_DENOMINATOR, SOLVETIME_CLAMP_FACTOR, MIN_L_FLOOR_*) are
+//! deliberately NOT JSON-keyed: they are zawy12-canonical fixed
+//! values per DAA_LWMA1.md §5.3 step 7, not Shekyl tunables.
 
-pub const _STATIC_FTL_CHECK: () = assert!(FTL_SECONDS == 540);
+include!(concat!(env!("OUT_DIR"), "/consensus_constants_generated.rs"));
+
+// Re-export with the names DAA_LWMA1.md §4 uses (the JSON keys are
+// scoped; the algorithm reads against canonical zawy12 names).
+pub const N: u64 = DAA_LWMA1_WINDOW_N;
+pub const T_SECONDS: u64 = DAA_LWMA1_TARGET_SECONDS;
+pub const GENESIS_DIFFICULTY: u128 = DAA_LWMA1_GENESIS_DIFFICULTY as u128;
+pub const FTL_SECONDS: u64 = DAA_LWMA1_FTL_SECONDS;
+pub const MTP_WINDOW: u64 = DAA_LWMA1_MTP_WINDOW;
+
+// Canonical zawy12 fixed values; NOT JSON-keyed.
+pub(crate) const BIAS_NUMERATOR: u128 = 99;
+pub(crate) const BIAS_DENOMINATOR: u128 = 200;
+pub(crate) const SOLVETIME_CLAMP_FACTOR: u64 = 6;
+pub(crate) const MIN_L_FLOOR_NUMERATOR: u128 = 1;
+pub(crate) const MIN_L_FLOOR_DENOMINATOR: u128 = 20;
+
+// Cross-language consistency sentinel (per FOLLOWUPS.md pattern).
+const _STATIC_FTL_CHECK: () = assert!(FTL_SECONDS == N * T_SECONDS / 20);
+const _STATIC_FTL_VALUE: () = assert!(FTL_SECONDS == 540);
 ```
 
 **Algorithm.** Create `rust/shekyl-difficulty/src/lwma1.rs` from
@@ -384,17 +458,37 @@ in full.
 **Delete the `DIFFICULTY_*` constants** in `src/cryptonote_config.h`
 per [`DAA_LWMA1.md`](./DAA_LWMA1.md) §9.2.
 
-**Rename** `DIFFICULTY_TARGET_V2` to `BLOCK_TARGET_SECONDS` (or
-delete and consume from `shekyl-difficulty` consts via a generated
-header). The latter is the canonical-source-of-truth shape and is
-preferred.
+**Consume LWMA-1 numeric constants from the generated header.**
+Per [`DAA_LWMA1.md`](./DAA_LWMA1.md) §4 and §6.2, the values for
+`N`, `T_SECONDS`, `FTL_SECONDS`, `MTP_WINDOW`, and
+`GENESIS_DIFFICULTY` come from the generated header
+`shekyl/consensus_constants_generated.h` (emitted by
+`cmake/generate_consensus_constants.py` from
+`config/consensus_constants.json`, extended in Phase 1). C++ code
+consumes those generated symbols (e.g.,
+`SHEKYL_DAA_LWMA1_TARGET_SECONDS`) directly.
 
-**Migrate FTL.** Replace `BLOCK_FUTURE_TIME_LIMIT` and
-`BLOCK_FUTURE_TIME_LIMIT_V2` consumers with `FTL_SECONDS=540`
-(consumed from `shekyl-difficulty` consts).
+`DIFFICULTY_TARGET_V2` (currently `120`) is **deleted** outright,
+not renamed. Every consumer of `DIFFICULTY_TARGET_V2` is rewired
+to `SHEKYL_DAA_LWMA1_TARGET_SECONDS` from the generated header.
+Renaming the hand-maintained `#define` would preserve the
+drift-vulnerability bug class the JSON-authority pattern exists
+to close.
 
-**Migrate MTP.** `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW=11` keeps its
-value but moves to the typed-const home.
+**Migrate FTL.** Delete the hand-maintained
+`BLOCK_FUTURE_TIME_LIMIT` and `BLOCK_FUTURE_TIME_LIMIT_V2`
+`#define`s. Rewire consumers to `SHEKYL_DAA_LWMA1_FTL_SECONDS`
+from the generated header.
+
+**Migrate MTP.** Delete the hand-maintained
+`BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` `#define`. Rewire consumers to
+`SHEKYL_DAA_LWMA1_MTP_WINDOW` from the generated header.
+
+**No-orphaned-magic-numbers invariant.** After Phase 4, `git grep
+-nE 'BLOCK_FUTURE_TIME_LIMIT|BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW|DIFFICULTY_TARGET_V[12]'`
+in the C++ source tree returns zero hits except the deletion-
+commit's own diff. CI can enforce this with a single grep step on
+the post-Phase-4 tree.
 
 **Delete tests/difficulty/.** `tests/difficulty/difficulty.cpp`,
 `tests/difficulty/gen_wide_data.py`, and
@@ -481,12 +575,23 @@ Update:
    Shekyl-specific sensitivity analysis on the §8.3 simulated-
    history corpus to confirm 90 is optimal under Shekyl's expected
    bootstrap-regime hashrate volatility.
-3. **Pinned spec revision capture format.** Markdown render vs. raw
-   HTML vs. a git submodule of a Shekyl-Foundation fork of zawy12's
-   repo. The current proposal is rendered Markdown (smallest
-   surface, easiest to diff for future audit); reviewer may prefer
-   one of the alternatives.
-4. **Phase 2 cross-check harness as Rust integration test vs. C++
+3. **Where the build.rs for the LWMA-1 consensus constants
+   lives.** Option A (preferred per Phase 1 §"Typed consensus
+   constants"): a new `rust/shekyl-difficulty/build.rs`. Option B:
+   extend the existing `rust/shekyl-engine-core/build.rs`. Option
+   A preserves `shekyl-difficulty`'s leaf-crate property (per
+   `DAA_LWMA1.md` §2.1) at the cost of a second build.rs reading
+   the same JSON; Option B centralizes but introduces a
+   workspace-internal dep from `shekyl-difficulty` to
+   `shekyl-engine-core`. Reviewer ratifies one.
+4. **JSON key naming.** The proposed keys are
+   `daa_lwma1_window_n`, `daa_lwma1_target_seconds`,
+   `daa_lwma1_ftl_seconds`, `daa_lwma1_mtp_window`,
+   `daa_lwma1_genesis_difficulty`. The existing
+   `fcmp_reference_block_min_age` style uses
+   `<subsystem>_<descriptor>`; the proposed style matches with the
+   `daa_lwma1_` prefix. Reviewer ratifies or replaces.
+5. **Phase 2 cross-check harness as Rust integration test vs. C++
    test target.** The current proposal places it in
    `tests/difficulty/` as a C++ target so it consumes the canonical
    C++ reference directly. A Rust integration test in
