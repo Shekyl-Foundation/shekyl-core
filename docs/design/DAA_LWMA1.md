@@ -345,21 +345,29 @@ The canonical LWMA-1 specification explicitly couples the DAA window
 size N to two related consensus constants:
 
 - **`BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW`** (a.k.a. Median Time Past,
-  MTP). Cryptonote default: 11 (i.e., the new block's timestamp must
-  be greater than the median of the previous 11). zawy12 LWMA-1
-  required: **11**. Shekyl: keep at 11.
-- **`BLOCK_FUTURE_TIME_LIMIT`** (FTL). Cryptonote default: 7200 s
-  (= 2 hours). zawy12 LWMA-1 required: **`N * T / 20`**. For N = 90,
-  T = 120: **540 s = 9 minutes**. The CryptoNote default (2 hours)
-  is too high for small chains and enables sustained timestamp
-  manipulation against LWMA's `6*T` clamp; the canonical reference
-  documents this explicitly and the recommended FTL is a hard
-  requirement, not a tunable.
+  MTP). **Current Shekyl-inherited value: 60** (per
+  `src/cryptonote_config.h:56`, a Monero-era widening from the
+  CryptoNote-original 11). zawy12 LWMA-1 required: **11**. Shekyl:
+  **tighten to 11**. The Monero-era 60-block widening was a
+  response to long-tail timestamp-attack scenarios that don't apply
+  to LWMA-1's own timestamp discipline (`6*T` solvetime clamp +
+  9-minute FTL together close the attack surface that motivated
+  Monero's MTP widening), and zawy12 explicitly recommends 11 for
+  LWMA-1 chains.
+- **`CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT`** (FTL). Current
+  Shekyl-inherited value: **7200 s = 2 hours** (per
+  `src/cryptonote_config.h:51`). zawy12 LWMA-1 required:
+  **`N * T / 20`**. For N = 90, T = 120: **540 s = 9 minutes**. The
+  CryptoNote default (2 hours) is too high for small chains and
+  enables sustained timestamp manipulation against LWMA's `6*T`
+  clamp; the canonical reference documents this explicitly and the
+  recommended FTL is a hard requirement, not a tunable.
 
 This means the deletion surface includes more than `difficulty.cpp`:
 the FTL constant and the MTP constant are part of the LWMA-1
-landing. The version-1 inherited values are wrong-by-construction
-once LWMA-1 is in place.
+landing, and both are **value changes**, not preservation. The
+version-1 inherited values are wrong-by-construction once LWMA-1
+is in place.
 
 **Both predicates and both constants live in `shekyl-difficulty`.**
 The crate exports, in addition to `lwma1_next`:
@@ -376,6 +384,26 @@ The crate exports, in addition to `lwma1_next`:
 These are predicates rather than value-producing transforms, but
 per `18-type-placement.mdc` predicates are just transforms whose
 codomain is `bool` — same shape, same crate.
+
+**Phase 1 implementation choice (not a Phase 0 blocker).** The
+const-sized array reference `&[u64; 11]` is consensus-correct
+(the MTP window size is fixed at 11 per §4) but ergonomically
+costly: every C++ caller assembles a `std::vector<uint64_t>` and
+needs an explicit conversion at the call site. Two equivalent
+alternatives are available to Phase 1 review:
+
+- `pub fn is_above_mtp(incoming: u64, previous: &[u64]) -> bool`
+  with a runtime `debug_assert!(previous.len() == MTP_WINDOW as
+  usize);` — slice ergonomics, lossless on debug, no protection
+  in release.
+- `pub fn is_above_mtp(incoming: u64, window: MtpWindow) -> bool`
+  with a `pub struct MtpWindow([u64; 11])` newtype carrying the
+  invariant — strongest type guarantee, requires a constructor.
+
+The `&[u64; 11]` shape in this design doc is the
+consensus-property-preserving baseline; Phase 1 may adopt either
+alternative provided the consensus property (exactly 11 timestamps
+or refuse the predicate) is preserved at the public boundary.
 
 The disposition to co-locate FTL/MTP with the DAA (rather than
 pre-extracting them into a separate `shekyl-timestamp-validation`
@@ -508,8 +536,8 @@ wrapper inside the verifier crate.
 | Bias factor numerator | b_num | **99** | zawy12 canonical (Issue #3, LWMA-1 reference line 127, unchanged since 2017–2018; derivation in §5.3 step 7) |
 | Bias factor denominator | b_den | **200** | zawy12 canonical (same line; `200 = 2 * 100` per the derivation in §5.3 step 7, not a separate tunable) |
 | Genesis difficulty | `D₀` | **100** (proposed) | §2.6 — Phase 0 ratifies |
-| Block future time limit | FTL | **`N * T / 20` = 540 s** | zawy12 canonical hard requirement (Issue #3 lines 85, 91) |
-| Median time past window | MTP | **11** | zawy12 canonical; Cryptonote default unchanged |
+| Block future time limit | FTL | **`N * T / 20` = 540 s** | zawy12 canonical hard requirement (Issue #3 lines 85, 91); tightens inherited `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT = 7200 s` |
+| Median time past window | MTP | **11** | zawy12 LWMA-1 canonical; tightens inherited `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW = 60` back to the CryptoNote-original 11 (Monero widened to 60; LWMA-1 doesn't need the widening per §2.5) |
 
 All values become typed `pub const` in
 `shekyl-difficulty/src/consts.rs` per `RANDOMX_V2_RUST.md` §9's
@@ -528,44 +556,69 @@ remaining `SHEKYL_*` FFI constants to the JSON-authority pattern"
 entry) and the audit trail at
 [`docs/audit_trail/2026-05-ffi-constant-drift-audit.md`](../audit_trail/2026-05-ffi-constant-drift-audit.md).
 
-Concretely, the LWMA-1 keys to add (final naming a Phase 1 review
-item, but proposed shape for review):
+**Algorithm-version-free naming.** The JSON keys and the generated
+C++ symbols are `daa_*` and `SHEKYL_DAA_*`, **not**
+`daa_lwma1_*` / `SHEKYL_DAA_LWMA1_*`. Rationale: if §10's reversion
+clause ever fires (LWMA-2/3/4 or ASERT replaces LWMA-1), the JSON
+keys and C++ symbol names should not have to change across every
+consumer site at the same time as the algorithm body. The
+algorithm-version flavor lives in the algorithm body
+(`shekyl-difficulty/src/lwma1.rs` for LWMA-1, hypothetically
+`asert.rs` for ASERT); the consensus constants are named for the
+role they play (DAA window, DAA target, DAA FTL, DAA MTP, DAA
+genesis difficulty), not for the algorithm that consumes them
+today. This matches the existing JSON's `fcmp_reference_block_*`
+pattern (FCMP is the subsystem, not a specific FCMP version) and
+matches the reasoning that motivated deleting `DIFFICULTY_TARGET_V2`
+instead of preserving it as a v1-specific constant.
 
 ```json
 {
-  "daa_lwma1_window_n": 90,
-  "daa_lwma1_target_seconds": 120,
-  "daa_lwma1_ftl_seconds": 540,
-  "daa_lwma1_mtp_window": 11,
-  "daa_lwma1_genesis_difficulty": 100
+  "daa_window_n": 90,
+  "daa_target_seconds": 120,
+  "daa_ftl_seconds": 540,
+  "daa_mtp_window": 11,
+  "daa_genesis_difficulty": 100
 }
 ```
 
 The two derived/canonical constants — `b_num = 99`, `b_den = 200`,
-`k_st = 6`, `k_L_num = 1`, `k_L_den = 20` — are **not** JSON-keyed.
-They are zawy12-canonical fixed values (per §5.3 step 7's
-derivation), not Shekyl tunables, and they live as inline
-constants in the algorithm body in `shekyl-difficulty/src/lwma1.rs`
-so that the formula reads against the canonical reference verbatim.
-JSON-keying them would falsely imply they are independently
-tunable.
+`k_st = 6`, `k_L_num = 1`, `k_L_den = 20` — are **not** JSON-keyed
+**and not named `pub const` in `consts.rs`**. They are
+zawy12-canonical fixed values (per §5.3 step 7's derivation), not
+Shekyl tunables, and they appear as **bare integer literals** in
+the algorithm body in `shekyl-difficulty/src/lwma1.rs` so that the
+formula reads against the canonical reference verbatim (e.g., the
+line that applies the bias factor is literally
+`next_D = avg_D * N * (N+1) * T * 99 / (200 * L)` with `99` and
+`200` as literals, matching canonical Issue #3 line 127). A
+brief comment at each literal cites the canonical line. Naming
+these as `BIAS_NUMERATOR` / `BIAS_DENOMINATOR` consts would invite
+future "tunable" misreadings; bare literals foreclose that
+misreading by construction.
 
 The cross-language generation pipeline is the existing one:
 
-- **Rust side.** Either `rust/shekyl-difficulty/build.rs` (new) or
-  an extension of `rust/shekyl-engine-core/build.rs` (existing)
-  reads the JSON and emits `consensus_constants_generated.rs` into
-  `OUT_DIR`. `shekyl-difficulty/src/consts.rs` `include!`s the
-  generated file. Phase 1 selects which build.rs to use — adding
-  a build.rs to a leaf crate is preferred (keeps the generation
-  scoped to the consumer), but piggybacking the existing one is
-  acceptable if the keys are few.
+- **Rust side.** A new `rust/shekyl-difficulty/build.rs` reads the
+  JSON and emits `consensus_constants_generated.rs` into `OUT_DIR`.
+  `shekyl-difficulty/src/consts.rs` `include!`s the generated file
+  and re-exports the constants under the canonical zawy12 names
+  (`N`, `T_SECONDS`, etc.). This preserves the leaf-crate property
+  per §2.1 (zero internal workspace deps; `serde_json` is a
+  build-time dep only, not a runtime dep). Extending
+  `rust/shekyl-engine-core/build.rs` to emit the LWMA-1 keys was
+  considered and rejected: it would introduce a workspace-internal
+  dep from `shekyl-difficulty` to `shekyl-engine-core` purely to
+  consume generated constants, breaking the leaf-crate property
+  for negligible code reduction.
 - **C++ side.** `cmake/generate_consensus_constants.py` is
-  extended with the same five keys, emitting them as `#define
-  SHEKYL_DAA_LWMA1_*` (or equivalent typed `constexpr`) into the
-  generated `shekyl/consensus_constants_generated.h`. The C++ side
-  consumes the generated header; no hand-maintained `#define` for
-  any LWMA-1 numeric constant.
+  extended with the five new keys, emitting them as `constexpr`
+  symbols `SHEKYL_DAA_WINDOW_N`, `SHEKYL_DAA_TARGET_SECONDS`,
+  `SHEKYL_DAA_FTL_SECONDS`, `SHEKYL_DAA_MTP_WINDOW`,
+  `SHEKYL_DAA_GENESIS_DIFFICULTY` into the generated
+  `shekyl/consensus_constants_generated.h`. The C++ side consumes
+  the generated header; no hand-maintained `#define` for any DAA
+  numeric constant.
 - **`shekyl_ffi.h`.** Hand-maintained per
   `25-rust-architecture.mdc` (the rule permits "cbindgen or
   hand-maintained"; the project's current pattern is
@@ -726,9 +779,13 @@ next_D = (avg_D * N * (N+1) * T * 99) / (200 * L)
 ```
 
 **Derivation** (from canonical zawy12 Issue #3, LWMA-2 reference's
-commented derivation, lines 313–318, which applies to the LWMA-1
-formula above with the LWMA-1 constant of `99` rather than LWMA-2's
-`97`):
+commented derivation, lines 313–318 *at the Phase 2 pinned-spec
+revision* per §3; the GitHub issue body's rendered Markdown can
+re-flow when the upstream author edits unrelated sections, so the
+line numbers above are stable only against the revision captured
+in `docs/design/refs/zawy12_issue_3_lwma1.md`). Applies to the
+LWMA-1 formula above with the LWMA-1 constant of `99` rather than
+LWMA-2's `97`:
 
 - `L / (N*(N+1)/2)` is the linear-weighted-moving-average of the
   clamped solvetimes (the denominator `N*(N+1)/2` is the sum of
@@ -775,7 +832,9 @@ re-associate the multiplication to avoid `u128` overflow:
 next_D = (avg_D / (200 * L)) * (N * (N+1) * T * 99)
 ```
 
-Matches canonical zawy12 Issue #3, LWMA-1 reference, lines 124–127.
+Matches canonical zawy12 Issue #3, LWMA-1 reference, lines 124–127
+*at the Phase 2 pinned-spec revision* per §3; same line-stability
+caveat as step 7.
 
 **Determinism of the branch trigger.** The condition `avg_D >
 2_000_000 * N * N * T` is pure integer comparison against
@@ -1006,6 +1065,15 @@ properties:
   anti-patterns (per-block clamp, caller-supplied solvetimes,
   missing minimum-L floor, missing bias factor) and the §8.1
   vectors must not exhibit any of them under any input.
+- **`solvetime[1]` `-T` offset regression vector** (per §5.3
+  step 2's "the `-T` offset is load-bearing" note). A vector
+  where the algorithm without the offset would shift `L`'s
+  expected stable-state value by a constant factor, producing a
+  different `next_D` than the canonical reference. A future
+  contributor who "simplifies" the offset away on the assumption
+  that it cancels in the sum gets caught by this unit test,
+  not by post-genesis drift. **Required**: Phase 1 cannot merge
+  without this vector.
 
 All vectors derived analytically against the §5.3 specification.
 
@@ -1064,56 +1132,198 @@ Concrete files and constants to remove at Phase 4 of
 
 ### 9.2 Constants deleted from `src/cryptonote_config.h`
 
+All five inherited `DIFFICULTY_*` `#define`s and the two
+timestamp-validation `#define`s are **deleted**, not renamed. Each
+is replaced by a consumer rewire to the corresponding
+`SHEKYL_DAA_*` symbol in the generated header
+`shekyl/consensus_constants_generated.h` (per §4's source-of-truth
+pattern). Renaming any of them would preserve the
+hand-maintained-`#define` drift class that the JSON authority
+exists to close.
+
 - `DIFFICULTY_TARGET_V1` (line 83) — pre-genesis variant, dead under
-  `60-no-monero-legacy.mdc`.
-- `DIFFICULTY_WINDOW` (line 84) — replaced by `N` const in
-  `shekyl-difficulty`.
-- `DIFFICULTY_LAG` (line 85, the `// !!!` constant) — not used by
-  LWMA-1; deleted.
-- `DIFFICULTY_CUT` (line 86) — not used by LWMA-1; deleted.
-- `DIFFICULTY_BLOCKS_COUNT` (line 87) — `N+1` known from `N`;
-  deleted.
+  `60-no-monero-legacy.mdc`; **deleted**, no replacement.
+- `DIFFICULTY_TARGET_V2` (line 82, value 120) — **deleted**;
+  consumers rewired to `SHEKYL_DAA_TARGET_SECONDS` from the
+  generated header. (The value is unchanged; the source-of-truth
+  moves from the hand-maintained `#define` to the JSON authority.
+  Round 3 disposition: delete-not-rename, against the prior draft's
+  rename-to-`BLOCK_TARGET_SECONDS` framing, because a rename
+  preserves exactly the drift class §4 exists to close.)
+- `DIFFICULTY_WINDOW` (line 84) — **deleted**; the DAA crate's `N`
+  const (sourced from `SHEKYL_DAA_WINDOW_N`) replaces it. No C++
+  consumer outside `difficulty.cpp` reads this directly per the
+  consumer audit; verify at Phase 4 PR time.
+- `DIFFICULTY_LAG` (line 85, the `// !!!` constant) — the `// !!!`
+  warning marks this as a known-buggy lag setting that Monero
+  preserved for compatibility; LWMA-1 has no equivalent and the
+  bug class doesn't apply. **Deleted**.
+- `DIFFICULTY_CUT` (line 86) — not used by LWMA-1; **deleted**.
+- `DIFFICULTY_BLOCKS_COUNT` (line 87) — was `N+1`; LWMA-1's
+  consumers compute `N+1` from `SHEKYL_DAA_WINDOW_N` directly.
+  **Deleted**.
 - `DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN` (line 95) — test-alias for
-  the inherited algorithm; deleted.
+  the inherited algorithm; **deleted**.
+- `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT` (line 51, value `60*60*2 =
+  7200`) — **deleted**; consumers rewired to
+  `SHEKYL_DAA_FTL_SECONDS` (value 540). The value change is the
+  consensus-rule change; see §9.5 for the consumer list.
+- `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` (line 56, value 60) —
+  **deleted**; consumers rewired to `SHEKYL_DAA_MTP_WINDOW` (value
+  11). The value change is the consensus-rule change; see §9.6 for
+  the consumer list.
 
-`DIFFICULTY_TARGET_V2` (line 82, value 120) is retained but renamed
-to `BLOCK_TARGET_SECONDS` and moved to the typed-const home in
-`shekyl-difficulty` per `RANDOMX_V2_RUST.md` §9 framing.
+There is **no** `BLOCK_FUTURE_TIME_LIMIT_V2` in this codebase
+(prior drafts named one — phantom).
 
-### 9.3 FTL and MTP constants
+### 9.3 (deprecated section header — content moved to §9.2)
 
-- `BLOCK_FUTURE_TIME_LIMIT` and `BLOCK_FUTURE_TIME_LIMIT_V2` (in
-  `cryptonote_config.h`): replaced with `N * T / 20 = 540 s` and
-  moved to the typed-const home.
-- `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` (MTP): kept at 11; moved to
-  the typed-const home alongside the other consensus constants.
+The Round 2 draft's §9.3 separately enumerated FTL/MTP constants
+under "value change with relocation to typed-const home." Round 3
+collapsed FTL/MTP into §9.2 as ordinary deletions (the JSON
+authority is the typed-const home; there is no separate
+relocation). The §9.5 and §9.6 consumer enumerations below are
+the operational replacement.
 
-### 9.4 Call-site rewiring in `src/cryptonote_core/blockchain.cpp`
+### 9.4 Call-site rewiring of `next_difficulty` in `src/cryptonote_core/blockchain.cpp`
 
-Three call sites currently consume the inherited `next_difficulty`:
+Three call sites consume the inherited `next_difficulty` /
+`next_difficulty_64`:
 
-- Line ~965: `Blockchain::get_difficulty_for_next_block()` —
+- `Blockchain::get_difficulty_for_next_block()` (~line 965) —
   rewires to `shekyl_difficulty_lwma1_next`.
-- Line ~1021: `Blockchain::check_difficulty_checkpoints()` —
+- `Blockchain::check_difficulty_checkpoints()` (~line 1021) —
   rewires to the same; the recalculation loop's "use historical
   difficulty target" framing collapses because LWMA-1 has only one
   parameter set, not a v1/v2 split.
-- Line ~1325: `Blockchain::get_next_difficulty_for_alternative_chain()`
-  — rewires to the same.
+- `Blockchain::get_next_difficulty_for_alternative_chain()`
+  (~line 1325) — rewires to the same.
 
-The four other `next_difficulty` consumers per the §1.1 reconnaissance
-grep are:
+Four other inherited consumers (per the §1.1 reconnaissance grep)
+are out of scope or already absorbed:
 
-- `src/cryptonote_basic/miner.cpp` (mining-side; consumes via the
-  same blockchain interface).
-- `src/cryptonote_basic/difficulty.{h,cpp}` (the implementation
-  itself; deleted).
-- `src/wallet/wallet_rpc_payments.cpp` (deleted in full per
-  `RANDOMX_V2_RUST.md` §15).
-- `src/rpc/core_rpc_server.cpp` (consumes via blockchain interface).
+- `src/cryptonote_basic/miner.cpp` — consumes via the blockchain
+  interface, not directly; rewired by the three blockchain
+  changes above.
+- `src/cryptonote_basic/difficulty.{h,cpp}` — the implementation
+  itself; deleted per §9.1.
+- `src/wallet/wallet_rpc_payments.cpp` — deleted in full per
+  `RANDOMX_V2_RUST.md` §15.
+- `src/rpc/core_rpc_server.cpp` — consumes `next_difficulty` via
+  the blockchain interface; rewired by the three changes above.
 
-Net: three blockchain call sites + the miner indirect + the
-core_rpc_server indirect, all rewired via a single FFI export.
+### 9.5 `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT` consumer enumeration
+
+The FTL constant has **one** direct consumer in the daemon source
+tree per the Round 3 reconnaissance grep, plus one test-suite
+consumer:
+
+- `src/cryptonote_core/blockchain.cpp:4276`:
+  `if(b.timestamp > (uint64_t)time(NULL) +
+   CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT)` — the FTL check inside
+  `Blockchain::check_block_timestamp_main`. Rewires to consume
+  `SHEKYL_DAA_FTL_SECONDS` from the generated header. **This is
+  the consensus-rule-change site**; the value-change from 7200 to
+  540 takes effect here.
+- `tests/core_tests/block_validation.cpp:137`:
+  `time(NULL) + 60*60 + CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT` —
+  test fixture constructing a block with timestamp deliberately
+  past FTL. Rewires to `SHEKYL_DAA_FTL_SECONDS`; the test's
+  semantics ("timestamp is past FTL") are preserved, but the
+  numerical margin shrinks from 7200 + 3600 to 540 + 3600.
+
+No other consumers in the C++ tree. The Phase 4 rewire surface
+for FTL is **two sites**.
+
+### 9.6 `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` consumer enumeration
+
+The MTP constant has **seven** direct consumers per the Round 3
+reconnaissance grep, all in the daemon source tree, plus two
+test-suite consumers:
+
+- `src/cryptonote_core/blockchain.cpp:1981, 1985` —
+  `complete_timestamps_vector`: assembles a timestamps vector of
+  size `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` for the MTP check.
+- `src/cryptonote_core/blockchain.cpp:4223, 4230, 4240, 4259,
+  4285, 4293` — six sites inside `check_block_timestamp` and
+  `get_long_term_block_weight_median`: the MTP median computation,
+  bounds checks, and the diagnostic `MERROR_VER` message.
+- `tests/core_tests/block_validation.h:92, 97`:
+  `gen_block_ts_not_checked` and `gen_block_ts_in_past` test
+  fixtures parametrized by the constant.
+- `tests/core_tests/block_validation.cpp:106, 120, 122` — fixture
+  body sites using the constant.
+
+All consumers rewire to `SHEKYL_DAA_MTP_WINDOW` from the generated
+header. **The value change (60 → 11) takes effect across all of
+these sites simultaneously.** Phase 4 reviewers should confirm
+that none of the call sites embed implicit assumptions about the
+window size (e.g., off-by-one arithmetic against the literal 60).
+The `complete_timestamps_vector` shape is window-size-agnostic;
+the `check_block_timestamp` median-computation is
+window-size-agnostic; the test fixtures are template-parameterized
+on the constant, so the rewire is purely textual.
+
+### 9.7 `DIFFICULTY_TARGET_V2` consumer enumeration
+
+The target-block-time constant has **~14 direct consumers across 9
+files** per the Round 3 reconnaissance grep. This is meaningfully
+larger than the §9.4 `next_difficulty` rewire surface and deserves
+its own audit. All consumers rewire to `SHEKYL_DAA_TARGET_SECONDS`
+from the generated header. The value is unchanged (still 120), so
+the rewire is mechanical at every site, but the **surface is
+larger than the §9.4 enumeration**, and one of the sites is
+RPC-contract-load-bearing:
+
+- `src/cryptonote_basic/cryptonote_basic_impl.cpp:78, 79` —
+  `static_assert(DIFFICULTY_TARGET_V2%60==0, ...)` plus a `target`
+  variable. The `static_assert` becomes a `const _: () =
+  assert!(SHEKYL_DAA_TARGET_SECONDS % 60 == 0);` on the Rust side
+  (or its C++ `constexpr` equivalent on the C++ side).
+- `src/cryptonote_core/blockchain.cpp:1020, 1322, 5894` — three
+  sites; the first two are inside the `next_difficulty` call-site
+  rewires from §9.4 and absorb naturally; `5894` is a getter
+  returning the block target seconds.
+- `src/cryptonote_core/cryptonote_core.cpp:1817, 1829, 1838` —
+  three sites inside the Poisson-probability blockchain-stall
+  detection threshold. The math is `T`-dependent; consumers
+  rewire textually.
+- **`src/rpc/core_rpc_server.cpp:1452`** —
+  `res.block_target = DIFFICULTY_TARGET_V2;` — **this is a daemon
+  RPC field consumed by wallet callers**. The value is unchanged
+  (still 120), so the RPC contract is preserved; the rewire is
+  source-only. The §11 wallet-touchpoints section is updated to
+  acknowledge this.
+- `src/daemon/rpc_command_executor.cpp:1319, 2039` — daemon CLI
+  display strings ("estimated backlog", "approximated hash rate").
+- `src/cryptonote_protocol/cryptonote_protocol_handler.inl:524` —
+  sync-progress display.
+- `src/wallet/wallet2.cpp:181, 182, 5975, 11548` — wallet defaults
+  for `DEFAULT_UNLOCK_TIME`, `RECENT_SPEND_WINDOW`, and two
+  `seconds_per_block` consumers. These rewire to the generated
+  header; the wallet's own unlock-time and recent-spend windows
+  are unaffected because the value is unchanged.
+- `src/wallet/wallet_rpc_server.cpp:163` — wallet RPC
+  `suggested_confirmations_threshold` math.
+
+Phase 4 reviewer responsibility: confirm by post-rewire grep that
+`git grep -nE 'DIFFICULTY_TARGET_V[12]' src/ tests/` returns zero
+hits (modulo the deletion-commit's own diff).
+
+### 9.8 RPC-contract preservation
+
+The §9.7 enumeration surfaces one consumer that is part of the
+public daemon RPC contract:
+`core_rpc_server.cpp:1452 res.block_target = DIFFICULTY_TARGET_V2`.
+Wallet callers read the `block_target` field from the daemon's
+`get_info` response. **The numeric value of the field is
+unchanged** (120 seconds before, 120 seconds after); only the
+source of the value moves from a hand-maintained `#define` to the
+generated header. No RPC client breakage results from this PR.
+This contrasts with the FTL/MTP changes (§9.5 / §9.6), which **do**
+change consensus-rule values — but FTL and MTP are not exposed via
+RPC, so the daemon's RPC surface is unchanged across the entire
+LWMA-1 migration.
 
 ## 10. Reversion clause
 

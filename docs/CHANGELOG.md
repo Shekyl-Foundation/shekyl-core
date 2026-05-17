@@ -54,6 +54,48 @@
   the future Rust validator actor will consume the same DAA transform
   without changes to the DAA crate.
 
+  *Round 3 review update (2026-05-17):* (a) corrects the
+  contradictory dispositions for `DIFFICULTY_TARGET_V2` — design doc
+  §9.2 now matches the plan's delete-not-rename directive (rename
+  would preserve the hand-maintained `#define` drift class the JSON
+  authority exists to close); (b) corrects two real factual errors
+  surfaced by a Round 3 reconnaissance grep of the C++ tree: the
+  constant is `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT` (not
+  `BLOCK_FUTURE_TIME_LIMIT`; there is no `_V2` variant), and
+  `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` is currently `60` (Monero-era
+  widening from the CryptoNote-original `11`), so the LWMA-1
+  disposition is a tightening — not preservation — from 60 back to
+  11; (c) adopts algorithm-version-free naming for the JSON keys
+  (`daa_window_n`, etc.) and the generated C++ symbols
+  (`SHEKYL_DAA_*`, not `SHEKYL_DAA_LWMA1_*`) so a future §10
+  reversion doesn't require renaming every consumer; (d) enumerates
+  the full Phase 4 consumer surface in new sections §9.5
+  (`CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT`: 2 sites), §9.6
+  (`BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW`: 9 sites), and §9.7
+  (`DIFFICULTY_TARGET_V2`: ~14 sites across 9 files), and adds §9.8
+  to flag the `core_rpc_server.cpp:1452 res.block_target` RPC-contract
+  preservation property; (e) acknowledges Phase 4 atomicity as a
+  deliberate exception to `06-branching.mdc` (FTL/MTP value changes
+  cannot stage behind alias `#define`s without weakening consensus
+  in the intermediate state); (f) resolves the bias-factor location
+  drift — `99` and `200` (plus `6` and `1/20`) appear as bare
+  integer literals inside `src/lwma1.rs` to match canonical zawy12
+  verbatim, **not** as named `pub(crate) const` in `consts.rs`;
+  (g) mechanizes Phase 5's conditional cross-reference to
+  `24-reviewer-discipline.mdc` so the Phase 5 reviewer can verify by
+  grep; (h) closes open question #3 (build.rs location) as Option A
+  per the leaf-crate property in §2.1; (i) adds a `solvetime[1]`
+  `-T` offset regression vector to §8.1's required-vector list;
+  (j) adds explicit MIT attribution to the Phase 2 vendored
+  `tests/difficulty/zawy12_lwma1_reference.h`; (k) moves long
+  reviewer-note prose out of the long-lived `Cargo.toml` into a
+  Phase 1 review-checklist section; (l) flags `is_above_mtp`'s
+  `&[u64; 11]` vs slice ergonomics as a Phase 1 implementation
+  choice (not a Phase 0 blocker); (m) adds canonical line-number
+  stability caveats to §5.3 step 7 and step 8 (line numbers are
+  stable only against the Phase 2 pinned-spec revision);
+  (n) updates Phase 4 work-item count from 11 to the actual 14.
+
 - **`07-consensus-atomic-cutovers.mdc` — named exception to
   branching policy for consensus-atomic cutovers**
   (`feat/consensus-atomic-cutovers-rule`, 2026-05-17). New rule
