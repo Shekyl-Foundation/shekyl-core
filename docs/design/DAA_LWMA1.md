@@ -1,6 +1,7 @@
 # LWMA-1 — Difficulty adjustment, Rust, from genesis
 
-**Status.** **DRAFT — Round 0 (initial draft, 2026-05-17).** Phase 0
+**Status.** **DRAFT — Round 1 (2026-05-17 initial draft; Round 1
+review pass addressing PR #49 reviewer findings).** Phase 0
 deliverable for the Shekyl difficulty-adjustment algorithm (DAA)
 migration. Companion: [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md). Both
 documents must pass the Phase 0 review cycle before any code lands.
@@ -223,7 +224,7 @@ These decisions are made now and locked. Any future proposal to
 reverse them must start with a new design doc that addresses the
 rationale below.
 
-### 1. Rust implementation, from genesis
+### 2.1 Rust implementation, from genesis
 
 Per `20-rust-vs-cpp-policy.mdc` rule 2 (Rust if any of: defines a
 cryptographic contract that other code consumes), the DAA is a
@@ -240,7 +241,7 @@ RandomX v2 verifier crate per `RANDOMX_V2_RUST.md`), not a child;
 DAA and PoW are math-orthogonal surfaces and the crate-level
 separation reflects that.
 
-### 2. Single algorithm path, no version dispatch
+### 2.2 Single algorithm path, no version dispatch
 
 Genesis ships with LWMA-1 and nothing else. There is no
 `HF_VERSION_LWMA1` gate, no fallback to inherited Monero DAA, no
@@ -252,7 +253,7 @@ This is the same disposition as the RandomX v2 plan's "no
 `RX_BLOCK_VERSION` gate, no version-dispatch switch" framing
 (`RANDOMX_V2_RUST.md` §13).
 
-### 3. Spec is the source of truth, the reference implementation is the cross-check
+### 2.3 Spec is the source of truth, the reference implementation is the cross-check
 
 The Rust implementation is written from zawy12's canonical
 LWMA-1 specification in
@@ -267,18 +268,23 @@ reference.
 This is the same doctrine as the RandomX v2 plan's "Spec Is the
 Source of Truth" framing (`RANDOMX_V2_RUST.md` §3).
 
-### 4. The pre-design sketch is not the canonical implementation
+### 2.4 The pre-design sketch is not the canonical implementation
 
 A pre-design Rust sketch existed at
 `rust/shekyl-difficulty/src/lwma1.rs` during early Phase 0
-reconnaissance. It was deleted (Phase 0, 2026-05-17) before any
-implementation work began so that Phase 1 starts from an empty crate
-directory and is written fresh against this design doc's §5.3
-algorithm specification. The divergences below are recorded as the
-design rationale for why the sketch did not become the
-implementation — they are an explicit anti-pattern catalogue, not a
-description of any committed code. Concrete divergences from zawy12
-canonical LWMA-1:
+reconnaissance. Per `15-deletion-and-debt.mdc`'s default-delete rule
+(code with no live caller is audit surface, attack surface, and
+review fatigue) the sketch was deleted in this PR's commit
+`91c6dc44c` before any implementation work began, so that Phase 1
+starts from an empty crate directory and is written fresh against
+this design doc's §5.3 algorithm specification. The deletion
+commit's authoritative record is in `git log`; the design doc cites
+the commit hash and the binding rule, not a literal calendar date.
+
+The divergences below are recorded as the design rationale for why
+the sketch did not become the implementation — they are an explicit
+anti-pattern catalogue, not a description of any committed code.
+Concrete divergences from zawy12 canonical LWMA-1:
 
 - Sketch uses a `clamp_factor` max-change-per-block parameter (3× by
   default). Canonical LWMA-1 has no per-block output clamp — output
@@ -299,16 +305,17 @@ canonical LWMA-1:
 - Sketch's test vectors are author-authored, not derived from the
   zawy12 simulator output on historical data.
 
-**Disposition.** The sketch was **deleted** during Phase 0 so that
-no on-disk pre-design code can accidentally become the starting
-point for the implementation crate (PR B in
-[`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md)). PR B writes the
+**Disposition.** Per `15-deletion-and-debt.mdc` (default-delete),
+the sketch was **deleted** during Phase 0 (this PR, commit
+`91c6dc44c`) so that no on-disk pre-design code can accidentally
+become the starting point for the implementation crate (Phase 1 in
+[`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md)). Phase 1 writes the
 implementation fresh against this design doc's §5.3 algorithm
 specification and §8 test-vector strategy. The divergence catalogue
 above is preserved here as the design record of why each non-canonical
 shape is rejected; it is not a description of any committed source.
 
-### 5. FTL and MTP are co-tuned with N
+### 2.5 FTL and MTP are co-tuned with N
 
 The canonical LWMA-1 specification explicitly couples the DAA window
 size N to two related consensus constants:
@@ -333,7 +340,7 @@ once LWMA-1 is in place.
 Phase 4 of [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) covers all
 three together.
 
-### 6. No genesis difficulty "guess" — start at a single ratified constant
+### 2.6 No genesis difficulty "guess" — start at a single ratified constant
 
 The canonical LWMA-1 reference includes a `difficulty_guess`
 parameter that hard-codes difficulty for the first `N+1` blocks
@@ -363,15 +370,36 @@ CPU hashrate measurements at the v2 fork pin.
 
 - **Spec source:** [`zawy12/difficulty-algorithms#3`](https://github.com/zawy12/difficulty-algorithms/issues/3)
   ("LWMA difficulty algorithm").
-- **Pinned issue revision:** the issue's body HEAD as of Phase 0
-  close. Because GitHub issues do not carry SHA addressing, the
-  pinned content is captured by hash of the rendered Markdown saved
-  at `docs/design/refs/zawy12_issue_3_lwma1.md` at PR-A merge time.
-  This anchors the audit trail against future edits to the issue.
+- **Pinned issue revision:** captured by fetching the **raw issue
+  body** via the GitHub REST API at Phase 2 PR time:
+
+  ```text
+  curl -sH "Accept: application/vnd.github.v3+json" \
+    https://api.github.com/repos/zawy12/difficulty-algorithms/issues/3 \
+    | jq -r .body > docs/design/refs/zawy12_issue_3_lwma1.md
+  ```
+
+  The `.body` field is the issue's canonical Markdown source as
+  authored — not GitHub's rendered HTML. The rendered form changes
+  over time (emoji rendering, link-formatting tweaks, table-styling
+  updates from GitHub's frontend) without the underlying source
+  changing; pinning the raw `.body` immunizes the audit trail
+  against those rendering shifts.
+
+  The captured file is committed to the repository and content-
+  hashed at commit time. Subsequent edits by the issue author are
+  detected by comparing the committed file against a fresh fetch;
+  the pin is then re-ratified or the design doc updates explicitly
+  per `21-reversion-clause-discipline.mdc`.
+
+  Phase 2 of [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) lands the
+  pin file.
 - **Reference implementation:** the `LWMA1_()` C++ function defined
-  inside zawy12 Issue #3 (lines 76–136 of the issue body at the
-  pinned revision). Used as a cross-check only; the Rust
-  implementation is written from the textual spec.
+  inside zawy12 Issue #3 (lines 76–136 of the raw `.body` at the
+  pinned revision; line numbers refer to the raw Markdown, which
+  matches the line numbers in the rendered view as of the design-
+  doc pin date). Used as a cross-check only; the Rust implementation
+  is written from the textual spec per §2.3.
 - **Simulation tooling:** zawy12's `difficulty-algorithms` repository
   contains historical-data simulators used to derive test-vector
   corpora. Specific corpus selection is described in §8.
@@ -384,8 +412,8 @@ CPU hashrate measurements at the v2 fork pin.
 | Target block time | `T` | **120 s** | Inherited from CryptoNote `DIFFICULTY_TARGET_V2`; unchanged. Orthogonal to DAA choice. |
 | Solvetime clamp factor | k_st | **6** (i.e., individual solvetimes capped at `6*T`) | zawy12 canonical |
 | Minimum-L floor coefficient | k_L | **1/20** (i.e., `L_min = N*N*T/20`) | zawy12 canonical |
-| Bias factor numerator | b_num | **99** | zawy12 canonical (fixes 2026-era LWMA-1 alignment bug per the bams-repo/go-chain audit) |
-| Bias factor denominator | b_den | **200** | zawy12 canonical |
+| Bias factor numerator | b_num | **99** | zawy12 canonical (Issue #3, LWMA-1 reference line 127, unchanged since 2017–2018; derivation in §5.3 step 7) |
+| Bias factor denominator | b_den | **200** | zawy12 canonical (same line; `200 = 2 * 100` per the derivation in §5.3 step 7, not a separate tunable) |
 | Genesis difficulty | `D₀` | **100** (proposed) | §2.6 — Phase 0 ratifies |
 | Block future time limit | FTL | **`N * T / 20` = 540 s** | zawy12 canonical hard requirement (Issue #3 lines 85, 91) |
 | Median time past window | MTP | **11** | zawy12 canonical; Cryptonote default unchanged |
@@ -406,16 +434,27 @@ and the values that anchor reproducible-build verification.
 
 ### 5.1 Inputs
 
-The DAA's input domain is two parallel vectors of length `N + 1`:
+The DAA is invoked when about to validate (or compute the target
+for) a new block. Let:
 
-- `timestamps: [u64; N+1]` — raw block timestamps (seconds since
-  Unix epoch), in chain order, with `timestamps[N]` being the most
-  recent block.
-- `cumulative_difficulties: [u128; N+1]` — cumulative difficulty up
-  to and including each timestamp's block.
+- `chain_height` — the height of the **chain tip** (the most recent
+  block already on chain). Genesis is height 0. After N+1 blocks
+  have been accepted, `chain_height == N`.
+- `timestamps[0..=N]` — `u64` raw block timestamps (seconds since
+  Unix epoch), in chain order, with `timestamps[0]` the oldest block
+  in the window and `timestamps[N]` the chain tip. The window holds
+  the most recent `N+1` accepted blocks.
+- `cumulative_difficulties[0..=N]` — `u128` cumulative difficulty up
+  to and including each block in the window.
 
 Plus three protocol constants: `T = 120`, `N = 90`,
 `GENESIS_DIFFICULTY = 100`.
+
+The input-vector length is fixed at `N+1` once the chain has matured
+(`chain_height >= N`). During the genesis window (`chain_height < N`,
+i.e., chain holds fewer than `N+1` blocks) the algorithm returns
+`GENESIS_DIFFICULTY` per §5.3 step 1 without inspecting the input
+vectors at all, and the FFI shim accepts a shorter `count` per §6.1.
 
 ### 5.2 Output
 
@@ -430,7 +469,32 @@ specification-first rule). Step-by-step:
 
 **Step 1 — Genesis-window short-circuit.** If `chain_height < N`,
 return `GENESIS_DIFFICULTY` directly. The chain has not yet
-accumulated `N + 1` blocks to weight against.
+accumulated `N + 1` blocks to weight against. This matches the
+canonical guard at zawy12 Issue #3, LWMA-1 reference, line 107:
+`if (height >= FORK_HEIGHT && height < FORK_HEIGHT + N) { return
+difficulty_guess; }`. Shekyl's `FORK_HEIGHT` is `0` (LWMA-1 lands at
+genesis with no prior algorithm to fork away from), so the
+condition collapses to `chain_height < N`.
+
+Boundary cases, anchored to the canonical:
+
+- `chain_height == 0` (only genesis block on chain): short-circuit
+  fires; return `GENESIS_DIFFICULTY`.
+- `chain_height == N - 1` (block at height `N-1` is the tip, chain
+  has `N` blocks): short-circuit fires; return `GENESIS_DIFFICULTY`.
+- `chain_height == N` (block at height `N` is the tip, chain has
+  `N+1` blocks): **first non-short-circuit invocation**. The window
+  is exactly `timestamps[0..=N]` and `cumulative_difficulties[0..=N]`,
+  matching the canonical's `assert(timestamps.size() == N+1)` at
+  line 108. The algorithm computes the difficulty target for the
+  next block (at height `N + 1`).
+
+The FFI surface's `count` parameter (§6.1) is bound to this
+boundary: when `chain_height < N`, any `count` is acceptable (the
+short-circuit ignores the vectors); when `chain_height >= N`,
+`count` must equal `N + 1` exactly, and `ERR_INVALID_COUNT` fires
+otherwise. This is the consensus invariant; an off-by-one here is a
+hard fork.
 
 **Step 2 — Out-of-sequence timestamp normalization.** Compute
 solvetimes from raw timestamps via a forward pass that converts any
@@ -438,18 +502,34 @@ out-of-sequence (decreasing or equal) timestamp pair into a positive
 solvetime of 1 second. Sustained adversarial out-of-sequence
 timestamps are bounded by the MTP check (§5.5), which rejects new
 blocks whose timestamp is below the median of the previous 11. The
-forward pass is:
+forward pass tracks a local `prev` (the normalized previous
+timestamp) and never mutates the input array:
 
 ```text
-prev = timestamps[0] - T
+prev = timestamps[0] - T            // synthetic anchor, matches canonical line 112
 for i in 1..=N:
-    if timestamps[i] > prev:
-        solvetime[i] = timestamps[i] - prev
-    else:
-        solvetime[i] = 1
-        timestamps[i] = prev + 1   // implicit: prev gets bumped
-    prev = max(timestamps[i], prev + 1)
+    this_ts = max(timestamps[i], prev + 1)   // out-of-sequence safety
+    solvetime[i] = this_ts - prev            // always positive, >= 1
+    prev = this_ts
 ```
+
+Per-iteration equivalence to canonical zawy12 Issue #3, LWMA-1
+reference, lines 113–118:
+
+- `if timestamps[i] > prev`: `this_ts == timestamps[i]`,
+  `solvetime[i] == timestamps[i] - prev` (canonical lines 115, 117).
+- `if timestamps[i] <= prev`: `this_ts == prev + 1`,
+  `solvetime[i] == 1` (canonical lines 116, 117).
+
+The `-T` offset on the initial `prev` is the canonical choice (line
+112: `previous_timestamp = timestamps[0] - T`) and is load-bearing:
+removing it would change every solvetime[1] by +T, shifting `L`'s
+expected stable-state value and biasing `next_D` by a constant
+factor. The offset is preserved here exactly.
+
+The Rust implementation takes `timestamps: &[u64]` and never writes
+into the caller's storage; `solvetime[i]` is local to the
+computation and `prev` is a stack-local `u64`.
 
 **Step 3 — Solvetime clamp.** Each solvetime is clamped to
 `min(6*T, solvetime)`. Solvetimes above `6*T = 720 s` are treated as
@@ -458,10 +538,28 @@ timestamp manipulation that tries to drive difficulty down via one
 large lying timestamp.
 
 **Step 4 — Linear-weighted sum.** Compute the weighted-sum L as
-`L = sum over i in 1..=N of (i * clamped_solvetime[i])`. The weight
-`i` grows linearly with recency. The block at position `i = N`
-(most recent) contributes weight `N`; the block at `i = 1` (oldest
-in the window) contributes weight 1.
+`L = sum over i in 1..=N of (i * clamped_solvetime[i])`. Indexing
+convention, locked:
+
+- `solvetime[i]` is the normalized interval between the previous
+  iteration's `prev` and `timestamps[i]` (steps 2–3), for `i` in
+  `1..=N`.
+- `solvetime[1]` is the **oldest** interval in the window —
+  specifically, the gap between the synthetic anchor
+  (`timestamps[0] - T`) and the normalized `timestamps[1]`. Weight
+  `1`.
+- `solvetime[N]` is the **most recent** interval — the gap between
+  the normalized `timestamps[N-1]` and the normalized `timestamps[N]`
+  (the chain tip). Weight `N`.
+- There is no `solvetime[0]`. The window holds `N + 1` timestamps
+  and produces `N` solvetimes.
+
+This matches canonical zawy12 Issue #3, LWMA-1 reference, line 117:
+`L += i*std::min(6*T, this_timestamp - previous_timestamp);` where
+`i` is the loop iteration in `1..=N`. The Phase 1 implementer must
+use this exact indexing — a 0-indexed weighting variant (weights
+`0..N-1`) would change `L` by a factor of `(N-1)/N` relative to
+canonical and break the bias correction in step 7.
 
 **Step 5 — Minimum-L floor.** If `L < N*N*T/20`, set
 `L = N*N*T/20`. This prevents extreme upward difficulty swings on a
@@ -471,17 +569,100 @@ run of unusually fast blocks.
 `avg_D = (cumulative_difficulties[N] - cumulative_difficulties[0]) / N`.
 
 **Step 7 — Apply formula with bias factor.** Compute
-`next_D = (avg_D * N * (N+1) * T * 99) / (200 * L)`. The `99/200`
-factor is a bias correction (effective `0.495`) that compensates
-for the asymmetric weighting of recent versus old blocks in the L
-sum. The 2026 bams-repo/go-chain audit corrected this from a
-`200/99` direction error in older LWMA implementations.
+
+```text
+next_D = (avg_D * N * (N+1) * T * 99) / (200 * L)
+```
+
+**Derivation** (from canonical zawy12 Issue #3, LWMA-2 reference's
+commented derivation, lines 313–318, which applies to the LWMA-1
+formula above with the LWMA-1 constant of `99` rather than LWMA-2's
+`97`):
+
+- `L / (N*(N+1)/2)` is the linear-weighted-moving-average of the
+  clamped solvetimes (the denominator `N*(N+1)/2` is the sum of
+  weights `1 + 2 + ... + N`). Call this `LWMA(STs)`.
+- Therefore `(N*(N+1)) / (2*L) == 1 / LWMA(STs)`.
+- `avg_D / LWMA(STs) ≈ HR` (the estimated hashrate over the window),
+  and `T / LWMA(STs)` is the ratio that adjusts `avg_D` so that the
+  target solvetime becomes `T` on average.
+- The unadjusted target is `avg_D * T / LWMA(STs) =
+  avg_D * T * N * (N+1) / (2 * L)`.
+- The multiplicative correction `99 / 100` compensates for a ~1 %
+  upward bias in `next_D` that arises from three sources documented
+  in canonical: (a) the `6*T` solvetime clamp truncates the upper
+  tail of the solvetime distribution, (b) low-`N` Poisson skew
+  approximates a gamma distribution that pulls the empirical mean
+  above `T`, and (c) downstream LWMA-2+ variants' jump rules add
+  further upward bias which the canonical author chose to keep the
+  correction conservative against. LWMA-1 has neither (b)-amplifiers
+  nor jump rules, so the `99/100` correction is a slight
+  over-correction for LWMA-1 in isolation; canonical's
+  recommendation is to keep `99` regardless, on the grounds that
+  variance reduction is cheaper than perfect mean centering.
+- Combining: `next_D = avg_D * T * N * (N+1) / (2 * L) * 99 / 100
+  = (avg_D * N * (N+1) * T * 99) / (200 * L)`. The denominator
+  `200` is `2 * 100`, not a separate constant — `2` from the
+  weighted-sum denominator and `100` from the bias correction.
+
+The direction matters: a `200/99` formula (denominator and
+numerator swapped) would invert the bias correction and produce
+`~1%` *higher* difficulty than the correct value, compounding to a
+chronic block-overshoot in real chains. The downstream
+[bams-repo/go-chain v0.10.3 audit](https://github.com/bams-repo/go-chain/commit/ae0eeede48f2602297f75df833689549df405ef7)
+documents one consumer that had the direction inverted and fixed
+it; canonical zawy12 has had the correct `99/200` direction since
+2017–2018. Cite preserved here as an example of how easy this
+inversion is to introduce — the Phase 1 implementer must transcribe
+the formula from canonical line 127 verbatim, not from secondary
+sources.
 
 **Step 8 — Overflow guard.** If `avg_D > 2_000_000 * N * N * T`,
 re-associate the multiplication to avoid `u128` overflow:
-`next_D = (avg_D / (200 * L)) * (N * (N+1) * T * 99)`. The
-re-association rounds slightly differently but stays within one
-unit of the unguarded computation.
+
+```text
+next_D = (avg_D / (200 * L)) * (N * (N+1) * T * 99)
+```
+
+Matches canonical zawy12 Issue #3, LWMA-1 reference, lines 124–127.
+
+**Determinism of the branch trigger.** The condition `avg_D >
+2_000_000 * N * N * T` is pure integer comparison against
+deterministic inputs: `avg_D` is computed from on-chain
+cumulative-difficulty values (consensus-deterministic by
+construction), `N` and `T` are compile-time `u128` constants, and
+the right-hand side `2_000_000 * N * N * T` is a single `u128`
+multiplication chain (`2_000_000 * 90 * 90 * 120 = 1_944_000_000`,
+well below `u128::MAX`). Every node evaluating the condition with
+identical inputs produces an identical boolean. The branch is
+consensus-safe.
+
+**Rounding difference at the boundary.** The two formulas produce
+**different** integer results when the branch trigger fires,
+because integer division is not associative:
+`(avg_D / (200 * L)) * K != (avg_D * K) / (200 * L)` in general,
+where `K = N * (N+1) * T * 99`. The maximum divergence is bounded
+by `K - 1` units in the `next_D` output (one full divide-rounding
+step). For Shekyl parameters this is at most `90 * 91 * 120 * 99 =
+97_297_200` units, which is small relative to any `avg_D` that
+triggers the branch (`avg_D > 1.944e9`), but **not** within "one
+unit" as the original draft claimed.
+
+The consensus property is not that the two formulas produce
+identical outputs — they don't — but that **every node takes the
+same branch on the same inputs and produces the same output within
+that branch**. The branch trigger and both formulas are
+bit-deterministic per the determinism argument above.
+
+**§8.1 test vector requirement.** The §8.1 unit-test corpus must
+include at least one vector with `avg_D` straddling the boundary —
+specifically: one input set with `avg_D` just below the trigger
+(unguarded branch) and one input set with `avg_D` just above the
+trigger (guarded branch), both cross-checked against the canonical
+reference C++ output via §8.2. This proves both branches' rounding
+behavior matches canonical and that the branch trigger fires at the
+correct threshold. Phase 1 cannot merge if this boundary test is
+absent or fails.
 
 ### 5.4 Properties
 
@@ -533,21 +714,35 @@ output values reach the caller through out-parameters.
 // Compute next difficulty per LWMA-1.
 //
 // Inputs:
-//   timestamps          - pointer to N+1 u64 timestamps in chain order,
-//                         oldest first
-//   cum_difficulties    - pointer to N+1 u128 cumulative-difficulty
+//   timestamps          - pointer to count u64 timestamps in chain order,
+//                         oldest first; index 0 is the oldest, index
+//                         count-1 is the chain tip
+//   cum_difficulties    - pointer to count u128 cumulative-difficulty
 //                         values matching timestamps in order
-//   count               - number of entries in each array; must equal
-//                         N+1 == 91 once chain has matured
-//   chain_height        - current chain height (used for genesis
-//                         short-circuit per §5.3 step 1)
+//   count               - number of entries in each array.
+//                         - If chain_height >= N: count MUST equal N+1
+//                           (== 91 for Shekyl V3.0); ERR_INVALID_COUNT
+//                           otherwise. This is the consensus contract
+//                           per §5.3 step 1's boundary.
+//                         - If chain_height <  N: count is ignored
+//                           (the genesis short-circuit returns
+//                           GENESIS_DIFFICULTY without inspecting the
+//                           vectors). Caller may pass any value
+//                           including 0.
+//   chain_height        - height of the chain tip (the most recent
+//                         block already on chain). Used for the
+//                         genesis short-circuit per §5.3 step 1; the
+//                         transition from short-circuit to algorithm
+//                         fires at chain_height == N.
 //   out_next_difficulty - pointer to u128 receiving the next-difficulty
 //                         output on success
 //
 // Returns:
 //   0  - OK; out_next_difficulty written
-//  -1  - ERR_NULL_PTR
-//  -2  - ERR_INVALID_COUNT (count != N+1 once chain_height >= N)
+//  -1  - ERR_NULL_PTR (any required pointer is null, including
+//                      out_next_difficulty; timestamps and cum_difficulties
+//                      may be null only when chain_height < N)
+//  -2  - ERR_INVALID_COUNT (chain_height >= N AND count != N+1)
 //  -3  - ERR_OVERFLOW (consensus invariant violation; out_next_difficulty
 //                      not written; caller must treat as protocol error)
 //  -4  - ERR_INTERNAL (caught panic at FFI boundary; out_next_difficulty
@@ -620,7 +815,7 @@ sharing the grep-scaffolding and failure-mode plumbing.
 
 Three test-vector tiers, each gating a specific PR:
 
-### 8.1 Unit tests (PR B gate)
+### 8.1 Unit tests (Phase 1 gate)
 
 Author-derived synthetic vectors covering the algorithm's structural
 properties:
@@ -641,14 +836,25 @@ properties:
   timestamps[i]`) produces a valid `next_D` rather than panicking
   or returning zero.
 - Bias factor direction (the `99/200` correction biases output
-  toward stability, not toward variance).
-- Per-canonical-reference 2026 bug avoidance: no per-block output
-  clamp engaged anywhere; the bams-repo/go-chain audit findings
-  cited at §2.4 do not regress.
+  toward stability, not toward variance). Specifically: a stable-
+  hashrate input with `solvetime[i] == T` produces `next_D` within
+  `±2%` of `avg_D`, not `±100%`; this catches the `200/99`
+  direction-inversion bug class flagged in §5.3 step 7.
+- **Overflow-guard boundary** (per §5.3 step 8). Two paired vectors:
+  one with `avg_D` immediately below `2_000_000 * N * N * T =
+  1_944_000_000` (unguarded branch); one with `avg_D` immediately
+  above the threshold (guarded branch). Both cross-checked against
+  the canonical reference output via §8.2. **Required**: Phase 1
+  cannot merge without this pair.
+- Anti-pattern regression: no per-block output clamp engaged
+  anywhere; the divergence catalogue in §2.4 names the four
+  anti-patterns (per-block clamp, caller-supplied solvetimes,
+  missing minimum-L floor, missing bias factor) and the §8.1
+  vectors must not exhibit any of them under any input.
 
 All vectors derived analytically against the §5.3 specification.
 
-### 8.2 Canonical-reference cross-check (PR B gate)
+### 8.2 Canonical-reference cross-check (Phase 2 gate)
 
 Generated by running the zawy12 reference `LWMA1_()` C++ function
 on each of the §8.1 input cases and asserting byte-identical
@@ -658,17 +864,18 @@ small `tests/lwma1_cross_check.cpp` harness lives in
 `tests/difficulty/` and CI runs it as part of the workspace's C++
 test build.
 
-The cross-check is **gating for PR B** (the crate scaffold + tests
-PR). If the Rust output diverges from the C++ reference on any
-§8.1 vector, the Rust implementation is wrong; the spec wins by
-construction, but the cross-check catches the case where the
-Rust implementation reads the spec differently from the C++
-reference.
+The cross-check is **gating for Phase 2** (the cross-check harness
+PR; the implementation crate lands in Phase 1). If the Rust output
+diverges from the C++ reference on any §8.1 vector, the Rust
+implementation is wrong (the spec wins by construction per §2.3,
+but the cross-check catches the case where the Rust implementation
+reads the spec differently from the C++ reference). Remediation is
+to fix the Phase 1 crate, not the Phase 2 harness.
 
 ### 8.3 Simulated-history corpus (release-gate test, not per-PR)
 
 Sourced from zawy12's simulator output on a representative
-historical-hashrate trace. The exact trace is selected during PR B
+historical-hashrate trace. The exact trace is selected during Phase 1
 review from the simulator's bundled inputs (Masari historical data,
 Bittube historical data, and the synthetic
 hashrate-attack-scenario inputs the canonical repository ships).
@@ -797,20 +1004,28 @@ the migration.
 ## 12. Reviewer discipline
 
 Per the pattern established in `RANDOMX_V2_RUST.md` §23, the
-"reviewer discipline" framing applies asymmetrically here:
+"reviewer discipline" framing applies asymmetrically here.
+
+**Status of `24-reviewer-discipline.mdc`.** The rule **does not yet
+exist** at `.cursor/rules/`. Its promotion is a V3.1 follow-up
+tracked by PR #45's design docs (`RANDOMX_V2_RUST.md` §17). This
+PR is **not** the one that lands that rule; it follows the shape
+the rule will land with. When the rule does land, no edit to this
+section is required — the discipline this section describes is
+already aligned with the eventual rule text.
+
+The per-phase discipline:
 
 - **Phase 0 (this PR).** Design doc + plan. Solo-architect review
-  under the aspirational `24-reviewer-discipline.mdc` rule (which
-  this PR's FOLLOWUPS entry still tracks as planned). The DAA is a
-  consensus-critical surface but operates on public consensus
+  in the shape `24-reviewer-discipline.mdc` will land with. The DAA
+  is a consensus-critical surface but operates on public consensus
   inputs only; reviewer attention concentrates on §4 parameter
   selection, §5 algorithm correctness against canonical reference,
   and §10 reversion criteria.
-- **PR B (implementation).** External reviewer not required; the
-  zawy12 canonical reference is the audit-of-record. Self-review
-  is the rule, with `24-reviewer-discipline.mdc` as the
-  aspirational target.
-- **PR C / D (FFI + C++ cutover).** Self-review; the changes are
+- **Phase 1 (implementation).** External reviewer not required;
+  the zawy12 canonical reference is the audit-of-record. Self-
+  review against the spec is the rule.
+- **Phases 3–4 (FFI + C++ cutover).** Self-review; the changes are
   mechanical against the design doc and the FFI signature in §6.
 - **Release-time gate.** No external algorithm-review gate analogous
   to RandomX v2's release-time Monero-audit dependency. LWMA-1 is
@@ -845,11 +1060,26 @@ Per `60-no-monero-legacy.mdc`:
 
 ## 15. MSRV
 
-`shekyl-difficulty` inherits the workspace MSRV from
-`rust/Cargo.toml` (currently the same as `shekyl-crypto-pq` per
-the cross-crate consistency rule in `25-rust-architecture.mdc`).
-The crate uses no nightly features, no `unsafe`, and no
-crate-level `#![allow(...)]`.
+**This PR does not set or change the workspace MSRV.** The
+`shekyl-difficulty` crate inherits whatever workspace MSRV is in
+effect at Phase 1 PR time, per the cross-crate consistency rule in
+`25-rust-architecture.mdc`. The crate uses no nightly features, no
+`unsafe`, and no crate-level `#![allow(...)]`, so any workspace MSRV
+that supports the `edition = "2024"` feature set is acceptable.
+
+**If a workspace MSRV is not pinned at Phase 1 time** (e.g., it is
+still under discussion in a sibling track), the pin is a
+**separate workspace-level PR** per `06-branching.mdc` rule 1 (PR
+scope is bounded), not part of the `shekyl-difficulty` scaffold.
+Phase 1 of `DAA_LWMA1_PLAN.md` does not block on MSRV pinning;
+the crate adopts whatever pin is in effect at merge time and Phase
+1's review explicitly verifies the inherited MSRV is compatible
+with the crate's feature usage.
+
+This boundary is the same one applied by the RandomX v2 plan
+(`RANDOMX_V2_RUST.md` §21): MSRV decisions are workspace-level
+and land in their own dedicated PR, not folded into a per-crate
+landing.
 
 ## 16. Guix reproducible-build impact
 

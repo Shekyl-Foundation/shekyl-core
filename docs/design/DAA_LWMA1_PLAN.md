@@ -56,13 +56,26 @@ LWMA-1 lands first because:
 
 ```mermaid
 flowchart LR
-  P0[Phase 0: Two design docs<br/>DAA_LWMA1.md<br/>DAA_LWMA1_PLAN.md] --> P1
+  P0[Phase 0: Two design docs<br/>DAA_LWMA1.md<br/>DAA_LWMA1_PLAN.md] --> R0{Phase 0 review<br/>4-6 rounds<br/>landed on dev?}
+  R0 -- no --> P0
+  R0 -- yes --> P1
   P1[Phase 1: shekyl-difficulty crate<br/>scaffold + spec-vector tests] --> P2
-  P2[Phase 2: Canonical-reference<br/>cross-check harness<br/>+ pinned spec revision commit] --> P3
+  P2[Phase 2: Canonical-reference<br/>cross-check harness<br/>+ pinned spec revision commit] --> R1{spec-vector AND<br/>cross-check<br/>both pass?}
+  R1 -- no --> P1
+  R1 -- yes --> P3
   P3[Phase 3: shekyl_difficulty_lwma1_next<br/>FFI surface + header] --> P4
   P4[Phase 4: C++ cutover<br/>delete difficulty.{h,cpp}<br/>delete DIFFICULTY_* constants<br/>FTL/MTP migration<br/>rewire 3 blockchain.cpp call sites] --> P5
   P5[Phase 5: Docs + CHANGELOG]
 ```
+
+The two decision diamonds mirror the `RANDOMX_V2_PLAN.md` shape:
+`R0` enforces the Phase 0 review-rounds gate before any code lands;
+`R1` enforces the spec-correctness gate before the FFI surface and
+the C++ cutover go in. A failure at `R1` loops back to Phase 1
+(the implementation is wrong) rather than Phase 2 (the harness
+itself is unlikely to be the source of divergence — the spec is the
+source of truth per §2.3 of the design doc, and the harness is its
+verbatim transcription).
 
 There is no parallelism within the LWMA-1 track — each phase
 sequentially depends on the previous. The whole sequence is small
@@ -109,7 +122,8 @@ materially weakened by the wrong FTL.
 
 Per `DAA_LWMA1.md` §2.4, the pre-design Rust sketch that existed at
 `rust/shekyl-difficulty/src/lwma1.rs` was **deleted** during Phase 0
-(2026-05-17). The divergence catalogue is preserved in
+in this PR's commit `91c6dc44c` per `15-deletion-and-debt.mdc`'s
+default-delete rule. The divergence catalogue is preserved in
 `DAA_LWMA1.md` §2.4 as the design record of why each non-canonical
 shape is rejected, not as a description of any committed source.
 Phase 1 starts from an empty crate directory and writes the
@@ -147,8 +161,11 @@ Two design documents:
     reopening.
 11. **Wallet, RPC, node touchpoints.** None to wallet; rewire RPC
     indirectly via blockchain interface.
-12. **Reviewer discipline.** Solo-architect under aspirational
-    `24-reviewer-discipline.mdc`; no external algorithm-review gate.
+12. **Reviewer discipline.** Solo-architect review in the shape
+    `24-reviewer-discipline.mdc` will land with — the rule does not
+    yet exist at `.cursor/rules/`; its promotion is a V3.1 follow-up
+    tracked by PR #45 (per `RANDOMX_V2_RUST.md` §17). No external
+    algorithm-review gate. See `DAA_LWMA1.md` §12.
 13. **Explicit non-goals.** No compatibility, no env-var overrides,
     no jump rules, no per-block output clamps.
 14. **License and attribution.** BSD-3 Shekyl Foundation for Rust;
@@ -186,7 +203,17 @@ license = "BSD-3-Clause"
 description = "Shekyl LWMA-1 difficulty-adjustment algorithm"
 
 [dependencies]
-# No deps; pure Rust, std-only.
+# No runtime dependencies. The algorithm body is pure Rust, std-only,
+# and operates on u128 arithmetic with no external math/util crates.
+#
+# Phase 1 reviewer note: workspace-level configuration is inherited
+# normally and is NOT a violation of the "no deps" property:
+#   - [lints] section is inherited from rust/Cargo.toml workspace
+#   - [profile.*] tuning is inherited from the workspace
+#   - thiserror may be added if the Lwma1Error taxonomy benefits from
+#     derive-based error types; thiserror is already a workspace dep
+#     used by shekyl-crypto-pq and shekyl-fcmp, so no new supply-chain
+#     surface is added. The decision is deferred to Phase 1 review.
 ```
 
 **Crate library.** Create `rust/shekyl-difficulty/src/lib.rs`:
@@ -241,11 +268,21 @@ fully reversible without touching any C++ code.
 Three work items: commit the pinned spec revision, build the
 cross-check harness, integrate the harness into CI.
 
-**Commit pinned spec revision.** Save the rendered Markdown of
-[`zawy12/difficulty-algorithms#3`](https://github.com/zawy12/difficulty-algorithms/issues/3)
-at PR-A merge time to `docs/design/refs/zawy12_issue_3_lwma1.md`.
-Include a SHA-256 hash of the file in
-[`DAA_LWMA1.md`](./DAA_LWMA1.md) §3's pin record.
+**Commit pinned spec revision.** Per
+[`DAA_LWMA1.md`](./DAA_LWMA1.md) §3, capture the **raw issue body**
+of [`zawy12/difficulty-algorithms#3`](https://github.com/zawy12/difficulty-algorithms/issues/3)
+via the GitHub REST API at Phase 2 PR time:
+
+```text
+curl -sH "Accept: application/vnd.github.v3+json" \
+  https://api.github.com/repos/zawy12/difficulty-algorithms/issues/3 \
+  | jq -r .body > docs/design/refs/zawy12_issue_3_lwma1.md
+```
+
+Commit the file. Record its SHA-256 in `DAA_LWMA1.md` §3's pin
+record. Pinning the raw `.body` (not GitHub's rendered HTML)
+immunizes the audit trail against rendering-side changes that don't
+affect spec meaning.
 
 **Cross-check harness.** Add
 `tests/difficulty/lwma1_cross_check.cpp` that builds the canonical
@@ -420,8 +457,10 @@ Update:
 - [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) — close the FOLLOWUPS
   entry that triggered this work (the Cluster 2.5 / Mission Audit
   entry that named LWMA-1 as the target); cross-reference the
-  `24-reviewer-discipline.mdc` and `40-ffi-discipline.mdc` rule-
-  promotion entries if they have landed by then.
+  `24-reviewer-discipline.mdc` rule-promotion entry only **if** that
+  rule has landed at `.cursor/rules/` by Phase 5 time. If it has
+  not, no cross-reference is added and §12 of `DAA_LWMA1.md`
+  remains the canonical reviewer-discipline description.
 
 ## Risk and reversibility summary
 
@@ -431,7 +470,7 @@ Update:
 | Wrong N, T, FTL, or MTP value | Phase 0 review ratification; values are typed `const` | Pre-genesis: change const + re-test. Post-genesis: hard fork. |
 | LWMA-1 unsuitable for actual Shekyl hashrate profile | §10 reversion clause names criteria; §8.3 corpus stress-tests Shekyl-specific scenarios | Pre-genesis: new design doc per §10. Post-genesis: hard fork. |
 | FTL/MTP migration leaves chain in non-canonical intermediate state | Phase 4 migrates all three together; never split across PRs | Phase 4 is atomic; partial-revert is not a supported state |
-| Pre-design sketch in `rust/shekyl-difficulty/src/lwma1.rs` accidentally becomes the implementation | Sketch deleted in Phase 0 (2026-05-17); §2.4 divergence catalogue retained as design record only; Phase 1 starts from empty crate directory | N/A — sketch no longer exists on disk |
+| Pre-design sketch in `rust/shekyl-difficulty/src/lwma1.rs` accidentally becomes the implementation | Sketch deleted in this PR (commit `91c6dc44c`) per `15-deletion-and-debt.mdc`; §2.4 divergence catalogue retained as design record only; Phase 1 starts from empty crate directory | N/A — sketch no longer exists on disk |
 
 ## Open questions for Phase 0 review
 
