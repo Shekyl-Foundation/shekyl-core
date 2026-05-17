@@ -4,6 +4,34 @@
 
 ### Added
 
+- **`07-consensus-atomic-cutovers.mdc` — named exception to
+  branching policy for consensus-atomic cutovers**
+  (`feat/consensus-atomic-cutovers-rule`, 2026-05-17). New rule
+  ratifying the "consensus-atomic cutover" exception class
+  drafted during PR #49's Round 5 review
+  (`DAA_LWMA1_PLAN.md` Phase 4). `06-branching.mdc`'s
+  5-working-day / 10-commit splitting guidance defends against
+  unreviewable PRs accumulating; this rule names the small class
+  of PRs that genuinely cannot split because every intermediate
+  state would be a non-canonical consensus configuration. Four
+  objectively-testable criteria, all required: (1) consensus-rule
+  boundary (byte-identical reproduction across nodes); (2)
+  indivisible under flag decomposition (no introduce-behind-flag
+  → flip → delete sequence produces consensus-safe intermediates
+  at every commit; this is the generalization-friendly definition
+  of indivisibility, distinct from "would be inconvenient to
+  split"); (3) surface enumerated in advance with grep evidence;
+  (4) disposition documented in PR with reviewer-map and rollback
+  procedure. A "what this is not" section explicitly disqualifies
+  convenience, velocity, reviewer bandwidth, and retroactive
+  citation as justifications. The rule records LWMA-1 Phase 4 as
+  its first approved instance and RandomX v2 Phase 3 as a case
+  **evaluated and not approved** (flag-decomposable per the
+  3a/3b/3c plan); future invocations append to the
+  history-of-application section as part of the PR itself. Per
+  `21-reversion-clause-discipline.mdc`'s named-criteria
+  principle, the exception is auditable mechanically against the
+  four criteria, not against LWMA-1-specific precedent erosion.
 - **RandomX v2 Rust port — Phase 0 design docs**
   (`feat/randomx-v2-phase0-design`, 2026-05-16). Adds three Phase 0
   design documents under `docs/design/`:

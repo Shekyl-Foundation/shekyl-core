@@ -1,0 +1,222 @@
+---
+description: Named exception to 06-branching.mdc for PRs whose work touches a consensus-rule boundary that no flag-flippable intermediate state can satisfy. Four objectively-testable criteria. First instance is LWMA-1 Phase 4.
+alwaysApply: true
+---
+
+# Consensus-atomic cutovers
+
+`06-branching.mdc`'s 5-working-day / 10-commit guidance is a defense
+against unreviewable PRs accumulating, and the default is that every
+substantive change splits to land that way. A small number of PRs
+genuinely cannot — specifically, PRs whose work would leave the
+chain in a non-canonical state at any intermediate split point,
+because validators reach different conclusions about the same
+block depending on which subset of the cutover they have applied.
+
+This rule names that exception class so the carve-out is auditable
+mechanically against named criteria, not against precedent erosion
+("we did it for X, can we do it for Y?"). Per
+`21-reversion-clause-discipline.mdc`'s named-criteria principle, the
+test is "does this PR meet criteria 1–4?", not "is this case
+analogous to a previous case?"
+
+## Scope
+
+This rule defines when a PR may exceed `06-branching.mdc`'s size
+and atomicity guidance. It does not relax any other discipline:
+the standard reviewer rigor, commit-message discipline
+(`90-commits.mdc`), test-gate requirements, and design-doc-first
+ordering (`05-system-thinking.mdc`) all still apply. The
+exception modifies only the splitting requirement, and only when
+all four criteria below are met.
+
+## When this exception applies
+
+All four criteria must be met. Each is independently testable;
+"arguable" does not satisfy a criterion.
+
+1. **Consensus-rule boundary.** The PR changes behavior that all
+   correctly-implementing nodes must reproduce byte-identically on
+   the same input. Internal refactors that preserve consensus
+   behavior do not qualify. Logging changes, RPC formatting
+   adjustments, internal cache restructurings, function-name
+   renames, and file reorganizations of consensus code that
+   preserve the rule do **not** qualify; only changes to the
+   rule itself (values, computation, validation logic) do.
+
+2. **Indivisible under flag decomposition.** No PR sequence
+   exists such that:
+
+   - PR A introduces the new path behind a flag, default off
+     (consensus-safe: all nodes still use the old path);
+   - PR B flips the flag default to on after some review window
+     (consensus-safe iff all nodes agree on flipping the flag at
+     the same height/time, which is itself the consensus event);
+   - PR C deletes the old path after all nodes have rolled to
+     the new default (consensus-safe: only the new path
+     remains).
+
+   If any such decomposition exists and would produce
+   consensus-safe intermediates at every commit, the PR splits
+   and this exception does not apply. Criterion 2 is met only
+   when no flag-flippable decomposition produces consensus-safe
+   intermediates — typically because the change is to a
+   consensus-rule constant whose value must agree across all
+   nodes regardless of which code path they call (e.g., a
+   timestamp-validation window, a future-time-limit, a
+   difficulty-target denominator). For these, a "flag" does not
+   exist in any meaningful sense; both nodes have to agree on
+   the same value.
+
+3. **Surface enumerated in advance, with evidence.** The PR
+   description contains a grep-result-derived enumeration of
+   every consensus-affecting symbol, file, and constant being
+   changed. The enumeration is the audit evidence that
+   completeness is checkable; "I'll find them as I touch each
+   file" does not satisfy this criterion. The grep result is
+   pasted into the PR description (or linked to a design-doc
+   section that contains it) so the reviewer can verify
+   completeness against the diff mechanically.
+
+4. **Disposition documented in PR, with reversibility plan.**
+   The PR description:
+
+   - cites this rule by name (`07-consensus-atomic-cutovers.mdc`);
+   - lists which of criteria 1–4 are met, one sentence per
+     criterion explaining the justification (criterion 4's
+     entry is the section itself);
+   - includes a **reviewer-map section** distinguishing
+     consensus-affecting changes (files X, Y, Z; lines A–B in
+     each) from mechanical changes (call-site rewires, no
+     logic change) from deletions (files removed wholesale).
+     The map lets a reviewer prioritize attention without
+     spelunking the diff;
+   - includes a **rollback procedure** naming the specific
+     files and changes that constitute reversion if consensus
+     breaks post-merge. "We'd revert the commit" is not a
+     rollback procedure — it's the absence of one. The
+     procedure is written in advance so a panicked rollback
+     isn't reconstructing it in real time.
+
+## What this exception is not
+
+The criteria above are the test. The justifications below are
+**explicitly not** criteria; a PR citing this rule must not be
+relying on any of them:
+
+- **Convenience.** "This is easier as one PR" is not a
+  criterion. Easier-than-splitting is the default expectation
+  that `06-branching.mdc` rejects.
+- **Velocity.** "Splitting would slow down the migration" is
+  not a criterion. Migrations are slow by design; the discipline
+  is what makes them bisectable later.
+- **Reviewer bandwidth.** "We'd waste reviewer time on three
+  PRs" is not a criterion. The exception trades reviewability
+  for atomicity; criterion 4's reviewer-map is the
+  compensating discipline, not "skip the reviewer's bandwidth
+  cost."
+- **Retroactive citation.** A PR that did not cite this rule
+  in its initial description **cannot** invoke the exception
+  later. The disposition is named at PR open; mid-review
+  invocation is reactive scope expansion, which the rule does
+  not authorize.
+
+## Compensating discipline when the exception is invoked
+
+The exception is reviewability-cost in exchange for
+atomicity-correctness. The discipline that makes the trade
+auditable rather than a free pass:
+
+- Criterion 3's grep-anchored enumeration is the
+  scope-bounding artifact. A PR that grows beyond the
+  enumerated surface during review **loses the exception**
+  and must be re-opened against the standard size/atomicity
+  guidance — i.e., scope creep within an exception-invoking
+  PR is grounds for rejecting the PR, not for re-arguing
+  the exception.
+- Criterion 4's reviewer-map is the attention-routing
+  artifact. The map's accuracy is itself a review item: a
+  reviewer who finds substantive consensus changes outside
+  the map's "consensus-affecting" subsection has identified
+  a map-failure, which is grounds for rejecting the PR.
+- The rollback procedure is the post-merge safety net. If
+  consensus breaks post-merge despite the named criteria,
+  the rollback procedure is the runbook. Its existence at
+  PR-open is the difference between a panicked revert and
+  a procedural revert.
+
+## History of application
+
+The exception class is auditable by enumeration of past
+invocations. Each invocation cites this rule, demonstrates
+the four criteria are met, and links here. Approved
+invocations:
+
+- **LWMA-1 Phase 4** (`docs/design/DAA_LWMA1_PLAN.md` Phase 4).
+  Difficulty-algorithm cutover from CryptoNote
+  cut-windowed-average to LWMA-1, paired with FTL/MTP value
+  changes. The FTL (`7200 → 540`) and MTP (`60 → 11`) value
+  changes are consensus-rule constants that no flag-flippable
+  decomposition can stage: both validating nodes have to
+  agree on the same FTL and MTP values at the same height,
+  and a flag-flippable intermediate where some nodes use
+  FTL=7200 + LWMA-1 while others use FTL=540 + LWMA-1 is not
+  a defensible consensus configuration. Criteria 1
+  (consensus-rule boundary: yes, FTL/MTP/algorithm), 2
+  (indivisible under flag decomposition: yes, paired
+  constants and algorithm), 3 (enumerated in advance:
+  `DAA_LWMA1.md` §§9.4–9.7), and 4 (disposition: the Phase
+  4 PR description cites this rule). Approved as the first
+  instance per Phase 0 review.
+
+Cases evaluated and **not** approved as instances:
+
+- **RandomX v2 Phase 3** (`docs/design/RANDOMX_V2_PLAN.md`).
+  The algorithm-body cutover is flag-decomposable per the
+  3a/3b/3c plan: Phase 3a adds the FFI swap behind a flag
+  default-on while the legacy path remains buildable for the
+  3a review window; Phase 3b removes the flag and finishes
+  the rewire; Phase 3c performs the implementation deletions.
+  Each sub-PR plausibly fits the 5-day / 10-commit ceiling.
+  Criterion 2 is not met (flag-flippable decomposition
+  exists); the exception does not apply, and RandomX v2
+  Phase 3 splits per `06-branching.mdc`.
+
+Future invocations append to this section as part of the PR
+itself, not after-the-fact.
+
+## Related rules
+
+- **`00-mission.mdc`** — security and quantum resilience are
+  preconditions. The exception exists because consensus
+  integrity is the security property that flag-decomposable
+  splits are designed to preserve in the normal case;
+  consensus-atomic cutovers are the cases where atomicity is
+  the property and splittability would undermine it.
+- **`05-system-thinking.mdc`** — specification first. The
+  surface enumerated in advance (criterion 3) is the
+  specification-side artifact that the exception requires; an
+  unspecified-in-advance PR is not eligible regardless of
+  consensus-atomicity.
+- **`06-branching.mdc`** — the rule this exception modifies.
+  All other branching guidance (no direct commits to `main`,
+  no long-lived feature branches, no `dev`-merges-into-feature
+  rebases, no force-pushes to `main`/`dev`) is unmodified.
+  The exception touches only the 5-day / 10-commit splitting
+  guidance.
+- **`15-deletion-and-debt.mdc`** — "while we're here" is the
+  enemy. The exception is not authorization for unrelated
+  changes to ride along with a consensus-atomic cutover;
+  scope is the criterion-3-enumerated surface, and "while
+  we're here" additions break the exception per criterion 3.
+- **`21-reversion-clause-discipline.mdc`** — named-criteria
+  principle. The exception's auditability comes from the
+  named criteria being mechanically testable, the same
+  shape that reversion clauses use for "reject now, reopen
+  if X." The exception is the same discipline applied to
+  "allow this exception only if conditions 1–4."
+- **`90-commits.mdc`** — scope per commit. The exception
+  relaxes the *PR* splitting guidance; within the PR,
+  commits still respect single-purpose scope per the commit
+  rule. A consensus-atomic cutover that is one PR is still
+  many commits, each with its own bounded scope.
