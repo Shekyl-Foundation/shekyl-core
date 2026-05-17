@@ -4,6 +4,37 @@
 
 ### Added
 
+- **LWMA-1 difficulty-adjustment migration — Phase 0 design docs**
+  (`feat/daa-lwma1-phase0-design`, 2026-05-17). Adds two Phase 0
+  design documents under `docs/design/`:
+  [`DAA_LWMA1.md`](./design/DAA_LWMA1.md) (the primary design) and
+  [`DAA_LWMA1_PLAN.md`](./design/DAA_LWMA1_PLAN.md) (the phased
+  execution plan, five phases sequential, no parallel tracks). The
+  primary design records the disposition to replace the inherited
+  CryptoNote cut-windowed-average DAA (`src/cryptonote_basic/difficulty.cpp`,
+  `DIFFICULTY_WINDOW=720`, `DIFFICULTY_LAG=15` with literal `// !!!`
+  warning, `DIFFICULTY_CUT=60`) with LWMA-1 from zawy12's canonical
+  reference at
+  [`zawy12/difficulty-algorithms#3`](https://github.com/zawy12/difficulty-algorithms/issues/3),
+  implemented as a Rust crate `shekyl-difficulty` per
+  `20-rust-vs-cpp-policy.mdc` rule 2 (cryptographic-contract surface).
+  Concrete parameter selection: N=90 (zawy12 canonical for T=120s),
+  T=120s (inherited), GENESIS_DIFFICULTY=100 (proposed), FTL=N\*T/20=540s
+  (zawy12-required, replaces inherited 7200s), MTP=11 (Cryptonote default
+  unchanged). The design pins genesis-time landing per
+  `16-architectural-inheritance.mdc` pre-genesis discount and
+  `60-no-monero-legacy.mdc` no-version-dispatch rule. Sibling track to
+  RandomX v2 but **independent**: math-orthogonal (DAA operates on
+  `(timestamps, cum_difficulties)`; PoW changes the hash function),
+  no wallet V3.2 gate applies, no Monero release-time audit dependency.
+  The on-disk `rust/shekyl-difficulty/src/lwma1.rs` sketch is explicitly
+  documented as **not** canonical (different formula, missing `6*T`
+  solvetime clamp, missing `N*N*T/20` minimum-L floor, missing `99/200`
+  bias factor) and is preserved illustratively only; Phase 1 writes the
+  implementation fresh against the design doc's §5.3 algorithm spec.
+  Reversion clauses per `21-reversion-clause-discipline.mdc` cover
+  LWMA-2/3/4 and ASERT reopening criteria.
+
 - **`07-consensus-atomic-cutovers.mdc` — named exception to
   branching policy for consensus-atomic cutovers**
   (`feat/consensus-atomic-cutovers-rule`, 2026-05-17). New rule
