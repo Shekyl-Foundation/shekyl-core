@@ -71,9 +71,8 @@ namespace std
 struct reference
 {
   uint64_t height;
-  uint64_t ring_size;
   uint64_t position;
-  reference(uint64_t h, uint64_t rs, uint64_t p): height(h), ring_size(rs), position(p) {}
+  reference(uint64_t h, uint64_t p): height(h), position(p) {}
 };
 
 int main(int argc, char* argv[])
@@ -213,7 +212,7 @@ int main(int argc, char* argv[])
       for (size_t n = 0; n < txin.key_offsets.size(); ++n)
       {
         output_data od(txin.amount, absolute[n], coinbase, height);
-        outputs[od].push_back(reference(height, txin.key_offsets.size(), n));
+        outputs[od].push_back(reference(height, n));
       }
     }
     return true;

@@ -1468,7 +1468,7 @@ namespace tools
       for (size_t n = 0; n < tx_constructions.size(); ++n)
       {
         const tools::wallet2::tx_construction_data &cd = tx_constructions[n];
-        res.desc.push_back({0, 0, std::numeric_limits<uint32_t>::max(), 0, {}, "", 0, "", 0, 0, ""});
+        res.desc.push_back({0, 0, 0, {}, "", 0, "", 0, 0, ""});
         wallet_rpc::COMMAND_RPC_DESCRIBE_TRANSFER::transfer_description &desc = res.desc.back();
         // Clear the recipients collection ready for this loop iteration
         tx_dests.clear();
@@ -1500,9 +1500,6 @@ namespace tools
         for (size_t s = 0; s < cd.sources.size(); ++s)
         {
           desc.amount_in += cd.sources[s].amount;
-          size_t ring_size = cd.sources[s].outputs.size();
-          if (ring_size < desc.ring_size)
-            desc.ring_size = ring_size;
         }
         for (size_t d = 0; d < cd.splitted_dsts.size(); ++d)
         {

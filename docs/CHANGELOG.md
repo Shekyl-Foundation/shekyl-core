@@ -26,6 +26,76 @@
   toggle) for any time between Phase 0 and genesis release if the
   algorithm-review gate fails per `RANDOMX_V2_RUST.md` §1.4.
 
+### Removed
+
+- **Vestigial CLSAG-era `ring_size` field (Phase 0 Mission Audit
+  Lens E finding E.2-A; Batch α PR 2)**
+  (`chore/audit-batch-alpha-pr2-ring-size-cleanup`, 2026-05-17).
+  Removes the surviving CLSAG-era "ring signature size"
+  parameter from the C++ wallet RPC surface and from two
+  blockchain-utility residue sites. Under FCMP++ with
+  full-chain membership proofs, there is no user-tunable
+  ring size; the anonymity set is the entire UTXO set.
+  This entry completes the cleanup begun by the prior
+  Rust-side `ring_size` removal recorded above ("Decoy and
+  `ring_size` removal from Rust RPC") by deleting the
+  remaining C++ residue that pre-genesis audit reviewers
+  would otherwise read as semantically live.
+
+  **Wallet RPC surface (`src/wallet/wallet_rpc_server_commands_defs.h`).**
+  Deleted `ring_size` field + serializer from four request
+  structs (`COMMAND_RPC_TRANSFER`, `COMMAND_RPC_TRANSFER_SPLIT`,
+  `COMMAND_RPC_SWEEP_ALL`, `COMMAND_RPC_SWEEP_SINGLE`; all
+  four were accepted-and-ignored via `KV_SERIALIZE_OPT(...,
+  (uint64_t)0)` with zero readers in the post-FCMP++
+  codepath) and from one response struct
+  (`transfer_description` inside `COMMAND_RPC_DESCRIBE_TRANSFER`;
+  `KV_SERIALIZE(ring_size)` mandatory in response, populated
+  by the now-meaningless min-across-sources walk below).
+
+  **Wallet RPC handler (`src/wallet/wallet_rpc_server.cpp`).**
+  Deleted the L1503–1505 `min(cd.sources[s].outputs.size())`
+  walk that populated `desc.ring_size`; under FCMP++,
+  `cd.sources[s].outputs.size()` does not represent a CLSAG
+  ring and the computed value has no consensus meaning.
+  Adjusted the `res.desc.push_back({...})` brace-init at
+  L1471 to drop the corresponding `std::numeric_limits<uint32_t>::max()`
+  third element.
+
+  **Blockchain logging (`src/cryptonote_core/blockchain.cpp`).**
+  Removed the `ring_size` local at L3192 and reformatted the
+  `MINFO` log line from `I/M/O` to `I/O` (inputs/outputs).
+  Under FCMP++ the "M" (mixin / ring-member count) field
+  pulled from `txin_to_key.key_offsets.size()` no longer
+  represents a CLSAG ring and was a vestigial logging
+  residue.
+
+  **Blockchain-usage analysis utility
+  (`src/blockchain_utilities/blockchain_usage.cpp`).**
+  Removed the `ring_size` field from the `reference` struct,
+  the corresponding constructor parameter (`uint64_t rs`),
+  and updated the sole call site at L216 from
+  `reference(height, txin.key_offsets.size(), n)` to
+  `reference(height, n)`. The field was write-only across
+  the utility's lifetime; the per-output frequency
+  accounting at the loop's tail (L222–236) counts
+  `out.second.size()` only.
+
+  **Scope and rationale.** Pre-genesis Rule-60 residue
+  cleanup per `.cursor/rules/60-no-monero-legacy.mdc`. The
+  standalone-PR disposition (rather than folding into the
+  V3.1+ Legacy `wallet_rpc_server` Rust cutover) was
+  selected because folding means vestigial `ring_size`
+  ships at genesis = concrete audit-confusion vector for
+  genesis-audit reviewers (5 RPC structs + desc calc +
+  log line + utility struct all look semantically live
+  without reading FCMP++ disambiguators). Bisectable,
+  mechanical, no architectural implications. Diff:
+  `4 files changed, 4 insertions(+), 19 deletions(-)`.
+  Not RingCT proper — `rct::*` types, output commitments,
+  Bulletproofs+ range proofs, and the wider RCT machinery
+  remain load-bearing under `RCTTypeFcmpPlusPlusPqc`.
+
 ### Changed
 
 - **RandomX v2 Phase 0 — Copilot PR #45 Round 2 findings addressed
