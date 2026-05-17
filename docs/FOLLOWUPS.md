@@ -1076,6 +1076,110 @@ sustainability is unaffected by the recalibration.
   rejected with reversion criteria) without re-deriving it at PR
   open time.
 
+- **`fips204` features-list discipline: drop `default-rng` and
+  unused parameter sets (sequencing trigger: Cluster 2 PR A —
+  `shekyl-crypto-pq` `Box<fips204::ml_dsa_65::PrivateKey>`
+  refactor; pre-genesis).** The current
+  [`rust/shekyl-crypto-pq/Cargo.toml`](../rust/shekyl-crypto-pq/Cargo.toml)
+  pin is `fips204 = "0.4.6"` without an explicit `features` list,
+  which implicitly enables `default-rng` plus the `ml-dsa-44` and
+  `ml-dsa-87` parameter sets that Shekyl does not consume. Phase 0
+  Mission Audit Lens D originally classified this under
+  D-fips204-discipline as Cargo.toml-only δ-trivial scope alongside
+  D-9 / D-10 / D-13 (drop `default-rng`; pin
+  `features = ["ml-dsa-65"]`).
+
+  **Pre-flight finding (Batch α PR 1 implementation).**
+  `rust/shekyl-crypto-pq/src/signature.rs:243` calls
+  `fips204::ml_dsa_65::try_keygen()` and `signature.rs:285` calls
+  `private_key.try_sign(message, &[])`. Both convenience
+  surfaces are gated by `#[cfg(feature = "default-rng")]` in
+  `fips204 v0.4.6` per inspection of
+  `~/.cargo/registry/src/.../fips204-0.4.6/src/lib.rs` and
+  `src/traits.rs`. Dropping `default-rng` from the features list
+  without first refactoring the consumption sites to the
+  explicit-RNG variants (`try_keygen_with_rng(rng)` and
+  `try_sign_with_rng(rng, msg, ctx)`) would break compilation.
+  The Cargo.toml-only framing is therefore wrong for this
+  finding; the real change is consumption-site + Cargo.toml.
+
+  **Revised disposition.** Defer to Cluster 2 PR A
+  (`shekyl-crypto-pq` ML-DSA-65 + `SpendSecret` / `ViewSecret`
+  workstream; D-19 directional disposition `Box<fips204::ml_dsa_65::PrivateKey>`).
+  Cluster 2 PR A already touches `signature.rs` for the D-19
+  refactor; folding the `default-rng` drop into the same PR
+  preserves bisect coherence (one PR covers all
+  `signature.rs` + `fips204` consumption-site discipline edits)
+  and keeps Batch α PR 1 strictly Cargo.toml + rules in scope.
+  Two-step within Cluster 2 PR A: (a) refactor `signature.rs`
+  keygen + sign sites to take an `&mut R: CryptoRngCore`
+  parameter, threading the workspace-canonical CSPRNG choice; (b)
+  set `fips204 = { version = "0.4.6", default-features = false,
+  features = ["ml-dsa-65"] }` and verify clean build.
+
+  **Meta-observation: rule 17 §4 verification gap.** Per
+  [`.cursor/rules/17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc) §4
+  ("Feature-flag plumbing"), the audit-time check that the
+  explicit features list does not include `default-rng` is
+  necessary but not sufficient; the load-bearing check is whether
+  consumption sites depend on `#[cfg(feature = "...")]`-gated
+  surfaces of the dependency. The Lens D audit performed the
+  enumerate-explicit-features check correctly and concluded
+  `default-rng` was unused; pre-flight implementation surfaced
+  the consumption-site dependency that the explicit-features
+  check missed. **Discipline refinement (pin):** rule 17 §4
+  verification should call out consumption-site cfg-gate trace
+  as an explicit check, not as an implicit consequence of
+  enumerating features. Future Lens D-style dependency-discipline
+  audits should `git grep -nE '(fips204|fips203|ml_dsa|ml_kem)' rust/`
+  (or the equivalent per-dep query) and trace each call to the
+  upstream `#[cfg(...)]` gate before classifying a feature as
+  drop-safe. Worth folding into the next 17-rule edit cycle as a
+  protocol clarification under §4.
+
+  **Batch α PR 1 scope reduction.** This deferral reduces Batch α
+  PR 1's scope from 6 items to 5: D-9 `bip39 features = ["zeroize"]`,
+  D-10 `argon2 features = ["zeroize"]`, D-13 `chacha20 features = ["zeroize"]`,
+  F.5-A rule example name correction, F.5-B rule glob cleanup.
+  The D-fips204-discipline item migrates to Cluster 2 PR A's scope
+  per the two-step above. Batch α PR 1 commit message references
+  this entry by anchor so the deferral is bisect-locatable.
+
+  *Reversion criterion* (per
+  [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).
+  If Cluster 2 PR A's scope shifts to not touch `signature.rs`
+  (e.g., the D-19 directional disposition reverts or the PR is
+  split across multiple PRs that don't include the keygen/sign
+  refactor), this deferral fires and the work surfaces as a
+  separate ~1-day PR (signature.rs RNG-parameterization refactor +
+  fips204 features-list edit + workspace CSPRNG threading
+  verification). The reversion is named at write time; future
+  re-evaluation requires no re-derivation of the rationale.
+
+  **Cross-references.**
+  [`rust/shekyl-crypto-pq/Cargo.toml`](../rust/shekyl-crypto-pq/Cargo.toml)
+  (target features-list edit);
+  [`rust/shekyl-crypto-pq/src/signature.rs`](../rust/shekyl-crypto-pq/src/signature.rs)
+  (consumption-site refactor target);
+  [`.cursor/rules/17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc) §4
+  (verification protocol — pending §4 refinement on
+  consumption-site cfg-gate trace);
+  [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+  (named-reversion shape);
+  the Hybrid `Vec<u8>`→fixed-size FOLLOWUP entry above
+  (D-19 directional disposition for `Box<fips204::ml_dsa_65::PrivateKey>`,
+  the sibling Cluster 2 PR A scope item that absorbs this
+  deferral).
+
+  *Audit-doc link.* Surfaced during Phase 0 Mission Audit Batch α
+  PR 1 pre-flight implementation (Lens D δ-trivial scope
+  refinement). Revises the original Lens D disposition for
+  D-fips204-discipline from Cargo.toml-only δ-trivial to
+  consumption-site + Cargo.toml, deferred to Cluster 2 PR A. The
+  rule 17 §4 verification gap is the substrate-evolution observation
+  the deferral surfaces; rule 17 amendment cycle is the natural home
+  for §4 protocol clarification.
+
 ---
 
 ## V3.1 — audit response and stressnet gates
