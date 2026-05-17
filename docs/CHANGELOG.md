@@ -221,19 +221,39 @@
   advance; documented disposition citing the criteria). The
   class was drafted here as four criteria; the sibling PR
   `feat/consensus-atomic-cutovers-rule` ratifies the criteria
-  as `.cursor/rules/07-consensus-atomic-cutovers.mdc` with
-  refinements absorbed during Round 6 review: criterion 2 is
-  reframed as "indivisible under flag decomposition" (the
-  generalization-friendly definition that distinguishes the
-  LWMA-1 case from flag-decomposable migrations like RandomX v2
-  Phase 3), criterion 4 adds a required reviewer-map and
-  rollback procedure, and a "what this is not" section
-  disqualifies convenience/velocity/reviewer-bandwidth/
-  retroactive-citation as justifications. Phase 4's section in
-  this plan now invokes the ratified rule by name and maps each
-  criterion to LWMA-1 Phase 4 specifically. Phase 4's exception
-  is auditable against the class's four criteria mechanically,
-  not against LWMA-1-specific precedent.
+  as `.cursor/rules/07-consensus-atomic-cutovers.mdc` and
+  refines them through Round 6 / Round 7 review before landing
+  (PR #50). The ratified form: the rule is opt-in
+  (`alwaysApply: false`) and unreachable by any PR that does
+  not cite it explicitly; criterion 2 is reframed as the
+  structural-inapplicability of flag decomposition to consensus
+  rules — a flag decomposition is consensus-safe only if both
+  flag states are simultaneously valid, which for a consensus
+  rule is impossible by definition, so criterion 2 is met
+  whenever criterion 1 is met (closing the "yes-it's-consensus-
+  but-splitting-would-be-inconvenient" loophole); criterion 3
+  adds a base-commit-anchored, timestamped grep so reviewers
+  re-run against the same SHA; criterion 4 is numbered into
+  sub-clauses 4.1–4.4 with reviewer-map-accuracy and
+  rollback-correctness promoted into the criterion itself
+  (rejecting the PR is the response to a map miss, not patching
+  the map); a "what this is not" section disqualifies
+  convenience / velocity / reviewer-bandwidth /
+  retroactive-citation; and the history of application is split
+  into "Approved invocations" (LWMA-1 Phase 4) and "Cases that
+  might appear analogous but are not" (RandomX v2 Phase 3,
+  where the 3a flag is build-system / FFI-routing rather than
+  consensus, the algorithm change ships in Phase 1's submodule
+  swap, and criterion 1 is therefore not met for Phase 3 at
+  all — structurally inapplicable, not "evaluated and
+  rejected"). The mechanism for future invocations is
+  self-anchoring: an invoking PR must include a commit that
+  adds its own entry to the rule's history-of-application
+  section. Phase 4's section in this plan invokes the ratified
+  rule by name and maps each criterion to LWMA-1 Phase 4
+  specifically; Phase 4's exception is auditable against the
+  class's four criteria mechanically, not against
+  LWMA-1-specific precedent.
 
 - **`07-consensus-atomic-cutovers.mdc` — named exception to
   branching policy for consensus-atomic cutovers**

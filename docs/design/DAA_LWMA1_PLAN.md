@@ -588,19 +588,20 @@ rather than by reference:
    would reach different acceptance conclusions on the same
    block header than one running the new values.
 2. **Indivisible under flag decomposition (criterion 2).** Yes.
-   The candidate flag-decomposition for the algorithm body
-   (introduce LWMA-1 behind a flag default off; flip; delete
-   the old path) would produce a consensus-safe intermediate
-   only if the FTL and MTP values were *also* flagged in
-   lockstep with the algorithm — but FTL and MTP are
-   consensus-rule *constants* whose values must agree across
-   all nodes regardless of which code path they call. A "flag"
-   for a consensus-rule constant does not exist in any
-   meaningful sense; both nodes have to agree on the same FTL
-   and MTP at the same height. The only way to flag them is to
-   define the consensus-event itself (which-height-flips), and
-   that consensus-event is exactly what Phase 4 ratifies. The
-   decomposition collapses into the single PR.
+   Per the rule's criterion-2 framing, flag decomposition only
+   counts as consensus-safe if both flag states are
+   simultaneously valid (build-system flags, performance-tuning
+   flags, instrumentation flags). For a consensus rule, both
+   nodes must produce byte-identical output on the same input,
+   so a flag that gated consensus behavior would have to
+   dispatch identically regardless of state — which means it
+   doesn't gate consensus behavior at all. The algorithm body,
+   the FTL value, and the MTP window are all consensus-rule
+   surfaces (criterion 1 above); there is therefore no
+   simultaneously-valid flag decomposition for any of them, and
+   none could exist without contradicting Shekyl's
+   no-version-dispatch posture per `60-no-monero-legacy.mdc`.
+   Criterion 2 is met structurally, not contingently.
 3. **Surface enumerated in advance (criterion 3).** Yes.
    `DAA_LWMA1.md` §§9.4–9.7 enumerate every consensus-affecting
    symbol, file, and constant being changed, with line numbers
@@ -628,15 +629,25 @@ work-item ceiling is fixed at the 14 items below (no scope
 creep within the PR; "while we're here" additions break the
 exception per criterion 3 per `15-deletion-and-debt.mdc`).
 RandomX v2's Phase 3 sub-PR split (3a/3b/3c per
-`RANDOMX_V2_PLAN.md`) does *not* invoke the same exception:
-criterion 2 is not met for it (the algorithm-body cutover is
-flag-decomposable: 3a adds the FFI swap behind a flag default
-on while the legacy path remains buildable; 3b removes the flag
-and finishes the rewire; 3c performs the implementation
-deletions; each sub-PR plausibly fits the 5-day / 10-commit
-ceiling). `07-consensus-atomic-cutovers.mdc`'s history-of-application
-section records RandomX v2 Phase 3 explicitly as a case
-**evaluated and not approved**.
+`RANDOMX_V2_PLAN.md`) does *not* invoke the same exception, and
+`07-consensus-atomic-cutovers.mdc`'s history-of-application
+section records RandomX v2 Phase 3 under "Cases that might
+appear analogous but are not." The reason is structural: the
+algorithm change itself (v1 → v2) does not ship in Phase 3 —
+it ships in Phase 1's submodule swap. Phase 3 is implementation
+routing: the FFI binding moves from the legacy path to the
+monero-oxide-vendored path, and the algorithm body is
+byte-identical on both sides of the 3a build flag. The 3a flag
+is therefore a build-system / FFI-routing flag, not a consensus
+flag, and criterion 1 is not met for Phase 3 at all. The
+exception is structurally inapplicable rather than evaluated
+and rejected; each sub-PR (3a/3b/3c) fits the standard
+`06-branching.mdc` size limit independently. LWMA-1 Phase 4 is
+the rule's first invocation, named in the rule's
+history-of-application section at the time the rule itself
+landed (PR #50). The eventual Phase 4 PR repeats the
+four-criterion mapping above verbatim per
+`07-consensus-atomic-cutovers.mdc` sub-clause 4.2.
 
 Fourteen work items, all in this PR (numbered for the work-item
 count audit; counts match `DAA_LWMA1.md` §§9.1–9.7):
