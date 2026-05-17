@@ -9,29 +9,75 @@
   (`feat/consensus-atomic-cutovers-rule`, 2026-05-17). New rule
   ratifying the "consensus-atomic cutover" exception class
   drafted during PR #49's Round 5 review
-  (`DAA_LWMA1_PLAN.md` Phase 4). `06-branching.mdc`'s
-  5-working-day / 10-commit splitting guidance defends against
-  unreviewable PRs accumulating; this rule names the small class
-  of PRs that genuinely cannot split because every intermediate
-  state would be a non-canonical consensus configuration. Four
-  objectively-testable criteria, all required: (1) consensus-rule
-  boundary (byte-identical reproduction across nodes); (2)
-  indivisible under flag decomposition (no introduce-behind-flag
-  → flip → delete sequence produces consensus-safe intermediates
-  at every commit; this is the generalization-friendly definition
-  of indivisibility, distinct from "would be inconvenient to
-  split"); (3) surface enumerated in advance with grep evidence;
-  (4) disposition documented in PR with reviewer-map and rollback
-  procedure. A "what this is not" section explicitly disqualifies
+  (`DAA_LWMA1_PLAN.md` Phase 4) and refined through Round 7
+  before landing. `06-branching.mdc`'s 5-working-day / 10-commit
+  splitting guidance defends against unreviewable PRs
+  accumulating; this rule names the small class of PRs that
+  genuinely cannot split because every intermediate state would
+  be a non-canonical consensus configuration. The rule is
+  **opt-in** (`alwaysApply: false`) — a PR that does not
+  explicitly cite the rule cannot invoke it. Four
+  objectively-testable criteria, all required:
+
+  1. **Consensus-rule boundary.** The PR changes behavior all
+     correctly-implementing nodes must reproduce byte-identically
+     on the same input. Refactors, RPC formatting, internal
+     caches, renames, and file reorganizations of consensus code
+     that preserve the rule do not qualify.
+  2. **Indivisible under flag decomposition.** Met whenever
+     criterion 1 is met, for structural rather than contingent
+     reasons. A flag decomposition only counts as consensus-safe
+     if both flag states are simultaneously valid (build-system
+     flags, performance-tuning flags, instrumentation flags
+     qualify). For a consensus rule, simultaneous validity is
+     impossible by definition: the flag would have to dispatch
+     identically regardless of state, which means it doesn't
+     gate consensus behavior at all. Hard-fork activations are
+     the consensus event the PR ratifies, not a decomposition of
+     it; Shekyl's `60-no-monero-legacy.mdc` no-version-dispatch
+     posture forecloses any other interpretation. This shape
+     closes the loophole where a PR author argues "yes, this is
+     a consensus change, but splitting would be inconvenient":
+     either the change affects consensus output (criteria 1+2
+     both met) or it does not (neither met).
+  3. **Surface enumerated in advance, with evidence.** A
+     grep-result-derived enumeration of every consensus-affecting
+     symbol/file/constant pasted into the PR description, **run
+     against the PR's base commit and timestamped at PR-open**
+     so reviewers re-run the same grep against the same base
+     commit to verify the surface hasn't shifted.
+  4. **Disposition documented in PR.** Numbered sub-clauses:
+     4.1 rule citation; 4.2 per-criterion justification; 4.3
+     reviewer-map (with enforcement: substantive consensus
+     changes found outside the map's "consensus-affecting"
+     subsection are grounds for rejecting the PR — the response
+     is re-opening with a corrected enumeration, not patching
+     the map); 4.4 rollback procedure (with enforcement:
+     procedure must be executable by a reviewer who has not
+     seen the PR; tacit-knowledge rollback procedures fail 4.4).
+
+  A "what this is not" section explicitly disqualifies
   convenience, velocity, reviewer bandwidth, and retroactive
-  citation as justifications. The rule records LWMA-1 Phase 4 as
-  its first approved instance and RandomX v2 Phase 3 as a case
-  **evaluated and not approved** (flag-decomposable per the
-  3a/3b/3c plan); future invocations append to the
-  history-of-application section as part of the PR itself. Per
+  citation as justifications. A "compensating discipline"
+  section names scope-creep within an exception-invoking PR as
+  itself grounds for rejection. The rule records LWMA-1 Phase
+  4 as its first approved instance under "Approved invocations,"
+  and RandomX v2 Phase 3 under a separate "Cases that might
+  appear analogous but are not" subsection — Phase 3 ships
+  implementation routing (the 3a flag is a build-system /
+  FFI-routing flag, not a consensus flag; the algorithm body is
+  byte-identical on both sides), so criterion 1 is not met and
+  the exception is **structurally inapplicable**, not
+  "evaluated and rejected" (the latter framing would invite
+  precedent-erosion arguments against future invocations). The
+  mechanism for future invocations is self-anchoring: the
+  invoking PR must include a commit that adds its own entry to
+  the rule's history-of-application section, so the audit trail
+  cannot be reconstructed retrospectively. Per
   `21-reversion-clause-discipline.mdc`'s named-criteria
-  principle, the exception is auditable mechanically against the
-  four criteria, not against LWMA-1-specific precedent erosion.
+  principle, the exception is auditable mechanically against
+  the four criteria, not against LWMA-1-specific precedent
+  erosion.
 - **RandomX v2 Rust port — Phase 0 design docs**
   (`feat/randomx-v2-phase0-design`, 2026-05-16). Adds three Phase 0
   design documents under `docs/design/`:
