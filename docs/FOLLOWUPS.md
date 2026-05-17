@@ -4574,8 +4574,11 @@ reference.
 
   *Trigger criteria* (any one suffices to fire F.8-sub work; all
   three named explicitly so future audit cannot mistake the
-  disposition for indefinite deferral — mirroring the D-6 sha2
-  acceptance-criteria precedent at lines 4203–4263 above):
+  disposition for indefinite deferral — mirroring the
+  acceptance-criteria precedent established by the D-6 `sha2`
+  no-`zeroize` entry above ("`sha2` 0.10.x has no `zeroize`
+  feature — accept-with-reversion-clause + parallel upstream
+  workstream")):
 
   1. **External audit feedback.** If the V3.0 external audit
      surfaces a constant-time-comparison concern at any specific

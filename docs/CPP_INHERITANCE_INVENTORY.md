@@ -83,17 +83,29 @@ the primary file's category unless this inventory states otherwise:
 A file that is **not** a sibling of any listed file, and which is
 functionally distinct (its own algorithm, library, or interface), gets
 its own row. The Phase 0 audit's PR #46 review surfaced four such
-files that warranted explicit rows: `aesb.c` and `oaes_lib.{c,h}` +
-`oaes_config.h` (CryptoNight AES primitives + OpenSSL AES port),
-`rx-slow-hash.c` (RandomX slow-hash), and `bulletproofs_plus.cc`
+files that warranted explicit rows: `src/crypto/aesb.c` and
+`src/crypto/oaes_lib.{c,h}` + `src/crypto/oaes_config.h` (CryptoNight
+AES primitives + OpenSSL AES port), `src/crypto/rx-slow-hash.c`
+(RandomX slow-hash), and `src/fcmp/bulletproofs_plus.cc`
 (BulletproofPlus parallel C++ implementation; see F.C++-3's
 "bulletproofs_plus re-verification" sub-section for the
 categorization-corrective note this triggered).
 
+**Path-notation convention.** Every filename in a table row carries
+its full repo-relative path (e.g., `src/crypto/foo.c`), not a bare
+basename, so `grep`/navigation against this inventory is reliable. The
+shorthand `src/crypto/foo.{c,h}` covers `src/crypto/foo.c` and
+`src/crypto/foo.h` together; siblings listed in the same row each
+carry the full path explicitly. Markdown links are added on the
+primary entry-point file in each row (for click-through to source);
+sibling files in the same row may omit the link but retain the full
+path.
+
 Files in `src/crypto/` and `src/fcmp/` that are pure utility headers
-shared across the kept-set (e.g., `c_threads.h`, `duration.h`,
-`generic-ops.h`, `hash-ops.h`, `initializer.h`) inherit F.C++-2 by
-default; if a workstream needs to migrate or delete any of these,
+shared across the kept-set (e.g., `src/crypto/c_threads.h`,
+`src/crypto/duration.h`, `src/crypto/generic-ops.h`,
+`src/crypto/hash-ops.h`, `src/crypto/initializer.h`) inherit F.C++-2
+by default; if a workstream needs to migrate or delete any of these,
 the workstream's PR adds an explicit row.
 
 ## F.C++-1 — Pending deletion
@@ -111,15 +123,15 @@ algorithm replacement also lands with this workstream.
 | [`src/crypto/slow-hash.c`](../src/crypto/slow-hash.c) | CryptoNight slow hash core | 2 MiB scratchpad never zeroized in inherited code (Lens C C-4/C-5 stop-gap-then-deletion context); see also [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md) 32-bit-fallback gating |
 | [`src/crypto/pow_cryptonight.cpp`](../src/crypto/pow_cryptonight.cpp) | CryptoNight PoW driver | Routed via the modular PoW schema interface per [`docs/DOCUMENTATION_TODOS_AND_PQC.md`](./DOCUMENTATION_TODOS_AND_PQC.md) §1.10; delete the driver, registration falls out by reference |
 | `src/crypto/aesb.c` | AES block primitives used by CryptoNight slow-hash | Cited only from CryptoNight paths; no consumer outside the deletion set |
-| `src/crypto/oaes_lib.{c,h}`, `oaes_config.h` | OpenSSL AES library port (CryptoNight dependency) | Cited only from CryptoNight paths; the entire OAES surface is CryptoNight-private and deletes with the rest of the set |
-| `src/crypto/CryptonightR_JIT.{c,h}`, `CryptonightR_JIT_stub.c`, `CryptonightR_template.{h,S}` | CryptoNight JIT compiler + code-generation template | Untested 32-bit fallback per [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md); JIT main, stub, and template all delete together |
-| `src/crypto/variant2_int_sqrt.h` | CryptoNight variant-2 integer sqrt helper | Used only by `slow-hash.c` |
-| `src/crypto/variant4_random_math.h` | CryptoNight variant-4 random-math helper | Used only by `slow-hash.c` |
+| `src/crypto/oaes_lib.{c,h}`, `src/crypto/oaes_config.h` | OpenSSL AES library port (CryptoNight dependency) | Cited only from CryptoNight paths; the entire OAES surface is CryptoNight-private and deletes with the rest of the set |
+| `src/crypto/CryptonightR_JIT.{c,h}`, `src/crypto/CryptonightR_JIT_stub.c`, `src/crypto/CryptonightR_template.{h,S}` | CryptoNight JIT compiler + code-generation template | Untested 32-bit fallback per [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md); JIT main, stub, and template all delete together |
+| `src/crypto/variant2_int_sqrt.h` | CryptoNight variant-2 integer sqrt helper | Used only by `src/crypto/slow-hash.c` |
+| `src/crypto/variant4_random_math.h` | CryptoNight variant-4 random-math helper | Used only by `src/crypto/slow-hash.c` |
 | `src/crypto/blake256.{c,h}` | Blake256 (CryptoNight component hash) | Not used outside CryptoNight chain |
-| `src/crypto/groestl.{c,h}`, `groestl_tables.h` | Groestl (CryptoNight component hash) | Not used outside CryptoNight chain |
+| `src/crypto/groestl.{c,h}`, `src/crypto/groestl_tables.h` | Groestl (CryptoNight component hash) | Not used outside CryptoNight chain |
 | `src/crypto/jh.{c,h}` | JH (CryptoNight component hash) | Not used outside CryptoNight chain |
-| `src/crypto/skein.c`, `skein_port.h` | Skein (CryptoNight component hash) | Not used outside CryptoNight chain |
-| `src/crypto/hash-extra-blake.c`, `hash-extra-groestl.c`, `hash-extra-jh.c`, `hash-extra-skein.c` | CryptoNight component-hash extras | Bundled with their respective component-hash files |
+| `src/crypto/skein.c`, `src/crypto/skein_port.h` | Skein (CryptoNight component hash) | Not used outside CryptoNight chain |
+| `src/crypto/hash-extra-blake.c`, `src/crypto/hash-extra-groestl.c`, `src/crypto/hash-extra-jh.c`, `src/crypto/hash-extra-skein.c` | CryptoNight component-hash extras | Bundled with their respective component-hash files |
 | [`src/fcmp/bulletproofs.{cc,h}`](../src/fcmp/bulletproofs.cc) | Legacy (non-plus) Bulletproof — already empty stub | `.cc` is `#include "bulletproofs.h"` only ("Legacy (non-plus) Bulletproof implementation removed. Use bulletproofs_plus.cc for BulletproofPlus."); per [`60-no-monero-legacy.mdc`](../.cursor/rules/60-no-monero-legacy.mdc) Rule 60, `RCTTypeBulletproof` is removed at consensus and the stub files become deletion residue |
 
 **Workstream attribution.** A-4/A-5/A-7/A-8 PoW workstream (paired with
@@ -145,13 +157,13 @@ handles the F.C++-1 deletion set).
 | File | Inherited role | Why kept at V3.0 |
 | --- | --- | --- |
 | [`src/crypto/keccak.{c,h}`](../src/crypto/keccak.c) | Keccak-f[1600] permutation | `cn_fast_hash` + general Keccak hashing; load-bearing for transitional period; subsumed by Rust `shekyl-crypto-pq` long-term |
-| [`src/crypto/hash.{c,h}`](../src/crypto/hash.c), `hash-ops.h` | General hash API | Wallet2 + tx_extra + serialization consumers; transitional substrate |
-| [`src/crypto/crypto.{cpp,h}`](../src/crypto/crypto.cpp), [`src/crypto/crypto-ops.{c,h}`](../src/crypto/crypto-ops.c), `crypto-ops-data.c`, `src/crypto/crypto_ops_builder/` | Bernstein ed25519 ref10 implementation + precomputed tables | Constant-time by design; widely-audited upstream; used by C++ crypto path; mirror of Rust `curve25519-dalek` ed25519 surface |
+| [`src/crypto/hash.{c,h}`](../src/crypto/hash.c), `src/crypto/hash-ops.h` | General hash API | Wallet2 + tx_extra + serialization consumers; transitional substrate |
+| [`src/crypto/crypto.{cpp,h}`](../src/crypto/crypto.cpp), [`src/crypto/crypto-ops.{c,h}`](../src/crypto/crypto-ops.c), `src/crypto/crypto-ops-data.c`, `src/crypto/crypto_ops_builder/` | Bernstein ed25519 ref10 implementation + precomputed tables | Constant-time by design; widely-audited upstream; used by C++ crypto path; mirror of Rust `curve25519-dalek` ed25519 surface |
 | `src/crypto/generators.{cpp,h}` | Group generators (Ed25519 G, H, T) | Shared between C++ and Rust via FFI; canonical generator constants |
-| [`src/crypto/pow_randomx.cpp`](../src/crypto/pow_randomx.cpp), [`src/crypto/pow_registry.{cpp,h}`](../src/crypto/pow_registry.cpp), `pow_schema.h` | RandomX PoW driver + registry + interface schema | Paired with A-4/A-5/A-7/A-8 PoW workstream; load-bearing for V3.0 RandomX-v2-from-genesis ship; `pow_schema.h` survives the CryptoNight-driver deletion as the modular PoW interface |
-| `src/crypto/rx-slow-hash.c` | RandomX slow-hash wrapper (RandomX backing for `cn_slow_hash`-shaped callers) | Paired with `pow_randomx.cpp`; load-bearing for RandomX-v2-from-genesis; kept alongside the rest of the RandomX path |
+| [`src/crypto/pow_randomx.cpp`](../src/crypto/pow_randomx.cpp), [`src/crypto/pow_registry.{cpp,h}`](../src/crypto/pow_registry.cpp), `src/crypto/pow_schema.h` | RandomX PoW driver + registry + interface schema | Paired with A-4/A-5/A-7/A-8 PoW workstream; load-bearing for V3.0 RandomX-v2-from-genesis ship; `pow_schema.h` survives the CryptoNight-driver deletion as the modular PoW interface |
+| `src/crypto/rx-slow-hash.c` | RandomX slow-hash wrapper (RandomX backing for `cn_slow_hash`-shaped callers) | Paired with `src/crypto/pow_randomx.cpp`; load-bearing for RandomX-v2-from-genesis; kept alongside the rest of the RandomX path |
 | [`src/crypto/random.{c,h}`](../src/crypto/random.c) | CSPRNG source (`/dev/urandom` + `CryptGenRandom`) | Lens F F.8 verified: production randomness routes through this on the C++ side; corresponds to Rust `OsRng` discipline |
-| `src/crypto/c_threads.h`, `duration.h`, `generic-ops.h`, `initializer.h` | C utility headers (threading shims, timing primitives, generic-operator macros, constructor-priority macros) | Used across the kept-set; no replacement warranted at V3.0; deletion would require auditing every cross-component consumer |
+| `src/crypto/c_threads.h`, `src/crypto/duration.h`, `src/crypto/generic-ops.h`, `src/crypto/initializer.h` | C utility headers (threading shims, timing primitives, generic-operator macros, constructor-priority macros) | Used across the kept-set; no replacement warranted at V3.0; deletion would require auditing every cross-component consumer |
 
 **Workstream attribution.** Optional docstring sweep folded into
 A-4/A-5/A-7/A-8 PoW workstream. The files themselves stay at V3.0;
