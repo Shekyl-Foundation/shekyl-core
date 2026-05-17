@@ -3899,47 +3899,222 @@ one place to confirm each item's relationship to the wallet stack.
   [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) §2
   (privacy-as-product anchor).
 
-- **Encrypted-persistence `PersistenceConsumerActor` for
-  long-running deployments (Stage 1 PR 5 R17 substrate;
-  V3.x).** PR 5 segment 2c refined the diagnostic-stream
-  restart-amnesia contract (PR 4 §5.4.8 #1) from
-  "in-memory only, drop on close" to "in-memory only by
-  default; user-controlled encrypted-persistence opt-in is
-  permitted if the persistence consumer's surface is
-  entirely within the wallet's own encrypted-state surface
-  (no cross-trust-boundary leak per PR 4 §5.4.8 #4)."
-  V3.0 ships the privacy-first default (drop-on-close);
-  V3.x optionally lands a `PersistenceConsumerActor`
-  whose surface is the wallet's own encrypted storage,
-  enabling crash-recovery via stream replay for
-  institutional / long-running / multi-day transaction-
-  construction deployments.
+- **Diagnostic-event encrypted-persistence — conditional
+  reopening bookmark (Stage 1 PR 4 R17 / PR 5 R17;
+  PR 4 Round 4 review pass F1 + F7 hardened, 2026-05-15).**
+  PR 5 segment 2c (2026-05-14) originally framed an
+  "encrypted-persistence opt-in" for `PendingTxDiagnostic`
+  events as a V3.x scheduled deliverable
+  (`PersistenceConsumerActor` for institutional / long-
+  running / multi-day deployments). PR 4 Round 4 review
+  pass F1 (2026-05-15) hardened that disposition to a
+  structural rejection at V3.0, with the same six attack
+  vectors named (crypto code-path expansion via persistence
+  triggers; deserialization-on-startup as exploit primitive;
+  metadata side-channel; cross-wallet correlation
+  amplification; persistence as adversary-controlled DoS;
+  forensic-attack primitive against seized wallets — full
+  enumeration at PR 4 §5.4.8 #1 / §5.4.9 F1). F7 extended
+  the same discipline to "encrypted cache for RPC recovery"
+  candidates (PR 4 §5.4.8 #6 / §5.4.9 F7).
 
-  **Trigger.** Institutional / long-running deployment
-  requirements (foundation treasury, multi-day tx
-  workflows, mining-wallet long-uptime operation);
-  wallet-storage encryption layer matures (wallet master
-  key derivation surface, key-rotation discipline);
-  user-configuration UX for persistence opt-in. None are
-  V3.0 blockers; the contract refinement at V3.0
-  preserves the V3.x option without committing to it.
+  **This entry is a conditional-reopening bookmark, not a
+  scheduled deliverable.** No version target; closed
+  automatically if V3.0 + V3.1 deployments do not surface
+  the criterion-(a) use case. Reopening requires **all** of:
 
-  **Architectural posture.** No V3.0 trait-surface change
-  required; the `DiagnosticSink` registration surface
-  already accepts arbitrary in-process consumers per
-  PR 4 §5.4.6 / §5.4.7 R6 reframe. The contract pin's
-  refinement narrows the persistence prohibition to
-  cross-boundary persistence specifically, which PR 4
-  §5.4.8 #4 (recursive-trust-boundary discipline) already
-  governs.
+  - **(a) Demonstrated production use case.** Real V3.0
+    deployment surface, not anticipated demand. Foundation
+    treasury, institutional custody, multi-day tx
+    workflows, mining-wallet long-uptime — these are
+    *interesting consequences* of a reopening, not
+    *triggers* for one. The trigger is the use case
+    surfacing in V3.0 deployment.
+  - **(b) Full threat-model review at the time of
+    evaluation.** Including the metadata side-channel,
+    cross-wallet correlation, deserialization-on-startup,
+    forensic-artifact, and DoS attack vectors enumerated
+    at PR 4 §5.4.9 F1.
+  - **(c) Explicit `AUDIT_SCOPE.md` amendment.** If
+    adopted, the persistence layer is brought into audit
+    scope.
+  - **(d) Privacy-first default supremacy
+    acknowledgment.** Per
+    [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) §2,
+    the privacy-first default discipline supersedes
+    ergonomic-recovery considerations except in cases
+    where (a)–(c) demonstrate the case.
+
+  **The previous "wallet-internal encrypted-persistence
+  opt-in is permitted if the consumer's surface is within
+  the wallet's encrypted-state surface" framing is
+  withdrawn.** PR 4 §5.4.8 #1's contract pin reverts to
+  the structural drop-on-close rule. Any `V3.x` consumer
+  attempting to satisfy a feature like this without
+  walking the four-pronged criteria is non-compliant with
+  the post-F1 hardening.
 
   Cross-references:
-  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
-  §5.4 R17 (segment 2c disposition);
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-  §5.4.8 #1 (restart-amnesia rule; refined by R17),
-  §5.4.8 #4 (recursive-trust-boundary discipline;
-  unchanged).
+  §5.4.8 #1 (post-F1 hardened drop-on-close pin), §5.4.8 #6
+  (encrypted-cache-for-RPC-recovery; F7 hardened
+  rejection), §5.4.9 F1 / F7 (review-pass disposition);
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R17 (post-F1-carryover hardened disposition).
+
+- **Diagnostic-stream consumer-actor PR `diagnostic_consumer_discipline`
+  CI lint (Stage 1 PR 4 Round 4 review pass F5 forward-
+  template, 2026-05-15; scope-extended by F12 amendment,
+  2026-05-15; V3.1+).** PR 4 §5.4.8 #4's recursive trust-
+  boundary pin and §5.4.6's per-emitter FIFO contract pin
+  together impose two consumer-actor disciplines that are
+  type-system-unenforceable at V3.0: (i) full-fidelity
+  diagnostic events flow only to actors whose external
+  surface is itself within the trust boundary, **recursively**;
+  (ii) consumer actors that need cross-emitter ordering
+  derive it from explicit causal-context fields in the
+  events (`SnapshotId`, `ReservationId` plus version,
+  `BlockHeight`), not from sink-observed arrival order.
+  Procedural enforcement (per-PR review checklist;
+  per-consumer-actor PR external-surface audit) is the V3.0
+  disposition; this entry queues the V3.1+ CI-lint
+  enforcement covering both disciplines as a single
+  `diagnostic_consumer_discipline` clippy-style check.
+
+  **F5 sub-scope (recursive trust-boundary).** Static check
+  that verifies any consumer binding to a `DiagnosticSink`
+  either (i) declares no external surface, or (ii) declares
+  its external surface carries projection-typed events only,
+  never full-fidelity event types from the stream taxonomies.
+  Detection shape: pattern-match on consumer-actor types
+  implementing `DiagnosticSink` *and* `Write` /
+  `serde::Serialize` / network-export / log-collection
+  surfaces; require explicit `#[allow(diagnostic_external_surface)]`
+  attribute with an inline rationale comment.
+
+  **F12 sub-scope (cross-emitter ordering misuse).** Static
+  check that verifies consumer-actor event-handler bodies
+  do not branch on the relative arrival timing of events
+  from distinct emitters without first constraining
+  ordering via an explicit causal-context field. Detection
+  shape: pattern-match on event-handler bodies that compare
+  timestamps or use sink-observed arrival order across
+  events whose emitter identity differs (statically-
+  determinable from the event-class taxonomy plus the
+  consumer's subscription set); flag such patterns and
+  require either (a) a causal-context field added to the
+  relevant event class with a matching update to the
+  consumer's ordering derivation, or (b) explicit
+  `#[allow(diagnostic_cross_emitter_ordering)]` with an
+  inline rationale comment naming why per-emitter-only
+  ordering is sufficient at this site.
+
+  **Why a CI lint, not just a review process.** A
+  procedural check requires every reviewer to apply the
+  recursive-trust-boundary discipline and the cross-emitter
+  causal-context discipline at every consumer-actor PR;
+  both disciplines survive only as long as reviewer rigor
+  holds. A CI lint moves both from reviewer-rigor-dependent
+  to enforced-by-default, consistent with
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  "discipline operates with continuous coverage" framing.
+  The lint becomes load-bearing as the consumer-actor
+  ecosystem grows beyond what a single reviewer can hold
+  in working memory; the F12 sub-scope catches a class of
+  bug (deadlock or misbehave-under-reordering) that audit
+  finds late and that CI catches immediately.
+
+  **Implementation candidates.** A `clippy` lint targeting
+  consumer constructors (`fn new(..., sink: Arc<dyn
+  DiagnosticSink>)`); a per-crate `#[deny(...)]` directive
+  with a project-defined `diagnostic_consumer_discipline`
+  lint; a CI script over `cargo expand` output looking for
+  full-fidelity event types crossing IPC / log / metrics
+  boundary types and for cross-emitter timing comparisons
+  in event-handler bodies.
+
+  **The lint is conceptual, not necessarily monolithic
+  (Stage 1 PR 4 Round 4 review pass meta-review post-
+  amendment, 2026-05-15; F12 sub-pin).** The unification is
+  at the contract level (one named discipline,
+  `diagnostic_consumer_discipline`, two related properties
+  it enforces), not necessarily at the implementation-pass
+  level. The F5 sub-scope (recursive trust-boundary) is a
+  type-level property — likely realized as a compile-time
+  trait-bound or `clippy` lint over consumer constructors;
+  the F12 sub-scope (cross-emitter ordering misuse) is a
+  code-pattern property — likely realized as an AST-level
+  pattern-match over event-handler bodies. The V3.1+
+  consumer-actor PR may land them as two related checks
+  under one configuration namespace rather than as a
+  single literal lint pass; either factoring satisfies the
+  contract. Pinned here so a future "the lint doesn't
+  exist as a single pass" finding cannot retroactively
+  invalidate a multi-check implementation that delivers
+  the unified discipline.
+
+  **Trigger.** When the second consumer actor enters
+  design rounds (`ReorgAmplificationDetector` and
+  `PeerReputationActor` together exhaust the single-
+  consumer case where reviewer attention is sufficient;
+  the multi-consumer case is where the CI lint pays back —
+  per F12, the cross-emitter sub-scope specifically
+  activates because two consumers with distinct
+  subscription sets create the substrate the misuse
+  pattern needs).
+
+  Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.8 #4 (recursive trust-boundary pin + V3.x forward-
+  template, items 1–4 including F12 cross-emitter
+  scope-extension), §5.4.6 7th contract pin (per-emitter
+  FIFO + cross-emitter undefined + F12 enforcement-gap
+  amendment), §5.4.9 F5 (recursive-trust-boundary
+  review-pass disposition), §5.4.9 F12 (cross-emitter
+  contract-gap meta-finding); consumer-actor PR template
+  (FOLLOWUPS entry above). Target: V3.1+.
+
+- **Diagnostic-stream specification document — projection-
+  type formalization per event class (Stage 1 PR 4 Round 4
+  review pass F9 forward-template, 2026-05-15; V3.x).**
+  PR 4 §6 (Round 4 review pass F9) records the V3.0
+  per-class projections for `TracingDiagnosticSink`
+  (`RefreshDiagnostic` projection set, `PendingTxDiagnostic`
+  projection set, `LedgerDiagnostic` projection set). The
+  F9 forward-template names the work to formalize these
+  projections in `DIAGNOSTIC_STREAM.md` (per the existing
+  V3.x spec-doc deliverable above) as a per-consumer
+  audit obligation: every consumer-actor PR must declare
+  its projection function for each event class it
+  consumes, listing exactly which fields are elided for
+  cross-boundary surfaces and naming the security property
+  the elision delivers (anti-fingerprinting, anti-
+  correlation, anti-timing-leak, etc.).
+
+  **Why formalization rather than per-PR review.** Without
+  formalization, every consumer-actor PR re-derives
+  projection-type semantics from PR 4 §5.4.8 #4 prose; the
+  re-derivation drift produces inconsistent projections
+  across consumers (the same event class projected
+  differently by `TracingDiagnosticSink` vs. a future
+  `MetricsExportSink`). The formalization establishes a
+  canonical projection function per event class that
+  consumers compose against; per-class deviation requires
+  explicit justification at the consumer's introduction
+  PR.
+
+  **Trigger.** When the V3.x consumer-actor design rounds
+  begin (concurrent with the F5 CI-lint trigger above);
+  earlier if the spec doc itself materializes before the
+  first consumer-actor PR.
+
+  Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §6 (V3.0 per-class projections under §6 review checklist),
+  §5.4.9 F9 (review-pass disposition);
+  diagnostic-stream specification document (FOLLOWUPS
+  entry above). Target: V3.x (concurrent with first
+  consumer-actor PR).
 
 - **Sync refresh wrapper generalization over `L: LedgerEngine`.**
   Stage 1 PR 2 generalized `Engine::start_refresh` and the
