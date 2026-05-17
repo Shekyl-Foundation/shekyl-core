@@ -4262,6 +4262,80 @@ reference.
   altitudes (type-derivation, design-round closure, work-item
   placement, dependency-discipline).
 
+- **F.8-sub: exhaustive constant-time + secret-handling spot-check
+  deferred with three named triggers per reversion-clause
+  discipline.** Phase 0 Mission Audit Lens F, finding F.8 categorical
+  verification (per
+  [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+  and
+  [`.cursor/rules/30-cryptography.mdc`](../.cursor/rules/30-cryptography.mdc)
+  §"Constant-time and trusted randomness"). The Lens F categorical
+  verification confirmed (a) zero production CSPRNG-bypass uses
+  (`thread_rng` / `StdRng` / `SeedableRng::seed_from` / `rand::random`
+  absent from production code; 3 bench/test uses all properly
+  justified inline); (b) CSPRNG sources verified across Rust
+  (`OsRng`) and C++ (`/dev/urandom` on Unix per
+  [`src/crypto/random.c:70-72`](../src/crypto/random.c) and
+  `CryptGenRandom` on Windows per the same file's Win32 branch); and
+  (c) `subtle::ConstantTimeEq` usage concentrated where load-bearing
+  (shekyl-oxide crypto crates + `shekyl-engine-prefs/src/io.rs` for
+  HMAC tag verification). The categorical verification is sufficient
+  for V3.0 audit-readiness.
+
+  *Exhaustive verification scope deferred.* A per-site walk for
+  (1) any production comparison of secret/auth bytes that bypasses
+  `subtle::ConstantTimeEq` in favor of bare `==` on byte arrays, and
+  (2) any production `log::error!` / `format!` / `Display for
+  SecretType` site that could exfiltrate secret material through
+  log/error paths, is **deferred** as exhaustive-verification work
+  that doesn't gate V3.0 audit closure.
+
+  *Trigger criteria* (any one suffices to fire F.8-sub work; all
+  three named explicitly so future audit cannot mistake the
+  disposition for indefinite deferral — mirroring the D-6 sha2
+  acceptance-criteria precedent at lines 4203–4263 above):
+
+  1. **External audit feedback.** If the V3.0 external audit
+     surfaces a constant-time-comparison concern at any specific
+     site, F.8-sub's methodology becomes the response artifact:
+     walk the site's call surface, walk adjacent comparison sites
+     under the same crate, document each as compliant or remediate.
+  2. **New cryptographic primitive landing.** Any V3.x addition
+     that introduces new secret-comparison or secret-formatting
+     surfaces (new PQC primitive when V4 lattice-only NIST
+     standardization closes; hardware-wallet integration per the
+     V3.x C-1 disposition; FROST signing implementation per the
+     B-3 Site 3 canonical-protocol-shape pin) triggers F.8-sub
+     against the new surface as a per-PR pre-flight check.
+  3. **Discipline-drift signal.** If a future PR review surfaces a
+     single instance of `==` on secret material or `format!` on a
+     secret-bearing type in production code, F.8-sub broadens to
+     the surrounding crate to confirm the instance is isolated
+     (not the visible tip of a larger discipline-drift pattern).
+
+  *Why this shape vs. exhaustive-now.* Exhaustive constant-time
+  walks return diminishing security per unit auditor-attention once
+  the categorical disciplines are verified (CSPRNG source, type-
+  enforced `subtle::ConstantTimeEq` at known load-bearing sites).
+  The Lens F substrate-compounding observation applies: per-site
+  walks that don't have a triggering signal produce mostly
+  verification-confirmations rather than novel findings. The three
+  named triggers cover the cases where per-site work is actually
+  load-bearing (specific audit feedback, specific new-surface
+  landing, specific drift signal) without spending pre-genesis
+  audit-attention on speculative walks.
+
+  *Cross-references.*
+  [`.cursor/rules/30-cryptography.mdc`](../.cursor/rules/30-cryptography.mdc)
+  §"Constant-time and trusted randomness" (the rule being deferred
+  to triggers rather than exhaustively verified now);
+  [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+  (deferral shape: rejected-with-named-reopening-criteria);
+  [`docs/CPP_INHERITANCE_INVENTORY.md`](./CPP_INHERITANCE_INVENTORY.md)
+  (C++ secret-handling-adjacent files inventoried; trigger 2's
+  "new cryptographic primitive" includes the F.C++-3 keep-
+  transitional set when those files are migrated to Rust).
+
 - **`shekyl-daemon-rpc/src/main.rs` uses `eprintln!` intentionally.**
   The standalone binary is a stub that exits with an error. No logging
   framework is initialized at that point. When standalone mode is
