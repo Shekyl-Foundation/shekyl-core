@@ -12,7 +12,7 @@ todos:
     content: "Phase 2: Add tests/difficulty/lwma1_cross_check.cpp harness (C++ test target per Round 4 disposition; canonical reference is C++, consuming it directly is simpler than Rust-side vendoring) that builds the zawy12 LWMA1_() C++ reference (extracted to tests/difficulty/zawy12_lwma1_reference.h with explicit SPDX-License-Identifier: MIT header per Round 3 disposition; derived from the pinned-spec revision) and asserts byte-equality between Rust output and C++ reference output across the §8.1 input corpus. CI runs the harness; failure fails CI. Commit docs/design/refs/zawy12_issue_3_lwma1.md as the pinned spec revision (raw issue body via GitHub REST API, immune to rendering-side drift). Record three LWMA1_() disambiguation anchors in the same file or a sibling .lwma1-anchors.json: (a) byte-offset range [offset_start, offset_end) within the pinned .body containing the LWMA1_() function, (b) the literal first line of LWMA1_(), (c) the literal last line. The issue contains four LWMA reference functions; without these anchors, Phase 2 maintainers cannot disambiguate the LWMA1_() boundaries from LWMA2_/3_/4_ when the upstream author reorders content."
     status: pending
   - id: phase3-ffi-wire-up
-    content: "Phase 3: Export shekyl_difficulty_lwma1_next from rust/shekyl-ffi/src/lib.rs per DAA_LWMA1.md §6.1 (i32 return; cum_difficulties: *const [u8; 16]; out_next_difficulty: *mut [u8; 16] — Round 4 pivoted from u128 to canonical-LE byte arrays per the FCMP++/KEM-derivation precedent; rationale: Rust u128 C ABI was target-dependent until rustc 1.77 and remains a footgun on uncommon targets, unacceptable for a consensus-critical surface; ERR_NULL_PTR / ERR_INVALID_COUNT / ERR_OVERFLOW / ERR_INTERNAL taxonomy). Add the declaration to src/shekyl/shekyl_ffi.h with const uint8_t (*)[16] types. Hand-maintain the bindings per 25-rust-architecture.mdc. PR delivers the FFI surface; the daemon does NOT yet consume it (still on inherited next_difficulty)."
+    content: "Phase 3: Export shekyl_difficulty_lwma1_next from rust/shekyl-ffi/src/lib.rs per DAA_LWMA1.md §6.1 (i32 return; cum_difficulties: *const ShekylU128; out_next_difficulty: *mut ShekylU128 where #[repr(C)] struct ShekylU128 { lo: u64, hi: u64 } — Round 5 pivoted from [u8; 16] to a field-named two-u64 struct per the FCMP++/KEM-derivation precedent; rationale: Rust u128 C ABI was target-dependent until rustc 1.77 and remains a footgun on uncommon targets; u64 has universally stable ABI on every Shekyl-supported target, debugger-friendly lo/hi field semantics carry the meaning, no improper_ctypes exposure; ERR_NULL_PTR / ERR_INVALID_COUNT / ERR_OVERFLOW / ERR_INTERNAL taxonomy). Add struct shekyl_u128 { uint64_t lo; uint64_t hi; } and the function declaration to src/shekyl/shekyl_ffi.h. Hand-maintain the bindings per 25-rust-architecture.mdc. PR delivers the FFI surface; the daemon does NOT yet consume it (still on inherited next_difficulty)."
     status: pending
   - id: phase4-cpp-cutover
     content: "Phase 4 (14 work items, deliberate atomic-cutover exception to 06-branching.mdc; rationale: FTL and MTP value changes cannot stage behind alias #defines without weakening consensus integrity in the intermediate state). Rewire Blockchain::get_difficulty_for_next_block() (blockchain.cpp:~965), Blockchain::check_difficulty_checkpoints() (~1021), Blockchain::get_next_difficulty_for_alternative_chain() (~1325) to shekyl_difficulty_lwma1_next. DELETE src/cryptonote_basic/difficulty.{h,cpp}. Delete the 6 inherited DIFFICULTY_* #defines (DIFFICULTY_TARGET_V1, DIFFICULTY_TARGET_V2, DIFFICULTY_WINDOW, DIFFICULTY_LAG with // !!! warning, DIFFICULTY_CUT, DIFFICULTY_BLOCKS_COUNT, DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN) from src/cryptonote_config.h. Rewire ~14 DIFFICULTY_TARGET_V2 consumers across 9 files (enumerated in DAA_LWMA1.md §9.7; preserves RPC contract per §9.8) to SHEKYL_DAA_TARGET_SECONDS from shekyl/consensus_constants_generated.h. Delete CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT; rewire 2 FTL consumers (enumerated in §9.5) to SHEKYL_DAA_FTL_SECONDS — consensus-rule value change 7200 → 540 takes effect here. Delete BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW; rewire 9 MTP consumers (enumerated in §9.6) to SHEKYL_DAA_MTP_WINDOW — consensus-rule value change 60 → 11 takes effect here. Delete tests/difficulty/{difficulty.cpp, gen_wide_data.py, generate-data}. Add symbol-isolation CI invariant: nm shekyld must not contain T|U next_difficulty_64|next_difficulty|check_difficulty_checkpoints (per DAA_LWMA1.md §7.1). Add no-C-ABI invariant on shekyl-difficulty per §7.2. Add no-orphaned-magic-numbers CI invariant: git grep on post-Phase-4 tree returns zero hits for CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT, BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW, DIFFICULTY_TARGET_V[12], DIFFICULTY_WINDOW, DIFFICULTY_LAG, DIFFICULTY_CUT, DIFFICULTY_BLOCKS_COUNT, DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN. Add RPC-contract regression test asserting daemon.get_info().block_target == 120 post-cutover. Audit and rewire wallet-side DIFFICULTY_TARGET_V2 consumers (wallet2.cpp:181/182/5975/11548, wallet_rpc_server.cpp:163). Update unit tests and docs."
@@ -455,47 +455,72 @@ Four work items: add the FFI export, declare the header, add
 error-code constants, and verify panic safety.
 
 **Add the FFI export** in `rust/shekyl-ffi/src/lib.rs`. The
-difficulty type at the ABI boundary is `[u8; 16]` little-endian
-per `DAA_LWMA1.md` §6.1 (Rust `u128` C-ABI soundness was target-
-dependent until rustc 1.77 and remains a footgun on uncommon
-targets; explicit byte arrays match the FCMP++ / KEM-derivation
-precedent and immunize the consensus-critical surface against
-target-portability failures):
+difficulty type at the ABI boundary is `#[repr(C)] struct
+ShekylU128 { lo: u64, hi: u64 }` per `DAA_LWMA1.md` §6.1 (Rust
+`u128` C-ABI soundness was target-dependent until rustc 1.77 and
+remains a footgun on uncommon targets; decomposing into two `u64`
+fields — each with universally stable C ABI — eliminates the
+exposure entirely; the field-named struct preserves explicit
+`lo`/`hi` semantics, debugger-friendly and unambiguous at every
+consumer call site):
 
 ```rust
+#[repr(C)]
+pub struct ShekylU128 {
+    pub lo: u64,
+    pub hi: u64,
+}
+
+impl From<u128> for ShekylU128 {
+    fn from(v: u128) -> Self {
+        Self { lo: v as u64, hi: (v >> 64) as u64 }
+    }
+}
+
+impl From<ShekylU128> for u128 {
+    fn from(v: ShekylU128) -> u128 {
+        ((v.hi as u128) << 64) | (v.lo as u128)
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn shekyl_difficulty_lwma1_next(
     timestamps: *const u64,
-    cum_difficulties: *const [u8; 16],
+    cum_difficulties: *const ShekylU128,
     count: usize,
     chain_height: u64,
-    out_next_difficulty: *mut [u8; 16],
+    out_next_difficulty: *mut ShekylU128,
 ) -> i32 {
-    // Decode cum_difficulties[i] via ptr::read_unaligned +
-    // u128::from_le_bytes; encode out_next_difficulty via
-    // u128::to_le_bytes + ptr::write_unaligned. Unaligned access
-    // is intentional: the C side's uint128_t buffer may not be
-    // 16-byte-aligned on all targets.
+    // Read cum_difficulties[i] via ptr::read followed by
+    // ShekylU128::into() to recover u128; write out_next_difficulty
+    // via ptr::write of ShekylU128::from(u128).
     // ... per DAA_LWMA1.md §6.1
 }
 ```
 
-The C-side declaration is:
+The C-side declaration in `src/shekyl/shekyl_ffi.h`:
 
 ```c
+struct shekyl_u128 {
+    uint64_t lo;   // little-endian lower 64 bits
+    uint64_t hi;   // little-endian upper 64 bits
+};
+
 int32_t shekyl_difficulty_lwma1_next(
     const uint64_t *timestamps,
-    const uint8_t (*cum_difficulties)[16],
+    const struct shekyl_u128 *cum_difficulties,
     size_t count,
     uint64_t chain_height,
-    uint8_t (*out_next_difficulty)[16]);
+    struct shekyl_u128 *out_next_difficulty);
 ```
 
-C++ callers with a native `uint128_t`-typed buffer **must memcpy**
-into and out of the `[u8; 16]` representation explicitly (not
-reinterpret-cast) so the endianness assumption is a deliberate
-checkpoint at the call site, not an implicit
-target-dependent invariant.
+C++ callers with a native `uint128_t`-typed buffer **must
+explicitly construct** `shekyl_u128` instances at the call site
+(`{ .lo = (uint64_t)v, .hi = (uint64_t)(v >> 64) }`) and
+decompose returned values symmetrically. The field-meaning is
+the contract; reinterpret-casting `uint128_t` to `shekyl_u128`
+relies on target-defined struct-layout ABI which Round 5
+explicitly rejects.
 
 The export sits inside the `shekyl-ffi` crate's single `unsafe`
 surface per `25-rust-architecture.mdc`. The `shekyl-difficulty`
@@ -548,14 +573,66 @@ policy's 5-working-day / 10-commit guidance is a defense against
 unreviewable PRs accumulating. Phase 4 is a deliberate exception
 on consensus-atomicity grounds: the work cannot be split across
 two PRs without weakening consensus integrity in the intermediate
-state. The exception is bounded: Phase 4 is mechanical (the
-rewires are textual; the deletions are file-level), the affected
-surface is enumerated in `DAA_LWMA1.md` §§9.4–9.7 in advance
-(rather than discovered at PR time), and the work-item ceiling is
-fixed (no scope creep within the PR). RandomX v2's Phase 3 sub-PR
-split (3a/3b/3c per `RANDOMX_V2_PLAN.md`) is the right shape for
-that migration because its surfaces *are* separable; the DAA's
-are not.
+state.
+
+**The "consensus-atomic cutover" exception class.** Round 5
+review names this carve-out as a *class*, not as a per-PR
+favor. The class's triggering criteria, drafted here so a
+future `06-branching.mdc` amendment PR has the text ready:
+
+1. **Consensus-rule boundary.** The PR touches a consensus-rule
+   value or behavior where partial application leaves the chain
+   in a non-canonical state — one in which validators reach
+   different conclusions about the same block depending on
+   which subset of the cutover they have applied.
+2. **Structural indivisibility.** The work cannot be split
+   across two or more PRs without producing an intermediate
+   consensus configuration that no node should run. This is
+   stricter than "would be inconvenient to split"; the test is
+   whether the intermediate state is itself a defensible
+   consensus configuration.
+3. **Surface enumerated in advance.** The affected files,
+   constants, and call sites are enumerated in the design
+   document referenced by the PR (here: `DAA_LWMA1.md`
+   §§9.4–9.7), not discovered at PR time. Enumeration-in-advance
+   bounds the review surface; absence of enumeration disqualifies
+   the exception.
+4. **Documented disposition.** The PR description cites the
+   exception class explicitly, names which design-doc
+   enumeration bounds the surface, and asserts the partial-
+   application failure mode the atomicity prevents.
+
+Per `21-reversion-clause-discipline.mdc`'s named-criteria
+discipline: the exception class is auditable mechanically
+("does this PR meet criteria 1–4?") rather than by precedent
+("we did it for LWMA-1, can we do it again?"). Phase 4 of this
+plan invokes the exception class against criteria 1 (FTL/MTP
+value changes are consensus-rule values), 2 (alias-period
+intermediate states are either preserve-old-values-across-rewire
+or silently-change-at-definition — neither is a defensible
+consensus configuration), 3 (`DAA_LWMA1.md` §§9.4–9.7 enumerate
+the surface in advance), and 4 (this paragraph in this plan).
+
+Phase 4 is bounded under the class: the rewires are mechanical
+(textual against the §§9.4–9.7 enumeration), the deletions are
+file-level (the difficulty.{h,cpp} pair and three `#define`s
+listed in §9.2), and the work-item ceiling is fixed at the 14
+items below (no scope creep within the PR). RandomX v2's Phase
+3 sub-PR split (3a/3b/3c per `RANDOMX_V2_PLAN.md`) is the right
+shape for that migration because its surfaces *are* separable —
+the consensus-atomic class does not engage for it; the LWMA-1
+Phase 4 is.
+
+**Ratification.** The exception class is **drafted, not yet
+ratified.** Ratification is a sibling PR amending
+`06-branching.mdc` (or its successor rule) to land the criteria
+above as a named carve-out before Phase 4 opens; the cost is
+~50 lines of rule text plus one `CHANGELOG.md` entry. If
+ratification is deferred and Phase 4 opens against the criteria
+in their drafted state, the Phase 4 PR description must cite
+this plan section as the criteria source so a future audit can
+trace the exception back to its named test rather than to
+LWMA-1-specific precedent erosion.
 
 Fourteen work items, all in this PR (numbered for the work-item
 count audit; counts match `DAA_LWMA1.md` §§9.1–9.7):

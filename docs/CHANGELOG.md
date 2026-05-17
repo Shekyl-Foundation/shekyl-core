@@ -163,6 +163,71 @@
   The numerical value matches; the source-of-truth is the JSON
   authority `daa_target_seconds`, not the inherited `#define`.
 
+  *Round 5 review update (2026-05-17):* (a) **FFI ABI pivot
+  from `[u8; 16]` byte arrays to `#[repr(C)] struct ShekylU128
+  { lo: u64, hi: u64 }`.** Round 4 named the `u128` ABI
+  unsoundness as a Tier 1 blocker but stopped short of
+  proposing the specific wire representation. Round 5 closes
+  this. `ShekylU128` decomposes the 128-bit value into two
+  `u64` fields whose ABI is universally stable on every Shekyl-
+  supported target — no `improper_ctypes` exposure, no
+  MSRV-pin-to-1.78 constraint, no per-target ABI verification
+  matrix. The struct-with-named-fields shape preserves explicit
+  `lo`/`hi` semantics (debugger-friendly, unambiguous, survives
+  any future endianness disposition because the field meaning
+  is carried by the field name). Endianness is consensus-locked
+  in `DAA_LWMA1.md` §6.1: `ShekylU128` is little-endian by
+  field semantics — `lo` is the low 64 bits, `hi` is the high
+  64 bits, reconstruction is `value = (hi as u128) << 64 | (lo
+  as u128)`. Cost: one struct definition and four lines of
+  `From` impls per direction. Benefit: the consensus-critical
+  surface is immune to `u128`-ABI target-portability issues
+  permanently, not just on rustc ≥ 1.77.
+  (b) **MTP 60 → 11 trade-off framing.** The
+  `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW = 60` → `SHEKYL_DAA_MTP_WINDOW
+  = 11` change travels in opposite directions on two security
+  axes simultaneously and a release-note skimmer reading the
+  value change in isolation would misread it as a security
+  regression. Surfaced explicitly: the **MTP-only timestamp-
+  attack defense weakens** (it is easier for an adversary to
+  satisfy "strictly greater than the median of 11 timestamps"
+  than "strictly greater than the median of 60 timestamps"
+  in isolation), and the **LWMA-1-coupled defense engages**
+  (the canonical zawy12 math is calibrated against MTP = 11,
+  not MTP = 60; running LWMA-1 with MTP = 60 would understate
+  the algorithm's solvetime-clamp resistance). `DAA_LWMA1.md`
+  §5.5 names all three checks (MTP + FTL + solvetime-clamp)
+  as *jointly* load-bearing — the combined defense profile
+  post-Phase-4 is stronger than either the pre-Phase-4
+  MTP=60-only profile or a hypothetical LWMA-1-with-MTP=60
+  configuration. The value change is the cost of moving from a
+  MTP-only-anchored defense to the canonical zawy12-coupled
+  defense; it is not a unilateral loosening.
+  (c) **RPC-contract preservation regression test (§9.8).** The
+  byte-identity assertion is now explicit: a wallet calling
+  `get_info` against the post-Phase-4 daemon receives a
+  `block_target` field that is **byte-identical** to the same
+  wallet's response against the pre-Phase-4 daemon (captured
+  as a fixture at PR-open). The value-identity assertion
+  (`120 == 120`) catches value drift; the byte-identity
+  assertion catches encoding drift (a future "change varint
+  encoding to little-endian byte array" refactor would
+  preserve the numeric value but break the wire contract). Both
+  are required to make the RPC-contract-preservation property
+  auditable rather than asserted.
+  (d) **"Consensus-atomic cutover" exception class drafted in
+  `DAA_LWMA1_PLAN.md`** Phase 4 (four criteria: consensus-rule
+  boundary; structural indivisibility; surface enumerated in
+  advance; documented disposition citing the criteria). The
+  class is drafted, not yet ratified — ratification is a
+  sibling PR amending `06-branching.mdc` to land the criteria
+  before Phase 4 opens. The drafting-here disposition serves
+  both the "ratify before Phase 4" and "defer with criteria
+  named in the design doc" paths per `21-reversion-clause-
+  discipline.mdc`'s named-criteria discipline. Phase 4's
+  exception is auditable against the class's four criteria
+  mechanically, not against LWMA-1-specific precedent.
+
 - **`07-consensus-atomic-cutovers.mdc` — named exception to
   branching policy for consensus-atomic cutovers**
   (`feat/consensus-atomic-cutovers-rule`, 2026-05-17). New rule

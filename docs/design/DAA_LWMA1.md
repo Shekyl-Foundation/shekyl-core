@@ -1017,49 +1017,75 @@ output values reach the caller through out-parameters.
 
 ### 6.1 The one committed export
 
-**Difficulty type at the ABI boundary: `[u8; 16]` little-endian.**
-The FFI exchanges 128-bit difficulty values as fixed-size 16-byte
-little-endian byte arrays, **not** as Rust `u128` / C `__uint128_t`.
-Rationale per `17-dependency-discipline.mdc`'s property-existence
-discipline and Round 4 review:
+**Difficulty type at the ABI boundary: `struct ShekylU128 { lo, hi }`
+little-endian by field semantics.** The FFI exchanges 128-bit
+difficulty values as a `#[repr(C)]` two-`u64` struct, **not** as
+Rust `u128` / C `__uint128_t`. Rationale per
+`17-dependency-discipline.mdc`'s property-existence discipline and
+Round 5 review:
 
 - The Rust `u128` C ABI was **unsound on several targets** until
-  Rust 1.77 (released March 2024); the `improper_ctypes` lint
+  rustc 1.77 (released March 2024); the `improper_ctypes` lint
   flagged it as undefined behavior up to that point, and the
   underlying ABI mismatch survives on uncommon targets even on
-  current Rust. See [rust-lang/rust#54341](https://github.com/rust-lang/rust/issues/54341)
+  current Rust. See
+  [rust-lang/rust#54341](https://github.com/rust-lang/rust/issues/54341)
   and [RFC 3535](https://github.com/rust-lang/rfcs/pull/3535).
-  The unsoundness is real on i686-pc-windows-gnu, sparc64,
-  powerpc64le, and others where the C-side ABI for 128-bit
-  integers disagrees with Rust's representation. For a
-  **consensus-critical** FFI surface, a target-dependent
+  For a **consensus-critical** FFI surface, a target-dependent
   soundness footgun is unacceptable.
-- The boring-safe disposition is explicit byte arrays. Both sides
-  serialize/deserialize at the ABI boundary; the in-memory
-  representation on either side is unconstrained.
-- This matches the FCMP++ and KEM-derivation FFI surfaces already
-  in the workspace, which exchange field elements and scalars as
-  fixed-size byte arrays for the same target-portability reason.
-- Endianness convention: **little-endian**, matching `u128::to_le_bytes`
-  on Rust and the canonical encoding of 128-bit integers across
-  the workspace's serialization layer.
+- `u64` is `unsigned long long` everywhere Shekyl supports;
+  its ABI is universally stable across every Rust toolchain
+  Shekyl targets. Decomposing the 128-bit value into two `u64`
+  fields eliminates the `improper_ctypes` exposure, removes any
+  MSRV-pin-to-1.78 constraint, and skips the per-target ABI
+  verification matrix entirely.
+- The struct-with-named-fields shape preserves explicit
+  semantics: `lo` is the low 64 bits, `hi` is the high 64 bits.
+  Debugger-friendly, survives any future endianness disposition
+  because the field meaning is carried by the field name, and
+  unambiguous at every consumer call site. `[u64; 2]` works
+  equivalently at the ABI level but loses the field naming and
+  invites lo/hi confusion.
+- This matches the FCMP++ and KEM-derivation FFI surfaces
+  already in the workspace, which exchange field elements and
+  scalars as field-named `#[repr(C)]` structs rather than
+  opaque byte arrays for the same field-semantic-clarity
+  reason.
+- Endianness convention: **little-endian by field semantics.**
+  `ShekylU128` is little-endian by field semantics — `lo` is
+  the low 64 bits, `hi` is the high 64 bits. Reconstruction:
+  `value = (hi as u128) << 64 | (lo as u128)`. Each `u64` field
+  is itself stored in target-native byte order at memory, but
+  the *semantic* meaning of `lo` vs. `hi` is consensus-locked
+  by the field names; consumers reconstruct the 128-bit value
+  using arithmetic, not byte-order reinterpretation.
 
 ```c
+// The 128-bit difficulty representation at the FFI boundary.
+// Little-endian by field semantics: lo is the low 64 bits,
+// hi is the high 64 bits. To reconstruct the 128-bit value:
+//   value = ((__uint128_t)hi << 64) | (__uint128_t)lo;
+struct shekyl_u128 {
+    uint64_t lo;
+    uint64_t hi;
+};
+
 // Compute next difficulty per LWMA-1.
 //
 // Inputs:
 //   timestamps          - pointer to count u64 timestamps in chain order,
 //                         oldest first; index 0 is the oldest, index
 //                         count-1 is the chain tip
-//   cum_difficulties    - pointer to count 16-byte little-endian
-//                         cumulative-difficulty values matching
-//                         timestamps in order. Each entry is the
-//                         canonical LE encoding of the corresponding
-//                         u128 cumulative difficulty. C callers with a
-//                         native uint128_t-typed buffer must memcpy
-//                         into this representation explicitly (rather
-//                         than reinterpret-casting), per the
-//                         endianness-checkpoint discipline.
+//   cum_difficulties    - pointer to count shekyl_u128 cumulative-
+//                         difficulty values matching timestamps in
+//                         order. Each entry's (lo, hi) fields decompose
+//                         the corresponding u128 cumulative difficulty.
+//                         C callers with a native uint128_t-typed
+//                         buffer must construct shekyl_u128 instances
+//                         explicitly (`{ .lo = v, .hi = v >> 64 }`)
+//                         rather than reinterpret-casting, so the
+//                         field-meaning is a checkpoint at the call
+//                         site.
 //   count               - number of entries in each array.
 //                         - If chain_height >= N: count MUST equal N+1
 //                           (== 91 for Shekyl V3.0); ERR_INVALID_COUNT
@@ -1075,9 +1101,10 @@ discipline and Round 4 review:
 //                         genesis short-circuit per §5.3 step 1; the
 //                         transition from short-circuit to algorithm
 //                         fires at chain_height == N.
-//   out_next_difficulty - pointer to a 16-byte buffer receiving the
-//                         canonical little-endian encoding of the
-//                         next-difficulty u128 output on success.
+//   out_next_difficulty - pointer to a shekyl_u128 receiving the
+//                         next-difficulty output on success; its
+//                         (lo, hi) fields decompose the u128 result
+//                         per the same field semantics.
 //
 // Returns:
 //   0  - OK; out_next_difficulty written
@@ -1091,34 +1118,55 @@ discipline and Round 4 review:
 //                      not written)
 int32_t shekyl_difficulty_lwma1_next(
     const uint64_t *timestamps,
-    const uint8_t (*cum_difficulties)[16],
+    const struct shekyl_u128 *cum_difficulties,
     size_t count,
     uint64_t chain_height,
-    uint8_t (*out_next_difficulty)[16]);
+    struct shekyl_u128 *out_next_difficulty);
 ```
 
-The Rust-side export signature mirrors this:
+The Rust-side mirror lives in `rust/shekyl-ffi/src/lib.rs`:
 
 ```rust
+#[repr(C)]
+pub struct ShekylU128 {
+    pub lo: u64,
+    pub hi: u64,
+}
+
+impl From<u128> for ShekylU128 {
+    fn from(v: u128) -> Self {
+        Self { lo: v as u64, hi: (v >> 64) as u64 }
+    }
+}
+
+impl From<ShekylU128> for u128 {
+    fn from(v: ShekylU128) -> u128 {
+        ((v.hi as u128) << 64) | (v.lo as u128)
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn shekyl_difficulty_lwma1_next(
     timestamps: *const u64,
-    cum_difficulties: *const [u8; 16],
+    cum_difficulties: *const ShekylU128,
     count: usize,
     chain_height: u64,
-    out_next_difficulty: *mut [u8; 16],
+    out_next_difficulty: *mut ShekylU128,
 ) -> i32 {
-    // ...
-    // Reads cum_difficulties[i] via core::ptr::read_unaligned
-    // followed by u128::from_le_bytes; writes out_next_difficulty
-    // via u128::to_le_bytes followed by core::ptr::write_unaligned.
+    // Reads cum_difficulties[i] via core::ptr::read followed by
+    // ShekylU128::into() to recover u128; writes out_next_difficulty
+    // via core::ptr::write of ShekylU128::from(u128).
+    // ... per the algorithm and error taxonomy above.
 }
 ```
 
-The unaligned read/write is intentional: the C side's
-`uint128_t` buffer may not be 16-byte-aligned on all targets,
-and the canonical-LE-byte-array view is alignment-free by
-construction.
+The conversions are infallible and lossless: the `u64`-to-`u128`
+widening is loss-free in both directions, and the bit-shift
+arithmetic is consensus-locked by §6.1's field-semantics
+contract. The cost is one extra type definition and four lines
+of `From` impls per direction — cheaper than auditing `u128`
+ABI behavior on every Shekyl-supported target on every Rust
+toolchain bump.
 
 ### 6.2 Discretionary additions (deferred to V3.x unless Phase 4 finds need)
 
@@ -1144,11 +1192,12 @@ both sides, generated from the single JSON authority.
   spec level; the FFI mirrors that.
 - Difficulty conversion / packing helpers. Difficulty is `u128`
   end-to-end at the consensus level on both sides; only the ABI
-  representation differs (`[u8; 16]` LE per §6.1's discipline).
-  The C++ side memcpys between its native `uint128_t` and the
-  16-byte LE buffer at the call site; the Rust side uses
-  `u128::{to_le_bytes, from_le_bytes}`. No general-purpose packing
-  helper is exposed across the FFI.
+  representation differs (`struct ShekylU128 { lo, hi }` per §6.1's
+  discipline). The C++ side decomposes/composes its native
+  `uint128_t` against the `(lo, hi)` field semantics at every call
+  site; the Rust side uses the `From<u128> ↔ From<ShekylU128>`
+  conversions defined in §6.1. No general-purpose packing helper
+  is exposed across the FFI.
 
 ## 7. Isolation invariants
 
@@ -1529,6 +1578,20 @@ This contrasts with the FTL/MTP changes (§9.5 / §9.6), which **do**
 change consensus-rule values — but FTL and MTP are not exposed via
 RPC, so the daemon's RPC surface is unchanged across the entire
 LWMA-1 migration.
+
+**Phase 4 regression test.** A regression test asserts the wire-
+contract preservation operationally, not just the value: a wallet
+issuing `get_info` against the post-Phase-4 daemon receives a
+response whose `block_target` field is **byte-identical** to the
+same wallet's response against the pre-Phase-4 daemon
+(captured once at PR-open as a fixture, asserted at every CI
+run). The byte-identity assertion catches refactors that
+preserve the numeric value (`120`) but break the wire encoding
+(e.g., a future "change varint encoding to little-endian byte
+array" refactor that leaves callers parsing a different number
+of bytes). The value-only assertion catches the value drift; the
+byte-identity assertion catches the encoding drift. Both are
+required to make the RPC-contract-preservation claim auditable.
 
 ## 10. Reversion clause
 
