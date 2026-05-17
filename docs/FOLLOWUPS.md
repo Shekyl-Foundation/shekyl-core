@@ -888,6 +888,194 @@ sustainability is unaffected by the recalibration.
   PR A's mechanical scope; warrants separate PR for the `sign()`
   refactor surface.
 
+- **Difficulty algorithm: replace inherited CryptoNote cut-windowed
+  average with LWMA-1 (sequencing trigger: A-4/A-5/A-7/A-8 PoW
+  workstream PR; pre-genesis).** The inherited difficulty algorithm
+  at [`src/cryptonote_basic/difficulty.cpp:122-163,203-240`](../src/cryptonote_basic/difficulty.cpp)
+  is the original CryptoNote cut-windowed average (sort timestamps;
+  cut 60 outliers per `DIFFICULTY_CUT`; compute time_span vs
+  total_work; scale by target_seconds). Parameters live in
+  [`src/cryptonote_config.h:82-95`](../src/cryptonote_config.h)
+  (`DIFFICULTY_TARGET_V2 = 120`, `DIFFICULTY_WINDOW = 720`,
+  `DIFFICULTY_LAG = 15 // !!!`, `DIFFICULTY_CUT = 60`,
+  `DIFFICULTY_BLOCKS_COUNT = DIFFICULTY_WINDOW + DIFFICULTY_LAG`).
+  Replacement target is LWMA-1 (Linear Weighted Moving Average,
+  zawy12 canonical implementation per the
+  [`zawy12/difficulty-algorithms`](https://github.com/zawy12/difficulty-algorithms)
+  reference repository), implemented in Rust per `20-rust-vs-cpp-policy`
+  rule #2 (difficulty algorithm defines a cryptographic contract
+  that other code consumes → Rust).
+
+  **Three primary rationales aligned with the mission hierarchy
+  per [`.cursor/rules/00-mission.mdc`](../.cursor/rules/00-mission.mdc):**
+
+  1. **Commitment 1 (security): no regression; defensive parity.**
+     The difficulty algorithm is PoW-input-independent (operates
+     on timestamps + cumulative difficulties only); LWMA-1's
+     security posture against timestamp-manipulation attacks is
+     well-characterized through ~8 years of real-world deployment
+     (Masari, multiple Monero forks, smaller CPU-mineable
+     projects) and through the simulation tooling in the canonical
+     zawy12 repository (hundreds of thousands of historical-data
+     blocks). The replacement does not weaken the PQC posture
+     (orthogonal to the difficulty surface) and does not weaken
+     timestamp-attack resistance.
+  2. **Commitment 2 (privacy): material side-benefit.** LWMA-1's
+     linear weighting introduces natural jitter in block intervals
+     compared to smoother algorithms (e.g., ASERT). For a
+     privacy-focused chain where transactions are broadcast over
+     anonymity networks (Tor, I2P), more variable block production
+     adds natural obfuscation against statistical timing attacks
+     that correlate broadcast-time with block-find-time. This is
+     a recognized DAA-design side-effect rather than a primary
+     LWMA goal, but it aligns with mission commitment 2's "privacy
+     is the product" framing — the inherent noise is privacy
+     surface that costs nothing else.
+  3. **Commitment 3 (outlast the team): mature substrate, low
+     reasoning load.** LWMA-1 is a 2017-vintage algorithm with
+     extensive post-2017 community testing (LWMA-2/3/4 were
+     evaluated and found not consistently superior; LWMA-1 remains
+     the recommended baseline as of 2025-2026). Simpler than
+     exponential algorithms (ASERT, EMA variants) to reason about,
+     debug, and audit — which matters disproportionately for an
+     unknown future maintainer who inherits the codebase. The
+     zawy12 reference repository is still actively referenced in
+     2025-2026 papers and projects (including post-quantum
+     experiments), so the canonical source remains a maintained
+     dependency-of-knowledge rather than a frozen reference.
+
+  **Tuning parameters (specific values pending PoW PR scope):**
+
+  | Parameter | Inherited (CryptoNote) | LWMA-1 candidate range | Notes |
+  | --- | --- | --- | --- |
+  | `N` (window) | `DIFFICULTY_WINDOW = 720` (24h at 120s) | 60–120 blocks (2–4h at 120s) | LWMA-1's fast-response design benefits from shorter windows; final value tuned during PoW PR against simulation data |
+  | Difficulty clamp | None | Max 3× change per block (zawy12 standard) | Prevents runaway adjustments on adversarial timestamps |
+  | Target block time | `DIFFICULTY_TARGET_V2 = 120s` | Inherit 120s | No coupling to algorithm choice; PoW PR may revisit independently |
+  | Outlier cut (`DIFFICULTY_CUT`) | 60 timestamps | n/a — not part of LWMA-1 | LWMA-1 handles timestamp manipulation via clamp + weighting, not via outlier excision |
+  | Lag (`DIFFICULTY_LAG`) | 15 blocks (carries `// !!!` warning) | n/a — not part of LWMA-1 | Disappears with algorithm replacement |
+
+  **Alternatives considered and rejected, with reversion criteria
+  per [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc):**
+
+  - **LWMA-2 / LWMA-3 / LWMA-4.** Community testing across multiple
+    coins did not establish consistent superiority over LWMA-1;
+    later variants introduced complexity (additional weighting
+    schemes, more aggressive adjustments) that produced oscillation
+    artifacts in some hashrate regimes. Rejected because LWMA-1
+    delivers the load-bearing properties with lower reasoning
+    load. *Reversion criterion:* if a Shekyl-specific simulation
+    against the canonical zawy12 tooling demonstrates LWMA-2+ has
+    materially better behavior under Shekyl's specific hashrate
+    profile (CPU-only RandomX v2; small-chain bootstrap regime),
+    reopen the disposition.
+  - **ASERT (Absolutely Scheduled Exponentially Rising Targets).**
+    Theoretically smoother long-term stability; strong deployment
+    record on Bitcoin Cash; respected in DAA literature. Rejected
+    for Shekyl-specific reasons: (a) ASERT's smoothness reduces
+    the privacy-jitter side-benefit material to commitment 2
+    above; (b) LWMA-1's faster response to hashrate changes is
+    better-shaped for the small-chain bootstrap regime where CPU
+    miners join and leave on short timescales; (c) ASERT's
+    exponential math raises the reasoning-load floor for future
+    maintainers more than LWMA-1's linear-weighted average does.
+    *Reversion criterion:* if Shekyl's hashrate volatility damps
+    to long-term equilibrium (post-bootstrap stable regime; e.g.,
+    several years post-genesis with consistent CPU miner
+    participation), and the privacy-jitter benefit is no longer
+    load-bearing (e.g., transaction-broadcast timing analysis is
+    mitigated by other privacy mechanisms), revisit ASERT for its
+    long-term stability advantages.
+  - **Keep inherited CryptoNote cut-windowed algorithm.** Rejected
+    per [`.cursor/rules/16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc):
+    inherited algorithm carries three Lens E findings
+    (`DIFFICULTY_TARGET_V1` Rule-60 residue per E.4-C-1;
+    `DIFFICULTY_LAG = 15 // !!!` warning marker per E.4-C-2;
+    Rule-75 rationale-documentation gap per E.4-C-3). Replacement
+    subsumes E.4-C-1 and E.4-C-2 (V1 parameter and LAG marker
+    both disappear when the algorithm is replaced) and transforms
+    E.4-C-3 into a forward-template requirement on the new Rust
+    implementation (rationale + bounds-for-safe-adjustment docs
+    per Rule 75; matches the canonical positive-reference shape
+    of [`rust/shekyl-economics/build.rs`](../rust/shekyl-economics/build.rs)).
+    *Reversion criterion (named for completeness):* if the LWMA-1
+    Rust implementation surfaces a structural defect against
+    Shekyl's specific PoW threat model that the inherited
+    algorithm doesn't share, revisit the keep-vs-replace decision.
+
+  *Disposition.* Replace pre-genesis as part of the
+  A-4/A-5/A-7/A-8 PoW workstream PR (RandomX v2 + LWMA-1 paired
+  decisions; same workstream landing on `dev` shortly). New Rust
+  implementation in `shekyl-consensus` per the
+  `20-rust-vs-cpp-policy` rule #2 routing. Forward-template
+  requirement: the new implementation must carry per-constant
+  rationale + bounds-for-safe-adjustment docs per Rule 75, ideally
+  via the build-time-codegen pattern from `shekyl-economics` /
+  `shekyl-staking` for tuning parameters that may need future
+  community consensus to adjust.
+
+  *Sequencing.* Lands with the PoW PR (paired with RandomX v2
+  from genesis per `docs/DOCUMENTATION_TODOS_AND_PQC.md` §1.10
+  and Phase 0 Mission Audit Lens A finding A-8). The pre-genesis
+  Rule-60 residue cleanup for `cryptonote_config.h` DIFFICULTY_*
+  V1 parameters (Lens E finding E.4-C-1) folds into the same
+  PR by definition (V1 parameters disappear when the algorithm
+  is replaced); the `DIFFICULTY_LAG // !!!` semantic verification
+  (E.4-C-2) also folds in by definition (LAG is CryptoNote-
+  specific). The Rule 75 rationale-doc forward-template (E.4-C-3)
+  applies to the new implementation's constants, not to the
+  inherited constants being deleted.
+
+  *Three-timeframe verification per [`.cursor/rules/05-system-thinking.mdc`](../.cursor/rules/05-system-thinking.mdc).*
+
+  - **Now (V3.0 genesis):** LWMA-1's fast hashrate response is the
+    right shape for small-chain bootstrap; privacy-jitter side-
+    benefit is most-valuable when anonymity-set is smallest.
+  - **Mining era end (~30 years):** LWMA-1's simplicity + mature
+    real-world data lower the reasoning load for difficulty-
+    adjustment review by maintainers who may not be the original
+    team. Algorithm is PoW-independent so survives any future
+    PoW change.
+  - **Post-quantum era (V4):** difficulty algorithm operates on
+    timestamps + cumulative difficulties only — no cryptographic
+    primitives in the computation path — so LWMA-1 transitions
+    cleanly when the PoW itself transitions to PQ-secure
+    primitives. The reversion criteria above name what would
+    trigger re-evaluation; nothing about the V4 transition itself
+    triggers them.
+
+  *Cross-references.*
+  [`docs/DOCUMENTATION_TODOS_AND_PQC.md`](./DOCUMENTATION_TODOS_AND_PQC.md)
+  §1.10 (paired RandomX-from-genesis pin);
+  [`src/cryptonote_basic/difficulty.cpp:122-163,203-240`](../src/cryptonote_basic/difficulty.cpp)
+  (inherited algorithm being replaced);
+  [`src/cryptonote_config.h:82-95`](../src/cryptonote_config.h)
+  (inherited tuning constants being deleted);
+  [`rust/shekyl-economics/build.rs`](../rust/shekyl-economics/build.rs)
+  (positive-reference forward-template for build-time-codegen
+  tunable-parameter discipline per Rule 75);
+  [`zawy12/difficulty-algorithms`](https://github.com/zawy12/difficulty-algorithms)
+  (canonical reference implementation + simulation tooling);
+  [`.cursor/rules/05-system-thinking.mdc`](../.cursor/rules/05-system-thinking.mdc)
+  (three-timeframe analysis);
+  [`.cursor/rules/16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  (inherited-code disposition rule);
+  [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+  (named reversion criteria for LWMA-2+ and ASERT);
+  [`.cursor/rules/75-system-autonomy.mdc`](../.cursor/rules/75-system-autonomy.mdc)
+  (no manual difficulty resets in normal operation;
+  per-parameter rationale + bounds discipline).
+
+  *Audit-doc link.* Pinned during Phase 0 Mission Audit Lens E
+  (E.4-C/D/E parallel-batch closure phase). The LWMA-1 design
+  decision subsumes E.4-C-1 and E.4-C-2 disposition work into the
+  PoW PR scope rather than treating those as separate cleanup
+  items, and transforms E.4-C-3 from a remediation finding into
+  a forward-template requirement on the replacement
+  implementation. Pre-PR pin lets the PoW PR author inherit the
+  full design substrate (tuning ranges + rationale + alternatives
+  rejected with reversion criteria) without re-deriving it at PR
+  open time.
+
 ---
 
 ## V3.1 — audit response and stressnet gates
