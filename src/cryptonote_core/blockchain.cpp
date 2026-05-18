@@ -58,6 +58,7 @@
 #include "warnings.h"
 #include "crypto/hash.h"
 #include "cryptonote_core.h"
+#include "difficulty_engine_error.h"
 #include "fcmp/rctSigs.h"
 #include "shekyl/shekyl_ffi.h"
 #include "common/perf_timer.h"
@@ -92,6 +93,87 @@ DISABLE_VS_WARNINGS(4267)
 
 // used to overestimate the block reward when estimating a per kB to use
 #define BLOCK_REWARD_OVERESTIMATE (10 * 1000000000000)
+
+namespace
+{
+  // LWMA-1 bridge — Phase 4 commit 3 of the DAA cutover.
+  //
+  // Converts the daemon's canonical inputs (oldest-first `uint64_t`
+  // timestamps + `boost::multiprecision::uint128_t` cumulative
+  // difficulties) into the FFI's `shekyl_u128` (lo/hi `uint64_t` pair)
+  // surface, dispatches to `shekyl_difficulty_lwma1_next`, decomposes
+  // the result, and throws `cryptonote::difficulty_computation_error`
+  // on any non-zero return code.
+  //
+  // `chain_height` semantics match the spec
+  // (docs/design/DAA_LWMA1.md §5.3): the height of the chain tip (the
+  // most recent block already on chain). The FFI's genesis short-circuit
+  // fires when `chain_height < SHEKYL_DAA_WINDOW_N`, returning
+  // `SHEKYL_DAA_GENESIS_DIFFICULTY` without inspecting the input
+  // slices. When `chain_height >= SHEKYL_DAA_WINDOW_N`, the slices MUST
+  // contain exactly `SHEKYL_DAA_WINDOW_N + 1` entries (consensus
+  // invariant; see §5.3 step 1's boundary).
+  //
+  // Allocation note: this helper builds a `std::vector<shekyl_u128>`
+  // (≈1.5 KiB at N=90) per call. The FFI shim's own per-call `Vec<u128>`
+  // allocation is documented in FOLLOWUPS.md under V3.1+; this C++-side
+  // allocation is part of the same future optimization scope.
+  cryptonote::difficulty_type lwma1_next_difficulty(
+      uint64_t chain_height,
+      const std::vector<uint64_t>& timestamps,
+      const std::vector<cryptonote::difficulty_type>& cumulative_difficulties)
+  {
+    if (timestamps.size() != cumulative_difficulties.size())
+    {
+      throw cryptonote::difficulty_computation_error(
+          SHEKYL_DIFFICULTY_ERR_INVALID_COUNT);
+    }
+
+    // Per the FFI contract (shekyl/shekyl_ffi.h): when chain_height < N
+    // pass count == 0; when chain_height >= N pass count == N + 1.
+    // Normalize here so the C++ call sites can carry their natural
+    // window state without each having to special-case the genesis
+    // range.
+    const bool genesis_range = chain_height < SHEKYL_DAA_WINDOW_N;
+    std::vector<shekyl_u128> cum_u128;
+    if (!genesis_range)
+    {
+      cum_u128.reserve(cumulative_difficulties.size());
+      const cryptonote::difficulty_type u64_mask =
+          cryptonote::difficulty_type(std::numeric_limits<uint64_t>::max());
+      for (const cryptonote::difficulty_type& v : cumulative_difficulties)
+      {
+        shekyl_u128 entry{};
+        entry.lo = static_cast<uint64_t>((v & u64_mask)
+            .convert_to<std::uint64_t>());
+        entry.hi = static_cast<uint64_t>((v >> 64)
+            .convert_to<std::uint64_t>());
+        cum_u128.push_back(entry);
+      }
+    }
+
+    const uint64_t* ts_ptr = genesis_range || timestamps.empty()
+        ? nullptr : timestamps.data();
+    const shekyl_u128* cd_ptr = genesis_range || cum_u128.empty()
+        ? nullptr : cum_u128.data();
+    const size_t count = genesis_range ? 0u : cum_u128.size();
+
+    shekyl_u128 result{};
+    const int32_t rc = shekyl_difficulty_lwma1_next(
+        ts_ptr,
+        cd_ptr,
+        count,
+        chain_height,
+        &result);
+    if (rc != SHEKYL_DIFFICULTY_OK)
+    {
+      throw cryptonote::difficulty_computation_error(rc);
+    }
+
+    return (cryptonote::difficulty_type(result.hi) << 64)
+         | cryptonote::difficulty_type(result.lo);
+  }
+} // anonymous namespace
 
 //------------------------------------------------------------------
 Blockchain::Blockchain(tx_memory_pool& tx_pool) :
@@ -886,10 +968,13 @@ bool Blockchain::get_block_by_hash(const crypto::hash &h, block &blk, bool *orph
   return false;
 }
 //------------------------------------------------------------------
-// This function aggregates the cumulative difficulties and timestamps of the
-// last DIFFICULTY_BLOCKS_COUNT blocks and passes them to next_difficulty,
-// returning the result of that call.  Ignores the genesis block, and can use
-// less blocks than desired if there aren't enough.
+// LWMA-1 next-difficulty (per docs/design/DAA_LWMA1.md §5.3). Aggregates
+// timestamps and cumulative_difficulties for the last
+// `SHEKYL_DAA_WINDOW_N + 1` blocks (or zero entries when the chain has
+// fewer than `SHEKYL_DAA_WINDOW_N` blocks — the FFI genesis short-circuit
+// returns SHEKYL_DAA_GENESIS_DIFFICULTY in that case). Throws
+// difficulty_computation_error on consensus-invariant violations
+// surfaced by the Rust algorithm; the daemon treats those as fatal.
 difficulty_type Blockchain::get_difficulty_for_next_block()
 {
   if (m_fixed_difficulty)
@@ -916,53 +1001,61 @@ difficulty_type Blockchain::get_difficulty_for_next_block()
   uint64_t height;
   top_hash = get_tail_id(height); // get it again now that we have the lock
   ++height; // top block height to blockchain height
+
+  // LWMA-1 window: exactly N+1 entries when the chain is past the
+  // genesis short-circuit, zero entries otherwise. The FFI's
+  // chain_height parameter is the height of the chain tip, i.e.,
+  // `height - 1` in this file's convention.
+  constexpr uint64_t lwma1_window_size = SHEKYL_DAA_WINDOW_N + 1;
+  const uint64_t chain_height = height - 1;
+
   // ND: Speedup
-  // 1. Keep a list of the last 735 (or less) blocks that is used to compute difficulty,
-  //    then when the next block difficulty is queried, push the latest height data and
-  //    pop the oldest one from the list. This only requires 1x read per height instead
-  //    of doing 735 (DIFFICULTY_BLOCKS_COUNT).
+  // Keep the LWMA-1 window cached on the Blockchain object so the
+  // next call only needs a 1-block roll-forward rather than re-fetching
+  // all N+1 entries from LMDB.
   if (m_reset_timestamps_and_difficulties_height)
     m_timestamps_and_difficulties_height = 0;
-  if (m_timestamps_and_difficulties_height != 0 && ((height - m_timestamps_and_difficulties_height) == 1) && m_timestamps.size() >= DIFFICULTY_BLOCKS_COUNT)
+  if (m_timestamps_and_difficulties_height != 0 && ((height - m_timestamps_and_difficulties_height) == 1) && m_timestamps.size() >= lwma1_window_size)
   {
     uint64_t index = height - 1;
     m_timestamps.push_back(m_db->get_block_timestamp(index));
     m_difficulties.push_back(m_db->get_block_cumulative_difficulty(index));
 
-    while (m_timestamps.size() > DIFFICULTY_BLOCKS_COUNT)
+    while (m_timestamps.size() > lwma1_window_size)
       m_timestamps.erase(m_timestamps.begin());
-    while (m_difficulties.size() > DIFFICULTY_BLOCKS_COUNT)
+    while (m_difficulties.size() > lwma1_window_size)
       m_difficulties.erase(m_difficulties.begin());
 
     m_timestamps_and_difficulties_height = height;
     timestamps = m_timestamps;
     difficulties = m_difficulties;
   }
-  else
+  else if (chain_height >= SHEKYL_DAA_WINDOW_N)
   {
-    uint64_t offset = height - std::min <uint64_t> (height, static_cast<uint64_t>(DIFFICULTY_BLOCKS_COUNT));
-    if (offset == 0)
-      ++offset;
-
-    timestamps.clear();
-    difficulties.clear();
-    if (height > offset)
+    // Window fully populated: fetch exactly N+1 entries ending at
+    // chain tip (heights chain_height - N .. chain_height inclusive).
+    const uint64_t window_start = chain_height + 1 - lwma1_window_size;
+    timestamps.reserve(lwma1_window_size);
+    difficulties.reserve(lwma1_window_size);
+    for (uint64_t h = window_start; h <= chain_height; ++h)
     {
-      timestamps.reserve(height - offset);
-      difficulties.reserve(height - offset);
+      timestamps.push_back(m_db->get_block_timestamp(h));
+      difficulties.push_back(m_db->get_block_cumulative_difficulty(h));
     }
-    for (; offset < height; offset++)
-    {
-      timestamps.push_back(m_db->get_block_timestamp(offset));
-      difficulties.push_back(m_db->get_block_cumulative_difficulty(offset));
-    }
-
     m_timestamps_and_difficulties_height = height;
     m_timestamps = timestamps;
     m_difficulties = difficulties;
   }
-  size_t target = get_difficulty_target();
-  difficulty_type diff = next_difficulty(timestamps, difficulties, target);
+  else
+  {
+    // Genesis short-circuit: chain has fewer than N blocks, so the
+    // FFI ignores the slices and returns SHEKYL_DAA_GENESIS_DIFFICULTY.
+    // Clear the cache so the next call re-evaluates.
+    m_timestamps_and_difficulties_height = 0;
+    m_timestamps.clear();
+    m_difficulties.clear();
+  }
+  difficulty_type diff = lwma1_next_difficulty(chain_height, timestamps, difficulties);
 
   CRITICAL_REGION_LOCAL1(m_difficulty_lock);
   m_difficulty_for_next_block_top_hash = top_hash;
@@ -997,28 +1090,41 @@ size_t Blockchain::recalculate_difficulties(std::optional<uint64_t> start_height
   const uint64_t top_height = m_db->height() - 1;
   MGINFO("Recalculating difficulties from height " << start_height << " to height " << top_height);
 
+  // LWMA-1 window: up to N+1 entries ending at the parent of the
+  // first block to recalculate. Genesis IS included (the legacy DAA
+  // skipped genesis; LWMA-1's algorithmic surface treats genesis as a
+  // normal entry — the genesis short-circuit operates on
+  // chain_height < N, not on slice contents).
+  constexpr uint64_t lwma1_window_size = SHEKYL_DAA_WINDOW_N + 1;
   std::vector<uint64_t> timestamps;
   std::vector<difficulty_type> difficulties;
-  timestamps.reserve(DIFFICULTY_BLOCKS_COUNT + 1);
-  difficulties.reserve(DIFFICULTY_BLOCKS_COUNT + 1);
-  if (start_height > 1)
+  timestamps.reserve(lwma1_window_size);
+  difficulties.reserve(lwma1_window_size);
+  if (start_height > 0)
   {
-    for (uint64_t i = 0; i < DIFFICULTY_BLOCKS_COUNT; ++i)
+    const uint64_t entries_to_fetch =
+        std::min<uint64_t>(start_height, lwma1_window_size);
+    const uint64_t fetch_start = start_height - entries_to_fetch;
+    for (uint64_t h = fetch_start; h < start_height; ++h)
     {
-      uint64_t height = start_height - 1 - i;
-      if (height == 0)
-        break;
-      timestamps.insert(timestamps.begin(), m_db->get_block_timestamp(height));
-      difficulties.insert(difficulties.begin(), m_db->get_block_cumulative_difficulty(height));
+      timestamps.push_back(m_db->get_block_timestamp(h));
+      difficulties.push_back(m_db->get_block_cumulative_difficulty(h));
     }
   }
-  difficulty_type last_cum_diff = start_height <= 1 ? start_height : difficulties.back();
+  difficulty_type last_cum_diff = start_height == 0
+      ? difficulty_type(0)
+      : difficulties.back();
   uint64_t drift_start_height = 0;
   std::vector<difficulty_type> new_cumulative_difficulties;
   for (uint64_t height = start_height; height <= top_height; ++height)
   {
-    size_t target = DIFFICULTY_TARGET_V2;
-    difficulty_type recalculated_diff = next_difficulty(timestamps, difficulties, target);
+    // chain_height is the height of the parent of the block being
+    // recalculated. For height == 0 (recalculating genesis) the parent
+    // doesn't exist; pass 0, which trips the FFI's genesis
+    // short-circuit (0 < N), returning SHEKYL_DAA_GENESIS_DIFFICULTY.
+    const uint64_t parent_height = height == 0 ? 0u : height - 1;
+    difficulty_type recalculated_diff =
+        lwma1_next_difficulty(parent_height, timestamps, difficulties);
 
     boost::multiprecision::uint256_t recalculated_cum_diff_256 = boost::multiprecision::uint256_t(recalculated_diff) + last_cum_diff;
     CHECK_AND_ASSERT_THROW_MES(recalculated_cum_diff_256 <= std::numeric_limits<difficulty_type>::max(), "Difficulty overflow!");
@@ -1041,14 +1147,14 @@ size_t Blockchain::recalculate_difficulties(std::optional<uint64_t> start_height
         LOG_ERROR(boost::format("%llu / %llu (%.1f%%)") % height % top_height % (100 * (height - drift_start_height) / float(top_height - drift_start_height)));
     }
 
-    if (height > 0)
+    // LWMA-1 includes genesis in the window when chain_height == N
+    // (window heights 0..N). Unlike the legacy DAA, do not skip
+    // pushing the block-at-height-0 entry.
+    timestamps.push_back(m_db->get_block_timestamp(height));
+    difficulties.push_back(recalculated_cum_diff);
+    if (timestamps.size() > lwma1_window_size)
     {
-      timestamps.push_back(m_db->get_block_timestamp(height));
-      difficulties.push_back(recalculated_cum_diff);
-    }
-    if (timestamps.size() > DIFFICULTY_BLOCKS_COUNT)
-    {
-      CHECK_AND_ASSERT_THROW_MES(timestamps.size() == DIFFICULTY_BLOCKS_COUNT + 1, "Wrong timestamps size: " << timestamps.size());
+      CHECK_AND_ASSERT_THROW_MES(timestamps.size() == lwma1_window_size + 1, "Wrong timestamps size: " << timestamps.size());
       timestamps.erase(timestamps.begin());
       difficulties.erase(difficulties.begin());
     }
@@ -1266,63 +1372,71 @@ difficulty_type Blockchain::get_next_difficulty_for_alternative_chain(const std:
   }
 
   LOG_PRINT_L3("Blockchain::" << __func__);
+
+  // LWMA-1 next-difficulty for the alt-chain candidate `bei`. The
+  // window contains the last N+1 blocks of the alt chain ending at
+  // bei.height - 1 (the parent of `bei` on the alt chain). The alt
+  // chain is conceptually `main_chain[0..first_alt_height) ++ alt_chain`.
+  //
+  // When bei.height <= N (i.e., chain_height < N), the FFI's genesis
+  // short-circuit fires and the window contents are ignored. Above
+  // that threshold the window MUST be exactly N+1 entries.
+  constexpr uint64_t lwma1_window_size = SHEKYL_DAA_WINDOW_N + 1;
   std::vector<uint64_t> timestamps;
   std::vector<difficulty_type> cumulative_difficulties;
+  timestamps.reserve(lwma1_window_size);
+  cumulative_difficulties.reserve(lwma1_window_size);
 
-  // if the alt chain isn't long enough to calculate the difficulty target
-  // based on its blocks alone, need to get more blocks from the main chain
-  if(alt_chain.size()< DIFFICULTY_BLOCKS_COUNT)
+  // chain_height for the FFI call: the parent of `bei` on the alt
+  // chain. bei.height == 0 (a candidate genesis) is not meaningful
+  // for the alt-chain path; guard the underflow defensively.
+  const uint64_t chain_height = bei.height == 0 ? 0u : bei.height - 1;
+
+  if (alt_chain.size() < lwma1_window_size)
   {
     CRITICAL_REGION_LOCAL(m_blockchain_lock);
 
-    // Figure out start and stop offsets for main chain blocks
-    size_t main_chain_stop_offset = alt_chain.size() ? alt_chain.front().height : bei.height;
-    size_t main_chain_count = DIFFICULTY_BLOCKS_COUNT - std::min(static_cast<size_t>(DIFFICULTY_BLOCKS_COUNT), alt_chain.size());
-    main_chain_count = std::min(main_chain_count, main_chain_stop_offset);
-    size_t main_chain_start_offset = main_chain_stop_offset - main_chain_count;
+    // Main-chain prefix: heights < first_alt_height (or bei.height if
+    // alt_chain is empty). Include genesis — LWMA-1 treats genesis as
+    // a normal entry inside the window when chain_height == N.
+    const uint64_t main_chain_stop_offset = alt_chain.size() ? alt_chain.front().height : bei.height;
+    const uint64_t main_chain_count = std::min<uint64_t>(
+        lwma1_window_size - alt_chain.size(),
+        main_chain_stop_offset);
+    const uint64_t main_chain_start_offset = main_chain_stop_offset - main_chain_count;
 
-    if(!main_chain_start_offset)
-      ++main_chain_start_offset; //skip genesis block
-
-    // get difficulties and timestamps from relevant main chain blocks
-    for(; main_chain_start_offset < main_chain_stop_offset; ++main_chain_start_offset)
+    for (uint64_t h = main_chain_start_offset; h < main_chain_stop_offset; ++h)
     {
-      timestamps.push_back(m_db->get_block_timestamp(main_chain_start_offset));
-      cumulative_difficulties.push_back(m_db->get_block_cumulative_difficulty(main_chain_start_offset));
+      timestamps.push_back(m_db->get_block_timestamp(h));
+      cumulative_difficulties.push_back(m_db->get_block_cumulative_difficulty(h));
     }
 
-    // make sure we haven't accidentally grabbed too many blocks...maybe don't need this check?
-    CHECK_AND_ASSERT_MES((alt_chain.size() + timestamps.size()) <= DIFFICULTY_BLOCKS_COUNT, false, "Internal error, alt_chain.size()[" << alt_chain.size() << "] + vtimestampsec.size()[" << timestamps.size() << "] NOT <= DIFFICULTY_WINDOW[]" << DIFFICULTY_BLOCKS_COUNT);
+    CHECK_AND_ASSERT_MES((alt_chain.size() + timestamps.size()) <= lwma1_window_size, false, "Internal error, alt_chain.size()[" << alt_chain.size() << "] + timestamps.size()[" << timestamps.size() << "] NOT <= LWMA-1 window[" << lwma1_window_size << "]");
 
-    for (const auto &bei : alt_chain)
+    for (const auto &alt_bei : alt_chain)
     {
-      timestamps.push_back(bei.bl.timestamp);
-      cumulative_difficulties.push_back(bei.cumulative_difficulty);
+      timestamps.push_back(alt_bei.bl.timestamp);
+      cumulative_difficulties.push_back(alt_bei.cumulative_difficulty);
     }
   }
-  // if the alt chain is long enough for the difficulty calc, grab difficulties
-  // and timestamps from it alone
   else
   {
-    timestamps.resize(static_cast<size_t>(DIFFICULTY_BLOCKS_COUNT));
-    cumulative_difficulties.resize(static_cast<size_t>(DIFFICULTY_BLOCKS_COUNT));
+    // Alt chain alone covers the window; take its most recent N+1.
+    timestamps.resize(lwma1_window_size);
+    cumulative_difficulties.resize(lwma1_window_size);
     size_t count = 0;
-    size_t max_i = timestamps.size()-1;
-    // get difficulties and timestamps from most recent blocks in alt chain
-    for (const auto &bei: boost::adaptors::reverse(alt_chain))
+    const size_t max_i = timestamps.size() - 1;
+    for (const auto &alt_bei : boost::adaptors::reverse(alt_chain))
     {
-      timestamps[max_i - count] = bei.bl.timestamp;
-      cumulative_difficulties[max_i - count] = bei.cumulative_difficulty;
+      timestamps[max_i - count] = alt_bei.bl.timestamp;
+      cumulative_difficulties[max_i - count] = alt_bei.cumulative_difficulty;
       count++;
-      if(count >= DIFFICULTY_BLOCKS_COUNT)
+      if (count >= lwma1_window_size)
         break;
     }
   }
 
-  size_t target = DIFFICULTY_TARGET_V2;
-
-  // calculate the difficulty target for the block and return it
-  return next_difficulty(timestamps, cumulative_difficulties, target);
+  return lwma1_next_difficulty(chain_height, timestamps, cumulative_difficulties);
 }
 //------------------------------------------------------------------
 static bool check_commitment_mask_valid(const transaction& tx);
