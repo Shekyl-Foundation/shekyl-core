@@ -34,7 +34,11 @@ impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let s = match self {
             Self::InvalidCount => "invalid input count for the given chain_height",
-            Self::Overflow => "consensus invariant violation (arithmetic overflow)",
+            Self::Overflow => {
+                "consensus invariant violation or arithmetic overflow \
+                 (non-monotonic cumulative difficulty or u128 wrap during \
+                 next-difficulty computation)"
+            }
         };
         f.write_str(s)
     }

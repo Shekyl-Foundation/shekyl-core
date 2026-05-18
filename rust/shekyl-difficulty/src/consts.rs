@@ -97,6 +97,32 @@ const _: () = assert!(
      drift requires a spec amendment."
 );
 
+// u64 / usize mirror-consistency sentinels. The `_USIZE` mirrors are
+// emitted by `build.rs` from the same JSON key as their `u64`
+// siblings, with a `u32::MAX` upper-bound validation; in principle
+// they cannot disagree. These sentinels are defense-in-depth: if a
+// future edit to `build.rs` (or to the source JSON, or to the
+// generator) breaks the symmetric emission, the divergence surfaces
+// at this crate's build rather than at a downstream call site where
+// the desync between the `u64` arithmetic and the `usize` index
+// could become consensus-critical.
+// `as u128` widens both `u64` and `usize` losslessly on every
+// supported target (usize is at most 64 bits per workspace policy;
+// u64 widens trivially). This unified-width comparison avoids
+// `cast_possible_truncation` lints from `usize as u64` while still
+// pinning the equality.
+const _: () = assert!(
+    N as u128 == N_USIZE as u128,
+    "N (u64) and N_USIZE (usize) must mirror the same JSON value; \
+     a desync here would split arithmetic from indexing."
+);
+const _: () = assert!(
+    MTP_WINDOW as u128 == MTP_WINDOW_USIZE as u128,
+    "MTP_WINDOW (u64) and MTP_WINDOW_USIZE (usize) must mirror the \
+     same JSON value; a desync here would split arithmetic from \
+     array-length indexing."
+);
+
 // Algorithm-internal type-safety sentinels: the LWMA-1 specification
 // references `N*N*T/20` for the minimum-L floor and `2_000_000 * N * N
 // * T` for the §5.3 step-8 overflow guard. Both arithmetic expressions

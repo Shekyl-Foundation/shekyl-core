@@ -52,10 +52,10 @@ pub fn is_timestamp_below_ftl(incoming: u64, local_clock: u64) -> bool {
 /// const-eval `assert!` in `consts.rs`, so the array length cannot
 /// drift from the JSON authority without a build failure.
 #[must_use]
-pub fn is_above_mtp(incoming: u64, previous_11: &[u64; MTP_WINDOW_USIZE]) -> bool {
+pub fn is_above_mtp(incoming: u64, previous_window: &[u64; MTP_WINDOW_USIZE]) -> bool {
     // Median of an odd-length sorted window is the middle element.
     // Copy because we cannot mutate the caller's window.
-    let mut window = *previous_11;
+    let mut window = *previous_window;
     window.sort_unstable();
     // MTP_WINDOW is odd (== 11) per §5.5; the build asserts
     // MTP_WINDOW == 11 in `consts.rs`, so `MTP_WINDOW_USIZE / 2` is

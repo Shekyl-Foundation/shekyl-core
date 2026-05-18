@@ -194,9 +194,11 @@ fn mtp_predicate_strict_above_median() {
 
 #[test]
 fn mtp_predicate_with_duplicates() {
-    // Median is the middle element after stable sort. With
-    // duplicates around the median, the predicate still answers
-    // correctly.
+    // Median is the middle element after sorting (stability does
+    // not matter for median selection -- duplicates compare equal,
+    // so any ordering among them places the same value at the
+    // median index). With duplicates around the median, the
+    // predicate still answers correctly.
     let window: [u64; MTP_WINDOW_USIZE] = [5; MTP_WINDOW_USIZE];
     assert!(is_above_mtp(6, &window));
     assert!(!is_above_mtp(5, &window));
