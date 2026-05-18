@@ -141,9 +141,17 @@ fn solvetime_one_negative_t_regression() {
     // `solvetime[1]` was incorrectly shifted by +T).
     let mut ts = stable_ts();
     ts[1] = B - 2 * T_SECONDS;
-    // Make timestamps[2..=N] also one-period-back so the running
-    // max remains B - T from iter 2 onwards (no out-of-sequence
-    // beyond iter 1).
+    // Fill timestamps[2..=N] on the `B + (i-1)*T` shifted-stable
+    // schedule. Under this construction the running max behaves as:
+    // prev_max[0] = B - T (synthetic anchor), prev_max[1] = B - T
+    // (back-step at iter 1 does not advance the max), then climbs
+    // monotonically as B + T, B + 2T, ... at iters 2..=N. The
+    // resulting solvetime sequence is: -T at iter 1 (the regression
+    // target), +2T at iter 2 (recovery jump after the back-step
+    // catches up to the synthetic anchor), then +T at iters 3..=N
+    // (steady state). All solvetimes are within ±6T so the clamp
+    // never engages, isolating the iter-1 negative-solvetime path
+    // from any clamp-engagement side effect.
     for (i, slot) in ts.iter_mut().enumerate().skip(2) {
         *slot = B + (u64::try_from(i).expect("i fits") - 1) * T_SECONDS;
     }
