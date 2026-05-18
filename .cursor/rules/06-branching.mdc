@@ -68,6 +68,7 @@ one of these rules, stop and ask the human first.
 ## When a short-lived branch is appropriate
 
 A branch off `dev` is appropriate when:
+
 - The change touches >~5 files or >~200 lines and would benefit from
   PR review before landing on `dev`.
 - The change is experimental and may be discarded.
@@ -77,6 +78,25 @@ In all cases the branch should be named `<author>/<short-description>`
 or `chore/<description>` / `fix/<description>` / `feat/<description>`,
 and should land on `dev` within 5 working days. If it can't, the change
 is too large; break it down.
+
+## The 5-day / 10-commit guidance has one named exception
+
+The 5-working-day / 10-commit splitting guidance in rule 2 and the
+"land on dev within 5 working days" guidance above have a single
+ratified exception: PRs that meet all four criteria of
+[`07-consensus-atomic-cutovers.mdc`](./07-consensus-atomic-cutovers.mdc)
+— consensus-rule boundary, indivisible under flag decomposition,
+surface enumerated in advance with grep evidence, and disposition
+documented in the PR description with reviewer-map and rollback
+procedure. The exception applies only to the PR-splitting guidance;
+every other rule in this file (no direct commits to `main`, no
+`dev`-merges-into-feature, no force-pushes to `main`/`dev`, no
+deletion without confirmation, etc.) is unmodified.
+
+If a PR appears to need the exception, the test is *not* "is this
+analogous to LWMA-1 Phase 4" — it is "does this PR meet the four
+named criteria in `07-consensus-atomic-cutovers.mdc`?" The exception
+is auditable mechanically against the criteria, not by precedent.
 
 ## When to ask the user instead of proceeding
 
