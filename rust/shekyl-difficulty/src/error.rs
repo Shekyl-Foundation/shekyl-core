@@ -13,7 +13,7 @@
 //! will log. Consumers wanting structured error reporting reconstruct
 //! it from the variant.
 
-/// Errors returned by [`crate::lwma1::lwma1_next`].
+/// Errors returned by [`crate::lwma1_next`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     /// `chain_height >= N` but the input window does not contain

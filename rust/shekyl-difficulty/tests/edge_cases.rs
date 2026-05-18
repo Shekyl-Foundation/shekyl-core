@@ -25,6 +25,16 @@ fn stable_ts() -> Vec<u64> {
 }
 
 #[test]
+fn genesis_difficulty_is_one_hundred() {
+    // Pin the ratified value per DAA_LWMA1.md §2.6. This complements
+    // the consts.rs const-eval `assert!` (which fails the build on
+    // drift) with a runtime check that any downstream test rig
+    // depending on the constant gets a clear failure rather than
+    // an opaque value mismatch.
+    assert_eq!(GENESIS_DIFFICULTY, 100, "DAA_LWMA1.md §2.6");
+}
+
+#[test]
 fn genesis_short_circuit_returns_genesis_difficulty() {
     // chain_height < N must return GENESIS_DIFFICULTY without
     // inspecting the input vectors. Test the full range

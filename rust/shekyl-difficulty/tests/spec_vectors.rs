@@ -18,7 +18,7 @@
 //! for genesis short-circuit, invalid count, overflow, and the
 //! §5.3 step-8 boundary live in `tests/edge_cases.rs`.
 
-use shekyl_difficulty::{lwma1_next, GENESIS_DIFFICULTY, N, N_USIZE, T_SECONDS};
+use shekyl_difficulty::{lwma1_next, N, N_USIZE, T_SECONDS};
 
 /// Unix-epoch base anchor matching `tests/phase0/preflight_outofseq.cpp`
 /// line 114 (`B = 1_700_000_000`). The Rust implementation itself does
@@ -198,11 +198,4 @@ fn vector_7_selfish_mine_attack_regression() {
         "selfish-mine vector must produce next_D > stable 990_000; \
          this is the September 2018 attack-class defense."
     );
-}
-
-// `GENESIS_DIFFICULTY` is consumed below; alias kept for cheap
-// import-survives-refactor confidence at grep time.
-#[test]
-fn genesis_difficulty_is_one_hundred() {
-    assert_eq!(GENESIS_DIFFICULTY, 100, "DAA_LWMA1.md §2.6");
 }
