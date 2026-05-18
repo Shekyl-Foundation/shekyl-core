@@ -86,11 +86,16 @@ int main() {
     const uint64_t N = 90;
     const uint64_t T = 120;
     const uint64_t avg_D = 1000000;
+    // Base anchor for the §8.1 timestamp convention (Unix-epoch base,
+    // 2023-11-14 22:13:20 UTC). Avoids u64 underflow at
+    // `previous_timestamp = timestamps[0] - T` on the first iteration.
+    // Named here for parity with preflight_outofseq.cpp line 114.
+    constexpr uint64_t B = 1700000000ULL;
 
     std::vector<uint64_t> timestamps(N+1);
     std::vector<uint64_t> cumulative_difficulties(N+1);
     for (uint64_t i = 0; i <= N; ++i) {
-        timestamps[i] = 1700000000ULL + i * T;
+        timestamps[i] = B + i * T;
         cumulative_difficulties[i] = i * avg_D;
     }
 
@@ -99,7 +104,7 @@ int main() {
 
     std::cout << "Phase 1 pre-flight verification result:" << std::endl;
     std::cout << "  Inputs: N=" << N << ", T=" << T << ", avg_D=" << avg_D << std::endl;
-    std::cout << "  Stable monotonic timestamps[i] = 1.7e9 + i*T, cumulative_difficulties[i] = i*avg_D" << std::endl;
+    std::cout << "  Stable monotonic timestamps[i] = B + i*T (B=1.7e9), cumulative_difficulties[i] = i*avg_D" << std::endl;
     std::cout << "  Canonical LWMA1_() output: " << out << std::endl;
     std::cout << "  Design doc §8.1 expected: 990000" << std::endl;
     std::cout << "  Match: " << (out == 990000 ? "YES" : "NO") << std::endl;

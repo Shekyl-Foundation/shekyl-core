@@ -66,15 +66,21 @@ difficulty_type LWMA1_shekyl_corrected(std::vector<uint64_t> timestamps,
    if (height >= FORK_HEIGHT && height < FORK_HEIGHT + N) { return difficulty_guess; }
    assert(timestamps.size() == N+1);
    __int128 L_signed = 0;
-   int64_t prev_max = (int64_t)timestamps[0] - (int64_t)T;
+   // prev_max is __int128 (signed) to match DAA_LWMA1.md §5.4's type
+   // discipline (signed 128-bit for intermediate solvetime/anchor state)
+   // and to avoid the implementation-defined uint64_t->int64_t cast that
+   // a 64-bit prev_max would require. The first iteration's anchor
+   // `timestamps[0] - T` would underflow u64 absent §8.1's base-anchor
+   // convention; the signed 128-bit form is the safe shape regardless.
+   __int128 prev_max = (__int128)timestamps[0] - (__int128)T;
    for (uint64_t i = 1; i <= N; ++i) {
-       __int128 solvetime = (__int128)timestamps[i] - (__int128)prev_max;
+       __int128 solvetime = (__int128)timestamps[i] - prev_max;
        __int128 lo = -(__int128)6 * (__int128)T;
        __int128 hi =  (__int128)6 * (__int128)T;
        if (solvetime < lo) solvetime = lo;
        if (solvetime > hi) solvetime = hi;
        L_signed += (__int128)i * solvetime;
-       prev_max = std::max(prev_max, (int64_t)timestamps[i]);
+       prev_max = std::max(prev_max, (__int128)timestamps[i]);
    }
    __int128 L_min = (__int128)N * (__int128)N * (__int128)T / 20;
    if (L_signed < L_min) L_signed = L_min;
@@ -82,6 +88,14 @@ difficulty_type LWMA1_shekyl_corrected(std::vector<uint64_t> timestamps,
    uint64_t avg_D = (cumulative_difficulties[N] - cumulative_difficulties[0]) / N;
    uint64_t next_D;
    unsigned __int128 Nf = (unsigned __int128)N * (unsigned __int128)(N + 1);
+   // The branching below mirrors canonical LWMA1_()'s overflow guard
+   // verbatim (issue #3 lines 105-106). The threshold expression
+   // `2000000ULL * N * N * T` is evaluated in uint64_t: with N=90, T=120
+   // it is 1.944e12, safely below 2^64. If this harness is reused with
+   // substantially larger N or T (not §8.1's parameters), the threshold
+   // itself can overflow uint64_t; a future variant would need to
+   // promote the comparison to unsigned __int128. For §8.1 fixtures the
+   // bounded-input assumption holds.
    if (avg_D > 2000000ULL * N * N * T) {
        next_D = (uint64_t)(((unsigned __int128)avg_D / (200ULL * L)) * (Nf * T * 99ULL));
    } else {
@@ -151,14 +165,22 @@ int main() {
             ts, cd, T, N, N+1);
     }
 
-    // (6) Out-of-sequence (Copilot finding 5 vector, fixed to base-anchored):
-    //   stable T-spaced timestamps for i in 0..=N-1, then timestamps[N] one
-    //   period back: timestamps[N] = timestamps[N-2].
+    // (6) Out-of-sequence: stable T-spaced timestamps for i in 0..=N-1,
+    //   then ts[N] is set so the LAST solvetime is -T (one period
+    //   backward in time relative to ts[N-1]). The override value
+    //   ts[N] = B + (N-2)*T coincides with ts[N-2] in absolute value,
+    //   because ts[N-2] was assigned B + (N-2)*T by the loop — i.e.,
+    //   "the last block's timestamp lands two slots earlier in the
+    //   strictly-monotonic sequence." These describe the same
+    //   configuration from two angles:
+    //     ts[N] - ts[N-1] = (B + (N-2)*T) - (B + (N-1)*T) = -T   (solvetime axis)
+    //     ts[N]           = ts[N-2]                              (absolute-value axis)
+    //   Both are intended.
     {
         std::vector<uint64_t> ts(N+1), cd(N+1);
         for (uint64_t i = 0; i <= N; ++i) { ts[i] = B + i*T; cd[i] = i*avg_D; }
-        ts[N] = B + (N-2)*T;  // one period back (out-of-sequence step)
-        run("(6) Out-of-sequence (timestamps[N] = timestamps[N-2], single back-step)",
+        ts[N] = B + (N-2)*T;  // makes solvetime[N] = -T (one period back)
+        run("(6) Out-of-sequence (last solvetime = -T; ts[N] coincides with ts[N-2])",
             ts, cd, T, N, N+1);
     }
 

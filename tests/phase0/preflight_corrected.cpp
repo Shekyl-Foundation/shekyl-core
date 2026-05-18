@@ -58,15 +58,18 @@ difficulty_type LWMA1_shekyl_corrected(std::vector<uint64_t> timestamps,
    assert(timestamps.size() == N+1);
 
    __int128 L_signed = 0;
-   int64_t prev_max = (int64_t)timestamps[0] - (int64_t)T;
+   // prev_max is __int128 (signed) to match DAA_LWMA1.md §5.4's type
+   // discipline (signed 128-bit for intermediate solvetime/anchor state)
+   // and avoid the implementation-defined uint64_t->int64_t cast.
+   __int128 prev_max = (__int128)timestamps[0] - (__int128)T;
    for (uint64_t i = 1; i <= N; ++i) {
-       __int128 solvetime = (__int128)timestamps[i] - (__int128)prev_max;
+       __int128 solvetime = (__int128)timestamps[i] - prev_max;
        __int128 lo = -(__int128)6 * (__int128)T;
        __int128 hi =  (__int128)6 * (__int128)T;
        if (solvetime < lo) solvetime = lo;
        if (solvetime > hi) solvetime = hi;
        L_signed += (__int128)i * solvetime;
-       prev_max = std::max(prev_max, (int64_t)timestamps[i]);
+       prev_max = std::max(prev_max, (__int128)timestamps[i]);
    }
    __int128 L_min = (__int128)N * (__int128)N * (__int128)T / 20;
    if (L_signed < L_min) L_signed = L_min;
@@ -91,25 +94,30 @@ int main() {
     const uint64_t N = 90;
     const uint64_t T = 120;
     const uint64_t avg_D = 1000000;
+    // Base anchor for the §8.1 timestamp convention (Unix-epoch base,
+    // 2023-11-14 22:13:20 UTC). Avoids u64 underflow at
+    // `prev_max_initial = timestamps[0] - T` on the first iteration.
+    // Named here for parity with preflight_outofseq.cpp line 114.
+    constexpr uint64_t B = 1700000000ULL;
 
     std::vector<uint64_t> timestamps(N+1);
     std::vector<uint64_t> cumulative_difficulties(N+1);
     for (uint64_t i = 0; i <= N; ++i) {
-        timestamps[i] = 1700000000ULL + i * T;
+        timestamps[i] = B + i * T;
         cumulative_difficulties[i] = i * avg_D;
     }
 
     uint64_t out_canon = LWMA1_canonical(timestamps, cumulative_difficulties, T, N, N+1, 0, 100);
     uint64_t out_shekyl = LWMA1_shekyl_corrected(timestamps, cumulative_difficulties, T, N, N+1, 0, 100);
 
-    std::cout << "Stable monotonic (timestamps[i] = 1.7e9 + i*T, avg_D=1_000_000):" << std::endl;
+    std::cout << "Stable monotonic (timestamps[i] = B + i*T, B=1.7e9, avg_D=1_000_000):" << std::endl;
     std::cout << "  Canonical LWMA1_() output: " << out_canon << std::endl;
     std::cout << "  Shekyl corrected output:   " << out_shekyl << std::endl;
     std::cout << "  Byte-identical: " << (out_canon == out_shekyl ? "YES" : "NO") << std::endl;
 
     // Out-of-sequence test vector: t2 < t1.
     std::vector<uint64_t> ts_oos(N+1);
-    for (uint64_t i = 0; i <= N; ++i) ts_oos[i] = 1700000000ULL + i * T;
+    for (uint64_t i = 0; i <= N; ++i) ts_oos[i] = B + i * T;
     ts_oos[2] = ts_oos[1] - 5*T;  // out-of-sequence: t2 = t1 - 30
     uint64_t out_canon_oos = LWMA1_canonical(ts_oos, cumulative_difficulties, T, N, N+1, 0, 100);
     uint64_t out_shekyl_oos = LWMA1_shekyl_corrected(ts_oos, cumulative_difficulties, T, N, N+1, 0, 100);

@@ -72,7 +72,10 @@ compares Rust output against this C++ reference's output:
 ```cpp
 // LWMA-1 with running-max + signed-solvetime + symmetric-clamp step 2/3.
 // Copyright (c) 2017-2018 Zawy, MIT License (canonical LWMA-1 portions).
-// Copyright (c) 2026 Shekyl Foundation, MIT License (step 2/3 derivation).
+// Copyright (c) 2026 Shekyl Foundation, BSD-3-Clause License
+// (step 2/3 derivation; matches production-code license per
+// tests/phase0/README.md and the harness file headers in
+// tests/phase0/preflight_corrected.cpp:11-15).
 // Canonical LWMA-1 pin:
 //   https://github.com/zawy12/difficulty-algorithms/issues/3
 // Selfish-mine attack motivation:
