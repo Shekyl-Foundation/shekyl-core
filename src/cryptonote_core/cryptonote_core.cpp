@@ -1814,6 +1814,25 @@ namespace cryptonote
       return true;
     }
 
+    // LWMA-1 Phase 4 §7 calibration bridge: the stall-detection thresholds
+    // depend on the block-target time T. The 1/7200 false-positive rate
+    // (one in 10 days) and the {45, 30, 15, 10, 5} expected-block counts
+    // for the {5400, 3600, 1800, 1200, 600}-second windows assume
+    // DIFFICULTY_TARGET_V2 == 120 (and its successor
+    // SHEKYL_DAA_TARGET_SECONDS post-commit 6). If T ever changes, both
+    // the threshold and the expected counts must be re-derived per
+    // docs/design/DAA_LWMA1.md §11, not silently scaled. The regression
+    // test that pins this calibration lives at
+    // tests/unit_tests/stall_detection_calibration.cpp; see
+    // docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md §7.
+    static_assert(DIFFICULTY_TARGET_V2 == SHEKYL_DAA_TARGET_SECONDS,
+        "Stall-detection bridge: DIFFICULTY_TARGET_V2 and "
+        "SHEKYL_DAA_TARGET_SECONDS must agree until commit 9 of the "
+        "LWMA-1 Phase 4 cutover deletes the legacy macro.");
+    static_assert(SHEKYL_DAA_TARGET_SECONDS == 120,
+        "Stall-detection calibration: the 1/7200 false-positive "
+        "threshold and the {45, 30, 15, 10, 5} expected-block counts "
+        "assume the 120-second block target.");
     static constexpr double threshold = 1. / (864000 / DIFFICULTY_TARGET_V2); // one false positive every 10 days
     static constexpr unsigned int max_blocks_checked = 150;
 
