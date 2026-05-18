@@ -411,7 +411,7 @@
     uses MTP + FTL + symmetric solvetime clamp + running-max
     normalization (four mechanisms) as the defense surface and
     does not implement a separate per-block-header `±7xT` rule,
-    consistent with zawy12 issue #24 item 8's post-FTL deprecation
+    consistent with zawy12 issue #24 item 9's post-FTL deprecation
     of `±7xT`.
 
   `DAA_LWMA1_PLAN.md` gains a "Round 9 dispositions" section
@@ -421,7 +421,7 @@
   line 3 updated from "Round 8" to "Round 9" to reflect the
   cumulative review pass.
   (i) **Round 9 supplement — local-time-only FTL trade-off
-  named.** The Round 9 closure of zawy12 issue #24 item 14 (FTL
+  named.** The Round 9 closure of zawy12 issue #24 item 17 (FTL
   vs peer-time-derived clocks) recorded the absence of substrate
   but did not name the threat-model trade the local-time-only
   FTL disposition deliberately accepts. This supplement makes the
@@ -447,10 +447,10 @@
   safety failure that propagates; (4) **Y2038-adjacent note** —
   `time(NULL)` returns `time_t`, which on 64-bit platforms (the
   only Shekyl-supported platforms per the 32-bit retirement chore
-  in `docs/FOLLOWUPS.md`) is 64-bit signed and Y2038 is not a
-  concern; if 32-bit platforms ever return to scope, both the FTL
-  comparison and the FTL/2 forward-looking peer-time constraint
-  must be revisited. `DAA_LWMA1.md` §1.2 (Commitment 1) gains a
+  landed at commit `e06ee37d96af`, recorded in `docs/FOLLOWUPS.md`)
+  is 64-bit signed and Y2038 is not a concern; if 32-bit platforms
+  ever return to scope, both the FTL comparison and the FTL/2
+  forward-looking peer-time constraint must be revisited. `DAA_LWMA1.md` §1.2 (Commitment 1) gains a
   closing observation: "The FTL-disposition choice (local-time-
   only, no peer-time-derived clock) reflects a deliberate
   threat-model preference for closing low-bar consensus attacks
@@ -460,6 +460,75 @@
   itself, ranking observation, and the "safe because" framing on
   the FTL value reduction (7200 → 540) are now consistently
   cross-referenced from §1.2, §5.5, and this CHANGELOG entry.
+  (j) **Round 10 zawy12 issue #24 item-number reconciliation +
+  issue pin + reference-file enumeration + commit-hash
+  cite-stabilization.** Round 10 review identified one
+  load-bearing finding and three robustness improvements:
+  - **Item-number drift sweep (load-bearing).** The Round 9
+    body edits used item numbers that did not match the live
+    zawy12 issue #24 numbering: 11 was used for the September
+    2018 selfish-mine attack (live: item 14), 14 for the May
+    2019 33% Sybil (live: item 17), 6 for the Jagerman MTP
+    patch (live: item 7), 8 for the post-FTL `±7xT`
+    disposition (live: item 9), and 13 for the January 2019
+    LWMA-2/3/4 deprecation (live: item 16). The pattern was
+    not a uniform offset but a cluster of mistranscriptions
+    during Round 9's body edits while the status block was
+    checked separately. The Round 10 sweep corrected 14 sites
+    in `DAA_LWMA1.md` body, 2 sites in `DAA_LWMA1_PLAN.md`
+    body, and 2 sites in this CHANGELOG entry — all now
+    consistent with the live issue and with the status block's
+    "items 3, 7, 9, 14, 17" enumeration. The discipline going
+    forward: cite by date + description as the primary
+    identifier (e.g., "September 2018 selfish-mine attack
+    class") so renumbering by the upstream author does not
+    silently invalidate cross-references; the item number is
+    a redundant cross-reference resolving against the §3 pin
+    (next item).
+  - **zawy12 issue #24 pin (audit-trail-stable).**
+    `DAA_LWMA1.md` §3 gains a "zawy12 issue #24 pin
+    (Round 10 addition)" bullet pinning the raw `.body` of
+    [`zawy12/difficulty-algorithms#24`](https://github.com/zawy12/difficulty-algorithms/issues/24)
+    via `docs/design/refs/zawy12_issue_24_history.md` at
+    Phase 2 PR time, using the same `gh api` + `jq -r .body`
+    mechanism as the existing issue-#3 pin. Every "zawy12
+    issue #24 item N" cross-reference downstream now resolves
+    against this pin's numbered list, not against the live
+    GitHub-rendered issue. The pin's SHA-256 and capture
+    timestamp land in §3's pin record at Phase 2 commit time.
+    `DAA_LWMA1_PLAN.md` Phase 2 task content extends to commit
+    the issue-#24 pin alongside the existing issue-#3 pin.
+  - **Phase 2 reference-file enumeration clarified.**
+    `DAA_LWMA1.md` §3's Round-9 disposition paragraph is
+    expanded into an explicit three-file enumeration making
+    clear that `zawy12_issue_3_lwma1.md` (raw issue-#3
+    `.body`, the canonical pin),
+    `zawy12_issue_3_lwma3.md` (convenience extraction of just
+    the LWMA3_() function, *not* the canonical pin), and
+    `zawy12_issue_3_lwma1_with_lwma3_step2.md` (Shekyl-composed
+    hybrid, a derived file used by the cross-check harness)
+    are three distinct files with distinct purposes. The
+    "snapshot pinned per §3" cross-reference at §5.3 step 2
+    now resolves unambiguously. `DAA_LWMA1_PLAN.md` Phase 2
+    body section gains a "Round 9 + Round 10 supplementary
+    reference files" subsection enumerating all four
+    Phase-2-committed files (three issue-#3 derivatives plus
+    the issue-#24 pin) and extending the anchors-file schema
+    with the LWMA3_() byte-offset anchors.
+  - **Commit-hash cite for 32-bit-retirement chore.**
+    `DAA_LWMA1.md` §5.5's Y2038-adjacent note and this
+    CHANGELOG's Round 9 supplement entry both previously cited
+    the chore by branch name (`chore/retire-32bit-targets`),
+    which is a deleted post-merge branch and not a stable cite
+    target. Both citations are now anchored on the merge
+    commit `e06ee37d96af` ("Merge pull request #15 from
+    Shekyl-Foundation/chore/retire-32bit-targets") with the
+    rationale named in §5.5.
+
+  Status block on line 3 updates from "Round 9" to "Round 10"
+  recording the cumulative review pass. No algorithm-level or
+  consensus-rule changes in Round 10; the round is documentation
+  drift remediation and audit-trail-stability improvements.
 
 - **`07-consensus-atomic-cutovers.mdc` — named exception to
   branching policy for consensus-atomic cutovers**

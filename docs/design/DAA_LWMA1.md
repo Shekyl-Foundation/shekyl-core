@@ -1,16 +1,21 @@
 # LWMA-1 — Difficulty adjustment, Rust, from genesis
 
-**Status.** **DRAFT — Round 9 (2026-05-17 initial draft; review
-passes 1–9 have all landed against PR #49; this doc carries
+**Status.** **DRAFT — Round 10 (2026-05-17 initial draft; review
+passes 1–10 have all landed against PR #49; this doc carries
 the Round 4 test-vector concrete-tuple correction, the Round 5
 `ShekylU128` FFI pivot, the Round 7 cleanup of the
 consensus-atomic-cutover invocation against the now-ratified
 `07-consensus-atomic-cutovers.mdc`, the Round 8 bias-factor
 stochastic-vs-deterministic clarification and §11 wallet-T
-touchpoint correction, and the Round 9 partial-LWMA-3 adoption
+touchpoint correction, the Round 9 partial-LWMA-3 adoption
 in §5.3 step 2/3 plus the zawy12 issue #24 dispositions on items
-3, 7, 9, 14, and 17 — see §1.3, §5.5, and §8.1's selfish-mine
-regression vector).** Phase 0 deliverable for the Shekyl
+3, 7, 9, 14, and 17, and the Round 10 item-number sweep
+reconciling 14 body sites against the live zawy12 issue #24
+numbering plus the issue-#24 pin under §3, the explicit Phase-2
+enumeration of the LWMA-3 reference files, and the commit-hash
+cite for the 32-bit-retirement chore replacing the deleted
+`chore/retire-32bit-targets` branch name).** Phase 0 deliverable
+for the Shekyl
 difficulty-adjustment algorithm (DAA) migration. Companion:
 [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md). Both documents must
 pass the Phase 0 review cycle before any code lands.
@@ -171,8 +176,9 @@ not establish consistent superiority over LWMA-1; later variants
 introduced complexity (additional weighting schemes, more aggressive
 adjustments) that produced oscillation artifacts in specific
 hashrate regimes. zawy12 himself deprecated all versions except
-LWMA-1 in January 2019 (issue #24 item 13) on the grounds that
-"LWMA 2, 3, and 4 seems better on most coins than LWMA-1, when
+LWMA-1 in January 2019 (issue #24 item 16, "About January 2019")
+on the grounds that "LWMA 2, 3, and 4 seems better on most coins
+than LWMA-1, when
 there is a persistent problem like there has been on Wownero, they
 seem to make it worse. Also 2, 3, and 4 may bias the performance
 metrics to look better than they are." LWMA-4 additionally
@@ -192,16 +198,17 @@ incorporates LWMA-3's running-max + signed-solvetime trick at
 floor used through Round 8) and LWMA-3's symmetric `±6*T`
 solvetime clamp at §5.3 step 3 (replacing LWMA-1's one-sided
 `min(solvetime, 6*T)` clamp). The mechanism is the documented
-remediation for zawy12 issue #24 item 11's September 2018
-selfish-mine attack class via out-of-sequence timestamps. The
+remediation for the September 2018 selfish-mine attack class via
+out-of-sequence timestamps (zawy12 issue #24 item 14). The
 remainder of LWMA-1's algorithm — weighted-sum, minimum-L floor,
 bias factor 99/200, overflow guard — is unchanged. This partial
 adoption is **not** a switch to LWMA-3; LWMA-3's jump rules and
 multi-window logic are explicitly excluded. The framing is
 "canonical zawy12 LWMA-1 with the step-2 timestamp-protection
 trick that zawy12 retroactively backported into LWMA-3 for
-attack-resistance reasons, and that issue #24 item 11 names as the
-algorithm-internal fix coins should adopt to close the September
+attack-resistance reasons, and that issue #24 item 14 names as
+the algorithm-internal fix coins should adopt to close the
+September
 2018 attack class without going to deprecated LWMA-3 wholesale."
 *Reversion criterion:* a Shekyl-specific simulation against the
 canonical zawy12 tooling demonstrates the running-max +
@@ -627,8 +634,9 @@ wrapper inside the verifier crate.
   minimum-L floor, bias factor 99/200, overflow guard,
   genesis-window short-circuit) are byte-identical to canonical
   `LWMA1_()`. The deviation is the documented Shekyl remediation
-  for zawy12 issue #24 item 11 (September 2018 selfish-mine attack
-  via out-of-sequence timestamps) — zawy12 names this as the
+  for the September 2018 selfish-mine attack class via
+  out-of-sequence timestamps (zawy12 issue #24 item 14) — zawy12
+  names this as the
   algorithm-internal fix coins should adopt when they do not want
   to switch wholesale to the (subsequently deprecated) LWMA-3.
   Phase 2's canonical-reference cross-check (§8.2) is therefore
@@ -639,13 +647,68 @@ wrapper inside the verifier crate.
   remaining steps applied to the resulting `L`. Phase 2 extracts
   both `LWMA1_()` and `LWMA3_()` references and composes the
   test-vector expectations from the appropriate one per the input
-  shape. The composite reference is captured in
-  `docs/design/refs/zawy12_issue_3_lwma1_with_lwma3_step2.md`
-  (Phase 2 closure file) for unambiguous downstream audit.
+  shape.
 
-  A Phase 2 byte-offset pin against `LWMA3_()` is added alongside
-  the existing `LWMA1_()` pin per the same three-anchor
-  (byte-range + first-line + last-line) discipline.
+  Phase 2 commits three reference files under `docs/design/refs/`
+  for unambiguous downstream audit:
+
+  1. `zawy12_issue_3_lwma1.md` — raw `.body` of zawy12 issue #3,
+     the canonical audit-trail pin. Contains all four reference
+     functions (`LWMA1_()`, `LWMA2_()`, `LWMA3_()`, `LWMA4_()`).
+     Disambiguation between them is by byte-offset anchor (the
+     three-anchor discipline above). The LWMA-1 byte-offset
+     anchor lands at this pin's commit time per the existing
+     Phase 2 plan; the LWMA-3 byte-offset anchor is added in the
+     same Phase 2 commit per the round-9 disposition.
+  2. `zawy12_issue_3_lwma3.md` — *convenience extraction* of the
+     `LWMA3_()` function only, copied verbatim from the raw
+     `.body` (per the LWMA-3 byte-offset anchor in file 1) so
+     that audit-reviewers reading the §5.3 step 2 / §8.2
+     cross-check derivation can see just the LWMA-3 source
+     without scrolling past the other three reference
+     functions. This file is *not* the canonical pin — file 1
+     is. If the two ever diverge, file 1 wins and file 2 must
+     be regenerated. The file is a strict subset of file 1's
+     content; no Shekyl-authored prose appears in it.
+  3. `zawy12_issue_3_lwma1_with_lwma3_step2.md` — the Shekyl-
+     composed hybrid showing LWMA-1's reference with step 2 and
+     step 3 substituted by the LWMA-3 mechanism. This file is
+     a *derived* artifact, not a pin; it is the executable form
+     of the §5.3 step 2/3 deviation specified textually above.
+     Phase 2's cross-check harness compares its output against
+     this file's body.
+
+  All three are committed in the same Phase 2 PR per
+  [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) Phase 2 task list.
+
+- **zawy12 issue #24 pin (Round 10 addition).** Phase 2 also
+  commits `docs/design/refs/zawy12_issue_24_history.md` —
+  the raw `.body` of
+  [`zawy12/difficulty-algorithms#24`](https://github.com/zawy12/difficulty-algorithms/issues/24)
+  ("LWMA's history"), captured via the same `gh api`/`curl` +
+  `jq -r .body` mechanism used for issue #3:
+
+  ```text
+  curl -sH "Accept: application/vnd.github.v3+json" \
+    https://api.github.com/repos/zawy12/difficulty-algorithms/issues/24 \
+    | jq -r .body > docs/design/refs/zawy12_issue_24_history.md
+  ```
+
+  Rationale: every "zawy12 issue #24 item N" cross-reference in
+  this design doc resolves against the numbered list inside this
+  pinned `.body`, not against the live GitHub-rendered issue.
+  Without the pin, an upstream-author edit that renumbers items
+  (e.g., inserting a new item between items 5 and 6) silently
+  invalidates every "item N" citation downstream of the
+  insertion. With the pin, the item numbers carry the
+  audit-trail discipline §3's LWMA-1 pin already establishes for
+  algorithm content. Per the round-10 disposition, design-doc
+  prose continues to cite by *date + description* (e.g.,
+  "September 2018 selfish-mine attack class") as the primary
+  identifier, with the item number as a redundant cross-reference
+  resolving against this pin; the date-and-description framing
+  is stable across renumbering, the item number is stable
+  against the pin. Belt and suspenders.
 
 - **Simulation tooling:** zawy12's `difficulty-algorithms` repository
   contains historical-data simulators used to derive test-vector
@@ -909,7 +972,7 @@ timestamps driving difficulty down). The lower clamp at `-6*T` is
 new in Round 9 and bounds the magnitude of negative solvetime
 contributions to `L`; this matches LWMA-3's published reference
 and matches zawy12's stated rationale ("change the -7xT limit to
--FTL" per issue #24 item 8 — and with FTL=540 = 4.5xT, our `-6*T`
+-FTL" per issue #24 item 9 — and with FTL=540 = 4.5xT, our `-6*T`
 choice is more conservative than `-FTL` would be, see §5.5 for
 the disposition).
 
@@ -1163,8 +1226,9 @@ LWMA-1's properties depend on incoming-timestamp validation that is
   The algorithm computes solvetimes against a non-decreasing
   running maximum of all previously-seen timestamps in the window,
   rather than against the raw predecessor timestamp. This is the
-  algorithm-internal remediation for zawy12 issue #24 item 11's
-  September 2018 selfish-mine attack class. Disposition recorded
+  algorithm-internal remediation for the September 2018
+  selfish-mine attack class (zawy12 issue #24 item 14).
+  Disposition recorded
   per §1.3 partial-LWMA-3-adoption clause.
 
 If any of MTP, FTL, the symmetric clamp, or the running-max
@@ -1174,7 +1238,8 @@ surface is materially weakened. The four mechanisms together
 constitute the defense surface; none is replaceable.
 
 **Jagerman MTP patch (verified present, no Phase 4 work needed).**
-zawy12 issue #24 item 6 names the Jagerman MTP patch (graft-project/GraftNetwork#118,
+zawy12 issue #24 item 7 names the Jagerman MTP patch
+(graft-project/GraftNetwork#118,
 later upstreamed to Monero) as required to prevent the
 "miner owns the MTP" template-rejection attack. The patch's
 substance: in `create_block_template`, if the proposed timestamp
@@ -1214,7 +1279,7 @@ up; recorded as a `FOLLOWUPS.md` item, not a Phase 4 atomic-cutover
 work item.
 
 **Disposition on header-level `±7xT` timestamp limits (zawy12
-issue #24 item 8).** zawy12 retired the header-level `+7xT` limit
+issue #24 item 9).** zawy12 retired the header-level `+7xT` limit
 once FTL was correctly tuned, and changed the `-7xT` limit to
 `-FTL`. Shekyl uses MTP + FTL + symmetric solvetime clamp +
 running-max normalization as the defense surface and does *not*
@@ -1225,8 +1290,9 @@ via §5.3 step 3's `-6*T` symmetric clamp (which is more
 conservative than zawy12's recommended `-FTL`). No `±7xT`
 header-level rule is added or carried forward.
 
-**Disposition on peer-time-derived clocks and zawy12 issue #24
-item 14 (May 2019 33% Sybil attack).** FTL is compared against
+**Disposition on peer-time-derived clocks and the May 2019 33%
+Sybil attack (zawy12 issue #24 item 17).** FTL is compared
+against
 the validator's local clock via `time(NULL)`, not against any
 peer-time-adjusted reference. Shekyl does not implement
 Bitcoin/Zcash-style `GetAdjustedTime()` or any peer-time-offset
@@ -1244,7 +1310,7 @@ the Round 9 closure: `git grep -E
 src/` returned zero matches against any consensus-relevant
 surface as of `feat/daa-lwma1-phase0-design` HEAD.
 
-This disposition closes zawy12 issue #24 item 14's May 2019
+This disposition closes zawy12 issue #24 item 17's May 2019
 finding **by absence of substrate**: the 33% Sybil attack
 requires peer-time-derived clocks, which this codebase does not
 have. Lowering FTL from 7200 s to 540 s is therefore safe against
@@ -1252,7 +1318,7 @@ the zcash/zcash#4021 attack class. The disposition is
 forward-looking: if a future Shekyl version adds peer-time
 correction (e.g., a Bitcoin-style `GetAdjustedTime` that averages
 peer-reported clock offsets), the `FTL / 2` revert-threshold
-relationship per zawy12 issue #24 item 14 becomes load-bearing
+relationship per zawy12 issue #24 item 17 becomes load-bearing
 and a `daa_peer_time_revert_threshold_seconds` consensus
 constant MUST be added at that point, set to `≤ FTL / 2 = 270 s`
 for the genesis FTL of 540 s. This is recorded as a forward
@@ -1260,7 +1326,7 @@ maintenance constraint on any future peer-time-correction
 disposition.
 
 **The trade-off, named explicitly.** Shekyl trades the zawy12
-issue #24 item 14 / [zcash/zcash#4021](https://github.com/zcash/zcash/issues/4021)
+issue #24 item 17 / [zcash/zcash#4021](https://github.com/zcash/zcash/issues/4021)
 peer-time-Sybil attack class for an operator-side NTP-hygiene
 requirement plus a coordinated-NTP-infrastructure-compromise
 threat that requires state-level access. The trade is documented
@@ -1335,14 +1401,18 @@ FTL disposition as missing functionality.
 
 **Y2038-adjacent note.** The FTL comparison uses `time(NULL)`,
 which returns `time_t`. On 64-bit platforms — which are the only
-platforms Shekyl supports per the 32-bit-retirement chore
-recorded in
-[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) ("Chore #3: retire every
-32-bit target", landed on `chore/retire-32bit-targets`) —
-`time_t` is 64-bit signed and Y2038 is not a concern. If 32-bit
-platforms ever return to scope, the FTL comparison surface and
-the FTL/2 forward-looking constraint above must both be revisited
-for `time_t` width before the re-introduction lands.
+platforms Shekyl supports per the 32-bit-retirement chore landed
+at commit `e06ee37d96af` ("Chore #3: retire every 32-bit target",
+PR #15 merged into `dev` on 2026-04, recorded in
+[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) "Chore #3" entry) —
+`time_t` is 64-bit signed and Y2038 is not a concern. The
+commit-hash cite (rather than a branch-name cite) is the
+audit-trail-stable form: `chore/retire-32bit-targets` is a
+deleted post-merge branch and is not a stable cite target. If
+32-bit platforms ever return to scope, the FTL comparison
+surface and the FTL/2 forward-looking constraint above must both
+be revisited for `time_t` width before the re-introduction
+lands.
 
 ### 5.6 Validator consumer contract: `chain_height → header.difficulty`
 
@@ -1741,7 +1811,7 @@ The vectors below use Shekyl V3.0 parameters (`N = 90`, `T = 120`,
   arithmetic at PR time**; the figure above is approximate (the
   intermediate `1_000_000 * 90 * 91 * 120 * 99` is exact, but
   the division is integer truncation).
-- **Selfish-mine attack regression (zawy12 issue #24 item 11,
+- **Selfish-mine attack regression (zawy12 issue #24 item 14,
   September 2018 attack class).** A two-block forwarded-and-back
   timestamp pattern designed to exercise the attack class the
   running-max + symmetric-clamp formulation is intended to
@@ -1785,7 +1855,7 @@ The vectors below use Shekyl V3.0 parameters (`N = 90`, `T = 120`,
   output matches the running-max + symmetric-clamp derivation.
   **Required**: Phase 1 cannot merge without this vector; it is
   the regression test for the Round 9 algorithm change and is
-  the closing-condition gate for zawy12 issue #24 item 11.
+  the closing-condition gate for zawy12 issue #24 item 14.
 - **Bias factor direction sanity.** Stable-hashrate input with
   `solvetime[i] == T` produces output **below** `avg_D` (per the
   stable-hashrate vector above). A `200/99` direction inversion

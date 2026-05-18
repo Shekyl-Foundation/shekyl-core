@@ -9,7 +9,7 @@ todos:
     content: "Phase 1: Add rust/shekyl-difficulty crate to rust/Cargo.toml workspace members as a leaf crate (zero internal workspace deps per DAA_LWMA1.md §2.1). Create rust/shekyl-difficulty/Cargo.toml (Shekyl Foundation copyright; BSD-3-Clause; no_std-compatible if practical, #![deny(unsafe_code)] crate-level). Extend config/consensus_constants.json with algorithm-version-free keys daa_{window_n=90, target_seconds=120, ftl_seconds=540, mtp_window=11, genesis_difficulty=100} per the JSON-authority pattern in DAA_LWMA1.md §4 (the algorithm-version flavor lives in src/lwma1.rs, not in symbol names). Extend cmake/generate_consensus_constants.py to emit SHEKYL_DAA_* constexpr symbols. Add rust/shekyl-difficulty/build.rs reading the JSON and emitting consensus_constants_generated.rs to OUT_DIR (Round 3 closed Option A; extending shekyl-engine-core/build.rs is rejected as it breaks the leaf-crate property). Create src/lib.rs re-exporting lwma1::lwma1_next, is_timestamp_below_ftl, is_above_mtp; src/consts.rs include!'ing the generated file and re-exporting N/T_SECONDS/FTL_SECONDS/MTP_WINDOW/GENESIS_DIFFICULTY (Round 3 disposition: bias factor 99/200, solvetime clamp 6, min-L floor 1/20 appear as bare integer literals inside src/lwma1.rs, NOT as named consts in src/consts.rs; matches canonical zawy12 verbatim per DAA_LWMA1.md §4); src/lwma1.rs (canonical implementation per DAA_LWMA1.md §5.3). Write unit tests against the §8.1 synthetic test corpus including the §5.3 step 8 overflow-boundary paired vectors AND the new §8.1 solvetime[1] -T-offset regression vector. PR cannot merge if cargo test, cargo clippy --all-targets -- -D warnings, or cargo fmt --check fails per 45-rust-lint-checks.mdc."
     status: pending
   - id: phase2-cross-check-harness
-    content: "Phase 2: Add tests/difficulty/lwma1_cross_check.cpp harness (C++ test target per Round 4 disposition; canonical reference is C++, consuming it directly is simpler than Rust-side vendoring) that builds the zawy12 LWMA1_() C++ reference (extracted to tests/difficulty/zawy12_lwma1_reference.h with explicit SPDX-License-Identifier: MIT header per Round 3 disposition; derived from the pinned-spec revision) and asserts byte-equality between Rust output and C++ reference output across the §8.1 input corpus. CI runs the harness; failure fails CI. Commit docs/design/refs/zawy12_issue_3_lwma1.md as the pinned spec revision (raw issue body via GitHub REST API, immune to rendering-side drift). Record three LWMA1_() disambiguation anchors in the same file or a sibling .lwma1-anchors.json: (a) byte-offset range [offset_start, offset_end) within the pinned .body containing the LWMA1_() function, (b) the literal first line of LWMA1_(), (c) the literal last line. The issue contains four LWMA reference functions; without these anchors, Phase 2 maintainers cannot disambiguate the LWMA1_() boundaries from LWMA2_/3_/4_ when the upstream author reorders content."
+    content: "Phase 2: Add tests/difficulty/lwma1_cross_check.cpp harness (C++ test target per Round 4 disposition; canonical reference is C++, consuming it directly is simpler than Rust-side vendoring) that builds the zawy12 LWMA1_() C++ reference (extracted to tests/difficulty/zawy12_lwma1_reference.h with explicit SPDX-License-Identifier: MIT header per Round 3 disposition; derived from the pinned-spec revision) and asserts byte-equality between Rust output and C++ reference output across the §8.1 input corpus. CI runs the harness; failure fails CI. Commit docs/design/refs/zawy12_issue_3_lwma1.md as the pinned spec revision (raw issue body via GitHub REST API, immune to rendering-side drift). Record three LWMA1_() disambiguation anchors in the same file or a sibling .lwma1-anchors.json: (a) byte-offset range [offset_start, offset_end) within the pinned .body containing the LWMA1_() function, (b) the literal first line of LWMA1_(), (c) the literal last line. The issue contains four LWMA reference functions; without these anchors, Phase 2 maintainers cannot disambiguate the LWMA1_() boundaries from LWMA2_/3_/4_ when the upstream author reorders content. Round 9 + Round 10 supplements: also commit docs/design/refs/zawy12_issue_3_lwma3.md (verbatim LWMA3_() extraction for reader convenience, per §5.3 step 2's partial LWMA-3 adoption), docs/design/refs/zawy12_issue_3_lwma1_with_lwma3_step2.md (Shekyl-composed hybrid reference used by the cross-check harness for out-of-sequence test vectors), and docs/design/refs/zawy12_issue_24_history.md (raw .body pin of zawy12 issue #24 supporting every 'item N' cross-reference downstream). Anchors file extends with lwma3_byte_offset_{start,end}/first_line/last_line per the same three-anchor discipline as LWMA1_."
     status: pending
   - id: phase3-ffi-wire-up
     content: "Phase 3: Export shekyl_difficulty_lwma1_next from rust/shekyl-ffi/src/lib.rs per DAA_LWMA1.md §6.1 (i32 return; cum_difficulties: *const ShekylU128; out_next_difficulty: *mut ShekylU128 where #[repr(C)] struct ShekylU128 { lo: u64, hi: u64 } — Round 5 pivoted from [u8; 16] to a field-named two-u64 struct per the FCMP++/KEM-derivation precedent; rationale: Rust u128 C ABI was target-dependent until rustc 1.77 and remains a footgun on uncommon targets; u64 has universally stable ABI on every Shekyl-supported target, debugger-friendly lo/hi field semantics carry the meaning, no improper_ctypes exposure; ERR_NULL_PTR / ERR_INVALID_COUNT / ERR_OVERFLOW / ERR_INTERNAL taxonomy). Add struct shekyl_u128 { uint64_t lo; uint64_t hi; } and the function declaration to src/shekyl/shekyl_ffi.h. Hand-maintain the bindings per 25-rust-architecture.mdc. PR delivers the FFI surface; the daemon does NOT yet consume it (still on inherited next_difficulty)."
@@ -405,10 +405,10 @@ specifically called out in §8.1:
 - "Out-of-sequence timestamp handling (running-max semantics,
   Round 9)" — exercises step 2's running-max and step 3's
   symmetric clamp with a single out-of-sequence pair; required.
-- "Selfish-mine attack regression (zawy12 issue #24 item 11,
+- "Selfish-mine attack regression (zawy12 issue #24 item 14,
   September 2018 attack class)" — the regression test for the
   Round 9 algorithm change and the closing-condition gate for
-  zawy12 issue #24 item 11; required.
+  zawy12 issue #24 item 14; required.
 
 These two vectors must produce byte-exact outputs that differ
 from a hypothetical Round-8-kyuupichan implementation for the
@@ -479,6 +479,79 @@ first line of the function (verbatim, for grep-anchor recovery),
 
 `DAA_LWMA1.md` §5.3's "lines N–M" citations resolve against the
 LWMA1_() byte-offset range, not against the full `.body`.
+
+**Round 9 supplementary reference files (committed alongside the
+pin in the same Phase 2 PR).** Per
+[`DAA_LWMA1.md`](./DAA_LWMA1.md) §3's Round-9 disposition, the
+partial LWMA-3 adoption in §5.3 step 2/3 requires two additional
+files under `docs/design/refs/`:
+
+1. `zawy12_issue_3_lwma3.md` — convenience extraction of the
+   `LWMA3_()` function from the pinned issue body. The extraction
+   is verbatim against the LWMA-3 byte-offset anchor (see below);
+   the file is *not* the canonical pin (file
+   `zawy12_issue_3_lwma1.md` is) — it is a reader-convenience
+   copy so audit-reviewers reading the cross-check derivation
+   can see just the LWMA-3 source. If the two diverge, the
+   canonical pin wins and this file is regenerated from it.
+2. `zawy12_issue_3_lwma1_with_lwma3_step2.md` — the Shekyl-
+   composed hybrid reference: LWMA-1's canonical body with step 2
+   and step 3 substituted by LWMA-3's running-max + symmetric-
+   clamp mechanism. This is a *derived* file (not a pin); it is
+   the executable form of `DAA_LWMA1.md` §5.3's textual
+   deviation. Phase 2's cross-check harness uses this file's
+   body when computing expected outputs against out-of-sequence
+   timestamp inputs (monotonic inputs use canonical `LWMA1_()`).
+
+The same Phase 2 anchors file gains LWMA-3 byte-offset anchors
+alongside the existing LWMA-1 anchors so that the LWMA3_()
+extraction is grep-anchored against upstream reordering. The
+anchors file structure extends to:
+
+```json
+{
+  "lwma1_byte_offset_start": 0,
+  "lwma1_byte_offset_end": 0,
+  "lwma1_first_line": "",
+  "lwma1_last_line": "",
+  "lwma3_byte_offset_start": 0,
+  "lwma3_byte_offset_end": 0,
+  "lwma3_first_line": "",
+  "lwma3_last_line": "",
+  "pinned_body_sha256": "",
+  "captured_at_utc": ""
+}
+```
+
+**Round 10 supplementary reference file: zawy12 issue #24 pin.**
+Per [`DAA_LWMA1.md`](./DAA_LWMA1.md) §3's Round-10 addition,
+Phase 2 also commits
+`docs/design/refs/zawy12_issue_24_history.md` — the raw `.body`
+of [`zawy12/difficulty-algorithms#24`](https://github.com/zawy12/difficulty-algorithms/issues/24)
+("LWMA's history"):
+
+```text
+curl -sH "Accept: application/vnd.github.v3+json" \
+  https://api.github.com/repos/zawy12/difficulty-algorithms/issues/24 \
+  | jq -r .body > docs/design/refs/zawy12_issue_24_history.md
+```
+
+Rationale: every "zawy12 issue #24 item N" cross-reference in
+the design doc resolves against the numbered list inside this
+pinned `.body`, not against the live GitHub-rendered issue.
+Without the pin, an upstream-author edit that renumbers items
+(e.g., inserting a new item between items 5 and 6) silently
+invalidates every downstream "item N" citation. Per the
+round-10 disposition, design-doc prose continues to cite by
+date + description as the primary identifier; the item number
+is a redundant cross-reference resolving against this pin.
+
+Phase 2 records the issue-#24 pin SHA-256 and the
+captured-at-UTC timestamp in `DAA_LWMA1.md` §3's pin record. No
+byte-offset anchors are needed for the issue-#24 pin: the design
+doc cites it by date + description, not by line range, so the
+audit-trail anchor is the SHA-256 of the full `.body` rather
+than per-section byte ranges.
 
 **Cross-check harness.** Add
 `tests/difficulty/lwma1_cross_check.cpp` that builds the canonical
@@ -1053,7 +1126,7 @@ issue items that surfaced during the review pass:
   §5.5's "Disposition on peer-time-derived clocks" paragraph,
   with a forward-looking constraint: if a future Shekyl version
   adds peer-time correction, the `FTL / 2` revert-threshold
-  relationship per zawy12 issue #24 item 14 becomes load-bearing
+  relationship per zawy12 issue #24 item 17 becomes load-bearing
   at that point.
 
 Items #1, #2, #4, #5, #6, #10, #12, #15, and #16 were already
