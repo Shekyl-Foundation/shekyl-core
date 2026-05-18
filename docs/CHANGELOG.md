@@ -335,6 +335,91 @@
   roughly 45–55 files across `src/` and `tests/`. (vi)
   `DAA_LWMA1.md` status block on line 3 updated from "Round 1"
   to reflect that Rounds 1–8 have all landed against this PR.
+  (h) **Round 9 zawy12 issue #24 cumulative-history review.**
+  Reviews the design against
+  [zawy12/difficulty-algorithms#24](https://github.com/zawy12/difficulty-algorithms/issues/24)
+  ("LWMA's history"), the canonical author's cumulative log of
+  known LWMA issues, fixes, and security-relevant findings.
+  Five items receive explicit dispositions; four (#1, #2, #4,
+  #5, #6, #10, #12, #15, #16) are confirmed already-addressed.
+  Substantive changes:
+  - **Item #14 (September 2018 selfish-mine via out-of-sequence
+    timestamps).** Algorithm-level change. `DAA_LWMA1.md` §5.3
+    steps 2 and 3 adopt LWMA-3's running-max + signed-solvetime
+    mechanism and symmetric `±6*T` clamp, replacing the
+    kyuupichan-style forward-pass-with-1-floor used through
+    Round 8. The remainder of the algorithm (weighted-sum,
+    minimum-L floor, bias factor 99/200, overflow guard,
+    genesis-window short-circuit) stays LWMA-1-canonical.
+    Disposition recorded in §1.3 (alternatives — "Partial
+    LWMA-3 adoption"), §3 (pinned spec — deviation note +
+    `LWMA3_()` reference pin), §5.3 steps 2/3/4 (algorithm
+    rewrite to signed-i128 intermediates + symmetric clamp),
+    §5.4 ("Signed-arithmetic discipline" property), §5.5
+    (defense-surface enumeration grows to four mechanisms), and
+    §8.1 (out-of-sequence vector reformulated for running-max
+    semantics, new "Selfish-mine attack regression (zawy12 issue
+    #24 item 11)" required vector). `DAA_LWMA1_PLAN.md` Phase 1
+    adds a signed-arithmetic discipline section detailing the
+    i128/u128 boundary and lists the two Round 9 test vectors
+    as required Phase 1 merge-gate criteria. Phase 2's
+    cross-check harness composes expectations from both
+    canonical `LWMA1_()` and `LWMA3_()` references per §8.2.
+  - **Item #17 (May 2019 33% Sybil attack via peer-time-offset).**
+    Closed by absence of substrate. The attack's precondition
+    ("If your coin uses network time instead of node local
+    time") is not met by Shekyl. `Blockchain::check_block_timestamp(b)`
+    compares against `time(NULL)` directly
+    (`blockchain.cpp:4276`); `Blockchain::get_adjusted_time(height)`
+    is blockchain-derived (median of recent block timestamps)
+    and consulted only by non-consensus paths. No peer-time-correction
+    mechanism exists in the daemon; audit-trail grep returned
+    zero matches for `time_offset|TimeOffset|GetAdjustedTime|GetTimeOffset|MAX_PEER_DELTA|MAX_TIME_DELTA|MEDIAN_TIME|TIMESTAMPS_FOR_TIME_SYNC`
+    against consensus-relevant surface. Lowering FTL from 7200 s
+    to 540 s is therefore safe against the
+    [zcash/zcash#4021](https://github.com/zcash/zcash/issues/4021)
+    attack class. Disposition recorded in
+    `DAA_LWMA1.md` §5.5's "Disposition on peer-time-derived
+    clocks" paragraph, with a forward-looking constraint: if a
+    future Shekyl version adds peer-time correction, the
+    `FTL / 2` revert-threshold relationship per zawy12 issue
+    #24 item 14 becomes load-bearing at that point and
+    `daa_peer_time_revert_threshold_seconds` MUST be added to
+    the JSON authority. The FTL value reduction (7200 → 540)
+    pre-dates this round but the safety rationale is now
+    explicit: it is safe *because* Shekyl does not implement
+    peer-time-derived clocks.
+  - **Item #7 (Jagerman MTP patch).** Verified present in
+    Shekyl's inherited `Blockchain::create_block_template` at
+    `blockchain.cpp:1650–1656` (the canonical pattern: set
+    `b.timestamp = time(NULL)`, then if `check_block_timestamp`
+    fails, raise to `median_ts`). The MTP window change from
+    60 to 11 preserves the patch's effectiveness; no Phase 4
+    work required. Disposition recorded in `DAA_LWMA1.md` §5.5
+    with code citation. A minor doc-vs-code drift at
+    `blockchain.cpp:1540`'s cached-template path is recorded
+    as a `FOLLOWUPS.md` candidate, not a Phase 4 atomic-cutover
+    work item.
+  - **Item #3 (window size N=60 vs N=90).** Documentation polish.
+    `DAA_LWMA1.md` §4's N parameter row notes that zawy12 issue
+    #24's 2018 "N ≈ 60" recommendation referred to `T = 60 s`
+    chains; the recommendation scales inversely with `T` and
+    for `T = 120 s` the canonical N is 90 (same ~90-minute
+    window).
+  - **Item #9 (±7xT header timestamp limits vs FTL boundary).**
+    Documentation only. `DAA_LWMA1.md` §5.5 records that Shekyl
+    uses MTP + FTL + symmetric solvetime clamp + running-max
+    normalization (four mechanisms) as the defense surface and
+    does not implement a separate per-block-header `±7xT` rule,
+    consistent with zawy12 issue #24 item 8's post-FTL deprecation
+    of `±7xT`.
+
+  `DAA_LWMA1_PLAN.md` gains a "Round 9 dispositions" section
+  recording all five issue-item dispositions and naming items
+  #1, #2, #4, #5, #6, #10, #12, #15, #16 as already-addressed
+  with their corresponding §ref. `DAA_LWMA1.md` status block on
+  line 3 updated from "Round 8" to "Round 9" to reflect the
+  cumulative review pass.
 
 - **`07-consensus-atomic-cutovers.mdc` — named exception to
   branching policy for consensus-atomic cutovers**

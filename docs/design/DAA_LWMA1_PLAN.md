@@ -370,7 +370,53 @@ transcribe** the on-disk sketch. Returns `Result<u128, Lwma1Error>`
 for ergonomic Rust callers; the FFI shim in Phase 3 converts to the
 `i32` error-code surface.
 
+**Round 9 partial-LWMA-3-adoption signed-arithmetic discipline.**
+Per [`DAA_LWMA1.md`](./DAA_LWMA1.md) §5.3 steps 2–4 and §5.4
+"Signed-arithmetic discipline," the Round 9 algorithm uses `i128`
+internally for solvetime computation, symmetric clamping, and
+weighted-sum accumulation; `u128` is restored at step 5's
+minimum-L floor (which guarantees a positive value going into
+step 7's unsigned division). The Phase 1 implementer must
+preserve this signedness boundary precisely:
+
+- Step 2's running-max formulation uses `prev_max: u64` and
+  `solvetime[i]: i128`; the subtraction `timestamps[i] as i128 -
+  prev_max as i128` is the canonical pattern (cast both operands
+  before subtracting; avoid `as i128` after the subtraction).
+- Step 3's symmetric clamp uses `solvetime.clamp(-6 * T as i128,
+  6 * T as i128)`.
+- Step 4's weighted sum accumulator is `let mut L: i128 = 0;`.
+- Step 5's minimum-L floor re-types: `let L: u128 =
+  L.max(N * N * T / 20) as u128;` (the `max` ensures
+  positivity, the cast is infallible after the max).
+- Step 7's division operates on `u128` throughout, unchanged
+  from the Round 8 form.
+
+The clippy lints
+`clippy::arithmetic_side_effects` and `clippy::indexing_slicing`
+apply to signed and unsigned arithmetic identically; the i128
+intermediates use `.checked_mul`, `.checked_add`, `.checked_sub`
+or explicit-cast-then-arithmetic patterns just like the u128 path.
+
 **Synthetic unit tests** per [`DAA_LWMA1.md`](./DAA_LWMA1.md) §8.1.
+The Round 9 vectors that exercise the partial-LWMA-3 adoption are
+specifically called out in §8.1:
+
+- "Out-of-sequence timestamp handling (running-max semantics,
+  Round 9)" — exercises step 2's running-max and step 3's
+  symmetric clamp with a single out-of-sequence pair; required.
+- "Selfish-mine attack regression (zawy12 issue #24 item 11,
+  September 2018 attack class)" — the regression test for the
+  Round 9 algorithm change and the closing-condition gate for
+  zawy12 issue #24 item 11; required.
+
+These two vectors must produce byte-exact outputs that differ
+from a hypothetical Round-8-kyuupichan implementation for the
+same inputs; the divergence is the load-bearing property the
+test catches. If a Round 9 Rust implementation produces the
+Round 8 (kyuupichan) numerical output for these vectors, the
+implementation has reverted to the Round 8 algorithm and Phase 1
+gate fails.
 
 **Phase 1 merge gate.** `cargo test`, `cargo clippy --all-targets
 -- -D warnings`, and `cargo fmt --check` must all pass per
@@ -936,6 +982,107 @@ defensible Phase-0-closeable answers and are now ratified.
   The C++ test-target approach also makes the cross-check
   available to C++ reviewers without a Rust toolchain at audit
   time.
+
+## Round 9 dispositions (zawy12 issue #24 review)
+
+Round 9 reviews [`DAA_LWMA1.md`](./DAA_LWMA1.md) against
+[zawy12/difficulty-algorithms#24](https://github.com/zawy12/difficulty-algorithms/issues/24)
+("LWMA's history"), the canonical author's cumulative log of
+known LWMA issues, fixes, and security-relevant findings. The
+review closes the design with explicit dispositions on five
+issue items that surfaced during the review pass:
+
+- **Item 3 (window size N=60 vs N=90).** zawy12 issue #24's 2018
+  "N ≈ 60" recommendation referred to `T = 60 s` chains; the
+  canonical recommendation scales inversely with `T`. For
+  Shekyl's `T = 120 s`, `N = 90` gives the same ~90-minute
+  window. Disposition: documentation polish only;
+  [`DAA_LWMA1.md`](./DAA_LWMA1.md) §4's N parameter row now
+  includes the T-scaling note. No algorithm or constant changes.
+- **Item 7 (Jagerman MTP patch).** Verified present in Shekyl's
+  inherited `Blockchain::create_block_template` at
+  `blockchain.cpp:1650–1656` (the canonical `b.timestamp =
+  time(NULL); if (!check_block_timestamp(b, median_ts))
+  b.timestamp = median_ts;` pattern). The MTP window change from
+  60 to 11 preserves the patch's effectiveness; no Phase 4 work
+  required. Disposition recorded in
+  [`DAA_LWMA1.md`](./DAA_LWMA1.md) §5.5 with code citation. A
+  minor doc-vs-code drift at `blockchain.cpp:1540`'s cached-template
+  path comment is recorded as a `FOLLOWUPS.md` item, not a
+  Phase 4 atomic-cutover work item.
+- **Item 9 (±7xT header timestamp limits vs FTL boundary).**
+  zawy12 deprecated header-level `±7xT` limits in favor of
+  FTL-based defenses once FTL was correctly tuned. Shekyl uses
+  MTP + FTL + symmetric solvetime clamp + running-max
+  normalization (§5.5) and does *not* implement a separate
+  per-block-header `±7xT` rule. With `FTL = 540 s = 4.5*T`, the
+  upper bound is tighter than `+7*T = 840 s`, and the lower-bound
+  defense moves into the algorithm via §5.3 step 3's `-6*T`
+  symmetric clamp. Disposition: documentation only;
+  [`DAA_LWMA1.md`](./DAA_LWMA1.md) §5.5 records the non-adoption.
+- **Item 14 (September 2018 selfish-mine via out-of-sequence
+  timestamps).** Algorithm-level disposition: §5.3 steps 2 and
+  3 adopt LWMA-3's running-max + signed-solvetime mechanism and
+  symmetric `±6*T` clamp, replacing the kyuupichan-style
+  forward-pass-with-1-floor used through Round 8. The remainder
+  of the algorithm stays LWMA-1-canonical. Disposition recorded
+  in [`DAA_LWMA1.md`](./DAA_LWMA1.md) §1.3 ("Partial LWMA-3
+  adoption"), §3 ("Deviation from canonical LWMA-1,
+  steps 2 and 3 only"), §5.3 steps 2/3/4 (algorithm rewrite),
+  §5.4 ("Signed-arithmetic discipline"), and §8.1
+  ("Selfish-mine attack regression"). Phase 1's test corpus
+  gains one regression
+  vector specifically exercising the September 2018 attack class.
+  Phase 2's cross-check harness composes expectations from both
+  canonical `LWMA1_()` and `LWMA3_()` references per §8.2.
+- **Item 17 (May 2019 33% Sybil attack via peer-time-offset).**
+  Closed by absence of substrate. The attack's precondition
+  ("If your coin uses network time instead of node local time")
+  is not met by Shekyl. Audit-trail evidence: `git grep -E
+  'time_offset|TimeOffset|GetAdjustedTime|GetTimeOffset|MAX_PEER_DELTA|MAX_TIME_DELTA|MEDIAN_TIME|TIMESTAMPS_FOR_TIME_SYNC'
+  src/` returns zero matches against any consensus-relevant
+  surface as of `feat/daa-lwma1-phase0-design` HEAD.
+  `Blockchain::check_block_timestamp(b)` compares
+  `b.timestamp` against `time(NULL)` directly
+  (`blockchain.cpp:4276`); `Blockchain::get_adjusted_time(height)`
+  is blockchain-derived (median of recent block timestamps) and
+  is consulted only by non-consensus paths (unlock-time leeway,
+  RPC display). No `daa_peer_time_revert_threshold_seconds`
+  constant is added because no peer-time-correction mechanism
+  exists. Disposition recorded in [`DAA_LWMA1.md`](./DAA_LWMA1.md)
+  §5.5's "Disposition on peer-time-derived clocks" paragraph,
+  with a forward-looking constraint: if a future Shekyl version
+  adds peer-time correction, the `FTL / 2` revert-threshold
+  relationship per zawy12 issue #24 item 14 becomes load-bearing
+  at that point.
+
+Items #1, #2, #4, #5, #6, #10, #12, #15, and #16 were already
+addressed prior to Round 9 review:
+
+- **Item 1** (Thaer's negative-solvetime bug, kyuupichan fix):
+  superseded by Round 9's partial-LWMA-3 adoption (item 14
+  above), which replaces kyuupichan with running-max +
+  symmetric clamp.
+- **Item 2** (CryptoNote pre-LWMA sort, `DIFFICULTY_LAG`,
+  `DIFFICULTY_CUT`): [`DAA_LWMA1.md`](./DAA_LWMA1.md) §9.2
+  deletes all three.
+- **Item 4** (FTL too high enables timestamp manipulation):
+  FTL: 7200 → 540, [`DAA_LWMA1.md`](./DAA_LWMA1.md) §9.5.
+- **Item 5** (IPBC signed/unsigned math bug): Rust's type system
+  prevents the entire bug class; [`DAA_LWMA1.md`](./DAA_LWMA1.md)
+  §5.4 properties explicitly note `u128` (and Round 9's `i128`)
+  throughout.
+- **Item 6** (vector-size off-by-one, N vs N+1):
+  [`DAA_LWMA1.md`](./DAA_LWMA1.md) §5.6 and §6.1 both spell out
+  `N+1 == 91` and the chain_height vs block-height distinction.
+- **Item 10** (MTP = 11 vs 60): [`DAA_LWMA1.md`](./DAA_LWMA1.md)
+  §9.6 documents the value change.
+- **Items 12, 15, 16** (LWMA-2/3/4 deprecation):
+  [`DAA_LWMA1.md`](./DAA_LWMA1.md) §1.3 considers each and
+  rejects with reversion clauses. The Round 9 partial-LWMA-3
+  adoption borrows only LWMA-3's step-2-and-3 timestamp-protection
+  mechanism; LWMA-3 itself remains rejected per zawy12's January
+  2019 deprecation.
 
 ## Cross-references
 

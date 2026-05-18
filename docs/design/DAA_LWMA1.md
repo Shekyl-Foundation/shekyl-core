@@ -1,13 +1,16 @@
 # LWMA-1 — Difficulty adjustment, Rust, from genesis
 
-**Status.** **DRAFT — Round 8 (2026-05-17 initial draft; review
-passes 1–8 have all landed against PR #49; this doc carries
+**Status.** **DRAFT — Round 9 (2026-05-17 initial draft; review
+passes 1–9 have all landed against PR #49; this doc carries
 the Round 4 test-vector concrete-tuple correction, the Round 5
 `ShekylU128` FFI pivot, the Round 7 cleanup of the
 consensus-atomic-cutover invocation against the now-ratified
-`07-consensus-atomic-cutovers.mdc`, and the Round 8 bias-factor
+`07-consensus-atomic-cutovers.mdc`, the Round 8 bias-factor
 stochastic-vs-deterministic clarification and §11 wallet-T
-touchpoint correction).** Phase 0 deliverable for the Shekyl
+touchpoint correction, and the Round 9 partial-LWMA-3 adoption
+in §5.3 step 2/3 plus the zawy12 issue #24 dispositions on items
+3, 7, 9, 14, and 17 — see §1.3, §5.5, and §8.1's selfish-mine
+regression vector).** Phase 0 deliverable for the Shekyl
 difficulty-adjustment algorithm (DAA) migration. Companion:
 [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md). Both documents must
 pass the Phase 0 review cycle before any code lands.
@@ -157,14 +160,45 @@ with multi-window logic. Community testing across multiple coins did
 not establish consistent superiority over LWMA-1; later variants
 introduced complexity (additional weighting schemes, more aggressive
 adjustments) that produced oscillation artifacts in specific
-hashrate regimes. zawy12 himself documents LWMA-4 as inappropriate
-for CryptoNote-lineage coins unless pool software adjusts timestamps
-during hashing — a constraint Shekyl pools cannot be relied upon to
+hashrate regimes. zawy12 himself deprecated all versions except
+LWMA-1 in January 2019 (issue #24 item 13) on the grounds that
+"LWMA 2, 3, and 4 seems better on most coins than LWMA-1, when
+there is a persistent problem like there has been on Wownero, they
+seem to make it worse. Also 2, 3, and 4 may bias the performance
+metrics to look better than they are." LWMA-4 additionally
+documents requiring pool software to adjust timestamps during
+hashing — a constraint Shekyl pools cannot be relied upon to
 satisfy. *Reversion criterion:* a Shekyl-specific simulation against
 the canonical zawy12 tooling demonstrates that LWMA-2+ has materially
 better behavior under Shekyl's specific hashrate profile (CPU-only
-RandomX v2; small-chain bootstrap regime) — reopen the disposition
+RandomX v2; small-chain bootstrap regime) AND zawy12's deprecation
+of these variants is re-evaluated upstream — reopen the disposition
 in a new design doc.
+
+**Partial LWMA-3 adoption: running-max + symmetric-clamp in step
+2 only (Round 9 disposition; current design).** Shekyl V3.0 LWMA-1
+incorporates LWMA-3's running-max + signed-solvetime trick at
+§5.3 step 2 (replacing the kyuupichan-style forward-pass-with-1-
+floor used through Round 8) and LWMA-3's symmetric `±6*T`
+solvetime clamp at §5.3 step 3 (replacing LWMA-1's one-sided
+`min(solvetime, 6*T)` clamp). The mechanism is the documented
+remediation for zawy12 issue #24 item 11's September 2018
+selfish-mine attack class via out-of-sequence timestamps. The
+remainder of LWMA-1's algorithm — weighted-sum, minimum-L floor,
+bias factor 99/200, overflow guard — is unchanged. This partial
+adoption is **not** a switch to LWMA-3; LWMA-3's jump rules and
+multi-window logic are explicitly excluded. The framing is
+"canonical zawy12 LWMA-1 with the step-2 timestamp-protection
+trick that zawy12 retroactively backported into LWMA-3 for
+attack-resistance reasons, and that issue #24 item 11 names as the
+algorithm-internal fix coins should adopt to close the September
+2018 attack class without going to deprecated LWMA-3 wholesale."
+*Reversion criterion:* a Shekyl-specific simulation against the
+canonical zawy12 tooling demonstrates the running-max +
+symmetric-clamp formulation produces materially worse behavior
+than the kyuupichan-style forward-pass under Shekyl's specific
+hashrate profile, AND no analogous attack class exists in
+Shekyl's operating environment. Both conditions must hold.
 
 **ASERT (Absolutely Scheduled Exponentially Rising Targets).**
 Theoretically smoother long-term stability; strong deployment record
@@ -572,6 +606,37 @@ wrapper inside the verifier crate.
   against the LWMA1_() byte-offset range above, not against the
   full pinned `.body`.
 
+- **Deviation from canonical LWMA-1, §5.3 step 2 + step 3 only
+  (Round 9 disposition).** Shekyl's LWMA-1 implementation borrows
+  the running-max + signed-solvetime mechanism + symmetric `±6*T`
+  clamp from canonical zawy12 LWMA-3 (issue #3, `LWMA3_()`
+  reference) and substitutes it for the kyuupichan-style
+  forward-pass-with-1-floor that canonical `LWMA1_()` uses. The
+  deviation is bounded to §5.3 step 2 (solvetime computation) and
+  step 3 (clamp shape); all other algorithm steps (weighted sum,
+  minimum-L floor, bias factor 99/200, overflow guard,
+  genesis-window short-circuit) are byte-identical to canonical
+  `LWMA1_()`. The deviation is the documented Shekyl remediation
+  for zawy12 issue #24 item 11 (September 2018 selfish-mine attack
+  via out-of-sequence timestamps) — zawy12 names this as the
+  algorithm-internal fix coins should adopt when they do not want
+  to switch wholesale to the (subsequently deprecated) LWMA-3.
+  Phase 2's canonical-reference cross-check (§8.2) is therefore
+  parameterized: §8.1's monotonic-timestamp test vectors must
+  byte-match canonical `LWMA1_()` (the algorithms agree on
+  monotonic inputs); the out-of-sequence vectors must byte-match
+  canonical `LWMA3_()` step-2-and-3 behavior with LWMA-1's
+  remaining steps applied to the resulting `L`. Phase 2 extracts
+  both `LWMA1_()` and `LWMA3_()` references and composes the
+  test-vector expectations from the appropriate one per the input
+  shape. The composite reference is captured in
+  `docs/design/refs/zawy12_issue_3_lwma1_with_lwma3_step2.md`
+  (Phase 2 closure file) for unambiguous downstream audit.
+
+  A Phase 2 byte-offset pin against `LWMA3_()` is added alongside
+  the existing `LWMA1_()` pin per the same three-anchor
+  (byte-range + first-line + last-line) discipline.
+
 - **Simulation tooling:** zawy12's `difficulty-algorithms` repository
   contains historical-data simulators used to derive test-vector
   corpora. Specific corpus selection is described in §8.
@@ -580,7 +645,7 @@ wrapper inside the verifier crate.
 
 | Parameter | Symbol | Shekyl V3.0 value | Source / rationale |
 | --- | --- | --- | --- |
-| Window size | `N` | **90** | zawy12 canonical recommendation for `T = 120 s` chains (Issue #3, line 84) |
+| Window size | `N` | **90** | zawy12 canonical recommendation for `T = 120 s` chains (Issue #3, line 84). Note: zawy12 issue #24 item 3's 2018 "N ≈ 60" recommendation referred to `T = 60 s` chains; the canonical recommendation scales inversely with `T` so that the window covers ~`N * T = 5400 s ≈ 90 min` of chain time. For Shekyl's `T = 120 s`, the canonical `N = 90` gives the same `~90 min` window. |
 | Target block time | `T` | **120 s** | Shekyl's chosen target block time per zawy12 LWMA-1's recommended range (60–120 s for CPU-mineable chains). The numerical value happens to match the inherited C++ `DIFFICULTY_TARGET_V2 = 120`, but Shekyl's source-of-truth is the JSON authority `daa_target_seconds` per §4, not the inherited `#define`. The inherited define is deleted at Phase 4 per §9.2. |
 | Solvetime clamp factor | k_st | **6** (i.e., individual solvetimes capped at `6*T`) | zawy12 canonical |
 | Minimum-L floor coefficient | k_L | **1/20** (i.e., `L_min = N*N*T/20`) | zawy12 canonical |
@@ -751,74 +816,132 @@ short-circuit ignores the vectors); when `chain_height >= N`,
 otherwise. This is the consensus invariant; an off-by-one here is a
 hard fork.
 
-**Step 2 — Out-of-sequence timestamp normalization.** Compute
-solvetimes from raw timestamps via a forward pass that converts any
-out-of-sequence (decreasing or equal) timestamp pair into a positive
-solvetime of 1 second. Sustained adversarial out-of-sequence
-timestamps are bounded by the MTP check (§5.5), which rejects new
-blocks whose timestamp is below the median of the previous 11. The
-forward pass tracks a local `prev` (the normalized previous
-timestamp) and never mutates the input array:
+**Step 2 — Running-max + signed solvetime (LWMA-3 timestamp
+protection trick).** Compute solvetimes via a forward pass that
+tracks a *non-decreasing* running maximum of all previously-seen
+timestamps and computes each new solvetime as the difference
+between the current timestamp and this running max. The mechanism
+is borrowed from canonical zawy12 LWMA-3's published reference
+(see `docs/design/refs/zawy12_issue_3_lwma3.md` snapshot pinned
+per §3) and is the documented disposition against the
+September 2018 selfish-mine attack class from zawy12 issue #24
+(see §1.3 and §5.5):
 
 ```text
-prev = timestamps[0] - T            // synthetic anchor, matches canonical line 112
+prev_max = timestamps[0] - T         // synthetic anchor, matches canonical line 112
 for i in 1..=N:
-    this_ts = max(timestamps[i], prev + 1)   // out-of-sequence safety
-    solvetime[i] = this_ts - prev            // always positive, >= 1
-    prev = this_ts
+    prev_max = max(prev_max, timestamps[i-1])   // running max, never decreases
+    solvetime[i] = timestamps[i] - prev_max     // signed; can be negative
+    // (clamp applied in step 3)
 ```
 
-Per-iteration equivalence to canonical zawy12 Issue #3, LWMA-1
-reference, lines 113–118:
+The arithmetic in step 2 is **signed `i128`**. Solvetimes are
+allowed to be negative (when `timestamps[i] < prev_max`); negative
+solvetimes are not normalized to a positive floor at this step
+(unlike Masari's pre-kyuupichan or the kyuupichan
+forward-pass-with-1-floor approaches that this design used prior
+to Round 9). The Round 9 disposition replaces the kyuupichan-style
+`max(timestamps[i], prev + 1)` formulation with the explicit
+running-max + signed-solvetime form so the algorithm penalizes
+out-of-sequence timestamps with a negative L contribution rather
+than the kyuupichan trick's "credit the lost solvetime to the
+next iteration" behavior. The two forms agree on monotonic
+timestamps; they diverge on out-of-sequence inputs, and the
+divergence is the load-bearing security property against the
+September 2018 attack class.
 
-- `if timestamps[i] > prev`: `this_ts == timestamps[i]`,
-  `solvetime[i] == timestamps[i] - prev` (canonical lines 115, 117).
-- `if timestamps[i] <= prev`: `this_ts == prev + 1`,
-  `solvetime[i] == 1` (canonical lines 116, 117).
+Per-iteration equivalence on monotonic inputs (`timestamps[i] >=
+timestamps[i-1]` for all `i`):
 
-The `-T` offset on the initial `prev` is the canonical choice (line
-112: `previous_timestamp = timestamps[0] - T`) and is load-bearing:
-removing it would change every solvetime[1] by +T, shifting `L`'s
-expected stable-state value and biasing `next_D` by a constant
-factor. The offset is preserved here exactly.
+- `prev_max == timestamps[i-1]` after step 2's `max(...)` line.
+- `solvetime[i] == timestamps[i] - timestamps[i-1] >= 0`.
+- Identical numerical output to canonical zawy12 Issue #3, LWMA-1
+  reference, line 117's `this_timestamp - previous_timestamp` for
+  any input that satisfies the chain's existing MTP/FTL discipline
+  with strict timestamp monotonicity.
 
-The Rust implementation takes `timestamps: &[u64]` and never writes
-into the caller's storage; `solvetime[i]` is local to the
-computation and `prev` is a stack-local `u64`.
+Divergence on out-of-sequence inputs (`timestamps[i] <
+timestamps[i-1]` for some `i`):
 
-**Step 3 — Solvetime clamp.** Each solvetime is clamped to
-`min(6*T, solvetime)`. Solvetimes above `6*T = 720 s` are treated as
-if they were exactly `6*T`. This is the canonical defense against
-timestamp manipulation that tries to drive difficulty down via one
-large lying timestamp.
+- `prev_max` retains the larger predecessor's value: `prev_max ==
+  timestamps[i-1]` (the higher of the two).
+- `solvetime[i] == timestamps[i] - prev_max < 0`.
+- Step 3 clamps to `-6*T`, so the most negative contribution is
+  bounded.
+- The next iteration `i+1`: `prev_max = max(prev_max,
+  timestamps[i])` is a no-op (since `timestamps[i] < prev_max`),
+  so `solvetime[i+1] = timestamps[i+1] - prev_max` uses the
+  pre-out-of-sequence running max, not the artificially-low
+  `timestamps[i]`. **This is the attack-class defense:** the
+  attacker cannot sandwich a low timestamp between higher ones to
+  produce an artificially high `solvetime[i+1]` on the recovery
+  iteration.
 
-**Step 4 — Linear-weighted sum.** Compute the weighted-sum L as
-`L = sum over i in 1..=N of (i * clamped_solvetime[i])`. Indexing
-convention, locked:
+The `-T` offset on the initial `prev_max` is preserved exactly
+from canonical line 112: `previous_timestamp = timestamps[0] - T`.
+Load-bearing per the existing analysis: removing it would shift
+solvetime[1] by +T, shifting `L`'s expected stable-state value
+and biasing `next_D` by a constant factor.
 
-- `solvetime[i]` is the normalized interval between the previous
-  iteration's `prev` and `timestamps[i]` (steps 2–3), for `i` in
-  `1..=N`.
+The Rust implementation takes `timestamps: &[u64]` and never
+writes into the caller's storage; `solvetime[i]` is local to the
+computation as `i128` and `prev_max` is a stack-local `u64`. The
+final `solvetime[i]` value flows into step 3 (clamp) as `i128`.
+
+**Step 3 — Symmetric solvetime clamp.** Each solvetime is clamped
+to `clamp(solvetime, -6*T, +6*T)`. Solvetimes outside `[-720,
++720]` are treated as if they were exactly `-6*T` or `+6*T`
+respectively. This is the canonical solvetime clamp from LWMA-3
+(symmetric form), replacing the prior LWMA-1 one-sided
+`min(solvetime, 6*T)` form which assumed non-negative solvetimes.
+The upper clamp is unchanged (defends against single large lying
+timestamps driving difficulty down). The lower clamp at `-6*T` is
+new in Round 9 and bounds the magnitude of negative solvetime
+contributions to `L`; this matches LWMA-3's published reference
+and matches zawy12's stated rationale ("change the -7xT limit to
+-FTL" per issue #24 item 8 — and with FTL=540 = 4.5xT, our `-6*T`
+choice is more conservative than `-FTL` would be, see §5.5 for
+the disposition).
+
+**Step 4 — Linear-weighted sum (signed accumulation).** Compute
+the weighted-sum L as `L = sum over i in 1..=N of (i *
+clamped_solvetime[i])`. **L is `i128`** because clamped_solvetime
+can be negative (per step 2's running-max formulation). The
+accumulator overflow bound is `N * (N+1) / 2 * 6 * T = 90 * 91 /
+2 * 720 = 2_948_400` in absolute value — well below `i128::MAX`
+(`≈1.7e38`). Indexing convention, locked:
+
+- `solvetime[i]` is the signed solvetime computed in step 2 and
+  clamped in step 3, for `i` in `1..=N`.
 - `solvetime[1]` is the **oldest** interval in the window —
   specifically, the gap between the synthetic anchor
-  (`timestamps[0] - T`) and the normalized `timestamps[1]`. Weight
-  `1`.
+  (`timestamps[0] - T`) and `timestamps[1]` (after running-max
+  resolution). Weight `1`.
 - `solvetime[N]` is the **most recent** interval — the gap between
-  the normalized `timestamps[N-1]` and the normalized `timestamps[N]`
-  (the chain tip). Weight `N`.
+  `prev_max` after iteration `N-1` and `timestamps[N]` (the chain
+  tip). Weight `N`.
 - There is no `solvetime[0]`. The window holds `N + 1` timestamps
   and produces `N` solvetimes.
 
-This matches canonical zawy12 Issue #3, LWMA-1 reference, line 117:
-`L += i*std::min(6*T, this_timestamp - previous_timestamp);` where
-`i` is the loop iteration in `1..=N`. The Phase 1 implementer must
-use this exact indexing — a 0-indexed weighting variant (weights
-`0..N-1`) would change `L` by a factor of `(N-1)/N` relative to
-canonical and break the bias correction in step 7.
+This matches canonical zawy12 Issue #3 LWMA-1 reference's weighted
+indexing at line 117 (`L += i*std::min(...)`); the signed-i128
+accumulation matches LWMA-3's reference (zawy12 issue #24 names
+this as the per-block-solvetime mechanism that distinguishes
+LWMA-3 from LWMA-1; Shekyl borrows it for step 2's protection
+without adopting LWMA-3's other changes). The Phase 1 implementer
+must use this exact indexing — a 0-indexed weighting variant
+(weights `0..N-1`) would change `L` by a factor of `(N-1)/N`
+relative to canonical and break the bias correction in step 7.
 
 **Step 5 — Minimum-L floor.** If `L < N*N*T/20`, set
-`L = N*N*T/20`. This prevents extreme upward difficulty swings on a
-run of unusually fast blocks.
+`L = N*N*T/20`. This prevents extreme upward difficulty swings on
+a run of unusually fast blocks **and** ensures `L` is strictly
+positive going into step 7's unsigned division (since
+`N*N*T/20 = 48_600 > 0`, the floor unconditionally guarantees
+`L > 0` regardless of how many negative solvetimes step 2/3
+produced). After step 5, `L` is mathematically a positive `i128`
+value and can be safely re-typed to `u128` for the step-7
+division.
 
 **Step 6 — Average difficulty over the window.** Compute
 `avg_D = (cumulative_difficulties[N] - cumulative_difficulties[0]) / N`.
@@ -986,12 +1109,25 @@ absent or fails.
   satisfies `30-cryptography.mdc`'s constant-time-or-explicit-
   rejection rule by being a non-secret-handling surface where the
   rule does not engage.
-- **Overflow safety.** All intermediate arithmetic uses `u128`. The
-  overflow guard in §5.3 step 8 covers the only computation that
-  can plausibly overflow `u128` under canonical parameter values;
-  every other intermediate is bounded by `N * (N+1) * T * 6` (the
-  maximum possible weighted-sum given the clamp) times the maximum
-  `u64` difficulty, which fits in `u128` by construction.
+- **Overflow safety.** Intermediate arithmetic uses signed `i128`
+  for the solvetime accumulation in §5.3 steps 2–4 (because
+  step 2's running-max formulation produces signed solvetimes
+  bounded by `[-6*T, +6*T]` after the clamp; see §5.3 step 4 for
+  the i128 accumulator overflow bound). After §5.3 step 5's
+  minimum-L floor, `L` is mathematically a positive value
+  bounded by `N*(N+1)/2 * 6*T = 2_948_400` in absolute value
+  (well within `i128::MAX ≈ 1.7e38`) and re-types to `u128` for
+  the step-7 division. The overflow guard in §5.3 step 8 covers
+  the `avg_D * N * (N+1) * T * 99` u128 multiplication, which is
+  the only step-7 computation that can plausibly overflow `u128`
+  under canonical parameter values.
+- **Signed-arithmetic discipline.** The transition from `u128`-
+  throughout to "i128 in steps 2–4, u128 elsewhere" is bounded
+  to §5.3 steps 2 (solvetime computation), 3 (symmetric clamp),
+  and 4 (weighted-sum accumulation). All other steps (1, 5, 6,
+  7, 8) and all FFI-boundary types remain `u128`. The
+  `ShekylU128` ABI is unchanged. Signed arithmetic is internal to
+  the algorithm body and is not observable to consumers.
 
 ### 5.5 Coupled timestamp validation
 
@@ -1006,12 +1142,123 @@ LWMA-1's properties depend on incoming-timestamp validation that is
   `FTL = N * T / 20 = 540 s` ahead of the validator's local clock.
   The inherited FTL of 7200 s is replaced with this value at
   genesis (Phase 4 of [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md)).
+- **Symmetric solvetime clamp at `±6*T` (§5.3 step 3, Round 9).**
+  Individual solvetimes are clamped to `[-6*T, +6*T]` inside the
+  algorithm. Upper clamp defends against single large forward
+  timestamps driving difficulty down; lower clamp bounds the
+  L-decreasing contribution of out-of-sequence timestamps. The
+  clamp is internal to `shekyl-difficulty` and not a separate
+  validator surface.
+- **Running-max timestamp normalization (§5.3 step 2, Round 9).**
+  The algorithm computes solvetimes against a non-decreasing
+  running maximum of all previously-seen timestamps in the window,
+  rather than against the raw predecessor timestamp. This is the
+  algorithm-internal remediation for zawy12 issue #24 item 11's
+  September 2018 selfish-mine attack class. Disposition recorded
+  per §1.3 partial-LWMA-3-adoption clause.
 
-If either check is bypassed (consensus bug, validator
-mis-implementation), LWMA-1's solvetime-clamp defense is materially
-weakened. The two checks plus the `6*T` solvetime clamp together
-constitute the timestamp-attack defense surface; none of the three
-is replaceable.
+If any of MTP, FTL, the symmetric clamp, or the running-max
+normalization is bypassed (consensus bug, validator
+mis-implementation), LWMA-1's combined timestamp-attack defense
+surface is materially weakened. The four mechanisms together
+constitute the defense surface; none is replaceable.
+
+**Jagerman MTP patch (verified present, no Phase 4 work needed).**
+zawy12 issue #24 item 6 names the Jagerman MTP patch (graft-project/GraftNetwork#118,
+later upstreamed to Monero) as required to prevent the
+"miner owns the MTP" template-rejection attack. The patch's
+substance: in `create_block_template`, if the proposed timestamp
+would fail the MTP check, raise it to the median so the node
+doesn't issue a template it would itself reject. Round 9
+verification confirms the patch is present in Shekyl's inherited
+`Blockchain::create_block_template` at `blockchain.cpp:1650–1656`:
+
+```c++
+b.timestamp = time(NULL);
+
+uint64_t median_ts;
+if (!check_block_timestamp(b, median_ts))
+{
+  b.timestamp = median_ts;
+}
+```
+
+The pattern matches the Jagerman fix exactly (set to local clock,
+then bump to median if that would be rejected). The MTP window
+change from 60 to 11 (§9.6) preserves the patch's effectiveness;
+the patch is window-size-agnostic and works identically against
+either median size per jagerman's own commentary on the original
+PR. No Phase 4 work required to add or modify the Jagerman patch.
+
+A minor doc-vs-code drift exists at the cached-template path
+(`blockchain.cpp:1540`), where the comment reads "ensures it can't
+get below the median of the last few blocks" but the code only
+guards against `< time(NULL)`. The cached template's timestamp
+was already MTP-validated when the non-cached path created it
+(lines 1650–1656 above), and the cache is invalidated on every
+new block addition (the `prev_id` check at line 1537), so the
+MTP-staleness window is bounded by template-cache lifetime
+(seconds). The drift is not load-bearing for the patch's
+correctness but the comment is misleading and should be cleaned
+up; recorded as a `FOLLOWUPS.md` item, not a Phase 4 atomic-cutover
+work item.
+
+**Disposition on header-level `±7xT` timestamp limits (zawy12
+issue #24 item 8).** zawy12 retired the header-level `+7xT` limit
+once FTL was correctly tuned, and changed the `-7xT` limit to
+`-FTL`. Shekyl uses MTP + FTL + symmetric solvetime clamp +
+running-max normalization as the defense surface and does *not*
+implement a separate per-block-header `±7xT` rule. With Shekyl's
+`FTL = 540 s = 4.5 * T`, the upper bound is tighter than `+7xT =
+840 s` was, and the lower-bound defense moves into the algorithm
+via §5.3 step 3's `-6*T` symmetric clamp (which is more
+conservative than zawy12's recommended `-FTL`). No `±7xT`
+header-level rule is added or carried forward.
+
+**Disposition on peer-time-derived clocks and zawy12 issue #24
+item 14 (May 2019 33% Sybil attack).** FTL is compared against
+the validator's local clock via `time(NULL)`, not against any
+peer-time-adjusted reference. Shekyl does not implement
+Bitcoin/Zcash-style `GetAdjustedTime()` or any peer-time-offset
+mechanism; the daemon has no `time_offset` collection or
+median-of-peer-clocks adjustment in any consensus path.
+`Blockchain::get_adjusted_time` exists in the inherited C++ code
+but is blockchain-derived (median of recent block timestamps,
+projected forward by `(WINDOW + 1) * T / 2`) and is consulted
+only by non-consensus paths
+(`Blockchain::is_tx_spendtime_unlocked` for unlock-time leeway,
+and the `get_info` RPC field for wallet-side display). It is not
+consulted by FTL validation. The audit-trail grep is recorded at
+the Round 9 closure: `git grep -E
+'time_offset|TimeOffset|GetAdjustedTime|GetTimeOffset|MAX_PEER_DELTA|MAX_TIME_DELTA|MEDIAN_TIME|TIMESTAMPS_FOR_TIME_SYNC'
+src/` returned zero matches against any consensus-relevant
+surface as of `feat/daa-lwma1-phase0-design` HEAD.
+
+This disposition closes zawy12 issue #24 item 14's May 2019
+finding **by absence of substrate**: the 33% Sybil attack
+requires peer-time-derived clocks, which this codebase does not
+have. Lowering FTL from 7200 s to 540 s is therefore safe against
+the zcash/zcash#4021 attack class. The disposition is
+forward-looking: if a future Shekyl version adds peer-time
+correction (e.g., a Bitcoin-style `GetAdjustedTime` that averages
+peer-reported clock offsets), the `FTL / 2` revert-threshold
+relationship per zawy12 issue #24 item 14 becomes load-bearing
+and a `daa_peer_time_revert_threshold_seconds` consensus
+constant MUST be added at that point, set to `≤ FTL / 2 = 270 s`
+for the genesis FTL of 540 s. This is recorded as a forward
+maintenance constraint on any future peer-time-correction
+disposition.
+
+The remaining assumption is that honest validators' local clocks
+stay synchronized within ±540 s of one another. This is a
+clock-sync assumption attackable via local NTP poisoning of an
+individual node, not via Sybil-against-peer-time-median. Per
+`00-mission.mdc`'s threat model, NTP-poisoning of an individual
+node is out-of-scope (it isolates the node from the network but
+does not affect chain consensus from other nodes' perspective).
+Standard NTP hygiene on validator hosts is the operational
+mitigation; the consensus protocol does not need to defend
+against it.
 
 ### 5.6 Validator consumer contract: `chain_height → header.difficulty`
 
@@ -1362,9 +1609,12 @@ The vectors below use Shekyl V3.0 parameters (`N = 90`, `T = 120`,
   not against the raw vector. Test vector includes both the
   pre-clamp expected (had the clamp not fired — should fail) and
   the post-clamp expected (correct).
-- **Minimum-L floor engagement.** All `solvetime[i] = 1` (the
-  out-of-sequence-normalization floor). `L_raw = N*(N+1)/2 = 4_095`
-  is far below `N*N*T/20 = 48_600`; the floor fires, `L` becomes
+- **Minimum-L floor engagement.** Monotonic-1-second-gap
+  timestamps: `timestamps[i] = timestamps[0] + i` for `i in
+  0..=N`. The running-max formulation produces
+  `solvetime[i] = 1` for all `i` (each new timestamp is exactly 1
+  second after the running max). `L_raw = N*(N+1)/2 = 4_095` is
+  far below `N*N*T/20 = 48_600`; the floor fires, `L` becomes
   `48_600`. Expected
   `next_D == avg_D * N * (N+1) * T * 99 / (200 * N*N*T/20)
           == avg_D * (N+1) * 99 * 20 / (200 * N)
@@ -1374,11 +1624,84 @@ The vectors below use Shekyl V3.0 parameters (`N = 90`, `T = 120`,
   the floor's job: extremely fast solvetimes signal a dramatic
   hashrate increase, and the algorithm responds proportionally
   (bounded by the floor, not unbounded).
-- **Out-of-sequence timestamp normalization.** `timestamps[i+1] <
-  timestamps[i]` for one or more `i`. Test vector asserts (a) no
-  panic, (b) no zero output, (c) the output matches the
-  algorithm run with the corresponding `solvetime[i] = 1`
-  substitution per §5.3 step 2.
+- **Out-of-sequence timestamp handling (running-max semantics,
+  Round 9).** Mostly-monotonic `T`-spaced timestamps with one
+  out-of-sequence pair: `timestamps[i] = (i-1) * T` for `i in
+  0..=N` except `timestamps[N-1] = (N-2) * T + T` (normal) and
+  `timestamps[N] = (N-2) * T` (one period back). Under the
+  running-max formulation: `solvetime[N] = timestamps[N] -
+  prev_max = (N-2)*T - (N-1)*T = -T`. Per §5.3 step 3's
+  symmetric clamp `[-6*T, +6*T]`, `-T` is within range and is
+  not clamped further. The contribution to `L` from this
+  iteration is `N * (-T)`, *negative*, in contrast to the prior
+  Round-8 kyuupichan behavior which would have produced
+  `N * 1 = +N` for the same input. The test vector asserts (a)
+  no panic, (b) the i128 accumulator handles the negative
+  contribution without underflow, (c) the minimum-L floor in
+  step 5 fires if and only if the cumulative `L < N*N*T/20`,
+  (d) the final `next_D` is strictly above the all-monotonic-`T`
+  reference value (because `L` is smaller due to the negative
+  contribution), and (e) the byte-exact output matches the
+  expected derivation
+  `next_D == avg_D * N * (N+1) * T * 99 / (200 * L_post_floor)`
+  with `L = sum(i*T for i in 1..N-1) + N*(-T) =
+  T * (N*(N-1)/2 - N) = T * N * (N-3)/2`. For `N = 90`,
+  `T = 120`, `avg_D = 1_000_000`: `L = 120 * 90 * 87 / 2 =
+  469_800` (floor does not fire since `469_800 > 48_600`);
+  `next_D = 1_000_000 * 90 * 91 * 120 * 99 / (200 * 469_800)`.
+  Numerator: `1_000_000 * 90 * 91 * 120 * 99 = 97_297_560 *
+  10^7 = 97_297_560 * 10_000_000 = 9.7297560e+17`. Denominator:
+  `200 * 469_800 = 93_960_000`. Quotient (integer divide):
+  `1_035_521_504`. **Phase 1 must derive and pin the exact
+  integer value with full precision against the implementation's
+  arithmetic at PR time**; the figure above is approximate (the
+  intermediate `1_000_000 * 90 * 91 * 120 * 99` is exact, but
+  the division is integer truncation).
+- **Selfish-mine attack regression (zawy12 issue #24 item 11,
+  September 2018 attack class).** A two-block forwarded-and-back
+  timestamp pattern designed to exercise the attack class the
+  running-max + symmetric-clamp formulation is intended to
+  defeat. Stable-hashrate background: `timestamps[i] = i * T`
+  for `i in 0..=N-2`. The attacker's two-block pattern:
+  `timestamps[N-1] = (N-2) * T + 1_000 * T` (artificial forward
+  jump: predecessor's timestamp pushed +1000*T into the future,
+  far beyond the symmetric clamp's +6*T per-block limit) and
+  `timestamps[N] = (N-2) * T + T` (the genuine post-attack
+  timestamp, well behind `timestamps[N-1]`).
+
+  Under canonical LWMA-1 (kyuupichan-style, Round 8): the
+  forward jump produces `solvetime[N-1] = +1000*T` clamped to
+  `+6*T`; the back-step produces a negative solvetime
+  normalized to `+1` by kyuupichan's
+  `max(timestamps[i], prev+1)` formulation. Net contribution
+  to `L`: `(N-1)*(+6*T) + N*1 = (N-1)*720 + 90 = 64_080 + 90
+  = 64_170`. The attacker has spent one `+6*T` clamped
+  contribution and recovered with a `+1` floor; total impact
+  on `L` is heavily inflated upward (which *decreases*
+  `next_D`, helping the attacker mine cheap blocks next).
+
+  Under Round 9 running-max + symmetric-clamp: the forward jump
+  produces `solvetime[N-1] = +6*T` (clamped); the running max
+  `prev_max` after iteration `N-1` is set to the forwarded value
+  `(N-2)*T + 1000*T`. At iteration `N`: `prev_max` stays at the
+  forwarded value (since `timestamps[N-1] < prev_max`).
+  `solvetime[N] = timestamps[N] - prev_max = (N-2)*T + T -
+  ((N-2)*T + 1000*T) = -999*T`, clamped to `-6*T`. Net
+  contribution to `L`: `(N-1)*(+6*T) + N*(-6*T) = -6*T = -720`.
+  The attacker's forward jump is *symmetrically cancelled* by
+  the recovery's clamped negative solvetime; total impact on
+  `L` is *negative* (which *increases* `next_D`, working against
+  the attacker).
+
+  Test vector asserts (a) Round 9 output is strictly above the
+  Round 8 (kyuupichan) output for the same input, (b) Round 9
+  output is strictly above the all-monotonic-`T` reference
+  output (i.e., the attack incurs a difficulty penalty rather
+  than a difficulty reward), and (c) the byte-exact Round 9
+  output matches the running-max + symmetric-clamp derivation.
+  **Required**: Phase 1 cannot merge without this vector; it is
+  the regression test for the Round 9 algorithm change and is
+  the closing-condition gate for zawy12 issue #24 item 11.
 - **Bias factor direction sanity.** Stable-hashrate input with
   `solvetime[i] == T` produces output **below** `avg_D` (per the
   stable-hashrate vector above). A `200/99` direction inversion
@@ -1411,21 +1734,50 @@ All vectors derived analytically against the §5.3 specification.
 
 ### 8.2 Canonical-reference cross-check (Phase 2 gate)
 
-Generated by running the zawy12 reference `LWMA1_()` C++ function
-on each of the §8.1 input cases and asserting byte-identical
-output. The C++ reference is built from the issue-body source
-saved at `docs/design/refs/zawy12_issue_3_lwma1.md` (per §3); a
-small `tests/lwma1_cross_check.cpp` harness lives in
-`tests/difficulty/` and CI runs it as part of the workspace's C++
-test build.
+Generated by running the zawy12 reference C++ functions on each of
+the §8.1 input cases and asserting byte-identical output. **Phase 2
+extracts both `LWMA1_()` and `LWMA3_()`** from the canonical
+issue-body source (per §3's deviation note), and the cross-check
+composes test-vector expectations from the appropriate reference
+per the input shape:
+
+- **Monotonic-timestamp vectors** (genesis short-circuit, stable
+  hashrate, 2× hashrate up/down, solvetime clamp engagement,
+  minimum-L floor engagement, bias-direction sanity,
+  overflow-guard boundary, `-T` offset regression): expected
+  output is byte-identical to canonical `LWMA1_()` — Shekyl's
+  step 2 running-max formulation collapses to canonical LWMA-1's
+  per-iteration predecessor on monotonic inputs (proof per §5.3
+  step 2's per-iteration equivalence on monotonic inputs).
+- **Out-of-sequence vectors** (out-of-sequence-timestamp handling,
+  selfish-mine attack regression): expected output is composed
+  as follows: solvetimes computed per canonical `LWMA3_()`'s
+  step 2 (running-max + signed accumulation) and `LWMA3_()`'s
+  step 3 (symmetric `±6*T` clamp); remaining steps (weighted-sum
+  accumulation, minimum-L floor, bias factor 99/200, overflow
+  guard) computed per canonical `LWMA1_()`. The composite
+  reference is documented in
+  `docs/design/refs/zawy12_issue_3_lwma1_with_lwma3_step2.md`
+  (Phase 2 closure file).
+
+The Phase 2 harness implements both extracted references and
+exposes a `compose_expected(input)` helper that selects the
+appropriate composition based on the input's
+out-of-sequence-timestamp characteristic. The harness's correctness
+is verified by running the canonical `LWMA1_()` and `LWMA3_()`
+references against their own self-test vectors (extracted from
+zawy12 issue #3's commentary) and asserting they reproduce the
+canonical-author's published expected outputs. Only after this
+self-validation does the harness's `compose_expected` become
+trustworthy for Shekyl-side comparison.
 
 The cross-check is **gating for Phase 2** (the cross-check harness
 PR; the implementation crate lands in Phase 1). If the Rust output
-diverges from the C++ reference on any §8.1 vector, the Rust
-implementation is wrong (the spec wins by construction per §2.3,
-but the cross-check catches the case where the Rust implementation
-reads the spec differently from the C++ reference). Remediation is
-to fix the Phase 1 crate, not the Phase 2 harness.
+diverges from the C++ reference composition on any §8.1 vector,
+the Rust implementation is wrong (the spec wins by construction
+per §2.3, but the cross-check catches the case where the Rust
+implementation reads the spec differently from the C++ references).
+Remediation is to fix the Phase 1 crate, not the Phase 2 harness.
 
 ### 8.3 Simulated-history corpus (release-gate test, not per-PR)
 
