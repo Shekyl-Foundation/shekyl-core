@@ -2087,16 +2087,16 @@ uint64_t Blockchain::get_total_staked(uint64_t height) const
 }
 //------------------------------------------------------------------
 // for an alternate chain, get the timestamps from the main chain to complete
-// the needed number of timestamps for the BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW.
+// the needed number of timestamps for SHEKYL_DAA_MTP_WINDOW.
 bool Blockchain::complete_timestamps_vector(uint64_t start_top_height, std::vector<uint64_t>& timestamps) const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
 
-  if(timestamps.size() >= BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW)
+  if(timestamps.size() >= SHEKYL_DAA_MTP_WINDOW)
     return true;
 
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
-  size_t need_elements = BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW - timestamps.size();
+  size_t need_elements = SHEKYL_DAA_MTP_WINDOW - timestamps.size();
   CHECK_AND_ASSERT_MES(start_top_height < m_db->height(), false, "internal error: passed start_height not < " << " m_db->height() -- " << start_top_height << " >= " << m_db->height());
   size_t stop_offset = start_top_height > need_elements ? start_top_height - need_elements : 0;
   timestamps.reserve(timestamps.size() + start_top_height - stop_offset);
@@ -4333,14 +4333,14 @@ uint64_t Blockchain::get_adjusted_time(uint64_t height) const
   LOG_PRINT_L3("Blockchain::" << __func__);
 
   // if not enough blocks, no proper median yet, return current time
-  if(height < BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW)
+  if(height < SHEKYL_DAA_MTP_WINDOW)
   {
       return static_cast<uint64_t>(time(NULL));
   }
   std::vector<uint64_t> timestamps;
 
-  // need most recent 60 blocks, get index of first of those
-  size_t offset = height - BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW;
+  // need most recent SHEKYL_DAA_MTP_WINDOW blocks, get index of first of those
+  size_t offset = height - SHEKYL_DAA_MTP_WINDOW;
   timestamps.reserve(height - offset);
   for(;offset < height; ++offset)
   {
@@ -4350,7 +4350,7 @@ uint64_t Blockchain::get_adjusted_time(uint64_t height) const
 
   // project the median to match approximately when the block being validated will appear
   // the median is calculated from a chunk of past blocks, so we use +1 to offset onto the current block
-  median_ts += (BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW + 1) * DIFFICULTY_TARGET_V2 / 2;
+  median_ts += (SHEKYL_DAA_MTP_WINDOW + 1) * DIFFICULTY_TARGET_V2 / 2;
 
   // project the current block's time based on the previous block's time
   // we don't use the current block's time directly to mitigate timestamp manipulation
@@ -4369,7 +4369,7 @@ bool Blockchain::check_block_timestamp(std::vector<uint64_t>& timestamps, const 
 
   if(b.timestamp < median_ts)
   {
-    MERROR_VER("Timestamp of block with id: " << get_block_hash(b) << ", " << b.timestamp << ", less than median of last " << BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW << " blocks, " << median_ts);
+    MERROR_VER("Timestamp of block with id: " << get_block_hash(b) << ", " << b.timestamp << ", less than median of last " << SHEKYL_DAA_MTP_WINDOW << " blocks, " << median_ts);
     return false;
   }
 
@@ -4377,8 +4377,8 @@ bool Blockchain::check_block_timestamp(std::vector<uint64_t>& timestamps, const 
 }
 //------------------------------------------------------------------
 // This function grabs the timestamps from the most recent <n> blocks,
-// where n = BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW.  If there are not those many
-// blocks in the blockchain, the timestap is assumed to be valid.  If there
+// where n = SHEKYL_DAA_MTP_WINDOW.  If there are not those many
+// blocks in the blockchain, the timestamp is assumed to be valid.  If there
 // are, this function returns:
 //   true if the block's timestamp is not less than the timestamp of the
 //       median of the selected blocks
@@ -4395,15 +4395,15 @@ bool Blockchain::check_block_timestamp(const block& b, uint64_t& median_ts) cons
   const auto h = m_db->height();
 
   // if not enough blocks, no proper median yet, return true
-  if(h < BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW)
+  if(h < SHEKYL_DAA_MTP_WINDOW)
   {
     return true;
   }
 
   std::vector<uint64_t> timestamps;
 
-  // need most recent 60 blocks, get index of first of those
-  size_t offset = h - BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW;
+  // need most recent SHEKYL_DAA_MTP_WINDOW blocks, get index of first of those
+  size_t offset = h - SHEKYL_DAA_MTP_WINDOW;
   timestamps.reserve(h - offset);
   for(;offset < h; ++offset)
   {

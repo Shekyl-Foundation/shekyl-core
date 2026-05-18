@@ -1561,8 +1561,8 @@ namespace cryptonote
      * @brief checks a block's timestamp
      *
      * This function grabs the timestamps from the most recent <n> blocks,
-     * where n = BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW.  If there are not those many
-     * blocks in the blockchain, the timestap is assumed to be valid.  If there
+     * where n = SHEKYL_DAA_MTP_WINDOW.  If there are not those many
+     * blocks in the blockchain, the timestamp is assumed to be valid.  If there
      * are, this function returns:
      *   true if the block's timestamp is not less than the timestamp of the
      *       median of the selected blocks
@@ -1594,7 +1594,7 @@ namespace cryptonote
      * @brief finish an alternate chain's timestamp window from the main chain
      *
      * for an alternate chain, get the timestamps from the main chain to complete
-     * the needed number of timestamps for the BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW.
+     * the needed number of timestamps for SHEKYL_DAA_MTP_WINDOW.
      *
      * @param start_height the alternate chain's attachment height to the main chain
      * @param timestamps return-by-value the timestamps set to be populated

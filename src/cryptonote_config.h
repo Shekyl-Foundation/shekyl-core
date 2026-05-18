@@ -52,8 +52,6 @@
 /** Depth (in blocks) below the chain tip before tx verification data may be pruned (~7d at 120s/block). */
 #define CRYPTONOTE_TX_PRUNE_DEPTH                       5000
 
-#define BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW               60
-
 // MONEY_SUPPLY/COIN/emission constants are generated from config/economics_params.json.
 
 #define CRYPTONOTE_REWARD_BLOCKS_WINDOW                 100

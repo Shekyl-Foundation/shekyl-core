@@ -103,7 +103,7 @@ bool gen_block_big_minor_version::generate(std::vector<test_event_entry>& events
 bool gen_block_ts_not_checked::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();
-  REWIND_BLOCKS_N(events, blk_0r, blk_0, miner_account, BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW - 2);
+  REWIND_BLOCKS_N(events, blk_0r, blk_0, miner_account, SHEKYL_DAA_MTP_WINDOW - 2);
 
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0r, miner_account, test_generator::bf_timestamp, 0, 0, blk_0.timestamp - 60 * 60);
@@ -117,9 +117,9 @@ bool gen_block_ts_not_checked::generate(std::vector<test_event_entry>& events) c
 bool gen_block_ts_in_past::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();
-  REWIND_BLOCKS_N(events, blk_0r, blk_0, miner_account, BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW - 1);
+  REWIND_BLOCKS_N(events, blk_0r, blk_0, miner_account, SHEKYL_DAA_MTP_WINDOW - 1);
 
-  uint64_t ts_below_median = std::get<block>(events[BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW / 2 - 1]).timestamp;
+  uint64_t ts_below_median = std::get<block>(events[SHEKYL_DAA_MTP_WINDOW / 2 - 1]).timestamp;
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0r, miner_account, test_generator::bf_timestamp, 0, 0, ts_below_median);
   events.push_back(blk_1);
