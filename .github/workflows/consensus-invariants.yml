@@ -50,5 +50,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # ripgrep is load-bearing for all three invariants in the gate
+      # script; the script's `command -v rg` precondition exits 2 if it
+      # is missing. `ubuntu-latest` ships without `rg`, so install it
+      # explicitly here.
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep
+          rg --version
+
       - name: Run consensus-invariants check
         run: scripts/ci/check_consensus_invariants.sh
