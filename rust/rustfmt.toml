@@ -1,0 +1,18 @@
+# Workspace rustfmt configuration.
+#
+# Pins the edition so IDE-launched rustfmt (rust-analyzer's format-on-
+# save, language-server reformat actions) and CLI `cargo fmt` reach
+# identical canonical layouts. Without this pin, standalone rustfmt
+# invocations (which rust-analyzer issues directly) default to Rust
+# edition 2015 if `--edition` is not supplied, while `cargo fmt`
+# discovers the workspace edition from each crate's Cargo.toml. The
+# divergence surfaces as save-time re-formats that undo `cargo fmt`'s
+# work and then fail the `cargo fmt --check` CI gate per
+# `45-rust-lint-checks.mdc`.
+#
+# Keep this file minimal: only pin what's load-bearing for IDE-vs-CLI
+# parity. Over-pinning rustfmt options (max_width, use_small_heuristics,
+# imports_granularity, etc.) creates a second source of drift between
+# this file and what the toolchain's default produces.
+
+edition = "2021"
