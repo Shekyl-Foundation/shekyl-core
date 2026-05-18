@@ -36,6 +36,17 @@
 
 set -euo pipefail
 
+# Dependency precondition. `rg` (ripgrep) is the load-bearing tool for all
+# three invariants below; a missing `rg` would turn the gate into a silent
+# pass via `2>/dev/null` masking the "command not found" failure. Fail
+# loudly at the top with a clear remediation hint, so local developers
+# without ripgrep installed see the actual problem.
+if ! command -v rg >/dev/null 2>&1; then
+  echo "ERROR: ripgrep (rg) is required for consensus-invariants checks." >&2
+  echo "       Install via your package manager (e.g., apt install ripgrep)." >&2
+  exit 2
+fi
+
 # Run from the repo root.
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
@@ -83,7 +94,7 @@ if rg --type-add 'cpp:*.{c,h,cpp,hpp,cc,inl}' --type cpp \
       -g '!build/**' \
       -n \
       '\b(next_difficulty|next_difficulty_64)\b' \
-      src/ tests/ contrib/ 2>/dev/null
+      src/ tests/ contrib/
 then
   echo "FAIL: live reference(s) to deleted DAA function(s) above."
   echo
@@ -106,7 +117,7 @@ echo "[2/3] No-C-ABI in rust/shekyl-difficulty/src/"
 if rg --type rust \
       -n \
       '(#\[no_mangle\]|extern\s+"C"\s+fn|#\[export_name)' \
-      rust/shekyl-difficulty/src/ 2>/dev/null
+      rust/shekyl-difficulty/src/
 then
   echo "FAIL: C-ABI declaration(s) in shekyl-difficulty above."
   echo
@@ -132,7 +143,7 @@ if rg --type-add 'cpp:*.{c,h,cpp,hpp,cc,inl}' --type cpp \
       -g '!build/**' \
       -n \
       "\\b(${DELETED_DEFINES})\\b" \
-      src/ tests/ contrib/ 2>/dev/null
+      src/ tests/ contrib/
 then
   echo "FAIL: reference(s) to deleted #define(s) above."
   echo

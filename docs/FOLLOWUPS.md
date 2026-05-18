@@ -2888,6 +2888,46 @@ one place to confirm each item's relationship to the wallet stack.
   bug** — the algorithm result is byte-identical to the
   zero-allocation alternative; only throughput changes.
 
+- **`Blockchain` LWMA-1 cache uses `std::vector` with
+  `erase(begin())` O(N) shifts.** Surfaced 2026-05-18 (LWMA-1
+  Phase 4 PR #53, Copilot review C-1). The two cache surfaces in
+  [`src/cryptonote_core/blockchain.cpp`](../src/cryptonote_core/blockchain.cpp)
+  — `Blockchain::get_difficulty_for_next_block`'s
+  `m_timestamps` / `m_difficulties` roll-forward at lines
+  ~1024–1027 and the matching pattern in
+  `Blockchain::recalculate_difficulties` at lines ~1158–1159 —
+  inherit the upstream Monero shape: `std::vector<uint64_t>`
+  with `vector.erase(vector.begin())` to drop the oldest entry
+  on each block. Each `erase(begin())` shifts the remaining
+  ~N entries, making the roll-forward O(N) per block. At
+  `N = 90` (LWMA-1 window), the absolute cost is small but
+  asymptotically wrong relative to the cache pattern's intent
+  (1-block roll-forward should be O(1)).
+
+  **Dispositions worth comparing at the V3.1+ perf pass:**
+
+  1. Replace `std::vector` with `std::deque` for the two cache
+     members; `pop_front()` is O(1). Smallest-touch change;
+     matches the data-structure to the access pattern.
+  2. Use a fixed-size ring buffer (e.g., `boost::circular_buffer`
+     or a hand-rolled `std::array<T, N + 1>` with an index
+     wrap). Eliminates dynamic allocation entirely; couples
+     the cache to the `SHEKYL_DAA_WINDOW_N` constant.
+  3. Coalesce the two `erase` loops into a single shifted
+     assignment when only one element needs to be removed (the
+     steady-state case). Smallest-diff fix; doesn't address the
+     asymptotic property in non-steady-state.
+
+  **Target: V3.1** (same pass as the `Vec<u128>` FFI-shim
+  allocation follow-up above). Closure point is the V3.1
+  difficulty/perf pass that benchmarks end-to-end per-block
+  cost; the disposition is chosen by data. **Not a correctness
+  bug** — algorithm result is byte-identical to the O(1)
+  alternative. Inherited from upstream Monero; per
+  `15-deletion-and-debt.mdc` "while we're here is the enemy,"
+  Phase 4 preserves the inherited shape with line-by-line
+  rewires only.
+
 - **Binary-level `nm`-on-`shekyld` symbol-isolation invariant for the
   deleted CryptoNote DAA functions.** Surfaced 2026-05-18 (LWMA-1
   Phase 4 PR, Commit 10 design discussion). The current

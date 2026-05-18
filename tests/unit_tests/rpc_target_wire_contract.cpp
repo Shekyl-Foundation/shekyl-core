@@ -30,25 +30,24 @@
 //
 // Two public JSON-RPC fields carry the block target time in seconds:
 //
-//   * `mining_status.block_target` — uint32_t, sourced today from
-//     `DIFFICULTY_TARGET_V2` at src/rpc/core_rpc_server.cpp:1452. Will
-//     migrate to SHEKYL_DAA_TARGET_SECONDS in commit 6 of the LWMA-1
-//     Phase 4 cutover.
+//   * `mining_status.block_target` — uint32_t, sourced from
+//     `SHEKYL_DAA_TARGET_SECONDS` at src/rpc/core_rpc_server.cpp:1452
+//     (commit 6 of the LWMA-1 Phase 4 cutover rewired this).
 //
-//   * `get_info.target` — uint64_t, sourced today from
+//   * `get_info.target` — uint64_t, sourced from
 //     `Blockchain::get_difficulty_target()` which returns
-//     `DIFFICULTY_TARGET_V2`. Will migrate symmetrically.
+//     `SHEKYL_DAA_TARGET_SECONDS` (also rewired by commit 6).
 //
 // Both fields are pinned to the literal 120 by the public RPC contract.
 // This test asserts:
 //
-//   1. The C++ macro and the generated Shekyl constant agree on 120 (until
-//      commit 9 of Phase 4 deletes the legacy macro; thereafter only the
-//      Shekyl constant remains).
+//   1. `SHEKYL_DAA_TARGET_SECONDS` equals 120 (via a static_assert below);
+//      a future JSON-authority change would trip the static_assert before
+//      the daemon ever serializes a wrong value.
 //   2. The epee KV-serialization layer emits the field with the byte
 //      sequence `"block_target":120` (or `"target":120`).
 //
-// Property (1) protects against arithmetic drift in either constant.
+// Property (1) protects against arithmetic drift in the Shekyl constant.
 // Property (2) protects against a future epee change silently breaking the
 // wire layout.
 //
@@ -64,8 +63,7 @@
 
 #include "gtest/gtest.h"
 
-#include "cryptonote_config.h"           // DIFFICULTY_TARGET_V2 +
-                                         //   SHEKYL_DAA_TARGET_SECONDS via
+#include "cryptonote_config.h"           // SHEKYL_DAA_TARGET_SECONDS via
                                          //   shekyl/consensus_constants_generated.h
 #include "rpc/core_rpc_server_commands_defs.h"
 #include "storages/portable_storage_template_helper.h"

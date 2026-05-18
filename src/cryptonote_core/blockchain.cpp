@@ -1013,6 +1013,15 @@ difficulty_type Blockchain::get_difficulty_for_next_block()
   // Keep the LWMA-1 window cached on the Blockchain object so the
   // next call only needs a 1-block roll-forward rather than re-fetching
   // all N+1 entries from LMDB.
+  //
+  // Cache-state invariant: the cache is either empty (the genesis-range
+  // else-branch below clears it) or fully populated (the chain_height
+  // >= SHEKYL_DAA_WINDOW_N else-if branch fills it with exactly N+1
+  // entries). The fast roll-forward branch's `m_timestamps.size() >=
+  // lwma1_window_size` guard then ensures we never enter roll-forward
+  // against a partially-populated cache; the transition from genesis-
+  // range (empty cache) to fully-populated happens via the full-refetch
+  // branch, never directly via roll-forward.
   if (m_reset_timestamps_and_difficulties_height)
     m_timestamps_and_difficulties_height = 0;
   if (m_timestamps_and_difficulties_height != 0 && ((height - m_timestamps_and_difficulties_height) == 1) && m_timestamps.size() >= lwma1_window_size)
@@ -1373,6 +1382,18 @@ difficulty_type Blockchain::get_next_difficulty_for_alternative_chain(const std:
 
   LOG_PRINT_L3("Blockchain::" << __func__);
 
+  // Precondition: alt-chain candidates are added at height >= 1.
+  // bei.height == 0 would mean "alternative genesis", which is
+  // structurally impossible — genesis is fixed per `60-no-monero-legacy.mdc`,
+  // and `handle_alternative_block` sets `bei.height = prev_data.height + 1`
+  // before calling here. A silent ternary fallback would mask the
+  // precondition violation; per `00-mission.mdc`, fail loudly instead.
+  // Matches the in-function sentinel-return pattern at the alt_chain.size()
+  // bound check below (false → difficulty 0 via implicit uint128_t conversion).
+  CHECK_AND_ASSERT_MES(bei.height > 0, false,
+      "get_next_difficulty_for_alternative_chain called with bei.height=0; "
+      "alt-chain candidates must have height >= 1 (genesis is fixed).");
+
   // LWMA-1 next-difficulty for the alt-chain candidate `bei`. The
   // window contains the last N+1 blocks of the alt chain ending at
   // bei.height - 1 (the parent of `bei` on the alt chain). The alt
@@ -1388,9 +1409,9 @@ difficulty_type Blockchain::get_next_difficulty_for_alternative_chain(const std:
   cumulative_difficulties.reserve(lwma1_window_size);
 
   // chain_height for the FFI call: the parent of `bei` on the alt
-  // chain. bei.height == 0 (a candidate genesis) is not meaningful
-  // for the alt-chain path; guard the underflow defensively.
-  const uint64_t chain_height = bei.height == 0 ? 0u : bei.height - 1;
+  // chain. bei.height >= 1 is guaranteed by the precondition assert
+  // above, so `bei.height - 1` is well-defined.
+  const uint64_t chain_height = bei.height - 1;
 
   if (alt_chain.size() < lwma1_window_size)
   {

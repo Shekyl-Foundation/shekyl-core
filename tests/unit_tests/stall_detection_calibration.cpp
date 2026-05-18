@@ -32,16 +32,17 @@
 // runs a Poisson tail test against the last 150 block timestamps. Its
 // calibration depends on two T-derived constants:
 //
-//   threshold       = 1 / (864000 / DIFFICULTY_TARGET_V2)
+//   threshold       = 1 / (864000 / SHEKYL_DAA_TARGET_SECONDS)
 //                   = 1 / 7200   (one false positive per 10 days)
-//   expected_counts = { window_s / DIFFICULTY_TARGET_V2 for each window }
+//   expected_counts = { window_s / SHEKYL_DAA_TARGET_SECONDS for each window }
 //                   = { 45, 30, 15, 10, 5 }   (5400s, 3600s, 1800s, 1200s, 600s)
 //
-// Both calibrations assume DIFFICULTY_TARGET_V2 (and its post-commit-6
-// successor SHEKYL_DAA_TARGET_SECONDS) equals 120 seconds. Phase 4 commit
-// 6 rewires the consumer call sites; this test pins the calibration
-// values so a future change to the constant trips a build/test failure
-// rather than silently scaling the false-positive rate.
+// Both calibrations assume SHEKYL_DAA_TARGET_SECONDS equals 120 seconds.
+// Phase 4 commit 6 rewired the consumer call sites from the
+// (now-deleted) DIFFICULTY_TARGET_V2 macro to this constant; this test
+// pins the calibration values so a future change to the constant trips
+// a build/test failure rather than silently scaling the false-positive
+// rate.
 //
 // The probability1 / probability functions in cryptonote_core.cpp are
 // file-static and not externally callable. This test reproduces them
@@ -64,8 +65,10 @@
 namespace
 {
 
-// Post-cutover invariant (commit 7 deleted `DIFFICULTY_TARGET_V2`; the
-// transitional bridge static_assert is gone with it).
+// SHEKYL_DAA_TARGET_SECONDS == 120 is load-bearing for the calibration
+// math below. A future JSON-authority change would trip this static_assert
+// at compile time before the daemon could ship a mis-calibrated stall
+// detector.
 static_assert(SHEKYL_DAA_TARGET_SECONDS == 120,
     "Stall-detection calibration: the 1/7200 false-positive threshold "
     "and the {45, 30, 15, 10, 5} expected-block counts assume the "
@@ -79,6 +82,10 @@ double ref_factorial(unsigned int n)
   if (n <= 1)
     return 1.0;
   double f = n;
+  // Post-decrement: `n-- > 1` evaluates the comparison against the
+  // pre-decrement value but the loop body sees the decremented `n`.
+  // Loop iterations multiply f by (n-1), (n-2), …, 2, computing
+  // n! = n × (n-1) × … × 2 correctly. Matches the production helper.
   while (n-- > 1)
     f *= n;
   return f;
