@@ -22,6 +22,7 @@ shekyl-fcmp = { path = "../shekyl-fcmp" }
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-consensus = { path = "../shekyl-consensus" }
+shekyl-difficulty = { path = "../shekyl-difficulty" }
 shekyl-economics = { path = "../shekyl-economics" }
 shekyl-staking = { path = "../shekyl-staking" }
 shekyl-proofs = { path = "../shekyl-proofs" }

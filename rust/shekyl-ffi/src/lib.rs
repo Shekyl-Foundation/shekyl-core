@@ -85,6 +85,13 @@ pub mod wallet_envelope_ffi;
 // export. Consumed by wallet2.cpp in the 2k/2l rewire slices.
 pub mod engine_file_ffi;
 
+// LWMA-1 difficulty-adjustment FFI export. Wraps `shekyl_difficulty::
+// lwma1_next` in a C-ABI surface using the `ShekylU128` two-u64
+// decomposition per `DAA_LWMA1.md` §6.1. Consumed by the Phase 2
+// cross-check harness (`tests/difficulty/lwma1_cross_check.cpp`) and
+// (Phase 3 onward) by the daemon's difficulty path.
+pub mod difficulty_ffi;
+
 static CONSENSUS_REGISTRY: Mutex<Option<shekyl_consensus::ConsensusRegistry>> = Mutex::new(None);
 
 /// Fixed-size witness header per input in the FCMP++ prove/verify FFI.

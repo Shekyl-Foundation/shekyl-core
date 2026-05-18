@@ -184,6 +184,16 @@ cannot start until Phase 0 has merged.
 
 ## Phase 1 — `shekyl-difficulty` crate scaffold
 
+**Status (2026-05-18): landed via PR #51 (merge commit `c8849896e` on
+`dev`). The `shekyl-difficulty` crate is workspace-registered, the
+build-script JSON-derived constants emit, the `lwma1_next` algorithm
+implements `DAA_LWMA1.md` §5.3 end-to-end, and the §8.1 vector
+corpus passes the 7 spec-vector and 11 edge-case integration tests
+under `cargo test -p shekyl-difficulty`.** This section is retained
+in its original form for the audit trail; subsequent work proceeds
+to Phase 2 (now also absorbing the original Phase 3's FFI export —
+see the Phase 2/3 absorption note at the top of Phase 2 below).
+
 Single PR adding the crate. Bounded scope; should be straightforward.
 Six work items: workspace registration, crate manifest, crate
 library, typed-constants module, algorithm module, synthetic unit
@@ -473,10 +483,50 @@ permitted in the algorithm code; both require explicit `.checked_*`
 the workspace member-addition and remove the directory). Phase 1 is
 fully reversible without touching any C++ code.
 
-## Phase 2 — Canonical-reference cross-check harness
+## Phase 2 — Canonical-reference cross-check harness (absorbs Phase 3 FFI)
 
-Three work items: commit the pinned spec revision, build the
-cross-check harness, integrate the harness into CI.
+**Phase 2/3 absorption (2026-05-18).** The original plan structured
+Phase 2 as "harness only" and Phase 3 as "FFI export only," with the
+expectation that the harness could call the Rust algorithm through a
+test-only C++ wrapper. The "or" clause in the original Phase 2
+prescription ("via FFI declared in Phase 3, or via a tiny test-only
+C++ wrapper around the `cargo build`-produced library") was
+optimistic about that wrapper path: any C++ caller into Rust requires
+`extern "C"` symbols from Rust, and the only architecturally clean
+place to host them is `shekyl-ffi` (the dedicated unsafe-boundary
+crate). Hosting them in `shekyl-difficulty` itself would violate the
+Phase 1 `#![deny(unsafe_code)]` posture; hosting them in a throwaway
+test-shim shape would be torn down and rewritten by the original
+Phase 3 anyway. The two-path "or" collapsed to a single architectural
+disposition: land the production FFI export in Phase 2 as a
+precondition to the harness, and have Phase 3 collapse to a "see
+Phase 2" plan-doc note. The Phase 2 PR is correspondingly larger
+(~+200 lines of Rust FFI + C header + harness + CMake), but no
+throwaway code is produced and the harness is the integration test
+for the production FFI surface.
+
+Six work items (was three before absorption): commit the LWMA-1/LWMA-3
+byte-offset anchors, commit the LWMA-3 convenience extraction, land
+the `ShekylU128` ABI + `shekyl_difficulty_lwma1_next` Rust FFI
+export, land the C header declaration, build the cross-check harness,
+integrate the harness into CI.
+
+**`catch_unwind` panic-safety wrapper dropped.** An earlier Phase 3
+prescription (preserved below) called for wrapping the FFI body in
+`std::panic::catch_unwind`. The workspace runs `panic = "abort"` in
+both `dev` and `release` profiles (`rust/Cargo.toml` lines 103, 106);
+under `panic = "abort"`, `catch_unwind` is a no-op because panics
+terminate the process before any catch can engage. The safety
+property under abort is: an uncaught panic cannot corrupt cross-FFI
+state because the process is already gone. The Rust algorithm body
+is panic-free by construction (it returns `Result<u128, Error>` for
+every error path the spec recognises and uses explicit
+`checked_*` / `try_from` overflow guards), and the §8.1 corpus + the
+Phase 2 cross-check exercise both branches. The FFI shim
+(`rust/shekyl-ffi/src/difficulty_ffi.rs`) therefore calls
+`lwma1_next` directly without a `catch_unwind` wrapper. The error
+code `SHEKYL_DIFFICULTY_ERR_INTERNAL` (-4) remains reserved in the
+C header for forward compatibility but is not currently emitted.
 
 **Commit pinned spec revision.** Per
 [`DAA_LWMA1.md`](./DAA_LWMA1.md) §3, capture the **raw issue body**
@@ -653,7 +703,23 @@ clarified.
 **Phase 2 reversibility.** The harness is test-only; removal is
 mechanical.
 
-## Phase 3 — FFI wire-up in `shekyl-ffi`
+## Phase 3 — FFI wire-up in `shekyl-ffi` (absorbed into Phase 2)
+
+**Status (2026-05-18): absorbed into Phase 2.** See the Phase 2/3
+absorption note at the top of Phase 2 above. The `ShekylU128` ABI,
+the `shekyl_difficulty_lwma1_next` Rust FFI export, the C header
+declaration in `src/shekyl/shekyl_ffi.h`, and the `SHEKYL_DIFFICULTY_*`
+error-code macros all landed in the Phase 2 PR alongside the
+cross-check harness that consumes them. The `catch_unwind`
+panic-safety prescription documented below was withdrawn in the
+absorption (workspace `panic = "abort"` makes it a no-op); see the
+absorption note for the disposition.
+
+This section is preserved verbatim below as the spec record for what
+the FFI surface is (header layout, error codes, ABI rationale).
+Subsequent phases (Phase 4 onward, which the absorption renumbered
+in spirit but not in section headings to avoid silent cross-doc
+breakage) consume the FFI surface defined here.
 
 Four work items: add the FFI export, declare the header, add
 error-code constants, and verify panic safety.

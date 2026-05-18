@@ -3165,6 +3165,7 @@ dependencies = [
  "shekyl-consensus",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-difficulty",
  "shekyl-economics",
  "shekyl-encoding",
  "shekyl-engine-file",
