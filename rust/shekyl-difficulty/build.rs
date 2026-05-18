@@ -73,6 +73,21 @@ fn main() {
     // build-time signal that the consensus parameter has drifted
     // outside the algorithm's assumptions (zawy12 LWMA-1 with
     // `N > 2^32` is not a meaningful regime).
+    //
+    // Why `u32::MAX` rather than `CARGO_CFG_TARGET_POINTER_WIDTH`:
+    // Shekyl is 64-bit-only per workspace policy, enforced at every
+    // build by the `cmake-gate-test` CI workflow and the
+    // 64-bit-only CMake gate in the C++ build (sized against a fake
+    // 32-bit toolchain at PR time). On every supported target,
+    // `usize >= u32`, so `u32::MAX` is a strictly more conservative
+    // ceiling than the target `usize`. Validating against
+    // `CARGO_CFG_TARGET_POINTER_WIDTH` here would couple this
+    // generator to a target-width abstraction that does not exist
+    // in our build matrix and would only matter for a
+    // narrower-than-32-bit target Shekyl does not and will not
+    // support. The DAA window values (90, 11) are also tiny --
+    // they fit in `u8` -- so this `u32::MAX` ceiling is a
+    // future-proofing belt, not a load-bearing safety belt.
     let window_n_usize: u32 = u32::try_from(window_n).expect(
         "daa_window_n must fit in u32 for usize emission \
          on all supported targets",

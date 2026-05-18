@@ -84,6 +84,25 @@ fn overflow_when_cumulative_difficulty_decreases() {
     assert_eq!(result, Err(Error::Overflow));
 }
 
+/// Compute `2_000_000 * N * N * T` (the §5.3 step-8 threshold) with
+/// `checked_mul` so a spec amendment that pushes N or T into u128-
+/// overflow territory fails this helper with a targeted message
+/// rather than silently wrapping and shifting which boundary the
+/// step-8 tests actually exercise. Mirrors the impl's discipline in
+/// `src/lwma1.rs` step-8 path.
+fn step_8_threshold() -> u128 {
+    let n = u128::from(N);
+    let t = u128::from(T_SECONDS);
+    2_000_000u128
+        .checked_mul(n)
+        .and_then(|x| x.checked_mul(n))
+        .and_then(|x| x.checked_mul(t))
+        .expect(
+            "§5.3 step-8 threshold (2_000_000 * N * N * T) must fit \
+             in u128 for the pinned consensus parameters",
+        )
+}
+
 #[test]
 fn step_8_overflow_guard_at_boundary_unguarded_branch() {
     // §5.3 step 8 boundary: the guard fires on `avg_D > threshold`
@@ -92,15 +111,28 @@ fn step_8_overflow_guard_at_boundary_unguarded_branch() {
     // boundary to test, since an off-by-one in the guard predicate
     // would route this here-correct case into the wrong branch.
     let ts = stable_ts();
-    let threshold: u128 = 2_000_000 * u128::from(N) * u128::from(N) * u128::from(T_SECONDS);
+    let threshold = step_8_threshold();
     // avg_D = threshold (exactly at the boundary, unguarded side);
-    // cum_diff[N] - cum_diff[0] = N * avg_D.
-    let cd: Vec<u128> = (0..=N).map(|i| u128::from(i) * threshold).collect();
+    // cum_diff[N] - cum_diff[0] = N * avg_D. Use `checked_mul` to
+    // surface a future spec drift that would overflow rather than
+    // silently wrap the cumulative-difficulty series.
+    let cd: Vec<u128> = (0..=N)
+        .map(|i| {
+            u128::from(i).checked_mul(threshold).expect(
+                "cum_diff[i] = i * threshold must fit in u128 \
+                 for the pinned consensus parameters",
+            )
+        })
+        .collect();
     let result = lwma1_next(N, &ts, &cd).expect("step-8 at-boundary (unguarded) must compute");
     // Sanity: result is positive and bounded by a large multiple
     // of the input avg_D (no wraparound).
     assert!(result > 0);
-    assert!(result < threshold * 10);
+    let upper = threshold.checked_mul(10).expect(
+        "sanity-check upper bound (10 * threshold) must fit in u128 \
+         for the pinned consensus parameters",
+    );
+    assert!(result < upper);
 }
 
 #[test]
@@ -109,9 +141,20 @@ fn step_8_overflow_guard_just_above_threshold_guarded_branch() {
     // value that crosses into `avg_D > threshold`, taking the
     // guarded (divide-first) branch.
     let ts = stable_ts();
-    let threshold: u128 = 2_000_000 * u128::from(N) * u128::from(N) * u128::from(T_SECONDS);
+    let threshold = step_8_threshold();
+    let above = threshold.checked_add(1).expect(
+        "threshold + 1 must fit in u128 (threshold << u128::MAX for \
+         pinned consensus parameters)",
+    );
     // avg_D = threshold + 1; cum_diff[N] - cum_diff[0] = N * (threshold + 1).
-    let cd: Vec<u128> = (0..=N).map(|i| u128::from(i) * (threshold + 1)).collect();
+    let cd: Vec<u128> = (0..=N)
+        .map(|i| {
+            u128::from(i).checked_mul(above).expect(
+                "cum_diff[i] = i * (threshold + 1) must fit in u128 \
+                 for the pinned consensus parameters",
+            )
+        })
+        .collect();
     let result =
         lwma1_next(N, &ts, &cd).expect("step-8 just-above-threshold (guarded) must compute");
     assert!(result > 0);

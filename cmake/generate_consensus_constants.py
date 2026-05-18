@@ -101,6 +101,16 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     def emit(name_lower: str) -> str:
+        # Both `KEYS_INTEGER[name_lower]` and `data[name_lower]` are
+        # guarded upfront by the `missing` check above (lines ~77-81)
+        # for every key in `KEYS_INTEGER`, so a `KeyError` here can
+        # only fire if the call site passes a `name_lower` not
+        # registered in `KEYS_INTEGER` -- i.e., a developer added a
+        # `#define ... {emit("foo")}` line without also registering
+        # "foo" above. That's an internal-code-hygiene failure mode
+        # rather than a JSON-input failure mode, and the resulting
+        # KeyError on `KEYS_INTEGER[name_lower]` names the offending
+        # key directly, which is sufficient triage signal.
         ctype = KEYS_INTEGER[name_lower]
         macro = TYPE_EMIT[ctype]
         return f"{macro}({data[name_lower]})"

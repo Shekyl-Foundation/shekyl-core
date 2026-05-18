@@ -21,10 +21,23 @@
 use shekyl_difficulty::{lwma1_next, GENESIS_DIFFICULTY, N, N_USIZE, T_SECONDS};
 
 /// Unix-epoch base anchor matching `tests/phase0/preflight_outofseq.cpp`
-/// line 114 (`B = 1_700_000_000`). Load-bearing per §8.1: it prevents
-/// `u64` underflow at `prev_max_initial = timestamps[0] - T` on the
-/// first iteration of §5.3 step 2 (`prev_max_initial = B - T` is well-
-/// defined for any `B > T`).
+/// line 114 (`B = 1_700_000_000`). The Rust implementation itself does
+/// not require `B > T` for arithmetic safety -- `lwma1_next` performs
+/// the `prev_max_initial = timestamps[0] - T` subtraction in i128
+/// (per `src/lwma1.rs`, the `let mut prev_max: i128 = i128::from(
+/// timestamps[0]) - t_i128` step in §5.3 step 2), so it cannot
+/// underflow regardless of `B`. The `B > T` choice is load-bearing
+/// for two adjacent surfaces:
+/// 1. The Phase 0 C++ harness (`tests/phase0/preflight_outofseq.cpp`)
+///    uses `uint64_t` and would underflow for `B < T`; the chosen
+///    anchor lets the harness compute reference outputs without
+///    extra signed-arithmetic plumbing.
+/// 2. Canonical zawy12 LWMA-1 (the byte-equality target for the §8.1
+///    vectors) uses unsigned timestamps; aligning `B` with the
+///    canonical regime keeps Shekyl-vs-zawy divergence isolated to
+///    the running-max + symmetric-clamp refinement under audit
+///    (per `docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md`)
+///    rather than introducing a second axis of divergence.
 const B: u64 = 1_700_000_000;
 
 /// `avg_D = 1_000_000` per all §8.1 vectors; `cumulative_difficulties[i]
