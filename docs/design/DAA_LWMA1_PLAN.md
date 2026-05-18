@@ -239,19 +239,31 @@ re-runs the harness and gets a different number):**
   treat as a reversion-clause trigger per §10 and surface the
   discrepancy on `dev` before further work.
 
-**Harness reproducibility.** The Phase 0 pre-flight harness
-source is available at the Phase 0 close commit; rebuild via:
+**Harness reproducibility (Round 13 update — committed to
+`tests/phase0/`).** The Phase 0 pre-flight harnesses are
+committed alongside this plan at `tests/phase0/`:
+
+- `preflight.cpp` — canonical-only run against the §8.1
+  stable hashrate vector (recovers `990_000`).
+- `preflight_corrected.cpp` — canonical and Shekyl variants
+  against the stable vector and the
+  `timestamps[2] = timestamps[1] - 5*T` regression vector
+  (recovers canonical `990_000` vs Shekyl `992_000`).
+- `preflight_outofseq.cpp` — both algorithms against the
+  seven §8.1 numerical vectors (stable, 2× up, 2× down,
+  clamp engagement, minimum-L floor, single back-step,
+  selfish-mine attack), base-anchored on `B = 1_700_000_000`.
+  This is the Round 13 cleanup harness; produces the empirical
+  values §8.1 pins as expected outputs.
+
+Phase 1's implementer reproduces the pinned values via:
 
 ```text
-g++ -std=c++17 -O2 preflight.cpp -o preflight && ./preflight
+cd tests/phase0 && g++ -std=c++17 -O2 preflight_outofseq.cpp -o p && ./p
 ```
 
-with the canonical `LWMA1_()` transcribed verbatim from
-`docs/design/refs/zawy12_issue_3_lwma1.md` lines 77–119 and
-inputs as above. Phase 1's implementer should re-run this
-harness as part of Phase 1 PR preparation; if the result
-diverges from `990_000`, treat as a reversion-clause trigger
-per the criteria above.
+If any of the seven vector outputs diverges from the §8.1 pin,
+treat as a reversion-clause trigger per the criteria above.
 
 **Workspace registration.** Add `shekyl-difficulty` to
 `rust/Cargo.toml`'s `[workspace.members]`.

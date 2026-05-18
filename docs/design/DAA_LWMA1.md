@@ -1,12 +1,47 @@
 # LWMA-1 — Difficulty adjustment, Rust, from genesis
 
 **Status.** **RATIFIED — Phase 0 close (2026-05-18 UTC).** Review
-passes 1–12 have all landed against PR #49. Phase 0 deliverable for
+passes 1–13 have all landed against PR #49. Phase 0 deliverable for
 the Shekyl difficulty-adjustment algorithm (DAA) migration. Companion:
 [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md). Phase 1 implementation is
 unblocked.
 
-The final round (Round 12) applied:
+Round 13 (post-Phase-0-close, addresses Copilot PR #49
+findings 3, 4, 5) applied:
+
+- §5.3 new step 9 documents the canonical zawy12 LWMA-1
+  trailing rounding-to-3-significant-decimal-digits step
+  (`((next_D + r/2) / r) * r` for the largest
+  `r ∈ {10, 100, ..., 10⁹}` such that `next_D > 100*r`). This
+  step was previously undocumented; the §8.1 expected values
+  all depend on it.
+- §8.1 timestamp base-anchor convention: all vectors now use
+  `timestamps[i] = B + f(i)` with `B = 1_700_000_000` (Unix
+  epoch base), eliminating the u64 underflow surfaced by
+  Copilot finding 5 on the previous `(i-1)*T` formulation.
+- §8.1 minimum-L-floor vector: expected output corrected from
+  `10_010_000` (analytic, pre-step-9) to `10_000_000` (rounded
+  through step 9), confirmed empirically.
+- §8.1 out-of-sequence vector: arithmetic completely rederived
+  (Copilot findings 3, 4); the previous worked numerator
+  `97_297_560 * 10^7` inflated the correct value
+  `97_297_200_000_000` by ~1000×, and the previous quotient
+  `1_035_521_504` omitted step 9's rounding. Round 13 pins
+  `next_D = 1_040_000` (Shekyl) vs `1_010_000` (canonical) per
+  the Phase 0 pre-flight harness output.
+- §8.1 selfish-mine vector: pinned numerical outputs
+  (`1_040_000` Shekyl vs `911_000` canonical) replacing the
+  prior relational-only assertion. Canonical's `911_000` is
+  *below* the `990_000` stable reference, confirming
+  canonical-LWMA-1 *rewards* this attack class — the
+  load-bearing regression Shekyl's running-max + symmetric
+  clamp formulation exists to fix.
+- `tests/phase0/{preflight,preflight_corrected,preflight_outofseq}.cpp`
+  committed alongside the design doc as authoritative
+  reproducibility artifacts; the §3 reference-files list now
+  includes the harness directory.
+
+The prior round (Round 12) applied:
 
 - A one-step reorder of the §5.3 step 2 pseudocode (`solvetime[i]`
   is now computed BEFORE `prev_max` is updated, so the `-T`
@@ -1328,6 +1363,63 @@ behavior matches canonical and that the branch trigger fires at the
 correct threshold. Phase 1 cannot merge if this boundary test is
 absent or fails.
 
+**Step 9 — Output rounding to 3 significant decimal digits (Round
+13 addition; canonical-LWMA-1 trailing step).** After steps 7/8
+produce the raw `next_D`, canonical zawy12 LWMA-1 (Issue #3,
+`LWMA1_()`, lines 116–119 of the pinned `.body`) applies a
+trailing rounding step that rounds `next_D` to the largest
+power-of-ten `r ∈ {10, 100, ..., 10^9}` such that
+`next_D > 100 * r`, with the rounding rule
+`next_D := ((next_D + r/2) / r) * r`. The effect is to round
+`next_D` to 3 significant decimal digits at the largest
+meaningful magnitude. The literal canonical loop is:
+
+```text
+r := 10^9
+while r > 1:
+    if next_D > 100 * r:
+        next_D := ((next_D + r/2) / r) * r
+        break
+    r := r / 10
+```
+
+If `next_D <= 100` the loop exits with `r == 1` and no rounding
+is applied (the `while r > 1` guard short-circuits). This is a
+consensus-load-bearing step: the §8.1 expected values (`990_000`
+for the stable-hashrate vector, `1_980_000` for the 2× increase
+vector, `495_000` for the 2× decrease, `10_000_000` for the
+minimum-L floor, `1_040_000` for the out-of-sequence single-
+back-step vector) all depend on this rounding. An implementation
+that omits the step produces near-but-not-exact values
+(`989_758` vs `990_000`, `1_035_252` vs `1_040_000`, etc.) and
+the §8.2 canonical-reference byte-cross-check will fail.
+
+**Determinism.** The loop bound is constant (`r ∈ {10, 10², …,
+10⁹}`, exited at the first iteration where `next_D > 100*r`),
+the comparison is integer, and the rounding formula uses
+integer addition/division — all deterministic on identical
+inputs across all hosts. The branch is consensus-safe by the
+same argument as step 8's overflow guard.
+
+**Rationale.** The rounding step is one of the canonical-LWMA-1
+properties that makes the algorithm's output stable against
+small numerical perturbations — for example, the `+T` shift in
+`solvetime[1]` from §5.3 step 2's `-T` synthetic anchor produces
+a sub-1% perturbation in raw `next_D` that the rounding step
+absorbs (the canonical reference and Shekyl's running-max
+variant both produce raw `989_758` on the §8.1 stable vector;
+both round to `990_000`). Removing the rounding step in pursuit
+of "deterministic to-the-unit" semantics would break parity with
+the canonical-reference cross-check (§8.2) and surface the
+anchor's residual as a falsely-load-bearing 1-unit discrepancy.
+
+**Reversion clause.** The rounding step is canonical zawy12
+LWMA-1 verbatim. Removing it is a deviation from §3's pinned
+spec source and requires a §10 reversion-clause amendment plus a
+fresh round of cross-check derivation against an alternative
+reference. Phase 1's Rust transcription includes the step; any
+PR proposing to drop or alter it requires a §10 disposition.
+
 ### 5.4 Properties
 
 - **Determinism.** Given identical inputs, the algorithm returns
@@ -1881,146 +1973,258 @@ confront the bias at design time, not at debug time.
 The vectors below use Shekyl V3.0 parameters (`N = 90`, `T = 120`,
 `GENESIS_DIFFICULTY = 100`).
 
+**Timestamp base-anchor convention (Round 13 normalization;
+addresses Copilot PR #49 finding 5).** All vectors below
+specify timestamps as `timestamps[i] = B + f(i)` where
+`B = 1_700_000_000` is a fixed Unix-epoch base. The base anchor
+is load-bearing: §5.3 step 2 computes
+`prev_max_initial = timestamps[0] - T` on the first iteration,
+which underflows `u64` (wraps to `~1.8e19`) if
+`timestamps[0] < T`. The pre-Round-13 vectors expressed
+timestamps as `i*T` or `(i-1)*T` with `B` implicit, which
+required mental tracking of the anchor at every harness rebuild
+and produced the Copilot-flagged `(i-1)*T → timestamps[0] = -T`
+unrepresentability finding. Vectors are now base-anchored
+verbatim; harness `B = 1_700_000_000` is the same base used by
+the §3 / §5.3 step 7 Phase 0 pre-flight harness so vectors
+compose with the existing reproducibility chain.
+
+Expected `next_D` values below are the **post-rounding output**
+per §5.3 step 9. The raw `next_D` (pre-step-9) is given inline
+where it differs from the rounded value, so a Phase 1
+implementer who wants to verify the rounding step's effect can
+cross-check both numbers.
+
 - **Genesis short-circuit.** `chain_height < N` returns
   `GENESIS_DIFFICULTY` verbatim. Specifically: for any
   `chain_height ∈ {0, 1, ..., 89}` and any `(timestamps,
   cum_difficulties)` input (including null), the output is
   exactly `100`.
-- **Perfectly stable hashrate.** `solvetime[i] == T == 120` for
-  all `i in 1..=N`, `cum_difficulties` arithmetic-progressing by
-  a constant `d_step` such that `avg_D == d_step` over the
-  window. Expected output: **`next_D == avg_D * 99 / 100`**
-  (the deterministic-input residual of the `99/100` factor per
-  §5.3 step 7's stochastic-vs-deterministic clarification, **not**
-  `next_D == avg_D`). For `avg_D == 1_000_000` this is exactly
-  `990_000` — empirically confirmed at Phase 0 close
-  (2026-05-18) by running canonical `LWMA1_()` from the pinned
-  issue body against this vector; both canonical and the
-  Shekyl-corrected algorithm produced `990_000` byte-identically.
+- **Perfectly stable hashrate.** `timestamps[i] = B + i*T` for
+  `i ∈ 0..=N`; `cum_difficulties[i] = i * 1_000_000` (so
+  `avg_D == 1_000_000`). Under §5.3 step 2 the synthetic anchor
+  `prev_max_initial = B - T` makes `solvetime[1] = 2*T`; for
+  `i ∈ 2..=N`, `solvetime[i] = T`. The weighted sum is
+  `L = 1*(2*T) + sum(i*T for i in 2..=N) = T * (N*(N+1)/2 + 1)
+  = 491_520`. Raw `next_D = avg_D * N * (N+1) * T * 99 /
+  (200 * L) = 97_297_200_000_000 / 98_304_000 = 989_758`.
+  After §5.3 step 9's rounding to 3 significant decimal digits
+  (`r = 10_000`, `((989_758 + 5_000) / 10_000) * 10_000`):
+  **`next_D = 990_000`**. Empirically confirmed at Phase 0
+  close (2026-05-18) by running canonical `LWMA1_()` from the
+  pinned issue body and Shekyl's running-max variant from
+  `docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md`
+  against this vector; both produce `990_000` byte-identically.
   See §5.3 step 7's "Phase 1 pre-flight verification" paragraph
   for the harness inputs and the cross-check against an
   out-of-sequence attack vector (canonical `990_000` vs Shekyl
   `992_000`, demonstrating the security divergence). The 1 %
-  residual is the design intent of the `99/200` factor surfacing
-  on deterministic input — under realistic stochastic operation,
-  the same factor cancels the ~1 % upward Poisson/clamp drift
-  and leaves long-run average difficulty centered on `avg_D`; on
-  this deterministic test vector, the drift isn't there, so the
-  correction surfaces as a visible residual. A test asserting
-  `next_D == avg_D` on this deterministic vector would falsely
-  fail on a correct implementation and falsely pass on an
-  implementation that silently removed the bias factor —
-  destroying its stochastic centering property in the process.
-- **Sudden 2× hashrate increase.** `solvetime[i] == T/2 == 60`
-  for all `i`. With `L = 60 * N * (N+1) / 2`, the formula yields
-  **`next_D == avg_D * 99 / 50 == avg_D * 198 / 100`** (a `1.98×`
-  rise, not `2×`; the bias factor pulls the response slightly
-  below the naive proportional response). For `avg_D == 1_000_000`
-  this is exactly `1_980_000`.
-- **Sudden 2× hashrate decrease.** `solvetime[i] == 2*T == 240`
-  for all `i`. With `L = 240 * N * (N+1) / 2`, the formula yields
-  **`next_D == avg_D * 99 / 200`** (a `0.495×` drop, not `0.5×`).
-  For `avg_D == 1_000_000` this is exactly `495_000`.
-- **Solvetime clamp engagement.** Single
-  `solvetime[N] = 100 * T = 12_000` with all other solvetimes at
-  `T`. The clamp truncates the outlier at `6*T = 720`; the
-  expected output is computed against a clamped-solvetime vector,
-  not against the raw vector. Test vector includes both the
-  pre-clamp expected (had the clamp not fired — should fail) and
-  the post-clamp expected (correct).
-- **Minimum-L floor engagement.** Monotonic-1-second-gap
-  timestamps: `timestamps[i] = timestamps[0] + i` for `i in
-  0..=N`. The running-max formulation produces
-  `solvetime[i] = 1` for all `i` (each new timestamp is exactly 1
-  second after the running max). `L_raw = N*(N+1)/2 = 4_095` is
-  far below `N*N*T/20 = 48_600`; the floor fires, `L` becomes
-  `48_600`. Expected
-  `next_D == avg_D * N * (N+1) * T * 99 / (200 * N*N*T/20)
-          == avg_D * (N+1) * 99 * 20 / (200 * N)
-          == avg_D * (N+1) * 99 / (10 * N)`. For `N = 90`,
-  `avg_D = 1_000_000`, this is exactly `1_000_000 * 91 * 99 / 900
-  == 1_000_000 * 9009 / 900 == 10_010_000`. The ~10× rise reflects
-  the floor's job: extremely fast solvetimes signal a dramatic
-  hashrate increase, and the algorithm responds proportionally
-  (bounded by the floor, not unbounded).
-- **Out-of-sequence timestamp handling (running-max semantics,
-  Round 9).** Mostly-monotonic `T`-spaced timestamps with one
-  out-of-sequence pair: `timestamps[i] = (i-1) * T` for `i in
-  0..=N` except `timestamps[N-1] = (N-2) * T + T` (normal) and
-  `timestamps[N] = (N-2) * T` (one period back). Under the
-  running-max formulation: `solvetime[N] = timestamps[N] -
-  prev_max = (N-2)*T - (N-1)*T = -T`. Per §5.3 step 3's
-  symmetric clamp `[-6*T, +6*T]`, `-T` is within range and is
-  not clamped further. The contribution to `L` from this
-  iteration is `N * (-T)`, *negative*, in contrast to the prior
-  Round-8 kyuupichan behavior which would have produced
-  `N * 1 = +N` for the same input. The test vector asserts (a)
-  no panic, (b) the i128 accumulator handles the negative
-  contribution without underflow, (c) the minimum-L floor in
-  step 5 fires if and only if the cumulative `L < N*N*T/20`,
-  (d) the final `next_D` is strictly above the all-monotonic-`T`
-  reference value (because `L` is smaller due to the negative
-  contribution), and (e) the byte-exact output matches the
-  expected derivation
-  `next_D == avg_D * N * (N+1) * T * 99 / (200 * L_post_floor)`
-  with `L = sum(i*T for i in 1..N-1) + N*(-T) =
-  T * (N*(N-1)/2 - N) = T * N * (N-3)/2`. For `N = 90`,
-  `T = 120`, `avg_D = 1_000_000`: `L = 120 * 90 * 87 / 2 =
-  469_800` (floor does not fire since `469_800 > 48_600`);
-  `next_D = 1_000_000 * 90 * 91 * 120 * 99 / (200 * 469_800)`.
-  Numerator: `1_000_000 * 90 * 91 * 120 * 99 = 97_297_560 *
-  10^7 = 97_297_560 * 10_000_000 = 9.7297560e+17`. Denominator:
-  `200 * 469_800 = 93_960_000`. Quotient (integer divide):
-  `1_035_521_504`. **Phase 1 must derive and pin the exact
-  integer value with full precision against the implementation's
-  arithmetic at PR time**; the figure above is approximate (the
-  intermediate `1_000_000 * 90 * 91 * 120 * 99` is exact, but
-  the division is integer truncation).
-- **Selfish-mine attack regression (zawy12 issue #24 item 14,
-  September 2018 attack class).** A two-block forwarded-and-back
-  timestamp pattern designed to exercise the attack class the
-  running-max + symmetric-clamp formulation is intended to
-  defeat. Stable-hashrate background: `timestamps[i] = i * T`
-  for `i in 0..=N-2`. The attacker's two-block pattern:
-  `timestamps[N-1] = (N-2) * T + 1_000 * T` (artificial forward
-  jump: predecessor's timestamp pushed +1000*T into the future,
-  far beyond the symmetric clamp's +6*T per-block limit) and
-  `timestamps[N] = (N-2) * T + T` (the genuine post-attack
-  timestamp, well behind `timestamps[N-1]`).
+  residual that the rounding step makes visible at the
+  `989_758 → 990_000` step is the design intent of the
+  `99/200` factor surfacing on deterministic input — under
+  realistic stochastic operation, the same factor cancels the
+  ~1 % upward Poisson/clamp drift and leaves long-run average
+  difficulty centered on `avg_D`; on this deterministic test
+  vector, the drift isn't there, so the correction surfaces as
+  a visible residual that the canonical rounding step then
+  pins to `990_000`. A test asserting `next_D == avg_D` on this
+  deterministic vector would falsely fail on a correct
+  implementation and falsely pass on an implementation that
+  silently removed the bias factor — destroying its stochastic
+  centering property in the process.
+- **Sudden 2× hashrate increase.** `timestamps[i] = B + i*(T/2)`
+  for `i ∈ 0..=N`; `cum_difficulties[i] = i * 1_000_000`. Under
+  §5.3 step 2, `solvetime[1] = (T/2) - (-T) = 3*T/2 = 180`;
+  `solvetime[2..=N] = T/2 = 60`. The raw L = `1*180 +
+  sum(i*60 for i in 2..=N) = 180 + 60 * (N*(N+1)/2 - 1) =
+  245_820`. Raw `next_D = 97_297_200_000_000 / 49_164_000 =
+  1_979_033`. After step 9 (`r = 10_000`):
+  **`next_D = 1_980_000`** — empirically confirmed by the
+  Phase 0 pre-flight harness (canonical and Shekyl-corrected
+  both produce `1_980_000`). A `1.98×` rise, not `2×`; the bias
+  factor pulls the response slightly below the naive
+  proportional response, and the rounding step then absorbs
+  the +T solvetime[1] perturbation back to the canonical
+  expected value.
+- **Sudden 2× hashrate decrease.** `timestamps[i] = B + i*(2*T)`
+  for `i ∈ 0..=N`; `cum_difficulties[i] = i * 1_000_000`. Under
+  §5.3 step 2, `solvetime[1] = (2*T) - (-T) = 3*T = 360`;
+  `solvetime[2..=N] = 2*T = 240`. L = `1*360 + sum(i*240 for
+  i in 2..=N) = 360 + 240 * (N*(N+1)/2 - 1) = 982_920`. Raw
+  `next_D = 97_297_200_000_000 / 196_584_000 = 494_938`. After
+  step 9 (`r = 10_000`): **`next_D = 495_000`** — empirically
+  confirmed. A `0.495×` drop, not `0.5×`.
+- **Solvetime clamp engagement.** `timestamps[i] = B + i*T` for
+  `i ∈ 0..=N-1`; `timestamps[N] = timestamps[N-1] + 100*T`
+  (i.e., the chain tip's timestamp is `100*T` later than its
+  immediate predecessor). Under §5.3 step 2,
+  `solvetime[1] = 2*T`; `solvetime[2..=N-1] = T`;
+  `solvetime[N] = 100*T` *before clamp*, then per §5.3 step 3
+  clamped to `+6*T = 720`. L computation:
 
-  Under canonical LWMA-1 (kyuupichan-style, Round 8): the
-  forward jump produces `solvetime[N-1] = +1000*T` clamped to
-  `+6*T`; the back-step produces a negative solvetime
-  normalized to `+1` by kyuupichan's
-  `max(timestamps[i], prev+1)` formulation. Net contribution
-  to `L`: `(N-1)*(+6*T) + N*1 = (N-1)*720 + 90 = 64_080 + 90
-  = 64_170`. The attacker has spent one `+6*T` clamped
-  contribution and recovered with a `+1` floor; total impact
-  on `L` is heavily inflated upward (which *decreases*
-  `next_D`, helping the attacker mine cheap blocks next).
+  ```text
+  L = 1*(2*T) + sum(i*T for i in 2..=N-1) + N*(6*T)
+    = 2*T + T*(sum(i for i in 2..=N-1)) + 6*N*T
+  ```
+
+  For `N = 90`, `T = 120`:
+  `L = 240 + 120*4004 + 6*90*120 = 240 + 480_480 + 64_800 =
+  545_520`. Raw `next_D = 97_297_200_000_000 / 109_104_000 =
+  891_785`. After step 9 (`r = 10_000`): **`next_D = 892_000`**
+  — empirically confirmed by the Phase 0 pre-flight harness.
+  The test vector asserts (a) the post-clamp value `892_000`
+  (correct), and (b) a separate assertion that
+  `next_D < 990_000` (the stable-hashrate reference), i.e., the
+  outlier solvetime[N] only partially translates to lower
+  difficulty because the clamp absorbs the rest. An
+  implementation that silently bypassed the clamp would produce
+  a much lower difficulty (`L` would be much larger) and the
+  inequality assertion would fail.
+- **Minimum-L floor engagement.** `timestamps[i] = B + i` for
+  `i ∈ 0..=N` (1-second gaps). Under §5.3 step 2,
+  `solvetime[1] = 1 - (-T) = T + 1 = 121`;
+  `solvetime[2..=N] = 1`. Raw L = `1*121 + sum(i*1 for i in
+  2..=N) = 121 + (sum(i for i in 1..=N) - 1) = 121 + 4094 =
+  4_215`. Floor check: `N*N*T/20 = 48_600`. Floor fires: L
+  becomes `48_600`. Raw `next_D = 97_297_200_000_000 /
+  9_720_000 = 10_009_999`. After step 9 (`r = 100_000`,
+  triggered since `10_009_999 > 100 * 100_000 = 10_000_000`):
+  `((10_009_999 + 50_000) / 100_000) * 100_000 = 100 * 100_000
+  = 10_000_000`. **`next_D = 10_000_000`** — empirically
+  confirmed by the Phase 0 pre-flight harness (both canonical
+  and Shekyl produce `10_000_000` byte-identically). The ~10×
+  rise reflects the floor's job: extremely fast solvetimes
+  signal a dramatic hashrate increase, and the algorithm
+  responds proportionally (bounded by the floor, not
+  unbounded). The pre-Round-13 doc claimed `10_010_000`
+  ignoring the rounding step's downward smoothing; Round 13
+  corrects to `10_000_000`.
+- **Out-of-sequence timestamp handling (running-max semantics,
+  Round 9; arithmetic corrected and base-anchored in Round 13
+  per Copilot PR #49 findings 3, 4, 5).**
+  `timestamps[i] = B + i*T` for `i ∈ 0..=N-1`;
+  `timestamps[N] = B + (N-2)*T` (chain tip's timestamp is one
+  period behind its immediate predecessor — a single
+  back-step). Under §5.3 step 2: `solvetime[1] = 2*T`;
+  `solvetime[2..=N-1] = T`; `solvetime[N] = (B + (N-2)*T) -
+  prev_max_after_iter_(N-1) = (B + (N-2)*T) - (B + (N-1)*T) =
+  -T`. Per §5.3 step 3's symmetric clamp `[-6*T, +6*T]`, the
+  `-T` value is within range and not clamped further. The
+  contribution to L from iteration N is `N * (-T) = -N*T`
+  (negative), in contrast to the prior Round-8 kyuupichan
+  behavior which would have produced `N * (+1)` for the same
+  input (canonical's `previous_timestamp+1` floor neutralizes
+  the back-step). L computation:
+
+  ```text
+  L = 1 * (2*T)                  [solvetime[1] from -T anchor]
+    + sum(i*T for i in 2..=N-1)  [stable T-spaced interior]
+    + N * (-T)                   [out-of-sequence back-step]
+    = 2*T + T*(sum(i for i in 2..=N-1)) - N*T
+    = 2*T + T*((N-1)*N/2 - 1) - N*T
+    = T*(2 - 1 - N) + T*N*(N-1)/2
+    = T*(1 - N) + T*N*(N-1)/2
+    = T*(N-1)*(N/2 - 1)
+    = T*(N-1)*(N-2)/2
+  ```
+
+  For `N = 90`, `T = 120`:
+  `L = 120 * 89 * 88 / 2 = 120 * 3916 = 469_920`. Cross-check
+  by direct sum: `L = 1*(2*120) + 120*(2+3+...+89) + 90*(-120) =
+  240 + 120*4004 - 10_800 = 240 + 480_480 - 10_800 = 469_920` ✓.
+  Floor check: `469_920 > N*N*T/20 = 48_600`, floor does not
+  fire. Raw `next_D = avg_D * N * (N+1) * T * 99 / (200 * L) =
+  1_000_000 * 90 * 91 * 120 * 99 / (200 * 469_920) =
+  97_297_200_000_000 / 93_984_000 = 1_035_252` (exact integer
+  divide; `97_297_200_000_000 = 9.72972 × 10¹³`, `93_984_000 =
+  9.3984 × 10⁷`, quotient `1_035_252.812...` truncated). After
+  §5.3 step 9 (`r = 10_000`, triggered since
+  `1_035_252 > 100 * 10_000 = 1_000_000`):
+  `((1_035_252 + 5_000) / 10_000) * 10_000 = 104 * 10_000 =
+  1_040_000`. **`next_D = 1_040_000`** — empirically confirmed
+  by the Phase 0 pre-flight harness extended at Round 13 to
+  cover this vector. Canonical `LWMA1_()` on the same input
+  produces **`1_010_000`** (the canonical kyuupichan
+  `previous_timestamp+1` floor neutralizes the back-step to a
+  `+1` solvetime; canonical's L is therefore slightly higher
+  than Shekyl's L, producing a slightly lower `next_D`). The
+  divergence `1_040_000 - 1_010_000 = 30_000` (3 % higher
+  difficulty under Shekyl) is the load-bearing security
+  property: Shekyl's running-max + symmetric-clamp formulation
+  penalizes the back-step with a higher difficulty whereas
+  canonical's behavior absorbs the attack with a `+1` floor.
+  The pre-Round-13 doc's worked arithmetic (`97_297_560 *
+  10^7`, `93_960_000`, `1_035_521_504`) inflated the numerator
+  by a factor of `~1000` and missed the rounding step
+  entirely; Round 13 anchors the empirical value `1_040_000`
+  against the Phase 0 pre-flight harness (`./preflight_outofseq`
+  on the Phase 0 commit).
+- **Selfish-mine attack regression (zawy12 issue #24 item 14,
+  September 2018 attack class; base-anchored in Round 13).** A
+  two-block forwarded-and-back timestamp pattern designed to
+  exercise the attack class the running-max + symmetric-clamp
+  formulation is intended to defeat.
+  - Stable-hashrate background: `timestamps[i] = B + i*T` for
+    `i ∈ 0..=N-2`.
+  - The attacker's two-block pattern:
+    `timestamps[N-1] = B + (N-2)*T + 1_000*T` (artificial
+    forward jump: predecessor's timestamp pushed +1000*T into
+    the future, far beyond the symmetric clamp's +6*T per-block
+    limit) and `timestamps[N] = B + (N-2)*T + T` (the genuine
+    post-attack timestamp, well behind `timestamps[N-1]`).
+
+  Under canonical LWMA-1 (kyuupichan-style): the forward jump
+  produces `solvetime[N-1] = +1000*T` clamped to `+6*T`; the
+  back-step produces a negative solvetime normalized to `+1` by
+  kyuupichan's `max(timestamps[i], prev+1)` formulation.
+  Canonical's L is heavily inflated upward (which *decreases*
+  `next_D`, helping the attacker mine cheap blocks next). Phase
+  0 pre-flight harness output: **canonical `next_D = 911_000`**.
 
   Under Round 9 running-max + symmetric-clamp: the forward jump
   produces `solvetime[N-1] = +6*T` (clamped); the running max
   `prev_max` after iteration `N-1` is set to the forwarded value
-  `(N-2)*T + 1000*T`. At iteration `N`: `prev_max` stays at the
-  forwarded value (since `timestamps[N-1] < prev_max`).
-  `solvetime[N] = timestamps[N] - prev_max = (N-2)*T + T -
-  ((N-2)*T + 1000*T) = -999*T`, clamped to `-6*T`. Net
-  contribution to `L`: `(N-1)*(+6*T) + N*(-6*T) = -6*T = -720`.
-  The attacker's forward jump is *symmetrically cancelled* by
-  the recovery's clamped negative solvetime; total impact on
-  `L` is *negative* (which *increases* `next_D`, working against
-  the attacker).
+  `B + (N-2)*T + 1000*T`. At iteration `N`: `prev_max` stays at
+  the forwarded value (since `timestamps[N-1] > timestamps[N]`).
+  Then:
 
-  Test vector asserts (a) Round 9 output is strictly above the
-  Round 8 (kyuupichan) output for the same input, (b) Round 9
-  output is strictly above the all-monotonic-`T` reference
-  output (i.e., the attack incurs a difficulty penalty rather
-  than a difficulty reward), and (c) the byte-exact Round 9
-  output matches the running-max + symmetric-clamp derivation.
-  **Required**: Phase 1 cannot merge without this vector; it is
-  the regression test for the Round 9 algorithm change and is
-  the closing-condition gate for zawy12 issue #24 item 14.
+  ```text
+  solvetime[N] = timestamps[N] - prev_max
+               = (B + (N-2)*T + T) - (B + (N-2)*T + 1000*T)
+               = -999*T
+  ```
+
+  Clamped to `-6*T`. The attacker's forward jump is
+  *symmetrically cancelled* by the recovery's clamped negative
+  solvetime. Phase 0 pre-flight harness output: **Shekyl
+  `next_D = 1_040_000`**.
+
+  The Shekyl/canonical divergence on this vector is
+  `1_040_000 / 911_000 ≈ 1.142×` — Shekyl produces 14 % higher
+  difficulty, *denying the attack*; canonical's 911_000 *rewards
+  the attack* by producing lower difficulty than the
+  all-monotonic-T reference (990_000). The intermediate L
+  calculations under each algorithm are not reproduced in this
+  doc because they involve order-of-T·N arithmetic with the
+  forward jump's full +1000*T contribution before clamping; the
+  Phase 0 pre-flight harness at
+  `tests/phase0/preflight_outofseq.cpp` (see §3 reference
+  files) is the authoritative reference.
+
+  Test vector asserts (a) Shekyl output `1_040_000` is strictly
+  above canonical output `911_000` for the same input (Shekyl
+  > canonical iff Shekyl penalizes attacks canonical rewards),
+  (b) Shekyl output is strictly above the all-monotonic-`T`
+  reference output `990_000` (the attack incurs a difficulty
+  penalty rather than a difficulty reward), (c) canonical
+  output is strictly below `990_000` (the attack rewards under
+  canonical — the load-bearing regression the running-max +
+  symmetric-clamp variant exists to fix), and (d) Shekyl's
+  byte-exact output `1_040_000` matches the
+  Phase 0 pre-flight harness output. **Required**: Phase 1
+  cannot merge without this vector; it is the regression test
+  for the Round 9 algorithm change and is the closing-condition
+  gate for zawy12 issue #24 item 14.
 - **Bias factor direction sanity.** Stable-hashrate input with
   `solvetime[i] == T` produces output **below** `avg_D` (per the
   stable-hashrate vector above). A `200/99` direction inversion
@@ -2049,7 +2253,15 @@ The vectors below use Shekyl V3.0 parameters (`N = 90`, `T = 120`,
   not by post-genesis drift. **Required**: Phase 1 cannot merge
   without this vector.
 
-All vectors derived analytically against the §5.3 specification.
+All vectors derived analytically against the §5.3 specification
+and (for those expressing concrete numerical tuples) empirically
+confirmed at Phase 0 close (2026-05-18) and Round 13
+(2026-05-18) by the harness at
+`tests/phase0/preflight_outofseq.cpp` (committed alongside the
+§3 reference files). The Phase 1 implementer reproduces the
+harness via `g++ -std=c++17 -O2 preflight_outofseq.cpp -o p &&
+./p` and asserts each `next_D` tuple matches the design-doc pin
+before opening Phase 1's first commit.
 
 ### 8.2 Canonical-reference cross-check (Phase 2 gate)
 
@@ -2291,9 +2503,12 @@ for FTL is **two sites**.
 The MTP constant has **eight** direct consumers per the Round 3
 reconnaissance grep, all in the daemon source tree, plus five
 test-suite consumers — **thirteen** total sites across **three**
-files (Round 11 reconciliation; the Round 3 prose said "seven + two"
-but the enumeration below has always counted eight + five — Copilot
-review caught the drift):
+files. (Round 11 reconciliation: an earlier draft of this prose
+under-counted the daemon and test-suite enumerations below; the
+underlying grep output and enumeration list have always been
+correct, only the summary numbers drifted. Copilot's PR #49
+review surfaced the drift; the summary now matches the
+enumeration exactly.)
 
 - `src/cryptonote_core/blockchain.cpp:1981, 1985` —
   `complete_timestamps_vector`: assembles a timestamps vector of

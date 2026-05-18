@@ -723,6 +723,86 @@
   this commit and is reproducible via
   `g++ -std=c++17 -O2 preflight.cpp -o preflight && ./preflight`.
 
+  (m) **Round 13 post-Phase-0-close cleanup (§5.3 step 9
+  canonical-rounding-step documentation, §8.1 base-anchor
+  convention and arithmetic correction, harness commit).**
+  (2026-05-18 UTC.) Addresses Copilot PR #49 findings 3, 4, 5
+  surfaced after the Phase 0 close commit. Phase 0 stays
+  ratified; Round 13 is post-ratification cleanup against the
+  same design intent. Four load-bearing changes:
+  - **§5.3 new step 9 — canonical zawy12 LWMA-1 trailing
+    rounding step.** Documents the previously-undocumented
+    `((next_D + r/2) / r) * r` rounding-to-3-significant-decimal-
+    digits step from canonical `LWMA1_()` (`zawy12_issue_3_lwma1.md`
+    lines 116–119 of the pinned `.body`). The §8.1 expected
+    values all depend on this step; without it, the raw outputs
+    are `989_758` (stable), `1_035_252` (out-of-sequence), etc.
+    — close but not byte-equal to the canonical 3-significant-
+    digit values. Round 13 adds the step explicitly so the
+    §8.2 canonical-reference byte-cross-check is well-defined,
+    and includes a reversion clause requiring a §10 disposition
+    for any future PR proposing to drop or alter it.
+  - **§8.1 timestamp base-anchor convention (Copilot finding
+    5).** All §8.1 vectors are now specified as
+    `timestamps[i] = B + f(i)` with `B = 1_700_000_000` (Unix
+    epoch base). The pre-Round-13 specification used `i*T` or
+    `(i-1)*T` formulas with `B` implicit; the latter produced
+    `timestamps[0] = -T`, unrepresentable as `u64` (wraps to
+    `~1.8e19`) and the cause of the pre-flight harness's
+    initial `10_000_000` mis-output before the Round 12
+    correction. Base-anchoring is now a §8.1 invariant rather
+    than a harness-side workaround.
+  - **§8.1 out-of-sequence and minimum-L-floor vectors — full
+    arithmetic rederivation (Copilot findings 3, 4).** The
+    pre-Round-13 out-of-sequence vector's worked arithmetic
+    inflated the numerator by ~1000× and omitted the
+    rounding step entirely (numerator `97_297_560 * 10^7`
+    instead of `97_297_200_000_000`; quotient `1_035_521_504`
+    instead of step-9-rounded `1_040_000`). Round 13 rederives
+    `L = T*(N-1)*(N-2)/2 = 469_920`, computes raw `next_D =
+    1_035_252`, applies step 9 to round to `1_040_000`, and
+    cross-checks against the harness output. The minimum-L
+    floor vector's expected output drops from `10_010_000`
+    (analytic, missing step 9) to `10_000_000` (step-9-rounded);
+    the analytic intermediate is preserved in the prose so
+    the rounding-step contribution is auditable.
+  - **§8.1 selfish-mine attack regression — pinned numerical
+    outputs.** The Round-9-era assertion was relational only
+    ("Shekyl > kyuupichan output," "Shekyl > all-monotonic-T
+    reference"). Round 13 pins the empirical values: canonical
+    `911_000`, Shekyl `1_040_000`. Canonical's `911_000` is
+    *below* the `990_000` stable reference, surfacing the
+    load-bearing property that canonical LWMA-1 actually
+    *rewards* this attack class (lower difficulty post-attack
+    means cheaper subsequent mining) — the regression Shekyl's
+    running-max + symmetric-clamp formulation exists to fix.
+    The §8.1 entry is rewritten to specify the canonical-and-
+    Shekyl outputs side-by-side, the divergence ratio
+    (~1.14×), and the four-part assertion the test vector
+    must verify.
+  - **Pre-flight harness committed to `tests/phase0/`.** The
+    three C++ harnesses produced during Phase 0 close and
+    Round 13 (`preflight.cpp`, `preflight_corrected.cpp`,
+    `preflight_outofseq.cpp`) are now committed alongside the
+    design doc as authoritative reproducibility artifacts,
+    with `README.md` explaining build/run/license. The MIT
+    SPDX identifier covers the canonical `LWMA1_()`
+    transcription; the Shekyl variant header documents
+    Shekyl Foundation origin. The `DAA_LWMA1.md` §3 reference
+    list and §8.1 vector-derivation footer point at the
+    harness directory; the Phase 1 implementer reproduces the
+    pinned values via `g++ -std=c++17 -O2
+    preflight_outofseq.cpp -o p && ./p` before opening
+    Phase 1's first commit.
+
+  Round 13 leaves the `RATIFIED — Phase 0 close (2026-05-18
+  UTC)` line on `DAA_LWMA1.md` line 3 unchanged — Phase 0
+  closed at Round 12; Round 13 is post-ratification cleanup of
+  finding-classes that surfaced after PR #49 was marked
+  merge-ready. The summary paragraphs below line 3 are
+  extended with a "Round 13 applied:" block listing the four
+  changes above. Phase 1 remains unblocked.
+
 - **`07-consensus-atomic-cutovers.mdc` — named exception to
   branching policy for consensus-atomic cutovers**
   (`feat/consensus-atomic-cutovers-rule`, 2026-05-17). New rule
