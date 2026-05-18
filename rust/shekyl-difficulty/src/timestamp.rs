@@ -47,9 +47,10 @@ pub fn is_timestamp_below_ftl(incoming: u64, local_clock: u64) -> bool {
 /// because it is the cheapest consensus property to defend.
 ///
 /// `MTP_WINDOW` is `11` per §5.5; the array literal length below is
-/// the `usize` mirror [`crate::consts::MTP_WINDOW_USIZE`] derived via
-/// const `try_from` so the array length cannot drift from the `u64`
-/// const without a build failure.
+/// the `usize` mirror [`crate::consts::MTP_WINDOW_USIZE`], emitted
+/// from `build.rs` and pinned against the `u64` const by the
+/// const-eval `assert!` in `consts.rs`, so the array length cannot
+/// drift from the JSON authority without a build failure.
 #[must_use]
 pub fn is_above_mtp(incoming: u64, previous_11: &[u64; MTP_WINDOW_USIZE]) -> bool {
     // Median of an odd-length sorted window is the middle element.

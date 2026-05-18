@@ -10,15 +10,11 @@
 
 use shekyl_difficulty::{
     is_above_mtp, is_timestamp_below_ftl, lwma1_next, Error, FTL_SECONDS, GENESIS_DIFFICULTY,
-    MTP_WINDOW_USIZE, N, T_SECONDS,
+    MTP_WINDOW_USIZE, N, N_USIZE, T_SECONDS,
 };
 
 const B: u64 = 1_700_000_000;
 const AVG_D: u128 = 1_000_000;
-
-fn n_usize() -> usize {
-    usize::try_from(N).expect("N fits in usize")
-}
 
 fn cd_window() -> Vec<u128> {
     (0..=N).map(|i| u128::from(i) * AVG_D).collect()
@@ -61,7 +57,7 @@ fn invalid_count_when_chain_height_at_boundary() {
     let ts = stable_ts();
     let cd = cd_window();
     // Too short: drop one entry from each vector.
-    let result = lwma1_next(N, &ts[..n_usize()], &cd[..n_usize()]);
+    let result = lwma1_next(N, &ts[..N_USIZE], &cd[..N_USIZE]);
     assert_eq!(result, Err(Error::InvalidCount));
     // Too long: extra entry.
     let mut ts_long = ts.clone();
@@ -72,7 +68,7 @@ fn invalid_count_when_chain_height_at_boundary() {
     assert_eq!(result, Err(Error::InvalidCount));
     // Length mismatch between the two vectors (one correct, one
     // off by one).
-    let result = lwma1_next(N, &ts, &cd[..n_usize()]);
+    let result = lwma1_next(N, &ts, &cd[..N_USIZE]);
     assert_eq!(result, Err(Error::InvalidCount));
 }
 
@@ -83,7 +79,7 @@ fn overflow_when_cumulative_difficulty_decreases() {
     let ts = stable_ts();
     let mut cd = cd_window();
     cd[0] = u128::MAX / 2;
-    cd[n_usize()] = 0;
+    cd[N_USIZE] = 0;
     let result = lwma1_next(N, &ts, &cd);
     assert_eq!(result, Err(Error::Overflow));
 }

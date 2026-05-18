@@ -18,7 +18,7 @@
 //! for genesis short-circuit, invalid count, overflow, and the
 //! §5.3 step-8 boundary live in `tests/edge_cases.rs`.
 
-use shekyl_difficulty::{lwma1_next, GENESIS_DIFFICULTY, N, T_SECONDS};
+use shekyl_difficulty::{lwma1_next, GENESIS_DIFFICULTY, N, N_USIZE, T_SECONDS};
 
 /// Unix-epoch base anchor matching `tests/phase0/preflight_outofseq.cpp`
 /// line 114 (`B = 1_700_000_000`). Load-bearing per §8.1: it prevents
@@ -91,7 +91,7 @@ fn vector_3_sudden_2x_hashrate_decrease() {
 #[test]
 fn vector_4_solvetime_clamp_engagement() {
     let mut ts: Vec<u64> = (0..=N).map(|i| B + i * T_SECONDS).collect();
-    ts[n_usize()] = ts[n_usize() - 1] + 100 * T_SECONDS;
+    ts[N_USIZE] = ts[N_USIZE - 1] + 100 * T_SECONDS;
     let cd = cd_window();
     let next_d = lwma1_next(CHAIN_HEIGHT, &ts, &cd).expect("vector 4 must compute");
     assert_eq!(
@@ -135,7 +135,7 @@ fn vector_5_minimum_l_floor_engagement() {
 #[test]
 fn vector_6_out_of_sequence_single_back_step() {
     let mut ts: Vec<u64> = (0..=N).map(|i| B + i * T_SECONDS).collect();
-    ts[n_usize()] = B + (N - 2) * T_SECONDS;
+    ts[N_USIZE] = B + (N - 2) * T_SECONDS;
     let cd = cd_window();
     let next_d = lwma1_next(CHAIN_HEIGHT, &ts, &cd).expect("vector 6 must compute");
     assert_eq!(
@@ -169,8 +169,8 @@ fn vector_6_out_of_sequence_single_back_step() {
 #[test]
 fn vector_7_selfish_mine_attack_regression() {
     let mut ts: Vec<u64> = (0..=N).map(|i| B + i * T_SECONDS).collect();
-    ts[n_usize() - 1] = B + (N - 2) * T_SECONDS + 1000 * T_SECONDS;
-    ts[n_usize()] = B + (N - 2) * T_SECONDS + T_SECONDS;
+    ts[N_USIZE - 1] = B + (N - 2) * T_SECONDS + 1000 * T_SECONDS;
+    ts[N_USIZE] = B + (N - 2) * T_SECONDS + T_SECONDS;
     let cd = cd_window();
     let next_d = lwma1_next(CHAIN_HEIGHT, &ts, &cd).expect("vector 7 must compute");
     assert_eq!(
@@ -185,11 +185,6 @@ fn vector_7_selfish_mine_attack_regression() {
         "selfish-mine vector must produce next_D > stable 990_000; \
          this is the September 2018 attack-class defense."
     );
-}
-
-/// `N` as `usize` (helper to keep individual tests above readable).
-fn n_usize() -> usize {
-    usize::try_from(N).expect("N fits in usize on supported targets")
 }
 
 // `GENESIS_DIFFICULTY` is consumed below; alias kept for cheap

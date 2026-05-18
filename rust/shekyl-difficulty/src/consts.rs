@@ -22,7 +22,7 @@ include!(concat!(
 pub const N: u64 = DAA_WINDOW_N;
 
 /// LWMA-1 window size as a `usize` for slice/array indexing. The
-/// build script ([`build.rs`]) emits this directly from the JSON
+/// build script (`build.rs`) emits this directly from the JSON
 /// value (validated as `<= u32::MAX`) so no in-Rust `u64 -> usize`
 /// cast is needed; this satisfies the workspace's
 /// `cast_possible_truncation = "deny"` lint without per-site
