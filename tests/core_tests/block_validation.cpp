@@ -134,7 +134,7 @@ bool gen_block_ts_in_future::generate(std::vector<test_event_entry>& events) con
   BLOCK_VALIDATION_INIT_GENERATE();
 
   block blk_1;
-  generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_timestamp, 0, 0, time(NULL) + 60*60 + CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT);
+  generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_timestamp, 0, 0, time(NULL) + 60*60 + SHEKYL_DAA_FTL_SECONDS);
   events.push_back(blk_1);
 
   DO_CALLBACK(events, "check_block_purged");
