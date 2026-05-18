@@ -1451,21 +1451,14 @@ namespace cryptonote
 
     // RPC wire contract: mining_status.block_target is part of the public
     // JSON-RPC surface. The literal 120 (seconds per block) is pinned by
-    // the contract; until commit 9 of the LWMA-1 Phase 4 cutover deletes
-    // DIFFICULTY_TARGET_V2, both that legacy macro and the
-    // SHEKYL_DAA_TARGET_SECONDS generated constant must agree. The
-    // matching static_asserts and round-trip regression test live in
-    // tests/unit_tests/rpc_target_wire_contract.cpp; see
+    // the contract. The round-trip regression test that pins the wire
+    // bytes lives at tests/unit_tests/rpc_target_wire_contract.cpp; see
     // docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md §16.4 for the rationale.
-    static_assert(DIFFICULTY_TARGET_V2 == SHEKYL_DAA_TARGET_SECONDS,
-        "RPC wire contract bridge: DIFFICULTY_TARGET_V2 and "
-        "SHEKYL_DAA_TARGET_SECONDS must agree until commit 9 of the LWMA-1 "
-        "Phase 4 cutover deletes the legacy macro.");
     static_assert(SHEKYL_DAA_TARGET_SECONDS == 120,
         "RPC wire contract: mining_status.block_target carries the block "
         "target time in seconds; 120 is pinned by the public JSON-RPC "
         "contract.");
-    res.block_target = DIFFICULTY_TARGET_V2;
+    res.block_target = SHEKYL_DAA_TARGET_SECONDS;
     if ( lMiner.is_mining() ) {
       res.speed = lMiner.get_speed();
       res.threads_count = lMiner.get_threads_count();

@@ -624,7 +624,7 @@ bool gen_block_low_coinbase::generate(std::vector<test_event_entry>& events) con
   block blk_1;
   std::vector<size_t> block_weights;
   generator.construct_block(blk_1, cryptonote::get_block_height(blk_0) + 1, cryptonote::get_block_hash(blk_0),
-    miner_account, blk_0.timestamp + DIFFICULTY_TARGET_V2, COIN + generator.get_already_generated_coins(cryptonote::get_block_hash(blk_0)),
+    miner_account, blk_0.timestamp + SHEKYL_DAA_TARGET_SECONDS, COIN + generator.get_already_generated_coins(cryptonote::get_block_hash(blk_0)),
     block_weights, {}, HF_VERSION_EXACT_COINBASE);
   events.push_back(blk_1);
 

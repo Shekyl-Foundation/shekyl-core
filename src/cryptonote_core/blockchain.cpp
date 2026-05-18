@@ -4350,11 +4350,11 @@ uint64_t Blockchain::get_adjusted_time(uint64_t height) const
 
   // project the median to match approximately when the block being validated will appear
   // the median is calculated from a chunk of past blocks, so we use +1 to offset onto the current block
-  median_ts += (SHEKYL_DAA_MTP_WINDOW + 1) * DIFFICULTY_TARGET_V2 / 2;
+  median_ts += (SHEKYL_DAA_MTP_WINDOW + 1) * SHEKYL_DAA_TARGET_SECONDS / 2;
 
   // project the current block's time based on the previous block's time
   // we don't use the current block's time directly to mitigate timestamp manipulation
-  uint64_t adjusted_current_block_ts = timestamps.back() + DIFFICULTY_TARGET_V2;
+  uint64_t adjusted_current_block_ts = timestamps.back() + SHEKYL_DAA_TARGET_SECONDS;
 
   // return minimum of ~current block time and adjusted median time
   // we do this since it's better to report a time in the past than a time in the future
@@ -6004,7 +6004,7 @@ bool Blockchain::get_hard_fork_voting_info(uint8_t version, uint32_t &window, ui
 
 uint64_t Blockchain::get_difficulty_target() const
 {
-  return DIFFICULTY_TARGET_V2;
+  return SHEKYL_DAA_TARGET_SECONDS;
 }
 
 std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> Blockchain:: get_output_histogram(const std::vector<uint64_t> &amounts, bool unlocked, uint64_t recent_cutoff, uint64_t min_count) const
