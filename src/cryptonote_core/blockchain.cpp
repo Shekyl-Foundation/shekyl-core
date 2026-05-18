@@ -115,13 +115,17 @@ namespace
   // invariant; see §5.3 step 1's boundary).
   //
   // Allocation note: this helper builds a `std::vector<shekyl_u128>`
-  // (≈1.5 KiB at N=90) per call. The FFI shim's own per-call `Vec<u128>`
-  // allocation is documented in FOLLOWUPS.md under V3.1+; this C++-side
-  // allocation is part of the same future optimization scope.
+  // (≈1.5 KiB at N=90) per call. Timestamps are also copied to a
+  // contiguous `std::vector<uint64_t>` so that the FFI raw pointer is
+  // valid regardless of whether the caller passes a `std::vector` or a
+  // `std::deque` (the member-variable caches use `std::deque` for O(1)
+  // pop_front). Both allocations are part of the same V3.1+ future
+  // optimization scope documented in FOLLOWUPS.md.
+  template <typename Timestamps, typename Difficulties>
   cryptonote::difficulty_type lwma1_next_difficulty(
       uint64_t chain_height,
-      const std::vector<uint64_t>& timestamps,
-      const std::vector<cryptonote::difficulty_type>& cumulative_difficulties)
+      const Timestamps& timestamps,
+      const Difficulties& cumulative_difficulties)
   {
     if (timestamps.size() != cumulative_difficulties.size())
     {
@@ -136,6 +140,7 @@ namespace
     // range.
     const bool genesis_range = chain_height < SHEKYL_DAA_WINDOW_N;
     std::vector<shekyl_u128> cum_u128;
+    std::vector<uint64_t> ts_vec;
     if (!genesis_range)
     {
       cum_u128.reserve(cumulative_difficulties.size());
@@ -150,10 +155,14 @@ namespace
             .convert_to<std::uint64_t>());
         cum_u128.push_back(entry);
       }
+      // Copy timestamps to a contiguous buffer so we can pass a raw
+      // pointer regardless of whether `Timestamps` is std::vector or
+      // std::deque (std::deque does not guarantee contiguous storage).
+      ts_vec.assign(timestamps.begin(), timestamps.end());
     }
 
-    const uint64_t* ts_ptr = genesis_range || timestamps.empty()
-        ? nullptr : timestamps.data();
+    const uint64_t* ts_ptr = genesis_range || ts_vec.empty()
+        ? nullptr : ts_vec.data();
     const shekyl_u128* cd_ptr = genesis_range || cum_u128.empty()
         ? nullptr : cum_u128.data();
     const size_t count = genesis_range ? 0u : cum_u128.size();
@@ -996,8 +1005,8 @@ difficulty_type Blockchain::get_difficulty_for_next_block()
   }
 
   CRITICAL_REGION_LOCAL(m_blockchain_lock);
-  std::vector<uint64_t> timestamps;
-  std::vector<difficulty_type> difficulties;
+  std::deque<uint64_t> timestamps;
+  std::deque<difficulty_type> difficulties;
   uint64_t height;
   top_hash = get_tail_id(height); // get it again now that we have the lock
   ++height; // top block height to blockchain height
@@ -1031,9 +1040,9 @@ difficulty_type Blockchain::get_difficulty_for_next_block()
     m_difficulties.push_back(m_db->get_block_cumulative_difficulty(index));
 
     while (m_timestamps.size() > lwma1_window_size)
-      m_timestamps.erase(m_timestamps.begin());
+      m_timestamps.pop_front();
     while (m_difficulties.size() > lwma1_window_size)
-      m_difficulties.erase(m_difficulties.begin());
+      m_difficulties.pop_front();
 
     m_timestamps_and_difficulties_height = height;
     timestamps = m_timestamps;
@@ -1044,8 +1053,6 @@ difficulty_type Blockchain::get_difficulty_for_next_block()
     // Window fully populated: fetch exactly N+1 entries ending at
     // chain tip (heights chain_height - N .. chain_height inclusive).
     const uint64_t window_start = chain_height + 1 - lwma1_window_size;
-    timestamps.reserve(lwma1_window_size);
-    difficulties.reserve(lwma1_window_size);
     for (uint64_t h = window_start; h <= chain_height; ++h)
     {
       timestamps.push_back(m_db->get_block_timestamp(h));
@@ -1105,10 +1112,8 @@ size_t Blockchain::recalculate_difficulties(std::optional<uint64_t> start_height
   // normal entry — the genesis short-circuit operates on
   // chain_height < N, not on slice contents).
   constexpr uint64_t lwma1_window_size = SHEKYL_DAA_WINDOW_N + 1;
-  std::vector<uint64_t> timestamps;
-  std::vector<difficulty_type> difficulties;
-  timestamps.reserve(lwma1_window_size);
-  difficulties.reserve(lwma1_window_size);
+  std::deque<uint64_t> timestamps;
+  std::deque<difficulty_type> difficulties;
   if (start_height > 0)
   {
     const uint64_t entries_to_fetch =
@@ -1164,8 +1169,8 @@ size_t Blockchain::recalculate_difficulties(std::optional<uint64_t> start_height
     if (timestamps.size() > lwma1_window_size)
     {
       CHECK_AND_ASSERT_THROW_MES(timestamps.size() == lwma1_window_size + 1, "Wrong timestamps size: " << timestamps.size());
-      timestamps.erase(timestamps.begin());
-      difficulties.erase(difficulties.begin());
+      timestamps.pop_front();
+      difficulties.pop_front();
     }
     last_cum_diff = recalculated_cum_diff;
   }

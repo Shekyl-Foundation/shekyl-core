@@ -43,6 +43,7 @@
 #include <boost/multi_index/hashed_index.hpp>
 #include <boost/multi_index/member.hpp>
 #include <atomic>
+#include <deque>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -1221,8 +1222,8 @@ namespace cryptonote
     uint64_t m_fake_scan_time;
     uint64_t m_sync_counter;
     uint64_t m_bytes_to_sync;
-    std::vector<uint64_t> m_timestamps;
-    std::vector<difficulty_type> m_difficulties;
+    std::deque<uint64_t> m_timestamps;
+    std::deque<difficulty_type> m_difficulties;
     uint64_t m_timestamps_and_difficulties_height;
     bool m_reset_timestamps_and_difficulties_height;
     uint64_t m_long_term_block_weights_window;
