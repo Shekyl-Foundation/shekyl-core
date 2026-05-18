@@ -73,18 +73,8 @@
 namespace
 {
 
-// Compile-time bridge: the legacy macro and the generated constant must
-// agree until commit 9 deletes the former. After commit 9 lands this
-// static_assert becomes a tautology of the form
-//   `static_assert(SHEKYL_DAA_TARGET_SECONDS == SHEKYL_DAA_TARGET_SECONDS)`
-// and should be deleted; the second static_assert below is the
-// post-cutover invariant.
-static_assert(DIFFICULTY_TARGET_V2 == SHEKYL_DAA_TARGET_SECONDS,
-    "RPC wire contract bridge: DIFFICULTY_TARGET_V2 and "
-    "SHEKYL_DAA_TARGET_SECONDS must agree until commit 9 of the LWMA-1 "
-    "Phase 4 cutover deletes the legacy macro. If this fires after commit "
-    "6, the orphan-rewire of DIFFICULTY_TARGET_V2 consumers is incomplete.");
-
+// Post-cutover invariant (commit 7 deleted `DIFFICULTY_TARGET_V2`; the
+// transitional bridge static_assert is gone with it).
 static_assert(SHEKYL_DAA_TARGET_SECONDS == 120,
     "RPC wire contract: mining_status.block_target and get_info.target "
     "are pinned to 120 seconds by the public JSON-RPC contract. Changing "
@@ -95,7 +85,7 @@ static_assert(SHEKYL_DAA_TARGET_SECONDS == 120,
 TEST(rpc_target_wire_contract, mining_status_block_target)
 {
   cryptonote::COMMAND_RPC_MINING_STATUS::response res{};
-  res.block_target = DIFFICULTY_TARGET_V2;
+  res.block_target = SHEKYL_DAA_TARGET_SECONDS;
 
   std::string json;
   ASSERT_TRUE(epee::serialization::store_t_to_json(res, json));

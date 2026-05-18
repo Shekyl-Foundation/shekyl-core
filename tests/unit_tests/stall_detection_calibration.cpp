@@ -58,19 +58,14 @@
 #include <array>
 #include <cmath>
 
-#include "cryptonote_config.h"  // DIFFICULTY_TARGET_V2 +
-                                //   SHEKYL_DAA_TARGET_SECONDS via
+#include "cryptonote_config.h"  // SHEKYL_DAA_TARGET_SECONDS via
                                 //   shekyl/consensus_constants_generated.h
 
 namespace
 {
 
-// Compile-time bridge: pins the rewire chain across Phase 4 commit 6.
-static_assert(DIFFICULTY_TARGET_V2 == SHEKYL_DAA_TARGET_SECONDS,
-    "Stall-detection bridge: DIFFICULTY_TARGET_V2 and "
-    "SHEKYL_DAA_TARGET_SECONDS must agree until commit 9 of the LWMA-1 "
-    "Phase 4 cutover deletes the legacy macro.");
-
+// Post-cutover invariant (commit 7 deleted `DIFFICULTY_TARGET_V2`; the
+// transitional bridge static_assert is gone with it).
 static_assert(SHEKYL_DAA_TARGET_SECONDS == 120,
     "Stall-detection calibration: the 1/7200 false-positive threshold "
     "and the {45, 30, 15, 10, 5} expected-block counts assume the "
@@ -118,14 +113,10 @@ TEST(stall_detection_calibration, threshold_value_pinned)
   // The threshold is 1 / (864000 / 120) = 1/7200 ≈ 1.388e-4.
   // 864000 seconds = 10 days, so the false-positive rate is one per
   // 10 days under correct Poisson block arrivals.
-  constexpr double pre_cutover =
-      1.0 / (864000.0 / static_cast<double>(DIFFICULTY_TARGET_V2));
-  constexpr double post_cutover =
+  constexpr double threshold =
       1.0 / (864000.0 / static_cast<double>(SHEKYL_DAA_TARGET_SECONDS));
 
-  EXPECT_DOUBLE_EQ(pre_cutover, 1.0 / 7200.0);
-  EXPECT_DOUBLE_EQ(post_cutover, 1.0 / 7200.0);
-  EXPECT_DOUBLE_EQ(pre_cutover, post_cutover);
+  EXPECT_DOUBLE_EQ(threshold, 1.0 / 7200.0);
 }
 
 TEST(stall_detection_calibration, expected_block_counts_pinned)
@@ -138,11 +129,9 @@ TEST(stall_detection_calibration, expected_block_counts_pinned)
 
   for (size_t n = 0; n < windows.size(); ++n)
   {
-    EXPECT_EQ(windows[n] / DIFFICULTY_TARGET_V2, expected[n])
+    EXPECT_EQ(windows[n] / SHEKYL_DAA_TARGET_SECONDS, expected[n])
         << "Stall-detection window " << n << " (" << windows[n]
         << "s): expected " << expected[n] << " blocks at the 120s target.";
-    EXPECT_EQ(windows[n] / SHEKYL_DAA_TARGET_SECONDS, expected[n])
-        << "Post-cutover symmetry check failed for window " << n;
   }
 }
 
@@ -179,7 +168,7 @@ TEST(stall_detection_calibration, stall_threshold_boundary_pinned)
   // calibration:
   for (unsigned int window_s : { 1200u, 1800u, 3600u, 5400u })
   {
-    const unsigned int expected = window_s / DIFFICULTY_TARGET_V2;
+    const unsigned int expected = window_s / SHEKYL_DAA_TARGET_SECONDS;
     const double p_zero_blocks = ref_probability(0, expected);
     EXPECT_LT(p_zero_blocks, threshold)
         << "Window " << window_s << "s (λ=" << expected
@@ -193,7 +182,7 @@ TEST(stall_detection_calibration, stall_threshold_boundary_pinned)
   // property guards against accidentally lowering T (which would
   // increase λ for the 600s window and push it below the threshold,
   // shifting the false-positive rate).
-  const unsigned int expected_600s = 600 / DIFFICULTY_TARGET_V2;
+  const unsigned int expected_600s = 600 / SHEKYL_DAA_TARGET_SECONDS;
   const double p_zero_blocks_600s = ref_probability(0, expected_600s);
   EXPECT_GT(p_zero_blocks_600s, threshold)
       << "Window 600s (λ=" << expected_600s

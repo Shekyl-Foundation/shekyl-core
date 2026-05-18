@@ -26,28 +26,17 @@
 # STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
 # THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-set(difficulty_sources
-  difficulty.cpp)
-
-set(difficulty_headers)
-
-monero_add_minimal_executable(difficulty-tests
-  ${difficulty_sources}
-  ${difficulty_headers})
-target_link_libraries(difficulty-tests
-  PRIVATE
-    cryptonote_basic
-    ${EXTRA_LIBRARIES})
-set_property(TARGET difficulty-tests
-  PROPERTY
-    FOLDER "tests")
-
-add_test(
-  NAME    difficulty
-  COMMAND difficulty-tests "${CMAKE_CURRENT_SOURCE_DIR}/data.txt")
-add_test(
-  NAME    wide_difficulty
-  COMMAND ${PYTHON_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/wide_difficulty.py" "${PYTHON_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/gen_wide_data.py" "${CMAKE_CURRENT_BINARY_DIR}/difficulty-tests" "${CMAKE_CURRENT_BINARY_DIR}/wide_data.txt")
+# The inherited Monero `difficulty-tests` executable plus its data
+# fixtures (`difficulty.cpp`, `data.txt`, `generate-data`,
+# `gen_wide_data.py`, `wide_difficulty.py`) were deleted in Phase 4 of
+# the LWMA-1 migration; they exercised the deleted CryptoNote
+# cut-windowed-average DAA. See `docs/design/DAA_LWMA1.md` §9.1 and
+# drift F1 in `docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md` §2. LWMA-1
+# coverage is provided by:
+#
+#   - The `shekyl-difficulty` Rust unit-test suite (`cargo test -p
+#     shekyl-difficulty`).
+#   - The cross-implementation `lwma1-cross-check` C++ harness below.
 
 # ----------------------------------------------------------------------
 # LWMA-1 cross-check harness (Phase 2 of docs/design/DAA_LWMA1_PLAN.md).
