@@ -420,6 +420,46 @@
   with their corresponding §ref. `DAA_LWMA1.md` status block on
   line 3 updated from "Round 8" to "Round 9" to reflect the
   cumulative review pass.
+  (i) **Round 9 supplement — local-time-only FTL trade-off
+  named.** The Round 9 closure of zawy12 issue #24 item 14 (FTL
+  vs peer-time-derived clocks) recorded the absence of substrate
+  but did not name the threat-model trade the local-time-only
+  FTL disposition deliberately accepts. This supplement makes the
+  trade explicit so a future reader does not misread the
+  disposition as missing functionality. `DAA_LWMA1.md` §5.5's
+  "Disposition on peer-time-derived clocks" paragraph is expanded
+  into four labelled subsections: (1) **the trade-off, named
+  explicitly** — Shekyl trades the zawy12 #17 / zcash/zcash#4021
+  peer-time-Sybil attack class (a ~$1000 attack accessible to
+  anyone with bandwidth to run enough peers) for an operator-side
+  NTP-hygiene requirement plus a coordinated-NTP-infrastructure-
+  compromise threat that requires state-level access; (2) **residual
+  threat-class ranking** — four classes documented from highest-
+  probability/lowest-impact (individual node clock skew, mitigated
+  by standard NTP hygiene, isolates affected node without
+  propagating to peers) through lowest-probability/highest-impact
+  (coordinated NTP-infrastructure compromise at scale, requiring
+  state-level access, not consensus-protocol-mitigated); (3)
+  **operator obligations** — validators are responsible for
+  keeping local clocks within ±540 s of network truth via standard
+  NTP discipline (multiple time sources, drift monitoring); NTP
+  failure is a liveness failure for the affected node, not a
+  safety failure that propagates; (4) **Y2038-adjacent note** —
+  `time(NULL)` returns `time_t`, which on 64-bit platforms (the
+  only Shekyl-supported platforms per the 32-bit retirement chore
+  in `docs/FOLLOWUPS.md`) is 64-bit signed and Y2038 is not a
+  concern; if 32-bit platforms ever return to scope, both the FTL
+  comparison and the FTL/2 forward-looking peer-time constraint
+  must be revisited. `DAA_LWMA1.md` §1.2 (Commitment 1) gains a
+  closing observation: "The FTL-disposition choice (local-time-
+  only, no peer-time-derived clock) reflects a deliberate
+  threat-model preference for closing low-bar consensus attacks
+  at the cost of slightly higher operator NTP-hygiene
+  responsibility — consistent with Shekyl's broader posture on
+  operator autonomy per `75-system-autonomy.mdc`." The trade
+  itself, ranking observation, and the "safe because" framing on
+  the FTL value reduction (7200 → 540) are now consistently
+  cross-referenced from §1.2, §5.5, and this CHANGELOG entry.
 
 - **`07-consensus-atomic-cutovers.mdc` — named exception to
   branching policy for consensus-atomic cutovers**

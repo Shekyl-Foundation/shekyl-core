@@ -108,6 +108,16 @@ through the simulation tooling in the canonical zawy12 repository
 (hundreds of thousands of historical-data blocks). No PoW-side
 weakening; no PQC-side weakening; structurally orthogonal to both.
 
+The FTL-disposition choice (local-time-only, no peer-time-derived
+clock) reflects a deliberate threat-model preference for closing
+low-bar consensus attacks at the cost of slightly higher operator
+NTP-hygiene responsibility — consistent with Shekyl's broader
+posture on operator autonomy per `75-system-autonomy.mdc`. The
+trade is documented and ranked against the residual threat classes
+in §5.5; the positioning observation is named here so that the
+Commitment-1 rationale captures the full security trade and not
+just the LWMA-1 algorithm in isolation.
+
 **Commitment 2 (privacy is the product).** LWMA-1's linear weighting
 introduces natural jitter in block intervals compared to smoother
 algorithms (ASERT, EMA variants). For a privacy-focused chain where
@@ -1249,16 +1259,90 @@ for the genesis FTL of 540 s. This is recorded as a forward
 maintenance constraint on any future peer-time-correction
 disposition.
 
-The remaining assumption is that honest validators' local clocks
-stay synchronized within ±540 s of one another. This is a
-clock-sync assumption attackable via local NTP poisoning of an
-individual node, not via Sybil-against-peer-time-median. Per
-`00-mission.mdc`'s threat model, NTP-poisoning of an individual
-node is out-of-scope (it isolates the node from the network but
-does not affect chain consensus from other nodes' perspective).
-Standard NTP hygiene on validator hosts is the operational
-mitigation; the consensus protocol does not need to defend
-against it.
+**The trade-off, named explicitly.** Shekyl trades the zawy12
+issue #24 item 14 / [zcash/zcash#4021](https://github.com/zcash/zcash/issues/4021)
+peer-time-Sybil attack class for an operator-side NTP-hygiene
+requirement plus a coordinated-NTP-infrastructure-compromise
+threat that requires state-level access. The trade is documented
+as deliberate. Bitcoin, Zcash, and historical Monero accepted
+the peer-time-Sybil class in exchange for clock-management
+convenience (the network median absorbs most local clock skew).
+Shekyl accepts the operator-NTP-hygiene class in exchange for
+closing the Sybil. For a privacy-focused chain where
+decentralization-against-state-actors is in the threat model,
+trading "low-bar attack accessible to anyone with bandwidth and
+~$1000 of infrastructure" for "high-bar attack requiring
+compromise of widely-deployed NTP infrastructure" is the
+favorable direction. This positioning observation also lives in
+§1.2 (Commitment 1) as a deliberate threat-model preference.
+
+**Residual threat-class ranking.** The local-time-only
+disposition leaves four residual threat classes, none of which
+recreate the Sybil:
+
+1. **Individual node clock skew (highest probability, lowest
+   impact).** A validator with a clock skewed > 540 s from
+   network truth accepts or rejects blocks inconsistently with
+   the rest of the network and is isolated from consensus until
+   its clock is fixed. This is a *liveness* failure for the
+   affected node, not a *safety* failure for the chain. Mitigation:
+   standard NTP hygiene (see operator obligations below).
+2. **Targeted NTP poisoning of one validator (medium attacker
+   bar, low impact).** An on-path attacker can skew a specific
+   validator's clock via NTP MITM, but the skewed validator
+   cannot produce skewed-timestamp blocks that the rest of the
+   network would accept — other validators' clocks remain
+   correct and reject the malformed block at FTL-check time.
+   The attack collapses to class 1: isolation of the targeted
+   node, not a consensus violation propagated to peers.
+3. **Coordinated NTP poisoning at scale (very high attacker
+   bar, real impact).** An attacker who compromises enough
+   public NTP infrastructure (the `pool.ntp.org` server set
+   and its upstream stratum-1 sources, or who occupies the
+   network path of many validators) can skew many validators
+   simultaneously, at which point malicious-timestamp blocks
+   would propagate. This requires state-level infrastructure
+   access; it is materially more expensive than the 33% peer
+   Sybil that the local-time-only disposition closes. Per
+   `00-mission.mdc`'s threat model, this class is acknowledged
+   but not consensus-protocol-mitigated; the operator-side
+   mitigation is multi-source NTP with cross-validation, not
+   a consensus rule.
+4. **Temporary partition via clock-skew exploitation (low
+   probability, self-healing).** A miner could in principle
+   produce a block whose timestamp passes FTL on one
+   validator's clock but fails on another's, creating a
+   short-lived partition. The partition resolves on chain
+   reorganization or when the lagging node's clock catches up;
+   the DAA's symmetric solvetime clamp prevents this from
+   compounding into a sustained attack because each subsequent
+   block's MTP window tightens the validation surface. Severity:
+   temporary, no consensus violation.
+
+**Operator obligations.** Validators are responsible for keeping
+their system clocks within ±540 s of network truth via standard
+NTP discipline: configure multiple time sources, monitor for
+drift, and treat unmonitored clock skew as an operator
+configuration error. NTP failure manifests as the affected
+validator losing consensus participation (liveness loss), *not*
+as a consensus-rule violation that propagates to other nodes
+(safety loss). This shifts a small portion of the clock-management
+responsibility from "the protocol handles it" to "the operator
+handles it." The shift is consistent with Shekyl's broader
+posture on operator autonomy (`75-system-autonomy.mdc`) but is
+named here so a future reader does not misread the local-time-only
+FTL disposition as missing functionality.
+
+**Y2038-adjacent note.** The FTL comparison uses `time(NULL)`,
+which returns `time_t`. On 64-bit platforms — which are the only
+platforms Shekyl supports per the 32-bit-retirement chore
+recorded in
+[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) ("Chore #3: retire every
+32-bit target", landed on `chore/retire-32bit-targets`) —
+`time_t` is 64-bit signed and Y2038 is not a concern. If 32-bit
+platforms ever return to scope, the FTL comparison surface and
+the FTL/2 forward-looking constraint above must both be revisited
+for `time_t` width before the re-introduction lands.
 
 ### 5.6 Validator consumer contract: `chain_height → header.difficulty`
 
