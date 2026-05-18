@@ -4,6 +4,805 @@
 
 ### Added
 
+- **LWMA-1 difficulty-adjustment migration — Phase 0 design docs**
+  (`feat/daa-lwma1-phase0-design`, 2026-05-17). Adds two Phase 0
+  design documents under `docs/design/`:
+  [`DAA_LWMA1.md`](./design/DAA_LWMA1.md) (the primary design) and
+  [`DAA_LWMA1_PLAN.md`](./design/DAA_LWMA1_PLAN.md) (the phased
+  execution plan, five phases sequential, no parallel tracks). The
+  primary design records the disposition to replace the inherited
+  CryptoNote cut-windowed-average DAA (`src/cryptonote_basic/difficulty.cpp`,
+  `DIFFICULTY_WINDOW=720`, `DIFFICULTY_LAG=15` with literal `// !!!`
+  warning, `DIFFICULTY_CUT=60`) with LWMA-1 from zawy12's canonical
+  reference at
+  [`zawy12/difficulty-algorithms#3`](https://github.com/zawy12/difficulty-algorithms/issues/3),
+  implemented as a Rust crate `shekyl-difficulty` per
+  `20-rust-vs-cpp-policy.mdc` rule 2 (cryptographic-contract surface).
+  Concrete parameter selection: N=90 (zawy12 canonical for T=120s),
+  T=120s (inherited), GENESIS_DIFFICULTY=100 (proposed), FTL=N\*T/20=540s
+  (zawy12-required, replaces inherited 7200s), MTP=11 (Cryptonote default
+  unchanged). The design pins genesis-time landing per
+  `16-architectural-inheritance.mdc` pre-genesis discount and
+  `60-no-monero-legacy.mdc` no-version-dispatch rule. Sibling track to
+  RandomX v2 but **independent**: math-orthogonal (DAA operates on
+  `(timestamps, cum_difficulties)`; PoW changes the hash function),
+  no wallet V3.2 gate applies, no Monero release-time audit dependency.
+  A pre-design `rust/shekyl-difficulty/src/lwma1.rs` sketch is explicitly
+  documented as **not** canonical (different formula, missing `6*T`
+  solvetime clamp, missing `N*N*T/20` minimum-L floor, missing `99/200`
+  bias factor) and was **deleted** during Phase 0 so Phase 1 starts from
+  an empty crate directory; the divergence catalogue is retained in
+  `DAA_LWMA1.md` §2.4 as the design record of why each non-canonical
+  shape is rejected.
+  Reversion clauses per `21-reversion-clause-discipline.mdc` cover
+  LWMA-2/3/4 and ASERT reopening criteria.
+
+  *Round 2 review update (2026-05-17):* (a) reframes `shekyl-difficulty`
+  as a **leaf crate** with zero internal workspace dependencies per
+  `18-type-placement.mdc`, with FFI exposure routed through `shekyl-ffi`
+  (`DAA_LWMA1.md` §2.1); (b) records the explicit "DAA is a primitive,
+  not an actor" disposition (`DAA_LWMA1.md` §2.7) — `lwma1_next` is a
+  free function plus typed constants plus the FTL/MTP predicates, no
+  `DifficultyEngine` actor wrapper; (c) pivots the consensus-constants
+  source-of-truth from a `cbindgen` handwave to the existing
+  `config/consensus_constants.json` JSON-authority pattern documented
+  in `docs/FOLLOWUPS.md` and the 2026-05-05 FFI constant-drift audit
+  (`DAA_LWMA1.md` §4, plan Phase 1 task); (d) adds a chain-state-
+  ownership disposition (`DAA_LWMA1.md` §17) acknowledging that
+  daemon-side LMDB chain state remains in C++ `Blockchain` through
+  Phase 4 and that no Rust crate owns daemon-side chain state today;
+  the future Rust validator actor will consume the same DAA transform
+  without changes to the DAA crate.
+
+  *Round 3 review update (2026-05-17):* (a) corrects the
+  contradictory dispositions for `DIFFICULTY_TARGET_V2` — design doc
+  §9.2 now matches the plan's delete-not-rename directive (rename
+  would preserve the hand-maintained `#define` drift class the JSON
+  authority exists to close); (b) corrects two real factual errors
+  surfaced by a Round 3 reconnaissance grep of the C++ tree: the
+  constant is `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT` (not
+  `BLOCK_FUTURE_TIME_LIMIT`; there is no `_V2` variant), and
+  `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` is currently `60` (Monero-era
+  widening from the CryptoNote-original `11`), so the LWMA-1
+  disposition is a tightening — not preservation — from 60 back to
+  11; (c) adopts algorithm-version-free naming for the JSON keys
+  (`daa_window_n`, etc.) and the generated C++ symbols
+  (`SHEKYL_DAA_*`, not `SHEKYL_DAA_LWMA1_*`) so a future §10
+  reversion doesn't require renaming every consumer; (d) enumerates
+  the full Phase 4 consumer surface in new sections §9.5
+  (`CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT`: 2 sites), §9.6
+  (`BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW`: 9 sites), and §9.7
+  (`DIFFICULTY_TARGET_V2`: ~14 sites across 9 files), and adds §9.8
+  to flag the `core_rpc_server.cpp:1452 res.block_target` RPC-contract
+  preservation property; (e) acknowledges Phase 4 atomicity as a
+  deliberate exception to `06-branching.mdc` (FTL/MTP value changes
+  cannot stage behind alias `#define`s without weakening consensus
+  in the intermediate state); (f) resolves the bias-factor location
+  drift — `99` and `200` (plus `6` and `1/20`) appear as bare
+  integer literals inside `src/lwma1.rs` to match canonical zawy12
+  verbatim, **not** as named `pub(crate) const` in `consts.rs`;
+  (g) mechanizes Phase 5's conditional cross-reference to
+  `24-reviewer-discipline.mdc` so the Phase 5 reviewer can verify by
+  grep; (h) closes open question #3 (build.rs location) as Option A
+  per the leaf-crate property in §2.1; (i) adds a `solvetime[1]`
+  `-T` offset regression vector to §8.1's required-vector list;
+  (j) adds explicit MIT attribution to the Phase 2 vendored
+  `tests/difficulty/zawy12_lwma1_reference.h`; (k) moves long
+  reviewer-note prose out of the long-lived `Cargo.toml` into a
+  Phase 1 review-checklist section; (l) flags `is_above_mtp`'s
+  `&[u64; 11]` vs slice ergonomics as a Phase 1 implementation
+  choice (not a Phase 0 blocker); (m) adds canonical line-number
+  stability caveats to §5.3 step 7 and step 8 (line numbers are
+  stable only against the Phase 2 pinned-spec revision);
+  (n) updates Phase 4 work-item count from 11 to the actual 14.
+
+  *Round 4 review update (2026-05-17):* (a) pivots the FFI ABI for
+  difficulty values from `u128` / `__uint128_t` to canonical
+  little-endian `[u8; 16]` byte arrays (`DAA_LWMA1.md` §6.1 and
+  plan Phase 3). Rationale: Rust's `u128` C ABI was unsound on
+  several targets until rustc 1.77 (March 2024) and remains a
+  target-portability footgun on uncommon platforms; for a
+  consensus-critical surface that's unacceptable. Explicit byte
+  arrays match the FCMP++ and KEM-derivation FFI precedent already
+  in the workspace and immunize the boundary against
+  target-dependent ABI surprises. C++ consumers memcpy between
+  their native `uint128_t` and the canonical-LE buffer at every
+  call site so the endianness assumption is a deliberate checkpoint
+  rather than an implicit invariant.
+  (b) **Consensus-correctness fix to §8.1 test vectors.** The
+  Round 3 vector "perfectly stable hashrate produces
+  `next_D == avg_D` (within rounding)" was mathematically wrong:
+  with `solvetime[i] == T` for all `i`, the formula yields
+  `next_D == avg_D * 99 / 100` — a deliberate 1 % downward bias,
+  which is the point of the `99/200` factor per §5.3 step 7's
+  derivation. The Round 3 expectation invited three implementer
+  failure paths (relax tolerance to absorb the 1 % shift; remove
+  the bias from the algorithm to satisfy the test; misread
+  "rounding" as ±1 %). Round 4 replaces all `≈`-shaped vectors
+  with concrete numerical tuples: stable hashrate → `0.99 * avg_D`,
+  2× hashrate increase → `1.98 * avg_D`, 2× hashrate decrease →
+  `0.495 * avg_D`, minimum-L floor (all solvetimes == 1) →
+  `~10.01 * avg_D`. Tuples are derived analytically from §5.3
+  and force the Phase 1 implementer to confront the bias at
+  design time, not at debug time. Also corrects an off-by-one in
+  §2.6's "first N+1 blocks" framing (canonical's `height < N`
+  short-circuit covers N blocks, not N+1; the Shekyl FFI
+  `chain_height < N` translation puts blocks `1..=N` in the
+  short-circuit per the new §5.6 validator consumer contract).
+  (c) Adds `DAA_LWMA1.md` §5.6 "Validator consumer contract:
+  `chain_height → header.difficulty`" specifying the off-by-one
+  mapping between the DAA function's `chain_height` parameter
+  (predecessor's height) and the block-being-validated's height,
+  plus the per-block disposition: block 0 (genesis) is exempt;
+  blocks `1..=N` carry `GENESIS_DIFFICULTY`; blocks `≥ N+1` are
+  algorithm-computed. Pre-empts the Phase 4 reviewer's first
+  question.
+  (d) **Closes all Phase 0 open questions.** `GENESIS_DIFFICULTY =
+  100` and `N = 90` are ratified zawy12 canonical with reversion
+  triggers in §10 covering simulation-driven change; the
+  "Shekyl-empirical RandomX v2 single-CPU measurement" alternative
+  referenced a measurement that cannot exist until RandomX v2
+  ships and is functionally identical to the §10 reversion trigger
+  already in place. Phase 2 cross-check harness language closed as
+  C++ test target (the canonical reference is C++; consuming
+  it directly is simpler than Rust-side vendoring; the alternative
+  was a cosmetic preference). Build.rs location (Option A) and
+  JSON-key naming (`daa_*` algorithm-version-free) were already
+  closed in Round 3 and are restated for completeness. No open
+  questions are carried into Phase 1; the design-rounds-in-
+  implementation-PR anti-pattern is closed at Phase 0.
+  (e) Adds three LWMA1_() disambiguation anchors to `DAA_LWMA1.md`
+  §3 and plan Phase 2: byte-offset range, first-line, last-line.
+  zawy12 Issue #3 contains four LWMA reference functions
+  (`LWMA1_/2_/3_/4_`); §5.3's "Issue #3, lines N–M" citations are
+  otherwise ambiguous and would break Phase 2 cross-check at the
+  smallest upstream reordering.
+  (f) Reframes `T = 120 s` as Shekyl's chosen target block time
+  (zawy12 LWMA-1 recommends 60–120 s for CPU-mineable chains)
+  rather than "inherited from CryptoNote `DIFFICULTY_TARGET_V2`."
+  The numerical value matches; the source-of-truth is the JSON
+  authority `daa_target_seconds`, not the inherited `#define`.
+
+  *Round 5 review update (2026-05-17):* (a) **FFI ABI pivot
+  from `[u8; 16]` byte arrays to `#[repr(C)] struct ShekylU128
+  { lo: u64, hi: u64 }`.** Round 4 named the `u128` ABI
+  unsoundness as a Tier 1 blocker but stopped short of
+  proposing the specific wire representation. Round 5 closes
+  this. `ShekylU128` decomposes the 128-bit value into two
+  `u64` fields whose ABI is universally stable on every Shekyl-
+  supported target — no `improper_ctypes` exposure, no
+  MSRV-pin-to-1.78 constraint, no per-target ABI verification
+  matrix. The struct-with-named-fields shape preserves explicit
+  `lo`/`hi` semantics (debugger-friendly, unambiguous, survives
+  any future endianness disposition because the field meaning
+  is carried by the field name). Endianness is consensus-locked
+  in `DAA_LWMA1.md` §6.1: `ShekylU128` is little-endian by
+  field semantics — `lo` is the low 64 bits, `hi` is the high
+  64 bits, reconstruction is `value = (hi as u128) << 64 | (lo
+  as u128)`. Cost: one struct definition and four lines of
+  `From` impls per direction. Benefit: the consensus-critical
+  surface is immune to `u128`-ABI target-portability issues
+  permanently, not just on rustc ≥ 1.77.
+  (b) **MTP 60 → 11 trade-off framing.** The
+  `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW = 60` → `SHEKYL_DAA_MTP_WINDOW
+  = 11` change travels in opposite directions on two security
+  axes simultaneously and a release-note skimmer reading the
+  value change in isolation would misread it as a security
+  regression. Surfaced explicitly: the **MTP-only timestamp-
+  attack defense weakens** (it is easier for an adversary to
+  satisfy "strictly greater than the median of 11 timestamps"
+  than "strictly greater than the median of 60 timestamps"
+  in isolation), and the **LWMA-1-coupled defense engages**
+  (the canonical zawy12 math is calibrated against MTP = 11,
+  not MTP = 60; running LWMA-1 with MTP = 60 would understate
+  the algorithm's solvetime-clamp resistance). `DAA_LWMA1.md`
+  §5.5 names all three checks (MTP + FTL + solvetime-clamp)
+  as *jointly* load-bearing — the combined defense profile
+  post-Phase-4 is stronger than either the pre-Phase-4
+  MTP=60-only profile or a hypothetical LWMA-1-with-MTP=60
+  configuration. The value change is the cost of moving from a
+  MTP-only-anchored defense to the canonical zawy12-coupled
+  defense; it is not a unilateral loosening.
+  (c) **RPC-contract preservation regression test (§9.8).** The
+  byte-identity assertion is now explicit: a wallet calling
+  `get_info` against the post-Phase-4 daemon receives a
+  `block_target` field that is **byte-identical** to the same
+  wallet's response against the pre-Phase-4 daemon (captured
+  as a fixture at PR-open). The value-identity assertion
+  (`120 == 120`) catches value drift; the byte-identity
+  assertion catches encoding drift (a future "change varint
+  encoding to little-endian byte array" refactor would
+  preserve the numeric value but break the wire contract). Both
+  are required to make the RPC-contract-preservation property
+  auditable rather than asserted.
+  (d) **"Consensus-atomic cutover" exception class drafted in
+  `DAA_LWMA1_PLAN.md`** Phase 4 (four criteria: consensus-rule
+  boundary; structural indivisibility; surface enumerated in
+  advance; documented disposition citing the criteria). The
+  class was drafted here as four criteria; the sibling PR
+  `feat/consensus-atomic-cutovers-rule` ratifies the criteria
+  as `.cursor/rules/07-consensus-atomic-cutovers.mdc` and
+  refines them through Round 6 / Round 7 review before landing
+  (PR #50). The ratified form: the rule is opt-in
+  (`alwaysApply: false`) and unreachable by any PR that does
+  not cite it explicitly; criterion 2 is reframed as the
+  structural-inapplicability of flag decomposition to consensus
+  rules — a flag decomposition is consensus-safe only if both
+  flag states are simultaneously valid, which for a consensus
+  rule is impossible by definition, so criterion 2 is met
+  whenever criterion 1 is met (closing the "yes-it's-consensus-
+  but-splitting-would-be-inconvenient" loophole); criterion 3
+  adds a base-commit-anchored, timestamped grep so reviewers
+  re-run against the same SHA; criterion 4 is numbered into
+  sub-clauses 4.1–4.4 with reviewer-map-accuracy and
+  rollback-correctness promoted into the criterion itself
+  (rejecting the PR is the response to a map miss, not patching
+  the map); a "what this is not" section disqualifies
+  convenience / velocity / reviewer-bandwidth /
+  retroactive-citation; and the history of application is split
+  into "Approved invocations" (LWMA-1 Phase 4) and "Cases that
+  might appear analogous but are not" (RandomX v2 Phase 3,
+  where the 3a flag is build-system / FFI-routing rather than
+  consensus, the algorithm change ships in Phase 1's submodule
+  swap, and criterion 1 is therefore not met for Phase 3 at
+  all — structurally inapplicable, not "evaluated and
+  rejected"). The mechanism for future invocations is
+  self-anchoring: an invoking PR must include a commit that
+  adds its own entry to the rule's history-of-application
+  section. Phase 4's section in this plan invokes the ratified
+  rule by name and maps each criterion to LWMA-1 Phase 4
+  specifically; Phase 4's exception is auditable against the
+  class's four criteria mechanically, not against
+  LWMA-1-specific precedent.
+  (e) **Round 8 bias-factor stochastic-vs-deterministic
+  clarification (`DAA_LWMA1.md` §5.3 step 7, §8.1).** The Round 4
+  test-vector correction landed concrete numerical tuples that
+  expect `next_D == avg_D * 99/100` on the §8.1 perfectly-stable
+  hashrate input (deliberate downward bias from the `99/200`
+  factor). The Round 4 fix did not synchronously update §5.3
+  step 7's derivation prose, which still described the `99/100`
+  factor as "compensating for a ~1 % upward bias" — leaving the
+  doc internally contradictory: one section described the factor
+  as canceling drift (stable input → `avg_D` exactly), the other
+  expected a 1 % residual. Round 8 resolves the contradiction by
+  making the stochastic-vs-deterministic distinction explicit:
+  the canonical zawy12 bias correction targets *stochastic*
+  upward drift (Poisson skew, `6*T` clamp truncation, jump-rule
+  amplification from downstream LWMA-2+ variants) present under
+  realistic chain operation; on §8.1's *deterministic* unit-test
+  vectors (all solvetimes exactly `T`, no clamp engagement,
+  no PRNG), the same factor surfaces as a deterministic 1 %
+  downward residual rather than as a corrective cancellation.
+  Both readings of the algorithm are correct under their
+  respective input shapes; the doc now says so explicitly so a
+  Phase 1 implementer who transcribes the formula and observes
+  `next_D == 990_000` on the §8.1 stable vector knows that's a
+  correctly implementing algorithm rather than a test
+  expectation to "fix." A Phase 1 pre-flight verification step
+  is added to `DAA_LWMA1_PLAN.md`: the canonical zawy12 C++
+  reference is run once against the §8.1 stable vector and the
+  result recorded in the Phase 1 PR description before
+  implementation begins, removing the residual ambiguity as a
+  function of empirical evidence rather than as a function of
+  prose interpretation.
+  (f) **Round 8 §11 wallet touchpoint correction.** §11
+  previously read "LWMA-1 is not consumed by the wallet —
+  wallets do not compute or check difficulty (validators do)" —
+  true for the *algorithm* but incomplete for the
+  *target-block-time constant `T`*, which §9.7's enumeration
+  surfaced as a wallet consumer at `wallet2.cpp:181, 182, 5975,
+  11548` and `wallet_rpc_server.cpp:163` (unlock-time defaults,
+  recent-spend-window math, `seconds_per_block` consumers,
+  `suggested_confirmations_threshold` math — five wallet-side
+  sites). §11 now reads accurately: the algorithm is not
+  consumed by the wallet, but `T` is, with a value-preserving
+  rewire from `DIFFICULTY_TARGET_V2` to
+  `SHEKYL_DAA_TARGET_SECONDS` across all five sites. Phase 4's
+  wallet impact is no longer mis-stated as "no wallet impact."
+  The §11 prose-vs-§9.7 enumeration drift was a Round 1 grep
+  finding that didn't make it into the §11 prose; Round 8
+  closes the loop.
+  (g) **Round 8 polish.** (i) `DAA_LWMA1.md` §6.3 explicitly
+  records that the `is_above_mtp` and `is_timestamp_below_ftl`
+  predicates committed in §2.5 are Rust-internal helpers
+  consumed by the §17 future validator actor, not exposed via
+  the FFI — the C++ side does the corresponding FTL and MTP
+  checks directly against the generated header constants per
+  §6.2's source-of-truth pattern, keeping the FFI surface
+  minimal per §6.1's "one committed export" discipline. (ii)
+  `DAA_LWMA1.md` §9.5 adds a Phase 4 reviewer note that with
+  the FTL value change from 7200 to 540, the FTL test margin
+  in `tests/core_tests/block_validation.cpp:137` shrinks from
+  "7.2 hours past FTL" to "1 hour past FTL"; the test must
+  assert rejection *specifically because of the FTL check*
+  (error-code equality, not generic "block rejected"), so the
+  test can't pass for the wrong reason if a future refactor
+  moves rejection to a different validation path. (iii)
+  `DAA_LWMA1.md` §9.7 adds a Phase 4 reviewer note for the
+  `cryptonote_core.cpp:1817, 1829, 1838` Poisson stall-detection
+  sites: the rewire is value-preserving but the path is not
+  exercised by any current test, so Phase 4 either confirms
+  coverage exists or adds a minimal regression test; "rewire
+  textually, value unchanged" alone is not a sufficient
+  verification claim for a path with no test coverage. (iv)
+  `DAA_LWMA1.md` §9.3 is repopulated with substantive
+  consolidation prose pointing FTL/MTP enumeration cross-
+  references to §9.5 and §9.6 respectively (was previously an
+  empty "deprecated section header" pointer with no content).
+  (v) `DAA_LWMA1_PLAN.md` Phase 4 adds a reviewer-expectation
+  note that the "14 work items" framing categorizes work but
+  understates diff size: actual file-change count lands at
+  roughly 45–55 files across `src/` and `tests/`. (vi)
+  `DAA_LWMA1.md` status block on line 3 updated from "Round 1"
+  to reflect that Rounds 1–8 have all landed against this PR.
+  (h) **Round 9 zawy12 issue #24 cumulative-history review.**
+  Reviews the design against
+  [zawy12/difficulty-algorithms#24](https://github.com/zawy12/difficulty-algorithms/issues/24)
+  ("LWMA's history"), the canonical author's cumulative log of
+  known LWMA issues, fixes, and security-relevant findings.
+  Five items receive explicit dispositions; four (#1, #2, #4,
+  #5, #6, #10, #12, #15, #16) are confirmed already-addressed.
+  Substantive changes:
+  - **Item #14 (September 2018 selfish-mine via out-of-sequence
+    timestamps).** Algorithm-level change. `DAA_LWMA1.md` §5.3
+    steps 2 and 3 adopt LWMA-3's running-max + signed-solvetime
+    mechanism and symmetric `±6*T` clamp, replacing the
+    kyuupichan-style forward-pass-with-1-floor used through
+    Round 8. The remainder of the algorithm (weighted-sum,
+    minimum-L floor, bias factor 99/200, overflow guard,
+    genesis-window short-circuit) stays LWMA-1-canonical.
+    Disposition recorded in §1.3 (alternatives — "Partial
+    LWMA-3 adoption"), §3 (pinned spec — deviation note +
+    `LWMA3_()` reference pin), §5.3 steps 2/3/4 (algorithm
+    rewrite to signed-i128 intermediates + symmetric clamp),
+    §5.4 ("Signed-arithmetic discipline" property), §5.5
+    (defense-surface enumeration grows to four mechanisms), and
+    §8.1 (out-of-sequence vector reformulated for running-max
+    semantics, new "Selfish-mine attack regression (zawy12 issue
+    #24 item 11)" required vector). `DAA_LWMA1_PLAN.md` Phase 1
+    adds a signed-arithmetic discipline section detailing the
+    i128/u128 boundary and lists the two Round 9 test vectors
+    as required Phase 1 merge-gate criteria. Phase 2's
+    cross-check harness composes expectations from both
+    canonical `LWMA1_()` and `LWMA3_()` references per §8.2.
+  - **Item #17 (May 2019 33% Sybil attack via peer-time-offset).**
+    Closed by absence of substrate. The attack's precondition
+    ("If your coin uses network time instead of node local
+    time") is not met by Shekyl. `Blockchain::check_block_timestamp(b)`
+    compares against `time(NULL)` directly
+    (`blockchain.cpp:4276`); `Blockchain::get_adjusted_time(height)`
+    is blockchain-derived (median of recent block timestamps)
+    and consulted only by non-consensus paths. No peer-time-correction
+    mechanism exists in the daemon; audit-trail grep returned
+    zero matches for `time_offset|TimeOffset|GetAdjustedTime|GetTimeOffset|MAX_PEER_DELTA|MAX_TIME_DELTA|MEDIAN_TIME|TIMESTAMPS_FOR_TIME_SYNC`
+    against consensus-relevant surface. Lowering FTL from 7200 s
+    to 540 s is therefore safe against the
+    [zcash/zcash#4021](https://github.com/zcash/zcash/issues/4021)
+    attack class. Disposition recorded in
+    `DAA_LWMA1.md` §5.5's "Disposition on peer-time-derived
+    clocks" paragraph, with a forward-looking constraint: if a
+    future Shekyl version adds peer-time correction, the
+    `FTL / 2` revert-threshold relationship per zawy12 issue
+    #24 item 14 becomes load-bearing at that point and
+    `daa_peer_time_revert_threshold_seconds` MUST be added to
+    the JSON authority. The FTL value reduction (7200 → 540)
+    pre-dates this round but the safety rationale is now
+    explicit: it is safe *because* Shekyl does not implement
+    peer-time-derived clocks.
+  - **Item #7 (Jagerman MTP patch).** Verified present in
+    Shekyl's inherited `Blockchain::create_block_template` at
+    `blockchain.cpp:1650–1656` (the canonical pattern: set
+    `b.timestamp = time(NULL)`, then if `check_block_timestamp`
+    fails, raise to `median_ts`). The MTP window change from
+    60 to 11 preserves the patch's effectiveness; no Phase 4
+    work required. Disposition recorded in `DAA_LWMA1.md` §5.5
+    with code citation. A minor doc-vs-code drift at
+    `blockchain.cpp:1540`'s cached-template path is recorded
+    as a `FOLLOWUPS.md` candidate, not a Phase 4 atomic-cutover
+    work item.
+  - **Item #3 (window size N=60 vs N=90).** Documentation polish.
+    `DAA_LWMA1.md` §4's N parameter row notes that zawy12 issue
+    #24's 2018 "N ≈ 60" recommendation referred to `T = 60 s`
+    chains; the recommendation scales inversely with `T` and
+    for `T = 120 s` the canonical N is 90 (same ~90-minute
+    window).
+  - **Item #9 (±7xT header timestamp limits vs FTL boundary).**
+    Documentation only. `DAA_LWMA1.md` §5.5 records that Shekyl
+    uses MTP + FTL + symmetric solvetime clamp + running-max
+    normalization (four mechanisms) as the defense surface and
+    does not implement a separate per-block-header `±7xT` rule,
+    consistent with zawy12 issue #24 item 9's post-FTL deprecation
+    of `±7xT`.
+
+  `DAA_LWMA1_PLAN.md` gains a "Round 9 dispositions" section
+  recording all five issue-item dispositions and naming items
+  #1, #2, #4, #5, #6, #10, #12, #15, #16 as already-addressed
+  with their corresponding §ref. `DAA_LWMA1.md` status block on
+  line 3 updated from "Round 8" to "Round 9" to reflect the
+  cumulative review pass.
+  (i) **Round 9 supplement — local-time-only FTL trade-off
+  named.** The Round 9 closure of zawy12 issue #24 item 17 (FTL
+  vs peer-time-derived clocks) recorded the absence of substrate
+  but did not name the threat-model trade the local-time-only
+  FTL disposition deliberately accepts. This supplement makes the
+  trade explicit so a future reader does not misread the
+  disposition as missing functionality. `DAA_LWMA1.md` §5.5's
+  "Disposition on peer-time-derived clocks" paragraph is expanded
+  into four labelled subsections: (1) **the trade-off, named
+  explicitly** — Shekyl trades the zawy12 #17 / zcash/zcash#4021
+  peer-time-Sybil attack class (a ~$1000 attack accessible to
+  anyone with bandwidth to run enough peers) for an operator-side
+  NTP-hygiene requirement plus a coordinated-NTP-infrastructure-
+  compromise threat that requires state-level access; (2) **residual
+  threat-class ranking** — four classes documented from highest-
+  probability/lowest-impact (individual node clock skew, mitigated
+  by standard NTP hygiene, isolates affected node without
+  propagating to peers) through lowest-probability/highest-impact
+  (coordinated NTP-infrastructure compromise at scale, requiring
+  state-level access, not consensus-protocol-mitigated); (3)
+  **operator obligations** — validators are responsible for
+  keeping local clocks within ±540 s of network truth via standard
+  NTP discipline (multiple time sources, drift monitoring); NTP
+  failure is a liveness failure for the affected node, not a
+  safety failure that propagates; (4) **Y2038-adjacent note** —
+  `time(NULL)` returns `time_t`, which on 64-bit platforms (the
+  only Shekyl-supported platforms per the 32-bit retirement chore
+  landed at commit `e06ee37d96af`, recorded in `docs/FOLLOWUPS.md`)
+  is 64-bit signed and Y2038 is not a concern; if 32-bit platforms
+  ever return to scope, both the FTL comparison and the FTL/2
+  forward-looking peer-time constraint must be revisited. `DAA_LWMA1.md` §1.2 (Commitment 1) gains a
+  closing observation: "The FTL-disposition choice (local-time-
+  only, no peer-time-derived clock) reflects a deliberate
+  threat-model preference for closing low-bar consensus attacks
+  at the cost of slightly higher operator NTP-hygiene
+  responsibility — consistent with Shekyl's broader posture on
+  operator autonomy per `75-system-autonomy.mdc`." The trade
+  itself, ranking observation, and the "safe because" framing on
+  the FTL value reduction (7200 → 540) are now consistently
+  cross-referenced from §1.2, §5.5, and this CHANGELOG entry.
+  (j) **Round 10 zawy12 issue #24 item-number reconciliation +
+  issue pin + reference-file enumeration + commit-hash
+  cite-stabilization.** Round 10 review identified one
+  load-bearing finding and three robustness improvements:
+  - **Item-number drift sweep (load-bearing).** The Round 9
+    body edits used item numbers that did not match the live
+    zawy12 issue #24 numbering: 11 was used for the September
+    2018 selfish-mine attack (live: item 14), 14 for the May
+    2019 33% Sybil (live: item 17), 6 for the Jagerman MTP
+    patch (live: item 7), 8 for the post-FTL `±7xT`
+    disposition (live: item 9), and 13 for the January 2019
+    LWMA-2/3/4 deprecation (live: item 16). The pattern was
+    not a uniform offset but a cluster of mistranscriptions
+    during Round 9's body edits while the status block was
+    checked separately. The Round 10 sweep corrected 14 sites
+    in `DAA_LWMA1.md` body, 2 sites in `DAA_LWMA1_PLAN.md`
+    body, and 2 sites in this CHANGELOG entry — all now
+    consistent with the live issue and with the status block's
+    "items 3, 7, 9, 14, 17" enumeration. The discipline going
+    forward: cite by date + description as the primary
+    identifier (e.g., "September 2018 selfish-mine attack
+    class") so renumbering by the upstream author does not
+    silently invalidate cross-references; the item number is
+    a redundant cross-reference resolving against the §3 pin
+    (next item).
+  - **zawy12 issue #24 pin (audit-trail-stable).**
+    `DAA_LWMA1.md` §3 gains a "zawy12 issue #24 pin
+    (Round 10 addition)" bullet pinning the raw `.body` of
+    [`zawy12/difficulty-algorithms#24`](https://github.com/zawy12/difficulty-algorithms/issues/24)
+    via `docs/design/refs/zawy12_issue_24_history.md` at
+    Phase 2 PR time, using the same `gh api` + `jq -r .body`
+    mechanism as the existing issue-#3 pin. Every "zawy12
+    issue #24 item N" cross-reference downstream now resolves
+    against this pin's numbered list, not against the live
+    GitHub-rendered issue. The pin's SHA-256 and capture
+    timestamp land in §3's pin record at Phase 2 commit time.
+    `DAA_LWMA1_PLAN.md` Phase 2 task content extends to commit
+    the issue-#24 pin alongside the existing issue-#3 pin.
+  - **Phase 2 reference-file enumeration clarified.**
+    `DAA_LWMA1.md` §3's Round-9 disposition paragraph is
+    expanded into an explicit three-file enumeration making
+    clear that `zawy12_issue_3_lwma1.md` (raw issue-#3
+    `.body`, the canonical pin),
+    `zawy12_issue_3_lwma3.md` (convenience extraction of just
+    the LWMA3_() function, *not* the canonical pin), and
+    `zawy12_issue_3_lwma1_with_lwma3_step2.md` (Shekyl-composed
+    hybrid, a derived file used by the cross-check harness)
+    are three distinct files with distinct purposes. The
+    "snapshot pinned per §3" cross-reference at §5.3 step 2
+    now resolves unambiguously. `DAA_LWMA1_PLAN.md` Phase 2
+    body section gains a "Round 9 + Round 10 supplementary
+    reference files" subsection enumerating all four
+    Phase-2-committed files (three issue-#3 derivatives plus
+    the issue-#24 pin) and extending the anchors-file schema
+    with the LWMA3_() byte-offset anchors.
+  - **Commit-hash cite for 32-bit-retirement chore.**
+    `DAA_LWMA1.md` §5.5's Y2038-adjacent note and this
+    CHANGELOG's Round 9 supplement entry both previously cited
+    the chore by branch name (`chore/retire-32bit-targets`),
+    which is a deleted post-merge branch and not a stable cite
+    target. Both citations are now anchored on the merge
+    commit `e06ee37d96af` ("Merge pull request #15 from
+    Shekyl-Foundation/chore/retire-32bit-targets") with the
+    rationale named in §5.5.
+
+  Status block on line 3 updates from "Round 9" to "Round 10"
+  recording the cumulative review pass. No algorithm-level or
+  consensus-rule changes in Round 10; the round is documentation
+  drift remediation and audit-trail-stability improvements.
+  (k) **Round 11 consumer-count drift reconciliation (Copilot
+  review of PR #49).** Copilot's first review pass on the
+  ready-for-review PR flagged two count-mismatch findings of the
+  same shape as Round 10's item-number drift — prose totals that
+  did not match their adjacent enumerations. The Round 11 sweep
+  reconciles both flagged sites plus the adjacent sites Copilot
+  did not flag but that exhibit the same drift pattern (per the
+  Round 10 discipline: fix the pattern, not just the flagged
+  instances).
+  - **MTP consumer count (§9.6 in `DAA_LWMA1.md`, propagated to
+    `DAA_LWMA1_PLAN.md` Phase 4 work item 6 and the breakdown
+    paragraph).** The §9.6 prose said "**seven** direct
+    consumers ... plus **two** test-suite consumers" but the
+    enumeration immediately below has always listed:
+    `blockchain.cpp:1981, 1985` (2 daemon sites) +
+    `blockchain.cpp:4223, 4230, 4240, 4259, 4285, 4293`
+    (6 daemon sites) +
+    `tests/core_tests/block_validation.h:92, 97`
+    (2 test sites) +
+    `tests/core_tests/block_validation.cpp:106, 120, 122`
+    (3 test sites) — **8 daemon + 5 test = 13 total sites across
+    3 files**. The prose now matches the enumeration: "eight
+    direct consumers ... plus five test-suite consumers —
+    thirteen total sites across three files." Downstream
+    propagation: the Phase 4 work item 6 in
+    `DAA_LWMA1_PLAN.md` previously read "the **nine** MTP
+    consumers ... (seven in `blockchain.cpp`, two in
+    `block_validation.{h,cpp}`)"; it now reads "the **thirteen**
+    MTP consumers ... (eight in `blockchain.cpp`, five in
+    `block_validation.{h,cpp}`)." The Phase 4 file-change
+    breakdown paragraph previously read "9 MTP consumer rewires
+    across 4 files (§9.6)" and now reads "13 MTP consumer rewires
+    across 3 files (§9.6)" — the file count was also wrong
+    (`blockchain.cpp` + `block_validation.h` + `block_validation.cpp`
+    is 3 files, not 4; the prior "4" likely double-counted
+    `cryptonote_config.h` where the `#define` lives, but that's
+    already counted in the adjacent "1 MTP `#define` removed"
+    item).
+  - **`DIFFICULTY_*` count (§9.2 in `DAA_LWMA1.md` and Phase 4
+    work item 3 + YAML phase4-cpp-cutover todo in
+    `DAA_LWMA1_PLAN.md`).** Copilot flagged the plan's Phase 4
+    work item 3 ("six constants" but enumerating seven names);
+    the same drift exists in `DAA_LWMA1.md` §9.2 line 1973
+    ("all five inherited `DIFFICULTY_*` `#define`s and the two
+    timestamp-validation `#define`s") and in the plan's YAML
+    todo block (line 18: "Delete the 6 inherited
+    DIFFICULTY_*"). The §9.2 enumeration has always listed
+    seven `DIFFICULTY_*` defines plus two timestamp-validation
+    defines, and the §9.3 cross-reference at line 2022
+    ("the seven `DIFFICULTY_*` defines plus FTL plus MTP")
+    and the plan's breakdown at line 789 ("7 `DIFFICULTY_*`
+    defines removed") have always been correct. The prose at
+    line 1973, the plan's work item 3 body, and the plan's
+    YAML todo are now reconciled to "seven" everywhere.
+  - **Forward-looking discipline.** Both drift instances share
+    the same pattern as Round 10's item-number drift: prose
+    totals composed by hand on top of enumerations that
+    accumulated incrementally across review rounds. The fix
+    going forward, per the Round 10 discipline, is the same: a
+    pre-PR scan for "prose says N, enumeration says M" mismatches
+    catches the class before it lands as a Copilot finding.
+
+  Status block on line 3 updates from "Round 10" to "Round 11"
+  recording the cumulative review pass. No algorithm-level or
+  consensus-rule changes in Round 11; the round is documentation
+  drift remediation surfaced by the first AI-reviewer pass on the
+  ready-for-review PR.
+  (l) **Phase 0 closeout (Round 12): §5.3 step 2 pseudocode
+  reorder, Phase 1 pre-flight execution, hybrid-reference
+  rename.** (2026-05-18 UTC). Phase 0 ratified after 12 review
+  rounds. Three load-bearing closeout actions in a single
+  commit:
+  - **Status block transition.** `DAA_LWMA1.md` line 3 transitions
+    from "Status: DRAFT — Round 11 …" to "Status: RATIFIED —
+    Phase 0 close (2026-05-18 UTC) — 12 review rounds. Round 12
+    was the final round; the status reflects ratification, not
+    'round 12 of N.'" The status block now records the Round 12
+    findings inline (pseudocode reorder, pre-flight execution,
+    hybrid-reference rename, three reference pins landed) so that
+    a future reader of the design doc sees the closeout summary
+    without needing to read the CHANGELOG.
+  - **§5.3 step 2 pseudocode reorder (load-bearing correctness
+    fix).** Round 12 review identified an order-of-operations bug
+    in the §5.3 step 2 pseudocode that contradicted the
+    surrounding prose at lines 957–960 and 994–996. The
+    pre-Round-12 pseudocode read `prev_max = max(prev_max,
+    timestamps[i-1]); solvetime[i] = timestamps[i] - prev_max;`
+    which, on the first loop iteration (`i=1`), executes
+    `prev_max = max(timestamps[0] - T, timestamps[0])`, evaluating
+    to `timestamps[0]` since `T > 0`. This overwrites the `-T`
+    anchor the surrounding prose claims is preserved, producing
+    `solvetime[1] = timestamps[1] - timestamps[0]` rather than the
+    intended `solvetime[1] = timestamps[1] - (timestamps[0] - T)
+    = T + T = 2T` on the stable input. The pseudocode is now
+    reordered to subtract-then-max:
+    `solvetime[i] = timestamps[i] - prev_max; prev_max =
+    max(prev_max, timestamps[i]);`. On the first iteration this
+    correctly evaluates `solvetime[1] = timestamps[1] - (t0 - T)
+    = 2T` (using the `-T` anchor), then updates `prev_max =
+    max(t0 - T, t1) = t1`. The prose at §5.3 lines 957–960 and
+    994–996 is updated to make the subtract-then-max semantics
+    explicit, including the empirical observation (from the
+    pre-flight harness, below) that the canonical zawy12
+    `LWMA1_()` reference behaves equivalently to the corrected
+    Shekyl pseudocode on monotonic inputs (both produce 990_000
+    on the §8.1 stable vector) but diverges on out-of-sequence
+    inputs (canonical 990_000 vs Shekyl-corrected 992_000 on the
+    Round 12 regression vector), confirming the running-max
+    mechanism's security property is load-bearing rather than
+    cosmetic.
+  - **Phase 1 pre-flight verification (executed at Phase 0 close
+    per §5.3 step 7).** Built a minimal C++ harness from the
+    canonical `LWMA1_()` reference transcribed verbatim from
+    `docs/design/refs/zawy12_issue_3_lwma1.md` (lines 77–119 of
+    the pinned `.body`), compiled with `g++ -std=c++17 -O2`, and
+    ran against the §8.1 "perfectly stable hashrate" input vector
+    with `avg_D = 1_000_000`, `N = 90`, `T = 120`, and
+    `timestamps[i] = 1_700_000_000 + i*T` for `i ∈ 0..=N`. Result:
+    canonical output `990_000` (matches §8.1 expected value).
+    An initial harness run with `timestamps[i] = i*T` produced
+    `10_000_000` due to `uint64_t(0) - uint64_t(120)` underflow at
+    `timestamps[0] - T`; corrected to realistic Unix epoch
+    timestamps and re-ran with the expected result. The
+    Shekyl-corrected algorithm (transcribed from
+    `docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md`)
+    was also compiled and run against the same stable input,
+    producing byte-identical `990_000` (confirming §8.2's
+    cross-check assertion that monotonic inputs match canonical
+    byte-for-byte). An out-of-sequence regression vector (the
+    same stable timestamps with `timestamps[2] = timestamps[1] -
+    5*T`) produced canonical `990_000` (attack neutralized to
+    `+1` via canonical's `previous_timestamp+1` floor; no
+    penalty) versus Shekyl-corrected `992_000` (attacker's
+    negative-solvetime contribution to `L` produces higher
+    `next_D`, denying the attack). The §5.3 step 7 stochastic-vs-
+    deterministic framing and §8.1's stable-vector expected
+    value are both empirically confirmed; the running-max
+    mechanism's load-bearing security property in §5.3 step 2 is
+    empirically verified by the regression vector. `DAA_LWMA1.md`
+    §5.3 step 7 and §8.1 record the inputs, the actual outputs,
+    and the divergence on the out-of-sequence vector;
+    `DAA_LWMA1_PLAN.md`'s Phase 1 pre-flight subsection records
+    the executed result and preserves the reversion-clause
+    triggers for any Phase 1 re-run that produces a different
+    number.
+  - **Hybrid-reference rename
+    (`zawy12_issue_3_lwma1_with_lwma3_step2.md` →
+    `shekyl_lwma1_running_max_symmetric_clamp.md`).** The Round 9
+    working name attributed the running-max + symmetric-clamp
+    mechanism to canonical LWMA-3 ("with_lwma3_step2"), but
+    canonical LWMA-3 (per the
+    `docs/design/refs/zawy12_issue_3_lwma3.md` extraction
+    referenced in the Phase 2 plan) does not actually implement
+    running-max, signed-solvetimes, or symmetric clamping in the
+    form §5.3 step 2 specifies — these are Shekyl-specific
+    refinements drawing on the *idea* of LWMA-3's out-of-sequence
+    handling but composed independently. The file is renamed to
+    `shekyl_lwma1_running_max_symmetric_clamp.md` to reflect the
+    Shekyl-specific construction; the file's preamble documents
+    the naming rationale, the empirical equivalence on monotonic
+    inputs, and the divergence on the regression vector. All
+    cross-references in `DAA_LWMA1.md` §3 and `DAA_LWMA1_PLAN.md`
+    are updated to the new name. The `zawy12_issue_3_lwma3.md`
+    convenience extraction (verbatim LWMA-3 reference, *not* a
+    pin) remains a Phase 2 work item per `DAA_LWMA1_PLAN.md`; it
+    is not load-bearing for Phase 1.
+  - **Three reference pins landed at Phase 0 close.** Per the
+    Phase 0 close discipline obligation, the three Phase 2 spec-
+    pin files landed as a Phase 1 precondition:
+    `docs/design/refs/zawy12_issue_3_lwma1.md` (canonical LWMA-1
+    pin, SHA-256
+    `14c68aee9780ca1b1fb8ca28ac43f7956996859f5281ef166cc0634b2cc50df9`,
+    captured-at 2026-05-18T05:25:21Z),
+    `docs/design/refs/zawy12_issue_24_history.md` (LWMA history
+    issue pin, SHA-256
+    `94a6fc8f10b57cf7d0731f62d07c0b4bbdf65d969d7c8679755b22eace76891d`,
+    same capture timestamp), and
+    `docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md`
+    (Shekyl hybrid reference, SHA-256
+    `f16f62695ae74b2ca47d15227b79035cdc349609d9fc73db2b7a3c57c0dfcc4a`,
+    same capture timestamp). `DAA_LWMA1.md` §3's pin records
+    embed the SHA-256s and timestamps; the `LWMA1_()` byte-offset
+    anchors and the LWMA3_() convenience extraction remain Phase
+    2 work per `DAA_LWMA1_PLAN.md` (not load-bearing for Phase 1).
+
+  Status block on line 3 updates from "DRAFT — Round 11" to
+  "RATIFIED — Phase 0 close (2026-05-18 UTC) — 12 review
+  rounds." Phase 0 is closed; Phase 1 (`shekyl-difficulty` crate
+  scaffold per `DAA_LWMA1_PLAN.md`) opens against ratified spec.
+  The pre-flight harness source (transcribed from the pinned
+  `zawy12_issue_3_lwma1.md` LWMA1_() function) is available at
+  this commit and is reproducible via
+  `g++ -std=c++17 -O2 preflight.cpp -o preflight && ./preflight`.
+
+  (m) **Round 13 post-Phase-0-close cleanup (§5.3 step 9
+  canonical-rounding-step documentation, §8.1 base-anchor
+  convention and arithmetic correction, harness commit).**
+  (2026-05-18 UTC.) Addresses Copilot PR #49 findings 3, 4, 5
+  surfaced after the Phase 0 close commit. Phase 0 stays
+  ratified; Round 13 is post-ratification cleanup against the
+  same design intent. Four load-bearing changes:
+  - **§5.3 new step 9 — canonical zawy12 LWMA-1 trailing
+    rounding step.** Documents the previously-undocumented
+    `((next_D + r/2) / r) * r` rounding-to-3-significant-decimal-
+    digits step from canonical `LWMA1_()` (`zawy12_issue_3_lwma1.md`
+    lines 116–119 of the pinned `.body`). The §8.1 expected
+    values all depend on this step; without it, the raw outputs
+    are `989_758` (stable), `1_035_252` (out-of-sequence), etc.
+    — close but not byte-equal to the canonical 3-significant-
+    digit values. Round 13 adds the step explicitly so the
+    §8.2 canonical-reference byte-cross-check is well-defined,
+    and includes a reversion clause requiring a §10 disposition
+    for any future PR proposing to drop or alter it.
+  - **§8.1 timestamp base-anchor convention (Copilot finding
+    5).** All §8.1 vectors are now specified as
+    `timestamps[i] = B + f(i)` with `B = 1_700_000_000` (Unix
+    epoch base). The pre-Round-13 specification used `i*T` or
+    `(i-1)*T` formulas with `B` implicit; the latter produced
+    `timestamps[0] = -T`, unrepresentable as `u64` (wraps to
+    `~1.8e19`) and the cause of the pre-flight harness's
+    initial `10_000_000` mis-output before the Round 12
+    correction. Base-anchoring is now a §8.1 invariant rather
+    than a harness-side workaround.
+  - **§8.1 out-of-sequence and minimum-L-floor vectors — full
+    arithmetic rederivation (Copilot findings 3, 4).** The
+    pre-Round-13 out-of-sequence vector's worked arithmetic
+    inflated the numerator by ~1000× and omitted the
+    rounding step entirely (numerator `97_297_560 * 10^7`
+    instead of `97_297_200_000_000`; quotient `1_035_521_504`
+    instead of step-9-rounded `1_040_000`). Round 13 rederives
+    `L = T*(N-1)*(N-2)/2 = 469_920`, computes raw `next_D =
+    1_035_252`, applies step 9 to round to `1_040_000`, and
+    cross-checks against the harness output. The minimum-L
+    floor vector's expected output drops from `10_010_000`
+    (analytic, missing step 9) to `10_000_000` (step-9-rounded);
+    the analytic intermediate is preserved in the prose so
+    the rounding-step contribution is auditable.
+  - **§8.1 selfish-mine attack regression — pinned numerical
+    outputs.** The Round-9-era assertion was relational only
+    ("Shekyl > kyuupichan output," "Shekyl > all-monotonic-T
+    reference"). Round 13 pins the empirical values: canonical
+    `911_000`, Shekyl `1_040_000`. Canonical's `911_000` is
+    *below* the `990_000` stable reference, surfacing the
+    load-bearing property that canonical LWMA-1 actually
+    *rewards* this attack class (lower difficulty post-attack
+    means cheaper subsequent mining) — the regression Shekyl's
+    running-max + symmetric-clamp formulation exists to fix.
+    The §8.1 entry is rewritten to specify the canonical-and-
+    Shekyl outputs side-by-side, the divergence ratio
+    (~1.14×), and the four-part assertion the test vector
+    must verify.
+  - **Pre-flight harness committed to `tests/phase0/`.** The
+    three C++ harnesses produced during Phase 0 close and
+    Round 13 (`preflight.cpp`, `preflight_corrected.cpp`,
+    `preflight_outofseq.cpp`) are now committed alongside the
+    design doc as authoritative reproducibility artifacts,
+    with `README.md` explaining build/run/license. The MIT
+    SPDX identifier covers the canonical `LWMA1_()`
+    transcription; the Shekyl variant header documents
+    Shekyl Foundation origin. The `DAA_LWMA1.md` §3 reference
+    list and §8.1 vector-derivation footer point at the
+    harness directory; the Phase 1 implementer reproduces the
+    pinned values via `g++ -std=c++17 -O2
+    preflight_outofseq.cpp -o p && ./p` before opening
+    Phase 1's first commit.
+
+  Round 13 leaves the `RATIFIED — Phase 0 close (2026-05-18
+  UTC)` line on `DAA_LWMA1.md` line 3 unchanged — Phase 0
+  closed at Round 12; Round 13 is post-ratification cleanup of
+  finding-classes that surfaced after PR #49 was marked
+  merge-ready. The summary paragraphs below line 3 are
+  extended with a "Round 13 applied:" block listing the four
+  changes above. Phase 1 remains unblocked.
+
 - **`07-consensus-atomic-cutovers.mdc` — named exception to
   branching policy for consensus-atomic cutovers**
   (`feat/consensus-atomic-cutovers-rule`, 2026-05-17). New rule
