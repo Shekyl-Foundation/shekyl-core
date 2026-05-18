@@ -2934,6 +2934,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-difficulty"
+version = "3.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "shekyl-economics"
 version = "3.1.0"
 dependencies = [

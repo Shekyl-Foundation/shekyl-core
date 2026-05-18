@@ -14,6 +14,7 @@ members = [
     "shekyl-daemon-rpc",
     "shekyl-encoding",
     "shekyl-address",
+    "shekyl-difficulty",
 
     # Vendored monero-oxide protocol crates
     "shekyl-oxide/crypto/helioselene",

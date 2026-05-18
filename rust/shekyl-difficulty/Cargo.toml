@@ -1,0 +1,23 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-difficulty"
+description = "LWMA-1 difficulty adjustment for Shekyl (docs/design/DAA_LWMA1.md)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Leaf crate per DAA_LWMA1.md §2.1: zero internal workspace
+# dependencies. The build script reads `config/consensus_constants.json`
+# directly (mirroring `rust/shekyl-engine-core/build.rs`) so the JSON
+# authority is consumed without routing through another Shekyl crate.
+[dependencies]
+
+[build-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

@@ -34,6 +34,16 @@ KEYS_INTEGER = {
     "fcmp_reference_block_min_age": "u64",
     "fcmp_reference_block_max_age": "u64",
     "rct_type_fcmp_plus_plus_pqc": "u8",
+    # LWMA-1 difficulty adjustment, docs/design/DAA_LWMA1.md §4.
+    # All u64 so the generated header has uniform `UINT64_C(...)`
+    # emission shape across the DAA window-shape constants. C++
+    # consumers (Phase 4) cast at the call site where a narrower
+    # integer is appropriate (e.g., MTP window length fits in `size_t`).
+    "daa_window_n": "u64",
+    "daa_target_seconds": "u64",
+    "daa_ftl_seconds": "u64",
+    "daa_mtp_window": "u64",
+    "daa_genesis_difficulty": "u64",
 }
 
 # Inclusive [min, max] range for each declared type.
@@ -91,6 +101,16 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     def emit(name_lower: str) -> str:
+        # Both `KEYS_INTEGER[name_lower]` and `data[name_lower]` are
+        # guarded upfront by the `missing` check above (lines ~77-81)
+        # for every key in `KEYS_INTEGER`, so a `KeyError` here can
+        # only fire if the call site passes a `name_lower` not
+        # registered in `KEYS_INTEGER` -- i.e., a developer added a
+        # `#define ... {emit("foo")}` line without also registering
+        # "foo" above. That's an internal-code-hygiene failure mode
+        # rather than a JSON-input failure mode, and the resulting
+        # KeyError on `KEYS_INTEGER[name_lower]` names the offending
+        # key directly, which is sufficient triage signal.
         ctype = KEYS_INTEGER[name_lower]
         macro = TYPE_EMIT[ctype]
         return f"{macro}({data[name_lower]})"
@@ -123,6 +143,26 @@ def main() -> int:
     {emit("fcmp_reference_block_max_age")}
 #define SHEKYL_RCT_TYPE_FCMP_PLUS_PLUS_PQC \
     {emit("rct_type_fcmp_plus_plus_pqc")}
+
+// LWMA-1 difficulty adjustment parameters per docs/design/DAA_LWMA1.md
+// §4. Generated alongside the FCMP/RCT constants because both subsets
+// share the cross-language-drift threat model (Bug 3 of the 2026-05-05
+// audit). The Rust mirror lives in rust/shekyl-difficulty's build.rs;
+// the Phase 4 C++ cutover replaces inherited `DIFFICULTY_TARGET_V2`,
+// `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT`, and
+// `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` with the symbols below per
+// docs/design/DAA_LWMA1_PLAN.md Phase 4. Until Phase 4 lands, these
+// macros are emitted but have no C++ consumer.
+#define SHEKYL_DAA_WINDOW_N \
+    {emit("daa_window_n")}
+#define SHEKYL_DAA_TARGET_SECONDS \
+    {emit("daa_target_seconds")}
+#define SHEKYL_DAA_FTL_SECONDS \
+    {emit("daa_ftl_seconds")}
+#define SHEKYL_DAA_MTP_WINDOW \
+    {emit("daa_mtp_window")}
+#define SHEKYL_DAA_GENESIS_DIFFICULTY \
+    {emit("daa_genesis_difficulty")}
 """
     out_path.write_text(content, encoding="utf-8")
     return 0
