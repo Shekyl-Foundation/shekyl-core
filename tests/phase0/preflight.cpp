@@ -17,15 +17,26 @@
 // LWMA1_() function transcribed verbatim from the pinned raw .body
 // (docs/design/refs/zawy12_issue_3_lwma1.md), lines 77-119.
 //
-// Inputs (§8.1 "perfectly stable hashrate" vector):
-//   N = 90, T = 120
-//   timestamps[i] = i * T for i in 0..=N   (strictly monotonic, delta=T)
+// Inputs (§8.1 "perfectly stable hashrate" vector, base-anchored per
+// Round 13 §8.1 convention; see docs/design/DAA_LWMA1.md §8.1 and
+// the README.md in this directory):
+//   N = 90, T = 120, B = 1_700_000_000 (Unix-epoch base)
+//   timestamps[i] = B + i*T for i in 0..=N   (strictly monotonic, delta=T)
 //   cumulative_difficulties[i] = i * 1_000_000 for i in 0..=N (avg_D = 1_000_000)
 //   FORK_HEIGHT = 0, height = N+1
 //   difficulty_guess = 100
 //
-// Expected (per design doc §8.1 analytical derivation): 990_000.
-// This harness records the canonical's actual output for §8.1 calibration.
+// The base anchor `B` is load-bearing: §5.3 step 2 computes
+// `prev_max_initial = timestamps[0] - T` on the first iteration, which
+// underflows `u64` (wraps to ~1.8e19) if `timestamps[0] < T`. The
+// pre-Round-13 `timestamps[i] = i*T` form produced exactly this
+// underflow and yielded `10_000_000` instead of `990_000` on the first
+// pre-flight run; the base-anchor form recovers the correct output.
+//
+// Expected (per design doc §8.1 analytical derivation + §5.3 step 9
+// canonical rounding): 990_000.
+// This harness records canonical LWMA1_()'s actual output for §8.1
+// calibration.
 
 #include <cassert>
 #include <cstdint>
@@ -88,7 +99,7 @@ int main() {
 
     std::cout << "Phase 1 pre-flight verification result:" << std::endl;
     std::cout << "  Inputs: N=" << N << ", T=" << T << ", avg_D=" << avg_D << std::endl;
-    std::cout << "  Stable monotonic timestamps[i] = i*T, cumulative_difficulties[i] = i*avg_D" << std::endl;
+    std::cout << "  Stable monotonic timestamps[i] = 1.7e9 + i*T, cumulative_difficulties[i] = i*avg_D" << std::endl;
     std::cout << "  Canonical LWMA1_() output: " << out << std::endl;
     std::cout << "  Design doc §8.1 expected: 990000" << std::endl;
     std::cout << "  Match: " << (out == 990000 ? "YES" : "NO") << std::endl;
