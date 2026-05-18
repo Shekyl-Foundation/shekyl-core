@@ -1,0 +1,118 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are met:
+//
+// 1. Redistributions of source code must retain the above copyright notice,
+//    this list of conditions and the following disclaimer.
+// 2. Redistributions in binary form must reproduce the above copyright
+//    notice, this list of conditions and the following disclaimer in the
+//    documentation and/or other materials provided with the distribution.
+// 3. Neither the name of the copyright holder nor the names of its
+//    contributors may be used to endorse or promote products derived from
+//    this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+// IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
+// THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+// PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+// CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+// EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+// PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+// PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+// LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+// NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+// SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+// RPC wire-contract regression test for the block-target surface.
+//
+// Two public JSON-RPC fields carry the block target time in seconds:
+//
+//   * `mining_status.block_target` — uint32_t, sourced today from
+//     `DIFFICULTY_TARGET_V2` at src/rpc/core_rpc_server.cpp:1452. Will
+//     migrate to SHEKYL_DAA_TARGET_SECONDS in commit 6 of the LWMA-1
+//     Phase 4 cutover.
+//
+//   * `get_info.target` — uint64_t, sourced today from
+//     `Blockchain::get_difficulty_target()` which returns
+//     `DIFFICULTY_TARGET_V2`. Will migrate symmetrically.
+//
+// Both fields are pinned to the literal 120 by the public RPC contract.
+// This test asserts:
+//
+//   1. The C++ macro and the generated Shekyl constant agree on 120 (until
+//      commit 9 of Phase 4 deletes the legacy macro; thereafter only the
+//      Shekyl constant remains).
+//   2. The epee KV-serialization layer emits the field with the byte
+//      sequence `"block_target":120` (or `"target":120`).
+//
+// Property (1) protects against arithmetic drift in either constant.
+// Property (2) protects against a future epee change silently breaking the
+// wire layout.
+//
+// The exact substring matched here is the pretty-printed form that
+// `epee::serialization::store_t_to_json` emits by default (the same
+// `indent=0, insert_newlines=true` path the daemon's JSON-RPC handlers
+// take). The space after `:` is part of the wire contract: downstream
+// JSON parsers MUST tolerate it but offline grep-based monitoring relies
+// on the canonical form.
+//
+// See docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md §16.4 for the migration
+// bridge rationale.
+
+#include "gtest/gtest.h"
+
+#include "cryptonote_config.h"           // DIFFICULTY_TARGET_V2 +
+                                         //   SHEKYL_DAA_TARGET_SECONDS via
+                                         //   shekyl/consensus_constants_generated.h
+#include "rpc/core_rpc_server_commands_defs.h"
+#include "storages/portable_storage_template_helper.h"
+
+namespace
+{
+
+// Compile-time bridge: the legacy macro and the generated constant must
+// agree until commit 9 deletes the former. After commit 9 lands this
+// static_assert becomes a tautology of the form
+//   `static_assert(SHEKYL_DAA_TARGET_SECONDS == SHEKYL_DAA_TARGET_SECONDS)`
+// and should be deleted; the second static_assert below is the
+// post-cutover invariant.
+static_assert(DIFFICULTY_TARGET_V2 == SHEKYL_DAA_TARGET_SECONDS,
+    "RPC wire contract bridge: DIFFICULTY_TARGET_V2 and "
+    "SHEKYL_DAA_TARGET_SECONDS must agree until commit 9 of the LWMA-1 "
+    "Phase 4 cutover deletes the legacy macro. If this fires after commit "
+    "6, the orphan-rewire of DIFFICULTY_TARGET_V2 consumers is incomplete.");
+
+static_assert(SHEKYL_DAA_TARGET_SECONDS == 120,
+    "RPC wire contract: mining_status.block_target and get_info.target "
+    "are pinned to 120 seconds by the public JSON-RPC contract. Changing "
+    "the constant requires a coordinated wire-format bump.");
+
+} // namespace
+
+TEST(rpc_target_wire_contract, mining_status_block_target)
+{
+  cryptonote::COMMAND_RPC_MINING_STATUS::response res{};
+  res.block_target = DIFFICULTY_TARGET_V2;
+
+  std::string json;
+  ASSERT_TRUE(epee::serialization::store_t_to_json(res, json));
+  EXPECT_NE(json.find("\"block_target\": 120"), std::string::npos)
+      << "mining_status wire response must carry `\"block_target\": 120`; "
+         "got:\n"
+      << json;
+}
+
+TEST(rpc_target_wire_contract, get_info_target)
+{
+  cryptonote::COMMAND_RPC_GET_INFO::response res{};
+  res.target = SHEKYL_DAA_TARGET_SECONDS;
+
+  std::string json;
+  ASSERT_TRUE(epee::serialization::store_t_to_json(res, json));
+  EXPECT_NE(json.find("\"target\": 120"), std::string::npos)
+      << "get_info wire response must carry `\"target\": 120`; got:\n"
+      << json;
+}

@@ -77,6 +77,7 @@ set(unit_tests_sources
   parse_amount.cpp
   pruning.cpp
   random.cpp
+  rpc_target_wire_contract.cpp
   rolling_median.cpp
   scaling_2021.cpp
   serialization.cpp
