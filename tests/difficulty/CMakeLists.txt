@@ -65,23 +65,35 @@ add_test(
 # Iterates the §8.1 input corpus and asserts the cross-implementation
 # relations documented in `docs/design/DAA_LWMA1.md` §3 / §8.1. Failure
 # aborts the test; the gate is 100% passing before the C++ cutover.
+#
+# MSVC gate: both reference headers use GCC/Clang `__int128` /
+# `unsigned __int128` (matching the convention established in
+# `tests/unit_tests/staking.cpp`). MSVC does not support the
+# `__int128` extension, so the cross-check harness is skipped on
+# MSVC builds. The Rust FFI symbol itself remains available on all
+# targets; what's lost on MSVC is only this test-side byte-equality
+# scaffolding. Coverage of the Rust algorithm is provided by the
+# `cargo test -p shekyl-difficulty` integration suite, which runs
+# on the same §8.1 corpus and is platform-independent.
 # ----------------------------------------------------------------------
-monero_add_minimal_executable(lwma1-cross-check
-  lwma1_cross_check.cpp
-  zawy12_lwma1_reference.h
-  shekyl_lwma1_hybrid_reference.h)
-target_include_directories(lwma1-cross-check
-  PRIVATE
-    "${CMAKE_SOURCE_DIR}/src"
-    "${MONERO_GENERATED_HEADERS_DIR}")
-target_link_libraries(lwma1-cross-check
-  PRIVATE
-    ${SHEKYL_FFI_LINK_LIBS}
-    ${EXTRA_LIBRARIES})
-set_property(TARGET lwma1-cross-check
-  PROPERTY
-    FOLDER "tests")
+if(NOT MSVC)
+  monero_add_minimal_executable(lwma1-cross-check
+    lwma1_cross_check.cpp
+    zawy12_lwma1_reference.h
+    shekyl_lwma1_hybrid_reference.h)
+  target_include_directories(lwma1-cross-check
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}/src"
+      "${MONERO_GENERATED_HEADERS_DIR}")
+  target_link_libraries(lwma1-cross-check
+    PRIVATE
+      ${SHEKYL_FFI_LINK_LIBS}
+      ${EXTRA_LIBRARIES})
+  set_property(TARGET lwma1-cross-check
+    PROPERTY
+      FOLDER "tests")
 
-add_test(
-  NAME    lwma1_cross_check
-  COMMAND lwma1-cross-check)
+  add_test(
+    NAME    lwma1_cross_check
+    COMMAND lwma1-cross-check)
+endif()

@@ -92,14 +92,16 @@ uint64_t call_rust(const std::vector<uint64_t>& ts) {
     if (rc != SHEKYL_DIFFICULTY_OK) {
         std::fprintf(stderr,
             "FATAL: shekyl_difficulty_lwma1_next returned %d for input "
-            "of size %zu\n", rc, ts.size());
+            "of size %llu\n",
+            rc, static_cast<unsigned long long>(ts.size()));
         std::exit(2);
     }
     if (out.hi != 0) {
         std::fprintf(stderr,
-            "FATAL: Rust returned out.hi = 0x%llx for input of size %zu; "
+            "FATAL: Rust returned out.hi = 0x%llx for input of size %llu; "
             "no §8.1 vector should overflow u64\n",
-            static_cast<unsigned long long>(out.hi), ts.size());
+            static_cast<unsigned long long>(out.hi),
+            static_cast<unsigned long long>(ts.size()));
         std::exit(2);
     }
     return out.lo;

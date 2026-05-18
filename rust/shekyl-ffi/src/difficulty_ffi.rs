@@ -76,6 +76,29 @@
 //! short-circuit case where `chain_height < N`); the FFI synthesises
 //! empty slices for that path. When `count > 0` both input pointers
 //! must be non-null.
+//!
+//! # Performance / allocation
+//!
+//! Each call allocates one `Vec<u128>` of length `count`
+//! (`count == N + 1 == 91` in the production path) to widen the
+//! `[ShekylU128]` input into a `[u128]` for [`shekyl_difficulty::lwma1_next`].
+//! Transmuting `&[ShekylU128]` directly to `&[u128]` is not safe:
+//! `ShekylU128` is `#[repr(C)]` with two-`u64` layout (alignment 8
+//! on x86_64), while Rust `u128` has alignment 16; the
+//! reinterpret-cast is exactly the layout-coupling Round 5 rejected
+//! when it chose the `ShekylU128` ABI in the first place.
+//!
+//! At 91 elements × 16 bytes the allocation is ~1.5 KiB per call,
+//! satisfied from the system allocator's small-object freelist in
+//! the nanosecond range. The cost is dominated by the algorithm's
+//! own 90-iteration weighted-sum loop, not the allocation. Phase 4
+//! (C++ daemon cutover, per `DAA_LWMA1_PLAN.md`) calls this once
+//! per block validation; at the production block target
+//! (`T = 120s`) the allocation is amortized to negligible. A
+//! stack-buffer alternative (`heapless::Vec<u128, N_PLUS_ONE>` or a
+//! signature change accepting `&[u128]` directly) is tracked as a
+//! V3.1+ FOLLOWUPS item rather than landed here, per the
+//! Phase 2 scope discipline.
 
 use core::slice;
 
@@ -187,10 +210,13 @@ pub unsafe extern "C" fn shekyl_difficulty_lwma1_next(
         )
     };
 
-    // Decompose the ShekylU128 inputs into native u128 for the
-    // algorithm. Allocation is acceptable here (orchestrator-side
-    // FFI shim with `std`); shekyl-difficulty itself remains
-    // no_std.
+    // Widen ShekylU128 (two-u64, align 8) to u128 (align 16) for
+    // the algorithm. The materialized Vec is unavoidable here:
+    // reinterpret-casting the input slice violates the alignment
+    // contract Round 5's ABI was designed to insulate from
+    // (see module docs § "ShekylU128 ABI", § "Performance /
+    // allocation"). shekyl-difficulty remains `#![no_std]`;
+    // the `Vec` is on the `std`-having FFI side.
     let cd: Vec<u128> = cd_ffi.iter().copied().map(u128::from).collect();
 
     match lwma1_next(chain_height, ts, &cd) {

@@ -31,8 +31,20 @@ full pinned issue body.
 Original work copyright (c) Zawy et al. and used here under the MIT
 License (per the upstream comment header preserved below); the
 Shekyl-authored prose above is BSD-3-Clause per the workspace default.
+
+Rendering note: the verbatim C++ body below is wrapped in a fenced
+`cpp` code block so Markdown renderers do not interpret `<`, `>`,
+or `*` as HTML/emphasis (e.g., `std::vector<uint64_t>` would
+otherwise be parsed as an HTML tag). The fence delimiters themselves
+are outside the byte-offset slice (`lwma3_byte_offset_start=17899`,
+`lwma3_byte_offset_end=20097`) recorded in
+`zawy12_issue_3_lwma1.anchors.json`; the bytes between the fence
+markers are byte-identical to that slice, preserving the anchor's
+byte-equality property. Reviewers verifying the pin should hash the
+fenced body only, not the file as a whole.
 -->
 
+```cpp
 difficulty_type next_difficulty_v3(std::vector<uint64_t> timestamps, 
     std::vector<difficulty_type> cumulative_difficulties) {
     
@@ -79,3 +91,4 @@ difficulty_type next_difficulty_v3(std::vector<uint64_t> timestamps,
   
     return next_D;
 }
+```

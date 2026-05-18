@@ -2811,6 +2811,53 @@ one place to confirm each item's relationship to the wallet stack.
     PR 0.6 vendor-bump in the rewrite plan
     [`.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md).**
 
+- **`shekyl_difficulty_lwma1_next` FFI shim allocates `Vec<u128>` per
+  call.** Surfaced 2026-05-18 (Phase 2 PR
+  [#52](https://github.com/Shekyl-Foundation/shekyl-core/pull/52),
+  Copilot review). The shim widens the C-ABI `[ShekylU128]` input
+  into a `Vec<u128>` (length `N + 1 == 91`) before invoking
+  [`shekyl_difficulty::lwma1_next`](../rust/shekyl-difficulty/src/lwma1.rs).
+  Reinterpret-casting `&[ShekylU128]` (`#[repr(C)]`, two-`u64`
+  layout, align 8) to `&[u128]` (align 16) violates Rust's slice
+  alignment invariant; the materialized copy is unavoidable under
+  the Round 5 ABI choice
+  ([`docs/design/DAA_LWMA1.md`](design/DAA_LWMA1.md) §6.1).
+
+  **Performance impact.** ~1.5 KiB per call (`91 × 16` bytes),
+  satisfied from the system allocator's small-object freelist.
+  Phase 4 (the C++ daemon cutover) calls this once per block
+  validation; at the production block target (`T = 120s`) the
+  allocation is amortized to negligible relative to the algorithm's
+  own 90-iteration weighted-sum loop.
+
+  **Dispositions worth comparing at the V3.1+ pass:**
+
+  1. Promote `shekyl_difficulty::lwma1_next` to accept a stack-
+     buffer iterator (e.g., a `&dyn ExactSizeIterator<Item = u128>`
+     or a const-generic-bounded `[u128; N_PLUS_ONE]`). Eliminates
+     allocation; couples the algorithm crate to the window-size
+     constant in a non-`#![no_std]`-friendly way.
+  2. Use `heapless::Vec<u128, 91>` in the FFI shim. Eliminates
+     allocation without changing the algorithm signature; adds a
+     `heapless` workspace dep and a stack frame of ~1.5 KiB at the
+     FFI entry.
+  3. Bypass the widening entirely by adding a parallel
+     `lwma1_next_decomposed(&[u64], &[(u64, u64)])` entry that
+     reads the two-u64 halves directly. Eliminates allocation and
+     keeps the algorithm crate `#![no_std]`; doubles the algorithm
+     crate's public surface.
+
+  **Target: V3.1** (post-genesis perf work). Closure point is the
+  V3.1 difficulty/perf pass that benchmarks LWMA-1's per-block
+  cost end-to-end on the production daemon path; the disposition
+  is chosen by data, not by a-priori preference. Until then, the
+  per-call allocation is documented at the FFI surface
+  ([`rust/shekyl-ffi/src/difficulty_ffi.rs`](../rust/shekyl-ffi/src/difficulty_ffi.rs)
+  module docs § "Performance / allocation") so callers and
+  reviewers see the cost explicitly. **This is not a correctness
+  bug** — the algorithm result is byte-identical to the
+  zero-allocation alternative; only throughput changes.
+
 ---
 
 ## V3.2 — Rust cutover and cleanup

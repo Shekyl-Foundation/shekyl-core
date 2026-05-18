@@ -29,6 +29,19 @@
 // LWMA-1 and Shekyl's refinement diverge. For monotonic vectors
 // (1-5), the canonical reference in zawy12_lwma1_reference.h is also
 // byte-equal to this one; the harness checks both for completeness.
+//
+// Compiler requirement: this header uses GCC/Clang `__int128` /
+// `unsigned __int128` for 128-bit intermediate arithmetic, matching
+// the convention in `src/cryptonote_basic/difficulty.cpp` (where the
+// extension is guarded behind `__x86_64__` with a portable 64-bit
+// fallback) and `tests/unit_tests/staking.cpp` (where the extension
+// is used unguarded in test-only code). MSVC does not support
+// `__int128`; the parent CMakeLists (`tests/difficulty/CMakeLists.txt`)
+// gates the `lwma1-cross-check` target behind `if(NOT MSVC)` so MSVC
+// builds skip this harness cleanly rather than failing to compile.
+// Coverage of the underlying Rust algorithm on MSVC builds comes
+// from `cargo test -p shekyl-difficulty`, which is platform-
+// independent.
 
 #pragma once
 
