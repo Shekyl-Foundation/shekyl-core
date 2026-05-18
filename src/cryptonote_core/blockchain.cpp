@@ -158,6 +158,7 @@ namespace
       // Copy timestamps to a contiguous buffer so we can pass a raw
       // pointer regardless of whether `Timestamps` is std::vector or
       // std::deque (std::deque does not guarantee contiguous storage).
+      ts_vec.reserve(timestamps.size());
       ts_vec.assign(timestamps.begin(), timestamps.end());
     }
 
