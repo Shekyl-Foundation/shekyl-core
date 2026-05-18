@@ -1,10 +1,16 @@
 # LWMA-1 — Difficulty adjustment, Rust, from genesis
 
-**Status.** **DRAFT — Round 1 (2026-05-17 initial draft; Round 1
-review pass addressing PR #49 reviewer findings).** Phase 0
-deliverable for the Shekyl difficulty-adjustment algorithm (DAA)
-migration. Companion: [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md). Both
-documents must pass the Phase 0 review cycle before any code lands.
+**Status.** **DRAFT — Round 8 (2026-05-17 initial draft; review
+passes 1–8 have all landed against PR #49; this doc carries
+the Round 4 test-vector concrete-tuple correction, the Round 5
+`ShekylU128` FFI pivot, the Round 7 cleanup of the
+consensus-atomic-cutover invocation against the now-ratified
+`07-consensus-atomic-cutovers.mdc`, and the Round 8 bias-factor
+stochastic-vs-deterministic clarification and §11 wallet-T
+touchpoint correction).** Phase 0 deliverable for the Shekyl
+difficulty-adjustment algorithm (DAA) migration. Companion:
+[`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md). Both documents must
+pass the Phase 0 review cycle before any code lands.
 
 **Scope.** Shekyl's target difficulty adjustment is **LWMA-1** (Linear
 Weighted Moving Average, variant 1) from zawy12's canonical reference
@@ -842,21 +848,70 @@ LWMA-2's `97`:
 - The unadjusted target is `avg_D * T / LWMA(STs) =
   avg_D * T * N * (N+1) / (2 * L)`.
 - The multiplicative correction `99 / 100` compensates for a ~1 %
-  upward bias in `next_D` that arises from three sources documented
-  in canonical: (a) the `6*T` solvetime clamp truncates the upper
-  tail of the solvetime distribution, (b) low-`N` Poisson skew
-  approximates a gamma distribution that pulls the empirical mean
-  above `T`, and (c) downstream LWMA-2+ variants' jump rules add
-  further upward bias which the canonical author chose to keep the
-  correction conservative against. LWMA-1 has neither (b)-amplifiers
-  nor jump rules, so the `99/100` correction is a slight
-  over-correction for LWMA-1 in isolation; canonical's
-  recommendation is to keep `99` regardless, on the grounds that
-  variance reduction is cheaper than perfect mean centering.
+  upward bias in `next_D` that arises **under stochastic operating
+  conditions** from three sources documented in canonical: (a) the
+  `6*T` solvetime clamp truncates the upper tail of the solvetime
+  distribution, (b) low-`N` Poisson skew approximates a gamma
+  distribution that pulls the empirical mean above `T`, and (c)
+  downstream LWMA-2+ variants' jump rules add further upward bias
+  which the canonical author chose to keep the correction
+  conservative against. LWMA-1 has neither (b)-amplifiers nor jump
+  rules, so the `99/100` correction is a slight over-correction for
+  LWMA-1 in isolation; canonical's recommendation is to keep `99`
+  regardless, on the grounds that variance reduction is cheaper
+  than perfect mean centering.
 - Combining: `next_D = avg_D * T * N * (N+1) / (2 * L) * 99 / 100
   = (avg_D * N * (N+1) * T * 99) / (200 * L)`. The denominator
   `200` is `2 * 100`, not a separate constant — `2` from the
   weighted-sum denominator and `100` from the bias correction.
+
+**Stochastic-vs-deterministic clarification (load-bearing for §8.1
+test interpretation).** All three bias sources above are
+*stochastic*: they apply when solvetimes are Poisson-distributed
+around mean `T`, with occasional outliers triggering the `6*T`
+clamp. Under those conditions — the realistic chain-operating
+conditions LWMA-1 is designed for — the `99/100` factor cancels
+the ~1 % upward drift, leaving the long-run average difficulty
+centered on `avg_D`.
+
+Under **deterministic operating conditions** — specifically, the
+synthetic unit-test inputs of §8.1 where all solvetimes are
+exactly `T` and no clamp fires — none of the three stochastic
+sources are present. The same `99/100` factor then produces a
+deterministic 1 % downward residual: `next_D = avg_D * 99/100`
+on stable-hashrate input. This is **not** a bug and **not** a
+test-expectation error; it is the same algorithm operating on a
+different input shape, with the bias-correction surfacing as a
+visible numerical residual because the stochastic drift it was
+designed to cancel isn't there.
+
+The §8.1 unit-test corpus is deliberately deterministic (no PRNG,
+no Poisson sampling) so the test vectors are reproducible
+byte-for-byte across hosts. The 1 % residual is therefore the
+*expected* output of a correct implementation on §8.1's stable
+vector. A Phase 1 implementer who hits the §8.1 stable vector and
+sees `next_D == avg_D * 99/100` is observing a correct
+implementation; a Phase 1 implementer who "fixes" the algorithm
+to produce `next_D == avg_D` on the deterministic vector has
+**broken the stochastic centering** that the factor exists to
+provide. Phase 2's canonical-reference cross-check (§8.2) is the
+backstop: the canonical zawy12 `LWMA1_()` C++ function applied to
+the §8.1 stable input produces `990_000` for `avg_D = 1_000_000`,
+not `1_000_000`. The Phase 1 implementer transcribes the formula
+verbatim and reaches the same number by construction.
+
+**Phase 1 pre-flight verification.** Before Phase 1 implementation
+begins, the canonical reference C++ implementation (extracted in
+Phase 2 to `tests/difficulty/zawy12_lwma1_reference.h`) is run
+once against the §8.1 stable-hashrate vector with
+`avg_D = 1_000_000` and the result recorded. If the result is
+`990_000`, the §8.1 expectation and this section's stochastic-vs-
+deterministic framing are both correct. If the result is
+`1_000_000`, the §8.1 vector is wrong (and this clarification
+section needs revision in the opposite direction). The Phase 1
+pre-flight task in
+[`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) Phase 1 records this
+verification step explicitly so it cannot be skipped.
 
 The direction matters: a `200/99` formula (denominator and
 numerator swapped) would invert the bias correction and produce
@@ -1198,6 +1253,21 @@ both sides, generated from the single JSON authority.
   site; the Rust side uses the `From<u128> ↔ From<ShekylU128>`
   conversions defined in §6.1. No general-purpose packing helper
   is exposed across the FFI.
+- **The `is_above_mtp` and `is_timestamp_below_ftl` predicates
+  committed in §2.5.** These live in `shekyl-difficulty` and are
+  consumed by the future Rust validator actor (§17), not by C++.
+  C++ performs the corresponding FTL and MTP checks directly
+  against the generated header constants `SHEKYL_DAA_FTL_SECONDS`
+  and `SHEKYL_DAA_MTP_WINDOW` (per §6.2's source-of-truth
+  pattern) — `c.timestamp > time(NULL) + SHEKYL_DAA_FTL_SECONDS`
+  is the FTL site (§9.5); the median-of-11 MTP check inlines the
+  generated `SHEKYL_DAA_MTP_WINDOW` constant in the existing
+  `complete_timestamps_vector` + median computation (§9.6). The
+  predicate functions are Rust-internal helpers for the §17
+  consumer-side actor and remain unexposed across the FFI to
+  avoid duplicating logic that the C++ side already has and to
+  keep the FFI surface minimal per §6.1's "one committed export"
+  discipline.
 
 ## 7. Isolation invariants
 
@@ -1261,12 +1331,20 @@ The vectors below use Shekyl V3.0 parameters (`N = 90`, `T = 120`,
   all `i in 1..=N`, `cum_difficulties` arithmetic-progressing by
   a constant `d_step` such that `avg_D == d_step` over the
   window. Expected output: **`next_D == avg_D * 99 / 100`**
-  (deliberate downward bias per §5.3 step 7 derivation, **not**
+  (the deterministic-input residual of the `99/100` factor per
+  §5.3 step 7's stochastic-vs-deterministic clarification, **not**
   `next_D == avg_D`). For `avg_D == 1_000_000` this is exactly
-  `990_000`. The 1 % bias is the design intent of the `99/200`
-  factor — a test asserting `next_D == avg_D` would falsely fail
-  on a correct implementation and falsely pass on an
-  implementation that silently removed the bias factor.
+  `990_000`. The 1 % residual is the design intent of the `99/200`
+  factor surfacing on deterministic input — under realistic
+  stochastic operation, the same factor cancels the ~1 % upward
+  Poisson/clamp drift and leaves long-run average difficulty
+  centered on `avg_D`; on this deterministic test vector, the
+  drift isn't there, so the correction surfaces as a visible
+  residual. A test asserting `next_D == avg_D` on this
+  deterministic vector would falsely fail on a correct
+  implementation and falsely pass on an implementation that
+  silently removed the bias factor — destroying its stochastic
+  centering property in the process.
 - **Sudden 2× hashrate increase.** `solvetime[i] == T/2 == 60`
   for all `i`. With `L = 60 * N * (N+1) / 2`, the formula yields
   **`next_D == avg_D * 99 / 50 == avg_D * 198 / 100`** (a `1.98×`
@@ -1430,14 +1508,39 @@ exists to close.
 There is **no** `BLOCK_FUTURE_TIME_LIMIT_V2` in this codebase
 (prior drafts named one — phantom).
 
-### 9.3 (deprecated section header — content moved to §9.2)
+### 9.3 FTL and MTP — deletion locations and consumer-enumeration cross-references
 
-The Round 2 draft's §9.3 separately enumerated FTL/MTP constants
-under "value change with relocation to typed-const home." Round 3
-collapsed FTL/MTP into §9.2 as ordinary deletions (the JSON
-authority is the typed-const home; there is no separate
-relocation). The §9.5 and §9.6 consumer enumerations below are
-the operational replacement.
+FTL (`CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT`) and MTP
+(`BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW`) are deleted from
+`src/cryptonote_config.h` per §9.2's enumeration of nine
+`#define` removals (the seven `DIFFICULTY_*` defines plus FTL
+plus MTP). They do not have a separate "relocation" step
+because the JSON authority `config/consensus_constants.json` is
+the typed-const home from genesis — there is nothing to relocate
+*from* a Monero-era #define *to* a Shekyl-era constant; the
+Shekyl-era constant is the canonical source and the
+Monero-inherited `#define` is the deletion target.
+
+The operational consumer enumerations for FTL and MTP are:
+
+- **FTL consumers** — §9.5 below (one daemon site at
+  `blockchain.cpp:4276`, one test-suite site at
+  `block_validation.cpp:137`).
+- **MTP consumers** — §9.6 below (seven daemon sites and four
+  test-suite sites).
+
+The two value-change consensus-rule effects (FTL: 7200 → 540,
+MTP: 60 → 11) take effect at the daemon consumer sites
+enumerated in §9.5 and §9.6 respectively, simultaneously with
+the §9.4 algorithm rewire, per Phase 4's atomic-cutover
+discipline (see `DAA_LWMA1_PLAN.md` Phase 4 invocation of
+`07-consensus-atomic-cutovers.mdc`). The Round 2 draft's §9.3
+separately enumerated FTL/MTP under "value change with
+relocation to typed-const home"; Round 3 collapsed those
+enumerations into §9.2 and §9.5/§9.6 because there is no
+separate relocation step — the section is preserved as a
+header-anchor for downstream cross-references and to make the
+"why isn't this here" question self-answering.
 
 ### 9.4 Call-site rewiring of `next_difficulty` in `src/cryptonote_core/blockchain.cpp`
 
@@ -1484,7 +1587,25 @@ consumer:
   test fixture constructing a block with timestamp deliberately
   past FTL. Rewires to `SHEKYL_DAA_FTL_SECONDS`; the test's
   semantics ("timestamp is past FTL") are preserved, but the
-  numerical margin shrinks from 7200 + 3600 to 540 + 3600.
+  numerical margin shrinks from 7200 + 3600 to 540 + 3600 — i.e.,
+  from "7.2 hours past FTL" to "1 hour past FTL." 1 hour is still
+  comfortably past `SHEKYL_DAA_FTL_SECONDS == 540`, so the test
+  block remains over the FTL threshold; the smaller margin doesn't
+  change the semantic outcome on any plausible test host.
+
+  **Phase 4 reviewer note for this test.** With the shrunken margin,
+  Phase 4 confirms the fixture asserts rejection *specifically
+  because of the FTL check* — i.e., that the assertion is keyed to
+  the FTL-violation error code (e.g., `MERROR_VER` /
+  `kFutureTimestampViolatesFutureTimeLimit`), not to a generic
+  "block rejected" outcome. The latter would let the test pass
+  for the wrong reason if a future refactor moved the rejection
+  to some other validation path (e.g., proof-of-work check, MTP
+  check) before the FTL site fires. A test that passes for the
+  wrong reason loses its evidence value about FTL behavior. The
+  fixture's assertion-message inspection or error-enum equality
+  check (whichever the test harness uses) is the operational
+  enforcement of this property.
 
 No other consumers in the C++ tree. The Phase 4 rewire surface
 for FTL is **two sites**.
@@ -1541,7 +1662,23 @@ RPC-contract-load-bearing:
 - `src/cryptonote_core/cryptonote_core.cpp:1817, 1829, 1838` —
   three sites inside the Poisson-probability blockchain-stall
   detection threshold. The math is `T`-dependent; consumers
-  rewire textually.
+  rewire textually. **Phase 4 reviewer note for stall detection.**
+  The rewire is value-preserving (`T` is unchanged at 120s), so
+  the stall-detection threshold's numerical behavior is
+  byte-identical pre- and post-rewire. *However*, the math is
+  not exercised by any test in the current `tests/` tree per the
+  Round 3 reconnaissance grep — the three sites compute the
+  expected-blocks-per-hour from `DIFFICULTY_TARGET_V2` and feed
+  it into a Poisson-probability comparison, but no unit test or
+  core test invokes that path. Phase 4 either (a) confirms via
+  grep that test coverage exists in the harness or (b) adds a
+  minimal regression test that exercises the stall-detection
+  path with a deterministic timestamp series, so the post-rewire
+  daemon's stall behavior is asserted rather than asserted-by-
+  textual-equivalence. The Phase 4 PR includes the (a)-or-(b)
+  disposition explicitly; "rewire textually, value unchanged" is
+  not by itself a sufficient verification claim for a path with
+  no test coverage.
 - **`src/rpc/core_rpc_server.cpp:1452`** —
   `res.block_target = DIFFICULTY_TARGET_V2;` — **this is a daemon
   RPC field consumed by wallet callers**. The value is unchanged
@@ -1620,19 +1757,38 @@ no re-derivation of the rationale.
 
 ## 11. Wallet, RPC, and node touchpoints
 
-LWMA-1 is consumed by the daemon's block validator and miner. It is
-**not** consumed by the wallet — wallets do not compute or check
-difficulty (validators do). The wallet-V3.2 cutover gate that
-applies to RandomX v2 (`RANDOMX_V2_RUST.md` §14) does **not** apply
-to LWMA-1. LWMA-1 can land before, during, or after the wallet V3.2
-migration without coupling.
+**The LWMA-1 algorithm** is consumed by the daemon's block
+validator and miner. It is **not** consumed by the wallet —
+wallets do not compute or check difficulty (validators do). The
+wallet-V3.2 cutover gate that applies to RandomX v2
+(`RANDOMX_V2_RUST.md` §14) does **not** apply to LWMA-1's
+algorithm. LWMA-1's algorithm can land before, during, or after
+the wallet V3.2 migration without coupling.
+
+**The DAA's target-block-time constant `T`** is, however,
+consumed by the wallet for unlock-time and recent-spend-window
+arithmetic. Per §9.7's enumeration, `src/wallet/wallet2.cpp:181,
+182, 5975, 11548` and `src/wallet/wallet_rpc_server.cpp:163` all
+read the inherited `DIFFICULTY_TARGET_V2` symbol. Phase 4 rewires
+these five wallet-side sites to consume `SHEKYL_DAA_TARGET_SECONDS`
+from the generated header `shekyl/consensus_constants_generated.h`.
+The value is unchanged (120 before and after); the rewire is
+purely source-textual, the wallet's unlock-time defaults and
+recent-spend-window math are byte-identical pre- and
+post-rewire, and no wallet-state migration is needed. This means
+LWMA-1's *constants* land on the wallet alongside the daemon —
+not just the daemon — but the wallet's *observable behavior* is
+unchanged.
 
 The `core_rpc_server` exposes difficulty values via JSON-RPC
 (`get_info`, `get_block_header_by_*`); those are read-only
 consumers of the value `Blockchain::get_difficulty_for_next_block()`
 returns. No RPC interface change is needed — the value's type
 (`difficulty_type`, a 128-bit unsigned integer) is unchanged across
-the migration.
+the migration. The `get_info` `block_target` field exposes
+`SHEKYL_DAA_TARGET_SECONDS` (== 120) per §9.7's RPC consumer
+enumeration; the §9.8 RPC-contract regression test asserts wire
+byte-identity for this field across the cutover.
 
 ## 12. Reviewer discipline
 

@@ -254,6 +254,87 @@
   specifically; Phase 4's exception is auditable against the
   class's four criteria mechanically, not against
   LWMA-1-specific precedent.
+  (e) **Round 8 bias-factor stochastic-vs-deterministic
+  clarification (`DAA_LWMA1.md` §5.3 step 7, §8.1).** The Round 4
+  test-vector correction landed concrete numerical tuples that
+  expect `next_D == avg_D * 99/100` on the §8.1 perfectly-stable
+  hashrate input (deliberate downward bias from the `99/200`
+  factor). The Round 4 fix did not synchronously update §5.3
+  step 7's derivation prose, which still described the `99/100`
+  factor as "compensating for a ~1 % upward bias" — leaving the
+  doc internally contradictory: one section described the factor
+  as canceling drift (stable input → `avg_D` exactly), the other
+  expected a 1 % residual. Round 8 resolves the contradiction by
+  making the stochastic-vs-deterministic distinction explicit:
+  the canonical zawy12 bias correction targets *stochastic*
+  upward drift (Poisson skew, `6*T` clamp truncation, jump-rule
+  amplification from downstream LWMA-2+ variants) present under
+  realistic chain operation; on §8.1's *deterministic* unit-test
+  vectors (all solvetimes exactly `T`, no clamp engagement,
+  no PRNG), the same factor surfaces as a deterministic 1 %
+  downward residual rather than as a corrective cancellation.
+  Both readings of the algorithm are correct under their
+  respective input shapes; the doc now says so explicitly so a
+  Phase 1 implementer who transcribes the formula and observes
+  `next_D == 990_000` on the §8.1 stable vector knows that's a
+  correctly implementing algorithm rather than a test
+  expectation to "fix." A Phase 1 pre-flight verification step
+  is added to `DAA_LWMA1_PLAN.md`: the canonical zawy12 C++
+  reference is run once against the §8.1 stable vector and the
+  result recorded in the Phase 1 PR description before
+  implementation begins, removing the residual ambiguity as a
+  function of empirical evidence rather than as a function of
+  prose interpretation.
+  (f) **Round 8 §11 wallet touchpoint correction.** §11
+  previously read "LWMA-1 is not consumed by the wallet —
+  wallets do not compute or check difficulty (validators do)" —
+  true for the *algorithm* but incomplete for the
+  *target-block-time constant `T`*, which §9.7's enumeration
+  surfaced as a wallet consumer at `wallet2.cpp:181, 182, 5975,
+  11548` and `wallet_rpc_server.cpp:163` (unlock-time defaults,
+  recent-spend-window math, `seconds_per_block` consumers,
+  `suggested_confirmations_threshold` math — five wallet-side
+  sites). §11 now reads accurately: the algorithm is not
+  consumed by the wallet, but `T` is, with a value-preserving
+  rewire from `DIFFICULTY_TARGET_V2` to
+  `SHEKYL_DAA_TARGET_SECONDS` across all five sites. Phase 4's
+  wallet impact is no longer mis-stated as "no wallet impact."
+  The §11 prose-vs-§9.7 enumeration drift was a Round 1 grep
+  finding that didn't make it into the §11 prose; Round 8
+  closes the loop.
+  (g) **Round 8 polish.** (i) `DAA_LWMA1.md` §6.3 explicitly
+  records that the `is_above_mtp` and `is_timestamp_below_ftl`
+  predicates committed in §2.5 are Rust-internal helpers
+  consumed by the §17 future validator actor, not exposed via
+  the FFI — the C++ side does the corresponding FTL and MTP
+  checks directly against the generated header constants per
+  §6.2's source-of-truth pattern, keeping the FFI surface
+  minimal per §6.1's "one committed export" discipline. (ii)
+  `DAA_LWMA1.md` §9.5 adds a Phase 4 reviewer note that with
+  the FTL value change from 7200 to 540, the FTL test margin
+  in `tests/core_tests/block_validation.cpp:137` shrinks from
+  "7.2 hours past FTL" to "1 hour past FTL"; the test must
+  assert rejection *specifically because of the FTL check*
+  (error-code equality, not generic "block rejected"), so the
+  test can't pass for the wrong reason if a future refactor
+  moves rejection to a different validation path. (iii)
+  `DAA_LWMA1.md` §9.7 adds a Phase 4 reviewer note for the
+  `cryptonote_core.cpp:1817, 1829, 1838` Poisson stall-detection
+  sites: the rewire is value-preserving but the path is not
+  exercised by any current test, so Phase 4 either confirms
+  coverage exists or adds a minimal regression test; "rewire
+  textually, value unchanged" alone is not a sufficient
+  verification claim for a path with no test coverage. (iv)
+  `DAA_LWMA1.md` §9.3 is repopulated with substantive
+  consolidation prose pointing FTL/MTP enumeration cross-
+  references to §9.5 and §9.6 respectively (was previously an
+  empty "deprecated section header" pointer with no content).
+  (v) `DAA_LWMA1_PLAN.md` Phase 4 adds a reviewer-expectation
+  note that the "14 work items" framing categorizes work but
+  understates diff size: actual file-change count lands at
+  roughly 45–55 files across `src/` and `tests/`. (vi)
+  `DAA_LWMA1.md` status block on line 3 updated from "Round 1"
+  to reflect that Rounds 1–8 have all landed against this PR.
 
 - **`07-consensus-atomic-cutovers.mdc` — named exception to
   branching policy for consensus-atomic cutovers**

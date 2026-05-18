@@ -189,6 +189,38 @@ Six work items: workspace registration, crate manifest, crate
 library, typed-constants module, algorithm module, synthetic unit
 tests.
 
+**Phase 1 pre-flight — bias-factor empirical verification.** Per
+[`DAA_LWMA1.md`](./DAA_LWMA1.md) §5.3 step 7's
+stochastic-vs-deterministic clarification, the canonical zawy12
+`LWMA1_()` C++ reference is run once before Phase 1
+implementation begins, against the §8.1 "perfectly stable
+hashrate" input vector with `avg_D = 1_000_000`, `N = 90`,
+`T = 120`, and `solvetime[i] = T` for all `i ∈ 1..=N`. The
+expected output is exactly `990_000` per the derivation in §5.3
+step 7 and the §8.1 vector. The result is recorded in the Phase
+1 PR description.
+
+- If the canonical reference produces `990_000`: the design
+  doc's §5.3 step 7 clarification and §8.1 expectation are both
+  empirically confirmed; Phase 1 implementation proceeds against
+  the unmodified spec.
+- If the canonical reference produces `1_000_000`: the §8.1
+  test vector's expected value is wrong (or the canonical
+  reference has changed between the §3 pinned-revision and
+  observation, which itself is a Phase 0 reversion-clause
+  trigger per `DAA_LWMA1.md` §10). Phase 1 stops; the Phase 0
+  doc is amended; Phase 0 re-reviews.
+- Any other output: the canonical reference's behavior contradicts
+  both the §5.3 derivation and the §8.1 expectation; treat as a
+  reversion-clause trigger per §10 and surface the discrepancy
+  on `dev` before further work.
+
+This verification step is mechanical (one C++ run against the
+canonical reference, one numeric comparison). It removes the
+remaining ambiguity in §5.3 step 7's stochastic-vs-deterministic
+framing as a function of empirical evidence rather than as a
+function of derivation prose.
+
 **Workspace registration.** Add `shekyl-difficulty` to
 `rust/Cargo.toml`'s `[workspace.members]`.
 
@@ -628,6 +660,30 @@ Phase 4's scope is bounded by the criterion-3 enumeration: the
 work-item ceiling is fixed at the 14 items below (no scope
 creep within the PR; "while we're here" additions break the
 exception per criterion 3 per `15-deletion-and-debt.mdc`).
+
+**Reviewer-expectation note on diff size.** The "14 work items"
+above are *categories of work*, not *file changes*: each
+category covers between one and ~14 individual file edits.
+Concretely, Phase 4's actual file-change count lands at
+**roughly 45–55 file changes** across `src/` and `tests/`,
+broken down as: 3 `next_difficulty` rewires (§9.4) + 2
+`difficulty.{h,cpp}` deletions (§9.1) + 7 `DIFFICULTY_*` defines
+removed from one file (`cryptonote_config.h`, §9.2) + 14
+`DIFFICULTY_TARGET_V2` consumer rewires across 9 files (§9.7) +
+1 FTL `#define` removed + 2 FTL consumer rewires across 2 files
+(§9.5) + 1 MTP `#define` removed + 9 MTP consumer rewires
+across 4 files (§9.6) + `tests/difficulty/` directory deletion
+(§9.1) + 3 invariant-test additions (symbol-isolation,
+no-C-ABI, no-orphaned-magic-numbers) + 1 RPC-contract test
+(§9.8) + 5 wallet-side `T`-consumer rewires (§11 / §9.7) + 1
+documentation update under `docs/`. A reviewer walking into the
+Phase 4 PR sees a diff of ~50 files; the "14 work items"
+framing is correct as a *categorization* but understates the
+mechanical breadth of the rewire surface. The criterion-3
+enumeration in `DAA_LWMA1.md` §§9.1–9.8 is the authoritative
+file-by-file mapping; this paragraph is the
+diff-size-expectation calibration for reviewers.
+
 RandomX v2's Phase 3 sub-PR split (3a/3b/3c per
 `RANDOMX_V2_PLAN.md`) does *not* invoke the same exception, and
 `07-consensus-atomic-cutovers.mdc`'s history-of-application
