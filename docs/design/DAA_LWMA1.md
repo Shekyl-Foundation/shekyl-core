@@ -1,7 +1,7 @@
 # LWMA-1 — Difficulty adjustment, Rust, from genesis
 
-**Status.** **DRAFT — Round 10 (2026-05-17 initial draft; review
-passes 1–10 have all landed against PR #49; this doc carries
+**Status.** **DRAFT — Round 11 (2026-05-17 initial draft; review
+passes 1–11 have all landed against PR #49; this doc carries
 the Round 4 test-vector concrete-tuple correction, the Round 5
 `ShekylU128` FFI pivot, the Round 7 cleanup of the
 consensus-atomic-cutover invocation against the now-ratified
@@ -9,13 +9,17 @@ consensus-atomic-cutover invocation against the now-ratified
 stochastic-vs-deterministic clarification and §11 wallet-T
 touchpoint correction, the Round 9 partial-LWMA-3 adoption
 in §5.3 step 2/3 plus the zawy12 issue #24 dispositions on items
-3, 7, 9, 14, and 17, and the Round 10 item-number sweep
+3, 7, 9, 14, and 17, the Round 10 item-number sweep
 reconciling 14 body sites against the live zawy12 issue #24
 numbering plus the issue-#24 pin under §3, the explicit Phase-2
 enumeration of the LWMA-3 reference files, and the commit-hash
 cite for the 32-bit-retirement chore replacing the deleted
-`chore/retire-32bit-targets` branch name).** Phase 0 deliverable
-for the Shekyl
+`chore/retire-32bit-targets` branch name, and the Round 11
+consumer-count drift reconciliation in §9.2 and §9.6 surfaced
+by the Copilot review of PR #49 — the §9.2 prose now matches
+its seven-DIFFICULTY-defines enumeration, and the §9.6 prose
+now matches its 8-daemon + 5-test = 13-site enumeration across
+three files).** Phase 0 deliverable for the Shekyl
 difficulty-adjustment algorithm (DAA) migration. Companion:
 [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md). Both documents must
 pass the Phase 0 review cycle before any code lands.
@@ -1970,8 +1974,13 @@ Concrete files and constants to remove at Phase 4 of
 
 ### 9.2 Constants deleted from `src/cryptonote_config.h`
 
-All five inherited `DIFFICULTY_*` `#define`s and the two
-timestamp-validation `#define`s are **deleted**, not renamed. Each
+All seven inherited `DIFFICULTY_*` `#define`s and the two
+timestamp-validation `#define`s are **deleted**, not renamed (Round
+11 reconciliation; the Round 3 prose said "five + two" but the
+enumeration below has always listed seven `DIFFICULTY_*` defines
+plus two timestamp-validation defines — Copilot review caught the
+drift in the parallel `DAA_LWMA1_PLAN.md` work-item 3, the sweep
+extends here). Each
 is replaced by a consumer rewire to the corresponding
 `SHEKYL_DAA_*` symbol in the generated header
 `shekyl/consensus_constants_generated.h` (per §4's source-of-truth
@@ -2118,22 +2127,27 @@ for FTL is **two sites**.
 
 ### 9.6 `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` consumer enumeration
 
-The MTP constant has **seven** direct consumers per the Round 3
-reconnaissance grep, all in the daemon source tree, plus two
-test-suite consumers:
+The MTP constant has **eight** direct consumers per the Round 3
+reconnaissance grep, all in the daemon source tree, plus five
+test-suite consumers — **thirteen** total sites across **three**
+files (Round 11 reconciliation; the Round 3 prose said "seven + two"
+but the enumeration below has always counted eight + five — Copilot
+review caught the drift):
 
 - `src/cryptonote_core/blockchain.cpp:1981, 1985` —
   `complete_timestamps_vector`: assembles a timestamps vector of
-  size `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` for the MTP check.
+  size `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` for the MTP check
+  (**2 sites**).
 - `src/cryptonote_core/blockchain.cpp:4223, 4230, 4240, 4259,
   4285, 4293` — six sites inside `check_block_timestamp` and
   `get_long_term_block_weight_median`: the MTP median computation,
-  bounds checks, and the diagnostic `MERROR_VER` message.
+  bounds checks, and the diagnostic `MERROR_VER` message
+  (**6 sites**).
 - `tests/core_tests/block_validation.h:92, 97`:
   `gen_block_ts_not_checked` and `gen_block_ts_in_past` test
-  fixtures parametrized by the constant.
+  fixtures parametrized by the constant (**2 sites**).
 - `tests/core_tests/block_validation.cpp:106, 120, 122` — fixture
-  body sites using the constant.
+  body sites using the constant (**3 sites**).
 
 All consumers rewire to `SHEKYL_DAA_MTP_WINDOW` from the generated
 header. **The value change (60 → 11) takes effect across all of

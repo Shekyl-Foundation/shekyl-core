@@ -15,7 +15,7 @@ todos:
     content: "Phase 3: Export shekyl_difficulty_lwma1_next from rust/shekyl-ffi/src/lib.rs per DAA_LWMA1.md §6.1 (i32 return; cum_difficulties: *const ShekylU128; out_next_difficulty: *mut ShekylU128 where #[repr(C)] struct ShekylU128 { lo: u64, hi: u64 } — Round 5 pivoted from [u8; 16] to a field-named two-u64 struct per the FCMP++/KEM-derivation precedent; rationale: Rust u128 C ABI was target-dependent until rustc 1.77 and remains a footgun on uncommon targets; u64 has universally stable ABI on every Shekyl-supported target, debugger-friendly lo/hi field semantics carry the meaning, no improper_ctypes exposure; ERR_NULL_PTR / ERR_INVALID_COUNT / ERR_OVERFLOW / ERR_INTERNAL taxonomy). Add struct shekyl_u128 { uint64_t lo; uint64_t hi; } and the function declaration to src/shekyl/shekyl_ffi.h. Hand-maintain the bindings per 25-rust-architecture.mdc. PR delivers the FFI surface; the daemon does NOT yet consume it (still on inherited next_difficulty)."
     status: pending
   - id: phase4-cpp-cutover
-    content: "Phase 4 (14 work items, deliberate atomic-cutover exception to 06-branching.mdc; rationale: FTL and MTP value changes cannot stage behind alias #defines without weakening consensus integrity in the intermediate state). Rewire Blockchain::get_difficulty_for_next_block() (blockchain.cpp:~965), Blockchain::check_difficulty_checkpoints() (~1021), Blockchain::get_next_difficulty_for_alternative_chain() (~1325) to shekyl_difficulty_lwma1_next. DELETE src/cryptonote_basic/difficulty.{h,cpp}. Delete the 6 inherited DIFFICULTY_* #defines (DIFFICULTY_TARGET_V1, DIFFICULTY_TARGET_V2, DIFFICULTY_WINDOW, DIFFICULTY_LAG with // !!! warning, DIFFICULTY_CUT, DIFFICULTY_BLOCKS_COUNT, DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN) from src/cryptonote_config.h. Rewire ~14 DIFFICULTY_TARGET_V2 consumers across 9 files (enumerated in DAA_LWMA1.md §9.7; preserves RPC contract per §9.8) to SHEKYL_DAA_TARGET_SECONDS from shekyl/consensus_constants_generated.h. Delete CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT; rewire 2 FTL consumers (enumerated in §9.5) to SHEKYL_DAA_FTL_SECONDS — consensus-rule value change 7200 → 540 takes effect here. Delete BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW; rewire 9 MTP consumers (enumerated in §9.6) to SHEKYL_DAA_MTP_WINDOW — consensus-rule value change 60 → 11 takes effect here. Delete tests/difficulty/{difficulty.cpp, gen_wide_data.py, generate-data}. Add symbol-isolation CI invariant: nm shekyld must not contain T|U next_difficulty_64|next_difficulty|check_difficulty_checkpoints (per DAA_LWMA1.md §7.1). Add no-C-ABI invariant on shekyl-difficulty per §7.2. Add no-orphaned-magic-numbers CI invariant: git grep on post-Phase-4 tree returns zero hits for CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT, BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW, DIFFICULTY_TARGET_V[12], DIFFICULTY_WINDOW, DIFFICULTY_LAG, DIFFICULTY_CUT, DIFFICULTY_BLOCKS_COUNT, DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN. Add RPC-contract regression test asserting daemon.get_info().block_target == 120 post-cutover. Audit and rewire wallet-side DIFFICULTY_TARGET_V2 consumers (wallet2.cpp:181/182/5975/11548, wallet_rpc_server.cpp:163). Update unit tests and docs."
+    content: "Phase 4 (14 work items, deliberate atomic-cutover exception to 06-branching.mdc; rationale: FTL and MTP value changes cannot stage behind alias #defines without weakening consensus integrity in the intermediate state). Rewire Blockchain::get_difficulty_for_next_block() (blockchain.cpp:~965), Blockchain::check_difficulty_checkpoints() (~1021), Blockchain::get_next_difficulty_for_alternative_chain() (~1325) to shekyl_difficulty_lwma1_next. DELETE src/cryptonote_basic/difficulty.{h,cpp}. Delete the 7 inherited DIFFICULTY_* #defines (DIFFICULTY_TARGET_V1, DIFFICULTY_TARGET_V2, DIFFICULTY_WINDOW, DIFFICULTY_LAG with // !!! warning, DIFFICULTY_CUT, DIFFICULTY_BLOCKS_COUNT, DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN) from src/cryptonote_config.h. Rewire ~14 DIFFICULTY_TARGET_V2 consumers across 9 files (enumerated in DAA_LWMA1.md §9.7; preserves RPC contract per §9.8) to SHEKYL_DAA_TARGET_SECONDS from shekyl/consensus_constants_generated.h. Delete CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT; rewire 2 FTL consumers (enumerated in §9.5) to SHEKYL_DAA_FTL_SECONDS — consensus-rule value change 7200 → 540 takes effect here. Delete BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW; rewire 9 MTP consumers (enumerated in §9.6) to SHEKYL_DAA_MTP_WINDOW — consensus-rule value change 60 → 11 takes effect here. Delete tests/difficulty/{difficulty.cpp, gen_wide_data.py, generate-data}. Add symbol-isolation CI invariant: nm shekyld must not contain T|U next_difficulty_64|next_difficulty|check_difficulty_checkpoints (per DAA_LWMA1.md §7.1). Add no-C-ABI invariant on shekyl-difficulty per §7.2. Add no-orphaned-magic-numbers CI invariant: git grep on post-Phase-4 tree returns zero hits for CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT, BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW, DIFFICULTY_TARGET_V[12], DIFFICULTY_WINDOW, DIFFICULTY_LAG, DIFFICULTY_CUT, DIFFICULTY_BLOCKS_COUNT, DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN. Add RPC-contract regression test asserting daemon.get_info().block_target == 120 post-cutover. Audit and rewire wallet-side DIFFICULTY_TARGET_V2 consumers (wallet2.cpp:181/182/5975/11548, wallet_rpc_server.cpp:163). Update unit tests and docs."
     status: pending
   - id: phase5-docs
     content: "Phase 5: Update docs/USER_GUIDE.md, docs/SHEKYLD_PREREQUISITES.md, docs/DESIGN_CONCEPTS.md (or equivalents), docs/CHANGELOG.md per 91-documentation-after-plans.mdc. Close any DAA_LWMA1 follow-ups this plan introduces. Cross-reference the rule promotion 24-reviewer-discipline.mdc if it has landed by then."
@@ -790,8 +790,8 @@ broken down as: 3 `next_difficulty` rewires (§9.4) + 2
 removed from one file (`cryptonote_config.h`, §9.2) + 14
 `DIFFICULTY_TARGET_V2` consumer rewires across 9 files (§9.7) +
 1 FTL `#define` removed + 2 FTL consumer rewires across 2 files
-(§9.5) + 1 MTP `#define` removed + 9 MTP consumer rewires
-across 4 files (§9.6) + `tests/difficulty/` directory deletion
+(§9.5) + 1 MTP `#define` removed + 13 MTP consumer rewires
+across 3 files (§9.6) + `tests/difficulty/` directory deletion
 (§9.1) + 3 invariant-test additions (symbol-isolation,
 no-C-ABI, no-orphaned-magic-numbers) + 1 RPC-contract test
 (§9.8) + 5 wallet-side `T`-consumer rewires (§11 / §9.7) + 1
@@ -836,7 +836,7 @@ count audit; counts match `DAA_LWMA1.md` §§9.1–9.7):
 2. **Delete `src/cryptonote_basic/difficulty.cpp` and
    `difficulty.h` in full** (per `DAA_LWMA1.md` §9.1).
 3. **Delete the inherited `DIFFICULTY_*` `#define`s** in
-   `src/cryptonote_config.h` (six constants: `DIFFICULTY_TARGET_V1`,
+   `src/cryptonote_config.h` (seven constants: `DIFFICULTY_TARGET_V1`,
    `DIFFICULTY_TARGET_V2`, `DIFFICULTY_WINDOW`, `DIFFICULTY_LAG`,
    `DIFFICULTY_CUT`, `DIFFICULTY_BLOCKS_COUNT`,
    `DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN`; per `DAA_LWMA1.md` §9.2).
@@ -855,8 +855,8 @@ count audit; counts match `DAA_LWMA1.md` §§9.1–9.7):
    change 7200 → 540 takes effect at this work item.**
 6. **Delete `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW`** `#define` in
    `src/cryptonote_config.h:56` (per `DAA_LWMA1.md` §9.2). Rewire
-   the nine MTP consumers enumerated by `DAA_LWMA1.md` §9.6
-   (seven in `blockchain.cpp`, two in `block_validation.{h,cpp}`)
+   the thirteen MTP consumers enumerated by `DAA_LWMA1.md` §9.6
+   (eight in `blockchain.cpp`, five in `block_validation.{h,cpp}`)
    to `SHEKYL_DAA_MTP_WINDOW` from the generated header. **Value
    change 60 → 11 takes effect at this work item.**
 7. **Delete the `tests/difficulty/` directory** (per

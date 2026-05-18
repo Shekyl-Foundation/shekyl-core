@@ -529,6 +529,73 @@
   recording the cumulative review pass. No algorithm-level or
   consensus-rule changes in Round 10; the round is documentation
   drift remediation and audit-trail-stability improvements.
+  (k) **Round 11 consumer-count drift reconciliation (Copilot
+  review of PR #49).** Copilot's first review pass on the
+  ready-for-review PR flagged two count-mismatch findings of the
+  same shape as Round 10's item-number drift — prose totals that
+  did not match their adjacent enumerations. The Round 11 sweep
+  reconciles both flagged sites plus the adjacent sites Copilot
+  did not flag but that exhibit the same drift pattern (per the
+  Round 10 discipline: fix the pattern, not just the flagged
+  instances).
+  - **MTP consumer count (§9.6 in `DAA_LWMA1.md`, propagated to
+    `DAA_LWMA1_PLAN.md` Phase 4 work item 6 and the breakdown
+    paragraph).** The §9.6 prose said "**seven** direct
+    consumers ... plus **two** test-suite consumers" but the
+    enumeration immediately below has always listed:
+    `blockchain.cpp:1981, 1985` (2 daemon sites) +
+    `blockchain.cpp:4223, 4230, 4240, 4259, 4285, 4293`
+    (6 daemon sites) +
+    `tests/core_tests/block_validation.h:92, 97`
+    (2 test sites) +
+    `tests/core_tests/block_validation.cpp:106, 120, 122`
+    (3 test sites) — **8 daemon + 5 test = 13 total sites across
+    3 files**. The prose now matches the enumeration: "eight
+    direct consumers ... plus five test-suite consumers —
+    thirteen total sites across three files." Downstream
+    propagation: the Phase 4 work item 6 in
+    `DAA_LWMA1_PLAN.md` previously read "the **nine** MTP
+    consumers ... (seven in `blockchain.cpp`, two in
+    `block_validation.{h,cpp}`)"; it now reads "the **thirteen**
+    MTP consumers ... (eight in `blockchain.cpp`, five in
+    `block_validation.{h,cpp}`)." The Phase 4 file-change
+    breakdown paragraph previously read "9 MTP consumer rewires
+    across 4 files (§9.6)" and now reads "13 MTP consumer rewires
+    across 3 files (§9.6)" — the file count was also wrong
+    (`blockchain.cpp` + `block_validation.h` + `block_validation.cpp`
+    is 3 files, not 4; the prior "4" likely double-counted
+    `cryptonote_config.h` where the `#define` lives, but that's
+    already counted in the adjacent "1 MTP `#define` removed"
+    item).
+  - **`DIFFICULTY_*` count (§9.2 in `DAA_LWMA1.md` and Phase 4
+    work item 3 + YAML phase4-cpp-cutover todo in
+    `DAA_LWMA1_PLAN.md`).** Copilot flagged the plan's Phase 4
+    work item 3 ("six constants" but enumerating seven names);
+    the same drift exists in `DAA_LWMA1.md` §9.2 line 1973
+    ("all five inherited `DIFFICULTY_*` `#define`s and the two
+    timestamp-validation `#define`s") and in the plan's YAML
+    todo block (line 18: "Delete the 6 inherited
+    DIFFICULTY_*"). The §9.2 enumeration has always listed
+    seven `DIFFICULTY_*` defines plus two timestamp-validation
+    defines, and the §9.3 cross-reference at line 2022
+    ("the seven `DIFFICULTY_*` defines plus FTL plus MTP")
+    and the plan's breakdown at line 789 ("7 `DIFFICULTY_*`
+    defines removed") have always been correct. The prose at
+    line 1973, the plan's work item 3 body, and the plan's
+    YAML todo are now reconciled to "seven" everywhere.
+  - **Forward-looking discipline.** Both drift instances share
+    the same pattern as Round 10's item-number drift: prose
+    totals composed by hand on top of enumerations that
+    accumulated incrementally across review rounds. The fix
+    going forward, per the Round 10 discipline, is the same: a
+    pre-PR scan for "prose says N, enumeration says M" mismatches
+    catches the class before it lands as a Copilot finding.
+
+  Status block on line 3 updates from "Round 10" to "Round 11"
+  recording the cumulative review pass. No algorithm-level or
+  consensus-rule changes in Round 11; the round is documentation
+  drift remediation surfaced by the first AI-reviewer pass on the
+  ready-for-review PR.
 
 - **`07-consensus-atomic-cutovers.mdc` — named exception to
   branching policy for consensus-atomic cutovers**
