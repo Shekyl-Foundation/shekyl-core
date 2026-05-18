@@ -899,6 +899,75 @@
   toggle) for any time between Phase 0 and genesis release if the
   algorithm-review gate fails per `RANDOMX_V2_RUST.md` §1.4.
 
+- **LWMA-1 difficulty-adjustment migration — Phase 1 crate scaffold
+  + spec-vector tests** (`feat/daa-lwma1-phase1-crate`, 2026-05-18).
+  Lands the Rust crate `rust/shekyl-difficulty` per
+  `docs/design/DAA_LWMA1.md` and `DAA_LWMA1_PLAN.md` Phase 1. Pure-
+  arithmetic `#![no_std]` + `#![deny(unsafe_code)]` leaf crate with
+  zero internal workspace deps; the FFI export
+  (`shekyl_difficulty_lwma1_next` with the `ShekylU128` ABI per
+  `DAA_LWMA1.md` §6.1) is deferred to Phase 3 in `shekyl-ffi`.
+
+  **Public surface.** `lwma1_next(chain_height, &timestamps,
+  &cumulative_difficulties) -> Result<u128, Error>` transcribes the
+  §5.3 algorithm verbatim (running-max + signed-solvetime per the
+  §5.3 step-2 Shekyl refinement, symmetric ±6T clamp per step 3, i128
+  weighted-sum accumulation per step 4, min-L floor at N²T/20 per
+  step 5, bias-corrected `99/200` formula per step 7, overflow guard
+  per step 8, and the canonical rounding-to-3-significant-decimal-
+  digits step 9 added in Round 13). Coupled timestamp predicates
+  `is_timestamp_below_ftl` and `is_above_mtp` co-located in the same
+  crate per `DAA_LWMA1.md` §2.5. Window-shape constants `N`,
+  `T_SECONDS`, `FTL_SECONDS`, `MTP_WINDOW`, `GENESIS_DIFFICULTY` flow
+  through the existing `config/consensus_constants.json` JSON
+  authority (extended with five `daa_*` keys); the bias factor
+  `99/200`, the solvetime clamp `6`, and the min-L floor divisor `20`
+  deliberately stay as bare integer literals inside `src/lwma1.rs`
+  per the Round 3 disposition (`DAA_LWMA1.md` §4) because changing
+  them is a deviation from canonical zawy12 LWMA-1, not a tunable
+  parameter.
+
+  **JSON-authority extension.** `config/consensus_constants.json`
+  adds `daa_window_n=90`, `daa_target_seconds=120`,
+  `daa_ftl_seconds=540`, `daa_mtp_window=11`,
+  `daa_genesis_difficulty=100`. `cmake/generate_consensus_constants.py`
+  extends `KEYS_INTEGER` and the emitted header with five
+  `SHEKYL_DAA_*` macros; until Phase 4 lands, these macros are
+  emitted but have no C++ consumer (the Phase 4 cutover replaces
+  inherited `DIFFICULTY_TARGET_V2`, `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT`,
+  and `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW`). `rust/shekyl-difficulty/build.rs`
+  reads the same JSON and emits the Rust mirrors to `OUT_DIR` (Round 3's
+  Option A; extending `shekyl-engine-core/build.rs` would have broken
+  the leaf-crate property). The build script also emits `usize` mirrors
+  of `N` and `MTP_WINDOW` as plain `usize` literals rather than via
+  `usize::try_from(u64)` in a const block, because `TryFrom::try_from`
+  is not yet const-trait-stable in rustc 1.95.0 (issue #143874); this
+  keeps the workspace's `cast_possible_truncation = "deny"` lint clean
+  without per-site `#[allow]` annotations.
+
+  **Test corpus.** 18 tests all pass with the workspace's full lint
+  suite under `-D warnings`. The 7 §8.1 spec vectors reproduce the
+  Phase 0 C++ harness outputs byte-for-byte: `990_000` (stable),
+  `1_980_000` (2× up), `495_000` (2× down), `892_000` (clamp
+  engagement), `10_000_000` (min-L floor), `1_040_000` (out-of-
+  sequence single back-step, Shekyl ≠ canonical's `1_010_000`),
+  `1_040_000` (selfish-mine attack regression, Shekyl ≠ canonical's
+  `911_000`). Edge cases: genesis short-circuit across `chain_height
+  ∈ 0..N` returns `GENESIS_DIFFICULTY`, the §5.3 step-1 boundary
+  surfaces `Error::InvalidCount` on length mismatch, a non-
+  monotonic cumulative-difficulty input surfaces `Error::Overflow`,
+  both branches of the §5.3 step-8 overflow guard execute cleanly,
+  the `solvetime[1] = -T` regression computes without overflow, and
+  the FTL/MTP predicates cover their respective boundaries.
+
+  **Gates.** Per `45-rust-lint-checks.mdc`, `cargo test --package
+  shekyl-difficulty`, `cargo clippy --package shekyl-difficulty
+  --all-targets -- -D warnings`, and `cargo fmt --package
+  shekyl-difficulty -- --check` all pass. `cargo check --workspace`
+  passes (the JSON authority extension does not affect existing
+  consumers; `shekyl-engine-core/build.rs` continues to read only
+  the FCMP/RCT keys it already consumed).
+
 ### Removed
 
 - **Vestigial CLSAG-era `ring_size` field (Phase 0 Mission Audit
