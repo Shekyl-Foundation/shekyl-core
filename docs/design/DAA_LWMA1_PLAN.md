@@ -3,13 +3,13 @@ name: LWMA-1 difficulty adjustment migration
 overview: "Replace Shekyl's inherited CryptoNote cut-windowed-average DAA (src/cryptonote_basic/difficulty.cpp, DIFFICULTY_WINDOW=720, DIFFICULTY_LAG=15-with-warning, DIFFICULTY_CUT=60) with LWMA-1 (zawy12 canonical, N=90 for T=120s) implemented as a Rust crate shekyl-difficulty per 20-rust-vs-cpp-policy.mdc rule 2. Genesis-time landing per 16-architectural-inheritance.mdc pre-genesis discount and 60-no-monero-legacy.mdc no-version-dispatch rule. Sibling track to RANDOMX_V2_PLAN.md but independent: LWMA-1 and RandomX v2 are math-orthogonal (DAA operates on (timestamps, cum_difficulties); PoW changes the hash function), no wallet V3.2 gate applies, no Monero release-time audit dependency. FTL (CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT, tightened from 7200s to N*T/20 = 540s) and MTP (BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW, tightened from 60 back to 11) are co-tuned per zawy12 canonical requirements. Phase 0 produces two design docs (DAA_LWMA1.md + this plan). Implementation cascades through Phase 1 (crate scaffold + spec-vector tests), Phase 2 (canonical-reference cross-check harness), Phase 3 (FFI wire-up in shekyl-ffi), Phase 4 (C++ cutover and inherited-DAA deletion). Each phase is a separate PR per 06-branching.mdc."
 todos:
   - id: phase0-design
-    content: "Phase 0: Write docs/design/DAA_LWMA1.md AND docs/design/DAA_LWMA1_PLAN.md. Cover: (a) inherited CryptoNote DAA disposition (delete-not-gate) per 60-no-monero-legacy.mdc and 16-architectural-inheritance.mdc; (b) Rust-implementation decision per 20-rust-vs-cpp-policy.mdc rule 2 (cryptographic contract); (c) Shekyl-specific parameter selection (N=90, T=120s, GENESIS_DIFFICULTY=100 proposed, FTL=N*T/20=540s, MTP=11); (d) canonical zawy12 LWMA-1 algorithm spec with overflow guards; (e) FFI surface (1 function, i32 error code, u128 out-param); (f) test-vector strategy (synthetic unit + canonical-reference cross-check + simulated-history corpus); (g) C++ deletion surface (difficulty.{h,cpp}, DIFFICULTY_* constants, tests/difficulty/, FTL/MTP migration); (h) sketch disposition (pre-design rust/shekyl-difficulty/src/lwma1.rs is NOT canonical and was deleted during Phase 0; divergence catalogue retained in DAA_LWMA1.md §2.4 as the design record of why each shape is rejected); (i) alternatives considered (LWMA-2/3/4, ASERT, retuned-cut-windowed, SMA) with reversion clauses per 21-reversion-clause-discipline.mdc; (j) reviewer-discipline framing (no external algorithm-review gate; zawy12 canonical is audit-of-record). Pass 4-6 review rounds before any code lands."
-    status: pending
+    content: "Phase 0: Write docs/design/DAA_LWMA1.md AND docs/design/DAA_LWMA1_PLAN.md. Cover: (a) inherited CryptoNote DAA disposition (delete-not-gate) per 60-no-monero-legacy.mdc and 16-architectural-inheritance.mdc; (b) Rust-implementation decision per 20-rust-vs-cpp-policy.mdc rule 2 (cryptographic contract); (c) Shekyl-specific parameter selection (N=90, T=120s, GENESIS_DIFFICULTY=100 proposed, FTL=N*T/20=540s, MTP=11); (d) canonical zawy12 LWMA-1 algorithm spec with overflow guards; (e) FFI surface (1 function, i32 error code, u128 out-param); (f) test-vector strategy (synthetic unit + canonical-reference cross-check + simulated-history corpus); (g) C++ deletion surface (difficulty.{h,cpp}, DIFFICULTY_* constants, tests/difficulty/, FTL/MTP migration); (h) sketch disposition (pre-design rust/shekyl-difficulty/src/lwma1.rs is NOT canonical and was deleted during Phase 0; divergence catalogue retained in DAA_LWMA1.md §2.4 as the design record of why each shape is rejected); (i) alternatives considered (LWMA-2/3/4, ASERT, retuned-cut-windowed, SMA) with reversion clauses per 21-reversion-clause-discipline.mdc; (j) reviewer-discipline framing (no external algorithm-review gate; zawy12 canonical is audit-of-record). Closed Phase 0 at 2026-05-18 UTC after 12 review rounds (round 12 was a §5.3 step 2 pseudocode-reorder + Phase 1 pre-flight execution + hybrid-reference rename). Three reference pins landed alongside: zawy12_issue_3_lwma1.md, zawy12_issue_24_history.md, shekyl_lwma1_running_max_symmetric_clamp.md. Pre-flight harness produced canonical 990_000 on the §8.1 stable vector and 990_000-vs-992_000 divergence on the out-of-sequence regression, empirically confirming §5.3 step 7 and §8.1."
+    status: completed
   - id: phase1-crate-scaffold
     content: "Phase 1: Add rust/shekyl-difficulty crate to rust/Cargo.toml workspace members as a leaf crate (zero internal workspace deps per DAA_LWMA1.md §2.1). Create rust/shekyl-difficulty/Cargo.toml (Shekyl Foundation copyright; BSD-3-Clause; no_std-compatible if practical, #![deny(unsafe_code)] crate-level). Extend config/consensus_constants.json with algorithm-version-free keys daa_{window_n=90, target_seconds=120, ftl_seconds=540, mtp_window=11, genesis_difficulty=100} per the JSON-authority pattern in DAA_LWMA1.md §4 (the algorithm-version flavor lives in src/lwma1.rs, not in symbol names). Extend cmake/generate_consensus_constants.py to emit SHEKYL_DAA_* constexpr symbols. Add rust/shekyl-difficulty/build.rs reading the JSON and emitting consensus_constants_generated.rs to OUT_DIR (Round 3 closed Option A; extending shekyl-engine-core/build.rs is rejected as it breaks the leaf-crate property). Create src/lib.rs re-exporting lwma1::lwma1_next, is_timestamp_below_ftl, is_above_mtp; src/consts.rs include!'ing the generated file and re-exporting N/T_SECONDS/FTL_SECONDS/MTP_WINDOW/GENESIS_DIFFICULTY (Round 3 disposition: bias factor 99/200, solvetime clamp 6, min-L floor 1/20 appear as bare integer literals inside src/lwma1.rs, NOT as named consts in src/consts.rs; matches canonical zawy12 verbatim per DAA_LWMA1.md §4); src/lwma1.rs (canonical implementation per DAA_LWMA1.md §5.3). Write unit tests against the §8.1 synthetic test corpus including the §5.3 step 8 overflow-boundary paired vectors AND the new §8.1 solvetime[1] -T-offset regression vector. PR cannot merge if cargo test, cargo clippy --all-targets -- -D warnings, or cargo fmt --check fails per 45-rust-lint-checks.mdc."
     status: pending
   - id: phase2-cross-check-harness
-    content: "Phase 2: Add tests/difficulty/lwma1_cross_check.cpp harness (C++ test target per Round 4 disposition; canonical reference is C++, consuming it directly is simpler than Rust-side vendoring) that builds the zawy12 LWMA1_() C++ reference (extracted to tests/difficulty/zawy12_lwma1_reference.h with explicit SPDX-License-Identifier: MIT header per Round 3 disposition; derived from the pinned-spec revision) and asserts byte-equality between Rust output and C++ reference output across the §8.1 input corpus. CI runs the harness; failure fails CI. Commit docs/design/refs/zawy12_issue_3_lwma1.md as the pinned spec revision (raw issue body via GitHub REST API, immune to rendering-side drift). Record three LWMA1_() disambiguation anchors in the same file or a sibling .lwma1-anchors.json: (a) byte-offset range [offset_start, offset_end) within the pinned .body containing the LWMA1_() function, (b) the literal first line of LWMA1_(), (c) the literal last line. The issue contains four LWMA reference functions; without these anchors, Phase 2 maintainers cannot disambiguate the LWMA1_() boundaries from LWMA2_/3_/4_ when the upstream author reorders content. Round 9 + Round 10 supplements: also commit docs/design/refs/zawy12_issue_3_lwma3.md (verbatim LWMA3_() extraction for reader convenience, per §5.3 step 2's partial LWMA-3 adoption), docs/design/refs/zawy12_issue_3_lwma1_with_lwma3_step2.md (Shekyl-composed hybrid reference used by the cross-check harness for out-of-sequence test vectors), and docs/design/refs/zawy12_issue_24_history.md (raw .body pin of zawy12 issue #24 supporting every 'item N' cross-reference downstream). Anchors file extends with lwma3_byte_offset_{start,end}/first_line/last_line per the same three-anchor discipline as LWMA1_."
+    content: "Phase 2: Add tests/difficulty/lwma1_cross_check.cpp harness (C++ test target per Round 4 disposition; canonical reference is C++, consuming it directly is simpler than Rust-side vendoring) that builds the zawy12 LWMA1_() C++ reference (extracted to tests/difficulty/zawy12_lwma1_reference.h with explicit SPDX-License-Identifier: MIT header per Round 3 disposition; derived from the pinned-spec revision) and asserts byte-equality between Rust output and C++ reference output across the §8.1 input corpus. CI runs the harness; failure fails CI. Phase 0 close landed three reference files: docs/design/refs/zawy12_issue_3_lwma1.md (canonical pin, SHA-256 14c68aee…), docs/design/refs/zawy12_issue_24_history.md (zawy12 issue #24 pin, SHA-256 94a6fc8f…), docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md (Shekyl hybrid reference, renamed per Round 12 from zawy12_issue_3_lwma1_with_lwma3_step2.md, SHA-256 f16f6269…). Phase 2 work item retained: record three LWMA1_() disambiguation anchors in a sibling docs/design/refs/zawy12_issue_3_lwma1.anchors.json: (a) byte-offset range [offset_start, offset_end) within the pinned .body containing the LWMA1_() function, (b) the literal first line of LWMA1_(), (c) the literal last line. The issue contains four LWMA reference functions; without these anchors, Phase 2 maintainers cannot disambiguate the LWMA1_() boundaries from LWMA2_/3_/4_ when the upstream author reorders content. Anchors file extends with lwma3_byte_offset_{start,end}/first_line/last_line per the same three-anchor discipline as LWMA1_. Phase 2 also commits docs/design/refs/zawy12_issue_3_lwma3.md (verbatim LWMA3_() extraction for reader convenience, per §5.3 step 2's partial LWMA-3 adoption; not load-bearing for Phase 1)."
     status: pending
   - id: phase3-ffi-wire-up
     content: "Phase 3: Export shekyl_difficulty_lwma1_next from rust/shekyl-ffi/src/lib.rs per DAA_LWMA1.md §6.1 (i32 return; cum_difficulties: *const ShekylU128; out_next_difficulty: *mut ShekylU128 where #[repr(C)] struct ShekylU128 { lo: u64, hi: u64 } — Round 5 pivoted from [u8; 16] to a field-named two-u64 struct per the FCMP++/KEM-derivation precedent; rationale: Rust u128 C ABI was target-dependent until rustc 1.77 and remains a footgun on uncommon targets; u64 has universally stable ABI on every Shekyl-supported target, debugger-friendly lo/hi field semantics carry the meaning, no improper_ctypes exposure; ERR_NULL_PTR / ERR_INVALID_COUNT / ERR_OVERFLOW / ERR_INTERNAL taxonomy). Add struct shekyl_u128 { uint64_t lo; uint64_t hi; } and the function declaration to src/shekyl/shekyl_ffi.h. Hand-maintain the bindings per 25-rust-architecture.mdc. PR delivers the FFI surface; the daemon does NOT yet consume it (still on inherited next_difficulty)."
@@ -189,37 +189,69 @@ Six work items: workspace registration, crate manifest, crate
 library, typed-constants module, algorithm module, synthetic unit
 tests.
 
-**Phase 1 pre-flight — bias-factor empirical verification.** Per
-[`DAA_LWMA1.md`](./DAA_LWMA1.md) §5.3 step 7's
+**Phase 1 pre-flight — bias-factor empirical verification
+(EXECUTED at Phase 0 close, 2026-05-18 UTC; result recorded
+below).** Per [`DAA_LWMA1.md`](./DAA_LWMA1.md) §5.3 step 7's
 stochastic-vs-deterministic clarification, the canonical zawy12
-`LWMA1_()` C++ reference is run once before Phase 1
-implementation begins, against the §8.1 "perfectly stable
-hashrate" input vector with `avg_D = 1_000_000`, `N = 90`,
-`T = 120`, and `solvetime[i] = T` for all `i ∈ 1..=N`. The
-expected output is exactly `990_000` per the derivation in §5.3
-step 7 and the §8.1 vector. The result is recorded in the Phase
-1 PR description.
+`LWMA1_()` C++ reference was compiled and run against the §8.1
+"perfectly stable hashrate" input vector with `avg_D = 1_000_000`,
+`N = 90`, `T = 120`, and `timestamps[i] = 1_700_000_000 + i*T`
+for `i ∈ 0..=N`. The canonical `LWMA1_()` was transcribed verbatim
+from the Phase 0 pin at
+`docs/design/refs/zawy12_issue_3_lwma1.md` (lines 77–119 of the
+pinned `.body`).
 
-- If the canonical reference produces `990_000`: the design
-  doc's §5.3 step 7 clarification and §8.1 expectation are both
-  empirically confirmed; Phase 1 implementation proceeds against
-  the unmodified spec.
-- If the canonical reference produces `1_000_000`: the §8.1
-  test vector's expected value is wrong (or the canonical
-  reference has changed between the §3 pinned-revision and
-  observation, which itself is a Phase 0 reversion-clause
+**Result: canonical output `990_000`** — matches the §8.1
+expected value exactly. The §5.3 step 7 clarification and §8.1
+expectation are both empirically confirmed; Phase 1 implementation
+proceeds against the unmodified spec.
+
+**Additional verification (Round 12 supplement):** the
+Shekyl-corrected algorithm (running-max + signed-solvetime +
+symmetric `±6*T` clamp, transcribed from
+`docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md`)
+was also compiled and run against the same stable input. It
+produced byte-identical `990_000`, confirming §8.2's cross-check
+assertion that monotonic inputs match canonical byte-for-byte.
+
+**Out-of-sequence attack regression (Round 12 addition):**
+the same vector with `timestamps[2] = timestamps[1] - 5*T`
+produced canonical output `990_000` (the attacker's
+negative-solvetime injection is neutralized to `+1` via
+canonical's `previous_timestamp+1` floor; no penalty applied)
+versus Shekyl-corrected output `992_000` (the attacker's
+negative-solvetime contribution to `L` produces a higher
+`next_D`, denying the attack). This empirically confirms the
+load-bearing security property §5.3 step 2 claims.
+
+**Reversion-clause triggers (preserved from the original
+Phase 1 pre-flight specification, in case Phase 1 implementation
+re-runs the harness and gets a different number):**
+
+- If the canonical reference produces `1_000_000` on the stable
+  vector: the §8.1 test vector's expected value is wrong (or the
+  canonical reference has changed between the §3 pinned-revision
+  and observation, which itself is a Phase 0 reversion-clause
   trigger per `DAA_LWMA1.md` §10). Phase 1 stops; the Phase 0
   doc is amended; Phase 0 re-reviews.
-- Any other output: the canonical reference's behavior contradicts
-  both the §5.3 derivation and the §8.1 expectation; treat as a
-  reversion-clause trigger per §10 and surface the discrepancy
-  on `dev` before further work.
+- Any other output: the canonical reference's behavior
+  contradicts both the §5.3 derivation and the §8.1 expectation;
+  treat as a reversion-clause trigger per §10 and surface the
+  discrepancy on `dev` before further work.
 
-This verification step is mechanical (one C++ run against the
-canonical reference, one numeric comparison). It removes the
-remaining ambiguity in §5.3 step 7's stochastic-vs-deterministic
-framing as a function of empirical evidence rather than as a
-function of derivation prose.
+**Harness reproducibility.** The Phase 0 pre-flight harness
+source is available at the Phase 0 close commit; rebuild via:
+
+```text
+g++ -std=c++17 -O2 preflight.cpp -o preflight && ./preflight
+```
+
+with the canonical `LWMA1_()` transcribed verbatim from
+`docs/design/refs/zawy12_issue_3_lwma1.md` lines 77–119 and
+inputs as above. Phase 1's implementer should re-run this
+harness as part of Phase 1 PR preparation; if the result
+diverges from `990_000`, treat as a reversion-clause trigger
+per the criteria above.
 
 **Workspace registration.** Add `shekyl-difficulty` to
 `rust/Cargo.toml`'s `[workspace.members]`.
@@ -480,11 +512,12 @@ first line of the function (verbatim, for grep-anchor recovery),
 `DAA_LWMA1.md` §5.3's "lines N–M" citations resolve against the
 LWMA1_() byte-offset range, not against the full `.body`.
 
-**Round 9 supplementary reference files (committed alongside the
-pin in the same Phase 2 PR).** Per
-[`DAA_LWMA1.md`](./DAA_LWMA1.md) §3's Round-9 disposition, the
-partial LWMA-3 adoption in §5.3 step 2/3 requires two additional
-files under `docs/design/refs/`:
+**Round 9 supplementary reference files (Round 12 update —
+Shekyl hybrid landed at Phase 0 close; LWMA-3 convenience
+extraction remains Phase 2 work).** Per
+[`DAA_LWMA1.md`](./DAA_LWMA1.md) §3's Round-9 disposition (as
+amended by Round 12), the partial LWMA-3 adoption in §5.3 step
+2/3 requires two additional files under `docs/design/refs/`:
 
 1. `zawy12_issue_3_lwma3.md` — convenience extraction of the
    `LWMA3_()` function from the pinned issue body. The extraction
@@ -494,14 +527,22 @@ files under `docs/design/refs/`:
    copy so audit-reviewers reading the cross-check derivation
    can see just the LWMA-3 source. If the two diverge, the
    canonical pin wins and this file is regenerated from it.
-2. `zawy12_issue_3_lwma1_with_lwma3_step2.md` — the Shekyl-
-   composed hybrid reference: LWMA-1's canonical body with step 2
-   and step 3 substituted by LWMA-3's running-max + symmetric-
-   clamp mechanism. This is a *derived* file (not a pin); it is
-   the executable form of `DAA_LWMA1.md` §5.3's textual
-   deviation. Phase 2's cross-check harness uses this file's
+   **Remains Phase 2 work** — not load-bearing for Phase 1
+   (Phase 1 implements §5.3's textual spec directly).
+2. `shekyl_lwma1_running_max_symmetric_clamp.md` (renamed from
+   the Round 9 working name
+   `zawy12_issue_3_lwma1_with_lwma3_step2.md` per Round 12's
+   attribution-precision disposition) — the Shekyl-composed
+   hybrid reference: LWMA-1's canonical body with step 2 and
+   step 3 substituted by Shekyl's running-max, signed-solvetime,
+   and symmetric `±6*T`-clamp mechanism. This is a *derived* file
+   (not a pin); it is the executable form of `DAA_LWMA1.md` §5.3's
+   textual design. Phase 2's cross-check harness uses this file's
    body when computing expected outputs against out-of-sequence
    timestamp inputs (monotonic inputs use canonical `LWMA1_()`).
+   **Landed at Phase 0 close (2026-05-18 UTC, SHA-256
+   `f16f6269…`)** as a Phase 1 precondition so the cross-check
+   derivation is unambiguous to the Phase 1 implementer.
 
 The same Phase 2 anchors file gains LWMA-3 byte-offset anchors
 alongside the existing LWMA-1 anchors so that the LWMA3_()

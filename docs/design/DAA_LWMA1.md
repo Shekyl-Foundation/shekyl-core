@@ -1,28 +1,59 @@
 # LWMA-1 — Difficulty adjustment, Rust, from genesis
 
-**Status.** **DRAFT — Round 11 (2026-05-17 initial draft; review
-passes 1–11 have all landed against PR #49; this doc carries
-the Round 4 test-vector concrete-tuple correction, the Round 5
-`ShekylU128` FFI pivot, the Round 7 cleanup of the
-consensus-atomic-cutover invocation against the now-ratified
-`07-consensus-atomic-cutovers.mdc`, the Round 8 bias-factor
-stochastic-vs-deterministic clarification and §11 wallet-T
-touchpoint correction, the Round 9 partial-LWMA-3 adoption
-in §5.3 step 2/3 plus the zawy12 issue #24 dispositions on items
-3, 7, 9, 14, and 17, the Round 10 item-number sweep
-reconciling 14 body sites against the live zawy12 issue #24
-numbering plus the issue-#24 pin under §3, the explicit Phase-2
-enumeration of the LWMA-3 reference files, and the commit-hash
-cite for the 32-bit-retirement chore replacing the deleted
-`chore/retire-32bit-targets` branch name, and the Round 11
-consumer-count drift reconciliation in §9.2 and §9.6 surfaced
-by the Copilot review of PR #49 — the §9.2 prose now matches
-its seven-DIFFICULTY-defines enumeration, and the §9.6 prose
-now matches its 8-daemon + 5-test = 13-site enumeration across
-three files).** Phase 0 deliverable for the Shekyl
-difficulty-adjustment algorithm (DAA) migration. Companion:
-[`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md). Both documents must
-pass the Phase 0 review cycle before any code lands.
+**Status.** **RATIFIED — Phase 0 close (2026-05-18 UTC).** Review
+passes 1–12 have all landed against PR #49. Phase 0 deliverable for
+the Shekyl difficulty-adjustment algorithm (DAA) migration. Companion:
+[`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md). Phase 1 implementation is
+unblocked.
+
+The final round (Round 12) applied:
+
+- A one-step reorder of the §5.3 step 2 pseudocode (`solvetime[i]`
+  is now computed BEFORE `prev_max` is updated, so the `-T`
+  synthetic anchor contributes to iter 1's solvetime exactly as in
+  canonical LWMA-1).
+- The companion prose at §5.3 step 2's per-iteration equivalence
+  paragraph (now correctly states `solvetime[1] = timestamps[1] -
+  (timestamps[0] - T)` for monotonic inputs) and at the
+  indexing-convention paragraph (now correctly states `solvetime[N]
+  uses prev_max after iteration N-1's update`).
+- The Phase 0 pre-flight empirical verification: canonical
+  `LWMA1_()` from the pinned issue body produces exactly `990_000`
+  on the §8.1 stable hashrate vector with `avg_D = 1_000_000`
+  (recorded in §5.3 step 7 and §8.1). The Shekyl-corrected
+  algorithm produces byte-identical `990_000` on monotonic inputs
+  and diverges (higher difficulty, denying the attack) on
+  out-of-sequence inputs.
+- The renamed Shekyl hybrid file:
+  `shekyl_lwma1_running_max_symmetric_clamp.md` replaces the
+  Round 9 working name `zawy12_issue_3_lwma1_with_lwma3_step2.md`
+  to reflect that the running-max + signed-solvetime + symmetric
+  clamp shape is Shekyl-specific (canonical LWMA-3 in issue #3
+  lines 360–370 does not literally implement these refinements;
+  zawy12 attributes the algorithm-internal fix to LWMA-3 in
+  issue #24 item 14 prose-only).
+
+Prior rounds (carried forward into the ratified design):
+
+- Round 4 test-vector concrete-tuple correction.
+- Round 5 `ShekylU128` FFI pivot.
+- Round 7 cleanup of the consensus-atomic-cutover invocation
+  against the now-ratified `07-consensus-atomic-cutovers.mdc`.
+- Round 8 bias-factor stochastic-vs-deterministic clarification
+  and §11 wallet-T touchpoint correction.
+- Round 9 partial-LWMA-3 adoption in §5.3 step 2/3 plus the
+  zawy12 issue #24 dispositions on items 3, 7, 9, 14, and 17.
+- Round 10 item-number sweep reconciling 14 body sites against
+  the live zawy12 issue #24 numbering, the issue-#24 pin under
+  §3, the explicit Phase-2 enumeration of the LWMA-3 reference
+  files, and the commit-hash cite for the 32-bit-retirement
+  chore replacing the deleted `chore/retire-32bit-targets`
+  branch name.
+- Round 11 consumer-count drift reconciliation in §9.2 and §9.6
+  surfaced by the Copilot review of PR #49 — the §9.2 prose now
+  matches its seven-`DIFFICULTY_*`-defines enumeration, and the
+  §9.6 prose now matches its 8-daemon + 5-test = 13-site
+  enumeration across three files.
 
 **Scope.** Shekyl's target difficulty adjustment is **LWMA-1** (Linear
 Weighted Moving Average, variant 1) from zawy12's canonical reference
@@ -592,8 +623,28 @@ wrapper inside the verifier crate.
   the pin is then re-ratified or the design doc updates explicitly
   per `21-reversion-clause-discipline.mdc`.
 
-  Phase 2 of [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) lands the
-  pin file.
+  **Pin record (landed at Phase 0 close, 2026-05-18).** The
+  pinned `.body` is committed at
+  `docs/design/refs/zawy12_issue_3_lwma1.md` with the following
+  audit-trail anchors:
+
+  ```text
+  SHA-256:        14c68aee9780ca1b1fb8ca28ac43f7956996859f5281ef166cc0634b2cc50df9
+  Captured-at:    2026-05-18T05:25:21Z
+  Source:         gh api repos/zawy12/difficulty-algorithms/issues/3 --jq .body
+  ```
+
+  Per the Phase 0 close discipline (see
+  [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) Phase 2 task list), the
+  pin file was originally specified to land at Phase 2 PR time;
+  Round 12's Phase 0 close decision brought the pin forward as a
+  Phase 1 precondition so that the canonical reference is
+  immediately available to the Phase 1 implementer for cross-check
+  derivation. The byte-offset disambiguation anchors (LWMA1_()
+  function range within the pinned `.body`) remain a Phase 2 task;
+  they are not load-bearing for Phase 1 (the Phase 1 implementer
+  works against §5.3's textual spec, not against byte-offset
+  citations).
 - **Reference implementation:** the `LWMA1_()` C++ function defined
   inside zawy12 Issue #3. The issue contains **four** reference
   functions (`LWMA1_()`, `LWMA2_()`, `LWMA3_()`, `LWMA4_()`);
@@ -653,40 +704,71 @@ wrapper inside the verifier crate.
   test-vector expectations from the appropriate one per the input
   shape.
 
-  Phase 2 commits three reference files under `docs/design/refs/`
-  for unambiguous downstream audit:
+  Three reference files land under `docs/design/refs/` for
+  unambiguous downstream audit (the first two landed at Phase 0
+  close per Round 12; the third remains a Phase 2 task):
 
   1. `zawy12_issue_3_lwma1.md` — raw `.body` of zawy12 issue #3,
-     the canonical audit-trail pin. Contains all four reference
-     functions (`LWMA1_()`, `LWMA2_()`, `LWMA3_()`, `LWMA4_()`).
-     Disambiguation between them is by byte-offset anchor (the
-     three-anchor discipline above). The LWMA-1 byte-offset
-     anchor lands at this pin's commit time per the existing
-     Phase 2 plan; the LWMA-3 byte-offset anchor is added in the
-     same Phase 2 commit per the round-9 disposition.
-  2. `zawy12_issue_3_lwma3.md` — *convenience extraction* of the
+     the canonical audit-trail pin (landed at Phase 0 close).
+     Contains all four reference functions (`LWMA1_()`,
+     `LWMA2_()`, `LWMA3_()`, `LWMA4_()`). Disambiguation between
+     them is by byte-offset anchor (the three-anchor discipline
+     above). The byte-offset anchors land at Phase 2 PR time per
+     the existing Phase 2 plan.
+  2. `shekyl_lwma1_running_max_symmetric_clamp.md` — the
+     Shekyl-composed hybrid (landed at Phase 0 close per Round
+     12; renamed from the working name
+     `zawy12_issue_3_lwma1_with_lwma3_step2.md` per Round 12's
+     attribution-precision disposition). This file is the
+     executable C++ form of §5.3 step 2/3's running-max +
+     signed-solvetime + symmetric-`±6*T`-clamp design.
+
+     ```text
+     SHA-256:        f16f62695ae74b2ca47d15227b79035cdc349609d9fc73db2b7a3c57c0dfcc4a
+     Captured-at:    2026-05-18T05:25:21Z
+     ```
+
+     This file is a *derived* artifact, not a pin; it is the
+     executable form of the §5.3 step 2/3 design specified
+     textually above. Phase 2's cross-check harness compares its
+     output against this file's body. The Phase 0 pre-flight
+     empirical verification (see §5.3 step 7) compiled and ran
+     this file alongside canonical `LWMA1_()` to confirm
+     byte-equivalence on monotonic inputs and demonstrate
+     divergence (with higher difficulty) on out-of-sequence
+     inputs.
+
+     Naming rationale (Round 12): canonical zawy12 LWMA-3 in
+     `zawy12_issue_3_lwma1.md` (the issue body) lines 360–370
+     does *not* literally implement running-max with signed
+     solvetimes or symmetric clamping — its step 2 is the same
+     `previous_timestamp+1` floor as canonical LWMA-1. The
+     running-max + signed-solvetime + symmetric-clamp shape is a
+     Shekyl-specific refinement of the principle zawy12 attributes
+     to LWMA-3 prose-only in
+     [issue #24 item 14](https://github.com/zawy12/difficulty-algorithms/issues/24)
+     ("a different method is used in LWMA-3 and LWMA-4 so
+     developers do not need to do work outside the algorithm").
+     The Round 9 working name embedded "lwma3_step2" as a handle;
+     Round 12 renames to `shekyl_lwma1_running_max_symmetric_clamp.md`
+     so the audit story matches the upstream-attribution facts.
+  3. `zawy12_issue_3_lwma3.md` — *convenience extraction* of the
      `LWMA3_()` function only, copied verbatim from the raw
      `.body` (per the LWMA-3 byte-offset anchor in file 1) so
      that audit-reviewers reading the §5.3 step 2 / §8.2
      cross-check derivation can see just the LWMA-3 source
-     without scrolling past the other three reference
-     functions. This file is *not* the canonical pin — file 1
-     is. If the two ever diverge, file 1 wins and file 2 must
-     be regenerated. The file is a strict subset of file 1's
-     content; no Shekyl-authored prose appears in it.
-  3. `zawy12_issue_3_lwma1_with_lwma3_step2.md` — the Shekyl-
-     composed hybrid showing LWMA-1's reference with step 2 and
-     step 3 substituted by the LWMA-3 mechanism. This file is
-     a *derived* artifact, not a pin; it is the executable form
-     of the §5.3 step 2/3 deviation specified textually above.
-     Phase 2's cross-check harness compares its output against
-     this file's body.
+     without scrolling past the other three reference functions.
+     This file is *not* the canonical pin — file 1 is. If the two
+     ever diverge, file 1 wins and file 2 must be regenerated.
+     The file is a strict subset of file 1's content; no
+     Shekyl-authored prose appears in it. **Remains a Phase 2
+     task** — not landed at Phase 0 close because it is
+     reader-convenience only, not load-bearing for Phase 1's
+     implementer (who works against §5.3's textual spec).
 
-  All three are committed in the same Phase 2 PR per
-  [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) Phase 2 task list.
-
-- **zawy12 issue #24 pin (Round 10 addition).** Phase 2 also
-  commits `docs/design/refs/zawy12_issue_24_history.md` —
+- **zawy12 issue #24 pin (Round 10 addition; landed at Phase 0
+  close per Round 12).**
+  `docs/design/refs/zawy12_issue_24_history.md` —
   the raw `.body` of
   [`zawy12/difficulty-algorithms#24`](https://github.com/zawy12/difficulty-algorithms/issues/24)
   ("LWMA's history"), captured via the same `gh api`/`curl` +
@@ -713,6 +795,19 @@ wrapper inside the verifier crate.
   resolving against this pin; the date-and-description framing
   is stable across renumbering, the item number is stable
   against the pin. Belt and suspenders.
+
+  **Pin record (landed at Phase 0 close, 2026-05-18).**
+
+  ```text
+  SHA-256:        94a6fc8f10b57cf7d0731f62d07c0b4bbdf65d969d7c8679755b22eace76891d
+  Captured-at:    2026-05-18T05:25:21Z
+  Source:         gh api repos/zawy12/difficulty-algorithms/issues/24 --jq .body
+  ```
+
+  No byte-offset anchors are needed for the issue-#24 pin: the
+  design doc cites it by date + description, not by line range,
+  so the audit-trail anchor is the SHA-256 of the full `.body`
+  rather than per-section byte ranges.
 
 - **Simulation tooling:** zawy12's `difficulty-algorithms` repository
   contains historical-data simulators used to derive test-vector
@@ -898,17 +993,29 @@ protection trick).** Compute solvetimes via a forward pass that
 tracks a *non-decreasing* running maximum of all previously-seen
 timestamps and computes each new solvetime as the difference
 between the current timestamp and this running max. The mechanism
-is borrowed from canonical zawy12 LWMA-3's published reference
-(see `docs/design/refs/zawy12_issue_3_lwma3.md` snapshot pinned
-per §3) and is the documented disposition against the
-September 2018 selfish-mine attack class from zawy12 issue #24
-(see §1.3 and §5.5):
+is the Shekyl-specific refinement of the algorithm-internal fix
+zawy12 attributes to LWMA-3 in
+[issue #24 item 14](https://github.com/zawy12/difficulty-algorithms/issues/24)
+prose ("a different method is used in LWMA-3 and LWMA-4 so
+developers do not need to do work outside the algorithm"); the
+literal canonical LWMA-3 code in
+[`docs/design/refs/zawy12_issue_3_lwma1.md`](./refs/zawy12_issue_3_lwma1.md)
+lines 360–370 of the pinned `.body` implements running-max
+equivalence via `previous_timestamp = this_timestamp` after a
+`previous_timestamp+1` floor, but does **not** allow signed
+solvetimes or symmetric clamping (those are the Shekyl
+refinements). The executable form of the Shekyl design is
+documented in
+[`docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md`](./refs/shekyl_lwma1_running_max_symmetric_clamp.md)
+and is the documented disposition against the September 2018
+selfish-mine attack class from zawy12 issue #24 (see §1.3 and
+§5.5):
 
 ```text
 prev_max = timestamps[0] - T         // synthetic anchor, matches canonical line 112
 for i in 1..=N:
-    prev_max = max(prev_max, timestamps[i-1])   // running max, never decreases
-    solvetime[i] = timestamps[i] - prev_max     // signed; can be negative
+    solvetime[i] = timestamps[i] - prev_max     // signed; uses anchor on iter 1, running max thereafter
+    prev_max = max(prev_max, timestamps[i])     // update running max AFTER computing solvetime
     // (clamp applied in step 3)
 ```
 
@@ -927,21 +1034,45 @@ timestamps; they diverge on out-of-sequence inputs, and the
 divergence is the load-bearing security property against the
 September 2018 attack class.
 
+**Ordering of solvetime computation and running-max update
+(Round 12 correction).** The pseudocode above computes
+`solvetime[i] = timestamps[i] - prev_max` BEFORE updating
+`prev_max = max(prev_max, timestamps[i])`. This ordering is
+load-bearing: it preserves the `-T` synthetic anchor's contribution
+to iter 1's solvetime exactly as in canonical zawy12 LWMA-1. Round
+9's initial pseudocode reordered the operations (running-max first,
+then solvetime), which inadvertently overwrote the `-T` anchor on
+iter 1 and shifted `solvetime[1]` by `+T`. Round 12 surfaced this
+via empirical verification: under the corrected ordering, the
+algorithm produces byte-identical output to canonical LWMA-1 on
+monotonic inputs (`990_000` for the §8.1 stable vector with
+`avg_D = 1_000_000`), as required by §8.2's cross-check assertion.
+
 Per-iteration equivalence on monotonic inputs (`timestamps[i] >=
 timestamps[i-1]` for all `i`):
 
-- `prev_max == timestamps[i-1]` after step 2's `max(...)` line.
-- `solvetime[i] == timestamps[i] - timestamps[i-1] >= 0`.
+- Before iter `i`: `prev_max` equals the running max over
+  `{timestamps[0] - T, timestamps[1], ..., timestamps[i-1]}`. For
+  monotonic input with `timestamps[i-1] > timestamps[0] - T` (the
+  normal case for `i >= 2`), this simplifies to `prev_max ==
+  timestamps[i-1]`. For iter 1 specifically, `prev_max ==
+  timestamps[0] - T` (the initial synthetic anchor).
+- `solvetime[1] == timestamps[1] - (timestamps[0] - T) ==
+  (timestamps[1] - timestamps[0]) + T`. For a steady-state input
+  with `timestamps[1] - timestamps[0] == T`, `solvetime[1] == 2*T`,
+  matching canonical LWMA-1's iter-1 behavior exactly.
+- `solvetime[i] == timestamps[i] - timestamps[i-1] >= 0` for
+  `i >= 2`.
 - Identical numerical output to canonical zawy12 Issue #3, LWMA-1
-  reference, line 117's `this_timestamp - previous_timestamp` for
-  any input that satisfies the chain's existing MTP/FTL discipline
-  with strict timestamp monotonicity.
+  reference for any monotonic input that satisfies the chain's
+  existing MTP/FTL discipline. Empirically verified at Phase 0
+  pre-flight (see §8.1).
 
 Divergence on out-of-sequence inputs (`timestamps[i] <
 timestamps[i-1]` for some `i`):
 
 - `prev_max` retains the larger predecessor's value: `prev_max ==
-  timestamps[i-1]` (the higher of the two).
+  max over previous timestamps` (the higher value).
 - `solvetime[i] == timestamps[i] - prev_max < 0`.
 - Step 3 clamps to `-6*T`, so the most negative contribution is
   bounded.
@@ -952,13 +1083,19 @@ timestamps[i-1]` for some `i`):
   `timestamps[i]`. **This is the attack-class defense:** the
   attacker cannot sandwich a low timestamp between higher ones to
   produce an artificially high `solvetime[i+1]` on the recovery
-  iteration.
+  iteration. Empirically verified at Phase 0 pre-flight: a
+  `timestamps[2] = timestamps[1] - 5*T` attack against the
+  otherwise-stable §8.1 vector produces `990_000` under canonical
+  (no penalty applied) versus `992_000` under the Shekyl algorithm
+  (higher difficulty, denying the attack).
 
-The `-T` offset on the initial `prev_max` is preserved exactly
-from canonical line 112: `previous_timestamp = timestamps[0] - T`.
+The `-T` offset on the initial `prev_max` is preserved exactly from
+canonical line 112: `previous_timestamp = timestamps[0] - T`.
 Load-bearing per the existing analysis: removing it would shift
-solvetime[1] by +T, shifting `L`'s expected stable-state value
-and biasing `next_D` by a constant factor.
+`solvetime[1]` by `+T`, shifting `L`'s expected stable-state value
+and biasing `next_D` by a constant factor. The corrected
+pseudocode's ordering (solvetime-first, max-second) is what
+delivers this preservation.
 
 The Rust implementation takes `timestamps: &[u64]` and never
 writes into the caller's storage; `solvetime[i]` is local to the
@@ -1100,18 +1237,35 @@ the §8.1 stable input produces `990_000` for `avg_D = 1_000_000`,
 not `1_000_000`. The Phase 1 implementer transcribes the formula
 verbatim and reaches the same number by construction.
 
-**Phase 1 pre-flight verification.** Before Phase 1 implementation
-begins, the canonical reference C++ implementation (extracted in
-Phase 2 to `tests/difficulty/zawy12_lwma1_reference.h`) is run
-once against the §8.1 stable-hashrate vector with
-`avg_D = 1_000_000` and the result recorded. If the result is
-`990_000`, the §8.1 expectation and this section's stochastic-vs-
-deterministic framing are both correct. If the result is
-`1_000_000`, the §8.1 vector is wrong (and this clarification
-section needs revision in the opposite direction). The Phase 1
-pre-flight task in
+**Phase 1 pre-flight verification (executed at Phase 0 close,
+2026-05-18).** The canonical reference C++ implementation
+(transcribed verbatim from
+[`docs/design/refs/zawy12_issue_3_lwma1.md`](./refs/zawy12_issue_3_lwma1.md)
+LWMA1_() lines 77–119 of the pinned `.body`) was compiled and
+run against the §8.1 stable-hashrate vector with `N = 90`,
+`T = 120`, `avg_D = 1_000_000`, `timestamps[i] = 1_700_000_000 +
+i*T`, and `cumulative_difficulties[i] = i * 1_000_000`. The
+result was exactly **`990_000`**, confirming the §8.1 expectation
+and this section's stochastic-vs-deterministic framing. The
+Shekyl-corrected algorithm (running-max + signed-solvetime +
+symmetric `±6*T` clamp per §5.3 step 2/3) produced byte-identical
+`990_000` on the same monotonic input. Both confirm the §8.2
+cross-check assertion that monotonic inputs match canonical
+byte-for-byte.
+
+A more aggressive out-of-sequence vector
+(`timestamps[2] = timestamps[1] - 5*T`) produced `990_000` under
+canonical (the attacker's negative-solvetime injection is
+neutralized to `+1` via canonical's `previous_timestamp+1` floor)
+and `992_000` under Shekyl (the attacker's negative-solvetime
+contribution to `L` produces a higher `next_D` — denying the
+attack). This is the load-bearing security property §5.3 step 2
+claims; the Phase 0 pre-flight empirically verified it.
+
+The Phase 1 pre-flight task in
 [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) Phase 1 records this
-verification step explicitly so it cannot be skipped.
+verification step's commit hash and re-run procedure so a
+future Phase 1 implementer can reproduce the result.
 
 The direction matters: a `200/99` formula (denominator and
 numerator swapped) would invert the bias correction and produce
@@ -1739,17 +1893,24 @@ The vectors below use Shekyl V3.0 parameters (`N = 90`, `T = 120`,
   (the deterministic-input residual of the `99/100` factor per
   §5.3 step 7's stochastic-vs-deterministic clarification, **not**
   `next_D == avg_D`). For `avg_D == 1_000_000` this is exactly
-  `990_000`. The 1 % residual is the design intent of the `99/200`
-  factor surfacing on deterministic input — under realistic
-  stochastic operation, the same factor cancels the ~1 % upward
-  Poisson/clamp drift and leaves long-run average difficulty
-  centered on `avg_D`; on this deterministic test vector, the
-  drift isn't there, so the correction surfaces as a visible
-  residual. A test asserting `next_D == avg_D` on this
-  deterministic vector would falsely fail on a correct
-  implementation and falsely pass on an implementation that
-  silently removed the bias factor — destroying its stochastic
-  centering property in the process.
+  `990_000` — empirically confirmed at Phase 0 close
+  (2026-05-18) by running canonical `LWMA1_()` from the pinned
+  issue body against this vector; both canonical and the
+  Shekyl-corrected algorithm produced `990_000` byte-identically.
+  See §5.3 step 7's "Phase 1 pre-flight verification" paragraph
+  for the harness inputs and the cross-check against an
+  out-of-sequence attack vector (canonical `990_000` vs Shekyl
+  `992_000`, demonstrating the security divergence). The 1 %
+  residual is the design intent of the `99/200` factor surfacing
+  on deterministic input — under realistic stochastic operation,
+  the same factor cancels the ~1 % upward Poisson/clamp drift
+  and leaves long-run average difficulty centered on `avg_D`; on
+  this deterministic test vector, the drift isn't there, so the
+  correction surfaces as a visible residual. A test asserting
+  `next_D == avg_D` on this deterministic vector would falsely
+  fail on a correct implementation and falsely pass on an
+  implementation that silently removed the bias factor —
+  destroying its stochastic centering property in the process.
 - **Sudden 2× hashrate increase.** `solvetime[i] == T/2 == 60`
   for all `i`. With `L = 60 * N * (N+1) / 2`, the formula yields
   **`next_D == avg_D * 99 / 50 == avg_D * 198 / 100`** (a `1.98×`
@@ -1915,8 +2076,8 @@ per the input shape:
   accumulation, minimum-L floor, bias factor 99/200, overflow
   guard) computed per canonical `LWMA1_()`. The composite
   reference is documented in
-  `docs/design/refs/zawy12_issue_3_lwma1_with_lwma3_step2.md`
-  (Phase 2 closure file).
+  `docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md`
+  (landed at Phase 0 close per Round 12).
 
 The Phase 2 harness implements both extracted references and
 exposes a `compose_expected(input)` helper that selects the

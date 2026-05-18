@@ -596,6 +596,132 @@
   consensus-rule changes in Round 11; the round is documentation
   drift remediation surfaced by the first AI-reviewer pass on the
   ready-for-review PR.
+  (l) **Phase 0 closeout (Round 12): §5.3 step 2 pseudocode
+  reorder, Phase 1 pre-flight execution, hybrid-reference
+  rename.** (2026-05-18 UTC). Phase 0 ratified after 12 review
+  rounds. Three load-bearing closeout actions in a single
+  commit:
+  - **Status block transition.** `DAA_LWMA1.md` line 3 transitions
+    from "Status: DRAFT — Round 11 …" to "Status: RATIFIED —
+    Phase 0 close (2026-05-18 UTC) — 12 review rounds. Round 12
+    was the final round; the status reflects ratification, not
+    'round 12 of N.'" The status block now records the Round 12
+    findings inline (pseudocode reorder, pre-flight execution,
+    hybrid-reference rename, three reference pins landed) so that
+    a future reader of the design doc sees the closeout summary
+    without needing to read the CHANGELOG.
+  - **§5.3 step 2 pseudocode reorder (load-bearing correctness
+    fix).** Round 12 review identified an order-of-operations bug
+    in the §5.3 step 2 pseudocode that contradicted the
+    surrounding prose at lines 957–960 and 994–996. The
+    pre-Round-12 pseudocode read `prev_max = max(prev_max,
+    timestamps[i-1]); solvetime[i] = timestamps[i] - prev_max;`
+    which, on the first loop iteration (`i=1`), executes
+    `prev_max = max(timestamps[0] - T, timestamps[0])`, evaluating
+    to `timestamps[0]` since `T > 0`. This overwrites the `-T`
+    anchor the surrounding prose claims is preserved, producing
+    `solvetime[1] = timestamps[1] - timestamps[0]` rather than the
+    intended `solvetime[1] = timestamps[1] - (timestamps[0] - T)
+    = T + T = 2T` on the stable input. The pseudocode is now
+    reordered to subtract-then-max:
+    `solvetime[i] = timestamps[i] - prev_max; prev_max =
+    max(prev_max, timestamps[i]);`. On the first iteration this
+    correctly evaluates `solvetime[1] = timestamps[1] - (t0 - T)
+    = 2T` (using the `-T` anchor), then updates `prev_max =
+    max(t0 - T, t1) = t1`. The prose at §5.3 lines 957–960 and
+    994–996 is updated to make the subtract-then-max semantics
+    explicit, including the empirical observation (from the
+    pre-flight harness, below) that the canonical zawy12
+    `LWMA1_()` reference behaves equivalently to the corrected
+    Shekyl pseudocode on monotonic inputs (both produce 990_000
+    on the §8.1 stable vector) but diverges on out-of-sequence
+    inputs (canonical 990_000 vs Shekyl-corrected 992_000 on the
+    Round 12 regression vector), confirming the running-max
+    mechanism's security property is load-bearing rather than
+    cosmetic.
+  - **Phase 1 pre-flight verification (executed at Phase 0 close
+    per §5.3 step 7).** Built a minimal C++ harness from the
+    canonical `LWMA1_()` reference transcribed verbatim from
+    `docs/design/refs/zawy12_issue_3_lwma1.md` (lines 77–119 of
+    the pinned `.body`), compiled with `g++ -std=c++17 -O2`, and
+    ran against the §8.1 "perfectly stable hashrate" input vector
+    with `avg_D = 1_000_000`, `N = 90`, `T = 120`, and
+    `timestamps[i] = 1_700_000_000 + i*T` for `i ∈ 0..=N`. Result:
+    canonical output `990_000` (matches §8.1 expected value).
+    An initial harness run with `timestamps[i] = i*T` produced
+    `10_000_000` due to `uint64_t(0) - uint64_t(120)` underflow at
+    `timestamps[0] - T`; corrected to realistic Unix epoch
+    timestamps and re-ran with the expected result. The
+    Shekyl-corrected algorithm (transcribed from
+    `docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md`)
+    was also compiled and run against the same stable input,
+    producing byte-identical `990_000` (confirming §8.2's
+    cross-check assertion that monotonic inputs match canonical
+    byte-for-byte). An out-of-sequence regression vector (the
+    same stable timestamps with `timestamps[2] = timestamps[1] -
+    5*T`) produced canonical `990_000` (attack neutralized to
+    `+1` via canonical's `previous_timestamp+1` floor; no
+    penalty) versus Shekyl-corrected `992_000` (attacker's
+    negative-solvetime contribution to `L` produces higher
+    `next_D`, denying the attack). The §5.3 step 7 stochastic-vs-
+    deterministic framing and §8.1's stable-vector expected
+    value are both empirically confirmed; the running-max
+    mechanism's load-bearing security property in §5.3 step 2 is
+    empirically verified by the regression vector. `DAA_LWMA1.md`
+    §5.3 step 7 and §8.1 record the inputs, the actual outputs,
+    and the divergence on the out-of-sequence vector;
+    `DAA_LWMA1_PLAN.md`'s Phase 1 pre-flight subsection records
+    the executed result and preserves the reversion-clause
+    triggers for any Phase 1 re-run that produces a different
+    number.
+  - **Hybrid-reference rename
+    (`zawy12_issue_3_lwma1_with_lwma3_step2.md` →
+    `shekyl_lwma1_running_max_symmetric_clamp.md`).** The Round 9
+    working name attributed the running-max + symmetric-clamp
+    mechanism to canonical LWMA-3 ("with_lwma3_step2"), but
+    canonical LWMA-3 (per the
+    `docs/design/refs/zawy12_issue_3_lwma3.md` extraction
+    referenced in the Phase 2 plan) does not actually implement
+    running-max, signed-solvetimes, or symmetric clamping in the
+    form §5.3 step 2 specifies — these are Shekyl-specific
+    refinements drawing on the *idea* of LWMA-3's out-of-sequence
+    handling but composed independently. The file is renamed to
+    `shekyl_lwma1_running_max_symmetric_clamp.md` to reflect the
+    Shekyl-specific construction; the file's preamble documents
+    the naming rationale, the empirical equivalence on monotonic
+    inputs, and the divergence on the regression vector. All
+    cross-references in `DAA_LWMA1.md` §3 and `DAA_LWMA1_PLAN.md`
+    are updated to the new name. The `zawy12_issue_3_lwma3.md`
+    convenience extraction (verbatim LWMA-3 reference, *not* a
+    pin) remains a Phase 2 work item per `DAA_LWMA1_PLAN.md`; it
+    is not load-bearing for Phase 1.
+  - **Three reference pins landed at Phase 0 close.** Per the
+    Phase 0 close discipline obligation, the three Phase 2 spec-
+    pin files landed as a Phase 1 precondition:
+    `docs/design/refs/zawy12_issue_3_lwma1.md` (canonical LWMA-1
+    pin, SHA-256
+    `14c68aee9780ca1b1fb8ca28ac43f7956996859f5281ef166cc0634b2cc50df9`,
+    captured-at 2026-05-18T05:25:21Z),
+    `docs/design/refs/zawy12_issue_24_history.md` (LWMA history
+    issue pin, SHA-256
+    `94a6fc8f10b57cf7d0731f62d07c0b4bbdf65d969d7c8679755b22eace76891d`,
+    same capture timestamp), and
+    `docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md`
+    (Shekyl hybrid reference, SHA-256
+    `f16f62695ae74b2ca47d15227b79035cdc349609d9fc73db2b7a3c57c0dfcc4a`,
+    same capture timestamp). `DAA_LWMA1.md` §3's pin records
+    embed the SHA-256s and timestamps; the `LWMA1_()` byte-offset
+    anchors and the LWMA3_() convenience extraction remain Phase
+    2 work per `DAA_LWMA1_PLAN.md` (not load-bearing for Phase 1).
+
+  Status block on line 3 updates from "DRAFT — Round 11" to
+  "RATIFIED — Phase 0 close (2026-05-18 UTC) — 12 review
+  rounds." Phase 0 is closed; Phase 1 (`shekyl-difficulty` crate
+  scaffold per `DAA_LWMA1_PLAN.md`) opens against ratified spec.
+  The pre-flight harness source (transcribed from the pinned
+  `zawy12_issue_3_lwma1.md` LWMA1_() function) is available at
+  this commit and is reproducible via
+  `g++ -std=c++17 -O2 preflight.cpp -o preflight && ./preflight`.
 
 - **`07-consensus-atomic-cutovers.mdc` — named exception to
   branching policy for consensus-atomic cutovers**
