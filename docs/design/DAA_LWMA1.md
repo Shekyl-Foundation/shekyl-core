@@ -795,11 +795,62 @@ wrapper inside the verifier crate.
      without scrolling past the other three reference functions.
      This file is *not* the canonical pin — file 1 is. If the two
      ever diverge, file 1 wins and file 2 must be regenerated.
-     The file is a strict subset of file 1's content; no
-     Shekyl-authored prose appears in it. **Remains a Phase 2
-     task** — not landed at Phase 0 close because it is
-     reader-convenience only, not load-bearing for Phase 1's
-     implementer (who works against §5.3's textual spec).
+     The file carries a Shekyl-authored header in HTML comment
+     form (SPDX `BSD-3-Clause AND MIT`, citing the upstream pin
+     SHA-256 and the byte-offset anchor it was extracted under)
+     so the extraction's provenance is self-documenting; the
+     LWMA-3 code body below the header is byte-identical to the
+     `[lwma3_byte_offset_start, lwma3_byte_offset_end)` slice of
+     file 1's `.body`. **Landed at Phase 2 PR time, 2026-05-18.**
+
+     ```text
+     SHA-256:        9e2db49a7e2151177cced1748a3d0a4e7cb68ed2b0ecd0c2995cf86f38323671
+     Captured-at:    2026-05-18T18:22:42Z
+     Source:         byte-slice of zawy12_issue_3_lwma1.md per the
+                     LWMA-3 byte-offset anchor in the anchors file
+                     (`lwma3_byte_offset_start=17899`,
+                     `lwma3_byte_offset_end=20097`)
+     ```
+
+- **Byte-offset disambiguation anchors (Phase 2 PR-time
+  addition).** `docs/design/refs/zawy12_issue_3_lwma1.anchors.json`
+  records the four-field anchor schema for both `LWMA1_()` (lines
+  77–119 of the pinned `.body` at the Phase 2 pin date) and the
+  upstream `next_difficulty_v3()` function carrying the "LWMA-3
+  difficulty algorithm" header (lines 339–384 at the same date),
+  plus the pinned-body SHA-256 and the capture timestamp. The
+  anchors file resolves the otherwise-ambiguous "Issue #3, lines
+  N–M" citations to a specific function's body, regardless of
+  upstream line-number drift.
+
+  **LWMA-3 brace-balance caveat.** The pinned upstream LWMA-3
+  function body contains malformed C++ at upstream lines 376–381
+  (an incomplete `next_D =` assignment and an unbalanced `)` in
+  the jump-rule branch). The pin captures this verbatim, and the
+  `lwma3_byte_offset_end` anchor uses the column-0 `}` line at
+  upstream line 384 as a *textual* end-of-function delimiter
+  rather than a balanced-brace marker. The LWMA-3 extraction
+  (file 3 above) preserves the malformation; downstream callers
+  who actually need a compilable LWMA-3 reference must consult
+  the (subsequently-cleaned) zawy12 LWMA-3 reference in his
+  later issues, not this convenience extraction. None of Shekyl's
+  cross-check logic depends on a compilable LWMA-3 — see the
+  hybrid-reference framing in file 2.
+
+  **Pin record (landed at Phase 2 PR time, 2026-05-18).**
+
+  ```text
+  SHA-256:        406320ca29e67e564b7c13eb0fd706b393f0af7558fd99bac391a73542250783
+  Captured-at:    2026-05-18T18:22:42Z
+  Source:         Phase 2 PR-time derivation against
+                  zawy12_issue_3_lwma1.md (`pinned_body_sha256`
+                  field cross-references the pin record above)
+  ```
+
+  All later citations in this design doc that read "Issue #3,
+  LWMA-1 reference, lines N–M" resolve against the LWMA-1
+  byte-offset range in the anchors file, NOT against the full
+  `.body` line numbers.
 
 - **zawy12 issue #24 pin (Round 10 addition; landed at Phase 0
   close per Round 12).**

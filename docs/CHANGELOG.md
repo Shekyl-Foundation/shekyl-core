@@ -899,6 +899,113 @@
   toggle) for any time between Phase 0 and genesis release if the
   algorithm-review gate fails per `RANDOMX_V2_RUST.md` §1.4.
 
+- **LWMA-1 difficulty-adjustment migration — Phase 2 cross-check
+  harness + FFI export (absorbs original Phase 3)**
+  (`feat/daa-lwma1-phase2`, 2026-05-18). Lands the C++ cross-check
+  harness that validates the Phase 1 Rust implementation against
+  both the canonical zawy12 LWMA-1 reference and the Shekyl hybrid
+  (running-max + symmetric-clamp) reference across the §8.1 test
+  corpus per `docs/design/DAA_LWMA1_PLAN.md` Phase 2, and lands the
+  `shekyl_difficulty_lwma1_next` FFI export the harness consumes.
+
+  **Phase 2/3 absorption.** The original plan separated Phase 2
+  ("harness only") from Phase 3 ("FFI export only"). The "or" clause
+  in Phase 2 ("via FFI declared in Phase 3, or via a tiny test-only
+  C++ wrapper") collapsed to a single architectural disposition on
+  audit: any C++ caller into Rust requires `extern "C"` symbols, and
+  the only architecturally clean place to host them is `shekyl-ffi`
+  (hosting in `shekyl-difficulty` itself would violate the Phase 1
+  `#![deny(unsafe_code)]` posture; hosting as a throwaway test shim
+  would be torn down by the original Phase 3 anyway). The two paths
+  collapsed: land the production FFI export in Phase 2 alongside the
+  harness, and have Phase 3 collapse to a "see Phase 2" plan-doc
+  note. The Phase 2 PR is correspondingly larger but produces zero
+  throwaway code; the harness is the integration test for the
+  production FFI surface.
+
+  **`catch_unwind` panic-safety wrapper dropped.** The original
+  Phase 3 prescription wrapped the FFI body in `std::panic::catch_unwind`.
+  The workspace runs `panic = "abort"` in both `dev` and `release`
+  profiles (`rust/Cargo.toml` lines 103, 106); under `panic = "abort"`,
+  `catch_unwind` is a no-op because panics terminate the process
+  before any catch can engage. The Rust algorithm body is panic-free
+  by construction (returns `Result<u128, Error>` for every spec error
+  path; uses explicit `checked_*` / `try_from` overflow guards), and
+  the §8.1 corpus exercises both branches. The FFI shim calls
+  `lwma1_next` directly. `SHEKYL_DIFFICULTY_ERR_INTERNAL` (-4)
+  remains reserved in the C header for forward compatibility but is
+  not currently emitted.
+
+  **Reference pinning.** Three pin records land:
+
+  - `docs/design/refs/zawy12_issue_3_lwma1.anchors.json` — byte-offset
+    + first/last-line anchors for `LWMA1_()` and the upstream LWMA-3
+    function inside the pinned `.body`, plus the pinned-body SHA-256
+    cross-reference (`14c68aee9780ca1b1fb8ca28ac43f7956996859f5281ef166cc0634b2cc50df9`).
+    The anchors file's own SHA-256 (`406320ca29e67e564b7c13eb0fd706b393f0af7558fd99bac391a73542250783`)
+    and capture timestamp (`2026-05-18T18:22:42Z`) land in
+    `DAA_LWMA1.md` §3 as the pin record.
+  - `docs/design/refs/zawy12_issue_3_lwma3.md` — convenience
+    extraction of the canonical LWMA-3 (`next_difficulty_v3`)
+    function from the pinned body. Shekyl-authored header (SPDX
+    `BSD-3-Clause AND MIT`) plus byte-identical extraction against
+    the anchors above. The pinned upstream LWMA-3 contains malformed
+    C++ at upstream lines 376-381 (incomplete `next_D =` assignment
+    and an unbalanced `)` in the jump-rule branch); the extraction
+    preserves the malformation as-is, documented in both the file
+    header and `DAA_LWMA1.md` §3. The closing-brace anchor at
+    upstream line 384 is a textual delimiter, not a balanced-brace
+    marker. SHA-256:
+    `9e2db49a7e2151177cced1748a3d0a4e7cb68ed2b0ecd0c2995cf86f38323671`.
+
+  **FFI surface (`rust/shekyl-ffi/src/difficulty_ffi.rs`).** New
+  module exposing `shekyl_difficulty_lwma1_next` as a
+  `pub unsafe extern "C" fn` with the `ShekylU128` two-u64
+  decomposition ABI per `DAA_LWMA1.md` §6.1 (Round 5's disposition
+  against target-defined Rust `u128` C ABI). Error codes wire-stable
+  at `0` / `-1` / `-2` / `-3` / `-4`; null-input pointers permitted
+  iff `count == 0` (genesis short-circuit). Five unit tests cover
+  the `ShekylU128` round-trip, the genesis path, the null-pointer
+  rejection paths (both `out` and inputs-with-nonzero-count), and
+  the `ERR_INVALID_COUNT` mapping.
+
+  **C header (`src/shekyl/shekyl_ffi.h`).** Adds the
+  `shekyl_difficulty_lwma1_next` declaration, the `struct shekyl_u128`
+  definition, and the `SHEKYL_DIFFICULTY_OK` /
+  `SHEKYL_DIFFICULTY_ERR_NULL_PTR` / `_ERR_INVALID_COUNT` /
+  `_ERR_OVERFLOW` / `_ERR_INTERNAL` macros. The struct lives inside
+  the existing top-of-file `extern "C"` block; macros sit at file
+  scope below the block per the C++ rule that `extern "C"` applies
+  to linkage of declarations, not to preprocessor symbols.
+
+  **Cross-check harness (`tests/difficulty/lwma1_cross_check.cpp`
+  + `tests/difficulty/zawy12_lwma1_reference.h` +
+  `tests/difficulty/shekyl_lwma1_hybrid_reference.h`).** Iterates
+  the seven §8.1 vectors and asserts the documented cross-
+  implementation relations:
+
+  - Vectors 1-5 (monotonic): canonical ≡ hybrid ≡ Rust (byte-equal
+    at the §8.1 pinned outputs).
+  - Vectors 6-7 (out-of-sequence): hybrid ≡ Rust (byte-equal at
+    `1_040_000`), both strictly different from canonical
+    (`1_010_000` for vector 6, `911_000` for vector 7 — the
+    load-bearing security divergence per zawy12 issue #24 item 14).
+
+  The canonical reference header carries the MIT SPDX header citing
+  the pinned-body byte-offset anchor; the hybrid reference header
+  is BSD-3-Clause-MIT dual-licensed (canonical portions are MIT;
+  the step-2/3 refinement is BSD-3-Clause per the Shekyl Foundation
+  copyright). The harness uses `SHEKYL_DAA_*` constants from
+  `shekyl/consensus_constants_generated.h` (Phase 1's
+  JSON-authoritative emit) so any drift between the JSON authority
+  and the harness expectations fails the build.
+
+  **CMake / ctest integration.** Extends
+  `tests/difficulty/CMakeLists.txt` with the `lwma1-cross-check`
+  target (linked against `${SHEKYL_FFI_LINK_LIBS}`) and the
+  `lwma1_cross_check` ctest registration. Harness reports 100 %
+  passing across the §8.1 corpus; failure aborts the test.
+
 - **LWMA-1 difficulty-adjustment migration — Phase 1 crate scaffold
   + spec-vector tests** (`feat/daa-lwma1-phase1-crate`, 2026-05-18).
   Lands the Rust crate `rust/shekyl-difficulty` per

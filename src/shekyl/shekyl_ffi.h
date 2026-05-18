@@ -1662,7 +1662,76 @@ bool shekyl_wallet_save_as(
     const uint8_t* password_ptr, size_t password_len,
     uint32_t* out_error);
 
+// ---------------------------------------------------------------------------
+// LWMA-1 difficulty-adjustment FFI surface
+//
+// Single function: `shekyl_difficulty_lwma1_next`. Wraps the
+// `shekyl-difficulty` crate's `lwma1_next` per `docs/design/DAA_LWMA1.md`
+// §5.3 and §6.1. The C-ABI difficulty type is `struct shekyl_u128`
+// (two u64 halves, little-endian) per Round 5's ABI disposition --
+// Rust `u128`'s C ABI was target-dependent until rustc 1.77 and the
+// decomposition eliminates the exposure on every supported target.
+//
+// `struct shekyl_u128` is declared inside this `extern "C"` block (C++
+// permits `struct` definitions inside `extern "C"`; the linkage
+// specification applies to function and variable declarations only).
+// Macros are emitted at file scope below the block so they remain
+// preprocessor-visible without being inside the linkage block.
+// ---------------------------------------------------------------------------
+
+/// Difficulty target at the C-ABI boundary.
+///
+/// Decomposes a 128-bit value into two `uint64_t` halves with
+/// universally stable C ABI. Little-endian: `lo` carries bits 0..64,
+/// `hi` carries bits 64..128. Callers with a native `uint128_t`-typed
+/// buffer MUST explicitly construct `shekyl_u128` instances at the
+/// call site (e.g. `{ .lo = (uint64_t)v, .hi = (uint64_t)(v >> 64) }`)
+/// and decompose returned values symmetrically; reinterpret-casting
+/// `uint128_t` to `shekyl_u128` relies on target-defined struct-layout
+/// ABI that Round 5 of `DAA_LWMA1.md` §6.1 explicitly rejects.
+struct shekyl_u128 {
+    uint64_t lo;   /* little-endian lower 64 bits */
+    uint64_t hi;   /* little-endian upper 64 bits */
+};
+
+/// Compute the next LWMA-1 difficulty target.
+///
+/// `timestamps` and `cum_difficulties` are parallel arrays of length
+/// `count`, ordered oldest-first. Both must equal `SHEKYL_DAA_WINDOW_N + 1`
+/// when `chain_height >= SHEKYL_DAA_WINDOW_N`; both must equal zero
+/// when `chain_height < SHEKYL_DAA_WINDOW_N` (the genesis short-circuit
+/// returns `SHEKYL_DAA_GENESIS_DIFFICULTY` without inspecting the
+/// inputs).
+///
+/// Returns 0 on success and writes the next difficulty target into
+/// `*out_next_difficulty`; returns a negative error code per the
+/// `SHEKYL_DIFFICULTY_ERR_*` macros below otherwise.
+int32_t shekyl_difficulty_lwma1_next(
+    const uint64_t* timestamps,
+    const struct shekyl_u128* cum_difficulties,
+    size_t count,
+    uint64_t chain_height,
+    struct shekyl_u128* out_next_difficulty);
+
 } // extern "C"
+
+/// `shekyl_difficulty_lwma1_next` returned successfully and
+/// `*out_next_difficulty` carries the next-block difficulty target.
+#define SHEKYL_DIFFICULTY_OK                  0
+/// A required pointer was null. `out_next_difficulty` must always be
+/// non-null; `timestamps` and `cum_difficulties` must be non-null when
+/// `count > 0` (they may be null when `count == 0`, the genesis short-
+/// circuit case where `chain_height < SHEKYL_DAA_WINDOW_N`).
+#define SHEKYL_DIFFICULTY_ERR_NULL_PTR       -1
+/// `count` disagrees with `chain_height` per `DAA_LWMA1.md` §5.3 step 1.
+#define SHEKYL_DIFFICULTY_ERR_INVALID_COUNT  -2
+/// Consensus invariant violation (non-monotonic cumulative difficulty)
+/// or `u128` arithmetic overflow inside the algorithm.
+#define SHEKYL_DIFFICULTY_ERR_OVERFLOW       -3
+/// Reserved for unexpected internal failure. Not currently emitted; the
+/// Rust workspace runs `panic = "abort"` so any panic terminates the
+/// process before reaching the return path.
+#define SHEKYL_DIFFICULTY_ERR_INTERNAL       -4
 
 /// Secure memory primitives are declared in shekyl/shekyl_secure_mem.h
 /// (C-compatible header used by both memwipe.c and mlocker.cpp).
