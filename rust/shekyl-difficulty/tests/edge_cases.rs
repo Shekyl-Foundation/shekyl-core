@@ -85,16 +85,18 @@ fn overflow_when_cumulative_difficulty_decreases() {
 }
 
 #[test]
-fn step_8_overflow_guard_below_threshold() {
-    // §5.3 step 8 boundary: avg_D just at-or-below the threshold
-    // `2_000_000 * N * N * T` takes the unguarded branch. Stable
-    // hashrate input, scaled cumulative difficulties to push
-    // avg_D just below the threshold.
+fn step_8_overflow_guard_at_boundary_unguarded_branch() {
+    // §5.3 step 8 boundary: the guard fires on `avg_D > threshold`
+    // (strict). avg_D == threshold is therefore the largest avg_D
+    // that still takes the unguarded branch -- the load-bearing
+    // boundary to test, since an off-by-one in the guard predicate
+    // would route this here-correct case into the wrong branch.
     let ts = stable_ts();
     let threshold: u128 = 2_000_000 * u128::from(N) * u128::from(N) * u128::from(T_SECONDS);
-    // avg_D = threshold; cum_diff[N] - cum_diff[0] = N * avg_D.
+    // avg_D = threshold (exactly at the boundary, unguarded side);
+    // cum_diff[N] - cum_diff[0] = N * avg_D.
     let cd: Vec<u128> = (0..=N).map(|i| u128::from(i) * threshold).collect();
-    let result = lwma1_next(N, &ts, &cd).expect("step-8 below-threshold must compute");
+    let result = lwma1_next(N, &ts, &cd).expect("step-8 at-boundary (unguarded) must compute");
     // Sanity: result is positive and bounded by a large multiple
     // of the input avg_D (no wraparound).
     assert!(result > 0);
@@ -102,14 +104,16 @@ fn step_8_overflow_guard_below_threshold() {
 }
 
 #[test]
-fn step_8_overflow_guard_above_threshold() {
-    // §5.3 step 8 boundary: avg_D just above the threshold takes
-    // the guarded branch (divide-first).
+fn step_8_overflow_guard_just_above_threshold_guarded_branch() {
+    // §5.3 step 8 boundary: avg_D = threshold + 1 is the smallest
+    // value that crosses into `avg_D > threshold`, taking the
+    // guarded (divide-first) branch.
     let ts = stable_ts();
     let threshold: u128 = 2_000_000 * u128::from(N) * u128::from(N) * u128::from(T_SECONDS);
     // avg_D = threshold + 1; cum_diff[N] - cum_diff[0] = N * (threshold + 1).
     let cd: Vec<u128> = (0..=N).map(|i| u128::from(i) * (threshold + 1)).collect();
-    let result = lwma1_next(N, &ts, &cd).expect("step-8 above-threshold must compute");
+    let result =
+        lwma1_next(N, &ts, &cd).expect("step-8 just-above-threshold (guarded) must compute");
     assert!(result > 0);
 }
 

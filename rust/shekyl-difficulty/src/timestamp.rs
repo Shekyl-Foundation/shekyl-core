@@ -37,8 +37,8 @@ pub fn is_timestamp_below_ftl(incoming: u64, local_clock: u64) -> bool {
 /// Returns `true` when `incoming` is strictly greater than the median
 /// of the preceding `MTP_WINDOW` timestamps (Median-Time-Past rule).
 ///
-/// The `&[u64; MTP_WINDOW as usize]` const-sized-array reference is
-/// the consensus-property-preserving baseline per §2.5: a window of
+/// The `&[u64; MTP_WINDOW_USIZE]` const-sized-array reference is the
+/// consensus-property-preserving baseline per §2.5: a window of
 /// length other than `MTP_WINDOW` cannot satisfy the MTP rule, and
 /// pushing that invariant into the type system catches off-by-one
 /// errors at consumer call sites at compile time. Per §2.5, Phase 1
