@@ -1,0 +1,54 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Consensus-invariants gate — verifies, at source level, that the
+# LWMA-1 cutover (Phase 4 of `docs/design/DAA_LWMA1_PLAN.md`) and
+# subsequent consensus-affecting deletions remain swept:
+#
+#   1. No live consumers of the deleted CryptoNote DAA functions
+#      `next_difficulty` / `next_difficulty_64`.
+#   2. No C-ABI declarations in `rust/shekyl-difficulty/src/` (the
+#      C ABI lives in `rust/shekyl-ffi` per `25-rust-architecture.mdc`).
+#   3. No orphaned references to the `DIFFICULTY_*` /
+#      `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT` /
+#      `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` /
+#      `CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1` `#define`s
+#      that Phase 4 deleted from `src/cryptonote_config.h`.
+#
+# Forward-compatibility note: this workflow is the shared landing
+# pad for consensus-invariant grep gates. The RandomX v2 Phase 2f
+# work (`docs/design/RANDOMX_V2_PLAN.md` §7.1 / §7.2) appends its
+# symbol-isolation and no-C-ABI checks to
+# `scripts/ci/check_consensus_invariants.sh` when it lands; the
+# workflow itself does not need to change.
+#
+# Structure mirrors `.github/workflows/zeroize-check.yml`:
+# single job, single runner, fast-running.
+
+name: ci/consensus-invariants
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "rust/shekyl-difficulty/**"
+      - "rust/shekyl-ffi/**"
+      - "scripts/ci/check_consensus_invariants.sh"
+      - ".github/workflows/consensus-invariants.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check-consensus-invariants:
+    name: "Consensus-invariants grep gate"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run consensus-invariants check
+        run: scripts/ci/check_consensus_invariants.sh
