@@ -156,13 +156,14 @@ has no Electrum-words branch. The actual Phase 1 rewire targets are:
 | File | Line | Surface |
 | --- | --- | --- |
 | `src/wallet/wallet2.cpp:600` | `parse_wallet_create_data` JSON helper | `ElectrumWords::words_to_bytes(field_seed, recovery_key, old_language)` — replaced with BIP39 path |
+| `src/wallet/wallet2.cpp:606–611` | `parse_wallet_create_data` JSON helper | `seed_passphrase` JSON field handling. Today calls `cryptonote::decrypt_key(recovery_key, field_seed_passphrase)` (Monero-encrypt_key semantic). Phase 1 reuses the field name + JSON schema but threads the passphrase to `shekyl_account_generate_from_bip39`'s `passphrase` parameter (BIP39-PBKDF2-HMAC-SHA512 semantic). The semantic shift is documented in §4.5.1; field-name preservation is the lowest-friction path for existing JSON-restore consumers. |
 | `src/wallet/wallet2.cpp:660–661` | `parse_wallet_create_data` JSON helper | `old_language_name` + `get_is_old_style_seed` deprecated-wallet detection — deleted |
 | `src/wallet/wallet2.cpp:669` | `parse_wallet_create_data` JSON helper | `wallet->set_seed_language(old_language)` — deleted |
-| `src/wallet/wallet2_ffi.cpp:648` | `query_key("mnemonic")` dispatch branch implementation | Today calls `wallet2::get_seed` → `ElectrumWords::bytes_to_words`. Rewired in Phase 1 to call `shekyl_bip39_mnemonic_from_entropy(wallet.bip39_entropy())` directly via the FFI. The dispatch case label `"mnemonic"` stays per §4.5; only the implementation body changes. Phase 4 then deletes `wallet2::get_seed` outright (no longer called). |
+| `src/wallet/wallet2_ffi.cpp:648` | `query_key("mnemonic")` dispatch branch implementation | Today calls `wallet2::get_seed` → `ElectrumWords::bytes_to_words`. Rewired in Phase 1 to call `shekyl_bip39_mnemonic_from_entropy(wallet.bip39_entropy())` directly via the FFI. The dispatch case label `"mnemonic"` stays per §4.5; only the implementation body changes. Phase 4 then deletes `wallet2::get_seed` outright (no longer called). The dispatch additionally hard-errors on non-empty passphrase per §4.5.1 (passphrase has no meaning at phrase-emit time under BIP39). |
 | `src/wallet/wallet2.cpp:1389` | `ElectrumWords::bytes_to_words(key, ...)` call inside `wallet2::get_seed` body | Deleted in Phase 4 alongside the method body |
-| `src/wallet/wallet_rpc_server.cpp:2324` | RESTORE_DETERMINISTIC_WALLET handler | `ElectrumWords::words_to_bytes(req.seed, recovery_key, language)` — phase 2 surface deletion (whole RPC command goes) |
-| `src/wallet/wallet_rpc_server.cpp:4162` | RESTORE_DETERMINISTIC_WALLET sibling | Same; phase 2 deletion |
-| `src/wallet/wallet_rpc_server.cpp:4257` | RESTORE_DETERMINISTIC_WALLET reply | `ElectrumWords::bytes_to_words(recovery_val, electrum_words, mnemonic_language)` — phase 2 deletion |
+| `src/wallet/wallet_rpc_server.cpp:2324` | `on_stop_background_sync` seed-recovery branch | `ElectrumWords::words_to_bytes(req.seed, recovery_key, language)` — Phase 2 deletes the entire `if (!req.seed.empty())` block at lines 2316–2366 alongside the `seed` / `seed_offset` fields on `COMMAND_RPC_STOP_BACKGROUND_SYNC::request`. The seed-based recovery path is dead-on-mainnet today (per inline comment at 2345–2362) and goes wholesale; password-only stop-background-sync survives. A BIP39 seed-recovery replacement is a separate `docs/FOLLOWUPS.md` V3.2 item (currently tracked). |
+| `src/wallet/wallet_rpc_server.cpp:4162` | `on_restore_deterministic_wallet` (whole RPC handler) | `ElectrumWords::words_to_bytes(req.seed, recovery_key, old_language)` — Phase 2 deletes the whole RPC command + handler (`COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET`). |
+| `src/wallet/wallet_rpc_server.cpp:4257` | `on_restore_deterministic_wallet` reply | `ElectrumWords::bytes_to_words(recovery_val, electrum_words, mnemonic_language)` — Phase 2 deletion (same handler as above). |
 | `src/wallet/wallet_rpc_server.cpp:3630–3631` | GET_LANGUAGES handler | `ElectrumWords::get_language_list(...)` — phase 2 deletion (whole RPC command goes) |
 | `src/wallet/wallet2_ffi.cpp:416` | `wallet2_ffi_restore_deterministic_wallet` body | `ElectrumWords::words_to_bytes(seed, recovery_key, old_language)` — phase 3 FFI surface deletion (whole function goes) |
 | `src/wallet/wallet2_ffi.cpp:1197–1198` | language-list export | `ElectrumWords::get_language_list(...)` — phase 3 deletion |
@@ -171,6 +172,26 @@ The `language` / `old_language` local variables in `wallet2.cpp`'s
 `parse_wallet_create_data` helper become unused once
 `words_to_bytes` is replaced; they are deleted in the same Phase 1
 atomic commit per §4.10's expanded Phase 1 scope.
+
+**Fresh-wallet generation flow defers to shekyl-gui-wallet.** The
+`wallet2_ffi_create_wallet` and `on_create_wallet` paths route
+through `wallet2::generate(..., dummy_key=null_skey, recover=false,
+...)` → `account_base::generate(...)` → `shekyl_account_generate_from_raw_seed`,
+which is mainnet-broken today (RAW32 is TESTNET/FAKECHAIN-only per
+`src/cryptonote_basic/account.cpp:443–446`). The
+"fresh entropy → BIP39 phrase → BIP39 derivation → store entropy"
+flow described in §4.10 point #1 lives in **shekyl-gui-wallet's
+Rust path** (calls `shekyl_account_generate_from_bip39` directly,
+displays the phrase to the user once for backup, hands the
+resulting account material to wallet2 via a path that does *not*
+populate `m_bip39_entropy` in B-1 scope). Consequence:
+post-B-1, `query_key("mnemonic")` works on restore-from-phrase
+wallets and hard-errors on new-via-FFI wallets. Phrase backup at
+creation time is the GUI's responsibility outside wallet2 state.
+A future V3.x architectural workstream may add
+`wallet2_ffi_create_wallet_from_bip39` if wallet2-side entropy
+tracking on the new-wallet path becomes load-bearing; not B-1 scope.
+See §4.10 point #1 for the full disposition rationale.
 
 ### 2.3 wallet2 state and JSON ser/de
 
@@ -193,8 +214,11 @@ atomic commit per §4.10's expanded Phase 1 scope.
 | `COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET` | `src/wallet/wallet_rpc_server_commands_defs.h:2223` | struct + handler | Delete (Phase 2) |
 | `COMMAND_RPC_QUERY_KEY` mnemonic branch | `src/wallet/wallet_rpc_server.cpp` query_key dispatch | conditional | The RPC-level dispatch label `"mnemonic"` persists per §4.5. Today the RPC handler delegates to `wallet2::get_seed`; in Phase 1 the handler is rewired to read `wallet.bip39_entropy()` and call `shekyl_bip39_mnemonic_from_entropy` directly (same shape as the FFI-level rewire in §2.5). Post-Phase-4 the RPC handler does not call `wallet2::get_seed` (which no longer exists). |
 | `get_wallet_words` handler | `src/wallet/wallet_rpc_server.cpp:2214,2220` | handler body | Delete (Phase 2) |
-| Language-set handlers | `src/wallet/wallet_rpc_server.cpp:3661,4082` | language-validation branches | Delete (Phase 2) |
-| Electrum-words restore branches | `src/wallet/wallet_rpc_server.cpp:2324–2358, 4162–4225` | `words_to_bytes` and `get_is_old_style_seed` calls + explanatory comments | Delete (Phase 2) |
+| Language-validation branches in surviving handlers | `src/wallet/wallet_rpc_server.cpp:3661, 4082` | `is_valid_language(req.language)` validation branches in `on_create_wallet` and `on_generate_from_keys` | Delete (Phase 2) |
+| `set_seed_language` calls in surviving handlers | `src/wallet/wallet_rpc_server.cpp:3688, 4088` | `wal->set_seed_language(req.language)` calls in `on_create_wallet` and `on_generate_from_keys` | Delete the call sites (Phase 2). These are paired with the validation-branch deletions above; deleting only the validation branch would leave the `set_seed_language` call referencing the about-to-be-deleted `req.language` field. |
+| `language` fields on surviving RPC request structs | `src/wallet/wallet_rpc_server_commands_defs.h` (`COMMAND_RPC_CREATE_WALLET::request`, `COMMAND_RPC_GENERATE_FROM_KEYS::request`) | request-struct field | Delete the `language` field from both structs (Phase 2). Request-schema change forces JSON-parse-error on any caller that supplies a `language` field — matches the §4.3 hard-error discipline at the FFI layer; consumers that today pass `language="English"` see immediate breakage rather than silent ignore. |
+| `on_restore_deterministic_wallet` handler body | `src/wallet/wallet_rpc_server.cpp:4162–4225` | `words_to_bytes`, `get_is_old_style_seed`, `is_valid_language`, `bytes_to_words` calls | Delete (Phase 2) as part of the whole `COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET` handler deletion. |
+| `on_stop_background_sync` seed-based recovery branch | `src/wallet/wallet_rpc_server.cpp:2316–2366` | the entire `if (!req.seed.empty()) { … }` block + `seed` / `seed_offset` fields on `COMMAND_RPC_STOP_BACKGROUND_SYNC::request` | **Delete the whole block** (Phase 2) including the request-struct field deletions. Comment at lines 2345–2362 documents this branch as mainnet-broken-today; password-only `stop_background_sync` survives. BIP39 seed-recovery replacement is a `docs/FOLLOWUPS.md` V3.2 item (not B-1 scope). |
 
 ### 2.5 FFI surface
 
@@ -204,6 +228,7 @@ atomic commit per §4.10's expanded Phase 1 scope.
 | `wallet2_ffi_create_wallet` `language` parameter | `src/wallet/wallet2_ffi.h:87` + `wallet2_ffi.cpp:309–319` | Drop parameter (signature change; Phase 3) |
 | `wallet2_ffi_generate_from_keys` `language` parameter | `src/wallet/wallet2_ffi.h:113` + `wallet2_ffi.cpp:523–527` | Drop parameter (signature change; Phase 3) |
 | `query_key("mnemonic")` dispatch branch | `src/wallet/wallet2_ffi.cpp:648,653` | **Rewire implementation to Rust BIP39 routing (Phase 1 atomic commit); dispatch label `"mnemonic"` persists per §4.5; `wallet2::get_seed` call site removed when the underlying method deletes in Phase 4 Commit A.** The branch implementation post-Phase-1 reads the entropy via `wallet.bip39_entropy()` (the new accessor per §2.3) and calls `shekyl_bip39_mnemonic_from_entropy` to produce the phrase, returning the §4.10 hard error if entropy is unset. |
+| `query_key("mnemonic")` dispatch — `passphrase` parameter | `src/wallet/wallet2_ffi.cpp:648` (via the wallet2 FFI `query_key` entry's `passphrase` parameter) | **Hard-error on non-empty passphrase** (Phase 1 atomic commit) per §4.5.1. Under Electrum-words the passphrase encrypted the spend secret before encoding-to-words; under BIP39 the phrase is derived from entropy alone and the passphrase has no meaning at phrase-emit time. Silently ignoring the parameter would be the §4.3-rule production-software graceful-degradation default leaking into pre-genesis; the discipline-correct disposition is loud failure. The RPC layer does not expose the passphrase parameter, so the hard-error surface is FFI-only. |
 | Language-list export | `src/wallet/wallet2_ffi.cpp:1197–1198` | Delete (Phase 3) |
 | `crypto::ElectrumWords::words_to_bytes` + `is_valid_language` calls | `src/wallet/wallet2_ffi.cpp:309,416,429,523` | Delete (Phase 3) |
 
@@ -336,7 +361,44 @@ depends on it.
 ### 3.2 Per-consumer migration map
 
 The cross-repo coordination matrix at audit-pre-flight (2026-05-19)
-collapses from three consumers to one:
+collapses from three consumers to one cross-repo consumer
+(`shekyl-gui-wallet`) plus one in-tree Rust consumer
+(`shekyl-engine-rpc`) that lives inside `shekyl-core`'s own
+workspace. The in-tree consumer is functionally the same as a
+cross-repo consumer from the FFI-deletion-blast-radius perspective
+— wrapper and `extern "C"` declaration are two ends of one wire —
+but it lands in the same shekyl-core PR as the C++ FFI change
+rather than a sibling PR.
+
+#### 3.2.0 shekyl-engine-rpc (IN-TREE Rust consumer; Phase 3 atomic with C++ FFI)
+
+The Rust crate at `rust/shekyl-engine-rpc/` wraps `wallet2_ffi` for
+the daemon-side wallet engine. Pre-flight inspection (2026-05-19)
+confirms three consumption sites:
+
+| File | Symbol | Phase 3 disposition |
+| --- | --- | --- |
+| `rust/shekyl-engine-rpc/src/ffi.rs:57` | `extern "C" fn wallet2_ffi_create_wallet(... language: *const c_char ...)` declaration | Drop the `language: *const c_char` parameter (signature change atomic with the C++ FFI deletion in §3.1's work item 2). |
+| `rust/shekyl-engine-rpc/src/ffi.rs:72` | `extern "C" fn wallet2_ffi_restore_deterministic_wallet(...)` declaration | Delete the entire `extern` declaration (atomic with the C++ FFI function deletion in §3.1's work item 1). |
+| `rust/shekyl-engine-rpc/src/ffi.rs:82` | `extern "C" fn wallet2_ffi_generate_from_keys(... language: *const c_char ...)` declaration | Drop the `language: *const c_char` parameter (atomic with the C++ FFI deletion in §3.1's work item 3). |
+| `rust/shekyl-engine-rpc/src/engine.rs:195–280` (`create_wallet`, `restore_deterministic_wallet`, `generate_from_keys` Rust wrappers) | Rust-side wrapper functions consumed by the daemon-side wallet engine | Match the FFI signature changes: drop `language: &str` parameters from `create_wallet` and `generate_from_keys`; delete `restore_deterministic_wallet` outright. Update any in-tree callers (search via `git grep -E 'engine::(create_wallet\|restore_deterministic_wallet\|generate_from_keys)'`). |
+
+The in-tree migration lands as part of the same shekyl-core Phase 3
+PR as the C++ FFI deletion — the wrapper change and the `extern "C"`
+declaration change cannot land separately without producing a
+non-buildable intermediate state (extern declaration referencing a
+non-existent symbol; or wrapper passing a parameter the extern no
+longer accepts). This is the same atomic-commit discipline as §4.10's
+"every change is the same architectural change at a different
+surface" — bisecting any single piece out produces a broken
+intermediate. The atomicity scope is **shekyl-core PR commit**, not
+**cross-repo merge** — the wrapper change is internal to the
+shekyl-core repo and merges in the same PR as the FFI deletion.
+
+The cross-repo coordination concern (§3.2.1 `shekyl-gui-wallet`)
+attaches to consumers *outside* `shekyl-core`'s workspace.
+`shekyl-engine-rpc` is in-workspace, so its migration runs inside
+the §3.1 work-item list rather than the §3.2 sibling-PR matrix.
 
 #### 3.2.1 shekyl-gui-wallet (ACTIVE consumer; Phase 3 coordination party)
 
@@ -579,6 +641,111 @@ which string downstream code uses to *request* the value). They
 are pinned separately so future audits can re-open one without
 re-opening the other.
 
+### 4.5.1 BIP39 passphrase semantic across two surfaces
+
+BIP39's passphrase is structurally different from Electrum-words'
+passphrase, and the difference lands at two distinct surfaces
+inside Phase 1's atomic commit. This subsection pins both
+dispositions so neither surface is silently ignored.
+
+**Surface A — `parse_wallet_create_data` JSON
+`seed_passphrase` field (`wallet2.cpp:606–611`).**
+
+Today the JSON-restore path uses `seed_passphrase` to decrypt the
+spend secret recovered from the 25-word phrase
+(`cryptonote::decrypt_key(recovery_key, field_seed_passphrase)`).
+This is the Monero "seed offset" semantic: the passphrase is a
+post-hoc XOR mask on the spend secret, not part of the seed
+derivation itself.
+
+BIP39's passphrase is mixed into PBKDF2-HMAC-SHA512 *during* seed
+derivation (`mnemonic + passphrase → 64-byte seed → account keys`).
+Functionally: same passphrase + same phrase always recovers the
+same account; passphrase changes produce a different account
+deterministically; an attacker who steals only the phrase cannot
+recover the account without the passphrase.
+
+**Disposition: preserve passphrase semantics through BIP39.**
+Phase 1 threads `field_seed_passphrase` (the JSON field's value)
+to `shekyl_account_generate_from_bip39`'s `passphrase` parameter
+(`account_ffi.rs:330`-equivalent). The JSON field name
+`seed_passphrase` is unchanged — JSON-restore consumers that pass
+the field today continue to work, with the semantic shifted from
+Monero-encrypt_key to BIP39-PBKDF2 transparently. Consumers that
+relied on the precise cryptographic mechanism (the encrypt_key
+XOR-on-spend-secret) rather than the user-observable property
+(same-phrase-same-passphrase-recovers-same-account) see a
+silent semantic shift; this is acceptable per the pre-genesis
+posture (no Shekyl consumers exist with the encrypt_key
+semantic expectation).
+
+This is the lowest-friction disposition: the FFI already accepts
+the passphrase parameter; the JSON schema is unchanged; the
+user-observable property is preserved; the only cost is the
+in-code semantic comment migration ("encrypts the spend secret"
+→ "feeds the BIP39 PBKDF2-HMAC-SHA512 input").
+
+Rejected alternative — **rename the JSON field to
+`bip39_passphrase`** — would force every JSON-restore consumer to
+migrate the field name without securing or clarifying anything.
+The §4.5 string-key disposition's "lower-friction industry-term
+preservation" framing applies here too.
+
+Rejected alternative — **delete the JSON field entirely; require
+passphrase to be empty** — strips a load-bearing BIP39 feature
+(passphrase-as-25th-word-equivalent) that the BIP39 spec
+deliberately specifies; this would put Shekyl out of step with
+the broader BIP39 ecosystem without justification.
+
+**Surface B — `query_key("mnemonic")` FFI dispatch's passphrase
+parameter (`wallet2_ffi.cpp:648`).**
+
+Today the dispatch calls `wallet2::get_seed(out_phrase,
+passphrase)`, which under Electrum-words uses the passphrase to
+encrypt the spend secret before encoding-to-words. Under BIP39,
+the phrase derives from entropy alone:
+`shekyl_bip39_mnemonic_from_entropy(entropy) → phrase`. The
+passphrase has no meaning at phrase-emit time — it lives in the
+phrase-to-seed direction (PBKDF2-HMAC-SHA512), not the
+entropy-to-phrase direction.
+
+**Disposition: hard-error on non-empty passphrase at the FFI
+dispatch.** Phase 1's rewired dispatch branch (per §4.5)
+inspects the passphrase parameter; if non-empty, returns a hard
+error:
+
+```text
+"the 'passphrase' parameter is not meaningful when querying the
+BIP-39 mnemonic phrase. The passphrase is consumed during
+phrase-to-seed derivation (see query_key passphrase semantics in
+the BIP-39 spec), not during phrase emission. Pass an empty
+passphrase to retrieve the phrase."
+```
+
+Empty / nullptr / zero-length is the only accepted value. This
+matches the §4.3 hard-error inversion: silent-ignore is the
+production-software graceful-degradation default that
+pre-genesis discipline inverts to loud failure. The RPC layer
+does not expose the passphrase parameter (the RPC
+`query_key` request struct carries only `key_type`), so the
+hard-error surface is FFI-only.
+
+**Why the two surfaces resolve differently.** Surface A preserves
+the passphrase because BIP39's seed-derivation path *uses* it
+load-bearingly. Surface B hard-errors because BIP39's
+phrase-emission path *does not use* it at all. The two surfaces
+share a parameter name (`passphrase`) but their semantic
+relationships to that parameter are structurally different
+under BIP39, and the dispositions reflect that structural
+difference.
+
+**Both dispositions land in the same Phase 1 atomic commit per
+§4.10's expanded scope.** The commit message references this
+subsection by section number; the test plan (§7.3) includes
+positive cases for Surface A (round-trip phrase + passphrase →
+same account) and negative cases for Surface B (non-empty
+passphrase on `query_key("mnemonic")` → hard-error).
+
 ### 4.6 CryptoNote-25-word format unsupported, period
 
 There is no fallback path. No "if seed has 25 words, try
@@ -812,29 +979,64 @@ std::optional<crypto::secret_bytes<32>> m_bip39_entropy;
 
 The field is set during:
 
-1. **New-wallet generation flow.** Fresh 32-byte entropy from OsRng
-   (via `shekyl_raw_seed_generate` per `account_ffi.rs:256` or a
-   sibling entry); phrase is computed via
-   `shekyl_bip39_mnemonic_from_entropy(entropy)` and displayed to the
-   user once for backup; account is generated via
-   `shekyl_account_generate_from_bip39(phrase)`; entropy is stored in
-   `m_bip39_entropy`.
-2. **Restore-from-phrase flow.** User supplies the 24-word phrase;
-   phrase validated via `shekyl_bip39_validate`; entropy extracted
-   via the new FFI `shekyl_bip39_mnemonic_to_entropy(phrase) →
-   entropy` (added in this disposition; see below); account generated
-   via `shekyl_account_generate_from_bip39(phrase)`; entropy stored
-   in `m_bip39_entropy`.
+1. **Restore-from-phrase flow via `parse_wallet_create_data` (JSON
+   restore path).** User-supplied JSON contains a `seed` field with
+   the 24-word phrase (and optionally a `seed_passphrase` field per
+   §4.5.1); phrase validated via `shekyl_bip39_validate`; entropy
+   extracted via the new FFI `shekyl_bip39_mnemonic_to_entropy(phrase)
+   → entropy` (added in this disposition; see below); account
+   generated via `shekyl_account_generate_from_bip39(phrase,
+   passphrase)`; entropy stored in `m_bip39_entropy`. This is the
+   primary path where B-1 populates `m_bip39_entropy`.
+
+2. **New-wallet generation flow via shekyl-gui-wallet's Rust path
+   (NOT via `wallet2_ffi_create_wallet`).** The fresh-entropy →
+   phrase → BIP39 derivation → account-keys flow runs in
+   shekyl-gui-wallet's Rust code (calls `shekyl_account_generate_from_bip39`
+   directly, displays the phrase to the user once for backup,
+   then constructs the wallet state). In B-1 scope this path does
+   **not** populate `m_bip39_entropy` — wallet2 receives
+   pre-computed account material from gui-wallet, not the BIP39
+   phrase or entropy. This is the **accept-partial-coverage**
+   disposition for B-1; see "Partial-coverage state" below.
 
 The field is **not** set during:
 
-1. **Restore-from-keys flow.** User supplies raw spend/view secret
+1. **`wallet2_ffi_create_wallet` / `on_create_wallet` (the wallet2
+   FFI / RPC new-wallet entry).** Today this path routes through
+   `wallet2::generate(...)` → `account_base::generate(...)` →
+   `shekyl_account_generate_from_raw_seed`, which is
+   testnet/fakechain-only per `src/cryptonote_basic/account.cpp:443–446`
+   (mainnet-broken today). It does not flow through BIP39; the
+   new-wallet path in shekyl-gui-wallet bypasses this entry. B-1
+   does not migrate this path to a BIP39-aware shape; that work
+   lives in a future V3.x architectural workstream (provisional
+   name: `wallet2_ffi_create_wallet_from_bip39`) if and when the
+   wallet2-side new-wallet path needs entropy tracking. Until then
+   the FFI new-wallet entry remains mainnet-broken; this is a
+   pre-existing condition, not introduced by B-1.
+2. **Restore-from-keys flow.** User supplies raw spend/view secret
    keys; no associated BIP39 phrase exists.
-2. **Restore-from-raw-seed-bytes flow.** User supplies a 32-byte raw
+3. **Restore-from-raw-seed-bytes flow.** User supplies a 32-byte raw
    seed; no associated BIP39 phrase exists.
-3. **Restore-from-device flow.** Hardware-wallet device manages the
+4. **Restore-from-device flow.** Hardware-wallet device manages the
    seed off-host; phrase is recoverable from the device, not from
-   wallet2 state.
+   wallet2 state. Trezor/Ledger restore paths must be verified at
+   Phase 1 implementation time to confirm they do not accidentally
+   populate `m_bip39_entropy` (verification item V3).
+
+**Partial-coverage state post-B-1.** `query_key("mnemonic")` works
+on wallets created via the JSON-restore-from-phrase path
+(`m_bip39_entropy` populated by §4.5/§4.10's Phase 1 rewire) and
+hard-errors on wallets created via `wallet2_ffi_create_wallet` /
+`on_create_wallet` (`m_bip39_entropy` unset because the new-wallet
+path doesn't flow through BIP39). Phrase backup at wallet creation
+time is **shekyl-gui-wallet's responsibility outside wallet2 state**
+— the GUI displays the phrase to the user once, the user copies it
+down, the GUI never persists it. For B-1, this partial coverage is
+acceptable per the pre-genesis posture; the alternative (full
+coverage via a `wallet2_ffi_create_wallet_from_bip39` extension)
+is a separate architectural workstream with its own design rounds.
 
 When the field is unset, `query_key("mnemonic")` returns a hard
 error: `"this wallet was not created from a BIP-39 mnemonic; the
@@ -957,25 +1159,62 @@ entry. Phase 4 Commit A deletes the declaration at
 alongside the other Electrum-words-era methods (`is_deterministic`,
 `get_seed_language`, `set_seed_language`).
 
-**`is_deterministic` disposition.** The method becomes "returns true
-if `m_bip39_entropy.has_value()`" — the same logical predicate as
-the original "returns true if seed_language is set," but anchored to
-the new state. Two options for Phase 4 disposition:
+**`is_deterministic` disposition.** Earlier substrate drafts framed
+`is_deterministic` as "returns true if `seed_language` is set." That
+framing was incorrect; the actual implementation at `wallet2.cpp:1362–1370`
+checks the **CryptoNote keypair-shape property**:
+
+```cpp
+bool wallet2::is_deterministic() const
+{
+  crypto::secret_key second;
+  keccak((uint8_t *)&get_account().get_keys().m_spend_secret_key,
+         sizeof(crypto::secret_key), (uint8_t *)&second, sizeof(crypto::secret_key));
+  sc_reduce32((uint8_t *)&second);
+  return memcmp(second.data, get_account().get_keys().m_view_secret_key.data,
+                sizeof(crypto::secret_key)) == 0;
+}
+```
+
+The predicate returns true if the view secret equals
+`sc_reduce32(keccak(spend_secret))` — the legacy CryptoNote derivation
+where the view secret is keccak-derived from the spend secret. Under
+Shekyl's HKDF-from-master-seed account pipeline (per
+`account_base::generate` and `account_base::rederive_from_master_seed`),
+the view secret is HKDF-derived from the master seed independently of
+the spend secret; the keccak-derives-view property is no longer true
+for any Shekyl account.
+
+**Consequence: `is_deterministic` returns `false` for every Shekyl
+wallet today, regardless of whether the wallet was created from a
+BIP39 phrase or from raw keys.** The predicate is structurally
+incorrect for Shekyl accounts; its current name promises a meaningful
+distinction (deterministic vs non-deterministic) that the
+implementation cannot deliver under Shekyl's HKDF derivation. This is
+a pre-existing condition (existed before B-1) and is independent of
+the Electrum-words deletion — but the Electrum-words deletion is the
+forcing function that surfaces it.
+
+Two options for Phase 4 disposition (independent of the corrected
+rationale):
 
 - **(i)** Re-implement `is_deterministic` to return
   `m_bip39_entropy.has_value()` in Phase 1; keep it indefinitely as
-  a useful query.
+  a useful "this wallet has a recoverable mnemonic" predicate.
 - **(ii)** Delete `is_deterministic` entirely in Phase 4; callers
   that need the predicate call `query_key("mnemonic")` and check for
-  the hard-error response.
+  the hard-error response, or read `bip39_entropy()` directly.
 
-The substrate disposition is **(ii)** per `60-no-monero-legacy.mdc`:
-the `is_deterministic` concept was load-bearing for the
-Electrum-words era's "this wallet has a recoverable seed" semantic;
-post-removal there is no two-class wallet distinction (BIP39 vs
-non-BIP39) at the predicate level — wallets either have a stored
-entropy or they don't, and the proper query is direct on the
-optional field, not a separate boolean method.
+The substrate disposition is **(ii)** per `60-no-monero-legacy.mdc`
+and `15-deletion-and-debt.mdc`: the structural keypair-shape predicate
+is dead code under Shekyl's HKDF derivation (returns `false` for
+every Shekyl wallet); reusing the name for a different semantic
+("has a stored BIP39 entropy") would propagate a misleading API
+name; the proper query is direct on the optional field, not a
+separate boolean method. Deletion is correct under both the
+current-broken state (predicate is structurally wrong) and the
+post-Electrum semantic (no two-class wallet distinction at the
+predicate level).
 
 **Reversion criteria (per Rule 21).** The entropy-persistence
 disposition is closed under:
@@ -1013,8 +1252,8 @@ trigger.
 
 | Repo | wallet2_ffi binding state (2026-05-19) | Phase 3 migration party? |
 | --- | --- | --- |
-| `shekyl-core` | N/A (host repo) | Yes (publishes the FFI deletion PR) |
-| `shekyl-gui-wallet` | Active consumer; substantial Electrum-words integration | Yes (publishes a coordinated migration PR) |
+| `shekyl-core` | Host repo + in-tree Rust consumer at `rust/shekyl-engine-rpc/` (three `extern "C"` declarations + three Rust wrappers, per §3.2.0) | Yes (publishes the FFI deletion PR; the in-tree Rust consumer migrates as work items inside the same PR per §3.2.0, atomic with the C++ FFI deletion) |
+| `shekyl-gui-wallet` | Active cross-repo consumer; substantial Electrum-words integration | Yes (publishes a coordinated migration PR per §3.2.1) |
 | `shekyl-mobile-wallet` | Not yet a consumer | No (picks up post-deletion FFI when it begins binding) |
 | `shekyl-web` | Not a consumer | No (picks up post-deletion FFI when it begins binding) |
 
