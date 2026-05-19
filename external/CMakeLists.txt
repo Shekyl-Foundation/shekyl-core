@@ -78,3 +78,63 @@ endif()
 add_subdirectory(db_drivers)
 add_subdirectory(qrcodegen)
 add_subdirectory(randomx EXCLUDE_FROM_ALL)
+
+# RandomX v2 (Shekyl-Foundation fork) — out-of-tree build.
+#
+# Both external/randomx (v1.2.1) and external/randomx-v2 (v2.0.1)
+# declare project(RandomX) and add_library(randomx ...). CMake target
+# names and most CACHE variables are global within a single configure
+# run, so add_subdirectory(randomx-v2) after add_subdirectory(randomx)
+# above would produce a duplicate-target error. ExternalProject_Add
+# builds the v2 fork in an isolated configure pass under
+# ${CMAKE_BINARY_DIR}/external/randomx-v2-build/, then exposes the
+# resulting static library plus its include directory through a
+# Shekyl-side IMPORTED target shekyl_randomx_v2.
+#
+# Patching the v2 fork's CMakeLists.txt is prohibited per
+# 10-shekyl-first.mdc (never contort upstream); see
+# docs/design/RANDOMX_V2_PHASE1_PLAN.md §2 for the full
+# target-collision analysis and disposition.
+#
+# No C++ component links shekyl_randomx_v2 in Phase 1. First
+# consumer is Phase 2's cross-check tests in
+# rust/shekyl-pow-randomx/, which compare a pure-Rust verifier's
+# per-hash output against this canonical C implementation
+# byte-for-byte.
+if(BUILD_RANDOMX_V2_MINER_LIB)
+  include(ExternalProject)
+
+  set(RANDOMX_V2_SRC     "${CMAKE_CURRENT_SOURCE_DIR}/randomx-v2")
+  set(RANDOMX_V2_INSTALL "${CMAKE_CURRENT_BINARY_DIR}/randomx-v2-install")
+  set(RANDOMX_V2_LIB
+      "${RANDOMX_V2_INSTALL}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}randomx${CMAKE_STATIC_LIBRARY_SUFFIX}")
+
+  ExternalProject_Add(randomx_v2_external
+    SOURCE_DIR        "${RANDOMX_V2_SRC}"
+    PREFIX            "${CMAKE_CURRENT_BINARY_DIR}/randomx-v2-build"
+    INSTALL_DIR       "${RANDOMX_V2_INSTALL}"
+    CMAKE_ARGS
+      -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+      -DCMAKE_INSTALL_LIBDIR=lib
+      -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+      -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+      -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+      -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+    BUILD_BYPRODUCTS  "${RANDOMX_V2_LIB}"
+    UPDATE_DISCONNECTED TRUE
+  )
+
+  file(MAKE_DIRECTORY "${RANDOMX_V2_INSTALL}/include")
+  add_library(shekyl_randomx_v2 STATIC IMPORTED GLOBAL)
+  set_target_properties(shekyl_randomx_v2 PROPERTIES
+    IMPORTED_LOCATION             "${RANDOMX_V2_LIB}"
+    INTERFACE_INCLUDE_DIRECTORIES "${RANDOMX_V2_INSTALL}/include"
+  )
+  add_dependencies(shekyl_randomx_v2 randomx_v2_external)
+
+  message(STATUS
+    "RandomX v2: building Shekyl-Foundation fork (pin aaafe71, v2.0.1) "
+    "out-of-tree; target shekyl_randomx_v2 is available. No Shekyl C++ "
+    "consumer links it in Phase 1; first consumer is Phase 2 cross-check "
+    "tests against the canonical v2 implementation.")
+endif()
