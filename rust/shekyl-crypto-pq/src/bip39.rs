@@ -251,6 +251,77 @@ mod tests {
         assert!(!validate(&truncated));
     }
 
+    /// BIP-0039 §A mandates NFKD Unicode normalisation of the passphrase
+    /// before it is consumed as part of the PBKDF2-HMAC-SHA512 salt
+    /// (`b"mnemonic" || NFKD(passphrase)`). Two byte-different but
+    /// logically-equivalent Unicode forms of the same passphrase must
+    /// therefore yield byte-identical seeds; if they do not, the wallet
+    /// derived under one form is unrecoverable from any spec-compliant
+    /// BIP-39 implementation given only the other form.
+    ///
+    /// The load-bearing properties this test enforces:
+    ///
+    /// 1. The `bip39` crate's `unicode-normalization` feature is enabled
+    ///    in the consumer build (per `Cargo.toml` failure-mode #1). If
+    ///    the feature is somehow off, `Mnemonic::to_seed` is not even
+    ///    present in the API; this test would fail to compile.
+    /// 2. Our consumer site continues to call the auto-NFKD-applying
+    ///    entry point (`to_seed`) rather than the
+    ///    caller-pre-normalises variant (`to_seed_normalized`) (per
+    ///    `Cargo.toml` failure-mode #2). A silent migration to the
+    ///    non-normalising entry point without a compensating NFKD
+    ///    pre-pass would cause this test to fail with two distinct
+    ///    seeds.
+    /// 3. The upstream NFKD implementation actually normalises
+    ///    `\u{00E9}` and `e\u{0301}` to the same byte sequence (the
+    ///    canonical decomposition). A dependency swap or upstream
+    ///    regression that broke this would fail this test.
+    ///
+    /// The mnemonic phrase is held constant (English wordlist, ASCII-only,
+    /// so NFC == NFKD trivially for the phrase itself). The load-bearing
+    /// surface is the passphrase, which is arbitrary user-supplied
+    /// Unicode and is therefore the dimension where NFKD makes the
+    /// difference between recoverable and unrecoverable wallets.
+    #[test]
+    fn nfkd_passphrase_normalization() {
+        let entropy = [0x42u8; 32];
+        let phrase = mnemonic_from_entropy(&entropy).unwrap();
+
+        // "café" in two Unicode-equivalent forms:
+        //   NFC:  c, a, f, U+00E9 (é precomposed)            — 5 bytes
+        //   NFKD: c, a, f, e, U+0301 (combining acute accent) — 6 bytes
+        // Both must NFKD-normalise to the same byte sequence
+        // (`c, a, f, e, U+0301`).
+        let pw_nfc = "caf\u{00E9}";
+        let pw_nfkd = "cafe\u{0301}";
+
+        assert_ne!(
+            pw_nfc.as_bytes(),
+            pw_nfkd.as_bytes(),
+            "test precondition: the two passphrase forms must be \
+             byte-different, otherwise the test is vacuous and \
+             would not detect a missing NFKD pass"
+        );
+
+        let seed_nfc = mnemonic_to_pbkdf2_seed(&phrase, pw_nfc).unwrap();
+        let seed_nfkd = mnemonic_to_pbkdf2_seed(&phrase, pw_nfkd).unwrap();
+
+        assert_eq!(
+            seed_nfc.as_slice(),
+            seed_nfkd.as_slice(),
+            "BIP-0039 §A NFKD normalisation of the passphrase is not \
+             being applied. Either the `bip39` crate's \
+             `unicode-normalization` feature is disabled in this build, \
+             or the consumer in `shekyl-crypto-pq/src/bip39.rs` has \
+             migrated from `to_seed` to `to_seed_normalized` without \
+             adding an NFKD pre-pass. Either way, wallets created with \
+             non-ASCII passphrases are non-recoverable from \
+             spec-compliant BIP-39 implementations. See \
+             `Cargo.toml`'s `bip39` dependency comment and \
+             `ELECTRUM_WORDS_REMOVAL.md` §4.7 #6 for the discipline."
+        );
+    }
+
     #[test]
     fn validate_rejects_bad_checksum() {
         // Replace the final word ("art") with a different valid-wordlist word.

@@ -917,9 +917,26 @@ contract:
    logically-equivalent inputs) is invisible to all standard
    tests. The explicit pin guarantees the BIP-0039 spec
    property is delivered regardless of transitive-feature
-   topology. A Phase 1 test verifies NFC↔NFKD round-trip
-   equivalence: two byte-different but Unicode-equivalent
-   phrase forms produce identical entropy and identical seed.
+   topology. The pin alone, however, does not catch a second
+   failure mode: a future refactor that migrates the consumer
+   in
+   [`rust/shekyl-crypto-pq/src/bip39.rs`](../../rust/shekyl-crypto-pq/src/bip39.rs)
+   from the auto-NFKD-applying entry points (`parse_in`,
+   `to_seed`) to the caller-pre-normalises variants
+   (`parse_in_normalized`, `to_seed_normalized`) without
+   adding an NFKD pre-pass would leave the pin in place and
+   the feature enabled, but silently produce non-spec-compliant
+   behaviour. The load-bearing enforcement is therefore a
+   regression test colocated with the dependency line, not the
+   pin itself: `tests::nfkd_passphrase_normalization` in
+   [`rust/shekyl-crypto-pq/src/bip39.rs`](../../rust/shekyl-crypto-pq/src/bip39.rs)
+   feeds NFC (`"caf\u{00E9}"`, U+00E9 precomposed) and NFKD
+   (`"cafe\u{0301}"`, U+0301 combining acute) forms of the
+   same passphrase through `mnemonic_to_pbkdf2_seed` and
+   asserts byte-identical seeds. The English wordlist is
+   ASCII-only so NFC == NFKD trivially for the phrase itself;
+   the passphrase is the load-bearing surface and is where the
+   test concentrates.
 
 This contract is documented here (not just inline in code
 comments) so future audits have a single load-bearing reference
