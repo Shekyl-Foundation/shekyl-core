@@ -1517,6 +1517,82 @@ primitive); V4 may re-evaluate the entire wallet-seed shape from
 scratch, but that is V4 design territory, not a B-1 reversion
 trigger.
 
+### 4.10.1 No new `wallet2` public methods for BIP-39 wallet creation
+
+The Phase 1 atomic commit does **not** add
+`wallet2::generate_from_bip39` or any sibling wallet-creation
+orchestration method to `tools::wallet2`. The BIP-39 orchestration
+chain (validate → entropy-extract → account-generate →
+entropy-persist → keys-file-create) inlines into the existing call
+site `tools::generate_from_json` (the JSON-restore-from-phrase
+path at [`src/wallet/wallet2.cpp:521`](../../src/wallet/wallet2.cpp)).
+Entropy persistence to `m_bip39_entropy` is handled via friend
+access from the namespace-scope `generate_from_json` function;
+implementation-shape choice (friend vs. narrow private setter
+exposed via friend) is Phase 1 commit-author discretion provided
+**no new public orchestration method** is introduced.
+
+**Tripwire honored.** This disposition honors the 2026-05-05
+audit-trail tripwire at
+[`tests/unit_tests/wallet_storage.cpp:42–144`](../../tests/unit_tests/wallet_storage.cpp),
+which uses `static_assert` to refuse `wallet2::generate_from_bip39`
+in three detector signatures (string/string/nettype;
+wipeable_string/wipeable_string/nettype; string/nettype). The
+tripwire is anchored in
+[`docs/audit_trail/2026-05-ffi-constant-drift-audit.md`](../audit_trail/2026-05-ffi-constant-drift-audit.md)
+Bug 4 and
+[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) §"V3.1+ Legacy C++ → Rust
+rewrite scope" (the `wallet2 has no generate_from_bip39 entry
+point` entry).
+
+**Why the tripwire applies to B-1.** The named reopening criteria
+for the 2026-05-05 disposition are (i) Rust rewrite Phase 5
+landing, or (ii) explicit FOLLOWUPS architectural reopening. B-1
+(Electrum-words removal) is neither. Per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)'s
+named-criteria principle, reopening requires meeting the named
+criteria, **not** being in a different workstream. The forbidden
+detectors cover the three most plausible signatures; the
+FOLLOWUPS entry — not the SFINAE — is the load-bearing artifact,
+so a method with an "exotic" signature that mechanically slipped
+past the detector still violates the disposition.
+
+**Discipline rationale.** Every new public method on `wallet2`
+becomes a "removal-as-breaking-change" obligation when the Rust
+rewrite Phase 5 lands. Inlining the orchestration into existing
+call sites converts those removals to "removal-as-no-op" when
+`wallet2` itself is deleted wholesale. The Electrum-words removal
+explicitly does **not** expand `wallet2`'s public surface; it
+removes from it. The orchestration chain has effectively one
+B-1-scope call site (`generate_from_json` / the JSON-restore-from-
+phrase path); a wrapper method captures zero call-site
+deduplication. The shekyl-gui-wallet new-wallet path runs entirely
+in Rust per §4.10 (`shekyl_account_generate_from_bip39` directly,
+not through wallet2), and `wallet2_ffi_create_wallet`'s migration
+is out of B-1 scope per §4.10's framing-3 sub-paragraph.
+
+**Class-level observation (sibling to §4.9).** Substrate-defined
+disciplines from prior audits remain in force across subsequent
+workstreams; reopening requires meeting the named reopening
+criteria, not just being in a different workstream. This pays
+forward across the wallet2 cluster B-2 / C-1 / C-3 / C-4 / C-5,
+B-3, M3b–M3e, the `transfer_details` migration, and the
+`wallet_rpc_server` cutover — each of which will encounter prior
+audit dispositions that might be tempting to reopen under
+different-workstream framing. The discipline says: read the
+reopening criteria; if not met, the prior disposition holds.
+
+**Reversion criteria (per Rule 21).** This sub-disposition
+re-opens under the same triggers as the 2026-05-05 disposition
+itself: (i) Rust rewrite Phase 5 landing (at which point the
+question is moot because `wallet2` is being deleted), or (ii)
+explicit FOLLOWUPS architectural reopening of the
+`wallet2 has no generate_from_bip39 entry point` entry. The
+re-evaluation shape is a fresh design round (not a per-PR
+override) that names the new caller(s) requiring the public
+method and demonstrates that the removal-as-no-op property is
+preserved.
+
 ---
 
 ## 5. Cross-repo coordination

@@ -196,6 +196,60 @@ pub unsafe extern "C" fn shekyl_bip39_mnemonic_from_entropy(
     true
 }
 
+/// Recover the 32-byte BIP-39 entropy from a validated 24-word English
+/// mnemonic phrase. Writes 32 bytes to `out32_ptr` on success; on failure
+/// returns `false` and zero-fills `out32_ptr`.
+///
+/// This is the inverse of [`shekyl_bip39_mnemonic_from_entropy`] and the
+/// primitive behind the wallet keyfile's persisted entropy field
+/// (`m_bip39_entropy` per `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10):
+/// the JSON-restore-from-phrase path calls this FFI to extract the entropy
+/// bytes for `store_keys`-encrypted persistence; `query_key("mnemonic")`
+/// later calls [`shekyl_bip39_mnemonic_from_entropy`] on the persisted
+/// entropy to regenerate the phrase on demand. The phrase itself never
+/// persists in long-lived wallet state.
+///
+/// Failure cases (all zero-fill `out32_ptr` and return `false`):
+/// * null `words_ptr` (with non-zero `words_len`), null `out32_ptr`
+/// * invalid UTF-8 in the input
+/// * non-24-word phrase (Shekyl mandates the canonical length per
+///   `shekyl-crypto-pq::bip39::SHEKYL_MNEMONIC_WORD_COUNT`)
+/// * BIP-39 checksum mismatch or unknown word
+///
+/// # Safety
+/// `words_ptr` must be valid for reads of `words_len` bytes (or null with
+/// `words_len == 0`). `out32_ptr` must be valid for 32 bytes of writes.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_bip39_mnemonic_to_entropy(
+    words_ptr: *const u8,
+    words_len: usize,
+    out32_ptr: *mut u8,
+) -> bool {
+    zero_out(out32_ptr, 32);
+    if out32_ptr.is_null() {
+        return false;
+    }
+    if words_ptr.is_null() && words_len != 0 {
+        return false;
+    }
+
+    let slice = if words_len == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(words_ptr, words_len)
+    };
+    let Ok(words) = std::str::from_utf8(slice) else {
+        return false;
+    };
+
+    let Ok(entropy) = bip39::entropy_from_mnemonic(words) else {
+        return false;
+    };
+
+    write_out(out32_ptr, entropy.as_slice(), 32);
+    true
+}
+
 /// Convert a validated 24-word mnemonic + optional passphrase into the
 /// 64-byte PBKDF2-HMAC-SHA512 output per BIP-39 §Seed-derivation.
 ///
@@ -887,6 +941,52 @@ mod tests {
         assert!(out[out_len..].iter().all(|&b| b == 0));
         let words = std::str::from_utf8(&out[..out_len]).unwrap();
         assert!(bip39::validate(words));
+    }
+
+    #[test]
+    fn bip39_mnemonic_to_entropy_round_trip() {
+        let entropy = [0x42u8; 32];
+        let words = bip39::mnemonic_from_entropy(&entropy).unwrap();
+        let words_bytes = words.as_bytes();
+        let mut out = [0xFFu8; 32];
+        unsafe {
+            assert!(shekyl_bip39_mnemonic_to_entropy(
+                words_bytes.as_ptr(),
+                words_bytes.len(),
+                out.as_mut_ptr(),
+            ));
+        }
+        assert_eq!(out, entropy);
+    }
+
+    #[test]
+    fn bip39_mnemonic_to_entropy_rejects_bad_mnemonic() {
+        let bad = "not even close to a mnemonic";
+        let mut out = [0xFFu8; 32];
+        unsafe {
+            assert!(!shekyl_bip39_mnemonic_to_entropy(
+                bad.as_ptr(),
+                bad.len(),
+                out.as_mut_ptr(),
+            ));
+        }
+        // Failure path must zero-fill the output buffer per the
+        // §"Fail-closed, constant-time write pattern" module-level
+        // discipline (see top-of-file rustdoc).
+        assert_eq!(out, [0u8; 32]);
+    }
+
+    #[test]
+    fn bip39_mnemonic_to_entropy_zero_fills_on_null_words() {
+        let mut out = [0xFFu8; 32];
+        unsafe {
+            assert!(!shekyl_bip39_mnemonic_to_entropy(
+                std::ptr::null(),
+                5,
+                out.as_mut_ptr(),
+            ));
+        }
+        assert_eq!(out, [0u8; 32]);
     }
 
     #[test]

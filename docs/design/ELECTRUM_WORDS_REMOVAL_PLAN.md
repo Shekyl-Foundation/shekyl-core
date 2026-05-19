@@ -294,6 +294,21 @@ directly), and Phase 4 Commit A deletes it per substrate §2.2.
    `get_is_old_style_seed` + `old_language_name`) and L669
    (`wallet->set_seed_language(old_language)`).
 
+   - **No new wallet2 public methods.** The orchestration chain
+     (validate → entropy-extract → account-generate →
+     entropy-persist → keys-file-create) inlines into
+     `tools::generate_from_json` (the JSON-restore-from-phrase
+     path) per substrate §4.10.1. Implementation-shape choice
+     (friend access vs. narrow private setter accessible via
+     friend) is commit-author discretion provided no
+     `wallet2::generate_from_bip39`-shaped public method is
+     introduced. The audit-trail tripwire at
+     `tests/unit_tests/wallet_storage.cpp:42–144` enforces this
+     at CI build time; the FOLLOWUPS.md
+     §"V3.1+ Legacy C++ → Rust rewrite scope" entry on
+     `wallet2 has no generate_from_bip39 entry point` is the
+     load-bearing architectural artifact.
+
 4. **Add public accessor `wallet2::bip39_entropy()`** in
    `src/wallet/wallet2.h` alongside other read-only accessors
    (per substrate §2.3 + §4.5):

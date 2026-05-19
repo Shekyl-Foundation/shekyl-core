@@ -129,6 +129,80 @@ pub fn mnemonic_to_pbkdf2_seed(
     Ok(Zeroizing::new(seed))
 }
 
+/// Recover the 32-byte BIP-39 entropy from a validated 24-word English
+/// mnemonic phrase.
+///
+/// BIP-39 is structurally one-way only on the phrase-to-PBKDF2-seed side
+/// (`mnemonic_to_pbkdf2_seed` above); the phrase-to-entropy direction is a
+/// reversible bit-unpacking of the 264-bit word stream into 256 entropy bits
+/// plus an 8-bit checksum. This entry point is the Shekyl-side primitive
+/// behind the `shekyl_bip39_mnemonic_to_entropy` FFI added by the
+/// Electrum-words removal Phase 1 atomic commit per
+/// `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10. The wallet keyfile
+/// persists the entropy (not the phrase); `query_key("mnemonic")`
+/// regenerates the phrase from the persisted entropy on demand.
+///
+/// # Errors
+///
+/// - `CryptoError::InvalidInput` if `words` is not a well-formed BIP-39
+///   English mnemonic (bad word, bad checksum, malformed Unicode).
+/// - `CryptoError::InvalidInput` if `words` parses but is not 24 words
+///   (Shekyl's `SHEKYL_MNEMONIC_WORD_COUNT` mandate per
+///   `bip39.rs` §"Scope" — only 24-word phrases are supported at v1).
+/// - `CryptoError::InvalidInput` on entropy-length mismatch — defensive
+///   guard against the upstream API yielding fewer or more than 32 bytes
+///   for a 24-word mnemonic. This branch is unreachable under correct
+///   `bip39 = 2.x` behaviour (24-word phrases always carry 32 bytes of
+///   entropy) but exists so any future upstream regression fails loudly
+///   here rather than silently truncating downstream.
+///
+/// # Zeroization
+///
+/// The returned `Zeroizing<[u8; 32]>` wipes its backing storage when
+/// dropped, per the cross-boundary zeroization contract documented in
+/// `ELECTRUM_WORDS_REMOVAL.md` §4.7. The upstream `bip39` crate's
+/// `to_entropy_array` returns a stack-resident `([u8; 33], usize)`
+/// tuple; this function copies the 32 entropy bytes into the
+/// `Zeroizing` wrapper and zeroizes the upstream stack buffer before
+/// returning.
+pub fn entropy_from_mnemonic(
+    words: &str,
+) -> Result<Zeroizing<[u8; SHEKYL_BIP39_ENTROPY_BYTES]>, CryptoError> {
+    let mnemonic = Mnemonic::parse_in(Language::English, words)
+        .map_err(|e| CryptoError::InvalidInput(format!("BIP-39 parse: {e}")))?;
+
+    if mnemonic.word_count() != SHEKYL_MNEMONIC_WORD_COUNT {
+        return Err(CryptoError::InvalidInput(format!(
+            "Shekyl requires 24-word mnemonics; got {}",
+            mnemonic.word_count()
+        )));
+    }
+
+    let (mut entropy_arr, entropy_len) = mnemonic.to_entropy_array();
+    if entropy_len != SHEKYL_BIP39_ENTROPY_BYTES {
+        // Wipe the upstream buffer before propagating the error.
+        use zeroize::Zeroize;
+        entropy_arr.zeroize();
+        return Err(CryptoError::InvalidInput(format!(
+            "BIP-39 entropy length mismatch: expected {}, got {}",
+            SHEKYL_BIP39_ENTROPY_BYTES, entropy_len
+        )));
+    }
+
+    let mut entropy = [0u8; SHEKYL_BIP39_ENTROPY_BYTES];
+    entropy.copy_from_slice(&entropy_arr[..SHEKYL_BIP39_ENTROPY_BYTES]);
+
+    // Wipe the upstream buffer: the upstream `to_entropy_array` returns a
+    // stack-resident `[u8; 33]` that the compiler is otherwise free to
+    // leave populated on the stack for the lifetime of the frame. The
+    // single 32-byte canonical copy lives inside the `Zeroizing` wrapper
+    // returned below.
+    use zeroize::Zeroize;
+    entropy_arr.zeroize();
+
+    Ok(Zeroizing::new(entropy))
+}
+
 /// Number of whitespace-separated tokens in `s`, after trimming.
 fn word_count(s: &str) -> usize {
     s.split_whitespace().count()
@@ -320,6 +394,62 @@ mod tests {
              `Cargo.toml`'s `bip39` dependency comment and \
              `ELECTRUM_WORDS_REMOVAL.md` §4.7 #6 for the discipline."
         );
+    }
+
+    /// `entropy_from_mnemonic` is the BIP-39 phrase-to-entropy primitive
+    /// the wallet keyfile relies on for the new `m_bip39_entropy` field
+    /// (per `ELECTRUM_WORDS_REMOVAL.md` §4.10). The round-trip property is
+    /// the load-bearing invariant: a phrase produced by
+    /// `mnemonic_from_entropy(E)` must yield exactly `E` when fed back
+    /// through `entropy_from_mnemonic`; otherwise the keyfile-stored
+    /// entropy and the user-supplied recovery phrase diverge and
+    /// `query_key("mnemonic")` returns a phrase that does not derive the
+    /// wallet's actual account material.
+    #[test]
+    fn entropy_from_mnemonic_round_trip() {
+        // Pick three entropy patterns: all-zero (BIP-39 vector #1's input),
+        // all-0x42 (matches `mnemonic_to_pbkdf2_seed` test fixtures), and
+        // a non-trivial bit pattern that won't accidentally agree with
+        // either extreme.
+        for &entropy_byte in &[0x00u8, 0x42u8, 0xC3u8] {
+            let entropy = [entropy_byte; SHEKYL_BIP39_ENTROPY_BYTES];
+            let words = mnemonic_from_entropy(&entropy).unwrap();
+            let recovered = entropy_from_mnemonic(&words).unwrap();
+            assert_eq!(recovered.as_slice(), &entropy[..]);
+        }
+    }
+
+    /// 23-word mnemonics are non-canonical for Shekyl (`bip39.rs` §"Scope":
+    /// only 24-word phrases are supported); the function must reject them
+    /// rather than silently truncating or padding the entropy.
+    #[test]
+    fn entropy_from_mnemonic_rejects_23_words() {
+        let entropy = [0u8; SHEKYL_BIP39_ENTROPY_BYTES];
+        let words = mnemonic_from_entropy(&entropy).unwrap();
+        let truncated: String = words
+            .split_whitespace()
+            .take(23)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(entropy_from_mnemonic(&truncated).is_err());
+    }
+
+    /// A phrase with a corrupted final word (the checksum word) must be
+    /// rejected with `InvalidInput`, not silently parsed with a tampered
+    /// entropy block. This guards the wallet keyfile against entropy
+    /// values that were never produced by a legitimate
+    /// `mnemonic_from_entropy` call.
+    #[test]
+    fn entropy_from_mnemonic_rejects_bad_checksum() {
+        let entropy = [0u8; SHEKYL_BIP39_ENTROPY_BYTES];
+        let words = mnemonic_from_entropy(&entropy).unwrap();
+        let mut tokens: Vec<&str> = words.split_whitespace().collect();
+        assert_eq!(tokens.last().copied(), Some("art"));
+        // "ability" is a wordlist token but yields a bad checksum in the
+        // 24th position for the all-zero entropy input.
+        *tokens.last_mut().unwrap() = "ability";
+        let tampered = tokens.join(" ");
+        assert!(entropy_from_mnemonic(&tampered).is_err());
     }
 
     #[test]

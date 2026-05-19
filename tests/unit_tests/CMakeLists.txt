@@ -98,6 +98,8 @@ set(unit_tests_sources
   fcmp.cpp
   vercmp.cpp
   wallet_storage.cpp
+  wallet_bip39.cpp
+  wallet_bip39_residency.cpp
   wipeable_string.cpp
   is_hdd.cpp
   aligned.cpp

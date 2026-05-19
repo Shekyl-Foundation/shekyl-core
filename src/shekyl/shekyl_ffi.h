@@ -847,6 +847,19 @@ bool shekyl_bip39_mnemonic_from_entropy(
     size_t out_words_cap,
     size_t* out_words_len);
 
+/// Recover the 32-byte BIP-39 entropy from a validated 24-word English
+/// mnemonic phrase. Writes 32 bytes to `out32_ptr` on success; zero-fills
+/// `out32_ptr` and returns `false` on validation failure or null
+/// `out32_ptr`. The inverse of `shekyl_bip39_mnemonic_from_entropy` above;
+/// used by the wallet keyfile JSON-restore path to extract the entropy
+/// bytes for `store_keys`-encrypted persistence in `m_bip39_entropy`. See
+/// `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10 for the keyfile schema
+/// rationale.
+bool shekyl_bip39_mnemonic_to_entropy(
+    const uint8_t* words_ptr,
+    size_t words_len,
+    uint8_t* out32_ptr);
+
 /// Run BIP-39 PBKDF2-HMAC-SHA512 (2048 iterations) over the NFKD form of the
 /// mnemonic + "mnemonic"||passphrase salt. Writes 64 bytes to `out64_ptr`.
 /// The passphrase is optional; pass `pass_ptr=nullptr, pass_len=0` for none.
