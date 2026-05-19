@@ -49,45 +49,23 @@ To run the same tests on a release build, replace `debug` with `release`.
 
 # Functional tests
 
-[TODO]
-Functional tests are located under the `tests/functional_tests` directory.
+The Monero-inherited `tests/functional_tests/` Python+C++ harness was
+deleted as part of the Phase 2 Electrum-words removal (see
+`docs/design/ELECTRUM_WORDS_REMOVAL_PLAN.md`). It targeted
+`monerod` / `monero-wallet-rpc` binary names that do not exist in
+Shekyl, restored wallets via a 25-word Electrum seed (the
+`restore_deterministic_wallet` JSON-RPC method removed in Phase 2),
+and was already silently skipped in CI (`functional_tests_rpc` was
+gated on Python deps the build environment didn't install). It was
+inherited dead code with no live caller.
 
-Building all the tests requires installing the following dependencies:
-```bash
-pip install requests psutil monotonic deepdiff
-```
-
-First, run a regtest daemon in the offline mode and with a fixed difficulty:
-```bash
-monerod --regtest --offline --fixed-difficulty 1
-```
-Alternatively, you can run multiple daemons and let them connect with each other by using `--add-exclusive-node`. In this case, make sure that the same fixed difficulty is given to all the daemons.
-
-Next, restore a mainnet wallet with the following seed and restore height 0 (the file path doesn't matter):
-```bash
-velvet lymph giddy number token physics poetry unquoted nibs useful sabotage limits benches lifestyle eden nitrogen anvil fewest avoid batch vials washing fences goat unquoted
-```
-
-Open the wallet file with `monero-wallet-rpc` with RPC port 18083. Finally, start tests by invoking ./blockchain.py or ./speed.py
-
-## Parameters
-
-Configuration of individual tests.
-
-### Mining test
-
-The following environment variables may be set to control the mining test:
-
-- `MINING_NO_MEASUREMENT` - set to anything to use large enough and fixed mining timeouts (use case: very slow PCs and no intention to change the mining code)
-- `MINING_SILENT`         - set to anything to disable mining logging
-
-For example, to customize the run of the functional tests, you may run the following commands from the build directory:
-
-```bash
-export MINING_NO_MEASUREMENT=1
-ctest -V -R functional_tests_rpc
-unset MINING_NO_MEASUREMENT
-```
+A Shekyl-native end-to-end harness — `shekyld` + `shekyl-wallet-rpc`
+with raw-seed (`shekyl_account_generate_from_raw_seed`) restore on
+testnet/fakechain — is a separate planning activity (cf.
+`20-rust-vs-cpp-policy.mdc` "migration is a planning activity"). It
+will live somewhere other than `tests/functional_tests/` and will be
+introduced under its own design document, not as a "while we're here"
+revival of this directory.
 
 # Fuzz tests
 

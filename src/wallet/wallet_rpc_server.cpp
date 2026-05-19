@@ -61,7 +61,6 @@ using namespace epee;
 #include "string_coding.h"
 #include "string_tools.h"
 #include "crypto/hash.h"
-#include "mnemonics/electrum-words.h"
 #include "memwipe.h"
 #include "shekyl/shekyl_ffi.h"
 #include "rpc/rpc_args.h"
