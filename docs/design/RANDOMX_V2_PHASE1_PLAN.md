@@ -736,10 +736,14 @@ all tasks done in this close-out commit unless flagged otherwise):
    [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A — Phase
    1" status paragraph from "in review as PR #54" to "landed on
    `dev` as PR #54 (merge commit `c0c4a11e5`, 2026-05-19)".
-4. ⏳ Branch hygiene per `06-branching.mdc` rule 5 (archive +
-   delete `feat/randomx-v2-phase1`) requires explicit user
-   confirmation; see the merge-completion comment trail. Tag
-   target name: `archive/feat-randomx-v2-phase1-2026-05-19`.
+4. ✅ Branch hygiene per `06-branching.mdc` rule 5: created
+   annotated tag `archive/feat-randomx-v2-phase1-2026-05-19`
+   pointing at `751354b1a` (the pre-merge branch tip) and pushed
+   to origin for recoverability, then deleted the
+   `feat/randomx-v2-phase1` branch locally and on origin. Branch
+   lifetime: 2026-05-18 (cut from `dev` at `6b59b54ee`) to
+   2026-05-19 (merged + archived), inside the `06-branching.mdc`
+   rule-2 ≤5-working-day window with margin.
 5. ✅ Verified `external/randomx` v1 submodule SHA `102f8acf`
    unchanged on `dev` post-merge (`git ls-tree dev external/randomx`
    reports `102f8acf90a7649ada410de5499a7ec62e49e1da`); v2
