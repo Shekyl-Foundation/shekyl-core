@@ -1,12 +1,21 @@
 # Electrum-words removal — CryptoNote 25-word mnemonic subsystem deletion from genesis
 
-**Status.** **DRAFT — Round 1 (initial draft, 2026-05-19).** Phase 0
+**Status.** **RATIFIED — Phase 0 close (2026-05-19 UTC).** Phase 0
 deliverable for the Electrum-words (CryptoNote-25-word mnemonic)
-subsystem removal. Companion:
+subsystem removal landed on `dev` as PR #55 (merge commit
+`60943cb16`, 2026-05-19), with substrate amendments PR #56 (merge
+commit `5bd34f2a1`, 2026-05-19) folding §§4.7 / 4.8 / 4.10 fixes
+back before Phase 1 implementation began. Phase 1 (wallet2
+internal rewire + BIP-39 entropy persistence) landed on `dev` as
+PR #57 (merge commit `3c787df86`, 2026-05-19); Phases 2–6 (the
+pure-deletion phases plus the cross-repo cutover and the docs /
+CI-invariants pass) remain pending per
 [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./ELECTRUM_WORDS_REMOVAL_PLAN.md).
-Both documents must close the Phase 0 review cycle (target 4–6
-rounds per `20-rust-vs-cpp-policy.mdc`) before any deletion code
-lands.
+Companion:
+[`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./ELECTRUM_WORDS_REMOVAL_PLAN.md).
+The Phase 0 review cycle (target 4–6 rounds per
+`20-rust-vs-cpp-policy.mdc`) closed before deletion code lands;
+deletion code begins at Phase 2.
 
 **Scope.** Shekyl genesis ships BIP39-only for wallet seed
 material. The inherited CryptoNote 25-word "Electrum-style"
