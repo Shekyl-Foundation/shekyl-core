@@ -2071,28 +2071,6 @@ namespace wallet_rpc
     typedef epee::misc_utils::struct_init<response_t> response;
   };
 
-  struct COMMAND_RPC_GET_LANGUAGES
-  {
-    struct request_t
-    {
-      BEGIN_KV_SERIALIZE_MAP()
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct response_t
-    {
-      std::vector<std::string> languages;
-      std::vector<std::string> languages_local;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(languages)
-        KV_SERIALIZE(languages_local)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
   struct COMMAND_RPC_CREATE_WALLET
   {
     struct request_t
