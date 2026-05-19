@@ -28,9 +28,9 @@
 
 // Stall-detection calibration regression test.
 //
-// The daemon's `core::check_block_rate()` (src/cryptonote_core/cryptonote_core.cpp:1809)
-// runs a Poisson tail test against the last 150 block timestamps. Its
-// calibration depends on two T-derived constants:
+// The daemon's `cryptonote::core::check_block_rate()` runs a Poisson
+// tail test against the last 150 block timestamps. Its calibration
+// depends on two T-derived constants:
 //
 //   threshold       = 1 / (864000 / SHEKYL_DAA_TARGET_SECONDS)
 //                   = 1 / 7200   (one false positive per 10 days)
@@ -74,9 +74,12 @@ static_assert(SHEKYL_DAA_TARGET_SECONDS == 120,
     "and the {45, 30, 15, 10, 5} expected-block counts assume the "
     "120-second block target.");
 
-// Local reference implementation of the daemon's static helpers, used to
-// sanity-check the canonical Poisson values. Matches the algorithm in
-// src/cryptonote_core/cryptonote_core.cpp:1777-1806 exactly.
+// Local reference implementation of the daemon's static helpers, used
+// to sanity-check the canonical Poisson values. Matches the production
+// `factorial()`, `probability1()`, and `probability()` helpers in
+// src/cryptonote_core/cryptonote_core.cpp exactly (symbol names rather
+// than line numbers, so this reference stays valid across unrelated
+// edits to the surrounding file).
 double ref_factorial(unsigned int n)
 {
   if (n <= 1)
@@ -128,9 +131,9 @@ TEST(stall_detection_calibration, threshold_value_pinned)
 
 TEST(stall_detection_calibration, expected_block_counts_pinned)
 {
-  // The stall-detection code at cryptonote_core.cpp:1823 checks five
-  // time windows; the expected block count for each is window / T. These
-  // are the Poisson means of the underlying tail tests.
+  // The windowed loop in `cryptonote::core::check_block_rate()` checks
+  // five time windows; the expected block count for each is window / T.
+  // These are the Poisson means of the underlying tail tests.
   constexpr std::array<unsigned int, 5> windows = { 5400, 3600, 1800, 1200, 600 };
   constexpr std::array<unsigned int, 5> expected = { 45, 30, 15, 10, 5 };
 
