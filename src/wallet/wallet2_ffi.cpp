@@ -306,9 +306,17 @@ int wallet2_ffi_create_wallet(wallet2_handle* w,
 
     if (!validate_wallet_path(wallet_path, w))
         return w->last_error_code;
-    if (!language || !crypto::ElectrumWords::is_valid_language(language)) {
+    // Phase 1 hard-error per `docs/design/ELECTRUM_WORDS_REMOVAL.md`
+    // §4.3: the `language` parameter is meaningless under BIP-39
+    // (the wordlist is English-only and selected by the protocol,
+    // not by the caller). The parameter is preserved at this Phase
+    // for FFI signature stability; Phase 3 drops it entirely.
+    // Empty / nullptr / zero-length is the only accepted value.
+    if (language && language[0] != '\0') {
         w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
-                     std::string("Unknown language: ") + (language ? language : ""));
+            "the 'language' parameter is no longer supported: Shekyl uses "
+            "the BIP-39 English wordlist exclusively. Pass an empty string "
+            "or NULL.");
         return w->last_error_code;
     }
 
@@ -316,7 +324,6 @@ int wallet2_ffi_create_wallet(wallet2_handle* w,
 
     try {
         auto wal = std::make_unique<tools::wallet2>(w->wallet->nettype(), 1, true);
-        wal->set_seed_language(language);
 
         cryptonote::COMMAND_RPC_GET_HEIGHT::request hreq;
         cryptonote::COMMAND_RPC_GET_HEIGHT::response hres;
@@ -475,6 +482,18 @@ char* wallet2_ffi_generate_from_keys(wallet2_handle* w,
         w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "address is required");
         return nullptr;
     }
+    // Phase 1 hard-error per `docs/design/ELECTRUM_WORDS_REMOVAL.md`
+    // §4.3: the `language` parameter is meaningless under BIP-39
+    // (English-only wordlist; protocol-selected). Empty / nullptr /
+    // zero-length is the only accepted value. Phase 3 drops the
+    // parameter entirely.
+    if (language && language[0] != '\0') {
+        w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
+            "the 'language' parameter is no longer supported: Shekyl uses "
+            "the BIP-39 English wordlist exclusively. Pass an empty string "
+            "or NULL.");
+        return nullptr;
+    }
     if (!validate_wallet_path(wallet_path, w))
         return nullptr;
 
@@ -517,14 +536,6 @@ char* wallet2_ffi_generate_from_keys(wallet2_handle* w,
         } else {
             wal->generate(wallet_file, password ? password : "", info.address, vk, false);
             info_msg = "Watch-only wallet has been generated successfully.";
-        }
-
-        if (language && language[0] != '\0') {
-            if (!crypto::ElectrumWords::is_valid_language(language)) {
-                w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "Invalid seed language");
-                return nullptr;
-            }
-            wal->set_seed_language(language);
         }
 
         wal->set_refresh_from_block_height(restore_height);
@@ -641,20 +652,57 @@ char* wallet2_ffi_query_key(wallet2_handle* w, const char* key_type)
         std::string key_value;
 
         if (strcmp(key_type, "mnemonic") == 0) {
+            // Phase 1 rewire per `docs/design/ELECTRUM_WORDS_REMOVAL.md`
+            // §4.5: the dispatch reads the persisted 32-byte BIP-39
+            // entropy via `wallet2::bip39_entropy()` and calls
+            // `shekyl_bip39_mnemonic_from_entropy` directly. The
+            // legacy `wallet2::get_seed` (Electrum-words via
+            // `bytes_to_words`) is no longer reachable from this site
+            // (it is dead-but-extant until Phase 4 Commit A).
+            //
+            // Failure surfaces:
+            // 1. Watch-only wallets: no spend material, no phrase.
+            // 2. Wallets whose `m_bip39_entropy` is unset
+            //    (raw-seed / from-keys / hardware paths per §4.10
+            //    "The field is not set during").
+            // 3. FFI buffer-size failures from
+            //    `shekyl_bip39_mnemonic_from_entropy` (defensive).
             if (w->wallet->watch_only()) {
                 w->set_error(WALLET_RPC_ERROR_CODE_WATCH_ONLY, "Watch-only wallet cannot retrieve seed");
                 return nullptr;
             }
-            if (!w->wallet->is_deterministic()) {
-                w->set_error(WALLET_RPC_ERROR_CODE_NON_DETERMINISTIC, "Non-deterministic wallet cannot display seed");
+            const auto& entropy_opt = w->wallet->bip39_entropy();
+            if (!entropy_opt) {
+                w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR,
+                    "this wallet was not created from a BIP-39 mnemonic; the "
+                    "mnemonic phrase is not available");
                 return nullptr;
             }
-            epee::wipeable_string seed;
-            if (!w->wallet->get_seed(seed)) {
-                w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "Failed to get seed");
+            // BIP-39 24-word English phrases fit within ~250 bytes
+            // (24 * 8-char-avg + 23 spaces); 512 is conservative.
+            uint8_t phrase_buf[512] = {0};
+            size_t phrase_len = 0;
+            const bool ok = shekyl_bip39_mnemonic_from_entropy(
+                entropy_opt->data(),
+                phrase_buf, sizeof(phrase_buf), &phrase_len);
+            if (!ok) {
+                memwipe(phrase_buf, sizeof(phrase_buf));
+                w->set_error(WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR, "Failed to recover BIP-39 mnemonic from entropy");
                 return nullptr;
             }
-            key_value = std::string(seed.data(), seed.size());
+            // Copy into the JSON-bound key_value via wipeable_string
+            // intermediate so the phrase is scrubbed at the
+            // wipeable_string destructor; the JSON-bound `key_value`
+            // remains the documented residue (substrate §4.7 records
+            // this as an inherited drift surface — the rapidjson
+            // String value copies the bytes again, and rapidjson does
+            // not zeroize).
+            {
+                epee::wipeable_string phrase_wipe(
+                    reinterpret_cast<const char*>(phrase_buf), phrase_len);
+                key_value.assign(phrase_wipe.data(), phrase_wipe.size());
+            }
+            memwipe(phrase_buf, sizeof(phrase_buf));
         } else if (strcmp(key_type, "view_key") == 0) {
             epee::wipeable_string key = epee::to_hex::wipeable_string(
                 w->wallet->get_account().get_keys().m_view_secret_key);

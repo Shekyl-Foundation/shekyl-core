@@ -76,7 +76,6 @@ using namespace epee;
 #include "serialization/binary_utils.h"
 #include "serialization/string.h"
 #include "cryptonote_basic/blobdatatype.h"
-#include "mnemonics/electrum-words.h"
 #include "common/i18n.h"
 #include "common/util.h"
 #include "common/apply_permutation.h"
@@ -238,10 +237,19 @@ namespace
   }
 }
 
-namespace
-{
-// Create on-demand to prevent static initialization order fiasco issues.
-struct options {
+namespace tools {
+// Phase-1 BIP-39 restore-from-phrase access surface per
+// `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10.1. The struct lives in
+// `namespace tools` rather than the anonymous namespace at this TU's
+// file scope so that `class wallet2` can `friend
+// tools::generate_from_json(...)` in `wallet2.h` (the friend declaration
+// matches `tools::generate_from_json` via unqualified name lookup from
+// `tools::wallet2`'s enclosing scope; an anonymous-namespace function
+// would not be the same entity). The rename from the historical
+// `options` to `wallet_args_options` disambiguates from `std::options`-
+// adjacent identifiers and makes the wallet-arg-descriptors semantic
+// explicit at every call site.
+struct wallet_args_options {
   const command_line::arg_descriptor<std::string> daemon_address = {"daemon-address", tools::wallet2::tr("Use daemon instance at <host>:<port>"), ""};
   const command_line::arg_descriptor<std::string> daemon_host = {"daemon-host", tools::wallet2::tr("Use daemon instance at host <arg> instead of localhost"), ""};
   const command_line::arg_descriptor<std::string> proxy = {"proxy", tools::wallet2::tr("[<ip>:]<port> socks proxy to use for daemon connections"), {}, true};
@@ -269,7 +277,10 @@ struct options {
   const command_line::arg_descriptor<std::string> extra_entropy = {"extra-entropy", tools::wallet2::tr("File containing extra entropy to initialize the PRNG (any data, aim for 256 bits of entropy to be useful, which typically means more than 256 bits of data)")};
   const command_line::arg_descriptor<bool> allow_mismatched_daemon_version = {"allow-mismatched-daemon-version", tools::wallet2::tr("Allow communicating with a daemon that uses a different version"), false};
 };
+} // namespace tools
 
+namespace
+{
 void do_prepare_file_names(const std::string& file_path, std::string& keys_file, std::string& wallet_file)
 {
   keys_file = file_path;
@@ -306,7 +317,7 @@ std::string get_weight_string(const cryptonote::transaction &tx, size_t blob_siz
   return get_weight_string(get_transaction_weight(tx, blob_size));
 }
 
-std::unique_ptr<tools::wallet2> make_basic(const boost::program_options::variables_map& vm, bool unattended, const options& opts, const std::function<std::optional<tools::password_container>(const char *, bool)> &password_prompter)
+std::unique_ptr<tools::wallet2> make_basic(const boost::program_options::variables_map& vm, bool unattended, const tools::wallet_args_options& opts, const std::function<std::optional<tools::password_container>(const char *, bool)> &password_prompter)
 {
   const bool testnet = command_line::get_arg(vm, opts.testnet);
   const bool stagenet = command_line::get_arg(vm, opts.stagenet);
@@ -489,7 +500,7 @@ std::unique_ptr<tools::wallet2> make_basic(const boost::program_options::variabl
   return wallet;
 }
 
-std::optional<tools::password_container> get_password(const boost::program_options::variables_map& vm, const options& opts, const std::function<std::optional<tools::password_container>(const char*, bool)> &password_prompter, const bool verify)
+std::optional<tools::password_container> get_password(const boost::program_options::variables_map& vm, const tools::wallet_args_options& opts, const std::function<std::optional<tools::password_container>(const char*, bool)> &password_prompter, const bool verify)
 {
   if (command_line::has_arg(vm, opts.password) && !command_line::is_arg_defaulted(vm, opts.password_file))
   {
@@ -518,8 +529,22 @@ std::optional<tools::password_container> get_password(const boost::program_optio
 
   return password_prompter(verify ? tools::wallet2::tr("Enter a new password for the wallet") : tools::wallet2::tr("Wallet password"), verify);
 }
+} // namespace (anonymous)
 
-std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_from_json(const std::string& json_file, const boost::program_options::variables_map& vm, bool unattended, const options& opts, const std::function<std::optional<tools::password_container>(const char *, bool)> &password_prompter)
+// `tools::generate_from_json` lives in `namespace tools` (not the anonymous
+// namespace above) so that `class tools::wallet2` can grant it friendship
+// in `wallet2.h` for the Phase-1 BIP-39 restore-from-phrase access surface
+// per `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10.1. The friend
+// declaration's unqualified name lookup resolves to `tools::generate_from_json`,
+// not to a TU-local anonymous-namespace function; thus the function must
+// live in `namespace tools` for the friendship to take effect. See the
+// CI tripwire at `tests/unit_tests/wallet_storage.cpp:42-144` which
+// forbids a public `wallet2::generate_from_bip39` method; this friendship
+// is the access mechanism that lets the JSON-restore-from-phrase
+// orchestration inline directly into `generate_from_json` without
+// expanding `wallet2`'s public surface.
+namespace tools {
+std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_from_json(const std::string& json_file, const boost::program_options::variables_map& vm, bool unattended, const wallet_args_options& opts, const std::function<std::optional<tools::password_container>(const char *, bool)> &password_prompter)
 {
   const bool testnet = command_line::get_arg(vm, opts.testnet);
   const bool stagenet = command_line::get_arg(vm, opts.stagenet);
@@ -592,23 +617,52 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
     }
 
     GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, seed, std::string, String, false, std::string());
-    std::string old_language;
-    crypto::secret_key recovery_key;
-    bool restore_deterministic_wallet = false;
+    GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, seed_passphrase, std::string, String, false, std::string());
+    bool restore_from_bip39 = false;
     if (field_seed_found)
     {
-      if (!crypto::ElectrumWords::words_to_bytes(field_seed, recovery_key, old_language))
+      // Phase 1 atomic-deliverable BIP-39 rewire per
+      // `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.5.1 Surface A and
+      // §4.10.1. The JSON `seed` field is interpreted as a 24-word
+      // BIP-39 English mnemonic; the JSON `seed_passphrase` field is
+      // consumed *inside* the BIP-39 PBKDF2-HMAC-SHA512 derivation by
+      // the orchestration block inlined below (no post-hoc
+      // `cryptonote::decrypt_key` step — the passphrase semantic
+      // shifts from Monero-encrypt_key to BIP-39 spec compliance).
+      // The orchestration inlines into this function rather than
+      // wrapping in a `wallet2::generate_from_bip39` method per the
+      // §4.10.1 disposition / CI tripwire at
+      // `tests/unit_tests/wallet_storage.cpp:42-144`.
+      //
+      // V6 25-word UX hint per
+      // `docs/design/ELECTRUM_WORDS_REMOVAL_PLAN.md` §Phase 1 work-
+      // item 10: count whitespace-separated tokens in `field_seed`;
+      // if exactly 25, surface a hint pointing at the BIP-39
+      // requirement before the bare validation error. The check is
+      // pre-validation UX — the underlying BIP-39 validation in the
+      // inlined `shekyl_bip39_mnemonic_to_entropy` call still rejects
+      // any non-24-word input.
       {
-        THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, tools::wallet2::tr("Electrum-style word list failed verification"));
+        std::vector<std::string> tokens;
+        boost::split(tokens, field_seed, boost::is_any_of(" \t\n\r"),
+                     boost::token_compress_on);
+        // boost::split with token_compress_on still emits a trailing
+        // empty token for `"a b "`; strip empties.
+        tokens.erase(std::remove_if(tokens.begin(), tokens.end(),
+                                    [](const std::string &t) { return t.empty(); }),
+                     tokens.end());
+        if (tokens.size() == 25)
+        {
+          THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error,
+              tools::wallet2::tr(
+                  "Shekyl uses 24-word BIP-39 mnemonics. 25-word phrases "
+                  "from other wallets (Monero, CryptoNote-based projects) "
+                  "are not compatible — Shekyl begins at its own genesis "
+                  "and does not support legacy seed formats. See "
+                  "docs/USER_GUIDE.md for the BIP-39 seed format details."));
+        }
       }
-      restore_deterministic_wallet = true;
-
-      GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, seed_passphrase, std::string, String, false, std::string());
-      if (field_seed_passphrase_found)
-      {
-        if (!field_seed_passphrase.empty())
-          recovery_key = cryptonote::decrypt_key(recovery_key, field_seed_passphrase);
-      }
+      restore_from_bip39 = true;
     }
 
     GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, address, std::string, String, false, std::string());
@@ -619,11 +673,11 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
     // compatibility checks
     if (!field_seed_found && !field_viewkey_found && !field_spendkey_found)
     {
-      THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, tools::wallet2::tr("At least one of either an Electrum-style word list, private view key, or private spend key must be specified"));
+      THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, tools::wallet2::tr("At least one of either a BIP-39 mnemonic phrase, private view key, or private spend key must be specified"));
     }
     if (field_seed_found && (field_viewkey_found || field_spendkey_found))
     {
-      THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, tools::wallet2::tr("Both Electrum-style word list and private key(s) specified"));
+      THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, tools::wallet2::tr("Both BIP-39 mnemonic phrase and private key(s) specified"));
     }
 
     // if an address was given, we check keys against it, and deduce the spend
@@ -657,22 +711,147 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
       }
     }
 
-    const bool deprecated_wallet = restore_deterministic_wallet && ((old_language == crypto::ElectrumWords::old_language_name) ||
-      crypto::ElectrumWords::get_is_old_style_seed(field_seed));
-    THROW_WALLET_EXCEPTION_IF(deprecated_wallet, tools::error::wallet_internal_error,
-      tools::wallet2::tr("Cannot generate deprecated wallets from JSON"));
+    // No deprecated-wallet detection: Phase 1 atomically retires the
+    // Electrum-words subsystem from the JSON-restore path
+    // (`docs/design/ELECTRUM_WORDS_REMOVAL.md` §6.1 — "BIP-39 from
+    // genesis, no legacy seed-format compatibility branch").
+    // 25-word phrases are caught earlier by the V6 UX-hint guard.
 
     wallet.reset(make_basic(vm, unattended, opts, password_prompter).release());
     wallet->set_refresh_from_block_height(field_scan_from_height);
     wallet->explicit_refresh_from_block_height(field_scan_from_height_found);
-    if (!old_language.empty())
-      wallet->set_seed_language(old_language);
 
     try
     {
-      if (!field_seed.empty())
+      if (restore_from_bip39)
       {
-        wallet->generate(field_filename, field_password, recovery_key, recover, false, create_address_file);
+        // Phase 1 atomic-deliverable BIP-39 orchestration per
+        // `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10 + §4.5.1
+        // Surface A, inlined here (rather than wrapped in a
+        // `wallet2::generate_from_bip39` member) per §4.10.1 and the
+        // CI tripwire at `tests/unit_tests/wallet_storage.cpp:42-144`.
+        // The orchestration chain is: BIP-39 phrase validation +
+        // entropy-extract (`shekyl_bip39_mnemonic_to_entropy`) →
+        // account material derivation (`m_account.generate_from_bip39`
+        // — the BIP-39 spec's PBKDF2-HMAC-SHA512 → master-seed →
+        // HKDF account pipeline) → entropy-persist
+        // (`m_bip39_entropy`) → keys-file-create (`create_keys_file`).
+        //
+        // Access to `wallet`'s private members (`m_account`,
+        // `m_bip39_entropy`, `m_nettype`, `m_refresh_from_block_height`,
+        // and the private setup methods) is granted via
+        // `class wallet2`'s friend declaration on
+        // `tools::generate_from_json` in `wallet2.h`. No new
+        // `wallet2` public method is introduced; when wallet2 itself
+        // is deleted at Rust-rewrite Phase 5, this orchestration
+        // disappears with it (removal-as-no-op) rather than cascading
+        // through public-method dependents (removal-as-breaking-change).
+        //
+        // The phrase and passphrase are passed through
+        // `epee::wipeable_string` so the cross-boundary zeroization
+        // contract per §4.7 holds end-to-end down to the FFI call.
+        // Mainnet/Stagenet only — the underlying FFI rejects testnet
+        // / fakechain `(network, BIP-39)` pairs (those nettypes use
+        // the raw-seed `generate(...)` overload).
+        const epee::wipeable_string phrase_wipe(field_seed);
+        const epee::wipeable_string passphrase_wipe(field_seed_passphrase);
+
+        wallet->clear();
+        wallet->prepare_file_names(field_filename);
+
+        // `wallet->clear()` resets `m_refresh_from_block_height` and the
+        // explicit-flag state to defaults, dropping the values applied at
+        // lines 721-722 above. Re-apply them here so the JSON
+        // `scan_from_height` (and its presence flag) survive the BIP-39
+        // branch's mid-stream clear; legacy non-BIP-39 paths (the
+        // `generate(...)` overload below) do not call `clear()` and
+        // therefore retain the line-721/722 values without re-application.
+        wallet->set_refresh_from_block_height(field_scan_from_height);
+        wallet->explicit_refresh_from_block_height(field_scan_from_height_found);
+
+        if (!field_filename.empty())
+        {
+          boost::system::error_code ignored_ec;
+          THROW_WALLET_EXCEPTION_IF(boost::filesystem::exists(wallet->m_wallet_file, ignored_ec), error::file_exists, wallet->m_wallet_file);
+          THROW_WALLET_EXCEPTION_IF(boost::filesystem::exists(wallet->m_keys_file,   ignored_ec), error::file_exists, wallet->m_keys_file);
+        }
+
+        // Recover the 32-byte canonical entropy from the validated
+        // phrase (the Phase 1 fifth-FFI surface per substrate §4.10 +
+        // §3.1). This is the load-bearing call for `m_bip39_entropy`
+        // persistence; if the phrase fails BIP-39 validation here,
+        // the keyfile is not created and no wallet state is left
+        // behind.
+        std::array<uint8_t, 32> entropy_buf{};
+        const bool entropy_ok = shekyl_bip39_mnemonic_to_entropy(
+            reinterpret_cast<const uint8_t*>(phrase_wipe.data()),
+            phrase_wipe.size(),
+            entropy_buf.data());
+        THROW_WALLET_EXCEPTION_IF(!entropy_ok, error::wallet_internal_error,
+            tools::wallet2::tr("invalid BIP-39 mnemonic phrase"));
+
+        // Derive account material from (phrase, passphrase).
+        // `m_account` owns the full PBKDF2-HMAC-SHA512 → HKDF
+        // derivation across the FFI; this site only orchestrates.
+        // `account_base::generate_from_bip39` accepts
+        // `epee::wipeable_string` directly (post-Phase-1 Copilot-fix
+        // signature change), so the wipe-on-drop discipline of
+        // `phrase_wipe` / `passphrase_wipe` extends end-to-end down
+        // to the FFI call: no `std::string` intermediate is created
+        // and no manual `memwipe` of a short-string-optimization
+        // payload is required (the SSO / libstdc++ COW paths could
+        // otherwise leave plaintext residue beyond the reach of an
+        // `&s[0]` memwipe). On exception we still scrub the
+        // entropy_buf transit copy explicitly because the
+        // `set_null()` inside `generate_from_bip39` does not see it.
+        try
+        {
+          wallet->m_account.generate_from_bip39(phrase_wipe, passphrase_wipe, wallet->m_nettype);
+        }
+        catch (...)
+        {
+          memwipe(entropy_buf.data(), entropy_buf.size());
+          throw;
+        }
+
+        wallet->init_type(hw::device::device_type::SOFTWARE);
+        wallet->setup_keys(field_password);
+
+        // Persist the canonical entropy. The optional is set on the
+        // mainline path; raw-seed / from-keys / hardware paths leave
+        // `m_bip39_entropy` at default-constructed `std::nullopt`
+        // per §4.10 "The field is not set during".
+        {
+          epee::mlocked<tools::scrubbed_arr<uint8_t, 32>> entropy_locked{};
+          std::copy(entropy_buf.begin(), entropy_buf.end(), entropy_locked.data());
+          wallet->m_bip39_entropy = std::move(entropy_locked);
+        }
+        // Wipe the stack-resident transit buffer; the canonical copy
+        // now lives under mlock inside `m_bip39_entropy`.
+        memwipe(entropy_buf.data(), entropy_buf.size());
+
+        // Calculate a starting refresh height (BIP-39 restore always
+        // takes the recover-path defaults; the substrate does not
+        // pin a specific refresh height for restored wallets — fall
+        // through to `estimate_blockchain_height` which the legacy
+        // `generate(...)` overload uses for `!recover` wallets). Gate
+        // on the JSON-presence flag rather than on the numeric value
+        // so that a user-supplied `scan_from_height: 0` (an explicit
+        // from-genesis rescan request) is preserved instead of being
+        // overwritten by the daemon-derived estimate.
+        if (!field_scan_from_height_found)
+        {
+          wallet->m_refresh_from_block_height = wallet->estimate_blockchain_height();
+        }
+
+        wallet->create_keys_file(field_filename, false, field_password,
+            wallet->m_nettype != MAINNET || create_address_file);
+
+        wallet->setup_new_blockchain();
+
+        if (!field_filename.empty())
+          wallet->store();
+
         password = field_password;
       }
       else if (field_viewkey.empty() && !field_spendkey.empty())
@@ -730,7 +909,10 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
   }
   return {nullptr, tools::password_container{}};
 }
+} // namespace tools
 
+namespace
+{
 std::string strjoin(const std::vector<size_t> &V, const char *sep)
 {
   std::stringstream ss;
@@ -1213,12 +1395,12 @@ wallet2::~wallet2()
 
 bool wallet2::has_testnet_option(const boost::program_options::variables_map& vm)
 {
-  return command_line::get_arg(vm, options().testnet);
+  return command_line::get_arg(vm, wallet_args_options().testnet);
 }
 
 bool wallet2::has_stagenet_option(const boost::program_options::variables_map& vm)
 {
-  return command_line::get_arg(vm, options().stagenet);
+  return command_line::get_arg(vm, wallet_args_options().stagenet);
 }
 
 bool wallet2::has_proxy_option() const
@@ -1228,17 +1410,17 @@ bool wallet2::has_proxy_option() const
 
 std::string wallet2::device_name_option(const boost::program_options::variables_map& vm)
 {
-  return command_line::get_arg(vm, options().hw_device);
+  return command_line::get_arg(vm, wallet_args_options().hw_device);
 }
 
 std::string wallet2::device_derivation_path_option(const boost::program_options::variables_map &vm)
 {
-  return command_line::get_arg(vm, options().hw_device_derivation_path);
+  return command_line::get_arg(vm, wallet_args_options().hw_device_derivation_path);
 }
 
 void wallet2::init_options(boost::program_options::options_description& desc_params)
 {
-  const options opts{};
+  const wallet_args_options opts{};
   command_line::add_arg(desc_params, opts.daemon_address);
   command_line::add_arg(desc_params, opts.daemon_host);
   command_line::add_arg(desc_params, opts.proxy);
@@ -1269,14 +1451,14 @@ void wallet2::init_options(boost::program_options::options_description& desc_par
 
 std::pair<std::unique_ptr<wallet2>, tools::password_container> wallet2::make_from_json(const boost::program_options::variables_map& vm, bool unattended, const std::string& json_file, const std::function<std::optional<tools::password_container>(const char *, bool)> &password_prompter)
 {
-  const options opts{};
+  const wallet_args_options opts{};
   return generate_from_json(json_file, vm, unattended, opts, password_prompter);
 }
 
 std::pair<std::unique_ptr<wallet2>, password_container> wallet2::make_from_file(
   const boost::program_options::variables_map& vm, bool unattended, const std::string& wallet_file, const std::function<std::optional<tools::password_container>(const char *, bool)> &password_prompter)
 {
-  const options opts{};
+  const wallet_args_options opts{};
   auto pwd = get_password(vm, opts, password_prompter, false);
   if (!pwd)
   {
@@ -1292,7 +1474,7 @@ std::pair<std::unique_ptr<wallet2>, password_container> wallet2::make_from_file(
 
 std::pair<std::unique_ptr<wallet2>, password_container> wallet2::make_new(const boost::program_options::variables_map& vm, bool unattended, const std::function<std::optional<password_container>(const char *, bool)> &password_prompter)
 {
-  const options opts{};
+  const wallet_args_options opts{};
   auto pwd = get_password(vm, opts, password_prompter, true);
   if (!pwd)
   {
@@ -1303,7 +1485,7 @@ std::pair<std::unique_ptr<wallet2>, password_container> wallet2::make_new(const 
 
 std::unique_ptr<wallet2> wallet2::make_dummy(const boost::program_options::variables_map& vm, bool unattended, const std::function<std::optional<tools::password_container>(const char *, bool)> &password_prompter)
 {
-  const options opts{};
+  const wallet_args_options opts{};
   return make_basic(vm, unattended, opts, password_prompter);
 }
 
@@ -1369,30 +1551,23 @@ bool wallet2::is_deterministic() const
       reinterpret_cast<const unsigned char*>(get_account().get_keys().m_view_secret_key.data)) == 0;
 }
 //----------------------------------------------------------------------------------------------------
-bool wallet2::get_seed(epee::wipeable_string& electrum_words, const epee::wipeable_string &passphrase) const
+bool wallet2::get_seed(epee::wipeable_string& /*electrum_words*/, const epee::wipeable_string& /*passphrase*/) const
 {
-  bool keys_deterministic = is_deterministic();
-  if (!keys_deterministic)
-  {
-    std::cout << "This is not a deterministic wallet" << std::endl;
-    return false;
-  }
-  if (seed_language.empty())
-  {
-    std::cout << "seed_language not set" << std::endl;
-    return false;
-  }
-
-  crypto::secret_key key = get_account().get_keys().m_spend_secret_key;
-  if (!passphrase.empty())
-    key = cryptonote::encrypt_key(key, passphrase);
-  if (!crypto::ElectrumWords::bytes_to_words(key, electrum_words, seed_language))
-  {
-    std::cout << "Failed to create seed from key for language: " << seed_language << std::endl;
-    return false;
-  }
-
-  return true;
+  // Phase 1 atomic-deliverable: `wallet2::get_seed` is left dead-but-
+  // extant per `docs/design/ELECTRUM_WORDS_REMOVAL.md` §6 / Phase 4
+  // Commit A disposition. The only call sites — the FFI dispatch
+  // branch at `wallet2_ffi.cpp:643` and the equivalent
+  // `wallet_rpc_server.cpp` `query_key("mnemonic")` handler — were
+  // rewired in this same Phase 1 commit to read `bip39_entropy()` and
+  // call `shekyl_bip39_mnemonic_from_entropy` directly, so this body
+  // has no live callers. The Electrum-words subsystem is also deleted
+  // from wallet2.cpp's compilation surface in Phase 1 (the
+  // `#include "mnemonics/electrum-words.h"` directive at L79 is
+  // removed in the same atomic commit), so this body cannot reach
+  // the old `crypto::ElectrumWords::bytes_to_words` path. The
+  // method's declaration in `wallet2.h` and this gutted body are
+  // both deleted in Phase 4 Commit A (per substrate §2.2 inventory).
+  return false;
 }
 //----------------------------------------------------------------------------------------------------
 bool wallet2::reconnect_device()
@@ -4790,7 +4965,9 @@ std::optional<wallet2::keys_file_data> wallet2::get_keys_file_data(const crypto:
   CHECK_AND_ASSERT_MES(r, std::nullopt, "failed to serialize wallet keys");
   std::optional<wallet2::keys_file_data> keys_file_data = wallet2::keys_file_data{};
 
-  // Create a JSON object with "key_data" and "seed_language" as keys.
+  // Create a JSON object with "key_data" / "seed_language" /
+  // "bip39_entropy" as keys. The whole JSON is xchacha20-encrypted
+  // below; on-disk surface is ciphertext only.
   rapidjson::Document json;
   json.SetObject();
   rapidjson::Value value(rapidjson::kStringType);
@@ -4800,6 +4977,30 @@ std::optional<wallet2::keys_file_data> wallet2::get_keys_file_data(const crypto:
   {
     value.SetString(seed_language.c_str(), seed_language.length());
     json.AddMember("seed_language", value, json.GetAllocator());
+  }
+
+  // Persist `m_bip39_entropy` (32 bytes, hex-encoded) when set, per
+  // `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10. The hex encoding
+  // is for keyfile JSON readability; the entropy bytes themselves are
+  // inside the xchacha20-encrypted envelope (the whole JSON is
+  // encrypted below at the `xchacha20(buffer...)` call), so the on-
+  // disk surface is ciphertext only. Net-new field in Phase 1;
+  // coexists with `seed_language` until Phase 4 Commit B deletes the
+  // latter.
+  if (m_bip39_entropy)
+  {
+    const std::string entropy_hex =
+        epee::string_tools::buff_to_hex_nodelimer(
+            std::string(reinterpret_cast<const char*>(m_bip39_entropy->data()),
+                        m_bip39_entropy->size()));
+    // Use the allocator-form of SetString so the document owns its
+    // own copy of the hex string; `entropy_hex` is a local whose
+    // lifetime ends with this block, and the surrounding
+    // `seed_language` SetString pattern is only safe because
+    // `seed_language` is a member of the enclosing `store_keys`
+    // caller scope.
+    value.SetString(entropy_hex.c_str(), entropy_hex.length(), json.GetAllocator());
+    json.AddMember("bip39_entropy", value, json.GetAllocator());
   }
 
   rapidjson::Value value2(rapidjson::kNumberType);
@@ -5345,6 +5546,37 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
     if (field_seed_language_found)
     {
       set_seed_language(field_seed_language);
+    }
+    // Phase 1 BIP-39 entropy load (`docs/design/ELECTRUM_WORDS_REMOVAL.md`
+    // §4.10 + §V4). Wallets created via `generate_from_bip39` write
+    // the field; wallets created via raw-seed / from-keys / hardware
+    // paths leave the field absent and `m_bip39_entropy` stays at
+    // default-constructed `std::nullopt`. The 32-byte payload is
+    // hex-encoded inside the xchacha20-encrypted envelope (the
+    // surrounding ciphertext was already decrypted into `account_data`
+    // upstream of this JSON parse).
+    GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, bip39_entropy, std::string, String, false, std::string());
+    if (field_bip39_entropy_found && !field_bip39_entropy.empty())
+    {
+      cryptonote::blobdata entropy_bin;
+      if (!epee::string_tools::parse_hexstr_to_binbuff(field_bip39_entropy, entropy_bin) ||
+          entropy_bin.size() != 32)
+      {
+        // Symmetric with the rest of `load_keys_buf`: sibling
+        // `GET_FIELD_FROM_JSON_RETURN_ON_ERROR` paths surface
+        // malformed-field errors as `LOG_ERROR; return false;` rather
+        // than as exceptions. Throwing here would force callers into a
+        // mixed result-style (false on most malformed fields, exception
+        // on this one) — keep the loader's single-path contract.
+        LOG_ERROR("wallet keyfile carries a malformed bip39_entropy field");
+        if (!entropy_bin.empty())
+          memwipe(&entropy_bin[0], entropy_bin.size());
+        return false;
+      }
+      epee::mlocked<tools::scrubbed_arr<uint8_t, 32>> entropy_locked{};
+      std::memcpy(entropy_locked.data(), entropy_bin.data(), entropy_bin.size());
+      m_bip39_entropy = std::move(entropy_locked);
+      memwipe(&entropy_bin[0], entropy_bin.size());
     }
     GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, watch_only, int, Int, false, false);
     m_watch_only = field_watch_only;

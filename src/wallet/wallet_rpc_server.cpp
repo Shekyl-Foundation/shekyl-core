@@ -62,6 +62,8 @@ using namespace epee;
 #include "string_tools.h"
 #include "crypto/hash.h"
 #include "mnemonics/electrum-words.h"
+#include "memwipe.h"
+#include "shekyl/shekyl_ffi.h"
 #include "rpc/rpc_args.h"
 #include "rpc/core_rpc_server_commands_defs.h"
 #include "fee_priority.h"
@@ -2203,7 +2205,14 @@ namespace tools
 
       if (req.key_type.compare("mnemonic") == 0)
       {
-        epee::wipeable_string seed;
+        // Phase 1 rewire per `docs/design/ELECTRUM_WORDS_REMOVAL.md`
+        // §4.5: the dispatch reads the persisted 32-byte BIP-39
+        // entropy via `wallet2::bip39_entropy()` and calls
+        // `shekyl_bip39_mnemonic_from_entropy` directly. The legacy
+        // `wallet2::get_seed` (Electrum-words) is no longer reachable
+        // from this site (it is dead-but-extant until Phase 4
+        // Commit A). The RPC layer does not expose a passphrase
+        // parameter, so the §4.5.1 Surface B hard-error is FFI-only.
         if (m_wallet->watch_only())
         {
           er.code = WALLET_RPC_ERROR_CODE_WATCH_ONLY;
@@ -2211,19 +2220,35 @@ namespace tools
           return false;
         }
         CHECK_IF_BACKGROUND_SYNCING();
-        if (!m_wallet->is_deterministic())
-        {
-          er.code = WALLET_RPC_ERROR_CODE_NON_DETERMINISTIC;
-          er.message = "The wallet is non-deterministic. Cannot display seed.";
-          return false;
-        }
-        if (!m_wallet->get_seed(seed))
+        const auto& entropy_opt = m_wallet->bip39_entropy();
+        if (!entropy_opt)
         {
           er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-          er.message = "Failed to get seed.";
+          er.message = "this wallet was not created from a BIP-39 mnemonic; the mnemonic phrase is not available";
           return false;
         }
-        res.key = std::string(seed.data(), seed.size()); // send to the network, then wipe RAM :D
+        uint8_t phrase_buf[512] = {0};
+        size_t phrase_len = 0;
+        const bool ok = shekyl_bip39_mnemonic_from_entropy(
+            entropy_opt->data(),
+            phrase_buf, sizeof(phrase_buf), &phrase_len);
+        if (!ok)
+        {
+          memwipe(phrase_buf, sizeof(phrase_buf));
+          er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
+          er.message = "Failed to recover BIP-39 mnemonic from entropy";
+          return false;
+        }
+        {
+          epee::wipeable_string phrase_wipe(
+              reinterpret_cast<const char*>(phrase_buf), phrase_len);
+          // send to the network, then wipe RAM :D (the RPC layer
+          // copies the phrase into `res.key` which is a plain
+          // `std::string` and is wipe-deferred per §4.7's documented
+          // residue at the RPC boundary).
+          res.key = std::string(phrase_wipe.data(), phrase_wipe.size());
+        }
+        memwipe(phrase_buf, sizeof(phrase_buf));
       }
       else if(req.key_type.compare("view_key") == 0)
       {
