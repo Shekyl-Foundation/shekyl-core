@@ -545,9 +545,14 @@ in `docs/FOLLOWUPS.md` and stay out of the PR.
 
 ## §10 Implementation close (2026-05-18)
 
-Phase 1 landed on `dev` as `feat/randomx-v2-phase1` (three commits;
-matches the planned ≤5 envelope from the top of this doc). The
-file-by-file diff matches §3 exactly:
+Phase 1 is implemented on `feat/randomx-v2-phase1` and proposed in
+PR #54 against `dev` (three implementation-close commits plus the
+Copilot-fix layers; remains within the planned ≤5 envelope from the
+top of this doc). The file-by-file diff matches §3 exactly. On
+merge, the post-merge close-out commit rewrites this paragraph to
+"landed on `dev` as `feat/randomx-v2-phase1`" with the merge SHA
+and merge date — see the post-merge close-out task list at the end
+of this §10.
 
 Numbers below are the per-file diff stats produced by `git diff
 --numstat origin/dev..HEAD` at the implementation-close commit
@@ -636,23 +641,34 @@ push; matches §4):
    inside the `07-consensus-atomic-cutovers.mdc`-style
    implementation-drift discipline.
 
-2. **D2 — `IMPORTED_LOCATION` is single-config; per-`CONFIG`
-   wiring deferred to Phase 2.** Surfaced by Copilot finding C-1
-   on PR #54. On single-config generators (Ninja, Make — the
-   production Shekyl build pipeline including Guix) the current
-   single-path wiring is correct by construction. On multi-config
-   generators (MSVC, Xcode), Debug ↔ Release in the same build
-   tree would have the second install overwrite the first.
-   **Phase 1 has no consumer of `shekyl_randomx_v2`** (the daemon
-   does not link it), so the collision is latent and never
-   observable in shipped artifacts. Phase 2 introduces the first
-   consumer (`rust/shekyl-pow-randomx/` cross-check tests); the
-   per-`CONFIG` split (per-`CONFIG` install dir +
-   `IMPORTED_LOCATION_<CONFIG>`) lands then. The
-   `external/CMakeLists.txt` block emits a `STATUS` message under
-   `CMAKE_CONFIGURATION_TYPES` so the latent condition is visible
-   to anyone running `cmake -G "Visual Studio 17 2022"
-   -DBUILD_RANDOMX_V2_MINER_LIB=ON` against this PR. Recorded in
+2. **D2 — `IMPORTED_LOCATION` is single-config; multi-config
+   generators are refused; per-`CONFIG` wiring deferred to
+   Phase 2.** Surfaced by Copilot findings C-1 (commit-3 review)
+   and C-6 (commit-4 review) on PR #54. On single-config
+   generators (Ninja, Make — the production Shekyl build
+   pipeline including Guix) the current single-path wiring is
+   correct by construction. On multi-config generators (MSVC,
+   Xcode, Ninja Multi-Config), Debug ↔ Release in the same build
+   tree would have the second install overwrite the first, and
+   `IMPORTED_LOCATION` would resolve to whichever was built last
+   regardless of which configuration the consumer is linking
+   from. **Phase 1 has no consumer of `shekyl_randomx_v2`** (the
+   daemon does not link it), so the collision is latent in
+   production. The C-1 commit-3 disposition was a `STATUS`
+   warning; the C-6 commit-4 disposition strengthens this to a
+   `FATAL_ERROR` (refuse rather than warn). The escalation
+   rationale is `00-mission.mdc` priority 1: silently producing
+   wrong-configuration artifacts is a correctness defect even
+   without a current consumer, and the right place to enforce a
+   correctness precondition is at the entry point (CMake
+   configure) rather than the exit point (when the latent bug
+   eventually manifests). Developers who want to exercise the
+   v2 build on Windows use `-G Ninja` plus an explicit
+   `-DCMAKE_BUILD_TYPE`; the `FATAL_ERROR` message names this
+   path. Phase 2 introduces the first consumer
+   (`rust/shekyl-pow-randomx/` cross-check tests) and replaces
+   the `FATAL_ERROR` with the per-`CONFIG` split (per-`CONFIG`
+   install dir + `IMPORTED_LOCATION_<CONFIG>`). Recorded in
    [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) under "RandomX v2
    `ExternalProject_Add`: per-`CONFIG` install path and
    `IMPORTED_LOCATION_<CONFIG>` for multi-config generators."
@@ -677,6 +693,26 @@ push; matches §4):
    reproducible-build pipeline. The disposition narrows the
    blast-radius of a future cross-compile regression to a single
    site (this `foreach`), not an expansion of scope.
+
+4. **D4 — Forwarded values are semicolon-escaped against the
+   sub-build's `CMAKE_ARGS` list semantics.** Surfaced by
+   Copilot finding C-5 on PR #54 (commit-4 review). List-valued
+   variables in the D3 forward set (`CMAKE_OSX_ARCHITECTURES`
+   most commonly; `CMAKE_FIND_ROOT_PATH` on cross-builds;
+   potentially others) contain semicolons in CMake's internal
+   list representation. `ExternalProject_Add`'s `CMAKE_ARGS` is
+   itself a list, and CMake splits unescaped semicolons at the
+   list boundary — so a forwarded `-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64`
+   would arrive at the sub-build as `-DCMAKE_OSX_ARCHITECTURES=arm64`
+   plus a stray `x86_64` bare token. The fix follows the
+   documented CMake idiom: declare `LIST_SEPARATOR "|"` on
+   `ExternalProject_Add` and substitute `;` → `|` in each
+   forwarded value at append time. `ExternalProject` reverses
+   the substitution before invoking the sub-build's `cmake`, so
+   the sub-build sees the original semicolons. The substitution
+   site is local to a single `foreach` iteration via
+   `_randomx_v2_fwd_val`, which is `unset` after use to avoid
+   leaking the temporary into the parent scope.
 
 **Post-merge close-out tasks** (mirrors the LWMA-1 Phase 4 pattern):
 

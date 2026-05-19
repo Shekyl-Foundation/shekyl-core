@@ -262,7 +262,7 @@ Pass review rounds calibrated to confidence assessment. Markdown only — zero m
 
 ## Track A — Phase 1 (parallel with Monero audit)
 
-**Status.** Implementation landed on `dev` as PR #`<phase1-pr>` (merge commit `<phase1-merge>`, `<phase1-date>`); detailed plan and reviewer-map are in [`docs/design/RANDOMX_V2_PHASE1_PLAN.md`](./RANDOMX_V2_PHASE1_PLAN.md). The merge-commit SHA, PR number, and date placeholders in this paragraph are backfilled by the post-merge close-out commit on `dev`, mirroring the convention established by the LWMA-1 Phase 4 close-out.
+**Status.** Implementation in review as PR #54 against `dev` on branch `feat/randomx-v2-phase1`; detailed plan and reviewer-map are in [`docs/design/RANDOMX_V2_PHASE1_PLAN.md`](./RANDOMX_V2_PHASE1_PLAN.md). On merge this paragraph is rewritten to "landed on `dev` as PR #`<phase1-pr>` (merge commit `<phase1-merge>`, `<phase1-date>`)" by the post-merge close-out commit on `dev`, mirroring the convention established by the LWMA-1 Phase 4 close-out (per [`docs/design/RANDOMX_V2_PHASE1_PLAN.md`](./RANDOMX_V2_PHASE1_PLAN.md) §10 post-merge close-out tasks).
 
 - Add [external/randomx-v2](../../external/randomx-v2) as a new submodule pointing at Shekyl-Foundation/RandomX v2 fork at a pinned commit (`aaafe71`, v2.0.1; identical to `tevador:master` per RANDOMX_V2_PHASE1_PLAN.md §1.3). Do not repoint `external/randomx`; the two coexist until Phase 3.
 - Add `BUILD_RANDOMX_V2_MINER_LIB` CMake option (default `OFF`; will flip to `ON` for miner consumers in Phase 3). Default-OFF means daemon builds are byte-identical to a no-flag build per the byte-equivalence test in RANDOMX_V2_PHASE1_PLAN.md §4.1.
