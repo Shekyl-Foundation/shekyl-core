@@ -133,6 +133,50 @@ std::string phrase_from_entropy(const std::array<uint8_t, 32> &entropy)
     return std::string(reinterpret_cast<const char *>(buf.data()), out_len);
 }
 
+// Escape `s` for embedding inside a JSON string literal per RFC 8259
+// §7. Per Copilot's PR #57 review, the previous direct interpolation
+// produced malformed JSON in two cases: (a) Windows `path::string()`
+// returns backslash-separated paths whose `\w`/`\u…` sequences are
+// invalid JSON escapes (rapidjson rejects the document), and (b) any
+// future test passing a `"`/`\\`-bearing password, phrase, or
+// passphrase would silently corrupt the document. Handling the
+// minimum mandatory set (`\\`, `\"`, control-byte `\u00XX`) is enough
+// for every input these tests construct today and is forward-safe
+// against the unicode-string edge cases. The result excludes the
+// surrounding quote characters; the call sites add them.
+std::string json_escape_string(const std::string &s)
+{
+    std::string out;
+    out.reserve(s.size() + 2);
+    for (const unsigned char c : s)
+    {
+        switch (c)
+        {
+            case '\"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (c < 0x20)
+                {
+                    static constexpr const char hex[] = "0123456789abcdef";
+                    out += "\\u00";
+                    out += hex[(c >> 4) & 0x0f];
+                    out += hex[c & 0x0f];
+                }
+                else
+                {
+                    out += static_cast<char>(c);
+                }
+                break;
+        }
+    }
+    return out;
+}
+
 // Write a JSON restore descriptor to the given file path, with the
 // minimum field set Phase 1's inlined `tools::generate_from_json`
 // orchestration requires for the BIP-39 path. `scan_from_height` is
@@ -147,11 +191,11 @@ void write_bip39_restore_json(const path &json_path,
     std::ofstream out(json_path.string(), std::ios::out | std::ios::trunc);
     out << "{\n";
     out << "  \"version\": 1,\n";
-    out << "  \"filename\": \"" << filename << "\",\n";
+    out << "  \"filename\": \"" << json_escape_string(filename) << "\",\n";
     out << "  \"scan_from_height\": 1,\n";
-    out << "  \"password\": \"" << password << "\",\n";
-    out << "  \"seed\": \"" << mnemonic << "\",\n";
-    out << "  \"seed_passphrase\": \"" << seed_passphrase << "\"\n";
+    out << "  \"password\": \"" << json_escape_string(password) << "\",\n";
+    out << "  \"seed\": \"" << json_escape_string(mnemonic) << "\",\n";
+    out << "  \"seed_passphrase\": \"" << json_escape_string(seed_passphrase) << "\"\n";
     out << "}\n";
 }
 

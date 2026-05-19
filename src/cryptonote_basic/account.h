@@ -35,6 +35,8 @@
 #include "serialization/keyvalue_serialization.h"
 #include "shekyl/shekyl_ffi.h"
 
+namespace epee { class wipeable_string; }
+
 namespace cryptonote
 {
 
@@ -126,9 +128,19 @@ namespace cryptonote
     /// Mainnet / stagenet production path. 24 English BIP-39 words + optional
     /// passphrase. Throws on invalid mnemonic or disallowed (nettype,format)
     /// pair. `passphrase` may be empty.
+    ///
+    /// Inputs are taken as `epee::wipeable_string` so the BIP-39 phrase and
+    /// passphrase remain inside the wipe-on-drop discipline end-to-end:
+    /// the underlying FFI consumes them via `data()` / `size()` for a
+    /// single immediate call and does not persist them, and no
+    /// `std::string` intermediate is materialized at the call site.
+    /// (`std::string`'s SSO and libstdc++ COW paths can leave plaintext
+    /// residue across reallocations that subsequent `memwipe` cannot
+    /// reach; `epee::wipeable_string` is backed by `std::vector<char>`
+    /// without those concerns and zeroes its buffer on destruction.)
     void generate_from_bip39(
-        const std::string &mnemonic_words,
-        const std::string &passphrase,
+        const epee::wipeable_string &mnemonic_words,
+        const epee::wipeable_string &passphrase,
         cryptonote::network_type nettype);
 
     /// Testnet / fakechain path. 32 bytes of input entropy that are also the

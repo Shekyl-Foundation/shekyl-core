@@ -184,8 +184,7 @@ pub fn entropy_from_mnemonic(
         use zeroize::Zeroize;
         entropy_arr.zeroize();
         return Err(CryptoError::InvalidInput(format!(
-            "BIP-39 entropy length mismatch: expected {}, got {}",
-            SHEKYL_BIP39_ENTROPY_BYTES, entropy_len
+            "BIP-39 entropy length mismatch: expected {SHEKYL_BIP39_ENTROPY_BYTES}, got {entropy_len}"
         )));
     }
 

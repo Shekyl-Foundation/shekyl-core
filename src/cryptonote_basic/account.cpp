@@ -42,6 +42,7 @@
 #include "shekyl/shekyl_ffi.h"
 #include "shekyl/shekyl_secure_mem.h"
 #include "memwipe.h"
+#include "wipeable_string.h"
 
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "account"
@@ -315,8 +316,8 @@ DISABLE_VS_WARNINGS(4244 4345)
   }
   //-----------------------------------------------------------------
   void account_base::generate_from_bip39(
-      const std::string &mnemonic_words,
-      const std::string &passphrase,
+      const epee::wipeable_string &mnemonic_words,
+      const epee::wipeable_string &passphrase,
       network_type nettype)
   {
     set_null();

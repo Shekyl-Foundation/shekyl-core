@@ -759,6 +759,16 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
         wallet->clear();
         wallet->prepare_file_names(field_filename);
 
+        // `wallet->clear()` resets `m_refresh_from_block_height` and the
+        // explicit-flag state to defaults, dropping the values applied at
+        // lines 721-722 above. Re-apply them here so the JSON
+        // `scan_from_height` (and its presence flag) survive the BIP-39
+        // branch's mid-stream clear; legacy non-BIP-39 paths (the
+        // `generate(...)` overload below) do not call `clear()` and
+        // therefore retain the line-721/722 values without re-application.
+        wallet->set_refresh_from_block_height(field_scan_from_height);
+        wallet->explicit_refresh_from_block_height(field_scan_from_height_found);
+
         if (!field_filename.empty())
         {
           boost::system::error_code ignored_ec;
@@ -783,35 +793,25 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
         // Derive account material from (phrase, passphrase).
         // `m_account` owns the full PBKDF2-HMAC-SHA512 → HKDF
         // derivation across the FFI; this site only orchestrates.
-        // The conversion to `std::string` at the boundary is the
-        // inherited `account_base::generate_from_bip39` signature
-        // (which itself consumes the phrase only via
-        // `data()`/`size()` for the immediate FFI call and does not
-        // persist it). The `std::string` copies are short-lived and
-        // scoped here; we `memwipe` them in-place before the
-        // destructor runs so the plaintext bytes do not linger in
-        // the heap allocator's free-list per the §4.7 transit-buffer
-        // discipline.
+        // `account_base::generate_from_bip39` accepts
+        // `epee::wipeable_string` directly (post-Phase-1 Copilot-fix
+        // signature change), so the wipe-on-drop discipline of
+        // `phrase_wipe` / `passphrase_wipe` extends end-to-end down
+        // to the FFI call: no `std::string` intermediate is created
+        // and no manual `memwipe` of a short-string-optimization
+        // payload is required (the SSO / libstdc++ COW paths could
+        // otherwise leave plaintext residue beyond the reach of an
+        // `&s[0]` memwipe). On exception we still scrub the
+        // entropy_buf transit copy explicitly because the
+        // `set_null()` inside `generate_from_bip39` does not see it.
+        try
         {
-          std::string phrase_str(phrase_wipe.data(), phrase_wipe.size());
-          std::string passphrase_str(passphrase_wipe.data(), passphrase_wipe.size());
-          try
-          {
-            wallet->m_account.generate_from_bip39(phrase_str, passphrase_str, wallet->m_nettype);
-          }
-          catch (...)
-          {
-            if (!phrase_str.empty())
-              memwipe(&phrase_str[0], phrase_str.size());
-            if (!passphrase_str.empty())
-              memwipe(&passphrase_str[0], passphrase_str.size());
-            memwipe(entropy_buf.data(), entropy_buf.size());
-            throw;
-          }
-          if (!phrase_str.empty())
-            memwipe(&phrase_str[0], phrase_str.size());
-          if (!passphrase_str.empty())
-            memwipe(&passphrase_str[0], passphrase_str.size());
+          wallet->m_account.generate_from_bip39(phrase_wipe, passphrase_wipe, wallet->m_nettype);
+        }
+        catch (...)
+        {
+          memwipe(entropy_buf.data(), entropy_buf.size());
+          throw;
         }
 
         wallet->init_type(hw::device::device_type::SOFTWARE);
@@ -834,8 +834,12 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
         // takes the recover-path defaults; the substrate does not
         // pin a specific refresh height for restored wallets — fall
         // through to `estimate_blockchain_height` which the legacy
-        // `generate(...)` overload uses for `!recover` wallets).
-        if (wallet->m_refresh_from_block_height == 0)
+        // `generate(...)` overload uses for `!recover` wallets). Gate
+        // on the JSON-presence flag rather than on the numeric value
+        // so that a user-supplied `scan_from_height: 0` (an explicit
+        // from-genesis rescan request) is preserved instead of being
+        // overwritten by the daemon-derived estimate.
+        if (!field_scan_from_height_found)
         {
           wallet->m_refresh_from_block_height = wallet->estimate_blockchain_height();
         }
@@ -5558,8 +5562,16 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
       if (!epee::string_tools::parse_hexstr_to_binbuff(field_bip39_entropy, entropy_bin) ||
           entropy_bin.size() != 32)
       {
-        THROW_WALLET_EXCEPTION(error::wallet_internal_error,
-            "wallet keyfile carries a malformed bip39_entropy field");
+        // Symmetric with the rest of `load_keys_buf`: sibling
+        // `GET_FIELD_FROM_JSON_RETURN_ON_ERROR` paths surface
+        // malformed-field errors as `LOG_ERROR; return false;` rather
+        // than as exceptions. Throwing here would force callers into a
+        // mixed result-style (false on most malformed fields, exception
+        // on this one) — keep the loader's single-path contract.
+        LOG_ERROR("wallet keyfile carries a malformed bip39_entropy field");
+        if (!entropy_bin.empty())
+          memwipe(&entropy_bin[0], entropy_bin.size());
+        return false;
       }
       epee::mlocked<tools::scrubbed_arr<uint8_t, 32>> entropy_locked{};
       std::memcpy(entropy_locked.data(), entropy_bin.data(), entropy_bin.size());
