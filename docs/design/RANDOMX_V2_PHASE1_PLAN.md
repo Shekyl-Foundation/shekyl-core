@@ -14,11 +14,13 @@ This plan does not anchor a specific SHA because Phase 1 has zero file
 overlap with the in-flight Phase 4 DAA PR (#53) — Phase 1 is gated on
 Phase 4 landing only for branch-hygiene reasons, not technical reasons.
 
-**Branch (forthcoming).** `feat/randomx-v2-phase1`, cut off `dev`
-after PR #53 (`feat/daa-lwma1-phase4`) lands, per `06-branching.mdc`
-rule 2 (short-lived; target ≤5 working days, ≤10 commits) and rule 3
-(no merging dev into a feature branch — the wait is for clean
-sequencing, not branch-currency).
+**Branch (forthcoming).** `feat/randomx-v2-phase1`, to be cut off
+`dev` once implementation begins. The soft sequencing precondition
+(PR #53 landed before this branch is cut) has been satisfied: PR #53
+merged into `dev` at commit `ef6f6bb66` on 2026-05-18. Per
+`06-branching.mdc` rule 2 the branch is short-lived (target ≤5
+working days, ≤10 commits); per rule 3 dev is not merged into it
+mid-flight.
 
 **Scope envelope.** Single PR. Target ≤250 lines of diff, ≤5 commits.
 No Shekyl-side consumer changes: this PR adds the v2 build
@@ -417,20 +419,25 @@ adds is fallback-compatible by construction.
 
 ### §6.1 Hard sequencing constraints
 
-None at the technical level. Phase 1 has zero file overlap with any
-other in-flight work (PR #53 DAA Phase 4 touches consensus subsystem;
-no shared files).
+None at the technical level. Phase 1 had zero file overlap with the
+DAA Phase 4 PR (#53; consensus subsystem; no shared files). PR #53
+has since merged into `dev` at `ef6f6bb66` (2026-05-18), so this
+section is now historical.
 
-### §6.2 Soft sequencing recommendation
+### §6.2 Soft sequencing recommendation (satisfied)
 
-Cut the Phase 1 branch after PR #53 merges, for branch-hygiene
-reasons:
+The soft-wait recommendation was: cut the Phase 1 branch after the
+DAA Phase 4 PR (#53) merges, for branch-hygiene reasons:
 
 - Avoids the temptation to merge dev into a long-running Phase 1
   branch (prohibited by `06-branching.mdc` rule 3).
 - Keeps the per-branch attention budget on one PR at a time.
-- The Phase 1 scope is small enough (≤200 lines, ≤5 commits) that a
-  ~1–2 day delay waiting for #53 is negligible.
+- The Phase 1 scope is small enough (≤250 lines, ≤5 commits) that
+  a ~1–2 day delay was negligible.
+
+PR #53 merged 2026-05-18; the precondition is satisfied. The
+`feat/randomx-v2-phase1` branch can be cut from `dev` whenever
+implementation begins.
 
 ### §6.3 Phase 2 unblocking
 

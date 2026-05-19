@@ -897,15 +897,17 @@ sustainability is unaffected by the recalibration.
   landed on `dev`:
   - Phase 0 (design): `dev` SHA `b0eb29b` (2026-05-15), spec +
     integration plan.
-  - Phase 1 (Rust crate `shekyl-difficulty`): `dev` SHA `<phase1>`,
-    LWMA-1 Rust implementation + timestamp-validation primitives.
-  - Phase 2 (FFI surface): `dev` SHA `<phase2>`,
-    `shekyl_difficulty_lwma1_next` C-ABI in `shekyl-ffi` +
-    `lwma1-cross-check` C++ harness verifying Rust ↔ canonical
-    zawy12 reference equivalence over ~5000 blocks.
-  - Phase 4 (C++ cutover): `dev` SHA `<phase4-merge>` (this commit),
-    the consensus-atomic cutover described in the `CHANGELOG.md`
-    `[Unreleased]` Phase 4 entry. All three Lens E findings
+  - Phase 1 (Rust crate `shekyl-difficulty`): `dev` SHA `c8849896e`
+    (PR #51, merged 2026-05-18), LWMA-1 Rust implementation +
+    timestamp-validation primitives.
+  - Phase 2 (FFI surface): `dev` SHA `96555a829` (PR #52, merged
+    2026-05-18), `shekyl_difficulty_lwma1_next` C-ABI in
+    `shekyl-ffi` plus the `lwma1-cross-check` C++ harness verifying
+    Rust ↔ canonical zawy12 reference equivalence over ~5000
+    blocks.
+  - Phase 4 (C++ cutover): `dev` SHA `ef6f6bb66` (PR #53, merged
+    2026-05-18), the consensus-atomic cutover described in the
+    `CHANGELOG.md` `[Unreleased]` Phase 4 entry. All three Lens E findings
     (E.4-C-1, E.4-C-2, E.4-C-3) are dispositioned: V1 parameters
     deleted with the algorithm replacement; `DIFFICULTY_LAG`
     `// !!!` warning marker disappears with the parameter; Rule 75

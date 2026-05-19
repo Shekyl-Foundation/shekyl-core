@@ -201,8 +201,10 @@ the four criteria are met, and links here. Approved
 invocations:
 
 - **LWMA-1 Phase 4** (`docs/design/DAA_LWMA1_PLAN.md` Phase 4;
-  landed on `dev` 2026-05-18 as `feat/daa-lwma1-phase4`, the
-  eleven-commit decomposition disposed in
+  landed on `dev` 2026-05-18 as PR #53 merge commit
+  `ef6f6bb66871ad6547ae92591ecabf43f9426f0b`; pre-merge branch tip
+  archived as tag `archive/feat-daa-lwma1-phase4-2026-05-19` at
+  `e1384eac0`; the eleven-commit decomposition disposed in
   `docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md` §18).
   Difficulty-algorithm cutover from CryptoNote
   cut-windowed-average to LWMA-1, paired with FTL and MTP
