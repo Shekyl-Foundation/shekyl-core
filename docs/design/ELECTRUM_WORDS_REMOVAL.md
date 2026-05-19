@@ -153,7 +153,7 @@ Total: 21 files deleted, ~570 KB.
 | `src/wallet/wallet2.h:1007` | `const std::string &get_seed_language() const` | Delete declaration (Phase 4) |
 | `src/wallet/wallet2.h:1011` | `void set_seed_language(const std::string&)` | Delete declaration (Phase 4) |
 | `src/wallet/wallet2.cpp:1362` | `bool wallet2::is_deterministic() const` body | Delete definition (Phase 4) |
-| `src/wallet/wallet2.cpp:1372` | `bool wallet2::get_seed(...)` body | Delete definition (Phase 4) — Phase 1 rewires the only call site (`wallet2_ffi.cpp:648` dispatch branch) to call Rust BIP39 directly, leaving this method dead-but-extant at Phase 4 entry; Phase 4 deletes the body alongside the declaration |
+| `src/wallet/wallet2.cpp:1372` | `bool wallet2::get_seed(...)` body | Delete definition (Phase 4) — Phase 1 rewires the only call site (`wallet2_ffi.cpp:643` dispatch branch) to call Rust BIP39 directly, leaving this method dead-but-extant at Phase 4 entry; Phase 4 deletes the body alongside the declaration |
 | `src/wallet/wallet2.cpp:1425` | `const std::string &wallet2::get_seed_language() const` body | Delete definition (Phase 4) |
 | `src/wallet/wallet2.cpp:1433` | `void wallet2::set_seed_language(const std::string&)` body | Delete definition (Phase 4) |
 
@@ -173,7 +173,7 @@ has no Electrum-words branch. The actual Phase 1 rewire targets are:
 | `src/wallet/wallet2.cpp:606–611` | `parse_wallet_create_data` JSON helper | `seed_passphrase` JSON field handling. Today calls `cryptonote::decrypt_key(recovery_key, field_seed_passphrase)` (Monero-encrypt_key semantic). Phase 1 reuses the field name + JSON schema but threads the passphrase to `shekyl_account_generate_from_bip39`'s `passphrase` parameter (BIP39-PBKDF2-HMAC-SHA512 semantic). The semantic shift is documented in §4.5.1; field-name preservation is the lowest-friction path for existing JSON-restore consumers. |
 | `src/wallet/wallet2.cpp:660–661` | `parse_wallet_create_data` JSON helper | `old_language_name` + `get_is_old_style_seed` deprecated-wallet detection — deleted |
 | `src/wallet/wallet2.cpp:669` | `parse_wallet_create_data` JSON helper | `wallet->set_seed_language(old_language)` — deleted |
-| `src/wallet/wallet2_ffi.cpp:648` | `query_key("mnemonic")` dispatch branch implementation | Today calls `wallet2::get_seed` → `ElectrumWords::bytes_to_words`. Rewired in Phase 1 to call `shekyl_bip39_mnemonic_from_entropy(wallet.bip39_entropy())` directly via the FFI. The dispatch case label `"mnemonic"` stays per §4.5; only the implementation body changes. Phase 4 then deletes `wallet2::get_seed` outright (no longer called). The dispatch additionally hard-errors on non-empty passphrase per §4.5.1 (passphrase has no meaning at phrase-emit time under BIP39). |
+| `src/wallet/wallet2_ffi.cpp:643` | `query_key("mnemonic")` dispatch branch implementation | Today calls `wallet2::get_seed` → `ElectrumWords::bytes_to_words`. Rewired in Phase 1 to call `shekyl_bip39_mnemonic_from_entropy(wallet.bip39_entropy())` directly via the FFI. The dispatch case label `"mnemonic"` stays per §4.5; only the implementation body changes. Phase 4 then deletes `wallet2::get_seed` outright (no longer called). The dispatch additionally hard-errors on non-empty passphrase per §4.5.1 (passphrase has no meaning at phrase-emit time under BIP39). |
 | `src/wallet/wallet2.cpp:1389` | `ElectrumWords::bytes_to_words(key, ...)` call inside `wallet2::get_seed` body | Deleted in Phase 4 alongside the method body |
 | `src/wallet/wallet_rpc_server.cpp:2324` | `on_stop_background_sync` seed-recovery branch | `ElectrumWords::words_to_bytes(req.seed, recovery_key, language)` — Phase 2 deletes the entire `if (!req.seed.empty())` block at lines 2316–2366 alongside the `seed` / `seed_offset` fields on `COMMAND_RPC_STOP_BACKGROUND_SYNC::request`. The seed-based recovery path is dead-on-mainnet today (per inline comment at 2345–2362) and goes wholesale; password-only stop-background-sync survives. A BIP39 seed-recovery replacement is a separate `docs/FOLLOWUPS.md` V3.2 item (currently tracked). |
 | `src/wallet/wallet_rpc_server.cpp:4162` | `on_restore_deterministic_wallet` (whole RPC handler) | `ElectrumWords::words_to_bytes(req.seed, recovery_key, old_language)` — Phase 2 deletes the whole RPC command + handler (`COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET`). |
@@ -211,8 +211,8 @@ See §4.10 point #1 for the full disposition rationale.
 
 | File | Line | Disposition |
 | --- | --- | --- |
-| `src/wallet/wallet2.h` | `std::optional<crypto::secret_bytes<32>> m_bip39_entropy;` field | **Add** (Phase 1 — new state field per §4.10) |
-| `src/wallet/wallet2.h` | `const std::optional<crypto::secret_bytes<32>>& bip39_entropy() const` accessor | **Add** (Phase 1 — read-only public accessor used by `wallet2_ffi.cpp:648` dispatch-branch rewire per §4.5 + §4.10) |
+| `src/wallet/wallet2.h` | `std::optional<epee::mlocked<tools::scrubbed_arr<uint8_t, 32>>> m_bip39_entropy;` field | **Add** (Phase 1 — new state field per §4.10) |
+| `src/wallet/wallet2.h` | `const std::optional<epee::mlocked<tools::scrubbed_arr<uint8_t, 32>>>& bip39_entropy() const` accessor | **Add** (Phase 1 — read-only public accessor used by `wallet2_ffi.cpp:643` dispatch-branch rewire per §4.5 + §4.10) |
 | `src/wallet/wallet2.h:1728` | `std::string seed_language;` field | Delete field (Phase 4 Commit C) |
 | `src/wallet/wallet2.cpp` JSON write path | JSON write of `bip39_entropy` | **Add** (Phase 1 — new ser/de per §4.10) |
 | `src/wallet/wallet2.cpp` JSON read path | JSON read of `bip39_entropy` | **Add** (Phase 1 — new ser/de per §4.10) |
@@ -241,8 +241,8 @@ See §4.10 point #1 for the full disposition rationale.
 | `wallet2_ffi_restore_deterministic_wallet` | `src/wallet/wallet2_ffi.h:98–104` + `wallet2_ffi.cpp:414–431` | Delete entire function (Phase 3) |
 | `wallet2_ffi_create_wallet` `language` parameter | `src/wallet/wallet2_ffi.h:87` + `wallet2_ffi.cpp:309–319` | Drop parameter (signature change; Phase 3) |
 | `wallet2_ffi_generate_from_keys` `language` parameter | `src/wallet/wallet2_ffi.h:113` + `wallet2_ffi.cpp:523–527` | Drop parameter (signature change; Phase 3) |
-| `query_key("mnemonic")` dispatch branch | `src/wallet/wallet2_ffi.cpp:648,653` | **Rewire implementation to Rust BIP39 routing (Phase 1 atomic commit); dispatch label `"mnemonic"` persists per §4.5; `wallet2::get_seed` call site removed when the underlying method deletes in Phase 4 Commit A.** The branch implementation post-Phase-1 reads the entropy via `wallet.bip39_entropy()` (the new accessor per §2.3) and calls `shekyl_bip39_mnemonic_from_entropy` to produce the phrase, returning the §4.10 hard error if entropy is unset. |
-| `query_key("mnemonic")` dispatch — `passphrase` parameter | `src/wallet/wallet2_ffi.cpp:648` (via the wallet2 FFI `query_key` entry's `passphrase` parameter) | **Hard-error on non-empty passphrase** (Phase 1 atomic commit) per §4.5.1. Under Electrum-words the passphrase encrypted the spend secret before encoding-to-words; under BIP39 the phrase is derived from entropy alone and the passphrase has no meaning at phrase-emit time. Silently ignoring the parameter would be the §4.3-rule production-software graceful-degradation default leaking into pre-genesis; the discipline-correct disposition is loud failure. The RPC layer does not expose the passphrase parameter, so the hard-error surface is FFI-only. |
+| `query_key("mnemonic")` dispatch branch | `src/wallet/wallet2_ffi.cpp:643,653` | **Rewire implementation to Rust BIP39 routing (Phase 1 atomic commit); dispatch label `"mnemonic"` persists per §4.5; `wallet2::get_seed` call site removed when the underlying method deletes in Phase 4 Commit A.** The branch implementation post-Phase-1 reads the entropy via `wallet.bip39_entropy()` (the new accessor per §2.3) and calls `shekyl_bip39_mnemonic_from_entropy` to produce the phrase, returning the §4.10 hard error if entropy is unset. |
+| `query_key("mnemonic")` dispatch — `passphrase` parameter | `src/wallet/wallet2_ffi.cpp:643` (via the wallet2 FFI `query_key` entry's `passphrase` parameter) | **Hard-error on non-empty passphrase** (Phase 1 atomic commit) per §4.5.1. Under Electrum-words the passphrase encrypted the spend secret before encoding-to-words; under BIP39 the phrase is derived from entropy alone and the passphrase has no meaning at phrase-emit time. Silently ignoring the parameter would be the §4.3-rule production-software graceful-degradation default leaking into pre-genesis; the discipline-correct disposition is loud failure. The RPC layer does not expose the passphrase parameter, so the hard-error surface is FFI-only. |
 | Language-list export | `src/wallet/wallet2_ffi.cpp:1197–1198` | Delete (Phase 3) |
 | `crypto::ElectrumWords::words_to_bytes` + `is_valid_language` calls | `src/wallet/wallet2_ffi.cpp:309,416,429,523` | Delete (Phase 3) |
 
@@ -370,7 +370,7 @@ is per-site (not a "straight swap at one line range"):
   `shekyl_bip39_mnemonic_to_entropy` (new) to recover entropy, then
   calls `shekyl_account_generate_from_bip39` to produce the account
   and populates `m_bip39_entropy` per §4.10.
-- `wallet2_ffi.cpp:648` (`query_key("mnemonic")` dispatch branch
+- `wallet2_ffi.cpp:643` (`query_key("mnemonic")` dispatch branch
   implementation) is rewired in Phase 1 to call
   `shekyl_bip39_mnemonic_from_entropy(wallet.bip39_entropy())`
   directly via the FFI per §4.5 + §4.10. The dispatch case label
@@ -639,10 +639,10 @@ query returns the BIP39 phrase derived from `m_bip39_entropy` (per
 mechanics:
 
 1. Phase 1 adds the public accessor
-   `const std::optional<crypto::secret_bytes<32>>& wallet2::bip39_entropy() const`
+   `const std::optional<epee::mlocked<tools::scrubbed_arr<uint8_t, 32>>>& wallet2::bip39_entropy() const`
    alongside the new `m_bip39_entropy` field (per §2.3).
 2. Phase 1 rewires the `query_key("mnemonic")` dispatch branch
-   implementation in `wallet2_ffi.cpp:648` (and the equivalent RPC
+   implementation in `wallet2_ffi.cpp:643` (and the equivalent RPC
    handler in `wallet_rpc_server.cpp`) to read
    `wallet.bip39_entropy()`, call
    `shekyl_bip39_mnemonic_from_entropy` directly via the FFI, and
@@ -743,7 +743,7 @@ deliberately specifies; this would put Shekyl out of step with
 the broader BIP39 ecosystem without justification.
 
 **Surface B — `query_key("mnemonic")` FFI dispatch's passphrase
-parameter (`wallet2_ffi.cpp:648`).**
+parameter (`wallet2_ffi.cpp:643`).**
 
 Today the dispatch calls `wallet2::get_seed(out_phrase,
 passphrase)`, which under Electrum-words uses the passphrase to
@@ -861,6 +861,66 @@ contract:
    file are the load-bearing implementation reference once it
    lands.
 
+5. **Constant-time secret comparison.** All equality checks
+   involving secret bytes (the 32-byte BIP-39 entropy in
+   `m_bip39_entropy`, the 64-byte PBKDF2 seed, derived scalars,
+   derived spend/view secrets) use constant-time primitives.
+   On the Rust side: `subtle::ConstantTimeEq` (or equivalent
+   ct-primitives exposed by `curve25519-dalek` /
+   `dalek-cryptography`'s ecosystem). On the C++ side:
+   `crypto_verify_32` (or `sodium_memcmp` / `CRYPTO_memcmp`),
+   not naive `memcmp` and not `std::vector<char>::operator==`
+   on secret-bearing containers. The discipline applies at
+   recommendation time and is enforced by the per-Rule-30
+   constant-time-or-explicit-rejection rule in
+   [`30-cryptography.mdc`](../../.cursor/rules/30-cryptography.mdc).
+   Note that `epee::wipeable_string::operator==` at
+   [`contrib/epee/include/wipeable_string.h:74`](../../contrib/epee/include/wipeable_string.h)
+   delegates to `std::vector<char>::operator==` and is **not**
+   constant-time; comparisons of phrase strings via the
+   `wipeable_string` equality operator are forbidden on
+   secret-bearing inputs. Phrase-equality is not a discipline
+   Shekyl needs (the canonical secret is the entropy bytes,
+   not the phrase) so this is forbidden-by-discipline, not
+   forbidden-by-implementation. Phase 1 does not introduce
+   any equality check against `m_bip39_entropy` (round-trip
+   tests verify the FFI's regenerated phrase against the
+   expected entropy via the derivation path, not via raw
+   entropy `memcmp`), so the §4.7 #5 discipline is a
+   forward-looking guard, not a current-bug fix.
+
+6. **NFKD Unicode normalization (BIP-0039 §A spec compliance).**
+   Mnemonic phrase and passphrase inputs are NFKD-normalized
+   before PBKDF2 / entropy derivation, per the BIP-0039
+   specification. Two users with logically-equivalent but
+   byte-different Unicode inputs (e.g., precomposed vs.
+   decomposed characters) must produce identical wallets per
+   spec; absent NFKD normalization, a phrase generated on a
+   host that emits NFC and re-entered on a host that expects
+   NFKD silently derives a different account, breaking
+   cross-platform recovery. The upstream `bip39 = "2.2.2"`
+   crate applies NFKD via `Mnemonic::normalize_utf8_cow`
+   ([`bip39-2.2.2/src/lib.rs:198–203`](https://github.com/rust-bitcoin/rust-bip39/blob/v2.2.2/src/lib.rs#L198)),
+   gated on the upstream `unicode-normalization` feature.
+   That feature is currently pulled in transitively via the
+   `std → alloc → unicode-normalization` chain in
+   [`bip39-2.2.2/Cargo.toml`](https://github.com/rust-bitcoin/rust-bip39/blob/v2.2.2/Cargo.toml).
+   Shekyl pins the feature **explicitly** in
+   [`rust/shekyl-crypto-pq/Cargo.toml`](../../rust/shekyl-crypto-pq/Cargo.toml)'s
+   `bip39` dependency line (`features = ["std", "zeroize",
+   "unicode-normalization"]`) as defense-in-depth against
+   transitive-feature drift: a future `cargo update` or
+   feature-flag refactor that breaks the `std → alloc →
+   unicode-normalization` chain would silently disable NFKD
+   without the explicit pin, and the resulting failure mode
+   (silently-different wallets for byte-different-but-
+   logically-equivalent inputs) is invisible to all standard
+   tests. The explicit pin guarantees the BIP-0039 spec
+   property is delivered regardless of transitive-feature
+   topology. A Phase 1 test verifies NFC↔NFKD round-trip
+   equivalence: two byte-different but Unicode-equivalent
+   phrase forms produce identical entropy and identical seed.
+
 This contract is documented here (not just inline in code
 comments) so future audits have a single load-bearing reference
 for what the boundary discipline is, and so the test invariant
@@ -898,30 +958,85 @@ protection" section. Both mitigations are partial:
   attacker reads of memory via `/proc/<pid>/mem` (root) or
   `ptrace` (CAP_SYS_PTRACE).
 
-**Disposition for V3.0:** The BIP39 phrase is `mlock`'d during
-its active scope on both sides of the FFI boundary (Rust side
-already does this via `bip39 = { features = ["zeroize"] }`'s
-`Zeroizing<>` wrapping plus the `shekyl_mlock` discipline; C++
-side wraps the `wipeable_string` in `mlock`'d page allocation
-per Rule 35 §"OS-level protection"). Hibernate exposure is
-**documented as a known residual**, not enforced in V3.0.
+**Disposition for V3.0:** The 32-byte BIP-39 **entropy**
+persisted at rest (`m_bip39_entropy` per §4.10) is mlock-backed
+via `epee::mlocked<tools::scrubbed_arr<uint8_t, 32>>`. This is
+the primary mitigation for the secret bytes that persist across
+function calls and whose page residency is the highest-value
+target for swap-out. The Rust side independently mlocks its
+secret-bearing transit buffers via the `bip39 = { features =
+["zeroize"] }` `Zeroizing<>` wrapping and the `shekyl_mlock`
+discipline applied to the FFI-owned entropy/seed allocations
+per [`35-secure-memory.mdc:163–172`](../../.cursor/rules/35-secure-memory.mdc).
 
-**Rationale for the residual:** mitigating hibernate exposure
-requires either (a) OS-level cooperation (a "no-hibernate
-process" flag on Linux that does not exist in mainline as of
-2026-05-19), (b) zeroing the phrase on every userspace context
-switch (prohibitively expensive), or (c) refusing to run on
-hibernate-capable systems (rejects every laptop and most
-desktops). All three are forward-impractical. The disposition is
-to mlock against swap (the routine exposure path) and accept
-hibernate as a residual the user takes on when they choose to
-hibernate a machine holding secrets.
+The transit-time **phrase strings** held in
+`epee::wipeable_string` are wipe-on-drop only in V3.0.
+Pre-flight verification at `dev` tip `60943cb16` confirmed that
+`epee::wipeable_string` is backed by `std::vector<char>`
+([`contrib/epee/include/wipeable_string.h:83`](../../contrib/epee/include/wipeable_string.h))
+with no `mlock` / `MADV_DONTDUMP` / `prctl(PR_SET_DUMPABLE)`
+application (zero matches across
+[`contrib/epee/src/wipeable_string.cpp`](../../contrib/epee/src/wipeable_string.cpp)
+for any of `mlock`, `madvise`, or `MADV_DONTDUMP`). Earlier
+substrate text in this section claimed `wipeable_string` was
+mlock-wrapped on the C++ side; that claim was incorrect and is
+corrected here. The actual V3.0 disposition is "phrase strings
+are wipe-on-drop, not mlocked" — phrase-string pages are
+swap-eligible during the brief window between user input and
+BIP-39 normalization, and during the FFI transit window in
+`query_key("mnemonic")` regeneration. The mlock-backed
+allocator for `epee::wipeable_string` is tracked as a
+**FOLLOWUPS V3.0 post-Electrum-words-removal cleanup-series**
+work item that lands before Stage 1 PR 4 kickoff (see the
+"`epee::wipeable_string` mlock-backed allocator" entry in
+[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)'s V3.0 pre-genesis queue).
+The cleanup is structurally an `epee::wipeable_string`-internal
+change, not a BIP-39-path change, so it is out of B-1 scope
+per [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)'s
+B-1-is-deletion-focused discipline; it is named-and-scheduled,
+not deferred-indefinitely, per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)'s
+reversion-clause discipline.
+
+Hibernate exposure is **documented as a known residual**, not
+enforced in V3.0 — orthogonal to the mlock landscape because
+hibernate snapshots the entire RAM regardless of `mlock` page
+flags on most operating systems.
+
+**Rationale for the entropy / phrase split.** The entropy is the
+canonical long-term secret persisted in the wallet keyfile;
+it has high page-residency lifetime (open-wallet to
+close-wallet) and accordingly justifies the per-allocation
+mlock cost. The phrase strings are transit-time only and the
+attack window is bounded by the FFI call duration (a few
+hundred microseconds to derive entropy → phrase in
+`query_key("mnemonic")`, plus the user-input latency on
+wallet-restore). Phase-1's discipline is to mitigate the
+higher-residency surface first (entropy mlock-backed in V3.0),
+schedule the lower-residency surface for the post-Electrum
+cleanup series (wipeable_string mlock-backed before PR 4),
+and document both residuals so future audits don't reach a
+weaker conclusion than the implementation delivers.
+
+**Rationale for the hibernate residual:** mitigating hibernate
+exposure requires either (a) OS-level cooperation (a
+"no-hibernate process" flag on Linux that does not exist in
+mainline as of 2026-05-19), (b) zeroing the phrase on every
+userspace context switch (prohibitively expensive), or (c)
+refusing to run on hibernate-capable systems (rejects every
+laptop and most desktops). All three are forward-impractical.
+The disposition is to mlock the entropy against swap (the
+routine exposure path) — with the wipeable_string allocator
+cleanup closing the phrase-string-transit-swap residual
+before PR 4 — and accept hibernate as a residual the user
+takes on when they choose to hibernate a machine holding
+secrets.
 
 **Pairing with the wallet master-key residual.** The wallet's
 long-term spend key / view key / PQC secret keys have the same
-swap-and-hibernate residual. Pinning it for the BIP39 phrase
-specifically — rather than implicitly relying on the
-master-key residual to also cover the phrase — makes the
+swap-and-hibernate residual. Pinning it for the BIP-39 phrase
+and entropy specifically — rather than implicitly relying on
+the master-key residual to also cover them — makes the
 discipline visible: every secret-bearing surface in the wallet
 inherits the same residual, and every audit-priority risks
 review re-asserts the same disposition.
@@ -936,7 +1051,11 @@ without suspend support) and the discipline becomes
 enforceable, or (c) a user-class emerges that requires the
 hibernate residual to be closed (e.g., institutional
 cold-storage workflows where hibernate exposure is
-unacceptable).
+unacceptable). The phrase-string-transit-swap sub-residual is
+re-opened if the FOLLOWUPS-tracked wipeable_string allocator
+cleanup is deferred past Stage 1 PR 4 kickoff without
+explicit re-justification, per the named-criteria principle
+of `21-reversion-clause-discipline.mdc`.
 
 Documentation cross-reference:
 [`35-secure-memory.mdc:163–172`](../../.cursor/rules/35-secure-memory.mdc)
@@ -1027,7 +1146,7 @@ state:
 
 ```cpp
 // src/wallet/wallet2.h, alongside other long-term-secret fields
-std::optional<crypto::secret_bytes<32>> m_bip39_entropy;
+std::optional<epee::mlocked<tools::scrubbed_arr<uint8_t, 32>>> m_bip39_entropy;
 ```
 
 The field is set during:
@@ -1090,6 +1209,90 @@ down, the GUI never persists it. For B-1, this partial coverage is
 acceptable per the pre-genesis posture; the alternative (full
 coverage via a `wallet2_ffi_create_wallet_from_bip39` extension)
 is a separate architectural workstream with its own design rounds.
+
+**Why `wallet2_ffi_create_wallet`'s mainnet-broken state is out
+of B-1 scope.** The substrate above describes
+`wallet2_ffi_create_wallet` as a callable-but-mainnet-broken
+FFI entry that persists across B-1. Pre-flight review surfaced
+that this disposition — strictly read — risks the
+[§6.1 "Keep Electrum-words for backward compat" rejection
+shape](#61-keep-electrum-words-for-backward-compat-rejected):
+a callable-but-discouraged surface that creates a permanent
+attack surface. The disposition is reframed here with explicit
+discipline-tracking so the deferral is auditable mechanically,
+not author-preference-anchored, per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)'s
+named-criteria principle.
+
+The mainnet-broken behavior derives from the raw-seed-on-mainnet
+restriction in
+[`src/cryptonote_basic/account.cpp:443–446`](../../src/cryptonote_basic/account.cpp),
+**not from Electrum-words infrastructure**. The restriction
+rejects raw-seed wallet generation on Mainnet/Stagenet
+regardless of the encoding the seed bytes arrived in.
+Electrum-words deletion neither introduces nor depends on this
+state; B-1's deletion sweep on Electrum-words is structurally
+independent of the raw-seed restriction. Phase 3's signature
+edit on `wallet2_ffi_create_wallet` (dropping the `language`
+parameter per §4.4) is a mechanical signature change unrelated
+to the mainnet-broken behavior of the function body — Phase 3
+does not introduce the brokenness and does not resolve it.
+
+The cleanup is a **separate workstream** because it requires
+designing the new wallet-creation FFI shape (a
+BIP-39-aware `wallet2_ffi_create_wallet_from_bip39` or
+equivalent), which doesn't exist yet — architectural design
+work, distinct from B-1's deletion-and-rewire scope. Per
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc) §"The
+'cost-benefit-defer-to-later' anti-pattern" — when the cleanup
+surface is open and the cleanup work is bounded, the discipline
+is to do the cleanup now; when the cleanup is design work that
+needs its own rounds, the discipline is to land it as a separate
+PR with tracked discipline. The
+`wallet2_ffi_create_wallet_from_bip39` shape needs design
+rounds; the language-parameter drop in Phase 3 is bounded.
+Folding the design work into B-1 would expand scope past the
+deletion-focused premise of the PR.
+
+The deferral is converted from "we'll get to it" to "tracked
+discipline item" via the explicit FOLLOWUPS entry
+"`wallet2_ffi_create_wallet` / `on_create_wallet`
+mainnet-broken FFI cleanup" in
+[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)'s V3.0 pre-genesis queue,
+targeted at the post-Electrum-words-removal cleanup series
+that lands before Stage 1 PR 4 kickoff. The FOLLOWUPS entry's
+existence — not its prose — is what satisfies §4.9's
+named-criteria principle and converts the §4.10 framing from
+"defensible deferral with provisional V3.x workstream"
+(implicit-deferred-cleanup, susceptible to "we'll get to it"
+drift) to "out-of-B-1-scope with named cleanup work item"
+(structural-deferral, audit-tracked).
+
+If the FOLLOWUPS entry slips past Stage 1 PR 4 kickoff without
+explicit re-justification of the deferral, the §6.1
+rejection-shape recurs and the disposition reopens per the
+named-criteria principle.
+
+**Hardware-wallet BIP-39 derivation parity** is a related but
+orthogonal question. A user who creates a Shekyl wallet via
+shekyl-gui-wallet's BIP-39 path, records the phrase, and later
+attempts to restore on a Trezor or Ledger device must receive
+the same Shekyl account. Parity requires alignment across
+(i) a SLIP-0044-registered or self-claimed coin type for
+Shekyl, (ii) the BIP-44 derivation path used by
+`shekyl_account_generate_from_bip39`, (iii) the network
+identifier's interaction with the derivation, and (iv) the
+PBKDF2-HMAC-SHA512 → cSHAKE-256 pipeline match between
+Shekyl-host and the eventual device firmware. None of these
+alignment dimensions are Electrum-words-removal questions; they
+exist regardless of which mnemonic standard Shekyl adopts, and
+they belong to the hardware-wallet integration workstream
+that does not yet have a substrate document. The alignment
+question is tracked as a separate FOLLOWUPS V3.x entry
+("Hardware-wallet BIP-39 derivation parity") that the eventual
+`docs/HARDWARE_WALLETS.md` will absorb when the
+hardware-wallet integration workstream opens. B-1 does not
+introduce the question and does not resolve it.
 
 When the field is unset, `query_key("mnemonic")` returns a hard
 error: `"this wallet was not created from a BIP-39 mnemonic; the
@@ -1170,10 +1373,10 @@ it inherits the same protection as `spend_secret` and `view_secret`.
 **The Phase 1 work scope expands.** Per the Round-3 + Round-4
 dispositions, Phase 1 (atomic commit) takes on:
 
-1. Add `m_bip39_entropy: std::optional<crypto::secret_bytes<32>>`
+1. Add `m_bip39_entropy: std::optional<epee::mlocked<tools::scrubbed_arr<uint8_t, 32>>>`
    field to wallet2 state.
 2. Add public accessor
-   `const std::optional<crypto::secret_bytes<32>>& wallet2::bip39_entropy() const`
+   `const std::optional<epee::mlocked<tools::scrubbed_arr<uint8_t, 32>>>& wallet2::bip39_entropy() const`
    alongside other read-only accessors in `wallet2.h`. This is the
    accessor the §4.5-routed dispatch branch uses to read the
    entropy when computing the phrase on demand.
@@ -1183,7 +1386,7 @@ dispositions, Phase 1 (atomic commit) takes on:
    parse paths (per §2 corrected inventory) to call `shekyl_bip39_*`
    FFI functions and populate `m_bip39_entropy`.
 5. **Rewire `query_key("mnemonic")` dispatch branch implementation
-   at `src/wallet/wallet2_ffi.cpp:648`** (and the equivalent RPC
+   at `src/wallet/wallet2_ffi.cpp:643`** (and the equivalent RPC
    handler in `wallet_rpc_server.cpp`) to read
    `wallet.bip39_entropy()` and call
    `shekyl_bip39_mnemonic_from_entropy` directly via the FFI,
@@ -1418,7 +1621,7 @@ behaviour, not a regression.
 ### 6.2 Partial deletion (audit-strict three-site scope) (REJECTED)
 
 The Phase 0 Mission Audit's initial framing of "three call
-sites" — `wallet2.cpp:1374` internal, `wallet2_ffi.cpp:648`
+sites" — `wallet2.cpp:1374` internal, `wallet2_ffi.cpp:643`
 `query_key("mnemonic")` dispatch, `wallet_rpc_server.cpp:2214`
 RPC handler — was a simplification that did not survive contact
 with the actual deletion surface (per §2's inventory). Deleting

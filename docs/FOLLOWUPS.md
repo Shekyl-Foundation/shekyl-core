@@ -1212,6 +1212,156 @@ sustainability is unaffected by the recalibration.
   the deferral surfaces; rule 17 amendment cycle is the natural home
   for §4 protocol clarification.
 
+- **`wallet2_ffi_create_wallet` / `on_create_wallet` mainnet-broken
+  FFI cleanup (post-Electrum-words-removal cleanup series; pre
+  Stage 1 PR 4 kickoff).** The wallet2 FFI / RPC fresh-wallet
+  entry points (`wallet2_ffi_create_wallet` per
+  [`src/wallet/wallet2_ffi.cpp:299`](../src/wallet/wallet2_ffi.cpp);
+  `on_create_wallet` per the RPC handler) route through
+  `wallet2::generate(...)` → `account_base::generate(...)` →
+  `shekyl_account_generate_from_raw_seed`, which is testnet /
+  fakechain-only per the raw-seed-on-mainnet restriction in
+  [`src/cryptonote_basic/account.cpp:443–446`](../src/cryptonote_basic/account.cpp).
+  On Mainnet/Stagenet the call rejects; on Testnet/Fakechain it
+  succeeds but without BIP-39 entropy persistence (so
+  `query_key("mnemonic")` post-creation returns the §4.10 hard
+  error). This is a callable-but-mainnet-broken FFI surface that
+  the Electrum-words-removal series leaves in place per
+  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  §4.10's "Why `wallet2_ffi_create_wallet`'s mainnet-broken
+  state is out of B-1 scope" sub-paragraph: the brokenness
+  derives from the raw-seed restriction in `account.cpp`, not
+  from Electrum-words infrastructure, and the cleanup is design
+  work (the new FFI shape) rather than deletion work (B-1's
+  scope).
+
+  **Cleanup scope.** Design and ship a BIP-39-aware new-wallet
+  FFI (provisional name `wallet2_ffi_create_wallet_from_bip39`),
+  rewire shekyl-engine-rpc and shekyl-gui-wallet's
+  `wallet_bridge.rs` to the new entry, **delete**
+  `wallet2_ffi_create_wallet` and `on_create_wallet` in the
+  same atomic PR per
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)'s
+  default-delete discipline. The PR's own scope is bounded
+  (one new FFI + two delete sites) so it fits the 5-day / 10-commit
+  ceiling of
+  [`06-branching.mdc`](../.cursor/rules/06-branching.mdc) without
+  invoking the consensus-atomic-cutover exception (the FFI
+  isn't a consensus rule).
+
+  **Severity.** Mid-grade. The mainnet-broken state is
+  pre-existing and known; users on shekyl-gui-wallet bypass the
+  broken entry via the Rust-side BIP-39 path per
+  `ELECTRUM_WORDS_REMOVAL.md` §4.10. The cleanup is a
+  surface-shrinkage / audit-attention-budget item, not a
+  user-facing bug fix.
+
+  **Reversion criterion** (per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).
+  If the cleanup slips past Stage 1 PR 4 kickoff without
+  explicit re-justification, the
+  [§6.1 "Keep Electrum-words for backward compat"](./design/ELECTRUM_WORDS_REMOVAL.md#61-keep-electrum-words-for-backward-compat-rejected)
+  rejection-shape recurs (callable-but-discouraged surface that
+  creates a permanent attack surface), the
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc) §"The
+  'cost-benefit-defer-to-later' anti-pattern" classification
+  fires, and the
+  [`ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  §4.10 disposition reopens.
+
+  **Cross-references.**
+  [`src/wallet/wallet2_ffi.cpp:299`](../src/wallet/wallet2_ffi.cpp)
+  (`wallet2_ffi_create_wallet` definition);
+  [`src/wallet/wallet2_ffi.h`](../src/wallet/wallet2_ffi.h)
+  (corresponding declaration);
+  [`src/cryptonote_basic/account.cpp:443–446`](../src/cryptonote_basic/account.cpp)
+  (the raw-seed-on-mainnet restriction that drives the
+  brokenness);
+  [`rust/shekyl-engine-rpc/src/ffi.rs`](../rust/shekyl-engine-rpc/src/ffi.rs)
+  (in-tree Rust consumer that needs the new FFI rewire);
+  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  §4.10 (substrate disposition).
+
+  *Audit-doc link.* Surfaced during Electrum-words-removal
+  Phase 1 pre-flight verification at `dev` tip `60943cb16`,
+  flagged against
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc) §"The
+  'cost-benefit-defer-to-later' anti-pattern". The substrate
+  amendment that produced this entry sharpened
+  `ELECTRUM_WORDS_REMOVAL.md` §4.10's disposition from mixed
+  framing (1)+(3) to framing (3)-with-discipline-tracking
+  per the named-criteria principle.
+
+- **`epee::wipeable_string` mlock-backed allocator
+  (post-Electrum-words-removal cleanup series; pre Stage 1 PR 4
+  kickoff).** Pre-flight verification at `dev` tip `60943cb16`
+  found that
+  [`contrib/epee/include/wipeable_string.h:83`](../contrib/epee/include/wipeable_string.h)
+  backs `epee::wipeable_string` with `std::vector<char>` and
+  applies no `mlock` / `MADV_DONTDUMP` / `prctl(PR_SET_DUMPABLE)`
+  (zero matches across the implementation file for any of
+  those primitives). Phrase-string transit buffers across the
+  BIP-39 FFI boundary are wipe-on-drop only; pages are
+  swap-eligible during the brief window between user input and
+  BIP-39 normalization and during `query_key("mnemonic")`
+  regeneration. Earlier substrate text in
+  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  §4.8 claimed `wipeable_string` was mlock-wrapped on the C++
+  side; that claim was factually incorrect and has been
+  corrected in the substrate-amendment PR that produced this
+  entry.
+
+  **Cleanup scope.** Add an mlock-backed allocator wrapper
+  alongside `epee::wipeable_string` (or refactor the existing
+  type to use an mlock-backed allocator under the hood), so
+  the wipe-on-drop discipline is paired with the swap-resistance
+  discipline that `35-secure-memory.mdc` §"OS-level protection"
+  pins as the standard mitigation. The change is
+  `wipeable_string`-internal (the allocator swap, plus
+  per-call-site review for layout-sensitive callers); BIP-39
+  paths consume the result without API change.
+
+  **Severity.** Mid-grade. `m_bip39_entropy` is independently
+  mlock-backed via
+  `epee::mlocked<tools::scrubbed_arr<uint8_t, 32>>` per
+  `ELECTRUM_WORDS_REMOVAL.md` §4.10's wallet-state addition, so
+  the high-residency surface is covered. The transit-time
+  exposure window is bounded (a few hundred microseconds per
+  FFI call), but the residual is documented-not-mitigated for
+  V3.0 by `ELECTRUM_WORDS_REMOVAL.md` §4.8's corrected
+  disposition; closing the residual before PR 4 keeps the
+  discipline visible.
+
+  **Reversion criterion** (per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).
+  If the allocator cleanup is deferred past Stage 1 PR 4
+  kickoff without explicit re-justification, the §4.8
+  documented-residual disposition is structurally wrong (no
+  longer pending bounded closure) and the substrate amendment
+  is reopened to either commit to the residual permanently or
+  schedule the cleanup to a different bounded milestone.
+
+  **Cross-references.**
+  [`contrib/epee/include/wipeable_string.h:83`](../contrib/epee/include/wipeable_string.h)
+  (`std::vector<char>` backing store);
+  [`contrib/epee/src/wipeable_string.cpp`](../contrib/epee/src/wipeable_string.cpp)
+  (implementation file lacking mlock);
+  [`contrib/epee/include/mlocker.h`](../contrib/epee/include/mlocker.h)
+  (existing `epee::mlocked<T>` template — model for the
+  allocator wrapper);
+  [`.cursor/rules/35-secure-memory.mdc`](../.cursor/rules/35-secure-memory.mdc)
+  §"OS-level protection" (canonical mitigation discipline);
+  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  §4.8 (corrected substrate disposition).
+
+  *Audit-doc link.* Surfaced during Electrum-words-removal
+  Phase 1 pre-flight verification at `dev` tip `60943cb16`.
+  The substrate-amendment PR that produced this entry replaced
+  `ELECTRUM_WORDS_REMOVAL.md` §4.8's incorrect "wipeable_string
+  is mlock-wrapped" claim with the corrected entropy-mlocked /
+  phrase-string-wipe-on-drop split, and explicitly named this
+  FOLLOWUPS entry as the bounded closure path for the residual.
+
 ---
 
 ## V3.1 — audit response and stressnet gates
@@ -4799,6 +4949,107 @@ one place to confirm each item's relationship to the wallet stack.
 
   Status: documentation complete. Code work deferred to V3.2 at
   earliest; actual vendor integration timeline is vendor-controlled.
+
+- **Hardware-wallet BIP-39 derivation parity (vendor- and
+  standardization-dependent; hardware-wallet integration
+  workstream).** Shekyl's host-side BIP-39 path
+  (`shekyl_account_generate_from_bip39` per
+  [`rust/shekyl-ffi/src/account_ffi.rs`](../rust/shekyl-ffi/src/account_ffi.rs))
+  must produce the same Shekyl account that an eventual Trezor /
+  Ledger / Coldcard / Jade firmware would derive when given the
+  same 24-word BIP-39 phrase + passphrase. Cross-platform
+  recovery requires alignment across four dimensions:
+
+  1. **SLIP-0044 coin type.** Shekyl needs either a registered
+     SLIP-0044 coin type or a self-claimed one in the unregistered
+     range. The decision is registration-dependent (SatoshiLabs's
+     SLIP-0044 maintenance is the standardization gate).
+  2. **BIP-44 derivation path.** The
+     [`account_base::generate_from_bip39`](../src/cryptonote_basic/account.cpp)
+     pipeline (entropy → cSHAKE-256 normalize → spend/view secret
+     derivation per
+     [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+     §7.12) must match what the device firmware derives at the
+     corresponding `m/44'/<coin-type>'/<account>'/<change>/<index>`
+     path. Today's pipeline is Shekyl-specific (PBKDF2-HMAC-SHA512
+     → cSHAKE-256, not BIP-32 → BIP-44); the device firmware would
+     need to mirror it, OR the host pipeline would need to add a
+     BIP-32 → BIP-44 layer.
+  3. **Network identifier interaction.** Mainnet / Stagenet /
+     Testnet network discriminators must enter the derivation in
+     the same way on host and device, or the same phrase derives
+     three different accounts depending on which network the
+     wallet was created against.
+  4. **Passphrase semantics.** The host implements BIP-0039 §A
+     standard passphrase semantics (passphrase concatenated into
+     PBKDF2 salt); the device must implement the same. Trezor's
+     "hidden wallet" passphrase semantics match; Ledger's vary by
+     firmware version.
+
+  **Why this is not Electrum-words-removal-scope.** None of
+  these alignment dimensions are mnemonic-encoding questions;
+  they exist regardless of whether Shekyl uses BIP-39,
+  Electrum-words, or any other mnemonic scheme. They belong to
+  the hardware-wallet integration workstream, which does not
+  yet have a substrate document. Per
+  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  §4.10's "Hardware-wallet BIP-39 derivation parity"
+  sub-paragraph, B-1 does not introduce the question and does
+  not resolve it.
+
+  **Cleanup scope.** Authoring `docs/HARDWARE_WALLETS.md`
+  (substrate doc for the hardware-wallet integration workstream)
+  is the prerequisite. The four alignment dimensions above
+  become §-level dispositions in that doc, with cross-references
+  back to this FOLLOWUPS entry once landed. Vendor outreach
+  (Coinkite, Blockstream, Trezor, Ledger) is the same outreach
+  cohort named by the PQC multisig hardware-wallet integration
+  entry above; the two workstreams should likely share vendor
+  conversations and `HARDWARE_WALLETS.md` should absorb both
+  surfaces under a unified substrate.
+
+  **Severity.** Forward-impact-grade. The cross-platform
+  recovery story breaks silently if alignment is wrong:
+  a user generates a phrase on shekyl-gui-wallet, records it,
+  buys a Trezor at firmware support time, restores from the
+  phrase, and gets a different Shekyl account. The failure is
+  invisible to the user until they realize the restored wallet
+  doesn't see their UTXOs. This is exactly the failure shape
+  hardware-wallet recovery is supposed to prevent.
+
+  **Reversion criterion** (per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).
+  Reopened when (a) the hardware-wallet integration workstream
+  opens with substrate authoring (`HARDWARE_WALLETS.md`), at
+  which point this entry is migrated into the new substrate
+  doc's disposition tables, or (b) a vendor commits to Shekyl
+  firmware support (forcing the alignment decision regardless
+  of substrate-doc readiness), or (c) the
+  `shekyl_account_generate_from_bip39` pipeline changes shape
+  in a way that affects derivation alignment (e.g., the cSHAKE
+  customization string changes per
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §7.12), forcing fresh alignment analysis.
+
+  **Cross-references.**
+  [`rust/shekyl-ffi/src/account_ffi.rs`](../rust/shekyl-ffi/src/account_ffi.rs)
+  (host-side `shekyl_account_generate_from_bip39`);
+  [`rust/shekyl-crypto-pq/src/bip39.rs`](../rust/shekyl-crypto-pq/src/bip39.rs)
+  (host-side BIP-39 entropy / seed derivation);
+  [`src/cryptonote_basic/account.cpp`](../src/cryptonote_basic/account.cpp)
+  (account-keys derivation from seed);
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §7.12 (cSHAKE-256 pipeline that's downstream of BIP-39 in
+  Shekyl's host-side derivation);
+  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  §4.10 ("Hardware-wallet BIP-39 derivation parity"
+  forward-reference sub-paragraph);
+  the PQC multisig hardware-wallet integration entry above
+  (same vendor outreach cohort).
+
+  Status: substrate-pending. `docs/HARDWARE_WALLETS.md`
+  authoring is the prerequisite; vendor outreach is vendor-controlled
+  beyond that.
 
 ---
 

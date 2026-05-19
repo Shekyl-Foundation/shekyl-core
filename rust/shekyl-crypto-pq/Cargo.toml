@@ -40,7 +40,22 @@ blake2 = "0.10"
 # `35-secure-memory.mdc`'s structural-memwipe rule. Required by every wallet
 # creation/restore path that materializes seed bytes (Phase 0 Mission Audit
 # Lens D D-9).
-bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroize"] }
+#
+# The `unicode-normalization` feature gates the NFKD normalization that the
+# BIP-0039 §A spec requires on mnemonic phrases and passphrases. Without it,
+# `Mnemonic::parse_in` / `parse` / `to_seed` (the entry points we use) are
+# `#[cfg]`-gated out entirely; with it, they internally call
+# `Mnemonic::normalize_utf8_cow` and apply `unicode_normalization::nfkd()`
+# before PBKDF2 / entropy derivation. The feature is currently pulled in
+# transitively via the `std -> alloc -> unicode-normalization` chain in
+# `bip39-2.2.2/Cargo.toml`, but it is **explicitly pinned here** as
+# defense-in-depth against transitive-feature drift: a future cargo update
+# or upstream feature refactor that breaks the chain would silently disable
+# NFKD without the explicit pin, and the failure mode (two byte-different
+# but logically-equivalent Unicode forms producing different wallets) is
+# invisible to all standard tests. See `ELECTRUM_WORDS_REMOVAL.md` §4.7 #6
+# for the load-bearing discipline statement.
+bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroize", "unicode-normalization"] }
 shekyl-address = { path = "../shekyl-address" }
 # `zeroize` feature activates `Sha3State: ZeroizeOnDrop` (sha3 0.10.9+)
 # so the cSHAKE / SHA-3 sponge state is wiped on drop. Required by the
