@@ -688,45 +688,72 @@ handlers in `wallet_rpc_server`.
    label is the load-bearing external interface per substrate
    §4.5's string-key disposition.
 
-9. **G7 — Migrate 12 Python functional tests off the deleted
-   RPC commands** (per substrate §2.7 and the end-to-end function
-   walk's test-migration finding):
+9. **G7 disposition reassessed at Phase 2 implementation time:
+   delete `tests/functional_tests/` outright instead of
+   migrating.** (Pre-flight findings, 2026-05-19.)
 
-   - Twelve functional tests under `tests/functional_tests/`
-     today call `restore_deterministic_wallet(seed=..., language=...)`.
-     Migrate each to `generate_from_keys(spend_key=...,
-     view_key=..., address=...)`. For each test, the migration
-     pre-computes the spend / view secret keys (derived from
-     the test's known fixed 25-word seed via the historical
-     Electrum-words derivation, run once at migration time) and
-     hardcodes them into the test source as hex constants. This
-     preserves the test's intent (deterministic recovery to a
-     known wallet) while routing through the surviving
-     `generate_from_keys` RPC command. The test fixtures' BIP39
-     phrases are not introduced (the functional tests are not
-     mnemonic-coverage tests; they are end-to-end recovery
-     tests, and `generate_from_keys` is the recovery primitive
-     that survives Phase 2).
-   - Three functional tests under
-     `tests/functional_tests/transfer.py` call
-     `stop_background_sync(seed=...)`. Convert each to
-     `stop_background_sync(password=...)` (the surviving
-     password-based code path). The conversion is mechanical:
-     replace the `seed=` kwarg with `password=`, drop any
-     associated `seed_offset=` kwarg, and supply the test's
-     known wallet password.
-   - The functional-test changes land in the same Phase 2 PR as
-     the RPC-deletion changes; they are the load-bearing test
-     gate that confirms the deletion does not regress
-     end-to-end recovery flows.
+   The plan-doc draft above proposed migrating 12 (actually 28)
+   `restore_deterministic_wallet(seed=..., language=...)` call
+   sites and 3 (actually 4) `stop_background_sync(seed=...)`
+   call sites under `tests/functional_tests/` to the surviving
+   `generate_from_keys` / password-only paths. Pre-flight
+   investigation surfaced four blockers that flipped the
+   disposition from migrate to delete:
 
-**Multi-commit decomposition (5 commits):**
+   - The harness invokes `monerod` and `monero-wallet-rpc`
+     binaries that do not exist in the Shekyl tree
+     (`shekyld` and `shekyl-wallet-rpc`).
+   - `tests/functional_tests/CMakeLists.txt:79` silently skipped
+     `functional_tests_rpc` and `check_missing_rpc_methods` in
+     the CI environment because `requests` / `psutil` /
+     `monotonic` / `deepdiff` Python deps were absent at
+     `cmake` configure time. The harness was not running in CI
+     and had not been running for the lifetime of the Shekyl
+     tree; no caller depended on it.
+   - `shekyl-wallet-rpc` has no `--regtest` / `--fakechain`
+     flag and defaults to mainnet network type even when
+     bound to a `shekyld --regtest` daemon. The
+     `shekyl_account_generate_from_raw_seed` FFI rejects the
+     `(mainnet, raw)` pair per
+     `rust/shekyl-crypto-pq/src/account.rs`'s permitted
+     network/seed-format matrix, so any migrated test that
+     restored a wallet on the regtest daemon would
+     fail-closed at the FFI layer. Wiring a network-mode flag
+     into `shekyl-wallet-rpc` is a separate planning activity
+     under `20-rust-vs-cpp-policy.mdc`, not Phase 2 scope.
+   - Even with the above three resolved, the harness would
+     still be Monero-shaped end-to-end — file structure,
+     Python 2 / 3 compat residue, ad-hoc daemon orchestration —
+     and would warrant a Shekyl-native rewrite under its own
+     design doc, not a "while we're here" revival here.
+
+   Per `15-deletion-and-debt.mdc` ("default: delete; code with
+   no live caller, code that handles state that doesn't exist
+   — all of it goes"), the Phase 2 disposition is: delete
+   `tests/functional_tests/` outright, drop
+   `add_subdirectory(functional_tests)` from
+   `tests/CMakeLists.txt`, rewrite the Functional tests
+   section of `tests/README.md` to record the deletion + a
+   pointer to the future Shekyl-native harness as a separate
+   planning activity. The Shekyl-native end-to-end harness
+   (`shekyld` + `shekyl-wallet-rpc` with raw-seed restore on
+   testnet/fakechain) is recorded as a `docs/FOLLOWUPS.md`
+   item; it is not a revival of `tests/functional_tests/`.
+
+**Multi-commit decomposition (5 commits, as landed):**
 
 1. `wallet-rpc: delete restore_deterministic_wallet RPC + handler + helper functions`
-2. `wallet-rpc: delete get_languages + get_wallet_words RPC commands`
-3. `wallet-rpc: delete language validation branches + set_seed_language calls + language request-struct fields in on_create_wallet/on_generate_from_keys per §2.4 G2`
-4. `wallet-rpc: delete stop_background_sync seed-recovery branch + request fields per §2.4 G1`
-5. `wallet-rpc: cleanup mnemonics/electrum-words.h include + migrate 12 functional tests per §2.4 G7`
+2. `wallet-rpc: delete get_languages JSON-RPC method`
+   (work item 1; no `get_wallet_words` handler exists in the
+   current tree — plan-doc drift versus the live code).
+3. `wallet-rpc: drop language field from create_wallet/generate_from_keys`
+   (work items 4 + 5; bisect-coupled deletion bundle).
+4. `wallet-rpc: drop seed-recovery branch from stop_background_sync`
+   (work item 6 / §2.4 G1).
+5. `wallet-rpc: drop electrum-words.h include + delete tests/functional_tests/`
+   (work items 7 + 9-as-reassessed; the migration originally
+   bundled here under work item 9 was replaced with a deletion
+   per the disposition above).
 
 Commit 3 bundles three deletions because they are bisect-coupled:
 work items 4 (the `is_valid_language(req.language)` validation
@@ -750,7 +777,7 @@ migration lands in Phase 3 per substrate §3.2.0).
 Third-party `wallet-rpc` clients that depend on these RPC
 commands (none known) would see RPC method-not-found errors at
 the moment of attempted use. Internal Python functional tests
-are migrated per work item 9.
+are deleted outright per work-item-9 reassessment, not migrated.
 
 **Branch:** `feat/electrum-words-removal-phase2-rpc-deletion`
 off `dev`.

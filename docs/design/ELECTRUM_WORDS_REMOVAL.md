@@ -273,19 +273,42 @@ See §4.10 point #1 for the full disposition rationale.
 Test-migration scope spans two phases, mirroring the two consumer
 surfaces (RPC at Phase 2 and FFI at Phase 3):
 
-- **Phase 2 — RPC-consumer migrations** (per the Phase 2 work-item
-  list, §2.4 G7). Twelve Python functional tests under
-  `tests/functional_tests/` today call
-  `restore_deterministic_wallet(seed=..., language=...)`. Each
-  migrates to `generate_from_keys(spend_key=..., view_key=...,
-  address=...)`, with the spend / view secret keys pre-derived
-  from the test's known fixed 25-word seed and hardcoded as hex
-  constants in the test source. Three sites in
-  `tests/functional_tests/transfer.py` call
-  `stop_background_sync(seed=...)`; each converts to
-  `stop_background_sync(password=...)` per the surviving
-  password-based code path. These migrations land in the same
-  Phase 2 PR as the RPC-deletion changes.
+- **Phase 2 — RPC-consumer migration disposition reassessed at
+  implementation time: deletion of `tests/functional_tests/`
+  outright instead of migration** (per the Phase 2 PR's
+  pre-flight findings, 2026-05-19, recorded in
+  `ELECTRUM_WORDS_REMOVAL_PLAN.md` Phase 2 work item 9).
+
+  This substrate's earlier draft proposed migrating 12 (actually
+  28) `restore_deterministic_wallet(seed=..., language=...)`
+  call sites and 3 (actually 4) `stop_background_sync(seed=...)`
+  sites under `tests/functional_tests/` to the surviving
+  `generate_from_keys` / password-only paths. Pre-flight
+  investigation surfaced four blockers that flipped the
+  disposition from migrate to delete: (a) the harness invokes
+  `monerod` / `monero-wallet-rpc` binary names that do not
+  exist in the Shekyl tree; (b) `functional_tests_rpc` and
+  `check_missing_rpc_methods` were silently skipped in CI
+  because `requests` / `psutil` / `monotonic` / `deepdiff`
+  Python deps were absent at `cmake` configure time —
+  inherited dead code with no live caller; (c)
+  `shekyl-wallet-rpc` lacks a `--regtest` / `--fakechain`
+  flag, defaults to mainnet, and the
+  `shekyl_account_generate_from_raw_seed` FFI rejects
+  `(mainnet, raw)` per the permitted network/seed-format
+  matrix in `rust/shekyl-crypto-pq/src/account.rs`, so
+  migrated tests would fail-closed at the FFI layer; (d) even
+  with the above three resolved, the harness is Monero-shaped
+  end-to-end and warrants a Shekyl-native rewrite under its
+  own design doc, not a "while we're here" revival here. Per
+  `15-deletion-and-debt.mdc`'s default-delete posture, the
+  Phase 2 PR deletes `tests/functional_tests/` outright,
+  drops `add_subdirectory(functional_tests)` from
+  `tests/CMakeLists.txt`, and rewrites the Functional tests
+  section of `tests/README.md` to record the deletion + the
+  planning posture for a Shekyl-native replacement
+  (separate `docs/FOLLOWUPS.md` item; not a revival of this
+  directory).
 
 - **Phase 3 — FFI-consumer language-parameter drops** (alongside
   the FFI signature change in §3.1's work items 2 and 3). Any
@@ -1937,10 +1960,11 @@ Test fixtures that exercise Electrum-words paths today:
 - `tests/unit_tests/serialization.cpp` (if it deserializes legacy
   wallet JSON with `seed_language`) — Phase 4 sweep removes the
   `seed_language` field from any test fixtures.
-- `tests/functional_tests/wallet.py` (Python integration tests)
-  — Phase 2 sweep removes `restore_deterministic_wallet` /
-  `get_languages` RPC calls; Phase 3 sweep removes any
-  `set_language` integration.
+- `tests/functional_tests/` (Python + C++ integration harness)
+  — deleted outright in the Phase 2 PR (work item 9
+  reassessed; see `ELECTRUM_WORDS_REMOVAL_PLAN.md` Phase 2).
+  Inherited Monero harness, never running in Shekyl CI,
+  targeting binary names that don't exist in the tree.
 
 **Pre-genesis posture confirmation:** there are zero production
 Shekyl wallet keyfiles in existence (the project has not yet

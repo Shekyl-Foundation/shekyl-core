@@ -1292,6 +1292,88 @@
 
 ### Removed
 
+- **Electrum-words subsystem — Phase 2: JSON-RPC surface deletion**
+  (`feat/electrum-words-removal-phase2-rpc-deletion`, 2026-05-19).
+  Deletes the inherited CryptoNote 25-word seed surface from the
+  wallet JSON-RPC layer per
+  `docs/design/ELECTRUM_WORDS_REMOVAL_PLAN.md` Phase 2 and
+  `docs/design/ELECTRUM_WORDS_REMOVAL.md` substrate §2.4. Closes
+  Phase 0 Mission Audit Lens B finding B-1 at the RPC layer (FFI +
+  `wallet2` core deletions follow in Phase 3 / Phase 4 / Phase 5).
+  Five commits, all in `src/wallet/wallet_rpc_server*` plus
+  `tests/`:
+
+  - `restore_deterministic_wallet` JSON-RPC method + handler +
+    `COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET` request/response
+    structs deleted. The method took a 25-word Electrum seed +
+    optional `seed_offset` + `language` and reconstructed an
+    account; Shekyl wallets restore from raw seeds via the
+    `shekyl_account_generate_from_raw_seed` FFI surface
+    (testnet/fakechain only per
+    `rust/shekyl-crypto-pq/src/account.rs`'s permitted
+    network/seed-format matrix), not from word lists.
+  - `get_languages` JSON-RPC method + handler +
+    `COMMAND_RPC_GET_LANGUAGES` request/response structs
+    deleted. The method enumerated Electrum-word language packs
+    that have no analogue in the Shekyl seed flow.
+  - `language` request field + `is_valid_language(req.language)`
+    validation branch + `wal->set_seed_language(req.language)`
+    call removed from `COMMAND_RPC_CREATE_WALLET` and
+    `COMMAND_RPC_GENERATE_FROM_KEYS`. The request-schema change
+    forces a JSON-parse-error on any caller that supplies a
+    `language` field, matching the §4.3 hard-error discipline at
+    the FFI layer (graceful-degradation default inverted to
+    immediate breakage). The underlying
+    `wallet2::set_seed_language` and
+    `crypto::ElectrumWords::is_valid_language` symbols still
+    exist (called from `wallet2_ffi.cpp` and `wallet2`
+    internals); their full removal lands with the mnemonics
+    module in Phase 5.
+  - `seed` and `seed_offset` request fields + the entire
+    seed-recovery branch (the
+    `if (!req.seed.empty()) { words_to_bytes / decrypt_key /
+    account.generate(...) / spend-key match check }` block at
+    `wallet_rpc_server.cpp:2316–2366`) removed from
+    `COMMAND_RPC_STOP_BACKGROUND_SYNC`. The branch was P0-broken
+    on mainnet/stagenet under the legacy 3-arg
+    `account.generate()` overload (constant-drift audit
+    `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`);
+    password-only `stop_background_sync` survives unchanged. A
+    BIP39 / raw-seed replacement is a `docs/FOLLOWUPS.md` V3.2
+    item, not Phase 2 scope.
+  - `#include "mnemonics/electrum-words.h"` removed from
+    `wallet_rpc_server.cpp` (no remaining ElectrumWords callers
+    in the file).
+  - `tests/functional_tests/` (29 files, 6,786 lines) deleted
+    outright. The plan-doc draft proposed migrating 12
+    (actually 28) `restore_deterministic_wallet` and 3
+    (actually 4) `stop_background_sync(seed=...)` call sites to
+    surviving RPC methods. Pre-flight investigation
+    (2026-05-19) surfaced four blockers that flipped the
+    disposition from migrate to delete: (a) the harness invokes
+    `monerod` / `monero-wallet-rpc` binaries that don't exist
+    in the Shekyl tree; (b) `functional_tests_rpc` and
+    `check_missing_rpc_methods` were silently skipped in CI
+    because the build environment lacked the
+    `requests` / `psutil` / `monotonic` / `deepdiff` Python
+    deps at `cmake` configure time — inherited dead code with
+    no live caller; (c) `shekyl-wallet-rpc` lacks a
+    `--regtest` / `--fakechain` flag and defaults to mainnet,
+    so the FFI rejects raw-seed restore on the regtest
+    daemon's fakechain network; (d) the harness is
+    Monero-shaped end-to-end and warrants a Shekyl-native
+    rewrite under its own design doc, not a "while we're here"
+    revival here. Per `15-deletion-and-debt.mdc`'s
+    default-delete posture, deletion is the disposition.
+    `add_subdirectory(functional_tests)` removed from
+    `tests/CMakeLists.txt`; the Functional tests section of
+    `tests/README.md` is rewritten to record the deletion +
+    the planning posture for a Shekyl-native replacement.
+
+  Build verification: `wallet_rpc_server`, `wallet`, `shekyld`,
+  and `unit_tests` targets all build clean; `unit_tests` ctest
+  pass (306s, 0 failures).
+
 - **Vestigial CLSAG-era `ring_size` field (Phase 0 Mission Audit
   Lens E finding E.2-A; Batch α PR 2)**
   (`chore/audit-batch-alpha-pr2-ring-size-cleanup`, 2026-05-17).
