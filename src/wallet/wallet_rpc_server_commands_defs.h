@@ -2077,12 +2077,10 @@ namespace wallet_rpc
     {
       std::string filename;
       std::string password;
-      std::string language;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(filename)
         KV_SERIALIZE(password)
-        KV_SERIALIZE(language)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<request_t> request;
@@ -2172,7 +2170,6 @@ namespace wallet_rpc
       std::string viewkey;
       std::string password;
       bool autosave_current;
-      std::string language;
 
       BEGIN_KV_SERIALIZE_MAP()
       KV_SERIALIZE_OPT(restore_height, (uint64_t)0)
@@ -2182,7 +2179,6 @@ namespace wallet_rpc
       KV_SERIALIZE(viewkey)
       KV_SERIALIZE(password)
       KV_SERIALIZE_OPT(autosave_current, true)
-      KV_SERIALIZE(language)
       END_KV_SERIALIZE_MAP()
     };
 

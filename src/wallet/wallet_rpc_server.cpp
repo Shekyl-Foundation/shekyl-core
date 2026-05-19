@@ -3676,14 +3676,6 @@ namespace tools
     }
     std::string wallet_file = req.filename.empty() ? "" : (m_wallet_dir + "/" + req.filename);
     {
-      if (!crypto::ElectrumWords::is_valid_language(req.language))
-      {
-        er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-        er.message = "Unknown language: " + req.language;
-        return false;
-      }
-    }
-    {
       po::options_description desc("dummy");
       const command_line::arg_descriptor<std::string, true> arg_password = {"password", "password"};
       const char *argv[4];
@@ -3703,7 +3695,6 @@ namespace tools
       er.message = "Failed to create wallet";
       return false;
     }
-    wal->set_seed_language(req.language);
     cryptonote::COMMAND_RPC_GET_HEIGHT::request hreq;
     cryptonote::COMMAND_RPC_GET_HEIGHT::response hres;
     hres.height = 0;
@@ -4093,17 +4084,6 @@ namespace tools
       er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
       er.message = "Failed to generate wallet";
       return false;
-    }
-
-    if (!req.language.empty())
-    {
-      if (!crypto::ElectrumWords::is_valid_language(req.language))
-      {
-        er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-        er.message = "The specified seed language is invalid.";
-        return false;
-      }
-      wal->set_seed_language(req.language);
     }
 
     // set blockheight if given
