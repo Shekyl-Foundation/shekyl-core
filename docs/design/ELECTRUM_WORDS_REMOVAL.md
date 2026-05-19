@@ -135,11 +135,11 @@ Total: 21 files deleted, ~570 KB.
 | File | Symbol | Disposition |
 | --- | --- | --- |
 | `src/wallet/wallet2.h:1001` | `bool is_deterministic() const` | Delete declaration (Phase 4) per §4.10's `is_deterministic` disposition (ii) |
-| `src/wallet/wallet2.h:1002` | `bool get_seed(epee::wipeable_string&, const epee::wipeable_string&)` | **Keep declaration; signature unchanged.** Re-implementation in Phase 1 per §4.10. |
+| `src/wallet/wallet2.h:1002` | `bool get_seed(epee::wipeable_string&, const epee::wipeable_string&)` | Delete declaration (Phase 4) — Phase 1's dispatch-branch rewire (per §4.5) breaks the dependency on this method, so Phase 4 can delete it cleanly |
 | `src/wallet/wallet2.h:1007` | `const std::string &get_seed_language() const` | Delete declaration (Phase 4) |
 | `src/wallet/wallet2.h:1011` | `void set_seed_language(const std::string&)` | Delete declaration (Phase 4) |
 | `src/wallet/wallet2.cpp:1362` | `bool wallet2::is_deterministic() const` body | Delete definition (Phase 4) |
-| `src/wallet/wallet2.cpp:1372` | `bool wallet2::get_seed(...)` body | **Re-implement (Phase 1)** to call `shekyl_bip39_mnemonic_from_entropy(this->m_bip39_entropy)` per §4.10 and return phrase, or hard-error if entropy unset |
+| `src/wallet/wallet2.cpp:1372` | `bool wallet2::get_seed(...)` body | Delete definition (Phase 4) — Phase 1 rewires the only call site (`wallet2_ffi.cpp:648` dispatch branch) to call Rust BIP39 directly, leaving this method dead-but-extant at Phase 4 entry; Phase 4 deletes the body alongside the declaration |
 | `src/wallet/wallet2.cpp:1425` | `const std::string &wallet2::get_seed_language() const` body | Delete definition (Phase 4) |
 | `src/wallet/wallet2.cpp:1433` | `void wallet2::set_seed_language(const std::string&)` body | Delete definition (Phase 4) |
 
@@ -158,7 +158,8 @@ has no Electrum-words branch. The actual Phase 1 rewire targets are:
 | `src/wallet/wallet2.cpp:600` | `parse_wallet_create_data` JSON helper | `ElectrumWords::words_to_bytes(field_seed, recovery_key, old_language)` — replaced with BIP39 path |
 | `src/wallet/wallet2.cpp:660–661` | `parse_wallet_create_data` JSON helper | `old_language_name` + `get_is_old_style_seed` deprecated-wallet detection — deleted |
 | `src/wallet/wallet2.cpp:669` | `parse_wallet_create_data` JSON helper | `wallet->set_seed_language(old_language)` — deleted |
-| `src/wallet/wallet2.cpp:1389` | `wallet2::get_seed` body | `ElectrumWords::bytes_to_words(key, ...)` call — replaced with BIP39 mnemonic-from-entropy per §4.10 |
+| `src/wallet/wallet2_ffi.cpp:648` | `query_key("mnemonic")` dispatch branch implementation | Today calls `wallet2::get_seed` → `ElectrumWords::bytes_to_words`. Rewired in Phase 1 to call `shekyl_bip39_mnemonic_from_entropy(wallet.bip39_entropy())` directly via the FFI. The dispatch case label `"mnemonic"` stays per §4.5; only the implementation body changes. Phase 4 then deletes `wallet2::get_seed` outright (no longer called). |
+| `src/wallet/wallet2.cpp:1389` | `ElectrumWords::bytes_to_words(key, ...)` call inside `wallet2::get_seed` body | Deleted in Phase 4 alongside the method body |
 | `src/wallet/wallet_rpc_server.cpp:2324` | RESTORE_DETERMINISTIC_WALLET handler | `ElectrumWords::words_to_bytes(req.seed, recovery_key, language)` — phase 2 surface deletion (whole RPC command goes) |
 | `src/wallet/wallet_rpc_server.cpp:4162` | RESTORE_DETERMINISTIC_WALLET sibling | Same; phase 2 deletion |
 | `src/wallet/wallet_rpc_server.cpp:4257` | RESTORE_DETERMINISTIC_WALLET reply | `ElectrumWords::bytes_to_words(recovery_val, electrum_words, mnemonic_language)` — phase 2 deletion |
@@ -175,7 +176,8 @@ atomic commit per §4.10's expanded Phase 1 scope.
 
 | File | Line | Disposition |
 | --- | --- | --- |
-| `src/wallet/wallet2.h` | `std::optional<...> m_bip39_entropy;` field | **Add** (Phase 1 — new state field per §4.10) |
+| `src/wallet/wallet2.h` | `std::optional<crypto::secret_bytes<32>> m_bip39_entropy;` field | **Add** (Phase 1 — new state field per §4.10) |
+| `src/wallet/wallet2.h` | `const std::optional<crypto::secret_bytes<32>>& bip39_entropy() const` accessor | **Add** (Phase 1 — read-only public accessor used by `wallet2_ffi.cpp:648` dispatch-branch rewire per §4.5 + §4.10) |
 | `src/wallet/wallet2.h:1728` | `std::string seed_language;` field | Delete field (Phase 4 Commit C) |
 | `src/wallet/wallet2.cpp` JSON write path | JSON write of `bip39_entropy` | **Add** (Phase 1 — new ser/de per §4.10) |
 | `src/wallet/wallet2.cpp` JSON read path | JSON read of `bip39_entropy` | **Add** (Phase 1 — new ser/de per §4.10) |
@@ -189,7 +191,7 @@ atomic commit per §4.10's expanded Phase 1 scope.
 | --- | --- | --- | --- |
 | `COMMAND_RPC_GET_LANGUAGES` | `src/wallet/wallet_rpc_server_commands_defs.h:2074` | struct + handler | Delete (Phase 2) |
 | `COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET` | `src/wallet/wallet_rpc_server_commands_defs.h:2223` | struct + handler | Delete (Phase 2) |
-| `COMMAND_RPC_QUERY_KEY` mnemonic branch | `src/wallet/wallet_rpc_server.cpp` query_key dispatch | conditional | **Keep** branch indefinitely per §4.5. Routing through Phase 1's re-implemented `wallet2::get_seed` (which calls `shekyl_bip39_mnemonic_from_entropy(m_bip39_entropy)` per §4.10) is transparent at the RPC dispatch layer; the RPC handler's implementation does not change. |
+| `COMMAND_RPC_QUERY_KEY` mnemonic branch | `src/wallet/wallet_rpc_server.cpp` query_key dispatch | conditional | The RPC-level dispatch label `"mnemonic"` persists per §4.5. Today the RPC handler delegates to `wallet2::get_seed`; in Phase 1 the handler is rewired to read `wallet.bip39_entropy()` and call `shekyl_bip39_mnemonic_from_entropy` directly (same shape as the FFI-level rewire in §2.5). Post-Phase-4 the RPC handler does not call `wallet2::get_seed` (which no longer exists). |
 | `get_wallet_words` handler | `src/wallet/wallet_rpc_server.cpp:2214,2220` | handler body | Delete (Phase 2) |
 | Language-set handlers | `src/wallet/wallet_rpc_server.cpp:3661,4082` | language-validation branches | Delete (Phase 2) |
 | Electrum-words restore branches | `src/wallet/wallet_rpc_server.cpp:2324–2358, 4162–4225` | `words_to_bytes` and `get_is_old_style_seed` calls + explanatory comments | Delete (Phase 2) |
@@ -201,7 +203,7 @@ atomic commit per §4.10's expanded Phase 1 scope.
 | `wallet2_ffi_restore_deterministic_wallet` | `src/wallet/wallet2_ffi.h:98–104` + `wallet2_ffi.cpp:414–431` | Delete entire function (Phase 3) |
 | `wallet2_ffi_create_wallet` `language` parameter | `src/wallet/wallet2_ffi.h:87` + `wallet2_ffi.cpp:309–319` | Drop parameter (signature change; Phase 3) |
 | `wallet2_ffi_generate_from_keys` `language` parameter | `src/wallet/wallet2_ffi.h:113` + `wallet2_ffi.cpp:523–527` | Drop parameter (signature change; Phase 3) |
-| `query_key("mnemonic")` dispatch branch | `src/wallet/wallet2_ffi.cpp:648,653` | **Keep** branch indefinitely per §4.5. Implementation re-routes through Phase 1's re-implemented `wallet2::get_seed` (no change at the FFI dispatch layer itself). |
+| `query_key("mnemonic")` dispatch branch | `src/wallet/wallet2_ffi.cpp:648,653` | **Rewire implementation to Rust BIP39 routing (Phase 1 atomic commit); dispatch label `"mnemonic"` persists per §4.5; `wallet2::get_seed` call site removed when the underlying method deletes in Phase 4 Commit A.** The branch implementation post-Phase-1 reads the entropy via `wallet.bip39_entropy()` (the new accessor per §2.3) and calls `shekyl_bip39_mnemonic_from_entropy` to produce the phrase, returning the §4.10 hard error if entropy is unset. |
 | Language-list export | `src/wallet/wallet2_ffi.cpp:1197–1198` | Delete (Phase 3) |
 | `crypto::ElectrumWords::words_to_bytes` + `is_valid_language` calls | `src/wallet/wallet2_ffi.cpp:309,416,429,523` | Delete (Phase 3) |
 
@@ -306,14 +308,25 @@ is per-site (not a "straight swap at one line range"):
   `shekyl_bip39_mnemonic_to_entropy` (new) to recover entropy, then
   calls `shekyl_account_generate_from_bip39` to produce the account
   and populates `m_bip39_entropy` per §4.10.
-- `wallet2.cpp:1389` (`wallet2::get_seed` body) calls
-  `shekyl_bip39_mnemonic_from_entropy(this->m_bip39_entropy)` to
-  produce the phrase, or returns the hard-error if entropy is
-  unset, per §4.5 + §4.10.
+- `wallet2_ffi.cpp:648` (`query_key("mnemonic")` dispatch branch
+  implementation) is rewired in Phase 1 to call
+  `shekyl_bip39_mnemonic_from_entropy(wallet.bip39_entropy())`
+  directly via the FFI per §4.5 + §4.10. The dispatch case label
+  `"mnemonic"` persists; only the implementation body changes.
+  Phase 4 deletes `wallet2::get_seed` (which is no longer called
+  by the rewired dispatch).
+- `wallet_rpc_server.cpp` `query_key` dispatch (RPC handler that
+  exposes `query_key` to RPC callers) is rewired in Phase 1 with
+  the same shape as the FFI-level dispatch — read
+  `wallet.bip39_entropy()` and call the FFI directly.
 - `wallet_rpc_server.cpp:2324, 4162, 4257, 3630–3631` and
   `wallet2_ffi.cpp:416, 1197–1198` are RPC and FFI surfaces that
   go away entirely in Phase 2 / Phase 3 — no rewire, just
   deletion.
+- `wallet2.cpp:1389` (`ElectrumWords::bytes_to_words(key, ...)`
+  call inside `wallet2::get_seed`) is **not** rewired — the
+  method body is dead-but-extant after Phase 1's dispatch-branch
+  rewire, and Phase 4 Commit A deletes the entire method body.
 
 No Phase 1 prerequisite work is required to add
 `shekyl_bip39_mnemonic_to_entropy` — it lands in the same Phase 1
@@ -512,25 +525,42 @@ Split from the Gap-1 review: this is two decisions bundled into
 one.
 
 **Routing decision (load-bearing): route `query_key("mnemonic")`
-to the Rust BIP39 entry via `wallet2::get_seed`'s re-implementation.**
-After Phase 1, the wallet's "mnemonic"-keyed query returns the
-BIP39 phrase derived from `m_bip39_entropy` (per §4.10) — not the
-25-word Electrum-words encoding. The `wallet2::get_seed` method
-**stays** (its declaration in `wallet2.h:1002` and its definition
-in `wallet2.cpp:1372`); only its body changes, calling
-`shekyl_bip39_mnemonic_from_entropy(this->m_bip39_entropy)` and
-returning the phrase via the existing `epee::wipeable_string&`
-out-parameter, or returning the §4.10 hard-error if entropy is
-unset (e.g., for wallets created from raw keys or device).
+to the Rust BIP39 entry directly at the dispatch site; delete
+`wallet2::get_seed`.** After Phase 1, the wallet's "mnemonic"-keyed
+query returns the BIP39 phrase derived from `m_bip39_entropy` (per
+§4.10) — not the 25-word Electrum-words encoding. Implementation
+mechanics:
 
-The `query_key("mnemonic")` dispatch branch in
-`wallet2_ffi.cpp:648` is **not deleted** at any phase per §4.10.
-Phase 1 re-implements `wallet2::get_seed`; the dispatch branch's
-implementation re-routes through the new body. Phase 2 and Phase
-4 leave the dispatch alone (the original substrate-doc note
-"replace with hard error (Phase 1) → delete branch (Phase 4)" is
-revised by this Round-3 fold-in to "re-implement via §4.10 Phase
-1 work; preserve dispatch branch indefinitely").
+1. Phase 1 adds the public accessor
+   `const std::optional<crypto::secret_bytes<32>>& wallet2::bip39_entropy() const`
+   alongside the new `m_bip39_entropy` field (per §2.3).
+2. Phase 1 rewires the `query_key("mnemonic")` dispatch branch
+   implementation in `wallet2_ffi.cpp:648` (and the equivalent RPC
+   handler in `wallet_rpc_server.cpp`) to read
+   `wallet.bip39_entropy()`, call
+   `shekyl_bip39_mnemonic_from_entropy` directly via the FFI, and
+   return the phrase — or return the §4.10 hard error if entropy is
+   unset (e.g., for wallets created from raw keys or device).
+3. The `wallet2::get_seed` method (declaration at `wallet2.h:1002`,
+   body at `wallet2.cpp:1372`) is **not** re-implemented in Phase
+   1. It is dead-but-extant after Phase 1's rewire (the only
+   caller, the dispatch branch, no longer calls it). Phase 4
+   Commit A deletes the method outright per §2.2's inventory.
+
+**Two distinguishable surfaces at the dispatch site:**
+
+| Surface | Phase 1 disposition | Phase 4 disposition |
+| --- | --- | --- |
+| Dispatch case label `"mnemonic"` (the string-key entry) | Persists | Persists |
+| Dispatch case implementation body | Rewired to call FFI directly via `wallet.bip39_entropy()` accessor | Unchanged from Phase 1 — does not touch `wallet2::get_seed` because Phase 1 already broke the dependency |
+| `wallet2::get_seed` method (declaration + body) | Not touched in Phase 1 (left dead-but-extant) | **Deleted** in Commit A per §2.2 |
+
+This separation resolves the round-3 internal contradiction
+between the substrate's §2.5 and §4.5 dispositions for the
+dispatch site. The string-key label persists; the implementation
+body rewires in Phase 1; the underlying `wallet2::get_seed`
+method deletes in Phase 4 (which is safe because Phase 1's
+rewire already broke the only call site's dependency on it).
 
 **String-key decision (UX call): keep the string key as
 `"mnemonic"`.** Rationale: "mnemonic" is the universal industry
@@ -587,12 +617,14 @@ contract:
    alongside `spend_secret` and `view_secret`. The
    entropy-on-disk is the canonical source-of-truth; the phrase
    is regenerated on demand via `shekyl_bip39_mnemonic_from_entropy`
-   inside the §4.5-routed `query_key("mnemonic")` path, and the
-   regenerated phrase is wipeable per the wipeable-string
-   discipline that flows from the Rust `Zeroizing<>` wrapper
-   through the FFI transit buffer to the caller's
-   `epee::wipeable_string`. No in-memory cache of the phrase
-   persists across query_key calls.
+   inside the §4.5-routed `query_key("mnemonic")` dispatch
+   branch (which reads the entropy via the new
+   `wallet2::bip39_entropy()` public accessor and calls the FFI
+   directly), and the regenerated phrase is wipeable per the
+   wipeable-string discipline that flows from the Rust
+   `Zeroizing<>` wrapper through the FFI transit buffer to the
+   caller's `epee::wipeable_string`. No in-memory cache of the
+   phrase persists across query_key calls.
 
 4. **Test invariant (§7.4).** A memory-residency invariant test
    runs after wallet generation/restore and after every
@@ -880,22 +912,35 @@ Encryption discipline: the entropy lives inside the
 password-derived key per the existing wallet2 keyfile pattern), so
 it inherits the same protection as `spend_secret` and `view_secret`.
 
-**The Phase 1 work scope expands.** Per the Round-3 disposition,
-Phase 1 (atomic commit) takes on:
+**The Phase 1 work scope expands.** Per the Round-3 + Round-4
+dispositions, Phase 1 (atomic commit) takes on:
 
-1. Add `m_bip39_entropy: std::optional<...>` field to wallet2 state.
-2. Add JSON write + JSON read for `bip39_entropy` in the keyfile
+1. Add `m_bip39_entropy: std::optional<crypto::secret_bytes<32>>`
+   field to wallet2 state.
+2. Add public accessor
+   `const std::optional<crypto::secret_bytes<32>>& wallet2::bip39_entropy() const`
+   alongside other read-only accessors in `wallet2.h`. This is the
+   accessor the §4.5-routed dispatch branch uses to read the
+   entropy when computing the phrase on demand.
+3. Add JSON write + JSON read for `bip39_entropy` in the keyfile
    ser/de path.
-3. Rewire `crypto::ElectrumWords::words_to_bytes` call sites at the
+4. Rewire `crypto::ElectrumWords::words_to_bytes` call sites at the
    parse paths (per §2 corrected inventory) to call `shekyl_bip39_*`
    FFI functions and populate `m_bip39_entropy`.
-4. **Re-implement `wallet2::get_seed`** to call
-   `shekyl_bip39_mnemonic_from_entropy(this->m_bip39_entropy)` and
-   return the phrase, OR return the hard error if `m_bip39_entropy`
-   is unset.
-5. Hard-error on non-empty `language` parameter on the rewired
+5. **Rewire `query_key("mnemonic")` dispatch branch implementation
+   at `src/wallet/wallet2_ffi.cpp:648`** (and the equivalent RPC
+   handler in `wallet_rpc_server.cpp`) to read
+   `wallet.bip39_entropy()` and call
+   `shekyl_bip39_mnemonic_from_entropy` directly via the FFI,
+   returning the phrase or returning the §4.10 hard error if the
+   entropy is unset. The dispatch case label `"mnemonic"` is
+   unchanged; only the implementation body changes. **The dispatch
+   branch does not call `wallet2::get_seed` after this rewire** —
+   that method is left dead-but-extant until Phase 4 Commit A
+   deletes it.
+6. Hard-error on non-empty `language` parameter on the rewired
    `wallet2::generate` callers (§4.3).
-6. Tests: BIP39 round-trip + entropy-persistence-roundtrip +
+7. Tests: BIP39 round-trip + entropy-persistence-roundtrip +
    memory-residency invariant (per §7.4).
 
 The commit is large but architecturally atomic: every change above
@@ -903,11 +948,14 @@ is the same architectural change at a different surface. Bisecting
 the rewire from the field addition produces a non-buildable
 intermediate state.
 
-**Phase 4's `wallet2::get_seed` disposition flips.** The method is
-**re-implemented in Phase 1**, not deleted in Phase 4. The original
-substrate §2.2 row marking the method for Phase-4 deletion is
-revised in §2.2's table: `get_seed` declaration is kept; its body
-is re-implemented in Phase 1; Phase 4 leaves it alone.
+**Phase 4's `wallet2::get_seed` disposition is preserved as
+deletion (per §2.2).** Phase 1's dispatch-branch rewire (item 5
+above) breaks the only call site's dependency on
+`wallet2::get_seed`, so the method is dead-but-extant at Phase 4's
+entry. Phase 4 Commit A deletes the declaration at
+`wallet2.h:1002` and the body at `wallet2.cpp:1372` outright,
+alongside the other Electrum-words-era methods (`is_deterministic`,
+`get_seed_language`, `set_seed_language`).
 
 **`is_deterministic` disposition.** The method becomes "returns true
 if `m_bip39_entropy.has_value()`" — the same logical predicate as
