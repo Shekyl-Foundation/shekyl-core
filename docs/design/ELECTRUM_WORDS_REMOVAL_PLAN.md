@@ -141,18 +141,26 @@ are the **plan-level** decisions (PR shape, sequencing, cutover
 mechanism) that the substrate doc's §4 references rather than
 restates.
 
-### 1. Five implementation PRs after Phase 0
+### 1. Five or six implementation PRs after Phase 0
 
-Five PRs total post-Phase 0: Phase 1 (wallet2 internal),
-Phase 2 (RPC), Phase 3 (FFI + cross-repo), Phase 4 (wallet2
-core), Phase 5 (mnemonics subsystem), Phase 6 (docs + CI). Phase
-6 is bundled with Phase 5's PR if the docs delta is small; if
-the CHANGELOG entry plus the two CI scripts plus the
+Five or six PRs total post-Phase 0, depending on Phase 6's
+fold-in disposition resolved at Phase 5 close (per §6.3 below):
+Phase 1 (wallet2 internal), Phase 2 (RPC), Phase 3 (FFI +
+cross-repo), Phase 4 (wallet2 core), Phase 5 (mnemonics
+subsystem), Phase 6 (docs + CI). Phase 6 is bundled with Phase
+5's PR if the docs delta is small (five PRs total post-Phase 0);
+if the CHANGELOG entry plus the two CI scripts plus the
 USER_GUIDE/DESIGN_CONCEPTS sweep is large, Phase 6 is its own
-sixth PR. Determined at Phase 5 close, not pre-decided here.
+sixth PR (six PRs total post-Phase 0). Determined at Phase 5
+close, not pre-decided here.
 
 Each PR fits `06-branching.mdc` rule 2 (short-lived; expected
 < 5 working days; < 10 commits).
+
+The substrate doc's §1 framing ("Phase 0 plus five-to-six
+implementation PRs") and the mermaid diagram above (six
+implementation-phase nodes P1–P6) both reflect this five-or-six
+shape consistently.
 
 ### 2. Cross-repo coordination at Phase 3 only
 

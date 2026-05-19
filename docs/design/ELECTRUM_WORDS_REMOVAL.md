@@ -78,11 +78,12 @@ pin, the audit's job was *finding* inherited architecture that
 contradicts the threat model; *executing* the migration is the
 work this PR series defines.
 
-This PR (Phase 0) plus four implementation PRs (Phases 1–6 across
-five PRs total per §5.2 of the plan doc) close out the B-1 audit
-finding. No follow-up audit work is expected; the symbol-isolation
-CI invariants (§7) become the structural compliance check that
-makes future re-acquisition of Electrum-words surface detectable.
+This PR (Phase 0) plus five-to-six implementation PRs (Phases 1–6
+across five or six PRs total, depending on whether Phase 6 folds
+into Phase 5's PR per plan §6.3) close out the B-1 audit finding.
+No follow-up audit work is expected; the symbol-isolation CI
+invariants (§7) become the structural compliance check that makes
+future re-acquisition of Electrum-words surface detectable.
 
 ---
 
@@ -93,8 +94,21 @@ descriptions can cite this section rather than re-enumerating.
 Line numbers are accurate as of `dev` tip after merges of PR #46
 (audit substrate), PR #47 (Batch α PR 1 / Cargo.toml zeroize
 features), PR #48 (Batch α PR 2 / ring_size cleanup), PR #53
-(LWMA-1 Phase 4), and PR #54 (RandomX v2 Phase 1). Re-verify
-against `dev` tip at each phase's branch-cut time.
+(LWMA-1 Phase 4), and PR #54 (RandomX v2 Phase 1).
+
+**Line-number stability discipline.** Line numbers drift as `dev`
+advances. Each phase's branch-cut commit must re-verify every
+deletion site against `dev` tip; the function name plus a nearby
+unique token (e.g., the `crypto::ElectrumWords::words_to_bytes`
+call inside `parse_wallet_create_data`, or the `"mnemonic"`
+string literal inside the `query_key` switch) is the stable
+anchor that survives drift. If a line-number citation in this
+section cannot be located by its anchor at branch-cut time, that
+is a Phase-N pre-flight finding (the symbol moved or was removed
+upstream) and must be resolved before the deletion lands. The
+per-phase PR description records the re-verified line numbers
+relative to its branch-cut commit, citing this section for the
+disposition rather than for the line numbers.
 
 ### 2.1 Mnemonics subsystem (`src/mnemonics/`)
 
@@ -593,8 +607,16 @@ The `seed_language` field on `wallet2` (currently
 `src/wallet/wallet2.h:1728`) is dropped in Phase 4. BIP39 is
 English-wordlist-only at genesis; there is no language concept to
 carry. The JSON serialization of `seed_language`
-(`wallet2.cpp:4793–4802` write, `:5344–5347` read) is dropped
-alongside the field.
+(`wallet2.cpp:4793–4802` write, `:5344–5347` read) and the field
+itself are both dropped in Phase 4, but in two sequential commits
+per plan §4.2: **Commit B** drops the JSON write/read sites
+(making the field write-only-in-memory), and **Commit C** drops
+the field declaration and any remaining in-memory writers. Commit
+B precedes Commit C so that a bisect landing between them sees a
+wallet that no longer persists `seed_language` to disk but still
+carries an unused in-memory field — a safe intermediate state.
+"Dropped alongside the field" elsewhere in this doc refers to the
+Phase-4-scoped pairing, not to a single commit.
 
 Multilingual BIP39 wordlists (Japanese, Spanish, French, etc.,
 per BIP39 spec) are a future feature that, if needed, lands via
@@ -787,11 +809,19 @@ in either direction triggers the cross-boundary zeroization
 contract:
 
 1. **Originating-scope zeroization.** Rust side produces
-   `Zeroizing<[u8; N]>` for entropy and seed bytes (already true
-   per `shekyl-crypto-pq::bip39` upstream contract via
-   `bip39 = { features = ["zeroize"] }` per Batch α PR 1).
-   C++ user-input side uses `epee::wipeable_string` (already the
-   pattern for wallet2 password / seed paths).
+   `Zeroizing<[u8; N]>` for entropy and seed bytes. This holds via
+   a two-layer arrangement: the in-tree workspace module
+   `rust/shekyl-crypto-pq/src/bip39.rs` wraps the upstream `bip39`
+   crate from crates.io (pinned at `bip39 = "2.2.2"` with
+   `default-features = false, features = ["std", "zeroize"]` in
+   `rust/shekyl-crypto-pq/Cargo.toml` per Batch α PR 1). The
+   upstream crate's `zeroize` feature gates the `Zeroize` /
+   `ZeroizeOnDrop` impls on `bip39::Mnemonic`; the workspace
+   wrapper layers Shekyl-specific constraints (24-word /
+   32-byte / English-only) on top and re-exports the
+   already-zeroizing primitives. C++ user-input side uses
+   `epee::wipeable_string` (already the pattern for wallet2
+   password / seed paths).
 
 2. **Transit buffer discipline.** Any intermediate FFI transit
    buffer (the `const uint8_t* words_ptr` parameter on the FFI
@@ -1645,12 +1675,33 @@ per `15-deletion-and-debt.mdc`).
 ### BIP39 specification
 
 - BIP-0039 — Mnemonic code for generating deterministic keys.
-  Implementation in `rust/shekyl-crypto-pq/src/bip39.rs`
-  (already a workspace dependency with `zeroize` feature enabled
-  per Batch α PR 1).
-- The BIP39 wordlist file (English) lives at the
-  `bip39 = { version = "...", features = ["zeroize"] }` crate's
-  vendored wordlist.
+  Authoritative replacement path is a two-layer arrangement:
+  - **In-tree workspace module:**
+    `rust/shekyl-crypto-pq/src/bip39.rs`. This is the
+    Shekyl-internal API surface (`entropy_from_mnemonic`,
+    `mnemonic_from_entropy`, Shekyl-specific 24-word/32-byte/
+    English-only enforcement, and the FFI bridge consumed by
+    `rust/shekyl-ffi/src/account_ffi.rs`). It is **not** a
+    crates.io dependency; it is part of the `shekyl-crypto-pq`
+    workspace crate.
+  - **Upstream crate (transitive dependency):**
+    `bip39 = "2.2.2"` from crates.io, declared in
+    `rust/shekyl-crypto-pq/Cargo.toml` with
+    `default-features = false, features = ["std", "zeroize"]`
+    per Batch α PR 1. This is what provides the canonical
+    2048-word English wordlist, the SHA-256 checksum logic, the
+    PBKDF2-HMAC-SHA512 derivation, and the `Zeroize` /
+    `ZeroizeOnDrop` impls on `bip39::Mnemonic` (gated behind
+    the `zeroize` feature).
+  - **Layering invariant.** Callers (C++ via FFI, Rust within
+    the workspace) interact only with the in-tree module's
+    surface. The upstream crate is an implementation detail
+    that the in-tree module wraps and constrains. Per
+    `17-dependency-discipline.mdc`, this is the verified
+    workspace state — the `Zeroize` impl exists on the wrapped
+    type via the upstream `zeroize` feature; the in-tree
+    module's `Zeroizing<[u8; N]>` returns inherit that
+    property.
 
 ### Rules
 
