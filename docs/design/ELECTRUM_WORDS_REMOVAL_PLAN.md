@@ -6,16 +6,16 @@ todos:
     content: "Phase 0: Write docs/design/ELECTRUM_WORDS_REMOVAL.md AND docs/design/ELECTRUM_WORDS_REMOVAL_PLAN.md. Cover: (a) inheritance disposition per `60-no-monero-legacy.mdc` + `16-architectural-inheritance.mdc`; (b) deletion surface inventory across `src/mnemonics/` (21 files), `wallet2` (8 methods + 1 field + JSON ser/de), RPC surface (4 commands), FFI surface (3 functions + 2 param drops), tests, CMake; (c) BIP39 replacement path via existing `shekyl_account_generate_from_bip39` + `shekyl_bip39_*` FFI bridge (verified to exist as of 2026-05-19); (d) per-consumer migration map: shekyl-gui-wallet (active consumer; substantial migration), shekyl-mobile-wallet (future consumer; no migration), shekyl-web (not a consumer; no migration); (e) permanent architectural decisions: BIP39-only from genesis, wallet2::generate() retains orchestrator role (disposition (a) from Round 1 review), Phase 1 hard-error on non-empty language parameter (not silently-ignored — production-software graceful-degradation default leak inverted), seed_language field removed, query_key string-key kept as `mnemonic` with routing changed to Rust BIP39, no 25-word fallback, cross-boundary zeroization contract for BIP39 phrase; (f) cross-repo coordination: atomic-with-justified-exceptions default (staged cutover requires explicit named third-party dependency justification), coordinated dev-tip merge for pre-genesis with commit-revert as reversion mechanism, post-genesis paired-signed-tag mechanism documented as forward template; (g) alternatives considered with explicit reversion clauses per `21-reversion-clause-discipline.mdc`; (h) test surface: nm symbol-isolation invariants, git grep no-orphans invariants, BIP39 round-trip tests, memory-residency invariant per KEY_ENGINE.md §7.5 audit pattern, zero-production-keyfile confirmation; (i) reviewer-discipline framing (no external-audit dependency; BIP39 is well-vetted industry standard; Phase 0 design + author review is audit-of-record). Target close: 4-6 review rounds per `20-rust-vs-cpp-policy.mdc`."
     status: in_progress
   - id: phase1-wallet2-internal-rewire
-    content: "Phase 1: Rewire wallet2::generate() and wallet2::restore() Electrum-words branches (src/wallet/wallet2.cpp:600-669) to call shekyl_account_generate_from_bip39 / shekyl_bip39_mnemonic_to_pbkdf2_seed instead of crypto::ElectrumWords::*. Behavior at wallet2::create_wallet FFI surface: the `language` parameter is preserved in signature (no FFI ABI break at Phase 1) but the implementation returns a hard error (not silently-ignored) on any non-empty value — empty/None/nullptr is the only accepted value. wallet2_ffi.cpp:648 query_key(\"mnemonic\") dispatch returns the BIP39 phrase derived from the wallet's seed material (substrate §4.5 routing decision). Add tests/unit_tests/wallet_bip39.cpp (BIP39 round-trip tests per substrate §7.3) and tests/unit_tests/wallet_bip39_residency.cpp (cross-boundary zeroization invariant per substrate §7.4). Delete the #include `mnemonics/electrum-words.h` from wallet2.cpp:79 (other consumers still need it until their phases). Multi-commit decomposition: (1) wallet2::generate/restore rewire to BIP39; (2) query_key(\"mnemonic\") routing change; (3) hard-error on non-empty language parameter at create_wallet/generate_from_keys FFI level; (4) BIP39 round-trip + memory-residency tests. PR scope: shekyl-core only. No consumer impact requiring coordination (shekyl-gui-wallet sees hard-error at runtime, fixes its callers in Phase 3 PR). Branch: `feat/electrum-words-removal-phase1-wallet2-rewire` off dev."
+    content: "Phase 1: wallet2 internal rewire + BIP39 entropy persistence + re-implementation of wallet2::get_seed + hard-error on non-empty language parameter (Round-3 fold-in: single atomic commit). Add m_bip39_entropy state field to wallet2 + JSON ser/de per substrate §4.10; add shekyl_bip39_mnemonic_to_entropy FFI (5th BIP39 function) + Rust bip39::entropy_from_mnemonic per substrate §3.1+§4.10; rewire ElectrumWords callers per substrate §2.2 corrected inventory (wallet2.cpp:600 parse_wallet_create_data JSON helper; wallet2.cpp:1389 get_seed body — note: NOT 600-669 which were misnamed in earlier drafts; the 5933/6021/6058 generate overloads take pre-decoded secret_key); re-implement wallet2::get_seed body to call shekyl_bip39_mnemonic_from_entropy(m_bip39_entropy) per substrate §4.5+§4.10 (declaration STAYS; Phase 4 does NOT delete it); hard-error wallet2_ffi_create_wallet and wallet2_ffi_generate_from_keys on non-empty language parameter per substrate §4.3; delete #include mnemonics/electrum-words.h from wallet2.cpp:79; add tests/unit_tests/wallet_bip39.cpp (round-trip + entropy persistence) and tests/unit_tests/wallet_bip39_residency.cpp (cross-boundary zeroization invariant; concrete test pattern is Phase 1 implementation-time sub-deliverable per §7.4). Single atomic commit (Round-3 fold-in Finding 2): merge rewire + hard-error + tests into one commit to close the silent-ignore window that a multi-commit decomposition would open. PR scope: shekyl-core only. shekyl-gui-wallet sees hard-error at runtime; gui-wallet fix lands in Phase 3 coordinated migration PR. Branch: `feat/electrum-words-removal-phase1-wallet2-rewire` off dev."
     status: pending
   - id: phase2-rpc-deletion
-    content: "Phase 2: Delete the Electrum-words RPC surface. Drop COMMAND_RPC_GET_LANGUAGES (wallet_rpc_server_commands_defs.h:2074), COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET (:2223), and the language-validation branches in wallet_rpc_server.cpp at lines 3661, 4082, 4162-4225, 2324-2358 (Electrum-words restore paths). Delete the get_wallet_words handler at wallet_rpc_server.cpp:2214,2220. Drop the COMMAND_RPC_QUERY_KEY mnemonic-string-routing branch only if a Rust-routed BIP39 dispatch lands in the same PR (otherwise defer the dispatch-branch deletion to Phase 4 alongside wallet2::get_seed deletion). Delete the #include `mnemonics/electrum-words.h` from wallet_rpc_server.cpp:64. PR scope: shekyl-core only. No consumer impact: the project's Rust wallet-rpc-server (`rust/shekyl-rpc-server`) does not bind these legacy RPC commands. Multi-commit decomposition: (1) delete restore-deterministic-wallet RPC + helper functions; (2) delete get-languages + set-language RPC; (3) delete wallet-words handler; (4) cleanup include. Branch: `feat/electrum-words-removal-phase2-rpc-deletion` off dev."
+    content: "Phase 2: Delete the Electrum-words RPC surface. Drop COMMAND_RPC_GET_LANGUAGES (wallet_rpc_server_commands_defs.h:2074), COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET (:2223), and the language-validation branches in wallet_rpc_server.cpp at lines 3661, 4082, 4162-4225, 2324-2358 (Electrum-words restore paths). Delete the get_wallet_words handler at wallet_rpc_server.cpp:2214,2220. The COMMAND_RPC_QUERY_KEY mnemonic-string-routing branch is **left unchanged** (Round-3 fold-in resolution): substrate §4.5 keeps the string key; Phase 1's wallet2::get_seed re-implementation flows through to the RPC layer transparently. Delete the #include `mnemonics/electrum-words.h` from wallet_rpc_server.cpp:64. PR scope: shekyl-core only. No consumer impact: the project's Rust wallet-rpc-server (`rust/shekyl-rpc-server`) does not bind these legacy RPC commands. Multi-commit decomposition: (1) delete restore-deterministic-wallet RPC + helper functions; (2) delete get-languages + set-language RPC; (3) delete wallet-words handler; (4) cleanup include. Branch: `feat/electrum-words-removal-phase2-rpc-deletion` off dev."
     status: pending
   - id: phase3-ffi-deletion-cross-repo-cutover
-    content: "Phase 3: FFI surface deletion + cross-repo atomic cutover with shekyl-gui-wallet. This is the load-bearing phase per substrate §5. shekyl-core PR deletes: wallet2_ffi_restore_deterministic_wallet (wallet2_ffi.h:98-104 + wallet2_ffi.cpp:414-431), the `language` parameter on wallet2_ffi_create_wallet (signature change), the `language` parameter on wallet2_ffi_generate_from_keys (signature change), the language-list export at wallet2_ffi.cpp:1197-1198, and all crypto::ElectrumWords::* calls in wallet2_ffi.cpp. Delete #include `mnemonics/electrum-words.h` from wallet2_ffi.cpp:38. shekyl-gui-wallet PR (in the shekyl-gui-wallet repo, coordinated sibling) deletes: src-tauri/src/wallet_bridge.rs::create_wallet language parameter (signature becomes create_wallet(wallet_path, password)), src-tauri/src/wallet_bridge.rs::restore_deterministic_wallet wrapper (replaced with a wrapper around the new BIP39 entry that the shekyl-core side now provides via existing shekyl_account_generate_from_bip39), src-tauri/src/commands.rs `language: Option<String>` parameters on import/create/restore flows, `seed_language: String` field on SeedInfo struct, UI flows that show seed-language picker. Cutover mechanism: coordinated dev-tip merge per substrate §5.3. Both PRs run CI to green; same-day merge to dev in both repos; shekyl-gui-wallet's shekyl-core pin updates to the post-merge dev SHA after shekyl-core merges. Reversion mechanism: commit-revert in coordinated order per substrate §5.4. Pre-flight: empirical verification that PR 4 (Refresh Engine) and PR 5 (Pending TX Engine) have not touched the wallet2_ffi.cpp deletion sites — `git log --oneline -- src/wallet/wallet2_ffi.cpp` since this PR's branch-cut, audit for refresh / pending-tx work; if clean, proceed; if conflict surface exists, rebase against dev tip. Branch: `feat/electrum-words-removal-phase3-ffi-cutover` off dev. shekyl-gui-wallet branch: `feat/electrum-words-removal-bip39-migration` off shekyl-gui-wallet's dev."
+    content: "Phase 3: FFI surface deletion + cross-repo atomic cutover with shekyl-gui-wallet. This is the load-bearing phase per substrate §5. shekyl-core PR deletes: wallet2_ffi_restore_deterministic_wallet (wallet2_ffi.h:98-104 + wallet2_ffi.cpp:414-431), the `language` parameter on wallet2_ffi_create_wallet (signature change), the `language` parameter on wallet2_ffi_generate_from_keys (signature change), the language-list export at wallet2_ffi.cpp:1197-1198, and all crypto::ElectrumWords::* calls in wallet2_ffi.cpp. Delete #include `mnemonics/electrum-words.h` from wallet2_ffi.cpp:38. shekyl-gui-wallet PR (in the shekyl-gui-wallet repo, coordinated sibling) deletes: src-tauri/src/wallet_bridge.rs::create_wallet language parameter (signature becomes create_wallet(wallet_path, password)), src-tauri/src/wallet_bridge.rs::restore_deterministic_wallet wrapper (replaced with a wrapper around the new BIP39 entry that the shekyl-core side now provides via existing shekyl_account_generate_from_bip39), src-tauri/src/commands.rs `language: Option<String>` parameters on import/create/restore flows, `seed_language: String` field on SeedInfo struct, UI flows that show seed-language picker. Cutover mechanism (Round-3 fold-in correction per Finding 4): the actual pin mechanism between shekyl-gui-wallet and shekyl-core is **Cargo path-dependency + workflow `git clone --branch dev`**, NOT Cargo crate-version pins or refs/tags clones. Phase 3's atomic cutover therefore uses (a) a temporary workflow-pin commit on the gui-wallet PR branch that points the clone command at the shekyl-core PR branch (lets gui-wallet CI prove green against the post-deletion FFI before either repo merges); (b) shekyl-core merges to dev first; (c) gui-wallet PR adds a follow-up revert commit returning the clone command to --branch dev; (d) gui-wallet CI re-runs against post-merge dev; (e) gui-wallet merges. Reversion mechanism: commit-revert in coordinated order per substrate §5.4. Pre-flight: empirical verification that PR 4 (Refresh Engine) and PR 5 (Pending TX Engine) have not touched the wallet2_ffi.cpp deletion sites — `git log --oneline -- src/wallet/wallet2_ffi.cpp` since this PR's branch-cut, audit for refresh / pending-tx work; if clean, proceed; if conflict surface exists, rebase against dev tip. Branch: `feat/electrum-words-removal-phase3-ffi-cutover` off dev. shekyl-gui-wallet branch: `feat/electrum-words-removal-bip39-migration` off shekyl-gui-wallet's dev."
     status: pending
   - id: phase4-wallet2-core-deletion
-    content: "Phase 4: wallet2 core method + state + JSON ser/de deletion. Three-commit decomposition per substrate §6 Spec-Gap-6 disposition: (Commit A) wallet2 method deletion — drop is_deterministic, get_seed, get_seed_language, set_seed_language from wallet2.h (lines 1001-1011) + wallet2.cpp (lines 1362, 1372, 1425, 1433). Each commit green independently; bisect-clean. (Commit B) JSON ser/de drop — delete seed_language from wallet2.cpp:4793-4802 (write) and :5344-5347 (read). Field is now in-memory-only state. (Commit C) seed_language field deletion — drop field from wallet2.h:1728 and all in-memory references. Also at this phase: delete the `query_key(\"mnemonic\")` dispatch branch in wallet2_ffi.cpp if not already handled in Phase 1 (the dispatch returns a BIP39 phrase via Rust routing post-Phase-1 per substrate §4.5; Phase 4 removes the branch entirely since `wallet2::get_seed` no longer exists). Also: delete legacy CryptoNote-25-word comment at wallet2.cpp:6479. PR 5 (Pending TX Engine) stabilization gate: before branch-cut, verify PR 5 has merged or has not touched wallet2.cpp lines 1300-1450 (the method-deletion region) or wallet2.h around line 1000-1011. If conflict surface exists, rebase against dev tip after PR 5 lands. PR scope: shekyl-core only. No consumer impact (Phase 3 already migrated the only active consumer). Branch: `feat/electrum-words-removal-phase4-wallet2-core` off dev."
+    content: "Phase 4: wallet2 core method + state + JSON ser/de deletion. Three-commit decomposition per substrate §6 Spec-Gap-6 disposition (Round-3 fold-in revision per Finding 3): (Commit A) wallet2 method deletion — drop is_deterministic, get_seed_language, set_seed_language from wallet2.h (lines 1001, 1007, 1011) + wallet2.cpp (lines 1362, 1425, 1433). **KEEP** wallet2::get_seed (wallet2.h:1002 + wallet2.cpp:1372) — re-implemented in Phase 1 per substrate §4.5+§4.10; the dispatch branch query_key(\"mnemonic\") in wallet2_ffi.cpp:648 ALSO STAYS (not deleted in Phase 4; earlier plan-doc instruction to delete it is removed by Round-3 fold-in). Each commit green independently; bisect-clean. (Commit B) JSON ser/de drop — delete seed_language from wallet2.cpp:4793-4802 (write) and :5344-5347 (read). Regenerate touched test fixtures that previously serialized seed_language. Field is now in-memory-only state. The bip39_entropy JSON ser/de added in Phase 1 is untouched at this phase. (Commit C) seed_language field deletion — drop field from wallet2.h:1728 and all in-memory references. The bip39_entropy field added in Phase 1 is untouched at this phase. Also at this phase: delete legacy CryptoNote-25-word comment at wallet2.cpp:6479. PR 5 (Pending TX Engine) stabilization gate: before branch-cut, verify PR 5 has merged or has not touched wallet2.cpp lines 1300-1450 (the method-deletion region) or wallet2.h around line 1000-1011. If conflict surface exists, rebase against dev tip after PR 5 lands. PR scope: shekyl-core only. No consumer impact (Phase 3 already migrated the only active consumer). Branch: `feat/electrum-words-removal-phase4-wallet2-core` off dev."
     status: pending
   - id: phase5-mnemonics-subsystem-deletion
     content: "Phase 5: Delete the src/mnemonics/ subsystem entirely. 21 files removed (14 language word-list headers + 4 framework files + 1 implementation pair + 1 CMakeLists + 1 unit test file in tests/unit_tests/mnemonics.cpp). Update src/CMakeLists.txt to drop `add_subdirectory(mnemonics)`; update src/wallet/CMakeLists.txt to drop `mnemonics` from link dependencies if listed; update tests/unit_tests/CMakeLists.txt to drop `mnemonics.cpp` from test sources. Verify the build is green with `mnemonics` library completely removed (no transitive consumers; per pre-flight grep on `crypto::ElectrumWords::` only wallet2.cpp + wallet2_ffi.cpp + wallet_rpc_server.cpp + the mnemonics/ subsystem itself touch it, all of which are handled by Phase 4 or this phase). Multi-commit decomposition: (1) delete src/mnemonics/ directory; (2) update CMakeLists.txt files; (3) delete tests/unit_tests/mnemonics.cpp; (4) verify build green. PR scope: shekyl-core only. Branch: `feat/electrum-words-removal-phase5-mnemonics-deletion` off dev."
@@ -41,7 +41,11 @@ The independence is by inspection:
 - **Stage 1 PR 4 (Refresh Engine)** touches `wallet2.cpp` refresh
   paths and `wallet2_ffi.cpp` refresh-related FFI surface. B-1
   touches `wallet2.cpp` mnemonic/seed-management paths (lines
-  600–669 generate/restore branches; 1362–1435 method bodies;
+  600 + 660–661 + 669 in `parse_wallet_create_data` JSON helper;
+  line 1389 in `get_seed` body — note: NOT lines 600–669 as a
+  range covering generate/restore; those methods at lines 5933,
+  6021, 6058, 6106 do NOT have Electrum-words branches per the
+  substrate §2.2 corrected inventory; 1362–1435 method bodies;
   4793–4802 + 5344–5347 JSON ser/de) and `wallet2_ffi.cpp`
   generate/restore/query_key surface. **Functional non-overlap;
   merge-conflict surface empirically zero**, verified at each
@@ -202,65 +206,157 @@ discipline) before any deletion code lands.
 cut, off `dev` tip 2026-05-19 = post-RandomX-v2-Phase-1 +
 post-LWMA-1-Phase-4 + post-Batch-α PRs #46/47/48 merge).
 
-## Phase 1 — wallet2 internal rewire
+## Phase 1 — wallet2 internal rewire + BIP39 entropy persistence
 
-**Scope:** signature-preserving, behavior-narrowing internal
-rewire of `wallet2::generate()` and `wallet2::restore()`
-Electrum-words branches to the existing Rust BIP39 FFI bridge.
-Phase 1 is the discovery-point phase: consumer code that passes
-non-empty `language` parameter breaks here, not at Phase 3.
+**Scope:** signature-preserving rewire of the Electrum-words call
+sites in wallet2 (per substrate §2.2 corrected inventory) +
+addition of `m_bip39_entropy` wallet2 state field with keyfile
+JSON ser/de (per substrate §4.10) + re-implementation of
+`wallet2::get_seed` to call `shekyl_bip39_mnemonic_from_entropy`
+(per substrate §4.5 + §4.10) + hard-error on non-empty `language`
+parameter (per substrate §4.3) + tests. Phase 1 is the
+discovery-point phase: consumer code that passes non-empty
+`language` parameter breaks here, not at Phase 3.
 
 **Detailed work items:**
 
-1. `src/wallet/wallet2.cpp:600–669` Electrum-words branches in
-   `wallet2::generate_new` / `wallet2::restore` rewire to
-   `shekyl_account_generate_from_bip39` /
-   `shekyl_bip39_mnemonic_to_pbkdf2_seed`. The `language` /
-   `old_language` local variables become unused (and are
-   deleted alongside the FFI parameter at Phase 3).
+1. **Add `m_bip39_entropy` field + JSON ser/de** (per substrate §4.10):
+   - Add `std::optional<crypto::secret_bytes<32>> m_bip39_entropy;`
+     to `src/wallet/wallet2.h` alongside other long-term-secret
+     fields.
+   - Add JSON write of `bip39_entropy` (hex-encoded) in the
+     `store_keys`-encrypted JSON envelope build path
+     (`src/wallet/wallet2.cpp` around the existing
+     `seed_language` JSON write at L4793–4802, but as a
+     separate field NOT replacing seed_language at this phase).
+   - Add JSON read of `bip39_entropy` in the `load_keys` JSON
+     parse path (`src/wallet/wallet2.cpp` around the existing
+     `seed_language` JSON read at L5344–5347).
+   - The two ser/de additions are net-new code; they coexist
+     with `seed_language` ser/de which Phase 4 Commit B deletes.
 
-2. `src/wallet/wallet2.cpp:1372` `wallet2::get_seed` body is
-   replaced with a call to the Rust BIP39 path that returns the
-   wallet's BIP39 phrase as `epee::wipeable_string`. The function
-   signature is preserved (Phase 4 deletes the method outright).
+2. **Add the fifth FFI function `shekyl_bip39_mnemonic_to_entropy`**
+   (per substrate §4.10 + §3.1):
+   - Rust-side: add `pub fn entropy_from_mnemonic(words: &str) ->
+     Result<Zeroizing<[u8; SHEKYL_BIP39_ENTROPY_BYTES]>,
+     CryptoError>` to `rust/shekyl-crypto-pq/src/bip39.rs`.
+     Delegates to upstream `bip39::Mnemonic::to_entropy()` +
+     enforces 32-byte length.
+   - FFI: add `#[no_mangle] pub unsafe extern "C" fn
+     shekyl_bip39_mnemonic_to_entropy(words_ptr, words_len,
+     out32_ptr) -> bool` to `rust/shekyl-ffi/src/account_ffi.rs`.
+   - C header: add the matching declaration to
+     `src/shekyl/shekyl_ffi.h`.
 
-3. `src/wallet/wallet2_ffi.cpp:648` `query_key("mnemonic")`
-   dispatch routes through the Rust BIP39 entry per substrate
-   §4.5 (routing decision: Rust BIP39; string-key decision:
-   keep as `"mnemonic"`).
+3. **Rewire `parse_wallet_create_data` JSON helper** at
+   `src/wallet/wallet2.cpp:600` (per corrected substrate §2.2):
+   replace `crypto::ElectrumWords::words_to_bytes(field_seed,
+   recovery_key, old_language)` with the BIP39 path that:
+   (a) calls `shekyl_bip39_validate(field_seed)`;
+   (b) calls `shekyl_bip39_mnemonic_to_entropy(field_seed) →
+   entropy`;
+   (c) calls `shekyl_account_generate_from_bip39(field_seed, ...) →
+   account material`;
+   (d) populates `recovery_key` from account material;
+   (e) populates `m_bip39_entropy` from (b).
+   Also delete L660–661 (deprecated-wallet detection via
+   `get_is_old_style_seed` + `old_language_name`) and L669
+   (`wallet->set_seed_language(old_language)`).
 
-4. `src/wallet/wallet2_ffi.cpp` `wallet2_ffi_create_wallet`
-   implementation returns a hard error
-   (`WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR` or equivalent) if
-   `language != nullptr && language[0] != '\0'`. Same for
-   `wallet2_ffi_generate_from_keys`. Function signatures are
-   preserved at Phase 1; Phase 3 drops the parameters.
+4. **Re-implement `wallet2::get_seed`** at
+   `src/wallet/wallet2.cpp:1372` (per substrate §4.5 + §4.10):
+   replace `crypto::ElectrumWords::bytes_to_words(key,
+   electrum_words, seed_language)` with the BIP39 path that:
+   (a) returns hard error
+   (`"this wallet was not created from a BIP-39 mnemonic; the
+   mnemonic phrase is not available"`) if `m_bip39_entropy` is
+   unset;
+   (b) otherwise calls `shekyl_bip39_mnemonic_from_entropy(
+   m_bip39_entropy.value())` and writes the phrase to the
+   `epee::wipeable_string&` out-parameter.
+   The method signature is preserved. The `passphrase` argument
+   is unused in the new implementation (the BIP39 passphrase
+   never persists in wallet2 state per BIP39 spec); this is the
+   Phase 1 implementation-time disposition — drop the argument
+   in a Phase 4 Commit-D sub-commit or in a follow-up cleanup
+   PR, not in Phase 1 (signature change would require FFI
+   coordination per §3.3).
 
-5. `src/wallet/wallet2_ffi.cpp:309–319`
-   `wallet2_ffi_create_wallet` Electrum-words-language-validation
-   path: replace with the hard-error branch from item 4.
+5. **Hard-error on non-empty `language` parameter** at the FFI
+   entry sites (per substrate §4.3): `wallet2_ffi_create_wallet`
+   (`src/wallet/wallet2_ffi.cpp:309`) and
+   `wallet2_ffi_generate_from_keys` (`src/wallet/wallet2_ffi.cpp:523`)
+   return a hard error (`WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR` or
+   equivalent) if `language != nullptr && language[0] != '\0'`.
+   Empty / nullptr / zero-length is the only accepted value.
+   Function signatures are preserved at Phase 1; Phase 3 drops
+   the parameters entirely.
 
-6. `src/wallet/wallet2.cpp:79` `#include "mnemonics/electrum-words.h"`
-   is deleted. The other two include sites (wallet2_ffi.cpp:38,
-   wallet_rpc_server.cpp:64) remain until their respective phases.
+6. **Delete `#include "mnemonics/electrum-words.h"`** from
+   `src/wallet/wallet2.cpp:79`. The other two include sites
+   (`wallet2_ffi.cpp:38`, `wallet_rpc_server.cpp:64`) remain until
+   their respective phases.
 
-7. Add `tests/unit_tests/wallet_bip39.cpp` per substrate §7.3
-   (BIP39 round-trip tests: generate, query, restore, assert
-   wallet identity).
+7. **Add `tests/unit_tests/wallet_bip39.cpp`** per substrate §7.3
+   (BIP39 round-trip tests: generate via new path → query seed
+   via `query_key("mnemonic")` → restore from that phrase →
+   assert wallets identical; entropy-persistence-roundtrip via
+   keyfile save/load).
 
-8. Add `tests/unit_tests/wallet_bip39_residency.cpp` per substrate
-   §7.4 (cross-boundary zeroization invariant; modelled on
-   `STAGE_1_PR_3_KEY_ENGINE.md §7.5` audit pattern).
+8. **Add `tests/unit_tests/wallet_bip39_residency.cpp`** per
+   substrate §7.4 (cross-boundary zeroization invariant; concrete
+   test-pattern design is Phase 1 implementation-time
+   sub-deliverable per §7.4's Round-3 fold-in — no extant pattern
+   to inherit; the Phase 1 commit message + test file land as the
+   load-bearing implementation reference).
 
-**Multi-commit decomposition (4 commits):**
+**Single atomic commit (Round-3 fold-in disposition per substrate
+§4.10 + Round-3 reviewer Finding 2):**
 
-1. `wallet: rewire wallet2::generate_new and ::restore Electrum-words branches to BIP39 FFI`
-2. `wallet: route query_key("mnemonic") through Rust BIP39 entry`
-3. `wallet: hard-error on non-empty language parameter at create_wallet / generate_from_keys`
-4. `wallet: add BIP39 round-trip and memory-residency invariant tests`
+Earlier plan-doc drafts proposed a four-commit decomposition
+(rewire / routing / hard-error / tests). Round-3 review surfaced
+that this decomposition opens a silent-ignore window: between the
+rewire commit and the hard-error commit, calling with
+`language="English"` produces a working BIP39 wallet with the
+language parameter silently ignored — the exact anti-pattern
+substrate §4.3 inverts. The disposition collapses to one
+architecturally-atomic commit:
 
-Each commit independently green; bisect-clean per
-`90-commits.mdc`'s scope-per-commit discipline.
+```text
+wallet: rewire wallet2 to BIP39 with entropy persistence and language hard-error
+
+  Phase 1 atomic deliverable for B-1 Electrum-words removal per
+  docs/design/ELECTRUM_WORDS_REMOVAL.md §4.10 (entropy persistence)
+  + §4.3 (language hard-error) + §4.5 (get_seed re-implementation).
+
+  - Add m_bip39_entropy wallet2 state field + keyfile JSON ser/de.
+  - Add shekyl_bip39_mnemonic_to_entropy FFI + Rust bip39
+    entropy_from_mnemonic.
+  - Rewire wallet2.cpp:600 parse_wallet_create_data ElectrumWords
+    branch to BIP39 path.
+  - Re-implement wallet2::get_seed to call
+    shekyl_bip39_mnemonic_from_entropy(m_bip39_entropy).
+  - Hard-error wallet2_ffi_create_wallet /
+    wallet2_ffi_generate_from_keys on non-empty language parameter.
+  - Delete include "mnemonics/electrum-words.h" from wallet2.cpp.
+  - Tests: wallet_bip39.cpp (round-trip + entropy persistence) +
+    wallet_bip39_residency.cpp (cross-boundary zeroization invariant).
+```
+
+The commit is large (~600–900 LoC delta across ~8 files) but
+architecturally atomic — every change is the same architectural
+change at a different surface. Bisecting any individual sub-piece
+out produces a non-buildable intermediate state (e.g., rewiring
+`parse_wallet_create_data` without `m_bip39_entropy` field
+leaves `m_bip39_entropy = ...` referring to a non-existent field;
+re-implementing `get_seed` without the field reference fails to
+compile).
+
+**Tests-in-commit discipline.** Tests land alongside the
+implementation in the same commit per substrate §7.3 / §7.4 and
+per Round-3 reviewer Finding 8. The earlier four-commit
+decomposition's tests-last shape was bisect-passes-by-absence-of-test;
+the atomic-commit shape is bisect-passes-by-positive-verification.
 
 **PR scope:** shekyl-core only. shekyl-gui-wallet sees the
 hard-error at runtime; the gui-wallet fix lands in the Phase 3
@@ -293,19 +389,18 @@ handlers in `wallet_rpc_server`.
 6. Delete `#include "mnemonics/electrum-words.h"` from
    `src/wallet/wallet_rpc_server.cpp:64`.
 7. The `COMMAND_RPC_QUERY_KEY` mnemonic-string-routing branch is
-   either:
-   - (a) updated to route through the Rust BIP39 entry (if the
-     wallet2 RPC handler still exposes this path post-Phase-1);
-     defer the dispatch-branch deletion to Phase 4 alongside
-     `wallet2::get_seed` deletion, **OR**
-   - (b) deleted entirely if the Rust-routed BIP39 dispatch is
-     not exposed via the wallet RPC at all (in which case the
-     `query_key("mnemonic")` RPC reply is "key type not
-     supported").
+   **left unchanged** (Round-3 fold-in resolution).
 
-   Decision deferred to Phase 2 implementation time, dependent
-   on whether Phase 1's `wallet2::get_seed` rewire (item 2 of
-   Phase 1) carries through to the RPC layer.
+   Earlier plan-doc drafts deferred this to Phase 2 implementation
+   time pending a routing decision. Substrate §4.5 already decided
+   it: `query_key("mnemonic")` string-key persists; routing
+   changes to the Rust BIP39 entry **via** `wallet2::get_seed`'s
+   Phase 1 re-implementation. Phase 2 makes no change to the RPC
+   dispatch — Phase 1's rewire of `wallet2::get_seed` (item 4 of
+   Phase 1) flows through the RPC layer transparently because the
+   RPC handler delegates to `wallet2::get_seed`. The dispatch
+   branch persists indefinitely as the documented external
+   interface per substrate §4.5's string-key disposition.
 
 **Multi-commit decomposition (4 commits):**
 
@@ -381,35 +476,98 @@ In the `shekyl-gui-wallet` repository, on a parallel branch:
 
 Per substrate §5.3 (coordinated dev-tip merge for pre-genesis):
 
+**Verified pin mechanism (Round-3 fold-in correction).**
+shekyl-gui-wallet's `src-tauri/Cargo.toml` uses Cargo **path
+dependencies**: `shekyl-ffi = { path = "../../shekyl-core/rust/shekyl-ffi" }`,
+`shekyl-engine-rpc = { path = "../../shekyl-core/rust/shekyl-engine-rpc" }`,
+etc. There is no version pin, no git-submodule pin, no
+`refs/tags/` pin in the Cargo manifest. Cross-repo coordination
+happens at the **workflow file** layer: shekyl-gui-wallet's
+`.github/workflows/{ci.yml,release.yml}` execute
+`git clone --depth 1 --branch dev https://github.com/Shekyl-Foundation/shekyl-core.git ../shekyl-core`
+to materialize a sibling checkout that the path dep resolves to.
+The pin granularity at workflow run time is the dev-tip — there
+is no commit-hash pin or refs/tags pin in the workflow's clone
+command.
+
+Earlier plan-doc drafts described the cutover via "Cargo.toml
+pin update to post-merge dev SHA" — that framing was wrong; the
+actual mechanism is dev-tip-clone in the workflow, with the
+correctness of the pair (shekyl-core dev tip, shekyl-gui-wallet
+dev tip) maintained by the merge-order discipline below.
+
+**Cutover sequence:**
+
 1. shekyl-core PR opens against `dev` with §3.1 work items.
 2. shekyl-gui-wallet migration PR opens against
    `shekyl-gui-wallet`'s `dev` with §3.2 work items. PR body
-   cites the shekyl-core PR by URL. The gui-wallet PR pins its
-   `Cargo.toml` `shekyl-core` dep to the specific
-   `shekyl-core` commit hash that is the FFI-deletion PR's head
-   (the pre-merge SHA on shekyl-core's PR branch); this lets
-   gui-wallet's CI build and test against the post-deletion FFI
-   surface before either repo merges.
+   cites the shekyl-core PR by URL. For shekyl-gui-wallet PR's
+   **local development** verification — building gui-wallet
+   against the not-yet-merged shekyl-core PR — the developer
+   checks out the shekyl-core PR branch as the sibling
+   `../shekyl-core/` directory. For shekyl-gui-wallet PR's **CI**,
+   either: (a) the workflow file remains unchanged and CI clones
+   `--branch dev` (which until shekyl-core merges still points at
+   the pre-deletion FFI; gui-wallet CI then fails to compile
+   against pre-deletion FFI for any post-deletion call-site
+   change, surfacing the cross-repo dependency at CI time but
+   before shekyl-core merges); OR (b) the gui-wallet PR includes
+   a single throwaway commit pinning the workflow's clone to the
+   shekyl-core PR's branch
+   (`git clone --branch feat/electrum-words-removal-phase3-ffi-cutover ...`),
+   reverted after shekyl-core merges. The substrate disposition
+   is **(b)** — explicit branch-pin commit in the gui-wallet PR
+   that is reverted as part of the post-shekyl-core-merge dev-tip-repoint
+   step. This gives gui-wallet's CI a green
+   verification against the FFI surface gui-wallet expects to
+   exist post-cutover, before either repo merges.
 3. Both PRs run CI to green.
 4. **Merge order is shekyl-core first, then shekyl-gui-wallet
    within the same session.** Concretely: (a) CI green on both
    PRs and reviewer-approval on both PRs are the prerequisites;
-   (b) shekyl-core merges to `dev`; (c) shekyl-gui-wallet's
-   `Cargo.toml` pin updates from the pre-merge SHA to the
-   post-merge `dev`-tip SHA on shekyl-core (mechanical commit on
-   the gui-wallet PR branch); (d) shekyl-gui-wallet's CI
-   re-runs against the updated pin; (e) shekyl-gui-wallet
-   merges. The intent is to confine the cross-repo inconsistency
-   window to a single failure mode (gui-wallet `dev` references
+   (b) shekyl-core merges to `dev`; (c) shekyl-gui-wallet PR
+   adds a follow-up commit reverting the temporary workflow pin
+   from §step-2(b) back to `--branch dev` (mechanical
+   single-file revert; the now-merged shekyl-core `dev` tip
+   already contains the FFI deletion); (d) shekyl-gui-wallet's
+   CI re-runs against `--branch dev` (which now resolves to the
+   post-merge shekyl-core tip); (e) shekyl-gui-wallet merges.
+   The intent is to confine the cross-repo inconsistency window
+   to a single failure mode (gui-wallet `dev` references
    freshly-deleted FFI symbols, producing immediate compile
-   failure on any local build during the gap) rather than the
+   failure on any local build that has a stale
+   `../shekyl-core/` checkout during the gap) rather than the
    reversed order's failure mode (gui-wallet `dev` references
-   not-yet-existing FFI symbols, allowing silent linker resolution
-   against pre-deletion shekyl-core artifacts in stale build
-   caches). The chosen order's failure mode is loud and bounded
-   to the gap window; the reversed order's failure mode is
-   silent and risks shipping pre-deletion shekyl-core binaries
-   against post-deletion gui-wallet code.
+   not-yet-existing FFI symbols, allowing silent linker
+   resolution against pre-deletion shekyl-core artifacts in
+   stale build caches). The chosen order's failure mode is loud
+   and bounded to the gap window; the reversed order's failure
+   mode is silent and risks shipping pre-deletion shekyl-core
+   binaries against post-deletion gui-wallet code.
+
+**Note on path-dep brittleness.** The Cargo path-dep mechanism
+means there is no compile-time SHA-pinning of gui-wallet to a
+specific shekyl-core commit. Two consequences:
+
+- Developer-local builds depend on whatever shekyl-core dev tip
+  the developer has checked out in `../shekyl-core/`. This is
+  not a Phase 3 problem (it's the pre-existing development
+  posture); the Phase 3 cutover only exacerbates the brittleness
+  during the merge gap.
+- CI clones `--branch dev` at workflow run time. The pin
+  granularity is "whatever dev is at clone time." Phase 3's
+  merge-order discipline (shekyl-core first, then gui-wallet
+  with workflow-pin revert) preserves the CI-green-against-cutover
+  property despite the absence of SHA-level pinning.
+
+Stronger CI pinning (e.g., gui-wallet workflow pins to a
+shekyl-core commit hash recorded in `.shekyl-core-pin` file
+checked into the gui-wallet repo) is **not** introduced in V3.0
+— the team-scale and merge-discipline cost-benefit per substrate
+§3.3 honor-system framing applies here too. Post-genesis, the
+discipline may need automation if the team scales; the
+disposition is re-opened per the substrate's reversion clauses
+if cross-repo coordination friction surfaces empirically.
 
 ### 3.4 Reversion mechanism
 
@@ -442,13 +600,19 @@ If overlap exists, rebase against `dev` tip; if not, proceed.
 3. `wallet-ffi: delete language-list export + remaining ElectrumWords calls`
 4. `wallet-ffi: cleanup mnemonics/electrum-words.h include`
 
-**Multi-commit decomposition (shekyl-gui-wallet PR, 4–5 commits):**
+**Multi-commit decomposition (shekyl-gui-wallet PR, 5–6 commits):**
 
-1. `wallet-bridge: drop language parameter from create_wallet`
-2. `wallet-bridge: migrate restore_deterministic_wallet to BIP39 entry`
-3. `commands: drop language parameters and seed_language fields`
-4. `ui: remove seed-language picker; update seed display to BIP39 24-word`
-5. `deps: bump shekyl-core pin to post-merge dev SHA`
+1. `ci: temporarily pin shekyl-core clone to feat/electrum-words-removal-phase3-ffi-cutover` (per §3.3 step 2(b); reverted in step 6)
+2. `wallet-bridge: drop language parameter from create_wallet`
+3. `wallet-bridge: migrate restore_deterministic_wallet to BIP39 entry`
+4. `commands: drop language parameters and seed_language fields`
+5. `ui: remove seed-language picker; update seed display to BIP39 24-word`
+6. `ci: revert temporary shekyl-core branch pin back to dev` (per §3.3 step 4(c); lands after shekyl-core's PR has merged to dev)
+
+Commit 6 is the only commit landing after shekyl-core's merge; the
+preceding five commits land on the gui-wallet PR branch before
+either repo merges, and the workflow-pin commit (1) is what
+lets gui-wallet CI prove green against the post-deletion FFI.
 
 **PR scope:** shekyl-core + shekyl-gui-wallet (coordinated unit).
 
@@ -482,19 +646,33 @@ surface is non-trivial.
 **Commit A — wallet2 method deletion.** Drop:
 
 - `wallet2.h:1001` `bool is_deterministic() const;` declaration.
-- `wallet2.h:1002` `bool get_seed(...)` declaration.
 - `wallet2.h:1007` `const std::string &get_seed_language() const;` declaration.
 - `wallet2.h:1011` `void set_seed_language(...)` declaration.
 - `wallet2.cpp:1362` `is_deterministic()` body.
-- `wallet2.cpp:1372` `get_seed()` body (which was rewired in
-  Phase 1; now deleted outright since callers have migrated).
 - `wallet2.cpp:1425` `get_seed_language()` body.
 - `wallet2.cpp:1433` `set_seed_language()` body.
 
+**Kept in Commit A** (per Round-3 fold-in resolution; substrate
+§4.5 + §4.10):
+
+- `wallet2.h:1002` `bool get_seed(...)` declaration — STAYS.
+- `wallet2.cpp:1372` `bool wallet2::get_seed(...)` body — STAYS
+  (re-implemented in Phase 1 to call
+  `shekyl_bip39_mnemonic_from_entropy(m_bip39_entropy)`; the
+  re-implemented body is the post-V3.0 production code, not a
+  Phase 4 deletion target).
+- `wallet2_ffi.cpp:648` `query_key("mnemonic")` dispatch branch
+  — STAYS. The branch persists as the documented external
+  interface per substrate §4.5; its implementation routes
+  through the Phase 1-re-implemented `wallet2::get_seed`.
+  Earlier plan-doc drafts said "delete the
+  `query_key("mnemonic")` dispatch branch in `wallet2_ffi.cpp:648`
+  if Phase 2 left it in place" — that instruction is removed by
+  this Round-3 fold-in. Phase 2 leaves the branch alone; Phase 4
+  also leaves it alone.
+
 Also at this commit: delete the legacy CryptoNote-25-word comment
-at `wallet2.cpp:6479`. Also: delete the `query_key("mnemonic")`
-dispatch branch in `wallet2_ffi.cpp:648` if Phase 2 left it in
-place (item 7 of Phase 2 deferred this decision).
+at `wallet2.cpp:6479`.
 
 After Commit A: `seed_language` field is dead state (no setters
 / getters / accessors); JSON ser/de still writes/reads it.
