@@ -2447,6 +2447,89 @@ sustainability is unaffected by the recalibration.
   specific minor decided when the curve25519-dalek 5.x release window
   becomes visible.
 
+- **Two `unmaintained` advisories surfaced by `cargo audit`
+  (`atomic-polyfill 1.0.3` / `bincode 1.3.3`; trigger: PR #57 CI
+  output review on commit `b71ecd892`, `2026-05-19`).** Both are
+  `unmaintained`-class advisories, allowed by default in
+  `cargo-audit` (which only blocks on `vulnerability`-class), so
+  they print as `warning: 2 allowed warnings found` and the
+  `cargo audit` step exits `0` — the audit gate stays green. Neither
+  is exploitable on the Shekyl threat model today; both are upstream
+  maintenance signals worth tracking for a deliberate upgrade window
+  rather than letting them accumulate.
+
+  ### Advisory A — `RUSTSEC-2023-0089` `atomic-polyfill 1.0.3`
+
+  Pulled transitively via `heapless 0.7.17 → postcard 1.1.3`,
+  consumed by `shekyl-ffi` and `shekyl-engine-state` (and through
+  `shekyl-engine-state` by `shekyl-scanner`, `shekyl-engine-rpc`,
+  `shekyl-engine-file`, `shekyl-engine-core`) for deterministic
+  serialization at the FFI / engine-state boundary. The advisory's
+  upstream remediation summary is "the crate is unmaintained;
+  consider `portable-atomic`-based alternatives." Closing the
+  advisory in-tree means riding a `heapless` / `postcard` release
+  pair that no longer pins `atomic-polyfill`; the API surface and
+  the deterministic-serialization byte-identity must be verified
+  per `.cursor/rules/17-dependency-discipline.mdc` before bumping.
+
+  ### Advisory B — `RUSTSEC-2025-0141` `bincode 1.3.3`
+
+  Pulled transitively via `iai-callgrind 0.16.1`, consumed only by
+  benchmark targets (the `engine_trait_bench_*` family per
+  [`docs/design/STAGE_0_HARNESS.md`](./design/STAGE_0_HARNESS.md)
+  §3.3.1). No production binary links `bincode`; the consumer is
+  the iai-callgrind harness. Closing the advisory means riding an
+  `iai-callgrind` release that drops `bincode 1.3.3`, or replacing
+  the bench harness if upstream readiness is far out. Bench-only
+  scope; no consensus or wallet path is touched.
+
+  ### Why these are not folded into PR #57
+
+  PR #57 is the wallet2 BIP-39 rewire / Phase-1 Electrum-words
+  removal. Touching the lockfile to address transitive-dep
+  advisories would put dep-discipline review on the same PR as
+  consensus-touching wallet code, which
+  `.cursor/rules/15-deletion-and-debt.mdc` ("'while we're here' is
+  the enemy") and `.cursor/rules/17-dependency-discipline.mdc`
+  (verification at source for every new feature flag / version bump)
+  both reject. Each advisory closure is its own dep-housekeeping PR.
+
+  ### Gate (per advisory)
+
+  Do not start either upgrade until upstream readiness is visible:
+
+  - **Advisory A:** a `postcard` release that no longer pins
+    `heapless 0.7.x` (and therefore no longer transitively pins
+    `atomic-polyfill`) is crates.io-published with a reviewable
+    changelog against the current `postcard 1.1.3` API surface.
+  - **Advisory B:** an `iai-callgrind` release that drops
+    `bincode 1.3.3` is crates.io-published, or a bench-harness
+    alternative is selected and pre-flight-reviewed.
+
+  ### Scope when picked up (per advisory)
+
+  Each advisory is a single small dep-housekeeping PR:
+
+  - **A** bumps `heapless` / `postcard` in
+    `rust/shekyl-engine-state/Cargo.toml`,
+    `rust/shekyl-ffi/Cargo.toml` (and any other consumers the
+    pre-flight surfaces); re-runs the deterministic-serialization
+    round-trip tests; confirms `cargo audit` no longer emits
+    `RUSTSEC-2023-0089`.
+  - **B** bumps `iai-callgrind` in every `shekyl-*-bench`
+    consumer; re-runs `capture_rust_baseline.sh` invariance (per
+    [`STAGE_0_HARNESS.md`](./design/STAGE_0_HARNESS.md) §3.3.1)
+    to confirm the bench harness still produces stable iai counts;
+    confirms `cargo audit` no longer emits `RUSTSEC-2025-0141`.
+
+  Each PR closes its half of this entry; when both advisories are
+  gone from `cargo audit` output, delete the whole entry per the
+  file's "git history is the archive" policy. The two upgrades are
+  independent and may land in either order.
+
+  Target version: **V3.1.x**, scheduled per advisory when upstream
+  readiness becomes visible.
+
 - **Chore #3: retire every 32-bit target — leading with the security argument (`v3.1.0-alpha.5`, landed on `chore/retire-32bit-targets`).**
   **Status: landed.** Closure narrative in
   `docs/audit_trail/RESOLVED_260419.md` §"Chore #3 (v3.1.0-alpha.5) —
