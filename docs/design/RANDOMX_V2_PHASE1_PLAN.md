@@ -1,18 +1,19 @@
 # RandomX v2 — Track A Phase 1 plan
 
-**Status.** Pre-implementation. This plan lands on `dev` ahead of the
-Phase 1 implementation branch and is the binding scope statement for
-the implementation PR.
+**Status.** Implementation. The `feat/randomx-v2-phase1` branch was
+cut from `dev` at `6b59b54ee` on 2026-05-18 and is now in PR review;
+the post-merge close-out section is at §21 below.
 
 **Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A
-— Phase 1" (lines 263–269) is the binding two-bullet scope; this doc
-expands it into a reviewable change list, a target-collision
-disposition, and a test plan.
+— Phase 1" is the binding two-bullet scope; this doc expands it into
+a reviewable change list, a target-collision disposition, and a test
+plan.
 
-**Base commit.** `dev` at the SHA where the Phase 1 branch is cut.
-This plan does not anchor a specific SHA because Phase 1 has zero file
-overlap with the in-flight Phase 4 DAA PR (#53) — Phase 1 is gated on
-Phase 4 landing only for branch-hygiene reasons, not technical reasons.
+**Base commit.** `dev` at `6b59b54ee` (the LWMA-1 Phase 4 close-out
+commit), the cut point for the `feat/randomx-v2-phase1` branch.
+Phase 1 had zero file overlap with PR #53 (the DAA Phase 4 PR);
+this branch was cut after #53 merged for branch-hygiene reasons, not
+technical ones (per §6 below).
 
 **Branch (forthcoming).** `feat/randomx-v2-phase1`, to be cut off
 `dev` once implementation begins. The soft sequencing precondition
@@ -536,3 +537,102 @@ to the Phase 1 PR:
 "While we're here" sweeps are explicitly disallowed per
 `15-deletion-and-debt.mdc`. Items spotted outside §3's file list go
 in `docs/FOLLOWUPS.md` and stay out of the PR.
+
+---
+
+## §10 Implementation close (2026-05-18)
+
+Phase 1 landed on `dev` as `feat/randomx-v2-phase1` (three commits;
+matches the planned ≤5 envelope from the top of this doc). The
+file-by-file diff matches §3 exactly:
+
+| File | Lines added | Lines removed | Match §3 |
+| --- | ---: | ---: | --- |
+| `.gitmodules` | 3 | 0 | §3.1 |
+| `external/randomx-v2` (gitlink at `aaafe71`) | 1 | 0 | §3.2 |
+| `CMakeLists.txt` (option declaration) | 13 | 0 | §3.3 |
+| `external/CMakeLists.txt` (option block) | 60 | 0 | §3.4 |
+| `docs/design/RANDOMX_V2_PLAN.md` | — | — | §3.5 |
+| `docs/CHANGELOG.md` | — | — | §3.6 |
+| `docs/FOLLOWUPS.md` | — | — | §3.7 (no entry) |
+
+**Commit decomposition.**
+
+1. **`randomx: add Shekyl-Foundation RandomX v2 submodule`**
+   (`<commit-1>`). `.gitmodules` block + gitlink at
+   `aaafe71322df6602c21a5c72937ac284724ae561`. Per §3.1–§3.2.
+
+2. **`randomx: add BUILD_RANDOMX_V2_MINER_LIB option +
+   ExternalProject_Add wiring`** (`<commit-2>`). Option
+   declaration in top-level `CMakeLists.txt` and
+   `ExternalProject_Add` + `IMPORTED` target in
+   `external/CMakeLists.txt`. Per §3.3–§3.4.
+
+3. **`randomx: documentation pass`** (`<commit-3>`). Phase 1
+   status flip in [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md)
+   §"Track A — Phase 1" plus YAML todos block; `CHANGELOG.md`
+   `[Unreleased]` entry; this §10 close section. Per §3.5–§3.7
+   and §7.
+
+**Build-smoke outcomes** (verified locally on a dev machine before
+push; matches §4):
+
+- §4.1 default-OFF: `cmake -B build-default` configured successfully
+  with no v2 surface entering the build. `CMakeCache.txt`
+  recorded `BUILD_RANDOMX_V2_MINER_LIB:BOOL=OFF`. The
+  `message(STATUS "RandomX v2: ...")` block did **not** emit,
+  confirming the `if(BUILD_RANDOMX_V2_MINER_LIB)` guard is
+  airtight. (Bit-for-bit `shekyld` byte-equivalence against a
+  pre-PR baseline was not re-run on this dev machine; the
+  reproducible-Guix pipeline is the production assurance for that
+  property.)
+- §4.2 option-ON build: `cmake -B build-on
+  -DBUILD_RANDOMX_V2_MINER_LIB=ON` configured successfully and
+  emitted the documented status message. `cmake --build build-on
+  --target randomx_v2_external` built the v2 source tree
+  out-of-tree and installed:
+  - `librandomx.a` (777786 bytes) at
+    `build-on/external/randomx-v2-install/lib/`
+  - `randomx.h` (12865 bytes) at
+    `build-on/external/randomx-v2-install/include/`
+  Both paths exactly match the `BUILD_BYPRODUCTS` and
+  `INTERFACE_INCLUDE_DIRECTORIES` literals in §3.4.
+- §4.3 submodule init: `git submodule update --init external/randomx-v2`
+  populated the submodule at SHA `aaafe71`. (Implicit in the
+  `git submodule add` of commit 1, which performs the clone +
+  pin checkout.)
+- §4.4: no new CI workflow added; the daemon CI matrix's existing
+  builds exercise the default-OFF path. Adding a
+  `BUILD_RANDOMX_V2_MINER_LIB=ON` matrix entry is a Phase 2
+  deliverable (alongside the `rust/shekyl-pow-randomx/` crate
+  that becomes the first consumer of `shekyl_randomx_v2`).
+
+**One implementation-time disposition not anticipated at plan time.**
+The `check_submodule(external/randomx-v2)` call in
+`CMakeLists.txt:459-463` was deliberately **not** added in this PR.
+The submodule is opt-in (only used when
+`BUILD_RANDOMX_V2_MINER_LIB=ON`), and `ExternalProject_Add` fails
+loudly at configure time if the source tree is empty (the same
+"submodule not initialized" failure mode `check_submodule` guards
+against for v1). Adding the call would require moving the option
+declaration earlier (above line 443) or duplicating the gating
+logic. Phase 3 promotes v2 to a default-built dependency; that is
+the right time to add the call. This is a narrow narrowing of
+scope, not an expansion, and stays inside the
+`07-consensus-atomic-cutovers.mdc`-style implementation-drift
+discipline.
+
+**Post-merge close-out tasks** (mirrors the LWMA-1 Phase 4 pattern):
+
+1. Backfill `<commit-1>` / `<commit-2>` / `<commit-3>` placeholders
+   in this §10 with the actual SHAs.
+2. Backfill `<phase1-merge>` / `<phase1-pr>` / `<phase1-date>`
+   placeholders in
+   [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A — Phase
+   1" status paragraph.
+3. Archive the pre-merge branch tip as
+   `archive/feat-randomx-v2-phase1-<YYYY-MM-DD>` and delete the
+   `feat/randomx-v2-phase1` branch (local + remote) per
+   `06-branching.mdc` rule 5.
+4. Verify `external/randomx` v1 submodule SHA `102f8acf` is
+   unchanged on `dev` post-merge (orthogonality check).
