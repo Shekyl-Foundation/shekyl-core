@@ -40,7 +40,42 @@ blake2 = "0.10"
 # `35-secure-memory.mdc`'s structural-memwipe rule. Required by every wallet
 # creation/restore path that materializes seed bytes (Phase 0 Mission Audit
 # Lens D D-9).
-bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroize"] }
+#
+# The `unicode-normalization` feature gates the NFKD normalization that
+# BIP-0039 §A requires on mnemonic phrases and passphrases. The entry
+# points we use (`Mnemonic::parse_in`, `Mnemonic::parse`, `Mnemonic::to_seed`)
+# are each `#[cfg(feature = "unicode-normalization")]`-gated at the function
+# declaration in `bip39-2.2.2/src/lib.rs` (lines 520, 531, 561 respectively);
+# without the feature they are absent from the API entirely. The non-gated
+# alternatives (`parse_in_normalized`, `parse_normalized`, `to_seed_normalized`
+# at lines 437, 514, 550) trust the caller to pass NFKD-normalized input and
+# apply no Unicode work themselves.
+#
+# The feature is currently pulled in transitively via the
+# `std -> alloc -> unicode-normalization` chain in `bip39-2.2.2/Cargo.toml`,
+# but it is **explicitly pinned here** as defense-in-depth. Two distinct
+# failure modes are relevant:
+#
+#   1. **Pin removed and the transitive chain breaks.** The consumer site
+#      in `shekyl-crypto-pq/src/bip39.rs` calls `Mnemonic::parse_in` and
+#      `Mnemonic::to_seed`; with the feature off, both functions disappear
+#      from the API and the crate fails to compile. Loud failure, easy to
+#      catch. The explicit pin closes this mode.
+#   2. **Pin survives but the consumer migrates to a non-gated entry
+#      point without adding an NFKD pre-pass.** A future refactor that
+#      swaps `parse_in` for `parse_in_normalized` (e.g., to elide the
+#      upstream `Cow` allocation) silently produces non-spec-compliant
+#      behaviour on non-ASCII passphrases: two byte-different but
+#      logically-equivalent Unicode forms then produce different
+#      wallets. The feature pin does **not** catch this mode; the
+#      regression test
+#      `shekyl-crypto-pq/src/bip39.rs::tests::nfkd_passphrase_normalization`
+#      does, by feeding NFC and NFKD forms of the same passphrase through
+#      our consumer entry points and asserting byte-identical seeds.
+#
+# See `ELECTRUM_WORDS_REMOVAL.md` §4.7 #6 for the discipline statement;
+# the test is the load-bearing enforcement of that discipline.
+bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroize", "unicode-normalization"] }
 shekyl-address = { path = "../shekyl-address" }
 # `zeroize` feature activates `Sha3State: ZeroizeOnDrop` (sha3 0.10.9+)
 # so the cSHAKE / SHA-3 sponge state is wiped on drop. Required by the
