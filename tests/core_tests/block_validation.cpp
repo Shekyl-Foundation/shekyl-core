@@ -94,6 +94,14 @@ bool gen_block_ts_in_past::generate(std::vector<test_event_entry>& events) const
   BLOCK_VALIDATION_INIT_GENERATE();
   REWIND_BLOCKS_N(events, blk_0r, blk_0, miner_account, SHEKYL_DAA_MTP_WINDOW - 1);
 
+  // Pick a timestamp strictly below the median of the MTP window. For
+  // the post-LWMA-1 window size 11, the median is at index 5 (0-based);
+  // `MTP/2 - 1 == 4` is one position below the median. For the legacy
+  // window size 60 the same expression picked index 29, one position
+  // below the upper-median candidate (indices 29/30 in a 60-window).
+  // The intent is identical in both regimes: a timestamp that, when
+  // promoted to the head of the window, sits strictly below the
+  // median and therefore must be rejected by the MTP rule.
   uint64_t ts_below_median = std::get<block>(events[SHEKYL_DAA_MTP_WINDOW / 2 - 1]).timestamp;
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0r, miner_account, test_generator::bf_timestamp, 0, 0, ts_below_median);

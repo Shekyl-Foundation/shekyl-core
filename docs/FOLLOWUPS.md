@@ -2888,45 +2888,63 @@ one place to confirm each item's relationship to the wallet stack.
   bug** — the algorithm result is byte-identical to the
   zero-allocation alternative; only throughput changes.
 
-- **`Blockchain` LWMA-1 cache uses `std::vector` with
-  `erase(begin())` O(N) shifts.** Surfaced 2026-05-18 (LWMA-1
-  Phase 4 PR #53, Copilot review C-1). The two cache surfaces in
+- **C++ bridge `lwma1_next_difficulty` helper allocates two heap
+  buffers per call.** Surfaced 2026-05-18 (LWMA-1 Phase 4 PR #53,
+  Copilot review C-11). The template helper in
   [`src/cryptonote_core/blockchain.cpp`](../src/cryptonote_core/blockchain.cpp)
-  — `Blockchain::get_difficulty_for_next_block`'s
-  `m_timestamps` / `m_difficulties` roll-forward at lines
-  ~1024–1027 and the matching pattern in
-  `Blockchain::recalculate_difficulties` at lines ~1158–1159 —
-  inherit the upstream Monero shape: `std::vector<uint64_t>`
-  with `vector.erase(vector.begin())` to drop the oldest entry
-  on each block. Each `erase(begin())` shifts the remaining
-  ~N entries, making the roll-forward O(N) per block. At
-  `N = 90` (LWMA-1 window), the absolute cost is small but
-  asymptotically wrong relative to the cache pattern's intent
-  (1-block roll-forward should be O(1)).
+  (anonymous namespace, around line 124) allocates two
+  `std::vector` buffers (`std::vector<shekyl_u128> cum_u128` and
+  `std::vector<uint64_t> ts_vec`) per call to widen the
+  cumulative-difficulty entries from `boost::multiprecision::uint128_t`
+  to the FFI's `shekyl_u128` and to copy timestamps to contiguous
+  storage (necessary because the cached call sites pass `std::deque`).
+  Each buffer is ~1.5 KiB at `N = 90` (91 entries × 16 bytes).
+  Called once per `get_difficulty_for_next_block`, once per alt-chain
+  validation, and `N + 1` times per full-chain recalculation in
+  `recalculate_difficulties`. Companion to the Rust-side
+  `Vec<u128>` allocation tracked in the entry above; both fall in
+  the same V3.1+ perf scope.
 
-  **Dispositions worth comparing at the V3.1+ perf pass:**
+  **Dispositions worth comparing at the V3.1+ pass:**
 
-  1. Replace `std::vector` with `std::deque` for the two cache
-     members; `pop_front()` is O(1). Smallest-touch change;
-     matches the data-structure to the access pattern.
-  2. Use a fixed-size ring buffer (e.g., `boost::circular_buffer`
-     or a hand-rolled `std::array<T, N + 1>` with an index
-     wrap). Eliminates dynamic allocation entirely; couples
-     the cache to the `SHEKYL_DAA_WINDOW_N` constant.
-  3. Coalesce the two `erase` loops into a single shifted
-     assignment when only one element needs to be removed (the
-     steady-state case). Smallest-diff fix; doesn't address the
-     asymptotic property in non-steady-state.
+  1. Promote both buffers to `thread_local static` and `clear()`
+     between calls. Costs nothing in code complexity; eliminates
+     allocation churn but holds the worst-case footprint per
+     thread. The bridge is called from a single Blockchain lock
+     so thread-local cost is bounded by the validator thread
+     count.
+  2. Make the bridge accept an out-buffer reference (callers own
+     the buffer; bridge clears + reuses). Zero per-call allocation
+     and zero global state; adds a parameter to each call site.
+  3. Combine with the Rust-side `Vec<u128>` follow-up above: a
+     stack-buffer iterator at the FFI surface would eliminate
+     both allocations together at the cost of coupling the
+     algorithm crate to the window-size constant.
 
-  **Target: V3.1** (same pass as the `Vec<u128>` FFI-shim
-  allocation follow-up above). Closure point is the V3.1
-  difficulty/perf pass that benchmarks end-to-end per-block
-  cost; the disposition is chosen by data. **Not a correctness
-  bug** — algorithm result is byte-identical to the O(1)
-  alternative. Inherited from upstream Monero; per
-  `15-deletion-and-debt.mdc` "while we're here is the enemy,"
-  Phase 4 preserves the inherited shape with line-by-line
-  rewires only.
+  **Target: V3.1** (same pass as the entries above). Closure point
+  is the V3.1 difficulty/perf pass that benchmarks end-to-end
+  per-block cost; the disposition is chosen by data. **Not a
+  correctness bug** — algorithm result is byte-identical to the
+  zero-allocation alternative.
+
+- **CLOSED (2026-05-18 — landed in same PR #53): `Blockchain`
+  LWMA-1 cache `vector` → `deque` migration.** Surfaced 2026-05-18
+  (LWMA-1 Phase 4 PR #53, Copilot review C-1); my initial
+  disposition was to defer per `15-deletion-and-debt.mdc`'s
+  "while we're here is the enemy" rule. The user landed the
+  disposition in-PR as commit `308385c26` ("perf: use std::deque
+  for LWMA-1 window caches for O(1) pop_front") plus the
+  follow-on `29edd517d` ("perf: add ts_vec.reserve before assign
+  in lwma1_next_difficulty"). Both `m_timestamps` /
+  `m_difficulties` cache members in
+  [`src/cryptonote_core/blockchain.cpp`](../src/cryptonote_core/blockchain.cpp)
+  are now `std::deque`; the corresponding `erase(begin())` while-
+  loops are replaced with `pop_front()`. The `lwma1_next_difficulty`
+  helper became a template accepting either `std::vector` (alt-
+  chain path) or `std::deque` (cached paths). The cache roll-
+  forward is now O(1) per block as the access pattern intended.
+  Closure record retained for traceability; no V3.x work remains
+  for this item.
 
 - **Binary-level `nm`-on-`shekyld` symbol-isolation invariant for the
   deleted CryptoNote DAA functions.** Surfaced 2026-05-18 (LWMA-1

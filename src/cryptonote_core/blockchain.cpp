@@ -133,6 +133,22 @@ namespace
           SHEKYL_DIFFICULTY_ERR_INVALID_COUNT);
     }
 
+    // Defense-in-depth: enforce the FFI contract at the C++ bridge
+    // boundary rather than relying solely on Rust to surface a count
+    // violation. The FFI contract (`shekyl/shekyl_ffi.h`) requires that
+    // when `chain_height >= SHEKYL_DAA_WINDOW_N` the caller passes
+    // exactly `SHEKYL_DAA_WINDOW_N + 1` window entries; under- or
+    // over-populated windows in that range are a consensus-invariant
+    // violation. Catching it here gives a clearer stack and avoids
+    // wasting an FFI roundtrip; the Rust side still validates the
+    // same invariant as belt-and-braces.
+    if (chain_height >= SHEKYL_DAA_WINDOW_N &&
+        timestamps.size() != SHEKYL_DAA_WINDOW_N + 1)
+    {
+      throw cryptonote::difficulty_computation_error(
+          SHEKYL_DIFFICULTY_ERR_INVALID_COUNT);
+    }
+
     // Per the FFI contract (shekyl/shekyl_ffi.h): when chain_height < N
     // pass count == 0; when chain_height >= N pass count == N + 1.
     // Normalize here so the C++ call sites can carry their natural
@@ -1126,6 +1142,25 @@ size_t Blockchain::recalculate_difficulties(std::optional<uint64_t> start_height
       difficulties.push_back(m_db->get_block_cumulative_difficulty(h));
     }
   }
+  // Cumulative-difficulty seed for the recalculation loop.
+  //
+  // Behavior change from legacy DAA: the inherited code used
+  // `start_height <= 1 ? start_height : difficulties.back()`, so at
+  // `start_height == 1` the seed was the literal 1 (matching the
+  // legacy genesis cum-diff convention). LWMA-1 includes genesis in
+  // the algorithmic window and treats it as a normal entry with
+  // `difficulty(0) == SHEKYL_DAA_GENESIS_DIFFICULTY` (100, not 1);
+  // the stored `cum_diff(0)` on the LWMA-1 chain therefore equals
+  // SHEKYL_DAA_GENESIS_DIFFICULTY. The correct seed for any
+  // `start_height >= 1` is `cum_diff(start_height - 1)` = the DB-
+  // stored value at the parent. `difficulties.back()` returns exactly
+  // this (the bootstrap loop above populates the window with the
+  // last `min(start_height, N+1)` cumulative-difficulty entries
+  // ending at `start_height - 1`).
+  //
+  // The new behavior is correct-by-construction for LWMA-1; the
+  // legacy literal-1 seed would silently produce a 99-unit drift at
+  // every recalculation that started at height 1 under the new DAA.
   difficulty_type last_cum_diff = start_height == 0
       ? difficulty_type(0)
       : difficulties.back();
@@ -1167,9 +1202,14 @@ size_t Blockchain::recalculate_difficulties(std::optional<uint64_t> start_height
     // pushing the block-at-height-0 entry.
     timestamps.push_back(m_db->get_block_timestamp(height));
     difficulties.push_back(recalculated_cum_diff);
-    if (timestamps.size() > lwma1_window_size)
+    // Trim back to the LWMA-1 window. By construction only one entry
+    // was pushed this iteration, so the deque can exceed the window
+    // by at most 1 — but using `while` rather than `if` keeps the
+    // invariant intact if a future refactor pushes additional entries
+    // per iteration. Mirrors the trimming pattern at lines ~1043-1046
+    // in `get_difficulty_for_next_block`.
+    while (timestamps.size() > lwma1_window_size)
     {
-      CHECK_AND_ASSERT_THROW_MES(timestamps.size() == lwma1_window_size + 1, "Wrong timestamps size: " << timestamps.size());
       timestamps.pop_front();
       difficulties.pop_front();
     }

@@ -65,9 +65,20 @@ namespace cryptonote
     // `next_difficulty` and `next_difficulty_64` were deleted in Phase 4
     // of the LWMA-1 migration (`docs/design/DAA_LWMA1.md` §9.1, drift
     // F6 in `docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md` §2). Consumers
-    // call `shekyl_difficulty_lwma1_next` via the FFI shim wrapped by
-    // `cryptonote/difficulty_engine_error.h`'s `lwma1_next_difficulty`
-    // helper instead.
+    // call `shekyl_difficulty_lwma1_next` via two pieces that live
+    // together but distinctly:
+    //
+    //   * The `lwma1_next_difficulty` helper defined in the anonymous
+    //     namespace of `src/cryptonote_core/blockchain.cpp` builds the
+    //     FFI argument arrays and dispatches the call.
+    //   * Non-zero FFI return codes are translated into the
+    //     `cryptonote::difficulty_computation_error` exception declared
+    //     in `src/cryptonote_core/difficulty_engine_error.h`.
+    //
+    // No DAA helper lives in this header any more; the only inhabitants
+    // are the `check_hash*` PoW predicates and the `hex` formatter,
+    // both of which are language-mechanical utilities orthogonal to
+    // the algorithm choice.
 
     std::string hex(difficulty_type v);
 }

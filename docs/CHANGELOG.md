@@ -122,9 +122,15 @@
   - **F4** — `DIFFICULTY_TARGET_V2` consumer count corrected from
     "~14 sites across 9 files" to the actual 8 production + 5
     test sites enumerated by the commit-6 sweep.
-  - **F5** — `DIFFICULTY_TARGET_V2` line numbers in `wallet2.cpp`
-    confirmed at 4239/4243 (drift from the spec's older line
-    numbers; rewired identically).
+  - **F5** — `DIFFICULTY_TARGET_V2` consumer **undercount in
+    `blockchain.cpp`**: the plan's §9.7 enumeration missed two
+    sites at lines 4239 / 4243 (an MTP-window correction and a
+    `timestamps.back() + DIFFICULTY_TARGET_V2` adjustment inside
+    `check_block_timestamp`); both rewired to
+    `SHEKYL_DAA_TARGET_SECONDS`. `wallet2.cpp`'s lines 181, 182,
+    5975, 11548 were never drift — the earlier text mis-attributed
+    F5 to `wallet2.cpp`; corrected 2026-05-18 per PR #53 Copilot
+    review C-6.
   - **F6** — surgical (not wholesale) deletion of
     `src/cryptonote_basic/difficulty.{h,cpp}`: the `check_hash`
     PoW-validation family is retained; only the

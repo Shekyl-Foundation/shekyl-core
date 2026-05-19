@@ -2416,8 +2416,15 @@ implementation. The load-bearing amendments are:
   (Monero-era pre-genesis) is deleted.
 - **§9.7 amended (F4, F5).** The "~14 consumers across 9 files"
   estimate refined to **8 production + 5 test = 13 total across 7
-  files**. `wallet2.cpp` line numbers updated from `181, 182, 5975,
-  11548` to `4239, 4243` (post-refactoring drift).
+  files**. F5 is a **two-site undercount in `blockchain.cpp`** at
+  lines `4239, 4243` (an MTP-window correction and a
+  `timestamps.back() + DIFFICULTY_TARGET_V2` adjustment, both
+  inside `check_block_timestamp`) that the plan's §9.7 enumeration
+  missed; rewired to `SHEKYL_DAA_TARGET_SECONDS` alongside the
+  plan-enumerated sites. `wallet2.cpp`'s `181, 182, 5975, 11548`
+  enumeration was always correct (per §11) — no drift there;
+  the earlier amendment text mis-attributed F5 to `wallet2.cpp`,
+  corrected 2026-05-18 (PR #53 Copilot review C-6).
 - **§7.1 amended (F7).** `check_difficulty_checkpoints()` is **not**
   a symbol-isolation deletion candidate. The function is a
   checkpoint-cumulative-difficulty comparison independent of the
