@@ -104,6 +104,72 @@ reviewing a design disposition, ask "is this the cost-benefit-defer-to-later
 answer?" If yes, the architectural-integrity-now
 answer is the default unless cost is genuinely prohibitive.
 
+## The "user-protection defaults in user-absent contexts" anti-pattern
+
+Sibling to the cost-benefit-defer-to-later anti-pattern above
+and named through a different surface. Production-software
+discipline ships pre-loaded with defaults that exist to protect
+deployed users: graceful degradation under unknown input,
+staged rollouts with deprecation windows,
+backward-compatibility preservation, opt-in migration paths,
+soft deprecation (`[[deprecated]]` annotations without delete
+dates), and version-skew tolerance are the canonical
+exemplars. Each default is correct in its native context
+(deployed-user-base, ongoing migration windows, third-party
+consumers under independent maintenance).
+
+Pre-genesis, with no deployed users, every one of these
+defaults inverts. Graceful degradation becomes loud failure
+(per the discipline pinned in
+`docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.3). Staged rollouts
+become atomic cutovers (per the same doc's §5.2). Backward
+compatibility becomes Rule-60 "deleted, not gated." Opt-in
+migration paths become `rm -rf ~/.shekyl` per
+`15-deletion-and-debt.mdc`. Soft deprecation becomes Rule-15
+"if you can't name the version, you can't deprecate — delete
+now." Version-skew tolerance becomes Rule-60 "no version
+dispatch."
+
+**The class-level pattern is "user-protection defaults in
+user-absent contexts."** Each instance is a default that
+production-software discipline ships pre-loaded; each requires
+explicit inversion when the underlying "users to protect"
+assumption does not hold. The inversion is not a
+once-per-pattern discipline — it is a once-per-design-decision
+discipline, because the same default re-enters every design
+review under a different guise (a new RPC signature, a new FFI
+parameter, a new state-machine transition, a new error code,
+…).
+
+**Recurrence pattern.** When a review surfaces a design that
+"gracefully accepts," "preserves compatibility with," "soft-
+deprecates," or "tolerates skew across" some surface, ask:
+"are there pre-genesis users to protect with this default?" If
+no, the production-software default is wrong-for-Shekyl
+regardless of how reasonable it sounds; the inversion is the
+discipline-correct disposition.
+
+**Recurrence cadence.** Two instances surfaced in a single
+design's Round 1 (the
+`docs/design/ELECTRUM_WORDS_REMOVAL.md` Phase-1-hard-error
+disposition and the atomic-cutover-default disposition).
+Substrate compounding per the discovery-cadence discipline
+above predicts more instances in subsequent PRs; each PR's
+discipline application is small, the aggregate hardening is
+large.
+
+**Relationship to the cost-benefit-defer-to-later anti-pattern.**
+Both anti-patterns are forms of *inherited disposition that
+contradicts Shekyl's threat model*. Cost-benefit-defer-to-later
+inherits the disposition from conventional cost-benefit
+analysis; user-protection-defaults-in-user-absent-contexts
+inherits the disposition from production-software discipline.
+Both are caught by the same load-bearing review question — "is
+this disposition delivering against the threat model?" — and
+both have the same disposition default — "the
+architecturally-integral-now answer is correct unless cost is
+genuinely prohibitive."
+
 ## Discovery cadence
 
 Each adversarial pass against design changes compounds the substrate's
