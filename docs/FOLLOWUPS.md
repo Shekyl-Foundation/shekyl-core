@@ -2999,6 +2999,78 @@ one place to confirm each item's relationship to the wallet stack.
   units that lack `extern "C"` exports are eligible for dead-code
   elimination.
 
+- **RandomX v2 `ExternalProject_Add`: per-`CONFIG` install path and
+  `IMPORTED_LOCATION_<CONFIG>` for multi-config generators.**
+  Surfaced 2026-05-18 (RandomX v2 Phase 1 PR #54, Copilot review
+  findings C-1 (commit-3) and C-6 (commit-4)). The Phase 1 wiring
+  in [`external/CMakeLists.txt`](../external/CMakeLists.txt) uses
+  a single, config-agnostic install path
+  (`${CMAKE_BINARY_DIR}/external/randomx-v2-install/`) and a
+  single `IMPORTED_LOCATION` on the `shekyl_randomx_v2` target.
+  On single-config generators (Ninja, Make — the production
+  Shekyl build pipeline including Guix) this is correct by
+  construction. On multi-config generators (MSVC's "Visual Studio"
+  generator, Xcode, "Ninja Multi-Config"), building Debug and
+  Release in the same build tree would have the second install
+  step overwrite the first, and `IMPORTED_LOCATION` would resolve
+  to whichever was built last regardless of which configuration
+  the consumer is linking from. The phrase "correct by
+  construction" holds today only because no Shekyl C++ component
+  links `shekyl_randomx_v2` in Phase 1 — the multi-config
+  collision is latent until the first consumer lands.
+  
+  **Phase 1 disposition (fail-fast).** As of PR #54 commit 4,
+  `external/CMakeLists.txt` refuses with `FATAL_ERROR` when
+  `BUILD_RANDOMX_V2_MINER_LIB=ON` is combined with a multi-config
+  generator (`CMAKE_CONFIGURATION_TYPES` non-empty), and names
+  this FOLLOWUPS entry in the error message. The escalation from
+  a STATUS warning (the commit-3 disposition) to a fail-fast
+  refusal (the commit-4 disposition) is `00-mission.mdc`
+  priority 1: silently producing wrong-configuration artifacts is
+  a correctness defect even without a current consumer, and the
+  right place to enforce a correctness precondition is at the
+  entry point (CMake configure) rather than the exit point (when
+  the latent bug eventually manifests). Developers who want to
+  exercise the v2 build on Windows in Phase 1 use `-G Ninja` with
+  an explicit `-DCMAKE_BUILD_TYPE`; the `FATAL_ERROR` message
+  names this path.
+  
+  **Phase 2 disposition (per-`CONFIG`).** Replace the
+  `FATAL_ERROR` with the per-`CONFIG` split alongside the first
+  real consumer (`rust/shekyl-pow-randomx/` cross-check tests
+  against the canonical v2 implementation, per
+  [`docs/design/RANDOMX_V2_PHASE1_PLAN.md`](design/RANDOMX_V2_PHASE1_PLAN.md)
+  §6.3). The minimal correct shape is:
+  
+  - Make `RANDOMX_V2_INSTALL` include `$<CONFIG>` (or, since
+    `ExternalProject_Add`'s `INSTALL_DIR` does not expand
+    generator expressions, switch to a per-config sub-build by
+    detecting `CMAKE_CONFIGURATION_TYPES` and emitting one
+    `ExternalProject_Add` per listed configuration).
+  - Set `IMPORTED_LOCATION_<CONFIG>` (and
+    `IMPORTED_LOCATION_DEBUG` / `_RELEASE` / `_RELWITHDEBINFO` /
+    `_MINSIZEREL` as needed) on `shekyl_randomx_v2` instead of
+    the single `IMPORTED_LOCATION`.
+  - Drop the Phase 1 `FATAL_ERROR` guard.
+  - Update the Phase 2 build-smoke procedure to exercise the
+    Debug + Release dual-config path on MSVC and Xcode
+    generators.
+  
+  **Why not now.** Phase 1's scope envelope is ≤250 lines, ≤5
+  commits, and explicitly forbids "while we're here"
+  architectural expansions (`RANDOMX_V2_PHASE1_PLAN.md` §9).
+  Adding per-`CONFIG` handling now without a consumer would be
+  speculative scaffolding (the kind `25-rust-architecture.mdc`
+  rejects) — the correct per-`CONFIG` shape depends on what shape
+  the consumer wants (single-config Rust harness vs. multi-config
+  MSVC daemon), and Phase 1 commits to neither.
+  
+  **Target: V3.x — RandomX v2 Phase 2** (`docs/design/RANDOMX_V2_PLAN.md`
+  Track A Phase 2). Closes when `rust/shekyl-pow-randomx/`'s
+  cross-check tests build cleanly under MSVC's multi-config
+  generator with both Debug and Release in the same build tree
+  AND the Phase 1 `FATAL_ERROR` guard has been removed.
+
 ---
 
 ## V3.2 — Rust cutover and cleanup

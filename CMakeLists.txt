@@ -490,6 +490,19 @@ enable_testing()
 
 option(BUILD_DOCUMENTATION "Build the Doxygen documentation." ON)
 option(BUILD_TESTS "Build tests." OFF)
+# RandomX v2 (Shekyl-Foundation fork) miner-library build toggle.
+# OFF (default): the v2 build is not configured; daemon and other
+# components are unaffected and byte-identical to a no-flag build
+# (per RANDOMX_V2_PHASE1_PLAN.md §4.1).
+# ON: external/CMakeLists.txt runs ExternalProject_Add against the
+# pinned external/randomx-v2 submodule and exposes the
+# shekyl_randomx_v2 IMPORTED static-library target. The target is
+# not consumed by any C++ component in Phase 1; the first consumer
+# is the Phase 2 cross-check test harness in rust/shekyl-pow-randomx/.
+# See docs/design/RANDOMX_V2_PHASE1_PLAN.md §§2.3, 3.3, 3.4.
+option(BUILD_RANDOMX_V2_MINER_LIB
+  "Build RandomX v2 (Shekyl-Foundation fork) miner library out-of-tree; default OFF in Phase 1, wired into miner consumers in Phase 3."
+  OFF)
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
   set(DEFAULT_BUILD_DEBUG_UTILITIES ON)
 else()
