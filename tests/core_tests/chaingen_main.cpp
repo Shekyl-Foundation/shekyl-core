@@ -119,8 +119,6 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_block_ts_in_past);
     GENERATE_AND_PLAY(gen_block_ts_in_future);
     GENERATE_AND_PLAY(gen_block_invalid_prev_id);
-    // Disabled: PoW-based test incompatible with --fixed-difficulty=1 (any nonce is valid at difficulty 1)
-    // GENERATE_AND_PLAY(gen_block_invalid_nonce);
     GENERATE_AND_PLAY(gen_block_no_miner_tx);
     GENERATE_AND_PLAY(gen_block_unlock_time_is_low);
     GENERATE_AND_PLAY(gen_block_unlock_time_is_high);
@@ -141,8 +139,6 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_block_miner_tx_out_has_view_tag_from_hf_view_tags);
     GENERATE_AND_PLAY(gen_block_has_invalid_tx);
     GENERATE_AND_PLAY(gen_block_is_too_big);
-    // Disabled: extremely slow with CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW=60, can take hours
-    // GENERATE_AND_PLAY(gen_block_invalid_binary_format);
     // Disabled: no "late v1 coinbase" era in Shekyl (1 = 1 = genesis)
     // GENERATE_AND_PLAY(gen_block_late_v1_coinbase_tx);
 

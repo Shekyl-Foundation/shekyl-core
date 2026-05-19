@@ -888,9 +888,39 @@ sustainability is unaffected by the recalibration.
   PR A's mechanical scope; warrants separate PR for the `sign()`
   refactor surface.
 
-- **Difficulty algorithm: replace inherited CryptoNote cut-windowed
+- ~~**Difficulty algorithm: replace inherited CryptoNote cut-windowed
   average with LWMA-1 (sequencing trigger: A-4/A-5/A-7/A-8 PoW
-  workstream PR; pre-genesis).** The inherited difficulty algorithm
+  workstream PR; pre-genesis).**~~ **CLOSED 2026-05-18 by the LWMA-1
+  Phase 4 C++ cutover (`feat/daa-lwma1-phase4`).** The four-phase
+  migration spec'd in [`docs/design/DAA_LWMA1_PLAN.md`](design/DAA_LWMA1_PLAN.md)
+  and [`docs/design/DAA_LWMA1.md`](design/DAA_LWMA1.md) is fully
+  landed on `dev`:
+  - Phase 0 (design): `dev` SHA `b0eb29b` (2026-05-15), spec +
+    integration plan.
+  - Phase 1 (Rust crate `shekyl-difficulty`): `dev` SHA `<phase1>`,
+    LWMA-1 Rust implementation + timestamp-validation primitives.
+  - Phase 2 (FFI surface): `dev` SHA `<phase2>`,
+    `shekyl_difficulty_lwma1_next` C-ABI in `shekyl-ffi` +
+    `lwma1-cross-check` C++ harness verifying Rust ↔ canonical
+    zawy12 reference equivalence over ~5000 blocks.
+  - Phase 4 (C++ cutover): `dev` SHA `<phase4-merge>` (this commit),
+    the consensus-atomic cutover described in the `CHANGELOG.md`
+    `[Unreleased]` Phase 4 entry. All three Lens E findings
+    (E.4-C-1, E.4-C-2, E.4-C-3) are dispositioned: V1 parameters
+    deleted with the algorithm replacement; `DIFFICULTY_LAG`
+    `// !!!` warning marker disappears with the parameter; Rule 75
+    rationale-doc forward-template is carried on the new
+    `SHEKYL_DAA_*` constants in
+    [`shekyl-consensus/build.rs`](../rust/shekyl-consensus/build.rs)
+    via the `consensus_constants_generated.h` codegen pipeline.
+
+  The original item is retained below for audit-trail context; the
+  three rationales remain the binding justification for the
+  algorithm choice, and the reversion criteria remain named for
+  post-genesis re-evaluation if simulation surfaces structural
+  defects.
+
+  The inherited difficulty algorithm
   at [`src/cryptonote_basic/difficulty.cpp:122-163,203-240`](../src/cryptonote_basic/difficulty.cpp)
   is the original CryptoNote cut-windowed average (sort timestamps;
   cut 60 outliers per `DIFFICULTY_CUT`; compute time_span vs
@@ -2857,6 +2887,115 @@ one place to confirm each item's relationship to the wallet stack.
   reviewers see the cost explicitly. **This is not a correctness
   bug** — the algorithm result is byte-identical to the
   zero-allocation alternative; only throughput changes.
+
+- **C++ bridge `lwma1_next_difficulty` helper allocates two heap
+  buffers per call.** Surfaced 2026-05-18 (LWMA-1 Phase 4 PR #53,
+  Copilot review C-11). The template helper in
+  [`src/cryptonote_core/blockchain.cpp`](../src/cryptonote_core/blockchain.cpp)
+  (anonymous namespace, around line 124) allocates two
+  `std::vector` buffers (`std::vector<shekyl_u128> cum_u128` and
+  `std::vector<uint64_t> ts_vec`) per call to widen the
+  cumulative-difficulty entries from `boost::multiprecision::uint128_t`
+  to the FFI's `shekyl_u128` and to copy timestamps to contiguous
+  storage (necessary because the cached call sites pass `std::deque`).
+  Each buffer is ~1.5 KiB at `N = 90` (91 entries × 16 bytes).
+  Called once per `get_difficulty_for_next_block`, once per alt-chain
+  validation, and `N + 1` times per full-chain recalculation in
+  `recalculate_difficulties`. Companion to the Rust-side
+  `Vec<u128>` allocation tracked in the entry above; both fall in
+  the same V3.1+ perf scope.
+
+  **Dispositions worth comparing at the V3.1+ pass:**
+
+  1. Promote both buffers to `thread_local static` and `clear()`
+     between calls. Costs nothing in code complexity; eliminates
+     allocation churn but holds the worst-case footprint per
+     thread. The bridge is called from a single Blockchain lock
+     so thread-local cost is bounded by the validator thread
+     count.
+  2. Make the bridge accept an out-buffer reference (callers own
+     the buffer; bridge clears + reuses). Zero per-call allocation
+     and zero global state; adds a parameter to each call site.
+  3. Combine with the Rust-side `Vec<u128>` follow-up above: a
+     stack-buffer iterator at the FFI surface would eliminate
+     both allocations together at the cost of coupling the
+     algorithm crate to the window-size constant.
+
+  **Target: V3.1** (same pass as the entries above). Closure point
+  is the V3.1 difficulty/perf pass that benchmarks end-to-end
+  per-block cost; the disposition is chosen by data. **Not a
+  correctness bug** — algorithm result is byte-identical to the
+  zero-allocation alternative.
+
+- **CLOSED (2026-05-18 — landed in same PR #53): `Blockchain`
+  LWMA-1 cache `vector` → `deque` migration.** Surfaced 2026-05-18
+  (LWMA-1 Phase 4 PR #53, Copilot review C-1); my initial
+  disposition was to defer per `15-deletion-and-debt.mdc`'s
+  "while we're here is the enemy" rule. The user landed the
+  disposition in-PR as commit `308385c26` ("perf: use std::deque
+  for LWMA-1 window caches for O(1) pop_front") plus the
+  follow-on `29edd517d` ("perf: add ts_vec.reserve before assign
+  in lwma1_next_difficulty"). Both `m_timestamps` /
+  `m_difficulties` cache members in
+  [`src/cryptonote_core/blockchain.cpp`](../src/cryptonote_core/blockchain.cpp)
+  are now `std::deque`; the corresponding `erase(begin())` while-
+  loops are replaced with `pop_front()`. The `lwma1_next_difficulty`
+  helper became a template accepting either `std::vector` (alt-
+  chain path) or `std::deque` (cached paths). The cache roll-
+  forward is now O(1) per block as the access pattern intended.
+  Closure record retained for traceability; no V3.x work remains
+  for this item.
+
+- **Binary-level `nm`-on-`shekyld` symbol-isolation invariant for the
+  deleted CryptoNote DAA functions.** Surfaced 2026-05-18 (LWMA-1
+  Phase 4 PR, Commit 10 design discussion). The current
+  consensus-invariants CI gate
+  ([`.github/workflows/consensus-invariants.yml`](../.github/workflows/consensus-invariants.yml)
+  +
+  [`scripts/ci/check_consensus_invariants.sh`](../scripts/ci/check_consensus_invariants.sh))
+  invariant 1 is a **source-level** grep: it verifies there are no
+  live `next_difficulty` or `next_difficulty_64` call sites in
+  `src/**`. This is a necessary precondition for binary absence but
+  is not the strongest available statement of the invariant: the
+  load-bearing property the threat model wants is that *the linked
+  daemon binary* doesn't contain a reachable
+  `cryptonote::next_difficulty(...)` symbol from which a future code
+  path could resurrect the deleted DAA.
+
+  **Disposition.** Add a binary-level CI step to the existing
+  workflow once CI infrastructure exposes a linked `shekyld` to a
+  post-link grep:
+
+  ```bash
+  if nm shekyld | rg -q '^.* (T|U) (next_difficulty_64|next_difficulty)\b'; then
+    echo "ERROR: linked daemon contains deleted DAA symbol"
+    exit 1
+  fi
+  ```
+
+  The check fails on either a defined (`T`) or referenced (`U`)
+  symbol matching the deleted DAA family. `nm` is preferred over
+  `readelf -s` for cross-toolchain portability (works on the
+  upcoming MSVC Windows build via `llvm-nm` and on macOS via
+  Apple's `nm`).
+
+  **Why not now.** The PR's reviewer-attention budget is loaded with
+  the consensus-rule changes (FTL/MTP/DAA); the source-level
+  invariant catches the same defection class with zero binary
+  artifact wrangling. The binary-level enhancement is value-add but
+  not load-bearing; deferred to a V3.x CI-hygiene pass.
+
+  **Target: V3.x** (CI hygiene). Closes when the
+  consensus-invariants workflow is extended with a post-build job
+  that links `shekyld` for the host triple and runs the `nm` check
+  above. The same job is the natural landing site for the upcoming
+  RandomX v2 Phase 2f symbol-isolation binary check; sharing the
+  job amortizes the link cost and avoids two parallel sub-workflows
+  doing similar things. No correctness issue exists today — the
+  source-level grep gives strong evidence the binary won't contain
+  the symbols, since unreferenced functions in C++ translation
+  units that lack `extern "C"` exports are eligible for dead-code
+  elimination.
 
 ---
 

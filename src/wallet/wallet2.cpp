@@ -178,8 +178,8 @@ namespace {
 
 #define IGNORE_LONG_PAYMENT_ID_FROM_BLOCK_VERSION 12
 
-#define DEFAULT_UNLOCK_TIME (CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE * DIFFICULTY_TARGET_V2)
-#define RECENT_SPEND_WINDOW (15 * DIFFICULTY_TARGET_V2)
+#define DEFAULT_UNLOCK_TIME (CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE * SHEKYL_DAA_TARGET_SECONDS)
+#define RECENT_SPEND_WINDOW (15 * SHEKYL_DAA_TARGET_SECONDS)
 
 static const std::string ASCII_OUTPUT_MAGIC = "ShekylAsciiDataV1";
 
@@ -5972,7 +5972,7 @@ crypto::secret_key wallet2::generate(const std::string& wallet_, const epee::wip
  {
    // -1 month for fluctuations in block time and machine date/time setup.
    // avg seconds per block
-   const int seconds_per_block = DIFFICULTY_TARGET_V2;
+   const int seconds_per_block = SHEKYL_DAA_TARGET_SECONDS;
    // ~num blocks per month
    const uint64_t blocks_per_month = 60*60*24*30/seconds_per_block;
 
@@ -11545,7 +11545,7 @@ uint64_t wallet2::get_approximate_blockchain_height() const
   // v2 fork block
   const uint64_t fork_block = m_nettype == TESTNET ? 624634 : m_nettype == STAGENET ? 32000 : 1009827;
   // avg seconds per block
-  const int seconds_per_block = DIFFICULTY_TARGET_V2;
+  const int seconds_per_block = SHEKYL_DAA_TARGET_SECONDS;
   // Calculated blockchain height
   uint64_t approx_blockchain_height = fork_block + (time(NULL) - fork_time)/seconds_per_block;
   // testnet and stagenet got some huge rollbacks, so the estimation is way off

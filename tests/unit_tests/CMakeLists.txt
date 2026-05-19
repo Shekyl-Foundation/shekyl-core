@@ -77,11 +77,13 @@ set(unit_tests_sources
   parse_amount.cpp
   pruning.cpp
   random.cpp
+  rpc_target_wire_contract.cpp
   rolling_median.cpp
   scaling_2021.cpp
   serialization.cpp
   sha256.cpp
   slow_memmem.cpp
+  stall_detection_calibration.cpp
   stack_trace.cpp
   subaddress.cpp
   test_tx_utils.cpp

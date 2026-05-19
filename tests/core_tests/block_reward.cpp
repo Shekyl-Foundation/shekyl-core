@@ -253,8 +253,8 @@ bool gen_block_reward::check_block_rewards(cryptonote::core& /*c*/, size_t /*ev_
   // Verify genesis block (checked index 0) reward matches the Shekyl formula
   // Height 0, already_generated_coins = 0, fee = 0
   {
-    static_assert(DIFFICULTY_TARGET_V2 % 60 == 0, "target must be a multiple of 60");
-    const int target_minutes = DIFFICULTY_TARGET_V2 / 60;
+    static_assert(SHEKYL_DAA_TARGET_SECONDS % 60 == 0, "target must be a multiple of 60");
+    const int target_minutes = SHEKYL_DAA_TARGET_SECONDS / 60;
     const int esf = EMISSION_SPEED_FACTOR_PER_MINUTE - (target_minutes - 1);
 
     uint64_t base_reward = MONEY_SUPPLY >> esf;

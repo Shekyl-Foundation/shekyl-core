@@ -1067,6 +1067,101 @@ migration. Mechanical but multi-file. **The bar for reverting is
 serious decision that triggers a new design doc revisiting
 [`DAA_LWMA1.md`](./DAA_LWMA1.md) §1.4.
 
+## Phase 4 implementation drift findings (2026-05-18 close)
+
+Implementation surfaced seven drift findings against the pre-flight
+([`DAA_LWMA1_PHASE4_PREFLIGHT.md`](./DAA_LWMA1_PHASE4_PREFLIGHT.md))
+and the spec ([`DAA_LWMA1.md`](./DAA_LWMA1.md) §§9.1–9.7). All seven
+were dispositioned in-PR per the pre-flight's §18 implementation-
+time-drift policy; each is recorded below for audit trail.
+
+- **F1 — surgical (not wholesale) deletion of `tests/difficulty/`.**
+  The pre-flight specified deleting the entire `tests/difficulty/`
+  directory. The `lwma1-cross-check` C++ harness landed in Phase 2
+  also lives in that directory and is load-bearing
+  (cross-checks Rust `lwma1_next` against the canonical zawy12 C++
+  reference for ~5000 blocks per CI run). Disposition: delete only
+  the legacy CryptoNote-DAA test artifacts
+  (`difficulty.cpp`, `data.txt`, `generate-data`, `gen_wide_data.py`,
+  `wide_difficulty.py`); retain `lwma1_cross_check.cpp`,
+  `zawy12_lwma1_reference.h`, `shekyl_lwma1_hybrid_reference.h`,
+  and the `lwma1-cross-check` CMake target.
+- **F2 — `CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V2` preserved
+  with rewired RHS.** The constant is a multi-step lock-time delta
+  formula (`DIFFICULTY_TARGET_V2 * CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS`
+  multiplied by an integer factor). Pre-flight §14 enumerated it
+  as ambiguous between deletion and rewire. Disposition: preserve
+  `_V2` with its RHS rewired from `DIFFICULTY_TARGET_V2` to
+  `SHEKYL_DAA_TARGET_SECONDS` (option B; value unchanged at 1800s).
+  Two live consumers (`blockchain.cpp:4043`, `wallet2.cpp:7330`)
+  are unaffected. The `_V1` variant (Monero-era pre-genesis
+  behavior) is deleted per `60-no-monero-legacy.mdc`.
+- **F3 — `block_validation.cpp` V1 `next_difficulty(...)` fixtures
+  deleted.** The pre-flight enumerated V1-specific test fixtures
+  (`lift_up_difficulty` helper, `gen_block_invalid_nonce`,
+  `gen_block_invalid_binary_format`) as legacy and a deletion
+  target. Implementation confirmed: all three exercise pre-V3
+  behavior with no V3-era equivalents in `core_tests`. Disposition:
+  delete the helper plus both test classes from
+  `block_validation.{cpp,h}`, plus the commented-out
+  `GENERATE_AND_PLAY` entries in `chaingen_main.cpp`.
+- **F4 — `DIFFICULTY_TARGET_V2` consumer count corrected.** The
+  spec's §9.7 estimated "~14 sites across 9 files" for
+  `DIFFICULTY_TARGET_V2` consumers (pre-flight enumeration).
+  Implementation-time `git grep` against the cleaner post-Phase-3
+  tree surfaced **8 production sites + 5 test sites = 13 total**
+  across 7 files. Drift is one site lower than estimated; no
+  correctness implication. Disposition: rewire all 13; the
+  consensus-invariants CI gate (§ "CI invariants" below) catches
+  any missed sites at PR time.
+- **F5 — `wallet2.cpp` line numbers drift.** Spec §11 cited
+  `wallet2.cpp:181, 182, 5975, 11548` as `DIFFICULTY_TARGET_V2`
+  consumers. Post-Phase-3 line numbers are 4239/4243; refactoring
+  in unrelated PRs moved the lines. Disposition: rewire at the
+  current line numbers; the spec doc is updated in the same
+  commit to record the drift (this section).
+- **F6 — surgical (not wholesale) deletion of
+  `src/cryptonote_basic/difficulty.{h,cpp}`.** The pre-flight and
+  spec §9.1 specified full deletion of the pair. Implementation
+  surfaced that `check_hash`, `check_hash_64`, `mul`, `cadd`,
+  `cadc`, and the SSE2-accelerated PoW-validation helpers live
+  in the same translation unit and have ~12 live production
+  consumers (PoW validation in `blockchain.cpp`, `cryptonote_core/cryptonote_core.cpp`,
+  RandomX integration paths). The DAA-vs-PoW split exists in the
+  file's structure but the wholesale-deletion disposition didn't
+  reflect it. Disposition: delete `next_difficulty_64` and
+  `next_difficulty` (the LWMA-1 cutover targets) plus the
+  `#include "cryptonote_config.h"` that only the deleted functions
+  needed; retain the `check_hash` PoW family. Spec §9.1 amended
+  to "surgical deletion of DAA functions; PoW family retained."
+- **F7 — `check_difficulty_checkpoints()` NOT a deletion target.**
+  Pre-flight §14 and spec §7.1 enumerated `check_difficulty_checkpoints()`
+  as a symbol-isolation deletion candidate alongside
+  `next_difficulty`. Implementation review surfaced that the
+  function (`blockchain.cpp:1066`) is a checkpoint-cumulative-
+  difficulty comparison that operates on already-computed
+  difficulties; it is independent of the deleted DAA algorithms
+  and is invoked by the alt-chain rollback path's checkpoint
+  validation. Disposition: retain; exclude from the consensus-
+  invariants CI gate's symbol-isolation invariant. The spec §7.1
+  and pre-flight §14 are amended to remove the false enumeration.
+  This is the one drift finding that surfaced *during*
+  implementation rather than *before* implementation, and it
+  exemplifies why the consensus-invariants CI gate's symbol list
+  must be the source of truth (not the spec's enumeration).
+
+The work-item count and PR-scope ceiling per
+`07-consensus-atomic-cutovers.mdc` sub-clause 4.2 are unchanged by
+the drift findings: F1, F2, F3 expand the scope of existing work
+items 7, 6, 12 respectively without adding new ones; F4 and F5
+correct the line-number bookkeeping for existing work item 4; F6
+narrows work item 2 from "delete the file" to "delete the DAA
+functions in the file"; F7 removes one item from the symbol-
+isolation invariant's match list. Net effect: same fourteen work
+items, sharper scope. The PR commit log preserves the eleven-commit
+decomposition disposed in the pre-flight (Commit 11 lands this
+section).
+
 ## Phase 5 — Docs
 
 Update:

@@ -200,7 +200,10 @@ invocations. Each invocation cites this rule, demonstrates
 the four criteria are met, and links here. Approved
 invocations:
 
-- **LWMA-1 Phase 4** (`docs/design/DAA_LWMA1_PLAN.md` Phase 4).
+- **LWMA-1 Phase 4** (`docs/design/DAA_LWMA1_PLAN.md` Phase 4;
+  landed on `dev` 2026-05-18 as `feat/daa-lwma1-phase4`, the
+  eleven-commit decomposition disposed in
+  `docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md` §18).
   Difficulty-algorithm cutover from CryptoNote
   cut-windowed-average to LWMA-1, paired with FTL and MTP
   value changes. The FTL (`7200 → 540`) and MTP (`60 → 11`)
@@ -212,10 +215,38 @@ invocations:
   (consensus-rule boundary: FTL/MTP/algorithm), 2 (no
   simultaneously-valid flag decomposition exists for any of
   the three), 3 (enumerated in advance: `DAA_LWMA1.md`
-  §§9.4–9.7), and 4 (disposition: the Phase 4 PR description
-  cites this rule and contains the sub-clause-4.1–4.4
-  artifacts). Approved as the first instance per Phase 0
-  review.
+  §§9.4–9.7, with the Phase 4 implementation amendments
+  recorded in `DAA_LWMA1_PLAN.md` "Phase 4 implementation
+  drift findings" section), and 4 (disposition: the Phase 4 PR
+  description cited this rule and contained the
+  sub-clause-4.1–4.4 artifacts; the rollback procedure was
+  "revert the merge commit on `dev`" because the cutover was
+  atomic and reversion is single-commit). The five-commit
+  consensus-rule cluster (commits 3–5: DAA rewires, FTL
+  rewires, MTP rewires; commits 7–8: `#define` deletions and
+  surgical `next_difficulty` deletion) is the reviewer-map
+  "consensus-affecting" subsection; commits 1, 2, 6, 9, 10,
+  and 11 are the mechanical / new-artifact / deletion shape
+  per sub-clause 4.3.
+
+  *In-flight discipline lesson.* Seven implementation drift
+  findings (F1–F7, recorded in `DAA_LWMA1_PLAN.md` "Phase 4
+  implementation drift findings") surfaced during the PR.
+  F1, F6, and F7 are the load-bearing class: each was a
+  case where the pre-flight specified wholesale deletion
+  and implementation revealed surgical deletion was the
+  correct shape (the file contained both load-bearing and
+  deletion-target code; the pre-flight didn't distinguish).
+  The pre-flight §18 "implementation-time drift" policy
+  absorbed these without triggering scope-creep-loses-the-
+  exception per sub-clause 4-criterion-3, because each
+  finding *narrowed* scope rather than expanding it. The
+  pattern argues for a forward-template item in this rule
+  (future pre-flights for consensus-atomic cutovers should
+  distinguish "delete the file" from "delete these specific
+  symbols in the file" at pre-flight time, not at
+  implementation time); landed under §18 here so future
+  invocations inherit the lesson without amending the rule.
 
 ### Cases that might appear analogous but are not
 

@@ -4,6 +4,180 @@
 
 ### Added
 
+- **LWMA-1 difficulty-adjustment migration — Phase 4 C++ cutover**
+  (`feat/daa-lwma1-phase4`, 2026-05-18). Lands the consensus-atomic
+  cutover from the inherited CryptoNote cut-windowed-average DAA to
+  LWMA-1, plus the two paired FTL/MTP value changes, in a single PR
+  invoking `07-consensus-atomic-cutovers.mdc`. The PR contains
+  eleven commits that respect single-purpose scope per
+  `90-commits.mdc`; the eleven-commit structure is the
+  pre-flight-disposed shape (`docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md`
+  §18). Closes work-items 1–14 of `docs/design/DAA_LWMA1_PLAN.md`
+  Phase 4 and the V3.0 DAA item in `docs/FOLLOWUPS.md`.
+
+  *Consensus-rule deltas* (the load-bearing changes a validator must
+  agree on):
+
+  - **DAA**: `Blockchain::next_difficulty` (CryptoNote
+    cut-windowed-average, `DIFFICULTY_WINDOW=720`,
+    `DIFFICULTY_LAG=15 // !!!`, `DIFFICULTY_CUT=60`) is replaced by
+    LWMA-1 from
+    [`zawy12/difficulty-algorithms#3`](https://github.com/zawy12/difficulty-algorithms/issues/3)
+    with `N=90`, `T=120s`, `GENESIS_DIFFICULTY=100`. The FFI
+    surface (`shekyl_difficulty_lwma1_next`) is wrapped at the
+    three `Blockchain` call sites
+    (`get_difficulty_for_next_block`, `recalculate_difficulties`,
+    `get_next_difficulty_for_alternative_chain`) by the
+    `lwma1_next_difficulty` helper in `blockchain.cpp`, which
+    throws `cryptonote::difficulty_computation_error` (declared in
+    `src/cryptonote_core/difficulty_engine_error.h`) on non-zero
+    FFI return codes.
+  - **FTL**: `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT` (`60*60*2` = 7200s)
+    becomes `SHEKYL_DAA_FTL_SECONDS` = 540s (zawy12-required
+    `N*T/20`). Tightens by 13.3×; reorgs more than 9 minutes deep
+    on local-clock disagreement are no longer accepted.
+  - **MTP**: `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` = 60 becomes
+    `SHEKYL_DAA_MTP_WINDOW` = 11. Tightens back from the Monero-era
+    widening to the CryptoNote-original window.
+
+  *Mechanical rewires* (value-preserving):
+
+  - `DIFFICULTY_TARGET_V2` (120s) consumers across the daemon,
+    wallet, RPC, and tests are rewired to
+    `SHEKYL_DAA_TARGET_SECONDS` (also 120s). 8 production sites
+    and 5 test sites; verified by the consensus-invariants gate
+    (`scripts/ci/check_consensus_invariants.sh` invariant 3).
+  - `CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V2` is preserved
+    with its RHS rewired from `DIFFICULTY_TARGET_V2` to
+    `SHEKYL_DAA_TARGET_SECONDS`; two live consumers
+    (`blockchain.cpp:4043`, `wallet2.cpp:7330`) are unaffected.
+  - `DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN` (60s V1 alias used by
+    tests as a generic "block time" multiplier) is replaced by
+    `SHEKYL_DAA_TARGET_SECONDS` (120s) at 4 non-deletion test
+    files (`bulletproof_plus.cpp`, `chaingen.cpp`,
+    `transactions_flow_test.cpp`,
+    `block_validation.cpp:267`). Semantic shift: 60s base → 120s
+    base for tests' block-time approximation, matching the actual
+    block rate.
+
+  *Deletions*:
+
+  - Seven inherited `#define`s removed from
+    `src/cryptonote_config.h`: `DIFFICULTY_TARGET_V[12]`,
+    `DIFFICULTY_WINDOW`, `DIFFICULTY_LAG` (with its `// !!!`
+    warning), `DIFFICULTY_CUT`, `DIFFICULTY_BLOCKS_COUNT`,
+    `DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN`. The V1 lock-delta
+    `CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1` is removed
+    (pre-genesis Monero behavior, dead under
+    `60-no-monero-legacy.mdc`).
+  - `next_difficulty` and `next_difficulty_64` deleted from
+    `src/cryptonote_basic/difficulty.{h,cpp}` (surgical, per the
+    pre-flight's drift-F6 amendment: the `check_hash` PoW family
+    in the same file is retained with ~12 live production
+    consumers).
+  - `tests/difficulty/{difficulty.cpp,data.txt,generate-data,gen_wide_data.py,wide_difficulty.py}`
+    deleted (~23 KB) — exercised the now-deleted CryptoNote DAA;
+    the `lwma1-cross-check` harness (Phase 2 vintage) is retained
+    in `tests/difficulty/CMakeLists.txt`.
+  - `lift_up_difficulty` helper plus `gen_block_invalid_nonce`
+    and `gen_block_invalid_binary_format` test classes removed
+    from `block_validation.{cpp,h}` (V1-only fixtures, already
+    disabled in the test driver).
+
+  *Regression tests added*:
+
+  - `tests/unit_tests/rpc_target_wire_contract.cpp` — pins the
+    public JSON-RPC wire contract for `mining_status.block_target`
+    and `get_info.target` at `120`. Both gtests plus the
+    `static_assert(SHEKYL_DAA_TARGET_SECONDS == 120, …)` static
+    pin remain after the cutover.
+  - `tests/unit_tests/stall_detection_calibration.cpp` — pins the
+    daemon's stall-detection calibration: 1/7200 false-positive
+    threshold, `{45, 30, 15, 10, 5}` expected-block counts across
+    the five Poisson windows, and the zero-blocks-tail-probability
+    boundary (the 600s window must NOT trip at λ=5; the four
+    longer windows must trip at λ ≥ 10).
+
+  *CI gate added*:
+
+  - `.github/workflows/consensus-invariants.yml` plus
+    `scripts/ci/check_consensus_invariants.sh` — three
+    source-level grep invariants (no live consumers of the
+    deleted DAA functions; no C-ABI in `rust/shekyl-difficulty`;
+    no orphaned references to the deleted `#define`s).
+    Shared landing pad for the upcoming RandomX v2 Phase 2f
+    symbol-isolation checks. Binary-level `nm`-on-`shekyld`
+    verification is a deferred enhancement (recorded in this
+    entry as a follow-up below).
+
+  *Pre-flight drift findings closed*:
+
+  - **F1** — surgical (not wholesale) deletion of
+    `tests/difficulty/`; the `lwma1-cross-check` harness stays.
+  - **F2** — `CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V2`
+    preserved with rewired RHS (option B); `_V1` deleted.
+  - **F3** — V1 `next_difficulty(...)` fixtures in
+    `block_validation.cpp` deleted along with the helper that
+    drove them.
+  - **F4** — `DIFFICULTY_TARGET_V2` consumer count corrected from
+    "~14 sites across 9 files" to the actual 8 production + 5
+    test sites enumerated by the commit-6 sweep.
+  - **F5** — `DIFFICULTY_TARGET_V2` consumer **undercount in
+    `blockchain.cpp`**: the plan's §9.7 enumeration missed two
+    sites at lines 4239 / 4243 (an MTP-window correction and a
+    `timestamps.back() + DIFFICULTY_TARGET_V2` adjustment inside
+    `check_block_timestamp`); both rewired to
+    `SHEKYL_DAA_TARGET_SECONDS`. `wallet2.cpp`'s lines 181, 182,
+    5975, 11548 were never drift — the earlier text mis-attributed
+    F5 to `wallet2.cpp`; corrected 2026-05-18 per PR #53 Copilot
+    review C-6.
+  - **F6** — surgical (not wholesale) deletion of
+    `src/cryptonote_basic/difficulty.{h,cpp}`: the `check_hash`
+    PoW-validation family is retained; only the
+    `next_difficulty` family is deleted.
+  - **F7** — `check_difficulty_checkpoints()` is NOT a deletion
+    target. Pre-flight §14 (and `DAA_LWMA1.md` §7.1) erroneously
+    enumerated it as a symbol-isolation deletion candidate. The
+    function in `blockchain.cpp:1066` is a checkpoint-cumulative-
+    difficulty comparison independent of the deleted DAA functions;
+    retained. The spec doc and pre-flight are amended in this
+    commit.
+
+  *Reviewer-map structure* (per
+  `07-consensus-atomic-cutovers.mdc` sub-clause 4.3):
+
+  - **A. Consensus-affecting changes** (priority attention):
+    `blockchain.cpp` DAA rewires (commit 3), FTL rewires
+    (commit 4), MTP rewires (commit 5), `cryptonote_config.h`
+    deletions (commit 7), `difficulty.cpp` deletions (commit 8).
+  - **B. Mechanical rewires** (value-unchanged):
+    `DIFFICULTY_TARGET_V2` → `SHEKYL_DAA_TARGET_SECONDS` (commit
+    6), `DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN` rewires in tests
+    (commit 7).
+  - **C. Deletions**: legacy DAA tests + V1 fixtures (commit 9).
+  - **D. New artifacts**: regression tests (commits 1, 2),
+    CI gate (commit 10), this changelog entry (commit 11).
+
+  *Rollback procedure* (per sub-clause 4.4):
+
+  If consensus breaks post-merge, the reversion is to revert the
+  merge commit on `dev` (single non-FF merge per
+  `06-branching.mdc`) and re-tag. Because the cutover is atomic
+  (FTL/MTP/DAA all in one PR), no partial reversion is required.
+  The pre-merge state of `blockchain.cpp`'s three
+  `next_difficulty` call sites, the FTL/MTP consumer surfaces,
+  and the deleted `#define`s are all captured in the pre-cutover
+  `dev` SHA recorded in the PR description; reverting the merge
+  restores them byte-identically.
+
+  *Follow-up*: binary-level `nm shekyld | rg -q '^.* (T|U)
+  (next_difficulty_64|next_difficulty)\b'` symbol-isolation check.
+  Source-level grep (this PR's invariant 1) is a necessary
+  precondition for binary absence; the binary-level check is a
+  deferred enhancement when CI is restructured to expose the
+  linked daemon binary to a post-link grep step. Tracked in
+  `docs/FOLLOWUPS.md`.
+
 - **LWMA-1 difficulty-adjustment migration — Phase 0 design docs**
   (`feat/daa-lwma1-phase0-design`, 2026-05-17). Adds two Phase 0
   design documents under `docs/design/`:

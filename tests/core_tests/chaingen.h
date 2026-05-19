@@ -422,7 +422,11 @@ cryptonote::account_public_address get_address(const cryptonote::account_base& i
 cryptonote::account_public_address get_address(const cryptonote::tx_destination_entry& inp);
 
 inline cryptonote::difficulty_type get_test_difficulty(const std::optional<uint8_t>& hf_ver=std::nullopt) {return !hf_ver || *hf_ver <= 1 ? 1 : 2;}
-inline uint64_t current_difficulty_window(const std::optional<uint8_t>& hf_ver=std::nullopt){ return !hf_ver || *hf_ver <= 1 ? DIFFICULTY_TARGET_V1 : DIFFICULTY_TARGET_V2; }
+// Shekyl is single-DAA from genesis (LWMA-1 with T = SHEKYL_DAA_TARGET_SECONDS).
+// The hf_ver parameter is retained for caller-site source compatibility but
+// has no effect; pre-genesis Monero hard-fork dispatch is removed per
+// .cursor/rules/60-no-monero-legacy.mdc.
+inline uint64_t current_difficulty_window(const std::optional<uint8_t>& /*hf_ver*/=std::nullopt) { return SHEKYL_DAA_TARGET_SECONDS; }
 
 cryptonote::tx_destination_entry build_dst(const var_addr_t& to, bool is_subaddr=false, uint64_t amount=0);
 std::vector<cryptonote::tx_destination_entry> build_dsts(const var_addr_t& to1, bool sub1=false, uint64_t am1=0);

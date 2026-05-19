@@ -1977,11 +1977,27 @@ Mirroring `RANDOMX_V2_RUST.md` §7's two-invariant pattern:
 
 ### 7.1 No legacy-DAA symbols in the daemon
 
-CI runs `nm shekyld | rg -q '^.* (T|U) (next_difficulty_64|next_difficulty|check_difficulty_checkpoints)\b'`
+**Phase 4 implementation note (F7).** The match list below
+originally enumerated `check_difficulty_checkpoints` alongside
+the `next_difficulty` family; implementation surfaced that
+`check_difficulty_checkpoints()` (`blockchain.cpp:1066`) is a
+checkpoint-cumulative-difficulty comparison independent of the
+deleted DAA algorithms — retained, not deleted. The match list
+below is corrected to the two `next_difficulty*` symbols. The
+landed CI invariant in
+[`scripts/ci/check_consensus_invariants.sh`](../../scripts/ci/check_consensus_invariants.sh)
+implements **source-level** grep (file-grep against `src/**`),
+which is necessary for the binary-level `nm` check below; the
+binary-level check itself is deferred to a V3.x CI hygiene pass
+per `docs/FOLLOWUPS.md`.
+
+CI runs `nm shekyld | rg -q '^.* (T|U) (next_difficulty_64|next_difficulty)\b'`
 and **fails on match**. These are the symbols defined in inherited
 `difficulty.cpp` / declared in `difficulty.h`. Phase 4 deletes those
-files; this invariant is the structural backstop against accidental
-restoration via inherited-code search-and-paste.
+two functions; this invariant is the structural backstop against
+accidental restoration via inherited-code search-and-paste. The
+`check_hash` PoW-validation family in the same file is retained
+(F6).
 
 ### 7.2 `shekyl-difficulty` has no C ABI
 
@@ -2380,6 +2396,47 @@ release time" split (`RANDOMX_V2_PLAN.md` Phase 2e).
 Concrete files and constants to remove at Phase 4 of
 [`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md):
 
+**Implementation amendments (2026-05-18 close).** Phase 4 landed on
+`dev` as `feat/daa-lwma1-phase4` on 2026-05-18. Seven drift findings
+(F1–F7, recorded in `DAA_LWMA1_PLAN.md` "Phase 4 implementation
+drift findings") amended this section's enumerations during
+implementation. The load-bearing amendments are:
+
+- **§9.1 amended (F1, F6).** `tests/difficulty/` directory deletion
+  is **surgical**, not wholesale: the `lwma1-cross-check` C++
+  harness (Phase 2 vintage) is retained, and `difficulty.cpp` +
+  legacy test-data files are deleted. `src/cryptonote_basic/difficulty.{h,cpp}`
+  deletion is **surgical**: only `next_difficulty_64` and
+  `next_difficulty` are deleted; the `check_hash` PoW-validation
+  family is retained because ~12 production consumers in
+  `blockchain.cpp` and `cryptonote_core.cpp` depend on it.
+- **§9.2 amended (F2).** `CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V2`
+  is **preserved** with its RHS rewired from `DIFFICULTY_TARGET_V2`
+  to `SHEKYL_DAA_TARGET_SECONDS`; only the `_V1` variant
+  (Monero-era pre-genesis) is deleted.
+- **§9.7 amended (F4, F5).** The "~14 consumers across 9 files"
+  estimate refined to **8 production + 5 test = 13 total across 7
+  files**. F5 is a **two-site undercount in `blockchain.cpp`** at
+  lines `4239, 4243` (an MTP-window correction and a
+  `timestamps.back() + DIFFICULTY_TARGET_V2` adjustment, both
+  inside `check_block_timestamp`) that the plan's §9.7 enumeration
+  missed; rewired to `SHEKYL_DAA_TARGET_SECONDS` alongside the
+  plan-enumerated sites. `wallet2.cpp`'s `181, 182, 5975, 11548`
+  enumeration was always correct (per §11) — no drift there;
+  the earlier amendment text mis-attributed F5 to `wallet2.cpp`,
+  corrected 2026-05-18 (PR #53 Copilot review C-6).
+- **§7.1 amended (F7).** `check_difficulty_checkpoints()` is **not**
+  a symbol-isolation deletion candidate. The function is a
+  checkpoint-cumulative-difficulty comparison independent of the
+  deleted DAA algorithms; retained. The pre-flight and §7.1's
+  earlier enumeration are corrected.
+
+The amendments narrow scope in each case; no work-item count
+expansion occurred. The consensus-invariants CI gate
+(`scripts/ci/check_consensus_invariants.sh`) is the source of truth
+for the post-cutover deletion surface; the enumerations below are
+preserved for design-intent context.
+
 ### 9.1 Files deleted in full
 
 - [`src/cryptonote_basic/difficulty.cpp`](../../src/cryptonote_basic/difficulty.cpp)
@@ -2488,10 +2545,15 @@ Three call sites consume the inherited `next_difficulty` /
 
 - `Blockchain::get_difficulty_for_next_block()` (~line 965) —
   rewires to `shekyl_difficulty_lwma1_next`.
-- `Blockchain::check_difficulty_checkpoints()` (~line 1021) —
-  rewires to the same; the recalculation loop's "use historical
-  difficulty target" framing collapses because LWMA-1 has only one
-  parameter set, not a v1/v2 split.
+- `Blockchain::recalculate_difficulties()` (~line 1021) —
+  rewires to the same. **Phase 4 implementation note (F7):** the
+  third call site here is `recalculate_difficulties`, not
+  `check_difficulty_checkpoints` as an earlier draft of this
+  section enumerated. `check_difficulty_checkpoints()` is a
+  checkpoint-cumulative-difficulty comparison that does not call
+  `next_difficulty` and is retained unchanged. The recalculation
+  loop's "use historical difficulty target" framing collapses
+  because LWMA-1 has only one parameter set, not a v1/v2 split.
 - `Blockchain::get_next_difficulty_for_alternative_chain()`
   (~line 1325) — rewires to the same.
 

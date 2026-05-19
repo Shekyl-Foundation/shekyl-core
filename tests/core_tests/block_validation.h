@@ -89,12 +89,12 @@ struct gen_block_big_minor_version : public gen_block_accepted_base<2>
   bool generate(std::vector<test_event_entry>& events) const;
 };
 
-struct gen_block_ts_not_checked : public gen_block_accepted_base<BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW>
+struct gen_block_ts_not_checked : public gen_block_accepted_base<SHEKYL_DAA_MTP_WINDOW>
 {
   bool generate(std::vector<test_event_entry>& events) const;
 };
 
-struct gen_block_ts_in_past : public gen_block_verification_base<BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW>
+struct gen_block_ts_in_past : public gen_block_verification_base<SHEKYL_DAA_MTP_WINDOW>
 {
   bool generate(std::vector<test_event_entry>& events) const;
 };
@@ -108,11 +108,6 @@ struct gen_block_invalid_prev_id : public gen_block_verification_base<1>
 {
   bool generate(std::vector<test_event_entry>& events) const;
   bool check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/);
-};
-
-struct gen_block_invalid_nonce : public gen_block_verification_base<3>
-{
-  bool generate(std::vector<test_event_entry>& events) const;
 };
 
 struct gen_block_no_miner_tx : public gen_block_verification_base<1>
@@ -193,18 +188,6 @@ struct gen_block_has_invalid_tx : public gen_block_verification_base<1>
 struct gen_block_is_too_big : public gen_block_verification_base<1>
 {
   bool generate(std::vector<test_event_entry>& events) const;
-};
-
-struct gen_block_invalid_binary_format : public test_chain_unit_base
-{
-  gen_block_invalid_binary_format();
-  bool generate(std::vector<test_event_entry>& events) const;
-  bool check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/);
-  bool check_all_blocks_purged(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
-  bool corrupt_blocks_boundary(cryptonote::core& c, size_t ev_index, const std::vector<test_event_entry>& events);
-
-private:
-  size_t m_corrupt_blocks_begin_idx;
 };
 
 struct gen_block_late_v1_coinbase_tx : public gen_block_verification_base<1>

@@ -849,6 +849,48 @@ from the plan + spec doc + this pre-flight's drift findings.
 Implementation begins on `feat/daa-lwma1-phase4` after this
 pre-flight commits to `dev`.
 
+## §20 Implementation close (2026-05-18)
+
+Phase 4 landed on `dev` as `feat/daa-lwma1-phase4` (eleven-commit
+decomposition, matching §18 above). Implementation surfaced two
+additional drift findings on top of the five recorded at
+pre-flight time (F1–F5); both are absorbed under §18's
+"in-scope-surfaces" disposition:
+
+- **F6 — surgical (not wholesale) deletion of `difficulty.{h,cpp}`**
+  (work-item 2, Commit 8). The pre-flight specified wholesale
+  deletion of the file pair. Implementation surfaced that
+  `check_hash`, `check_hash_64`, `mul`, `cadd`, `cadc`, and SSE2
+  PoW-validation helpers share the translation unit with the DAA
+  functions and have ~12 production consumers. Disposition:
+  delete only `next_difficulty_64` and `next_difficulty` plus the
+  `#include "cryptonote_config.h"` they pulled in; retain the
+  `check_hash` family. The disposition narrows scope and does not
+  trigger scope-creep-loses-the-exception per
+  `07-consensus-atomic-cutovers.mdc` "Compensating discipline."
+- **F7 — `check_difficulty_checkpoints()` not a deletion target**
+  (Commit 10). The pre-flight §14 and spec §7.1 enumerated this
+  function in the symbol-isolation invariant's match list.
+  Implementation review surfaced that the function is a
+  checkpoint-cumulative-difficulty comparison independent of the
+  deleted DAA algorithms; retained. The
+  `scripts/ci/check_consensus_invariants.sh` invariant 1 match
+  list is the corrected list (two `next_difficulty*` symbols, no
+  `check_difficulty_checkpoints`). The spec doc's §7.1 and §9.4
+  are amended in Commit 11 to record the correction.
+
+Both findings narrow rather than expand scope; both are recorded
+in `DAA_LWMA1_PLAN.md` "Phase 4 implementation drift findings"
+section as the source of truth.
+
+The eleven-commit decomposition matched §18 exactly with one
+implementation-time addition: **F1 expanded Commit 9's scope** to
+include the surgical retention of the `lwma1-cross-check` C++
+harness in `tests/difficulty/`. The commit-9 file list grew from
+"wholesale `tests/difficulty/` directory delete" to "delete the
+six legacy CryptoNote-DAA files; retain the harness." The work
+item 7 in `DAA_LWMA1_PLAN.md` Phase 4 is amended in Commit 11.
+
 If implementation surfaces a finding outside this pre-flight's
 scope, the disposition (per
 `07-consensus-atomic-cutovers.mdc` "Compensating discipline when
