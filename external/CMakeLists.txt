@@ -109,17 +109,46 @@ if(BUILD_RANDOMX_V2_MINER_LIB)
   set(RANDOMX_V2_LIB
       "${RANDOMX_V2_INSTALL}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}randomx${CMAKE_STATIC_LIBRARY_SUFFIX}")
 
+  # Base CMAKE_ARGS forwarded into the sub-build unconditionally.
+  set(_RANDOMX_V2_CMAKE_ARGS
+    -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+    -DCMAKE_INSTALL_LIBDIR=lib
+    -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+    -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+    -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+  )
+
+  # Cross-compile / platform-pinning settings forwarded when the parent
+  # configure defined them. Each variable is only appended when set, so
+  # the sub-build doesn't see spurious -DVAR= overrides that would clear
+  # its own toolchain defaults. The list tracks the standard CMake
+  # cross-build knobs and matches the subset the Shekyl daemon's
+  # production CI (Guix + the cross-build matrices in
+  # .github/workflows/depends.yml) relies on.
+  foreach(_var IN ITEMS
+      CMAKE_TOOLCHAIN_FILE
+      CMAKE_SYSROOT
+      CMAKE_FIND_ROOT_PATH
+      CMAKE_OSX_ARCHITECTURES
+      CMAKE_OSX_DEPLOYMENT_TARGET
+      CMAKE_OSX_SYSROOT
+      CMAKE_ANDROID_NDK
+      CMAKE_ANDROID_ARCH_ABI
+      CMAKE_SYSTEM_NAME
+      CMAKE_SYSTEM_PROCESSOR
+      CMAKE_C_COMPILER_LAUNCHER
+      CMAKE_CXX_COMPILER_LAUNCHER)
+    if(DEFINED ${_var})
+      list(APPEND _RANDOMX_V2_CMAKE_ARGS "-D${_var}=${${_var}}")
+    endif()
+  endforeach()
+
   ExternalProject_Add(randomx_v2_external
     SOURCE_DIR        "${RANDOMX_V2_SRC}"
     PREFIX            "${CMAKE_CURRENT_BINARY_DIR}/randomx-v2-build"
     INSTALL_DIR       "${RANDOMX_V2_INSTALL}"
-    CMAKE_ARGS
-      -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
-      -DCMAKE_INSTALL_LIBDIR=lib
-      -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
-      -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-      -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
-      -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+    CMAKE_ARGS        ${_RANDOMX_V2_CMAKE_ARGS}
     BUILD_BYPRODUCTS  "${RANDOMX_V2_LIB}"
     UPDATE_DISCONNECTED TRUE
   )
@@ -131,6 +160,26 @@ if(BUILD_RANDOMX_V2_MINER_LIB)
     INTERFACE_INCLUDE_DIRECTORIES "${RANDOMX_V2_INSTALL}/include"
   )
   add_dependencies(shekyl_randomx_v2 randomx_v2_external)
+
+  # Phase 1 single-config disposition (Copilot finding C-1, deferred).
+  # The install path randomx-v2-install/ is config-agnostic. On
+  # multi-config generators (MSVC, Xcode) that build Debug AND Release
+  # in the same build tree, this can collide: the second install
+  # overwrites the first. Phase 1 has no consumer of
+  # shekyl_randomx_v2 (the daemon does not link it), so the collision
+  # is latent and never observable. Phase 2 introduces the first
+  # consumer (the rust/shekyl-pow-randomx/ cross-check tests); the
+  # multi-config split (per-CONFIG install dir + IMPORTED_LOCATION_<CONFIG>)
+  # lands then under docs/FOLLOWUPS.md item
+  # "RandomX v2 ExternalProject_Add: per-CONFIG install/imported-location
+  # for multi-config generators".
+  if(CMAKE_CONFIGURATION_TYPES)
+    message(STATUS
+      "RandomX v2: multi-config generator detected; Phase 1 wiring uses "
+      "a single-config install path. Latent until Phase 2 consumer "
+      "lands; see docs/FOLLOWUPS.md and the §10 implementation-time "
+      "disposition note in docs/design/RANDOMX_V2_PHASE1_PLAN.md.")
+  endif()
 
   message(STATUS
     "RandomX v2: building Shekyl-Foundation fork (pin aaafe71, v2.0.1) "

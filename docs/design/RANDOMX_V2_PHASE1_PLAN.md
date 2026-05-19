@@ -1,8 +1,10 @@
 # RandomX v2 — Track A Phase 1 plan
 
 **Status.** Implementation. The `feat/randomx-v2-phase1` branch was
-cut from `dev` at `6b59b54ee` on 2026-05-18 and is now in PR review;
-the post-merge close-out section is at §21 below.
+cut from `dev` at `6b59b54ee` on 2026-05-18 and is now in PR #54
+review. The implementation-close record (file-by-file diff table,
+commit decomposition, build-smoke outcomes, implementation-time
+dispositions, and post-merge close-out task list) is at §10 below.
 
 **Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A
 — Phase 1" is the binding two-bullet scope; this doc expands it into
@@ -15,12 +17,13 @@ Phase 1 had zero file overlap with PR #53 (the DAA Phase 4 PR);
 this branch was cut after #53 merged for branch-hygiene reasons, not
 technical ones (per §6 below).
 
-**Branch (forthcoming).** `feat/randomx-v2-phase1`, to be cut off
-`dev` once implementation begins. The soft sequencing precondition
-(PR #53 landed before this branch is cut) has been satisfied: PR #53
-merged into `dev` at commit `ef6f6bb66` on 2026-05-18. Per
-`06-branching.mdc` rule 2 the branch is short-lived (target ≤5
-working days, ≤10 commits); per rule 3 dev is not merged into it
+**Branch.** `feat/randomx-v2-phase1` (cut from `dev` at `6b59b54ee`
+on 2026-05-18; pushed to origin as PR #54). The soft sequencing
+precondition (PR #53 landed before this branch is cut) was satisfied
+when PR #53 merged into `dev` at `ef6f6bb66` on 2026-05-18, ~25
+minutes before this branch was cut. Per `06-branching.mdc` rule 2 the
+branch is short-lived (target ≤5 working days, ≤10 commits — landed
+in 3 commits in <1 day); per rule 3 `dev` is not merged into it
 mid-flight.
 
 **Scope envelope.** Single PR. Target ≤250 lines of diff, ≤5 commits.
@@ -546,15 +549,26 @@ Phase 1 landed on `dev` as `feat/randomx-v2-phase1` (three commits;
 matches the planned ≤5 envelope from the top of this doc). The
 file-by-file diff matches §3 exactly:
 
+Numbers below are the per-file diff stats produced by `git diff
+--numstat origin/dev..HEAD` at the implementation-close commit
+(commit 3 in the §10 commit list). The Copilot-fix commit (commit 4)
+that addresses PR #54 review findings C-1 through C-4 lands on top
+and adjusts the totals; the post-merge close-out task list at the
+end of this §10 backfills the final as-merged numbers. The table
+maps each file to the §3 sub-section that proposed it, which is
+the property the implementation must satisfy — the diff counts are
+informative, not load-bearing.
+
 | File | Lines added | Lines removed | Match §3 |
 | --- | ---: | ---: | --- |
 | `.gitmodules` | 3 | 0 | §3.1 |
 | `external/randomx-v2` (gitlink at `aaafe71`) | 1 | 0 | §3.2 |
 | `CMakeLists.txt` (option declaration) | 13 | 0 | §3.3 |
 | `external/CMakeLists.txt` (option block) | 60 | 0 | §3.4 |
-| `docs/design/RANDOMX_V2_PLAN.md` | — | — | §3.5 |
-| `docs/CHANGELOG.md` | — | — | §3.6 |
-| `docs/FOLLOWUPS.md` | — | — | §3.7 (no entry) |
+| `docs/design/RANDOMX_V2_PLAN.md` (status flip) | 9 | 6 | §3.5 |
+| `docs/CHANGELOG.md` (`[Unreleased]` entry) | 27 | 0 | §3.6 |
+| `docs/design/RANDOMX_V2_PHASE1_PLAN.md` (this §10) | 110 | 10 | §3 (closes the plan) |
+| `docs/FOLLOWUPS.md` | 0 | 0 | §3.7 (no entry at implementation-close; D2 entry lands in Copilot-fix commit) |
 
 **Commit decomposition.**
 
@@ -607,32 +621,80 @@ push; matches §4):
   deliverable (alongside the `rust/shekyl-pow-randomx/` crate
   that becomes the first consumer of `shekyl_randomx_v2`).
 
-**One implementation-time disposition not anticipated at plan time.**
-The `check_submodule(external/randomx-v2)` call in
-`CMakeLists.txt:459-463` was deliberately **not** added in this PR.
-The submodule is opt-in (only used when
-`BUILD_RANDOMX_V2_MINER_LIB=ON`), and `ExternalProject_Add` fails
-loudly at configure time if the source tree is empty (the same
-"submodule not initialized" failure mode `check_submodule` guards
-against for v1). Adding the call would require moving the option
-declaration earlier (above line 443) or duplicating the gating
-logic. Phase 3 promotes v2 to a default-built dependency; that is
-the right time to add the call. This is a narrow narrowing of
-scope, not an expansion, and stays inside the
-`07-consensus-atomic-cutovers.mdc`-style implementation-drift
-discipline.
+**Implementation-time dispositions** (not anticipated at plan time):
+
+1. **D1 — `check_submodule(external/randomx-v2)` deliberately
+   omitted.** The submodule is opt-in (only used when
+   `BUILD_RANDOMX_V2_MINER_LIB=ON`), and `ExternalProject_Add`
+   fails loudly at configure time if the source tree is empty (the
+   same "submodule not initialized" failure mode `check_submodule`
+   guards against for v1). Adding the call would require moving the
+   option declaration earlier (above line 443 in `CMakeLists.txt`)
+   or duplicating the gating logic. Phase 3 promotes v2 to a
+   default-built dependency; that is the right time to add the
+   call. This is a narrowing of scope, not an expansion, and stays
+   inside the `07-consensus-atomic-cutovers.mdc`-style
+   implementation-drift discipline.
+
+2. **D2 — `IMPORTED_LOCATION` is single-config; per-`CONFIG`
+   wiring deferred to Phase 2.** Surfaced by Copilot finding C-1
+   on PR #54. On single-config generators (Ninja, Make — the
+   production Shekyl build pipeline including Guix) the current
+   single-path wiring is correct by construction. On multi-config
+   generators (MSVC, Xcode), Debug ↔ Release in the same build
+   tree would have the second install overwrite the first.
+   **Phase 1 has no consumer of `shekyl_randomx_v2`** (the daemon
+   does not link it), so the collision is latent and never
+   observable in shipped artifacts. Phase 2 introduces the first
+   consumer (`rust/shekyl-pow-randomx/` cross-check tests); the
+   per-`CONFIG` split (per-`CONFIG` install dir +
+   `IMPORTED_LOCATION_<CONFIG>`) lands then. The
+   `external/CMakeLists.txt` block emits a `STATUS` message under
+   `CMAKE_CONFIGURATION_TYPES` so the latent condition is visible
+   to anyone running `cmake -G "Visual Studio 17 2022"
+   -DBUILD_RANDOMX_V2_MINER_LIB=ON` against this PR. Recorded in
+   [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) under "RandomX v2
+   `ExternalProject_Add`: per-`CONFIG` install path and
+   `IMPORTED_LOCATION_<CONFIG>` for multi-config generators."
+   Target: V3.x — RandomX v2 Phase 2.
+
+3. **D3 — Toolchain pass-through expanded beyond the §3.4
+   canonical list.** Surfaced by Copilot finding C-2 on PR #54.
+   The §3.4 plan text proposed forwarding only
+   `CMAKE_C_COMPILER` and `CMAKE_CXX_COMPILER` through
+   `CMAKE_ARGS`. The implementation expanded this to the standard
+   CMake cross-build set (`CMAKE_TOOLCHAIN_FILE`,
+   `CMAKE_SYSROOT`, `CMAKE_FIND_ROOT_PATH`,
+   `CMAKE_OSX_ARCHITECTURES`, `CMAKE_OSX_DEPLOYMENT_TARGET`,
+   `CMAKE_OSX_SYSROOT`, `CMAKE_ANDROID_NDK`,
+   `CMAKE_ANDROID_ARCH_ABI`, `CMAKE_SYSTEM_NAME`,
+   `CMAKE_SYSTEM_PROCESSOR`, and the `CMAKE_*_COMPILER_LAUNCHER`
+   variables). Each is appended only when `DEFINED`, so the
+   sub-build's own toolchain defaults are preserved when the
+   parent doesn't define the variable. Aligns the v2 sub-build
+   with the cross-compile patterns the Shekyl daemon already
+   uses in `.github/workflows/depends.yml` and the Guix
+   reproducible-build pipeline. The disposition narrows the
+   blast-radius of a future cross-compile regression to a single
+   site (this `foreach`), not an expansion of scope.
 
 **Post-merge close-out tasks** (mirrors the LWMA-1 Phase 4 pattern):
 
 1. Backfill `<commit-1>` / `<commit-2>` / `<commit-3>` placeholders
-   in this §10 with the actual SHAs.
-2. Backfill `<phase1-merge>` / `<phase1-pr>` / `<phase1-date>`
+   in this §10 with the actual SHAs, plus the Copilot-fix commit
+   SHA (commit 4 — addresses PR #54 review findings C-1 / C-2 /
+   C-3 / C-4, landing dispositions D2 and D3 in this §10 and the
+   D2 entry in [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)).
+2. Refresh the per-file diff-stat table in this §10 with the
+   final as-merged numbers (`git diff --numstat <base>..<merge>`),
+   since the implementation-close snapshot above predates commit 4.
+3. Backfill `<phase1-merge>` / `<phase1-pr>` / `<phase1-date>`
    placeholders in
    [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A — Phase
    1" status paragraph.
-3. Archive the pre-merge branch tip as
+4. Archive the pre-merge branch tip as
    `archive/feat-randomx-v2-phase1-<YYYY-MM-DD>` and delete the
    `feat/randomx-v2-phase1` branch (local + remote) per
    `06-branching.mdc` rule 5.
-4. Verify `external/randomx` v1 submodule SHA `102f8acf` is
+5. Verify `external/randomx` v1 submodule SHA `102f8acf` is
    unchanged on `dev` post-merge (orthogonality check).
