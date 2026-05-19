@@ -5,31 +5,45 @@
 ### Added
 
 - **RandomX v2 — Phase 1: pinned submodule + out-of-tree build wiring**
-  (`feat/randomx-v2-phase1`). Adds `external/randomx-v2` submodule
-  pinned to Shekyl-Foundation/RandomX SHA
+  (`feat/randomx-v2-phase1`, PR #54, merge commit `c0c4a11e5`,
+  2026-05-19). Adds `external/randomx-v2` submodule pinned to
+  Shekyl-Foundation/RandomX SHA
   `aaafe71322df6602c21a5c72937ac284724ae561` (v2.0.1 release;
   identical to `tevador/RandomX:master` at pin time, per the
   dependency-discipline verification in
   `docs/design/RANDOMX_V2_PHASE1_PLAN.md` §1.3). Adds
   `BUILD_RANDOMX_V2_MINER_LIB` CMake option (default `OFF`). When
-  `ON`, an `ExternalProject_Add` block in `external/CMakeLists.txt`
-  builds the v2 fork out-of-tree under
+  `ON` on a single-config generator (Ninja, Make), an
+  `ExternalProject_Add` block in `external/CMakeLists.txt` builds
+  the v2 fork out-of-tree under
   `${CMAKE_BINARY_DIR}/external/randomx-v2-build/` and exposes the
   `shekyl_randomx_v2` `IMPORTED` static-library target plus its
-  include directory. The out-of-tree build pattern avoids the
-  target-name collision with `external/randomx` (v1.2.1), which
-  declares the same `project(RandomX)` and `add_library(randomx
-  ...)` symbols; see `RANDOMX_V2_PHASE1_PLAN.md` §2 for the
-  collision analysis and disposition rationale. No Shekyl C++
-  consumer links the new target in this PR; first consumers are
-  Phase 2 cross-check tests against the canonical v2 implementation
-  (the new Rust crate `rust/shekyl-pow-randomx/`) and Phase 3's
-  miner cutover. The existing `external/randomx` (v1.2.1 at
-  `102f8acf`) is unchanged; the v1 fallback path per
+  include directory. The block forwards the standard CMake
+  cross-build knobs (toolchain file, sysroot, Apple/Android
+  settings, system name/processor, compiler launchers) to the
+  sub-build via a semicolon-safe `LIST_SEPARATOR`-based forwarding
+  pattern. On multi-config generators (MSVC, Xcode, Ninja
+  Multi-Config) the option fails with a `FATAL_ERROR` directing
+  the developer to `-G Ninja` plus an explicit
+  `-DCMAKE_BUILD_TYPE`; per-`CONFIG` wiring is the V3.x Phase 2
+  FOLLOWUPS item alongside the first real consumer. The
+  out-of-tree build pattern avoids the target-name collision with
+  `external/randomx` (v1.2.1), which declares the same
+  `project(RandomX)` and `add_library(randomx ...)` symbols; see
+  `RANDOMX_V2_PHASE1_PLAN.md` §2 for the collision analysis and
+  disposition rationale. No Shekyl C++ consumer links the new
+  target in this PR; first consumers are Phase 2 cross-check
+  tests against the canonical v2 implementation (the new Rust
+  crate `rust/shekyl-pow-randomx/`) and Phase 3's miner cutover.
+  The existing `external/randomx` (v1.2.1 at `102f8acf`) is
+  unchanged; the v1 fallback path per
   `docs/design/RANDOMX_V1_FALLBACK.md` §1 remains reachable. See
   `docs/design/RANDOMX_V2_PHASE1_PLAN.md` for the full scope, the
   `ExternalProject_Add` configuration rationale, the build-smoke
-  test results, and the reversibility plan.
+  test results, the §10 implementation-time dispositions (D1
+  `check_submodule` omission, D2 multi-config fail-fast, D3
+  toolchain forwarding expansion, D4 semicolon-escape), and the
+  reversibility plan.
 
 - **LWMA-1 difficulty-adjustment migration — Phase 4 C++ cutover**
   (`feat/daa-lwma1-phase4`, 2026-05-18). Lands the consensus-atomic

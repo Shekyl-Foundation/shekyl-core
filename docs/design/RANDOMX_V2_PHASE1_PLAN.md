@@ -543,37 +543,46 @@ in `docs/FOLLOWUPS.md` and stay out of the PR.
 
 ---
 
-## §10 Implementation close (2026-05-18)
+## §10 Implementation close (2026-05-18 → 2026-05-19)
 
-Phase 1 is implemented on `feat/randomx-v2-phase1` and proposed in
-PR #54 against `dev` (three implementation-close commits plus the
-Copilot-fix layers; remains within the planned ≤5 envelope from the
-top of this doc). The file-by-file diff matches §3 exactly. On
-merge, the post-merge close-out commit rewrites this paragraph to
-"landed on `dev` as `feat/randomx-v2-phase1`" with the merge SHA
-and merge date — see the post-merge close-out task list at the end
-of this §10.
+Phase 1 landed on `dev` via PR #54 (merge commit `c0c4a11e5`,
+2026-05-19) on branch `feat/randomx-v2-phase1` (cut from `dev` at
+`6b59b54ee` on 2026-05-18). Five commits total: three
+implementation-close commits (`409f80e8d`, `a3c874275`,
+`1f5d6d953`) plus two Copilot-fix layers (`60bba8997` addressing
+C-1/C-2/C-3/C-4 and `751354b1a` addressing C-5/C-6/C-8/C-9). At the
+≤5-commit envelope from §9.
 
-Numbers below are the per-file diff stats produced by `git diff
---numstat origin/dev..HEAD` at the implementation-close commit
-(commit 3 in the §10 commit list). The Copilot-fix commit (commit 4)
-that addresses PR #54 review findings C-1 through C-4 lands on top
-and adjusts the totals; the post-merge close-out task list at the
-end of this §10 backfills the final as-merged numbers. The table
-maps each file to the §3 sub-section that proposed it, which is
-the property the implementation must satisfy — the diff counts are
-informative, not load-bearing.
+The file-by-file diff matches §3's proposed file list exactly. The
+diff-line totals exceed §9's ≤250-line envelope (final tally: 477
+added / 24 removed across 8 files), driven primarily by the §10
+dispositions and the FOLLOWUPS entry that landed during Copilot
+triage rounds (D2 multi-config `FATAL_ERROR`, D3 toolchain
+forwarding, D4 semicolon-escape). The line envelope was sized for
+the implementation footprint; the Copilot-triage addenda are
+discipline-cost the project absorbs because the alternative —
+deferring the dispositions to a follow-up PR — splits the
+record-keeping for the same set of edits. The §3 file-list
+envelope (the load-bearing scope statement) was respected
+throughout.
+
+Numbers below are the final as-merged per-file diff stats produced
+by `git diff --numstat 6b59b54ee..c0c4a11e5` (the PR's merge-base
+on `dev` to the merge commit). The table maps each file to the §3
+sub-section that proposed it, which is the property the
+implementation must satisfy — the diff counts are informative, not
+load-bearing.
 
 | File | Lines added | Lines removed | Match §3 |
 | --- | ---: | ---: | --- |
 | `.gitmodules` | 3 | 0 | §3.1 |
 | `external/randomx-v2` (gitlink at `aaafe71`) | 1 | 0 | §3.2 |
 | `CMakeLists.txt` (option declaration) | 13 | 0 | §3.3 |
-| `external/CMakeLists.txt` (option block) | 60 | 0 | §3.4 |
-| `docs/design/RANDOMX_V2_PLAN.md` (status flip) | 9 | 6 | §3.5 |
+| `external/CMakeLists.txt` (option block + D2 fail-fast + D3 toolchain forward + D4 list-separator escape) | 136 | 0 | §3.4 |
+| `docs/design/RANDOMX_V2_PLAN.md` (status flip + tense correction) | 9 | 6 | §3.5 |
 | `docs/CHANGELOG.md` (`[Unreleased]` entry) | 27 | 0 | §3.6 |
-| `docs/design/RANDOMX_V2_PHASE1_PLAN.md` (this §10) | 110 | 10 | §3 (closes the plan) |
-| `docs/FOLLOWUPS.md` | 0 | 0 | §3.7 (no entry at implementation-close; D2 entry lands in Copilot-fix commit) |
+| `docs/design/RANDOMX_V2_PHASE1_PLAN.md` (this §10 across implementation-close + 2 Copilot-fix layers) | 216 | 18 | §3 (closes the plan) |
+| `docs/FOLLOWUPS.md` (D2 multi-config FATAL_ERROR + Phase 2 closure criteria) | 72 | 0 | §3.7 (entry landed in Copilot-fix commit 4, amended in commit 5) |
 
 **Commit decomposition.**
 
@@ -714,23 +723,25 @@ push; matches §4):
    `_randomx_v2_fwd_val`, which is `unset` after use to avoid
    leaking the temporary into the parent scope.
 
-**Post-merge close-out tasks** (mirrors the LWMA-1 Phase 4 pattern):
+**Post-merge close-out tasks** (mirrors the LWMA-1 Phase 4 pattern;
+all tasks done in this close-out commit unless flagged otherwise):
 
-1. Backfill `<commit-1>` / `<commit-2>` / `<commit-3>` placeholders
-   in this §10 with the actual SHAs, plus the Copilot-fix commit
-   SHA (commit 4 — addresses PR #54 review findings C-1 / C-2 /
-   C-3 / C-4, landing dispositions D2 and D3 in this §10 and the
-   D2 entry in [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)).
-2. Refresh the per-file diff-stat table in this §10 with the
-   final as-merged numbers (`git diff --numstat <base>..<merge>`),
-   since the implementation-close snapshot above predates commit 4.
-3. Backfill `<phase1-merge>` / `<phase1-pr>` / `<phase1-date>`
-   placeholders in
+1. ✅ Backfilled the commit SHAs in the §10 opening paragraph:
+   `409f80e8d` / `a3c874275` / `1f5d6d953` (implementation-close
+   layers 1/2/3) plus `60bba8997` / `751354b1a` (Copilot-fix
+   layers 4/5 — C-1/C-2/C-3/C-4 and C-5/C-6/C-8/C-9 respectively).
+2. ✅ Refreshed the per-file diff-stat table with the final
+   as-merged numbers from `git diff --numstat 6b59b54ee..c0c4a11e5`.
+3. ✅ Rewrote
    [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A — Phase
-   1" status paragraph.
-4. Archive the pre-merge branch tip as
-   `archive/feat-randomx-v2-phase1-<YYYY-MM-DD>` and delete the
-   `feat/randomx-v2-phase1` branch (local + remote) per
-   `06-branching.mdc` rule 5.
-5. Verify `external/randomx` v1 submodule SHA `102f8acf` is
-   unchanged on `dev` post-merge (orthogonality check).
+   1" status paragraph from "in review as PR #54" to "landed on
+   `dev` as PR #54 (merge commit `c0c4a11e5`, 2026-05-19)".
+4. ⏳ Branch hygiene per `06-branching.mdc` rule 5 (archive +
+   delete `feat/randomx-v2-phase1`) requires explicit user
+   confirmation; see the merge-completion comment trail. Tag
+   target name: `archive/feat-randomx-v2-phase1-2026-05-19`.
+5. ✅ Verified `external/randomx` v1 submodule SHA `102f8acf`
+   unchanged on `dev` post-merge (`git ls-tree dev external/randomx`
+   reports `102f8acf90a7649ada410de5499a7ec62e49e1da`); v2
+   submodule pinned to `aaafe71322df6602c21a5c72937ac284724ae561`
+   as planned (orthogonality check passes).
