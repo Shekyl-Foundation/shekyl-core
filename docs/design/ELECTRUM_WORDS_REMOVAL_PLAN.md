@@ -6,7 +6,7 @@ todos:
     content: "Phase 0: Write docs/design/ELECTRUM_WORDS_REMOVAL.md AND docs/design/ELECTRUM_WORDS_REMOVAL_PLAN.md. Cover: (a) inheritance disposition per `60-no-monero-legacy.mdc` + `16-architectural-inheritance.mdc`; (b) deletion surface inventory across `src/mnemonics/` (21 files), `wallet2` (8 methods + 1 field + JSON ser/de), RPC surface (4 commands), FFI surface (3 functions + 2 param drops), tests, CMake; (c) BIP39 replacement path via existing `shekyl_account_generate_from_bip39` + `shekyl_bip39_*` FFI bridge (verified to exist as of 2026-05-19); (d) per-consumer migration map: shekyl-gui-wallet (active consumer; substantial migration), shekyl-mobile-wallet (future consumer; no migration), shekyl-web (not a consumer; no migration); (e) permanent architectural decisions: BIP39-only from genesis, wallet2::generate() retains orchestrator role (disposition (a) from Round 1 review), Phase 1 hard-error on non-empty language parameter (not silently-ignored — production-software graceful-degradation default leak inverted), seed_language field removed, query_key string-key kept as `mnemonic` with routing changed to Rust BIP39, no 25-word fallback, cross-boundary zeroization contract for BIP39 phrase; (f) cross-repo coordination: atomic-with-justified-exceptions default (staged cutover requires explicit named third-party dependency justification), coordinated dev-tip merge for pre-genesis with commit-revert as reversion mechanism, post-genesis paired-signed-tag mechanism documented as forward template; (g) alternatives considered with explicit reversion clauses per `21-reversion-clause-discipline.mdc`; (h) test surface: nm symbol-isolation invariants, git grep no-orphans invariants, BIP39 round-trip tests, memory-residency invariant per KEY_ENGINE.md §7.5 audit pattern, zero-production-keyfile confirmation; (i) reviewer-discipline framing (no external-audit dependency; BIP39 is well-vetted industry standard; Phase 0 design + author review is audit-of-record). Target close: 4-6 review rounds per `20-rust-vs-cpp-policy.mdc`."
     status: in_progress
   - id: phase1-wallet2-internal-rewire
-    content: "Phase 1: wallet2 internal rewire + BIP39 entropy persistence + public `bip39_entropy()` accessor + rewire of the `query_key(\"mnemonic\")` dispatch branch implementation + hard-error on non-empty language parameter + hard-error on non-empty passphrase at query_key dispatch + thread seed_passphrase through BIP39 PBKDF2 (Round-3, Round-4, end-to-end-function-walk fold-ins: single atomic commit). Add m_bip39_entropy state field to wallet2 + public read-only accessor `wallet2::bip39_entropy()` + JSON ser/de per substrate §2.3 + §4.10; add shekyl_bip39_mnemonic_to_entropy FFI (5th BIP39 function) + Rust bip39::entropy_from_mnemonic per substrate §3.1+§4.10; rewire ElectrumWords callers per substrate §2.2 corrected inventory (wallet2.cpp:600 parse_wallet_create_data JSON helper + 606-611 seed_passphrase JSON field handling); **thread field_seed_passphrase (from JSON field \"seed_passphrase\") to shekyl_account_generate_from_bip39's passphrase parameter per substrate §4.5.1 Surface A (JSON field name preserved; semantic shifts from Monero-encrypt_key to BIP39-PBKDF2-HMAC-SHA512)**; rewire the `query_key(\"mnemonic\")` dispatch branch implementation at `src/wallet/wallet2_ffi.cpp:648` (and the equivalent RPC handler) to read `wallet.bip39_entropy()` and call `shekyl_bip39_mnemonic_from_entropy` directly via FFI per substrate §4.5 + §4.10 (dispatch case label `\"mnemonic\"` persists; only the implementation body changes; `wallet2::get_seed` is **not** re-implemented and is left dead-but-extant until Phase 4 Commit A deletes it); **hard-error query_key(\"mnemonic\") FFI dispatch on non-empty passphrase parameter per substrate §4.5.1 Surface B (passphrase has no meaning at phrase-emit time under BIP39; RPC layer does not expose this parameter, so hard-error surface is FFI-only)**; hard-error wallet2_ffi_create_wallet and wallet2_ffi_generate_from_keys on non-empty language parameter per substrate §4.3; delete #include mnemonics/electrum-words.h from wallet2.cpp:79; add tests/unit_tests/wallet_bip39.cpp (round-trip + entropy persistence + Surface-A passphrase positive case + Surface-B passphrase hard-error negative case) and tests/unit_tests/wallet_bip39_residency.cpp (cross-boundary zeroization invariant; concrete test pattern is Phase 1 implementation-time sub-deliverable per §7.4). Implementation-time verification items: V3 (hardware-wallet path does not populate m_bip39_entropy), V4 (entropy lives inside chacha20-encrypted keys blob, not plaintext envelope). Single atomic commit (Round-3 fold-in Finding 2): merge rewire + hard-errors + passphrase-threading + tests into one commit to close the silent-ignore window that a multi-commit decomposition would open. PR scope: shekyl-core only. shekyl-gui-wallet sees hard-error at runtime; gui-wallet fix lands in Phase 3 coordinated migration PR. Branch: `feat/electrum-words-removal-phase1-wallet2-rewire` off dev."
+    content: "Phase 1: wallet2 internal rewire + BIP39 entropy persistence + public `bip39_entropy()` accessor + rewire of the `query_key(\"mnemonic\")` dispatch branch implementation + hard-error on non-empty language parameter + hard-error on non-empty passphrase at query_key dispatch + thread seed_passphrase through BIP39 PBKDF2 + V6 25-word-restore error-message UX hint (Round-3, Round-4, end-to-end-function-walk fold-ins: single atomic commit). Add m_bip39_entropy state field to wallet2 + public read-only accessor `wallet2::bip39_entropy()` + JSON ser/de per substrate §2.3 + §4.10; add shekyl_bip39_mnemonic_to_entropy FFI (5th BIP39 function) + Rust bip39::entropy_from_mnemonic per substrate §3.1+§4.10; rewire ElectrumWords callers per substrate §2.2 corrected inventory (wallet2.cpp:600 parse_wallet_create_data JSON helper + 606-611 seed_passphrase JSON field handling); **thread field_seed_passphrase (from JSON field \"seed_passphrase\") to shekyl_account_generate_from_bip39's passphrase parameter per substrate §4.5.1 Surface A (JSON field name preserved; semantic shifts from Monero-encrypt_key to BIP39-PBKDF2-HMAC-SHA512)**; rewire the `query_key(\"mnemonic\")` dispatch branch implementation at `src/wallet/wallet2_ffi.cpp:648` (and the equivalent RPC handler) to read `wallet.bip39_entropy()` and call `shekyl_bip39_mnemonic_from_entropy` directly via FFI per substrate §4.5 + §4.10 (dispatch case label `\"mnemonic\"` persists; only the implementation body changes; `wallet2::get_seed` is **not** re-implemented and is left dead-but-extant until Phase 4 Commit A deletes it); **hard-error query_key(\"mnemonic\") FFI dispatch on non-empty passphrase parameter per substrate §4.5.1 Surface B (passphrase has no meaning at phrase-emit time under BIP39; RPC layer does not expose this parameter, so hard-error surface is FFI-only)**; hard-error wallet2_ffi_create_wallet and wallet2_ffi_generate_from_keys on non-empty language parameter per substrate §4.3; **V6 — wrap the BIP39 validation error path in parse_wallet_create_data to surface a user-friendly hint when the input phrase is exactly 25 words (\"Shekyl uses 24-word BIP-39 mnemonics. 25-word phrases from other wallets are not compatible.\"); folded into Phase 1 on cohesion grounds (helper is the user-facing wrapper around the BIP39 validation error introduced in this phase; implementation site is already touched by parse_wallet_create_data rewire)**; delete #include mnemonics/electrum-words.h from wallet2.cpp:79; add tests/unit_tests/wallet_bip39.cpp (round-trip + entropy persistence + Surface-A passphrase positive case + Surface-B passphrase hard-error negative case + V6 25-word-hint negative case) and tests/unit_tests/wallet_bip39_residency.cpp (cross-boundary zeroization invariant; concrete test pattern is Phase 1 implementation-time sub-deliverable per §7.4). Implementation-time verification items: V3 (hardware-wallet path does not populate m_bip39_entropy), V4 (entropy lives inside chacha20-encrypted keys blob, not plaintext envelope). Single atomic commit (Round-3 fold-in Finding 2): merge rewire + hard-errors + passphrase-threading + V6 hint + tests into one commit to close the silent-ignore window that a multi-commit decomposition would open. PR scope: shekyl-core only. shekyl-gui-wallet sees hard-error at runtime; gui-wallet fix lands in Phase 3 coordinated migration PR. Branch: `feat/electrum-words-removal-phase1-wallet2-rewire` off dev."
     status: pending
   - id: phase2-rpc-deletion
     content: "Phase 2: Delete the Electrum-words RPC surface. Drop COMMAND_RPC_GET_LANGUAGES (wallet_rpc_server_commands_defs.h:2074), COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET (:2223) + its handler at wallet_rpc_server.cpp:4162-4225, and the language-validation branches in wallet_rpc_server.cpp at lines 3661, 4082. **G2 — delete set_seed_language(req.language) calls at wallet_rpc_server.cpp:3688 (on_create_wallet) and :4088 (on_generate_from_keys), plus the `language` field on COMMAND_RPC_CREATE_WALLET::request and COMMAND_RPC_GENERATE_FROM_KEYS::request in wallet_rpc_server_commands_defs.h (request-schema change forces JSON-parse-error on caller-supplied language, matches §4.3 hard-error discipline).** Delete the get_wallet_words handler at wallet_rpc_server.cpp:2214,2220. **G1 — delete the on_stop_background_sync seed-based recovery branch (the entire `if (!req.seed.empty()) { ... }` block at wallet_rpc_server.cpp:2316–2366) + the `seed`/`seed_offset` fields on COMMAND_RPC_STOP_BACKGROUND_SYNC::request; password-only stop_background_sync survives; BIP39 seed-recovery replacement is a V3.2 FOLLOWUPS item, not B-1 scope.** The COMMAND_RPC_QUERY_KEY mnemonic-string-routing branch is **left unchanged in Phase 2**: substrate §4.5 keeps the dispatch label `\"mnemonic\"` indefinitely; Phase 1's rewire routes through Rust BIP39 directly via FFI. Delete the #include `mnemonics/electrum-words.h` from wallet_rpc_server.cpp:64. **G7 — migrate 12 Python functional tests off restore_deterministic_wallet to generate_from_keys (pre-compute spend/view secret keys from each test's known seed, hardcode them); convert transfer.py's 3 stop_background_sync(seed=...) sites to password-based.** PR scope: shekyl-core only. No consumer impact: rust/shekyl-rpc-server does not bind these legacy RPC commands; rust/shekyl-engine-rpc wraps wallet2_ffi (not JSON-RPC) and migrates in Phase 3 per §3.2.0. Multi-commit decomposition (5 commits): (1) delete restore-deterministic-wallet RPC + handler + helper functions; (2) delete get-languages + get-wallet-words RPC commands; (3) delete set-seed-language calls + language request-struct fields per §2.4 G2; (4) delete stop-background-sync seed-recovery branch + request fields per §2.4 G1; (5) cleanup include + migrate 12 functional tests per §2.4 G7. Branch: `feat/electrum-words-removal-phase2-rpc-deletion` off dev."
@@ -21,7 +21,7 @@ todos:
     content: "Phase 5: Delete the src/mnemonics/ subsystem entirely. 21 files removed (14 language word-list headers + 4 framework files + 1 implementation pair + 1 CMakeLists + 1 unit test file in tests/unit_tests/mnemonics.cpp). Update src/CMakeLists.txt to drop `add_subdirectory(mnemonics)`; update src/wallet/CMakeLists.txt to drop `mnemonics` from link dependencies if listed; update tests/unit_tests/CMakeLists.txt to drop `mnemonics.cpp` from test sources. Verify the build is green with `mnemonics` library completely removed (no transitive consumers; per pre-flight grep on `crypto::ElectrumWords::` only wallet2.cpp + wallet2_ffi.cpp + wallet_rpc_server.cpp + the mnemonics/ subsystem itself touch it, all of which are handled by Phase 4 or this phase). Multi-commit decomposition: (1) delete src/mnemonics/ directory; (2) update CMakeLists.txt files; (3) delete tests/unit_tests/mnemonics.cpp; (4) verify build green. PR scope: shekyl-core only. Branch: `feat/electrum-words-removal-phase5-mnemonics-deletion` off dev."
     status: pending
   - id: phase6-docs-and-ci-invariants
-    content: "Phase 6: Documentation pass per `91-documentation-after-plans.mdc` + CI invariants per substrate §7. Update docs/CHANGELOG.md with a comprehensive `### Removed` entry under `## [Unreleased]` documenting the Electrum-words subsystem removal across Phases 1-5 (cite the PRs by number). Audit docs/USER_GUIDE.md, docs/SHEKYLD_PREREQUISITES.md, docs/DESIGN_CONCEPTS.md (or equivalents) for any references to Electrum-words / 25-word mnemonic / seed-language picker / language list; update to reflect BIP39-only seed flow. Add tests/symbol_isolation/electrum_words_removed.sh CI script: runs `nm` against build artifacts; greps for the substrate §7.1 symbol list; fails build if any match. Add tests/grep_invariants/electrum_words_no_orphans.sh CI script: runs `git grep -E` for the substrate §7.2 identifier list; fails build if any non-allowlisted match. Wire both into the CI runner config. Update docs/FOLLOWUPS.md to mark the B-1 finding as closed (cite Phase 1-6 merge SHAs) and add a V3.2 follow-up item for the stop_background_sync BIP39 seed-recovery replacement (deleted in Phase 2 §2.4 G1 with no immediate replacement). **V6 — error-message UX hint for 25-word restore attempts: wrap the BIP39 validation error path used by the restore-from-phrase JSON helper (Phase 1's wallet2.cpp:600 rewire) to surface a user-friendly hint when the input phrase is exactly 25 words (\"Shekyl uses 24-word BIP-39 mnemonics. 25-word phrases from other wallets (Monero, CryptoNote-based projects) are not compatible — Shekyl begins at its own genesis and does not support legacy seed formats.\"). Underlying behavior unchanged per §4.6; UX-only improvement.** PR scope: shekyl-core only. Branch: `feat/electrum-words-removal-phase6-docs-ci-invariants` off dev."
+    content: "Phase 6: Documentation pass per `91-documentation-after-plans.mdc` + CI invariants per substrate §7. Update docs/CHANGELOG.md with a comprehensive `### Removed` entry under `## [Unreleased]` documenting the Electrum-words subsystem removal across Phases 1-5 (cite the PRs by number). Audit docs/USER_GUIDE.md, docs/SHEKYLD_PREREQUISITES.md, docs/DESIGN_CONCEPTS.md (or equivalents) for any references to Electrum-words / 25-word mnemonic / seed-language picker / language list; update to reflect BIP39-only seed flow. Add tests/symbol_isolation/electrum_words_removed.sh CI script: runs `nm` against build artifacts; greps for the substrate §7.1 symbol list; fails build if any match. Add tests/grep_invariants/electrum_words_no_orphans.sh CI script: runs `git grep -E` for the substrate §7.2 identifier list; fails build if any non-allowlisted match. Wire both into the CI runner config. Update docs/FOLLOWUPS.md to mark the B-1 finding as closed (cite Phase 1-6 merge SHAs) and add a V3.2 follow-up item for the stop_background_sync BIP39 seed-recovery replacement (deleted in Phase 2 §2.4 G1 with no immediate replacement). (V6 25-word-restore error-message UX hint was originally scoped here but folded into Phase 1 on cohesion grounds per Phase 1 work item 10; Phase 6 inherits no V6 work.) PR scope: shekyl-core only. Branch: `feat/electrum-words-removal-phase6-docs-ci-invariants` off dev."
     status: pending
 isProject: false
 ---
@@ -378,6 +378,52 @@ directly), and Phase 4 Commit A deletes it per substrate §2.2.
    to inherit; the Phase 1 commit message + test file land as the
    load-bearing implementation reference).
 
+10. **V6 — 25-word-restore error-message UX hint** (per the
+    end-to-end function walk's V6 verification item). The
+    helper wraps the BIP39 validation error path used by the
+    `parse_wallet_create_data` JSON helper's BIP39 rewire (work
+    item 3 above); when the input phrase is exactly 25 words,
+    the wrapper surfaces a user-friendly hint pointing at the
+    BIP-39 requirement:
+
+    ```text
+    Shekyl uses 24-word BIP-39 mnemonics. 25-word phrases from
+    other wallets (Monero, CryptoNote-based projects) are not
+    compatible — Shekyl begins at its own genesis and does not
+    support legacy seed formats. See docs/USER_GUIDE.md for the
+    BIP-39 seed format details.
+    ```
+
+    The 25-word-detection is a word-count check on the user's
+    input before BIP39 validation; the hint is a wrapper around
+    the generic BIP39 validation error from
+    `shekyl_bip39_validate`. The hint is purely UX (a more
+    informative error message); the underlying behavior is
+    unchanged from substrate §4.6 (25-word phrases always
+    produce a BIP39 validation error).
+
+    **Placement rationale.** V6 was originally scoped as a
+    Phase 6 docs item alongside the user-facing documentation
+    sweep. It folds into Phase 1 on **cohesion grounds**: the
+    helper is the user-facing wrapper around the BIP39
+    validation error that Phase 1 introduces, and the
+    implementation site (`wallet2.cpp` near
+    `parse_wallet_create_data`) is already touched by work
+    item 3's atomic commit. Landing V6 here means the error
+    message ships in lockstep with the BIP39 path it wraps;
+    landing it in Phase 6 would leave a multi-PR window during
+    which 25-word restore attempts produce a bare BIP39
+    validation error without the disambiguating hint. The
+    UX-cost outweighs the architectural-cleanliness preference
+    for a strictly-architectural Phase 1 commit; the helper is
+    a small surface (single function in
+    `wallet2.cpp`-or-adjacent) and does not enlarge the
+    commit's architectural scope.
+
+    Test coverage in `tests/unit_tests/wallet_bip39.cpp`
+    includes a negative case: a known 25-word phrase produces
+    the V6 hint (not a bare BIP39 validation error).
+
 **Single atomic commit (Round-3 fold-in disposition per substrate
 §4.10 + Round-3 reviewer Finding 2):**
 
@@ -421,11 +467,17 @@ wallet: rewire wallet2 to BIP39 with entropy persistence and hard-errors
   - Hard-error wallet2_ffi_create_wallet /
     wallet2_ffi_generate_from_keys on non-empty language parameter
     per §4.3.
+  - V6 — wrap the BIP39 validation error path in
+    parse_wallet_create_data to surface a 24-vs-25-word UX hint
+    when the input phrase is exactly 25 words. Folded into Phase 1
+    on cohesion grounds per work item 10 placement-rationale
+    (helper wraps the BIP39 validation error this phase introduces).
   - Delete include "mnemonics/electrum-words.h" from wallet2.cpp.
   - Tests: wallet_bip39.cpp (round-trip + entropy persistence +
     passphrase round-trip positive case for §4.5.1 Surface A +
-    passphrase hard-error negative case for §4.5.1 Surface B) +
-    wallet_bip39_residency.cpp (cross-boundary zeroization invariant).
+    passphrase hard-error negative case for §4.5.1 Surface B +
+    V6 25-word-hint negative case) + wallet_bip39_residency.cpp
+    (cross-boundary zeroization invariant).
 ```
 
 The commit is large (~600–900 LoC delta across ~8 files) but
@@ -604,9 +656,21 @@ handlers in `wallet_rpc_server`.
 
 1. `wallet-rpc: delete restore_deterministic_wallet RPC + handler + helper functions`
 2. `wallet-rpc: delete get_languages + get_wallet_words RPC commands`
-3. `wallet-rpc: delete set_seed_language calls + language request-struct fields per §2.4 G2`
+3. `wallet-rpc: delete language validation branches + set_seed_language calls + language request-struct fields in on_create_wallet/on_generate_from_keys per §2.4 G2`
 4. `wallet-rpc: delete stop_background_sync seed-recovery branch + request fields per §2.4 G1`
 5. `wallet-rpc: cleanup mnemonics/electrum-words.h include + migrate 12 functional tests per §2.4 G7`
+
+Commit 3 bundles three deletions because they are bisect-coupled:
+work items 4 (the `is_valid_language(req.language)` validation
+branches at lines 3661 and 4082), 5 (the
+`wal->set_seed_language(req.language)` calls at lines 3688 and
+4088), and the `language` request-struct fields all reference
+the same field. Deleting only the validation branch leaves
+`set_seed_language(req.language)` referencing the same field;
+deleting only the call leaves the field validated-but-unused;
+deleting only the field breaks both surviving sites. All three
+must land together for bisect-cleanliness; the commit title
+reflects the full scope.
 
 **PR scope:** shekyl-core only. The project's
 `rust/shekyl-rpc-server` does not bind these legacy RPC commands
@@ -1084,31 +1148,9 @@ after plans) + substrate §7 (CI invariants).
    per Phase 2 work item 6 (the Electrum-words seed-recovery
    branch was deleted with no immediate BIP39 replacement).
 
-5. **V6 — Error-message UX hint for 25-word restore attempts**
-   (per the end-to-end function walk's V6 verification item).
-   Wrap the BIP39 validation error path used by the
-   restore-from-phrase JSON helper at
-   `wallet2.cpp:600`-rewire (Phase 1) to surface a
-   user-friendly hint when the input phrase is exactly 25 words.
-   The hint suggests the user is attempting a Monero / CryptoNote
-   restore and points at the V3.0 BIP39 requirement:
-
-   ```text
-   Shekyl uses 24-word BIP-39 mnemonics. 25-word phrases from
-   other wallets (Monero, CryptoNote-based projects) are not
-   compatible — Shekyl begins at its own genesis and does not
-   support legacy seed formats. See docs/USER_GUIDE.md for the
-   BIP-39 seed format details.
-   ```
-
-   The 25-word-detection is a word-count check on the user's
-   input before BIP39 validation; the hint is a wrapper around
-   the generic BIP39 validation error. The hint is purely UX
-   (a more-informative error message); the underlying behavior
-   is unchanged from §4.6 (25-word phrases produce a BIP39
-   validation error). Implementation surface: a single helper in
-   `src/wallet/wallet2.cpp` near the `parse_wallet_create_data`
-   error-handling path; no FFI surface change.
+(V6 — 25-word-restore error-message UX hint — folded into
+Phase 1's atomic commit per Phase 1 work item 10's
+placement-rationale paragraph. Phase 6 inherits no V6 work.)
 
 ### 6.2 CI invariants
 
