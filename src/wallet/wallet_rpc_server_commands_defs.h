@@ -2409,13 +2409,9 @@ namespace wallet_rpc
     struct request_t
     {
       std::string wallet_password;
-      std::string seed;
-      std::string seed_offset;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(wallet_password)
-        KV_SERIALIZE_OPT(seed, (std::string)"")
-        KV_SERIALIZE_OPT(seed_offset, (std::string)"")
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<request_t> request;

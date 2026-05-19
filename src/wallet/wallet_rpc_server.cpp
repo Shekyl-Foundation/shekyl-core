@@ -2338,59 +2338,7 @@ namespace tools
     try
     {
       PRE_VALIDATE_BACKGROUND_SYNC();
-      crypto::secret_key spend_secret_key = crypto::null_skey;
-
-      // Load the spend key from seed if seed is provided
-      if (!req.seed.empty())
-      {
-        crypto::secret_key recovery_key;
-        std::string language;
-
-        if (!crypto::ElectrumWords::words_to_bytes(req.seed, recovery_key, language))
-        {
-          er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-          er.message = "Electrum-style word list failed verification";
-          return false;
-        }
-
-        if (!req.seed_offset.empty())
-          recovery_key = cryptonote::decrypt_key(recovery_key, req.seed_offset);
-
-        // generate spend key under the wallet's network so the derivation
-        // salt matches the stored mainnet/testnet/stagenet account.
-        // Pre-fix this hardcoded FAKECHAIN via the legacy 3-arg
-        // `account.generate(...)` overload, so on a non-FAKECHAIN wallet
-        // the recovered spend_secret_key would never match
-        // `m_wallet`'s stored spend key, and `stop_background_sync`'s
-        // post-recovery key check would always fail. This is a P0 bug
-        // on mainnet — fail-closed at the RPC, but the RPC was simply
-        // broken on mainnet. Bug 4-adjacent in
-        // `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
-        //
-        // The Electrum-words path (`crypto::ElectrumWords::words_to_bytes`)
-        // is itself defunct post-Monero-fork (see comment on
-        // `account_base::generate`). A separate FOLLOWUPS V3.2 item
-        // tracks deletion / replacement of this entire seed-recovery
-        // path with a BIP-39 entry; until then, passing the right
-        // nettype is the minimal fix that gets `stop_background_sync`
-        // working on the network it was always supposed to support.
-        //
-        // Note: RAW32 is only permitted on TESTNET / FAKECHAIN. On
-        // MAINNET / STAGENET this still throws (because the
-        // Electrum-words flow was conceptually a raw-seed flow, and
-        // the RAW32 / network matrix from `permitted_seed_format`
-        // rejects those pairs). The throw is correct fail-closed
-        // behaviour: a mainnet user trying to recover via Electrum
-        // words gets a clear error rather than silent FAKECHAIN
-        // derivation. Real mainnet recovery requires the BIP-39 path,
-        // which `stop_background_sync` does not currently expose
-        // (FOLLOWUPS V3.2 covers the replacement).
-        cryptonote::account_base account;
-        account.generate(recovery_key, true, false, m_wallet->nettype());
-        spend_secret_key = account.get_keys().m_spend_secret_key;
-      }
-
-      m_wallet->stop_background_sync(req.wallet_password, spend_secret_key);
+      m_wallet->stop_background_sync(req.wallet_password, crypto::null_skey);
     }
     catch (...)
     {
