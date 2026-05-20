@@ -9,8 +9,8 @@ todos:
     content: "Phase 1: wallet2 internal rewire + BIP39 entropy persistence + public `bip39_entropy()` accessor + rewire of the `query_key(\"mnemonic\")` dispatch branch implementation + hard-error on non-empty language parameter + hard-error on non-empty passphrase at query_key dispatch + thread seed_passphrase through BIP39 PBKDF2 + V6 25-word-restore error-message UX hint (Round-3, Round-4, end-to-end-function-walk fold-ins: single atomic commit). Add m_bip39_entropy state field to wallet2 + public read-only accessor `wallet2::bip39_entropy()` + JSON ser/de per substrate §2.3 + §4.10; add shekyl_bip39_mnemonic_to_entropy FFI (5th BIP39 function) + Rust bip39::entropy_from_mnemonic per substrate §3.1+§4.10; rewire ElectrumWords callers per substrate §2.2 corrected inventory (wallet2.cpp:600 parse_wallet_create_data JSON helper + 606-611 seed_passphrase JSON field handling); **thread field_seed_passphrase (from JSON field \"seed_passphrase\") to shekyl_account_generate_from_bip39's passphrase parameter per substrate §4.5.1 Surface A (JSON field name preserved; semantic shifts from Monero-encrypt_key to BIP39-PBKDF2-HMAC-SHA512)**; rewire the `query_key(\"mnemonic\")` dispatch branch implementation at `src/wallet/wallet2_ffi.cpp:648` (and the equivalent RPC handler) to read `wallet.bip39_entropy()` and call `shekyl_bip39_mnemonic_from_entropy` directly via FFI per substrate §4.5 + §4.10 (dispatch case label `\"mnemonic\"` persists; only the implementation body changes; `wallet2::get_seed` is **not** re-implemented and is left dead-but-extant until Phase 4 Commit A deletes it); **hard-error query_key(\"mnemonic\") FFI dispatch on non-empty passphrase parameter per substrate §4.5.1 Surface B (passphrase has no meaning at phrase-emit time under BIP39; RPC layer does not expose this parameter, so hard-error surface is FFI-only)**; hard-error wallet2_ffi_create_wallet and wallet2_ffi_generate_from_keys on non-empty language parameter per substrate §4.3; **V6 — wrap the BIP39 validation error path in parse_wallet_create_data to surface a user-friendly hint when the input phrase is exactly 25 words (\"Shekyl uses 24-word BIP-39 mnemonics. 25-word phrases from other wallets are not compatible.\"); folded into Phase 1 on cohesion grounds (helper is the user-facing wrapper around the BIP39 validation error introduced in this phase; implementation site is already touched by parse_wallet_create_data rewire)**; delete #include mnemonics/electrum-words.h from wallet2.cpp:79; add tests/unit_tests/wallet_bip39.cpp (round-trip + entropy persistence + Surface-A passphrase positive case + Surface-B passphrase hard-error negative case + V6 25-word-hint negative case) and tests/unit_tests/wallet_bip39_residency.cpp (cross-boundary zeroization invariant; concrete test pattern is Phase 1 implementation-time sub-deliverable per §7.4). Implementation-time verification items: V3 (hardware-wallet path does not populate m_bip39_entropy), V4 (entropy lives inside chacha20-encrypted keys blob, not plaintext envelope). Single atomic commit (Round-3 fold-in Finding 2): merge rewire + hard-errors + passphrase-threading + V6 hint + tests into one commit to close the silent-ignore window that a multi-commit decomposition would open. PR scope: shekyl-core only. shekyl-gui-wallet sees hard-error at runtime; gui-wallet fix lands in Phase 3 coordinated migration PR. Branch: `feat/electrum-words-removal-phase1-wallet2-rewire` off dev. **Status (2026-05-19): completed.** Landed on `dev` as PR #57 (merge commit `3c787df86`, 2026-05-19). Three-commit landing (implementation `827ea7ea9` + post-merge-review Copilot-fix layer `b71ecd892` + dependency-discipline FOLLOWUPS layer `04cfcec5c` for the `cargo audit` unmaintained-dep advisories surfaced during the PR's audit job). Branch lifetime <1 working day against the `06-branching.mdc` rule-2 ≤5-working-day window. Substrate orchestration was inlined into `parse_wallet_create_data` via a friend namespace function rather than a public `wallet2::generate_from_bip39` member; the existing `tests/unit_tests/wallet_storage.cpp` CI tripwire defending the absence of `wallet2::generate_from_bip39` is preserved by design (substrate §4.10.1 disposition)."
     status: completed
   - id: phase2-rpc-deletion
-    content: "Phase 2: Delete the Electrum-words RPC surface. Drop COMMAND_RPC_GET_LANGUAGES (wallet_rpc_server_commands_defs.h:2074), COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET (:2223) + its handler at wallet_rpc_server.cpp:4162-4225, and the language-validation branches in wallet_rpc_server.cpp at lines 3661, 4082. **G2 — delete set_seed_language(req.language) calls at wallet_rpc_server.cpp:3688 (on_create_wallet) and :4088 (on_generate_from_keys), plus the `language` field on COMMAND_RPC_CREATE_WALLET::request and COMMAND_RPC_GENERATE_FROM_KEYS::request in wallet_rpc_server_commands_defs.h (request-schema change forces JSON-parse-error on caller-supplied language, matches §4.3 hard-error discipline).** Delete the get_wallet_words handler at wallet_rpc_server.cpp:2214,2220. **G1 — delete the on_stop_background_sync seed-based recovery branch (the entire `if (!req.seed.empty()) { ... }` block at wallet_rpc_server.cpp:2316–2366) + the `seed`/`seed_offset` fields on COMMAND_RPC_STOP_BACKGROUND_SYNC::request; password-only stop_background_sync survives; BIP39 seed-recovery replacement is a V3.2 FOLLOWUPS item, not B-1 scope.** The COMMAND_RPC_QUERY_KEY mnemonic-string-routing branch is **left unchanged in Phase 2**: substrate §4.5 keeps the dispatch label `\"mnemonic\"` indefinitely; Phase 1's rewire routes through Rust BIP39 directly via FFI. Delete the #include `mnemonics/electrum-words.h` from wallet_rpc_server.cpp:64. **G7 — migrate 12 Python functional tests off restore_deterministic_wallet to generate_from_keys (pre-compute spend/view secret keys from each test's known seed, hardcode them); convert transfer.py's 3 stop_background_sync(seed=...) sites to password-based.** PR scope: shekyl-core only. No consumer impact: rust/shekyl-rpc-server does not bind these legacy RPC commands; rust/shekyl-engine-rpc wraps wallet2_ffi (not JSON-RPC) and migrates in Phase 3 per §3.2.0. Multi-commit decomposition (5 commits): (1) delete restore-deterministic-wallet RPC + handler + helper functions; (2) delete get-languages + get-wallet-words RPC commands; (3) delete set-seed-language calls + language request-struct fields per §2.4 G2; (4) delete stop-background-sync seed-recovery branch + request fields per §2.4 G1; (5) cleanup include + migrate 12 functional tests per §2.4 G7. Branch: `feat/electrum-words-removal-phase2-rpc-deletion` off dev."
-    status: pending
+    content: "Phase 2: Delete the Electrum-words RPC surface. Drop COMMAND_RPC_GET_LANGUAGES (wallet_rpc_server_commands_defs.h:2074), COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET (:2223) + its handler at wallet_rpc_server.cpp:4162-4225, and the language-validation branches in wallet_rpc_server.cpp at lines 3661, 4082. **G2 — delete set_seed_language(req.language) calls at wallet_rpc_server.cpp:3688 (on_create_wallet) and :4088 (on_generate_from_keys), plus the `language` field on COMMAND_RPC_CREATE_WALLET::request and COMMAND_RPC_GENERATE_FROM_KEYS::request in wallet_rpc_server_commands_defs.h (request-schema change forces JSON-parse-error on caller-supplied language, matches §4.3 hard-error discipline).** Delete the get_wallet_words handler at wallet_rpc_server.cpp:2214,2220. **G1 — delete the on_stop_background_sync seed-based recovery branch (the entire `if (!req.seed.empty()) { ... }` block at wallet_rpc_server.cpp:2316–2366) + the `seed`/`seed_offset` fields on COMMAND_RPC_STOP_BACKGROUND_SYNC::request; password-only stop_background_sync survives; BIP39 seed-recovery replacement is a V3.2 FOLLOWUPS item, not B-1 scope.** The COMMAND_RPC_QUERY_KEY mnemonic-string-routing branch is **left unchanged in Phase 2**: substrate §4.5 keeps the dispatch label `\"mnemonic\"` indefinitely; Phase 1's rewire routes through Rust BIP39 directly via FFI. Delete the #include `mnemonics/electrum-words.h` from wallet_rpc_server.cpp:64. **G7 — disposition reassessed at implementation time: tests/functional_tests/ deleted outright instead of migrated.** Pre-flight investigation (2026-05-19) surfaced four blockers that flipped the disposition from migrate to delete: (a) the harness invokes monerod / monero-wallet-rpc binaries that don't exist in the Shekyl tree; (b) functional_tests_rpc and check_missing_rpc_methods were silently skipped in CI for the lifetime of the Shekyl tree because the build environment lacked the requests / psutil / monotonic / deepdiff Python deps; (c) shekyl-wallet-rpc lacks a --regtest / --fakechain flag and defaults to mainnet, so shekyl_account_generate_from_raw_seed rejects (mainnet, raw); (d) harness is Monero-shaped end-to-end and warrants a Shekyl-native rewrite under its own design doc. Phase 2 disposition: delete tests/functional_tests/ outright, drop add_subdirectory(functional_tests) from tests/CMakeLists.txt, rewrite tests/README.md Functional tests section, file V3.1 FOLLOWUPS item for Shekyl-native end-to-end harness. PR scope: shekyl-core only. No consumer impact: rust/shekyl-rpc-server does not bind these legacy RPC commands; rust/shekyl-engine-rpc wraps wallet2_ffi (not JSON-RPC) and migrates in Phase 3 per §3.2.0. Multi-commit decomposition (5 commits): (1) delete restore-deterministic-wallet RPC + handler + helper functions; (2) delete get-languages JSON-RPC method (no get_wallet_words handler exists in the current tree — plan-doc drift); (3) delete language field from create_wallet/generate_from_keys per §2.4 G2; (4) drop seed-recovery branch from stop_background_sync per §2.4 G1; (5) drop electrum-words.h include + delete tests/functional_tests/ per §2.4 G7-reassessed. Branch: `feat/electrum-words-removal-phase2-rpc-deletion` off dev. **Status (2026-05-19): completed.** Surfaced as PR #58 (https://github.com/Shekyl-Foundation/shekyl-core/pull/58); awaiting CI / Copilot review / merge to dev."
+    status: completed
   - id: phase3-ffi-deletion-cross-repo-cutover
     content: "Phase 3: FFI surface deletion + cross-repo atomic cutover with shekyl-gui-wallet + in-tree Rust consumer migration in rust/shekyl-engine-rpc. This is the load-bearing phase per substrate §5. shekyl-core PR deletes: wallet2_ffi_restore_deterministic_wallet (wallet2_ffi.h:98-104 + wallet2_ffi.cpp:414-431), the `language` parameter on wallet2_ffi_create_wallet (signature change), the `language` parameter on wallet2_ffi_generate_from_keys (signature change), the language-list export at wallet2_ffi.cpp:1197-1198, and all crypto::ElectrumWords::* calls in wallet2_ffi.cpp. Delete #include `mnemonics/electrum-words.h` from wallet2_ffi.cpp:38. **G5 — in-tree Rust consumer migration in rust/shekyl-engine-rpc (atomic with the C++ FFI deletion per substrate §3.2.0; wrapper and extern declaration are two ends of one wire and cannot land separately without a non-buildable intermediate state): drop the `language: *const c_char` parameter from `extern \"C\" fn wallet2_ffi_create_wallet` at ffi.rs:57; delete the entire `extern \"C\" fn wallet2_ffi_restore_deterministic_wallet` declaration at ffi.rs:72; drop the `language: *const c_char` parameter from `extern \"C\" fn wallet2_ffi_generate_from_keys` at ffi.rs:82; update the three Rust wrapper functions in engine.rs:195–280 (engine::create_wallet drops `language: &str`; engine::restore_deterministic_wallet deletes entirely; engine::generate_from_keys drops `language: &str`); audit in-tree callers via `git grep -E 'engine::(create_wallet|restore_deterministic_wallet|generate_from_keys)'` and migrate each call site in the same commit.** shekyl-gui-wallet PR (in the shekyl-gui-wallet repo, coordinated sibling) deletes: src-tauri/src/wallet_bridge.rs::create_wallet language parameter, src-tauri/src/wallet_bridge.rs::restore_deterministic_wallet wrapper, src-tauri/src/commands.rs `language: Option<String>` parameters, `seed_language: String` field on SeedInfo struct, UI flows that show seed-language picker. Cutover mechanism (Round-3 fold-in correction per Finding 4): Cargo path-dependency + workflow `git clone --branch dev`. Phase 3's atomic cutover uses (a) a temporary workflow-pin commit on the gui-wallet PR branch that points the clone command at the shekyl-core PR branch; (b) shekyl-core merges to dev first; (c) gui-wallet PR adds a follow-up revert commit returning the clone command to --branch dev; (d) gui-wallet CI re-runs against post-merge dev; (e) gui-wallet merges. Reversion mechanism: commit-revert in coordinated order per substrate §5.4. Pre-flight: empirical verification that PR 4 (Refresh Engine) and PR 5 (Pending TX Engine) have not touched the wallet2_ffi.cpp deletion sites — `git log --oneline -- src/wallet/wallet2_ffi.cpp` since this PR's branch-cut, audit for refresh / pending-tx work; if clean, proceed; if conflict surface exists, rebase against dev tip. Multi-commit decomposition (shekyl-core PR, 5 commits with C++/Rust pairing per substrate §3.2.0): each C++-FFI-deletion commit pairs with the in-tree Rust extern/wrapper change in the same commit. Branch: `feat/electrum-words-removal-phase3-ffi-cutover` off dev. shekyl-gui-wallet branch: `feat/electrum-words-removal-bip39-migration` off shekyl-gui-wallet's dev."
     status: pending
@@ -606,6 +606,44 @@ off `dev`.
 
 ## Phase 2 — RPC surface deletion
 
+**Status.** Surfaced on the branch
+`feat/electrum-words-removal-phase2-rpc-deletion` as
+[PR #58](https://github.com/Shekyl-Foundation/shekyl-core/pull/58)
+(2026-05-19). Seven commits landed on the branch:
+
+1. `5eb778cde` — `wallet-rpc: delete restore_deterministic_wallet
+   RPC + handler + helpers`
+2. `72312af2c` — `wallet-rpc: delete get_languages JSON-RPC method`
+3. `011745d70` — `wallet-rpc: drop language field from
+   create_wallet/generate_from_keys`
+4. `255ea0abb` — `wallet-rpc: drop seed-recovery branch from
+   stop_background_sync`
+5. `9b4481101` — `wallet-rpc: drop electrum-words.h include +
+   delete tests/functional_tests/`
+6. `663b48394` — `docs: record Phase 2 actuals (functional_tests
+   deleted, not migrated)` (plan-doc / substrate / CHANGELOG
+   actuals-vs-draft reconciliation)
+7. *Phase 2 closure pass* (this commit) — `docs/USER_GUIDE.md`,
+   `docs/WALLET_RPC_RUST.md`, `docs/SHEKYLD_PREREQUISITES.md`,
+   `docs/design/RANDOMX_V2_RUST.md` stale-doc cleanup;
+   `docs/FOLLOWUPS.md` V3.2 `stop_background_sync` entry
+   reframed (Electrum-words branch is gone; the work is now
+   "add a BIP-39 / raw-seed entry in the Rust JSON-RPC server"
+   rather than "replace the existing branch") + new V3.1
+   "Shekyl-native end-to-end wallet/daemon test harness"
+   entry filed against the deleted `tests/functional_tests/`;
+   plan-doc Phase 2 Status subsection added.
+
+The seven-commit shape replaces the originally planned five-commit
+shape because (a) work item 9 was reassessed at implementation
+time from "migrate functional tests" to "delete
+`tests/functional_tests/` outright" + a docs closeout commit (see
+work item 9's Disposition flip note below) and (b) the closure
+pass per `91-documentation-after-plans.mdc` audited the wider
+docs surface for stale references to the deleted RPC methods and
+the deleted Python harness, which Phase 0's plan-doc draft did
+not pre-enumerate. Awaiting CI / Copilot review / merge to dev.
+
 **Scope:** delete the Electrum-words RPC commands and their
 handlers in `wallet_rpc_server`.
 
@@ -740,7 +778,7 @@ handlers in `wallet_rpc_server`.
    testnet/fakechain) is recorded as a `docs/FOLLOWUPS.md`
    item; it is not a revival of `tests/functional_tests/`.
 
-**Multi-commit decomposition (5 commits, as landed):**
+**Multi-commit decomposition (7 commits, as landed):**
 
 1. `wallet-rpc: delete restore_deterministic_wallet RPC + handler + helper functions`
 2. `wallet-rpc: delete get_languages JSON-RPC method`
@@ -754,6 +792,23 @@ handlers in `wallet_rpc_server`.
    (work items 7 + 9-as-reassessed; the migration originally
    bundled here under work item 9 was replaced with a deletion
    per the disposition above).
+6. `docs: record Phase 2 actuals (functional_tests deleted, not
+   migrated)` (post-implementation plan-doc / substrate /
+   CHANGELOG actuals-vs-draft reconciliation per
+   `91-documentation-after-plans.mdc`'s "after any Plan is
+   executed, documentation must be read and updated to reflect
+   the changes" rule).
+7. *Phase 2 closure pass* — wider stale-doc cleanup
+   (`USER_GUIDE.md`, `WALLET_RPC_RUST.md`,
+   `SHEKYLD_PREREQUISITES.md`, `RANDOMX_V2_RUST.md`),
+   `FOLLOWUPS.md` updates (V3.2 `stop_background_sync` entry
+   reframed; new V3.1 Shekyl-native test-harness entry), and
+   plan-doc Phase 2 Status subsection. Surfaced during the
+   PR-pending interval while CI / Copilot review proceed; lands
+   on the same branch rather than being deferred to a separate
+   docs-only PR per the discipline of recording Phase 2
+   actuals against the same review surface that's already
+   open for the Phase 2 RPC deletions.
 
 Commit 3 bundles three deletions because they are bisect-coupled:
 work items 4 (the `is_valid_language(req.language)` validation

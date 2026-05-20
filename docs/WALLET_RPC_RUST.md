@@ -200,14 +200,17 @@ build.
 
 ## RPC Method Coverage
 
-89 RPC methods from `wallet_rpc_server.h` are implemented in the
+87 RPC methods from `wallet_rpc_server.h` are implemented in the
 `wallet2_ffi_json_rpc` dispatcher (9 classical multisig methods were removed;
-FROST multisig is handled by native Rust handlers, see below):
+FROST multisig is handled by native Rust handlers, see below; 2 Electrum-words
+methods — `restore_deterministic_wallet` and `get_languages` — removed in the
+Phase 2 of the Electrum-words removal series, per
+[`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./design/ELECTRUM_WORDS_REMOVAL_PLAN.md)):
 
 | Category | Methods |
 |----------|---------|
 | Lifecycle | `create_wallet`, `open_wallet`, `close_wallet`, `stop_wallet`, `store`, `change_wallet_password` |
-| Import | `restore_deterministic_wallet`, `generate_from_keys` |
+| Import | `generate_from_keys` |
 | Balance/Address | `get_balance`, `get_address`, `get_height`, `get_address_index` |
 | Accounts | `get_accounts`, `create_account`, `label_account`, `create_address`, `label_address` |
 | Account tags | `get_account_tags`, `tag_accounts`, `untag_accounts`, `set_account_tag_description` |
@@ -231,7 +234,7 @@ FROST multisig is handled by native Rust handlers, see below):
 | Background sync | `setup_background_sync`, `start_background_sync`, `stop_background_sync` |
 | Staking | `stake`, `unstake`, `get_staked_outputs`, `get_staked_balance`, `claim_rewards` |
 | Fees | `estimate_tx_size_and_weight`, `get_default_fee_priority` |
-| Meta | `get_version`, `get_languages` |
+| Meta | `get_version` |
 
 ## Scanner Integration (`rust-scanner` feature)
 

@@ -1366,6 +1366,77 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1 — audit response and stressnet gates
 
+- **Shekyl-native end-to-end wallet/daemon test harness
+  (replacement for the deleted `tests/functional_tests/`).**
+  The Monero-inherited Python+C++ functional-test harness under
+  `tests/functional_tests/` (29 files, 6,786 lines) was deleted
+  outright in Phase 2 of the Electrum-words removal series
+  (PR #58, `feat/electrum-words-removal-phase2-rpc-deletion`).
+  Pre-flight investigation (recorded in
+  [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./design/ELECTRUM_WORDS_REMOVAL_PLAN.md)
+  Phase 2 work item 9 reassessed) found four blockers that
+  flipped the disposition from migrate to delete: (a) the harness
+  invoked `monerod` / `monero-wallet-rpc` binaries that don't
+  exist in the Shekyl tree; (b) `functional_tests_rpc` and
+  `check_missing_rpc_methods` were silently skipped in CI for
+  the lifetime of the Shekyl tree because the build environment
+  lacked the `requests` / `psutil` / `monotonic` / `deepdiff`
+  Python deps at `cmake` configure time — inherited dead code
+  with no live caller; (c) `shekyl-wallet-rpc` lacks a
+  `--regtest` / `--fakechain` flag, defaults to mainnet, and the
+  `shekyl_account_generate_from_raw_seed` FFI rejects
+  `(mainnet, raw)` per the permitted network/seed-format matrix
+  in `rust/shekyl-crypto-pq/src/account.rs`, so any migrated
+  test that restored a wallet against a `shekyld --regtest`
+  daemon would fail-closed at the FFI; (d) the harness was
+  Monero-shaped end-to-end (Python 2/3 compat residue, ad-hoc
+  daemon orchestration, Monero-format addresses) and warranted
+  a Shekyl-native rewrite under its own design doc per
+  `20-rust-vs-cpp-policy.mdc`'s "migration is a planning
+  activity" rule, not a "while we're here" revival here.
+
+  The Shekyl-native harness's design contract:
+
+  - **Binaries:** spawns `shekyld` and `shekyl-wallet-rpc`
+    directly (per `src/daemon/CMakeLists.txt:74` and
+    `src/wallet/CMakeLists.txt:98`).
+  - **Network:** `--regtest` (fakechain) for proof-of-life and
+    `--testnet` for raw-seed restore coverage, since
+    `shekyl_account_generate_from_raw_seed` permits `(testnet,
+    raw)` and `(fakechain, raw)` per the FFI matrix. Mainnet
+    coverage is gated on Bug 4's BIP-39 wrapper landing
+    (separate V3.2 item).
+  - **Test fixtures:** raw-seed restore via the FFI, not a
+    25-word Electrum seed; `generate_from_keys` for spend+view
+    restoration; password-only `stop_background_sync`.
+  - **Placement:** likely `tests/integration/wallet_e2e/` (the
+    placement referenced in
+    [`SHEKYLD_PREREQUISITES.md`](./SHEKYLD_PREREQUISITES.md)
+    §"Pre-existing harness gaps"); final layout is design-doc
+    output, not a pre-decided invariant.
+  - **Language:** Rust (`shekyl-wallet-rpc-test` integration
+    crate or similar) per `20-rust-vs-cpp-policy.mdc`'s
+    Rust-by-default posture; no Python harness.
+  - **CI gating:** target is the same gate that today
+    silently-skipped `functional_tests_rpc` was *supposed* to
+    occupy; the new harness must run by default in CI, not be
+    gated behind unverified Python deps.
+
+  This is a planning activity per `20-rust-vs-cpp-policy.mdc`;
+  the design doc is a separate artifact (4–6 review rounds before
+  implementation) and is itself a deliverable, not a pre-PR
+  spec. **Trigger:** kicked off when a maintainer opens the
+  design doc; this entry is a placeholder so the gap surfaces in
+  CI / audit reviews until the harness exists.
+
+  **Target version:** V3.1 (audit-response + stressnet gates is
+  the natural home for an end-to-end harness; the deleted
+  Python harness was nominally aimed at the same surface).
+  Cross-references: PR #58 (Phase 2 RPC deletion);
+  [`SHEKYLD_PREREQUISITES.md`](./SHEKYLD_PREREQUISITES.md)
+  §"Pre-existing harness gaps"; tests/README.md "Functional
+  tests" section.
+
 - **RandomX v2 — Guix reproducible-build obligation pickup (trigger:
   Guix integration design pass lands).** When Guix infrastructure
   arrives, the RandomX v2 work creates the obligations recorded in
@@ -2778,27 +2849,34 @@ its wake.
   whatever the Rust transfer pipeline picks for this slot replaces
   the C++ dummy.
 
-- **Replace `wallet_rpc_server::on_stop_background_sync`'s
-  Electrum-words seed-recovery with a BIP-39 entry.** The RPC
-  recovers a `spend_secret_key` from a user-supplied seed via
-  `crypto::ElectrumWords::words_to_bytes` followed by
-  `account_base::generate(recovery_key, true, false, nettype)`.
-  The Electrum-words encoding is itself defunct post-Monero-fork
-  (per `account_base::generate`'s doc comment: "the Electrum-style
-  25-word / keccak-chain recovery path is gone"); on top of that,
-  the post-Bug-4-adjacent fix means the call now throws on
-  MAINNET / STAGENET because RAW32 isn't permitted there. So the
-  seed-recovery half of `stop_background_sync` is currently
-  mainnet-broken-with-clear-error rather than mainnet-broken-with-
-  silent-key-mismatch. Functionally equivalent to "this RPC is
-  defunct on mainnet," which is the correct fail-closed posture for
-  a defunct API but isn't a finished feature. The fix is to take a
-  BIP-39 mnemonic + passphrase instead of Electrum words and route
-  through `account_base::generate_from_bip39`.
+- **Add a BIP-39 / raw-seed recovery entry to
+  `stop_background_sync` in the Rust JSON-RPC server.** Pre-Phase-2
+  this entry was framed as "replace the Electrum-words seed-
+  recovery branch with BIP-39." The Electrum-words branch
+  (`crypto::ElectrumWords::words_to_bytes` →
+  `account_base::generate(recovery_key, true, false, nettype)` →
+  spend-key match check) was deleted outright in Phase 2 of the
+  Electrum-words removal series (PR #58); the C++
+  `wallet_rpc_server::on_stop_background_sync` handler now only
+  forwards `crypto::null_skey` to `wallet2::stop_background_sync`,
+  i.e., password-only recovery. Seed-based recovery via the JSON-RPC
+  surface is not currently exposed at all.
+
+  The forward-looking work is therefore additive: the V3.2
+  Rust JSON-RPC server gets to define a BIP-39 / raw-seed
+  recovery shape from scratch (route through the
+  `shekyl_account_generate_from_raw_seed` FFI for testnet/fakechain;
+  define the BIP-39 mnemonic + passphrase entry shape for
+  mainnet/stagenet once Bug-4's BIP-39 wrapper lands per the
+  separate V3.2 "wallet2 BIP-39 entry point" item). The C++ shim
+  retires with `wallet_rpc_server.cpp` in the same release; nothing
+  to migrate, since Phase 2 already removed the legacy surface.
 
   **Closure point:** V3.2 alongside the `shekyl-wallet-rpc` Rust
-  cutover. The Rust JSON-RPC server gets to define the recovery API
-  from scratch; the C++ shim retires with `wallet_rpc_server.cpp`.
+  cutover. Cross-references: PR #58 (Phase 2 RPC deletion);
+  [`docs/design/ELECTRUM_WORDS_REMOVAL.md`](./design/ELECTRUM_WORDS_REMOVAL.md)
+  §2.4 G1; commit `255ea0abb` (`wallet-rpc: drop seed-recovery
+  branch from stop_background_sync`).
 
 - **Replace `wallet_rpc_server::on_create_wallet` and
   `wallet2_ffi::create` raw-seed wallet creation with a BIP-39

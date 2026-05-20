@@ -531,8 +531,10 @@ Test targets:
 - `tests/CMakeLists.txt` (`shekyl-wallet-crypto-bench`)
 - `tests/wallet_bench/CMakeLists.txt` (`shekyl-wallet-bench`)
 - `tests/daemon_tests/CMakeLists.txt`
-- `tests/functional_tests/CMakeLists.txt` (`functional_tests`,
-  `make_test_signature`)
+- ~~`tests/functional_tests/CMakeLists.txt` (`functional_tests`,
+  `make_test_signature`)~~ — deleted outright in Phase 2 of the
+  Electrum-words removal (PR #58); not part of the Phase 3
+  link-drop checklist.
 - `tests/hash/CMakeLists.txt` (`hash-tests`)
 - `tests/performance_tests/CMakeLists.txt` (`performance_tests`)
 
@@ -667,7 +669,10 @@ RPC payments and are deleted whole:
 - `src/rpc/rpc_payment_signature.cpp`
 - `src/rpc/rpc_payment_costs.h`
 - `src/wallet/wallet_rpc_payments.cpp` (the wallet PoW touchpoint)
-- `tests/functional_tests/rpc_payment.py`
+- ~~`tests/functional_tests/rpc_payment.py`~~ — already gone:
+  `tests/functional_tests/` was deleted outright in Phase 2 of
+  the Electrum-words removal (PR #58); the rpc_payment Python
+  test went with it.
 
 Files that touch RPC payments but stay; surgical edits remove the
 payment hooks, types, RPC endpoints, CLI commands, and config fields:
@@ -701,10 +706,11 @@ payment hooks, types, RPC endpoints, CLI commands, and config fields:
 
 Test runner surface:
 
-- `tests/functional_tests/functional_tests_rpc.py` — remove
-  `'rpc_payment'` from `DEFAULT_TESTS` (currently in the default
-  list at line 13). Without this edit, the functional-test runner
-  would call into the deleted Python test file.
+- ~~`tests/functional_tests/functional_tests_rpc.py` — remove
+  `'rpc_payment'` from `DEFAULT_TESTS`~~ — moot: the entire
+  `tests/functional_tests/` directory was deleted in Phase 2 of
+  the Electrum-words removal (PR #58). No test-runner edit is
+  needed; the runner does not exist.
 
 Phase 0 review confirms this list against the tree before Phase 4
 begins; new daemon or wallet code merged in the interim is added here.
