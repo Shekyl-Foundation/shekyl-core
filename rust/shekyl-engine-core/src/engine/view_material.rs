@@ -10,7 +10,7 @@
 //! Per [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §3.1 +
 //! §5.4.7 R4 (a-instance-scoped), `ViewMaterial` is constructed
 //! once by the orchestrator from
-//! [`AllKeysBlob`](shekyl_crypto_pq::account::AllKeysBlob) under
+//! [`AllKeysBlob`] under
 //! the existing key read-guard, then moved into
 //! `LocalRefresh::new` (Phase 0b binding form per §4) for the
 //! refresh-instance's lifetime. The orchestrator never holds a
@@ -107,8 +107,11 @@
 //!
 //! [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
 
-use curve25519_dalek::{edwards::EdwardsPoint, scalar::Scalar};
+use curve25519_dalek::{edwards::CompressedEdwardsY, edwards::EdwardsPoint, scalar::Scalar};
+use shekyl_crypto_pq::account::AllKeysBlob;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+
+use super::error::{IoError, RefreshError};
 
 /// Per-instance view-and-spend material handed to
 /// [`RefreshEngine`](super::traits::RefreshEngine) implementors at
@@ -116,7 +119,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 ///
 /// Per [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §5.4.7 R4
 /// (a-instance-scoped), the orchestrator constructs this type once
-/// from [`AllKeysBlob`](shekyl_crypto_pq::account::AllKeysBlob) and
+/// from [`AllKeysBlob`] and
 /// moves it into `LocalRefresh::new` (Phase 0b binding form per
 /// §4); the type's wipe-on-drop chain runs when the implementor
 /// drops, clearing the secret material.
@@ -154,6 +157,86 @@ pub struct ViewMaterial {
     /// computation inside the producer's per-output match path
     /// (per `shekyl-scanner`'s `Scanner` interface).
     pub spend_secret: Zeroizing<[u8; 32]>,
+}
+
+impl ViewMaterial {
+    /// Construct a [`ViewMaterial`] from the wallet's
+    /// [`AllKeysBlob`].
+    ///
+    /// Per [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §5.4.7 R4
+    /// (a-instance-scoped), this is the orchestrator's single
+    /// construction site: called from `Engine::assemble` (and the
+    /// test-only `replace_*` helpers) under the freshly-derived
+    /// `AllKeysBlob`, then moved into
+    /// `LocalRefresh::new` for the refresh-instance's lifetime.
+    /// After the move the orchestrator never reads the constructed
+    /// `ViewMaterial` again; it is exposed to the producer only
+    /// through the [`RefreshEngine`](super::traits::RefreshEngine)
+    /// trait surface.
+    ///
+    /// # Field derivation
+    ///
+    /// The five fields are extracted verbatim from `keys`:
+    ///
+    /// - `spend_pub`: `keys.spend_pk` decompressed once
+    ///   ([`CompressedEdwardsY::decompress`]) — fails with
+    ///   [`RefreshError::Io`] if the compressed point bytes are not
+    ///   a canonical Edwards point.
+    /// - `view_scalar`: `Scalar::from_bytes_mod_order(keys.view_sk
+    ///   bytes)` — `view_sk` is stored as canonical 32-byte little-
+    ///   endian, reduction is a no-op on canonical input but
+    ///   `from_bytes_mod_order` is the safe choice for round-tripping
+    ///   serialized scalars.
+    /// - `x25519_sk`: copy of `keys.view_sk` bytes — `view_sk` and
+    ///   the X25519 secret key are the same 32-byte material (the
+    ///   wallet's view secret double-duties as the X25519 private
+    ///   scalar via the birational mapping at derivation time).
+    /// - `ml_kem_dk`: copy of `keys.ml_kem_dk.as_canonical_bytes()`
+    ///   into an owned `Vec<u8>`.
+    /// - `spend_secret`: copy of `keys.spend_sk` canonical bytes.
+    ///
+    /// All [`Zeroizing`] wrappers ensure the temporary copies are
+    /// wiped on drop; the source `AllKeysBlob` is unaffected.
+    ///
+    /// # Errors
+    ///
+    /// - [`RefreshError::Io`] with [`IoError::Scanner`] when
+    ///   `keys.spend_pk` is not a canonical Edwards point or does
+    ///   not decompress to a curve point. Defensive: `AllKeysBlob`
+    ///   construction validates the spend public key, so reaching
+    ///   this branch indicates corruption of in-memory key state.
+    ///
+    /// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
+    pub fn try_from_keys(keys: &AllKeysBlob) -> Result<Self, RefreshError> {
+        let spend_pub = CompressedEdwardsY::from_slice(keys.spend_pk.as_canonical_bytes())
+            .map_err(|e| {
+                RefreshError::Io(IoError::Scanner {
+                    detail: format!("AllKeysBlob.spend_pk is not a valid CompressedEdwardsY: {e}"),
+                })
+            })?
+            .decompress()
+            .ok_or_else(|| {
+                RefreshError::Io(IoError::Scanner {
+                    detail: "AllKeysBlob.spend_pk does not decompress to a curve point".to_string(),
+                })
+            })?;
+
+        let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(
+            *keys.view_sk.as_canonical_bytes(),
+        ));
+        let x25519_sk: Zeroizing<[u8; 32]> = Zeroizing::new(*keys.view_sk.as_canonical_bytes());
+        let ml_kem_dk: Zeroizing<Vec<u8>> =
+            Zeroizing::new(keys.ml_kem_dk.as_canonical_bytes().to_vec());
+        let spend_secret: Zeroizing<[u8; 32]> = Zeroizing::new(*keys.spend_sk.as_canonical_bytes());
+
+        Ok(Self {
+            spend_pub,
+            view_scalar,
+            x25519_sk,
+            ml_kem_dk,
+            spend_secret,
+        })
+    }
 }
 
 impl Drop for ViewMaterial {

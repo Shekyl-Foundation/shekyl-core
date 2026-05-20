@@ -200,7 +200,7 @@ use shekyl_engine_prefs::WalletPrefs;
 use shekyl_engine_state::WalletLedger;
 
 use crate::engine::local_ledger::LedgerState;
-use crate::engine::traits::{DaemonEngine, LedgerEngine};
+use crate::engine::traits::{DaemonEngine, LedgerEngine, RefreshEngine};
 
 /// The Shekyl V3 wallet domain orchestrator.
 ///
@@ -276,6 +276,7 @@ pub struct Engine<
     S: EngineSignerKind,
     D: DaemonEngine = DaemonClient,
     L: LedgerEngine = LocalLedger,
+    R: RefreshEngine = LocalRefresh,
 > {
     /// On-disk envelope: `.wallet.keys` (region 1) +
     /// `.wallet` (region 2). Owns the advisory lock and the
@@ -396,6 +397,39 @@ pub struct Engine<
     /// task exit (RAII).
     refresh_slot: refresh::RefreshSlot,
 
+    /// Producer-side [`RefreshEngine`] implementor.
+    ///
+    /// Per [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §7.X C5
+    /// (`Engine<S, D, L, R>` parameterization), the engine owns one
+    /// `R: RefreshEngine` for the lifetime of the open wallet; the
+    /// orchestrator's refresh paths (`Engine::start_refresh` /
+    /// `Engine::refresh`) dispatch the per-attempt producer body
+    /// through the trait surface. Production callers default
+    /// `R = LocalRefresh`, constructed at every `Engine::create` /
+    /// `Engine::open_*` site by moving a freshly-derived
+    /// [`ViewMaterial`](view_material::ViewMaterial) into
+    /// `LocalRefresh::new`.
+    ///
+    /// # Visibility for trait-dispatch (Stage 4)
+    ///
+    /// Holding the implementor by-value on `Engine` makes the
+    /// producer wipe-on-drop chain run when the wallet closes (today:
+    /// `Engine::close`; Stage 4: actor shutdown), wiping the producer's
+    /// view-and-spend secrets at the same moment as the rest of the
+    /// engine's key material. The Stage 4 actor cutover replaces this
+    /// field with an actor handle; the trait surface stays the same.
+    ///
+    /// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
+    // C5 (next commit on the §7.X commit list) is the first reader
+    // when `run_refresh_task` migrates from the inlined producer body
+    // to `engine.refresh.produce_scan_result(...)` trait dispatch.
+    // The field is written by every `Engine::assemble` and carried
+    // through the test-only `replace_*` helpers in C5a; the
+    // dead-code warning is silenced here because the writer-only
+    // window is exactly one commit long.
+    #[allow(dead_code)]
+    pub(crate) refresh: R,
+
     /// Compile-time signer-kind dispatch. The actual key material lives
     /// in [`Engine::keys`] (for `SoloSigner`); this marker exists so
     /// the V3.1 multisig type can name distinct method signatures via
@@ -404,8 +438,8 @@ pub struct Engine<
     _signer: PhantomData<S>,
 }
 
-impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine> std::fmt::Debug
-    for Engine<S, D, L>
+impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine, R: RefreshEngine>
+    std::fmt::Debug for Engine<S, D, L, R>
 {
     /// Redacted debug output. Specific reasons each field is or is not
     /// printed:
@@ -438,6 +472,14 @@ impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine> st
     ///   process-local monotonic `u64` with no observable secret
     ///   content; surfacing it helps debugging without leaking
     ///   reservation details.
+    /// - `refresh` — printed as an opaque `<redacted: RefreshEngine>`
+    ///   marker. The producer holds view-and-spend material per
+    ///   §5.4.7 R4; surfacing the implementor's `Debug` would risk
+    ///   leaking that material through a downstream sink. The
+    ///   producer's identity type is also printed for diagnostic
+    ///   purposes (e.g., distinguishing `LocalRefresh` from a future
+    ///   actor-backed implementor at Stage 4); `type_name` is
+    ///   secret-free.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Engine")
             .field("file", &self.file)
@@ -450,6 +492,8 @@ impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine> st
             .field("network", &self.network)
             .field("capability", &self.capability)
             .field("refresh_running", &self.refresh_slot.is_claimed())
+            .field("refresh", &"<redacted: RefreshEngine>")
+            .field("refresh_kind", &std::any::type_name::<R>())
             .field("signer_kind", &std::any::type_name::<S>())
             .finish()
     }
@@ -500,7 +544,7 @@ impl std::ops::Deref for LedgerReadGuard<'_> {
 // `D: DaemonEngine` and `L: LedgerEngine` private-bound: see the
 // rationale on the `pub struct Engine` definition in this file.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine> Engine<S, D, L> {
+impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> Engine<S, D, L, R> {
     /// Network this wallet is bound to. Cached from
     /// [`WalletFile`]'s region 1 at construction; stable for the life
     /// of the open wallet.
@@ -563,7 +607,7 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine> Engine<S, D, L> {
 // `LedgerEngine` to a richer surface (or replaces this accessor
 // with a trait-level read-state method), this block dissolves.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
+impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine> Engine<S, D, LocalLedger, R> {
     /// Borrow the persistent ledger for read-only queries (transfers,
     /// bookkeeping entries, tx metadata, sync cursor). Mutation goes
     /// through the methods on [`Engine`] that the lifecycle / refresh /
