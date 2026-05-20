@@ -4223,7 +4223,14 @@ typical-case per-tx scan time is well under the lock-latency
 target — the typical-case escalation is unnecessary. Phase 1
 commit-author makes the call against benchmarked cost; the
 choice is recorded in the C4 commit message and bisectable
-against the C4 commit boundary.
+against the C4 commit boundary. **Measurement evidence
+landed.** The Phase 1 author's reference measurement (Linux
+i9-11950H, `performance` governor, bench harness commit
+`46c64760d`, 2026-05-20) lives durably at §7.Y. Worst-case
+per-tx scan time at `N = MAX_OUTPUTS = 16` measures
+12.95 ms cold p99 — exceeding the §3.1 millisecond-scale
+target by ~13× — so the criterion is met and C4 lands the
+per-output safe-point granularity.
 
 **Inline edits applied.**
 
@@ -5004,8 +5011,10 @@ Introduces the `RefreshEngine`-implementing aggregate:
   under either granularity provided the criterion is
   satisfied. Phase 1 commit-message records the
   measurement and the chosen granularity per the
-  audit-trail discipline; the choice is bisectable
-  against the C4 commit boundary.
+  audit-trail discipline (durable measurement evidence
+  lives at §7.Y; C4 commit-message summarizes and cites
+  by section); the choice is bisectable against the C4
+  commit boundary.
 - **Producer-side per-class emission rate budget (Round 4
   review pass, 2026-05-15; F6; emission-cadence pin from
   F13 sub-pin amendment, 2026-05-15).**
@@ -5198,6 +5207,335 @@ per `emit` call). The §5.4.4 invocation-overhead constraint
 is satisfied by construction: no per-call setup cost beyond
 the parameter passes; no per-block dispatch overhead beyond
 the existing per-block scan loop's iteration count.
+
+---
+
+## §7.Y Phase 1 F11-S audit-trail measurement (2026-05-20)
+
+The Round 4 review-pass §5.4.9 F11-S post-amendment sub-pin
+pinned the per-output safe-point escalation criterion as a
+binding Phase 1 commit-author deliverable: if worst-case per-tx
+`recover_outputs_in_tx` scan time under maximum-output-count
+hostile transactions exceeds the §3.1 sub-block lock-latency
+target, the safe-point granularity escalates from per-transaction
+(per §7.X C4 "Inner cancellation check") to per-output (per §7.X
+C4 "Per-output escalation criterion"). The §7.X C4 commit message
+records the chosen granularity and summarizes the measurement;
+**this section holds the durable evidence so the C4 commit body
+can cite by section rather than embedding multi-page benchmark
+output**. The FOLLOWUPS V3.0 entry "F11-S Windows-midrange-PC
+measurement revisit at stressnet" ([`docs/FOLLOWUPS.md`](../FOLLOWUPS.md))
+references this section as the substrate the Phase 7.7
+re-measurement is compared against.
+
+This section is **append-only**: re-measurements at FOLLOWUPS-
+triggered substrate changes (Windows-midrange-PC re-measurement
+at Phase 7.7; future re-measurements at hardware-floor shifts)
+land as new sub-sections (§7.Y.11, §7.Y.12, …) preserving the
+historical audit trail.
+
+### §7.Y.1 Disposition
+
+**Chosen granularity: per-output safe-point.** Worst-case per-tx
+scan time under `N = MAX_OUTPUTS = 16` hostile transactions measures
+**12.95 ms p99 cold-cache** on the Phase 1 author's reference
+hardware (§7.Y.2), exceeding the §3.1 millisecond-scale lock-latency
+target by ~13×. The F11-S sub-pin's binding criterion is met
+unambiguously; per-output granularity is mandatory at C4.
+
+**Strict 2× safety margin breach acknowledged and deferred.**
+Per-output marginal cost measures **819 µs cold p99**
+(regression-derived) / **809 µs cold p99** (direct quotient at
+N=16) — within the §3.1 raw 1 ms target (0.82×) but exceeding the
+strict 500 µs microbench-to-production decision-line by 1.64×.
+The Phase 7.7 stressnet re-measurement on the designated Windows-
+midrange PC (per FOLLOWUPS) is the load-bearing audit-trail floor
+that confirms (per-output granularity remains sub-millisecond on
+commodity Windows hardware) or escalates (per-output cost exceeds
+§3.1 target ⇒ further optimization or safe-point granularity
+revision) the disposition.
+
+### §7.Y.2 Environment
+
+| Item | Value |
+|---|---|
+| Hardware | 11th Gen Intel Core i9-11950H @ 2.60 GHz base / 5.00 GHz turbo (8C/16T, Tiger Lake-H) |
+| OS | Linux 6.12.88-1 Debian 13, x86_64 |
+| Toolchain | rustc 1.95.0, cargo 1.95.0, release profile |
+| CPU governor | `performance` (all 16 logical cores) |
+| CPU pinning | `taskset -c 4` (single logical core, physical core 4) |
+| Power source | AC (BAT0 = Full) |
+| Load avg at bench start | 0.36 / 0.36 / 0.52 (1m / 5m / 15m) |
+| Frequency at bench start (core 4) | 4.35 GHz |
+| valgrind | 3.24.0 |
+| iai-callgrind-runner | 0.16.1 |
+| Bench harness commit | `46c64760d` (PR 4 F11-S prep #2) |
+| Measurement date | 2026-05-20 |
+
+### §7.Y.3 Harness
+
+The bench harness lives at three sites, all gated to dev/bench
+builds:
+
+- [`rust/shekyl-scanner/src/bench_fixtures.rs`](../../rust/shekyl-scanner/src/bench_fixtures.rs)
+  (gated behind the `test-utils` feature) — `BenchWalletKeys`,
+  `make_bench_wallet`, `build_worst_case_scannable_block`,
+  `build_typical_case_scannable_block`, plus sanity-check tests
+  that assert the worst-case fixture actually exercises the
+  view-tag-matching slow path and the typical-case fixture
+  actually exits via the view-tag mismatch fast path.
+- [`rust/shekyl-scanner/benches/scan_transaction.rs`](../../rust/shekyl-scanner/benches/scan_transaction.rs)
+  (criterion) — two benchmark groups
+  (`worst_case_all_view_tags_match` [F11-S binding, identified
+  in code via the `F11S_BINDING_GROUP` constant] and
+  `typical_case_view_tag_filtered` [contextual]), each sweeping
+  N ∈ {1, 4, 8, 16} outputs with both warm-cache and cold-cache
+  variants. Warm-cache uses criterion's `iter_batched_ref`;
+  cold-cache uses `iter_batched` with `BatchSize::PerIteration`
+  (fresh `(Scanner, ScannableBlock)` constructed per iteration
+  outside the measured region — setup-induced L1/L2 thrashing
+  is part of what "cold" means here).
+- [`rust/shekyl-scanner/benches/scan_transaction_iai.rs`](../../rust/shekyl-scanner/benches/scan_transaction_iai.rs)
+  (iai-callgrind companion) — deterministic instruction-count
+  cross-check on the same two groups at the same N sweep.
+
+The harness measures `Scanner::scan(block)` (the public API),
+accepting minimal block-orchestration overhead in exchange for
+public-API consistency with the production refresh-engine call
+path.
+
+### §7.Y.4 Wall-clock measurement (criterion, performance governor)
+
+Per-tx total scan time, all N values (100 samples per cell):
+
+| Group | Cache | N | p50 (µs) | p99 (µs) | max (µs) | min (µs) |
+|---|---|---|---:|---:|---:|---:|
+| worst_case | warm | 1 | 724 | 820 | 1063 | 710 |
+| worst_case | warm | 4 | 2927 | 2974 | 2991 | 2910 |
+| worst_case | warm | 8 | 5877 | 6024 | 6483 | 5843 |
+| worst_case | warm | 16 | 11672 | 11895 | 12215 | 11600 |
+| worst_case | cold | 1 | 721 | 771 | 1014 | 714 |
+| worst_case | cold | 4 | 2941 | 2994 | 3001 | 2923 |
+| worst_case | cold | 8 | 5901 | 6382 | 6382 | 5844 |
+| **worst_case** | **cold** | **16** | **11754** | **12983** | **14273** | **11642** |
+| typical_case | warm | 1 | 93 | 95 | 96 | 92 |
+| typical_case | warm | 4 | 365 | 395 | 397 | 360 |
+| typical_case | warm | 8 | 789 | 1360 | 1525 | 730 |
+| typical_case | warm | 16 | 1510 | 2541 | 2542 | 1460 |
+| typical_case | cold | 1 | 97 | 117 | 130 | 95 |
+| typical_case | cold | 4 | 386 | 432 | 449 | 374 |
+| typical_case | cold | 8 | 743 | 777 | 780 | 732 |
+| typical_case | cold | 16 | 1500 | 1768 | 1852 | 1465 |
+
+**F11-S binding row in bold**: `worst_case / cold-cache /
+N = MAX_OUTPUTS = 16`.
+
+Linear regression across N (`time = F + N × P`, cold-cache p99):
+
+| Group | Per-tx fixed F (µs) | Per-output marginal P (µs) | Worst @ N=16 (µs) |
+|---|---:|---:|---:|
+| worst_case (p50) | -2 | 735 | 11764 |
+| **worst_case (p99)** | **-157** | **819** | **12951** |
+| worst_case (max) | -329 | 896 | 14009 |
+| typical_case (p99) | -23 | 110 | 1734 |
+
+The slightly negative intercept at p99 reflects per-iteration
+setup outliers at low N (N=1 cold p99 = 771 µs vs regression-
+predicted 662 µs; +109 µs residual); the high-N points are
+clean (N=16 cold p99 residual = +32 µs, <0.3% of measurement).
+**The directly-measured N=16 cold p99 (12.95 ms) is the
+load-bearing number**; the regression-derived per-output cost
+(819 µs) is the secondary derivation and is anchored against
+the deterministic iai-callgrind per-output instruction count
+(§7.Y.5).
+
+### §7.Y.5 iai-callgrind cross-check (deterministic; governor-independent)
+
+iai-callgrind instruments under valgrind to count executed
+instructions exactly, decoupling the measurement from CPU
+frequency, scheduling jitter, and cache state. Instruction
+counts per `Scanner::scan` call:
+
+| Group | N=1 | N=4 | N=8 | N=16 |
+|---|---:|---:|---:|---:|
+| worst_case (insn) | 13,597,126 | 54,308,095 | 108,578,773 | 217,160,656 |
+| typical_case (insn) | 1,695,591 | 6,698,615 | 13,375,638 | 28,122,608 |
+
+Linear regression:
+
+| Group | Per-tx fixed (insn) | Per-output marginal (insn) | Residual @ N=16 |
+|---|---:|---:|---:|
+| worst_case | +22,429 | 13,570,860 | +4,471 (0.002%) |
+| typical_case | -324,444 | 1,765,180 | +204,167 (0.7%) |
+
+Worst-case is linear to within **0.005% at N=16** — the per-output
+cost is genuinely flat (no per-tx amortizable overhead is being
+missed). Typical-case has a slightly looser fit due to ~16% per-tx
+fixed overhead (`Scanner` setup amortizes faster relative to the
+smaller per-output cost), but residuals remain under 1.5% at every
+N.
+
+**Cache locality (worst case).** RAM hits scale by **+15.7 per
+added output** (N=1: 585 RAM hits; N=16: 821). The per-output
+cost is dominated by L1-resident crypto code (ML-KEM-768 decap +
+Curve25519 commitment verify + HKDF derivations), not memory
+bandwidth. **This property bounds portability across systems** —
+the FOLLOWUPS Windows-midrange re-measurement at Phase 7.7
+should track the i9-11950H result modulo single-thread frequency
+differences only.
+
+### §7.Y.6 Cross-method agreement
+
+| Source | Slow-path-to-fast-path ratio |
+|---|---:|
+| Wall-clock (cold p99) | **7.46×** |
+| Instruction count (iai-callgrind) | **7.69×** |
+| **Agreement** | **within 3.1%** |
+
+The 3.1% wall-clock-vs-instruction agreement is strong evidence
+the measurement isn't being confounded by noise or cache
+pathology, and that the slow-path / fast-path cost ratio is a
+real architectural property of `scan_output_recover`'s
+X25519-precedes-view-tag-derivation ordering (§7.Y.7).
+
+### §7.Y.7 Methodology sanity check — Shekyl-corrected expected ratio range
+
+The F11-S sub-pin's audit-trail-template framing presumed an
+expected slow-path-to-fast-path ratio of ~100-500×, anchored on
+Monero's wire-byte view-tag ordering where the fast-path is
+dominated by a 50-200 ns wire compare *before* any DH work. The
+measured ratio of 6.58× (powersave first-pass) / 7.46×
+(performance second-pass) trips that framing's "ratio is wildly
+off ⇒ measurement-methodology smell" rule on its face — but the
+discrepancy is **architectural, not methodological**.
+
+**Shekyl's `scan_output_recover` ordering** (see the bench
+harness's sanity-check tests
+`worst_case_first_output_returns_full_recovery` and
+`typical_case_first_output_exits_via_view_tag_mismatch`, which
+assert the typical-case error literally carries the `"X25519 view
+tag mismatch"` text): each per-output flow is **X25519 ECDH →
+HKDF-derive view tag from SS → wire-compare derived vs on-chain →
+branch**. The wire-compare-derived-vs-on-chain step is still
+~50-200 ns, but X25519 ECDH + HKDF (~95-105 µs) is **always paid**
+on every output regardless of view-tag outcome. The typical-case
+cost is therefore X25519-ECDH-bound, not wire-compare-bound.
+
+**Shekyl-corrected expected ranges:**
+
+| Quantity | Expected (Shekyl ordering) | Measured |
+|---|---:|---:|
+| Fast-path floor (X25519 ECDH + HKDF) | 80-150 µs/output | **105 µs** |
+| Slow-path (fast-path + ML-KEM-768 decap + commit/amount verify) | 600-900 µs/output | **690-819 µs** |
+| Slow-path-to-fast-path ratio | 5-10× | **7.46×** |
+
+All three figures land in-range; the sanity-check passes. The
+audit-trail template's 100-500× range derived from Monero's
+wire-byte view-tag ordering — not Shekyl's derive-on-scan
+ordering — and is re-anchored at the Shekyl-corrected **5-10×**
+range for future re-measurements (the FOLLOWUPS Phase 7.7
+re-measurement's expected-range column should cite the 5-10×
+figure with this section as the anchor).
+
+### §7.Y.8 Powersave → performance delta (governor sensitivity)
+
+The Phase 1 author's first-pass measurement used the system's
+default `powersave` CPU governor; a second pass under
+`performance` governor (all 16 logical cores) confirms the
+load-bearing N=16 result is governor-insensitive:
+
+| N | Powersave cold p99 (µs) | Performance cold p99 (µs) | Δ |
+|---:|---:|---:|---:|
+| 1 | 1308 | 771 | -41% |
+| 4 | 5161 | 2994 | -42% |
+| 8 | 6131 | 6382 | +4% |
+| **16** | **12319** | **12983** | **+5%** |
+
+`powersave` significantly inflates the low-N samples (the
+powersave-to-turbo frequency ramp dominates the short
+per-iteration measurement window), but the high-N samples are
+already turbo-saturated by the time of measurement. The +5%
+drift at N=16 cold p99 reflects that `performance` amplifies
+background-interference outliers visible against a less-noisy
+steady state; the **median** at N=16 actually improved from
+11963 → 11754 µs (-1.7%), confirming the central tendency is
+consistent.
+
+For audit-trail purposes the `performance`-governor p99
+(12.95 ms) is the conservative binding; the `powersave`
+first-pass remains valid as a corroborating data point.
+
+### §7.Y.9 Forward bindings (reversion-clause discipline)
+
+Per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc),
+the §7.Y.1 disposition records the substrate-anchored
+re-evaluation criterion explicitly:
+
+- **Substrate (now).** Phase 1 author's reference hardware
+  (Intel i9-11950H, Linux + AC, `performance` governor),
+  bench harness commit `46c64760d`, dev-tip
+  `recover_outputs_in_tx` implementation.
+- **Re-evaluation criterion (named substrate change).** A
+  measurement on the designated Windows midrange PC at Phase 7.7
+  stressnet against the same bench harness, OR a measurement
+  on different hardware after a substantive
+  `recover_outputs_in_tx` implementation change (e.g., ML-KEM-768
+  decap crate upgrade with substantially-different per-output
+  cost), OR a `MAX_OUTPUTS` bound change (currently 16; FCMP++
+  consensus-binding).
+- **Re-evaluation shape.** Append a new sub-section §7.Y.N to
+  this section with the re-measurement's environment, table, and
+  disposition; if the disposition changes (granularity escalates
+  from per-output, or de-escalates back to per-tx), the FOLLOWUPS
+  entry's escalation-PR shape (per
+  [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) "F11-S Windows-midrange-PC
+  measurement revisit at stressnet (V3.0)") applies.
+
+**Cross-references.**
+- §5.4.9 F11-S sub-pin disposition (the criterion this section
+  satisfies).
+- §7.X C4 "Per-output escalation criterion" bullet (the commit
+  decomposition that lands the per-output safe-point against this
+  section's measurement).
+- [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) "F11-S Windows-midrange-PC
+  measurement revisit at stressnet (V3.0)" entry (the close-condition
+  that triggers re-measurement).
+- [`rust/shekyl-scanner/src/scan.rs`](../../rust/shekyl-scanner/src/scan.rs)
+  `MAX_OUTPUTS = 16` (the consensus-binding upper bound the
+  measurement's N sweep is anchored against).
+
+### §7.Y.10 Re-measurement protocol
+
+When the FOLLOWUPS Phase 7.7 entry triggers, the re-measurement
+follows this protocol:
+
+1. Recompile the `46c64760d` bench harness on the target
+   platform against the dev tip at re-measurement time
+   (confirming behavioural compatibility with the bench-harness
+   API; if the harness has drifted post-`46c64760d`, capture the
+   harness's then-current commit SHA in the re-measurement's
+   §7.Y.2-equivalent environment table).
+2. Capture the §7.Y.2 environment table for the target platform.
+3. Run `cargo bench -p shekyl-scanner --bench scan_transaction`
+   under the target platform's equivalent of `performance`
+   governor + single-core pin; capture per-N per-cache
+   p50/p99/max tables.
+4. Run `cargo bench -p shekyl-scanner --bench scan_transaction_iai`
+   for the deterministic instruction-count cross-check; expect
+   approximately-identical instruction counts (governor- and
+   platform-independent modulo libc / crypto-crate ISA-feature
+   variation) and confirm linearity holds.
+5. Compute the cold-cache p99 N=16 worst-case per-tx scan time
+   and the per-output marginal cost.
+6. Compare against the §3.1 1 ms target and the strict 500 µs
+   decision-line; document the disposition in a new §7.Y.*
+   sub-section appended to this section, naming the re-measurement
+   date and target platform.
+7. If the disposition changes (per-output granularity escalates
+   to per-N-output batching, or to per-instruction safe-point, or
+   the cost falls below the strict decision-line obviating the
+   2× margin caveat), the FOLLOWUPS entry's escalation-PR shape
+   applies.
 
 ---
 

@@ -232,22 +232,29 @@ sustainability is unaffected by the recalibration.
   2026-05-10), comment ID 3215308856 on `merge.rs:336`.
 
 - **F11-S Windows-midrange-PC measurement revisit at stressnet
-  (trigger: PR 4 C4 lands the Linux-laptop F11-S measurement;
-  close-condition: stressnet phase captures the matching
-  Windows-midrange-PC measurement against the same bench harness;
-  Phase 7.7).** Per
+  (trigger: PR 4 lands the Linux-laptop F11-S measurement evidence
+  at design-doc §7.Y, 2026-05-20; close-condition: stressnet phase
+  captures the matching Windows-midrange-PC measurement against the
+  same bench harness; Phase 7.7).** Per
   [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §4184–§4238 (F11-S sub-pin), Phase 1 commit-author for C4 decides
   per-tx vs. per-output safe-point granularity against benchmarked
-  `recover_outputs_in_tx` cost. The reference measurement for C4
-  captures on the Phase 1 author's Linux laptop on AC against the
-  bench harness landed at commit `46c64760d`
+  `recover_outputs_in_tx` cost. The reference measurement captured
+  on the Phase 1 author's Linux laptop on AC against the bench
+  harness landed at commit `46c64760d`
   (`rust/shekyl-scanner/benches/scan_transaction.rs`, group
   `worst_case_all_view_tags_match`, F11-S binding identified in
   code via the `F11S_BINDING_GROUP` constant; per-output worst-case
   cost = full hybrid PQC slow path with subaddress-lookup miss).
-  The C4 commit message records the measurement and chosen
-  granularity per the §4222–§4238 audit-trail discipline.
+  **Measurement disposition (2026-05-20):** worst-case per-tx scan
+  time at `N = MAX_OUTPUTS = 16` measures 12.95 ms cold p99 (~13×
+  the §3.1 1 ms target); C4 lands the per-output safe-point
+  granularity per §4209–§4217 of the F11-S sub-pin. The durable
+  measurement evidence (environment, four data points × two
+  groups × two cache variants, iai-callgrind cross-check, sanity
+  check, governor-sensitivity analysis, re-measurement protocol)
+  lives at design-doc §7.Y; the C4 commit message summarizes and
+  cites §7.Y per the §4222–§4238 audit-trail discipline.
 
   **Why the Linux-laptop measurement alone is not the audit floor.**
   The §3.1 millisecond-scale lock-latency target is a property of
@@ -282,31 +289,36 @@ sustainability is unaffected by the recalibration.
 
   **Re-evaluation per
   [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc).**
-  If the Windows-midrange measurement produces a granularity
-  decision that disagrees with C4's Linux-laptop disposition (i.e.,
-  C4 selected per-tx granularity but the Windows-midrange worst-
-  case per-tx scan time exceeds the §3.1 lock-latency target ×
-  C4's 2× safety margin), the safe-point granularity escalates to
-  per-output per §4209–§4217 of the F11-S sub-pin (the per-tx →
-  per-output escalation is wallet-internal scope; not a chain-rule
-  change). Escalation is a single-point edit in
-  `RefreshEngine::recover_outputs_in_tx` and lands in a focused PR
-  off `dev` named `refresh/f11s-stressnet-granularity-escalation`.
-  If the measurements agree, this entry closes with the Windows-
-  midrange data points appended to C4's audit trail and no code
-  change.
+  C4 lands per-output safe-point granularity on the Linux-laptop
+  measurement (820 µs cold p99 per-output marginal cost, within
+  the §3.1 1 ms raw target by 0.82× but exceeding the strict 2×
+  safety-margin decision-line by 1.64×). The Windows-midrange
+  re-measurement either confirms (per-output cost remains within
+  the §3.1 1 ms raw target on commodity Windows hardware ⇒ this
+  entry closes with the Windows-midrange data points appended to
+  §7.Y and no code change) or escalates (per-output cost exceeds
+  the §3.1 raw target on commodity Windows hardware ⇒ further
+  safe-point granularity refinement, per-N-output batching, or
+  per-output crypto-cost optimization is required, landing in a
+  focused PR off `dev` named
+  `refresh/f11s-stressnet-granularity-escalation`). The escalation
+  PR is wallet-internal scope; not a chain-rule change.
 
   **Close-condition.** A stressnet commit captures the Windows-
-  midrange-PC F11-S measurement against the bench harness, and
-  either (a) the granularity decision matches C4's, in which case
-  the audit trail extends with the Windows-midrange data points
-  and this entry closes; or (b) the granularity escalates to
-  per-output, in which case the escalation PR closes both this
-  entry and the F11-S sub-pin.
+  midrange-PC F11-S measurement against the bench harness and
+  appends the data points to design-doc §7.Y as a new
+  `§7.Y.N`-shape sub-section per the §7.Y.10 re-measurement
+  protocol. Either (a) the Windows-midrange per-output cold p99
+  remains within the §3.1 1 ms raw target, in which case the audit
+  trail extends and this entry closes; or (b) the Windows-midrange
+  per-output cold p99 exceeds the §3.1 raw target, in which case
+  the escalation PR closes both this entry and the F11-S sub-pin.
 
   **Cross-references.**
   [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §4184–§4238 (F11-S sub-pin and per-output escalation criterion);
+  §7.Y (durable Phase 1 author measurement evidence and
+  re-measurement protocol);
   `rust/shekyl-scanner/benches/scan_transaction.rs` and
   `rust/shekyl-scanner/src/bench_fixtures.rs` (bench harness; F11-S
   binding named in code via the `F11S_BINDING_GROUP` constant);
