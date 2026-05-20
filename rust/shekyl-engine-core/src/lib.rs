@@ -23,11 +23,13 @@ pub mod workflow;
 
 pub use claim_builder::{ClaimTxBuilder, ClaimTxPlan};
 pub use engine::{
-    Capability, CapabilityInput, Credentials, DaemonClient, Engine, EngineCreateParams,
-    EngineSignerKind, FeePriority, IoError, KeyError, Network, OpenError, OpenedEngine, PendingTx,
-    PendingTxError, RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase,
-    RefreshProgress, RefreshReorgEvent, RefreshSummary, ReservationId, SendError, SoloSigner,
-    TxError, TxHash, TxRecipient, TxRecipientSummary, TxRequest, ViewMaterial,
+    Capability, CapabilityInput, Credentials, DaemonClient, DaemonOp, DiagnosticSink, Engine,
+    EngineCreateParams, EngineSignerKind, FeePriority, IoError, KeyError, MalformedKind, Network,
+    NoopDiagnosticSink, OpenError, OpenedEngine, PendingTx, PendingTxError, ProtocolErrorKind,
+    RefreshDiagnostic, RefreshError, RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress,
+    RefreshReorgEvent, RefreshSummary, ReservationId, SendError, SoloSigner, SuppressedClass,
+    TracingDiagnosticSink, TxError, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
+    ViewMaterial,
 };
 pub use error::EngineCoreError;
 pub use scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
