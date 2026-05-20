@@ -159,6 +159,7 @@ pub mod error;
 pub mod lifecycle;
 pub(crate) mod local_keys;
 pub(crate) mod local_ledger;
+pub(crate) mod local_refresh;
 pub mod merge;
 pub mod network;
 pub mod pending;
@@ -179,6 +180,7 @@ pub use diagnostics::{
 pub use error::{IoError, KeyError, OpenError, PendingTxError, RefreshError, SendError, TxError};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 pub use local_ledger::LocalLedger;
+pub use local_refresh::LocalRefresh;
 pub use network::Network;
 pub use pending::{
     FeePriority, PendingTx, ReservationId, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
