@@ -212,6 +212,74 @@ pub enum RefreshError {
     /// not consume. Carries an [`IoError`] for upstream detail.
     #[error("daemon/scan IO failure: {0}")]
     Io(#[from] IoError),
+
+    /// The orchestrator state machine reached a path the developer
+    /// marked as "should never happen" — a structural invariant
+    /// violation, distinct from both [`Self::ConcurrentMutation`]
+    /// (retry-budget exhaustion under sustained merge contention) and
+    /// [`Self::MalformedScanResult`] (a producer-bug signal carrying
+    /// internal-shape violations of the scanner's output contract).
+    ///
+    /// # Why this is its own variant
+    ///
+    /// The two retry-loop call sites in
+    /// `Engine::refresh` and `run_refresh_task` currently fall back on
+    /// `MalformedScanResult` when the loop body exits without observing
+    /// a `ConcurrentMutation`, with the comment *"falling through with
+    /// `None` would mean the loop body itself is broken."* That case
+    /// is structurally distinct from a scanner-produced contract
+    /// violation: it is an orchestrator-side state-machine failure,
+    /// not a producer-side defect. Routing both through
+    /// `MalformedScanResult` would conflate "the scanner emitted a
+    /// `ScanResult` whose internal shape disagrees with itself" with
+    /// "the engine's retry loop reached an unreachable branch";
+    /// downstream consumers (telemetry; future peer-reputation
+    /// actors; future user-facing error surface) need different
+    /// responses for the two cases. The variant separation is
+    /// correctness-preserving, not stylistic.
+    ///
+    /// Routing through `ConcurrentMutation` is also wrong: that
+    /// variant carries the snapshot-disagreement pair (`wallet`,
+    /// `result`) the caller uses to decide whether to retry. An
+    /// unreached-invariant case has no such pair to report.
+    ///
+    /// # Field
+    ///
+    /// `context` is a `&'static str` named at the call site so audit
+    /// can read every distinguishable invariant-violation class from
+    /// source. The unit-variant discipline on the producer trait
+    /// surface (`RefreshEngine::Error: Into<RefreshError>` with
+    /// trait-error vocabulary restricted to `Cancelled` / `Io` /
+    /// `MalformedScanResult`) exists to close the memory-amplifier
+    /// and log-exfiltration vectors on attacker-influenced data;
+    /// neither vector applies here, because `context` is
+    /// compile-time-fixed developer content at an
+    /// orchestrator-internal call site — no daemon input or
+    /// scanner-emitted bytes flow in.
+    ///
+    /// # Lifecycle
+    ///
+    /// The variant is added in PR 4 C3 ahead of any call-site
+    /// migration. PR 4 C5 migrates the two retry-loop call sites
+    /// (the `MalformedScanResult { reason: "..." }` fallbacks in
+    /// `run_refresh_task` and `Engine::refresh`) over to
+    /// `InternalInvariantViolation`, preserving the existing
+    /// `&'static str` content as the `context` value at each site.
+    /// Future orchestrator-internal "this branch should be
+    /// unreachable" paths route here categorically rather than
+    /// re-litigating where they belong.
+    ///
+    /// See `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §4 Phase 0c
+    /// ("Why `InternalInvariantViolation` is its own variant, not
+    /// an extension of `ConcurrentMutation`") for the full rationale.
+    #[error("internal invariant violation: {context}")]
+    InternalInvariantViolation {
+        /// Compile-time-fixed name of the violated invariant. Named
+        /// at the call site so audit can read every distinguishable
+        /// case from source rather than parsing a runtime-synthesized
+        /// message.
+        context: &'static str,
+    },
 }
 
 // --- Ledger ----------------------------------------------------------------
