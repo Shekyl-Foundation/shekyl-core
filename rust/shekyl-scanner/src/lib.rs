@@ -66,7 +66,9 @@ pub use claim::ClaimableInfo;
 pub use extra::{Extra, ExtraField};
 pub use ledger_ext::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt};
 pub use output::WalletOutput;
-pub use scan::{GuaranteedScanner, RecoveredWalletOutput, ScanError, Scanner, Timelocked};
+pub use scan::{
+    GuaranteedScanner, RecoveredWalletOutput, ScanError, Scanner, Timelocked, MAX_OUTPUTS,
+};
 pub use shared_key::SharedKeyDerivations;
 pub use view_pair::{GuaranteedViewPair, ViewPair, ViewPairError};
 

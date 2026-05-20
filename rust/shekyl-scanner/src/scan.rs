@@ -37,6 +37,59 @@ use crate::{extra::Extra, output::*, GuaranteedViewPair, SubaddressIndex, ViewPa
 const X25519_CT_BYTES: usize = 32;
 const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
 
+/// Maximum number of outputs a single transaction may carry under
+/// Shekyl V3 consensus, mirroring the FCMP++ Bulletproofs+ commitment
+/// cap.
+///
+/// # Defense-in-depth posture
+///
+/// The scanner enforces this bound at `InternalScanner::scan_transaction`
+/// entry — *before* any per-output decap or key-image derivation runs —
+/// so that an adversarial daemon delivering oversized transactions
+/// cannot inflate the wallet's per-tx scan-time budget. Consensus
+/// validation will eventually reject any such transaction, but the
+/// scanner does not depend on that timing: it bounds its own per-tx
+/// loop independently. The check is O(1) (single integer compare) and
+/// converts the §3.1 sub-block lock-latency reasoning from "unbounded
+/// per-tx work under adversarial daemon block crafting" to "bounded
+/// per-tx work with N ≤ [`MAX_OUTPUTS`] by construction", which is
+/// what the F11-S audit-trail measurement in PR 4 §5.4.9 binds
+/// against. See `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §3.1
+/// and the C4 F11-S measurement commit-body for the full rationale.
+///
+/// # Cross-references
+///
+/// Three mirror sites name the same `16` constant in the workspace.
+/// The canonical source of truth is
+/// [`shekyl_generators::MAX_BULLETPROOF_COMMITMENTS`] — the value the
+/// Bulletproofs+ CRS is generated against; loosening it without
+/// regenerating generators would break verification. The other
+/// mirrors are:
+///
+/// - `shekyl_tx_builder::MAX_OUTPUTS` — builder-side prover cap (a
+///   transaction signer cannot construct a tx with more outputs than
+///   the BP+ CRS supports). Not an intra-doc link because
+///   `shekyl-scanner` does not depend on `shekyl-tx-builder`.
+/// - This constant — scanner-side defense-in-depth gate.
+///
+/// The single-direction `const_assert!` below couples this constant
+/// to the canonical bound; a future bump of
+/// `MAX_BULLETPROOF_COMMITMENTS` will fire a build error here until
+/// the scanner gate is intentionally re-decided.
+pub const MAX_OUTPUTS: usize = 16;
+
+// Single-direction enforcement against the canonical source of truth.
+// `shekyl_generators::MAX_BULLETPROOF_COMMITMENTS` is the
+// Bulletproofs+ CRS size; the scanner gate must agree by construction.
+// `shekyl-tx-builder` carries its own assertion against the same
+// canonical, so a future loosening of the canonical bound fires CI in
+// every mirror crate independently rather than triangulating through
+// any single crate.
+const _: () = assert!(
+    MAX_OUTPUTS == shekyl_generators::MAX_BULLETPROOF_COMMITMENTS,
+    "shekyl-scanner MAX_OUTPUTS must match shekyl_generators::MAX_BULLETPROOF_COMMITMENTS (Bulletproofs+ CRS size)",
+);
+
 /// A recovered output with all PQC secrets populated at scan time.
 ///
 /// Carries the HKDF-derived secrets (ho, y, z, k_amount), combined shared secret,
@@ -271,6 +324,33 @@ impl InternalScanner {
         tx_hash: [u8; 32],
         tx: &Transaction<Pruned>,
     ) -> Result<Timelocked, ScanError> {
+        // Defense-in-depth size gate (PR 4 §3.1 / F11-S substrate). The
+        // wallet's trust model treats the daemon as adversarial; a
+        // hostile daemon could (pre-consensus rejection) deliver
+        // transactions whose output count exceeds the FCMP++
+        // Bulletproofs+ CRS size and inflate the per-tx scan budget
+        // arbitrarily. Bound the per-tx work at the scanner's own
+        // entry rather than depending on consensus validation timing.
+        //
+        // Skip-and-log shape: an oversized transaction is silently
+        // skipped (returns the empty `Timelocked`) and a `WARN` event
+        // fires for observability. Engine-side diagnostic emission
+        // (`RefreshDiagnostic::DaemonMalformed { kind: ExcessiveOutputs }`)
+        // lands in PR 4 C4 via a pre-pass over the block's per-tx
+        // output counts inside `produce_scan_result`; the scanner
+        // does not depend on the engine-core's `DiagnosticSink` trait
+        // to preserve the existing layering.
+        let output_count = tx.prefix().outputs.len();
+        if output_count > MAX_OUTPUTS {
+            tracing::warn!(
+                target: "shekyl_scanner::scan",
+                output_count,
+                max_outputs = MAX_OUTPUTS,
+                "scanner: skipping transaction with excessive output count (defense-in-depth gate; consensus would also reject)"
+            );
+            return Ok(Timelocked(vec![]));
+        }
+
         if tx.version() != 2 {
             return Ok(Timelocked(vec![]));
         }
@@ -536,5 +616,187 @@ impl GuaranteedScanner {
     /// Scan a block for outputs belonging to this wallet.
     pub fn scan(&mut self, block: ScannableBlock) -> Result<Timelocked, ScanError> {
         self.0.scan(block)
+    }
+}
+
+/// Tests for the scanner-side defense-in-depth size gate on
+/// [`InternalScanner::scan_transaction`] (PR 4 §3.1 / F11-S
+/// substrate). The gate skips any transaction whose output count
+/// exceeds [`MAX_OUTPUTS`] before any per-output decap runs and emits
+/// a `WARN`-level tracing event for observability. These tests pin
+/// the behavioural contract: skip-and-log shape, return value
+/// `Ok(Timelocked::empty())`, and event firing at the documented
+/// target. They live in the same module as [`InternalScanner`]
+/// because the type is module-private; the established
+/// `crate::tests` location is for behavioural tests of public
+/// surfaces.
+#[cfg(test)]
+mod gate_tests {
+    use std::sync::{Arc, Mutex};
+
+    use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+    use tracing::{
+        span::{Attributes, Id, Record},
+        Event, Level, Metadata, Subscriber,
+    };
+
+    use shekyl_oxide::transaction::{
+        Input, Output, Pruned, Timelock, Transaction, TransactionPrefix,
+    };
+
+    use super::*;
+    use crate::view_pair::ViewPair;
+
+    /// A minimal [`tracing::Subscriber`] that records every event's
+    /// `(Level, target)` pair into a shared vector. The
+    /// implementation is intentionally hand-rolled to avoid pulling
+    /// `tracing-subscriber` (or `tracing-test`) in as a dev
+    /// dependency for a single assertion. Span lifecycle methods are
+    /// no-ops; the gate-firing tests only care about events.
+    #[derive(Clone, Default)]
+    struct EventCapture {
+        events: Arc<Mutex<Vec<(Level, &'static str)>>>,
+    }
+
+    impl Subscriber for EventCapture {
+        fn enabled(&self, _meta: &Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _attrs: &Attributes<'_>) -> Id {
+            // `Id::from_u64(0)` is reserved by `tracing`; any other
+            // non-zero value satisfies the contract for a subscriber
+            // that does not track per-span identity.
+            Id::from_u64(1)
+        }
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+        fn event(&self, event: &Event<'_>) {
+            let meta = event.metadata();
+            self.events
+                .lock()
+                .expect("event-capture mutex poisoned")
+                .push((*meta.level(), meta.target()));
+        }
+        fn enter(&self, _span: &Id) {}
+        fn exit(&self, _span: &Id) {}
+    }
+
+    /// Build an [`InternalScanner`] with placeholder keys. The gate
+    /// fires before any cryptographic state is touched, so the
+    /// scanner only needs to construct successfully — the
+    /// [`ViewPair`] torsion check is satisfied by the basepoint, and
+    /// the empty PQC key material is never read on the gate path.
+    fn placeholder_scanner() -> InternalScanner {
+        let pair = ViewPair::new(
+            ED25519_BASEPOINT_POINT,
+            Zeroizing::new(Scalar::ONE),
+            Zeroizing::new([0u8; 32]),
+            Zeroizing::new(Vec::new()),
+        )
+        .expect("basepoint is torsion-free");
+        InternalScanner::new(pair, Zeroizing::new([0u8; 32]))
+    }
+
+    /// Build a non-miner v2 `Transaction<Pruned>` with the requested
+    /// number of outputs. The output bytes themselves are placeholder
+    /// (zero key, no view tag); they are never inspected on the gate
+    /// path (the gate fires before per-output decap), and on the
+    /// at-boundary test path the zero key fails to decompress so
+    /// each output iteration `continue`s without recovering anything.
+    fn synthesize_tx(output_count: usize) -> Transaction<Pruned> {
+        let outputs = (0..output_count)
+            .map(|_| Output {
+                amount: None,
+                key: CompressedPoint([0u8; 32]),
+                view_tag: None,
+                staking: None,
+            })
+            .collect();
+        Transaction::V2 {
+            prefix: TransactionPrefix {
+                additional_timelock: Timelock::None,
+                // Non-miner classification — [`Input::ToKey`] (rather
+                // than [`Input::Gen`]) so the tx is treated as a
+                // normal user transaction subject to the per-tx
+                // output cap documented on [`MAX_OUTPUTS`]. The
+                // input fields are placeholders; `scan_transaction`
+                // never inspects the input vector.
+                inputs: vec![Input::ToKey {
+                    amount: None,
+                    key_offsets: vec![1],
+                    key_image: CompressedPoint([0u8; 32]),
+                }],
+                outputs,
+                extra: vec![],
+            },
+            proofs: None,
+        }
+    }
+
+    #[test]
+    fn skips_transaction_with_output_count_above_max() {
+        let scanner = placeholder_scanner();
+        let tx = synthesize_tx(MAX_OUTPUTS + 1);
+
+        let capture = EventCapture::default();
+        let result = tracing::subscriber::with_default(capture.clone(), || {
+            scanner.scan_transaction(0, [0u8; 32], &tx)
+        });
+
+        let timelocked = result.expect("gate skips the tx without surfacing a ScanError");
+        assert!(
+            timelocked.is_empty(),
+            "gate must return Timelocked::empty() for oversized transactions"
+        );
+
+        let events = capture
+            .events
+            .lock()
+            .expect("event-capture mutex poisoned")
+            .clone();
+        let warn_at_target = events
+            .iter()
+            .any(|(level, target)| *level == Level::WARN && *target == "shekyl_scanner::scan");
+        assert!(
+            warn_at_target,
+            "gate must emit a WARN-level tracing event at target `shekyl_scanner::scan` (events seen: {events:?})"
+        );
+    }
+
+    #[test]
+    fn admits_transaction_at_exact_max_outputs() {
+        // Boundary check: the gate fires on STRICTLY greater than
+        // `MAX_OUTPUTS`. A transaction with exactly `MAX_OUTPUTS`
+        // outputs proceeds past the gate and into the normal scan
+        // path (which will, with placeholder keys / empty extra,
+        // surface no owned outputs but does NOT short-circuit at
+        // the gate).
+        let scanner = placeholder_scanner();
+        let tx = synthesize_tx(MAX_OUTPUTS);
+
+        let capture = EventCapture::default();
+        let result = tracing::subscriber::with_default(capture.clone(), || {
+            scanner.scan_transaction(0, [0u8; 32], &tx)
+        });
+
+        let timelocked =
+            result.expect("at-boundary tx scans without ScanError under placeholder keys");
+        assert!(
+            timelocked.is_empty(),
+            "placeholder keys recover no owned outputs, so the Timelocked is empty by absence-of-match, not by gate-trigger"
+        );
+
+        let events = capture
+            .events
+            .lock()
+            .expect("event-capture mutex poisoned")
+            .clone();
+        let warn_at_target = events
+            .iter()
+            .any(|(level, target)| *level == Level::WARN && *target == "shekyl_scanner::scan");
+        assert!(
+            !warn_at_target,
+            "gate must NOT fire at the boundary (output_count == MAX_OUTPUTS); WARN events seen: {events:?}"
+        );
     }
 }
