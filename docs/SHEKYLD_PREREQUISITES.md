@@ -83,7 +83,10 @@ Phase 2 of the Electrum-words removal series (PR #58); the
 working invocation pattern is preserved in this doc's "Working
 CLI invocation" subsection below and in the design notes for the
 forthcoming Shekyl-native end-to-end harness
-(`tests/integration/wallet_e2e/`).
+(proposed placement `tests/integration/wallet_e2e/` — directory does
+not exist yet; final layout is design-doc output, not pre-decided,
+per [`FOLLOWUPS.md`](./FOLLOWUPS.md) V3.1
+"Shekyl-native end-to-end wallet/daemon test harness").
 
 ### Working CLI invocation
 
@@ -159,7 +162,9 @@ Shekyl tree — the renamed binaries are `shekyld` and
 `src/wallet/CMakeLists.txt:98`), embedded Monero-format addresses
 (`42ey...`), and was already silently skipped in CI for the
 lifetime of the Shekyl tree. The Shekyl-native end-to-end harness
-(`tests/integration/wallet_e2e/` per the rewrite plan) will spawn
+(proposed placement `tests/integration/wallet_e2e/` per the
+rewrite plan in [`FOLLOWUPS.md`](./FOLLOWUPS.md) V3.1; final
+layout is design-doc output, not yet committed) will spawn
 `shekyld` directly with raw-seed restore on testnet/fakechain via
 the `shekyl_account_generate_from_raw_seed` FFI; that work is a
 separate planning activity tracked in `docs/FOLLOWUPS.md`.

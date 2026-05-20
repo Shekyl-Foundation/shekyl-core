@@ -200,17 +200,30 @@ build.
 
 ## RPC Method Coverage
 
-87 RPC methods from `wallet_rpc_server.h` are implemented in the
+89 RPC methods from `wallet_rpc_server.h` are implemented in the
 `wallet2_ffi_json_rpc` dispatcher (9 classical multisig methods were removed;
-FROST multisig is handled by native Rust handlers, see below; 2 Electrum-words
-methods — `restore_deterministic_wallet` and `get_languages` — removed in the
-Phase 2 of the Electrum-words removal series, per
-[`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./design/ELECTRUM_WORDS_REMOVAL_PLAN.md)):
+FROST multisig is handled by native Rust handlers, see below):
+
+> **Note (2026-05-19, Phase 2 of the Electrum-words removal series).**
+> PR #58 deleted `restore_deterministic_wallet` and `get_languages`
+> from the **C++ `wallet_rpc_server` HTTP JSON-RPC surface** (the
+> `simplewallet`-style HTTP endpoint), but **not** from the
+> `wallet2_ffi_json_rpc` dispatcher tabulated below. The FFI
+> dispatcher (`src/wallet/wallet2_ffi.cpp:3477` / `:3511`) still
+> routes both methods, and `create_wallet` / `generate_from_keys`
+> still parse a `language` parameter at the dispatcher (defaulted
+> to `"English"`, then rejected by Phase 1's hard-error gate at
+> `src/wallet/wallet2_ffi.cpp:309-320`). Phase 3 deletes both
+> methods plus the `language` parameter from this surface as well;
+> at that point the count drops to 87. Until then, this table is
+> the source of truth for the FFI dispatcher's coverage. See
+> [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./design/ELECTRUM_WORDS_REMOVAL_PLAN.md)
+> Phase 2 / Phase 3 for the multi-surface sequencing.
 
 | Category | Methods |
 |----------|---------|
 | Lifecycle | `create_wallet`, `open_wallet`, `close_wallet`, `stop_wallet`, `store`, `change_wallet_password` |
-| Import | `generate_from_keys` |
+| Import | `restore_deterministic_wallet`, `generate_from_keys` |
 | Balance/Address | `get_balance`, `get_address`, `get_height`, `get_address_index` |
 | Accounts | `get_accounts`, `create_account`, `label_account`, `create_address`, `label_address` |
 | Account tags | `get_account_tags`, `tag_accounts`, `untag_accounts`, `set_account_tag_description` |
@@ -234,7 +247,7 @@ Phase 2 of the Electrum-words removal series, per
 | Background sync | `setup_background_sync`, `start_background_sync`, `stop_background_sync` |
 | Staking | `stake`, `unstake`, `get_staked_outputs`, `get_staked_balance`, `claim_rewards` |
 | Fees | `estimate_tx_size_and_weight`, `get_default_fee_priority` |
-| Meta | `get_version` |
+| Meta | `get_version`, `get_languages` |
 
 ## Scanner Integration (`rust-scanner` feature)
 
