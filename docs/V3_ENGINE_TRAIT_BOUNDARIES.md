@@ -1204,35 +1204,131 @@ Reasons (collapsing what were Q9.6 and Q9.7 into one resolution):
   the split explicit.
 
 **Ownership.** The producer logic (`produce_scan_result`'s body,
-the four-checkpoint cancellation discipline within it, the scanner
-construction). Does **not** own the slot, the retry loop, or the
-inter-attempt cancellation observation — those live on `Engine<S>`.
+the producer-side cancellation checkpoints **2 / 3 / 5** within it,
+the scanner construction). Does **not** own the slot, the retry
+loop, the inter-attempt cancellation observation, or checkpoints
+**1 / 4** — those live on `Engine<S>`. §7 invariant 4 pins the
+trait-and-orchestrator checkpoint split as a contract surface; the
+five-checkpoint discipline (the new checkpoint 5 = per-transaction
+inner check inside the per-block scan loop, per
+[`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+§5.4.9 F2 / F11 / F11-S) is named on the trait surface below and
+in §7 invariant 4.
 
-**Stage 1 surface.**
+**Stage 1 surface (Phase 0a binding form per
+[`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+§4).**
 
 ```rust
-pub trait RefreshEngine {
+pub trait RefreshEngine: Send + Sync + 'static {
+    /// Trait-level associated error.
+    ///
+    /// **Unit-variant-only at the trait surface.** Per
+    /// [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    /// §4 Phase 0c and §5.4.7 R6 reframe, the synchronous trait
+    /// return is the **structural-branch signal** — the
+    /// orchestrator's response to each variant is structural
+    /// ("propagate cancellation" / "retry with backoff" /
+    /// "rotate peer + do not retry"), not data-dependent. Rich
+    /// structured diagnostic information flows through the
+    /// `diagnostics: &dyn DiagnosticSink` parameter below (the
+    /// second channel of the two-channel actor-mesh seam), not
+    /// through the synchronous error payload. Carrying
+    /// attacker-influenced data on the error itself
+    /// (`String` reasons, daemon-derived evidence buffers) is
+    /// rejected per §5.4.7 R6's memory-amplifier-vector closure;
+    /// the orchestrator's per-call-site `&'static str` context
+    /// for `InternalInvariantViolation` is the only payload
+    /// shape that lands at the orchestrator's `RefreshError`
+    /// enum, and it is compile-time-fixed developer content,
+    /// not attacker-controlled.
     type Error: Into<RefreshError>;
 
     /// Produce a `ScanResult` against the given ledger snapshot
-    /// and daemon. Owns cancellation checkpoints **2** (post-tip-
-    /// fetch) and **3** (mid-scan, between blocks); returns
-    /// `RefreshError::Cancelled` on observation. Checkpoints 1
-    /// (top-of-attempt) and 4 (pre-merge) are observed by the
-    /// orchestrator on `Engine<S>`, not here.
+    /// and daemon.
     ///
-    /// `daemon` is borrowed for the duration of one attempt. The
-    /// `&D` borrow lives only for this call; if the implementor
-    /// needs an owned handle to move into a spawned future (e.g.,
-    /// the parallel block-fetch a future scaling refinement might
-    /// add), it clones internally. The §2.5
-    /// `Clone + Send + Sync + 'static` bound on `D` makes this
-    /// cheap and Stage-4-actor-compatible
+    /// # Cancellation
+    ///
+    /// Owns producer-side checkpoints **2** (post-tip-fetch),
+    /// **3** (mid-scan, between blocks), and **5**
+    /// (per-transaction, inside the per-block scan loop —
+    /// added per
+    /// [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    /// §5.4.9 F2 to bound wallet-lock latency under adversarial
+    /// daemon block-crafting to per-transaction scan time
+    /// rather than per-block scan time). On observation at any
+    /// checkpoint, returns `RefreshError::Cancelled`.
+    /// Checkpoints **1** (top-of-attempt) and **4** (pre-merge)
+    /// are observed by the orchestrator on `Engine<S>`, not
+    /// here.
+    ///
+    /// # Atomicity under cancellation (R7)
+    ///
+    /// A call returns **either** a `ScanResult` covering the
+    /// full span it scanned **or** `RefreshError::Cancelled`.
+    /// **No partial-span `ScanResult` is ever returned.** This
+    /// is the atomicity contract that lets the orchestrator's
+    /// retry loop treat each producer call as a discrete unit
+    /// rather than reasoning about partial mid-call state.
+    ///
+    /// # Checkpoint 5 safe-point pin (F11 + F11-S)
+    ///
+    /// Checkpoint 5 fires at a **safe-point** — at the top of
+    /// the per-transaction iteration in the per-block scan
+    /// loop, **after** the prior iteration's `Zeroizing<…>`-
+    /// wrapped per-output materials have dropped at scope
+    /// exit, and **before** the next transaction's view-tag /
+    /// hybrid-decap / key-image derivation begins. Mid-derivation
+    /// firing is **forbidden** — the cancellation must not
+    /// interleave with a partially-derived per-output secret
+    /// whose `Drop` chain has not yet completed. Per
+    /// [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    /// §5.4.9 F11-S, implementors **measure**
+    /// `recover_outputs_in_tx`'s per-output marginal cost on
+    /// reference hardware and escalate the safe-point
+    /// granularity to per-output (between consecutive per-output
+    /// decap iterations within the per-tx loop, with the same
+    /// safe-point semantics) when worst-case per-transaction
+    /// scan time under maximum-output hostile transactions
+    /// exceeds the §3.1 sub-block lock-latency target.
+    ///
+    /// # Diagnostic stream
+    ///
+    /// Structured diagnostic events flow through `diagnostics`
+    /// per the two-channel reframe
+    /// (§5.4.7 R6 of
+    /// [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)).
+    /// The synchronous trait return is one channel; the
+    /// `RefreshDiagnostic` event stream emitted through this
+    /// parameter is the other. The two channels are **coherent**:
+    /// every non-`Cancelled` `Err` return is preceded by at
+    /// least one corresponding `RefreshDiagnostic` emission
+    /// before the error is returned (§5.4.6 emission/return
+    /// coherence pin). The `&dyn DiagnosticSink` borrow is
+    /// per-call (runtime dispatch; no widening of
+    /// `LocalRefresh::new`'s arity at Stage 4 cutover); sink
+    /// implementations are **non-blocking** under concurrent
+    /// emission and preserve **per-emitter FIFO ordering**
+    /// (cross-emitter ordering is undefined). Full-fidelity
+    /// `RefreshDiagnostic` consumers MUST be inside the wallet
+    /// trust boundary (recursively); cross-process / network-
+    /// bound consumers receive only **projection types**
+    /// sanitized at the boundary per §5.4.6 / §5.4.8 #4.
+    ///
+    /// # Daemon-handle borrow
+    ///
+    /// `daemon` is borrowed for the duration of one attempt.
+    /// The `&D` borrow lives only for this call; if the
+    /// implementor needs an owned handle to move into a
+    /// spawned future (e.g., the parallel block-fetch a future
+    /// scaling refinement might add), it clones internally.
+    /// The §2.5 `Clone + Send + Sync + 'static` bound on `D`
+    /// makes this cheap and Stage-4-actor-compatible
     /// (`ActorRef<DaemonActor>` clones in O(1)). Implementors
-    /// MUST NOT borrow `&D` across a `tokio::spawn` boundary; the
-    /// borrow-then-spawn pattern would hold the caller's reference
-    /// past the call frame, which fails the §1.4 return-value
-    /// discipline at Stage 4.
+    /// MUST NOT borrow `&D` across a `tokio::spawn` boundary;
+    /// the borrow-then-spawn pattern would hold the caller's
+    /// reference past the call frame, which fails the §1.4
+    /// return-value discipline at Stage 4.
     async fn produce_scan_result<D: DaemonEngine>(
         &self,
         snapshot: LedgerSnapshot,
@@ -1240,6 +1336,7 @@ pub trait RefreshEngine {
         opts: &RefreshOptions,
         cancel: &CancellationToken,
         progress: &watch::Sender<RefreshProgress>,
+        diagnostics: &dyn DiagnosticSink,
     ) -> Result<ScanResult, Self::Error>;
 }
 ```
@@ -1257,9 +1354,11 @@ loop {
 
     let scan_result = self
         .refresh
-        .produce_scan_result(snapshot, &daemon, opts, &cancel, &progress)
+        .produce_scan_result(snapshot, &daemon, opts, &cancel, &progress, &sink)
         .await?;
-    // checkpoints 2 and 3 observed inside produce_scan_result.
+    // checkpoints 2, 3, and 5 observed inside produce_scan_result.
+    // (Checkpoint 5 is the F2-introduced per-transaction inner
+    // check; bounds lock-latency to per-transaction scan time.)
 
     cancel.check_cancelled()?;          // checkpoint 4: pre-merge
     match self.ledger.apply_scan_result(scan_result).await {
@@ -1270,6 +1369,65 @@ loop {
 }
 ```
 
+**`Send + Sync + 'static` on the trait (Phase 0a; §5.4.6).** PR 1
+pinned `Clone + Send + Sync + 'static` on `DaemonEngine` (§2.5)
+so the daemon handle is shareable by clone with the producer
+task. PR 4 pins `Send + Sync + 'static` on `RefreshEngine`
+itself for symmetry: Stage 4's `kameo` actor wraps `LocalRefresh`
+as the actor body, and the bound is the type-check predicate
+that lets the wrap compile. Listing it at the trait surface
+catches the common failure mode where a trait that "happens to
+be `Send + Sync + 'static` today" gains a non-`Send` method
+parameter (or field) before the actor wrap forces the issue.
+The bound is not `Clone`: `RefreshEngine` implementors hold
+`ViewMaterial` (secret material; not safely `Clone`-derived per
+the architectural-inheritance discipline), so a forced `Clone`
+would re-introduce the secret-duplication hazard the
+`ZeroizeOnDrop` chain closes.
+
+**`LedgerSnapshot` value-typed contract (Phase 0a; §5.4.5).**
+The `snapshot: LedgerSnapshot` parameter is **passed by value**,
+not by reference. The orchestrator constructs the snapshot under
+the engine read-guard, drops the guard, and hands the snapshot
+to the producer by move. `LedgerSnapshot` carries only
+reorg-window descriptors (block hashes plus per-height summaries)
+— no shared state, no lifetime tying it to the live ledger;
+cheap clone is honest because the type carries no shared
+state. The contract pin prevents future drift toward
+`&LedgerSnapshot` shapes that would hold a borrow across the
+unlocked scan phase (a `&mut LedgerEngine`-equivalent
+talking-stick handoff in disguise per §1.4).
+
+**`ViewMaterial` (Phase 0a; per
+[`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+§5.4.7 R4 — a-instance-scoped).** A new public type in
+`shekyl_engine_core`, exported at the flat crate root alongside
+`RefreshError` / `RefreshOptions` / `RefreshProgress`:
+
+```rust
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct ViewMaterial {
+    pub spend_pub: EdwardsPoint,
+    pub view_scalar: Zeroizing<Scalar>,
+    pub x25519_sk: Zeroizing<[u8; 32]>,
+    pub ml_kem_dk: Zeroizing<Vec<u8>>,
+    pub spend_secret: Zeroizing<[u8; 32]>,
+}
+```
+
+`LocalRefresh::new(view_material: ViewMaterial)` captures the
+view-and-spend material at construction time; the `Scanner`
+builds once at `LocalRefresh::new` and is held for the
+instance's lifetime. Per-attempt cost drops to
+`(snapshot.clone() + daemon.get_height() + per-block
+fetch+scan)` — no per-attempt scanner construction, no
+per-attempt secret duplication. Pinning the type at the
+trait-surface site so Stage 4 actor implementors and any
+future `RefreshEngine` implementor share the constructor
+shape; the (a-instance-scoped) lifetime story is the
+trait-surface contract, not a `LocalRefresh`-specific
+implementation detail.
+
 **Borrow-checking story.** This shape sidesteps the original Q9.7
 problem cleanly. The producer takes:
 
@@ -1277,7 +1435,10 @@ problem cleanly. The producer takes:
   descriptors; not a borrow on the ledger).
 - A borrowed `&D: DaemonEngine` (lives for one attempt; the
   implementor clones internally if it needs an owned handle).
-- Borrowed cancel/progress channels.
+- Borrowed cancel / progress / diagnostic-sink channels (the
+  `&dyn DiagnosticSink` borrow is per-call and runtime-dispatched
+  so Stage 4 does not re-rev the trait or widen
+  `LocalRefresh::new`'s arity when a new sink type emerges).
 
 No `&mut LedgerEngine` is held anywhere on the trait surface
 (per Round 3's §2 sweep: all trait methods are `&self` with
@@ -1288,6 +1449,35 @@ lock for the duration of one method invocation. No long-held
 borrow across the unlocked scan phase, no caller-provided
 mutation handle, no talking-stick handoff — exactly the discipline
 §1.4 enforces, now expressed at the trait boundary.
+
+**Phase 0 substrate (design provenance).** The §2.3 surface
+above lands in two stages:
+
+- **Phase 0a (this section, doc-only)** — the
+  Phase-0a-binding-pinned trait surface per
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §4: `Send + Sync + 'static` supertrait bound, unit-variant
+  `Self::Error: Into<RefreshError>` discipline, six-arg
+  `produce_scan_result` with the `diagnostics: &dyn
+  DiagnosticSink` parameter, `LedgerSnapshot` value-typed
+  contract, `ScanResult` atomicity-under-cancellation
+  contract (R7), `ViewMaterial` type pin (R4
+  a-instance-scoped), and the five-checkpoint discipline
+  (F2 / F11 / F11-S).
+- **Phase 1 (Stage 1 PR 4's C1–C8 commits)** —
+  `pub(crate) trait RefreshEngine` lands in
+  `engine::traits::refresh`; `ViewMaterial` /
+  `RefreshDiagnostic` / `DiagnosticSink` /
+  `NoopDiagnosticSink` / `TracingDiagnosticSink` /
+  `LocalRefresh` ship as the Stage 1 concrete substrate;
+  `Engine<S, D, L, R>` parameterization wires the trait
+  into the orchestrator. The §7.X commit decomposition
+  ordering is load-bearing for the Phase 1
+  bisection-discipline gate.
+
+Stage 4 cutover preserves the §2.3 surface verbatim per §7's
+invariants; the implementor swap (`LocalRefresh` →
+`kameo`-backed actor body) does not touch the trait shape.
 
 ### 2.4 `PendingTxEngine`
 
@@ -2890,7 +3080,7 @@ This is a real semantic gap, and it informs the discipline:
   semantics. `RefreshEngine::produce_scan_result` is the model:
   its `CancellationToken` parameter signals cancellation through
   the trait's contract, observable at controlled checkpoints
-  (per §7's four-checkpoint discipline).
+  (per §7's five-checkpoint discipline).
 - **Operations whose side effects are idempotent or whose
   post-drop continuation is acceptable** can rely on drop
   semantics. `KeyEngine::sign_transaction` is acceptable to drop —
@@ -2953,7 +3143,7 @@ async fn long_running_op(
 
 `cancel` is the caller's signal to abandon work. The implementor
 checks `cancel.is_cancelled()` at controlled checkpoints (per
-§7's four-checkpoint discipline) and returns a cancellation-shaped
+§7's five-checkpoint discipline) and returns a cancellation-shaped
 error — `EngineError::Cancelled` or trait-specific equivalent —
 not a partial result. The cancellation error is structurally
 distinct from `RuntimeFailure` per §5.1: cancellation is a
@@ -3152,7 +3342,7 @@ not the cancellation surface; the token is).
 | `LedgerEngine` | `snapshot` | sync | yes (read-only; returns owned snapshot) | n/a |
 | `LedgerEngine` | `balance` | sync | yes (read-only) | n/a |
 | `LedgerEngine` | `apply_scan_result` | async | **conditionally** — idempotent given the same `ScanResult` against the same starting `synced_height`; if the height has advanced (because a concurrent merge landed), the second apply returns `RefreshError::ConcurrentMutation` deterministically. Never produces a double-applied state. | **b** (mutates ledger state; Stage 4 drop after enqueue is observation-only — the merge may complete asynchronously) |
-| `RefreshEngine` | `produce_scan_result` | async | no (each call observes the daemon's current tip; tip advances over time) | **c** (explicit `CancellationToken` parameter; four-checkpoint cancellation per §7) |
+| `RefreshEngine` | `produce_scan_result` | async | no (each call observes the daemon's current tip; tip advances over time) | **c** (explicit `CancellationToken` parameter; five-checkpoint cancellation per §7) |
 | `PendingTxEngine` | `build` | async | no (each build picks fresh decoys; reservation IDs are monotonic) | **b** (allocates a reservation and mutates the reservation tracker; Stage 4 drop after enqueue is observation-only) |
 | `PendingTxEngine` | `submit` | async | **conditionally** — daemon dedupes by tx hash; calling `submit` twice on the same `ReservationId` produces one mempool submission | **b** (network side effect via `DaemonEngine`; Stage 4 drop after enqueue is observation-only) |
 | `PendingTxEngine` | `discard` | async | yes (discarding an already-discarded reservation is a no-op error variant the caller can treat as success) | **b** (mutates reservation tracker) |
@@ -4004,7 +4194,8 @@ so Stage 4 implementors cannot argue for redesign:
    trait methods against the actor-backed types.
 4. **Cancellation semantics are preserved verbatim, with the
    trait/orchestrator split itself part of the contract** (Round
-   2 refinement). The four checkpoints are:
+   2 refinement; checkpoint 5 added per PR 4 Round 4 F2). The
+   five checkpoints are:
 
    1. **Top-of-attempt** — owned by the orchestrator
       (`Engine::start_refresh`, `Engine::refresh`). Covers the
@@ -4016,7 +4207,7 @@ so Stage 4 implementors cannot argue for redesign:
       cancel-aware; the await runs to completion; this checkpoint
       is what makes a cancel-during-tip-fetch deterministically
       surface as `Cancelled`.
-   3. **Mid-scan** — owned by
+   3. **Mid-scan, between blocks** — owned by
       `RefreshEngine::produce_scan_result`. Covers cancels
       between blocks during the long scan phase, where the bulk
       of elapsed time lives.
@@ -4024,6 +4215,28 @@ so Stage 4 implementors cannot argue for redesign:
       post-scan window where a valid `ScanResult` has been
       returned but the write borrow for `apply_scan_result` has
       not yet been acquired.
+   5. **Per-transaction, inside the per-block scan loop** —
+      owned by `RefreshEngine::produce_scan_result`. Added per
+      [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+      §5.4.9 F2 to bound wallet-lock latency under adversarial
+      daemon block-crafting to per-transaction scan time
+      rather than per-block scan time. **Safe-point pin
+      (F11 + F11-S, binding):** fires at the top of the
+      per-transaction iteration, **after** the prior iteration's
+      `Zeroizing<…>`-wrapped per-output materials have dropped
+      at scope exit, **before** the next transaction's
+      view-tag / hybrid-decap / key-image derivation begins.
+      Mid-derivation firing is **forbidden** — the cancellation
+      must not interleave with a partially-derived per-output
+      secret whose `Drop` chain has not yet completed.
+      Implementors **measure** `recover_outputs_in_tx`'s
+      per-output marginal cost on reference hardware and
+      escalate the safe-point granularity to per-output
+      (between consecutive per-output decap iterations within
+      the per-tx loop, with the same safe-point semantics)
+      when worst-case per-tx scan time under maximum-output
+      hostile transactions exceeds the §3.1 sub-block
+      lock-latency target.
 
    No post-merge checkpoint by design. Once `apply_scan_result`
    commits, the merge is authoritative and a cancel observed
@@ -4032,7 +4245,7 @@ so Stage 4 implementors cannot argue for redesign:
    The Stage 4 actor for `RefreshEngine` and the Stage 4
    orchestration on `Engine` observe the same checkpoints in the
    same order with the same ownership split between trait
-   (checkpoints 2, 3) and orchestrator (checkpoints 1, 4).
+   (checkpoints 2, 3, 5) and orchestrator (checkpoints 1, 4).
 
 If any Stage 4 PR proposes violating one of the above, the PR's
 review surface is *this document*, not the PR's diff: the
@@ -4458,7 +4671,7 @@ that doesn't currently exist (separate implementation work).
 implementation surface (mailboxes vs locks) but is constrained
 by §7 to preserve the trait surface verbatim. Verification
 that the cutover actually preserves observed behavior across
-§7's checkpoints (post-tip-fetch ownership, four-checkpoint
+§7's checkpoints (post-tip-fetch ownership, five-checkpoint
 cancellation discipline, idempotency conditions per §4) is
 not automatic — the implementations are different, and
 "identical behavior" must be demonstrated, not assumed.
@@ -4481,7 +4694,7 @@ produced evidence that the gated properties hold:
 - §7 invariants 1–4 are demonstrated against the cutover
   implementation under the methodology's test scenarios
   (trait surface stability, post-tip-fetch checkpoint
-  ownership, four-checkpoint cancellation discipline,
+  ownership, five-checkpoint cancellation discipline,
   checkpoint ownership split).
 - Per-method idempotency conditions per §4 are verified —
   methods marked "yes" produce identical observable outcomes
@@ -4564,7 +4777,7 @@ concurrently with cutover work.)
 
 *Structural cross-reference.* §7 invariants 1–4
 (trait-surface stability, post-tip-fetch checkpoint
-ownership, four-checkpoint cancellation discipline,
+ownership, five-checkpoint cancellation discipline,
 checkpoint ownership split); §6 test boundary (the mock
 infrastructure that makes shared-driver testing possible);
 §3.2 call-site disposition table.
@@ -5099,7 +5312,7 @@ the threshold conditions is rejected as conjectural.
 - [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md) §*"Engine binary boundary: pure message-passing over shared handle"* (2026-04-27) — Path B, retires the outer `Arc<RwLock<Engine>>` at Stage 4.
 - [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md) §*"`RefreshHandle` (Phase 2a Branch 2) ships transitional `Arc<RwLock<Engine>>` under Path B"* (2026-04-27) — explicit pin that the current self-arc is transitional.
 - [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md) §*"Pending-tx protocol: two-phase build/submit/discard over single-phase callback"* (2026-04-27) — the `PendingTxEngine` surface.
-- [`rust/shekyl-engine-core/src/engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs) `run_refresh_task` rustdoc — the four-checkpoint cancellation contract reproduced inline in §7.
+- [`rust/shekyl-engine-core/src/engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs) `run_refresh_task` rustdoc — the cancellation contract reproduced inline (PR 4 Phase 1 brings the inline rustdoc into alignment with §7's five-checkpoint discipline).
 - [`rust/shekyl-engine-core/src/engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs) `Engine::refresh` rustdoc (post-2026-04-28) — the sync-vs-async cancellation split.
 - [`rust/shekyl-engine-core/src/engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs) — current `MockDaemon` (renamed from `MockRpc` in Stage 1 PR 1, extended into a full `DaemonEngine` implementor with submit dedup, fixed fee-estimate snapshot with override hook, and queued-error injection per §6.1; `ChaCha20Rng` reserved for future fee-jitter / synthetic-fork randomization per §6.2 but not yet consumed at this PR's contract surface) and `make_synthetic_block` scaffolding; `derive_seed` helper per §6.2.
 - [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) "Generic `DaemonClient`" — closed: spec by §2.5 (two-trait shape); Stage 1 implementation by PR 1 (§2.5 surface + `Engine<S, D>` parameterization + first hybrid test); production-constructor generalization deferred to V3.2 alongside the `DaemonEngine`-to-`pub` promotion.
