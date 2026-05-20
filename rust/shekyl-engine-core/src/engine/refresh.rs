@@ -2003,7 +2003,7 @@ mod refresh_handle_tests {
     //! `start_refresh_integration_tests` below, which carries
     //! both fixture flavours: an unreachable-`DaemonClient`
     //! flavour for handle-shape invariants and daemon-IO error
-    //! mapping, and a `MockDaemon`-driven hybrid flavour
+    //! mapping, and a `TestDaemon`-driven hybrid flavour
     //! (added in Stage 1 PR 1, per
     //! `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.3) that exercises
     //! the producer end-to-end against synthetic chain state.
@@ -2395,14 +2395,14 @@ mod start_refresh_integration_tests {
     //!   slot-release after the producer task winds down,
     //!   completion delivery on RPC failure) without modelling
     //!   any chain state.
-    //! - **Hybrid scenarios** wire a [`MockDaemon`] in place of the
+    //! - **Hybrid scenarios** wire a [`TestDaemon`] in place of the
     //!   real `DaemonClient` via
     //!   [`Engine::replace_daemon`](super::Engine::replace_daemon),
     //!   per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.3 hybrid-
     //!   construction discipline. These tests exercise
     //!   `start_refresh` end-to-end against synthetic chain state;
     //!   the trait abstractions from Stage 1 PR 1 (the
-    //!   `DaemonEngine` surface, the `MockDaemon: Rpc + DaemonEngine`
+    //!   `DaemonEngine` surface, the `TestDaemon: Rpc + DaemonEngine`
     //!   impl, the `derive_seed` master-seed helper) are what makes
     //!   this coverage possible — Stage 0 had no path for a synthetic
     //!   chain to drive `start_refresh` because `DaemonClient`
@@ -2427,7 +2427,7 @@ mod start_refresh_integration_tests {
     use crate::engine::fault_injecting_ledger::FaultInjecting;
     use crate::engine::lifecycle::EngineCreateParams;
     use crate::engine::local_ledger::LocalLedger;
-    use crate::engine::test_support::{derive_seed, MockDaemon, ROLE_DAEMON};
+    use crate::engine::test_support::{derive_seed, TestDaemon, ROLE_DAEMON};
     use crate::engine::traits::LedgerEngine;
     use crate::engine::{
         Credentials, DaemonClient, Engine, IoError, RefreshError, RefreshOptions, SoloSigner,
@@ -2588,26 +2588,26 @@ mod start_refresh_integration_tests {
         _ = h2.join().await;
     }
 
-    // ── Hybrid scenarios: real Engine<SoloSigner> + MockDaemon ──────────
+    // ── Hybrid scenarios: real Engine<SoloSigner> + TestDaemon ──────────
     //
     // The construction discipline (§6.3):
     //
     // 1. Build a real `Engine<SoloSigner>` via `Engine::create` using
     //    an unreachable `DaemonClient`. Pays for the file-handle,
     //    keys, ledger, refresh-slot, and preferences setup once.
-    // 2. Swap the daemon component for a `MockDaemon` via
+    // 2. Swap the daemon component for a `TestDaemon` via
     //    `Engine::replace_daemon`. The result is
-    //    `Engine<SoloSigner, MockDaemon>`; the dummy daemon is
+    //    `Engine<SoloSigner, TestDaemon>`; the dummy daemon is
     //    dropped.
     // 3. Wrap in `Arc<RwLock<…>>` and call `Engine::start_refresh`.
 
-    /// Build an `Engine<SoloSigner, MockDaemon>` ready for hybrid
+    /// Build an `Engine<SoloSigner, TestDaemon>` ready for hybrid
     /// `start_refresh` tests. Returns the `TempDir` alongside so the
     /// caller keeps the wallet file alive for the lifetime of the
     /// engine.
     async fn make_hybrid_engine_arc(
-        mock: MockDaemon,
-    ) -> (Arc<RwLock<Engine<SoloSigner, MockDaemon>>>, TempDir) {
+        mock: TestDaemon,
+    ) -> (Arc<RwLock<Engine<SoloSigner, TestDaemon>>>, TempDir) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let base_path = tmp.path().join("wallet");
         let creds = Credentials::password_only(b"start-refresh hybrid integration tests");
@@ -2649,7 +2649,7 @@ mod start_refresh_integration_tests {
     }
 
     /// Linear-scan baseline for the hybrid surface. With a 6-block
-    /// `MockDaemon` chain (heights 0..=5; `chain[0]` is genesis,
+    /// `TestDaemon` chain (heights 0..=5; `chain[0]` is genesis,
     /// `chain[1..=5]` are post-genesis) and a fresh wallet at
     /// `synced_height = 0`, `start_refresh` runs producer → merge
     /// to completion: the producer derives the range
@@ -2660,9 +2660,9 @@ mod start_refresh_integration_tests {
     ///
     /// What this pins (Stage 1 PR 1):
     ///
-    /// - `Engine<SoloSigner, MockDaemon>` is a real, callable shape —
+    /// - `Engine<SoloSigner, TestDaemon>` is a real, callable shape —
     ///   the `D: DaemonEngine` parameterization isn't a phantom type;
-    ///   `MockDaemon` actually drives the producer.
+    ///   `TestDaemon` actually drives the producer.
     /// - The mock's `Rpc` impl (`get_height`,
     ///   `get_scannable_block_by_number`) is wired through every
     ///   layer that the real `start_refresh` traverses (handle →
@@ -2683,7 +2683,7 @@ mod start_refresh_integration_tests {
     /// in the test name" guidance applies only to tests that
     /// exercise RNG-driven mock behaviour (fee jitter, synthetic-
     /// fork randomization). This test doesn't — it wires
-    /// `MockDaemon`'s pure chain-serving surface, so the master
+    /// `TestDaemon`'s pure chain-serving surface, so the master
     /// seed lives in the body alone and the test name stays
     /// descriptive.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2697,7 +2697,7 @@ mod start_refresh_integration_tests {
         let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
         // 6 blocks at heights 0..=5: chain[0] = genesis; chain[1..=5]
         // are the 5 post-genesis blocks the producer scans.
-        let mock = MockDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let mock = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
         let (arc, _tmp) = make_hybrid_engine_arc(mock).await;
 
         // Sanity-check the pre-refresh invariant: the wallet starts
@@ -2719,7 +2719,7 @@ mod start_refresh_integration_tests {
         let summary = handle
             .join()
             .await
-            .expect("hybrid refresh against a 6-block MockDaemon chain joins successfully");
+            .expect("hybrid refresh against a 6-block TestDaemon chain joins successfully");
         assert_eq!(summary.processed_height_range, 1..6);
         assert_eq!(summary.blocks_processed, 5);
 
@@ -2753,12 +2753,12 @@ mod start_refresh_integration_tests {
         }
     }
 
-    /// Build an `Engine<SoloSigner, MockDaemon, FaultInjecting<LocalLedger>>`
+    /// Build an `Engine<SoloSigner, TestDaemon, FaultInjecting<LocalLedger>>`
     /// ready for hybrid retry tests. Composes
     /// [`Engine::replace_daemon`] (PR 1) with [`Engine::replace_ledger`]
     /// (PR 2 commit 6): one real `Engine::create` ceremony pays for the
     /// file-handle / keys / refresh-slot / preferences setup, then the
-    /// daemon slot is swapped for a deterministic [`MockDaemon`] and
+    /// daemon slot is swapped for a deterministic [`TestDaemon`] and
     /// the ledger slot is swapped for the production [`LocalLedger`]
     /// composed inside a [`FaultInjecting`] failure-injection wrapper
     /// (PR 4 C6β no-Mock substrate per the Round 5 amendment,
@@ -2766,10 +2766,10 @@ mod start_refresh_integration_tests {
     /// caller keeps the wallet file alive for the engine’s
     /// lifetime.
     async fn make_hybrid_engine_arc_with_ledger(
-        mock_daemon: MockDaemon,
+        mock_daemon: TestDaemon,
         ledger: FaultInjecting<LocalLedger>,
     ) -> (
-        Arc<RwLock<Engine<SoloSigner, MockDaemon, FaultInjecting<LocalLedger>>>>,
+        Arc<RwLock<Engine<SoloSigner, TestDaemon, FaultInjecting<LocalLedger>>>>,
         TempDir,
     ) {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -2798,7 +2798,7 @@ mod start_refresh_integration_tests {
     }
 
     /// Exercise the §5.2 retry contract end-to-end. Composition: a
-    /// 6-block [`MockDaemon`] chain (heights 0..=5) drives the producer
+    /// 6-block [`TestDaemon`] chain (heights 0..=5) drives the producer
     /// from `synced_height = 0`; the paired
     /// [`FaultInjecting<LocalLedger>`](FaultInjecting) wrapper has one
     /// queued [`RefreshError::ConcurrentMutation`] response from
@@ -2811,7 +2811,7 @@ mod start_refresh_integration_tests {
     ///
     /// What this pins (Stage 1 PR 2 + PR 4 C6β no-Mock substrate):
     ///
-    /// - `Engine<SoloSigner, MockDaemon, FaultInjecting<LocalLedger>>`
+    /// - `Engine<SoloSigner, TestDaemon, FaultInjecting<LocalLedger>>`
     ///   is a real, callable shape — the `L: LedgerEngine`
     ///   parameterization isn't a phantom type; the wrapper-around-
     ///   production-ledger actually drives the merge. Composes the
@@ -2848,7 +2848,7 @@ mod start_refresh_integration_tests {
     ///
     /// Master seed is recorded as a literal in the test body per
     /// §6.2; the daemon seed is `derive_seed(&master, ROLE_DAEMON)`
-    /// for `MockDaemon`. The `derive_seed_pinned_fixture_*` tests in
+    /// for `TestDaemon`. The `derive_seed_pinned_fixture_*` tests in
     /// `test_support` lock down that derivation against upstream
     /// library drift. The ledger wrapper does not consume a seed
     /// — the production [`LocalLedger`] underneath is deterministic
@@ -2866,7 +2866,7 @@ mod start_refresh_integration_tests {
 
         // 6-block linear chain; producer scans heights 1..=5 starting
         // from a fresh `LocalLedger` at `synced_height = 0`.
-        let mock_daemon = MockDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let mock_daemon = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
         let ledger = FaultInjecting::new(LocalLedger::from_test_blocks(Vec::new()));
 
         // Inject exactly one `ConcurrentMutation` so the first merge
@@ -2899,7 +2899,7 @@ mod start_refresh_integration_tests {
             .expect("start_refresh claims the slot on the hybrid engine");
 
         let summary = handle.join().await.expect(
-            "hybrid retry refresh against a 6-block MockDaemon chain joins after one retry",
+            "hybrid retry refresh against a 6-block TestDaemon chain joins after one retry",
         );
         assert_eq!(
             summary.merge_attempts, 2,

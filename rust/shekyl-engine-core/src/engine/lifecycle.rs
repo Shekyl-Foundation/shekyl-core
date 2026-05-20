@@ -710,13 +710,13 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine, R: RefreshEngine> E
     /// fully-constructed `Engine<SoloSigner>` — file, keys,
     /// preferences, ledger, refresh slot — but want to drive
     /// `start_refresh` (or any other daemon-touching method)
-    /// against a `MockDaemon` rather than a `DaemonClient` pointed
+    /// against a `TestDaemon` rather than a `DaemonClient` pointed
     /// at an unreachable URL. The pattern is:
     ///
     /// ```ignore
     /// let real = Engine::<SoloSigner>::create(params, dummy_daemon())?;
-    /// let mock = MockDaemon::with_seed(derive_seed(&master, ROLE_DAEMON));
-    /// let hybrid: Engine<SoloSigner, MockDaemon> = real.replace_daemon(mock);
+    /// let mock = TestDaemon::with_seed(derive_seed(&master, ROLE_DAEMON));
+    /// let hybrid: Engine<SoloSigner, TestDaemon> = real.replace_daemon(mock);
     /// ```
     ///
     /// The original `D1` daemon is dropped; the returned engine's
@@ -730,7 +730,7 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine, R: RefreshEngine> E
     /// over `D: DaemonEngine` (default `DaemonClient`) alongside
     /// the `DaemonEngine`-to-`pub` promotion. At that point the
     /// production constructors accept any `D` directly, hybrid
-    /// tests construct their `Engine<SoloSigner, MockDaemon>` via
+    /// tests construct their `Engine<SoloSigner, TestDaemon>` via
     /// the public path without intermediate dummy-daemon ceremony,
     /// and this `#[cfg(test)] pub(crate)` helper retires. The
     /// retirement commit deletes both `replace_daemon` and the

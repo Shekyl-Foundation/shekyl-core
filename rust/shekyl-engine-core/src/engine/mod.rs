@@ -366,7 +366,7 @@ pub struct Engine<
     /// Generic over `D: DaemonEngine`. Production code defaults `D` to
     /// [`DaemonClient`] (a thin wrapper over
     /// `shekyl_simple_request_rpc::SimpleRequestRpc`); crate-internal
-    /// tests substitute `MockDaemon` to drive failure-injection and
+    /// tests substitute `TestDaemon` to drive failure-injection and
     /// deduplication scenarios against the same orchestration logic.
     /// See `crate::engine::traits::daemon` for the trait contract.
     daemon: D,
@@ -600,7 +600,7 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> En
     /// The return type is `&D`, the type-parameter slot for the
     /// daemon. The production default `D = DaemonClient` resolves
     /// this to `&DaemonClient`; crate-internal tests substitute
-    /// `MockDaemon` and observe the same accessor shape.
+    /// `TestDaemon` and observe the same accessor shape.
     pub fn daemon(&self) -> &D {
         &self.daemon
     }
@@ -668,7 +668,7 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> En
     /// to install the wrapper before driving any refresh.
     // C6α introduces the wrapper substrate; the first consumers of
     // `replace_refresh` land in C6β / C6γ when the hybrid tests
-    // rewire from MockLedger/MockDaemon onto the FaultInjecting<L>
+    // rewire from MockLedger/TestDaemon onto the FaultInjecting<L>
     // and TestDaemon shapes. Pre-genesis no production caller exists.
     #[cfg(any(test, feature = "test-helpers"))]
     #[allow(dead_code)]

@@ -8,21 +8,21 @@
 //! Lives under `#[cfg(test)]` and is `pub(crate)` only — never
 //! re-exported. Exists so the producer (`produce_scan_result`),
 //! `Engine::refresh`, the `RefreshHandle` integration tests, and
-//! the Stage 1 hybrid tests (`Engine<SoloSigner, MockDaemon>`) all
+//! the Stage 1 hybrid tests (`Engine<SoloSigner, TestDaemon>`) all
 //! build their synthetic chains and inject failures through one
 //! audited site rather than each rolling its own.
 //!
 //! What this module ships:
 //!
-//! - [`MockDaemon`]: deterministic in-memory implementor of both
+//! - [`TestDaemon`]: deterministic in-memory implementor of both
 //!   [`shekyl_rpc::Rpc`] (chain serving — height / block fetch
 //!   with reorg simulation, failure injection per height) **and**
 //!   the crate-internal `DaemonEngine` Stage 1 trait (transaction
 //!   submission with daemon-faithful tx-hash dedup per the §5.2
 //!   retry contract; configurable fee estimates per §2.5). One
 //!   value drives both the producer-only refresh tests
-//!   (consumed as `&MockDaemon: Rpc` by `produce_scan_result`)
-//!   and the hybrid `Engine<SoloSigner, MockDaemon>` tests
+//!   (consumed as `&TestDaemon: Rpc` by `produce_scan_result`)
+//!   and the hybrid `Engine<SoloSigner, TestDaemon>` tests
 //!   (consumed as the engine's `D: DaemonEngine` slot).
 //! - [`make_synthetic_block`]: minimal-valid `ScannableBlock`
 //!   constructor (V2 miner transaction with `Input::Gen`, no
@@ -52,7 +52,7 @@
 //!   constructs `RecoveredWalletOutput`s directly, bypassing
 //!   `Scanner::scan`) or on a small `ViewPair`-backed block
 //!   builder. The choice is the producer's test suite to make; the
-//!   `MockDaemon` only needs to deliver whatever `ScannableBlock`
+//!   `TestDaemon` only needs to deliver whatever `ScannableBlock`
 //!   the test author hands it.
 //! - Branched chains as first-class state. The reorg simulation
 //!   model is "the daemon's canonical chain shifts": the wallet
@@ -79,9 +79,9 @@ use crate::engine::pending::TxHash;
 use crate::engine::traits::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
 
 /// Default 32-byte seed for tests that don't exercise the
-/// `ChaCha20Rng`-driven paths of [`MockDaemon`].
+/// `ChaCha20Rng`-driven paths of [`TestDaemon`].
 ///
-/// Producer-only refresh tests (which use `MockDaemon` purely as
+/// Producer-only refresh tests (which use `TestDaemon` purely as
 /// an `Rpc` chain server) pass this constant rather than a bespoke
 /// literal so the §6.2 "every constructor takes a seed" contract
 /// is honored without ceremony at every call site. Tests that do
@@ -108,7 +108,7 @@ pub(crate) const DEFAULT_TEST_SEED: [u8; 32] = [0u8; 32];
 // `ROLE_PERSISTENCE`, `ROLE_REFRESH`, `ROLE_PENDING_TX` alongside their
 // corresponding `Mock*` / `FaultInjecting*` types.
 
-/// Role tag for the [`MockDaemon`] slot in §6.2 master-seed derivation.
+/// Role tag for the [`TestDaemon`] slot in §6.2 master-seed derivation.
 pub(crate) const ROLE_DAEMON: &[u8] = b"role/daemon";
 
 /// Derive a per-component 32-byte seed from a master seed and a role
@@ -158,7 +158,7 @@ pub(crate) fn derive_seed(master: &[u8; 32], role: &[u8]) -> [u8; 32] {
 ///
 /// # Contract fidelity (§6.1, Round 4b — Item 3)
 ///
-/// `MockDaemon` honors the *contract* of `DaemonEngine`, not just
+/// `TestDaemon` honors the *contract* of `DaemonEngine`, not just
 /// the syntactic surface:
 ///
 /// - `submit_transaction` dedupes by tx hash exactly as the real
@@ -167,7 +167,7 @@ pub(crate) fn derive_seed(master: &[u8; 32], role: &[u8]) -> [u8; 32] {
 ///   `AlreadyKnown { hash }`). The hash is derived
 ///   deterministically via `shekyl_crypto_hash::cn_fast_hash` over
 ///   the submitted bytes — the real daemon hashes the tx prefix
-///   plus signatures, but for `MockDaemon` the byte-keyed dedup
+///   plus signatures, but for `TestDaemon` the byte-keyed dedup
 ///   provides the §5.2 retry-safety semantics tests need without
 ///   parsing transaction structure (Phase 2a refines this once
 ///   the production stub parses `tx_bytes`).
@@ -176,7 +176,7 @@ pub(crate) fn derive_seed(master: &[u8; 32], role: &[u8]) -> [u8; 32] {
 ///   hybrid tests exercise real `Engine`-orchestration retry
 ///   logic against realistic error variants.
 #[derive(Clone)]
-pub(crate) struct MockDaemon {
+pub(crate) struct TestDaemon {
     state: Arc<Mutex<State>>,
 }
 
@@ -266,7 +266,7 @@ impl State {
     }
 }
 
-/// Construct the default [`FeeEstimates`] that fresh `MockDaemon`s
+/// Construct the default [`FeeEstimates`] that fresh `TestDaemon`s
 /// return from `get_fee_estimates`. The three priorities scale
 /// monotonically (economy < standard < priority) so tests that
 /// observe per-priority resolution see distinct values without
@@ -281,8 +281,8 @@ fn default_fee_estimates() -> FeeEstimates {
     }
 }
 
-impl MockDaemon {
-    /// Construct a `MockDaemon` with an empty chain and the given
+impl TestDaemon {
+    /// Construct a `TestDaemon` with an empty chain and the given
     /// 32-byte seed. The seed initializes the internal
     /// `ChaCha20Rng` per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.2.
     /// Tests that don't care about RNG-driven affordances pass
@@ -293,7 +293,7 @@ impl MockDaemon {
         }
     }
 
-    /// Construct a `MockDaemon` with a pre-filled canonical chain
+    /// Construct a `TestDaemon` with a pre-filled canonical chain
     /// and the given seed. Equivalent to [`Self::with_seed`]
     /// followed by repeated `push_block` calls; provided as a
     /// constructor so common cases stay one-line.
@@ -315,7 +315,7 @@ impl MockDaemon {
     pub(crate) fn push_block(&self, block: ScannableBlock) {
         self.state
             .lock()
-            .expect("MockDaemon state poisoned")
+            .expect("TestDaemon state poisoned")
             .chain
             .push(block);
     }
@@ -342,12 +342,12 @@ impl MockDaemon {
     /// Panics if `fork_height > chain.len()` (the truncation point
     /// lies past the chain end).
     pub(crate) fn replace_chain_from(&self, fork_height: u64, new_blocks: Vec<ScannableBlock>) {
-        let mut state = self.state.lock().expect("MockDaemon state poisoned");
+        let mut state = self.state.lock().expect("TestDaemon state poisoned");
         let keep = usize::try_from(fork_height)
-            .expect("MockDaemon::replace_chain_from: fork_height fits in usize");
+            .expect("TestDaemon::replace_chain_from: fork_height fits in usize");
         assert!(
             keep <= state.chain.len(),
-            "MockDaemon::replace_chain_from: fork_height {fork_height} exceeds chain length {}",
+            "TestDaemon::replace_chain_from: fork_height {fork_height} exceeds chain length {}",
             state.chain.len()
         );
         state.chain.truncate(keep);
@@ -361,7 +361,7 @@ impl MockDaemon {
     pub(crate) fn set_daemon_height(&self, cap: u64) {
         self.state
             .lock()
-            .expect("MockDaemon state poisoned")
+            .expect("TestDaemon state poisoned")
             .daemon_height_cap = Some(cap);
     }
 
@@ -370,7 +370,7 @@ impl MockDaemon {
     /// `get_height` returns the canonical height. Models
     /// transient daemon flakiness.
     pub(crate) fn set_height_error_for_next_n_calls(&self, n: u32, kind: &RpcError) {
-        let mut state = self.state.lock().expect("MockDaemon state poisoned");
+        let mut state = self.state.lock().expect("TestDaemon state poisoned");
         for _ in 0..n {
             state.height_errors.push_back(kind.clone());
         }
@@ -384,7 +384,7 @@ impl MockDaemon {
     pub(crate) fn inject_block_fetch_failure(&self, height: u64, kind: RpcError) {
         self.state
             .lock()
-            .expect("MockDaemon state poisoned")
+            .expect("TestDaemon state poisoned")
             .block_errors
             .entry(height)
             .or_default()
@@ -398,7 +398,7 @@ impl MockDaemon {
     pub(crate) fn set_block_returns_malformed(&self, height: u64) {
         self.state
             .lock()
-            .expect("MockDaemon state poisoned")
+            .expect("TestDaemon state poisoned")
             .malformed_at
             .insert(height);
     }
@@ -409,7 +409,7 @@ impl MockDaemon {
     pub(crate) fn chain_len(&self) -> u64 {
         self.state
             .lock()
-            .expect("MockDaemon state poisoned")
+            .expect("TestDaemon state poisoned")
             .chain
             .len() as u64
     }
@@ -420,7 +420,7 @@ impl MockDaemon {
     pub(crate) fn set_fee_estimates(&self, fees: FeeEstimates) {
         self.state
             .lock()
-            .expect("MockDaemon state poisoned")
+            .expect("TestDaemon state poisoned")
             .fee_estimates = fees;
     }
 
@@ -433,7 +433,7 @@ impl MockDaemon {
     pub(crate) fn inject_submit_failure(&self, err: RpcError) {
         self.state
             .lock()
-            .expect("MockDaemon state poisoned")
+            .expect("TestDaemon state poisoned")
             .submit_errors
             .push_back(err);
     }
@@ -445,7 +445,7 @@ impl MockDaemon {
     pub(crate) fn inject_fee_failure(&self, err: RpcError) {
         self.state
             .lock()
-            .expect("MockDaemon state poisoned")
+            .expect("TestDaemon state poisoned")
             .fee_errors
             .push_back(err);
     }
@@ -461,13 +461,13 @@ impl MockDaemon {
     pub(crate) fn submitted_count(&self) -> usize {
         self.state
             .lock()
-            .expect("MockDaemon state poisoned")
+            .expect("TestDaemon state poisoned")
             .submitted_hashes
             .len()
     }
 }
 
-impl Rpc for MockDaemon {
+impl Rpc for TestDaemon {
     fn post(
         &self,
         _route: &str,
@@ -475,8 +475,8 @@ impl Rpc for MockDaemon {
     ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
         async move {
             panic!(
-                "MockDaemon::post is unreachable: tests override the high-level Rpc methods directly. \
-                 If you reached here, you called a default-impl Rpc method that MockDaemon does not yet override; \
+                "TestDaemon::post is unreachable: tests override the high-level Rpc methods directly. \
+                 If you reached here, you called a default-impl Rpc method that TestDaemon does not yet override; \
                  add the override rather than implementing post()."
             )
         }
@@ -485,7 +485,7 @@ impl Rpc for MockDaemon {
     fn get_height(&self) -> impl Send + std::future::Future<Output = Result<usize, RpcError>> {
         let state = self.state.clone();
         async move {
-            let mut state = state.lock().expect("MockDaemon state poisoned");
+            let mut state = state.lock().expect("TestDaemon state poisoned");
             if let Some(err) = state.height_errors.pop_front() {
                 return Err(err);
             }
@@ -495,7 +495,7 @@ impl Rpc for MockDaemon {
                 .map(|cap| cap.min(chain_len))
                 .unwrap_or(chain_len);
             usize::try_from(height)
-                .map_err(|_| RpcError::InvalidNode("MockDaemon height exceeded usize".to_string()))
+                .map_err(|_| RpcError::InvalidNode("TestDaemon height exceeded usize".to_string()))
         }
     }
 
@@ -506,11 +506,11 @@ impl Rpc for MockDaemon {
         let state = self.state.clone();
         async move {
             let height = number as u64;
-            let mut state = state.lock().expect("MockDaemon state poisoned");
+            let mut state = state.lock().expect("TestDaemon state poisoned");
 
             if state.malformed_at.contains(&height) {
                 return Err(RpcError::InvalidNode(format!(
-                    "MockDaemon: malformed block at height {height}"
+                    "TestDaemon: malformed block at height {height}"
                 )));
             }
 
@@ -527,17 +527,17 @@ impl Rpc for MockDaemon {
             // classifier treats this as transient-retryable, which
             // is what the daemon-chain-too-short tests assert.
             let idx = usize::try_from(height).map_err(|_| {
-                RpcError::InvalidNode("MockDaemon: height did not fit in usize".to_string())
+                RpcError::InvalidNode("TestDaemon: height did not fit in usize".to_string())
             })?;
 
             state.chain.get(idx).cloned().ok_or_else(|| {
-                RpcError::InvalidNode(format!("MockDaemon: no block at height {height}"))
+                RpcError::InvalidNode(format!("TestDaemon: no block at height {height}"))
             })
         }
     }
 }
 
-impl DaemonEngine for MockDaemon {
+impl DaemonEngine for TestDaemon {
     type Error = RpcError;
 
     fn get_fee_estimates(
@@ -545,7 +545,7 @@ impl DaemonEngine for MockDaemon {
     ) -> impl Send + std::future::Future<Output = Result<FeeEstimates, Self::Error>> {
         let state = self.state.clone();
         async move {
-            let mut state = state.lock().expect("MockDaemon state poisoned");
+            let mut state = state.lock().expect("TestDaemon state poisoned");
             if let Some(err) = state.fee_errors.pop_front() {
                 return Err(err);
             }
@@ -560,7 +560,7 @@ impl DaemonEngine for MockDaemon {
         let state = self.state.clone();
         async move {
             let hash = TxHash(shekyl_crypto_hash::cn_fast_hash(&tx_bytes));
-            let mut state = state.lock().expect("MockDaemon state poisoned");
+            let mut state = state.lock().expect("TestDaemon state poisoned");
             if let Some(err) = state.submit_errors.pop_front() {
                 return Err(err);
             }
@@ -631,7 +631,7 @@ mod tests {
     /// `0..n`, with `chain[0]` as the genesis-style block parented
     /// from `[0u8; 32]`. Real-daemon convention: `chain[h] = block at
     /// height h`. `linear_chain(n).len() == n`, so
-    /// `MockDaemon::with_seed_and_chain(_, linear_chain(n)).get_height()`
+    /// `TestDaemon::with_seed_and_chain(_, linear_chain(n)).get_height()`
     /// returns `n`.
     fn linear_chain(n: u64) -> Vec<ScannableBlock> {
         let mut chain =
@@ -647,13 +647,13 @@ mod tests {
 
     #[tokio::test]
     async fn empty_chain_reports_zero_height() {
-        let rpc = MockDaemon::with_seed(DEFAULT_TEST_SEED);
+        let rpc = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         assert_eq!(rpc.get_height().await.unwrap(), 0);
     }
 
     #[tokio::test]
     async fn linear_chain_reports_canonical_height() {
-        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(5));
+        let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(5));
         assert_eq!(rpc.get_height().await.unwrap(), 5);
     }
 
@@ -662,7 +662,7 @@ mod tests {
         // chain[h] = block at height h (real-daemon convention).
         let chain = linear_chain(3);
         let expected_h2 = chain[2].block.hash();
-        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
+        let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
 
         let block = rpc.get_scannable_block_by_number(2).await.unwrap();
         assert_eq!(block.block.hash(), expected_h2);
@@ -671,7 +671,7 @@ mod tests {
     #[tokio::test]
     async fn parent_hash_chains_correctly() {
         // 3-block chain has heights 0, 1, 2; verify h=2 parents from h=1.
-        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
+        let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
         let h1 = rpc.get_scannable_block_by_number(1).await.unwrap();
         let h2 = rpc.get_scannable_block_by_number(2).await.unwrap();
         assert_eq!(h2.block.header.previous, h1.block.hash());
@@ -679,7 +679,7 @@ mod tests {
 
     #[tokio::test]
     async fn replace_chain_from_truncates_and_extends() {
-        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(5));
+        let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(5));
         // Fork at height 3: chain heights 0, 1, 2 survive; replace 3+.
         let parent_h2 = rpc
             .get_scannable_block_by_number(2)
@@ -707,14 +707,14 @@ mod tests {
 
     #[tokio::test]
     async fn daemon_height_cap_below_chain_len() {
-        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(10));
+        let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(10));
         rpc.set_daemon_height(4);
         assert_eq!(rpc.get_height().await.unwrap(), 4);
     }
 
     #[tokio::test]
     async fn height_errors_drain_in_fifo_then_recover() {
-        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(2));
+        let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(2));
         rpc.set_height_error_for_next_n_calls(2, &RpcError::ConnectionError("transient".into()));
 
         assert!(rpc.get_height().await.is_err());
@@ -724,7 +724,7 @@ mod tests {
 
     #[tokio::test]
     async fn block_fetch_failure_is_one_shot() {
-        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
+        let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(3));
         rpc.inject_block_fetch_failure(2, RpcError::ConnectionError("flaky".into()));
 
         assert!(rpc.get_scannable_block_by_number(2).await.is_err());
@@ -735,7 +735,7 @@ mod tests {
     async fn malformed_block_errors_persistently() {
         // 4-block chain (heights 0..=3); mark height 1 malformed and
         // verify other heights still serve normally.
-        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(4));
+        let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(4));
         rpc.set_block_returns_malformed(1);
 
         for _ in 0..3 {
@@ -749,7 +749,7 @@ mod tests {
 
     #[tokio::test]
     async fn clones_share_state() {
-        let rpc = MockDaemon::with_seed(DEFAULT_TEST_SEED);
+        let rpc = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         let clone = rpc.clone();
         // Push genesis at height 0; clone observes get_height=1.
         rpc.push_block(make_synthetic_block(0, [0u8; 32]));
@@ -759,13 +759,13 @@ mod tests {
     #[tokio::test]
     async fn fetching_genesis_returns_chain_index_zero() {
         // Real-daemon convention: chain[0] is genesis at height 0.
-        // The pre-fix MockDaemon refused height-0 fetches; that
+        // The pre-fix TestDaemon refused height-0 fetches; that
         // refusal was the artifact of a 1-indexed chain layout that
         // didn't match the daemon protocol. With the fix in place,
         // height 0 is a first-class fetch.
         let chain = linear_chain(1);
         let expected = chain[0].block.hash();
-        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
+        let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
         let h0 = rpc.get_scannable_block_by_number(0).await.unwrap();
         assert_eq!(h0.block.hash(), expected);
     }
@@ -773,7 +773,7 @@ mod tests {
     #[tokio::test]
     async fn fetching_past_chain_end_is_an_error() {
         // 2-block chain has heights 0, 1; height 2 is past the tip.
-        let rpc = MockDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(2));
+        let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(2));
         let err = rpc.get_scannable_block_by_number(2).await.unwrap_err();
         assert!(matches!(err, RpcError::InvalidNode(_)));
     }
@@ -782,7 +782,7 @@ mod tests {
 
     #[tokio::test]
     async fn fee_estimates_default_is_monotonic_economy_standard_priority() {
-        let daemon = MockDaemon::with_seed(DEFAULT_TEST_SEED);
+        let daemon = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         let fees = daemon.get_fee_estimates().await.unwrap();
         // FeeRate exposes no public per_weight accessor; verify
         // shape by round-tripping through equality against the
@@ -794,7 +794,7 @@ mod tests {
 
     #[tokio::test]
     async fn fee_estimates_override_persists_across_calls() {
-        let daemon = MockDaemon::with_seed(DEFAULT_TEST_SEED);
+        let daemon = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         let custom = FeeEstimates {
             economy: FeeRate::new(7, 1).unwrap(),
             standard: FeeRate::new(70, 1).unwrap(),
@@ -808,7 +808,7 @@ mod tests {
 
     #[tokio::test]
     async fn fee_failure_is_one_shot_then_recovers() {
-        let daemon = MockDaemon::with_seed(DEFAULT_TEST_SEED);
+        let daemon = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         daemon.inject_fee_failure(RpcError::ConnectionError("fee-pool rotating".into()));
         assert!(daemon.get_fee_estimates().await.is_err());
         assert!(daemon.get_fee_estimates().await.is_ok());
@@ -816,7 +816,7 @@ mod tests {
 
     #[tokio::test]
     async fn submit_transaction_first_sight_returns_submitted() {
-        let daemon = MockDaemon::with_seed(DEFAULT_TEST_SEED);
+        let daemon = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         let bytes = b"tx-alpha".to_vec();
         let outcome = daemon.submit_transaction(bytes.clone()).await.unwrap();
         match outcome {
@@ -832,10 +832,10 @@ mod tests {
     async fn submit_transaction_dedupes_retry_returns_already_known() {
         // Models the §5.2 retry contract: engine submits, network
         // glitches between submit and ack, engine retries with the
-        // same tx_bytes; the daemon (and MockDaemon) reports
+        // same tx_bytes; the daemon (and TestDaemon) reports
         // AlreadyKnown rather than admitting a duplicate. Same hash
         // both times — caller correlates the two outcomes.
-        let daemon = MockDaemon::with_seed(DEFAULT_TEST_SEED);
+        let daemon = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         let bytes = b"tx-beta".to_vec();
         let first = daemon.submit_transaction(bytes.clone()).await.unwrap();
         let second = daemon.submit_transaction(bytes.clone()).await.unwrap();
@@ -850,7 +850,7 @@ mod tests {
 
     #[tokio::test]
     async fn submit_transaction_distinct_bytes_get_distinct_hashes() {
-        let daemon = MockDaemon::with_seed(DEFAULT_TEST_SEED);
+        let daemon = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         let alpha = daemon.submit_transaction(b"alpha".to_vec()).await.unwrap();
         let beta = daemon.submit_transaction(b"beta".to_vec()).await.unwrap();
         let alpha_hash = match alpha {
@@ -873,7 +873,7 @@ mod tests {
         // normally — exercising the engine's "retry after
         // transient error; dedup handles second-trip-after-success"
         // path.
-        let daemon = MockDaemon::with_seed(DEFAULT_TEST_SEED);
+        let daemon = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         let bytes = b"tx-gamma".to_vec();
 
         daemon.inject_submit_failure(RpcError::ConnectionError("flaky".into()));
@@ -891,7 +891,7 @@ mod tests {
 
     #[tokio::test]
     async fn submit_dedup_state_is_shared_across_clones() {
-        let daemon = MockDaemon::with_seed(DEFAULT_TEST_SEED);
+        let daemon = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         let clone = daemon.clone();
         let bytes = b"tx-delta".to_vec();
         let first = daemon.submit_transaction(bytes.clone()).await.unwrap();

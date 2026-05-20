@@ -622,28 +622,39 @@ sustainability is unaffected by the recalibration.
   Status banner, §6 no-Mock substrate inheritance discipline,
   §6.1 test-substrate paradigm pin, §7.X C6β commit prose.
 
-- **Stage 1 retroactive Mock-X cleanup: `MockDaemon` → `TestDaemon`
-  rename.** The `MockDaemon` case (Stage 1 PR 1 substrate) is
-  structurally different from `MockLedger`: real `DaemonClient`
-  requires network connectivity, so the test-substitute is a
-  legitimate alternative real implementation that serves canned
-  / cached test responses without network. The structural shape
-  is fine; the "Mock" naming is the bug — it inherits the
-  conflation that the broader Mock-X rejection identifies. The
-  fix is a rename to `TestDaemon` (signaling "alternative real
-  implementation for tests" rather than "fake of an
-  implementation") with the same shape. Lower-priority than the
-  `MockLedger` cleanup because the structural pattern is
-  correct; only the naming is wrong. **Pinned (2026-05-20) to
-  land in Stage 1 PR 4 (`RefreshEngine`) §7.X commit C6γ per the
-  PR 4 Round 5 substrate-decision amendment** ([`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-  Status banner, §6 no-Mock substrate inheritance discipline,
-  §7.X C6 commit prose); bundled with the `MockLedger` cleanup
-  (C6β) so PR 4's substrate-pass closes both FOLLOWUPS entries
-  in one cut. Cross-references:
+- **[CLOSED 2026-05-20] Stage 1 retroactive Mock-X cleanup:
+  `MockDaemon` → `TestDaemon` rename.** Landed in PR 4 §7.X
+  commit C6γ: mechanical rename of the type and every call site
+  in
+  [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
+  (struct + `impl` blocks + module docstrings), `engine/refresh.rs`,
+  `engine/lifecycle.rs`, `engine/mod.rs`,
+  `benches/common/engine_fixture.rs`, and `Cargo.toml`
+  (rationale comment); plus the active-doc trajectory references
+  in [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md).
+  The structural shape is unchanged — the type is still an
+  alternative real implementation that serves canned / cached
+  test responses without network — only the naming changed.
+
+  **Substrate trajectory.** The `MockDaemon` case (Stage 1 PR 1
+  substrate) was structurally different from `MockLedger`: real
+  `DaemonClient` requires network connectivity, so the
+  test-substitute is a legitimate alternative real implementation,
+  not a parallel-implementation fake. The structural shape was
+  fine; the "Mock" naming was the bug — it inherited the
+  conflation that the broader Mock-X rejection identified.
+  C6γ's fix renames the type so the name signals "alternative
+  real implementation for tests" rather than "fake of an
+  implementation," with the same shape. Bundled with the
+  `MockLedger` cleanup (C6β) so PR 4's substrate-pass closes
+  both FOLLOWUPS entries in one cut, per the Round 5 amendment.
+
+  Cross-references (historical):
   [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
-  §2.1.2. Target: V3.0 baseline; pinned to Stage 1 PR 4 C6γ
-  (closure recorded with PR 4 merge SHA per PR 4 §7.X C8 prose).
+  §2.1.2 (broader Mock-X rejection rationale);
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  Status banner, §6 no-Mock substrate inheritance discipline,
+  §7.X C6γ commit prose.
 
 - **CHANGELOG backfill for Stage 0 PR-A and PR-C.** Stage 0
   preparatory PRs PR-A (`3d313256c` — symmetry rule),

@@ -10,7 +10,7 @@
 //! # Why this exists (no-Mock substrate per PR 3 §2.1.2)
 //!
 //! The Round 4 PR 4 plan was a parallel-implementation `MockRefresh`
-//! mirroring `MockDaemon` / `MockLedger`; the Round 5 substrate-
+//! mirroring `TestDaemon` / `MockLedger`; the Round 5 substrate-
 //! decision amendment (commit `8484e669a`) replaced that plan with
 //! the binding no-Mock substrate shape PR 3
 //! [`§2.1.2`](../../../../../docs/design/STAGE_1_PR_3_KEY_ENGINE.md)
@@ -296,7 +296,7 @@ mod tests {
     use crate::engine::diagnostics::NoopDiagnosticSink;
     use crate::engine::error::{IoError, RefreshError};
     use crate::engine::refresh::{LedgerSnapshot, RefreshOptions, RefreshPhase, RefreshProgress};
-    use crate::engine::test_support::{MockDaemon, DEFAULT_TEST_SEED};
+    use crate::engine::test_support::{TestDaemon, DEFAULT_TEST_SEED};
     use crate::engine::traits::refresh::RefreshEngine;
 
     /// Trivial `RefreshEngine` stub: returns an empty `ScanResult`
@@ -373,7 +373,7 @@ mod tests {
         let wrapper = FaultInjecting::new(DelegationStub);
         assert_eq!(wrapper.queued_failures(), 0);
 
-        let daemon = Arc::new(MockDaemon::with_seed(DEFAULT_TEST_SEED));
+        let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
         let (snapshot, cancel, progress) = smoke_inputs();
         let sink = NoopDiagnosticSink;
 
@@ -408,7 +408,7 @@ mod tests {
         wrapper.queue_failure(RefreshError::Cancelled);
         assert_eq!(wrapper.queued_failures(), 1);
 
-        let daemon = Arc::new(MockDaemon::with_seed(DEFAULT_TEST_SEED));
+        let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
         let sink = NoopDiagnosticSink;
 
         // First call: pops the injection.
@@ -462,7 +462,7 @@ mod tests {
         }));
         assert_eq!(wrapper.queued_failures(), 2);
 
-        let daemon = Arc::new(MockDaemon::with_seed(DEFAULT_TEST_SEED));
+        let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
         let sink = NoopDiagnosticSink;
 
         // First call: head is Cancelled.
@@ -534,7 +534,7 @@ mod tests {
         wrapper.queue_failure(RefreshError::Cancelled);
         assert_eq!(wrapper.queued_failures(), 2);
 
-        let daemon = Arc::new(MockDaemon::with_seed(DEFAULT_TEST_SEED));
+        let daemon = Arc::new(TestDaemon::with_seed(DEFAULT_TEST_SEED));
         let sink = NoopDiagnosticSink;
 
         let (snapshot, cancel, progress) = smoke_inputs();

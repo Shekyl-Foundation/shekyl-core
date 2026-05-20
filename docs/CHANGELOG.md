@@ -89,16 +89,45 @@
     docs remain as historical-record prose per the
     `15-deletion-and-debt.mdc` "while we're here" discipline).
 
-  *Test gates.* `cargo fmt` clean; `cargo clippy -p
-  shekyl-engine-core --all-targets --features test-helpers --
+  *C6γ — `MockDaemon` → `TestDaemon` rename*:
+  - Mechanical rename of the test-substitute type and every call
+    site across
+    [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
+    (struct, `impl Rpc`, `impl DaemonEngine`, module docstrings),
+    [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs),
+    [`engine/lifecycle.rs`](../rust/shekyl-engine-core/src/engine/lifecycle.rs),
+    [`engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs),
+    [`benches/common/engine_fixture.rs`](../rust/shekyl-engine-core/benches/common/engine_fixture.rs)
+    (forward-pointer comment), and
+    [`Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+    (`ChaCha20Rng` rationale comment).
+  - Structural shape unchanged — the type is still an alternative
+    real implementation that serves canned / cached test responses
+    without network connectivity (per PR 3 §2.1.2's distinction
+    between "alternative real implementation" and "parallel-
+    implementation fake"). Only the naming changed: `TestDaemon`
+    signals the role correctly per the no-Mock substrate-
+    inheritance discipline.
+  - Active-doc trajectory updates in
+    [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §1.2 (Generic `DaemonClient` trajectory row), §1.4 rename-chain
+    note, §6.1 hybrid-test discussion, §6.2 RNG-seed pin, §3.5
+    `Rpc`-impl rationale, and the §"Linked file paths" inventory
+    entry (rename chain extended: `MockRpc` → `MockDaemon` →
+    `TestDaemon`).
+
+  *Test gates.* `cargo fmt --all -- --check` clean; `cargo clippy
+  -p shekyl-engine-core --all-targets --features test-helpers --
   -D warnings` clean; `cargo clippy -p shekyl-engine-core
   --all-targets -- -D warnings` clean (default features);
   `cargo test -p shekyl-engine-core --lib` 152/152 pass
   including the migrated hybrid retry test; `cargo check
-  -p shekyl-engine-core` and `cargo check -p shekyl-engine-core
-  --features test-helpers` and `cargo check -p shekyl-engine-core
-  --tests` all green. C6γ (`MockDaemon` → `TestDaemon` rename)
-  is deferred to a follow-up commit per the design doc.
+  -p shekyl-engine-core` (default + `--features test-helpers` +
+  `--tests` + `--benches` + `--workspace --tests`) all green.
+
+  PR 4 §7.X commits C0 through C6 are now landed; commit C7
+  (hybrid retry test + property tests) and C8 (docs propagation)
+  are the remaining substrate work for PR 4.
 
 - **RandomX v2 — Phase 1: pinned submodule + out-of-tree build wiring**
   (`feat/randomx-v2-phase1`, PR #54, merge commit `c0c4a11e5`,
