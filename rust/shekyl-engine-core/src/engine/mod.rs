@@ -157,6 +157,8 @@ pub mod daemon;
 pub(crate) mod diagnostics;
 pub mod error;
 #[cfg(any(test, feature = "test-helpers"))]
+pub(crate) mod fault_injecting_ledger;
+#[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_refresh;
 pub mod lifecycle;
 pub(crate) mod local_keys;

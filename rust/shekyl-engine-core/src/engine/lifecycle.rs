@@ -787,14 +787,18 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine, R: RefreshEngine> E
     /// §6.3). Hybrid tests that need a fully-constructed
     /// `Engine<SoloSigner>` but want to drive
     /// [`super::Engine::apply_scan_result`] (or any other ledger-
-    /// touching path) against a deterministic `MockLedger` rather
-    /// than the canonical `LocalLedger` use this method:
+    /// touching path) against a wrapped production [`super::local_ledger::LocalLedger`]
+    /// for failure injection use this method together with
+    /// [`super::fault_injecting_ledger::FaultInjecting`] and
+    /// [`super::local_ledger::LocalLedger::from_test_blocks`] (the
+    /// PR 4 C6β no-Mock substrate per the Round 5 amendment,
+    /// commit `8484e669a`):
     ///
     /// ```ignore
     /// let real = Engine::<SoloSigner>::create(params, dummy_daemon())?;
-    /// let mock_ledger = MockLedger::with_seed(derive_seed(&master, ROLE_LEDGER));
-    /// let hybrid: Engine<SoloSigner, DaemonClient, MockLedger> =
-    ///     real.replace_ledger(mock_ledger);
+    /// let ledger = FaultInjecting::new(LocalLedger::from_test_blocks(Vec::new()));
+    /// let hybrid: Engine<SoloSigner, DaemonClient, FaultInjecting<LocalLedger>> =
+    ///     real.replace_ledger(ledger);
     /// ```
     ///
     /// Composes with [`Self::replace_daemon`]: a hybrid test that
@@ -816,12 +820,12 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine, R: RefreshEngine> E
     /// LedgerEngine` (default `LocalLedger`) alongside the
     /// `LedgerEngine`-to-`pub` promotion. At that point production
     /// constructors accept any `L` directly, hybrid tests construct
-    /// their `Engine<SoloSigner, _, MockLedger>` via the public
-    /// path without the intermediate dummy-ledger ceremony, and
-    /// this `#[cfg(test)] pub(crate)` helper retires. The retirement
-    /// commit deletes both `replace_daemon` and `replace_ledger`
-    /// together; production paths are unaffected because they never
-    /// named these methods.
+    /// their `Engine<SoloSigner, _, FaultInjecting<LocalLedger>>` via
+    /// the public path without the intermediate dummy-ledger
+    /// ceremony, and this `#[cfg(test)] pub(crate)` helper retires.
+    /// The retirement commit deletes both `replace_daemon` and
+    /// `replace_ledger` together; production paths are unaffected
+    /// because they never named these methods.
     pub(crate) fn replace_ledger<L2: LedgerEngine>(self, ledger: L2) -> Engine<S, D1, L2, R> {
         let Engine {
             file,

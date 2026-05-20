@@ -4,6 +4,102 @@
 
 ### Added
 
+- **Stage 1 PR 4 — C6 no-Mock substrate pass (`RefreshEngine` /
+  `LedgerEngine` failure-injection wrappers)**
+  (`feat/stage-1-pr4-refresh-engine`, 2026-05-20). Lands the
+  C6α + C6β sub-commits of PR 4's substrate pass per the Round 5
+  amendment (commit `8484e669a`) and sub-pin extension
+  (commit `29cb7e138`, F-Mock-1 through F-Mock-8). The pass closes
+  the [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) "Stage 1 retroactive
+  Mock-X cleanup: `MockLedger` → `LocalLedger::from_test_blocks(...)`
+  + `FaultInjecting<LocalLedger>`" entry and applies the no-Mock
+  pattern PR 3 established (production-only implementors +
+  composable trait-level `FaultInjecting<T>` wrappers) to PR 2's
+  inherited `MockLedger` parallel-implementation.
+
+  *C6α — `FaultInjecting<R: RefreshEngine>` wrapper + `test-helpers`
+  feature* (commit `e9310542a`):
+  - Adds `test-helpers = []` Cargo feature to
+    [`rust/shekyl-engine-core/Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+    (mirrors the `bench-internals` precedent) gating the C6
+    test-helper surfaces with `#[cfg(any(test, feature =
+    "test-helpers"))]` per the F-Mock-1 symmetry pin.
+  - Adds
+    [`engine/fault_injecting_refresh.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs)
+    implementing `FaultInjecting<R: RefreshEngine>` with the
+    Option (i) wrapper API (`type Error = RefreshError`; FIFO
+    `Mutex<VecDeque<RefreshError>>` queue; `queue_failure(err)`
+    general injector; `queued_failures()` drain inspector;
+    `debug_assert!`-on-Drop queue-drain contract per F-Mock-2).
+  - Adds `Engine::replace_refresh` test-only setter on
+    [`engine/lifecycle.rs`](../rust/shekyl-engine-core/src/engine/lifecycle.rs)
+    mirroring the existing `replace_daemon` / `replace_ledger`
+    helpers.
+  - Adds Class 1 trait-surface smoke tests covering empty-queue
+    passthrough, single-injection-then-delegation, multi-injection
+    FIFO ordering, and `#[should_panic]` queue-drain-on-teardown.
+
+  *C6β — `FaultInjecting<L: LedgerEngine>` + `LocalLedger::from_test_blocks`
+  + `MockLedger` retirement*:
+  - Adds
+    [`engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs)
+    implementing `FaultInjecting<L: LedgerEngine>` with the same
+    Option (i) wrapper shape (queue-of-`RefreshError`,
+    `queue_failure` / `queue_concurrent_mutation` /
+    `queued_failures`, `debug_assert!`-on-Drop). Not `Clone` by
+    design — the prior `MockLedger`'s `Arc<Mutex<…>>` aliasing
+    shape (inherited from CryptoNote test patterns) does not
+    survive the no-Mock transition.
+  - Adds test-only `LocalLedger::from_test_blocks(Vec<Block>)`
+    constructor at
+    [`engine/local_ledger.rs`](../rust/shekyl-engine-core/src/engine/local_ledger.rs).
+    The V3.0 substrate supports the empty-`Vec` case only (the
+    sole shape every existing `MockLedger`-replaced caller
+    needs); non-empty `Vec` panics with a forward-pointer to
+    the V3.1 `TestLedgerBuilder` substrate-design FOLLOWUPS
+    entry. The `Vec<Block>` signature is load-bearing — V3.1's
+    substrate consumes the body without a signature change per
+    the rationale recorded in the constructor's rustdoc.
+  - Migrates the §5.2 hybrid retry integration test
+    `hybrid_apply_scan_result_retries_on_concurrent_mutation`
+    (in
+    [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs))
+    from `MockLedger::with_seed(...)` +
+    `queue_concurrent_mutation()` to
+    `FaultInjecting::new(LocalLedger::from_test_blocks(Vec::new()))`
+    + `queue_concurrent_mutation()`. The wrapper's non-`Clone`
+    posture required restructuring the assertion sites from a
+    cloned handle to read-guard access through the engine's
+    `Arc<RwLock<Engine<…>>>`; this is the structurally-correct
+    shape (single owner per the no-Mock substrate-inheritance
+    discipline).
+  - Deletes `MockLedger` + `MockLedgerState` + `ROLE_LEDGER` +
+    associated rustdoc + contract tests +
+    `derive_seed_pinned_fixture_for_role_ledger` test from
+    [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
+    (`ROLE_LEDGER` becomes dead weight because `LocalLedger`'s
+    `from_test_blocks` is deterministic and consumes no seed;
+    the `ROLE_DAEMON` HKDF-derivation pinned-fixture test in
+    the same module covers the underlying derivation mechanism).
+  - Updates the stale `MockLedger` reference in
+    [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §1.2 (the only active-doc factual claim that named
+    `MockLedger` as the current substrate; the broader
+    historical references in §§4+ and the PR 2 / PR 3 design
+    docs remain as historical-record prose per the
+    `15-deletion-and-debt.mdc` "while we're here" discipline).
+
+  *Test gates.* `cargo fmt` clean; `cargo clippy -p
+  shekyl-engine-core --all-targets --features test-helpers --
+  -D warnings` clean; `cargo clippy -p shekyl-engine-core
+  --all-targets -- -D warnings` clean (default features);
+  `cargo test -p shekyl-engine-core --lib` 152/152 pass
+  including the migrated hybrid retry test; `cargo check
+  -p shekyl-engine-core` and `cargo check -p shekyl-engine-core
+  --features test-helpers` and `cargo check -p shekyl-engine-core
+  --tests` all green. C6γ (`MockDaemon` → `TestDaemon` rename)
+  is deferred to a follow-up commit per the design doc.
+
 - **RandomX v2 — Phase 1: pinned submodule + out-of-tree build wiring**
   (`feat/randomx-v2-phase1`, PR #54, merge commit `c0c4a11e5`,
   2026-05-19). Adds `external/randomx-v2` submodule pinned to

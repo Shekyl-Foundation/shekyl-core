@@ -181,6 +181,102 @@ impl LocalLedger {
     }
 }
 
+#[cfg(any(test, feature = "test-helpers"))]
+impl LocalLedger {
+    /// **Test-only constructor.** Build a [`LocalLedger`] from a
+    /// vector of deterministic test-block fixtures.
+    ///
+    /// Stage 1 PR 4 C6β introduces this constructor as the
+    /// production-only replacement for the parallel-implementation
+    /// `MockLedger::with_seed(...)` per the Round 5 substrate-decision
+    /// amendment (commit `8484e669a`) and the no-Mock substrate
+    /// discipline established by PR 3 §2.1.2. Pairs with
+    /// [`super::fault_injecting_ledger::FaultInjecting`] (the C6β
+    /// composable failure-injection wrapper) for failure-injection
+    /// scenarios; the constructor itself is the success-path
+    /// equivalent of `MockLedger::with_seed`.
+    ///
+    /// # V3.0 substrate scope
+    ///
+    /// The V3.0 substrate covers the empty-blocks case only
+    /// (`blocks == Vec::new()`), which is sufficient for every
+    /// `MockLedger`-replaced caller surveyed in the C6β migration
+    /// audit (5 sites in
+    /// [`engine/test_support.rs`](super::test_support)'s `tests`
+    /// module and 1 site in
+    /// [`engine/refresh.rs`](super::refresh)'s
+    /// `start_refresh_integration_tests` module, all of which seed
+    /// an empty ledger). Non-empty `blocks` panic with a
+    /// forward-pointer to the V3.1 `TestLedgerBuilder` substrate-
+    /// design FOLLOWUPS entry; that entry's three-prong disposition
+    /// (coordinated-not-per-port; designed-before-first-daemon-Rust-
+    /// port; forward-composable with this constructor) and the
+    /// flagged middle-ground option (structurally-valid-but-
+    /// semantically-stubbed fixtures) are the V3.1 implementation
+    /// design conversation. See
+    /// [`docs/FOLLOWUPS.md`](../../../../../docs/FOLLOWUPS.md)
+    /// "Coordinated `TestLedgerBuilder` test-infrastructure substrate
+    /// design (V3.1 ...)" for the full disposition.
+    ///
+    /// # Why `Vec<Block>` and not `Vec::new()`-only
+    ///
+    /// The forward-compatible signature is the load-bearing
+    /// rationale per the FOLLOWUPS entry's third disposition prong
+    /// ("Forward-composable with PR 4 C6β
+    /// `LocalLedger::from_test_blocks`"): V3.1's substrate produces
+    /// `Vec<Block>` (or a richer type wrapping it), and the C6β
+    /// constructor accepts `Vec<Block>` so the V3.1 substrate slots
+    /// in without a signature change. Constraining the V3.0
+    /// signature to `()` would force a signature change at V3.1 —
+    /// the cost-benefit-defer-to-later anti-pattern per
+    /// [`16-architectural-inheritance.mdc`](../../../../../.cursor/rules/16-architectural-inheritance.mdc).
+    ///
+    /// # Visibility / gating (F-Mock-1 symmetry)
+    ///
+    /// `pub(crate)` and gated by `#[cfg(any(test, feature =
+    /// "test-helpers"))]`, matching the
+    /// [`super::fault_injecting_ledger::FaultInjecting`] /
+    /// [`super::fault_injecting_refresh::FaultInjecting`] /
+    /// [`super::Engine::replace_refresh`] gating per the Round 5
+    /// sub-pin extension F-Mock-1 cfg-gating-symmetry disposition.
+    /// Production builds do not compile this constructor; crate-
+    /// internal tests and downstream `test-helpers`-feature
+    /// consumers reach it through the `LocalLedger` type itself.
+    ///
+    /// # Lints
+    ///
+    /// - `dead_code` allow: under `--features test-helpers`
+    ///   without `cfg(test)` no caller is in scope; the
+    ///   `cfg(test)`-gated callers in
+    ///   [`super::test_support::tests`] and
+    ///   [`super::refresh::start_refresh_integration_tests`] are
+    ///   the canonical consumers. Symmetric with the sibling
+    ///   [`super::fault_injecting_ledger::FaultInjecting::new`]
+    ///   disposition.
+    /// - `clippy::needless_pass_by_value` allow: the `Vec<Block>`
+    ///   signature is load-bearing per the V3.1 substrate-
+    ///   trajectory rationale above; the V3.1 implementation
+    ///   consumes the `Vec` body (move ingestion into the ledger)
+    ///   without changing the signature. A `&[Block]` signature
+    ///   would force the V3.1 substrate to either clone-on-ingest
+    ///   or pivot the signature — both the cost-benefit-defer-to-
+    ///   later anti-pattern this rationale rejects.
+    #[allow(dead_code, clippy::needless_pass_by_value)]
+    pub(crate) fn from_test_blocks(blocks: Vec<shekyl_oxide::block::Block>) -> Self {
+        assert!(
+            blocks.is_empty(),
+            "LocalLedger::from_test_blocks: non-empty Vec<Block> not yet supported at V3.0. \
+             The V3.0 substrate covers the empty-ledger case only (sufficient for all \
+             current MockLedger-replaced callers). Richer fixtures are pending the V3.1 \
+             TestLedgerBuilder substrate-design activity per docs/FOLLOWUPS.md \
+             'Coordinated TestLedgerBuilder test-infrastructure substrate design' entry. \
+             Pass Vec::new() for the V3.0 empty-ledger path; the V3.1 substrate replaces \
+             this assertion with the real ingestion body without a signature change."
+        );
+        Self::new(WalletLedger::empty(), LedgerIndexes::empty())
+    }
+}
+
 #[cfg(feature = "bench-internals")]
 impl LocalLedger {
     /// **Bench internals only.** Replace the inner persisted

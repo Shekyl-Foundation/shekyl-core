@@ -575,48 +575,52 @@ sustainability is unaffected by the recalibration.
   discipline" entry for the lemma that generalizes from this
   recurrence.
 
-- **Stage 1 retroactive Mock-X cleanup: `MockLedger` →
-  `LocalLedger::from_test_blocks(...)` + `FaultInjecting<LocalLedger>`.**
-  Stage 1 PR 3 (`KeyEngine`) Round 2 review surfaced that the
-  Mock-X test-substrate pattern is wrong as a category: parallel
-  test-only implementations conflate test-controlled inputs to
-  real implementations with substitute implementations, add
-  attack surface, don't compose with future implementors, and
-  encourage tests to verify against fake semantics rather than
-  real semantics. PR 3 lands the no-Mock pattern at its own
-  cut-point (production-only `LocalKeys` with `from_seed` /
-  `#[cfg(test)] from_test_seed` constructors + a composable
-  `FaultInjecting<K: KeyEngine>` wrapper). The retroactive
-  cleanup of PR 2's `MockLedger` follows the same pattern but is
-  not worth retroactive churn within PR 2's already-merged
-  branch; **pinned (2026-05-20) to land in Stage 1 PR 4
-  (`RefreshEngine`) §7.X commit C6β per the PR 4 Round 5
-  substrate-decision amendment** ([`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-  Status banner, §6 no-Mock substrate inheritance discipline,
-  §7.X C6 commit prose). PR 4's pre-flight surfaced the cleanup
+- **[CLOSED 2026-05-20] Stage 1 retroactive Mock-X cleanup:
+  `MockLedger` → `LocalLedger::from_test_blocks(...)` +
+  `FaultInjecting<LocalLedger>`.** Landed in PR 4 §7.X commit
+  C6β: `FaultInjecting<L: LedgerEngine>` extracted to
+  [`engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs);
+  `LocalLedger::from_test_blocks(Vec<Block>)` added at
+  [`engine/local_ledger.rs`](../rust/shekyl-engine-core/src/engine/local_ledger.rs)
+  (V3.0 supports the empty-`Vec` case only; non-empty fixtures
+  pending the V3.1 coordinated `TestLedgerBuilder` substrate
+  design entry below); `MockLedger` + `MockLedgerState` +
+  `ROLE_LEDGER` deleted wholesale from `engine/test_support.rs`;
+  the §5.2 hybrid retry test `hybrid_apply_scan_result_retries_on_concurrent_mutation`
+  migrated to `FaultInjecting::new(LocalLedger::from_test_blocks(Vec::new()))`
+  via the existing `Engine::replace_ledger` slot.
+
+  **Substrate trajectory.** Stage 1 PR 3 (`KeyEngine`) Round 2
+  review surfaced that the Mock-X test-substrate pattern is
+  wrong as a category: parallel test-only implementations
+  conflate test-controlled inputs to real implementations with
+  substitute implementations, add attack surface, don't compose
+  with future implementors, and encourage tests to verify against
+  fake semantics rather than real semantics. PR 3 landed the
+  no-Mock pattern at its own cut-point (production-only
+  `LocalKeys` with `from_seed` / `#[cfg(test)] from_test_seed`
+  constructors + a composable `FaultInjecting<K: KeyEngine>`
+  wrapper). PR 4's pre-flight surfaced the `MockLedger` cleanup
   naturally because C6/C7's new `RefreshEngine` test substrate
-  would otherwise compound the Mock-X debt this entry exists to
-  close, and the
+  would otherwise have compounded the Mock-X debt this entry
+  existed to close, and the
   [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
   cost-benefit-defer-to-later anti-pattern names the
   architectural-integrity-now disposition as the default for
-  security-load-bearing substrate work pre-genesis. The
-  structurally-correct shape is a production-only `LocalLedger`
-  with a `#[cfg(test)]`-gated `from_test_blocks(...)` constructor
-  (deterministic test-block fixtures) plus a composable
-  `FaultInjecting<L: LedgerEngine>` wrapper (failure injection on
-  top of any `L: LedgerEngine` impl). The current `MockLedger`
-  ([`engine/test_support.rs:773`](../rust/shekyl-engine-core/src/engine/test_support.rs))
-  is structurally already a `FaultInjecting<LocalLedger>`-shaped
-  wrapper (delegating to the canonical
-  `apply_scan_result_to_state`); C6β is mostly
-  extraction-and-rename, not a re-implementation.
-  Cross-references:
+  security-load-bearing substrate work pre-genesis. C6β was
+  mostly extraction-and-rename, not re-implementation: the
+  pre-deletion `MockLedger` was structurally already a
+  `FaultInjecting<LocalLedger>`-shaped wrapper that delegated to
+  the canonical `apply_scan_result_to_state`.
+
+  Cross-references (historical):
   [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
   §2.1.2 (broader Mock-X rejection rationale), §6.4 (per-PR-3
   substrate disposition), §7.9 (test-substrate disposition open
-  question). Target: V3.0 baseline; pinned to Stage 1 PR 4 C6β
-  (closure recorded with PR 4 merge SHA per PR 4 §7.X C8 prose).
+  question);
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  Status banner, §6 no-Mock substrate inheritance discipline,
+  §6.1 test-substrate paradigm pin, §7.X C6β commit prose.
 
 - **Stage 1 retroactive Mock-X cleanup: `MockDaemon` → `TestDaemon`
   rename.** The `MockDaemon` case (Stage 1 PR 1 substrate) is

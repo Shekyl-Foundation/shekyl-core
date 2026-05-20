@@ -996,15 +996,18 @@ async fn run_refresh_task<S, D: DaemonEngine, L, R: RefreshEngine>(
         // surface (commit 7) rather than the LocalLedger-specialized
         // [`Engine::apply_scan_result`] sync wrapper. The trait method
         // is `async`, so the future is awaited inline; this is what
-        // lets `Engine<S, D, MockLedger>` flow through the same
-        // refresh path that `Engine<S, D, LocalLedger>` uses, which
-        // is the foundation for the §5.2 hybrid retry test.
+        // lets `Engine<S, D, FaultInjecting<LocalLedger>>` flow
+        // through the same refresh path that `Engine<S, D,
+        // LocalLedger>` uses, which is the foundation for the §5.2
+        // hybrid retry test (PR 4 C6β no-Mock substrate).
         //
         // Lock-hold-across-await note: the engine read-guard `g` is
         // held for the duration of `apply_scan_result.await`. This is
-        // benign for Stage 1's `LocalLedger` and `MockLedger`
-        // implementors (both have wholly synchronous future bodies,
-        // so the await completes in synchronous-merge time) but will
+        // benign for Stage 1's `LocalLedger` and its
+        // [`FaultInjecting<LocalLedger>`](super::fault_injecting_ledger::FaultInjecting)
+        // failure-injection wrapper (both have wholly synchronous
+        // future bodies, so the await completes in synchronous-merge
+        // time) but will
         // need restructuring at Stage 4 when an actor-backed
         // implementor's `apply_scan_result` future genuinely awaits a
         // `kameo` ask: extending the outer engine read-guard across
@@ -2421,10 +2424,10 @@ mod start_refresh_integration_tests {
     use tempfile::TempDir;
     use tokio::sync::RwLock;
 
+    use crate::engine::fault_injecting_ledger::FaultInjecting;
     use crate::engine::lifecycle::EngineCreateParams;
-    use crate::engine::test_support::{
-        derive_seed, MockDaemon, MockLedger, ROLE_DAEMON, ROLE_LEDGER,
-    };
+    use crate::engine::local_ledger::LocalLedger;
+    use crate::engine::test_support::{derive_seed, MockDaemon, ROLE_DAEMON};
     use crate::engine::traits::LedgerEngine;
     use crate::engine::{
         Credentials, DaemonClient, Engine, IoError, RefreshError, RefreshOptions, SoloSigner,
@@ -2750,19 +2753,23 @@ mod start_refresh_integration_tests {
         }
     }
 
-    /// Build an `Engine<SoloSigner, MockDaemon, MockLedger>` ready for
-    /// hybrid retry tests. Composes
+    /// Build an `Engine<SoloSigner, MockDaemon, FaultInjecting<LocalLedger>>`
+    /// ready for hybrid retry tests. Composes
     /// [`Engine::replace_daemon`] (PR 1) with [`Engine::replace_ledger`]
-    /// (PR 2 commit 6): one real `Engine::create` ceremony pays for
-    /// the file-handle / keys / refresh-slot / preferences setup, and
-    /// then both engine slots are swapped out for deterministic
-    /// in-memory mocks. Returns the [`TempDir`] alongside so the
-    /// caller keeps the wallet file alive for the engine's lifetime.
+    /// (PR 2 commit 6): one real `Engine::create` ceremony pays for the
+    /// file-handle / keys / refresh-slot / preferences setup, then the
+    /// daemon slot is swapped for a deterministic [`MockDaemon`] and
+    /// the ledger slot is swapped for the production [`LocalLedger`]
+    /// composed inside a [`FaultInjecting`] failure-injection wrapper
+    /// (PR 4 C6β no-Mock substrate per the Round 5 amendment,
+    /// commit `8484e669a`). Returns the [`TempDir`] alongside so the
+    /// caller keeps the wallet file alive for the engine’s
+    /// lifetime.
     async fn make_hybrid_engine_arc_with_ledger(
         mock_daemon: MockDaemon,
-        mock_ledger: MockLedger,
+        ledger: FaultInjecting<LocalLedger>,
     ) -> (
-        Arc<RwLock<Engine<SoloSigner, MockDaemon, MockLedger>>>,
+        Arc<RwLock<Engine<SoloSigner, MockDaemon, FaultInjecting<LocalLedger>>>>,
         TempDir,
     ) {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -2786,53 +2793,67 @@ mod start_refresh_integration_tests {
         // most-naturally as "first wire the chain source, then wire
         // the merge target."
         let with_daemon = real.replace_daemon(mock_daemon);
-        let hybrid = with_daemon.replace_ledger(mock_ledger);
+        let hybrid = with_daemon.replace_ledger(ledger);
         (Arc::new(RwLock::new(hybrid)), tmp)
     }
 
     /// Exercise the §5.2 retry contract end-to-end. Composition: a
-    /// 6-block `MockDaemon` chain (heights 0..=5) drives the producer
-    /// from `synced_height = 0`; the paired `MockLedger` has one
+    /// 6-block [`MockDaemon`] chain (heights 0..=5) drives the producer
+    /// from `synced_height = 0`; the paired
+    /// [`FaultInjecting<LocalLedger>`](FaultInjecting) wrapper has one
     /// queued [`RefreshError::ConcurrentMutation`] response from
-    /// [`MockLedger::queue_concurrent_mutation`], so the first merge
-    /// attempt observes the injected race and the producer retries
-    /// with a fresh snapshot. The second attempt finds the failure
-    /// queue empty, runs the canonical merge body, and advances the
-    /// `MockLedger`'s `synced_height` to 5.
+    /// [`FaultInjecting::queue_concurrent_mutation`], so the first
+    /// merge attempt observes the injected race and the producer
+    /// retries with a fresh snapshot. The second attempt finds the
+    /// failure queue empty, runs the canonical merge body against the
+    /// inner production [`LocalLedger`], and advances its
+    /// `synced_height` to 5.
     ///
-    /// What this pins (Stage 1 PR 2):
+    /// What this pins (Stage 1 PR 2 + PR 4 C6β no-Mock substrate):
     ///
-    /// - `Engine<SoloSigner, MockDaemon, MockLedger>` is a real,
-    ///   callable shape — the `L: LedgerEngine` parameterization
-    ///   isn't a phantom type; `MockLedger` actually drives the
-    ///   merge. Composes the PR 1 daemon-slot swap with the PR 2
-    ///   ledger-slot swap on a single engine instance.
+    /// - `Engine<SoloSigner, MockDaemon, FaultInjecting<LocalLedger>>`
+    ///   is a real, callable shape — the `L: LedgerEngine`
+    ///   parameterization isn't a phantom type; the wrapper-around-
+    ///   production-ledger actually drives the merge. Composes the
+    ///   PR 1 daemon-slot swap with the PR 2 ledger-slot swap on a
+    ///   single engine instance.
     /// - The §5.2 retry contract is exercised through the *real*
     ///   refresh path (`Engine::start_refresh` → `run_refresh_task`
     ///   producer/merge loop), not a unit test of
     ///   `apply_scan_result` in isolation. The merge dispatches
     ///   through the [`LedgerEngine`] trait surface, so the same
     ///   call site that production `LocalLedger` traverses also
-    ///   accepts `MockLedger` for failure injection.
+    ///   accepts [`FaultInjecting<LocalLedger>`](FaultInjecting) for
+    ///   failure injection — and on the success path the merge runs
+    ///   against the *real* production merge body
+    ///   ([`apply_scan_result_to_state`](super::merge::apply_scan_result_to_state)),
+    ///   not a parallel-implementation stand-in.
     /// - Failure-queue draining is FIFO and bounded: queueing a
     ///   single `ConcurrentMutation` produces exactly one retry
     ///   (`merge_attempts == 2`), and the post-test queue length is
-    ///   zero. `MockLedger`'s state aliases through `Arc<Mutex<…>>`
-    ///   so the per-engine clone the producer holds and the test
-    ///   handle observe the same drain.
+    ///   zero. The wrapper consumes the engine's ledger slot by move,
+    ///   so post-refresh assertions read through `arc.read().await`'s
+    ///   `ledger` field rather than an aliased handle (per the
+    ///   no-Mock substrate's "no `Arc<Mutex<…>>` aliasing for test
+    ///   observability" property — production `LocalLedger` is
+    ///   itself `Sync` through its own `RwLock`, and the wrapper
+    ///   preserves that property without an extra Arc layer).
     /// - `replace_ledger` preserves engine state across the swap,
     ///   composing cleanly with `replace_daemon`: keys, ledger
-    ///   *handle reference* (now the mock), reservations, refresh
-    ///   slot, and capability all flow through the move-rebuild
-    ///   unchanged, and the produced engine is `Send + Sync`
-    ///   (required for `Arc<RwLock<…>>` + `tokio::spawn`).
+    ///   *handle reference* (now the failure-injection wrapper),
+    ///   reservations, refresh slot, and capability all flow through
+    ///   the move-rebuild unchanged, and the produced engine is
+    ///   `Send + Sync` (required for `Arc<RwLock<…>>` +
+    ///   `tokio::spawn`).
     ///
     /// Master seed is recorded as a literal in the test body per
-    /// §6.2; the per-component seeds are
-    /// `derive_seed(&master, ROLE_DAEMON)` for `MockDaemon` and
-    /// `derive_seed(&master, ROLE_LEDGER)` for `MockLedger`. The two
-    /// `derive_seed_pinned_fixture_*` tests in `test_support` lock
-    /// down those derivations against upstream library drift.
+    /// §6.2; the daemon seed is `derive_seed(&master, ROLE_DAEMON)`
+    /// for `MockDaemon`. The `derive_seed_pinned_fixture_*` tests in
+    /// `test_support` lock down that derivation against upstream
+    /// library drift. The ledger wrapper does not consume a seed
+    /// — the production [`LocalLedger`] underneath is deterministic
+    /// by construction, and the wrapper's failure queue is the only
+    /// behavioural deviation the test introduces.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn hybrid_apply_scan_result_retries_on_concurrent_mutation() {
         const MASTER_SEED: [u8; 32] = [
@@ -2842,38 +2863,34 @@ mod start_refresh_integration_tests {
         ];
 
         let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
-        let ledger_seed = derive_seed(&MASTER_SEED, ROLE_LEDGER);
 
         // 6-block linear chain; producer scans heights 1..=5 starting
-        // from a fresh `MockLedger` at `synced_height = 0`.
+        // from a fresh `LocalLedger` at `synced_height = 0`.
         let mock_daemon = MockDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
-        let mock_ledger = MockLedger::with_seed(ledger_seed);
+        let ledger = FaultInjecting::new(LocalLedger::from_test_blocks(Vec::new()));
 
         // Inject exactly one `ConcurrentMutation` so the first merge
         // observes the race and the second runs the canonical body.
-        mock_ledger.queue_concurrent_mutation();
+        // The wrapper exposes its queue mutators by `&self`, so this
+        // is callable on `ledger` directly before the value moves
+        // into the engine.
+        ledger.queue_concurrent_mutation();
         assert_eq!(
-            mock_ledger.queued_failures(),
+            ledger.queued_failures(),
             1,
             "pre-refresh: one ConcurrentMutation queued"
         );
 
-        // Hold an aliasing handle for post-refresh assertions —
-        // `MockLedger` clones share state through `Arc<Mutex<…>>`,
-        // so the engine's internal handle and this one observe the
-        // same drain.
-        let ledger_handle = mock_ledger.clone();
+        let (arc, _tmp) = make_hybrid_engine_arc_with_ledger(mock_daemon, ledger).await;
 
-        let (arc, _tmp) = make_hybrid_engine_arc_with_ledger(mock_daemon, mock_ledger).await;
-
-        // Sanity-check the pre-refresh invariant on the mocked ledger
+        // Sanity-check the pre-refresh invariant on the wrapped ledger
         // surface (trait dispatch via the engine's `ledger` field).
         {
             let g = arc.read().await;
             assert_eq!(
                 g.ledger.synced_height(),
                 0,
-                "fresh hybrid engine starts at MockLedger synced_height 0"
+                "fresh hybrid engine starts at LocalLedger synced_height 0"
             );
         }
 
@@ -2891,21 +2908,31 @@ mod start_refresh_integration_tests {
         assert_eq!(summary.processed_height_range, 1..6);
         assert_eq!(summary.blocks_processed, 5);
 
-        // Failure queue drained exactly once.
-        assert_eq!(
-            ledger_handle.queued_failures(),
-            0,
-            "the single queued ConcurrentMutation was consumed by the retry"
-        );
-
-        // Post-merge state is authoritative on the mock ledger: the
-        // canonical merge body ran on attempt 2 and advanced the
-        // `MockLedger`'s `synced_height` to the chain tip.
-        assert_eq!(
-            ledger_handle.synced_height(),
-            5,
-            "post-retry MockLedger synced_height matches the producer's range upper bound"
-        );
+        // Post-refresh assertions read through the engine arc: the
+        // wrapper was moved into the engine on `replace_ledger`, and
+        // both the failure-queue inspector and the inner ledger's
+        // `synced_height` projection are reachable through the
+        // engine's `ledger` field. (`FaultInjecting<L>` is not `Clone`
+        // by design — the no-Mock substrate intentionally forecloses
+        // the `Arc<Mutex<…>>` aliasing shape `MockLedger` carried
+        // forward from Monero patterns.)
+        {
+            let g = arc.read().await;
+            assert_eq!(
+                g.ledger.queued_failures(),
+                0,
+                "the single queued ConcurrentMutation was consumed by the retry"
+            );
+            // Post-merge state is authoritative on the wrapped ledger:
+            // the canonical merge body ran on attempt 2 and advanced
+            // the inner `LocalLedger`'s `synced_height` to the chain
+            // tip.
+            assert_eq!(
+                g.ledger.synced_height(),
+                5,
+                "post-retry LocalLedger synced_height matches the producer's range upper bound"
+            );
+        }
 
         // Slot release: same shape as the linear-scan hybrid test.
         let deadline = Instant::now() + Duration::from_secs(5);
