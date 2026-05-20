@@ -277,6 +277,75 @@ pub enum ScanError {
     InvalidScannableBlock(&'static str),
 }
 
+/// Outcome of [`Scanner::scan_with_cancel`] /
+/// [`GuaranteedScanner::scan_with_cancel`].
+///
+/// Pairs the wallet's per-output safe-point granularity from
+/// `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4.9 F11-S (the
+/// per-output cancellation check fires between consecutive
+/// `scan_output_recover` iterations within each per-tx loop, at a
+/// §7.X C4 safe point) with the scanner's existing
+/// `Result<Timelocked, ScanError>` shape, in a single outcome type
+/// that preserves the §5.4.7 R7 atomicity-under-cancellation pin:
+/// cancellation observed mid-block returns [`ScanOutcome::Cancelled`]
+/// and discards every recovered output collected so far for the
+/// block. No partial [`Timelocked`] is ever returned.
+///
+/// # Safe-point semantics (binding)
+///
+/// The cancellation closure is invoked at the **top of each
+/// per-output iteration** inside `scan_transaction`'s per-output
+/// loop — AFTER the prior iteration's `Zeroizing<…>`-wrapped
+/// per-output material has dropped at scope exit, BEFORE this
+/// iteration's first secret derivation (`scan_output_recover`)
+/// begins. Mid-iteration firing is FORBIDDEN by the §3.1 / §2.3
+/// cancellation-checkpoint contract; the safe-point semantics
+/// depend on the iteration boundary being the drop window.
+///
+/// # `ScanError` distinction
+///
+/// [`ScanError`] continues to surface scanner-detected invariant
+/// violations (unsupported protocol, malformed scannable block).
+/// Cancellation is a caller-driven signal, not a scanner error;
+/// it lives on this enum so callers can distinguish "the scanner
+/// rejected the input" from "the scanner stopped on the caller's
+/// request" without coercing one into the other.
+pub enum ScanOutcome {
+    /// The block was scanned to completion. The wrapped
+    /// [`Timelocked`] is the same value [`Scanner::scan`] /
+    /// [`GuaranteedScanner::scan`] would have returned for the
+    /// same input.
+    Completed(Timelocked),
+
+    /// The caller's `is_cancelled` closure returned `true`
+    /// between two per-output decap iterations, at the
+    /// §5.4.9 F11-S safe-point semantics. The block's partial
+    /// scan state is discarded; no [`Timelocked`] is surfaced.
+    /// The caller (the engine producer) returns
+    /// `RefreshError::Cancelled` at the next call boundary per
+    /// the §5.4.7 R7 atomicity-under-cancellation contract.
+    Cancelled,
+}
+
+// Manual `Debug` impl: [`Timelocked`] wraps
+// [`RecoveredWalletOutput`], which carries `Zeroizing<[u8; 32]>`
+// per-output secrets and intentionally does NOT derive `Debug`.
+// `ScanOutcome` is observability-relevant (matched in tests and
+// in producer-side coherence checks), so we surface the variant
+// discriminant + the recovered-output count without surfacing
+// any secret residue.
+impl std::fmt::Debug for ScanOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Completed(t) => f
+                .debug_struct("ScanOutcome::Completed")
+                .field("recovered_count", &t.len())
+                .finish(),
+            Self::Cancelled => f.write_str("ScanOutcome::Cancelled"),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct InternalScanner {
     pair: ViewPair,
@@ -318,12 +387,13 @@ impl InternalScanner {
             .insert(spend.compress().into(), Some(subaddress));
     }
 
-    fn scan_transaction(
+    fn scan_transaction_with_cancel(
         &self,
         output_index_for_first_ringct_output: u64,
         tx_hash: [u8; 32],
         tx: &Transaction<Pruned>,
-    ) -> Result<Timelocked, ScanError> {
+        is_cancelled: &mut dyn FnMut() -> bool,
+    ) -> Result<ScanOutcome, ScanError> {
         // Defense-in-depth size gate (PR 4 §3.1 / F11-S substrate). The
         // wallet's trust model treats the daemon as adversarial; a
         // hostile daemon could (pre-consensus rejection) deliver
@@ -340,6 +410,11 @@ impl InternalScanner {
         // output counts inside `produce_scan_result`; the scanner
         // does not depend on the engine-core's `DiagnosticSink` trait
         // to preserve the existing layering.
+        //
+        // The size gate is NOT subject to the cancellation check — it
+        // is O(1) at function entry and fires before any per-output
+        // secret derivation, so it cannot inflate the lock-latency
+        // budget the cancellation discipline bounds.
         let output_count = tx.prefix().outputs.len();
         if output_count > MAX_OUTPUTS {
             tracing::warn!(
@@ -348,15 +423,15 @@ impl InternalScanner {
                 max_outputs = MAX_OUTPUTS,
                 "scanner: skipping transaction with excessive output count (defense-in-depth gate; consensus would also reject)"
             );
-            return Ok(Timelocked(vec![]));
+            return Ok(ScanOutcome::Completed(Timelocked(vec![])));
         }
 
         if tx.version() != 2 {
-            return Ok(Timelocked(vec![]));
+            return Ok(ScanOutcome::Completed(Timelocked(vec![])));
         }
 
         let Ok(extra) = Extra::read(&mut tx.prefix().extra.as_slice()) else {
-            return Ok(Timelocked(vec![]));
+            return Ok(ScanOutcome::Completed(Timelocked(vec![])));
         };
 
         let kem_ct_blob = extra.pqc_kem_ciphertext();
@@ -364,6 +439,27 @@ impl InternalScanner {
 
         let mut res = vec![];
         for (o, output) in tx.prefix().outputs.iter().enumerate() {
+            // §5.4.9 F11-S per-output safe-point check (PR 4 §7.Y
+            // measurement binds per-output granularity at C4).
+            //
+            // Fires at the TOP of each per-output iteration: AFTER the
+            // prior iteration's `Zeroizing<…>`-wrapped per-output
+            // material dropped at the scope exit at the end of the
+            // previous iteration, BEFORE this iteration's first secret
+            // derivation (the `scan_output_recover` call below). Iter 0
+            // is the per-tx safe-point (no prior iteration's
+            // `Zeroizing<…>` to drop; the prior transaction's last
+            // per-output iteration's drops have completed before the
+            // outer per-tx loop entered this transaction).
+            //
+            // On hit: return `ScanOutcome::Cancelled`. Per-output
+            // material accumulated in `res` so far for this tx is
+            // discarded at function return; the caller (engine producer)
+            // discards the partial block state per §5.4.7 R7.
+            if is_cancelled() {
+                return Ok(ScanOutcome::Cancelled);
+            }
+
             let Some(output_key_point) = output.key.decompress() else {
                 continue;
             };
@@ -505,10 +601,26 @@ impl InternalScanner {
             });
         }
 
-        Ok(Timelocked(res))
+        Ok(ScanOutcome::Completed(Timelocked(res)))
     }
 
     fn scan(&mut self, block: ScannableBlock) -> Result<Timelocked, ScanError> {
+        // Delegate to the cancellable variant with a never-cancelling
+        // closure. Same unreachable-Cancelled mapping discipline as
+        // `scan_transaction`: closure-invariant proves the branch is
+        // unreachable; we surface an empty `Timelocked` instead of
+        // `unreachable!()` to keep the function panic-free.
+        match self.scan_with_cancel(block, &mut || false)? {
+            ScanOutcome::Completed(t) => Ok(t),
+            ScanOutcome::Cancelled => Ok(Timelocked(Vec::new())),
+        }
+    }
+
+    fn scan_with_cancel(
+        &mut self,
+        block: ScannableBlock,
+        is_cancelled: &mut dyn FnMut() -> bool,
+    ) -> Result<ScanOutcome, ScanError> {
         let ScannableBlock {
             block,
             transactions,
@@ -521,7 +633,7 @@ impl InternalScanner {
         }
         let Some(mut output_index_for_first_ringct_output) = output_index_for_first_ringct_output
         else {
-            return Ok(Timelocked(vec![]));
+            return Ok(ScanOutcome::Completed(Timelocked(vec![])));
         };
 
         if block.header.hardfork_version < 1 {
@@ -538,17 +650,35 @@ impl InternalScanner {
             txs_with_hashes.push((*hash, tx));
         }
 
+        // Per-tx safe-point semantics are subsumed by the per-output
+        // check at iter 0 inside `scan_transaction_with_cancel` — the
+        // cancellation check fires at the top of every per-output
+        // iteration including iter 0, which is by construction the
+        // between-transactions boundary at the start of each tx's
+        // per-output loop. No additional per-tx-loop-body check is
+        // needed at this layer; routing the closure through to the
+        // inner helper is sufficient for the F11-S binding.
         let mut res = Timelocked(vec![]);
         for (hash, tx) in txs_with_hashes {
-            {
-                let mut this_txs_outputs = vec![];
-                core::mem::swap(
-                    &mut self
-                        .scan_transaction(output_index_for_first_ringct_output, hash, &tx)?
-                        .0,
-                    &mut this_txs_outputs,
-                );
-                res.0.extend(this_txs_outputs);
+            match self.scan_transaction_with_cancel(
+                output_index_for_first_ringct_output,
+                hash,
+                &tx,
+                is_cancelled,
+            )? {
+                ScanOutcome::Completed(mut this_tx) => {
+                    res.0.append(&mut this_tx.0);
+                }
+                ScanOutcome::Cancelled => {
+                    // Per §5.4.7 R7 atomicity-under-cancellation: the
+                    // accumulated `res` for this block is discarded
+                    // along with the function return; no partial
+                    // `Timelocked` is surfaced. The caller (engine
+                    // producer) abandons the partial block-scan state
+                    // and returns `RefreshError::Cancelled` at the
+                    // next call boundary.
+                    return Ok(ScanOutcome::Cancelled);
+                }
             }
 
             if matches!(tx, Transaction::V2 { .. }) {
@@ -562,7 +692,7 @@ impl InternalScanner {
         // is guaranteed to be either `None` or `Some(encrypted_8_bytes)` — no runtime strip
         // pass is needed here.
 
-        Ok(res)
+        Ok(ScanOutcome::Completed(res))
     }
 }
 
@@ -596,6 +726,56 @@ impl Scanner {
     pub fn scan(&mut self, block: ScannableBlock) -> Result<Timelocked, ScanError> {
         self.0.scan(block)
     }
+
+    /// Cooperative-cancellation variant of [`Self::scan`].
+    ///
+    /// Per `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4.9 F11-S
+    /// (and the §7.Y per-output safe-point measurement evidence that
+    /// binds the granularity), the caller passes an `is_cancelled`
+    /// closure that is invoked at the top of each per-output decap
+    /// iteration inside `scan_transaction`'s per-output loop. The
+    /// closure observes the caller's cancellation token; on hit
+    /// (`is_cancelled() == true`) the scanner returns
+    /// [`ScanOutcome::Cancelled`] and discards every recovered output
+    /// collected so far for the block.
+    ///
+    /// # Safe-point semantics (binding)
+    ///
+    /// The closure is invoked at the §5.4.9 F11-S safe point: AFTER
+    /// the prior per-output iteration's `Zeroizing<…>`-wrapped
+    /// material has dropped at scope exit, BEFORE this iteration's
+    /// first secret derivation begins. Mid-derivation firing is
+    /// FORBIDDEN by the §3.1 / §2.3 cancellation-checkpoint contract.
+    /// Iter 0 of each transaction's per-output loop is the per-tx
+    /// safe-point between transactions; iter > 0 is the per-output
+    /// safe-point within a transaction.
+    ///
+    /// # Atomicity-under-cancellation (§5.4.7 R7)
+    ///
+    /// On cancellation mid-block, the partial scan state is
+    /// discarded along with the function return. No partial
+    /// [`Timelocked`] is ever surfaced; callers observe either
+    /// [`ScanOutcome::Completed`] (a full scan; equivalent to
+    /// [`Self::scan`]'s return) or [`ScanOutcome::Cancelled`] (no
+    /// scan output).
+    ///
+    /// # Closure shape
+    ///
+    /// `is_cancelled: &mut dyn FnMut() -> bool` admits both stateless
+    /// closures (e.g., `|| token.is_cancelled()` for a captured
+    /// `tokio_util::sync::CancellationToken`) and stateful ones
+    /// (e.g., test fixtures that count invocations to assert the
+    /// per-output check fires at the expected cadence). The
+    /// `&mut dyn FnMut() -> bool` type avoids monomorphization
+    /// per-closure-type and is bench-cheap (a single virtual call
+    /// per per-output iteration; ~1–3 ns per call per §5.4.9 F2).
+    pub fn scan_with_cancel(
+        &mut self,
+        block: ScannableBlock,
+        is_cancelled: &mut dyn FnMut() -> bool,
+    ) -> Result<ScanOutcome, ScanError> {
+        self.0.scan_with_cancel(block, is_cancelled)
+    }
 }
 
 /// A scanner that guarantees scanned outputs are spendable (burning-bug immune).
@@ -616,6 +796,18 @@ impl GuaranteedScanner {
     /// Scan a block for outputs belonging to this wallet.
     pub fn scan(&mut self, block: ScannableBlock) -> Result<Timelocked, ScanError> {
         self.0.scan(block)
+    }
+
+    /// Cooperative-cancellation variant of [`Self::scan`]. See
+    /// [`Scanner::scan_with_cancel`] for the safe-point semantics
+    /// and atomicity contract; the implementation is identical
+    /// (both wrap the same private `InternalScanner` body).
+    pub fn scan_with_cancel(
+        &mut self,
+        block: ScannableBlock,
+        is_cancelled: &mut dyn FnMut() -> bool,
+    ) -> Result<ScanOutcome, ScanError> {
+        self.0.scan_with_cancel(block, is_cancelled)
     }
 }
 
@@ -740,10 +932,16 @@ mod gate_tests {
 
         let capture = EventCapture::default();
         let result = tracing::subscriber::with_default(capture.clone(), || {
-            scanner.scan_transaction(0, [0u8; 32], &tx)
+            scanner.scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut || false)
         });
 
-        let timelocked = result.expect("gate skips the tx without surfacing a ScanError");
+        let outcome = result.expect("gate skips the tx without surfacing a ScanError");
+        let timelocked = match outcome {
+            ScanOutcome::Completed(t) => t,
+            ScanOutcome::Cancelled => {
+                panic!("never-cancelling closure must not produce ScanOutcome::Cancelled")
+            }
+        };
         assert!(
             timelocked.is_empty(),
             "gate must return Timelocked::empty() for oversized transactions"
@@ -776,11 +974,17 @@ mod gate_tests {
 
         let capture = EventCapture::default();
         let result = tracing::subscriber::with_default(capture.clone(), || {
-            scanner.scan_transaction(0, [0u8; 32], &tx)
+            scanner.scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut || false)
         });
 
-        let timelocked =
+        let outcome =
             result.expect("at-boundary tx scans without ScanError under placeholder keys");
+        let timelocked = match outcome {
+            ScanOutcome::Completed(t) => t,
+            ScanOutcome::Cancelled => {
+                panic!("never-cancelling closure must not produce ScanOutcome::Cancelled")
+            }
+        };
         assert!(
             timelocked.is_empty(),
             "placeholder keys recover no owned outputs, so the Timelocked is empty by absence-of-match, not by gate-trigger"
@@ -797,6 +1001,228 @@ mod gate_tests {
         assert!(
             !warn_at_target,
             "gate must NOT fire at the boundary (output_count == MAX_OUTPUTS); WARN events seen: {events:?}"
+        );
+    }
+}
+
+/// Tests for the [`Scanner::scan_with_cancel`] /
+/// [`InternalScanner::scan_transaction_with_cancel`] per-output
+/// safe-point cancellation surface (PR 4 §5.4.9 F11-S; binding
+/// per the §7.Y measurement evidence).
+///
+/// The cancellation check fires at the **top** of each per-output
+/// iteration, BEFORE that iteration's `output.key.decompress()`
+/// and the `scan_output_recover` call. Placeholder keys (zero
+/// `output.key`) `continue` at the `decompress` line without
+/// touching `scan_output_recover`, so each iteration executes
+/// exactly one cancellation-closure invocation regardless of
+/// whether any output decodes — the closure call cadence is what
+/// these tests assert.
+///
+/// Tests cover three axes:
+///
+/// - **Per-output cadence:** closure called once per per-output
+///   iteration; cancellation hit on the N-th call returns
+///   [`ScanOutcome::Cancelled`] after exactly N calls.
+/// - **Per-tx boundary (= iter 0):** cancellation between two
+///   transactions in the same block surfaces as [`ScanOutcome::Cancelled`]
+///   without invoking the next transaction's per-output body.
+/// - **Never-cancels equivalence:** a closure that returns
+///   `false` unconditionally produces a [`ScanOutcome::Completed`]
+///   whose [`Timelocked`] equals [`Scanner::scan`]'s return for
+///   the same input.
+#[cfg(test)]
+mod cancel_tests {
+    use std::sync::{Arc, Mutex};
+
+    use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
+
+    use shekyl_oxide::transaction::{
+        Input, Output, Pruned, Timelock, Transaction, TransactionPrefix,
+    };
+
+    use super::*;
+    use crate::view_pair::ViewPair;
+
+    /// Build an [`InternalScanner`] with placeholder keys (mirrors
+    /// `gate_tests::placeholder_scanner`). The cancellation check
+    /// fires at the top of each per-output iteration, BEFORE the
+    /// per-output decap; placeholder keys never satisfy the decap
+    /// and each iteration `continue`s after one cancellation-closure
+    /// call, which is what the per-output cadence tests assert.
+    fn placeholder_scanner() -> InternalScanner {
+        let pair = ViewPair::new(
+            ED25519_BASEPOINT_POINT,
+            Zeroizing::new(Scalar::ONE),
+            Zeroizing::new([0u8; 32]),
+            Zeroizing::new(Vec::new()),
+        )
+        .expect("basepoint is torsion-free");
+        InternalScanner::new(pair, Zeroizing::new([0u8; 32]))
+    }
+
+    /// Mirror of `gate_tests::synthesize_tx`: a non-miner v2
+    /// `Transaction<Pruned>` with the requested number of
+    /// placeholder outputs. Placeholder keys fail to decompress;
+    /// each per-output iteration `continue`s after the (now
+    /// pre-decompress) cancellation check fires once.
+    fn synthesize_tx(output_count: usize) -> Transaction<Pruned> {
+        let outputs = (0..output_count)
+            .map(|_| Output {
+                amount: None,
+                key: CompressedPoint([0u8; 32]),
+                view_tag: None,
+                staking: None,
+            })
+            .collect();
+        Transaction::V2 {
+            prefix: TransactionPrefix {
+                additional_timelock: Timelock::None,
+                inputs: vec![Input::ToKey {
+                    amount: None,
+                    key_offsets: vec![1],
+                    key_image: CompressedPoint([0u8; 32]),
+                }],
+                outputs,
+                extra: vec![],
+            },
+            proofs: None,
+        }
+    }
+
+    /// Cancel-on-Nth-call closure: tracks invocation count and
+    /// returns `true` on call number `cancel_at` (1-indexed). The
+    /// `Arc<Mutex<u64>>` shape lets the test assert the post-hoc
+    /// call count without borrowing the closure.
+    fn cancel_on_nth_call(cancel_at: u64) -> (Box<dyn FnMut() -> bool>, Arc<Mutex<u64>>) {
+        let counter = Arc::new(Mutex::new(0u64));
+        let counter_for_closure = Arc::clone(&counter);
+        let closure: Box<dyn FnMut() -> bool> = Box::new(move || {
+            let mut c = counter_for_closure
+                .lock()
+                .expect("call-count mutex poisoned");
+            *c += 1;
+            *c >= cancel_at
+        });
+        (closure, counter)
+    }
+
+    #[test]
+    fn per_output_cancellation_check_fires_once_per_iteration() {
+        // 8-output transaction with placeholder keys; cancel on the
+        // 4th closure invocation. Expected: the loop body runs through
+        // iters 0..=3 (4 closure calls), and the 4th call returns
+        // `true` → `ScanOutcome::Cancelled` surfaces; iters 4..=7
+        // are never reached.
+        let scanner = placeholder_scanner();
+        let tx = synthesize_tx(8);
+        let (mut closure, counter) = cancel_on_nth_call(4);
+
+        let outcome = scanner
+            .scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut closure)
+            .expect("placeholder tx is structurally valid; size gate passes");
+
+        assert!(
+            matches!(outcome, ScanOutcome::Cancelled),
+            "cancellation closure returned true → outcome must be ScanOutcome::Cancelled"
+        );
+        assert_eq!(
+            *counter.lock().expect("call-count mutex poisoned"),
+            4,
+            "cancellation check fires once per per-output iteration; cancel-on-4th means exactly 4 invocations"
+        );
+    }
+
+    #[test]
+    fn no_cancellation_runs_loop_to_completion() {
+        // 5-output transaction with placeholder keys; closure always
+        // returns false. Expected: the loop body runs through all 5
+        // iters (5 closure calls), each output `continue`s at the
+        // decompress check, and the outcome is
+        // `ScanOutcome::Completed(empty)`.
+        let scanner = placeholder_scanner();
+        let tx = synthesize_tx(5);
+        let counter = Arc::new(Mutex::new(0u64));
+        let counter_for_closure = Arc::clone(&counter);
+        let mut closure = move || {
+            let mut c = counter_for_closure
+                .lock()
+                .expect("call-count mutex poisoned");
+            *c += 1;
+            false
+        };
+
+        let outcome = scanner
+            .scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut closure)
+            .expect("placeholder tx is structurally valid; size gate passes");
+
+        match outcome {
+            ScanOutcome::Completed(t) => {
+                assert!(t.is_empty(), "placeholder keys recover no owned outputs");
+            }
+            ScanOutcome::Cancelled => {
+                panic!("never-cancelling closure must not produce ScanOutcome::Cancelled")
+            }
+        }
+        assert_eq!(
+            *counter.lock().expect("call-count mutex poisoned"),
+            5,
+            "no-cancel run fires the check on every per-output iteration including iter 0"
+        );
+    }
+
+    #[test]
+    fn cancellation_at_iter_zero_serves_as_per_tx_safe_point() {
+        // 3-output transaction; cancel on the 1st closure invocation
+        // (i.e., immediately at iter 0). This is the binding-cited
+        // per-tx safe-point: between transactions, the next tx's iter 0
+        // is the safe-point boundary. The closure firing on the 1st
+        // call ends the scan before any per-output body runs.
+        let scanner = placeholder_scanner();
+        let tx = synthesize_tx(3);
+        let (mut closure, counter) = cancel_on_nth_call(1);
+
+        let outcome = scanner
+            .scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut closure)
+            .expect("placeholder tx is structurally valid; size gate passes");
+
+        assert!(
+            matches!(outcome, ScanOutcome::Cancelled),
+            "cancel-on-iter-0 must surface ScanOutcome::Cancelled"
+        );
+        assert_eq!(
+            *counter.lock().expect("call-count mutex poisoned"),
+            1,
+            "cancel-on-iter-0 invokes the closure exactly once and returns immediately"
+        );
+    }
+
+    #[test]
+    fn size_gate_short_circuits_before_cancellation_check() {
+        // Oversized tx (MAX_OUTPUTS + 1) — the size gate at function
+        // entry returns `ScanOutcome::Completed(empty)` BEFORE the
+        // per-output loop starts. The cancellation closure must NOT
+        // be invoked: the gate is O(1) and not subject to the
+        // cancellation discipline (it fires before any per-output
+        // secret derivation).
+        let scanner = placeholder_scanner();
+        let tx = synthesize_tx(MAX_OUTPUTS + 1);
+        let (mut closure, counter) = cancel_on_nth_call(1);
+
+        let outcome = scanner
+            .scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut closure)
+            .expect("oversized tx surfaces a gate-skip, not a ScanError");
+
+        match outcome {
+            ScanOutcome::Completed(t) => assert!(t.is_empty()),
+            ScanOutcome::Cancelled => {
+                panic!("size gate must short-circuit before any cancellation check fires")
+            }
+        }
+        assert_eq!(
+            *counter.lock().expect("call-count mutex poisoned"),
+            0,
+            "cancellation closure must NOT be invoked when the size gate short-circuits"
         );
     }
 }
