@@ -225,6 +225,25 @@ multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "serde_json", "hex
 # measure them. Not part of the public API; consumers must not depend
 # on this feature.
 bench-internals = []
+# Internal feature: re-exports otherwise-`pub(crate)` failure-injection
+# wrappers (`FaultInjecting<R: RefreshEngine>`,
+# `Engine::replace_refresh`, eventual `FaultInjecting<L: LedgerEngine>`
+# and `LocalLedger::from_test_blocks` per PR 4 C6β) for downstream
+# integration test crates that need composition-paradigm failure
+# injection at the trait boundary. Not part of the public API;
+# consumers must not depend on this feature in production builds.
+# Symmetric with `bench-internals` (above): both expose
+# `pub(crate)` test/benchmark affordances behind an opt-in feature
+# without bleeding them into the production API.
+#
+# Pre-genesis no downstream consumer crate exists yet; the feature is
+# declared so the gating composes correctly when one emerges. The
+# gating itself is the load-bearing property — `#[cfg(any(test,
+# feature = "test-helpers"))]` on the four C6 test-helper surfaces
+# ensures none of them link into production builds. See
+# `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C6α / F-Mock-1
+# / F-Mock-7.
+test-helpers = []
 
 [lints]
 workspace = true

@@ -156,6 +156,8 @@ pub mod capability;
 pub mod daemon;
 pub(crate) mod diagnostics;
 pub mod error;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) mod fault_injecting_refresh;
 pub mod lifecycle;
 pub(crate) mod local_keys;
 pub(crate) mod local_ledger;
@@ -621,6 +623,55 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> En
     #[allow(dead_code)]
     pub(crate) fn keys(&self) -> &AllKeysBlob {
         &self.keys
+    }
+
+    /// Test-only setter that replaces the producer-side
+    /// [`RefreshEngine`] implementor on this engine.
+    ///
+    /// Stage 1 PR 4 C6α introduces this surface so hybrid tests
+    /// can swap a vanilla [`LocalRefresh`] for a
+    /// [`FaultInjecting<LocalRefresh>`](super::fault_injecting_refresh::FaultInjecting)
+    /// wrapper, exercising the orchestrator's retry / cancellation /
+    /// merge paths against the same production implementor with the
+    /// trait boundary perturbed. Per the Round 5 substrate-decision
+    /// amendment (commit `8484e669a`), the test-substrate paradigm
+    /// is composition: production types with optional fault
+    /// injection at the trait boundary, not Mock-X parallel
+    /// implementations.
+    ///
+    /// # Visibility
+    ///
+    /// `pub(crate)` and gated by `#[cfg(any(test, feature =
+    /// "test-helpers"))]` per the F-Mock-1 symmetry pin: production
+    /// builds do not compile this method, and crate-internal tests /
+    /// downstream `test-helpers`-feature consumers reach it through
+    /// the engine handle. The feature itself is declared in
+    /// [`Cargo.toml`](../../Cargo.toml)'s `[features]` table; no
+    /// downstream consumer exists pre-genesis, the feature is
+    /// declared so the gating composes correctly when one emerges.
+    ///
+    /// # Arc replacement semantics
+    ///
+    /// The engine holds the implementor as `Arc<R>` (see the
+    /// `refresh` field rustdoc above for the lock-free dispatch
+    /// rationale). This setter constructs a fresh `Arc<R>` around
+    /// `refresh` and replaces the previous reference; any in-flight
+    /// `produce_scan_result` future spawned before the swap keeps
+    /// its strong reference to the prior implementor until the
+    /// future settles, then drops it. Tests must not call this
+    /// setter while a refresh is in flight (the engine's
+    /// single-flight slot guards against accidental concurrent
+    /// `start_refresh`, but does not prevent setter-during-refresh
+    /// races); per the F-Mock-2 queue contract, tests are expected
+    /// to install the wrapper before driving any refresh.
+    // C6α introduces the wrapper substrate; the first consumers of
+    // `replace_refresh` land in C6β / C6γ when the hybrid tests
+    // rewire from MockLedger/MockDaemon onto the FaultInjecting<L>
+    // and TestDaemon shapes. Pre-genesis no production caller exists.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[allow(dead_code)]
+    pub(crate) fn replace_refresh(&mut self, refresh: R) {
+        self.refresh = std::sync::Arc::new(refresh);
     }
 }
 
