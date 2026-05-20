@@ -93,4 +93,32 @@ pub use types::{LeafEntry, OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeCo
 pub const MAX_INPUTS: usize = shekyl_fcmp::MAX_INPUTS;
 
 /// Maximum number of outputs per transaction.
+///
+/// # Canonical source of truth
+///
+/// This constant mirrors
+/// [`shekyl_generators::MAX_BULLETPROOF_COMMITMENTS`] — the value the
+/// Bulletproofs+ CRS is generated against. The builder cannot
+/// construct a transaction with more outputs than the BP+ CRS
+/// supports, so this mirror is structural rather than a separate
+/// policy choice. The single-direction `const_assert` below couples
+/// this constant to the canonical bound; a future bump of
+/// `MAX_BULLETPROOF_COMMITMENTS` will fire a build error here until
+/// the builder-side mirror is intentionally re-decided.
+///
+/// The sibling mirror in `shekyl-scanner` (`shekyl_scanner::MAX_OUTPUTS`,
+/// the scanner-side defense-in-depth gate per PR 4 §3.1 / F11-S)
+/// carries its own assertion against the same canonical, so a
+/// loosening fires CI in each mirror crate independently rather than
+/// triangulating through any single crate.
 pub const MAX_OUTPUTS: usize = 16;
+
+// Single-direction enforcement against the canonical source of truth.
+// `shekyl_generators::MAX_BULLETPROOF_COMMITMENTS` is the
+// Bulletproofs+ CRS size; the builder-side cap must agree by
+// construction. See the `MAX_OUTPUTS` doc-comment above for the
+// canonical-source-of-truth rationale.
+const _: () = assert!(
+    MAX_OUTPUTS == shekyl_generators::MAX_BULLETPROOF_COMMITMENTS,
+    "shekyl-tx-builder MAX_OUTPUTS must match shekyl_generators::MAX_BULLETPROOF_COMMITMENTS (Bulletproofs+ CRS size)",
+);
