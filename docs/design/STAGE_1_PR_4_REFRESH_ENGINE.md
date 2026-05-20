@@ -43,7 +43,22 @@ R5 was deferred and R6 chose `MalformedScanResult { reason:
 Round 2's R5 and R6 dispositions** with the two-channel
 actor-mesh shape: synchronous trait return `RefreshError`
 becomes **unit-variant-only** (`Cancelled` / `Io` /
-`MalformedScanResult`; no payload of any kind), and a parallel
+`MalformedScanResult`; no payload of any kind — *the Phase 0c
+close-out amendment below + the pre-existing payload-bearing
+variants refine this framing: only `Cancelled` is unit;
+`Io(IoError)`, `MalformedScanResult { reason: &'static str }`,
+and `InternalInvariantViolation { context: &'static str }` carry
+bounded compile-time-fixed payloads, with the `&'static str`
+constraint preserving the no-memory-amplifier-vector property per
+§5.4.7 R6 closure. Of these payload-bearing variants, only
+`Io` and `InternalInvariantViolation` are reachable from a
+`RefreshEngine` impl's `Self::Error`; `MalformedScanResult` is
+constructed exclusively by the merge layer (§4 Phase 0c;
+§6.1 two-enum architecture pin). The "no payload" framing
+was correct for the round's `RefreshEngine` impl-side error
+convention; the orchestrator-side enum was payload-bearing
+throughout, refined here by additive forward-pointer per the
+coherence-pass meta-discipline*), and a parallel
 **`RefreshDiagnostic` event stream emitted via `DiagnosticSink`**
 fans out to specialized consumer actors with per-consumer trust
 posture and sanitization rules. The reframe dissolves R5 by
@@ -318,6 +333,147 @@ decomposition ordering decision; it replaces stale C6 substrate
 prose with the binding no-Mock shape PR 3 §2.1.2 settled. The
 α-disposition, the F1–F13 dispositions, and the C0–C5 / C7 / C8
 commit prose are all unchanged.
+
+The **Round 5 sub-pin extension (2026-05-20)** is a same-day
+follow-up review that surfaces eight Mock-X-substrate findings
+(F-Mock-1 through F-Mock-8) on the Round 5 amendment, runs an
+amendment-layering coherence pass against the post-Round-5
+substrate, and pins a paradigm-disambiguation locus (§6.1) the
+existing prose has been operating against implicitly. The pass
+lands four substantive sharpenings and four minor audit-trail
+notes; none reopen any Round 1–4 disposition or the Round 5
+amendment itself, but they refine the Round 5 C6 substrate so
+the Phase 1 author implements against an explicit pin rather
+than reverse-engineering it from tests. **Substantive (F-Mock-1
+through F-Mock-4):** F-Mock-1 pins the cfg-gating symmetry across
+all four C6 surfaces (Option (a): all gated `#[cfg(any(test,
+feature = "test-helpers"))]`; C6α scope includes the
+`[features]` `test-helpers = []` addition with the `bench-internals`
+rationale-comment precedent); F-Mock-2 pins the
+`FaultInjecting` queue contract (FIFO ordering;
+`queued_failures()` drain inspector per the existing
+[`MockLedger::queued_failures`](../../rust/shekyl-engine-core/src/engine/test_support.rs)
+precedent; `debug_assert!`-on-Drop for non-empty queue;
+reentrance pops the head); F-Mock-3 + F-Mock-3-sharpening pin
+the wrapper-API design (Option (i): `type Error = RefreshError`;
+the queue holds `RefreshError` values directly) and the trait-
+reachable-variant enumeration. Empirical resolution against
+[`engine/error.rs:148–270`](../../rust/shekyl-engine-core/src/engine/error.rs),
+[`engine/local_refresh.rs:347–384`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs),
+[`engine/traits/ledger.rs:270–273`](../../rust/shekyl-engine-core/src/engine/traits/ledger.rs),
+and [`engine/merge.rs:181–451`](../../rust/shekyl-engine-core/src/engine/merge.rs):
+of `RefreshError`'s six variants, **three are reachable from a
+`RefreshEngine` impl's `Self::Error`** (`Cancelled` unit, `Io(IoError)`
+payload, `InternalInvariantViolation { context: &'static str }`
+payload constructed at the `From` impl site), and **three are
+orchestrator-constructed only** (`ConcurrentMutation { wallet, result }`
+constructed at the merge gate; `AlreadyRunning` constructed at the
+binary-layer single-flight; `MalformedScanResult { reason: &'static str }`
+constructed in `apply_scan_result_to_state` when scan-result internal-
+shape invariants fail). Under Option (i) the wrapper exposes the
+full `RefreshError` surface uniformly across all `R`, with two test
+classes named explicitly (Class 1: wrapper-based trait-surface tests;
+Class 2: From-conversion tests against `LocalRefresh` directly per
+the two-enum architecture pin in §6.1). The cause-vs-effect testing
+pattern for orchestrator-constructed variants is documented in C6α
+prose (drive causes through `FaultInjecting<LocalLedger>` for
+`ConcurrentMutation`; through `FaultInjecting<LocalRefresh>` queuing
+`RefreshError::InternalInvariantViolation` directly for the producer-
+returned-then-orchestrator-propagated path; orchestrator-side
+retry-budget-exhaustion `InternalInvariantViolation` construction is
+exercised by Option (i)-injectable cause paths via the retry-loop
+construction sites). The two-enum architecture itself
+(`LocalRefreshError` `pub(crate)` + `RefreshError` `pub` + `From`
+bridge constructing/discarding payloads at the boundary) is a
+`RefreshEngine`-specific positive architectural pattern pinned in
+§6.1 as a forward-template for future per-trait PRs;
+`LedgerEngine::apply_scan_result` carries no analogous intermediate
+because its trait signature speaks `RefreshError` directly; F-Mock-4 anchors the
+"structurally-already-`FaultInjecting<LocalLedger>`" claim against
+the current-source verification at
+[`engine/test_support.rs:773–812`](../../rust/shekyl-engine-core/src/engine/test_support.rs)
+so future re-readers don't have to re-verify. **Minor (F-Mock-5
+through F-Mock-8):** F-Mock-5 adds an explicit C6β migration
+table for `MockLedger`'s public test surface
+(`with_seed` / `with_seed_and_state` / `queue_concurrent_mutation`
+/ `queued_failures`) to its new home in
+`FaultInjecting<LocalLedger>` plus `LocalLedger::from_test_blocks`,
+and corrects the "replaces `MockLedger::new(...)`" prose error
+(the constructor is named `with_seed` / `with_seed_and_state`,
+not `new`); F-Mock-6 adds the Phase 1 author commitment note
+to C6γ's commit-message template; F-Mock-7 confirms the
+`test-helpers` feature does not currently exist in
+[`Cargo.toml`](../../rust/shekyl-engine-core/Cargo.toml) and
+pins the introduction as part of C6α's scope; F-Mock-8
+enumerates the C6α smoke-test property classes by name across
+two test classes per the two-enum architecture pin in §6.1: Class 1
+(wrapper-based, four sub-properties: empty-queue passthrough;
+single-injection-then-delegation; multi-injection FIFO ordering;
+queue-drain-on-teardown), and Class 2 (From-conversion tests against
+`LocalRefresh` directly: each `LocalRefreshError` variant exercised
+end-to-end against the corresponding `RefreshError` variant the
+`From` impl produces — Class 2 lives in
+[`local_refresh.rs`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs)'s
+existing tests module per the `local_refresh_error_maps_to_refresh_error`
+precedent, sibling to the wrapper test surface, not a replacement).
+
+The **amendment-layering coherence pass (2026-05-20)** runs
+two lenses against the post-Round-5 substrate: (1)
+layered-amendment forward-pointer gaps (sites where a later
+amendment refined an earlier disposition without an inline
+pointer back from the earlier site) and (2)
+composition-paradigm-vs-actor-paradigm language conflation
+(sites where the prose drifts between the two paradigms
+without naming the seam). Lens 1 surfaces the pre-Phase-0c
+forward-pointer gap as a **recurrence pattern** — the same
+class of finding F-Mock-3 surfaced from one angle, present at
+three sites (the Status banner's Round 2 reframe paragraph; §3.1's
+two-channel error surface prose; §4 Phase 0c's inline comment).
+All three sites carry the Round 2 reframe's "unit-variant-only;
+no payload of any kind" framing which is correct for the
+`RefreshEngine` impl's `Self::Error` (per the convention;
+`LocalRefreshError` is unit-only by design) but reads as a flat
+claim about the orchestrator-side `RefreshError` that the Phase 0c
+amendment and pre-existing payload-bearing variants
+(`Io(IoError)`, `MalformedScanResult { reason }`) later refined.
+The lens records the **amendment-forward-pointer convention** as a
+meta-discipline alongside `21-reversion-clause-discipline.mdc`'s
+named-criteria principle: any future amendment that narrows or
+refines an earlier round's contract lands its own forward-pointer
+at the earlier site. The two disciplines are complementary —
+reversion-clauses make rejection-dispositions readable across
+substrate changes; forward-pointers make narrowing-amendments
+readable across layered rounds. Both are about making layered
+prose readable across time. Lens 2 finds no actionable
+conflation — the doc is paradigm-honest (line 2747 explicitly
+acknowledges "this applies in both the synchronous and actor-mesh
+models"; §6 line 4589 honestly states "the α-disposition holds
+under both the Round-1 synchronous framing and the Round-3
+actor-mesh framing") — but lacks a single locus that defines
+what each paradigm covers and where the seam sits. The new
+§6.1 "Test-substrate paradigm pin" is that canonical locus.
+The pass also lands a coordinated **V3.1 ledger-generator
+FOLLOWUPS entry** (per the F-Mock-adjacent ledger-generator
+question): PR 4 C6β's
+`LocalLedger::from_test_blocks(blocks: Vec<Block>) -> Self`
+remains the V3.0 substrate (Need A — unit-test fixtures;
+sufficient for `RefreshEngine` merge tests); the broader
+`TestLedgerBuilder`-style coordinated test-infrastructure design
+(Need B — valid FCMP++ transactions with valid PQC auth
+signatures and valid curve-tree membership proofs, replacing the
+deleted C++ chaingen harness for V3.x Rust unit tests on
+tx-validation / tx-pool / staking invariants) is pinned as a
+V3.1 substrate-design FOLLOWUPS entry to land BEFORE the first
+daemon Rust port, with a structurally-valid-but-semantically-stubbed
+middle-ground option flagged for the design conversation. The
+amendment is **not** a round reopening — it pins what the existing
+substrate already operates against; it does not revisit any
+trait-surface contract pin, attack-surface disposition, or
+commit-decomposition ordering decision. The α-disposition, the
+F1–F13 dispositions, the Round 5 amendment, and the
+C0–C5 / C7 / C8 commit prose remain unchanged; the C6
+sub-decomposition (C6α / C6β / C6γ) gains the F-Mock dispositions
+inline.
 
 This document was opened in parallel with the
 M3c–M3e tail of Stage 1 PR 3 per the 2026-05-10 sequencing
@@ -619,13 +775,41 @@ PR 4's check completes here.
   framing are recorded in §5.4.5 below.
 
 - **Two-channel error surface (Round 2 reframe; §5.4.7 R6,
-  §5.4.8).** PR 4 separates the synchronous trait return from
-  the actor-mesh diagnostic stream. The synchronous return
-  (`RefreshError`) is **unit-variant-only** — no string, no
-  evidence, no payload — so the orchestrator's branch table is
-  structural (cancel-propagate / retry-with-backoff / peer-
-  rotation) and the §5.4.5 memory-amplifier vector is closed
-  by construction. The parallel `RefreshDiagnostic` event stream
+  §5.4.8; orchestrator-side enum extended by Round 2 close-out
+  / §4 Phase 0c; two-enum architecture pinned in §6.1).** PR 4
+  separates the synchronous trait return from
+  the actor-mesh diagnostic stream. The `RefreshEngine` impl's
+  `Self::Error` is **unit-variant-only** by convention — no
+  string, no evidence, no payload at the impl-side surface — so
+  the attacker-influenced memory-amplifier vector (§5.4.5) is
+  closed by construction at the producer-internal boundary. The
+  orchestrator-side `RefreshError` enum (per §4 Phase 0c;
+  §6 binding-check matrix) carries payload-bearing variants
+  (`Io(IoError)`, `MalformedScanResult { reason: &'static str }`,
+  `InternalInvariantViolation { context: &'static str }`) where
+  the payload content is compile-time-fixed developer content,
+  not attacker-influenced data. Of these payload-bearing variants,
+  only `Io` and `InternalInvariantViolation` are reachable from a
+  `RefreshEngine` impl's `Self::Error` via the `From` impl boundary;
+  `MalformedScanResult` is constructed exclusively by the merge
+  layer (`apply_scan_result_to_state` in `engine/merge.rs`) when
+  scan-result internal-shape invariants fail, and the orchestrator-
+  only variants (`ConcurrentMutation`, `AlreadyRunning`) are
+  constructed at the merge-gate / binary-layer single-flight
+  respectively. The orchestrator's branch table remains structural
+  (cancel-propagate / retry-with-backoff / peer-rotation /
+  invariant-violation-surface); the impl's `Self::Error` (e.g.,
+  [`LocalRefreshError`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs),
+  `pub(crate)`, unit-variant-only) maps to the orchestrator-side
+  `RefreshError` via the `Self::Error: Into<RefreshError>` trait
+  bound at the orchestrator boundary, where the orchestrator-side
+  payload content is constructed at the `From` impl site. This
+  is the **two-enum architecture** (`RefreshEngine`-specific;
+  `LedgerEngine::apply_scan_result` returns `Result<(), RefreshError>`
+  directly with no `Self::Error` indirection per
+  [`engine/traits/ledger.rs:270–273`](../../rust/shekyl-engine-core/src/engine/traits/ledger.rs))
+  pinned in §6.1 as a positive architectural pattern and
+  forward-template for future per-trait PRs. The parallel `RefreshDiagnostic` event stream
   emitted via `DiagnosticSink` carries the rich structured
   information consumed by specialized actors (peer-reputation,
   recovery, telemetry, logger) with per-consumer trust posture
@@ -787,15 +971,35 @@ call-site audit).**
 
   ```rust
   pub enum RefreshError {
-      // From the trait surface (unit-variant; no payload):
-      Cancelled,
-      Io(IoError),
-      MalformedScanResult { reason: &'static str },  // orchestrator-constructed; &'static str OK at this site
-      // Orchestrator-side merge / retry layer:
+      // Reachable from a `RefreshEngine` impl's `Self::Error` via
+      // `Self::Error: Into<RefreshError>`. The impl's `Self::Error`
+      // is unit-variant-only by convention (the Round 2 reframe's
+      // "no payload at the impl-side surface" property — see
+      // `LocalRefreshError`, `pub(crate)`, four unit variants).
+      // Payload-bearing fields on these variants are constructed
+      // at the `From<Self::Error>` impl site at the orchestrator
+      // boundary, with the orchestrator supplying compile-time-
+      // fixed `&'static str` content per the attacker-influenced-
+      // data exclusion (§5.4.5 / §5.4.7 R6). Per §6.1 two-enum
+      // architecture pin: this is the `RefreshEngine`-specific
+      // shape; `LedgerEngine::apply_scan_result` speaks
+      // `Result<(), RefreshError>` directly with no intermediate.
+      Cancelled,                                       // unit
+      Io(IoError),                                     // payload; from LocalRefreshError::{Io, Malformed}
+      InternalInvariantViolation { context: &'static str }, // payload; from LocalRefreshError::Internal; also orchestrator-side construction at retry-loop sites
+      // Orchestrator-merge-detected — not reachable from any
+      // `RefreshEngine` impl's `Self::Error`; constructed
+      // exclusively by `apply_scan_result_to_state` in
+      // `engine/merge.rs` when scan-result internal-shape
+      // invariants fail. `reason` is compile-time-fixed at the
+      // construction site.
+      MalformedScanResult { reason: &'static str },
+      // Orchestrator-side merge / retry layer — never reached
+      // from any trait impl; constructed by the orchestrator's
+      // own control-flow (concurrent-mutation detection at merge;
+      // binary-layer single-flight enforcement):
       ConcurrentMutation,
       AlreadyRunning,
-      // Round 2 close-out (2026-05-13):
-      InternalInvariantViolation { context: &'static str },
   }
   ```
 
@@ -4669,8 +4873,250 @@ cleanup of pre-discipline `MockX` types under the
 [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
 continuous-discipline framing.
 
+### §6.1 Test-substrate paradigm pin (Round 5 sub-pin extension, 2026-05-20)
+
+The C6 test-substrate is **composition-paradigm by design**.
+`FaultInjecting<R: RefreshEngine>` is a wrapper type implementing
+the same trait as its inner `R`, delegating with optional injection
+at the trait boundary — canonical Decorator pattern / static
+composition via generics, with no actor machinery, no message
+passing, no mailboxes, no supervision.
+`LocalLedger::from_test_blocks` is a constructor; the resulting
+`LocalLedger` composes into wrappers via static generics.
+`Engine::replace_refresh` is a pure type-system mechanism
+(`&mut self` exclusive borrow, swap the inner `R` field). The
+test-substrate stays composition-paradigm even when the
+production substrate migrates to the Stage 4 `kameo`-based actor
+mesh — the failure-injection seam is at the trait boundary,
+which is the stable interface across both paradigms.
+
+The seam between paradigms in PR 4 substrate:
+
+- **Composition-paradigm surfaces.** The
+  `RefreshEngine` / `LedgerEngine` / `KeyEngine` /
+  `DaemonEngine` traits; the `Engine<S, D, L, R>`
+  parameterized struct; the `FaultInjecting<R>` /
+  `FaultInjecting<L>` wrappers; the
+  `LocalLedger::from_test_blocks` constructor; the
+  `Engine::replace_refresh` setter; the trait-dispatch path
+  from the orchestrator into `R::produce_scan_result`.
+- **Actor-paradigm surfaces.** The `RefreshDiagnostic`
+  event stream emitted via `DiagnosticSink`; the
+  `ReorgAmplificationDetector` / `PeerReputationActor` /
+  `RecoveryActor` consumer actors (V3.x per §5.4.7 R5
+  reframe / §5.4.8 #1 / §5.4.8 attack-surface dispositions);
+  the Stage 4 `kameo`-based actor mesh wrapping the engines
+  (planned, not yet landed — per §1.4 return-value discipline
+  and §2.2 out-of-scope note).
+- **Paradigm-coherent design property.** The composition
+  trait surfaces are designed to admit Stage 4 actor wrapping
+  without re-rev (per §1.4 return-value discipline). The trait
+  surface stays stable; Stage 4 wraps each implementor in a
+  `kameo` actor with a message-passing surface that delegates
+  through the same trait method signatures. The
+  composition-paradigm test substrate
+  (`FaultInjecting<R>` / `LocalLedger::from_test_blocks`)
+  keeps testing the trait boundary even after Stage 4 migration
+  — actor-paradigm tests are a different scope (mailbox tests,
+  supervision tests, message-ordering tests) that do not replace
+  the trait-boundary tests.
+
+**Why composition-paradigm for the test substrate specifically.**
+The test substrate exists to verify trait-surface contract
+behavior. The trait surface is stable across the composition →
+actor migration; the actor surface is Stage-4-specific. Building
+test substrate against the actor surface would mean building
+substrate against a future contract that does not yet exist;
+building against the trait surface means substrate that survives
+both V3.0 (composition production) and Stage 4 (actor production)
+without re-design.
+
+**The four substantive F-Mock findings under the paradigm lens.**
+
+- **F-Mock-1 (cfg-gating symmetry).** Composition-paradigm. The
+  symmetry resolution (Option (a): all four C6 surfaces gated
+  `#[cfg(any(test, feature = "test-helpers"))]`) is correct
+  because the composition primitives (`FaultInjecting<R>` +
+  `LocalLedger::from_test_blocks`) compose for external test
+  consumers as a coherent test-helpers API surface.
+- **F-Mock-2 (queue contract).** Composition-paradigm. FIFO
+  ordering, drain inspection, `debug_assert!`-on-Drop, reentrance
+  behavior — all properties of a synchronous wrapper type with
+  internal queue state. The queue is **wrapper-internal state
+  visible only through the wrapper's API**, not an actor mailbox.
+  If this were actor-paradigm the queue would be the actor's
+  mailbox and the contract would be about message ordering
+  through the mailbox; the wrapper-on-trait disposition is
+  structurally different and pinned here so the Stage 4
+  migration author does not translate it incorrectly.
+- **F-Mock-3 / F-Mock-3-sharpening (wrapper-API design +
+  variant disambiguation).** Composition-paradigm. The wrapper-
+  API choice is **Option (i)**: `type Error = RefreshError`;
+  the queue holds `RefreshError` values directly, uniform across
+  all `R` (the wrapper is R-agnostic at the injection surface;
+  tests do not need to know which `R::Error` shape the
+  underlying producer carries). Cross-wrapper symmetry justifies
+  the choice: `FaultInjecting<L: LedgerEngine>` must queue
+  `RefreshError` by trait necessity
+  ([`engine/traits/ledger.rs:270–273`](../../rust/shekyl-engine-core/src/engine/traits/ledger.rs)
+  — `apply_scan_result` returns `Result<(), RefreshError>` with
+  no `Self::Error` indirection), so `FaultInjecting<R>` queuing
+  `RefreshError` matches.
+
+  **Trait-reachable vs. orchestrator-constructed variants
+  (empirical per `engine/error.rs`, `engine/merge.rs`, and
+  `engine/local_refresh.rs`).** Of the six `RefreshError`
+  variants, three are reachable from a `RefreshEngine` impl's
+  `Self::Error` (via `Self::Error: Into<RefreshError>`):
+  `Cancelled` (unit), `Io(IoError)` (payload), and
+  `InternalInvariantViolation { context: &'static str }`
+  (payload, with `context` constructed at the `From` impl site).
+  Three are orchestrator-constructed only:
+  `MalformedScanResult { reason }` (constructed exclusively by
+  the merge layer in
+  [`engine/merge.rs:315–451`](../../rust/shekyl-engine-core/src/engine/merge.rs)
+  when scan-result internal-shape invariants fail),
+  `ConcurrentMutation { wallet, result }` (constructed at the
+  merge gate), and `AlreadyRunning` (constructed at the
+  binary-layer single-flight).
+
+  **Direct injection vs. cause injection.** Under Option (i),
+  `FaultInjecting<R>` can inject any `RefreshError` variant
+  directly into the orchestrator-side surface. For
+  trait-reachable variants this exercises the same code paths
+  the production From conversion would reach; for
+  orchestrator-constructed variants it lets tests exercise the
+  orchestrator's handling logic without requiring the cause
+  (e.g., test "orchestrator handles `MalformedScanResult` from
+  the producer trait surface correctly" even though no V3.0
+  `RefreshEngine` impl actually returns it — the wrapper bypass
+  is a deliberate test affordance). For `InternalInvariantViolation`
+  specifically, both paths are legitimate test classes:
+  **direct injection** via `FaultInjecting<R>` exercises the
+  producer-returned-then-orchestrator-propagated path
+  (verifying the orchestrator propagates without retry);
+  **cause injection** via the existing retry-loop construction
+  sites in `engine/refresh.rs` exercises the orchestrator-side
+  construction path (where the orchestrator's own control-flow
+  reaches an unreachable branch). Cause injection for
+  `ConcurrentMutation` happens through
+  `FaultInjecting<LocalLedger>::queue_concurrent_mutation` per
+  the F-Mock-2 wrapper API. The two patterns are siblings, not
+  alternatives, and both translate cleanly to Stage 4
+  actor-paradigm tests (drive causes through one actor's
+  mailbox; observe effects from another) so the test
+  substrate's discipline transfers without re-design.
+- **F-Mock-4 (verification gate).** Paradigm-independent.
+  Verified at the composition level against current source at
+  [`engine/test_support.rs:773–812`](../../rust/shekyl-engine-core/src/engine/test_support.rs):
+  `MockLedger::apply_scan_result` (line 792) pops from
+  `concurrent_mutation_queue` (line 794) and otherwise delegates
+  to the canonical `apply_scan_result_to_state` (line 810). The
+  structural shape is already
+  `FaultInjecting<LocalLedger>`-shaped; C6β extraction is
+  mostly extraction-and-rename per Round 5 amendment.
+
+#### §6.1.1 Two-enum architecture (RefreshEngine-specific positive pattern)
+
+The `RefreshEngine` trait carries a deliberate two-enum
+architecture that the C6 substrate inherits and tests against,
+worth pinning explicitly as a positive architectural reference:
+
+- **Producer-internal `LocalRefreshError`** —
+  [`engine/local_refresh.rs:347`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs),
+  `pub(crate)`, **unit-variant-only** by convention, four variants
+  (`Cancelled`, `Io`, `Malformed`, `Internal`). The producer
+  carries no payload material at its `Self::Error` boundary;
+  internal context that distinguishes "the daemon failed" from
+  "the scanner saw a malformed block" lives in the producer's
+  body and gets diagnostic-stream emitted (`DaemonProtocolError`,
+  `DaemonMalformed`) before the return; the `Self::Error` itself
+  is structural-branch-signal-only.
+- **Orchestrator-facing `RefreshError`** —
+  [`engine/error.rs:148`](../../rust/shekyl-engine-core/src/engine/error.rs),
+  `pub`, payload-bearing throughout (only `Cancelled` and
+  `AlreadyRunning` are unit). Of the six variants, three are
+  reachable from a `RefreshEngine` impl's `Self::Error` per
+  §6.1's F-Mock-3 paragraph (`Cancelled`, `Io(IoError)`,
+  `InternalInvariantViolation { context: &'static str }`);
+  three are constructed by the orchestrator (`MalformedScanResult`
+  by merge; `ConcurrentMutation` by merge gate; `AlreadyRunning`
+  by binary-layer single-flight).
+- **From impl boundary** —
+  [`engine/local_refresh.rs:368–384`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs).
+  Payload information is constructed or discarded at this
+  boundary, not in the producer's body. `LocalRefreshError::Io`
+  maps to `RefreshError::Io(IoError::Daemon { detail: "..." })`
+  with the `detail` field a compile-time-fixed `String` literal;
+  `LocalRefreshError::Malformed` maps to
+  `RefreshError::Io(IoError::Scanner { detail: "..." })` with the
+  same property; `LocalRefreshError::Internal` maps to
+  `RefreshError::InternalInvariantViolation { context: "..." }`
+  with `context` compile-time-fixed at the conversion site.
+  The orchestrator-side payload guarantees (no attacker-influenced
+  data; no memory-amplifier vector per §5.4.5 / §5.4.7 R6) are
+  enforced at the type-system level at the conversion boundary,
+  not by convention at each producer return site.
+
+**Why this is a positive pattern.** The architectural cleanness
+that the two-enum split delivers — payload guarantees enforced
+by the type system at the conversion boundary, not by convention
+at every producer return site — makes the trait surface auditable
+in a way single-enum architectures cannot match. A reviewer
+auditing the orchestrator's `RefreshError` handling reads one
+enum with bounded compile-time-fixed payloads; a reviewer auditing
+the producer's error vocabulary reads one enum with no payload
+discipline to enforce. Both reviewer surfaces are minimal and the
+discipline at the boundary is explicit.
+
+**Forward-template for per-trait PRs.** Future per-trait PRs
+(PR 5 `PendingTxEngine`, PR 6 `KeyEngine` per the
+[`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
+sequencing) adopt this shape when applicable: producer-internal
+error enums are `pub(crate)` and unit-variant-only; trait-surface
+error enums are `pub` and may carry payloads constrained to
+compile-time-fixed types; `From` impls bridge them and construct
+payloads at the boundary. The shape is not load-bearing for traits
+whose canonical method signatures return `Result<_, OrchestratorError>`
+directly (per the `LedgerEngine` precedent); it is load-bearing
+for traits whose canonical method signatures return
+`Result<_, Self::Error>` with `Self::Error: Into<OrchestratorError>`.
+Per-trait PR pre-flight checks include "does this trait have an
+impl-side `Self::Error` indirection, and if so, is the producer-
+internal enum unit-variant-only?" as a substrate-application check
+alongside the four-pattern no-Mock pre-flight per
+PR 3 §2.1.5.
+
+**Test-substrate implications.** Two test classes follow from the
+two-enum architecture, both load-bearing for C6α's smoke-test
+coverage (per F-Mock-8 sub-finding):
+
+- **Class 1 — wrapper-based trait-surface tests.** Tests use
+  `FaultInjecting<R: RefreshEngine>` to inject `RefreshError`
+  values directly (per F-Mock-3 Option (i) wrapper design) and
+  verify the orchestrator handles each variant correctly. This
+  class lives in C6α's smoke-test surface against the wrapper
+  itself plus the trait-dispatched `Engine` integration tests.
+- **Class 2 — From-conversion tests against `LocalRefresh`.**
+  Tests drive `LocalRefresh` directly via the `pub(crate)`
+  producer-internal surface to produce each `LocalRefreshError`
+  variant, then verify the `From<LocalRefreshError>` impl produces
+  the correct `RefreshError` variant. This class lives in
+  [`local_refresh.rs`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs)'s
+  existing tests module per the
+  [`local_refresh_error_maps_to_refresh_error`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+  test precedent — sibling to the wrapper test surface, not a
+  replacement, because the wrapper bypasses the From conversion
+  by injecting `RefreshError` directly at its trait boundary.
+
+The C6 substrate as drafted handles Class 1 well via the
+wrapper; Class 2 lives in `local_refresh.rs`'s test module and
+is named here explicitly so the test-coverage story is complete
+across both surfaces.
+
 **Test-substrate preservation list (Round 4 enumeration; Round 5
-substrate amendment, 2026-05-20).**
+substrate amendment, 2026-05-20; Round 5 sub-pin extension F-Mock
+sharpening, 2026-05-20).**
 
 - [x] `LocalRefresh::produce_scan_result` unit-test
   coverage — Phase 1 confirms test surfaces match the
@@ -4681,46 +5127,100 @@ substrate amendment, 2026-05-20).**
   port to the trait-dispatch shape with `NoopDiagnosticSink`
   as the default test sink.
 - [x] **`FaultInjecting<R: RefreshEngine>` test substrate
-  (Round 5 amendment; replaces the prior `MockRefresh` plan).**
-  Phase 1 commit C6 introduces; `Engine::replace_refresh`
+  (Round 5 amendment; replaces the prior `MockRefresh` plan;
+  Round 5 sub-pin extension F-Mock-3-sharpening).** Phase 1
+  commit C6α introduces; `Engine::replace_refresh`
   test-only setter on `Engine<S, D, L, R>` gated behind
-  `#[cfg(any(test, feature = "test-helpers"))]`; queues
-  `RefreshError::Cancelled` / `RefreshError::Io` /
-  `RefreshError::InternalInvariantViolation` for failure
-  injection on the trait-dispatch path. The wrapper composes
-  around `LocalRefresh` (the production producer body lives
-  in [`engine/local_refresh.rs`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs)),
-  not as a parallel implementation. Per PR 3 §2.1.2's
-  five-failure-mode rejection of the Mock-X pattern; see
-  the no-Mock substrate inheritance discipline above for the
-  binding rationale.
+  `#[cfg(any(test, feature = "test-helpers"))]`. Per F-Mock-3
+  Option (i) wrapper design (see §6.1 F-Mock-3 paragraph;
+  §6.1.1 two-enum architecture pin) the wrapper carries
+  `type Error = RefreshError` and queues `RefreshError` values
+  directly, uniform across all `R`. Cross-wrapper symmetry with
+  `FaultInjecting<L: LedgerEngine>` (which queues `RefreshError`
+  by trait necessity per
+  [`engine/traits/ledger.rs:270–273`](../../rust/shekyl-engine-core/src/engine/traits/ledger.rs))
+  justifies the choice. The wrapper composes around `LocalRefresh`
+  (the production producer body lives in
+  [`engine/local_refresh.rs`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs)),
+  not as a parallel implementation. Class 1 wrapper-based tests
+  inject `RefreshError` values directly into the orchestrator
+  surface; Class 2 From-conversion tests live in
+  `local_refresh.rs`'s existing tests module and exercise
+  `LocalRefresh` directly against its `pub(crate)` producer
+  surface per the
+  [`local_refresh_error_maps_to_refresh_error`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+  test precedent (per §6.1.1 Test-substrate implications). Per
+  PR 3 §2.1.2's five-failure-mode rejection of the Mock-X
+  pattern; see the no-Mock substrate inheritance discipline
+  above for the binding rationale and §6.1 for the paradigm pin.
 - [x] **`FaultInjecting<L: LedgerEngine>` test substrate +
   `LocalLedger::from_test_blocks(...)` constructor (Round 5
   amendment; retroactive Mock-X cleanup of `MockLedger` per
-  [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) lines 578–604).**
-  Phase 1 commit C6 introduces; extracts the existing
-  `MockLedger::queue_concurrent_mutation` body
-  ([`engine/test_support.rs:773`](../../rust/shekyl-engine-core/src/engine/test_support.rs))
-  into the composable wrapper; adds
-  `LocalLedger::from_test_blocks(...)` (deterministic
-  test-block fixtures, gated by `#[cfg(test)]`); rewires
-  `test_support.rs` callers. The cleanup is mostly
-  extraction-and-rename — current `MockLedger` already runs
-  the canonical `apply_scan_result_to_state` merge body, so
-  the structural shape is already the wrapper-not-parallel-
-  implementation shape per PR 3 §2.1.2. C6 closes the
-  FOLLOWUPS entry.
+  [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)'s `MockLedger`
+  cleanup entry; Round 5 sub-pin extension F-Mock-4 +
+  F-Mock-5).**
+  Phase 1 commit C6β introduces; extracts the existing
+  `MockLedger::queue_concurrent_mutation` body — verified
+  against current source at
+  [`engine/test_support.rs:773–812`](../../rust/shekyl-engine-core/src/engine/test_support.rs)
+  (`impl LedgerEngine for MockLedger`):
+  `apply_scan_result` (line 792) pops from
+  `concurrent_mutation_queue` (line 794); on empty-queue,
+  delegates to the canonical `apply_scan_result_to_state`
+  (line 810); the structural shape is already
+  `FaultInjecting<LocalLedger>`-shaped per F-Mock-4 — into
+  the composable wrapper at
+  `rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs`,
+  same `#[cfg(any(test, feature = "test-helpers"))]` gating
+  as `FaultInjecting<R: RefreshEngine>` per F-Mock-1 symmetry.
+  Adds `LocalLedger::from_test_blocks(blocks: Vec<Block>) -> Self`
+  (deterministic test-block fixtures, gated
+  `#[cfg(any(test, feature = "test-helpers"))]` per F-Mock-1
+  symmetry). C6β migration table maps `MockLedger`'s four
+  public-test-affordance methods to their post-migration homes:
+
+  | `MockLedger` method (current) | Post-C6β home |
+  | --- | --- |
+  | `with_seed(seed: [u8; 32]) -> Self` ([`test_support.rs:695`](../../rust/shekyl-engine-core/src/engine/test_support.rs)) | `LocalLedger::from_test_blocks(blocks: Vec<Block>) -> Self` constructs against a deterministic block vector. Callers that previously used `with_seed` to seed an empty-chain test build `Vec::new()`; callers seeding a chain pass the existing block vector |
+  | `with_seed_and_state(seed: [u8; 32], blocks: Vec<ScannableBlock>) -> Self` ([`test_support.rs:707`](../../rust/shekyl-engine-core/src/engine/test_support.rs)) | `LocalLedger::from_test_blocks(blocks: Vec<Block>) -> Self` — the `seed` field was used for `WalletLedger` cosmetic state and is not load-bearing for `LedgerEngine` merge tests; callers migrate to passing the chain only |
+  | `queue_concurrent_mutation(&self)` ([`test_support.rs:733`](../../rust/shekyl-engine-core/src/engine/test_support.rs)) | `FaultInjecting<LocalLedger>::queue_concurrent_mutation()` (preserves the method name; identical semantics) |
+  | `queued_failures(&self) -> usize` ([`test_support.rs:745`](../../rust/shekyl-engine-core/src/engine/test_support.rs)) | `FaultInjecting<LocalLedger>::queued_failures() -> usize` (the wrapper's queue-drain inspector — `MockLedger`'s existing implementation is the F-Mock-2 queue-contract precedent the wrapper formalizes) |
+
+  Rewires `test_support.rs` callers and all per-test
+  instantiations. The cleanup is mostly extraction-and-rename
+  — current `MockLedger` already runs the canonical
+  `apply_scan_result_to_state` merge body, so the structural
+  shape is already the wrapper-not-parallel-implementation
+  shape per PR 3 §2.1.2 (verified against current source per
+  F-Mock-4). C6β closes the FOLLOWUPS entry; per F-Mock-7 the
+  `test-helpers` feature is introduced as part of C6α's
+  scope so the gating composes at C6β.
 - [x] **`TestDaemon` rename of `MockDaemon` (Round 5
   amendment; retroactive Mock-X cleanup per
-  [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) lines 606–620).**
-  Phase 1 commit C6 introduces; mechanical rename of the
+  [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)'s `MockDaemon`
+  cleanup entry; Round 5 sub-pin extension F-Mock-6).**
+  Phase 1 commit C6γ introduces; mechanical rename of the
   `MockDaemon` type and all callers in
   [`engine/test_support.rs`](../../rust/shekyl-engine-core/src/engine/test_support.rs)
   and tests. The structural shape is unchanged — `MockDaemon`
   is already an alternative real implementation that serves
   canned / cached test responses without network connectivity;
-  the rename signals that shape correctly. C6 closes the
-  FOLLOWUPS entry.
+  the rename signals that shape correctly. **Phase 1 author
+  commit-message-template addition (F-Mock-6).** The C6γ
+  commit message enumerates the test affordances `MockDaemon`
+  carries that survive the rename unchanged
+  (`with_seed` / `with_seed_and_chain` / `push_block` /
+  `replace_chain_from` / `set_daemon_height` /
+  `set_height_error_for_next_n_calls` /
+  `inject_block_fetch_failure` / `set_block_returns_malformed`
+  / `chain_len` / `set_fee_estimates` /
+  `inject_submit_failure` / `inject_fee_failure` /
+  `submitted_count` per
+  [`engine/test_support.rs:318–490`](../../rust/shekyl-engine-core/src/engine/test_support.rs)),
+  documenting the semantic shift "fake of an implementation" →
+  "alternative real implementation for tests" at the
+  doc-trail level so the rename's intent is preserved in
+  the commit-message archive. C6γ closes the FOLLOWUPS entry.
 - [x] `AssertionSink` (test substrate; coherence property
   test) — Phase 1 commit C7 introduces per §5.4.6 emission/
   return-coherence canonical-reference pin. The sink
@@ -5285,21 +5785,189 @@ C6 is decomposed into three sub-commits per bisection discipline
 (per the `90-commits.mdc` scope-per-commit rule and the PR 4
 precedent set by C5 / C5a / C5b / C5β):
 
-- **C6α — `FaultInjecting<R: RefreshEngine>` wrapper.**
-  Introduces the composable wrapper at
+- **C6α — `FaultInjecting<R: RefreshEngine>` wrapper +
+  `test-helpers` feature introduction (Round 5 sub-pin
+  extension F-Mock-1 / F-Mock-2 / F-Mock-3-sharpening /
+  F-Mock-7 / F-Mock-8).**
+
+  **Wrapper definition (F-Mock-3 Option (i)).** Introduces the
+  composable wrapper at
   `rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs`
-  (gated behind `#[cfg(any(test, feature = "test-helpers"))]`).
-  Holds a queue of `RefreshError` injections (`Cancelled`,
-  `Io`, `InternalInvariantViolation { context: &'static str }`).
+  (gated `#[cfg(any(test, feature = "test-helpers"))]` per
+  F-Mock-1 symmetry).
   `impl<R: RefreshEngine> RefreshEngine for FaultInjecting<R>`
-  pops the head injection if non-empty (returns the error
-  without invoking the inner producer) or delegates to
+  with **`type Error = RefreshError`** (per §6.1 F-Mock-3 +
+  §6.1.1 two-enum architecture pin: the wrapper exposes the
+  orchestrator-side `RefreshError` surface uniformly across
+  all `R`, R-agnostic; cross-wrapper symmetry with
+  `FaultInjecting<L: LedgerEngine>` whose trait signature
+  forces the same shape per
+  [`engine/traits/ledger.rs:270–273`](../../rust/shekyl-engine-core/src/engine/traits/ledger.rs)).
+  The queue holds `RefreshError` values directly.
+  `produce_scan_result` pops the head injection if non-empty
+  (returns the queued `RefreshError` without invoking the
+  inner producer; the wrapper's
+  `Self::Error: Into<RefreshError>` bound is the identity at
+  the orchestrator boundary) or delegates to
   `self.inner.produce_scan_result(...)` and forwards the
-  result. `Engine::replace_refresh(&mut self, refresh: R)`
-  test-only setter on `Engine<S, D, L, R>` gated behind the
-  same feature. CI gate: existing test suite against the
-  trait-dispatched `Engine` plus a smoke test of the wrapper
-  itself.
+  result, with the inner producer's `R::Error` converted to
+  `RefreshError` via the `Into` bound at the wrapper's return
+  site (so the wrapper sees `RefreshError` on both injection
+  and delegation paths, uniformly). `Engine::replace_refresh(
+  &mut self, refresh: R)` test-only setter on `Engine<S, D, L, R>`
+  gated behind the same feature.
+
+  **F-Mock-3-sharpening (trait-reachable vs.
+  orchestrator-constructed variants; cause-vs-effect testing
+  pattern).** Of the six `RefreshError` variants per
+  [`engine/error.rs:148–270`](../../rust/shekyl-engine-core/src/engine/error.rs),
+  three are reachable from a `RefreshEngine` impl's
+  `Self::Error` via the `From` conversion: `Cancelled` (unit),
+  `Io(IoError)` (payload), and `InternalInvariantViolation
+  { context: &'static str }` (payload constructed at the From
+  impl site per
+  [`engine/local_refresh.rs:368–384`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs)).
+  Three are orchestrator-constructed only:
+  `MalformedScanResult { reason }` (constructed exclusively by
+  the merge layer in
+  [`engine/merge.rs:315–451`](../../rust/shekyl-engine-core/src/engine/merge.rs)),
+  `ConcurrentMutation { wallet, result }` (constructed at the
+  merge gate), `AlreadyRunning` (constructed at binary-layer
+  single-flight). Under Option (i) **direct injection** the
+  wrapper can inject any of the six variants directly into the
+  orchestrator surface; for trait-reachable variants this
+  exercises the same code path the production From conversion
+  would reach; for orchestrator-constructed variants direct
+  injection is a deliberate test affordance (test "orchestrator
+  handles `MalformedScanResult` from the producer trait surface
+  correctly" even though no V3.0 `RefreshEngine` impl actually
+  returns it). For `InternalInvariantViolation` both direct
+  injection (testing producer-returned-then-orchestrator-
+  propagated path) and **cause injection** (driving causes
+  through `FaultInjecting<LocalLedger>::queue_concurrent_mutation`
+  per F-Mock-2 to exhaust the retry budget at the orchestrator-
+  side construction sites in `engine/refresh.rs`) are legitimate
+  test classes; both are exercised. For `ConcurrentMutation`
+  cause injection through `FaultInjecting<LocalLedger>` is the
+  primary path (exercises the merge-gate construction site);
+  direct injection through `FaultInjecting<R>` exercises the
+  orchestrator's handling of an orchestrator-already-detected
+  ConcurrentMutation arriving at the producer surface
+  (deliberate test affordance, not a production-reachable path
+  on `R`). The pattern is "drive causes through one trait
+  wrapper, observe effects on the orchestrator surface" — see
+  §6.1 paradigm pin for why this shape translates cleanly to
+  Stage 4 actor-paradigm tests.
+
+  **F-Mock-2 queue contract (composition-paradigm; see §6.1
+  paradigm pin).** The queue is **wrapper-internal state
+  visible only through the wrapper's API**, not an actor
+  mailbox; the queue type is `RefreshError` per the Option (i)
+  wrapper API above. Contract:
+
+  - **FIFO ordering.** Injections are popped head-first;
+    if the test injects
+    `[RefreshError::Cancelled, RefreshError::Io(IoError::Daemon {..})]`
+    in that order, the next two calls return `Cancelled`
+    then `Io(IoError::Daemon{..})`. The ordering pin
+    forecloses property tests that assert per-call
+    return-discriminant ordering from failing unhelpfully
+    against a LIFO or unordered implementation.
+  - **Drain inspector.** The wrapper exposes
+    `queued_failures(&self) -> usize` per the existing
+    [`MockLedger::queued_failures`](../../rust/shekyl-engine-core/src/engine/test_support.rs)
+    precedent (per F-Mock-2 the existing API is the canonical
+    shape). Tests verify queue-drain by asserting
+    `wrapper.queued_failures() == 0` at teardown, closing
+    the false-positive class where a test injects a failure,
+    runs the engine, asserts the engine handled correctly,
+    and never notices the injection path was not exercised.
+  - **`debug_assert!` on Drop for non-empty queue.** If a
+    test leaves the wrapper without draining, the wrapper's
+    `Drop` impl fires `debug_assert!(self.queue.is_empty(),
+    "FaultInjecting dropped with N queued failures
+    un-consumed; tests must drain via queued_failures()")` —
+    panic-on-leftover in test/debug builds; silent in
+    release (release builds should not have the wrapper
+    compiled in regardless, per the F-Mock-1 cfg-gating).
+  - **Reentrance.** If a test injects a failure and the
+    producer's body internally re-enters via some path that
+    calls back into `RefreshEngine`, the second call also
+    pops from the queue per the "pop head if non-empty"
+    semantics. The V3.0 `LocalRefresh` has no such
+    reentrance pattern; the pin is for forward-compatibility
+    with Stage 4 actor-mesh implementors that may carry
+    different reentrance behaviour.
+
+  **F-Mock-7 `test-helpers` feature introduction.** C6α's
+  scope includes adding `test-helpers = []` to
+  [`rust/shekyl-engine-core/Cargo.toml`](../../rust/shekyl-engine-core/Cargo.toml)'s
+  `[features]` section, with a rationale comment matching the
+  existing `bench-internals` precedent (lines 223–227):
+
+  ```toml
+  # Internal feature: re-exports otherwise-`pub(crate)`
+  # failure-injection wrappers (FaultInjecting<R: RefreshEngine>,
+  # FaultInjecting<L: LedgerEngine>, Engine::replace_refresh,
+  # LocalLedger::from_test_blocks) for downstream integration
+  # test crates that need composition-paradigm failure injection
+  # at the trait boundary. Not part of the public API; consumers
+  # must not depend on this feature in production builds.
+  test-helpers = []
+  ```
+
+  Per F-Mock-1 symmetry the feature gates all four C6
+  test-helper surfaces uniformly. Pre-genesis no downstream
+  test-helpers consumer crate exists yet; the feature is
+  declared so the gating composes correctly when one emerges
+  (the gating is the load-bearing property, not the
+  external-API polish).
+
+  **F-Mock-8 smoke-test property classes (two test classes
+  per §6.1.1 two-enum architecture pin).** C6α's smoke-test
+  surface covers **two classes** corresponding to the two-enum
+  architecture; both are load-bearing for the test-coverage
+  story to be complete.
+
+  **Class 1 — wrapper-based trait-surface tests** (live in the
+  new `fault_injecting_refresh.rs` test module). Four
+  sub-properties:
+
+  1. **Empty-queue passthrough.** Wrapper with empty queue
+     delegates to inner producer; no injection consumed.
+  2. **Single-injection-then-delegation.** Queue one
+     `RefreshError`; first call returns the injection; second
+     call delegates to inner producer.
+  3. **Multi-injection FIFO ordering.** Queue `[A, B]`;
+     first call returns `A`; second call returns `B`;
+     third call delegates to inner producer.
+  4. **Queue-drain-on-teardown.** Queue two failures; consume
+     one; assert `queued_failures() == 1`; drain via a second
+     consume; assert `queued_failures() == 0`. (The Drop-time
+     `debug_assert!` is a separate test that constructs a
+     wrapper, queues a failure, and lets it drop;
+     `#[should_panic]` verifies the assert fires.)
+
+  **Class 2 — From-conversion tests against `LocalRefresh`**
+  (live in [`local_refresh.rs`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs)'s
+  existing tests module per the
+  [`local_refresh_error_maps_to_refresh_error`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+  precedent). Each `LocalRefreshError` variant exercised
+  end-to-end against the corresponding `RefreshError` variant
+  the `From` impl produces; the existing test already covers
+  the four-variant matrix and C6α scope confirms its presence
+  rather than adding new content (Phase 1 author confirms the
+  test compiles after the wrapper introduction and gates;
+  no migration needed because `LocalRefreshError` and its
+  `From` impl are unchanged by C6α). This class is **sibling
+  to Class 1, not a replacement** — the wrapper bypasses the
+  From conversion by injecting `RefreshError` directly under
+  Option (i), so wrapper tests do not exercise the From impl;
+  Class 2 is what verifies the From impl behavior.
+
+  CI gate: existing test suite against the trait-dispatched
+  `Engine` plus Class 1 wrapper smoke tests plus Class 2
+  From-conversion test (already in place; confirmed-only).
 - **C6β — `FaultInjecting<L: LedgerEngine>` extraction +
   `LocalLedger::from_test_blocks(...)` constructor
   (closes [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) lines 578–604).**

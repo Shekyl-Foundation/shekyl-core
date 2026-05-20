@@ -2436,6 +2436,90 @@ sustainability is unaffected by the recalibration.
     rollback restoration, mempool key-image dedup, sorted-input
     requirement. Spec-anchors in `staking/`. Target: V3.x — lands with
     the staking Rust port.
+
+- **Coordinated `TestLedgerBuilder` test-infrastructure substrate
+  design (V3.1 pre-first-daemon-Rust-port substrate-design
+  FOLLOWUP).** The three V3.x invariant-test entries above
+  (tx-validation, FCMP++ tx-pool, staking lifecycle) share a
+  common test-infrastructure need: each set of unit tests
+  requires deterministic synthetic blocks/transactions whose
+  shape is rich enough to exercise the named invariants. PR 4
+  C6β lands the minimum-substrate
+  [`LocalLedger::from_test_blocks(blocks: Vec<Block>) -> Self`](../rust/shekyl-engine-core/src/engine/local_ledger.rs)
+  per [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §7.X C6β (sufficient for `RefreshEngine` merge tests; "Need A"
+  per the design doc's Round 5 sub-pin extension framing). The
+  V3.x invariant-test entries above need richer substrate
+  ("Need B"): test ledgers carrying transactions with valid
+  FCMP++ membership proofs, valid PQC auth signatures, and
+  valid curve-tree state — the structural-validity floor below
+  which most daemon validation paths cannot be meaningfully
+  exercised.
+
+  **Disposition (three-prong).**
+
+  1. **Coordinated, not per-port.** Design one
+     `TestLedgerBuilder` / `TestBlockBuilder` /
+     `TestTransactionBuilder` substrate that produces valid
+     Shekyl-format artifacts and is shared across all three
+     V3.x port queues. Building three ad-hoc per-port substrates
+     is the discipline-drift answer (per
+     [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+     "continuous discipline as inheritance prevention" — substrate
+     decisions made DURING the first consumer create per-consumer
+     inconsistency that subsequent consumers inherit).
+  2. **Designed BEFORE the first daemon Rust port.** The
+     substrate-design doc lands as a stand-alone V3.1 design
+     activity (its own design rounds, its own pre-flight
+     against `25-rust-architecture.mdc` and
+     `35-secure-memory.mdc`) before any of the three port queues
+     consume it. The cost asymmetry from
+     [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+     §"The 'cost-benefit-defer-to-later' anti-pattern" applies:
+     substrate decisions are cheap pre-consumer and expensive
+     post-consumer.
+  3. **Forward-composable with PR 4 C6β
+     `LocalLedger::from_test_blocks`.** The V3.1 substrate
+     should produce `Vec<Block>` (or a richer type wrapping
+     it) such that `from_test_blocks` consumes the substrate's
+     output naturally. The PR 4 C6β constructor signature is
+     designed to compose forward; the V3.1 substrate
+     pre-flight verifies composition is preserved when the
+     richer substrate types layer on top.
+
+  **Middle-ground option to flag in the design conversation.**
+  Between "Need A" (no structural validity at all; sufficient
+  for ledger-state merge tests) and "Need B" (full chaingen-
+  equivalent infrastructure with real wallet-derived outputs and
+  end-to-end transaction generation), a third class exists:
+  **structurally-valid-but-semantically-stubbed** fixtures —
+  transactions whose proofs verify, signatures verify, and FCMP++
+  membership proofs are valid, but whose semantic content is
+  canned (deterministic seeds, no real wallet state, no
+  scan-recoverable outputs). Many of the deleted invariant tests
+  (the "tx X is rejected because invariant Y fires" class) need
+  a valid-shaped tx with one invariant violated, not a
+  fully-real wallet-derived tx. The structurally-valid-but-
+  semantically-stubbed builder unblocks a substantial fraction
+  of the disabled-test backlog at lower cost than full Need B.
+  The trade-off (which class of tests is unblocked at what
+  cost) is the substrate-design conversation's load-bearing
+  question; flagged here so the V3.1 design rounds enter with
+  the option on the table rather than defaulting to a binary
+  "Need A only or full Need B" framing.
+
+  **Target version:** V3.1 (substrate-design activity; lands as
+  a design doc + design rounds; implementation may stretch
+  across V3.1 and V3.2 depending on scope). **Triggering
+  conditions:** any of the three V3.x invariant-test entries
+  above being scheduled for an upcoming PR cycle; failure to
+  land the substrate-design doc before the first of those PRs
+  opens triggers a discipline-drift finding per
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc).
+  **Cross-reference:** PR 4 C6β prose at
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §7.X C6β and the Round 5 sub-pin extension's ledger-generator
+  disposition paragraph in the Status banner.
 - **(Closed by deletion 2026-05-05.) `core_tests` synthetic-block
   harness rewrite for v3-only flows.** Original framing retained for
   audit-trail context: 19 `core_tests` tests (`gen_tx_*` × 11,

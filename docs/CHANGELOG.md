@@ -8222,6 +8222,246 @@
   PR 4 `PendingTxEngine` — PR 4 is `RefreshEngine`; PR 5 is
   `PendingTxEngine`), and this CHANGELOG entry.
 
+- **Stage 1 PR 4 (`RefreshEngine`) — Round 5 sub-pin extension
+  + amendment-layering coherence pass (F-Mock-1 through F-Mock-8
+  + Option (i) wrapper API + two-enum architecture pin).**
+  (`feat/stage-1-pr4-refresh-engine`, 2026-05-20). Doc-only
+  follow-up to the Round 5 substrate-decision amendment above.
+  Same-day review pass surfaced eight Mock-X-substrate findings
+  (F-Mock-1 through F-Mock-8) on the Round 5 amendment, then
+  ran an amendment-layering coherence pass against the
+  post-Round-5 substrate to surface forward-pointer gaps and
+  paradigm-language conflations. The pass landed four
+  substantive sharpenings, four minor audit-trail notes, a new
+  §6.1 "Test-substrate paradigm pin" subsection, and a new
+  §6.1.1 "Two-enum architecture (RefreshEngine-specific positive
+  pattern)" sub-section pinning the producer-internal /
+  trait-surface error-enum split as a positive architectural
+  reference and forward-template for future per-trait PRs.
+  None reopen any Round 1–4 disposition or the Round 5
+  amendment itself; the sub-pin refines the Round 5 C6
+  substrate so the Phase 1 author implements against an
+  explicit pin rather than reverse-engineering from tests.
+
+  **Substantive dispositions (F-Mock-1 through F-Mock-4 +
+  Option (i) wrapper API + two-enum architecture).**
+
+  1. **F-Mock-1 — `cfg`-gating symmetry (Option (a)).** All four
+     C6 surfaces (`FaultInjecting<R: RefreshEngine>`,
+     `Engine::replace_refresh`, `FaultInjecting<L: LedgerEngine>`,
+     `LocalLedger::from_test_blocks`) are gated uniformly
+     `#[cfg(any(test, feature = "test-helpers"))]`. The
+     `test-helpers` feature is introduced as part of C6α's
+     scope per the F-Mock-7 disposition, with a rationale
+     comment matching the existing `bench-internals` precedent
+     at [`rust/shekyl-engine-core/Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+     lines 223–227.
+
+  2. **F-Mock-2 — `FaultInjecting` queue contract.** Wrapper-
+     internal queue (not actor mailbox) holding `RefreshError`
+     values directly per Option (i) below. Contract: FIFO
+     ordering; `queued_failures(&self) -> usize` drain
+     inspector per the existing
+     [`MockLedger::queued_failures`](../rust/shekyl-engine-core/src/engine/test_support.rs)
+     precedent; `debug_assert!`-on-Drop for non-empty queue
+     (panic-on-leftover in test/debug builds); reentrance pops
+     the head per the "pop head if non-empty" semantics.
+
+  3. **F-Mock-3 + F-Mock-3-sharpening + Option (i) wrapper
+     API.** The wrapper carries `type Error = RefreshError`
+     (not `R::Error`) and queues `RefreshError` values
+     directly, uniform across all `R`. Cross-wrapper symmetry
+     justifies the choice:
+     `FaultInjecting<L: LedgerEngine>` must queue `RefreshError`
+     by trait necessity (per
+     [`engine/traits/ledger.rs:270–273`](../rust/shekyl-engine-core/src/engine/traits/ledger.rs)
+     — `apply_scan_result` returns `Result<(), RefreshError>`
+     with no `Self::Error` indirection), so
+     `FaultInjecting<R>` queuing `RefreshError` matches.
+
+     **Empirical variant enumeration (per source).** Of the
+     six `RefreshError` variants at
+     [`engine/error.rs:148`](../rust/shekyl-engine-core/src/engine/error.rs),
+     three are reachable from a `RefreshEngine` impl's
+     `Self::Error` via the `From` conversion: `Cancelled`
+     (unit), `Io(IoError)` (payload), and
+     `InternalInvariantViolation { context: &'static str }`
+     (payload constructed at the `From` impl site per
+     [`engine/local_refresh.rs:368–384`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)).
+     Three are orchestrator-constructed only:
+     `MalformedScanResult { reason }` (constructed
+     **exclusively** by the merge layer at
+     [`engine/merge.rs:315–451`](../rust/shekyl-engine-core/src/engine/merge.rs)
+     when scan-result internal-shape invariants fail —
+     superseding the doc's prior framing that grouped it with
+     `Cancelled` / `Io` as trait-reachable),
+     `ConcurrentMutation { wallet, result }` (constructed at
+     the merge gate), and `AlreadyRunning` (constructed at the
+     binary-layer single-flight). Under Option (i) direct
+     injection the wrapper can inject any of the six variants
+     into the orchestrator surface; for
+     `InternalInvariantViolation` both direct injection
+     (testing producer-returned-then-orchestrator-propagated
+     path) and **cause injection** (driving causes through
+     `FaultInjecting<LocalLedger>::queue_concurrent_mutation`
+     per F-Mock-2 to exhaust the retry budget at orchestrator-
+     side construction sites in `engine/refresh.rs`) are
+     legitimate test classes.
+
+  4. **F-Mock-4 — `MockLedger`-structurally-already-`FaultInjecting`
+     verification gate anchored.** The Round 5 amendment's
+     load-bearing claim ("current `MockLedger` is structurally
+     already a `FaultInjecting<LocalLedger>`-shaped wrapper") is
+     anchored to source at
+     [`engine/test_support.rs:773–812`](../rust/shekyl-engine-core/src/engine/test_support.rs):
+     `MockLedger::apply_scan_result` (line 792) pops from
+     `concurrent_mutation_queue` (line 794); on empty-queue,
+     delegates to the canonical `apply_scan_result_to_state`
+     (line 810). Future re-readers don't have to re-verify;
+     C6β scope is bounded as anticipated.
+
+  **Two-enum architecture pin (§6.1.1).** The `RefreshEngine`
+  trait carries a deliberate two-enum architecture worth
+  pinning as a positive architectural reference and forward-
+  template for future per-trait PRs. Producer-internal
+  [`LocalRefreshError`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+  is `pub(crate)`, unit-variant-only by convention, four
+  variants (`Cancelled`, `Io`, `Malformed`, `Internal`).
+  Orchestrator-facing
+  [`RefreshError`](../rust/shekyl-engine-core/src/engine/error.rs)
+  is `pub`, payload-bearing throughout. The `From` impl
+  boundary at
+  [`engine/local_refresh.rs:368–384`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+  is where payload information is constructed or discarded.
+  The architectural cleanness this delivers — payload
+  guarantees enforced by the type system at the conversion
+  boundary, not by convention at every producer return site —
+  makes the trait surface auditable in a way single-enum
+  architectures cannot match. The pattern is shape-applicable
+  to traits whose canonical method signatures return
+  `Result<_, Self::Error>` with `Self::Error: Into<OrchestratorError>`;
+  it is **not** load-bearing for traits whose canonical method
+  signatures return `Result<_, OrchestratorError>` directly
+  (per the `LedgerEngine` precedent). Per-trait PR pre-flight
+  checks include "does this trait have an impl-side
+  `Self::Error` indirection, and if so, is the producer-internal
+  enum unit-variant-only?" as a substrate-application check
+  alongside the four-pattern no-Mock pre-flight per PR 3
+  §2.1.5.
+
+  **Test-substrate implications (two test classes named
+  explicitly).** Two test classes follow from the two-enum
+  architecture, both load-bearing for C6α's smoke-test coverage:
+
+  - **Class 1 — wrapper-based trait-surface tests.** Tests
+    use `FaultInjecting<R: RefreshEngine>` to inject
+    `RefreshError` values directly (per Option (i) wrapper
+    API); verify the orchestrator handles each variant
+    correctly. Lives in C6α's new
+    `fault_injecting_refresh.rs` test module plus the
+    trait-dispatched `Engine` integration tests.
+    Sub-properties: empty-queue passthrough; single-injection-
+    then-delegation; multi-injection FIFO ordering;
+    queue-drain-on-teardown (with Drop-time `debug_assert!`
+    `#[should_panic]` separately verified).
+
+  - **Class 2 — From-conversion tests against `LocalRefresh`.**
+    Tests drive `LocalRefresh` directly via the `pub(crate)`
+    producer-internal surface to produce each
+    `LocalRefreshError` variant; verify the
+    `From<LocalRefreshError>` impl produces the correct
+    `RefreshError` variant. Lives in
+    [`local_refresh.rs`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)'s
+    existing tests module per the
+    [`local_refresh_error_maps_to_refresh_error`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+    test precedent; **sibling to Class 1, not a replacement**
+    because the wrapper bypasses the `From` conversion by
+    injecting `RefreshError` directly under Option (i).
+
+  **Amendment-forward-pointer convention (recorded as
+  meta-discipline).** The coherence pass surfaced the
+  pre-Phase-0c forward-pointer gap as a **recurrence pattern**
+  — the same class of finding F-Mock-3 surfaced from one
+  angle, present at three sites (the Status banner's Round 2
+  reframe paragraph; §3.1's two-channel error surface prose;
+  §4 Phase 0c's inline comment) all carrying the Round 2
+  reframe's "unit-variant-only; no payload of any kind"
+  framing that the Phase 0c amendment later refined. Three
+  additive forward-pointers added at those sites preserve
+  each round's historical record (what was decided at that
+  round) while resolving the ambiguity (what the current
+  binding contract is). The convention is recorded as a
+  **meta-discipline** alongside
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)'s
+  named-criteria principle: any future amendment that narrows
+  or refines an earlier round's contract lands its own
+  forward-pointer at the earlier site. The two disciplines
+  are complementary — reversion-clauses make rejection-
+  dispositions readable across substrate changes;
+  forward-pointers make narrowing-amendments readable across
+  layered rounds. Both are about making layered prose
+  readable across time.
+
+  **Minor dispositions (F-Mock-5 through F-Mock-8).** F-Mock-5
+  adds an explicit C6β migration table mapping `MockLedger`'s
+  four public test-affordance methods (`with_seed`,
+  `with_seed_and_state`, `queue_concurrent_mutation`,
+  `queued_failures`) to their post-migration homes and corrects
+  the prior "replaces `MockLedger::new(...)`" prose error (the
+  constructor is `with_seed` / `with_seed_and_state`, not
+  `new`). F-Mock-6 adds a Phase 1 author commit-message-template
+  note to C6γ enumerating the `MockDaemon` test affordances
+  surviving the rename unchanged. F-Mock-7 confirms the
+  `test-helpers` feature does not currently exist in
+  [`Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml) and pins
+  the introduction as part of C6α's scope. F-Mock-8 enumerates
+  C6α smoke-test property classes by name across the two
+  test-class structure above.
+
+  **V3.1 ledger-generator FOLLOWUPS entry (sub-pin extension
+  Decision 4: coordinated `TestLedgerBuilder` substrate
+  design).** The three V3.x invariant-test FOLLOWUPS entries
+  (tx-validation, FCMP++ tx-pool, staking lifecycle at
+  [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) lines 2411–2438) share a
+  common test-infrastructure need beyond what PR 4 C6β's
+  `LocalLedger::from_test_blocks` covers. The sub-pin lands a
+  new V3.1 substrate-design FOLLOWUPS entry pinning the
+  coordinated-design disposition: build one `TestLedgerBuilder`
+  / `TestBlockBuilder` / `TestTransactionBuilder` substrate
+  designed **before** the first daemon Rust port lands (cost
+  asymmetry from
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  "cost-benefit-defer-to-later anti-pattern"); design to be
+  forward-composable with PR 4 C6β's
+  `LocalLedger::from_test_blocks` signature; flag the
+  structurally-valid-but-semantically-stubbed middle-ground
+  option in the V3.1 design conversation rather than defaulting
+  to a binary "Need A or full Need B" framing.
+
+  The sub-pin extension is **not** a round reopening: no
+  Round 1–4 disposition, attack-surface pin, or commit-
+  decomposition ordering is touched; only the Round 5 C6
+  substrate and the layered-amendment prose are refined.
+  α-disposition, F1–F13 dispositions, Round 5 amendment, and
+  C0–C5 / C7 / C8 commit prose remain unchanged; the C6
+  sub-decomposition (C6α / C6β / C6γ) gains the F-Mock
+  dispositions inline.
+
+  Files touched (doc-only):
+  `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` (Status banner
+  Round 5 sub-pin extension paragraph + coherence-pass
+  paragraph + amendment-forward-pointer convention recording;
+  three forward-pointer additions at the layered-amendment
+  sites; new §6.1 paradigm pin + §6.1.1 two-enum architecture
+  pin; §6 preservation list `FaultInjecting<R>` /
+  `FaultInjecting<L>` / `TestDaemon` entries updated; §7.X
+  C6α wrapper-definition / F-Mock-3-sharpening / F-Mock-2
+  queue contract / F-Mock-7 `test-helpers` feature /
+  F-Mock-8 smoke-test prose all updated; §7.X C6β migration
+  table added; §7.X C6γ commit-message template note added),
+  `docs/FOLLOWUPS.md` (new V3.1 coordinated `TestLedgerBuilder`
+  substrate-design entry), and this CHANGELOG entry.
+
 - **Stage 1 PR 3 (`KeyEngine`) M3a pre-flight closures landed.**
   The four open `STAGE_1_PR_3_KEY_ENGINE.md` dispositions Round 4
   deliberately deferred — the handle-model emergent attack
