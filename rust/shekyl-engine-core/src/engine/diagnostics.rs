@@ -101,6 +101,52 @@ pub enum MalformedKind {
     /// validation. Corresponds to
     /// [`ScanError::InvalidScannableBlock`](shekyl_scanner::ScanError::InvalidScannableBlock).
     InvalidBlockStructure,
+
+    /// The fetched block contains a transaction whose output count
+    /// exceeds [`shekyl_scanner::MAX_OUTPUTS`] (the FCMP++
+    /// Bulletproofs+ CRS bound; canonically anchored at
+    /// `shekyl_generators::MAX_BULLETPROOF_COMMITMENTS`).
+    ///
+    /// # Producer-side detection (PR 4 C4 emission site)
+    ///
+    /// The producer runs a per-tx pre-pass over each fetched
+    /// block's transactions BEFORE invoking the scanner; any
+    /// transaction whose `prefix.outputs.len() > MAX_OUTPUTS`
+    /// triggers one [`RefreshDiagnostic::DaemonMalformed`] event
+    /// carrying this variant. The pre-pass is the engine-side
+    /// diagnostic emission discipline; the scanner additionally
+    /// enforces the bound as a defense-in-depth gate inside
+    /// `InternalScanner::scan_transaction_with_cancel` (skip-and-log
+    /// shape; consensus validation would also reject the
+    /// transaction).
+    ///
+    /// # Why a dedicated variant (vs. `InvalidBlockStructure`)
+    ///
+    /// `InvalidBlockStructure` is the catch-all for scanner-side
+    /// structural rejection driven by `ScanError::InvalidScannableBlock`.
+    /// The excessive-outputs case is detected by the producer's
+    /// pre-pass — *before* the scanner is invoked — so it never
+    /// surfaces as a `ScanError` and would otherwise be invisible
+    /// at the diagnostic layer. The dedicated variant lets
+    /// consumers (e.g., [`TracingDiagnosticSink`]) distinguish
+    /// "the daemon delivered a structurally-invalid block at the
+    /// per-block level" from "the daemon delivered a transaction
+    /// with an excessive output count" — the two signal different
+    /// adversarial hypotheses (block-level malformation vs.
+    /// per-tx attempted scan-budget inflation per PR 4 §3.1 /
+    /// F11-S substrate).
+    ///
+    /// # Spec reference
+    ///
+    /// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §3.1
+    /// (sub-block lock-latency property under adversarial daemon
+    /// block crafting); §5.4.9 F11-S (per-output safe-point
+    /// escalation criterion); §7.X C4 (the
+    /// `LocalRefresh::produce_scan_result` per-tx pre-pass emission
+    /// site).
+    ///
+    /// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
+    ExcessiveOutputs,
 }
 
 /// Bounded enumeration of the producer's daemon-RPC operations
@@ -661,6 +707,9 @@ mod tests {
         sink.emit(RefreshDiagnostic::DaemonMalformed {
             kind: MalformedKind::InvalidBlockStructure,
         });
+        sink.emit(RefreshDiagnostic::DaemonMalformed {
+            kind: MalformedKind::ExcessiveOutputs,
+        });
         sink.emit(RefreshDiagnostic::DaemonTimeout {
             op: DaemonOp::GetHeight,
             elapsed: Duration::from_millis(250),
@@ -692,6 +741,9 @@ mod tests {
         let sink = TracingDiagnosticSink::new();
         sink.emit(RefreshDiagnostic::DaemonMalformed {
             kind: MalformedKind::UnsupportedProtocolVersion,
+        });
+        sink.emit(RefreshDiagnostic::DaemonMalformed {
+            kind: MalformedKind::ExcessiveOutputs,
         });
         sink.emit(RefreshDiagnostic::DaemonTimeout {
             op: DaemonOp::GetScannableBlockByNumber,
