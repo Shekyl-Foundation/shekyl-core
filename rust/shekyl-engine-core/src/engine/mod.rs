@@ -154,6 +154,7 @@
 
 pub mod capability;
 pub mod daemon;
+pub(crate) mod diagnostics;
 pub mod error;
 pub mod lifecycle;
 pub(crate) mod local_keys;
@@ -164,12 +165,14 @@ pub mod pending;
 pub mod refresh;
 pub mod signer;
 pub(crate) mod traits;
+pub mod view_material;
 
 #[cfg(test)]
 pub(crate) mod test_support;
 
 pub use capability::Capability;
 pub use daemon::DaemonClient;
+pub use diagnostics::RefreshDiagnostic;
 pub use error::{IoError, KeyError, OpenError, PendingTxError, RefreshError, SendError, TxError};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 pub use local_ledger::LocalLedger;
@@ -181,6 +184,7 @@ pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
 };
 pub use signer::{EngineSignerKind, SoloSigner};
+pub use view_material::ViewMaterial;
 
 use std::collections::BTreeMap;
 use std::marker::PhantomData;

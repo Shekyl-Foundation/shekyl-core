@@ -48,6 +48,13 @@
 pub(crate) mod daemon;
 pub(crate) mod key;
 pub(crate) mod ledger;
+pub(crate) mod refresh;
 
 pub(crate) use daemon::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
 pub(crate) use ledger::LedgerEngine;
+// C5 lands the first orchestrator-side consumer of `RefreshEngine`
+// (Engine<S, D, L, R> parameterization per PR 4 §7.X). C1 lands the
+// re-export so subsequent commits do not pay for trait-surface
+// access by absolute path.
+#[allow(unused_imports)]
+pub(crate) use refresh::RefreshEngine;
