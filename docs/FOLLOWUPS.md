@@ -589,19 +589,34 @@ sustainability is unaffected by the recalibration.
   `FaultInjecting<K: KeyEngine>` wrapper). The retroactive
   cleanup of PR 2's `MockLedger` follows the same pattern but is
   not worth retroactive churn within PR 2's already-merged
-  branch; instead it lands alongside Stage 1 PR 4 (`PendingTxEngine`)
-  or PR 5 (whichever per-trait PR's pre-flight surfaces the
-  cleanup naturally). The structurally-correct shape is a
-  production-only `LocalLedger` with a `#[cfg(test)]`-gated
-  `from_test_blocks(...)` constructor (deterministic test-block
-  fixtures) plus a composable `FaultInjecting<L: LedgerEngine>`
-  wrapper (failure injection on top of any `L: LedgerEngine`
-  impl). Cross-references:
+  branch; **pinned (2026-05-20) to land in Stage 1 PR 4
+  (`RefreshEngine`) §7.X commit C6β per the PR 4 Round 5
+  substrate-decision amendment** ([`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  Status banner, §6 no-Mock substrate inheritance discipline,
+  §7.X C6 commit prose). PR 4's pre-flight surfaced the cleanup
+  naturally because C6/C7's new `RefreshEngine` test substrate
+  would otherwise compound the Mock-X debt this entry exists to
+  close, and the
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  cost-benefit-defer-to-later anti-pattern names the
+  architectural-integrity-now disposition as the default for
+  security-load-bearing substrate work pre-genesis. The
+  structurally-correct shape is a production-only `LocalLedger`
+  with a `#[cfg(test)]`-gated `from_test_blocks(...)` constructor
+  (deterministic test-block fixtures) plus a composable
+  `FaultInjecting<L: LedgerEngine>` wrapper (failure injection on
+  top of any `L: LedgerEngine` impl). The current `MockLedger`
+  ([`engine/test_support.rs:773`](../rust/shekyl-engine-core/src/engine/test_support.rs))
+  is structurally already a `FaultInjecting<LocalLedger>`-shaped
+  wrapper (delegating to the canonical
+  `apply_scan_result_to_state`); C6β is mostly
+  extraction-and-rename, not a re-implementation.
+  Cross-references:
   [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
   §2.1.2 (broader Mock-X rejection rationale), §6.4 (per-PR-3
   substrate disposition), §7.9 (test-substrate disposition open
-  question). Target: V3.0 baseline alongside Stage 1 PR 4 or
-  PR 5.
+  question). Target: V3.0 baseline; pinned to Stage 1 PR 4 C6β
+  (closure recorded with PR 4 merge SHA per PR 4 §7.X C8 prose).
 
 - **Stage 1 retroactive Mock-X cleanup: `MockDaemon` → `TestDaemon`
   rename.** The `MockDaemon` case (Stage 1 PR 1 substrate) is
@@ -615,9 +630,16 @@ sustainability is unaffected by the recalibration.
   implementation for tests" rather than "fake of an
   implementation") with the same shape. Lower-priority than the
   `MockLedger` cleanup because the structural pattern is
-  correct; only the naming is wrong. Cross-references:
+  correct; only the naming is wrong. **Pinned (2026-05-20) to
+  land in Stage 1 PR 4 (`RefreshEngine`) §7.X commit C6γ per the
+  PR 4 Round 5 substrate-decision amendment** ([`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  Status banner, §6 no-Mock substrate inheritance discipline,
+  §7.X C6 commit prose); bundled with the `MockLedger` cleanup
+  (C6β) so PR 4's substrate-pass closes both FOLLOWUPS entries
+  in one cut. Cross-references:
   [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
-  §2.1.2. Target: V3.0 baseline alongside Stage 1 PR 4 or PR 5.
+  §2.1.2. Target: V3.0 baseline; pinned to Stage 1 PR 4 C6γ
+  (closure recorded with PR 4 merge SHA per PR 4 §7.X C8 prose).
 
 - **CHANGELOG backfill for Stage 0 PR-A and PR-C.** Stage 0
   preparatory PRs PR-A (`3d313256c` — symmetry rule),

@@ -18,7 +18,15 @@ and Round 4 review pass meta-review post-amendment sub-pins
 sub-pins F11-S / F12-S / F13-S sharpening the dispositions
 without reopening F1–F9 or Round 1–4; F13-S substantively
 closes the `SuppressedRateLimit` emission-cadence covert
-channel, 2026-05-15) closed.** Round 1's load-bearing question (§5 producer
+channel, 2026-05-15), and **Round 5 substrate-decision
+amendment** (no-Mock substrate inheritance from PR 3 §2.1.2;
+C6 plan rewritten from `MockRefresh` to
+`FaultInjecting<R: RefreshEngine>`; retroactive Mock-X
+cleanup of `MockLedger` extracted as `FaultInjecting<L:
+LedgerEngine>` and `MockDaemon` renamed to `TestDaemon`
+land in PR 4's C6 substrate scope per
+[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) scheduling, 2026-05-20)
+closed.** Round 1's load-bearing question (§5 producer
 redesign) settled to **α — preserved current shape** per
 §5.4. The Round 1 review pass (2026-05-12)
 corrected §3.1's materially-wrong "no secret-touching surface"
@@ -261,6 +269,55 @@ pre-implementation substrate review. The α-disposition still
 holds; all Round 1–4 dispositions still hold; the review pass
 hardens contract pins and attack-surface dispositions without
 opening a new design question.
+
+The **Round 5 substrate-decision amendment (2026-05-20)** lands
+mid-Phase-1 between C5β (legacy producer scaffolding deletion)
+and C6 (test substrate). The C6 plan as written through Round 4
+("`MockRefresh` test substrate; mirrors `MockDaemon` / `MockLedger`
+from PR 1 / PR 2") is **stale prose** from before the PR 3 §2.1.2
+Mock-X rejection landed. Building `MockRefresh` would instantiate
+exactly the parallel-implementation anti-pattern PR 3 §2.1.2
+rejected as a category and compound the Mock-X debt that
+[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) already schedules to be
+paid down "alongside Stage 1 PR 4 or PR 5." The amendment
+disposition:
+
+1. C6 replaces `MockRefresh` with the no-Mock substrate shape
+ PR 3 settled on: production-only `LocalRefresh` (already
+ landed at C4) plus a composable `FaultInjecting<R:
+ RefreshEngine>` wrapper for failure injection. The wrapper
+ composes against any current or future `R` implementor
+ without per-impl parallel-Mock proliferation.
+2. The FOLLOWUPS-scheduled retroactive Mock-X cleanup of
+ `MockLedger` (extract `FaultInjecting<L: LedgerEngine>`
+ from the existing wrapper body; add
+ `LocalLedger::from_test_blocks(...)` constructor;
+ rewire `test_support.rs` callers) lands in PR 4's C6
+ substrate scope, not deferred to PR 5. Current
+ `MockLedger` is structurally already a `FaultInjecting<
+ LocalLedger>`-shaped wrapper around `apply_scan_result_to_state`
+ (per [`engine/test_support.rs:773`](../../rust/shekyl-engine-core/src/engine/test_support.rs));
+ the cleanup is mostly extraction-and-rename, not a
+ re-implementation.
+3. The FOLLOWUPS-scheduled `MockDaemon` → `TestDaemon` rename
+ (lower priority per FOLLOWUPS line 617; structural shape is
+ already correct, only the naming is wrong) lands alongside
+ the `MockLedger` cleanup so PR 4 closes both FOLLOWUPS
+ entries in one substrate-pass.
+
+Per
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+§"cost-benefit-defer-to-later anti-pattern", the
+architectural-integrity-now disposition is the default for
+security-load-bearing substrate work pre-genesis; the pre-genesis
+discount per [`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)
+applies, and PR 4 is the FOLLOWUPS-named landing slot. The
+amendment is **not** a round reopening — it does not revisit any
+trait-surface contract pin, attack-surface disposition, or commit-
+decomposition ordering decision; it replaces stale C6 substrate
+prose with the binding no-Mock shape PR 3 §2.1.2 settled. The
+α-disposition, the F1–F13 dispositions, and the C0–C5 / C7 / C8
+commit prose are all unchanged.
 
 This document was opened in parallel with the
 M3c–M3e tail of Stage 1 PR 3 per the 2026-05-10 sequencing
@@ -4537,7 +4594,83 @@ finalization).**
   framing (the framing recasts but does not change the
   disposition; per Round 3 status banner).
 
-**Test-substrate preservation list (Round 4 enumeration).**
+**Test-substrate discipline — no-Mock substrate inheritance from
+PR 3 §2.1.2 (Round 5 amendment, 2026-05-20).**
+
+PR 4's test substrate is binding-pinned against the no-Mock
+substrate pattern PR 3 §2.1.2 settled. PR 3 rejected the Mock-X
+pattern as a category — not as a per-trait disposition — naming
+five failure modes the pattern instantiates regardless of which
+trait it's applied to:
+
+1. **Adds attack surface.** Test-only types in production code;
+ visibility-constraint dependencies; build-config edge cases
+ that test paths exercise but production paths don't.
+2. **Conflates test-controlled inputs to real implementations
+ with test substitute implementations.** Different operational
+ shapes that share the same `MockX` naming. A real
+ implementation seeded with deterministic test inputs is
+ structurally different from a fake of an implementation, and
+ naming them both `MockX` hides the distinction.
+3. **Inherits a Monero pattern that has produced real bugs in
+ the inherited codebase.**
+4. **Doesn't compose with future implementors** (HSM-backed,
+ hardware-key, future remote-refresh implementors) — each
+ implementor would need its own Mock variant, and tests
+ verifying against fake semantics rather than real semantics
+ multiply with the implementor count.
+5. **Encourages tests to verify against fake semantics rather
+ than real semantics.** The test suite's coverage claim
+ degrades: "tested" means "tested against the Mock," not
+ "tested against the production implementation."
+
+The binding no-Mock substrate shape for PR 4:
+
+- **Production-only `LocalRefresh`** for the success path
+ (landed at C4). Tests that need the production producer
+ body consume `LocalRefresh` directly; the
+ [`engine/local_refresh.rs`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+ `tests` module exercises real `Scanner`, real `TestDaemon`
+ chain serving (`MockDaemon` pre-C6γ rename), real
+ `apply_scan_result_to_state` merge body.
+- **Composable `FaultInjecting<R: RefreshEngine>` wrapper**
+ for failure injection. Defined once, composes against any
+ `R` implementor (`FaultInjecting<LocalRefresh>` for V3.0;
+ `FaultInjecting<FutureRemoteRefresh>` for later impls
+ without re-writing the wrapper). The wrapper holds a
+ `pub(crate)` failure queue; tests inject
+ `RefreshError::Cancelled` / `RefreshError::Io` /
+ `RefreshError::InternalInvariantViolation` via
+ `queue_failure(...)` and run the engine against the wrapper.
+- **Composable `FaultInjecting<L: LedgerEngine>` wrapper**
+ for failure injection at the merge boundary (extracted
+ from the current `MockLedger`'s `concurrent_mutation_queue`
+ body per the FOLLOWUPS retroactive cleanup; current
+ `MockLedger` is structurally already this wrapper).
+ `LocalLedger::from_test_blocks(...)` constructor replaces
+ the parallel-implementation `MockLedger::new(...)` test
+ surface.
+- **`TestDaemon` (rename of `MockDaemon`)** for the
+ alternative-real-implementation case (per FOLLOWUPS line
+ 614). `TestDaemon`'s structural shape is already correct
+ — real `DaemonClient` requires network connectivity, so
+ the test substitute is a legitimate alternative real
+ implementation serving canned / cached test responses
+ without network. The `Mock` naming was the bug; the
+ rename signals "alternative real implementation for tests"
+ rather than "fake of an implementation."
+
+The substrate decision is auditable against PR 3 §2.1.2's named
+criteria, not against precedent. Future per-trait PRs (PR 5+)
+inherit the same discipline via the PR 3 §2.1.5 four-pattern
+pre-flight checklist; PR 4's substrate work is the first
+post-PR-3 application of the discipline and the first retroactive
+cleanup of pre-discipline `MockX` types under the
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+continuous-discipline framing.
+
+**Test-substrate preservation list (Round 4 enumeration; Round 5
+substrate amendment, 2026-05-20).**
 
 - [x] `LocalRefresh::produce_scan_result` unit-test
   coverage — Phase 1 confirms test surfaces match the
@@ -4547,14 +4680,47 @@ finalization).**
   [`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
   port to the trait-dispatch shape with `NoopDiagnosticSink`
   as the default test sink.
-- [x] `MockRefresh` test substrate (mirrors `MockDaemon` /
-  `MockLedger` from PR 1 / PR 2) — Phase 1 commit C6
-  introduces; `replace_refresh` test-only setter on
-  `Engine<S, D, L, R>`; queues `RefreshError::Cancelled` /
-  `RefreshError::Io` / `RefreshError::MalformedScanResult`
-  for failure injection on the trait-dispatch path. The
-  substrate is **not** the production `LocalRefresh`; it
-  exercises the trait surface, not the producer body.
+- [x] **`FaultInjecting<R: RefreshEngine>` test substrate
+  (Round 5 amendment; replaces the prior `MockRefresh` plan).**
+  Phase 1 commit C6 introduces; `Engine::replace_refresh`
+  test-only setter on `Engine<S, D, L, R>` gated behind
+  `#[cfg(any(test, feature = "test-helpers"))]`; queues
+  `RefreshError::Cancelled` / `RefreshError::Io` /
+  `RefreshError::InternalInvariantViolation` for failure
+  injection on the trait-dispatch path. The wrapper composes
+  around `LocalRefresh` (the production producer body lives
+  in [`engine/local_refresh.rs`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs)),
+  not as a parallel implementation. Per PR 3 §2.1.2's
+  five-failure-mode rejection of the Mock-X pattern; see
+  the no-Mock substrate inheritance discipline above for the
+  binding rationale.
+- [x] **`FaultInjecting<L: LedgerEngine>` test substrate +
+  `LocalLedger::from_test_blocks(...)` constructor (Round 5
+  amendment; retroactive Mock-X cleanup of `MockLedger` per
+  [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) lines 578–604).**
+  Phase 1 commit C6 introduces; extracts the existing
+  `MockLedger::queue_concurrent_mutation` body
+  ([`engine/test_support.rs:773`](../../rust/shekyl-engine-core/src/engine/test_support.rs))
+  into the composable wrapper; adds
+  `LocalLedger::from_test_blocks(...)` (deterministic
+  test-block fixtures, gated by `#[cfg(test)]`); rewires
+  `test_support.rs` callers. The cleanup is mostly
+  extraction-and-rename — current `MockLedger` already runs
+  the canonical `apply_scan_result_to_state` merge body, so
+  the structural shape is already the wrapper-not-parallel-
+  implementation shape per PR 3 §2.1.2. C6 closes the
+  FOLLOWUPS entry.
+- [x] **`TestDaemon` rename of `MockDaemon` (Round 5
+  amendment; retroactive Mock-X cleanup per
+  [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) lines 606–620).**
+  Phase 1 commit C6 introduces; mechanical rename of the
+  `MockDaemon` type and all callers in
+  [`engine/test_support.rs`](../../rust/shekyl-engine-core/src/engine/test_support.rs)
+  and tests. The structural shape is unchanged — `MockDaemon`
+  is already an alternative real implementation that serves
+  canned / cached test responses without network connectivity;
+  the rename signals that shape correctly. C6 closes the
+  FOLLOWUPS entry.
 - [x] `AssertionSink` (test substrate; coherence property
   test) — Phase 1 commit C7 introduces per §5.4.6 emission/
   return-coherence canonical-reference pin. The sink
@@ -4582,7 +4748,13 @@ finalization).**
   cancellation-checkpoint split (checkpoints 2/3 in the
   trait body; checkpoints 1/4 in the orchestrator) and the
   retry-loop's `ConcurrentMutation` retry path against
-  `MockRefresh`-injected mutations.
+  `FaultInjecting<LocalLedger>`-injected mutations
+  (Round 5 amendment; replaces the prior
+  `MockRefresh`-injected reference). The engine instance
+  under test is `Engine<SoloSigner, TestDaemon,
+  FaultInjecting<LocalLedger>, FaultInjecting<LocalRefresh>>`
+  — all production implementors, all failure injection via
+  composable wrappers, no parallel-implementation Mocks.
 
 **Call-site sweep audit (Round 4 enumeration; Phase 1
 performs the migration).**
@@ -5093,25 +5265,92 @@ C5 is the load-bearing trait-dispatch commit; existing
 `Engine`-driven refresh paths execute against the trait surface
 after C5 lands.
 
-**Commit C6 — `MockRefresh` test substrate + `replace_refresh`
-test-only setter.**
+**Commit C6 — `FaultInjecting<R: RefreshEngine>` test substrate
++ retroactive Mock-X cleanup of `MockLedger` and `MockDaemon`
+(Round 5 substrate amendment, 2026-05-20).**
 
-Mirrors `MockDaemon` / `MockLedger` from PR 1 / PR 2:
+The prior Round-4 plan was `MockRefresh` mirroring `MockDaemon` /
+`MockLedger`. The Round 5 amendment (Status banner above; §6
+no-Mock substrate inheritance discipline) replaces it with the
+binding no-Mock substrate shape PR 3 §2.1.2 settled and lands
+the FOLLOWUPS-scheduled retroactive cleanups of `MockLedger`
+and `MockDaemon` in the same substrate-pass. The amendment
+disposition (architectural-integrity-now per
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc))
+prevents PR 4 from compounding Mock-X debt and closes two
+FOLLOWUPS entries
+([`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) lines 578–620).
 
-- `pub struct MockRefresh` in
-  `rust/shekyl-engine-core/src/engine/mock_refresh.rs` (gated
-  behind `#[cfg(any(test, feature = "test-helpers"))]`)
-  implementing `RefreshEngine` with a queued response shape
-  for failure injection (`RefreshError::Cancelled`,
-  `RefreshError::Io`, `RefreshError::MalformedScanResult`).
-- `Engine::replace_refresh(&mut self, refresh: R)`
-  test-only setter (gated behind the same feature).
-- The mock exercises the trait surface; it does **not**
-  reproduce `LocalRefresh`'s producer body. Tests that need
-  the production producer-body still consume `LocalRefresh`.
+C6 is decomposed into three sub-commits per bisection discipline
+(per the `90-commits.mdc` scope-per-commit rule and the PR 4
+precedent set by C5 / C5a / C5b / C5β):
 
-CI runs the existing test suite against the trait-dispatched
-`Engine`; no behavioural regression expected.
+- **C6α — `FaultInjecting<R: RefreshEngine>` wrapper.**
+  Introduces the composable wrapper at
+  `rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs`
+  (gated behind `#[cfg(any(test, feature = "test-helpers"))]`).
+  Holds a queue of `RefreshError` injections (`Cancelled`,
+  `Io`, `InternalInvariantViolation { context: &'static str }`).
+  `impl<R: RefreshEngine> RefreshEngine for FaultInjecting<R>`
+  pops the head injection if non-empty (returns the error
+  without invoking the inner producer) or delegates to
+  `self.inner.produce_scan_result(...)` and forwards the
+  result. `Engine::replace_refresh(&mut self, refresh: R)`
+  test-only setter on `Engine<S, D, L, R>` gated behind the
+  same feature. CI gate: existing test suite against the
+  trait-dispatched `Engine` plus a smoke test of the wrapper
+  itself.
+- **C6β — `FaultInjecting<L: LedgerEngine>` extraction +
+  `LocalLedger::from_test_blocks(...)` constructor
+  (closes [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) lines 578–604).**
+  Extracts the existing `MockLedger::queue_concurrent_mutation`
+  body ([`engine/test_support.rs:773`](../../rust/shekyl-engine-core/src/engine/test_support.rs))
+  into the new wrapper at
+  `rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs`
+  (same `#[cfg(...)]` gating). Adds
+  `LocalLedger::from_test_blocks(blocks: Vec<Block>) -> Self`
+  (deterministic test-block fixtures, gated by `#[cfg(test)]`)
+  replacing `MockLedger::new(...)`. Rewires
+  `engine/test_support.rs` callers and all per-test instantiations.
+  Per §6 no-Mock substrate inheritance discipline: current
+  `MockLedger` is structurally already a `FaultInjecting<
+  LocalLedger>`-shaped wrapper (its merge path delegates to the
+  canonical `apply_scan_result_to_state`); the cleanup is
+  mostly extraction-and-rename, not a re-implementation.
+- **C6γ — `MockDaemon` → `TestDaemon` rename
+  (closes [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) lines 606–620).**
+  Mechanical rename of the `MockDaemon` type and all callers in
+  [`engine/test_support.rs`](../../rust/shekyl-engine-core/src/engine/test_support.rs)
+  and tests. The structural shape is unchanged — `MockDaemon`
+  is already an alternative real implementation that serves
+  canned / cached test responses without network connectivity;
+  the rename signals that shape correctly per PR 3 §2.1.2.
+  Bundled with C6α/C6β because PR 4's substrate-pass is the
+  FOLLOWUPS-named landing slot for both cleanups.
+
+C6 (composite) is the test-substrate commit; the existing test
+suite runs against the trait-dispatched `Engine` after C6
+lands, with all failure injection routed through the composable
+`FaultInjecting<...>` wrappers and no parallel-implementation
+Mocks remaining in the engine-core crate.
+
+**Re-iterated no-Mock rationale (per PR 3 §2.1.2 and §6 above):**
+the prior `MockRefresh` plan would have re-instantiated the
+parallel-implementation anti-pattern PR 3 rejected as a category.
+Building it would (1) add attack surface via test-only types in
+production code; (2) conflate test-controlled inputs to real
+implementations with substitute implementations under the same
+`MockX` naming; (3) carry forward an inherited-Monero pattern
+that has produced real bugs in the inherited codebase; (4)
+foreclose composition with future `RefreshEngine` implementors
+(each implementor would need its own Mock variant); (5) encourage
+tests to verify against fake producer semantics rather than
+real `LocalRefresh` semantics, degrading the test suite's
+coverage claim. The no-Mock substrate shape avoids all five
+failure modes by construction: tests exercise the real
+`LocalRefresh` producer body through the `FaultInjecting<...>`
+wrapper, with deterministic failure injection at the trait
+boundary rather than as a parallel implementation of the trait.
 
 **Commit C7 — Hybrid retry test + property tests
 (`AssertionSink` / `PanickingSink`).**
@@ -5124,7 +5363,10 @@ Lands the §6 Test-substrate-preservation deliverables:
   cancellation-checkpoint split (checkpoints 2/3 in the
   trait body; checkpoints 1/4 in the orchestrator) and the
   retry-loop's `ConcurrentMutation` retry path against
-  `MockRefresh`-injected mutations. Mirrors PR 2's
+  `FaultInjecting<LocalLedger>`-injected mutations
+  (Round 5 amendment; replaces the prior `MockRefresh`-injected
+  reference per the no-Mock substrate inheritance discipline).
+  Mirrors PR 2's
   `hybrid_apply_scan_result_retries_on_concurrent_mutation`
   shape.
 - `pub struct AssertionSink` (test-only) implementing
@@ -5143,8 +5385,11 @@ Lands the §6 Test-substrate-preservation deliverables:
   unwinds without corrupting `LocalRefresh` interior state.
 
 C7 is the property-test commit; the hybrid test is
-end-to-end against `Engine<MockSigner, MockDaemon,
-MockLedger, MockRefresh>`. CI exercises both classes.
+end-to-end against `Engine<SoloSigner, TestDaemon,
+FaultInjecting<LocalLedger>, FaultInjecting<LocalRefresh>>`
+(Round 5 amendment; production implementors with failure
+injection via composable wrappers, per the no-Mock substrate
+inheritance discipline). CI exercises both classes.
 
 **Commit C8 — Docs propagation + CHANGELOG.**
 
@@ -5175,6 +5420,13 @@ Final commit; doc-only:
   entries** also referenced: the consumer-actor-PR
   aggregator-republisher CI lint (F5) and the diagnostic-stream
   spec doc per-class projection-type formalization (F9).
+  **Round 5 substrate amendment closures (2026-05-20):** the
+  two retroactive Mock-X cleanup entries (`MockLedger` →
+  `FaultInjecting<LocalLedger>` + `LocalLedger::from_test_blocks`
+  at FOLLOWUPS lines 578–604; `MockDaemon` → `TestDaemon` rename
+  at lines 606–620) are closed by PR 4 C6α/C6β/C6γ; the
+  FOLLOWUPS entries are marked closed with the PR 4 merge SHA
+  as the closure anchor.
 - The `feat/stage-1-pr4-refresh-engine` branch's PR
   description references this §7.X commit list as the
   contract; CI green at every commit per the Phase 1

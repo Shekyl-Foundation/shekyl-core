@@ -8141,6 +8141,87 @@
 
 ### Documentation
 
+- **Stage 1 PR 4 (`RefreshEngine`) — Round 5 substrate-decision
+  amendment (no-Mock substrate for C6).**
+  (`feat/stage-1-pr4-refresh-engine`, 2026-05-20). Doc-only
+  amendment to
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  landed mid-Phase-1 between C5β (legacy producer scaffolding
+  deletion) and C6 (test substrate). The Round 4 §7.X C6 plan
+  ("`MockRefresh` test substrate; mirrors `MockDaemon` /
+  `MockLedger` from PR 1 / PR 2") is **stale prose** from before
+  PR 3 §2.1.2's Mock-X rejection landed; building `MockRefresh`
+  would re-instantiate the parallel-implementation anti-pattern
+  PR 3 rejected as a category and compound the Mock-X debt that
+  [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) already scheduled to be
+  paid down. The amendment dispositions:
+
+  1. **C6 replaces `MockRefresh` with `FaultInjecting<R:
+     RefreshEngine>`.** Composable wrapper around the production
+     `LocalRefresh` (landed at C4); queues `RefreshError::Cancelled`
+     / `Io` / `InternalInvariantViolation` for failure injection
+     at the trait boundary; composes against any current or future
+     `R` implementor without per-impl parallel-Mock proliferation.
+
+  2. **Retroactive Mock-X cleanup of `MockLedger` lands in PR 4
+     C6β** (not deferred to PR 5). Extracts the existing
+     `MockLedger` body into `FaultInjecting<L: LedgerEngine>`;
+     adds `LocalLedger::from_test_blocks(...)` constructor
+     replacing the parallel-implementation `MockLedger::new(...)`
+     surface. Current `MockLedger` is structurally already a
+     `FaultInjecting<LocalLedger>`-shaped wrapper (delegating to
+     the canonical `apply_scan_result_to_state`); the cleanup is
+     mostly extraction-and-rename, not a re-implementation.
+     Closes [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) lines 578–604.
+
+  3. **`MockDaemon` → `TestDaemon` rename lands in PR 4 C6γ**
+     alongside C6β. Mechanical rename only — the structural
+     shape is already correct (alternative real implementation
+     serving canned / cached test responses without network
+     connectivity); only the `Mock` naming was the bug. Closes
+     [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) lines 606–620.
+
+  The amendment is **not** a round reopening per the §7 amendment
+  framing: it does not revisit any trait-surface contract pin,
+  attack-surface disposition, or commit-decomposition ordering
+  decision; it replaces stale C6 substrate prose with the binding
+  no-Mock shape PR 3 §2.1.2 settled. The α-disposition, the
+  F1–F13 dispositions, and the C0–C5 / C7 / C8 commit prose are
+  all unchanged.
+
+  The no-Mock rationale is re-iterated explicitly in §6 of the
+  design doc (new "Test-substrate discipline — no-Mock substrate
+  inheritance from PR 3 §2.1.2" subsection) and in the §7.X C6
+  prose, naming the five failure modes the Mock-X pattern
+  instantiates: (1) attack surface from test-only types in
+  production code; (2) conflation of test-controlled inputs to
+  real implementations with substitute implementations; (3)
+  inherited-Monero pattern that has produced real bugs in the
+  inherited codebase; (4) foreclosure of composition with future
+  trait implementors; (5) tests verifying against fake semantics
+  rather than real semantics, degrading the coverage claim.
+
+  Rationale anchor:
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  §"cost-benefit-defer-to-later anti-pattern" names the
+  architectural-integrity-now disposition as the default for
+  security-load-bearing substrate work pre-genesis;
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  pre-genesis discount applies. Cross-references:
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §2.1.2 (Mock-X rejection rationale + five named failure modes),
+  §2.1.5 (four-pattern pre-flight checklist future per-trait PRs
+  inherit).
+
+  Files touched (doc-only):
+  `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` (Status banner;
+  new §6 no-Mock substrate inheritance discipline subsection;
+  test-substrate preservation list rewritten; §7.X C6/C7/C8 prose
+  updated), `docs/FOLLOWUPS.md` (two retroactive Mock-X cleanup
+  entries pinned to PR 4 C6β/C6γ; fix the prior bug that called
+  PR 4 `PendingTxEngine` — PR 4 is `RefreshEngine`; PR 5 is
+  `PendingTxEngine`), and this CHANGELOG entry.
+
 - **Stage 1 PR 3 (`KeyEngine`) M3a pre-flight closures landed.**
   The four open `STAGE_1_PR_3_KEY_ENGINE.md` dispositions Round 4
   deliberately deferred — the handle-model emergent attack
