@@ -165,7 +165,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 use zeroize::Zeroizing;
 
-use super::diagnostics::{DiagnosticSink, MalformedKind, RefreshDiagnostic, SuppressedClass};
+use super::diagnostics::{
+    DiagnosticSink, MalformedKind, ProtocolErrorKind, RefreshDiagnostic, SuppressedClass,
+};
 use super::error::{IoError, RefreshError};
 use super::refresh::{LedgerSnapshot, RefreshOptions, RefreshPhase, RefreshProgress};
 use super::traits::daemon::DaemonEngine;
@@ -530,14 +532,22 @@ impl RefreshEngine for LocalRefresh {
                 return Err(LocalRefreshError::Cancelled);
             }
 
-            // Daemon-tip read. Producer-side classifier for
-            // RpcError → DaemonProtocolError lands at C5; until
-            // then, RPC failure surfaces as Io without an
-            // emission.
+            // Daemon-tip read. Per §5.4.7 R6 memory-amplifier
+            // closure: the upstream `RpcError`'s `String` payload
+            // is NOT propagated; the bounded
+            // `ProtocolErrorKind` classification is emitted via
+            // the rate-limited diagnostic stream (per-block
+            // ceiling + F13-S latch handled by `emit_state`).
             let tip = match daemon.get_height().await {
                 Ok(t) => t as u64,
                 Err(e) => {
                     error!(error = %e, "LocalRefresh: get_height failed");
+                    emit_state.try_emit(
+                        diagnostics,
+                        RefreshDiagnostic::DaemonProtocolError {
+                            kind: classify_rpc_error(&e),
+                        },
+                    );
                     return Err(LocalRefreshError::Io);
                 }
             };
@@ -580,7 +590,9 @@ impl RefreshEngine for LocalRefresh {
                     return Err(LocalRefreshError::Cancelled);
                 }
 
-                let scannable = fetch_block_with_retry(daemon, h, &cancel).await?;
+                let scannable =
+                    fetch_block_with_retry(daemon, h, &cancel, &mut emit_state, diagnostics)
+                        .await?;
 
                 // Reorg detection (only when no reorg recorded yet
                 // this call; after a fork is decided, subsequent
@@ -594,8 +606,15 @@ impl RefreshEngine for LocalRefresh {
                                 "LocalRefresh: chain reorg detected at parent of {h}, walking fork point",
                             );
 
-                            let fork_height =
-                                find_fork_point(daemon, &snapshot, h - 1, &cancel).await?;
+                            let fork_height = find_fork_point(
+                                daemon,
+                                &snapshot,
+                                h - 1,
+                                &cancel,
+                                &mut emit_state,
+                                diagnostics,
+                            )
+                            .await?;
                             let depth =
                                 u32::try_from(h.saturating_sub(fork_height)).unwrap_or(u32::MAX);
                             emit_state.try_emit(
@@ -800,6 +819,77 @@ const fn scanner_error_to_malformed_kind(_err: &ScanError) -> MalformedKind {
     MalformedKind::InvalidBlockStructure
 }
 
+/// Classify an upstream [`RpcError`] into the bounded
+/// [`ProtocolErrorKind`] tag without propagating the underlying
+/// `String` payload.
+///
+/// Per [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §4 Phase 0e
+/// and §5.4.7 R6 memory-amplifier closure (binding): the
+/// producer's observability stream MUST carry only the bounded
+/// variant-tag classification of `RpcError`; the `String` payload
+/// that `InternalError(String)` / `ConnectionError(String)` /
+/// `InvalidNode(String)` carry is dropped at this boundary so an
+/// adversarial daemon cannot drive memory amplification into the
+/// wallet's diagnostic stream.
+///
+/// # Refresh-reachable mapping
+///
+/// The five [`ProtocolErrorKind`] variants enumerate the
+/// refresh-reachable upstream subset confirmed by the Round 4
+/// call-site audit (`get_height` + `get_scannable_block_by_number`
+/// are the only refresh-issued RPCs):
+///
+/// - [`RpcError::ConnectionError`] → [`ProtocolErrorKind::ConnectionError`]
+/// - [`RpcError::InternalError`] → [`ProtocolErrorKind::InternalError`]
+/// - [`RpcError::InvalidNode`] → [`ProtocolErrorKind::InvalidNode`]
+/// - [`RpcError::InvalidTransaction`] → [`ProtocolErrorKind::InvalidTransaction`]
+/// - [`RpcError::PrunedTransaction`] → [`ProtocolErrorKind::PrunedTransaction`]
+///
+/// # Defensive mapping for non-refresh-reachable variants
+///
+/// `RpcError::TransactionsNotFound` / `RpcError::InvalidFee` /
+/// `RpcError::InvalidPriority` are not reachable from
+/// `get_height` / `get_scannable_block_by_number` per the
+/// Round 4 audit — they belong to the future `PendingTxEngine`
+/// send-tx path. If they nonetheless surface from this site
+/// (e.g., upstream RPC client behavior change), the defensive
+/// classification is [`ProtocolErrorKind::InvalidNode`] — "the
+/// daemon returned an envelope the producer did not expect from
+/// this RPC method." [`ProtocolErrorKind`] is
+/// `#[non_exhaustive]`; PR 5's `PendingTxEngine` extraction may
+/// grow the variant set additively.
+///
+/// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
+//
+// `clippy::match_same_arms` would have us merge the audit-
+// confirmed `InvalidNode(_)` arm with the defensive
+// `TransactionsNotFound | InvalidFee | InvalidPriority` arm
+// because both map to `ProtocolErrorKind::InvalidNode`. The
+// separation is the load-bearing discipline here: the first arm
+// is the Round-4-audit-confirmed mapping for a refresh-reachable
+// variant; the second is the defensive fallback for variants
+// that the audit confirmed are NOT refresh-reachable. Merging
+// them would lose the audit boundary that the rustdoc records
+// and that future maintainers need to see when PR 5's
+// `PendingTxEngine` extraction reaches this site.
+#[allow(clippy::match_same_arms)]
+const fn classify_rpc_error(err: &RpcError) -> ProtocolErrorKind {
+    match err {
+        RpcError::ConnectionError(_) => ProtocolErrorKind::ConnectionError,
+        RpcError::InternalError(_) => ProtocolErrorKind::InternalError,
+        RpcError::InvalidNode(_) => ProtocolErrorKind::InvalidNode,
+        RpcError::InvalidTransaction(_) => ProtocolErrorKind::InvalidTransaction,
+        RpcError::PrunedTransaction => ProtocolErrorKind::PrunedTransaction,
+        // Non-refresh-reachable upstream variants
+        // (`TransactionsNotFound` / `InvalidFee` /
+        // `InvalidPriority`) defensively classify as
+        // `InvalidNode`; see rustdoc.
+        RpcError::TransactionsNotFound(_) | RpcError::InvalidFee | RpcError::InvalidPriority => {
+            ProtocolErrorKind::InvalidNode
+        }
+    }
+}
+
 /// Walk backwards from `from_height` to find the highest height
 /// at which the daemon's reported block hash matches the
 /// wallet's snapshot. Returns `(matching_height + 1)` so the
@@ -807,11 +897,19 @@ const fn scanner_error_to_malformed_kind(_err: &ScanError) -> MalformedKind {
 ///
 /// Stops at height `1` (genesis) if no match is found in the
 /// window. Honours cancellation between fetch attempts.
+///
+/// The `emit_state` / `diagnostics` parameters thread through to
+/// [`fetch_block_with_retry`]'s per-attempt `RpcError`
+/// classification so producer-side `DaemonProtocolError` events
+/// emit under the per-block ceiling + F13-S latch discipline
+/// during reorg-walk traversal.
 async fn find_fork_point<R: Rpc>(
     rpc: &R,
     snapshot: &LedgerSnapshot,
     from_height: u64,
     cancel: &CancellationToken,
+    emit_state: &mut EmitState,
+    diagnostics: &dyn DiagnosticSink,
 ) -> Result<u64, LocalRefreshError> {
     let mut h = from_height;
     loop {
@@ -827,7 +925,7 @@ async fn find_fork_point<R: Rpc>(
             return Ok(h + 1);
         };
 
-        let daemon_block = fetch_block_with_retry(rpc, h, cancel).await?;
+        let daemon_block = fetch_block_with_retry(rpc, h, cancel, emit_state, diagnostics).await?;
         if daemon_block.block.hash() == stored_hash {
             return Ok(h + 1);
         }
@@ -843,10 +941,20 @@ async fn find_fork_point<R: Rpc>(
 /// Fetch a block at `height` with exponential backoff on
 /// transient RPC failures. Cancellation is honoured both before
 /// each attempt and during the inter-attempt backoff.
+///
+/// On any per-attempt `RpcError` (retry-eligible or terminal),
+/// emits one [`RefreshDiagnostic::DaemonProtocolError`] carrying
+/// the bounded [`classify_rpc_error`] classification. The
+/// emission flows through `emit_state.try_emit`, so the per-block
+/// ceiling + F13-S latch (§5.4.8 #5) close the
+/// emission-cadence covert channel when the retry budget triggers
+/// many emissions in a single block window.
 async fn fetch_block_with_retry<R: Rpc>(
     rpc: &R,
     height: u64,
     cancel: &CancellationToken,
+    emit_state: &mut EmitState,
+    diagnostics: &dyn DiagnosticSink,
 ) -> Result<ScannableBlock, LocalRefreshError> {
     let height_usize =
         usize::try_from(height).expect("block height fits in usize on 64-bit targets");
@@ -860,13 +968,18 @@ async fn fetch_block_with_retry<R: Rpc>(
         match rpc.get_scannable_block_by_number(height_usize).await {
             Ok(b) => return Ok(b),
             Err(e) if attempt + 1 < MAX_BLOCK_FETCH_RETRIES => {
-                let _: &RpcError = &e;
                 warn!(
                     height,
                     attempt = attempt + 1,
                     max = MAX_BLOCK_FETCH_RETRIES,
                     error = %e,
                     "LocalRefresh::fetch_block_with_retry: block fetch failed, retrying",
+                );
+                emit_state.try_emit(
+                    diagnostics,
+                    RefreshDiagnostic::DaemonProtocolError {
+                        kind: classify_rpc_error(&e),
+                    },
                 );
                 tokio::select! {
                     () = cancel.cancelled() => return Err(LocalRefreshError::Cancelled),
@@ -880,6 +993,12 @@ async fn fetch_block_with_retry<R: Rpc>(
                     error = %e,
                     "LocalRefresh::fetch_block_with_retry: block fetch failed after {} attempts",
                     MAX_BLOCK_FETCH_RETRIES,
+                );
+                emit_state.try_emit(
+                    diagnostics,
+                    RefreshDiagnostic::DaemonProtocolError {
+                        kind: classify_rpc_error(&e),
+                    },
                 );
                 return Err(LocalRefreshError::Io);
             }
@@ -1055,5 +1174,79 @@ mod tests {
         // would require an InvalidScannableBlock instance.
         // Coverage is provided by C7's `AssertionSink` property
         // tests once they land.
+    }
+
+    /// `classify_rpc_error` maps each refresh-reachable
+    /// [`RpcError`] variant to the Round-4-audit-confirmed
+    /// [`ProtocolErrorKind`] tag per §4 Phase 0e.
+    ///
+    /// The String payloads on `InternalError` / `ConnectionError`
+    /// / `InvalidNode` are NOT inspected by the classifier — the
+    /// §5.4.7 R6 memory-amplifier closure binds this site.
+    #[test]
+    fn classify_rpc_error_refresh_reachable_subset() {
+        assert_eq!(
+            classify_rpc_error(&RpcError::ConnectionError(String::new())),
+            ProtocolErrorKind::ConnectionError
+        );
+        assert_eq!(
+            classify_rpc_error(&RpcError::InternalError(String::new())),
+            ProtocolErrorKind::InternalError
+        );
+        assert_eq!(
+            classify_rpc_error(&RpcError::InvalidNode(String::new())),
+            ProtocolErrorKind::InvalidNode
+        );
+        assert_eq!(
+            classify_rpc_error(&RpcError::InvalidTransaction([0u8; 32])),
+            ProtocolErrorKind::InvalidTransaction
+        );
+        assert_eq!(
+            classify_rpc_error(&RpcError::PrunedTransaction),
+            ProtocolErrorKind::PrunedTransaction
+        );
+    }
+
+    /// `classify_rpc_error` defensively maps the non-refresh-
+    /// reachable upstream variants (`TransactionsNotFound` /
+    /// `InvalidFee` / `InvalidPriority`) to
+    /// [`ProtocolErrorKind::InvalidNode`] per the rustdoc
+    /// disposition. These variants belong to PR 5's
+    /// `PendingTxEngine` send-tx path; if PR 5 needs distinct
+    /// tagging, [`ProtocolErrorKind`] grows additively under
+    /// `#[non_exhaustive]`.
+    #[test]
+    fn classify_rpc_error_non_refresh_reachable_subset_falls_back_to_invalid_node() {
+        assert_eq!(
+            classify_rpc_error(&RpcError::TransactionsNotFound(vec![])),
+            ProtocolErrorKind::InvalidNode
+        );
+        assert_eq!(
+            classify_rpc_error(&RpcError::InvalidFee),
+            ProtocolErrorKind::InvalidNode
+        );
+        assert_eq!(
+            classify_rpc_error(&RpcError::InvalidPriority),
+            ProtocolErrorKind::InvalidNode
+        );
+    }
+
+    /// The Round-4-audited `ProtocolErrorKind` set is exhaustive
+    /// over the refresh-reachable upstream subset. Adding a
+    /// variant to upstream [`RpcError`] must not produce a
+    /// silently-falling-through case at the classifier — the
+    /// classifier's `match` is exhaustive (no `_` arm) so a new
+    /// upstream variant breaks the build until C5b's
+    /// classification is extended deliberately.
+    #[test]
+    fn classify_rpc_error_is_exhaustive_at_the_match_arm() {
+        // This compiles only because `classify_rpc_error` is
+        // exhaustive against every `RpcError` variant. If
+        // upstream grows a new variant the build fails here
+        // (and at `classify_rpc_error`'s definition site) until
+        // the new variant is given an explicit classification.
+        fn _exhaustive(e: &RpcError) -> ProtocolErrorKind {
+            classify_rpc_error(e)
+        }
     }
 }
