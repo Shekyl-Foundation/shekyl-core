@@ -139,13 +139,11 @@ namespace tools
         MAP_JON_RPC_WE("rescan_spent",       on_rescan_spent,       wallet_rpc::COMMAND_RPC_RESCAN_SPENT)
         MAP_JON_RPC_WE("start_mining",       on_start_mining,       wallet_rpc::COMMAND_RPC_START_MINING)
         MAP_JON_RPC_WE("stop_mining",        on_stop_mining,        wallet_rpc::COMMAND_RPC_STOP_MINING)
-        MAP_JON_RPC_WE("get_languages",      on_get_languages,      wallet_rpc::COMMAND_RPC_GET_LANGUAGES)
         MAP_JON_RPC_WE("create_wallet",      on_create_wallet,      wallet_rpc::COMMAND_RPC_CREATE_WALLET)
         MAP_JON_RPC_WE("open_wallet",        on_open_wallet,        wallet_rpc::COMMAND_RPC_OPEN_WALLET)
         MAP_JON_RPC_WE("close_wallet",       on_close_wallet,       wallet_rpc::COMMAND_RPC_CLOSE_WALLET)
         MAP_JON_RPC_WE("change_wallet_password",        on_change_wallet_password,        wallet_rpc::COMMAND_RPC_CHANGE_WALLET_PASSWORD)
         MAP_JON_RPC_WE("generate_from_keys", on_generate_from_keys, wallet_rpc::COMMAND_RPC_GENERATE_FROM_KEYS)
-        MAP_JON_RPC_WE("restore_deterministic_wallet",      on_restore_deterministic_wallet,      wallet_rpc::COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET)
         MAP_JON_RPC_WE("validate_address",   on_validate_address,   wallet_rpc::COMMAND_RPC_VALIDATE_ADDRESS)
         MAP_JON_RPC_WE("set_daemon",         on_set_daemon,         wallet_rpc::COMMAND_RPC_SET_DAEMON)
         MAP_JON_RPC_WE("set_log_level",      on_set_log_level,      wallet_rpc::COMMAND_RPC_SET_LOG_LEVEL)
@@ -230,13 +228,11 @@ namespace tools
       bool on_rescan_spent(const wallet_rpc::COMMAND_RPC_RESCAN_SPENT::request& req, wallet_rpc::COMMAND_RPC_RESCAN_SPENT::response& res, epee::json_rpc::error& er, const connection_context *ctx = NULL);
       bool on_start_mining(const wallet_rpc::COMMAND_RPC_START_MINING::request& req, wallet_rpc::COMMAND_RPC_START_MINING::response& res, epee::json_rpc::error& er, const connection_context *ctx = NULL);
       bool on_stop_mining(const wallet_rpc::COMMAND_RPC_STOP_MINING::request& req, wallet_rpc::COMMAND_RPC_STOP_MINING::response& res, epee::json_rpc::error& er, const connection_context *ctx = NULL);
-      bool on_get_languages(const wallet_rpc::COMMAND_RPC_GET_LANGUAGES::request& req, wallet_rpc::COMMAND_RPC_GET_LANGUAGES::response& res, epee::json_rpc::error& er, const connection_context *ctx = NULL);
       bool on_create_wallet(const wallet_rpc::COMMAND_RPC_CREATE_WALLET::request& req, wallet_rpc::COMMAND_RPC_CREATE_WALLET::response& res, epee::json_rpc::error& er, const connection_context *ctx = NULL);
       bool on_open_wallet(const wallet_rpc::COMMAND_RPC_OPEN_WALLET::request& req, wallet_rpc::COMMAND_RPC_OPEN_WALLET::response& res, epee::json_rpc::error& er, const connection_context *ctx = NULL);
       bool on_close_wallet(const wallet_rpc::COMMAND_RPC_CLOSE_WALLET::request& req, wallet_rpc::COMMAND_RPC_CLOSE_WALLET::response& res, epee::json_rpc::error& er, const connection_context *ctx = NULL);
       bool on_change_wallet_password(const wallet_rpc::COMMAND_RPC_CHANGE_WALLET_PASSWORD::request& req, wallet_rpc::COMMAND_RPC_CHANGE_WALLET_PASSWORD::response& res, epee::json_rpc::error& er, const connection_context *ctx = NULL);
       bool on_generate_from_keys(const wallet_rpc::COMMAND_RPC_GENERATE_FROM_KEYS::request& req, wallet_rpc::COMMAND_RPC_GENERATE_FROM_KEYS::response& res, epee::json_rpc::error& er, const connection_context *ctx = NULL);
-      bool on_restore_deterministic_wallet(const wallet_rpc::COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET::request& req, wallet_rpc::COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET::response& res, epee::json_rpc::error& er, const connection_context *ctx = NULL);
       bool on_validate_address(const wallet_rpc::COMMAND_RPC_VALIDATE_ADDRESS::request& req, wallet_rpc::COMMAND_RPC_VALIDATE_ADDRESS::response& res, epee::json_rpc::error& er, const connection_context *ctx = NULL);
       bool on_set_daemon(const wallet_rpc::COMMAND_RPC_SET_DAEMON::request& req, wallet_rpc::COMMAND_RPC_SET_DAEMON::response& res, epee::json_rpc::error& er, const connection_context *ctx = NULL);
       bool on_set_log_level(const wallet_rpc::COMMAND_RPC_SET_LOG_LEVEL::request& req, wallet_rpc::COMMAND_RPC_SET_LOG_LEVEL::response& res, epee::json_rpc::error& er, const connection_context *ctx = NULL);

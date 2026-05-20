@@ -204,6 +204,40 @@ build.
 `wallet2_ffi_json_rpc` dispatcher (9 classical multisig methods were removed;
 FROST multisig is handled by native Rust handlers, see below):
 
+> **Note (2026-05-19, Phase 2 of the Electrum-words removal series).**
+> PR #58 deleted `restore_deterministic_wallet` and `get_languages`
+> from the **C++ `wallet_rpc_server` HTTP JSON-RPC surface** (the
+> `simplewallet`-style HTTP endpoint), but **not** from the
+> `wallet2_ffi_json_rpc` dispatcher tabulated below. The FFI
+> dispatcher (`src/wallet/wallet2_ffi.cpp:3477` / `:3511`) still
+> routes both methods, and three dispatched methods —
+> `create_wallet`, `restore_deterministic_wallet`, and
+> `generate_from_keys` — still parse a `language` parameter. The
+> dispatcher's defaulting and the Phase 1 hard-error gating differ
+> per method (file references are `src/wallet/wallet2_ffi.cpp`):
+>
+> - `create_wallet`: dispatcher (`:3493`) defaults `language` to
+>   `"English"`; the Phase 1 hard-error gate at
+>   `wallet2_ffi_create_wallet` (`:315-321`) rejects any non-empty
+>   value, so dispatcher callers must pass `language: ""`
+>   explicitly to succeed.
+> - `restore_deterministic_wallet`: dispatcher (`:3524`) defaults
+>   `language` to `"English"`. There is **no** Phase 1 hard-error
+>   gate on `wallet2_ffi_restore_deterministic_wallet`; the function
+>   still routes through `crypto::ElectrumWords::words_to_bytes`
+>   (`:423`) and is scheduled for outright deletion in Phase 3.
+> - `generate_from_keys`: dispatcher (`:3543`) defaults `language`
+>   to the empty string; the Phase 1 hard-error gate at
+>   `wallet2_ffi_generate_from_keys` (`:490-496`) accepts that
+>   default, so callers that omit `language` succeed.
+>
+> Phase 3 deletes both methods plus the `language` parameter from
+> this surface as well; at that point the count drops to 87.
+> Until then, this table is the source of truth for the FFI
+> dispatcher's coverage. See
+> [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./design/ELECTRUM_WORDS_REMOVAL_PLAN.md)
+> Phase 2 / Phase 3 for the multi-surface sequencing.
+
 | Category | Methods |
 |----------|---------|
 | Lifecycle | `create_wallet`, `open_wallet`, `close_wallet`, `stop_wallet`, `store`, `change_wallet_password` |

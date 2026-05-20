@@ -239,7 +239,7 @@ See §4.10 point #1 for the full disposition rationale.
 | `get_wallet_words` handler | `src/wallet/wallet_rpc_server.cpp:2214,2220` | handler body | Delete (Phase 2) |
 | Language-validation branches in surviving handlers | `src/wallet/wallet_rpc_server.cpp:3661, 4082` | `is_valid_language(req.language)` validation branches in `on_create_wallet` and `on_generate_from_keys` | Delete (Phase 2) |
 | `set_seed_language` calls in surviving handlers | `src/wallet/wallet_rpc_server.cpp:3688, 4088` | `wal->set_seed_language(req.language)` calls in `on_create_wallet` and `on_generate_from_keys` | Delete the call sites (Phase 2). These are paired with the validation-branch deletions above; deleting only the validation branch would leave the `set_seed_language` call referencing the about-to-be-deleted `req.language` field. |
-| `language` fields on surviving RPC request structs | `src/wallet/wallet_rpc_server_commands_defs.h` (`COMMAND_RPC_CREATE_WALLET::request`, `COMMAND_RPC_GENERATE_FROM_KEYS::request`) | request-struct field | Delete the `language` field from both structs (Phase 2). Request-schema change forces JSON-parse-error on any caller that supplies a `language` field — matches the §4.3 hard-error discipline at the FFI layer; consumers that today pass `language="English"` see immediate breakage rather than silent ignore. |
+| `language` fields on surviving RPC request structs | `src/wallet/wallet_rpc_server_commands_defs.h` (`COMMAND_RPC_CREATE_WALLET::request`, `COMMAND_RPC_GENERATE_FROM_KEYS::request`) | request-struct field | Delete the `language` field from both structs (Phase 2). epee KV-serialization is pull-based, so dropping the field does **not** force a JSON-parse-error: keys the consumer struct does not declare are silently ignored, and a caller that still sends `language="English"` sees the value dropped on the floor with no error. The §4.3 hard-error discipline is enforced one layer down at the FFI surface (Phase 1 `wallet2_ffi_create_wallet` / `wallet2_ffi_generate_from_keys` reject non-empty `language`); the wallet-RPC handler does not transit that gate (`wallet_rpc_server::on_create_wallet` calls `wallet2::generate()` directly). The load-bearing property at the wallet-RPC layer is therefore **structural unreachability** of the field from request parsing, not runtime rejection. Phase 3 collapses both surfaces by deleting the FFI parameter entirely. |
 | `on_restore_deterministic_wallet` handler body | `src/wallet/wallet_rpc_server.cpp:4162–4225` | `words_to_bytes`, `get_is_old_style_seed`, `is_valid_language`, `bytes_to_words` calls | Delete (Phase 2) as part of the whole `COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET` handler deletion. |
 | `on_stop_background_sync` seed-based recovery branch | `src/wallet/wallet_rpc_server.cpp:2316–2366` | the entire `if (!req.seed.empty()) { … }` block + `seed` / `seed_offset` fields on `COMMAND_RPC_STOP_BACKGROUND_SYNC::request` | **Delete the whole block** (Phase 2) including the request-struct field deletions. Comment at lines 2345–2362 documents this branch as mainnet-broken-today; password-only `stop_background_sync` survives. BIP39 seed-recovery replacement is a `docs/FOLLOWUPS.md` V3.2 item (not B-1 scope). |
 
@@ -273,19 +273,42 @@ See §4.10 point #1 for the full disposition rationale.
 Test-migration scope spans two phases, mirroring the two consumer
 surfaces (RPC at Phase 2 and FFI at Phase 3):
 
-- **Phase 2 — RPC-consumer migrations** (per the Phase 2 work-item
-  list, §2.4 G7). Twelve Python functional tests under
-  `tests/functional_tests/` today call
-  `restore_deterministic_wallet(seed=..., language=...)`. Each
-  migrates to `generate_from_keys(spend_key=..., view_key=...,
-  address=...)`, with the spend / view secret keys pre-derived
-  from the test's known fixed 25-word seed and hardcoded as hex
-  constants in the test source. Three sites in
-  `tests/functional_tests/transfer.py` call
-  `stop_background_sync(seed=...)`; each converts to
-  `stop_background_sync(password=...)` per the surviving
-  password-based code path. These migrations land in the same
-  Phase 2 PR as the RPC-deletion changes.
+- **Phase 2 — RPC-consumer migration disposition reassessed at
+  implementation time: deletion of `tests/functional_tests/`
+  outright instead of migration** (per the Phase 2 PR's
+  pre-flight findings, 2026-05-19, recorded in
+  `ELECTRUM_WORDS_REMOVAL_PLAN.md` Phase 2 work item 9).
+
+  This substrate's earlier draft proposed migrating 12 (actually
+  28) `restore_deterministic_wallet(seed=..., language=...)`
+  call sites and 3 (actually 4) `stop_background_sync(seed=...)`
+  sites under `tests/functional_tests/` to the surviving
+  `generate_from_keys` / password-only paths. Pre-flight
+  investigation surfaced four blockers that flipped the
+  disposition from migrate to delete: (a) the harness invokes
+  `monerod` / `monero-wallet-rpc` binary names that do not
+  exist in the Shekyl tree; (b) `functional_tests_rpc` and
+  `check_missing_rpc_methods` were silently skipped in CI
+  because `requests` / `psutil` / `monotonic` / `deepdiff`
+  Python deps were absent at `cmake` configure time —
+  inherited dead code with no live caller; (c)
+  `shekyl-wallet-rpc` lacks a `--regtest` / `--fakechain`
+  flag, defaults to mainnet, and the
+  `shekyl_account_generate_from_raw_seed` FFI rejects
+  `(mainnet, raw)` per the permitted network/seed-format
+  matrix in `rust/shekyl-crypto-pq/src/account.rs`, so
+  migrated tests would fail-closed at the FFI layer; (d) even
+  with the above three resolved, the harness is Monero-shaped
+  end-to-end and warrants a Shekyl-native rewrite under its
+  own design doc, not a "while we're here" revival here. Per
+  `15-deletion-and-debt.mdc`'s default-delete posture, the
+  Phase 2 PR deletes `tests/functional_tests/` outright,
+  drops `add_subdirectory(functional_tests)` from
+  `tests/CMakeLists.txt`, and rewrites the Functional tests
+  section of `tests/README.md` to record the deletion + the
+  planning posture for a Shekyl-native replacement
+  (separate `docs/FOLLOWUPS.md` item; not a revival of this
+  directory).
 
 - **Phase 3 — FFI-consumer language-parameter drops** (alongside
   the FFI signature change in §3.1's work items 2 and 3). Any
@@ -1937,10 +1960,11 @@ Test fixtures that exercise Electrum-words paths today:
 - `tests/unit_tests/serialization.cpp` (if it deserializes legacy
   wallet JSON with `seed_language`) — Phase 4 sweep removes the
   `seed_language` field from any test fixtures.
-- `tests/functional_tests/wallet.py` (Python integration tests)
-  — Phase 2 sweep removes `restore_deterministic_wallet` /
-  `get_languages` RPC calls; Phase 3 sweep removes any
-  `set_language` integration.
+- `tests/functional_tests/` (Python + C++ integration harness)
+  — deleted outright in the Phase 2 PR (work item 9
+  reassessed; see `ELECTRUM_WORDS_REMOVAL_PLAN.md` Phase 2).
+  Inherited Monero harness, never running in Shekyl CI,
+  targeting binary names that don't exist in the tree.
 
 **Pre-genesis posture confirmation:** there are zero production
 Shekyl wallet keyfiles in existence (the project has not yet

@@ -74,12 +74,19 @@ exists (`src/rpc/core_rpc_server.h:153`,
 `!m_restricted` (`src/rpc/core_rpc_server.h:153`), so the integration
 harness must connect to an unrestricted RPC port.
 
-**Proof-of-life tests.** Existing Python functional tests
+**Proof-of-life tests.** The Python functional tests that
+historically demonstrated `--regtest` + `generateblocks` invocation
 (`tests/functional_tests/blockchain.py`, `daemon_info.py`,
-`transfer.py`, `mining.py`, `p2p.py`) drive `--regtest` against
-`generateblocks`. The launch script
-`tests/functional_tests/functional_tests_rpc.py:37–77` demonstrates a
-working invocation pattern.
+`transfer.py`, `mining.py`, `p2p.py`,
+`functional_tests_rpc.py:37–77`) were deleted outright in the
+Phase 2 of the Electrum-words removal series (PR #58); the
+working invocation pattern is preserved in this doc's "Working
+CLI invocation" subsection below and in the design notes for the
+forthcoming Shekyl-native end-to-end harness
+(proposed placement `tests/integration/wallet_e2e/` — directory does
+not exist yet; final layout is design-doc output, not pre-decided,
+per [`FOLLOWUPS.md`](./FOLLOWUPS.md) V3.1
+"Shekyl-native end-to-end wallet/daemon test harness").
 
 ### Working CLI invocation
 
@@ -144,17 +151,23 @@ first non-genesis block.
 
 ### Pre-existing harness gaps (not blocking, but worth filing)
 
-The Python functional tests under `tests/functional_tests/` still
-invoke binaries named `monerod` and `monero-wallet-rpc`
-(`tests/functional_tests/functional_tests_rpc.py:37–77`,
-`tests/README.md:60–64`), and embed Monero-format addresses
-(`42ey...`). The Shekyl-renamed binaries are `shekyld` and
-`shekyl-wallet-rpc` (`src/daemon/CMakeLists.txt:74`,
-`src/wallet/CMakeLists.txt:98`). The Rust integration harness
-(`tests/integration/wallet_e2e/` per the rewrite plan) will spawn
-`shekyld` directly — this gap does not block the rewrite, but the
-Python functional suite is itself dead weight that the rewrite's
-deletion phase will sweep up.
+The Python functional tests under `tests/functional_tests/` were
+deleted outright in the Phase 2 of the Electrum-words removal
+series (PR #58, `feat/electrum-words-removal-phase2-rpc-deletion`)
+per [`ELECTRUM_WORDS_REMOVAL_PLAN.md`](./design/ELECTRUM_WORDS_REMOVAL_PLAN.md)
+Phase 2 work item 9 (reassessed). The harness invoked binaries
+named `monerod` and `monero-wallet-rpc` (which do not exist in the
+Shekyl tree — the renamed binaries are `shekyld` and
+`shekyl-wallet-rpc` per `src/daemon/CMakeLists.txt:74` and
+`src/wallet/CMakeLists.txt:98`), embedded Monero-format addresses
+(`42ey...`), and was already silently skipped in CI for the
+lifetime of the Shekyl tree. The Shekyl-native end-to-end harness
+(proposed placement `tests/integration/wallet_e2e/` per the
+rewrite plan in [`FOLLOWUPS.md`](./FOLLOWUPS.md) V3.1; final
+layout is design-doc output, not yet committed) will spawn
+`shekyld` directly with raw-seed restore on testnet/fakechain via
+the `shekyl_account_generate_from_raw_seed` FFI; that work is a
+separate planning activity tracked in `docs/FOLLOWUPS.md`.
 
 ### Pre-task verdict (regtest)
 
