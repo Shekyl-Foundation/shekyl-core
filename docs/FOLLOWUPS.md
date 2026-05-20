@@ -231,6 +231,94 @@ sustainability is unaffected by the recalibration.
   **Originating context.** Copilot PR #37 review (second pass,
   2026-05-10), comment ID 3215308856 on `merge.rs:336`.
 
+- **F11-S Windows-midrange-PC measurement revisit at stressnet
+  (trigger: PR 4 C4 lands the Linux-laptop F11-S measurement;
+  close-condition: stressnet phase captures the matching
+  Windows-midrange-PC measurement against the same bench harness;
+  Phase 7.7).** Per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §4184–§4238 (F11-S sub-pin), Phase 1 commit-author for C4 decides
+  per-tx vs. per-output safe-point granularity against benchmarked
+  `recover_outputs_in_tx` cost. The reference measurement for C4
+  captures on the Phase 1 author's Linux laptop on AC against the
+  bench harness landed at commit `46c64760d`
+  (`rust/shekyl-scanner/benches/scan_transaction.rs`, group
+  `worst_case_all_view_tags_match`, F11-S binding identified in
+  code via the `F11S_BINDING_GROUP` constant; per-output worst-case
+  cost = full hybrid PQC slow path with subaddress-lookup miss).
+  The C4 commit message records the measurement and chosen
+  granularity per the §4222–§4238 audit-trail discipline.
+
+  **Why the Linux-laptop measurement alone is not the audit floor.**
+  The §3.1 millisecond-scale lock-latency target is a property of
+  the wallet experience on commodity user hardware. A laptop-class
+  measurement on Linux + AC overstates the hardware floor relative
+  to the commodity-Windows-midrange configuration that dominates the
+  real wallet-user population. Per `00-mission.mdc` priority 3 ("the
+  system must outlast the team"), the lock-latency property must
+  hold against the hardware Shekyl users actually run, not against
+  the developer's laptop. The Linux-laptop measurement is sufficient
+  for C4's Phase-1-author-time disposition (the bench harness's
+  worst-case cost is constant-time-bounded and scales linearly with
+  single-thread crypto throughput, so a Linux-laptop measurement
+  plus C4's 2× safety margin should cover the Windows-midrange floor
+  with headroom by construction); it is **not** sufficient as the
+  audit-trail floor.
+
+  **Disposition.** Defer the Windows-midrange-PC measurement to
+  stressnet (Phase 7.7), the V3.0 phase that exercises the full
+  wallet-refresh path under realistic reorg and varied-
+  reference-block conditions per the existing Phase 7.7 entries
+  (`FCMP_REFERENCE_BLOCK_MAX_AGE = 100` cluster, cross-referenced
+  below). At stressnet, the designated Windows midrange PC re-runs
+  the `scan_transaction` bench harness (criterion + iai-callgrind
+  companion) on the same `worst_case_all_view_tags_match` and
+  `typical_case_view_tag_filtered` groups against the same
+  `OUTPUT_COUNTS = {1, 4, 8, 16}` sweep, and the resulting
+  measurement is captured into the stressnet audit trail using the
+  same commit-message template C4 used (four data points + slow-
+  path-to-fast-path ratio sanity check + decision threshold + chosen
+  granularity).
+
+  **Re-evaluation per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc).**
+  If the Windows-midrange measurement produces a granularity
+  decision that disagrees with C4's Linux-laptop disposition (i.e.,
+  C4 selected per-tx granularity but the Windows-midrange worst-
+  case per-tx scan time exceeds the §3.1 lock-latency target ×
+  C4's 2× safety margin), the safe-point granularity escalates to
+  per-output per §4209–§4217 of the F11-S sub-pin (the per-tx →
+  per-output escalation is wallet-internal scope; not a chain-rule
+  change). Escalation is a single-point edit in
+  `RefreshEngine::recover_outputs_in_tx` and lands in a focused PR
+  off `dev` named `refresh/f11s-stressnet-granularity-escalation`.
+  If the measurements agree, this entry closes with the Windows-
+  midrange data points appended to C4's audit trail and no code
+  change.
+
+  **Close-condition.** A stressnet commit captures the Windows-
+  midrange-PC F11-S measurement against the bench harness, and
+  either (a) the granularity decision matches C4's, in which case
+  the audit trail extends with the Windows-midrange data points
+  and this entry closes; or (b) the granularity escalates to
+  per-output, in which case the escalation PR closes both this
+  entry and the F11-S sub-pin.
+
+  **Cross-references.**
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §4184–§4238 (F11-S sub-pin and per-output escalation criterion);
+  `rust/shekyl-scanner/benches/scan_transaction.rs` and
+  `rust/shekyl-scanner/src/bench_fixtures.rs` (bench harness; F11-S
+  binding named in code via the `F11S_BINDING_GROUP` constant);
+  `rust/shekyl-scanner/src/scan.rs` (`MAX_OUTPUTS = 16` scanner-side
+  gate at `scan_transaction` entry, the consensus-binding bound the
+  bench's N sweep is anchored to); the existing Phase 7.7 stressnet
+  entry above (FCMP++ historical-tree-path cluster) as the
+  precedent that stressnet is the V3.0 phase where wallet-side
+  measurements against commodity hardware are captured.
+
+  **Target.** V3.0, Phase 7.7 stressnet.
+
 - **`scripts/bench/compare.py`: treat baseline=0 as informational,
   not fail (trigger: cut chore PR off `dev` immediately; pre-RC1).**
   The CI bench gate at `scripts/bench/compare.py:218–219` computes
