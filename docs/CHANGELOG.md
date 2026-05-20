@@ -1300,8 +1300,10 @@
   `docs/design/ELECTRUM_WORDS_REMOVAL.md` substrate §2.4. Closes
   Phase 0 Mission Audit Lens B finding B-1 at the RPC layer (FFI +
   `wallet2` core deletions follow in Phase 3 / Phase 4 / Phase 5).
-  Five commits, all in `src/wallet/wallet_rpc_server*` plus
-  `tests/`:
+  Landed across the commit list below (the bullet list is the
+  source of truth; explicit count omitted because review iterations
+  add closeout commits). All in `src/wallet/wallet_rpc_server*`
+  plus `tests/`:
 
   - `restore_deterministic_wallet` JSON-RPC method + handler +
     `COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET` request/response
@@ -1320,10 +1322,23 @@
     validation branch + `wal->set_seed_language(req.language)`
     call removed from `COMMAND_RPC_CREATE_WALLET` and
     `COMMAND_RPC_GENERATE_FROM_KEYS`. The request-schema change
-    forces a JSON-parse-error on any caller that supplies a
-    `language` field, matching the §4.3 hard-error discipline at
-    the FFI layer (graceful-degradation default inverted to
-    immediate breakage). The underlying
+    drops the field from the deserializer surface. **epee
+    KV-serialization is pull-based**: keys the consumer struct
+    does not declare are silently ignored, so callers that still
+    send `language="English"` do not see a parse error — the
+    value is dropped on the floor and `wallet2::generate()` runs
+    with the wallet2 default seed language. The §4.3 hard-error
+    discipline is enforced at the **FFI surface** (Phase 1
+    `wallet2_ffi_create_wallet` / `wallet2_ffi_generate_from_keys`
+    reject non-empty `language` per
+    `src/wallet/wallet2_ffi.cpp:309–320, 485–495`); the
+    wallet-RPC handler reaches `wallet2::generate()` directly,
+    so the FFI's hard-error gate is not on this code path. The
+    load-bearing property at the wallet-RPC layer is therefore
+    **structural unreachability** of the field from request
+    parsing — no read path from JSON to behavior — rather than
+    runtime rejection. Phase 3 deletes the FFI parameter
+    entirely, collapsing both surfaces. The underlying
     `wallet2::set_seed_language` and
     `crypto::ElectrumWords::is_valid_language` symbols still
     exist (called from `wallet2_ffi.cpp` and `wallet2`
