@@ -64,40 +64,63 @@
 //! (cancel-on-drop, single-flight enforcement, progress watch
 //! channel) ships in branch 2 on top of this synchronous baseline.
 
-use std::collections::HashSet;
 use std::ops::Range;
-use std::time::Duration;
 
-use curve25519_dalek::{edwards::CompressedEdwardsY, scalar::Scalar};
-use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_engine_state::{LedgerBlock, ReorgBlocks};
-use shekyl_oxide::transaction::Input;
-use shekyl_rpc::{Rpc, RpcError, ScannableBlock};
-use shekyl_scanner::{ScanError, Scanner, ViewPair};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, warn};
-use zeroize::Zeroizing;
+use tracing::debug;
 
-use super::error::{IoError, RefreshError};
+use super::diagnostics::TracingDiagnosticSink;
+use super::error::RefreshError;
 use super::local_ledger::LocalLedger;
 use super::signer::EngineSignerKind;
-use super::traits::{DaemonEngine, LedgerEngine};
+use super::traits::{DaemonEngine, LedgerEngine, RefreshEngine};
 use super::Engine;
-use crate::scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, ScanResult, StakeEvent};
+use crate::scan::ScanResult;
+
+// Legacy producer-body imports — `#[cfg(test)]`-gated alongside the
+// free-function `produce_scan_result` and its helpers per C5's
+// trait-dispatch migration. The C5β follow-up deletes both the
+// producer body and these imports.
+#[cfg(test)]
+use super::error::IoError;
+#[cfg(test)]
+use crate::scan::{DetectedTransfer, KeyImageObserved, ReorgRewind, StakeEvent};
+#[cfg(test)]
+use curve25519_dalek::{edwards::CompressedEdwardsY, scalar::Scalar};
+#[cfg(test)]
+use shekyl_crypto_pq::account::AllKeysBlob;
+#[cfg(test)]
+use shekyl_oxide::transaction::Input;
+#[cfg(test)]
+use shekyl_rpc::{Rpc, RpcError, ScannableBlock};
+#[cfg(test)]
+use shekyl_scanner::{ScanError, Scanner, ViewPair};
+#[cfg(test)]
+use std::collections::HashSet;
+#[cfg(test)]
+use std::time::Duration;
+#[cfg(test)]
+use tracing::{error, warn};
+#[cfg(test)]
+use zeroize::Zeroizing;
 
 /// Maximum retries for transient per-block RPC failures. Mirrors the
 /// legacy `shekyl-scanner::sync` ceiling so the operational surface
 /// (network flakes recover, persistent failures are surfaced in
 /// bounded time) is unchanged across the migration.
+#[cfg(test)]
 const MAX_BLOCK_FETCH_RETRIES: u32 = 5;
 
 /// Initial backoff for block-fetch retries; doubles per attempt up to
 /// [`MAX_RETRY_DELAY`].
+#[cfg(test)]
 const INITIAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 /// Upper bound on the per-attempt backoff. 30 s matches the legacy
 /// loop; the producer's caller is the binary-layer refresh, which
 /// already has its own outer retry budget on top.
+#[cfg(test)]
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 
 /// Read-only snapshot of the wallet ledger taken at the start of a
@@ -198,6 +221,18 @@ impl LedgerSnapshot {
 /// commit 4. Keeping it separate keeps the producer free of any
 /// `Engine<S>` dependency and lets the retry loop pattern-match on
 /// the failure class without unwrapping a wrapper.
+///
+/// # Status (C5β cleanup target)
+///
+/// Migrated out of production paths at C5 per
+/// `STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C5: the trait-dispatch
+/// surface on [`crate::engine::traits::RefreshEngine`] supplants the
+/// free-function producer body, and `LocalRefreshError` (in
+/// `local_refresh.rs`) is the V3.0 implementor error. `ProduceError`
+/// remains `#[cfg(test)]` until the C5β follow-up commit ports the
+/// producer-body tests to [`crate::engine::LocalRefresh`] and
+/// deletes the legacy free-function surface wholesale.
+#[cfg(test)]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ProduceError {
     /// A block-fetch RPC call failed and the
@@ -601,9 +636,9 @@ impl RefreshHandle {
     /// panicked (which would be an internal-consistency bug), the
     /// oneshot's `Sender` is dropped without sending; this surface
     /// returns
-    /// [`RefreshError::MalformedScanResult`] with a static reason
-    /// pointing at the panic site so audit reads a typed contract
-    /// failure rather than a silent loss.
+    /// [`RefreshError::InternalInvariantViolation`] with a static
+    /// context pointing at the panic site so audit reads a typed
+    /// contract failure rather than a silent loss.
     pub async fn join(mut self) -> Result<RefreshSummary, RefreshError> {
         let rx = self
             .completion_rx
@@ -611,8 +646,8 @@ impl RefreshHandle {
             .expect("RefreshHandle::join is called at most once: the type consumes self");
         match rx.await {
             Ok(result) => result,
-            Err(_) => Err(RefreshError::MalformedScanResult {
-                reason:
+            Err(_) => Err(RefreshError::InternalInvariantViolation {
+                context:
                     "RefreshHandle::join: producer task dropped completion sender without delivery",
             }),
         }
@@ -812,6 +847,17 @@ impl Drop for SlotGuard {
 /// `produce_scan_result` call (per-attempt). The wrapping loop
 /// owns the `Sender` and re-builds the emitter per attempt with
 /// the new `blocks_total`.
+///
+/// # Status (C5β cleanup target)
+///
+/// The C5 trait-dispatch migration moved per-block progress emission
+/// into [`crate::engine::LocalRefresh::produce_scan_result`], which
+/// receives the [`tokio::sync::watch::Sender<RefreshProgress>`]
+/// directly. `ProgressEmitter` is preserved `#[cfg(test)]` only for
+/// the legacy producer-body tests that still drive
+/// [`produce_scan_result`] directly; the C5β follow-up deletes both
+/// together.
+#[cfg(test)]
 pub(crate) struct ProgressEmitter<'a> {
     sender: Option<&'a tokio::sync::watch::Sender<RefreshProgress>>,
     /// `daemon_tip - synced_height` for this attempt. Static for
@@ -821,6 +867,7 @@ pub(crate) struct ProgressEmitter<'a> {
     blocks_total: u64,
 }
 
+#[cfg(test)]
 impl<'a> ProgressEmitter<'a> {
     /// No-op emitter: per-block calls are silently dropped.
     /// Used by the synchronous `Engine::refresh` path and by every
@@ -836,6 +883,10 @@ impl<'a> ProgressEmitter<'a> {
     /// Construct an emitter wired to a real watch sender. Used by
     /// the async producer task (`drive_refresh_loop` →
     /// `produce_scan_result`).
+    // C5β cleanup target: post-C5, the only test callers use `noop()`;
+    // `new()` is dead-but-kept to preserve the historical constructor
+    // until the producer-body deletion lands together.
+    #[allow(dead_code)]
     pub(crate) const fn new(
         sender: &'a tokio::sync::watch::Sender<RefreshProgress>,
         blocks_total: u64,
@@ -945,6 +996,7 @@ const _: fn() = || {
 /// matches against the live wallet's owned-output set; this is the
 /// "filter at merge, not at produce" choice that keeps the snapshot
 /// free of the wallet's transfer / key-image maps.
+#[cfg(test)]
 pub(crate) async fn produce_scan_result<R: Rpc>(
     rpc: &R,
     scanner: &mut Scanner,
@@ -1100,6 +1152,7 @@ pub(crate) async fn produce_scan_result<R: Rpc>(
 /// snapshot's reorg window does not extend that far back; the merge
 /// will reject this case as `ConcurrentMutation` if the wallet has
 /// since recorded a hash there, which is the correct behavior.
+#[cfg(test)]
 fn parent_hash_for_start(snapshot: &LedgerSnapshot, start: u64) -> Option<[u8; 32]> {
     if start <= 1 {
         None
@@ -1120,6 +1173,7 @@ fn parent_hash_for_start(snapshot: &LedgerSnapshot, start: u64) -> Option<[u8; 3
 /// Returning `1` in that case forces the merge to rewind to genesis,
 /// which is the correct behavior (the wallet's recorded chain is
 /// entirely orphaned from the daemon's view).
+#[cfg(test)]
 async fn find_fork_point<R: Rpc>(
     rpc: &R,
     snapshot: &LedgerSnapshot,
@@ -1173,6 +1227,7 @@ async fn find_fork_point<R: Rpc>(
 /// Fetch a block at `height` with exponential backoff on transient
 /// RPC failures. Cancellation is honoured both before each attempt
 /// and during the inter-attempt backoff.
+#[cfg(test)]
 async fn fetch_block_with_retry<R: Rpc>(
     rpc: &R,
     height: u64,
@@ -1224,6 +1279,7 @@ async fn fetch_block_with_retry<R: Rpc>(
 /// Debug-only consistency check used by [`produce_scan_result`]'s
 /// `debug_assert!`. Verifies that every accumulated entry lies inside
 /// `[start, end)`. Production builds skip the work entirely.
+#[cfg(test)]
 fn consistent_against_range(
     block_hashes: &[(u64, [u8; 32])],
     new_transfers: &[DetectedTransfer],
@@ -1251,6 +1307,12 @@ fn consistent_against_range(
 /// `Zeroizing<…>` wrappers we hand to `Scanner` / `ViewPair` ensure
 /// the scanner's local copies do the same when this `Scanner` is
 /// dropped at the end of the refresh attempt.
+// C5β cleanup target: post-C5 trait-dispatch migration, scanner
+// construction lives in `LocalRefresh::build_scanner` (using the
+// implementor-owned `ViewMaterial`). This free-function helper is
+// dead-but-kept until the producer-body deletion lands.
+#[cfg(test)]
+#[allow(dead_code)]
 fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> {
     let spend_pub = CompressedEdwardsY::from_slice(keys.spend_pk.as_canonical_bytes())
         .map_err(|e| {
@@ -1406,8 +1468,8 @@ fn build_scanner_from_keys(keys: &AllKeysBlob) -> Result<Scanner, RefreshError> 
 /// path always delivers `Ok(summary)`; consumers that want to
 /// abandon a successful refresh in flight have to drop the handle
 /// and reconcile against the next `progress().borrow()`.
-async fn run_refresh_task<S, D: DaemonEngine, L>(
-    engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S, D, L>>>,
+async fn run_refresh_task<S, D: DaemonEngine, L, R: RefreshEngine>(
+    engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S, D, L, R>>>,
     opts: RefreshOptions,
     cancel: CancellationToken,
     progress: tokio::sync::watch::Sender<RefreshProgress>,
@@ -1416,23 +1478,16 @@ async fn run_refresh_task<S, D: DaemonEngine, L>(
 ) where
     S: EngineSignerKind + Send + Sync + 'static,
     L: LedgerEngine + Send + Sync + 'static,
-    Engine<S, D, L>: Send + Sync,
+    Engine<S, D, L, R>: Send + Sync,
 {
-    // Build the scanner once (keys are immutable for the lifetime of
-    // the open engine; rebuilding per attempt would only repeat
-    // EdwardsPoint decompression). Briefly take the read lock to
-    // borrow `keys()`.
-    let scanner_init = {
-        let g = engine_arc.read().await;
-        build_scanner_from_keys(g.keys())
-    };
-    let mut scanner = match scanner_init {
-        Ok(s) => s,
-        Err(e) => {
-            _ = completion.send(Err(e));
-            return;
-        }
-    };
+    // Producer-side observability sink. `TracingDiagnosticSink` is the
+    // V3.0 canonical projection per `engine/diagnostics.rs` F9: each
+    // RefreshDiagnostic variant is routed to a typed `tracing` span
+    // with bucketed labels. Constructed once per refresh and shared
+    // by reference into every attempt's `produce_scan_result` call —
+    // the sink is a unit struct (`Copy`), so the inline ceremony is
+    // free.
+    let sink = TracingDiagnosticSink::new();
 
     let mut last_concurrent_mutation: Option<RefreshError> = None;
 
@@ -1451,12 +1506,21 @@ async fn run_refresh_task<S, D: DaemonEngine, L>(
             return;
         }
 
-        // Snapshot + daemon clone. The producer does not hold the
-        // daemon between attempts: the engine state — including the
-        // live daemon reference — is re-snapshotted at the start of
-        // every attempt, so re-cloning is the same cost as
-        // re-borrowing and avoids leaking the borrow across the
-        // intervening read-lock.
+        // Snapshot + daemon clone + refresh-impl Arc-clone. Take the
+        // engine read-lock once per attempt to extract three
+        // independently-owned values, then drop the guard before
+        // dispatching the producer body:
+        //
+        // - `snapshot: LedgerSnapshot` — owned snapshot of wallet
+        //   state at the attempt's start.
+        // - `daemon: D` — daemon-trait implementor (cheap Arc-clone
+        //   in the production `DaemonClient` case).
+        // - `refresh: Arc<R>` — producer-trait implementor handle.
+        //   `Engine::refresh` is `Arc<R>` precisely so the long-
+        //   running scan can dispatch through the trait surface
+        //   without holding the engine read-lock through the
+        //   `produce_scan_result.await` (which would block the merge
+        //   path's write-lock acquisition).
         //
         // Snapshot acquisition goes through [`LedgerEngine::snapshot`]
         // on the implementor field (the trait-dispatch path); the
@@ -1464,93 +1528,48 @@ async fn run_refresh_task<S, D: DaemonEngine, L>(
         // borrow is shared (`read().await`) per the §5 commit-5
         // relaxation: with mutation interior to `LocalLedger`, the
         // refresh driver no longer needs an exclusive engine borrow.
-        let (snapshot, daemon) = {
+        let (snapshot, daemon, refresh) = {
             let g = engine_arc.read().await;
-            (g.ledger.snapshot(), g.daemon().clone())
+            (
+                g.ledger.snapshot(),
+                g.daemon().clone(),
+                std::sync::Arc::clone(&g.refresh),
+            )
         };
         let current_synced = snapshot.synced_height;
 
-        // First network call. The underlying RPC isn't cancel-aware,
-        // so a cancel fired during the await runs to RPC completion.
-        // We re-check `cancel` immediately after the call returns
-        // (see the post-await checkpoint just below) so a cancelled
-        // refresh deterministically reports `Cancelled` rather than
-        // proceeding into the per-block scan or surfacing as an
-        // unrelated daemon error.
-        let daemon_tip = match daemon.get_height().await {
-            Ok(t) => t,
-            Err(e) => {
-                _ = completion.send(Err(RefreshError::Io(IoError::Daemon {
-                    detail: format!("get_height failed: {e}"),
-                })));
-                return;
-            }
-        };
+        // Trait dispatch: the producer body lives in the
+        // [`RefreshEngine`] implementor (production default
+        // [`crate::engine::LocalRefresh`]), per
+        // `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C5. The
+        // implementor owns scanner construction, the daemon-tip read,
+        // per-block fetch + retry, per-block progress emission on the
+        // `watch::Sender<RefreshProgress>`, and the producer-side
+        // cancellation checkpoints 2/3/4/5 (per `traits/refresh.rs`
+        // §"Cancellation discipline"). The orchestrator owns
+        // checkpoints 1 (top-of-attempt, above) and the pre-merge
+        // checkpoint (below).
+        let produced = refresh
+            .produce_scan_result(
+                snapshot,
+                &daemon,
+                opts.clone(),
+                cancel.clone(),
+                progress.clone(),
+                &sink,
+            )
+            .await;
 
-        // Post-tip-fetch cancel checkpoint. Honours a cancel that
-        // fired during the daemon RPC before we kick off the per-
-        // block scan. State is unmutated; the just-returned tip is
-        // discarded along with the (small) RPC cost. See the
-        // function's `# Cancellation` section for the full
-        // checkpoint layout.
-        if cancel.is_cancelled() {
-            let mut terminal = *progress.borrow();
-            terminal.phase = RefreshPhase::Cancelled;
-            _ = progress.send(terminal);
-            _ = completion.send(Err(RefreshError::Cancelled));
-            return;
-        }
-
-        let daemon_tip_u64 =
-            u64::try_from(daemon_tip).expect("daemon height fits in u64 on 64-bit targets");
-
-        // `get_height` returns the **count** of blocks (one past the
-        // tip-block index), so the producer's exclusive-end range
-        // `synced_height + 1 .. count` scans heights
-        // `[synced_height + 1, count - 1]` inclusive — i.e. it
-        // includes the tip block. This mirrors the synchronous
-        // [`Engine::refresh`] driver above; the symmetry is load-
-        // bearing because both paths share `produce_scan_result`.
-        let start = current_synced.saturating_add(1);
-        let end = daemon_tip_u64;
-        let blocks_total = end.saturating_sub(start);
-        let height_range = start..end;
-
-        // Re-baseline `blocks_total` for this attempt before the per-
-        // block emitter starts publishing `Scanning` updates. Reorg
-        // rewinds inside `produce_scan_result` may transiently push
-        // `blocks_processed` down; the watch channel preserves
-        // latest-only semantics so subscribers see the restated
-        // total.
-        _ = progress.send(RefreshProgress {
-            height: current_synced,
-            blocks_processed: 0,
-            blocks_total,
-            phase: RefreshPhase::Scanning,
-        });
-
-        let emitter = ProgressEmitter::new(&progress, blocks_total);
-        let produced = produce_scan_result(
-            &daemon,
-            &mut scanner,
-            &snapshot,
-            height_range,
-            &cancel,
-            &emitter,
-        )
-        .await;
-
-        let result = match map_produce_error(produced) {
+        let result = match produced.map_err(Into::into) {
             Ok(r) => r,
             Err(RefreshError::Cancelled) => {
-                // Mid-scan cancel: the producer noticed `cancel`
-                // between blocks and bailed. Mirror the top-of-
-                // attempt cancel emission — preserve the last
-                // published baseline (which the per-block
-                // `ProgressEmitter` advanced as the scan ran) and
-                // override only `phase`. This is the third of the
-                // four cancel checkpoints documented on this
-                // function.
+                // Mid-scan cancel: the producer observed the cancel
+                // token at one of its internal checkpoints (2, 3,
+                // or 5) and bailed. Mirror the top-of-attempt
+                // cancel emission — preserve the last published
+                // baseline (which the producer's per-block emit
+                // advanced as the scan ran) and override only
+                // `phase`.
                 let mut terminal = *progress.borrow();
                 terminal.phase = RefreshPhase::Cancelled;
                 _ = progress.send(terminal);
@@ -1565,8 +1584,7 @@ async fn run_refresh_task<S, D: DaemonEngine, L>(
 
         let summary = summarize(&result, attempt);
 
-        // Pre-merge cancel checkpoint (the fourth of four documented
-        // on this function). The producer returned a valid
+        // Pre-merge cancel checkpoint. The producer returned a valid
         // `ScanResult`, but the user fired `cancel` between the last
         // per-block check inside `produce_scan_result` and now. The
         // merge has not yet acquired the write lock, so wallet state
@@ -1584,7 +1602,9 @@ async fn run_refresh_task<S, D: DaemonEngine, L>(
         // Best-effort `Merging` ping right before the write-lock. The
         // merge is bounded by compute (no I/O), so subscribers
         // observing this phase are usually about to immediately
-        // observe success or a retry.
+        // observe success or a retry. `blocks_total` mirrors
+        // `blocks_processed`: the producer is done, so total equals
+        // processed at this phase transition.
         _ = progress.send(RefreshProgress {
             height: summary
                 .processed_height_range
@@ -1592,7 +1612,7 @@ async fn run_refresh_task<S, D: DaemonEngine, L>(
                 .saturating_sub(1)
                 .max(current_synced),
             blocks_processed: summary.blocks_processed,
-            blocks_total,
+            blocks_total: summary.blocks_processed,
             phase: RefreshPhase::Merging,
         });
 
@@ -1652,10 +1672,15 @@ async fn run_refresh_task<S, D: DaemonEngine, L>(
                     result,
                     "run_refresh_task: snapshot race, retrying with fresh snapshot",
                 );
+                // Re-baseline progress with current_synced and zeroed
+                // counters. The next attempt's `produce_scan_result`
+                // re-derives `blocks_total` from a fresh snapshot +
+                // daemon-tip read; the orchestrator no longer owns
+                // that value after the C5 trait-dispatch migration.
                 _ = progress.send(RefreshProgress {
                     height: current_synced,
                     blocks_processed: 0,
-                    blocks_total,
+                    blocks_total: 0,
                     phase: RefreshPhase::Retrying,
                 });
                 last_concurrent_mutation =
@@ -1671,12 +1696,18 @@ async fn run_refresh_task<S, D: DaemonEngine, L>(
 
     // Retry budget exhausted on `ConcurrentMutation`. Mirror
     // `Engine::refresh_with`: surface the last observed race;
-    // falling through with `None` would mean the loop body itself is
-    // broken, which we surface as `MalformedScanResult` so audit
-    // reads a typed contract failure rather than silent retry
-    // exhaustion.
-    let terminal = last_concurrent_mutation.unwrap_or(RefreshError::MalformedScanResult {
-        reason: "run_refresh_task retry loop exited without an observed ConcurrentMutation",
+    // falling through with `None` would mean the loop body itself
+    // is broken, which we surface as `InternalInvariantViolation`
+    // (the C5-migrated discriminant for refresh-loop control-flow
+    // contract failures per `STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X
+    // C5) so audit reads a typed contract failure rather than
+    // silent retry exhaustion. The legacy `MalformedScanResult`
+    // discriminant carried producer-internal text via its `reason`
+    // field; the C5 discipline routes producer payloads through the
+    // `DiagnosticSink` and reserves typed `RefreshError` variants
+    // for orchestrator control flow only.
+    let terminal = last_concurrent_mutation.unwrap_or(RefreshError::InternalInvariantViolation {
+        context: "run_refresh_task retry loop exited without an observed ConcurrentMutation",
     });
     _ = completion.send(Err(terminal));
     // _slot_guard drops here, releasing the slot.
@@ -1716,7 +1747,7 @@ fn summarize(result: &ScanResult, merge_attempts: u32) -> RefreshSummary {
 // retained until the sync entry points either acquire a runtime
 // handle path or are themselves migrated to `async fn`.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine> Engine<S, D, L> {
+impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> Engine<S, D, L, R> {
     /// Spawn an async refresh task and return a [`RefreshHandle`]
     /// for observing and controlling it.
     ///
@@ -1849,7 +1880,7 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine> Engine<S, D, L> {
 // sync call site; the cost is not currently justified by a consumer
 // of `Engine::refresh` against a non-`LocalLedger` ledger.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
+impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine> Engine<S, D, LocalLedger, R> {
     /// Drive a refresh against the configured daemon: pull a snapshot
     /// of the wallet's ledger, ask the producer to scan
     /// `synced_height + 1 .. daemon_tip + 1`, and merge the result
@@ -1938,48 +1969,55 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
         opts: &RefreshOptions,
         runtime: &tokio::runtime::Handle,
     ) -> Result<RefreshSummary, RefreshError> {
-        // Production producer closure: capture the daemon, scanner,
-        // runtime, and a fresh cancellation token, then map
-        // `ProduceError` into `RefreshError` so `refresh_with` only
-        // sees one error type. The scanner is constructed once per
-        // refresh call and reused across retry attempts: wallet key
-        // material is immutable for the lifetime of the handle, so
-        // rebuilding it per attempt would only repeat `EdwardsPoint`
-        // decompression for no behavioural gain. If a future capability
-        // flip ever needs to land mid-refresh, the rebuild moves into
-        // the per-attempt closure as a deliberate change, not a
-        // silent one.
+        // Producer dispatch via the [`RefreshEngine`] trait surface
+        // (`R: RefreshEngine`, default `LocalRefresh`). The trait
+        // implementor owns scanner construction, daemon-tip read,
+        // per-block fetch + retry, per-block progress emission, and
+        // the producer-side cancellation checkpoints; the sync
+        // `Engine::refresh` surface only drives the
+        // snapshot-merge-with-retry orchestration around it.
+        //
+        // The sync path's cancellation token is created fresh per
+        // call and never fires — see the function rustdoc's
+        // "Cancellation contract" section: the async surface
+        // ([`Engine::start_refresh`]) is the cancellation surface,
+        // not this one.
+        //
+        // Producer observability: the sync path does not expose a
+        // [`DiagnosticSink`] to its callers, so the producer's
+        // diagnostic stream is discarded via [`NoopDiagnosticSink`].
+        // Callers that want producer-side observability use the async
+        // path, which routes through [`TracingDiagnosticSink`] in
+        // `run_refresh_task`.
         let cancel = CancellationToken::new();
-        let daemon = self.daemon.clone();
-        let scanner = build_scanner_from_keys(self.keys())?;
-        let scanner_cell = std::cell::RefCell::new(scanner);
+        let sink = super::diagnostics::NoopDiagnosticSink::new();
+
+        // Throwaway progress channel: the sync path has no
+        // subscriber, but the trait surface requires a
+        // `watch::Sender<RefreshProgress>` to emit per-block updates
+        // into. Constructed once per call and dropped at the end of
+        // the closure scope; the receiver immediately drops as well,
+        // so the producer's `progress.send(...)` calls are no-ops
+        // (best-effort sends to a no-subscriber watch channel
+        // silently succeed by replacing the buffered latest value).
+        let (progress_tx, _progress_rx) = tokio::sync::watch::channel(RefreshProgress {
+            height: 0,
+            blocks_processed: 0,
+            blocks_total: 0,
+            phase: RefreshPhase::Scanning,
+        });
 
         self.refresh_with(opts, |_attempt, snapshot| {
-            let daemon_tip = runtime.block_on(daemon.get_height()).map_err(|e| {
-                RefreshError::Io(IoError::Daemon {
-                    detail: format!("get_height failed: {e}"),
-                })
-            })?;
-            let daemon_tip_u64 =
-                u64::try_from(daemon_tip).expect("daemon height fits in u64 on 64-bit targets");
-
-            // `get_height` is the count of blocks; the producer range
-            // is exclusive-end, so we scan
-            // `synced_height + 1 .. daemon_tip_count`.
-            let start = snapshot.synced_height.saturating_add(1);
-            let end = daemon_tip_u64;
-            let height_range = start..end;
-
-            let mut scanner = scanner_cell.borrow_mut();
-            let produced = runtime.block_on(produce_scan_result(
-                &daemon,
-                &mut scanner,
-                snapshot,
-                height_range,
-                &cancel,
-                &ProgressEmitter::noop(),
-            ));
-            map_produce_error(produced)
+            runtime
+                .block_on(self.refresh.produce_scan_result(
+                    snapshot.clone(),
+                    &self.daemon,
+                    opts.clone(),
+                    cancel.clone(),
+                    progress_tx.clone(),
+                    &sink,
+                ))
+                .map_err(Into::into)
         })
     }
 
@@ -2055,12 +2093,18 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
         // Retry budget exhausted on `ConcurrentMutation`. Surface the
         // last race we observed so the caller can see *which* heights
         // disagreed; falling through without observing one would mean
-        // the loop body itself is broken, which we surface as a
-        // `MalformedScanResult` so audit reads a typed contract
-        // failure rather than a silent retry exhaustion.
+        // the loop body itself is broken, which we surface as
+        // `InternalInvariantViolation` (the C5-migrated discriminant
+        // for refresh-loop control-flow contract failures per
+        // `STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C5) so audit reads a
+        // typed contract failure rather than a silent retry
+        // exhaustion. `MalformedScanResult` remains the merge-gate
+        // discriminant for producer-emitted scan-result invariant
+        // violations; this site is orchestrator control flow, not
+        // merge-gate validation.
         Err(
-            last_concurrent_mutation.unwrap_or(RefreshError::MalformedScanResult {
-                reason: "Engine::refresh retry loop exited without an observed ConcurrentMutation",
+            last_concurrent_mutation.unwrap_or(RefreshError::InternalInvariantViolation {
+                context: "Engine::refresh retry loop exited without an observed ConcurrentMutation",
             }),
         )
     }
@@ -2070,6 +2114,7 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
 /// [`Engine::refresh_with`]'s producer closure surfaces. Centralised
 /// so the production closure and tests of the mapping stay in lock
 /// step.
+#[cfg(test)]
 pub(crate) fn map_produce_error(
     result: Result<ScanResult, ProduceError>,
 ) -> Result<ScanResult, RefreshError> {
@@ -3339,11 +3384,23 @@ mod refresh_driver_tests {
             .refresh(&opts, rt.handle())
             .expect_err("unreachable daemon must error out");
 
+        // After C5's trait-dispatch migration the producer-side
+        // error projection lives in `LocalRefresh`: a daemon-tip
+        // `get_height` failure surfaces as `LocalRefreshError::Io`,
+        // which the `From<LocalRefreshError> for RefreshError`
+        // conversion projects as `RefreshError::Io(IoError::Daemon
+        // { detail: "LocalRefresh: daemon I/O failure during refresh" })`.
+        // The bounded detail string is a deliberate design
+        // disposition (per §5.4.7 R6's memory-amplifier closure):
+        // upstream `RpcError` payloads are not propagated into the
+        // typed `RefreshError`; richer per-error classification
+        // routes through the `DiagnosticSink` as
+        // `DaemonProtocolError { kind: ProtocolErrorKind }`.
         match err {
             RefreshError::Io(IoError::Daemon { detail }) => {
                 assert!(
-                    detail.contains("get_height"),
-                    "expected get_height failure detail, got {detail:?}"
+                    detail.contains("LocalRefresh"),
+                    "expected LocalRefresh-projected daemon I/O detail, got {detail:?}"
                 );
             }
             other => panic!("expected Io(Daemon), got {other:?}"),
@@ -3601,22 +3658,26 @@ mod refresh_handle_tests {
     /// If the producer task drops its completion sender without
     /// sending (which would only happen on a panic — a contract
     /// violation), `join()` surfaces a typed
-    /// `MalformedScanResult` rather than panicking.
+    /// `InternalInvariantViolation` rather than panicking. (Migrated
+    /// from `MalformedScanResult` at C5 per
+    /// `STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C5 — producer panic is
+    /// an orchestrator control-flow invariant violation, not a
+    /// merge-gate scan-result invariant violation.)
     #[tokio::test]
-    async fn join_maps_dropped_sender_to_malformed_scan_result() {
+    async fn join_maps_dropped_sender_to_internal_invariant_violation() {
         let (handle, completion, _progress, _cancel, _producer_assert) =
             handle_with(RefreshOptions::default());
         drop(completion);
 
         let result = handle.join().await;
         match result {
-            Err(RefreshError::MalformedScanResult { reason }) => {
+            Err(RefreshError::InternalInvariantViolation { context }) => {
                 assert!(
-                    reason.contains("dropped completion sender"),
-                    "reason was: {reason}"
+                    context.contains("dropped completion sender"),
+                    "context was: {context}"
                 );
             }
-            other => panic!("expected MalformedScanResult, got {other:?}"),
+            other => panic!("expected InternalInvariantViolation, got {other:?}"),
         }
     }
 

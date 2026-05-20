@@ -410,25 +410,41 @@ pub struct Engine<
     /// [`ViewMaterial`](view_material::ViewMaterial) into
     /// `LocalRefresh::new`.
     ///
+    /// # Why `Arc<R>` rather than `R`
+    ///
+    /// `run_refresh_task` takes an `Arc<RwLock<Engine<...>>>` because
+    /// the orchestrator and the merge path share the same engine
+    /// instance. The producer body (`produce_scan_result`) is long-
+    /// running — network round-trips plus per-block scan — and must
+    /// **not** hold any engine borrow across its `.await` boundary:
+    /// the merge path needs the write half of the `RwLock` to land
+    /// the scan result, and a read-borrow held through the scan
+    /// would deadlock the merge.
+    ///
+    /// Holding the implementor as `Arc<R>` lets the orchestrator
+    /// `Arc::clone` it out of the read-lock in a single brief borrow
+    /// and then dispatch the trait call lock-free. The `&self`
+    /// receiver on the trait method composes naturally: the cloned
+    /// `Arc<R>` keeps `R` alive for the future's lifetime, the trait
+    /// implementor's interior state is accessed through `&*arc` (free
+    /// of borrow-on-Engine). `LocalRefresh`'s `ViewMaterial` remains
+    /// owned-and-non-Clone at the implementor level; the Arc wraps
+    /// the implementor, not the secret.
+    ///
     /// # Visibility for trait-dispatch (Stage 4)
     ///
-    /// Holding the implementor by-value on `Engine` makes the
-    /// producer wipe-on-drop chain run when the wallet closes (today:
-    /// `Engine::close`; Stage 4: actor shutdown), wiping the producer's
-    /// view-and-spend secrets at the same moment as the rest of the
-    /// engine's key material. The Stage 4 actor cutover replaces this
-    /// field with an actor handle; the trait surface stays the same.
+    /// Holding the implementor by-Arc on `Engine` makes the producer
+    /// wipe-on-drop chain run when the last `Arc<R>` reference drops
+    /// — typically at wallet close (today: `Engine::close`; Stage 4:
+    /// actor shutdown). The Arc's strong count is exactly 1 in
+    /// steady state (engine owns the only handle); the producer
+    /// briefly bumps it to 2 for the duration of one
+    /// `produce_scan_result` call, then drops back to 1 when the
+    /// future settles. The Stage 4 actor cutover replaces this field
+    /// with an actor handle; the trait surface stays the same.
     ///
     /// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
-    // C5 (next commit on the §7.X commit list) is the first reader
-    // when `run_refresh_task` migrates from the inlined producer body
-    // to `engine.refresh.produce_scan_result(...)` trait dispatch.
-    // The field is written by every `Engine::assemble` and carried
-    // through the test-only `replace_*` helpers in C5a; the
-    // dead-code warning is silenced here because the writer-only
-    // window is exactly one commit long.
-    #[allow(dead_code)]
-    pub(crate) refresh: R,
+    pub(crate) refresh: std::sync::Arc<R>,
 
     /// Compile-time signer-kind dispatch. The actual key material lives
     /// in [`Engine::keys`] (for `SoloSigner`); this marker exists so
@@ -594,6 +610,15 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> En
     /// `reserve_proof`) that take borrowed inputs and return finished
     /// artifacts, so call sites elsewhere never need a borrow on
     /// [`AllKeysBlob`] directly.
+    // After C5's trait-dispatch migration, the only previous reader
+    // (`build_scanner_from_keys` in `refresh.rs`) is `#[cfg(test)]`-gated
+    // alongside the legacy producer body; `LocalRefresh` constructs its
+    // scanner from `ViewMaterial` derived at `Engine::assemble` time.
+    // C5β re-evaluates whether `keys()` survives the producer-body
+    // deletion or is itself deleted with the deprecation cycle; Phase 2's
+    // `sign_transfer` / `tx_proof` / `reserve_proof` will need either
+    // this accessor or a dedicated method-level surface.
+    #[allow(dead_code)]
     pub(crate) fn keys(&self) -> &AllKeysBlob {
         &self.keys
     }

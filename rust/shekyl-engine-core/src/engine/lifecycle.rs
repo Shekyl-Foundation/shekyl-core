@@ -679,7 +679,7 @@ impl Engine<SoloSigner> {
                     detail: format!("ViewMaterial construction failed: {other:?}"),
                 }),
             })?;
-        let refresh = super::local_refresh::LocalRefresh::new(view_material);
+        let refresh = std::sync::Arc::new(super::local_refresh::LocalRefresh::new(view_material));
 
         Ok(Self {
             file,
