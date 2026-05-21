@@ -1337,11 +1337,7 @@ pub(crate) fn generate_superscalar(gen: &mut Blake2Generator) -> SuperscalarProg
             // If this macro-op writes the result, update register
             // info.
             if current.info.result_op == Some(macro_op_index_u8) {
-                let dst = usize::from(
-                    current
-                        .dst
-                        .expect("dst assigned before result_op macro-op"),
-                );
+                let dst = usize::from(current.dst.expect("dst assigned before result_op macro-op"));
                 registers[dst].latency = dep_cycle;
                 registers[dst].last_op_group = current.op_group;
                 registers[dst].last_op_par = current.op_group_par;
@@ -1437,8 +1433,7 @@ pub(crate) fn execute_superscalar(
             Sit::IXorR => registers[dst] ^= registers[src],
             Sit::IAddRs => {
                 let shift = instr.mod_shift();
-                registers[dst] =
-                    registers[dst].wrapping_add(registers[src].wrapping_shl(shift));
+                registers[dst] = registers[dst].wrapping_add(registers[src].wrapping_shl(shift));
             }
             Sit::IMulR => registers[dst] = registers[dst].wrapping_mul(registers[src]),
             Sit::IRorC => registers[dst] = registers[dst].rotate_right(instr.imm32 % 64),
@@ -1545,7 +1540,10 @@ mod tests {
         assert_eq!(randomx_reciprocal(33), 17_887_751_829_051_686_415);
         assert_eq!(randomx_reciprocal(65537), 18_446_462_603_027_742_720);
         assert_eq!(randomx_reciprocal(15_000_001), 10_316_166_306_300_415_204);
-        assert_eq!(randomx_reciprocal(3_845_182_035), 10_302_264_209_224_146_340);
+        assert_eq!(
+            randomx_reciprocal(3_845_182_035),
+            10_302_264_209_224_146_340
+        );
         assert_eq!(randomx_reciprocal(0xffff_ffff), 9_223_372_039_002_259_456);
     }
 
@@ -1671,7 +1669,10 @@ mod tests {
         let n = p1.size().min(p2.size()).min(16);
         assert!(n > 0);
         let diff = (0..n).any(|i| p1.instructions()[i] != p2.instructions()[i]);
-        assert!(diff, "two distinct seeds produced identical instruction prefixes");
+        assert!(
+            diff,
+            "two distinct seeds produced identical instruction prefixes"
+        );
     }
 
     #[test]
@@ -1683,7 +1684,10 @@ mod tests {
         let n = p1.size().min(p2.size()).min(16);
         assert!(n > 0);
         let diff = (0..n).any(|i| p1.instructions()[i] != p2.instructions()[i]);
-        assert!(diff, "two distinct nonces produced identical instruction prefixes");
+        assert!(
+            diff,
+            "two distinct nonces produced identical instruction prefixes"
+        );
     }
 
     // ============================================================
@@ -1746,12 +1750,22 @@ mod tests {
         assert!(bytes.len() >= 8, "wire format header is 8 bytes");
         assert_eq!(&bytes[0..4], SSP_MAGIC, "wire-format magic mismatch");
         let size = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
-        assert!(size <= SUPERSCALAR_MAX_SIZE, "size exceeds SUPERSCALAR_MAX_SIZE");
+        assert!(
+            size <= SUPERSCALAR_MAX_SIZE,
+            "size exceeds SUPERSCALAR_MAX_SIZE"
+        );
         let addr_reg = bytes[6];
-        assert!(addr_reg < REGISTERS_COUNT_U8, "address register out of range");
+        assert!(
+            addr_reg < REGISTERS_COUNT_U8,
+            "address register out of range"
+        );
         assert_eq!(bytes[7], 0, "reserved byte must be 0x00");
         let body_len = size * 8;
-        assert_eq!(bytes.len(), 8 + body_len, "wire-format body length mismatch");
+        assert_eq!(
+            bytes.len(),
+            8 + body_len,
+            "wire-format body length mismatch"
+        );
 
         let mut prog = SuperscalarProgram::new();
         prog.size = size;
@@ -1798,8 +1812,9 @@ mod tests {
 
     #[test]
     fn vector_1_layer_a_baseline_determinism() {
-        let expected: &[u8] =
-            include_bytes!("../tests/vectors/reference/superscalar/ss_program_seed_empty_nonce_0.bin");
+        let expected: &[u8] = include_bytes!(
+            "../tests/vectors/reference/superscalar/ss_program_seed_empty_nonce_0.bin"
+        );
         let mut gen = Blake2Generator::new(&[], 0);
         let prog = generate_superscalar(&mut gen);
         let actual = serialize_program(&prog);
@@ -1812,8 +1827,9 @@ mod tests {
 
     #[test]
     fn vector_2_layer_a_tests_nonce_mixing_only() {
-        let expected: &[u8] =
-            include_bytes!("../tests/vectors/reference/superscalar/ss_program_seed_empty_nonce_1.bin");
+        let expected: &[u8] = include_bytes!(
+            "../tests/vectors/reference/superscalar/ss_program_seed_empty_nonce_1.bin"
+        );
         let mut gen = Blake2Generator::new(&[], 1);
         let prog = generate_superscalar(&mut gen);
         let actual = serialize_program(&prog);
@@ -1847,10 +1863,12 @@ mod tests {
 
     #[test]
     fn vector_1_layer_b_execute_baseline() {
-        let prog_bytes: &[u8] =
-            include_bytes!("../tests/vectors/reference/superscalar/ss_program_seed_empty_nonce_0.bin");
-        let expected_bytes: &[u8] =
-            include_bytes!("../tests/vectors/reference/superscalar/ss_execute_seed_empty_nonce_0.bin");
+        let prog_bytes: &[u8] = include_bytes!(
+            "../tests/vectors/reference/superscalar/ss_program_seed_empty_nonce_0.bin"
+        );
+        let expected_bytes: &[u8] = include_bytes!(
+            "../tests/vectors/reference/superscalar/ss_execute_seed_empty_nonce_0.bin"
+        );
         let prog = deserialize_program(prog_bytes);
         let mut r = LAYER_B_INPUT_R;
         execute_superscalar(&prog, &mut r);
@@ -1863,10 +1881,12 @@ mod tests {
 
     #[test]
     fn vector_2_layer_b_execute_nonce_mixing() {
-        let prog_bytes: &[u8] =
-            include_bytes!("../tests/vectors/reference/superscalar/ss_program_seed_empty_nonce_1.bin");
-        let expected_bytes: &[u8] =
-            include_bytes!("../tests/vectors/reference/superscalar/ss_execute_seed_empty_nonce_1.bin");
+        let prog_bytes: &[u8] = include_bytes!(
+            "../tests/vectors/reference/superscalar/ss_program_seed_empty_nonce_1.bin"
+        );
+        let expected_bytes: &[u8] = include_bytes!(
+            "../tests/vectors/reference/superscalar/ss_execute_seed_empty_nonce_1.bin"
+        );
         let prog = deserialize_program(prog_bytes);
         let mut r = LAYER_B_INPUT_R;
         execute_superscalar(&prog, &mut r);
