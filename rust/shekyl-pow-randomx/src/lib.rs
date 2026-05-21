@@ -37,17 +37,19 @@
 //!   if those greps were already live. See
 //!   [`RANDOMX_V2_RUST.md`](../../docs/design/RANDOMX_V2_RUST.md) §7.2.
 //!
-//! # Scope at this commit (Phase 2b commit 1)
+//! # Scope at this commit (Phase 2b commit 3)
 //!
 //! Phase 2a landed the workspace scaffold and the Argon2d "memory fill"
-//! primitive used by `Cache::derive`. Phase 2b commit 1 lands the
-//! Phase 2b primitive scaffolding:
+//! primitive used by `Cache::derive`. Phase 2b commits 1-3 land the
+//! remaining v2 primitives the verifier needs:
 //!
 //! - `src/aes.rs` — AES single-round wrappers (`cipher_round`,
-//!   `equiv_inv_cipher_round`) over `aes-0.9.0`'s `hazmat` API.
-//!   §3.2-3.4 composites (`AesGenerator1R/4R`, `AesHash1R`) land in
-//!   Phase 2b commit 2.
+//!   `equiv_inv_cipher_round`) over `aes-0.9.0`'s `hazmat` API plus
+//!   the §3.2-3.4 composites (`AesGenerator1R`, `AesGenerator4R`,
+//!   `AesHash1R`).
 //! - `src/blake2_generator.rs` — `Blake2Generator` PRNG per spec §3.5.
+//! - `src/superscalar.rs` — `SuperscalarHash` program generator and
+//!   executor per spec §6 + §7.2 (commit 3 lands these).
 //! - F1 convergence on `src/argon2d.rs`'s `#[allow(dead_code)]`: moved
 //!   from the module-level attribute on `mod argon2d` to per-item
 //!   attributes inside the module, matching the per-entry-point
@@ -55,11 +57,8 @@
 //!   [`RANDOMX_V2_PHASE2B_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2B_PLAN.md)
 //!   §5.1.
 //!
-//! Subsequent Phase 2b commits (per the same plan §7):
+//! Remaining Phase 2b commits (per the same plan §7):
 //!
-//! - **commit 2:** AES composites (`AesGenerator1R/4R`, `AesHash1R`).
-//! - **commit 3:** `superscalar.rs` (`SuperscalarProgram`,
-//!   `generate_superscalar`, `execute_superscalar`).
 //! - **commits 4-5:** spec-vector parity tests against the C reference.
 //! - **commit 6:** CHANGELOG + V3.0/Phase 3c FOLLOWUPS entry.
 //!
@@ -86,3 +85,4 @@
 mod aes;
 mod argon2d;
 mod blake2_generator;
+mod superscalar;
