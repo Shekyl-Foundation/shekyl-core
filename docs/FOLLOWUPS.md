@@ -694,87 +694,6 @@ sustainability is unaffected by the recalibration.
   discipline" entry for the lemma that generalizes from this
   recurrence.
 
-- **[CLOSED 2026-05-20] Stage 1 retroactive Mock-X cleanup:
-  `MockLedger` → `LocalLedger::from_test_blocks(...)` +
-  `FaultInjecting<LocalLedger>`.** Landed in PR 4 §7.X commit
-  C6β: `FaultInjecting<L: LedgerEngine>` extracted to
-  [`engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs);
-  `LocalLedger::from_test_blocks(Vec<Block>)` added at
-  [`engine/local_ledger.rs`](../rust/shekyl-engine-core/src/engine/local_ledger.rs)
-  (V3.0 supports the empty-`Vec` case only; non-empty fixtures
-  pending the V3.1 coordinated `TestLedgerBuilder` substrate
-  design entry below); `MockLedger` + `MockLedgerState` +
-  `ROLE_LEDGER` deleted wholesale from `engine/test_support.rs`;
-  the §5.2 hybrid retry test `hybrid_apply_scan_result_retries_on_concurrent_mutation`
-  migrated to `FaultInjecting::new(LocalLedger::from_test_blocks(Vec::new()))`
-  via the existing `Engine::replace_ledger` slot.
-
-  **Substrate trajectory.** Stage 1 PR 3 (`KeyEngine`) Round 2
-  review surfaced that the Mock-X test-substrate pattern is
-  wrong as a category: parallel test-only implementations
-  conflate test-controlled inputs to real implementations with
-  substitute implementations, add attack surface, don't compose
-  with future implementors, and encourage tests to verify against
-  fake semantics rather than real semantics. PR 3 landed the
-  no-Mock pattern at its own cut-point (production-only
-  `LocalKeys` with `from_seed` / `#[cfg(test)] from_test_seed`
-  constructors + a composable `FaultInjecting<K: KeyEngine>`
-  wrapper). PR 4's pre-flight surfaced the `MockLedger` cleanup
-  naturally because C6/C7's new `RefreshEngine` test substrate
-  would otherwise have compounded the Mock-X debt this entry
-  existed to close, and the
-  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
-  cost-benefit-defer-to-later anti-pattern names the
-  architectural-integrity-now disposition as the default for
-  security-load-bearing substrate work pre-genesis. C6β was
-  mostly extraction-and-rename, not re-implementation: the
-  pre-deletion `MockLedger` was structurally already a
-  `FaultInjecting<LocalLedger>`-shaped wrapper that delegated to
-  the canonical `apply_scan_result_to_state`.
-
-  Cross-references (historical):
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
-  §2.1.2 (broader Mock-X rejection rationale), §6.4 (per-PR-3
-  substrate disposition), §7.9 (test-substrate disposition open
-  question);
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-  Status banner, §6 no-Mock substrate inheritance discipline,
-  §6.1 test-substrate paradigm pin, §7.X C6β commit prose.
-
-- **[CLOSED 2026-05-20] Stage 1 retroactive Mock-X cleanup:
-  `MockDaemon` → `TestDaemon` rename.** Landed in PR 4 §7.X
-  commit C6γ: mechanical rename of the type and every call site
-  in
-  [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
-  (struct + `impl` blocks + module docstrings), `engine/refresh.rs`,
-  `engine/lifecycle.rs`, `engine/mod.rs`,
-  `benches/common/engine_fixture.rs`, and `Cargo.toml`
-  (rationale comment); plus the active-doc trajectory references
-  in [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md).
-  The structural shape is unchanged — the type is still an
-  alternative real implementation that serves canned / cached
-  test responses without network — only the naming changed.
-
-  **Substrate trajectory.** The `MockDaemon` case (Stage 1 PR 1
-  substrate) was structurally different from `MockLedger`: real
-  `DaemonClient` requires network connectivity, so the
-  test-substitute is a legitimate alternative real implementation,
-  not a parallel-implementation fake. The structural shape was
-  fine; the "Mock" naming was the bug — it inherited the
-  conflation that the broader Mock-X rejection identified.
-  C6γ's fix renames the type so the name signals "alternative
-  real implementation for tests" rather than "fake of an
-  implementation," with the same shape. Bundled with the
-  `MockLedger` cleanup (C6β) so PR 4's substrate-pass closes
-  both FOLLOWUPS entries in one cut, per the Round 5 amendment.
-
-  Cross-references (historical):
-  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
-  §2.1.2 (broader Mock-X rejection rationale);
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-  Status banner, §6 no-Mock substrate inheritance discipline,
-  §7.X C6γ commit prose.
-
 - **CHANGELOG backfill for Stage 0 PR-A and PR-C.** Stage 0
   preparatory PRs PR-A (`3d313256c` — symmetry rule),
   PR-A-extension (`2e5309ad3` — boundary rule), and PR-C
@@ -4113,43 +4032,6 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.x — staker archival and visualization ship
 
-- **[CLOSED 2026-05-20] Stage 1 PR 4 Phase 0d — `RefreshEngine`
-  checkpoint 3 mid-scan-reorg-abort extension: struck, not
-  deferred.** PR 4's Round 1 review pass surfaced a conditional
-  Phase 0d candidate — "extend producer-side checkpoint 3 with
-  one daemon tip-poll per checkpoint-3 hit so a mid-scan reorg
-  triggers an early abort" — pending the §5.4.5 R5 adversarial
-  scenario disposition. Round 2's reframe of
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-  §5.4.7 R5 settled R5 by composition under the two-channel
-  diagnostic shape rather than by extending checkpoint 3:
-  `RefreshDiagnostic::ReorgObserved` is the seam; the
-  `ReorgAmplificationDetector` V3.x consumer actor entry below
-  is the composition home. Phase 0d is therefore **struck**
-  (not deferred) — the producer's §7 checkpoint discipline
-  remains five-checkpoint (1 / 2 / 3 / 4 / 5 per §5.4.9 F2),
-  the trait surface gains no additional cancellation site,
-  and no V3.x candidate exists to revisit "extend checkpoint
-  3." This entry is the explicit retirement note distinct
-  from the live V3.x deferrals below (R5 composition consumer
-  actor; R6 fail2ban consumer actor; R4 (c) view-material
-  flow refinements), each of which remains open with named
-  triggers per
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-  §4 Phase 0d, §5.4.7 R5 / R6 / R4 (c), and §8 closure.
-  Per
-  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
-  the named reopening criterion for re-introducing the
-  checkpoint-3 extension would be the §5.4.7 R5 composition
-  consumer actor failing to bound mid-scan reorg work in
-  practice; that determination is data-driven and Stage-4-
-  vintage, and no current evidence motivates re-evaluation.
-  Cross-references:
-  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-  §4 Phase 0d (struck), §5.4.7 R5 reframe, §5.4.9 F2 (five-
-  checkpoint discipline), §7.X C8 commit prose (this
-  retirement note pinned in FOLLOWUPS).
-
 - **`ReorgAmplificationDetector` consumer actor (Stage 1 PR 4 R5
   composition home; supersedes the Round 2 first-pass "extend
   checkpoint 3" deferral).** PR 4's Round 2 reframe of
@@ -5772,6 +5654,123 @@ reference.
 ## Recently resolved (audit trail)
 
 Retained for citation in review; each links to the canonical record.
+
+- **Stage 1 PR 4 Phase 0d — `RefreshEngine` checkpoint 3 mid-scan-
+  reorg-abort extension: struck, not deferred (closed 2026-05-20,
+  merged to `dev` 2026-05-21 at `fd6005e2a`).** PR 4's Round 1 review
+  pass surfaced a conditional Phase 0d candidate — "extend
+  producer-side checkpoint 3 with one daemon tip-poll per
+  checkpoint-3 hit so a mid-scan reorg triggers an early abort" —
+  pending the §5.4.5 R5 adversarial scenario disposition. Round 2's
+  reframe of
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R5 settled R5 by composition under the two-channel
+  diagnostic shape rather than by extending checkpoint 3:
+  `RefreshDiagnostic::ReorgObserved` is the seam; the
+  `ReorgAmplificationDetector` V3.x consumer actor entry (above, in
+  the V3.x staker-archival queue) is the composition home. Phase 0d
+  is therefore **struck** (not deferred) — the producer's §7
+  checkpoint discipline remains five-checkpoint (1 / 2 / 3 / 4 / 5
+  per §5.4.9 F2), the trait surface gains no additional cancellation
+  site, and no V3.x candidate exists to revisit "extend checkpoint
+  3." This entry is the explicit retirement note distinct from the
+  live V3.x deferrals (R5 composition consumer actor; R6 fail2ban
+  consumer actor; R4 (c) view-material flow refinements), each of
+  which remains open with named triggers per
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §4 Phase 0d, §5.4.7 R5 / R6 / R4 (c), and §8 closure. Per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+  the named reopening criterion for re-introducing the checkpoint-3
+  extension would be the §5.4.7 R5 composition consumer actor
+  failing to bound mid-scan reorg work in practice; that
+  determination is data-driven and Stage-4-vintage, and no current
+  evidence motivates re-evaluation. Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §4 Phase 0d (struck), §5.4.7 R5 reframe, §5.4.9 F2 (five-
+  checkpoint discipline), §7.X C8 commit prose (this retirement
+  note pinned in FOLLOWUPS).
+
+- **Stage 1 retroactive Mock-X cleanup: `MockLedger` →
+  `LocalLedger::from_test_blocks(...)` + `FaultInjecting<LocalLedger>`
+  (closed 2026-05-20, merged to `dev` 2026-05-21 at `fd6005e2a`).**
+  Landed in PR 4 §7.X commit C6β: `FaultInjecting<L: LedgerEngine>`
+  extracted to
+  [`engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs);
+  `LocalLedger::from_test_blocks(Vec<Block>)` added at
+  [`engine/local_ledger.rs`](../rust/shekyl-engine-core/src/engine/local_ledger.rs)
+  (V3.0 supports the empty-`Vec` case only; non-empty fixtures
+  pending the V3.1 coordinated `TestLedgerBuilder` substrate design
+  entry); `MockLedger` + `MockLedgerState` + `ROLE_LEDGER` deleted
+  wholesale from `engine/test_support.rs`; the §5.2 hybrid retry
+  test `hybrid_apply_scan_result_retries_on_concurrent_mutation`
+  migrated to
+  `FaultInjecting::new(LocalLedger::from_test_blocks(Vec::new()))`
+  via the existing `Engine::replace_ledger` slot.
+
+  **Substrate trajectory.** Stage 1 PR 3 (`KeyEngine`) Round 2 review
+  surfaced that the Mock-X test-substrate pattern is wrong as a
+  category: parallel test-only implementations conflate
+  test-controlled inputs to real implementations with substitute
+  implementations, add attack surface, don't compose with future
+  implementors, and encourage tests to verify against fake semantics
+  rather than real semantics. PR 3 landed the no-Mock pattern at its
+  own cut-point (production-only `LocalKeys` with `from_seed` /
+  `#[cfg(test)] from_test_seed` constructors + a composable
+  `FaultInjecting<K: KeyEngine>` wrapper). PR 4's pre-flight
+  surfaced the `MockLedger` cleanup naturally because C6/C7's new
+  `RefreshEngine` test substrate would otherwise have compounded the
+  Mock-X debt this entry existed to close, and the
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  cost-benefit-defer-to-later anti-pattern names the
+  architectural-integrity-now disposition as the default for
+  security-load-bearing substrate work pre-genesis. C6β was mostly
+  extraction-and-rename, not re-implementation: the pre-deletion
+  `MockLedger` was structurally already a
+  `FaultInjecting<LocalLedger>`-shaped wrapper that delegated to the
+  canonical `apply_scan_result_to_state`.
+
+  Cross-references (historical):
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §2.1.2 (broader Mock-X rejection rationale), §6.4 (per-PR-3
+  substrate disposition), §7.9 (test-substrate disposition open
+  question);
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  Status banner, §6 no-Mock substrate inheritance discipline,
+  §6.1 test-substrate paradigm pin, §7.X C6β commit prose.
+
+- **Stage 1 retroactive Mock-X cleanup: `MockDaemon` → `TestDaemon`
+  rename (closed 2026-05-20, merged to `dev` 2026-05-21 at
+  `fd6005e2a`).** Landed in PR 4 §7.X commit C6γ: mechanical rename
+  of the type and every call site in
+  [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
+  (struct + `impl` blocks + module docstrings), `engine/refresh.rs`,
+  `engine/lifecycle.rs`, `engine/mod.rs`,
+  `benches/common/engine_fixture.rs`, and `Cargo.toml` (rationale
+  comment); plus the active-doc trajectory references in
+  [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md).
+  The structural shape is unchanged — the type is still an
+  alternative real implementation that serves canned / cached test
+  responses without network — only the naming changed.
+
+  **Substrate trajectory.** The `MockDaemon` case (Stage 1 PR 1
+  substrate) was structurally different from `MockLedger`: real
+  `DaemonClient` requires network connectivity, so the
+  test-substitute is a legitimate alternative real implementation,
+  not a parallel-implementation fake. The structural shape was fine;
+  the "Mock" naming was the bug — it inherited the conflation that
+  the broader Mock-X rejection identified. C6γ's fix renames the
+  type so the name signals "alternative real implementation for
+  tests" rather than "fake of an implementation," with the same
+  shape. Bundled with the `MockLedger` cleanup (C6β) so PR 4's
+  substrate-pass closes both FOLLOWUPS entries in one cut, per the
+  Round 5 amendment.
+
+  Cross-references (historical):
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §2.1.2 (broader Mock-X rejection rationale);
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  Status banner, §6 no-Mock substrate inheritance discipline,
+  §7.X C6γ commit prose.
 
 - **Stage 1 PR 3 architectural-inheritance migration: "secrets confined
   to engine" property activated at M3d (2026-05-11).** The
