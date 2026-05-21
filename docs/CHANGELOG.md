@@ -527,8 +527,97 @@
     deps` gates all inherit C13's results unchanged
     (no rust files touched in C14).
 
-  PR 4 §7.X commits C0 through C14 are now all landed; PR
-  #60 carries the full C0–C14 set. See the separate `###
+  *C15 – C16 — Copilot second-round review responses*:
+  - Two small post-PR-open commits closing the four
+    additional line-anchored findings the GitHub Copilot
+    reviewer raised against `30798d783` (the C14 push
+    head) on PR #60. Both batches touch `engine/`-side
+    rustdoc and harness surfaces only; doc-only /
+    harness-only; no API surface, no trait body, and no
+    production code-path touched. Each commit cites its
+    Copilot finding IDs in the commit message body per
+    [`.cursor/rules/90-commits.mdc`](../.cursor/rules/90-commits.mdc).
+  - **C15** `bafb9c548` — refresh-trait
+    `[`LocalRefresh`]` rustdoc link target fix in
+    [`rust/shekyl-engine-core/src/engine/traits/refresh.rs`](../rust/shekyl-engine-core/src/engine/traits/refresh.rs).
+    Two `[`LocalRefresh`]` reference-link aliases (lines
+    204 + 258 of the `RefreshEngine` trait file) pointed
+    at `super::super::Engine` instead of
+    `super::super::LocalRefresh`. The misroute was silent
+    (the alias target is a valid path; rustdoc accepts
+    it) but the rendered docs at the two body sites (lines
+    48 and 244) linked "LocalRefresh" to the `Engine`
+    struct rather than `LocalRefresh`. Correct target
+    verified at source: `LocalRefresh` lives at
+    `engine/local_refresh.rs:250`, re-exported at
+    `engine/mod.rs:187`; from `engine::traits::refresh`,
+    `super::super::LocalRefresh` resolves through the
+    re-export (matching the working precedent at
+    `engine/fault_injecting_refresh.rs:105`). Closes
+    Copilot finding IDs 3278391428, 3278391456.
+  - **C16** `376e1e821` — `FaultInjecting<R>` +
+    `FaultInjecting<L>` Drop-time `debug_assert!` message
+    fix in
+    [`rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs)
+    and
+    [`rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs).
+    Both Drop messages told test authors to "drain via
+    `queued_failures()` and `consume_or_inject`". Neither
+    instruction was usable: `consume_or_inject` does not
+    exist anywhere in the workspace (`rg -nF
+    'consume_or_inject'` returned only the two
+    message-body sites — leftover prose from an earlier
+    API draft), and `queued_failures()` is a `usize`
+    inspector, not a drain. Rewritten to direct readers at
+    the real drain mechanism — `produce_scan_result(..)`
+    for the refresh wrapper, `apply_scan_result(..)` for
+    the ledger wrapper — with `queued_failures()` cited
+    explicitly as the inspector. The two
+    `#[should_panic(expected = ...)]` test attributes
+    (`fault_injecting_ledger.rs:528`,
+    `fault_injecting_refresh.rs:590`) re-pinned to the new
+    substring shape in the same commit per scope-per-
+    commit discipline (mechanical follow-on of the
+    production-message edit). The refresh-side
+    `should_panic` had also been pinned on the older
+    "FaultInjecting" (without `<R>`) spelling; both
+    ledger and refresh assertions now consistently include
+    the generic-parameter suffix. Closes Copilot finding
+    IDs 3278391467, 3278391479.
+  - Gates per commit: each ran its scoped bisection-
+    discipline gates against `shekyl-engine-core` (fmt
+    --check, clippy --all-targets -- -D warnings, test
+    --lib, doc --no-deps). C15 doc-only (rustdoc-target);
+    C16 production message + same-scope `should_panic`
+    re-pin. Test counts unchanged at 170 / 170 lib tests
+    pass; doc warnings unchanged at 49 (C9 baseline). The
+    two re-pinned `should_panic` tests both confirm the
+    new substrings.
+
+  *C17 — `[Unreleased]` doc-after-plans propagation for
+  C15 – C16* (this commit):
+  - Doc-only follow-up per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    final-task-always rule. After C15 / C16 landed locally
+    with green gates, the design doc §7.X status banner
+    was extended to enumerate C14 / C15 / C16 alongside
+    C0 – C13 with landing SHAs and per-commit
+    one-paragraph summaries, and the §7.X commit-block
+    section gained a new `**Commits C15 – C16 — Copilot
+    post-PR-open second-round review responses.**` block
+    with per-commit prose + Copilot finding IDs + gate
+    evidence. This `*C15 – C16 — Copilot second-round
+    review responses*` subsection above is the matching
+    CHANGELOG entry; the doc-after-plans propagation also
+    updates the closing C0–C17 paragraph below.
+  - Gate inheritance from C16: C17 is doc-only, so the
+    `cargo fmt --check`, `cargo clippy --all-targets --
+    -D warnings`, `cargo test --lib`, and `cargo doc
+    --no-deps` gates all inherit C16's results unchanged
+    (no rust files touched in C17).
+
+  PR 4 §7.X commits C0 through C17 are now all landed; PR
+  #60 carries the full C0–C17 set. See the separate `###
   Added` and `### Changed` entries below for the trait-
   surface and `Engine<S, D, L, R>` four-parameter additions
   PR 4 ships,
