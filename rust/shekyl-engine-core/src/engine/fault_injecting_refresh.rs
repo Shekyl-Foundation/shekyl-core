@@ -208,8 +208,10 @@ impl<R: RefreshEngine> Drop for FaultInjecting<R> {
         let remaining = self.queue.get_mut().map(|q| q.len()).unwrap_or(0);
         debug_assert!(
             remaining == 0,
-            "FaultInjecting dropped with {remaining} queued failures un-consumed; \
-             tests must drain via queued_failures() and consume_or_inject"
+            "FaultInjecting<R> dropped with {remaining} queued failure(s) un-consumed; \
+             tests must drain by issuing enough produce_scan_result(..) calls on the \
+             wrapper to consume every queued failure (queued_failures() inspects the \
+             remaining count for debugging)"
         );
     }
 }
@@ -585,7 +587,7 @@ mod tests {
     /// `90-commits.mdc` scope discipline this gate matches the
     /// `debug_assert!`'s own gate, preserving symmetry.
     #[test]
-    #[should_panic(expected = "FaultInjecting dropped with 1 queued failures un-consumed")]
+    #[should_panic(expected = "FaultInjecting<R> dropped with 1 queued failure(s) un-consumed")]
     #[cfg(debug_assertions)]
     fn drop_with_un_drained_queue_panics() {
         let wrapper = FaultInjecting::new(DelegationStub);

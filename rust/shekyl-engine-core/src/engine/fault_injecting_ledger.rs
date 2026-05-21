@@ -272,8 +272,10 @@ impl<L: LedgerEngine> Drop for FaultInjecting<L> {
         let remaining = self.queue.get_mut().map(|q| q.len()).unwrap_or(0);
         debug_assert!(
             remaining == 0,
-            "FaultInjecting<L> dropped with {remaining} queued failures un-consumed; \
-             tests must drain via queued_failures() and consume_or_inject"
+            "FaultInjecting<L> dropped with {remaining} queued failure(s) un-consumed; \
+             tests must drain by issuing enough apply_scan_result(..) calls on the \
+             wrapper to consume every queued failure (queued_failures() inspects the \
+             remaining count for debugging)"
         );
     }
 }
@@ -523,7 +525,7 @@ mod tests {
     /// failure path is intrinsic to `Drop`, and the test infra
     /// observes the unwind.
     #[test]
-    #[should_panic(expected = "FaultInjecting<L> dropped with 1 queued failures un-consumed")]
+    #[should_panic(expected = "FaultInjecting<L> dropped with 1 queued failure(s) un-consumed")]
     fn wrapper_drop_with_undrained_queue_panics() {
         let wrapper = FaultInjecting::new(LocalLedger::from_test_blocks(Vec::new()));
         wrapper.queue_failure(RefreshError::ConcurrentMutation {
