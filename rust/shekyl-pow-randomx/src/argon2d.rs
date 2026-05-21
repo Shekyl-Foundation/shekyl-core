@@ -212,4 +212,91 @@ mod tests {
         let mut blocks: Vec<Block> = vec![Block::default(); 64];
         fill_cache(b"any key", &mut blocks);
     }
+
+    /// Common key shared by the small-parameter reference vectors.
+    /// Mirrors the `key` argument recorded in each vector's
+    /// `.meta.txt` provenance header.
+    const SMALL_VECTOR_KEY: &[u8] = b"Shekyl RandomX v2 Phase 2a test key";
+
+    /// Convert an `&[Block]` slice into a contiguous `Vec<u8>` matching
+    /// the on-disk vector layout. The on-disk format is exactly the
+    /// little-endian QWORD stream that `Block` stores internally
+    /// (per argon2-0.5.3 `src/block.rs:51`,
+    /// `pub struct Block([u64; Self::SIZE / 8])` with `#[repr(align(64))]`),
+    /// which is itself the layout the v2 fork's generator produces by
+    /// writing `block.v` directly to `stdout`
+    /// (`external/randomx-v2/src/argon2_core.h:74` defines the
+    /// equivalent C-side `struct block_ { uint64_t v[128]; }`). The
+    /// conversion goes through `u64::to_le_bytes` so this comparison
+    /// remains correct on big-endian targets regardless of
+    /// `Block`'s in-memory representation.
+    fn blocks_to_le_bytes(blocks: &[Block]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(blocks.len() * Block::SIZE);
+        for block in blocks {
+            for word in block.as_ref() {
+                out.extend_from_slice(&word.to_le_bytes());
+            }
+        }
+        out
+    }
+
+    /// Run `argon2::Argon2::fill_memory` with the RandomX salt and the
+    /// supplied (m_cost, t_cost) at p_cost = 1, then compare the
+    /// filled memory byte-for-byte against the committed reference
+    /// vector. `fill_cache` itself is the m_cost = 262144 specialization
+    /// of this path; verifying parity at smaller m exercises the same
+    /// inner loop (per the `_generator/README.md` rationale) without
+    /// the 256 MiB allocation cost of the production parameters.
+    fn assert_small_vector(m_cost: u32, t_cost: u32, expected: &[u8]) {
+        let params = Params::new(m_cost, t_cost, RANDOMX_ARGON_LANES, None)
+            .expect("small-vector parameters within argon2 0.5 valid ranges");
+        assert_eq!(
+            params.block_count(),
+            m_cost as usize,
+            "p_cost = 1 single-lane invariant",
+        );
+
+        let argon2 = Argon2::new(Algorithm::Argon2d, Version::V0x13, params);
+        let mut blocks: Vec<Block> = vec![Block::default(); m_cost as usize];
+        argon2
+            .fill_memory(SMALL_VECTOR_KEY, RANDOMX_ARGON_SALT, &mut blocks[..])
+            .expect("fill_memory at small-vector parameters cannot fail");
+
+        let actual = blocks_to_le_bytes(&blocks);
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "vector length mismatch (vector file truncated or wrong m_cost?)",
+        );
+        assert_eq!(
+            actual, expected,
+            "byte-for-byte parity with argon2_ref.c at pin aaafe71 (m_cost = {m_cost}, t_cost = {t_cost})",
+        );
+    }
+
+    /// Boundary case: `m_cost = MIN_M_COST = 2 * SYNC_POINTS = 8`,
+    /// `t_cost = 3` (matches RANDOMX_ARGON_ITERATIONS). Validates
+    /// argon2's behavior at the smallest legal m and at the same
+    /// pass-count RandomX uses in production.
+    /// Provenance: see sibling `.meta.txt`.
+    #[test]
+    fn vector_m8_t3_p1_shekyl_test_key() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/argon2d/m8_t3_p1_shekyl_test_key.bin");
+        assert_small_vector(8, 3, expected);
+    }
+
+    /// Non-trivial scale: `m_cost = 64`, `segment_length = 16`,
+    /// exercising the cross-segment reference-block dependency that
+    /// the `m = 8` boundary case does not (where `segment_length =
+    /// 2`). Same t/p/salt/key as the m = 8 vector, so a divergence
+    /// between the two tests localizes failure to the multi-segment
+    /// code path.
+    /// Provenance: see sibling `.meta.txt`.
+    #[test]
+    fn vector_m64_t3_p1_shekyl_test_key() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/argon2d/m64_t3_p1_shekyl_test_key.bin");
+        assert_small_vector(64, 3, expected);
+    }
 }
