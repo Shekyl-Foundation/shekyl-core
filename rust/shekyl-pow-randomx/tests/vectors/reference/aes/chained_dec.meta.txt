@@ -1,0 +1,49 @@
+AES chained-round equivalent-inverse-cipher derived test vector — chained_dec.bin
+=================================================================================
+
+Spec attestation
+----------------
+F6 supplement vector per `docs/design/RANDOMX_V2_PHASE2B_PLAN.md`
+§§5.6, 6.1. Pins the byte-level identity of three successive
+applications of `equiv_inv_cipher_round` (= `soft_aesdec` =
+`_mm_aesdec_si128` = `InvSubBytes → InvShiftRows → InvMixColumns →
+AddRoundKey`) starting from a fixed initial state and reusing a
+fixed round key across all three rounds.
+
+See `chained_enc.meta.txt` for the rationale of the multi-round
+shape (catching equivalent-inverse vs. FIPS-197 standard inverse
+divergence at round 2) and of the shared-key-across-rounds choice
+(reproducibility from minimal state; F6 cares about cumulative
+diffusion, not per-round key novelty).
+
+Inputs (hardcoded in `_generator/gen.cpp`; same as `chained_enc`)
+------------------------------------------------------------------
+initial state = [0x00, 0x01, 0x02, ..., 0x0f]
+shared key    = [0xa5; 16]
+rounds        = 3 (state output after each round is committed)
+
+Output layout
+-------------
+48 bytes = 3 × 16 bytes:
+  bytes [0..16)  = state after round 1 = soft_aesdec(initial, key)
+  bytes [16..32) = state after round 2 = soft_aesdec(round_1_out, key)
+  bytes [32..48) = state after round 3 = soft_aesdec(round_2_out, key)
+
+Generator
+---------
+source      = ./_generator/gen.cpp
+build       = ./_generator/Makefile (`make gen`)
+command     = ./gen chained_dec
+output_size = 48 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/soft_aes.cpp
+function    = soft_aesdec(rx_vec_i128 in, rx_vec_i128 key)
+
+Phase
+-----
+Phase 2b (`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §§5.6, 6.1, 7
+commit 4).

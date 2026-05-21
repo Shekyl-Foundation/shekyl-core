@@ -1,0 +1,67 @@
+SuperscalarHash combined attestation vector — ss_combined_seed_shekyl_nonce_0.bin
+=================================================================================
+
+Spec attestation
+----------------
+End-to-end attestation tuple per
+`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §5.4: a single canonical
+"this is what a correct SuperscalarHash port produces for these
+inputs" reference. Downstream consumers — other Shekyl repos,
+alternative SS-hash ports, audit reviewers without the Rust port
+source — can verify their own implementation against this single
+vector without needing to parse the wire-format-specific Layer A
+serialization.
+
+This vector is byte-identical to `ss_execute_seed_shekyl_nonce_0.bin`
+by construction. The two files are tested through different code
+paths on the Rust side: the Layer B test loads the serialized
+program from a Layer A `.bin` and runs `execute_superscalar`
+against it (decoupling generation from execution parity); the
+combined test regenerates the program locally via
+`generate_superscalar` and then executes (testing the full
+generate → execute pipeline without intermediate serialization,
+mirroring how downstream consumers would actually use the SS-hash).
+
+Inputs (hardcoded in `_generator/gen.cpp`)
+------------------------------------------
+seed    = b"shekyl-ss-test"  — 14 ASCII bytes
+nonce   = 0
+input_r = [0, 1, 2, 3, 4, 5, 6, 7]  — uint64_t each
+
+The full pipeline: `Blake2Generator(seed, nonce)` →
+`generateSuperscalar(prog, gen)` →
+`executeSuperscalar(input_r, prog)` →
+emit `input_r` as 8 × `u64` LE.
+
+Output layout
+-------------
+64 bytes = post-execution `r[8]` as 8 × `u64` little-endian.
+
+Generator
+---------
+source      = ./_generator/gen.cpp
+build       = ./_generator/Makefile (`make gen`)
+command     = ./gen combined
+output_size = 64 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/superscalar.cpp,
+              src/blake2_generator.cpp,
+              src/instructions_portable.cpp,
+              src/reciprocal.c,
+              src/blake2/blake2b.c
+functions   = randomx::generateSuperscalar(SuperscalarProgram&,
+                                            Blake2Generator&),
+              randomx::executeSuperscalar(int_reg_t (&r)[8],
+                                           SuperscalarProgram& prog,
+                                           std::vector<uint64_t>* reciprocals = nullptr)
+
+Phase
+-----
+Phase 2b (`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §5.4 / F4, §7
+commit 5) — single end-to-end spec-attestation tuple. The Layer A
++ Layer B vectors above attribute failure modes mechanically; this
+vector is the canonical "downstream verifier" reference.

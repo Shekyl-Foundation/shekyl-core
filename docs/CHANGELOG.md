@@ -179,6 +179,84 @@
 
 ### Added
 
+- **RandomX v2 Track A Phase 2b — AES + Blake2Generator +
+  SuperscalarHash primitives + spec-vector parity tests**
+  (`feat/randomx-v2-phase2b`, 2026-05-21). Second sub-PR of the
+  Rust pure-software RandomX v2 verifier port per
+  [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
+  §"Track A — Phase 2" and the design plan
+  [`docs/design/RANDOMX_V2_PHASE2B_PLAN.md`](design/RANDOMX_V2_PHASE2B_PLAN.md).
+  7-commit stack (6 designed + 1 rustfmt cleanup interleaved between
+  commits 5 and 6 to absorb residue an editor save reintroduced into
+  `superscalar.rs` between gate-runs) landing the remaining v2
+  primitives the verifier needs:
+  - **Commit 1 — AES round primitives + Blake2Generator + MSRV
+    bump.** `cipher_round` / `equiv_inv_cipher_round` at
+    [`src/aes.rs`](../rust/shekyl-pow-randomx/src/aes.rs)
+    wrapping `aes-0.9.0::hazmat` (`_mm_aesenc_si128` /
+    `_mm_aesdec_si128` equivalent-inverse semantics, matching
+    RandomX `soft_aesenc` / `soft_aesdec`). `Blake2Generator`
+    PRNG at
+    [`src/blake2_generator.rs`](../rust/shekyl-pow-randomx/src/blake2_generator.rs)
+    per spec §3.5. Workspace `rust-version = "1.85"` pin for
+    `aes-0.9.0`'s edition-2024 MSRV, verified against the Guix
+    substrate before pinning. F1 convergence on
+    `src/argon2d.rs`'s `#[allow(dead_code)]` from module-level
+    to per-item attributes.
+  - **Commit 2 — AES composites.** `AesGenerator1R` (state
+    writeback), `AesGenerator4R` (no writeback), `AesHash1R` per
+    spec §3.2–3.4. Initial state, generator keys, and extra-
+    round keys ported as `const [u8; 16]` arrays via
+    `pack_le_u32x4` reproducing `_mm_set_epi32(i3, i2, i1, i0)`'s
+    little-endian memory layout exactly.
+  - **Commit 3 — SuperscalarHash generator + executor.**
+    [`src/superscalar.rs`](../rust/shekyl-pow-randomx/src/superscalar.rs)
+    implementing spec §6 + §7.2. Pure function call surface (no
+    module-level mutable state) per permanent decision #6;
+    `#![deny(unsafe_code)]` survives. Includes the §5.5 spec-
+    silence audit table in the module rustdoc with 8 documented
+    spec-silent decisions matching the C reference verbatim.
+  - **Commit 4 — AES spec-vector parity tests.** 8 reference
+    vectors at
+    [`tests/vectors/reference/aes/`](../rust/shekyl-pow-randomx/tests/vectors/reference/aes/)
+    covering round primitives, the F6 chained-pair multi-round
+    supplement, `AesGenerator1R` / `4R` outputs, and `AesHash1R`
+    on uniform + empty inputs. Reviewer-runnable C++ generator
+    at `_generator/` instantiates `<softAes=true>` templates to
+    keep emitted bytes SIMD-codegen-independent.
+  - **Commit 5 — SuperscalarHash spec-vector parity tests.** 7
+    reference vectors at
+    [`tests/vectors/reference/superscalar/`](../rust/shekyl-pow-randomx/tests/vectors/reference/superscalar/)
+    per the F4 structured 3-vector decomposition: 3 Layer A
+    program serializations (baseline / nonce-mixing / seed-
+    derivation isolation), 3 Layer B executions against fixed
+    `r=[0..8]`, and 1 combined end-to-end attestation tuple.
+    Test names encode the failure-mode attribution
+    (`vector_2_tests_nonce_mixing_only`, etc.). Layer B decouples
+    generation parity (Layer A) from execution parity; combined
+    tests the full generate→execute pipeline without intermediate
+    serialization. Wire format documented in
+    `_generator/README.md` "Wire format" and in
+    `serialize_program` / `deserialize_program` helpers.
+  - **Commit 6 — CHANGELOG + FOLLOWUPS entry** (this commit).
+    F7 AES symbol-surface handoff to V3.0 / Phase 3c recorded at
+    [`docs/FOLLOWUPS.md`](FOLLOWUPS.md); the live runnable check
+    (`cargo build --release && nm shekyld | grep -iE
+    '(aes|randomx)'`) and its expected disposition (no
+    `randomx_*` matches per `RANDOMX_V2_RUST.md` §7.1; aes-crate
+    Rust-mangled symbols expected and benign) are recorded at the
+    pre-genesis queue so the Phase 3c PR closes the item.
+  - Phase 2b retains the Phase 2a forward-compatibility posture:
+    no `#[no_mangle]`, no `extern "C" fn`, no `#[export_name]`,
+    no module-level runtime-mutable state. `#![deny(unsafe_code)]`
+    at the crate level. `cargo test -p shekyl-pow-randomx`
+    succeeds without `external/randomx-v2/` initialized and
+    without a C++ toolchain — the live differential harness
+    remains Phase 2g's separate artifact. Phase 2c–2e build on
+    Phase 2b's primitives to deliver `Vm`, bytecode dispatch,
+    and `Cache::derive`; Phase 3 then wires the verifier through
+    `shekyl-ffi`; Phase 4 deletes the C++ verifier path.
+
 - **RandomX v2 Track A Phase 2a — `shekyl-pow-randomx` crate
   scaffold + Argon2d primitive** (`feat/randomx-v2-phase2a`,
   2026-05-21). First sub-PR of the Rust pure-software RandomX v2

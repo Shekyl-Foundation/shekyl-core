@@ -1,0 +1,72 @@
+SuperscalarHash program serialization vector — ss_program_seed_empty_nonce_0.bin
+================================================================================
+
+Spec attestation
+----------------
+Cross-checks shekyl-pow-randomx's `superscalar::generate_superscalar`
+(spec §6 + §7.2) against the v2 RandomX fork's
+`randomx::generateSuperscalar`. This is the Layer A baseline vector
+in the F4 structured 3-vector decomposition per
+`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §5.4: empty seed + nonce=0
+is the simplest possible Blake2Generator input, so a divergence
+here means the SS-RNG → port-assign → instruction-selection pipeline
+is broken end-to-end on the most trivial driver.
+
+Inputs (hardcoded in `_generator/gen.cpp`)
+------------------------------------------
+seed   = (nullptr, size=0)  — design plan §5.4 notation: `0x00 (baseline)`,
+                              interpreted as "empty seed" matching the
+                              Rust test's `Blake2Generator::new(&[], 0)`
+                              call site
+nonce  = 0
+
+Output layout
+-------------
+Serialized SuperscalarProgram in the canonical wire format
+documented in `_generator/README.md` "Wire format" + on the Rust
+side at `src/superscalar.rs`'s `superscalar_vector_format` module
+rustdoc:
+
+  +0:  bytes [0..4)     = ASCII magic "SSP1"
+  +4:  bytes [4..6)     = size: u16 LE
+  +6:  byte  [6..7)     = address_register: u8 (0..7)
+  +7:  byte  [7..8)     = reserved (must be 0x00)
+  +8:  bytes [8..8+8*size) = instructions (8 bytes each):
+         +0:    opcode  u8     — SuperscalarInstructionType discriminant
+         +1:    dst     u8     — destination register (0..7)
+         +2:    src     u8     — source register (0..7)
+         +3:    mod     u8     — packed mod field
+         +4..+8: imm32  u32 LE — instruction immediate
+
+Total bytes for this vector: 3592 = 8 header + 8 * 448 instructions.
+
+Generator
+---------
+source      = ./_generator/gen.cpp
+build       = ./_generator/Makefile (`make gen`)
+command     = ./gen prog_v1
+output_size = 3592 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/superscalar.cpp,
+              src/blake2_generator.cpp,
+              src/instructions_portable.cpp,
+              src/reciprocal.c,
+              src/blake2/blake2b.c
+function    = randomx::generateSuperscalar(SuperscalarProgram&,
+                                           Blake2Generator&)
+
+Phase
+-----
+Phase 2b (`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §5.4 / F4, §7
+commit 5) — Layer A program parity for the baseline seed/nonce
+tuple in the structured 3-vector decomposition. Paired with the
+nonce-mixing (`ss_program_seed_empty_nonce_1.bin`) and seed-
+derivation (`ss_program_seed_shekyl_nonce_0.bin`) Layer A vectors;
+the Layer B `ss_execute_seed_empty_nonce_0.bin` exercises the
+execution path against this program; the combined vector
+(`ss_combined_seed_shekyl_nonce_0.bin`) is the spec-attestation
+end-to-end tuple.

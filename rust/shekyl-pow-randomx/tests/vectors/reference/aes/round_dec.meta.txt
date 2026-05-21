@@ -1,0 +1,52 @@
+AES single-round equivalent-inverse-cipher derived test vector — round_dec.bin
+==============================================================================
+
+Spec attestation
+----------------
+Cross-checks shekyl-pow-randomx's `aes::equiv_inv_cipher_round` (a
+thin wrapper over `aes-0.9.0::hazmat::equiv_inv_cipher_round`)
+against the v2 RandomX fork's `soft_aesdec` (constant-time LUT
+software AES). The `equiv_inv_cipher_round` semantic is FIPS-197
+Appendix C equivalent-inverse form / `_mm_aesdec_si128` —
+`InvSubBytes → InvShiftRows → InvMixColumns → AddRoundKey`. Note
+the equivalent-inverse-cipher order is NOT the FIPS-197 standard
+inverse order (which would be `InvShiftRows → InvSubBytes →
+AddRoundKey → InvMixColumns`); per
+`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §§4.1, 5.6 the `aes-0.9.0`
+crate exposes only the equivalent-inverse form for single-round
+use, structurally precluding the wrong-form-selection failure mode.
+This vector pins the byte-level identity of that form against the
+fork's reference.
+
+Inputs (3 tuples; hardcoded in `_generator/gen.cpp`)
+-----------------------------------------------------
+T1: state = [0x42; 16], key = [0x99; 16]
+T2: state = [0x00, 0x01, ..., 0x0f], key = [0x00; 16]
+T3: state = [0x00, 0x01, ..., 0x0f], key = [0x10, 0x11, ..., 0x1f]
+
+(Same input table as `round_enc.bin`; see that vector's `.meta.txt`
+for the rationale of each choice.)
+
+Output layout
+-------------
+48 bytes total = 3 × 16 bytes, concatenated in the order T1, T2, T3.
+Each 16-byte segment is the `soft_aesdec(state, key)` result for the
+corresponding tuple, written in the canonical FIPS-197 byte order.
+
+Generator
+---------
+source      = ./_generator/gen.cpp
+build       = ./_generator/Makefile (`make gen`)
+command     = ./gen round_dec
+output_size = 48 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/soft_aes.cpp
+function    = soft_aesdec(rx_vec_i128 in, rx_vec_i128 key)
+
+Phase
+-----
+Phase 2b (`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §§6.1, 7 commit 4).

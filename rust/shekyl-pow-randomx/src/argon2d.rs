@@ -151,6 +151,17 @@ const PARAMS: Params = match Params::new(
 /// an awkward 256-MiB heap-allocation dance for the `[Block; N]`
 /// type. Phase 2e's `Cache::derive` is the single production caller
 /// and will allocate `vec![Block::default(); RANDOMX_ARGON_BLOCKS]`.
+// REMOVE WHEN PHASE 2e WIRES THIS:
+//
+// Phase 2e lands `Cache::derive(seedhash) -> Cache` as the single
+// production caller of `fill_cache`. Until then `fill_cache` (and the
+// `RANDOMX_ARGON_*` constants + `PARAMS` it consumes transitively) is
+// dead-by-construction. Per `RANDOMX_V2_PHASE2B_PLAN.md` §5.1 F1
+// convergence, this is the function-level allow that replaced Phase
+// 2a's module-level `#[allow(dead_code)] mod argon2d;`. The narrower
+// scope keeps the `dead_code` lint live as wiring-bug signal across
+// the rest of the module.
+#[allow(dead_code)]
 pub(crate) fn fill_cache(key: &[u8], blocks: &mut [Block]) {
     assert_eq!(
         blocks.len(),

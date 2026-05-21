@@ -37,19 +37,42 @@
 //!   if those greps were already live. See
 //!   [`RANDOMX_V2_RUST.md`](../../docs/design/RANDOMX_V2_RUST.md) §7.2.
 //!
-//! # Scope at this commit (Phase 2a)
+//! # Scope at this PR (Phase 2b)
 //!
-//! Workspace scaffold and the Argon2d "memory fill" primitive used by
-//! `Cache::derive`. The primitive itself lands in the next commit
-//! (`src/argon2d.rs`). Subsequent sub-PRs (per
+//! Phase 2a landed the workspace scaffold and the Argon2d "memory fill"
+//! primitive used by `Cache::derive`. Phase 2b lands the remaining v2
+//! primitives the verifier needs plus spec-vector parity tests against
+//! the v2 fork's reference at pin `aaafe71`:
+//!
+//! - `src/aes.rs` — AES single-round wrappers (`cipher_round`,
+//!   `equiv_inv_cipher_round`) over `aes-0.9.0`'s `hazmat` API plus
+//!   the §3.2-3.4 composites (`AesGenerator1R`, `AesGenerator4R`,
+//!   `AesHash1R`), with 8 spec-vector parity tests consuming pre-
+//!   committed reference bytes via `include_bytes!`; the reviewer-
+//!   runnable C++ generator lives at
+//!   `tests/vectors/reference/aes/_generator/`.
+//! - `src/blake2_generator.rs` — `Blake2Generator` PRNG per spec §3.5.
+//! - `src/superscalar.rs` — `SuperscalarHash` program generator and
+//!   executor per spec §6 + §7.2, plus F4 structured 3-vector
+//!   decomposition spec-vector tests (Layer A program serialization
+//!   × 3 + Layer B execution × 3 + combined end-to-end attestation
+//!   = 7 vectors); the reviewer-runnable C++ generator lives at
+//!   `tests/vectors/reference/superscalar/_generator/`.
+//! - F1 convergence on `src/argon2d.rs`'s `#[allow(dead_code)]`: moved
+//!   from the module-level attribute on `mod argon2d` to per-item
+//!   attributes inside the module, matching the per-entry-point
+//!   discipline applied to the new modules. See
+//!   [`RANDOMX_V2_PHASE2B_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2B_PLAN.md)
+//!   §5.1.
+//!
+//! Subsequent sub-PRs (per
 //! [`RANDOMX_V2_PLAN.md`](../../docs/design/RANDOMX_V2_PLAN.md)
 //! §"Track A — Phase 2"):
 //!
-//! - **2b:** AES round + SuperScalarHash.
 //! - **2c:** `Vm<'a>` scratchpad + execution loop.
 //! - **2d:** Bytecode opcode dispatch.
-//! - **2e:** `Cache::derive` wrapping the Argon2d primitive landed
-//!   here.
+//! - **2e:** `Cache::derive` wrapping the Argon2d primitive landed by
+//!   Phase 2a and the SuperscalarHash primitive landed by Phase 2b.
 //! - **2f:** `CacheStore` LRU + crate-level CI invariant tests
 //!   (mechanical enforcement of §7.2's isolation invariants).
 //! - **2g:** C-side differential harness as a *separate* test-only
@@ -62,13 +85,7 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
-// CLIPPY: the `pub(crate)` items in `argon2d` (the RandomX-Argon2d
-// constants, the compile-time-validated `PARAMS`, and `fill_cache`
-// itself) are dead-by-construction until Phase 2e lands `Cache::derive`
-// as the single production caller. The module-level `#[allow]` is the
-// narrowest scope that covers all items without per-item annotations,
-// per `.cursor/rules/45-rust-lint-checks.mdc`'s "as narrowly as
-// possible" guidance balanced against the unit tests already exercising
-// every item inside the module.
-#[allow(dead_code)]
+mod aes;
 mod argon2d;
+mod blake2_generator;
+mod superscalar;

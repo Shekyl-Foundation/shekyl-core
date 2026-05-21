@@ -8,9 +8,19 @@ name = "shekyl-pow-randomx"
 description = "Pure-software RandomX v2 verifier for Shekyl daemon block validation (docs/design/RANDOMX_V2_PLAN.md, RANDOMX_V2_RUST.md)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# AES round primitive for AesGenerator1R/4R + AesHash1R per `specs.md`
+# §§3.2-3.4. See workspace `Cargo.toml` for the verification record.
+aes = { workspace = true }
+
+# Blake2b for the BlakeGenerator's "S = Hash512(S)" rebuild step per
+# `specs.md` §3.5. Direct dep per the workspace-Cargo.toml rationale.
+blake2 = { workspace = true }
+
+
 # Argon2d "memory fill" primitive used by Cache::derive (Phase 2e wraps
 # this). Pinned at workspace minor (0.5) matching shekyl-crypto-pq's
 # direct dep; Cargo's feature unification means the final feature set
