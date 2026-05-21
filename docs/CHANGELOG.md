@@ -2,6 +2,97 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- **Phase 2a PR #62 — address Copilot review (post-Round-1
+  follow-up cycle).** Doc-only commits on
+  `feat/randomx-v2-phase2a`. Addresses five Copilot review findings
+  surfaced against the Phase 2a initial commits (`107d6f8ce`,
+  `9f854e0ce`, `f0d648fb2`). The fixes cluster on two distinct
+  substantive concerns in the `_generator/` directory; the Rust
+  test source and the production `argon2d.rs` primitive are
+  unaffected.
+
+  - **Findings C1–C4 — "architecture-independent" wording is
+    materially wrong (4 sites).** The committed `_generator/gen.c`,
+    `_generator/Makefile`, `m8_t3_p1_shekyl_test_key.meta.txt`, and
+    `m64_t3_p1_shekyl_test_key.meta.txt` all asserted that the
+    `argon2_ref.c` reference Argon2 implementation "keeps the
+    produced bytes architecture-independent." That is wrong on
+    endianness: `gen.c`'s `write_raw` does a raw `fwrite` of
+    `block { uint64_t v[128] }` memory, which serializes each
+    `uint64_t` in the host's native byte order. The committed
+    `.bin` files happen to be little-endian u64 streams because
+    they were generated on a little-endian host (x86_64 Linux);
+    regenerating on a big-endian host would silently produce
+    different bytes and break the byte-for-byte test.
+
+    Reworded each site to the accurate framing: the reference
+    impl is **instruction-set-independent** (no AVX2/SSSE3 codegen
+    variance across hosts that share a byte order), and the
+    on-disk vector format is **a little-endian u64 stream** — the
+    same format `argon2d.rs`'s `blocks_to_le_bytes` produces in
+    Rust via `u64::to_le_bytes` (per `argon2d.rs:230-241`).
+    `gen.c`'s comment additionally records the big-endian-host
+    disposition: the fix if a future maintainer regenerates on
+    big-endian hardware is to add a `htole64`-style serialization
+    step in `write_raw`, not to redefine the on-disk format.
+
+    Important asymmetry preserved: the **Rust** test side is
+    already architecturally portable — `blocks_to_le_bytes` pins
+    the LE convention on both sides regardless of `Block`'s
+    in-memory layout, so the `cargo test` path works correctly on
+    big-endian targets. The bug was only on the C generator side
+    and only in the comment claims, not in the bytes themselves
+    (which are correct for the all-little-endian maintainer/CI
+    fleet the project ships against).
+
+  - **Finding C5 — `_generator/README.md` provenance check command
+    is broken (1 site).** The "Reviewing the vectors" section
+    documented `diff -r . ..` as the verification command. That
+    compares the `_generator/` directory's file set (`gen.c`,
+    `Makefile`, `README.md`) against the parent directory's file
+    set (`*.bin`, `*.meta.txt`); the file sets do not overlap, so
+    `diff -r` always reports "only in" entries instead of the
+    intended check (do the regenerated `.bin` files match the
+    committed bytes?).
+
+    Replaced with `git diff --stat -- ../*.bin` issued from inside
+    `_generator/`. `make vectors` overwrites the committed bytes
+    in-place; `git diff --stat` then asks git whether the working
+    tree has drifted from `HEAD` on the specific `.bin` paths. A
+    clean exit (no output) is the affirmative attestation that
+    the committed bytes match the named fork pin. Added a paragraph
+    explaining why the prior `diff -r . ..` command did not work
+    so a future reviewer doesn't reintroduce the same shape.
+
+  *Gates.* Doc/comment-only changes; no production Rust touched.
+  `cargo fmt --check`, `cargo clippy -p shekyl-pow-randomx
+  --all-targets -- -D warnings`, `cargo test -p shekyl-pow-randomx`,
+  and `cargo doc -p shekyl-pow-randomx --no-deps` all clean. The
+  Phase 2f forward-compatibility greps from
+  `RANDOMX_V2_RUST.md` §7.2 (`#[no_mangle]`, `extern "C" fn`,
+  `#[export_name]`, module-level runtime-mutable state) still
+  return zero hits on the crate.
+
+  *Scope discipline note.* C1–C4 land as a single commit because
+  they are the same finding instance applied at four sites with
+  identical content fixes (per `90-commits.mdc` scope-per-commit
+  rule — "scope" is the substantive change class, not the file
+  count); C5 lands as a separate commit because it is a distinct
+  finding (functional bug in a procedure command vs. wording
+  precision). The Lean-A disposition (reword the comments to
+  describe the constraint accurately) is preferred over Lean-B
+  (add `htole64` portability shims to `gen.c`) because the
+  generator is a developer-machine-only artifact that runs on
+  the project's all-little-endian maintainer fleet, and bundling
+  portability shims for a host architecture nobody runs on is
+  the cost-benefit-defer-to-later anti-pattern's mirror image
+  per [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc).
+  The big-endian-host disposition is recorded in `gen.c`'s
+  comment so a future maintainer who needs it knows the
+  prescribed shape.
+
 ### Added
 
 - **RandomX v2 Track A Phase 2a — `shekyl-pow-randomx` crate
