@@ -234,24 +234,49 @@ multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "serde_json", "hex
 # measure them. Not part of the public API; consumers must not depend
 # on this feature.
 bench-internals = []
-# Internal feature: re-exports otherwise-`pub(crate)` failure-injection
-# wrappers (`FaultInjecting<R: RefreshEngine>`,
-# `Engine::replace_refresh`, eventual `FaultInjecting<L: LedgerEngine>`
-# and `LocalLedger::from_test_blocks` per PR 4 C6β) for downstream
-# integration test crates that need composition-paradigm failure
-# injection at the trait boundary. Not part of the public API;
-# consumers must not depend on this feature in production builds.
-# Symmetric with `bench-internals` (above): both expose
-# `pub(crate)` test/benchmark affordances behind an opt-in feature
-# without bleeding them into the production API.
+# Internal feature: gates compilation of `pub(crate)` failure-injection
+# wrappers (`FaultInjecting<R: RefreshEngine>` per C6α,
+# `FaultInjecting<L: LedgerEngine>` per C6β,
+# `Engine::replace_refresh` test-only setter per C6α,
+# `LocalLedger::from_test_blocks` constructor per C6β) so they
+# build under the test substrate without bleeding into production.
+# The four surfaces are `#[cfg(any(test, feature = "test-helpers"))]`-
+# gated AT THE DEFINITION SITE; the feature flag is the external
+# half of that gate (the `test` cfg is the internal half).
 #
-# Pre-genesis no downstream consumer crate exists yet; the feature is
-# declared so the gating composes correctly when one emerges. The
-# gating itself is the load-bearing property — `#[cfg(any(test,
-# feature = "test-helpers"))]` on the four C6 test-helper surfaces
-# ensures none of them link into production builds. See
-# `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C6α / F-Mock-1
-# / F-Mock-7.
+# Symmetric with `bench-internals` (above) in name and shape, but
+# NOT in re-export posture: `bench-internals` actually re-exports
+# its `pub(crate)` types under a `__bench_internals` module
+# (`pub use` gated on the feature) so external Criterion harnesses
+# can name them; `test-helpers` does NOT currently re-export
+# anything. The four surfaces remain `pub(crate)` even with the
+# feature enabled — downstream crates cannot reach them through
+# the public API regardless of feature posture.
+#
+# Why no public re-exports yet (`21-reversion-clause-discipline.mdc`):
+# pre-genesis no downstream consumer crate exists; speculative re-
+# exports without a named caller would be the "pre-provisioning
+# for hypothetical consumers" anti-pattern the discipline rejects.
+# The current shape (compile-gate-only) is the minimum surface
+# that lets the test substrate exist; the public-re-export half
+# lands when the first downstream consumer emerges, at which point
+# the disposition is reopened via a focused PR adding
+# `#[cfg(feature = "test-helpers")] pub use ...` re-exports under
+# a `__test_helpers` module (matching the `__bench_internals`
+# precedent), the V3.0-targeted FOLLOWUPS item naming that
+# downstream crate, and an `AUDIT_SCOPE.md` amendment if the
+# crate exposes any production-surface implications.
+#
+# Production-build safety property (the load-bearing claim): the
+# `#[cfg(any(test, feature = "test-helpers"))]` gating at the
+# definition site ensures NONE of the four failure-injection
+# surfaces link into a default-feature production build. The
+# feature flag's external half is what lets a downstream crate
+# (when one exists) opt into the test-substrate surface without
+# patching the upstream crate.
+#
+# See `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C6α /
+# F-Mock-1 / F-Mock-7.
 test-helpers = []
 
 [lints]
