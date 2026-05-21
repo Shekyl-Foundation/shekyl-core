@@ -86,7 +86,26 @@ use crate::scan::ScanResult;
 /// named checkpoints per [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`]
 /// §2.3 + §7 invariant 4. Ownership splits between the
 /// orchestrator (checkpoints 1 + 4) and the producer
-/// (checkpoints 2 + 3 + 5):
+/// (checkpoints 2 + 3 + 5).
+///
+/// **List ordering vs. checkpoint numbering.** The bullets below
+/// are listed in **temporal-firing order** (the order in which
+/// checkpoints fire during a single refresh attempt:
+/// 1 → 2 → 3 → 5 → 4), not in numeric order. The checkpoint
+/// numbering itself preserves the design-round audit trail per
+/// [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`] §7 item 4
+/// ("checkpoint 5 added per PR 4 Round 4 F2"): numbers 1–4 were
+/// the original
+/// four-checkpoint discipline; the per-transaction inner safe-
+/// point was added later as checkpoint 5 rather than renumbering
+/// the existing four sites. Renumbering to numeric-sequential
+/// order is rejected per `21-reversion-clause-discipline.mdc`'s
+/// substrate-anchored disposition: 12+ existing cross-reference
+/// sites across the codebase (CHANGELOG, design docs,
+/// orchestrator code, producer code) would all need
+/// synchronized migration, and the audit-trail provenance of
+/// "checkpoint 5 = the F2-added one" carries reviewer-facing
+/// information that pure-sequential numbering would lose.
 ///
 /// 1. **Orchestrator — pre-attempt** (before producer entry). If
 ///    the cancel token has fired, the orchestrator returns
