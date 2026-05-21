@@ -154,25 +154,37 @@
 
 pub mod capability;
 pub mod daemon;
+pub(crate) mod diagnostics;
 pub mod error;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) mod fault_injecting_ledger;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) mod fault_injecting_refresh;
 pub mod lifecycle;
 pub(crate) mod local_keys;
 pub(crate) mod local_ledger;
+pub(crate) mod local_refresh;
 pub mod merge;
 pub mod network;
 pub mod pending;
 pub mod refresh;
 pub mod signer;
 pub(crate) mod traits;
+pub mod view_material;
 
 #[cfg(test)]
 pub(crate) mod test_support;
 
 pub use capability::Capability;
 pub use daemon::DaemonClient;
+pub use diagnostics::{
+    DaemonOp, DiagnosticSink, MalformedKind, NoopDiagnosticSink, ProtocolErrorKind,
+    RefreshDiagnostic, SuppressedClass, TracingDiagnosticSink,
+};
 pub use error::{IoError, KeyError, OpenError, PendingTxError, RefreshError, SendError, TxError};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 pub use local_ledger::LocalLedger;
+pub use local_refresh::LocalRefresh;
 pub use network::Network;
 pub use pending::{
     FeePriority, PendingTx, ReservationId, TxHash, TxRecipient, TxRecipientSummary, TxRequest,
@@ -181,6 +193,7 @@ pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
 };
 pub use signer::{EngineSignerKind, SoloSigner};
+pub use view_material::ViewMaterial;
 
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
@@ -191,7 +204,7 @@ use shekyl_engine_prefs::WalletPrefs;
 use shekyl_engine_state::WalletLedger;
 
 use crate::engine::local_ledger::LedgerState;
-use crate::engine::traits::{DaemonEngine, LedgerEngine};
+use crate::engine::traits::{DaemonEngine, LedgerEngine, RefreshEngine};
 
 /// The Shekyl V3 wallet domain orchestrator.
 ///
@@ -267,6 +280,7 @@ pub struct Engine<
     S: EngineSignerKind,
     D: DaemonEngine = DaemonClient,
     L: LedgerEngine = LocalLedger,
+    R: RefreshEngine = LocalRefresh,
 > {
     /// On-disk envelope: `.wallet.keys` (region 1) +
     /// `.wallet` (region 2). Owns the advisory lock and the
@@ -352,7 +366,7 @@ pub struct Engine<
     /// Generic over `D: DaemonEngine`. Production code defaults `D` to
     /// [`DaemonClient`] (a thin wrapper over
     /// `shekyl_simple_request_rpc::SimpleRequestRpc`); crate-internal
-    /// tests substitute `MockDaemon` to drive failure-injection and
+    /// tests substitute `TestDaemon` to drive failure-injection and
     /// deduplication scenarios against the same orchestration logic.
     /// See `crate::engine::traits::daemon` for the trait contract.
     daemon: D,
@@ -387,6 +401,55 @@ pub struct Engine<
     /// task exit (RAII).
     refresh_slot: refresh::RefreshSlot,
 
+    /// Producer-side [`RefreshEngine`] implementor.
+    ///
+    /// Per [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §7.X C5
+    /// (`Engine<S, D, L, R>` parameterization), the engine owns one
+    /// `R: RefreshEngine` for the lifetime of the open wallet; the
+    /// orchestrator's refresh paths (`Engine::start_refresh` /
+    /// `Engine::refresh`) dispatch the per-attempt producer body
+    /// through the trait surface. Production callers default
+    /// `R = LocalRefresh`, constructed at every `Engine::create` /
+    /// `Engine::open_*` site by moving a freshly-derived
+    /// [`ViewMaterial`](view_material::ViewMaterial) into
+    /// `LocalRefresh::new`.
+    ///
+    /// # Why `Arc<R>` rather than `R`
+    ///
+    /// `run_refresh_task` takes an `Arc<RwLock<Engine<...>>>` because
+    /// the orchestrator and the merge path share the same engine
+    /// instance. The producer body (`produce_scan_result`) is long-
+    /// running — network round-trips plus per-block scan — and must
+    /// **not** hold any engine borrow across its `.await` boundary:
+    /// the merge path needs the write half of the `RwLock` to land
+    /// the scan result, and a read-borrow held through the scan
+    /// would deadlock the merge.
+    ///
+    /// Holding the implementor as `Arc<R>` lets the orchestrator
+    /// `Arc::clone` it out of the read-lock in a single brief borrow
+    /// and then dispatch the trait call lock-free. The `&self`
+    /// receiver on the trait method composes naturally: the cloned
+    /// `Arc<R>` keeps `R` alive for the future's lifetime, the trait
+    /// implementor's interior state is accessed through `&*arc` (free
+    /// of borrow-on-Engine). `LocalRefresh`'s `ViewMaterial` remains
+    /// owned-and-non-Clone at the implementor level; the Arc wraps
+    /// the implementor, not the secret.
+    ///
+    /// # Visibility for trait-dispatch (Stage 4)
+    ///
+    /// Holding the implementor by-Arc on `Engine` makes the producer
+    /// wipe-on-drop chain run when the last `Arc<R>` reference drops
+    /// — typically at wallet close (today: `Engine::close`; Stage 4:
+    /// actor shutdown). The Arc's strong count is exactly 1 in
+    /// steady state (engine owns the only handle); the producer
+    /// briefly bumps it to 2 for the duration of one
+    /// `produce_scan_result` call, then drops back to 1 when the
+    /// future settles. The Stage 4 actor cutover replaces this field
+    /// with an actor handle; the trait surface stays the same.
+    ///
+    /// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
+    pub(crate) refresh: std::sync::Arc<R>,
+
     /// Compile-time signer-kind dispatch. The actual key material lives
     /// in [`Engine::keys`] (for `SoloSigner`); this marker exists so
     /// the V3.1 multisig type can name distinct method signatures via
@@ -395,8 +458,8 @@ pub struct Engine<
     _signer: PhantomData<S>,
 }
 
-impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine> std::fmt::Debug
-    for Engine<S, D, L>
+impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine, R: RefreshEngine>
+    std::fmt::Debug for Engine<S, D, L, R>
 {
     /// Redacted debug output. Specific reasons each field is or is not
     /// printed:
@@ -429,6 +492,14 @@ impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine> st
     ///   process-local monotonic `u64` with no observable secret
     ///   content; surfacing it helps debugging without leaking
     ///   reservation details.
+    /// - `refresh` — printed as an opaque `<redacted: RefreshEngine>`
+    ///   marker. The producer holds view-and-spend material per
+    ///   §5.4.7 R4; surfacing the implementor's `Debug` would risk
+    ///   leaking that material through a downstream sink. The
+    ///   producer's identity type is also printed for diagnostic
+    ///   purposes (e.g., distinguishing `LocalRefresh` from a future
+    ///   actor-backed implementor at Stage 4); `type_name` is
+    ///   secret-free.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Engine")
             .field("file", &self.file)
@@ -441,6 +512,8 @@ impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine> st
             .field("network", &self.network)
             .field("capability", &self.capability)
             .field("refresh_running", &self.refresh_slot.is_claimed())
+            .field("refresh", &"<redacted: RefreshEngine>")
+            .field("refresh_kind", &std::any::type_name::<R>())
             .field("signer_kind", &std::any::type_name::<S>())
             .finish()
     }
@@ -491,7 +564,7 @@ impl std::ops::Deref for LedgerReadGuard<'_> {
 // `D: DaemonEngine` and `L: LedgerEngine` private-bound: see the
 // rationale on the `pub struct Engine` definition in this file.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine> Engine<S, D, L> {
+impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> Engine<S, D, L, R> {
     /// Network this wallet is bound to. Cached from
     /// [`WalletFile`]'s region 1 at construction; stable for the life
     /// of the open wallet.
@@ -527,7 +600,7 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine> Engine<S, D, L> {
     /// The return type is `&D`, the type-parameter slot for the
     /// daemon. The production default `D = DaemonClient` resolves
     /// this to `&DaemonClient`; crate-internal tests substitute
-    /// `MockDaemon` and observe the same accessor shape.
+    /// `TestDaemon` and observe the same accessor shape.
     pub fn daemon(&self) -> &D {
         &self.daemon
     }
@@ -541,8 +614,127 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine> Engine<S, D, L> {
     /// `reserve_proof`) that take borrowed inputs and return finished
     /// artifacts, so call sites elsewhere never need a borrow on
     /// [`AllKeysBlob`] directly.
+    // After C5's trait-dispatch migration AND C5β's
+    // producer-scaffolding deletion, no production reader of
+    // `keys()` survives: the legacy `build_scanner_from_keys` /
+    // `produce_scan_result` free functions in `engine/refresh.rs`
+    // were deleted in C5β (`b6a1274de`); `LocalRefresh::build_scanner`
+    // (`engine/local_refresh.rs:283`) constructs the scanner from
+    // `ViewMaterial` derived at `Engine::assemble` time via
+    // `ViewMaterial::try_from_keys(&self.keys)`. The remaining
+    // live consumer is the `Engine::replace_refresh` test-only
+    // setter (`mod.rs:695`), which re-derives `ViewMaterial` from
+    // `engine.keys()` for hybrid tests composing `LocalRefresh` /
+    // `FaultInjecting<R>` post-construction; that surface is
+    // `#[cfg(any(test, feature = "test-helpers"))]`-gated, hence
+    // the `#[allow(dead_code)]` below remains load-bearing for
+    // default-feature production builds where no consumer fires.
+    //
+    // Phase 2's `sign_transfer` / `tx_proof` / `reserve_proof`
+    // will introduce production consumers (either re-using this
+    // accessor or via dedicated method-level surfaces), at which
+    // point `#[allow(dead_code)]` is reopened for deletion per
+    // `21-reversion-clause-discipline.mdc`'s named-criterion
+    // shape.
+    #[allow(dead_code)]
     pub(crate) fn keys(&self) -> &AllKeysBlob {
         &self.keys
+    }
+
+    /// Test-only constructor: rebuild the engine with `refresh`
+    /// substituted in place of the existing
+    /// [`RefreshEngine`](super::traits::RefreshEngine) implementor,
+    /// leaving every other field unchanged.
+    ///
+    /// Mirrors [`super::Engine::replace_daemon`] /
+    /// [`super::Engine::replace_ledger`] for the `R: RefreshEngine`
+    /// slot added in PR 4 C5a. Hybrid tests that need a
+    /// fully-constructed `Engine<SoloSigner>` but want to wrap the
+    /// production [`super::local_refresh::LocalRefresh`] in a
+    /// [`super::fault_injecting_refresh::FaultInjecting`] failure-
+    /// injection wrapper compose this with `replace_daemon` and
+    /// `replace_ledger`:
+    ///
+    /// ```ignore
+    /// let real = Engine::<SoloSigner>::create(params, dummy_daemon())?;
+    /// // Re-derive ViewMaterial from the engine's keys (the same path
+    /// // Engine::create uses internally at assemble time):
+    /// let vm = ViewMaterial::try_from_keys(real.keys())?;
+    /// let refresh = FaultInjecting::new(LocalRefresh::new(vm));
+    /// let hybrid: Engine<SoloSigner, TestDaemon, FaultInjecting<LocalLedger>, FaultInjecting<LocalRefresh>> =
+    ///     real
+    ///         .replace_daemon(test_daemon)
+    ///         .replace_ledger(FaultInjecting::new(LocalLedger::from_test_blocks(Vec::new())))
+    ///         .replace_refresh(refresh);
+    /// ```
+    ///
+    /// The original `R1` refresh implementor is dropped (its
+    /// `Arc<R1>` strong count goes to zero, firing the wipe-on-drop
+    /// chain on any view material the implementor held); the
+    /// returned engine's `refresh` field is a fresh `Arc<R2>` over
+    /// the supplied implementor. Per the C6α "Arc replacement
+    /// semantics" rationale, tests must not call this method while
+    /// a refresh is in flight — the engine's single-flight slot
+    /// guards against concurrent `start_refresh` but not against
+    /// setter-during-refresh races.
+    ///
+    /// # Visibility
+    ///
+    /// `pub(crate)` and gated by `#[cfg(any(test, feature =
+    /// "test-helpers"))]` per the C6α F-Mock-1 symmetry pin (asymmetric
+    /// with sibling `replace_daemon` / `replace_ledger`, which are
+    /// `#[cfg(test)]`-only: those methods predate the `test-helpers`
+    /// feature and exist purely for crate-internal tests, while
+    /// `replace_refresh` lands alongside the `FaultInjecting<R>`
+    /// wrapper that is itself `test-helpers`-feature-callable for
+    /// downstream consumers). Production builds do not compile this
+    /// method.
+    ///
+    /// # API shape change from C6α
+    ///
+    /// C6α introduced `replace_refresh` as a `&mut self` setter that
+    /// could only swap one `R` for another `R` of the same type. C7's
+    /// hybrid test requires changing the type parameter from
+    /// `LocalRefresh` to `FaultInjecting<LocalRefresh>`, which the
+    /// `&mut self` shape cannot express. The consume-and-rebuild
+    /// signature here matches the precedent set by `replace_daemon`
+    /// / `replace_ledger` and lets the four-parameter
+    /// `Engine<S, D, L, R>` compose cleanly across all three slot
+    /// substitutions. Per the C6α docstring's "Phase 1 author
+    /// commitment note", `replace_refresh` had no consumers in
+    /// C6α/C6β/C6γ, so the signature change is non-breaking; C7 is
+    /// the first consumer.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[allow(dead_code)]
+    pub(crate) fn replace_refresh<R2: RefreshEngine>(self, refresh: R2) -> Engine<S, D, L, R2> {
+        let Engine {
+            file,
+            keys,
+            ledger,
+            reservations,
+            next_reservation_id,
+            prefs,
+            daemon,
+            network,
+            capability,
+            refresh_slot,
+            refresh: _old,
+            _signer,
+        } = self;
+        Engine {
+            file,
+            keys,
+            ledger,
+            reservations,
+            next_reservation_id,
+            prefs,
+            daemon,
+            network,
+            capability,
+            refresh_slot,
+            refresh: std::sync::Arc::new(refresh),
+            _signer,
+        }
     }
 }
 
@@ -554,7 +746,7 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine> Engine<S, D, L> {
 // `LedgerEngine` to a richer surface (or replaces this accessor
 // with a trait-level read-state method), this block dissolves.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
+impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine> Engine<S, D, LocalLedger, R> {
     /// Borrow the persistent ledger for read-only queries (transfers,
     /// bookkeeping entries, tx metadata, sync cursor). Mutation goes
     /// through the methods on [`Engine`] that the lifecycle / refresh /

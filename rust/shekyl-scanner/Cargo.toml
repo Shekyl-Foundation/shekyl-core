@@ -62,5 +62,22 @@ harness = false
 name = "scan_block_iai"
 harness = false
 
+# PR 4 §3.1 / F11-S substrate: per-output cost measurement for
+# `Scanner::scan` against worst-case (all view tags match — F11-S
+# binding) and typical-case (view-tag-filtered — contextual) fixtures.
+# The wall-clock harness (`scan_transaction.rs`) sweeps N ∈ {1,4,8,16}
+# in warm/cold-cache variants and reports quantiles; the iai-callgrind
+# companion (`scan_transaction_iai.rs`) cross-validates with
+# deterministic instruction counts. Both bench files share fixture
+# helpers via `shekyl_scanner::bench_fixtures::*` (gated by the
+# `test-utils` feature on the self-dep above).
+[[bench]]
+name = "scan_transaction"
+harness = false
+
+[[bench]]
+name = "scan_transaction_iai"
+harness = false
+
 [lints]
 workspace = true

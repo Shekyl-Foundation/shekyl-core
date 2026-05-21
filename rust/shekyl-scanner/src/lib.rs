@@ -58,6 +58,15 @@ pub mod subaddress;
 pub mod transfer;
 pub mod view_pair;
 
+/// Bench fixture helpers for the [`scan::Scanner::scan`] per-output
+/// cost measurement (PR 4 §3.1 / F11-S substrate). Gated behind
+/// `#[cfg(any(test, feature = "test-utils"))]` so the production
+/// crate surface stays free of bench-only constructors; the two
+/// `benches/scan_transaction*.rs` harnesses both consume this
+/// module via the existing self-dep with `features = ["test-utils"]`.
+#[cfg(any(test, feature = "test-utils"))]
+pub mod bench_fixtures;
+
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -66,7 +75,10 @@ pub use claim::ClaimableInfo;
 pub use extra::{Extra, ExtraField};
 pub use ledger_ext::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt};
 pub use output::WalletOutput;
-pub use scan::{GuaranteedScanner, RecoveredWalletOutput, ScanError, Scanner, Timelocked};
+pub use scan::{
+    GuaranteedScanner, RecoveredWalletOutput, ScanError, ScanOutcome, Scanner, Timelocked,
+    MAX_OUTPUTS,
+};
 pub use shared_key::SharedKeyDerivations;
 pub use view_pair::{GuaranteedViewPair, ViewPair, ViewPairError};
 

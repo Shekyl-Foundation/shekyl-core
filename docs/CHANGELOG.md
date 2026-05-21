@@ -4,6 +4,1036 @@
 
 ### Added
 
+- **Stage 1 PR 4 — `RefreshEngine` trait surface**
+  (`feat/stage-1-pr4-refresh-engine`, 2026-05-15 → 2026-05-20).
+  Lands the Phase-0a-binding `RefreshEngine` trait and the
+  `ViewMaterial` adjacent type per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §4 Phase 0a + Phase 0c + Phase 0e and
+  [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.3 (PR 4 C0 = `322677261`; C1 = `d3edc1abb`).
+  - `pub trait RefreshEngine: Send + Sync + 'static` at
+    [`engine/traits/refresh.rs`](../rust/shekyl-engine-core/src/engine/traits/refresh.rs)
+    with one async method `produce_scan_result(snapshot:
+    LedgerSnapshot, daemon: &D, opts: &RefreshOptions, cancel:
+    &CancellationToken, progress: &watch::Sender<RefreshProgress>,
+    diagnostics: &dyn DiagnosticSink) -> Result<ScanResult,
+    Self::Error>` and `type Error: Into<RefreshError>`.
+  - Five-checkpoint cancellation discipline (1 / 4 on the
+    orchestrator; 2 / 3 / 5 on the trait body; checkpoint 5
+    is the per-transaction inner check per §5.4.9 F2 +
+    F11 + F11-S safe-point pins).
+  - `Self::Error` is **unit-variant-only at the trait surface**
+    per §5.4.7 R6 reframe: rich structured diagnostic
+    information flows through the `&dyn DiagnosticSink`
+    second channel; the synchronous return is a structural-
+    branch signal only. Of `RefreshError`'s six variants,
+    three are reachable from a `RefreshEngine` impl's
+    `Self::Error` via `Into` (`Cancelled` unit, `Io(IoError)`,
+    `InternalInvariantViolation { context: &'static str }`);
+    three are orchestrator-constructed only
+    (`MalformedScanResult` at the merge layer;
+    `ConcurrentMutation` at the merge gate; `AlreadyRunning`
+    at binary-layer single-flight).
+  - `ScanResult` atomicity-under-cancellation contract:
+    `produce_scan_result` returns **either** a `ScanResult`
+    covering the full span it scanned **or**
+    `RefreshError::Cancelled` — no partial-span result is
+    ever returned (R7 disposition).
+  - `LedgerSnapshot` is passed **by value** (R5 + §5.4.5):
+    the orchestrator constructs under the engine read-guard,
+    drops the guard, and hands the snapshot to the producer
+    by move; the snapshot carries reorg-window descriptors
+    only and is cheap to clone.
+  - `&D` daemon-handle borrow with the §2.5 `Clone + Send +
+    Sync + 'static` bound on `D`, so implementors can clone
+    internally if they need an owned handle to spawn work
+    (e.g., parallel block-fetch refinements); implementors
+    MUST NOT borrow `&D` across a `tokio::spawn` boundary.
+  - `pub struct ViewMaterial { spend_pub: EdwardsPoint;
+    view_scalar: Zeroizing<Scalar>; x25519_sk: Zeroizing<[u8;
+    32]>; ml_kem_dk: Zeroizing<Vec<u8>>; spend_secret:
+    Zeroizing<[u8; 32]> }` at
+    [`engine/view_material.rs`](../rust/shekyl-engine-core/src/engine/view_material.rs)
+    with `Zeroize + ZeroizeOnDrop` derived; capturing the
+    view-and-spend material at `LocalRefresh::new` so the
+    `Scanner` builds once and is held for the instance
+    lifetime (no per-attempt scanner construction; no
+    per-attempt secret duplication; R4 a-instance-scoped).
+  - The `LocalRefresh` implementor at
+    [`engine/local_refresh.rs`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+    (PR 4 C4 = `ac100e1ab`) is the V3.0 production `R`
+    parameter for `Engine<S, D, L, R>`; future implementors
+    (Stage 4 actor-mesh `RefreshActor`; any future producer
+    variant) implement the same trait surface.
+
+- **Stage 1 PR 4 — `RefreshDiagnostic` enum + `DiagnosticSink`
+  trait + Stage 1 sink implementations** (PR 4 C2 =
+  `8fc207051`; `SuppressedRateLimit` variant per Round 4
+  review pass F6 = same commit). Lands the second channel of
+  the two-channel error / diagnostic actor-mesh seam per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 reframe + §5.4.8 attack-surface dispositions.
+  - `pub enum RefreshDiagnostic` at
+    [`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs)
+    with `#[non_exhaustive]` and the Round-4-audit-confirmed
+    Stage 1 variant set: `DaemonMalformed { kind:
+    MalformedKind }`, `DaemonTimeout { op: DaemonOp, elapsed:
+    Duration }`, `DaemonProtocolError { kind:
+    ProtocolErrorKind }`, `ReorgObserved { fork_height: u64,
+    depth: u32 }`, `ScanProgress { height: u64, candidates:
+    u32 }`, and the Round-4-F6-added `SuppressedRateLimit {
+    class: SuppressedClass }`.
+  - Supporting bounded enums (`MalformedKind`, `DaemonOp`,
+    `ProtocolErrorKind`, `SuppressedClass`), all
+    `#[non_exhaustive]`; `SuppressedClass` carries one arm per
+    rate-limited event class (`DaemonMalformed`,
+    `DaemonTimeout`, `DaemonProtocolError`, `ReorgObserved`,
+    `ScanProgress`). The `SuppressedRateLimit` variant
+    carries *only* `class: SuppressedClass` — no count, no
+    timing, no original-event payload — per the §5.4.8 #5
+    F13-pin closing the suppressed-event-count covert
+    channel back from the producer's internal state.
+  - `pub trait DiagnosticSink: Send + Sync + 'static` with
+    one method `fn emit(&self, event: RefreshDiagnostic)`.
+    Trait-level contract pins (rustdoc): emission is
+    **non-blocking** (extends to **non-blocking under
+    concurrent emission**, foreclosing `Mutex<VecDeque<_>>`-
+    style implementations that re-introduce the producer-
+    liveness hazard at scale); emission/return **coherence**
+    (every non-`Cancelled` `Err` return is preceded by at
+    least one corresponding `RefreshDiagnostic` emission
+    before the error returns, with `AssertionSink`-driven
+    property tests at C7 as the canonical reference per
+    [`19-validation-surface-discipline.mdc`](../.cursor/rules/19-validation-surface-discipline.mdc));
+    **per-emitter FIFO ordering preserved** (the
+    seventh contract pin added by Round 4 review pass F4 =
+    §5.4.6; cross-emitter ordering is undefined); and the
+    in-process-only trust-boundary contract per §5.4.6 /
+    §5.4.8 #4 (full-fidelity `RefreshDiagnostic` consumers
+    MUST live inside the wallet trust boundary recursively;
+    cross-process / network-bound consumers receive only
+    projection types sanitized at the boundary).
+  - `pub struct NoopDiagnosticSink` + `pub struct
+    TracingDiagnosticSink` ship as the Stage 1 sink
+    implementations; `TracingDiagnosticSink::emit` routes
+    **per-class projections** to `tracing::event!` per the
+    Round-4-review-pass F9 audit (variant tag only for
+    `DaemonMalformed` / `DaemonProtocolError` /
+    `SuppressedRateLimit`; bucketed `elapsed` for
+    `DaemonTimeout`; bucketed `depth` for `ReorgObserved`;
+    bucketed `candidates` for `ScanProgress` with `height`
+    elided), not the full `RefreshDiagnostic` `Debug` impl.
+  - All trait + enum surface re-exported flat at the
+    `shekyl_engine_core` crate root per the R3 pattern.
+
+- **Stage 1 PR 4 — C6 no-Mock substrate pass (`RefreshEngine` /
+  `LedgerEngine` failure-injection wrappers)**
+  (`feat/stage-1-pr4-refresh-engine`, 2026-05-20). Lands the
+  C6α + C6β sub-commits of PR 4's substrate pass per the Round 5
+  amendment (commit `8484e669a`) and sub-pin extension
+  (commit `29cb7e138`, F-Mock-1 through F-Mock-8). The pass closes
+  the [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) "Stage 1 retroactive
+  Mock-X cleanup: `MockLedger` → `LocalLedger::from_test_blocks(...)`
+  + `FaultInjecting<LocalLedger>`" entry and applies the no-Mock
+  pattern PR 3 established (production-only implementors +
+  composable trait-level `FaultInjecting<T>` wrappers) to PR 2's
+  inherited `MockLedger` parallel-implementation.
+
+  *C6α — `FaultInjecting<R: RefreshEngine>` wrapper + `test-helpers`
+  feature* (commit `e9310542a`):
+  - Adds `test-helpers = []` Cargo feature to
+    [`rust/shekyl-engine-core/Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+    (mirrors the `bench-internals` precedent) gating the C6
+    test-helper surfaces with `#[cfg(any(test, feature =
+    "test-helpers"))]` per the F-Mock-1 symmetry pin.
+  - Adds
+    [`engine/fault_injecting_refresh.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs)
+    implementing `FaultInjecting<R: RefreshEngine>` with the
+    Option (i) wrapper API (`type Error = RefreshError`; FIFO
+    `Mutex<VecDeque<RefreshError>>` queue; `queue_failure(err)`
+    general injector; `queued_failures()` drain inspector;
+    `debug_assert!`-on-Drop queue-drain contract per F-Mock-2).
+  - Adds `Engine::replace_refresh` test-only setter on
+    [`engine/lifecycle.rs`](../rust/shekyl-engine-core/src/engine/lifecycle.rs)
+    mirroring the existing `replace_daemon` / `replace_ledger`
+    helpers.
+  - Adds Class 1 trait-surface smoke tests covering empty-queue
+    passthrough, single-injection-then-delegation, multi-injection
+    FIFO ordering, and `#[should_panic]` queue-drain-on-teardown.
+
+  *C6β — `FaultInjecting<L: LedgerEngine>` + `LocalLedger::from_test_blocks`
+  + `MockLedger` retirement*:
+  - Adds
+    [`engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs)
+    implementing `FaultInjecting<L: LedgerEngine>` with the same
+    Option (i) wrapper shape (queue-of-`RefreshError`,
+    `queue_failure` / `queue_concurrent_mutation` /
+    `queued_failures`, `debug_assert!`-on-Drop). Not `Clone` by
+    design — the prior `MockLedger`'s `Arc<Mutex<…>>` aliasing
+    shape (inherited from CryptoNote test patterns) does not
+    survive the no-Mock transition.
+  - Adds test-only `LocalLedger::from_test_blocks(Vec<Block>)`
+    constructor at
+    [`engine/local_ledger.rs`](../rust/shekyl-engine-core/src/engine/local_ledger.rs).
+    The V3.0 substrate supports the empty-`Vec` case only (the
+    sole shape every existing `MockLedger`-replaced caller
+    needs); non-empty `Vec` panics with a forward-pointer to
+    the V3.1 `TestLedgerBuilder` substrate-design FOLLOWUPS
+    entry. The `Vec<Block>` signature is load-bearing — V3.1's
+    substrate consumes the body without a signature change per
+    the rationale recorded in the constructor's rustdoc.
+  - Migrates the §5.2 hybrid retry integration test
+    `hybrid_apply_scan_result_retries_on_concurrent_mutation`
+    (in
+    [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs))
+    from `MockLedger::with_seed(...)` +
+    `queue_concurrent_mutation()` to
+    `FaultInjecting::new(LocalLedger::from_test_blocks(Vec::new()))`
+    + `queue_concurrent_mutation()`. The wrapper's non-`Clone`
+    posture required restructuring the assertion sites from a
+    cloned handle to read-guard access through the engine's
+    `Arc<RwLock<Engine<…>>>`; this is the structurally-correct
+    shape (single owner per the no-Mock substrate-inheritance
+    discipline).
+  - Deletes `MockLedger` + `MockLedgerState` + `ROLE_LEDGER` +
+    associated rustdoc + contract tests +
+    `derive_seed_pinned_fixture_for_role_ledger` test from
+    [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
+    (`ROLE_LEDGER` becomes dead weight because `LocalLedger`'s
+    `from_test_blocks` is deterministic and consumes no seed;
+    the `ROLE_DAEMON` HKDF-derivation pinned-fixture test in
+    the same module covers the underlying derivation mechanism).
+  - Updates the stale `MockLedger` reference in
+    [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §1.2 (the only active-doc factual claim that named
+    `MockLedger` as the current substrate; the broader
+    historical references in §§4+ and the PR 2 / PR 3 design
+    docs remain as historical-record prose per the
+    `15-deletion-and-debt.mdc` "while we're here" discipline).
+
+  *C6γ — `MockDaemon` → `TestDaemon` rename*:
+  - Mechanical rename of the test-substitute type and every call
+    site across
+    [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
+    (struct, `impl Rpc`, `impl DaemonEngine`, module docstrings),
+    [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs),
+    [`engine/lifecycle.rs`](../rust/shekyl-engine-core/src/engine/lifecycle.rs),
+    [`engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs),
+    [`benches/common/engine_fixture.rs`](../rust/shekyl-engine-core/benches/common/engine_fixture.rs)
+    (forward-pointer comment), and
+    [`Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+    (`ChaCha20Rng` rationale comment).
+  - Structural shape unchanged — the type is still an alternative
+    real implementation that serves canned / cached test responses
+    without network connectivity (per PR 3 §2.1.2's distinction
+    between "alternative real implementation" and "parallel-
+    implementation fake"). Only the naming changed: `TestDaemon`
+    signals the role correctly per the no-Mock substrate-
+    inheritance discipline.
+  - Active-doc trajectory updates in
+    [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §1.2 (Generic `DaemonClient` trajectory row), §1.4 rename-chain
+    note, §6.1 hybrid-test discussion, §6.2 RNG-seed pin, §3.5
+    `Rpc`-impl rationale, and the §"Linked file paths" inventory
+    entry (rename chain extended: `MockRpc` → `MockDaemon` →
+    `TestDaemon`).
+
+  *Test gates (post-C6).* `cargo fmt --all -- --check` clean;
+  `cargo clippy -p shekyl-engine-core --all-targets --features
+  test-helpers -- -D warnings` clean; `cargo clippy -p
+  shekyl-engine-core --all-targets -- -D warnings` clean
+  (default features); `cargo test -p shekyl-engine-core --lib`
+  152/152 pass including the migrated hybrid retry test;
+  `cargo check -p shekyl-engine-core` (default + `--features
+  test-helpers` + `--tests` + `--benches` + `--workspace
+  --tests`) all green.
+
+  *C7 — hybrid retry test + property tests
+  (`AssertionSink` / `PanickingSink`)* (commit `c9e65bbc6`):
+  - Refactors `Engine::replace_refresh` at
+    [`engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs)
+    from a `&mut self` setter into a consume-and-rebuild
+    constructor (`fn replace_refresh<R2: RefreshEngine>(self,
+    refresh: R2) -> Engine<S, D, L, R2>`) mirroring the
+    existing `replace_daemon` / `replace_ledger` shape at
+    [`engine/lifecycle.rs`](../rust/shekyl-engine-core/src/engine/lifecycle.rs).
+    The refactor lets the generic `R` type parameter change
+    between construction and replacement so test orchestration
+    can build an `Engine<…, LocalRefresh>` at assemble time
+    and rewire it to `Engine<…, FaultInjecting<LocalRefresh>>`
+    for failure-injection scenarios without going through a
+    `dyn`-erased trait object.
+  - Adds `AssertionSink`, `PanickingSink`, and the
+    `PanickingSinkTrigger` configuration enum to
+    [`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs),
+    all gated `#[cfg(any(test, feature = "test-helpers"))]`
+    per the F-Mock-1 cfg-symmetry pin. `AssertionSink` records
+    emitted `RefreshDiagnostic` events for post-hoc coherence
+    assertions; `PanickingSink` panics on configured trigger
+    events to exercise producer panic-safety.
+  - Adds `proptest = "1"` as a `dev-dependency` in
+    [`rust/shekyl-engine-core/Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+    powering the new producer property tests below.
+  - Adds the hybrid retry test
+    `hybrid_refresh_engine_orchestrator_cancellation_retries`
+    at
+    [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+    that exercises the producer-trait / orchestrator
+    cancellation-checkpoint split end-to-end against the
+    fully-composed `Engine<SoloSigner, TestDaemon,
+    FaultInjecting<LocalLedger>, FaultInjecting<LocalRefresh>>`
+    stack, verifying the orchestrator retries on
+    `ConcurrentMutation` (driven by
+    `FaultInjecting<LocalLedger>::queue_concurrent_mutation`)
+    and surfaces cancellation cleanly when
+    `FaultInjecting<LocalRefresh>` injects
+    `RefreshError::Cancelled`.
+  - Adds the `producer_property_tests` module at
+    [`engine/local_refresh.rs`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+    with five parametric coherence tests, one
+    `proptest!`-driven fuzz test
+    (`coherence_proptest_fuzz_chain_and_injection`) exercising
+    randomized chain length + failure-injection scenarios,
+    four panic-safety tests verifying clean unwind through
+    `PanickingSink` panics across `DaemonMalformed` /
+    `DaemonProtocolError` / `ScanProgress` / `Any` triggers
+    plus a recovery test, and a classifier sanity test. The
+    coherence tests exercise the §5.4.6 emission/return
+    coherence pin: every non-`Cancelled` `RefreshError` is
+    preceded by a corresponding `RefreshDiagnostic` emission.
+    The panic-safety tests verify the §5.4.6 producer-side
+    robustness property: `Scanner` zeroizes cleanly via
+    `Drop` across a panicking `emit`, cancellation-token
+    state remains well-defined, and the refresh attempt
+    fails predictably without corrupting interior state.
+    Tests are deterministic via a compile-time-generated
+    `PROPERTY_TEST_MASTER_SEED` and `#[tokio::test(start_paused
+    = true)]` for fake-time async scheduling.
+
+  *Test gates (post-C7).* `cargo fmt --all -- --check` clean;
+  `cargo clippy -p shekyl-engine-core --all-targets --features
+  test-helpers -- -D warnings` clean; default-feature clippy
+  clean; `cargo test -p shekyl-engine-core --features
+  test-helpers --lib` 170/170 pass (152 → 170: +18 C7 tests);
+  `cargo doc -p shekyl-engine-core --features test-helpers
+  --no-deps` green with no new doc warnings (pre-existing
+  intra-doc-link warnings to private items are baseline and
+  unrelated to C7 changes).
+
+  *C8 — docs propagation* (this commit):
+  - This CHANGELOG entry extended with the C7 sub-section
+    above and the C8 sub-section here.
+  - [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    gains the Phase-1-landed Status-banner closure paragraph
+    enumerating C0–C8 landing SHAs; §7.X gains per-`Commit
+    Cn` `Landed:` lines anchoring each commit's SHA inline
+    next to the design-time prose.
+  - [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §2.3 past-tenses the "Stage 1 surface" header and cross-
+    references the as-landed implementation locators
+    (`engine/traits/refresh.rs`, `engine/diagnostics.rs`,
+    `engine/local_refresh.rs`, `engine/mod.rs`,
+    `engine/fault_injecting_refresh.rs`,
+    `engine/fault_injecting_ledger.rs`) with their commit
+    SHAs (C1 / C2 / C4 / C5a / C6α / C6β).
+  - [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) gains a Phase 0d
+    explicit retirement note ("struck, not deferred") at the
+    top of the V3.x section, distinguishing the Round 2
+    composition reframe's struck-candidate from the live
+    R5 / R6 / R4 (c) V3.x consumer-actor deferrals that
+    remain open per Round 3's prior amendments. The pre-
+    existing closed-entries for Mock-X cleanup
+    (`MockLedger` → `FaultInjecting<LocalLedger>` +
+    `LocalLedger::from_test_blocks` and `MockDaemon` →
+    `TestDaemon`) carry the `[CLOSED 2026-05-20]` marker
+    from C6β / C6γ landing and are unchanged in C8.
+
+  *C9 — FOLLOWUPS P1 / P2 / P3 re-anchor post-Phase-1
+  landing* (this commit):
+  - Doc-only follow-up commit; not in the original Round 4
+    C0–C8 decomposition but added post-PR-open per the
+    user-directed "correct known document errors within the
+    current PR" trigger (per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    stale-doc detection discipline and
+    [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)'s
+    "deferred without a named home is the failure mode"
+    framing). Surfaced during a post-C8 review of
+    `docs/FOLLOWUPS.md` against the actual code state in
+    `engine/local_ledger.rs:356–367` (trait-method
+    `apply_scan_result` discards `Vec<usize>` and short-
+    circuits `populate_engine_handle_fields`) and
+    `engine/merge.rs:181–215` (inherent
+    `Engine::apply_scan_result` runs the post-pass against
+    the captured `inserted` indices) — the two paths diverge
+    by construction in the post-Phase-1 substrate.
+  - [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) P1 / P2 / P3 entries
+    rewritten with **Post-PR-4-Phase-1 substrate** subsections
+    + substrate-anchored reopening criteria per
+    [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc).
+    The pre-Phase-1 "defer to PR 4" dispositions all assumed
+    α/β/γ Round 1 would reshape the producer/consumer pattern
+    and the `LedgerEngine::apply_scan_result` trait surface,
+    absorbing P1 / P2 / P3 as a side effect. Phase 1 settled
+    on α (preserved current shape; trait surface unchanged) per
+    `STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4 Round 1, and did not
+    absorb the three items. P1's hard precondition ("PR 4
+    lands before any binary integrates `RefreshHandle`")
+    survives intact and is restated as "P1 closes before any
+    binary integrates `RefreshHandle`". Each entry's
+    re-anchored disposition names a focused follow-up PR
+    landing V3.0 pre-genesis: P1 →
+    `refresh/p1-async-path-post-pass` (two candidate
+    closing shapes both feasible against the post-Phase-1
+    substrate — shape (b) `RefreshEngine` owns the merge
+    post-pass is newly available because PR 4 landed the
+    `RefreshEngine` trait at C1 / C4); P2 →
+    `refresh/p2-wallet-birthday-plumbing` (substrate
+    well-defined: `LocalRefresh::new` is the V3.0 production
+    implementor per C4 = `ac100e1ab`); P3 → downstream of
+    P1, closes alongside P1 in the same focused PR (both
+    candidate P1-closing shapes close P3 as a side effect;
+    P3 stays catalogued separately to preserve the Copilot
+    PR #37 audit trail).
+  - [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    §5.5 named-home table rows P1 / P2 / P3 updated with a
+    bold **Phase 1 landed without absorption** marker plus
+    one-sentence cross-refs to the re-anchored FOLLOWUPS
+    dispositions, preserving the §5.5 audit-trail discipline
+    per `15-deletion-and-debt.mdc`.
+  - `STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X Status banner
+    extended to enumerate C9 alongside C0–C8; the same §7.X
+    gains a new `**Commit C9 — FOLLOWUPS P1 / P2 / P3
+    re-anchor post-Phase-1 landing**` block documenting
+    design-time intent and landing SHA, mirroring the
+    per-commit documentation pattern from C0–C8.
+  - Gate inheritance from C8: C9 is doc-only, so
+    `cargo fmt --check`, `cargo clippy -- -D warnings`,
+    `cargo test --lib`, and `cargo doc --no-deps` all
+    inherit C8's results unchanged (170 / 170 lib tests
+    pass; fmt clean; clippy clean under both default and
+    `test-helpers` features; 48 doc warnings unchanged at
+    the C7 baseline).
+
+  *C10 – C13 — Copilot post-PR-open review responses*:
+  - Four small post-PR-open commits closing the nine
+    line-anchored findings the GitHub Copilot review raised
+    against `95affda61` (C8 head before C9 push) on PR #60.
+    Each commit is scoped to a single concern (file +
+    correction class) per
+    [`.cursor/rules/90-commits.mdc`](../.cursor/rules/90-commits.mdc)'s
+    scope-per-commit discipline; each commit cites its
+    Copilot finding IDs in the commit message body. Doc-only
+    / harness-only; no API surface, no trait body, and no
+    production code-path touched.
+  - **C10** `60f401e77` — scanner rustdoc fn-name
+    corrections in
+    [`rust/shekyl-scanner/src/scan.rs`](../rust/shekyl-scanner/src/scan.rs).
+    Six sites updated from pre-C4 `scan_transaction` to
+    C4-landed `scan_transaction_with_cancel`, plus the
+    gate-test rustdoc return-type updated from
+    `Ok(Timelocked::empty())` to
+    `Ok(ScanOutcome::Completed(Timelocked(empty)))` to match
+    the actual `ScanOutcome` variant the gate returns.
+    Closes Copilot finding IDs 3278232594 / 3278232649 /
+    3278232666 / 3278232686 plus two same-class adjacent
+    sites discovered during the audit.
+  - **C11** `949e42bd8` — `bench_fixtures` rustdoc fact-fix
+    in
+    [`rust/shekyl-scanner/src/bench_fixtures.rs`](../rust/shekyl-scanner/src/bench_fixtures.rs).
+    The `make_bench_wallet` spend-secret comment cited the
+    on-chain spend point as the basepoint when
+    `fake_spend_key_bytes()` actually returns `2 * G`. The
+    `fake_spend_key_bytes()` rustdoc opening was internally
+    contradictory and is rewritten as a clean three-property
+    justification (torsion-free; non-default; distinct from
+    `G`). Behaviour unchanged — `fake_spend_key_bytes()`
+    body still returns `(2 * G).compress().to_bytes()`
+    byte-identically; F11-S cold-cache audit-trail
+    unaffected. Closes Copilot finding IDs 3278232628 /
+    3278232770.
+  - **C12** `20b082a38` — refresh-trait checkpoint-list
+    temporal-firing-order explanation in
+    [`rust/shekyl-engine-core/src/engine/traits/refresh.rs`](../rust/shekyl-engine-core/src/engine/traits/refresh.rs).
+    The `RefreshEngine` trait rustdoc lists checkpoints in
+    temporal-firing order (1 → 2 → 3 → 5 → 4) rather than
+    numeric order. Copilot read this as out-of-order, but
+    the numbering is repo-wide audit-trail convention
+    preserving "checkpoint 5 added per PR 4 Round 4 F2".
+    Synchronized renumbering would touch 12+ cross-reference
+    sites and dissolve the F2-audit-trail provenance;
+    rejected per
+    [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)'s
+    substrate-anchored disposition. Fix applied: add an
+    explanatory paragraph to the trait rustdoc that names
+    the temporal-firing-order convention explicitly so the
+    question isn't re-litigated. Closes Copilot finding ID
+    3278232791.
+  - **C13** `262ece667` — scan-transaction warm-cache bench
+    harness clone-out-of-timed-region fix in
+    [`rust/shekyl-scanner/benches/scan_transaction.rs`](../rust/shekyl-scanner/benches/scan_transaction.rs).
+    Both warm-cache benchmark variants used
+    `iter_batched_ref` with an in-routine
+    `mem::replace(b, block.clone())`, placing
+    `ScannableBlock::clone` inside the timed region.
+    Switched to `iter_batched(|| block.clone(), |block|
+    scanner.scan(block), ..)` so the clone is in the setup
+    closure and only `Scanner::scan` is measured. **F11-S
+    audit-trail impact: ZERO** — the F11-S binding
+    measurement (per
+    [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    §3.1 / §5.4.9 / §7.Y) is anchored on the cold-cache
+    N=16 worst-case p99 (12.95 ms per-tx / 819 µs
+    per-output), and the cold variant was already
+    methodologically correct (all setup outside the timed
+    region). Captured F11-S numbers at `a4da2212a` and the
+    C4 per-output safe-point disposition stand without
+    revision. Closes Copilot finding IDs 3278232713 /
+    3278232736.
+  - Gates per commit: each commit ran its scoped bisection-
+    discipline gates against the affected crate
+    (`shekyl-scanner` for C10 / C11 / C13;
+    `shekyl-engine-core` for C12). Test counts and doc-
+    warning baselines unchanged: 57 / 57 scanner lib tests
+    pass; 170 / 170 engine-core lib tests pass; scanner doc
+    warnings = 2 (C8 baseline); engine-core doc warnings =
+    49 (C9 baseline). C13 additionally ran
+    `cargo check --benches` to confirm the bench targets
+    compile under the new `iter_batched` shape.
+
+  *C14 — `[Unreleased]` doc-after-plans propagation for
+  C10 – C13* (this commit):
+  - Doc-only follow-up commit per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    final-task-always rule. After C10 / C11 / C12 / C13
+    landed locally with green gates, the design doc §7.X
+    Status banner (line ~478) was extended to enumerate
+    C10 – C13 alongside C0 – C9 with landing SHAs and
+    per-commit one-paragraph summaries, and the §7.X
+    commit-block section gained a new
+    `**Commits C10 – C13 — Copilot post-PR-open review
+    responses.**` block with the same per-commit prose +
+    F11-S impact statement + gate evidence. The C9 block's
+    placeholder `**Landed: this commit**` was replaced with
+    the landed SHA `839c4bbfd`. This `*C10 – C13 — Copilot
+    post-PR-open review responses*` subsection above is
+    the matching CHANGELOG entry; the doc-after-plans
+    propagation also updates the closing C0–C13 paragraph
+    below.
+  - Gate inheritance from C13: C14 is doc-only, so the
+    `cargo fmt --check`, `cargo clippy --all-targets --
+    -D warnings`, `cargo test --lib`, and `cargo doc --no-
+    deps` gates all inherit C13's results unchanged
+    (no rust files touched in C14).
+
+  *C15 – C16 — Copilot second-round review responses*:
+  - Two small post-PR-open commits closing the four
+    additional line-anchored findings the GitHub Copilot
+    reviewer raised against `30798d783` (the C14 push
+    head) on PR #60. Both batches touch `engine/`-side
+    rustdoc and harness surfaces only; doc-only /
+    harness-only; no API surface, no trait body, and no
+    production code-path touched. Each commit cites its
+    Copilot finding IDs in the commit message body per
+    [`.cursor/rules/90-commits.mdc`](../.cursor/rules/90-commits.mdc).
+  - **C15** `bafb9c548` — refresh-trait
+    `[`LocalRefresh`]` rustdoc link target fix in
+    [`rust/shekyl-engine-core/src/engine/traits/refresh.rs`](../rust/shekyl-engine-core/src/engine/traits/refresh.rs).
+    Two `[`LocalRefresh`]` reference-link aliases (lines
+    204 + 258 of the `RefreshEngine` trait file) pointed
+    at `super::super::Engine` instead of
+    `super::super::LocalRefresh`. The misroute was silent
+    (the alias target is a valid path; rustdoc accepts
+    it) but the rendered docs at the two body sites (lines
+    48 and 244) linked "LocalRefresh" to the `Engine`
+    struct rather than `LocalRefresh`. Correct target
+    verified at source: `LocalRefresh` lives at
+    `engine/local_refresh.rs:250`, re-exported at
+    `engine/mod.rs:187`; from `engine::traits::refresh`,
+    `super::super::LocalRefresh` resolves through the
+    re-export (matching the working precedent at
+    `engine/fault_injecting_refresh.rs:105`). Closes
+    Copilot finding IDs 3278391428, 3278391456.
+  - **C16** `376e1e821` — `FaultInjecting<R>` +
+    `FaultInjecting<L>` Drop-time `debug_assert!` message
+    fix in
+    [`rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs)
+    and
+    [`rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs).
+    Both Drop messages told test authors to "drain via
+    `queued_failures()` and `consume_or_inject`". Neither
+    instruction was usable: `consume_or_inject` does not
+    exist anywhere in the workspace (`rg -nF
+    'consume_or_inject'` returned only the two
+    message-body sites — leftover prose from an earlier
+    API draft), and `queued_failures()` is a `usize`
+    inspector, not a drain. Rewritten to direct readers at
+    the real drain mechanism — `produce_scan_result(..)`
+    for the refresh wrapper, `apply_scan_result(..)` for
+    the ledger wrapper — with `queued_failures()` cited
+    explicitly as the inspector. The two
+    `#[should_panic(expected = ...)]` test attributes
+    (`fault_injecting_ledger.rs:528`,
+    `fault_injecting_refresh.rs:590`) re-pinned to the new
+    substring shape in the same commit per scope-per-
+    commit discipline (mechanical follow-on of the
+    production-message edit). The refresh-side
+    `should_panic` had also been pinned on the older
+    "FaultInjecting" (without `<R>`) spelling; both
+    ledger and refresh assertions now consistently include
+    the generic-parameter suffix. Closes Copilot finding
+    IDs 3278391467, 3278391479.
+  - Gates per commit: each ran its scoped bisection-
+    discipline gates against `shekyl-engine-core` (fmt
+    --check, clippy --all-targets -- -D warnings, test
+    --lib, doc --no-deps). C15 doc-only (rustdoc-target);
+    C16 production message + same-scope `should_panic`
+    re-pin. Test counts unchanged at 170 / 170 lib tests
+    pass; doc warnings unchanged at 49 (C9 baseline). The
+    two re-pinned `should_panic` tests both confirm the
+    new substrings.
+
+  *C17 — `[Unreleased]` doc-after-plans propagation for
+  C15 – C16*:
+  - Doc-only follow-up per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    final-task-always rule. After C15 / C16 landed locally
+    with green gates, the design doc §7.X status banner
+    was extended to enumerate C14 / C15 / C16 alongside
+    C0 – C13 with landing SHAs and per-commit
+    one-paragraph summaries, and the §7.X commit-block
+    section gained a new `**Commits C15 – C16 — Copilot
+    post-PR-open second-round review responses.**` block
+    with per-commit prose + Copilot finding IDs + gate
+    evidence. This `*C15 – C16 — Copilot second-round
+    review responses*` subsection above is the matching
+    CHANGELOG entry; the doc-after-plans propagation also
+    updates the closing C0–C20 paragraph below.
+  - Gate inheritance from C16: C17 is doc-only, so the
+    `cargo fmt --check`, `cargo clippy --all-targets --
+    -D warnings`, `cargo test --lib`, and `cargo doc
+    --no-deps` gates all inherit C16's results unchanged
+    (no rust files touched in C17).
+
+  *C18 – C20 — Copilot third-round review responses*:
+  - Three small post-PR-open commits closing the three
+    additional line-anchored findings the GitHub Copilot
+    reviewer raised against `966154d27` (the C17 push
+    head) on PR #60. The findings clustered on substantive
+    discipline questions rather than rustdoc cosmetics:
+    F11-S cancellation safe-point completeness, dead-arm
+    invariant enforcement, and cryptographic-decoding
+    constant-time-or-explicit-rejection discipline. Each
+    commit cites its Copilot finding ID in the commit
+    message body per
+    [`.cursor/rules/90-commits.mdc`](../.cursor/rules/90-commits.mdc).
+  - **C18** `6cc22965f` — `Scanner::scan_with_cancel` per-tx
+    safe-point cancellation check in
+    [`rust/shekyl-scanner/src/scan.rs`](../rust/shekyl-scanner/src/scan.rs).
+    The F11-S binding's between-tx safe-point per
+    `RefreshEngine` trait rustdoc checkpoint 5 was
+    delivered only via the inner per-output iter-0 check
+    inside `scan_transaction_with_cancel`. For transactions
+    whose per-output loop never runs (zero-output txs;
+    `tx.version() != 2`; malformed `extra`; oversized per
+    the defense-in-depth size gate) the inner check is
+    bypassed and the outer per-tx loop delegated straight
+    back without cancellation opportunity. Worst case: a
+    block of `N` such transactions deferred cancellation
+    by `N × O(1)-per-tx-skip` cost rather than bounded at
+    a single tx-entry's cost. Fix adds `if is_cancelled()
+    { return Cancelled }` at the outer per-tx loop entry,
+    rewrites the misleading "subsumed by per-output check
+    at iter 0" comment to describe the new two-checkpoint
+    shape, and adds the
+    `outer_per_tx_loop_cancellation_fires_for_zero_output_tx`
+    regression test (V2 miner-only block via
+    `Input::Gen(0)` + empty outputs/extra). The
+    `cancel_tests` module rustdoc was simultaneously
+    updated from a three-axis to a four-axis taxonomy
+    naming the outer-loop per-tx boundary explicitly.
+    F11-S benchmark impact: zero — added check is one
+    closure invocation per tx, a few nanoseconds amortized
+    across `N_outputs` per tx and well below the F11-S
+    worst-case per-output cost. Closes Copilot finding ID
+    3278452877.
+  - **C19** `5749f444c` — dead `ScanOutcome::Cancelled`
+    arm `debug_assert!` in `InternalScanner::scan` in
+    [`rust/shekyl-scanner/src/scan.rs`](../rust/shekyl-scanner/src/scan.rs).
+    The function delegates to `scan_with_cancel` with a
+    never-cancelling closure (`|| false`); under the
+    closure-invariant, the `Cancelled` variant is
+    unreachable. The previous code mapped the unreachable
+    variant to `Ok(Timelocked(Vec::new()))` for
+    production-panic-free behavior — but the empty-result
+    fallback would silently mask future logic-dispatch
+    regressions. Fix adds `debug_assert!(false, …)`
+    naming the closure-invariant before the empty-result
+    fallback, so debug-mode tests catch the violation
+    immediately while production behavior is unchanged.
+    Discipline (preferring `debug_assert!` over
+    `unreachable!()`) named in the same arm's comment so
+    a future refactor preserves the rationale. Closes
+    Copilot finding ID 3278452893.
+  - **C20** `3331fb82e` — `ViewMaterial::try_from_keys`
+    view_scalar canonical-bytes decoding in
+    [`rust/shekyl-engine-core/src/engine/view_material.rs`](../rust/shekyl-engine-core/src/engine/view_material.rs).
+    The previous reconstruction via
+    `Scalar::from_bytes_mod_order(*keys.view_sk
+    .as_canonical_bytes())` silently reduces
+    non-canonical / corrupted input to a canonical scalar
+    — masking in-memory corruption of view-key state and
+    producing a scalar that is NOT the wallet's actual
+    view secret on bad input. The same construction site
+    (lines 211–222) validates `keys.spend_pk` with
+    explicit `IoError::Scanner` on non-canonical bytes;
+    the asymmetric treatment of view-scalar vs.
+    spend-public-key was not justified by the threat
+    model. Fix switches to
+    `Option::<Scalar>::from(Scalar::from_canonical_bytes(...))
+    .ok_or_else(|| RefreshError::Io(IoError::Scanner {
+    detail: ... }))?`. On canonical input the resulting
+    scalar is bit-identical to the pre-fix output; on
+    non-canonical input the conversion returns `None` and
+    maps to `RefreshError::Io(IoError::Scanner)` with an
+    operator-actionable detail string. The rustdoc's
+    field-derivation summary and `# Errors` block were
+    both updated to describe the new shape and cite
+    `30-cryptography.mdc`'s constant-time-or-explicit-
+    rejection discipline as the anchor. Closes Copilot
+    finding ID 3278452905.
+  - Gates per commit: each ran its scoped
+    bisection-discipline gates against the touched crate
+    (C18 / C19: `shekyl-scanner`; C20:
+    `shekyl-engine-core`) plus downstream
+    `shekyl-engine-core` regression for the scanner-side
+    changes (fmt --check, clippy --all-targets -- -D
+    warnings, test --lib, doc --no-deps). Scanner test
+    count: 57 → 58 (C18 added regression test;
+    C19 unchanged). Engine-core test count unchanged at
+    170 / 170 lib tests pass. Scanner doc warnings
+    unchanged at 2 (C8 baseline). Engine-core doc
+    warnings unchanged at 49 (C9 baseline).
+
+  *C21 — `[Unreleased]` doc-after-plans propagation for
+  C18 – C20* (this commit):
+  - Doc-only follow-up per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    final-task-always rule. After C18 / C19 / C20 landed
+    locally with green gates, the design doc §7.X status
+    banner was extended to enumerate C18 / C19 / C20
+    alongside C0 – C17 with landing SHAs and per-commit
+    one-paragraph summaries, and the §7.X commit-block
+    section gained a new `**Commits C18 – C20 — Copilot
+    post-PR-open third-round review responses.**` block
+    with per-commit prose + Copilot finding IDs + gate
+    evidence. This `*C18 – C20 — Copilot third-round
+    review responses*` subsection above is the matching
+    CHANGELOG entry; the doc-after-plans propagation also
+    updates the closing C0–C21 paragraph below.
+  - Gate inheritance from C20: C21 is doc-only, so the
+    `cargo fmt --check`, `cargo clippy --all-targets --
+    -D warnings`, `cargo test --lib`, and `cargo doc
+    --no-deps` gates all inherit C20's results unchanged
+    (no rust files touched in C21).
+
+  *C22 – C23 — Copilot fourth-round review responses*:
+  - Two small post-PR-open commits closing the five
+    additional line-anchored findings the GitHub Copilot
+    reviewer raised against `5557b3192` (the C21 push
+    head) on PR #60. Four of the five findings clustered
+    on a single class (stale `expect()` panic-message
+    references in the bench harness) and bundle into a
+    single mechanical commit; the fifth is a substantive
+    test-discipline refinement and lands separately.
+    Each commit cites its Copilot finding ID(s) in the
+    commit message body per
+    [`.cursor/rules/90-commits.mdc`](../.cursor/rules/90-commits.mdc).
+  - **C22** `168ff0e22` — stale `scan_transaction_with_cancel`
+    `expect()` strings in
+    [`rust/shekyl-scanner/benches/scan_transaction.rs`](../rust/shekyl-scanner/benches/scan_transaction.rs).
+    Four `.expect("scan_transaction_with_cancel must not
+    error on well-formed fixture")` sites (warm + cold
+    variants of the worst-case and typical-case bench
+    groups) referenced the private inner helper but the
+    call sites themselves invoke the public surface
+    `Scanner::scan(..)`. The mismatch is the same class
+    as the C10 commit (`60f401e77`) that rewrote six
+    rustdoc fn-name references in `scan.rs` post the C4
+    rename + split (`ac100e1ab`); C22 closes the bench-
+    file residue C10's review-attention scope didn't
+    cover. Fix updates all four sites to `"Scanner::scan
+    must not error on well-formed fixture"`; rustfmt
+    collapsed the now-shorter message to single-line
+    form. No semantic change (panic messages only fire
+    on `Err`, and the bench fixtures' `Scanner::scan`
+    invocations never produce `Err` by construction).
+    Operator-facing diagnostic discipline (audit-trail
+    clarity when a bench panics in CI). Closes Copilot
+    finding IDs 3278543704, 3278543738, 3278543753,
+    3278543764.
+  - **C23** `a2f173c73` — replace Debug-substring with
+    structural `CryptoError::DecapsulationFailed` match
+    in
+    [`rust/shekyl-scanner/src/bench_fixtures.rs`](../rust/shekyl-scanner/src/bench_fixtures.rs).
+    The `typical_case_first_output_exits_via_view_tag_mismatch`
+    sanity-check test asserted `format!("{err:?}")
+    .contains("X25519 view tag mismatch")` to verify the
+    fast-path-rejection error class — brittle to Debug-
+    format changes (re-derivation, additional context
+    fields, terse-vs-verbose variants) per Copilot's
+    test-discipline finding. Validation at source confirms
+    `scan_output_recover` constructs multiple
+    `DecapsulationFailed(String)` instances along distinct
+    early-exit paths (view-tag mismatch, invalid ML-KEM
+    ciphertext length, invalid decap key, ML-KEM decap
+    rejection); a pure variant-only check would not
+    distinguish the typical-case fixture's intended path
+    from sibling reasons, so the substring check on the
+    inner message IS load-bearing. Fix uses a let-else
+    binding both the variant AND the inner `String` field
+    followed by a separate inner-message `assert!` — the
+    two-class pinning (variant + reason within variant)
+    is preserved; only the FORM changes (binding the
+    inner `String` directly via pattern-match rather than
+    going through `format!("{err:?}")`). Comment rewritten
+    to enumerate the two drift classes the new shape
+    catches explicitly. `CryptoError` imported via the
+    existing `shekyl_crypto_pq::error` public path. Closes
+    Copilot finding ID 3278543725.
+  - Gates per commit: C22 ran `cargo fmt -p shekyl-
+    scanner -- --check` (auto-format applied to collapse
+    the shorter message to single-line; second --check
+    clean) + `cargo clippy -p shekyl-scanner --all-
+    targets -- -D warnings` (clean) + `cargo build -p
+    shekyl-scanner --benches` (clean) + `cargo test -p
+    shekyl-scanner --lib` (58 / 58 pass; unchanged from
+    C19). C23 ran the same scoped gates plus a targeted
+    `cargo test ... typical_case_first_output_exits_via_view_tag_mismatch
+    -- --nocapture` to confirm the new structural form
+    classifies the fixture's view-tag-mismatch error
+    correctly (1 / 1 pass). Scanner doc warnings
+    unchanged at 2 (C8 baseline).
+
+  *C24 — `[Unreleased]` doc-after-plans propagation for
+  C22 – C23* (this commit):
+  - Doc-only follow-up per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    final-task-always rule. After C22 / C23 landed
+    locally with green gates, the design doc §7.X status
+    banner was extended to enumerate C22 / C23 alongside
+    C0 – C21 with landing SHAs and per-commit one-
+    paragraph summaries, and the §7.X commit-block
+    section gained a new `**Commits C22 – C23 — Copilot
+    post-PR-open fourth-round review responses.**` block
+    with per-commit prose + Copilot finding IDs + gate
+    evidence. This `*C22 – C23 — Copilot fourth-round
+    review responses*` subsection above is the matching
+    CHANGELOG entry; the doc-after-plans propagation also
+    updates the closing C0–C24 paragraph below.
+  - Gate inheritance from C23: C24 is doc-only, so the
+    `cargo fmt --check`, `cargo clippy --all-targets --
+    -D warnings`, `cargo test --lib`, and `cargo doc
+    --no-deps` gates all inherit C23's results unchanged
+    (no rust files touched in C24).
+
+  *C25 – C28 — Copilot fifth-round review responses*:
+  - Four small post-PR-open commits closing the five
+    additional line-anchored findings the GitHub Copilot
+    reviewer raised against `3f4460a59` (the C24 push
+    head) on PR #60. All five findings are substantive
+    doc/code-hygiene issues (none nitpicky): three are
+    stale-doc references to deleted symbols / abandoned
+    test substrates (per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    "Stale-doc detection ... the doc update is not
+    optional — the doc is wrong and will mislead readers"
+    rule); one is a dead lint-allow attribute (per
+    [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)'s
+    "Default: delete"); one is a Cargo feature description
+    that claimed re-exports the feature doesn't actually
+    perform.
+  - **C25** `543fffe23` — stale `build_scanner_from_keys`
+    rustdoc / comment references in
+    [`rust/shekyl-engine-core/src/engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs)
+    (comment above `pub(crate) fn keys()`) and
+    [`rust/shekyl-engine-core/src/engine/view_material.rs`](../rust/shekyl-engine-core/src/engine/view_material.rs)
+    (module rustdoc § "Field shape"). The free function
+    `build_scanner_from_keys` was deleted in C5β
+    (`b6a1274de` — legacy producer-scaffolding deletion
+    in `engine/refresh.rs`) and replaced by
+    `ViewMaterial::try_from_keys(&AllKeysBlob)` (engine
+    assembly time, per C5a = `553d70139`) +
+    `LocalRefresh::build_scanner` (per-attempt scanner
+    construction, per C4 = `ac100e1ab`). Both LIVE Rust
+    sites updated to name the actual current derivation
+    path; the surviving live consumer of
+    `Engine::keys()` (`Engine::replace_refresh`'s test-
+    substrate re-derivation per C6α = `e9310542a`) named
+    explicitly; reopening-criterion clause added per
+    [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+    naming Phase 2's `sign_transfer` / `tx_proof` /
+    `reserve_proof` surfaces as the substrate-change
+    that would reopen `#[allow(dead_code)]` deletion.
+    Initial rewrite introduced an
+    `[Engine::replace_refresh](super::Engine::replace_refresh)`
+    intra-doc link that triggered a new rustdoc privacy
+    warning (`replace_refresh` is `pub(crate)`, link
+    from `pub` `view_material` module's rustdoc
+    unresolves); reverted to a plain backtick reference
+    per the C18 cross-crate-link mitigation pattern;
+    doc-warning count back to baseline 49. Closes
+    Copilot finding IDs 3278677182, 3278677211.
+  - **C26** `1cdcd6e52` — dead `#[allow(unused_imports)]`
+    on `pub(crate) use refresh::RefreshEngine` re-export
+    in
+    [`rust/shekyl-engine-core/src/engine/traits/mod.rs`](../rust/shekyl-engine-core/src/engine/traits/mod.rs).
+    The suppression was load-bearing at C1's introduction
+    commit (`d3edc1abb`) when the re-export landed ahead
+    of consumers; C5 (`7140f726a` — `Engine<S, D, L, R>`
+    four-parameter type slot + retry-loop migration to
+    trait dispatch) introduced multiple production
+    consumers making the import live. The suppression
+    has not been load-bearing since C5 and now masks
+    future regressions where the import becomes dead
+    again. Removed per
+    [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)'s
+    "Default: delete"; accompanying comment rewritten to
+    anchor C1 / C5 / C26 and explain the masking-future-
+    regressions failure mode the removal prevents.
+    Symmetric form to C25's update of `Engine::keys()`'s
+    `#[allow(dead_code)]` (same discipline check, different
+    disposition because that suppression's live-consumer
+    audit surfaced an ongoing default-feature production
+    justification). Closes Copilot finding ID 3278677226.
+  - **C27** `15c76a73e` — reword `test-helpers` Cargo
+    feature description in
+    [`rust/shekyl-engine-core/Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+    to reflect that the feature gates compilation only,
+    NOT public re-exports. The previous description
+    claimed the feature "re-exports otherwise-`pub(crate)`
+    failure-injection wrappers ... for downstream
+    integration test crates", but the four named surfaces
+    (`FaultInjecting<R: RefreshEngine>`, `FaultInjecting<L:
+    LedgerEngine>`, `Engine::replace_refresh`,
+    `LocalLedger::from_test_blocks`) remain `pub(crate)`
+    with the feature enabled — no `__test_helpers`
+    re-export module exists at the crate root (verified
+    at source vs. the sibling `bench-internals` feature
+    which DOES have a `__bench_internals` re-export at
+    `lib.rs:46-56`). Per
+    [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+    chose option (b) of Copilot's two options: reword to
+    reflect actual shape, NOT speculatively add re-
+    exports for hypothetical downstream consumers that
+    don't yet exist (the "pre-provisioning for
+    hypothetical consumers" anti-pattern). The rewritten
+    comment names: what the feature actually does
+    (compile-gate the four `pub(crate)` surfaces); what
+    it does NOT do (no public re-exports; compare-and-
+    contrast with `bench-internals` makes the asymmetry
+    explicit); why no re-exports yet (pre-genesis
+    no-consumer state); reopening criteria (when the
+    first downstream consumer emerges, add
+    `__test_helpers` module under the `__bench_internals`
+    precedent + V3.0-targeted FOLLOWUPS item +
+    `AUDIT_SCOPE.md` amendment if needed); load-bearing
+    production-build safety property (the
+    `#[cfg(any(test, feature = "test-helpers"))]`
+    gating at the definition site keeps the four
+    failure-injection surfaces out of default-feature
+    production builds). Closes Copilot finding ID
+    3278677251.
+  - **C28** `1879baf73` — Post-PR-4 retirement note added
+    to
+    [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../docs/V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §6 "Test boundary" / §6.1 "Pinned commitments for
+    Stage 1". The §6 framing still asserted a "fully-
+    mocked `Engine<SoloSigner, MockKey, MockLedger,
+    MockDaemon, …>`" Stage-1 test direction and the §6.1
+    Round-3 commitment list still enumerated all seven
+    Mock-X types, but three of the seven have retired:
+    `MockKey` in PR 3 (per
+    `STAGE_1_PR_3_KEY_ENGINE.md` §6.4 no-Mock substrate
+    — already acknowledged in §6.1 Round-4b's
+    `(Post-M3 note)` but NOT in the §6 framing
+    paragraph); `MockLedger` in PR 4 C6β (replaced by
+    `FaultInjecting<L: LedgerEngine>`); `MockRefresh`
+    in PR 4 C6α (replaced by `FaultInjecting<R:
+    RefreshEngine>`). Three additions: (1) new
+    `> (Post-M3 + Post-PR-4 note: ...)` block-quote
+    beneath the §6 opening paragraph naming all three
+    retirements + replacement substrates + surviving
+    Mock-X types; (2) nested `(Post-M3 + Post-PR-4
+    update to the Round-3 list)` item inside §6.1's
+    pinned-commitments list inline-annotating each
+    retired type with its anchor commit + replacement;
+    (3) extension of the existing `(Post-M3 note: ...)`
+    paragraph inside §6.1 Round-4b to include the
+    Post-PR-4 retirements + name the contract-fidelity
+    discipline as applying to `FaultInjecting<...>`
+    wrappers (which honor the trait contract by
+    delegating to the wrapped real production
+    implementor's behavior — wrapper-injected failures
+    fire BEFORE or AFTER delegation per the wrapper's
+    documented semantics, not by substituting alternative
+    return values). §6.2+ RNG-injection example snippets
+    (lines 4102, 4149, 4177) retain `MockLedger::with_seed(...)`
+    literal example text as a deliberate scope decision
+    per `15-deletion-and-debt.mdc` "while we're here is
+    the enemy" — those examples demonstrate the
+    seeded-RNG injection MECHANISM (invariant under
+    implementor name) and rewriting them would either
+    lose pedagogical clarity or require a §6.2+
+    refactor outside C28's named-Copilot-finding scope.
+    Closes Copilot finding ID 3278677269.
+  - Gates per commit: each ran its scoped bisection-
+    discipline gates. C25 / C26 touched `shekyl-engine-core`
+    Rust files (`cargo fmt -p shekyl-engine-core --
+    --check`, `cargo clippy -p shekyl-engine-core
+    --all-targets --features test-helpers -- -D
+    warnings`, default-feature clippy, `cargo test -p
+    shekyl-engine-core --lib`, `cargo doc -p
+    shekyl-engine-core --no-deps`) all clean: 170 / 170
+    lib tests pass; 49 doc warnings unchanged (C9
+    baseline). C27 touched `Cargo.toml` only
+    (comment-only change inside `[features]`); fmt /
+    clippy / test all clean; no `.rs` files touched.
+    C28 touched a `docs/` markdown file only; gate
+    inheritance from C27.
+
+  *C29 — `[Unreleased]` doc-after-plans propagation for
+  C25 – C28* (this commit):
+  - Doc-only follow-up per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    final-task-always rule. After C25 / C26 / C27 / C28
+    landed locally with green gates, the design doc §7.X
+    status banner was extended to enumerate C25 / C26 /
+    C27 / C28 alongside C0 – C24 with landing SHAs and
+    per-commit one-paragraph summaries, and the §7.X
+    commit-block section gained a new `**Commits C25 –
+    C28 — Copilot post-PR-open fifth-round review
+    responses.**` block with per-commit prose + Copilot
+    finding IDs + gate evidence. This `*C25 – C28 —
+    Copilot fifth-round review responses*` subsection
+    above is the matching CHANGELOG entry; the doc-after-
+    plans propagation also updates the closing C0–C29
+    paragraph below.
+  - Gate inheritance from C28: C29 is doc-only, so the
+    `cargo fmt --check`, `cargo clippy --all-targets --
+    -D warnings`, `cargo test --lib`, and `cargo doc
+    --no-deps` gates all inherit C28's results unchanged
+    (no rust files touched in C29).
+
+  PR 4 §7.X commits C0 through C29 are now all landed; PR
+  #60 carries the full C0–C29 set. See the separate `###
+  Added` and `### Changed` entries below for the trait-
+  surface and `Engine<S, D, L, R>` four-parameter additions
+  PR 4 ships,
+  per the C8 spec at `STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X
+  C8.
+
 - **RandomX v2 — Phase 1: pinned submodule + out-of-tree build wiring**
   (`feat/randomx-v2-phase1`, PR #54, merge commit `c0c4a11e5`,
   2026-05-19). Adds `external/randomx-v2` submodule pinned to
@@ -1289,6 +2319,73 @@
   passes (the JSON authority extension does not affect existing
   consumers; `shekyl-engine-core/build.rs` continues to read only
   the FCMP/RCT keys it already consumed).
+
+### Changed
+
+- **Stage 1 PR 4 — `Engine` parameterized over `R: RefreshEngine`
+  (fourth type parameter)** (`feat/stage-1-pr4-refresh-engine`,
+  PR 4 C5a = `553d70139`; default `R = LocalRefresh` per the
+  Round 4 turnkey-default discipline). `Engine<S: Signer>`
+  becomes `Engine<S: Signer, D: DaemonEngine = DaemonClient, L:
+  LedgerEngine = LocalLedger, R: RefreshEngine = LocalRefresh>`
+  at
+  [`engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs).
+  The orchestrator retry loop in
+  [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  migrates from a free-function `produce_scan_result(...)` to
+  trait dispatch on `R` via `self.refresh.produce_scan_result(...)`
+  per PR 4 C5 = `7140f726a`; the legacy producer scaffolding
+  (`produce_scan_result` free function + `ProduceError` +
+  `ProgressEmitter` + duplicated helpers + constants) is deleted
+  from `engine/refresh.rs` per PR 4 C5β = `b6a1274de`. The new
+  `Engine::replace_refresh` test-only constructor (consume-and-
+  rebuild; refactored at PR 4 C7 = `c9e65bbc6` from its initial
+  `&mut self` setter form per PR 4 C6α = `e9310542a`) lets the
+  `R` type parameter change between construction and replacement
+  so test orchestration can build the engine with `LocalRefresh`
+  at assemble time and rewire to `FaultInjecting<LocalRefresh>`
+  for failure-injection scenarios. `ViewMaterial::try_from_keys`
+  at
+  [`engine/view_material.rs`](../rust/shekyl-engine-core/src/engine/view_material.rs)
+  derives the trait-required view-and-spend material from the
+  `KeyEngine` at engine-assemble time, populating the
+  `LocalRefresh` constructor argument. Crate-level public APIs
+  consuming the engine type alias (`Wallet`,
+  `WalletWithLedger<L>` test helpers, `RefreshHandle`, the
+  benchmark fixtures) thread the additional type parameters
+  forward with appropriate defaults; no consumer outside the
+  `shekyl-engine-core` crate is required to name `R`
+  explicitly under the default-parameter discipline.
+
+- **Stage 1 PR 4 — `RefreshError::InternalInvariantViolation
+  { context: &'static str }` variant addition** (PR 4 C3 =
+  `c45894ffe`; Phase 0c amendment per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 close-out). Resolves the Round 2 R6 "(a) extend
+  `ConcurrentMutation` or (b) introduce
+  `InternalInvariantViolation`" cleanup pin at the design layer.
+  Disposition (b): conflating "wallet under sustained merge
+  contention" and "wallet hit an internal bug" into
+  `ConcurrentMutation` would deny downstream consumers
+  (`PeerReputationActor`, telemetry, user-facing error surface)
+  the structural distinction they need to respond correctly.
+  The retry-loop call sites in
+  [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  (per PR 4 C5 = `7140f726a`) and the `RefreshHandle::join`
+  dropped-sender site surface state-machine invariant
+  violations as `InternalInvariantViolation { context }` with
+  compile-time-fixed developer content; `&'static str` is
+  appropriate at the orchestrator-internal site because the
+  field carries no attacker-influenced data (the memory-
+  amplifier and log-exfiltration vectors the producer-trait
+  unit-variant discipline closes do not apply here). The
+  variant is one of three `RefreshError` variants reachable
+  from a `RefreshEngine` impl's `Self::Error` via `Into`
+  (alongside `Cancelled` unit and `Io(IoError)`); the other
+  three variants (`MalformedScanResult`, `ConcurrentMutation`,
+  `AlreadyRunning`) are orchestrator-constructed only per
+  the §6.1.1 two-enum architecture pin and the
+  F-Mock-3-sharpening trait-reachable-variant enumeration.
 
 ### Removed
 
@@ -8140,6 +9237,327 @@
   the repo). Neither requires a code change.
 
 ### Documentation
+
+- **Stage 1 PR 4 (`RefreshEngine`) — Round 5 substrate-decision
+  amendment (no-Mock substrate for C6).**
+  (`feat/stage-1-pr4-refresh-engine`, 2026-05-20). Doc-only
+  amendment to
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  landed mid-Phase-1 between C5β (legacy producer scaffolding
+  deletion) and C6 (test substrate). The Round 4 §7.X C6 plan
+  ("`MockRefresh` test substrate; mirrors `MockDaemon` /
+  `MockLedger` from PR 1 / PR 2") is **stale prose** from before
+  PR 3 §2.1.2's Mock-X rejection landed; building `MockRefresh`
+  would re-instantiate the parallel-implementation anti-pattern
+  PR 3 rejected as a category and compound the Mock-X debt that
+  [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) already scheduled to be
+  paid down. The amendment dispositions:
+
+  1. **C6 replaces `MockRefresh` with `FaultInjecting<R:
+     RefreshEngine>`.** Composable wrapper around the production
+     `LocalRefresh` (landed at C4); queues `RefreshError::Cancelled`
+     / `Io` / `InternalInvariantViolation` for failure injection
+     at the trait boundary; composes against any current or future
+     `R` implementor without per-impl parallel-Mock proliferation.
+
+  2. **Retroactive Mock-X cleanup of `MockLedger` lands in PR 4
+     C6β** (not deferred to PR 5). Extracts the existing
+     `MockLedger` body into `FaultInjecting<L: LedgerEngine>`;
+     adds `LocalLedger::from_test_blocks(...)` constructor
+     replacing the parallel-implementation `MockLedger::new(...)`
+     surface. Current `MockLedger` is structurally already a
+     `FaultInjecting<LocalLedger>`-shaped wrapper (delegating to
+     the canonical `apply_scan_result_to_state`); the cleanup is
+     mostly extraction-and-rename, not a re-implementation.
+     Closes [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) lines 578–604.
+
+  3. **`MockDaemon` → `TestDaemon` rename lands in PR 4 C6γ**
+     alongside C6β. Mechanical rename only — the structural
+     shape is already correct (alternative real implementation
+     serving canned / cached test responses without network
+     connectivity); only the `Mock` naming was the bug. Closes
+     [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) lines 606–620.
+
+  The amendment is **not** a round reopening per the §7 amendment
+  framing: it does not revisit any trait-surface contract pin,
+  attack-surface disposition, or commit-decomposition ordering
+  decision; it replaces stale C6 substrate prose with the binding
+  no-Mock shape PR 3 §2.1.2 settled. The α-disposition, the
+  F1–F13 dispositions, and the C0–C5 / C7 / C8 commit prose are
+  all unchanged.
+
+  The no-Mock rationale is re-iterated explicitly in §6 of the
+  design doc (new "Test-substrate discipline — no-Mock substrate
+  inheritance from PR 3 §2.1.2" subsection) and in the §7.X C6
+  prose, naming the five failure modes the Mock-X pattern
+  instantiates: (1) attack surface from test-only types in
+  production code; (2) conflation of test-controlled inputs to
+  real implementations with substitute implementations; (3)
+  inherited-Monero pattern that has produced real bugs in the
+  inherited codebase; (4) foreclosure of composition with future
+  trait implementors; (5) tests verifying against fake semantics
+  rather than real semantics, degrading the coverage claim.
+
+  Rationale anchor:
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  §"cost-benefit-defer-to-later anti-pattern" names the
+  architectural-integrity-now disposition as the default for
+  security-load-bearing substrate work pre-genesis;
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  pre-genesis discount applies. Cross-references:
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §2.1.2 (Mock-X rejection rationale + five named failure modes),
+  §2.1.5 (four-pattern pre-flight checklist future per-trait PRs
+  inherit).
+
+  Files touched (doc-only):
+  `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` (Status banner;
+  new §6 no-Mock substrate inheritance discipline subsection;
+  test-substrate preservation list rewritten; §7.X C6/C7/C8 prose
+  updated), `docs/FOLLOWUPS.md` (two retroactive Mock-X cleanup
+  entries pinned to PR 4 C6β/C6γ; fix the prior bug that called
+  PR 4 `PendingTxEngine` — PR 4 is `RefreshEngine`; PR 5 is
+  `PendingTxEngine`), and this CHANGELOG entry.
+
+- **Stage 1 PR 4 (`RefreshEngine`) — Round 5 sub-pin extension
+  + amendment-layering coherence pass (F-Mock-1 through F-Mock-8
+  + Option (i) wrapper API + two-enum architecture pin).**
+  (`feat/stage-1-pr4-refresh-engine`, 2026-05-20). Doc-only
+  follow-up to the Round 5 substrate-decision amendment above.
+  Same-day review pass surfaced eight Mock-X-substrate findings
+  (F-Mock-1 through F-Mock-8) on the Round 5 amendment, then
+  ran an amendment-layering coherence pass against the
+  post-Round-5 substrate to surface forward-pointer gaps and
+  paradigm-language conflations. The pass landed four
+  substantive sharpenings, four minor audit-trail notes, a new
+  §6.1 "Test-substrate paradigm pin" subsection, and a new
+  §6.1.1 "Two-enum architecture (RefreshEngine-specific positive
+  pattern)" sub-section pinning the producer-internal /
+  trait-surface error-enum split as a positive architectural
+  reference and forward-template for future per-trait PRs.
+  None reopen any Round 1–4 disposition or the Round 5
+  amendment itself; the sub-pin refines the Round 5 C6
+  substrate so the Phase 1 author implements against an
+  explicit pin rather than reverse-engineering from tests.
+
+  **Substantive dispositions (F-Mock-1 through F-Mock-4 +
+  Option (i) wrapper API + two-enum architecture).**
+
+  1. **F-Mock-1 — `cfg`-gating symmetry (Option (a)).** All four
+     C6 surfaces (`FaultInjecting<R: RefreshEngine>`,
+     `Engine::replace_refresh`, `FaultInjecting<L: LedgerEngine>`,
+     `LocalLedger::from_test_blocks`) are gated uniformly
+     `#[cfg(any(test, feature = "test-helpers"))]`. The
+     `test-helpers` feature is introduced as part of C6α's
+     scope per the F-Mock-7 disposition, with a rationale
+     comment matching the existing `bench-internals` precedent
+     at [`rust/shekyl-engine-core/Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+     lines 223–227.
+
+  2. **F-Mock-2 — `FaultInjecting` queue contract.** Wrapper-
+     internal queue (not actor mailbox) holding `RefreshError`
+     values directly per Option (i) below. Contract: FIFO
+     ordering; `queued_failures(&self) -> usize` drain
+     inspector per the existing
+     [`MockLedger::queued_failures`](../rust/shekyl-engine-core/src/engine/test_support.rs)
+     precedent; `debug_assert!`-on-Drop for non-empty queue
+     (panic-on-leftover in test/debug builds); reentrance pops
+     the head per the "pop head if non-empty" semantics.
+
+  3. **F-Mock-3 + F-Mock-3-sharpening + Option (i) wrapper
+     API.** The wrapper carries `type Error = RefreshError`
+     (not `R::Error`) and queues `RefreshError` values
+     directly, uniform across all `R`. Cross-wrapper symmetry
+     justifies the choice:
+     `FaultInjecting<L: LedgerEngine>` must queue `RefreshError`
+     by trait necessity (per
+     [`engine/traits/ledger.rs:270–273`](../rust/shekyl-engine-core/src/engine/traits/ledger.rs)
+     — `apply_scan_result` returns `Result<(), RefreshError>`
+     with no `Self::Error` indirection), so
+     `FaultInjecting<R>` queuing `RefreshError` matches.
+
+     **Empirical variant enumeration (per source).** Of the
+     six `RefreshError` variants at
+     [`engine/error.rs:148`](../rust/shekyl-engine-core/src/engine/error.rs),
+     three are reachable from a `RefreshEngine` impl's
+     `Self::Error` via the `From` conversion: `Cancelled`
+     (unit), `Io(IoError)` (payload), and
+     `InternalInvariantViolation { context: &'static str }`
+     (payload constructed at the `From` impl site per
+     [`engine/local_refresh.rs:368–384`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)).
+     Three are orchestrator-constructed only:
+     `MalformedScanResult { reason }` (constructed
+     **exclusively** by the merge layer at
+     [`engine/merge.rs:315–451`](../rust/shekyl-engine-core/src/engine/merge.rs)
+     when scan-result internal-shape invariants fail —
+     superseding the doc's prior framing that grouped it with
+     `Cancelled` / `Io` as trait-reachable),
+     `ConcurrentMutation { wallet, result }` (constructed at
+     the merge gate), and `AlreadyRunning` (constructed at the
+     binary-layer single-flight). Under Option (i) direct
+     injection the wrapper can inject any of the six variants
+     into the orchestrator surface; for
+     `InternalInvariantViolation` both direct injection
+     (testing producer-returned-then-orchestrator-propagated
+     path) and **cause injection** (driving causes through
+     `FaultInjecting<LocalLedger>::queue_concurrent_mutation`
+     per F-Mock-2 to exhaust the retry budget at orchestrator-
+     side construction sites in `engine/refresh.rs`) are
+     legitimate test classes.
+
+  4. **F-Mock-4 — `MockLedger`-structurally-already-`FaultInjecting`
+     verification gate anchored.** The Round 5 amendment's
+     load-bearing claim ("current `MockLedger` is structurally
+     already a `FaultInjecting<LocalLedger>`-shaped wrapper") is
+     anchored to source at
+     [`engine/test_support.rs:773–812`](../rust/shekyl-engine-core/src/engine/test_support.rs):
+     `MockLedger::apply_scan_result` (line 792) pops from
+     `concurrent_mutation_queue` (line 794); on empty-queue,
+     delegates to the canonical `apply_scan_result_to_state`
+     (line 810). Future re-readers don't have to re-verify;
+     C6β scope is bounded as anticipated.
+
+  **Two-enum architecture pin (§6.1.1).** The `RefreshEngine`
+  trait carries a deliberate two-enum architecture worth
+  pinning as a positive architectural reference and forward-
+  template for future per-trait PRs. Producer-internal
+  [`LocalRefreshError`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+  is `pub(crate)`, unit-variant-only by convention, four
+  variants (`Cancelled`, `Io`, `Malformed`, `Internal`).
+  Orchestrator-facing
+  [`RefreshError`](../rust/shekyl-engine-core/src/engine/error.rs)
+  is `pub`, payload-bearing throughout. The `From` impl
+  boundary at
+  [`engine/local_refresh.rs:368–384`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+  is where payload information is constructed or discarded.
+  The architectural cleanness this delivers — payload
+  guarantees enforced by the type system at the conversion
+  boundary, not by convention at every producer return site —
+  makes the trait surface auditable in a way single-enum
+  architectures cannot match. The pattern is shape-applicable
+  to traits whose canonical method signatures return
+  `Result<_, Self::Error>` with `Self::Error: Into<OrchestratorError>`;
+  it is **not** load-bearing for traits whose canonical method
+  signatures return `Result<_, OrchestratorError>` directly
+  (per the `LedgerEngine` precedent). Per-trait PR pre-flight
+  checks include "does this trait have an impl-side
+  `Self::Error` indirection, and if so, is the producer-internal
+  enum unit-variant-only?" as a substrate-application check
+  alongside the four-pattern no-Mock pre-flight per PR 3
+  §2.1.5.
+
+  **Test-substrate implications (two test classes named
+  explicitly).** Two test classes follow from the two-enum
+  architecture, both load-bearing for C6α's smoke-test coverage:
+
+  - **Class 1 — wrapper-based trait-surface tests.** Tests
+    use `FaultInjecting<R: RefreshEngine>` to inject
+    `RefreshError` values directly (per Option (i) wrapper
+    API); verify the orchestrator handles each variant
+    correctly. Lives in C6α's new
+    `fault_injecting_refresh.rs` test module plus the
+    trait-dispatched `Engine` integration tests.
+    Sub-properties: empty-queue passthrough; single-injection-
+    then-delegation; multi-injection FIFO ordering;
+    queue-drain-on-teardown (with Drop-time `debug_assert!`
+    `#[should_panic]` separately verified).
+
+  - **Class 2 — From-conversion tests against `LocalRefresh`.**
+    Tests drive `LocalRefresh` directly via the `pub(crate)`
+    producer-internal surface to produce each
+    `LocalRefreshError` variant; verify the
+    `From<LocalRefreshError>` impl produces the correct
+    `RefreshError` variant. Lives in
+    [`local_refresh.rs`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)'s
+    existing tests module per the
+    [`local_refresh_error_maps_to_refresh_error`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+    test precedent; **sibling to Class 1, not a replacement**
+    because the wrapper bypasses the `From` conversion by
+    injecting `RefreshError` directly under Option (i).
+
+  **Amendment-forward-pointer convention (recorded as
+  meta-discipline).** The coherence pass surfaced the
+  pre-Phase-0c forward-pointer gap as a **recurrence pattern**
+  — the same class of finding F-Mock-3 surfaced from one
+  angle, present at three sites (the Status banner's Round 2
+  reframe paragraph; §3.1's two-channel error surface prose;
+  §4 Phase 0c's inline comment) all carrying the Round 2
+  reframe's "unit-variant-only; no payload of any kind"
+  framing that the Phase 0c amendment later refined. Three
+  additive forward-pointers added at those sites preserve
+  each round's historical record (what was decided at that
+  round) while resolving the ambiguity (what the current
+  binding contract is). The convention is recorded as a
+  **meta-discipline** alongside
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)'s
+  named-criteria principle: any future amendment that narrows
+  or refines an earlier round's contract lands its own
+  forward-pointer at the earlier site. The two disciplines
+  are complementary — reversion-clauses make rejection-
+  dispositions readable across substrate changes;
+  forward-pointers make narrowing-amendments readable across
+  layered rounds. Both are about making layered prose
+  readable across time.
+
+  **Minor dispositions (F-Mock-5 through F-Mock-8).** F-Mock-5
+  adds an explicit C6β migration table mapping `MockLedger`'s
+  four public test-affordance methods (`with_seed`,
+  `with_seed_and_state`, `queue_concurrent_mutation`,
+  `queued_failures`) to their post-migration homes and corrects
+  the prior "replaces `MockLedger::new(...)`" prose error (the
+  constructor is `with_seed` / `with_seed_and_state`, not
+  `new`). F-Mock-6 adds a Phase 1 author commit-message-template
+  note to C6γ enumerating the `MockDaemon` test affordances
+  surviving the rename unchanged. F-Mock-7 confirms the
+  `test-helpers` feature does not currently exist in
+  [`Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml) and pins
+  the introduction as part of C6α's scope. F-Mock-8 enumerates
+  C6α smoke-test property classes by name across the two
+  test-class structure above.
+
+  **V3.1 ledger-generator FOLLOWUPS entry (sub-pin extension
+  Decision 4: coordinated `TestLedgerBuilder` substrate
+  design).** The three V3.x invariant-test FOLLOWUPS entries
+  (tx-validation, FCMP++ tx-pool, staking lifecycle at
+  [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) lines 2411–2438) share a
+  common test-infrastructure need beyond what PR 4 C6β's
+  `LocalLedger::from_test_blocks` covers. The sub-pin lands a
+  new V3.1 substrate-design FOLLOWUPS entry pinning the
+  coordinated-design disposition: build one `TestLedgerBuilder`
+  / `TestBlockBuilder` / `TestTransactionBuilder` substrate
+  designed **before** the first daemon Rust port lands (cost
+  asymmetry from
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  "cost-benefit-defer-to-later anti-pattern"); design to be
+  forward-composable with PR 4 C6β's
+  `LocalLedger::from_test_blocks` signature; flag the
+  structurally-valid-but-semantically-stubbed middle-ground
+  option in the V3.1 design conversation rather than defaulting
+  to a binary "Need A or full Need B" framing.
+
+  The sub-pin extension is **not** a round reopening: no
+  Round 1–4 disposition, attack-surface pin, or commit-
+  decomposition ordering is touched; only the Round 5 C6
+  substrate and the layered-amendment prose are refined.
+  α-disposition, F1–F13 dispositions, Round 5 amendment, and
+  C0–C5 / C7 / C8 commit prose remain unchanged; the C6
+  sub-decomposition (C6α / C6β / C6γ) gains the F-Mock
+  dispositions inline.
+
+  Files touched (doc-only):
+  `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` (Status banner
+  Round 5 sub-pin extension paragraph + coherence-pass
+  paragraph + amendment-forward-pointer convention recording;
+  three forward-pointer additions at the layered-amendment
+  sites; new §6.1 paradigm pin + §6.1.1 two-enum architecture
+  pin; §6 preservation list `FaultInjecting<R>` /
+  `FaultInjecting<L>` / `TestDaemon` entries updated; §7.X
+  C6α wrapper-definition / F-Mock-3-sharpening / F-Mock-2
+  queue contract / F-Mock-7 `test-helpers` feature /
+  F-Mock-8 smoke-test prose all updated; §7.X C6β migration
+  table added; §7.X C6γ commit-message template note added),
+  `docs/FOLLOWUPS.md` (new V3.1 coordinated `TestLedgerBuilder`
+  substrate-design entry), and this CHANGELOG entry.
 
 - **Stage 1 PR 3 (`KeyEngine`) M3a pre-flight closures landed.**
   The four open `STAGE_1_PR_3_KEY_ENGINE.md` dispositions Round 4

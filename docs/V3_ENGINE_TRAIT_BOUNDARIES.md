@@ -216,7 +216,7 @@ preservation. The two are complementary disciplines.
 | Anonymity-network-coordination trait (Tor/I2P transport for archival queries) | V3.x — currently flagged in §9 as a future-trait candidate; trait shape not designed |
 | View-only / hardware-offload `open_*` bodies | V3.0 follow-up; orthogonal |
 | Generic `DaemonClient` *implementation* | Stage 1 PR 1 landed the `Engine<S, D: DaemonEngine = DaemonClient>` parameterization (per §2.5; `MockDaemon`-driven `start_refresh` coverage now exists end-to-end via `Engine::replace_daemon`). V3.2 generalizes the production constructors (`Engine::create`, `Engine::open_full`) over `D` alongside the `DaemonEngine`-to-`pub` promotion, retiring the `#[cfg(test)] pub(crate) replace_daemon` helper. |
-| Generic `LocalLedger` *implementation* | Stage 1 PR 2 landed the `Engine<S, D = DaemonClient, L: LedgerEngine = LocalLedger>` parameterization (per §2.2 post-Phase-0c surface; `MockLedger`-driven `apply_scan_result` retry coverage now exists end-to-end via `Engine::replace_ledger`). The `pub(crate) trait LedgerEngine` declares four methods (`synced_height`, `snapshot`, `balance`, `apply_scan_result`); `Engine::start_refresh` and the producer task `run_refresh_task` are generalized over `L`. The synchronous wrappers `Engine::refresh` / `Engine::refresh_with` remain `LocalLedger`-specialized because the trait's `apply_scan_result` is `async fn` and the sync entry points cannot dispatch through it without a runtime-handle threading story (queued at V3.x in `FOLLOWUPS.md`). V3.2 generalizes the production constructors (`Engine::create`, `Engine::open_full`) over `L` alongside the `LedgerEngine`-to-`pub` promotion, retiring the `#[cfg(test)] pub(crate) replace_ledger` helper. The `LocalLedger` aggregate landed as `pub` (not `pub(crate)`) because Rust requires every default type parameter on a `pub` type to be at least as visible as the type itself; the trait `LedgerEngine` itself stays `pub(crate)` per §1.4. |
+| Generic `LocalLedger` *implementation* | Stage 1 PR 2 landed the `Engine<S, D = DaemonClient, L: LedgerEngine = LocalLedger>` parameterization (per §2.2 post-Phase-0c surface). PR 4 C6β retired the original `MockLedger` parallel-implementation in favour of the no-Mock substrate `FaultInjecting<LocalLedger>::new(LocalLedger::from_test_blocks(Vec::new()))`; `apply_scan_result` retry coverage now exists end-to-end via `Engine::replace_ledger` wrapping the production `LocalLedger` with the trait-level failure-injection wrapper (per `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C6β + §6.1 "no-Mock substrate inheritance discipline"). The `pub(crate) trait LedgerEngine` declares four methods (`synced_height`, `snapshot`, `balance`, `apply_scan_result`); `Engine::start_refresh` and the producer task `run_refresh_task` are generalized over `L`. The synchronous wrappers `Engine::refresh` / `Engine::refresh_with` remain `LocalLedger`-specialized because the trait's `apply_scan_result` is `async fn` and the sync entry points cannot dispatch through it without a runtime-handle threading story (queued at V3.x in `FOLLOWUPS.md`). V3.2 generalizes the production constructors (`Engine::create`, `Engine::open_full`) over `L` alongside the `LedgerEngine`-to-`pub` promotion, retiring the `#[cfg(test)] pub(crate) replace_ledger` helper. The `LocalLedger` aggregate landed as `pub` (not `pub(crate)`) because Rust requires every default type parameter on a `pub` type to be at least as visible as the type itself; the trait `LedgerEngine` itself stays `pub(crate)` per §1.4. |
 
 ### 1.3 Why "concrete fields + generic-bounded methods" is the Stage 1 shape
 
@@ -1215,9 +1215,28 @@ inner check inside the per-block scan loop, per
 §5.4.9 F2 / F11 / F11-S) is named on the trait surface below and
 in §7 invariant 4.
 
-**Stage 1 surface (Phase 0a binding form per
+**Stage 1 surface (landed via PR 4 §7.X commits C0–C8 on
+`feat/stage-1-pr4-refresh-engine`; the Phase 0a binding form per
 [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-§4).**
+§4 below is the as-shipped trait).** The trait is now declared at
+[`engine/traits/refresh.rs`](../rust/shekyl-engine-core/src/engine/traits/refresh.rs)
+(commit `d3edc1abb`, PR 4 C1); the supporting
+`RefreshDiagnostic` + `DiagnosticSink` substrate at
+[`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs)
+(commit `8fc207051`, PR 4 C2); the `LocalRefresh` implementor at
+[`engine/local_refresh.rs`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+(commit `ac100e1ab`, PR 4 C4); the `Engine<S, D, L, R>` four-parameter
+wiring at
+[`engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs)
+(commit `553d70139`, PR 4 C5a); and the
+`FaultInjecting<R: RefreshEngine>` + `FaultInjecting<L: LedgerEngine>`
+test-substrate wrappers at
+[`engine/fault_injecting_refresh.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs)
+(commit `e9310542a`, PR 4 C6α) and
+[`engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs)
+(commit `e94526dec`, PR 4 C6β). The PR 4 §7.X commit list and per-
+commit landing-SHA cross-references are in that doc's §7.X header.
+The trait as declared:
 
 ```rust
 pub trait RefreshEngine: Send + Sync + 'static {
@@ -3948,6 +3967,36 @@ MockLedger, MockDaemon, …>`** that drives `start_refresh`
 end-to-end with deterministic chain state, deterministic key
 material, and no filesystem.
 
+> **(Post-M3 + Post-PR-4 note: substrate evolved away from
+> full-Mock-X composition.)** The "fully-mocked
+> `Engine<SoloSigner, MockKey, MockLedger, MockDaemon, …>`"
+> framing above describes the Stage 1 design-time target. The
+> shipped V3.0 substrate is hybrid:
+>
+> - **PR 3** (`STAGE_1_PR_3_KEY_ENGINE.md` §6.4) shipped without
+>   a `MockKey` type. The no-Mock-X substrate uses a real
+>   `LocalKeys` (the production `KeyEngine` implementor) seeded
+>   with deterministic test input rather than a parallel
+>   `MockKey` honoring `KeyEngine`'s contract.
+> - **PR 4** retired `MockLedger` in favor of
+>   `FaultInjecting<LocalLedger>` (C6β = `e94526dec`) and
+>   retired `MockRefresh` in favor of `FaultInjecting<LocalRefresh>`
+>   (C6α = `e9310542a`). The wrapper-based fault-injection
+>   substrate composes a real production implementor with a
+>   trait-boundary failure-injection wrapper (per the same
+>   `RefreshEngine` / `LedgerEngine` trait bounds the
+>   orchestrator already dispatches against), eliminating the
+>   parallel-Mock-X contract-fidelity burden for these two
+>   traits.
+>
+> The surviving Mock-X types as of PR 4 land:
+> `MockDaemon`, `MockEconomics`, `MockPersistence`,
+> `MockPendingTx`. The contract-fidelity discipline (§6.1
+> Round-4b — Item 3) applies unchanged to those types AND to
+> `FaultInjecting<...>` wrappers (which honor the trait
+> contract by delegating to the wrapped production type's
+> implementation).
+
 Today's test coverage:
 
 - **Producer-only:** `MockDaemon` in [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
@@ -3977,6 +4026,24 @@ ceremony, which today add ~50–200 ms per test.
   (`#[cfg(test)] pub(crate)`). The list as of Round 3:
   `MockKey`, `MockLedger`, `MockEconomics`, `MockDaemon`,
   `MockPersistence`, `MockRefresh`, `MockPendingTx`.
+  - **(Post-M3 + Post-PR-4 update to the Round-3 list.)** Of
+    the seven Round-3 commitments, three retired in favor of
+    real-implementor + wrapper substrates: `MockKey` retired
+    in PR 3 (`STAGE_1_PR_3_KEY_ENGINE.md` §6.4 no-Mock
+    substrate; `LocalKeys` is used directly with deterministic
+    test seeds); `MockLedger` retired in PR 4 (C6β =
+    `e94526dec`; replaced by `FaultInjecting<LocalLedger>` +
+    `LocalLedger::from_test_blocks(Vec<Block>)`);
+    `MockRefresh` retired in PR 4 (C6α = `e9310542a`;
+    replaced by `FaultInjecting<LocalRefresh>` +
+    `Engine::replace_refresh` test-only setter). The
+    surviving Round-3 commitments (`MockEconomics`,
+    `MockDaemon`, `MockPersistence`, `MockPendingTx`) remain
+    on the trait-boundary Mock-X pattern; the contract-
+    fidelity discipline below applies to them and to the
+    `FaultInjecting<...>` wrappers (which honor the trait
+    contract by delegating to the real production
+    implementor).
 - `start_refresh` integration tests against a fully-mocked engine
   ship in the same Stage 1 commit that lands the trait surfaces.
 - `MockEconomics` is constants-driven: the V3.0
@@ -3996,11 +4063,26 @@ ceremony, which today add ~50–200 ms per test.
   semantics match production; `MockKey::sign_transaction` consumes
   RNG bytes from its seeded `ChaCha20Rng` so signature shapes are
   deterministic given the same inputs but distinct across calls.
-  (Post-M3 note: PR 3 shipped without a `MockKey` type per
+  (Post-M3 + Post-PR-4 note: PR 3 shipped without a
+  `MockKey` type per
   [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
-  §6.4's no-Mock substrate; the contract-fidelity discipline
-  applies to the surviving `Mock*` types for traits where the
-  Mock-X pattern persists at V3.0 baseline.)
+  §6.4's no-Mock substrate; PR 4 additionally retired
+  `MockLedger` (C6β = `e94526dec`; replaced by
+  `FaultInjecting<L: LedgerEngine>` composed against
+  `LocalLedger::from_test_blocks`) and `MockRefresh`
+  (C6α = `e9310542a`; replaced by `FaultInjecting<R:
+  RefreshEngine>` composed against `LocalRefresh` via the
+  `Engine::replace_refresh` test-only setter); the
+  contract-fidelity discipline applies to the surviving
+  Mock-X types for traits where the Mock-X pattern persists
+  at V3.0 baseline (`MockDaemon`, `MockEconomics`,
+  `MockPersistence`, `MockPendingTx`) AND to
+  `FaultInjecting<...>` wrappers, which honor the trait
+  contract by delegating to the wrapped real production
+  implementor's behavior — the wrapper-injected failures
+  fire BEFORE or AFTER delegation per the wrapper's
+  documented semantics, not by substituting alternative
+  return values that contradict the trait contract.)
   Tests that assume a `Mock*` returns arbitrary plausible values
   fail to test the production code's behavior — they test the
   test harness's behavior. The contract-fidelity discipline

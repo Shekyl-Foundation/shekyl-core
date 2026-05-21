@@ -141,7 +141,7 @@
 //! workload measured at Stage 0 PR-2 (`synced_height`) does not
 //! trigger a daemon RPC, so the URL is never contacted. A future
 //! bench whose workload **does** trigger an RPC must swap the
-//! `DaemonClient` for a real test double — `MockDaemon`, arriving
+//! `DaemonClient` for a real test double — `TestDaemon`, arriving
 //! with Stage 1 PR 1 per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.1.
 //! That migration replaces [`construct_dummy_daemon`] in the fixture
 //! (or introduces a sibling fixture under `benches/common/` per

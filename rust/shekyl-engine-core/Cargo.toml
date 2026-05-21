@@ -95,7 +95,7 @@ tempfile = "3"
 # retry-backoff tests use to make exponential delays instantaneous
 # without sacrificing determinism.
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "test-util"] }
-# `MockDaemon` (in `engine::test_support`) holds an internal
+# `TestDaemon` (in `engine::test_support`) holds an internal
 # `ChaCha20Rng` seeded from its constructor seed per
 # `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.2 (deterministic RNG
 # injection). The seed plus a stable PRNG implementation is what
@@ -113,6 +113,15 @@ rand_chacha = "0.3"
 # affect the production crate graph.
 hkdf = "0.12"
 sha2 = "0.10"
+# PR 4 C7 property tests pin §5.4.6 emission/return coherence and the
+# §5.4.6 producer-panic-safety property as permanent CI regression
+# coverage. `proptest = "1"` is the workspace consensus version
+# (matches `shekyl-crypto-pq`'s `prop_round_trip` gate); enabling it as
+# a dev-dep keeps the production crate graph unaffected while letting
+# the per-attempt coherence invariant be fuzzed across the producer's
+# failure-injection space (RpcError → DaemonProtocolError, malformed
+# block → DaemonMalformed, clean path → no error event).
+proptest = "1"
 # Stage 1 PR 3 M3c-via-C dev-deps. The
 # `engine_derived_bundle_signs_through_tx_builder_end_to_end` test
 # (in `engine::local_keys::tests`) drives an engine-derived
@@ -225,6 +234,50 @@ multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "serde_json", "hex
 # measure them. Not part of the public API; consumers must not depend
 # on this feature.
 bench-internals = []
+# Internal feature: gates compilation of `pub(crate)` failure-injection
+# wrappers (`FaultInjecting<R: RefreshEngine>` per C6α,
+# `FaultInjecting<L: LedgerEngine>` per C6β,
+# `Engine::replace_refresh` test-only setter per C6α,
+# `LocalLedger::from_test_blocks` constructor per C6β) so they
+# build under the test substrate without bleeding into production.
+# The four surfaces are `#[cfg(any(test, feature = "test-helpers"))]`-
+# gated AT THE DEFINITION SITE; the feature flag is the external
+# half of that gate (the `test` cfg is the internal half).
+#
+# Symmetric with `bench-internals` (above) in name and shape, but
+# NOT in re-export posture: `bench-internals` actually re-exports
+# its `pub(crate)` types under a `__bench_internals` module
+# (`pub use` gated on the feature) so external Criterion harnesses
+# can name them; `test-helpers` does NOT currently re-export
+# anything. The four surfaces remain `pub(crate)` even with the
+# feature enabled — downstream crates cannot reach them through
+# the public API regardless of feature posture.
+#
+# Why no public re-exports yet (`21-reversion-clause-discipline.mdc`):
+# pre-genesis no downstream consumer crate exists; speculative re-
+# exports without a named caller would be the "pre-provisioning
+# for hypothetical consumers" anti-pattern the discipline rejects.
+# The current shape (compile-gate-only) is the minimum surface
+# that lets the test substrate exist; the public-re-export half
+# lands when the first downstream consumer emerges, at which point
+# the disposition is reopened via a focused PR adding
+# `#[cfg(feature = "test-helpers")] pub use ...` re-exports under
+# a `__test_helpers` module (matching the `__bench_internals`
+# precedent), the V3.0-targeted FOLLOWUPS item naming that
+# downstream crate, and an `AUDIT_SCOPE.md` amendment if the
+# crate exposes any production-surface implications.
+#
+# Production-build safety property (the load-bearing claim): the
+# `#[cfg(any(test, feature = "test-helpers"))]` gating at the
+# definition site ensures NONE of the four failure-injection
+# surfaces link into a default-feature production build. The
+# feature flag's external half is what lets a downstream crate
+# (when one exists) opt into the test-substrate surface without
+# patching the upstream crate.
+#
+# See `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C6α /
+# F-Mock-1 / F-Mock-7.
+test-helpers = []
 
 [lints]
 workspace = true

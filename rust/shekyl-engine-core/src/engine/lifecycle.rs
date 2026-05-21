@@ -69,7 +69,8 @@ use shekyl_engine_state::{LedgerIndexes, WalletLedger};
 
 use super::error::{IoError, KeyError, OpenError};
 use super::local_ledger::LocalLedger;
-use super::traits::{DaemonEngine, LedgerEngine};
+use super::local_refresh::LocalRefresh;
+use super::traits::{DaemonEngine, LedgerEngine, RefreshEngine};
 use super::{Capability, DaemonClient, Engine, EngineSignerKind, SoloSigner};
 
 // ---------------------------------------------------------------------------
@@ -135,10 +136,11 @@ pub enum OpenedEngine<
     S: EngineSignerKind,
     D: DaemonEngine = DaemonClient,
     L: LedgerEngine = LocalLedger,
+    R: RefreshEngine = LocalRefresh,
 > {
     /// `.wallet` was present and decoded successfully. The wallet is
     /// fully loaded against the persisted ledger.
-    Loaded(Engine<S, D, L>),
+    Loaded(Engine<S, D, L, R>),
 
     /// `.wallet` was missing. The keys file was intact and the wallet
     /// was reconstructed with an empty ledger anchored at
@@ -146,15 +148,15 @@ pub enum OpenedEngine<
     /// state, then `save_state` the rebuilt ledger.
     Restored {
         /// The reconstructed wallet, ready for refresh.
-        wallet: Engine<S, D, L>,
+        wallet: Engine<S, D, L, R>,
         /// Block height the synthesized ledger anchors at; equals the
         /// keys-file's `restore_height_hint` widened to `u64`.
         from_height: u64,
     },
 }
 
-impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine> std::fmt::Debug
-    for OpenedEngine<S, D, L>
+impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine, R: RefreshEngine>
+    std::fmt::Debug for OpenedEngine<S, D, L, R>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -174,9 +176,11 @@ impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine> st
 // `D: DaemonEngine` and `L: LedgerEngine` private-bound: see the
 // rationale on the `pub struct Engine` definition in `engine/mod.rs`.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine> OpenedEngine<S, D, L> {
+impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine>
+    OpenedEngine<S, D, L, R>
+{
     /// Borrow the underlying wallet regardless of the variant.
-    pub fn wallet(&self) -> &Engine<S, D, L> {
+    pub fn wallet(&self) -> &Engine<S, D, L, R> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -184,7 +188,7 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine> OpenedEngine<S, D, L
     }
 
     /// Mutably borrow the underlying wallet regardless of the variant.
-    pub fn wallet_mut(&mut self) -> &mut Engine<S, D, L> {
+    pub fn wallet_mut(&mut self) -> &mut Engine<S, D, L, R> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -194,7 +198,7 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine> OpenedEngine<S, D, L
     /// Consume the outcome and return the wallet, discarding the
     /// recovery-path signal. Use only when the caller has already
     /// surfaced the lost-state branch through some other channel.
-    pub fn into_wallet(self) -> Engine<S, D, L> {
+    pub fn into_wallet(self) -> Engine<S, D, L, R> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -482,7 +486,7 @@ impl Engine<SoloSigner> {
 
         let indexes = LedgerIndexes::rebuild_from_ledger(&initial_ledger.ledger);
 
-        Ok(Self::assemble(
+        Self::assemble(
             file,
             blob,
             initial_ledger,
@@ -491,7 +495,7 @@ impl Engine<SoloSigner> {
             daemon,
             network,
             Capability::Full,
-        ))
+        )
     }
 
     /// Open an existing FULL-capability wallet.
@@ -591,7 +595,7 @@ impl Engine<SoloSigner> {
 
         let wallet = Self::assemble(
             file, blob, ledger, indexes, prefs, daemon, network, capability,
-        );
+        )?;
 
         Ok(match restored_from {
             None => OpenedEngine::Loaded(wallet),
@@ -653,8 +657,31 @@ impl Engine<SoloSigner> {
         daemon: DaemonClient,
         network: Network,
         capability: Capability,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, OpenError> {
+        // Construct the producer's view-and-spend material once, from
+        // the freshly-derived `AllKeysBlob`, and move it into the
+        // `LocalRefresh` aggregate per
+        // [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §5.4.7 R4
+        // (a-instance-scoped) + §7.X C5. `ViewMaterial` does not
+        // implement `Clone`; the orchestrator never holds a second
+        // copy after the move. The construction site is unique to
+        // `assemble` so future open paths inherit the wiring
+        // automatically.
+        let view_material =
+            super::view_material::ViewMaterial::try_from_keys(&keys).map_err(|e| match e {
+                super::error::RefreshError::Io(io) => OpenError::Io(io),
+                // `try_from_keys` constructs only `RefreshError::Io(IoError::Scanner)`,
+                // but the exhaustive match keeps the mapping
+                // robust if `try_from_keys`'s error surface ever
+                // widens (and surfaces a defensive translation
+                // rather than a panic).
+                other => OpenError::Io(IoError::Scanner {
+                    detail: format!("ViewMaterial construction failed: {other:?}"),
+                }),
+            })?;
+        let refresh = std::sync::Arc::new(super::local_refresh::LocalRefresh::new(view_material));
+
+        Ok(Self {
             file,
             keys,
             ledger: super::local_ledger::LocalLedger::new(ledger, indexes),
@@ -665,14 +692,15 @@ impl Engine<SoloSigner> {
             network,
             capability,
             refresh_slot: super::refresh::RefreshSlot::new(),
+            refresh,
             _signer: std::marker::PhantomData,
-        }
+        })
     }
 }
 
 #[cfg(test)]
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine> Engine<S, D1, L> {
+impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine, R: RefreshEngine> Engine<S, D1, L, R> {
     /// Test-only constructor: rebuild the engine with `daemon`
     /// substituted in place of the existing one, leaving every
     /// other field unchanged.
@@ -682,13 +710,13 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine> Engine<S, D1, L> {
     /// fully-constructed `Engine<SoloSigner>` — file, keys,
     /// preferences, ledger, refresh slot — but want to drive
     /// `start_refresh` (or any other daemon-touching method)
-    /// against a `MockDaemon` rather than a `DaemonClient` pointed
+    /// against a `TestDaemon` rather than a `DaemonClient` pointed
     /// at an unreachable URL. The pattern is:
     ///
     /// ```ignore
     /// let real = Engine::<SoloSigner>::create(params, dummy_daemon())?;
-    /// let mock = MockDaemon::with_seed(derive_seed(&master, ROLE_DAEMON));
-    /// let hybrid: Engine<SoloSigner, MockDaemon> = real.replace_daemon(mock);
+    /// let mock = TestDaemon::with_seed(derive_seed(&master, ROLE_DAEMON));
+    /// let hybrid: Engine<SoloSigner, TestDaemon> = real.replace_daemon(mock);
     /// ```
     ///
     /// The original `D1` daemon is dropped; the returned engine's
@@ -702,7 +730,7 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine> Engine<S, D1, L> {
     /// over `D: DaemonEngine` (default `DaemonClient`) alongside
     /// the `DaemonEngine`-to-`pub` promotion. At that point the
     /// production constructors accept any `D` directly, hybrid
-    /// tests construct their `Engine<SoloSigner, MockDaemon>` via
+    /// tests construct their `Engine<SoloSigner, TestDaemon>` via
     /// the public path without intermediate dummy-daemon ceremony,
     /// and this `#[cfg(test)] pub(crate)` helper retires. The
     /// retirement commit deletes both `replace_daemon` and the
@@ -719,7 +747,7 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine> Engine<S, D1, L> {
     /// test surface; production paths cannot reach it because
     /// `pub(crate) #[cfg(test)]` excludes them from the published
     /// API and from the non-test build.
-    pub(crate) fn replace_daemon<D2: DaemonEngine>(self, daemon: D2) -> Engine<S, D2, L> {
+    pub(crate) fn replace_daemon<D2: DaemonEngine>(self, daemon: D2) -> Engine<S, D2, L, R> {
         let Engine {
             file,
             keys,
@@ -731,6 +759,7 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine> Engine<S, D1, L> {
             network,
             capability,
             refresh_slot,
+            refresh,
             _signer,
         } = self;
         Engine {
@@ -744,6 +773,7 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine> Engine<S, D1, L> {
             network,
             capability,
             refresh_slot,
+            refresh,
             _signer,
         }
     }
@@ -757,14 +787,18 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine> Engine<S, D1, L> {
     /// §6.3). Hybrid tests that need a fully-constructed
     /// `Engine<SoloSigner>` but want to drive
     /// [`super::Engine::apply_scan_result`] (or any other ledger-
-    /// touching path) against a deterministic `MockLedger` rather
-    /// than the canonical `LocalLedger` use this method:
+    /// touching path) against a wrapped production [`super::local_ledger::LocalLedger`]
+    /// for failure injection use this method together with
+    /// [`super::fault_injecting_ledger::FaultInjecting`] and
+    /// [`super::local_ledger::LocalLedger::from_test_blocks`] (the
+    /// PR 4 C6β no-Mock substrate per the Round 5 amendment,
+    /// commit `8484e669a`):
     ///
     /// ```ignore
     /// let real = Engine::<SoloSigner>::create(params, dummy_daemon())?;
-    /// let mock_ledger = MockLedger::with_seed(derive_seed(&master, ROLE_LEDGER));
-    /// let hybrid: Engine<SoloSigner, DaemonClient, MockLedger> =
-    ///     real.replace_ledger(mock_ledger);
+    /// let ledger = FaultInjecting::new(LocalLedger::from_test_blocks(Vec::new()));
+    /// let hybrid: Engine<SoloSigner, DaemonClient, FaultInjecting<LocalLedger>> =
+    ///     real.replace_ledger(ledger);
     /// ```
     ///
     /// Composes with [`Self::replace_daemon`]: a hybrid test that
@@ -786,13 +820,13 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine> Engine<S, D1, L> {
     /// LedgerEngine` (default `LocalLedger`) alongside the
     /// `LedgerEngine`-to-`pub` promotion. At that point production
     /// constructors accept any `L` directly, hybrid tests construct
-    /// their `Engine<SoloSigner, _, MockLedger>` via the public
-    /// path without the intermediate dummy-ledger ceremony, and
-    /// this `#[cfg(test)] pub(crate)` helper retires. The retirement
-    /// commit deletes both `replace_daemon` and `replace_ledger`
-    /// together; production paths are unaffected because they never
-    /// named these methods.
-    pub(crate) fn replace_ledger<L2: LedgerEngine>(self, ledger: L2) -> Engine<S, D1, L2> {
+    /// their `Engine<SoloSigner, _, FaultInjecting<LocalLedger>>` via
+    /// the public path without the intermediate dummy-ledger
+    /// ceremony, and this `#[cfg(test)] pub(crate)` helper retires.
+    /// The retirement commit deletes both `replace_daemon` and
+    /// `replace_ledger` together; production paths are unaffected
+    /// because they never named these methods.
+    pub(crate) fn replace_ledger<L2: LedgerEngine>(self, ledger: L2) -> Engine<S, D1, L2, R> {
         let Engine {
             file,
             keys,
@@ -804,6 +838,7 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine> Engine<S, D1, L> {
             network,
             capability,
             refresh_slot,
+            refresh,
             _signer,
         } = self;
         Engine {
@@ -817,6 +852,7 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine> Engine<S, D1, L> {
             network,
             capability,
             refresh_slot,
+            refresh,
             _signer,
         }
     }

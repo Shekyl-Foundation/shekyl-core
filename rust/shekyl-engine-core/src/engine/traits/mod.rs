@@ -48,6 +48,17 @@
 pub(crate) mod daemon;
 pub(crate) mod key;
 pub(crate) mod ledger;
+pub(crate) mod refresh;
 
 pub(crate) use daemon::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
 pub(crate) use ledger::LedgerEngine;
+// C5 (`7140f726a`) lands the first orchestrator-side consumer of
+// `RefreshEngine` per the `Engine<S, D, L, R>` parameterization in
+// PR 4 §7.X; C1 (`d3edc1abb`) had landed the re-export ahead of
+// C5 so subsequent commits do not pay for trait-surface access by
+// absolute path. The `#[allow(unused_imports)]` C1 carried at that
+// time has been live consumers since C5, so the suppression has
+// been removed per `15-deletion-and-debt.mdc`'s "Default: delete"
+// rule (the annotation now masks future regressions rather than
+// suppressing a justified warning).
+pub(crate) use refresh::RefreshEngine;
