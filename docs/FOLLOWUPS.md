@@ -478,9 +478,11 @@ sustainability is unaffected by the recalibration.
   Python file, no workspace code changes. Lands before any
   subsequent PR that hits the bench gate. Pre-RC1.
 
-- **Stage 1 PR 3 engine-property test re-location (trigger:
-  `KeyEngine` widens from `pub(crate)` to `pub`; pre-RC1).** Two
-  Stage 1 PR 3 property tests landed as unit tests in
+- **Stage 1 PR 3 engine-property test re-location (trigger: V3.2
+  unified `KeyEngine` / `LedgerEngine` / `DaemonEngine`
+  `pub(crate) → pub` visibility-promotion bundle per
+  `STAGE_1_PR_3_KEY_ENGINE.md` §7.7; pre-RC1).** Two Stage 1 PR 3
+  property tests landed as unit tests in
   `rust/shekyl-engine-core/src/engine/local_keys.rs`'s `mod tests`
   rather than the integration-test placement their pre-flights
   specified, both forced by the same M3a Round 4a `pub(crate)`
@@ -494,15 +496,20 @@ sustainability is unaffected by the recalibration.
 
   - *M3b D5 — byte-identical bundle-derivation test.*
     `derive_source_secrets_bundle_byte_identical_against_legacy_chain`
-    (and its peer
-    `derive_source_secrets_bundle_byte_identical_against_legacy_chain_subaddress`).
+    at `rust/shekyl-engine-core/src/engine/local_keys.rs:1258`.
     Pre-flight specification:
     `docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md` §D5
     (`rust/shekyl-engine-core/tests/byte_identical_derivation.rs`).
-    Pins bundle-byte identity between engine and legacy
-    derivation paths field-by-field.
+    Pins bundle-byte identity between engine and legacy derivation
+    paths field-by-field. The pre-flight estimated a separate
+    `..._subaddress` peer test for the subaddress sweep; in
+    implementation the sweep over
+    `subaddress_idx ∈ {PRIMARY, 1, 42}` was consolidated into
+    this single test's inner loop (see test body at lines
+    1278–1322), so the entry covers one test, not two.
   - *M3c-via-C — engine-bundle end-to-end signing test.*
-    `engine_derived_bundle_signs_through_tx_builder_end_to_end`.
+    `engine_derived_bundle_signs_through_tx_builder_end_to_end`
+    at `rust/shekyl-engine-core/src/engine/local_keys.rs:1554`.
     Pre-flight specification:
     `docs/design/STAGE_1_PR_3_M3C_PREFLIGHT.md` §2.1 (Option C
     disposition; `rust/shekyl-engine-core/tests/` integration
@@ -512,19 +519,29 @@ sustainability is unaffected by the recalibration.
     acceptance — the property M3d's removal of the legacy
     bundle-derivation fallback depends on.
 
-  **Trigger condition.** When `KeyEngine` widens from
-  `pub(crate)` to `pub` (per `STAGE_1_PR_3_KEY_ENGINE.md` §4.4
-  trait visibility evolution — driven by whichever pre-RC PR
-  needs to reach `KeyEngine` from outside `shekyl-engine-core`,
-  e.g., the `wallet_rpc_server` Rust cutover or any other
-  consumer crate), both property tests should be re-located to
-  their pre-flights' planned integration-test placements so they
-  exercise the same surface external consumers will exercise. The
-  re-location is one PR covering both tests (not two separate
-  PRs): the visibility flip is the trigger for both, and bundling
-  them keeps the migration-tail discipline cost bounded. The
-  deviations are recorded inline in each test docstring so a
-  future maintainer cross-referencing either pre-flight finds the
+  **Trigger condition (substrate-anchored).** When the **unified
+  V3.2 visibility-promotion bundle** lands per
+  `STAGE_1_PR_3_KEY_ENGINE.md` §7.7 ("V3.x full-PQC trait churn
+  acknowledgement") and §3.4 Decision 4 — the bundle promotes
+  `KeyEngine`, `LedgerEngine`, and `DaemonEngine` from
+  `pub(crate)` to `pub` together when the actor abstraction
+  surfaces concrete external consumers. **Unilateral `KeyEngine`
+  widening does not satisfy this trigger** — Stage 1's Trust-class
+  A classification (PR 3 §2.1 trust-class table row for `KeyEngine`)
+  and the unified-bundle disposition both lock all three engine traits
+  to move together; promoting `KeyEngine` alone re-introduces the
+  trust-model incoherence the lock prevents. When the V3.2 bundle
+  lands and `SourceSecretsBundle` / `KeyEngineError` ride along
+  with the trait per the bundle's enumerated surface, both
+  property tests should be re-located to their pre-flights'
+  planned integration-test placements so they exercise the same
+  surface external consumers will exercise. The re-location is
+  one PR covering both tests (not two separate PRs): the
+  visibility flip is the trigger for both, and bundling them
+  keeps the migration-tail discipline cost bounded. The
+  deviations are recorded inline in each test docstring
+  (`local_keys.rs:1243-1251` and `:1538-1541`) so a future
+  maintainer cross-referencing either pre-flight finds the
   tracking link. Pre-RC1.
 
 - **`RecoveredWalletOutput.key_image`: promote to `Option<KeyImage>`
