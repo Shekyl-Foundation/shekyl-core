@@ -3246,6 +3246,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-pow-randomx"
+version = "3.1.0"
+dependencies = [
+ "argon2",
+]
+
+[[package]]
 name = "shekyl-primitives"
 version = "0.1.0"
 dependencies = [
