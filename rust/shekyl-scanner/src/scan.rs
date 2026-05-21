@@ -43,8 +43,9 @@ const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_LEN;
 ///
 /// # Defense-in-depth posture
 ///
-/// The scanner enforces this bound at `InternalScanner::scan_transaction`
-/// entry — *before* any per-output decap or key-image derivation runs —
+/// The scanner enforces this bound at
+/// `InternalScanner::scan_transaction_with_cancel` entry — *before*
+/// any per-output decap or key-image derivation runs —
 /// so that an adversarial daemon delivering oversized transactions
 /// cannot inflate the wallet's per-tx scan-time budget. Consensus
 /// validation will eventually reject any such transaction, but the
@@ -294,8 +295,9 @@ pub enum ScanError {
 /// # Safe-point semantics (binding)
 ///
 /// The cancellation closure is invoked at the **top of each
-/// per-output iteration** inside `scan_transaction`'s per-output
-/// loop — AFTER the prior iteration's `Zeroizing<…>`-wrapped
+/// per-output iteration** inside
+/// `scan_transaction_with_cancel`'s per-output loop — AFTER the
+/// prior iteration's `Zeroizing<…>`-wrapped
 /// per-output material has dropped at scope exit, BEFORE this
 /// iteration's first secret derivation (`scan_output_recover`)
 /// begins. Mid-iteration firing is FORBIDDEN by the §3.1 / §2.3
@@ -607,9 +609,9 @@ impl InternalScanner {
     fn scan(&mut self, block: ScannableBlock) -> Result<Timelocked, ScanError> {
         // Delegate to the cancellable variant with a never-cancelling
         // closure. Same unreachable-Cancelled mapping discipline as
-        // `scan_transaction`: closure-invariant proves the branch is
-        // unreachable; we surface an empty `Timelocked` instead of
-        // `unreachable!()` to keep the function panic-free.
+        // `scan_transaction_with_cancel`: closure-invariant proves
+        // the branch is unreachable; we surface an empty `Timelocked`
+        // instead of `unreachable!()` to keep the function panic-free.
         match self.scan_with_cancel(block, &mut || false)? {
             ScanOutcome::Completed(t) => Ok(t),
             ScanOutcome::Cancelled => Ok(Timelocked(Vec::new())),
@@ -733,7 +735,8 @@ impl Scanner {
     /// (and the §7.Y per-output safe-point measurement evidence that
     /// binds the granularity), the caller passes an `is_cancelled`
     /// closure that is invoked at the top of each per-output decap
-    /// iteration inside `scan_transaction`'s per-output loop. The
+    /// iteration inside `scan_transaction_with_cancel`'s per-output
+    /// loop. The
     /// closure observes the caller's cancellation token; on hit
     /// (`is_cancelled() == true`) the scanner returns
     /// [`ScanOutcome::Cancelled`] and discards every recovered output
@@ -812,13 +815,14 @@ impl GuaranteedScanner {
 }
 
 /// Tests for the scanner-side defense-in-depth size gate on
-/// [`InternalScanner::scan_transaction`] (PR 4 §3.1 / F11-S
-/// substrate). The gate skips any transaction whose output count
-/// exceeds [`MAX_OUTPUTS`] before any per-output decap runs and emits
-/// a `WARN`-level tracing event for observability. These tests pin
-/// the behavioural contract: skip-and-log shape, return value
-/// `Ok(Timelocked::empty())`, and event firing at the documented
-/// target. They live in the same module as [`InternalScanner`]
+/// [`InternalScanner::scan_transaction_with_cancel`] (PR 4 §3.1 /
+/// F11-S substrate). The gate skips any transaction whose output
+/// count exceeds [`MAX_OUTPUTS`] before any per-output decap runs and
+/// emits a `WARN`-level tracing event for observability. These tests
+/// pin the behavioural contract: skip-and-log shape, return value
+/// `Ok(ScanOutcome::Completed(Timelocked(empty)))`, and event firing
+/// at the documented target. They live in the same module as
+/// [`InternalScanner`]
 /// because the type is module-private; the established
 /// `crate::tests` location is for behavioural tests of public
 /// surfaces.
@@ -911,8 +915,9 @@ mod gate_tests {
                 // than [`Input::Gen`]) so the tx is treated as a
                 // normal user transaction subject to the per-tx
                 // output cap documented on [`MAX_OUTPUTS`]. The
-                // input fields are placeholders; `scan_transaction`
-                // never inspects the input vector.
+                // input fields are placeholders;
+                // `scan_transaction_with_cancel` never inspects the
+                // input vector.
                 inputs: vec![Input::ToKey {
                     amount: None,
                     key_offsets: vec![1],
