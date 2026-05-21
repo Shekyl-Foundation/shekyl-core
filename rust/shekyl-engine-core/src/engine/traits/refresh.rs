@@ -201,7 +201,7 @@ use crate::scan::ScanResult;
 ///
 /// [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`]: ../../../../../docs/V3_ENGINE_TRAIT_BOUNDARIES.md
 /// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
-/// [`LocalRefresh`]: super::super::Engine
+/// [`LocalRefresh`]: super::super::LocalRefresh
 pub(crate) trait RefreshEngine: Send + Sync + 'static {
     /// Implementor-specific error. Convertible into
     /// [`RefreshError`] so [`Engine<S>`](super::super::Engine)
@@ -255,7 +255,7 @@ pub(crate) trait RefreshEngine: Send + Sync + 'static {
     /// and the producer must unwind without corrupting interior
     /// state.
     ///
-    /// [`LocalRefresh`]: super::super::Engine
+    /// [`LocalRefresh`]: super::super::LocalRefresh
     #[allow(dead_code)] // C5 lands the first orchestrator-side dispatch through this method.
     #[allow(clippy::too_many_arguments)] // 6 explicit args is the Phase 0a binding form.
     fn produce_scan_result<D: DaemonEngine>(
