@@ -4,6 +4,49 @@
 
 ### Added
 
+- **RandomX v2 Track A Phase 2a — `shekyl-pow-randomx` crate
+  scaffold + Argon2d primitive** (`feat/randomx-v2-phase2a`,
+  2026-05-21). First sub-PR of the Rust pure-software RandomX v2
+  verifier port per
+  [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
+  §"Track A — Phase 2" and
+  [`docs/design/RANDOMX_V2_RUST.md`](design/RANDOMX_V2_RUST.md).
+  - New workspace crate
+    [`rust/shekyl-pow-randomx/`](../rust/shekyl-pow-randomx/) with
+    crate-level rustdoc citing the Phase 0 decision substrate
+    (spec-first per `RANDOMX_V2_RUST.md` §3; derived-first per
+    §4; isolation invariants per §7).
+  - `pub(crate) fn fill_cache(key: &[u8], blocks: &mut [argon2::Block])`
+    at
+    [`src/argon2d.rs`](../rust/shekyl-pow-randomx/src/argon2d.rs)
+    implementing the Cache Argon2d "memory fill" per
+    `external/randomx-v2/doc/specs.md` §7.1 + Table 7.1.1
+    (`parallelism = 1`, `memory = 262144` KiB = 256 MiB,
+    `iterations = 3`, `Argon2d`, `salt = "RandomX\x03"`). Built on
+    `argon2 = "0.5.3"`'s `Argon2::fill_memory` after verifying at
+    source that the omit-finalizer path matches RandomX's
+    spec-required surface (recorded in the module rustdoc).
+    Constants and `Params` are compile-time validated.
+  - Argon2d spec-vector parity tests at
+    [`tests/vectors/reference/argon2d/`](../rust/shekyl-pow-randomx/tests/vectors/reference/argon2d/):
+    two derived vectors (`m=8` boundary case;
+    `m=64` multi-segment) from `argon2_ref.c` at fork pin
+    `aaafe71` (v2.0.1), with per-file `.meta.txt` provenance
+    headers and a reviewer-runnable `_generator/` reproducer
+    (`gen.c`, `Makefile`, `README.md`). The Rust tests consume
+    pre-committed bytes via `include_bytes!`; no `cargo test`
+    dev-dep on the C library (Phase 2g owns the live
+    differential harness at full RandomX parameters).
+  - Forward-compatible with Phase 2f's CI isolation invariants:
+    no `#[no_mangle]`, no `extern "C" fn`, no `#[export_name]`,
+    no module-level runtime-mutable state (no `Mutex`/`RwLock`/
+    `OnceCell`/`OnceLock`/`Lazy`/`static mut`/atomics-at-module-scope).
+    `#![deny(unsafe_code)]` at the crate level.
+  - Phase 2a scope is purely additive: no FFI surface, no C++
+    caller rewire, no deletion of `src/crypto/rx-slow-hash.c`
+    (those are Phase 3a/3b/3c/4). Phase 2b lands AES round +
+    SuperScalarHash next.
+
 - **Stage 1 PR 4 — `RefreshEngine` trait surface**
   (`feat/stage-1-pr4-refresh-engine`, 2026-05-15 → 2026-05-20).
   Lands the Phase-0a-binding `RefreshEngine` trait and the
