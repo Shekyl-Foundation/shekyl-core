@@ -215,7 +215,7 @@ preservation. The two are complementary disciplines.
 | `ArchivalEngine` trait surface (per-shard state, archival operations) | V3.x — separate trait that consumes `EconomicsEngine` |
 | Anonymity-network-coordination trait (Tor/I2P transport for archival queries) | V3.x — currently flagged in §9 as a future-trait candidate; trait shape not designed |
 | View-only / hardware-offload `open_*` bodies | V3.0 follow-up; orthogonal |
-| Generic `DaemonClient` *implementation* | Stage 1 PR 1 landed the `Engine<S, D: DaemonEngine = DaemonClient>` parameterization (per §2.5; `TestDaemon`-driven `start_refresh` coverage now exists end-to-end via `Engine::replace_daemon`). V3.2 generalizes the production constructors (`Engine::create`, `Engine::open_full`) over `D` alongside the `DaemonEngine`-to-`pub` promotion, retiring the `#[cfg(test)] pub(crate) replace_daemon` helper. |
+| Generic `DaemonClient` *implementation* | Stage 1 PR 1 landed the `Engine<S, D: DaemonEngine = DaemonClient>` parameterization (per §2.5; `MockDaemon`-driven `start_refresh` coverage now exists end-to-end via `Engine::replace_daemon`). V3.2 generalizes the production constructors (`Engine::create`, `Engine::open_full`) over `D` alongside the `DaemonEngine`-to-`pub` promotion, retiring the `#[cfg(test)] pub(crate) replace_daemon` helper. |
 | Generic `LocalLedger` *implementation* | Stage 1 PR 2 landed the `Engine<S, D = DaemonClient, L: LedgerEngine = LocalLedger>` parameterization (per §2.2 post-Phase-0c surface). PR 4 C6β retired the original `MockLedger` parallel-implementation in favour of the no-Mock substrate `FaultInjecting<LocalLedger>::new(LocalLedger::from_test_blocks(Vec::new()))`; `apply_scan_result` retry coverage now exists end-to-end via `Engine::replace_ledger` wrapping the production `LocalLedger` with the trait-level failure-injection wrapper (per `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C6β + §6.1 "no-Mock substrate inheritance discipline"). The `pub(crate) trait LedgerEngine` declares four methods (`synced_height`, `snapshot`, `balance`, `apply_scan_result`); `Engine::start_refresh` and the producer task `run_refresh_task` are generalized over `L`. The synchronous wrappers `Engine::refresh` / `Engine::refresh_with` remain `LocalLedger`-specialized because the trait's `apply_scan_result` is `async fn` and the sync entry points cannot dispatch through it without a runtime-handle threading story (queued at V3.x in `FOLLOWUPS.md`). V3.2 generalizes the production constructors (`Engine::create`, `Engine::open_full`) over `L` alongside the `LedgerEngine`-to-`pub` promotion, retiring the `#[cfg(test)] pub(crate) replace_ledger` helper. The `LocalLedger` aggregate landed as `pub` (not `pub(crate)`) because Rust requires every default type parameter on a `pub` type to be at least as visible as the type itself; the trait `LedgerEngine` itself stays `pub(crate)` per §1.4. |
 
 ### 1.3 Why "concrete fields + generic-bounded methods" is the Stage 1 shape
@@ -1218,15 +1218,15 @@ in §7 invariant 4.
 **Stage 1 surface (landed via PR 4 §7.X commits C0–C8 on
 `feat/stage-1-pr4-refresh-engine`; the Phase 0a binding form per
 [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-§4 below is the as-shipped trait).** The trait is declared at
+§4 below is the as-shipped trait).** The trait is now declared at
 [`engine/traits/refresh.rs`](../rust/shekyl-engine-core/src/engine/traits/refresh.rs)
 (commit `d3edc1abb`, PR 4 C1); the supporting
 `RefreshDiagnostic` + `DiagnosticSink` substrate at
 [`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs)
 (commit `8fc207051`, PR 4 C2); the `LocalRefresh` implementor at
 [`engine/local_refresh.rs`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
-(commit `ac100e1ab`, PR 4 C4); the `Engine<S, D, L, R>`
-four-parameter wiring at
+(commit `ac100e1ab`, PR 4 C4); the `Engine<S, D, L, R>` four-parameter
+wiring at
 [`engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs)
 (commit `553d70139`, PR 4 C5a); and the
 `FaultInjecting<R: RefreshEngine>` + `FaultInjecting<L: LedgerEngine>`
@@ -1234,9 +1234,9 @@ test-substrate wrappers at
 [`engine/fault_injecting_refresh.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs)
 (commit `e9310542a`, PR 4 C6α) and
 [`engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs)
-(commit `e94526dec`, PR 4 C6β). The PR 4 §7.X commit list and
-per-commit landing-SHA cross-references are in that doc's §7.X
-header. The trait as declared:
+(commit `e94526dec`, PR 4 C6β). The PR 4 §7.X commit list and per-
+commit landing-SHA cross-references are in that doc's §7.X header.
+The trait as declared:
 
 ```rust
 pub trait RefreshEngine: Send + Sync + 'static {
@@ -1601,16 +1601,14 @@ without re-importing. The wallet-specific methods
 (`get_fee_estimates`, `submit_transaction`) live on `DaemonEngine`
 itself, never on `Rpc`. The test-support mock implements `Rpc`
 directly (rather than wrapping `SimpleRequestRpc`) and carries an
-`impl DaemonEngine for TestDaemon` that satisfies the trait
+`impl DaemonEngine for MockDaemon` that satisfies the trait
 contract — including the `submit_transaction` per-tx-hash dedup
 clause from §6.1 and the fee-estimate / submit error-queue surface
 that producer-and-driver tests inject failures through. The mock
-is `TestDaemon` in
+is `MockDaemon` in
 [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
-(renamed `MockRpc` → `MockDaemon` when its surface widened to a
-full `DaemonEngine` implementor in Stage 1 PR 1; renamed
-`MockDaemon` → `TestDaemon` in Stage 1 PR 4 C6γ per the Round 5
-no-Mock substrate-inheritance discipline).
+(renamed from `MockRpc` when its surface widened to a full
+`DaemonEngine` implementor in Stage 1 PR 1).
 
 **Why `Clone + Send + Sync + 'static`** — same as Round 1: the
 daemon handle is shared by clone with the producer task in
@@ -3480,7 +3478,7 @@ matches the production runtime requirement. Tests that
 exclusively exercise async surfaces (no sync `Engine::refresh`
 or analog) may use the default `#[tokio::test]` because
 no `Handle::block_on` is invoked. The §6 test-boundary section
-inherits this requirement: `TestDaemon`-driven `start_refresh`
+inherits this requirement: `MockDaemon`-driven `start_refresh`
 integration tests are async-throughout and use the default
 attribute; tests that drive sync `Engine::refresh` against
 mocks use the multi-thread flavor explicitly.
@@ -3965,13 +3963,43 @@ its own dedup mechanism rather than inheriting the inner's.
 
 The trait abstractions unlock a category of test that is not
 possible today: a **fully-mocked `Engine<SoloSigner, MockKey,
-MockLedger, TestDaemon, …>`** that drives `start_refresh`
+MockLedger, MockDaemon, …>`** that drives `start_refresh`
 end-to-end with deterministic chain state, deterministic key
 material, and no filesystem.
 
+> **(Post-M3 + Post-PR-4 note: substrate evolved away from
+> full-Mock-X composition.)** The "fully-mocked
+> `Engine<SoloSigner, MockKey, MockLedger, MockDaemon, …>`"
+> framing above describes the Stage 1 design-time target. The
+> shipped V3.0 substrate is hybrid:
+>
+> - **PR 3** (`STAGE_1_PR_3_KEY_ENGINE.md` §6.4) shipped without
+>   a `MockKey` type. The no-Mock-X substrate uses a real
+>   `LocalKeys` (the production `KeyEngine` implementor) seeded
+>   with deterministic test input rather than a parallel
+>   `MockKey` honoring `KeyEngine`'s contract.
+> - **PR 4** retired `MockLedger` in favor of
+>   `FaultInjecting<LocalLedger>` (C6β = `e94526dec`) and
+>   retired `MockRefresh` in favor of `FaultInjecting<LocalRefresh>`
+>   (C6α = `e9310542a`). The wrapper-based fault-injection
+>   substrate composes a real production implementor with a
+>   trait-boundary failure-injection wrapper (per the same
+>   `RefreshEngine` / `LedgerEngine` trait bounds the
+>   orchestrator already dispatches against), eliminating the
+>   parallel-Mock-X contract-fidelity burden for these two
+>   traits.
+>
+> The surviving Mock-X types as of PR 4 land:
+> `MockDaemon`, `MockEconomics`, `MockPersistence`,
+> `MockPendingTx`. The contract-fidelity discipline (§6.1
+> Round-4b — Item 3) applies unchanged to those types AND to
+> `FaultInjecting<...>` wrappers (which honor the trait
+> contract by delegating to the wrapped production type's
+> implementation).
+
 Today's test coverage:
 
-- **Producer-only:** `TestDaemon` in [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
+- **Producer-only:** `MockDaemon` in [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
   drives `produce_scan_result` directly. Twelve producer tests
   cover the linear-scan / reorg / RPC-failure / cancellation paths.
 - **Driver-only with partial mocking:** the driver-side tests in
@@ -3979,7 +4007,7 @@ Today's test coverage:
   unreachable `SimpleRequestRpc` URL and assert error-path
   behavior. Stage 1 PR 1 (`DaemonEngine`) closes the
   end-to-end-against-synthetic-chain gap that previously existed:
-  with `TestDaemon: DaemonEngine` and `Engine<S, D: DaemonEngine =
+  with `MockDaemon: DaemonEngine` and `Engine<S, D: DaemonEngine =
   DaemonClient>`, the existing chain-injection harness
   (`replace_chain_from`, `queue_height_error`, `queue_block_error`)
   is now available to `start_refresh` integration tests directly,
@@ -3996,8 +4024,26 @@ ceremony, which today add ~50–200 ms per test.
 
 - Each trait gets a `Mock*` implementor in `engine::test_support`
   (`#[cfg(test)] pub(crate)`). The list as of Round 3:
-  `MockKey`, `MockLedger`, `MockEconomics`, `TestDaemon`,
+  `MockKey`, `MockLedger`, `MockEconomics`, `MockDaemon`,
   `MockPersistence`, `MockRefresh`, `MockPendingTx`.
+  - **(Post-M3 + Post-PR-4 update to the Round-3 list.)** Of
+    the seven Round-3 commitments, three retired in favor of
+    real-implementor + wrapper substrates: `MockKey` retired
+    in PR 3 (`STAGE_1_PR_3_KEY_ENGINE.md` §6.4 no-Mock
+    substrate; `LocalKeys` is used directly with deterministic
+    test seeds); `MockLedger` retired in PR 4 (C6β =
+    `e94526dec`; replaced by `FaultInjecting<LocalLedger>` +
+    `LocalLedger::from_test_blocks(Vec<Block>)`);
+    `MockRefresh` retired in PR 4 (C6α = `e9310542a`;
+    replaced by `FaultInjecting<LocalRefresh>` +
+    `Engine::replace_refresh` test-only setter). The
+    surviving Round-3 commitments (`MockEconomics`,
+    `MockDaemon`, `MockPersistence`, `MockPendingTx`) remain
+    on the trait-boundary Mock-X pattern; the contract-
+    fidelity discipline below applies to them and to the
+    `FaultInjecting<...>` wrappers (which honor the trait
+    contract by delegating to the real production
+    implementor).
 - `start_refresh` integration tests against a fully-mocked engine
   ship in the same Stage 1 commit that lands the trait surfaces.
 - `MockEconomics` is constants-driven: the V3.0
@@ -4012,16 +4058,31 @@ ceremony, which today add ~50–200 ms per test.
   the semantic guarantees the trait promises: `MockLedger::apply_scan_result`
   produces the conditional idempotency per §4 (same `ScanResult`
   against same starting `synced_height` → same outcome; advanced
-  height → `RefreshError::ConcurrentMutation`); `TestDaemon::submit_transaction`
+  height → `RefreshError::ConcurrentMutation`); `MockDaemon::submit_transaction`
   produces the daemon's tx-hash dedup behavior so retry-safety
   semantics match production; `MockKey::sign_transaction` consumes
   RNG bytes from its seeded `ChaCha20Rng` so signature shapes are
   deterministic given the same inputs but distinct across calls.
-  (Post-M3 note: PR 3 shipped without a `MockKey` type per
+  (Post-M3 + Post-PR-4 note: PR 3 shipped without a
+  `MockKey` type per
   [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
-  §6.4's no-Mock substrate; the contract-fidelity discipline
-  applies to the surviving `Mock*` types for traits where the
-  Mock-X pattern persists at V3.0 baseline.)
+  §6.4's no-Mock substrate; PR 4 additionally retired
+  `MockLedger` (C6β = `e94526dec`; replaced by
+  `FaultInjecting<L: LedgerEngine>` composed against
+  `LocalLedger::from_test_blocks`) and `MockRefresh`
+  (C6α = `e9310542a`; replaced by `FaultInjecting<R:
+  RefreshEngine>` composed against `LocalRefresh` via the
+  `Engine::replace_refresh` test-only setter); the
+  contract-fidelity discipline applies to the surviving
+  Mock-X types for traits where the Mock-X pattern persists
+  at V3.0 baseline (`MockDaemon`, `MockEconomics`,
+  `MockPersistence`, `MockPendingTx`) AND to
+  `FaultInjecting<...>` wrappers, which honor the trait
+  contract by delegating to the wrapped real production
+  implementor's behavior — the wrapper-injected failures
+  fire BEFORE or AFTER delegation per the wrapper's
+  documented semantics, not by substituting alternative
+  return values that contradict the trait contract.)
   Tests that assume a `Mock*` returns arbitrary plausible values
   fail to test the production code's behavior — they test the
   test harness's behavior. The contract-fidelity discipline
@@ -4039,7 +4100,7 @@ Every `Mock*` constructor takes an explicit 32-byte seed:
 ```rust
 let key = MockKey::with_seed([0xde, 0xad, 0xbe, 0xef, /* … */]);
 let ledger = MockLedger::with_seed([0x42; 32]);
-let daemon = TestDaemon::with_seed([0xa5; 32]);
+let daemon = MockDaemon::with_seed([0xa5; 32]);
 ```
 
 The seed initializes a `ChaCha20Rng` internal to the mock; all
@@ -4086,7 +4147,7 @@ let ledger_seed  = derive_seed(&master_seed, b"role/ledger");
 let daemon_seed  = derive_seed(&master_seed, b"role/daemon");
 let key    = MockKey::with_seed(key_seed);
 let ledger = MockLedger::with_seed(ledger_seed);
-let daemon = TestDaemon::with_seed(daemon_seed);
+let daemon = MockDaemon::with_seed(daemon_seed);
 ```
 
 The role tag is a stable byte string per component slot; the
@@ -4113,7 +4174,7 @@ The seven traits admit *hybrid* test compositions: real
 implementing types for some traits, `Mock*` types for others.
 The clearest motivating case is integration-flavored tests that
 exercise the real `KeyEngine` (because the real key arithmetic
-is what's being tested) against a `MockLedger` and `TestDaemon`
+is what's being tested) against a `MockLedger` and `MockDaemon`
 (because the test is not exercising chain state or RPC). The
 hybrid is valuable: it tests a production code path with
 production crypto without standing up the full chain-and-network
@@ -4137,7 +4198,7 @@ The discipline is therefore: **`Mock*` types in any hybrid
 composition must satisfy the full §6.1 contract.** Specifically:
 
 - Idempotency conditions documented in §4 hold for the `Mock*`
-  implementor: `TestDaemon::submit_transaction` dedupes by tx
+  implementor: `MockDaemon::submit_transaction` dedupes by tx
   hash exactly as the real daemon does, because that is the
   documented condition `PendingTxEngine::submit` (real or mock)
   derives its retry safety from per §5.2.
@@ -5335,7 +5396,7 @@ the threshold conditions is rejected as conjectural.
 - [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md) §*"Pending-tx protocol: two-phase build/submit/discard over single-phase callback"* (2026-04-27) — the `PendingTxEngine` surface.
 - [`rust/shekyl-engine-core/src/engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs) `run_refresh_task` rustdoc — the cancellation contract reproduced inline (PR 4 Phase 1 brings the inline rustdoc into alignment with §7's five-checkpoint discipline).
 - [`rust/shekyl-engine-core/src/engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs) `Engine::refresh` rustdoc (post-2026-04-28) — the sync-vs-async cancellation split.
-- [`rust/shekyl-engine-core/src/engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs) — current `TestDaemon` (renamed `MockRpc` → `MockDaemon` in Stage 1 PR 1; renamed `MockDaemon` → `TestDaemon` in Stage 1 PR 4 C6γ per the Round 5 no-Mock substrate-inheritance discipline — `TestDaemon` signals "alternative real implementation for tests" rather than "fake of an implementation"; extended into a full `DaemonEngine` implementor with submit dedup, fixed fee-estimate snapshot with override hook, and queued-error injection per §6.1; `ChaCha20Rng` reserved for future fee-jitter / synthetic-fork randomization per §6.2 but not yet consumed at this PR's contract surface) and `make_synthetic_block` scaffolding; `derive_seed` helper per §6.2.
+- [`rust/shekyl-engine-core/src/engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs) — current `MockDaemon` (renamed from `MockRpc` in Stage 1 PR 1, extended into a full `DaemonEngine` implementor with submit dedup, fixed fee-estimate snapshot with override hook, and queued-error injection per §6.1; `ChaCha20Rng` reserved for future fee-jitter / synthetic-fork randomization per §6.2 but not yet consumed at this PR's contract surface) and `make_synthetic_block` scaffolding; `derive_seed` helper per §6.2.
 - [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) "Generic `DaemonClient`" — closed: spec by §2.5 (two-trait shape); Stage 1 implementation by PR 1 (§2.5 surface + `Engine<S, D>` parameterization + first hybrid test); production-constructor generalization deferred to V3.2 alongside the `DaemonEngine`-to-`pub` promotion.
 - [`docs/CI_BASELINE.md`](CI_BASELINE.md) — `shekyl-oxide` divergence-canary policy referenced in §2.5's upstream/downstream rationale.
 - [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc) — the "4–6 review rounds before any Rust" rule this document is run against.
