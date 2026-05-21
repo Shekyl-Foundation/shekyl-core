@@ -95,30 +95,36 @@
 //! Per `RANDOMX_V2_PHASE2B_PLAN.md` §5.5: where [`specs.md`] is silent
 //! on fine-grain details that the generator nonetheless must commit to
 //! a specific behavior for, the Rust port matches the C reference
-//! verbatim and an issue is filed at the Shekyl-Foundation fork. The
-//! `fork issue filed` column lists the issue identifier once filed.
-//! Per the §5.5 closing policy, the column is populated before the
-//! Phase 2b PR moves out of Draft.
+//! verbatim. The discipline says "spec wins on disagreement," but
+//! spec **silence** means C wins by default; this table records the
+//! eight places that happens so the choice is auditable rather than
+//! invisible.
 //!
-//! | # | Spec section silent on | C reference disposition | Rust port disposition | Fork issue filed |
-//! |---|-------------------------|--------------------------|------------------------|--------------------|
-//! | 1 | §6.3 initial `DecoderBuffer` before the first `fetchNext` call | `superscalar.cpp:659` initialises `decodeBuffer = &DecoderBuffer::Default` (a sentinel with `index_ = -1` and `getSize() = 0`); on the first `fetchNext` call with `currentInstruction.type = INVALID`, `mulCount = 0`, `cycle = 0`, the `mulCount < cycle + 1` branch fires unconditionally and returns `decodeBuffer4444`. The Default buffer is never queried for slots. | Same observable behaviour: the Rust generator's `decode_buffer` binding is freshly produced by `DecoderBuffer::fetch_next` inside each outer-loop iteration, so the C sentinel is structurally unnecessary; the first call returns `&DECODE_BUFFER_4444` via the same `mul_count < cycle + 1` test. | _to be filed before PR exits Draft_ |
-//! | 2 | §6.3.4 `LOOK_FORWARD_CYCLES` constant | `superscalar.cpp:583` defines `LOOK_FORWARD_CYCLES = 4`; if no source/destination register is available at the current cycle, the generator looks up to 4 cycles forward before throwing the instruction away. | Same constant value 4. | _to be filed_ |
-//! | 3 | §6.3.4 `MAX_THROWAWAY_COUNT` constant | `superscalar.cpp:584` defines `MAX_THROWAWAY_COUNT = 256`; after that many throwaways the generator aborts the current decode buffer. | Same constant value 256. | _to be filed_ |
-//! | 4 | §6.3.1 bit selection from `getByte()` for default decoder-group choice | `superscalar.cpp:304` selects `decodeBuffers[gen.getByte() & 3]` (low 2 bits, indexing the 4-entry `decodeBuffers` array). | Same: `decode_buffers[gen.get_byte() & 0b11]`. | _to be filed_ |
-//! | 5 | §6.3.1 bit selection from `getByte()` for IMUL_RCP follow-up (group 0 or 3) | `superscalar.cpp:285` selects `(gen.getByte() & 1) ? decodeBuffer484 : decodeBuffer493` (bit 0). | Same. | _to be filed_ |
-//! | 6 | §6.3.2 3-byte last-slot selection between ISUB_R, IXOR_R, IMULH_R, ISMULH_R | `superscalar.cpp:373` selects `slot_3L[gen.getByte() & 3]` (low 2 bits over the 4-entry `slot_3L` array). | Same: `SLOT_3_LAST[gen.get_byte() & 0b11]`. | _to be filed_ |
-//! | 7 | §6.3.4 IADD_RS exceptional case: only 2 registers available and r5 is one of them | `superscalar.cpp:524-528` sets `src = RegisterNeedsDisplacement (= r5)` unconditionally (so the other register can be destination), bypassing the normal `selectRegister` path. | Same. | _to be filed_ |
-//! | 8 | §6.3.4 `allowChainedMul` trigger semantics | `superscalar.cpp:739` passes `throwAwayCount > 0` as `allowChainedMul`; spec says "set to true if an attempt to find source/destination registers failed". | Same. | _to be filed_ |
+//! | # | Spec section silent on | C reference disposition | Rust port disposition |
+//! |---|-------------------------|--------------------------|------------------------|
+//! | 1 | §6.3 initial `DecoderBuffer` before the first `fetchNext` call | `superscalar.cpp:659` initialises `decodeBuffer = &DecoderBuffer::Default` (a sentinel with `index_ = -1` and `getSize() = 0`); on the first `fetchNext` call with `currentInstruction.type = INVALID`, `mulCount = 0`, `cycle = 0`, the `mulCount < cycle + 1` branch fires unconditionally and returns `decodeBuffer4444`. The Default buffer is never queried for slots. | Same observable behaviour: the Rust generator's `decode_buffer` binding is freshly produced by `DecoderBuffer::fetch_next` inside each outer-loop iteration, so the C sentinel is structurally unnecessary; the first call returns `&DECODE_BUFFER_4444` via the same `mul_count < cycle + 1` test. |
+//! | 2 | §6.3.4 `LOOK_FORWARD_CYCLES` constant | `superscalar.cpp:583` defines `LOOK_FORWARD_CYCLES = 4`; if no source/destination register is available at the current cycle, the generator looks up to 4 cycles forward before throwing the instruction away. | Same constant value 4. |
+//! | 3 | §6.3.4 `MAX_THROWAWAY_COUNT` constant | `superscalar.cpp:584` defines `MAX_THROWAWAY_COUNT = 256`; after that many throwaways the generator aborts the current decode buffer. | Same constant value 256. |
+//! | 4 | §6.3.1 bit selection from `getByte()` for default decoder-group choice | `superscalar.cpp:304` selects `decodeBuffers[gen.getByte() & 3]` (low 2 bits, indexing the 4-entry `decodeBuffers` array). | Same: `decode_buffers[gen.get_byte() & 0b11]`. |
+//! | 5 | §6.3.1 bit selection from `getByte()` for IMUL_RCP follow-up (group 0 or 3) | `superscalar.cpp:285` selects `(gen.getByte() & 1) ? decodeBuffer484 : decodeBuffer493` (bit 0). | Same. |
+//! | 6 | §6.3.2 3-byte last-slot selection between ISUB_R, IXOR_R, IMULH_R, ISMULH_R | `superscalar.cpp:373` selects `slot_3L[gen.getByte() & 3]` (low 2 bits over the 4-entry `slot_3L` array). | Same: `SLOT_3_LAST[gen.get_byte() & 0b11]`. |
+//! | 7 | §6.3.4 IADD_RS exceptional case: only 2 registers available and r5 is one of them | `superscalar.cpp:524-528` sets `src = RegisterNeedsDisplacement (= r5)` unconditionally (so the other register can be destination), bypassing the normal `selectRegister` path. | Same. |
+//! | 8 | §6.3.4 `allowChainedMul` trigger semantics | `superscalar.cpp:739` passes `throwAwayCount > 0` as `allowChainedMul`; spec says "set to true if an attempt to find source/destination registers failed". | Same. |
 //!
-//! **Long-tail acknowledgement.** Filed-but-unresolved fork issues are
-//! a known long-tail item. The Shekyl-Foundation fork's responsiveness
-//! to spec-silence issues is not under Phase 2b's control. The Rust
-//! port's verbatim-port-of-C disposition is the right one regardless
-//! of fork-side resolution status. This table records that this is
-//! happening intentionally, not by oversight: the discipline says
-//! "spec wins on disagreement" but in practice spec silence means C
-//! wins by default; this table documents it.
+//! **Long-tail acknowledgement.** Whether each row eventually
+//! becomes a filed fork-side spec-clarification issue is not under
+//! Phase 2b's control and is not load-bearing for Phase 2b's
+//! correctness claim — the Rust port's verbatim-port-of-C
+//! disposition is the right one for each row regardless of any
+//! fork-side resolution status. The audit table is the
+//! disposition; per
+//! `21-reversion-clause-discipline.mdc`, this disposition reopens
+//! only if a substrate change makes per-row issue tracking
+//! load-bearing (for example, if the spec is later amended such
+//! that a row's C-only behavior becomes spec-required, in which
+//! case the row would migrate from "spec-silent, C wins" to "spec-
+//! required, verified against spec" and the corresponding parity
+//! test would carry the new spec citation).
 //!
 //! [`specs.md`]: ../../external/randomx-v2/doc/specs.md
 

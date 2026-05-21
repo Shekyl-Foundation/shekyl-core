@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! BlakeGenerator: simple PRNG over Blake2b-512 per
+//! [`Blake2Generator`]: simple PRNG over Blake2b-512 per
 //! [`specs.md`](../../external/randomx-v2/doc/specs.md) §3.5.
 //!
 //! The generator maintains a 64-byte internal state `S` and a byte
@@ -26,21 +26,27 @@
 //!   **not** describe a `nonce` parameter; the `nonce` extension at
 //!   offset 60 is a C-reference implementation detail used by spec
 //!   §7.2 to generate 8 distinct `SuperscalarHash` instances from
-//!   the same key `K`. This spec-silence is a known item disposed by
-//!   the audit table that lands with `superscalar.rs` in Phase 2b
-//!   commit 3 per `RANDOMX_V2_PHASE2B_PLAN.md` §5.5 (F5).
+//!   the same key `K`. This spec-silence is a known item disposed
+//!   by the audit table in `superscalar.rs` per
+//!   `RANDOMX_V2_PHASE2B_PLAN.md` §5.5 (F5).
 //! - **C reference:** `external/randomx-v2/src/blake2_generator.{hpp,cpp}`
 //!   is the byte-for-byte target. The C uses `int nonce` and
 //!   `store32(&data[60], nonce)`; the Rust port uses `u32` to be
 //!   honest about the on-wire size and matches the same little-endian
 //!   layout.
 //!
-//! # Scope at this commit (Phase 2b commit 1)
+//! # Test coverage
 //!
-//! Smoke tests only. The byte-for-byte spec-vector parity tests
-//! (against a C-reference-generated `(seed, nonce, getByte/getUInt32
-//! stream)` tuple) land in Phase 2b commit 5 alongside the
-//! `SuperscalarHash` vectors that exercise the generator end-to-end.
+//! Smoke tests in this module cover `(seed, nonce) →` stream
+//! determinism, divergence under nonce variation, and the refill
+//! boundary. Byte-for-byte spec-vector parity against the C
+//! reference is exercised end-to-end by the `SuperscalarHash`
+//! vectors in `superscalar.rs` (Layer A program-serialization +
+//! Layer B execution-output + combined attestation tuple), since
+//! `generate_superscalar` consumes `Blake2Generator` for every
+//! opcode / register / immediate decision — a divergence in this
+//! module would surface as a Layer A byte-diff against the
+//! C-generated reference.
 
 use blake2::{Blake2b512, Digest};
 
@@ -59,12 +65,16 @@ const STATE_SIZE: usize = 64;
 
 /// `(seed, nonce) → PRNG byte stream` per spec §3.5.
 ///
-/// # REMOVE WHEN COMMIT 3 LANDS:
+/// # REMOVE WHEN PHASE 2c/2e WIRES THIS:
 ///
-/// Phase 2b commit 3 lands `superscalar.rs`'s `generate_superscalar`
-/// which constructs `Blake2Generator` instances per spec §7.2. Until
-/// then the only callers are tests; the `dead_code` lint is silenced
-/// narrowly per `21-reversion-clause-discipline.mdc`.
+/// `Blake2Generator` is consumed by `generate_superscalar` (already
+/// in this crate at `superscalar.rs`) but that consumer is itself
+/// `#[allow(dead_code)]` pending Phase 2e's `Cache::derive` and
+/// Phase 2c's program-generation seed. Until those land in
+/// production, the only live callers are unit + parity tests; the
+/// `dead_code` lint is silenced narrowly per
+/// `21-reversion-clause-discipline.mdc` against the dissolution
+/// table in `RANDOMX_V2_PHASE2B_PLAN.md` §5.1 (F1).
 #[allow(dead_code)]
 pub(crate) struct Blake2Generator {
     /// Rolling 64-byte buffer; refilled by `S := Blake2b512(S)` when
@@ -89,9 +99,10 @@ impl Blake2Generator {
     /// [`get_byte`]: Blake2Generator::get_byte
     /// [`get_uint32`]: Blake2Generator::get_uint32
     ///
-    /// # REMOVE WHEN COMMIT 3 LANDS:
+    /// # REMOVE WHEN PHASE 2c/2e WIRES THIS:
     ///
-    /// Same dissolution timeline as the [`Blake2Generator`] type.
+    /// Same Phase 2c/2e dissolution timeline as the
+    /// [`Blake2Generator`] type itself.
     #[allow(dead_code)]
     pub(crate) fn new(seed: &[u8], nonce: u32) -> Self {
         let mut data = [0u8; STATE_SIZE];
@@ -106,11 +117,13 @@ impl Blake2Generator {
 
     /// Return the next byte of the PRNG stream.
     ///
-    /// # REMOVE WHEN COMMIT 3 LANDS:
+    /// # REMOVE WHEN PHASE 2c/2e WIRES THIS:
     ///
-    /// Same dissolution timeline as the [`Blake2Generator`] type.
-    /// SuperscalarHash generation per spec §6.3 consumes `get_byte`
-    /// for opcode / register-index selection.
+    /// Same Phase 2c/2e dissolution timeline as the
+    /// [`Blake2Generator`] type itself. `generate_superscalar` (per
+    /// spec §6.3) consumes `get_byte` for opcode / register-index
+    /// selection but is itself `#[allow(dead_code)]` until those
+    /// phases land.
     #[allow(dead_code)]
     pub(crate) fn get_byte(&mut self) -> u8 {
         self.check_data(1);
@@ -122,11 +135,12 @@ impl Blake2Generator {
     /// Return the next 4 bytes of the PRNG stream interpreted as a
     /// little-endian `u32`.
     ///
-    /// # REMOVE WHEN COMMIT 3 LANDS:
+    /// # REMOVE WHEN PHASE 2c/2e WIRES THIS:
     ///
-    /// Same dissolution timeline as the [`Blake2Generator`] type.
-    /// SuperscalarHash generation per spec §6.3 consumes `get_uint32`
-    /// for instruction immediates.
+    /// Same Phase 2c/2e dissolution timeline as the
+    /// [`Blake2Generator`] type itself. `generate_superscalar` (per
+    /// spec §6.3) consumes `get_uint32` for instruction immediates
+    /// but is itself `#[allow(dead_code)]` until those phases land.
     #[allow(dead_code)]
     pub(crate) fn get_uint32(&mut self) -> u32 {
         self.check_data(4);

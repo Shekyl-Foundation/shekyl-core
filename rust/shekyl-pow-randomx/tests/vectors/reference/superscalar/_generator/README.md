@@ -117,7 +117,9 @@ Per `RANDOMX_V2_PHASE2B_PLAN.md` §5.4 (F4):
 
 ```
 +0:  bytes [0..4)        = ASCII magic "SSP1"
-+4:  bytes [4..6)        = size: u16 LE (instruction count, 0..170)
++4:  bytes [4..6)        = size: u16 LE (instruction count,
+                            0..=SUPERSCALAR_MAX_SIZE = 0..=512;
+                            ~448 in practice)
 +6:  byte  [6..7)        = address_register: u8 (0..7)
 +7:  byte  [7..8)        = reserved (must be 0x00)
 +8:  bytes [8..8 + 8*size) = instructions (8 bytes each):

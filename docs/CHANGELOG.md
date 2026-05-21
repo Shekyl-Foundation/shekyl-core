@@ -186,8 +186,10 @@
   [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
   §"Track A — Phase 2" and the design plan
   [`docs/design/RANDOMX_V2_PHASE2B_PLAN.md`](design/RANDOMX_V2_PHASE2B_PLAN.md).
-  6-commit stack landing the remaining v2 primitives the verifier
-  needs:
+  7-commit stack (6 designed + 1 rustfmt cleanup interleaved between
+  commits 5 and 6 to absorb residue an editor save reintroduced into
+  `superscalar.rs` between gate-runs) landing the remaining v2
+  primitives the verifier needs:
   - **Commit 1 — AES round primitives + Blake2Generator + MSRV
     bump.** `cipher_round` / `equiv_inv_cipher_round` at
     [`src/aes.rs`](../rust/shekyl-pow-randomx/src/aes.rs)

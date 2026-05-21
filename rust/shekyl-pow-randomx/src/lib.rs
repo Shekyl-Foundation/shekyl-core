@@ -37,29 +37,26 @@
 //!   if those greps were already live. See
 //!   [`RANDOMX_V2_RUST.md`](../../docs/design/RANDOMX_V2_RUST.md) §7.2.
 //!
-//! # Scope at this commit (Phase 2b commit 5)
+//! # Scope at this PR (Phase 2b)
 //!
 //! Phase 2a landed the workspace scaffold and the Argon2d "memory fill"
-//! primitive used by `Cache::derive`. Phase 2b commits 1-3 landed the
-//! remaining v2 primitives the verifier needs; commits 4-5 add spec-
-//! vector parity tests against the v2 fork's reference at pin
-//! `aaafe71` (commit 4: AES surface; commit 5: SuperscalarHash
-//! surface).
+//! primitive used by `Cache::derive`. Phase 2b lands the remaining v2
+//! primitives the verifier needs plus spec-vector parity tests against
+//! the v2 fork's reference at pin `aaafe71`:
 //!
 //! - `src/aes.rs` — AES single-round wrappers (`cipher_round`,
 //!   `equiv_inv_cipher_round`) over `aes-0.9.0`'s `hazmat` API plus
 //!   the §3.2-3.4 composites (`AesGenerator1R`, `AesGenerator4R`,
-//!   `AesHash1R`). Commit 4 adds 8 spec-vector parity tests
-//!   consuming the pre-committed reference bytes via `include_bytes!`;
-//!   the reviewer-runnable C++ generator lives at
+//!   `AesHash1R`), with 8 spec-vector parity tests consuming pre-
+//!   committed reference bytes via `include_bytes!`; the reviewer-
+//!   runnable C++ generator lives at
 //!   `tests/vectors/reference/aes/_generator/`.
 //! - `src/blake2_generator.rs` — `Blake2Generator` PRNG per spec §3.5.
 //! - `src/superscalar.rs` — `SuperscalarHash` program generator and
-//!   executor per spec §6 + §7.2 (commit 3 lands these). Commit 5
-//!   adds the F4 structured 3-vector decomposition spec-vector tests
-//!   (Layer A program serialization × 3 + Layer B execution × 3 +
-//!   combined end-to-end attestation = 7 vectors); the reviewer-
-//!   runnable C++ generator lives at
+//!   executor per spec §6 + §7.2, plus F4 structured 3-vector
+//!   decomposition spec-vector tests (Layer A program serialization
+//!   × 3 + Layer B execution × 3 + combined end-to-end attestation
+//!   = 7 vectors); the reviewer-runnable C++ generator lives at
 //!   `tests/vectors/reference/superscalar/_generator/`.
 //! - F1 convergence on `src/argon2d.rs`'s `#[allow(dead_code)]`: moved
 //!   from the module-level attribute on `mod argon2d` to per-item
@@ -67,10 +64,6 @@
 //!   discipline applied to the new modules. See
 //!   [`RANDOMX_V2_PHASE2B_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2B_PLAN.md)
 //!   §5.1.
-//!
-//! Remaining Phase 2b commits (per the same plan §7):
-//!
-//! - **commit 6:** CHANGELOG + V3.0/Phase 3c FOLLOWUPS entry.
 //!
 //! Subsequent sub-PRs (per
 //! [`RANDOMX_V2_PLAN.md`](../../docs/design/RANDOMX_V2_PLAN.md)

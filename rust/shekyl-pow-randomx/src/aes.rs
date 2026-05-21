@@ -230,9 +230,9 @@ fn split_into_4_lanes(state: &[u8; 64]) -> [&[u8; 16]; 4] {
 /// final state is written back to `state`, allowing chained calls per
 /// `aes_hash.cpp:197-200`.
 ///
-/// `output.len()` must be a non-zero multiple of 64; zero is permitted
-/// (no-op leaving `state` untouched, matching the C semantics where
-/// the loop body never executes for `outputSize == 0`).
+/// `output.len()` must be a multiple of 64; empty is allowed (no-op
+/// leaving `state` untouched, matching the C semantics where the
+/// loop body never executes for `outputSize == 0`).
 ///
 /// [`specs.md`]: ../../external/randomx-v2/doc/specs.md
 ///
@@ -294,8 +294,8 @@ pub(crate) fn fill_aes_1r_x4(state: &mut [u8; 64], output: &mut [u8]) {
 /// per-iteration state mutated in-place use [`fill_aes_1r_x4`]
 /// instead.
 ///
-/// `output.len()` must be a non-zero multiple of 64; zero is permitted
-/// (no-op, matching the C semantics).
+/// `output.len()` must be a multiple of 64; empty is allowed (no-op,
+/// matching the C semantics).
 ///
 /// [`specs.md`]: ../../external/randomx-v2/doc/specs.md
 ///
@@ -371,10 +371,11 @@ pub(crate) fn fill_aes_4r_x4(state: &[u8; 64], output: &mut [u8]) {
 /// xkey)`, `cipher_round(state2, xkey)`, `equiv_inv_cipher_round(state3,
 /// xkey)`.
 ///
-/// `input.len()` must be a non-zero multiple of 64. Empty input is
-/// permitted in the C reference (the loop body simply does not
-/// execute); the Rust port preserves that semantic and the resulting
-/// hash is the two-extra-rounds-from-initial-state value.
+/// `input.len()` must be a multiple of 64; empty is allowed (the C
+/// reference's loop body simply does not execute on empty input,
+/// and the Rust port preserves that semantic — the resulting hash
+/// is the two-extra-rounds-from-initial-state value, exercised by
+/// the `hash_aes_1r_x4_empty_input_*` tests).
 ///
 /// [`specs.md`]: ../../external/randomx-v2/doc/specs.md
 ///

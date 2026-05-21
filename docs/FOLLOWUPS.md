@@ -1568,11 +1568,19 @@ sustainability is unaffected by the recalibration.
   symbol collision is precluded.
 
   **Runnable check** (one-shot, when Phase 3c links the verifier
-  through the daemon for the first time):
+  through the daemon for the first time). The Shekyl daemon
+  (`shekyld`) is built via CMake, not `cargo`, per
+  [`docs/COMPILING_DEBUGGING_TESTING.md`](COMPILING_DEBUGGING_TESTING.md);
+  the canonical command from a clean checkout is:
 
   ```bash
-  cargo build --release && nm shekyld | grep -iE '(aes|randomx)'
+  make release && \
+    nm build/$(uname -s)/release/bin/shekyld | grep -iE '(aes|randomx)'
   ```
+
+  (Substitute the appropriate `<platform>` segment manually if
+  `uname -s` doesn't match the CMake output directory — the
+  pattern is `build/<platform>/release/bin/shekyld`.)
 
   **Expected disposition.** No matches against any name in §7.1's
   10-symbol banned list. AES-crate symbols (Rust-mangled
