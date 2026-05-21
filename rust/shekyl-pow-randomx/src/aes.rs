@@ -45,16 +45,27 @@
 //! that is verified internal to the `aes` crate. `#![deny(unsafe_code)]`
 //! at the crate level survives.
 //!
-//! # Scope at this commit (Phase 2b commit 2)
+//! # Scope at this commit (Phase 2b commit 4)
 //!
-//! Round primitives (commit 1) plus the §3.2-3.4 composites:
-//! [`fill_aes_1r_x4`], [`fill_aes_4r_x4`], [`hash_aes_1r_x4`]. The
-//! spec constants (initial state, generator keys, extra-round keys)
-//! are ported as `const [u8; 16]` arrays via [`pack_le_u32x4`] which
-//! reproduces `_mm_set_epi32(i3, i2, i1, i0)`'s little-endian memory
-//! layout exactly. Per-iteration smoke tests live alongside; the
-//! byte-for-byte spec-vector parity tests against the C reference
-//! land in Phase 2b commit 4.
+//! Round primitives (commit 1) plus the §3.2-3.4 composites
+//! (commit 2): [`fill_aes_1r_x4`], [`fill_aes_4r_x4`],
+//! [`hash_aes_1r_x4`]. The spec constants (initial state, generator
+//! keys, extra-round keys) are ported as `const [u8; 16]` arrays via
+//! [`pack_le_u32x4`] which reproduces `_mm_set_epi32(i3, i2, i1, i0)`'s
+//! little-endian memory layout exactly.
+//!
+//! Commit 4 adds the byte-for-byte spec-vector parity tests against
+//! the v2 fork's reference at pin `aaafe71`. The 8 reference vectors
+//! live under [`tests/vectors/reference/aes/`] with `.meta.txt`
+//! provenance headers; the C++ generator that produced them lives at
+//! [`tests/vectors/reference/aes/_generator/`] and is reviewer-
+//! runnable per its `README.md`. The Rust tests consume the
+//! pre-committed `.bin` bytes via `include_bytes!`, so `cargo test`
+//! has no dev-dep on the C library (Phase 2g's live differential
+//! harness is the separate artifact).
+//!
+//! [`tests/vectors/reference/aes/`]: ../../tests/vectors/reference/aes/
+//! [`tests/vectors/reference/aes/_generator/`]: ../../tests/vectors/reference/aes/_generator/
 //!
 //! [`hazmat::cipher_round`]: aes::hazmat::cipher_round
 //! [`hazmat::equiv_inv_cipher_round`]: aes::hazmat::equiv_inv_cipher_round
@@ -703,5 +714,231 @@ mod tests {
         let input = [0u8; 33];
         let mut h = [0u8; 64];
         hash_aes_1r_x4(&input, &mut h);
+    }
+
+    // -----------------------------------------------------------------
+    // Spec-vector parity tests against the v2 fork's reference at pin
+    // `aaafe71`. Vectors live under `tests/vectors/reference/aes/` and
+    // were emitted by `tests/vectors/reference/aes/_generator/gen.cpp`
+    // calling `soft_aesenc` / `soft_aesdec` (round primitives) and the
+    // `<softAes=true>` template instantiations of `hashAes1Rx4` /
+    // `fillAes1Rx4` / `fillAes4Rx4` (composites). See each vector's
+    // `.meta.txt` for provenance + the spec section it attests to.
+    //
+    // The constants below MUST stay in sync with the
+    // `ROUND_INPUT_STATES` / `ROUND_INPUT_KEYS` / `CHAIN_INPUT_STATE` /
+    // `CHAIN_INPUT_KEY` tables in `gen.cpp`. A drift means the .bin's
+    // committed bytes were produced from different inputs and the
+    // parity assertion is meaningless; the integration is auditable by
+    // grepping the Rust constants and the gen.cpp tables side by side.
+    // -----------------------------------------------------------------
+
+    /// Three round-primitive input tuples mirroring `gen.cpp`'s
+    /// `ROUND_INPUT_STATES` / `ROUND_INPUT_KEYS`. Used by both the
+    /// `round_enc` and `round_dec` vectors; the .bin layout is the
+    /// concatenation of `cipher_round` / `equiv_inv_cipher_round`
+    /// outputs in this order.
+    const ROUND_INPUTS: [([u8; 16], [u8; 16]); 3] = [
+        // T1: uniform-byte state + uniform-byte key.
+        ([0x42; 16], [0x99; 16]),
+        // T2: sequential state, zero key.
+        (
+            [
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+                0x0e, 0x0f,
+            ],
+            [0x00; 16],
+        ),
+        // T3: sequential state, offset-sequential key (all bytes
+        // distinct between state and key).
+        (
+            [
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+                0x0e, 0x0f,
+            ],
+            [
+                0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+                0x1e, 0x1f,
+            ],
+        ),
+    ];
+
+    /// Chained-pair initial state and shared round key mirroring
+    /// `gen.cpp`'s `CHAIN_INPUT_STATE` / `CHAIN_INPUT_KEY`.
+    const CHAIN_INPUT_STATE: [u8; 16] = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f,
+    ];
+    const CHAIN_INPUT_KEY: [u8; 16] = [0xa5; 16];
+
+    /// `cipher_round` byte-for-byte against `soft_aesenc` for 3
+    /// non-degenerate input tuples.
+    /// Provenance: see sibling `round_enc.meta.txt`.
+    #[test]
+    fn vector_round_enc() {
+        let expected: &[u8] = include_bytes!("../tests/vectors/reference/aes/round_enc.bin");
+        assert_eq!(expected.len(), 3 * 16, "round_enc.bin size");
+        for (i, (state, key)) in ROUND_INPUTS.iter().enumerate() {
+            let mut actual = *state;
+            cipher_round(&mut actual, key);
+            let expected_slice: &[u8; 16] = expected[i * 16..(i + 1) * 16]
+                .try_into()
+                .expect("16-byte vector segment");
+            assert_eq!(
+                &actual, expected_slice,
+                "cipher_round tuple {i} mismatch (state={state:02x?}, key={key:02x?})",
+            );
+        }
+    }
+
+    /// `equiv_inv_cipher_round` byte-for-byte against `soft_aesdec`
+    /// for the same 3 input tuples.
+    /// Provenance: see sibling `round_dec.meta.txt`.
+    #[test]
+    fn vector_round_dec() {
+        let expected: &[u8] = include_bytes!("../tests/vectors/reference/aes/round_dec.bin");
+        assert_eq!(expected.len(), 3 * 16, "round_dec.bin size");
+        for (i, (state, key)) in ROUND_INPUTS.iter().enumerate() {
+            let mut actual = *state;
+            equiv_inv_cipher_round(&mut actual, key);
+            let expected_slice: &[u8; 16] = expected[i * 16..(i + 1) * 16]
+                .try_into()
+                .expect("16-byte vector segment");
+            assert_eq!(
+                &actual, expected_slice,
+                "equiv_inv_cipher_round tuple {i} mismatch (state={state:02x?}, key={key:02x?})",
+            );
+        }
+    }
+
+    /// F6 supplement: 3 rounds of `cipher_round` chained against the
+    /// same key; intermediate state pinned after each round. Catches
+    /// the case where equivalent-inverse and FIPS-197 standard inverse
+    /// forms happen to agree on degenerate inputs but diverge by
+    /// round 2 (per `RANDOMX_V2_PHASE2B_PLAN.md` §5.6).
+    /// Provenance: see sibling `chained_enc.meta.txt`.
+    #[test]
+    fn vector_chained_enc_3rounds() {
+        let expected: &[u8] = include_bytes!("../tests/vectors/reference/aes/chained_enc.bin");
+        assert_eq!(expected.len(), 3 * 16, "chained_enc.bin size");
+        let mut state = CHAIN_INPUT_STATE;
+        for round in 0..3 {
+            cipher_round(&mut state, &CHAIN_INPUT_KEY);
+            let expected_slice: &[u8; 16] = expected[round * 16..(round + 1) * 16]
+                .try_into()
+                .expect("16-byte chained-round segment");
+            assert_eq!(
+                &state, expected_slice,
+                "cipher_round chained round {round} state mismatch",
+            );
+        }
+    }
+
+    /// F6 supplement: 3 rounds of `equiv_inv_cipher_round` chained.
+    /// Provenance: see sibling `chained_dec.meta.txt`.
+    #[test]
+    fn vector_chained_dec_3rounds() {
+        let expected: &[u8] = include_bytes!("../tests/vectors/reference/aes/chained_dec.bin");
+        assert_eq!(expected.len(), 3 * 16, "chained_dec.bin size");
+        let mut state = CHAIN_INPUT_STATE;
+        for round in 0..3 {
+            equiv_inv_cipher_round(&mut state, &CHAIN_INPUT_KEY);
+            let expected_slice: &[u8; 16] = expected[round * 16..(round + 1) * 16]
+                .try_into()
+                .expect("16-byte chained-round segment");
+            assert_eq!(
+                &state, expected_slice,
+                "equiv_inv_cipher_round chained round {round} state mismatch",
+            );
+        }
+    }
+
+    /// `fill_aes_1r_x4` byte-for-byte against
+    /// `fillAes1Rx4<softAes=true>` at iters=4, initial state
+    /// `[0x42; 64]`. Vector layout: `output[256]` ‖ `final_state[64]`,
+    /// so this test asserts both the produced PRNG bytes *and* the
+    /// state-writeback contract (`aes_hash.cpp:197-200`).
+    /// Provenance: see sibling `gen_1r_state42_iters4.meta.txt`.
+    #[test]
+    fn vector_gen_1r_state42_iters4() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/aes/gen_1r_state42_iters4.bin");
+        assert_eq!(expected.len(), 256 + 64, "gen_1r_state42_iters4.bin size");
+        let mut state = [0x42u8; 64];
+        let mut output = [0u8; 256];
+        fill_aes_1r_x4(&mut state, &mut output);
+        assert_eq!(
+            output.as_slice(),
+            &expected[0..256],
+            "fill_aes_1r_x4 output bytes mismatch",
+        );
+        assert_eq!(
+            &state,
+            &expected[256..320],
+            "fill_aes_1r_x4 final-state writeback mismatch",
+        );
+    }
+
+    /// `fill_aes_4r_x4` byte-for-byte against
+    /// `fillAes4Rx4<softAes=true>` at iters=4, initial state
+    /// `[0x33; 64]`. No `final_state` segment — `fillAes4Rx4` does
+    /// not write back state (`aes_hash.cpp:282`), and the Rust
+    /// signature's `&[u8; 64]` (shared) parameter pins this at the
+    /// type level.
+    /// Provenance: see sibling `gen_4r_state33_iters4.meta.txt`.
+    #[test]
+    fn vector_gen_4r_state33_iters4() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/aes/gen_4r_state33_iters4.bin");
+        assert_eq!(expected.len(), 256, "gen_4r_state33_iters4.bin size");
+        let state = [0x33u8; 64];
+        let mut output = [0u8; 256];
+        fill_aes_4r_x4(&state, &mut output);
+        assert_eq!(
+            output.as_slice(),
+            expected,
+            "fill_aes_4r_x4 output bytes mismatch",
+        );
+    }
+
+    /// `hash_aes_1r_x4` byte-for-byte against
+    /// `hashAes1Rx4<softAes=true>` on a uniform 128-byte input.
+    /// Exercises both the absorb-loop body (2 chunks) and the
+    /// two-extra-rounds finalisation.
+    /// Provenance: see sibling `hash_1r_uniform128.meta.txt`.
+    #[test]
+    fn vector_hash_1r_uniform128() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/aes/hash_1r_uniform128.bin");
+        assert_eq!(expected.len(), 64, "hash_1r_uniform128.bin size");
+        let input = [0x11u8; 128];
+        let mut hash = [0u8; 64];
+        hash_aes_1r_x4(&input, &mut hash);
+        assert_eq!(
+            hash.as_slice(),
+            expected,
+            "hash_aes_1r_x4 uniform-input digest mismatch",
+        );
+    }
+
+    /// `hash_aes_1r_x4` byte-for-byte against
+    /// `hashAes1Rx4<softAes=true>` on the empty-input boundary case.
+    /// The absorb loop body never executes; the digest is the
+    /// finalisation of the initial-state spec constants alone. This
+    /// pins the 6 spec constants (`AES_HASH_1R_STATE0..STATE3`,
+    /// `AES_HASH_1R_XKEY0`, `AES_HASH_1R_XKEY1`) via their byte-level
+    /// effect on the empty-input digest.
+    /// Provenance: see sibling `hash_1r_empty.meta.txt`.
+    #[test]
+    fn vector_hash_1r_empty() {
+        let expected: &[u8] = include_bytes!("../tests/vectors/reference/aes/hash_1r_empty.bin");
+        assert_eq!(expected.len(), 64, "hash_1r_empty.bin size");
+        let mut hash = [0u8; 64];
+        hash_aes_1r_x4(&[], &mut hash);
+        assert_eq!(
+            hash.as_slice(),
+            expected,
+            "hash_aes_1r_x4 empty-input digest mismatch",
+        );
     }
 }

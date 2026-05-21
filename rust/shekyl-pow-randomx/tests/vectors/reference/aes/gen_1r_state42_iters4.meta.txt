@@ -1,0 +1,60 @@
+AesGenerator1R derived test vector — gen_1r_state42_iters4.bin
+==============================================================
+
+Spec attestation
+----------------
+Cross-checks shekyl-pow-randomx's `aes::fill_aes_1r_x4` against the
+v2 RandomX fork's `fillAes1Rx4<softAes=true>`. Per
+`external/randomx-v2/doc/specs.md` §3.2 (=
+`external/randomx-v2/src/aes_hash.cpp:152`), AesGenerator1R fills
+its `output` buffer with PRNG bytes derived from a 64-byte state
+using a single AES round per 16 bytes of output in four parallel
+lanes:
+
+  lane 0 (state[ 0..16)): equiv_inv_cipher_round keyed by KEY0
+  lane 1 (state[16..32)): cipher_round            keyed by KEY1
+  lane 2 (state[32..48)): equiv_inv_cipher_round keyed by KEY2
+  lane 3 (state[48..64)): cipher_round            keyed by KEY3
+
+After each iteration the per-lane state is the input for the next
+iteration; after the loop, the final post-loop state is **written
+back** to the caller's `state` buffer (`aes_hash.cpp:197-200`). The
+Rust signature takes `state: &mut [u8; 64]` to express this writeback
+at the type level; this vector pins both the produced PRNG output
+and the post-loop state byte-for-byte.
+
+Inputs (hardcoded in `_generator/gen.cpp` and the Rust test side)
+------------------------------------------------------------------
+initial state = [0x42; 64]
+iterations    = 4 (output size = 4 × 64 = 256 bytes)
+
+The KEY0..KEY3 constants come from `specs.md` §3.2 / `aes_hash.cpp:
+134-139` and are the same Blake2b-512-derived 4 × 16-byte values
+already encoded in `src/aes.rs` as `AES_GEN_1R_KEY0..KEY3` via the
+`pack_le_u32x4` helper.
+
+Output layout
+-------------
+320 bytes total = `output[256]` ‖ `final_state[64]`:
+  bytes [0..256)   = the 256 bytes written to `buffer` during the
+                     4 iterations, in the order they were emitted.
+  bytes [256..320) = the per-lane state after the 4th iteration
+                     (the writeback value, lanes 0..3 concatenated).
+
+Generator
+---------
+source      = ./_generator/gen.cpp
+build       = ./_generator/Makefile (`make gen`)
+command     = ./gen gen_1r_state42_iters4
+output_size = 320 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/aes_hash.cpp, src/soft_aes.cpp
+function    = fillAes1Rx4<true>(state, output_size, buffer)
+
+Phase
+-----
+Phase 2b (`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §§6.1, 7 commit 4).

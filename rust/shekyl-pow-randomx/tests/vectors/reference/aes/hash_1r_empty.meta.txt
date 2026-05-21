@@ -1,0 +1,50 @@
+AesHash1R empty-input derived test vector — hash_1r_empty.bin
+=============================================================
+
+Spec attestation
+----------------
+Cross-checks shekyl-pow-randomx's `aes::hash_aes_1r_x4` against the
+v2 RandomX fork's `hashAes1Rx4<softAes=true>` on the boundary case
+where `inputSize == 0`. The absorb loop body never executes (the
+`while (inptr < inputEnd)` precondition is false), and the resulting
+hash is the two-extra-rounds-from-initial-state finalisation value:
+the four lanes are initialised from `AES_HASH_1R_STATE0..STATE3`,
+then `cipher_round`/`equiv_inv_cipher_round`'d twice with `XKEY0`
+and `XKEY1`, then concatenated.
+
+This vector therefore pins the spec constants themselves (state
+constants, xkey constants) via their byte-level effect on the
+empty-input hash — a future regression in any of the 6 spec
+constants would surface here, in addition to surfacing in the
+non-empty `hash_1r_uniform128.bin` vector. Downstream consumers can
+reproduce this 64-byte value from the published spec constants
+alone, without running the absorb loop.
+
+Inputs (hardcoded in `_generator/gen.cpp` and the Rust test side)
+------------------------------------------------------------------
+input = [] (length 0; valid per the absorb-loop precondition
+            `inputSize % 64 == 0`)
+
+Output layout
+-------------
+64 bytes = lane0 ‖ lane1 ‖ lane2 ‖ lane3 (each 16 bytes), in the
+order they were `rx_store_vec_i128`'d at `aes_hash.cpp:124-127`,
+after only the two-extra-rounds finalisation (no absorb iterations).
+
+Generator
+---------
+source      = ./_generator/gen.cpp
+build       = ./_generator/Makefile (`make gen`)
+command     = ./gen hash_1r_empty
+output_size = 64 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/aes_hash.cpp, src/soft_aes.cpp
+function    = hashAes1Rx4<true>(nullptr, 0, hash)
+
+Phase
+-----
+Phase 2b (`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §§6.1, 7 commit 4).

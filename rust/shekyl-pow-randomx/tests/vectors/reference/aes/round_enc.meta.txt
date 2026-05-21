@@ -1,0 +1,61 @@
+AES single-round encryption derived test vector — round_enc.bin
+================================================================
+
+Spec attestation
+----------------
+Cross-checks shekyl-pow-randomx's `aes::cipher_round` (a thin wrapper
+over `aes-0.9.0::hazmat::cipher_round`) against the v2 RandomX
+fork's `soft_aesenc` (constant-time LUT software AES). The
+`cipher_round` semantic is FIPS-197 Appendix C / `_mm_aesenc_si128` —
+`SubBytes → ShiftRows → MixColumns → AddRoundKey`. Per
+`external/randomx-v2/doc/specs.md` §§3.2-3.4 the AES generators and
+hash are defined in terms of this single-round primitive applied to
+4 parallel 16-byte lanes; this vector exercises the primitive
+directly before the composite functions in `gen_*` / `hash_*`
+vectors cover the composition.
+
+Inputs (3 tuples; hardcoded in `_generator/gen.cpp`)
+-----------------------------------------------------
+T1: state = [0x42; 16], key = [0x99; 16]
+    Uniform-byte state and uniform-byte key. Mirrors the
+    `cipher_round_does_not_mutate_round_key` smoke test in
+    `src/aes.rs` so a tester can correlate visually.
+
+T2: state = [0x00, 0x01, ..., 0x0f], key = [0x00; 16]
+    Sequential state, zero key. Catches a ShiftRows regression
+    that uniform-state inputs cannot detect (the row permutation
+    is a no-op on a uniform row).
+
+T3: state = [0x00, 0x01, ..., 0x0f], key = [0x10, 0x11, ..., 0x1f]
+    Sequential state, offset-sequential key. Every byte distinct;
+    maximises the per-round mix.
+
+Output layout
+-------------
+48 bytes total = 3 × 16 bytes, concatenated in the order T1, T2, T3.
+Each 16-byte segment is the `soft_aesenc(state, key)` result for the
+corresponding tuple, written in the canonical FIPS-197 byte order
+(== the in-memory layout of `rx_vec_i128` on little-endian hosts ==
+the `[u8; 16]` layout of `aes-0.9.0::Block`).
+
+Generator
+---------
+source      = ./_generator/gen.cpp
+build       = ./_generator/Makefile (`make gen`)
+command     = ./gen round_enc
+output_size = 48 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/soft_aes.cpp
+function    = soft_aesenc(rx_vec_i128 in, rx_vec_i128 key)
+
+Phase
+-----
+Phase 2b (`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §§6.1, 7 commit 4)
+— spec-vector parity for the AES round primitive. The chained-pair
+multi-round F6 supplement vector (`chained_enc.bin`) covers the
+multi-round case; the AesGenerator and AesHash vectors cover the
+composite consumers.

@@ -37,16 +37,21 @@
 //!   if those greps were already live. See
 //!   [`RANDOMX_V2_RUST.md`](../../docs/design/RANDOMX_V2_RUST.md) §7.2.
 //!
-//! # Scope at this commit (Phase 2b commit 3)
+//! # Scope at this commit (Phase 2b commit 4)
 //!
 //! Phase 2a landed the workspace scaffold and the Argon2d "memory fill"
-//! primitive used by `Cache::derive`. Phase 2b commits 1-3 land the
-//! remaining v2 primitives the verifier needs:
+//! primitive used by `Cache::derive`. Phase 2b commits 1-3 landed the
+//! remaining v2 primitives the verifier needs; commit 4 adds spec-
+//! vector parity tests for the AES surface against the v2 fork's
+//! reference at pin `aaafe71`.
 //!
 //! - `src/aes.rs` — AES single-round wrappers (`cipher_round`,
 //!   `equiv_inv_cipher_round`) over `aes-0.9.0`'s `hazmat` API plus
 //!   the §3.2-3.4 composites (`AesGenerator1R`, `AesGenerator4R`,
-//!   `AesHash1R`).
+//!   `AesHash1R`). Commit 4 adds 8 spec-vector parity tests
+//!   consuming the pre-committed reference bytes via `include_bytes!`;
+//!   the reviewer-runnable C++ generator lives at
+//!   `tests/vectors/reference/aes/_generator/`.
 //! - `src/blake2_generator.rs` — `Blake2Generator` PRNG per spec §3.5.
 //! - `src/superscalar.rs` — `SuperscalarHash` program generator and
 //!   executor per spec §6 + §7.2 (commit 3 lands these).
@@ -59,7 +64,8 @@
 //!
 //! Remaining Phase 2b commits (per the same plan §7):
 //!
-//! - **commits 4-5:** spec-vector parity tests against the C reference.
+//! - **commit 5:** SuperscalarHash spec-vector parity tests
+//!   (C++ generator + 3-vector F4 decomposition + combined end-to-end).
 //! - **commit 6:** CHANGELOG + V3.0/Phase 3c FOLLOWUPS entry.
 //!
 //! Subsequent sub-PRs (per
