@@ -838,8 +838,196 @@
     --no-deps` gates all inherit C23's results unchanged
     (no rust files touched in C24).
 
-  PR 4 §7.X commits C0 through C24 are now all landed; PR
-  #60 carries the full C0–C24 set. See the separate `###
+  *C25 – C28 — Copilot fifth-round review responses*:
+  - Four small post-PR-open commits closing the five
+    additional line-anchored findings the GitHub Copilot
+    reviewer raised against `3f4460a59` (the C24 push
+    head) on PR #60. All five findings are substantive
+    doc/code-hygiene issues (none nitpicky): three are
+    stale-doc references to deleted symbols / abandoned
+    test substrates (per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    "Stale-doc detection ... the doc update is not
+    optional — the doc is wrong and will mislead readers"
+    rule); one is a dead lint-allow attribute (per
+    [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)'s
+    "Default: delete"); one is a Cargo feature description
+    that claimed re-exports the feature doesn't actually
+    perform.
+  - **C25** `543fffe23` — stale `build_scanner_from_keys`
+    rustdoc / comment references in
+    [`rust/shekyl-engine-core/src/engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs)
+    (comment above `pub(crate) fn keys()`) and
+    [`rust/shekyl-engine-core/src/engine/view_material.rs`](../rust/shekyl-engine-core/src/engine/view_material.rs)
+    (module rustdoc § "Field shape"). The free function
+    `build_scanner_from_keys` was deleted in C5β
+    (`b6a1274de` — legacy producer-scaffolding deletion
+    in `engine/refresh.rs`) and replaced by
+    `ViewMaterial::try_from_keys(&AllKeysBlob)` (engine
+    assembly time, per C5a = `553d70139`) +
+    `LocalRefresh::build_scanner` (per-attempt scanner
+    construction, per C4 = `ac100e1ab`). Both LIVE Rust
+    sites updated to name the actual current derivation
+    path; the surviving live consumer of
+    `Engine::keys()` (`Engine::replace_refresh`'s test-
+    substrate re-derivation per C6α = `e9310542a`) named
+    explicitly; reopening-criterion clause added per
+    [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+    naming Phase 2's `sign_transfer` / `tx_proof` /
+    `reserve_proof` surfaces as the substrate-change
+    that would reopen `#[allow(dead_code)]` deletion.
+    Initial rewrite introduced an
+    `[Engine::replace_refresh](super::Engine::replace_refresh)`
+    intra-doc link that triggered a new rustdoc privacy
+    warning (`replace_refresh` is `pub(crate)`, link
+    from `pub` `view_material` module's rustdoc
+    unresolves); reverted to a plain backtick reference
+    per the C18 cross-crate-link mitigation pattern;
+    doc-warning count back to baseline 49. Closes
+    Copilot finding IDs 3278677182, 3278677211.
+  - **C26** `1cdcd6e52` — dead `#[allow(unused_imports)]`
+    on `pub(crate) use refresh::RefreshEngine` re-export
+    in
+    [`rust/shekyl-engine-core/src/engine/traits/mod.rs`](../rust/shekyl-engine-core/src/engine/traits/mod.rs).
+    The suppression was load-bearing at C1's introduction
+    commit (`d3edc1abb`) when the re-export landed ahead
+    of consumers; C5 (`7140f726a` — `Engine<S, D, L, R>`
+    four-parameter type slot + retry-loop migration to
+    trait dispatch) introduced multiple production
+    consumers making the import live. The suppression
+    has not been load-bearing since C5 and now masks
+    future regressions where the import becomes dead
+    again. Removed per
+    [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)'s
+    "Default: delete"; accompanying comment rewritten to
+    anchor C1 / C5 / C26 and explain the masking-future-
+    regressions failure mode the removal prevents.
+    Symmetric form to C25's update of `Engine::keys()`'s
+    `#[allow(dead_code)]` (same discipline check, different
+    disposition because that suppression's live-consumer
+    audit surfaced an ongoing default-feature production
+    justification). Closes Copilot finding ID 3278677226.
+  - **C27** `15c76a73e` — reword `test-helpers` Cargo
+    feature description in
+    [`rust/shekyl-engine-core/Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+    to reflect that the feature gates compilation only,
+    NOT public re-exports. The previous description
+    claimed the feature "re-exports otherwise-`pub(crate)`
+    failure-injection wrappers ... for downstream
+    integration test crates", but the four named surfaces
+    (`FaultInjecting<R: RefreshEngine>`, `FaultInjecting<L:
+    LedgerEngine>`, `Engine::replace_refresh`,
+    `LocalLedger::from_test_blocks`) remain `pub(crate)`
+    with the feature enabled — no `__test_helpers`
+    re-export module exists at the crate root (verified
+    at source vs. the sibling `bench-internals` feature
+    which DOES have a `__bench_internals` re-export at
+    `lib.rs:46-56`). Per
+    [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+    chose option (b) of Copilot's two options: reword to
+    reflect actual shape, NOT speculatively add re-
+    exports for hypothetical downstream consumers that
+    don't yet exist (the "pre-provisioning for
+    hypothetical consumers" anti-pattern). The rewritten
+    comment names: what the feature actually does
+    (compile-gate the four `pub(crate)` surfaces); what
+    it does NOT do (no public re-exports; compare-and-
+    contrast with `bench-internals` makes the asymmetry
+    explicit); why no re-exports yet (pre-genesis
+    no-consumer state); reopening criteria (when the
+    first downstream consumer emerges, add
+    `__test_helpers` module under the `__bench_internals`
+    precedent + V3.0-targeted FOLLOWUPS item +
+    `AUDIT_SCOPE.md` amendment if needed); load-bearing
+    production-build safety property (the
+    `#[cfg(any(test, feature = "test-helpers"))]`
+    gating at the definition site keeps the four
+    failure-injection surfaces out of default-feature
+    production builds). Closes Copilot finding ID
+    3278677251.
+  - **C28** `1879baf73` — Post-PR-4 retirement note added
+    to
+    [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../docs/V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §6 "Test boundary" / §6.1 "Pinned commitments for
+    Stage 1". The §6 framing still asserted a "fully-
+    mocked `Engine<SoloSigner, MockKey, MockLedger,
+    MockDaemon, …>`" Stage-1 test direction and the §6.1
+    Round-3 commitment list still enumerated all seven
+    Mock-X types, but three of the seven have retired:
+    `MockKey` in PR 3 (per
+    `STAGE_1_PR_3_KEY_ENGINE.md` §6.4 no-Mock substrate
+    — already acknowledged in §6.1 Round-4b's
+    `(Post-M3 note)` but NOT in the §6 framing
+    paragraph); `MockLedger` in PR 4 C6β (replaced by
+    `FaultInjecting<L: LedgerEngine>`); `MockRefresh`
+    in PR 4 C6α (replaced by `FaultInjecting<R:
+    RefreshEngine>`). Three additions: (1) new
+    `> (Post-M3 + Post-PR-4 note: ...)` block-quote
+    beneath the §6 opening paragraph naming all three
+    retirements + replacement substrates + surviving
+    Mock-X types; (2) nested `(Post-M3 + Post-PR-4
+    update to the Round-3 list)` item inside §6.1's
+    pinned-commitments list inline-annotating each
+    retired type with its anchor commit + replacement;
+    (3) extension of the existing `(Post-M3 note: ...)`
+    paragraph inside §6.1 Round-4b to include the
+    Post-PR-4 retirements + name the contract-fidelity
+    discipline as applying to `FaultInjecting<...>`
+    wrappers (which honor the trait contract by
+    delegating to the wrapped real production
+    implementor's behavior — wrapper-injected failures
+    fire BEFORE or AFTER delegation per the wrapper's
+    documented semantics, not by substituting alternative
+    return values). §6.2+ RNG-injection example snippets
+    (lines 4102, 4149, 4177) retain `MockLedger::with_seed(...)`
+    literal example text as a deliberate scope decision
+    per `15-deletion-and-debt.mdc` "while we're here is
+    the enemy" — those examples demonstrate the
+    seeded-RNG injection MECHANISM (invariant under
+    implementor name) and rewriting them would either
+    lose pedagogical clarity or require a §6.2+
+    refactor outside C28's named-Copilot-finding scope.
+    Closes Copilot finding ID 3278677269.
+  - Gates per commit: each ran its scoped bisection-
+    discipline gates. C25 / C26 touched `shekyl-engine-core`
+    Rust files (`cargo fmt -p shekyl-engine-core --
+    --check`, `cargo clippy -p shekyl-engine-core
+    --all-targets --features test-helpers -- -D
+    warnings`, default-feature clippy, `cargo test -p
+    shekyl-engine-core --lib`, `cargo doc -p
+    shekyl-engine-core --no-deps`) all clean: 170 / 170
+    lib tests pass; 49 doc warnings unchanged (C9
+    baseline). C27 touched `Cargo.toml` only
+    (comment-only change inside `[features]`); fmt /
+    clippy / test all clean; no `.rs` files touched.
+    C28 touched a `docs/` markdown file only; gate
+    inheritance from C27.
+
+  *C29 — `[Unreleased]` doc-after-plans propagation for
+  C25 – C28* (this commit):
+  - Doc-only follow-up per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    final-task-always rule. After C25 / C26 / C27 / C28
+    landed locally with green gates, the design doc §7.X
+    status banner was extended to enumerate C25 / C26 /
+    C27 / C28 alongside C0 – C24 with landing SHAs and
+    per-commit one-paragraph summaries, and the §7.X
+    commit-block section gained a new `**Commits C25 –
+    C28 — Copilot post-PR-open fifth-round review
+    responses.**` block with per-commit prose + Copilot
+    finding IDs + gate evidence. This `*C25 – C28 —
+    Copilot fifth-round review responses*` subsection
+    above is the matching CHANGELOG entry; the doc-after-
+    plans propagation also updates the closing C0–C29
+    paragraph below.
+  - Gate inheritance from C28: C29 is doc-only, so the
+    `cargo fmt --check`, `cargo clippy --all-targets --
+    -D warnings`, `cargo test --lib`, and `cargo doc
+    --no-deps` gates all inherit C28's results unchanged
+    (no rust files touched in C29).
+
+  PR 4 §7.X commits C0 through C29 are now all landed; PR
+  #60 carries the full C0–C29 set. See the separate `###
   Added` and `### Changed` entries below for the trait-
   surface and `Engine<S, D, L, R>` four-parameter additions
   PR 4 ships,
