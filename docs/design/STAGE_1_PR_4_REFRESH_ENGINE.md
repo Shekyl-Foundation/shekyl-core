@@ -475,6 +475,65 @@ C0–C5 / C7 / C8 commit prose remain unchanged; the C6
 sub-decomposition (C6α / C6β / C6γ) gains the F-Mock dispositions
 inline.
 
+**Phase 1 landed (2026-05-20).** The §7.X commit list cuts
+through against the post-Round-4 / post-Round-5 substrate as
+specified; CI green at every commit per the Phase 1 bisection-
+discipline gate. Landing SHAs on `feat/stage-1-pr4-refresh-engine`:
+**C0** `322677261` (`docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.3 +
+§7 amendment, doc-only) — landed on `dev` ahead of the branch
+cut per Round 4's branching disposition; **C1** `d3edc1abb`
+(`RefreshEngine` trait + `ViewMaterial` type); **C2**
+`8fc207051` (`RefreshDiagnostic` + `DiagnosticSink` +
+`NoopDiagnosticSink` + `TracingDiagnosticSink` + projection
+plumbing + `SuppressedRateLimit` variant); **C3** `c45894ffe`
+(`RefreshError::InternalInvariantViolation` variant addition,
+bisectable from call-site migration); **C4** `ac100e1ab`
+(`LocalRefresh` aggregate + `produce_scan_result` body + per-
+output safe-point, with C4 prep at `e560d0c12` /
+`365a2de7c` / `d385bd728`); **C5a** `553d70139`
+(`Engine<S, D, L, R>` four-parameter type slot +
+`ViewMaterial::try_from_keys` + `LocalRefresh` wired at
+assemble); **C5b** `0dea3fd1e` (`RpcError` →
+`ProtocolErrorKind` classifier + `DaemonProtocolError`
+emission at the three retry-loop daemon-call sites);
+**C5** `7140f726a` (orchestrator retry-loop migration to
+trait dispatch on `R` + `InternalInvariantViolation` surfacing
+at retry-loop construction sites); **C5β** `b6a1274de`
+(legacy producer-scaffolding deletion in `engine/refresh.rs`
+— `produce_scan_result` free function + `ProduceError` +
+`ProgressEmitter` + duplicated helpers + constants;
+orphaned tests ported / deleted against `LocalRefresh`);
+**C6α** `e9310542a` (`FaultInjecting<R: RefreshEngine>`
+wrapper + `test-helpers` Cargo feature +
+`Engine::replace_refresh` test-only setter + Class 1 smoke
+tests per F-Mock-8); **C6β** `e94526dec`
+(`FaultInjecting<L: LedgerEngine>` extraction +
+`LocalLedger::from_test_blocks(Vec<Block>)` constructor +
+`MockLedger` retirement + hybrid retry test migration +
+`ROLE_LEDGER` deletion); **C6γ** `b937906a6` (`MockDaemon`
+→ `TestDaemon` rename across 99 call sites + active-doc
+trajectory updates); **C7** `c9e65bbc6`
+(`Engine::replace_refresh` consume-and-rebuild refactor +
+`AssertionSink` + `PanickingSink` + `PanickingSinkTrigger` +
+hybrid retry test
+`hybrid_refresh_engine_orchestrator_cancellation_retries` +
+producer-property-tests module with 5 parametric coherence
+tests + 1 fuzzed proptest + 4 panic-safety tests + 1
+classifier sanity test); **C8** *this commit*
+(docs propagation + `CHANGELOG` + V3_ENGINE_TRAIT_BOUNDARIES
+§2.3 past-tense + FOLLOWUPS Phase 0d-strike retirement
+note). Round 5 substrate-decision amendment (`8484e669a`)
+and Round 5 sub-pin extension (`29cb7e138`), plus the
+F11-S audit-trail measurement evidence (`a4da2212a`), land
+as design-doc commits on the implementation branch
+alongside C5β / C6α and are not in the C0–C8 numbering.
+Test-gate cumulative: 170 / 170 lib tests pass at C7;
+`cargo fmt --all -- --check` clean; `cargo clippy -p
+shekyl-engine-core --all-targets --features test-helpers --
+-D warnings` clean; default-feature clippy clean; doc
+warnings unchanged at 48 (zero new C7 warnings; baseline 49
+pre-C7).
+
 This document was opened in parallel with the
 M3c–M3e tail of Stage 1 PR 3 per the 2026-05-10 sequencing
 decision recorded in
@@ -5486,6 +5545,10 @@ land the implementation surface against the amended spec.
 C0's commit message references this design doc's §4 Phase 0a
 binding-pinned form as the substrate.
 
+**Landed: `322677261`** on `dev` (2026-05-15;
+`docs: amend §2.3 RefreshEngine + sweep §7 four→five
+checkpoints`).
+
 **Commit C1 — `RefreshEngine` trait declaration + `ViewMaterial`
 type.**
 
@@ -5516,6 +5579,9 @@ C1 introduces no implementing aggregate yet; the trait sits
 unconsumed until C4 wires it into `Engine`. CI compiles the
 new trait against the existing crate but does not exercise
 it.
+
+**Landed: `d3edc1abb`** (`refresh: introduce RefreshEngine
+trait + ViewMaterial type (PR 4 C1)`).
 
 **Commit C2 — `RefreshDiagnostic` enum + `DiagnosticSink`
 trait + Stage 1 sink impls.**
@@ -5582,6 +5648,9 @@ Lands the Phase 0e diagnostic-stream substrate:
 C2 introduces no production consumers yet; the substrate
 sits ready for C4 to wire `produce_scan_result` against it.
 
+**Landed: `8fc207051`** (`refresh: populate RefreshDiagnostic
++ DiagnosticSink + Stage 1 sinks (PR 4 C2)`).
+
 **Commit C3 — `RefreshError::InternalInvariantViolation`
 variant addition.**
 
@@ -5603,6 +5672,9 @@ CI compiles the enum; existing `RefreshError`-matching code
 needs `_ => ...` arms or explicit `InternalInvariantViolation`
 arms. The match-arm exhaustiveness pass is part of C3's
 mechanical scope.
+
+**Landed: `c45894ffe`** (`refresh: add
+RefreshError::InternalInvariantViolation variant (PR 4 C3)`).
 
 **Commit C4 — `LocalRefresh` aggregate + `produce_scan_result`
 implementation.**
@@ -5733,6 +5805,14 @@ Introduces the `RefreshEngine`-implementing aggregate:
 C4 introduces no `Engine`-side parameterization; the new
 aggregate sits in the crate but unconsumed until C5.
 
+**Landed: `ac100e1ab`** (`refresh: add LocalRefresh aggregate
+with per-output safe-point (PR 4 C4)`); C4 prep:
+**`e560d0c12`** (`refresh: add MalformedKind::ExcessiveOutputs
+variant (PR 4 C4 prep)`); **`365a2de7c`** (`scanner: add
+Scanner::scan_with_cancel per-output safe-point API (PR 4 C4
+prep)`); **`d385bd728`** (`scanner: enforce MAX_OUTPUTS bound
+at scan_transaction entry (PR 4 F11-S prep)`).
+
 **Commit C5 — `Engine` parameterization + retry-loop call-site
 migration + `RpcError` classification.**
 
@@ -5764,6 +5844,19 @@ migrations:
 C5 is the load-bearing trait-dispatch commit; existing
 `Engine`-driven refresh paths execute against the trait surface
 after C5 lands.
+
+**Landed:** **C5a** `553d70139` (`refresh: parameterize Engine
+with R: RefreshEngine type slot (PR 4 C5a)`); **C5b**
+`0dea3fd1e` (`refresh: classify RpcError as ProtocolErrorKind
+diagnostics (PR 4 C5b)`); **C5** `7140f726a` (`refresh: cut
+Engine retry loop over to RefreshEngine dispatch (PR 4 C5)`);
+**C5β** `b6a1274de` (`refresh: delete legacy producer
+scaffolding in refresh.rs (PR 4 C5β)`). The C5β cleanup
+deletes the pre-trait `produce_scan_result` free function +
+`ProduceError` + `ProgressEmitter` + duplicated helpers +
+constants from `engine/refresh.rs`; the bisection-discipline
+gates run green between the C5 trait-dispatch cutover and the
+C5β scaffolding removal.
 
 **Commit C6 — `FaultInjecting<R: RefreshEngine>` test substrate
 + retroactive Mock-X cleanup of `MockLedger` and `MockDaemon`
@@ -6002,6 +6095,20 @@ lands, with all failure injection routed through the composable
 `FaultInjecting<...>` wrappers and no parallel-implementation
 Mocks remaining in the engine-core crate.
 
+**Landed:** **C6α** `e9310542a` (`refresh: C6α
+FaultInjecting<R: RefreshEngine> wrapper + test-helpers`);
+**C6β** `e94526dec` (`refresh: C6β FaultInjecting<L:
+LedgerEngine> + LocalLedger::from_test_blocks + MockLedger
+retirement`); **C6γ** `b937906a6` (`refresh: C6γ MockDaemon
+→ TestDaemon rename`). Round 5 substrate-decision amendment
+`8484e669a` (`refresh: Round 5 substrate-decision amendment
+(no-Mock C6 plan)`) and Round 5 sub-pin extension
+`29cb7e138` (`refresh: Round 5 sub-pin extension (F-Mock-1..8
++ two-enum architecture)`) precede C6α as design-doc commits
+on the implementation branch; they are not part of the C6
+implementation numbering but record the binding substrate
+C6α/β/γ implement against.
+
 **Re-iterated no-Mock rationale (per PR 3 §2.1.2 and §6 above):**
 the prior `MockRefresh` plan would have re-instantiated the
 parallel-implementation anti-pattern PR 3 rejected as a category.
@@ -6059,6 +6166,39 @@ FaultInjecting<LocalLedger>, FaultInjecting<LocalRefresh>>`
 injection via composable wrappers, per the no-Mock substrate
 inheritance discipline). CI exercises both classes.
 
+**Landed: `c9e65bbc6`** (`refresh: C7 hybrid retry test +
+AssertionSink/PanickingSink property tests`). Concrete C7
+deliverables landed (the C7 design above is the binding
+substrate; the implementation widens within the binding
+contract): `Engine::replace_refresh` refactored from
+`&mut self` setter to consume-and-rebuild constructor so the
+`R` type parameter can change to `FaultInjecting<LocalRefresh>`
+(mirrors the existing `replace_daemon` / `replace_ledger`
+shape per
+[`engine/lifecycle.rs`](../../rust/shekyl-engine-core/src/engine/lifecycle.rs));
+`AssertionSink` + `PanickingSink` + `PanickingSinkTrigger`
+land at
+[`engine/diagnostics.rs`](../../rust/shekyl-engine-core/src/engine/diagnostics.rs)
+gated `#[cfg(any(test, feature = "test-helpers"))]` per the
+F-Mock-1 cfg-symmetry pin; `proptest = "1"` added as a
+`dev-dependency` for the producer-property-tests module at
+[`engine/local_refresh.rs`](../../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+(5 parametric coherence tests + 1 fuzzed proptest +
+4 panic-safety tests + 1 classifier sanity test); the
+hybrid retry test
+`hybrid_refresh_engine_orchestrator_cancellation_retries` at
+[`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs)
+exercises the producer-trait/orchestrator cancellation-
+checkpoint split end-to-end against
+`Engine<SoloSigner, TestDaemon, FaultInjecting<LocalLedger>,
+FaultInjecting<LocalRefresh>>`. Tests pass 170/170 under
+`cargo test --features test-helpers --lib`; `cargo fmt --all
+-- --check` + `cargo clippy --all-targets --features
+test-helpers -- -D warnings` + default-feature clippy +
+`cargo doc --features test-helpers --no-deps` all green
+(no new doc warnings; pre-existing intra-doc-link warnings
+to private items are baseline and unrelated to C7 changes).
+
 **Commit C8 — Docs propagation + CHANGELOG.**
 
 Final commit; doc-only:
@@ -6102,6 +6242,29 @@ Final commit; doc-only:
 
 C8 is the docs / changelog commit; the PR opens with C8 as
 the tip.
+
+**Landed: this commit** (`refresh: C8 docs propagation +
+CHANGELOG`). C8's scope as executed: the Status-banner
+"Phase 1 landed" closure paragraph above (line-anchored
+just before "This document was opened in parallel with…");
+the per-`Commit Cn` `Landed:` lines in this §7.X section
+(C0–C7, plus C5/C5β decomposition and C6α/β/γ); the
+[`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
+§2.3 past-tense reframe with implementation-locator
+SHAs; the [`CHANGELOG`](../CHANGELOG.md) `[Unreleased]`
+extension covering C7 under the existing PR 4 entry plus
+the C8-mandated `### Added` entries for the `RefreshEngine`
+trait + `RefreshDiagnostic` enum (with `SuppressedRateLimit`
+variant) + `DiagnosticSink` trait (with per-emitter FIFO
+pin); the `### Changed` entries for `Engine<S, D, L, R>`
+four-parameter wiring and `RefreshError::InternalInvariantViolation`
+variant addition; and the [`FOLLOWUPS`](../FOLLOWUPS.md)
+Phase 0d-strike retirement note (the conditional candidate
+retired by composition per §5.4.7 R5 reframe; **struck**, not
+deferred — the §5.4.7 R5 / R6 / R4 (c) V3.x consumer-actor
+deferrals remain open per Round 3's prior amendments and
+the existing FOLLOWUPS entries). PR 4 §7.X commits C0–C8
+are now landed; the PR is ready to open against `dev`.
 
 **Phase 1 readiness checklist (gates the C0 cut).** The
 following are pre-conditions for the implementation branch to

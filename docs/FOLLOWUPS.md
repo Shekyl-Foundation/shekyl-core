@@ -3994,6 +3994,43 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.x — staker archival and visualization ship
 
+- **[CLOSED 2026-05-20] Stage 1 PR 4 Phase 0d — `RefreshEngine`
+  checkpoint 3 mid-scan-reorg-abort extension: struck, not
+  deferred.** PR 4's Round 1 review pass surfaced a conditional
+  Phase 0d candidate — "extend producer-side checkpoint 3 with
+  one daemon tip-poll per checkpoint-3 hit so a mid-scan reorg
+  triggers an early abort" — pending the §5.4.5 R5 adversarial
+  scenario disposition. Round 2's reframe of
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R5 settled R5 by composition under the two-channel
+  diagnostic shape rather than by extending checkpoint 3:
+  `RefreshDiagnostic::ReorgObserved` is the seam; the
+  `ReorgAmplificationDetector` V3.x consumer actor entry below
+  is the composition home. Phase 0d is therefore **struck**
+  (not deferred) — the producer's §7 checkpoint discipline
+  remains five-checkpoint (1 / 2 / 3 / 4 / 5 per §5.4.9 F2),
+  the trait surface gains no additional cancellation site,
+  and no V3.x candidate exists to revisit "extend checkpoint
+  3." This entry is the explicit retirement note distinct
+  from the live V3.x deferrals below (R5 composition consumer
+  actor; R6 fail2ban consumer actor; R4 (c) view-material
+  flow refinements), each of which remains open with named
+  triggers per
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §4 Phase 0d, §5.4.7 R5 / R6 / R4 (c), and §8 closure.
+  Per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+  the named reopening criterion for re-introducing the
+  checkpoint-3 extension would be the §5.4.7 R5 composition
+  consumer actor failing to bound mid-scan reorg work in
+  practice; that determination is data-driven and Stage-4-
+  vintage, and no current evidence motivates re-evaluation.
+  Cross-references:
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §4 Phase 0d (struck), §5.4.7 R5 reframe, §5.4.9 F2 (five-
+  checkpoint discipline), §7.X C8 commit prose (this
+  retirement note pinned in FOLLOWUPS).
+
 - **`ReorgAmplificationDetector` consumer actor (Stage 1 PR 4 R5
   composition home; supersedes the Round 2 first-pass "extend
   checkpoint 3" deferral).** PR 4's Round 2 reframe of

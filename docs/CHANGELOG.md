@@ -4,6 +4,129 @@
 
 ### Added
 
+- **Stage 1 PR 4 — `RefreshEngine` trait surface**
+  (`feat/stage-1-pr4-refresh-engine`, 2026-05-15 → 2026-05-20).
+  Lands the Phase-0a-binding `RefreshEngine` trait and the
+  `ViewMaterial` adjacent type per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §4 Phase 0a + Phase 0c + Phase 0e and
+  [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.3 (PR 4 C0 = `322677261`; C1 = `d3edc1abb`).
+  - `pub trait RefreshEngine: Send + Sync + 'static` at
+    [`engine/traits/refresh.rs`](../rust/shekyl-engine-core/src/engine/traits/refresh.rs)
+    with one async method `produce_scan_result(snapshot:
+    LedgerSnapshot, daemon: &D, opts: &RefreshOptions, cancel:
+    &CancellationToken, progress: &watch::Sender<RefreshProgress>,
+    diagnostics: &dyn DiagnosticSink) -> Result<ScanResult,
+    Self::Error>` and `type Error: Into<RefreshError>`.
+  - Five-checkpoint cancellation discipline (1 / 4 on the
+    orchestrator; 2 / 3 / 5 on the trait body; checkpoint 5
+    is the per-transaction inner check per §5.4.9 F2 +
+    F11 + F11-S safe-point pins).
+  - `Self::Error` is **unit-variant-only at the trait surface**
+    per §5.4.7 R6 reframe: rich structured diagnostic
+    information flows through the `&dyn DiagnosticSink`
+    second channel; the synchronous return is a structural-
+    branch signal only. Of `RefreshError`'s six variants,
+    three are reachable from a `RefreshEngine` impl's
+    `Self::Error` via `Into` (`Cancelled` unit, `Io(IoError)`,
+    `InternalInvariantViolation { context: &'static str }`);
+    three are orchestrator-constructed only
+    (`MalformedScanResult` at the merge layer;
+    `ConcurrentMutation` at the merge gate; `AlreadyRunning`
+    at binary-layer single-flight).
+  - `ScanResult` atomicity-under-cancellation contract:
+    `produce_scan_result` returns **either** a `ScanResult`
+    covering the full span it scanned **or**
+    `RefreshError::Cancelled` — no partial-span result is
+    ever returned (R7 disposition).
+  - `LedgerSnapshot` is passed **by value** (R5 + §5.4.5):
+    the orchestrator constructs under the engine read-guard,
+    drops the guard, and hands the snapshot to the producer
+    by move; the snapshot carries reorg-window descriptors
+    only and is cheap to clone.
+  - `&D` daemon-handle borrow with the §2.5 `Clone + Send +
+    Sync + 'static` bound on `D`, so implementors can clone
+    internally if they need an owned handle to spawn work
+    (e.g., parallel block-fetch refinements); implementors
+    MUST NOT borrow `&D` across a `tokio::spawn` boundary.
+  - `pub struct ViewMaterial { spend_pub: EdwardsPoint;
+    view_scalar: Zeroizing<Scalar>; x25519_sk: Zeroizing<[u8;
+    32]>; ml_kem_dk: Zeroizing<Vec<u8>>; spend_secret:
+    Zeroizing<[u8; 32]> }` at
+    [`engine/view_material.rs`](../rust/shekyl-engine-core/src/engine/view_material.rs)
+    with `Zeroize + ZeroizeOnDrop` derived; capturing the
+    view-and-spend material at `LocalRefresh::new` so the
+    `Scanner` builds once and is held for the instance
+    lifetime (no per-attempt scanner construction; no
+    per-attempt secret duplication; R4 a-instance-scoped).
+  - The `LocalRefresh` implementor at
+    [`engine/local_refresh.rs`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+    (PR 4 C4 = `ac100e1ab`) is the V3.0 production `R`
+    parameter for `Engine<S, D, L, R>`; future implementors
+    (Stage 4 actor-mesh `RefreshActor`; any future producer
+    variant) implement the same trait surface.
+
+- **Stage 1 PR 4 — `RefreshDiagnostic` enum + `DiagnosticSink`
+  trait + Stage 1 sink implementations** (PR 4 C2 =
+  `8fc207051`; `SuppressedRateLimit` variant per Round 4
+  review pass F6 = same commit). Lands the second channel of
+  the two-channel error / diagnostic actor-mesh seam per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 reframe + §5.4.8 attack-surface dispositions.
+  - `pub enum RefreshDiagnostic` at
+    [`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs)
+    with `#[non_exhaustive]` and the Round-4-audit-confirmed
+    Stage 1 variant set: `DaemonMalformed { kind:
+    MalformedKind }`, `DaemonTimeout { op: DaemonOp, elapsed:
+    Duration }`, `DaemonProtocolError { kind:
+    ProtocolErrorKind }`, `ReorgObserved { fork_height: u64,
+    depth: u32 }`, `ScanProgress { height: u64, candidates:
+    u32 }`, and the Round-4-F6-added `SuppressedRateLimit {
+    class: SuppressedClass }`.
+  - Supporting bounded enums (`MalformedKind`, `DaemonOp`,
+    `ProtocolErrorKind`, `SuppressedClass`), all
+    `#[non_exhaustive]`; `SuppressedClass` carries one arm per
+    rate-limited event class (`DaemonMalformed`,
+    `DaemonTimeout`, `DaemonProtocolError`, `ReorgObserved`,
+    `ScanProgress`). The `SuppressedRateLimit` variant
+    carries *only* `class: SuppressedClass` — no count, no
+    timing, no original-event payload — per the §5.4.8 #5
+    F13-pin closing the suppressed-event-count covert
+    channel back from the producer's internal state.
+  - `pub trait DiagnosticSink: Send + Sync + 'static` with
+    one method `fn emit(&self, event: RefreshDiagnostic)`.
+    Trait-level contract pins (rustdoc): emission is
+    **non-blocking** (extends to **non-blocking under
+    concurrent emission**, foreclosing `Mutex<VecDeque<_>>`-
+    style implementations that re-introduce the producer-
+    liveness hazard at scale); emission/return **coherence**
+    (every non-`Cancelled` `Err` return is preceded by at
+    least one corresponding `RefreshDiagnostic` emission
+    before the error returns, with `AssertionSink`-driven
+    property tests at C7 as the canonical reference per
+    [`19-validation-surface-discipline.mdc`](../.cursor/rules/19-validation-surface-discipline.mdc));
+    **per-emitter FIFO ordering preserved** (the
+    seventh contract pin added by Round 4 review pass F4 =
+    §5.4.6; cross-emitter ordering is undefined); and the
+    in-process-only trust-boundary contract per §5.4.6 /
+    §5.4.8 #4 (full-fidelity `RefreshDiagnostic` consumers
+    MUST live inside the wallet trust boundary recursively;
+    cross-process / network-bound consumers receive only
+    projection types sanitized at the boundary).
+  - `pub struct NoopDiagnosticSink` + `pub struct
+    TracingDiagnosticSink` ship as the Stage 1 sink
+    implementations; `TracingDiagnosticSink::emit` routes
+    **per-class projections** to `tracing::event!` per the
+    Round-4-review-pass F9 audit (variant tag only for
+    `DaemonMalformed` / `DaemonProtocolError` /
+    `SuppressedRateLimit`; bucketed `elapsed` for
+    `DaemonTimeout`; bucketed `depth` for `ReorgObserved`;
+    bucketed `candidates` for `ScanProgress` with `height`
+    elided), not the full `RefreshDiagnostic` `Debug` impl.
+  - All trait + enum surface re-exported flat at the
+    `shekyl_engine_core` crate root per the R3 pattern.
+
 - **Stage 1 PR 4 — C6 no-Mock substrate pass (`RefreshEngine` /
   `LedgerEngine` failure-injection wrappers)**
   (`feat/stage-1-pr4-refresh-engine`, 2026-05-20). Lands the
@@ -116,18 +239,122 @@
     entry (rename chain extended: `MockRpc` → `MockDaemon` →
     `TestDaemon`).
 
-  *Test gates.* `cargo fmt --all -- --check` clean; `cargo clippy
-  -p shekyl-engine-core --all-targets --features test-helpers --
-  -D warnings` clean; `cargo clippy -p shekyl-engine-core
-  --all-targets -- -D warnings` clean (default features);
-  `cargo test -p shekyl-engine-core --lib` 152/152 pass
-  including the migrated hybrid retry test; `cargo check
-  -p shekyl-engine-core` (default + `--features test-helpers` +
-  `--tests` + `--benches` + `--workspace --tests`) all green.
+  *Test gates (post-C6).* `cargo fmt --all -- --check` clean;
+  `cargo clippy -p shekyl-engine-core --all-targets --features
+  test-helpers -- -D warnings` clean; `cargo clippy -p
+  shekyl-engine-core --all-targets -- -D warnings` clean
+  (default features); `cargo test -p shekyl-engine-core --lib`
+  152/152 pass including the migrated hybrid retry test;
+  `cargo check -p shekyl-engine-core` (default + `--features
+  test-helpers` + `--tests` + `--benches` + `--workspace
+  --tests`) all green.
 
-  PR 4 §7.X commits C0 through C6 are now landed; commit C7
-  (hybrid retry test + property tests) and C8 (docs propagation)
-  are the remaining substrate work for PR 4.
+  *C7 — hybrid retry test + property tests
+  (`AssertionSink` / `PanickingSink`)* (commit `c9e65bbc6`):
+  - Refactors `Engine::replace_refresh` at
+    [`engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs)
+    from a `&mut self` setter into a consume-and-rebuild
+    constructor (`fn replace_refresh<R2: RefreshEngine>(self,
+    refresh: R2) -> Engine<S, D, L, R2>`) mirroring the
+    existing `replace_daemon` / `replace_ledger` shape at
+    [`engine/lifecycle.rs`](../rust/shekyl-engine-core/src/engine/lifecycle.rs).
+    The refactor lets the generic `R` type parameter change
+    between construction and replacement so test orchestration
+    can build an `Engine<…, LocalRefresh>` at assemble time
+    and rewire it to `Engine<…, FaultInjecting<LocalRefresh>>`
+    for failure-injection scenarios without going through a
+    `dyn`-erased trait object.
+  - Adds `AssertionSink`, `PanickingSink`, and the
+    `PanickingSinkTrigger` configuration enum to
+    [`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs),
+    all gated `#[cfg(any(test, feature = "test-helpers"))]`
+    per the F-Mock-1 cfg-symmetry pin. `AssertionSink` records
+    emitted `RefreshDiagnostic` events for post-hoc coherence
+    assertions; `PanickingSink` panics on configured trigger
+    events to exercise producer panic-safety.
+  - Adds `proptest = "1"` as a `dev-dependency` in
+    [`rust/shekyl-engine-core/Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+    powering the new producer property tests below.
+  - Adds the hybrid retry test
+    `hybrid_refresh_engine_orchestrator_cancellation_retries`
+    at
+    [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+    that exercises the producer-trait / orchestrator
+    cancellation-checkpoint split end-to-end against the
+    fully-composed `Engine<SoloSigner, TestDaemon,
+    FaultInjecting<LocalLedger>, FaultInjecting<LocalRefresh>>`
+    stack, verifying the orchestrator retries on
+    `ConcurrentMutation` (driven by
+    `FaultInjecting<LocalLedger>::queue_concurrent_mutation`)
+    and surfaces cancellation cleanly when
+    `FaultInjecting<LocalRefresh>` injects
+    `RefreshError::Cancelled`.
+  - Adds the `producer_property_tests` module at
+    [`engine/local_refresh.rs`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+    with five parametric coherence tests, one
+    `proptest!`-driven fuzz test
+    (`coherence_proptest_fuzz_chain_and_injection`) exercising
+    randomized chain length + failure-injection scenarios,
+    four panic-safety tests verifying clean unwind through
+    `PanickingSink` panics across `DaemonMalformed` /
+    `DaemonProtocolError` / `ScanProgress` / `Any` triggers
+    plus a recovery test, and a classifier sanity test. The
+    coherence tests exercise the §5.4.6 emission/return
+    coherence pin: every non-`Cancelled` `RefreshError` is
+    preceded by a corresponding `RefreshDiagnostic` emission.
+    The panic-safety tests verify the §5.4.6 producer-side
+    robustness property: `Scanner` zeroizes cleanly via
+    `Drop` across a panicking `emit`, cancellation-token
+    state remains well-defined, and the refresh attempt
+    fails predictably without corrupting interior state.
+    Tests are deterministic via a compile-time-generated
+    `PROPERTY_TEST_MASTER_SEED` and `#[tokio::test(start_paused
+    = true)]` for fake-time async scheduling.
+
+  *Test gates (post-C7).* `cargo fmt --all -- --check` clean;
+  `cargo clippy -p shekyl-engine-core --all-targets --features
+  test-helpers -- -D warnings` clean; default-feature clippy
+  clean; `cargo test -p shekyl-engine-core --features
+  test-helpers --lib` 170/170 pass (152 → 170: +18 C7 tests);
+  `cargo doc -p shekyl-engine-core --features test-helpers
+  --no-deps` green with no new doc warnings (pre-existing
+  intra-doc-link warnings to private items are baseline and
+  unrelated to C7 changes).
+
+  *C8 — docs propagation* (this commit):
+  - This CHANGELOG entry extended with the C7 sub-section
+    above and the C8 sub-section here.
+  - [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    gains the Phase-1-landed Status-banner closure paragraph
+    enumerating C0–C8 landing SHAs; §7.X gains per-`Commit
+    Cn` `Landed:` lines anchoring each commit's SHA inline
+    next to the design-time prose.
+  - [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §2.3 past-tenses the "Stage 1 surface" header and cross-
+    references the as-landed implementation locators
+    (`engine/traits/refresh.rs`, `engine/diagnostics.rs`,
+    `engine/local_refresh.rs`, `engine/mod.rs`,
+    `engine/fault_injecting_refresh.rs`,
+    `engine/fault_injecting_ledger.rs`) with their commit
+    SHAs (C1 / C2 / C4 / C5a / C6α / C6β).
+  - [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) gains a Phase 0d
+    explicit retirement note ("struck, not deferred") at the
+    top of the V3.x section, distinguishing the Round 2
+    composition reframe's struck-candidate from the live
+    R5 / R6 / R4 (c) V3.x consumer-actor deferrals that
+    remain open per Round 3's prior amendments. The pre-
+    existing closed-entries for Mock-X cleanup
+    (`MockLedger` → `FaultInjecting<LocalLedger>` +
+    `LocalLedger::from_test_blocks` and `MockDaemon` →
+    `TestDaemon`) carry the `[CLOSED 2026-05-20]` marker
+    from C6β / C6γ landing and are unchanged in C8.
+
+  PR 4 §7.X commits C0 through C8 are now all landed; PR 4
+  is ready to open against `dev`. See the separate
+  `### Added` and `### Changed` entries below for the
+  trait-surface and `Engine<S, D, L, R>` four-parameter
+  additions PR 4 ships, per the C8 spec at
+  `STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C8.
 
 - **RandomX v2 — Phase 1: pinned submodule + out-of-tree build wiring**
   (`feat/randomx-v2-phase1`, PR #54, merge commit `c0c4a11e5`,
@@ -1414,6 +1641,73 @@
   passes (the JSON authority extension does not affect existing
   consumers; `shekyl-engine-core/build.rs` continues to read only
   the FCMP/RCT keys it already consumed).
+
+### Changed
+
+- **Stage 1 PR 4 — `Engine` parameterized over `R: RefreshEngine`
+  (fourth type parameter)** (`feat/stage-1-pr4-refresh-engine`,
+  PR 4 C5a = `553d70139`; default `R = LocalRefresh` per the
+  Round 4 turnkey-default discipline). `Engine<S: Signer>`
+  becomes `Engine<S: Signer, D: DaemonEngine = DaemonClient, L:
+  LedgerEngine = LocalLedger, R: RefreshEngine = LocalRefresh>`
+  at
+  [`engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs).
+  The orchestrator retry loop in
+  [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  migrates from a free-function `produce_scan_result(...)` to
+  trait dispatch on `R` via `self.refresh.produce_scan_result(...)`
+  per PR 4 C5 = `7140f726a`; the legacy producer scaffolding
+  (`produce_scan_result` free function + `ProduceError` +
+  `ProgressEmitter` + duplicated helpers + constants) is deleted
+  from `engine/refresh.rs` per PR 4 C5β = `b6a1274de`. The new
+  `Engine::replace_refresh` test-only constructor (consume-and-
+  rebuild; refactored at PR 4 C7 = `c9e65bbc6` from its initial
+  `&mut self` setter form per PR 4 C6α = `e9310542a`) lets the
+  `R` type parameter change between construction and replacement
+  so test orchestration can build the engine with `LocalRefresh`
+  at assemble time and rewire to `FaultInjecting<LocalRefresh>`
+  for failure-injection scenarios. `ViewMaterial::try_from_keys`
+  at
+  [`engine/view_material.rs`](../rust/shekyl-engine-core/src/engine/view_material.rs)
+  derives the trait-required view-and-spend material from the
+  `KeyEngine` at engine-assemble time, populating the
+  `LocalRefresh` constructor argument. Crate-level public APIs
+  consuming the engine type alias (`Wallet`,
+  `WalletWithLedger<L>` test helpers, `RefreshHandle`, the
+  benchmark fixtures) thread the additional type parameters
+  forward with appropriate defaults; no consumer outside the
+  `shekyl-engine-core` crate is required to name `R`
+  explicitly under the default-parameter discipline.
+
+- **Stage 1 PR 4 — `RefreshError::InternalInvariantViolation
+  { context: &'static str }` variant addition** (PR 4 C3 =
+  `c45894ffe`; Phase 0c amendment per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 close-out). Resolves the Round 2 R6 "(a) extend
+  `ConcurrentMutation` or (b) introduce
+  `InternalInvariantViolation`" cleanup pin at the design layer.
+  Disposition (b): conflating "wallet under sustained merge
+  contention" and "wallet hit an internal bug" into
+  `ConcurrentMutation` would deny downstream consumers
+  (`PeerReputationActor`, telemetry, user-facing error surface)
+  the structural distinction they need to respond correctly.
+  The retry-loop call sites in
+  [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  (per PR 4 C5 = `7140f726a`) and the `RefreshHandle::join`
+  dropped-sender site surface state-machine invariant
+  violations as `InternalInvariantViolation { context }` with
+  compile-time-fixed developer content; `&'static str` is
+  appropriate at the orchestrator-internal site because the
+  field carries no attacker-influenced data (the memory-
+  amplifier and log-exfiltration vectors the producer-trait
+  unit-variant discipline closes do not apply here). The
+  variant is one of three `RefreshError` variants reachable
+  from a `RefreshEngine` impl's `Self::Error` via `Into`
+  (alongside `Cancelled` unit and `Io(IoError)`); the other
+  three variants (`MalformedScanResult`, `ConcurrentMutation`,
+  `AlreadyRunning`) are orchestrator-constructed only per
+  the §6.1.1 two-enum architecture pin and the
+  F-Mock-3-sharpening trait-reachable-variant enumeration.
 
 ### Removed
 

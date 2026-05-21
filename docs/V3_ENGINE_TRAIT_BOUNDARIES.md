@@ -1215,9 +1215,28 @@ inner check inside the per-block scan loop, per
 §5.4.9 F2 / F11 / F11-S) is named on the trait surface below and
 in §7 invariant 4.
 
-**Stage 1 surface (Phase 0a binding form per
+**Stage 1 surface (landed via PR 4 §7.X commits C0–C8 on
+`feat/stage-1-pr4-refresh-engine`; the Phase 0a binding form per
 [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-§4).**
+§4 below is the as-shipped trait).** The trait is declared at
+[`engine/traits/refresh.rs`](../rust/shekyl-engine-core/src/engine/traits/refresh.rs)
+(commit `d3edc1abb`, PR 4 C1); the supporting
+`RefreshDiagnostic` + `DiagnosticSink` substrate at
+[`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs)
+(commit `8fc207051`, PR 4 C2); the `LocalRefresh` implementor at
+[`engine/local_refresh.rs`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+(commit `ac100e1ab`, PR 4 C4); the `Engine<S, D, L, R>`
+four-parameter wiring at
+[`engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs)
+(commit `553d70139`, PR 4 C5a); and the
+`FaultInjecting<R: RefreshEngine>` + `FaultInjecting<L: LedgerEngine>`
+test-substrate wrappers at
+[`engine/fault_injecting_refresh.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs)
+(commit `e9310542a`, PR 4 C6α) and
+[`engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs)
+(commit `e94526dec`, PR 4 C6β). The PR 4 §7.X commit list and
+per-commit landing-SHA cross-references are in that doc's §7.X
+header. The trait as declared:
 
 ```rust
 pub trait RefreshEngine: Send + Sync + 'static {
