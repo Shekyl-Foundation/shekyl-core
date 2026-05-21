@@ -204,11 +204,14 @@ pub fn make_bench_wallet() -> BenchWalletKeys {
     .expect("ED25519_BASEPOINT_POINT is torsion-free by definition");
 
     // Spend-key secret: arbitrary 32-byte value. The bench fixture
-    // builders below set the on-chain `recovered_b` to the basepoint
-    // (via `fake_spend_key_bytes()`), which doesn't match this secret,
-    // so post-recovery ownership lookup misses and key-image
-    // computation never runs. Keeping a real-shaped `Zeroizing` here
-    // mirrors the production `Scanner::new` API.
+    // builders below set the on-chain spend point to `2 * G` (via
+    // `fake_spend_key_bytes()`, deliberately distinct from the bench
+    // wallet's registered spend point `G` — see that function's
+    // rustdoc for the rationale), so the recovered `B'` during
+    // scanning equals `2 * G` and misses the subaddress-table key
+    // `G`. Ownership lookup misses by construction and key-image
+    // computation never runs. Keeping a real-shaped `Zeroizing`
+    // here mirrors the production `Scanner::new` API.
     let spend_secret: SpendSecret = Zeroizing::new([0x11u8; 32]);
 
     BenchWalletKeys {
@@ -219,32 +222,36 @@ pub fn make_bench_wallet() -> BenchWalletKeys {
 }
 
 /// Construct the on-chain spend-key bytes used as the `spend_key`
-/// argument to [`construct_output`] in fixture construction. Choosing
-/// [`ED25519_BASEPOINT_POINT`] (torsion-free, non-default) satisfies
-/// [`construct_output`]'s preconditions and makes the recovered `B'`
-/// during scanning equal to the basepoint — which does **not** match
-/// the bench wallet's registered spend point (also the basepoint, but
-/// stored under a different `CompressedPoint` map key wrapper —
-/// actually they ARE equal, see below), so the subaddress lookup
-/// outcome depends on the wallet's registered point.
+/// argument to [`construct_output`] in fixture construction.
 ///
-/// **Why this still produces ownership-miss in the worst-case fixture:**
-/// In [`make_bench_wallet`] the wallet's spend point is set to
-/// [`ED25519_BASEPOINT_POINT`] for [`ViewPair`] construction
-/// (satisfying torsion-free). The scanner's subaddress table is
-/// keyed on that exact point. If we used the basepoint as the
-/// fake-spend-key here too, the recovered `B'` would match and
-/// ownership lookup would succeed — defeating the worst-case
-/// classification (the cost would include post-recovery key-image
-/// computation, which the adversarial-daemon threat model cannot
-/// force). To guarantee ownership miss, we use a *different*
-/// torsion-free point: `2 * G` (twice the basepoint).
+/// Returns `(2 * G).compress().to_bytes()`. The choice of `2 * G` is
+/// load-bearing for the worst-case fixture's classification:
+///
+/// - **Torsion-free.** As a sum of two torsion-free points, `2 * G`
+///   is itself torsion-free and so satisfies [`construct_output`]'s
+///   precondition on the spend point.
+/// - **Non-default.** Not the curve identity, so it is a valid
+///   spend point shape.
+/// - **Distinct from the bench wallet's registered spend point.**
+///   [`make_bench_wallet`] registers the spend point as
+///   [`ED25519_BASEPOINT_POINT`] (`G`) for [`ViewPair`]
+///   construction. The scanner's subaddress table is keyed on that
+///   exact point. Returning `G` here would make the recovered `B'`
+///   during scanning match the registered key, ownership lookup
+///   would succeed, and the cost would include post-recovery
+///   key-image computation — **defeating the worst-case
+///   classification** (which the adversarial-daemon threat model
+///   cannot force). `2 * G` guarantees ownership-miss: the
+///   recovered `B'` equals `2 * G`, which is not present in the
+///   subaddress-table keyed on `G`.
+///
+/// The result is that every per-output decap in the worst-case
+/// fixture runs the full slow path (view-tag match → KEM decap →
+/// shared-secret derive → recovered-`B'` compute) and exits at the
+/// subaddress-lookup miss, with no key-image computation. This is
+/// exactly the cost shape F11-S binds against per
+/// `STAGE_1_PR_4_REFRESH_ENGINE.md` §3.1 / §5.4.9.
 fn fake_spend_key_bytes() -> [u8; 32] {
-    // 2 * G — torsion-free (sum of two torsion-free points), non-
-    // default (not the identity), and distinct from the bench
-    // wallet's registered spend point (which is `G` per
-    // `make_bench_wallet`). The recovered `B'` during scanning will
-    // equal `2 * G`, missing the subaddress-table key `G`.
     let two_g = ED25519_BASEPOINT_POINT + ED25519_BASEPOINT_POINT;
     two_g.compress().to_bytes()
 }
