@@ -608,13 +608,31 @@ impl InternalScanner {
 
     fn scan(&mut self, block: ScannableBlock) -> Result<Timelocked, ScanError> {
         // Delegate to the cancellable variant with a never-cancelling
-        // closure. Same unreachable-Cancelled mapping discipline as
-        // `scan_transaction_with_cancel`: closure-invariant proves
-        // the branch is unreachable; we surface an empty `Timelocked`
-        // instead of `unreachable!()` to keep the function panic-free.
+        // closure. Closure-invariant: `|| false` is the only closure
+        // the inner call tree ever sees on this path, so every
+        // `is_cancelled()` consultation (outer per-tx loop entry +
+        // inner per-output iter-0 check) returns `false` and the
+        // `Cancelled` variant is by construction unreachable.
+        //
+        // The `Cancelled` arm is intentionally NOT `unreachable!()` —
+        // production builds keep the function panic-free, surfacing
+        // an empty `Timelocked` if the invariant were ever violated.
+        // The `debug_assert!(false, …)` catches the violation in
+        // tests / debug builds so a future regression (e.g., a
+        // refactor that threads a different closure through this
+        // path) is surfaced immediately instead of silently masking
+        // a logic error behind the empty-result fallback.
         match self.scan_with_cancel(block, &mut || false)? {
             ScanOutcome::Completed(t) => Ok(t),
-            ScanOutcome::Cancelled => Ok(Timelocked(Vec::new())),
+            ScanOutcome::Cancelled => {
+                debug_assert!(
+                    false,
+                    "InternalScanner::scan: never-cancelling closure (|| false) \
+                     cannot produce ScanOutcome::Cancelled; reaching this arm \
+                     indicates a logic error in the cancellation dispatch path"
+                );
+                Ok(Timelocked(Vec::new()))
+            }
         }
     }
 
