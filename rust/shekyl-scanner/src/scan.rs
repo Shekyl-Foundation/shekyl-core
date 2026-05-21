@@ -652,16 +652,40 @@ impl InternalScanner {
             txs_with_hashes.push((*hash, tx));
         }
 
-        // Per-tx safe-point semantics are subsumed by the per-output
-        // check at iter 0 inside `scan_transaction_with_cancel` — the
-        // cancellation check fires at the top of every per-output
-        // iteration including iter 0, which is by construction the
-        // between-transactions boundary at the start of each tx's
-        // per-output loop. No additional per-tx-loop-body check is
-        // needed at this layer; routing the closure through to the
-        // inner helper is sufficient for the F11-S binding.
+        // §5.4.9 F11-S per-tx safe-point check at the
+        // between-transactions boundary. This is the F11-S
+        // checkpoint as defined in `shekyl-engine-core`'s
+        // `engine::traits::refresh::RefreshEngine` trait rustdoc
+        // (cancellation checkpoint 5): "between per-transaction
+        // iterations, after the prior iteration's `Zeroizing<…>`
+        // drops, before the next iteration's first secret
+        // derivation". The inner
+        // `scan_transaction_with_cancel`'s per-output check
+        // (iter 0) is necessary but not sufficient on its own —
+        // for transactions where the per-output loop never runs
+        // (zero outputs; `tx.version() != 2`; malformed `extra`;
+        // oversized per the defense-in-depth size gate) the
+        // inner check is bypassed by the early-return paths
+        // before any per-output iteration. Without this outer
+        // check, cancellation could be deferred by N_txs ×
+        // O(1)-per-tx-skip cost rather than bounded at a single
+        // tx-entry's cost.
+        //
+        // On hit: return `ScanOutcome::Cancelled` per §5.4.7 R7;
+        // any partial block-scan `res` accumulated so far is
+        // discarded at function return.
+        //
+        // The inner per-output check is preserved unchanged: it
+        // delivers the F11-S binding's intra-tx safe-point
+        // granularity (each `scan_output_recover` call is its
+        // own checkpoint), while this outer check delivers the
+        // inter-tx safe-point regardless of whether the inner
+        // loop runs.
         let mut res = Timelocked(vec![]);
         for (hash, tx) in txs_with_hashes {
+            if is_cancelled() {
+                return Ok(ScanOutcome::Cancelled);
+            }
             match self.scan_transaction_with_cancel(
                 output_index_for_first_ringct_output,
                 hash,
@@ -1024,14 +1048,23 @@ mod gate_tests {
 /// whether any output decodes — the closure call cadence is what
 /// these tests assert.
 ///
-/// Tests cover three axes:
+/// Tests cover four axes:
 ///
 /// - **Per-output cadence:** closure called once per per-output
 ///   iteration; cancellation hit on the N-th call returns
 ///   [`ScanOutcome::Cancelled`] after exactly N calls.
-/// - **Per-tx boundary (= iter 0):** cancellation between two
-///   transactions in the same block surfaces as [`ScanOutcome::Cancelled`]
-///   without invoking the next transaction's per-output body.
+/// - **Per-tx boundary inside `scan_transaction_with_cancel` (=
+///   iter 0):** when the per-output loop runs, iter 0's check
+///   doubles as the between-transactions safe-point for the
+///   tx-with-outputs case.
+/// - **Per-tx boundary inside `scan_with_cancel` (outer loop):**
+///   the outer per-tx loop's body has its own
+///   `is_cancelled()` check before delegating to the inner
+///   helper. This delivers the F11-S between-tx safe-point even
+///   when the inner per-output loop never runs (zero outputs,
+///   `tx.version() != 2`, malformed `extra`, or oversized per
+///   the defense-in-depth size gate); without it cancellation
+///   could be deferred by `N_txs × O(1)-per-tx-skip` cost.
 /// - **Never-cancels equivalence:** a closure that returns
 ///   `false` unconditionally produces a [`ScanOutcome::Completed`]
 ///   whose [`Timelocked`] equals [`Scanner::scan`]'s return for
@@ -1199,6 +1232,90 @@ mod cancel_tests {
             *counter.lock().expect("call-count mutex poisoned"),
             1,
             "cancel-on-iter-0 invokes the closure exactly once and returns immediately"
+        );
+    }
+
+    /// Regression test for the F11-S per-tx safe-point pin at the
+    /// outer `scan_with_cancel` per-tx loop.
+    ///
+    /// Build a `ScannableBlock` consisting of a miner-only block
+    /// (V2 miner-tx with `Input::Gen(0)` and no outputs; no
+    /// additional non-miner transactions). With this shape, the
+    /// inner `scan_transaction_with_cancel`'s per-output loop
+    /// runs zero iterations for the miner tx — so the inner
+    /// per-output cancellation check would never fire. The
+    /// outer per-tx-loop entry check (added in
+    /// `scan_with_cancel`) is the only path that can deliver
+    /// cancellation here.
+    ///
+    /// With a cancel-on-1st-call closure:
+    ///
+    /// - **Before the per-tx-loop entry check:** outer loop
+    ///   delegates straight to the inner helper, which
+    ///   early-returns `Completed(empty)` without invoking the
+    ///   closure; outer returns `Completed(empty)` and the
+    ///   closure call count is 0. F11-S binding's
+    ///   "between-tx" safe-point is silently bypassed.
+    /// - **After the per-tx-loop entry check:** outer loop's
+    ///   `is_cancelled()` fires on the 1st call and returns
+    ///   `Cancelled` immediately; closure call count is exactly
+    ///   1.
+    ///
+    /// The test asserts the post-fix behavior; under the
+    /// pre-fix shape it would fail with `Completed` and
+    /// `count == 0`. Closes the F11-S binding gap surfaced as
+    /// Copilot PR #60 review comment 3278452877.
+    #[test]
+    fn outer_per_tx_loop_cancellation_fires_for_zero_output_tx() {
+        use shekyl_oxide::block::{Block, BlockHeader};
+
+        let pair = ViewPair::new(
+            ED25519_BASEPOINT_POINT,
+            Zeroizing::new(Scalar::ONE),
+            Zeroizing::new([0u8; 32]),
+            Zeroizing::new(Vec::new()),
+        )
+        .expect("basepoint is torsion-free");
+        let mut scanner = InternalScanner::new(pair, Zeroizing::new([0u8; 32]));
+
+        let header = BlockHeader {
+            hardfork_version: 1,
+            hardfork_signal: 0,
+            timestamp: 0,
+            previous: [0u8; 32],
+            nonce: 0,
+        };
+        let miner_tx: Transaction<shekyl_oxide::transaction::NotPruned> = Transaction::V2 {
+            prefix: TransactionPrefix {
+                additional_timelock: Timelock::None,
+                inputs: vec![Input::Gen(0)],
+                outputs: vec![],
+                extra: vec![],
+            },
+            proofs: None,
+        };
+        let block = Block::new(header, miner_tx, vec![])
+            .expect("Block::new accepts a V2 miner-tx + zero additional tx hashes");
+        let scannable = ScannableBlock {
+            block,
+            transactions: vec![],
+            output_index_for_first_ringct_output: Some(0),
+        };
+
+        let (mut closure, counter) = cancel_on_nth_call(1);
+        let outcome = scanner
+            .scan_with_cancel(scannable, &mut closure)
+            .expect("structurally valid miner-only block scans without ScanError");
+
+        assert!(
+            matches!(outcome, ScanOutcome::Cancelled),
+            "outer per-tx-loop check must deliver Cancelled on a miner-only block; \
+             pre-fix shape returned Completed(empty) here"
+        );
+        assert_eq!(
+            *counter.lock().expect("call-count mutex poisoned"),
+            1,
+            "outer per-tx-loop check fires exactly once before delegating to the inner helper"
         );
     }
 
