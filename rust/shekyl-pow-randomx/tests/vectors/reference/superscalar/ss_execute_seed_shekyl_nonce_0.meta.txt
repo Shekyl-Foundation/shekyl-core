@@ -1,0 +1,58 @@
+SuperscalarHash execution vector — ss_execute_seed_shekyl_nonce_0.bin
+=====================================================================
+
+Spec attestation
+----------------
+Cross-checks shekyl-pow-randomx's `superscalar::execute_superscalar`
+(spec §7.3 step 5) against the v2 RandomX fork's
+`randomx::executeSuperscalar`. Layer B vector paired with Layer A
+program `ss_program_seed_shekyl_nonce_0.bin` (the seed-derivation
+isolation program). See `ss_execute_seed_empty_nonce_0.meta.txt`
+for the Layer B vector rationale; this vector exercises the same
+execution path against the third Layer A program.
+
+This vector is byte-identical to `ss_combined_seed_shekyl_nonce_0.bin`
+by construction. The two files are tested through different code
+paths on the Rust side: the Layer B test (`ss_execute_*`) loads the
+serialized program from `.bin` and runs `execute_superscalar` against
+it; the combined test (`ss_combined_*`) regenerates the program
+locally via `generate_superscalar` and then executes. A divergence
+between the two on the Rust side would indicate the wire-format
+round-trip is lossy, which the Layer A tests already catch
+independently.
+
+Inputs (hardcoded in `_generator/gen.cpp`)
+------------------------------------------
+program = Layer A vector `ss_program_seed_shekyl_nonce_0.bin`
+input_r = [0, 1, 2, 3, 4, 5, 6, 7]  — same as exec_v1 by intent
+
+Output layout
+-------------
+64 bytes = `r[8]` after `executeSuperscalar(r, prog)`, each register
+written as little-endian `u64`.
+
+Generator
+---------
+source      = ./_generator/gen.cpp
+build       = ./_generator/Makefile (`make gen`)
+command     = ./gen exec_v3
+output_size = 64 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/superscalar.cpp,
+              src/blake2_generator.cpp,
+              src/instructions_portable.cpp,
+              src/reciprocal.c,
+              src/blake2/blake2b.c
+function    = randomx::executeSuperscalar(int_reg_t (&r)[8],
+                                          SuperscalarProgram& prog,
+                                          std::vector<uint64_t>* reciprocals = nullptr)
+
+Phase
+-----
+Phase 2b (`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §5.4 / F4, §7
+commit 5) — Layer B execution parity for the seed-derivation
+isolation tuple's program.

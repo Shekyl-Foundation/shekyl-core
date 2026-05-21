@@ -1,0 +1,54 @@
+SuperscalarHash program serialization vector — ss_program_seed_empty_nonce_1.bin
+================================================================================
+
+Spec attestation
+----------------
+Layer A nonce-mixing isolation vector in the F4 structured 3-vector
+decomposition per `docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §5.4.
+Shares the (empty) seed with `ss_program_seed_empty_nonce_0.bin`
+and differs only in nonce. A test that asserts this byte-for-byte
+against `generate_superscalar(Blake2Generator::new(&[], 1))`
+isolates the Blake2Generator's nonce-mixing path: a divergence
+here while the empty-seed/nonce=0 vector passes attributes the
+failure to nonce handling specifically (not seed initialization,
+not the downstream port-assign / instruction-selection pipeline).
+
+Inputs (hardcoded in `_generator/gen.cpp`)
+------------------------------------------
+seed   = (nullptr, size=0)  — same as vector 1 by intent
+nonce  = 1                  — differs from vector 1 by exactly the
+                              nonce-mixing surface
+
+Output layout
+-------------
+Serialized SuperscalarProgram in the canonical wire format
+documented at `_generator/README.md` "Wire format" + on the Rust
+side at `src/superscalar.rs`'s `superscalar_vector_format` module
+rustdoc. Total bytes for this vector: 3640 = 8 header + 8 * 454
+instructions.
+
+Generator
+---------
+source      = ./_generator/gen.cpp
+build       = ./_generator/Makefile (`make gen`)
+command     = ./gen prog_v2
+output_size = 3640 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/superscalar.cpp,
+              src/blake2_generator.cpp,
+              src/instructions_portable.cpp,
+              src/reciprocal.c,
+              src/blake2/blake2b.c
+function    = randomx::generateSuperscalar(SuperscalarProgram&,
+                                           Blake2Generator&)
+
+Phase
+-----
+Phase 2b (`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §5.4 / F4, §7
+commit 5) — Layer A program parity for the nonce-mixing isolation
+tuple. The Rust-side test name encodes the failure-mode
+attribution (`vector_2_tests_nonce_mixing_only`).

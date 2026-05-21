@@ -1,0 +1,55 @@
+SuperscalarHash program serialization vector — ss_program_seed_shekyl_nonce_0.bin
+=================================================================================
+
+Spec attestation
+----------------
+Layer A seed-derivation isolation vector in the F4 structured
+3-vector decomposition per `docs/design/RANDOMX_V2_PHASE2B_PLAN.md`
+§5.4. Shares `nonce=0` with `ss_program_seed_empty_nonce_0.bin`
+and differs only in the seed. A test that asserts this byte-for-byte
+against `generate_superscalar(Blake2Generator::new(b"shekyl-ss-test", 0))`
+isolates the Blake2Generator's seed-initialization and seed-byte-
+consumption paths: a divergence here while the empty-seed vector
+passes attributes the failure to seed handling specifically.
+
+Inputs (hardcoded in `_generator/gen.cpp`)
+------------------------------------------
+seed   = b"shekyl-ss-test"  — 14 ASCII bytes; arbitrary but distinct
+                              from the empty seed, exercising both
+                              the seed-pointer-non-null branch and a
+                              non-trivial Blake2Generator data fill
+nonce  = 0                   — same as vector 1 by intent
+
+Output layout
+-------------
+Serialized SuperscalarProgram in the canonical wire format
+documented at `_generator/README.md` "Wire format" + on the Rust
+side at `src/superscalar.rs`'s `superscalar_vector_format` module
+rustdoc. Total bytes for this vector: 3536 = 8 header + 8 * 441
+instructions.
+
+Generator
+---------
+source      = ./_generator/gen.cpp
+build       = ./_generator/Makefile (`make gen`)
+command     = ./gen prog_v3
+output_size = 3536 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/superscalar.cpp,
+              src/blake2_generator.cpp,
+              src/instructions_portable.cpp,
+              src/reciprocal.c,
+              src/blake2/blake2b.c
+function    = randomx::generateSuperscalar(SuperscalarProgram&,
+                                           Blake2Generator&)
+
+Phase
+-----
+Phase 2b (`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §5.4 / F4, §7
+commit 5) — Layer A program parity for the seed-derivation isolation
+tuple. The Rust-side test name encodes the failure-mode attribution
+(`vector_3_tests_seed_derivation_only`).

@@ -18,14 +18,39 @@
 //! - [`execute_superscalar`] — execute a previously-generated program
 //!   over an `[u64; 8]` register file.
 //!
-//! # Scope at this commit (Phase 2b commit 3)
+//! # Scope at this commit (Phase 2b commit 5)
 //!
-//! Lands the program-generator and executor; smoke tests on a single
-//! fixed `(seed, nonce)`. Byte-for-byte parity tests against
-//! `superscalar.cpp` (Layer A program serialization × 3 + Layer B
-//! execution × 3 + combined per the F4 decomposition in
+//! Commit 3 landed the program-generator and executor plus structural
+//! smoke tests on a single fixed `(seed, nonce)`. Commit 5 adds the
+//! byte-for-byte spec-vector parity tests against `superscalar.cpp`
+//! at fork pin `aaafe71`: Layer A program serialization × 3 + Layer B
+//! execution × 3 + combined end-to-end attestation, per the F4
+//! structured 3-vector decomposition in
 //! [`RANDOMX_V2_PHASE2B_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2B_PLAN.md)
-//! §5.4) land in commit 5.
+//! §5.4.
+//!
+//! The 7 reference vectors live under
+//! [`tests/vectors/reference/superscalar/`] with `.meta.txt`
+//! provenance headers; the C++ generator that produced them lives at
+//! [`tests/vectors/reference/superscalar/_generator/`] and is
+//! reviewer-runnable per its `README.md`. The Rust tests consume the
+//! pre-committed `.bin` bytes via `include_bytes!`, so `cargo test`
+//! has no dev-dep on the C library (Phase 2g's live differential
+//! harness is the separate artifact).
+//!
+//! **Failure-mode attribution.** The Layer A vectors share the
+//! `(seed=empty, nonce=*)` axis (vectors 1+2) and the `(*, nonce=0)`
+//! axis (vectors 1+3); a divergence on only vector 2 attributes to
+//! Blake2Generator nonce handling, on only vector 3 attributes to
+//! seed initialization, on both 2 and 3 attributes to the downstream
+//! port-assign / instruction-selection pipeline. Layer B decouples
+//! generation parity from execution parity; the combined vector tests
+//! the full generate→execute pipeline without intermediate
+//! serialization (the spec-attestation reference downstream consumers
+//! verify against).
+//!
+//! [`tests/vectors/reference/superscalar/`]: ../../tests/vectors/reference/superscalar/
+//! [`tests/vectors/reference/superscalar/_generator/`]: ../../tests/vectors/reference/superscalar/_generator/
 //!
 //! # Spec / C reference
 //!
@@ -1312,7 +1337,11 @@ pub(crate) fn generate_superscalar(gen: &mut Blake2Generator) -> SuperscalarProg
             // If this macro-op writes the result, update register
             // info.
             if current.info.result_op == Some(macro_op_index_u8) {
-                let dst = usize::from(current.dst.expect("dst assigned before result_op macro-op"));
+                let dst = usize::from(
+                    current
+                        .dst
+                        .expect("dst assigned before result_op macro-op"),
+                );
                 registers[dst].latency = dep_cycle;
                 registers[dst].last_op_group = current.op_group;
                 registers[dst].last_op_par = current.op_group_par;
@@ -1408,7 +1437,8 @@ pub(crate) fn execute_superscalar(
             Sit::IXorR => registers[dst] ^= registers[src],
             Sit::IAddRs => {
                 let shift = instr.mod_shift();
-                registers[dst] = registers[dst].wrapping_add(registers[src].wrapping_shl(shift));
+                registers[dst] =
+                    registers[dst].wrapping_add(registers[src].wrapping_shl(shift));
             }
             Sit::IMulR => registers[dst] = registers[dst].wrapping_mul(registers[src]),
             Sit::IRorC => registers[dst] = registers[dst].rotate_right(instr.imm32 % 64),
@@ -1515,10 +1545,7 @@ mod tests {
         assert_eq!(randomx_reciprocal(33), 17_887_751_829_051_686_415);
         assert_eq!(randomx_reciprocal(65537), 18_446_462_603_027_742_720);
         assert_eq!(randomx_reciprocal(15_000_001), 10_316_166_306_300_415_204);
-        assert_eq!(
-            randomx_reciprocal(3_845_182_035),
-            10_302_264_209_224_146_340
-        );
+        assert_eq!(randomx_reciprocal(3_845_182_035), 10_302_264_209_224_146_340);
         assert_eq!(randomx_reciprocal(0xffff_ffff), 9_223_372_039_002_259_456);
     }
 
@@ -1644,10 +1671,7 @@ mod tests {
         let n = p1.size().min(p2.size()).min(16);
         assert!(n > 0);
         let diff = (0..n).any(|i| p1.instructions()[i] != p2.instructions()[i]);
-        assert!(
-            diff,
-            "two distinct seeds produced identical instruction prefixes"
-        );
+        assert!(diff, "two distinct seeds produced identical instruction prefixes");
     }
 
     #[test]
@@ -1659,9 +1683,241 @@ mod tests {
         let n = p1.size().min(p2.size()).min(16);
         assert!(n > 0);
         let diff = (0..n).any(|i| p1.instructions()[i] != p2.instructions()[i]);
-        assert!(
-            diff,
-            "two distinct nonces produced identical instruction prefixes"
+        assert!(diff, "two distinct nonces produced identical instruction prefixes");
+    }
+
+    // ============================================================
+    // Spec-vector parity tests (Phase 2b commit 5)
+    // ============================================================
+    //
+    // Byte-for-byte parity against the v2 RandomX fork's reference
+    // (`external/randomx-v2/`, pin `aaafe71`) per
+    // `docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §5.4 (F4 structured
+    // 3-vector decomposition). The `.bin` reference vectors live
+    // under `tests/vectors/reference/superscalar/` and are
+    // reproducible via `tests/vectors/reference/superscalar/_generator/`
+    // (see that directory's `README.md` for the build / regeneration
+    // procedure).
+    //
+    // The wire format for serialized programs is documented in
+    // `_generator/README.md` "Wire format" and is reproduced here in
+    // the [`serialize_program`] / [`deserialize_program`] helpers.
+    // The format is intentionally fixed-cost-per-instruction (8 bytes,
+    // mirroring `SuperscalarInstruction`'s declared layout) so any
+    // cross-component disagreement on instruction encoding surfaces
+    // as a byte diff at a predictable offset rather than as an opaque
+    // hash mismatch.
+
+    /// Fixed Layer B input applied to all three generated programs.
+    /// Mirrors `_generator/gen.cpp`'s `r[8] = {0, 1, 2, 3, 4, 5, 6, 7}`
+    /// initialization at the `emit_layer_b` call site.
+    const LAYER_B_INPUT_R: [u64; REGISTERS_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7];
+
+    /// Wire-format magic for a serialized [`SuperscalarProgram`]. ASCII
+    /// "SSP1" pins the format version; any future drift (e.g., metadata
+    /// expansion) is caught at the deserializer's assertion site.
+    const SSP_MAGIC: &[u8; 4] = b"SSP1";
+
+    /// Serialize a program in the canonical wire format. Used by Layer
+    /// A tests to compare against the committed `.bin` bytes.
+    fn serialize_program(prog: &SuperscalarProgram) -> Vec<u8> {
+        let size = prog.size();
+        assert!(size <= SUPERSCALAR_MAX_SIZE);
+        let size_u16 = u16::try_from(size).expect("size fits in u16");
+        let mut buf = Vec::with_capacity(8 + size * 8);
+        buf.extend_from_slice(SSP_MAGIC);
+        buf.extend_from_slice(&size_u16.to_le_bytes());
+        buf.push(prog.address_register());
+        buf.push(0); // reserved
+        for instr in prog.instructions() {
+            buf.push(instr.opcode);
+            buf.push(instr.dst);
+            buf.push(instr.src);
+            buf.push(instr.mod_);
+            buf.extend_from_slice(&instr.imm32.to_le_bytes());
+        }
+        buf
+    }
+
+    /// Parse the canonical wire format into a [`SuperscalarProgram`].
+    /// Used by Layer B tests to decouple "did we generate the right
+    /// program?" (Layer A) from "did we execute correctly?" (Layer B).
+    fn deserialize_program(bytes: &[u8]) -> SuperscalarProgram {
+        assert!(bytes.len() >= 8, "wire format header is 8 bytes");
+        assert_eq!(&bytes[0..4], SSP_MAGIC, "wire-format magic mismatch");
+        let size = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+        assert!(size <= SUPERSCALAR_MAX_SIZE, "size exceeds SUPERSCALAR_MAX_SIZE");
+        let addr_reg = bytes[6];
+        assert!(addr_reg < REGISTERS_COUNT_U8, "address register out of range");
+        assert_eq!(bytes[7], 0, "reserved byte must be 0x00");
+        let body_len = size * 8;
+        assert_eq!(bytes.len(), 8 + body_len, "wire-format body length mismatch");
+
+        let mut prog = SuperscalarProgram::new();
+        prog.size = size;
+        prog.address_register = addr_reg;
+        for i in 0..size {
+            let off = 8 + i * 8;
+            prog.instructions[i] = SuperscalarInstruction {
+                opcode: bytes[off],
+                dst: bytes[off + 1],
+                src: bytes[off + 2],
+                mod_: bytes[off + 3],
+                imm32: u32::from_le_bytes([
+                    bytes[off + 4],
+                    bytes[off + 5],
+                    bytes[off + 6],
+                    bytes[off + 7],
+                ]),
+            };
+        }
+        prog
+    }
+
+    /// Decode a Layer B / combined 64-byte register dump.
+    fn decode_register_output(bytes: &[u8]) -> [u64; REGISTERS_COUNT] {
+        assert_eq!(bytes.len(), 64, "register output is 8 * u64 LE");
+        let mut r = [0u64; REGISTERS_COUNT];
+        for (i, slot) in r.iter_mut().enumerate() {
+            let off = i * 8;
+            *slot = u64::from_le_bytes([
+                bytes[off],
+                bytes[off + 1],
+                bytes[off + 2],
+                bytes[off + 3],
+                bytes[off + 4],
+                bytes[off + 5],
+                bytes[off + 6],
+                bytes[off + 7],
+            ]);
+        }
+        r
+    }
+
+    // ---- Layer A: program-serialization parity ----
+
+    #[test]
+    fn vector_1_layer_a_baseline_determinism() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/superscalar/ss_program_seed_empty_nonce_0.bin");
+        let mut gen = Blake2Generator::new(&[], 0);
+        let prog = generate_superscalar(&mut gen);
+        let actual = serialize_program(&prog);
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "Layer A baseline (seed=empty, nonce=0) diverges from reference",
+        );
+    }
+
+    #[test]
+    fn vector_2_layer_a_tests_nonce_mixing_only() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/superscalar/ss_program_seed_empty_nonce_1.bin");
+        let mut gen = Blake2Generator::new(&[], 1);
+        let prog = generate_superscalar(&mut gen);
+        let actual = serialize_program(&prog);
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "Layer A nonce-mixing isolation (seed=empty, nonce=1) diverges from reference; \
+             if vector 1 also fails, the bug is downstream of RNG; if only this fails, \
+             the bug is in Blake2Generator nonce handling",
+        );
+    }
+
+    #[test]
+    fn vector_3_layer_a_tests_seed_derivation_only() {
+        let expected: &[u8] = include_bytes!(
+            "../tests/vectors/reference/superscalar/ss_program_seed_shekyl_nonce_0.bin"
+        );
+        let mut gen = Blake2Generator::new(b"shekyl-ss-test", 0);
+        let prog = generate_superscalar(&mut gen);
+        let actual = serialize_program(&prog);
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "Layer A seed-derivation isolation (seed=shekyl-ss-test, nonce=0) diverges \
+             from reference; if vector 1 also fails, the bug is downstream of RNG; if \
+             only this fails, the bug is in Blake2Generator seed initialization",
+        );
+    }
+
+    // ---- Layer B: execution parity (loads program from Layer A .bin) ----
+
+    #[test]
+    fn vector_1_layer_b_execute_baseline() {
+        let prog_bytes: &[u8] =
+            include_bytes!("../tests/vectors/reference/superscalar/ss_program_seed_empty_nonce_0.bin");
+        let expected_bytes: &[u8] =
+            include_bytes!("../tests/vectors/reference/superscalar/ss_execute_seed_empty_nonce_0.bin");
+        let prog = deserialize_program(prog_bytes);
+        let mut r = LAYER_B_INPUT_R;
+        execute_superscalar(&prog, &mut r);
+        let expected = decode_register_output(expected_bytes);
+        assert_eq!(
+            r, expected,
+            "Layer B execution (vector 1, baseline) diverges from reference",
+        );
+    }
+
+    #[test]
+    fn vector_2_layer_b_execute_nonce_mixing() {
+        let prog_bytes: &[u8] =
+            include_bytes!("../tests/vectors/reference/superscalar/ss_program_seed_empty_nonce_1.bin");
+        let expected_bytes: &[u8] =
+            include_bytes!("../tests/vectors/reference/superscalar/ss_execute_seed_empty_nonce_1.bin");
+        let prog = deserialize_program(prog_bytes);
+        let mut r = LAYER_B_INPUT_R;
+        execute_superscalar(&prog, &mut r);
+        let expected = decode_register_output(expected_bytes);
+        assert_eq!(
+            r, expected,
+            "Layer B execution (vector 2, nonce-mixing) diverges from reference",
+        );
+    }
+
+    #[test]
+    fn vector_3_layer_b_execute_seed_derivation() {
+        let prog_bytes: &[u8] = include_bytes!(
+            "../tests/vectors/reference/superscalar/ss_program_seed_shekyl_nonce_0.bin"
+        );
+        let expected_bytes: &[u8] = include_bytes!(
+            "../tests/vectors/reference/superscalar/ss_execute_seed_shekyl_nonce_0.bin"
+        );
+        let prog = deserialize_program(prog_bytes);
+        let mut r = LAYER_B_INPUT_R;
+        execute_superscalar(&prog, &mut r);
+        let expected = decode_register_output(expected_bytes);
+        assert_eq!(
+            r, expected,
+            "Layer B execution (vector 3, seed-derivation) diverges from reference",
+        );
+    }
+
+    // ---- Combined: end-to-end generate→execute pipeline ----
+
+    #[test]
+    fn combined_end_to_end_spec_attestation() {
+        // Bytes are by construction identical to
+        // ss_execute_seed_shekyl_nonce_0.bin (see the .meta.txt
+        // headers for the rationale on keeping both files); this
+        // test exercises the full generate→execute pipeline without
+        // an intermediate wire-format round-trip, mirroring how
+        // downstream consumers would actually use SuperscalarHash.
+        let expected_bytes: &[u8] = include_bytes!(
+            "../tests/vectors/reference/superscalar/ss_combined_seed_shekyl_nonce_0.bin"
+        );
+        let mut gen = Blake2Generator::new(b"shekyl-ss-test", 0);
+        let prog = generate_superscalar(&mut gen);
+        let mut r = LAYER_B_INPUT_R;
+        execute_superscalar(&prog, &mut r);
+        let expected = decode_register_output(expected_bytes);
+        assert_eq!(
+            r, expected,
+            "Combined end-to-end attestation tuple diverges from reference; \
+             if the Layer A and Layer B tests above pass, the wire-format \
+             round-trip in deserialize_program is masking a bug",
         );
     }
 }

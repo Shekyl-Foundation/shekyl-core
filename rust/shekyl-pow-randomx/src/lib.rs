@@ -37,13 +37,14 @@
 //!   if those greps were already live. See
 //!   [`RANDOMX_V2_RUST.md`](../../docs/design/RANDOMX_V2_RUST.md) §7.2.
 //!
-//! # Scope at this commit (Phase 2b commit 4)
+//! # Scope at this commit (Phase 2b commit 5)
 //!
 //! Phase 2a landed the workspace scaffold and the Argon2d "memory fill"
 //! primitive used by `Cache::derive`. Phase 2b commits 1-3 landed the
-//! remaining v2 primitives the verifier needs; commit 4 adds spec-
-//! vector parity tests for the AES surface against the v2 fork's
-//! reference at pin `aaafe71`.
+//! remaining v2 primitives the verifier needs; commits 4-5 add spec-
+//! vector parity tests against the v2 fork's reference at pin
+//! `aaafe71` (commit 4: AES surface; commit 5: SuperscalarHash
+//! surface).
 //!
 //! - `src/aes.rs` — AES single-round wrappers (`cipher_round`,
 //!   `equiv_inv_cipher_round`) over `aes-0.9.0`'s `hazmat` API plus
@@ -54,7 +55,12 @@
 //!   `tests/vectors/reference/aes/_generator/`.
 //! - `src/blake2_generator.rs` — `Blake2Generator` PRNG per spec §3.5.
 //! - `src/superscalar.rs` — `SuperscalarHash` program generator and
-//!   executor per spec §6 + §7.2 (commit 3 lands these).
+//!   executor per spec §6 + §7.2 (commit 3 lands these). Commit 5
+//!   adds the F4 structured 3-vector decomposition spec-vector tests
+//!   (Layer A program serialization × 3 + Layer B execution × 3 +
+//!   combined end-to-end attestation = 7 vectors); the reviewer-
+//!   runnable C++ generator lives at
+//!   `tests/vectors/reference/superscalar/_generator/`.
 //! - F1 convergence on `src/argon2d.rs`'s `#[allow(dead_code)]`: moved
 //!   from the module-level attribute on `mod argon2d` to per-item
 //!   attributes inside the module, matching the per-entry-point
@@ -64,8 +70,6 @@
 //!
 //! Remaining Phase 2b commits (per the same plan §7):
 //!
-//! - **commit 5:** SuperscalarHash spec-vector parity tests
-//!   (C++ generator + 3-vector F4 decomposition + combined end-to-end).
 //! - **commit 6:** CHANGELOG + V3.0/Phase 3c FOLLOWUPS entry.
 //!
 //! Subsequent sub-PRs (per
