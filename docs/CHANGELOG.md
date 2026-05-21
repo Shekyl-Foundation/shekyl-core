@@ -595,7 +595,7 @@
     new substrings.
 
   *C17 — `[Unreleased]` doc-after-plans propagation for
-  C15 – C16* (this commit):
+  C15 – C16*:
   - Doc-only follow-up per
     [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
     final-task-always rule. After C15 / C16 landed locally
@@ -609,15 +609,137 @@
     evidence. This `*C15 – C16 — Copilot second-round
     review responses*` subsection above is the matching
     CHANGELOG entry; the doc-after-plans propagation also
-    updates the closing C0–C17 paragraph below.
+    updates the closing C0–C20 paragraph below.
   - Gate inheritance from C16: C17 is doc-only, so the
     `cargo fmt --check`, `cargo clippy --all-targets --
     -D warnings`, `cargo test --lib`, and `cargo doc
     --no-deps` gates all inherit C16's results unchanged
     (no rust files touched in C17).
 
-  PR 4 §7.X commits C0 through C17 are now all landed; PR
-  #60 carries the full C0–C17 set. See the separate `###
+  *C18 – C20 — Copilot third-round review responses*:
+  - Three small post-PR-open commits closing the three
+    additional line-anchored findings the GitHub Copilot
+    reviewer raised against `966154d27` (the C17 push
+    head) on PR #60. The findings clustered on substantive
+    discipline questions rather than rustdoc cosmetics:
+    F11-S cancellation safe-point completeness, dead-arm
+    invariant enforcement, and cryptographic-decoding
+    constant-time-or-explicit-rejection discipline. Each
+    commit cites its Copilot finding ID in the commit
+    message body per
+    [`.cursor/rules/90-commits.mdc`](../.cursor/rules/90-commits.mdc).
+  - **C18** `6cc22965f` — `Scanner::scan_with_cancel` per-tx
+    safe-point cancellation check in
+    [`rust/shekyl-scanner/src/scan.rs`](../rust/shekyl-scanner/src/scan.rs).
+    The F11-S binding's between-tx safe-point per
+    `RefreshEngine` trait rustdoc checkpoint 5 was
+    delivered only via the inner per-output iter-0 check
+    inside `scan_transaction_with_cancel`. For transactions
+    whose per-output loop never runs (zero-output txs;
+    `tx.version() != 2`; malformed `extra`; oversized per
+    the defense-in-depth size gate) the inner check is
+    bypassed and the outer per-tx loop delegated straight
+    back without cancellation opportunity. Worst case: a
+    block of `N` such transactions deferred cancellation
+    by `N × O(1)-per-tx-skip` cost rather than bounded at
+    a single tx-entry's cost. Fix adds `if is_cancelled()
+    { return Cancelled }` at the outer per-tx loop entry,
+    rewrites the misleading "subsumed by per-output check
+    at iter 0" comment to describe the new two-checkpoint
+    shape, and adds the
+    `outer_per_tx_loop_cancellation_fires_for_zero_output_tx`
+    regression test (V2 miner-only block via
+    `Input::Gen(0)` + empty outputs/extra). The
+    `cancel_tests` module rustdoc was simultaneously
+    updated from a three-axis to a four-axis taxonomy
+    naming the outer-loop per-tx boundary explicitly.
+    F11-S benchmark impact: zero — added check is one
+    closure invocation per tx, a few nanoseconds amortized
+    across `N_outputs` per tx and well below the F11-S
+    worst-case per-output cost. Closes Copilot finding ID
+    3278452877.
+  - **C19** `5749f444c` — dead `ScanOutcome::Cancelled`
+    arm `debug_assert!` in `InternalScanner::scan` in
+    [`rust/shekyl-scanner/src/scan.rs`](../rust/shekyl-scanner/src/scan.rs).
+    The function delegates to `scan_with_cancel` with a
+    never-cancelling closure (`|| false`); under the
+    closure-invariant, the `Cancelled` variant is
+    unreachable. The previous code mapped the unreachable
+    variant to `Ok(Timelocked(Vec::new()))` for
+    production-panic-free behavior — but the empty-result
+    fallback would silently mask future logic-dispatch
+    regressions. Fix adds `debug_assert!(false, …)`
+    naming the closure-invariant before the empty-result
+    fallback, so debug-mode tests catch the violation
+    immediately while production behavior is unchanged.
+    Discipline (preferring `debug_assert!` over
+    `unreachable!()`) named in the same arm's comment so
+    a future refactor preserves the rationale. Closes
+    Copilot finding ID 3278452893.
+  - **C20** `3331fb82e` — `ViewMaterial::try_from_keys`
+    view_scalar canonical-bytes decoding in
+    [`rust/shekyl-engine-core/src/engine/view_material.rs`](../rust/shekyl-engine-core/src/engine/view_material.rs).
+    The previous reconstruction via
+    `Scalar::from_bytes_mod_order(*keys.view_sk
+    .as_canonical_bytes())` silently reduces
+    non-canonical / corrupted input to a canonical scalar
+    — masking in-memory corruption of view-key state and
+    producing a scalar that is NOT the wallet's actual
+    view secret on bad input. The same construction site
+    (lines 211–222) validates `keys.spend_pk` with
+    explicit `IoError::Scanner` on non-canonical bytes;
+    the asymmetric treatment of view-scalar vs.
+    spend-public-key was not justified by the threat
+    model. Fix switches to
+    `Option::<Scalar>::from(Scalar::from_canonical_bytes(...))
+    .ok_or_else(|| RefreshError::Io(IoError::Scanner {
+    detail: ... }))?`. On canonical input the resulting
+    scalar is bit-identical to the pre-fix output; on
+    non-canonical input the conversion returns `None` and
+    maps to `RefreshError::Io(IoError::Scanner)` with an
+    operator-actionable detail string. The rustdoc's
+    field-derivation summary and `# Errors` block were
+    both updated to describe the new shape and cite
+    `30-cryptography.mdc`'s constant-time-or-explicit-
+    rejection discipline as the anchor. Closes Copilot
+    finding ID 3278452905.
+  - Gates per commit: each ran its scoped
+    bisection-discipline gates against the touched crate
+    (C18 / C19: `shekyl-scanner`; C20:
+    `shekyl-engine-core`) plus downstream
+    `shekyl-engine-core` regression for the scanner-side
+    changes (fmt --check, clippy --all-targets -- -D
+    warnings, test --lib, doc --no-deps). Scanner test
+    count: 57 → 58 (C18 added regression test;
+    C19 unchanged). Engine-core test count unchanged at
+    170 / 170 lib tests pass. Scanner doc warnings
+    unchanged at 2 (C8 baseline). Engine-core doc
+    warnings unchanged at 49 (C9 baseline).
+
+  *C21 — `[Unreleased]` doc-after-plans propagation for
+  C18 – C20* (this commit):
+  - Doc-only follow-up per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    final-task-always rule. After C18 / C19 / C20 landed
+    locally with green gates, the design doc §7.X status
+    banner was extended to enumerate C18 / C19 / C20
+    alongside C0 – C17 with landing SHAs and per-commit
+    one-paragraph summaries, and the §7.X commit-block
+    section gained a new `**Commits C18 – C20 — Copilot
+    post-PR-open third-round review responses.**` block
+    with per-commit prose + Copilot finding IDs + gate
+    evidence. This `*C18 – C20 — Copilot third-round
+    review responses*` subsection above is the matching
+    CHANGELOG entry; the doc-after-plans propagation also
+    updates the closing C0–C21 paragraph below.
+  - Gate inheritance from C20: C21 is doc-only, so the
+    `cargo fmt --check`, `cargo clippy --all-targets --
+    -D warnings`, `cargo test --lib`, and `cargo doc
+    --no-deps` gates all inherit C20's results unchanged
+    (no rust files touched in C21).
+
+  PR 4 §7.X commits C0 through C21 are now all landed; PR
+  #60 carries the full C0–C21 set. See the separate `###
   Added` and `### Changed` entries below for the trait-
   surface and `Engine<S, D, L, R>` four-parameter additions
   PR 4 ships,
