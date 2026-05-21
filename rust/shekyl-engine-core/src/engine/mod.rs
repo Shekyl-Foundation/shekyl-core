@@ -614,14 +614,28 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> En
     /// `reserve_proof`) that take borrowed inputs and return finished
     /// artifacts, so call sites elsewhere never need a borrow on
     /// [`AllKeysBlob`] directly.
-    // After C5's trait-dispatch migration, the only previous reader
-    // (`build_scanner_from_keys` in `refresh.rs`) is `#[cfg(test)]`-gated
-    // alongside the legacy producer body; `LocalRefresh` constructs its
-    // scanner from `ViewMaterial` derived at `Engine::assemble` time.
-    // C5β re-evaluates whether `keys()` survives the producer-body
-    // deletion or is itself deleted with the deprecation cycle; Phase 2's
-    // `sign_transfer` / `tx_proof` / `reserve_proof` will need either
-    // this accessor or a dedicated method-level surface.
+    // After C5's trait-dispatch migration AND C5β's
+    // producer-scaffolding deletion, no production reader of
+    // `keys()` survives: the legacy `build_scanner_from_keys` /
+    // `produce_scan_result` free functions in `engine/refresh.rs`
+    // were deleted in C5β (`b6a1274de`); `LocalRefresh::build_scanner`
+    // (`engine/local_refresh.rs:283`) constructs the scanner from
+    // `ViewMaterial` derived at `Engine::assemble` time via
+    // `ViewMaterial::try_from_keys(&self.keys)`. The remaining
+    // live consumer is the `Engine::replace_refresh` test-only
+    // setter (`mod.rs:695`), which re-derives `ViewMaterial` from
+    // `engine.keys()` for hybrid tests composing `LocalRefresh` /
+    // `FaultInjecting<R>` post-construction; that surface is
+    // `#[cfg(any(test, feature = "test-helpers"))]`-gated, hence
+    // the `#[allow(dead_code)]` below remains load-bearing for
+    // default-feature production builds where no consumer fires.
+    //
+    // Phase 2's `sign_transfer` / `tx_proof` / `reserve_proof`
+    // will introduce production consumers (either re-using this
+    // accessor or via dedicated method-level surfaces), at which
+    // point `#[allow(dead_code)]` is reopened for deletion per
+    // `21-reversion-clause-discipline.mdc`'s named-criterion
+    // shape.
     #[allow(dead_code)]
     pub(crate) fn keys(&self) -> &AllKeysBlob {
         &self.keys

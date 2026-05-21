@@ -35,12 +35,22 @@
 //!
 //! # Field shape (Phase 0a binding form per §4)
 //!
-//! The five fields are exactly those that
-//! `build_scanner_from_keys` today extracts from `&AllKeysBlob` at
-//! `crate::engine::refresh`; `ViewMaterial` is the named type
-//! carrying them across the producer boundary so the producer
-//! never re-derives them from `AllKeysBlob` and the orchestrator
-//! does not need to re-hold the master keys past the move.
+//! The five fields are derived from `&AllKeysBlob` at engine
+//! assembly time via [`ViewMaterial::try_from_keys`] (the C5a
+//! `Engine::create` site) and per-attempt via the
+//! `pub(crate) Engine::replace_refresh` test-only setter for
+//! the test substrate. They are the exact set previously
+//! extracted by the C5β-retired free function
+//! `build_scanner_from_keys` in `crate::engine::refresh` (deleted
+//! in C5β = `b6a1274de` alongside the legacy `produce_scan_result`
+//! body); `ViewMaterial` is the named type carrying them across
+//! the producer boundary so the producer never re-derives them
+//! from `AllKeysBlob` and the orchestrator does not need to
+//! re-hold the master keys past the move. The per-attempt
+//! `Scanner` construction itself moved to
+//! [`LocalRefresh::build_scanner`](super::local_refresh::LocalRefresh)
+//! (C4 = `ac100e1ab`), which consumes the `ViewMaterial`
+//! `LocalRefresh` was constructed against.
 //!
 //! - `spend_pub: EdwardsPoint` — the wallet's account-level spend
 //!   public key, decompressed once at construction; held for
