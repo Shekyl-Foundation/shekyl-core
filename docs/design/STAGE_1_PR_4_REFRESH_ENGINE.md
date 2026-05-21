@@ -519,14 +519,22 @@ hybrid retry test
 `hybrid_refresh_engine_orchestrator_cancellation_retries` +
 producer-property-tests module with 5 parametric coherence
 tests + 1 fuzzed proptest + 4 panic-safety tests + 1
-classifier sanity test); **C8** *this commit*
+classifier sanity test); **C8** `95affda61`
 (docs propagation + `CHANGELOG` + V3_ENGINE_TRAIT_BOUNDARIES
 §2.3 past-tense + FOLLOWUPS Phase 0d-strike retirement
-note). Round 5 substrate-decision amendment (`8484e669a`)
-and Round 5 sub-pin extension (`29cb7e138`), plus the
-F11-S audit-trail measurement evidence (`a4da2212a`), land
-as design-doc commits on the implementation branch
-alongside C5β / C6α and are not in the C0–C8 numbering.
+note); **C9** *this commit* (FOLLOWUPS P1 / P2 / P3
+re-anchor post-Phase-1-landing: PR 4 settled α per Round 1
+without absorbing P1 / P2 / P3, so the pre-Phase-1 "defer
+to PR 4" dispositions become stale; re-anchored against the
+post-Phase-1 substrate with substrate-anchored reopening
+criteria per `21-reversion-clause-discipline.mdc`, plus the
+matching §5.5 named-home table updates above and the
+CHANGELOG follow-up entry). Round 5 substrate-decision
+amendment (`8484e669a`) and Round 5 sub-pin extension
+(`29cb7e138`), plus the F11-S audit-trail measurement
+evidence (`a4da2212a`), land as design-doc commits on the
+implementation branch alongside C5β / C6α and are not in
+the C0–C9 numbering.
 Test-gate cumulative: 170 / 170 lib tests pass at C7;
 `cargo fmt --all -- --check` clean; `cargo clippy -p
 shekyl-engine-core --all-targets --features test-helpers --
@@ -4718,9 +4726,9 @@ for PR 4's scope: every item has a named home.
 | Item | Target | Where documented |
 | --- | --- | --- |
 | α/β/γ producer-redesign decision (Round 1 closed: α) | V3.0 | §5.4 (this doc) |
-| Async-path-skip post-pass (P1 *latent*) | V3.0 | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 (recorded on `dev` 2026-05-10; entry titled “P1 (latent): refresh post-pass skipped on async path”) |
-| Wallet-birthday plumbing into producer start-height (P2) | V3.0 | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 (recorded on `dev` 2026-05-10; entry titled “P2: wallet-birthday plumbing not wired into producer start-height”) |
-| Trait-impl `apply_scan_result` `Vec<usize>`-discard (P3) | V3.0 (closed by Round 3 / Round 4 trait-surface enumeration) | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 (recorded on `dev` 2026-05-10 via PR #37 commit `0a0d46b38`; entry titled “P3: `apply_scan_result_to_state` allocates `Vec<usize>` even for trait-impl callers that discard it”). PR #37 reshaped the merge pipeline so `LedgerIndexes::ingest_block`, `process_scanned_outputs`, and `apply_scan_result_to_state` carry insertion-index ranges (`Range<usize>` and `Vec<usize>`); the two trait-impl call sites (`LocalLedger::apply_scan_result`, `EngineFixture::apply_scan_result`) currently discard the `Vec` to preserve `LedgerEngine::apply_scan_result`'s unit-result trait signature. PR 4's trait-surface enumeration (Round 3 / Round 4) decides between two shapes that both close P3: (a) `LedgerEngine::apply_scan_result` grows to surface the insertion-range carryout, in which case the `Vec` is consumed and the optimization is dead code; (b) `RefreshEngine` owns the merge post-pass directly and `LedgerEngine::apply_scan_result` is removed, in which case the discard sites disappear with the trait method. Under α (Round 1) plus the (a-instance-scoped) view-material disposition (Round 2 R4), both shapes remain candidates — the choice falls out of Round 3's trait-surface enumeration against the post-M3e tree |
+| Async-path-skip post-pass (P1 *latent*) | V3.0 | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 (recorded on `dev` 2026-05-10; re-anchored 2026-05-20 post-Phase-1; entry titled “P1 (latent): refresh post-pass skipped on async path”). **Phase 1 landed without absorption.** Phase 1 settled the producer/consumer pattern on α (preserved current shape) per §5.4 Round 1; the `LedgerEngine::apply_scan_result` trait surface was not changed, so the trait-method discard at `local_ledger.rs:356–367` still skips `populate_engine_handle_fields`. P1 remains open against a focused follow-up PR (`refresh/p1-async-path-post-pass` or equivalent) landing V3.0 pre-genesis; the two closing shapes ((a) trait grows insertion-range carryout — closes P1 + P3; (b) `RefreshEngine` owns the merge post-pass + `LedgerEngine::apply_scan_result` removed — closes P1 + P3) are both substrate-feasible against the post-Phase-1 trait inventory (`RefreshEngine` now exists per C1 / C4; `LedgerEngine` still mutable per `00-mission.mdc`'s priority hierarchy). Hard precondition stands: P1 must close before any binary integrates `RefreshHandle` |
+| Wallet-birthday plumbing into producer start-height (P2) | V3.0 | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 (recorded on `dev` 2026-05-10; re-anchored 2026-05-20 post-Phase-1; entry titled “P2: wallet-birthday plumbing not wired into producer start-height”). **Phase 1 landed without absorption.** Phase 1's α producer-shape disposition preserved the current `produce_scan_result` start-height computation; no plumbing rode along with the reshape. P2 remains open against a focused follow-up PR (`refresh/p2-wallet-birthday-plumbing` or equivalent) landing V3.0 pre-genesis; the substrate is now well-defined for the plumbing PR (`LocalRefresh::new` is the V3.0 production implementor per C4 = `ac100e1ab`; the choice between (i) `LocalRefresh::new` parameter and (ii) `RefreshOptions` hint falls out of the call-site audit at PR open) |
+| Trait-impl `apply_scan_result` `Vec<usize>`-discard (P3) | V3.0 (downstream of P1 — both close together in the same focused PR) | [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 (recorded on `dev` 2026-05-10 via PR #37 commit `0a0d46b38`; re-anchored 2026-05-20 post-Phase-1; entry titled “P3: `apply_scan_result_to_state` allocates `Vec<usize>` even for trait-impl callers that discard it”). **Phase 1's α retained the discard shape; the pre-Phase-1 reversion criterion fired explicitly.** PR #37 reshaped the merge pipeline so `LedgerIndexes::ingest_block`, `process_scanned_outputs`, and `apply_scan_result_to_state` carry insertion-index ranges (`Range<usize>` and `Vec<usize>`); the trait-impl call sites (`LocalLedger::apply_scan_result` and `FaultInjecting<LocalLedger>::apply_scan_result` by delegation) still discard the `Vec` to preserve `LedgerEngine::apply_scan_result`'s unit-result trait signature. Both candidate P1-closing shapes — (a) `LedgerEngine::apply_scan_result` grows the insertion-range carryout (the `Vec` is consumed; optimization is dead code) and (b) `RefreshEngine` owns the merge post-pass + `LedgerEngine::apply_scan_result` is removed (the discard sites disappear with the trait method) — close P3 as a side effect. P3 stays catalogued separately to preserve the Copilot PR #37 audit trail; it does not need an independent factoring PR |
 | β internal-batching refinement | **closed (Round 2)** — kept as §2.2 future-scaling note; **not** promoted to FOLLOWUPS yet (avoids "FOLLOWUPS without a named trigger" graveyard per [`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)); revisit if V3.0 RC stabilization bandwidth profiling identifies β as the remediation over alternatives (daemon-side prefix-matching, view-tag pre-filter improvements, wallet-side prune-by-birthday) | §2.2 (out-of-scope note) + §5.4.7 R2 |
 | FMD (fuzzy message detection) — negative result for V3.0 | V4 research | [`REFRESH_DESIGN_LANDSCAPE.md`](./REFRESH_DESIGN_LANDSCAPE.md) §4 |
 | OMR (oblivious message retrieval) — negative result for V3.0 | V3.x research | [`REFRESH_DESIGN_LANDSCAPE.md`](./REFRESH_DESIGN_LANDSCAPE.md) §5 |
@@ -6264,7 +6272,88 @@ retired by composition per §5.4.7 R5 reframe; **struck**, not
 deferred — the §5.4.7 R5 / R6 / R4 (c) V3.x consumer-actor
 deferrals remain open per Round 3's prior amendments and
 the existing FOLLOWUPS entries). PR 4 §7.X commits C0–C8
-are now landed; the PR is ready to open against `dev`.
+landed; PR #60 opened against `dev` immediately after the
+C8 push.
+
+**Commit C9 — FOLLOWUPS P1 / P2 / P3 re-anchor post-Phase-1
+landing.**
+
+Doc-only follow-up commit; not in the original Round 4 C0–C8
+decomposition but added post-PR-open per the user-directed
+"correct known document errors within the current PR" trigger
+(per `91-documentation-after-plans.mdc`'s stale-doc detection
+discipline and `15-deletion-and-debt.mdc`'s "deferred without
+a named home is the failure mode" framing). Surfaced during a
+post-C8 review of `docs/FOLLOWUPS.md` against the actual code
+state in `engine/local_ledger.rs:356–367` and
+`engine/merge.rs:181–215`.
+
+The pre-Phase-1 dispositions on P1 / P2 / P3 all said "defer
+to PR 4" on the substrate assumption that PR 4's α/β/γ Round 1
+would reshape the producer/consumer pattern and the
+`LedgerEngine::apply_scan_result` trait surface, absorbing the
+three items as a side effect. Phase 1 settled the disposition
+on α (preserved current shape; trait surface unchanged), and
+PR 4 Phase 1's substrate change did **not** absorb P1 / P2 /
+P3:
+
+- **P1 (latent: async-path post-pass skipped).** The
+  trait-method discard at `local_ledger.rs:356–367` still
+  short-circuits `populate_engine_handle_fields`. The two
+  candidate closing shapes ((a) trait grows insertion-range
+  carryout; (b) `RefreshEngine` owns the merge post-pass +
+  trait method removed) both remain feasible — Phase 1 made
+  shape (b) newly available by landing the `RefreshEngine`
+  trait — but neither shape rode along with α.
+- **P2 (wallet-birthday plumbing).** Phase 1's α preserved
+  the current `produce_scan_result` start-height
+  computation; no plumbing rode along with the reshape. The
+  substrate is now well-defined for the plumbing PR
+  (`LocalRefresh::new` is the V3.0 production implementor
+  per C4 = `ac100e1ab`).
+- **P3 (`Vec<usize>`-discard).** Phase 1's α retained the
+  discard shape; the pre-Phase-1 reversion criterion fired
+  explicitly. P3 is now downstream of P1 — both close
+  together in the same focused follow-up PR.
+
+C9's scope:
+
+- [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) P1 / P2 / P3 entries
+  rewritten with substrate-anchored reopening criteria per
+  [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).
+  Each entry adds a **Post-PR-4-Phase-1 substrate** subsection
+  documenting which substrate assumption from the pre-Phase-1
+  disposition held vs. fell through; each entry's
+  **Disposition** is re-anchored to a focused follow-up PR off
+  `dev` with the substrate-anchored reopening criteria
+  spelled out. The P1 hard precondition ("PR 4 lands before
+  any binary integrates `RefreshHandle`") is restated as
+  "P1 closes before any binary integrates `RefreshHandle`"
+  — Phase 1 was the *first* of two necessary substrate
+  changes, and the precondition survived intact.
+- [`STAGE_1_PR_4_REFRESH_ENGINE.md`](.) §5.5 named-home
+  table rows P1 / P2 / P3 (this doc, above) updated with a
+  bold **Phase 1 landed without absorption** marker plus a
+  one-sentence cross-ref to the re-anchored FOLLOWUPS
+  disposition, preserving the §5.5 audit-trail discipline
+  per `15-deletion-and-debt.mdc`.
+- The Status banner above lists C9 alongside C0–C8;
+  this `Commit C9` block documents the design-time intent
+  and landing SHA.
+- [`docs/CHANGELOG.md`](../CHANGELOG.md) `[Unreleased]` PR 4
+  entry gains a `*C9 — FOLLOWUPS re-anchor post-Phase-1
+  landing*` subsection mirroring the per-commit
+  documentation pattern.
+
+C9 is doc-only; the `cargo fmt --check` / `cargo clippy
+-D warnings` / `cargo test --lib` / `cargo doc` gates inherit
+C8's results (170 / 170 lib tests pass; fmt clean; clippy
+clean under both default and `test-helpers` features;
+48 doc warnings unchanged at the C7 baseline).
+
+**Landed: this commit** (`refresh: C9 re-anchor P1/P2/P3
+FOLLOWUPS post-Phase-1 landing`). PR 4 §7.X commits C0–C9
+are now all landed; PR #60 carries the full C0–C9 set.
 
 **Phase 1 readiness checklist (gates the C0 cut).** The
 following are pre-conditions for the implementation branch to

@@ -349,12 +349,79 @@
     `TestDaemon`) carry the `[CLOSED 2026-05-20]` marker
     from C6β / C6γ landing and are unchanged in C8.
 
-  PR 4 §7.X commits C0 through C8 are now all landed; PR 4
-  is ready to open against `dev`. See the separate
-  `### Added` and `### Changed` entries below for the
-  trait-surface and `Engine<S, D, L, R>` four-parameter
-  additions PR 4 ships, per the C8 spec at
-  `STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C8.
+  *C9 — FOLLOWUPS P1 / P2 / P3 re-anchor post-Phase-1
+  landing* (this commit):
+  - Doc-only follow-up commit; not in the original Round 4
+    C0–C8 decomposition but added post-PR-open per the
+    user-directed "correct known document errors within the
+    current PR" trigger (per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    stale-doc detection discipline and
+    [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)'s
+    "deferred without a named home is the failure mode"
+    framing). Surfaced during a post-C8 review of
+    `docs/FOLLOWUPS.md` against the actual code state in
+    `engine/local_ledger.rs:356–367` (trait-method
+    `apply_scan_result` discards `Vec<usize>` and short-
+    circuits `populate_engine_handle_fields`) and
+    `engine/merge.rs:181–215` (inherent
+    `Engine::apply_scan_result` runs the post-pass against
+    the captured `inserted` indices) — the two paths diverge
+    by construction in the post-Phase-1 substrate.
+  - [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) P1 / P2 / P3 entries
+    rewritten with **Post-PR-4-Phase-1 substrate** subsections
+    + substrate-anchored reopening criteria per
+    [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc).
+    The pre-Phase-1 "defer to PR 4" dispositions all assumed
+    α/β/γ Round 1 would reshape the producer/consumer pattern
+    and the `LedgerEngine::apply_scan_result` trait surface,
+    absorbing P1 / P2 / P3 as a side effect. Phase 1 settled
+    on α (preserved current shape; trait surface unchanged) per
+    `STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4 Round 1, and did not
+    absorb the three items. P1's hard precondition ("PR 4
+    lands before any binary integrates `RefreshHandle`")
+    survives intact and is restated as "P1 closes before any
+    binary integrates `RefreshHandle`". Each entry's
+    re-anchored disposition names a focused follow-up PR
+    landing V3.0 pre-genesis: P1 →
+    `refresh/p1-async-path-post-pass` (two candidate
+    closing shapes both feasible against the post-Phase-1
+    substrate — shape (b) `RefreshEngine` owns the merge
+    post-pass is newly available because PR 4 landed the
+    `RefreshEngine` trait at C1 / C4); P2 →
+    `refresh/p2-wallet-birthday-plumbing` (substrate
+    well-defined: `LocalRefresh::new` is the V3.0 production
+    implementor per C4 = `ac100e1ab`); P3 → downstream of
+    P1, closes alongside P1 in the same focused PR (both
+    candidate P1-closing shapes close P3 as a side effect;
+    P3 stays catalogued separately to preserve the Copilot
+    PR #37 audit trail).
+  - [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    §5.5 named-home table rows P1 / P2 / P3 updated with a
+    bold **Phase 1 landed without absorption** marker plus
+    one-sentence cross-refs to the re-anchored FOLLOWUPS
+    dispositions, preserving the §5.5 audit-trail discipline
+    per `15-deletion-and-debt.mdc`.
+  - `STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X Status banner
+    extended to enumerate C9 alongside C0–C8; the same §7.X
+    gains a new `**Commit C9 — FOLLOWUPS P1 / P2 / P3
+    re-anchor post-Phase-1 landing**` block documenting
+    design-time intent and landing SHA, mirroring the
+    per-commit documentation pattern from C0–C8.
+  - Gate inheritance from C8: C9 is doc-only, so
+    `cargo fmt --check`, `cargo clippy -- -D warnings`,
+    `cargo test --lib`, and `cargo doc --no-deps` all
+    inherit C8's results unchanged (170 / 170 lib tests
+    pass; fmt clean; clippy clean under both default and
+    `test-helpers` features; 48 doc warnings unchanged at
+    the C7 baseline).
+
+  PR 4 §7.X commits C0 through C9 are now all landed; PR #60
+  carries the full C0–C9 set. See the separate `### Added`
+  and `### Changed` entries below for the trait-surface and
+  `Engine<S, D, L, R>` four-parameter additions PR 4 ships,
+  per the C8 spec at `STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X
+  C8.
 
 - **RandomX v2 — Phase 1: pinned submodule + out-of-tree build wiring**
   (`feat/randomx-v2-phase1`, PR #54, merge commit `c0c4a11e5`,

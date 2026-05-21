@@ -111,50 +111,93 @@ sustainability is unaffected by the recalibration.
 
 - **P1 (latent): refresh post-pass skipped on async path —
   `populate_engine_handle_fields` does not run when refresh
-  dispatches through `LedgerEngine::apply_scan_result` (trigger:
-  PR 4 / `RefreshEngine` extraction; **hard precondition: PR 4
-  lands before any binary integrates `RefreshHandle`**;
-  pre-RC1).** `run_refresh_task` in
-  `rust/shekyl-engine-core/src/engine/refresh.rs:1634` calls
-  `g.ledger.apply_scan_result(result).await` (trait dispatch per
-  §5 commit-7 of M3b's pre-flight, which keeps the dispatch
-  generic over `LocalLedger` / `MockLedger` for the §5.2 hybrid
-  retry test). The trait method returns `Result<(), _>`, discarding
-  the inserted-indices `Vec<usize>` produced by
-  `apply_scan_result_to_state`. The engine post-pass
+  dispatches through `LedgerEngine::apply_scan_result` (re-anchored
+  2026-05-20 after PR 4 Phase 1 landed without absorption; **hard
+  precondition: P1 closes before any binary integrates
+  `RefreshHandle`**; pre-RC1).** The async refresh task in
+  `rust/shekyl-engine-core/src/engine/refresh.rs` calls
+  `g.ledger.apply_scan_result(result).await` (trait dispatch on
+  `L: LedgerEngine`, generalized in PR 4 C5β / C6β so the
+  retry-loop dispatches against `FaultInjecting<LocalLedger>` for
+  hybrid fault-injection tests). The trait method returns
+  `Result<(), _>`, discarding the inserted-indices `Vec<usize>`
+  produced by `apply_scan_result_to_state`. The engine post-pass
   (`populate_engine_handle_fields`) lives above the trait per
   M3b's "engine post-pass at the orchestrator layer" disposition —
   consumers of `LedgerEngine` other than the engine have no use
   for the post-pass, so the trait surface stays bookkeeping-only.
   The two decisions together skip the post-pass on the production
   async refresh path: newly-merged transfers do not get their
-  `output_handle` / `source_ciphertext` populated.
+  `output_handle` / `source_ciphertext` populated. The two paths
+  diverge by construction at
+  `rust/shekyl-engine-core/src/engine/local_ledger.rs:356–367`
+  (trait-method `apply_scan_result` — discards the `Vec` via
+  `.map(|_| ())`) vs.
+  `rust/shekyl-engine-core/src/engine/merge.rs:181–215`
+  (inherent `Engine::apply_scan_result` — runs
+  `populate_engine_handle_fields` against the captured
+  `inserted` indices).
 
   **Severity.** P1 *latent*. Correctness-breaking but currently
-  dormant: as of `dev` tip `86626beed`, no Shekyl binary calls
-  `start_refresh`. The gap becomes live the moment any binary
-  integrates `RefreshHandle` and relies on post-merge transfers
-  having their engine-handle fields populated.
+  dormant: as of `dev` tip and the post-PR-4-Phase-1 substrate,
+  no Shekyl binary calls `start_refresh`. The gap becomes live
+  the moment any binary integrates `RefreshHandle` and relies on
+  post-merge transfers having their engine-handle fields
+  populated.
 
-  **Disposition.** Defer to PR 4 (`RefreshEngine` extraction). The
-  architecturally clean fix requires settling the producer/consumer
-  pattern (α streaming / β internal batching / γ consumer-driven
-  per the PR 4 design doc seed) — exactly the surface PR 4's
-  Round 1 decides. A surgical fix in the perf interim PR would
-  pre-commit PR 4 to a pattern, inverting the
-  cost-benefit-defer-to-later anti-pattern (per
-  `.cursor/rules/16-architectural-inheritance.mdc`).
+  **Post-PR-4-Phase-1 substrate.** PR 4 Phase 1 (commits C0–C9
+  on `feat/stage-1-pr4-refresh-engine`; close-out at PR #60)
+  landed the α producer-shape disposition: the producer/consumer
+  pattern settled on α (preserved current shape) per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4 Round 1, and the `LedgerEngine::apply_scan_result` trait
+  surface was not changed by Phase 1. Phase 1 therefore did not
+  absorb P1 by reshape, as the pre-Phase-1 disposition
+  ("defer to PR 4") anticipated. P1 remains open against the
+  same trait-method discard pattern in `local_ledger.rs:356–367`.
 
-  **Hard precondition.** PR 4 must land before any binary
+  **Disposition (re-anchored 2026-05-20).** Defer to a focused
+  follow-up PR off `dev` named
+  `refresh/p1-async-path-post-pass` (or equivalent), landing
+  V3.0 pre-genesis. The §8 named-home table on the PR 4 design
+  doc enumerates the two shapes that both close P1 against the
+  PR 4 substrate: (a) `LedgerEngine::apply_scan_result` grows
+  to surface the insertion-range carryout — the `Vec` is
+  consumed, P1 and P3 close together; (b) the merge post-pass
+  moves onto `RefreshEngine` (the new trait landed in PR 4
+  C1 / C4) and `LedgerEngine::apply_scan_result` is removed —
+  the discard sites disappear with the trait method, P1 and P3
+  close together. Either shape is a focused PR (≤ ~5 files;
+  ≤ ~200 lines) and respects `06-branching.mdc`'s splitting
+  guidance. The shape selection itself is a small design round
+  (1–2 rounds) sized to the cost-benefit tradeoff between (a)
+  cross-trait surface growth and (b) cross-trait responsibility
+  migration; both shapes preserve the M3b "engine post-pass at
+  the orchestrator layer" architectural invariant.
+
+  **Hard precondition.** P1 must close before any binary
   integrates `RefreshHandle`. Treating this as a rule-grade
   precondition (rather than a "we'll get to it") is what makes
   the deferral discipline-grade per
-  `.cursor/rules/15-deletion-and-debt.mdc`'s "deferred without a
-  named home is the failure mode" framing. A binary that
-  integrates `RefreshHandle` before this entry resolves is itself
-  a rule violation. Recorded against PR 4's design doc seed
-  (`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`) as Round 1
-  required scope.
+  `.cursor/rules/15-deletion-and-debt.mdc`'s "deferred without
+  a named home is the failure mode" framing. A binary that
+  integrates `RefreshHandle` before this entry resolves is
+  itself a rule violation. The precondition survived PR 4
+  Phase 1 landing intact — Phase 1 was the *first* of two
+  necessary substrate changes (RefreshEngine trait exists,
+  enabling shape (b); LedgerEngine trait surface still in scope
+  for shape (a)); P1 closure is the second.
+
+  **Reopening criteria (per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).**
+  This entry closes when **either** (a) or (b) lands (close P1
+  and P3 in the same focused PR — they are downstream of the
+  same trait-surface choice) **or** when a Shekyl binary
+  integrates `RefreshHandle` and the integration PR's
+  pre-flight surfaces the gap as blocking (escalates the
+  precondition into a rule violation). The entry **reopens
+  with higher severity (P0)** if a binary integrates
+  `RefreshHandle` while P1 is still open.
 
   **Originating context.** Surfaced during the
   `perf/merge-insertion-indices` interim PR (commit `b9b0704b7`,
@@ -163,42 +206,84 @@ sustainability is unaffected by the recalibration.
   began returning `Vec<usize>`). The `.map(|_| ())` made the
   silent skip explicit; the explicitness is why it surfaced. See
   `docs/design/PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md` §9.2
-  for the full trace.
+  for the full trace, and the PR 4 design doc §5.5 named-home
+  table row for P1 for the substrate-post-Phase-1 cross-ref.
 
 - **P2: wallet-birthday plumbing not wired into producer
-  start-height (trigger: PR 4 / `RefreshEngine` extraction;
-  pre-RC1).** `refresh_from_block_height` and `skip_to_height`
-  exist in the Rust prefs/state layer
+  start-height (re-anchored 2026-05-20 after PR 4 Phase 1 landed
+  without absorption; pre-RC1).** `refresh_from_block_height`
+  and `skip_to_height` exist in the Rust prefs/state layer
   (`rust/shekyl-engine-prefs/`) but are not threaded into the
-  producer's start-height calculation. A wallet restored from seed
-  with a non-zero birthday scans every block from genesis,
-  ignoring the birthday hint.
+  producer's start-height calculation in
+  `rust/shekyl-engine-core/src/engine/local_refresh.rs`'s
+  `produce_scan_result` body (verified by grep — zero references
+  to either preference field under `engine/`). A wallet restored
+  from seed with a non-zero birthday scans every block from
+  genesis, ignoring the birthday hint.
 
   **Severity.** P2 — performance regression for restored-from-seed
   wallets only. No correctness impact; the scan finds the same
   outputs, just slower.
 
-  **Disposition.** Defer to PR 4. The producer's start-height is
-  precisely the surface PR 4's α/β/γ Round 1 will reshape. Wiring
-  the birthday through the current producer lands plumbing PR 4's
-  reshape discards. Recorded against PR 4's design doc seed as
-  Round 1 required scope.
+  **Post-PR-4-Phase-1 substrate.** PR 4 Phase 1 (commits C0–C9 on
+  `feat/stage-1-pr4-refresh-engine`; close-out at PR #60) landed
+  the α producer-shape disposition per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4 Round 1 (preserved current shape). The pre-Phase-1
+  disposition assumed the producer's start-height surface would
+  be reshaped by α/β/γ Round 1; α preserved it, so no plumbing
+  rode along with the reshape. P2 remains open against the same
+  unplumbed surface, with the substrate now well-defined for the
+  plumbing PR: `LocalRefresh::new` is the V3.0 production
+  implementor (PR 4 C4 = `ac100e1ab`) and the start-height
+  computation lives inside `produce_scan_result`.
+
+  **Disposition (re-anchored 2026-05-20).** Defer to a focused
+  follow-up PR off `dev` named
+  `refresh/p2-wallet-birthday-plumbing` (or equivalent),
+  landing V3.0 pre-genesis. Shape: thread
+  `refresh_from_block_height` / `skip_to_height` from the
+  `shekyl-engine-prefs` layer into either (i) a new
+  `LocalRefresh::new` parameter (e.g.,
+  `start_height_floor: Option<u64>`) consumed at
+  `produce_scan_result` start-height computation, or (ii) the
+  existing `RefreshOptions` carrying the floor as a hint. Choice
+  between (i) and (ii) falls out of the call-site audit at PR
+  open: (i) is appropriate if the floor is constructor-time
+  static (set once when the wallet is opened); (ii) is
+  appropriate if the floor is per-refresh dynamic (e.g.,
+  rescan-from-height runtime user action). The PR is small
+  enough to fit `06-branching.mdc`'s splitting guidance.
+
+  **Reopening criteria (per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).**
+  This entry closes when the focused plumbing PR lands. The
+  entry reopens with higher severity (P1) if a binary integrates
+  `start_refresh` against a restored-from-seed wallet and the
+  full-chain rescan time materially degrades the wallet open
+  flow (e.g., dominates p99 first-refresh latency on the
+  Phase 7.7 stressnet measurement against commodity Windows
+  hardware).
 
   **Originating context.** Surfaced alongside the async-path-skip
   finding during `perf/merge-insertion-indices` pre-flight; both
   items were originally bundled as "M3b.1" before being unbundled
   into per-validation-surface scopes per
   `.cursor/rules/19-validation-surface-discipline.mdc`. See
-  `docs/design/PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md` §9.3.
+  `docs/design/PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md` §9.3,
+  and the PR 4 design doc §5.5 named-home table row for P2 for
+  the substrate-post-Phase-1 cross-ref.
 
 - **P3: `apply_scan_result_to_state` allocates `Vec<usize>` even
-  for trait-impl callers that discard it (trigger: PR 4 /
-  `RefreshEngine` extraction; pre-RC1).** PR #37 (perf interim)
-  changed `apply_scan_result_to_state`'s return from `()` to
-  `Vec<usize>` so the engine post-pass can walk inserted indices
-  in O(k). The two trait-impl callers
-  (`LocalLedger::apply_scan_result`,
-  `EngineFixture::apply_scan_result`) discard the Vec via
+  for trait-impl callers that discard it (re-anchored 2026-05-20
+  after PR 4 Phase 1 retained the discard shape; downstream of
+  P1; pre-RC1).** PR #37 (perf interim) changed
+  `apply_scan_result_to_state`'s return from `()` to `Vec<usize>`
+  so the engine post-pass can walk inserted indices in O(k). The
+  trait-impl callers (`LocalLedger::apply_scan_result` at
+  `rust/shekyl-engine-core/src/engine/local_ledger.rs:356–367`,
+  and `FaultInjecting<LocalLedger>::apply_scan_result` by
+  delegation through the inner) discard the Vec via
   `.map(|_| ())` to preserve the `LedgerEngine::apply_scan_result`
   trait signature `Result<(), _>`. The discard wastes
   `Vec::with_capacity(new_transfers.len())` allocation per merge
@@ -212,24 +297,58 @@ sustainability is unaffected by the recalibration.
   sink parameter).
 
   **Why not fold into PR #37.** The discard sites are
-  architectural shims awaiting PR 4. PR 4 will resolve the
-  async-path-skip P1 by either (a) routing the post-pass through
-  the trait dispatch (Vec gets used → optimization is dead code),
-  or (b) removing the trait impl's `apply_scan_result` entirely
-  (optimization is irrelevant). Optimizing the shim now is the
+  architectural shims awaiting PR 4. PR 4 was anticipated to
+  resolve the async-path-skip P1 by either (a) routing the
+  post-pass through the trait dispatch (Vec gets used →
+  optimization is dead code), or (b) removing the trait impl's
+  `apply_scan_result` entirely (optimization is irrelevant).
+  Optimizing the shim then would have been the
   cost-benefit-defer-to-later anti-pattern's inverse: doing
   incremental work now that PR 4 reshapes anyway. Per
-  `.cursor/rules/16-architectural-inheritance.mdc`, the fix
-  rides with PR 4's reshape.
+  `.cursor/rules/16-architectural-inheritance.mdc`, the fix was
+  to ride with PR 4's reshape.
 
-  **Disposition.** Defer to PR 4. If PR 4's α/β/γ producer-redesign
-  Round 1 chooses a pattern that retains the discard shape (i.e.,
-  the trait method continues to return `()`), revisit this entry
-  as a separate factoring PR. Otherwise the entry closes when
-  PR 4 lands.
+  **Post-PR-4-Phase-1 substrate.** PR 4 Phase 1 (commits C0–C9
+  on `feat/stage-1-pr4-refresh-engine`; close-out at PR #60)
+  landed the α producer-shape disposition per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4 Round 1, and the `LedgerEngine::apply_scan_result` trait
+  surface was not changed by Phase 1. The pre-Phase-1
+  disposition's own reversion criterion ("If PR 4's α/β/γ
+  producer-redesign Round 1 chooses a pattern that retains the
+  discard shape (i.e., the trait method continues to return
+  `()`), revisit this entry as a separate factoring PR") fired
+  explicitly — the chosen α retains the discard shape, and the
+  trait method still returns `Result<(), _>`. P3 is therefore
+  no longer "wait for PR 4"; it is "downstream of P1's
+  resolution."
+
+  **Disposition (re-anchored 2026-05-20).** Downstream of P1.
+  Both candidate P1-closing shapes ((a) trait grows insertion-
+  range carryout; (b) `RefreshEngine` owns the merge post-pass)
+  close P3 as a side effect, so P3 does not need an independent
+  fix or a separate factoring PR. The focused PR that closes
+  P1 (`refresh/p1-async-path-post-pass` or equivalent) also
+  closes P3. P3 stays catalogued separately rather than folded
+  into P1's entry to preserve the Copilot PR #37 audit trail
+  (comment ID 3215308856 → P3 entry → P1 closure) per
+  `15-deletion-and-debt.mdc`'s "deferred without a named home
+  is the failure mode" framing.
+
+  **Reopening criteria (per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).**
+  This entry closes alongside P1 (same focused PR). The entry
+  reopens as an independent factoring PR only if P1's closure
+  PR for some reason fails to consume the `Vec<usize>` at the
+  trait boundary (e.g., the PR introduces an intermediate
+  shape where the Vec is still constructed-then-discarded on
+  the trait-dispatch path) — substrate-anchored to the PR's
+  diff, not to schedule pressure.
 
   **Originating context.** Copilot PR #37 review (second pass,
-  2026-05-10), comment ID 3215308856 on `merge.rs:336`.
+  2026-05-10), comment ID 3215308856 on `merge.rs:336`. See
+  the PR 4 design doc §5.5 named-home table row for P3 for
+  the substrate-post-Phase-1 cross-ref.
 
 - **F11-S Windows-midrange-PC measurement revisit at stressnet
   (trigger: PR 4 lands the Linux-laptop F11-S measurement evidence
