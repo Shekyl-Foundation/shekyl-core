@@ -182,11 +182,13 @@ impl ViewMaterial {
     ///   ([`CompressedEdwardsY::decompress`]) — fails with
     ///   [`RefreshError::Io`] if the compressed point bytes are not
     ///   a canonical Edwards point.
-    /// - `view_scalar`: `Scalar::from_bytes_mod_order(keys.view_sk
+    /// - `view_scalar`: `Scalar::from_canonical_bytes(keys.view_sk
     ///   bytes)` — `view_sk` is stored as canonical 32-byte little-
-    ///   endian, reduction is a no-op on canonical input but
-    ///   `from_bytes_mod_order` is the safe choice for round-tripping
-    ///   serialized scalars.
+    ///   endian; `from_canonical_bytes` succeeds on canonical input
+    ///   and rejects (returns `None`) on non-canonical / corrupted
+    ///   bytes, so in-memory corruption surfaces as
+    ///   [`RefreshError::Io`] rather than silently reducing to a
+    ///   different scalar.
     /// - `x25519_sk`: copy of `keys.view_sk` bytes — `view_sk` and
     ///   the X25519 secret key are the same 32-byte material (the
     ///   wallet's view secret double-duties as the X25519 private
@@ -205,6 +207,20 @@ impl ViewMaterial {
     ///   not decompress to a curve point. Defensive: `AllKeysBlob`
     ///   construction validates the spend public key, so reaching
     ///   this branch indicates corruption of in-memory key state.
+    /// - [`RefreshError::Io`] with [`IoError::Scanner`] when
+    ///   `keys.view_sk` is not a canonical 32-byte little-endian
+    ///   scalar (high bit set or value ≥ ℓ). Defensive: same
+    ///   `AllKeysBlob`-construction invariant — the view secret is
+    ///   stored canonical at derivation time, so reaching this
+    ///   branch likewise indicates in-memory corruption.
+    ///   `Scalar::from_canonical_bytes` is preferred over
+    ///   `from_bytes_mod_order` here per
+    ///   `30-cryptography.mdc`'s constant-time-or-explicit-rejection
+    ///   discipline: silent reduction of corrupted bytes would
+    ///   mask the corruption and surface a different scalar than
+    ///   the wallet's actual view key, with downstream
+    ///   correctness implications for view-tag matching and
+    ///   shared-secret derivation.
     ///
     /// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
     pub fn try_from_keys(keys: &AllKeysBlob) -> Result<Self, RefreshError> {
@@ -221,9 +237,18 @@ impl ViewMaterial {
                 })
             })?;
 
-        let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(
-            *keys.view_sk.as_canonical_bytes(),
-        ));
+        let view_scalar = Zeroizing::new(
+            Option::<Scalar>::from(Scalar::from_canonical_bytes(
+                *keys.view_sk.as_canonical_bytes(),
+            ))
+            .ok_or_else(|| {
+                RefreshError::Io(IoError::Scanner {
+                    detail: "AllKeysBlob.view_sk is not a canonical 32-byte scalar \
+                             (high bit set or value ≥ ℓ); in-memory key state may be corrupted"
+                        .to_string(),
+                })
+            })?,
+        );
         let x25519_sk: Zeroizing<[u8; 32]> = Zeroizing::new(*keys.view_sk.as_canonical_bytes());
         let ml_kem_dk: Zeroizing<Vec<u8>> =
             Zeroizing::new(keys.ml_kem_dk.as_canonical_bytes().to_vec());
