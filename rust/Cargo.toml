@@ -55,6 +55,10 @@ members = [
 
     # Unified tracing-based logger init for all Rust binaries
     "shekyl-logging",
+
+    # Pure-software RandomX v2 verifier (docs/design/RANDOMX_V2_PLAN.md,
+    # RANDOMX_V2_RUST.md). Consumed by shekyl-ffi (Phase 3); not the miner.
+    "shekyl-pow-randomx",
 ]
 # Local-only harnesses that must not participate in the parent
 # workspace. Excluded here (rather than relying on the nested

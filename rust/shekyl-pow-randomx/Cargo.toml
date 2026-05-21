@@ -1,0 +1,40 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-pow-randomx"
+description = "Pure-software RandomX v2 verifier for Shekyl daemon block validation (docs/design/RANDOMX_V2_PLAN.md, RANDOMX_V2_RUST.md)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Argon2d "memory fill" primitive used by Cache::derive (Phase 2e wraps
+# this). Pinned at workspace minor (0.5) matching shekyl-crypto-pq's
+# direct dep; Cargo's feature unification means the final feature set
+# is (alloc + zeroize) regardless of which crate declares which.
+#
+# Verified at source against argon2-0.5.3
+# (~/.cargo/registry/src/.../argon2-0.5.3/src/lib.rs:268-318):
+# `Argon2::fill_memory(pwd, salt, &mut [Block])` performs exactly the
+# RandomX-required "omit finalizer; output is the filled memory array"
+# semantics from specs.md §7.1. The `output_len=0` path inside
+# `initial_hash` (lib.rs:526) reproduces dataset.cpp:76's
+# `context.outlen = 0`. Argon2d (algorithm.rs:54, discriminant 0) +
+# Version::V0x13 (version.rs default) match the C fork's pin.
+# See src/argon2d.rs module rustdoc for the complete dispositions.
+#
+# Feature notes:
+# - `alloc`: required for `Argon2::fill_memory`'s internal Vec usage.
+# - `zeroize`: activates `impl Zeroize for Block`. RandomX Cache
+#   contents are PUBLIC (deterministic function of the seedhash, a
+#   block-header value); zeroize is defense-in-depth rather than
+#   load-bearing for our threat model, but enabling it here keeps
+#   the feature union identical to shekyl-crypto-pq's, avoiding
+#   a duplicate argon2 build with a different feature set.
+argon2 = { version = "0.5", default-features = false, features = ["alloc", "zeroize"] }
+
+[lints]
+workspace = true
