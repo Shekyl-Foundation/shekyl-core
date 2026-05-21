@@ -1554,6 +1554,65 @@ sustainability is unaffected by the recalibration.
   phrase-string-wipe-on-drop split, and explicitly named this
   FOLLOWUPS entry as the bounded closure path for the residual.
 
+- **RandomX v2 Phase 3c — `aes`-crate symbol-surface check on the
+  linked `shekyld` binary** (trigger: Phase 2b PR landing; target:
+  V3.0 / Phase 3c PR closes this item). Phase 2b added `aes-0.9.0`
+  as a workspace dependency of `shekyl-pow-randomx`. The Rust-
+  mangled symbols (`_ZN3aes...`) and AES-NI intrinsics
+  (`_mm_aesenc_si128`, which lowers to a bare `aesenc` CPU
+  instruction without an external symbol) **never match any of the
+  10 banned `randomx_*` names** in
+  [`docs/design/RANDOMX_V2_RUST.md`](design/RANDOMX_V2_RUST.md) §7.1
+  by construction — §7.1 uses an explicit-list grep, not an
+  `aes*` or `randomx_*` glob. The structural concern about
+  symbol collision is precluded.
+
+  **Runnable check** (one-shot, when Phase 3c links the verifier
+  through the daemon for the first time):
+
+  ```bash
+  cargo build --release && nm shekyld | grep -iE '(aes|randomx)'
+  ```
+
+  **Expected disposition.** No matches against any name in §7.1's
+  10-symbol banned list. AES-crate symbols (Rust-mangled
+  `_ZN3aes...`) are expected to appear and are benign — they are
+  the `aes-0.9.0` crate's internal surface, not the C-ABI banned
+  `randomx_*` symbols §7.1 forbids. The check confirms nothing
+  leaks into the daemon by surprise; a regression that surfaces
+  here is a Phase 3c rewire bug, not a Phase 2b correctness defect.
+
+  **Why deferred.** The check is by definition a post-link
+  observation; pre-Phase-3c there is no `shekyld` binary that
+  links the Rust verifier. Recording the disposition in
+  FOLLOWUPS.md (rather than in the Phase 2b PR description) makes
+  the Phase 3c author's runbook auditable without "rely on the
+  Phase 3c author re-reading the Phase 2b PR description months
+  later" failure mode per `21-reversion-clause-discipline.mdc`'s
+  named-criteria principle.
+
+  **Sequencing relationship to the existing Phase 2f symbol-
+  isolation item.** The V3.1+ entry "Binary-level `nm`-on-
+  `shekyld` symbol-isolation invariant for the deleted CryptoNote
+  DAA functions" (see V3.1+) names the same post-link `nm` shape
+  as the natural landing site for the Phase 2f symbol-isolation
+  binary check. Phase 3c can fold this F7 check into the same
+  post-link CI step or run it as a one-shot at PR-open time; the
+  disposition is "no `randomx_*` matches" either way.
+
+  **Cross-references.**
+  [`docs/design/RANDOMX_V2_RUST.md`](design/RANDOMX_V2_RUST.md) §7.1
+  (10-symbol explicit-list grep);
+  [`docs/design/RANDOMX_V2_PHASE2B_PLAN.md`](design/RANDOMX_V2_PHASE2B_PLAN.md)
+  §5.7 (F7 finding and forward-action rationale);
+  [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
+  Phase 3c (the wiring PR that closes this item).
+
+  **Target.** V3.0 / Phase 3c. Closes when the post-link `nm`
+  check above runs against the verifier-linked `shekyld` with
+  zero `randomx_*` matches and aes-crate symbols visibly present
+  per the expected disposition.
+
 ---
 
 ## V3.1 — audit response and stressnet gates
