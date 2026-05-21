@@ -416,10 +416,122 @@
     `test-helpers` features; 48 doc warnings unchanged at
     the C7 baseline).
 
-  PR 4 §7.X commits C0 through C9 are now all landed; PR #60
-  carries the full C0–C9 set. See the separate `### Added`
-  and `### Changed` entries below for the trait-surface and
-  `Engine<S, D, L, R>` four-parameter additions PR 4 ships,
+  *C10 – C13 — Copilot post-PR-open review responses*:
+  - Four small post-PR-open commits closing the nine
+    line-anchored findings the GitHub Copilot review raised
+    against `95affda61` (C8 head before C9 push) on PR #60.
+    Each commit is scoped to a single concern (file +
+    correction class) per
+    [`.cursor/rules/90-commits.mdc`](../.cursor/rules/90-commits.mdc)'s
+    scope-per-commit discipline; each commit cites its
+    Copilot finding IDs in the commit message body. Doc-only
+    / harness-only; no API surface, no trait body, and no
+    production code-path touched.
+  - **C10** `60f401e77` — scanner rustdoc fn-name
+    corrections in
+    [`rust/shekyl-scanner/src/scan.rs`](../rust/shekyl-scanner/src/scan.rs).
+    Six sites updated from pre-C4 `scan_transaction` to
+    C4-landed `scan_transaction_with_cancel`, plus the
+    gate-test rustdoc return-type updated from
+    `Ok(Timelocked::empty())` to
+    `Ok(ScanOutcome::Completed(Timelocked(empty)))` to match
+    the actual `ScanOutcome` variant the gate returns.
+    Closes Copilot finding IDs 3278232594 / 3278232649 /
+    3278232666 / 3278232686 plus two same-class adjacent
+    sites discovered during the audit.
+  - **C11** `949e42bd8` — `bench_fixtures` rustdoc fact-fix
+    in
+    [`rust/shekyl-scanner/src/bench_fixtures.rs`](../rust/shekyl-scanner/src/bench_fixtures.rs).
+    The `make_bench_wallet` spend-secret comment cited the
+    on-chain spend point as the basepoint when
+    `fake_spend_key_bytes()` actually returns `2 * G`. The
+    `fake_spend_key_bytes()` rustdoc opening was internally
+    contradictory and is rewritten as a clean three-property
+    justification (torsion-free; non-default; distinct from
+    `G`). Behaviour unchanged — `fake_spend_key_bytes()`
+    body still returns `(2 * G).compress().to_bytes()`
+    byte-identically; F11-S cold-cache audit-trail
+    unaffected. Closes Copilot finding IDs 3278232628 /
+    3278232770.
+  - **C12** `20b082a38` — refresh-trait checkpoint-list
+    temporal-firing-order explanation in
+    [`rust/shekyl-engine-core/src/engine/traits/refresh.rs`](../rust/shekyl-engine-core/src/engine/traits/refresh.rs).
+    The `RefreshEngine` trait rustdoc lists checkpoints in
+    temporal-firing order (1 → 2 → 3 → 5 → 4) rather than
+    numeric order. Copilot read this as out-of-order, but
+    the numbering is repo-wide audit-trail convention
+    preserving "checkpoint 5 added per PR 4 Round 4 F2".
+    Synchronized renumbering would touch 12+ cross-reference
+    sites and dissolve the F2-audit-trail provenance;
+    rejected per
+    [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)'s
+    substrate-anchored disposition. Fix applied: add an
+    explanatory paragraph to the trait rustdoc that names
+    the temporal-firing-order convention explicitly so the
+    question isn't re-litigated. Closes Copilot finding ID
+    3278232791.
+  - **C13** `262ece667` — scan-transaction warm-cache bench
+    harness clone-out-of-timed-region fix in
+    [`rust/shekyl-scanner/benches/scan_transaction.rs`](../rust/shekyl-scanner/benches/scan_transaction.rs).
+    Both warm-cache benchmark variants used
+    `iter_batched_ref` with an in-routine
+    `mem::replace(b, block.clone())`, placing
+    `ScannableBlock::clone` inside the timed region.
+    Switched to `iter_batched(|| block.clone(), |block|
+    scanner.scan(block), ..)` so the clone is in the setup
+    closure and only `Scanner::scan` is measured. **F11-S
+    audit-trail impact: ZERO** — the F11-S binding
+    measurement (per
+    [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    §3.1 / §5.4.9 / §7.Y) is anchored on the cold-cache
+    N=16 worst-case p99 (12.95 ms per-tx / 819 µs
+    per-output), and the cold variant was already
+    methodologically correct (all setup outside the timed
+    region). Captured F11-S numbers at `a4da2212a` and the
+    C4 per-output safe-point disposition stand without
+    revision. Closes Copilot finding IDs 3278232713 /
+    3278232736.
+  - Gates per commit: each commit ran its scoped bisection-
+    discipline gates against the affected crate
+    (`shekyl-scanner` for C10 / C11 / C13;
+    `shekyl-engine-core` for C12). Test counts and doc-
+    warning baselines unchanged: 57 / 57 scanner lib tests
+    pass; 170 / 170 engine-core lib tests pass; scanner doc
+    warnings = 2 (C8 baseline); engine-core doc warnings =
+    49 (C9 baseline). C13 additionally ran
+    `cargo check --benches` to confirm the bench targets
+    compile under the new `iter_batched` shape.
+
+  *C14 — `[Unreleased]` doc-after-plans propagation for
+  C10 – C13* (this commit):
+  - Doc-only follow-up commit per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    final-task-always rule. After C10 / C11 / C12 / C13
+    landed locally with green gates, the design doc §7.X
+    Status banner (line ~478) was extended to enumerate
+    C10 – C13 alongside C0 – C9 with landing SHAs and
+    per-commit one-paragraph summaries, and the §7.X
+    commit-block section gained a new
+    `**Commits C10 – C13 — Copilot post-PR-open review
+    responses.**` block with the same per-commit prose +
+    F11-S impact statement + gate evidence. The C9 block's
+    placeholder `**Landed: this commit**` was replaced with
+    the landed SHA `839c4bbfd`. This `*C10 – C13 — Copilot
+    post-PR-open review responses*` subsection above is
+    the matching CHANGELOG entry; the doc-after-plans
+    propagation also updates the closing C0–C13 paragraph
+    below.
+  - Gate inheritance from C13: C14 is doc-only, so the
+    `cargo fmt --check`, `cargo clippy --all-targets --
+    -D warnings`, `cargo test --lib`, and `cargo doc --no-
+    deps` gates all inherit C13's results unchanged
+    (no rust files touched in C14).
+
+  PR 4 §7.X commits C0 through C14 are now all landed; PR
+  #60 carries the full C0–C14 set. See the separate `###
+  Added` and `### Changed` entries below for the trait-
+  surface and `Engine<S, D, L, R>` four-parameter additions
+  PR 4 ships,
   per the C8 spec at `STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X
   C8.
 

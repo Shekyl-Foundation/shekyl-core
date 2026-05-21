@@ -522,19 +522,64 @@ tests + 1 fuzzed proptest + 4 panic-safety tests + 1
 classifier sanity test); **C8** `95affda61`
 (docs propagation + `CHANGELOG` + V3_ENGINE_TRAIT_BOUNDARIES
 §2.3 past-tense + FOLLOWUPS Phase 0d-strike retirement
-note); **C9** *this commit* (FOLLOWUPS P1 / P2 / P3
+note); **C9** `839c4bbfd` (FOLLOWUPS P1 / P2 / P3
 re-anchor post-Phase-1-landing: PR 4 settled α per Round 1
 without absorbing P1 / P2 / P3, so the pre-Phase-1 "defer
 to PR 4" dispositions become stale; re-anchored against the
 post-Phase-1 substrate with substrate-anchored reopening
 criteria per `21-reversion-clause-discipline.mdc`, plus the
 matching §5.5 named-home table updates above and the
-CHANGELOG follow-up entry). Round 5 substrate-decision
-amendment (`8484e669a`) and Round 5 sub-pin extension
-(`29cb7e138`), plus the F11-S audit-trail measurement
-evidence (`a4da2212a`), land as design-doc commits on the
+CHANGELOG follow-up entry); **C10** `60f401e77` (scanner
+rustdoc fn-name corrections in
+[`shekyl-scanner/src/scan.rs`](../../rust/shekyl-scanner/src/scan.rs) —
+six sites updated from pre-C4 `scan_transaction` to the
+C4-landed `scan_transaction_with_cancel`, plus the gate-test
+rustdoc return-type updated from `Ok(Timelocked::empty())`
+to `Ok(ScanOutcome::Completed(Timelocked(empty)))`; closes
+Copilot PR #60 review IDs 3278232594 / 3278232649 /
+3278232666 / 3278232686 plus two same-class adjacent sites);
+**C11** `949e42bd8` (`bench_fixtures` rustdoc fact-fix in
+[`shekyl-scanner/src/bench_fixtures.rs`](../../rust/shekyl-scanner/src/bench_fixtures.rs) —
+the `fake_spend_key_bytes()` rustdoc and the adjacent
+`make_bench_wallet` spend-secret comment described the
+worst-case fixture's spend point as the basepoint when the
+function actually returns `2 * G`; the opening paragraph
+was also internally contradictory and is rewritten as a
+clean three-property justification — torsion-free,
+non-default, distinct from `G`; closes Copilot PR #60
+review IDs 3278232628 / 3278232770); **C12** `20b082a38`
+(refresh-trait checkpoint-list temporal-firing-order
+explanation in
+[`engine/traits/refresh.rs`](../../rust/shekyl-engine-core/src/engine/traits/refresh.rs) —
+the `RefreshEngine` trait rustdoc lists checkpoints in
+temporal-firing order 1 → 2 → 3 → 5 → 4 rather than numeric
+order; Copilot read the list as out-of-order, but the
+numbering is repo-wide audit-trail convention preserving
+"checkpoint 5 added per PR 4 Round 4 F2"; synchronized
+renumbering would touch 12+ cross-reference sites and
+dissolve the F2-audit-trail provenance, so the disposition
+per `21-reversion-clause-discipline.mdc` is to preserve the
+numbering and add an explanatory paragraph so the question
+isn't re-litigated; closes Copilot PR #60 review ID
+3278232791); **C13** `262ece667` (scan-transaction
+warm-cache bench harness in
+[`shekyl-scanner/benches/scan_transaction.rs`](../../rust/shekyl-scanner/benches/scan_transaction.rs) —
+the warm variants used `iter_batched_ref` with an in-routine
+`mem::replace(b, block.clone())`, placing
+`ScannableBlock::clone` inside the timed region; switched
+to `iter_batched(|| block.clone(), |block| scanner.scan(block), ..)`
+so the clone is in the setup closure and only
+`Scanner::scan` is measured; **the F11-S cold-cache
+binding measurement is unaffected** because the cold
+variant already used `iter_batched` with the full
+`(scanner, block)` construction in the setup closure;
+closes Copilot PR #60 review IDs 3278232713 /
+3278232736). Round 5 substrate-decision amendment
+(`8484e669a`) and Round 5 sub-pin extension (`29cb7e138`),
+plus the F11-S audit-trail measurement evidence
+(`a4da2212a`), land as design-doc commits on the
 implementation branch alongside C5β / C6α and are not in
-the C0–C9 numbering.
+the C0–C13 numbering.
 Test-gate cumulative: 170 / 170 lib tests pass at C7;
 `cargo fmt --all -- --check` clean; `cargo clippy -p
 shekyl-engine-core --all-targets --features test-helpers --
@@ -6351,9 +6396,137 @@ C8's results (170 / 170 lib tests pass; fmt clean; clippy
 clean under both default and `test-helpers` features;
 48 doc warnings unchanged at the C7 baseline).
 
-**Landed: this commit** (`refresh: C9 re-anchor P1/P2/P3
-FOLLOWUPS post-Phase-1 landing`). PR 4 §7.X commits C0–C9
-are now all landed; PR #60 carries the full C0–C9 set.
+**Landed: `839c4bbfd`** (`refresh: C9 re-anchor P1/P2/P3
+FOLLOWUPS post-Phase-1 landing`).
+
+**Commits C10–C13 — Copilot post-PR-open review responses.**
+
+PR #60 opened after C8 with C9 added before push. The
+GitHub Copilot review against `95affda61` (C8 head before
+the C9 push) returned nine line-anchored findings; this
+batch of four commits closes all nine. Doc-only / harness-
+only changes; no API surface, no trait body, and no
+production code-path touched. Each commit cites its
+Copilot finding IDs in the commit message body.
+
+- **C10** `60f401e77` — scanner rustdoc fn-name
+  corrections in
+  [`shekyl-scanner/src/scan.rs`](../../rust/shekyl-scanner/src/scan.rs).
+  Six sites updated from pre-C4 `scan_transaction` to
+  C4-landed `scan_transaction_with_cancel`, plus the
+  gate-test rustdoc return-type updated from
+  `Ok(Timelocked::empty())` to
+  `Ok(ScanOutcome::Completed(Timelocked(empty)))` to
+  match the actual `ScanOutcome` variant the gate
+  returns. Four sites flagged by Copilot (IDs 3278232594,
+  3278232649, 3278232666, 3278232686); two additional
+  same-class sites caught during the audit (lines 738 and
+  917) and fixed in the same commit per
+  `15-deletion-and-debt.mdc`'s "leave the file in good
+  shape" allowance.
+
+- **C11** `949e42bd8` — `bench_fixtures` rustdoc
+  fact-fix in
+  [`shekyl-scanner/src/bench_fixtures.rs`](../../rust/shekyl-scanner/src/bench_fixtures.rs).
+  Two sites updated. The
+  `make_bench_wallet` spend-secret comment cited "the
+  basepoint (via `fake_spend_key_bytes()`)" as the
+  on-chain spend point; the function actually returns
+  `2 * G`. Rewritten to cite `2 * G` directly with a
+  cross-reference to `fake_spend_key_bytes()`'s rustdoc.
+  The `fake_spend_key_bytes()` rustdoc opening paragraph
+  was internally contradictory (described returning the
+  basepoint, then a parenthetical "actually they ARE
+  equal, see below", then a downstream "we use a
+  *different* torsion-free point: `2 * G`"); rewritten
+  as a clean three-property justification (torsion-free;
+  non-default; distinct from `G`). Behaviour unchanged —
+  `fake_spend_key_bytes()` body still returns
+  `(2 * G).compress().to_bytes()` byte-identically; the
+  worst-case fixture's ownership-miss classification is
+  load-bearing for the F11-S cold-cache audit trail and
+  that audit trail is not affected by this commit. Closes
+  Copilot finding IDs 3278232628, 3278232770.
+
+- **C12** `20b082a38` — refresh-trait checkpoint-list
+  temporal-firing-order explanation in
+  [`engine/traits/refresh.rs`](../../rust/shekyl-engine-core/src/engine/traits/refresh.rs).
+  The `RefreshEngine` trait rustdoc's cancellation-
+  checkpoint list bullets in temporal-firing order
+  (1 → 2 → 3 → 5 → 4) rather than numeric order, which
+  Copilot read as out-of-order. The numbering is
+  repo-wide audit-trail convention — checkpoint 5 was
+  added later (per PR 4 Round 4 F2) rather than
+  renumbering the existing four sites, preserving the
+  "checkpoint 5 = the F2-added one" provenance.
+  Synchronized renumbering would touch 12+ cross-reference
+  sites (docs/V3_ENGINE_TRAIT_BOUNDARIES.md, docs/
+  CHANGELOG.md, docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md,
+  rust/shekyl-engine-core/src/engine/refresh.rs, rust/
+  shekyl-engine-core/src/engine/local_refresh.rs) and
+  dissolve the F2-audit-trail provenance the numbering
+  carries; rejected per
+  [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)'s
+  substrate-anchored disposition. Fix applied: add an
+  explanatory "**List ordering vs. checkpoint
+  numbering**" paragraph to the trait rustdoc that names
+  the temporal-firing-order convention explicitly, cross-
+  references the audit-trail provenance, and names the
+  reversion-clause disposition so a future reviewer
+  doesn't trip on the same observation and re-litigate
+  the disposition. Closes Copilot finding ID 3278232791.
+
+- **C13** `262ece667` — scan-transaction warm-cache
+  bench harness clone-out-of-timed-region fix in
+  [`shekyl-scanner/benches/scan_transaction.rs`](../../rust/shekyl-scanner/benches/scan_transaction.rs).
+  Both warm-cache benchmark variants
+  (`bench_worst_case_all_view_tags_match` and
+  `bench_typical_case_view_tag_filtered`) used
+  `iter_batched_ref` with an in-routine
+  `mem::replace(b, block.clone())` to swap a fresh clone
+  in per iteration. This placed `ScannableBlock::clone`
+  inside the timed region, so warm-cache measurements
+  included clone overhead rather than isolating
+  `Scanner::scan` cost. Switched to
+  `iter_batched(|| block.clone(), |block| scanner.scan(block), ..)`
+  so the clone is in the setup closure and only
+  `scanner.scan(black_box(block))` is measured. **F11-S
+  audit-trail impact: ZERO** — the F11-S binding
+  measurement (§3.1 / §5.4.9 / §7.Y) is anchored on the
+  **cold-cache** N=16 worst-case p99 (12.95 ms per-tx /
+  819 µs per-output), and the cold variant was already
+  structured with `iter_batched` and the full
+  `(scanner, block)` construction in the setup closure
+  (no clone inside timed region). The warm-cache numbers
+  are presented as cache-amplification context only and
+  are not load-bearing for the C4 per-output safe-point
+  disposition; the captured F11-S numbers at commit
+  `a4da2212a` and the C4 disposition stand without
+  revision. For audit-trail completeness, §7.Y's
+  warm-cache tables include clone overhead and are
+  therefore upper-bound measurements; the qualitative
+  warm/cold cache-amplification ratio (~7.46× cold/warm
+  at N=16 p99) is unchanged in shape. Future warm-cache
+  captures (e.g., Phase 7.7 stressnet) will use the
+  corrected methodology by construction. Closes Copilot
+  finding IDs 3278232713, 3278232736.
+
+C10–C13 gate inheritance: each commit ran its scoped
+bisection-discipline gates (`cargo fmt --check`,
+`cargo clippy --all-targets -- -D warnings`,
+`cargo test --lib`, `cargo check --benches` for C13,
+`cargo doc --no-deps`) against the affected crate
+(`shekyl-scanner` for C10 / C11 / C13;
+`shekyl-engine-core` for C12). Test counts and doc-
+warning baselines unchanged: 57 / 57 scanner lib tests
+pass; 170 / 170 engine-core lib tests pass; scanner doc
+warnings = 2 (C8 baseline); engine-core doc warnings =
+49 (C9 baseline). No new doc warnings introduced.
+
+**Landed: `262ece667`** (`refresh: C13 move warm-cache
+bench clone out of timed region`). PR 4 §7.X commits
+C0–C13 are now all landed; PR #60 carries the full
+C0–C13 set.
 
 **Phase 1 readiness checklist (gates the C0 cut).** The
 following are pre-conditions for the implementation branch to
