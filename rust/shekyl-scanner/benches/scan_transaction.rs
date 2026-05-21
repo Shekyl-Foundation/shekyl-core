@@ -54,12 +54,18 @@
 //! side [`shekyl_scanner::MAX_OUTPUTS`] gate (consensus-binding limit
 //! of 16). Each `N` is measured in two cache variants:
 //!
-//! - **`warm`**: the scanner instance and `ScannableBlock` are
-//!   constructed once, then `scanner.scan(block)` is repeated via
-//!   `iter_batched_ref` so the scanner's `HashMap<CompressedPoint,
-//!   …>` subaddress lookup and the per-tx `Extra::read` parser stay
-//!   resident in L1/L2. This is the "second and later passes through
-//!   the same hot path" cost.
+//! - **`warm`**: the scanner instance is constructed once and
+//!   reused; the `ScannableBlock` is cloned in the `iter_batched`
+//!   setup closure (so the clone happens outside the timed region)
+//!   and `scanner.scan(block)` runs in the inner routine. The
+//!   scanner's `HashMap<CompressedPoint, …>` subaddress lookup and
+//!   the per-tx `Extra::read` parser stay resident in L1/L2 across
+//!   iterations. This is the "second and later passes through the
+//!   same hot path" cost. (The earlier harness shape used
+//!   `iter_batched_ref` with an in-routine `mem::replace(b,
+//!   block.clone())`; that placed the clone inside the timed
+//!   region and was corrected per Copilot PR #60 review findings
+//!   3278232713 / 3278232736.)
 //!
 //! - **`cold`**: the scanner instance and `ScannableBlock` are
 //!   re-constructed every iteration via `iter_batched(.., ..,
@@ -129,18 +135,28 @@ fn bench_worst_case_all_view_tags_match(c: &mut Criterion) {
     for &n in OUTPUT_COUNTS {
         group.throughput(Throughput::Elements(n as u64));
 
-        // ── Warm-cache variant: scanner + block constructed once;
-        //    iter_batched_ref reuses both across iterations. ──
+        // ── Warm-cache variant: scanner constructed once and
+        //    reused across iterations; the block is cloned in the
+        //    `iter_batched` setup closure (outside the timed region)
+        //    so the measurement isolates `Scanner::scan` cost from
+        //    `ScannableBlock` clone overhead. The earlier shape used
+        //    `iter_batched_ref` with an in-routine `mem::replace(
+        //    b, block.clone())`, which placed the clone inside the
+        //    timed region. Corrected per Copilot PR #60 review
+        //    finding 3278232713; F11-S cold-cache binding (below) is
+        //    unaffected as the cold variant already uses
+        //    `iter_batched` with the fresh-block construction in the
+        //    setup closure. ──
         {
             let mut scanner = fresh_scanner(&wallet);
             let block = build_worst_case_scannable_block(n, &wallet);
             group.bench_with_input(BenchmarkId::new("warm", n), &n, |b, &_n| {
-                b.iter_batched_ref(
+                b.iter_batched(
                     || block.clone(),
-                    |b| {
-                        let res = scanner
-                            .scan(black_box(std::mem::replace(b, block.clone())))
-                            .expect("scan_transaction must not error on well-formed fixture");
+                    |block| {
+                        let res = scanner.scan(black_box(block)).expect(
+                            "scan_transaction_with_cancel must not error on well-formed fixture",
+                        );
                         black_box(res);
                     },
                     BatchSize::SmallInput,
@@ -149,7 +165,13 @@ fn bench_worst_case_all_view_tags_match(c: &mut Criterion) {
         }
 
         // ── Cold-cache variant: fresh scanner + fresh block per
-        //    iteration via iter_batched with PerIteration sizing. ──
+        //    iteration via iter_batched with PerIteration sizing.
+        //    This variant is the F11-S binding (per
+        //    STAGE_1_PR_4_REFRESH_ENGINE.md §7.Y measurement
+        //    evidence) and was already structured with all setup
+        //    (scanner + block construction) outside the timed
+        //    region, so the methodology correction above does not
+        //    affect F11-S audit-trail numbers. ──
         group.bench_with_input(BenchmarkId::new("cold", n), &n, |b, &n| {
             b.iter_batched(
                 || {
@@ -159,9 +181,9 @@ fn bench_worst_case_all_view_tags_match(c: &mut Criterion) {
                     )
                 },
                 |(mut scanner, block)| {
-                    let res = scanner
-                        .scan(black_box(block))
-                        .expect("scan_transaction must not error on well-formed fixture");
+                    let res = scanner.scan(black_box(block)).expect(
+                        "scan_transaction_with_cancel must not error on well-formed fixture",
+                    );
                     black_box(res);
                 },
                 BatchSize::PerIteration,
@@ -190,17 +212,20 @@ fn bench_typical_case_view_tag_filtered(c: &mut Criterion) {
     for &n in OUTPUT_COUNTS {
         group.throughput(Throughput::Elements(n as u64));
 
-        // ── Warm-cache variant. ──
+        // ── Warm-cache variant. Same methodology correction as the
+        //    worst-case warm variant above (Copilot PR #60 review
+        //    finding 3278232736): clone moved into `iter_batched`
+        //    setup closure to isolate `Scanner::scan` cost. ──
         {
             let mut scanner = fresh_scanner(&wallet);
             let block = build_typical_case_scannable_block(n);
             group.bench_with_input(BenchmarkId::new("warm", n), &n, |b, &_n| {
-                b.iter_batched_ref(
+                b.iter_batched(
                     || block.clone(),
-                    |b| {
-                        let res = scanner
-                            .scan(black_box(std::mem::replace(b, block.clone())))
-                            .expect("scan_transaction must not error on well-formed fixture");
+                    |block| {
+                        let res = scanner.scan(black_box(block)).expect(
+                            "scan_transaction_with_cancel must not error on well-formed fixture",
+                        );
                         black_box(res);
                     },
                     BatchSize::SmallInput,
@@ -218,9 +243,9 @@ fn bench_typical_case_view_tag_filtered(c: &mut Criterion) {
                     )
                 },
                 |(mut scanner, block)| {
-                    let res = scanner
-                        .scan(black_box(block))
-                        .expect("scan_transaction must not error on well-formed fixture");
+                    let res = scanner.scan(black_box(block)).expect(
+                        "scan_transaction_with_cancel must not error on well-formed fixture",
+                    );
                     black_box(res);
                 },
                 BatchSize::PerIteration,
