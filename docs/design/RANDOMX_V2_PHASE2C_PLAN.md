@@ -8,8 +8,17 @@ naming (same shape F4 dissolved for `DatasetReader` / `MockDatasetReader`).
 Three structural restructurings landed within Round 1's bounds:
 (R2-D1) trait → free function for dispatch; (R2-D2) `Vm<'a>` private →
 `compute_hash` public transform; (R2-D3) `Cache::from_raw` visibility
-correction. Round 3 anticipated for substrate-completeness pass before
-implementation cuts.
+correction. **Round 3 closed 2026-05-21:** substrate-completeness pass
+before implementation cuts. (R3-D1) §5.1.1 function-body replacement
+contract pins the 2c→2d hand-off (frozen signature; frozen
+`Instruction` field set; `VmState` field set populated empirically
+against `bytecode_machine.hpp`'s 29 opcode handlers and corrected one
+prompted-list speculation — `mp` is a v2-only local alias, not a
+struct field). (R3-minor-1) §13 3a inheritance FFI layering note.
+(R3-minor-2) §9/§12/§15 `tests/perf/per_hash_latency.rs` placeholder.
+(R3-D3) Sibling commit lands `RANDOMX_V2_PHASE2D_PLAN.md` skeleton
+scaffold. Target ≤1 round met; implementation cut authorized post-
+PR-#65 merge.
 
 **Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A
 — Phase 2" sub-PR 2c is the binding one-line scope ("Implement Cache
@@ -35,7 +44,8 @@ Phase 2c implementation branch cuts later from post-this-doc `dev`.
 
 - `chore/randomx-v2-phase2c-plan` (this doc + the parent-plan
   precursor patch + Round 2 plan-doc revisions + Round 2 parent-plan
-  alignment; short-lived per `06-branching.mdc` rule 2; four commits;
+  alignment + Round 3 plan-doc revisions + Round 3 2d skeleton scaffold;
+  short-lived per `06-branching.mdc` rule 2; six commits;
   lands on `dev` via PR #65).
 - `feat/randomx-v2-phase2c` (implementation; cut from post-this-doc
   `dev`; not yet cut as of this doc's commit).
@@ -360,6 +370,178 @@ findings together establish the discipline: trait + stub-impl =
 mock-X anti-pattern; transform-function + body-replacement = the
 shape Shekyl uses for this pattern.
 
+### 5.1.1 Function-body replacement contract (2c → 2d hand-off)
+
+**Why this section exists (R3-D1).** R2-D1 replaced the
+`BytecodeDispatch` trait + `StubNopDispatch` impl with a
+`dispatch_instruction` free function whose body is NOP in 2c and is
+replaced in 2d. "Replaces the body" is one of the most failure-prone
+refactor patterns in code review — the signature can change silently;
+the new body can implicitly require different state initialization;
+the stub's assumptions about `VmState`'s shape can fail to carry
+forward. This section pins the contract explicitly so 2d's review
+surface is mechanical ("does the contract hold?") rather than
+diff-archaeology of what the trait used to encapsulate.
+
+The contract has three frozen surfaces. Each freezing locks one
+degree of freedom that the trait + stub-impl shape would have exposed.
+
+#### Frozen surface 1: `dispatch_instruction` signature
+
+```rust
+fn dispatch_instruction(instr: &Instruction, state: &mut VmState)
+```
+
+2d **cannot**:
+
+- Add parameters. (E.g., a `&Cache` parameter for "memory-mode reads"
+  — empirically wrong: per `bytecode_machine.hpp:145-270`, no
+  per-instruction handler reads the cache. M-opcodes read the
+  scratchpad; the cache is only read by the per-iteration dataset
+  read inside `VmState::run`, not by `dispatch_instruction`.)
+- Add a return value. (CBRANCH's PC mutation is via `state` — see
+  VmState field set below.)
+- Change the lifetime/borrow shape. (No `&'a Cache` field on
+  `VmState`; no `'_` elision shift; `VmState` carries owned data
+  only with no lifetime parameter.)
+- Restructure as an IBC-style 2-pass design. (See the reopening
+  criterion at the bottom of this sub-section.)
+
+**Single-pass design choice.** The contract locks the single-pass
+shape (`dispatch_instruction` reads `opcode`/`dst`/`src`/`mod_`/`imm32`
+from `&Instruction` per call). The C reference uses a 2-pass design
+that pre-resolves register pointers into an `InstructionByteCode`
+form at compile-time (`bytecode_machine.hpp:46-65, 117-124`). The
+Rust port adopts the single-pass shape on the prior that Rust+LLVM
+optimize the per-call decode trivially (`Instruction` is an 8-byte
+packed struct read). If 2d's benchmarks invalidate this prior, the
+reopening criterion below applies.
+
+#### Frozen surface 2: `Instruction` field set
+
+Per RandomX spec §5.1 and verified against the v2 fork's
+`instruction.hpp`:
+
+```rust
+struct Instruction {
+    opcode: u8,
+    dst: u8,
+    src: u8,
+    mod_: u8,
+    imm32: u32,
+}
+```
+
+2d cannot add fields. Spec §5.1's 8-byte instruction layout is
+wire-format-stable (program-init produces these byte-for-byte from
+the entropy buffer). Instruction-derived state (resolved register
+pointers, memMask, shift amount, branch target) is computed per-call
+inside `dispatch_instruction`'s body, not stored on `Instruction`.
+
+#### Frozen surface 3: `VmState` field set
+
+The most failure-prone hand-off. If `VmState` ships in 2c missing a
+field 2d's dispatch needs (e.g., FDIV_M's `eMask`), 2d either extends
+`VmState` (violating this contract) or hacks around it. Either is
+bad. The audit (below) enumerates each field empirically against the
+C reference's 29 opcode handlers + iteration loop.
+
+**Audit command (Round 3 deliverable; re-verified at implementation-PR
+time):**
+
+```bash
+grep -nE 'static void exe_' external/randomx-v2/src/bytecode_machine.hpp
+```
+
+29 hits (one per opcode). Each handler's body reads/writes through
+`*ibc.{idst,isrc,fdst,fsrc}`, `ibc.{imm,shift,target,memMask}`,
+`scratchpad`, and `config` (FDIV_M only). The pointer indirections
+(`ibc.idst` etc.) resolve to fields on `RegisterFile`/
+`NativeRegisterFile` (`common.hpp:189-195`, `bytecode_machine.hpp:38-44`)
+plus `ProgramConfiguration` (`program.hpp:39-42`) plus
+`MemoryRegisters` (`common.hpp:184-187`) plus per-VM state in
+`randomx_vm` (`virtual_machine.hpp:69-85`). Cross-referenced against
+`vm_interpreted.cpp::execute()` (the iteration loop) for fields read
+outside `dispatch_instruction`.
+
+**Required for `dispatch_instruction`:**
+
+| Field | Type | C reference source | Used by opcode(s) |
+|-------|------|-------------------|-------------------|
+| `r` | `[u64; 8]` | `NativeRegisterFile.r[RegistersCount]` | All integer R-form opcodes (IADD_RS, ISUB_R, IMUL_R, IMULH_R, ISMULH_R, IMUL_RCP, INEG_R, IXOR_R, IROR_R, IROL_R, ISWAP_R) + integer M-opcodes (IADD_M, ISUB_M, IMUL_M, IMULH_M, ISMULH_M, IXOR_M) + ISTORE + CBRANCH |
+| `f` | `[F128; 4]` | `NativeRegisterFile.f[RegisterCountFlt]` | FADD_R, FADD_M, FSUB_R, FSUB_M, FSCAL_R, FSWAP_R |
+| `e` | `[F128; 4]` | `NativeRegisterFile.e[RegisterCountFlt]` | FMUL_R, FDIV_M, FSQRT_R |
+| `a` | `[F128; 4]` | `NativeRegisterFile.a[RegisterCountFlt]` | Read-only operand (FADD_R, FSUB_R, FMUL_R `fsrc`); never mutated after init |
+| `fprc` | `u32` | not in `NativeRegisterFile`/`MemoryRegisters` — separate VM state (per spec §5.2.5) | CFROUND |
+| `scratchpad` | `Box<[u8; SCRATCHPAD_L3]>` | `uint8_t* scratchpad` (VmBase) | All M-opcodes (IADD_M, ISUB_M, IMUL_M, IMULH_M, ISMULH_M, IXOR_M, FADD_M, FSUB_M, FDIV_M) + ISTORE |
+| `e_mask` | `[u64; 2]` | `ProgramConfiguration.eMask[2]` | FDIV_M (via `maskRegisterExponentMantissa`, `bytecode_machine.hpp:272-278`) |
+
+**Required for `VmState::run` iteration loop only (`dispatch_instruction` does NOT read these):**
+
+| Field | Type | C reference source | Iteration-loop role |
+|-------|------|-------------------|---------------------|
+| `ma` | `u32` | `MemoryRegisters.ma` | `datasetRead` address; per F5 v2-only collapse, also written by `mp ^= readReg2 ^ readReg3` (`vm_interpreted.cpp:90` under V2 alias). Init source for `sp_addr1` (`vm_interpreted.cpp:67`). |
+| `mx` | `u32` | `MemoryRegisters.mx` | `datasetPrefetch` address; `std::swap(mem.mx, mem.ma)` swap target each iteration (`vm_interpreted.cpp:94`). Init source for `sp_addr0` (`vm_interpreted.cpp:66`). |
+| `read_reg` | `[u32; 4]` | `ProgramConfiguration.readReg0..3` | sp_addr derivation + mp-XOR each iteration (`vm_interpreted.cpp:70, 90`). |
+| `dataset_offset` | `u64` | `randomx_vm::datasetOffset` | `datasetRead`/`datasetPrefetch` base offset (per-VM, set during `initialize`). |
+| `program` | `Box<Program>` | `randomx_vm::program` | 2048 parsed instructions feeding the dispatch loop. |
+| `temp_hash` | `[u64; 8]` | `randomx_vm::tempHash` | Blake2b intermediate buffer for program-init and finalize. |
+
+**Explicitly NOT in `VmState` (with Round 3 audit rationale):**
+
+| Field | Disposition | Source / why |
+|-------|-------------|--------------|
+| `mp` | **NOT a separate field** | `vm_interpreted.cpp:89` is `auto& mp = (flags & V2) ? mem.ma : mem.mx;` — a v2-only **local-variable alias** for `mem.ma`. The C reference's `MemoryRegisters` struct (`common.hpp:184-187`) carries only `mx` and `ma`. F5 v2-only simplification collapses the assignment site to `state.ma` directly, eliminating the alias. **Round 3 audit correction (R3-D1):** the earlier prompted field list speculated `mp: u32` as a separate field; the audit verified no such field exists in the C reference, and the v2-only Rust port introduces none. See §5.5 F5 corrected entry. |
+| `vm_flags` | NOT in `VmState` | F5 v2-only: no version branching at runtime; v2 is structural. |
+| `cache_key` | NOT in `VmState` | `randomx_vm::cacheKey: std::string` (`virtual_machine.hpp:83`) is metadata not read by execution; only used for diagnostic prints in the C reference. |
+| `register_usage` | NOT in `VmState` (under single-pass) | `BytecodeMachine::registerUsage[RegistersCount]` (`bytecode_machine.hpp:282`) is compile-pass state for CBRANCH-time register-availability tracking. Single-pass dispatch (per Frozen surface 1) has no compile pass; the tracking is unneeded. |
+| `sp_addr0`, `sp_addr1` | NOT in `VmState` (locals) | `vm_interpreted.cpp:66-67` are local variables in `execute()`. The Rust port keeps them as local variables in `VmState::run`'s iteration loop. `dispatch_instruction` never reads them; M-opcode addresses come from `r[src] + imm32` masked by memMask (`bytecode_machine.hpp:285-288`), NOT from spAddr. |
+| `&Cache` borrow | NOT a `VmState` field | Passed to `VmState::run` as a parameter; `compute_hash` owns the borrow. `VmState` carries owned data only — no lifetime parameter, no `&'a Cache` field. The cache is read once per iteration (the dataset read between dispatch loop and AES mix) inside `VmState::run`, not by `dispatch_instruction`. |
+
+#### Reopening criterion (reversion-clause shape)
+
+Per `21-reversion-clause-discipline.mdc`, the signature freeze is
+conditional, not absolute. The reopening criterion:
+
+**Reopen iff** 2d's per-opcode dispatch benchmark (per F8
+forward-action consumed by 2g) demonstrates that single-pass dispatch
+cannot meet Phase 0's ≤3.0× C-reference budget — **and** the
+demonstrated shortfall is attributable to per-call decode cost rather
+than per-opcode body work (i.e., profiling shows the
+`opcode`/`dst`/`src`/`mod_` field reads from `&Instruction` are a
+non-trivial fraction of per-instruction cost).
+
+**Re-evaluation shape** (if the criterion triggers): 2d Round 1
+surfaces the benchmark evidence and re-specs the signature to
+`fn dispatch_instruction(ibc: &InstructionByteCode, state: &mut
+VmState)`, where `InstructionByteCode` is the pre-resolved-pointer
+form mirroring the C reference's `bytecode_machine.hpp:46-65`. The
+2c amendment (adding `InstructionByteCode` to `vm.rs` + adding an
+`Instruction → InstructionByteCode` compile pass to
+`VmState::initialize`) is a documented 2d-Round-1 amendment to 2c,
+not implementation-time reactive scope expansion. The cost of the
+reopening is bounded by 2c's structural pre-work: the audit table
+above already enumerates everything `VmState` needs; the only
+addition is the `InstructionByteCode` type and the compile pass.
+
+**Reopen NOT iff** 2d's author prefers the IBC form for style
+reasons, wants pre-emptive performance margin without benchmark
+evidence, or cites "alignment with C reference shape" as the
+justification. Per `21-reversion-clause-discipline.mdc`'s
+anti-pattern enumeration ("Keep it for flexibility" is debt;
+"Reopen on request" is no discipline at all), preference-based
+reopening is rejected.
+
+**Cross-references.** Phase 2d's plan doc
+(`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`, the Round 3 R3-D3 skeleton
+shipped alongside this plan doc) carries the contract forward
+verbatim and references this section. Implementation-PR-time review
+of 2d's diff checks against this contract mechanically: signature
+unchanged; `Instruction` field set unchanged; `VmState` field
+additions justified by audit-grep evidence against
+`bytecode_machine.hpp` opcode handlers; reversion criterion either
+satisfied (with named benchmark evidence) or not invoked.
+
 ### 5.2 F2 — FPU rounding mode: deferred to 2d
 
 **Problem.** RandomX's `fprc` register selects one of four IEEE 754
@@ -530,7 +712,7 @@ Decision #1):
 
 | C reference site | v2 form (Rust port adopts) | Rust port shape |
 |------------------|----------------------------|-----------------|
-| `vm_interpreted.cpp:89` — `auto& mp = (flags & V2) ? mem.ma : mem.mx;` | `mp = ma` | `mp = ma` assignment is unconditional (no version gate). `mp` register exists unconditionally as a `Vm` field. **Distinction:** existence is the data-flow disposition; assignment is the control-flow disposition. |
+| `vm_interpreted.cpp:89` — `auto& mp = (flags & V2) ? mem.ma : mem.mx;` | `mp` is a v2-only **local-variable alias** for `mem.ma` | No `mp` field in `VmState`. The v2 simplification collapses the assignment site (`vm_interpreted.cpp:90`, `mp ^= ...`) to `state.ma ^= ...` directly, eliminating the alias. The C reference's `MemoryRegisters` struct (`common.hpp:184-187`) carries only `mx` and `ma`; `mp` exists only as the function-local reference inside `execute()`. **Round 3 audit correction (R3-D1):** earlier drafts read this entry as `mp` being a `Vm` field that "exists unconditionally"; the C reference does not carry it as a struct field, and the v2-only Rust port has no reason to introduce one. See §5.1.1's "Explicitly NOT in `VmState`" row for the verified disposition. |
 | `vm_interpreted.cpp:99` — `if (flags & V2)` F/E AES mix over FP registers | take v2 branch unconditionally | `VmState::run`'s F/E AES mix is the v2 form (per spec §4.5.4) with no conditional. |
 | `bytecode_machine.hpp:263` — `if ((flags & V2) == 0 \|\| (isrc & 60) == 0)` IADD_M/ISUB_M/IMUL_M imm32 cap | take v2 branch (the cap applies) | `dispatch_instruction`'s memory-instruction imm32 handling caps to first 6 bits unconditionally (relevant to 2d's bytecode dispatch; 2c's stub-NOP `dispatch_instruction` body carries no integer ops, but the F5 discipline forward-pointer ensures 2d's body replacement inherits the v2-only cap). |
 | `virtual_machine.hpp:63-66` — `setFlagV2()` / `clearFlagV2()` mutators | no flag mutation | `Vm` has no `set_flag_v2` method; v2 is hardcoded by construction. |
@@ -830,6 +1012,44 @@ rust/shekyl-pow-randomx/BENCH_RESULTS.md   # measured medians at PR-merge
 CHANGELOG entry records the BENCH_RESULTS.md commit so downstream
 PRs know to compare against it.
 
+**Per-hash latency placeholder (R3-minor-2).** Phase 2c also lands
+a placeholder file at the canonical 2g path:
+
+```text
+rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs   # #[ignore]'d; populated in 2g
+```
+
+The placeholder's body:
+
+```rust
+//! Phase 2g deliverable: per-hash latency benchmark against the
+//! v2 C reference, asserting Rust/C ratio ≤ 3.0× per Phase 0 §8
+//! budget. Requires 2g's differential harness binary; landed
+//! alongside 2g's other harness infrastructure.
+//!
+//! Cadence: release-gate suite, not per-PR CI, per parent plan's
+//! release-gate vs per-PR split.
+
+#[test]
+#[ignore = "Phase 2g deliverable; placeholder per 2c's F8 forward-action"]
+fn per_hash_latency_ratio_within_budget() {
+    unimplemented!(
+        "Phase 2g lands this; see RANDOMX_V2_PHASE2C_PLAN.md §5.8 F8 \
+         and §13 forward-path 2g inheritance"
+    );
+}
+```
+
+`#[ignore]` makes `cargo test` skip it (no PR-gate failure);
+`unimplemented!()` makes "running it" produce a clear pointer to
+where the real work lands. 2g's author finds the placeholder by
+grep against its own deliverable name and replaces the body
+in-place — same shape as 2c's stub-NOP `dispatch_instruction`
+body-replacement, applied to a different cross-phase hand-off.
+Per `21-reversion-clause-discipline.mdc`, structural code
+out-survives prose discipline; the placeholder is the
+out-surviving form.
+
 ## 9. Commit granularity
 
 Eight commits, each respecting `06-branching.mdc` and
@@ -846,13 +1066,18 @@ finding):
 | 5 | `randomx: VmState::initialize with register/program init (T3-T5)` | ~180 LoC | §6 T3-T5 |
 | 6 | `randomx: compute_hash with dispatch_instruction NOP body + spec vectors (T6-T8)` | ~200 LoC | §5.1, §5.7, §6 T6-T8 |
 | 7 | `randomx: Phase 2c reference vector generator (T1-T8)` | ~400 LoC | §5.6, §7 |
-| 8 | `randomx: Phase 2c benchmarks + BENCH_RESULTS.md + CHANGELOG` | ~150 LoC | §5.8, §8 |
+| 8 | `randomx: Phase 2c benchmarks + per_hash_latency placeholder + BENCH_RESULTS.md + CHANGELOG` | ~170 LoC | §5.8, §8, §13 forward-path 2g |
 
-Total ≈ 1530 LoC, comfortably below the §"Scope envelope" 1800 LoC
+Total ≈ 1550 LoC, comfortably below the §"Scope envelope" 1800 LoC
 target. The Round 2 collapse (5 vm-side files → 1 vm.rs) shaved
 ~150 LoC of module-boundary boilerplate vs. Round 1's first-draft
-estimate. Generator C++ + CMake (~450 LoC) is separate from the
-Rust LoC count.
+estimate. Commit 8 carries a ~20 LoC bump vs. Round 2's first-draft
+to land the R3-minor-2 `tests/perf/per_hash_latency.rs` placeholder
+(`#[ignore]` + `unimplemented!()` cross-referencing F8 / §13 2g
+inheritance; the deferred-action becomes structural code rather
+than plan-doc prose 2g's author has to remember to consult).
+Generator C++ + CMake (~450 LoC) is separate from the Rust LoC
+count.
 
 ## 10. Gates
 
@@ -903,9 +1128,10 @@ No nightly-only APIs. MSRV stays at 1.85 (no bump).
 | `tests/vm/t8_end_to_end.rs` | ~80 | T8 spec-vector test |
 | `benches/cache_derive.rs` | ~80 | criterion bench |
 | `benches/compute_hash_alloc.rs` | ~80 | criterion bench (under stub-NOP dispatch) |
+| `tests/perf/per_hash_latency.rs` | ~20 | R3-minor-2 placeholder (`#[ignore]` + `unimplemented!()`); populated in 2g |
 | `BENCH_RESULTS.md` | ~30 | baseline numbers |
 | `CHANGELOG.md` delta | ~15 | one entry |
-| **Rust total** | ~1343 | inside ≤1800 envelope; ~140 LoC under Round 1 first-draft estimate (vm/ module-boundary boilerplate eliminated) |
+| **Rust total** | ~1363 | inside ≤1800 envelope; ~140 LoC under Round 1 first-draft estimate (vm/ module-boundary boilerplate eliminated); +20 LoC for R3-minor-2 placeholder |
 | `_generator/phase2c/gen.cpp` | ~200 | C++ generator |
 | `_generator/phase2c/CMakeLists.txt` | ~250 | CMake plumbing |
 | `_generator/phase2c/README.md` | ~40 | build + reviewer notes |
@@ -967,6 +1193,28 @@ Phase 2c lands the cache + VM substrate; downstream phases inherit:
     memo per parent plan Decision #6) and invokes `compute_hash`
     per request. `VmState` and `dispatch_instruction` remain
     invisible to the FFI consumer.
+  - **FFI layering discipline (R3-minor-1).**
+    `shekyl_ffi::shekyl_pow_randomx_v2_hash(seedhash: *const u8,
+    data: *const u8, data_len: usize, out: *mut u8) -> i32` is a
+    **thin error-translation shim** over
+    `shekyl_pow_randomx::compute_hash`; no semantic logic lives in
+    the shim. The shim's body consists of: (a) `*const u8` →
+    `&[u8]` slice construction with null-pointer + length
+    validation, (b) a single `compute_hash(&cache, seedhash, data)`
+    call, and (c) `i32` error-code translation (slice validation
+    failures → negative error codes per `shekyl_ffi`'s existing
+    convention; success → 0). Verification, dispatch, cache
+    derivation, scratchpad allocation, register init, AES mix,
+    finalization — **none** of these live in the FFI boundary.
+    Implementation-PR-time review of 3a checks that the shim body
+    is ≤30 LoC and that the only `compute_hash` call site lives
+    inside the shim (no per-request `Cache::derive` in the FFI
+    layer; cache construction routes through `CacheStore` per
+    Decision #6). This discipline note prevents 3a from accidentally
+    pulling verification logic into the FFI boundary — a
+    failure-mode for `shekyl-ffi` cutovers per
+    `36-secret-locality.mdc` (Rust owns secrets; FFI owns ABI
+    translation only).
 
 ## 14. Round history
 
@@ -974,7 +1222,7 @@ Phase 2c lands the cache + VM substrate; downstream phases inherit:
 |-------|------|---------|
 | Round 1 | 2026-05-21 | F1–F9 dispositions closed via interactive walk + ShekylU128 audit. F4 absorption surfaced as round-1 structural change requiring parent-plan revision (the first precursor commit on this branch). |
 | Round 2 | 2026-05-21 | Substrate-finding pass against the Round 1 plan-doc. Three structural restructurings landed within Round 1's locked dispositions: **(R2-D1)** `BytecodeDispatch` trait + `StubNopDispatch` impl → `dispatch_instruction` free function with NOP body replaced in 2d, eliminating the mock-X anti-pattern recurrence (§5.1 F1, §1 cross-cut). **(R2-D2)** `Vm<'a>` public type → `compute_hash` public transform with `VmState` private (§2 type table, §3 module layout collapse 5 files → 2 files, §13 forward-path updates for 2d/2f/3a). **(R2-D3)** `Cache::from_raw` visibility correction (`pub` → `pub(crate)`; test-time only, not FFI surface — §5.9 F9). Parent-plan alignment commit follows (Decision #7 substrate-shift per `21-reversion-clause-discipline.mdc`: `VmState` pooling becomes internal to `compute_hash`, not a public `VmPool` type). All three deliverables tighten the type-and-module shape inside the bounds Round 1's dispositions already established; no Round 1 disposition reopened. |
-| Round 3 | pending | Substrate-completeness pass before implementation cut (target ≤1 round). |
+| Round 3 | 2026-05-21 | Substrate-completeness pass against Round 2 plan-doc; close-out before implementation. **(R3-D1)** §5.1.1 "Function-body replacement contract" pins the 2c → 2d hand-off: frozen `dispatch_instruction` signature, frozen `Instruction` field set, and `VmState` field set populated empirically from an audit against `bytecode_machine.hpp`'s 29 opcode handlers + `vm_interpreted.cpp::execute()`. Audit produced one correction-from-prompted-list finding: `mp` is a v2-only local-variable alias for `mem.ma` per `vm_interpreted.cpp:89`, not a `MemoryRegisters` struct field; §5.5 F5 entry updated to match (existence disposition was wrong in Rounds 1–2; the v2-only Rust port introduces no `mp` field). Single-pass dispatch shape locked; IBC 2-pass form rejected with named reversion-clause criterion (reopen iff 2d benchmarks show single-pass cannot hit ≤3.0× Phase 0 budget AND profiling attributes shortfall to per-call decode cost). **(R3-minor-1)** §13 3a inheritance gains an FFI layering discipline note: `shekyl_pow_randomx_v2_hash` is a thin error-translation shim over `compute_hash`; no semantic logic in the FFI boundary; shim body ≤30 LoC. **(R3-minor-2)** §9 commit 8 + §15 PR template + §12 forecast envelope add the `tests/perf/per_hash_latency.rs` placeholder (`#[ignore]` + `unimplemented!()` cross-referencing F8 / §13 2g inheritance); structural code out-survives prose deferral. **(R3-D3)** Sibling commit lands `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` skeleton scaffold: §5.1.1 contract carry-forward, VmState field-set reference, forward-actions accumulated from F1/F2/F3/F5/F7, decision points for 2d Round 1 (FPU rounding-mode mechanism; F128 newtype shape; per-opcode dispatch shape). All Round 3 deliverables remain within Round 2's locked dispositions; no Round 2 or Round 1 disposition reopened. Target ≤1 round met. |
 
 ## 15. References to commit (Phase 2c PR description shape)
 
@@ -1014,5 +1262,16 @@ within Round 1's locked dispositions.
 ## Test plan
 
 T1–T8 spec-vector parity (byte-equality against generator output).
-Plus per-component unit tests in `cache.rs` and `vm.rs`.
+Plus per-component unit tests in `cache.rs` and `vm.rs`. Plus
+`tests/perf/per_hash_latency.rs` placeholder (`#[ignore]`'d; landed
+for 2g's per-hash latency benchmark — see RANDOMX_V2_PHASE2C_PLAN.md
+§8 placeholder sub-section).
+
+## Forward path verification
+
+- `dispatch_instruction` body is the only `vm.rs` site mutated by
+  Phase 2d (see RANDOMX_V2_PHASE2C_PLAN.md §5.1.1 contract).
+- `VmState` field additions in 2d require audit-grep evidence per
+  §5.1.1 reopening criterion.
+- `tests/perf/per_hash_latency.rs` body is replaced by 2g, not by 2d.
 ```
