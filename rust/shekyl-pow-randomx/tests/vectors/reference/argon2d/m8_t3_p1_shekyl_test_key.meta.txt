@@ -34,7 +34,13 @@ fork        = external/randomx-v2/
 pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
 sources     = src/argon2_ref.c, src/argon2_core.c, src/blake2/blake2b.c
 fill_block  = randomx_argon2_fill_segment_ref (the portable, non-SIMD
-              reference; keeps produced bytes architecture-independent)
+              reference; produces bytes that are instruction-set-
+              independent — no AVX2/SSSE3 codegen variance. The on-disk
+              `.bin` format is a little-endian u64 stream — the same
+              format `blocks_to_le_bytes` produces in the Rust test
+              and the format the C generator's raw `fwrite` of
+              `block { uint64_t v[128] }` happens to produce on
+              little-endian hosts.)
 
 Phase
 -----

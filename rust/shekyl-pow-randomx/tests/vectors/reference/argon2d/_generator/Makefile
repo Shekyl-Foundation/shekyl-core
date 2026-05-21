@@ -6,7 +6,11 @@
 # Reproducer for the Argon2d reference vectors committed alongside this
 # Makefile. Builds `gen` against the v2 RandomX fork's reference Argon2
 # implementation at pin aaafe71 (no SSSE3/AVX2 variants; the reference
-# `argon2_ref.c` keeps the produced bytes architecture-independent).
+# `argon2_ref.c` keeps the produced bytes instruction-set-independent —
+# no SIMD codegen variance — and reproducible on any little-endian
+# platform with a C compiler. The on-disk `.bin` format is a
+# little-endian u64 stream; see `gen.c`'s `randomx_argon2_fill_segment_ref`
+# comment block for the big-endian-host caveat).
 #
 # This Makefile and the surrounding `_generator/` directory are
 # committed for audit reproducibility per docs/design/RANDOMX_V2_RUST.md

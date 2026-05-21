@@ -52,8 +52,20 @@
 /*
  * Argon2 implementation used: the v2 fork's reference (portable)
  * impl in `argon2_ref.c`. Pinning this here (rather than at the SSSE3
- * or AVX2 variants) keeps the produced bytes architecture-independent
- * and reproducible on any platform with a C compiler.
+ * or AVX2 variants) keeps the produced bytes instruction-set-
+ * independent — no SIMD codegen variance across hosts that share a
+ * byte order. The on-disk vector format is a little-endian u64 stream;
+ * `write_raw` below does a raw `fwrite` of `block { uint64_t v[128] }`
+ * memory, which produces that little-endian byte order on
+ * little-endian hosts (x86_64, aarch64). Regenerating on a big-endian
+ * host would require an explicit per-`uint64_t` byteswap step, which
+ * is not implemented because all maintainer and CI hosts are
+ * little-endian; if that ever changes, the disposition is to add a
+ * `htole64`-style serialization layer in `write_raw`, not to redefine
+ * the on-disk format (the Rust test side in
+ * `shekyl-pow-randomx::argon2d::blocks_to_le_bytes` is already
+ * architecturally portable via `u64::to_le_bytes` and pins the LE
+ * convention on both sides).
  */
 extern void randomx_argon2_fill_segment_ref(const argon2_instance_t *instance,
                                             argon2_position_t position);
