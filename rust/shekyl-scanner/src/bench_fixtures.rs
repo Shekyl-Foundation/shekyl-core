@@ -438,6 +438,7 @@ mod tests {
     //! worst-case fixture as fast-path-equivalent.
 
     use shekyl_crypto_pq::{
+        error::CryptoError,
         kem::ML_KEM_768_CT_LEN,
         output::{scan_output_recover, OutputData},
     };
@@ -539,18 +540,38 @@ mod tests {
              bench would silently measure full-slow-path cost",
         );
 
-        // Per scan_output_recover's source, the view-tag-mismatch
-        // error carries the literal text "X25519 view tag mismatch"
-        // inside a DecapsulationFailed variant. Pinning the text
-        // catches accidental migration to a different early-exit
-        // path (e.g., LowOrderPoint) that would also satisfy
-        // `expect_err` but indicate a different fixture problem.
-        let msg = format!("{err:?}");
+        // Pin BOTH the error variant and the inner message: the
+        // variant check catches drift to a non-`DecapsulationFailed`
+        // early-exit (e.g., a `LowOrderPoint` rejection that would
+        // also satisfy `expect_err`), and the inner-message check
+        // catches drift WITHIN `DecapsulationFailed` to a sibling
+        // reason (`scan_output_recover` constructs several
+        // `DecapsulationFailed(String)` instances — "invalid
+        // ML-KEM ciphertext length", "invalid decap key: ...",
+        // ML-KEM decap rejection — all of which would pass the
+        // variant check on their own; only the view-tag-mismatch
+        // path is the typical-case fixture's intended classifier).
+        //
+        // The let-else binds `msg` from the variant's inner
+        // `String` rather than formatting via `format!("{err:?}")`,
+        // which makes the assertion robust to Debug-format
+        // changes (re-derivation, additional context fields,
+        // verbose vs. terse variants) while still pinning the
+        // intended early-exit path. Closes the substring-vs-
+        // structural test discipline question raised on PR #60.
+        let CryptoError::DecapsulationFailed(msg) = &err else {
+            panic!(
+                "typical-case fixture must surface the view-tag-mismatch \
+                 fast-path rejection as CryptoError::DecapsulationFailed; \
+                 got a different variant: {err:?}"
+            );
+        };
         assert!(
             msg.contains("X25519 view tag mismatch"),
-            "expected view-tag-mismatch in {err:?}; if the error is \
-             LowOrderPoint or another early-exit, the typical-case \
-             fixture is mis-classified"
+            "expected view-tag-mismatch in DecapsulationFailed inner message; \
+             got {msg:?} — if this is a sibling DecapsulationFailed reason \
+             (invalid ML-KEM ciphertext length, invalid decap key, ML-KEM \
+             decap rejection) the typical-case fixture is mis-classified"
         );
     }
 
