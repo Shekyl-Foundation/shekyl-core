@@ -154,9 +154,9 @@ fn bench_worst_case_all_view_tags_match(c: &mut Criterion) {
                 b.iter_batched(
                     || block.clone(),
                     |block| {
-                        let res = scanner.scan(black_box(block)).expect(
-                            "scan_transaction_with_cancel must not error on well-formed fixture",
-                        );
+                        let res = scanner
+                            .scan(black_box(block))
+                            .expect("Scanner::scan must not error on well-formed fixture");
                         black_box(res);
                     },
                     BatchSize::SmallInput,
@@ -181,9 +181,9 @@ fn bench_worst_case_all_view_tags_match(c: &mut Criterion) {
                     )
                 },
                 |(mut scanner, block)| {
-                    let res = scanner.scan(black_box(block)).expect(
-                        "scan_transaction_with_cancel must not error on well-formed fixture",
-                    );
+                    let res = scanner
+                        .scan(black_box(block))
+                        .expect("Scanner::scan must not error on well-formed fixture");
                     black_box(res);
                 },
                 BatchSize::PerIteration,
@@ -223,9 +223,9 @@ fn bench_typical_case_view_tag_filtered(c: &mut Criterion) {
                 b.iter_batched(
                     || block.clone(),
                     |block| {
-                        let res = scanner.scan(black_box(block)).expect(
-                            "scan_transaction_with_cancel must not error on well-formed fixture",
-                        );
+                        let res = scanner
+                            .scan(black_box(block))
+                            .expect("Scanner::scan must not error on well-formed fixture");
                         black_box(res);
                     },
                     BatchSize::SmallInput,
@@ -243,9 +243,9 @@ fn bench_typical_case_view_tag_filtered(c: &mut Criterion) {
                     )
                 },
                 |(mut scanner, block)| {
-                    let res = scanner.scan(black_box(block)).expect(
-                        "scan_transaction_with_cancel must not error on well-formed fixture",
-                    );
+                    let res = scanner
+                        .scan(black_box(block))
+                        .expect("Scanner::scan must not error on well-formed fixture");
                     black_box(res);
                 },
                 BatchSize::PerIteration,
