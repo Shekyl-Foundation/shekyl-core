@@ -93,6 +93,90 @@
   comment so a future maintainer who needs it knows the
   prescribed shape.
 
+- **Post-PR-4 `docs/FOLLOWUPS.md` cleanup**
+  (`chore/post-pr4-followups-cleanup`, 2026-05-21). Two scope-respecting
+  doc-only commits closing the cleanup work that became actionable once
+  PR 4 (commit `fd6005e2a`, merged 2026-05-21) landed. Scoped per the
+  post-PR-4 FOLLOWUPS triage to **Class A relocations** (closed-but-
+  mislocated entries) and **D-item 481 substrate corrections**, with
+  Class B (P1 / P2 / P3) and Class C (F11-S Windows-midrange, refresh
+  bandwidth under α) deliberately untouched to avoid the
+  cost-benefit-defer-to-later anti-pattern of reflexive re-anchoring
+  under [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  — their existing trigger language remains accurate and the merge SHA
+  will be cited at each focused PR's open date.
+
+  - **Commit 1 — Relocate three `[CLOSED 2026-05-20]` PR 4 entries to
+    Recently resolved** (`38a599fc6`):
+    [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) gains three audit-trail entries
+    relocated from the live queues, prose-verbatim with the
+    `[CLOSED 2026-05-20]` prefix folded into the standard "(closed
+    YYYY-MM-DD, merged to `dev` YYYY-MM-DD at SHA)" parenthetical the
+    section uses, plus the dev-merge SHA `fd6005e2a` added for
+    traceability:
+    1. "Stage 1 retroactive Mock-X cleanup: `MockLedger` →
+       `LocalLedger::from_test_blocks(...)` +
+       `FaultInjecting<LocalLedger>`" (was V3.0 queue L697; PR 4 §7.X
+       commit C6β),
+    2. "Stage 1 retroactive Mock-X cleanup: `MockDaemon` →
+       `TestDaemon` rename" (was V3.0 queue L744; PR 4 §7.X commit
+       C6γ),
+    3. "Stage 1 PR 4 Phase 0d — `RefreshEngine` checkpoint 3 mid-scan-
+       reorg-abort extension: struck, not deferred" (was V3.x staker-
+       archival queue L4116; PR 4 §7.X commit C8).
+    The Phase-0d entry had one substrate-anchored cross-reference that
+    became wrong in its new location (referenced
+    `ReorgAmplificationDetector` as "below" — true in V3.x queue
+    context, false in Recently-resolved context); rephrased to
+    "(above, in the V3.x staker-archival queue)". Net diff: 117
+    insertions / 118 deletions (relocation-shape).
+
+  - **Commit 2 — Sharpen PR 3 engine-property test re-location entry**
+    (`95ece3760`): [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) V3.0-queue entry
+    "Stage 1 PR 3 engine-property test re-location" (~L481) gains two
+    substrate-correctness fixes surfaced during the post-PR-4 cleanup
+    triage that confirmed why the work is not completable in the
+    current cleanup PR:
+    1. Trigger anchor corrected from
+       `STAGE_1_PR_3_KEY_ENGINE.md` §4.4 (which does not exist — §4 is
+       the "Post-amendment §2.1 trait surface" and has no §4.4) to
+       §7.7 ("V3.x full-PQC trait churn acknowledgement") + §3.4
+       Decision 4. Trigger reworded to name the V3.2 unified
+       `KeyEngine` / `LedgerEngine` / `DaemonEngine` `pub(crate) →
+       pub` visibility-promotion bundle explicitly, with an inline
+       "unilateral `KeyEngine` widening does not satisfy this trigger"
+       clause that prevents future maintainers from acting on a
+       single-trait widening — re-introducing the trust-model
+       incoherence the per-trait `pub(crate)` lock prevents per Stage
+       1's Trust-class A classification (PR 3 §2.1 trust-class table
+       row for `KeyEngine`).
+    2. M3b D5 peer-test name removed (the
+       `..._subaddress` peer test the pre-flight estimated was
+       consolidated into the primary test's inner loop during M3b
+       implementation; `local_keys.rs:1278-1322`). Added one-sentence
+       pre-flight-vs-implementation note for cross-reference traceability
+       to `STAGE_1_PR_3_M3B_PREFLIGHT.md` §D5. File:line anchors added
+       for both tests (`local_keys.rs:1258`, `:1554`) and the inline
+       test-docstring deviation notes (`:1243-1251`, `:1538-1541`).
+    Disposition unchanged: entry remains open with the same V3.2
+    trigger and one-PR-covers-both-tests bundling guidance.
+
+  *Gates.* Doc-only changes; no code touched. `git diff` shape
+  verified to be relocation + substrate-correctness only; no live
+  disposition re-anchoring. No CHANGELOG drift relative to the as-
+  landed FOLLOWUPS state.
+
+  *Scope discipline note.* The cleanup PR's scope was bounded
+  explicitly against the **user-named anti-pattern of continual
+  re-anchoring without completion**: items where the work cannot be
+  completed at this time (P1 / P2 / P3, F11-S Windows-midrange,
+  refresh bandwidth under α, the PR 3 engine-property test re-location
+  itself) get their existing dispositions preserved verbatim, and the
+  merge SHA `fd6005e2a` will be cited at each focused PR's open date
+  per `21-reversion-clause-discipline.mdc`'s named-criteria principle.
+  Only completable work (relocations + substrate-correctness fixes)
+  lands here.
+
 ### Added
 
 - **RandomX v2 Track A Phase 2a — `shekyl-pow-randomx` crate
