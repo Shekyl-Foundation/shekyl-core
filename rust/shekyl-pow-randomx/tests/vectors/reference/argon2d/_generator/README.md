@@ -90,11 +90,22 @@ To verify a `.bin` matches the named pin:
 git -C external/randomx-v2 rev-parse HEAD            # expect aaafe71...
 cd rust/shekyl-pow-randomx/tests/vectors/reference/argon2d/_generator
 make clean && make vectors
-diff -r . ..                                          # expect no diff
+git diff --stat -- ../*.bin                          # expect no output
 ```
 
-Any drift surfaces as a `diff` line per affected vector. The
-`.meta.txt` files alongside each `.bin` record the exact command
+`make vectors` regenerates the `.bin` files in the parent directory,
+overwriting the committed bytes. `git diff --stat -- ../*.bin` then
+asks git whether the working tree has drifted from `HEAD` on those
+specific paths — a clean exit (no output) is the affirmative
+attestation that the committed bytes match the named fork pin.
+
+(The earlier suggestion to run `diff -r . ..` did not work: it compared
+the `_generator/` directory's file set — `gen.c`, `Makefile`, this
+`README.md` — against the parent's file set — `*.bin` and `*.meta.txt`
+— so `diff` always reported "only in" entries instead of the
+content-drift check the workflow needs.)
+
+The `.meta.txt` files alongside each `.bin` record the exact command
 line, the fork pin, and the spec section the vector attests to;
 those headers are the audit attestation per
 `RANDOMX_V2_RUST.md` §3.
