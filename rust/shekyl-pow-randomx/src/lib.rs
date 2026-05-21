@@ -61,3 +61,14 @@
 
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
+
+// CLIPPY: the `pub(crate)` items in `argon2d` (the RandomX-Argon2d
+// constants, the compile-time-validated `PARAMS`, and `fill_cache`
+// itself) are dead-by-construction until Phase 2e lands `Cache::derive`
+// as the single production caller. The module-level `#[allow]` is the
+// narrowest scope that covers all items without per-item annotations,
+// per `.cursor/rules/45-rust-lint-checks.mdc`'s "as narrowly as
+// possible" guidance balanced against the unit tests already exercising
+// every item inside the module.
+#[allow(dead_code)]
+mod argon2d;
