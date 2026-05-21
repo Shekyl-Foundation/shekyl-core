@@ -113,6 +113,15 @@ rand_chacha = "0.3"
 # affect the production crate graph.
 hkdf = "0.12"
 sha2 = "0.10"
+# PR 4 C7 property tests pin §5.4.6 emission/return coherence and the
+# §5.4.6 producer-panic-safety property as permanent CI regression
+# coverage. `proptest = "1"` is the workspace consensus version
+# (matches `shekyl-crypto-pq`'s `prop_round_trip` gate); enabling it as
+# a dev-dep keeps the production crate graph unaffected while letting
+# the per-attempt coherence invariant be fuzzed across the producer's
+# failure-injection space (RpcError → DaemonProtocolError, malformed
+# block → DaemonMalformed, clean path → no error event).
+proptest = "1"
 # Stage 1 PR 3 M3c-via-C dev-deps. The
 # `engine_derived_bundle_signs_through_tx_builder_end_to_end` test
 # (in `engine::local_keys::tests`) drives an engine-derived

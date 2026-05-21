@@ -658,6 +658,260 @@ const fn candidates_bucket(c: usize) -> &'static str {
     }
 }
 
+// ============================================================================
+// AssertionSink / PanickingSink — C7 property-test sinks
+// ============================================================================
+
+/// Recording [`DiagnosticSink`] for the §5.4.6 emission/return
+/// coherence property test.
+///
+/// Records every [`RefreshDiagnostic`] event emitted on it in the
+/// order they arrived, behind a [`std::sync::Mutex`] over a
+/// [`Vec`]. Tests inspect the recorded stream after the producer
+/// returns to assert the coherence contract:
+///
+/// - For every non-[`super::error::RefreshError::Cancelled`]
+///   producer-returned error, the stream contains at least one
+///   corresponding [`RefreshDiagnostic`] event class
+///   ("`MalformedScanResult` ↔ `DaemonMalformed`",
+///   "`Io` ↔ `DaemonProtocolError` or `DaemonTimeout`").
+/// - No error-attributed event ([`RefreshDiagnostic::DaemonMalformed`],
+///   [`RefreshDiagnostic::DaemonProtocolError`],
+///   [`RefreshDiagnostic::DaemonTimeout`]) is followed by an
+///   `Ok(_)` producer return — the "phantom error" failure mode the
+///   §5.4.6 prose names.
+///
+/// # Permanent CI coverage pin (§5.4.6 / F3)
+///
+/// The `AssertionSink` + the
+/// [`local_refresh::tests::produce_scan_result_emission_return_coherence`](super::local_refresh)
+/// property test that consumes it are **permanent CI regression
+/// coverage** per §5.4.6. Every PR touching any [`super::traits::RefreshEngine`]
+/// implementation MUST keep the property test green; a failure is a
+/// contract violation, not a test-investigation event. The
+/// implementation either satisfies the coherence contract or the
+/// design doc is updated with explicit re-pin language and the test
+/// follows. Prose/test drift resolves AGAINST the test.
+///
+/// # Gating
+///
+/// `#[cfg(any(test, feature = "test-helpers"))] pub` per the C6α
+/// F-Mock-1 symmetry pin: crate-internal tests instantiate the sink
+/// inline; downstream `test-helpers`-feature consumers (none
+/// pre-genesis) reach it through the public type name. Production
+/// builds do not compile the type.
+///
+/// # Concurrent emission
+///
+/// The §5.4.6 non-blocking pin tolerates concurrent `emit` calls
+/// from multiple producer tasks; `AssertionSink`'s recording lock
+/// satisfies this only when contention is bounded. The V3.0
+/// `LocalRefresh` producer is single-task; for multi-emitter
+/// scenarios (Stage 4 actor-mesh tests), a lock-free recording sink
+/// would replace this implementation. The test substrate is
+/// adequate for V3.0 producer coverage.
+#[cfg(any(test, feature = "test-helpers"))]
+#[derive(Debug, Default)]
+#[allow(dead_code)] // Constructed by C7 property tests (cfg(test)) and by downstream test-helpers consumers.
+pub struct AssertionSink {
+    /// Recording buffer; `Mutex` guards the append on `emit` and the
+    /// drain on inspection. `RwLock` would not help — every access
+    /// is a write to either the vector or a read of the captured
+    /// snapshot, and the C7 tests do not race readers against the
+    /// producer task.
+    events: std::sync::Mutex<Vec<RefreshDiagnostic>>,
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+impl AssertionSink {
+    /// Construct a fresh recording sink with an empty buffer.
+    #[must_use]
+    #[allow(dead_code)] // Phase 1 author: lands as the canonical C7 coherence-test constructor.
+    pub fn new() -> Self {
+        Self {
+            events: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Snapshot the recorded events, cloning the inner buffer so
+    /// the sink can continue receiving emissions while the
+    /// inspection runs. The clone is bounded by the producer's
+    /// per-attempt emission ceiling (§5.4.8 #5 +
+    /// [`super::local_refresh::PER_BLOCK_CEILING`]) times the
+    /// scan range, so per-test memory is bounded.
+    #[allow(dead_code)] // Phase 1 author: lands as the canonical C7 coherence-test inspector.
+    pub fn recorded(&self) -> Vec<RefreshDiagnostic> {
+        self.events
+            .lock()
+            .expect("AssertionSink events poisoned")
+            .clone()
+    }
+
+    /// Number of events the sink has observed since construction.
+    /// Equivalent to `recorded().len()` but avoids the clone.
+    #[allow(dead_code)] // Phase 1 author: convenience inspector for count-only assertions.
+    pub fn count(&self) -> usize {
+        self.events
+            .lock()
+            .expect("AssertionSink events poisoned")
+            .len()
+    }
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+impl DiagnosticSink for AssertionSink {
+    fn emit(&self, event: RefreshDiagnostic) {
+        self.events
+            .lock()
+            .expect("AssertionSink events poisoned")
+            .push(event);
+    }
+}
+
+/// Panic-on-emit [`DiagnosticSink`] for the §5.4.6
+/// producer-panic-safety property test.
+///
+/// Configured to panic when the producer emits a specific class of
+/// event (or every event, per the [`Trigger::Any`] variant). Drives
+/// the producer-side robustness property: a panicking sink unwinds
+/// through the producer's call frame; the producer's
+/// [`shekyl_scanner::Scanner`] is zeroized on drop via the
+/// [`zeroize::ZeroizeOnDrop`] chain on
+/// [`super::view_material::ViewMaterial`]; no half-emitted scan
+/// state or cancellation-token inconsistency remains observable
+/// after the unwind.
+///
+/// # Producer-side robustness property (§5.4.6, binding)
+///
+/// Per §5.4.6: "any panic propagating out of `emit` results in a
+/// predictable refresh-attempt failure with `Scanner` cleanly
+/// zeroized via `Drop`, no leaked half-state, and the cancellation
+/// token consistently in either fired-or-not state". The C7
+/// [`local_refresh::tests::produce_scan_result_panicking_sink_unwind_safe`](super::local_refresh)
+/// test consumes this sink to assert that property at the
+/// orchestrator boundary:
+///
+/// - The producer's future resolves to a `JoinError::Panic` when
+///   driven through `tokio::spawn`.
+/// - The cancellation token remains unfired (the panic
+///   short-circuits the producer before any
+///   `cancel.cancel()` would fire; the token's external observer
+///   sees a consistent unfired-state).
+/// - A subsequent fresh refresh attempt against the same engine
+///   succeeds (no corrupted engine state from the prior unwind).
+///
+/// # Scanner zeroization (structural property)
+///
+/// The [`shekyl_scanner::Scanner`] held inside the producer's stack
+/// frame is dropped during unwind; its [`zeroize::ZeroizeOnDrop`]
+/// chain (via [`super::view_material::ViewMaterial`]'s embedded
+/// zeroize types) wipes the spend / view / KEM secret bytes. Direct
+/// observation of the wipe requires either an instrumented
+/// `Scanner` type or a memory-witness counter — both are V3.x
+/// extensions per the §5.4.6 "Round 4 test deliverable" prose. C7
+/// pins the structural property at the orchestrator boundary
+/// (panic propagates cleanly; no half-state) and relies on the
+/// `ZeroizeOnDrop` derive on `ViewMaterial` for the wipe property
+/// the underlying scanner inherits.
+///
+/// # Permanent CI coverage pin (§5.4.6 / F3)
+///
+/// Parallel to [`AssertionSink`]: every PR touching any
+/// [`super::traits::RefreshEngine`] implementation MUST keep the
+/// panic-safety property test green. A test failure is a
+/// producer-side robustness contract violation.
+///
+/// # Gating
+///
+/// `#[cfg(any(test, feature = "test-helpers"))] pub` per the C6α
+/// F-Mock-1 symmetry pin.
+#[cfg(any(test, feature = "test-helpers"))]
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // Constructed by C7 panic-safety property tests (cfg(test)) and by downstream test-helpers consumers.
+pub struct PanickingSink {
+    /// Which class of event triggers the panic. [`Trigger::Any`]
+    /// panics on the first emission of any class.
+    trigger: PanickingSinkTrigger,
+}
+
+/// Trigger discriminant for [`PanickingSink`]. Each variant names a
+/// [`RefreshDiagnostic`] class; an emission whose class matches the
+/// configured trigger fires the panic. [`Self::Any`] panics on the
+/// first emission regardless of class — useful for testing the
+/// general unwind-safety property without binding the test to a
+/// specific producer code path.
+///
+/// # Why not just `Option<RefreshDiagnostic-discriminant>`?
+///
+/// [`RefreshDiagnostic`] carries non-`Copy` payload fields
+/// (`Duration` is `Copy`, but the enum's full identity includes
+/// payload values the trigger doesn't compare against). The
+/// dedicated trigger enum keeps the configuration surface tag-only
+/// and `Copy`, matching the [`PanickingSink`] derive shape.
+#[cfg(any(test, feature = "test-helpers"))]
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Variants are referenced by C7 panic-safety property tests (cfg(test)) and by downstream test-helpers consumers.
+pub enum PanickingSinkTrigger {
+    /// Panic on the first emission of any class. Drives the
+    /// general producer-panic-safety property regardless of which
+    /// code path inside the producer first emits.
+    Any,
+    /// Panic on first [`RefreshDiagnostic::DaemonMalformed`]
+    /// emission. Pairs with a malformed-block-injecting test
+    /// daemon to exercise the unwind-during-malformed-detection
+    /// path.
+    OnDaemonMalformed,
+    /// Panic on first [`RefreshDiagnostic::DaemonProtocolError`]
+    /// emission. Pairs with an `RpcError`-injecting test daemon to
+    /// exercise the unwind-during-rpc-failure path.
+    OnDaemonProtocolError,
+    /// Panic on first [`RefreshDiagnostic::ScanProgress`] emission.
+    /// Pairs with any successful scan to exercise the
+    /// unwind-during-per-block-progress path (the most frequent
+    /// emit site).
+    OnScanProgress,
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+impl PanickingSink {
+    /// Construct a sink that panics on the first emission matching
+    /// `trigger`.
+    #[must_use]
+    #[allow(dead_code)] // Phase 1 author: lands as the canonical C7 panic-safety-test constructor.
+    pub const fn new(trigger: PanickingSinkTrigger) -> Self {
+        Self { trigger }
+    }
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+impl DiagnosticSink for PanickingSink {
+    fn emit(&self, event: RefreshDiagnostic) {
+        let fires = matches!(
+            (self.trigger, &event),
+            (PanickingSinkTrigger::Any, _)
+                | (
+                    PanickingSinkTrigger::OnDaemonMalformed,
+                    RefreshDiagnostic::DaemonMalformed { .. },
+                )
+                | (
+                    PanickingSinkTrigger::OnDaemonProtocolError,
+                    RefreshDiagnostic::DaemonProtocolError { .. },
+                )
+                | (
+                    PanickingSinkTrigger::OnScanProgress,
+                    RefreshDiagnostic::ScanProgress { .. },
+                )
+        );
+        if fires {
+            panic!(
+                "PanickingSink configured trigger {:?} fired on emission {:?}",
+                self.trigger, event
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Sink-construction and projection-stability smoke tests.
@@ -763,5 +1017,154 @@ mod tests {
         sink.emit(RefreshDiagnostic::SuppressedRateLimit {
             class: SuppressedClass::DaemonProtocolError,
         });
+    }
+
+    // ------------------------------------------------------------------------
+    // C7 smoke tests — AssertionSink / PanickingSink
+    // ------------------------------------------------------------------------
+    //
+    // These are construction-and-trigger smoke tests; the full
+    // §5.4.6 emission/return coherence and producer-panic-safety
+    // properties land as proptest-driven coverage in
+    // `local_refresh.rs` and as the hybrid retry test in
+    // `refresh.rs`. The smoke tests below verify the sinks' own
+    // contract: AssertionSink records in FIFO order, PanickingSink
+    // panics only on matched triggers.
+
+    #[test]
+    fn assertion_sink_records_events_in_emission_order() {
+        let sink = AssertionSink::new();
+        assert_eq!(sink.count(), 0);
+        sink.emit(RefreshDiagnostic::DaemonProtocolError {
+            kind: ProtocolErrorKind::ConnectionError,
+        });
+        sink.emit(RefreshDiagnostic::DaemonMalformed {
+            kind: MalformedKind::InvalidBlockStructure,
+        });
+        sink.emit(RefreshDiagnostic::ScanProgress {
+            height: 42,
+            candidates: 3,
+        });
+        assert_eq!(sink.count(), 3);
+        let recorded = sink.recorded();
+        assert!(matches!(
+            recorded[0],
+            RefreshDiagnostic::DaemonProtocolError {
+                kind: ProtocolErrorKind::ConnectionError
+            }
+        ));
+        assert!(matches!(
+            recorded[1],
+            RefreshDiagnostic::DaemonMalformed {
+                kind: MalformedKind::InvalidBlockStructure
+            }
+        ));
+        assert!(matches!(
+            recorded[2],
+            RefreshDiagnostic::ScanProgress {
+                height: 42,
+                candidates: 3
+            }
+        ));
+    }
+
+    #[test]
+    fn assertion_sink_recorded_clones_buffer_without_draining() {
+        let sink = AssertionSink::new();
+        sink.emit(RefreshDiagnostic::ScanProgress {
+            height: 1,
+            candidates: 0,
+        });
+        let snap1 = sink.recorded();
+        let snap2 = sink.recorded();
+        assert_eq!(snap1.len(), 1);
+        assert_eq!(snap2.len(), 1);
+        assert_eq!(sink.count(), 1);
+    }
+
+    #[test]
+    fn panicking_sink_any_fires_on_first_emission() {
+        let sink = PanickingSink::new(PanickingSinkTrigger::Any);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sink.emit(RefreshDiagnostic::ScanProgress {
+                height: 1,
+                candidates: 0,
+            });
+        }));
+        assert!(result.is_err(), "Any trigger must panic on emit");
+    }
+
+    #[test]
+    fn panicking_sink_on_daemon_malformed_only_fires_on_matched_class() {
+        let sink = PanickingSink::new(PanickingSinkTrigger::OnDaemonMalformed);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sink.emit(RefreshDiagnostic::ScanProgress {
+                height: 1,
+                candidates: 0,
+            });
+            sink.emit(RefreshDiagnostic::DaemonProtocolError {
+                kind: ProtocolErrorKind::ConnectionError,
+            });
+        }));
+        assert!(
+            result.is_ok(),
+            "OnDaemonMalformed must NOT fire on ScanProgress or DaemonProtocolError"
+        );
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sink.emit(RefreshDiagnostic::DaemonMalformed {
+                kind: MalformedKind::InvalidBlockStructure,
+            });
+        }));
+        assert!(
+            result.is_err(),
+            "OnDaemonMalformed must fire on DaemonMalformed emit"
+        );
+    }
+
+    #[test]
+    fn panicking_sink_on_protocol_error_only_fires_on_matched_class() {
+        let sink = PanickingSink::new(PanickingSinkTrigger::OnDaemonProtocolError);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sink.emit(RefreshDiagnostic::DaemonMalformed {
+                kind: MalformedKind::InvalidBlockStructure,
+            });
+        }));
+        assert!(
+            result.is_ok(),
+            "OnDaemonProtocolError must NOT fire on DaemonMalformed"
+        );
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sink.emit(RefreshDiagnostic::DaemonProtocolError {
+                kind: ProtocolErrorKind::InternalError,
+            });
+        }));
+        assert!(
+            result.is_err(),
+            "OnDaemonProtocolError must fire on DaemonProtocolError emit"
+        );
+    }
+
+    #[test]
+    fn panicking_sink_on_scan_progress_only_fires_on_matched_class() {
+        let sink = PanickingSink::new(PanickingSinkTrigger::OnScanProgress);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sink.emit(RefreshDiagnostic::DaemonMalformed {
+                kind: MalformedKind::InvalidBlockStructure,
+            });
+        }));
+        assert!(
+            result.is_ok(),
+            "OnScanProgress must NOT fire on DaemonMalformed"
+        );
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sink.emit(RefreshDiagnostic::ScanProgress {
+                height: 7,
+                candidates: 0,
+            });
+        }));
+        assert!(result.is_err(), "OnScanProgress must fire on ScanProgress");
     }
 }

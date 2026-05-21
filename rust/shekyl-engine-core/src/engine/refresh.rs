@@ -2425,10 +2425,13 @@ mod start_refresh_integration_tests {
     use tokio::sync::RwLock;
 
     use crate::engine::fault_injecting_ledger::FaultInjecting;
+    use crate::engine::fault_injecting_refresh::FaultInjecting as FaultInjectingRefresh;
     use crate::engine::lifecycle::EngineCreateParams;
     use crate::engine::local_ledger::LocalLedger;
+    use crate::engine::local_refresh::LocalRefresh;
     use crate::engine::test_support::{derive_seed, TestDaemon, ROLE_DAEMON};
     use crate::engine::traits::LedgerEngine;
+    use crate::engine::view_material::ViewMaterial;
     use crate::engine::{
         Credentials, DaemonClient, Engine, IoError, RefreshError, RefreshOptions, SoloSigner,
     };
@@ -2945,6 +2948,252 @@ mod start_refresh_integration_tests {
             drop(g);
             if Instant::now() > deadline {
                 panic!("slot still claimed 5s after hybrid retry refresh joined");
+            }
+        }
+    }
+
+    /// **Hybrid retry test pinning the §6 trait/orchestrator
+    /// cancellation-checkpoint split end-to-end against a fully-
+    /// composed `Engine<SoloSigner, TestDaemon, FaultInjecting<LocalLedger>,
+    /// FaultInjecting<LocalRefresh>>` substrate.**
+    ///
+    /// Composition (per the §6 Round 5 no-Mock substrate amendment,
+    /// commit `8484e669a`):
+    ///
+    /// - Daemon slot: [`TestDaemon`] driving a 6-block linear chain
+    ///   (heights 0..=5).
+    /// - Ledger slot: [`FaultInjecting<LocalLedger>`](FaultInjecting)
+    ///   wrapping a fresh production [`LocalLedger`]; one
+    ///   `ConcurrentMutation` pre-queued via
+    ///   [`FaultInjecting::queue_concurrent_mutation`].
+    /// - Refresh slot: [`FaultInjectingRefresh<LocalRefresh>`](FaultInjectingRefresh)
+    ///   wrapping a [`LocalRefresh`] constructed from the engine's
+    ///   own keys via [`ViewMaterial::try_from_keys`] — the same
+    ///   path [`super::lifecycle`] uses at [`Engine::create`] time.
+    ///   No failures pre-queued; the wrapper is present as the
+    ///   end-to-end test of the C5a `Engine<S, D, L, R>` four-
+    ///   parameter shape, not as a failure-injection driver in this
+    ///   particular scenario. The shape-test property is independent
+    ///   of the retry property: this test pins both in a single
+    ///   composition.
+    ///
+    /// What this pins (Phase 1 PR 4 C7, no-Mock substrate end-to-end):
+    ///
+    /// - **Four-slot composition.** Every engine slot (daemon,
+    ///   ledger, refresh, plus the implicit signer) is parameterised
+    ///   through the trait surface; the swap composition
+    ///   `replace_daemon → replace_ledger → replace_refresh` rebuilds
+    ///   the engine three times, each time moving the type parameter
+    ///   from its previous default to the swapped-in implementor.
+    ///   The result type
+    ///   `Engine<SoloSigner, TestDaemon, FaultInjecting<LocalLedger>,
+    ///   FaultInjectingRefresh<LocalRefresh>>` is a real, callable
+    ///   shape — proving that the `R: RefreshEngine` parameter from
+    ///   C5a composes with the `D: DaemonEngine` (PR 1) and
+    ///   `L: LedgerEngine` (PR 2) parameters at the orchestrator
+    ///   call sites in [`run_refresh_task`].
+    /// - **Cancellation-checkpoint split exercised end-to-end.** The
+    ///   orchestrator runs through checkpoint 1 (top-of-attempt) and
+    ///   checkpoint 4 (pre-merge) on each of the two attempts — four
+    ///   orchestrator-side checkpoint observations. The producer
+    ///   trait body runs through checkpoints 2/3 (top-of-loop +
+    ///   per-block) across the 5 block iterations on attempt 2, plus
+    ///   whatever per-block iterations attempt 1 completes before the
+    ///   merge-time `ConcurrentMutation` retry. No cancel-token is
+    ///   fired in this test, so each checkpoint observes
+    ///   `is_cancelled() == false` and proceeds — pinning the
+    ///   not-cancelled path; the cancellation-path coverage is the
+    ///   shared-token tests in the producer-side suite. The split's
+    ///   load-bearing property is that the two checkpoint sets live
+    ///   on opposite sides of the trait boundary; running the full
+    ///   retry pipeline exercises both sides against the wrapper-
+    ///   composed engine.
+    /// - **Retry path against `FaultInjecting<LocalLedger>` injected
+    ///   mutation.** The first merge attempt observes the injected
+    ///   `ConcurrentMutation`; the orchestrator's retry branch
+    ///   re-runs the producer (which is `FaultInjectingRefresh`-
+    ///   wrapped — confirming the trait dispatch routes through the
+    ///   wrapper, not directly to `LocalRefresh`) and the second
+    ///   attempt's merge runs the canonical `apply_scan_result_to_state`
+    ///   body against the inner `LocalLedger`. `summary.merge_attempts
+    ///   == 2`. (Round 5 amendment replaces the prior `MockRefresh`-
+    ///   injected reference per the no-Mock substrate inheritance
+    ///   discipline.)
+    /// - **Wrapper queue accounting.** Both wrappers expose
+    ///   `queued_failures()` for the F-Mock-2 drain-inspector
+    ///   contract. Post-refresh, the ledger wrapper's queue is `0`
+    ///   (the injected mutation was consumed by attempt 1's merge);
+    ///   the refresh wrapper's queue is `0` (no failures were queued,
+    ///   so the queue was empty throughout; the producer delegated
+    ///   to `LocalRefresh` on every call). Both wrappers' [`Drop`]
+    ///   impls fire `debug_assert!` if any failure remained queued,
+    ///   so the test additionally pins the drain contract at
+    ///   teardown via the [`Drop`] path.
+    ///
+    /// **Why this test exists alongside the C6β
+    /// `hybrid_apply_scan_result_retries_on_concurrent_mutation`
+    /// test.** The C6β test pins the three-slot composition
+    /// (`Engine<S, D, FaultInjecting<L>>` with default
+    /// `R = LocalRefresh`); the C7 test pins the four-slot
+    /// composition by adding the `FaultInjectingRefresh<LocalRefresh>`
+    /// substitution. The cancellation-checkpoint split spans both
+    /// the trait body and the orchestrator, so exercising the split
+    /// requires the producer to actually dispatch through the
+    /// `RefreshEngine` trait surface (via the wrapper) rather than a
+    /// direct `LocalRefresh::produce_scan_result` call. The C7 test
+    /// is the first end-to-end coverage that satisfies that
+    /// constraint.
+    ///
+    /// Master seed is recorded as a literal in the test body per
+    /// §6.2; the daemon seed is `derive_seed(&master, ROLE_DAEMON)`.
+    /// The wallet-side master seed is independent of the daemon seed
+    /// by design (per the §6.2 contract); both wrappers are
+    /// deterministic by construction (the queue contents are the
+    /// only behavioural deviation either wrapper introduces, and
+    /// only the ledger wrapper queues anything here).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn hybrid_refresh_engine_orchestrator_cancellation_retries() {
+        const MASTER_SEED: [u8; 32] = [
+            0xc7, 0xc7, 0x7c, 0x7c, 0xfa, 0xce, 0xb0, 0x0b, 0xd0, 0x0d, 0xfe, 0xed, 0x42, 0x42,
+            0x13, 0x37, 0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07, 0x18, 0x29, 0x3a, 0x4b, 0x5c,
+            0x6d, 0x7e, 0x8f, 0x90,
+        ];
+
+        let daemon_seed = derive_seed(&MASTER_SEED, ROLE_DAEMON);
+
+        // 6-block linear chain (heights 0..=5); the producer scans
+        // heights 1..=5 from a fresh `LocalLedger` at
+        // `synced_height = 0`. The wallet's own master seed (driven
+        // by `make_hybrid_engine_arc_with_ledger`'s internal
+        // deterministic-seed loop) is independent of `MASTER_SEED`
+        // here, which only seeds the daemon side — the wallet seed
+        // is regenerated per fixture and the keys derived from it
+        // are what the refresh wrapper consumes via
+        // `ViewMaterial::try_from_keys` below.
+        let mock_daemon = TestDaemon::with_seed_and_chain(daemon_seed, linear_chain(6));
+        let ledger = FaultInjecting::new(LocalLedger::from_test_blocks(Vec::new()));
+
+        // Inject exactly one `ConcurrentMutation` on the ledger
+        // wrapper. The refresh wrapper has no failures queued — this
+        // test pins the four-slot composition shape; the refresh
+        // wrapper's failure-injection path is covered by the C6α
+        // Class 1 smoke tests at `fault_injecting_refresh.rs::tests`.
+        ledger.queue_concurrent_mutation();
+        assert_eq!(
+            ledger.queued_failures(),
+            1,
+            "pre-refresh: one ConcurrentMutation queued on the ledger wrapper"
+        );
+
+        // Build the three-slot engine via the C6β helper, then chain
+        // the C5a `replace_refresh` to land the four-slot composition.
+        // The keys accessor is `pub(crate)`, so the `ViewMaterial`
+        // construction happens here at the test site rather than as a
+        // helper-internal step — keeping the helper's signature
+        // forward-compatible with future per-test refresh-substitution
+        // shapes.
+        let (arc, _tmp) = make_hybrid_engine_arc_with_ledger(mock_daemon, ledger).await;
+        let arc = {
+            // Pull the engine out of the `Arc<RwLock<…>>` to consume
+            // it for `replace_refresh`, then re-wrap. This works
+            // because `make_hybrid_engine_arc_with_ledger` is the
+            // only `Arc` reference holder; the consume-and-rebuild
+            // shape of `replace_refresh` (mirroring
+            // `replace_daemon` / `replace_ledger`) requires owned
+            // `Engine`, not a borrow.
+            let engine = std::sync::Arc::into_inner(arc)
+                .expect("arc has one strong reference at this point")
+                .into_inner();
+            // Derive ViewMaterial from the engine's own keys — the
+            // same path `Engine::create` uses internally at assemble
+            // time to construct the default `LocalRefresh`. This
+            // recovers a structurally-identical refresh implementor
+            // and re-wraps it in the failure-injection wrapper.
+            let vm = ViewMaterial::try_from_keys(engine.keys())
+                .expect("ViewMaterial::try_from_keys against engine keys");
+            let refresh = FaultInjectingRefresh::new(LocalRefresh::new(vm));
+            let hybrid = engine.replace_refresh(refresh);
+            Arc::new(RwLock::new(hybrid))
+        };
+
+        // Sanity-check pre-refresh invariants through the engine
+        // arc's `ledger` and `refresh` fields (trait-dispatch reads).
+        // The refresh field is `Arc<R>`, so the wrapper-internal
+        // queue inspector is callable through a clone-or-deref pair;
+        // the test reads through the cloned Arc rather than the
+        // engine's read-guard, so the assertion lives outside the
+        // guard's scope.
+        {
+            let g = arc.read().await;
+            assert_eq!(
+                g.ledger.synced_height(),
+                0,
+                "fresh hybrid engine starts at LocalLedger synced_height 0"
+            );
+            assert_eq!(
+                g.refresh.queued_failures(),
+                0,
+                "pre-refresh: no failures queued on the refresh wrapper"
+            );
+        }
+
+        let handle = Engine::start_refresh(arc.clone(), RefreshOptions::default())
+            .await
+            .expect("start_refresh claims the slot on the four-slot hybrid engine");
+
+        let summary = handle
+            .join()
+            .await
+            .expect("hybrid retry refresh against four-slot composition joins after one retry");
+
+        assert_eq!(
+            summary.merge_attempts, 2,
+            "first attempt drains the injected ConcurrentMutation on the ledger wrapper;              second attempt's merge succeeds against the inner LocalLedger"
+        );
+        assert_eq!(summary.processed_height_range, 1..6);
+        assert_eq!(summary.blocks_processed, 5);
+
+        // Post-refresh assertions: both wrappers' queues are drained.
+        // The ledger wrapper's queue went 1 → 0 across the retry; the
+        // refresh wrapper's queue stayed 0 throughout (no failures
+        // were queued). The Drop debug_assert!s would fire at engine
+        // teardown if either queue were non-zero, so this assertion
+        // additionally guards against a regression where a failure
+        // got queued elsewhere in the test path.
+        {
+            let g = arc.read().await;
+            assert_eq!(
+                g.ledger.queued_failures(),
+                0,
+                "ledger wrapper: the single queued ConcurrentMutation was consumed by the retry"
+            );
+            assert_eq!(
+                g.refresh.queued_failures(),
+                0,
+                "refresh wrapper: queue was empty throughout (no failures pre-queued)"
+            );
+            // Post-merge state is authoritative on the wrapped
+            // ledger; the inner `LocalLedger` synced_height matches
+            // the producer's range upper bound after the canonical
+            // merge ran on attempt 2.
+            assert_eq!(
+                g.ledger.synced_height(),
+                5,
+                "post-retry LocalLedger synced_height matches the producer's range upper bound"
+            );
+        }
+
+        // Slot release: same shape as the C6β hybrid retry test.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            tokio::task::yield_now().await;
+            let g = arc.read().await;
+            if !g.refresh_slot.is_claimed() {
+                break;
+            }
+            drop(g);
+            if Instant::now() > deadline {
+                panic!("slot still claimed 5s after four-slot hybrid retry refresh joined");
             }
         }
     }

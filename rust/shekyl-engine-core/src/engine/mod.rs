@@ -627,53 +627,100 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> En
         &self.keys
     }
 
-    /// Test-only setter that replaces the producer-side
-    /// [`RefreshEngine`] implementor on this engine.
+    /// Test-only constructor: rebuild the engine with `refresh`
+    /// substituted in place of the existing
+    /// [`RefreshEngine`](super::traits::RefreshEngine) implementor,
+    /// leaving every other field unchanged.
     ///
-    /// Stage 1 PR 4 C6α introduces this surface so hybrid tests
-    /// can swap a vanilla [`LocalRefresh`] for a
-    /// [`FaultInjecting<LocalRefresh>`](super::fault_injecting_refresh::FaultInjecting)
-    /// wrapper, exercising the orchestrator's retry / cancellation /
-    /// merge paths against the same production implementor with the
-    /// trait boundary perturbed. Per the Round 5 substrate-decision
-    /// amendment (commit `8484e669a`), the test-substrate paradigm
-    /// is composition: production types with optional fault
-    /// injection at the trait boundary, not Mock-X parallel
-    /// implementations.
+    /// Mirrors [`super::Engine::replace_daemon`] /
+    /// [`super::Engine::replace_ledger`] for the `R: RefreshEngine`
+    /// slot added in PR 4 C5a. Hybrid tests that need a
+    /// fully-constructed `Engine<SoloSigner>` but want to wrap the
+    /// production [`super::local_refresh::LocalRefresh`] in a
+    /// [`super::fault_injecting_refresh::FaultInjecting`] failure-
+    /// injection wrapper compose this with `replace_daemon` and
+    /// `replace_ledger`:
+    ///
+    /// ```ignore
+    /// let real = Engine::<SoloSigner>::create(params, dummy_daemon())?;
+    /// // Re-derive ViewMaterial from the engine's keys (the same path
+    /// // Engine::create uses internally at assemble time):
+    /// let vm = ViewMaterial::try_from_keys(real.keys())?;
+    /// let refresh = FaultInjecting::new(LocalRefresh::new(vm));
+    /// let hybrid: Engine<SoloSigner, TestDaemon, FaultInjecting<LocalLedger>, FaultInjecting<LocalRefresh>> =
+    ///     real
+    ///         .replace_daemon(test_daemon)
+    ///         .replace_ledger(FaultInjecting::new(LocalLedger::from_test_blocks(Vec::new())))
+    ///         .replace_refresh(refresh);
+    /// ```
+    ///
+    /// The original `R1` refresh implementor is dropped (its
+    /// `Arc<R1>` strong count goes to zero, firing the wipe-on-drop
+    /// chain on any view material the implementor held); the
+    /// returned engine's `refresh` field is a fresh `Arc<R2>` over
+    /// the supplied implementor. Per the C6α "Arc replacement
+    /// semantics" rationale, tests must not call this method while
+    /// a refresh is in flight — the engine's single-flight slot
+    /// guards against concurrent `start_refresh` but not against
+    /// setter-during-refresh races.
     ///
     /// # Visibility
     ///
     /// `pub(crate)` and gated by `#[cfg(any(test, feature =
-    /// "test-helpers"))]` per the F-Mock-1 symmetry pin: production
-    /// builds do not compile this method, and crate-internal tests /
-    /// downstream `test-helpers`-feature consumers reach it through
-    /// the engine handle. The feature itself is declared in
-    /// [`Cargo.toml`](../../Cargo.toml)'s `[features]` table; no
-    /// downstream consumer exists pre-genesis, the feature is
-    /// declared so the gating composes correctly when one emerges.
+    /// "test-helpers"))]` per the C6α F-Mock-1 symmetry pin (asymmetric
+    /// with sibling `replace_daemon` / `replace_ledger`, which are
+    /// `#[cfg(test)]`-only: those methods predate the `test-helpers`
+    /// feature and exist purely for crate-internal tests, while
+    /// `replace_refresh` lands alongside the `FaultInjecting<R>`
+    /// wrapper that is itself `test-helpers`-feature-callable for
+    /// downstream consumers). Production builds do not compile this
+    /// method.
     ///
-    /// # Arc replacement semantics
+    /// # API shape change from C6α
     ///
-    /// The engine holds the implementor as `Arc<R>` (see the
-    /// `refresh` field rustdoc above for the lock-free dispatch
-    /// rationale). This setter constructs a fresh `Arc<R>` around
-    /// `refresh` and replaces the previous reference; any in-flight
-    /// `produce_scan_result` future spawned before the swap keeps
-    /// its strong reference to the prior implementor until the
-    /// future settles, then drops it. Tests must not call this
-    /// setter while a refresh is in flight (the engine's
-    /// single-flight slot guards against accidental concurrent
-    /// `start_refresh`, but does not prevent setter-during-refresh
-    /// races); per the F-Mock-2 queue contract, tests are expected
-    /// to install the wrapper before driving any refresh.
-    // C6α introduces the wrapper substrate; the first consumers of
-    // `replace_refresh` land in C6β / C6γ when the hybrid tests
-    // rewire from MockLedger/TestDaemon onto the FaultInjecting<L>
-    // and TestDaemon shapes. Pre-genesis no production caller exists.
+    /// C6α introduced `replace_refresh` as a `&mut self` setter that
+    /// could only swap one `R` for another `R` of the same type. C7's
+    /// hybrid test requires changing the type parameter from
+    /// `LocalRefresh` to `FaultInjecting<LocalRefresh>`, which the
+    /// `&mut self` shape cannot express. The consume-and-rebuild
+    /// signature here matches the precedent set by `replace_daemon`
+    /// / `replace_ledger` and lets the four-parameter
+    /// `Engine<S, D, L, R>` compose cleanly across all three slot
+    /// substitutions. Per the C6α docstring's "Phase 1 author
+    /// commitment note", `replace_refresh` had no consumers in
+    /// C6α/C6β/C6γ, so the signature change is non-breaking; C7 is
+    /// the first consumer.
     #[cfg(any(test, feature = "test-helpers"))]
     #[allow(dead_code)]
-    pub(crate) fn replace_refresh(&mut self, refresh: R) {
-        self.refresh = std::sync::Arc::new(refresh);
+    pub(crate) fn replace_refresh<R2: RefreshEngine>(self, refresh: R2) -> Engine<S, D, L, R2> {
+        let Engine {
+            file,
+            keys,
+            ledger,
+            reservations,
+            next_reservation_id,
+            prefs,
+            daemon,
+            network,
+            capability,
+            refresh_slot,
+            refresh: _old,
+            _signer,
+        } = self;
+        Engine {
+            file,
+            keys,
+            ledger,
+            reservations,
+            next_reservation_id,
+            prefs,
+            daemon,
+            network,
+            capability,
+            refresh_slot,
+            refresh: std::sync::Arc::new(refresh),
+            _signer,
+        }
     }
 }
 
