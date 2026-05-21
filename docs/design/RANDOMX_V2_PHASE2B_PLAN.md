@@ -8,9 +8,9 @@ discipline ordering rationale (§5.1 below).
 
 **Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A
 — Phase 2" sub-PR 2b is the binding one-line scope ("AES round /
-SuperScalarHash primitives from the v2 spec; spec-vector parity"); this
+SuperscalarHash primitives from the v2 spec; spec-vector parity"); this
 doc expands it into a reviewable change list, dependency-discipline
-dispositions, a test plan, and the six findings that surfaced during
+dispositions, a test plan, and the seven findings that surfaced during
 Rounds 2 and 3.
 
 **Base commit.** `dev` at `e63fd2105` (this doc's cut point on
@@ -67,8 +67,8 @@ zero-finding integration rather than a refactor.**
 | # | Decision | Phase 2b compliance |
 |---|----------|---------------------|
 | 1 | C JIT stays miner-only | Zero JIT code in this PR; pure interpreter primitives. |
-| 2 | Spec wins over C reference | All five primitive families have spec sections (§3.2-3.4 AES, §3.5 BlakeGenerator, §6 SuperscalarHash). Spec-silent fine-grain details (§3 in `RANDOMX_V2_RUST.md`) are dispositioned via the spec-silence audit table in `superscalar.rs` rustdoc (§5.5 below); the Rust port matches the C iteration order verbatim and files fork-side clarification issues. |
-| 3 | Transform-shaped types | All five primitives are pure functions at the callable surface. `Blake2Generator` is the one statefully-shaped type because §3.5 *defines* it as stateful (get_byte / get_uint32 advance state); the constructor is `Blake2Generator::new(seed, nonce)` and the state is `&mut self` per-call. No module-level state. |
+| 2 | Spec wins over C reference | All six primitives have spec sections (§3.2-3.4 AES round + composites, §3.5 BlakeGenerator, §6 SuperscalarHash). Spec-silent fine-grain details (§3 in `RANDOMX_V2_RUST.md`) are dispositioned via the spec-silence audit table in `superscalar.rs` rustdoc (§5.5 below); the Rust port matches the C iteration order verbatim and files fork-side clarification issues. |
+| 3 | Transform-shaped types | Five of the six primitive call surfaces are pure functions; `Blake2Generator` is the one stateful type because §3.5 *defines* it as stateful (get_byte / get_uint32 advance state); the constructor is `Blake2Generator::new(seed, nonce)` and the state is `&mut self` per-call. No module-level state. |
 | 4 | No prewarm / no async cache rebuild | Phase 2b adds no scheduling. |
 | 5 | No `#[no_mangle]` / `extern "C" fn` / `#[export_name]` | Phase 2f greps continue to zero-hit. |
 | 6 | No module-level runtime-mutable state | Spec constants are `const`-only (AES round keys per §3.2-3.4, AesHash1R initial state + extra keys per §3.4, BlakeGenerator's lack of seed-state defaults). |
@@ -77,7 +77,7 @@ zero-finding integration rather than a refactor.**
 
 ## 2. Scope (the in-scope work)
 
-Five primitive families land:
+Six primitives land:
 
 | # | Primitive | Spec section | C reference | Downstream caller |
 |---|-----------|--------------|-------------|--------------------|
@@ -151,8 +151,10 @@ aes = { version = "0.9", default-features = false, features = ["hazmat"] }
   `_mm_aesdec_si128` and `soft_aesdec`). The crate exposes **only** the
   equivalent-inverse form (no separate `inv_cipher_round`), so the wrong-
   form selection failure mode is structurally precluded.
-- **Feature plumbing.** `hazmat` is the gating feature (`Cargo.toml:43-44`).
-  Without it the single-round API is unreachable.
+- **Feature plumbing.** `hazmat` is the gating feature
+  (`aes-0.9.0/Cargo.toml:43-44`, in the `aes` crate's own manifest —
+  not the workspace `rust/Cargo.toml`). Without it the single-round
+  API is unreachable.
 - **Safety posture.** Both `hazmat` round functions are safe at the public
   API; the `unsafe { $body }` is internal to an `if_intrinsics_available!`
   macro gated by runtime CPUID detection. `#![deny(unsafe_code)]`
