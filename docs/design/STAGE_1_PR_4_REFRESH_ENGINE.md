@@ -648,12 +648,44 @@ detail: ... }))?` per `30-cryptography.mdc`'s
 constant-time-or-explicit-rejection discipline, with the
 rustdoc's field-derivation summary and `# Errors` block
 both updated; closes Copilot PR #60 review ID 3278452905 —
-also fired on `966154d27`). Round 5 substrate-decision
-amendment (`8484e669a`) and Round 5 sub-pin extension
-(`29cb7e138`), plus the F11-S audit-trail measurement
-evidence (`a4da2212a`), land as design-doc commits on the
-implementation branch alongside C5β / C6α and are not in
-the C0–C20 numbering.
+also fired on `966154d27`); **C22** `168ff0e22`
+(stale `scan_transaction_with_cancel` `expect()` panic
+strings in
+[`shekyl-scanner/benches/scan_transaction.rs`](../../rust/shekyl-scanner/benches/scan_transaction.rs) —
+four `.expect("scan_transaction_with_cancel must not
+error on well-formed fixture")` sites across warm + cold
+variants of the worst-case and typical-case bench groups
+named the private inner helper, but the call sites
+themselves invoke the public surface `Scanner::scan(..)`;
+same class as C10's six-rustdoc fn-name correction inside
+`scan.rs` post the C4 rename + split (`ac100e1ab`), now
+extended to the bench harness; fix updates all four sites
+to `"Scanner::scan must not error on well-formed fixture"`
+with rustfmt collapsing the now-shorter message to single-
+line form; closes Copilot PR #60 review IDs 3278543704 /
+3278543738 / 3278543753 / 3278543764 — fired on the C21
+head `5557b3192`); **C23** `a2f173c73` (replace Debug-
+substring with structural `CryptoError::DecapsulationFailed`
+match in
+[`shekyl-scanner/src/bench_fixtures.rs`](../../rust/shekyl-scanner/src/bench_fixtures.rs) —
+the `typical_case_first_output_exits_via_view_tag_mismatch`
+sanity-check test asserted `format!("{err:?}").contains(
+"X25519 view tag mismatch")` which is brittle to Debug-
+format changes; `scan_output_recover` constructs multiple
+`DecapsulationFailed(String)` instances along distinct
+early-exit paths so a pure variant-only check would not
+distinguish the typical-case fixture's intended path from
+sibling reasons; fix uses a let-else binding the variant
+AND the inner `String` field followed by a separate
+inner-message `assert!`, preserving the two-class pinning
+(variant + reason within variant) and changing only the
+FORM of the check; closes Copilot PR #60 review ID
+3278543725 — also fired on `5557b3192`). Round 5
+substrate-decision amendment (`8484e669a`) and Round 5
+sub-pin extension (`29cb7e138`), plus the F11-S audit-trail
+measurement evidence (`a4da2212a`), land as design-doc
+commits on the implementation branch alongside C5β / C6α
+and are not in the C0–C23 numbering.
 Test-gate cumulative: 170 / 170 lib tests pass at C7;
 `cargo fmt --all -- --check` clean; `cargo clippy -p
 shekyl-engine-core --all-targets --features test-helpers --
@@ -6836,12 +6868,130 @@ Engine-core doc warnings unchanged at 49 (C9 baseline).
 
 **Landed: `3331fb82e`** (`engine-core: C20 view_scalar
 canonical-bytes decoding with IoError on corruption`).
-C21 (this commit) is the doc-after-plans propagation
+C21 `5557b3192` is the doc-after-plans propagation
 for C18 – C20 per
 [`.cursor/rules/91-documentation-after-plans.mdc`](../../.cursor/rules/91-documentation-after-plans.mdc)'s
 final-task-always rule: doc-only, no rust files
-touched. PR 4 §7.X commits C0–C21 are now all landed;
-PR #60 carries the full C0–C21 set.
+touched.
+
+**Commits C22–C23 — Copilot post-PR-open fourth-round
+review responses.**
+
+After C21 pushed PR #60 to head `5557b3192`, the GitHub
+Copilot reviewer fired a fourth pass against the new
+head and returned five additional line-anchored findings.
+Four of the five clustered on a single class — stale
+`expect()` panic-message strings in the bench harness
+referencing the private inner helper `scan_transaction_with_cancel`
+when the call sites themselves invoke the public surface
+`Scanner::scan(..)` — and bundle into a single mechanical
+commit per `90-commits.mdc` scope-per-commit discipline.
+The fifth is a substantive test-discipline refinement
+(Debug-substring vs. structural match) and lands
+separately.
+
+- **C22** `168ff0e22` — stale `scan_transaction_with_cancel`
+  `expect()` strings in
+  [`shekyl-scanner/benches/scan_transaction.rs`](../../rust/shekyl-scanner/benches/scan_transaction.rs).
+  Four `.expect("scan_transaction_with_cancel must not
+  error on well-formed fixture")` sites named the private
+  inner helper while the calls invoke `Scanner::scan(..)`
+  (the public surface that wraps `InternalScanner::scan`
+  with `|| false` per C4 = `ac100e1ab`). The mismatch is
+  the same class as the C10 commit (`60f401e77`) that
+  rewrote six rustdoc fn-name references inside
+  `scan.rs` from pre-C4 `scan_transaction` to post-C4
+  `scan_transaction_with_cancel`; C22 closes the bench-
+  file residue C10's review-attention scope didn't cover.
+  Fix: two `replace_all` passes (the leading whitespace
+  distinguishes the iter_batched-setup-closure form from
+  the body-closure form; both shapes carry the same panic
+  message), all four sites converged to `"Scanner::scan
+  must not error on well-formed fixture"`, rustfmt then
+  collapsed each to single-line form (the shorter message
+  no longer wraps under rustfmt's 100-col default). The
+  four sites: `:156` warm-cache worst-case body, `:183`
+  cold-cache worst-case body (the F11-S BINDING
+  measurement), `:225` warm-cache typical-case body,
+  `:245` cold-cache typical-case body. No semantic
+  change: `.expect(..)` strings only fire on panic, and
+  the F11-S well-formed fixtures (per `bench_fixtures::
+  build_{worst,typical}_case_scannable_block` + the four
+  sanity-check tests at `bench_fixtures.rs:464,514,558,576`)
+  never produce `Err` on `Scanner::scan`. Operator-facing
+  diagnostic discipline (audit-trail clarity when a bench
+  panics in CI). F11-S benchmark impact: zero — message-
+  string changes do not affect timing. Closes Copilot PR
+  #60 review IDs 3278543704, 3278543738, 3278543753,
+  3278543764.
+
+- **C23** `a2f173c73` — replace Debug-substring with
+  structural `CryptoError::DecapsulationFailed` match in
+  [`shekyl-scanner/src/bench_fixtures.rs`](../../rust/shekyl-scanner/src/bench_fixtures.rs).
+  The `typical_case_first_output_exits_via_view_tag_mismatch`
+  sanity-check test asserted `format!("{err:?}").contains(
+  "X25519 view tag mismatch")` to verify the fast-path-
+  rejection error class — brittle to Debug-format changes
+  (re-derivation, additional context fields, terse-vs-
+  verbose variants) per Copilot's test-discipline finding.
+  Validation at source: `CryptoError::DecapsulationFailed(
+  String)` is a tuple-variant carrying the inner reason
+  (`shekyl-crypto-pq/src/error.rs:14-15`), and
+  `scan_output_recover` (`shekyl-crypto-pq/src/output.rs`)
+  constructs SEVERAL `DecapsulationFailed(String)`
+  instances along distinct early-exit paths: "X25519 view
+  tag mismatch" (the typical-case fixture's intended
+  classifier), "invalid ML-KEM ciphertext length",
+  "invalid decap key: {underlying e}", and the ML-KEM
+  decap rejection itself. All four pass `matches!(err,
+  CryptoError::DecapsulationFailed(_))` — a pure variant-
+  only check would NOT distinguish the typical-case
+  fixture's intended path from sibling failure modes, so
+  the substring check on the inner message IS load-bearing
+  for fixture mis-classification detection. Fix uses a
+  let-else binding the variant AND the inner `String`
+  field, followed by a separate inner-message `assert!`:
+  the two-class pinning (variant + reason within variant)
+  is preserved; only the FORM changes (binding the inner
+  `String` directly via pattern-match rather than going
+  through `format!("{err:?}")`). The original prose
+  comment is rewritten to enumerate the two drift classes
+  the new shape catches explicitly: (1) drift to a non-
+  `DecapsulationFailed` early-exit (e.g., a `LowOrderPoint`
+  rejection) caught by the let-else's variant check, and
+  (2) drift WITHIN `DecapsulationFailed` to a sibling
+  reason caught by the inner-message substring check.
+  `CryptoError` imported via the existing
+  `shekyl_crypto_pq::error` public path; no other call
+  sites change. Closes Copilot PR #60 review ID 3278543725.
+
+C22–C23 gates: each commit ran its scoped bisection-
+discipline gates against `shekyl-scanner`
+(`cargo fmt -p shekyl-scanner -- --check` — clean after
+C22's rustfmt auto-format applied to collapse the
+shorter message to single-line; `cargo clippy -p
+shekyl-scanner --all-targets -- -D warnings` — clean;
+`cargo test -p shekyl-scanner --lib` — 58 / 58 pass,
+unchanged from C19; `cargo doc -p shekyl-scanner
+--no-deps` — 2 warnings, unchanged from C8 baseline).
+C23 additionally ran the targeted `cargo test ...
+typical_case_first_output_exits_via_view_tag_mismatch
+-- --nocapture` to confirm the new structural form
+classifies the fixture's view-tag-mismatch error
+correctly (1 / 1 pass; the test would now panic with
+the let-else's named diagnostic if `scan_output_recover`
+ever returned a non-`DecapsulationFailed` variant on
+this input, instead of the previous-shape generic
+substring-not-found message).
+
+**Landed: `a2f173c73`** (`scanner: C23 replace
+Debug-substring with structural CryptoError match in
+bench_fixtures test`). C24 (this commit) is the
+doc-after-plans propagation for C22 – C23 per
+[`.cursor/rules/91-documentation-after-plans.mdc`](../../.cursor/rules/91-documentation-after-plans.mdc)'s
+final-task-always rule: doc-only, no rust files
+touched. PR 4 §7.X commits C0–C24 are now all landed;
+PR #60 carries the full C0–C24 set.
 
 **Phase 1 readiness checklist (gates the C0 cut).** The
 following are pre-conditions for the implementation branch to
