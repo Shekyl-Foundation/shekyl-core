@@ -32,8 +32,26 @@ seedhash-as-array-pointer + ERR_NULL_PTR taxonomy), and 2f (CacheStore
 canonical-slot eviction-protection; `VmState` pool capacity sized
 against daemon parallel-verification fanout). Parent-plan alignment
 ships as a sibling commit on this branch (Decision #6, Decision #7,
-Phase 0 §5/§6 carry-forwards). Target ≤1 round met; implementation
-cut authorized post-PR-#65 merge.
+Phase 0 §5/§6 carry-forwards). **Round 5 closed 2026-05-21:**
+closure-only refinement pass tightening four discipline-enforcement
+edges without surfacing new findings (substantive review surface
+closed at Round 4). (R5-D1) §5.11.8 framing amendment — "reading-the-
+source vs. producing-a-table-from-intuition" named as the load-
+bearing audit step; "show your work" enforcement via line-range
+citations in every audit table. (R5-D2) Parent plan §5 FFI hardening
+refinements (sibling commit) — C-side `const uint8_t (*seedhash)[32]`
+header form, C++ call-site declaration discipline, and
+`RANDOMX_BLOCK_TEMPLATE_MAX_SIZE` rationale-sentence cross-check.
+(R5-D3) 2d skeleton §3.1 CI grep mechanical enforcement addendum
+(sibling commit) — matches the `no #[no_mangle]` invariant shape;
+the prose-as-discipline is necessary but not sufficient. (R5-D4)
+`docs/FOLLOWUPS.md` V3.0 entry (sibling commit) — post-2c-implementation
+forward-action to promote 2c-emergent disciplines to project-level
+documentation. Posture-shift note: Round 4's threat-model framing
+converted "design closure" into "design closure plus active defense
+against named attacker objectives" — named so 2d/2f/2g/LWMA-1 Phase 4
+inherit the shape. Target ≤1 round met; implementation cut authorized
+post-PR-#65 merge.
 
 **Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A
 — Phase 2" sub-PR 2c is the binding one-line scope ("Implement Cache
@@ -59,11 +77,13 @@ Phase 2c implementation branch cuts later from post-this-doc `dev`.
 
 - `chore/randomx-v2-phase2c-plan` (this doc + the parent-plan
   precursor patch + Round 2 plan-doc revisions + Round 2 parent-plan
-  alignment + Round 3 plan-doc revisions + Round 3 2d skeleton scaffold
-  + Round 4 plan-doc threat-model addenda + Round 4 2d skeleton
-  threat-model addenda + Round 4 parent-plan alignment;
-  short-lived per `06-branching.mdc` rule 2; nine commits;
-  lands on `dev` via PR #65).
+  alignment + Round 3 plan-doc revisions + Round 3 2d skeleton scaffold,
+  plus Round 4 plan-doc threat-model addenda + Round 4 2d skeleton
+  threat-model addenda + Round 4 parent-plan alignment, plus Round 5
+  plan-doc closure refinements + Round 5 2d skeleton CI grep addendum,
+  plus Round 5 parent-plan FFI-hardening refinements + Round 5
+  `docs/FOLLOWUPS.md` V3.0 entry; short-lived per `06-branching.mdc`
+  rule 2; thirteen commits; lands on `dev` via PR #65).
 - `feat/randomx-v2-phase2c` (implementation; cut from post-this-doc
   `dev`; not yet cut as of this doc's commit).
 
@@ -1328,10 +1348,62 @@ sampled and adversarial inputs). The discipline applies at each
 PR's design time; 2g's harness is the safety net for cases where
 the plan-doc-time discipline missed something.
 
+**Round 5 framing amendment — "the audit's value is in the
+reading-the-source step, not the producing-a-table step."** The mp
+correction is the precedent that proves the discipline. The lesson
+is *not* "we caught one bug." The lesson is that **an audit that
+just confirms a prompted-list table is the failure mode
+`16-architectural-inheritance.mdc`'s "audits-are-clean-so-compress"
+anti-pattern names** — the table is the audit's output; the audit's
+substance is in the line-by-line reading of the C reference that
+*produces* the table. A contributor who skips the reading-the-source
+step and generates a table from prompted intuition reintroduces the
+consensus-split-via-divergence failure mode (Objective 6) exactly
+as the pre-correction Rounds 1–2 tables had `mp` wrong: the table
+existed, it looked plausible, it was wrong, and no audit happened
+because "audit" meant "look at the prompted summary," not "open
+`vm_interpreted.cpp` and read."
+
+**Enforcement: show your work.** Every audit table in the plan-doc
+(`§5.1.1` `VmState` field set; `§5.5 F5` v2-only simplification
+table; the eventual `§3.4` `u128`/`__int128_t` edge-case audit in
+the 2d skeleton; the eventual `§7.1` opcode-handler audit in 2d's
+Round 1 plan-doc) **cites line ranges in the C reference at the
+pinned fork commit.** Format:
+
+| Subject | C reference cite | Disposition |
+|---------|------------------|-------------|
+| (field/opcode/path) | (file `path/to/source.{cpp,hpp,h}:N–M`) | (audit-derived disposition) |
+
+The line-range citations are the audit's evidence-trail. A reviewer
+spot-checks by opening the cited file at the pinned commit and
+reading the named lines; if the citation matches the disposition,
+the row is confirmed. If the cited lines don't contain what the
+disposition claims, the row fails and the audit is rejected
+regardless of how plausible the rest of the table looks. This is
+the same shape as `30-cryptography.mdc`'s constant-time-or-explicit-
+rejection rule: absence of the citation is a claim that no
+citation is needed, and the burden of that claim is the audit
+table's author's, not the reviewer's.
+
+The discipline's recurrence-pattern protection is the same as the
+`mp` precedent: future contributors who attempt to land an audit
+table without line-range citations are asking for the "table looks
+plausible, audit didn't happen" failure mode. Catching this at
+PR-review-time prevents the consensus-split-source bug from
+shipping. The §5.1.1 audit-grep command is the operational form
+that pre-fills the cite column; the reviewer's spot-check is the
+operational form of confirming the auditor read what the citation
+claims.
+
 **No new code; no plan-doc change beyond this section.** The
 discipline already exists; this section names it explicitly so 2d/2g
 PRs inherit it as a discipline note rather than as a precedent the
-authors have to re-derive.
+authors have to re-derive. The Round 5 amendment names the
+*reading-the-source* step as load-bearing — distinct from the
+table-existing step — so future audit-table authors don't optimize
+toward the visible artifact at the expense of the invisible
+discipline.
 
 ## 6. Test strategy
 
@@ -1695,6 +1767,7 @@ Phase 2c lands the cache + VM substrate; downstream phases inherit:
 | Round 2 | 2026-05-21 | Substrate-finding pass against the Round 1 plan-doc. Three structural restructurings landed within Round 1's locked dispositions: **(R2-D1)** `BytecodeDispatch` trait + `StubNopDispatch` impl → `dispatch_instruction` free function with NOP body replaced in 2d, eliminating the mock-X anti-pattern recurrence (§5.1 F1, §1 cross-cut). **(R2-D2)** `Vm<'a>` public type → `compute_hash` public transform with `VmState` private (§2 type table, §3 module layout collapse 5 files → 2 files, §13 forward-path updates for 2d/2f/3a). **(R2-D3)** `Cache::from_raw` visibility correction (`pub` → `pub(crate)`; test-time only, not FFI surface — §5.9 F9). Parent-plan alignment commit follows (Decision #7 substrate-shift per `21-reversion-clause-discipline.mdc`: `VmState` pooling becomes internal to `compute_hash`, not a public `VmPool` type). All three deliverables tighten the type-and-module shape inside the bounds Round 1's dispositions already established; no Round 1 disposition reopened. |
 | Round 3 | 2026-05-21 | Substrate-completeness pass against Round 2 plan-doc; close-out before implementation. **(R3-D1)** §5.1.1 "Function-body replacement contract" pins the 2c → 2d hand-off: frozen `dispatch_instruction` signature, frozen `Instruction` field set, and `VmState` field set populated empirically from an audit against `bytecode_machine.hpp`'s 29 opcode handlers + `vm_interpreted.cpp::execute()`. Audit produced one correction-from-prompted-list finding: `mp` is a v2-only local-variable alias for `mem.ma` per `vm_interpreted.cpp:89`, not a `MemoryRegisters` struct field; §5.5 F5 entry updated to match (existence disposition was wrong in Rounds 1–2; the v2-only Rust port introduces no `mp` field). Single-pass dispatch shape locked; IBC 2-pass form rejected with named reversion-clause criterion (reopen iff 2d benchmarks show single-pass cannot hit ≤3.0× Phase 0 budget AND profiling attributes shortfall to per-call decode cost). **(R3-minor-1)** §13 3a inheritance gains an FFI layering discipline note: `shekyl_pow_randomx_v2_hash` is a thin error-translation shim over `compute_hash`; no semantic logic in the FFI boundary; shim body ≤30 LoC. **(R3-minor-2)** §9 commit 8 + §15 PR template + §12 forecast envelope add the `tests/perf/per_hash_latency.rs` placeholder (`#[ignore]` + `unimplemented!()` cross-referencing F8 / §13 2g inheritance); structural code out-survives prose deferral. **(R3-D3)** Sibling commit lands `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` skeleton scaffold: §5.1.1 contract carry-forward, VmState field-set reference, forward-actions accumulated from F1/F2/F3/F5/F7, decision points for 2d Round 1 (FPU rounding-mode mechanism; F128 newtype shape; per-opcode dispatch shape). All Round 3 deliverables remain within Round 2's locked dispositions; no Round 2 or Round 1 disposition reopened. Target ≤1 round met. |
 | Round 4 | 2026-05-21 | Threat-model addenda pass against the Round 3 plan-doc; priority-1 (per `00-mission.mdc`) adversarial review enumerating six attack objectives (mining-faster differential; cache poisoning; FFI exploitation; resource DoS; Rust safety boundary gaps; consensus split via implementation divergence). New §5.11 records eight findings + dispositions. **In-scope 2c-implementation additions:** §5.11.1 T1' (`Cache::derive` determinism property — single-thread loop, concurrent threads, interleaved seedhash) + T2' (`derive_item` invariance property), ~60 LoC in commits 2 and 3; §5.11.2 `debug_assert!` discipline at the two unsafe `Box::new_zeroed_slice` sites, ~10 LoC across commits 2 and 4; §5.11.3 debug-vs-release equivalence as PR gate (1 line in CI workflow + §10 gate entry); §5.11.4 public-input-only scope note in crate-level doc-comments. **Forward-actions to downstream phases:** §5.11.5 2g adversarial seedhash corpus + pathological-program worst-case timing bound; §5.11.6 3a FFI null-pointer + length-validation + `seedhash: *const [u8; 32]` typed-array pointer + `ERR_NULL_PTR` taxonomy; §5.11.7 2f CacheStore canonical-seedhash slot eviction-protection + `VmState` pool capacity sized against daemon parallel-verification fanout. **Discipline note:** §5.11.8 audit-against-actual-code validation (the discipline that produced R3-D1's `mp` correction is the discipline 2d/2g inherit for their own surfaces). Parent plan alignment ships as a sibling commit on this branch (Decision #6 R4 carries CacheStore eviction-protection note; Decision #7 R4 carries VmState pool sizing note; Phase 0 §5 R4 pins `RANDOMX_BLOCK_TEMPLATE_MAX_SIZE` and `ERR_NULL_PTR` taxonomy + `*const [u8; 32]` signature; Phase 0 §6 R4 adds worst-case ≤5.0× timing bound; Risk acknowledgments R4 adds a Rust-vs-C edge-case differential bullet). The 2d skeleton scaffold gets a sibling commit adding §2 F7 per-rounding-mode coverage forward-action, §3.1 unsafe-block scope-check discipline, and §4.1 u128/`__int128` edge-case differential discipline. All Round 4 additions remain within Round 1–3's locked dispositions; no prior disposition reopened. Target ≤1 round met. |
+| Round 5 | 2026-05-21 | Closure-only refinement pass against the Round 4 plan-doc. Substantive review surface is closed at Round 4; Round 5 tightens four discipline-enforcement edges without surfacing new findings. **(R5-D1)** §5.11.8 framing amendment: "reading-the-source vs. producing-a-table-from-intuition" named as the load-bearing audit step (the table is the audit's output; the audit's substance is the line-by-line reading that *produces* the table); "show your work" enforcement formalized — every audit table cites line ranges at the pinned fork commit, reviewer spot-checks by opening the cited file and reading the named lines. The `mp` correction is reframed from "we caught one bug" to "the prompted-list table that didn't reflect a reading-the-source pass was the failure mode `16-architectural-inheritance.mdc`'s 'audits-are-clean-so-compress' anti-pattern names." **(R5-D2)** Parent plan Phase 0 §5 FFI hardening refinements (sibling commit): C-side header form `const uint8_t (*seedhash)[32]` (not decayed `const uint8_t *`); C++ call-site declaration discipline (`uint8_t seedhash_buffer[32]` + `&seedhash_buffer`), documented at each call site not just at the signature; `RANDOMX_BLOCK_TEMPLATE_MAX_SIZE` rationale-sentence ("generous ceiling well above any realistic Shekyl block template; the 2 MiB == scratchpad-size coincidence is not load-bearing coupling"). **(R5-D3)** 2d skeleton §3.1 CI grep mechanical enforcement addendum (sibling commit): the unsafe-block scope-check discipline gets the same shape as the `no #[no_mangle] in shekyl-pow-randomx` invariant — a CI-time grep asserts the rounding-mode-setter function body contains exactly one of the chosen intrinsic / asm form and nothing else (no other intrinsic calls, no pointer dereferences, no allocator calls). Prose-as-discipline is necessary but not sufficient; the grep is the enforcement that survives "a future contributor stashing the previous mode for restoration" style additive drift. **(R5-D4)** New `docs/FOLLOWUPS.md` V3.0 entry (sibling commit): post-2c-implementation forward-action to promote 2c-emergent disciplines (function-body replacement contract, audit-against-actual-code, threat-model addenda framing, reversion-clause for sub-PR boundary changes, forward-action propagation convention) to project-level documentation (likely `.cursor/rules/26-sub-pr-design-discipline.mdc` or `docs/conventions/`). **Posture-shift note (recorded for downstream sub-PRs).** Round 4's threat-model framing converted "design closure" into **design closure plus active defense against named attacker objectives**. The shift is worth naming so 2d Round 1, 2f Round 1, 2g Round 1, and LWMA-1 Phase 4's design rounds get the same shape rather than reverting to per-finding review — the threat-model-objective framing surfaces findings (`mp`, eviction interleave, FPU rounding-mode escape, u128 edge cases) that per-finding review wouldn't have caught because no individual finding *suggests* the next one; the attacker-objective frame does. All Round 5 additions remain within Round 1–4's locked dispositions; no prior disposition reopened. Target ≤1 round met. |
 
 ## 15. References to commit (Phase 2c PR description shape)
 
