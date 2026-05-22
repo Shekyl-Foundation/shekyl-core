@@ -1628,24 +1628,26 @@ sustainability is unaffected by the recalibration.
   `dev` at `e9917097f`, post-PR-#66). Option A selected over
   `docs/conventions/` — disciplines fit the standard rules shape
   with substantial prose, precedents, and reversion clauses per
-  `21-reversion-clause-discipline.mdc`.
+  `21-reversion-clause-discipline.mdc`. **Opt-in** (`alwaysApply:
+  false`): cite explicitly when scoping multi-round per-trait PRs
+  (same injection model as `07-consensus-atomic-cutovers.mdc`).
 
   **Coverage.** Five design-round disciplines (function-body
   replacement contract; audit-against-actual-code; threat-model
   addenda framing; reversion-clause for sub-PR boundary changes;
-  forward-action propagation) plus nine impl-time Round 0
-  disciplines (R0-D5–D12; R0-D8 split into results-fidelity vs
-  per-commit build cleanliness). Round 0 pre-flight shape
-  documented for future per-trait PRs.
+  forward-action propagation) plus nine pre-flight disciplines
+  (R0-D5–R0-D12 disposition IDs; R0-D8 split into results-fidelity
+  vs per-commit build cleanliness). Pre-flight pass shape documented
+  for future per-trait PRs (plan-doc "Round 0" naming preserved for
+  audit-trail IDs only).
 
   **Substrate artifacts (historical).**
   [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](./design/RANDOMX_V2_PHASE2C_PLAN.md)
-  §5.1.1, §5.4, §5.11, §13, §14;
+  (R3-D1, F4, Round 4 addenda, forward-path, R0-D5–R0-D12, R5-D1);
   [`docs/design/RANDOMX_V2_PHASE2C_AUDIT.md`](./design/RANDOMX_V2_PHASE2C_AUDIT.md);
   [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](./design/RANDOMX_V2_PHASE2D_PLAN.md)
-  §3.5 R1-D3 (post-promotion audit example). Downstream authors
-  cite `26-sub-pr-design-discipline.mdc` instead of re-reading 2c
-  §14 for process shape.
+  R1-D3 (post-promotion audit example). Downstream authors cite
+  `26-sub-pr-design-discipline.mdc` explicitly for process shape.
 
 ---
 

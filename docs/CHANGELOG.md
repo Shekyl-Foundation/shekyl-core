@@ -10,7 +10,8 @@
   [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md)
   / [`RANDOMX_V2_PHASE2C_AUDIT.md`](design/RANDOMX_V2_PHASE2C_AUDIT.md)
   into [`.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc)
-  (Option A). Closes `docs/FOLLOWUPS.md` V3.0 discipline-promotion
+  (Option A; opt-in — cite when scoping multi-round per-trait PRs).
+  Closes `docs/FOLLOWUPS.md` V3.0 discipline-promotion
   item. Applies to RandomX v2 sub-PRs, LWMA-1 Phase 4, and other
   multi-round consensus-critical design work.
 
