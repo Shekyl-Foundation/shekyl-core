@@ -275,23 +275,54 @@ runtime via `--test=tN`).
 `Cache` and `compute_hash` (via `VmState`) consume only types
 already exported (or `pub(crate)`) from 2a and 2b modules:
 
-| Phase 2c consumer | Phase 2a/2b provider | Provider's visibility |
-|-------------------|---------------------|------------------------|
-| `Cache::derive` | `argon2d::fill_cache(key: &[u8], blocks: &mut [Block])` | `pub(crate) fn` |
-| `Cache::derive` | `blake2_generator::Blake2Generator::new` + `.next_byte`/`.next_u32` | `pub(crate) struct` |
-| `Cache::derive` | `superscalar::generate_superscalar(prog: &mut SuperscalarProgram, gen: &mut Blake2Generator)` | `pub(crate) fn` |
-| `Cache::derive_item` | `superscalar::execute_superscalar(prog: &SuperscalarProgram, regs: &mut [u64; 8])` | `pub(crate) fn` |
-| `Cache::derive_item` | `superscalar::randomx_reciprocal(divisor: u64) -> u64` | `pub(crate) fn` (already on-the-fly per C reference's `reciprocalCache`; no Rust-side cache needed) |
-| `VmState::new` (scratchpad init) | `aes::fill_aes_1r_x4(state: &mut [u8; 64], scratchpad: &mut [u8])` | `pub fn` |
-| `VmState::new` (program parse) | `aes::fill_aes_4r_x4(entropy: &[u8; 64], buf: &mut [u8])` | `pub fn` |
-| `compute_hash` / `VmState::run` (F/E AES mix) | `aes::fill_aes_4r_x4` (per spec §4) | `pub fn` |
-| `compute_hash` / `VmState::finalize` | `aes::hash_aes_1r_x4(scratchpad: &[u8], hash: &mut [u8; 64])` | `pub fn` |
+| Phase 2c consumer | Phase 2a/2b provider | Provider's current visibility | 2c disposition |
+|-------------------|---------------------|------------------------|----------------|
+| `Cache::derive` | `argon2d::fill_cache(key: &[u8], blocks: &mut [Block])` | `pub(crate) fn` | reuse as-is |
+| `Cache::derive` | `blake2_generator::Blake2Generator::new` + `.get_byte`/`.get_uint32` | `pub(crate) struct` + `pub(crate) fn` methods | reuse as-is |
+| `Cache::derive` | `superscalar::generate_superscalar(gen: &mut Blake2Generator) -> SuperscalarProgram` | `pub(crate) fn` | reuse as-is |
+| `Cache::derive_item` | `superscalar::execute_superscalar(program: &SuperscalarProgram, registers: &mut [u64; 8])` | `pub(crate) fn` | reuse as-is |
+| `Cache::derive_item` | `superscalar::randomx_reciprocal(divisor: u32) -> u64` | currently private `fn` (module-internal helper for `SuperscalarInstructionState::create`) | **2c promotes to `pub(crate) fn`** so `cache.rs` can call it during dataset-item derivation; the C reference computes the reciprocal on-the-fly per `dataset.cpp::initDatasetItem`, so no Rust-side `reciprocalCache` is introduced |
+| `VmState::new` (scratchpad init) | `aes::fill_aes_1r_x4(state: &mut [u8; 64], output: &mut [u8])` | `pub(crate) fn` | reuse as-is |
+| `VmState::new` (program parse) | `aes::fill_aes_4r_x4(state: &[u8; 64], output: &mut [u8])` | `pub(crate) fn` | reuse as-is |
+| `compute_hash` / `VmState::run` (F/E AES mix) | `aes::fill_aes_4r_x4` (per spec §4) | `pub(crate) fn` | reuse as-is |
+| `compute_hash` / `VmState::finalize` | `aes::hash_aes_1r_x4(input: &[u8], hash: &mut [u8; 64])` | `pub(crate) fn` | reuse as-is |
 
-**Verification step (Round 2 deliverable):** confirm each
-`pub(crate)` visibility is sufficient for 2c's consumption (i.e.,
-the same crate). If any needs to be `pub`, it's a documented
-visibility-promotion in 2c; if any needs no change, the 2c PR is a
-pure consumer of the existing 2a+2b surface.
+**Audit provenance (Round 5 amendment — §5.11.8 discipline).** Every
+row in this table was verified by reading the named function's
+declaration in the pinned `shekyl-pow-randomx` source. Per-row line
+references at the time of the Round-5 audit pass (post-Phase-2b
+merge SHA, recorded for reviewer spot-check):
+
+- `argon2d::fill_cache` — `rust/shekyl-pow-randomx/src/argon2d.rs:165`
+- `Blake2Generator::get_byte` / `get_uint32` — `rust/shekyl-pow-randomx/src/blake2_generator.rs:128, 145`
+- `superscalar::generate_superscalar` — `rust/shekyl-pow-randomx/src/superscalar.rs:1227`
+- `superscalar::execute_superscalar` — `rust/shekyl-pow-randomx/src/superscalar.rs:1427`
+- `superscalar::randomx_reciprocal` — `rust/shekyl-pow-randomx/src/superscalar.rs:1520`
+- `aes::fill_aes_1r_x4` / `fill_aes_4r_x4` / `hash_aes_1r_x4` — `rust/shekyl-pow-randomx/src/aes.rs:253, 312, 392`
+
+The earlier draft (Rounds 1–4) had three audit-drift entries: the
+`Blake2Generator` method names (`.next_byte`/`.next_u32` are not
+the actual names — the actual methods are `.get_byte`/`.get_uint32`);
+the `generate_superscalar` signature shape (the actual signature
+takes only `gen: &mut Blake2Generator` and returns a
+`SuperscalarProgram` by value, not the out-parameter form);
+`randomx_reciprocal`'s divisor type (`u32`, not `u64`) and
+visibility (currently private; Phase 2c promotes to `pub(crate)`).
+The AES helper rows had a visibility-drift error (`pub fn`,
+actually `pub(crate) fn`). All five corrections landed in the
+Copilot-review absorption commit per the §5.11.8 audit-against-source
+precedent (`mp` correction at R3-D1 — same shape, different surface;
+audit-tables that don't cite line ranges are a prompted-list failure
+mode regardless of how plausible the table looks).
+
+**Verification gate (carried forward to Phase 2c implementation PR).**
+Re-run the audit at PR-implementation time against the then-current
+`shekyl-pow-randomx` source — visibilities, signatures, and method
+names must match the implementation PR's actual call sites. Any
+drift between this table and the implementation PR's source is the
+same class of finding as `mp`; the implementation PR's plan-doc
+audit row updates the citations to the implementation-PR pin and
+the file/line numbers above adjust accordingly.
 
 ### 4.2 `criterion = "0.5"` (already DEV-only)
 
