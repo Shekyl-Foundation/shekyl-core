@@ -260,7 +260,9 @@ impl Cache {
     /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
     /// §14 R0-D12. Allocations: one 256-MiB `Box<[Block]>` for the
     /// cache memory + one 8-element `Box<[SuperscalarProgram]>`
-    /// (~96 KiB) for the programs.
+    /// (~32 KiB: 8 × ~4 KiB per program per `src/superscalar.rs`
+    /// module rustdoc — `512 × 8`-byte instructions + ~16 bytes of
+    /// meta per program) for the programs.
     pub fn derive(seedhash: &[u8; 32]) -> Cache {
         let mut memory = alloc_zeroed_cache_blocks(RANDOMX_ARGON_BLOCKS);
 

@@ -75,9 +75,11 @@ Requires:
 the previous documentation incorrectly conflated as both "~30 s":
 
 - **Compile time (`make`):** ~10 s on the reference machine
-  (compile `gen.cpp` + link against the fork's pre-built `.o`
-  files). Depends on the host's cold disk cache and compiler
-  version; measure with `time make` if a precise number is needed.
+  (compile `gen.cpp` together with the fork sources listed in
+  `FORK_OBJS` — see the Makefile — in a single link step; no
+  pre-built `.o` inputs). Depends on the host's cold disk cache
+  and compiler version; measure with `time make` if a precise
+  number is needed.
 - **Per-vector cost:** dominated by `randomx_init_cache` (the C++
   fork's Argon2d-256-MiB fill, algorithmically identical to Rust
   `Cache::derive` whose baseline is ~341 ms median per
