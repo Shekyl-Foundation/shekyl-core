@@ -90,5 +90,6 @@ mod argon2d;
 mod blake2_generator;
 mod cache;
 mod superscalar;
+mod vm;
 
 pub use cache::Cache;
