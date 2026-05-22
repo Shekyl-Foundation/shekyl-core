@@ -1,0 +1,108 @@
+Phase 2c reference vector — t8_vm_compute_hash_nop.bin
+=======================================================
+
+Spec attestation
+----------------
+T8 attests Rust `compute_hash` byte-for-byte parity with the v2
+RandomX fork's `randomx_calculate_hash` end-to-end under stub-NOP
+dispatch. Mirrors the production path exactly except the VM is
+the Phase 2c `StubNopInterpretedLightVm` (per §5.6); both the
+generator and the Rust port skip per-opcode bytecode dispatch but
+run the full per-iteration loop body (spAddr derivation, register
+loads, AES f/e mix, dataset reads, scratchpad writes, register
+write-back), and chain `RANDOMX_PROGRAM_COUNT` (= 8) sub-programs
+with Blake2b-256-over-RegisterFile re-seeding between programs and
+a final `getFinalResult` AES hash + Blake2b finalization.
+
+A T8 divergence isolates an integration bug at the
+program-chaining / final-hash boundary that the per-stage tests
+(T1–T7) couldn't catch — e.g. wrong RegisterFile layout passed to
+the chaining Blake2b, wrong final hash size, wrong AES rounds
+count in getFinalResult, wrong rounding-mode initialization. T8
+is the single end-to-end attestation: if T1–T7 pass and T8 fails,
+the bug is in the orchestration (`compute_hash` outer loop), not
+in any individual stage.
+
+Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 (F7 T8) + §5.6 (stub-NOP
+dispatch rationale) + §5.5 (compute_hash structure).
+
+Inputs (hardcoded in `_generator/phase2c/gen.cpp`)
+--------------------------------------------------
+seedhash  = [0x01, 0x02, ..., 0x20]    (32-byte canonical, cache key)
+data      = T8_DATA_INPUT              (192-byte ASCII string,
+                                        documented inline in gen.cpp)
+flag      = RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_V2
+softAes   = true                       (portability pin)
+
+T8_DATA_INPUT bytes (ASCII):
+
+    "phase2c-t8-end-to-end-stub-nop-hash-canonical-data-input-"
+    "padding-to-256-bytes-so-the-blake2b-input-spans-multiple-"
+    "blocks-and-the-fillaes1rx4-scratchpad-init-consumes-a-"
+    "non-trivial-seed.....END"
+
+Length 192 B (verified at test time by `t8_data_input_is_192_bytes`
+in `src/vm.rs#mod tests`). The literal's "padding-to-256" /
+"spans-multiple-blocks" phrasing is content, not a size promise —
+the actual 192 B already spans multiple 64-B AES-1R-x4 scratchpad
+seed blocks, which is all the test needs.
+
+Output layout
+-------------
+32-byte Blake2b-256 final hash from `getFinalResult` (which runs
+hashAes1Rx4 over the scratchpad → 64-byte hash buffer → Blake2b-256
+over (RegisterFile || hash_buffer) → 32-byte final).
+
+Total bytes for this vector: 32.
+
+Generator
+---------
+source      = ./_generator/phase2c/gen.cpp (mode t8)
+build       = ./_generator/phase2c/Makefile (`make gen`)
+command     = ./gen t8 > t8_vm_compute_hash_nop.bin
+output_size = 32 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/randomx.cpp (randomx_calculate_hash structure),
+              src/virtual_machine.cpp (initialize, initScratchpad,
+                getFinalResult, resetRoundingMode),
+              src/vm_interpreted.cpp (interpreted loop minus
+                executeBytecode),
+              src/vm_interpreted_light.cpp (datasetRead light-VM),
+              src/aes_hash.cpp (fillAes1Rx4, hashAes1Rx4,
+                fillAes4Rx4),
+              src/blake2/blake2b.c,
+              src/bytecode_machine.hpp (NativeRegisterFile struct)
+function    = (composite — see "Spec attestation")
+
+Notes — chain-boundary register-reset semantics
+-----------------------------------------------
+The C reference's `InterpretedVm::execute()` constructs a fresh
+`NativeRegisterFile nreg;` per chain at `vm_interpreted.cpp:59`;
+the `NativeRegisterFile` struct at `bytecode_machine.hpp:40`
+declares `int_reg_t r[RegistersCount] = { 0 };`, so each chain's
+iteration loop starts with the integer registers ZEROED regardless
+of the prior chain's final `nreg.r` values. The end-of-chain
+writeback at `vm_interpreted.cpp:130-131` stores `nreg.r` into
+`reg.r` for the inter-chain Blake2b-256 input only — `reg.r` is
+NOT loaded back into the next chain's `nreg.r`. The Rust port
+fuses `reg` and `nreg` into a single `VmState.r` field per
+`30-cryptography.mdc`'s secret-locality discipline; the per-chain
+implicit reset that fell out of the C two-struct shape is
+re-asserted as an explicit `self.r = [0; 8];` at the top of
+`VmState::execute_program` (Rust port). T6/T7 single-chain spec-
+vector tests don't surface this divergence (`VmState::new` returns
+`self.r = [0; 8]` already); T8 is the first multi-chain test and
+the one that pinned the discipline. See
+`docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §14 Round 0 R0-D10.
+
+Phase
+-----
+Phase 2c (`docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.7 / F7 T8,
+§5.6 stub-NOP dispatch, §5.5 compute_hash structure, §9 commit 7)
+— end-to-end stub-NOP hash parity. Consumed by Rust test
+`t8_vm_compute_hash_nop_matches_fork_reference` in
+`rust/shekyl-pow-randomx/src/vm.rs#mod tests`.

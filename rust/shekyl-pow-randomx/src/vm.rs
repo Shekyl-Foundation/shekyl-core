@@ -1240,6 +1240,49 @@ impl VmState {
     ///
     /// [`program`]: VmState::program
     pub(crate) fn execute_program(&mut self, cache: &crate::Cache) {
+        // Per-chain `nreg.r` reset to mirror the C reference's
+        // `NativeRegisterFile nreg;` construction at
+        // `vm_interpreted.cpp:59`. The C struct declares
+        // `int_reg_t r[RegistersCount] = { 0 };` at
+        // `bytecode_machine.hpp:40`, so each chain begins with
+        // integer registers zeroed regardless of the prior chain's
+        // final `nreg.r` (the prior chain's writeback to `reg.r` at
+        // `vm_interpreted.cpp:130-131` is consumed by the
+        // inter-chain Blake2b at `randomx.cpp` but NOT by the next
+        // chain's iteration loop — `nreg.r` is freshly zero-init,
+        // not loaded from `reg.r`).
+        //
+        // Rust's [`VmState`] fuses `reg` and `nreg` into a single
+        // `self.r` field for per-`30-cryptography.mdc` secret-
+        // locality clarity (one source of truth per register). The
+        // chain-boundary semantics that fall out of the C two-struct
+        // shape must be re-asserted here at the Rust function entry,
+        // or the second-and-subsequent chains' iteration 0 sees
+        // non-zero `self.r` carried from the prior chain's writeback
+        // and diverges from C byte-for-byte.
+        //
+        // `self.f` / `self.e` are NOT reset: the C `nreg.f` /
+        // `nreg.e` are likewise uninitialized at chain start
+        // (`rx_vec_f128 f[RegisterCountFlt]; e[RegisterCountFlt];`
+        // at `bytecode_machine.hpp:41-42`), but the iteration loop
+        // unconditionally overwrites both (`nreg.f[i] =
+        // rx_cvt_packed_int_vec_f128(...)` / `nreg.e[i] =
+        // maskRegisterExponentMantissa(...)` at `vm_interpreted.cpp:80-83`)
+        // before any read. Iteration 0's overwrite makes the prior
+        // chain's carryover unobservable, so the Rust port leaves
+        // `self.f` / `self.e` untouched here (matches C's behavior
+        // post-iter-0 by construction).
+        //
+        // `self.a` is set by [`Self::init_program`] (replaces the C
+        // `randomx_vm::initialize` writes to `reg.a`); no reset
+        // needed at this entry point.
+        //
+        // T8 spec-vector test (commit 7) is the production caller
+        // that surfaces the chain-boundary divergence — single-chain
+        // tests (T6 / T7) don't reproduce because `VmState::new`
+        // returns `self.r = [0; 8]` already.
+        self.r = [0; 8];
+
         // Spec §4.6.1: initial sp_addr derivation from mem.mx / mem.ma.
         // The two addresses drive the per-iteration scratchpad reads
         // and writes; both reset to 0 at the end of each iteration
@@ -1248,159 +1291,7 @@ impl VmState {
         let mut sp_addr1: u32 = self.ma;
 
         for _ic in 0..PROGRAM_ITERATIONS {
-            // Spec §4.6.1: sp_mix derivation + sp_addr update.
-            let rr0 = self.read_reg[0] as usize;
-            let rr1 = self.read_reg[1] as usize;
-            let sp_mix: u64 = self.r[rr0] ^ self.r[rr1];
-
-            // SAFETY (clippy::cast_possible_truncation): `sp_mix as u32`
-            // intentionally truncates to the low 32 bits, mirroring C
-            // `spAddr0 ^= spMix;` where the uint32_t LHS forces the
-            // uint64_t RHS to be implicitly truncated. Same for the
-            // `(sp_mix >> 32) as u32` extracting the high 32 bits.
-            #[allow(clippy::cast_possible_truncation)]
-            {
-                sp_addr0 ^= sp_mix as u32;
-                sp_addr1 ^= (sp_mix >> 32) as u32;
-            }
-            sp_addr0 &= SCRATCHPAD_L3_MASK_64;
-            sp_addr1 &= SCRATCHPAD_L3_MASK_64;
-
-            // Spec §4.6.2: load r[0..8] from scratchpad at sp_addr0,
-            // XOR-ing into the existing register values.
-            let sp_addr0_usize = sp_addr0 as usize;
-            for i in 0..REGISTERS_COUNT {
-                let off = sp_addr0_usize + 8 * i;
-                let bytes: [u8; 8] = self.scratchpad[off..off + 8]
-                    .try_into()
-                    .expect("SCRATCHPAD_L3_MASK_64 bounds sp_addr0 + 64 within scratchpad");
-                self.r[i] ^= u64::from_le_bytes(bytes);
-            }
-
-            // Spec §4.6.3: load f[0..4] from scratchpad at sp_addr1
-            // (overwriting prior f values).
-            let sp_addr1_usize = sp_addr1 as usize;
-            for i in 0..REGISTER_COUNT_FLT {
-                let off = sp_addr1_usize + 8 * i;
-                let bytes: [u8; 8] = self.scratchpad[off..off + 8]
-                    .try_into()
-                    .expect("SCRATCHPAD_L3_MASK_64 bounds sp_addr1 + 64 within scratchpad");
-                self.f[i] = cvt_packed_int_to_f128(&bytes);
-            }
-
-            // Spec §4.6.3: load e[0..4] from scratchpad at sp_addr1 +
-            // RegisterCountFlt-pair offset, with maskRegisterExponentMantissa
-            // applied to enforce the positive-finite range FDIV_M requires.
-            for i in 0..REGISTER_COUNT_FLT {
-                let off = sp_addr1_usize + 8 * (REGISTER_COUNT_FLT + i);
-                let bytes: [u8; 8] = self.scratchpad[off..off + 8]
-                    .try_into()
-                    .expect("SCRATCHPAD_L3_MASK_64 bounds sp_addr1 + 64 within scratchpad");
-                let raw = cvt_packed_int_to_f128(&bytes);
-                self.e[i] = mask_register_exponent_mantissa(raw, self.e_mask);
-            }
-
-            // Spec §4.6.4: dispatch through the 384 parsed instructions.
-            // In Phase 2c the body is NOP per §5.1.1 frozen surface 1;
-            // Phase 2d replaces dispatch_instruction's body with the
-            // 28 opcode-handler dispatch table.
-            for instr_idx in 0..PROGRAM_SIZE {
-                let instr = self.program.instructions[instr_idx];
-                dispatch_instruction(&instr, self);
-            }
-
-            // Spec §4.6.5: dataset read prep — capture read_ptr from
-            // the pre-mutation `ma`, then XOR-mutate `ma` from
-            // r[read_reg[2]] ^ r[read_reg[3]] (v2-only mp aliasing
-            // collapsed to direct ma access per §5.5 F5).
-            let read_ptr: u64 = self.dataset_offset + u64::from(self.ma & CACHE_LINE_ALIGN_MASK);
-            let rr2 = self.read_reg[2] as usize;
-            let rr3 = self.read_reg[3] as usize;
-            let mp_xor: u64 = self.r[rr2] ^ self.r[rr3];
-            // SAFETY (clippy::cast_possible_truncation): mirrors C
-            // `mp ^= nreg.r[readReg2] ^ nreg.r[readReg3];` where the
-            // uint32_t LHS (mem.ma) truncates the uint64_t RHS.
-            #[allow(clippy::cast_possible_truncation)]
-            {
-                self.ma ^= mp_xor as u32;
-            }
-            // `datasetPrefetch(datasetOffset + (mp & CacheLineAlignMask))`
-            // is a no-op in light mode per
-            // `vm_interpreted_light.hpp:55` — the Rust port omits the
-            // call entirely (no actual dataset memory to prefetch).
-
-            // Spec §4.6.5: dataset read — XOR a 64-byte dataset item
-            // into r[0..8]. Light-mode derives the item on-the-fly via
-            // Cache::derive_item; mirrors
-            // `vm_interpreted_light.cpp::datasetRead`.
-            let item_number = read_ptr / u64::from(CACHE_LINE_SIZE);
-            let item = cache.derive_item(item_number);
-            for i in 0..REGISTERS_COUNT {
-                let off = 8 * i;
-                let bytes: [u8; 8] = item[off..off + 8].try_into().expect(
-                    "Cache::derive_item returns 64 bytes; 8 u64 chunks fit by construction",
-                );
-                self.r[i] ^= u64::from_le_bytes(bytes);
-            }
-
-            // Spec §4.6.5: std::swap(mem.mx, mem.ma).
-            core::mem::swap(&mut self.mx, &mut self.ma);
-
-            // Spec §4.6.6: store r[0..8] into scratchpad at sp_addr1.
-            for i in 0..REGISTERS_COUNT {
-                let off = sp_addr1_usize + 8 * i;
-                self.scratchpad[off..off + 8].copy_from_slice(&self.r[i].to_le_bytes());
-            }
-
-            // Spec §4.6.7: F/E AES mix (v2 path).
-            //
-            // Per `vm_interpreted.cpp:99-117`: cast each f/e pair to
-            // 16-byte AES state vectors, then for each of 4 e-keys
-            // apply AES-encrypt to f[0]/f[2] and AES-decrypt to
-            // f[1]/f[3] in lockstep (same e-key per round across all
-            // 4 f-vectors). Result: each f[j] is mixed through 4
-            // rounds using the 4 e-keys.
-            //
-            // The C uses `aesenc<softAes>` and `aesdec<softAes>` —
-            // `aesenc` = ShiftRows + SubBytes + MixColumns + Xor(key)
-            // (which is `crate::aes::cipher_round`); `aesdec` =
-            // InvShiftRows + InvSubBytes + InvMixColumns + Xor(key)
-            // (which is `crate::aes::equiv_inv_cipher_round`). Audit
-            // posture: same AES round primitives the Phase 2b
-            // commit-2 spec-vector tests validate via T6/T7 against
-            // C-reference output.
-            let mut freg: [[u8; 16]; 4] = [
-                f128_to_aes_bytes(self.f[0]),
-                f128_to_aes_bytes(self.f[1]),
-                f128_to_aes_bytes(self.f[2]),
-                f128_to_aes_bytes(self.f[3]),
-            ];
-            let ekey: [[u8; 16]; 4] = [
-                f128_to_aes_bytes(self.e[0]),
-                f128_to_aes_bytes(self.e[1]),
-                f128_to_aes_bytes(self.e[2]),
-                f128_to_aes_bytes(self.e[3]),
-            ];
-            for ek in &ekey {
-                crate::aes::cipher_round(&mut freg[0], ek);
-                crate::aes::equiv_inv_cipher_round(&mut freg[1], ek);
-                crate::aes::cipher_round(&mut freg[2], ek);
-                crate::aes::equiv_inv_cipher_round(&mut freg[3], ek);
-            }
-            for (i, fblock) in freg.iter().enumerate().take(REGISTER_COUNT_FLT) {
-                self.f[i] = aes_bytes_to_f128(fblock);
-            }
-
-            // Spec §4.6.8: store f[0..4] (16 bytes each) into
-            // scratchpad at sp_addr0.
-            for i in 0..REGISTER_COUNT_FLT {
-                let off = sp_addr0_usize + 16 * i;
-                self.scratchpad[off..off + 8]
-                    .copy_from_slice(&self.f[i][0].to_bits().to_le_bytes());
-                self.scratchpad[off + 8..off + 16]
-                    .copy_from_slice(&self.f[i][1].to_bits().to_le_bytes());
-            }
-
+            let _used = self.execute_iteration(cache, sp_addr0, sp_addr1);
             // Spec §4.6 trailer: sp_addr0/1 reset to 0 between
             // iterations. The C reference re-derives them at the top
             // of each iteration from sp_mix; the reset here ensures
@@ -1410,6 +1301,196 @@ impl VmState {
             sp_addr0 = 0;
             sp_addr1 = 0;
         }
+    }
+
+    /// Run **one** iteration of the spec §4.6 loop body.
+    ///
+    /// Factored out of [`Self::execute_program`] so the per-iteration
+    /// snapshot points needed by the T6 and T7 spec-vector tests
+    /// (`tests/vectors/reference/vm/t6_vm_spaddr_4iter.bin`,
+    /// `t7_vm_aesmix_4iter.bin`) can capture intermediate state
+    /// without duplicating the loop body in test code.
+    ///
+    /// Returns the spec §4.6.1 *post-derivation, pre-mask* (no, the
+    /// *post-mask*) `(sp_addr0, sp_addr1)` pair actually used to index
+    /// the scratchpad for this iteration's loads and stores. Concretely:
+    ///
+    /// ```text
+    /// sp_mix  = self.r[read_reg[0]] ^ self.r[read_reg[1]]
+    /// sp_addr0 = (sp_addr0_in ^ (sp_mix as u32))         & SCRATCHPAD_L3_MASK_64
+    /// sp_addr1 = (sp_addr1_in ^ ((sp_mix >> 32) as u32)) & SCRATCHPAD_L3_MASK_64
+    /// ```
+    ///
+    /// `sp_addr0_in` / `sp_addr1_in` are `self.mx` / `self.ma` on
+    /// iteration 0 and `0` / `0` on every subsequent iteration; the
+    /// reset is the caller's responsibility ([`Self::execute_program`]
+    /// performs it). Returning the masked pair (rather than re-deriving
+    /// it at the call site) gives the snapshot tests a single
+    /// authoritative source for the value.
+    ///
+    /// This is a `pub(crate)` helper for the T6 / T7 tests; production
+    /// callers should use [`Self::execute_program`] instead.
+    pub(crate) fn execute_iteration(
+        &mut self,
+        cache: &crate::Cache,
+        sp_addr0_in: u32,
+        sp_addr1_in: u32,
+    ) -> (u32, u32) {
+        // Spec §4.6.1: sp_mix derivation + sp_addr update.
+        let rr0 = self.read_reg[0] as usize;
+        let rr1 = self.read_reg[1] as usize;
+        let sp_mix: u64 = self.r[rr0] ^ self.r[rr1];
+
+        let mut sp_addr0 = sp_addr0_in;
+        let mut sp_addr1 = sp_addr1_in;
+        // SAFETY (clippy::cast_possible_truncation): `sp_mix as u32`
+        // intentionally truncates to the low 32 bits, mirroring C
+        // `spAddr0 ^= spMix;` where the uint32_t LHS forces the
+        // uint64_t RHS to be implicitly truncated. Same for the
+        // `(sp_mix >> 32) as u32` extracting the high 32 bits.
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            sp_addr0 ^= sp_mix as u32;
+            sp_addr1 ^= (sp_mix >> 32) as u32;
+        }
+        sp_addr0 &= SCRATCHPAD_L3_MASK_64;
+        sp_addr1 &= SCRATCHPAD_L3_MASK_64;
+
+        // Spec §4.6.2: load r[0..8] from scratchpad at sp_addr0,
+        // XOR-ing into the existing register values.
+        let sp_addr0_usize = sp_addr0 as usize;
+        for i in 0..REGISTERS_COUNT {
+            let off = sp_addr0_usize + 8 * i;
+            let bytes: [u8; 8] = self.scratchpad[off..off + 8]
+                .try_into()
+                .expect("SCRATCHPAD_L3_MASK_64 bounds sp_addr0 + 64 within scratchpad");
+            self.r[i] ^= u64::from_le_bytes(bytes);
+        }
+
+        // Spec §4.6.3: load f[0..4] from scratchpad at sp_addr1
+        // (overwriting prior f values).
+        let sp_addr1_usize = sp_addr1 as usize;
+        for i in 0..REGISTER_COUNT_FLT {
+            let off = sp_addr1_usize + 8 * i;
+            let bytes: [u8; 8] = self.scratchpad[off..off + 8]
+                .try_into()
+                .expect("SCRATCHPAD_L3_MASK_64 bounds sp_addr1 + 64 within scratchpad");
+            self.f[i] = cvt_packed_int_to_f128(&bytes);
+        }
+
+        // Spec §4.6.3: load e[0..4] from scratchpad at sp_addr1 +
+        // RegisterCountFlt-pair offset, with maskRegisterExponentMantissa
+        // applied to enforce the positive-finite range FDIV_M requires.
+        for i in 0..REGISTER_COUNT_FLT {
+            let off = sp_addr1_usize + 8 * (REGISTER_COUNT_FLT + i);
+            let bytes: [u8; 8] = self.scratchpad[off..off + 8]
+                .try_into()
+                .expect("SCRATCHPAD_L3_MASK_64 bounds sp_addr1 + 64 within scratchpad");
+            let raw = cvt_packed_int_to_f128(&bytes);
+            self.e[i] = mask_register_exponent_mantissa(raw, self.e_mask);
+        }
+
+        // Spec §4.6.4: dispatch through the 384 parsed instructions.
+        // In Phase 2c the body is NOP per §5.1.1 frozen surface 1;
+        // Phase 2d replaces dispatch_instruction's body with the
+        // 28 opcode-handler dispatch table.
+        for instr_idx in 0..PROGRAM_SIZE {
+            let instr = self.program.instructions[instr_idx];
+            dispatch_instruction(&instr, self);
+        }
+
+        // Spec §4.6.5: dataset read prep — capture read_ptr from
+        // the pre-mutation `ma`, then XOR-mutate `ma` from
+        // r[read_reg[2]] ^ r[read_reg[3]] (v2-only mp aliasing
+        // collapsed to direct ma access per §5.5 F5).
+        let read_ptr: u64 = self.dataset_offset + u64::from(self.ma & CACHE_LINE_ALIGN_MASK);
+        let rr2 = self.read_reg[2] as usize;
+        let rr3 = self.read_reg[3] as usize;
+        let mp_xor: u64 = self.r[rr2] ^ self.r[rr3];
+        // SAFETY (clippy::cast_possible_truncation): mirrors C
+        // `mp ^= nreg.r[readReg2] ^ nreg.r[readReg3];` where the
+        // uint32_t LHS (mem.ma) truncates the uint64_t RHS.
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            self.ma ^= mp_xor as u32;
+        }
+        // `datasetPrefetch(datasetOffset + (mp & CacheLineAlignMask))`
+        // is a no-op in light mode per
+        // `vm_interpreted_light.hpp:55` — the Rust port omits the
+        // call entirely (no actual dataset memory to prefetch).
+
+        // Spec §4.6.5: dataset read — XOR a 64-byte dataset item
+        // into r[0..8]. Light-mode derives the item on-the-fly via
+        // Cache::derive_item; mirrors
+        // `vm_interpreted_light.cpp::datasetRead`.
+        let item_number = read_ptr / u64::from(CACHE_LINE_SIZE);
+        let item = cache.derive_item(item_number);
+        for i in 0..REGISTERS_COUNT {
+            let off = 8 * i;
+            let bytes: [u8; 8] = item[off..off + 8]
+                .try_into()
+                .expect("Cache::derive_item returns 64 bytes; 8 u64 chunks fit by construction");
+            self.r[i] ^= u64::from_le_bytes(bytes);
+        }
+
+        // Spec §4.6.5: std::swap(mem.mx, mem.ma).
+        core::mem::swap(&mut self.mx, &mut self.ma);
+
+        // Spec §4.6.6: store r[0..8] into scratchpad at sp_addr1.
+        for i in 0..REGISTERS_COUNT {
+            let off = sp_addr1_usize + 8 * i;
+            self.scratchpad[off..off + 8].copy_from_slice(&self.r[i].to_le_bytes());
+        }
+
+        // Spec §4.6.7: F/E AES mix (v2 path).
+        //
+        // Per `vm_interpreted.cpp:99-117`: cast each f/e pair to
+        // 16-byte AES state vectors, then for each of 4 e-keys
+        // apply AES-encrypt to f[0]/f[2] and AES-decrypt to
+        // f[1]/f[3] in lockstep (same e-key per round across all
+        // 4 f-vectors). Result: each f[j] is mixed through 4
+        // rounds using the 4 e-keys.
+        //
+        // The C uses `aesenc<softAes>` and `aesdec<softAes>` —
+        // `aesenc` = ShiftRows + SubBytes + MixColumns + Xor(key)
+        // (which is `crate::aes::cipher_round`); `aesdec` =
+        // InvShiftRows + InvSubBytes + InvMixColumns + Xor(key)
+        // (which is `crate::aes::equiv_inv_cipher_round`). Audit
+        // posture: same AES round primitives the Phase 2b
+        // commit-2 spec-vector tests validate via T6/T7 against
+        // C-reference output.
+        let mut freg: [[u8; 16]; 4] = [
+            f128_to_aes_bytes(self.f[0]),
+            f128_to_aes_bytes(self.f[1]),
+            f128_to_aes_bytes(self.f[2]),
+            f128_to_aes_bytes(self.f[3]),
+        ];
+        let ekey: [[u8; 16]; 4] = [
+            f128_to_aes_bytes(self.e[0]),
+            f128_to_aes_bytes(self.e[1]),
+            f128_to_aes_bytes(self.e[2]),
+            f128_to_aes_bytes(self.e[3]),
+        ];
+        for ek in &ekey {
+            crate::aes::cipher_round(&mut freg[0], ek);
+            crate::aes::equiv_inv_cipher_round(&mut freg[1], ek);
+            crate::aes::cipher_round(&mut freg[2], ek);
+            crate::aes::equiv_inv_cipher_round(&mut freg[3], ek);
+        }
+        for (i, fblock) in freg.iter().enumerate().take(REGISTER_COUNT_FLT) {
+            self.f[i] = aes_bytes_to_f128(fblock);
+        }
+
+        // Spec §4.6.8: store f[0..4] (16 bytes each) into
+        // scratchpad at sp_addr0.
+        for i in 0..REGISTER_COUNT_FLT {
+            let off = sp_addr0_usize + 16 * i;
+            self.scratchpad[off..off + 8].copy_from_slice(&self.f[i][0].to_bits().to_le_bytes());
+            self.scratchpad[off + 8..off + 16]
+                .copy_from_slice(&self.f[i][1].to_bits().to_le_bytes());
+        }
+
+        (sp_addr0, sp_addr1)
     }
 }
 
@@ -1693,32 +1774,34 @@ pub fn compute_hash(cache: &crate::Cache, seedhash: &[u8; 32], data: &[u8]) -> [
     state.init_program(&temp_hash);
     state.execute_program(cache);
 
-    // Step 5a: AesHash1R the scratchpad into the `a` register array,
-    // overwriting the program-init-derived `a` values. Mirrors
-    // `hashAes1Rx4<softAes>(scratchpad, ScratchpadSize, &reg.a)` at
-    // `virtual_machine.cpp:121`.
+    // Step 5a: AesHash1R the scratchpad into a 64-byte buffer that
+    // mirrors the C reference's `&reg.a` post-`hashAes1Rx4` state.
+    // Mirrors `hashAes1Rx4<softAes>(scratchpad, ScratchpadSize, &reg.a)`
+    // at `virtual_machine.cpp:121`. The Rust port deliberately does
+    // NOT round-trip these bytes through `state.a` (which is typed
+    // `[F128; 4] = [[f64; 2]; 4]`) before feeding them to the final
+    // Blake2b. The C reference treats `reg.a` as a raw 64-byte memory
+    // region during the final hash (`blake2b(&reg, sizeof(RegisterFile))`
+    // reads it as bytes), whereas a load-store of arbitrary AES output
+    // bytes through Rust's `f64` slot risks bit-pattern divergence for
+    // pathological NaN encodings the AES output may produce — the
+    // hash output is not constrained to valid IEEE-754 representations.
+    // Hashing the bytes directly side-steps the round-trip entirely
+    // and matches the C ref byte-for-byte regardless of the AES
+    // output's interpretation as a float. See `state.a` field rustdoc
+    // for the post-`hashAes1Rx4` invariant about its abandoned
+    // observable shape.
     let mut a_bytes = [0u8; 64];
     crate::aes::hash_aes_1r_x4(&state.scratchpad[..], &mut a_bytes);
-    for i in 0..REGISTER_COUNT_FLT {
-        let off = 16 * i;
-        let lo = u64::from_le_bytes(
-            a_bytes[off..off + 8]
-                .try_into()
-                .expect("16-byte F128 split at 8"),
-        );
-        let hi = u64::from_le_bytes(
-            a_bytes[off + 8..off + 16]
-                .try_into()
-                .expect("16-byte F128 split at 8"),
-        );
-        state.a[i] = [f64::from_bits(lo), f64::from_bits(hi)];
-    }
 
     // Step 5b: Blake2b<U32>(register_file) → 32-byte output.
     // Mirrors `blake2b(out, outSize, &reg, sizeof(RegisterFile), ...)`
     // at `virtual_machine.cpp:122` with outSize = RANDOMX_HASH_SIZE = 32.
+    // Feeds r/f/e from state (their bit patterns are the iteration-loop
+    // outputs, byte-equivalent to the C ref's `nreg`-to-`reg` writeback)
+    // and the raw `a_bytes` for the AES-hashed slot.
     let mut hasher = Blake2b::<U32>::new();
-    feed_register_file_to_hasher(&state, &mut hasher);
+    feed_register_file_to_hasher_with_raw_a(&state, &a_bytes, &mut hasher);
     let out = hasher.finalize();
     let mut output = [0u8; 32];
     output.copy_from_slice(&out);
@@ -1766,6 +1849,51 @@ fn feed_register_file_to_hasher<D: blake2::Digest>(state: &VmState, hasher: &mut
         hasher.update(a_pair[0].to_bits().to_le_bytes());
         hasher.update(a_pair[1].to_bits().to_le_bytes());
     }
+}
+
+/// Same as [`feed_register_file_to_hasher`] but substitutes the
+/// 64-byte raw `a_bytes` slot in place of `state.a`'s `f64`-typed
+/// view. Used by [`compute_hash`]'s final step where the AES-hashed
+/// scratchpad bytes are NOT guaranteed to be valid IEEE-754
+/// representations and must not pass through `f64::from_bits` ->
+/// `to_bits` round-trip before hashing.
+///
+/// The C reference's `getFinalResult` writes the `hashAes1Rx4` output
+/// into `&reg.a` (64 bytes raw) and then hashes the whole `RegisterFile`
+/// struct via `blake2b(&reg, sizeof(RegisterFile))`, which treats
+/// `reg.a` as raw bytes. Mirroring that path requires hashing the
+/// raw 64-byte AES output directly rather than reconstructing it
+/// from `state.a`'s `f64` array — Rust's `f64::from_bits` and
+/// `f64::to_bits` are documented bit-preserving on x86_64, but the
+/// `state.a` field is typed `[F128; 4] = [[f64; 2]; 4]`, and arbitrary
+/// AES output bytes interpreted as `f64` can land on signaling-NaN
+/// bit patterns whose canonical handling is not load-store-safe in
+/// all backend code paths. Per `30-cryptography.mdc`'s constant-time
+/// and behavior-equivalence discipline, eliminate the round-trip
+/// entirely.
+///
+/// Inputs:
+/// * `state` — VM state; only `r`, `f`, `e` are read.
+/// * `a_bytes` — 64-byte raw AES-hashed scratchpad slot. Replaces
+///   `state.a` in the hash input.
+/// * `hasher` — any `Digest` instance.
+fn feed_register_file_to_hasher_with_raw_a<D: blake2::Digest>(
+    state: &VmState,
+    a_bytes: &[u8; 64],
+    hasher: &mut D,
+) {
+    for r_val in &state.r {
+        hasher.update(r_val.to_le_bytes());
+    }
+    for f_pair in &state.f {
+        hasher.update(f_pair[0].to_bits().to_le_bytes());
+        hasher.update(f_pair[1].to_bits().to_le_bytes());
+    }
+    for e_pair in &state.e {
+        hasher.update(e_pair[0].to_bits().to_le_bytes());
+        hasher.update(e_pair[1].to_bits().to_le_bytes());
+    }
+    hasher.update(a_bytes);
 }
 
 #[cfg(test)]
@@ -2296,5 +2424,390 @@ mod tests {
                 back[1].to_bits(),
             );
         }
+    }
+
+    // -----------------------------------------------------------------
+    // T3-T8 spec-vector tests (Phase 2c §5.7 / F7 T3..T8; §9 commit 7).
+    //
+    // All six vectors were generated by
+    // `tests/vectors/reference/_generator/phase2c/gen.cpp` against the
+    // v2 RandomX fork at pin
+    // `aaafe71322df6602c21a5c72937ac284724ae561` (v2.0.1). The
+    // committed `.bin` bytes are bootstrap vectors until Phase 2g
+    // lands the live differential harness; see the sibling
+    // `.meta.txt` files for per-vector provenance and the Phase 2c
+    // generator README for the cross-vector substrate provenance.
+    //
+    // Inputs shared across T3-T7: `CANONICAL_TEMP_HASH` is the
+    // 64-byte Blake2b-512 of the ASCII preimage
+    // `"shekyl-randomx-v2-phase2c-canonical-input"` — re-derived
+    // here as a pinned constant rather than re-computed at test time
+    // so a reviewer can cross-check the bytes against the one-line
+    // Python equivalent (`python3 -c "import hashlib; \
+    // print(hashlib.blake2b(b'shekyl-randomx-v2-phase2c-canonical-\
+    // input', digest_size=64).hexdigest())"`) without running the
+    // test suite.
+    //
+    // Inputs shared across T1/T2/T8: `CANONICAL_SEEDHASH` is the
+    // 32-byte sequential 0x01..=0x20. Defined locally in this
+    // tests module (duplicated from `cache.rs#mod tests` rather
+    // than promoted to a shared test-helper crate — the duplication
+    // is two lines per side, and a shared test helper would expand
+    // the crate's `[dev-dependencies]` surface for one literal).
+    // -----------------------------------------------------------------
+
+    use blake2::digest::{Update, VariableOutput};
+    use blake2::Blake2bVar;
+
+    /// 32-byte canonical T1/T2/T8 seedhash; mirrors
+    /// `cache.rs#mod tests::CANONICAL_SEEDHASH` and
+    /// `CANONICAL_SEEDHASH` in
+    /// `tests/vectors/reference/_generator/phase2c/gen.cpp`.
+    const CANONICAL_SEEDHASH: [u8; 32] = [
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
+        0x1f, 0x20,
+    ];
+
+    /// 64-byte canonical temp_hash for T3/T4/T5/T6/T7 — equals
+    /// `Blake2b-512(b"shekyl-randomx-v2-phase2c-canonical-input")`.
+    /// Mirrors `g_canonical_temp_hash` (derived at startup from
+    /// `CANONICAL_TEMP_HASH_PREIMAGE`) in
+    /// `tests/vectors/reference/_generator/phase2c/gen.cpp`.
+    const CANONICAL_TEMP_HASH: [u8; 64] = [
+        0xb8, 0x4e, 0xb7, 0x92, 0xf6, 0xcf, 0x73, 0xe0, 0x3a, 0x89, 0x32, 0x0d, 0x42, 0xd6, 0xa4,
+        0x50, 0x92, 0xa7, 0x3b, 0x2f, 0xa9, 0xbf, 0x51, 0x9e, 0xad, 0xad, 0x44, 0xe5, 0xe6, 0x27,
+        0x92, 0x48, 0x01, 0xc8, 0xce, 0x2e, 0x2f, 0xb2, 0xb1, 0x29, 0x66, 0xff, 0xa0, 0x83, 0xd1,
+        0x62, 0x72, 0xbe, 0xa3, 0x45, 0xce, 0x3d, 0xad, 0x43, 0x48, 0x4c, 0x5f, 0xe7, 0x52, 0xde,
+        0x77, 0x78, 0xde, 0x78,
+    ];
+
+    /// Cross-check: re-derive `CANONICAL_TEMP_HASH` at test time
+    /// from its documented preimage and assert byte-equality.
+    /// Catches a stale pinned constant if a future contributor
+    /// edits one without the other.
+    #[test]
+    fn canonical_temp_hash_matches_preimage_derivation() {
+        let mut hasher = Blake2bVar::new(64).expect("Blake2bVar(64) accepts 64-byte output");
+        hasher.update(b"shekyl-randomx-v2-phase2c-canonical-input");
+        let mut derived = [0u8; 64];
+        hasher
+            .finalize_variable(&mut derived)
+            .expect("Blake2bVar finalize succeeds for 64-byte buffer");
+        assert_eq!(
+            derived, CANONICAL_TEMP_HASH,
+            "CANONICAL_TEMP_HASH constant diverged from its documented preimage",
+        );
+    }
+
+    /// Serialize a [`VmState`]'s register file in the 256-byte
+    /// canonical layout the C generator emits via
+    /// `emit_register_file_snapshot`:
+    ///
+    /// - `+0`   `r[0..8]`  × u64 LE        (64 B)
+    /// - `+64`  `f[0..4]`  × `[lo f64 LE bits, hi f64 LE bits]` (64 B)
+    /// - `+128` `e[0..4]`  × `[lo f64 LE bits, hi f64 LE bits]` (64 B)
+    /// - `+192` `a[0..4]`  × `[lo f64 LE bits, hi f64 LE bits]` (64 B)
+    ///
+    /// Total: 256 bytes. Matches the C `RegisterFile` struct's byte
+    /// layout (per `common.hpp:190-195`) and the order
+    /// [`feed_register_file_to_hasher`] uses to feed the
+    /// `compute_hash` chain Blake2b.
+    fn register_file_snapshot(state: &VmState) -> [u8; 256] {
+        let mut out = [0u8; 256];
+        for (i, &v) in state.r.iter().enumerate() {
+            out[i * 8..(i + 1) * 8].copy_from_slice(&v.to_le_bytes());
+        }
+        for (i, pair) in state.f.iter().enumerate() {
+            let off = 64 + i * 16;
+            out[off..off + 8].copy_from_slice(&pair[0].to_bits().to_le_bytes());
+            out[off + 8..off + 16].copy_from_slice(&pair[1].to_bits().to_le_bytes());
+        }
+        for (i, pair) in state.e.iter().enumerate() {
+            let off = 128 + i * 16;
+            out[off..off + 8].copy_from_slice(&pair[0].to_bits().to_le_bytes());
+            out[off + 8..off + 16].copy_from_slice(&pair[1].to_bits().to_le_bytes());
+        }
+        for (i, pair) in state.a.iter().enumerate() {
+            let off = 192 + i * 16;
+            out[off..off + 8].copy_from_slice(&pair[0].to_bits().to_le_bytes());
+            out[off + 8..off + 16].copy_from_slice(&pair[1].to_bits().to_le_bytes());
+        }
+        out
+    }
+
+    /// T3 spec-vector: `VmState::init_scratchpad(&mut CANONICAL_TEMP_HASH)`
+    /// produces a 2 MiB scratchpad whose Blake2b-256 matches the v2
+    /// RandomX fork's `fillAes1Rx4<softAes>` output byte-for-byte at
+    /// pin `aaafe71`.
+    ///
+    /// Provenance: see sibling
+    /// `tests/vectors/reference/vm/t3_vm_scratchpad_init.meta.txt`.
+    /// Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 / F7 T3, §9 commit 7.
+    #[test]
+    fn t3_vm_scratchpad_init_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t3_vm_scratchpad_init.bin");
+        assert_eq!(expected.len(), 32, "t3 .bin size invariant");
+
+        let mut state = VmState::new();
+        let mut seed = CANONICAL_TEMP_HASH;
+        state.init_scratchpad(&mut seed);
+
+        let mut hasher = Blake2bVar::new(32).expect("Blake2bVar(32) accepts 32-byte output");
+        hasher.update(&state.scratchpad[..]);
+        let mut actual = [0u8; 32];
+        hasher
+            .finalize_variable(&mut actual)
+            .expect("Blake2bVar finalize succeeds for 32-byte buffer");
+
+        assert_eq!(
+            actual,
+            <[u8; 32]>::try_from(expected).expect("32-byte vector"),
+            "VmState::init_scratchpad scratchpad fingerprint diverged from fork pin aaafe71 reference",
+        );
+    }
+
+    /// T4 spec-vector: post-`init_program` [`VmState`] register file
+    /// snapshot matches the v2 RandomX fork's post-`initialize()`
+    /// `NativeRegisterFile` byte-for-byte at pin `aaafe71`.
+    ///
+    /// Captures the pre-iteration state: `r[8]` / `f[4]` / `e[4]`
+    /// are zero (set per-iteration inside `execute_iteration`),
+    /// `a[4]` is populated from `getSmallPositiveFloatBits(entropy[0..8])`.
+    ///
+    /// Provenance: see sibling
+    /// `tests/vectors/reference/vm/t4_vm_register_init.meta.txt`.
+    /// Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 / F7 T4, §9 commit 7.
+    #[test]
+    fn t4_vm_register_init_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t4_vm_register_init.bin");
+        assert_eq!(expected.len(), 256, "t4 .bin size invariant");
+
+        let mut state = VmState::new();
+        state.init_program(&CANONICAL_TEMP_HASH);
+
+        let actual = register_file_snapshot(&state);
+
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "VmState::init_program register-file snapshot diverged from fork pin aaafe71 reference",
+        );
+    }
+
+    /// T5 spec-vector: post-`init_program` [`VmState::program`]
+    /// instruction stream matches the v2 RandomX fork's parsed
+    /// [`randomx::Program`] byte-for-byte at pin `aaafe71`, serialized
+    /// in the canonical 8-bytes-per-instruction wire format
+    /// `(opcode u8, dst u8, src u8, mod u8, imm32 u32 LE)`.
+    ///
+    /// Provenance: see sibling
+    /// `tests/vectors/reference/vm/t5_vm_program_parse.meta.txt`.
+    /// Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 / F7 T5, §9 commit 7.
+    #[test]
+    fn t5_vm_program_parse_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t5_vm_program_parse.bin");
+        assert_eq!(
+            expected.len(),
+            PROGRAM_SIZE * INSTRUCTION_SIZE,
+            "t5 .bin size invariant ({PROGRAM_SIZE} instructions × {INSTRUCTION_SIZE} bytes)",
+        );
+
+        let mut state = VmState::new();
+        state.init_program(&CANONICAL_TEMP_HASH);
+
+        let mut actual = vec![0u8; PROGRAM_SIZE * INSTRUCTION_SIZE];
+        for (i, instr) in state.program.instructions.iter().enumerate() {
+            let off = i * INSTRUCTION_SIZE;
+            actual[off] = instr.opcode;
+            actual[off + 1] = instr.dst;
+            actual[off + 2] = instr.src;
+            actual[off + 3] = instr.mod_;
+            actual[off + 4..off + 8].copy_from_slice(&instr.imm32.to_le_bytes());
+        }
+
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "VmState::init_program instruction stream diverged from fork pin aaafe71 reference",
+        );
+    }
+
+    /// Cache derived under the canonical T6/T7/T8 seedhash
+    /// (0x01..=0x20). Distinct from the T6'/T7'/T8' shared cache
+    /// (0x42..) — those property tests pay one cache derivation;
+    /// the spec-vector tests pay a second, since the canonical
+    /// inputs differ. Cached via `OnceLock` so the 8 spec-vector
+    /// tests that touch the cache (T6, T7, T8 + helper sub-tests
+    /// if added) amortize the ~5 s derivation cost.
+    fn canonical_cache() -> &'static crate::Cache {
+        use std::sync::OnceLock;
+        static CACHE: OnceLock<crate::Cache> = OnceLock::new();
+        CACHE.get_or_init(|| crate::Cache::derive(&CANONICAL_SEEDHASH))
+    }
+
+    /// T6 spec-vector: post-mask `(sp_addr0, sp_addr1)` pairs across
+    /// the first 4 iterations of the stub-NOP loop match the v2
+    /// RandomX fork's interpreted iteration loop byte-for-byte at
+    /// pin `aaafe71`. The C generator's snapshot fires immediately
+    /// after the spAddr derivation and masking step, before the
+    /// register-load substrate runs; the Rust port's `execute_iteration`
+    /// returns the post-mask pair after performing the iteration's
+    /// loads — both shapes capture the same `(sp_addr0, sp_addr1)`
+    /// values used to index the scratchpad for that iteration.
+    ///
+    /// The first iteration uses `(self.mx, self.ma)` (set by
+    /// `init_program`) as the initial `(sp_addr0_in, sp_addr1_in)`;
+    /// every subsequent iteration uses `(0, 0)` (the spec-pinned
+    /// per-iteration reset).
+    ///
+    /// Provenance: see sibling
+    /// `tests/vectors/reference/vm/t6_vm_spaddr_4iter.meta.txt`.
+    /// Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 / F7 T6, §5.6 stub-NOP
+    /// dispatch, §9 commit 7.
+    #[test]
+    fn t6_vm_spaddr_4iter_matches_fork_reference() {
+        const ITER_COUNT: usize = 4;
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t6_vm_spaddr_4iter.bin");
+        assert_eq!(
+            expected.len(),
+            ITER_COUNT * 8,
+            "t6 .bin size invariant ({ITER_COUNT} iterations × 8 bytes)",
+        );
+
+        let cache = canonical_cache();
+        let mut state = VmState::new();
+        state.init_program(&CANONICAL_TEMP_HASH);
+
+        let mut actual = [0u8; ITER_COUNT * 8];
+        let mut sp_addr0_in: u32 = state.mx;
+        let mut sp_addr1_in: u32 = state.ma;
+        for ic in 0..ITER_COUNT {
+            let (sp_addr0, sp_addr1) = state.execute_iteration(cache, sp_addr0_in, sp_addr1_in);
+            actual[ic * 8..ic * 8 + 4].copy_from_slice(&sp_addr0.to_le_bytes());
+            actual[ic * 8 + 4..ic * 8 + 8].copy_from_slice(&sp_addr1.to_le_bytes());
+            sp_addr0_in = 0;
+            sp_addr1_in = 0;
+        }
+
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "execute_iteration sp_addr pairs diverged from fork pin aaafe71 reference \
+             (each 8-byte chunk = spAddr0 LE u32 + spAddr1 LE u32; iteration 0..{ITER_COUNT} in order)",
+        );
+    }
+
+    /// T7 spec-vector: post-AES-mix register-file snapshot across
+    /// the first 4 iterations of the stub-NOP loop matches the v2
+    /// RandomX fork's iteration loop byte-for-byte at pin `aaafe71`.
+    /// Each 256-byte snapshot uses the same layout as T4: `r[8]
+    /// u64 LE` then `f[4]` / `e[4]` / `a[4]` pairs of f64 LE bits.
+    ///
+    /// The C generator captures `nreg` at the END of the iteration's
+    /// loop body (after the FP register → scratchpad store); the
+    /// Rust port's `execute_iteration` mutates `state.{r,f,e}`
+    /// in place and returns at the same point — so `register_file_snapshot(&state)`
+    /// after each iteration captures the same byte image.
+    ///
+    /// The `a[4]` portion of every snapshot is identical to T4's
+    /// post-`init_program` `a[4]` (the iteration body never writes
+    /// to `state.a`); the test does not special-case this — the
+    /// byte-equality assertion covers it.
+    ///
+    /// Provenance: see sibling
+    /// `tests/vectors/reference/vm/t7_vm_aesmix_4iter.meta.txt`.
+    /// Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 / F7 T7, §5.6 stub-NOP
+    /// dispatch, §9 commit 7.
+    #[test]
+    fn t7_vm_aesmix_4iter_matches_fork_reference() {
+        const ITER_COUNT: usize = 4;
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t7_vm_aesmix_4iter.bin");
+        assert_eq!(
+            expected.len(),
+            ITER_COUNT * 256,
+            "t7 .bin size invariant ({ITER_COUNT} iterations × 256 bytes)",
+        );
+
+        let cache = canonical_cache();
+        let mut state = VmState::new();
+        state.init_program(&CANONICAL_TEMP_HASH);
+
+        let mut actual = vec![0u8; ITER_COUNT * 256];
+        let mut sp_addr0_in: u32 = state.mx;
+        let mut sp_addr1_in: u32 = state.ma;
+        for ic in 0..ITER_COUNT {
+            let _ = state.execute_iteration(cache, sp_addr0_in, sp_addr1_in);
+            let snap = register_file_snapshot(&state);
+            actual[ic * 256..(ic + 1) * 256].copy_from_slice(&snap);
+            sp_addr0_in = 0;
+            sp_addr1_in = 0;
+        }
+
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "execute_iteration register-file snapshots diverged from fork pin aaafe71 reference \
+             (each 256-byte chunk = r[8]/f[4]/e[4]/a[4] in T4 layout; iteration 0..{ITER_COUNT} in order)",
+        );
+    }
+
+    /// 192-byte ASCII canonical T8 data input — mirrors `T8_DATA_INPUT`
+    /// in `tests/vectors/reference/_generator/phase2c/gen.cpp`. The
+    /// literal's "padding-to-256" / "spans-multiple-blocks" phrasing
+    /// is content, not a size promise — the actual length is 192 B,
+    /// which still spans multiple 64-B AES-1R-x4 scratchpad seed
+    /// blocks.
+    const T8_DATA_INPUT: &[u8] = b"phase2c-t8-end-to-end-stub-nop-hash-canonical-data-input-padding-to-256-bytes-so-the-blake2b-input-spans-multiple-blocks-and-the-fillaes1rx4-scratchpad-init-consumes-a-non-trivial-seed.....END";
+
+    /// Cross-check: `T8_DATA_INPUT` is exactly 192 bytes. The literal
+    /// is split across multiple `&str` segments in `gen.cpp`; this
+    /// assertion locks the concatenated total against accidental
+    /// edits on either side.
+    #[test]
+    fn t8_data_input_is_192_bytes() {
+        assert_eq!(
+            T8_DATA_INPUT.len(),
+            192,
+            "T8_DATA_INPUT length diverged from the 192-byte invariant \
+             documented in tests/vectors/reference/vm/t8_vm_compute_hash_nop.meta.txt",
+        );
+    }
+
+    /// T8 spec-vector: end-to-end `compute_hash` output under stub-NOP
+    /// dispatch matches the v2 RandomX fork's `randomx_calculate_hash`
+    /// byte-for-byte at pin `aaafe71`, given the canonical seedhash
+    /// and 256-byte data input.
+    ///
+    /// This is the single end-to-end attestation: if T3-T7 pass and
+    /// T8 fails, the divergence is in the `compute_hash` orchestration
+    /// (program-chaining, RegisterFile re-seeding Blake2b,
+    /// `getFinalResult` AES + Blake2b finalize), not in any individual
+    /// stage T3-T7 covers.
+    ///
+    /// Provenance: see sibling
+    /// `tests/vectors/reference/vm/t8_vm_compute_hash_nop.meta.txt`.
+    /// Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 / F7 T8, §5.6 stub-NOP
+    /// dispatch, §5.5 compute_hash structure, §9 commit 7.
+    #[test]
+    fn t8_vm_compute_hash_nop_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t8_vm_compute_hash_nop.bin");
+        assert_eq!(expected.len(), 32, "t8 .bin size invariant");
+
+        let cache = canonical_cache();
+        let actual = compute_hash(cache, &CANONICAL_SEEDHASH, T8_DATA_INPUT);
+
+        assert_eq!(
+            actual,
+            <[u8; 32]>::try_from(expected).expect("32-byte vector"),
+            "compute_hash diverged from fork pin aaafe71 reference \
+             (cache = derive(CANONICAL_SEEDHASH); data = T8_DATA_INPUT)",
+        );
     }
 }

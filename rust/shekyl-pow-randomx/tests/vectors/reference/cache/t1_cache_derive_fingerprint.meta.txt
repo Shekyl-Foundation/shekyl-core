@@ -1,0 +1,82 @@
+Phase 2c reference vector — t1_cache_derive_fingerprint.bin
+============================================================
+
+Spec attestation
+----------------
+T1 attests Rust `Cache::derive` byte-for-byte parity with the v2
+RandomX fork's `randomx_init_cache` for the canonical seedhash. The
+fingerprint covers both the 256 MiB Argon2d-derived `cache.memory`
+and the 8 SuperscalarPrograms derived from the same seedhash via
+Blake2Generator + `generateSuperscalar`. A divergence here
+attributes a cache-derivation bug to (a) Argon2d output, (b)
+SuperscalarHash program generation, or (c) the seedhash → blake2
+generator wiring — by structure, isolatable from the Phase 2a / 2b
+single-subsystem vectors that already pass.
+
+Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 (F7 T1).
+
+Inputs (hardcoded in `_generator/phase2c/gen.cpp`)
+--------------------------------------------------
+seedhash  = [0x01, 0x02, 0x03, ..., 0x20]  — 32-byte canonical
+                                              sequential test seed,
+                                              shared with T2, T8
+flag      = RANDOMX_FLAG_DEFAULT           — softAes (portability)
+
+Output layout
+-------------
+Output = Blake2b-256 final hash over:
+  - cache.memory                          (262144 × 1024 B = 256 MiB)
+  - for each i in 0..8:
+      - magic              "SSP1"         (4 B)
+      - size_u16_le                        (2 B)
+      - address_register_u8                (1 B)
+      - reserved (0x00)                    (1 B)
+      - size × {opcode u8, dst u8, src u8, mod u8, imm32_le}
+
+Total bytes for this vector: 32.
+
+Generator
+---------
+source      = ./_generator/phase2c/gen.cpp (mode t1)
+build       = ./_generator/phase2c/Makefile (`make gen`)
+command     = ./gen t1 > t1_cache_derive_fingerprint.bin
+output_size = 32 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/randomx.cpp (randomx_alloc_cache / randomx_init_cache),
+              src/dataset.cpp (initCache),
+              src/argon2_core.c + src/argon2_avx2.c + src/argon2_ssse3.c
+                + src/argon2_ref.c,
+              src/blake2/blake2b.c,
+              src/blake2_generator.cpp,
+              src/superscalar.cpp (generateSuperscalar)
+function    = (composite — see "Output layout")
+
+Notes
+-----
+The generator deliberately re-derives the 8 SuperscalarPrograms via
+`Blake2Generator(key, keySize)` + `generateSuperscalar(prog, gen)`
+directly, bypassing `cache->programs` (which `initCache` produces).
+Reason: `dataset.cpp:131-138` post-processes `cache->programs`
+after `generateSuperscalar` — for every `IMUL_RCP` instruction the
+C reference REPLACES `imm32` in-place with `cache->reciprocalCache.size()`
+(an index into the JIT-side reciprocal-cache table) and pushes the
+precomputed `randomx_reciprocal(original_imm32)` value into that
+side cache. The Rust port stores the ORIGINAL `imm32` and computes
+the reciprocal on-the-fly in `execute_superscalar`'s `IMUL_RCP` arm
+(no reciprocal side cache exists); the two storage shapes are
+RESULT-equivalent (verified by T2 dataset-item parity) but
+BYTE-divergent for serialization paths that consume `imm32`
+directly. Hashing the pre-replacement programs gives the cache-
+fingerprint vector that the Rust port matches by construction. See
+`docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §14 Round 0 R0-D11.
+
+Phase
+-----
+Phase 2c (`docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.7 / F7 T1,
+§9 commit 7) — cache-derivation fingerprint. Consumed by Rust
+test `t1_cache_derive_fingerprint_matches_fork_reference` in
+`rust/shekyl-pow-randomx/src/cache.rs#mod tests`.

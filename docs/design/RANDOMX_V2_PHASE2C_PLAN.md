@@ -120,6 +120,73 @@ falsified by impl-time substrate re-check; R0-D8 adds the cross-
 language-port discipline alongside the test-design disciplines
 R0-D5 / R0-D6 anchor).
 
+**R0-D10 (commit-7 post-fixture-generation, T8 failure-mode
+discovery).** Captures a chain-boundary bug surfaced when the T8
+end-to-end stub-NOP `compute_hash` spec-vector test ran against the
+F6-generator-produced fixture and diverged from the C reference.
+Root cause: the C `vm_interpreted.cpp::execute` constructs a fresh
+`NativeRegisterFile nreg;` per chain (`bytecode_machine.hpp:40`
+declares `int_reg_t r[RegistersCount] = { 0 };`), so each chain
+starts with the integer registers zeroed regardless of the prior
+chain's final `nreg.r` values (the prior chain's writeback to
+`reg.r` at `vm_interpreted.cpp:130-131` is consumed by the
+inter-chain Blake2b for `tempHash` derivation only — NOT by the
+next chain's iteration loop, which uses a fresh `nreg.r = { 0 }`).
+The Rust port fuses `reg` and `nreg` into a single `self.r` field
+on `VmState` per `30-cryptography.mdc`'s secret-locality discipline
+(one source of truth per register); the per-chain implicit reset
+that fell out of the C two-struct shape did NOT propagate to the
+fused Rust shape and required an explicit `self.r = [0; 8];` at
+the top of `execute_program`. T6/T7 (single-chain spec-vector
+tests) did not surface the bug because `VmState::new` returns
+`self.r = [0; 8]` already, so the carryover only manifests across
+inter-chain boundaries inside `compute_hash`. Disposition: explicit
+reset at `execute_program` entry, with an extended comment block
+naming the C two-struct semantics and the Rust fused-state
+divergence. R0-D10 extends the R0-D5/R0-D6/R0-D7/R0-D8 docket as
+the **cross-language-port-implicit-state-loss discipline**: when a
+language port fuses two source-language storage shapes into one
+target-language field, every behavior that fell out of the
+two-shape structure (default initialization, per-instance lifecycle,
+construction-order side effects) becomes a load-bearing explicit
+assertion the port must make at the equivalent state-transition
+points. The C `NativeRegisterFile nreg;` per-chain construction is
+one such behavior; the explicit reset at `execute_program` entry
+is its Rust equivalent. **R0-D11 (commit-7 T1 failure-mode
+discovery).** Captures a SS-program-storage divergence surfaced
+when the T1 cache-derivation Blake2b-256 fingerprint diverged
+between Rust and C. Root cause: `dataset.cpp::initCache:131-138`
+post-processes the SS programs after `generateSuperscalar` —
+for every `IMUL_RCP` instruction the C reference REPLACES `imm32`
+in-place with `cache->reciprocalCache.size()` (the index into the
+side-cache the JIT later loads from) and pushes the precomputed
+`randomx_reciprocal(original_imm32)` value into the side cache. The
+Rust port stores the ORIGINAL `imm32` and computes the reciprocal
+on-the-fly at `superscalar.rs:1465-1467` (the `IMUL_RCP` arm of
+`execute_superscalar`); no reciprocal side cache exists per R0-D7's
+withdrawn promotion. The two storage shapes are RESULT-equivalent
+(verified by T2's 8-item dataset-item parity batch) but
+BYTE-divergent for any serialization that consumes `imm32`
+directly. Disposition: fix in the C generator, not the Rust port —
+per `05-system-thinking.mdc`'s spec-first / R0-D8
+results-fidelity-over-shape-fidelity discipline, the JIT-side
+reciprocal cache is a code-generation optimization that the
+interpreter-only Phase 2c stack does not need, so the cache-
+fingerprint vector that the Rust port can match by construction
+is the one over the *unmodified* SS programs. The generator
+re-derives the 8 SS programs via `randomx::Blake2Generator(key,
+keySize)` + `randomx::generateSuperscalar(prog, gen)` directly
+(bypassing `initCache`'s `cache->programs` post-processing), then
+hashes those programs alongside `cache->memory`. R0-D11 is a
+sibling of R0-D10 under the same cross-language-port discipline
+docket — both are impl-time substrate findings that fall out of
+the Rust port's results-equivalence-over-shape-equivalence
+posture; both surface only when end-to-end-spec-vector tests
+exercise the byte boundaries that property tests (T1'/T2'/T7')
+provably can't cover. Both fixes land in commit 7 alongside the
+T1-T8 spec-vector tests and the F6 generator that produced their
+fixtures.
+
 **R0-D9 (commit-5 pre-flight, post-R0-D8).** Corrects an off-by-5×
 numeric-constant claim: `PROGRAM_SIZE` is `RANDOMX_PROGRAM_SIZE_V2 =
 384`, not `2048`. The 2048 value is `RANDOMX_PROGRAM_ITERATIONS`, the

@@ -1,0 +1,71 @@
+Phase 2c reference vector — t2_cache_derive_item_batch.bin
+===========================================================
+
+Spec attestation
+----------------
+T2 attests Rust `Cache::derive_item` byte-for-byte parity with the
+v2 RandomX fork's `randomx::initDatasetItem` for 8 boundary-and-
+edge item indices. The 8 indices cover:
+
+  - item 0 (lowest address)
+  - item 1 (lowest + 1, exercises the cache-line / address wrap)
+  - item 1023 (boundary just below 64 cache-lines = 1 KiB block)
+  - item 1024 (boundary just at 64 cache-lines = 1 KiB block)
+  - item 524287 / 524288 (mid-cache boundary near
+    DatasetExtraItems lower edge)
+  - item 2097150 / 2097151 (highest two valid items, just below
+    DatasetExtraItems upper edge = 33554431 / 33554432)
+
+A divergence at any of the 8 attributes the failure to a specific
+boundary class (cache-line wrap, 1 KiB block boundary, mid-cache,
+upper-cache) per the index it failed on.
+
+Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 (F7 T2).
+
+Inputs (hardcoded in `_generator/phase2c/gen.cpp`)
+--------------------------------------------------
+seedhash       = [0x01, 0x02, ..., 0x20]  (32-byte canonical)
+item_numbers   = [0, 1, 1023, 1024, 524287, 524288, 2097150, 2097151]
+flag           = RANDOMX_FLAG_DEFAULT
+
+Output layout
+-------------
+8 × 64-byte dataset items, concatenated in `item_numbers` order:
+
+  +0   item 0           (64 B)
+  +64  item 1           (64 B)
+  +128 item 1023        (64 B)
+  +192 item 1024        (64 B)
+  +256 item 524287      (64 B)
+  +320 item 524288      (64 B)
+  +384 item 2097150     (64 B)
+  +448 item 2097151     (64 B)
+
+Each 64-byte item is 8 × u64 little-endian — the natural output
+shape of `initDatasetItem` (which writes via `store64` to the
+caller's cache-line buffer).
+
+Total bytes for this vector: 512 (= 8 × 64).
+
+Generator
+---------
+source      = ./_generator/phase2c/gen.cpp (mode t2)
+build       = ./_generator/phase2c/Makefile (`make gen`)
+command     = ./gen t2 > t2_cache_derive_item_batch.bin
+output_size = 512 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/dataset.cpp (initDatasetItem),
+              src/superscalar.hpp (executeSuperscalar),
+              src/reciprocal.c
+function    = randomx::initDatasetItem(randomx_cache*, uint8_t*, uint64_t)
+
+Phase
+-----
+Phase 2c (`docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.7 / F7 T2,
+§9 commit 7) — dataset item derivation parity. Consumed by Rust
+test `t2_cache_derive_item_batch_matches_fork_reference` in
+`rust/shekyl-pow-randomx/src/cache.rs#mod tests`.
