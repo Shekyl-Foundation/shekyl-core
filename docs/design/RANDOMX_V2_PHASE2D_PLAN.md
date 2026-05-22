@@ -21,6 +21,23 @@ records the `u128`-vs-`__int128_t` edge-case differential discipline
 divergence"). All three are forward-actions that 2d Round 1 absorbs
 at design time; none reopen the Round 3 contract.
 
+**Round 5 addendum (2026-05-21).** Phase 2c Round 5's closure
+refinements (`RANDOMX_V2_PHASE2C_PLAN.md` §14 Round 5 entry) added
+a single 2d-bound item: §3.1's unsafe-block scope-check discipline
+(prose-form from Scaffold-R4) is promoted to a CI-time grep
+mechanical-enforcement gate modeled on the **`shekyl-pow-randomx`
+never uses `#[no_mangle]`** invariant pattern from `RANDOMX_V2_PLAN.md`
+§7.7. The grep is a §10 hard gate in the 2d implementation PR;
+reviewer-attention enforcement (prose) is necessary but not
+sufficient against the failure mode where a future contributor
+expands the unsafe surface with a reasonable-seeming addition
+("stash the previous mode for restoration," "check a feature flag
+before writing") that slips past a reviewer reading the unsafe
+block but not the diff context. 2d Round 1 fixes the primitive
+choice; the implementation PR adds the option-specific permitted
+and forbidden grep pattern set. No Scaffold or Scaffold-R4
+disposition reopened.
+
 **Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md)
 §"Track A — Phase 2" sub-PR 2d is the binding one-line scope
 ("Implement v2 bytecode dispatch — real per-opcode dispatch
@@ -311,6 +328,76 @@ and scratchpad) are governed by the same discipline; 2c §5.11.2's
 `debug_assert!` pattern is the implementation-PR-side check that
 the carve-out body produces the size it claims.
 
+**Round 5 addition: CI-time grep mechanical enforcement.** The
+prose-as-discipline above is necessary but not sufficient.
+Reviewer-attention enforcement is the failure mode where an
+auditor reads the `unsafe` block, sees a small body, and confirms
+the discipline without re-reading every line — exactly the shape
+that lets a future contributor land a "reasonable-seeming addition"
+that silently expands the unsafe surface (e.g., stashing the
+previous rounding mode for restoration; checking a feature flag
+before writing; mutating a sibling field "while the carve-out is
+already open"). The grep catches these; prose doesn't.
+
+The 2d implementation PR adds a CI-time grep against the rounding-
+mode-setter function body, modeled on the **`shekyl-pow-randomx`
+never uses `#[no_mangle]`** invariant pattern from
+`RANDOMX_V2_PLAN.md` §7.7 (the "Phase 2 structural isolation
+invariants" surface). The grep asserts that the function body
+contains exactly one of the option (a)/(b)/(c) primitives and
+nothing else — no other intrinsic calls, no pointer dereferences,
+no allocator calls, no function calls beyond the chosen primitive.
+
+**Discipline note for 2d Round 1 design closure.** The grep's
+exact source-form depends on which of options (a)–(d) Round 1
+selects in §3.1; the discipline is the same in all cases. Round 1's
+disposition fixes the primitive choice, and the implementation-PR's
+CI script greps for _that_ primitive's presence and the absence of
+every other intrinsic / allocator / pointer-dereference pattern in
+the function body. The Round 1 doc-comment names the primitive and
+the grep's exact pattern set; the implementation PR adds the grep.
+
+**Expected shape of the grep set** (filled per Round 1 disposition):
+
+- **Permitted (exactly one expected in the function body):** one
+  of `_mm_setcsr` / `_MM_SET_ROUNDING_MODE` (option (a), x86_64
+  intrinsic), `__set_fpcr` (option (a), aarch64 intrinsic),
+  `asm!` (option (b), inline asm form), or `<chosen-crate>::<fn>`
+  (option (c), third-party-crate form).
+- **Forbidden (zero hits expected in the function body):** any
+  other `_mm_*` / `__*` intrinsic; any `asm!` other than the one
+  intended primitive (option (b) only); any `Box::*`,
+  `Vec::with_capacity`, `slice::from_raw_parts*`,
+  `assume_init`, `MaybeUninit::*` allocator/init pattern; any
+  unary `*` dereference of a `*const _` / `*mut _` pointer; any
+  function call other than the single primitive.
+
+The implementation-PR's CI script scopes the grep to the
+rounding-mode-setter function body (e.g., `fn set_rounding_mode`
+or `fn apply_fprc`) — _not_ the whole crate — by matching on the
+function declaration's line range. A reviewer who notes the
+function name changed (e.g., a contributor renames it to
+`fn maybe_restore_and_set_rounding_mode`) is the human-side check
+that the grep scope still matches the intended target; the grep
+fails closed (assertion-style: zero forbidden-hits OR fail) so a
+function-body that drifted outside the scope-match is caught at
+PR-CI-time, not at audit-time.
+
+This grep is the same shape as the §7.7 `no #[no_mangle]`
+invariant: a future contributor who adds an "improvement" that
+expands the unsafe surface ("let me also stash the previous mode"
+or "let me also check a feature flag") fails CI immediately rather
+than slipping past a reviewer who reads the `unsafe` block
+contents but not the diff context that motivated the change. The
+discipline doesn't depend on the reviewer's careful reading; it
+depends on the grep's mechanical execution.
+
+The 2d implementation-PR description names this grep explicitly
+under §10 Gates (cargo fmt / cargo clippy / cargo test / **FPU
+unsafe-block scope-check grep** / cargo doc). A failing grep is
+a hard gate; the PR cannot land until the function body matches
+the discipline.
+
 ### 3.2 `F128` newtype shape
 
 **Question.** Does Phase 2d extract an `F128` newtype, and if so
@@ -499,4 +586,5 @@ are Phase 2d's own pre-flight work.
 |-------|------|---------|
 | Scaffold | 2026-05-21 | Skeleton scaffold landed as deliverable of Phase 2c Round 3 (R3-D3). Records the 2c → 2d hand-off contract verbatim, the locked-by-2c `VmState` field set, the F1/F2/F3/F5/F7 forward-actions, the three Round 1 decision points (FPU rounding-mode mechanism; `F128` newtype shape; per-opcode dispatch shape), and the scope discipline. Round 1 design doc supersedes this file when it lands. |
 | Scaffold-R4 | 2026-05-21 | Round 4 addenda landed as a sibling commit of Phase 2c Round 4's threat-model addenda (per `RANDOMX_V2_PHASE2C_PLAN.md` §5.11). Three additions: (i) §2 F7 forward-action extended with per-rounding-mode coverage requirement (9 FP opcodes × 4 IEEE 754 modes ≥ 36 mode-coverage tests, byte-equality-asserted against C reference under matching mode); carry from 2c §5.11 Objective 1 "FPU rounding-mode escape." (ii) §3.1 FPU rounding-mode decision-point gains an "unsafe-block scope-check discipline" addendum: whichever option (a)–(d) 2d Round 1 selects, the resulting `unsafe` block is audited to do only the rounding-mode write (no state mutation, no pointer dereferences, no allocation, no call-site fan-out); carry from 2c §5.11 Objective 5 "`unsafe`-block discipline at the FPU intrinsic." (iii) New §3.4 "`u128` / `__int128_t` edge-case differential discipline" enumerates four edge-case classes (div by zero, signed-div overflow, shift-by-width, `u128 * u128` truncation) and requires 2d Round 1 to audit every `u128`/`i128`-using opcode handler against the C reference, pre-handling reachable edge cases; carry from 2c §5.11 Objective 6 "consensus split via implementation divergence." None of the three additions reopen the Round 3 contract; all are forward-actions absorbed at 2d Round 1 design time. |
+| Scaffold-R5 | 2026-05-21 | Round 5 addendum landed as a sibling commit of Phase 2c Round 5's closure refinements (per `RANDOMX_V2_PHASE2C_PLAN.md` §14 Round 5 entry). One addition: §3.1 "CI-time grep mechanical enforcement" subsection promotes the Scaffold-R4 prose-as-discipline (unsafe-block scope-check) to a mechanically-enforced gate. The grep is modeled on the **`shekyl-pow-randomx` never uses `#[no_mangle]`** invariant pattern from `RANDOMX_V2_PLAN.md` §7.7 — asserts the rounding-mode-setter function body contains exactly one of the option (a)/(b)/(c) primitives and nothing else (no other intrinsic calls, no pointer dereferences, no allocator calls, no function calls beyond the chosen primitive). 2d Round 1 fixes the primitive choice; the implementation-PR adds the grep with the option-specific permitted/forbidden pattern set. Catches the "future contributor adds a reasonable-seeming improvement that silently expands the unsafe surface" failure mode (e.g., stashing previous mode for restoration, checking a feature flag, mutating a sibling field) that prose-as-discipline depends on reviewer attention to catch. CI-fail-closed: a function body that drifts outside the discipline fails PR CI rather than passing audit. Named as a §10 hard gate in the 2d implementation PR. No prior Scaffold or Scaffold-R4 disposition reopened. |
 | Round 1 | pending | Phase 2d's first design round. Cuts after Phase 2c implementation lands. |
