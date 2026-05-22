@@ -11,32 +11,38 @@
 //! Per
 //! [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
 //! §2 surface 1 + §5.4 (F4 — `Cache` lands in 2c, not 2e), this module
-//! lands across three Phase 2c implementation-PR commits:
+//! landed across three Phase 2c implementation-PR commits:
 //!
-//! - **Commit 1:** [`Cache`] struct + size constants
+//! - **Commit 1** introduced the [`Cache`] struct + size constants
 //!   ([`CACHE_SIZE`], [`DATASET_ITEM_SIZE`], [`DATASET_ITEM_COUNT`]) +
 //!   empty [`Drop`] (review-surface hook per §5.11.4).
-//! - **Commit 2 (this commit):** [`Cache::derive`] + the
+//! - **Commit 2** introduced [`Cache::derive`] + the
 //!   [`RANDOMX_CACHE_ACCESSES`] constant + the cache-memory allocation
 //!   carve-out + the `programs` field on [`Cache`] + cache-site
-//!   `debug_assert!`s per §5.11.2 + T1' determinism property test
-//!   (`#[cfg(test)] mod tests` per §14 Round 0 R0-D6). T1 spec-vector
-//!   test deferred to commit 7 alongside the F6 generator that
-//!   produces its fixture; `Cache::from_raw` dropped at impl-time
-//!   pre-flight per §14 Round 0 R0-D5.
-//! - **Commit 3 (this commit):** `pub(crate) Cache::derive_item` +
+//!   `debug_assert!`s per §5.11.2 + the T1' determinism property test
+//!   (`#[cfg(test)] mod tests` per §14 Round 0 R0-D6). The T1
+//!   spec-vector test was deferred to commit 7 alongside the F6
+//!   generator that produces its fixture; `Cache::from_raw` was
+//!   dropped at impl-time pre-flight per §14 Round 0 R0-D5.
+//! - **Commit 3** introduced `pub(crate) Cache::derive_item` +
 //!   `pub(crate) Cache::item_bytes` + the dataset-item spec constants
 //!   ([`SUPERSCALAR_MUL_0`], [`SUPERSCALAR_ADD_1`]..[`SUPERSCALAR_ADD_7`]) +
-//!   T2' invariance property test. Dissolves the
+//!   the T2' invariance property test. It also dissolved the
 //!   `#[allow(dead_code)]` on `superscalar::execute_superscalar` (this
 //!   is the production caller per spec §7.3 step 5). The planned
 //!   promotion of `superscalar::randomx_reciprocal` to `pub(crate)`
 //!   was withdrawn at impl-time pre-flight per §14 Round 0 R0-D7 —
 //!   `cache.rs::derive_item` consumes the reciprocal value
 //!   transitively via `execute_superscalar`'s `IMUL_RCP` arm
-//!   (`superscalar.rs:1463`), not by direct call. T2 spec-vector
-//!   test deferred to commit 7 alongside the F6 generator that
+//!   (`superscalar.rs:1463`), not by direct call. The T2 spec-vector
+//!   test was deferred to commit 7 alongside the F6 generator that
 //!   produces its fixture.
+//! - **Commit 7** added the T1 / T2 spec-vector tests
+//!   (`tests` module) and the F6 generator fixtures they consume;
+//!   the R0-D11 storage-divergence finding (`SuperscalarProgram`
+//!   `IMUL_RCP::imm32` is the raw post-`AesGenerator1R` byte in the
+//!   Rust port and the reciprocal-cache index in the C reference) is
+//!   resolved in the generator, not here.
 //!
 //! # Threat-model disposition (per §5.11.4)
 //!
@@ -380,26 +386,22 @@ impl Cache {
     /// pin `aaafe71` for the 8-input set `{0, 1, 1023, 1024, 524_287,
     /// 524_288, 2_097_150, 2_097_151}` per §5.6.
     ///
-    /// # REMOVE WHEN PHASE 2c COMMIT 6 WIRES THIS:
+    /// # Production caller
     ///
-    /// Until commit 6's `pub fn compute_hash` lands, `derive_item` has
-    /// no `pub`-reachable caller. The entire transitive chain reached
-    /// from this function (`item_bytes`, `execute_superscalar` and its
-    /// internal helpers `sign_extend_2s_compl` / `mulh` / `smulh` /
-    /// `smulh_u64` / `randomx_reciprocal`, `SuperscalarInstructionType::from_opcode`,
+    /// The sole production caller is `vm::VmState::dataset_read`
+    /// (`vm.rs::dataset_read` at line 1427 calls `cache.derive_item`
+    /// per spec §7.3 step 5; reachable from the public [`compute_hash`]
+    /// transform via `VmState::execute_program`). The entire transitive
+    /// chain reached from this function — [`item_bytes`](Cache::item_bytes),
+    /// `execute_superscalar` and its internal helpers
+    /// (`sign_extend_2s_compl` / `mulh` / `smulh` / `smulh_u64` /
+    /// `randomx_reciprocal`), `SuperscalarInstructionType::from_opcode`,
     /// `Instruction::mod_shift`, the eight `SUPERSCALAR_*` spec
     /// constants, the `memory` / `programs` field reads, and the
     /// `CACHE_SIZE` / `DATASET_ITEM_SIZE` / `DATASET_ITEM_COUNT`
-    /// constant reads) is dead-code-lint dead in the same chain.
-    ///
-    /// A single `#[allow(dead_code)]` at this chain entry-point
-    /// suppresses the transitive lint cascade per the standard
-    /// `rustc` reachability analysis: `#[allow]` marks the item live;
-    /// its callees become reachable-from-live; the lint walks no
-    /// further. Commit 6's `compute_hash` becomes the production
-    /// `pub` caller, at which point this `#[allow]` (and only this
-    /// one) gets removed.
-    #[allow(dead_code)]
+    /// constant reads — is reachable-from-`pub` by the same chain;
+    /// no `#[allow(dead_code)]` is needed (and adding one would mask
+    /// genuine dead-code regressions in the chain).
     pub(crate) fn derive_item(&self, item_number: u64) -> [u8; DATASET_ITEM_SIZE] {
         let mut register_value: u64 = item_number;
         let r0 = item_number.wrapping_add(1).wrapping_mul(SUPERSCALAR_MUL_0);

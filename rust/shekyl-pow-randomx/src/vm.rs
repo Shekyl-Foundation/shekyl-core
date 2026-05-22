@@ -1710,24 +1710,48 @@ fn dispatch_instruction(_instr: &Instruction, _state: &mut VmState) {
 /// No constant-time discipline applies to access patterns; no
 /// wipe-on-drop is load-bearing for confidentiality.
 ///
-/// # Performance posture (per §8 budget)
+/// # Performance posture (per §8 budget, R0-D12 reconciliation)
 ///
 /// At the Phase 2c stub-NOP cost, [`compute_hash`] is dominated by
-/// the 2 MiB scratchpad allocation + the 8 × 2048 iteration loop's
-/// AES-mix + scratchpad I/O + Blake2b chain steps. Per §8's
-/// pre-commit-7 benchmark, the expected per-hash wall time is
-/// ≤100 µs on a 2026-era reference machine — well under the
-/// commit-8 PR-gating threshold. The dominant cost is the AES-mix
+/// the 8 × 2048 iteration loop's per-iteration work: the AES-mix
 /// (8 chains × 2048 iterations × 16 AES rounds = ~262_144 AES round
-/// operations); the `Cache::derive_item` calls (one per iteration ×
-/// 8 chains × 2048 iterations = ~16_384 SuperscalarHash chains)
-/// drop the wall budget closer to ~5 ms each per `Cache::derive_item`'s
-/// commit-3 measured cost, totaling tens of seconds per hash — this
-/// is the V3.0 verifier perf gap §13's Phase 2g optimization closes
-/// (currently the verifier path is not optimized; Phase 2g's
-/// inline-superscalar work brings the gap into the ≤100 µs envelope).
-/// The Phase 2c shape is functionally correct; the Phase 2g shape is
-/// production-fast.
+/// operations) + the `Cache::derive_item` calls (one per iteration ×
+/// 8 chains × 2048 iterations = ~16_384 SuperscalarHash chains) +
+/// the scratchpad I/O + the Blake2b inter-chain hashes. The 2 MiB
+/// scratchpad allocation is sub-millisecond on contemporary x86-64
+/// and is dominated by the loop body, not the other way around.
+///
+/// **Empirical baseline (commit 8).** The `compute_hash_alloc::per_call`
+/// criterion bench at
+/// [`rust/shekyl-pow-randomx/BENCH_RESULTS.md`](../../rust/shekyl-pow-randomx/BENCH_RESULTS.md)
+/// measures median **296.00 ms per call** (95% CI [292.81 ms,
+/// 299.47 ms]) on an i9-11950H (Debian 13, kernel
+/// `6.12.88+deb13-amd64`, N=100). The §8 plan-doc budget (≤100 µs)
+/// bound the *allocation portion specifically* — not the full
+/// pipeline; the §5.8 plan-doc disposition #1 parenthetical
+/// authorized the implementation-PR-time bench-shape decision the
+/// commit-8 bench actually implements (end-to-end pipeline, because
+/// that matches the bench function call). The reconciliation
+/// (re-baseline the budget against empirical hardware-class
+/// measurements; add an allocation-only sub-bench; or defer the
+/// per-hash latency check to Phase 2g's Rust-vs-C ratio per
+/// R3-minor-2's `tests/perf/per_hash_latency.rs` placeholder) is a
+/// §13-forward-path question for 2d / 2f / 2g design rounds. The
+/// disposition is documented in
+/// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+/// §14 Round 0 R0-D12 with substrate-anchored reopening criteria
+/// per `21-reversion-clause-discipline.mdc`.
+///
+/// **Why the dominant cost is the loop body, not the SS execution.**
+/// Stub-NOP `dispatch_instruction` does no per-instruction work, so
+/// the per-iteration cost reduces to: SS chain execution (~16 µs
+/// per item per `Cache::derive_item`'s commit-3 measured cost) +
+/// scratchpad load/store + AES f/e mix + the per-iter Blake2b
+/// chaining. Phase 2g's inline-superscalar work is the optimization
+/// path that brings this into the per-hash budget Phase 0 §6 names;
+/// the Phase 2c shape is functionally correct (T1-T8 byte-identical
+/// to the C reference under stub-NOP dispatch) and the Phase 2g
+/// shape is production-fast.
 pub fn compute_hash(cache: &crate::Cache, seedhash: &[u8; 32], data: &[u8]) -> [u8; 32] {
     // The seedhash parameter is documentary-only per the module-level
     // rustdoc and the function rustdoc above. Bind a dropped reference

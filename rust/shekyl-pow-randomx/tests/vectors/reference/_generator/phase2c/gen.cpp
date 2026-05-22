@@ -101,26 +101,12 @@ constexpr uint8_t CANONICAL_SEEDHASH[32] = {
 };
 
 // Canonical 64-byte temp_hash for direct fillAes1Rx4 / fillAes4Rx4
-// inputs (T3, T4, T5, T6, T7). Constructed as Blake2b-512 over the
-// ASCII bytes of "shekyl-randomx-v2-phase2c-canonical-input" so any
-// reviewer can reproduce.
-//
-// Computed once and pinned as a constant; the generator does not
-// re-derive it at runtime.
-constexpr uint8_t CANONICAL_TEMP_HASH[64] = {
-    // Blake2b-512(b"shekyl-randomx-v2-phase2c-canonical-input")
-    // — value verified at generator-build time via t3's runtime
-    // assertion (see verify_canonical_temp_hash() below).
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-};
-
+// inputs (T3, T4, T5, T6, T7). Derived at startup from the documented
+// preimage below via Blake2b-512 (see derive_canonical_temp_hash())
+// and stored in g_canonical_temp_hash. Keeping the canonical bytes
+// runtime-derived from a documented preimage (rather than a pinned
+// 64-hex-byte literal) keeps the generator self-contained — any
+// reviewer can reproduce by re-running blake2b over the preimage.
 constexpr const char* CANONICAL_TEMP_HASH_PREIMAGE =
     "shekyl-randomx-v2-phase2c-canonical-input";
 
@@ -165,9 +151,6 @@ void derive_canonical_temp_hash() {
         std::fprintf(stderr, "blake2b failure deriving canonical temp_hash\n");
         std::exit(3);
     }
-    // Silence the unused-constant warning by binding it; the pinned
-    // CANONICAL_TEMP_HASH constant is documentation, not load-bearing.
-    (void)CANONICAL_TEMP_HASH;
 }
 
 // ---------------------------------------------------------------------------
@@ -312,7 +295,7 @@ void emit_t2() {
 // ---------------------------------------------------------------------------
 // T3 — fillAes1Rx4 scratchpad init.
 //
-// Input: 64-byte CANONICAL_TEMP_HASH (the post-Blake2b-512(input)
+// Input: 64-byte g_canonical_temp_hash (the post-Blake2b-512(preimage)
 // state that `randomx_calculate_hash` passes to `machine->initScratchpad`).
 // Output: Blake2b-256(scratchpad bytes after fillAes1Rx4).
 // ---------------------------------------------------------------------------
@@ -701,7 +684,7 @@ void emit_register_file_snapshot(const randomx::RegisterFile& reg) {
 // ---------------------------------------------------------------------------
 // T4 — Register init from entropy (post-initialize() RegisterFile).
 //
-// Input: program parsed from CANONICAL_TEMP_HASH via fillAes4Rx4 +
+// Input: program parsed from g_canonical_temp_hash via fillAes4Rx4 +
 // initialize() (entropy slots 0-15 → reg.a / mem / config / eMask).
 // Output: 256-byte NativeRegisterFile snapshot (only the .a[4]
 // FP registers are populated by initialize(); .r / .f / .e are
@@ -731,7 +714,7 @@ void emit_t4() {
 // ---------------------------------------------------------------------------
 // T5 — Parsed Program structure from entropy.
 //
-// Input: 64-byte CANONICAL_TEMP_HASH → fillAes4Rx4 → 384-instruction
+// Input: 64-byte g_canonical_temp_hash → fillAes4Rx4 → 384-instruction
 // Program (the entropy buffer (128 B) + instruction bytes (3072 B) =
 // 3200 B fillAes4Rx4 output, of which we serialize only the
 // 3072-byte instruction tail).
@@ -771,7 +754,7 @@ void emit_t5() {
 // T6 — spAddr0/1 derivation across the first 4 iterations of the
 // stub-NOP loop.
 //
-// Input: CANONICAL_TEMP_HASH → generateProgram + initialize → 4
+// Input: g_canonical_temp_hash → generateProgram + initialize → 4
 // iterations of the stub-NOP loop.
 // Output: 4 × (spAddr0 LE u32, spAddr1 LE u32) = 32 bytes.
 // ---------------------------------------------------------------------------
@@ -796,7 +779,7 @@ void emit_t6() {
 // ---------------------------------------------------------------------------
 // T7 — Post-AES-mix register snapshot across the first 4 iterations.
 //
-// Input: CANONICAL_TEMP_HASH → generateProgram + initialize → 4
+// Input: g_canonical_temp_hash → generateProgram + initialize → 4
 // iterations of the stub-NOP loop.
 // Output: 4 × 256-byte NativeRegisterFile snapshot = 1024 bytes.
 //
