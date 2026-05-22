@@ -37,50 +37,75 @@
 //!   if those greps were already live. See
 //!   [`RANDOMX_V2_RUST.md`](../../docs/design/RANDOMX_V2_RUST.md) §7.2.
 //!
-//! # Scope at this PR (Phase 2b)
+//! # Scope at this PR (Phase 2c)
 //!
 //! Phase 2a landed the workspace scaffold and the Argon2d "memory fill"
-//! primitive used by `Cache::derive`. Phase 2b lands the remaining v2
-//! primitives the verifier needs plus spec-vector parity tests against
-//! the v2 fork's reference at pin `aaafe71`:
+//! primitive. Phase 2b landed the AES round primitives, `AesGenerator1R`
+//! / `AesGenerator4R` / `AesHash1R` composites, `Blake2Generator`, and
+//! `SuperscalarHash` program generator + executor. Phase 2c lands the
+//! cache + VM substrate end-to-end, with per-stage and end-to-end
+//! spec-vector parity against the v2 fork at pin `aaafe71` (per the
+//! `cache_derive_fingerprint` T1 vector and the seven `vm/*` T3-T8
+//! vectors under `tests/vectors/reference/`):
 //!
-//! - `src/aes.rs` — AES single-round wrappers (`cipher_round`,
-//!   `equiv_inv_cipher_round`) over `aes-0.9.0`'s `hazmat` API plus
-//!   the §3.2-3.4 composites (`AesGenerator1R`, `AesGenerator4R`,
-//!   `AesHash1R`), with 8 spec-vector parity tests consuming pre-
-//!   committed reference bytes via `include_bytes!`; the reviewer-
-//!   runnable C++ generator lives at
-//!   `tests/vectors/reference/aes/_generator/`.
-//! - `src/blake2_generator.rs` — `Blake2Generator` PRNG per spec §3.5.
-//! - `src/superscalar.rs` — `SuperscalarHash` program generator and
-//!   executor per spec §6 + §7.2, plus F4 structured 3-vector
-//!   decomposition spec-vector tests (Layer A program serialization
-//!   × 3 + Layer B execution × 3 + combined end-to-end attestation
-//!   = 7 vectors); the reviewer-runnable C++ generator lives at
-//!   `tests/vectors/reference/superscalar/_generator/`.
-//! - F1 convergence on `src/argon2d.rs`'s `#[allow(dead_code)]`: moved
-//!   from the module-level attribute on `mod argon2d` to per-item
-//!   attributes inside the module, matching the per-entry-point
-//!   discipline applied to the new modules. See
-//!   [`RANDOMX_V2_PHASE2B_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2B_PLAN.md)
-//!   §5.1.
+//! - `src/cache.rs` — `pub Cache` + `pub fn Cache::derive(seedhash)`
+//!   (the 256 MiB Argon2d fill plus eight `Blake2Generator`-seeded
+//!   `generateSuperscalar` programs from Phase 2a + Phase 2b
+//!   primitives), `pub(crate) Cache::derive_item`, and
+//!   `pub(crate) Cache::item_bytes` for the per-iteration
+//!   dataset-item read path.
+//! - `src/vm.rs` — `pub fn compute_hash(&Cache, &[u8; 32], &[u8])`,
+//!   `pub(crate) VmState` (2 MiB scratchpad, register file, per-
+//!   program init from entropy), and `dispatch_instruction(...)`
+//!   with a NOP body. Phase 2d replaces the dispatch body
+//!   in-place per §5.1.1 of the plan doc.
+//! - `tests/vectors/reference/cache/` + `tests/vectors/reference/vm/`
+//!   — 8 reference vectors (T1: cache fingerprint; T2: dataset item
+//!   batch; T3-T8: VM scratchpad init, register init, program parse,
+//!   sp_addr derivation, AES-mix snapshot, end-to-end stub-NOP hash)
+//!   pre-computed by the reviewer-runnable C++ generator at
+//!   `tests/vectors/reference/_generator/phase2c/`.
+//! - `benches/cache_derive.rs` + `benches/compute_hash_alloc.rs` —
+//!   criterion baselines per §5.8 PR-gate budget (`Cache::derive`
+//!   ≤ 200 ms median; `compute_hash` ≤ 100 µs median under stub-NOP).
+//!   Numbers recorded in `BENCH_RESULTS.md`.
+//! - `tests/perf/per_hash_latency.rs` — Phase 2g placeholder
+//!   (`#[ignore]` + `unimplemented!()`) at the canonical 2g
+//!   deliverable path per §5.8 R3-minor-2; 2g replaces the body
+//!   in-place.
 //!
 //! Subsequent sub-PRs (per
 //! [`RANDOMX_V2_PLAN.md`](../../docs/design/RANDOMX_V2_PLAN.md)
 //! §"Track A — Phase 2"):
 //!
-//! - **2c:** `Vm<'a>` scratchpad + execution loop.
-//! - **2d:** Bytecode opcode dispatch.
-//! - **2e:** `Cache::derive` wrapping the Argon2d primitive landed by
-//!   Phase 2a and the SuperscalarHash primitive landed by Phase 2b.
-//! - **2f:** `CacheStore` LRU + crate-level CI invariant tests
-//!   (mechanical enforcement of §7.2's isolation invariants).
+//! - **2d:** Per-opcode bytecode dispatch. Function-body replacement
+//!   of `dispatch_instruction` inside `vm.rs` — no trait wiring, no
+//!   impl swap, no signature change to `compute_hash`.
+//! - **2f:** `CacheStore` LRU + `VmState` pool + crate-level CI
+//!   invariant tests (mechanical enforcement of §7.2's isolation
+//!   invariants).
 //! - **2g:** C-side differential harness as a *separate* test-only
 //!   artifact (not a `[dev-dependencies]` of this crate); the crate's
-//!   own `cargo test` succeeds without the C library present.
+//!   own `cargo test` succeeds without the C library present. 2g
+//!   also populates the `tests/perf/per_hash_latency.rs` placeholder
+//!   landed by Phase 2c.
 //!
 //! Phase 3 then exposes the verifier through `shekyl-ffi` and rewires
 //! the C++ daemon to it; Phase 4 deletes the C++ verifier path.
+//!
+//! # Scope: public-input verification only
+//!
+//! This crate is designed for **public-input verification** (block
+//! Proof-of-Work hashing). Secret-input use — e.g. hashing private
+//! material with a RandomX-shaped construction (a wallet KDF, a
+//! Proof-of-Work-shaped commitment scheme over private inputs, etc.)
+//! — would require a separate threat model addressing allocator-
+//! pressure side channels, scratchpad cache-line residency, and per-
+//! iteration timing variance. No current or planned consumer uses
+//! this crate with secret material. See
+//! [`RANDOMX_V2_PHASE2C_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+//! §5.11.4 for the reopening criterion under
+//! [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).
 
 #![deny(unsafe_code)]
 #![deny(missing_docs)]

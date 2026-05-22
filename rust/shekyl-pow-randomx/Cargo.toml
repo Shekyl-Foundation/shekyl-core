@@ -46,5 +46,47 @@ blake2 = { workspace = true }
 #   a duplicate argon2 build with a different feature set.
 argon2 = { version = "0.5", default-features = false, features = ["alloc", "zeroize"] }
 
+[dev-dependencies]
+# Criterion for the two Phase 2c PR-gate benches per
+# `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.8 + §8: `cache_derive`
+# (≤200 ms median over N=100 iters) and `compute_hash_alloc` (≤100 µs
+# median over N=10000 iters, under stub-NOP dispatch). Version + feature
+# set match `shekyl-crypto-pq`'s existing dev-dep
+# (`rust/shekyl-crypto-pq/Cargo.toml`) so workspace dep-resolution
+# stays unified rather than building a second criterion variant for
+# this crate. Per-PR criterion adoption is justified by the §5.8
+# disposition's "PR fails if median > X" gate; no production code path
+# depends on criterion.
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+# `Cache::derive(&KEY)` end-to-end (Argon2d 256 MiB + 8 ×
+# `generateSuperscalar`). PR-gate threshold: median ≤200 ms.
+# See `benches/cache_derive.rs` for the harness + threshold rationale.
+name = "cache_derive"
+harness = false
+
+[[bench]]
+# `compute_hash(&cache, &SEEDHASH, &DATA)` end-to-end under stub-NOP
+# dispatch (the Phase 2c dispatch_instruction NOP body; Phase 2d's
+# real per-opcode body will grow this bench's per-call cost). PR-gate
+# threshold: median ≤100 µs. The budget binds the VmState allocation
+# + scratchpad zeroing + register-file init + iteration-loop overhead
+# specifically. See `benches/compute_hash_alloc.rs` for the harness.
+name = "compute_hash_alloc"
+harness = false
+
+[[test]]
+# Phase 2g per-hash latency placeholder per
+# `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.8 disposition #3 + §13
+# R3-minor-2: lands at the canonical 2g-deliverable path under
+# `tests/perf/` so 2g's author finds it by grep. Cargo's default test
+# discovery only auto-detects files at the top of `tests/`; the
+# explicit `path` makes the under-`perf/` placement discoverable
+# without losing the perf namespace. The body is `#[ignore]`'d so
+# `cargo test` doesn't run it; 2g replaces the body in-place.
+name = "per_hash_latency"
+path = "tests/perf/per_hash_latency.rs"
+
 [lints]
 workspace = true
