@@ -8,8 +8,10 @@
 //!
 //! `SuperscalarHash` is RandomX's custom diffusion function over 8
 //! 64-bit registers. It is consumed by Cache → Dataset construction
-//! (Phase 2e); this module provides the two pure functions Cache::derive
-//! needs:
+//! (Phase 2c [`Cache::derive`](crate::Cache::derive) for program
+//! generation; Phase 2c commit 3 `Cache::derive_item` for program
+//! execution over each cache row); this module provides the two pure
+//! functions those callers need:
 //!
 //! - [`generate_superscalar`] — generate a [`SuperscalarProgram`] by
 //!   simulating an Intel-Ivy-Bridge-style reference CPU and driving
@@ -85,10 +87,14 @@
 //!   fields: a fixed-size array of [`SUPERSCALAR_MAX_SIZE`] (= 512)
 //!   instructions plus a `usize` size counter plus a `u8`
 //!   address-register index; total = 4096 bytes for instructions
-//!   plus ~16 bytes of meta = ~4 KiB per program. Cache::derive in
-//!   Phase 2e holds 8 programs simultaneously = ~32 KiB total, well
-//!   within default 2 MiB Linux thread stacks (no heap allocation
-//!   needed).
+//!   plus ~16 bytes of meta = ~4 KiB per program. Phase 2c's
+//!   [`Cache::derive`](crate::Cache::derive) holds 8 programs
+//!   simultaneously = ~32 KiB total; the allocation lives on the heap
+//!   as `Box<[SuperscalarProgram]>` (length 8 by construction) per
+//!   `cache.rs`'s `programs` field, sidestepping the ~32 KiB stack-
+//!   pressure question that the per-program-on-stack design would
+//!   otherwise raise during the `(0..8).map(generate_superscalar).collect()`
+//!   step.
 //!
 //! # Spec-silence audit table
 //!
@@ -1218,12 +1224,10 @@ fn schedule_mop(
 /// the register with the longest dependency chain — that register's
 /// index is stored as `address_register` and used by §7.3 step 7.
 ///
-/// # REMOVE WHEN PHASE 2e WIRES THIS:
-///
-/// Phase 2e (`Cache::derive`) is the production caller; 8 programs are
-/// generated from a single `Blake2Generator` seeded from key `K` per
-/// §7.2 to produce the Dataset.
-#[allow(dead_code)]
+/// Phase 2c's [`Cache::derive`](crate::Cache::derive) is the production
+/// caller; [`RANDOMX_CACHE_ACCESSES`](crate::cache::RANDOMX_CACHE_ACCESSES)
+/// (= 8) programs are generated from a single [`Blake2Generator`] seeded
+/// from `seedhash` per §7.2 to produce the Dataset.
 pub(crate) fn generate_superscalar(gen: &mut Blake2Generator) -> SuperscalarProgram {
     let mut prog = SuperscalarProgram::new();
     let mut port_busy: PortBusy = [[false; 3]; CYCLE_MAP_SIZE];
@@ -1416,14 +1420,19 @@ pub(crate) fn generate_superscalar(gen: &mut Blake2Generator) -> SuperscalarProg
 /// `Vec<uint64_t>` cache, but the cached values are identical to the
 /// on-the-fly [`randomx_reciprocal`] computation and the
 /// pre-computation is a JIT-side optimization that has no role in
-/// the interpreter-only Phase 2 stack.
+/// the interpreter-only Phase 2 stack. Per
+/// `RANDOMX_V2_PHASE2C_PLAN.md` §14 Round 0 R0-D7, this also means
+/// `randomx_reciprocal` stays private — `cache.rs::derive_item`
+/// consumes the reciprocal value transitively via the `IMUL_RCP` arm
+/// below, not by direct call.
 ///
-/// # REMOVE WHEN PHASE 2e WIRES THIS:
+/// # Production caller
 ///
-/// Phase 2e (`Cache::derive`) is the production caller per spec
-/// §7.3 step 5: `SuperscalarHash[i](r0..r7)` modifies the registers
-/// in place.
-#[allow(dead_code)]
+/// Phase 2c commit 3 (`Cache::derive_item`) is the production caller
+/// per spec §7.3 step 5: `SuperscalarHash[i](r0..r7)` modifies the
+/// registers in place, called for each of the
+/// [`RANDOMX_CACHE_ACCESSES`](crate::cache::RANDOMX_CACHE_ACCESSES)
+/// (= 8) programs chained over the indexed cache row.
 pub(crate) fn execute_superscalar(
     program: &SuperscalarProgram,
     registers: &mut [u64; REGISTERS_COUNT],

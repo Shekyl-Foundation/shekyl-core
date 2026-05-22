@@ -1,0 +1,74 @@
+Phase 2c reference vector — t7_vm_aesmix_4iter.bin
+===================================================
+
+Spec attestation
+----------------
+T7 attests Rust per-iteration post-AES-mix register state byte-for-
+byte parity with the v2 RandomX fork's interpreted iteration loop
+under stub-NOP dispatch over the first 4 iterations. Captures the
+NativeRegisterFile snapshot AT THE END of each iteration's loop
+body — after register XOR-load, FP cvt+mask, [skipped bytecode],
+dataset read, scratchpad writeback, V2 AES f/e mix, and FP
+scratchpad store.
+
+A T7 divergence isolates the V2 AES f/e mix branch (vm_interpreted.cpp
+lines 99-117) — consuming `nreg.e` as the round key and mixing
+`nreg.f` through the aesenc/aesdec chain — from the spAddr derivation
+(T6) and the parse/init (T4 / T5). The 4-iteration window matches T6; each
+snapshot is 256 B (the same layout as T4).
+
+Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 (F7 T7) + §5.6 (stub-NOP
+dispatch rationale).
+
+Inputs (hardcoded in `_generator/phase2c/gen.cpp`)
+--------------------------------------------------
+seedhash  = [0x01, 0x02, ..., 0x20]  (32-byte canonical, for cache)
+temp_hash = CANONICAL_TEMP_HASH (64 B, see T3 .meta.txt)
+flag      = RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_V2
+softAes   = true                     (portability pin)
+iter_count = 4
+
+Output layout
+-------------
+4 × 256-byte NativeRegisterFile snapshot = 1024 B, in iteration
+order. Each 256-byte snapshot matches T4's layout exactly:
+
+  +0     r[0..8]  × u64                              (64 B)
+  +64    f[0..4]  × {lo: f64 LE bits, hi: f64 LE bits} (64 B)
+  +128   e[0..4]  × {lo: f64 LE bits, hi: f64 LE bits} (64 B)
+  +192   a[0..4]  × {lo: f64 LE bits, hi: f64 LE bits} (64 B)
+
+The `a[4]` registers are immutable across iterations (set once by
+`initialize`, never written by the loop body), so all 4 snapshots'
++192..+256 regions are identical and match T4's +192..+256. The
+`r[8]`, `f[4]`, `e[4]` regions diverge per iteration — covering
+the loop body's effects.
+
+Total bytes for this vector: 1024 (= 4 × 256).
+
+Generator
+---------
+source      = ./_generator/phase2c/gen.cpp (mode t7)
+build       = ./_generator/phase2c/Makefile (`make gen`)
+command     = ./gen t7 > t7_vm_aesmix_4iter.bin
+output_size = 1024 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/vm_interpreted.cpp (interpreted iteration loop —
+                full body except executeBytecode),
+              src/vm_interpreted_light.cpp (datasetRead),
+              src/soft_aes.cpp + src/aes_hash.cpp (softAes
+                aesenc/aesdec),
+              src/intrin_portable.h (rx_cast_vec_*, rx_store_vec_*)
+function    = (composite — see "Spec attestation")
+
+Phase
+-----
+Phase 2c (`docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.7 / F7 T7,
+§5.6 stub-NOP dispatch, §9 commit 7) — per-iteration register
+state parity. Consumed by Rust test
+`t7_vm_aesmix_4iter_matches_fork_reference` in
+`rust/shekyl-pow-randomx/src/vm.rs#mod tests`.

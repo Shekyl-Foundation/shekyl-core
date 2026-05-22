@@ -599,6 +599,35 @@ jobs:
       - name: "Gate 1: proptest (--release for speed)"
         working-directory: rust
         run: cargo test --locked --release -p shekyl-crypto-pq --test prop_round_trip
+      - name: "Gate 2: shekyl-pow-randomx debug-vs-release equivalence"
+        # Per `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.11.3 R4:
+        # Rust integer-overflow semantics differ between debug (panic)
+        # and release (wrapping). The verifier ships release. Any 2c
+        # arithmetic that accidentally uses `+`/`*` where it should use
+        # `wrapping_add`/`wrapping_mul` is invisible to debug-mode
+        # `cargo test` but produces a different hash for overflow
+        # inputs in release. The T1-T8 spec-vector tests (commit 7)
+        # contain byte-equality assertions against fork-generated
+        # fixtures; re-running them under `--release` asserts that
+        # release-profile output matches debug-profile output (both
+        # match the fork). Any divergence fails the PR.
+        #
+        # Cost: ~50 s additional CI wall-clock (measured on the
+        # i9-11950H reference machine; CI hardware likely differs).
+        # The §5.11.3 cost estimate was ~30 s under the planned ~200 ms
+        # per-`Cache::derive` budget; R0-D12 (see
+        # `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §14 + `BENCH_RESULTS.md`)
+        # measured ~341 ms median, which inflates T1''s 100-iteration
+        # determinism property test from ~26 s → ~34 s and pushes total
+        # release-test wall-clock to ~47 s. The cost increase is
+        # acceptable: T1'/T2'/T3'–T8' determinism properties are
+        # plan-doc-mandated per §5.11.1 with an explicit reopening
+        # criterion that names the audits-are-clean-so-compress anti-
+        # pattern, i.e. "remove the non-determinism source, not the
+        # property test." Acceptable for the consensus-split-bug class
+        # this gate catches.
+        working-directory: rust
+        run: cargo test --locked --release -p shekyl-pow-randomx
       - name: Bech32m address encoding tests
         working-directory: rust
         run: cargo test --locked -p shekyl-crypto-pq -- address

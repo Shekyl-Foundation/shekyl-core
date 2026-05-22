@@ -10,8 +10,10 @@
 //! §7.1: a 256 MiB Argon2d run with the parameters in Table 7.1.1, where
 //! "the finalizer and output calculation steps of Argon2 are omitted;
 //! the output is the filled memory array." This file is the inside of
-//! that step. Phase 2e's `Cache::derive` will own the buffer allocation
-//! and call [`fill_cache`].
+//! that step. Phase 2c's [`Cache::derive`](crate::Cache::derive) owns
+//! the buffer allocation (via `Box::new_zeroed_slice` under the
+//! `#![deny(unsafe_code)]` carve-out in `cache.rs`) and calls
+//! [`fill_cache`].
 //!
 //! # Dependency disposition (per `.cursor/rules/17-dependency-discipline.mdc`)
 //!
@@ -149,19 +151,10 @@ const PARAMS: Params = match Params::new(
 /// would prevent it if Rust supported a `&mut [Block;
 /// RANDOMX_ARGON_BLOCKS]` parameter without forcing the caller into
 /// an awkward 256-MiB heap-allocation dance for the `[Block; N]`
-/// type. Phase 2e's `Cache::derive` is the single production caller
-/// and will allocate `vec![Block::default(); RANDOMX_ARGON_BLOCKS]`.
-// REMOVE WHEN PHASE 2e WIRES THIS:
-//
-// Phase 2e lands `Cache::derive(seedhash) -> Cache` as the single
-// production caller of `fill_cache`. Until then `fill_cache` (and the
-// `RANDOMX_ARGON_*` constants + `PARAMS` it consumes transitively) is
-// dead-by-construction. Per `RANDOMX_V2_PHASE2B_PLAN.md` §5.1 F1
-// convergence, this is the function-level allow that replaced Phase
-// 2a's module-level `#[allow(dead_code)] mod argon2d;`. The narrower
-// scope keeps the `dead_code` lint live as wiring-bug signal across
-// the rest of the module.
-#[allow(dead_code)]
+/// type. Phase 2c's [`Cache::derive`](crate::Cache::derive) is the
+/// single production caller and allocates the buffer via
+/// `Box::new_zeroed_slice(RANDOMX_ARGON_BLOCKS)` under the
+/// `#![deny(unsafe_code)]` carve-out in `cache.rs`.
 pub(crate) fn fill_cache(key: &[u8], blocks: &mut [Block]) {
     assert_eq!(
         blocks.len(),

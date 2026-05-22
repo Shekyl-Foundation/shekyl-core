@@ -2,6 +2,208 @@
 
 ## [Unreleased]
 
+### Added
+
+- **RandomX v2 Track A Phase 2c — Cache derivation + VM substrate +
+  T1-T8 spec-vector parity + bench baselines** (`feat/randomx-v2-phase2c-impl`,
+  PR #66, 2026-05-22). Third sub-PR of the Rust pure-software RandomX
+  v2 verifier port per
+  [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
+  §"Track A — Phase 2" and the design plan
+  [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md).
+  Eight-commit stack landing the cache + VM substrate end-to-end
+  with byte-for-byte parity against the `randomx-v2` fork at pin
+  `aaafe71` (v2.0.1) for all eight reference vectors (T1-T8), plus
+  the bench baseline + CI cross-profile gate that Phase 2d/2f/2g
+  inherit:
+  - **Commit 1 — `Cache` type skeleton + size constants + `Drop`**
+    (`39eda3164`). [`src/cache.rs`](../rust/shekyl-pow-randomx/src/cache.rs)
+    `pub Cache` struct + `CACHE_SIZE` / `DATASET_ITEM_SIZE` /
+    `DATASET_ITEM_COUNT` constants + empty `Drop` (review-surface hook
+    per §5.11.4). Per the §3 module layout + §2 surface 1 framing.
+  - **Commit 2 — `Cache::derive` + T1' determinism + unsafe carve-out
+    #1** (`48e7df633`). Argon2d 256 MiB fill (delegating to Phase 2a's
+    `pub(crate) fill_cache`) + 8 × `Blake2Generator`-seeded
+    `generateSuperscalar` programs (delegating to Phase 2b's
+    `Blake2Generator` + `generateSuperscalar` from `src/superscalar.rs`)
+    + `RANDOMX_CACHE_ACCESSES` constant + the cache-memory allocation
+    unsafe carve-out (the only `#![deny(unsafe_code)]` exception this
+    commit introduces, per the §1 covenant 7 enumeration) + cache-site
+    `debug_assert!`s per §5.11.2. T1' (`Cache::derive` determinism
+    property test, ~100 invocations) + the `programs` field landing
+    on `Cache`. Plan-doc errata `86f058c3b`/`431a54b38`/`3e6bb2734`
+    (impl-time pre-flight R0-D5/R0-D6/R0-D7: drop `Cache::from_raw`,
+    relocate T1-T8 to unit tests, withdraw `randomx_reciprocal`
+    `pub(crate)` promotion).
+  - **Commit 3 — `Cache::derive_item` + `item_bytes` + T2' invariance**
+    (`9ab584596`). `pub(crate) Cache::derive_item` (the per-iteration
+    dataset-item read consumed by `VmState`'s 2048-iteration loop)
+    + `pub(crate) Cache::item_bytes` (the byte-level indexing
+    accessor) + the dataset-item spec constants (`SUPERSCALAR_MUL_0`,
+    `SUPERSCALAR_ADD_1`..`SUPERSCALAR_ADD_7`). T2' (invariance under
+    item-number permutation) property test. Dissolves the
+    `#[allow(dead_code)]` on `superscalar::execute_superscalar`.
+  - **Commit 4 — `VmState` skeleton + scratchpad alloc + `Drop`**
+    (`c63555a5e`, with `186a8cfdf` fix-up for the
+    `PROGRAM_SIZE`/`PROGRAM_ITERATIONS` distinction caught at
+    R0-D9 pre-flight). [`src/vm.rs`](../rust/shekyl-pow-randomx/src/vm.rs)
+    `pub(crate) VmState` skeleton with the frozen §5.1.1 field set
+    (per §5.5 F5 v2-only simplification), `pub(crate)` type
+    definitions (`F128`, `Instruction`, `Program`), the
+    `PROGRAM_SIZE` (384) / `PROGRAM_ITERATIONS` (2048) /
+    `RANDOMX_SCRATCHPAD_L3` (2 MiB) spec constants, the
+    `alloc_zeroed_scratchpad` carve-out (the second and final
+    `#![deny(unsafe_code)]` exception this PR introduces per §1
+    covenant 7), the scratchpad-allocation `debug_assert!` per
+    §5.11.2, the empty `Drop` (review-surface hook per §5.11.4),
+    and the threat-model disposition rustdoc per §5.11.4
+    (public-input-only scope note).
+  - **Commit 5 — `init_scratchpad` + `init_program` + T3'-T5'
+    determinism** (`76cf9a5ae`). `VmState::init_scratchpad` via
+    `crate::aes::fill_aes_1r_x4`; `VmState::init_program` (stack-
+    allocate the 3 200-byte program buffer per spec §4.5's
+    `128 + 8 × PROGRAM_SIZE` budget, fill via
+    `crate::aes::fill_aes_4r_x4`, parse `entropy[0..128]` into the
+    register-init field set, parse `instructions[128..3200]` into
+    `self.program.instructions`); plus the IEEE-754 / dataset
+    helpers the parser consumes (`get_small_positive_float_bits`,
+    `get_float_mask`, `CACHE_LINE_ALIGN_MASK`,
+    `DATASET_EXTRA_ITEMS`, `CACHE_LINE_SIZE`). T3' / T4' / T5'
+    fixture-free determinism property tests inline per §5.11.1
+    + §14 Round 0 R0-D6 (test placement inside `src/*.rs#mod tests`).
+  - **Commit 6 — `compute_hash` + `execute_program` + T6'-T8'
+    determinism** (`4b182292b`). `pub fn compute_hash(&Cache,
+    &[u8; 32], &[u8]) -> [u8; 32]` (the crate's single hash-
+    producing entry point) + `VmState::execute_program` (the spec
+    §4.6 / `vm_interpreted.cpp::execute()` 2048-iteration loop —
+    the single per-iteration body that the stub-NOP
+    `dispatch_instruction` dispatches into per spec §4.6.5) + the
+    private `dispatch_instruction` NOP-body stub (the §5.1
+    function-body replacement contract Phase 2d fills in per
+    §5.1.1 frozen surfaces 1-3); plus the supporting helpers
+    (`SCRATCHPAD_L3_MASK_64`, `DYNAMIC_MANTISSA_MASK`,
+    `RANDOMX_PROGRAM_COUNT`, `cvt_packed_int_to_f128`,
+    `mask_register_exponent_mantissa`). T6' / T7' / T8' fixture-
+    free determinism property tests inline per §5.11.1.
+  - **Commit 7 — T1-T8 spec-vector parity vs. randomx-v2 fork**
+    (`4ba995469`). Reviewer-runnable C++ reference generator at
+    [`tests/vectors/reference/_generator/phase2c/`](../rust/shekyl-pow-randomx/tests/vectors/reference/_generator/phase2c/)
+    (Makefile + `gen.cpp` + README + `.gitignore`) compiled against
+    the vendored fork at pin `aaafe71`. Eight reference vectors
+    pre-computed and committed under
+    [`tests/vectors/reference/cache/`](../rust/shekyl-pow-randomx/tests/vectors/reference/cache/)
+    (T1: cache fingerprint Blake2b-256 over the entire derived
+    cache + the 8 superscalar programs; T2: 8-item dataset batch)
+    and
+    [`tests/vectors/reference/vm/`](../rust/shekyl-pow-randomx/tests/vectors/reference/vm/)
+    (T3: scratchpad init; T4: register init from entropy; T5:
+    program parse from entropy; T6: `spAddr0`/`spAddr1` snapshot
+    across 4 stub-NOP iterations; T7: post-AES-mix register
+    snapshot across 4 stub-NOP iterations; T8: end-to-end
+    `compute_hash` output under stub-NOP dispatch). Ten Rust spec-
+    vector tests (T1-T8) inline in `src/cache.rs` and `src/vm.rs`
+    pass byte-equality against the committed fixtures. Refactor:
+    `VmState::execute_program` split into `execute_program` (the
+    outer per-chain orchestration) + `execute_iteration` (the
+    per-iter body) to enable T6/T7 intermediate-state snapshotting.
+    **Two implementation-time substrate-divergence findings landed
+    in this commit** per
+    [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+    cross-language-port discipline:
+    - **R0-D10 — chain-boundary integer-register reset
+      (cross-language-port-implicit-state-loss discipline).** The
+      C reference's per-chain `NativeRegisterFile nreg;`
+      construction (`vm_interpreted.cpp:59`) implicitly zero-
+      initializes the integer-register array via the struct
+      definition at `bytecode_machine.hpp:40`. The Rust port fuses
+      `reg` + `nreg` into a single `VmState.r` per
+      `30-cryptography.mdc` secret-locality framing; the per-chain
+      reset that fell out of C's two-struct shape is re-asserted
+      explicitly as `self.r = [0; 8];` at the top of
+      `VmState::execute_program`. T8 (the end-to-end vector that
+      runs all 8 chains) surfaced the missing reset; T6/T7 (single
+      chain) don't. Disposition under §14 Round 0 R0-D10.
+    - **R0-D11 — `IMUL_RCP::imm32` storage divergence (cross-
+      language-port-storage-divergence discipline).** The C
+      reference's `initCache` (`dataset.cpp:131-138`) post-processes
+      the 8 `SuperscalarProgram`s after `generateSuperscalar` by
+      replacing each `IMUL_RCP` instruction's `imm32` in-place
+      with an index into a reciprocal-cache side table; the
+      reciprocal value is later resolved at execution time via
+      that index. The Rust port keeps the original `imm32` and
+      computes the reciprocal on-the-fly in
+      `execute_superscalar` (result-equivalent, byte-divergent
+      for serialization). T1 (the cache fingerprint vector that
+      hashes the serialized programs alongside the derived cache)
+      surfaced the divergence; T2 (which only consumes the
+      `derive_item` output, not the program serialization) didn't.
+      Resolution lives in the C++ generator (`emit_t1` re-runs
+      `Blake2Generator` + `generateSuperscalar` directly rather
+      than reading the C reference's `cache->programs` to hash
+      the pre-modification programs); the Rust port's storage
+      shape is the consensus-relevant one. Verified result-
+      equivalence via T2's dataset-item parity (which exercises
+      the same `IMUL_RCP` arm at execution time via Rust's
+      on-the-fly reciprocal calculation). Disposition under §14
+      Round 0 R0-D11.
+  - **Commit 8 — Phase 2c benches + per_hash_latency placeholder
+    + debug-vs-release CI gate + scope-bounding doc-comment +
+    BENCH_RESULTS + CHANGELOG** (this commit). Two criterion
+    benches at
+    [`benches/cache_derive.rs`](../rust/shekyl-pow-randomx/benches/cache_derive.rs)
+    + [`benches/compute_hash_alloc.rs`](../rust/shekyl-pow-randomx/benches/compute_hash_alloc.rs)
+    landing the §5.8 PR-gate baseline measurement infrastructure.
+    [`tests/perf/per_hash_latency.rs`](../rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs)
+    placeholder (`#[ignore]` + `unimplemented!()` cross-referencing
+    F8 + §13 forward-path 2g inheritance) at the canonical 2g
+    deliverable path per R3-minor-2 — structural code out-survives
+    prose discipline per
+    [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc);
+    2g's author finds the placeholder by grep against its own
+    deliverable name and replaces the body in-place. Workflow line
+    addition in [`.github/workflows/build.yml`](../.github/workflows/build.yml)
+    Gate 2: `cargo test --release -p shekyl-pow-randomx` per
+    §5.11.3 R4 (Rust integer-overflow semantics differ between
+    debug-panic and release-wrap; T1-T8 byte-equality assertions
+    catch any silent drift). Crate-level scope-bounding doc-comment
+    in [`src/lib.rs`](../rust/shekyl-pow-randomx/src/lib.rs) per
+    §5.11.4 R4 (public-input-only scope with substrate-anchored
+    reopening criterion). Baseline measurements recorded in
+    [`BENCH_RESULTS.md`](../rust/shekyl-pow-randomx/BENCH_RESULTS.md)
+    (i9-11950H, Debian 13, kernel 6.12.88): `Cache::derive` median
+    341.45 ms; `compute_hash` end-to-end (stub-NOP) median 296.00 ms.
+    **Both measurements exceed the §5.8 plan-author budgets**
+    (200 ms and 100 µs respectively); the threshold-vs-actual gap
+    is documented in `BENCH_RESULTS.md` §"Threshold reconciliation"
+    with the diagnosis (single-thread Argon2d on this hardware
+    class is fundamentally a ~300 ms operation; the
+    `compute_hash_alloc` budget framing was internally inconsistent
+    with what the bench measures) and named reopening criteria per
+    `21-reversion-clause-discipline.mdc`. Plan-doc errata R0-D12
+    (separate commit landing alongside this one) records the gap
+    in §14 Round 0; Phase 2c does not block on the reconciliation
+    per the §5.8 explicit "implementation-PR-time decision"
+    authority.
+
+  Phase 2c retains the Phase 2a/2b forward-compatibility posture:
+  no `#[no_mangle]`, no `extern "C" fn`, no `#[export_name]`, no
+  module-level runtime-mutable state. `#![deny(unsafe_code)]` at
+  the crate level with the two carve-outs above per §1 covenant 7
+  (`cache::CACHE_MEMORY_ALLOC` and `vm::alloc_zeroed_scratchpad`).
+  `cargo test -p shekyl-pow-randomx` succeeds without
+  `external/randomx-v2/` initialized and without a C++ toolchain —
+  the spec-vector reproducibility check (`make vectors` in the
+  generator directory) opts in to the fork submodule + C++ build.
+  The live differential harness remains Phase 2g's separate
+  artifact. Phase 2d builds on the Phase 2c `dispatch_instruction`
+  NOP stub via function-body replacement (no trait wiring, no impl
+  swap, no signature change to `compute_hash` per §5.1.1's frozen
+  surfaces 1-3); Phase 2f wraps `Cache::derive` in a `CacheStore`
+  LRU + `VmState` pool; Phase 2g lands the C-side differential
+  harness as a separate test-only artifact; Phase 3 then exposes
+  the verifier through `shekyl-ffi` and rewires the C++ daemon to
+  it; Phase 4 deletes the C++ verifier path.
+
 ### Documentation
 
 - **RandomX v2 Track A Phase 2c plan + 2d skeleton scaffold + parent-plan

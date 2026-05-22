@@ -65,17 +65,9 @@ const STATE_SIZE: usize = 64;
 
 /// `(seed, nonce) → PRNG byte stream` per spec §3.5.
 ///
-/// # REMOVE WHEN PHASE 2c/2e WIRES THIS:
-///
-/// `Blake2Generator` is consumed by `generate_superscalar` (already
-/// in this crate at `superscalar.rs`) but that consumer is itself
-/// `#[allow(dead_code)]` pending Phase 2e's `Cache::derive` and
-/// Phase 2c's program-generation seed. Until those land in
-/// production, the only live callers are unit + parity tests; the
-/// `dead_code` lint is silenced narrowly per
-/// `21-reversion-clause-discipline.mdc` against the dissolution
-/// table in `RANDOMX_V2_PHASE2B_PLAN.md` §5.1 (F1).
-#[allow(dead_code)]
+/// Consumed by [`generate_superscalar`](crate::superscalar::generate_superscalar)
+/// to produce the 8 SuperscalarHash programs in
+/// [`Cache::derive`](crate::Cache::derive) per spec §7.2.
 pub(crate) struct Blake2Generator {
     /// Rolling 64-byte buffer; refilled by `S := Blake2b512(S)` when
     /// exhausted.
@@ -98,12 +90,6 @@ impl Blake2Generator {
     ///
     /// [`get_byte`]: Blake2Generator::get_byte
     /// [`get_uint32`]: Blake2Generator::get_uint32
-    ///
-    /// # REMOVE WHEN PHASE 2c/2e WIRES THIS:
-    ///
-    /// Same Phase 2c/2e dissolution timeline as the
-    /// [`Blake2Generator`] type itself.
-    #[allow(dead_code)]
     pub(crate) fn new(seed: &[u8], nonce: u32) -> Self {
         let mut data = [0u8; STATE_SIZE];
         let copy_len = seed.len().min(MAX_SEED_SIZE);
@@ -116,15 +102,6 @@ impl Blake2Generator {
     }
 
     /// Return the next byte of the PRNG stream.
-    ///
-    /// # REMOVE WHEN PHASE 2c/2e WIRES THIS:
-    ///
-    /// Same Phase 2c/2e dissolution timeline as the
-    /// [`Blake2Generator`] type itself. `generate_superscalar` (per
-    /// spec §6.3) consumes `get_byte` for opcode / register-index
-    /// selection but is itself `#[allow(dead_code)]` until those
-    /// phases land.
-    #[allow(dead_code)]
     pub(crate) fn get_byte(&mut self) -> u8 {
         self.check_data(1);
         let b = self.data[self.data_index];
@@ -134,14 +111,6 @@ impl Blake2Generator {
 
     /// Return the next 4 bytes of the PRNG stream interpreted as a
     /// little-endian `u32`.
-    ///
-    /// # REMOVE WHEN PHASE 2c/2e WIRES THIS:
-    ///
-    /// Same Phase 2c/2e dissolution timeline as the
-    /// [`Blake2Generator`] type itself. `generate_superscalar` (per
-    /// spec §6.3) consumes `get_uint32` for instruction immediates
-    /// but is itself `#[allow(dead_code)]` until those phases land.
-    #[allow(dead_code)]
     pub(crate) fn get_uint32(&mut self) -> u32 {
         self.check_data(4);
         let bytes: [u8; 4] = self.data[self.data_index..self.data_index + 4]
