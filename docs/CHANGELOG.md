@@ -59,7 +59,8 @@
     consensus split via implementation divergence. New §5.11 records
     eight findings + dispositions. **In-scope 2c-implementation
     additions:** T1' (`Cache::derive` determinism) + T2'
-    (`derive_item` invariance) property tests (~120 LoC);
+    (`derive_item` invariance) property tests (~60 LoC per §5.11.1's
+    per-sub-test estimate; T1'a/b/c ~10 LoC each + T2'a ~30 LoC);
     `debug_assert!` discipline at the two unsafe
     `Box::new_zeroed_slice` sites (~10 LoC); debug-vs-release
     equivalence as PR gate (1 line in CI workflow); public-input-only

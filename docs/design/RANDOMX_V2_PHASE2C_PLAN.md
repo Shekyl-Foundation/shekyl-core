@@ -22,7 +22,7 @@ against the priority-1 surface (per `00-mission.mdc`'s
 security-and-quantum-resilience commitment). New §5.11 enumerates
 six attack-objective findings + the audit-against-source discipline
 note that produced the R3-D1 `mp` correction. In-scope 2c-implementation
-additions: T1'/T2' determinism property tests (~120 LoC across
+additions: T1'/T2' determinism property tests (~60 LoC across
 commits 2 and 3); `debug_assert!` discipline on the two unsafe
 allocation sites (~10 LoC across commits 2 and 4); debug-vs-release
 equivalence as a per-PR gate (1 CI-workflow line). Forward-actions
