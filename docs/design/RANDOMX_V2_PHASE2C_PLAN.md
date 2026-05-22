@@ -521,7 +521,22 @@ time):**
 grep -nE 'static void exe_' external/randomx-v2/src/bytecode_machine.hpp
 ```
 
-29 hits (one per opcode). Each handler's body reads/writes through
+28 hits — one per spec opcode **except** IMUL_RCP, which has no
+dedicated `exe_` handler. IMUL_RCP dispatches through `exe_IMUL_R`:
+`bytecode_machine.cpp:75` reads `case InstructionType::IMUL_RCP: //executed as IMUL_R`,
+and `compileInstruction` sets `ibc.type = IMUL_R` for IMUL_RCP with
+`ibc.isrc` pointing at the precomputed reciprocal in `reciprocalCache`
+instead of a real register. The 28 handlers cover all 29 dispatchable
+ibc.type values because IMUL_RCP collapses to IMUL_R at compile time.
+**R0-audit correction (R0-D1):** earlier drafts read "29 hits"; the
+actual grep count at audit-pin `aaafe71` is 28. Field-set derivation
+unaffected (IMUL_RCP's register reads/writes are a subset of IMUL_R's;
+the reciprocal lives behind `ibc.isrc` which resolves through the same
+`int_reg_t*` typedef regardless of whether the source is a real
+register or `reciprocalCache[i]`). See `RANDOMX_V2_PHASE2C_AUDIT.md`
+§5 F2 for the audit trail.
+
+Each handler's body reads/writes through
 `*ibc.{idst,isrc,fdst,fsrc}`, `ibc.{imm,shift,target,memMask}`,
 `scratchpad`, and `config` (FDIV_M only). The pointer indirections
 (`ibc.idst` etc.) resolve to fields on `RegisterFile`/
@@ -800,7 +815,7 @@ Decision #1):
 | `vm_interpreted.cpp:99` — `if (flags & V2)` F/E AES mix over FP registers | take v2 branch unconditionally | `VmState::run`'s F/E AES mix is the v2 form (per spec §4.5.4) with no conditional. |
 | `bytecode_machine.hpp:261-266` — `exe_CFROUND` body: `if (((flags & V2) == 0) \|\| ((isrc & 60) == 0)) rx_set_rounding_mode(isrc % 4);` | take v2 branch (CFROUND is throttled) | The v2-only condition gates CFROUND on `(isrc & 60) == 0` — bits 2–5 of the rotated source register must be clear, so CFROUND fires on ~1/64 of evaluations rather than every iteration. Phase 0 §6 names this as the structural protection against adversarial seedhashes that produce programs which re-set the FPU rounding mode every iteration (worst-case-timing exposure). The v2-only Rust port encodes the throttle unconditionally in 2d's `exe_CFROUND` equivalent — no `cfg(v1)` branch, no fall-through to the v1-form "fire every time" path. 2c's stub-NOP `dispatch_instruction` body executes no CFROUND, but the F5 forward-pointer ensures 2d's body replacement inherits the throttle exactly. **R0-audit correction (R0-D1):** earlier drafts mis-labeled this row as an "IADD_M/ISUB_M/IMUL_M imm32 cap"; the cited line is CFROUND, not a memory-instruction handler. Memory-form integer instructions in `bytecode_machine.cpp` (`compileInstruction` sites for IADD_M/ISUB_M/IMUL_M) full-sign-extend the 32-bit imm via `signExtend2sCompl(instr.getImm32())` with no v1/v2 differential cap. The "caps to first 6 bits" framing was a mis-summary of CFROUND's `isrc & 60` mask. See `RANDOMX_V2_PHASE2C_AUDIT.md` §5 F3 for the audit trail. |
 | `virtual_machine.hpp:63-66` — `setFlagV2()` / `clearFlagV2()` mutators | no flag mutation | `Vm` has no `set_flag_v2` method; v2 is hardcoded by construction. |
-| `program.hpp:46-48` — `Program::getSize(flags)` returning `_V1=256` or `_V2=2048` | `PROGRAM_SIZE = 2048` | Rust constant `pub(crate) const PROGRAM_SIZE: usize = 2048;` (no flags param). |
+| `program.hpp:56-58` — `Program::getSize(flags)` returning `_V1=256` or `_V2=2048` | `PROGRAM_SIZE = 2048` | Rust constant `pub(crate) const PROGRAM_SIZE: usize = 2048;` (no flags param). **R0-audit correction (R0-D2):** earlier drafts cited `program.hpp:46-48`; the correct location at audit-pin `aaafe71` is `program.hpp:56-58`. Lines 46-48 are `operator()(int pc)`, the instruction accessor. Semantic claim unchanged. |
 | `common.hpp:51-54, 98-102` — V1+V2 static_asserts | V2 only | Rust port retains only V2-form assertions in `Cache`/`Vm` const blocks. |
 | `configuration.h:56` — `#define RANDOMX_PROGRAM_SIZE_V1 256` | not defined | Rust has no `PROGRAM_SIZE_V1` constant. |
 | `randomx.h:52` — `RANDOMX_FLAG_V2 = 128` enum value | no flags enum | Rust has no flags enum; v2 is structural. |
