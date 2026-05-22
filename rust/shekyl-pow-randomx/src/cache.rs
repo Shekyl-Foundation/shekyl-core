@@ -24,10 +24,19 @@
 //!   test deferred to commit 7 alongside the F6 generator that
 //!   produces its fixture; `Cache::from_raw` dropped at impl-time
 //!   pre-flight per §14 Round 0 R0-D5.
-//! - **Commit 3:** `pub(crate) Cache::derive_item` + `pub(crate)
-//!   Cache::item_bytes` + T2' invariance property test (promotes
-//!   `superscalar::randomx_reciprocal` to `pub(crate)` per §4.1
-//!   row 6); T2 spec-vector test also deferred to commit 7.
+//! - **Commit 3 (this commit):** `pub(crate) Cache::derive_item` +
+//!   `pub(crate) Cache::item_bytes` + the dataset-item spec constants
+//!   ([`SUPERSCALAR_MUL_0`], [`SUPERSCALAR_ADD_1`]..[`SUPERSCALAR_ADD_7`]) +
+//!   T2' invariance property test. Dissolves the
+//!   `#[allow(dead_code)]` on `superscalar::execute_superscalar` (this
+//!   is the production caller per spec §7.3 step 5). The planned
+//!   promotion of `superscalar::randomx_reciprocal` to `pub(crate)`
+//!   was withdrawn at impl-time pre-flight per §14 Round 0 R0-D7 —
+//!   `cache.rs::derive_item` consumes the reciprocal value
+//!   transitively via `execute_superscalar`'s `IMUL_RCP` arm
+//!   (`superscalar.rs:1463`), not by direct call. T2 spec-vector
+//!   test deferred to commit 7 alongside the F6 generator that
+//!   produces its fixture.
 //!
 //! # Threat-model disposition (per §5.11.4)
 //!
@@ -45,16 +54,41 @@ use argon2::Block;
 
 use crate::argon2d::{fill_cache, RANDOMX_ARGON_BLOCKS};
 use crate::blake2_generator::Blake2Generator;
-use crate::superscalar::{generate_superscalar, SuperscalarProgram};
+use crate::superscalar::{execute_superscalar, generate_superscalar, SuperscalarProgram};
 
 /// Number of [`SuperscalarProgram`]s generated per [`Cache`].
 ///
 /// `RANDOMX_CACHE_ACCESSES = 8` per
-/// [`external/randomx-v2/src/configuration.h:101`](../../../external/randomx-v2/src/configuration.h)
-/// at pin `aaafe71`. Each call to [`Cache::derive_item`] (commit 3)
-/// chains exactly `RANDOMX_CACHE_ACCESSES` SuperscalarHash transforms
-/// over the indexed cache row per spec §7.3.
+/// [`external/randomx-v2/src/configuration.h:44`](../../../external/randomx-v2/src/configuration.h)
+/// at pin `aaafe71`. Each call to [`Cache::derive_item`] chains
+/// exactly `RANDOMX_CACHE_ACCESSES` SuperscalarHash transforms over
+/// the indexed cache row per spec §7.3.
 pub(crate) const RANDOMX_CACHE_ACCESSES: usize = 8;
+
+/// Spec constants for [`Cache::derive_item`]'s register seed per
+/// spec §7.3 step 2 and
+/// [`external/randomx-v2/src/dataset.cpp:150-157`](../../../external/randomx-v2/src/dataset.cpp)
+/// at pin `aaafe71`. The C reference defines these as `constexpr`
+/// `superscalarMul0` / `superscalarAdd1`..`superscalarAdd7` inside
+/// the anonymous namespace surrounding `initDatasetItem`; this
+/// module mirrors them as `const` with the `SUPERSCALAR_MUL_0` /
+/// `SUPERSCALAR_ADD_N` shape per Rust naming conventions. Used
+/// only by [`Cache::derive_item`].
+pub(crate) const SUPERSCALAR_MUL_0: u64 = 6_364_136_223_846_793_005;
+/// See [`SUPERSCALAR_MUL_0`].
+pub(crate) const SUPERSCALAR_ADD_1: u64 = 9_298_411_001_130_361_340;
+/// See [`SUPERSCALAR_MUL_0`].
+pub(crate) const SUPERSCALAR_ADD_2: u64 = 12_065_312_585_734_608_966;
+/// See [`SUPERSCALAR_MUL_0`].
+pub(crate) const SUPERSCALAR_ADD_3: u64 = 9_306_329_213_124_626_780;
+/// See [`SUPERSCALAR_MUL_0`].
+pub(crate) const SUPERSCALAR_ADD_4: u64 = 5_281_919_268_842_080_866;
+/// See [`SUPERSCALAR_MUL_0`].
+pub(crate) const SUPERSCALAR_ADD_5: u64 = 10_536_153_434_571_861_004;
+/// See [`SUPERSCALAR_MUL_0`].
+pub(crate) const SUPERSCALAR_ADD_6: u64 = 3_398_623_926_847_679_864;
+/// See [`SUPERSCALAR_MUL_0`].
+pub(crate) const SUPERSCALAR_ADD_7: u64 = 9_549_104_520_008_361_294;
 
 /// Allocate a zeroed `Box<[Block]>` of the requested length.
 ///
@@ -97,7 +131,6 @@ fn alloc_zeroed_cache_blocks(len: usize) -> Box<[Block]> {
 /// [`argon2::Block`]`::SIZE` (`= 1024`) rather than restating the
 /// `262_144 * 1024` arithmetic; if either upstream constant changes,
 /// the change propagates here automatically.
-#[allow(dead_code)] // CLIPPY: read in commit 2 (Cache::derive allocation site).
 pub(crate) const CACHE_SIZE: usize = RANDOMX_ARGON_BLOCKS * Block::SIZE;
 
 /// Per-item dataset-read width in bytes.
@@ -108,20 +141,30 @@ pub(crate) const CACHE_SIZE: usize = RANDOMX_ARGON_BLOCKS * Block::SIZE;
 /// reads exactly this many bytes from the cache (8 native-endian
 /// 64-bit registers serialized after 8 chained SuperscalarHash
 /// transforms per spec §7.3). Becomes the return-array length of
-/// `Cache::derive_item` and `Cache::item_bytes` in commit 3.
-#[allow(dead_code)] // CLIPPY: read in commit 3 (derive_item / item_bytes signatures).
+/// [`Cache::derive_item`] and [`Cache::item_bytes`].
 pub(crate) const DATASET_ITEM_SIZE: usize = 64;
 
-/// Number of distinct dataset items addressable from the cache.
+/// Number of cache-line-sized addressable items in the cache.
 ///
 /// `CacheSize / CacheLineSize = 268_435_456 / 64 = 4_194_304` per
 /// [`external/randomx-v2/src/common.hpp:85,
 /// :88`](../../../external/randomx-v2/src/common.hpp) at pin
-/// `aaafe71`. The execution loop addresses items in
-/// `0..DATASET_ITEM_COUNT`; commit 3's `derive_item` rejects
-/// out-of-range arguments via `debug_assert!` per §5.11.2.
-#[allow(dead_code)] // CLIPPY: read in commit 3 (derive_item bounds-check site).
+/// `aaafe71`. This is the modulus the C reference's `getMixBlock`
+/// applies to the u64 register value before computing the cache-line
+/// offset (`mask = CacheSize / CacheLineSize - 1` at
+/// `dataset.cpp:160`). The constant is a power of two by spec
+/// construction (asserted at compile time below), which lets
+/// [`Cache::item_bytes`] reduce the modulus to a bitwise `& MASK`.
+/// Distinct from the full RandomX dataset size — `Cache::derive_item`
+/// accepts any `u64` `item_number` and the cache-line addressing is
+/// performed internally on each iteration; no caller-side range
+/// check is required.
 pub(crate) const DATASET_ITEM_COUNT: usize = CACHE_SIZE / DATASET_ITEM_SIZE;
+
+const _: () = assert!(
+    DATASET_ITEM_COUNT.is_power_of_two(),
+    "DATASET_ITEM_COUNT must be a power of two so item_bytes can mask with (DATASET_ITEM_COUNT - 1)",
+);
 
 /// RandomX v2 Cache — 256 MiB of Argon2d-derived memory consumed by
 /// `compute_hash` via the per-iteration dataset-item read in the spec
@@ -140,13 +183,14 @@ pub(crate) const DATASET_ITEM_COUNT: usize = CACHE_SIZE / DATASET_ITEM_SIZE;
 ///
 /// [`Cache`] is the only `pub` item in this module per
 /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
-/// §5.9 (R2-D3 visibility correction): `derive_item` and `item_bytes`
-/// (commit 3) are `pub(crate)` — there is no FFI consumer for them at
-/// Phase 2c, and exposing them now would create reviewer-attention
-/// surface for properties no caller asserts. The test-only
-/// `Cache::from_raw` was dropped at impl-time pre-flight per §14
-/// Round 0 R0-D5; the T1' / T1 tests use the real [`Cache::derive`]
-/// path (no test-only shortcut).
+/// §5.9 (R2-D3 visibility correction): `Cache::derive_item` and
+/// `Cache::item_bytes` are `pub(crate)` — there is no FFI consumer
+/// for them at Phase 2c, and exposing them now would create
+/// reviewer-attention surface for properties no caller asserts. The
+/// test-only `Cache::from_raw` was dropped at impl-time pre-flight
+/// per §14 Round 0 R0-D5; the T1' / T2' / T1 / T2 tests use the real
+/// [`Cache::derive`] / `Cache::derive_item` paths (no test-only
+/// shortcut).
 ///
 /// # Threat-model disposition
 ///
@@ -160,12 +204,9 @@ pub struct Cache {
     /// `Send + Sync`-safe for the eventual Phase 2f `CacheStore`
     /// `Arc<Cache>` shape.
     ///
-    /// Field is private; consumers go through [`Cache::derive`] (this
-    /// commit) for construction. Read access from `derive_item`
-    /// (commit 3) flows through `Cache::item_bytes` without exposing
-    /// the buffer.
-    #[allow(dead_code)]
-    // CLIPPY: written by Cache::derive (commit 2); read by Cache::derive_item (commit 3).
+    /// Field is private; consumers go through [`Cache::derive`] for
+    /// construction. Read access from [`Cache::derive_item`] flows
+    /// through [`Cache::item_bytes`] without exposing the buffer.
     memory: Box<[Block]>,
     /// The [`RANDOMX_CACHE_ACCESSES`] (= 8) [`SuperscalarProgram`]s
     /// generated from `Blake2Generator::new(seedhash, 0)` per spec
@@ -177,8 +218,6 @@ pub struct Cache {
     /// keep the inner type ergonomic for iteration; the length
     /// invariant is checked at construction via `debug_assert_eq!`
     /// per §5.11.2.
-    #[allow(dead_code)]
-    // CLIPPY: written by Cache::derive (commit 2); read by Cache::derive_item (commit 3).
     programs: Box<[SuperscalarProgram]>,
 }
 
@@ -239,6 +278,174 @@ impl Cache {
         );
 
         Cache { memory, programs }
+    }
+
+    /// Read the 64-byte cache row addressed by `item_number` per
+    /// `external/randomx-v2/src/dataset.cpp:159-162 getMixBlock` at
+    /// pin `aaafe71`.
+    ///
+    /// `item_number` is masked to the low `log2(DATASET_ITEM_COUNT)`
+    /// bits before addressing (matching the C reference's
+    /// `mask = CacheSize / CacheLineSize - 1` modulus), so any `u64`
+    /// is accepted — callers are not required to range-check.
+    ///
+    /// # Layout
+    ///
+    /// The cache memory is `RANDOMX_ARGON_BLOCKS` (262_144) of
+    /// `argon2::Block` (1 KiB each), giving 256 MiB of contiguous
+    /// storage organized as `128 × u64` words per block. Each
+    /// 64-byte cache line spans 8 contiguous u64 words within a
+    /// single block — there are exactly 16 cache lines per block
+    /// (`1024 / 64 = 16`), and no line straddles a block boundary.
+    /// Returned bytes are the little-endian serialization of those
+    /// 8 words, matching the C reference's `load64_native` reads on
+    /// little-endian targets and remaining correct on big-endian
+    /// targets per the LE convention applied uniformly across the
+    /// crate (see `argon2d::tests::blocks_to_le_bytes` for the
+    /// established precedent at `argon2d.rs:237`).
+    pub(crate) fn item_bytes(&self, item_number: u64) -> [u8; DATASET_ITEM_SIZE] {
+        // Mask first as u64 (loses no information; the mask is
+        // `DATASET_ITEM_COUNT - 1 = 0x3F_FFFF`, 22 bits), then go
+        // u64 → u32 via try_from (always succeeds because a 22-bit
+        // value fits in u32) → usize (lossless per Rust's target
+        // requirement `usize >= u32`). This matches the C reference's
+        // `getMixBlock` cast chain (`registerValue & mask` where mask
+        // is u32 by spec; see `external/randomx-v2/src/dataset.cpp:160`).
+        let masked = item_number & (DATASET_ITEM_COUNT as u64 - 1);
+        let line_idx = usize::try_from(masked).expect(
+            "(item_number & (DATASET_ITEM_COUNT - 1)) fits in u32 by mask construction (22 bits)",
+        );
+        // Each 1-KiB Block holds 16 cache lines (1024 / 64 = 16) and
+        // 128 u64 words (1024 / 8 = 128); 1 cache line = 8 u64 words.
+        let block_idx = line_idx >> 4;
+        let word_offset = (line_idx & 0xF) << 3;
+        let words = &self.memory[block_idx].as_ref()[word_offset..word_offset + 8];
+
+        let mut out = [0u8; DATASET_ITEM_SIZE];
+        for (chunk, &word) in out.chunks_exact_mut(8).zip(words.iter()) {
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
+        out
+    }
+
+    /// Derive the 64-byte dataset item at index `item_number` per
+    /// spec §7.3 and
+    /// `external/randomx-v2/src/dataset.cpp:164-190 initDatasetItem`
+    /// at pin `aaafe71`.
+    ///
+    /// Computes the initial 8-register state from `item_number`
+    /// using the [`SUPERSCALAR_MUL_0`] / [`SUPERSCALAR_ADD_1`] ..
+    /// [`SUPERSCALAR_ADD_7`] spec constants, then iterates
+    /// [`RANDOMX_CACHE_ACCESSES`] (= 8) times:
+    ///
+    /// 1. Read the cache row addressed by the running register value
+    ///    (via [`Cache::item_bytes`]).
+    /// 2. Execute `self.programs[i]` over the register array (via
+    ///    [`execute_superscalar`]).
+    /// 3. XOR the 8 register words with the 8 little-endian-decoded
+    ///    cache-row words.
+    /// 4. Update the running register value to the program's
+    ///    address-register output.
+    ///
+    /// Returns the little-endian serialization of the final 8-register
+    /// state (matching the C reference's `memcpy(out, &rl, 64)` on
+    /// little-endian targets; the LE convention is uniform across the
+    /// crate per [`Cache::item_bytes`]'s rationale).
+    ///
+    /// # Reciprocal computation
+    ///
+    /// The C reference's per-program `executeSuperscalar(rl, prog,
+    /// &cache->reciprocalCache)` passes a precomputed
+    /// `reciprocalCache` to amortize `IMUL_RCP` reciprocals across
+    /// dataset items. The Rust port computes reciprocals on-the-fly
+    /// inside [`execute_superscalar`]'s `IMUL_RCP` arm (per the
+    /// `superscalar::execute_superscalar` doc-comment; see
+    /// `superscalar.rs:1418-1424`); no separate `reciprocalCache`
+    /// field exists on [`Cache`] per
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §5.4 ("the Rust port is simpler than C") and §14 Round 0 R0-D7
+    /// (the planned promotion of `randomx_reciprocal` to `pub(crate)`
+    /// was withdrawn because no direct caller exists in `cache.rs`).
+    ///
+    /// # Determinism
+    ///
+    /// Output is a pure function of `(self, item_number)`: every call
+    /// with the same arguments returns byte-identical output. The T2'
+    /// property test in this file's `#[cfg(test)] mod tests` block
+    /// asserts this across interleaved invocations on a shared
+    /// [`Cache`] per
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §5.11.1. The T2 spec-vector test (commit 7) further asserts
+    /// byte-equality against the C-reference generator output at
+    /// pin `aaafe71` for the 8-input set `{0, 1, 1023, 1024, 524_287,
+    /// 524_288, 2_097_150, 2_097_151}` per §5.6.
+    ///
+    /// # REMOVE WHEN PHASE 2c COMMIT 6 WIRES THIS:
+    ///
+    /// Until commit 6's `pub fn compute_hash` lands, `derive_item` has
+    /// no `pub`-reachable caller. The entire transitive chain reached
+    /// from this function (`item_bytes`, `execute_superscalar` and its
+    /// internal helpers `sign_extend_2s_compl` / `mulh` / `smulh` /
+    /// `smulh_u64` / `randomx_reciprocal`, `SuperscalarInstructionType::from_opcode`,
+    /// `Instruction::mod_shift`, the eight `SUPERSCALAR_*` spec
+    /// constants, the `memory` / `programs` field reads, and the
+    /// `CACHE_SIZE` / `DATASET_ITEM_SIZE` / `DATASET_ITEM_COUNT`
+    /// constant reads) is dead-code-lint dead in the same chain.
+    ///
+    /// A single `#[allow(dead_code)]` at this chain entry-point
+    /// suppresses the transitive lint cascade per the standard
+    /// `rustc` reachability analysis: `#[allow]` marks the item live;
+    /// its callees become reachable-from-live; the lint walks no
+    /// further. Commit 6's `compute_hash` becomes the production
+    /// `pub` caller, at which point this `#[allow]` (and only this
+    /// one) gets removed.
+    #[allow(dead_code)]
+    pub(crate) fn derive_item(&self, item_number: u64) -> [u8; DATASET_ITEM_SIZE] {
+        let mut register_value: u64 = item_number;
+        let r0 = item_number.wrapping_add(1).wrapping_mul(SUPERSCALAR_MUL_0);
+        let mut rl: [u64; 8] = [
+            r0,
+            r0 ^ SUPERSCALAR_ADD_1,
+            r0 ^ SUPERSCALAR_ADD_2,
+            r0 ^ SUPERSCALAR_ADD_3,
+            r0 ^ SUPERSCALAR_ADD_4,
+            r0 ^ SUPERSCALAR_ADD_5,
+            r0 ^ SUPERSCALAR_ADD_6,
+            r0 ^ SUPERSCALAR_ADD_7,
+        ];
+
+        debug_assert_eq!(
+            self.programs.len(),
+            RANDOMX_CACHE_ACCESSES,
+            "Cache::derive_item program-count invariant (per spec §7.2 + §5.11.2): \
+             `self.programs.len()` must equal `RANDOMX_CACHE_ACCESSES` ({RANDOMX_CACHE_ACCESSES}); \
+             got {actual}",
+            actual = self.programs.len(),
+        );
+
+        for program in &self.programs {
+            let mix = self.item_bytes(register_value);
+            execute_superscalar(program, &mut rl);
+            for (reg, chunk) in rl.iter_mut().zip(mix.chunks_exact(8)) {
+                let bytes: [u8; 8] = chunk
+                    .try_into()
+                    .expect("chunks_exact(8) yields [u8; 8] by construction");
+                *reg ^= u64::from_le_bytes(bytes);
+            }
+            let addr = usize::from(program.address_register());
+            debug_assert!(
+                addr < 8,
+                "SuperscalarProgram::address_register must be in 0..8 by generate_superscalar \
+                 construction (asserted at superscalar.rs:1644); got {addr}",
+            );
+            register_value = rl[addr];
+        }
+
+        let mut out = [0u8; DATASET_ITEM_SIZE];
+        for (chunk, &word) in out.chunks_exact_mut(8).zip(rl.iter()) {
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
+        out
     }
 }
 
@@ -381,5 +588,47 @@ mod tests {
             caches_equal(&reference_a, &candidate_a_2),
             "Cache::derive(SEEDHASH_A) drifted after derive(SEEDHASH_B) + derive(SEEDHASH_C)",
         );
+    }
+
+    /// T2' invariance property test for `Cache::derive_item`.
+    ///
+    /// Derives one `Cache` (shared across all sub-assertions in this
+    /// single `#[test]`); records the reference output for each of T2's
+    /// 8 item_numbers; then for 10 repetitions, calls
+    /// `cache.derive_item(neighbor)` to perturb any hypothetical hidden
+    /// state, calls `cache.derive_item(n)` again, and asserts the
+    /// output is byte-identical to the reference. Catches cross-call
+    /// state pollution inside `derive_item` (e.g., a `&mut [u64; 8]`
+    /// register buffer reused without reset, or any interior-mutability
+    /// state added in a future refactor).
+    ///
+    /// Per RANDOMX_V2_PHASE2C_PLAN.md §5.11.1 T2'a.
+    ///
+    /// Fixture-free per §14 Round 0 R0-D7 pre-flight pin 7: the
+    /// commit-3 version of T2' asserts byte-identity across runs only.
+    /// The companion T2 spec-vector test (commit 7) asserts byte-
+    /// equality against the C-reference generator output for the same
+    /// 8-input set.
+    #[test]
+    fn t2_prime_invariance_interleaved() {
+        const ITEM_NUMBERS: [u64; 8] = [0, 1, 1023, 1024, 524_287, 524_288, 2_097_150, 2_097_151];
+        const REPETITIONS: usize = 10;
+
+        let cache = Cache::derive(&SEEDHASH_A);
+        let reference: [[u8; DATASET_ITEM_SIZE]; ITEM_NUMBERS.len()] =
+            ITEM_NUMBERS.map(|n| cache.derive_item(n));
+
+        for rep in 0..REPETITIONS {
+            for (idx, &n) in ITEM_NUMBERS.iter().enumerate() {
+                let neighbor = ITEM_NUMBERS[(idx + rep + 1) % ITEM_NUMBERS.len()];
+                let _ = cache.derive_item(neighbor);
+                let actual = cache.derive_item(n);
+                assert_eq!(
+                    actual, reference[idx],
+                    "Cache::derive_item({n}) drifted at rep {rep} \
+                     after derive_item({neighbor})",
+                );
+            }
+        }
     }
 }

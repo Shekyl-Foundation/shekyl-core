@@ -1420,16 +1420,19 @@ pub(crate) fn generate_superscalar(gen: &mut Blake2Generator) -> SuperscalarProg
 /// `Vec<uint64_t>` cache, but the cached values are identical to the
 /// on-the-fly [`randomx_reciprocal`] computation and the
 /// pre-computation is a JIT-side optimization that has no role in
-/// the interpreter-only Phase 2 stack.
+/// the interpreter-only Phase 2 stack. Per
+/// `RANDOMX_V2_PHASE2C_PLAN.md` §14 Round 0 R0-D7, this also means
+/// `randomx_reciprocal` stays private — `cache.rs::derive_item`
+/// consumes the reciprocal value transitively via the `IMUL_RCP` arm
+/// below, not by direct call.
 ///
-/// # REMOVE WHEN PHASE 2c COMMIT 3 WIRES THIS:
+/// # Production caller
 ///
 /// Phase 2c commit 3 (`Cache::derive_item`) is the production caller
 /// per spec §7.3 step 5: `SuperscalarHash[i](r0..r7)` modifies the
 /// registers in place, called for each of the
 /// [`RANDOMX_CACHE_ACCESSES`](crate::cache::RANDOMX_CACHE_ACCESSES)
 /// (= 8) programs chained over the indexed cache row.
-#[allow(dead_code)]
 pub(crate) fn execute_superscalar(
     program: &SuperscalarProgram,
     registers: &mut [u64; REGISTERS_COUNT],
