@@ -126,12 +126,26 @@ Required for `dispatch_instruction` (audit source:
 | Field | Type | Used by opcode(s) |
 |-------|------|-------------------|
 | `r` | `[u64; 8]` | All integer R-form, integer M-form, ISTORE, CBRANCH |
-| `f` | `[F128; 4]` | FADD_R, FADD_M, FSUB_R, FSUB_M, FSCAL_R, FSWAP_R |
-| `e` | `[F128; 4]` | FMUL_R, FDIV_M, FSQRT_R |
-| `a` | `[F128; 4]` | Read-only operand (FADD_R, FSUB_R, FMUL_R `fsrc`) |
+| `f` | `[F128; 4]` (alias in 2c; see note) | FADD_R, FADD_M, FSUB_R, FSUB_M, FSCAL_R, FSWAP_R |
+| `e` | `[F128; 4]` (alias in 2c; see note) | FMUL_R, FDIV_M, FSQRT_R |
+| `a` | `[F128; 4]` (alias in 2c; see note) | Read-only operand (FADD_R, FSUB_R, FMUL_R `fsrc`) |
 | `fprc` | `u32` | CFROUND |
 | `scratchpad` | `Box<[u8; SCRATCHPAD_L3]>` | All M-opcodes + ISTORE |
 | `e_mask` | `[u64; 2]` | FDIV_M |
+
+**`F128` shape note.** Per Phase 2c §5.1.1 + §5.3 F3a, the
+`[F128; 4]` spelling above is shorthand for `[[f64; 2]; 4]`. Phase
+2c locks the _element shape_ (`[f64; 2]` — two `f64`s per FP
+register) via `type F128 = [f64; 2];` alias only — no newtype, no
+methods, no `struct` wrapper. **Phase 2d Round 1 §3.2 decision
+point** is whether the alias stays as-is or is promoted to a
+`struct F128([f64; 2])` newtype with method API for FP
+operations. If §3.2 keeps the alias, the field types in this table
+compile against `[[f64; 2]; 4]` as written; if §3.2 promotes to
+newtype, the field types compile against `[F128; 4]` where `F128`
+is a `struct` with method API. The _frozen_ property is the
+element shape (`[f64; 2]`); the type identity is 2d Round 1's
+call.
 
 Required for `VmState::run` iteration loop only
 (`dispatch_instruction` does NOT read these):

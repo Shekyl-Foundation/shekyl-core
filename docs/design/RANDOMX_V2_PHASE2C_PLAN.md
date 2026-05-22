@@ -537,12 +537,28 @@ outside `dispatch_instruction`.
 | Field | Type | C reference source | Used by opcode(s) |
 |-------|------|-------------------|-------------------|
 | `r` | `[u64; 8]` | `NativeRegisterFile.r[RegistersCount]` | All integer R-form opcodes (IADD_RS, ISUB_R, IMUL_R, IMULH_R, ISMULH_R, IMUL_RCP, INEG_R, IXOR_R, IROR_R, IROL_R, ISWAP_R) + integer M-opcodes (IADD_M, ISUB_M, IMUL_M, IMULH_M, ISMULH_M, IXOR_M) + ISTORE + CBRANCH |
-| `f` | `[F128; 4]` | `NativeRegisterFile.f[RegisterCountFlt]` | FADD_R, FADD_M, FSUB_R, FSUB_M, FSCAL_R, FSWAP_R |
-| `e` | `[F128; 4]` | `NativeRegisterFile.e[RegisterCountFlt]` | FMUL_R, FDIV_M, FSQRT_R |
-| `a` | `[F128; 4]` | `NativeRegisterFile.a[RegisterCountFlt]` | Read-only operand (FADD_R, FSUB_R, FMUL_R `fsrc`); never mutated after init |
+| `f` | `[F128; 4]` (Phase 2c: `type F128 = [f64; 2];` alias) | `NativeRegisterFile.f[RegisterCountFlt]` | FADD_R, FADD_M, FSUB_R, FSUB_M, FSCAL_R, FSWAP_R |
+| `e` | `[F128; 4]` (Phase 2c: `type F128 = [f64; 2];` alias) | `NativeRegisterFile.e[RegisterCountFlt]` | FMUL_R, FDIV_M, FSQRT_R |
+| `a` | `[F128; 4]` (Phase 2c: `type F128 = [f64; 2];` alias) | `NativeRegisterFile.a[RegisterCountFlt]` | Read-only operand (FADD_R, FSUB_R, FMUL_R `fsrc`); never mutated after init |
 | `fprc` | `u32` | not in `NativeRegisterFile`/`MemoryRegisters` — separate VM state (per spec §5.2.5) | CFROUND |
 | `scratchpad` | `Box<[u8; SCRATCHPAD_L3]>` | `uint8_t* scratchpad` (VmBase) | All M-opcodes (IADD_M, ISUB_M, IMUL_M, IMULH_M, ISMULH_M, IXOR_M, FADD_M, FSUB_M, FDIV_M) + ISTORE |
 | `e_mask` | `[u64; 2]` | `ProgramConfiguration.eMask[2]` | FDIV_M (via `maskRegisterExponentMantissa`, `bytecode_machine.hpp:272-278`) |
+
+**`F128` shorthand discipline.** The `[F128; 4]` spelling in the
+table above is editorial shorthand for `[[f64; 2]; 4]` — Phase 2c
+introduces `F128` only as a `type F128 = [f64; 2];` alias (per §5.3
+F3a). Phase 2c's `VmState` field types compile against the raw
+`[f64; 2]` representation; the alias is a single-line `type`
+declaration with no methods and no `struct` wrapper. The newtype
+extraction decision (`struct F128([f64; 2])` with method API,
+distinct type identity, potential `Copy`/`Default`/`Debug` derives)
+is deferred to Phase 2d's §3.2 design-decision point per F3a's
+explicit deferral. Implementers reading this table should **not**
+infer that 2c must define an `F128` newtype — the frozen field set
+locks the *element shape* (`[f64; 2]`), not the *type identity*.
+2d Round 1 makes the newtype-or-keep-alias call against real
+dispatch surfaces; until then, "F128" is a typographic convenience
+for "the two-f64 pair the FP registers carry."
 
 **Required for `VmState::run` iteration loop only (`dispatch_instruction` does NOT read these):**
 
