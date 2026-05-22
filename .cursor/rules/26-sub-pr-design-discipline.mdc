@@ -1,30 +1,57 @@
 ---
-description: Sub-PR design and impl-time pre-flight disciplines for multi-round per-trait PRs. Promoted from RandomX v2 Phase 2c; applies to consensus-critical design work generally.
-alwaysApply: true
+description: Opt-in process disciplines for multi-round per-trait PRs (design rounds + pre-flight). Cite explicitly when scoping consensus-critical, FFI, or reference-port sub-PR work — not for single-commit refactors or doc-only PRs. Promoted from RandomX v2 Phase 2c.
+alwaysApply: false
 ---
 
 # Sub-PR design discipline
 
 Multi-round per-trait PRs (RandomX v2 sub-PRs, LWMA-1 Phase 4,
 future consensus-critical extractions) accumulate process disciplines
-that are not trait-specific. Phase 2c's design rounds (1–5) and
-impl-time pre-flight (Round 0, R0-D5–R0-D12) produced fourteen
-named disciplines; they first landed in
+that are not trait-specific. Phase 2c's design rounds (1–5) and the
+**pre-flight pass** (disposition IDs **R0-D5–R0-D12** in the 2c audit
+trail — "Round 0" in plan-doc naming only, meaning impl-time pre-
+flight after design closure, not "the round before Round 1") produced
+fourteen named disciplines; they first landed in
 `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` and
 `docs/design/RANDOMX_V2_PHASE2C_AUDIT.md` and are promoted here so
 downstream authors inherit them without re-deriving from one plan-doc.
 
+**Opt-in (same shape as `07-consensus-atomic-cutovers.mdc`).** This
+rule is not injected into every session. **Cite
+`26-sub-pr-design-discipline.mdc` explicitly** when scoping or
+reviewing a multi-round per-trait PR — in the plan-doc scaffold, PR
+description, or reviewer checklist. Single-commit additions, doc-only
+changes, and refactors outside the scope test below do not invoke it.
+
+Each discipline below follows
+`21-reversion-clause-discipline.mdc`'s rejection / reopening criteria /
+re-evaluation shape, applied at sub-PR altitude. Inline sub-headers
+are intentional for skim-friendliness; the structural inheritance is
+explicit here rather than duplicated from rule 21.
+
 **Disposition choice.** Option A — this file — over
 `docs/conventions/SUB_PR_DESIGN_DISCIPLINE.md`. The disciplines fit
-the project's standard rules shape (rejection + reopening criteria +
-re-evaluation shape + anti-patterns + precedents) without needing a
-separate multi-page conventions doc. Worked examples cite the 2c
-plan-doc and audit trail; the rule is the authoritative surface.
+the project's standard rules shape without needing a separate multi-
+page conventions doc. Worked examples cite disposition IDs and the 2c
+plan-doc audit trail; this file is the authoritative process surface.
 
 Per `05-system-thinking.mdc`, these disciplines are the operational
 form of "specification first, code second" for sub-PR design: the
 spec is the frozen contract, the threat-model frame, and the substrate
 read — not prose intuition about what the reference "probably" does.
+
+**Numeric claims at pre-flight.** Every numeric claim in a plan-doc —
+constants, budgets, LoC envelopes, commit counts — is subject to
+verification at pre-flight; the plan-doc records the claim, pre-flight
+records whether the claim survived contact with substrate or
+measurement. **B6** (R0-D9) is the source-line variant: verify values
+against the cited substrate line at audit pin. **B9** (R0-D12) is the
+measurement variant: run prescribed benches/tests and reconcile
+thresholds against empirical baselines before a budget becomes a
+gate — the failure mode where `compute_hash_alloc` measured ~296 ms
+against a 100 µs label is only catchable by running the bench, and
+generalizes to any budget written from inherited-code intuition
+without measuring the Rust implementation on the actual workload.
 
 ## Scope
 
@@ -35,10 +62,14 @@ involved. Does not replace trait-specific plan-docs; those carry the
 substrate enumeration. This rule carries the *process* that plan-docs
 should follow.
 
-## Round 0 — impl-time pre-flight shape
+## Pre-flight pass (Round 0 disposition naming)
 
-Every multi-round per-trait PR inherits a **Round 0** pass between
-design closure and production code:
+Every multi-round per-trait PR inherits a **pre-flight pass** between
+design closure and production code. In plan-doc and audit trails this
+pass is labeled **Round 0** and findings **R0-D#** — stable IDs that
+must not be renamed. In this rule, **pre-flight pass** is the section
+title; **Round 0** / **R0-D#** refer to that same pass when citing
+2c precedents.
 
 1. **Substrate re-check.** Re-read the substrate each closed
    disposition cites (source files at audit pin, call graphs, cost
@@ -47,20 +78,20 @@ design closure and production code:
 2. **Artifact execution.** Run the tests, benches, and generators the
    plan-doc prescribes; reconcile measurements against budgets at
    PR-open. Catches findings substrate re-read alone cannot surface
-   (R0-D10–D12 precedents).
+   (R0-D10–R0-D12 precedents; B9 above).
 
-Round 0 is **not a redesign**. It is a discipline pass that catches
-design-time decisions falsified by impl-time substrate or by running
-produced artifacts. Record findings in the plan-doc status block and
-in a sibling audit trail (2c's shape:
+The pre-flight pass is **not a redesign**. It catches design-time
+decisions falsified by impl-time substrate or by running produced
+artifacts. Record findings in the plan-doc status block and in a
+sibling audit trail (2c's shape:
 `docs/design/<TRAIT>_AUDIT.md`).
 
-**Posture (extends Round 4 / Round 5).** Design closure means
-**design closure plus active defense against named attacker
-objectives**, not per-finding whack-a-mole. Round 0 complements the
-threat-model frame: substrate re-check defends against transcription
-and scope drift; artifact execution defends against estimates that
-never met measurement.
+**Posture (extends Round 4 / R5-D1).** Design closure means **design
+closure plus active defense against named attacker objectives**, not
+per-finding whack-a-mole. Pre-flight complements the threat-model
+frame: substrate re-check defends against transcription and scope
+drift; artifact execution defends against estimates that never met
+measurement.
 
 ---
 
@@ -84,10 +115,10 @@ fields added when the body lands).
 sub-PR's benchmarks or threat-model review shows the single-pass (or
 current) shape cannot meet a load-bearing budget **and** profiling
 attributes the shortfall to the frozen shape itself — not to missing
-implementation. Example: 2c locked single-pass `dispatch_instruction`;
-reopen to IBC two-pass only if 2d benchmarks show single-pass cannot
-hit the Phase 0 budget and profiling attributes shortfall to per-call
-decode cost (`RANDOMX_V2_PHASE2C_PLAN.md` §5.1.1).
+implementation. Example: 2c locked single-pass `dispatch_instruction`
+(R3-D1 function-body replacement contract); reopen to IBC two-pass
+only if 2d benchmarks show single-pass cannot hit the Phase 0 budget
+and profiling attributes shortfall to per-call decode cost.
 
 **Re-evaluation shape.** New design-round entry in the downstream
 sub-PR's plan-doc naming the frozen surface violated, substrate
@@ -102,17 +133,15 @@ contract. Implementation follows in a separate commit sequence per
   contract check.
 - **Mock trait for one implementation.** Trait with one impl is debt
   per `21-reversion-clause-discipline.mdc`; use function-body
-  replacement instead (`RANDOMX_V2_PHASE2C_PLAN.md` §5.1 F1 / R2-D1).
+  replacement instead (F1 / R2-D1).
 
 **Precedents.**
 
 - `dispatch_instruction(instr: &Instruction, state: &mut VmState)` —
-  NOP body in 2c (PR #66), body replacement in 2d
-  (`docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.1.1;
-  `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §1).
+  NOP body in 2c (PR #66), body replacement in 2d (R3-D1;
+  `RANDOMX_V2_PHASE2D_PLAN.md` contract inheritance).
 - F4 absorption: `compute_hash(&Cache, …)` production signature lands
-  in 2c; no `DatasetReader` trait + mock
-  (`RANDOMX_V2_PHASE2C_PLAN.md` §5.4).
+  in 2c; no `DatasetReader` trait + mock.
 
 ---
 
@@ -135,9 +164,8 @@ that exclusion per `07-consensus-atomic-cutovers.mdc` criterion 4.
 
 **Re-evaluation shape.** Reviewer spot-checks cited file at pinned
 commit; row fails if cited lines do not support the disposition.
-Round 5 formalized **show your work**: every row names
-`path/to/source:N–M` at the audit pin (`RANDOMX_V2_PHASE2C_PLAN.md`
-§5.11.8).
+R5-D1 formalized **show your work**: every row names
+`path/to/source:N–M` at the audit pin.
 
 **Anti-patterns.**
 
@@ -152,13 +180,13 @@ Round 5 formalized **show your work**: every row names
 **Precedents.**
 
 - R3-D1 `mp` correction (`vm_interpreted.cpp:89`; not a struct field)
-  — consensus-split source if shipped (`§5.11.8`).
+  — consensus-split source if shipped (R5-D1).
 - R1-D3 (2d Round 1): wire opcodes are frequency-encoded
   (`bytecode_machine.hpp:67–98`), not `InstructionType` enum values
-  (`RANDOMX_V2_PHASE2D_PLAN.md` §3.5 R1-D3).
-- Round 0 F3: CFROUND throttle vs non-existent imm32 cap — cited
-  `bytecode_machine.hpp:261–266`, not a prompted wrong row
-  (`RANDOMX_V2_PHASE2C_AUDIT.md` §Round 0).
+  (`RANDOMX_V2_PHASE2D_PLAN.md` R1-D3).
+- Pre-flight F3 (R0-D1): CFROUND throttle vs non-existent imm32 cap —
+  cited `bytecode_machine.hpp:261–266`, not a prompted wrong row
+  (`RANDOMX_V2_PHASE2C_AUDIT.md` pre-flight trail).
 
 ---
 
@@ -167,6 +195,12 @@ Round 5 formalized **show your work**: every row names
 **One-line shape.** Late-round pass against 3–6 attacker objectives;
 route each finding to in-scope absorption, discipline note, or named
 downstream forward-action.
+
+**Timing.** Threat-model addenda is typically a **late design-rounds**
+discipline (often Round 3–4): after feature completeness, before
+closure. At Round 1 the design is not yet stable enough to adversarially
+probe; at Round 5-only it is too late — closure means closure **plus**
+active defense, not freeze-then-whack-a-mole.
 
 **Rejection.** Closing design on feature completeness without a
 priority-1 adversarial pass against named objectives. Per-finding review
@@ -179,25 +213,24 @@ consensus, or untrusted-input surfaces — pure orchestration with no
 new attack surface. If substrate later adds such a surface, reopen via
 design-round 1 of that sub-PR with a fresh objective enumeration.
 
-**Re-evaluation shape.** New plan-doc section (2c's shape: §5.11)
-with objective table, disposition per finding `(a) in-scope`, `(b)
-discipline note`, `(c) forward-action`, and cross-links in §13 /
-target plan-doc scaffolds.
+**Re-evaluation shape.** New plan-doc section (2c's shape: Round 4
+threat-model addenda) with objective table, disposition per finding
+`(a) in-scope`, `(b) discipline note`, `(c) forward-action`, and
+cross-links in forward-path / target plan-doc scaffolds (A5).
 
 **Anti-patterns.**
 
-- **Per-finding whack-a-mole after "design closed."** Round 4
-  posture-shift: closure means closure **plus active defense**, not
-  freeze (`RANDOMX_V2_PHASE2C_PLAN.md` §14 Round 5 posture-shift
-  note).
+- **Per-finding whack-a-mole after "design closed."** Round 4 /
+  R5-D1 posture-shift: closure means closure **plus active defense**,
+  not freeze.
 - **Threat-model findings with no route.** A finding without
   absorb-or-carry disposition is institutional knowledge loss.
 
 **Precedents.**
 
-- Round 4 §5.11: six objectives → T1'–T8' in-scope; §5.11.5–7
-  forward-actions to 2f/2g/3a (`RANDOMX_V2_PHASE2C_PLAN.md` §5.11).
-- §5.11.8 ties Objective 6 (consensus split) to audit-against-actual-
+- Round 4: six objectives → T1'–T8' in-scope; forward-actions to
+  2f/2g/3a (R4 §5.11.5–7 disposition IDs in 2c plan-doc).
+- R5-D1 ties Objective 6 (consensus split) to audit-against-actual-
   code — threat-model and audit disciplines compose, not duplicate.
 
 ---
@@ -210,15 +243,18 @@ comes from named reasoning, not inertia.
 
 **Rejection.** Silent scope migration (work "was 2e, now 2c") without
 documented substrate motivation and reopening criteria. Applies
-`21-reversion-clause-discipline.mdc` at sub-PR altitude — do not
-restate that rule here; cite it for the three-part shape.
+`21-reversion-clause-discipline.mdc` at sub-PR altitude — cite rule
+21 for the three-part shape; do not restate it here.
 
 **Reopening criteria.** A deferred boundary (e.g., "trait stays for
 later sub-PR") reopens when a **named production caller** or
 **consensus event** requires the abstracted surface now — not when a
-contributor prefers convenience. F4 example: trait-based cache mock
-reopens if 2f/3a integration tests need a mock with multiple impls and
-design-round 1 documents the caller (`§5.4` forward-action).
+contributor prefers convenience or test ergonomics. F4 example: the
+absorption removed `DatasetReader` because there was no second
+production impl; the trait **reopens** only if a **real production
+caller** demands the abstraction (e.g., multiple cache backends in
+consensus path) — documented in design-round 1 with call-graph
+evidence, not because integration tests want a mock.
 
 **Re-evaluation shape.** Plan-doc section naming old boundary, new
 boundary, substrate evidence, parent-plan revision artifact if
@@ -236,9 +272,9 @@ shift.
 **Precedents.**
 
 - F4: `Cache::derive` absorbed from planned 2e into 2c; eliminates
-  `DatasetReader` trait + mock (`§5.4`; PR #66).
+  `DatasetReader` trait + mock (PR #66).
 - R2-D1: trait → free function within Round 1 locked dispositions —
-  structural tightening, not scope creep (`§14` Round 2).
+  structural tightening, not scope creep (Round 2).
 
 ---
 
@@ -258,7 +294,7 @@ when the downstream sub-PR is **not yet scaffolded** and the work is
 record the exception in the source plan-doc with why inline was cheaper
 than carry. Otherwise carry.
 
-**Re-evaluation shape.** Source: §13 forward-path bullet or §5.11.x
+**Re-evaluation shape.** Source: forward-path bullet or Round 4
 forward-action subsection. Target: downstream plan-doc §1 or §3
 "inherited forward-actions" with ID (e.g., R4 §5.11.6 → 3a FFI
 hardening). Close the carry when the target PR lands the work.
@@ -268,22 +304,23 @@ hardening). Close the carry when the target PR lands the work.
 - **"2d will figure it out."** Without scaffold carry, 2d Round 1
   re-derives FPU, F128, CFROUND pointers from scratch.
 - **Carry without target anchor.** Forward-action must name phase +
-  plan-doc section, not "later."
+  disposition ID, not "later."
 
 **Precedents.**
 
-- §13: 2d/2f/2g/3a inheritance lists with R4 §5.11.x IDs
-  (`RANDOMX_V2_PHASE2C_PLAN.md` §13).
-- §5.11.6 → 3a: null-check, length validation, `*const [u8; 32]`,
+- 2c forward-path: 2d/2f/2g/3a inheritance lists with R4 §5.11.x IDs.
+- R4 §5.11.6 → 3a: null-check, length validation, `*const [u8; 32]`,
   `ERR_NULL_PTR` taxonomy — each item copied to 3a scaffold when
   drafted.
 
 ---
 
-## Part B — Impl-time pre-flight disciplines (Round 0)
+## Part B — Pre-flight pass disciplines (R0-D# IDs)
 
 These emerge when design-closed dispositions meet the actual substrate
-or produced artifacts. Apply during Round 0 before production commits.
+or produced artifacts. Apply during the pre-flight pass before
+production commits. Disposition IDs **R0-D5–R0-D12** are stable
+audit-trail anchors (plan-doc "Round 0" naming).
 
 ### B1. Test-fidelity vs dominant-cost (R0-D5)
 
@@ -297,13 +334,13 @@ measurement shows the optimized path is load-bearing against the
 **dominant** cost (e.g., CI execution budget, not local dev build)
 **and** the test's fidelity claim remains true.
 
-**Re-evaluation shape.** Round 0 finding in plan-doc + audit trail;
-LoC/commit table updates; reversion clause in §5.9 narrative.
+**Re-evaluation shape.** Pre-flight finding in plan-doc + audit trail;
+LoC/commit table updates; reversion clause in F9 / R0-D5 narrative.
 
 **Anti-pattern.** "Saves 200ms per test" under 15-minute builds.
 
 **Precedent.** `Cache::from_raw` dropped — T2 shares one derive per
-`#[test]`; T1'a needs 100 real derives (`§14` R0-D5; PR #66).
+`#[test]`; T1'a needs 100 real derives (R0-D5; PR #66).
 
 ---
 
@@ -311,6 +348,9 @@ LoC/commit table updates; reversion clause in §5.9 narrative.
 
 **Rejection.** Widening `pub` surface, test-only accessors, or
 visibility relaxations so integration tests can read internal state.
+See also **B3** (call-graph-anchored visibility): B2 is the test-
+placement / API-widening failure mode; B3 is the `pub(crate)` promotion
+without a direct production caller.
 
 **Reopening criteria.** New `pub` test-only API reopens only with a
 **named production caller** documented in the same PR — not test
@@ -324,7 +364,7 @@ test placement paragraphs.
 `Cache` for byte equality.
 
 **Precedent.** T1–T8 moved from `tests/{cache,vm}/*.rs` to unit
-tests in `src/cache.rs` / `src/vm.rs` (`§14` R0-D6).
+tests in `src/cache.rs` / `src/vm.rs` (R0-D6).
 
 ---
 
@@ -332,22 +372,24 @@ tests in `src/cache.rs` / `src/vm.rs` (`§14` R0-D6).
 
 **Rejection.** `pub(crate)` (or `pub`) promotion for helpers with no
 direct caller — optionality without named caller per
-`21-reversion-clause-discipline.mdc`.
+`21-reversion-clause-discipline.mdc`. See also **B2**: widening
+visibility for tests is the common trigger; both disciplines reject
+surface expansion without a production call graph.
 
 **Reopening criteria.** Promotion when a **direct call site** lands in
 production code (not transitive consumption through another entry
 point); design-round 1 of the introducing PR documents call-graph
 evidence.
 
-**Re-evaluation shape.** §4.1 dependency table row rewrite with
+**Re-evaluation shape.** Dependency table row rewrite (R0-D7) with
 withdrawn promotion + reopening criterion.
 
 **Anti-pattern.** "2c promotes so cache can call it" when
 `derive_item` → `execute_superscalar` → `IMUL_RCP` arm consumes the
 reciprocal transitively (`superscalar.rs:1463`).
 
-**Precedent.** `randomx_reciprocal` stays private (`§14` R0-D7;
-`RANDOMX_V2_PHASE2C_AUDIT.md` §4 row 2).
+**Precedent.** `randomx_reciprocal` stays private (R0-D7;
+`RANDOMX_V2_PHASE2C_AUDIT.md` dependency-table row).
 
 ---
 
@@ -368,7 +410,7 @@ by side; frozen field sets unchanged if results-equivalent.
 C's `generateProgram` + `initialize` split.
 
 **Precedent.** C three-method init → Rust `init_scratchpad` +
-`init_program` fusion (`§14` R0-D8; `vm_interpreted.cpp:50–54` vs
+`init_program` fusion (R0-D8; `vm_interpreted.cpp:50–54` vs
 `vm.rs`).
 
 ---
@@ -385,25 +427,27 @@ their provenance — not for new vectors.
 
 **Re-evaluation shape.** Defer spec-vector tests to generator commit;
 add fixture-free property tests (T3'–T8') in earlier commits per
-§5.11.1 pattern.
+Round 4 T1'–T8' pattern.
 
-**Anti-pattern.** §9 titles "(T3–T5)" in commit 5 while F6 generator
-lands commit 7.
+**Anti-pattern.** Commit-table titles "(T3–T5)" in commit 5 while F6
+generator lands commit 7.
 
 **Precedent.** T3–T8 spec vectors deferred to commit 7; T3'–T8' in
-commits 5–6 (`§14` R0-D8).
+commits 5–6 (R0-D8).
 
 ---
 
 ### B6. Numeric-constant verification (R0-D9)
 
-**Rejection.** Numeric values in plan-doc tables transcribed without
-reading the cited substrate line — conflating adjacent constants
-(`PROGRAM_ITERATIONS` 2048 vs `PROGRAM_SIZE` 384).
+**Rejection.** Numeric **constants** in plan-doc tables transcribed
+without reading the cited substrate line — conflating adjacent
+definitions (`PROGRAM_ITERATIONS` 2048 vs `PROGRAM_SIZE` 384). Distinct
+from **B9**: B6 is source-line verification; B9 is measurement
+verification of budgets and runtime thresholds.
 
-**Reopening criteria.** N/A — always verify. Table rows that cite
-`configuration.h:N` must have the value column checked against line N
-at audit pin.
+**Reopening criteria.** N/A — always verify at pre-flight. Table rows
+that cite `configuration.h:N` must have the value column checked
+against line N at audit pin.
 
 **Re-evaluation shape.** Plan-doc errata + fix-up commit for code
 already landed with wrong constant; separate commits per
@@ -435,7 +479,7 @@ chain carryover inside `compute_hash`.
 
 **Precedent.** `self.r = [0; 8]` at `execute_program` entry — C fresh
 `NativeRegisterFile` per chain (`vm_interpreted.cpp`; T8 caught
-carryover T6/T7 missed) (`§14` R0-D10).
+carryover T6/T7 missed) (R0-D10).
 
 ---
 
@@ -459,7 +503,7 @@ proves item parity.
 
 **Precedent.** T1 generator bypasses `initCache` IMUL_RCP post-process;
 Rust stores original `imm32` (`dataset.cpp:131–138` vs
-`superscalar.rs:1465–1467`) (`§14` R0-D11).
+`superscalar.rs:1465–1467`) (R0-D11).
 
 ---
 
@@ -468,7 +512,9 @@ Rust stores original `imm32` (`dataset.cpp:131–138` vs
 **Rejection.** Absolute PR-gate thresholds set from estimates without
 measurement on implementation hardware; treating plan-doc budget as
 gate when bench function measures a wider surface than budget text
-describes.
+describes. Highest-leverage pre-flight check for plan-doc **budgets**:
+the disposition was wrong because no one ran the prescribed artifact
+before writing the threshold.
 
 **Reopening criteria.** Threshold revision when (a) optimization lands
 with measured delta against recorded baseline, (b) workload amortization
@@ -476,14 +522,14 @@ changes what the budget measures (e.g., LRU cache hit rate), or (c)
 downstream phase adds sub-bench that isolates the bounded portion.
 
 **Re-evaluation shape.** `BENCH_RESULTS.md` §Measurements + §Threshold
-reconciliation with named reopening criteria; forward to downstream
-§13 if not blocking current PR.
+reconciliation with named reopening criteria; forward via A5 if not
+blocking current PR.
 
 **Anti-pattern.** Blocking merge on 100 µs gate when bench calls full
 `compute_hash` (~296 ms median under stub-NOP).
 
 **Precedent.** `cache_derive` 341 ms vs 200 ms budget; `compute_hash_alloc`
-296 ms vs 100 µs label mismatch (`BENCH_RESULTS.md`; `§14` R0-D12).
+296 ms vs 100 µs label mismatch (`BENCH_RESULTS.md`; R0-D12).
 
 ---
 
@@ -491,9 +537,9 @@ reconciliation with named reopening criteria; forward to downstream
 
 These disciplines compound per `16-architectural-inheritance.mdc`
 §"Continuous discipline as inheritance prevention." Citing this
-file in Round 1+ design docs replaces re-reading
-`RANDOMX_V2_PHASE2C_PLAN.md` §14 for process shape; cite the 2c
-plan-doc only for RandomX-specific substrate.
+file in design-round 1+ plan-docs replaces re-reading
+`RANDOMX_V2_PHASE2C_PLAN.md` round history for **process** shape;
+cite the 2c plan-doc only for RandomX-specific substrate.
 
 When a reviewer sees a violation (uncited audit row, test-only `pub`
 widener, scope move without reversion clause), reject per
@@ -508,18 +554,23 @@ is unrelated.
 - **`15-deletion-and-debt.mdc`** — sibling PR scope is discipline
   promotion only; no "while we're here" implementation.
 - **`16-architectural-inheritance.mdc`** — audits-are-clean-so-compress;
-  continuous discipline; Round 5 posture-shift kinship.
-- **`21-reversion-clause-discipline.mdc`** — three-part shape for A4
-  and all reject-now dispositions above.
-- **`07-consensus-atomic-cutovers.mdc`** — reviewer-map when relaxing
+  continuous discipline; R5-D1 posture-shift kinship.
+- **`21-reversion-clause-discipline.mdc`** — three-part shape inherited
+  by every discipline above.
+- **`07-consensus-atomic-cutovers.mdc`** — opt-in exception class
+  (same injection model as this rule); reviewer-map when relaxing
   A2 for non-consensus refactors.
 
 ## Originating artifacts
 
-- `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` — §5.1.1, §5.4, §5.11,
-  §13, §14 (R0-D5–D12, R5-D1).
-- `docs/design/RANDOMX_V2_PHASE2C_AUDIT.md` — Round 0 trail.
-- `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` — R1-D3 audit-against-
-  actual-code example post-promotion.
+Promotion pattern (replicable — see also `07-consensus-atomic-cutovers.mdc`
+from LWMA-1 Phase 4): disciplines generalize from a specific work item;
+this section is the audit trail.
+
+- `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` — R3-D1, F4, Round 4
+  addenda, forward-path, R0-D5–R0-D12, R5-D1.
+- `docs/design/RANDOMX_V2_PHASE2C_AUDIT.md` — pre-flight trail.
+- `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` — R1-D3 (post-promotion
+  audit-against-actual-code example).
 - Landed via `chore/sub-pr-design-discipline` (closes
   `docs/FOLLOWUPS.md` V3.0 discipline-promotion item).
