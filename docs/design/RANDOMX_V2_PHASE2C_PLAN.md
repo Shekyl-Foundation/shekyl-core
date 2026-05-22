@@ -324,11 +324,27 @@ same class of finding as `mp`; the implementation PR's plan-doc
 audit row updates the citations to the implementation-PR pin and
 the file/line numbers above adjust accordingly.
 
-### 4.2 `criterion = "0.5"` (already DEV-only)
+### 4.2 `criterion = "0.5"` (added by 2c implementation PR as DEV-only)
 
-Already in workspace via Phase 2b's bench setup. Used for
-`benches/cache_derive.rs` and `benches/compute_hash_alloc.rs`.
-No version bump needed.
+Used for `benches/cache_derive.rs` and `benches/compute_hash_alloc.rs`.
+The implementation PR's commit 8 (per §9 commit granularity) adds the
+dev-dep entry to `rust/shekyl-pow-randomx/Cargo.toml`:
+
+```toml
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+```
+
+mirroring the pattern in `shekyl-scanner`, `shekyl-engine-state`, and
+`shekyl-engine-file` (all of which declare `criterion = { version = "0.5",
+features = ["html_reports"] }` directly in their crate `Cargo.toml`).
+The version `0.5` is established by those crates; no version bump and no
+workspace-dependencies-table addition needed. **R0-audit correction
+(R0-D3):** earlier drafts framed criterion as "already in workspace via
+Phase 2b's bench setup"; Phase 2b did not establish a bench setup in
+`shekyl-pow-randomx`, and `rust/shekyl-pow-randomx/Cargo.toml` has no
+`[dev-dependencies]` section at audit-pin `5df8bd2c2`. See
+`RANDOMX_V2_PHASE2C_AUDIT.md` §5 F1 for the audit trail.
 
 ### 4.3 `bytemuck` — REJECTED
 
