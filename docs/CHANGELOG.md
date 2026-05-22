@@ -4,16 +4,27 @@
 
 ### Added
 
-- **RandomX v2 Track A Phase 2d — Round 1 design doc** (branch
+- **RandomX v2 Track A Phase 2d — Rounds 1–6 design closure** (branch
   `chore/randomx-v2-phase2d-plan`, pending PR). Expands
   [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
-  from skeleton to Round 1 closure after PR #66 lands on `dev`
-  (`e9917097f`): FPU rounding-mode disposition (quarantined `unsafe`
-  intrinsics in `fpu_rounding.rs`), minimal `F128` newtype, frequency-
-  decoded `match` dispatch (substrate finding: wire opcodes are not enum
-  values), u128 edge-case audit, T9–T16 test plan, six-commit
-  implementation table, and gate checklist. Phase 2c plan doc updated
-  with PR #66 implementation closure.
+  through Round 6 after PR #66 on `dev` (`e9917097f`): Round 1
+  (FPU/`F128`/frequency dispatch/u128 audit); Round 2 (PC-driven loop,
+  `Program.cbranch_table`, `VmState.branch_pc`); Round 3 (threat-model
+  addenda); Round 4 (phase2d generator CLI for T9–T16); Round 5
+  (closure + §10 FPU grep patterns). Round 6 closes two Round-6-blocking
+  findings against the Round-5 state: **(R6-D1)** aarch64 FPU primitive
+  resolves the R1-D1/R5-D1 inconsistency by reopening R1-D1 option (b)
+  for aarch64 only — stable inline asm `mrs/msr fpcr` write — with
+  substrate justification (no stable `core::arch::aarch64` FPCR-write
+  intrinsic exists); **(R6-D2)** out-of-range opcode disposition changes
+  from R1-D3's `debug_assert!`/no-op pair to `panic!` in both profiles,
+  removing the debug-vs-release behavior divergence the §10 equivalence
+  gate would surface. Plan-doc edits ride along: R1-D4 IMUL_RCP
+  unreachability citation (R6-D3), §8 commit-5 split into 5a (T9–T16
+  additions) + 5b (T8 expectation flip) keeping the consensus-affecting
+  flip independently bisectable (R6-D4), `exec_pc` invariant-
+  documentation note + sentinel reset for implementation-PR rustdoc
+  (R6-D5). Implementation authorized on `feat/randomx-v2-phase2d`.
 
 - **RandomX v2 Track A Phase 2c — Cache derivation + VM substrate +
   T1-T8 spec-vector parity + bench baselines** (`feat/randomx-v2-phase2c-impl`,

@@ -1,6 +1,6 @@
 # RandomX v2 — Track A Phase 2d plan
 
-**Status.** Round 1 closed 2026-05-22 on branch
+**Status.** Rounds 1–6 closed 2026-05-22 on branch
 `chore/randomx-v2-phase2d-plan`. This document began as the skeleton
 scaffold landed 2026-05-21 (Phase 2c Round 3, R3-D3) and was expanded
 into a Round 1 design doc after PR #66 (Phase 2c implementation) merged
@@ -8,11 +8,18 @@ to `dev` at `e9917097f`. Round 1 closes the §3 decision points (FPU
 rounding-mode mechanism; `F128` newtype shape; per-opcode dispatch
 shape; `u128`/`__int128_t` edge-case audit), re-verifies the §1.3
 `VmState` field-set audit against pin `aaafe71`, and lands the test
-plan / commit table / gate checklist that gate the
-`feat/randomx-v2-phase2d` implementation branch. Rounds 2–5 (target
-4–6 total per `20-rust-vs-cpp-policy.mdc`) remain for threat-model
-addenda, generator CLI extensions, and closure-only refinements before
-implementation cuts.
+plan / commit table / gate checklist. Rounds 2–5 close the CBRANCH
+substrate gap (R2-D1–R2-D5), threat-model addenda, generator CLI, and
+closure. Round 6 closes two findings against the Round 5 state that
+were Round-6-blocking before implementation cuts: the aarch64 FPU-
+primitive inconsistency between R1-D1 (hardware FPCR) and R5-D1 (libc
+`fesetround`), and the debug-vs-release divergence in R1-D3's out-of-
+range opcode disposition (`debug_assert!` vs no-op). Three plan-doc
+edits ride along: R1-D4 IMUL_RCP unreachability citation; R2-D5
+`exec_pc` invariant-documentation note for the implementation PR; §8
+commit-5 split into 5a (T9–T16 additions) + 5b (T8 expectation flip).
+See §3.7 and §11. Implementation cut on `feat/randomx-v2-phase2d` is
+authorized post this doc landing on `dev`.
 
 **Round 4 addenda (2026-05-21).** Phase 2c Round 4's threat-model
 review (`RANDOMX_V2_PHASE2C_PLAN.md` §5.11) accumulated three
@@ -570,14 +577,21 @@ semantics at the MXCSR/FPCR level rather than libc `fesetround` alone.
 | Target | Primitive | C substrate |
 |--------|-----------|-------------|
 | `x86_64` | `core::arch::x86_64::_mm_setcsr(rx_mxcsr_default \| (mode << 13))` with `rx_mxcsr_default = 0x9FC0` | `intrin_portable.h:168-176` |
-| `aarch64` | Read/modify/write FPCR rounding field (RN/RD/RU/RZ mapping per IEEE 754 mode 0..3) via `core::arch::aarch64` helpers | Portable fallback in `instructions_portable.cpp:141-158` when intrinsics unavailable |
+| `aarch64` | Stable inline asm read/modify/write of `FPCR` rounding field (`mrs {0}, fpcr` + `msr fpcr, {0}`), with IEEE 754 mode 0..3 remapped to FPCR `RMode` encoding (RN/RU/RD/RZ at bits 22–23) — see R6-D1 substrate finding | C reference on aarch64 calls the same hardware path through SoftFloat/intrinsics; libc `fesetround` is the portable fallback in `instructions_portable.cpp:141-158`, **not** the path Shekyl selects |
 | other | `compile_error!` at module compile time | Shekyl verifier CI targets `x86_64` + `aarch64` only (same posture as Phase 2b AES generator README) |
 
 **Rejected options.**
 
-- **(b) Inline asm** — same `unsafe` carve-out cost as (a) with strictly
-  worse audit readability; no substrate advantage over the intrinsics the
-  C reference already uses on x86_64.
+- **(b) Inline asm** — rejected for `x86_64` per worse audit readability
+  with no substrate advantage over `_mm_setcsr`. **Reopened for
+  `aarch64` only at Round 6 (R6-D1)**: stable `core::arch::aarch64`
+  does not expose an FPCR-write intrinsic, so the "no substrate
+  advantage" rationale applies only to `x86_64`. Inline asm via the
+  stable `core::arch::asm!` macro is the only path that satisfies R1-D1's
+  "MXCSR/FPCR level rather than libc `fesetround` alone" design intent
+  on aarch64. Per `21-reversion-clause-discipline.mdc`'s reopening-
+  criteria principle, the reopening is substrate-anchored (different
+  intrinsic landscape on aarch64 vs x86_64), not preference-anchored.
 - **(c) Third-party crate** — no workspace dependency verified under
   `17-dependency-discipline.mdc` that exposes a narrower `unsafe`
   surface than (a); adds supply-chain fan-out without property gain.
@@ -698,7 +712,7 @@ portable helper (shift mask).
 | IMUL_R/M | `wrapping_mul` low 64 | U | U | — | M (low half only) |
 | IMULH_R/M | `mulh` | U | U | — | M (`superscalar.rs:1495-1497`) |
 | ISMULH_R/M | `smulh_u64` | U | U | — | M (`superscalar.rs:1506-1519`) |
-| IMUL_RCP | same as IMUL_R | U | U | — | M |
+| IMUL_RCP | same as IMUL_R | U (see footnote) | U | — | M |
 | INEG_R | `(!x).wrapping_add(1)` | U | U | — | — |
 | IXOR_R/M | `^` | U | U | — | — |
 | IROR_R | `rotr(x, src & 63)` | U | U | G | — |
@@ -713,6 +727,21 @@ adversarial corpus remains a 2g forward-action (§2 F7 + §5.11.5); 2d
 ships the design-time audit above plus T9+ vectors that exercise IMULH
 and shift-boundary inputs.
 
+**IMUL_RCP unreachability footnote (R1-D4 / Round 6 cite).** The
+"U" cell for IMUL_RCP div-by-zero is established by the C reference's
+compile-time gate: `bytecode_machine.cpp:246-258` rewrites the
+instruction type to NOP when `isZeroOrPowerOf2(divisor)` is true,
+where `divisor = imm32`. The reciprocal-table lookup at runtime is
+therefore never reached with a zero or power-of-2 divisor — both are
+filtered out at program-compile time. RandomX v2 spec §5.2.10
+(IMUL_RCP) names the same precondition normatively
+(`imm32 != 0 && !isPowerOf2(imm32)`). The Rust port's Phase 2c
+`compile_instruction` already mirrors this gate
+(`superscalar.rs` `randomx_reciprocal` callers); 2d's dispatch
+inherits the same precondition without re-checking it. If a future
+refactor moves the gate, the IMUL_RCP "U" disposition reverts to
+**G** with a runtime check matching the spec wording.
+
 #### R1-D5 — §1.3 `VmState` audit re-verification
 
 Re-run 2026-05-22: all 28 executable handlers in
@@ -721,6 +750,367 @@ surface 3. No amendment required. `mp` remains absent (v2-only alias
 collapsed to `ma` per 2c). `dataset_offset` is read by the iteration
 loop in `execute_iteration`, not by `dispatch_instruction` — unchanged
 from 2c audit.
+
+### 3.6 Rounds 2–5 dispositions (2026-05-22)
+
+#### R2-D1 — PC-driven iteration loop (substrate gap closure)
+
+**Substrate.** The C reference executes parsed instructions via a
+PC-driven loop with backward branches (`bytecode_machine.hpp:126-130`,
+`exe_CBRANCH` at `:254-258`). Phase 2c's linear `for instr_idx in
+0..PROGRAM_SIZE` scan cannot reproduce CBRANCH control flow.
+
+**Disposition.** Replace the §4.6.4 linear scan in
+`VmState::execute_iteration` with a PC-driven loop mirroring C's
+`executeBytecode` post-increment semantics:
+
+```text
+pc = 0
+while pc < PROGRAM_SIZE:
+    dispatch_instruction(&program.instructions[pc], self)
+    if branch_pc is Some(t):
+        pc = t + 1          // C sets pc = target, then for-loop ++pc
+        clear branch_pc
+    else:
+        pc += 1
+```
+
+The frozen `dispatch_instruction` signature is unchanged; PC mutation
+is iteration-loop responsibility per 2c §5.1.1 (loop fields are not
+part of the frozen dispatch surface).
+
+**Rejected:** keeping the linear scan (byte-equality failure on any
+program containing a taken CBRANCH); reopening the IBC 2-pass signature
+(no benchmark evidence per §1 reopening criterion).
+
+#### R2-D2 — CBRANCH static metadata on `Program` (not `VmState`)
+
+**Substrate.** CBRANCH branch targets come from the compile-time
+`registerUsage[creg]` table (`bytecode_machine.cpp:435-450`), updated
+during `compileInstruction` as a side effect of parsing the static
+384-instruction program. The table depends only on `(instructions,
+index)` — not on runtime register values.
+
+**Disposition.** Extend [`Program`] with a parallel
+`cbranch_table: [CBranchMeta; PROGRAM_SIZE]` populated once at the end
+of `VmState::init_program` by simulating C's `registerUsage` updates
+across all 384 slots (same rules as `compileInstruction` dst-write
+sites + CBRANCH's "mark all registers used at i"). Each `CBranchMeta`
+holds `{ creg, target, imm, mem_mask }` for slots whose frequency-decode
+type is `CBRANCH`; non-CBRANCH slots remain `CBranchMeta::INACTIVE`.
+
+At dispatch time the CBRANCH arm reads
+`program.cbranch_table[state.exec_pc]` — see **R2-D5** for how `exec_pc`
+is supplied without changing the frozen `dispatch_instruction` signature.
+
+**Rejected:** storing `register_usage: [i32; 8]` on `VmState` (explicitly
+forbidden in 2c §5.1.1); per-iteration registerUsage pre-pass (redundant
+once static metadata exists).
+
+#### R2-D5 — `VmState.exec_pc` iteration index (pairs with R2-D2)
+
+**Substrate.** `cbranch_table` is indexed by instruction position `i`,
+but `dispatch_instruction` cannot gain a `pc` parameter (frozen surface
+1). The CBRANCH arm must know which table slot to read.
+
+**Disposition.** Add `exec_pc: u16` to `VmState` as iteration-loop
+scratch (same class as R2-D3's `branch_pc`):
+
+- Set by `execute_iteration` immediately before each
+  `dispatch_instruction` call.
+- Read **only** by the CBRANCH arm (to index `cbranch_table`) and by
+  test introspection if needed.
+- Reset is implicit (overwritten each dispatch step).
+
+Together, R2-D3 + R2-D5 are two iteration-coordination fields replacing
+C's `int& pc` split across "current index" (`exec_pc`) and "branch
+target pending" (`branch_pc`). Neither field is read by non-CBRANCH
+opcode handlers.
+
+#### R2-D3 — `VmState.branch_pc` iteration-coordination field (R1-D5 amendment)
+
+**Substrate.** C passes `int& pc` into `exe_CBRANCH`; the frozen Rust
+signature cannot add parameters or return values.
+
+**Disposition.** Add `branch_pc: Option<u16>` to `VmState`:
+
+- Reset to `None` at the start of each `execute_iteration`.
+- Written **only** by the CBRANCH arm inside `dispatch_instruction`
+  when the branch condition fires.
+- Read **only** by `execute_iteration`'s PC loop (then cleared).
+
+This field is iteration-coordination scratch — not read by any other
+opcode handler. Documented as a Round 2 amendment to §1.3 (one field;
+does not reopen `register_usage` / `mp` / cache-key prohibitions).
+
+**Reopening criterion.** Reopens to the IBC 2-pass design only if
+Phase 2d per-opcode benchmarks demonstrate the single-pass decode cost
+fails the ≤3.0× C-reference budget with evidence attributable to
+per-call decode (unchanged from §1 reopening criterion).
+
+#### R2-D4 — IMUL_RCP reciprocal access
+
+**Disposition.** Promote `superscalar::randomx_reciprocal` to
+`pub(crate)` for the `IMUL_RCP` → `IMUL_R` dispatch arm (same
+semantics as `bytecode_machine.cpp:245-258`). No new crate surface.
+
+#### R3-D1 — Threat-model addenda (Round 3)
+
+Carry-forward from 2c §5.11, scoped to 2d surfaces:
+
+| Objective | 2d disposition |
+|-----------|----------------|
+| FPU rounding-mode escape | T11–T14 matrix (§6.2) + CFROUND throttle T15; host mode set only inside `set_rounding_mode` |
+| Timing side-channels at dispatch | Explicit rejection: verifier-only path; no constant-time claim for PoW VM dispatch (`30-cryptography.mdc` explicit rejection) |
+| `unsafe` FPU surface expansion | §10 CI grep on `set_rounding_mode` body (Scaffold-R5) |
+| Integer widening divergence | R1-D4 audit + T9 IMULH/ISMULH smoke |
+| Malformed opcode bytes | Frequency decode out-of-range → `debug_assert!` (debug) / no-op (release), matching C `UNREACHABLE` posture |
+
+Property-test analogs T9'–T16' remain **deferred to 2g** unless a
+future substrate finding surfaces a gap (unchanged from §6.2).
+
+#### R4-D1 — Phase 2d generator CLI (`tests/vectors/reference/_generator/phase2d/`)
+
+Sibling directory to `phase2c/`, same Makefile/link posture (x86_64
+Linux, fork pin `aaafe71`, soft-Aes-only). Subcommands:
+
+| Flag | Output | Rust test |
+|------|--------|-----------|
+| `--t9-integer-smoke` | `t9_*.bin` + `.meta.txt` | `t9_*` in `vm.rs#mod tests` |
+| `--t10-fp-smoke --mode=rn` | `t10_*.bin` | `t10_*` |
+| `--fp-matrix --mode={rn,rd,ru,rz}` | `t11_*` … `t14_*` (9 opcodes × 4 modes) | `t11_*` … `t14_*` |
+| `--cfround-throttle` | `t15_*.bin` | `t15_*` |
+| `--hash-e2e` | `t16_*.bin` (replaces T8 NOP fixture) | `t8_*` updated + `t16_*` |
+
+Wire formats follow phase2c README conventions (little-endian,
+`.meta.txt` names pin + mode + opcode). Generator sets host rounding
+mode before FP captures to match Rust `set_rounding_mode` semantics.
+
+#### R5-D1 — Design closure (Round 5)
+
+- §5 readiness gate items 3–4 satisfied as of Round 5 close; Round 6
+  re-opens the readiness gate for two design-disposition findings
+  (§3.7 R6-D1, R6-D2) plus three plan-doc edits (R1-D4 cite, R2-D5
+  invariant note, §8 commit-5 split). Implementation cut remains
+  authorized only after Round 6 closes.
+- §1.3 amendment recorded: `branch_pc`, `exec_pc`, `Program.cbranch_table` only.
+- §10 FPU grep permitted patterns pinned (superseded by R6-D1 — see
+  §3.7 for the post-Round-6 grep targets; preserved here as the Round-5
+  closure record).
+
+---
+
+### 3.7 Round 6 dispositions
+
+Round 6 closes two findings against the Round-5 state that were
+Round-6-blocking (R6-D1, R6-D2) and absorbs three plan-doc edits that
+ride along with the implementation PR (R6-D3 R1-D4 cite already landed
+in §3.4; R6-D4 §8 commit-5 split already landed in §8; R6-D5 R2-D5
+invariant-documentation note for implementation-PR rustdoc). Dispositions
+are recorded here so the implementation PR inherits an unambiguous
+design state.
+
+#### R6-D1 — Aarch64 FPU primitive: hardware FPCR via stable inline asm
+
+**Finding.** R1-D1's design table specified the aarch64 primitive as
+"Read/modify/write FPCR rounding field … via `core::arch::aarch64`
+helpers" — an intrinsic-level hardware write matching the "MXCSR/FPCR
+level rather than libc `fesetround` alone" design intent. R5-D1's grep
+target, however, pinned `fesetround(` as the aarch64 permitted pattern.
+The two specifications are different primitives (intrinsic vs libc) and
+selecting `fesetround` silently routes the aarch64 verifier through
+glibc/musl/Bionic's libc implementations, whose semantics can vary
+across libc vendors. Byte-equality against the C reference's hardware-
+FPCR path may not hold on aarch64 under libc-mediated mode setting —
+exactly the consensus-split-via-divergence threat R1-D4 was structured
+to catch.
+
+**Substrate finding (audit-against-actual-substrate).** Stable Rust's
+`core::arch::aarch64` does not expose an FPCR-write intrinsic. The
+substrate options for aarch64 FPCR access in stable Rust are:
+
+- Stable inline asm via `core::arch::asm!` macro (`mrs {0}, fpcr` +
+  `msr fpcr, {0}` register read/modify/write).
+- Libc `fesetround` (the R5-D1 target).
+- Third-party crate exposing the hardware path.
+
+R1-D1's blanket rejection of inline asm (option b) was anchored in "no
+substrate advantage over the intrinsics the C reference already uses on
+x86_64." That rationale is correct for x86_64 — `_mm_setcsr` exists in
+`core::arch::x86_64`, intrinsic-level. On aarch64 there is no
+equivalent stable intrinsic, so the "no substrate advantage" rationale
+does not apply; rejecting (b) for aarch64 forces (libc) or (third-party
+crate), neither of which delivers the hardware-FPCR property R1-D1's
+design intent requires.
+
+**Disposition (Round 6).** Aarch64 uses stable inline asm to write
+FPCR, reopening R1-D1 option (b) for aarch64 only per
+`21-reversion-clause-discipline.mdc`'s reopening-criteria principle
+(substrate-anchored re-evaluation: the intrinsic landscape differs
+between x86_64 and aarch64; R1-D1's rejection rationale applied only to
+x86_64).
+
+| Target | Primitive | C substrate parity |
+|--------|-----------|--------------------|
+| `x86_64` | `core::arch::x86_64::_mm_setcsr(rx_mxcsr_default \| (mode << 13))` (unchanged from R1-D1) | `intrin_portable.h:168-176` `_mm_setcsr` |
+| `aarch64` | `asm!("mrs {0}, fpcr", out(reg) old); let new = (old & !FPCR_RM_MASK) \| remap(mode); asm!("msr fpcr, {0}", in(reg) new)` | C reference's hardware path; libc `fesetround` is the portable fallback path Shekyl explicitly does not select |
+| other | `compile_error!` (unchanged from R1-D1) | — |
+
+The IEEE 754 mode index 0..3 (the bit pattern stored in `VmState.fprc`
+and exposed by CFROUND) maps to FPCR `RMode` field (bits 22–23)
+differently from MXCSR — aarch64 FPCR's encoding is (00=RN, 01=RU,
+10=RD, 11=RZ) while spec/MXCSR is (00=RN, 01=RD, 10=RU, 11=RZ). The
+aarch64 implementation contains a small remap table; the implementation
+PR's grep allows the remap table's static contents but no other
+intrinsic calls or function calls in the `set_rounding_mode` function
+body.
+
+**§10 FPU grep targets (Round 6 supersedes Round 5).**
+
+- **x86_64:** exactly one `_mm_setcsr(` in `set_rounding_mode` body.
+- **aarch64:** exactly two `asm!(` invocations in body (the `mrs` read
+  and `msr` write), zero `fesetround(` calls, zero other function
+  calls (the remap-table lookup is a `static` array index, not a
+  function call).
+- **Forbidden (all targets):** any function call beyond the
+  arch-specific permitted set, pointer deref, allocator, second
+  rounding primitive, or `unsafe { … }` block that does anything other
+  than the rounding-mode write.
+
+**`unsafe_code` discipline.** The arch-cfg'd inline asm sits inside the
+single `#[deny(unsafe_code)]` carve-out promised by §7; no additional
+carve-outs are introduced relative to Round 1's accounting.
+
+**Reversion criteria (`21-reversion-clause-discipline.mdc`).** R6-D1
+reverts to libc `fesetround` on aarch64 if any of: (a) the asm-based
+primitive fails byte-equality against the C reference's hardware path
+under T11–T14's per-mode corpus on aarch64 CI hosts; (b) stable Rust
+exposes a `core::arch::aarch64` FPCR write intrinsic (substrate change
+making asm unnecessary). Criterion (b) is the documented re-evaluation
+shape; the disposition revisits at that point, not by author preference.
+
+#### R6-D2 — Out-of-range opcode disposition: `panic!` in both profiles
+
+**Finding.** R1-D3's "out-of-range opcode bytes hit the UNREACHABLE
+posture (`debug_assert!` in debug; no-op in release)" produces
+observable behavior divergence across profiles. The §10 debug ≡
+release equivalence gate (inherited from 2c, §10 line 998) runs the
+test corpus under both profiles and asserts identical output. A
+malformed (out-of-range) opcode byte in debug panics; in release it
+no-ops silently. Two failure modes follow:
+
+- A future generator change accidentally produces a malformed opcode
+  byte: debug CI panics, release silently passes — and release is the
+  shipped artifact. The CI failure is visible; the underlying
+  divergence in observable behavior is exactly the
+  consensus-split-via-divergence threat the equivalence gate catches.
+- An adversarial input (Phase 2g's adversarial corpus) crafts a
+  malformed opcode byte deliberately. Debug rejects; release silently
+  accepts. Two correctly-implementing verifiers disagree on validity.
+
+**Substrate finding.** R1-D3's frequency decode (the cumulative ceiling
+ladder per `bytecode_machine.hpp:67-98`) covers every u8 0..256
+exhaustively — `RANDOMX_FREQ_*` sums to 256 by spec construction. The
+"out-of-range" branch in `decode_instruction_type` is therefore
+unreachable in well-formed RandomX v2 programs. If the branch ever
+fires, the decode logic itself has drifted upstream of dispatch — not
+that an attacker crafted bad input.
+
+**Disposition (Round 6).** Replace R1-D3's `debug_assert!` / no-op pair
+with `panic!("RandomX v2 opcode decode produced out-of-range value {opcode}; decode ladder is inconsistent with bytecode_machine.hpp:67-98")`
+in both profiles. The panic is the "this should never happen"
+assertion that fails closed: if it ever fires, the decode logic has
+drifted and the verifier correctly halts rather than silently producing
+arbitrary output. The C reference's `UNREACHABLE` (`__builtin_unreachable()`)
+admits undefined behavior the optimizer may eliminate; `panic!` in both
+profiles is the safer consensus posture — observable, identical across
+debug and release, and matches the unreachability claim normatively
+rather than relying on profile-conditional checks.
+
+**Equivalence gate.** Under R6-D2, the §10 debug ≡ release equivalence
+gate no longer has a divergence-of-behavior-on-malformed-opcode escape
+hatch. T9–T16 cannot exercise the panic path (all use frequency-encoded
+well-formed programs); the panic is a defensive assertion against
+decode-logic drift, not a runtime case the corpus exercises.
+
+**Test coverage.** No T-vector exercises the panic (by R6-D2's
+construction). The implementation PR adds a `#[should_panic]` unit
+test that constructs a `decode_instruction_type` call on a synthetic
+out-of-range u8 with a deliberately broken decode-ladder mock, asserting
+the panic message text. This sits in the same posture as Phase 2c's
+allocation-failure tests: the test exists to prove the failure-closed
+posture is wired, not to exercise it in production paths.
+
+**Reversion criteria.** R6-D2 reverts to a profile-conditional posture
+only if a substrate change makes the decode ladder genuinely incomplete
+(e.g., a future spec amendment introducing reserved opcode bytes whose
+dispatch is undefined). No such substrate change is anticipated under
+RandomX v2 spec at pin `aaafe71`.
+
+#### R6-D3 — R1-D4 IMUL_RCP unreachability citation (light edit)
+
+Landed in §3.4 as the IMUL_RCP unreachability footnote (post-table).
+Cites RandomX v2 spec §5.2.10 and C reference `bytecode_machine.cpp:246-258`
+(`isZeroOrPowerOf2(divisor)` gate at compile time). Aligns the R1-D4
+"U" disposition with the rules-26 A2 discipline that audit-table
+cells cite pinned line ranges; the load-bearing step is reading source
+at those lines.
+
+#### R6-D4 — Commit table split: T9–T16 vs T8 expectation flip
+
+Landed in §8. Commit 5 splits into:
+
+- **5a:** add T9–T16 vectors and tests (all new tests; ~350 LoC + fixtures).
+- **5b:** flip T8 expectation from NOP-hash to real-hash byte-equality
+  (one existing test; expected output changes; ~20 LoC).
+
+The split keeps the consensus-affecting flip independently bisectable.
+Bisection against the original combined commit 5 produced "either a
+new test failed or T8 flipped incorrectly" without distinguishing. The
+split makes 5b independently reviewable as "this commit changes
+consensus-affecting test expectations because dispatch now produces
+real hashes" — the same shape as the `mp` correction discipline from
+Phase 2c Round 3 (audit-against-actual-code surfacing a consensus-
+affecting change as an atomic event).
+
+#### R6-D5 — `exec_pc` invariant-documentation note (implementation PR)
+
+R2-D5 added `exec_pc: u16` to `VmState` as iteration-loop scratch for
+CBRANCH-table indexing under the frozen `dispatch_instruction`
+signature. A future reader of `VmState` may not see why `exec_pc` is a
+field (which conceptually persists across dispatch calls) versus a
+parameter or a scratch local — and silent mis-reads of stale `exec_pc`
+outside the intended window are exactly the kind of subtle bug rust-
+type-system discipline is supposed to prevent.
+
+**Note for implementation PR (R6-D5).** Two refinements ride along
+with the implementation PR's `VmState` rustdoc:
+
+1. **Field-rustdoc invariant.** The `exec_pc` field's rustdoc records
+   the invariant verbatim: *"`exec_pc` is iteration-loop scratch; it is
+   set by `execute_iteration` immediately before each
+   `dispatch_instruction` call and is read only by the CBRANCH
+   dispatch arm. The field is not part of the VM's persistent state
+   between dispatch calls; it exists on `VmState` because the frozen
+   `dispatch_instruction` signature precludes passing it as a
+   parameter. Any read of `exec_pc` outside the CBRANCH dispatch arm
+   is a discipline violation; any write outside `execute_iteration`'s
+   pre-dispatch step is a discipline violation."*
+2. **Sentinel reset.** `execute_iteration` writes `exec_pc =
+   u16::MAX` at the end of each iteration (after the final dispatch
+   returns). A future code path that reads `exec_pc` outside the
+   intended window will trip the `cbranch_table[u16::MAX]` index-out-
+   of-bounds check (`Program.cbranch_table` is length-256; `u16::MAX`
+   is out of range), failing closed with a panic rather than silently
+   reading stale data. The sentinel-reset cost is one `u16` store per
+   iteration; the discipline payoff is index-out-of-bounds-rather-
+   than-silent-stale-read on every out-of-window read.
+
+Both refinements land in the implementation PR (per R6-D5's
+"plan-doc edits ride along" disposition); they do not require a Round
+7 amendment to the plan doc.
+- Implementation PR cites §8 commit table + §9 gate checklist.
+- `docs/CHANGELOG.md` updated when plan doc merges.
 
 ---
 
@@ -764,10 +1154,12 @@ PR #66 implementation merge at `e9917097f`). Implementation of Phase
 1. ~~PR #65 (Phase 2c plan-doc PR) merged.~~ **Done.**
 2. ~~PR for Phase 2c implementation merged.~~ **Done** (`e9917097f`).
 3. This `chore/randomx-v2-phase2d-plan` branch expanding the skeleton
-   into a Round 1 design doc — **in progress on this branch.**
-4. Round 1–5 design rounds closed (target 4–6 rounds per
-   `20-rust-vs-cpp-policy.mdc`). **Round 1 closed 2026-05-22;**
-   Rounds 2–5 remain before `feat/randomx-v2-phase2d` cuts.
+   into a Round 1 design doc — **Done** (Rounds 1–6 closed 2026-05-22).
+4. Rounds 1–6 design rounds closed (target 4–6 rounds per
+   `20-rust-vs-cpp-policy.mdc`; Round 6 added one Round-6-blocking
+   amendment plus three plan-doc edits — see §3.7). **Done 2026-05-22**
+   (§3.6 + §3.7). `feat/randomx-v2-phase2d` implementation cut
+   authorized.
 
 ---
 
@@ -827,16 +1219,21 @@ outs from 2c).
 | # | Subject (imperative, ≤72 chars) | ~LoC | Plan anchor |
 |---|----------------------------------|------|-------------|
 | 1 | `randomx: F128 newtype + integer rotate/load helpers` | ~180 | §3.5 R1-D2, R1-D3 |
-| 2 | `randomx: fpu_rounding module + CFROUND handler wiring` | ~120 | §3.5 R1-D1, §2 F5 |
-| 3 | `randomx: dispatch_instruction match arms (integer opcodes)` | ~350 | §3.5 R1-D3, R1-D4 |
+| 2 | `randomx: fpu_rounding module + CFROUND handler wiring` | ~120 | §3.5 R1-D1, §3.7 R6-D1, §2 F5 |
+| 3 | `randomx: dispatch_instruction match arms (integer opcodes)` | ~350 | §3.5 R1-D3, §3.7 R6-D2, R1-D4 |
 | 4 | `randomx: dispatch_instruction FP opcode arms` | ~280 | §3.5 R1-D2, §2 F2 |
-| 5 | `randomx: T9-T16 spec vectors + T8 real-hash update` | ~400 + fixtures | §6 |
-| 6 | `randomx: FPU rounding-mode CI grep + BENCH_RESULTS update` | ~80 | §10 |
+| 5a | `randomx: T9-T16 spec vectors (additions)` | ~350 + fixtures | §6, §3.7 R6-D4 |
+| 5b | `randomx: flip T8 expectation to real-hash byte-equality` | ~20 | §6.2, §3.7 R6-D4 |
+| 6 | `randomx: FPU rounding-mode CI grep + BENCH_RESULTS update` | ~80 | §3.7 R6-D1, §10 |
 
-≤6 commits; bisect-friendly ordering (integer dispatch before FP arms
-so commit 3 keeps `cargo test` green with stub FP arms if needed — prefer
+≤7 commits; bisect-friendly ordering (integer dispatch before FP arms so
+commit 3 keeps `cargo test` green with stub FP arms if needed — prefer
 single commit 4 landing all FP arms atomically to avoid half-real hash
-semantics).
+semantics). Per R6-D4, commit 5 splits into 5a (T9–T16 additions, all
+new tests green) and 5b (T8 NOP-hash → real-hash expectation flip, one
+existing test's expected output changes); the split keeps the
+consensus-affecting flip independently bisectable from the new-vector
+additions.
 
 ---
 
@@ -849,7 +1246,7 @@ semantics).
 | Test | `cargo test -p shekyl-pow-randomx` (includes T1–T16 unit tests) |
 | Debug ≡ release | Existing `.github/workflows/build.yml` Gate 2 (inherited from 2c) |
 | Doc | `cargo doc -p shekyl-pow-randomx --no-deps` |
-| FPU unsafe grep | Script scoped to `fn set_rounding_mode` per §3.5 R1-D1 |
+| FPU unsafe grep | Script scoped to `fn set_rounding_mode` per §3.7 R6-D1 (supersedes R5-D1's `fesetround` aarch64 target) |
 | Bench (informational) | `cargo bench -p shekyl-pow-randomx --bench compute_hash_alloc` — record in `BENCH_RESULTS.md`; not a PR hard gate per R0-D12 |
 
 ---
@@ -872,4 +1269,9 @@ semantics).
 | Scaffold | 2026-05-21 | Skeleton scaffold landed as deliverable of Phase 2c Round 3 (R3-D3). Records the 2c → 2d hand-off contract verbatim, the locked-by-2c `VmState` field set, the F1/F2/F3/F5/F7 forward-actions, the three Round 1 decision points (FPU rounding-mode mechanism; `F128` newtype shape; per-opcode dispatch shape), and the scope discipline. Round 1 design doc supersedes this file when it lands. |
 | Scaffold-R4 | 2026-05-21 | Round 4 addenda landed as a sibling commit of Phase 2c Round 4's threat-model addenda (per `RANDOMX_V2_PHASE2C_PLAN.md` §5.11). Three additions: (i) §2 F7 forward-action extended with per-rounding-mode coverage requirement (9 FP opcodes × 4 IEEE 754 modes ≥ 36 mode-coverage tests, byte-equality-asserted against C reference under matching mode); carry from 2c §5.11 Objective 1 "FPU rounding-mode escape." (ii) §3.1 FPU rounding-mode decision-point gains an "unsafe-block scope-check discipline" addendum: whichever option (a)–(d) 2d Round 1 selects, the resulting `unsafe` block is audited to do only the rounding-mode write (no state mutation, no pointer dereferences, no allocation, no call-site fan-out); carry from 2c §5.11 Objective 5 "`unsafe`-block discipline at the FPU intrinsic." (iii) New §3.4 "`u128` / `__int128_t` edge-case differential discipline" enumerates four edge-case classes (div by zero, signed-div overflow, shift-by-width, `u128 * u128` truncation) and requires 2d Round 1 to audit every `u128`/`i128`-using opcode handler against the C reference, pre-handling reachable edge cases; carry from 2c §5.11 Objective 6 "consensus split via implementation divergence." None of the three additions reopen the Round 3 contract; all are forward-actions absorbed at 2d Round 1 design time. |
 | Scaffold-R5 | 2026-05-21 | Round 5 addendum landed as a sibling commit of Phase 2c Round 5's closure refinements (per `RANDOMX_V2_PHASE2C_PLAN.md` §14 Round 5 entry). One addition: §3.1 "CI-time grep mechanical enforcement" subsection promotes the Scaffold-R4 prose-as-discipline (unsafe-block scope-check) to a mechanically-enforced gate. The grep is modeled on the **`shekyl-pow-randomx` never uses `#[no_mangle]`** invariant pattern from `RANDOMX_V2_PLAN.md` §7.7 — asserts the rounding-mode-setter function body contains exactly one of the option (a)/(b)/(c) primitives and nothing else (no other intrinsic calls, no pointer dereferences, no allocator calls, no function calls beyond the chosen primitive). 2d Round 1 fixes the primitive choice; the implementation-PR adds the grep with the option-specific permitted/forbidden pattern set. Catches the "future contributor adds a reasonable-seeming improvement that silently expands the unsafe surface" failure mode (e.g., stashing previous mode for restoration, checking a feature flag, mutating a sibling field) that prose-as-discipline depends on reviewer attention to catch. CI-fail-closed: a function body that drifts outside the discipline fails PR CI rather than passing audit. Named as a §10 hard gate in the 2d implementation PR. No prior Scaffold or Scaffold-R4 disposition reopened. |
-| Round 1 | 2026-05-22 | Post-PR-#66 design round on `chore/randomx-v2-phase2d-plan`. Closes §3 decision points: **(R1-D1)** FPU rounding via quarantined `unsafe` intrinsics in `fpu_rounding.rs` (option a); **(R1-D2)** minimal `F128` newtype (option b); **(R1-D3)** dense `match` on `decode_instruction_type(opcode)` (option a) — substrate finding: wire opcode bytes are frequency-encoded (`bytecode_machine.hpp:67-98`), not `InstructionType` enum values; dispatch replicates `compileInstruction` operand decode plus `exe_*` bodies; **(R1-D4)** u128/i128 edge-case audit table; **(R1-D5)** §1.3 VmState re-audit (no field amendments). Lands §6–§10. Rounds 2–5 remain before implementation cuts. |
+| Round 1 | 2026-05-22 | Post-PR-#66 design round on `chore/randomx-v2-phase2d-plan`. Closes §3 decision points: **(R1-D1)** FPU rounding via quarantined `unsafe` intrinsics in `fpu_rounding.rs` (option a); **(R1-D2)** minimal `F128` newtype (option b); **(R1-D3)** dense `match` on `decode_instruction_type(opcode)` (option a) — substrate finding: wire opcode bytes are frequency-encoded (`bytecode_machine.hpp:67-98`), not `InstructionType` enum values; dispatch replicates `compileInstruction` operand decode plus `exe_*` bodies; **(R1-D4)** u128/i128 edge-case audit table; **(R1-D5)** §1.3 VmState re-audit (no field amendments). Lands §6–§10. |
+| Round 2 | 2026-05-22 | CBRANCH / PC substrate gap closure: **(R2-D1)** PC-driven `execute_iteration` loop; **(R2-D2)** `Program.cbranch_table` static metadata from simulated `registerUsage`; **(R2-D3)** `VmState.branch_pc` iteration-coordination field; **(R2-D5)** `VmState.exec_pc` for CBRANCH table indexing; **(R2-D4)** `pub(crate) randomx_reciprocal` for IMUL_RCP. Frozen `dispatch_instruction` signature preserved. |
+| Round 3 | 2026-05-22 | Threat-model addenda **(R3-D1)**: FPU escape → T11–T15 + grep; timing side-channels explicitly rejected for verifier dispatch; integer widening → R1-D4 + T9; malformed opcodes → UNREACHABLE posture. T9'–T16' deferred to 2g. |
+| Round 4 | 2026-05-22 | Generator CLI spec **(R4-D1)**: `phase2d/` sibling to `phase2c/` with subcommands for T9–T16 + T8 real-hash fixture. |
+| Round 5 | 2026-05-22 | Closure **(R5-D1)**: §5 gate satisfied as of round close; §10 FPU grep patterns pinned (x86_64 `_mm_setcsr`, aarch64 `fesetround` matching C portable path). Note: R5-D1's aarch64 `fesetround` target was found inconsistent with R1-D1's "MXCSR/FPCR level rather than libc `fesetround` alone" design intent during Round 6 review; superseded by R6-D1. |
+| Round 6 | 2026-05-22 | Round-6-blocking findings closed against the Round-5 state: **(R6-D1)** aarch64 FPU primitive resolves the R1-D1/R5-D1 inconsistency by reopening R1-D1 option (b) for aarch64 only — stable inline asm `mrs/msr fpcr` write — with substrate justification (no stable `core::arch::aarch64` FPCR-write intrinsic exists; R1-D1's "no substrate advantage" rejection rationale applied to x86_64, not aarch64). §10 FPU grep targets updated. **(R6-D2)** Out-of-range opcode disposition changes from R1-D3's `debug_assert!`/no-op pair to `panic!` in both profiles, removing the debug-vs-release behavior divergence the §10 equivalence gate would surface and asserting unreachability normatively rather than via profile-conditional checks. Plan-doc edits ride along: **(R6-D3)** R1-D4 IMUL_RCP unreachability citation (spec §5.2.10 + C `bytecode_machine.cpp:246-258`); **(R6-D4)** §8 commit-5 split into 5a (T9–T16 additions) + 5b (T8 expectation flip) keeping the consensus-affecting flip independently bisectable; **(R6-D5)** `exec_pc` invariant-documentation note for implementation-PR rustdoc + sentinel-reset to `u16::MAX` for fail-closed out-of-window reads. Implementation cut authorized. **Posture cite (audit-against-actual-code recurrence).** R1-D3's frequency-decode finding (wire opcode bytes are frequency-encoded per `bytecode_machine.hpp:67-98`, not `InstructionType` enum values) is the **second instance** of the audit-against-actual-code discipline catching a real consensus-split bug pre-implementation. First instance: Phase 2c Round 3 `mp` correction (audit reading the actual C reference rather than working from prompted summaries). Two instances now confirm the pattern; the discipline applies forward to 2f/2g per `16-architectural-inheritance.mdc`'s discovery-cadence framing. |
