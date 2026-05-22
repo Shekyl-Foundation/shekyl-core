@@ -51,12 +51,24 @@ documentation. Posture-shift note: Round 4's threat-model framing
 converted "design closure" into "design closure plus active defense
 against named attacker objectives" — named so 2d/2f/2g/LWMA-1 Phase 4
 inherit the shape. Target ≤1 round met; implementation cut authorized
-post-PR-#65 merge.
+post-PR-#65 merge. **Round 0 impl-time pre-flight closed 2026-05-21:**
+audit pass against the merged plan-doc produced four corrections (F1
+clarity / F2 factual / F3 substantive / F4 factual) absorbed via
+prefix errata commits on the implementation branch before any
+production code lands; a fifth impl-time disposition (R0-D5) drops
+`Cache::from_raw` under a newly-articulated discipline (test-fidelity-
+vs-dominant-cost: test-only API surfaces justified by execution-speed
+optimization must demonstrate the optimization is load-bearing against
+the *dominant* wall-clock cost, typically build, not the dominated
+per-test cost; under 15-minute build : 200ms test, the optimization is
+structurally insufficient regardless of magnitude). See §14 Round 0
+entry for the discipline-promotion docket extension.
 
 **Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A
 — Phase 2" sub-PR 2c is the binding one-line scope ("Implement Cache
-(with public `derive(seedhash)` + pub(crate) `from_raw`/`derive_item`
-accessors) AND `compute_hash(&Cache, &[u8; 32], &[u8]) -> [u8; 32]`
+(with public `derive(seedhash)` + pub(crate) `derive_item`/`item_bytes`
+accessors; `from_raw` dropped at impl-time pre-flight per §14 Round 0
+R0-D5) AND `compute_hash(&Cache, &[u8; 32], &[u8]) -> [u8; 32]`
 public transform [...]"); this doc expands it into a reviewable
 change list, dependency-discipline dispositions, a test plan, and
 the nine findings (plus the ShekylU128 audit) that closed during
@@ -172,7 +184,7 @@ One new public type + one new public free function. `VmState` and
 
 | # | Surface | Visibility | Spec section | C reference | Downstream caller |
 |---|---------|-----------|--------------|-------------|--------------------|
-| 1 | `Cache` (with `pub fn derive(seedhash)`; `pub(crate)` `from_raw`, `derive_item`, `item_bytes`) | `pub struct` + mixed-visibility methods | §7, §7.3 | `dataset.cpp::initCache` + `initDatasetItem` | 2c `compute_hash` (via `pub(crate)` `derive_item`); eventual 2f `CacheStore` (via `pub` `derive`); eventual 3a FFI surface |
+| 1 | `Cache` (with `pub fn derive(seedhash)`; `pub(crate)` `derive_item`, `item_bytes`; `from_raw` dropped at impl-time pre-flight — §14 Round 0 R0-D5) | `pub struct` + mixed-visibility methods | §7, §7.3 | `dataset.cpp::initCache` + `initDatasetItem` | 2c `compute_hash` (via `pub(crate)` `derive_item`); eventual 2f `CacheStore` (via `pub` `derive`); eventual 3a FFI surface |
 | 2 | `compute_hash(cache: &Cache, seedhash: &[u8; 32], data: &[u8]) -> [u8; 32]` | `pub fn` | §4 (full per-hash flow) | `randomx::calculate_hash` orchestrating `virtual_machine.cpp::initialize` + `vm_interpreted.cpp::run` | eventual 2f `VmState`-pooling decision (internal to `compute_hash`); eventual 3a FFI surface (the FFI shim calls `compute_hash` directly) |
 | 3 | `VmState` (private struct; internal scratchpad + register file + helpers) | `pub(crate) struct` (visible to `cache.rs` for tests, **not** re-exported via `lib.rs`) | §4 (initialization + execution loop) | `virtual_machine.hpp::RandomXVm` | internal to `vm.rs` only |
 | 4 | `dispatch_instruction(instr: &Instruction, state: &mut VmState)` | private `fn` (not `pub(crate)`) | §5 (bytecode) | `bytecode_machine.cpp::execute` | internal to `vm.rs`'s execution loop only; Phase 2d replaces the body, no signature change |
@@ -235,7 +247,7 @@ rust/shekyl-pow-randomx/src/
 ├── aes.rs                # (2b, unchanged)
 ├── blake2_generator.rs   # (2b, unchanged)
 ├── superscalar.rs        # (2b, unchanged)
-├── cache.rs              # NEW: `pub struct Cache` + `pub fn Cache::derive` + `pub(crate)` `Cache::{from_raw, derive_item, item_bytes}`
+├── cache.rs              # NEW: `pub struct Cache` + `pub fn Cache::derive` + `pub(crate)` `Cache::{derive_item, item_bytes}` (from_raw dropped — §14 Round 0 R0-D5)
 └── vm.rs                 # NEW: `pub fn compute_hash` + `pub(crate) struct VmState` + private `fn dispatch_instruction` (NOP stub body, replaced in 2d)
 ```
 
@@ -1008,8 +1020,7 @@ following visibilities:
 
 | Method | Visibility | Purpose |
 |--------|-----------|---------|
-| `Cache::derive(seedhash: &[u8; 32]) -> Cache` | `pub fn` | Production constructor for FFI consumers (called via `compute_hash`'s callers; eventually wrapped by 2f's `CacheStore`). |
-| `Cache::from_raw(bytes: Vec<u8>) -> Cache` | **`pub(crate) fn`** | **Test-time construction only.** Spec-vector tests hand-roll `Cache` values from generator-produced byte arrays to bypass derivation overhead in `derive_item` tests. **Not** an FFI surface — FFI consumers call `compute_hash` which calls `Cache::derive` internally. |
+| `Cache::derive(seedhash: &[u8; 32]) -> Cache` | `pub fn` | Production constructor for FFI consumers (called via `compute_hash`'s callers; eventually wrapped by 2f's `CacheStore`). Also used by every test that needs a `Cache` — see R0-D5 below. |
 | `Cache::derive_item(item_number: u64) -> [u8; 64]` | `pub(crate) fn` | Internal helper consumed by `VmState::run` (the per-iteration dataset-item read). Not part of the public crate surface; if a future caller needs it, the visibility-promotion is a documented 2-line change. |
 | `Cache::item_bytes(item_number: u64) -> [u8; 64]` | `pub(crate) fn` | Helper accessor for the byte-level indexing into `Cache.blocks` (F4-detail-A). Internal to `cache.rs`. |
 
@@ -1018,12 +1029,69 @@ plan described `from_raw` as "the public byte-array constructor for
 FFI consumers." This phrasing was a holdover from F9's original
 framing before F4-absorbed dissolved the dataset-reader abstraction.
 The actual consumer of `from_raw` is the test corpus, not the FFI
-surface. The correction tightens the surface area: one fewer `pub`
+surface. The correction tightened the surface area: one fewer `pub`
 on the crate's public boundary; one fewer thing a reviewer has to
-audit as "is this safe for FFI consumers?" The visibility-promotion
-escape hatch (pub(crate) → pub) remains a documented future-action
-if a real FFI consumer demands it; until then, the default is the
-tighter visibility.
+audit as "is this safe for FFI consumers?" Historical record preserved
+here for context; **superseded by R0-D5 below**, which drops
+`from_raw` entirely.
+
+**Impl-time pre-flight correction (R0-D5; supersedes R2-D3).**
+Commit-2 pre-flight surfaced that `from_raw`'s sole stated
+justification ("bypass derivation overhead in `derive_item` tests"
+per the original R2-D3 framing) rested on a since-falsified
+assumption: that T2's eight item-number sub-tests would each pay
+the ~200ms Argon2d cost independently. They do not — a single
+`#[test]` with shared setup pays Argon2d once and amortizes over
+all sub-tests (200ms + 8 × µs ≈ 200ms wall). The "bypass" saves
+~200ms once per test invocation against the dominant cost of build
+wall-clock (~15 minutes for the test harness in this codebase),
+which is rounding error: 200ms / 900,000ms ≈ 0.022%.
+
+T1' (the determinism property test for `Cache::derive`) seals the
+case from a different angle: T1' MUST use real `Cache::derive` to
+be meaningful — a property test that bypasses the production code
+path is testing the bypass, not the production code, and is
+worthless as a defense against non-determinism in `derive`. Since
+T1' must pay 100 × 200ms = ~20s regardless, T2's ~200ms is
+rounding error against the dominant test-execution cost too, not
+just against build.
+
+`from_raw` was load-bearing on a cost-comparison that doesn't hold
+at either altitude (against build wall-clock; against test wall-
+clock dominated by T1'). It has no faithful consumer. Drop.
+
+**Discipline articulation (extends Round 5 R5-D4 discipline-
+promotion docket as the sixth 2c-emergent discipline).** **Test-
+fidelity vs. dominant-cost discipline:** test-only API surfaces and
+test-only code paths justified by execution-speed optimization must
+demonstrate the optimization is load-bearing against the dominant
+cost (typically build wall-clock), not the dominated cost (per-test
+execution). When build dominates execution by 3+ orders of
+magnitude, execution-speed arguments are structurally insufficient
+regardless of magnitude. The discipline's corollary: any test-only
+shortcut that introduces divergence from the production code path
+loses its justification under the dominant-cost frame because the
+gain (small fraction of build+test wall-clock) is dwarfed by the
+cost (tests that don't exercise what production does). See §14
+Round 0 entry for the docket extension; the discipline-promotion
+sibling PR (per `docs/FOLLOWUPS.md` V3.0 entry) picks this up
+alongside the five design-round-emergent disciplines.
+
+**Reopening criterion (reversion-clause shape per `21-reversion-
+clause-discipline.mdc`).** The disposition is "drop `from_raw`" not
+"refuse forever." The reopening criterion is substrate-anchored: a
+future test (within Phase 2c or downstream) that simultaneously
+(a) cannot be structured to share `Cache::derive` setup within a
+single `#[test]` and (b) costs enough wall-clock that the cost
+becomes material against build wall-clock, would re-trigger
+evaluation. The re-evaluation shape: a fresh design pass in the
+relevant sub-PR's design rounds (not in an impl-time pre-flight),
+documenting the test's cost profile and the failed-share-setup
+analysis, and proposing the `from_raw` signature against the most-
+faithful-system-test discipline (which, when reopened, would still
+favor a `(memory, seedhash)` shape over a `(memory, programs)`
+shape because the latter hand-rolls program state real `derive` can
+never produce).
 
 ### 5.10 ShekylU128 audit (mechanical action item from F3)
 
@@ -1104,14 +1172,18 @@ same seedhash reach different acceptance decisions on the same
 block.
 
 **Disposition.** Add two property-shaped sibling tests to commits 2
-and 3 respectively:
+and 3 respectively. Both exercise the real `Cache::derive` /
+`derive_item` production code paths — no `from_raw` shortcut (dropped
+per §5.9 R0-D5; a determinism property test that bypasses the path
+it claims to test is worthless as a defense):
 
 - **T1' — `Cache::derive` determinism property** (commit 2; ~30 LoC):
   - **T1'a (single-thread loop)**: Run `Cache::derive(SAME_SEEDHASH)`
     100 times sequentially; assert every output is byte-identical to
-    every other output (and to T1's reference vector). Catches hidden
-    state inside the `Cache` struct, allocator-dependent layout, and
-    any state-mutating shortcut that affects byte output.
+    every other output (and to T1's reference vector once T1 lands in
+    commit 7). Catches hidden state inside the `Cache` struct,
+    allocator-dependent layout, and any state-mutating shortcut that
+    affects byte output.
   - **T1'b (concurrent threads)**: Spawn 4 threads, each running
     `Cache::derive(SAME_SEEDHASH)` 25 times; collect 100 outputs;
     assert all byte-identical. Catches races in the 8-program
@@ -1119,27 +1191,36 @@ and 3 respectively:
     if any per-call mutable state slipped in.
   - **T1'c (interleaved seedhash pattern)**: Run
     `derive(A), derive(B), derive(C), derive(A), derive(D), derive(A)`;
-    assert all three `derive(A)` outputs are byte-identical and
-    match T1's reference. Catches cross-call state pollution (e.g.,
-    a thread-local buffer that doesn't get reset between calls).
+    assert all three `derive(A)` outputs are byte-identical (and
+    match T1's reference once it lands in commit 7). Catches cross-
+    call state pollution (e.g., a thread-local buffer that doesn't
+    get reset between calls).
 - **T2' — `Cache::derive_item` invariance property** (commit 3; ~30 LoC):
-  - **T2'a (same item_number, varied call order)**: For each of T2's
-    8 item_numbers, call `derive_item(N)` 10 times in varying
+  - **T2'a (same item_number, varied call order)**: Derive one
+    `Cache` via real `Cache::derive(SEEDHASH)` (shared across all
+    sub-assertions in the single `#[test]`); for each of T2's 8
+    item_numbers, call `cache.derive_item(N)` 10 times in varying
     intervening-call patterns (e.g., `derive_item(N), derive_item(N+1),
     derive_item(N), derive_item(N+2), derive_item(N)`); assert every
-    return for `N` is byte-identical to T2's reference vector. Catches
-    any cross-call state pollution inside `derive_item` (e.g., a
-    `&mut [u64; 8]` register buffer reused without reset).
+    return for `N` is byte-identical to T2's reference vector (once T2
+    lands in commit 7). Catches any cross-call state pollution
+    inside `derive_item` (e.g., a `&mut [u64; 8]` register buffer
+    reused without reset).
 
-**Test placement.** T1' lives in `tests/cache/t1_prime_determinism.rs`
-(sibling to `tests/cache/t1_cache_derive.rs`); T2' lives in
-`tests/cache/t2_prime_invariance.rs`. Both are CI-gated; failure
-fails the PR.
+**Test placement.** T1' lives in `tests/cache/t1_prime_determinism.rs`;
+T2' lives in `tests/cache/t2_prime_invariance.rs`. T1 and T2 (the
+spec-vector parity tests) ship in commit 7 alongside the F6 generator
+that produces their fixtures, per §9 commit-7 scope (T1' / T2' do not
+need fixtures and ship in commits 2 / 3 respectively). Both T1' and
+T2' are CI-gated; failure fails the PR.
 
 **Cost.** ~60 LoC of test code total. No new dependencies (uses
-`std::thread::scope` for T1'b). Negligible CI time (≤2 s wall;
-single-thread `Cache::derive` is the cost dominator and runs
-serially in T1'a regardless).
+`std::thread::scope` for T1'b). CI wall-clock is dominated by T1''s
+~26s of `Cache::derive` calls (100 sequential × ~200ms +
+4 concurrent threads × 25 × ~200ms wall + 6 interleaved × ~200ms);
+T2' adds ~200ms (one shared derive + 80 derive_item calls at ~µs
+each). Acceptable against the ~15-minute test-harness build cost
+per the test-fidelity-vs-dominant-cost discipline (§5.9 R0-D5).
 
 **Reopening criterion (reversion-clause shape).** If T1' or T2' ever
 fails, the disposition is **NOT** "remove the property test as
@@ -1627,15 +1708,15 @@ finding):
 | # | Commit | LoC budget | Section reference |
 |---|--------|-----------|-------------------|
 | 1 | `randomx: Cache type skeleton + size constants + Drop` | ~80 LoC | §3 module layout, §2 surface 1 |
-| 2 | `randomx: Cache::derive + pub(crate) Cache::from_raw + T1 + T1' determinism + cache-site debug_assert!` | ~290 LoC | §5.4, §5.9, §6 T1, §5.11.1 T1', §5.11.2 |
-| 3 | `randomx: Cache::derive_item + item_bytes accessor + T2 + T2' invariance` | ~180 LoC | §4.3, §5.4, §6 T2, §5.11.1 T2' |
+| 2 | `randomx: Cache::derive + T1' determinism + cache-site debug_assert!` | ~210 LoC | §5.4, §5.9, §5.11.1 T1', §5.11.2 |
+| 3 | `randomx: Cache::derive_item + item_bytes accessor + T2' invariance` | ~150 LoC | §4.3, §5.4, §5.11.1 T2' |
 | 4 | `randomx: VmState skeleton + scratchpad/register-file alloc + scratchpad debug_assert! + Drop` | ~125 LoC | §3, §2 surface 3, §5.11.2 |
 | 5 | `randomx: VmState::initialize with register/program init (T3-T5)` | ~180 LoC | §6 T3-T5 |
 | 6 | `randomx: compute_hash with dispatch_instruction NOP body + spec vectors (T6-T8)` | ~200 LoC | §5.1, §5.7, §6 T6-T8 |
-| 7 | `randomx: Phase 2c reference vector generator (T1-T8)` | ~400 LoC | §5.6, §7 |
+| 7 | `randomx: Phase 2c reference vector generator + T1/T2 spec-vector tests (T1-T8)` | ~450 LoC | §5.6, §6 T1/T2, §7 |
 | 8 | `randomx: Phase 2c benchmarks + per_hash_latency placeholder + debug-vs-release CI gate + scope-bounding doc-comments + BENCH_RESULTS.md + CHANGELOG` | ~180 LoC | §5.8, §8, §13 forward-path 2g, §5.11.3, §5.11.4 |
 
-Total ≈ 1635 LoC, comfortably below the §"Scope envelope" 1800 LoC
+Total ≈ 1575 LoC, comfortably below the §"Scope envelope" 1800 LoC
 target. The Round 2 collapse (5 vm-side files → 1 vm.rs) shaved
 ~150 LoC of module-boundary boilerplate vs. Round 1's first-draft
 estimate. Commit 8 carries a ~20 LoC bump vs. Round 2's first-draft
@@ -1646,8 +1727,14 @@ than plan-doc prose 2g's author has to remember to consult).
 Round 4 absorbs ~85 LoC additional across commits 2 (T1' + cache
 `debug_assert!`), 3 (T2'), 4 (scratchpad `debug_assert!`), and 8
 (debug-vs-release CI line + public-input-only doc-comments).
-Generator C++ + CMake (~450 LoC) is separate from the Rust LoC
-count.
+**Round 0 impl-time pre-flight (R0-D5) shaved ~60 LoC across commits
+2 (from_raw drop + T1 move to commit 7) and 3 (T2 move to commit 7),
+and added ~50 LoC to commit 7 (T1+T2 spec-vector tests land with
+their fixtures); net ≈ −10 LoC. The T1+T2 tests pair with their
+generator-produced fixtures in commit 7 so per-commit `cargo build`
+is clean (no `include_bytes!` referencing not-yet-existing files);
+T1' / T2' (fixture-free) stay in commits 2 / 3.** Generator C++ +
+CMake (~450 LoC) is separate from the Rust LoC count.
 
 ## 10. Gates
 
@@ -1690,7 +1777,7 @@ No nightly-only APIs. MSRV stays at 1.85 (no bump).
 
 | Artifact | LoC budget | Notes |
 |----------|-----------|-------|
-| `src/cache.rs` | ~300 | `pub Cache` + `pub derive` + `pub(crate)` `from_raw`/`derive_item`/`item_bytes` |
+| `src/cache.rs` | ~270 | `pub Cache` + `pub derive` + `pub(crate)` `derive_item`/`item_bytes` (`from_raw` dropped per §5.9 R0-D5) |
 | `src/vm.rs` | ~250 | `pub compute_hash` + `pub(crate) VmState` + private `dispatch_instruction` (NOP body) + scratchpad/register helpers all in one file |
 | `src/lib.rs` | ~10 (delta) | `mod cache; mod vm;` + re-exports `Cache` and `compute_hash` |
 | `tests/cache/t1_cache_derive.rs` | ~80 | T1 spec-vector test |
@@ -1855,6 +1942,7 @@ Phase 2c lands the cache + VM substrate; downstream phases inherit:
 | Round 2 | 2026-05-21 | Substrate-finding pass against the Round 1 plan-doc. Three structural restructurings landed within Round 1's locked dispositions: **(R2-D1)** `BytecodeDispatch` trait + `StubNopDispatch` impl → `dispatch_instruction` free function with NOP body replaced in 2d, eliminating the mock-X anti-pattern recurrence (§5.1 F1, §1 cross-cut). **(R2-D2)** `Vm<'a>` public type → `compute_hash` public transform with `VmState` private (§2 type table, §3 module layout collapse 5 files → 2 files, §13 forward-path updates for 2d/2f/3a). **(R2-D3)** `Cache::from_raw` visibility correction (`pub` → `pub(crate)`; test-time only, not FFI surface — §5.9 F9). Parent-plan alignment commit follows (Decision #7 substrate-shift per `21-reversion-clause-discipline.mdc`: `VmState` pooling becomes internal to `compute_hash`, not a public `VmPool` type). All three deliverables tighten the type-and-module shape inside the bounds Round 1's dispositions already established; no Round 1 disposition reopened. |
 | Round 3 | 2026-05-21 | Substrate-completeness pass against Round 2 plan-doc; close-out before implementation. **(R3-D1)** §5.1.1 "Function-body replacement contract" pins the 2c → 2d hand-off: frozen `dispatch_instruction` signature, frozen `Instruction` field set, and `VmState` field set populated empirically from an audit against `bytecode_machine.hpp`'s 29 opcode handlers + `vm_interpreted.cpp::execute()`. Audit produced one correction-from-prompted-list finding: `mp` is a v2-only local-variable alias for `mem.ma` per `vm_interpreted.cpp:89`, not a `MemoryRegisters` struct field; §5.5 F5 entry updated to match (existence disposition was wrong in Rounds 1–2; the v2-only Rust port introduces no `mp` field). Single-pass dispatch shape locked; IBC 2-pass form rejected with named reversion-clause criterion (reopen iff 2d benchmarks show single-pass cannot hit ≤3.0× Phase 0 budget AND profiling attributes shortfall to per-call decode cost). **(R3-minor-1)** §13 3a inheritance gains an FFI layering discipline note: `shekyl_pow_randomx_v2_hash` is a thin error-translation shim over `compute_hash`; no semantic logic in the FFI boundary; shim body ≤30 LoC. **(R3-minor-2)** §9 commit 8 + §15 PR template + §12 forecast envelope add the `tests/perf/per_hash_latency.rs` placeholder (`#[ignore]` + `unimplemented!()` cross-referencing F8 / §13 2g inheritance); structural code out-survives prose deferral. **(R3-D3)** Sibling commit lands `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` skeleton scaffold: §5.1.1 contract carry-forward, VmState field-set reference, forward-actions accumulated from F1/F2/F3/F5/F7, decision points for 2d Round 1 (FPU rounding-mode mechanism; F128 newtype shape; per-opcode dispatch shape). All Round 3 deliverables remain within Round 2's locked dispositions; no Round 2 or Round 1 disposition reopened. Target ≤1 round met. |
 | Round 4 | 2026-05-21 | Threat-model addenda pass against the Round 3 plan-doc; priority-1 (per `00-mission.mdc`) adversarial review enumerating six attack objectives (mining-faster differential; cache poisoning; FFI exploitation; resource DoS; Rust safety boundary gaps; consensus split via implementation divergence). New §5.11 records eight findings + dispositions. **In-scope 2c-implementation additions:** §5.11.1 T1' (`Cache::derive` determinism property — single-thread loop, concurrent threads, interleaved seedhash) + T2' (`derive_item` invariance property), ~60 LoC in commits 2 and 3; §5.11.2 `debug_assert!` discipline at the two unsafe `Box::new_zeroed_slice` sites, ~10 LoC across commits 2 and 4; §5.11.3 debug-vs-release equivalence as PR gate (1 line in CI workflow + §10 gate entry); §5.11.4 public-input-only scope note in crate-level doc-comments. **Forward-actions to downstream phases:** §5.11.5 2g adversarial seedhash corpus + pathological-program worst-case timing bound; §5.11.6 3a FFI null-pointer + length-validation + `seedhash: *const [u8; 32]` typed-array pointer + `ERR_NULL_PTR` taxonomy; §5.11.7 2f CacheStore canonical-seedhash slot eviction-protection + `VmState` pool capacity sized against daemon parallel-verification fanout. **Discipline note:** §5.11.8 audit-against-actual-code validation (the discipline that produced R3-D1's `mp` correction is the discipline 2d/2g inherit for their own surfaces). Parent plan alignment ships as a sibling commit on this branch (Decision #6 R4 carries CacheStore eviction-protection note; Decision #7 R4 carries VmState pool sizing note; Phase 0 §5 R4 pins `RANDOMX_BLOCK_TEMPLATE_MAX_SIZE` and `ERR_NULL_PTR` taxonomy + `*const [u8; 32]` signature; Phase 0 §6 R4 adds worst-case ≤5.0× timing bound; Risk acknowledgments R4 adds a Rust-vs-C edge-case differential bullet). The 2d skeleton scaffold gets a sibling commit adding §2 F7 per-rounding-mode coverage forward-action, §3.1 unsafe-block scope-check discipline, and §4.1 u128/`__int128` edge-case differential discipline. All Round 4 additions remain within Round 1–3's locked dispositions; no prior disposition reopened. Target ≤1 round met. |
+| Round 0 (impl-time pre-flight) | 2026-05-21 | Pre-implementation pass against the post-PR-#65-merge plan-doc on the implementation branch (`feat/randomx-v2-phase2c-impl`). Audit pass against the merged plan-doc + actual substrate at branch-cut pin produced four findings (F1 clarity — criterion as dev-dep, addressed at §4.2 R0-D3; F2 factual — opcode count 29 → 28, addressed at §5.1.1 R0-D1; F3 substantive — CFROUND throttle vs non-existent imm32 cap, addressed at §5.5 F5 row 3 R0-D1; F4 factual — `program.hpp` citation off ~10 lines, addressed at §5.5 F5 row 5 R0-D2). All four absorbed via prefix errata commits on the impl branch before any production code lands; trail recorded in `RANDOMX_V2_PHASE2C_AUDIT.md`. **(R0-D5)** `Cache::from_raw` dropped at impl-time pre-flight, superseding R2-D3 (R2-D3's `pub → pub(crate)` visibility correction is now historical). Surfaced during commit-2 pre-flight as a substrate-completeness finding: `from_raw`'s sole stated justification ("bypass derivation overhead in `derive_item` tests") rested on a since-falsified per-test-call assumption — T2's 8 sub-tests share setup within a single `#[test]` and pay Argon2d once (~200ms), and T1'a's 100 sequential derives must use real `Cache::derive` for the determinism property test to be meaningful, so the dominant cost is T1''s ~26s of derives, not T2's ~200ms saving. The optimization isn't load-bearing against any dominant cost; `from_raw` has no faithful consumer; drop. §5.9 F9 narrative records the disposition + reversion-clause. §9 commit table updated (commit 2: ~290 → ~210 LoC; commit 3: ~180 → ~150 LoC; commit 7: ~400 → ~450 LoC absorbing T1/T2 spec-vector tests alongside the generator that produces their fixtures; net ≈ −10 LoC). §12 forecast updated (cache.rs ~300 → ~270 LoC). §5.11.1 T1' / T2' descriptions tightened to make "uses real `Cache::derive`" explicit. **Discipline articulation (extends Round 5 R5-D4 promotion docket as the sixth 2c-emergent discipline):** **test-fidelity vs. dominant-cost discipline** — test-only API surfaces and test-only code paths justified by execution-speed optimization must demonstrate the optimization is load-bearing against the *dominant* wall-clock cost (typically build), not the dominated per-test cost; when build dominates execution by 3+ orders of magnitude (here: ~15min build : ~200ms test ≈ 0.022%), execution-speed arguments are structurally insufficient regardless of magnitude. Routes to `docs/FOLLOWUPS.md` V3.0 entry's discipline-promotion sibling-PR docket alongside the five design-round-emergent disciplines. **Posture-shift note (extends Round 4's posture-shift framing):** Round 0 (impl-time pre-flight) is the discipline pass that catches design-time decisions falsified by impl-time substrate (cost-profile changes, share-setup discoveries, etc.); it sits structurally between the audit-against-actual-code pass (R3-D1 `mp` precedent; R0-D1/D2 CFROUND + citation precedents) and the production implementation. The discipline pass is *not* a redesign — it's a substrate re-check that catches falsified-justification dispositions before code lands against them. 2d's impl-time pre-flight, 2f's, and so on should inherit this shape. All Round 0 dispositions remain within Round 1–5's locked dispositions; no Round 1–5 disposition reopened except R2-D3, which is superseded with explicit citation. Target: pre-flight before any production code lands. Met. |
 | Round 5 | 2026-05-21 | Closure-only refinement pass against the Round 4 plan-doc. Substantive review surface is closed at Round 4; Round 5 tightens four discipline-enforcement edges without surfacing new findings. **(R5-D1)** §5.11.8 framing amendment: "reading-the-source vs. producing-a-table-from-intuition" named as the load-bearing audit step (the table is the audit's output; the audit's substance is the line-by-line reading that *produces* the table); "show your work" enforcement formalized — every audit table cites line ranges at the pinned fork commit, reviewer spot-checks by opening the cited file and reading the named lines. The `mp` correction is reframed from "we caught one bug" to "the prompted-list table that didn't reflect a reading-the-source pass was the failure mode `16-architectural-inheritance.mdc`'s 'audits-are-clean-so-compress' anti-pattern names." **(R5-D2)** Parent plan Phase 0 §5 FFI hardening refinements (sibling commit): C-side header form `const uint8_t (*seedhash)[32]` (not decayed `const uint8_t *`); C++ call-site declaration discipline (`uint8_t seedhash_buffer[32]` + `&seedhash_buffer`), documented at each call site not just at the signature; `RANDOMX_BLOCK_TEMPLATE_MAX_SIZE` rationale-sentence ("generous ceiling well above any realistic Shekyl block template; the 2 MiB == scratchpad-size coincidence is not load-bearing coupling"). **(R5-D3)** 2d skeleton §3.1 CI grep mechanical enforcement addendum (sibling commit): the unsafe-block scope-check discipline gets the same shape as the `no #[no_mangle] in shekyl-pow-randomx` invariant — a CI-time grep asserts the rounding-mode-setter function body contains exactly one of the chosen intrinsic / asm form and nothing else (no other intrinsic calls, no pointer dereferences, no allocator calls). Prose-as-discipline is necessary but not sufficient; the grep is the enforcement that survives "a future contributor stashing the previous mode for restoration" style additive drift. **(R5-D4)** New `docs/FOLLOWUPS.md` V3.0 entry (sibling commit): post-2c-implementation forward-action to promote 2c-emergent disciplines (function-body replacement contract, audit-against-actual-code, threat-model addenda framing, reversion-clause for sub-PR boundary changes, forward-action propagation convention) to project-level documentation (likely `.cursor/rules/26-sub-pr-design-discipline.mdc` or `docs/conventions/`). **Posture-shift note (recorded for downstream sub-PRs).** Round 4's threat-model framing converted "design closure" into **design closure plus active defense against named attacker objectives**. The shift is worth naming so 2d Round 1, 2f Round 1, 2g Round 1, and LWMA-1 Phase 4's design rounds get the same shape rather than reverting to per-finding review — the threat-model-objective framing surfaces findings (`mp`, eviction interleave, FPU rounding-mode escape, u128 edge cases) that per-finding review wouldn't have caught because no individual finding *suggests* the next one; the attacker-objective frame does. All Round 5 additions remain within Round 1–4's locked dispositions; no prior disposition reopened. Target ≤1 round met. |
 
 ## 15. References to commit (Phase 2c PR description shape)
@@ -1866,8 +1954,9 @@ The implementation PR's description carries the following structure
 ## Summary
 
 Phase 2c of the RandomX v2 Rust port. Lands `Cache` (`pub derive`
-constructor + `pub(crate)` `from_raw`/`derive_item`/`item_bytes`
-accessors) and `compute_hash(&Cache, &[u8; 32], &[u8]) -> [u8; 32]`
+constructor + `pub(crate)` `derive_item`/`item_bytes` accessors;
+`from_raw` dropped at impl-time pre-flight per §14 Round 0 R0-D5)
+and `compute_hash(&Cache, &[u8; 32], &[u8]) -> [u8; 32]`
 public transform. `VmState` and `dispatch_instruction` are private
 implementation details of `vm.rs`; `dispatch_instruction`'s NOP body
 is replaced in Phase 2d. T1–T8 spec-vector parity tests.
