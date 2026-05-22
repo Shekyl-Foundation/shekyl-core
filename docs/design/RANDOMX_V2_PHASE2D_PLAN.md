@@ -79,8 +79,8 @@ implementation branch cuts later from post-this-doc `dev`.
 net-new Rust (dispatch body + `F128` newtype + integer helpers +
 tests + rustdoc) + ~150 KB of committed reference vector bytes (T9+
 per-opcode corpus + rounding-mode matrix) + ~400 LoC of C++ generator
-glue extending the Phase 2c `phase2c/` generator pattern. ≤6 commits
-per §9 below. No FFI surface, no C++ caller rewire, no changes to
+glue extending the Phase 2c `phase2c/` generator pattern. ≤7 commits
+per §8 below. No FFI surface, no C++ caller rewire, no changes to
 `Cache::derive` / `compute_hash` signatures.
 
 **Cross-references.**
@@ -677,8 +677,9 @@ Special cases preserved from C:
 - `IMUL_RCP` (`InstructionType` via its frequency bucket) executes
   the `IMUL_R` body (`bytecode_machine.cpp:75-77`).
 - `NOP` bucket is a no-op.
-- Out-of-range opcode bytes hit the `UNREACHABLE` posture (`debug_assert!`
-  in debug; no-op in release).
+- Out-of-range opcode bytes hit the `UNREACHABLE` posture: `panic!`
+  in both profiles (R6-D2 supersedes the Round 1 draft of
+  `debug_assert!` in debug / no-op in release).
 
 Operand decode replicates `bytecode_machine.cpp:81-477` rules:
 `dst/src % RegistersCount`, `signExtend2sCompl(imm32)` for M-form and
@@ -864,7 +865,7 @@ Carry-forward from 2c §5.11, scoped to 2d surfaces:
 | Timing side-channels at dispatch | Explicit rejection: verifier-only path; no constant-time claim for PoW VM dispatch (`30-cryptography.mdc` explicit rejection) |
 | `unsafe` FPU surface expansion | §10 CI grep on `set_rounding_mode` body (Scaffold-R5) |
 | Integer widening divergence | R1-D4 audit + T9 IMULH/ISMULH smoke |
-| Malformed opcode bytes | Frequency decode out-of-range → `debug_assert!` (debug) / no-op (release), matching C `UNREACHABLE` posture |
+| Malformed opcode bytes | Frequency decode out-of-range → `panic!` in both profiles (R6-D2; supersedes Round 3 draft of `debug_assert!`/no-op) |
 
 Property-test analogs T9'–T16' remain **deferred to 2g** unless a
 future substrate finding surfaces a gap (unchanged from §6.2).
@@ -1009,8 +1010,9 @@ no-ops silently. Two failure modes follow:
   accepts. Two correctly-implementing verifiers disagree on validity.
 
 **Substrate finding.** R1-D3's frequency decode (the cumulative ceiling
-ladder per `bytecode_machine.hpp:67-98`) covers every u8 0..256
-exhaustively — `RANDOMX_FREQ_*` sums to 256 by spec construction. The
+ladder per `bytecode_machine.hpp:67-98`) covers all 256 u8 values
+(0..=255) exhaustively — `RANDOMX_FREQ_*` sums to 256 by spec
+construction. The
 "out-of-range" branch in `decode_instruction_type` is therefore
 unreachable in well-formed RandomX v2 programs. If the branch ever
 fires, the decode logic itself has drifted upstream of dispatch — not
@@ -1100,7 +1102,8 @@ with the implementation PR's `VmState` rustdoc:
    u16::MAX` at the end of each iteration (after the final dispatch
    returns). A future code path that reads `exec_pc` outside the
    intended window will trip the `cbranch_table[u16::MAX]` index-out-
-   of-bounds check (`Program.cbranch_table` is length-256; `u16::MAX`
+   of-bounds check (`Program.cbranch_table` is length `PROGRAM_SIZE`
+   (384); `u16::MAX`
    is out of range), failing closed with a panic rather than silently
    reading stale data. The sentinel-reset cost is one `u16` store per
    iteration; the discipline payoff is index-out-of-bounds-rather-
@@ -1180,7 +1183,7 @@ into a `phase2d/` sibling (or subcommand) producing:
 
 | ID | Coverage | Generator mode |
 |----|----------|----------------|
-| T9 | Single-instruction integer smoke (IADD_RS, IMULH_R, IROR_R, ISTORE) | `--opcode-isolated` |
+| T9 | Single-instruction integer smoke (IADD_RS, IMULH_R, IROR_R, ISTORE) | `--t9-integer-smoke` |
 | T10 | FP smoke under RN (FADD_R, FMUL_R, FDIV_M, FSQRT_R) | `--fp-smoke --mode=rn` |
 | T11–T14 | Rounding-mode matrix: 9 FP opcodes × 4 IEEE modes (36 tests minimum per §2 F7 Round 4 addition) | `--fp-matrix --mode={rn,rd,ru,rz}` |
 | T15 | CFROUND throttle (`isrc & 60 != 0` → no mode change) | `--cfround-throttle` |
@@ -1188,7 +1191,8 @@ into a `phase2d/` sibling (or subcommand) producing:
 
 Each vector ships `.bin` + `.meta.txt` naming the rounding mode, opcode
 under test, and fork pin. Property-test analogs T9'–T16' are **deferred
-to Round 2** unless a Round 2 threat-model pass surfaces a gap.
+to Phase 2g** unless a future substrate finding surfaces a gap (per
+R3-D1).
 
 ### 6.3 Test placement
 

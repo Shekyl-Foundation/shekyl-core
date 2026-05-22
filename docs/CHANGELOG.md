@@ -4,8 +4,18 @@
 
 ### Added
 
-- **RandomX v2 Track A Phase 2d — Rounds 1–6 design closure** (branch
-  `chore/randomx-v2-phase2d-plan`, pending PR). Expands
+- **Sub-PR design discipline rule** (PR #67, 2026-05-22). Promotes fourteen
+  Phase 2c-emergent process disciplines from
+  [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md)
+  / [`RANDOMX_V2_PHASE2C_AUDIT.md`](design/RANDOMX_V2_PHASE2C_AUDIT.md)
+  into [`.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc)
+  (Option A; opt-in — cite when scoping multi-round per-trait PRs).
+  Closes `docs/FOLLOWUPS.md` V3.0 discipline-promotion
+  item. Applies to RandomX v2 sub-PRs, LWMA-1 Phase 4, and other
+  multi-round consensus-critical design work.
+
+- **RandomX v2 Track A Phase 2d — Rounds 1–6 design closure** (PR #68).
+  Expands
   [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
   through Round 6 after PR #66 on `dev` (`e9917097f`): Round 1
   (FPU/`F128`/frequency dispatch/u128 audit); Round 2 (PC-driven loop,
