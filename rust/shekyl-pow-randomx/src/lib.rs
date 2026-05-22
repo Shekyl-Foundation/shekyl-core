@@ -66,9 +66,16 @@
 //!   pre-computed by the reviewer-runnable C++ generator at
 //!   `tests/vectors/reference/_generator/phase2c/`.
 //! - `benches/cache_derive.rs` + `benches/compute_hash_alloc.rs` —
-//!   criterion baselines per §5.8 PR-gate budget (`Cache::derive`
-//!   ≤ 200 ms median; `compute_hash` ≤ 100 µs median under stub-NOP).
-//!   Numbers recorded in `BENCH_RESULTS.md`.
+//!   criterion baselines. `Cache::derive` was scoped at ≤ 200 ms
+//!   median per §5.8; the §8 ≤ 100 µs budget applied to the
+//!   `compute_hash` *allocation skeleton* specifically (an
+//!   allocation-only sub-bench has not landed yet), and the
+//!   `compute_hash_alloc` bench measures the full pipeline under
+//!   stub-NOP dispatch as an informational baseline rather than a
+//!   PR gate. The reconciliation between the §8 allocation-only
+//!   budget and the empirical full-pipeline numbers is recorded
+//!   as R0-D12 in `RANDOMX_V2_PHASE2C_PLAN.md` §14 with measured
+//!   medians captured in `BENCH_RESULTS.md`.
 //! - `tests/perf/per_hash_latency.rs` — Phase 2g placeholder
 //!   (`#[ignore]` + `unimplemented!()`) at the canonical 2g
 //!   deliverable path per §5.8 R3-minor-2; 2g replaces the body

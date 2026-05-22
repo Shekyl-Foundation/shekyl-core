@@ -12,9 +12,9 @@ dataset read, scratchpad writeback, V2 AES f/e mix, and FP
 scratchpad store.
 
 A T7 divergence isolates the V2 AES f/e mix branch (vm_interpreted.cpp
-lines 99-117) — the consume `nreg.e` as round key, mix `nreg.f`
-through aesenc/aesdec chain — from the spAddr derivation (T6) and
-the parse/init (T4 / T5). The 4-iteration window matches T6; each
+lines 99-117) — consuming `nreg.e` as the round key and mixing
+`nreg.f` through the aesenc/aesdec chain — from the spAddr derivation
+(T6) and the parse/init (T4 / T5). The 4-iteration window matches T6; each
 snapshot is 256 B (the same layout as T4).
 
 Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 (F7 T7) + §5.6 (stub-NOP

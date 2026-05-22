@@ -948,11 +948,26 @@ impl VmState {
     ///
     /// Per
     /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
-    /// §8 budget, the per-hash allocation cost (the 2 MiB scratchpad
-    /// plus the 3 KiB program plus the inline state) is the
-    /// dominant cost of `compute_hash` under stub-NOP dispatch —
-    /// commit 8's `benches/compute_hash_alloc.rs` measures it
-    /// directly under the ≤100 µs PR-gating threshold.
+    /// §8 budget, the per-hash *allocation-only* skeleton (the
+    /// 2 MiB scratchpad plus the 3 KiB program plus the inline
+    /// state) was scoped at ≤100 µs as a separate sub-bench target.
+    /// `BENCH_RESULTS.md` records that no allocation-only sub-bench
+    /// has landed yet (R0-D12 reconciliation followup); commit 8's
+    /// `benches/compute_hash_alloc.rs` measures the **full
+    /// `compute_hash` pipeline** under stub-NOP dispatch (median
+    /// 296.00 ms on i9-11950H per `BENCH_RESULTS.md`), not the
+    /// allocation skeleton in isolation, and is informational
+    /// rather than PR-gating. The dominant cost in that
+    /// full-pipeline measurement is the per-chain hash-math
+    /// pipeline (init_scratchpad / init_program / execute_program
+    /// repeated `RANDOMX_PROGRAM_COUNT` times) and the inter-chain
+    /// Blake2b-512 overwrites, not the one-shot allocation here.
+    /// The §8 ≤100 µs target stays applicable to the allocation
+    /// skeleton (an isolated allocation-only bench would land at
+    /// well below the threshold on the same machine); reconciling
+    /// the §8 budget against the empirical full-pipeline
+    /// measurement is the R0-D12 followup, tracked in
+    /// `RANDOMX_V2_PHASE2C_PLAN.md` §14.
     ///
     /// # Liveness disposition (commit 6 wired)
     ///
@@ -1311,9 +1326,10 @@ impl VmState {
     /// `t7_vm_aesmix_4iter.bin`) can capture intermediate state
     /// without duplicating the loop body in test code.
     ///
-    /// Returns the spec §4.6.1 *post-derivation, pre-mask* (no, the
-    /// *post-mask*) `(sp_addr0, sp_addr1)` pair actually used to index
-    /// the scratchpad for this iteration's loads and stores. Concretely:
+    /// Returns the spec §4.6.1 *post-mask* `(sp_addr0, sp_addr1)`
+    /// pair — the values actually used to index the scratchpad for
+    /// this iteration's loads and stores, after the `sp_mix`-driven
+    /// derivation and the `SCRATCHPAD_L3_MASK_64` mask. Concretely:
     ///
     /// ```text
     /// sp_mix  = self.r[read_reg[0]] ^ self.r[read_reg[1]]
@@ -1847,11 +1863,20 @@ pub fn compute_hash(cache: &crate::Cache, seedhash: &[u8; 32], data: &[u8]) -> [
 /// in the same order with `to_le_bytes` / `to_bits().to_le_bytes()`
 /// to produce a byte-identical input to Blake2b.
 ///
-/// Used twice by [`compute_hash`]: once per inter-chain `temp_hash`
-/// overwrite (Blake2b-512), and once for the final 32-byte output
-/// (Blake2b<U32>). Factored out to ensure both call sites feed
-/// identical bytes (any drift between them would be a consensus
-/// bug invisible to local unit tests).
+/// Used `RANDOMX_PROGRAM_COUNT - 1 = 7` times by [`compute_hash`]'s
+/// Step 3 (the per-chain `temp_hash` overwrite loop, Blake2b-512).
+/// The final 32-byte output (Step 5b, `Blake2b<U32>`) does **not**
+/// use this function — it uses
+/// [`feed_register_file_to_hasher_with_raw_a`] instead, which
+/// substitutes the raw 64-byte `hashAes1Rx4` output for `state.a`
+/// to avoid round-tripping arbitrary AES bytes through `f64`.
+/// See that function's rustdoc for the rationale.
+///
+/// Factored out (rather than inlined into the chain loop) so the 7
+/// call sites are guaranteed to feed byte-identical inputs to
+/// Blake2b — any drift across the inter-chain `temp_hash`
+/// overwrites would be a consensus bug invisible to local unit
+/// tests.
 ///
 /// # Determinism / side-channel posture
 ///
