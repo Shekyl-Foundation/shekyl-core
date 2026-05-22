@@ -40,7 +40,7 @@ a single 2d-bound item: §3.1's unsafe-block scope-check discipline
 (prose-form from Scaffold-R4) is promoted to a CI-time grep
 mechanical-enforcement gate modeled on the **`shekyl-pow-randomx`
 never uses `#[no_mangle]`** invariant pattern from `RANDOMX_V2_PLAN.md`
-§7.7. The grep is a §10 hard gate in the 2d implementation PR;
+§7.7. The grep is a §9 hard gate in the 2d implementation PR;
 reviewer-attention enforcement (prose) is necessary but not
 sufficient against the failure mode where a future contributor
 expands the unsafe surface with a reasonable-seeming addition
@@ -429,7 +429,7 @@ discipline doesn't depend on the reviewer's careful reading; it
 depends on the grep's mechanical execution.
 
 The 2d implementation-PR description names this grep explicitly
-under §10 Gates (cargo fmt / cargo clippy / cargo test / **FPU
+under §9 Gates (cargo fmt / cargo clippy / cargo test / **FPU
 unsafe-block scope-check grep** / cargo doc). A failing grep is
 a hard gate; the PR cannot land until the function body matches
 the discipline.
@@ -619,7 +619,7 @@ scoped grep on `set_rounding_mode`'s function body asserting exactly one
 of `_mm_setcsr` (x86_64 cfg branch) or the aarch64 FPCR write primitive,
 and zero forbidden patterns (other intrinsics, pointer dereferences,
 allocators, extra function calls). Permitted/forbidden sets are pinned in
-§10.
+§9 (Gates table) and §3.7 R6-D1.
 
 #### R1-D2 — `F128` newtype shape: option (b)
 
@@ -863,7 +863,7 @@ Carry-forward from 2c §5.11, scoped to 2d surfaces:
 |-----------|----------------|
 | FPU rounding-mode escape | T11–T14 matrix (§6.2) + CFROUND throttle T15; host mode set only inside `set_rounding_mode` |
 | Timing side-channels at dispatch | Explicit rejection: verifier-only path; no constant-time claim for PoW VM dispatch (`30-cryptography.mdc` explicit rejection) |
-| `unsafe` FPU surface expansion | §10 CI grep on `set_rounding_mode` body (Scaffold-R5) |
+| `unsafe` FPU surface expansion | §9 CI grep on `set_rounding_mode` body (Scaffold-R5) |
 | Integer widening divergence | R1-D4 audit + T9 IMULH/ISMULH smoke |
 | Malformed opcode bytes | Frequency decode out-of-range → `panic!` in both profiles (R6-D2; supersedes Round 3 draft of `debug_assert!`/no-op) |
 
@@ -895,7 +895,7 @@ mode before FP captures to match Rust `set_rounding_mode` semantics.
   invariant note, §8 commit-5 split). Implementation cut remains
   authorized only after Round 6 closes.
 - §1.3 amendment recorded: `branch_pc`, `exec_pc`, `Program.cbranch_table` only.
-- §10 FPU grep permitted patterns pinned (superseded by R6-D1 — see
+- §9 FPU grep permitted patterns pinned (superseded by R6-D1 — see
   §3.7 for the post-Round-6 grep targets; preserved here as the Round-5
   closure record).
 
@@ -966,7 +966,9 @@ PR's grep allows the remap table's static contents but no other
 intrinsic calls or function calls in the `set_rounding_mode` function
 body.
 
-**§10 FPU grep targets (Round 6 supersedes Round 5).**
+**§9 FPU unsafe grep targets (Round 6 supersedes Round 5).** Permitted
+and forbidden patterns are specified in §3.7 R6-D1; the §9 Gates table
+names the CI script as a hard gate.
 
 - **x86_64:** exactly one `_mm_setcsr(` in `set_rounding_mode` body.
 - **aarch64:** exactly two `asm!(` invocations in body (the `mrs` read
@@ -994,9 +996,10 @@ shape; the disposition revisits at that point, not by author preference.
 
 **Finding.** R1-D3's "out-of-range opcode bytes hit the UNREACHABLE
 posture (`debug_assert!` in debug; no-op in release)" produces
-observable behavior divergence across profiles. The §10 debug ≡
-release equivalence gate (inherited from 2c, §10 line 998) runs the
-test corpus under both profiles and asserts identical output. A
+observable behavior divergence across profiles. The §9 Gates table
+**Debug ≡ release** row (inherited from Phase 2c
+`RANDOMX_V2_PHASE2C_PLAN.md` §5.11.3) runs the test corpus under both
+profiles and asserts identical output. A
 malformed (out-of-range) opcode byte in debug panics; in release it
 no-ops silently. Two failure modes follow:
 
@@ -1029,8 +1032,8 @@ profiles is the safer consensus posture — observable, identical across
 debug and release, and matches the unreachability claim normatively
 rather than relying on profile-conditional checks.
 
-**Equivalence gate.** Under R6-D2, the §10 debug ≡ release equivalence
-gate no longer has a divergence-of-behavior-on-malformed-opcode escape
+**Equivalence gate.** Under R6-D2, the §9 **Debug ≡ release** gate
+(Phase 2c §5.11.3) no longer has a divergence-of-behavior-on-malformed-opcode escape
 hatch. T9–T16 cannot exercise the panic path (all use frequency-encoded
 well-formed programs); the panic is a defensive assertion against
 decode-logic drift, not a runtime case the corpus exercises.
@@ -1228,7 +1231,7 @@ outs from 2c).
 | 4 | `randomx: dispatch_instruction FP opcode arms` | ~280 | §3.5 R1-D2, §2 F2 |
 | 5a | `randomx: T9-T16 spec vectors (additions)` | ~350 + fixtures | §6, §3.7 R6-D4 |
 | 5b | `randomx: flip T8 expectation to real-hash byte-equality` | ~20 | §6.2, §3.7 R6-D4 |
-| 6 | `randomx: FPU rounding-mode CI grep + BENCH_RESULTS update` | ~80 | §3.7 R6-D1, §10 |
+| 6 | `randomx: FPU rounding-mode CI grep + BENCH_RESULTS update` | ~80 | §3.7 R6-D1, §9 |
 
 ≤7 commits; bisect-friendly ordering (integer dispatch before FP arms so
 commit 3 keeps `cargo test` green with stub FP arms if needed — prefer
@@ -1272,10 +1275,10 @@ additions.
 |-------|------|---------|
 | Scaffold | 2026-05-21 | Skeleton scaffold landed as deliverable of Phase 2c Round 3 (R3-D3). Records the 2c → 2d hand-off contract verbatim, the locked-by-2c `VmState` field set, the F1/F2/F3/F5/F7 forward-actions, the three Round 1 decision points (FPU rounding-mode mechanism; `F128` newtype shape; per-opcode dispatch shape), and the scope discipline. Round 1 design doc supersedes this file when it lands. |
 | Scaffold-R4 | 2026-05-21 | Round 4 addenda landed as a sibling commit of Phase 2c Round 4's threat-model addenda (per `RANDOMX_V2_PHASE2C_PLAN.md` §5.11). Three additions: (i) §2 F7 forward-action extended with per-rounding-mode coverage requirement (9 FP opcodes × 4 IEEE 754 modes ≥ 36 mode-coverage tests, byte-equality-asserted against C reference under matching mode); carry from 2c §5.11 Objective 1 "FPU rounding-mode escape." (ii) §3.1 FPU rounding-mode decision-point gains an "unsafe-block scope-check discipline" addendum: whichever option (a)–(d) 2d Round 1 selects, the resulting `unsafe` block is audited to do only the rounding-mode write (no state mutation, no pointer dereferences, no allocation, no call-site fan-out); carry from 2c §5.11 Objective 5 "`unsafe`-block discipline at the FPU intrinsic." (iii) New §3.4 "`u128` / `__int128_t` edge-case differential discipline" enumerates four edge-case classes (div by zero, signed-div overflow, shift-by-width, `u128 * u128` truncation) and requires 2d Round 1 to audit every `u128`/`i128`-using opcode handler against the C reference, pre-handling reachable edge cases; carry from 2c §5.11 Objective 6 "consensus split via implementation divergence." None of the three additions reopen the Round 3 contract; all are forward-actions absorbed at 2d Round 1 design time. |
-| Scaffold-R5 | 2026-05-21 | Round 5 addendum landed as a sibling commit of Phase 2c Round 5's closure refinements (per `RANDOMX_V2_PHASE2C_PLAN.md` §14 Round 5 entry). One addition: §3.1 "CI-time grep mechanical enforcement" subsection promotes the Scaffold-R4 prose-as-discipline (unsafe-block scope-check) to a mechanically-enforced gate. The grep is modeled on the **`shekyl-pow-randomx` never uses `#[no_mangle]`** invariant pattern from `RANDOMX_V2_PLAN.md` §7.7 — asserts the rounding-mode-setter function body contains exactly one of the option (a)/(b)/(c) primitives and nothing else (no other intrinsic calls, no pointer dereferences, no allocator calls, no function calls beyond the chosen primitive). 2d Round 1 fixes the primitive choice; the implementation-PR adds the grep with the option-specific permitted/forbidden pattern set. Catches the "future contributor adds a reasonable-seeming improvement that silently expands the unsafe surface" failure mode (e.g., stashing previous mode for restoration, checking a feature flag, mutating a sibling field) that prose-as-discipline depends on reviewer attention to catch. CI-fail-closed: a function body that drifts outside the discipline fails PR CI rather than passing audit. Named as a §10 hard gate in the 2d implementation PR. No prior Scaffold or Scaffold-R4 disposition reopened. |
+| Scaffold-R5 | 2026-05-21 | Round 5 addendum landed as a sibling commit of Phase 2c Round 5's closure refinements (per `RANDOMX_V2_PHASE2C_PLAN.md` §14 Round 5 entry). One addition: §3.1 "CI-time grep mechanical enforcement" subsection promotes the Scaffold-R4 prose-as-discipline (unsafe-block scope-check) to a mechanically-enforced gate. The grep is modeled on the **`shekyl-pow-randomx` never uses `#[no_mangle]`** invariant pattern from `RANDOMX_V2_PLAN.md` §7.7 — asserts the rounding-mode-setter function body contains exactly one of the option (a)/(b)/(c) primitives and nothing else (no other intrinsic calls, no pointer dereferences, no allocator calls, no function calls beyond the chosen primitive). 2d Round 1 fixes the primitive choice; the implementation-PR adds the grep with the option-specific permitted/forbidden pattern set. Catches the "future contributor adds a reasonable-seeming improvement that silently expands the unsafe surface" failure mode (e.g., stashing previous mode for restoration, checking a feature flag, mutating a sibling field) that prose-as-discipline depends on reviewer attention to catch. CI-fail-closed: a function body that drifts outside the discipline fails PR CI rather than passing audit. Named as a §9 hard gate in the 2d implementation PR. No prior Scaffold or Scaffold-R4 disposition reopened. |
 | Round 1 | 2026-05-22 | Post-PR-#66 design round on `chore/randomx-v2-phase2d-plan`. Closes §3 decision points: **(R1-D1)** FPU rounding via quarantined `unsafe` intrinsics in `fpu_rounding.rs` (option a); **(R1-D2)** minimal `F128` newtype (option b); **(R1-D3)** dense `match` on `decode_instruction_type(opcode)` (option a) — substrate finding: wire opcode bytes are frequency-encoded (`bytecode_machine.hpp:67-98`), not `InstructionType` enum values; dispatch replicates `compileInstruction` operand decode plus `exe_*` bodies; **(R1-D4)** u128/i128 edge-case audit table; **(R1-D5)** §1.3 VmState re-audit (no field amendments). Lands §6–§10. |
 | Round 2 | 2026-05-22 | CBRANCH / PC substrate gap closure: **(R2-D1)** PC-driven `execute_iteration` loop; **(R2-D2)** `Program.cbranch_table` static metadata from simulated `registerUsage`; **(R2-D3)** `VmState.branch_pc` iteration-coordination field; **(R2-D5)** `VmState.exec_pc` for CBRANCH table indexing; **(R2-D4)** `pub(crate) randomx_reciprocal` for IMUL_RCP. Frozen `dispatch_instruction` signature preserved. |
 | Round 3 | 2026-05-22 | Threat-model addenda **(R3-D1)**: FPU escape → T11–T15 + grep; timing side-channels explicitly rejected for verifier dispatch; integer widening → R1-D4 + T9; malformed opcodes → UNREACHABLE posture. T9'–T16' deferred to 2g. |
 | Round 4 | 2026-05-22 | Generator CLI spec **(R4-D1)**: `phase2d/` sibling to `phase2c/` with subcommands for T9–T16 + T8 real-hash fixture. |
-| Round 5 | 2026-05-22 | Closure **(R5-D1)**: §5 gate satisfied as of round close; §10 FPU grep patterns pinned (x86_64 `_mm_setcsr`, aarch64 `fesetround` matching C portable path). Note: R5-D1's aarch64 `fesetround` target was found inconsistent with R1-D1's "MXCSR/FPCR level rather than libc `fesetround` alone" design intent during Round 6 review; superseded by R6-D1. |
-| Round 6 | 2026-05-22 | Round-6-blocking findings closed against the Round-5 state: **(R6-D1)** aarch64 FPU primitive resolves the R1-D1/R5-D1 inconsistency by reopening R1-D1 option (b) for aarch64 only — stable inline asm `mrs/msr fpcr` write — with substrate justification (no stable `core::arch::aarch64` FPCR-write intrinsic exists; R1-D1's "no substrate advantage" rejection rationale applied to x86_64, not aarch64). §10 FPU grep targets updated. **(R6-D2)** Out-of-range opcode disposition changes from R1-D3's `debug_assert!`/no-op pair to `panic!` in both profiles, removing the debug-vs-release behavior divergence the §10 equivalence gate would surface and asserting unreachability normatively rather than via profile-conditional checks. Plan-doc edits ride along: **(R6-D3)** R1-D4 IMUL_RCP unreachability citation (spec §5.2.10 + C `bytecode_machine.cpp:246-258`); **(R6-D4)** §8 commit-5 split into 5a (T9–T16 additions) + 5b (T8 expectation flip) keeping the consensus-affecting flip independently bisectable; **(R6-D5)** `exec_pc` invariant-documentation note for implementation-PR rustdoc + sentinel-reset to `u16::MAX` for fail-closed out-of-window reads. Implementation cut authorized. **Posture cite (audit-against-actual-code recurrence).** R1-D3's frequency-decode finding (wire opcode bytes are frequency-encoded per `bytecode_machine.hpp:67-98`, not `InstructionType` enum values) is the **second instance** of the audit-against-actual-code discipline catching a real consensus-split bug pre-implementation. First instance: Phase 2c Round 3 `mp` correction (audit reading the actual C reference rather than working from prompted summaries). Two instances now confirm the pattern; the discipline applies forward to 2f/2g per `16-architectural-inheritance.mdc`'s discovery-cadence framing. |
+| Round 5 | 2026-05-22 | Closure **(R5-D1)**: §5 gate satisfied as of round close; §9 FPU grep patterns pinned (x86_64 `_mm_setcsr`, aarch64 `fesetround` matching C portable path). Note: R5-D1's aarch64 `fesetround` target was found inconsistent with R1-D1's "MXCSR/FPCR level rather than libc `fesetround` alone" design intent during Round 6 review; superseded by R6-D1. |
+| Round 6 | 2026-05-22 | Round-6-blocking findings closed against the Round-5 state: **(R6-D1)** aarch64 FPU primitive resolves the R1-D1/R5-D1 inconsistency by reopening R1-D1 option (b) for aarch64 only — stable inline asm `mrs/msr fpcr` write — with substrate justification (no stable `core::arch::aarch64` FPCR-write intrinsic exists; R1-D1's "no substrate advantage" rejection rationale applied to x86_64, not aarch64). §9 FPU unsafe grep targets updated (§3.7 R6-D1). **(R6-D2)** Out-of-range opcode disposition changes from R1-D3's `debug_assert!`/no-op pair to `panic!` in both profiles, removing the debug-vs-release behavior divergence the §9 **Debug ≡ release** gate (Phase 2c §5.11.3) would surface and asserting unreachability normatively rather than via profile-conditional checks. Plan-doc edits ride along: **(R6-D3)** R1-D4 IMUL_RCP unreachability citation (spec §5.2.10 + C `bytecode_machine.cpp:246-258`); **(R6-D4)** §8 commit-5 split into 5a (T9–T16 additions) + 5b (T8 expectation flip) keeping the consensus-affecting flip independently bisectable; **(R6-D5)** `exec_pc` invariant-documentation note for implementation-PR rustdoc + sentinel-reset to `u16::MAX` for fail-closed out-of-window reads. Implementation cut authorized. **Posture cite (audit-against-actual-code recurrence).** R1-D3's frequency-decode finding (wire opcode bytes are frequency-encoded per `bytecode_machine.hpp:67-98`, not `InstructionType` enum values) is the **second instance** of the audit-against-actual-code discipline catching a real consensus-split bug pre-implementation. First instance: Phase 2c Round 3 `mp` correction (audit reading the actual C reference rather than working from prompted summaries). Two instances now confirm the pattern; the discipline applies forward to 2f/2g per `16-architectural-inheritance.mdc`'s discovery-cadence framing. |
