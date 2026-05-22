@@ -1271,19 +1271,22 @@ hardening forward-actions:
   `seedhash`, `data`, and `out` for null before constructing slices
   or dereferencing. Even `slice::from_raw_parts(ptr::null(), 0)` is
   UB in Rust, so the check is mandatory regardless of length. Null
-  on any of the three pointers translates to a new error code
-  `ERR_NULL_PTR (-2)` (or whatever value Phase 3a's taxonomy
-  assigns); the LWMA-1 FFI precedent has the same shape and is the
-  template.
+  on any of the three pointers translates to **`ERR_NULL_PTR
+  (-1)`** per the parent plan's FFI error taxonomy (`RANDOMX_V2_PLAN.md`
+  Phase 0 §5 + `RANDOMX_V2_RUST.md` §7's
+  `SHEKYL_POW_RANDOMX_V2_ERR_NULL_PTR` constant). The LWMA-1 FFI
+  precedent has the same shape and is the template.
 - **Length validation against a published maximum**: `data_len` is
-  validated against `RANDOMX_BLOCK_TEMPLATE_MAX_SIZE` (or the
-  Shekyl-side equivalent constant; parent plan §5 Round 4 pins the
-  constant). If `data_len > MAX`, the FFI shim returns
-  `ERR_LENGTH_EXCEEDED` (or equivalent) without constructing the
-  slice. The check defends against a hostile C++ caller passing
-  `data_len` that overruns the actual buffer; even though the C++
-  side is the trust boundary in principle, defense-in-depth at the
-  FFI shim is the discipline.
+  validated against `RANDOMX_BLOCK_TEMPLATE_MAX_SIZE` (parent plan
+  §5 Round 4 + Round 5 cross-check pins the constant at 2 MiB). If
+  `data_len > MAX`, the FFI shim returns **`ERR_DATA_TOO_LARGE
+  (-2)`** per the parent plan's FFI error taxonomy
+  (`RANDOMX_V2_PLAN.md` Phase 0 §5 + `RANDOMX_V2_RUST.md` §7's
+  `SHEKYL_POW_RANDOMX_V2_ERR_DATA_TOO_LARGE` constant) without
+  constructing the slice. The check defends against a hostile C++
+  caller passing `data_len` that overruns the actual buffer; even
+  though the C++ side is the trust boundary in principle, defense-in-depth
+  at the FFI shim is the discipline.
 - **`seedhash` as typed-array pointer**: the FFI signature is
   `seedhash: *const [u8; 32]` (a pointer to a typed array) rather
   than `seedhash: *const u8` (an untyped pointer relying on
@@ -1294,8 +1297,13 @@ hardening forward-actions:
 
 All three are 3a-implementation-time discipline notes; the parent
 plan §5 Round 4 amendment pins the `RANDOMX_BLOCK_TEMPLATE_MAX_SIZE`
-constant value and the `ERR_NULL_PTR` taxonomy entry so 3a doesn't
-re-litigate them.
+constant value and the full `ERR_NULL_PTR (-1)` / `ERR_DATA_TOO_LARGE
+(-2)` taxonomy (per `RANDOMX_V2_RUST.md` §7's C-header
+`SHEKYL_POW_RANDOMX_V2_*` constants) so 3a doesn't re-litigate them.
+This plan-doc's references to those constants use the parent-plan
+spelling and numeric values verbatim (no alternative spellings,
+no placeholder values) so Phase 3a's enum doesn't have to reconcile
+two competing taxonomies at implementation time.
 
 ### 5.11.7 Forward-actions to Phase 2f (CacheStore + VmState pool)
 
@@ -1777,12 +1785,14 @@ Phase 2c lands the cache + VM substrate; downstream phases inherit:
       `out` is checked for null before any dereference or slice
       construction. `slice::from_raw_parts(ptr::null(), 0)` is UB
       in Rust regardless of length; the check is mandatory.
-      Translates to `ERR_NULL_PTR (-2)` (or equivalent;
-      parent-plan §5 R4 pins the taxonomy value).
+      Translates to **`ERR_NULL_PTR (-1)`** per the parent plan's
+      FFI error taxonomy (`RANDOMX_V2_PLAN.md` Phase 0 §5 +
+      `RANDOMX_V2_RUST.md` §7).
     - **Length validation against `RANDOMX_BLOCK_TEMPLATE_MAX_SIZE`.**
       `data_len` is validated against the max before slice
-      construction; oversize returns `ERR_LENGTH_EXCEEDED`. Parent
-      plan §5 R4 pins the constant value.
+      construction; oversize returns **`ERR_DATA_TOO_LARGE (-2)`**
+      per the parent plan's FFI error taxonomy. Parent plan §5 R4
+      pins the constant value (2 MiB; cross-checked in R5).
     - **`seedhash` as typed-array pointer.** FFI signature uses
       `seedhash: *const [u8; 32]` (typed-array pointer) rather
       than `seedhash: *const u8` (untyped pointer relying on
