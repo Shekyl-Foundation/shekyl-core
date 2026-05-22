@@ -8,6 +8,19 @@ Round 1 must address. Round 1 of Phase 2d populates this scaffold;
 this commit only puts the scaffold in place so 2d's author does not
 have to reconstruct the 2c-locked items from plan-doc prose.
 
+**Round 4 addenda (2026-05-21).** Phase 2c Round 4's threat-model
+review (`RANDOMX_V2_PHASE2C_PLAN.md` §5.11) accumulated three
+2d-bound items on top of the original Round 3 contract: §2's F7
+forward-action gains a per-rounding-mode coverage requirement (carry
+from 2c §5.11 Objective 1 "FPU rounding-mode escape"); §3.1's FPU
+rounding-mode decision-point gains an unsafe-block scope-check
+discipline addendum (carry from 2c §5.11 Objective 5
+"`unsafe`-block discipline at the FPU intrinsic"); §3.4 is new and
+records the `u128`-vs-`__int128_t` edge-case differential discipline
+(carry from 2c §5.11 Objective 6 "consensus split via implementation
+divergence"). All three are forward-actions that 2d Round 1 absorbs
+at design time; none reopen the Round 3 contract.
+
 **Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md)
 §"Track A — Phase 2" sub-PR 2d is the binding one-line scope
 ("Implement v2 bytecode dispatch — real per-opcode dispatch
@@ -187,6 +200,35 @@ the same mode. **2d's test corpus extends 2c's T1–T8 matrix with
 T9+ tests for per-opcode arithmetic correctness, each carrying an
 explicit rounding-mode disposition in its `.meta.txt`.**
 
+**Round 4 addition: per-rounding-mode coverage.** Per 2c §5.11
+Objective 1 ("FPU rounding-mode escape" — an attacker who reverse-
+engineers the verifier's actual rounding behavior can craft inputs
+that exploit divergence from spec-required rounding), the F7
+forward-action's "explicit rounding-mode disposition per test" is
+insufficient on its own. 2d Round 1 commits to a stronger discipline:
+**every FP opcode (FADD_R, FADD_M, FSUB_R, FSUB_M, FMUL_R, FDIV_M,
+FSQRT_R, FSCAL_R, FSWAP_R) must have at least one test under each of
+the four IEEE 754 rounding modes (RN/RD/RU/RZ), with byte-equality
+asserted against the C reference under the matching mode.** That is
+9 FP opcodes × 4 modes = 36 mode-coverage tests at minimum, beyond
+whatever T9+ tests the F7 forward-action otherwise produces.
+
+The coverage matrix lives in 2d Round 1's test plan (the to-be-
+expanded version of this skeleton's §4); the generator binary (per
+2c §5.6 F6 single-binary CLI dispatch) gains a per-mode reference
+output mode that sets the host rounding mode before generating
+reference register state. The C reference's `setRoundingMode` (per
+`intrin_portable.h`) is the source of truth for what "set rounding
+mode" means at the generator level; the Rust verifier's
+mode-plumbing (per §3.1's outcome) is the equivalent at the
+verifier level. Test byte-equality holds iff both implementations
+agree at every IEEE 754 corner case under each of the four modes.
+
+This is the test-side mitigation for 2c §5.11 Objective 1's
+attacker-controlled-divergence concern. The dispatch-side
+implementation is §3.1's decision-point outcome; the test-side
+coverage is this F7 addition.
+
 ---
 
 ## 3. Decision points for 2d Round 1
@@ -229,6 +271,45 @@ Options (none pre-selected):
 
 2d Round 1 evaluates each against `17-dependency-discipline.mdc`,
 `30-cryptography.mdc`, and Phase 0's ≤3.0× performance budget.
+
+**Round 4 addition: unsafe-block scope-check discipline.** Per 2c
+§5.11 Objective 5 ("`unsafe`-block discipline at the FPU intrinsic"),
+whichever option from (a)–(d) 2d Round 1 selects, the resulting
+`unsafe` block (if any — option (d) avoids `unsafe` entirely) is
+audited at 2d-implementation time to verify it does **only** the
+rounding-mode write and nothing else:
+
+- **No surrounding state mutation.** The `unsafe` block contains
+  exactly one operation: the MXCSR (x86_64) or FPCR (aarch64) write.
+  Adjacent register-file reads, scratchpad writes, or VmState field
+  updates live in the surrounding safe code, not inside the
+  `unsafe` carve-out.
+- **No pointer dereferences.** The rounding-mode write does not
+  read or write memory through a raw pointer; it operates only on
+  the CPU's FPU control word via the intrinsic / asm primitive.
+- **No allocation.** No `Box::new_*`, no slice constructor, no
+  `assume_init` call inside the `unsafe` block.
+- **No call-site fan-out.** The `unsafe` block contains no function
+  call other than the single intrinsic (option (a)) or no `call`
+  instruction beyond the inline-asm body (option (b)). If option
+  (c) is selected, the third-party crate's `unsafe` discipline is
+  audited per `17-dependency-discipline.mdc`'s property-existence
+  verification, not assumed.
+
+The audit produces a `// SAFETY:` doc-comment per
+`35-secure-memory.mdc` that enumerates exactly what the block does
+and why it cannot violate UB. The comment is part of the 2d
+implementation-PR review surface; a reviewer who finds the block
+doing more than the rounding-mode write rejects the PR.
+
+This is the discipline that prevents the FPU rounding-mode carve-
+out from becoming the entry point for unrelated `unsafe` work
+("while I have the carve-out open, let me also..."), which would
+violate both `15-deletion-and-debt.mdc` and `35-secure-memory.mdc`.
+The two existing 2c carve-outs (`Box::new_zeroed_slice` for cache
+and scratchpad) are governed by the same discipline; 2c §5.11.2's
+`debug_assert!` pattern is the implementation-PR-side check that
+the carve-out body produces the size it claims.
 
 ### 3.2 `F128` newtype shape
 
@@ -286,6 +367,76 @@ Options:
 2d Round 1 chooses one with named benchmark or reasoning evidence.
 Per the reversion-clause in 2c §5.1.1, the IBC 2-pass form is a
 fallback if (a)/(b) cannot meet the ≤3.0× budget.
+
+### 3.4 `u128` / `__int128_t` edge-case differential discipline (Round 4)
+
+**Context.** Per 2c §5.11 Objective 6 ("consensus split via
+implementation divergence"), Rust's `u128` arithmetic may diverge
+from C's `__int128_t` arithmetic at edge cases the spec does not
+mechanically pin down. Examples:
+
+- **Division by zero.** Rust panics on `u128 / 0` and `u128 % 0`
+  (in debug and release alike — the panic is a defined behavior,
+  not a profile-dependent one). C is undefined behavior. If a
+  RandomX opcode's input can ever drive a divisor to zero, the
+  Rust verifier panics where the C miner produces an arbitrary
+  bit pattern, and the chain forks.
+- **Signed division overflow** (`i128::MIN / -1`). Rust panics; C
+  is UB. Same hazard, opposite-sign register variant.
+- **Shift-by-width-or-greater.** Rust panics in debug, wraps in
+  release (profile-dependent). C is UB. The debug-vs-release
+  equivalence test from 2c §5.11.3 catches the
+  profile-dependence; the bigger hazard is the Rust-vs-C
+  divergence at the boundary.
+- **`u128 * u128` truncation.** Rust's `wrapping_mul` returns the
+  low 128 bits; the C reference uses `_umul128` intrinsic for the
+  low half and may compute the high half separately. If the
+  dispatch needs both halves (e.g., IMULH_R, IMULH_M, IMUL_RCP),
+  the high half's computation path must be byte-equality-checked
+  against the C reference.
+
+**Discipline.** 2d Round 1 commits to:
+
+1. **Audit every opcode handler that uses `u128` or `i128`** for
+   the four edge-case classes above. The audit produces a table
+   like 2c §5.1.1's VmState audit: opcode → arithmetic path →
+   edge-case disposition (cannot occur per spec / saturated
+   explicitly / checked path with explicit Rust panic prevented
+   by guard).
+2. **Match the C reference's behavior at every reachable edge
+   case.** Where the C reference exhibits UB, the Rust dispatch
+   either:
+   - Proves the edge case is unreachable (spec excludes it; e.g.,
+     IMUL_RCP divisor is always non-zero by spec construction),
+     and documents the proof in a comment that names the spec
+     section.
+   - Pre-handles the edge case with an explicit branch that
+     produces the same observable result as the C reference's
+     dominant compiler output (or the spec's intended behavior,
+     where the spec specifies and the C implementation deviates
+     — in which case the deviation is itself an upstream-fork
+     finding and routes to a follow-up).
+3. **Generator-side test coverage.** The reference vector
+   generator (per 2c §5.6 F6) gains adversarial inputs that drive
+   each enumerated edge case at the C reference; 2d's tests
+   assert byte-equality. Belongs in 2g's adversarial corpus per
+   2c §5.11.5 for the full enumeration; 2d carries the
+   per-opcode subset that 2d's dispatch implementation needs.
+
+**Why this is 2d's problem, not 2g's.** 2g's harness is the
+empirical safety net for cases that escape design-time audit; 2d's
+audit is the design-time mitigation. The audit prevents the bug
+from shipping in the first place; the harness catches what the
+audit missed. Per `16-architectural-inheritance.mdc`'s "continuous
+discipline as inheritance prevention," design-time discipline is
+cheaper and more durable than empirical sampling.
+
+**Out of scope for 2d.** `i128::MIN / -1` paths and div-by-zero
+paths that turn out to be reachable but the C reference's UB is
+itself the consensus rule (i.e., the network has long agreed on
+some specific compiler output as the canonical answer) — these are
+2g findings, not 2d findings. 2d audits and pre-handles; 2g's
+harness backstops.
 
 ---
 
@@ -347,4 +498,5 @@ are Phase 2d's own pre-flight work.
 | Round | Date | Outcome |
 |-------|------|---------|
 | Scaffold | 2026-05-21 | Skeleton scaffold landed as deliverable of Phase 2c Round 3 (R3-D3). Records the 2c → 2d hand-off contract verbatim, the locked-by-2c `VmState` field set, the F1/F2/F3/F5/F7 forward-actions, the three Round 1 decision points (FPU rounding-mode mechanism; `F128` newtype shape; per-opcode dispatch shape), and the scope discipline. Round 1 design doc supersedes this file when it lands. |
+| Scaffold-R4 | 2026-05-21 | Round 4 addenda landed as a sibling commit of Phase 2c Round 4's threat-model addenda (per `RANDOMX_V2_PHASE2C_PLAN.md` §5.11). Three additions: (i) §2 F7 forward-action extended with per-rounding-mode coverage requirement (9 FP opcodes × 4 IEEE 754 modes ≥ 36 mode-coverage tests, byte-equality-asserted against C reference under matching mode); carry from 2c §5.11 Objective 1 "FPU rounding-mode escape." (ii) §3.1 FPU rounding-mode decision-point gains an "unsafe-block scope-check discipline" addendum: whichever option (a)–(d) 2d Round 1 selects, the resulting `unsafe` block is audited to do only the rounding-mode write (no state mutation, no pointer dereferences, no allocation, no call-site fan-out); carry from 2c §5.11 Objective 5 "`unsafe`-block discipline at the FPU intrinsic." (iii) New §3.4 "`u128` / `__int128_t` edge-case differential discipline" enumerates four edge-case classes (div by zero, signed-div overflow, shift-by-width, `u128 * u128` truncation) and requires 2d Round 1 to audit every `u128`/`i128`-using opcode handler against the C reference, pre-handling reachable edge cases; carry from 2c §5.11 Objective 6 "consensus split via implementation divergence." None of the three additions reopen the Round 3 contract; all are forward-actions absorbed at 2d Round 1 design time. |
 | Round 1 | pending | Phase 2d's first design round. Cuts after Phase 2c implementation lands. |
