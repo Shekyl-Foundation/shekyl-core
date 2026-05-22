@@ -88,4 +88,7 @@
 mod aes;
 mod argon2d;
 mod blake2_generator;
+mod cache;
 mod superscalar;
+
+pub use cache::Cache;
