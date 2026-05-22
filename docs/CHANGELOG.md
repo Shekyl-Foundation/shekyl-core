@@ -120,7 +120,9 @@
       unsafe surface" failure mode that prose-as-discipline depends
       on reviewer attention to catch.
     - **(R5-D4)** New [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) V3.0 entry:
-      post-2c-implementation sibling PR to promote five 2c-emergent
+      sibling PR (opens post-PR-#65 merge to `dev`;
+      parallel-eligible with the Phase 2c implementation PR,
+      not gated on it) to promote five 2c-emergent
       disciplines to project-level documentation (likely
       `.cursor/rules/26-sub-pr-design-discipline.mdc` with
       substantial prose, similar shape to

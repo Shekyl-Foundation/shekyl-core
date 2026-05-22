@@ -1694,9 +1694,10 @@ sustainability is unaffected by the recalibration.
   knowledge that sits in one plan-doc is at one-PR-per-
   contributor risk of being lost.
 
-  **Disposition.** A sibling PR opens after Phase 2c
-  implementation lands on `dev` (post-PR-#65 merge) and
-  promotes the five disciplines either as:
+  **Disposition.** A sibling PR opens after this plan-doc PR
+  (PR #65) merges to `dev` — parallel-eligible with the Phase 2c
+  implementation PR rather than gated on it — and promotes the
+  five disciplines either as:
 
   - **Option A: `.cursor/rules/` entry.** A new file
     `.cursor/rules/26-sub-pr-design-discipline.mdc` capturing
@@ -1725,14 +1726,24 @@ sustainability is unaffected by the recalibration.
   **Scope discipline.** The sibling PR is not a Phase 2c
   Round 5 deliverable — that would be scope creep
   (`15-deletion-and-debt.mdc` "while we're here is the
-  enemy"). The sibling PR is **post-2c-implementation**,
-  opens after PR #65 merges, and is short-lived per
+  enemy"). The sibling PR opens **after PR #65 (the plan-doc
+  PR) merges to `dev`**, is parallel-eligible with the Phase 2c
+  implementation PR (not gated on it), and is short-lived per
   `06-branching.mdc` rule 2. The sibling PR's own scope is
   exclusively the discipline-promotion work; it does not
   carry implementation changes, doc-comment changes, or
   forward-action absorption from other PRs. A reviewer who
   sees scope drift in this sibling PR rejects it per the
   scope discipline.
+
+  The "parallel-eligible" framing matters because the
+  promoted disciplines are needed at Phase 2d Round 1 design
+  time (which can start as soon as the Phase 2c
+  implementation PR opens for review — Phase 2d's first
+  design round doesn't have to wait for Phase 2c to land
+  fully). Gating the discipline-promotion PR on Phase 2c
+  implementation lands would delay 2d's design substrate
+  past the deadline this entry was written to defend.
 
   **Reopening criteria (per `21-reversion-clause-
   discipline.mdc`).** If the sibling PR is deferred beyond
