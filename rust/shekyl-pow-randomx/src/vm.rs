@@ -13,28 +13,30 @@
 //! set, this module lands across three Phase 2c implementation-PR
 //! commits:
 //!
-//! - **Commit 4 (this commit, as corrected by the R0-D9 fix-up
-//!   immediately on top):** [`VmState`] struct skeleton with the
-//!   frozen field set (per §5.1.1 + §5.5 F5 v2-only simplification),
-//!   the [`F128`] / [`Instruction`] / [`Program`] type definitions,
-//!   the [`PROGRAM_SIZE`] / [`PROGRAM_ITERATIONS`] /
+//! - **Commit 4 (as corrected by the R0-D9 fix-up immediately on
+//!   top):** [`VmState`] struct skeleton with the frozen field set
+//!   (per §5.1.1 + §5.5 F5 v2-only simplification), the [`F128`] /
+//!   [`Instruction`] / [`Program`] type definitions, the
+//!   [`PROGRAM_SIZE`] / [`PROGRAM_ITERATIONS`] /
 //!   [`RANDOMX_SCRATCHPAD_L3`] spec constants, [`VmState::new`]
-//!   (allocation-only constructor), the `alloc_zeroed_scratchpad`
+//!   (allocation-only constructor), the [`alloc_zeroed_scratchpad`]
 //!   carve-out (Phase 2c's second and final `#![deny(unsafe_code)]`
 //!   carve-out per §1 covenant 7 + §5.11.2), the scratchpad-
 //!   allocation `debug_assert!` per §5.11.2, and the empty [`Drop`]
-//!   (review-surface hook per §5.11.4). No `compute_hash`, no
-//!   `dispatch_instruction`, no register/program init — those land
-//!   in commits 5 and 6.
-//! - **Commit 5 (planned, per §14 Round 0 R0-D8 Rust-idiomatic
-//!   two-method init shape):** `VmState::init_scratchpad` via
-//!   `aes::fill_aes_1r_x4`, plus `VmState::init_program` (stack-
-//!   allocate the 3200-byte buffer per spec §4.5's
-//!   `128 + 8 * RANDOMX_PROGRAM_SIZE` budget, fill via
-//!   `aes::fill_aes_4r_x4`, parse entropy[0..128] into register-init
-//!   fields, parse instructions[128..3200] into
-//!   `self.program.instructions`), plus T3'/T4'/T5' fixture-free
-//!   determinism property tests inline.
+//!   (review-surface hook per §5.11.4).
+//! - **Commit 5 (this commit, per §14 Round 0 R0-D8 Rust-idiomatic
+//!   two-method init shape):** [`VmState::init_scratchpad`] via
+//!   [`crate::aes::fill_aes_1r_x4`], plus [`VmState::init_program`]
+//!   (stack-allocate the [`PROGRAM_BUFFER_SIZE`] = 3_200-byte buffer
+//!   per spec §4.5's `128 + 8 * RANDOMX_PROGRAM_SIZE` budget, fill
+//!   via [`crate::aes::fill_aes_4r_x4`], parse entropy[0..128] into
+//!   the register-init field set via
+//!   [`get_small_positive_float_bits`] / [`get_float_mask`] /
+//!   [`CACHE_LINE_ALIGN_MASK`] / [`DATASET_EXTRA_ITEMS`] /
+//!   [`CACHE_LINE_SIZE`], parse instructions[128..3200] into
+//!   `self.program.instructions`); plus the IEEE-754 / dataset
+//!   constants the helpers consume; plus T3'/T4'/T5' fixture-free
+//!   determinism property tests inline per §5.11.1.
 //! - **Commit 6 (planned):** `pub fn compute_hash` + the private
 //!   `fn dispatch_instruction` NOP-body stub (the §5.1 function-body
 //!   replacement contract Phase 2d fills in), plus the F/E AES mix
@@ -164,6 +166,254 @@ const _: () = assert!(
      RANDOMX_SCRATCHPAD_LN / sizeof(int_reg_t) - 1 for N in 1..=3, \
      which is only correct when the operand is a power of two)"
 );
+
+/// RandomX dataset base size in bytes.
+///
+/// `RANDOMX_DATASET_BASE_SIZE = 2_147_483_648` (2 GiB) per
+/// [`external/randomx-v2/src/configuration.h:50`](../../../external/randomx-v2/src/configuration.h)
+/// at pin `aaafe71`. Consumed transitively by [`CACHE_LINE_ALIGN_MASK`]
+/// (`(RANDOMX_DATASET_BASE_SIZE - 1) & !(CACHE_LINE_SIZE as u32 - 1)`
+/// per `common.hpp:87`). The Rust port never indexes a dataset
+/// directly (the verifier uses `Cache::derive_item` to compute dataset
+/// items on the fly per Phase 0's "no dataset" decision); this
+/// constant exists only to derive [`CACHE_LINE_ALIGN_MASK`] and is
+/// not otherwise consumed.
+#[allow(dead_code)]
+pub(crate) const RANDOMX_DATASET_BASE_SIZE: u32 = 2_147_483_648;
+
+/// RandomX dataset extra size in bytes.
+///
+/// `RANDOMX_DATASET_EXTRA_SIZE = 33_554_368` per
+/// [`external/randomx-v2/src/configuration.h:53`](../../../external/randomx-v2/src/configuration.h)
+/// at pin `aaafe71`. Consumed transitively by [`DATASET_EXTRA_ITEMS`]
+/// (`RANDOMX_DATASET_EXTRA_SIZE / CACHE_LINE_SIZE` per
+/// `common.hpp:90`). The Rust port never indexes a dataset directly;
+/// this constant exists only to derive [`DATASET_EXTRA_ITEMS`] and is
+/// not otherwise consumed.
+#[allow(dead_code)]
+pub(crate) const RANDOMX_DATASET_EXTRA_SIZE: u32 = 33_554_368;
+
+/// Cache-line size in bytes.
+///
+/// `CacheLineSize = RANDOMX_DATASET_ITEM_SIZE = 64` per
+/// [`external/randomx-v2/src/common.hpp:85`](../../../external/randomx-v2/src/common.hpp)
+/// and
+/// [`external/randomx-v2/src/randomx.h:36`](../../../external/randomx-v2/src/randomx.h)
+/// at pin `aaafe71`. Used by [`VmState::init_program`]'s `mem.ma`
+/// alignment + `dataset_offset` multiplier.
+#[allow(dead_code)]
+pub(crate) const CACHE_LINE_SIZE: u32 = 64;
+
+/// Cache-line alignment mask.
+///
+/// `CacheLineAlignMask = (RANDOMX_DATASET_BASE_SIZE - 1) & ~(CacheLineSize - 1)`
+/// per
+/// [`external/randomx-v2/src/common.hpp:87`](../../../external/randomx-v2/src/common.hpp)
+/// at pin `aaafe71`. Applied to `entropy(8)` during
+/// [`VmState::init_program`] to compute `mem.ma` per
+/// `virtual_machine.cpp:81`. The mask zeros the low 6 bits (cache-
+/// line alignment) within the low 31 bits (`DATASET_BASE_SIZE - 1`);
+/// at the spec-pinned values the result is `0x7FFF_FFC0`.
+#[allow(dead_code)]
+pub(crate) const CACHE_LINE_ALIGN_MASK: u32 =
+    (RANDOMX_DATASET_BASE_SIZE - 1) & !(CACHE_LINE_SIZE - 1);
+
+/// Dataset extra items.
+///
+/// `DatasetExtraItems = RANDOMX_DATASET_EXTRA_SIZE / CACHE_LINE_SIZE`
+/// per
+/// [`external/randomx-v2/src/common.hpp:90`](../../../external/randomx-v2/src/common.hpp)
+/// at pin `aaafe71`. Applied to `entropy(13)` during
+/// [`VmState::init_program`] to compute `dataset_offset` per
+/// `virtual_machine.cpp:91`. At the spec-pinned values the result is
+/// `524_287` (= `2^19 - 1`).
+#[allow(dead_code)]
+pub(crate) const DATASET_EXTRA_ITEMS: u32 = RANDOMX_DATASET_EXTRA_SIZE / CACHE_LINE_SIZE;
+
+/// IEEE-754 binary64 mantissa width in bits.
+///
+/// `mantissaSize = 52` per
+/// [`external/randomx-v2/src/common.hpp:174`](../../../external/randomx-v2/src/common.hpp)
+/// at pin `aaafe71`. Used by [`get_small_positive_float_bits`] /
+/// [`get_static_exponent`] to assemble IEEE-754 binary64 bit patterns
+/// from the program-init entropy buffer.
+#[allow(dead_code)]
+pub(crate) const MANTISSA_SIZE: u32 = 52;
+
+/// IEEE-754 binary64 exponent width in bits.
+///
+/// `exponentSize = 11` per
+/// [`external/randomx-v2/src/common.hpp:175`](../../../external/randomx-v2/src/common.hpp)
+/// at pin `aaafe71`. Used by [`get_small_positive_float_bits`] to
+/// mask the entropy-derived exponent into the binary64 11-bit field.
+#[allow(dead_code)]
+pub(crate) const EXPONENT_SIZE: u32 = 11;
+
+/// IEEE-754 binary64 mantissa mask.
+///
+/// `mantissaMask = (1 << mantissaSize) - 1` per
+/// [`external/randomx-v2/src/common.hpp:176`](../../../external/randomx-v2/src/common.hpp)
+/// at pin `aaafe71`.
+#[allow(dead_code)]
+pub(crate) const MANTISSA_MASK: u64 = (1u64 << MANTISSA_SIZE) - 1;
+
+/// IEEE-754 binary64 exponent mask.
+///
+/// `exponentMask = (1 << exponentSize) - 1` per
+/// [`external/randomx-v2/src/common.hpp:177`](../../../external/randomx-v2/src/common.hpp)
+/// at pin `aaafe71`.
+#[allow(dead_code)]
+pub(crate) const EXPONENT_MASK: u64 = (1u64 << EXPONENT_SIZE) - 1;
+
+/// IEEE-754 binary64 exponent bias.
+///
+/// `exponentBias = 1023` per
+/// [`external/randomx-v2/src/common.hpp:178`](../../../external/randomx-v2/src/common.hpp)
+/// at pin `aaafe71`.
+#[allow(dead_code)]
+pub(crate) const EXPONENT_BIAS: u64 = 1023;
+
+/// Dynamic exponent bit-width for the `e`-register float-mask
+/// derivation.
+///
+/// `dynamicExponentBits = 4` per
+/// [`external/randomx-v2/src/common.hpp:179`](../../../external/randomx-v2/src/common.hpp)
+/// at pin `aaafe71`. Used by [`get_static_exponent`].
+#[allow(dead_code)]
+pub(crate) const DYNAMIC_EXPONENT_BITS: u32 = 4;
+
+/// Static exponent bit-width consumed from the entropy MSB by
+/// [`get_static_exponent`].
+///
+/// `staticExponentBits = 4` per
+/// [`external/randomx-v2/src/common.hpp:180`](../../../external/randomx-v2/src/common.hpp)
+/// at pin `aaafe71`.
+#[allow(dead_code)]
+pub(crate) const STATIC_EXPONENT_BITS: u32 = 4;
+
+/// Fixed exponent bits seeded into [`get_static_exponent`]'s output
+/// before XOR-ing with the entropy-derived bits.
+///
+/// `constExponentBits = 0x300` per
+/// [`external/randomx-v2/src/common.hpp:181`](../../../external/randomx-v2/src/common.hpp)
+/// at pin `aaafe71`.
+#[allow(dead_code)]
+pub(crate) const CONST_EXPONENT_BITS: u64 = 0x300;
+
+/// Size in bytes of the per-program entropy header.
+///
+/// Per [`spec §4.5`](../../../external/randomx-v2/doc/specs.md) +
+/// [`external/randomx-v2/src/program.hpp:66`](../../../external/randomx-v2/src/program.hpp)
+/// at pin `aaafe71`, the C reference's `Program::entropyBuffer` is
+/// `uint64_t entropyBuffer[16]` — 16 × 8 = 128 bytes. The Rust port
+/// reads these 128 bytes from the head of the [`PROGRAM_BUFFER_SIZE`]
+/// AES-fill output and parses them into the register-init field set
+/// per [`VmState::init_program`].
+#[allow(dead_code)]
+pub(crate) const ENTROPY_BUFFER_SIZE: usize = 128;
+
+/// Size in bytes of a single parsed [`Instruction`] in the program
+/// buffer's instruction tail.
+///
+/// Per [`spec §5.1`](../../../external/randomx-v2/doc/specs.md) +
+/// [`external/randomx-v2/src/instruction.hpp`](../../../external/randomx-v2/src/instruction.hpp)
+/// at pin `aaafe71`, every RandomX instruction is exactly 8 bytes
+/// on the wire: `opcode | dst | src | mod_ | imm32 (LE)`.
+#[allow(dead_code)]
+pub(crate) const INSTRUCTION_SIZE: usize = 8;
+
+/// Size in bytes of the [`VmState::init_program`] AES-fill buffer.
+///
+/// Per [`spec §4.5`](../../../external/randomx-v2/doc/specs.md) the
+/// per-program AES-generator emits `128 + 8 * RANDOMX_PROGRAM_SIZE`
+/// bytes per program-init call (128-byte entropy header + 384 × 8-byte
+/// instructions = 3_200 bytes at `RANDOMX_PROGRAM_SIZE_V2 = 384`).
+/// The constant is asserted equal to `ENTROPY_BUFFER_SIZE +
+/// PROGRAM_SIZE * INSTRUCTION_SIZE` at compile time below.
+#[allow(dead_code)]
+pub(crate) const PROGRAM_BUFFER_SIZE: usize = ENTROPY_BUFFER_SIZE + PROGRAM_SIZE * INSTRUCTION_SIZE;
+
+const _: () = assert!(
+    PROGRAM_BUFFER_SIZE == 3_200,
+    "PROGRAM_BUFFER_SIZE must equal 128 + 8 * 384 = 3_200 per spec \
+     section 4.5; if PROGRAM_SIZE drifts away from 384 (per R0-D9), \
+     this assertion catches the drift before init_program's stack \
+     allocation runs against a wrong size"
+);
+
+const _: () = assert!(
+    PROGRAM_BUFFER_SIZE % 64 == 0,
+    "PROGRAM_BUFFER_SIZE must be a multiple of 64 per the \
+     `aes::fill_aes_4r_x4` output-length contract \
+     (the AES-4R-x4 generator emits in 64-byte chunks)"
+);
+
+/// Decode an entropy-derived `u64` into IEEE-754 binary64 bits for a
+/// "small positive float" — used for `a`-register initialization.
+///
+/// Mirrors `getSmallPositiveFloatBits` at
+/// [`external/randomx-v2/src/virtual_machine.cpp:49-56`](../../../external/randomx-v2/src/virtual_machine.cpp)
+/// at pin `aaafe71`. Extracts the high 5 bits of `entropy` as the
+/// exponent (range `0..=31`), adds [`EXPONENT_BIAS`], masks with
+/// [`EXPONENT_MASK`], and ORs the masked exponent (shifted up by
+/// [`MANTISSA_SIZE`]) with the low [`MANTISSA_SIZE`] bits of `entropy`
+/// as the mantissa. The result is the bit pattern of a positive
+/// binary64 value in the range `[2^-1023, 2^-993)`.
+///
+/// # Determinism / side-channel posture
+///
+/// Pure function of `entropy`; no allocator calls, no atomic ops, no
+/// table lookups. Constant-time across all inputs per the bit-pattern
+/// shape of the operations (shifts/ANDs/ORs on `u64`).
+#[allow(dead_code)]
+pub(crate) fn get_small_positive_float_bits(entropy: u64) -> u64 {
+    let exponent = entropy >> 59;
+    let mantissa = entropy & MANTISSA_MASK;
+    let exponent = exponent + EXPONENT_BIAS;
+    let exponent = exponent & EXPONENT_MASK;
+    let exponent = exponent << MANTISSA_SIZE;
+    exponent | mantissa
+}
+
+/// Decode an entropy-derived `u64` into the static-exponent half of
+/// an `e_mask` value — used internally by [`get_float_mask`].
+///
+/// Mirrors `getStaticExponent` at
+/// [`external/randomx-v2/src/virtual_machine.cpp:58-63`](../../../external/randomx-v2/src/virtual_machine.cpp)
+/// at pin `aaafe71`. Seeds with [`CONST_EXPONENT_BITS`] (`0x300`),
+/// ORs in the top [`STATIC_EXPONENT_BITS`] of `entropy` shifted up by
+/// [`DYNAMIC_EXPONENT_BITS`], then shifts the whole assembly up by
+/// [`MANTISSA_SIZE`] to land in the binary64 exponent field.
+///
+/// # Determinism / side-channel posture
+///
+/// See [`get_small_positive_float_bits`].
+#[allow(dead_code)]
+pub(crate) fn get_static_exponent(entropy: u64) -> u64 {
+    let exponent = CONST_EXPONENT_BITS;
+    let exponent = exponent | ((entropy >> (64 - STATIC_EXPONENT_BITS)) << DYNAMIC_EXPONENT_BITS);
+    exponent << MANTISSA_SIZE
+}
+
+/// Decode an entropy-derived `u64` into an `e_mask[i]` value applied
+/// by FDIV_M's `maskRegisterExponentMantissa` step.
+///
+/// Mirrors `getFloatMask` at
+/// [`external/randomx-v2/src/virtual_machine.cpp:65-68`](../../../external/randomx-v2/src/virtual_machine.cpp)
+/// at pin `aaafe71`. Combines the low 22 bits of `entropy` with the
+/// [`get_static_exponent`]-derived static exponent. The result is
+/// stored into `VmState::e_mask[0]` / `e_mask[1]` during
+/// [`VmState::init_program`] and consumed by FDIV_M in Phase 2d's
+/// bytecode dispatch (`bytecode_machine.hpp:272-278`).
+///
+/// # Determinism / side-channel posture
+///
+/// See [`get_small_positive_float_bits`].
+#[allow(dead_code)]
+pub(crate) fn get_float_mask(entropy: u64) -> u64 {
+    const MASK_22BIT: u64 = (1u64 << 22) - 1;
+    (entropy & MASK_22BIT) | get_static_exponent(entropy)
+}
 
 /// A single 8-byte RandomX v2 bytecode instruction.
 ///
@@ -538,6 +788,186 @@ impl VmState {
             temp_hash: [0u64; 8],
         }
     }
+
+    /// Fill [`scratchpad`] from `seed` via the spec §4.5.2
+    /// `fill_aes_1r_x4` generator.
+    ///
+    /// Mirrors `VmBase<...>::initScratchpad(void* seed)` at
+    /// [`external/randomx-v2/src/virtual_machine.cpp`](../../../external/randomx-v2/src/virtual_machine.cpp)
+    /// (`fillAes1Rx4<softAes>(seed, ScratchpadSize, scratchpad)`) at
+    /// pin `aaafe71`. The seed is mutated in place: after the call
+    /// returns, `seed` contains the next 64 bytes of AES-1R-x4 stream
+    /// state, which `compute_hash` (commit 6) chains forward as the
+    /// seed for the first program-init call.
+    ///
+    /// # Why the seed is `&mut [u8; 64]` rather than a `VmState` field
+    ///
+    /// The C reference stores the seed as `VmBase::tempHash[8]`
+    /// (`virtual_machine.hpp`) and threads `void*` into the AES
+    /// primitive. The Rust port takes the seed as an explicit
+    /// `&mut [u8; 64]` parameter per the
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §14 Round 0 R0-D8 results-fidelity-over-shape-fidelity
+    /// discipline: the data flow is made explicit at the call site
+    /// (the caller manages a local `[u8; 64]` seed buffer; the AES
+    /// chain advances visibly across `init_scratchpad` +
+    /// `init_program` invocations); no `unsafe` `u64`-to-`u8` cast is
+    /// required to bridge the [`crate::aes::fill_aes_1r_x4`] primitive's
+    /// `&mut [u8; 64]` state parameter to a hypothetical
+    /// `VmState::temp_hash` field; and tests pass seeds directly
+    /// without preparing `temp_hash` field state per setup.
+    ///
+    /// [`scratchpad`]: VmState::scratchpad
+    ///
+    /// # REMOVE WHEN PHASE 2c COMMIT 6 WIRES THIS:
+    ///
+    /// Same chain-entry pattern as [`VmState::new`] — until commit
+    /// 6's `pub fn compute_hash` lands, [`VmState::init_scratchpad`]
+    /// has no `pub`-reachable caller. The transitive chain reached
+    /// from this method ([`crate::aes::fill_aes_1r_x4`] —
+    /// already chain-entry-allowed in `aes.rs` per Phase 2b's
+    /// commit-2 dead-code discipline) inherits the suppression via
+    /// the standard `rustc` reachability analysis. Commit 6's
+    /// `compute_hash` becomes the production `pub` caller, at which
+    /// point this `#[allow]` is removed.
+    #[allow(dead_code)]
+    pub(crate) fn init_scratchpad(&mut self, seed: &mut [u8; 64]) {
+        crate::aes::fill_aes_1r_x4(seed, &mut self.scratchpad[..]);
+    }
+
+    /// Parse the spec §4.5 per-program entropy header into the
+    /// register-init field set + parse the trailing instruction
+    /// sequence into [`program`].
+    ///
+    /// Mirrors the fused effect of `VmBase<...>::generateProgram(seed)`
+    /// (at
+    /// [`external/randomx-v2/src/virtual_machine.hpp`](../../../external/randomx-v2/src/virtual_machine.hpp))
+    /// followed by `randomx_vm::initialize()` (at
+    /// [`external/randomx-v2/src/virtual_machine.cpp:72-94`](../../../external/randomx-v2/src/virtual_machine.cpp))
+    /// at pin `aaafe71`. The Rust port fuses the C reference's two
+    /// methods into one per
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §14 Round 0 R0-D8 results-fidelity-over-shape-fidelity
+    /// discipline: the [`PROGRAM_BUFFER_SIZE`]-byte AES-fill buffer
+    /// is a function-local consumed in the same call that produces
+    /// it, so the C class-method shape (one method per logical step
+    /// on the same struct) collapses cleanly to a single Rust method
+    /// with a stack-local intermediate.
+    ///
+    /// # Layout of the AES-fill buffer
+    ///
+    /// `fill_aes_4r_x4(seed, &mut buf)` produces
+    /// [`PROGRAM_BUFFER_SIZE`] = 3_200 bytes laid out per
+    /// [`spec §4.5`](../../../external/randomx-v2/doc/specs.md):
+    ///
+    /// - **Bytes `0..ENTROPY_BUFFER_SIZE = 128`** — entropy header
+    ///   (16 little-endian `u64`s). Parsed below into `a` / `ma` /
+    ///   `mx` / `read_reg` / `dataset_offset` / `e_mask`.
+    /// - **Bytes `128..PROGRAM_BUFFER_SIZE = 3_200`** — 384 ×
+    ///   `INSTRUCTION_SIZE = 8`-byte instructions. Parsed below into
+    ///   `self.program.instructions[0..PROGRAM_SIZE]`.
+    ///
+    /// Entropy indices 9 and 11 are *read* by the underlying AES
+    /// stream (the `u64` decode consumes all 128 bytes regardless of
+    /// whether the parsed value is consumed) but their decoded values
+    /// are intentionally **unused** per `virtual_machine.cpp:72-94`'s
+    /// `initialize` body — only entropy indices 0..=8, 10, 12..=15
+    /// are read by the C reference, leaving 9 and 11 as deliberate
+    /// gaps in the entropy-consumption schedule. The Rust port
+    /// mirrors this exactly: the `entropy[9]` / `entropy[11]` decoded
+    /// values are local-only and never assigned to any `VmState`
+    /// field.
+    ///
+    /// # Determinism / side-channel posture
+    ///
+    /// Pure function of `seed` and `self.scratchpad`'s allocation
+    /// (no per-call mutable state outside `self`); `fill_aes_4r_x4`
+    /// is deterministic per
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §5.11.1 T5'. The entropy-parse helpers
+    /// ([`get_small_positive_float_bits`] / [`get_float_mask`]) are
+    /// constant-time across all entropy inputs per their bit-pattern
+    /// shape.
+    ///
+    /// [`program`]: VmState::program
+    ///
+    /// # REMOVE WHEN PHASE 2c COMMIT 6 WIRES THIS:
+    ///
+    /// Same chain-entry pattern as [`VmState::init_scratchpad`].
+    #[allow(dead_code)]
+    pub(crate) fn init_program(&mut self, seed: &[u8; 64]) {
+        let mut buf = [0u8; PROGRAM_BUFFER_SIZE];
+        crate::aes::fill_aes_4r_x4(seed, &mut buf);
+
+        let entropy: [u64; 16] = core::array::from_fn(|i| {
+            let off = i * 8;
+            u64::from_le_bytes(
+                buf[off..off + 8]
+                    .try_into()
+                    .expect("ENTROPY_BUFFER_SIZE = 128 fits 16 u64s by construction"),
+            )
+        });
+
+        for i in 0..4 {
+            self.a[i][0] = f64::from_bits(get_small_positive_float_bits(entropy[2 * i]));
+            self.a[i][1] = f64::from_bits(get_small_positive_float_bits(entropy[2 * i + 1]));
+        }
+
+        // SAFETY (clippy::cast_possible_truncation): the mask
+        // `CACHE_LINE_ALIGN_MASK = 0x7FFF_FFC0` zeros bits 32..=63
+        // before the cast, so the `as u32` truncation discards only
+        // zero bits. Mirrors C `mem.ma = entropy(8) & CacheLineAlignMask;`
+        // at `virtual_machine.cpp:81` where the same arithmetic
+        // assigns to `uint32_t ma`.
+        #[allow(clippy::cast_possible_truncation)]
+        let masked_ma = (entropy[8] & u64::from(CACHE_LINE_ALIGN_MASK)) as u32;
+        self.ma = masked_ma;
+
+        // SAFETY (clippy::cast_possible_truncation): the spec-pinned
+        // truncation is the consensus rule. Mirrors C
+        // `mem.mx = entropy(10);` at `virtual_machine.cpp:82` where
+        // the `uint64_t` is implicitly truncated by the
+        // `uint32_t mx` field type. Preserving the divergence-free
+        // mapping requires the same truncation in Rust.
+        #[allow(clippy::cast_possible_truncation)]
+        let truncated_mx = entropy[10] as u32;
+        self.mx = truncated_mx;
+
+        let addr_regs = entropy[12];
+        // SAFETY (clippy::cast_possible_truncation): `& 1` /
+        // `>> N & 1` masks the operand to {0, 1}, which fits in `u32`
+        // trivially. Mirrors C `config.readReg0 = 0 + (addressRegisters & 1);`
+        // pattern at `virtual_machine.cpp:84-90`.
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            self.read_reg[0] = (addr_regs & 1) as u32;
+            self.read_reg[1] = 2 + ((addr_regs >> 1) & 1) as u32;
+            self.read_reg[2] = 4 + ((addr_regs >> 2) & 1) as u32;
+            self.read_reg[3] = 6 + ((addr_regs >> 3) & 1) as u32;
+        }
+
+        self.dataset_offset =
+            (entropy[13] % u64::from(DATASET_EXTRA_ITEMS + 1)) * u64::from(CACHE_LINE_SIZE);
+
+        self.e_mask[0] = get_float_mask(entropy[14]);
+        self.e_mask[1] = get_float_mask(entropy[15]);
+
+        for i in 0..PROGRAM_SIZE {
+            let off = ENTROPY_BUFFER_SIZE + i * INSTRUCTION_SIZE;
+            let bytes = &buf[off..off + INSTRUCTION_SIZE];
+            self.program.instructions[i] = Instruction {
+                opcode: bytes[0],
+                dst: bytes[1],
+                src: bytes[2],
+                mod_: bytes[3],
+                imm32: u32::from_le_bytes(
+                    bytes[4..8]
+                        .try_into()
+                        .expect("INSTRUCTION_SIZE = 8 yields a 4-byte imm32 tail by construction"),
+                ),
+            };
+        }
+    }
 }
 
 impl Drop for VmState {
@@ -572,5 +1002,218 @@ impl Drop for VmState {
     fn drop(&mut self) {
         // INTENT: no-op. See impl rustdoc for the public-input-only
         // rationale and the future-field-addition review-surface hook.
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SEED_A: [u8; 64] = [0xAB; 64];
+    const SEED_B: [u8; 64] = [0xCD; 64];
+
+    /// Byte-equality between two scratchpads.
+    fn scratchpads_equal(a: &[u8; RANDOMX_SCRATCHPAD_L3], b: &[u8; RANDOMX_SCRATCHPAD_L3]) -> bool {
+        a.as_slice() == b.as_slice()
+    }
+
+    /// Field-wise equality between two [`Instruction`]s.
+    ///
+    /// Per
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §5.11.1 T5'a: "compared via field-wise equality across
+    /// `opcode`, `dst`, `src`, `mod_`, `imm32`". Local-to-tests
+    /// helper so [`Instruction`]'s production derive list stays
+    /// minimal per R0-D6 (tests-use-the-actual-API discipline; no
+    /// production trait additions to ease test ergonomics).
+    fn instructions_equal(a: &Instruction, b: &Instruction) -> bool {
+        a.opcode == b.opcode
+            && a.dst == b.dst
+            && a.src == b.src
+            && a.mod_ == b.mod_
+            && a.imm32 == b.imm32
+    }
+
+    /// T3'a determinism property: two `VmState`s each fed the same
+    /// seed to `init_scratchpad` produce byte-identical scratchpads
+    /// **and** advance the seed to byte-identical post-call states.
+    /// Catches hidden state inside `fill_aes_1r_x4`, allocator-
+    /// dependent layout, or any per-call mutable state in the AES
+    /// path.
+    ///
+    /// Per
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §5.11.1 T3'a sub-test 1/2.
+    #[test]
+    fn t3_prime_init_scratchpad_determinism_same_seed_twice() {
+        let mut vm1 = VmState::new();
+        let mut vm2 = VmState::new();
+        let mut seed1 = SEED_A;
+        let mut seed2 = SEED_A;
+
+        vm1.init_scratchpad(&mut seed1);
+        vm2.init_scratchpad(&mut seed2);
+
+        assert!(
+            scratchpads_equal(&vm1.scratchpad, &vm2.scratchpad),
+            "init_scratchpad(SAME_SEED) produced divergent scratchpads",
+        );
+        assert_eq!(
+            seed1, seed2,
+            "init_scratchpad(SAME_SEED) advanced the seed divergently \
+             (the AES-1R-x4 stream-state write-back is non-deterministic)",
+        );
+    }
+
+    /// T3'b interleaved-seed determinism property: one `VmState`
+    /// run through `init_scratchpad(A)` / `init_scratchpad(B)` /
+    /// `init_scratchpad(A)` produces byte-identical scratchpads on
+    /// both `A` invocations. Catches cross-call state pollution
+    /// (e.g., AES round-key state retention between invocations,
+    /// allocator-scratch buffer not reset, etc.).
+    ///
+    /// Per
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §5.11.1 T3'b sub-test 2/2.
+    #[test]
+    fn t3_prime_init_scratchpad_determinism_interleaved() {
+        let mut vm = VmState::new();
+
+        let mut seed_a1 = SEED_A;
+        vm.init_scratchpad(&mut seed_a1);
+        let scratchpad_a1: Box<[u8; RANDOMX_SCRATCHPAD_L3]> = vm.scratchpad.clone();
+
+        let mut seed_b = SEED_B;
+        vm.init_scratchpad(&mut seed_b);
+
+        let mut seed_a2 = SEED_A;
+        vm.init_scratchpad(&mut seed_a2);
+
+        assert!(
+            scratchpads_equal(&vm.scratchpad, &scratchpad_a1),
+            "init_scratchpad(SEED_A) scratchpad drifted after init_scratchpad(SEED_B)",
+        );
+        assert_eq!(
+            seed_a1, seed_a2,
+            "init_scratchpad(SEED_A) seed-advance drifted after init_scratchpad(SEED_B)",
+        );
+    }
+
+    /// T4'a register-init determinism property: two `VmState`s each
+    /// fed the same seed to `init_program` produce byte-identical
+    /// register-init field subsets (`a`, `ma`, `mx`, `read_reg`,
+    /// `dataset_offset`, `e_mask`). Catches non-determinism in the
+    /// entropy-parse path (`get_small_positive_float_bits`,
+    /// `get_float_mask`) or in the `[u64; 16]` little-endian decode.
+    ///
+    /// Per
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §5.11.1 T4'a.
+    #[test]
+    fn t4_prime_init_program_register_determinism_same_seed_twice() {
+        let mut vm1 = VmState::new();
+        let mut vm2 = VmState::new();
+
+        vm1.init_program(&SEED_A);
+        vm2.init_program(&SEED_A);
+
+        assert_eq!(
+            vm1.a.map(|pair| [pair[0].to_bits(), pair[1].to_bits()]),
+            vm2.a.map(|pair| [pair[0].to_bits(), pair[1].to_bits()]),
+            "init_program(SAME_SEED) register `a` divergent",
+        );
+        assert_eq!(
+            vm1.ma, vm2.ma,
+            "init_program(SAME_SEED) memory register `ma` divergent",
+        );
+        assert_eq!(
+            vm1.mx, vm2.mx,
+            "init_program(SAME_SEED) memory register `mx` divergent",
+        );
+        assert_eq!(
+            vm1.read_reg, vm2.read_reg,
+            "init_program(SAME_SEED) `read_reg` divergent",
+        );
+        assert_eq!(
+            vm1.dataset_offset, vm2.dataset_offset,
+            "init_program(SAME_SEED) `dataset_offset` divergent",
+        );
+        assert_eq!(
+            vm1.e_mask, vm2.e_mask,
+            "init_program(SAME_SEED) `e_mask` divergent",
+        );
+    }
+
+    /// T5'a parsed-instructions determinism property: two `VmState`s
+    /// each fed the same seed to `init_program` produce
+    /// byte-identical `program.instructions` across all
+    /// [`PROGRAM_SIZE`] (384) entries, compared field-wise via
+    /// [`instructions_equal`]. Catches non-determinism in
+    /// `fill_aes_4r_x4` output or in the per-instruction 8-byte
+    /// decode (`opcode` / `dst` / `src` / `mod_` bytes +
+    /// little-endian `imm32`).
+    ///
+    /// Per
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §5.11.1 T5'a.
+    #[test]
+    fn t5_prime_init_program_instructions_determinism_same_seed_twice() {
+        let mut vm1 = VmState::new();
+        let mut vm2 = VmState::new();
+
+        vm1.init_program(&SEED_A);
+        vm2.init_program(&SEED_A);
+
+        for i in 0..PROGRAM_SIZE {
+            assert!(
+                instructions_equal(&vm1.program.instructions[i], &vm2.program.instructions[i]),
+                "init_program(SAME_SEED) program.instructions[{i}] divergent: \
+                 vm1 = (opcode={}, dst={}, src={}, mod_={}, imm32={:#010x}), \
+                 vm2 = (opcode={}, dst={}, src={}, mod_={}, imm32={:#010x})",
+                vm1.program.instructions[i].opcode,
+                vm1.program.instructions[i].dst,
+                vm1.program.instructions[i].src,
+                vm1.program.instructions[i].mod_,
+                vm1.program.instructions[i].imm32,
+                vm2.program.instructions[i].opcode,
+                vm2.program.instructions[i].dst,
+                vm2.program.instructions[i].src,
+                vm2.program.instructions[i].mod_,
+                vm2.program.instructions[i].imm32,
+            );
+        }
+    }
+
+    /// Helpers' bit-pattern smoke check: `get_small_positive_float_bits`
+    /// always produces a positive-finite IEEE-754 binary64 (per the
+    /// spec §4.5's "small positive float" guarantee). Constructs the
+    /// bit pattern from a known-input entropy and verifies the sign
+    /// bit is zero and the exponent field falls in the spec-pinned
+    /// range `[exponentBias, exponentBias + 31]`.
+    ///
+    /// Pins the helper's invariant: divergence from the C reference's
+    /// `getSmallPositiveFloatBits` would silently produce non-finite
+    /// `a`-register values in 2d's FP dispatch, with no test in 2c
+    /// observing the drift under stub-NOP dispatch. T4' / T5' check
+    /// determinism; this check pins the *value-range* contract.
+    #[test]
+    fn get_small_positive_float_bits_produces_positive_finite() {
+        for entropy in [0u64, 1, u64::MAX, 0x1234_5678_9ABC_DEF0] {
+            let bits = get_small_positive_float_bits(entropy);
+            let f = f64::from_bits(bits);
+            assert!(
+                f.is_finite() && f.is_sign_positive(),
+                "get_small_positive_float_bits({entropy:#x}) = {bits:#x} \
+                 yielded f64 {f} (not positive-finite)",
+            );
+            let exponent_field = (bits >> MANTISSA_SIZE) & EXPONENT_MASK;
+            assert!(
+                (EXPONENT_BIAS..=EXPONENT_BIAS + 31).contains(&exponent_field),
+                "get_small_positive_float_bits({entropy:#x}) exponent field {exponent_field} \
+                 out of spec-pinned [exponentBias, exponentBias + 31] = [{}, {}]",
+                EXPONENT_BIAS,
+                EXPONENT_BIAS + 31,
+            );
+        }
     }
 }
