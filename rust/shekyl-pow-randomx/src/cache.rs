@@ -250,11 +250,17 @@ impl Cache {
     ///
     /// # Cost
     ///
-    /// Dominated by the 256-MiB Argon2d fill (~200 ms on a modern
-    /// x86_64 per Phase 0 §8 budget; PR-gated by
-    /// `benches/cache_derive.rs` per §5.8 / §8). Allocations: one
-    /// 256-MiB `Box<[Block]>` for the cache memory + one 8-element
-    /// `Box<[SuperscalarProgram]>` (~96 KiB) for the programs.
+    /// Dominated by the 256-MiB Argon2d fill. Phase 0 §8 scoped the
+    /// budget at ~200 ms on a modern x86_64; the Phase 2c empirical
+    /// baseline on the reference machine (i9-11950H, Debian 13) is
+    /// **~341 ms median** per `BENCH_RESULTS.md`. Measured by
+    /// `benches/cache_derive.rs` as an informational baseline (not a
+    /// PR gate at Phase 2c); the budget-vs-measurement reconciliation
+    /// is tracked at
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §14 R0-D12. Allocations: one 256-MiB `Box<[Block]>` for the
+    /// cache memory + one 8-element `Box<[SuperscalarProgram]>`
+    /// (~96 KiB) for the programs.
     pub fn derive(seedhash: &[u8; 32]) -> Cache {
         let mut memory = alloc_zeroed_cache_blocks(RANDOMX_ARGON_BLOCKS);
 
@@ -312,14 +318,22 @@ impl Cache {
     pub(crate) fn item_bytes(&self, item_number: u64) -> [u8; DATASET_ITEM_SIZE] {
         // Mask first as u64 (loses no information; the mask is
         // `DATASET_ITEM_COUNT - 1 = 0x3F_FFFF`, 22 bits), then go
-        // u64 → u32 via try_from (always succeeds because a 22-bit
-        // value fits in u32) → usize (lossless per Rust's target
-        // requirement `usize >= u32`). This matches the C reference's
-        // `getMixBlock` cast chain (`registerValue & mask` where mask
-        // is u32 by spec; see `external/randomx-v2/src/dataset.cpp:160`).
+        // u64 → usize via try_from. The try_from is infallible by
+        // construction: Rust guarantees `usize >= 16 bits` (and on
+        // all Shekyl target platforms `usize >= 32 bits`), and the
+        // masked value fits in 22 bits, so it fits in any `usize`
+        // the toolchain may produce. The `expect` is a contract
+        // assertion against future mask widening, not a runtime
+        // possibility under the current mask. This matches the C
+        // reference's `getMixBlock` index computation
+        // (`(registerValue & mask) / CacheLineSize`, where the mask
+        // is the truncation-defining operation; see
+        // `external/randomx-v2/src/dataset.cpp:160`) — the cast is
+        // a lossless conversion of the already-narrowed value, not
+        // a u64 → u32 truncation.
         let masked = item_number & (DATASET_ITEM_COUNT as u64 - 1);
         let line_idx = usize::try_from(masked).expect(
-            "(item_number & (DATASET_ITEM_COUNT - 1)) fits in u32 by mask construction (22 bits)",
+            "(item_number & (DATASET_ITEM_COUNT - 1)) fits in usize by mask construction (22 bits, fits in any Rust-conformant usize >= 16 bits)",
         );
         // Each 1-KiB Block holds 16 cache lines (1024 / 64 = 16) and
         // 128 u64 words (1024 / 8 = 128); 1 cache line = 8 u64 words.
@@ -742,9 +756,12 @@ mod tests {
     /// boundary indices match the v2 RandomX fork's `initDatasetItem`
     /// output byte-for-byte at pin `aaafe71`.
     ///
-    /// The 8 indices cover lowest-address (0, 1), 1 KiB-block-boundary
-    /// (1023, 1024), mid-cache (524287, 524288), and upper-end
-    /// (2097150, 2097151) — per the T2 .meta.txt boundary analysis.
+    /// The 8 indices cover lowest-input (0, 1), 10-bit transition
+    /// (1023, 1024), the `DATASET_EXTRA_ITEMS` spec boundary
+    /// (524287 = `DATASET_EXTRA_ITEMS` itself / 524288 = one past),
+    /// and a 21-bit-magnitude sample (2097150, 2097151 — additional
+    /// high-magnitude sample points, NOT a spec boundary). See the
+    /// T2 `.meta.txt` for the full per-index rationale.
     ///
     /// Provenance: see sibling
     /// `tests/vectors/reference/cache/t2_cache_derive_item_batch.meta.txt`.

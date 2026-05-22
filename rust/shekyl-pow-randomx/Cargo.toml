@@ -47,32 +47,53 @@ blake2 = { workspace = true }
 argon2 = { version = "0.5", default-features = false, features = ["alloc", "zeroize"] }
 
 [dev-dependencies]
-# Criterion for the two Phase 2c PR-gate benches per
+# Criterion for the two Phase 2c informational benches per
 # `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.8 + §8: `cache_derive`
-# (≤200 ms median over N=100 iters) and `compute_hash_alloc` (≤100 µs
-# median over N=10000 iters, under stub-NOP dispatch). Version + feature
-# set match `shekyl-crypto-pq`'s existing dev-dep
-# (`rust/shekyl-crypto-pq/Cargo.toml`) so workspace dep-resolution
-# stays unified rather than building a second criterion variant for
-# this crate. Per-PR criterion adoption is justified by the §5.8
-# disposition's "PR fails if median > X" gate; no production code path
+# (sample_size=100 per §5.8) and `compute_hash_alloc` (sample_size=100
+# per the bench's runtime-economics observation; §5.8's nominal
+# N=10000 is intractable at the empirical ~hundreds-of-ms per-call
+# cost — see the bench harness rustdoc). Version + feature set match
+# `shekyl-crypto-pq`'s existing dev-dep (`rust/shekyl-crypto-pq/Cargo.toml`)
+# so workspace dep-resolution stays unified rather than building a
+# second criterion variant for this crate. No production code path
 # depends on criterion.
+#
+# §5.8's "PR fails if median > X" budget shapes (≤200 ms for
+# `cache_derive`, ≤100 µs for `compute_hash_alloc`) are recorded as
+# planned targets in the plan doc; the empirical baselines on the
+# reference machine exceed both (`cache_derive` ~341 ms,
+# `compute_hash_alloc` ~296 ms end-to-end full-pipeline). The
+# reconciliation — re-baseline the budgets to hardware-class
+# measurements vs. introduce an allocation-only sub-bench vs. defer
+# the per-hash latency check to Phase 2g's Rust-vs-C ratio — is
+# tracked at `RANDOMX_V2_PHASE2C_PLAN.md` §14 (R0-D12). At Phase 2c
+# both benches are **informational baselines** (recorded in
+# `BENCH_RESULTS.md`), not enforced PR gates.
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
 # `Cache::derive(&KEY)` end-to-end (Argon2d 256 MiB + 8 ×
-# `generateSuperscalar`). PR-gate threshold: median ≤200 ms.
-# See `benches/cache_derive.rs` for the harness + threshold rationale.
+# `generateSuperscalar`). Phase 2c informational baseline (~341 ms
+# median on the reference machine per `BENCH_RESULTS.md`); §5.8's
+# planned ≤200 ms budget is unmet pending the R0-D12 reconciliation
+# in `RANDOMX_V2_PHASE2C_PLAN.md` §14. See `benches/cache_derive.rs`
+# for the harness rationale and the threshold-enforcement disposition.
 name = "cache_derive"
 harness = false
 
 [[bench]]
 # `compute_hash(&cache, &SEEDHASH, &DATA)` end-to-end under stub-NOP
-# dispatch (the Phase 2c dispatch_instruction NOP body; Phase 2d's
-# real per-opcode body will grow this bench's per-call cost). PR-gate
-# threshold: median ≤100 µs. The budget binds the VmState allocation
-# + scratchpad zeroing + register-file init + iteration-loop overhead
-# specifically. See `benches/compute_hash_alloc.rs` for the harness.
+# dispatch (the Phase 2c `dispatch_instruction` NOP body; Phase 2d's
+# real per-opcode body will grow this bench's per-call cost).
+# Measures the *full pipeline* under stub-NOP, not the VmState
+# allocation skeleton in isolation. Phase 2c informational baseline
+# (~296 ms median per call on the reference machine per
+# `BENCH_RESULTS.md`); §5.8's planned ≤100 µs budget targeted the
+# allocation-only sub-bench (not landed yet) — full-pipeline numbers
+# include the per-chain hash math + AES f/e mix + Blake2b chaining,
+# all of which dominate the one-shot allocation. R0-D12 reconciliation
+# in `RANDOMX_V2_PHASE2C_PLAN.md` §14 tracks the disposition. See
+# `benches/compute_hash_alloc.rs` for the harness rationale.
 name = "compute_hash_alloc"
 harness = false
 

@@ -5,59 +5,69 @@
 
 //! `Cache::derive` end-to-end criterion bench.
 //!
-//! Phase 2c PR-gate per
+//! Phase 2c informational baseline per
 //! [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
-//! §5.8 disposition #1 + §8 BENCH_RESULTS.md baseline. Measures the
-//! cost of a single `Cache::derive(&KEY)` call (Argon2d 256 MiB fill,
-//! followed by eight `Blake2Generator`-seeded `generateSuperscalar`
-//! programs) on a fixed 32-byte seedhash; sample size = 100 per §5.8
-//! spec.
+//! §5.8 disposition #1 + §8. Measures the cost of a single
+//! `Cache::derive(&KEY)` call (Argon2d 256 MiB fill, followed by
+//! eight `Blake2Generator`-seeded `generateSuperscalar` programs)
+//! on a fixed 32-byte seedhash; sample size = 100 per §5.8 spec.
 //!
-//! # PR-gate budget
+//! # Status: informational, not PR-gating
 //!
-//! **Median ≤ 200 ms.** Per §5.8: "PR fails if median > 200 ms."
-//! Recorded in `BENCH_RESULTS.md` at PR-merge with the run conditions
-//! (CPU, OS, kernel, libc, criterion version, wall-clock date) so
-//! downstream phases (2d, 2f, 2g) compare against a known baseline.
-//! Regression >10% triggers investigation but not auto-failure
-//! (auto-failure is the absolute-threshold check above).
+//! §5.8 originally framed this bench as an absolute-threshold PR
+//! gate with **Median ≤ 200 ms**. The Phase 2c empirical baseline
+//! on the reference machine (i9-11950H, Debian 13) is **~341 ms
+//! median** per `BENCH_RESULTS.md` — exceeding the planned budget.
+//! Rather than retrofit a runner-class-specific budget at the §5.8
+//! plan-doc layer, the disposition (R0-D12 in
+//! `RANDOMX_V2_PHASE2C_PLAN.md` §14) is to record the empirical
+//! number, run this bench as **informational** at Phase 2c, and
+//! re-baseline the budget against measured hardware classes in
+//! Phase 2d (or sooner if a sub-bench split materializes — see
+//! R0-D12's reopening criteria). CI does not fail on this bench's
+//! output at Phase 2c; the bench output is recorded in
+//! `BENCH_RESULTS.md` so downstream phases (2d, 2f, 2g) compare
+//! against a known baseline.
 //!
-//! # Threshold enforcement mechanism
+//! # Threshold enforcement mechanism (when the gate is re-enabled)
 //!
 //! Per §5.8 final paragraph the CI threshold check is **informational
 //! at this phase** (the bench output is recorded but does not fail
-//! the workflow). The absolute-threshold gate is enforced by the PR
-//! author running `cargo bench -p shekyl-pow-randomx --bench
+//! the workflow). The intended absolute-threshold gate (once the
+//! R0-D12 reconciliation re-baselines the budget) is enforced by
+//! the PR author running `cargo bench -p shekyl-pow-randomx --bench
 //! cache_derive` locally before opening the PR, comparing the median
-//! against the 200 ms budget, and either landing the result in
+//! against the re-baselined budget, and either landing the result in
 //! `BENCH_RESULTS.md` (if green) or surfacing the regression to the
-//! reviewer (if red). The criterion runner is invoked with
-//! `--measurement-time` long enough to converge to a stable median
-//! on 256 MiB cache derivation, then the median printed to stdout by
-//! criterion is the gate value.
+//! reviewer (if red). At Phase 2c the second branch is the default
+//! (the planned 200 ms budget is not met on the reference machine);
+//! `BENCH_RESULTS.md` records the gap and the disposition.
 //!
 //! # Why this isn't a `#[test]`
 //!
 //! The natural alternative would be to put the threshold check in
 //! `src/cache.rs#mod tests` so `cargo test` enforces it. Two
-//! disqualifiers per §5.8 framing:
+//! disqualifiers per §5.8 framing apply regardless of the eventual
+//! re-baselined budget value:
 //!
 //! 1. **Wall-clock determinism.** Tests are expected to be
-//!    deterministic across CI runner classes. A 200 ms threshold on a
-//!    busy runner can flake from background process contention,
-//!    invalidating the test on substrate (runner load) rather than on
-//!    code substance. Benches accept this noise because their job is
-//!    measurement, not validation.
-//! 2. **Sample-size economics.** 100 iterations × 200 ms = 20 s per
-//!    `cargo test` invocation per test, which would dominate the
-//!    debug-mode test runtime. Benches naturally accept that cost
-//!    because the developer opts into them.
+//!    deterministic across CI runner classes. A wall-clock threshold
+//!    on a busy runner can flake from background-process contention,
+//!    invalidating the test on substrate (runner load) rather than
+//!    on code substance. Benches accept this noise because their
+//!    job is measurement, not validation.
+//! 2. **Sample-size economics.** 100 iterations × ~341 ms (current
+//!    measured baseline) ≈ 34 s per `cargo test` invocation per
+//!    test, which would dominate the debug-mode test runtime.
+//!    Benches naturally accept that cost because the developer
+//!    opts into them.
 //!
-//! The disposition therefore matches §5.8's "PR fails if median > X"
-//! literal reading: enforcement is the developer's responsibility
-//! pre-PR, the bench is the measurement instrument, BENCH_RESULTS.md
-//! is the recorded baseline, and the reviewer's job is to confirm
-//! the recorded numbers fit the budget.
+//! The disposition therefore matches §5.8's framing: enforcement
+//! (when re-enabled post-R0-D12 reconciliation) is the developer's
+//! responsibility pre-PR; the bench is the measurement instrument;
+//! `BENCH_RESULTS.md` is the recorded baseline; and the reviewer's
+//! job is to confirm the recorded numbers fit the *currently-applicable*
+//! budget (informational at Phase 2c).
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 

@@ -69,15 +69,31 @@ Requires:
 - A C++17 toolchain (`c++`).
 - GNU `make`.
 - The v2 RandomX fork submodule initialized at pin `aaafe71`.
-- `~30 s` to allocate + Argon2d-derive a fresh 256 MiB cache per
-  vector (the slow path; the cache is rebuilt per-vector since
-  each `./gen <mode>` is a single-shot process).
+
+**Runtime costs** (measured on the same reference machine as
+`BENCH_RESULTS.md` — i9-11950H, Debian 13). Two distinct costs that
+the previous documentation incorrectly conflated as both "~30 s":
+
+- **Compile time (`make`):** ~10 s on the reference machine
+  (compile `gen.cpp` + link against the fork's pre-built `.o`
+  files). Depends on the host's cold disk cache and compiler
+  version; measure with `time make` if a precise number is needed.
+- **Per-vector cost:** dominated by `randomx_init_cache` (the C++
+  fork's Argon2d-256-MiB fill, algorithmically identical to Rust
+  `Cache::derive` whose baseline is ~341 ms median per
+  `BENCH_RESULTS.md`). The C++ fork's optimized Argon2d runs in
+  the same order of magnitude — likely faster on AVX2 hosts.
+  Each `./gen <mode>` is a single-shot process that re-runs the
+  cache derivation, so total cost for `make vectors` is
+  approximately `8 × cache-derive + per-vector additional work`.
+- **Total `make vectors`:** ~4 s on the reference machine for all
+  8 vectors (T1–T8), measured wall-clock after a warm `make`.
 
 ```sh
 git submodule update --init external/randomx-v2
 cd rust/shekyl-pow-randomx/tests/vectors/reference/_generator/phase2c
-make           # builds ./gen (~30 s)
-make vectors   # regenerates all 8 .bin files (~4 min total)
+make           # builds ./gen (~10 s on reference machine)
+make vectors   # regenerates all 8 .bin files (~4 s on reference machine)
 make clean     # removes ./gen
 ```
 

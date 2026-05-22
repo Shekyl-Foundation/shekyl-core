@@ -115,10 +115,14 @@ constexpr uint8_t CANONICAL_SEEDHASH[32] = {
 constexpr const char* CANONICAL_TEMP_HASH_PREIMAGE =
     "shekyl-randomx-v2-phase2c-canonical-input";
 
-// 8 item_numbers for T2 — covers item 0 boundary, low cache-line
-// boundary, both sides of a typical Argon2 block boundary, and the
-// upper-end items just below DatasetExtraItems. Same set used by Rust
-// T2' (`t2_prime_invariance`).
+// 8 item_numbers for T2 — sample points covering low inputs (0, 1),
+// a 10-bit transition (1023, 1024), the DATASET_EXTRA_ITEMS spec
+// boundary (524287 = DATASET_EXTRA_ITEMS / 524288 = one past), and
+// a 21-bit-magnitude sample (2097150, 2097151 — additional high-
+// magnitude points, NOT the highest valid items: the full dataset
+// spans ~34M items). See `../../cache/t2_cache_derive_item_batch.meta.txt`
+// for the per-index rationale. Same set used by Rust T2'
+// (`t2_prime_invariance`).
 constexpr uint64_t T2_ITEM_NUMBERS[8] = {
     0, 1, 1023, 1024, 524287, 524288, 2097150, 2097151,
 };
@@ -356,10 +360,15 @@ void emit_t3() {
 // Inheritance from `InterpretedLightVm` (not `InterpretedVm`) is
 // deliberate: light-VM mode derives dataset items on demand from
 // the cache (per `vm_interpreted_light.cpp::datasetRead`), so the
-// generator does not need to allocate the 2 GiB dataset. This keeps
-// the per-vector run time bounded by the cache init (~30 s) instead
-// of cache+dataset (~minutes). The Rust port's `compute_hash` also
-// runs light-VM-only, so the C ref needs to match.
+// generator does not need to allocate the 2 GiB dataset. This
+// keeps the per-vector run time bounded by the cache init
+// (Argon2d 256 MiB fill, sub-second on a modern x86_64 — the Rust
+// port's `Cache::derive` baseline is ~341 ms median per
+// `BENCH_RESULTS.md`; the C++ fork is in the same order of
+// magnitude) instead of cache+dataset (which would add the
+// ~minutes-scale 2 GiB dataset fill). The Rust port's
+// `compute_hash` also runs light-VM-only, so the C ref needs to
+// match.
 //
 // The subclass uses the InterpretedVm's protected accessors (mem,
 // scratchpad, program, config, reg, datasetPtr, datasetOffset) via

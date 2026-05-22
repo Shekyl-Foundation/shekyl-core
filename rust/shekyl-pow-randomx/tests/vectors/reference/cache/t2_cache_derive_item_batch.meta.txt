@@ -4,21 +4,38 @@ Phase 2c reference vector — t2_cache_derive_item_batch.bin
 Spec attestation
 ----------------
 T2 attests Rust `Cache::derive_item` byte-for-byte parity with the
-v2 RandomX fork's `randomx::initDatasetItem` for 8 boundary-and-
-edge item indices. The 8 indices cover:
+v2 RandomX fork's `randomx::initDatasetItem` for 8 ad-hoc sample
+indices chosen to exercise the superscalar chain over a spread of
+input magnitudes. `initDatasetItem` / `Cache::derive_item` accept
+arbitrary `u64` item numbers (they consume the input as initial
+register state for the superscalar program; no input-side mask is
+applied at this entry point — only the inner `Cache::item_bytes`
+cache reads mask, and they mask to the cache's 22-bit row index
+range), so these 8 indices are sample points, not spec boundaries
+in the sense of constants the algorithm switches on.
 
-  - item 0 (lowest address)
-  - item 1 (lowest + 1, exercises the cache-line / address wrap)
-  - item 1023 (boundary just below 64 cache-lines = 1 KiB block)
-  - item 1024 (boundary just at 64 cache-lines = 1 KiB block)
-  - item 524287 / 524288 (mid-cache boundary near
-    DatasetExtraItems lower edge)
-  - item 2097150 / 2097151 (highest two valid items, just below
-    DatasetExtraItems upper edge = 33554431 / 33554432)
+The 8 indices:
 
-A divergence at any of the 8 attributes the failure to a specific
-boundary class (cache-line wrap, 1 KiB block boundary, mid-cache,
-upper-cache) per the index it failed on.
+  - item 0 (lowest input — initial register state at zero entropy)
+  - item 1 (lowest + 1, exercises the low-bit transition)
+  - item 1023 / 1024 (10-bit transition, 2^10 - 1 / 2^10)
+  - item 524287 / 524288 — **this pair IS a spec-anchored
+    boundary**: 524287 = `DATASET_EXTRA_ITEMS` (`= RANDOMX_DATASET_
+    EXTRA_SIZE / CACHE_LINE_SIZE = 33,554,368 / 64`), the upper
+    edge of the per-VM dataset-offset window that
+    `VmState::init_program` derives from entropy[13] (see
+    `vm.rs:1173`). 524288 = `DATASET_EXTRA_ITEMS + 1` (just past it).
+  - item 2097150 / 2097151 (21-bit transition, 2^21 - 2 / 2^21 - 1
+    — additional high-magnitude sample points; NOT a spec boundary,
+    NOT the "highest valid items". The full RandomX dataset spans
+    ~34M items (`(RANDOMX_DATASET_BASE_SIZE + RANDOMX_DATASET_
+    EXTRA_SIZE) / CACHE_LINE_SIZE ≈ 34,078,720`); and the cache's
+    own row count is `DATASET_ITEM_COUNT = 4,194,304` (22-bit mask
+    space used by `Cache::item_bytes`). 2097151 is well below both.)
+
+A divergence at any of the 8 attributes the failure to the specific
+input magnitude that failed; the 524287 / 524288 pair specifically
+gates the `DATASET_EXTRA_ITEMS` boundary used by `init_program`.
 
 Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 (F7 T2).
 
