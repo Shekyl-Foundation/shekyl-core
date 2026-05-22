@@ -1622,9 +1622,12 @@ sustainability is unaffected by the recalibration.
   per the expected disposition.
 
 - **Promote 2c-emergent sub-PR design disciplines to project-level
-  documentation** (trigger: Phase 2c implementation PR merges to
-  `dev`; target: V3.0 / post-2c-implementation sibling PR before
-  Phase 2d Round 1 opens). Phase 2c's design rounds (1–5) accumulated
+  documentation** (trigger: PR #65 — the Phase 2c plan-doc PR —
+  merges to `dev`; target: V3.0 / short-lived sibling PR opens
+  within 5 working days of PR #65 merge, parallel-eligible with
+  the Phase 2c implementation PR rather than gated on it, lands
+  before Phase 2d Round 1 opens). Phase 2c's design rounds (1–5)
+  accumulated
   five disciplines that are not 2c-specific — they apply to every
   subsequent sub-PR in the RandomX v2 track (2d, 2f, 2g, 3a, 3c)
   and to LWMA-1's eventual Phase 4 PR, and probably to other
