@@ -1622,176 +1622,32 @@ sustainability is unaffected by the recalibration.
   per the expected disposition.
 
 - **Promote 2c-emergent sub-PR design disciplines to project-level
-  documentation** (trigger: PR #65 — the Phase 2c plan-doc PR —
-  merges to `dev`; target: V3.0 / short-lived sibling PR opens
-  within 5 working days of PR #65 merge, parallel-eligible with
-  the Phase 2c implementation PR rather than gated on it, lands
-  before Phase 2d Round 1 opens). Phase 2c's design rounds (1–5)
-  accumulated
-  five disciplines that are not 2c-specific — they apply to every
-  subsequent sub-PR in the RandomX v2 track (2d, 2f, 2g, 3a, 3c)
-  and to LWMA-1's eventual Phase 4 PR, and probably to other
-  consensus-critical multi-round design work elsewhere in the
-  codebase. They are currently encoded in
+  documentation** — **Closed (V3.0).** Landed in
+  [`.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc)
+  via branch `chore/sub-pr-design-discipline` (sibling PR off
+  `dev` at `e9917097f`, post-PR-#66). Option A selected over
+  `docs/conventions/` — disciplines fit the standard rules shape
+  with substantial prose, precedents, and reversion clauses per
+  `21-reversion-clause-discipline.mdc`. **Opt-in** (`alwaysApply:
+  false`): cite explicitly when scoping multi-round per-trait PRs
+  (same injection model as `07-consensus-atomic-cutovers.mdc`).
+
+  **Coverage.** Five design-round disciplines (function-body
+  replacement contract; audit-against-actual-code; threat-model
+  addenda framing; reversion-clause for sub-PR boundary changes;
+  forward-action propagation) plus nine pre-flight disciplines
+  (R0-D5–R0-D12 disposition IDs; R0-D8 split into results-fidelity
+  vs per-commit build cleanliness). Pre-flight pass shape documented
+  for future per-trait PRs (plan-doc "Round 0" naming preserved for
+  audit-trail IDs only).
+
+  **Substrate artifacts (historical).**
   [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](./design/RANDOMX_V2_PHASE2C_PLAN.md)
-  as 2c-specific framings; promotion is what stops them from being
-  2c-anecdotal and makes them downstream-inheritable.
-
-  **The five disciplines.**
-
-  1. **Function-body replacement contract** (sub-PR hand-off
-     shape; `RANDOMX_V2_PHASE2C_PLAN.md` §5.1.1). A sub-PR
-     freezes a function signature + caller-state-field set +
-     dispatch-input-field set, lands the function with a body
-     that is mechanically a NOP (or `unimplemented!()`), and the
-     following sub-PR replaces the function body in place against
-     the frozen contract. This decouples "extract the surface"
-     from "implement the surface" cleanly enough that the two
-     PRs review against independent properties.
-  2. **Audit-against-actual-code discipline** (the mp-correction
-     precedent; `RANDOMX_V2_PHASE2C_PLAN.md` §5.11.8). Audit
-     tables in plan-docs cite line ranges at a pinned reference-
-     source commit; reviewers spot-check by opening the cited
-     file and reading the named lines. The discipline's value
-     is in the reading-the-source step, not in the producing-a-
-     table step. The R3-D1 `mp` correction is the precedent that
-     proves the discipline (a prompted-list table had `mp` wrong;
-     the audit against `vm_interpreted.cpp` caught it pre-
-     implementation; without the audit, the divergent code would
-     have shipped as a consensus-split source).
-  3. **Threat-model addenda framing** (the Round 4 posture-shift;
-     `RANDOMX_V2_PHASE2C_PLAN.md` §5.11 + §14 Round 5 entry).
-     A late-round adversarial pass enumerates 3–6 attacker
-     objectives (mining differential, cache poisoning, FFI
-     exploitation, resource DoS, Rust safety gaps, consensus
-     split via divergence) and surfaces in-scope additions
-     plus downstream forward-actions. The frame surfaces
-     findings that per-finding review wouldn't catch because no
-     individual finding *suggests* the next one — the attacker-
-     objective frame does.
-  4. **Reversion-clause discipline for sub-PR boundary changes**
-     (the F4 absorption; `RANDOMX_V2_PHASE2C_PLAN.md` §5.4 +
-     `21-reversion-clause-discipline.mdc`). A scope-boundary
-     change between sub-PRs (e.g., `Cache::derive` moves from
-     originally-scoped 2e into 2c) is named explicitly with
-     the substrate-anchored reasoning that motivates the move
-     and the reopening criteria that would re-shape the
-     scope; the boundary's stability comes from the named
-     reasoning, not from "the boundary is the boundary."
-  5. **Forward-action propagation convention** (the §5.11.5/6/7
-     routing; `RANDOMX_V2_PHASE2C_PLAN.md` §13). Each design
-     round's findings route to either in-scope (this PR
-     absorbs the finding) or downstream (a named later PR
-     inherits the forward-action with the carry recorded in
-     both the source PR's plan-doc and the target PR's
-     scaffold). The convention's value is institutional-
-     knowledge survival: a downstream PR's author doesn't
-     re-derive what was already decided; the carry is the
-     decided artifact.
-
-  **Severity.** Process-discipline. Not a correctness bug;
-  not blocking 2c or 2d. The cost of *not* promoting is that
-  2d's author (and 2f/2g/3a/3c, and LWMA-1 Phase 4's author)
-  re-derives the disciplines from 2c's plan-doc, which is
-  expensive and may not re-derive faithfully — institutional
-  knowledge that sits in one plan-doc is at one-PR-per-
-  contributor risk of being lost.
-
-  **Disposition.** A sibling PR opens after this plan-doc PR
-  (PR #65) merges to `dev` — parallel-eligible with the Phase 2c
-  implementation PR rather than gated on it — and promotes the
-  five disciplines either as:
-
-  - **Option A: `.cursor/rules/` entry.** A new file
-    `.cursor/rules/26-sub-pr-design-discipline.mdc` capturing
-    the disciplines in the project's standard
-    rules-document shape. Naturally inherits the
-    "always-applied" enforcement and shows up in every
-    contributor's context automatically.
-  - **Option B: `docs/conventions/` document.** A new
-    `docs/conventions/SUB_PR_DESIGN_DISCIPLINE.md`
-    capturing the same content in a longer-form documentation
-    shape. Not auto-applied but referenced from `.cursor/
-    rules/05-system-thinking.mdc` and from each per-trait
-    sub-PR's plan-doc scaffold so contributors discover it
-    at PR-design-time.
-
-  The sibling PR selects between A and B based on the
-  disciplines' shape: A if the disciplines fit naturally as
-  pithy bullet-rules; B if they need worked examples and
-  multi-paragraph rationale. Default expectation per the
-  shape of `16-architectural-inheritance.mdc` (which has
-  ~600 lines and reads more like a worked-conventions
-  document than a bullet-rules list) is **A with substantial
-  prose**, similar in shape to `16-architectural-
-  inheritance.mdc` and `21-reversion-clause-discipline.mdc`.
-
-  **Scope discipline.** The sibling PR is not a Phase 2c
-  Round 5 deliverable — that would be scope creep
-  (`15-deletion-and-debt.mdc` "while we're here is the
-  enemy"). The sibling PR opens **after PR #65 (the plan-doc
-  PR) merges to `dev`**, is parallel-eligible with the Phase 2c
-  implementation PR (not gated on it), and is short-lived per
-  `06-branching.mdc` rule 2. The sibling PR's own scope is
-  exclusively the discipline-promotion work; it does not
-  carry implementation changes, doc-comment changes, or
-  forward-action absorption from other PRs. A reviewer who
-  sees scope drift in this sibling PR rejects it per the
-  scope discipline.
-
-  The "parallel-eligible" framing matters because the
-  promoted disciplines are needed at Phase 2d Round 1 design
-  time (which can start as soon as the Phase 2c
-  implementation PR opens for review — Phase 2d's first
-  design round doesn't have to wait for Phase 2c to land
-  fully). Gating the discipline-promotion PR on Phase 2c
-  implementation lands would delay 2d's design substrate
-  past the deadline this entry was written to defend.
-
-  **Reopening criteria (per `21-reversion-clause-
-  discipline.mdc`).** If the sibling PR is deferred beyond
-  Phase 2d Round 1's open, the deferral is itself a substrate-
-  change that re-evaluates the disposition: a 2d Round 1
-  that proceeds without the promoted disciplines is the
-  failure mode the promotion was designed to prevent.
-  Practical disposition: open the sibling PR within 5
-  working days of PR #65 merging; if 2d Round 1 cuts before
-  the sibling PR lands, 2d Round 1 inherits the disciplines
-  from `RANDOMX_V2_PHASE2C_PLAN.md` directly with a one-
-  line acknowledgment that the sibling PR is pending.
-
-  **Cross-references.**
-  [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](./design/RANDOMX_V2_PHASE2C_PLAN.md)
-  §5.1.1 (function-body replacement contract), §5.4 (F4
-  absorption), §5.11 (threat-model addenda), §5.11.8 (audit-
-  against-actual-code discipline), §13 (forward-action
-  propagation), §14 (Round 5 entry recording the Round 4
-  posture-shift);
+  (R3-D1, F4, Round 4 addenda, forward-path, R0-D5–R0-D12, R5-D1);
+  [`docs/design/RANDOMX_V2_PHASE2C_AUDIT.md`](./design/RANDOMX_V2_PHASE2C_AUDIT.md);
   [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](./design/RANDOMX_V2_PHASE2D_PLAN.md)
-  §1 (contract inheritance shape);
-  [`.cursor/rules/05-system-thinking.mdc`](../.cursor/rules/05-system-thinking.mdc)
-  ("specification first, code second" — the disciplines are
-  the operational form of that principle for multi-round
-  per-trait PRs);
-  [`.cursor/rules/16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
-  ("continuous discipline as inheritance prevention" —
-  the sibling PR is one instance of that pattern applied to
-  process disciplines, not just code disciplines);
-  [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
-  (named-criteria reversion principle the F4 / Round-5
-  reversion-clause discipline instances cite).
-
-  **Originating context.** Phase 2c Round 5 closure
-  refinements (sibling commits on `chore/randomx-v2-phase2c-
-  plan` branch, PR #65). Round 5's review surfaced the
-  observation that the disciplines accumulated across
-  Rounds 1–4 are not 2c-anecdotal; recording the promotion
-  as a forward-action here makes the institutional knowledge
-  survive the closing of 2c's plan-doc.
-
-  **Target.** V3.0, post-2c-implementation. Opens within 5
-  working days of PR #65 merging to `dev`; lands before
-  Phase 2d Round 1's design doc cuts.
+  R1-D3 (post-promotion audit example). Downstream authors cite
+  `26-sub-pr-design-discipline.mdc` explicitly for process shape.
 
 ---
 
