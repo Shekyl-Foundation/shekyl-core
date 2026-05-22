@@ -13,8 +13,8 @@
 //! set, this module lands across three Phase 2c implementation-PR
 //! commits:
 //!
-//! - **Commit 4 (as corrected by the R0-D9 fix-up immediately on
-//!   top):** [`VmState`] struct skeleton with the frozen field set
+//! - **Commit 4 introduced** (as corrected by the R0-D9 fix-up
+//!   immediately on top) the [`VmState`] struct skeleton with the frozen field set
 //!   (per §5.1.1 + §5.5 F5 v2-only simplification), the [`F128`] /
 //!   [`Instruction`] / [`Program`] type definitions, the
 //!   [`PROGRAM_SIZE`] / [`PROGRAM_ITERATIONS`] /
@@ -24,8 +24,8 @@
 //!   carve-out per §1 covenant 7 + §5.11.2), the scratchpad-
 //!   allocation `debug_assert!` per §5.11.2, and the empty [`Drop`]
 //!   (review-surface hook per §5.11.4).
-//! - **Commit 5 (this commit, per §14 Round 0 R0-D8 Rust-idiomatic
-//!   two-method init shape):** [`VmState::init_scratchpad`] via
+//! - **Commit 5 introduced** (per §14 Round 0 R0-D8 Rust-idiomatic
+//!   two-method init shape) [`VmState::init_scratchpad`] via
 //!   [`crate::aes::fill_aes_1r_x4`], plus [`VmState::init_program`]
 //!   (stack-allocate the [`PROGRAM_BUFFER_SIZE`] = 3_200-byte buffer
 //!   per spec §4.5's `128 + 8 * RANDOMX_PROGRAM_SIZE` budget, fill
@@ -37,7 +37,7 @@
 //!   `self.program.instructions`); plus the IEEE-754 / dataset
 //!   constants the helpers consume; plus T3'/T4'/T5' fixture-free
 //!   determinism property tests inline per §5.11.1.
-//! - **Commit 6 (this commit, per §9 + §5.1.1 + §5.11.1 T6'-T8'):**
+//! - **Commit 6 introduced** (per §9 + §5.1.1 + §5.11.1 T6'-T8')
 //!   [`compute_hash`] (the `pub` per-hash transform — the crate's
 //!   single hash-producing entry point) + [`VmState::execute_program`]
 //!   (the spec §4.6 / `vm_interpreted.cpp::execute()` 2048-iteration
@@ -1035,12 +1035,12 @@ impl VmState {
     ///
     /// [`scratchpad`]: VmState::scratchpad
     ///
-    /// # REMOVE WHEN PHASE 2c COMMIT 6 WIRES THIS:
+    /// # Production caller
     ///
     /// Same chain-entry pattern as [`VmState::new`] — commit 6's
     /// [`compute_hash`] is the production `pub` caller; the
     /// transitive chain reached from this method
-    /// ([`crate::aes::fill_aes_1r_x4`]) is live as of this commit.
+    /// ([`crate::aes::fill_aes_1r_x4`]) is live as of commit 6.
     pub(crate) fn init_scratchpad(&mut self, seed: &mut [u8; 64]) {
         crate::aes::fill_aes_1r_x4(seed, &mut self.scratchpad[..]);
     }
@@ -1532,7 +1532,7 @@ impl Drop for VmState {
 /// Per-instruction dispatch — the §5.1.1 frozen-surface-1 function-
 /// body replacement point for Phase 2c → Phase 2d.
 ///
-/// **Phase 2c body (this commit): NOP** — every opcode is a no-op.
+/// **Phase 2c body (commit 6, stub): NOP** — every opcode is a no-op.
 /// The structural pieces of the interpreter loop
 /// ([`VmState::execute_program`]'s spAddr derivation, register-load
 /// from scratchpad, F/E AES mix, ma/mx swap, scratchpad store) run
@@ -2806,7 +2806,8 @@ mod tests {
     /// T8 spec-vector: end-to-end `compute_hash` output under stub-NOP
     /// dispatch matches the v2 RandomX fork's `randomx_calculate_hash`
     /// byte-for-byte at pin `aaafe71`, given the canonical seedhash
-    /// and 256-byte data input.
+    /// and 192-byte data input (see `t8_data_input_is_192_bytes` above
+    /// and `tests/vectors/reference/vm/t8_vm_compute_hash_nop.meta.txt`).
     ///
     /// This is the single end-to-end attestation: if T3-T7 pass and
     /// T8 fails, the divergence is in the `compute_hash` orchestration
