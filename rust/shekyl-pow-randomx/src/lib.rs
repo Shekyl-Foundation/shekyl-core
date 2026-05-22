@@ -93,3 +93,4 @@ mod superscalar;
 mod vm;
 
 pub use cache::Cache;
+pub use vm::compute_hash;

@@ -37,11 +37,39 @@
 //!   `self.program.instructions`); plus the IEEE-754 / dataset
 //!   constants the helpers consume; plus T3'/T4'/T5' fixture-free
 //!   determinism property tests inline per §5.11.1.
-//! - **Commit 6 (planned):** `pub fn compute_hash` + the private
-//!   `fn dispatch_instruction` NOP-body stub (the §5.1 function-body
-//!   replacement contract Phase 2d fills in), plus the F/E AES mix
-//!   per-iteration loop and the Blake2b finalize, plus T6'/T7'/T8'
-//!   fixture-free determinism property tests inline.
+//! - **Commit 6 (this commit, per §9 + §5.1.1 + §5.11.1 T6'-T8'):**
+//!   [`compute_hash`] (the `pub` per-hash transform — the crate's
+//!   single hash-producing entry point) + [`VmState::execute_program`]
+//!   (the spec §4.6 / `vm_interpreted.cpp::execute()` 2048-iteration
+//!   loop, single per-iteration body that the stub-NOP
+//!   [`dispatch_instruction`] dispatches into per spec §4.6.5) + the
+//!   private [`dispatch_instruction`] NOP-body stub (the §5.1
+//!   function-body replacement contract Phase 2d fills in per
+//!   §5.1.1 frozen surfaces 1–3); plus the supporting helpers
+//!   ([`SCRATCHPAD_L3_MASK_64`] + [`DYNAMIC_MANTISSA_MASK`] +
+//!   [`RANDOMX_PROGRAM_COUNT`] constants;
+//!   [`cvt_packed_int_to_f128`] + [`mask_register_exponent_mantissa`]
+//!   pure-function bytecode-machine helpers); plus T6'/T7'/T8'
+//!   fixture-free determinism property tests inline per §5.11.1.
+//!
+//! # `compute_hash` `seedhash` parameter — documentary-only
+//!
+//! The [`compute_hash`] signature carries `seedhash: &[u8; 32]` for
+//! cache-binding documentation only: spec §2 separates the two
+//! algorithm inputs `K` (key — the 0..=60-byte seedhash used to
+//! derive the dataset/cache via Argon2d + SuperscalarHash) and `H`
+//! (value — the arbitrary-length data hashed against the cache).
+//! The per-hash Blake2b seed used by [`VmState::init_scratchpad`] is
+//! `Blake2b-512(H)` per spec §4.1 (`randomx.cpp::randomx_calculate_hash`
+//! lines 392-394 at pin `aaafe71`); `K` is NOT mixed into the
+//! per-hash Blake2b chain. Callers pass the seedhash to document the
+//! cache-binding contract (cache derived from this `K` must be paired
+//! with hashes computed from `H` against the same `K`); the parameter
+//! is consumed only by the `debug_assert!` checking cache freshness in
+//! a future PR (V3.0 follow-up), not by the hash math itself. See the
+//! Round 0 R0-D9 cSHAKE-vs-spec-canonical discussion in the parent
+//! [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+//! for the dependency-discipline trail that produced this disposition.
 //!
 //! # Threat-model disposition (per §5.11.4)
 //!
@@ -87,7 +115,6 @@ use core::mem::MaybeUninit;
 /// FSQRT_R, FSCAL_R, FSWAP_R, CFROUND) and decides then. Until
 /// then, this alias locks the *element shape* (`[f64; 2]`), not
 /// the *type identity*.
-#[allow(dead_code)]
 pub(crate) type F128 = [f64; 2];
 
 /// Number of [`Instruction`]s in a single RandomX v2 [`Program`].
@@ -114,7 +141,6 @@ pub(crate) type F128 = [f64; 2];
 /// `2048` and was corrected via R0-D9). The two constants are
 /// defined together below to make the distinction structurally
 /// explicit at every reading.
-#[allow(dead_code)]
 pub(crate) const PROGRAM_SIZE: usize = 384;
 
 /// Number of times each RandomX v2 [`Program`] is executed per hash.
@@ -129,7 +155,6 @@ pub(crate) const PROGRAM_SIZE: usize = 384;
 /// # Distinct from [`PROGRAM_SIZE`] (R0-D9 anchor)
 ///
 /// See [`PROGRAM_SIZE`] rustdoc.
-#[allow(dead_code)]
 pub(crate) const PROGRAM_ITERATIONS: usize = 2048;
 
 /// RandomX v2 scratchpad size in bytes.
@@ -156,7 +181,6 @@ pub(crate) const PROGRAM_ITERATIONS: usize = 2048;
 /// per §1 covenant 7); the conversion `Box<[u8]> → Box<[u8; N]>`
 /// is the safe `try_into` from `std`, with a `debug_assert!` per
 /// §5.11.2 guarding the intermediate slice length.
-#[allow(dead_code)]
 pub(crate) const RANDOMX_SCRATCHPAD_L3: usize = 2_097_152;
 
 const _: () = assert!(
@@ -166,6 +190,96 @@ const _: () = assert!(
      RANDOMX_SCRATCHPAD_LN / sizeof(int_reg_t) - 1 for N in 1..=3, \
      which is only correct when the operand is a power of two)"
 );
+
+/// Cache-line-aligned scratchpad address mask applied by
+/// [`VmState::execute_program`] to `sp_addr0` / `sp_addr1` each
+/// iteration before the register-load + F/E-load + scratchpad-store
+/// memory accesses.
+///
+/// `ScratchpadL3Mask64 = (ScratchpadL3 / 8 - 1) * 64` per
+/// [`external/randomx-v2/src/common.hpp:164`](../../../external/randomx-v2/src/common.hpp)
+/// at pin `aaafe71`, where `ScratchpadL3 = RANDOMX_SCRATCHPAD_L3 /
+/// sizeof(int_reg_t) = RANDOMX_SCRATCHPAD_L3 / 8`. The expression
+/// resolves to `RANDOMX_SCRATCHPAD_L3 / 64 - 1` u64-pair cache-lines,
+/// multiplied by `64` bytes per cache-line, equaling
+/// `RANDOMX_SCRATCHPAD_L3 - 64` (= the byte offset of the last
+/// 64-byte cache-line within the 2 MiB scratchpad). The Rust port
+/// preserves the C reference's compositional spelling
+/// (`/ 64 - 1) * 64` rather than `- 64` directly) for traceability;
+/// the `const _: () = assert!(…)` block below double-checks the two
+/// equal-value reductions.
+///
+/// # Address-derivation budget
+///
+/// At the spec-pinned `RANDOMX_SCRATCHPAD_L3 = 2_097_152`, the mask
+/// is `2_097_088`. The per-iteration loop reads from
+/// `scratchpad[sp_addr1 + 8 * (i + RegisterCountFlt)]` (max
+/// `sp_addr1 + 8 * 7 = sp_addr1 + 56`, last byte at offset
+/// `sp_addr1 + 63`) and writes to `scratchpad[sp_addr0 + 16 * i]`
+/// (max `sp_addr0 + 16 * 3 = sp_addr0 + 48`, last byte at offset
+/// `sp_addr0 + 63`). Mask-bounded by `2_097_088`, the highest byte
+/// access is `2_097_088 + 63 = 2_097_151` — exactly the last byte
+/// of the 2 MiB scratchpad. The mask is tight: any larger
+/// `sp_addr` would index past the buffer.
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) const SCRATCHPAD_L3_MASK_64: u32 = ((RANDOMX_SCRATCHPAD_L3 / 64 - 1) * 64) as u32;
+
+const _: () = assert!(
+    SCRATCHPAD_L3_MASK_64 as usize == RANDOMX_SCRATCHPAD_L3 - 64,
+    "SCRATCHPAD_L3_MASK_64 must equal `RANDOMX_SCRATCHPAD_L3 - 64` \
+     (the byte offset of the last 64-byte cache-line in the scratchpad); \
+     drift here means the C-reference compositional spelling no longer \
+     reduces to the simpler equivalent — investigate whether \
+     RANDOMX_SCRATCHPAD_L3 has drifted or whether the C reference's \
+     formula has changed"
+);
+
+/// Number of program chains executed per [`compute_hash`] invocation.
+///
+/// `RANDOMX_PROGRAM_COUNT = 8` per
+/// [`external/randomx-v2/src/configuration.h:65`](../../../external/randomx-v2/src/configuration.h)
+/// at pin `aaafe71`. Consumed by [`compute_hash`]'s chain loop:
+/// the first `RANDOMX_PROGRAM_COUNT - 1` (= 7) chains follow each
+/// `init_program` + `execute_program` with a
+/// `Blake2b-512(register_file)` chain step that overwrites
+/// `temp_hash`; the eighth chain skips the chain-step Blake2b and
+/// instead feeds the final register-file (post-`AesHash1R` overwrite
+/// of the `a` registers) to `Blake2b<U32>` for the 32-byte output.
+/// Mirrors the loop bound at
+/// [`external/randomx-v2/src/randomx.cpp:397-402`](../../../external/randomx-v2/src/randomx.cpp).
+pub(crate) const RANDOMX_PROGRAM_COUNT: usize = 8;
+
+/// Output size in bytes of [`compute_hash`]'s final
+/// `Blake2b<U32>(register_file)` step.
+///
+/// `RANDOMX_HASH_SIZE = 32` per
+/// [`external/randomx-v2/src/randomx.h:35`](../../../external/randomx-v2/src/randomx.h)
+/// at pin `aaafe71`. Encoded in the [`compute_hash`] return type
+/// (`[u8; 32]`); this constant exists for documentation cross-reference
+/// to the C reference and to anchor any future generic-over-output-
+/// size code that wants the named source.
+#[allow(dead_code)]
+pub(crate) const RANDOMX_HASH_SIZE: usize = 32;
+
+/// Number of 64-bit integer registers in the RandomX register file.
+///
+/// `RegistersCount = 8` per
+/// [`external/randomx-v2/src/common.hpp:165`](../../../external/randomx-v2/src/common.hpp)
+/// at pin `aaafe71`. Equals the array length of [`VmState::r`].
+/// Used by [`VmState::execute_program`]'s register-load loop and by
+/// [`compute_hash`]'s register-file Blake2b feed.
+pub(crate) const REGISTERS_COUNT: usize = 8;
+
+/// Number of 128-bit floating-point register pairs in the RandomX
+/// register file (each register pair carries two `f64` lanes).
+///
+/// `RegisterCountFlt = RegistersCount / 2 = 4` per
+/// [`external/randomx-v2/src/common.hpp:166`](../../../external/randomx-v2/src/common.hpp)
+/// at pin `aaafe71`. Equals the array length of [`VmState::f`] /
+/// [`VmState::e`] / [`VmState::a`]. Used by
+/// [`VmState::execute_program`]'s F/E load + AES mix + F store loops
+/// and by [`compute_hash`]'s register-file Blake2b feed.
+pub(crate) const REGISTER_COUNT_FLT: usize = REGISTERS_COUNT / 2;
 
 /// RandomX dataset base size in bytes.
 ///
@@ -178,7 +292,6 @@ const _: () = assert!(
 /// items on the fly per Phase 0's "no dataset" decision); this
 /// constant exists only to derive [`CACHE_LINE_ALIGN_MASK`] and is
 /// not otherwise consumed.
-#[allow(dead_code)]
 pub(crate) const RANDOMX_DATASET_BASE_SIZE: u32 = 2_147_483_648;
 
 /// RandomX dataset extra size in bytes.
@@ -190,7 +303,6 @@ pub(crate) const RANDOMX_DATASET_BASE_SIZE: u32 = 2_147_483_648;
 /// `common.hpp:90`). The Rust port never indexes a dataset directly;
 /// this constant exists only to derive [`DATASET_EXTRA_ITEMS`] and is
 /// not otherwise consumed.
-#[allow(dead_code)]
 pub(crate) const RANDOMX_DATASET_EXTRA_SIZE: u32 = 33_554_368;
 
 /// Cache-line size in bytes.
@@ -201,7 +313,6 @@ pub(crate) const RANDOMX_DATASET_EXTRA_SIZE: u32 = 33_554_368;
 /// [`external/randomx-v2/src/randomx.h:36`](../../../external/randomx-v2/src/randomx.h)
 /// at pin `aaafe71`. Used by [`VmState::init_program`]'s `mem.ma`
 /// alignment + `dataset_offset` multiplier.
-#[allow(dead_code)]
 pub(crate) const CACHE_LINE_SIZE: u32 = 64;
 
 /// Cache-line alignment mask.
@@ -214,7 +325,6 @@ pub(crate) const CACHE_LINE_SIZE: u32 = 64;
 /// `virtual_machine.cpp:81`. The mask zeros the low 6 bits (cache-
 /// line alignment) within the low 31 bits (`DATASET_BASE_SIZE - 1`);
 /// at the spec-pinned values the result is `0x7FFF_FFC0`.
-#[allow(dead_code)]
 pub(crate) const CACHE_LINE_ALIGN_MASK: u32 =
     (RANDOMX_DATASET_BASE_SIZE - 1) & !(CACHE_LINE_SIZE - 1);
 
@@ -227,7 +337,6 @@ pub(crate) const CACHE_LINE_ALIGN_MASK: u32 =
 /// [`VmState::init_program`] to compute `dataset_offset` per
 /// `virtual_machine.cpp:91`. At the spec-pinned values the result is
 /// `524_287` (= `2^19 - 1`).
-#[allow(dead_code)]
 pub(crate) const DATASET_EXTRA_ITEMS: u32 = RANDOMX_DATASET_EXTRA_SIZE / CACHE_LINE_SIZE;
 
 /// IEEE-754 binary64 mantissa width in bits.
@@ -237,7 +346,6 @@ pub(crate) const DATASET_EXTRA_ITEMS: u32 = RANDOMX_DATASET_EXTRA_SIZE / CACHE_L
 /// at pin `aaafe71`. Used by [`get_small_positive_float_bits`] /
 /// [`get_static_exponent`] to assemble IEEE-754 binary64 bit patterns
 /// from the program-init entropy buffer.
-#[allow(dead_code)]
 pub(crate) const MANTISSA_SIZE: u32 = 52;
 
 /// IEEE-754 binary64 exponent width in bits.
@@ -246,7 +354,6 @@ pub(crate) const MANTISSA_SIZE: u32 = 52;
 /// [`external/randomx-v2/src/common.hpp:175`](../../../external/randomx-v2/src/common.hpp)
 /// at pin `aaafe71`. Used by [`get_small_positive_float_bits`] to
 /// mask the entropy-derived exponent into the binary64 11-bit field.
-#[allow(dead_code)]
 pub(crate) const EXPONENT_SIZE: u32 = 11;
 
 /// IEEE-754 binary64 mantissa mask.
@@ -254,7 +361,6 @@ pub(crate) const EXPONENT_SIZE: u32 = 11;
 /// `mantissaMask = (1 << mantissaSize) - 1` per
 /// [`external/randomx-v2/src/common.hpp:176`](../../../external/randomx-v2/src/common.hpp)
 /// at pin `aaafe71`.
-#[allow(dead_code)]
 pub(crate) const MANTISSA_MASK: u64 = (1u64 << MANTISSA_SIZE) - 1;
 
 /// IEEE-754 binary64 exponent mask.
@@ -262,7 +368,6 @@ pub(crate) const MANTISSA_MASK: u64 = (1u64 << MANTISSA_SIZE) - 1;
 /// `exponentMask = (1 << exponentSize) - 1` per
 /// [`external/randomx-v2/src/common.hpp:177`](../../../external/randomx-v2/src/common.hpp)
 /// at pin `aaafe71`.
-#[allow(dead_code)]
 pub(crate) const EXPONENT_MASK: u64 = (1u64 << EXPONENT_SIZE) - 1;
 
 /// IEEE-754 binary64 exponent bias.
@@ -270,8 +375,22 @@ pub(crate) const EXPONENT_MASK: u64 = (1u64 << EXPONENT_SIZE) - 1;
 /// `exponentBias = 1023` per
 /// [`external/randomx-v2/src/common.hpp:178`](../../../external/randomx-v2/src/common.hpp)
 /// at pin `aaafe71`.
-#[allow(dead_code)]
 pub(crate) const EXPONENT_BIAS: u64 = 1023;
+
+/// Dynamic-mantissa mask applied by FDIV_M's
+/// `maskRegisterExponentMantissa` step and by the per-iteration F/E
+/// mix in [`VmState::execute_program`] (the spec §4.6.3 E-register
+/// load with the mantissa preserved and the exponent replaced by
+/// `e_mask`).
+///
+/// `dynamicMantissaMask = (1 << (mantissaSize + dynamicExponentBits)) - 1`
+/// per
+/// [`external/randomx-v2/src/common.hpp:182`](../../../external/randomx-v2/src/common.hpp)
+/// at pin `aaafe71`. At the spec-pinned values (`mantissaSize = 52`,
+/// `dynamicExponentBits = 4`) the mask is `(1 << 56) - 1 =
+/// 0x00FF_FFFF_FFFF_FFFF` — the low 56 bits set, the high 8 bits
+/// (the static exponent half) clear.
+pub(crate) const DYNAMIC_MANTISSA_MASK: u64 = (1u64 << (MANTISSA_SIZE + DYNAMIC_EXPONENT_BITS)) - 1;
 
 /// Dynamic exponent bit-width for the `e`-register float-mask
 /// derivation.
@@ -279,7 +398,6 @@ pub(crate) const EXPONENT_BIAS: u64 = 1023;
 /// `dynamicExponentBits = 4` per
 /// [`external/randomx-v2/src/common.hpp:179`](../../../external/randomx-v2/src/common.hpp)
 /// at pin `aaafe71`. Used by [`get_static_exponent`].
-#[allow(dead_code)]
 pub(crate) const DYNAMIC_EXPONENT_BITS: u32 = 4;
 
 /// Static exponent bit-width consumed from the entropy MSB by
@@ -288,7 +406,6 @@ pub(crate) const DYNAMIC_EXPONENT_BITS: u32 = 4;
 /// `staticExponentBits = 4` per
 /// [`external/randomx-v2/src/common.hpp:180`](../../../external/randomx-v2/src/common.hpp)
 /// at pin `aaafe71`.
-#[allow(dead_code)]
 pub(crate) const STATIC_EXPONENT_BITS: u32 = 4;
 
 /// Fixed exponent bits seeded into [`get_static_exponent`]'s output
@@ -297,7 +414,6 @@ pub(crate) const STATIC_EXPONENT_BITS: u32 = 4;
 /// `constExponentBits = 0x300` per
 /// [`external/randomx-v2/src/common.hpp:181`](../../../external/randomx-v2/src/common.hpp)
 /// at pin `aaafe71`.
-#[allow(dead_code)]
 pub(crate) const CONST_EXPONENT_BITS: u64 = 0x300;
 
 /// Size in bytes of the per-program entropy header.
@@ -309,7 +425,6 @@ pub(crate) const CONST_EXPONENT_BITS: u64 = 0x300;
 /// reads these 128 bytes from the head of the [`PROGRAM_BUFFER_SIZE`]
 /// AES-fill output and parses them into the register-init field set
 /// per [`VmState::init_program`].
-#[allow(dead_code)]
 pub(crate) const ENTROPY_BUFFER_SIZE: usize = 128;
 
 /// Size in bytes of a single parsed [`Instruction`] in the program
@@ -319,7 +434,6 @@ pub(crate) const ENTROPY_BUFFER_SIZE: usize = 128;
 /// [`external/randomx-v2/src/instruction.hpp`](../../../external/randomx-v2/src/instruction.hpp)
 /// at pin `aaafe71`, every RandomX instruction is exactly 8 bytes
 /// on the wire: `opcode | dst | src | mod_ | imm32 (LE)`.
-#[allow(dead_code)]
 pub(crate) const INSTRUCTION_SIZE: usize = 8;
 
 /// Size in bytes of the [`VmState::init_program`] AES-fill buffer.
@@ -330,7 +444,6 @@ pub(crate) const INSTRUCTION_SIZE: usize = 8;
 /// instructions = 3_200 bytes at `RANDOMX_PROGRAM_SIZE_V2 = 384`).
 /// The constant is asserted equal to `ENTROPY_BUFFER_SIZE +
 /// PROGRAM_SIZE * INSTRUCTION_SIZE` at compile time below.
-#[allow(dead_code)]
 pub(crate) const PROGRAM_BUFFER_SIZE: usize = ENTROPY_BUFFER_SIZE + PROGRAM_SIZE * INSTRUCTION_SIZE;
 
 const _: () = assert!(
@@ -365,7 +478,6 @@ const _: () = assert!(
 /// Pure function of `entropy`; no allocator calls, no atomic ops, no
 /// table lookups. Constant-time across all inputs per the bit-pattern
 /// shape of the operations (shifts/ANDs/ORs on `u64`).
-#[allow(dead_code)]
 pub(crate) fn get_small_positive_float_bits(entropy: u64) -> u64 {
     let exponent = entropy >> 59;
     let mantissa = entropy & MANTISSA_MASK;
@@ -388,7 +500,6 @@ pub(crate) fn get_small_positive_float_bits(entropy: u64) -> u64 {
 /// # Determinism / side-channel posture
 ///
 /// See [`get_small_positive_float_bits`].
-#[allow(dead_code)]
 pub(crate) fn get_static_exponent(entropy: u64) -> u64 {
     let exponent = CONST_EXPONENT_BITS;
     let exponent = exponent | ((entropy >> (64 - STATIC_EXPONENT_BITS)) << DYNAMIC_EXPONENT_BITS);
@@ -409,10 +520,124 @@ pub(crate) fn get_static_exponent(entropy: u64) -> u64 {
 /// # Determinism / side-channel posture
 ///
 /// See [`get_small_positive_float_bits`].
-#[allow(dead_code)]
 pub(crate) fn get_float_mask(entropy: u64) -> u64 {
     const MASK_22BIT: u64 = (1u64 << 22) - 1;
     (entropy & MASK_22BIT) | get_static_exponent(entropy)
+}
+
+/// Convert an 8-byte little-endian scratchpad slice (two packed
+/// 32-bit signed integers) to a [`F128`] (two f64 lanes), per the
+/// SSE2 `_mm_cvtepi32_pd` semantics the bytecode machine relies on
+/// for the spec §4.6.2 F/E register load.
+///
+/// Mirrors `rx_cvt_packed_int_vec_f128(const void* addr)` at
+/// [`external/randomx-v2/src/intrin_portable.h:163-166`](../../../external/randomx-v2/src/intrin_portable.h)
+/// at pin `aaafe71`. The C reference loads 8 bytes via
+/// `_mm_loadl_epi64`, then `_mm_cvtepi32_pd` interprets the low 64
+/// bits as two packed signed 32-bit integers (little-endian on x86)
+/// and converts each to a `double` with full-range sign extension
+/// (i32 → f64 is exact: every i32 fits in f64's 53-bit mantissa).
+///
+/// # Wire-format and consensus posture
+///
+/// The byte interpretation is consensus-relevant: bytes `0..4` of
+/// `addr` are the **first** i32 (lo lane), bytes `4..8` are the
+/// **second** i32 (hi lane). The Rust port reads each lane via
+/// `i32::from_le_bytes` and converts to `f64` via the lossless
+/// `f64::from(i32)` (`From<i32> for f64` is the language's canonical
+/// i32→f64 conversion, equivalent to the spec-pinned x86 semantics).
+///
+/// # Determinism / side-channel posture
+///
+/// Pure function of the 8 input bytes; no allocator calls, no atomic
+/// ops, no table lookups. The `i32 → f64` conversion is a single
+/// constant-time operation on every supported target (no branching
+/// on the input value, no exception generation since every i32 has
+/// an exact f64 representation).
+pub(crate) fn cvt_packed_int_to_f128(bytes: &[u8; 8]) -> F128 {
+    let lo = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let hi = i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    [f64::from(lo), f64::from(hi)]
+}
+
+/// Apply the FDIV_M-style `maskRegisterExponentMantissa` transform
+/// to a [`F128`] register pair.
+///
+/// Mirrors `maskRegisterExponentMantissa(ProgramConfiguration& config,
+/// rx_vec_f128 x)` at
+/// [`external/randomx-v2/src/bytecode_machine.hpp:272-278`](../../../external/randomx-v2/src/bytecode_machine.hpp)
+/// at pin `aaafe71`. The transform replaces each lane's IEEE-754
+/// exponent (the high 8 bits of the static-exponent half) with the
+/// corresponding `e_mask[i]` byte pattern while preserving the
+/// 56-bit mantissa-plus-dynamic-exponent low bits via
+/// [`DYNAMIC_MANTISSA_MASK`]. The C reference uses SSE2
+/// `_mm_and_pd` + `_mm_or_pd`; the Rust port operates on the bit
+/// pattern directly via `f64::to_bits` / `f64::from_bits` (the
+/// IEEE-754 spec defines the bit-level transform unambiguously,
+/// and the Rust intrinsics are constant-time on every target).
+///
+/// # Consumer
+///
+/// Used by [`VmState::execute_program`]'s spec §4.6.3 E-register
+/// load (mirroring `vm_interpreted.cpp:83` at pin `aaafe71`). Once
+/// Phase 2d lands real bytecode dispatch, FDIV_M consumes the same
+/// helper.
+///
+/// # Determinism / side-channel posture
+///
+/// Pure function of `x` + `e_mask`; no allocator calls, no atomic
+/// ops, no table lookups. The bit-pattern manipulation is
+/// constant-time across all inputs per the shape of the operations
+/// (ANDs/ORs on `u64`).
+pub(crate) fn mask_register_exponent_mantissa(x: F128, e_mask: [u64; 2]) -> F128 {
+    let lo_bits = (x[0].to_bits() & DYNAMIC_MANTISSA_MASK) | e_mask[0];
+    let hi_bits = (x[1].to_bits() & DYNAMIC_MANTISSA_MASK) | e_mask[1];
+    [f64::from_bits(lo_bits), f64::from_bits(hi_bits)]
+}
+
+/// Reinterpret a [`F128`] register pair as a 16-byte AES state block
+/// (little-endian bit-pattern: lo lane bytes then hi lane bytes).
+///
+/// Mirrors the C reference's `rx_cast_vec_f2i(nreg.f[i])` at
+/// [`external/randomx-v2/src/vm_interpreted.cpp:104-105`](../../../external/randomx-v2/src/vm_interpreted.cpp)
+/// at pin `aaafe71`. The C path uses SSE2 `_mm_castpd_si128` which
+/// is a zero-cost reinterpret of the 128-bit register's bytes; the
+/// Rust port serializes via `f64::to_bits` + `u64::to_le_bytes` to
+/// the same byte sequence on little-endian targets (the spec-pinned
+/// representation matches the IEEE-754 binary64 little-endian
+/// canonical form per spec §5.2). Consumed by the per-iteration F/E
+/// AES mix in [`VmState::execute_program`].
+///
+/// # Determinism / side-channel posture
+///
+/// Pure function of `f`; no allocator calls, no atomic ops. The
+/// `to_bits` / `to_le_bytes` conversions are constant-time on every
+/// supported target.
+fn f128_to_aes_bytes(f: F128) -> [u8; 16] {
+    let mut bytes = [0u8; 16];
+    bytes[0..8].copy_from_slice(&f[0].to_bits().to_le_bytes());
+    bytes[8..16].copy_from_slice(&f[1].to_bits().to_le_bytes());
+    bytes
+}
+
+/// Inverse of [`f128_to_aes_bytes`] — reinterpret a 16-byte AES
+/// state block as a [`F128`] register pair.
+///
+/// Mirrors `rx_cast_vec_i2f(freg[i])` at
+/// [`external/randomx-v2/src/vm_interpreted.cpp:115-116`](../../../external/randomx-v2/src/vm_interpreted.cpp)
+/// at pin `aaafe71`. The C path uses SSE2 `_mm_castsi128_pd`; the
+/// Rust port deserializes via `u64::from_le_bytes` + `f64::from_bits`
+/// to the same f64-pair value on little-endian targets.
+///
+/// # Determinism / side-channel posture
+///
+/// Pure function of `bytes`; no allocator calls, no atomic ops. The
+/// `from_le_bytes` / `from_bits` conversions are constant-time on
+/// every supported target.
+fn aes_bytes_to_f128(bytes: &[u8; 16]) -> F128 {
+    let lo = u64::from_le_bytes(bytes[0..8].try_into().expect("16-byte block split at 8"));
+    let hi = u64::from_le_bytes(bytes[8..16].try_into().expect("16-byte block split at 8"));
+    [f64::from_bits(lo), f64::from_bits(hi)]
 }
 
 /// A single 8-byte RandomX v2 bytecode instruction.
@@ -443,6 +668,12 @@ pub(crate) fn get_float_mask(entropy: u64) -> u64 {
 /// `mod_` (trailing underscore) avoids the `mod` keyword collision;
 /// the C reference uses `mod` directly since C++ has no such
 /// reservation.
+// `Instruction` fields are written by `init_program` and consumed
+// only by `dispatch_instruction`. Under the Phase 2c stub-NOP body,
+// `dispatch_instruction` ignores every field; Phase 2d's body
+// replacement is the first production reader, so the per-field
+// "never read" dead-code lint stays suppressed at the struct level
+// until then.
 #[allow(dead_code)]
 #[derive(Default, Clone, Copy)]
 pub(crate) struct Instruction {
@@ -486,7 +717,6 @@ pub(crate) struct Instruction {
 /// is amortized to a single move into the [`Box`] and is bounded by
 /// the once-per-hash construction cost (`VmState::new` is called
 /// from `compute_hash` once per hash, not per dispatch).
-#[allow(dead_code)]
 pub(crate) struct Program {
     /// The [`PROGRAM_SIZE`] (384) parsed instructions feeding the
     /// spec §4.5.4 dispatch loop. Populated by commit 5's
@@ -724,38 +954,24 @@ impl VmState {
     /// commit 8's `benches/compute_hash_alloc.rs` measures it
     /// directly under the ≤100 µs PR-gating threshold.
     ///
-    /// # REMOVE WHEN PHASE 2c COMMIT 6 WIRES THIS:
+    /// # Liveness disposition (commit 6 wired)
     ///
-    /// Until commit 6's `pub fn compute_hash` lands, [`VmState::new`]
-    /// has no `pub`-reachable caller. The entire transitive chain
-    /// reached from this function ([`alloc_zeroed_scratchpad`],
-    /// [`Program::default`], [`Instruction::default`], the
-    /// [`F128`] alias, the [`PROGRAM_SIZE`] / [`PROGRAM_ITERATIONS`]
-    /// / [`RANDOMX_SCRATCHPAD_L3`] constants, the [`VmState`] /
-    /// [`Program`] / [`Instruction`] field reads in [`VmState::drop`]'s
-    /// implicit field-drop walk) is dead-code-lint dead in the same
-    /// chain. [`PROGRAM_ITERATIONS`] is consumed at commit 6 by
-    /// `VmState::run`'s outer loop and at Phase 2d by the bytecode
-    /// dispatch's per-iteration index space; until then, the same
-    /// chain-entry `#[allow(dead_code)]` covers its read-site
-    /// absence.
-    ///
-    /// A single `#[allow(dead_code)]` at this chain entry-point
-    /// suppresses the transitive lint cascade per the standard
-    /// `rustc` reachability analysis (mirroring the same discipline
-    /// applied to `Cache::derive_item` in commit 3 of this PR per
-    /// `cache.rs:402`). Per-struct `#[allow(dead_code)]` on
-    /// [`VmState`] / [`Program`] / [`Instruction`] / [`F128`]
-    /// covers the field-level "never read" lint that the
-    /// reachability propagation does not suppress on its own (the
-    /// lint fires for unread fields independent of whether the
-    /// enclosing struct is constructed). Commit 6's `compute_hash`
-    /// becomes the production `pub` caller, at which point this
-    /// `#[allow]` on [`VmState::new`] is removed (the per-struct
-    /// `#[allow]`s outlive it because the field reads only begin
-    /// when commit 5's [`VmState::initialize`] and commit 6's
-    /// dispatch wire them).
-    #[allow(dead_code)]
+    /// Commit 6's [`compute_hash`] is the production `pub` caller
+    /// of [`VmState::new`]; the transitive chain
+    /// ([`alloc_zeroed_scratchpad`], [`Program::default`],
+    /// [`Instruction::default`], the [`F128`] alias, the
+    /// [`PROGRAM_SIZE`] / [`PROGRAM_ITERATIONS`] /
+    /// [`RANDOMX_SCRATCHPAD_L3`] constants, the [`VmState`] /
+    /// [`Program`] / [`Instruction`] field reads from
+    /// [`VmState::execute_program`] and [`compute_hash`]'s
+    /// `feed_register_file_to_hasher`) is reached from this entry
+    /// point as a live chain. The per-struct `#[allow(dead_code)]`
+    /// on [`VmState`] persists because the `fprc` and `temp_hash`
+    /// fields remain unread under the Phase 2c stub-NOP dispatch
+    /// (`fprc` is wired by Phase 2d's CFROUND handler; `temp_hash`
+    /// is a placeholder field whose role [`compute_hash`] satisfies
+    /// with a local buffer — see the field's rustdoc for the
+    /// Phase 2d / V3.1 followup that re-evaluates the field).
     pub(crate) fn new() -> Self {
         let slice = alloc_zeroed_scratchpad();
 
@@ -821,16 +1037,10 @@ impl VmState {
     ///
     /// # REMOVE WHEN PHASE 2c COMMIT 6 WIRES THIS:
     ///
-    /// Same chain-entry pattern as [`VmState::new`] — until commit
-    /// 6's `pub fn compute_hash` lands, [`VmState::init_scratchpad`]
-    /// has no `pub`-reachable caller. The transitive chain reached
-    /// from this method ([`crate::aes::fill_aes_1r_x4`] —
-    /// already chain-entry-allowed in `aes.rs` per Phase 2b's
-    /// commit-2 dead-code discipline) inherits the suppression via
-    /// the standard `rustc` reachability analysis. Commit 6's
-    /// `compute_hash` becomes the production `pub` caller, at which
-    /// point this `#[allow]` is removed.
-    #[allow(dead_code)]
+    /// Same chain-entry pattern as [`VmState::new`] — commit 6's
+    /// [`compute_hash`] is the production `pub` caller; the
+    /// transitive chain reached from this method
+    /// ([`crate::aes::fill_aes_1r_x4`]) is live as of this commit.
     pub(crate) fn init_scratchpad(&mut self, seed: &mut [u8; 64]) {
         crate::aes::fill_aes_1r_x4(seed, &mut self.scratchpad[..]);
     }
@@ -891,10 +1101,8 @@ impl VmState {
     ///
     /// [`program`]: VmState::program
     ///
-    /// # REMOVE WHEN PHASE 2c COMMIT 6 WIRES THIS:
-    ///
-    /// Same chain-entry pattern as [`VmState::init_scratchpad`].
-    #[allow(dead_code)]
+    /// Same chain-entry pattern as [`VmState::init_scratchpad`] —
+    /// commit 6's [`compute_hash`] is the production `pub` caller.
     pub(crate) fn init_program(&mut self, seed: &[u8; 64]) {
         let mut buf = [0u8; PROGRAM_BUFFER_SIZE];
         crate::aes::fill_aes_4r_x4(seed, &mut buf);
@@ -968,6 +1176,241 @@ impl VmState {
             };
         }
     }
+
+    /// Execute the parsed [`program`] for [`PROGRAM_ITERATIONS`]
+    /// iterations against `cache`, mutating the register file and
+    /// scratchpad in place per spec §4.6 + `vm_interpreted.cpp::execute()`
+    /// at pin `aaafe71`.
+    ///
+    /// Mirrors `InterpretedVm<...>::execute()` at
+    /// [`external/randomx-v2/src/vm_interpreted.cpp:57-138`](../../../external/randomx-v2/src/vm_interpreted.cpp)
+    /// fused with the light-VM `datasetRead` override at
+    /// [`external/randomx-v2/src/vm_interpreted_light.cpp:41-49`](../../../external/randomx-v2/src/vm_interpreted_light.cpp).
+    /// Per
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §5.4 F4 (Cache::derive absorption / DatasetReader-trait
+    /// elimination), the cache is borrowed directly here rather than
+    /// through a trait abstraction; `cache.derive_item(item_number)`
+    /// substitutes for the C reference's `initDatasetItem(cachePtr,
+    /// (uint8_t*)rl, itemNumber)`.
+    ///
+    /// # v2-only simplification
+    ///
+    /// Per §5.5 F5 v2-only simplification, the C reference's `mp`
+    /// alias collapses to direct `self.ma` access (the v2-branch of
+    /// `auto& mp = (flags & V2) ? mem.ma : mem.mx;` at
+    /// `vm_interpreted.cpp:89` — under v2 the alias is always
+    /// `mem.ma`, so the Rust port skips the alias entirely). The F/E
+    /// AES mix below similarly skips the non-v2 fallback
+    /// (`nreg.f[i] = rx_xor_vec_f128(nreg.f[i], nreg.e[i])` at
+    /// `vm_interpreted.cpp:119-120`), executing only the v2 AES-mix
+    /// path. Per `60-no-monero-legacy.mdc`, the v1 paths are deleted
+    /// rather than gated behind a runtime check.
+    ///
+    /// # Light-mode `datasetPrefetch` no-op
+    ///
+    /// The C reference's `datasetPrefetch(datasetOffset + (mp &
+    /// CacheLineAlignMask))` at `vm_interpreted.cpp:92` is
+    /// overridden as an empty body by
+    /// `InterpretedLightVm::datasetPrefetch` at
+    /// `vm_interpreted_light.hpp:55` — light-mode VMs have no
+    /// actual dataset memory to prefetch. The Rust port (verifier-
+    /// only, light-mode equivalent per
+    /// [`RANDOMX_V2_PLAN.md`](../../../docs/design/RANDOMX_V2_PLAN.md)'s
+    /// "no dataset" decision) omits the prefetch call entirely.
+    ///
+    /// # Stub-NOP dispatch (Phase 2c)
+    ///
+    /// Per §5.1 F1 + §5.1.1, the per-instruction loop dispatches
+    /// through [`dispatch_instruction`]'s NOP body — every opcode is
+    /// a no-op in 2c. The structural pieces of the iteration loop
+    /// (spAddr derivation, register-load from scratchpad, F/E AES
+    /// mix, `ma`/`mx` swap, scratchpad store) all run; only the
+    /// per-instruction semantics are deferred to 2d.
+    ///
+    /// # Determinism / side-channel posture
+    ///
+    /// Pure function of `(self, cache)`. No allocator calls beyond
+    /// the local `[F128; 4]` AES-mix buffers; no atomic ops; no
+    /// global state. The scratchpad index space (`sp_addr0` /
+    /// `sp_addr1` masked by [`SCRATCHPAD_L3_MASK_64`]) is bounded
+    /// by construction per the constant's rustdoc — all
+    /// `self.scratchpad[off..off + N]` accesses are in-bounds and
+    /// non-panicking under the spec-pinned configuration.
+    ///
+    /// [`program`]: VmState::program
+    pub(crate) fn execute_program(&mut self, cache: &crate::Cache) {
+        // Spec §4.6.1: initial sp_addr derivation from mem.mx / mem.ma.
+        // The two addresses drive the per-iteration scratchpad reads
+        // and writes; both reset to 0 at the end of each iteration
+        // (so they only carry from-iteration state on iteration 0).
+        let mut sp_addr0: u32 = self.mx;
+        let mut sp_addr1: u32 = self.ma;
+
+        for _ic in 0..PROGRAM_ITERATIONS {
+            // Spec §4.6.1: sp_mix derivation + sp_addr update.
+            let rr0 = self.read_reg[0] as usize;
+            let rr1 = self.read_reg[1] as usize;
+            let sp_mix: u64 = self.r[rr0] ^ self.r[rr1];
+
+            // SAFETY (clippy::cast_possible_truncation): `sp_mix as u32`
+            // intentionally truncates to the low 32 bits, mirroring C
+            // `spAddr0 ^= spMix;` where the uint32_t LHS forces the
+            // uint64_t RHS to be implicitly truncated. Same for the
+            // `(sp_mix >> 32) as u32` extracting the high 32 bits.
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                sp_addr0 ^= sp_mix as u32;
+                sp_addr1 ^= (sp_mix >> 32) as u32;
+            }
+            sp_addr0 &= SCRATCHPAD_L3_MASK_64;
+            sp_addr1 &= SCRATCHPAD_L3_MASK_64;
+
+            // Spec §4.6.2: load r[0..8] from scratchpad at sp_addr0,
+            // XOR-ing into the existing register values.
+            let sp_addr0_usize = sp_addr0 as usize;
+            for i in 0..REGISTERS_COUNT {
+                let off = sp_addr0_usize + 8 * i;
+                let bytes: [u8; 8] = self.scratchpad[off..off + 8]
+                    .try_into()
+                    .expect("SCRATCHPAD_L3_MASK_64 bounds sp_addr0 + 64 within scratchpad");
+                self.r[i] ^= u64::from_le_bytes(bytes);
+            }
+
+            // Spec §4.6.3: load f[0..4] from scratchpad at sp_addr1
+            // (overwriting prior f values).
+            let sp_addr1_usize = sp_addr1 as usize;
+            for i in 0..REGISTER_COUNT_FLT {
+                let off = sp_addr1_usize + 8 * i;
+                let bytes: [u8; 8] = self.scratchpad[off..off + 8]
+                    .try_into()
+                    .expect("SCRATCHPAD_L3_MASK_64 bounds sp_addr1 + 64 within scratchpad");
+                self.f[i] = cvt_packed_int_to_f128(&bytes);
+            }
+
+            // Spec §4.6.3: load e[0..4] from scratchpad at sp_addr1 +
+            // RegisterCountFlt-pair offset, with maskRegisterExponentMantissa
+            // applied to enforce the positive-finite range FDIV_M requires.
+            for i in 0..REGISTER_COUNT_FLT {
+                let off = sp_addr1_usize + 8 * (REGISTER_COUNT_FLT + i);
+                let bytes: [u8; 8] = self.scratchpad[off..off + 8]
+                    .try_into()
+                    .expect("SCRATCHPAD_L3_MASK_64 bounds sp_addr1 + 64 within scratchpad");
+                let raw = cvt_packed_int_to_f128(&bytes);
+                self.e[i] = mask_register_exponent_mantissa(raw, self.e_mask);
+            }
+
+            // Spec §4.6.4: dispatch through the 384 parsed instructions.
+            // In Phase 2c the body is NOP per §5.1.1 frozen surface 1;
+            // Phase 2d replaces dispatch_instruction's body with the
+            // 28 opcode-handler dispatch table.
+            for instr_idx in 0..PROGRAM_SIZE {
+                let instr = self.program.instructions[instr_idx];
+                dispatch_instruction(&instr, self);
+            }
+
+            // Spec §4.6.5: dataset read prep — capture read_ptr from
+            // the pre-mutation `ma`, then XOR-mutate `ma` from
+            // r[read_reg[2]] ^ r[read_reg[3]] (v2-only mp aliasing
+            // collapsed to direct ma access per §5.5 F5).
+            let read_ptr: u64 = self.dataset_offset + u64::from(self.ma & CACHE_LINE_ALIGN_MASK);
+            let rr2 = self.read_reg[2] as usize;
+            let rr3 = self.read_reg[3] as usize;
+            let mp_xor: u64 = self.r[rr2] ^ self.r[rr3];
+            // SAFETY (clippy::cast_possible_truncation): mirrors C
+            // `mp ^= nreg.r[readReg2] ^ nreg.r[readReg3];` where the
+            // uint32_t LHS (mem.ma) truncates the uint64_t RHS.
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                self.ma ^= mp_xor as u32;
+            }
+            // `datasetPrefetch(datasetOffset + (mp & CacheLineAlignMask))`
+            // is a no-op in light mode per
+            // `vm_interpreted_light.hpp:55` — the Rust port omits the
+            // call entirely (no actual dataset memory to prefetch).
+
+            // Spec §4.6.5: dataset read — XOR a 64-byte dataset item
+            // into r[0..8]. Light-mode derives the item on-the-fly via
+            // Cache::derive_item; mirrors
+            // `vm_interpreted_light.cpp::datasetRead`.
+            let item_number = read_ptr / u64::from(CACHE_LINE_SIZE);
+            let item = cache.derive_item(item_number);
+            for i in 0..REGISTERS_COUNT {
+                let off = 8 * i;
+                let bytes: [u8; 8] = item[off..off + 8].try_into().expect(
+                    "Cache::derive_item returns 64 bytes; 8 u64 chunks fit by construction",
+                );
+                self.r[i] ^= u64::from_le_bytes(bytes);
+            }
+
+            // Spec §4.6.5: std::swap(mem.mx, mem.ma).
+            core::mem::swap(&mut self.mx, &mut self.ma);
+
+            // Spec §4.6.6: store r[0..8] into scratchpad at sp_addr1.
+            for i in 0..REGISTERS_COUNT {
+                let off = sp_addr1_usize + 8 * i;
+                self.scratchpad[off..off + 8].copy_from_slice(&self.r[i].to_le_bytes());
+            }
+
+            // Spec §4.6.7: F/E AES mix (v2 path).
+            //
+            // Per `vm_interpreted.cpp:99-117`: cast each f/e pair to
+            // 16-byte AES state vectors, then for each of 4 e-keys
+            // apply AES-encrypt to f[0]/f[2] and AES-decrypt to
+            // f[1]/f[3] in lockstep (same e-key per round across all
+            // 4 f-vectors). Result: each f[j] is mixed through 4
+            // rounds using the 4 e-keys.
+            //
+            // The C uses `aesenc<softAes>` and `aesdec<softAes>` —
+            // `aesenc` = ShiftRows + SubBytes + MixColumns + Xor(key)
+            // (which is `crate::aes::cipher_round`); `aesdec` =
+            // InvShiftRows + InvSubBytes + InvMixColumns + Xor(key)
+            // (which is `crate::aes::equiv_inv_cipher_round`). Audit
+            // posture: same AES round primitives the Phase 2b
+            // commit-2 spec-vector tests validate via T6/T7 against
+            // C-reference output.
+            let mut freg: [[u8; 16]; 4] = [
+                f128_to_aes_bytes(self.f[0]),
+                f128_to_aes_bytes(self.f[1]),
+                f128_to_aes_bytes(self.f[2]),
+                f128_to_aes_bytes(self.f[3]),
+            ];
+            let ekey: [[u8; 16]; 4] = [
+                f128_to_aes_bytes(self.e[0]),
+                f128_to_aes_bytes(self.e[1]),
+                f128_to_aes_bytes(self.e[2]),
+                f128_to_aes_bytes(self.e[3]),
+            ];
+            for ek in &ekey {
+                crate::aes::cipher_round(&mut freg[0], ek);
+                crate::aes::equiv_inv_cipher_round(&mut freg[1], ek);
+                crate::aes::cipher_round(&mut freg[2], ek);
+                crate::aes::equiv_inv_cipher_round(&mut freg[3], ek);
+            }
+            for (i, fblock) in freg.iter().enumerate().take(REGISTER_COUNT_FLT) {
+                self.f[i] = aes_bytes_to_f128(fblock);
+            }
+
+            // Spec §4.6.8: store f[0..4] (16 bytes each) into
+            // scratchpad at sp_addr0.
+            for i in 0..REGISTER_COUNT_FLT {
+                let off = sp_addr0_usize + 16 * i;
+                self.scratchpad[off..off + 8]
+                    .copy_from_slice(&self.f[i][0].to_bits().to_le_bytes());
+                self.scratchpad[off + 8..off + 16]
+                    .copy_from_slice(&self.f[i][1].to_bits().to_le_bytes());
+            }
+
+            // Spec §4.6 trailer: sp_addr0/1 reset to 0 between
+            // iterations. The C reference re-derives them at the top
+            // of each iteration from sp_mix; the reset here ensures
+            // the XOR at iteration N+1 starts from 0 ^ sp_mix
+            // rather than from the prior iteration's value, matching
+            // `vm_interpreted.cpp:126-127`.
+            sp_addr0 = 0;
+            sp_addr1 = 0;
+        }
+    }
 }
 
 impl Drop for VmState {
@@ -1002,6 +1445,326 @@ impl Drop for VmState {
     fn drop(&mut self) {
         // INTENT: no-op. See impl rustdoc for the public-input-only
         // rationale and the future-field-addition review-surface hook.
+    }
+}
+
+/// Per-instruction dispatch — the §5.1.1 frozen-surface-1 function-
+/// body replacement point for Phase 2c → Phase 2d.
+///
+/// **Phase 2c body (this commit): NOP** — every opcode is a no-op.
+/// The structural pieces of the interpreter loop
+/// ([`VmState::execute_program`]'s spAddr derivation, register-load
+/// from scratchpad, F/E AES mix, ma/mx swap, scratchpad store) run
+/// per spec §4.6.4-§4.6.8 around this NOP body and exercise the full
+/// per-iteration data-flow surface; only the per-instruction
+/// semantics (IADD_RS, ISUB_R, IMUL_R, ..., the 28 opcode handlers
+/// per `bytecode_machine.hpp` audit at R0-D1) are deferred to Phase
+/// 2d's body replacement.
+///
+/// **Phase 2d body (replaces this body, not the signature):** a
+/// table-driven 28-arm dispatch per spec §5.1 (the 29 dispatchable
+/// opcodes collapse to 28 handlers because IMUL_RCP dispatches
+/// through IMUL_R per `bytecode_machine.cpp:75` — see
+/// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+/// §5.1.1 R0-D1).
+///
+/// # Function-body replacement contract (per §5.1.1 frozen surface 1)
+///
+/// Phase 2d **cannot** change this signature:
+///
+/// - The two-parameter shape (`&Instruction` + `&mut VmState`) is
+///   the surface every opcode handler operates against. Adding
+///   parameters (e.g., a `&Cache` for a hypothetical "memory-mode
+///   read" opcode) is incorrect against the C reference's
+///   `bytecode_machine.hpp:145-270` audit — no per-instruction
+///   handler reads the cache. The cache is read once per iteration
+///   in [`VmState::execute_program`]'s dataset-read step, not here.
+/// - No return value. CBRANCH's PC mutation is via `state.program`
+///   per the C reference's `compileInstruction`-driven branch-target
+///   resolution.
+/// - No lifetime/borrow shape change. [`VmState`] owns its data;
+///   the cache borrow is the caller's, not the dispatcher's.
+///
+/// **Reopening criterion** (per `21-reversion-clause-discipline.mdc`):
+/// Phase 2d's per-opcode benchmark may demonstrate the single-pass
+/// signature fails the ≤3.0× C-reference perf budget for reasons
+/// attributable to per-call decode cost. Iff that evidence surfaces,
+/// the signature reopens to the IBC 2-pass form
+/// (`fn dispatch_instruction(ibc: &InstructionByteCode, state: &mut
+/// VmState)`); the re-evaluation lands as a 2d Round 1 design
+/// finding, not implementation-time reactive scope expansion. See
+/// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+/// §5.1.1 "Reopening criterion (reversion-clause shape)".
+///
+/// # Determinism / side-channel posture
+///
+/// Pure NOP function. No-ops on every input. Phase 2d's body
+/// inherits the constant-time-or-explicit-rejection discipline per
+/// `30-cryptography.mdc` for per-opcode timing equivalence.
+fn dispatch_instruction(_instr: &Instruction, _state: &mut VmState) {
+    // Phase 2c stub: NOP all opcodes.
+    //
+    // Phase 2d replaces this body with a 28-arm table-driven
+    // dispatch over `_instr.opcode`. See
+    // `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` for the forward-action
+    // design and `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.1.1 for
+    // the frozen-signature contract that 2d's body replacement
+    // operates within.
+}
+
+/// Compute the 32-byte RandomX v2 hash of `data` against the cache
+/// derived from `seedhash`, per spec §4.1 + spec §4.6 +
+/// [`external/randomx-v2/src/randomx.cpp:380-410`](../../../external/randomx-v2/src/randomx.cpp)'s
+/// `randomx_calculate_hash` at pin `aaafe71`.
+///
+/// This is the **single hash-producing entry point** of the
+/// `shekyl-pow-randomx` crate — the public surface the
+/// [`shekyl-ffi`](../../../rust/shekyl-ffi) FFI shim (Phase 3a) and
+/// the daemon's block-validation path consume. No other `pub fn`
+/// produces a RandomX hash; no internal API circumvents this
+/// function's chain-of-Blake2b + scratchpad + program-iteration
+/// composition.
+///
+/// # Inputs
+///
+/// - `cache` — the [`Cache`](crate::Cache) value derived from
+///   `seedhash` (= spec §2's `K` argument). The dataset items
+///   `VmState::execute_program` reads each iteration are computed
+///   on-the-fly via [`Cache::derive_item`](crate::Cache).
+/// - `seedhash` — **documentary-only** per the module-level rustdoc.
+///   The seedhash is not an input to the per-hash Blake2b; it is
+///   carried for cache-binding documentation (the caller asserts
+///   they have paired this `cache` with this `seedhash`, and the
+///   parameter pin is the surface where a future
+///   `debug_assert!(cache.seedhash() == seedhash)` will land once
+///   the cache-binding invariant is added to [`Cache`](crate::Cache)
+///   itself — V3.0 follow-up tracked in `docs/FOLLOWUPS.md`).
+/// - `data` — the spec §2 `H` argument; arbitrary-length input
+///   whose hash this function produces. Internally consumed by the
+///   initial `temp_hash = Blake2b-512(data)` step.
+///
+/// # Output
+///
+/// A 32-byte `Blake2b<U32>(register_file)` over the final
+/// register-file state (after the eighth `init_program` +
+/// `execute_program` chain and the `AesHash1R(scratchpad) → a`
+/// overwrite).
+///
+/// # Hash composition (spec §4.1 + §4.6, mirroring C
+/// `randomx_calculate_hash`)
+///
+/// 1. `temp_hash := Blake2b-512(data)` — 64-byte seed for the AES
+///    chains. Spec §4.1; C ref `randomx.cpp:392-394`. `seedhash` is
+///    NOT mixed into this Blake2b call (see §2's `K`/`H` separation
+///    + the module-level rustdoc justification).
+/// 2. `VmState::init_scratchpad(&mut temp_hash)` — fill the
+///    2 MiB scratchpad via `AesGenerator1R` keyed by `temp_hash`,
+///    which mutates `temp_hash` to the post-fill AES state (this
+///    mutation chains forward to the first `VmState::init_program`
+///    call). Spec §4.2; C ref `virtual_machine.cpp:132-134` +
+///    `randomx.cpp:395`.
+/// 3. For `chain in 0..RANDOMX_PROGRAM_COUNT - 1` (= 7 chains):
+///    - `VmState::init_program(&temp_hash)` — generate the
+///      program + initialize register state from `temp_hash`. The
+///      Rust port's `fill_aes_4r_x4` does NOT mutate `temp_hash`
+///      (the C ref does, but the mutation is immediately
+///      overwritten by step 3.3 and never read between, so the Rust
+///      port's non-mutating signature is byte-equivalent per
+///      §14 R0-D8 results-fidelity discipline). Spec §4.5; C ref
+///      `virtual_machine.cpp:137-138` + `:72-94`.
+///    - `VmState::execute_program(cache)` — execute the parsed
+///      program for `PROGRAM_ITERATIONS` (2048) iterations. Spec
+///      §4.6; C ref `vm_interpreted.cpp:57-138`.
+///    - `temp_hash := Blake2b-512(register_file)` — overwrite
+///      `temp_hash` with the Blake2b of the 256-byte register file.
+///      The register-file layout is `r[0..8] (64 bytes) || f[0..4]
+///      (64 bytes) || e[0..4] (64 bytes) || a[0..4] (64 bytes)`,
+///      with each `u64` little-endian and each `f64` as IEEE-754
+///      little-endian bit pattern, matching C's `RegisterFile`
+///      struct layout per `common.hpp:190-195`. Spec §4.1.3; C ref
+///      `randomx.cpp:399`.
+/// 4. The eighth (last) chain:
+///    - `VmState::init_program(&temp_hash)`.
+///    - `VmState::execute_program(cache)`.
+///    - **NO** chain-step Blake2b after this last execute — instead,
+///      the finalize step below produces the 32-byte output.
+/// 5. **Finalize (spec §4.7; C ref
+///    `virtual_machine.cpp:120-123` + `randomx.cpp:402-403`):**
+///    - `aes::hash_aes_1r_x4(scratchpad → a)` — hash the entire
+///      scratchpad into the 64-byte `a` register array, overwriting
+///      the program-init-derived `a` values.
+///    - `output := Blake2b<U32>(register_file)` — 32-byte Blake2b
+///      over the final register file (with `a` now holding the
+///      AesHash1R'd scratchpad digest).
+///
+/// # Phase 2c stub-NOP dispatch caveat
+///
+/// Per `dispatch_instruction`'s rustdoc, Phase 2c's bytecode
+/// dispatch is NOP — every per-instruction opcode is a no-op. The
+/// scratchpad-init, program-init, F/E AES mix, dataset-read, and
+/// scratchpad-store steps all execute correctly, but the per-iteration
+/// register arithmetic that real RandomX requires (the 28 opcode
+/// handlers) is deferred to Phase 2d. As a result, [`compute_hash`]'s
+/// Phase 2c output is **not** consensus-equivalent with the C
+/// reference RandomX v2 hash — the function is structurally complete
+/// (deterministic, type-safe, panic-safe, allocates correctly) but
+/// semantically a stub. Spec-vector parity tests (T1–T8 per §5.11.1
+/// and §6) land in Phase 2c's commit 7 to fixture the stub's
+/// deterministic output; the C-reference-equivalence tests land in
+/// Phase 2d's spec-vector update.
+///
+/// # Determinism / side-channel posture
+///
+/// Pure function of `(cache, data)` (seedhash is documentary-only).
+/// No allocator calls outside the per-call `VmState::new` (2 MiB
+/// scratchpad + 3 KiB program). No atomic ops, no module-level
+/// mutable state, no time-based behavior. Thread-safe by
+/// construction: every call allocates its own `VmState`; no shared
+/// mutable state between calls.
+///
+/// Per the §5.11.4 threat-model disposition, every byte of every
+/// internal buffer is a deterministic function of `(cache, data)`,
+/// both of which are public by construction (cache derived from a
+/// block-header seedhash; data is a block-header hash candidate).
+/// No constant-time discipline applies to access patterns; no
+/// wipe-on-drop is load-bearing for confidentiality.
+///
+/// # Performance posture (per §8 budget)
+///
+/// At the Phase 2c stub-NOP cost, [`compute_hash`] is dominated by
+/// the 2 MiB scratchpad allocation + the 8 × 2048 iteration loop's
+/// AES-mix + scratchpad I/O + Blake2b chain steps. Per §8's
+/// pre-commit-7 benchmark, the expected per-hash wall time is
+/// ≤100 µs on a 2026-era reference machine — well under the
+/// commit-8 PR-gating threshold. The dominant cost is the AES-mix
+/// (8 chains × 2048 iterations × 16 AES rounds = ~262_144 AES round
+/// operations); the `Cache::derive_item` calls (one per iteration ×
+/// 8 chains × 2048 iterations = ~16_384 SuperscalarHash chains)
+/// drop the wall budget closer to ~5 ms each per `Cache::derive_item`'s
+/// commit-3 measured cost, totaling tens of seconds per hash — this
+/// is the V3.0 verifier perf gap §13's Phase 2g optimization closes
+/// (currently the verifier path is not optimized; Phase 2g's
+/// inline-superscalar work brings the gap into the ≤100 µs envelope).
+/// The Phase 2c shape is functionally correct; the Phase 2g shape is
+/// production-fast.
+pub fn compute_hash(cache: &crate::Cache, seedhash: &[u8; 32], data: &[u8]) -> [u8; 32] {
+    // The seedhash parameter is documentary-only per the module-level
+    // rustdoc and the function rustdoc above. Bind a dropped reference
+    // to satisfy `#[deny(unused)]`-style discipline without producing
+    // a warning; once the V3.0 follow-up adds cache-binding assertions
+    // (`debug_assert!(cache.seedhash() == seedhash)`), this binding
+    // becomes load-bearing.
+    let _ = seedhash;
+
+    use blake2::digest::consts::U32;
+    use blake2::{Blake2b, Blake2b512, Digest};
+
+    let mut state = VmState::new();
+
+    // Step 1: temp_hash = Blake2b-512(data). Output is 64 bytes,
+    // which becomes the seed for `init_scratchpad`.
+    let mut temp_hash: [u8; 64] = {
+        let mut hasher = Blake2b512::new();
+        hasher.update(data);
+        let out = hasher.finalize();
+        let mut buf = [0u8; 64];
+        buf.copy_from_slice(&out);
+        buf
+    };
+
+    // Step 2: init_scratchpad. This mutates temp_hash to the
+    // post-AES-1R-x4 stream state, chaining forward to step 3.
+    state.init_scratchpad(&mut temp_hash);
+
+    // Step 3: first `RANDOMX_PROGRAM_COUNT - 1` (= 7) chains.
+    // Each chain runs init_program + execute_program, then
+    // overwrites temp_hash with Blake2b-512(register_file).
+    for _chain in 0..(RANDOMX_PROGRAM_COUNT - 1) {
+        state.init_program(&temp_hash);
+        state.execute_program(cache);
+
+        let mut hasher = Blake2b512::new();
+        feed_register_file_to_hasher(&state, &mut hasher);
+        let out = hasher.finalize();
+        temp_hash.copy_from_slice(&out);
+    }
+
+    // Step 4: last chain — init + execute, no chain-step Blake2b.
+    state.init_program(&temp_hash);
+    state.execute_program(cache);
+
+    // Step 5a: AesHash1R the scratchpad into the `a` register array,
+    // overwriting the program-init-derived `a` values. Mirrors
+    // `hashAes1Rx4<softAes>(scratchpad, ScratchpadSize, &reg.a)` at
+    // `virtual_machine.cpp:121`.
+    let mut a_bytes = [0u8; 64];
+    crate::aes::hash_aes_1r_x4(&state.scratchpad[..], &mut a_bytes);
+    for i in 0..REGISTER_COUNT_FLT {
+        let off = 16 * i;
+        let lo = u64::from_le_bytes(
+            a_bytes[off..off + 8]
+                .try_into()
+                .expect("16-byte F128 split at 8"),
+        );
+        let hi = u64::from_le_bytes(
+            a_bytes[off + 8..off + 16]
+                .try_into()
+                .expect("16-byte F128 split at 8"),
+        );
+        state.a[i] = [f64::from_bits(lo), f64::from_bits(hi)];
+    }
+
+    // Step 5b: Blake2b<U32>(register_file) → 32-byte output.
+    // Mirrors `blake2b(out, outSize, &reg, sizeof(RegisterFile), ...)`
+    // at `virtual_machine.cpp:122` with outSize = RANDOMX_HASH_SIZE = 32.
+    let mut hasher = Blake2b::<U32>::new();
+    feed_register_file_to_hasher(&state, &mut hasher);
+    let out = hasher.finalize();
+    let mut output = [0u8; 32];
+    output.copy_from_slice(&out);
+    output
+}
+
+/// Feed the 256-byte register-file (`r[0..8] || f[0..4] || e[0..4] ||
+/// a[0..4]`) to a [`Digest`] hasher, matching the C reference's
+/// `blake2b(..., &reg, sizeof(RegisterFile), ...)` byte-for-byte.
+///
+/// The C `RegisterFile` struct layout per
+/// [`external/randomx-v2/src/common.hpp:190-195`](../../../external/randomx-v2/src/common.hpp)
+/// is `int_reg_t r[8]` (8 × 8 = 64 bytes) followed by `fpu_reg_t
+/// f[4]` (4 × 16 = 64 bytes) followed by `fpu_reg_t e[4]` (64 bytes)
+/// followed by `fpu_reg_t a[4]` (64 bytes) — total 256 bytes. Each
+/// `int_reg_t` is `uint64_t` (little-endian on x86); each
+/// `fpu_reg_t` is `struct { double lo; double hi; }` (two IEEE-754
+/// binary64 little-endian bit patterns). The Rust port serializes
+/// in the same order with `to_le_bytes` / `to_bits().to_le_bytes()`
+/// to produce a byte-identical input to Blake2b.
+///
+/// Used twice by [`compute_hash`]: once per inter-chain `temp_hash`
+/// overwrite (Blake2b-512), and once for the final 32-byte output
+/// (Blake2b<U32>). Factored out to ensure both call sites feed
+/// identical bytes (any drift between them would be a consensus
+/// bug invisible to local unit tests).
+///
+/// # Determinism / side-channel posture
+///
+/// Pure function of `state`. Constant-time per the
+/// `to_le_bytes` / `to_bits` semantics.
+fn feed_register_file_to_hasher<D: blake2::Digest>(state: &VmState, hasher: &mut D) {
+    for r_val in &state.r {
+        hasher.update(r_val.to_le_bytes());
+    }
+    for f_pair in &state.f {
+        hasher.update(f_pair[0].to_bits().to_le_bytes());
+        hasher.update(f_pair[1].to_bits().to_le_bytes());
+    }
+    for e_pair in &state.e {
+        hasher.update(e_pair[0].to_bits().to_le_bytes());
+        hasher.update(e_pair[1].to_bits().to_le_bytes());
+    }
+    for a_pair in &state.a {
+        hasher.update(a_pair[0].to_bits().to_le_bytes());
+        hasher.update(a_pair[1].to_bits().to_le_bytes());
     }
 }
 
@@ -1213,6 +1976,324 @@ mod tests {
                  out of spec-pinned [exponentBias, exponentBias + 31] = [{}, {}]",
                 EXPONENT_BIAS,
                 EXPONENT_BIAS + 31,
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // T6'/T7'/T8' determinism property tests (per
+    // `RANDOMX_V2_PHASE2C_PLAN.md` §5.11.1).
+    //
+    // [`Cache::derive`] is the dominant cost in these tests (single-thread
+    // ~5s on a 2026-era reference machine per commit 2's measurement).
+    // The tests share one [`Cache`] instance across all T6'/T7'/T8' calls
+    // via a [`std::sync::OnceLock`]; the per-test cost drops to one
+    // `execute_program` (light-mode dataset reads dominate at ~5ms per
+    // iteration ✕ 2048 ✕ 8 chains = many seconds per `compute_hash`).
+    // The plan-doc §8 budget marks this performance as expected for
+    // Phase 2c (Phase 2g closes the verifier-perf gap).
+    //
+    // The shared cache is derived from a fixed test seedhash. The
+    // tests are not concerned with consensus-equivalence of the
+    // dataset items (Phase 2d spec-vector tests cover that); they
+    // are concerned only with determinism (same inputs → same
+    // outputs) of the structural execute_program / compute_hash
+    // path.
+    // -------------------------------------------------------------------
+
+    use std::sync::OnceLock;
+
+    /// Test-only fixed seedhash used to derive the shared [`crate::Cache`]
+    /// instance for T6'/T7'/T8'. The value is arbitrary; what matters
+    /// is that the same seedhash is reused across every call so the
+    /// `OnceLock` initialization runs exactly once for the whole test
+    /// run.
+    const TEST_SEEDHASH: [u8; 32] = [0x42; 32];
+
+    /// Shared [`crate::Cache`] for T6'/T7'/T8'. The first test to call
+    /// [`shared_cache`] pays the ~5s `Cache::derive` cost; every
+    /// subsequent caller (across every test in this module) reuses
+    /// the same instance. Per the [`std::sync::OnceLock`] contract,
+    /// concurrent first-callers race once and exactly one
+    /// initialization runs.
+    fn shared_cache() -> &'static crate::Cache {
+        static CACHE: OnceLock<crate::Cache> = OnceLock::new();
+        CACHE.get_or_init(|| crate::Cache::derive(&TEST_SEEDHASH))
+    }
+
+    /// Test-only fixed program-init seed used by T6'/T7' to populate
+    /// `VmState` with reproducible register, ma, mx, read_reg,
+    /// dataset_offset, e_mask, and parsed `program.instructions`
+    /// state before each `execute_program` call.
+    const TEST_PROGRAM_SEED: [u8; 64] = [0xA5; 64];
+
+    /// T6' scratchpad-mix determinism: two [`VmState`]s, each
+    /// initialized identically (same `init_scratchpad` + `init_program`
+    /// seed, same shared [`crate::Cache`]) and executed via
+    /// [`VmState::execute_program`], produce byte-identical
+    /// `scratchpad` bytes after execution. Catches non-determinism
+    /// in the per-iteration scratchpad-load → dispatch → scratchpad-
+    /// store data flow, including non-deterministic sp_addr
+    /// derivation, non-deterministic register-load XOR ordering,
+    /// non-deterministic dataset-read indexing, or non-deterministic
+    /// scratchpad-write ordering.
+    ///
+    /// Per
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §5.11.1 T6'.
+    #[test]
+    fn t6_prime_execute_program_scratchpad_determinism() {
+        let cache = shared_cache();
+
+        let mut vm1 = VmState::new();
+        let mut vm2 = VmState::new();
+
+        let mut seed1 = [0x37u8; 64];
+        let mut seed2 = [0x37u8; 64];
+        vm1.init_scratchpad(&mut seed1);
+        vm2.init_scratchpad(&mut seed2);
+
+        vm1.init_program(&TEST_PROGRAM_SEED);
+        vm2.init_program(&TEST_PROGRAM_SEED);
+
+        vm1.execute_program(cache);
+        vm2.execute_program(cache);
+
+        assert!(
+            scratchpads_equal(&vm1.scratchpad, &vm2.scratchpad),
+            "execute_program(SAME_INPUTS) produced divergent scratchpad bytes",
+        );
+    }
+
+    /// T7' F/E AES mix + integer-register determinism: two
+    /// [`VmState`]s, each initialized identically and executed via
+    /// [`VmState::execute_program`], produce byte-identical `r`, `f`,
+    /// `e`, `a`, `ma`, `mx` state after execution. Catches non-
+    /// determinism in the F/E AES mix's per-round e-key application
+    /// or in the integer-register XOR chain (`r[i] ^=
+    /// scratchpad[off..off+8]` and the dataset-item XOR fold).
+    ///
+    /// Per
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §5.11.1 T7'.
+    #[test]
+    fn t7_prime_execute_program_register_determinism() {
+        let cache = shared_cache();
+
+        let mut vm1 = VmState::new();
+        let mut vm2 = VmState::new();
+
+        let mut seed1 = [0x37u8; 64];
+        let mut seed2 = [0x37u8; 64];
+        vm1.init_scratchpad(&mut seed1);
+        vm2.init_scratchpad(&mut seed2);
+
+        vm1.init_program(&TEST_PROGRAM_SEED);
+        vm2.init_program(&TEST_PROGRAM_SEED);
+
+        vm1.execute_program(cache);
+        vm2.execute_program(cache);
+
+        assert_eq!(vm1.r, vm2.r, "execute_program(SAME_INPUTS) `r` divergent");
+        assert_eq!(
+            vm1.f.map(|p| [p[0].to_bits(), p[1].to_bits()]),
+            vm2.f.map(|p| [p[0].to_bits(), p[1].to_bits()]),
+            "execute_program(SAME_INPUTS) `f` divergent",
+        );
+        assert_eq!(
+            vm1.e.map(|p| [p[0].to_bits(), p[1].to_bits()]),
+            vm2.e.map(|p| [p[0].to_bits(), p[1].to_bits()]),
+            "execute_program(SAME_INPUTS) `e` divergent",
+        );
+        assert_eq!(
+            vm1.a.map(|p| [p[0].to_bits(), p[1].to_bits()]),
+            vm2.a.map(|p| [p[0].to_bits(), p[1].to_bits()]),
+            "execute_program(SAME_INPUTS) `a` divergent",
+        );
+        assert_eq!(
+            vm1.ma, vm2.ma,
+            "execute_program(SAME_INPUTS) `ma` divergent"
+        );
+        assert_eq!(
+            vm1.mx, vm2.mx,
+            "execute_program(SAME_INPUTS) `mx` divergent"
+        );
+    }
+
+    /// T8'a end-to-end [`compute_hash`] determinism: two
+    /// `compute_hash(cache, seedhash, data)` calls with identical
+    /// inputs produce byte-identical 32-byte outputs. Catches any
+    /// non-determinism in the full hash composition (Blake2b chain,
+    /// scratchpad init, program init, 8-chain execute loop, finalize
+    /// AES-hash + Blake2b).
+    ///
+    /// Per
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §5.11.1 T8' "single-thread determinism".
+    #[test]
+    fn t8_prime_compute_hash_determinism_same_inputs_twice() {
+        let cache = shared_cache();
+
+        let data = b"shekyl-randomx-v2-phase-2c-commit-6-determinism-test";
+
+        let hash1 = compute_hash(cache, &TEST_SEEDHASH, data);
+        let hash2 = compute_hash(cache, &TEST_SEEDHASH, data);
+
+        assert_eq!(
+            hash1, hash2,
+            "compute_hash(SAME_INPUTS) divergent: {hash1:02x?} vs {hash2:02x?}",
+        );
+    }
+
+    /// T8'b [`compute_hash`] distinguishes inputs that differ in a
+    /// single bit. Pins the trivial-collision-resistance contract:
+    /// the Phase 2c stub-NOP dispatch must still propagate input
+    /// differences through the scratchpad + AES mix + Blake2b chain
+    /// to a different final hash, even though the per-instruction
+    /// arithmetic is a no-op. Catches a hypothetical degenerate
+    /// case where the stub-NOP collapses input variation
+    /// (e.g., if `data` were not fed to the Blake2b seed).
+    ///
+    /// Per
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §5.11.1 T8' "single-bit flip distinguishability".
+    #[test]
+    fn t8_prime_compute_hash_distinguishes_single_bit_flip() {
+        let cache = shared_cache();
+
+        let data_a: &[u8] = b"phase-2c-t8b-bitflip-A";
+        let data_b: &[u8] = b"phase-2c-t8b-bitflip-B";
+
+        let hash_a = compute_hash(cache, &TEST_SEEDHASH, data_a);
+        let hash_b = compute_hash(cache, &TEST_SEEDHASH, data_b);
+
+        assert_ne!(
+            hash_a, hash_b,
+            "compute_hash(DIFFERENT_DATA) collided: {hash_a:02x?} vs {hash_b:02x?}",
+        );
+    }
+
+    /// T8'c [`compute_hash`] concurrent determinism: two threads
+    /// each computing `compute_hash(cache, seedhash, data)` against
+    /// the same shared [`crate::Cache`] produce identical outputs.
+    /// Catches a hypothetical thread-unsafe data path in
+    /// `compute_hash` or `VmState::execute_program` (e.g.,
+    /// accidentally-shared mutable state, allocator-dependent
+    /// behavior). Per
+    /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+    /// §5.11.1 T8' "concurrent determinism" — the same `Cache`
+    /// shared between threads is the Phase 3a FFI deployment
+    /// shape, so this property must hold by construction.
+    #[test]
+    fn t8_prime_compute_hash_concurrent_determinism() {
+        let cache = shared_cache();
+
+        let data = b"phase-2c-t8c-concurrent-determinism-test-input-bytes";
+
+        let h1 = std::thread::scope(|s| {
+            let t = s.spawn(|| compute_hash(cache, &TEST_SEEDHASH, data));
+            t.join().expect("compute_hash thread panicked")
+        });
+        let h2 = std::thread::scope(|s| {
+            let t = s.spawn(|| compute_hash(cache, &TEST_SEEDHASH, data));
+            t.join().expect("compute_hash thread panicked")
+        });
+        let h_main = compute_hash(cache, &TEST_SEEDHASH, data);
+
+        assert_eq!(
+            h1, h2,
+            "compute_hash concurrent: thread1 != thread2 ({h1:02x?} vs {h2:02x?})",
+        );
+        assert_eq!(
+            h1, h_main,
+            "compute_hash concurrent: thread1 != main ({h1:02x?} vs {h_main:02x?})",
+        );
+    }
+
+    /// Helper smoke-check: `cvt_packed_int_to_f128` recovers the
+    /// signed 32-bit lanes from a packed 8-byte input as IEEE-754
+    /// binary64 floats. Mirrors SSE2 `_mm_cvtepi32_pd` per spec §5.2.
+    /// Pins the cast direction (signed, not unsigned) for the
+    /// integer → float conversion that the `f`/`e` register loads
+    /// depend on per `vm_interpreted.cpp:79-81`.
+    #[test]
+    fn cvt_packed_int_to_f128_recovers_signed_i32_lanes() {
+        let bytes: [u8; 8] = {
+            let mut b = [0u8; 8];
+            b[0..4].copy_from_slice(&(-1i32).to_le_bytes());
+            b[4..8].copy_from_slice(&(42i32).to_le_bytes());
+            b
+        };
+        let f = cvt_packed_int_to_f128(&bytes);
+        assert_eq!(
+            f[0].to_bits(),
+            (-1.0f64).to_bits(),
+            "lo lane: signed -1 should round-trip",
+        );
+        assert_eq!(
+            f[1].to_bits(),
+            42.0f64.to_bits(),
+            "hi lane: signed 42 should round-trip",
+        );
+    }
+
+    /// Helper smoke-check: `mask_register_exponent_mantissa` clears
+    /// the high (sign + exponent) bits of each lane and OR-overlays
+    /// the e_mask exponent. Pins the masking semantics
+    /// `bytecode_machine.hpp:272-278` requires for FDIV_M's
+    /// positive-finite operand contract.
+    #[test]
+    fn mask_register_exponent_mantissa_preserves_mantissa_and_overlays_emask() {
+        const X_LO: u64 = 0xDEAD_BEEF_CAFE_BABE;
+        const X_HI: u64 = 0x0123_4567_89AB_CDEF;
+        let x: F128 = [f64::from_bits(X_LO), f64::from_bits(X_HI)];
+        let e_mask: [u64; 2] = [
+            0x3FF0_0000_0000_0000, // exponent bias only
+            0x4000_0000_0000_0000,
+        ];
+        let out = mask_register_exponent_mantissa(x, e_mask);
+        let expected_lo = (X_LO & DYNAMIC_MANTISSA_MASK) | e_mask[0];
+        let expected_hi = (X_HI & DYNAMIC_MANTISSA_MASK) | e_mask[1];
+        assert_eq!(
+            out[0].to_bits(),
+            expected_lo,
+            "mask_register_exponent_mantissa lo lane mis-masked",
+        );
+        assert_eq!(
+            out[1].to_bits(),
+            expected_hi,
+            "mask_register_exponent_mantissa hi lane mis-masked",
+        );
+    }
+
+    /// Helper round-trip: `f128_to_aes_bytes` and `aes_bytes_to_f128`
+    /// are byte-exact inverses. Pins the F/E AES mix's cast surface:
+    /// any drift between the two helpers' byte serialization would
+    /// silently corrupt the AES mix output.
+    #[test]
+    fn f128_aes_bytes_round_trip() {
+        let originals: [F128; 4] = [
+            [0.0, -0.0],
+            [1.0, f64::from_bits(0xCAFE_BABE_DEAD_BEEF)],
+            [f64::INFINITY, f64::NEG_INFINITY],
+            [f64::from_bits(0x1234_5678_9ABC_DEF0), f64::EPSILON],
+        ];
+        for &f in &originals {
+            let bytes = f128_to_aes_bytes(f);
+            let back = aes_bytes_to_f128(&bytes);
+            assert_eq!(
+                back[0].to_bits(),
+                f[0].to_bits(),
+                "F128 round-trip lo lane drifted: {:#x} -> {:#x}",
+                f[0].to_bits(),
+                back[0].to_bits(),
+            );
+            assert_eq!(
+                back[1].to_bits(),
+                f[1].to_bits(),
+                "F128 round-trip hi lane drifted: {:#x} -> {:#x}",
+                f[1].to_bits(),
+                back[1].to_bits(),
             );
         }
     }
