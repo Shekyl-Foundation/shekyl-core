@@ -13,8 +13,12 @@
 # scratchpad-mix + AES-mix snapshots, and the end-to-end stub-NOP hash.
 #
 # Pinning to `softAes=true` keeps the produced bytes instruction-set-
-# independent — no AES-NI / NEON / RVV / zvkned codegen variance — and
-# reproducible on any little-endian platform with a C++17 compiler.
+# independent — no AES-NI / NEON / RVV / zvkned codegen variance — so
+# the *byte output* is reproducible on any little-endian C++17 host.
+# Build-host portability is narrower: the Makefile itself is x86_64-
+# Linux-pinned per the JIT-source pinning at FORK_OBJS below (rationale
+# at the FORK_OBJS-prelude block). Cross-host reproduction of the same
+# bytes requires swapping the JIT sources per the path documented there.
 #
 # This Makefile and the surrounding `_generator/phase2c/` directory are
 # committed for audit reproducibility per docs/design/RANDOMX_V2_RUST.md

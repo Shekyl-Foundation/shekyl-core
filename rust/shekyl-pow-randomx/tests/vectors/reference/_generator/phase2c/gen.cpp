@@ -20,7 +20,12 @@
 // `softAes=true` for fillAes / hashAes calls (no AES-NI codegen
 // dispatch) and emits all multi-byte fields as explicit little-endian.
 // The Rust port's `compute_hash` is also softAes-only; byte-equality
-// holds on any little-endian host with a C++17 compiler.
+// of the produced vectors holds on any little-endian C++17 host.
+// Build-host portability is narrower — the accompanying Makefile is
+// x86_64-Linux-pinned because the v2 RandomX fork's `randomx_create_vm`
+// references the x86_64 JIT-compiler symbols at link time even on the
+// interpreted-light code path. See the Makefile's `FORK_OBJS` prelude
+// for the cross-host swap path.
 
 #include <cassert>
 #include <cinttypes>

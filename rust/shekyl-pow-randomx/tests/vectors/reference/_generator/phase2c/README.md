@@ -54,11 +54,24 @@ verifying the bytes match the named pin's `randomx.cpp` +
 
 ## Building
 
-Requires a C++17 toolchain (`c++`), GNU `make`, the v2 RandomX
-fork submodule initialized at pin `aaafe71`, and `~30 s` to
-allocate + Argon2d-derive a fresh 256 MiB cache per vector
-(the slow path; the cache is rebuilt per-vector since each `./gen
-<mode>` is a single-shot process):
+Requires:
+
+- An **x86_64-Linux host** — the Makefile hard-pins
+  `jit_compiler_x86.cpp` + `jit_compiler_x86_static.S` in
+  `FORK_OBJS` because the v2 RandomX fork's `randomx_create_vm`
+  references the x86_64 JIT-compiler symbols at link time even
+  on the interpreted-light code path used by all eight vectors.
+  Cross-host reproduction would need the Makefile's `FORK_OBJS`
+  swapped to `jit_compiler_a64*.cpp` / `jit_compiler_rv64*.cpp`
+  per the fork's `CMakeLists.txt` §§141–185 (the swap is
+  mechanical but unverified for Shekyl's v3 launch posture,
+  which targets x86_64 hosts).
+- A C++17 toolchain (`c++`).
+- GNU `make`.
+- The v2 RandomX fork submodule initialized at pin `aaafe71`.
+- `~30 s` to allocate + Argon2d-derive a fresh 256 MiB cache per
+  vector (the slow path; the cache is rebuilt per-vector since
+  each `./gen <mode>` is a single-shot process).
 
 ```sh
 git submodule update --init external/randomx-v2
@@ -102,13 +115,22 @@ the Rust side:
 | `T2_ITEM_NUMBERS`         | `[0, 1, 1023, 1024, 524287, 524288, 2097150, 2097151]` (boundary + edge dataset item indices)        | T2              |
 | `T8_DATA_INPUT`           | 192-byte ASCII string (preimage label + padding)                                                      | T8              |
 
-The `CANONICAL_TEMP_HASH` placeholder zeros in `gen.cpp` are
-documentation only; the actual value is re-derived at runtime
-via `derive_canonical_temp_hash()` so the generator is self-
-contained (no manual transcription of 64 hex bytes into source).
-The Rust side pins the derived bytes explicitly per
-`src/vm.rs#mod tests` so reviewers can cross-check by running
-the one-line Python equivalent.
+The C++ generator and the Rust spec-vector tests handle the
+canonical temp_hash differently to keep each side self-contained:
+
+- `gen.cpp` derives the value at startup into a runtime global
+  `g_canonical_temp_hash` by Blake2b-512-ing
+  `CANONICAL_TEMP_HASH_PREIMAGE` (the documented ASCII string),
+  so the generator carries no hand-transcribed 64-hex-byte
+  literal.
+- The Rust side (`src/vm.rs#mod tests::CANONICAL_TEMP_HASH`)
+  pins the derived bytes explicitly as a `const [u8; 64]` and
+  re-asserts byte-equality at test time against a Blake2b-512
+  of the same preimage (the
+  `canonical_temp_hash_matches_preimage_derivation` cross-check),
+  so a reviewer can verify the constant by running
+  the one-line Python equivalent without invoking the C++
+  generator.
 
 ## What the stub-NOP VM tests
 
@@ -170,9 +192,11 @@ affected vector.
 Per-vector wire formats are documented in the sibling `.meta.txt`
 files (one per `.bin`). All multi-byte fields are little-endian;
 the generator pins `softAes=true` for fillAes / hashAes /
-aesenc / aesdec, so the bytes are reproducible on any little-
-endian host with a C++17 compiler regardless of AES-NI / NEON /
-RVV codegen variance.
+aesenc / aesdec, so the *byte output* is reproducible on any
+little-endian C++17 host regardless of AES-NI / NEON / RVV codegen
+variance. *Build-host* portability is narrower per the
+[Building](#building) section — the Makefile is currently
+x86_64-Linux-pinned.
 
 ## Reviewing the vectors
 
@@ -196,8 +220,14 @@ fork pin.
 
 All multi-byte fields (sizes, imm32 values, u64 register words,
 f64 bit patterns) are emitted explicitly little-endian via
-`emit_le_u32` / `emit_le_u64` / `emit_le_f64`. The generator is
-portable to big-endian hosts; the resulting bytes are identical
-regardless of host endianness. The `softAes=true` pin closes off
-the AES-NI / NEON / RVV codegen variance that would otherwise
-make the scratchpad-fill and AES-mix snapshots host-dependent.
+`emit_le_u32` / `emit_le_u64` / `emit_le_f64`. The byte layout is
+LE-canonical; the emitted bytes would be identical regardless of
+host endianness *in principle*. In practice the Makefile is
+x86_64-Linux-pinned (see [Building](#building)), so the big-endian
+portability is a property of the byte format rather than a property
+of any currently-supported build host; reproducing the bytes today
+requires an x86_64-Linux host. The `softAes=true` pin closes off
+the AES-NI / NEON / RVV codegen variance that would otherwise make
+the scratchpad-fill and AES-mix snapshots host-dependent — the
+relevant portability guarantee for the bytes the Rust port hashes
+against on its (x86_64) build hosts.

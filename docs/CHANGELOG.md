@@ -92,7 +92,7 @@
     the vendored fork at pin `aaafe71`. Eight reference vectors
     pre-computed and committed under
     [`tests/vectors/reference/cache/`](../rust/shekyl-pow-randomx/tests/vectors/reference/cache/)
-    (T1: cache fingerprint Blake2b-512 over the entire derived
+    (T1: cache fingerprint Blake2b-256 over the entire derived
     cache + the 8 superscalar programs; T2: 8-item dataset batch)
     and
     [`tests/vectors/reference/vm/`](../rust/shekyl-pow-randomx/tests/vectors/reference/vm/)
