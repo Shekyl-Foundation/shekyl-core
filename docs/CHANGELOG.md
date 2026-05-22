@@ -4,6 +4,16 @@
 
 ### Added
 
+- **Sub-PR design discipline rule** (branch
+  `chore/sub-pr-design-discipline`, pending PR). Promotes fourteen
+  Phase 2c-emergent process disciplines from
+  [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md)
+  / [`RANDOMX_V2_PHASE2C_AUDIT.md`](design/RANDOMX_V2_PHASE2C_AUDIT.md)
+  into [`.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc)
+  (Option A). Closes `docs/FOLLOWUPS.md` V3.0 discipline-promotion
+  item. Applies to RandomX v2 sub-PRs, LWMA-1 Phase 4, and other
+  multi-round consensus-critical design work.
+
 - **RandomX v2 Track A Phase 2c — Cache derivation + VM substrate +
   T1-T8 spec-vector parity + bench baselines** (`feat/randomx-v2-phase2c-impl`,
   PR #66, 2026-05-22). Third sub-PR of the Rust pure-software RandomX
