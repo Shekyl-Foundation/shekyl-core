@@ -1,12 +1,18 @@
-# RandomX v2 — Track A Phase 2d plan (skeleton scaffold)
+# RandomX v2 — Track A Phase 2d plan
 
-**Status.** Skeleton scaffold landed 2026-05-21 as a deliverable of
-Phase 2c Round 3 (R3-D3) — _not_ a Round 1 design. This document
-records the 2c → 2d hand-off contract, the locked-by-2c surfaces, the
-forward-actions 2c accumulated for 2d, and the decision points 2d's
-Round 1 must address. Round 1 of Phase 2d populates this scaffold;
-this commit only puts the scaffold in place so 2d's author does not
-have to reconstruct the 2c-locked items from plan-doc prose.
+**Status.** Round 1 closed 2026-05-22 on branch
+`chore/randomx-v2-phase2d-plan`. This document began as the skeleton
+scaffold landed 2026-05-21 (Phase 2c Round 3, R3-D3) and was expanded
+into a Round 1 design doc after PR #66 (Phase 2c implementation) merged
+to `dev` at `e9917097f`. Round 1 closes the §3 decision points (FPU
+rounding-mode mechanism; `F128` newtype shape; per-opcode dispatch
+shape; `u128`/`__int128_t` edge-case audit), re-verifies the §1.3
+`VmState` field-set audit against pin `aaafe71`, and lands the test
+plan / commit table / gate checklist that gate the
+`feat/randomx-v2-phase2d` implementation branch. Rounds 2–5 (target
+4–6 total per `20-rust-vs-cpp-policy.mdc`) remain for threat-model
+addenda, generator CLI extensions, and closure-only refinements before
+implementation cuts.
 
 **Round 4 addenda (2026-05-21).** Phase 2c Round 4's threat-model
 review (`RANDOMX_V2_PHASE2C_PLAN.md` §5.11) accumulated three
@@ -50,16 +56,25 @@ rounding-mode plumbing; `F128` newtype extraction if needed").
 is reproduced verbatim in §1 below so Phase 2d's review does not
 require chasing the 2c diff to find what was frozen.
 
-**Base commit.** `dev` at the post-PR-2c-merge tip (TBD). Phase 2d's
-branch (`feat/randomx-v2-phase2d`) cuts from there.
+**Base commit.** `dev` at the post-PR-#66 merge tip (merge commit
+`e9917097f` on 2026-05-22). This doc's branch
+(`chore/randomx-v2-phase2d-plan`) cuts from there; the Phase 2d
+implementation branch cuts later from post-this-doc `dev`.
 
 **Branches.**
 
-- `chore/randomx-v2-phase2d-plan` (Phase 2d Round 1 design doc; cut
-  after 2c lands; expands this skeleton into a reviewable Round 1
-  document per the 2b/2c precedent).
-- `feat/randomx-v2-phase2d` (implementation; cut from
-  post-Round-1-design-doc `dev`).
+- `chore/randomx-v2-phase2d-plan` (this doc; short-lived per
+  `06-branching.mdc` rule 2; lands on `dev` via its own PR).
+- `feat/randomx-v2-phase2d` (implementation; cut from post-this-doc
+  `dev`; not yet cut as of Round 1 close).
+
+**Scope envelope.** Single implementation PR. Target ≤1200 lines of
+net-new Rust (dispatch body + `F128` newtype + integer helpers +
+tests + rustdoc) + ~150 KB of committed reference vector bytes (T9+
+per-opcode corpus + rounding-mode matrix) + ~400 LoC of C++ generator
+glue extending the Phase 2c `phase2c/` generator pattern. ≤6 commits
+per §9 below. No FFI surface, no C++ caller rewire, no changes to
+`Cache::derive` / `compute_hash` signatures.
 
 **Cross-references.**
 
@@ -539,6 +554,174 @@ some specific compiler output as the canonical answer) — these are
 2g findings, not 2d findings. 2d audits and pre-handles; 2g's
 harness backstops.
 
+### 3.5 Round 1 dispositions (2026-05-22)
+
+Round 1 closes the four §3 items below. Each disposition cites the
+audit-pin substrate (`external/randomx-v2/` at `aaafe71`) and the
+post-PR-#66 Rust port at `e9917097f`.
+
+#### R1-D1 — FPU rounding-mode mechanism: option (a)
+
+**Disposition.** Quarantined-`unsafe` per-arch intrinsic writes in a
+dedicated `set_rounding_mode(mode: u32)` function inside
+`src/fpu_rounding.rs` (new module), matching the C reference's
+semantics at the MXCSR/FPCR level rather than libc `fesetround` alone.
+
+| Target | Primitive | C substrate |
+|--------|-----------|-------------|
+| `x86_64` | `core::arch::x86_64::_mm_setcsr(rx_mxcsr_default \| (mode << 13))` with `rx_mxcsr_default = 0x9FC0` | `intrin_portable.h:168-176` |
+| `aarch64` | Read/modify/write FPCR rounding field (RN/RD/RU/RZ mapping per IEEE 754 mode 0..3) via `core::arch::aarch64` helpers | Portable fallback in `instructions_portable.cpp:141-158` when intrinsics unavailable |
+| other | `compile_error!` at module compile time | Shekyl verifier CI targets `x86_64` + `aarch64` only (same posture as Phase 2b AES generator README) |
+
+**Rejected options.**
+
+- **(b) Inline asm** — same `unsafe` carve-out cost as (a) with strictly
+  worse audit readability; no substrate advantage over the intrinsics the
+  C reference already uses on x86_64.
+- **(c) Third-party crate** — no workspace dependency verified under
+  `17-dependency-discipline.mdc` that exposes a narrower `unsafe`
+  surface than (a); adds supply-chain fan-out without property gain.
+- **(d) Pure-software rounding** — forecloses hardware FPU semantics;
+  byte-equality against the C reference's `rx_*_vec_f128` paths is the
+  load-bearing property; software emulation risks drift at subnormal /
+  NaN corners the T9+ corpus will exercise.
+
+**CFROUND integration.** Handler body matches v2-only form from
+`bytecode_machine.hpp:261-266` with the v1 gate deleted (per §2 F5):
+
+```text
+isrc = rotr(r[src_reg], imm32 & 63)   // imm from compileInstruction: getImm32() & 63
+if (isrc & 60) == 0:
+    set_rounding_mode(isrc % 4)
+    state.fprc = isrc % 4
+```
+
+The host rounding mode is set **before** subsequent FP opcodes in the
+same program execute, mirroring C's `rx_set_rounding_mode` side effect.
+`state.fprc` mirrors the C `randomx_vm::fprc` field for test introspection.
+
+**CI grep (Scaffold-R5 carry-forward).** Implementation PR adds a
+scoped grep on `set_rounding_mode`'s function body asserting exactly one
+of `_mm_setcsr` (x86_64 cfg branch) or the aarch64 FPCR write primitive,
+and zero forbidden patterns (other intrinsics, pointer dereferences,
+allocators, extra function calls). Permitted/forbidden sets are pinned in
+§10.
+
+#### R1-D2 — `F128` newtype shape: option (b)
+
+**Disposition.** Promote `type F128 = [f64; 2]` to `struct F128([f64; 2])`
+with `Copy`, `Debug`, and the minimal method surface the 28 opcode handlers
+need:
+
+| Method | Opcode(s) | Spec / C substrate |
+|--------|-----------|-------------------|
+| `add_unrestricted` | FADD_R, FADD_M | `rx_add_vec_f128` |
+| `sub_unrestricted` | FSUB_R, FSUB_M | `rx_sub_vec_f128` |
+| `mul_unrestricted` | FMUL_R | `rx_mul_vec_f128` |
+| `div_masked` | FDIV_M | `rx_div_vec_f128` after `mask_register_exponent_mantissa` |
+| `sqrt_unrestricted` | FSQRT_R | `rx_sqrt_vec_f128` |
+| `swap_lanes` | FSWAP_R | `rx_swap_vec_f128` |
+| `xor_with_scale_mask` | FSCAL_R | XOR with `0x80F0000000000000` per lane |
+
+Existing Phase 2c helpers (`cvt_packed_int_to_f128`,
+`mask_register_exponent_mantissa`, AES mix conversions) move to
+`impl F128` or remain free functions taking/returning `F128` — no
+second parallel API. **Rejected (a):** per-opcode inline `[f64; 2]`
+arithmetic duplicates the C `rx_*_vec_f128` call sites and forecloses
+centralized rounding-mode-sensitive test hooks. **Rejected (c):** full
+integer-encoding surface has no caller beyond what Phase 2c already
+lands; optionality without named caller per `21-reversion-clause-discipline.mdc`.
+
+**Frozen element shape.** The `[f64; 2]` lane layout is unchanged; only
+the type identity promotes from alias to newtype. `VmState` field types
+become `[F128; 4]` without adding fields.
+
+#### R1-D3 — Per-opcode dispatch shape: option (a), with frequency decode
+
+**Substrate finding (audit-against-actual-code).** The wire-format
+`Instruction.opcode` byte is **not** equal to `InstructionType`'s
+numeric enum (`instruction.hpp:42-72`). The C reference maps opcode
+bytes to handler types via cumulative frequency ceilings
+(`bytecode_machine.hpp:67-98`, `configuration.h:88-125
+RANDOMX_FREQ_*`). T5's byte-equality test proves the Rust port stores
+these frequency-encoded opcode bytes verbatim. Matching on
+`instr.opcode` as if it were `0..=28` would mis-dispatch.
+
+**Disposition.** Two-layer dispatch inside `dispatch_instruction`:
+
+1. **`decode_instruction_type(opcode: u8) -> InstructionType`** — a
+   `const fn` (or `match` chain) mirroring the `ceil_*` ladder at
+   `bytecode_machine.hpp:68-98` using the same `RANDOMX_FREQ_*`
+   constants ported to Rust `const` items in `vm.rs`.
+2. **`match decode_instruction_type(instr.opcode)`** with one arm per
+   `InstructionType`, each arm replicating **both** the
+   `compileInstruction` operand decode **and** the corresponding
+   `exe_*` body from `bytecode_machine.hpp:145-270`.
+
+Special cases preserved from C:
+
+- `IMUL_RCP` (`InstructionType` via its frequency bucket) executes
+  the `IMUL_R` body (`bytecode_machine.cpp:75-77`).
+- `NOP` bucket is a no-op.
+- Out-of-range opcode bytes hit the `UNREACHABLE` posture (`debug_assert!`
+  in debug; no-op in release).
+
+Operand decode replicates `bytecode_machine.cpp:81-477` rules:
+`dst/src % RegistersCount`, `signExtend2sCompl(imm32)` for M-form and
+self-src R-form variants, `getModMem` / `getModShift` / `getModCond`
+splits from `instruction.hpp:90-98`, and scratchpad mask selection
+(`ScratchpadL1Mask` / `L2` / `L3` constants already in `vm.rs`).
+
+**Rejected (b)/(c):** unchanged from the scaffold — indirect tables
+and nightly tail-call add cost without substrate fidelity gain.
+
+**Register decode helpers** land as private `fn` in `vm.rs`:
+`decode_int_reg`, `decode_fp_reg`, `scratchpad_addr`, `load64`/`store64`
+(little-endian), `rotr`/`rotl` (portable definitions matching
+`instructions_portable.cpp:92-103`), `sign_extend_i32_to_i64`.
+**`mulh` / `smulh_u64`** reuse Phase 2b widening helpers via
+`pub(crate)` promotion — do not re-derive semantics.
+
+#### R1-D4 — `u128` / `__int128_t` edge-case audit table
+
+Audit performed 2026-05-22 against `bytecode_machine.hpp:145-270` and
+`instructions_portable.cpp` at pin `aaafe71`. Disposition classes per
+§3.4: **U** = unreachable under spec-constrained inputs; **M** = matches
+C widening path already verified in Phase 2b; **G** = guarded to match C
+portable helper (shift mask).
+
+| Opcode | Arithmetic path | Div-by-zero | Signed-div overflow | Shift ≥ width | u128 high-half |
+|--------|-----------------|-------------|---------------------|---------------|----------------|
+| IADD_RS | `wrapping_add` + shift ≤3 | U | U | G (`shift = mod>>2 % 4`) | — |
+| IADD_M | `load64` + `wrapping_add` | U | U | — | — |
+| ISUB_R/M | `wrapping_sub` | U | U | — | — |
+| IMUL_R/M | `wrapping_mul` low 64 | U | U | — | M (low half only) |
+| IMULH_R/M | `mulh` | U | U | — | M (`superscalar.rs:1495-1497`) |
+| ISMULH_R/M | `smulh_u64` | U | U | — | M (`superscalar.rs:1506-1519`) |
+| IMUL_RCP | same as IMUL_R | U | U | — | M |
+| INEG_R | `(!x).wrapping_add(1)` | U | U | — | — |
+| IXOR_R/M | `^` | U | U | — | — |
+| IROR_R | `rotr(x, src & 63)` | U | U | G | — |
+| IROL_R | `rotl(x, src & 63)` | U | U | G | — |
+| ISWAP_R | register swap | U | U | — | — |
+| F* / CFROUND | hardware FPU | U | U | G (CFROUND `rotr` uses compile-time imm) | — |
+| CBRANCH | `wrapping_add` + mask test | U | U | — | — |
+| ISTORE | `store64` | U | U | — | — |
+
+No opcode handler performs division; `i128::MIN / -1` is **U**. Full
+adversarial corpus remains a 2g forward-action (§2 F7 + §5.11.5); 2d
+ships the design-time audit above plus T9+ vectors that exercise IMULH
+and shift-boundary inputs.
+
+#### R1-D5 — §1.3 `VmState` audit re-verification
+
+Re-run 2026-05-22: all 28 executable handlers in
+`bytecode_machine.hpp:145-270` read only fields present in §1 frozen
+surface 3. No amendment required. `mp` remains absent (v2-only alias
+collapsed to `ma` per 2c). `dataset_offset` is read by the iteration
+loop in `execute_iteration`, not by `dispatch_instruction` — unchanged
+from 2c audit.
+
 ---
 
 ## 4. Scope discipline
@@ -574,31 +757,119 @@ Out of scope (regardless of how convenient it would be):
 
 ## 5. Round 1 readiness gate
 
-This skeleton scaffold satisfies the 2c → 2d hand-off discipline
-(per `91-documentation-after-plans.mdc` and the 2b/2c precedent that
-each phase's plan doc carries forward-actions for the next).
-Implementation of Phase 2d is **gated** on:
+Items 1–2 are **satisfied** as of 2026-05-22 (PR #65 plan-doc merge;
+PR #66 implementation merge at `e9917097f`). Implementation of Phase
+2d remains **gated** on:
 
-1. PR #65 (Phase 2c plan-doc PR) merged.
-2. PR for Phase 2c implementation (`feat/randomx-v2-phase2c`)
-   merged.
-3. A `chore/randomx-v2-phase2d-plan` branch cut, expanding this
-   scaffold into a Round 1 design doc that closes the §3 decision
-   points and re-runs the §1 §1.3 audit-re-verification.
-4. Round 1 design rounds closed (target 4-6 rounds per
-   `20-rust-vs-cpp-policy.mdc`), at which point this file is
-   replaced by the post-Round-1 plan doc.
-
-Items 1-2 are gating events outside this branch's scope; items 3-4
-are Phase 2d's own pre-flight work.
+1. ~~PR #65 (Phase 2c plan-doc PR) merged.~~ **Done.**
+2. ~~PR for Phase 2c implementation merged.~~ **Done** (`e9917097f`).
+3. This `chore/randomx-v2-phase2d-plan` branch expanding the skeleton
+   into a Round 1 design doc — **in progress on this branch.**
+4. Round 1–5 design rounds closed (target 4–6 rounds per
+   `20-rust-vs-cpp-policy.mdc`). **Round 1 closed 2026-05-22;**
+   Rounds 2–5 remain before `feat/randomx-v2-phase2d` cuts.
 
 ---
 
-## 6. Round history
+## 6. Test plan
+
+### 6.1 Inherited vectors (must stay green)
+
+T1–T8 from Phase 2c remain mandatory. T8 (`t8_vm_compute_hash_nop.bin`)
+**must flip** to real-hash byte-equality once dispatch lands — the NOP
+stub expectation is replaced by end-to-end hash parity under real
+bytecode semantics. T6/T7 unchanged (iteration snapshots precede full
+dispatch semantics).
+
+### 6.2 New spec vectors (T9+)
+
+Extend the Phase 2c generator (`tests/vectors/reference/_generator/phase2c/`)
+into a `phase2d/` sibling (or subcommand) producing:
+
+| ID | Coverage | Generator mode |
+|----|----------|----------------|
+| T9 | Single-instruction integer smoke (IADD_RS, IMULH_R, IROR_R, ISTORE) | `--opcode-isolated` |
+| T10 | FP smoke under RN (FADD_R, FMUL_R, FDIV_M, FSQRT_R) | `--fp-smoke --mode=rn` |
+| T11–T14 | Rounding-mode matrix: 9 FP opcodes × 4 IEEE modes (36 tests minimum per §2 F7 Round 4 addition) | `--fp-matrix --mode={rn,rd,ru,rz}` |
+| T15 | CFROUND throttle (`isrc & 60 != 0` → no mode change) | `--cfround-throttle` |
+| T16 | End-to-end `compute_hash` with real dispatch (replaces T8 NOP expectation) | `--hash-e2e` |
+
+Each vector ships `.bin` + `.meta.txt` naming the rounding mode, opcode
+under test, and fork pin. Property-test analogs T9'–T16' are **deferred
+to Round 2** unless a Round 2 threat-model pass surfaces a gap.
+
+### 6.3 Test placement
+
+Per Phase 2c R0-D6: spec-vector tests live in `src/vm.rs#mod tests`
+via `include_bytes!("../tests/vectors/reference/vm/...")`. No new
+`pub` accessors for test convenience.
+
+---
+
+## 7. Module layout
+
+```
+rust/shekyl-pow-randomx/src/
+├── lib.rs           # add `mod fpu_rounding;`
+├── fpu_rounding.rs  # NEW: `set_rounding_mode` + CI-grep target
+├── vm.rs            # dispatch body, F128 newtype, integer helpers / re-exports
+└── superscalar.rs   # `pub(crate)` mulh / smulh_u64 (if not extracted)
+```
+
+No new workspace dependencies. Third `#![deny(unsafe_code)]` exception:
+only `fpu_rounding::set_rounding_mode` (after the two allocation carve-
+outs from 2c).
+
+---
+
+## 8. Commit table (implementation PR)
+
+| # | Subject (imperative, ≤72 chars) | ~LoC | Plan anchor |
+|---|----------------------------------|------|-------------|
+| 1 | `randomx: F128 newtype + integer rotate/load helpers` | ~180 | §3.5 R1-D2, R1-D3 |
+| 2 | `randomx: fpu_rounding module + CFROUND handler wiring` | ~120 | §3.5 R1-D1, §2 F5 |
+| 3 | `randomx: dispatch_instruction match arms (integer opcodes)` | ~350 | §3.5 R1-D3, R1-D4 |
+| 4 | `randomx: dispatch_instruction FP opcode arms` | ~280 | §3.5 R1-D2, §2 F2 |
+| 5 | `randomx: T9-T16 spec vectors + T8 real-hash update` | ~400 + fixtures | §6 |
+| 6 | `randomx: FPU rounding-mode CI grep + BENCH_RESULTS update` | ~80 | §10 |
+
+≤6 commits; bisect-friendly ordering (integer dispatch before FP arms
+so commit 3 keeps `cargo test` green with stub FP arms if needed — prefer
+single commit 4 landing all FP arms atomically to avoid half-real hash
+semantics).
+
+---
+
+## 9. Gates (implementation PR)
+
+| Gate | Command / check |
+|------|-----------------|
+| Format | `cargo fmt --check` (workspace) |
+| Lint | `cargo clippy --all-targets -- -D warnings` on `shekyl-pow-randomx` |
+| Test | `cargo test -p shekyl-pow-randomx` (includes T1–T16 unit tests) |
+| Debug ≡ release | Existing `.github/workflows/build.yml` Gate 2 (inherited from 2c) |
+| Doc | `cargo doc -p shekyl-pow-randomx --no-deps` |
+| FPU unsafe grep | Script scoped to `fn set_rounding_mode` per §3.5 R1-D1 |
+| Bench (informational) | `cargo bench -p shekyl-pow-randomx --bench compute_hash_alloc` — record in `BENCH_RESULTS.md`; not a PR hard gate per R0-D12 |
+
+---
+
+## 10. Forward path
+
+- **2f** inherits unchanged `compute_hash` surface; pooling wraps the
+  same `VmState` allocation path 2c landed.
+- **2g** inherits T11–T14 mode matrix as seed corpus for differential
+  harness expansion per §2 F7.
+- **3a** still sees only `Cache::derive` + `compute_hash`; dispatch
+  remains private.
+
+---
+
+## 11. Round history
 
 | Round | Date | Outcome |
 |-------|------|---------|
 | Scaffold | 2026-05-21 | Skeleton scaffold landed as deliverable of Phase 2c Round 3 (R3-D3). Records the 2c → 2d hand-off contract verbatim, the locked-by-2c `VmState` field set, the F1/F2/F3/F5/F7 forward-actions, the three Round 1 decision points (FPU rounding-mode mechanism; `F128` newtype shape; per-opcode dispatch shape), and the scope discipline. Round 1 design doc supersedes this file when it lands. |
 | Scaffold-R4 | 2026-05-21 | Round 4 addenda landed as a sibling commit of Phase 2c Round 4's threat-model addenda (per `RANDOMX_V2_PHASE2C_PLAN.md` §5.11). Three additions: (i) §2 F7 forward-action extended with per-rounding-mode coverage requirement (9 FP opcodes × 4 IEEE 754 modes ≥ 36 mode-coverage tests, byte-equality-asserted against C reference under matching mode); carry from 2c §5.11 Objective 1 "FPU rounding-mode escape." (ii) §3.1 FPU rounding-mode decision-point gains an "unsafe-block scope-check discipline" addendum: whichever option (a)–(d) 2d Round 1 selects, the resulting `unsafe` block is audited to do only the rounding-mode write (no state mutation, no pointer dereferences, no allocation, no call-site fan-out); carry from 2c §5.11 Objective 5 "`unsafe`-block discipline at the FPU intrinsic." (iii) New §3.4 "`u128` / `__int128_t` edge-case differential discipline" enumerates four edge-case classes (div by zero, signed-div overflow, shift-by-width, `u128 * u128` truncation) and requires 2d Round 1 to audit every `u128`/`i128`-using opcode handler against the C reference, pre-handling reachable edge cases; carry from 2c §5.11 Objective 6 "consensus split via implementation divergence." None of the three additions reopen the Round 3 contract; all are forward-actions absorbed at 2d Round 1 design time. |
 | Scaffold-R5 | 2026-05-21 | Round 5 addendum landed as a sibling commit of Phase 2c Round 5's closure refinements (per `RANDOMX_V2_PHASE2C_PLAN.md` §14 Round 5 entry). One addition: §3.1 "CI-time grep mechanical enforcement" subsection promotes the Scaffold-R4 prose-as-discipline (unsafe-block scope-check) to a mechanically-enforced gate. The grep is modeled on the **`shekyl-pow-randomx` never uses `#[no_mangle]`** invariant pattern from `RANDOMX_V2_PLAN.md` §7.7 — asserts the rounding-mode-setter function body contains exactly one of the option (a)/(b)/(c) primitives and nothing else (no other intrinsic calls, no pointer dereferences, no allocator calls, no function calls beyond the chosen primitive). 2d Round 1 fixes the primitive choice; the implementation-PR adds the grep with the option-specific permitted/forbidden pattern set. Catches the "future contributor adds a reasonable-seeming improvement that silently expands the unsafe surface" failure mode (e.g., stashing previous mode for restoration, checking a feature flag, mutating a sibling field) that prose-as-discipline depends on reviewer attention to catch. CI-fail-closed: a function body that drifts outside the discipline fails PR CI rather than passing audit. Named as a §10 hard gate in the 2d implementation PR. No prior Scaffold or Scaffold-R4 disposition reopened. |
-| Round 1 | pending | Phase 2d's first design round. Cuts after Phase 2c implementation lands. |
+| Round 1 | 2026-05-22 | Post-PR-#66 design round on `chore/randomx-v2-phase2d-plan`. Closes §3 decision points: **(R1-D1)** FPU rounding via quarantined `unsafe` intrinsics in `fpu_rounding.rs` (option a); **(R1-D2)** minimal `F128` newtype (option b); **(R1-D3)** dense `match` on `decode_instruction_type(opcode)` (option a) — substrate finding: wire opcode bytes are frequency-encoded (`bytecode_machine.hpp:67-98`), not `InstructionType` enum values; dispatch replicates `compileInstruction` operand decode plus `exe_*` bodies; **(R1-D4)** u128/i128 edge-case audit table; **(R1-D5)** §1.3 VmState re-audit (no field amendments). Lands §6–§10. Rounds 2–5 remain before implementation cuts. |

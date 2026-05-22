@@ -4,6 +4,17 @@
 
 ### Added
 
+- **RandomX v2 Track A Phase 2d — Round 1 design doc** (branch
+  `chore/randomx-v2-phase2d-plan`, pending PR). Expands
+  [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
+  from skeleton to Round 1 closure after PR #66 lands on `dev`
+  (`e9917097f`): FPU rounding-mode disposition (quarantined `unsafe`
+  intrinsics in `fpu_rounding.rs`), minimal `F128` newtype, frequency-
+  decoded `match` dispatch (substrate finding: wire opcodes are not enum
+  values), u128 edge-case audit, T9–T16 test plan, six-commit
+  implementation table, and gate checklist. Phase 2c plan doc updated
+  with PR #66 implementation closure.
+
 - **RandomX v2 Track A Phase 2c — Cache derivation + VM substrate +
   T1-T8 spec-vector parity + bench baselines** (`feat/randomx-v2-phase2c-impl`,
   PR #66, 2026-05-22). Third sub-PR of the Rust pure-software RandomX
