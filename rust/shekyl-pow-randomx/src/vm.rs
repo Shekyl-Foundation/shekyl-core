@@ -13,26 +13,33 @@
 //! set, this module lands across three Phase 2c implementation-PR
 //! commits:
 //!
-//! - **Commit 4 (this commit):** [`VmState`] struct skeleton with the
+//! - **Commit 4 (this commit, as corrected by the R0-D9 fix-up
+//!   immediately on top):** [`VmState`] struct skeleton with the
 //!   frozen field set (per §5.1.1 + §5.5 F5 v2-only simplification),
 //!   the [`F128`] / [`Instruction`] / [`Program`] type definitions,
-//!   the [`PROGRAM_SIZE`] / [`RANDOMX_SCRATCHPAD_L3`] spec constants,
-//!   [`VmState::new`] (allocation-only constructor), the
-//!   `alloc_zeroed_scratchpad` carve-out (Phase 2c's second and final
-//!   `#![deny(unsafe_code)]` carve-out per §1 covenant 7 + §5.11.2),
-//!   the scratchpad-allocation `debug_assert!` per §5.11.2, and the
-//!   empty [`Drop`] (review-surface hook per §5.11.4). No `compute_hash`,
-//!   no `dispatch_instruction`, no register/program init — those land
+//!   the [`PROGRAM_SIZE`] / [`PROGRAM_ITERATIONS`] /
+//!   [`RANDOMX_SCRATCHPAD_L3`] spec constants, [`VmState::new`]
+//!   (allocation-only constructor), the `alloc_zeroed_scratchpad`
+//!   carve-out (Phase 2c's second and final `#![deny(unsafe_code)]`
+//!   carve-out per §1 covenant 7 + §5.11.2), the scratchpad-
+//!   allocation `debug_assert!` per §5.11.2, and the empty [`Drop`]
+//!   (review-surface hook per §5.11.4). No `compute_hash`, no
+//!   `dispatch_instruction`, no register/program init — those land
 //!   in commits 5 and 6.
-//! - **Commit 5 (planned):** `VmState::initialize` with scratchpad init
-//!   via `aes::fill_aes_1r_x4`, register-file init from the entropy
-//!   buffer, program parsing via `aes::fill_aes_4r_x4`, plus T3-T5
-//!   inline spec-vector tests (per §6 T3-T5 / §14 Round 0 R0-D6).
+//! - **Commit 5 (planned, per §14 Round 0 R0-D8 Rust-idiomatic
+//!   two-method init shape):** `VmState::init_scratchpad` via
+//!   `aes::fill_aes_1r_x4`, plus `VmState::init_program` (stack-
+//!   allocate the 3200-byte buffer per spec §4.5's
+//!   `128 + 8 * RANDOMX_PROGRAM_SIZE` budget, fill via
+//!   `aes::fill_aes_4r_x4`, parse entropy[0..128] into register-init
+//!   fields, parse instructions[128..3200] into
+//!   `self.program.instructions`), plus T3'/T4'/T5' fixture-free
+//!   determinism property tests inline.
 //! - **Commit 6 (planned):** `pub fn compute_hash` + the private
 //!   `fn dispatch_instruction` NOP-body stub (the §5.1 function-body
 //!   replacement contract Phase 2d fills in), plus the F/E AES mix
-//!   per-iteration loop and the Blake2b finalize, plus T6-T8 inline
-//!   spec-vector tests.
+//!   per-iteration loop and the Blake2b finalize, plus T6'/T7'/T8'
+//!   fixture-free determinism property tests inline.
 //!
 //! # Threat-model disposition (per §5.11.4)
 //!
@@ -83,15 +90,45 @@ pub(crate) type F128 = [f64; 2];
 
 /// Number of [`Instruction`]s in a single RandomX v2 [`Program`].
 ///
-/// `RANDOMX_PROGRAM_SIZE_V2 = 2048` per
+/// `RANDOMX_PROGRAM_SIZE_V2 = 384` per
 /// [`external/randomx-v2/src/configuration.h:57`](../../../external/randomx-v2/src/configuration.h)
 /// at pin `aaafe71`. Per
 /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
 /// §5.5 F5 (v2-only simplification), the Rust port carries no
 /// `PROGRAM_SIZE_V1` constant — v2 is structural, not a runtime
 /// flag, and the V1 program size (256 instructions) is unreachable.
+///
+/// # Distinct from [`PROGRAM_ITERATIONS`] (R0-D9 anchor)
+///
+/// Per
+/// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
+/// §14 Round 0 R0-D9, `PROGRAM_SIZE` (the per-program instruction
+/// count, 384) is structurally distinct from [`PROGRAM_ITERATIONS`]
+/// (the per-program outer-loop iteration count, 2048). Each program
+/// is executed [`PROGRAM_ITERATIONS`] times, and each iteration
+/// dispatches through all [`PROGRAM_SIZE`] instructions in sequence.
+/// Conflating the two produces a 5× over-allocation of the
+/// [`Program`] buffer (an earlier draft of this constant carried
+/// `2048` and was corrected via R0-D9). The two constants are
+/// defined together below to make the distinction structurally
+/// explicit at every reading.
 #[allow(dead_code)]
-pub(crate) const PROGRAM_SIZE: usize = 2048;
+pub(crate) const PROGRAM_SIZE: usize = 384;
+
+/// Number of times each RandomX v2 [`Program`] is executed per hash.
+///
+/// `RANDOMX_PROGRAM_ITERATIONS = 2048` per
+/// [`external/randomx-v2/src/configuration.h:62`](../../../external/randomx-v2/src/configuration.h)
+/// at pin `aaafe71`. Consumed by `VmState::run`'s outer iteration
+/// loop (commit 6) mirroring
+/// [`external/randomx-v2/src/vm_interpreted.cpp:69`](../../../external/randomx-v2/src/vm_interpreted.cpp)'s
+/// `for(unsigned ic = 0; ic < RANDOMX_PROGRAM_ITERATIONS; ++ic)`.
+///
+/// # Distinct from [`PROGRAM_SIZE`] (R0-D9 anchor)
+///
+/// See [`PROGRAM_SIZE`] rustdoc.
+#[allow(dead_code)]
+pub(crate) const PROGRAM_ITERATIONS: usize = 2048;
 
 /// RandomX v2 scratchpad size in bytes.
 ///
@@ -172,13 +209,14 @@ pub(crate) struct Instruction {
     pub(crate) imm32: u32,
 }
 
-/// A RandomX v2 program — exactly [`PROGRAM_SIZE`] (2048)
-/// [`Instruction`]s feeding the dispatch loop.
+/// A RandomX v2 program — exactly [`PROGRAM_SIZE`] (384)
+/// [`Instruction`]s feeding the dispatch loop, executed
+/// [`PROGRAM_ITERATIONS`] (2048) times per hash.
 ///
 /// Per
 /// [`external/randomx-v2/src/program.hpp:44-68`](../../../external/randomx-v2/src/program.hpp)
 /// at pin `aaafe71`, the C reference's `Program` class carries
-/// *both* the 128-byte entropy buffer header *and* the 2048-instruction
+/// *both* the 128-byte entropy buffer header *and* the 384-instruction
 /// `programBuffer`. The Rust port splits these: the entropy-buffer-
 /// derived state (`e_mask`, `read_reg`, scratchpad init, register
 /// init, etc.) lives in individual [`VmState`] fields, and [`Program`]
@@ -192,18 +230,18 @@ pub(crate) struct Instruction {
 ///
 /// [`VmState::program`] is `Box<Program>` — a single heap allocation
 /// of `size_of::<Program>() = PROGRAM_SIZE * size_of::<Instruction>()
-/// = 2048 * 8 = 16_384` bytes. Construction goes through
+/// = 384 * 8 = 3_072` bytes. Construction goes through
 /// [`Program::default`] (safe stable Rust via `std::array::from_fn`)
-/// then `Box::new`; the 16 KiB stack overhead during construction
+/// then `Box::new`; the 3 KiB stack overhead during construction
 /// is amortized to a single move into the [`Box`] and is bounded by
 /// the once-per-hash construction cost (`VmState::new` is called
 /// from `compute_hash` once per hash, not per dispatch).
 #[allow(dead_code)]
 pub(crate) struct Program {
-    /// The 2048 parsed instructions feeding the spec §4.5.4 dispatch
-    /// loop. Populated by commit 5's `VmState::initialize` from the
-    /// AES-generated entropy buffer; left zero-initialized by
-    /// [`Program::default`].
+    /// The [`PROGRAM_SIZE`] (384) parsed instructions feeding the
+    /// spec §4.5.4 dispatch loop. Populated by commit 5's
+    /// `VmState::init_program` from the AES-generated entropy
+    /// buffer; left zero-initialized by [`Program::default`].
     pub(crate) instructions: [Instruction; PROGRAM_SIZE],
 }
 
@@ -220,7 +258,7 @@ impl Default for Program {
     /// §11) and constructs the array element-by-element without
     /// requiring `T: Copy`.
     ///
-    /// Construction allocates the 16 KiB array on the stack, which
+    /// Construction allocates the 3 KiB array on the stack, which
     /// [`VmState::new`] then moves into a [`Box`] via [`Box::new`].
     /// The stack overhead is acceptable at the once-per-hash
     /// allocation cadence per the same construction-cost rationale
@@ -386,11 +424,12 @@ pub(crate) struct VmState {
     /// `datasetRead` / `datasetPrefetch`. Set once during program-
     /// init (commit 5).
     pub(crate) dataset_offset: u64,
-    /// The 2048 parsed [`Instruction`]s feeding the dispatch loop.
-    /// Heap-allocated as `Box<Program>` (one allocation of 16 KiB).
-    /// Populated by commit 5's `VmState::initialize` from the AES-
-    /// generated entropy buffer; left zero-initialized by
-    /// [`VmState::new`].
+    /// The [`PROGRAM_SIZE`] (384) parsed [`Instruction`]s feeding
+    /// the per-iteration dispatch loop, executed
+    /// [`PROGRAM_ITERATIONS`] (2048) times per hash. Heap-allocated
+    /// as `Box<Program>` (one allocation of 3 KiB). Populated by
+    /// commit 5's `VmState::init_program` from the AES-generated
+    /// entropy buffer; left zero-initialized by [`VmState::new`].
     pub(crate) program: Box<Program>,
     /// `randomx_vm::tempHash` — Blake2b intermediate hash buffer
     /// used by program-init (read 1024 bytes of entropy per program
@@ -419,7 +458,7 @@ impl VmState {
     /// - One [`RANDOMX_SCRATCHPAD_L3`]-sized heap allocation
     ///   (2 MiB) for [`scratchpad`], zero-initialized via the
     ///   [`alloc_zeroed_scratchpad`] carve-out.
-    /// - One `size_of::<Program>()`-sized heap allocation (16 KiB)
+    /// - One `size_of::<Program>()`-sized heap allocation (3 KiB)
     ///   for [`program`], constructed via [`Program::default`]
     ///   ([`core::array::from_fn`] of [`Instruction::default`]) and
     ///   moved into a [`Box`].
@@ -430,7 +469,7 @@ impl VmState {
     /// Per
     /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
     /// §8 budget, the per-hash allocation cost (the 2 MiB scratchpad
-    /// plus the 16 KiB program plus the inline state) is the
+    /// plus the 3 KiB program plus the inline state) is the
     /// dominant cost of `compute_hash` under stub-NOP dispatch —
     /// commit 8's `benches/compute_hash_alloc.rs` measures it
     /// directly under the ≤100 µs PR-gating threshold.
@@ -441,10 +480,15 @@ impl VmState {
     /// has no `pub`-reachable caller. The entire transitive chain
     /// reached from this function ([`alloc_zeroed_scratchpad`],
     /// [`Program::default`], [`Instruction::default`], the
-    /// [`F128`] alias, the [`PROGRAM_SIZE`] / [`RANDOMX_SCRATCHPAD_L3`]
-    /// constants, the [`VmState`] / [`Program`] / [`Instruction`]
-    /// field reads in [`VmState::drop`]'s implicit field-drop walk)
-    /// is dead-code-lint dead in the same chain.
+    /// [`F128`] alias, the [`PROGRAM_SIZE`] / [`PROGRAM_ITERATIONS`]
+    /// / [`RANDOMX_SCRATCHPAD_L3`] constants, the [`VmState`] /
+    /// [`Program`] / [`Instruction`] field reads in [`VmState::drop`]'s
+    /// implicit field-drop walk) is dead-code-lint dead in the same
+    /// chain. [`PROGRAM_ITERATIONS`] is consumed at commit 6 by
+    /// `VmState::run`'s outer loop and at Phase 2d by the bytecode
+    /// dispatch's per-iteration index space; until then, the same
+    /// chain-entry `#[allow(dead_code)]` covers its read-site
+    /// absence.
     ///
     /// A single `#[allow(dead_code)]` at this chain entry-point
     /// suppresses the transitive lint cascade per the standard
@@ -499,7 +543,7 @@ impl VmState {
 impl Drop for VmState {
     /// Empty drop — the 2 MiB `scratchpad` buffer is freed by the
     /// default `Box<[u8; RANDOMX_SCRATCHPAD_L3]>` destructor, the
-    /// 16 KiB `program` buffer is freed by the default `Box<Program>`
+    /// 3 KiB `program` buffer is freed by the default `Box<Program>`
     /// destructor, and every other field is `Copy`/`Default` inline
     /// state that needs no destructor. No zeroization is required
     /// because every field is public-input-only per
