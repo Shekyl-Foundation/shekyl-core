@@ -25,6 +25,39 @@ Implementation-time audits (per `91-documentation-after-plans.mdc`
 and `cargo test` byte-equality against generator vectors) are downstream
 gates on the implementation PR itself, not this audit's responsibility.
 
+## 1.5 Subsequent post-audit supersessions
+
+This audit is a **historical snapshot** at audit pin `5df8bd2c2`.
+Several rows in §4 and §6 reflect plan-doc claims that were
+subsequently superseded by implementation-time `Round 0` dispositions
+(R0-D5 through R0-D12) recorded in
+[`RANDOMX_V2_PHASE2C_PLAN.md`](./RANDOMX_V2_PHASE2C_PLAN.md) §14 and
+the prose narrative immediately above it. The audit's row content is
+preserved as-recorded (the rows are honest about what the substrate
+looked like at audit pin), with inline **`[Superseded by R0-D#]`**
+markers pointing forward to the dispositions that updated each
+affected claim. Readers consuming this doc should follow each marker
+to the plan-doc's §14 entry for the current disposition.
+
+Supersession summary (full text per disposition in plan-doc §14):
+
+| Audit row(s) | Superseded by | Disposition |
+|--------------|---------------|-------------|
+| §4 row 2, §6.1 dependency-table `Cache::derive_item → randomx_reciprocal` row | **R0-D7** (commit-3 pre-flight) | `randomx_reciprocal` promotion to `pub(crate)` withdrawn; the value is consumed transitively via `execute_superscalar`'s `IMUL_RCP` arm at `superscalar.rs:1463`, not by direct call. Stays private. |
+| §5 F4 `PROGRAM_SIZE` substantive-claim disposition (V2 = 2048) | **R0-D9** (commit-5 pre-flight) | Plan-doc + Rust port conflated `RANDOMX_PROGRAM_ITERATIONS = 2048` with `RANDOMX_PROGRAM_SIZE_V2 = 384`. Correct constants: `PROGRAM_SIZE = 384` (per-program instruction count, `configuration.h:57`) + `PROGRAM_ITERATIONS = 2048` (per-program outer-loop iteration count, `configuration.h:62`). Rust port code fixed in commit `186a8cfdf` (commit 4 fix). |
+| §5 F1 `criterion` "Already in workspace" claim (audit's F1 already disposed) | (no later supersession) | F1's disposition recorded in this audit body. Commit 8 added the dev-dep entry per plan. |
+| §5 / §6 references implying `Cache::from_raw` will be a test-only constructor | **R0-D5** (commit-2 pre-flight) | `Cache::from_raw` dropped at impl-time per the test-fidelity-vs-dominant-cost discipline. |
+| §5 / §6 references implying T1-T8 land as integration tests under `tests/{cache,vm}/*.rs` | **R0-D6** (commit-2 pre-flight) | T1-T8 + T1'-T8' relocated to unit tests inside `src/cache.rs#mod tests` / `src/vm.rs#mod tests` per the tests-use-the-actual-API discipline. |
+| §5 / §6 references implying T3-T8 spec-vector tests land in commits 5/6 | **R0-D8** (commit-5 pre-flight) | T3-T8 spec-vector tests deferred to commit 7 alongside the F6 generator; T3'-T8' determinism property analogs land in commits 5/6. |
+| (no audit-row equivalent; commit-7 emergent) | **R0-D10**, **R0-D11** | Cross-language-port-implicit-state-loss + storage-divergence findings from running T1/T8 fixtures (commit 7). |
+| (no audit-row equivalent; commit-8 emergent) | **R0-D12** | Plan-author-estimate-vs-empirical-measurement gap from running §5.8 PR-gate benches (commit 8). |
+
+The supersession markers below are **non-blocking** for the audit's
+historical record. The audit itself remains a faithful snapshot of
+the pre-implementation substrate; the markers exist solely so a
+reader who arrives at this doc finds the live disposition without
+having to cross-reference §14 from scratch.
+
 ## 1. Audit purpose
 
 Per Phase 2c plan-doc §5.11.8:
@@ -105,14 +138,14 @@ continuity held across PR #65's review window.
 | # | Surface | Plan-doc location | Verdict |
 |---|---------|-------------------|---------|
 | 1 | Dependency table (Phase 2a/2b providers consumed by 2c) | §4.1 (9 rows) | 8 rows verify byte-perfect; 1 row (criterion dev-dep claim) needs clarification — **F1** |
-| 2 | `randomx_reciprocal` visibility | §4.1 row 6 + §4.3 | Confirmed: currently private `fn` at `superscalar.rs:1520`; 2c promotes to `pub(crate) fn` as planned |
+| 2 | `randomx_reciprocal` visibility | §4.1 row 6 + §4.3 | Confirmed: currently private `fn` at `superscalar.rs:1520`; 2c promotes to `pub(crate) fn` as planned **[Superseded by R0-D7: promotion withdrawn; stays private; see plan-doc §14 + §1 status appendix]** |
 | 3 | Frozen `dispatch_instruction` signature | §5.1.1 surface 1 | Confirmed against `bytecode_machine.hpp:46-65` IBC pattern + `bytecode_machine.hpp:145-268` handler bodies |
 | 4 | Frozen `Instruction` field set | §5.1.1 surface 2 | Confirmed against v2 fork's `instruction.hpp` (Round-5 plan-doc table reads the spec §5.1 layout correctly) |
 | 5 | Frozen `VmState` field set | §5.1.1 surface 3 | Field-set rows confirmed against `bytecode_machine.hpp` opcode handlers + `virtual_machine.hpp:69-85` per-VM state; **opcode-count statement off-by-one** — **F2** |
 | 6 | `mp` correction precedent | §5.5 F5 row 1, §5.11.8 | Confirmed: `vm_interpreted.cpp:89` is `auto& mp = (randomx_vm::getFlags() & RANDOMX_FLAG_V2) ? mem.ma : mem.mx;`; `common.hpp:184-187`'s `MemoryRegisters` has only `mx, ma, memory` |
 | 7 | V2-only simplification table rows 1, 2, 4, 6, 7, 8 | §5.5 F5 | Verified clean (six of eight rows) |
 | 8 | V2-only simplification row 3 (`bytecode_machine.hpp:263`) | §5.5 F5 | **Substantive miscategorization** — **F3** |
-| 9 | V2-only simplification row 5 (`program.hpp:46-48`) | §5.5 F5 | **Line citation off by ~10 lines** — **F4** |
+| 9 | V2-only simplification row 5 (`program.hpp:46-48`) | §5.5 F5 | **Line citation off by ~10 lines** — **F4** **[Superseded by R0-D9: F4's body cosmetic correction is preserved; the semantic V2=2048 claim is wrong. Correct: `PROGRAM_SIZE = 384` + `PROGRAM_ITERATIONS = 2048` as separate constants. See plan-doc §14 + commit `186a8cfdf` for the Rust port fix-up.]** |
 | 10 | `ShekylU128` audit (only `u128` site in `shekyl-pow-randomx`) | §5.10 | Confirmed: `mulh()` at `superscalar.rs:1486` is the only production `u128` site (plus its `mulh_*` test and its rustdoc) |
 | 11 | Cross-plan-doc consistency (2d skeleton §1 frozen field set) | 2d skeleton §1 vs 2c §5.1.1 | Confirmed: 2d's table mirrors 2c's exactly; the "2c wins" tie-break is documented |
 | 12 | Threat-model substrate (six attack objectives) | §5.11 | No substrate shift; the disciplines (T1'/T2' determinism, `debug_assert!`, debug-vs-release equivalence, audit-against-source) are encoded in plan-doc and will encode into implementation |
@@ -299,7 +332,14 @@ operational defense; this audit is its application.
 CFROUND's v2-only throttling correctly, with the corrected forward-
 pointer to 2d's CFROUND handler. See sibling commit on this branch.
 
-### F4 — §5.5 F5 row 5 line citation off *(factual; semantic claim correct)*
+### F4 — §5.5 F5 row 5 line citation off *(factual; semantic claim subsequently overturned by R0-D9)*
+
+> **At audit pin, this finding was scoped to a cosmetic citation-drift
+> correction. The semantic claim within the plan-doc quote below
+> (`_V2=2048` / `PROGRAM_SIZE = 2048`) was subsequently overturned by
+> R0-D9 — see [Superseded by R0-D9] in §4 row 9 of this audit + the
+> "Verification" section below + plan-doc §14 Round 0 R0-D9 for the
+> current disposition.** The audit body is preserved as-recorded.
 
 **Plan-doc claim** (§5.5 F5 row 5):
 
@@ -323,15 +363,29 @@ public:
 
 Lines 46–48 are `operator()` (the instruction accessor by program
 counter), not `getSize`. The actual `Program::getSize` is at lines
-**56–58**. The semantic claim is correct (`getSize` returns V1=256
-or V2=2048 based on the flag bit; v2-only Rust port hardcodes 2048
-via `pub(crate) const PROGRAM_SIZE: usize = 2048;`); only the line
-citation drifted.
+**56–58**. At audit pin, the *line citation* drift was the only
+finding; the audit also recorded the semantic claim ("V1=256 / V2=2048
+... v2-only Rust port hardcodes 2048 via `pub(crate) const PROGRAM_SIZE:
+usize = 2048;`").
 
-**Disposition.** Cosmetic factual correction.
+**[Superseded by R0-D9: the V2=2048 semantic claim is wrong.** The
+plan-doc and the audit body both conflated `RANDOMX_PROGRAM_ITERATIONS
+= 2048` (per-program outer-loop iteration count, `configuration.h:62`)
+with `RANDOMX_PROGRAM_SIZE_V2 = 384` (per-program instruction count,
+`configuration.h:57`). `Program::getSize` actually returns 256 (V1) or
+384 (V2). The Rust port now defines `pub(crate) const PROGRAM_SIZE:
+usize = 384;` + `pub(crate) const PROGRAM_ITERATIONS: usize = 2048;`
+separately (commit `186a8cfdf` is the commit-4 fix-up; full disposition
+in plan-doc §14 Round 0 R0-D9.] The line-citation correction itself
+(rows 46-48 → 56-58) remains valid.
 
-**Plan-doc errata applied.** §5.5 F5 row 5 citation updated to
-`program.hpp:56-58`. See sibling commit on this branch.
+**Disposition (audit-pin record).** Cosmetic factual correction
+(citation drift). The semantic correction is R0-D9's responsibility.
+
+**Plan-doc errata applied (audit-pin record).** §5.5 F5 row 5 citation
+updated to `program.hpp:56-58`. See sibling commit on this branch.
+The R0-D9 semantic correction is a separate commit chain
+(`464b2f7f5` plan-doc errata + `186a8cfdf` Rust port fix).
 
 ## 6. Confirmed surfaces (no errata)
 
@@ -348,7 +402,7 @@ only against the errata surfaces.
 | `Cache::derive` | `blake2_generator::Blake2Generator::{new, get_byte, get_uint32}` | `blake2_generator.rs:107` (`new`), `:128` (`get_byte`), `:145` (`get_uint32`) — all `pub(crate)` |
 | `Cache::derive` | `superscalar::generate_superscalar(gen: &mut Blake2Generator) -> SuperscalarProgram` | `superscalar.rs:1227` `pub(crate) fn generate_superscalar(gen: &mut Blake2Generator) -> SuperscalarProgram` |
 | `Cache::derive_item` | `superscalar::execute_superscalar(program: &SuperscalarProgram, registers: &mut [u64; REGISTERS_COUNT])` | `superscalar.rs:1427` (note: actual signature uses `REGISTERS_COUNT = 8` const at `superscalar.rs:151`, semantically identical to `[u64; 8]`) |
-| `Cache::derive_item` | `superscalar::randomx_reciprocal(divisor: u32) -> u64` | `superscalar.rs:1520` `fn randomx_reciprocal(divisor: u32) -> u64` (currently private; 2c promotes to `pub(crate)`) |
+| `Cache::derive_item` (transitive only) | `superscalar::randomx_reciprocal(divisor: u32) -> u64` | `superscalar.rs:1520` `fn randomx_reciprocal(divisor: u32) -> u64` **[Superseded by R0-D7: this is not a direct dependency. The actual call graph is `derive_item` → `execute_superscalar` → `randomx_reciprocal` (the reciprocal is computed inside `execute_superscalar`'s `IMUL_RCP` arm at `superscalar.rs:1463`, not pulled from a caller-passed cache). `randomx_reciprocal` stays private; see plan-doc §14 + §1 status appendix]** |
 | `VmState::new` (scratchpad init) | `aes::fill_aes_1r_x4(state: &mut [u8; 64], output: &mut [u8])` | `aes.rs:253` `pub(crate) fn fill_aes_1r_x4(state: &mut [u8; 64], output: &mut [u8])` |
 | `VmState::new` (program parse) + `compute_hash` (F/E mix) | `aes::fill_aes_4r_x4(state: &[u8; 64], output: &mut [u8])` | `aes.rs:312` `pub(crate) fn fill_aes_4r_x4(state: &[u8; 64], output: &mut [u8])` |
 | `compute_hash::finalize` | `aes::hash_aes_1r_x4(input: &[u8], hash: &mut [u8; 64])` | `aes.rs:392` `pub(crate) fn hash_aes_1r_x4(input: &[u8], hash: &mut [u8; 64])` |
