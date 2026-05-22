@@ -17,8 +17,23 @@ prompted-list speculation — `mp` is a v2-only local alias, not a
 struct field). (R3-minor-1) §13 3a inheritance FFI layering note.
 (R3-minor-2) §9/§12/§15 `tests/perf/per_hash_latency.rs` placeholder.
 (R3-D3) Sibling commit lands `RANDOMX_V2_PHASE2D_PLAN.md` skeleton
-scaffold. Target ≤1 round met; implementation cut authorized post-
-PR-#65 merge.
+scaffold. **Round 4 closed 2026-05-21:** threat-model addenda pass
+against the priority-1 surface (per `00-mission.mdc`'s
+security-and-quantum-resilience commitment). New §5.11 enumerates
+six attack-objective findings + the audit-against-source discipline
+note that produced the R3-D1 `mp` correction. In-scope 2c-implementation
+additions: T1'/T2' determinism property tests (~120 LoC across
+commits 2 and 3); `debug_assert!` discipline on the two unsafe
+allocation sites (~10 LoC across commits 2 and 4); debug-vs-release
+equivalence as a per-PR gate (1 CI-workflow line). Forward-actions
+accumulated for 2g (adversarial seedhash corpus; pathological-program
+worst-case timing bound), 3a (FFI null-check + length-validation +
+seedhash-as-array-pointer + ERR_NULL_PTR taxonomy), and 2f (CacheStore
+canonical-slot eviction-protection; `VmState` pool capacity sized
+against daemon parallel-verification fanout). Parent-plan alignment
+ships as a sibling commit on this branch (Decision #6, Decision #7,
+Phase 0 §5/§6 carry-forwards). Target ≤1 round met; implementation
+cut authorized post-PR-#65 merge.
 
 **Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §"Track A
 — Phase 2" sub-PR 2c is the binding one-line scope ("Implement Cache
@@ -44,8 +59,10 @@ Phase 2c implementation branch cuts later from post-this-doc `dev`.
 
 - `chore/randomx-v2-phase2c-plan` (this doc + the parent-plan
   precursor patch + Round 2 plan-doc revisions + Round 2 parent-plan
-  alignment + Round 3 plan-doc revisions + Round 3 2d skeleton scaffold;
-  short-lived per `06-branching.mdc` rule 2; six commits;
+  alignment + Round 3 plan-doc revisions + Round 3 2d skeleton scaffold
+  + Round 4 plan-doc threat-model addenda + Round 4 2d skeleton
+  threat-model addenda + Round 4 parent-plan alignment;
+  short-lived per `06-branching.mdc` rule 2; nine commits;
   lands on `dev` via PR #65).
 - `feat/randomx-v2-phase2c` (implementation; cut from post-this-doc
   `dev`; not yet cut as of this doc's commit).
@@ -950,6 +967,372 @@ suite; 2c is not the right place to add a test for that path.
 
 **Audit closure.** Recorded here; no action.
 
+## 5.11 Threat-model findings (Round 4)
+
+Round 4 closed 2026-05-21. A priority-1 (per `00-mission.mdc`)
+adversarial review of the Round 3 plan-doc enumerated six attack
+objectives against the Phase 2c surface; each objective surfaced
+findings whose disposition is recorded below. The framing names
+each finding as either **(a) 2c-implementation-PR scope expansion**
+(work that the Phase 2c implementation PR absorbs), **(b) plan-doc
+discipline note** (no implementation impact; a scope-or-discipline
+boundary recorded for future maintainers), or **(c) forward-action
+to a downstream phase** (work that 2d, 2f, 2g, or 3a inherits).
+
+The six attack objectives, with the findings and their dispositions,
+follow. Cross-cutting recommendations are §5.11.1 through §5.11.8.
+
+| Objective | Attack surface | Dispositions in §5.11 |
+|-----------|---------------|------------------------|
+| 1. Mine valid blocks faster than honest miners | Differential between Rust verifier and C miner | §5.11.5 (2g adversarial corpus); §5.11.8 (audit-against-source discipline) |
+| 2. Poison the cache | `Cache::derive` / `derive_item` determinism | §5.11.1 (T1' / T2' determinism property tests, in-scope) |
+| 3. Exploit the FFI boundary | `compute_hash` → `shekyl_pow_randomx_v2_hash` | §5.11.6 (3a forward-actions: null-check + length-validation + seedhash-as-`[u8; 32]` ptr + ERR_NULL_PTR taxonomy) |
+| 4. Cause the verifier to consume excessive resources | Cache-derivation DoS; scratchpad allocation pressure; pathological programs | §5.11.5 (2g pathological-program timing); §5.11.7 (2f CacheStore eviction-protection + VmState pool capacity sizing) |
+| 5. Exploit Rust safety boundary gaps | `Box::new_zeroed_slice` size correctness; 2d's FPU rounding-mode unsafe carve-out | §5.11.2 (`debug_assert!` discipline, in-scope); §5.11.4 (public-input-only scope note); 2d skeleton §3.1 augmentation |
+| 6. Cause consensus split via implementation divergence | Rust-vs-C edge-case behaviors (u128 / FP NaN / debug-vs-release / `mp`-style transcription errors) | §5.11.3 (debug-vs-release equivalence, in-scope); §5.11.8 (discipline note); 2d skeleton §4.1 (u128 vs `__int128`) |
+
+### 5.11.1 Determinism property tests (T1' + T2')
+
+**Problem.** T1 (cache derivation) and T2 (`cache.derive_item`) in
+the F7 matrix each compare a single Rust output to a single
+generator-produced reference vector. A single-comparison test
+catches deterministic bugs in `Cache::derive` / `derive_item`, but
+misses non-determinism bugs (race conditions in the 8-program
+SuperscalarHash generation, allocator-dependent ordering effects,
+hidden state inside the `Cache` struct that leaks across `derive_item`
+calls). Non-determinism in cache derivation is a **consensus-split
+attack surface**: validators producing different caches from the
+same seedhash reach different acceptance decisions on the same
+block.
+
+**Disposition.** Add two property-shaped sibling tests to commits 2
+and 3 respectively:
+
+- **T1' — `Cache::derive` determinism property** (commit 2; ~30 LoC):
+  - **T1'a (single-thread loop)**: Run `Cache::derive(SAME_SEEDHASH)`
+    100 times sequentially; assert every output is byte-identical to
+    every other output (and to T1's reference vector). Catches hidden
+    state inside the `Cache` struct, allocator-dependent layout, and
+    any state-mutating shortcut that affects byte output.
+  - **T1'b (concurrent threads)**: Spawn 4 threads, each running
+    `Cache::derive(SAME_SEEDHASH)` 25 times; collect 100 outputs;
+    assert all byte-identical. Catches races in the 8-program
+    SuperscalarHash generation or in Argon2d block initialization
+    if any per-call mutable state slipped in.
+  - **T1'c (interleaved seedhash pattern)**: Run
+    `derive(A), derive(B), derive(C), derive(A), derive(D), derive(A)`;
+    assert all three `derive(A)` outputs are byte-identical and
+    match T1's reference. Catches cross-call state pollution (e.g.,
+    a thread-local buffer that doesn't get reset between calls).
+- **T2' — `Cache::derive_item` invariance property** (commit 3; ~30 LoC):
+  - **T2'a (same item_number, varied call order)**: For each of T2's
+    8 item_numbers, call `derive_item(N)` 10 times in varying
+    intervening-call patterns (e.g., `derive_item(N), derive_item(N+1),
+    derive_item(N), derive_item(N+2), derive_item(N)`); assert every
+    return for `N` is byte-identical to T2's reference vector. Catches
+    any cross-call state pollution inside `derive_item` (e.g., a
+    `&mut [u64; 8]` register buffer reused without reset).
+
+**Test placement.** T1' lives in `tests/cache/t1_prime_determinism.rs`
+(sibling to `tests/cache/t1_cache_derive.rs`); T2' lives in
+`tests/cache/t2_prime_invariance.rs`. Both are CI-gated; failure
+fails the PR.
+
+**Cost.** ~60 LoC of test code total. No new dependencies (uses
+`std::thread::scope` for T1'b). Negligible CI time (≤2 s wall;
+single-thread `Cache::derive` is the cost dominator and runs
+serially in T1'a regardless).
+
+**Reopening criterion (reversion-clause shape).** If T1' or T2' ever
+fails, the disposition is **NOT** "remove the property test as
+flaky" — that's the failure mode `16-architectural-inheritance.mdc`'s
+"audits-are-clean-so-compress" anti-pattern warns against. The
+disposition is "find the non-determinism source and remove it." The
+property test stays.
+
+### 5.11.2 `debug_assert!` discipline for unsafe allocation sites
+
+**Problem.** Phase 2c's two carve-outs from `#![deny(unsafe_code)]`
+are `Box::new_zeroed_slice` calls (one in `Cache::derive` for the
+~256 MB cache buffer; one in `VmState::new` for the 2 MB scratchpad).
+Each call is followed by `assume_init_slice` (or equivalent) that
+trusts the allocation size matches `CACHE_SIZE` / `SCRATCHPAD_L3`.
+If a future refactor drifts the size constant in one place without
+updating the unsafe site (e.g., `RANDOMX_CACHE_SIZE` changes but the
+`Box::new_zeroed_slice(2 * 1024 * 1024)` literal stays the same),
+the allocated buffer's actual length disagrees with downstream code's
+indexing expectations. Downstream indexing reads past the actual
+allocation. Subtle, not caught by `cargo test` if the indexing
+happens to stay in-bounds of the wrong-but-still-allocated region.
+
+**Disposition.** Each `Box::new_zeroed_slice` site gains a
+`debug_assert_eq!(allocation.len(), EXPECTED_SIZE)` immediately after
+`assume_init_slice` (or the equivalent `MaybeUninit::assume_init`
+shape that 2c's implementation actually uses), before any indexing.
+`EXPECTED_SIZE` is the same constant the `Box::new_zeroed_slice` call
+used (so the assertion fires only if the constant is drifted in one
+place without the other). In debug builds this catches size-constant
+drift in CI; in release builds (production) the assertion compiles
+out, so there is no per-call overhead.
+
+The `// SAFETY:` doc-comment template for both sites carries the
+discipline as a required item:
+
+```rust
+// SAFETY:
+// - <reason the allocation+assume_init pair is sound>
+// - Size invariant: `allocation.len() == EXPECTED_SIZE` per the
+//   `debug_assert_eq!` immediately below; in release builds this
+//   assertion compiles out, leaving the wrap zero-overhead, but in
+//   debug builds (CI) it catches size-constant drift before any
+//   indexing reads past the actual allocation.
+let allocation = unsafe { ... };
+debug_assert_eq!(allocation.len(), EXPECTED_SIZE);
+```
+
+**Cost.** ~5 LoC per site × 2 sites = ~10 LoC; absorbed into commit 2
+(cache site) and commit 4 (scratchpad site).
+
+**Reopening criterion.** If a future contributor argues for removing
+the `debug_assert!` because "we have other tests that would catch
+the bug," the reopening criterion is whether those other tests
+actually exercise the size-drift path (typically they don't — the
+T1–T8 corpus uses the same constants the allocation does, so a
+drift that affects both equally is invisible). Per
+`16-architectural-inheritance.mdc`'s "audits-are-clean-so-compress"
+anti-pattern, the discipline doesn't get to coast.
+
+### 5.11.3 Debug-vs-release equivalence as PR gate
+
+**Problem.** Rust's integer-overflow behavior differs between debug
+(panic) and release (two's-complement wrap). The verifier ships
+release. If a future maintainer runs `cargo test` in debug mode and
+sees green, but the release build of the same code produces a
+different hash for some input, the maintainer's local validation
+disagrees with what ships. This is a class of consensus-split bug
+that's invisible to default `cargo test`.
+
+The mechanism is mechanical: 2c contains integer arithmetic in
+`Cache::derive_item`'s superscalar-hash chain (8 × 8-register
+`u64` programs) and in the `dispatch_instruction` body's eventual
+2d integer opcodes. Any wrapping arithmetic that uses Rust's
+`wrapping_*` methods is consistent across profiles; any arithmetic
+that uses `+` / `*` directly will panic in debug and wrap in
+release on the same overflow input. If 2c's code accidentally uses
+`+` where it should use `wrapping_add`, the bug is invisible until
+the release build hits a real-world overflow input.
+
+**Disposition.** The 2c implementation PR's `cargo test` invocation
+in CI runs both `cargo test -p shekyl-pow-randomx --all-features`
+(debug) **and** `cargo test -p shekyl-pow-randomx --all-features
+--release` (release). The release run asserts identical T1–T8
+outputs to the debug run (they share the same reference vectors;
+both must pass byte-equality against the generator output). Any
+divergence between profiles fails the PR.
+
+CI workflow line addition (~1 line in the existing
+`Rust: audit, test, determinism` workflow). The release build
+takes longer than debug, but compilation is already incremental
+across the workflow steps, so the cost is bounded by ~30 s additional
+wall time per CI run. Acceptable for the security property gained.
+
+**Cost.** 1 line in the CI workflow file. The 2c implementation PR
+adds it as part of the in-file-discipline exception (the workflow
+file is already edited for Phase 2c reasons; the additional line
+fits the exception).
+
+**Reopening criterion.** If CI infrastructure ever moves to a
+release-only test pipeline (e.g., a future "all tests run release
+by default" workflow change), the debug-vs-release gate becomes
+redundant in that pipeline. At that point the disposition is to
+either (a) keep the explicit dual run for the security property
+(debug catches integer-overflow panics that release silently
+wraps), or (b) document the change in the plan doc and accept the
+reduction. Don't silently drop the gate.
+
+### 5.11.4 Public-input-only scope note
+
+**Problem.** RandomX `compute_hash` operates on public inputs
+(seedhash + block-header bytes). Allocator-pressure patterns (e.g.,
+the cache-line residency of the scratchpad after a given execution
+path) could in principle leak information about input distributions
+through cache-line timing. For public-input use, this is not a
+threat — the inputs are already public. For hypothetical future
+secret-input use (e.g., a wallet hashing private material with a
+RandomX-shaped construction), it would be a threat.
+
+**Disposition.** Add a scope-bounding note to `cache.rs` and `vm.rs`
+crate-level doc-comments stating:
+
+> This crate is designed for public-input verification (block PoW).
+> Secret-input use would require a separate threat model addressing
+> allocator-pressure side channels, scratchpad cache-line residency,
+> and per-iteration timing variance. No current or planned consumer
+> uses this crate with secret material.
+
+**Cost.** ~6 lines of doc-comment. No code change.
+
+**Reopening criterion.** If a future consumer proposes using
+`shekyl-pow-randomx` with secret material (a wallet KDF, a
+ProofOfWork-shaped commitment scheme over private inputs, etc.),
+the reopening criterion is "draft a separate threat model addressing
+the side-channel surfaces this crate's design did not consider."
+Per `21-reversion-clause-discipline.mdc`, this is a substrate-shift
+trigger (consumer class changes), not a preference-trigger.
+
+### 5.11.5 Forward-actions to Phase 2g (adversarial corpus + worst-case timing)
+
+The Phase 2g differential harness corpus is a sampled set of
+`(seedhash, data)` inputs; sampling catches statistically-common
+bugs but misses adversarially-crafted inputs. Two forward-actions:
+
+- **Adversarial seedhash corpus**: 2g selects 5–10 seedhashes
+  specifically chosen to produce programs that exercise rare paths:
+  programs heavy in CFROUND (per-iteration rounding-mode thrash),
+  heavy in FDIV_M (per-iteration FP division with mask), heavy in
+  cache-miss-shaped scratchpad access patterns, heavy in CBRANCH
+  (branch-misprediction-shaped dispatch). The corpus runs the T1–T8
+  matrix (and 2d's T9+ per-opcode tests) plus the differential
+  harness against each adversarial seedhash. Assertions: byte-equality
+  against C reference per (seedhash, data) pair; per-hash latency
+  within budget (see worst-case bound below) for each pair.
+- **Pathological-program worst-case timing bound**: Phase 0's ≤3.0×
+  C-reference per-hash budget is an average across benign inputs.
+  2g adds a worst-case bound (parent plan §6 carries the constant;
+  Round 4 sibling commit lands the constant) tested against the
+  adversarial corpus. If the worst case exceeds the bound, the
+  verifier can be CPU-DoS'd by miners grinding seedhashes to find
+  pathological programs.
+
+The 2g plan-doc (when drafted) carries these forward-actions
+verbatim and selects the specific seedhash corpus. The criteria for
+"this seedhash is adversarial enough to include" are part of 2g's
+Round 1.
+
+### 5.11.6 Forward-actions to Phase 3a (FFI boundary hardening)
+
+Phase 3a wires `shekyl-ffi::shekyl_pow_randomx_v2_hash` over
+`shekyl-pow-randomx::compute_hash` per the §13 R3-minor-1 FFI
+layering note. Round 4 expands that note with three FFI-boundary
+hardening forward-actions:
+
+- **Null-pointer validation**: the FFI shim explicitly checks
+  `seedhash`, `data`, and `out` for null before constructing slices
+  or dereferencing. Even `slice::from_raw_parts(ptr::null(), 0)` is
+  UB in Rust, so the check is mandatory regardless of length. Null
+  on any of the three pointers translates to a new error code
+  `ERR_NULL_PTR (-2)` (or whatever value Phase 3a's taxonomy
+  assigns); the LWMA-1 FFI precedent has the same shape and is the
+  template.
+- **Length validation against a published maximum**: `data_len` is
+  validated against `RANDOMX_BLOCK_TEMPLATE_MAX_SIZE` (or the
+  Shekyl-side equivalent constant; parent plan §5 Round 4 pins the
+  constant). If `data_len > MAX`, the FFI shim returns
+  `ERR_LENGTH_EXCEEDED` (or equivalent) without constructing the
+  slice. The check defends against a hostile C++ caller passing
+  `data_len` that overruns the actual buffer; even though the C++
+  side is the trust boundary in principle, defense-in-depth at the
+  FFI shim is the discipline.
+- **`seedhash` as typed-array pointer**: the FFI signature is
+  `seedhash: *const [u8; 32]` (a pointer to a typed array) rather
+  than `seedhash: *const u8` (an untyped pointer relying on
+  documentation to claim 32-byte length). The type system enforces
+  the length at the shim's compile time, eliminating the class of
+  bugs where a caller passes a shorter buffer and Rust reads past
+  the end.
+
+All three are 3a-implementation-time discipline notes; the parent
+plan §5 Round 4 amendment pins the `RANDOMX_BLOCK_TEMPLATE_MAX_SIZE`
+constant value and the `ERR_NULL_PTR` taxonomy entry so 3a doesn't
+re-litigate them.
+
+### 5.11.7 Forward-actions to Phase 2f (CacheStore + VmState pool)
+
+Two forward-actions sized for the 2f plan doc:
+
+- **CacheStore canonical-slot eviction-protection**: Decision #6's
+  capacity-2 LRU `CacheStore` is small enough that an attacker who
+  can submit alt-chain block headers with novel seedhashes can flush
+  the canonical-seedhash slot with a 3-seedhash interleave, forcing
+  ~150-200 ms of cache re-derivation per attack block. The forward-
+  action: the canonical-seedhash slot (the seedhash for the current
+  chain tip's epoch) is **sticky** — it is not subject to LRU
+  eviction; only the secondary slot churns under attacker-induced
+  pressure. The 2f plan doc Round 1 enumerates the mechanism
+  (explicit "pinned slot" + "transient slot" rather than
+  capacity-2 LRU; or capacity-2 LRU with a `pin(seedhash)` API the
+  daemon calls when it learns a new canonical seedhash). Parent
+  plan Decision #6 Round 4 carries the disposition note.
+- **`VmState` pool capacity sized against daemon parallel-verification
+  fanout**: Decision #7 (Round 2 substrate-shift form) makes
+  `VmState` pooling internal to `compute_hash`. If 2f's benchmarks
+  show pooling is needed, the pool's capacity must be sized against
+  the daemon's actual parallel-verification fanout (alt-chain branch
+  validation runs in parallel; mempool tx verification runs in
+  parallel). An arbitrarily-chosen capacity either under-provisions
+  (pool exhaustion forces per-call allocation, defeating the pool)
+  or over-provisions (memory waste). The 2f plan doc Round 1
+  enumerates the daemon's actual parallel-verification fanout (via
+  a daemon-side code survey or runtime measurement) and sizes the
+  pool accordingly. Parent plan Decision #7 Round 4 carries the
+  discipline note.
+
+### 5.11.8 Audit-against-actual-code discipline (mp-correction validation)
+
+**Observation.** Round 3's `VmState` field-set audit (§5.1.1) caught
+one correction-from-prompt finding: the earlier `mp` row in the
+field-set table was speculative (transcribed from an expected-behavior
+prompt), and the audit against `vm_interpreted.cpp` and `common.hpp`
+revealed `mp` is a v2-only local-variable alias for `mem.ma`, not a
+struct field. The discipline that found it — **audit-against-actual-
+code, not against documentation or prompted lists** — is the
+discipline that prevents the same class of bug shipping as a
+consensus-split source.
+
+Had the Rust port shipped `state.mp: u32` synced to `state.ma`, the
+verifier might have produced subtly different behavior in some
+opcode path that read `mp` directly vs. reading `ma` — exactly the
+shape of Objective 6 (consensus split via implementation divergence).
+The bug would have been invisible to T1–T8 (which test structural
+correctness against generator output; the generator would have used
+`mem.ma` everywhere, matching the C reference, and the Rust port's
+`state.mp` divergence would have flowed through the F/E AES mix
+silently). It would have surfaced only as a chain split between
+Rust verifiers and C miners on inputs where the divergent code path
+fired.
+
+**Disposition (discipline note, not in-scope).** The audit-against-
+source discipline is the operational form of Round 4 against
+Objective 6. For every `VmState` field, `Instruction` field,
+`Cache` accessor, and `compute_hash` operation in 2c's
+implementation PR, the reviewer's check is:
+
+> Is this field/operation present in the C reference at the pinned
+> commit? Does its semantic match the C reference's? Or is it a
+> prompted-list speculation that drifted from the reference?
+
+The §5.1.1 audit-grep command (`grep -nE 'static void exe_'
+external/randomx-v2/src/bytecode_machine.hpp`) is the operational
+form for the bytecode dispatch surface; the Round 4 expansion is to
+apply the same discipline at every other 2c surface (Cache
+construction, scratchpad init, register init, F/E AES mix,
+finalization). The discipline is not "trust the plan doc's tables"
+— the plan doc's tables are the audit's output; the audit's input
+is the C reference source.
+
+**Forward propagation.** 2d's §1.3 audit re-verification (per
+`RANDOMX_V2_PHASE2D_PLAN.md` §1) carries the discipline forward to
+the dispatch surface; 2g's differential harness is the eventual
+empirical check (byte-equality against the C reference for both
+sampled and adversarial inputs). The discipline applies at each
+PR's design time; 2g's harness is the safety net for cases where
+the plan-doc-time discipline missed something.
+
+**No new code; no plan-doc change beyond this section.** The
+discipline already exists; this section names it explicitly so 2d/2g
+PRs inherit it as a discipline note rather than as a precedent the
+authors have to re-derive.
+
 ## 6. Test strategy
 
 Eight named spec-vector tests per the F7 matrix above. Each test:
@@ -971,6 +1354,32 @@ size, register count, dataset-item byte offset arithmetic). These
 are coarse functional tests, not spec-vector parity — they catch
 implementation-side bugs that the spec-vectors would only catch via
 the full T1–T8 run.
+
+**Round 4 additions — determinism property tests (§5.11.1).** Two
+sibling tests extend the T1/T2 spec-vector coverage with
+non-determinism-detecting properties:
+
+- **T1' (`tests/cache/t1_prime_determinism.rs`)**: three sub-tests
+  exercising single-thread loop (100 iterations), concurrent
+  threads (4 × 25), and interleaved seedhash patterns; all assert
+  byte-identity across runs and against T1's reference vector.
+- **T2' (`tests/cache/t2_prime_invariance.rs`)**: one sub-test per
+  item_number in T2's 8-input set; each runs 10 interleaved
+  `derive_item` calls per item_number with varying intervening
+  calls; asserts byte-identity across runs and against T2's
+  reference vector.
+
+T1' and T2' are CI-gated. Failure fails the PR. They sit alongside
+T1/T2 in `tests/cache/`; both file naming and `cargo test` discovery
+respect the per-test-file convention from Phase 2b.
+
+**Round 4 additions — debug-vs-release equivalence (§5.11.3).** The
+CI workflow runs both debug (`cargo test`) and release
+(`cargo test --release`) profiles of the T1–T8 corpus (plus T1'/T2')
+and asserts byte-identity between profiles. Any divergence fails the
+PR. This catches integer-overflow-semantics drift between profiles
+(Rust panics in debug, wraps in release) that default `cargo test`
+would silently let ship in release builds.
 
 ## 7. Reference-vector generator (F6 details)
 
@@ -1060,15 +1469,15 @@ finding):
 | # | Commit | LoC budget | Section reference |
 |---|--------|-----------|-------------------|
 | 1 | `randomx: Cache type skeleton + size constants + Drop` | ~80 LoC | §3 module layout, §2 surface 1 |
-| 2 | `randomx: Cache::derive + pub(crate) Cache::from_raw + cache.rs tests` | ~250 LoC | §5.4, §5.9, §6 T1 |
-| 3 | `randomx: Cache::derive_item + item_bytes accessor + T2 tests` | ~150 LoC | §4.3, §5.4, §6 T2 |
-| 4 | `randomx: VmState skeleton + scratchpad/register-file alloc + Drop` | ~120 LoC | §3, §2 surface 3 |
+| 2 | `randomx: Cache::derive + pub(crate) Cache::from_raw + T1 + T1' determinism + cache-site debug_assert!` | ~290 LoC | §5.4, §5.9, §6 T1, §5.11.1 T1', §5.11.2 |
+| 3 | `randomx: Cache::derive_item + item_bytes accessor + T2 + T2' invariance` | ~180 LoC | §4.3, §5.4, §6 T2, §5.11.1 T2' |
+| 4 | `randomx: VmState skeleton + scratchpad/register-file alloc + scratchpad debug_assert! + Drop` | ~125 LoC | §3, §2 surface 3, §5.11.2 |
 | 5 | `randomx: VmState::initialize with register/program init (T3-T5)` | ~180 LoC | §6 T3-T5 |
 | 6 | `randomx: compute_hash with dispatch_instruction NOP body + spec vectors (T6-T8)` | ~200 LoC | §5.1, §5.7, §6 T6-T8 |
 | 7 | `randomx: Phase 2c reference vector generator (T1-T8)` | ~400 LoC | §5.6, §7 |
-| 8 | `randomx: Phase 2c benchmarks + per_hash_latency placeholder + BENCH_RESULTS.md + CHANGELOG` | ~170 LoC | §5.8, §8, §13 forward-path 2g |
+| 8 | `randomx: Phase 2c benchmarks + per_hash_latency placeholder + debug-vs-release CI gate + scope-bounding doc-comments + BENCH_RESULTS.md + CHANGELOG` | ~180 LoC | §5.8, §8, §13 forward-path 2g, §5.11.3, §5.11.4 |
 
-Total ≈ 1550 LoC, comfortably below the §"Scope envelope" 1800 LoC
+Total ≈ 1635 LoC, comfortably below the §"Scope envelope" 1800 LoC
 target. The Round 2 collapse (5 vm-side files → 1 vm.rs) shaved
 ~150 LoC of module-boundary boilerplate vs. Round 1's first-draft
 estimate. Commit 8 carries a ~20 LoC bump vs. Round 2's first-draft
@@ -1076,6 +1485,9 @@ to land the R3-minor-2 `tests/perf/per_hash_latency.rs` placeholder
 (`#[ignore]` + `unimplemented!()` cross-referencing F8 / §13 2g
 inheritance; the deferred-action becomes structural code rather
 than plan-doc prose 2g's author has to remember to consult).
+Round 4 absorbs ~85 LoC additional across commits 2 (T1' + cache
+`debug_assert!`), 3 (T2'), 4 (scratchpad `debug_assert!`), and 8
+(debug-vs-release CI line + public-input-only doc-comments).
 Generator C++ + CMake (~450 LoC) is separate from the Rust LoC
 count.
 
@@ -1086,8 +1498,13 @@ PR-merge gates (CI-enforced):
 - `cargo fmt --check` (all Rust passes; rustfmt regression-free per
   Phase 2b's commit 28d9a336f precedent).
 - `cargo clippy --workspace --all-targets -- -D warnings`.
-- `cargo test -p shekyl-pow-randomx --all-features` (T1–T8 + unit
-  tests all pass).
+- `cargo test -p shekyl-pow-randomx --all-features` (T1–T8 plus
+  T1' / T2' plus unit tests all pass under debug profile).
+- **`cargo test -p shekyl-pow-randomx --all-features --release`**
+  (Round 4 §5.11.3 addition: same T1–T8 / T1' / T2' corpus runs
+  under release profile; byte-equality assertions in those tests
+  fail the PR if release output diverges from debug output. Catches
+  integer-overflow-semantics drift between profiles.)
 - `cargo doc -p shekyl-pow-randomx --no-deps` (rustdoc clean).
 - `Lint: no debug macros in production Rust` (workflow already in
   CI; zero hits expected).
@@ -1119,7 +1536,9 @@ No nightly-only APIs. MSRV stays at 1.85 (no bump).
 | `src/vm.rs` | ~250 | `pub compute_hash` + `pub(crate) VmState` + private `dispatch_instruction` (NOP body) + scratchpad/register helpers all in one file |
 | `src/lib.rs` | ~10 (delta) | `mod cache; mod vm;` + re-exports `Cache` and `compute_hash` |
 | `tests/cache/t1_cache_derive.rs` | ~80 | T1 spec-vector test |
+| `tests/cache/t1_prime_determinism.rs` | ~40 | R4 §5.11.1: T1' determinism property (3 sub-tests) |
 | `tests/cache/t2_derive_item.rs` | ~100 | T2 spec-vector test |
+| `tests/cache/t2_prime_invariance.rs` | ~30 | R4 §5.11.1: T2' invariance property (per-item interleaved-call) |
 | `tests/vm/t3_scratchpad_init.rs` | ~60 | T3 spec-vector test |
 | `tests/vm/t4_register_init.rs` | ~60 | T4 spec-vector test |
 | `tests/vm/t5_program_parse.rs` | ~60 | T5 spec-vector test |
@@ -1131,7 +1550,8 @@ No nightly-only APIs. MSRV stays at 1.85 (no bump).
 | `tests/perf/per_hash_latency.rs` | ~20 | R3-minor-2 placeholder (`#[ignore]` + `unimplemented!()`); populated in 2g |
 | `BENCH_RESULTS.md` | ~30 | baseline numbers |
 | `CHANGELOG.md` delta | ~15 | one entry |
-| **Rust total** | ~1363 | inside ≤1800 envelope; ~140 LoC under Round 1 first-draft estimate (vm/ module-boundary boilerplate eliminated); +20 LoC for R3-minor-2 placeholder |
+| `.github/workflows/...` delta | ~1 | R4 §5.11.3: `cargo test --release` line in existing Rust workflow |
+| **Rust total** | ~1444 | inside ≤1800 envelope; ~140 LoC under Round 1 first-draft estimate (vm/ module-boundary boilerplate eliminated); +20 LoC for R3-minor-2 placeholder; +80 LoC for R4 §5.11.1 + §5.11.2 + §5.11.3 + §5.11.4 (`debug_assert!` discipline absorbed into cache.rs and vm.rs LoC budgets above) |
 | `_generator/phase2c/gen.cpp` | ~200 | C++ generator |
 | `_generator/phase2c/CMakeLists.txt` | ~250 | CMake plumbing |
 | `_generator/phase2c/README.md` | ~40 | build + reviewer notes |
@@ -1179,12 +1599,45 @@ Phase 2c lands the cache + VM substrate; downstream phases inherit:
     Decision #7 (Round 2 substrate-shift form): per-call allocation
     is the default; pooling, if needed, is internal to
     `compute_hash`.
+  - **R4 §5.11.7: CacheStore canonical-slot eviction-protection.**
+    The capacity-2 LRU `CacheStore` is small enough that an
+    attacker can flush the canonical-seedhash slot with a
+    3-seedhash interleave (alt-chain block headers with novel
+    seedhashes), forcing ~150-200 ms cache re-derivation per
+    attack block. 2f's Round 1 decision point: implement the
+    canonical-seedhash slot as **sticky** (not subject to LRU
+    eviction); only the secondary slot churns under attacker-induced
+    pressure. Mechanism is 2f's call (explicit
+    pinned-slot + transient-slot, or `pin(seedhash)` API on the
+    capacity-2 LRU). Parent plan Decision #6 R4 carries the
+    discipline note.
+  - **R4 §5.11.7: `VmState` pool capacity sized against daemon
+    parallel-verification fanout.** If 2f's benchmarks show pooling
+    is needed, the pool capacity must be sized against the daemon's
+    actual parallel-verification fanout (alt-chain branch validation
+    plus mempool tx verification), not chosen arbitrarily. 2f
+    Round 1 enumerates the fanout via daemon-side code survey or
+    runtime measurement and sizes the pool accordingly. Parent
+    plan Decision #7 R4 carries the discipline note.
 
 - **2g** inherits:
   - Differential-harness test corpus uses real cache + real
     dispatch (2g lands after 2d).
   - Per-hash latency benchmark placement
     (`tests/perf/per_hash_latency.rs`) + release-gate cadence.
+  - **R4 §5.11.5: adversarial seedhash corpus.** 2g selects 5–10
+    seedhashes specifically chosen to produce programs heavy in
+    CFROUND, FDIV_M, cache-miss-shaped scratchpad access, and
+    CBRANCH. The corpus runs T1–T8 (and 2d's T9+ per-opcode tests)
+    plus the differential harness against each adversarial
+    seedhash. Selection criteria are part of 2g's Round 1.
+  - **R4 §5.11.5: pathological-program worst-case timing bound.**
+    Phase 0's ≤3.0× C-reference budget is the average across
+    benign inputs. 2g asserts a worst-case bound (parent plan §6
+    R4 carries the constant) against the adversarial corpus. If
+    the worst case exceeds the bound, the verifier is exposed to
+    CPU-DoS by miners grinding seedhashes for pathological
+    programs.
 
 - **3a** inherits:
   - `Cache` (the `pub fn derive` constructor) + `compute_hash` (the
@@ -1194,12 +1647,12 @@ Phase 2c lands the cache + VM substrate; downstream phases inherit:
     per request. `VmState` and `dispatch_instruction` remain
     invisible to the FFI consumer.
   - **FFI layering discipline (R3-minor-1).**
-    `shekyl_ffi::shekyl_pow_randomx_v2_hash(seedhash: *const u8,
-    data: *const u8, data_len: usize, out: *mut u8) -> i32` is a
-    **thin error-translation shim** over
+    `shekyl_ffi::shekyl_pow_randomx_v2_hash` is a **thin
+    error-translation shim** over
     `shekyl_pow_randomx::compute_hash`; no semantic logic lives in
-    the shim. The shim's body consists of: (a) `*const u8` →
-    `&[u8]` slice construction with null-pointer + length
+    the shim. The shim's body consists of: (a) `*const u8` /
+    `*const [u8; 32]` / `*mut u8` → `&[u8]` / `&[u8; 32]` /
+    `&mut [u8; 32]` slice construction with null-pointer + length
     validation, (b) a single `compute_hash(&cache, seedhash, data)`
     call, and (c) `i32` error-code translation (slice validation
     failures → negative error codes per `shekyl_ffi`'s existing
@@ -1215,6 +1668,24 @@ Phase 2c lands the cache + VM substrate; downstream phases inherit:
     failure-mode for `shekyl-ffi` cutovers per
     `36-secret-locality.mdc` (Rust owns secrets; FFI owns ABI
     translation only).
+  - **R4 §5.11.6: FFI boundary hardening** (three forward-actions,
+    each landed in 3a's implementation):
+    - **Null-pointer validation.** Each of `seedhash`, `data`,
+      `out` is checked for null before any dereference or slice
+      construction. `slice::from_raw_parts(ptr::null(), 0)` is UB
+      in Rust regardless of length; the check is mandatory.
+      Translates to `ERR_NULL_PTR (-2)` (or equivalent;
+      parent-plan §5 R4 pins the taxonomy value).
+    - **Length validation against `RANDOMX_BLOCK_TEMPLATE_MAX_SIZE`.**
+      `data_len` is validated against the max before slice
+      construction; oversize returns `ERR_LENGTH_EXCEEDED`. Parent
+      plan §5 R4 pins the constant value.
+    - **`seedhash` as typed-array pointer.** FFI signature uses
+      `seedhash: *const [u8; 32]` (typed-array pointer) rather
+      than `seedhash: *const u8` (untyped pointer relying on
+      documentation for length). The type system enforces the
+      32-byte length at the shim's compile time. Same shape applies
+      to `out: *mut [u8; 32]`.
 
 ## 14. Round history
 
@@ -1223,6 +1694,7 @@ Phase 2c lands the cache + VM substrate; downstream phases inherit:
 | Round 1 | 2026-05-21 | F1–F9 dispositions closed via interactive walk + ShekylU128 audit. F4 absorption surfaced as round-1 structural change requiring parent-plan revision (the first precursor commit on this branch). |
 | Round 2 | 2026-05-21 | Substrate-finding pass against the Round 1 plan-doc. Three structural restructurings landed within Round 1's locked dispositions: **(R2-D1)** `BytecodeDispatch` trait + `StubNopDispatch` impl → `dispatch_instruction` free function with NOP body replaced in 2d, eliminating the mock-X anti-pattern recurrence (§5.1 F1, §1 cross-cut). **(R2-D2)** `Vm<'a>` public type → `compute_hash` public transform with `VmState` private (§2 type table, §3 module layout collapse 5 files → 2 files, §13 forward-path updates for 2d/2f/3a). **(R2-D3)** `Cache::from_raw` visibility correction (`pub` → `pub(crate)`; test-time only, not FFI surface — §5.9 F9). Parent-plan alignment commit follows (Decision #7 substrate-shift per `21-reversion-clause-discipline.mdc`: `VmState` pooling becomes internal to `compute_hash`, not a public `VmPool` type). All three deliverables tighten the type-and-module shape inside the bounds Round 1's dispositions already established; no Round 1 disposition reopened. |
 | Round 3 | 2026-05-21 | Substrate-completeness pass against Round 2 plan-doc; close-out before implementation. **(R3-D1)** §5.1.1 "Function-body replacement contract" pins the 2c → 2d hand-off: frozen `dispatch_instruction` signature, frozen `Instruction` field set, and `VmState` field set populated empirically from an audit against `bytecode_machine.hpp`'s 29 opcode handlers + `vm_interpreted.cpp::execute()`. Audit produced one correction-from-prompted-list finding: `mp` is a v2-only local-variable alias for `mem.ma` per `vm_interpreted.cpp:89`, not a `MemoryRegisters` struct field; §5.5 F5 entry updated to match (existence disposition was wrong in Rounds 1–2; the v2-only Rust port introduces no `mp` field). Single-pass dispatch shape locked; IBC 2-pass form rejected with named reversion-clause criterion (reopen iff 2d benchmarks show single-pass cannot hit ≤3.0× Phase 0 budget AND profiling attributes shortfall to per-call decode cost). **(R3-minor-1)** §13 3a inheritance gains an FFI layering discipline note: `shekyl_pow_randomx_v2_hash` is a thin error-translation shim over `compute_hash`; no semantic logic in the FFI boundary; shim body ≤30 LoC. **(R3-minor-2)** §9 commit 8 + §15 PR template + §12 forecast envelope add the `tests/perf/per_hash_latency.rs` placeholder (`#[ignore]` + `unimplemented!()` cross-referencing F8 / §13 2g inheritance); structural code out-survives prose deferral. **(R3-D3)** Sibling commit lands `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` skeleton scaffold: §5.1.1 contract carry-forward, VmState field-set reference, forward-actions accumulated from F1/F2/F3/F5/F7, decision points for 2d Round 1 (FPU rounding-mode mechanism; F128 newtype shape; per-opcode dispatch shape). All Round 3 deliverables remain within Round 2's locked dispositions; no Round 2 or Round 1 disposition reopened. Target ≤1 round met. |
+| Round 4 | 2026-05-21 | Threat-model addenda pass against the Round 3 plan-doc; priority-1 (per `00-mission.mdc`) adversarial review enumerating six attack objectives (mining-faster differential; cache poisoning; FFI exploitation; resource DoS; Rust safety boundary gaps; consensus split via implementation divergence). New §5.11 records eight findings + dispositions. **In-scope 2c-implementation additions:** §5.11.1 T1' (`Cache::derive` determinism property — single-thread loop, concurrent threads, interleaved seedhash) + T2' (`derive_item` invariance property), ~60 LoC in commits 2 and 3; §5.11.2 `debug_assert!` discipline at the two unsafe `Box::new_zeroed_slice` sites, ~10 LoC across commits 2 and 4; §5.11.3 debug-vs-release equivalence as PR gate (1 line in CI workflow + §10 gate entry); §5.11.4 public-input-only scope note in crate-level doc-comments. **Forward-actions to downstream phases:** §5.11.5 2g adversarial seedhash corpus + pathological-program worst-case timing bound; §5.11.6 3a FFI null-pointer + length-validation + `seedhash: *const [u8; 32]` typed-array pointer + `ERR_NULL_PTR` taxonomy; §5.11.7 2f CacheStore canonical-seedhash slot eviction-protection + `VmState` pool capacity sized against daemon parallel-verification fanout. **Discipline note:** §5.11.8 audit-against-actual-code validation (the discipline that produced R3-D1's `mp` correction is the discipline 2d/2g inherit for their own surfaces). Parent plan alignment ships as a sibling commit on this branch (Decision #6 R4 carries CacheStore eviction-protection note; Decision #7 R4 carries VmState pool sizing note; Phase 0 §5 R4 pins `RANDOMX_BLOCK_TEMPLATE_MAX_SIZE` and `ERR_NULL_PTR` taxonomy + `*const [u8; 32]` signature; Phase 0 §6 R4 adds worst-case ≤5.0× timing bound; Risk acknowledgments R4 adds a Rust-vs-C edge-case differential bullet). The 2d skeleton scaffold gets a sibling commit adding §2 F7 per-rounding-mode coverage forward-action, §3.1 unsafe-block scope-check discipline, and §4.1 u128/`__int128` edge-case differential discipline. All Round 4 additions remain within Round 1–3's locked dispositions; no prior disposition reopened. Target ≤1 round met. |
 
 ## 15. References to commit (Phase 2c PR description shape)
 
@@ -1252,7 +1724,8 @@ within Round 1's locked dispositions.
 
 - [x] `cargo fmt --check`
 - [x] `cargo clippy -- -D warnings`
-- [x] `cargo test -p shekyl-pow-randomx --all-features` (T1–T8 pass)
+- [x] `cargo test -p shekyl-pow-randomx --all-features` (T1–T8 + T1' + T2' pass under debug)
+- [x] `cargo test -p shekyl-pow-randomx --all-features --release` (same corpus passes under release; byte-identity vs. debug per §5.11.3)
 - [x] `cargo doc -p shekyl-pow-randomx --no-deps`
 - [x] `cache_derive` bench median ≤200 ms (see BENCH_RESULTS.md)
 - [x] `compute_hash_alloc` bench median ≤100 µs under stub-NOP dispatch (see BENCH_RESULTS.md)
@@ -1261,11 +1734,16 @@ within Round 1's locked dispositions.
 
 ## Test plan
 
-T1–T8 spec-vector parity (byte-equality against generator output).
-Plus per-component unit tests in `cache.rs` and `vm.rs`. Plus
+T1–T8 spec-vector parity (byte-equality against generator output)
+plus T1' / T2' determinism + invariance property tests
+(`tests/cache/t1_prime_determinism.rs`,
+`tests/cache/t2_prime_invariance.rs` — see §5.11.1). Plus
+per-component unit tests in `cache.rs` and `vm.rs`. Plus
 `tests/perf/per_hash_latency.rs` placeholder (`#[ignore]`'d; landed
 for 2g's per-hash latency benchmark — see RANDOMX_V2_PHASE2C_PLAN.md
-§8 placeholder sub-section).
+§8 placeholder sub-section). Debug-vs-release equivalence verified
+by running the full test suite under both profiles in CI
+(`cargo test` + `cargo test --release`; see §5.11.3).
 
 ## Forward path verification
 
@@ -1274,4 +1752,8 @@ for 2g's per-hash latency benchmark — see RANDOMX_V2_PHASE2C_PLAN.md
 - `VmState` field additions in 2d require audit-grep evidence per
   §5.1.1 reopening criterion.
 - `tests/perf/per_hash_latency.rs` body is replaced by 2g, not by 2d.
+- `debug_assert!` lines at the two `Box::new_zeroed_slice` sites are
+  preserved across 2d/2f refactors (see §5.11.2 discipline note).
+- Public-input-only scope notes in `cache.rs` and `vm.rs` crate-level
+  doc-comments are preserved across downstream phases (see §5.11.4).
 ```
