@@ -4,6 +4,54 @@
 
 ### Added
 
+- **RandomX v2 Track A Phase 2d implementation core landed**
+  (`feat/randomx-v2-phase2d`, 2026-05-22). Implements
+  [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
+  §3.5/§3.7 R1–R6 decisions on
+  [`rust/shekyl-pow-randomx`](../rust/shekyl-pow-randomx):
+  - **F128 newtype + integer helpers** (`bd7cea464`). Promotes the
+    Phase 2c `type F128 = [f64; 2]` alias to a `#[derive(Copy)]`
+    `struct F128([f64; 2])` carrying `add/sub/mul/div/sqrt/swap`
+    + FSCAL XOR-mask methods per §3.2 R1-D2. Adds private
+    `sign_extend_i32_to_i64`, `load64`/`store64`, `rotr`/`rotl`
+    helpers matching `instructions_portable.cpp` semantics. Quarantines
+    the FPU rounding-mode write in a new
+    [`fpu_rounding`](../rust/shekyl-pow-randomx/src/fpu_rounding.rs)
+    module (x86_64 `_mm_setcsr`, aarch64 `mrs/msr fpcr` inline asm)
+    per §3.1 R1-D1 / §3.7 R6-D1. Replaces the Phase 2c stub-NOP
+    `dispatch_instruction` body with a dense `match` on
+    `decode_instruction_type(opcode)` covering all 28 executable
+    opcodes plus CFROUND + CBRANCH, driven by a PC loop with
+    `Program.cbranch_table` static metadata populated during
+    `init_program` (§3.6 R2-D1/R2-D2/R2-D3). Promotes
+    `superscalar::{mulh, smulh_u64, randomx_reciprocal}` to
+    `pub(crate)` for IMULH/IMUL_RCP dispatch.
+  - **T16 real-dispatch hash vector + CI grep + FPU reset**
+    (`26fc49d6c`). Adds
+    [`tests/vectors/reference/vm/t16_vm_compute_hash_real.bin`](../rust/shekyl-pow-randomx/tests/vectors/reference/vm/t16_vm_compute_hash_real.bin)
+    emitted by the pinned fork's interpreted-light VM under
+    `RANDOMX_FLAG_V2` (§6.2 T16 / §8 commit 5b); Phase 2c's stub-NOP
+    T6/T7/T8 vectors are marked `#[ignore]` because real dispatch
+    mutates the register file before later iterations, so the
+    end-to-end T16 byte-equality supersedes them. Adds
+    [`scripts/ci/check_randomx_fpu_rounding.sh`](../scripts/ci/check_randomx_fpu_rounding.sh)
+    wired into the existing Lint job to enforce the §9 FPU
+    primitive scope (`_mm_setcsr` exactly once on x86_64, two
+    `asm!(` calls on aarch64, no `fesetround`). Restores FPU
+    rounding mode to round-to-nearest at `compute_hash` entry/exit
+    and around the `execute_program` determinism tests so the
+    process-wide MXCSR/FPCR mutation from CFROUND does not leak
+    across tests. Phase 2d post-dispatch `compute_hash_alloc::per_call`
+    measures 303.60 ms median (+2.6% vs. Phase 2c stub-NOP baseline
+    of 296.00 ms), under the §9 ±10% regression-trigger threshold
+    (`rust/shekyl-pow-randomx/BENCH_RESULTS.md`).
+
+  Outstanding before the implementation PR is openable per §8: T9–T15
+  spec-vector additions (single-opcode integer/FP smoke + 9 FP × 4
+  mode matrix + CFROUND throttle) emitted by a `phase2d/` generator
+  sibling. The remaining work is purely additive — T16 already
+  validates byte-equal hash output against the C reference end-to-end.
+
 - **Sub-PR design discipline rule** (PR #67, 2026-05-22). Promotes fourteen
   Phase 2c-emergent process disciplines from
   [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md)
