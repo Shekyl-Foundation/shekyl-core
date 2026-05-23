@@ -1,15 +1,35 @@
 # RandomX v2 — Track A Phase 2f plan
 
-**Status.** Scaffold landed 2026-05-23 on branch
+**Status.** **Round 3 closed + post-closure pins + post-closure
+pin refinements.** Scaffold landed 2026-05-23 on branch
 `chore/randomx-v2-phase2f-plan` post Phase 2d merge (PR #70 → `dev`
-merge commit `fb21909ff`). This document is the Round-0 substrate
-capture: it pins the carry-forwards from `RANDOMX_V2_PLAN.md` Decisions
-#6 / #7, from `RANDOMX_V2_PHASE2C_PLAN.md` §5.11.7, and from
-`RANDOMX_V2_PHASE2D_PLAN.md` §10; names the locked-by-2c/2d surface that
-2f inherits; and enumerates the Round 1 decision points without
-prematurely closing them. Round 1 (post-scaffold-merge) closes the
-decision points and lands the implementation hand-off contract on
-`feat/randomx-v2-phase2f-impl`.
+merge commit `fb21909ff`); subsequent rounds and post-closure
+amendments landed in-place against the same chore branch. Current
+state per §11 Round history: Round 1 closed the §3 decision
+points; Round 2 landed the architectural reframe (`PreparedCache`
++ `Seedhash` newtype; `Cache: pub → pub(crate)`; `compute_hash`
+signature change); Round 3 closed the refinement bundle (cfg-gated
+A/B bench; F1–F7 threat model; runtime-configurable pool capacity);
+post-closure pins + refinements specified the under-specified
+substrate the rounds left. The implementation hand-off contract is
+captured in §5; the implementation PR cuts from post-this-doc
+`dev` on `feat/randomx-v2-phase2f-impl`.
+
+**Reading order (audit trail).** §1.1 / §3.* / §11 each carry the
+scaffold-as-of-Round-0 / Round 1 framing as audit trail per
+`91-documentation-after-plans.mdc`, with Round 2 / Round 3 /
+post-closure-pin supersessions marked inline. Readers tracing
+the discipline's evolution read the rounds in chronological
+order; readers wanting current state read the latest-marked
+supersession in each section.
+
+**Original scaffold framing (preserved as audit trail).** The
+text below this paragraph through the end of the front-matter
+(`Parent plan` → `Out of scope`) is the scaffold-as-of-Round-0
+framing. Some claims (e.g., "no 2c or 2d public surface
+changes in 2f"; "≤600 net-new lines") are superseded by later
+rounds and are flagged inline below; the original framing is
+preserved so the discipline's evolution is auditable.
 
 **Parent plan.** [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md)
 §"Track A — Phase 2" sub-PR 2f scope (line 27):
@@ -48,8 +68,21 @@ The 2d implementation (PR #70) realized this: `compute_hash`'s
 signature is `pub fn compute_hash(&Cache, &[u8; 32], &[u8]) -> [u8;
 32]`, `VmState` is private to `vm.rs`, `dispatch_instruction` is
 private. 2f's CacheStore lives alongside this surface; the pool (if
-benchmarks justify it) lives *inside* `compute_hash`. No 2c or 2d
-public surface changes in 2f.
+benchmarks justify it) lives *inside* `compute_hash`.
+
+**Scaffold framing said: "No 2c or 2d public surface changes in
+2f." Round 2 supersedes** — the Round 2 architectural reframe
+(see §1.1 Round 2 amendment) intentionally amends the inherited
+2d public surface to close a consensus-correctness footgun the
+2d signature carried (caller-passed wrong cache for given
+seedhash → wrong hash). The amended public surface is `Seedhash`
+newtype + `PreparedCache` bundling + `compute_hash(&PreparedCache,
+&[u8])`; `Cache` transitions `pub → pub(crate)`. Per
+`16-architectural-inheritance.mdc` pre-genesis discount, the
+substrate correction lands in plan-doc Round 2 rather than in
+V3.x. The scaffold framing is preserved as audit trail; the
+inherited-as-of-2d surface was the right starting point even
+though Round 2 supersedes it.
 
 **Base commit.** `dev` at `fb21909ff` (PR #70 merge tip,
 2026-05-23). This doc's branch (`chore/randomx-v2-phase2f-plan`)
@@ -63,15 +96,27 @@ cuts from there; the Phase 2f implementation branch
 - `feat/randomx-v2-phase2f-impl` (implementation; cut from
   post-this-doc `dev`; not yet cut as of Scaffold close).
 
-**Scope envelope.** Single implementation PR. Target ≤600 lines of
-net-new Rust (CacheStore type + tests + benchmark harness + crate-
-invariant grep tests + optional VmState pool body if the bench result
-warrants it) + one new CI script (`scripts/ci/check_randomx_crate_invariants.sh`
-or equivalent — final name pinned at Round 1) + updates to
+**Scope envelope.** Single implementation PR. **Round 2 supersedes
+the original ≤600 net-new-lines target** — see §5.2 line-count
+table for the current per-item budget (~800 net-new lines after
+the Round 2 `Seedhash` newtype + `PreparedCache` + atomic-sweep
+additions; ~50–150 additional lines if the R1-D3 cfg-gated pool
+flips to production per the bench result). The scaffold-original
+≤600 figure is preserved here as audit trail; the load-bearing
+budget is §5.2's table.
+
+Surface: CacheStore type + tests + benchmark harness + crate-
+invariant grep tests + cfg-gated `VmState` pool body (per Round 3
+§3.3 reframe) + Round-2-introduced `Seedhash` newtype +
+`PreparedCache` + atomic Seedhash sweep + one new CI script
+(`scripts/ci/check_randomx_crate_invariants.sh` or equivalent —
+final name pinned at Round 1) + updates to
 `rust/shekyl-pow-randomx/BENCH_RESULTS.md`. **No consensus-affecting
 changes; no new reference vectors; no fork-pin advance.** 2f is
-pure-utility + benchmark; the consensus surface was exhausted by 2d's
-T9–T16 + bench delta entries.
+pure-utility + benchmark + (Round 2) type-system reframe of the
+verifier's public surface; the consensus surface was exhausted by
+2d's T9–T16 + bench delta entries and Round 2's reframe is
+type-only (same hash outputs for same effective inputs).
 
 **Out of scope (deferred to subsequent phases).**
 

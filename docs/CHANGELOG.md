@@ -4,6 +4,69 @@
 
 ### Added
 
+- **RandomX v2 Track A Phase 2f — plan-doc front-matter staleness
+  corrections** (`chore/randomx-v2-phase2f-plan`, 2026-05-23).
+  Addresses PR #71 review findings (4 items, all header drift
+  between the scaffold-as-of-Round-0 framing and the post-Round-3
+  + post-closure-pin actual state). Per
+  `91-documentation-after-plans.mdc` audit-trail discipline, the
+  scaffold-original framing is preserved in place and the
+  superseding state is marked inline; this preserves the
+  discipline's evolution as auditable rather than flattening
+  history.
+
+  **(1) §Status block reframed.** The opening paragraph
+  previously described the doc as a "Round-0 substrate capture"
+  with Round 1 as the next deliverable. Reframed to "Round 3
+  closed + post-closure pins + post-closure pin refinements"
+  with a brief inventory of what each round / post-closure
+  amendment landed; readers wanting current state read the
+  status block, readers wanting evolution read §11 Round
+  history. Two new front-matter paragraphs (Reading order +
+  Original scaffold framing preserved) make the audit-trail
+  discipline explicit.
+
+  **(2) §front-matter "No 2c or 2d public surface changes in
+  2f" claim flagged as superseded.** The original claim was
+  correct as of the scaffold but is false post-Round-2 (which
+  intentionally amends the inherited 2d public surface to
+  close the consensus-correctness footgun the 2d signature
+  carried). The original claim is preserved as audit trail; a
+  Round-2-supersedes paragraph immediately follows it citing
+  `16-architectural-inheritance.mdc`'s pre-genesis discount
+  rationale for landing the substrate correction in plan-doc
+  Round 2 rather than V3.x.
+
+  **(3) §Scope envelope `≤600 net-new-lines` target flagged
+  as superseded.** Round 2's `Seedhash` newtype +
+  `PreparedCache` + atomic Seedhash sweep added ~200 net
+  lines per §5.2's line-count table (~800 net-new lines
+  total; ~50–150 additional if the R1-D3 cfg-gated pool flips
+  to production). The scaffold-original ≤600 figure is
+  preserved as audit trail; the load-bearing budget is §5.2's
+  per-item table.
+
+  **(4) CHANGELOG post-closure-pin-refinements entry
+  honestly framed.** The previous closing paragraph said "No
+  structural changes to Round 2 / Round 3 / post-closure-pin
+  dispositions; only narrower specifications" — but item (1)
+  in the same bullet is a narrow structural change to a
+  post-closure pin (reversing the pin-#2 framing on
+  `cache_ref()` in favor of an explicit accessor). Reworded
+  to "No changes to Round 2 / Round 3 dispositions. Item (1)
+  above is a narrow structural change to a post-closure pin
+  …; the other five items are narrower specifications of
+  pre-existing pins." This is the same shape as the
+  prediction-vs-measured discipline added in commit
+  `cb9dc0dd2`'s §8 framing — make the divergence visible
+  rather than letting it slip past.
+
+  No changes to plan-doc dispositions (Round 1 / Round 2 /
+  Round 3) or to post-closure pins (item-#1 reversal already
+  landed in commit `cb9dc0dd2`); these are framing-staleness
+  corrections only. No CI / code changes; PR #71 remains
+  doc-only.
+
 - **RandomX v2 Track A Phase 2f — post-closure pin refinements**
   (`chore/randomx-v2-phase2f-plan`, 2026-05-23). Companion
   commit to the post-closure substrate-completeness pins
@@ -105,12 +168,15 @@
   outputs as a backstop" — not "we test against the C reference"
   alone. Phase 2g's plan-doc inherits this framing.
 
-  No structural changes to Round 2 / Round 3 / post-closure-pin
-  dispositions; only narrower specifications of pre-existing
-  pins. Reopen criteria are substrate-anchored per the named
-  items; none anticipated. The chore branch holds Round 2 +
-  Round 3 + post-closure pins + post-closure pin refinements;
-  no push without separate authorization.
+  No changes to Round 2 / Round 3 dispositions. Item (1) above
+  is a narrow structural change to a post-closure pin (the
+  pin-#2 framing on `cache_ref()` is reversed in favor of an
+  explicit `pub(crate) fn cache_ref(&self) -> &Cache` accessor);
+  the other five items are narrower specifications of
+  pre-existing pins. Reopen criteria are substrate-anchored per
+  the named items; none anticipated. The chore branch holds
+  Round 2 + Round 3 + post-closure pins + post-closure pin
+  refinements; no push without separate authorization.
 
 - **RandomX v2 Track A Phase 2f — post-closure substrate-
   completeness pins** (`chore/randomx-v2-phase2f-plan`,
