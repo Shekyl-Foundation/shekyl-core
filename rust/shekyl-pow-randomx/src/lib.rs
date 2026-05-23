@@ -77,6 +77,16 @@
 //!   program init from entropy), and `dispatch_instruction(...)`
 //!   with a NOP body. Phase 2d replaces the dispatch body
 //!   in-place per §5.1.1 of the plan doc.
+//! - `src/cache_store.rs` — `pub CacheStore` capacity-2
+//!   sticky-canonical store landed by Phase 2F §3.1 Round 2.
+//!   Two slots ([`PreparedCache`]-typed canonical + transient)
+//!   plus an in-flight derivation map close the F1 (cache-
+//!   derivation DoS amplification) and F3 (thundering-herd) attack
+//!   classes; cleanup-on-publish closes F4 (unbounded in-flight
+//!   map growth). Internal synchronization uses per-slot
+//!   `RwLock<Option<Arc<PreparedCache>>>` plus
+//!   `Mutex<HashMap<Seedhash, Arc<DerivationSlot>>>` (no new
+//!   workspace dependency added).
 //! - `tests/vectors/reference/cache/` + `tests/vectors/reference/vm/`
 //!   — 8 reference vectors (T1: cache fingerprint; T2: dataset item
 //!   batch; T3-T8: VM scratchpad init, register init, program parse,
@@ -139,6 +149,7 @@ mod aes;
 mod argon2d;
 mod blake2_generator;
 mod cache;
+mod cache_store;
 pub(crate) mod fpu_rounding;
 mod prepared_cache;
 mod seedhash;
@@ -146,6 +157,7 @@ pub(crate) mod superscalar;
 mod vm;
 
 pub(crate) use cache::Cache;
+pub use cache_store::CacheStore;
 pub use prepared_cache::PreparedCache;
 pub use seedhash::Seedhash;
 pub use vm::compute_hash;
