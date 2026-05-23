@@ -4,6 +4,133 @@
 
 ### Added
 
+- **RandomX v2 Track A Phase 2f — Round 1 design closure**
+  (`chore/randomx-v2-phase2f-plan`, 2026-05-23). Closes Round 1 of
+  [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md)
+  six decision points after the 2026-05-23 scaffold (`f3da9f093`):
+  - **R1-D1 (CacheStore API surface):** picks option (b) explicit
+    two-slot type with `new` / `lookup` / `insert` / `set_canonical`.
+    Rejects (a) transparent memo on the basis that the F1 sticky-
+    canonical defense depends on the caller never letting the
+    canonical seedhash be evicted by routine `lookup` ordering;
+    folding the canonical-vs-transient distinction into the type
+    structurally enforces what (a) would push to caller discipline.
+    Rejects (c) type-stratified composition as over-provisioning at
+    capacity 2. Internal sync via `std::sync::Mutex` only — `lru` is
+    not a workspace dependency (verified at `rust/Cargo.toml`),
+    `parking_lot` is transitive-only via the existing
+    `criterion` / `tokio` paths, and a 2-slot store does not justify
+    pulling either into the direct dep set per
+    `17-dependency-discipline.mdc`. Frozen API code-block pinned in
+    `RANDOMX_V2_PHASE2F_PLAN.md` §3.1 Round 1 disposition; revert
+    criteria (substrate-anchored): a second Rust caller emerges
+    needing concurrent canonicality across multiple chains;
+    Decision #5 (FFI-locality) reverses; Phase 3a FFI shim survey
+    surfaces concurrency requirements incompatible with the two-
+    slot shape.
+  - **R1-D2 (eviction policy + interleave matrix):** policy falls
+    out of (b) — canonical slot is non-evictable, transient slot is
+    displace-on-insert, `set_canonical` advance promotes-from-
+    transient + demotes-prior. Cold-start window (no `set_canonical`
+    yet called) leaves both slots subject to attacker churn; bounded
+    to daemon startup and handled by the FFI shim's discipline (no
+    fallback policy in `CacheStore` itself). 11-row pre/post state-
+    transition table covering `RANDOMX_V2_PHASE2C_PLAN.md` §5.11.7
+    #1 3-seedhash interleave attack, the 2-seedhash cold-start
+    degenerate case, the canonical-advance demotion, and the no-op
+    cases. Reversion criteria tied to R1-D1.
+  - **R1-D3 (bench methodology for per-call `VmState` isolation):**
+    picks option (b) Component method. Rejects (a) Diff method
+    because the natural amortization shape requires either promoting
+    `VmState` to `pub` or adding a `pub fn compute_hash_with_state`
+    helper — both contradict `RANDOMX_V2_PHASE2F_PLAN.md` §1.1
+    (`VmState` is `pub(crate)`) and Decision #7 (no public `VmPool`).
+    Rejects (c) Population method per the scaffold's sequencing-
+    cycle note. Component sum: `Box::<[u8]>::new_zeroed_slice(2 MiB)`
+    median + synthetic register-file zero-init median (the bench
+    does not consume the production `VmState` newtype to keep
+    visibility clean); the sum is a *floor* on per-call alloc cost.
+    Bench code-block pinned in §3.3 Round 1 disposition. Revert
+    criteria: floor lands in [50, 100) µs ambiguity band per R1-D4
+    (would require option (a)'s tighter measurement); Decision #7
+    reverses; empirical evidence shows the component decomposition
+    systematically underestimates by > 30%.
+  - **R1-D4 (pool decision threshold + reversion clause):** confirms
+    the 100 µs threshold per `RANDOMX_V2_PLAN.md` line 240. Three-
+    band decision rule on the R1-D3 component-floor median: < 50 µs
+    → no pool (Branch A); [50, 100) µs → escalate to impl-PR pre-
+    flight per R1-D3 reversion-clause #1 (Branch B); ≥ 100 µs →
+    pool inside `compute_hash`, no public `VmPool`, capacity from
+    R1-D5 (Branch C). Reversion clauses for the no-pool path
+    enumerate substrate-anchored triggers (allocator regression;
+    scratchpad-size change at consensus level; runtime-architecture
+    mismatch).
+  - **R1-D5 (daemon parallel-verification fanout survey
+    methodology):** audit-against-actual-code per
+    `16-architectural-inheritance.mdc` against
+    `src/cryptonote_core/blockchain.cpp`,
+    `src/cryptonote_core/tx_pool.cpp`,
+    `src/cryptonote_core/cryptonote_tx_utils.cpp`,
+    `src/cryptonote_core/tx_pqc_verify.cpp`, and
+    `src/common/threadpool.{h,cpp}` at `dev` tip = `fb21909ff`.
+    Substrate correction vs. prompt: only **one** parallel
+    `compute_hash` call site exists at HEAD — alt-chain branch
+    validation's `block_longhash_worker` via
+    `tools::threadpool::getInstanceForCompute()`, capped by
+    `m_max_prepare_blocks_threads` (default 4). Mempool tx
+    verification does **not** call `compute_hash` in parallel; the
+    prompt's two-source assumption was incorrect. Pool capacity
+    formula: `min(threadpool::getInstanceForCompute().get_max_concurrency(),
+    m_max_prepare_blocks_threads) + 1` reserve. Reversion criteria:
+    a future PR introduces `tools::threadpool` + `compute_hash` in
+    `tx_pool.cpp` / `cryptonote_tx_utils.cpp` / `tx_pqc_verify.cpp`;
+    `m_max_prepare_blocks_threads` default change; Phase 3a FFI
+    shim survey reveals new concurrent consumer.
+  - **R1-E1 (CI grep pattern set + permitted exceptions):** three
+    patterns. Pattern A bans imports of `once_cell` / `lazy_static` /
+    `OnceLock` / `LazyLock` (stricter than module-level-static-only —
+    eliminates the disambiguation between module-level and function-
+    local usage by rejecting the import; the crate provably needs
+    none of these). Pattern B bans column-0 `static` declarations
+    (function-local statics are inside fn bodies and indented per
+    rustfmt; `const` items are a different keyword and not matched).
+    Pattern C bans `#[no_mangle]`, `#[unsafe(no_mangle)]`,
+    `#[export_name`, `#[unsafe(export_name`, and `extern "C" fn`
+    definition form (`extern "C" { fn foo(); }` import blocks
+    consuming external FFI surfaces are not matched since they
+    require `fn` *inside* the brace block, not after `"C"`). New
+    script `scripts/ci/check_randomx_crate_invariants.sh` modeled on
+    `scripts/ci/check_randomx_fpu_rounding.sh` from Phase 2d. CI
+    integration: new `.github/workflows/build.yml` step
+    `enforce RandomX crate-level isolation invariants` sibling to the
+    FPU step. **Substrate finding at verification:** pattern C's
+    first draft (anywhere-on-line match) collided with the existing
+    `lib.rs` rustdoc at lines 31–32, which legitimately cites the
+    forbidden tokens as part of the documented discipline.
+    Disposition: anchor pattern C at column 0 with optional leading
+    whitespace (matches code attributes indented inside fn bodies;
+    excludes rustdoc lines, which start with `//!`). Verified clean
+    baseline at HEAD post-fix across `rust/shekyl-pow-randomx/src/`.
+    Per-pattern reversion criteria: stdlib evolution producing
+    pattern A successor primitives; genuine large-immutable-shared-
+    state need motivating pattern B relaxation; Decision #5 (FFI-
+    locality) reversal motivating pattern C reopen.
+  - **Plan-doc edits:** §3.1–§3.6 each gain a Round 1 disposition
+    sub-block (preserving the scaffold's framing as audit-trail per
+    `91-documentation-after-plans.mdc`); §5 superseded by frozen-
+    surface contract (5.1 frozen items + 5.2 in-scope artifact
+    table + 5.3 out-of-scope re-emphasis); §6 superseded by the
+    7-row CacheStore unit-test table + 4-row CI-invariant table +
+    4-row bench-harness table; §8 superseded by the 5-commit table
+    with R1-D4 three-branch (A/B/C) conditional on commit 4; §11
+    Round history gains Round 1 row.
+  - Implementation deferred to `feat/randomx-v2-phase2f-impl` after
+    Round-N closure (target 4–6 rounds, matching Phase 2c/2d
+    cadence). Round 4 specifically does the threat-model addenda
+    pass against scaffold §4. Branch policy per
+    `06-branching.mdc` — chore branch is short-lived; commit not
+    pushed pending user authorization.
+
 - **RandomX v2 Track A Phase 2d implementation core landed**
   (`feat/randomx-v2-phase2d`, 2026-05-22). Implements
   [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
