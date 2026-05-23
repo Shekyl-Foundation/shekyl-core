@@ -1927,13 +1927,13 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
 
     match decode_instruction_type(instr.opcode) {
         InstructionType::IAddRs => {
-            let addend = state.r[src].wrapping_shl(mod_shift(instr)).wrapping_add(if dst
-                == REGISTER_NEEDS_DISPLACEMENT
-            {
-                imm
-            } else {
-                0
-            });
+            let addend = state.r[src].wrapping_shl(mod_shift(instr)).wrapping_add(
+                if dst == REGISTER_NEEDS_DISPLACEMENT {
+                    imm
+                } else {
+                    0
+                },
+            );
             state.r[dst] = state.r[dst].wrapping_add(addend);
         }
         InstructionType::IAddM => {
@@ -1982,9 +1982,8 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
         }
         InstructionType::IMulRcp => {
             if !is_zero_or_power_of_two(instr.imm32) {
-                state.r[dst] = state.r[dst].wrapping_mul(crate::superscalar::randomx_reciprocal(
-                    instr.imm32,
-                ));
+                state.r[dst] =
+                    state.r[dst].wrapping_mul(crate::superscalar::randomx_reciprocal(instr.imm32));
             }
         }
         InstructionType::INegR => {
@@ -2001,11 +2000,19 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
             state.r[dst] ^= value;
         }
         InstructionType::IRorR => {
-            let value = if src == dst { u64::from(instr.imm32) } else { state.r[src] };
+            let value = if src == dst {
+                u64::from(instr.imm32)
+            } else {
+                state.r[src]
+            };
             state.r[dst] = rotr(state.r[dst], (value & 63) as u32);
         }
         InstructionType::IRolR => {
-            let value = if src == dst { u64::from(instr.imm32) } else { state.r[src] };
+            let value = if src == dst {
+                u64::from(instr.imm32)
+            } else {
+                state.r[src]
+            };
             state.r[dst] = rotl(state.r[dst], (value & 63) as u32);
         }
         InstructionType::ISwapR => {
@@ -3460,10 +3467,7 @@ mod tests {
         [0x400C_0000_0000_0000, 0x4010_0000_0000_0000],
     ];
 
-    const CANONICAL_E_MASK_PD: [u64; 2] = [
-        0x3FF0_0000_0000_0000,
-        0x4000_0000_0000_0000,
-    ];
+    const CANONICAL_E_MASK_PD: [u64; 2] = [0x3FF0_0000_0000_0000, 0x4000_0000_0000_0000];
 
     /// Materialize a fresh [`VmState`] populated with the Phase 2d
     /// canonical register file + scratchpad fixture. Mirrors
