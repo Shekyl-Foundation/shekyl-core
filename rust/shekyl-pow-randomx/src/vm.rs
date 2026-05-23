@@ -699,7 +699,6 @@ fn aes_bytes_to_f128(bytes: &[u8; 16]) -> F128 {
 ///
 /// Mirrors `signExtend2sCompl` / IMM32 handling in
 /// `bytecode_machine.cpp` operand decode at pin `aaafe71`.
-#[allow(dead_code)]
 #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 pub(crate) const fn sign_extend_i32_to_i64(x: u32) -> u64 {
     (x as i32 as i64) as u64
@@ -776,7 +775,6 @@ fn decode_instruction_type(opcode: u8) -> InstructionType {
 ///
 /// Mirrors `load64` in `external/randomx-v2/src/blake2/endian.h` at
 /// pin `aaafe71` (native little-endian on verifier targets).
-#[allow(dead_code)]
 pub(crate) fn load64(addr: &[u8]) -> u64 {
     let bytes: [u8; 8] = addr[..8].try_into().expect("load64 requires 8 bytes");
     u64::from_le_bytes(bytes)
@@ -786,7 +784,6 @@ pub(crate) fn load64(addr: &[u8]) -> u64 {
 ///
 /// Mirrors `store64` in `external/randomx-v2/src/blake2/endian.h` at
 /// pin `aaafe71`.
-#[allow(dead_code)]
 pub(crate) fn store64(addr: &mut [u8], value: u64) {
     addr[..8].copy_from_slice(&value.to_le_bytes());
 }
@@ -795,7 +792,6 @@ pub(crate) fn store64(addr: &mut [u8], value: u64) {
 ///
 /// Portable definition matching `instructions_portable.cpp:92-94`
 /// (`(-b & 63)` shift amount) at pin `aaafe71`.
-#[allow(dead_code)]
 #[allow(clippy::manual_rotate)]
 pub(crate) fn rotr(a: u64, b: u32) -> u64 {
     let b = b & 63;
@@ -809,7 +805,6 @@ pub(crate) fn rotr(a: u64, b: u32) -> u64 {
 ///
 /// Portable definition matching `instructions_portable.cpp:99-101`
 /// at pin `aaafe71`.
-#[allow(dead_code)]
 #[allow(clippy::manual_rotate)]
 pub(crate) fn rotl(a: u64, b: u32) -> u64 {
     let b = b & 63;
@@ -823,7 +818,6 @@ fn int_reg(index: u8) -> usize {
     usize::from(index) % REGISTERS_COUNT
 }
 
-#[allow(dead_code)]
 fn fp_reg(index: u8) -> usize {
     usize::from(index) % REGISTER_COUNT_FLT
 }
@@ -884,7 +878,6 @@ fn is_zero_or_power_of_two(x: u32) -> bool {
 /// separated from the dispatch match so commit 2 can pin the
 /// rounding-mode side effect before commit 3 lands the frequency
 /// decode ladder.
-#[allow(dead_code)]
 fn execute_cfround(instr: &Instruction, state: &mut VmState) {
     let src = usize::from(instr.src % 8);
     let isrc = rotr(state.r[src], instr.imm32 & 63);
