@@ -871,6 +871,32 @@ void emit_t8() {
     release_stub_vm_pair(p);
 }
 
+// ---------------------------------------------------------------------------
+// T16 — End-to-end real-dispatch hash.
+//
+// Input: CANONICAL_SEEDHASH (cache key) + T8_DATA_INPUT (the data
+// argument to compute_hash, intentionally reused from T8 so the only
+// changed variable is the bytecode-dispatch body).
+// Output: 32-byte RandomX v2 final hash using the pinned fork's normal
+// interpreted-light VM with RANDOMX_FLAG_V2 set.
+// ---------------------------------------------------------------------------
+
+void emit_t16() {
+    randomx_cache* cache = alloc_and_init_canonical_cache();
+    randomx_vm* vm = randomx_create_vm(RANDOMX_FLAG_V2, cache, nullptr);
+    if (vm == nullptr) {
+        std::fprintf(stderr, "randomx_create_vm returned NULL in t16\n");
+        std::exit(3);
+    }
+
+    uint8_t out[RANDOMX_HASH_SIZE];
+    randomx_calculate_hash(vm, T8_DATA_INPUT.data(), T8_DATA_INPUT.size(), out);
+    emit_bytes(out, RANDOMX_HASH_SIZE);
+
+    randomx_destroy_vm(vm);
+    randomx_release_cache(cache);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -878,7 +904,7 @@ int main(int argc, char** argv) {
         std::fprintf(
             stderr,
             "Usage: %s <mode>\n"
-            "Modes: t1, t2, t3, t4, t5, t6, t7, t8\n"
+            "Modes: t1, t2, t3, t4, t5, t6, t7, t8, t16\n"
             "  t1: cache derivation Blake2b-256 fingerprint\n"
             "  t2: 8 × 64-byte dataset items (item_numbers fixed)\n"
             "  t3: fillAes1Rx4 scratchpad Blake2b-256 fingerprint\n"
@@ -886,7 +912,8 @@ int main(int argc, char** argv) {
             "  t5: 384-instruction Program serialization\n"
             "  t6: spAddr0/1 pairs for first 4 stub-NOP iterations\n"
             "  t7: post-AES-mix register snapshot for first 4 iters\n"
-            "  t8: end-to-end stub-NOP compute_hash output\n",
+            "  t8: end-to-end stub-NOP compute_hash output\n"
+            "  t16: end-to-end real-dispatch compute_hash output\n",
             argv[0]);
         return 2;
     }
@@ -909,6 +936,8 @@ int main(int argc, char** argv) {
         emit_t7();
     } else if (mode == "t8") {
         emit_t8();
+    } else if (mode == "t16") {
+        emit_t16();
     } else {
         std::fprintf(stderr, "unknown mode: %s\n", mode.c_str());
         return 2;

@@ -1,7 +1,7 @@
 <!-- Copyright (c) 2025-2026, The Shekyl Foundation -->
 <!-- All rights reserved. BSD-3-Clause -->
 
-# Phase 2c reference-vector generator (T1–T8)
+# Phase 2c/2d reference-vector generator (T1–T8, T16)
 
 Reproducer for the eight Phase 2c committed test vectors:
 
@@ -13,6 +13,7 @@ Reproducer for the eight Phase 2c committed test vectors:
 - `rust/shekyl-pow-randomx/tests/vectors/reference/vm/t6_vm_spaddr_4iter.bin`
 - `rust/shekyl-pow-randomx/tests/vectors/reference/vm/t7_vm_aesmix_4iter.bin`
 - `rust/shekyl-pow-randomx/tests/vectors/reference/vm/t8_vm_compute_hash_nop.bin`
+- `rust/shekyl-pow-randomx/tests/vectors/reference/vm/t16_vm_compute_hash_real.bin`
 
 Built against the v2 RandomX fork's full reference substrate
 (`external/randomx-v2/src/*`) at pin `aaafe71` (v2.0.1). The
@@ -118,6 +119,7 @@ make clean     # removes ./gen
 | `t6` | 32 B      | `../../vm/t6_vm_spaddr_4iter.bin`                  |
 | `t7` | 1024 B    | `../../vm/t7_vm_aesmix_4iter.bin`                  |
 | `t8` | 32 B      | `../../vm/t8_vm_compute_hash_nop.bin`              |
+| `t16` | 32 B     | `../../vm/t16_vm_compute_hash_real.bin`            |
 
 ## Canonical inputs
 
@@ -128,10 +130,10 @@ the Rust side:
 
 | Constant                  | Value                                                                                                | Used by         |
 |---------------------------|------------------------------------------------------------------------------------------------------|-----------------|
-| `CANONICAL_SEEDHASH`      | 32 bytes `[0x01, 0x02, …, 0x20]` (sequential)                                                        | T1, T2, T8      |
+| `CANONICAL_SEEDHASH`      | 32 bytes `[0x01, 0x02, …, 0x20]` (sequential)                                                        | T1, T2, T8, T16 |
 | `CANONICAL_TEMP_HASH`     | 64 bytes = `Blake2b-512(b"shekyl-randomx-v2-phase2c-canonical-input")` derived at startup            | T3, T4, T5, T6, T7 |
 | `T2_ITEM_NUMBERS`         | `[0, 1, 1023, 1024, 524287, 524288, 2097150, 2097151]` (boundary + edge dataset item indices)        | T2              |
-| `T8_DATA_INPUT`           | 192-byte ASCII string (preimage label + padding)                                                      | T8              |
+| `T8_DATA_INPUT`           | 192-byte ASCII string (preimage label + padding)                                                      | T8, T16         |
 
 The C++ generator and the Rust spec-vector tests handle the
 canonical temp_hash differently to keep each side self-contained:

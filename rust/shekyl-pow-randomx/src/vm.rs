@@ -2277,6 +2277,8 @@ pub fn compute_hash(cache: &crate::Cache, seedhash: &[u8; 32], data: &[u8]) -> [
     use blake2::digest::consts::U32;
     use blake2::{Blake2b, Blake2b512, Digest};
 
+    crate::fpu_rounding::set_rounding_mode(0);
+
     let mut state = VmState::new();
 
     // Step 1: temp_hash = Blake2b-512(data). Output is 64 bytes,
@@ -2342,6 +2344,7 @@ pub fn compute_hash(cache: &crate::Cache, seedhash: &[u8; 32], data: &[u8]) -> [
     let out = hasher.finalize();
     let mut output = [0u8; 32];
     output.copy_from_slice(&out);
+    crate::fpu_rounding::set_rounding_mode(0);
     output
 }
 
@@ -2730,7 +2733,9 @@ mod tests {
         vm1.init_program(&TEST_PROGRAM_SEED);
         vm2.init_program(&TEST_PROGRAM_SEED);
 
+        crate::fpu_rounding::set_rounding_mode(0);
         vm1.execute_program(cache);
+        crate::fpu_rounding::set_rounding_mode(0);
         vm2.execute_program(cache);
 
         assert!(
@@ -2765,7 +2770,9 @@ mod tests {
         vm1.init_program(&TEST_PROGRAM_SEED);
         vm2.init_program(&TEST_PROGRAM_SEED);
 
+        crate::fpu_rounding::set_rounding_mode(0);
         vm1.execute_program(cache);
+        crate::fpu_rounding::set_rounding_mode(0);
         vm2.execute_program(cache);
 
         assert_eq!(vm1.r, vm2.r, "execute_program(SAME_INPUTS) `r` divergent");
@@ -3260,6 +3267,7 @@ mod tests {
     /// Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 / F7 T6, §5.6 stub-NOP
     /// dispatch, §9 commit 7.
     #[test]
+    #[ignore = "Phase 2c stub-NOP vector; Phase 2d real-dispatch parity is covered by T16"]
     fn t6_vm_spaddr_4iter_matches_fork_reference() {
         const ITER_COUNT: usize = 4;
         let expected: &[u8] =
@@ -3315,6 +3323,7 @@ mod tests {
     /// Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 / F7 T7, §5.6 stub-NOP
     /// dispatch, §9 commit 7.
     #[test]
+    #[ignore = "Phase 2c stub-NOP vector; Phase 2d real-dispatch parity is covered by T16"]
     fn t7_vm_aesmix_4iter_matches_fork_reference() {
         const ITER_COUNT: usize = 4;
         let expected: &[u8] =
@@ -3370,27 +3379,26 @@ mod tests {
         );
     }
 
-    /// T8 spec-vector: end-to-end `compute_hash` output under stub-NOP
-    /// dispatch matches the v2 RandomX fork's `randomx_calculate_hash`
+    /// T16 spec-vector: end-to-end `compute_hash` output under real
+    /// bytecode dispatch matches the v2 RandomX fork's `randomx_calculate_hash`
     /// byte-for-byte at pin `aaafe71`, given the canonical seedhash
     /// and 192-byte data input (see `t8_data_input_is_192_bytes` above
-    /// and `tests/vectors/reference/vm/t8_vm_compute_hash_nop.meta.txt`).
+    /// and `tests/vectors/reference/vm/t16_vm_compute_hash_real.meta.txt`).
     ///
     /// This is the single end-to-end attestation: if T3-T7 pass and
-    /// T8 fails, the divergence is in the `compute_hash` orchestration
+    /// If T16 fails, the divergence is in the `compute_hash` orchestration
     /// (program-chaining, RegisterFile re-seeding Blake2b,
     /// `getFinalResult` AES + Blake2b finalize), not in any individual
     /// stage T3-T7 covers.
     ///
     /// Provenance: see sibling
-    /// `tests/vectors/reference/vm/t8_vm_compute_hash_nop.meta.txt`.
-    /// Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 / F7 T8, §5.6 stub-NOP
-    /// dispatch, §5.5 compute_hash structure, §9 commit 7.
+    /// `tests/vectors/reference/vm/t16_vm_compute_hash_real.meta.txt`.
+    /// Per RANDOMX_V2_PHASE2D_PLAN.md §6.2 T16 and §8 commit 5b.
     #[test]
-    fn t8_vm_compute_hash_nop_matches_fork_reference() {
+    fn t16_vm_compute_hash_real_matches_fork_reference() {
         let expected: &[u8] =
-            include_bytes!("../tests/vectors/reference/vm/t8_vm_compute_hash_nop.bin");
-        assert_eq!(expected.len(), 32, "t8 .bin size invariant");
+            include_bytes!("../tests/vectors/reference/vm/t16_vm_compute_hash_real.bin");
+        assert_eq!(expected.len(), 32, "t16 .bin size invariant");
 
         let cache = canonical_cache();
         let actual = compute_hash(cache, &CANONICAL_SEEDHASH, T8_DATA_INPUT);
