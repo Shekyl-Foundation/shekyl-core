@@ -3,14 +3,21 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `Cache::derive` end-to-end criterion bench.
+//! `PreparedCache::derive` end-to-end criterion bench.
 //!
 //! Phase 2c informational baseline per
 //! [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
 //! §5.8 disposition #1 + §8. Measures the cost of a single
-//! `Cache::derive(&KEY)` call (Argon2d 256 MiB fill, followed by
-//! eight `Blake2Generator`-seeded `generateSuperscalar` programs)
-//! on a fixed 32-byte seedhash; sample size = 100 per §5.8 spec.
+//! [`PreparedCache::derive(Seedhash)`][PreparedCache::derive] call
+//! (the inner `Cache::derive` Argon2d 256 MiB fill, followed by
+//! eight `Blake2Generator`-seeded `generateSuperscalar` programs,
+//! plus the bundle assembly that copies the 32-byte seedhash) on
+//! a fixed seedhash; sample size = 100 per §5.8 spec. The bundle
+//! assembly is sub-microsecond and dominated by the Argon2d fill;
+//! the bench's Phase 2c baseline is unchanged from the pre-Phase-2F
+//! `Cache::derive` shape it replaces.
+//!
+//! [PreparedCache::derive]: shekyl_pow_randomx::PreparedCache::derive
 //!
 //! # Status: informational, not PR-gating
 //!
@@ -71,15 +78,16 @@
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-use shekyl_pow_randomx::Cache;
+use shekyl_pow_randomx::{PreparedCache, Seedhash};
 
-/// 32-byte canonical bench seedhash. Distinct from the spec-vector
-/// tests' `CANONICAL_SEEDHASH` (sequential `0x01..=0x20`) to keep
-/// benches and tests from accidentally sharing reference state; the
-/// specific bytes are irrelevant to the measurement (Argon2d cost is
-/// input-independent at fixed parameters), so a stable ASCII label
-/// works as well as any other byte string.
-const BENCH_SEEDHASH: [u8; 32] = *b"shekyl-randomx-v2-bench-Cache-00";
+/// 32-byte canonical bench seedhash bytes. Distinct from the
+/// spec-vector tests' `CANONICAL_SEEDHASH_BYTES` (sequential
+/// `0x01..=0x20`) to keep benches and tests from accidentally
+/// sharing reference state; the specific bytes are irrelevant to
+/// the measurement (Argon2d cost is input-independent at fixed
+/// parameters), so a stable ASCII label works as well as any
+/// other byte string.
+const BENCH_SEEDHASH_BYTES: [u8; 32] = *b"shekyl-randomx-v2-bench-Cache-00";
 
 fn bench_cache_derive(c: &mut Criterion) {
     let mut group = c.benchmark_group("cache_derive");
@@ -92,12 +100,13 @@ fn bench_cache_derive(c: &mut Criterion) {
     group.sample_size(100);
     group.bench_function("derive", |b| {
         b.iter(|| {
-            let cache = Cache::derive(black_box(&BENCH_SEEDHASH));
+            let prepared =
+                PreparedCache::derive(black_box(Seedhash::from_bytes(BENCH_SEEDHASH_BYTES)));
             // Force the result to be observable so the optimizer
             // cannot elide the derivation. `black_box` on the
-            // resulting `Cache` participates in the per-iteration
-            // measurement boundary.
-            black_box(cache)
+            // resulting `PreparedCache` participates in the
+            // per-iteration measurement boundary.
+            black_box(prepared)
         });
     });
     group.finish();

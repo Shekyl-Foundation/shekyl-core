@@ -9,13 +9,17 @@
 //! Phase 2c informational baseline per
 //! [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
 //! §5.8 disposition #1 + §8. Measures the per-call cost of
-//! `compute_hash(&cache, &SEEDHASH, &DATA)` with a pre-derived
-//! `Cache` shared across iterations (so the `Cache::derive` cost is
-//! amortized out of the per-call measurement). The harness measures
-//! the **full `compute_hash` pipeline**, not the `VmState` allocation
-//! skeleton in isolation — the bench name's "alloc" suffix reflects
-//! the §5.8 plan-doc framing (the planned ≤100 µs budget targeted
-//! the allocation portion), not what the bench actually measures.
+//! `compute_hash(&prepared, &DATA)` with a pre-derived
+//! [`PreparedCache`] shared across iterations (so the
+//! [`PreparedCache::derive`] cost is amortized out of the per-call
+//! measurement). The harness measures the **full `compute_hash`
+//! pipeline**, not the `VmState` allocation skeleton in isolation —
+//! the bench name's "alloc" suffix reflects the §5.8 plan-doc
+//! framing (the planned ≤100 µs budget targeted the allocation
+//! portion), not what the bench actually measures.
+//!
+//! [`PreparedCache`]: shekyl_pow_randomx::PreparedCache
+//! [`PreparedCache::derive`]: shekyl_pow_randomx::PreparedCache::derive
 //!
 //! # Per-call cost composition
 //!
@@ -77,12 +81,13 @@
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-use shekyl_pow_randomx::{compute_hash, Cache};
+use shekyl_pow_randomx::{compute_hash, PreparedCache, Seedhash};
 
-/// 32-byte canonical bench seedhash. Distinct from the spec-vector
-/// tests' `CANONICAL_SEEDHASH` to keep bench and test reference
-/// state separate per the rationale in `cache_derive.rs`.
-const BENCH_SEEDHASH: [u8; 32] = *b"shekyl-randomx-v2-bench-c_hash00";
+/// 32-byte canonical bench seedhash bytes. Distinct from the
+/// spec-vector tests' `CANONICAL_SEEDHASH_BYTES` to keep bench and
+/// test reference state separate per the rationale in
+/// `cache_derive.rs`.
+const BENCH_SEEDHASH_BYTES: [u8; 32] = *b"shekyl-randomx-v2-bench-c_hash00";
 
 /// 76-byte ASCII bench input. The actual byte content is irrelevant
 /// to the measurement (compute_hash cost is input-length-dominated
@@ -93,14 +98,16 @@ const BENCH_DATA: &[u8] =
     b"shekyl-randomx-v2-phase2c-compute_hash-alloc-bench-canonical-input-padding";
 
 fn bench_compute_hash_alloc(c: &mut Criterion) {
-    // Pre-derive cache outside the timed loop so the `Cache::derive`
-    // cost (~341 ms on the reference machine per `BENCH_RESULTS.md`)
-    // is paid once total, not per iteration. Even with cache pre-
-    // derivation, this bench measures the *full per-call pipeline*
-    // (VmState alloc + scratchpad init + 8 chains × 2048-iter loop
-    // + 7 × Blake2b-512 inter-chain + final hashAes1Rx4 + Blake2b-256),
-    // not the allocation skeleton in isolation.
-    let cache = Cache::derive(&BENCH_SEEDHASH);
+    // Pre-derive the bundle outside the timed loop so the
+    // `PreparedCache::derive` cost (~341 ms on the reference
+    // machine per `BENCH_RESULTS.md`, dominated by the underlying
+    // `Cache::derive` Argon2d fill) is paid once total, not per
+    // iteration. Even with the bundle pre-derivation, this bench
+    // measures the *full per-call pipeline* (VmState alloc +
+    // scratchpad init + 8 chains × 2048-iter loop + 7 × Blake2b-512
+    // inter-chain + final hashAes1Rx4 + Blake2b-256), not the
+    // allocation skeleton in isolation.
+    let prepared = PreparedCache::derive(Seedhash::from_bytes(BENCH_SEEDHASH_BYTES));
 
     let mut group = c.benchmark_group("compute_hash_alloc");
     // §5.8's nominal sample-size is N=10000. Implementation-PR-time
@@ -130,11 +137,7 @@ fn bench_compute_hash_alloc(c: &mut Criterion) {
     group.sample_size(100);
     group.bench_function("per_call", |b| {
         b.iter(|| {
-            let hash = compute_hash(
-                black_box(&cache),
-                black_box(&BENCH_SEEDHASH),
-                black_box(BENCH_DATA),
-            );
+            let hash = compute_hash(black_box(&prepared), black_box(BENCH_DATA));
             black_box(hash)
         });
     });

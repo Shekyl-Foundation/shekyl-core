@@ -52,24 +52,34 @@
 //!   pure-function bytecode-machine helpers); plus T6'/T7'/T8'
 //!   fixture-free determinism property tests inline per §5.11.1.
 //!
-//! # `compute_hash` `seedhash` parameter — documentary-only
+//! # `compute_hash` cache-seedhash binding — typed via [`crate::PreparedCache`]
 //!
-//! The [`compute_hash`] signature carries `seedhash: &[u8; 32]` for
-//! cache-binding documentation only: spec §2 separates the two
-//! algorithm inputs `K` (key — the 0..=60-byte seedhash used to
-//! derive the dataset/cache via Argon2d + SuperscalarHash) and `H`
-//! (value — the arbitrary-length data hashed against the cache).
-//! The per-hash Blake2b seed used by [`VmState::init_scratchpad`] is
-//! `Blake2b-512(H)` per spec §4.1 (`randomx.cpp::randomx_calculate_hash`
-//! lines 392-394 at pin `aaafe71`); `K` is NOT mixed into the
-//! per-hash Blake2b chain. Callers pass the seedhash to document the
-//! cache-binding contract (cache derived from this `K` must be paired
-//! with hashes computed from `H` against the same `K`); the parameter
-//! is consumed only by the `debug_assert!` checking cache freshness in
-//! a future PR (V3.0 follow-up), not by the hash math itself. See the
-//! Round 0 R0-D9 cSHAKE-vs-spec-canonical discussion in the parent
-//! [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
-//! for the dependency-discipline trail that produced this disposition.
+//! Phase 2c shipped [`compute_hash`] with a
+//! `(&Cache, &[u8; 32], &[u8])` signature where the seedhash was
+//! documentary-only — the per-hash Blake2b chain consumes `H`
+//! (data) and not `K` (seedhash; spec §2 / `randomx.cpp::randomx_calculate_hash`
+//! lines 392-394 at pin `aaafe71`), so the seedhash parameter
+//! existed solely to document the cache-binding contract that
+//! "the cache used to compute this hash was derived from this
+//! seedhash." The contract was convention-enforced; a caller
+//! passing the wrong cache for a given seedhash got a
+//! consensus-rejected hash (correct outcome) but no compile-time
+//! check (avoidable footgun).
+//!
+//! Phase 2F §1.1 Round 2 closes the footgun by wrapping the pair
+//! in [`crate::PreparedCache`], whose only public construction
+//! path is [`crate::PreparedCache::derive(seedhash)`](crate::PreparedCache::derive).
+//! [`compute_hash`] now takes `(&PreparedCache, &[u8])`; the
+//! cache-seedhash binding is type-enforced at construction rather
+//! than convention-enforced at the call site, and the seedhash
+//! travels in the bundle for any future body-level cache-binding
+//! assertions. The per-hash chain still consumes only `H` (the
+//! `data` parameter) — the seedhash's role at this layer remains
+//! documentary; only the documentation mechanism changed from
+//! "third parameter" to "field on the bundle." See
+//! [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2F_PLAN.md)
+//! §1.1 / §3.1 Round 2 for the substrate-correction trail that
+//! produced this disposition.
 //!
 //! # Threat-model disposition (per §5.11.4)
 //!
@@ -2106,8 +2116,9 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
     }
 }
 
-/// Compute the 32-byte RandomX v2 hash of `data` against the cache
-/// derived from `seedhash`, per spec §4.1 + spec §4.6 +
+/// Compute the 32-byte RandomX v2 hash of `data` against the
+/// [`PreparedCache`](crate::PreparedCache) the caller derived
+/// from a [`Seedhash`](crate::Seedhash), per spec §4.1 + spec §4.6 +
 /// [`external/randomx-v2/src/randomx.cpp:380-410`](../../../external/randomx-v2/src/randomx.cpp)'s
 /// `randomx_calculate_hash` at pin `aaafe71`.
 ///
@@ -2121,18 +2132,23 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
 ///
 /// # Inputs
 ///
-/// - `cache` — the [`Cache`](crate::Cache) value derived from
-///   `seedhash` (= spec §2's `K` argument). The dataset items
+/// - `prepared` — a [`PreparedCache`](crate::PreparedCache) bundle
+///   carrying the (crate-private) `Cache` and the
+///   [`Seedhash`](crate::Seedhash) it was derived from. Per
+///   [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2F_PLAN.md)
+///   §1.1 Round 2, the bundle replaces the pre-Round-2
+///   `(&Cache, &Seedhash)` parameter pair: the cache-seedhash
+///   pairing is enforced at construction
+///   ([`PreparedCache::derive`](crate::PreparedCache::derive) is
+///   the only public path), so wrong-cache-for-seedhash is
+///   unrepresentable at the call site. The dataset items
 ///   `VmState::execute_program` reads each iteration are computed
-///   on-the-fly via [`Cache::derive_item`](crate::Cache).
-/// - `seedhash` — **documentary-only** per the module-level rustdoc.
-///   The seedhash is not an input to the per-hash Blake2b; it is
-///   carried for cache-binding documentation (the caller asserts
-///   they have paired this `cache` with this `seedhash`, and the
-///   parameter pin is the surface where a future
-///   `debug_assert!(cache.seedhash() == seedhash)` will land once
-///   the cache-binding invariant is added to [`Cache`](crate::Cache)
-///   itself — V3.0 follow-up tracked in `docs/FOLLOWUPS.md`).
+///   on-the-fly via the inner cache's `derive_item` (accessed
+///   through the `pub(crate)` `cache_ref`). The seedhash is
+///   **documentary-only** at the per-hash level (the spec's `K`
+///   argument is consumed by the cache-derive primitive, not by
+///   the hash chain itself); the bundle carries it so the pairing
+///   is type-checked, not so the hash body re-reads it.
 /// - `data` — the spec §2 `H` argument; arbitrary-length input
 ///   whose hash this function produces. Internally consumed by the
 ///   initial `temp_hash = Blake2b-512(data)` step.
@@ -2209,19 +2225,22 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
 ///
 /// # Determinism / side-channel posture
 ///
-/// Pure function of `(cache, data)` (seedhash is documentary-only).
-/// No allocator calls outside the per-call `VmState::new` (2 MiB
+/// Pure function of `(prepared, data)` — equivalently
+/// `(cache, seedhash, data)` decomposed inside the bundle. The
+/// seedhash is documentary-only for the per-hash chain. No
+/// allocator calls outside the per-call `VmState::new` (2 MiB
 /// scratchpad + 3 KiB program). No atomic ops, no module-level
 /// mutable state, no time-based behavior. Thread-safe by
 /// construction: every call allocates its own `VmState`; no shared
 /// mutable state between calls.
 ///
 /// Per the §5.11.4 threat-model disposition, every byte of every
-/// internal buffer is a deterministic function of `(cache, data)`,
-/// both of which are public by construction (cache derived from a
-/// block-header seedhash; data is a block-header hash candidate).
-/// No constant-time discipline applies to access patterns; no
-/// wipe-on-drop is load-bearing for confidentiality.
+/// internal buffer is a deterministic function of `(prepared, data)`,
+/// both of which are public by construction (the cache inside
+/// `prepared` is derived from a block-header seedhash; data is a
+/// block-header hash candidate). No constant-time discipline
+/// applies to access patterns; no wipe-on-drop is load-bearing for
+/// confidentiality.
 ///
 /// # Performance posture (per §8 budget, R0-D12 reconciliation)
 ///
@@ -2265,14 +2284,17 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
 /// the Phase 2c shape is functionally correct (T1-T8 byte-identical
 /// to the C reference under stub-NOP dispatch) and the Phase 2g
 /// shape is production-fast.
-pub fn compute_hash(cache: &crate::Cache, seedhash: &[u8; 32], data: &[u8]) -> [u8; 32] {
-    // The seedhash parameter is documentary-only per the module-level
-    // rustdoc and the function rustdoc above. Bind a dropped reference
-    // to satisfy `#[deny(unused)]`-style discipline without producing
-    // a warning; once the V3.0 follow-up adds cache-binding assertions
-    // (`debug_assert!(cache.seedhash() == seedhash)`), this binding
-    // becomes load-bearing.
-    let _ = seedhash;
+pub fn compute_hash(prepared: &crate::PreparedCache, data: &[u8]) -> [u8; 32] {
+    // The cache-seedhash binding travels in the `PreparedCache`
+    // bundle per Phase 2F §1.1 Round 2. The dispatch loop reads
+    // the inner `Cache` via `prepared.cache_ref()`; the seedhash
+    // is available via `prepared.seedhash()` for any future
+    // body-level cache-binding assertions (currently the binding
+    // is type-enforced by `PreparedCache::derive`'s pairing of
+    // cache + seedhash at construction; a runtime
+    // `debug_assert!` would re-derive the cache and defeat its
+    // purpose).
+    let cache = prepared.cache_ref();
 
     use blake2::digest::consts::U32;
     use blake2::{Blake2b, Blake2b512, Digest};
@@ -2680,22 +2702,27 @@ mod tests {
 
     use std::sync::OnceLock;
 
-    /// Test-only fixed seedhash used to derive the shared [`crate::Cache`]
-    /// instance for T6'/T7'/T8'. The value is arbitrary; what matters
-    /// is that the same seedhash is reused across every call so the
-    /// `OnceLock` initialization runs exactly once for the whole test
-    /// run.
-    const TEST_SEEDHASH: [u8; 32] = [0x42; 32];
+    use crate::{PreparedCache, Seedhash};
 
-    /// Shared [`crate::Cache`] for T6'/T7'/T8'. The first test to call
-    /// [`shared_cache`] pays the ~5s `Cache::derive` cost; every
-    /// subsequent caller (across every test in this module) reuses
-    /// the same instance. Per the [`std::sync::OnceLock`] contract,
-    /// concurrent first-callers race once and exactly one
-    /// initialization runs.
-    fn shared_cache() -> &'static crate::Cache {
-        static CACHE: OnceLock<crate::Cache> = OnceLock::new();
-        CACHE.get_or_init(|| crate::Cache::derive(&TEST_SEEDHASH))
+    /// Test-only fixed seedhash bytes used to derive the shared
+    /// [`crate::PreparedCache`] for T6'/T7'/T8'. The value is
+    /// arbitrary; what matters is that the same seedhash is
+    /// reused across every call so the `OnceLock` initialization
+    /// runs exactly once for the whole test run. Wrapped in
+    /// [`Seedhash`] inside [`shared_prepared_cache`] per the Phase
+    /// 2F §1.1 Round 2 type sweep.
+    const TEST_SEEDHASH_BYTES: [u8; 32] = [0x42; 32];
+
+    /// Shared [`PreparedCache`] for T6'/T7'/T8'. The first test
+    /// to call [`shared_prepared_cache`] pays the ~5 s
+    /// [`crate::PreparedCache::derive`] cost (dominated by the
+    /// 256-MiB Argon2d fill); every subsequent caller (across
+    /// every test in this module) reuses the same instance. Per
+    /// the [`std::sync::OnceLock`] contract, concurrent first-
+    /// callers race once and exactly one initialization runs.
+    fn shared_prepared_cache() -> &'static PreparedCache {
+        static PREPARED: OnceLock<PreparedCache> = OnceLock::new();
+        PREPARED.get_or_init(|| PreparedCache::derive(Seedhash::from_bytes(TEST_SEEDHASH_BYTES)))
     }
 
     /// Test-only fixed program-init seed used by T6'/T7' to populate
@@ -2720,7 +2747,7 @@ mod tests {
     /// §5.11.1 T6'.
     #[test]
     fn t6_prime_execute_program_scratchpad_determinism() {
-        let cache = shared_cache();
+        let cache = shared_prepared_cache().cache_ref();
 
         let mut vm1 = VmState::new();
         let mut vm2 = VmState::new();
@@ -2757,7 +2784,7 @@ mod tests {
     /// §5.11.1 T7'.
     #[test]
     fn t7_prime_execute_program_register_determinism() {
-        let cache = shared_cache();
+        let cache = shared_prepared_cache().cache_ref();
 
         let mut vm1 = VmState::new();
         let mut vm2 = VmState::new();
@@ -2802,7 +2829,7 @@ mod tests {
     }
 
     /// T8'a end-to-end [`compute_hash`] determinism: two
-    /// `compute_hash(cache, seedhash, data)` calls with identical
+    /// `compute_hash(prepared, data)` calls with identical
     /// inputs produce byte-identical 32-byte outputs. Catches any
     /// non-determinism in the full hash composition (Blake2b chain,
     /// scratchpad init, program init, 8-chain execute loop, finalize
@@ -2813,12 +2840,12 @@ mod tests {
     /// §5.11.1 T8' "single-thread determinism".
     #[test]
     fn t8_prime_compute_hash_determinism_same_inputs_twice() {
-        let cache = shared_cache();
+        let prepared = shared_prepared_cache();
 
         let data = b"shekyl-randomx-v2-phase-2c-commit-6-determinism-test";
 
-        let hash1 = compute_hash(cache, &TEST_SEEDHASH, data);
-        let hash2 = compute_hash(cache, &TEST_SEEDHASH, data);
+        let hash1 = compute_hash(prepared, data);
+        let hash2 = compute_hash(prepared, data);
 
         assert_eq!(
             hash1, hash2,
@@ -2840,13 +2867,13 @@ mod tests {
     /// §5.11.1 T8' "single-bit flip distinguishability".
     #[test]
     fn t8_prime_compute_hash_distinguishes_single_bit_flip() {
-        let cache = shared_cache();
+        let prepared = shared_prepared_cache();
 
         let data_a: &[u8] = b"phase-2c-t8b-bitflip-A";
         let data_b: &[u8] = b"phase-2c-t8b-bitflip-B";
 
-        let hash_a = compute_hash(cache, &TEST_SEEDHASH, data_a);
-        let hash_b = compute_hash(cache, &TEST_SEEDHASH, data_b);
+        let hash_a = compute_hash(prepared, data_a);
+        let hash_b = compute_hash(prepared, data_b);
 
         assert_ne!(
             hash_a, hash_b,
@@ -2855,31 +2882,32 @@ mod tests {
     }
 
     /// T8'c [`compute_hash`] concurrent determinism: two threads
-    /// each computing `compute_hash(cache, seedhash, data)` against
-    /// the same shared [`crate::Cache`] produce identical outputs.
-    /// Catches a hypothetical thread-unsafe data path in
+    /// each computing `compute_hash(prepared, data)` against the
+    /// same shared [`crate::PreparedCache`] produce identical
+    /// outputs. Catches a hypothetical thread-unsafe data path in
     /// `compute_hash` or `VmState::execute_program` (e.g.,
     /// accidentally-shared mutable state, allocator-dependent
     /// behavior). Per
     /// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
-    /// §5.11.1 T8' "concurrent determinism" — the same `Cache`
-    /// shared between threads is the Phase 3a FFI deployment
+    /// §5.11.1 T8' "concurrent determinism" — the same
+    /// `PreparedCache` shared between threads is the Phase 3a FFI
+    /// deployment
     /// shape, so this property must hold by construction.
     #[test]
     fn t8_prime_compute_hash_concurrent_determinism() {
-        let cache = shared_cache();
+        let prepared = shared_prepared_cache();
 
         let data = b"phase-2c-t8c-concurrent-determinism-test-input-bytes";
 
         let h1 = std::thread::scope(|s| {
-            let t = s.spawn(|| compute_hash(cache, &TEST_SEEDHASH, data));
+            let t = s.spawn(|| compute_hash(prepared, data));
             t.join().expect("compute_hash thread panicked")
         });
         let h2 = std::thread::scope(|s| {
-            let t = s.spawn(|| compute_hash(cache, &TEST_SEEDHASH, data));
+            let t = s.spawn(|| compute_hash(prepared, data));
             t.join().expect("compute_hash thread panicked")
         });
-        let h_main = compute_hash(cache, &TEST_SEEDHASH, data);
+        let h_main = compute_hash(prepared, data);
 
         assert_eq!(
             h1, h2,
@@ -3057,11 +3085,13 @@ mod tests {
     use blake2::digest::{Update, VariableOutput};
     use blake2::Blake2bVar;
 
-    /// 32-byte canonical T1/T2/T8 seedhash; mirrors
-    /// `cache.rs#mod tests::CANONICAL_SEEDHASH` and
+    /// 32-byte canonical T1/T2/T8 seedhash bytes; mirrors
+    /// `cache.rs#mod tests::CANONICAL_SEEDHASH_BYTES` and
     /// `CANONICAL_SEEDHASH` in
     /// `tests/vectors/reference/_generator/phase2c/gen.cpp`.
-    const CANONICAL_SEEDHASH: [u8; 32] = [
+    /// Wrapped in [`Seedhash`] inside [`canonical_prepared_cache`]
+    /// per the Phase 2F §1.1 Round 2 type sweep.
+    const CANONICAL_SEEDHASH_BYTES: [u8; 32] = [
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
         0x1f, 0x20,
@@ -3234,17 +3264,22 @@ mod tests {
         );
     }
 
-    /// Cache derived under the canonical T6/T7/T8 seedhash
-    /// (0x01..=0x20). Distinct from the T6'/T7'/T8' shared cache
-    /// (0x42..) — those property tests pay one cache derivation;
-    /// the spec-vector tests pay a second, since the canonical
-    /// inputs differ. Cached via `OnceLock` so the 8 spec-vector
-    /// tests that touch the cache (T6, T7, T8 + helper sub-tests
-    /// if added) amortize the ~5 s derivation cost.
-    fn canonical_cache() -> &'static crate::Cache {
+    /// [`PreparedCache`] derived under the canonical T6/T7/T8
+    /// seedhash (0x01..=0x20). Distinct from the T6'/T7'/T8'
+    /// shared `PreparedCache` (0x42..) — those property tests
+    /// pay one cache derivation; the spec-vector tests pay a
+    /// second, since the canonical inputs differ. Cached via
+    /// `OnceLock` so the 8 spec-vector tests that touch the
+    /// cache (T6, T7, T8 + helper sub-tests if added) amortize
+    /// the ~5 s derivation cost.
+    ///
+    /// [`PreparedCache`]: crate::PreparedCache
+    fn canonical_prepared_cache() -> &'static crate::PreparedCache {
         use std::sync::OnceLock;
-        static CACHE: OnceLock<crate::Cache> = OnceLock::new();
-        CACHE.get_or_init(|| crate::Cache::derive(&CANONICAL_SEEDHASH))
+        static PREPARED: OnceLock<crate::PreparedCache> = OnceLock::new();
+        PREPARED.get_or_init(|| {
+            crate::PreparedCache::derive(Seedhash::from_bytes(CANONICAL_SEEDHASH_BYTES))
+        })
     }
 
     /// T6 spec-vector: post-mask `(sp_addr0, sp_addr1)` pairs across
@@ -3278,7 +3313,7 @@ mod tests {
             "t6 .bin size invariant ({ITER_COUNT} iterations × 8 bytes)",
         );
 
-        let cache = canonical_cache();
+        let cache = canonical_prepared_cache().cache_ref();
         let mut state = VmState::new();
         state.init_program(&CANONICAL_TEMP_HASH);
 
@@ -3334,7 +3369,7 @@ mod tests {
             "t7 .bin size invariant ({ITER_COUNT} iterations × 256 bytes)",
         );
 
-        let cache = canonical_cache();
+        let cache = canonical_prepared_cache().cache_ref();
         let mut state = VmState::new();
         state.init_program(&CANONICAL_TEMP_HASH);
 
@@ -3400,14 +3435,15 @@ mod tests {
             include_bytes!("../tests/vectors/reference/vm/t16_vm_compute_hash_real.bin");
         assert_eq!(expected.len(), 32, "t16 .bin size invariant");
 
-        let cache = canonical_cache();
-        let actual = compute_hash(cache, &CANONICAL_SEEDHASH, T8_DATA_INPUT);
+        let prepared = canonical_prepared_cache();
+        let actual = compute_hash(prepared, T8_DATA_INPUT);
 
         assert_eq!(
             actual,
             <[u8; 32]>::try_from(expected).expect("32-byte vector"),
             "compute_hash diverged from fork pin aaafe71 reference \
-             (cache = derive(CANONICAL_SEEDHASH); data = T8_DATA_INPUT)",
+             (prepared = PreparedCache::derive(Seedhash::from_bytes(CANONICAL_SEEDHASH_BYTES)); \
+              data = T8_DATA_INPUT)",
         );
     }
 

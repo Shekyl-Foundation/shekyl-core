@@ -176,25 +176,40 @@ const _: () = assert!(
 /// `compute_hash` via the per-iteration dataset-item read in the spec
 /// §4.5.4 execution loop.
 ///
-/// # Construction
+/// # Public construction path: [`crate::PreparedCache`]
 ///
-/// The sole constructor is [`Cache::derive`] (commit 2 of the Phase
-/// 2c implementation PR). The fields are intentionally private —
-/// callers must go through `derive` rather than building a [`Cache`]
-/// from a raw `Box<[Block]>` and a raw program list, which would
-/// invite skipping the deterministic `argon2d::fill_cache` +
-/// `superscalar::generate_superscalar` steps the verifier depends on.
+/// [`Cache`] is `pub(crate)` per
+/// [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2F_PLAN.md)
+/// §1.1 Round 2 substrate correction. The public construction
+/// path is [`crate::PreparedCache::derive`], which bundles the
+/// derived `Cache` with the [`crate::Seedhash`] it was derived
+/// from at the type level. Exposing `Cache` publicly would let
+/// callers construct it without the seedhash binding and
+/// reintroduce the consensus-correctness footgun the bundling
+/// prevents (a caller passing the wrong cache for a given
+/// seedhash gets a wrong hash, which the network rejects).
+/// Test access is preserved via the
+/// `src/*.rs#mod tests` discipline (Phase 2c R0-D6); test code in
+/// the same crate sees `pub(crate)` items unchanged.
 ///
-/// # Public surface
+/// # In-crate construction
 ///
-/// [`Cache`] is the only `pub` item in this module per
-/// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
-/// §5.9 (R2-D3 visibility correction): `Cache::derive_item` and
-/// `Cache::item_bytes` are `pub(crate)` — there is no FFI consumer
-/// for them at Phase 2c, and exposing them now would create
-/// reviewer-attention surface for properties no caller asserts. The
-/// test-only `Cache::from_raw` was dropped at impl-time pre-flight
-/// per §14 Round 0 R0-D5; the T1' / T2' / T1 / T2 tests use the real
+/// The sole constructor is [`Cache::derive`]. The fields are
+/// intentionally private — callers must go through `derive`
+/// rather than building a [`Cache`] from a raw `Box<[Block]>` and
+/// a raw program list, which would invite skipping the
+/// deterministic `argon2d::fill_cache` +
+/// `superscalar::generate_superscalar` steps the verifier depends
+/// on.
+///
+/// # In-crate accessors
+///
+/// `Cache::derive_item` and `Cache::item_bytes` are `pub(crate)`
+/// — there is no FFI consumer for them at Phase 2c/2f, and
+/// exposing them would create reviewer-attention surface for
+/// properties no caller asserts. The test-only `Cache::from_raw`
+/// was dropped at impl-time pre-flight per Phase 2c §14 Round 0
+/// R0-D5; the T1' / T2' / T1 / T2 tests use the real
 /// [`Cache::derive`] / `Cache::derive_item` paths (no test-only
 /// shortcut).
 ///
@@ -202,7 +217,7 @@ const _: () = assert!(
 ///
 /// See the module-level docstring for the public-input-only
 /// disposition that drives the empty [`Drop`] implementation below.
-pub struct Cache {
+pub(crate) struct Cache {
     /// `RANDOMX_ARGON_BLOCKS` (262_144) [`argon2::Block`]s of 1024
     /// bytes each, totaling [`CACHE_SIZE`] (256 MiB). Allocated as
     /// `Box<[Block]>` so the size is fixed at construction (no
@@ -263,7 +278,20 @@ impl Cache {
     /// (~32 KiB: 8 × ~4 KiB per program per `src/superscalar.rs`
     /// module rustdoc — `512 × 8`-byte instructions + ~16 bytes of
     /// meta per program) for the programs.
-    pub fn derive(seedhash: &[u8; 32]) -> Cache {
+    ///
+    /// # Visibility
+    ///
+    /// `pub(crate)` per
+    /// [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2F_PLAN.md)
+    /// §1.1 Round 2. The public construction path is
+    /// [`crate::PreparedCache::derive`], which calls this
+    /// primitive and bundles the result with the input
+    /// [`crate::Seedhash`]. The signature takes `&Seedhash`
+    /// rather than `&[u8; 32]` so the type system enforces the
+    /// "this byte array is a seedhash, not an output hash"
+    /// distinction at every internal call site as well.
+    pub(crate) fn derive(seedhash: &crate::Seedhash) -> Cache {
+        let bytes = seedhash.as_bytes();
         let mut memory = alloc_zeroed_cache_blocks(RANDOMX_ARGON_BLOCKS);
 
         debug_assert_eq!(
@@ -275,9 +303,9 @@ impl Cache {
             actual = memory.len(),
         );
 
-        fill_cache(seedhash, &mut memory);
+        fill_cache(bytes, &mut memory);
 
-        let mut gen = Blake2Generator::new(seedhash, 0);
+        let mut gen = Blake2Generator::new(bytes, 0);
         let programs: Box<[SuperscalarProgram]> = (0..RANDOMX_CACHE_ACCESSES)
             .map(|_| generate_superscalar(&mut gen))
             .collect();
@@ -496,10 +524,25 @@ impl Drop for Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Seedhash;
 
-    const SEEDHASH_A: [u8; 32] = [0x01; 32];
-    const SEEDHASH_B: [u8; 32] = [0x02; 32];
-    const SEEDHASH_C: [u8; 32] = [0x03; 32];
+    /// Test seedhash A — all-`0x01` bytes wrapped in [`Seedhash`]
+    /// per Phase 2F §1.1 Round 2 Seedhash-newtype sweep.
+    fn seedhash_a() -> Seedhash {
+        Seedhash::from_bytes([0x01; 32])
+    }
+
+    /// Test seedhash B — all-`0x02` bytes wrapped in [`Seedhash`]
+    /// per Phase 2F §1.1 Round 2.
+    fn seedhash_b() -> Seedhash {
+        Seedhash::from_bytes([0x02; 32])
+    }
+
+    /// Test seedhash C — all-`0x03` bytes wrapped in [`Seedhash`]
+    /// per Phase 2F §1.1 Round 2.
+    fn seedhash_c() -> Seedhash {
+        Seedhash::from_bytes([0x03; 32])
+    }
 
     /// Byte-equality between two `Cache` values.
     ///
@@ -540,12 +583,13 @@ mod tests {
     #[test]
     fn t1_prime_determinism_single_thread() {
         const ITERATIONS: usize = 100;
-        let reference = Cache::derive(&SEEDHASH_A);
+        let a = seedhash_a();
+        let reference = Cache::derive(&a);
         for i in 1..ITERATIONS {
-            let candidate = Cache::derive(&SEEDHASH_A);
+            let candidate = Cache::derive(&a);
             assert!(
                 caches_equal(&reference, &candidate),
-                "Cache::derive(SEEDHASH_A) produced divergent output on iteration {i}",
+                "Cache::derive(seedhash_a) produced divergent output on iteration {i}",
             );
         }
     }
@@ -560,17 +604,18 @@ mod tests {
     fn t1_prime_determinism_concurrent() {
         const THREADS: usize = 4;
         const PER_THREAD: usize = 25;
-        let reference = Cache::derive(&SEEDHASH_A);
+        let a = seedhash_a();
+        let reference = Cache::derive(&a);
         std::thread::scope(|s| {
             let mut handles = Vec::with_capacity(THREADS);
             for _ in 0..THREADS {
                 let reference = &reference;
                 handles.push(s.spawn(move || {
                     for i in 0..PER_THREAD {
-                        let candidate = Cache::derive(&SEEDHASH_A);
+                        let candidate = Cache::derive(&a);
                         assert!(
                             caches_equal(reference, &candidate),
-                            "Cache::derive(SEEDHASH_A) produced divergent output \
+                            "Cache::derive(seedhash_a) produced divergent output \
                              in concurrent-thread iteration {i}",
                         );
                     }
@@ -592,19 +637,22 @@ mod tests {
     /// Per RANDOMX_V2_PHASE2C_PLAN.md §5.11.1 T1' sub-test 3/3.
     #[test]
     fn t1_prime_determinism_interleaved() {
-        let reference_a = Cache::derive(&SEEDHASH_A);
-        let _b = Cache::derive(&SEEDHASH_B);
-        let candidate_a_1 = Cache::derive(&SEEDHASH_A);
-        let _c = Cache::derive(&SEEDHASH_C);
-        let candidate_a_2 = Cache::derive(&SEEDHASH_A);
+        let a = seedhash_a();
+        let b = seedhash_b();
+        let c = seedhash_c();
+        let reference_a = Cache::derive(&a);
+        let _b = Cache::derive(&b);
+        let candidate_a_1 = Cache::derive(&a);
+        let _c = Cache::derive(&c);
+        let candidate_a_2 = Cache::derive(&a);
 
         assert!(
             caches_equal(&reference_a, &candidate_a_1),
-            "Cache::derive(SEEDHASH_A) drifted after derive(SEEDHASH_B)",
+            "Cache::derive(seedhash_a) drifted after derive(seedhash_b)",
         );
         assert!(
             caches_equal(&reference_a, &candidate_a_2),
-            "Cache::derive(SEEDHASH_A) drifted after derive(SEEDHASH_B) + derive(SEEDHASH_C)",
+            "Cache::derive(seedhash_a) drifted after derive(seedhash_b) + derive(seedhash_c)",
         );
     }
 
@@ -632,7 +680,7 @@ mod tests {
         const ITEM_NUMBERS: [u64; 8] = [0, 1, 1023, 1024, 524_287, 524_288, 2_097_150, 2_097_151];
         const REPETITIONS: usize = 10;
 
-        let cache = Cache::derive(&SEEDHASH_A);
+        let cache = Cache::derive(&seedhash_a());
         let reference: [[u8; DATASET_ITEM_SIZE]; ITEM_NUMBERS.len()] =
             ITEM_NUMBERS.map(|n| cache.derive_item(n));
 
@@ -666,14 +714,22 @@ mod tests {
     use blake2::digest::{Update, VariableOutput};
     use blake2::Blake2bVar;
 
-    /// 32-byte canonical T1/T2/T8 seedhash. Sequential 0x01..=0x20
-    /// bytes; matches `CANONICAL_SEEDHASH` in the Phase 2c generator
-    /// (`_generator/phase2c/gen.cpp`).
-    const CANONICAL_SEEDHASH: [u8; 32] = [
+    /// 32-byte canonical T1/T2/T8 seedhash bytes. Sequential
+    /// 0x01..=0x20 bytes; matches `CANONICAL_SEEDHASH` in the
+    /// Phase 2c generator (`_generator/phase2c/gen.cpp`). Wrapped
+    /// in [`Seedhash`] at the call site via [`canonical_seedhash`].
+    const CANONICAL_SEEDHASH_BYTES: [u8; 32] = [
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
         0x1f, 0x20,
     ];
+
+    /// Canonical seedhash as a [`Seedhash`] value for the T1/T2/T8
+    /// spec-vector tests. Helper rather than `const` because
+    /// [`Seedhash::from_bytes`] is not (yet) `const fn`.
+    fn canonical_seedhash() -> Seedhash {
+        Seedhash::from_bytes(CANONICAL_SEEDHASH_BYTES)
+    }
 
     /// Feed a single 1 KiB Argon2 cache block into a Blake2b hasher
     /// as 128 little-endian u64 words. Matches the C generator's
@@ -730,7 +786,7 @@ mod tests {
             include_bytes!("../tests/vectors/reference/cache/t1_cache_derive_fingerprint.bin");
         assert_eq!(expected.len(), 32, "t1 .bin size invariant");
 
-        let cache = Cache::derive(&CANONICAL_SEEDHASH);
+        let cache = Cache::derive(&canonical_seedhash());
         debug_assert_eq!(cache.memory.len(), RANDOMX_ARGON_BLOCKS);
         debug_assert_eq!(cache.programs.len(), RANDOMX_CACHE_ACCESSES);
 
@@ -781,7 +837,7 @@ mod tests {
             DATASET_ITEM_SIZE,
         );
 
-        let cache = Cache::derive(&CANONICAL_SEEDHASH);
+        let cache = Cache::derive(&canonical_seedhash());
 
         for (i, &n) in ITEM_NUMBERS.iter().enumerate() {
             let actual = cache.derive_item(n);

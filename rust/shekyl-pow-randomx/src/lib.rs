@@ -21,12 +21,12 @@
 //!   `external/randomx-v2/src/` are bugs filed against the C fork,
 //!   not amendments to this port. See
 //!   [`RANDOMX_V2_RUST.md`](../../docs/design/RANDOMX_V2_RUST.md) §3.
-//! - **Derived-first.** `Cache`, `Vm`, and `Hash` are transform-shaped
-//!   per
+//! - **Derived-first.** `PreparedCache`, `Vm`, and `Hash` are
+//!   transform-shaped per
 //!   [`18-type-placement.mdc`](../../.cursor/rules/18-type-placement.mdc):
 //!   their canonical definitions are functions (e.g.
-//!   `Cache::derive(seedhash) -> Cache`); storage is a memoization of
-//!   the function's output. See
+//!   `PreparedCache::derive(seedhash) -> PreparedCache`); storage
+//!   is a memoization of the function's output. See
 //!   [`RANDOMX_V2_RUST.md`](../../docs/design/RANDOMX_V2_RUST.md) §4.
 //! - **Isolation invariants.** No `#[no_mangle]`, no `extern "C" fn`,
 //!   no `#[export_name]` (bare or `#[unsafe(…)]`), no module-level
@@ -48,13 +48,31 @@
 //! `cache_derive_fingerprint` T1 vector and the seven `vm/*` T3-T8
 //! vectors under `tests/vectors/reference/`):
 //!
-//! - `src/cache.rs` — `pub Cache` + `pub fn Cache::derive(seedhash)`
-//!   (the 256 MiB Argon2d fill plus eight `Blake2Generator`-seeded
-//!   `generateSuperscalar` programs from Phase 2a + Phase 2b
-//!   primitives), `pub(crate) Cache::derive_item`, and
+//! - `src/seedhash.rs` — `pub Seedhash` newtype wrapping the
+//!   32-byte seedhash. Per Phase 2F §1.1 Round 2, the type is
+//!   the typed key consumed by [`PreparedCache::derive`] and
+//!   indexed by the (Phase 2F) `CacheStore`'s slot map; the
+//!   newtype distinguishes seedhash bytes from arbitrary 32-byte
+//!   buffers (output hashes, candidate digests) at every call
+//!   site.
+//! - `src/prepared_cache.rs` — `pub PreparedCache` + `pub fn
+//!   PreparedCache::derive(Seedhash) -> PreparedCache`. The
+//!   bundle pairs the derived cache with the seedhash it was
+//!   derived from; per Phase 2F §1.1 / §3.1 Round 2 it is the
+//!   public construction path for cache-bearing values, replacing
+//!   Phase 2c's `(&Cache, &Seedhash)` parameter pair on
+//!   [`compute_hash`] with a single bundled argument that the type
+//!   system enforces consistent.
+//! - `src/cache.rs` — `pub(crate) Cache` + `pub(crate) fn
+//!   Cache::derive(&Seedhash) -> Cache` (the 256 MiB Argon2d fill
+//!   plus eight `Blake2Generator`-seeded `generateSuperscalar`
+//!   programs from Phase 2a + Phase 2b primitives),
+//!   `pub(crate) Cache::derive_item`, and
 //!   `pub(crate) Cache::item_bytes` for the per-iteration
-//!   dataset-item read path.
-//! - `src/vm.rs` — `pub fn compute_hash(&Cache, &[u8; 32], &[u8])`,
+//!   dataset-item read path. The narrowing to `pub(crate)`
+//!   landed at Phase 2F §1.1 Round 2; FFI consumers go through
+//!   [`PreparedCache::derive`] / [`compute_hash`].
+//! - `src/vm.rs` — `pub fn compute_hash(&PreparedCache, &[u8])`,
 //!   `pub(crate) VmState` (2 MiB scratchpad, register file, per-
 //!   program init from entropy), and `dispatch_instruction(...)`
 //!   with a NOP body. Phase 2d replaces the dispatch body
@@ -122,8 +140,12 @@ mod argon2d;
 mod blake2_generator;
 mod cache;
 pub(crate) mod fpu_rounding;
+mod prepared_cache;
+mod seedhash;
 pub(crate) mod superscalar;
 mod vm;
 
-pub use cache::Cache;
+pub(crate) use cache::Cache;
+pub use prepared_cache::PreparedCache;
+pub use seedhash::Seedhash;
 pub use vm::compute_hash;
