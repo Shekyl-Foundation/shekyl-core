@@ -4,6 +4,104 @@
 
 ### Added
 
+- **RandomX v2 Track A Phase 2f — post-closure substrate-
+  completeness pins** (`chore/randomx-v2-phase2f-plan`,
+  2026-05-23). Companion commit to Round 2 + Round 3 of
+  [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md).
+  Per `21-reversion-clause-discipline.mdc` ("an under-specification
+  surfaced post-closure does not reopen the round it belonged
+  to but is named explicitly as a post-closure pin"; not a
+  Round 4). Six items, all narrow specifications of what
+  Round 2 / Round 3 already pinned at the architectural level.
+
+  **(1) §1.1 `Display` impl framing corrected.** Round 2's
+  framing claimed "lowercase hex for logging consistency with
+  Phase 2c's existing seedhash-formatting conventions";
+  verification at HEAD (`rg -i seedhash` across
+  `rust/shekyl-pow-randomx/src/`) found zero `tracing::` /
+  `log::` / `format!` / hex-rendering sites. Phase 2c does not
+  establish a seedhash-formatting convention because Phase 2c
+  does not log seedhashes. The lowercase-hex disposition
+  stands (matches `hex::encode` and the cryptographic-output
+  convention); the framing is corrected to cite the
+  convention directly rather than the unsupported "Phase 2c
+  consistency" claim. The `Display` impl is for downstream
+  consumers (FFI shim, daemon-side logging, test
+  diagnostics) — the verifier crate itself does not log.
+
+  **(2) §1.1 dispatch-loop / `Cache` visibility pin.** The
+  Round 2 `Cache: pub → pub(crate)` transition does not affect
+  the dispatch loop's `vm.rs::execute_one` signature (in-crate
+  `cache: &Cache` — the visibility transition is
+  crate-boundary-only). `compute_hash` extracts
+  `&prepared.cache` via private-field access internally (both
+  in the same crate); no `cache_ref()` accessor on
+  `PreparedCache` is added. Tests that need direct `Cache`
+  construction continue to use `pub(crate) Cache::from_raw`
+  per the Phase 2c R0-D6 tests-use-the-actual-API discipline.
+
+  **(3) §1.1 `PreparedCache` equality pin.** `PreparedCache`
+  does not derive `PartialEq` / `Eq`. Two equality semantics
+  are needed; each is served by a more specific primitive than
+  `PartialEq` on `PreparedCache`: seedhash equality
+  (`slot.seedhash() == lookup_key` via `Seedhash`'s derived
+  `PartialEq`) for CacheStore slot indexing, and `Arc::ptr_eq`
+  for identity comparisons in tests T-CS-5/7/9. Deriving
+  `PartialEq` would either be structural value-equality
+  (compare 256 MiB cache bytes; no caller wants this) or
+  delegating equality (compare seedhash only; conflates "same
+  seedhash" with "same `PreparedCache` instance"). Both shapes
+  are wrong; the absence of the impl forces consumers to use
+  the right primitive at the call site.
+
+  **(4) §8 commit-5 empirical-conditional + branch-prediction
+  pin.** Commit 5 (cfg-gate flip per §3.4 Round 3) is
+  conditional on the §6.3 A/B bench delta measured at commit
+  4. The empirical answer does not exist at plan-doc-close
+  time. Branch C (≥ 100 µs delta) plausible per PR-66's
+  hundreds-of-µs per-call alloc cost; Branch A (< 50 µs)
+  plausible per `Box::<[u8]>::new_zeroed_slice(2 MiB)`
+  typical tens-of-µs cost on modern allocators. Both
+  predictions are consistent with the §3.4 Round 3
+  disposition; the impl-PR's commit-4 bench result resolves
+  the prediction with substrate-anchored data, and the impl-PR
+  description names the branch taken so reviewers can spot
+  surprises against the prediction.
+
+  **(5) §10.3 Phase 3a FFI shim discipline.** The verifier
+  crate provides the Rust-side type system (`Seedhash`,
+  `PreparedCache`, `Arc<PreparedCache>`, `CacheStore`); the
+  Phase 3a FFI shim owns the C-side opaque-handle shape,
+  `Seedhash::from_bytes(*ptr)` construction at the boundary,
+  `Arc<PreparedCache>` lifecycle across the boundary
+  (daemon-facing API discourages long-lived holds per the
+  caller hand-off Arc-lifetime discipline), and
+  `VmStatePool::new(capacity)` runtime-parameter derivation
+  from `dev`-tip daemon threadpool source at Phase 3a wire-up
+  time. Phase 3a's plan inherits the disposition rather than
+  re-litigating it.
+
+  **(6) §10.4 Phase 2g `compute_hash_with_trace` pre-pin.**
+  Pre-pinned the option for a
+  `#[cfg(any(test, feature = "differential-trace"))] pub fn
+  compute_hash_with_trace(prepared, data, trace_sink) ->
+  [u8; 32]` test-infrastructure entry point for differential-
+  harness bisection (per-iteration register-file snapshots;
+  not a public-API addition; production build pays no
+  overhead). The C reference does not expose this; the Rust
+  verifier exposes it under `#[cfg(...)]` so the verifier's
+  "stay minimal; don't add Shekyl-specific divergence"
+  discipline is preserved. Phase 2g's plan inherits the
+  option; uses it iff bisection workflow requires per-iteration
+  trace visibility (otherwise the API is not added).
+
+  No structural changes to Round 2 / Round 3 dispositions;
+  only narrower specifications. The reopen criteria for the
+  post-closure pins are substrate-anchored per the named
+  items; none are anticipated. The chore branch holds Round 2
+  + Round 3 + post-closure pins; no push without separate
+  authorization.
+
 - **RandomX v2 Track A Phase 2f — Round 3 design (refinement
   bundle)** (`chore/randomx-v2-phase2f-plan`, 2026-05-23).
   Companion commit to Round 2's architectural keystone for
