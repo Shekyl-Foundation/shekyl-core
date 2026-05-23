@@ -4,6 +4,114 @@
 
 ### Added
 
+- **RandomX v2 Track A Phase 2f — post-closure pin refinements**
+  (`chore/randomx-v2-phase2f-plan`, 2026-05-23). Companion
+  commit to the post-closure substrate-completeness pins
+  ([`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md)).
+  Six narrow refinements, each tightening a post-closure pin
+  against a substrate observation. Per
+  `21-reversion-clause-discipline.mdc`'s post-closure-pin
+  discipline; not a Round 4.
+
+  **(1) §1.1 pin #2 reversed: explicit `pub(crate) cache_ref()`
+  accessor on `PreparedCache`.** The original post-closure-pin
+  disposition ("no accessor; `compute_hash` private-field-extracts
+  internally") is replaced. The explicit accessor:
+
+  ```rust
+  impl PreparedCache {
+      pub(crate) fn cache_ref(&self) -> &Cache;
+  }
+  ```
+
+  documents the established reach-through shape from
+  `&PreparedCache` to `&Cache` for the dispatch loop's in-crate
+  consumption, and prevents a future contributor from
+  re-exposing `Cache`'s API on `PreparedCache` (e.g., adding
+  `prepared.derive_item(...)` as a convenience). Per
+  `05-system-thinking.mdc`'s "specification first, code second"
+  discipline, the explicit accessor is the documented contract.
+  Tests continue to use `pub(crate) Cache::from_raw` per Phase
+  2c R0-D6.
+
+  **(2) §4 Round 4 placeholder explicit close.** F1–F7 is the
+  threat-model close for Phase 2F. The §4 "Round 4 placeholder"
+  is preserved per `91-documentation-after-plans.mdc` audit-trail
+  discipline so the Round 1 framing remains visible; it is not
+  a queued deliverable. Future findings (impl-PR pre-flight;
+  Phase 2g differential-harness surface) reopen the threat
+  model via substrate-change criteria, not via sequential
+  numbering — there is no Round 4 hanging on this plan-doc.
+
+  **(3) §8 commit-5 prediction-vs-measured discipline.** The
+  impl-PR description must include both the predicted branch
+  (from §8 — Branch C plausible per PR-66's hundreds-of-µs;
+  Branch A plausible per modern-allocator tens-of-µs) and the
+  measured branch (from commit 4's `BENCH_RESULTS.md`) with
+  explicit reconciliation: "prediction held" or "prediction
+  wrong because <substrate-anchored reason>." Mirrors the
+  mp-correction discipline (Phase 2c PR-65); makes the
+  divergence visible rather than letting it slip past as an
+  undocumented surprise.
+
+  **(4) §10.3 layering note: shim absorbs (g)-style discipline
+  the verifier rejected.** The shim-side scoped-closure
+  discipline ("borrow for the duration of one hash computation"
+  rather than "store the handle in async state") absorbs the
+  API constraint Round 2 §3.1 rejected at the verifier layer.
+  The (g)-option scoped-closure pattern was rejected at the
+  verifier's Rust-side API for being too constraining on
+  consumers; the same pattern is acceptable on the shim side
+  because the shim's consumers are FFI callers who already
+  navigate explicit allocate/use/destroy lifecycle. The
+  responsibility moved layers (verifier → shim) rather than
+  disappeared. Future readers see that the (g)-rejection at the
+  verifier and the (g)-style absorption at the shim are the
+  same discipline, applied at the layer where it doesn't
+  constrain the wrong consumers.
+
+  **(5) §10.4 cfg-gated-additions principle + `TraceSink`
+  scope.** Cfg-gated test-infrastructure additions are not
+  "tweaks to upstream RandomX" — they are Rust-language
+  affordances for tooling. The "don't tweak upstream unless we
+  need to" discipline applies to consensus-affecting behavior
+  (production-build code paths influencing hash output, cache
+  derivation, dispatch loop, validation rules), not to bisection
+  convenience (test-only paths gated by
+  `#[cfg(any(test, feature = ...))]`). The line is
+  consensus-affecting, not Shekyl-specific. **`TraceSink`
+  trait scope pinned**: the trait's surface design lives with
+  Phase 2g's plan-doc, not with the verifier's public API; the
+  trait stays scoped to the differential harness's consumption.
+  Do not promote `TraceSink` to a public surface — a
+  `pub trait TraceSink` exposed from the verifier crate would
+  create an API contract that constrains future verifier-internal
+  refactors.
+
+  **(6) §10.5 Phase 2g audit posture against the C reference.**
+  Three-leg framing for the "Shekyl's verifier is canonical
+  RandomX v2" claim: (1) spec-faithful implementation discipline
+  (Phases 2b/2c/2d/2f); (2) C-reference audit where the spec is
+  silent (Argon2d salt; SuperscalarHash program-generation seed;
+  JIT-vs-interpreter dispatch; etc.); (3) differential-harness
+  corpus testing (Phase 2g). The load-bearing claim is **leg
+  1**; leg 3 is the backstop. Corpus testing on a finite set of
+  inputs does not establish behavior on the unbounded set of
+  all inputs, but it does increase confidence that leg 1's
+  discipline was applied correctly. For an external auditor
+  asking "how do you know this is right?", the answer is "we
+  implemented to spec, audited against the C reference where
+  the spec is silent, and test against the C reference's
+  outputs as a backstop" — not "we test against the C reference"
+  alone. Phase 2g's plan-doc inherits this framing.
+
+  No structural changes to Round 2 / Round 3 / post-closure-pin
+  dispositions; only narrower specifications of pre-existing
+  pins. Reopen criteria are substrate-anchored per the named
+  items; none anticipated. The chore branch holds Round 2 +
+  Round 3 + post-closure pins + post-closure pin refinements;
+  no push without separate authorization.
+
 - **RandomX v2 Track A Phase 2f — post-closure substrate-
   completeness pins** (`chore/randomx-v2-phase2f-plan`,
   2026-05-23). Companion commit to Round 2 + Round 3 of
