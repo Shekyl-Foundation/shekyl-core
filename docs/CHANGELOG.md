@@ -46,11 +46,27 @@
     of 296.00 ms), under the §9 ±10% regression-trigger threshold
     (`rust/shekyl-pow-randomx/BENCH_RESULTS.md`).
 
-  Outstanding before the implementation PR is openable per §8: T9–T15
-  spec-vector additions (single-opcode integer/FP smoke + 9 FP × 4
-  mode matrix + CFROUND throttle) emitted by a `phase2d/` generator
-  sibling. The remaining work is purely additive — T16 already
-  validates byte-equal hash output against the C reference end-to-end.
+  - **T9–T15 single-opcode reference vectors** (Phase 2d §6.2 / §8
+    commit 5a). Adds a new
+    [`tests/vectors/reference/_generator/phase2d/`](../rust/shekyl-pow-randomx/tests/vectors/reference/_generator/phase2d/)
+    generator (gen.cpp + Makefile + README) driving the pinned fork's
+    `randomx::BytecodeMachine::compileInstruction` +
+    `executeInstruction` against fabricated single instructions over
+    a canonical `NativeRegisterFile` + scratchpad fixture, and emits
+    seven new `.bin` + `.meta.txt` reference vectors under
+    [`tests/vectors/reference/vm/`](../rust/shekyl-pow-randomx/tests/vectors/reference/vm/):
+    T9 integer smoke (IADD_RS / IMULH_R / IROR_R / ISTORE), T10 FP
+    smoke under RN (FADD_R / FMUL_R / FDIV_M / FSQRT_R), T11–T14 the
+    9-FP-opcode matrix under MXCSR modes 0..3, and T15 CFROUND
+    throttle (throttled + 2 unthrottled cases, paired with
+    `rx_get_rounding_mode()` u32). Rust spec-vector tests in
+    [`src/vm.rs#mod tests`](../rust/shekyl-pow-randomx/src/vm.rs)
+    drive `dispatch_instruction` against the same canonical fixture
+    and assert byte-equality (`{t9,t10,t11,t12,t13,t14,t15}_vm_..._matches_fork_reference`).
+    Phase 2d's implementation core (PRs landed prior) plus T9–T15
+    per-opcode coverage and T16 end-to-end hash now exhaust the
+    `executeInstruction` dispatch surface against the v2 fork pin
+    `aaafe71` byte-for-byte.
 
 - **Sub-PR design discipline rule** (PR #67, 2026-05-22). Promotes fourteen
   Phase 2c-emergent process disciplines from

@@ -3410,4 +3410,297 @@ mod tests {
              (cache = derive(CANONICAL_SEEDHASH); data = T8_DATA_INPUT)",
         );
     }
+
+    // -----------------------------------------------------------------
+    // Phase 2d single-opcode reference vectors (T9-T15).
+    //
+    // Each probe drives `dispatch_instruction` against a fabricated
+    // `Instruction` over a canonical `VmState` register file and
+    // scratchpad pattern, and asserts the 256-byte
+    // `register_file_snapshot` matches the v2 fork's
+    // `executeInstruction` output byte-for-byte. Provenance for each
+    // vector is documented inline below and in the sibling
+    // `.meta.txt` files under `tests/vectors/reference/vm/`.
+    //
+    // The canonical fixture matches
+    // `tests/vectors/reference/_generator/phase2d/gen.cpp`'s
+    // `CANONICAL_*` tables exactly — see the matching constants
+    // there for byte-for-byte cross-reference.
+    // -----------------------------------------------------------------
+
+    const CANONICAL_R: [u64; 8] = [
+        0x0102_0304_0506_0708,
+        0x1112_1314_1516_1718,
+        0x2122_2324_2526_2728,
+        0x3132_3334_3536_3738,
+        0x4142_4344_4546_4748,
+        0x5152_5354_5556_5758,
+        0x6162_6364_6566_6768,
+        0x7172_7374_7576_7778,
+    ];
+
+    const CANONICAL_F_BITS: [[u64; 2]; 4] = [
+        [0x3FF0_0000_0000_0000, 0x4000_0000_0000_0000],
+        [0xBFF0_0000_0000_0000, 0xC000_0000_0000_0000],
+        [0x4008_0000_0000_0000, 0x4010_0000_0000_0000],
+        [0xBFE0_0000_0000_0000, 0x3FE8_0000_0000_0000],
+    ];
+
+    const CANONICAL_E_BITS: [[u64; 2]; 4] = [
+        [0x4030_0000_0000_0000, 0x4034_0000_0000_0000],
+        [0x4038_0000_0000_0000, 0x403C_0000_0000_0000],
+        [0x4040_0000_0000_0000, 0x4042_0000_0000_0000],
+        [0x4044_0000_0000_0000, 0x4046_0000_0000_0000],
+    ];
+
+    const CANONICAL_A_BITS: [[u64; 2]; 4] = [
+        [0x3FE0_0000_0000_0000, 0x3FE8_0000_0000_0000],
+        [0x3FF8_0000_0000_0000, 0x3FFC_0000_0000_0000],
+        [0x4002_0000_0000_0000, 0x4006_0000_0000_0000],
+        [0x400C_0000_0000_0000, 0x4010_0000_0000_0000],
+    ];
+
+    const CANONICAL_E_MASK_PD: [u64; 2] = [
+        0x3FF0_0000_0000_0000,
+        0x4000_0000_0000_0000,
+    ];
+
+    /// Materialize a fresh [`VmState`] populated with the Phase 2d
+    /// canonical register file + scratchpad fixture. Mirrors
+    /// `_generator/phase2d/gen.cpp`'s `init_nreg` / `init_config` /
+    /// `init_scratchpad` per-probe. Each probe re-uses this helper so
+    /// the harness shape is identical across opcodes.
+    fn canonical_phase2d_state() -> VmState {
+        let mut state = VmState::new();
+        state.r = CANONICAL_R;
+        for i in 0..REGISTER_COUNT_FLT {
+            state.f[i] = F128([
+                f64::from_bits(CANONICAL_F_BITS[i][0]),
+                f64::from_bits(CANONICAL_F_BITS[i][1]),
+            ]);
+            state.e[i] = F128([
+                f64::from_bits(CANONICAL_E_BITS[i][0]),
+                f64::from_bits(CANONICAL_E_BITS[i][1]),
+            ]);
+            state.a[i] = F128([
+                f64::from_bits(CANONICAL_A_BITS[i][0]),
+                f64::from_bits(CANONICAL_A_BITS[i][1]),
+            ]);
+        }
+        state.e_mask = CANONICAL_E_MASK_PD;
+        state.read_reg = [0, 1, 2, 3];
+        for (i, byte) in state.scratchpad.iter_mut().enumerate() {
+            let mixed = i.wrapping_mul(0x9E).wrapping_add(0x37);
+            *byte = u8::try_from(mixed & 0xff).expect("masked u8");
+        }
+        // Pin the FPU rounding mode to RN before each probe so the
+        // helper is rounding-mode-clean across tests. Per-probe FP
+        // matrix tests overwrite this immediately before dispatch.
+        crate::fpu_rounding::set_rounding_mode(0);
+        state
+    }
+
+    /// Build a fabricated [`Instruction`] for a single Phase 2d probe.
+    fn instr(opcode: u8, dst: u8, src: u8, mod_: u8, imm32: u32) -> Instruction {
+        Instruction {
+            opcode,
+            dst,
+            src,
+            mod_,
+            imm32,
+        }
+    }
+
+    /// Drive `dispatch_instruction` for one probe under MXCSR mode
+    /// `fprc` and return the 256-byte post-execution register-file
+    /// snapshot. Resets the FPU mode to RN on exit so subsequent
+    /// probes start clean.
+    fn run_probe(opcode: u8, dst: u8, src: u8, mod_: u8, imm32: u32, fprc: u32) -> [u8; 256] {
+        let mut state = canonical_phase2d_state();
+        crate::fpu_rounding::set_rounding_mode(fprc);
+        let i = instr(opcode, dst, src, mod_, imm32);
+        dispatch_instruction(&i, &mut state);
+        let snap = register_file_snapshot(&state);
+        crate::fpu_rounding::set_rounding_mode(0);
+        snap
+    }
+
+    /// T9 spec-vector: single-opcode integer dispatch matches the v2
+    /// RandomX fork's `executeInstruction` byte-for-byte at pin
+    /// `aaafe71` for IADD_RS / IMULH_R / IROR_R / ISTORE.
+    ///
+    /// Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 T9.
+    #[test]
+    fn t9_vm_single_int_smoke_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t9_vm_single_int_smoke.bin");
+        assert_eq!(expected.len(), 4 * 256, "t9 .bin size invariant");
+
+        let probes: [(u8, u8, u8, u8, u32); 4] = [
+            (0, 2, 3, 0, 0x1234_5678),
+            (66, 4, 5, 0, 0),
+            (106, 6, 7, 0, 11),
+            (240, 0, 1, 0xE0, 0xCAFE_0007),
+        ];
+        let mut actual = vec![0u8; probes.len() * 256];
+        for (i, &(opcode, dst, src, mod_, imm32)) in probes.iter().enumerate() {
+            let snap = run_probe(opcode, dst, src, mod_, imm32, 0);
+            actual[i * 256..(i + 1) * 256].copy_from_slice(&snap);
+        }
+
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "T9 integer-smoke dispatch diverged from fork pin aaafe71",
+        );
+    }
+
+    /// T10 spec-vector: single-opcode FP dispatch under RN matches
+    /// the v2 RandomX fork's `executeInstruction` byte-for-byte at
+    /// pin `aaafe71` for FADD_R / FMUL_R / FDIV_M / FSQRT_R.
+    ///
+    /// Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 T10.
+    #[test]
+    fn t10_vm_single_fp_smoke_rn_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t10_vm_single_fp_smoke_rn.bin");
+        assert_eq!(expected.len(), 4 * 256, "t10 .bin size invariant");
+
+        let probes: [(u8, u8, u8, u8, u32); 4] = [
+            (124, 0, 0, 0, 0),
+            (172, 1, 2, 0, 0),
+            (204, 2, 3, 0, 0x040),
+            (208, 3, 0, 0, 0),
+        ];
+        let mut actual = vec![0u8; probes.len() * 256];
+        for (i, &(opcode, dst, src, mod_, imm32)) in probes.iter().enumerate() {
+            let snap = run_probe(opcode, dst, src, mod_, imm32, 0);
+            actual[i * 256..(i + 1) * 256].copy_from_slice(&snap);
+        }
+
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "T10 FP-smoke RN dispatch diverged from fork pin aaafe71",
+        );
+    }
+
+    /// Drive the 9-opcode FP matrix probe under a given MXCSR mode
+    /// and return the concatenated 9 × 256 = 2304-byte snapshot.
+    fn fp_matrix_actual(fprc: u32) -> Vec<u8> {
+        let probes: [(u8, u8, u8, u8, u32); 9] = [
+            (120, 1, 0, 0, 0),
+            (124, 0, 0, 0, 0),
+            (140, 1, 2, 0, 0x040),
+            (145, 2, 1, 0, 0),
+            (161, 0, 3, 0, 0x080),
+            (166, 3, 0, 0, 0),
+            (172, 1, 2, 0, 0),
+            (204, 2, 3, 0, 0x040),
+            (208, 3, 0, 0, 0),
+        ];
+        let mut out = vec![0u8; probes.len() * 256];
+        for (i, &(opcode, dst, src, mod_, imm32)) in probes.iter().enumerate() {
+            let snap = run_probe(opcode, dst, src, mod_, imm32, fprc);
+            out[i * 256..(i + 1) * 256].copy_from_slice(&snap);
+        }
+        out
+    }
+
+    /// T11 spec-vector: 9-opcode FP matrix under MXCSR mode 0 (RN).
+    /// Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 T11.
+    #[test]
+    fn t11_vm_fp_matrix_rn_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t11_vm_fp_matrix_rn.bin");
+        assert_eq!(expected.len(), 9 * 256, "t11 .bin size invariant");
+        let actual = fp_matrix_actual(0);
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "T11 FP-matrix RN diverged from fork pin aaafe71",
+        );
+    }
+
+    /// T12 spec-vector: 9-opcode FP matrix under MXCSR mode 1 (RD).
+    /// Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 T12.
+    #[test]
+    fn t12_vm_fp_matrix_rd_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t12_vm_fp_matrix_rd.bin");
+        assert_eq!(expected.len(), 9 * 256, "t12 .bin size invariant");
+        let actual = fp_matrix_actual(1);
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "T12 FP-matrix RD diverged from fork pin aaafe71",
+        );
+    }
+
+    /// T13 spec-vector: 9-opcode FP matrix under MXCSR mode 2 (RU).
+    /// Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 T13.
+    #[test]
+    fn t13_vm_fp_matrix_ru_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t13_vm_fp_matrix_ru.bin");
+        assert_eq!(expected.len(), 9 * 256, "t13 .bin size invariant");
+        let actual = fp_matrix_actual(2);
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "T13 FP-matrix RU diverged from fork pin aaafe71",
+        );
+    }
+
+    /// T14 spec-vector: 9-opcode FP matrix under MXCSR mode 3 (RZ).
+    /// Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 T14.
+    #[test]
+    fn t14_vm_fp_matrix_rz_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t14_vm_fp_matrix_rz.bin");
+        assert_eq!(expected.len(), 9 * 256, "t14 .bin size invariant");
+        let actual = fp_matrix_actual(3);
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "T14 FP-matrix RZ diverged from fork pin aaafe71",
+        );
+    }
+
+    /// T15 spec-vector: CFROUND throttle and unthrottled-mode
+    /// behavior matches the v2 RandomX fork's `exe_CFROUND` byte-for
+    /// byte at pin `aaafe71`. Three cases per the .meta.txt:
+    /// throttled (r[1] = 0x0C, expected mode unchanged), unthrottled
+    /// target RN (r[1] = 0x00), unthrottled target RZ (r[1] = 0x03).
+    ///
+    /// Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 T15.
+    #[test]
+    fn t15_vm_cfround_throttle_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t15_vm_cfround_throttle.bin");
+        assert_eq!(expected.len(), 3 * (256 + 4), "t15 .bin size invariant");
+
+        let mut actual = vec![0u8; 3 * (256 + 4)];
+
+        for (case_idx, &src_value) in [0x0Cu64, 0x00, 0x03].iter().enumerate() {
+            let mut state = canonical_phase2d_state();
+            state.r[1] = src_value;
+            crate::fpu_rounding::set_rounding_mode(0);
+            let i = instr(239, 0, 1, 0, 0);
+            dispatch_instruction(&i, &mut state);
+            let snap = register_file_snapshot(&state);
+            let mode = state.fprc;
+            crate::fpu_rounding::set_rounding_mode(0);
+
+            let off = case_idx * (256 + 4);
+            actual[off..off + 256].copy_from_slice(&snap);
+            actual[off + 256..off + 260].copy_from_slice(&mode.to_le_bytes());
+        }
+
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "T15 CFROUND-throttle dispatch diverged from fork pin aaafe71",
+        );
+    }
 }

@@ -1,0 +1,41 @@
+Phase 2d reference vector — t11_vm_fp_matrix_rn.bin
+===================================================
+
+Spec attestation
+----------------
+T11 attests Rust `dispatch_instruction` byte-for-byte parity with
+the v2 RandomX fork's FP dispatch under MXCSR mode 0 (round-to-
+nearest) across the full 9-opcode FP set:
+
+  FSWAP_R (120), FADD_R (124), FADD_M (140), FSUB_R (145),
+  FSUB_M (161), FSCAL_R (166), FMUL_R (172), FDIV_M (204),
+  FSQRT_R (208).
+
+Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2. T11 is the RN
+slice of the T11-T14 FP rounding-mode matrix.
+
+Inputs
+------
+Canonical NativeRegisterFile + scratchpad (same as T9/T10). MXCSR
+set via `rx_set_rounding_mode(0)` before each probe.
+
+Output layout
+-------------
+9 × 256-byte NativeRegisterFile snapshots in the opcode order
+listed above. Total: 2304 bytes.
+
+Generator
+---------
+source      = ./_generator/phase2d/gen.cpp (mode t11)
+command     = ./gen t11 > t11_vm_fp_matrix_rn.bin
+output_size = 2304 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+
+Phase
+-----
+Phase 2d (`docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2). Consumed
+by `t11_vm_fp_matrix_rn_matches_fork_reference`.
