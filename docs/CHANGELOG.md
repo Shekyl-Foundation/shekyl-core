@@ -4,6 +4,82 @@
 
 ### Added
 
+- **RandomX v2 Track A Phase 2f — Round 3 design (refinement
+  bundle)** (`chore/randomx-v2-phase2f-plan`, 2026-05-23).
+  Companion commit to Round 2's architectural keystone for
+  [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md).
+  Round 3 hardens the dispositions Round 2 left for follow-up.
+  **§3.3 R1-D3 reframed to cfg-gated A/B approach** — pool body
+  implemented behind `#[cfg(any(test, feature = "internal-pool-bench"))]`
+  regardless of R1-D4 outcome; bench harness measures both paths
+  directly (`B-pool-off` always; `B-pool-on` when feature
+  enabled). Closes the Round 1 circular-sequencing problem.
+  **§3.4 R1-D4 dissolved into R1-D3** — the threshold (Decision
+  #7's 100 µs) is a binding source; the Round 1 task is
+  mechanical application of the threshold to the A/B delta. The
+  cfg-gated pool stays in source as the bench-only artifact on
+  Branch A; flips to default-on on Branch C. **§3.5 R1-D5
+  refined to runtime-configurable capacity** —
+  `VmStatePool::new(capacity: usize)` constructed from the Phase
+  3a FFI shim's threadpool-source-derived value; the default
+  constructor panics in non-test builds to enforce explicit
+  configuration. The Round 1 R1-D5 survey methodology stands;
+  the substrate-anchored value flows in at runtime rather than
+  baking into a `pub(crate) const` at compile time. Closes the
+  Round 1 staleness footgun where a Phase-2F-baked-in capacity
+  could mismatch the Phase 3a daemon configuration. **§3.6 R1-E1
+  rustfmt-rely-chain note added** — the column-0 anchor is
+  robust against function-local statics if and only if
+  `cargo fmt --check` is a CI gate (which it is, per Phase 2c
+  R0-D6); the rely-chain is named explicitly in the §3.6 Round 3
+  sub-block. **§4 threat-model F1–F7 enumeration** (Round 4
+  placeholder retained as audit trail; Round 3 supersedes
+  inline): F1 cache-derivation DoS amplification (closed by
+  canonical non-eviction); F2 Arc-holding memory exhaustion
+  (bounded by capacity-2 + caller-side discipline note); F3
+  thundering herd on novel-seedhash (closed by in-flight dedup);
+  F4 unbounded HashMap growth (closed by cleanup-on-publish); F5
+  concurrent-derivation race (covered by determinism property +
+  dedup); F6 mutex contention amplification (addressed by
+  `RwLock`-per-slot + capacity-2-no-sharding); F7 cache-derivation
+  cost asymmetry (out of scope; upstream daemon-side validation
+  discipline). **Caller hand-off Arc-lifetime discipline note**
+  added to the `CacheStore` rustdoc (consumers should hold
+  `Arc<PreparedCache>` only for the duration of the immediate
+  hash computation; long-lived holds extend cache memory
+  residency beyond `CacheStore`'s bound; daemon-side discipline,
+  not a `CacheStore` enforcement). **§6.1 test plan reshaped to
+  Round-2-typed pre/post table** (T-CS-1..11; in-flight-dedup
+  test T-CS-7; cleanup-on-publish white-box test T-CS-8;
+  concurrent-determinism property test T-CS-9; type-shape
+  compile-time checks T-CS-10/11). **§6.3 bench harness
+  reshaped** to `B-pool-off` / `B-pool-on` A/B per §3.3 Round 3;
+  component-floor benches retained as cross-check;
+  `BENCH_RESULTS.md` records the A/B delta + Branch disposition.
+  **§8 commit table reshaped** to 6-commit Round-2-+-Round-3
+  shape: `Seedhash` + `PreparedCache` type sweep (1);
+  `CacheStore` (2); invariant grep gate (3); cfg-gated pool +
+  A/B bench (4 — always); cfg-gate flip (5 — Branch C only);
+  plan close + `CHANGELOG` (6). The Round 1 5-commit shape's
+  Branch-A-omits-commit-4 / Branch-B-defers-commit-4 /
+  Branch-C-includes-commit-4 trichotomy collapses to "is commit
+  5 included" rather than "does commit 4 exist." **§3.1 (g)
+  rejection inline at `CacheStore` rustdoc** — the Arc-holding
+  memory exhaustion finding is named in the public rustdoc so
+  future readers asking "wouldn't this be simpler without two
+  slots?" find the adversarial finding rather than re-proposing
+  the shape. **Adversarial-pass-precedent named** — the (g) → (b)
+  Round 2 reversal is the second documented instance of
+  "adversarial pass reverses an aesthetically-preferred choice"
+  (first: LWMA-1 time-source local-time-only over peer-time-
+  derived). The recurrence justifies promotion to
+  `26-sub-pr-design-discipline.mdc` as a sibling discipline-
+  promotion PR (`chore/sub-pr-design-discipline-adversarial-pass`).
+  No outstanding Round-N+1 follow-ups queued from Round 3; Round
+  4 (if any future round opens) reopens via the §3.1 / §3.3 /
+  §3.5 substrate-change reopening criteria, not via sequential
+  numbering.
+
 - **RandomX v2 Track A Phase 2f — Round 2 design (architectural
   reframe)** (`chore/randomx-v2-phase2f-plan`, 2026-05-23).
   Architectural keystone for

@@ -562,6 +562,42 @@ future readers asking "wouldn't this be simpler without the
 two-slot structure?" find the adversarial finding rather than
 re-proposing the shape.
 
+**Adversarial-pass precedent (Round 3 names; twice-confirmed).**
+The (g) → (b) reversal at Round 2 is the second documented
+instance of a recurring shape: an adversarially-stronger
+disposition supersedes an aesthetically-preferred one once a
+threat-model pass surfaces a memory-exhaustion or DoS-amplification
+class the cleaner shape opens. The first instance is the LWMA-1
+time-source disposition (`docs/design/DAA_LWMA1.md` §§2.4–2.5):
+the local-time-only choice supersedes the peer-time-derived
+shape that was structurally elegant ("the network self-governs
+time as well as difficulty") but adversarially weak under a
+peer-time-poisoning attack class. Both instances share:
+
+1. An initial shape that was structurally elegant — the (g)
+   no-CacheStore design here; the peer-time-derived design at
+   LWMA-1. Both matched a "the system self-governs at the
+   smallest layer" principle.
+2. An adversarial pass that surfaced a class of attack the
+   elegant shape opened — Arc-holding memory exhaustion here;
+   peer-time poisoning at LWMA-1. Both attacks were
+   demonstrable, not hypothetical.
+3. A reversion to the less-elegant-but-adversarially-stronger
+   shape, with the trade-off explicitly named in the design
+   doc — the §3.1 Round 2 capacity-2 ceiling here; LWMA-1's
+   local-time-only disposition.
+
+The recurrence justifies promoting the discipline to
+`26-sub-pr-design-discipline.mdc`. The promotion is queued as
+a precursor PR (`chore/sub-pr-design-discipline-adversarial-pass`)
+per §10.1 Round 3 — landing the rule in the substrate before
+forward extractions can lean on it. Future per-trait or per-
+sub-PR designs should run an explicit "adversarial pass before
+closure" round to surface the class of finding both instances
+landed; the recurrence pattern says the cost (one round) is
+much smaller than the cost of discovering the class
+post-closure.
+
 **Frozen public surface (Round 2 supersedes Round 1's code-
 block):**
 
@@ -573,6 +609,24 @@ block):**
 // plus at-most-one transient (displaced by every new
 // lookup_or_derive when no slot match exists). Concurrency-safe by
 // interior mutability per the synchronization-shape sub-block below.
+//
+// ## Why two slots and not "no CacheStore at all"
+//
+// A "no CacheStore" alternative — let consumers manage
+// `Arc<PreparedCache>` directly, possibly with a per-consumer
+// in-flight-derivation map for thundering-herd protection — was
+// considered (Axes 2/3 alternatives (d) and (g) per §3.1 Round 2
+// disposition) and rejected for **Arc-holding memory exhaustion**.
+// Without a CacheStore-layer cap, an attacker who induces
+// concurrent novel-seedhash lookups across multiple consumers (or
+// repeated within one consumer) gets the daemon to hold many
+// `Arc<PreparedCache>` clones whose total memory footprint scales
+// with the number of distinct seedhashes seen in the attack
+// window (each `PreparedCache` is ~256 MiB). Capacity-2 at the
+// CacheStore layer bounds this; consumer-side discipline alone
+// does not. Future readers asking "wouldn't this be simpler
+// without the two-slot structure?" should read §3.1 Round 2's
+// (d)/(g) rejection rather than re-proposing the shape.
 pub struct CacheStore { /* private fields per sync-shape sub-block */ }
 
 impl CacheStore {
@@ -1036,6 +1090,114 @@ zone handled by R1-D4's reversion clause.
   in-place; substrate changes outside that band trigger a fresh
   Phase 2f.X round on this plan-doc.
 
+**Round 3 disposition (cfg-gated pool reframe; supersedes the
+Round 1 component-method-only methodology).**
+
+The Round 1 disposition above stays as audit trail per
+`91-documentation-after-plans.mdc`. Round 3 reframes the
+methodology to break a sequencing problem the Round 1 disposition
+left implicit: option (a) was rejected as circular ("decide
+whether to pool based on the bench" requires implementing the
+pool to bench against). Option (b) avoided the circularity but
+measures a *floor* (allocator behavior on a 2 MiB zero-init), not
+the pool's actual cost-savings against a steady-state allocator.
+Without an A/B against pool-mode, the (b) measurement is
+conservative-against-no-pool but uninformative about pool-mode
+savings.
+
+Round 3's reframe: **the pool is implemented for the bench
+regardless of R1-D4's outcome, kept behind a `cfg(...)` gate.**
+The pool body lives behind
+`#[cfg(any(test, feature = "internal-pool-bench"))]`. The bench
+harness measures both the no-pool path (the production path) and
+the cfg-gated pool path (the would-be production path if R1-D4
+fires the ≥-100-µs branch). The bench result determines whether
+the cfg-gated pool is **promoted to production** (cfg removed,
+the pool becomes the production path) or **stays as the bench-
+only artifact** (cfg retained, the pool is not in production
+builds but remains in the codebase for future re-bench).
+
+The Round 3 methodology preserves Round 1's option-(b) component
+method as the no-pool sanity floor: B-2 + B-3 medians sum to a
+component-floor that the no-pool A/B measurement should not
+exceed. The component method survives as a cross-check, not as
+the only methodology.
+
+**Implementation shape.**
+
+```rust
+// In rust/shekyl-pow-randomx/src/vm.rs (or src/pool.rs):
+
+#[cfg(any(test, feature = "internal-pool-bench"))]
+pub(crate) struct VmStatePool { /* private fields */ }
+
+#[cfg(any(test, feature = "internal-pool-bench"))]
+impl VmStatePool {
+    pub(crate) fn new(capacity: usize) -> VmStatePool;
+    pub(crate) fn acquire(&self) -> VmStateGuard<'_>;
+    pub(crate) fn release(&self, vm: VmState);
+}
+
+// compute_hash body in src/vm.rs:
+pub fn compute_hash(prepared: &PreparedCache, data: &[u8]) -> [u8; 32] {
+    // No-pool path (production):
+    let mut vm = VmState::new();
+    /* ... dispatch loop ... */
+
+    // (Phase 3a or impl-PR's cfg-gated A/B bench harness substitutes
+    // pool-acquire/release here when the feature is enabled. The
+    // production build never compiles the pool body.)
+}
+```
+
+The cfg-gated pool body is `pub(crate)` even when enabled — it
+is bench / test infrastructure, never a public type per Phase 2c
+Decision #7 (no public `VmPool`). Promotion to production
+removes the cfg gate but does not promote the visibility.
+
+**Bench harness shape (R1-D3 Round 3 supersedes R1-D3 Round 1's
+single-bench).**
+
+| # | Bench | Source | Mode |
+|---|---|---|---|
+| B-1 | `compute_hash_alloc::per_call` (existing) | `benches/compute_hash_alloc.rs` | Phase 2d baseline (full-pipeline). Informational. |
+| B-2 | `vmstate_alloc_scratchpad_zeroed` | `benches/per_call_alloc.rs` (new) | Component method (Round 1 sanity floor). |
+| B-3 | `vmstate_alloc_register_file` | Same | Component method (Round 1 sanity floor). |
+| B-pool-off | `compute_hash_with_no_pool::per_call` | `benches/compute_hash_alloc.rs` extension | A/B path: production no-pool path, instrumented for direct measurement. |
+| B-pool-on | `compute_hash_with_pool::per_call` | Same, gated by `--features internal-pool-bench` | A/B path: cfg-gated pool path. |
+
+`BENCH_RESULTS.md` records:
+
+- B-2 + B-3 sum (component-floor; sanity check).
+- B-pool-off median (production-no-pool).
+- B-pool-on median (cfg-gated pool).
+- Delta (B-pool-off − B-pool-on); applied to the §3.4 R1-D4
+  threshold.
+- R1-D4 disposition (no-pool / ambiguity-escalation / pool-
+  promoted) with the delta-vs-100-µs comparison.
+
+**Reversion clause (Round 3 supersedes Round 1's clause).**
+
+- *Rejection.* Round 1's component-method-as-sole-bench is
+  rejected at Round 3 because it cannot measure the pool's
+  actual savings; only the floor. The component method is
+  preserved as a sanity floor, not as the methodology.
+- *Reopening criteria.*
+  1. The `--features internal-pool-bench` build doesn't compile
+     for any reason — the Round 3 reframe presumes the cfg-gated
+     pool can be implemented in ≤ 150 lines (matches the Round 1
+     conditional-impl estimate). If implementation surfaces
+     unexpected complexity, the methodology reverts to Round 1's
+     component-only and the impl-PR escalates per the Round 1
+     ambiguity-band-handling.
+  2. Round 1's reversion criteria carry forward (Decision #7
+     reversal; component decomposition under-estimate; ambiguity-
+     band fall-through to impl-PR pre-flight).
+- *Re-evaluation shape.* The Phase 2F impl-PR's pre-flight
+  computes the A/B delta and applies the §3.4 R1-D4 Round 3
+  disposition (R1-D4 folded into R1-D3). Substrate changes
+  outside that band trigger a fresh Phase 2f.X round.
+
 ### 3.4 R1-D4 — Pool decision threshold
 
 Phase 0 budget is **≤100 µs** per `RANDOMX_V2_PLAN.md` line 240. R1-D4
@@ -1109,6 +1271,52 @@ machine measures, e.g., 30 µs).
   conditional-on-Decision-#7. The reversion criterion for *that*
   rejection is Decision #7's own substrate-change clause (see
   parent plan §"Permanent architectural decisions" #7).
+
+**Round 3 disposition (R1-D4 folds into R1-D3 Round 3 reframe).**
+
+The Round 1 disposition above stays as audit trail. Round 3
+dissolves R1-D4 as a separate Round-1 decision: the pool decision
+threshold is no longer a Round-1-time question whose answer
+needs to be deferred to bench-time (the Round 1 framing required
+this because option (b) measured a floor, not the pool's
+savings, so the pool decision was inherently an impl-PR-pre-flight
+measurement). With Round 3's cfg-gated pool reframe, the bench
+measures both paths directly; the threshold (≥ 100 µs → pool
+promoted; < 50 µs → cfg-gated pool stays bench-only;
+[50, 100) µs → impl-PR pre-flight escalation) is a **mechanical
+application** of `RANDOMX_V2_PLAN.md` line 240's Phase 0 budget
+to the A/B delta, not a separate decision.
+
+The threshold values themselves are unchanged from Round 1; the
+disposition retires the framing of "R1-D4 is a separate decision
+point" because there's nothing left for R1-D4 to decide once
+R1-D3 Round 3 measures the pool directly. R1-D4's three-band
+table (no-pool / ambiguity / pool-path) is preserved as the
+**rule for applying R1-D3 Round 3's bench delta**:
+
+- **Branch A (cfg-gated pool stays bench-only).** A/B delta
+  < 50 µs → no-pool production path is within budget; the
+  cfg-gated pool body remains in the codebase for future re-
+  bench but is not promoted. `BENCH_RESULTS.md` records the
+  delta and the disposition.
+- **Branch B (ambiguity-band escalation).** A/B delta in
+  [50, 100) µs → impl-PR pre-flight re-evaluates per Round 1's
+  ambiguity-handling shape; either ship the cfg-gated pool by
+  precaution OR keep it bench-only and document the choice.
+- **Branch C (cfg-gated pool promoted).** A/B delta ≥ 100 µs
+  → cfg gate removed; the pool body becomes the production
+  path. The Phase 2F impl-PR ships the pool unconditionally.
+
+The Round 1 reversion criteria for the no-pool path
+(Branches A and B) carry forward unchanged: allocator
+regression, scratchpad-size change at consensus level, runtime-
+architecture mismatch.
+
+**Round 3 disposition reversion clause (mechanical).** R1-D4
+reopens only if R1-D3's substrate changes (per R1-D3's Round 3
+reversion criteria). Since R1-D4 is now a mechanical application,
+not a decision, "reopening R1-D4" doesn't have a separate
+substrate-change class — it is whatever R1-D3 surfaces.
 
 ### 3.5 R1-D5 — Daemon parallel-verification fanout survey (conditional)
 
@@ -1218,6 +1426,98 @@ design-time-fixed.
   place (small change; commit on a successor `chore/` branch) or
   triggers a Phase 2f.X round if the new shape is incompatible
   with capacity = binding-fanout + 1.
+
+**Round 3 disposition (capacity is runtime-configurable, not a
+compile-time constant; supersedes Round 1's
+`pub(crate) const POOL_CAPACITY: usize` shape).**
+
+The Round 1 disposition above stays as audit trail. Round 3
+refines: the pool capacity is a **runtime parameter** passed to
+`VmStatePool::new(capacity: usize)`, not a compile-time constant.
+The R1-D5 methodology (binding-fanout + 1 reserve) is unchanged;
+where the methodology is *applied* shifts from impl-PR-time
+(Round 1) to Phase 3a-FFI-shim-construction-time (Round 3).
+
+**Why runtime-configurable.** The Round 1 framing assumed the
+pool capacity could be derived at impl-PR time by reading the
+`dev` tip's threadpool source. That assumption is correct for
+the *methodology* (the algorithm for deriving the number) but
+fragile for the *number*: the impl-PR's read of
+`m_max_prepare_blocks_threads` may not equal the value at
+Phase 3a's wire-up time (the daemon-side threadpool is itself
+evolving per the parent migration), and operator overrides
+(`--prepare-blocks-threads`) make the binding fanout per-instance
+rather than per-build. A compile-time constant pinned at impl-PR
+forecloses operator-driven adjustment; a runtime parameter
+respects it.
+
+The Phase 2F impl-PR ships the `VmStatePool::new(capacity)`
+constructor with the methodology-pinned-at-Round-1; Phase 3a
+applies the methodology to whatever the daemon's actual state is
+at FFI-shim construction time (reads `tools::threadpool` +
+`m_max_prepare_blocks_threads` at that HEAD, derives capacity,
+passes to the constructor). The Phase 2F impl-PR uses a stub
+default `Default::default()` that **panics in non-test builds**
+to enforce the discipline that Phase 3a must explicitly pass a
+capacity (no silent default in production).
+
+**Implementation shape.**
+
+```rust
+// In rust/shekyl-pow-randomx/src/vm.rs (cfg-gated per R1-D3 Round 3):
+
+#[cfg(any(test, feature = "internal-pool-bench"))]
+impl VmStatePool {
+    /// Construct a `VmStatePool` with the given capacity. Per
+    /// R1-D5's methodology (Round 1 disposition; Round 3
+    /// runtime-configurable), `capacity` should be
+    /// `binding_fanout + 1` where binding fanout is
+    /// `min(threadpool_max, m_max_prepare_blocks_threads)` at
+    /// the daemon's runtime state. Capacity is determined by the
+    /// caller (Phase 3a's FFI shim), not by the verifier crate.
+    pub(crate) fn new(capacity: usize) -> VmStatePool;
+}
+
+// `Default` implementation that panics outside test/bench:
+#[cfg(any(test, feature = "internal-pool-bench"))]
+impl Default for VmStatePool {
+    fn default() -> Self {
+        #[cfg(test)]
+        return VmStatePool::new(4); // bench / test default
+        #[cfg(all(not(test), feature = "internal-pool-bench"))]
+        panic!("VmStatePool::default() is not safe outside tests; \
+                Phase 3a's FFI shim must pass an explicit capacity \
+                derived per R1-D5 methodology");
+    }
+}
+```
+
+**`BENCH_RESULTS.md` records (Round 3 supersedes Round 1's
+"format example"):**
+
+The methodology is recorded once, not per-PR. The actual
+capacity number is per-deployment (Phase 3a's FFI shim records it
+at construction time; the verifier's bench harness records it for
+the bench's own sanity-check). The R1-D5 reversion-clause
+substrate-change events still trigger a methodology re-evaluation
+(not just a number adjustment).
+
+**Round 3 reversion clause (mechanical refinement of Round 1).**
+
+- *Rejection.* The Round 1 compile-time-constant disposition is
+  rejected at Round 3 because it's structurally incompatible
+  with operator-driven capacity adjustment (`--prepare-blocks-threads`
+  override) and Phase 3a's FFI shim being the right
+  caller-of-`VmStatePool::new`.
+- *Reopening criteria.* Round 1's R1-D5 reopening criteria carry
+  forward unchanged; Round 3 adds:
+  4. The runtime-parameter shape is shown to be costly (e.g.,
+     branching on `capacity` inside the hot path measurably
+     hurts perf). Substrate-anchored event: bench evidence;
+     not speculation.
+- *Re-evaluation shape.* Same as Round 1's clause; Phase 3a's
+  FFI shim is the natural site for the methodology application,
+  not the impl-PR.
 
 ### 3.6 R1-E1 — CI grep pattern set for the two new crate invariants
 
@@ -1387,32 +1687,261 @@ patterns.
   explicitly so the next reviewer can audit the relaxation) or
   rejects the proposal.
 
+**Round 3 disposition (rustfmt-rely-chain note for Pattern B).**
+
+The Round 1 disposition above stays as audit trail. Round 3 adds
+one explicit note to Pattern B's robustness analysis: the
+column-0 anchoring relies on `cargo fmt --check` enforcing
+column-0 for module-level items. The chain is:
+
+1. `cargo fmt` (or rustfmt) is enforced as a CI gate (per the
+   workspace's existing `rust-fmt-check.mdc` rule).
+2. rustfmt's default style places module-level items at column 0
+   (no indentation).
+3. Function-local items (including function-local `static`
+   declarations, used for things like
+   `static REGEX: OnceLock<...> = OnceLock::new();` inside
+   `fn` bodies) are indented to at least column 4 (or whatever
+   the function's body indentation is).
+4. Therefore Pattern B's `^[[:space:]]*(...)?(unsafe[[:space:]]+)?static[[:space:]]+`
+   anchored at column 0 (with optional leading whitespace for
+   attribute-decorated items at column 0) matches module-level
+   items but does not match function-local items.
+
+The chain is robust as long as `cargo fmt --check` is enforced.
+If a future PR weakens the formatting gate (e.g., disables it
+in CI for a specific path), Pattern B's column-0 heuristic
+weakens correspondingly. The reopening criterion: any change to
+the formatting gate's coverage. The reversion-clause discipline
+is explicit: the substrate that makes Pattern B robust is the
+formatting gate; if the substrate shifts, the pattern shifts.
+
+This is a **substrate-anchored documentation note**, not a
+pattern change. Pattern B is unchanged from Round 1; the note
+documents what the pattern relies on so future contributors
+don't accidentally weaken the substrate without realizing it
+loosens the invariant.
+
 ---
 
-## 4. Threat-model addenda (Round 4 placeholder)
+## 4. Threat-model addenda
 
-Round 4 reviews Phase 2f's design against Shekyl's
-`00-mission.mdc` priority hierarchy. Substrate-anchored items
-expected to surface, based on prior phases' Round 4 patterns:
+The scaffold-as-of-Round-1 framed this section as a Round 4
+placeholder enumerating three substrate-anchored items expected
+to surface (cache-derivation DoS amplification; pool exhaustion;
+Mutex contention). Round 3's adversarial pass against the
+Round 2 architectural reframe surfaced the items earlier than
+Round 4, against the Round-2-typed surface (Arc<PreparedCache>;
+in-flight deduplication; per-slot RwLock). The Round-4-deferral
+framing is **superseded** by Round 3's enumeration below; the
+placeholder text is preserved as audit trail at the bottom of
+this section.
 
-- **Cache-derivation DoS amplification.** F1's sticky canonical
-  defends against the 3-seedhash interleave. Does it defend against
-  a 2-seedhash interleave (where the attacker controls both slots —
-  e.g., the daemon hasn't yet learned a new canonical, so no slot is
-  pinned, and both LRU slots churn)? Round 4 addresses.
-- **Pool exhaustion attack (conditional on R1-D4 pool path).** If
-  the pool capacity from R1-D5 is sized to N and an attacker submits
-  > N concurrent verification requests, the (N+1)th request hits
-  the slow per-call-allocation path. Is this a DoS? Round 4
-  evaluates against the parent-plan's worst-case latency budget.
-- **Mutex contention.** A `Mutex<LruCache<...>>` serializes all
-  CacheStore lookups across the daemon. At Phase 3a fanout, is this
-  a throughput bottleneck? Round 4 evaluates against the per-hash
-  latency budget.
+Round 3 enumerates seven attack classes against the Round 2
+surface, each with a disposition. The enumeration is a forward-
+template surface: future contributors looking at "why this
+shape?" find the adversarial findings inline, not in a separate
+threat-modeling document.
 
-Round 4 may identify in-2f-implementation work or 2f→2g/3a forward-
-action carries. The placeholder is a discipline anchor only; actual
-items land at Round 4 close.
+### F1 — Cache-derivation DoS amplification (3-seedhash interleave)
+
+**Attack.** An attacker submits alt-chain block headers with novel
+seedhashes that interleave with the canonical seedhash, evicting
+the canonical from the LRU and forcing ~150–200 ms of cache
+re-derivation per attack block.
+
+**Pre-Round-2 disposition.** F1 was the carry-forward forward-
+action from Phase 2c §5.11.7 #1; Round 1's R1-D1 disposition
+chose Option (b) (explicit two-slot type with sticky canonical)
+to close it.
+
+**Round 2 disposition.** Closed by §3.1 Round 2 Axis-2's
+reaffirmed (b) on `Arc<PreparedCache>`: the canonical slot is
+non-evictable; only the transient slot churns under the
+interleave. Test coverage: T-CS-1 (Round 3-typed; see §6.1
+Round 3 disposition) asserts canonical survives a 3-seedhash
+interleave.
+
+### F2 — Memory exhaustion via Arc-holding (Round 3 NEW)
+
+**Attack.** A consumer holds an `Arc<PreparedCache>` clone past
+the slot's eviction event (e.g., long-running RPC handler that
+hasn't completed; async task that captured the Arc). The
+underlying `Cache` (~256 MiB Argon2d-derived state) stays alive
+as long as any clone references it, regardless of slot
+occupancy. Repeated under attacker pressure (e.g., the attacker
+induces repeated novel-seedhash lookups while a long-running
+operation holds the canonical's Arc), the daemon's memory
+footprint grows beyond the capacity-2 ceiling.
+
+**Round 3 disposition.** Bounded structurally at the
+`CacheStore` layer by the capacity-2 cap on `Arc<PreparedCache>`
+references stored *in* slots; consumer-side discipline bounds
+clones held *outside* slots. The CacheStore's bound covers the
+expected case (lookup → use → drop the clone); long-held clones
+are a consumer-side discipline concern. Documented in the
+CacheStore rustdoc (§4 caller hand-off discipline note below)
+so 3a's consumer code doesn't accidentally introduce the
+failure mode the (g) analysis surfaced.
+
+**Reversion clause.** Reopen if Phase 3a profiling reveals
+sustained operational patterns where consumer-held clones
+extend the cache lifetime beyond an actionable threshold (e.g.,
+several minutes); the disposition could shift to a typed-handle
+pattern (e.g., `CacheGuard<'a>` that drops on-scope-exit) at
+the verifier-crate layer. Substrate-anchored event: profiling
+evidence; not speculation.
+
+### F3 — Thundering herd on novel-seedhash derivation (Round 3 NEW)
+
+**Attack.** Two (or more) concurrent threads call
+`lookup_or_derive(seedhash)` for the same novel seedhash. Without
+deduplication, both threads run parallel Argon2d fills, doubling
+the CPU cost and the memory footprint during derivation.
+
+**Round 3 disposition.** Closed by the in-flight deduplication
+shape pinned in §3.1 Round 2:
+`Mutex<HashMap<Seedhash, Shared<DerivationFuture>>>`. The first
+call inserts the future; subsequent calls clone the `Shared`
+and await. Only one Argon2d fill runs.
+
+**Test coverage.** T-CS-7 (concurrent-determinism property) +
+T-CS-8 (thundering-herd assertion: two concurrent
+`lookup_or_derive` calls receive the same `Arc<PreparedCache>`
+clone via `Arc::ptr_eq`).
+
+### F4 — Unbounded HashMap growth under sustained novel-seedhash attack (Round 3 NEW)
+
+**Attack.** Without cleanup, the in-flight `HashMap` accumulates
+entries: each derivation completes and leaves a `Shared` whose
+future is resolved; the entry stays until the `HashMap` rehashes
+or `CacheStore` is dropped. Sustained novel-seedhash attack
+causes unbounded growth (memory exhaustion + lookup-time
+amortization rises linearly with seedhashes-seen).
+
+**Round 3 disposition.** Closed by **cleanup-on-publish**: the
+in-flight-map entry is dropped immediately when the derivation
+completes and the `Arc<PreparedCache>` is published to the
+transient slot. The in-flight `HashMap` holds only currently-
+derivating seedhashes; size is bounded by the concurrency
+level, not by total derivations seen.
+
+**Test coverage.** T-CS-9 (publish-clears-inflight: after
+`lookup_or_derive(novel)` completes, the in-flight map is empty
+for that seedhash; verified by white-box access to the private
+`in_flight` field via `src/*.rs#mod tests` discipline).
+
+### F5 — Concurrent-derivation race producing inconsistent caches (Round 3 NEW)
+
+**Attack.** If `Cache::derive` is non-deterministic, two
+concurrent calls for the same seedhash could produce different
+`Cache` instances. Consumers receiving the bytes from one and
+not the other would compute different hashes — a consensus-split
+scenario.
+
+**Round 3 disposition.** Closed by:
+1. `Cache::derive` is deterministic by spec (Phase 2c R1
+   spec-vector property test asserts byte-identical output
+   for byte-identical input).
+2. The in-flight deduplication makes "two concurrent calls" hit
+   one derivation, so the race is structurally eliminated for
+   the same-seedhash case.
+
+The two layers are belt-and-suspenders: even if the in-flight
+deduplication has a bug that lets two derivations through, the
+underlying determinism property holds.
+
+**Test coverage.** T-CS-10 (concurrent-determinism property
+test): two `std::thread::spawn` workers call
+`PreparedCache::derive(SAME_SEEDHASH)`; assert the resulting
+`Cache::item_bytes(0)` (or any deterministic byte function) is
+byte-identical regardless of in-flight-deduplication behavior.
+
+### F6 — Mutex contention amplification (Round 3 NEW)
+
+**Attack.** A `Mutex` over the slot pair serializes all
+`CacheStore` lookups across the daemon. At Phase 3a fanout
+(N concurrent validators), the `Mutex` contention amortizes
+each lookup with serialization cost, defeating concurrency.
+
+**Round 3 disposition.** Closed by the synchronization shape
+pinned in §3.1 Round 2: per-slot `RwLock` (canonical reads
+don't block transient writes and vice versa); `Mutex<HashMap>`
+for in-flight only (short critical section). At capacity-2,
+sharding is overkill; the per-slot `RwLock` is sufficient.
+
+**Reversion clause.** Reopen if Phase 3a profiling shows
+contention as the bottleneck; the disposition could shift to
+sharding or to a lock-free structure. Substrate-anchored event:
+profiling evidence; not speculation.
+
+### F7 — Cache-derivation cost asymmetry (out of scope)
+
+**Attack.** The verifier crate's `Cache::derive` is ~150–200 ms;
+verifying a hash with a wrong cache (deliberately submitted by
+an attacker) takes one `compute_hash` call (~10 µs) + the
+derivation cost the validator paid to look up the cache. If
+the attacker's submission rate exceeds the validator's
+derivation throughput, the validator falls behind.
+
+**Round 3 disposition.** Out of scope for Phase 2F. The attack
+is mitigated upstream of the verifier:
+1. The daemon-side validation discipline (alt-chain header
+   filtering by difficulty target before expensive PoW
+   recompute) bounds the rate at which novel-seedhash
+   derivations are demanded.
+2. The pool path (R1-D3 Round 3, conditional) amortizes
+   `compute_hash` call cost; orthogonal to derivation cost.
+
+The asymmetry is a consensus-design concern (Phase 0 latency
+budget; difficulty algorithm tuning), not a verifier-crate
+concern. Phase 3a/3b consume the verifier's compute_hash and
+apply the daemon-side throttling discipline. Documented here
+as the seventh attack class so future contributors don't
+attempt to defend it inside the verifier crate.
+
+### Caller hand-off Arc-lifetime discipline note (Round 3)
+
+The Round 3 F2 disposition relies on consumer-side discipline:
+holding `Arc<PreparedCache>` clones across long-running
+boundaries (RPC handlers, async tasks, background workers)
+extends the cache's memory residency beyond `CacheStore`'s
+capacity-2 bound.
+
+The CacheStore rustdoc explicitly documents this property:
+
+> Consumers should hold `Arc<PreparedCache>` clones only for
+> the duration of the immediate hash computation; long-lived
+> holds extend cache memory residency beyond `CacheStore`'s
+> bound. Pattern: `lookup` (or `lookup_or_derive`), use, drop.
+> If a consumer needs to bridge an async boundary, the
+> recommended pattern is to drop the Arc before yielding and
+> re-look-up after the await; this is structurally safer than
+> capturing the Arc in a future.
+
+This is daemon-side discipline (consumer of the verifier crate
+applies it), not a CacheStore enforcement. Phase 3a's FFI shim
+audits its own call sites for the pattern.
+
+### Round 4 placeholder (preserved as audit trail)
+
+> *(Round 1 framing: "Round 4 reviews Phase 2f's design against
+> Shekyl's `00-mission.mdc` priority hierarchy. Substrate-anchored
+> items expected to surface, based on prior phases' Round 4
+> patterns: cache-derivation DoS amplification; pool exhaustion;
+> Mutex contention.")*
+>
+> Round 3 absorbed the threat-model enumeration earlier than
+> the Round 1 framing anticipated, against the Round 2 surface.
+> The three substrate-anchored items the Round 1 framing named
+> are covered by F1 (cache-derivation DoS), F6 (Mutex
+> contention), and (conditional on R1-D3 Round 3 pool-path)
+> the pool-exhaustion attack (which would surface as a future
+> F8 if the pool path triggers; the Phase 2F impl-PR's pre-
+> flight evaluates whether to enumerate it inline at impl
+> time). Round 4 may still identify additional items if the
+> impl-PR or the Phase 2g differential harness surfaces
+> findings; the §4 enumeration is forward-extensible.
 
 ---
 
@@ -1589,32 +2118,48 @@ lines if triggered.
 
 ### 6.1 CacheStore unit tests
 
-Pinned per R1-D1 (option (b)) + R1-D2 (eviction policy table).
-Each test corresponds to one or more rows of the §3.2 pre/post
-table; the test's `assert!(store.lookup(&X).is_some())` and
+The Round 1 test matrix below is preserved as audit trail per
+`91-documentation-after-plans.mdc`. Round 3's matrix
+(supersede-marked inline) reshapes the tests against the Round
+2-typed surface (`Arc<PreparedCache>`; `lookup_or_derive` instead
+of `insert`; `&Seedhash` instead of `&[u8; 32]`); adds tests for
+the Round 2 in-flight deduplication shape and the Round 3 F2/F3/
+F4/F5 threat-model dispositions.
+
+Pinned per R1-D1 Round 2 + R1-D2 Round 2 (eviction-policy table
+in §3.1 Round 2 disposition; the §3.2 Round 1 table is preserved
+as audit trail). Each test corresponds to one or more rows of
+the §3.1 Round 2 11-row pre/post table; the test's
+`assert!(store.lookup(&X).is_some())` and
 `assert!(store.lookup(&Y).is_none())` checks reproduce the row's
-post-state. Live in `rust/shekyl-pow-randomx/src/cache_store.rs#mod tests`
-(unit tests, per the Phase 2c R0-D6 tests-use-the-actual-API
-discipline — `cache_store.rs#mod tests` has `pub(crate)` access to
-internal slot fields for diagnostic assertions, not just
-`lookup`-via-public-API).
+post-state. Live in
+`rust/shekyl-pow-randomx/src/cache_store.rs#mod tests` (unit
+tests, per the Phase 2c R0-D6 tests-use-the-actual-API
+discipline — `cache_store.rs#mod tests` has `pub(crate)` access
+to internal slot fields and the in-flight `HashMap` for
+diagnostic assertions, not just public-API access).
 
-Test fixture: a stub `Cache` (the test does not derive a real
-256 MiB cache; tests use the existing `Cache::derive(&KEY)` from
-Phase 2c only when end-to-end identity is needed). For most slot-
-behavior tests, an `Arc<Cache>` of an arbitrary `Cache` instance
-suffices since the tests check identity by `Arc::ptr_eq` or
-seedhash equality, not by content.
+Test fixture: a stub `PreparedCache` (the test does not derive a
+real 256 MiB cache; tests construct
+`PreparedCache::derive(SEEDHASH)` only when end-to-end identity
+is needed; for most slot-behavior tests, the test fixture
+constructs `Arc<PreparedCache>` instances with stub `Cache`
+content via the `pub(crate)` `Cache::from_raw` test-time
+constructor — Phase 2c R1 — paired with a `Seedhash` literal).
 
-| # | Test name | R1-D2 row(s) | Assertion |
+| # | Test name | §3.1 Round 2 row(s) | Assertion |
 |---|---|---|---|
-| T-CS-1 | `cachestore_canonical_survives_3way_interleave` | rows 5–6, then extension to D | After `set_canonical(A); insert(B); insert(C); insert(D);` assert `lookup(A).is_some()` AND `lookup(D).is_some()` AND `lookup(B).is_none()` AND `lookup(C).is_none()`. **F1 anti-DoS test.** |
-| T-CS-2 | `cachestore_no_canonical_evicts_in_transient` | rows 2–3 (cold-start) | After `insert(A); insert(B);` (no `set_canonical` called), assert `lookup(A).is_none()` AND `lookup(B).is_some()`. **R1-D2 #2 degenerate-case test.** |
-| T-CS-3 | `cachestore_canonical_advance_demotes_prior` | row 7 | After `set_canonical(A); insert(B); set_canonical(B);` assert `lookup(A).is_some()` (A demoted to transient) AND `lookup(B).is_some()` (B canonical). Then `insert(C);` and assert `lookup(A).is_none()` AND `lookup(B).is_some()` AND `lookup(C).is_some()`. **R1-D2 #3 advance test.** |
-| T-CS-4 | `cachestore_set_canonical_noop_on_unknown` | row 8 | After `set_canonical(A); insert(B); set_canonical(D)` (D never inserted), assert `lookup(A).is_some()` AND `lookup(B).is_some()` AND `lookup(D).is_none()`. (No-op semantics: `set_canonical(unknown)` does NOT derive.) |
-| T-CS-5 | `cachestore_insert_canonical_match_is_noop` | row 9 | After `set_canonical(A); insert(B);` then `insert(A, cache_A_v2)` with a *different* `Arc<Cache>` for the same seedhash, assert `lookup(A)` returns the original `cache_A` (verified by `Arc::ptr_eq`), NOT `cache_A_v2`. (Canonical insert collision → no-op, matching the row table.) |
-| T-CS-6 | `cachestore_lookup_returns_arc_clone` | (generic invariant) | `Arc::strong_count(&cache_A) == 1` before insert; == 2 after `insert(A, cache_A.clone())`; == 3 after one `lookup(A)`; drops back when each lookup result goes out of scope. |
-| T-CS-7 | `cachestore_thread_safety_smoke` | (generic invariant) | Two `std::thread::spawn` workers each performing 100 alternating `lookup` / `insert` calls against a shared `Arc<CacheStore>`. Test passes if no panic, no deadlock, and the canonical slot survives the interleave. (Full thread-safety stress is 2g's differential harness territory; this is a smoke test.) |
+| T-CS-1 | `cachestore_canonical_survives_3way_interleave` | rows 5–6, then extension to D | `let pa = la(A); set_canonical(pa); la(B); la(C); la(D);` assert `lookup(&A).is_some()` AND `lookup(&D).is_some()` AND `lookup(&B).is_none()` AND `lookup(&C).is_none()`. **F1 anti-DoS test.** |
+| T-CS-2 | `cachestore_no_canonical_evicts_in_transient` | rows 2–3 (cold-start) | `la(A); la(B);` (no `set_canonical` called), assert `lookup(&A).is_none()` AND `lookup(&B).is_some()`. **R1-D2 #2 degenerate-case test.** |
+| T-CS-3 | `cachestore_canonical_advance_demotes_prior` | row 7 | `let pa = la(A); set_canonical(pa); let pb = la(B); set_canonical(pb);` assert `lookup(&A).is_some()` (A demoted to transient) AND `lookup(&B).is_some()` (B canonical). Then `la(C);` and assert `lookup(&A).is_none()` AND `lookup(&B).is_some()` AND `lookup(&C).is_some()`. **R1-D2 #3 advance test.** |
+| T-CS-4 | `cachestore_set_canonical_noop_on_canonical_match` | row 8 | `let pa = la(A); set_canonical(pa.clone()); la(B); set_canonical(pa);` (re-advance to A); assert `lookup(&A).is_some()` AND `lookup(&B).is_some()`. **No-op identity test.** |
+| T-CS-5 | `cachestore_lookup_returns_arc_clone` | (generic invariant) | `let pa = la(A);` `Arc::strong_count(&pa) == 2` (one in transient slot, one held by caller); `lookup(&A);` `strong_count == 3`; clones drop back when each lookup result goes out of scope. |
+| T-CS-6 | `cachestore_thread_safety_smoke` | (generic invariant) | Two `std::thread::spawn` workers each performing 100 alternating `lookup` / `lookup_or_derive` / `set_canonical` calls against a shared `Arc<CacheStore>`. Test passes if no panic, no deadlock, and the canonical slot survives the interleave. (Full thread-safety stress is 2g's differential harness territory; this is a smoke test.) |
+| T-CS-7 | `cachestore_thundering_herd_dedup` | row 11 | Two `std::thread::spawn` workers each call `cs.lookup_or_derive(&NOVEL)` for the same novel seedhash. Assert `Arc::ptr_eq(&result_thread1, &result_thread2)` (both received the same Arc clone). **F3 thundering-herd test.** |
+| T-CS-8 | `cachestore_inflight_cleanup_on_publish` | row 11 | After `cs.lookup_or_derive(&A)` completes, white-box assert `cs.in_flight.lock().unwrap().is_empty()` for seedhash A. **F4 cleanup-on-publish test.** Uses `pub(crate)` access to the private `in_flight` field. |
+| T-CS-9 | `cachestore_concurrent_derivation_determinism` | (generic property) | Two `std::thread::spawn` workers each construct `PreparedCache::derive(SAME_SEEDHASH)` *outside* the CacheStore (so the in-flight dedup doesn't apply). Assert `result_thread1.cache.item_bytes(0) == result_thread2.cache.item_bytes(0)` for byte-identical output. **F5 concurrent-derivation race test.** Asserts `Cache::derive` determinism independent of in-flight-dedup. |
+| T-CS-10 | `cachestore_set_canonical_takes_arc_prepared` | rows 4, 7 | Type-level check — `set_canonical` accepts `Arc<PreparedCache>`, not a seedhash + cache pair. (Compile-time check via the test's `let pa: Arc<PreparedCache> = ...; cs.set_canonical(pa);` pattern.) |
+| T-CS-11 | `cachestore_lookup_returns_typed_seedhash` | (Round 2 type-shape) | Type-level check — `lookup` takes `&Seedhash`, not `&[u8; 32]`. The test exercises `cs.lookup(&Seedhash::from_bytes([0x42; 32]))` to confirm the newtype is accepted at the call site. |
 
 ### 6.2 Crate-invariant grep tests
 
@@ -1642,9 +2187,14 @@ if the script's logic regressed.
 
 ### 6.3 Bench harness
 
-Per R1-D3 option (b): two component benches plus the existing
-Phase 2c `compute_hash_alloc` full-pipeline bench (303.60 ms median
-post-2d per `BENCH_RESULTS.md`).
+The Round 1 bench-harness table below is preserved as audit
+trail. Round 3's table (supersede-marked inline) reshapes the
+harness for the cfg-gated A/B approach pinned at §3.3 Round 3:
+the pool body is implemented behind
+`#[cfg(any(test, feature = "internal-pool-bench"))]` and the
+bench harness measures both paths directly.
+
+Round 1 framing:
 
 | # | Bench | Source | Assertion |
 |---|---|---|---|
@@ -1653,12 +2203,32 @@ post-2d per `BENCH_RESULTS.md`).
 | B-3 | `vmstate_alloc_register_file` (NEW per R1-D3) | Same | Component 2 of R1-D3 floor: register-file synth init median. |
 | B-4 | (Conditional per R1-D4 pool path) `compute_hash_with_pool::per_call` | `benches/compute_hash_alloc.rs` extension | Pool-path median; delta vs. B-1 reported in `BENCH_RESULTS.md`. |
 
-`BENCH_RESULTS.md` records:
+**Round 3 supersedes (cfg-gated A/B harness):**
 
-- Component-floor sum (B-2 + B-3 medians).
-- R1-D4 disposition applied (no-pool / ambiguity-band-escalation /
-  pool path) with the floor-vs-100-µs comparison spelled out.
-- (If pool path) B-4 delta and the R1-D5-derived pool capacity.
+| # | Bench | Source | Mode |
+|---|---|---|---|
+| B-1 | `compute_hash_alloc::per_call` (existing) | `benches/compute_hash_alloc.rs` | Phase 2d baseline (full-pipeline). Informational. |
+| B-2 | `vmstate_alloc_scratchpad_zeroed` | `benches/per_call_alloc.rs` (new) | Component method (Round 1 sanity floor; Round 3 retains as cross-check). |
+| B-3 | `vmstate_alloc_register_file` | Same | Component method (Round 1 sanity floor; Round 3 retains as cross-check). |
+| B-pool-off | `compute_hash_with_no_pool::per_call` | `benches/compute_hash_alloc.rs` extension | A/B path: production no-pool path, instrumented for direct measurement. Always runs. |
+| B-pool-on | `compute_hash_with_pool::per_call` | Same, gated by `--features internal-pool-bench` | A/B path: cfg-gated pool path. Runs only when the feature is enabled (CI / impl-PR pre-flight bench gate). |
+
+`BENCH_RESULTS.md` records (Round 3 supersedes):
+
+- Component-floor sum (B-2 + B-3 medians; sanity check against
+  B-pool-off — B-pool-off should not exceed component-floor by
+  more than the dispatch loop's known cost).
+- B-pool-off median (production no-pool path).
+- B-pool-on median (cfg-gated pool path; conditional on the
+  bench being run with `--features internal-pool-bench`).
+- A/B delta (B-pool-off − B-pool-on; this is the savings the
+  pool would deliver if promoted).
+- R1-D4 Round 3 disposition applied (Branch A / Branch B /
+  Branch C) with the delta-vs-100-µs comparison.
+- (If Branch C / pool-promoted) the Phase 3a-derived pool
+  capacity per R1-D5 Round 3 (runtime parameter), recorded as
+  the impl-PR's stub-default-for-tests value with a forward
+  pointer to the Phase 3a FFI shim's actual derivation.
 
 ---
 
@@ -1673,10 +2243,12 @@ directory is untouched. `_generator/phase2c/` and
 
 ## 8. Commit table
 
-Round 1 pins the implementation-PR commit breakdown. The base
-breakdown is 5 commits (matching Phase 2d's actual landed count).
-Commit 4 is conditional per R1-D4 — three branches per the §3.4
-disposition:
+The Round 1 commit breakdown below is preserved as audit trail.
+Round 3's table (supersede-marked inline) reshapes the breakdown
+for the Round 2 type sweep + Round 3 cfg-gated A/B bench harness.
+The Round 3 base breakdown is 6 commits.
+
+Round 1 framing:
 
 - **Branch A** (component floor < 50 µs): commit 4 is *omitted*;
   the impl PR closes at 4 commits + R1-D4-no-pool reversion-clause
@@ -1705,6 +2277,36 @@ internalization (commit 4) does not bundle into the bench commit
 (commit 3) even though the bench result drives the pool decision —
 keeping them separate means the bench result is reviewable
 independently of the pool implementation.
+
+**Round 3 supersedes (6-commit shape with Round 2 type sweep + cfg-gated A/B bench):**
+
+The Round 3 disposition makes the pool body always-implemented
+(behind `#[cfg(any(test, feature = "internal-pool-bench"))]` per
+§3.3 Round 3) and the cfg-gating-flip becomes the conditional
+commit instead. Round 2's `Seedhash` newtype + `PreparedCache`
+bundling adds a dedicated type-introduction commit (rule 90: scope
+per commit; the type sweep is logically separate from the
+`CacheStore` body). The §3.4 Round 3 branches (A/B/C) collapse
+to "is the pool's cfg-gating flipped to default-on" rather than
+"does the pool exist."
+
+| # | Subject (imperative, ≤72 chars) | Scope | Conditional? |
+|---|----------------------------------|-------|--------------|
+| 1 | `randomx: introduce Seedhash newtype + PreparedCache bundle` | New `src/seedhash.rs` (`pub struct Seedhash([u8; 32])` per §1.1 Round 2, with `from_bytes` / `as_bytes`). New `PreparedCache` in `src/lib.rs` or `src/prepared_cache.rs` bundling `Cache` + `Seedhash`. `Cache` visibility transitions from `pub` to `pub(crate)` with rustdoc cross-reference per §1.1 Round 2. `compute_hash` signature transitions from `(&Cache, &[u8; 32], &[u8])` to `(&PreparedCache, &[u8])`. Atomic codebase sweep updating every call site (per §3.1 Round 2 sweep-discipline) — Phase 2c/2d tests, FFI shim's internal `Seedhash::from_bytes(*ptr)` construction, every `&[u8; 32]` seedhash parameter. | Always |
+| 2 | `randomx: add CacheStore two-slot type per Phase 2f §3.1 Round 2` | New `src/cache_store.rs` (~200–300 lines) per R1-D1 Round 2 frozen API: `lookup`, `lookup_or_derive`, `set_canonical`. Internal `RwLock<Option<Arc<PreparedCache>>>` slots + `Mutex<HashMap<Seedhash, Shared<DerivationFuture>>>` in-flight map per §3.1 Round 2 sync-shape. Cleanup-on-publish per §3.1 Round 2. Re-export from `lib.rs`. Unit tests T-CS-1..11 per §6.1 Round 3. | Always |
+| 3 | `randomx: add crate-invariant grep gate per Phase 2f §3.6` | New `scripts/ci/check_randomx_crate_invariants.sh` (~50 lines) per R1-E1 patterns A/B/C with rustfmt-rely-chain note (§3.6 Round 3). New `.github/workflows/build.yml` step (~2 lines) sibling to FPU step. Cargo-test wrapper `tests/crate_invariants.rs`. | Always |
+| 4 | `randomx: implement cfg-gated VmState pool + per-call alloc bench` | Pool body in `src/vm_pool.rs` (~50–150 lines) gated by `#[cfg(any(test, feature = "internal-pool-bench"))]` per §3.3 Round 3. `VmStatePool::new(capacity: usize)` per R1-D5 Round 3 (runtime parameter; panic on default in non-test builds). Component benches B-2 + B-3 + B-pool-off + B-pool-on per §6.3 Round 3. `BENCH_RESULTS.md` update with A/B delta + §3.4 Round 3 branch disposition. | Always (the pool exists in source either way; B-pool-on only runs when `--features internal-pool-bench` is passed) |
+| 5 | `randomx: flip pool cfg-gate to default-on per Phase 2f §3.4 Round 3` | (Branch C only) Cfg-gate flip: `#[cfg(any(test, feature = "internal-pool-bench"))]` → unconditional. `compute_hash` rewires through the pool. Phase 3a's FFI shim sees the new `compute_hash` body. | Only on Branch C; omitted on Branch A (B-pool-off ≥ B-pool-on − pool overhead by < 100 µs delta); deferred on Branch B (50–100 µs ambiguity-band escalation per §3.4 Round 3) |
+| 6 | `randomx: close Phase 2f plan and update CHANGELOG` | `docs/CHANGELOG.md` entry (per rule 91); `RANDOMX_V2_PHASE2F_PLAN.md` §11 impl-PR-close row + impl-PR delta. Cite branch taken (A/B/C) and any reversion-clause activations. | Always |
+
+Per rule 90 (commit scope): each commit is bounded-scope. The
+Round 2 type sweep (commit 1) is logically separate from the
+CacheStore body (commit 2) — keeping them separate means the
+type-shape change is reviewable independently of the new
+type's main consumer. The pool implementation (commit 4) does
+not bundle into the cfg-gate flip (commit 5) — keeping them
+separate means the cfg-gated pool body is reviewable
+independently of the production-rewire.
 
 ---
 
@@ -1797,5 +2399,6 @@ already PQC-prepared by virtue of being PQC-orthogonal.
 | Round | Date | Outcome |
 |-------|------|---------|
 | Scaffold | 2026-05-23 | This document. Pins the substrate carry-forwards from `RANDOMX_V2_PLAN.md` Decisions #6/#7, `RANDOMX_V2_PHASE2C_PLAN.md` §5.11.7, and `RANDOMX_V2_PHASE2D_PLAN.md` §10. Enumerates §3 Round 1 decision points (R1-D1 API shape; R1-D2 eviction policy; R1-D3 bench methodology; R1-D4 pool threshold; R1-D5 fanout survey; R1-E1 grep patterns). Out-of-scope items pinned (no differential harness; no CI per-hash latency gate; no binary-level `nm` check; no parallel `Cache::derive`). Round 1 supersedes this scaffold's §3 / §5 / §6 / §8 with closed-decision content; the scaffold remains the substrate-capture provenance. |
+| Round 3 | 2026-05-23 | **Refinement bundle (closes Round 2's queued sub-details).** Round 2 landed the architectural keystone; Round 3 hardens the dispositions Round 2 left for follow-up. **§3.3 R1-D3 reframed to cfg-gated A/B approach.** The Round 1 (b) Component-method disposition is superseded by a cfg-gated pool approach: the pool body is implemented behind `#[cfg(any(test, feature = "internal-pool-bench"))]` regardless of R1-D4 outcome; the bench harness measures both paths directly (`B-pool-off` always; `B-pool-on` when the feature is enabled). Closes the Round 1 circular-sequencing problem ("can't bench the pool without implementing the pool" → "implement the pool gated for benching, promote to production iff the bench delta clears Decision #7's threshold"). The cfg-gated pool stays in source as the bench-only artifact on Branch A; flips to default-on on Branch C. **§3.4 R1-D4 dissolved into R1-D3.** No separate Round-1 decision exists: the threshold (Decision #7's 100 µs) is a binding source; the Round 1 task is mechanical application of the threshold to the A/B delta from §3.3 Round 3. The §3.4 "Round 1 disposition" becomes a forward pointer to §3.3 + Decision #7 + the §8 Round 3 commit table's Branch A/B/C trichotomy. **§3.5 R1-D5 refined to runtime-configurable capacity.** The Round 1 disposition's pool-capacity-as-compile-time-constant shape is superseded by `VmStatePool::new(capacity: usize)` — a runtime parameter constructed from the Phase 3a FFI shim's threadpool-source-derived value. The Round 1 R1-D5 survey methodology stands; the substrate-anchored value flows into the constructor at runtime rather than getting baked into a `pub(crate) const` at compile time. The default constructor panics in non-test builds to enforce explicit configuration. Closes the Round 1 staleness footgun where a Phase-2F-baked-in capacity could mismatch the Phase 3a daemon configuration. **§3.6 R1-E1 rustfmt-rely-chain note added.** The Round 1 column-0 anchor is robust against function-local statics if and only if `cargo fmt --check` is a CI gate (which it is, per Phase 2c R0-D6). The rustfmt-rely-chain is named explicitly in the §3.6 Round 3 sub-block so future readers don't need to re-derive the soundness condition. **§4 threat model: F1–F7 enumeration** (Round 4 placeholder retained as audit trail; Round 3 supersedes inline). Seven attack classes named with disposition: F1 cache-derivation DoS amplification (closed by canonical non-eviction); F2 Arc-holding memory exhaustion (bounded by capacity-2 + caller-side discipline note); F3 thundering herd on novel-seedhash (closed by in-flight dedup); F4 unbounded HashMap growth (closed by cleanup-on-publish); F5 concurrent-derivation race (covered by determinism property + dedup); F6 mutex contention amplification (addressed by RwLock-per-slot + capacity-2-no-sharding); F7 cache-derivation cost asymmetry (out of scope; upstream daemon-side validation discipline). The enumeration replaces Round 1's three-line threat-model placeholder. **Caller hand-off Arc-lifetime discipline note** added to the CacheStore rustdoc (consumers should hold `Arc<PreparedCache>` only for the duration of the immediate hash computation; long-lived holds extend cache memory residency beyond CacheStore's bound; daemon-side discipline, not a CacheStore enforcement). **§6.1 test plan reshaped to Round-2-typed pre/post table** (T-CS-1..11; in-flight dedup test T-CS-7; cleanup-on-publish white-box test T-CS-8; concurrent-determinism property test T-CS-9; type-shape compile-time checks T-CS-10/11). **§6.3 bench harness reshaped** to B-pool-off / B-pool-on A/B per §3.3 Round 3; component-floor benches (B-2/B-3) retained as cross-check; `BENCH_RESULTS.md` records the A/B delta + Branch disposition. **§8 commit table reshaped** to 6-commit Round-2-+-Round-3 shape: commit 1 = `Seedhash` + `PreparedCache` type sweep; commit 2 = `CacheStore`; commit 3 = invariant grep gate; commit 4 = cfg-gated pool + A/B bench (always); commit 5 = cfg-gate flip (Branch C only); commit 6 = plan close + `CHANGELOG`. The Round 1 5-commit shape's Branch-A-omits-commit-4 / Branch-B-defers-commit-4 / Branch-C-includes-commit-4 trichotomy collapses to "is commit 5 included" rather than "does commit 4 exist." **§3.1 (g) rejection inline at CacheStore rustdoc** so future readers asking "wouldn't this be simpler without two slots?" find the adversarial finding rather than re-proposing the shape. **Adversarial-pass-precedent** named: the (g) → (b) Round 2 reversal is the second documented instance of "adversarial pass reverses an aesthetically-preferred choice" (first: LWMA-1 time-source local-time-only over peer-time-derived). The recurrence justifies promotion to `26-sub-pr-design-discipline.mdc` as a sibling discipline-promotion PR (`chore/sub-pr-design-discipline-adversarial-pass`). **No substrate read of Round 2** — Round 3 builds atop the already-landed Round 2 dispositions. **No outstanding Round-N+1 follow-ups** queued from Round 3; Round 4 (if any future round opens) reopens via the §3.1 / §3.3 / §3.5 substrate-change reopening criteria, not via sequential numbering. |
 | Round 2 | 2026-05-23 | **Architectural reframe (load-bearing structural change).** The Round 1 dispositions stand as audit trail; Round 2 supersedes the load-bearing surface where the Phase 2c freeze inherited a consensus-correctness footgun the type system can close. **§1.1 substrate correction.** Phase 2c's `compute_hash(&Cache, &[u8; 32], &[u8]) -> [u8; 32]` shape carries the cache and the seedhash as separate arguments; a caller passing the wrong cache for a given seedhash gets a wrong hash, which is fine for chain integrity (network rejects) but is a footgun the type system can close at zero cost. Round 2 introduces `PreparedCache` (bundles `Cache + Seedhash`), `Seedhash` newtype (replaces the `&[u8; 32]` alias), and amends `compute_hash` to take `&PreparedCache`. `Cache` transitions `pub → pub(crate)`; the public construction path is `PreparedCache::derive`. Per `16-architectural-inheritance.mdc` pre-genesis discount and the cost-benefit-defer-to-later anti-pattern, the substrate correction lands now in Round 2 of Phase 2F's plan-doc rather than in V3.x. **§3.1 R1-D1 + R1-D2 merged disposition.** The single-axis Round 1 question (CacheStore API shape) is layered into a three-axis question post-`PreparedCache`: Axis 1 = where the cache+seedhash binding lives (Round 2 picks `PreparedCache` bundling); Axis 2 = canonical-protection shape (Round 1's (b) reaffirmed; now operates on `Arc<PreparedCache>`); Axis 3 = whether `CacheStore` exists (Round 2 picks (e)/(f) hybrid — thin amortizing layer with explicit two-slot canonical-protection). Rejects (d)/(g) no-CacheStore alternatives for the Arc-holding memory exhaustion attack. **Frozen API code-block updated:** `lookup(&Seedhash) -> Option<Arc<PreparedCache>>`, `lookup_or_derive(&Seedhash) -> Arc<PreparedCache>`, `set_canonical(Arc<PreparedCache>)`. The Round 1 `insert` method is removed (subsumed by `lookup_or_derive`'s on-completion publication). **In-flight derivation deduplication** pinned: `Mutex<HashMap<Seedhash, Shared<DerivationFuture>>>` with cleanup-on-publish; closes the thundering-herd attack surface that applies regardless of Axis 2/3 selection. **Synchronization shape** pinned: per-slot `RwLock<Option<Arc<PreparedCache>>>` (canonical + transient), `Mutex<HashMap>` for in-flight; sharding rejected at capacity-2. **11-row state-transition table** updated to `Arc<PreparedCache>` typing; substantive transitions unchanged (canonical non-evictable; transient displace-on-publish; advance promotes-and-demotes); in-flight-dedup concurrent row added. **Capacity-2 reopen criterion sharpened**: requires named real consumer + sustained operational pattern + measurable cost (not "we might want N someday"). **Transparent-memo framing retired**; parent-plan `RANDOMX_V2_PLAN.md` Decision #6 wording amendment queued as precursor PR `chore/randomx-v2-plan-decision6-amendment` (precedent: Phase 2c F4-absorbed parent-plan rescope). **Reversion clause expanded** to three independent axes (Axis 1: PreparedCache; Axis 2: canonical-protection-in-(b); Axis 3: CacheStore exists), each with substrate-anchored reopening criteria. **§5 hand-off contract** updated: `compute_hash` signature, `Cache` visibility, `CacheStore` API, eviction-policy table, and Round-2 new artifacts (Seedhash newtype, PreparedCache, FFI-shim sweep) supersede the Round 1 freeze items where applicable; Round 1 items not touched by Round 2 (R1-D3 / R1-D4 / R1-D5 / R1-E1) carry forward unchanged. **Seedhash newtype sweep is atomic with its introduction**: every site that currently passes `&[u8; 32]` for a seedhash updates in the same impl-PR commit as the newtype landing — no transitional period. **§10 forward path** updated: 2g and 3a inherit the `PreparedCache` shape; PQC migration space note added (verifier crate is PQC-orthogonal by construction; PQC architectural choices land at Phase 3a's shim layer, not in the verifier). **Round 3 follow-up commit queued** to refine R1-D3 (cfg-gated pool approach), fold R1-D4 into R1-D3, refine R1-D5 (runtime-configurable capacity), and absorb threat-model F1–F7 enumeration + adversarial-pass-precedent note. The Round 2 commit lands the architectural keystone; Round 3 hardens the dispositions. |
 | Round 1 | 2026-05-23 | *(Audit trail; superseded by Round 2 where applicable.)* Closed R1-D1 through R1-E1. **R1-D1**: CacheStore picks option (b) explicit two-slot type (`new` / `lookup` / `insert` / `set_canonical`); rejects (a) for caller-discipline burden on the F1 sticky-canonical defense; rejects (c) for over-provisioning (capacity 2 doesn't justify type-stratified composition). Internal sync via `std::sync::Mutex` (no new workspace deps; verified `lru` not in `rust/Cargo.toml`, `parking_lot` only transitive). **R1-D2**: eviction policy falls out of (b) — canonical non-evictable; transient displace-on-insert; `set_canonical` advance promotes-from-transient + demotes-prior; cold-start-window degenerate case bounded to daemon startup and handled by FFI shim's discipline (no fallback policy in CacheStore). 11-row pre/post state-transition table pinned in §3.2 covering 3-seedhash interleave attack, cold-start, advance, no-op cases. **R1-D3**: bench methodology picks option (b) Component method; rejects (a) Diff method because it would require promoting `VmState` to `pub` and adding a `compute_hash_with_state` helper — both contradict §1.1 freeze and Decision #7's no-public-`VmPool` posture; rejects (c) Population method per scaffold's sequencing-cycle note. Component sum measures `Box::<[u8]>::new_zeroed_slice(2 MiB)` + synthetic register-file init (the bench does not consume the production `VmState` newtype to keep visibility clean); sum is a *floor* on per-call alloc cost (excludes register-file struct overhead and field-init cost). **R1-D4**: pool decision threshold confirmed at 100 µs per `RANDOMX_V2_PLAN.md` line 240. Three-band rule: < 50 µs → no pool (Branch A); [50, 100) µs → escalate to impl-PR pre-flight per R1-D3 reversion-clause #1 (Branch B); ≥ 100 µs → pool inside `compute_hash`, no public `VmPool`, capacity from R1-D5 (Branch C). Reversion clauses for the no-pool path: allocator regression (mimalloc/jemalloc swap), scratchpad-size change at consensus level, runtime-architecture mismatch (cross-compile target's allocator differs from CI). **R1-D5**: daemon parallel-verification fanout survey methodology pinned. Audit-against-actual-code per `16-architectural-inheritance.mdc`: read `src/cryptonote_core/blockchain.cpp`, `src/cryptonote_core/tx_pool.cpp`, `src/cryptonote_core/cryptonote_tx_utils.cpp`, `src/common/threadpool.{h,cpp}` at `dev` tip = `fb21909ff`. Substrate correction vs. prompt: only **one** parallel-`compute_hash` call site exists at HEAD — alt-chain branch validation's `block_longhash_worker` via `tools::threadpool::getInstanceForCompute()`, capped by `m_max_prepare_blocks_threads` (default 4). Mempool tx verification (`tx_pool.cpp`, `cryptonote_tx_utils.cpp`, `tx_pqc_verify.cpp`) does **not** call `compute_hash` in parallel — the prompt's two-source assumption was incorrect. Pool capacity formula: `min(threadpool::getInstanceForCompute().get_max_concurrency(), m_max_prepare_blocks_threads) + 1` reserve. Reversion criteria: a future PR introducing `tools::threadpool` + `compute_hash` in tx_pool.cpp / cryptonote_tx_utils.cpp / tx_pqc_verify.cpp; `m_max_prepare_blocks_threads` default change; Phase 3a FFI shim survey reveals new concurrent consumer. **R1-E1**: three-pattern enumeration: pattern A bans imports of `once_cell` / `lazy_static` / `OnceLock` / `LazyLock` (stricter than module-level-static-only — eliminates the disambiguation between module-level and function-local usage by rejecting the import; the crate provably does not need any of these); pattern B bans column-0 `static` declarations (function-local statics live inside fn bodies and are indented, so pattern B does not match them; `const` items are a different keyword and not matched); pattern C bans `#[no_mangle]`, `#[unsafe(no_mangle)]`, `#[export_name`, `#[unsafe(export_name`, and `extern "C" fn` definition form (`extern "C" { fn foo(); }` import blocks consuming an external FFI surface are not matched since they require `fn` *inside* the brace block, not after `"C"`). New script `scripts/ci/check_randomx_crate_invariants.sh` modeled on `check_randomx_fpu_rounding.sh`. CI integration: new `.github/workflows/build.yml` step `enforce RandomX crate-level isolation invariants` sibling to FPU step. Reversion criteria per pattern: stdlib evolution (pattern A successor primitives), genuine large-immutable-shared-state need (pattern B reopen), Decision #5 reversal (pattern C reopen). **Substrate finding at verification.** Pattern C's first draft (anywhere-on-line match) collided with the existing `lib.rs` rustdoc at lines 31–32, which legitimately cites the forbidden tokens (`` `#[no_mangle]` ``, `` `extern "C" fn` ``, `` `#[export_name]` ``) as part of the documented discipline. Disposition: anchor pattern C at column 0 (with optional leading whitespace for attributes indented inside fn bodies) — code attributes start at column 0 modulo indentation, rustdoc lines start with `//!`. Patterns A and B were already `^`-anchored; the inconsistency was specific to pattern C. **Verification at HEAD (post-fix)**: greps return zero hits across `rust/shekyl-pow-randomx/src/` confirming clean baseline. **Plan-doc edits**: §3.1–§3.6 each gain a "Round 1 disposition" sub-block; §5 placeholder superseded by frozen-surface contract (5.1) + in-scope artifact table (5.2) + out-of-scope re-emphasis (5.3); §6 placeholder superseded by 7-row CacheStore unit-test table + 4-row CI-invariant table + 4-row bench-harness table; §8 placeholder superseded by 5-commit table with R1-D4 three-branch conditional (commit 4 omitted/deferred/included per Branch A/B/C). |
