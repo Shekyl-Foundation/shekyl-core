@@ -101,21 +101,65 @@ use core::mem::MaybeUninit;
 /// a supported verifier platform per
 /// [`RANDOMX_V2_PLAN.md`](../../../docs/design/RANDOMX_V2_PLAN.md)).
 ///
-/// # Phase 2c shape (F3a deferred newtype)
+/// # Phase 2d shape (R1-D2 minimal newtype)
 ///
-/// Phase 2c introduces `F128` as a `type F128 = [f64; 2];` alias —
-/// no `struct` wrapper, no method API, no `Copy`/`Default`/`Debug`
-/// derives beyond what the inner array already provides. Per
-/// [`RANDOMX_V2_PHASE2C_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
-/// §5.3 F3a + §5.1.1 "F128 shorthand discipline", the newtype
-/// extraction decision (`struct F128([f64; 2])` with method API,
-/// distinct type identity) is deferred to Phase 2d's §3.2
-/// design-decision point: 2d Round 1 evaluates the newtype-or-keep
-/// against real dispatch surfaces (FADD_R, FSUB_R, FMUL_R, FDIV_M,
-/// FSQRT_R, FSCAL_R, FSWAP_R, CFROUND) and decides then. Until
-/// then, this alias locks the *element shape* (`[f64; 2]`), not
-/// the *type identity*.
-pub(crate) type F128 = [f64; 2];
+/// Phase 2d promotes the Phase 2c `type F128 = [f64; 2]` alias to a
+/// `struct` newtype per
+/// [`RANDOMX_V2_PHASE2D_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2D_PLAN.md)
+/// §3.2 R1-D2. The inner `[f64; 2]` lane layout is unchanged; FP
+/// opcode methods land in the same commit series as their dispatch
+/// arms. Integer helpers (`rotr`, `rotl`, `load64`, `store64`) live
+/// alongside this type as private `fn` items for bytecode dispatch.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct F128(pub(crate) [f64; 2]);
+
+impl core::ops::Index<usize> for F128 {
+    type Output = f64;
+
+    fn index(&self, index: usize) -> &f64 {
+        &self.0[index]
+    }
+}
+
+impl core::ops::IndexMut<usize> for F128 {
+    fn index_mut(&mut self, index: usize) -> &mut f64 {
+        &mut self.0[index]
+    }
+}
+
+impl F128 {
+    fn add_unrestricted(self, rhs: Self) -> Self {
+        Self([self[0] + rhs[0], self[1] + rhs[1]])
+    }
+
+    fn sub_unrestricted(self, rhs: Self) -> Self {
+        Self([self[0] - rhs[0], self[1] - rhs[1]])
+    }
+
+    fn mul_unrestricted(self, rhs: Self) -> Self {
+        Self([self[0] * rhs[0], self[1] * rhs[1]])
+    }
+
+    fn div_masked(self, rhs: Self) -> Self {
+        Self([self[0] / rhs[0], self[1] / rhs[1]])
+    }
+
+    fn sqrt_unrestricted(self) -> Self {
+        Self([self[0].sqrt(), self[1].sqrt()])
+    }
+
+    fn swap_lanes(self) -> Self {
+        Self([self[1], self[0]])
+    }
+
+    fn xor_with_scale_mask(self) -> Self {
+        const FSCAL_MASK: u64 = 0x80F0_0000_0000_0000;
+        Self([
+            f64::from_bits(self[0].to_bits() ^ FSCAL_MASK),
+            f64::from_bits(self[1].to_bits() ^ FSCAL_MASK),
+        ])
+    }
+}
 
 /// Number of [`Instruction`]s in a single RandomX v2 [`Program`].
 ///
@@ -233,6 +277,17 @@ const _: () = assert!(
      RANDOMX_SCRATCHPAD_L3 has drifted or whether the C reference's \
      formula has changed"
 );
+
+const RANDOMX_SCRATCHPAD_L1: usize = 16_384;
+const RANDOMX_SCRATCHPAD_L2: usize = 262_144;
+const SCRATCHPAD_L1_MASK: u64 = ((RANDOMX_SCRATCHPAD_L1 / 8 - 1) * 8) as u64;
+const SCRATCHPAD_L2_MASK: u64 = ((RANDOMX_SCRATCHPAD_L2 / 8 - 1) * 8) as u64;
+const SCRATCHPAD_L3_MASK: u64 = ((RANDOMX_SCRATCHPAD_L3 / 8 - 1) * 8) as u64;
+
+const REGISTER_NEEDS_DISPLACEMENT: usize = 5;
+const RANDOMX_JUMP_BITS: u32 = 8;
+const RANDOMX_JUMP_OFFSET: u32 = 8;
+const CONDITION_MASK: u64 = (1u64 << RANDOMX_JUMP_BITS) - 1;
 
 /// Number of program chains executed per [`compute_hash`] invocation.
 ///
@@ -557,7 +612,7 @@ pub(crate) fn get_float_mask(entropy: u64) -> u64 {
 pub(crate) fn cvt_packed_int_to_f128(bytes: &[u8; 8]) -> F128 {
     let lo = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
     let hi = i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-    [f64::from(lo), f64::from(hi)]
+    F128([f64::from(lo), f64::from(hi)])
 }
 
 /// Apply the FDIV_M-style `maskRegisterExponentMantissa` transform
@@ -592,7 +647,7 @@ pub(crate) fn cvt_packed_int_to_f128(bytes: &[u8; 8]) -> F128 {
 pub(crate) fn mask_register_exponent_mantissa(x: F128, e_mask: [u64; 2]) -> F128 {
     let lo_bits = (x[0].to_bits() & DYNAMIC_MANTISSA_MASK) | e_mask[0];
     let hi_bits = (x[1].to_bits() & DYNAMIC_MANTISSA_MASK) | e_mask[1];
-    [f64::from_bits(lo_bits), f64::from_bits(hi_bits)]
+    F128([f64::from_bits(lo_bits), f64::from_bits(hi_bits)])
 }
 
 /// Reinterpret a [`F128`] register pair as a 16-byte AES state block
@@ -637,7 +692,201 @@ fn f128_to_aes_bytes(f: F128) -> [u8; 16] {
 fn aes_bytes_to_f128(bytes: &[u8; 16]) -> F128 {
     let lo = u64::from_le_bytes(bytes[0..8].try_into().expect("16-byte block split at 8"));
     let hi = u64::from_le_bytes(bytes[8..16].try_into().expect("16-byte block split at 8"));
-    [f64::from_bits(lo), f64::from_bits(hi)]
+    F128([f64::from_bits(lo), f64::from_bits(hi)])
+}
+
+/// Sign-extend a 32-bit two's-complement immediate to 64 bits.
+///
+/// Mirrors `signExtend2sCompl` / IMM32 handling in
+/// `bytecode_machine.cpp` operand decode at pin `aaafe71`.
+#[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+pub(crate) const fn sign_extend_i32_to_i64(x: u32) -> u64 {
+    (x as i32 as i64) as u64
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InstructionType {
+    IAddRs,
+    IAddM,
+    ISubR,
+    ISubM,
+    IMulR,
+    IMulM,
+    IMulhR,
+    IMulhM,
+    ISMulhR,
+    ISMulhM,
+    IMulRcp,
+    INegR,
+    IXorR,
+    IXorM,
+    IRorR,
+    IRolR,
+    ISwapR,
+    FSwapR,
+    FAddR,
+    FAddM,
+    FSubR,
+    FSubM,
+    FScalR,
+    FMulR,
+    FDivM,
+    FSqrtR,
+    CBranch,
+    CfRound,
+    IStore,
+}
+
+fn decode_instruction_type(opcode: u8) -> InstructionType {
+    match opcode {
+        0..=15 => InstructionType::IAddRs,
+        16..=22 => InstructionType::IAddM,
+        23..=38 => InstructionType::ISubR,
+        39..=45 => InstructionType::ISubM,
+        46..=61 => InstructionType::IMulR,
+        62..=65 => InstructionType::IMulM,
+        66..=69 => InstructionType::IMulhR,
+        70 => InstructionType::IMulhM,
+        71..=74 => InstructionType::ISMulhR,
+        75 => InstructionType::ISMulhM,
+        76..=83 => InstructionType::IMulRcp,
+        84..=85 => InstructionType::INegR,
+        86..=100 => InstructionType::IXorR,
+        101..=105 => InstructionType::IXorM,
+        106..=113 => InstructionType::IRorR,
+        114..=115 => InstructionType::IRolR,
+        116..=119 => InstructionType::ISwapR,
+        120..=123 => InstructionType::FSwapR,
+        124..=139 => InstructionType::FAddR,
+        140..=144 => InstructionType::FAddM,
+        145..=160 => InstructionType::FSubR,
+        161..=165 => InstructionType::FSubM,
+        166..=171 => InstructionType::FScalR,
+        172..=203 => InstructionType::FMulR,
+        204..=207 => InstructionType::FDivM,
+        208..=213 => InstructionType::FSqrtR,
+        214..=238 => InstructionType::CBranch,
+        239 => InstructionType::CfRound,
+        240..=255 => InstructionType::IStore,
+    }
+}
+
+/// Load a little-endian `u64` from an 8-byte scratchpad slice.
+///
+/// Mirrors `load64` in `external/randomx-v2/src/blake2/endian.h` at
+/// pin `aaafe71` (native little-endian on verifier targets).
+pub(crate) fn load64(addr: &[u8]) -> u64 {
+    let bytes: [u8; 8] = addr[..8].try_into().expect("load64 requires 8 bytes");
+    u64::from_le_bytes(bytes)
+}
+
+/// Store a little-endian `u64` into an 8-byte scratchpad slice.
+///
+/// Mirrors `store64` in `external/randomx-v2/src/blake2/endian.h` at
+/// pin `aaafe71`.
+pub(crate) fn store64(addr: &mut [u8], value: u64) {
+    addr[..8].copy_from_slice(&value.to_le_bytes());
+}
+
+/// Rotate `a` right by `b` bits (mod 64).
+///
+/// Portable definition matching `instructions_portable.cpp:92-94`
+/// (`(-b & 63)` shift amount) at pin `aaafe71`.
+#[allow(clippy::manual_rotate)]
+pub(crate) fn rotr(a: u64, b: u32) -> u64 {
+    let b = b & 63;
+    if b == 0 {
+        return a;
+    }
+    (a >> b) | (a << (64 - b))
+}
+
+/// Rotate `a` left by `b` bits (mod 64).
+///
+/// Portable definition matching `instructions_portable.cpp:99-101`
+/// at pin `aaafe71`.
+#[allow(clippy::manual_rotate)]
+pub(crate) fn rotl(a: u64, b: u32) -> u64 {
+    let b = b & 63;
+    if b == 0 {
+        return a;
+    }
+    (a << b) | (a >> (64 - b))
+}
+
+fn int_reg(index: u8) -> usize {
+    usize::from(index) % REGISTERS_COUNT
+}
+
+fn fp_reg(index: u8) -> usize {
+    usize::from(index) % REGISTER_COUNT_FLT
+}
+
+fn mod_mem(instr: &Instruction) -> bool {
+    instr.mod_ % 4 != 0
+}
+
+fn mod_shift(instr: &Instruction) -> u32 {
+    u32::from((instr.mod_ >> 2) % 4)
+}
+
+fn mod_cond(instr: &Instruction) -> u32 {
+    u32::from(instr.mod_ >> 4)
+}
+
+fn memory_mask(instr: &Instruction, dst: usize, src: usize) -> u64 {
+    if src == dst {
+        SCRATCHPAD_L3_MASK
+    } else if mod_mem(instr) {
+        SCRATCHPAD_L1_MASK
+    } else {
+        SCRATCHPAD_L2_MASK
+    }
+}
+
+fn scratchpad_addr(base: u64, imm: u64, mask: u64) -> usize {
+    usize::try_from(base.wrapping_add(imm) & mask)
+        .expect("RandomX scratchpad masks fit in usize on verifier targets")
+}
+
+fn load_scratchpad_u64(state: &VmState, base: u64, imm: u64, mask: u64) -> u64 {
+    let off = scratchpad_addr(base, imm, mask);
+    load64(&state.scratchpad[off..off + 8])
+}
+
+fn load_scratchpad_f128(state: &VmState, base: u64, imm: u64, mask: u64) -> F128 {
+    let off = scratchpad_addr(base, imm, mask);
+    let bytes: [u8; 8] = state.scratchpad[off..off + 8]
+        .try_into()
+        .expect("scratchpad mask bounds 8-byte F128 integer load");
+    cvt_packed_int_to_f128(&bytes)
+}
+
+fn store_scratchpad_u64(state: &mut VmState, base: u64, imm: u64, mask: u64, value: u64) {
+    let off = scratchpad_addr(base, imm, mask);
+    store64(&mut state.scratchpad[off..off + 8], value);
+}
+
+fn is_zero_or_power_of_two(x: u32) -> bool {
+    x & x.wrapping_sub(1) == 0
+}
+
+/// Execute the v2-only CFROUND body.
+///
+/// Mirrors `bytecode_machine.hpp:261-266` with the v1 flag branch
+/// deleted per `RANDOMX_V2_PHASE2D_PLAN.md` §2 F5. The helper is
+/// separated from the dispatch match so commit 2 can pin the
+/// rounding-mode side effect before commit 3 lands the frequency
+/// decode ladder.
+fn execute_cfround(instr: &Instruction, state: &mut VmState) {
+    let src = usize::from(instr.src % 8);
+    let isrc = rotr(state.r[src], instr.imm32 & 63);
+
+    if (isrc & 60) == 0 {
+        let mode = (isrc & 3) as u32;
+        crate::fpu_rounding::set_rounding_mode(mode);
+        state.fprc = mode;
+    }
 }
 
 /// A single 8-byte RandomX v2 bytecode instruction.
@@ -723,6 +972,9 @@ pub(crate) struct Program {
     /// `VmState::init_program` from the AES-generated entropy
     /// buffer; left zero-initialized by [`Program::default`].
     pub(crate) instructions: [Instruction; PROGRAM_SIZE],
+    /// CBRANCH target-next-PC table, derived from the C reference's
+    /// `registerUsage` simulation during program compilation.
+    pub(crate) cbranch_table: [u16; PROGRAM_SIZE],
 }
 
 impl Default for Program {
@@ -746,6 +998,7 @@ impl Default for Program {
     fn default() -> Self {
         Self {
             instructions: core::array::from_fn(|_| Instruction::default()),
+            cbranch_table: [u16::MAX; PROGRAM_SIZE],
         }
     }
 }
@@ -916,6 +1169,12 @@ pub(crate) struct VmState {
     /// per spec §4.5.3) and the final hash assembly. Set during
     /// `compute_hash` setup, read by program-init and finalize.
     pub(crate) temp_hash: [u64; 8],
+    /// Next program counter requested by CBRANCH, or `u16::MAX` when
+    /// the current instruction did not branch.
+    pub(crate) branch_pc: u16,
+    /// Currently executing instruction index, used to index
+    /// [`Program::cbranch_table`] from the frozen dispatch signature.
+    pub(crate) exec_pc: u16,
 }
 
 impl VmState {
@@ -1005,9 +1264,9 @@ impl VmState {
 
         Self {
             r: [0u64; 8],
-            f: [[0.0f64; 2]; 4],
-            e: [[0.0f64; 2]; 4],
-            a: [[0.0f64; 2]; 4],
+            f: [F128::default(); 4],
+            e: [F128::default(); 4],
+            a: [F128::default(); 4],
             fprc: 0,
             scratchpad,
             e_mask: [0u64; 2],
@@ -1017,6 +1276,8 @@ impl VmState {
             dataset_offset: 0,
             program: Box::new(Program::default()),
             temp_hash: [0u64; 8],
+            branch_pc: u16::MAX,
+            exec_pc: u16::MAX,
         }
     }
 
@@ -1189,6 +1450,50 @@ impl VmState {
                         .expect("INSTRUCTION_SIZE = 8 yields a 4-byte imm32 tail by construction"),
                 ),
             };
+        }
+
+        let mut register_usage = [-1i32; REGISTERS_COUNT];
+        self.program.cbranch_table = [u16::MAX; PROGRAM_SIZE];
+        for i in 0..PROGRAM_SIZE {
+            let current_index = i32::try_from(i).expect("PROGRAM_SIZE fits in i32");
+            let instr = self.program.instructions[i];
+            let instr_type = decode_instruction_type(instr.opcode);
+            let dst = int_reg(instr.dst);
+            let src = int_reg(instr.src);
+
+            match instr_type {
+                InstructionType::IAddRs
+                | InstructionType::IAddM
+                | InstructionType::ISubR
+                | InstructionType::ISubM
+                | InstructionType::IMulR
+                | InstructionType::IMulM
+                | InstructionType::IMulhR
+                | InstructionType::IMulhM
+                | InstructionType::ISMulhR
+                | InstructionType::ISMulhM
+                | InstructionType::INegR
+                | InstructionType::IXorR
+                | InstructionType::IXorM
+                | InstructionType::IRorR
+                | InstructionType::IRolR => {
+                    register_usage[dst] = current_index;
+                }
+                InstructionType::IMulRcp if !is_zero_or_power_of_two(instr.imm32) => {
+                    register_usage[dst] = current_index;
+                }
+                InstructionType::ISwapR if src != dst => {
+                    register_usage[dst] = current_index;
+                    register_usage[src] = current_index;
+                }
+                InstructionType::CBranch => {
+                    let creg = dst;
+                    self.program.cbranch_table[i] =
+                        u16::try_from(register_usage[creg] + 1).expect("CBRANCH target fits u16");
+                    register_usage.fill(current_index);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -1410,10 +1715,20 @@ impl VmState {
         // In Phase 2c the body is NOP per §5.1.1 frozen surface 1;
         // Phase 2d replaces dispatch_instruction's body with the
         // 28 opcode-handler dispatch table.
-        for instr_idx in 0..PROGRAM_SIZE {
+        let mut instr_idx = 0usize;
+        while instr_idx < PROGRAM_SIZE {
+            self.exec_pc = u16::try_from(instr_idx).expect("PROGRAM_SIZE fits in u16");
+            self.branch_pc = u16::MAX;
             let instr = self.program.instructions[instr_idx];
             dispatch_instruction(&instr, self);
+            if self.branch_pc == u16::MAX {
+                instr_idx += 1;
+            } else {
+                instr_idx = usize::from(self.branch_pc);
+            }
         }
+        self.exec_pc = u16::MAX;
+        self.branch_pc = u16::MAX;
 
         // Spec §4.6.5: dataset read prep — capture read_ptr from
         // the pre-mutation `ma`, then XOR-mutate `ma` from
@@ -1598,15 +1913,197 @@ impl Drop for VmState {
 /// Pure NOP function. No-ops on every input. Phase 2d's body
 /// inherits the constant-time-or-explicit-rejection discipline per
 /// `30-cryptography.mdc` for per-opcode timing equivalence.
-fn dispatch_instruction(_instr: &Instruction, _state: &mut VmState) {
-    // Phase 2c stub: NOP all opcodes.
-    //
-    // Phase 2d replaces this body with a 28-arm table-driven
-    // dispatch over `_instr.opcode`. See
-    // `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` for the forward-action
-    // design and `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.1.1 for
-    // the frozen-signature contract that 2d's body replacement
-    // operates within.
+fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
+    let dst = int_reg(instr.dst);
+    let src = int_reg(instr.src);
+    let imm = sign_extend_i32_to_i64(instr.imm32);
+
+    match decode_instruction_type(instr.opcode) {
+        InstructionType::IAddRs => {
+            let addend = state.r[src].wrapping_shl(mod_shift(instr)).wrapping_add(
+                if dst == REGISTER_NEEDS_DISPLACEMENT {
+                    imm
+                } else {
+                    0
+                },
+            );
+            state.r[dst] = state.r[dst].wrapping_add(addend);
+        }
+        InstructionType::IAddM => {
+            let mask = memory_mask(instr, dst, src);
+            let base = if src == dst { 0 } else { state.r[src] };
+            let value = load_scratchpad_u64(state, base, imm, mask);
+            state.r[dst] = state.r[dst].wrapping_add(value);
+        }
+        InstructionType::ISubR => {
+            let value = if src == dst { imm } else { state.r[src] };
+            state.r[dst] = state.r[dst].wrapping_sub(value);
+        }
+        InstructionType::ISubM => {
+            let mask = memory_mask(instr, dst, src);
+            let base = if src == dst { 0 } else { state.r[src] };
+            let value = load_scratchpad_u64(state, base, imm, mask);
+            state.r[dst] = state.r[dst].wrapping_sub(value);
+        }
+        InstructionType::IMulR => {
+            let value = if src == dst { imm } else { state.r[src] };
+            state.r[dst] = state.r[dst].wrapping_mul(value);
+        }
+        InstructionType::IMulM => {
+            let mask = memory_mask(instr, dst, src);
+            let base = if src == dst { 0 } else { state.r[src] };
+            let value = load_scratchpad_u64(state, base, imm, mask);
+            state.r[dst] = state.r[dst].wrapping_mul(value);
+        }
+        InstructionType::IMulhR => {
+            state.r[dst] = crate::superscalar::mulh(state.r[dst], state.r[src]);
+        }
+        InstructionType::IMulhM => {
+            let mask = memory_mask(instr, dst, src);
+            let base = if src == dst { 0 } else { state.r[src] };
+            let value = load_scratchpad_u64(state, base, imm, mask);
+            state.r[dst] = crate::superscalar::mulh(state.r[dst], value);
+        }
+        InstructionType::ISMulhR => {
+            state.r[dst] = crate::superscalar::smulh_u64(state.r[dst], state.r[src]);
+        }
+        InstructionType::ISMulhM => {
+            let mask = memory_mask(instr, dst, src);
+            let base = if src == dst { 0 } else { state.r[src] };
+            let value = load_scratchpad_u64(state, base, imm, mask);
+            state.r[dst] = crate::superscalar::smulh_u64(state.r[dst], value);
+        }
+        InstructionType::IMulRcp => {
+            if !is_zero_or_power_of_two(instr.imm32) {
+                state.r[dst] =
+                    state.r[dst].wrapping_mul(crate::superscalar::randomx_reciprocal(instr.imm32));
+            }
+        }
+        InstructionType::INegR => {
+            state.r[dst] = (!state.r[dst]).wrapping_add(1);
+        }
+        InstructionType::IXorR => {
+            let value = if src == dst { imm } else { state.r[src] };
+            state.r[dst] ^= value;
+        }
+        InstructionType::IXorM => {
+            let mask = memory_mask(instr, dst, src);
+            let base = if src == dst { 0 } else { state.r[src] };
+            let value = load_scratchpad_u64(state, base, imm, mask);
+            state.r[dst] ^= value;
+        }
+        InstructionType::IRorR => {
+            let value = if src == dst {
+                u64::from(instr.imm32)
+            } else {
+                state.r[src]
+            };
+            state.r[dst] = rotr(state.r[dst], (value & 63) as u32);
+        }
+        InstructionType::IRolR => {
+            let value = if src == dst {
+                u64::from(instr.imm32)
+            } else {
+                state.r[src]
+            };
+            state.r[dst] = rotl(state.r[dst], (value & 63) as u32);
+        }
+        InstructionType::ISwapR => {
+            if src != dst {
+                state.r.swap(dst, src);
+            }
+        }
+        InstructionType::CBranch => {
+            let shift = mod_cond(instr) + RANDOMX_JUMP_OFFSET;
+            let mut addend = imm | (1u64 << shift);
+            if shift > 0 {
+                addend &= !(1u64 << (shift - 1));
+            }
+            state.r[dst] = state.r[dst].wrapping_add(addend);
+            if (state.r[dst] & (CONDITION_MASK << shift)) == 0 {
+                state.branch_pc = state.program.cbranch_table[usize::from(state.exec_pc)];
+            }
+        }
+        InstructionType::CfRound => execute_cfround(instr, state),
+        InstructionType::IStore => {
+            let mask = if mod_cond(instr) < 14 {
+                if mod_mem(instr) {
+                    SCRATCHPAD_L1_MASK
+                } else {
+                    SCRATCHPAD_L2_MASK
+                }
+            } else {
+                SCRATCHPAD_L3_MASK
+            };
+            store_scratchpad_u64(state, state.r[dst], imm, mask, state.r[src]);
+        }
+        InstructionType::FSwapR => {
+            let dst = int_reg(instr.dst);
+            if dst < REGISTER_COUNT_FLT {
+                state.f[dst] = state.f[dst].swap_lanes();
+            } else {
+                let dst = dst - REGISTER_COUNT_FLT;
+                state.e[dst] = state.e[dst].swap_lanes();
+            }
+        }
+        InstructionType::FAddR => {
+            let dst = fp_reg(instr.dst);
+            let src = fp_reg(instr.src);
+            state.f[dst] = state.f[dst].add_unrestricted(state.a[src]);
+        }
+        InstructionType::FAddM => {
+            let dst = fp_reg(instr.dst);
+            let src = int_reg(instr.src);
+            let mask = if mod_mem(instr) {
+                SCRATCHPAD_L1_MASK
+            } else {
+                SCRATCHPAD_L2_MASK
+            };
+            let value = load_scratchpad_f128(state, state.r[src], imm, mask);
+            state.f[dst] = state.f[dst].add_unrestricted(value);
+        }
+        InstructionType::FSubR => {
+            let dst = fp_reg(instr.dst);
+            let src = fp_reg(instr.src);
+            state.f[dst] = state.f[dst].sub_unrestricted(state.a[src]);
+        }
+        InstructionType::FSubM => {
+            let dst = fp_reg(instr.dst);
+            let src = int_reg(instr.src);
+            let mask = if mod_mem(instr) {
+                SCRATCHPAD_L1_MASK
+            } else {
+                SCRATCHPAD_L2_MASK
+            };
+            let value = load_scratchpad_f128(state, state.r[src], imm, mask);
+            state.f[dst] = state.f[dst].sub_unrestricted(value);
+        }
+        InstructionType::FScalR => {
+            let dst = fp_reg(instr.dst);
+            state.f[dst] = state.f[dst].xor_with_scale_mask();
+        }
+        InstructionType::FMulR => {
+            let dst = fp_reg(instr.dst);
+            let src = fp_reg(instr.src);
+            state.e[dst] = state.e[dst].mul_unrestricted(state.a[src]);
+        }
+        InstructionType::FDivM => {
+            let dst = fp_reg(instr.dst);
+            let src = int_reg(instr.src);
+            let mask = if mod_mem(instr) {
+                SCRATCHPAD_L1_MASK
+            } else {
+                SCRATCHPAD_L2_MASK
+            };
+            let value = load_scratchpad_f128(state, state.r[src], imm, mask);
+            let value = mask_register_exponent_mantissa(value, state.e_mask);
+            state.e[dst] = state.e[dst].div_masked(value);
+        }
+        InstructionType::FSqrtR => {
+            let dst = fp_reg(instr.dst);
+            state.e[dst] = state.e[dst].sqrt_unrestricted();
+        }
+    }
 }
 
 /// Compute the 32-byte RandomX v2 hash of `data` against the cache
@@ -1780,6 +2277,8 @@ pub fn compute_hash(cache: &crate::Cache, seedhash: &[u8; 32], data: &[u8]) -> [
     use blake2::digest::consts::U32;
     use blake2::{Blake2b, Blake2b512, Digest};
 
+    crate::fpu_rounding::set_rounding_mode(0);
+
     let mut state = VmState::new();
 
     // Step 1: temp_hash = Blake2b-512(data). Output is 64 bytes,
@@ -1845,6 +2344,7 @@ pub fn compute_hash(cache: &crate::Cache, seedhash: &[u8; 32], data: &[u8]) -> [
     let out = hasher.finalize();
     let mut output = [0u8; 32];
     output.copy_from_slice(&out);
+    crate::fpu_rounding::set_rounding_mode(0);
     output
 }
 
@@ -2233,7 +2733,9 @@ mod tests {
         vm1.init_program(&TEST_PROGRAM_SEED);
         vm2.init_program(&TEST_PROGRAM_SEED);
 
+        crate::fpu_rounding::set_rounding_mode(0);
         vm1.execute_program(cache);
+        crate::fpu_rounding::set_rounding_mode(0);
         vm2.execute_program(cache);
 
         assert!(
@@ -2268,7 +2770,9 @@ mod tests {
         vm1.init_program(&TEST_PROGRAM_SEED);
         vm2.init_program(&TEST_PROGRAM_SEED);
 
+        crate::fpu_rounding::set_rounding_mode(0);
         vm1.execute_program(cache);
+        crate::fpu_rounding::set_rounding_mode(0);
         vm2.execute_program(cache);
 
         assert_eq!(vm1.r, vm2.r, "execute_program(SAME_INPUTS) `r` divergent");
@@ -2423,7 +2927,7 @@ mod tests {
     fn mask_register_exponent_mantissa_preserves_mantissa_and_overlays_emask() {
         const X_LO: u64 = 0xDEAD_BEEF_CAFE_BABE;
         const X_HI: u64 = 0x0123_4567_89AB_CDEF;
-        let x: F128 = [f64::from_bits(X_LO), f64::from_bits(X_HI)];
+        let x = F128([f64::from_bits(X_LO), f64::from_bits(X_HI)]);
         let e_mask: [u64; 2] = [
             0x3FF0_0000_0000_0000, // exponent bias only
             0x4000_0000_0000_0000,
@@ -2450,10 +2954,10 @@ mod tests {
     #[test]
     fn f128_aes_bytes_round_trip() {
         let originals: [F128; 4] = [
-            [0.0, -0.0],
-            [1.0, f64::from_bits(0xCAFE_BABE_DEAD_BEEF)],
-            [f64::INFINITY, f64::NEG_INFINITY],
-            [f64::from_bits(0x1234_5678_9ABC_DEF0), f64::EPSILON],
+            F128([0.0, -0.0]),
+            F128([1.0, f64::from_bits(0xCAFE_BABE_DEAD_BEEF)]),
+            F128([f64::INFINITY, f64::NEG_INFINITY]),
+            F128([f64::from_bits(0x1234_5678_9ABC_DEF0), f64::EPSILON]),
         ];
         for &f in &originals {
             let bytes = f128_to_aes_bytes(f);
@@ -2473,6 +2977,51 @@ mod tests {
                 back[1].to_bits(),
             );
         }
+    }
+
+    #[test]
+    fn integer_helpers_match_portable_semantics() {
+        assert_eq!(sign_extend_i32_to_i64(0x8000_0000), 0xffff_ffff_8000_0000);
+        assert_eq!(sign_extend_i32_to_i64(0x7fff_ffff), 0x0000_0000_7fff_ffff);
+
+        let mut buf = [0u8; 8];
+        store64(&mut buf, 0x0123_4567_89AB_CDEF);
+        assert_eq!(load64(&buf), 0x0123_4567_89AB_CDEF);
+
+        let x = 0x1234_5678_9ABC_DEF0u64;
+        assert_eq!(rotr(x, 0), x);
+        assert_eq!(rotl(x, 0), x);
+        assert_eq!(rotr(x, 4), x.rotate_right(4));
+        assert_eq!(rotl(x, 4), x.rotate_left(4));
+        assert_eq!(rotr(x, 64), x);
+        assert_eq!(rotl(x, 64), x);
+    }
+
+    #[test]
+    fn cfround_helper_updates_fprc_only_when_unthrottled() {
+        let mut state = VmState::new();
+        let instr = Instruction {
+            opcode: 0,
+            dst: 0,
+            src: 1,
+            mod_: 0,
+            imm32: 0,
+        };
+
+        state.r[1] = 2;
+        state.fprc = 0;
+        execute_cfround(&instr, &mut state);
+        assert_eq!(state.fprc, 2, "CFROUND should publish isrc % 4");
+
+        state.r[1] = 4;
+        state.fprc = 2;
+        execute_cfround(&instr, &mut state);
+        assert_eq!(
+            state.fprc, 2,
+            "CFROUND should not update fprc when isrc & 60 is nonzero",
+        );
+
+        crate::fpu_rounding::set_rounding_mode(0);
     }
 
     // -----------------------------------------------------------------
@@ -2718,6 +3267,7 @@ mod tests {
     /// Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 / F7 T6, §5.6 stub-NOP
     /// dispatch, §9 commit 7.
     #[test]
+    #[ignore = "Phase 2c stub-NOP vector; Phase 2d real-dispatch parity is covered by T16"]
     fn t6_vm_spaddr_4iter_matches_fork_reference() {
         const ITER_COUNT: usize = 4;
         let expected: &[u8] =
@@ -2773,6 +3323,7 @@ mod tests {
     /// Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 / F7 T7, §5.6 stub-NOP
     /// dispatch, §9 commit 7.
     #[test]
+    #[ignore = "Phase 2c stub-NOP vector; Phase 2d real-dispatch parity is covered by T16"]
     fn t7_vm_aesmix_4iter_matches_fork_reference() {
         const ITER_COUNT: usize = 4;
         let expected: &[u8] =
@@ -2828,27 +3379,26 @@ mod tests {
         );
     }
 
-    /// T8 spec-vector: end-to-end `compute_hash` output under stub-NOP
-    /// dispatch matches the v2 RandomX fork's `randomx_calculate_hash`
+    /// T16 spec-vector: end-to-end `compute_hash` output under real
+    /// bytecode dispatch matches the v2 RandomX fork's `randomx_calculate_hash`
     /// byte-for-byte at pin `aaafe71`, given the canonical seedhash
     /// and 192-byte data input (see `t8_data_input_is_192_bytes` above
-    /// and `tests/vectors/reference/vm/t8_vm_compute_hash_nop.meta.txt`).
+    /// and `tests/vectors/reference/vm/t16_vm_compute_hash_real.meta.txt`).
     ///
     /// This is the single end-to-end attestation: if T3-T7 pass and
-    /// T8 fails, the divergence is in the `compute_hash` orchestration
+    /// If T16 fails, the divergence is in the `compute_hash` orchestration
     /// (program-chaining, RegisterFile re-seeding Blake2b,
     /// `getFinalResult` AES + Blake2b finalize), not in any individual
     /// stage T3-T7 covers.
     ///
     /// Provenance: see sibling
-    /// `tests/vectors/reference/vm/t8_vm_compute_hash_nop.meta.txt`.
-    /// Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 / F7 T8, §5.6 stub-NOP
-    /// dispatch, §5.5 compute_hash structure, §9 commit 7.
+    /// `tests/vectors/reference/vm/t16_vm_compute_hash_real.meta.txt`.
+    /// Per RANDOMX_V2_PHASE2D_PLAN.md §6.2 T16 and §8 commit 5b.
     #[test]
-    fn t8_vm_compute_hash_nop_matches_fork_reference() {
+    fn t16_vm_compute_hash_real_matches_fork_reference() {
         let expected: &[u8] =
-            include_bytes!("../tests/vectors/reference/vm/t8_vm_compute_hash_nop.bin");
-        assert_eq!(expected.len(), 32, "t8 .bin size invariant");
+            include_bytes!("../tests/vectors/reference/vm/t16_vm_compute_hash_real.bin");
+        assert_eq!(expected.len(), 32, "t16 .bin size invariant");
 
         let cache = canonical_cache();
         let actual = compute_hash(cache, &CANONICAL_SEEDHASH, T8_DATA_INPUT);
@@ -2858,6 +3408,296 @@ mod tests {
             <[u8; 32]>::try_from(expected).expect("32-byte vector"),
             "compute_hash diverged from fork pin aaafe71 reference \
              (cache = derive(CANONICAL_SEEDHASH); data = T8_DATA_INPUT)",
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Phase 2d single-opcode reference vectors (T9-T15).
+    //
+    // Each probe drives `dispatch_instruction` against a fabricated
+    // `Instruction` over a canonical `VmState` register file and
+    // scratchpad pattern, and asserts the 256-byte
+    // `register_file_snapshot` matches the v2 fork's
+    // `executeInstruction` output byte-for-byte. Provenance for each
+    // vector is documented inline below and in the sibling
+    // `.meta.txt` files under `tests/vectors/reference/vm/`.
+    //
+    // The canonical fixture matches
+    // `tests/vectors/reference/_generator/phase2d/gen.cpp`'s
+    // `CANONICAL_*` tables exactly — see the matching constants
+    // there for byte-for-byte cross-reference.
+    // -----------------------------------------------------------------
+
+    const CANONICAL_R: [u64; 8] = [
+        0x0102_0304_0506_0708,
+        0x1112_1314_1516_1718,
+        0x2122_2324_2526_2728,
+        0x3132_3334_3536_3738,
+        0x4142_4344_4546_4748,
+        0x5152_5354_5556_5758,
+        0x6162_6364_6566_6768,
+        0x7172_7374_7576_7778,
+    ];
+
+    const CANONICAL_F_BITS: [[u64; 2]; 4] = [
+        [0x3FF0_0000_0000_0000, 0x4000_0000_0000_0000],
+        [0xBFF0_0000_0000_0000, 0xC000_0000_0000_0000],
+        [0x4008_0000_0000_0000, 0x4010_0000_0000_0000],
+        [0xBFE0_0000_0000_0000, 0x3FE8_0000_0000_0000],
+    ];
+
+    const CANONICAL_E_BITS: [[u64; 2]; 4] = [
+        [0x4030_0000_0000_0000, 0x4034_0000_0000_0000],
+        [0x4038_0000_0000_0000, 0x403C_0000_0000_0000],
+        [0x4040_0000_0000_0000, 0x4042_0000_0000_0000],
+        [0x4044_0000_0000_0000, 0x4046_0000_0000_0000],
+    ];
+
+    const CANONICAL_A_BITS: [[u64; 2]; 4] = [
+        [0x3FE0_0000_0000_0000, 0x3FE8_0000_0000_0000],
+        [0x3FF8_0000_0000_0000, 0x3FFC_0000_0000_0000],
+        [0x4002_0000_0000_0000, 0x4006_0000_0000_0000],
+        [0x400C_0000_0000_0000, 0x4010_0000_0000_0000],
+    ];
+
+    const CANONICAL_E_MASK_PD: [u64; 2] = [0x3FF0_0000_0000_0000, 0x4000_0000_0000_0000];
+
+    /// Materialize a fresh [`VmState`] populated with the Phase 2d
+    /// canonical register file + scratchpad fixture. Mirrors
+    /// `_generator/phase2d/gen.cpp`'s `init_nreg` / `init_config` /
+    /// `init_scratchpad` per-probe. Each probe re-uses this helper so
+    /// the harness shape is identical across opcodes.
+    fn canonical_phase2d_state() -> VmState {
+        let mut state = VmState::new();
+        state.r = CANONICAL_R;
+        for i in 0..REGISTER_COUNT_FLT {
+            state.f[i] = F128([
+                f64::from_bits(CANONICAL_F_BITS[i][0]),
+                f64::from_bits(CANONICAL_F_BITS[i][1]),
+            ]);
+            state.e[i] = F128([
+                f64::from_bits(CANONICAL_E_BITS[i][0]),
+                f64::from_bits(CANONICAL_E_BITS[i][1]),
+            ]);
+            state.a[i] = F128([
+                f64::from_bits(CANONICAL_A_BITS[i][0]),
+                f64::from_bits(CANONICAL_A_BITS[i][1]),
+            ]);
+        }
+        state.e_mask = CANONICAL_E_MASK_PD;
+        state.read_reg = [0, 1, 2, 3];
+        for (i, byte) in state.scratchpad.iter_mut().enumerate() {
+            let mixed = i.wrapping_mul(0x9E).wrapping_add(0x37);
+            *byte = u8::try_from(mixed & 0xff).expect("masked u8");
+        }
+        // Pin the FPU rounding mode to RN before each probe so the
+        // helper is rounding-mode-clean across tests. Per-probe FP
+        // matrix tests overwrite this immediately before dispatch.
+        crate::fpu_rounding::set_rounding_mode(0);
+        state
+    }
+
+    /// Build a fabricated [`Instruction`] for a single Phase 2d probe.
+    fn instr(opcode: u8, dst: u8, src: u8, mod_: u8, imm32: u32) -> Instruction {
+        Instruction {
+            opcode,
+            dst,
+            src,
+            mod_,
+            imm32,
+        }
+    }
+
+    /// Drive `dispatch_instruction` for one probe under MXCSR mode
+    /// `fprc` and return the 256-byte post-execution register-file
+    /// snapshot. Resets the FPU mode to RN on exit so subsequent
+    /// probes start clean.
+    fn run_probe(opcode: u8, dst: u8, src: u8, mod_: u8, imm32: u32, fprc: u32) -> [u8; 256] {
+        let mut state = canonical_phase2d_state();
+        crate::fpu_rounding::set_rounding_mode(fprc);
+        let i = instr(opcode, dst, src, mod_, imm32);
+        dispatch_instruction(&i, &mut state);
+        let snap = register_file_snapshot(&state);
+        crate::fpu_rounding::set_rounding_mode(0);
+        snap
+    }
+
+    /// T9 spec-vector: single-opcode integer dispatch matches the v2
+    /// RandomX fork's `executeInstruction` byte-for-byte at pin
+    /// `aaafe71` for IADD_RS / IMULH_R / IROR_R / ISTORE.
+    ///
+    /// Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 T9.
+    #[test]
+    fn t9_vm_single_int_smoke_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t9_vm_single_int_smoke.bin");
+        assert_eq!(expected.len(), 4 * 256, "t9 .bin size invariant");
+
+        let probes: [(u8, u8, u8, u8, u32); 4] = [
+            (0, 2, 3, 0, 0x1234_5678),
+            (66, 4, 5, 0, 0),
+            (106, 6, 7, 0, 11),
+            (240, 0, 1, 0xE0, 0xCAFE_0007),
+        ];
+        let mut actual = vec![0u8; probes.len() * 256];
+        for (i, &(opcode, dst, src, mod_, imm32)) in probes.iter().enumerate() {
+            let snap = run_probe(opcode, dst, src, mod_, imm32, 0);
+            actual[i * 256..(i + 1) * 256].copy_from_slice(&snap);
+        }
+
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "T9 integer-smoke dispatch diverged from fork pin aaafe71",
+        );
+    }
+
+    /// T10 spec-vector: single-opcode FP dispatch under RN matches
+    /// the v2 RandomX fork's `executeInstruction` byte-for-byte at
+    /// pin `aaafe71` for FADD_R / FMUL_R / FDIV_M / FSQRT_R.
+    ///
+    /// Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 T10.
+    #[test]
+    fn t10_vm_single_fp_smoke_rn_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t10_vm_single_fp_smoke_rn.bin");
+        assert_eq!(expected.len(), 4 * 256, "t10 .bin size invariant");
+
+        let probes: [(u8, u8, u8, u8, u32); 4] = [
+            (124, 0, 0, 0, 0),
+            (172, 1, 2, 0, 0),
+            (204, 2, 3, 0, 0x040),
+            (208, 3, 0, 0, 0),
+        ];
+        let mut actual = vec![0u8; probes.len() * 256];
+        for (i, &(opcode, dst, src, mod_, imm32)) in probes.iter().enumerate() {
+            let snap = run_probe(opcode, dst, src, mod_, imm32, 0);
+            actual[i * 256..(i + 1) * 256].copy_from_slice(&snap);
+        }
+
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "T10 FP-smoke RN dispatch diverged from fork pin aaafe71",
+        );
+    }
+
+    /// Drive the 9-opcode FP matrix probe under a given MXCSR mode
+    /// and return the concatenated 9 × 256 = 2304-byte snapshot.
+    fn fp_matrix_actual(fprc: u32) -> Vec<u8> {
+        let probes: [(u8, u8, u8, u8, u32); 9] = [
+            (120, 1, 0, 0, 0),
+            (124, 0, 0, 0, 0),
+            (140, 1, 2, 0, 0x040),
+            (145, 2, 1, 0, 0),
+            (161, 0, 3, 0, 0x080),
+            (166, 3, 0, 0, 0),
+            (172, 1, 2, 0, 0),
+            (204, 2, 3, 0, 0x040),
+            (208, 3, 0, 0, 0),
+        ];
+        let mut out = vec![0u8; probes.len() * 256];
+        for (i, &(opcode, dst, src, mod_, imm32)) in probes.iter().enumerate() {
+            let snap = run_probe(opcode, dst, src, mod_, imm32, fprc);
+            out[i * 256..(i + 1) * 256].copy_from_slice(&snap);
+        }
+        out
+    }
+
+    /// T11 spec-vector: 9-opcode FP matrix under MXCSR mode 0 (RN).
+    /// Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 T11.
+    #[test]
+    fn t11_vm_fp_matrix_rn_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t11_vm_fp_matrix_rn.bin");
+        assert_eq!(expected.len(), 9 * 256, "t11 .bin size invariant");
+        let actual = fp_matrix_actual(0);
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "T11 FP-matrix RN diverged from fork pin aaafe71",
+        );
+    }
+
+    /// T12 spec-vector: 9-opcode FP matrix under MXCSR mode 1 (RD).
+    /// Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 T12.
+    #[test]
+    fn t12_vm_fp_matrix_rd_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t12_vm_fp_matrix_rd.bin");
+        assert_eq!(expected.len(), 9 * 256, "t12 .bin size invariant");
+        let actual = fp_matrix_actual(1);
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "T12 FP-matrix RD diverged from fork pin aaafe71",
+        );
+    }
+
+    /// T13 spec-vector: 9-opcode FP matrix under MXCSR mode 2 (RU).
+    /// Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 T13.
+    #[test]
+    fn t13_vm_fp_matrix_ru_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t13_vm_fp_matrix_ru.bin");
+        assert_eq!(expected.len(), 9 * 256, "t13 .bin size invariant");
+        let actual = fp_matrix_actual(2);
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "T13 FP-matrix RU diverged from fork pin aaafe71",
+        );
+    }
+
+    /// T14 spec-vector: 9-opcode FP matrix under MXCSR mode 3 (RZ).
+    /// Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 T14.
+    #[test]
+    fn t14_vm_fp_matrix_rz_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t14_vm_fp_matrix_rz.bin");
+        assert_eq!(expected.len(), 9 * 256, "t14 .bin size invariant");
+        let actual = fp_matrix_actual(3);
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "T14 FP-matrix RZ diverged from fork pin aaafe71",
+        );
+    }
+
+    /// T15 spec-vector: CFROUND throttle and unthrottled-mode
+    /// behavior matches the v2 RandomX fork's `exe_CFROUND` byte-for
+    /// byte at pin `aaafe71`. Three cases per the .meta.txt:
+    /// throttled (r[1] = 0x0C, expected mode unchanged), unthrottled
+    /// target RN (r[1] = 0x00), unthrottled target RZ (r[1] = 0x03).
+    ///
+    /// Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 T15.
+    #[test]
+    fn t15_vm_cfround_throttle_matches_fork_reference() {
+        let expected: &[u8] =
+            include_bytes!("../tests/vectors/reference/vm/t15_vm_cfround_throttle.bin");
+        assert_eq!(expected.len(), 3 * (256 + 4), "t15 .bin size invariant");
+
+        let mut actual = vec![0u8; 3 * (256 + 4)];
+
+        for (case_idx, &src_value) in [0x0Cu64, 0x00, 0x03].iter().enumerate() {
+            let mut state = canonical_phase2d_state();
+            state.r[1] = src_value;
+            crate::fpu_rounding::set_rounding_mode(0);
+            let i = instr(239, 0, 1, 0, 0);
+            dispatch_instruction(&i, &mut state);
+            let snap = register_file_snapshot(&state);
+            let mode = state.fprc;
+            crate::fpu_rounding::set_rounding_mode(0);
+
+            let off = case_idx * (256 + 4);
+            actual[off..off + 256].copy_from_slice(&snap);
+            actual[off + 256..off + 260].copy_from_slice(&mode.to_le_bytes());
+        }
+
+        assert_eq!(
+            actual.as_slice(),
+            expected,
+            "T15 CFROUND-throttle dispatch diverged from fork pin aaafe71",
         );
     }
 }

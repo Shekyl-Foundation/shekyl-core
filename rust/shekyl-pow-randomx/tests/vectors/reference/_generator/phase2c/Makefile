@@ -124,6 +124,8 @@ gen: gen.cpp $(FORK_OBJS)
 #                                     4 iterations under stub-NOP dispatch
 #   T8  vm_compute_hash_nop         — end-to-end compute_hash output with
 #                                     literal-NOP byteCode override
+#   T16 vm_compute_hash_real        — end-to-end compute_hash output with
+#                                     real v2 bytecode dispatch
 vectors: gen
 	./gen t1 > ../../cache/t1_cache_derive_fingerprint.bin
 	./gen t2 > ../../cache/t2_cache_derive_item_batch.bin
@@ -133,6 +135,7 @@ vectors: gen
 	./gen t6 > ../../vm/t6_vm_spaddr_4iter.bin
 	./gen t7 > ../../vm/t7_vm_aesmix_4iter.bin
 	./gen t8 > ../../vm/t8_vm_compute_hash_nop.bin
+	./gen t16 > ../../vm/t16_vm_compute_hash_real.bin
 
 # Sanity check that the fork pin hasn't drifted under us. Informational;
 # does not block `vectors` since the .meta.txt files record the

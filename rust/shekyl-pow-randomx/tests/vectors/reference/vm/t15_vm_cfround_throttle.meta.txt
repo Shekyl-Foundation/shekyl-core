@@ -1,0 +1,73 @@
+Phase 2d reference vector — t15_vm_cfround_throttle.bin
+=======================================================
+
+Spec attestation
+----------------
+T15 attests Rust `execute_cfround` byte-for-byte parity with the v2
+RandomX fork's `exe_CFROUND` semantics, covering both the throttle
+path (high source bits non-zero leaves the FPU mode unchanged) and
+the unthrottled path (rotation right by `imm32 & 63` selects bits
+0..1 of the rotated value as the new MXCSR mode).
+
+Three probes:
+
+  1. Throttled : r[1] = 0x0C    (bits 2..3 set -> isrc & 60 ≠ 0)
+                 imm32 = 0      (no rotation)
+                 expected mode = 0 (unchanged from rx_set_rounding_mode(0))
+  2. Unthrottled, target RN : r[1] = 0x00, imm32 = 0
+                              expected mode = 0
+  3. Unthrottled, target RZ : r[1] = 0x03, imm32 = 0
+                              expected mode = 3
+
+CFROUND is the only opcode that mutates the FPU rounding mode, and
+its `& 60` throttle is what stabilizes the RandomX hash against
+adversarial high-bit input that would otherwise cause mode flapping.
+T15 is the single attestation that the Rust port's
+`execute_cfround` enforces the same mask + rotation arithmetic as
+the C reference.
+
+Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2.
+
+Inputs
+------
+Canonical NativeRegisterFile per probe with r[1] overwritten to the
+case-specific byte; everything else (r[0], r[2..7], f/e/a, eMask,
+readReg*) inherited from gen.cpp's CANONICAL_* tables. MXCSR
+initialized to mode 0 via `rx_set_rounding_mode(0)` before each
+probe.
+
+Output layout
+-------------
+Per probe:
+  - 256-byte post-execution NativeRegisterFile snapshot (T4 layout)
+  - 4-byte LE u32 = `rx_get_rounding_mode()` measured immediately
+    after dispatch
+
+Total: 3 × (256 + 4) = 780 bytes.
+
+The register snapshot is emitted (and must match the canonical
+init) to pin the invariant that CFROUND does NOT mutate the
+register file — only the FPU mode.
+
+Generator
+---------
+source      = ./_generator/phase2d/gen.cpp (mode t15)
+command     = ./gen t15 > t15_vm_cfround_throttle.bin
+output_size = 780 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/bytecode_machine.cpp/.hpp (exe_CFROUND,
+                compileInstruction CFROUND branch),
+              src/intrin_portable.h (rx_set_rounding_mode,
+                rx_get_rounding_mode)
+function    = randomx::BytecodeMachine::executeInstruction (CFROUND
+              case in the executeInstruction switch)
+
+Phase
+-----
+Phase 2d (`docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2). Consumed
+by Rust test `t15_vm_cfround_throttle_matches_fork_reference` in
+`rust/shekyl-pow-randomx/src/vm.rs#mod tests`.

@@ -72,6 +72,8 @@ jobs:
             exit 1
           fi
           echo "No debug macros in production Rust — OK"
+      - name: enforce RandomX FPU rounding primitive scope
+        run: scripts/ci/check_randomx_fpu_rounding.sh
       - name: reject BOOST_FOREACH in C++
         run: |
           HITS=$(grep -rn 'BOOST_FOREACH' src/ tests/ --include='*.cpp' --include='*.h' --include='*.hpp' || true)

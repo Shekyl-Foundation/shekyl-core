@@ -1492,7 +1492,7 @@ const fn sign_extend_2s_compl(x: u32) -> u64 {
 /// `const fn` because `u128::From` is not yet stable as a const
 /// trait (rust-lang/rust#143874); call sites are runtime-only.
 #[allow(clippy::cast_possible_truncation)]
-fn mulh(a: u64, b: u64) -> u64 {
+pub(crate) fn mulh(a: u64, b: u64) -> u64 {
     ((u128::from(a) * u128::from(b)) >> 64) as u64
 }
 
@@ -1515,7 +1515,7 @@ fn smulh(a: i64, b: i64) -> i64 {
 /// Matches the C reference's `r[dst] = smulh((int64_t)r[dst],
 /// (int64_t)r[src])` pattern from `superscalar.cpp:888`.
 #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
-fn smulh_u64(a: u64, b: u64) -> u64 {
+pub(crate) fn smulh_u64(a: u64, b: u64) -> u64 {
     smulh(a as i64, b as i64) as u64
 }
 
@@ -1526,7 +1526,7 @@ fn smulh_u64(a: u64, b: u64) -> u64 {
 /// Preconditions (per the C `assert`): `divisor != 0`. The
 /// SuperscalarHash generator additionally guarantees `divisor` is
 /// not a power of 2 (see [`SuperscalarInstructionState::create`]).
-fn randomx_reciprocal(divisor: u32) -> u64 {
+pub(crate) fn randomx_reciprocal(divisor: u32) -> u64 {
     debug_assert!(divisor != 0, "randomx_reciprocal divisor must be nonzero");
     let p2_exp63: u64 = 1u64 << 63;
     let divisor_u64 = u64::from(divisor);

@@ -3,7 +3,9 @@
 Phase 2c PR-merge baseline per [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
 §5.8 + §8. Downstream phases (2d, 2f, 2g) compare against these
 numbers; regression >10% triggers investigation per the §5.8
-disposition.
+disposition. Phase 2d real-dispatch results below recorded per
+[`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2D_PLAN.md)
+§9.
 
 ## Run conditions
 
@@ -27,6 +29,13 @@ disposition.
 |-------|--------|--------|-------------|----------|--------|
 | `cache_derive::derive` | **341.45 ms** | [336.20 ms, 347.32 ms] | 100 (per §5.8 spec) | 8/100 (6 high-mild, 2 high-severe) | `benches/cache_derive.rs` |
 | `compute_hash_alloc::per_call` | **296.00 ms** | [292.81 ms, 299.47 ms] | 100 (reduced from §5.8's 10000; see §"Threshold reconciliation" below) | 7/100 (2 high-mild, 5 high-severe) | `benches/compute_hash_alloc.rs` |
+
+### Phase 2d post-dispatch deltas (2026-05-22)
+
+| Bench | Median | Delta vs. Phase 2c | Comment |
+|-------|--------|--------------------|---------|
+| `cache_derive::derive` | not re-measured | — | Phase 2d does not touch the cache derivation path. |
+| `compute_hash_alloc::per_call` | 303.60 ms | +2.6% | Real bytecode dispatch over 2048 iterations x 8 chains x 384 instructions per program; well under the §5.8 +/-10% regression-trigger threshold. |
 
 ## Threshold reconciliation
 

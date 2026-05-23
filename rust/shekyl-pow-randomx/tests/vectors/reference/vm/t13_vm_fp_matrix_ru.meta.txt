@@ -1,0 +1,29 @@
+Phase 2d reference vector — t13_vm_fp_matrix_ru.bin
+===================================================
+
+Spec attestation
+----------------
+T13 is the round-up (MXCSR mode 2) slice of the T11-T14 FP
+rounding-mode matrix. Same 9-opcode set and probe order as T11.
+
+Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2.
+
+Output layout
+-------------
+9 × 256-byte NativeRegisterFile snapshots. Total: 2304 bytes.
+
+Generator
+---------
+source      = ./_generator/phase2d/gen.cpp (mode t13)
+command     = ./gen t13 > t13_vm_fp_matrix_ru.bin
+output_size = 2304 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+
+Phase
+-----
+Phase 2d (`docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2). Consumed
+by `t13_vm_fp_matrix_ru_matches_fork_reference`.

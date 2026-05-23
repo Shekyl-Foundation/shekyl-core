@@ -1,0 +1,31 @@
+Phase 2d reference vector — t16_vm_compute_hash_real.bin
+
+Purpose
+-------
+End-to-end RandomX v2 compute_hash output under real bytecode dispatch.
+This replaces Phase 2c's T8 stub-NOP expectation as the hash-level
+byte-equality vector once `dispatch_instruction` is no longer a NOP.
+
+Provenance
+----------
+fork        = external/randomx-v2
+pin         = aaafe71322df6602c21a5c72937ac284724ae561
+generator   = tests/vectors/reference/_generator/phase2c/gen.cpp
+mode        = t16
+command     = ./gen t16 > t16_vm_compute_hash_real.bin
+
+Inputs
+------
+cache key   = CANONICAL_SEEDHASH
+data        = T8_DATA_INPUT
+vm flags    = RANDOMX_FLAG_V2
+
+Wire Format
+-----------
+32 bytes: RandomX hash output from the pinned fork's interpreted-light
+VM via `randomx_calculate_hash`.
+
+Expected Bytes
+--------------
+bd 51 bf 85 14 7b 69 6c 78 2c 8d 04 43 fe ce 1a
+48 69 72 2f 42 b7 20 cc 99 77 f3 c0 0c f9 84 7d
