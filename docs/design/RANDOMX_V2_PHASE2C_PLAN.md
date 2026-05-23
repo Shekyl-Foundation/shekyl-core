@@ -51,7 +51,18 @@ documentation. Posture-shift note: Round 4's threat-model framing
 converted "design closure" into "design closure plus active defense
 against named attacker objectives" — named so 2d/2f/2g/LWMA-1 Phase 4
 inherit the shape. Target ≤1 round met; implementation cut authorized
-post-PR-#65 merge. **Round 0 impl-time pre-flight closed 2026-05-21:**
+post-PR-#65 merge. **Implementation landed 2026-05-22:** PR #66
+(`feat/randomx-v2-phase2c-impl`) merged to `dev` via merge commit
+`e9917097f`. Eight-commit stack + six post-review fix commits; all
+T1–T8 spec vectors byte-identical; T1'–T8' property tests green;
+debug-vs-release equivalence CI gate live; `BENCH_RESULTS.md` records
+R0-D12 informational baselines (~341 ms cache derive, ~296 ms
+end-to-end `compute_hash_alloc` on the reference i9-11950H). Impl-time
+pre-flight trail in
+[`RANDOMX_V2_PHASE2C_AUDIT.md`](./RANDOMX_V2_PHASE2C_AUDIT.md). Phase
+2d Round 1 design is unblocked per
+[`RANDOMX_V2_PHASE2D_PLAN.md`](./RANDOMX_V2_PHASE2D_PLAN.md) §5 items
+1–2. **Round 0 impl-time pre-flight closed 2026-05-21:**
 audit pass against the merged plan-doc produced four corrections (F1
 clarity / F2 factual / F3 substantive / F4 factual) absorbed via
 prefix errata commits on the implementation branch before any
@@ -357,8 +368,8 @@ Phase 2c implementation branch cuts later from post-this-doc `dev`.
   plus Round 5 parent-plan FFI-hardening refinements + Round 5
   `docs/FOLLOWUPS.md` V3.0 entry; short-lived per `06-branching.mdc`
   rule 2; thirteen commits; lands on `dev` via PR #65).
-- `feat/randomx-v2-phase2c` (implementation; cut from post-this-doc
-  `dev`; not yet cut as of this doc's commit).
+- `feat/randomx-v2-phase2c-impl` (implementation; cut from post-PR-#65
+  `dev`; merged via PR #66 → `e9917097f` on 2026-05-22).
 
 **Scope envelope.** Single implementation PR. Target ≤1800 lines of
 net-new Rust (implementation + tests + rustdoc) + ~50 KB of committed
