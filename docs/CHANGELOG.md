@@ -68,6 +68,21 @@
     `executeInstruction` dispatch surface against the v2 fork pin
     `aaafe71` byte-for-byte.
 
+  - **Phase 2d post-gate fmt cleanup** (`4fc0606d1`). Six mechanical
+    `cargo fmt --check` divergences accumulated across the four
+    Phase 2d substantive commits surfaced together when the §9
+    Format gate re-ran post-T9-T15 land: four in
+    `dispatch_instruction`'s integer arms (IAddRs / IMulRcp / IRorR /
+    IRolR) from `bd7cea464`, plus `CANONICAL_E_MASK_PD` from
+    `043076f18`. Addressed in a single fmt-only commit per
+    `15-deletion-and-debt.mdc`'s "fix mechanical formatting errors
+    in a file already being modified" carve-out; no semantic
+    change. §8 commit-table reconciliation (five landed commits vs.
+    seven planned slots) is documented in
+    [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
+    §11's Implementation row with SHA → §8 mapping and §9 gate
+    confirmation at HEAD `4fc0606d1`.
+
 - **Sub-PR design discipline rule** (PR #67, 2026-05-22). Promotes fourteen
   Phase 2c-emergent process disciplines from
   [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md)
