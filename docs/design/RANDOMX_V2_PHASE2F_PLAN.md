@@ -96,10 +96,16 @@ T9–T16 + bench delta entries.
 
 ## 1. Locked-by-2c-and-2d substrate
 
-The following are frozen by the post-PR-#70 `dev` tip. 2f does not
-amend any of them.
+The following are frozen by the post-PR-#70 `dev` tip. The
+scaffold-as-of-Round-1 captured §1.1 / §1.2 / §1.3 below as
+"unchanged"; Round 2's substrate-correction (per the *Round 2
+amendment* sub-block of §1.1) supersedes the §1.1 public-API freeze
+with a structurally-stronger shape. §1.2 / §1.3 are unchanged.
 
-### 1.1 Public API surface (unchanged)
+### 1.1 Public API surface (Round 2 supersedes the scaffold-and-Round-1 freeze)
+
+**Scaffold-as-of-Round-1 freeze (preserved as audit trail per
+`91-documentation-after-plans.mdc`):**
 
 ```rust
 // In rust/shekyl-pow-randomx/src/lib.rs (or re-exports therefrom):
@@ -114,10 +120,125 @@ pub fn compute_hash(cache: &Cache, seedhash: &[u8; 32], data: &[u8]) -> [u8; 32]
 // (no public exposure; pinned by Phase 2c R1)
 ```
 
-2f **adds** `pub struct CacheStore` (shape TBD per R1-D1) and
-**possibly amends** `compute_hash`'s body to consult an internal
-`VmStatePool` (per R1-D4 / bench result). It does **not** change
-`compute_hash`'s signature.
+The scaffold framing was: *"2f adds `pub struct CacheStore` (shape
+TBD per R1-D1) and possibly amends `compute_hash`'s body to consult
+an internal `VmStatePool` (per R1-D4 / bench result). It does not
+change `compute_hash`'s signature."* That framing was correct under
+Round 1's option-set (which scoped CacheStore to canonical-protection
+QoS and treated the `compute_hash(&Cache, &[u8; 32], &[u8])`
+signature as stable), but Round 2's adversarial pass against the
+option-set surfaced the consensus-correctness footgun the signature
+preserves: a caller passing the wrong cache for a given seedhash
+gets a wrong hash, which the network rejects, which is correct for
+chain integrity but a footgun the type system can close at zero
+cost. Round 2 closes it.
+
+**Round 2 amendment (load-bearing substrate correction):**
+
+Per `16-architectural-inheritance.mdc`'s pre-genesis discount and
+the cost-benefit-defer-to-later anti-pattern, the substrate-
+correction lands now in Round 2 of Phase 2F's plan-doc rather than
+in V3.x. Pre-genesis the cost is bounded; post-genesis it would
+require migration tooling that runs forever. The freeze amendment
+is paired with a small precursor PR amending the parent
+`RANDOMX_V2_PLAN.md` Decision #6 wording before the Phase 2F
+implementation PR opens (queued; see §10 forward path).
+
+```rust
+// In rust/shekyl-pow-randomx/src/lib.rs (or re-exports therefrom):
+
+/// 32-byte seedhash newtype. Distinct from generic `[u8; 32]`
+/// values (output hashes, content hashes, etc.) at the type level
+/// to prevent accidental mixing at call sites. Per-instance
+/// representation is private; consumers go through `from_bytes`
+/// (construction) and `as_bytes` (read-only access). Pre-genesis
+/// the representation is a fixed `[u8; 32]` array; post-genesis a
+/// representation change does not break downstream callers because
+/// the byte-level access is method-mediated, not field-mediated.
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Seedhash(/* private [u8; 32] */);
+
+impl Seedhash {
+    pub fn from_bytes(bytes: [u8; 32]) -> Seedhash;
+    pub fn as_bytes(&self) -> &[u8; 32];
+}
+
+// `Display` impl renders as lowercase hex for logging consistency
+// with Phase 2c's existing seedhash-formatting conventions.
+impl core::fmt::Display for Seedhash { /* ... */ }
+
+/// Bundle of a derived `Cache` with the `Seedhash` it was derived
+/// from. The pairing is enforced at construction (`derive` is the
+/// only public path to a `PreparedCache`); consumers can only
+/// produce a `PreparedCache` whose `cache` was derived from its
+/// `seedhash`. The `compute_hash` entry point takes
+/// `&PreparedCache` and reads the seedhash from the bundle, so
+/// the consensus-correctness invariant ("the cache used to compute
+/// this hash was derived from the seedhash this hash was attributed
+/// to") becomes type-enforced rather than convention-enforced.
+///
+/// The bundling is the load-bearing structural change Round 2
+/// lands; see §3.1 R1-D1 Round 2 disposition for the full
+/// rationale and the rejected-alternative comparison.
+pub struct PreparedCache { /* private fields: { cache: Cache, seedhash: Seedhash } */ }
+
+impl PreparedCache {
+    /// Derive a `PreparedCache` from a seedhash. The internal
+    /// `Cache::derive` is `pub(crate)`; it is the implementation
+    /// primitive but not the public API. Public callers always go
+    /// through `PreparedCache::derive` so the seedhash-cache
+    /// binding is type-enforced.
+    pub fn derive(seedhash: Seedhash) -> PreparedCache;
+
+    /// Seedhash this `PreparedCache` was derived from.
+    pub fn seedhash(&self) -> &Seedhash;
+}
+
+/// Compute a RandomX v2 hash. The cache-seedhash binding is carried
+/// by `prepared`; there is no separate seedhash parameter. A caller
+/// who needs to compute hashes for multiple seedhashes constructs
+/// distinct `PreparedCache` instances (typically obtained via
+/// `CacheStore::lookup_or_derive` per §3.1).
+pub fn compute_hash(prepared: &PreparedCache, data: &[u8]) -> [u8; 32];
+
+// pub(crate) items consumed by tests / internal callers:
+//   pub(crate) struct Cache { /* private fields */ }
+//   pub(crate) fn Cache::derive(seedhash: &Seedhash) -> Cache
+//   Cache::from_raw, Cache::derive_item, Cache::item_bytes
+// Cache transitions from `pub` (Phase 2c freeze) to `pub(crate)`
+// (Round 2 amendment): exposing `Cache` publicly would let callers
+// construct it without the binding and reintroduce the failure
+// mode the bundling prevents. Test access is preserved via the
+// Phase 2c R0-D6 `src/*.rs#mod tests` discipline (`pub(crate)`
+// access from inside the crate, no public-API widening). The
+// `Cache` rustdoc carries a pointer to `PreparedCache` as the
+// public construction path, mirroring the shape of
+// `Cache::from_raw`'s rustdoc carrying its "test-time only; FFI
+// consumers use `compute_hash`" pointer.
+```
+
+Round 2 also pins one implementation note that crosses every
+seedhash-handling site: the Seedhash newtype introduction is a
+mechanical sweep across `Cache::derive`, `PreparedCache::derive`,
+`CacheStore::*`, the FFI shim's seedhash constructor, and every
+test that constructs a literal seedhash. This sweep happens in the
+**same implementation-PR commit** as the Seedhash newtype landing,
+not as a follow-up — otherwise the codebase has a transitional
+period where some sites use `&[u8; 32]` and some use `&Seedhash`,
+which is exactly the drift the newtype prevents. §8's commit table
+captures this in commit 1's scope.
+
+The `compute_hash` body inside `src/vm.rs` reads
+`prepared.seedhash().as_bytes()` where the prior shape took the
+seedhash as a separate argument; this is mechanical and does not
+affect the dispatch loop's semantics.
+
+2f **adds** `pub struct CacheStore` (shape pinned at R1-D1 per the
+Round 2 disposition) and **possibly amends** `compute_hash`'s body
+to consult a feature-gated `VmStatePool` (per R1-D3's Round 3
+reframe). The `compute_hash` *signature* is amended by Round 2
+(takes `&PreparedCache`, not `&Cache + &[u8; 32]`); the dispatch
+behavior inside the function body is unchanged.
 
 ### 1.2 Private substrate (unchanged)
 
@@ -360,6 +481,337 @@ happens outside the lock (caller derives, then calls `insert`).
   API does not change in place; it is replaced atomically by a
   new shape per the deletion-and-debt rule.
 
+**Round 2 disposition (merges R1-D2; supersedes R1-D1's frozen
+surface per §1.1 substrate correction).** The §1.1 amendment
+changes the load-bearing question from "what is CacheStore's API
+shape?" (a single-axis question Round 1 closed against a single-
+axis options menu) to "what is the layered shape — PreparedCache
++ CacheStore — that delivers the consensus-correctness invariant
+at the type level *and* the canonical-protection QoS at the
+structural level?" Round 2 closes the layered question.
+
+The Round 1 disposition above stays as audit trail per
+`91-documentation-after-plans.mdc`. The frozen API code-block in
+the Round 1 disposition is **superseded** by the Round 2 code-
+block below.
+
+**Three-axis options matrix.** The Round 1 option-set (a)/(b)/(c)
+mapped a single axis (canonical-protection shape). Round 2's
+adversarial pass surfaces that the load-bearing question is
+layered across three independent axes:
+
+- **Axis 1 — where the cache+seedhash binding lives.**
+  - (i) separate `Cache` and `seedhash` parameters to
+    `compute_hash` (Phase 2c freeze; Round 2 rejects).
+  - (ii) `PreparedCache` bundle (Round 2 picks; §1.1 amendment).
+  Axis 1 is consensus-correctness: a caller passing the wrong
+  cache for a given seedhash gets a wrong hash, which is fine
+  for chain integrity (network rejects) but is a footgun the
+  type system can close at zero cost. The `PreparedCache`
+  bundling makes wrong-cache-for-seedhash unrepresentable.
+- **Axis 2 — where canonical-protection lives.**
+  - (a) transparent memo with explicit `pin(seedhash)` /
+    `unpin()`. Round 1 rejected on caller-discipline grounds.
+  - (b) explicit two-slot type with `set_canonical`. Round 1
+    picked. Round 2 **reaffirms (b)**, but reframed: the slots
+    hold `Arc<PreparedCache>` (not `Arc<Cache>` + tracked
+    seedhash); seedhash-as-slot-key is read from
+    `prepared.seedhash()` rather than tracked separately.
+  - (c) type-stratified composition. Round 1 rejected as over-
+    provisioning at capacity 2.
+  Axis 2 is QoS — canonical-protection is a denial-of-service-
+  amplification defense (per F1), not a consensus-correctness
+  invariant. Once Axis 1 type-enforces consensus correctness,
+  Axis 2's choice has lower stakes; (b) is still right but the
+  argument shifts from "structurally enforce consensus
+  correctness" to "structurally enforce the QoS sticky
+  property."
+- **Axis 3 — whether CacheStore exists at all.**
+  - (d) no-CacheStore: consumers manage `Arc<PreparedCache>`
+    lifecycle directly via `PreparedCache::derive`; in-flight
+    deduplication and canonical-protection are consumer-side
+    concerns.
+  - (e) thin amortizing layer: CacheStore exists but is
+    minimal — holds at-most-N `Arc<PreparedCache>` instances
+    with simple LRU; no canonical-protection structure.
+  - (f) CacheStore with full canonical-protection structure
+    (the Round 1 (b) shape, pre-PreparedCache).
+  Round 2 picks the **(e)/(f) hybrid**: a thin amortizing layer
+  with explicit two-slot canonical-protection on top of
+  `Arc<PreparedCache>`. The structural shape is (f) but the
+  framing is (e) — CacheStore is no longer the fortress
+  enforcing consensus correctness; it's a thin amortizing layer
+  whose canonical-protection structure is QoS-shaped.
+
+**Rejection of (d) and (g).** The (d) no-CacheStore alternative
+and its (g) refinement (no-CacheStore + per-consumer in-flight
+deduplication map) share a rejection rationale: **Arc-holding
+memory exhaustion**. Without an upper bound at a CacheStore
+layer, an attacker who induces concurrent novel-seedhash lookups
+across multiple consumers (or repeated within one consumer) gets
+the daemon to hold many `Arc<PreparedCache>` clones whose total
+memory footprint scales with the number of distinct seedhashes
+seen in the attack window. Capacity-N at the CacheStore layer
+bounds this; consumer-side discipline does not (consumer code
+that, e.g., stores `Arc<PreparedCache>` in async handler state
+across an RPC call extends the cache's lifetime; the CacheStore
+layer's bound is the only structural defense). The (d)/(g)
+rejection is documented inline in the CacheStore rustdoc per
+Round 3's `§3.1 rustdoc cite of (g) rejection` refinement, so
+future readers asking "wouldn't this be simpler without the
+two-slot structure?" find the adversarial finding rather than
+re-proposing the shape.
+
+**Frozen public surface (Round 2 supersedes Round 1's code-
+block):**
+
+```rust
+// In rust/shekyl-pow-randomx/src/cache_store.rs (new); re-exported
+// from rust/shekyl-pow-randomx/src/lib.rs as `pub use cache_store::CacheStore;`.
+//
+// Two-slot store: at-most-one canonical (sticky against eviction)
+// plus at-most-one transient (displaced by every new
+// lookup_or_derive when no slot match exists). Concurrency-safe by
+// interior mutability per the synchronization-shape sub-block below.
+pub struct CacheStore { /* private fields per sync-shape sub-block */ }
+
+impl CacheStore {
+    /// Construct an empty store. Both slots start unset; the FFI
+    /// shim's lock-ordering discipline (per Decision #5) ensures
+    /// `set_canonical` is called before serving lookups. The cold-
+    /// start window is bounded to daemon startup.
+    pub fn new() -> CacheStore;
+
+    /// Fast-path lookup: returns `Some(Arc::clone(...))` if
+    /// `seedhash` matches the canonical or transient slot, else
+    /// `None`. Never derives. Separates fast-path (no derivation)
+    /// from slow-path (`lookup_or_derive`) so a hot-path validator
+    /// that knows it should hit canonical can call `lookup` and
+    /// treat `None` as an error signal rather than transparently
+    /// paying ~150 ms of unexpected derivation cost.
+    pub fn lookup(&self, seedhash: &Seedhash) -> Option<Arc<PreparedCache>>;
+
+    /// Slow-path lookup: returns the cache for `seedhash`,
+    /// deriving on miss. Concurrent calls for the same novel
+    /// `seedhash` share one in-flight derivation per the
+    /// in-flight-deduplication sub-block below; only one Argon2d
+    /// fill runs. On derivation completion the result is published
+    /// into the transient slot and returned. The in-flight-map
+    /// entry is dropped immediately on publish (cleanup-on-publish;
+    /// see threat-model F4 in §4 Round 3 disposition).
+    pub fn lookup_or_derive(&self, seedhash: &Seedhash) -> Arc<PreparedCache>;
+
+    /// Advance the canonical to `prepared`. Semantics:
+    /// - The previous canonical (if any) is demoted to transient,
+    ///   evicting the prior transient occupant from the slot. The
+    ///   evicted occupant's `Arc<PreparedCache>` clones held in
+    ///   consumer code stay alive until those clones drop; the
+    ///   underlying cache lives as long as any clone references it,
+    ///   regardless of slot occupancy.
+    /// - The new `prepared` lives in the canonical slot; it is
+    ///   non-evictable for as long as it is canonical.
+    /// - If `prepared.seedhash()` already matches the existing
+    ///   canonical, no-op.
+    /// - The argument is the bundled `Arc<PreparedCache>`, not a
+    ///   seedhash + cache pair. The caller obtains it via
+    ///   `lookup_or_derive` (or by direct
+    ///   `PreparedCache::derive` outside the store).
+    pub fn set_canonical(&self, prepared: Arc<PreparedCache>);
+}
+
+impl Default for CacheStore { /* equivalent to ::new() */ }
+```
+
+The Round 1 `insert` method is **removed**. Its function
+(publish a derived cache into the transient slot) is subsumed by
+`lookup_or_derive`'s on-completion publication; no caller-driven
+insert path remains. This collapses the Round 1 four-method
+public surface to three methods, eliminates the caller-induced
+state where a derived cache is held outside the store awaiting an
+explicit `insert` call, and removes the `insert(canonical_match)`
+no-op edge case the Round 1 state-transition table had to
+enumerate.
+
+**In-flight derivation deduplication shape (Round 2 pins; new
+vs. Round 1 surface).**
+
+The in-flight `HashMap` is the primitive that closes the
+thundering-herd attack surface:
+
+```rust
+// Internal to CacheStore (private fields):
+struct CacheStore {
+    canonical: RwLock<Option<Arc<PreparedCache>>>,
+    transient: RwLock<Option<Arc<PreparedCache>>>,
+    in_flight: Mutex<HashMap<Seedhash, Shared<DerivationFuture>>>,
+}
+```
+
+Concurrent `lookup_or_derive` calls for the same novel seedhash
+hit the in-flight map: the first call inserts a
+`Shared<DerivationFuture>` and starts the Argon2d fill; subsequent
+calls clone the `Shared` future and await the existing
+derivation. When the first derivation completes, the result is
+published to the transient slot **and** the in-flight-map entry
+is dropped (cleanup-on-publish). Subsequent lookups hit the slot,
+not the in-flight map.
+
+Cleanup-on-publish is load-bearing for memory-boundedness. Without
+it, the in-flight `HashMap` grows unboundedly under sustained
+novel-seedhash attack (each derivation completes and leaves an
+entry; the entry stays until the `HashMap` rehashes or
+`CacheStore` is dropped). With cleanup-on-publish, the in-flight
+`HashMap` holds only currently-derivating seedhashes; size is
+bounded by the concurrency level, not by total derivations seen.
+
+The `Shared<DerivationFuture>` is the `futures::future::Shared`
+adapter that allows multiple consumers to await one future. Per
+rule 17 (dependency discipline), the `futures` crate is not yet a
+workspace dependency; the implementation PR may use either
+`futures` (adding it to `[workspace.dependencies]` in
+`rust/Cargo.toml`) or a sync alternative built on
+`std::sync::Arc<std::sync::Mutex<DerivationState>>` + condvar.
+The choice is a Round 3 sub-detail; the contract — "concurrent
+callers share one derivation" — is pinned at Round 2.
+
+**Synchronization shape (Round 2 pins; replaces Round 1's
+`Mutex<{...}>` placeholder).**
+
+- **Per-slot `RwLock<Option<Arc<PreparedCache>>>`.** Lookups are
+  the hot path; writes (`set_canonical`, `lookup_or_derive`'s
+  publication) are rare. `RwLock` lets concurrent readers
+  proceed; writers block briefly during the slot swap. A single
+  `Mutex` over the slot pair would serialize all readers,
+  defeating concurrency. Per-slot locking (rather than one lock
+  over both slots) lets canonical reads not block transient
+  writes and vice versa — minor but free given the type
+  structure, and the canonical-vs-transient swap during
+  `set_canonical` is the only operation that needs both locks
+  (acquired in canonical-then-transient order to avoid
+  deadlock).
+- **`Mutex<HashMap>` for in-flight.** Writes (insert on first
+  call; remove on cleanup-on-publish) and reads (clone the
+  existing future) are roughly balanced; the critical section is
+  short (HashMap access + `Shared::clone`); `RwLock` would not
+  buy meaningful concurrency. `Mutex` is the simpler primitive.
+- **Sharding rejected.** At capacity-2, sharding the slots
+  across N independent locks doesn't reduce contention — there
+  is no contention to reduce when there are only two slots.
+  Sharding is for high-concurrency many-bucket data structures;
+  not applicable here.
+
+Pre-genesis (`15-deletion-and-debt.mdc`) makes synchronization-
+shape changes bounded if a future bench surfaces `RwLock`-not-
+helping or `Mutex`-contention; reopen via Round X+1 rather than
+maintaining a versioning surface.
+
+**11-row state-transition table (Round 2 supersedes Round 1's
+table; `Arc<PreparedCache>` shape).**
+
+Pre/post states reference `Option<Arc<PreparedCache>>` slots;
+transitions are typed against `Arc<PreparedCache>` (set_canonical
+takes the bundle) or `&Seedhash` (lookup is keyed by seedhash).
+The substantive transitions are unchanged from Round 1 (canonical
+non-evictable; transient displace-on-publish; advance promotes-
+from-transient + demotes-prior); the table refresh is the typing
+plus the `insert→lookup_or_derive` substitution. Let
+`pA = Arc<PreparedCache>{seedhash=A, cache=cA}` etc.; let
+`la = lookup_or_derive`.
+
+| Action | Pre-state | Post-state |
+|--------|-----------|------------|
+| `new()` | (none) | canonical=None, transient=None |
+| `la(A)` (novel, no canonical) | canonical=None, transient=None | canonical=None, transient=Some(pA) (returns pA) |
+| `la(B)` (novel, no canonical) | canonical=None, transient=Some(pA) | canonical=None, transient=Some(pB) (pA dropped from slot; consumer-held Arc clones survive) |
+| `set_canonical(pA)`, A in transient | canonical=None, transient=Some(pA) | canonical=Some(pA), transient=None |
+| `la(B)` (novel, A canonical) | canonical=Some(pA), transient=None | canonical=Some(pA), transient=Some(pB) |
+| `la(C)` (novel, A canonical, B transient) | canonical=Some(pA), transient=Some(pB) | canonical=Some(pA), transient=Some(pC) (pB dropped from slot) |
+| `set_canonical(pB)`, A canonical, B not present | canonical=Some(pA), transient=Some(pC) | derives B → canonical=Some(pB), transient=Some(pA) (A demoted; pC dropped from slot) — *the caller calls `la(B)` first to obtain `pB`; `set_canonical(pB)` then advances* |
+| `set_canonical(pA)` (canonical match) | canonical=Some(pA), transient=Some(pB) | canonical=Some(pA), transient=Some(pB) (no-op) |
+| `la(A)` (canonical match) | canonical=Some(pA), transient=Some(pB) | canonical=Some(pA), transient=Some(pB) (returns pA from canonical) |
+| `la(B)` (transient match) | canonical=Some(pA), transient=Some(pB) | canonical=Some(pA), transient=Some(pB) (returns pB from transient) |
+| concurrent `la(D)` × 2 (novel) | canonical=Some(pA), transient=Some(pB) | both calls await one in-flight derivation; on completion: canonical=Some(pA), transient=Some(pD) (pB dropped from slot); both calls receive the same `Arc<PreparedCache>` clone (in-flight dedup) |
+
+Test matrix (per §6.1 Round 3 refinement) asserts each row's
+pre/post identity by direct `lookup(...)` checks after each
+action plus `Arc::ptr_eq` checks for the in-flight-dedup row.
+
+**Capacity-2 reopen criterion (Round 2 sharpens Round 1).**
+
+The Round 1 reopen criterion was: "a second Rust caller of
+`CacheStore` lands that needs concurrent canonicality across
+multiple chains." Round 2 sharpens: a *named real consumer*
+surfaces a *sustained operational pattern* where 2 caches isn't
+sufficient and the operator demonstrably has to choose between
+paying re-derivation cost or extending the `CacheStore`. Not
+"we might want N someday"; "this specific consumer has
+demonstrated 2 isn't enough." The substrate-anchored event is
+the consumer's call-site grep evidence + a measurement showing
+the cost (e.g., "Phase 3a stressnet validator served 4 distinct
+seedhashes across overlapping 30-minute reorg windows;
+re-derivation cost N hash-units; CacheStore extension would have
+saved N").
+
+**Transparent-memo framing retired.**
+
+The parent-plan `RANDOMX_V2_PLAN.md` Decision #6 wording
+("transparent memo with capacity-2 LRU and `pin()` API") belonged
+to Round 1's Option (a). Option (b) is honest about the
+two-slot structure and the canonical-vs-transient distinction —
+the type's API surface (`set_canonical` is a structural concept)
+is not a transparent-memo API. The wording is updated by a small
+precursor PR `chore/randomx-v2-plan-decision6-amendment` (queued
+in §10) that lands **before** the Phase 2F implementation PR
+opens. Bounded scope; one-file change; the precedent is the
+Phase 2c F4-absorbed parent-plan rescope.
+
+**Reversion clause (Round 2 supersedes Round 1's clause).**
+
+- *Rejection.* The three-axis disposition above (Axis 1 →
+  PreparedCache; Axis 2 → (b); Axis 3 → (e)/(f) hybrid) is
+  rejected at V3.0 only if substrate-change fires per the
+  reopening criteria below. The Round 1 reopening criteria for
+  Axis 2 carry forward unchanged; Round 2 adds Axis 1 and Axis 3
+  reopening criteria below.
+- *Reopening criteria — Axis 1 (PreparedCache).* Reopen if
+  **any** of:
+  1. A consumer surfaces a need to construct `compute_hash`-
+     suitable inputs *without* going through `PreparedCache::derive`
+     (e.g., a deserialization path that reconstitutes a cache
+     from disk without re-deriving). Demonstrate by a concrete
+     deserialization use case; not "we might want it."
+  2. The Phase 3a FFI shim audit reveals that the bundling
+     constrains the C-ABI surface in a way that's costly to
+     work around (e.g., the C++ caller has the cache and seedhash
+     in separate state and bundling on every call costs
+     measurable time). Demonstrate by impl-PR profiling.
+  3. A V4-PQC architectural choice requires `compute_hash` to
+     take input that wraps PQC-authenticated metadata about the
+     cache, breaking the simple `&PreparedCache` shape. The
+     reopening is a successor design doc; not in Phase 2F's
+     scope.
+- *Reopening criteria — Axis 2 (canonical-protection in (b)).*
+  Carries forward Round 1's three reopening criteria unchanged
+  (second Rust caller; Decision #5 reversal; Phase 3a FFI shim
+  survey reveals incompatible concurrency profile).
+- *Reopening criteria — Axis 3 (CacheStore exists).* Reopen if:
+  1. A bench surfaces that the in-flight deduplication
+     contention (Mutex<HashMap>) is the bottleneck under
+     production load; the disposition could shift to (d)/(g)
+     consumer-side dedup OR a sharded in-flight map. Demonstrate
+     by Phase 3a profiling; not speculation.
+  2. The architectural-inheritance audit at Phase 3a reveals
+     that consumer-side discipline can be made structural (e.g.,
+     a typed handle that drops on-scope-exit, removing the
+     consumer-side Arc-holding attack); the (d)/(g) rejection's
+     rationale dissolves and `CacheStore` simplifies.
+- *Re-evaluation shape.* New design round (Round X+1 of a Phase
+  2f extension or a Phase-2f-successor doc), citing the
+  substrate change and re-running the three-axis option matrix.
+  The PreparedCache + CacheStore layered shape does not change in
+  place; it is replaced atomically per the deletion-and-debt
+  rule.
+
 ### 3.2 R1-D2 — Eviction policy under attacker interleave
 
 Given R1-D1's API choice, fix the eviction policy:
@@ -428,6 +880,24 @@ option (b). Reopening criteria for R1-D2 are exactly R1-D1's
 reopening criteria — the policy cannot be revisited independently
 of the API shape. If R1-D1 reopens (per its substrate-change
 clauses), R1-D2 is re-derived from the new shape.
+
+**Round 2 disposition (R1-D2 merged into R1-D1 Round 2).** Round
+2's substrate-correction (per §1.1 amendment + §3.1 Round 2)
+makes R1-D1 and R1-D2 a single layered question rather than two
+independent questions: once Axis 1 (PreparedCache) is type-
+enforced, the Axis 2 eviction policy operates on
+`Arc<PreparedCache>` and the eviction transitions are typed
+against the bundle. The Round 1 R1-D2 disposition above stays as
+audit trail per `91-documentation-after-plans.mdc`. The
+substantive eviction transitions are unchanged from Round 1
+(canonical non-evictable; transient displace-on-publish; advance
+promotes-from-transient + demotes-prior); the typing is
+`Arc<PreparedCache>` instead of `(seedhash, Arc<Cache>)` pairs;
+the `insert` action is replaced by `lookup_or_derive`'s on-
+completion publication. The full Round-2-typed 11-row state-
+transition table lives in §3.1 Round 2 disposition; the Round 1
+table above is preserved as audit trail and **superseded** by
+the §3.1 Round 2 table.
 
 ### 3.3 R1-D3 — Benchmark methodology (per-call VmState allocation)
 
@@ -952,37 +1422,85 @@ Round 1 close lands this section. Mirrors Phase 2c §5.1.1 / Phase 2d
 §5 — the contract names what 2f's implementation PR can change vs.
 what is frozen.
 
-### 5.1 Frozen-by-this-doc-at-Round-1
+### 5.1 Frozen-by-this-doc-at-Round-1-and-Round-2
 
 The implementation PR (`feat/randomx-v2-phase2f-impl`) inherits the
 following as immutable. Changes to any of these require a new
 Phase 2f round on this doc, not a code-side amendment.
 
-- **`compute_hash` signature** per §1.1: `pub fn compute_hash(&Cache, &[u8; 32], &[u8]) -> [u8; 32]`. Unchanged. R1-D4's
-  pool path, if triggered, internalizes inside this function's
-  body without altering the signature.
-- **`Cache` public API** per §1.1: `pub struct Cache` with
-  `pub fn Cache::derive(&Seedhash) -> Cache` plus the
-  `pub(crate)` accessors. Unchanged.
+The Round 1 freeze items below are preserved as audit trail per
+`91-documentation-after-plans.mdc`; Round 2's amendments
+(supersede-marked inline) replace the Round 1 items where the
+substrate correction applies.
+
+- **`compute_hash` signature.** Round 1 freeze:
+  `pub fn compute_hash(&Cache, &[u8; 32], &[u8]) -> [u8; 32]`.
+  **Round 2 supersedes (per §1.1 amendment):**
+  `pub fn compute_hash(&PreparedCache, &[u8]) -> [u8; 32]`. The
+  cache-seedhash binding is carried by the `PreparedCache`
+  bundle; the seedhash is no longer a separate parameter.
+  R1-D4's pool path, if triggered, internalizes inside the
+  function body without altering the (Round-2-amended)
+  signature.
+- **`Seedhash` newtype.** Round 2-new freeze (no Round 1
+  predecessor): `#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)] pub struct Seedhash(/* private [u8; 32] */)`
+  with `pub fn Seedhash::from_bytes([u8; 32]) -> Seedhash` and
+  `pub fn Seedhash::as_bytes(&self) -> &[u8; 32]`. `Display` impl
+  for hex-formatting consistency with Phase 2c. Newtype
+  representation is private (accessor-mediated, not field-
+  mediated) to allow pre-genesis representation changes.
+- **`PreparedCache`.** Round 2-new freeze (no Round 1
+  predecessor): `pub struct PreparedCache` with
+  `pub fn PreparedCache::derive(Seedhash) -> PreparedCache` and
+  `pub fn PreparedCache::seedhash(&self) -> &Seedhash`. The
+  bundle is the only public path to `compute_hash`-suitable
+  inputs.
+- **`Cache` public API.** Round 1 freeze:
+  `pub struct Cache` with `pub fn Cache::derive(&Seedhash) -> Cache`
+  plus `pub(crate)` accessors. **Round 2 supersedes (per §1.1
+  amendment):** `pub(crate) struct Cache` with
+  `pub(crate) fn Cache::derive(&Seedhash) -> Cache`. The
+  `pub(crate)` transition closes the failure mode the
+  `PreparedCache` bundling exists to prevent (consumers
+  constructing `Cache` without the seedhash binding). The
+  `Cache` rustdoc carries a pointer to `PreparedCache` as the
+  public construction path. Test access is preserved via
+  `src/*.rs#mod tests` discipline (Phase 2c R0-D6).
 - **`VmState` visibility** per §1.1: `pub(crate)` in `src/vm.rs`.
   Unchanged. R1-D3 option (b) (Component method) was selected
   specifically to avoid promoting this to `pub`.
-- **`CacheStore` public API** per R1-D1's option (b) frozen
-  surface (see §3.1 Round 1 disposition for the full code-block
-  spec). Constructor `new()`, `lookup(&[u8; 32]) -> Option<Arc<Cache>>`,
-  `insert(&[u8; 32], Arc<Cache>)`, `set_canonical(&[u8; 32])`.
-  Internal synchronization via `std::sync::Mutex` only.
-- **CacheStore eviction policy** per R1-D2's row-by-row pre/post
-  table (§3.2 Round 1 disposition). Canonical non-evictable;
-  transient displace-on-insert; `set_canonical` advance promotes-
-  from-transient + demotes-prior; cold-start window before first
-  `set_canonical` leaves both slots subject to attacker churn
-  (caller-discipline-bounded).
+- **`CacheStore` public API.** Round 1 freeze:
+  `new()`, `lookup(&[u8; 32]) -> Option<Arc<Cache>>`,
+  `insert(&[u8; 32], Arc<Cache>)`, `set_canonical(&[u8; 32])`,
+  internal `std::sync::Mutex` only. **Round 2 supersedes (per
+  §3.1 Round 2 disposition):**
+  `new()`,
+  `lookup(&Seedhash) -> Option<Arc<PreparedCache>>`,
+  `lookup_or_derive(&Seedhash) -> Arc<PreparedCache>`,
+  `set_canonical(Arc<PreparedCache>)`. The Round 1 `insert`
+  method is removed; its function is subsumed by
+  `lookup_or_derive`'s on-completion publication. Internal
+  synchronization is per-slot
+  `RwLock<Option<Arc<PreparedCache>>>` (canonical + transient)
+  plus `Mutex<HashMap<Seedhash, Shared<DerivationFuture>>>`
+  for in-flight deduplication; cleanup-on-publish drops the
+  in-flight entry on derivation completion.
+- **CacheStore eviction policy.** Round 1 freeze: §3.2 Round 1
+  table. **Round 2 supersedes:** §3.1 Round 2 11-row
+  state-transition table (typed against `Arc<PreparedCache>`;
+  `insert→lookup_or_derive` substitution; in-flight-dedup
+  concurrent row added). Substantive transitions unchanged
+  (canonical non-evictable; transient displace-on-publish;
+  advance promotes-from-transient + demotes-prior; cold-start
+  window before first `set_canonical` is bounded by FFI shim's
+  lock-ordering discipline per Decision #5).
 - **Bench methodology** per R1-D3 option (b). Component method
   measuring scratchpad zero-init + register-file zero-init in
   isolation, summed median = floor on per-call alloc cost.
   No `compute_hash_with_state` helper added (would require
-  promoting `VmState` to `pub`).
+  promoting `VmState` to `pub`). (Round 3 may refine the
+  bench harness shape; see §3.3 Round 3 disposition once
+  Round 3 commits.)
 - **Pool decision rule** per R1-D4 three-band table (< 50 µs
   → no pool; [50, 100) µs → impl-PR pre-flight escalation;
   ≥ 100 µs → pool inside `compute_hash`).
@@ -996,26 +1514,50 @@ Phase 2f round on this doc, not a code-side amendment.
   (Pattern A runtime-mutable-state imports; Pattern B module-
   level statics; Pattern C FFI exports). Pinned regex bodies in
   §3.6 Round 1 disposition.
+- **Seedhash newtype sweep is atomic with its introduction.**
+  The Round 2 §1.1 substrate correction adds the `Seedhash`
+  newtype; every site that currently passes `&[u8; 32]` for a
+  seedhash (Cache::derive, PreparedCache::derive, CacheStore::*,
+  the FFI shim's seedhash constructor, every test that
+  constructs a literal seedhash) updates to `&Seedhash` /
+  `Seedhash` in the **same commit** as the newtype's landing.
+  Not as a follow-up. Otherwise the codebase has a
+  transitional period where some sites use `&[u8; 32]` and
+  some use `&Seedhash`, which is exactly the drift the
+  newtype prevents.
 
 ### 5.2 In-scope for the implementation PR
 
+The Round 1 in-scope table below is preserved as audit trail per
+`91-documentation-after-plans.mdc`. Round 2's amendments
+(supersede-marked inline) replace the Round 1 entries where the
+substrate correction applies; new Round-2 artifacts are appended
+as items 12–15. The table reflects the Round 2 shape post-
+amendment.
+
 | # | Artifact | Lines (estimate) | Path |
 |---|---|---|---|
-| 1 | `CacheStore` struct + impl block per R1-D1 frozen API | ~120–200 | `rust/shekyl-pow-randomx/src/cache_store.rs` (new) |
-| 2 | Re-export from `lib.rs` | ~1 | `rust/shekyl-pow-randomx/src/lib.rs` (`pub use cache_store::CacheStore;`) |
+| 1 | `CacheStore` struct + impl block. **Round 2 supersedes** Round 1's frozen-API spec: lookup/lookup_or_derive/set_canonical signatures take `&Seedhash` / `Arc<PreparedCache>`; per-slot `RwLock` + `Mutex<HashMap>` for in-flight dedup; cleanup-on-publish. | ~250–350 | `rust/shekyl-pow-randomx/src/cache_store.rs` (new) |
+| 2 | Re-export from `lib.rs`. **Round 2 amends:** `pub use cache_store::CacheStore; pub use prepared::{PreparedCache, Seedhash};` | ~3 | `rust/shekyl-pow-randomx/src/lib.rs` |
 | 3 | Crate-invariant grep script per R1-E1 | ~50 | `scripts/ci/check_randomx_crate_invariants.sh` (new) |
 | 4 | CI workflow step per R1-E1 | ~2 | `.github/workflows/build.yml` (sibling to FPU step) |
 | 5 | Component bench per R1-D3 option (b) | ~60–100 | `rust/shekyl-pow-randomx/benches/per_call_alloc.rs` (new) or extension to existing `compute_hash_alloc.rs` |
 | 6 | `BENCH_RESULTS.md` update with component-floor median + R1-D4 disposition | ~30 | `rust/shekyl-pow-randomx/BENCH_RESULTS.md` |
 | 7 | (Conditional per R1-D4) `VmState` pool body inside `compute_hash` | ~50–150 | `rust/shekyl-pow-randomx/src/vm.rs` (function-body amendment) |
 | 8 | (Conditional per R1-D4) `pub(crate) const POOL_CAPACITY: usize` per R1-D5 derivation | ~5 | `rust/shekyl-pow-randomx/src/vm.rs` |
-| 9 | CacheStore unit tests per §6.1 | ~150–250 | `rust/shekyl-pow-randomx/src/cache_store.rs#mod tests` |
+| 9 | CacheStore unit tests per §6.1. **Round 2 supersedes** Round 1's test matrix to match Round-2-typed pre/post table; in-flight-dedup test added. | ~250–350 | `rust/shekyl-pow-randomx/src/cache_store.rs#mod tests` |
 | 10 | Crate-invariant smoke test (script-runner from `cargo test`) per §6.2 | ~30 | `rust/shekyl-pow-randomx/tests/crate_invariants.rs` (new) |
-| 11 | CHANGELOG + Round-history close | ~30 | `docs/CHANGELOG.md`, this plan-doc §11 |
+| 11 | CHANGELOG + Round-history close | ~50 | `docs/CHANGELOG.md`, this plan-doc §11 |
+| 12 | **Round 2 new:** `Seedhash` newtype + impls (Copy/Clone/Debug/Eq/Hash/PartialEq derives + Display + from_bytes/as_bytes accessors) | ~50–80 | `rust/shekyl-pow-randomx/src/prepared.rs` (new) or `src/seedhash.rs` |
+| 13 | **Round 2 new:** `PreparedCache` struct + `derive` + `seedhash` accessor | ~30–50 | `rust/shekyl-pow-randomx/src/prepared.rs` |
+| 14 | **Round 2 amends:** `Cache` visibility transition `pub → pub(crate)`; `Cache::derive` signature `&[u8; 32] → &Seedhash`; rustdoc pointer to `PreparedCache` | ~10–20 | `rust/shekyl-pow-randomx/src/lib.rs` + `src/cache/mod.rs` (or wherever `Cache` lives) |
+| 15 | **Round 2 amends:** `compute_hash` signature `(&Cache, &[u8; 32], &[u8]) → (&PreparedCache, &[u8])`; body reads `prepared.seedhash().as_bytes()` where the prior shape took the seedhash directly. | ~5–15 | `rust/shekyl-pow-randomx/src/vm.rs` |
+| 16 | **Round 2 new:** Atomic Seedhash-newtype sweep across all `&[u8; 32]`-as-seedhash sites in the crate (test seedhash literals, internal callers). Also crosses the `shekyl-ffi` boundary in the FFI-shim's seedhash constructor — but the FFI shim itself is **out of scope for Phase 2F** (Decision #5; `shekyl-ffi` lives outside this crate). The Phase 2F impl-PR ships the `Seedhash::from_bytes` constructor; the FFI shim's call-site update is Phase 3a's responsibility. The sweep within `rust/shekyl-pow-randomx/` is mechanical and atomic with item #12's landing per §5.1. | ~30–50 | (cross-cutting; see paths below) |
 
-Total ~600 lines net-new (matches the §"Scope envelope" target).
-The R1-D4 pool path adds ~50–150 lines if triggered; the no-pool
-path closes at ~450 lines.
+Total ~800 lines net-new (was Round 1's ~600; the Round 2
+PreparedCache + Seedhash + sweep + larger CacheStore + larger test
+matrix add ~200 net lines). The R1-D4 pool path adds ~50–150
+lines if triggered.
 
 ### 5.3 Out-of-scope for the implementation PR (re-emphasized)
 
@@ -1029,6 +1571,17 @@ path closes at ~450 lines.
   favor of option (b); reopens only via R1-D3 reversion clause #1
   within the impl-PR's own pre-flight if the floor lands in the
   ambiguity band).
+- **Round 2 new:** FFI shim updates in `shekyl-ffi` (the crate
+  outside this Phase 2F's scope per Decision #5). Phase 2F ships
+  the `Seedhash::from_bytes` constructor; Phase 3a's FFI shim PR
+  calls it. The cross-crate boundary is honored per `06-branching.mdc`
+  scope discipline.
+- **Round 2 new:** Parent-plan `RANDOMX_V2_PLAN.md` Decision #6
+  wording amendment (the "transparent memo with capacity-2 LRU
+  and `pin()` API" framing). Out of scope for the Phase 2F
+  impl-PR; lands as a small precursor PR
+  `chore/randomx-v2-plan-decision6-amendment` per §10. Bounded
+  scope; one-file change.
 
 ---
 
@@ -1180,14 +1733,62 @@ Inherits Phase 2d's gates. Adds two new ones:
 - **2g** inherits the post-2f `compute_hash` body (with or without
   pool per R1-D4). The differential harness operates on the same
   public surface as today; no harness-side changes from 2f are
-  visible.
-- **3a** sees only `Cache::derive`, `compute_hash`, and the new
-  `CacheStore` (which `shekyl-ffi` will instantiate as the
-  transparent memo per `RANDOMX_V2_PHASE2C_PLAN.md` Decision #6).
-  Dispatch and pool stay private.
+  visible. **Round 2 amends:** the public surface is
+  `compute_hash(&PreparedCache, &[u8]) -> [u8; 32]` (per §1.1
+  amendment), not `compute_hash(&Cache, &[u8; 32], &[u8])`; 2g's
+  harness consumes the bundled `PreparedCache` shape.
+- **3a** sees `Cache::derive` (now `pub(crate)`; reachable only
+  via `PreparedCache::derive`), `compute_hash`, the new
+  `CacheStore`, the `Seedhash` newtype, and `PreparedCache`.
+  `shekyl-ffi` will instantiate the `CacheStore` per
+  `RANDOMX_V2_PHASE2C_PLAN.md` Decision #6; 3a's FFI shim
+  constructs `Seedhash::from_bytes(*ptr)` from the C-ABI's
+  `*const [u8; 32]` and bundles `Arc<PreparedCache>` instances
+  through the C-ABI as opaque pointers. Dispatch and (R1-D4-
+  conditional) pool stay private.
 - **3c** absorbs the binary-level `nm`-on-`shekyld` symbol-isolation
   check from FOLLOWUPS line 3633ff; 2f's source-level greps are the
   Rust-side companion.
+
+### 10.1 Precursor PR queued by Round 2
+
+- **`chore/randomx-v2-plan-decision6-amendment`** — small
+  precursor PR amending the parent-plan
+  `RANDOMX_V2_PLAN.md` Decision #6 wording. Round 1 picked
+  Option (b) for `CacheStore`'s API shape; the parent plan's
+  "transparent memo with capacity-2 LRU and `pin()` API"
+  framing belongs to the rejected Option (a). Round 2 retires
+  the framing in §3.1 Round 2 disposition; the parent-plan
+  text itself is updated by this precursor PR before the Phase
+  2F implementation PR opens. Precedent: Phase 2c F4-absorbed
+  parent-plan rescope (which followed the same pattern of a
+  Round-N substrate finding driving a small precursor PR
+  against the parent plan).
+
+### 10.2 PQC migration space
+
+The verifier crate's API shape at the Phase 2F freeze is
+PQC-orthogonal by construction. `Seedhash` is a 32-byte newtype;
+`PreparedCache` bundles classical Argon2d-derived cache state
+with the seedhash; `compute_hash` produces a 32-byte hash output.
+None of these surfaces presume the post-PQC architectural
+choices (V4-lattice signature scheme, hybrid-PQC verification
+pipeline shape, PQC-authenticated header metadata).
+
+The verifier's role in the post-PQC pipeline is **same as
+today**: given a seedhash and data, produce a deterministic
+32-byte hash. The PQC architectural choices land at Phase 3a's
+shim layer (where `Seedhash` is constructed from validated block
+header bytes; pre-PQC the validation is classical-signature-
+shaped, post-PQC it is hybrid-PQC-shaped). The verifier crate
+does not see the validation discipline; it sees the seedhash.
+
+This factoring is a load-bearing property: the verifier crate's
+test surface, audit posture, and freeze are stable across the
+classical → PQC transition. The PQC migration space is not a
+Phase 2F concern. The note exists so future contributors don't
+attempt to "PQC-prepare" the verifier crate's API; the API is
+already PQC-prepared by virtue of being PQC-orthogonal.
 
 ---
 
@@ -1196,4 +1797,5 @@ Inherits Phase 2d's gates. Adds two new ones:
 | Round | Date | Outcome |
 |-------|------|---------|
 | Scaffold | 2026-05-23 | This document. Pins the substrate carry-forwards from `RANDOMX_V2_PLAN.md` Decisions #6/#7, `RANDOMX_V2_PHASE2C_PLAN.md` §5.11.7, and `RANDOMX_V2_PHASE2D_PLAN.md` §10. Enumerates §3 Round 1 decision points (R1-D1 API shape; R1-D2 eviction policy; R1-D3 bench methodology; R1-D4 pool threshold; R1-D5 fanout survey; R1-E1 grep patterns). Out-of-scope items pinned (no differential harness; no CI per-hash latency gate; no binary-level `nm` check; no parallel `Cache::derive`). Round 1 supersedes this scaffold's §3 / §5 / §6 / §8 with closed-decision content; the scaffold remains the substrate-capture provenance. |
-| Round 1 | 2026-05-23 | Closed R1-D1 through R1-E1. **R1-D1**: CacheStore picks option (b) explicit two-slot type (`new` / `lookup` / `insert` / `set_canonical`); rejects (a) for caller-discipline burden on the F1 sticky-canonical defense; rejects (c) for over-provisioning (capacity 2 doesn't justify type-stratified composition). Internal sync via `std::sync::Mutex` (no new workspace deps; verified `lru` not in `rust/Cargo.toml`, `parking_lot` only transitive). **R1-D2**: eviction policy falls out of (b) — canonical non-evictable; transient displace-on-insert; `set_canonical` advance promotes-from-transient + demotes-prior; cold-start-window degenerate case bounded to daemon startup and handled by FFI shim's discipline (no fallback policy in CacheStore). 11-row pre/post state-transition table pinned in §3.2 covering 3-seedhash interleave attack, cold-start, advance, no-op cases. **R1-D3**: bench methodology picks option (b) Component method; rejects (a) Diff method because it would require promoting `VmState` to `pub` and adding a `compute_hash_with_state` helper — both contradict §1.1 freeze and Decision #7's no-public-`VmPool` posture; rejects (c) Population method per scaffold's sequencing-cycle note. Component sum measures `Box::<[u8]>::new_zeroed_slice(2 MiB)` + synthetic register-file init (the bench does not consume the production `VmState` newtype to keep visibility clean); sum is a *floor* on per-call alloc cost (excludes register-file struct overhead and field-init cost). **R1-D4**: pool decision threshold confirmed at 100 µs per `RANDOMX_V2_PLAN.md` line 240. Three-band rule: < 50 µs → no pool (Branch A); [50, 100) µs → escalate to impl-PR pre-flight per R1-D3 reversion-clause #1 (Branch B); ≥ 100 µs → pool inside `compute_hash`, no public `VmPool`, capacity from R1-D5 (Branch C). Reversion clauses for the no-pool path: allocator regression (mimalloc/jemalloc swap), scratchpad-size change at consensus level, runtime-architecture mismatch (cross-compile target's allocator differs from CI). **R1-D5**: daemon parallel-verification fanout survey methodology pinned. Audit-against-actual-code per `16-architectural-inheritance.mdc`: read `src/cryptonote_core/blockchain.cpp`, `src/cryptonote_core/tx_pool.cpp`, `src/cryptonote_core/cryptonote_tx_utils.cpp`, `src/common/threadpool.{h,cpp}` at `dev` tip = `fb21909ff`. Substrate correction vs. prompt: only **one** parallel-`compute_hash` call site exists at HEAD — alt-chain branch validation's `block_longhash_worker` via `tools::threadpool::getInstanceForCompute()`, capped by `m_max_prepare_blocks_threads` (default 4). Mempool tx verification (`tx_pool.cpp`, `cryptonote_tx_utils.cpp`, `tx_pqc_verify.cpp`) does **not** call `compute_hash` in parallel — the prompt's two-source assumption was incorrect. Pool capacity formula: `min(threadpool::getInstanceForCompute().get_max_concurrency(), m_max_prepare_blocks_threads) + 1` reserve. Reversion criteria: a future PR introducing `tools::threadpool` + `compute_hash` in tx_pool.cpp / cryptonote_tx_utils.cpp / tx_pqc_verify.cpp; `m_max_prepare_blocks_threads` default change; Phase 3a FFI shim survey reveals new concurrent consumer. **R1-E1**: three-pattern enumeration: pattern A bans imports of `once_cell` / `lazy_static` / `OnceLock` / `LazyLock` (stricter than module-level-static-only — eliminates the disambiguation between module-level and function-local usage by rejecting the import; the crate provably does not need any of these); pattern B bans column-0 `static` declarations (function-local statics live inside fn bodies and are indented, so pattern B does not match them; `const` items are a different keyword and not matched); pattern C bans `#[no_mangle]`, `#[unsafe(no_mangle)]`, `#[export_name`, `#[unsafe(export_name`, and `extern "C" fn` definition form (`extern "C" { fn foo(); }` import blocks consuming an external FFI surface are not matched since they require `fn` *inside* the brace block, not after `"C"`). New script `scripts/ci/check_randomx_crate_invariants.sh` modeled on `check_randomx_fpu_rounding.sh`. CI integration: new `.github/workflows/build.yml` step `enforce RandomX crate-level isolation invariants` sibling to FPU step. Reversion criteria per pattern: stdlib evolution (pattern A successor primitives), genuine large-immutable-shared-state need (pattern B reopen), Decision #5 reversal (pattern C reopen). **Substrate finding at verification.** Pattern C's first draft (anywhere-on-line match) collided with the existing `lib.rs` rustdoc at lines 31–32, which legitimately cites the forbidden tokens (`` `#[no_mangle]` ``, `` `extern "C" fn` ``, `` `#[export_name]` ``) as part of the documented discipline. Disposition: anchor pattern C at column 0 (with optional leading whitespace for attributes indented inside fn bodies) — code attributes start at column 0 modulo indentation, rustdoc lines start with `//!`. Patterns A and B were already `^`-anchored; the inconsistency was specific to pattern C. **Verification at HEAD (post-fix)**: greps return zero hits across `rust/shekyl-pow-randomx/src/` confirming clean baseline. **Plan-doc edits**: §3.1–§3.6 each gain a "Round 1 disposition" sub-block; §5 placeholder superseded by frozen-surface contract (5.1) + in-scope artifact table (5.2) + out-of-scope re-emphasis (5.3); §6 placeholder superseded by 7-row CacheStore unit-test table + 4-row CI-invariant table + 4-row bench-harness table; §8 placeholder superseded by 5-commit table with R1-D4 three-branch conditional (commit 4 omitted/deferred/included per Branch A/B/C). |
+| Round 2 | 2026-05-23 | **Architectural reframe (load-bearing structural change).** The Round 1 dispositions stand as audit trail; Round 2 supersedes the load-bearing surface where the Phase 2c freeze inherited a consensus-correctness footgun the type system can close. **§1.1 substrate correction.** Phase 2c's `compute_hash(&Cache, &[u8; 32], &[u8]) -> [u8; 32]` shape carries the cache and the seedhash as separate arguments; a caller passing the wrong cache for a given seedhash gets a wrong hash, which is fine for chain integrity (network rejects) but is a footgun the type system can close at zero cost. Round 2 introduces `PreparedCache` (bundles `Cache + Seedhash`), `Seedhash` newtype (replaces the `&[u8; 32]` alias), and amends `compute_hash` to take `&PreparedCache`. `Cache` transitions `pub → pub(crate)`; the public construction path is `PreparedCache::derive`. Per `16-architectural-inheritance.mdc` pre-genesis discount and the cost-benefit-defer-to-later anti-pattern, the substrate correction lands now in Round 2 of Phase 2F's plan-doc rather than in V3.x. **§3.1 R1-D1 + R1-D2 merged disposition.** The single-axis Round 1 question (CacheStore API shape) is layered into a three-axis question post-`PreparedCache`: Axis 1 = where the cache+seedhash binding lives (Round 2 picks `PreparedCache` bundling); Axis 2 = canonical-protection shape (Round 1's (b) reaffirmed; now operates on `Arc<PreparedCache>`); Axis 3 = whether `CacheStore` exists (Round 2 picks (e)/(f) hybrid — thin amortizing layer with explicit two-slot canonical-protection). Rejects (d)/(g) no-CacheStore alternatives for the Arc-holding memory exhaustion attack. **Frozen API code-block updated:** `lookup(&Seedhash) -> Option<Arc<PreparedCache>>`, `lookup_or_derive(&Seedhash) -> Arc<PreparedCache>`, `set_canonical(Arc<PreparedCache>)`. The Round 1 `insert` method is removed (subsumed by `lookup_or_derive`'s on-completion publication). **In-flight derivation deduplication** pinned: `Mutex<HashMap<Seedhash, Shared<DerivationFuture>>>` with cleanup-on-publish; closes the thundering-herd attack surface that applies regardless of Axis 2/3 selection. **Synchronization shape** pinned: per-slot `RwLock<Option<Arc<PreparedCache>>>` (canonical + transient), `Mutex<HashMap>` for in-flight; sharding rejected at capacity-2. **11-row state-transition table** updated to `Arc<PreparedCache>` typing; substantive transitions unchanged (canonical non-evictable; transient displace-on-publish; advance promotes-and-demotes); in-flight-dedup concurrent row added. **Capacity-2 reopen criterion sharpened**: requires named real consumer + sustained operational pattern + measurable cost (not "we might want N someday"). **Transparent-memo framing retired**; parent-plan `RANDOMX_V2_PLAN.md` Decision #6 wording amendment queued as precursor PR `chore/randomx-v2-plan-decision6-amendment` (precedent: Phase 2c F4-absorbed parent-plan rescope). **Reversion clause expanded** to three independent axes (Axis 1: PreparedCache; Axis 2: canonical-protection-in-(b); Axis 3: CacheStore exists), each with substrate-anchored reopening criteria. **§5 hand-off contract** updated: `compute_hash` signature, `Cache` visibility, `CacheStore` API, eviction-policy table, and Round-2 new artifacts (Seedhash newtype, PreparedCache, FFI-shim sweep) supersede the Round 1 freeze items where applicable; Round 1 items not touched by Round 2 (R1-D3 / R1-D4 / R1-D5 / R1-E1) carry forward unchanged. **Seedhash newtype sweep is atomic with its introduction**: every site that currently passes `&[u8; 32]` for a seedhash updates in the same impl-PR commit as the newtype landing — no transitional period. **§10 forward path** updated: 2g and 3a inherit the `PreparedCache` shape; PQC migration space note added (verifier crate is PQC-orthogonal by construction; PQC architectural choices land at Phase 3a's shim layer, not in the verifier). **Round 3 follow-up commit queued** to refine R1-D3 (cfg-gated pool approach), fold R1-D4 into R1-D3, refine R1-D5 (runtime-configurable capacity), and absorb threat-model F1–F7 enumeration + adversarial-pass-precedent note. The Round 2 commit lands the architectural keystone; Round 3 hardens the dispositions. |
+| Round 1 | 2026-05-23 | *(Audit trail; superseded by Round 2 where applicable.)* Closed R1-D1 through R1-E1. **R1-D1**: CacheStore picks option (b) explicit two-slot type (`new` / `lookup` / `insert` / `set_canonical`); rejects (a) for caller-discipline burden on the F1 sticky-canonical defense; rejects (c) for over-provisioning (capacity 2 doesn't justify type-stratified composition). Internal sync via `std::sync::Mutex` (no new workspace deps; verified `lru` not in `rust/Cargo.toml`, `parking_lot` only transitive). **R1-D2**: eviction policy falls out of (b) — canonical non-evictable; transient displace-on-insert; `set_canonical` advance promotes-from-transient + demotes-prior; cold-start-window degenerate case bounded to daemon startup and handled by FFI shim's discipline (no fallback policy in CacheStore). 11-row pre/post state-transition table pinned in §3.2 covering 3-seedhash interleave attack, cold-start, advance, no-op cases. **R1-D3**: bench methodology picks option (b) Component method; rejects (a) Diff method because it would require promoting `VmState` to `pub` and adding a `compute_hash_with_state` helper — both contradict §1.1 freeze and Decision #7's no-public-`VmPool` posture; rejects (c) Population method per scaffold's sequencing-cycle note. Component sum measures `Box::<[u8]>::new_zeroed_slice(2 MiB)` + synthetic register-file init (the bench does not consume the production `VmState` newtype to keep visibility clean); sum is a *floor* on per-call alloc cost (excludes register-file struct overhead and field-init cost). **R1-D4**: pool decision threshold confirmed at 100 µs per `RANDOMX_V2_PLAN.md` line 240. Three-band rule: < 50 µs → no pool (Branch A); [50, 100) µs → escalate to impl-PR pre-flight per R1-D3 reversion-clause #1 (Branch B); ≥ 100 µs → pool inside `compute_hash`, no public `VmPool`, capacity from R1-D5 (Branch C). Reversion clauses for the no-pool path: allocator regression (mimalloc/jemalloc swap), scratchpad-size change at consensus level, runtime-architecture mismatch (cross-compile target's allocator differs from CI). **R1-D5**: daemon parallel-verification fanout survey methodology pinned. Audit-against-actual-code per `16-architectural-inheritance.mdc`: read `src/cryptonote_core/blockchain.cpp`, `src/cryptonote_core/tx_pool.cpp`, `src/cryptonote_core/cryptonote_tx_utils.cpp`, `src/common/threadpool.{h,cpp}` at `dev` tip = `fb21909ff`. Substrate correction vs. prompt: only **one** parallel-`compute_hash` call site exists at HEAD — alt-chain branch validation's `block_longhash_worker` via `tools::threadpool::getInstanceForCompute()`, capped by `m_max_prepare_blocks_threads` (default 4). Mempool tx verification (`tx_pool.cpp`, `cryptonote_tx_utils.cpp`, `tx_pqc_verify.cpp`) does **not** call `compute_hash` in parallel — the prompt's two-source assumption was incorrect. Pool capacity formula: `min(threadpool::getInstanceForCompute().get_max_concurrency(), m_max_prepare_blocks_threads) + 1` reserve. Reversion criteria: a future PR introducing `tools::threadpool` + `compute_hash` in tx_pool.cpp / cryptonote_tx_utils.cpp / tx_pqc_verify.cpp; `m_max_prepare_blocks_threads` default change; Phase 3a FFI shim survey reveals new concurrent consumer. **R1-E1**: three-pattern enumeration: pattern A bans imports of `once_cell` / `lazy_static` / `OnceLock` / `LazyLock` (stricter than module-level-static-only — eliminates the disambiguation between module-level and function-local usage by rejecting the import; the crate provably does not need any of these); pattern B bans column-0 `static` declarations (function-local statics live inside fn bodies and are indented, so pattern B does not match them; `const` items are a different keyword and not matched); pattern C bans `#[no_mangle]`, `#[unsafe(no_mangle)]`, `#[export_name`, `#[unsafe(export_name`, and `extern "C" fn` definition form (`extern "C" { fn foo(); }` import blocks consuming an external FFI surface are not matched since they require `fn` *inside* the brace block, not after `"C"`). New script `scripts/ci/check_randomx_crate_invariants.sh` modeled on `check_randomx_fpu_rounding.sh`. CI integration: new `.github/workflows/build.yml` step `enforce RandomX crate-level isolation invariants` sibling to FPU step. Reversion criteria per pattern: stdlib evolution (pattern A successor primitives), genuine large-immutable-shared-state need (pattern B reopen), Decision #5 reversal (pattern C reopen). **Substrate finding at verification.** Pattern C's first draft (anywhere-on-line match) collided with the existing `lib.rs` rustdoc at lines 31–32, which legitimately cites the forbidden tokens (`` `#[no_mangle]` ``, `` `extern "C" fn` ``, `` `#[export_name]` ``) as part of the documented discipline. Disposition: anchor pattern C at column 0 (with optional leading whitespace for attributes indented inside fn bodies) — code attributes start at column 0 modulo indentation, rustdoc lines start with `//!`. Patterns A and B were already `^`-anchored; the inconsistency was specific to pattern C. **Verification at HEAD (post-fix)**: greps return zero hits across `rust/shekyl-pow-randomx/src/` confirming clean baseline. **Plan-doc edits**: §3.1–§3.6 each gain a "Round 1 disposition" sub-block; §5 placeholder superseded by frozen-surface contract (5.1) + in-scope artifact table (5.2) + out-of-scope re-emphasis (5.3); §6 placeholder superseded by 7-row CacheStore unit-test table + 4-row CI-invariant table + 4-row bench-harness table; §8 placeholder superseded by 5-commit table with R1-D4 three-branch conditional (commit 4 omitted/deferred/included per Branch A/B/C). |
