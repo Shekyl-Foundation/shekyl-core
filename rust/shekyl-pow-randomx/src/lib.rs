@@ -121,7 +121,8 @@ mod aes;
 mod argon2d;
 mod blake2_generator;
 mod cache;
-mod superscalar;
+pub(crate) mod fpu_rounding;
+pub(crate) mod superscalar;
 mod vm;
 
 pub use cache::Cache;
