@@ -187,6 +187,23 @@ R5-D1 formalized **show your work**: every row names
 - Pre-flight F3 (R0-D1): CFROUND throttle vs non-existent imm32 cap —
   cited `bytecode_machine.hpp:261–266`, not a prompted wrong row
   (`RANDOMX_V2_PHASE2C_AUDIT.md` pre-flight trail).
+- R6-D2 (2d Round 6): `RANDOMX_FREQ_*` sums to 256
+  (`configuration.h:88–125`, `bytecode_machine.hpp:67–98`), so the
+  out-of-range branch in `decode_instruction_type` is unreachable by
+  construction. Reading the ladder removed an observable debug-vs-
+  release behavior divergence in R1-D3's prior disposition
+  (`debug_assert!` / no-op pair) before the §10 equivalence gate would
+  have surfaced it. Fourth confirmed instance; reaffirms the
+  discipline crystallized at precedent #3
+  (`RANDOMX_V2_PHASE2D_PLAN.md` R6-D2).
+
+The four precedents span two adjacent sub-PRs of the same migration
+(2c R3-D1 / pre-flight F3; 2d R1-D3 / R6-D2). The discipline is now
+load-bearing for any inherited-reference port where prompted summaries
+or documentation can diverge from the C reference at the audit pin —
+"what the reference is reputed to do" vs "what the reference actually
+does at the pinned commit." Treat A2 as non-optional rather than
+recommended on that surface class.
 
 ---
 
