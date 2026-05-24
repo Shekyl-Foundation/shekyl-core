@@ -57,14 +57,41 @@
 //!
 //! # Visibility discipline
 //!
-//! Per Phase 2c Decision #7 (no public `VmPool` type), [`VmStatePool`]
-//! itself stays `pub(crate)` even when the cfg-gate is enabled. The
-//! bench harness reaches the pool via [`compute_hash_with_pool`]
-//! (`#[doc(hidden)] pub` cfg-gated), which is the bench-only
-//! entry-point shim. Phase 3a's promotion-to-production (§3.4 Round 3
-//! Branch C, §8 commit 5) flips the cfg-gate to unconditional but
-//! does **not** lift the visibility — `VmStatePool` remains
-//! `pub(crate)` and the FFI shim layer is the only consumer.
+//! Per Phase 2c Decision #7 (no public `VmPool` type), the
+//! pool's API surface is kept off the production rustdoc and out
+//! of the no-feature build. The mechanism is two-layered:
+//!
+//! 1. The whole module is gated by
+//!    `#[cfg(any(test, feature = "internal-pool-bench"))]`, so the
+//!    no-feature production build never compiles the pool body.
+//! 2. Within the gated module, [`VmStatePool`] and
+//!    [`compute_hash_with_pool`] are marked `#[doc(hidden)] pub`,
+//!    not `pub(crate)`: the criterion bench in
+//!    [`benches/compute_hash_alloc.rs`](../benches/compute_hash_alloc.rs)
+//!    is a separate cargo target (an external compilation unit),
+//!    so it can only name items that are `pub` at the crate
+//!    boundary. `pub(crate)` would forbid the bench from naming
+//!    `VmStatePool::new` or `compute_hash_with_pool` at all.
+//!    `#[doc(hidden)]` keeps the `pub` symbols off the published
+//!    rustdoc API surface.
+//!
+//! [`VmStateGuard`] *is* `pub(crate)` because its
+//! `Deref::Target = VmState` references the `pub(crate)`
+//! [`crate::vm::VmState`] type and Rust forbids `pub` types from
+//! exposing crate-private types in their public interface (E0446).
+//! The bench harness never names the guard directly; it goes
+//! through [`compute_hash_with_pool`], which acquires/releases the
+//! guard internally.
+//!
+//! Phase 3a's promotion-to-production (§3.4 Round 3 Branch C,
+//! §8 commit 5) flips the cfg-gate to unconditional and
+//! simultaneously narrows [`VmStatePool`] from
+//! `#[doc(hidden)] pub` down to `pub(crate)`: the FFI shim layer
+//! lives inside the crate, so post-promotion the type does not
+//! need to cross the crate boundary at all, and the bench-only
+//! `pub` carve-out is rescinded. The Branch A measurement landed
+//! in this PR did not trigger that promotion; the type's current
+//! `#[doc(hidden)] pub` shape is the bench-only state.
 
 #![cfg(any(test, feature = "internal-pool-bench"))]
 
@@ -78,12 +105,20 @@ use crate::vm::VmState;
 /// See module-level rustdoc for the substrate, semantics, and
 /// visibility discipline.
 ///
-/// The struct is `pub(crate)` even when the cfg-gate is enabled,
-/// per Phase 2c Decision #7. External (bench harness) consumers reach
-/// the pool through [`compute_hash_with_pool`], which is the
-/// bench-only `#[doc(hidden)] pub` entry-point shim. Promotion to
-/// production (per §3.4 Round 3 Branch C) flips the cfg-gate but does
-/// not lift the visibility.
+/// `#[doc(hidden)] pub` (rather than `pub(crate)`) because the
+/// criterion bench in
+/// [`benches/compute_hash_alloc.rs`](../benches/compute_hash_alloc.rs)
+/// is a separate cargo target and can only name items that are
+/// `pub` at the crate boundary. `#[doc(hidden)]` keeps the symbol
+/// off the published rustdoc, and the surrounding
+/// `#[cfg(any(test, feature = "internal-pool-bench"))]` keeps it
+/// out of the no-feature production build entirely. Per Phase 2c
+/// Decision #7 this is *not* a public-API promise — the type is
+/// reachable only when a consumer opts into the bench feature
+/// flag. Promotion to production (per §3.4 Round 3 Branch C)
+/// narrows the visibility to `pub(crate)` simultaneously with the
+/// cfg-gate removal; the Branch A measurement landed in this PR
+/// did not trigger that promotion.
 #[doc(hidden)]
 pub struct VmStatePool {
     /// LIFO pool of recycled `VmState` instances. Capped at
@@ -258,13 +293,31 @@ impl<'p> Drop for VmStateGuard<'p> {
             // calls would leave `vm` in `None`; nothing to release).
             return;
         };
-        // `try_lock` deliberately not used here: if the mutex is
-        // poisoned by a panicking acquire/release elsewhere, the
-        // pool's invariants are already broken; `lock()` propagates
-        // the poison so the bench harness sees the panic rather than
-        // silently leaking the `VmState`. The drop happens at the
-        // end of every `compute_hash_with_pool` call, so the lock
-        // hold time is bounded by `Vec::push` (a few pointer ops).
+        // Mutex-poisoning policy diverges between `acquire` and
+        // `Drop` deliberately:
+        //
+        //   - [`VmStatePool::acquire`] runs in normal control flow
+        //     and propagates poison via `expect(...)`. A panic at
+        //     acquire is recoverable and surfaces the broken
+        //     invariant to the bench harness loudly.
+        //   - This [`Drop`] may run during an in-progress unwind
+        //     (the bench iteration body panicked, the guard's
+        //     stack-frame is being torn down). A second panic
+        //     during unwind triggers `abort()` (Rust's
+        //     double-panic policy), which is louder than the
+        //     primary failure and obscures the diagnostic chain.
+        //
+        // The poison is therefore swallowed via
+        // `Err(poison) => poison.into_inner()`: whichever shape
+        // the inner `Vec` is in, we either rejoin the pool (if
+        // capacity allows) or drop the `VmState` here, without
+        // escalating an already-broken state to abort. Lock-hold
+        // time is bounded by `Vec::push` (a few pointer ops) so
+        // the swallow window is sub-microsecond. `try_lock` is
+        // not used because `Drop` runs at the end of every
+        // `compute_hash_with_pool` call: the lock is virtually
+        // always uncontended; spinning on `try_lock` would
+        // complicate the contract without measurable benefit.
         let mut inner = match self.pool.inner.lock() {
             Ok(g) => g,
             Err(poison) => poison.into_inner(),

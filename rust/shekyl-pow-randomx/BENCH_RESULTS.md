@@ -111,20 +111,46 @@ cost in a single-bench-thread harness.
 | `compute_hash_alloc::per_call` (Phase 2c/2d baseline replay) | 307.42 ms | [306.26, 308.94] | 100 | 2048-iter dispatch over 8 chains. |
 | `compute_hash_alloc::with_no_pool::per_call` (B-pool-off) | **304.44 ms** | [303.14, 305.96] | 100 | Production no-pool path; `VmState::new()` per call. |
 | `compute_hash_alloc::with_pool::per_call` (B-pool-on) | **303.72 ms** | [302.71, 304.88] | 100 | Cfg-gated pool path; `VmStatePool::new(4)` pre-allocated outside the timed loop. |
-| `per_call_alloc::vmstate_alloc_scratchpad_zeroed` (B-2) | **48.6 µs** | [48.42, 48.87] | 200 | 2 MiB zero-init via `vec![0u8; 2 * 1024 * 1024].into_boxed_slice()`. |
-| `per_call_alloc::vmstate_alloc_register_file` (B-3) | **81.7 ns** | [81.33, 82.24] | 200 | `Box::new(Program::default())`. |
+| `per_call_alloc::vmstate_alloc_scratchpad_zeroed` (B-2) | **47.66 µs** | [47.47, 47.87] | 200 | 2 MiB zero-init via `Box::new_zeroed_slice(N)` + `assume_init` — mirrors the production `crate::vm::alloc_zeroed_scratchpad` carve-out exactly (re-measured on review-fix commit; see §"B-2 methodology refinement" below). |
+| `per_call_alloc::vmstate_alloc_register_file` (B-3) | **93.2 ns** | [92.32, 94.30] | 200 | `Box::new(Program::default())` — re-measured alongside B-2. |
 
 Run conditions: 11th Gen Intel Core i9-11950H @ 2.60 GHz, 128 GiB
 DDR4, Debian 13 (kernel `6.12.88+deb13-amd64`), system glibc
 allocator (no `mimalloc`/`jemalloc` override), Rust workspace MSRV
 `1.85`, Criterion `0.5.1`, machine quiescent at measurement time.
 
+##### B-2 methodology refinement (review-fix commit, 2026-05-24)
+
+Initial commit-4 B-2 used `vec![0u8; N].into_boxed_slice()` as
+the zero-initialized 2 MiB allocation idiom. A PR review noted the
+discrepancy against production: `crate::vm::alloc_zeroed_scratchpad`
+goes through `Box::new_zeroed_slice(N) + assume_init`, which is
+the stabilized (Rust 1.82+) path that routes directly to the
+allocator's `alloc_zeroed`. The `vec![0u8; N]` form *also* folds
+to `alloc_zeroed` on current `rustc` via the `IsZero`
+specialization in `Vec::from_elem`, so the timing converged on
+this hardware — but the convergence is a stdlib-implementation
+property rather than a contract. The bench was switched to the
+production-mirror form to remove the dependency on that
+specialization holding across future stdlib versions.
+
+Re-measurement under the new form yielded **B-2 = 47.66 µs**
+(prev. 48.6 µs) and **B-3 = 93.2 ns** (prev. 81.7 ns; B-3's
+allocation path was not changed, so the ~14% shift is run-to-run
+variance at sub-100 ns scale). Component-floor sum:
+**~47.75 µs** (prev. ~48.7 µs). The shift is below 1 µs in
+absolute terms and well within the run-to-run noise band already
+documented for these benches; the Branch A disposition below is
+unaffected.
+
 #### A/B delta and disposition: Branch A
 
-- **Component-floor sum** (B-2 + B-3 ≈ 48.6 µs + 0.082 µs ≈ 48.7
-  µs): the theoretical maximum pool savings on this hardware. Pool
-  amortization saves at most the per-call allocation cost; the
-  component floor is the upper bound on `B-pool-off − B-pool-on`.
+- **Component-floor sum** (B-2 + B-3 ≈ 47.66 µs + 0.093 µs ≈ 47.75
+  µs; updated post-review-fix per §"B-2 methodology refinement"
+  above; prior estimate ≈ 48.7 µs): the theoretical maximum pool
+  savings on this hardware. Pool amortization saves at most the
+  per-call allocation cost; the component floor is the upper bound
+  on `B-pool-off − B-pool-on`.
 - **Measured A/B point-estimate delta**: 304.44 ms − 303.72 ms ≈
   **0.72 ms ≈ 720 µs**.
 - **CI-overlap check**: the 95% CIs `[303.14, 305.96]` and
@@ -133,12 +159,12 @@ allocator (no `mimalloc`/`jemalloc` override), Rust workspace MSRV
   indistinguishable from zero** at this sample size.
 - **Substrate reconciliation**: the measured 720 µs delta cannot
   be pool savings because the component-floor analysis caps
-  achievable pool savings at ≈ 48.7 µs. The 720 µs is run-to-run
+  achievable pool savings at ≈ 47.75 µs. The 720 µs is run-to-run
   measurement noise (allocator state, CPU thermal/scheduling
   variance, large-page TLB warmup) rather than pool benefit.
 
 **Disposition: Branch A** per §3.4 R1-D4 Round 3. The achievable
-pool savings (component-floor cap ≈ 48.7 µs) is below the 50 µs
+pool savings (component-floor cap ≈ 47.75 µs) is below the 50 µs
 threshold; pooling produces no production-relevant performance
 improvement on this hardware class. The cfg-gated `VmStatePool`
 stays in source as a bench-only artifact (cfg-gated under
@@ -155,16 +181,18 @@ shim sees the unchanged production `compute_hash` body
   alloc; Branch A (< 50 µs) plausible if modern glibc/mmap-backed
   allocators amortize the 2 MiB scratchpad zero-init to tens of µs.
 - **Measured branch**: Branch A.
-- **Reconciliation**: **prediction A held.** B-2 measured at 48.6 µs
-  on this hardware, which is consistent with the §8 "modern
-  allocators amortize 2 MiB zero-init to tens of µs" framing
-  (mmap-backed glibc on Linux kernel 6.12 large-page-aware allocator).
-  PR-66's per-call full-pipeline cost was dominated by dispatch-loop
-  overhead (2048 iterations × 8 chains × per-iter AES + scratchpad RW
-  + dataset reads), not allocation-specific cost. Pooling cannot
-  amortize dispatch-loop cost; only allocation cost can be amortized,
-  and the component-floor cap (≈ 48.7 µs) is below the Branch B/C
-  threshold.
+- **Reconciliation**: **prediction A held.** B-2 measured at 47.66
+  µs (post-review-fix; initial 48.6 µs under the
+  `vec![0u8; N].into_boxed_slice()` shape) on this hardware,
+  consistent with the §8 "modern allocators amortize 2 MiB
+  zero-init to tens of µs" framing (mmap-backed glibc on Linux
+  kernel 6.12 large-page-aware allocator). PR-66's per-call
+  full-pipeline cost was dominated by dispatch-loop overhead
+  (2048 iterations × 8 chains × per-iter AES + scratchpad RW +
+  dataset reads), not allocation-specific cost. Pooling cannot
+  amortize dispatch-loop cost; only allocation cost can be
+  amortized, and the component-floor cap (≈ 47.75 µs) is below
+  the Branch B/C threshold.
 
 The substrate finding: on this hardware class, RandomX
 `compute_hash`'s per-call allocation cost is structurally below

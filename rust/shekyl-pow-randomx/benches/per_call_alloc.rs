@@ -16,10 +16,11 @@
 //! - **B-2 — `vmstate_alloc_scratchpad_zeroed`.** The 2 MiB
 //!   zero-initialized scratchpad is the dominant per-call
 //!   allocation by size (2_097_152 bytes vs. ~3 KiB for the
-//!   register-file `Box<Program>`). The bench measures the
-//!   `Box::<[u8; 2 * 1024 * 1024]>::new_zeroed_slice`-equivalent
-//!   path that `crate::vm::alloc_zeroed_scratchpad` uses inside
-//!   `VmState::new`.
+//!   register-file `Box<Program>`). The bench mirrors
+//!   `crate::vm::alloc_zeroed_scratchpad`'s exact pattern:
+//!   `Box::new_zeroed_slice(N)` followed by `assume_init`. Both
+//!   bench and production resolve to the global allocator's
+//!   `alloc_zeroed` call.
 //! - **B-3 — `vmstate_alloc_register_file`.** The `Box<Program>`
 //!   allocation backs the per-program parsed bytecode. Sized at
 //!   `PROGRAM_SIZE * INSTRUCTION_SIZE = 384 * 8 = 3072` bytes plus
@@ -57,6 +58,8 @@
 //! Phase 3a may re-run them on the FFI-shim deployment hardware to
 //! confirm the §3.4 R1-D4 disposition still holds against the
 //! deployed allocator.
+
+use std::mem::MaybeUninit;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
@@ -128,12 +131,24 @@ impl Default for Program {
 /// allocation that `VmState::new` performs via
 /// `crate::vm::alloc_zeroed_scratchpad`.
 ///
-/// The bench measures `vec![0u8; 2 * 1024 * 1024].into_boxed_slice()`
-/// — the standard-library equivalent of the carve-out's behavior
-/// (zero-initialized 2 MiB heap allocation). On contemporary x86-64
-/// allocators (system glibc, mimalloc, jemalloc) the cost is
-/// dominated by the kernel's zero-page-mapping `mmap` path on cold
-/// allocations and the per-thread cache hit on warm allocations.
+/// The bench mirrors the production allocation pattern exactly:
+/// `Box::new_zeroed_slice(N)` followed by `assume_init`, which is
+/// what `crate::vm::alloc_zeroed_scratchpad` does. Both paths
+/// route through the global allocator's `alloc_zeroed` (per the
+/// Rust 1.82+ stabilization of `Box::new_zeroed_slice`); on
+/// contemporary x86-64 allocators (system glibc, mimalloc,
+/// jemalloc) the cost is dominated by the kernel's
+/// zero-page-mapping `mmap` path on cold allocations and the
+/// per-thread cache hit on warm allocations.
+///
+/// Earlier drafts used `vec![0u8; N].into_boxed_slice()`. On
+/// current `rustc` releases the `IsZero` specialization in
+/// `Vec::from_elem` does fold this to the same `alloc_zeroed`
+/// call, so the timing is observably equivalent on the reference
+/// hardware — but the equivalence is a stdlib-implementation
+/// property rather than a contract. Mirroring the production call
+/// exactly removes the dependency on that specialization holding
+/// across future stdlib versions.
 fn bench_vmstate_alloc_scratchpad_zeroed(c: &mut Criterion) {
     let mut group = c.benchmark_group("per_call_alloc");
     // `sample_size = 200` reflects the per-call cost being well
@@ -144,12 +159,28 @@ fn bench_vmstate_alloc_scratchpad_zeroed(c: &mut Criterion) {
     group.sample_size(200);
     group.bench_function("vmstate_alloc_scratchpad_zeroed", |b| {
         b.iter(|| {
-            // `vec![0; N].into_boxed_slice()` is the standard
-            // `Box<[u8]>` zero-initialized allocation idiom; matches
-            // the observable cost of
-            // `crate::vm::alloc_zeroed_scratchpad`'s carve-out.
-            // Stable-Rust path; no nightly feature required.
-            let buf: Box<[u8]> = vec![0u8; black_box(RANDOMX_SCRATCHPAD_L3)].into_boxed_slice();
+            // `Box::new_zeroed_slice(N)` + `assume_init` is the
+            // exact pattern `crate::vm::alloc_zeroed_scratchpad`
+            // uses (stable since Rust 1.82; the crate's MSRV is
+            // 1.85). The unsafe block is the bench-side mirror of
+            // the production carve-out's unsafe block — same
+            // safety reasoning applies (every `u8` bit pattern is
+            // valid; `Box::new_zeroed_slice(len)` zero-initializes
+            // per its stabilized contract).
+            let uninit: Box<[MaybeUninit<u8>]> =
+                Box::new_zeroed_slice(black_box(RANDOMX_SCRATCHPAD_L3));
+            // SAFETY:
+            // `u8`'s all-zeros bit pattern is a valid `u8` value (every
+            // value 0..=255 is in range; 0 is trivially valid).
+            // `Box::new_zeroed_slice(len)` allocates `len` contiguous
+            // `MaybeUninit<u8>` cells and zero-initializes them per its
+            // stabilized contract (Rust 1.82+; MSRV 1.85). Converting
+            // `Box<[MaybeUninit<u8>]>` to `Box<[u8]>` via `assume_init`
+            // is therefore sound. Mirrors the SAFETY comment on
+            // `crate::vm::alloc_zeroed_scratchpad` per the
+            // module-rustdoc "bench-side mirror" discipline.
+            #[allow(unsafe_code)]
+            let buf: Box<[u8]> = unsafe { uninit.assume_init() };
             black_box(buf)
         });
     });

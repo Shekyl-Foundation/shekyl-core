@@ -52,9 +52,31 @@ if [[ ! -d "${CRATE_SRC}" ]]; then
 fi
 
 # Pattern A: ban runtime-mutable lazy-state imports at module scope
-# (rejected via column-0 `^use ` anchor; in-fn `use` is indented).
+# (rejected via column-0 anchor; in-fn `use` is indented per rustfmt).
 # Permitted exception: NONE.
-PATTERN_RUNTIME_STATE='^use[[:space:]]+(once_cell|lazy_static)|^use[[:space:]]+std::sync::(OnceLock|LazyLock)|^use[[:space:]]+core::sync::(OnceLock|LazyLock)|^lazy_static!'
+#
+# The pattern matches a column-0 import (with optional `pub` /
+# `pub(crate)` / `pub(super)` / `pub(in path)` prefix, mirroring
+# Pattern B's prefix coverage) whose right-hand side mentions any
+# of the banned identifiers anywhere on the line. This catches:
+#
+#   - `use std::sync::OnceLock;`
+#   - `use std::sync::OnceLock as Foo;`
+#   - `pub use std::sync::OnceLock;`
+#   - `pub(crate) use std::sync::OnceLock;`
+#   - `use std::sync::{OnceLock, Mutex};` (grouped form)
+#   - `use once_cell::sync::Lazy;`
+#   - `use lazy_static::lazy_static;`
+#   - `lazy_static! { ... }` (column-0 macro invocation)
+#
+# False-positive surface (banned identifier as a substring of an
+# unrelated path component) is bounded: the banned tokens
+# `once_cell` / `lazy_static` / `OnceLock` / `LazyLock` are
+# reserved-style library names that don't recur in unrelated Rust
+# paths. A future false positive is caught at the gate-fire and
+# resolved by tightening the regex; the failure mode is loud, not
+# silent.
+PATTERN_RUNTIME_STATE='^(pub(\([^)]+\))?[[:space:]]+)?use[[:space:]]+.*(once_cell|lazy_static|OnceLock|LazyLock)|^lazy_static!'
 
 # Pattern B: ban module-level `static` items (mut or otherwise).
 # Function-local statics are inside fn bodies (indented per rustfmt);

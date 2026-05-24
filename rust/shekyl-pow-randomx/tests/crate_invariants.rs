@@ -20,6 +20,21 @@
 //! three column-0 / leading-whitespace-anchored regexes; if a
 //! future patch unanchored a pattern, the comments would start
 //! matching and the assertions below would expose the regression).
+//!
+//! # Portability
+//!
+//! The wrapper is `#![cfg(unix)]`: the gate is a bash script
+//! (`#!/usr/bin/env bash`) and `script_file_is_executable` reads
+//! the Unix executable bit via [`std::os::unix::fs::PermissionsExt`].
+//! Neither construct is meaningful on Windows. Gating the file at
+//! the module level keeps `cargo test -p shekyl-pow-randomx`
+//! portable: on Windows, the wrapper compiles to nothing and the
+//! crate's other tests run unaffected. CI runs the actual gate on
+//! Linux runners as a sibling to the FPU step in `build.yml`, so
+//! the security property holds at the project level regardless of
+//! per-developer workstation OS.
+
+#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::process::Command;
