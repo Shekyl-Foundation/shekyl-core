@@ -90,7 +90,26 @@ PATTERN_MODULE_STATIC='^(pub(\([^)]+\))?[[:space:]]+)?(unsafe[[:space:]]+)?stati
 # Permitted exception: NONE. An `extern "C" { fn foo(); }` *import*
 # block consuming an FFI surface is not matched (this pattern
 # requires `extern "C" fn` definition form, with `fn` after `"C"`).
-PATTERN_FFI_EXPORT='^[[:space:]]*(#\[no_mangle\]|#\[unsafe\(no_mangle\)\]|#\[export_name|#\[unsafe\(export_name|extern[[:space:]]+"C"[[:space:]]+fn[[:space:]])'
+#
+# The `extern "C" fn` arm allows an optional `pub` / `pub(crate)` /
+# `pub(super)` / `pub(in path)` visibility prefix and an optional
+# `unsafe` keyword before `extern`, mirroring Pattern A's prefix
+# coverage. This catches the export-intent shape independent of
+# whether `#[no_mangle]` is currently present:
+#
+#   - `extern "C" fn foo() {}`
+#   - `pub extern "C" fn foo() {}`
+#   - `pub(crate) extern "C" fn foo() {}`
+#   - `unsafe extern "C" fn foo() {}`
+#   - `pub unsafe extern "C" fn foo() {}`
+#
+# The shape gate is independent of the `#[no_mangle]` /
+# `#[export_name(...)]` arms above: a future contributor adding
+# `pub extern "C" fn` (Rust-mangled, not actually C-callable) and
+# later attaching `#[no_mangle]` would have the shape arm fire on
+# the first commit rather than only the second, closing the door on
+# stepwise FFI-export drift.
+PATTERN_FFI_EXPORT='^[[:space:]]*(#\[no_mangle\]|#\[unsafe\(no_mangle\)\]|#\[export_name|#\[unsafe\(export_name|(pub(\([^)]+\))?[[:space:]]+)?(unsafe[[:space:]]+)?extern[[:space:]]+"C"[[:space:]]+fn[[:space:]])'
 
 failures=0
 

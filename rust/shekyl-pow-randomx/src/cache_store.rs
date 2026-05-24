@@ -78,14 +78,29 @@ use crate::Seedhash;
 /// # Synchronization shape
 ///
 /// Per Phase 2F §3.1 Round 2: per-slot
-/// [`std::sync::RwLock<Option<Arc<PreparedCache>>>`]
-/// (canonical reads do not block transient writes, and vice versa);
+/// [`std::sync::RwLock<Option<Arc<PreparedCache>>>`];
 /// [`std::sync::Mutex<std::collections::HashMap>`] for the in-flight
 /// deduplication map (writes — insert on first call; remove on
 /// cleanup-on-publish — and reads are roughly balanced; the critical
-/// section is short). [`Self::set_canonical`]'s canonical-vs-transient
-/// swap is the only operation that needs both slot locks; they are
-/// acquired in canonical-then-transient order to avoid deadlock.
+/// section is short).
+///
+/// **Lock-ordering discipline (invariant):** every method that
+/// acquires both slot locks acquires them in **canonical-then-
+/// transient** order, regardless of read-vs-write mode. This applies
+/// to:
+///
+/// - [`Self::lookup`] — canonical-read, then transient-read; both
+///   held across the comparison sequence so the lookup is
+///   linearizable against concurrent [`Self::set_canonical`].
+/// - [`Self::set_canonical`] — canonical-write, then transient-write
+///   (only when an actual swap is needed; the seedhash-equal no-op
+///   exits before acquiring transient).
+///
+/// No method acquires the transient lock before the canonical lock,
+/// so there is no deadlock cycle. The publish path inside
+/// [`Self::lookup_or_derive`] writes only to the transient slot
+/// (transient-write held alone) and to the in-flight map
+/// (in-flight-mutex held alone); these are sequential, not nested.
 ///
 /// # In-flight deduplication
 ///
@@ -200,16 +215,40 @@ impl CacheStore {
     /// `None` as an error signal rather than transparently paying
     /// ~150 ms of unexpected derivation cost.
     ///
-    /// Lookups acquire only [`std::sync::RwLock`] read guards; the
-    /// canonical and transient slots are checked sequentially, and
-    /// concurrent lookups do not block each other.
+    /// # Linearizability and lock ordering
+    ///
+    /// Both slot read guards are acquired before either comparison
+    /// runs and held for the duration of the comparison sequence.
+    /// This makes the lookup linearizable against concurrent
+    /// [`Self::set_canonical`] calls: a `set_canonical` cannot
+    /// promote an entry from transient to canonical (or demote
+    /// canonical to transient) between this method's two slot
+    /// inspections, so a `seedhash` that is present in either slot
+    /// at function entry is guaranteed to be observed.
+    ///
+    /// The acquisition order — **canonical-read first, transient-
+    /// read second** — matches [`Self::set_canonical`]'s
+    /// canonical-write-then-transient-write order, eliminating any
+    /// deadlock cycle. Concurrent `lookup` callers do not block
+    /// each other; `lookup` blocks only when a writer holds (or is
+    /// queued for) one of the slot locks, which is bounded by the
+    /// `set_canonical` / publish-on-derive critical sections (each
+    /// O(register-write)).
+    ///
+    /// The pre-fix behavior — releasing the canonical guard before
+    /// acquiring the transient guard — opened a transient→canonical
+    /// promotion race in which a concurrent `set_canonical` could
+    /// move the requested entry between the two checks; this method
+    /// now closes that window. See PR #72 NF2.
     pub fn lookup(&self, seedhash: &Seedhash) -> Option<Arc<PreparedCache>> {
-        if let Some(p) = self.canonical.read().unwrap().as_ref() {
+        let canonical = self.canonical.read().unwrap();
+        let transient = self.transient.read().unwrap();
+        if let Some(p) = canonical.as_ref() {
             if p.seedhash() == seedhash {
                 return Some(Arc::clone(p));
             }
         }
-        if let Some(p) = self.transient.read().unwrap().as_ref() {
+        if let Some(p) = transient.as_ref() {
             if p.seedhash() == seedhash {
                 return Some(Arc::clone(p));
             }
@@ -605,6 +644,97 @@ mod tests {
         // And a non-matching seedhash returns None.
         let other = Seedhash::from_bytes([0x99; 32]);
         assert!(cs.lookup(&other).is_none());
+    }
+
+    // ---- T-CS-12 ------------------------------------------------
+
+    #[test]
+    fn cachestore_lookup_linearizable_under_canonical_swap() {
+        // PR #72 NF2 regression test: the buggy `lookup`
+        // implementation released the canonical read guard before
+        // acquiring the transient read guard, opening a race window
+        // in which a concurrent `set_canonical` could promote an
+        // entry from transient to canonical (and demote the prior
+        // canonical to transient) between the two inspections. A
+        // `lookup(&T)` straddling such a swap could observe
+        // canonical=Some(prior) (released) → transient=Some(prior)
+        // (after the demote, the prior canonical is now in
+        // transient) and return `None` despite the requested entry
+        // being live in the canonical slot the entire time.
+        //
+        // **Setup.** Both slots populated with distinct prepared
+        // caches:
+        //
+        //   1. `lookup_or_derive(&s_a)` derives `p_a` into transient.
+        //   2. `set_canonical(p_a)` promotes `p_a` to canonical
+        //      (transient resets to `None` because the prior canonical
+        //      was `None`, which is documented as "evicts the prior
+        //      transient occupant" — `p_a`'s slot binding moves from
+        //      transient to canonical).
+        //   3. `lookup_or_derive(&s_b)` derives `p_b` into transient.
+        //
+        //   Final pre-loop state: canonical = Some(p_a), transient =
+        //   Some(p_b). Both `s_a` and `s_b` are observable via
+        //   `lookup`.
+        //
+        // **Loop invariant.** Each writer iteration alternates
+        // `set_canonical(p_a) / set_canonical(p_b)`; every call swaps
+        // the slots — `p_a`/`p_b` are always present in *some* slot
+        // at every observable moment. A linearizable `lookup` must
+        // always find them.
+        //
+        // With the buggy implementation this test fails
+        // probabilistically under thread interleaving; with the
+        // fixed implementation (both read guards held across the
+        // comparison sequence) it passes deterministically because
+        // a concurrent `set_canonical` cannot interleave between the
+        // two slot reads.
+        //
+        // **Cost.** Two `PreparedCache::derive` calls (~150–200 ms
+        // each) outside the timed contention loop; the loop itself
+        // is 2,000 × (2 swaps + 4 lookups) of microsecond-scale
+        // operations.
+        let cs = Arc::new(CacheStore::new());
+        let s_a = seedhash_a();
+        let s_b = seedhash_b();
+        // Step 1: derive p_a (lands in transient).
+        let p_a = cs.lookup_or_derive(&s_a);
+        // Step 2: promote p_a to canonical (transient evicts to None).
+        cs.set_canonical(Arc::clone(&p_a));
+        // Step 3: derive p_b into transient. Now both slots populated.
+        let p_b = cs.lookup_or_derive(&s_b);
+        // Sanity-check the pre-loop state: both seedhashes observable.
+        assert!(cs.lookup(&s_a).is_some());
+        assert!(cs.lookup(&s_b).is_some());
+
+        let cs_writer = Arc::clone(&cs);
+        let p_a_for_writer = Arc::clone(&p_a);
+        let p_b_for_writer = Arc::clone(&p_b);
+        let writer = thread::spawn(move || {
+            for _ in 0..2_000 {
+                cs_writer.set_canonical(Arc::clone(&p_b_for_writer));
+                cs_writer.set_canonical(Arc::clone(&p_a_for_writer));
+            }
+        });
+
+        let cs_reader = Arc::clone(&cs);
+        let reader = thread::spawn(move || {
+            for _ in 0..2_000 {
+                assert!(
+                    cs_reader.lookup(&s_a).is_some(),
+                    "lookup(&s_a) returned None during canonical swap loop \
+                     — non-linearizable lookup (PR #72 NF2)"
+                );
+                assert!(
+                    cs_reader.lookup(&s_b).is_some(),
+                    "lookup(&s_b) returned None during canonical swap loop \
+                     — non-linearizable lookup (PR #72 NF2)"
+                );
+            }
+        });
+
+        writer.join().unwrap();
+        reader.join().unwrap();
     }
 
     // ---- DerivationSlot internal coverage -----------------------

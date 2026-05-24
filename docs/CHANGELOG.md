@@ -154,6 +154,75 @@
   `compute_hash_alloc::per_call` 307.42 ms vs. Phase 2d baseline
   303.60 ms (+1.27%; under §9's ±10% regression-trigger threshold).
 
+- **RandomX v2 Track A Phase 2f — review-cycle fixes (PR #72
+  Copilot findings NF1 + NF2)** (`feat/randomx-v2-phase2f-impl`,
+  2026-05-24). Two implementation defects surfaced by the post-fix
+  Copilot review against `7b5302ee9` and addressed in-place. Both
+  are localized refinements at the implementation layer; the
+  Round 2 / Round 3 / post-closure-pin architectural dispositions
+  remain unchanged. Plan-doc round history records the fixes as
+  audit trail per `21-reversion-clause-discipline.mdc`'s
+  post-closure-pin discipline.
+
+  - **NF1 — `PATTERN_FFI_EXPORT` blind spot in
+    [`scripts/ci/check_randomx_crate_invariants.sh`](../scripts/ci/check_randomx_crate_invariants.sh).**
+    The Round 3 §3.6 R1-E1 pattern C `extern "C" fn` arm anchored
+    `extern` as the first non-whitespace token; `pub extern "C" fn`,
+    `pub(crate) extern "C" fn`, `unsafe extern "C" fn`, and
+    `pub unsafe extern "C" fn` all bypassed the gate. Without
+    `#[no_mangle]` they are not C-callable today, but the gate's
+    stated purpose is to forbid the *export-intent shape*
+    independent of `#[no_mangle]` so that stepwise FFI-export drift
+    (add `pub extern "C" fn` first, attach `#[no_mangle]` later)
+    fires the gate at the first commit rather than only the
+    second. **Fix:** extend the regex to allow optional
+    `pub` / `pub(crate)` / `pub(super)` / `pub(in path)` visibility
+    prefix and optional `unsafe` keyword before `extern`,
+    mirroring pattern A's prefix coverage (closes the same shape
+    of blind spot the F1 fix closed for pattern A). Verified
+    against eleven positive shape variants (all match) and eight
+    negative shapes (`extern "C" { fn bar(); }` import blocks,
+    rustdoc citations, `use std::ffi::CStr;`, `fn extern_c() {}`,
+    etc. — all skip).
+
+  - **NF2 — `CacheStore::lookup` linearizability race on
+    transient→canonical promotion** in
+    [`rust/shekyl-pow-randomx/src/cache_store.rs`](../rust/shekyl-pow-randomx/src/cache_store.rs).
+    The Round 2 §3.1 per-slot `RwLock<Option<Arc<PreparedCache>>>`
+    shape was specified at the architecture level; the
+    implementation acquired and released each slot's read guard
+    sequentially across the comparison sequence. A concurrent
+    `set_canonical` could promote an entry from transient to
+    canonical between `lookup`'s two slot inspections, causing
+    `lookup(&S)` to observe canonical=Some(prior) → released →
+    transient=Some(prior_canonical) → return `None` despite the
+    requested entry being live in the canonical slot the entire
+    time. Soft consequence: a `lookup_or_derive` consumer falls
+    through to a ~150–200 ms Argon2d-512 re-derivation that should
+    have been a slot hit; violates the documented "few hundred
+    nanoseconds" cost-model. **Fix:** acquire both slot read
+    guards before the comparison sequence and hold them across
+    both inspections. The canonical-then-transient acquisition
+    order matches `set_canonical`'s canonical-write-then-transient-
+    write order, so there is no deadlock cycle. Updated `lookup`
+    rustdoc with explicit linearizability + lock-ordering
+    discussion; updated the `CacheStore` struct's
+    `# Synchronization shape` rustdoc to record the global
+    lock-ordering invariant ("every method acquiring both slot
+    locks acquires them canonical-then-transient, regardless of
+    read-vs-write mode"). **New test T-CS-12
+    `cachestore_lookup_linearizable_under_canonical_swap`:** seeds
+    the store with two pre-derived prepared caches in distinct
+    slots, runs alternating `set_canonical(p_a) /
+    set_canonical(p_b)` calls in one thread while a second thread
+    tightly polls `lookup(&seedhash_a) / lookup(&seedhash_b)` for
+    2,000 iterations and asserts both never return `None` (both
+    entries are live in *some* slot at every observable moment, so
+    a linearizable `lookup` must always find them). With the buggy
+    implementation the test fails probabilistically; with the fix
+    it passes deterministically because a concurrent
+    `set_canonical` cannot interleave between the two slot reads.
+
 - **RandomX v2 Track A Phase 2f — plan-doc front-matter staleness
   corrections** (`chore/randomx-v2-phase2f-plan`, 2026-05-23).
   Addresses PR #71 review findings (4 items, all header drift
