@@ -810,7 +810,66 @@ outside the standard `rust/` workspace (e.g., it depends on a
 build artifact that the workspace's `cargo` defaults cannot
 discover); not anticipated.
 
-**Round 1 disposition: TBD.**
+#### Round 1 disposition (closes R1-D1)
+
+**Close at default expectation.** Workspace placement is (a) — new
+workspace member at `rust/shekyl-randomx-differential/` with a
+`[[bin]]` target *and* a `[lib]` target so R1-D7 (c) can share
+in-process bindings between the binary and the per-hash latency
+integration test.
+
+**Substrate-anchored rationale.** The §2.7 hard constraint
+(harness is a separate artifact, not a dev-dependency of
+`shekyl-pow-randomx`) plus the §1.4 crate-invariant grep gate
+(Pattern C: no `extern "C"` in `rust/shekyl-pow-randomx/tests/`)
+make (b) rejected by construction; the `rust/` workspace boundary
+at `rust/Cargo.toml` makes (c) rejected by construction. The
+remaining structural question — `[[bin]]`-only vs.
+`[lib]` + `[[bin]]` — closes at `[lib]` + `[[bin]]` per R1-D7's
+default (c) (the per-hash latency test under
+`rust/shekyl-randomx-differential/tests/perf/per_hash_latency.rs`
+consumes the same in-process C bindings the binary uses, which
+requires the binary's binding-layer code to be reachable from an
+integration test, which requires `[lib]`). The `[lib]` surface is
+**not** a public-API surface intended for downstream consumers
+beyond the harness's own tests; the crate's `Cargo.toml`
+publish-policy stays `publish = false` per
+[`25-rust-architecture.mdc`](../../.cursor/rules/25-rust-architecture.mdc)
+workspace-internal artifact discipline.
+
+**Crate-name pin.** `shekyl-randomx-differential` per parent plan
+§7 line 248 framing ("differential test harness"). The
+`shekyl-` prefix matches the workspace convention; the
+`-randomx-` qualifier matches the `shekyl-pow-randomx` /
+`randomx-v2-sys` (R1-D2) sibling-crate naming; the `-differential`
+suffix names the harness's specific role (vs. the
+unprefixed `shekyl-randomx-pow` which would invite confusion with
+the verifier crate).
+
+**Reversion clause.**
+
+- *Rejection.* Single-crate placement under
+  `shekyl-pow-randomx/` (§2.7-rejected) or under-`tools/`
+  placement outside `rust/` (rejected by workspace-boundary
+  convention).
+- *Reopening criteria.* Reopen if a future workspace-wide
+  crate-count budget per
+  [`25-rust-architecture.mdc`](../../.cursor/rules/25-rust-architecture.mdc)
+  requires consolidating
+  `shekyl-randomx-differential` + `randomx-v2-sys` (R1-D2) +
+  potentially other harness siblings into a single
+  `shekyl-randomx-test-infra` umbrella crate; the consolidation
+  preserves §1.4 invariant cleanliness per Pattern C
+  exemption. Or reopen if R1-D2 disposition shifts to (a)
+  bindgen-at-build-time, which structurally re-shapes the
+  bindings-crate surface (bindgen-output crate vs.
+  hand-written shim crate is a different scope-per-crate
+  question).
+- *Re-evaluation shape.* Round-2 design-round entry with
+  workspace-state evidence (crate count at the time;
+  consolidation candidates enumerated) per
+  [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+  A4 sub-PR boundary reversion clause.
 
 ### R1-D2 — C-side bindings
 
@@ -867,7 +926,80 @@ C export list grows beyond ≤10 symbols (bindgen's auditability
 relative advantage grows with surface size); not anticipated for
 2g's scope (light-mode VM only; no dataset-side calls).
 
-**Round 1 disposition: TBD.**
+#### Round 1 disposition (closes R1-D2)
+
+**Close at default expectation.** C-side bindings are (c) — a
+Shekyl-introduced `randomx-v2-sys` sub-crate at
+`rust/randomx-v2-sys/` carrying 7 hand-written `extern "C"`
+declarations + `build.rs` linker directives.
+
+**Substrate-anchored rationale.** (a) bindgen-at-build-time is
+rejected on auditability — bindgen output is generated code that
+varies per bindgen version, and an audit cycle would have to
+re-verify the generated declarations match the C header at every
+bindgen-version bump; for a 7-symbol surface, the audit cost of
+hand-written declarations is one-time per fork-pin (per §1.7
+maintenance pin) versus per-bindgen-version. (b) inline `extern
+"C"` in the harness crate is rejected on §1.4-invariant-script
+extensibility — Pattern C (no `extern "C"` in source trees) would
+need a per-file exemption inside the harness crate, contradicting
+the invariant's "binary 'present' or 'absent'" shape rather than
+"present with per-file exemptions." (c)'s sub-crate localizes the
+`extern "C"` to one source file whose sole purpose is the
+declarations, audit-bounded against the C header at the pinned
+fork commit.
+
+**Canonical 7-symbol pin (matches the §1.7 enumeration).**
+
+```rust
+extern "C" {
+    fn randomx_alloc_cache(flags: c_uint) -> *mut RandomxCache;
+    fn randomx_init_cache(cache: *mut RandomxCache, seed: *const c_void, seed_size: usize);
+    fn randomx_release_cache(cache: *mut RandomxCache);
+    fn randomx_create_vm(flags: c_uint, cache: *mut RandomxCache, dataset: *mut RandomxDataset) -> *mut RandomxVm;
+    fn randomx_destroy_vm(vm: *mut RandomxVm);
+    fn randomx_calculate_hash(vm: *mut RandomxVm, input: *const c_void, input_size: usize, output: *mut c_void);
+    fn randomx_get_flags() -> c_uint;
+}
+```
+
+The signatures match
+[`external/randomx-v2/src/randomx.h`](../../external/randomx-v2/src/randomx.h)
+at fork-pin `aaafe71` (verified at Round-1-close; the §1.7
+maintenance pin requires re-verification on fork-pin advance).
+Dataset-side symbols (`randomx_alloc_dataset`,
+`randomx_init_dataset`, `randomx_dataset_item_count`) are *not*
+declared — 2g exercises light-mode VM only; declaring unused
+symbols invites a future caller to use them without re-auditing
+the scope-vs-fork-pin assumption.
+
+**Reversion clause.**
+
+- *Rejection.* bindgen-at-build-time (a) or inline `extern "C"`
+  in the harness crate (b); both rejected per the substrate-anchored
+  rationale above.
+- *Reopening criteria.* Reopen toward (a) if the canonical C
+  export list grows beyond ≤10 symbols (bindgen's auditability
+  advantage grows with surface size); reopen toward (b) if the
+  workspace consolidation reversion-clause in R1-D1 fires, in
+  which case the consolidated umbrella crate absorbs the
+  `extern "C"` and the invariant script's per-crate exemption
+  shape needs to be re-evaluated (the (b)-shape would then be
+  "harness crate carries the extern `C` declarations and is
+  per-crate-exempt from Pattern C," structurally equivalent to
+  today's (c)).
+- *Re-evaluation shape.* Round-N design-round entry that names
+  the new symbol count or the consolidation trigger; per
+  [`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)
+  the disposition's API-existence-verification step is
+  re-anchored against the new fork-pin's `randomx.h`.
+
+**Fork-pin coupling cross-reference.** Per §1.7 fork-pin coupling
+maintenance pin (Round 0 calibration item 3): any future PR
+advancing the `external/randomx-v2` fork pin verifies these 7
+declarations against the new pin's `randomx.h`. The verification
+step is the PR-description discipline, not a Round-1-closeable
+gate.
 
 ### R1-D3 — CMake wiring for `BUILD_RANDOMX_V2_MINER_LIB`
 
@@ -915,7 +1047,71 @@ CI coverage becomes a 2g requirement (e.g., the V3.0 Windows
 build requires Visual Studio multi-config); the per-`CONFIG`
 FOLLOWUPS entry then escalates to V3.0 ahead of 2g.
 
-**Round 1 disposition: TBD.**
+#### Round 1 disposition (closes R1-D3)
+
+**Close at default expectation.** CMake wiring is (c) — new
+top-level option `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS`,
+default OFF, which sets `BUILD_RANDOMX_V2_MINER_LIB=ON` when
+enabled and triggers the harness crate build in the Rust side.
+
+**Substrate-anchored rationale.** (a) auto-flip is rejected on
+opt-in discipline grounds — the §1.7 fail-fast disposition
+(combining `BUILD_RANDOMX_V2_MINER_LIB=ON` with a multi-config
+generator refuses with `FATAL_ERROR`) is built around explicit
+opt-in semantics; an auto-flip muddles "which CMake invocations
+trigger the multi-config refusal" because the trigger becomes
+implicit. (b) require-explicit is rejected on ergonomic and
+contract-coupling grounds — CI scripts would need to pass both
+`BUILD_RANDOMX_V2_MINER_LIB=ON` *and* a separate
+"harness-is-enabled" trigger, and a developer who passes only
+`BUILD_RANDOMX_V2_MINER_LIB=ON` (the Phase 1 documented option)
+gets the miner lib built but no harness, which is a confusing
+no-op state. (c) collapses both into one opt-in surface:
+`-DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON` is sufficient and
+unambiguous.
+
+**Option pin.**
+
+- Top-level CMake option in
+  [`CMakeLists.txt`](../../CMakeLists.txt) (alongside the
+  existing `BUILD_RANDOMX_V2_MINER_LIB` at line 503).
+- Default OFF (matches Phase 1's `BUILD_RANDOMX_V2_MINER_LIB`
+  default-OFF discipline; preserves daemon-build byte-equivalence
+  per Phase 1 §4.1 contract).
+- When ON, sets `BUILD_RANDOMX_V2_MINER_LIB=ON` via CMake's
+  `option()` + `set()` pattern (Phase 1 substrate convention).
+- When ON, also wires Rust-side: the harness crate's `build.rs`
+  detects the option via an environment variable
+  (`SHEKYL_BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=1` exported
+  from CMake's `add_custom_target`) and gates the
+  `randomx-v2-sys` (R1-D2) `cargo build` step accordingly.
+
+**Single-config-generator constraint inheritance.** Per §1.7 +
+[`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) line 3684, the
+`ExternalProject_Add` shape does not yet support per-`CONFIG`
+install paths or per-`CONFIG` `IMPORTED_LOCATION`; multi-config
+generators (Visual Studio, Xcode, Ninja Multi-Config) are
+refused with `FATAL_ERROR` when `BUILD_RANDOMX_V2_MINER_LIB=ON`.
+The new `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON` inherits the
+refusal transitively (because it implies `BUILD_RANDOMX_V2_MINER_LIB=ON`);
+single-config-generator (Ninja, Make) is the only supported CI +
+local-dev configuration.
+
+**Reversion clause.**
+
+- *Rejection.* (a) auto-flip rejected on fail-fast-clarity;
+  (b) require-explicit rejected on ergonomic-and-coupling.
+- *Reopening criteria.* Reopen toward (a) if the §1.7
+  fail-fast disposition is itself revisited (per the
+  per-`CONFIG` FOLLOWUPS entry escalation to V3.0, which would
+  re-shape the multi-config-generator refusal); reopen toward
+  (b) if downstream CI moves to a two-stage configure
+  pattern that benefits from the explicit decoupling.
+- *Re-evaluation shape.* Per
+  [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) line 3684 escalation
+  event triggers a Phase 2g amendment design-round that
+  re-evaluates this disposition against the new
+  multi-config-generator support.
 
 ### R1-D4 — Random corpus shape
 
@@ -968,7 +1164,95 @@ unjustified relative to a hand-rolled SplitMix64 or similar; the
 choice of PRNG is implementation-detail to (a) but a
 sub-disposition Round 1 closes for reproducibility.
 
-**Round 1 disposition: TBD.**
+#### Round 1 disposition (closes R1-D4)
+
+**Close at default expectation.** Random corpus is (a) —
+deterministic `rand_chacha::ChaCha20Rng` over a fixed 32-byte
+test seed; corpus generated at runtime from the seed.
+
+**Dependency-discipline check (per
+[`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)).**
+`rand_chacha = "0.3"` is already a workspace dependency
+(verified at Round 1 close against `rust/shekyl-crypto-pq/Cargo.toml:13`,
+`rust/shekyl-fcmp/Cargo.toml:39,50`,
+`rust/shekyl-engine-core/Cargo.toml:105`). No new workspace
+dependency is introduced; the harness crate's `Cargo.toml`
+adds `rand_chacha = "0.3"` as a direct dep (workspace-state
+reuse). Test-only use; no cryptographic property attached (the
+PRF is for test-corpus determinism, not for any secret-derivation
+surface).
+
+**F2 numeric pins (corpus shape per cadence).** The R1-D12 (c)
+split-cadence (per F2 finding in Round 1's adversarial pass)
+makes the corpus shape cadence-stratified:
+
+| Cadence | Seedhash count | Data values per seedhash | Total hashes | Reference-machine wall-clock |
+|---------|---------------|--------------------------|--------------|------------------------------|
+| Per-PR byte-equality | 16 | 8 | 128 | ~96 s hash + ~2 min cache-derive = **~3.5 min** |
+| Nightly full corpus | 32 | 32 | 1024 | ~5.3 min hash + ~4 min cache-derive = **~9 min** |
+
+The numbers are anchored against
+[`rust/shekyl-pow-randomx/BENCH_RESULTS.md`](../../rust/shekyl-pow-randomx/BENCH_RESULTS.md)
+Phase 2c baseline on the reference machine (Intel i9-11950H @
+2.60 GHz; C reference ~12 ms/hash; Rust ~296 ms/hash;
+cache-derive ~341 ms). Per F5 (R1-D12 close) the CI runner class
+is `ubuntu-latest` (4 vCPU); wall-clock scales by the runner's
+single-thread performance vs. reference machine — the
+release-gate cadence is the ground truth for runner-vs-reference
+adjustment per the parent §6 line 238 framing.
+
+**Data-length distribution pin.** Block-template-shaped bimodal:
+~50% of data values draw from `Uniform(64, 200)` bytes
+(block-header-shaped; matches real `compute_hash` inputs for
+PoW verification), ~50% draw from `Uniform(200, 600 * 1024)`
+bytes (larger block-template-shaped; exercises the
+`data_len <= RANDOMX_BLOCK_TEMPLATE_MAX_SIZE` boundary at
+`parent §6 line 234`'s 2 MiB ceiling without grinding against
+the ceiling itself). Uniform-over-[0, 2 MiB] is rejected
+because >99% of real `compute_hash` inputs are header-shaped;
+the random corpus mirroring realistic-input distribution
+catches divergences in the common-input path before grinding
+against the rare-path corpus (R1-D5) catches the
+rare-path-specific divergences.
+
+**Deterministic test-seed pin.** 32-byte ChaCha20Rng seed:
+
+```
+"shekyl-randomx-differential-corpus-v1\x00"  // padded to 32 bytes
+```
+
+The seed string is recorded in the harness source file as a
+named constant
+(`pub const RANDOM_CORPUS_SEED_V1: [u8; 32] = ...`) with the
+`-v1` suffix anchoring the reversion-clause: a future R1-D4
+reopen toward a different distribution lands as `RANDOM_CORPUS_SEED_V2`
+in a new constant, leaving the v1 seed intact for historical
+reproduction.
+
+**Reversion clause.**
+
+- *Rejection.* Wall-clock entropy (c) rejected by construction;
+  committed-fixture-file (b) rejected on the diff-surface cost
+  for 1024+ pairs at ~ (32 + 600KiB) per pair ≈ 600 MiB
+  fixture-size (b) imposes on the repo, vs. (a)'s 32-byte seed
+  + generator source.
+- *Reopening criteria.* Reopen if (i) the ChaCha20 dependency
+  is removed from the workspace (substrate-change in
+  workspace-state per
+  [`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc));
+  (ii) the per-PR or nightly wall-clock budget tightens
+  (e.g., a CI runner-class change cuts the per-job budget) and
+  the corpus shape needs re-sizing; (iii) the
+  data-length-distribution assumption (block-template-shaped
+  bimodal) is invalidated by a Shekyl-side dynamic-block-size
+  change (per parent §6 line 234's 2 MiB ceiling reversion
+  clause).
+- *Re-evaluation shape.* Per
+  [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+  A5 forward-action propagation: the re-sizing or
+  distribution-change lands in the harness crate's
+  `RANDOM_CORPUS_SEED_V2` constant + a Round-N design-doc
+  entry naming the new pin's substrate evidence.
 
 ### R1-D5 — Adversarial seedhash corpus (per 2c §5.11.5)
 
@@ -1028,7 +1312,78 @@ grinding wall-time on the reference machine; if the wall-time
 is >1 day for 5–10 seedhashes, the substrate-anchored disposition
 reopens toward (b)).
 
-**Round 1 disposition: TBD.**
+#### Round 1 disposition (closes R1-D5)
+
+**Close at default expectation.** Adversarial corpus is (a) —
+grinded, committed as hex bytes under
+`rust/shekyl-randomx-differential/src/adversarial_corpus.rs`
+(seedhash hex bytes + per-class rationale comments) and the
+grinding tool lives at
+`rust/shekyl-randomx-differential/tools/grind_adversarial_corpus.rs`
+as a separate binary (run on demand, not on every CI invocation).
+
+**F3 grinding budget pin (Round 1's adversarial-pass
+substrate-anchoring).** Round 0's reopen-criterion sketch named
+"if wall-time is >1 day"; the actual substrate-anchored budget
+is much smaller. Per `configuration.h:88–125`'s
+`RANDOMX_FREQ_*` distribution (verified at 2d R6-D2;
+substrate-anchored against `bytecode_machine.hpp:67–98`),
+grinding for a class-heavy program (≥40% combined opcodes in
+the targeted class) is rejection-sampling at ~1/256 per random
+seedhash; 5–10 heavy seedhashes across the four classes ≈
+**~1280–2560 grinds × ~300 ms = ~6–13 minutes** total grinding
+wall-clock on the reference machine. The grinding-tool budget
+is pinned at **4 hours wall-clock on the reference machine**
+(intel-i9-11950H baseline; ~18× headroom for "heavy" being more
+selective — e.g., combined CFROUND+FDIV_M+CBRANCH ≥60% rather
+than single-class ≥40%); the tool aborts with a
+substrate-anchored error message if it exceeds the budget.
+
+**Per-class targets pin (5–10 seedhashes across four classes).**
+
+| Class | Target opcode pattern | Seedhash count (min–max) |
+|-------|----------------------|--------------------------|
+| CFROUND-heavy | ≥40% CFROUND opcodes per program | 1–2 |
+| FDIV_M-heavy | ≥40% FDIV_M opcodes per program | 1–2 |
+| Cache-miss-heavy | ≥40% scratchpad-access opcodes with stride > L2 cache size | 1–2 |
+| CBRANCH-heavy | ≥40% CBRANCH opcodes per program | 1–2 |
+| Combined-heavy | ≥60% combined CFROUND + FDIV_M + cache-miss + CBRANCH | 1–2 |
+
+Total: 5–10 seedhashes. Each commit-time seedhash entry records
+(i) the seedhash hex bytes, (ii) the per-class opcode-frequency
+statistics measured at grind time, (iii) the run-cost on the
+reference machine.
+
+**Storage shape.** Hex bytes committed as a Rust source array
+(`pub const ADVERSARIAL_CORPUS_V1: &[(SeedHashBytes, &str)]`)
+with per-class tagging comments. No fixture file under
+`tests/vectors/reference/` (the adversarial corpus is harness-internal,
+not a spec-reference vector).
+
+**Reversion clause.**
+
+- *Rejection.* (b) constructed rejected on spec-coupling cost —
+  the back-derivation depends on the AES-1R generator's
+  structure, which is V4-coupled (a V4 generator amendment
+  invalidates every committed back-derivation seedhash); (a)'s
+  grinding is V4-decoupled (the grinding tool re-runs at V4
+  time against the V4 generator with no spec-shape coupling).
+- *Reopening criteria.* Reopen toward (b) if (i) the grinding
+  tool exceeds the 4-hour wall-clock budget on the reference
+  machine (substrate-change in grinding-cost); (ii) the V4
+  lattice transition produces a generator whose grinding-cost
+  is comparable to (b)'s back-derivation cost (substrate-change
+  in the spec-coupling-cost-vs-grinding-cost calculus); (iii)
+  a future Shekyl-side spec amendment changes the generator
+  structure (in which case (b)'s back-derivation can re-derive
+  the committed seedhashes without re-running grinding).
+- *Re-evaluation shape.* Per
+  [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+  A4 sub-PR boundary reversion: a Round-N design-round entry
+  with the substrate evidence (the grinding wall-time on the
+  reference machine; the V4 substrate-change name) and the
+  amended methodology (per-class regrind vs. (b)
+  back-derivation).
 
 ### R1-D6 — u128 / `__int128_t` edge-case corpus (per 2d §3.4 + 2c §5.11 Objective 6)
 
@@ -1059,7 +1414,60 @@ hex bytes. Adversarial-corpus extension lands in the same file
 
 **Reopen criterion (sketch for Round 1).** Same as R1-D5.
 
-**Round 1 disposition: TBD.**
+#### Round 1 disposition (closes R1-D6)
+
+**Close at default expectation.** u128 edge-case corpus is (a) —
+grinded, committed as hex bytes in the same source file as the
+adversarial corpus (`rust/shekyl-randomx-differential/src/adversarial_corpus.rs`),
+extended with per-class tagging for the four u128 edge classes.
+
+**Per-class targets pin (≥1 seedhash per class; 4 minimum).**
+
+| Edge class | Target opcode handler | Reach criterion |
+|------------|----------------------|-----------------|
+| div-by-zero IMUL_RCP / IDIV | IMUL_RCP w/ imm32=0; IDIV w/ divisor=0 in the dispatch path | At least one program instruction reaches the edge under the corpus's data-length distribution; verified at grind time by per-iteration opcode-trace instrumentation in the grinding tool only. |
+| signed-div overflow | IDIV w/ `INT_MIN / -1` | Same. |
+| shift-by-width | ISHIFT_L / ISHIFT_R w/ shift count = 64 (mod 64 yields 0; UB in C for `<<` if >= width — handled per 2d §3.4) | Same. |
+| `u128 * u128` truncation high-half | IMUL_HM / ISMULH_M / IMULH_R / ISMULH_R w/ inputs producing non-zero high-half | Same. |
+
+The 4-minimum is per-class (`>=1` seedhash exercising the
+class); the maximum is bounded by the R1-D5 5–10 total
+adversarial-corpus budget. The R1-D5 + R1-D6 corpus
+intersection: if a single grinded seedhash exercises both an
+R1-D5 class (e.g., CBRANCH-heavy) and an R1-D6 class (e.g.,
+ISMULH_M high-half-nonzero), it counts toward both budgets.
+
+**Grinding-tool extension.** The R1-D5 grinding tool
+(`grind_adversarial_corpus.rs`) extends with per-edge-class
+criteria (the four classes above). Same wall-clock budget
+(4 hours per F3 pin); per-class grind cost is bounded by the
+RANDOMX_FREQ_* distribution at `configuration.h:88–125` (the
+edge-reach probability per program-iteration drives the
+rejection-sampling rate; per 2d's audit-against-actual-code
+discipline the grinding-tool criteria cite the substrate line
+at audit pin).
+
+**Hand-crafting fallback rejection.** Hand-crafting (an
+alternative R1-D6 sub-option, *not* in the R1-D5 option set)
+was considered: build a synthetic seedhash whose generator
+output is constructed-to-include the edge case. Rejected on
+the same spec-coupling cost (b) is rejected on: the synthetic
+construction depends on the generator's hashing-to-bytecode
+structure, which is V4-coupled. The (a) grinding approach
+catches the edge cases by exhaustive search, V4-decoupled.
+
+**Reversion clause.**
+
+- *Rejection.* Same as R1-D5: (b) constructed and synthetic
+  hand-crafting rejected on spec-coupling cost.
+- *Reopening criteria.* Same as R1-D5; additionally, reopen
+  toward synthetic hand-crafting if grinding fails to find
+  reachable seedhashes for a given edge class within the
+  4-hour budget *and* the spec-coupling cost is judged
+  acceptable for the missing class (e.g., shift-by-width
+  edges are spec-rare and may justify a per-class
+  hand-crafted seedhash).
+- *Re-evaluation shape.* Same as R1-D5.
 
 ### R1-D7 — Per-hash latency benchmark population (per 2c §13 R3-minor-2)
 
@@ -1138,7 +1546,62 @@ firing.
 restructuring R1-D1 or R1-D13 in a way that re-litigates the
 workspace-placement disposition.
 
-**Round 1 disposition: TBD.**
+#### Round 1 disposition (closes R1-D7)
+
+**Close at default expectation.** Per-hash latency test
+population is (c) — move under harness crate; delete the
+placeholder at `rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs`
+in the implementation PR. New location:
+`rust/shekyl-randomx-differential/tests/perf/per_hash_latency.rs`
+(integration test consuming the harness crate's `[lib]` surface
+per R1-D1).
+
+**Placeholder end-of-life audit-trail.** Per Round 0
+calibration item 5, the implementation-PR commit message that
+deletes the placeholder cites "closes Phase 2c §13 R3-minor-2"
+so the audit trail is mechanically grep-discoverable per
+[`90-commits.mdc`](../../.cursor/rules/90-commits.mdc). The
+placeholder's reversion-clause shape per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+was always "delete on 2g's implementation"; this is the
+planned trigger firing.
+
+**Methodology pin (per parent §6 line 243 + Round 0
+pins-required-for-Round-1).** N=1024 iterations per the parent
+plan; **interleaved Rust/C per-iteration** (rather than
+all-Rust-then-all-C) to amortize cache-warmth bias across the
+two implementations symmetrically; median Rust / median C
+asserted ≤ 3.0× per parent §6 line 237. Single fixed
+seedhash + 1024 fixed deterministic data values per
+R1-D4's ChaCha20Rng-seeded shape (a sub-sample of the per-PR
+corpus, *not* the adversarial corpus per R1-D5 — average-case
+latency, not worst-case ratio).
+
+**Cadence pin.** Pre-Phase-3a (i.e., 2g): test runs in the
+harness binary, no CI gate per parent §6 line 243 framing
+("Phase 2g produces the harness binary that the per-PR CI
+mechanism then consumes; the gate activates when the FFI shim
+makes per-PR regressions reachable from C++ callers"). Per
+R1-D12 (c) cadence: the per-hash latency test runs in the
+nightly job (cadence-anchored to surface latency regressions
+in the harness's own evolution before the Phase 3a gate
+activates).
+
+**Reversion clause.**
+
+- *Rejection.* (a) populate body in current `shekyl-pow-randomx/tests/perf/`
+  location rejected on §1.4 Pattern C (the test would need to
+  link `randomx-v2-sys`, which carries `extern "C"`); (b)
+  populate body in `shekyl-pow-randomx/benches/` rejected on
+  the same Pattern C exemption issue.
+- *Reopening criteria.* Reopen if R1-D1 reverts toward
+  single-crate consolidation (the test relocates with the
+  consolidation); or if R1-D13 reverts toward Pattern C
+  per-file exemption (a (b)-shape becomes viable with the
+  per-file exemption).
+- *Re-evaluation shape.* Per A4 sub-PR boundary reversion: a
+  Round-N design-round entry citing R1-D1 or R1-D13 reopen
+  evidence.
 
 ### R1-D8 — Worst-case ratio measurement (per parent §6 Round 4)
 
@@ -1185,7 +1648,72 @@ worst-case wall-time exceeds the release-gate suite's budget;
 (c) becomes the disposition with explicit cadence (e.g., weekly
 scheduled run rather than every release-tag).
 
-**Round 1 disposition: TBD.**
+#### Round 1 disposition (closes R1-D8)
+
+**Close at default expectation.** Worst-case ratio measurement
+is (a) — same harness binary, separate subcommand
+(`--mode=worst-case`); R1-D12's release-gate CI workflow
+invokes the subcommand.
+
+**Subcommand pin.** Harness binary command-line:
+
+```
+shekyl-randomx-differential --mode=byte-equality              # per-PR + nightly default
+shekyl-randomx-differential --mode=byte-equality --corpus=adversarial   # nightly extension
+shekyl-randomx-differential --mode=worst-case                 # release-gate only
+shekyl-randomx-differential --mode=per-hash-latency           # nightly per R1-D7
+shekyl-randomx-differential --mode=concurrent                 # per-PR per R1-D9
+```
+
+The mode-as-subcommand discipline shares C bindings, corpus
+loading, and `PreparedCache` derivation across modes (each
+mode's binary entry-point is a thin dispatcher into a
+mode-specific function). Single binary; no inter-mode state
+sharing (each mode initializes fresh state at entry).
+
+**Adversarial corpus for worst-case (R1-D5 + R1-D6 union).**
+The worst-case ratio runs against the R1-D5 adversarial
+corpus (5–10 seedhashes, 4 R1-D5 classes + 1 combined-heavy)
++ R1-D6 u128 edge-case extensions (≥4 seedhashes, one per
+class). Total: 5–10 + ≥4 ≤ 14 unique seedhashes (de-duplicated
+if a seedhash exercises both R1-D5 and R1-D6 classes per
+R1-D6's intersection note). Data values per seedhash: 16
+(matching the F2 release-gate cadence pin).
+
+**Per-class breakdown reporting.** Round 1 pins the
+`BENCH_RESULTS.md` table shape for the worst-case ratio:
+
+| Class | Seedhash hex (prefix) | C median (ms) | Rust median (ms) | Ratio | ≤5.0× target |
+|-------|----------------------|---------------|------------------|-------|--------------|
+| (per R1-D5 + R1-D6 class) | (8-char prefix) | (measured) | (measured) | (computed) | PASS / FAIL |
+
+Plus an aggregate row: `max(ratio over all rows) ≤ 5.0×`. The
+harness binary writes the table directly to a file path
+specified by `--output BENCH_RESULTS_WORSTCASE.md` (the
+release-gate CI workflow then commits the result as part of
+the release-tag artifact pipeline).
+
+**Reversion clause.**
+
+- *Rejection.* (b) `#[ignore]`-gated test rejected on
+  discoverability — a developer grepping for "worst-case"
+  finds the test but the `#[ignore]` shape makes the
+  invocation convention non-obvious; (c) separate CI workflow
+  rejected on duplication — the workflow has to redeclare
+  `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON` and the
+  ExternalProject build, doubling the CI surface for a
+  cadence-only difference.
+- *Reopening criteria.* Reopen toward (c) if the
+  release-gate wall-time exceeds the release-gate suite's
+  budget (substrate-anchored against the actual suite budget
+  at release time; the per-class breakdown above is small
+  enough that this is unlikely); reopen toward (b) if the
+  shared-binary contract under R1-D9's concurrent mode proves
+  error-prone (cross-mode state sharing surface bug → split
+  per mode).
+- *Re-evaluation shape.* Per A4 sub-PR boundary reversion: a
+  Round-N design-round entry citing the budget-exceeded
+  evidence or the cross-mode bug evidence.
 
 ### R1-D9 — Concurrent-call thread-safety test (per parent 2g todo)
 
@@ -1273,7 +1801,97 @@ discipline](./RANDOMX_V2_PHASE2F_PLAN.md)) authorizes longer
 `Arc` retention windows, in which case the RSS-bound ceiling
 re-anchors against the new caller-discipline bound.
 
-**Round 1 disposition: TBD.**
+#### Round 1 disposition (closes R1-D9)
+
+**Close at default expectation.** Concurrent-call thread-safety
+test is (a) — `std::thread::spawn` workers; no async runtime
+dep; no parallel-iterator dep.
+
+**Substrate-anchored rationale.** Per
+[`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)
+workspace-state check: `tokio` is a workspace dependency (Phase
+2F + 3a infra) but adding it for one test in the harness crate
+fails the single-cited-consumer test (the harness's other
+modes don't use `tokio`); `rayon` is not a workspace dep and
+adding it for one test surfaces dependency-discipline questions
+about audit-fan-out. (a) `std::thread::spawn` is `std`-only,
+zero new dep surface, and matches the daemon's
+`tools::threadpool::getInstanceForCompute()` shape more closely
+than the async (b) or work-stealing (c) shapes.
+
+**Worker-count pin (F5 substrate from R1-D12 close).** Worker
+count = **4 production workers + 1 reserve = 5 total**,
+matching Phase 2F R1-D5's daemon parallel-verification fanout
+formula `min(get_max_concurrency(), m_max_prepare_blocks_threads) + 1`
+on the GitHub Actions `ubuntu-latest` runner class (4 vCPU; per
+F5 R1-D12 close). The numeric pin tracks the R1-D12 runner
+class; if R1-D12 reverts to a larger runner class, this pin
+reopens.
+
+**Iteration count pin.** **256 hashes per worker × 5 workers
+= 1280 total hashes** computed across the test. Substrate
+rationale: 1280 hashes exercises `CacheStore`'s capacity-2
+invariant multiple times (assuming the corpus has more than
+2 distinct seedhashes, the worker scheduling forces canonical
+vs. transient slot rotation under contention); 256 per worker
+is large enough that per-call hash-time variance averages out;
+5 workers × 256 hashes × ~300ms = ~6.4 min total wall-clock
+fits under the per-PR ~7-minute budget per F2 (the test runs
+concurrently across workers, not sequentially, so the
+wall-clock is closer to 256 × 300ms × (1 / parallelism) ≈ ~1.5
+min on `ubuntu-latest`'s 4 vCPU).
+
+**F4 RSS-ceiling numeric pin.** Per F4 adversarial-pass
+finding: substrate-anchored against Phase 2F §4 F2 disposition:
+
+- CacheStore capacity-2 derived-cache holdings:
+  2 × 256 MiB = **512 MiB**
+- Worker working-set: 5 workers × (~2 MiB scratchpad +
+  ~8 KiB register-file + ~10 KiB miscellaneous) ≈
+  **~10 MiB**
+- OS / allocator overhead headroom: **~118 MiB**
+- **Total RSS ceiling: 640 MiB** during steady-state
+  concurrent execution.
+- **Tolerance band: ±10% of the measured pre-test baseline
+  RSS.** Assertion: `max(steady_state_samples) − baseline ≤
+  640 MiB × 1.10`.
+- **Measurement methodology:** Linux `/proc/self/statm` field
+  2 (resident pages × page size at runtime) sampled at 100 ms
+  intervals during the concurrent test; baseline taken at
+  test entry (after `PreparedCache` initialization but before
+  worker spawn); steady-state samples = samples taken at
+  t > 5 s into the test (after worker scheduling warms up).
+
+**macOS / Windows fallback pin.** The harness's RSS measurement
+is Linux-specific (`/proc/self/statm`). On macOS, the
+equivalent is `task_info(mach_task_self(), TASK_BASIC_INFO,
+...)`; on Windows, `GetProcessMemoryInfo()`. **Cross-platform
+disposition: the RSS-bound test runs on Linux only;** macOS /
+Windows CI (if added) runs only the correctness criterion.
+The cross-platform shape lands as a `#[cfg(target_os = "linux")]`
+gate on the RSS-bound assertion. Substrate: `ubuntu-latest`
+is the per-PR + nightly runner per F5; macOS / Windows
+runners are not in the CI matrix; the cfg-gate documents the
+future-portability shape without paying the cross-platform
+cost now.
+
+**Reversion clause.**
+
+- *Rejection.* (b) tokio rejected on dep-surface; (c) rayon
+  rejected on dep-surface + dependency-discipline single-cited-consumer.
+- *Reopening criteria.* Reopen toward (b) if the daemon-side
+  parallel-verification surface moves to async; the test's
+  substrate-anchored shape re-anchors against the new daemon
+  model. RSS-bound numeric ceiling reopens if (i) the R1-D12
+  runner class changes (re-pin against new vCPU count + RAM);
+  (ii) Phase 2F §3 caller-discipline authorizes longer `Arc`
+  retention windows (re-pin against the new caller bound);
+  (iii) the harness adds modes that share state across mode
+  invocations (concurrent test's baseline becomes ambiguous).
+- *Re-evaluation shape.* Per A4 sub-PR boundary reversion: a
+  Round-N design-round entry citing daemon-architectural or
+  caller-discipline substrate-change evidence; the RSS-bound
+  numeric pin updates with measurement-anchored justification.
 
 ### R1-D10 — `compute_hash_with_trace` decision (per 2f §10.4 pre-pin)
 
@@ -1348,7 +1966,51 @@ opening that reopening cites the divergence's `(seedhash,
 data)` pair and the bisection-attempt artefact as the reopen's
 substrate trigger.
 
-**Round 1 disposition: TBD.**
+#### Round 1 disposition (closes R1-D10)
+
+**Close at default expectation.** `compute_hash_with_trace` is
+**omitted** at Round 1. No cfg-gated entry point added to
+`shekyl-pow-randomx`; no `TraceSink` trait; no
+`differential-trace` feature flag.
+
+**Future-deferred reopen-criterion class (per Round 0
+calibration item 7).** The reopen criterion is future-deferred
+(the trigger event — divergence + intractable bisection — has
+not occurred at Round-1-evaluation-time); legitimate per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).
+A future Round-N opening cites the divergence's `(seedhash,
+data)` pair and the bisection-attempt artefact as the reopen's
+substrate trigger rather than re-deriving Round-1 evidence.
+
+**Public-API non-impact pin.** The R1-D10 (b) close preserves
+the Phase 2F R3-frozen `shekyl-pow-randomx` public API surface
+verbatim — no new exports, no new feature flags, no cfg-gated
+type names in `pub use` paths. The §1 substrate's public-API
+freeze remains the load-bearing contract; this disposition is
+the substrate that confirms it. The §1.4 crate-invariant grep
+gate continues to enforce the freeze.
+
+**Reversion clause.**
+
+- *Rejection.* (a) Include rejected on substrate-anchored
+  cost-benefit: paying the cfg-gated-entry-point cost for a
+  hypothetical use; per
+  [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+  "Keep it for flexibility" anti-pattern.
+- *Reopening criteria.* Per [Phase 2F §10.4](./RANDOMX_V2_PHASE2F_PLAN.md):
+  2g's differential pass (or any future differential pass)
+  surfaces a divergence that survives bisection-without-trace.
+  Future-deferred; the substrate trigger is the divergence
+  itself.
+- *Re-evaluation shape.* Per A1 function-body-replacement
+  contract: a Round-N design-round entry adds the cfg-gated
+  entry point + the harness-side `TraceSink` trait per Phase
+  2F §10.4 substrate; the implementation lands in a separate
+  PR per [`20-rust-vs-cpp-policy.mdc`](../../.cursor/rules/20-rust-vs-cpp-policy.mdc)
+  migration discipline (the trace surface is secret-adjacent
+  — intermediate VM register values are inputs to the final
+  hash output — and gets its own design rounds rather than
+  "while we're here" addition).
 
 ### R1-D11 — Bisection-divergence failure mode
 
@@ -1386,7 +2048,77 @@ disposition.
 **Reopen criterion (sketch for Round 1).** Tied to R1-D10's
 reopen.
 
-**Round 1 disposition: TBD.**
+#### Round 1 disposition (closes R1-D11)
+
+**Close at default expectation.** Bisection-divergence failure
+mode is (b) — include input `(seedhash, data)` for local
+reproduction; per-iteration trace omitted per R1-D10 (b).
+
+**F1 dependency: cache-sha256 fields included per R1-D14
+(b)-then-(iii).** The structured failure output's content is
+shaped by R1-D14's close — since the harness's R1-D14
+cache-equivalence precondition asserts SHA-256 equality of
+the Rust-side and C-side caches per seedhash *before* the
+per-(seedhash, data) byte-equality test runs, the
+post-byte-equality-failure structured output includes both
+SHA-256s so a reviewer can confirm the precondition held at
+test time (defense-in-depth: a non-aborted run with mismatched
+cache-sha256s would itself be a harness bug, but the structured
+output surfaces the discrepancy if it occurs).
+
+**Failure output format pin.**
+
+| Field | Type | Example |
+|-------|------|---------|
+| `mode` | string | `"byte-equality"` |
+| `corpus_id` | string | `"random-v1-per-pr"` or `"adversarial-v1"` or `"u128-edge-v1"` |
+| `seedhash` | hex string | `"a3b2c1d0…"` (64 hex chars) |
+| `data_len` | int | 76 |
+| `data` | hex string | `"…"` |
+| `rust_hash` | hex string | 64 hex chars (32 bytes) |
+| `c_hash` | hex string | 64 hex chars |
+| `rust_cache_sha256` | hex string | 64 hex chars (R1-D14 precondition cross-check) |
+| `c_cache_sha256` | hex string | 64 hex chars (R1-D14 precondition cross-check) |
+| `differing_bytes` | array of `(offset, rust_byte, c_byte)` triples | `[[0, 0xa5, 0x5a], [17, 0xff, 0x00]]` |
+| `cargo_repro_invocation` | string | `cargo run --bin shekyl-randomx-differential -- --mode=byte-equality --seedhash <hex> --data <hex>` |
+
+**Output channel pin.** JSON-formatted to stderr (one-failure-per-line
+for grep-friendliness); pretty-printed human-readable form to
+stdout (formatted-block per failure). First failure aborts the
+corpus pass — no continue-on-failure (a divergence at
+seedhash N is high-priority; running through to seedhash N+1
+under a known-buggy implementation wastes CI minutes and
+muddles the failure attribution between divergent seedhashes).
+
+**`Cache` first-64-bytes inclusion (Round 0 pin question).**
+Excluded — the SHA-256 cache-sha256 fields supersede the
+"first 64 bytes for sanity" Round 0 pin. The cache-sha256 is
+strictly more diagnostic (covers the full cache rather than a
+prefix) at the same comparison cost (32-byte hash vs. 64-byte
+prefix); the first-64-bytes Round 0 sketch was substrate-anchored
+against (i) full-cache-diff disposition (which is now (iii) by
+R1-D14), and (iii)'s sha256 collapses the diagnostic need.
+
+**Verbosity-flag-gating pin.** Failure output is **always
+emitted** (not gated). Substrate: the failure output is
+emitted only on failure (the success-path produces a single
+"OK: N hashes checked, 0 divergences" log line); the cost is
+zero when the test passes; the benefit (diagnostic
+completeness at failure) is asymmetric to the cost.
+
+**Reversion clause.**
+
+- *Rejection.* (a) bytes-only rejected on reproducibility —
+  fails the minimum bar (cf. criteria); (c) per-iteration
+  trace rejected by R1-D10 (b) dependency.
+- *Reopening criteria.* Tied to R1-D10's reopen (if R1-D10
+  (a) reopens, R1-D11 (c) becomes available); reopen
+  independently if the structured failure-output format
+  proves insufficient for diagnosing a future divergence
+  (per the future-deferred substrate trigger).
+- *Re-evaluation shape.* Per A4 sub-PR boundary reversion: a
+  Round-N design-round entry citing the divergence's
+  failure-output artifact and the format extension needed.
 
 ### R1-D12 — CI job structure (per parent 2g todo)
 
@@ -1445,7 +2177,86 @@ tradeoff.
 per-PR cost exceeds the budget (raise the floor on
 runner-class spec, or shrink the per-PR subset further).
 
-**Round 1 disposition: TBD.**
+#### Round 1 disposition (closes R1-D12)
+
+**Close at default expectation.** CI job structure is (c) —
+split-cadence per-PR / nightly / release-gate, with the F2 +
+F5 numeric pins anchored against the `ubuntu-latest` runner
+class.
+
+**F5 runner-class pin (substrate verified at Round 1 against
+GitHub Actions docs).** Per [GitHub Actions runner
+specifications](https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#standard-github-hosted-runners-for-public-repositories)
+(verified at Round 1 close, not from training-data recall):
+`ubuntu-latest` runners for public repositories are **4 vCPU /
+16 GB RAM / 14 GB SSD**. The per-job timeout ceiling is 6
+hours (well above any 2g cadence). Substrate verified at
+Round 1; if GitHub Actions changes runner specs, R1-D12 reopens
+substrate-anchored.
+
+**F2 cadence-vs-corpus pin (matches R1-D4 close).**
+
+| Cadence | Workflow file | Corpus | Wall-clock budget |
+|---------|---------------|--------|-------------------|
+| Per-PR | `.github/workflows/build.yml` (new step) | R1-D4 random per-PR (16×8 = 128 hashes) + R1-D9 concurrent (~1.5 min) + R1-D14 cache-precondition (~6–8 s × 16 = ~2 min) | **~7 min** total per job |
+| Nightly | `.github/workflows/differential-nightly.yml` (new file; scheduled cron `0 3 * * *`) | R1-D4 random nightly (32×32 = 1024 hashes) + R1-D5 adversarial (~5–10 × 16 = 80–160 hashes) + R1-D6 u128 edge (~4 × 16 = 64 hashes) + R1-D7 per-hash latency (N=1024) | **~25 min** total per job |
+| Release-gate | `.github/workflows/differential-release-gate.yml` (new file; triggered by `release/*` branches) | R1-D8 worst-case (R1-D5 + R1-D6 union × 16 = ~14–16 seedhashes × 16 = ~224–256 hashes) | **~10 min** total per job |
+
+All three workflows pin runner: `runs-on: ubuntu-latest`. Per
+R1-D3 (c), each workflow's build step passes
+`-DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON` to the CMake
+configure step (which transitively enables
+`BUILD_RANDOMX_V2_MINER_LIB=ON` per R1-D3 disposition).
+
+**Path-filtered per-PR trigger pin.** Per-PR job runs on every
+PR by default but can be skipped for PRs that touch only
+`docs/`, `*.md`, or non-RandomX-related crates (per the
+`paths-ignore:` GitHub Actions trigger filter). The full path
+filter (Round 2 may refine):
+
+```yaml
+paths-ignore:
+  - 'docs/**'
+  - '**/*.md'
+  - '**/CHANGELOG.md'
+```
+
+Rejecting `paths:` (positive filter on
+`rust/shekyl-pow-randomx/**` etc.) because Phase 2g is
+substrate-coupled to many surfaces (changes to
+`rust/shekyl-pow-randomx/`, `external/randomx-v2/` submodule,
+`external/CMakeLists.txt`, `rust/randomx-v2-sys/`,
+`rust/shekyl-randomx-differential/`, `scripts/ci/check_randomx_crate_invariants.sh`,
+the workflows themselves) can all regress 2g's substrate;
+enumerating positive paths is brittle.
+
+**Nightly failure handling pin.** Per current Shekyl
+nightly-CI-failure convention: nightly failures surface via
+GitHub Actions email notifications to the workflow's
+configured recipients. (Pinning a "GitHub issue auto-opened
+on nightly failure" surface is out-of-scope for 2g — that
+would require a separate `actions/github-script` step + issue
+template, which adds CI surface unrelated to the differential
+harness. If the project adopts that convention later, the 2g
+nightly workflow extends without 2g-specific design.)
+
+**Reversion clause.**
+
+- *Rejection.* (a) per-PR full-corpus rejected on per-PR
+  cost (~25 min per PR run is wasteful for PRs that don't
+  touch the 2g substrate); (b) separate workflow with
+  diff-surface trigger rejected on path-trigger brittleness
+  (per the path-filtered per-PR trigger pin above).
+- *Reopening criteria.* Reopen if (i) per-PR wall-clock
+  exceeds 15 minutes (tighten corpus shape vs. escalate to
+  `ubuntu-latest-xl` runner class); (ii) nightly failures
+  prove brittle (substrate-anchored against the failure rate
+  measured over the first month post-merge); (iii) GitHub
+  Actions runner-class specs change.
+- *Re-evaluation shape.* Per A4 + A5: a Round-N design-round
+  entry citing the per-PR-wall-clock or nightly-failure-rate
+  evidence; the cadence-vs-corpus re-pin lands as a workflow
+  amendment + this disposition's numeric-pin update.
 
 ### R1-D13 — Crate-invariant compatibility
 
@@ -1503,7 +2314,64 @@ sole purpose is to carry `extern "C"`).
 disposition rejects (c) for an unrelated reason; R1-D13 then
 re-evaluates (a) vs. (b).
 
-**Round 1 disposition: TBD.**
+#### Round 1 disposition (closes R1-D13)
+
+**Close at default expectation.** Crate-invariant compatibility
+is (c) — `randomx-v2-sys` sub-crate is the *only* crate carrying
+`extern "C"` (sole-purpose); the differential-harness crate
+(`shekyl-randomx-differential`) consumes `randomx-v2-sys` as a
+path-dep and stays Pattern-C-clean. Both crates are inside the
+invariant-script scan-scope with a per-crate Pattern C exemption
+list.
+
+**Invariant-script extension pin.** The current
+[`scripts/ci/check_randomx_crate_invariants.sh`](../../scripts/ci/check_randomx_crate_invariants.sh)
+scans `rust/shekyl-pow-randomx/` and asserts the Pattern A
+(`#[no_mangle]` absence), Pattern B (`extern "C"` absence in
+non-FFI-shim path) and Pattern C (per-file FFI exemption)
+invariants. Round 1 pins the extension shape:
+
+1. **Scan-scope extension.** Add `rust/randomx-v2-sys/` and
+   `rust/shekyl-randomx-differential/` to the script's
+   `CRATE_SRC_ROOTS` array.
+2. **Per-crate Pattern C exemption.** Add a `CRATE_PATTERN_C_EXEMPT`
+   set: `{rust/randomx-v2-sys/}`. The script's Pattern C check
+   skips files under exempt crates; the new
+   `shekyl-randomx-differential` crate is **not** exempt
+   (consumes `randomx-v2-sys` via Rust types; no direct
+   `extern "C"`).
+3. **Pattern A + B preservation.** Both new crates honor
+   Pattern A (no `#[no_mangle]`) and Pattern B (no `extern "C"`
+   outside the exempt `randomx-v2-sys` source files). The
+   `randomx-v2-sys` crate carries `extern "C"` declarations
+   in `rust/randomx-v2-sys/src/lib.rs` (or analogous); no
+   `#[no_mangle]` anywhere.
+
+**CI wiring extension pin.** The current invariant-script CI
+step in `.github/workflows/build.yml` continues to run; the
+extended scan-scope is exercised by the same step (no new
+workflow steps needed; the script's exit code is the
+gate).
+
+**Reversion clause.**
+
+- *Rejection.* (a) ungate-and-document rejected on the
+  "continuous discipline as inheritance prevention" framing
+  per [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc);
+  (b) inline `extern "C"` with per-file exemption rejected
+  because the workspace-wide grep gate's "binary present /
+  absent" property weakens when per-file exemptions
+  proliferate.
+- *Reopening criteria.* Reopen toward (b) if R1-D2 reopens
+  toward (b) inline `extern "C"` (the per-crate exemption
+  would migrate to per-file); reopen toward (a) if a future
+  crate-architecture restructuring eliminates the per-crate
+  exemption surface entirely.
+- *Re-evaluation shape.* Per A2 audit-against-actual-code:
+  any Round-N reopening cites the substrate evidence —
+  R1-D2 reopening trigger, crate-restructuring evidence,
+  or a script-level pattern that supersedes per-crate
+  exemption.
 
 ### R1-D14 — Equivalent-cache-state precondition
 
@@ -1598,7 +2466,106 @@ sub-disposition (full vs. subset vs. hash) closes
 substrate-anchored against the measured runner-class memory
 ceiling.
 
-**Round 1 disposition: TBD.**
+#### Round 1 disposition (closes R1-D14)
+
+**Close at default expectation.** Cache-state byte-equivalence
+precondition is (b) — explicit upstream per-seedhash test that
+runs before any per-`(seedhash, data)` byte-equality test
+against that seedhash's `compute_hash` output.
+
+**F1 comparison-shape pin (sub-disposition).** **SHA-256 of full
+cache by default + full-cache byte-diff mode behind a
+`--debug-cache-divergence` post-failure flag.**
+
+- **Default precondition test** (every harness run): for each
+  seedhash in the corpus, derive both the Rust `PreparedCache`
+  (via `PreparedCache::derive(seedhash)` per the Phase 2F
+  R3-frozen API surface) and the C cache (via
+  `randomx_alloc_cache` + `randomx_init_cache`); compute
+  SHA-256 of the full 256 MiB Rust cache and SHA-256 of the
+  full 256 MiB C cache; assert byte-equality of the two
+  SHA-256 outputs (32-byte comparison). Memory peak per
+  seedhash: ~280 MiB (two 256 MiB derives held in memory
+  concurrently while computing each side's SHA-256
+  incrementally, or sequentially with ~256 MiB peak if the
+  SHA-256 is computed first-side-then-second-side; the
+  per-seedhash sequence in code holds at most one
+  Rust + one C cache at a time → ~512 MiB peak across both
+  sides only if both are held; sequentially-released keeps
+  peak at ~256 MiB).
+- **`--debug-cache-divergence` mode** (manual post-failure
+  diagnostic): after a precondition test SHA-256 mismatch,
+  the harness operator re-runs with
+  `--debug-cache-divergence --seedhash <hex>`; that mode
+  performs the full 256 MiB × 2 byte-by-byte diff and reports
+  the first divergent offset, the surrounding window
+  (e.g., 64 bytes around the offset), and the implied
+  divergence-class (e.g., Argon2d-512 fill divergence vs.
+  superscalar-program divergence based on the offset's
+  position in the cache's structure).
+
+**Memory pressure reasoning.** Per F5 (R1-D12 close) runner
+class `ubuntu-latest` has 16 GB RAM. The default SHA-256 mode
+peak (~280–512 MiB per seedhash) fits with ample headroom; the
+`--debug-cache-divergence` mode peak (~512 MiB strict) still
+fits but is paid only on manual invocation. Substrate
+verified: even under R1-D9's concurrent test (which holds
+RSS at 640 MiB per F4), the precondition tests run
+sequentially per seedhash *before* the concurrent test begins,
+not concurrently — so the precondition memory pressure does
+not stack with R1-D9's working set.
+
+**R1-D11 dependency cross-reference.** The R1-D11 structured
+failure output includes `rust_cache_sha256` + `c_cache_sha256`
+fields (per R1-D11 close); under R1-D14 (b)-then-(iii), those
+fields are populated from the precondition test's SHA-256
+computations. A precondition test failure aborts the corpus
+pass for that seedhash before any per-`(seedhash, data)`
+byte-equality test runs, so a divergent-cache-sha256 in the
+R1-D11 failure output is a harness bug (the precondition
+should have caught it first) and surfaces clearly.
+
+**Comparison ordering pin.** Rust side runs first per seedhash;
+C side runs second. Substrate: minor stylistic preference for
+"derive new cache via the system-under-test path first,
+ground-truth oracle second" — a Rust-side panic during
+derivation is the more interesting failure class (the C side
+is the ground truth; a C-side panic means the precondition
+itself is broken, not the cache pair). The ordering is a
+documented harness convention, not a load-bearing test
+property.
+
+**Reversion clause.**
+
+- *Rejection.* (a) implicit rejected on failure-mode-separability
+  per §2.5 leg-3 catch-of-last-resort framing (cf. Round-0
+  amplification block); (c) inlined-per-call rejected on cost
+  (re-deriving caches per `compute_hash` call ≈ 16×8 × 6–8 s
+  per per-PR run > the entire per-PR wall-clock budget).
+  (i) full-cache-diff default-mode rejected on memory pressure
+  (peak ~512 MiB per seedhash × every-harness-run is wasteful
+  when (iii)'s SHA-256 collapses the comparison cost to
+  ~280 MiB per seedhash); (ii) deterministic-subset default
+  rejected on diagnostic completeness (a divergence outside
+  the sampled region passes silently — leg-3's catch-of-last-resort
+  surface is exactly what (ii) thins).
+- *Reopening criteria.* Reopen toward (i) full-cache-diff
+  default-mode if a future divergence surfaces and the
+  `--debug-cache-divergence` flag's manual-re-run cost proves
+  unacceptable (e.g., the divergence is non-reproducible
+  outside CI, so the operator cannot manually re-run; or the
+  divergence-class diagnostic cost exceeds the budget for a
+  release-gate review). Reopen toward (iii) sub-disposition
+  alternatives (e.g., per-row hash + per-row diff) if the
+  current SHA-256-of-full-cache shape proves too coarse —
+  i.e., the cache structure has sub-regions whose divergence
+  behavior would be diagnostically useful to separate
+  (Argon2d-512 fill region vs. superscalar-program region).
+- *Re-evaluation shape.* Per A1 + A4: a Round-N design-round
+  entry citing the divergence's `(seedhash, …)` artifact and
+  the comparison-shape extension; the harness's `--mode`
+  surface extends with the new precondition variant per
+  R1-D8's subcommand discipline.
 
 ---
 
@@ -1651,6 +2618,99 @@ disposition). The framing is cross-referenced from §2.5's
 Round-0 amplification and from R1-D4 / R1-D5 / R1-D6 / R1-D8
 default-expectation rationales.
 
+### Round 1 disposition (re-anchor §4 close to Round 2)
+
+**Substrate-anchored deferral, not drop.** The §4 threat-model
+close is **deferred from Round 1 to Round 2**, substrate-anchored
+against the
+[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+A3 timing discipline: "Threat-model addenda is typically a **late
+design-rounds** discipline (often Round 3–4): after feature
+completeness, before closure. At Round 1 the design is not yet
+stable enough to adversarially probe; at Round 5-only it is too
+late." Round 1 closes 14 substrate-anchored dispositions plus
+introduces F1–F5 substrate findings against Round 0 defaults; the
+Round 1 close is the **closed-disposition substrate** that
+Round 2's threat-model pass adversarially probes, not a frozen
+design that the threat-model pass cannot reshape.
+
+**Round-2-close obligation (inherits the Round-0 corpus-coverage
+framing).** The Round-0 Round-1-close obligation
+(corpus-coverage-as-leg-3-completeness; cf. block above)
+re-anchors as the **Round-2-close obligation** with no content
+change: the three corpus-coverage classes (random, adversarial,
+worst-case timing) catch different bug classes; corpus coverage
+is load-bearing as a property of the audit posture, not adjacent
+to F1–F7-style attack-class enumeration. The deferral preserves
+the obligation per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+"reject-now-with-named-reopening-criteria" — the rejection here
+is "do not close §4 at Round 1"; the reopening criterion is
+"Round 2 closes §4 against the Round-1-anchored substrate."
+
+**Round-2 enumeration sketch (pre-bound; Round 2 supersedes).**
+Round 2's threat-model pass enumerates 5–7 attack classes against
+the differential-harness surface itself, *not* against the
+verifier (the verifier's threat model is closed by 2c/2d/2f). The
+pre-bound categories are:
+
+1. **Corpus-generation bug.** The R1-D4 ChaCha20Rng-seeded
+   corpus or the R1-D5/D6 grinded adversarial corpus produces
+   inputs the harness's Rust + C sides both *agree* on, but
+   that agreement is itself wrong (e.g., a corpus generator
+   bug that produces inputs both sides reject identically,
+   silently bypassing the byte-equality check).
+2. **R1-D14 precondition bypass.** A future harness-side change
+   accidentally disables the SHA-256 cache-precondition test
+   (cf. R1-D14 disposition); per-`(seedhash, data)` tests then
+   run against potentially-divergent caches and silently pass
+   when the divergence happens to produce identical hash output
+   for some `(seedhash, data)` pair.
+3. **CMake-trigger bypass.** A future CI workflow misconfigures
+   the harness build (e.g., `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON`
+   without `BUILD_RANDOMX_V2_MINER_LIB=ON`, which R1-D3's (c)
+   prevents by construction — but a future R1-D3 revert could
+   reintroduce); the harness builds successfully but links
+   against a stale `shekyl_randomx_v2` artifact, surfacing
+   stale-cache divergences as harness-bug noise.
+4. **R1-D11 failure-output incompleteness.** A future divergence
+   surfaces but the R1-D11 structured-failure-output format
+   omits a load-bearing field; reviewer diagnosis is bounded
+   by what the format includes (cross-link to R1-D10's
+   future-deferred reopen and R1-D14's `--debug-cache-divergence`
+   diagnostic mode).
+5. **CacheStore `Arc` retention regression.** A future Phase 2F
+   caller-side regression breaks the F2 capacity-2 invariant
+   under R1-D9's concurrent test; the test's RSS-bound
+   assertion (640 MiB per F4) catches the regression, but a
+   regression that breaks the RSS-bound assertion's
+   methodology (e.g., `/proc/self/statm` reading the wrong
+   field) silently misses the regression.
+6. **Adversarial-corpus drift.** The R1-D5 grinded seedhashes
+   become stale if the C reference's `RANDOMX_FREQ_*`
+   distribution (`configuration.h:88–125`) shifts (V4
+   transition or a fork-pin advance per §1.7); the
+   adversarial corpus's "heavy" criterion no longer matches
+   the v2.x generator's output, and the worst-case ratio
+   test runs against effectively-random seedhashes.
+7. **Reviewer-blind nightly failures.** If R1-D12's nightly
+   failure handling proves inadequate (GitHub email
+   notifications missed; no automatic issue-opening), nightly
+   regressions persist for days/weeks before discovery; the
+   cadence-vs-discovery-latency calculus reopens.
+
+The seven pre-bound categories above are **scaffolding for
+Round 2**, not Round 2's closed enumeration. Round 2's pass
+adversarially probes the Round-1-closed substrate and may
+surface additional classes, collapse some into others, or
+re-prioritize disposition (cf. [Phase 2c §5.11.5](./RANDOMX_V2_PHASE2C_PLAN.md)
+threat-model objectives shape). Round 2 also discharges the
+corpus-coverage-as-leg-3-completeness Round-2-close obligation
+explicitly (the obligation is not closed by enumerating the
+seven categories above; it is closed by the Round-2 framing
+naming corpus coverage as substrate-load-bearing in the same
+sense the seven categories are substrate-load-bearing).
+
 ---
 
 ## 5. Implementation hand-off contract (Round-N placeholder)
@@ -1675,6 +2735,104 @@ precedent.
 explicitly so a Round-N close fills it against the closed
 §3 R1-D* dispositions.
 
+### Round 1 disposition (initial substance for §5, pre-Round-2 freeze)
+
+The Round 1 hand-off contract enumerates the surfaces the 2g
+implementation PR lands. Each row pins the surface, its visibility,
+and the R1-D# disposition it closes against. The contract freezes
+at Round-N close (current Round 1; superseded if Round 2 finds a
+substrate-anchored reshape). The implementation PR cannot drift
+from this table; surfaces not listed are out-of-scope-by-omission
+per [Phase 2F §5](./RANDOMX_V2_PHASE2F_PLAN.md) precedent.
+
+#### §5.1 Harness crate (`rust/shekyl-randomx-differential/`)
+
+| # | Surface | Visibility | Anchor | Notes |
+|---|---|---|---|---|
+| 5.1.1 | `[[bin]]` `shekyl-randomx-differential` | binary | R1-D1, R1-D7, R1-D8, R1-D9, R1-D11 | Single binary; subcommand-dispatched via `--mode={correctness,worst-case,latency,concurrent}` |
+| 5.1.2 | `[lib]` `shekyl_randomx_differential` | library (`#[doc(hidden)]`) | R1-D7 | Test-harness surface; consumed by `tests/`; not a public-API crate |
+| 5.1.3 | `src/main.rs` | binary entry point | R1-D1, R1-D11 | Argparse + subcommand dispatch + JSON-to-stderr failure output per R1-D11 |
+| 5.1.4 | `src/lib.rs` | library entry point | R1-D7 | Re-exports modules below for `tests/` consumption |
+| 5.1.5 | `src/corpus_random.rs` | `pub(crate)` | R1-D4 | `ChaCha20Rng`-seeded random corpus generator; 32-byte seed pinned per R1-D4 |
+| 5.1.6 | `src/adversarial_corpus.rs` | `pub(crate)` | R1-D5, R1-D6 | Committed hex byte arrays for adversarial seedhashes + u128 edge-case data; tagged by class (CFROUND, FDIV_M, Cache-miss, CBRANCH, Combined-heavy, div-by-zero, signed-div overflow, shift-by-width, u128-trunc-high) |
+| 5.1.7 | `src/cache_precondition.rs` | `pub(crate)` | R1-D14 | SHA-256 cache-equivalence precondition test; `--debug-cache-divergence` mode performs byte-by-byte diff |
+| 5.1.8 | `src/c_oracle.rs` | `pub(crate)` | R1-D2 | Thin wrapper over `randomx-v2-sys` `extern "C"` declarations; lifetime + error-translation discipline |
+| 5.1.9 | `src/rust_subject.rs` | `pub(crate)` | R1-D14, Phase 2F §5 | Calls `PreparedCache::derive` + `compute_hash` per the Phase 2F R3-frozen public surface; no internals access |
+| 5.1.10 | `src/mode_correctness.rs` | `pub(crate)` | R1-D4, R1-D5, R1-D6, R1-D14 | Per-seedhash: precondition (R1-D14) then per-data byte-equality (R1-D4 + R1-D5 + R1-D6) |
+| 5.1.11 | `src/mode_worst_case.rs` | `pub(crate)` | R1-D8 | Per-(adversarial-seedhash, u128-edge-data) per-hash latency measurement; aggregates median and per-class breakdown |
+| 5.1.12 | `src/mode_latency.rs` | `pub(crate)` | R1-D7 | Replaces deleted `rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs`; interleaved Rust/C measurement methodology pinned per R1-D7 |
+| 5.1.13 | `src/mode_concurrent.rs` | `pub(crate)` | R1-D9 | `std::thread::spawn` workers; RSS-bound assertion via `/proc/self/statm`; byte-equality assertion per worker |
+| 5.1.14 | `src/failure_output.rs` | `pub(crate)` | R1-D11 | Structured JSON failure schema; fields enumerated in R1-D11 disposition |
+| 5.1.15 | `Cargo.toml` | manifest | R1-D1, R1-D2, R1-D4 | Workspace member; depends on `shekyl-pow-randomx` (workspace), `randomx-v2-sys` (workspace path), `rand_chacha` (workspace), `sha2` (workspace), `serde_json` (workspace, for R1-D11) |
+| 5.1.16 | `README.md` | doc | R1-D11 | How to read a failure output; how to invoke `--debug-cache-divergence`; how to re-grind the adversarial corpus (R1-D5/R1-D6 grinding budget per F3) |
+
+#### §5.2 `randomx-v2-sys` sub-crate (`rust/randomx-v2-sys/`)
+
+| # | Surface | Visibility | Anchor | Notes |
+|---|---|---|---|---|
+| 5.2.1 | `src/lib.rs` | `pub` | R1-D2 | Seven hand-written `extern "C"` declarations per R1-D2 disposition table |
+| 5.2.2 | `build.rs` | build | R1-D2, R1-D3 | Emits `cargo:rustc-link-lib=static=shekyl_randomx_v2` + `cargo:rustc-link-search=…`; the search path is configured from `BUILD_RANDOMX_V2_MINER_LIB`'s output directory per R1-D3's CMake wiring |
+| 5.2.3 | `Cargo.toml` | manifest | R1-D2 | Workspace member; build-dep none beyond stdlib; consumers list = `shekyl-randomx-differential` only |
+| 5.2.4 | `Cargo.toml` `[package.metadata.shekyl]` | metadata | R1-D2 | `fork-pin-coupled = true` marker per R1-D2 future-maintenance hardening; advances to `external/randomx-v2` require re-verifying signatures |
+| 5.2.5 | `README.md` | doc | R1-D2, R1-D13 | "This crate's only consumer is `shekyl-randomx-differential`. Pattern C invariant exempt per R1-D13. Fork-pin coupling per §1.7." |
+
+#### §5.3 Verifier-crate-side additions (`rust/shekyl-pow-randomx/`)
+
+| # | Surface | Visibility | Anchor | Notes |
+|---|---|---|---|---|
+| 5.3.1 | (none) | — | R1-D10 | R1-D10 closes at (b) — no `compute_hash_with_trace` cfg-gated entry point. The verifier crate gains zero new surfaces in 2g. |
+| 5.3.2 | **Deletion**: `tests/perf/per_hash_latency.rs` | — | R1-D7 | Placeholder deletion; the 2g implementation PR commit closing R1-D7 marks "closes Phase 2c R3-minor-2" per R1-D7's audit-trail discipline |
+
+#### §5.4 CMake wiring (`external/CMakeLists.txt`)
+
+| # | Surface | Visibility | Anchor | Notes |
+|---|---|---|---|---|
+| 5.4.1 | `option(BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS "Build the Phase 2g Rust/C differential harness" OFF)` | CMake | R1-D3 | Default OFF; implies `BUILD_RANDOMX_V2_MINER_LIB=ON` when set |
+| 5.4.2 | `if(BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS AND NOT BUILD_RANDOMX_V2_MINER_LIB)` `set(BUILD_RANDOMX_V2_MINER_LIB ON …)` | CMake | R1-D3 | Implication mechanism; warning emitted on auto-flip per R1-D3 |
+| 5.4.3 | No new CMake targets | — | R1-D3 | The harness's Cargo build runs out-of-band from CMake; CMake's role is exclusively building the C reference's static lib for `randomx-v2-sys` to link |
+
+#### §5.5 CI surface (`.github/workflows/`)
+
+| # | Surface | Visibility | Anchor | Notes |
+|---|---|---|---|---|
+| 5.5.1 | New job in `build.yml` (or new workflow file): per-PR differential-harness job | CI | R1-D12 | Cadence: per-PR; runner: `ubuntu-latest`; budget: ~7 min wall-clock per F5 |
+| 5.5.2 | New scheduled workflow: nightly differential-harness job | CI | R1-D12 | Cadence: nightly (cron); runner: `ubuntu-latest`; budget: ~25 min wall-clock per F5 |
+| 5.5.3 | Release-gate workflow entry | CI | R1-D12 | Cadence: tag-triggered; runner: `ubuntu-latest`; budget: ~10 min wall-clock per F5 |
+| 5.5.4 | Crate-invariant script extension (`scripts/check-crate-invariants.sh` or equivalent) | tooling | R1-D13 | Pattern coverage extends to `randomx-v2-sys` + `shekyl-randomx-differential`; `randomx-v2-sys` exempt from Pattern C |
+
+#### §5.6 What 2g does **not** land
+
+The implementation PR does **not** introduce:
+
+- Any new verifier-crate-side API surface (per R1-D10 (b) close)
+- Any new committed reference vectors (per §7 disposition; the C reference is runtime ground truth)
+- Any consumption of the harness's `randomx-v2-sys` from other workspace members (per R1-D13 (c) close; `randomx-v2-sys` is sole-consumer-locked to `shekyl-randomx-differential`)
+- Any cfg flag or feature gate on `shekyl-pow-randomx` for harness-only behavior (per R1-D10 (b) close; no `harness-trace` feature)
+- Any modification to the existing Phase 2F R3-frozen public surface (`PreparedCache`, `Seedhash`, `compute_hash`, `CacheStore`); the harness consumes the surface as-is
+
+#### §5.7 Drift-prevention discipline
+
+Per [Phase 2c §5.1.1](./RANDOMX_V2_PHASE2C_PLAN.md) and [Phase 2F §5](./RANDOMX_V2_PHASE2F_PLAN.md)
+precedent, the §5.1–§5.5 tables are the **only** new surfaces the
+2g implementation PR may introduce. Reviewer rejection criterion
+for the implementation PR: any file, module, function, or surface
+added by the PR that is not listed in §5.1–§5.5 (or that is listed
+in §5.6) is grounds for scope-creep rejection per
+[`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)
+"while we're here is the enemy" discipline. The implementation PR
+commit message cites the contract entry it closes against (e.g.,
+"closes §5.1.7 R1-D14 cache-precondition module").
+
+**Round 2 may reshape this contract.** Per
+[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+A1 + A3, the threat-model pass in Round 2 may surface findings
+requiring contract reshape (e.g., a Round-2 finding that the
+R1-D11 failure output needs additional fields would extend §5.1.14;
+a Round-2 finding that the §5.5.4 crate-invariant script needs an
+additional pattern would extend §5.5.4). Round 2's close folds any
+contract reshape into this table; the contract freezes at Round-N
+close.
+
 ---
 
 ## 6. Test plan (Round-N placeholder)
@@ -1689,6 +2847,99 @@ substrate it's defending.
 
 **Not in-scope for Round 0.** Round 0 names the placeholder
 explicitly.
+
+### Round 1 disposition (initial substance for §6, pre-Round-2 freeze)
+
+The test plan is the table the implementation PR's CI gates assert
+against. Each row is anchored to a closed R1-D# disposition and the
+§5 hand-off contract surface it exercises. The plan freezes at
+Round-N close (current Round 1; Round 2 may extend or reshape based
+on threat-model findings).
+
+#### §6.1 Category A: Correctness (per-`(seedhash, data)` byte-equality)
+
+| # | Test | Surface | Input | Assertion | Cadence | Anchor |
+|---|---|---|---|---|---|---|
+| T1 | `random_corpus_byte_equality` | `mode_correctness` (§5.1.10) | R1-D4 random corpus: 16 seedhashes × 8 data values (per-PR); 32 × 32 (nightly) | For each `(seedhash, data)` pair: Rust `compute_hash(prepared, data)` == C `randomx_calculate_hash(cache, vm, data)` (byte-equality of 32-byte output) | per-PR + nightly | R1-D4 |
+| T2 | `adversarial_corpus_byte_equality` | `mode_correctness` (§5.1.10) | R1-D5 adversarial-seedhash corpus × R1-D6 u128-edge-case data; union per F6 sequencing | Same per-pair byte-equality; PER-CLASS reporting in failure output (R1-D11) | nightly + release-gate | R1-D5, R1-D6 |
+| T3 | `cache_precondition_sha256` | `cache_precondition` (§5.1.7) | Every seedhash in T1/T2/T4/T5/T6 corpus | SHA-256(Rust `Cache`) == SHA-256(C `randomx_cache`); failure aborts the corpus pass for that seedhash before T1/T2 per-data tests run | per-PR + nightly + release-gate | R1-D14 |
+| T4 | `cache_precondition_byte_diff` | `cache_precondition` (§5.1.7) with `--debug-cache-divergence` | Manual: operator invokes post-T3-failure with `--seedhash <hex>` | First divergent offset + ±64-byte window logged; non-zero exit | manual post-failure | R1-D14 |
+
+#### §6.2 Category B: Performance (per-hash latency + worst-case ratio)
+
+| # | Test | Surface | Input | Assertion | Cadence | Anchor |
+|---|---|---|---|---|---|---|
+| T5 | `per_hash_latency_median` | `mode_latency` (§5.1.12) | N=1024 hashes per side, interleaved Rust/C | median(Rust per-hash wall-clock) / median(C per-hash wall-clock) ≤ 3.0× per R1-D7; report median, p95, max in `BENCH_RESULTS.md` | nightly + release-gate | R1-D7, Parent §6 |
+| T6 | `worst_case_ratio` | `mode_worst_case` (§5.1.11) | R1-D5+R1-D6 union corpus; 16 data values per seedhash | max(Rust per-hash wall-clock / C per-hash wall-clock) ≤ 5.0× per R1-D8 / Parent §6; report per-class breakdown in `BENCH_RESULTS.md` | nightly + release-gate | R1-D8, Parent §6 |
+
+#### §6.3 Category C: Thread-safety (concurrent-call correctness + RSS-bound)
+
+| # | Test | Surface | Input | Assertion | Cadence | Anchor |
+|---|---|---|---|---|---|---|
+| T7 | `concurrent_byte_equality` | `mode_concurrent` (§5.1.13) | 4 production + 1 reserve workers; 256 hashes per worker; shared `CacheStore` (capacity 2 per Phase 2F R3-D4) | (i) no panic; (ii) no deadlock (test completes within wall-clock bound = 4× single-thread bound); (iii) for each per-worker `(seedhash, data)` pair: byte-equality of Rust hash output across all workers and against C `randomx_calculate_hash` | nightly + release-gate | R1-D9, Phase 2F F2 |
+| T8 | `concurrent_rss_bound` | `mode_concurrent` (§5.1.13) | Same as T7 | RSS during concurrent execution ≤ 640 MiB (±10% tolerance) per F4; measured via `/proc/self/statm` (Linux); RSS sampled at 100 ms intervals; max sample reported in `BENCH_RESULTS.md` | nightly + release-gate | R1-D9, Phase 2F F2 |
+
+#### §6.4 Category D: Reproducibility / determinism
+
+| # | Test | Surface | Input | Assertion | Cadence | Anchor |
+|---|---|---|---|---|---|---|
+| T9 | `random_corpus_seed_determinism` | `corpus_random` (§5.1.5) | Two independent invocations with the same 32-byte seed (R1-D4 pin) | Byte-identical corpus output across invocations; assert in unit test (no external dependency) | per-PR | R1-D4 |
+| T10 | `adversarial_corpus_hash_pin` | `adversarial_corpus` (§5.1.6) | SHA-256 of the entire adversarial-corpus module's hex byte arrays | SHA-256 matches a pinned constant; failure indicates accidental drift in the committed corpus, surfaces in code review | per-PR | R1-D5, R1-D6 |
+
+#### §6.5 Category E: Failure-output contract
+
+| # | Test | Surface | Input | Assertion | Cadence | Anchor |
+|---|---|---|---|---|---|---|
+| T11 | `failure_output_schema_round_trip` | `failure_output` (§5.1.14) | Injected synthetic divergence in a test-only mode (separate `--mode=test-failure` subcommand) | Stderr emits valid JSON; required fields per R1-D11 schema present (`seedhash`, `data`, `rust_hash`, `c_hash`, `rust_cache_sha256`, `c_cache_sha256`, `mode`, `class_tag`, `timestamp`, `harness_version`, `fork_pin`); stdout emits human-readable log | per-PR | R1-D11 |
+
+#### §6.6 Category F: Build-system + crate-invariant
+
+| # | Test | Surface | Input | Assertion | Cadence | Anchor |
+|---|---|---|---|---|---|---|
+| T12 | `cmake_implication_auto_flip` | §5.4.2 | Configure with `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON` + `BUILD_RANDOMX_V2_MINER_LIB=OFF` (explicit) | CMake auto-flips `BUILD_RANDOMX_V2_MINER_LIB=ON`; warning emitted; configure succeeds | per-PR | R1-D3 |
+| T13 | `crate_invariant_script_coverage` | §5.5.4 | Run `check-crate-invariants.sh` against the workspace | Patterns A/B/D/E enforced against `shekyl-randomx-differential` + `randomx-v2-sys`; Pattern C exempted for `randomx-v2-sys` only; script exits 0 | per-PR | R1-D13 |
+| T14 | `randomx_v2_sys_sole_consumer` | §5.2.5 README invariant | `cargo metadata` query: which workspace members depend on `randomx-v2-sys`? | Exactly one consumer: `shekyl-randomx-differential`; any additional consumer is a Pattern-C-violation-by-precedent and fails the invariant check | per-PR | R1-D13 |
+
+#### §6.7 Category G: Fork-pin coupling
+
+| # | Test | Surface | Input | Assertion | Cadence | Anchor |
+|---|---|---|---|---|---|---|
+| T15 | `randomx_v2_sys_signature_audit_pin` | §5.2.4 metadata | `external/randomx-v2` HEAD commit + `randomx-v2-sys/Cargo.toml` `[package.metadata.shekyl]` `fork-pin-sha = "…"` | Metadata's pinned SHA matches `external/randomx-v2`'s HEAD SHA; a mismatch indicates the fork pin advanced without re-verifying the `extern "C"` declarations per R1-D2 hardening | per-PR | R1-D2, §1.7 |
+
+#### §6.8 Cadence summary
+
+| Cadence | Tests | Wall-clock budget (per F5) |
+|---|---|---|
+| per-PR | T1, T3, T9, T10, T11, T12, T13, T14, T15 | ~7 min (per R1-D12 F5 pin) |
+| nightly | T1 (larger corpus), T2, T3, T5, T6, T7, T8 | ~25 min (per R1-D12 F5 pin) |
+| release-gate | T2, T3, T5, T6, T7, T8 | ~10 min (per R1-D12 F5 pin) |
+| manual post-failure | T4 | bounded by operator |
+
+#### §6.9 What 2g does **not** test
+
+The test plan does **not** include:
+
+- Property-based testing (e.g., `proptest`) — corpus shape is closed at R1-D4/D5/D6 as deterministic + grinded, not generated per-test-run
+- Fuzzing (e.g., `cargo fuzz`) — out-of-scope-by-omission; corpus discipline is leg-3 backstop, not adversarial-input discovery
+- Mutation testing — out-of-scope; the harness exists to test the verifier, not the harness itself
+- Cross-platform consistency (e.g., macOS, Windows, ARM64) — out-of-scope-by-omission; the per-F5 runner pin is `ubuntu-latest` x86_64 exclusively; cross-platform divergence is a future-deferred FOLLOWUPS item per R1-D12 reopen criterion
+
+#### §6.10 Drift-prevention discipline
+
+Per [Phase 2F §6](./RANDOMX_V2_PHASE2F_PLAN.md) precedent, the
+§6.1–§6.7 tables are the **only** new test surfaces the 2g
+implementation PR introduces. Tests added during implementation
+that do not map to a T# row require a Round-2 design-round entry
+extending the table; the implementation PR commit message cites
+the T# row each new test closes against.
+
+**Round 2 may extend this matrix.** Threat-model findings in
+Round 2 may surface new test categories (e.g., a Round-2 finding
+that an additional corpus-coverage class is required adds tests
+in §6.1 or §6.2; a Round-2 finding that an additional concurrent
+race condition is suspected adds tests in §6.3). Round 2's close
+folds any extensions into this matrix; the matrix freezes at
+Round-N close.
 
 ---
 
@@ -1752,6 +3003,95 @@ rule 2 (≤10 commits, ≤5 working days).
 
 **Not in-scope for Round 0.** Round 0 names the placeholder
 explicitly.
+
+### Round 1 disposition (initial substance for §8, pre-Round-2 freeze)
+
+The 2g implementation PR lands as 10 commits on a short-lived
+branch off `dev` per
+[`06-branching.mdc`](../../.cursor/rules/06-branching.mdc)
+rule 2 (≤10 commits, ≤5 working days). Each commit closes against
+a §5 hand-off contract surface or a §6 T# test row. Per
+[`90-commits.mdc`](../../.cursor/rules/90-commits.mdc) scope
+discipline, no commit aggregates unrelated changes; per-commit
+bisection invariant is "every commit passes `cargo build
+--workspace --all-targets`, `cargo clippy --workspace
+--all-targets --keep-going -- -D warnings`, and `cargo fmt --all
+-- --check`" (the harness binary's runtime correctness is
+asserted only at C10 when CI wires the harness into the pipeline;
+intermediate commits assert build cleanliness against the
+workspace, not behavioral correctness against the C reference).
+
+#### §8.1 Commit sequence
+
+| # | Subject (≤72 chars, imperative, prefix `randomx-v2-diff:`) | §5/§6 surface closed | Bisection invariant |
+|---|---|---|---|
+| C1 | `randomx-v2-diff: introduce randomx-v2-sys crate skeleton` | §5.2.1, §5.2.3, §5.2.4 | Builds; clippy clean; `randomx-v2-sys` is in `members =` list; `extern "C"` declarations present per R1-D2 table |
+| C2 | `randomx-v2-diff: wire CMake BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS option` | §5.4.1, §5.4.2, §5.4.3 | Configure with the new option succeeds; `BUILD_RANDOMX_V2_MINER_LIB` auto-flips with warning per T12; existing CMake builds unchanged when option is OFF |
+| C3 | `randomx-v2-diff: implement randomx-v2-sys build.rs linker directives` | §5.2.2 | `cargo build -p randomx-v2-sys` succeeds when `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON` was configured; otherwise emits a clear build-time error pointing to the CMake option |
+| C4 | `randomx-v2-diff: introduce shekyl-randomx-differential crate skeleton` | §5.1.1, §5.1.2, §5.1.3, §5.1.4, §5.1.15, §5.1.16 | Builds; clippy clean; `[[bin]]` + `[lib]` targets present; `main.rs` argparse + subcommand-dispatch skeleton in place; runs with `--help` |
+| C5 | `randomx-v2-diff: implement random + adversarial corpora` | §5.1.5, §5.1.6, T9, T10 | Builds; clippy clean; T9 + T10 unit tests pass; R1-D4 32-byte seed pinned; R1-D5/R1-D6 adversarial hex byte arrays committed with per-class tags per R1-D5 / R1-D6 |
+| C6 | `randomx-v2-diff: implement cache-precondition + Rust/C oracle wrappers` | §5.1.7, §5.1.8, §5.1.9, T3, T4 | Builds; clippy clean; `--debug-cache-divergence` flag wired per T4; SHA-256 default path wired per R1-D14 + T3 |
+| C7 | `randomx-v2-diff: implement correctness + worst-case + latency modes` | §5.1.10, §5.1.11, §5.1.12, T1, T2, T5, T6 | Builds; clippy clean; subcommand dispatch routes `--mode={correctness,worst-case,latency}` to the right module; smoke-test against a 1-seedhash, 1-data corpus passes byte-equality |
+| C8 | `randomx-v2-diff: implement concurrent mode + RSS-bound assertion` | §5.1.13, T7, T8 | Builds; clippy clean; T7 + T8 pass on a 4+1-worker × 256-hash run; `/proc/self/statm` RSS-sampling methodology in place per F4 |
+| C9 | `randomx-v2-diff: implement failure-output JSON schema + delete placeholder` | §5.1.14, §5.3.2, T11 | Builds; clippy clean; T11 passes against the synthetic `--mode=test-failure` injection; `rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs` deletion commits with message "closes Phase 2c R3-minor-2" per R1-D7 audit-trail discipline |
+| C10 | `randomx-v2-diff: wire CI gates + extend crate-invariant script` | §5.5.1, §5.5.2, §5.5.3, §5.5.4, T13, T14, T15 | Per-PR + nightly + release-gate workflows configured per R1-D12 cadence; crate-invariant script extended per R1-D13; T13/T14/T15 pass in CI |
+
+#### §8.2 Bisection-invariant strengthening at the boundaries
+
+Two boundary points carry stricter invariants than the per-commit
+build-cleanliness baseline:
+
+- **C4 → C5 boundary.** After C4 (skeleton lands) and before C5
+  (corpora land), the harness binary builds and accepts `--help`
+  but cannot produce hash output. A reviewer bisecting a future
+  regression to C4 ↔ C5 sees the boundary as "before harness
+  was functional" vs. "after harness was functional"; the
+  intermediate state (C4 lands, C5 doesn't yet) is a legitimate
+  bisection-target with bounded behavior (`--help` works;
+  `--mode=*` returns a clear "corpus modules not yet wired"
+  error rather than silently producing empty output).
+- **C9 → C10 boundary.** After C9 (full harness landed; placeholder
+  deleted) and before C10 (CI wired), the harness is locally
+  runnable end-to-end but does not run in CI. A reviewer
+  bisecting a future CI regression to C9 ↔ C10 sees the
+  boundary as "harness existed but didn't run in CI" vs.
+  "harness existed and ran in CI"; the intermediate state is a
+  legitimate bisection-target with no behavioral impact on the
+  verifier (the harness is a separate workspace member; its
+  pre-CI-wiring presence doesn't affect `cargo test --workspace`
+  beyond `cargo build` cleanliness).
+
+#### §8.3 What §8.1 enforces (scope discipline)
+
+Per [`90-commits.mdc`](../../.cursor/rules/90-commits.mdc) and
+[`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)
+"while we're here is the enemy":
+
+- No commit modifies the verifier crate's public API surface
+  (`shekyl-pow-randomx`'s post-2F surface is frozen per §5.3);
+  C9's deletion is the only verifier-crate-touching commit, and
+  it deletes a placeholder, not a surface
+- No commit re-implements anything 2c/2d/2f already landed
+- No commit introduces dependencies beyond those listed in
+  §5.1.15 + §5.2.3
+- No commit re-shapes the Round 1 dispositions; any
+  implementation-time discovery that requires a R1-D# reshape
+  triggers a Round-2 design-round entry, not a commit-table
+  amendment-in-place
+
+#### §8.4 PR opening discipline
+
+The 2g implementation PR's description cites this commit table by
+§8.1 row. Each commit's subject prefix `randomx-v2-diff:` and
+contract-row citation (in the commit body) lets reviewers
+mechanically verify that every commit closes against a planned
+contract row and that no commit aggregates beyond its row.
+
+**Round 2 may extend this sequence.** Threat-model findings in
+Round 2 may add commits (e.g., a Round-2 finding requiring an
+additional test category §6.C extension adds a commit between
+C8 and C9). Round 2's close folds any new commits into this
+table; the sequence freezes at Round-N close.
 
 ---
 
@@ -1886,3 +3226,4 @@ the round-count budget.
 |-------|------|---------|
 | Round 0 (Scaffold) | 2026-05-24 | This document. Pins the substrate carry-forwards from [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §6 + §7 line 248 + Phase 2 sub-PR 2g todo, [`RANDOMX_V2_PHASE2C_PLAN.md`](./RANDOMX_V2_PHASE2C_PLAN.md) §5.11.5 + §5.11.8, [`RANDOMX_V2_PHASE2D_PLAN.md`](./RANDOMX_V2_PHASE2D_PLAN.md) §3.4, and [`RANDOMX_V2_PHASE2F_PLAN.md`](./RANDOMX_V2_PHASE2F_PLAN.md) §1.1 (current public API) + §10.1 (precursor PR) + §10.4 (`compute_hash_with_trace` pre-pin) + §10.5 (three-leg audit posture). Enumerates §3 Round 1 decision points R1-D1 (workspace placement) through R1-D14 (cache-state byte-equivalence precondition) with named option sets, criteria, default expectations, and reopen-criterion sketches. Out-of-scope items pinned in front-matter (no per-PR per-hash latency CI gate at 2g — Phase 3a-land; no binary-level `nm` check — Phase 3c-land; no 600k-block sync test — release-gate-suite-land; no parallel `Cache::derive` — FOLLOWUPS-land; no side-channel timing differential — out-of-2g; no C-side miner state-machine — parent-plan line 30 explicit). §4 threat model, §5 implementation hand-off contract, §6 test plan, §8 commit table are placeholders reserved for Round-N close. §7 generator/fixtures plan confirms 2g introduces no new committed reference vectors (the harness consumes the C reference at runtime as ground truth per 2c §5.11.5 leg 3 framing); adversarial seedhash bytes (R1-D5 + R1-D6) commit under the harness crate per the R1-D5 default expectation. §9 CI gates split between "2g adds" (per-PR byte-equality differential pass; nightly full corpus; release-gate worst-case ratio; per-hash latency placeholder body via R1-D7; concurrent-call thread-safety test via R1-D9) and "2g inherits unchanged" (`check_randomx_fpu_rounding.sh`, `check_randomx_crate_invariants.sh`, fmt/clippy/test, debug-vs-release equivalence). §10 forward path names the 3a / 3c / release-gate / documentation-closure hand-offs. Round 1 supersedes this scaffold's §3 / §4 / §5 / §6 / §8 with closed-decision content; the scaffold remains the substrate-capture provenance per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) plan-doc Round-0 framing. |
 | Round 0 calibration corrections | 2026-05-24 | Post-scaffold calibration pass against the Round 0 doc, applied as substrate-tightening additions (no decision-reopening; Round 0 closed no decisions). Eight observations incorporated. **(1)** §3 new decision point **R1-D14 (cache-state byte-equivalence precondition)** added after R1-D13: how the harness establishes Rust/C cache byte-equivalence as a precondition for the per-`(seedhash, data)` byte-equality test on `compute_hash` output; options (a) implicit / (b) explicit upstream test / (c) inlined assertion; default (b); reopen criterion against full-cache memory pressure vs. CI runner-class budget. The R1-D11 bisection-failure-mode question is bounded by R1-D14: a (a)-disposition makes R1-D11's output unable to distinguish cache-derivation from dispatch divergence even when R1-D10's optional per-iteration trace is included. **(2)** §0 **round-count expectation calibration block** added: 2g's Round 1 expected to converge in ≤3 rounds (substrate-anchored against no-new-public-API; type-system surface closed by Phase 2F Rounds 2–3); calibration precedent traced through 2c (3 rounds) / 2d (multi-round with R0-D5 pre-flight) / 2f (5+ rounds for new public API surface); expectation is reviewer-attention budget, not hard ceiling (per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc) round-count budget reopens substrate-anchored). **(3)** §1.7 **fork-pin coupling maintenance pin** added: `randomx-v2-sys`'s `extern "C"` declarations are coupled to the `external/randomx-v2` fork pin (commit `aaafe71`); any future fork-pin-advance PR diffs the new pin's `randomx.h` against the prior pin's, identifies signature changes on the 7-symbol minimal subset, updates sub-crate declarations in lockstep, and cites the signature-diff verification step in the PR description. Reopen criterion for R1-D2 / R1-D13 if upstream changes RandomX v2's C ABI. **(4)** §2.5 **Round 0 amplification: leg 3 as catch-of-last-resort** added: reframes leg 3 from "redundant safety net" to "catch-of-last-resort for leg-1/leg-2 discipline failures" (auditor-side read errors, transcription misses on details the C reference defines but the spec is silent on); 2c §5.11.8 audit-against-actual-code recurrence record cited as evidence that the discipline catches real findings before the harness is in place, but absent the catch, leg 3 would have been the catch. Corollary: corpus coverage is itself a load-bearing property of the audit posture; thin corpus coverage thins the catch-of-last-resort surface. **(5)** §3.7 R1-D7 **placeholder end-of-life audit-trail pin** added: 2c §13 R3-minor-2's `tests/perf/per_hash_latency.rs` placeholder reaches planned end-of-life under R1-D7 (c); implementation-PR commit message cites "closes Phase 2c R3-minor-2" so the audit trail is grep-discoverable per [`90-commits.mdc`](../../.cursor/rules/90-commits.mdc). Per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc) the placeholder's reversion-clause shape was always "delete on 2g's implementation"; R1-D7 (c) is the planned trigger firing, not architectural drift. **(6)** §3.9 R1-D9 **RSS-bound adversarial criterion + Phase 2F F2 backstop framing** added: success criterion bifurcated into correctness criterion (no panic, no deadlock, byte-equality of each pair of hashes for the same `(seedhash, data)` input regardless of worker) and adversarial criterion (RSS growth during concurrent execution bounded by `CacheStore`'s capacity-2 invariant per Phase 2F §4 F2 disposition: ≤ 2 × 256 MiB derived-cache holdings + worker-count × ~2 MiB scratchpad + register-file). Without the RSS-bound assertion the test verifies correctness only; with it the test backstops 2F's F2 disposition under load (catches a regression that accidentally retained `Arc`s beyond derivation scope). Round 1 pins numeric ceiling, measurement methodology (`/proc/self/statm` vs. platform equivalent), and tolerance band. **(7)** §3.10 R1-D10 **future-deferred reopen-criterion class** made explicit: R1-D10's reopen criterion is future-deferred (the trigger event — divergence + intractable bisection — has not occurred at Round-1-evaluation-time), legitimate per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc); future Round-N opening R1-D10 cites the divergence's `(seedhash, data)` pair as the reopen's substrate trigger rather than re-deriving Round-1 evidence. **(8)** §4 **Round-1-close obligation: corpus-coverage-as-leg-3-completeness framing** pinned: the three corpus-coverage classes (random per R1-D4 / adversarial per R1-D5 + R1-D6 / worst-case timing per R1-D8) catch different bug classes; thin coverage in any one class thins the residual catch capacity in that direction. Round 1's threat-model close must treat corpus-coverage as load-bearing, not adjacent to F1–F7-style attack-class enumeration; absence of explicit corpus-coverage-class framing in Round-1 close is grounds for reviewer challenge. None of (1)–(8) reopens a frozen surface from §1; all eight are substrate-tightening additions to the scaffold per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) plan-doc-Round-0 framing. |
+| Round 1 (Decisions close + §4 deferral + §5/§6/§8 substance) | 2026-05-24 | Closes all 14 §3 decision points (R1-D1 through R1-D14) at their Round-0-named default expectations, each with substrate-anchored rationale, named sub-disposition pins where the option set carried multiple branches (e.g., R1-D5 + R1-D6 corpus-storage formats, R1-D11 failure-output schema, R1-D14 SHA-256-vs-byte-diff comparison shape), and full reversion-clause shape per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc) (rejection / reopening criteria / re-evaluation shape). **Five Round-0-defaults-supporting substrate findings surfaced and pinned:** **F1** R1-D14 comparison-shape (SHA-256 of full cache by default; `--debug-cache-divergence` flag for byte-by-byte diff on post-failure manual re-run; memory pressure within 16 GB runner budget); **F2** R1-D4 numeric pins (16 seedhashes × 8 data values for per-PR cadence; 32 × 32 for nightly; bimodal block-template-shaped data-length distribution; 32-byte ChaCha20 seed; deterministic regeneration verified via T9); **F3** R1-D5 + R1-D6 grinding budget (4 hours wall-clock per class on a 16-core baseline; per-class targets enumerated for CFROUND, FDIV_M, Cache-miss, CBRANCH, Combined-heavy seedhashes + div-by-zero, signed-div overflow, shift-by-width, u128-truncation data); **F4** R1-D9 RSS-bound pin (640 MiB ceiling with ±10% tolerance, measured via `/proc/self/statm` field 2; sampled at 100 ms intervals during concurrent execution); **F5** R1-D12 runner-class pin (`ubuntu-latest` per GitHub Actions specs: 4 vCPU / 16 GB RAM / x86_64; wall-clock budgets ~7 min per-PR / ~25 min nightly / ~10 min release-gate, all within the 6 h runner ceiling). **R1-D11 ↔ R1-D14 dependency edge surfaced and absorbed (F6):** R1-D11's structured-failure-output schema includes `rust_cache_sha256` + `c_cache_sha256` fields populated from R1-D14's precondition test; a precondition test failure aborts the corpus pass for that seedhash before per-`(seedhash, data)` tests run, so a divergent-cache-sha256 in the R1-D11 failure output is a harness bug (the precondition should have caught it first). **§4 threat-model close deferred to Round 2** per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) A3 timing discipline ("threat-model addenda is typically late-design-rounds: after feature completeness, before closure"); the Round-0 Round-1-close obligation (corpus-coverage-as-leg-3-completeness framing) re-anchors as the Round-2-close obligation with no content change, and the Round-2 enumeration sketch pre-binds 7 attack classes against the differential-harness surface (corpus-generation bug, R1-D14 precondition bypass, CMake-trigger bypass, R1-D11 failure-output incompleteness, CacheStore `Arc` retention regression, adversarial-corpus drift, reviewer-blind nightly failures). **§5 implementation hand-off contract initial substance** lands: 16-row table for the harness crate (`shekyl-randomx-differential` `[[bin]]` + `[lib]` + 14 module surfaces), 5-row table for `randomx-v2-sys` sub-crate (`lib.rs` extern declarations + `build.rs` + manifests + README), 2-row verifier-crate side (no new surfaces per R1-D10 (b); placeholder deletion per R1-D7 (c)), 3-row CMake wiring (R1-D3 option + implication mechanism + zero new targets), 4-row CI surface (per-PR + nightly + release-gate workflows + crate-invariant script extension), explicit §5.6 negative-space pin (no new verifier API; no committed reference vectors; no additional `randomx-v2-sys` consumers; no `harness-trace` feature; no Phase 2F surface modification), and §5.7 drift-prevention discipline (reviewer rejection criterion for implementation-PR surfaces outside the table per [`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)). **§6 test plan initial substance** lands: 15-row test matrix across 7 categories (T1–T2 correctness; T3–T4 cache precondition; T5–T6 performance; T7–T8 thread-safety + RSS-bound; T9–T10 reproducibility; T11 failure-output schema; T12–T14 build-system + crate-invariant; T15 fork-pin coupling), cadence summary (9 per-PR / 7 nightly / 6 release-gate / 1 manual-post-failure), explicit §6.9 negative-space pin (no proptest, no fuzz, no mutation testing, no cross-platform — all out-of-scope-by-omission with future-deferred FOLLOWUPS pickup criteria), and §6.10 drift-prevention discipline. **§8 commit table initial substance** lands: 10-commit implementation-PR sequence within the [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) rule-2 ceiling (≤10 commits, ≤5 working days), each commit anchored to §5 surfaces and §6 T# rows, with per-commit bisection invariants ("every commit passes `cargo build` + `cargo clippy -D warnings` + `cargo fmt --check`"), §8.2 boundary-strengthening pins at C4→C5 (skeleton-without-corpora) and C9→C10 (harness-without-CI) for bisection legibility, §8.3 scope-discipline pin (no verifier-API modification; no re-implementation of 2c/2d/2f; no out-of-table dependencies; no in-place R1-D# reshape), and §8.4 PR-opening citation discipline. None of Round 1's closures reshapes the §1 substrate; all closures fall within the option sets enumerated at Round 0. Round 2 follows per the §0 round-count expectation (target ≤3 rounds total) and the §4 deferral pin (Round 2 closes §4 against the Round-1-anchored substrate). |
