@@ -4,6 +4,156 @@
 
 ### Added
 
+- **RandomX v2 Track A Phase 2f implementation core landed**
+  (`feat/randomx-v2-phase2f-impl`, 2026-05-23). Implements
+  [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md)
+  Round 2 + Round 3 dispositions on
+  [`rust/shekyl-pow-randomx`](../rust/shekyl-pow-randomx) in five
+  commits versus the §8 Round 3 ceiling of six (commit 5 omitted
+  per Branch A — see prediction-vs-measured reconciliation below).
+
+  - **`Seedhash` newtype + `PreparedCache` bundle** (`e687cf68b`).
+    Closes the Phase 2c-inherited consensus-correctness footgun
+    where `compute_hash(&Cache, &[u8; 32], &[u8])` carried the
+    cache and the seedhash as separate arguments — a caller passing
+    the wrong cache for a given seedhash got a wrong hash. New
+    [`src/seedhash.rs`](../rust/shekyl-pow-randomx/src/seedhash.rs)
+    introduces `pub struct Seedhash([u8; 32])` with `from_bytes` /
+    `as_bytes` / `Display` (lowercase hex per §1.1 Round 2 +
+    post-closure pin #1) replacing every `&[u8; 32]` seedhash
+    parameter site. New
+    [`src/prepared_cache.rs`](../rust/shekyl-pow-randomx/src/prepared_cache.rs)
+    bundles `Cache + Seedhash` with `PreparedCache::derive` as the
+    single public construction path; `Cache` transitions
+    `pub → pub(crate)` per §1.1 Round 2. `compute_hash` signature
+    transitions from `(&Cache, &[u8; 32], &[u8])` to
+    `(&PreparedCache, &[u8])`. Atomic codebase sweep updates every
+    in-crate call site (Phase 2c/2d tests, `vm.rs` tests,
+    `cache.rs` tests, benches) per §3.1 Round 2 sweep-discipline.
+    Per `16-architectural-inheritance.mdc`'s pre-genesis discount
+    + cost-benefit-defer-to-later anti-pattern, the substrate
+    correction lands at Phase 2F rather than V3.x.
+
+  - **`CacheStore` two-slot type** (`31aa0ff9d`). New
+    [`src/cache_store.rs`](../rust/shekyl-pow-randomx/src/cache_store.rs)
+    implements §3.1 Round 2's frozen API: `lookup`,
+    `lookup_or_derive`, `set_canonical`. Internal sync-shape per
+    §3.1 Round 2: per-slot `RwLock<Option<Arc<PreparedCache>>>`
+    (canonical non-evictable + transient displace-on-publish),
+    `Mutex<HashMap<Seedhash, Shared<DerivationFuture>>>` for
+    in-flight derivation deduplication with cleanup-on-publish
+    per §3.1 Round 2 (closes F3 thundering-herd attack on
+    novel-seedhash + F4 unbounded HashMap growth). Eleven unit
+    tests T-CS-1 through T-CS-11 per §6.1 Round 3 cover the
+    state-transition table (3-seedhash interleave attack;
+    cold-start; advance-promotes-and-demotes), in-flight dedup
+    (T-CS-7), cleanup-on-publish white-box (T-CS-8),
+    concurrent-determinism property (T-CS-9), and type-shape
+    compile-time checks (T-CS-10/11). Caller hand-off Arc-lifetime
+    discipline note in the rustdoc per §4 F2 disposition.
+
+  - **Crate-invariant grep gate** (`68086d99c`). New
+    [`scripts/ci/check_randomx_crate_invariants.sh`](../scripts/ci/check_randomx_crate_invariants.sh)
+    enforces §3.6 R1-E1 patterns A/B/C: pattern A bans imports of
+    `once_cell` / `lazy_static` / `OnceLock` / `LazyLock` (stricter
+    than module-level-static-only by rejecting at the import); pattern
+    B bans column-0 `static` declarations (function-local statics
+    live inside fn bodies and are indented; `const` items are a
+    different keyword); pattern C bans `#[no_mangle]`,
+    `#[unsafe(no_mangle)]`, `#[export_name`, `#[unsafe(export_name`,
+    and `extern "C" fn` definition form anchored at column 0
+    modulo attribute indentation (so the `lib.rs` rustdoc citation
+    of the discipline does not collide with the gate). The
+    rustfmt-rely-chain note per §3.6 Round 3 records that the
+    column-0 anchor is robust against function-local statics if
+    and only if `cargo fmt --check` is a CI gate (which it is per
+    Phase 2c R0-D6). New `.github/workflows/build.yml` step sibling
+    to the FPU-rounding step. New
+    [`tests/crate_invariants.rs`](../rust/shekyl-pow-randomx/tests/crate_invariants.rs)
+    cargo-test wrapper makes the gate runnable via `cargo test` for
+    local pre-PR checks. Verification at HEAD: zero hits across
+    `rust/shekyl-pow-randomx/src/`.
+
+  - **Cfg-gated `VmStatePool` + four-bench A/B harness**
+    (`3121b726d`). New
+    [`src/vm_pool.rs`](../rust/shekyl-pow-randomx/src/vm_pool.rs)
+    gated by `#[cfg(any(test, feature = "internal-pool-bench"))]`
+    per §3.3 Round 3. `VmStatePool::new(capacity: usize)` is a
+    runtime parameter per §3.5 R1-D5 Round 3 (panics in non-test
+    builds without the feature flag, enforcing explicit
+    configuration); `Mutex<Vec<VmState>>` storage with capacity
+    cap; `acquire()` returns a `VmStateGuard` whose `Drop` returns
+    the instance to the pool if capacity allows. `vm.rs` factors
+    `compute_hash` into a thin wrapper over `pub(crate)
+    compute_hash_inner(&mut VmState, ...)` so the production
+    no-pool path (`VmState::new()` per call) and the cfg-gated
+    pool path share one implementation; `compute_hash_inner` zeros
+    `state.fprc` on entry (the only `VmState` field with observable
+    carry-over across pooled reuse, since CFROUND writes `fprc`
+    during `execute_program` but does not reset it at boundaries).
+    Seven unit tests T-PL-1 through T-PL-7 cover acquire/release,
+    capacity bounds, and equivalence to the no-pool path. New
+    [`benches/per_call_alloc.rs`](../rust/shekyl-pow-randomx/benches/per_call_alloc.rs)
+    measures B-2 (scratchpad zero-init) + B-3 (register-file/program
+    alloc); `compute_hash_alloc.rs` extends with B-pool-off (always
+    on) + B-pool-on (under `--features internal-pool-bench`). The
+    cfg-gated approach closes the Round 1 circular-sequencing
+    problem ("can't bench the pool without implementing the pool").
+
+  - **Phase 2f A/B bench measurement — Branch A** (`a37aac054`).
+    [`BENCH_RESULTS.md`](../rust/shekyl-pow-randomx/BENCH_RESULTS.md)
+    records the §3.4 R1-D4 Round 3 disposition empirically:
+    B-pool-off 304.44 ms median (CI [303.14, 305.96]), B-pool-on
+    303.72 ms median (CI [302.71, 304.88]), B-2 48.6 µs, B-3
+    81.7 ns. Component-floor sum (B-2 + B-3) ≈ 48.7 µs caps the
+    achievable pool savings; the point-estimate A/B delta of 720 µs
+    is statistically indistinguishable from zero (95% CIs overlap
+    heavily) and structurally bounded above by the component-floor
+    cap (so the 720 µs is run-to-run measurement noise, not pool
+    benefit). **Disposition: Branch A** — achievable savings is
+    below the §3.4 Round 3 50 µs threshold; pooling produces no
+    production-relevant benefit on this hardware class. The
+    cfg-gated `VmStatePool` stays in source as a bench-only artifact;
+    §8 commit 5 (cfg-gate flip to default-on) is omitted. Phase 3a's
+    FFI shim sees the unchanged production `compute_hash` body.
+
+    **Prediction-vs-measured reconciliation** per §8 Round 3
+    discipline: prediction A held. The §8 plan-doc recorded two
+    competing predictions (Branch C plausible per PR-66's
+    hundreds-of-µs full-pipeline alloc cost; Branch A plausible
+    per modern allocators amortizing 2 MiB zero-init to tens of
+    µs). B-2 measured at 48.6 µs on this hardware (mmap-backed
+    glibc on kernel 6.12, large-page-aware allocator) is consistent
+    with the Branch A framing; PR-66's per-call full-pipeline cost
+    (~300 ms) is dispatch-loop dominated (2048 iterations × 8
+    chains × per-iter AES + scratchpad RW + dataset reads), not
+    allocation-specific. Pooling can amortize only allocation cost;
+    the component-floor cap is structurally below Branch B/C
+    thresholds. Reopening criterion per
+    [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc):
+    a hardware class with substantially different allocator
+    behavior, a Phase 3a FFI fanout pattern not captured by the
+    single-thread bench, or a Phase 2g per-hash-latency surface
+    on production-target hardware that yields A/B delta ≥ 100 µs
+    reopens the disposition via a fresh §3.4 pin in the relevant
+    plan-doc.
+
+  **§9 gate confirmation (HEAD = `a37aac054`):** Format `cargo fmt
+  -p shekyl-pow-randomx -- --check` ✓; Lint `cargo clippy -p
+  shekyl-pow-randomx --all-targets -- -D warnings` ✓ (feature off);
+  Lint `cargo clippy -p shekyl-pow-randomx --all-targets --features
+  internal-pool-bench -- -D warnings` ✓ (feature on); Test `cargo
+  test -p shekyl-pow-randomx --release -- --test-threads=1` ✓ (117
+  passed, 2 ignored — T6/T7 superseded by Phase 2d's T16; 4
+  crate_invariants integration tests passed; 1 perf placeholder
+  ignored — T17 per-hash latency Phase 2g deliverable); Doc `cargo
+  doc -p shekyl-pow-randomx --no-deps` ✓; FPU unsafe grep
+  `scripts/ci/check_randomx_fpu_rounding.sh` ✓ (inherited from 2d);
+  Crate-invariant grep `scripts/ci/check_randomx_crate_invariants.sh` ✓
+  (new gate landed in commit 3); Bench delta informational —
+  `compute_hash_alloc::per_call` 307.42 ms vs. Phase 2d baseline
+  303.60 ms (+1.27%; under §9's ±10% regression-trigger threshold).
+
 - **RandomX v2 Track A Phase 2f — plan-doc front-matter staleness
   corrections** (`chore/randomx-v2-phase2f-plan`, 2026-05-23).
   Addresses PR #71 review findings (4 items, all header drift
