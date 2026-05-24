@@ -155,6 +155,70 @@
   303.60 ms (+1.27%; under §9's ±10% regression-trigger threshold).
 
 - **RandomX v2 Track A Phase 2f — review-cycle fix (PR #72
+  Copilot finding NF8, fifth pass)**
+  (`feat/randomx-v2-phase2f-impl`, 2026-05-24). One finding
+  surfaced by the fifth Copilot review pass against `84d5ba72a`
+  and addressed in-place. NF8 is a documentation-vs-implementation
+  discrepancy in the cargo-test wrapper's rustdoc claim about its
+  regression-detection role; the architectural disposition is
+  unchanged, and the fix tightens the substrate by expanding
+  scan scope rather than weakening the documented claim.
+
+  - **NF8 — `tests/crate_invariants.rs` rustdoc claimed an active
+    regression-detection mechanism the scan scope did not
+    realize.** The cargo-test wrapper preamble described "would-match"
+    comments inside `tests/crate_invariants.rs` as a positive
+    regression-detection surface — if a future patch un-anchored
+    one of the patterns, the in-comment citations would start
+    matching and the gate would fire. The mechanism is real
+    *only if* the file is in scan scope; pre-NF8, the script's
+    `CRATE_SRC="rust/shekyl-pow-randomx/src"` constant excluded
+    the test directory entirely, so the regression-detection
+    claim was a fiction.
+
+    **Fix.** Expanded `CRATE_SRC` from a single path to an
+    array `("rust/shekyl-pow-randomx/src",
+    "rust/shekyl-pow-randomx/tests",
+    "rust/shekyl-pow-randomx/benches")` in
+    [`scripts/ci/check_randomx_crate_invariants.sh`](../scripts/ci/check_randomx_crate_invariants.sh).
+    The recursive `grep` arm gains `--include='*.rs'` to skip
+    C/C++ reference-vector generators at
+    `tests/vectors/reference/<primitive>/_generator/*.{c,cpp}`
+    (legitimate column-0 `static` declarations under C/C++
+    semantics; out of scope for a Rust-targeted invariant gate).
+    The per-file `awk` multi-line scanner already iterated via
+    `find ... -name '*.rs'` and picked up the change
+    automatically. The verifier crate's `tests/` and `benches/`
+    directories carry zero column-0 banned shapes today, so the
+    scope expansion is mechanical with no false-positive surface.
+
+    **Verification.** Plant-revert positive-side tests across
+    both new scope arms: `use std::sync::OnceLock;` plant in
+    `tests/` → gate FAILS; multi-line bypass plant in `benches/`
+    → gate FAILS; column-0 `static` plant in `tests/` → gate
+    FAILS; `pub extern "C" fn` plant in `benches/` → gate FAILS;
+    baseline → gate PASSES. **Regression-detection reality
+    check:** simulated un-anchoring of Pattern A (drop the `^`
+    from the regex) fires the gate from multiple in-scope
+    sources: (1) the
+    [`tests/crate_invariants.rs:146-147`](../rust/shekyl-pow-randomx/tests/crate_invariants.rs)
+    would-match comments, exactly as the rustdoc claim
+    describes; (2) legitimate function-local indented
+    `use std::sync::OnceLock;` statements inside
+    `#[cfg(test)] mod tests { }` blocks at
+    `src/cache_store.rs:596`, `src/vm.rs:2767`, and
+    `src/vm.rs:3342`, which the column-0 anchor was protecting
+    and would un-protect under regression. The mechanism is
+    doubly real with the expanded scope.
+
+    **Documentation.** Updated the
+    [`tests/crate_invariants.rs`](../rust/shekyl-pow-randomx/tests/crate_invariants.rs)
+    preamble to explicitly cite the NF8 fix and the now-real
+    regression-detection mechanism, naming the scope expansion
+    (`src/` → `src/` + `tests/` + `benches/`) as the substrate
+    change.
+
+- **RandomX v2 Track A Phase 2f — review-cycle fix (PR #72
   Copilot finding NF7, fourth pass)**
   (`feat/randomx-v2-phase2f-impl`, 2026-05-24). One finding
   surfaced by the fourth Copilot review pass against `321b89edb`

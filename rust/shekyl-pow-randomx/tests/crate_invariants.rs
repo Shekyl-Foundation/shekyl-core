@@ -12,14 +12,25 @@
 //! without depending on CI infrastructure (the gate also runs as
 //! a `build.yml` step sibling to the FPU step).
 //!
-//! The cargo-test layer also functions as a *positive* check: a
-//! test below intentionally introduces commented-out docstring
-//! examples of each pattern A/B/C, ensuring the test would fail
-//! if the script's logic regressed (the comments themselves are
-//! lines beginning with `//` and so are not matched by any of the
-//! three column-0 / leading-whitespace-anchored regexes; if a
-//! future patch unanchored a pattern, the comments would start
-//! matching and the assertions below would expose the regression).
+//! The cargo-test layer also functions as a *positive* check: the
+//! comment block below intentionally introduces commented-out
+//! "would-match" examples of each pattern A/B/C plus the Pattern A
+//! multi-line bypass closure (PR #72 NF7), ensuring the test would
+//! fail if the script's logic regressed. The comments themselves
+//! are lines beginning with `//` and so are not matched by any of
+//! the three column-0 / leading-whitespace-anchored regexes today;
+//! if a future patch unanchored a pattern, the comments would start
+//! matching and the assertions below would expose the regression.
+//!
+//! The mechanism is real (per PR #72 NF8 fix) because the script's
+//! scan scope was expanded from `src/` to
+//! `src/` + `tests/` + `benches/`. Before the NF8 fix the would-match
+//! examples lived in `tests/crate_invariants.rs` outside scan scope,
+//! so a hypothetical un-anchoring regression would not have been
+//! caught — the file's own comments could not fire the gate. With
+//! the expanded scope, this file is one of the inputs grep'd at
+//! every script invocation; the would-match examples are now in
+//! scope and form an active regression-detection surface.
 //!
 //! # Portability
 //!

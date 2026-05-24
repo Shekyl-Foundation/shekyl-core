@@ -44,12 +44,39 @@
 
 set -euo pipefail
 
-CRATE_SRC="rust/shekyl-pow-randomx/src"
+# Scan scope: the verifier crate's `src/` (production), `tests/`
+# (cargo-test integration targets), and `benches/` (criterion bench
+# targets). The discipline applies uniformly: the column-0 anchor on
+# Patterns A/B and the leading-whitespace anchor on Pattern C ban
+# *module-level* banned shapes regardless of which compilation unit
+# (lib / test / bench) the source belongs to. Including `tests/`
+# closes the PR #72 NF8 finding — the cargo-test wrapper at
+# `tests/crate_invariants.rs` carries documentary "would-match"
+# examples whose claimed regression-detection role (a future
+# pattern-unanchoring would cause them to start matching) is real
+# only if the file is in scan scope. The expansion to `benches/`
+# applies the same discipline to bench infrastructure for
+# consistency with the verifier-crate-wide framing.
+#
+# The intent of the per-pattern anchors is preserved: function-local
+# `OnceLock` / `static` declarations inside `#[cfg(test)] mod tests`
+# blocks remain allowed (they are indented per rustfmt and so fail
+# the column-0 anchor), and `extern "C" { fn foo(); }` *import*
+# blocks remain allowed (they don't carry `fn` after `"C"`). The
+# scope expansion adds no new false-positive surface today (verified
+# at landing: zero column-0 banned shapes in `tests/` or `benches/`).
+CRATE_SRC=(
+  "rust/shekyl-pow-randomx/src"
+  "rust/shekyl-pow-randomx/tests"
+  "rust/shekyl-pow-randomx/benches"
+)
 
-if [[ ! -d "${CRATE_SRC}" ]]; then
-  echo "FATAL: ${CRATE_SRC} not found" >&2
-  exit 1
-fi
+for d in "${CRATE_SRC[@]}"; do
+  if [[ ! -d "${d}" ]]; then
+    echo "FATAL: ${d} not found" >&2
+    exit 1
+  fi
+done
 
 # Pattern A: ban runtime-mutable lazy-state imports at module scope
 # (rejected via column-0 anchor; in-fn `use` is indented per rustfmt).
@@ -158,27 +185,34 @@ PATTERN_FFI_EXPORT='^[[:space:]]*(#\[no_mangle\]|#\[unsafe\(no_mangle\)\]|#\[exp
 
 failures=0
 
+# `--include='*.rs'` restricts the recursive `grep` to Rust source.
+# `tests/vectors/reference/<primitive>/_generator/*.{c,cpp}` are C/C++
+# reference-vector generators (test fixtures shipped alongside the
+# generated `*.bin` vectors, not the Rust verifier code) and carry
+# legitimate column-0 `static` declarations under C/C++ semantics; they
+# are out of scope for this Rust-targeted invariant gate.
 for pat_name in PATTERN_RUNTIME_STATE PATTERN_MODULE_STATIC PATTERN_FFI_EXPORT; do
   pat="${!pat_name}"
-  HITS="$(grep -rEn "${pat}" "${CRATE_SRC}" || true)"
+  HITS="$(grep -rEn --include='*.rs' "${pat}" "${CRATE_SRC[@]}" || true)"
   if [[ -n "${HITS}" ]]; then
-    echo "FATAL: ${pat_name} matched in ${CRATE_SRC}:" >&2
+    echo "FATAL: ${pat_name} matched in ${CRATE_SRC[*]}:" >&2
     echo "${HITS}" >&2
     failures=$((failures + 1))
   fi
 done
 
 # Multi-line bypass closure for Pattern A: per-file awk pass over
-# every `.rs` source under `${CRATE_SRC}`. See SCAN_USE_BLOCKS_AWK
-# definition above for the rationale and PR #72 NF7 reference.
+# every `.rs` source under each `${CRATE_SRC[@]}` directory. See
+# SCAN_USE_BLOCKS_AWK definition above for the rationale and PR #72
+# NF7 reference.
 while IFS= read -r f; do
   HITS_MULTI="$(awk -v tokens="${RUNTIME_STATE_TOKENS}" "${SCAN_USE_BLOCKS_AWK}" "${f}")"
   if [[ -n "${HITS_MULTI}" ]]; then
-    echo "FATAL: PATTERN_RUNTIME_STATE matched multi-line use block in ${CRATE_SRC}:" >&2
+    echo "FATAL: PATTERN_RUNTIME_STATE matched multi-line use block in ${CRATE_SRC[*]}:" >&2
     echo "${HITS_MULTI}" >&2
     failures=$((failures + 1))
   fi
-done < <(find "${CRATE_SRC}" -name '*.rs' -type f)
+done < <(find "${CRATE_SRC[@]}" -name '*.rs' -type f)
 
 if [[ ${failures} -ne 0 ]]; then
   exit 1
