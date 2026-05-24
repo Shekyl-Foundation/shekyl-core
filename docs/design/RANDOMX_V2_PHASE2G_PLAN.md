@@ -49,6 +49,43 @@ passes" for "the verifier is canonical RandomX v2." The harness is
 the safety net; the leg-1 claim stands on the implementation
 discipline of 2b/2c/2d/2f.
 
+### Round-count expectation
+
+**2g's Round 1 is expected to converge in ≤3 rounds.** The
+substrate-anchored rationale: 2g introduces no new public API
+surface — the type-system surface (`Seedhash` newtype,
+`PreparedCache` bundle, `compute_hash` signature, `CacheStore`
+API, cfg-gated `VmStatePool`) was closed by Phase 2F Rounds 2
+and 3 and is frozen per §1. The substantive Round 1 decisions
+are corpus shape (R1-D4 random; R1-D5 adversarial; R1-D6 u128
+edge-case), CI placement (R1-D12 cadence + R1-D3 CMake wiring +
+R1-D13 invariant-script extension), harness wiring (R1-D1
+workspace placement + R1-D2 bindings + R1-D7 per-hash
+placeholder population + R1-D9 concurrent-call test), and
+test-infrastructure dispositions (R1-D8 worst-case; R1-D10
+trace pre-pin; R1-D11 failure-mode format; R1-D14
+cache-equivalence precondition). All fourteen are bounded by
+the §1 substrate — none require reopening a frozen surface.
+
+Calibration precedent. Round counts scale with how much
+type-system reframe the sub-PR does: 2c closed in 3 rounds
+(modest reframe — `Cache` + `Vm` + stub-NOP dispatch); 2d
+closed across multiple rounds including R0-D5 pre-flight
+(dispatch-body replacement); 2f closed in 5+ rounds (substantial
+reframe — `PreparedCache` + `Seedhash` newtype + `Cache`
+visibility transition + `CacheStore` API + cfg-gated pool).
+2g is test-infrastructure layered atop the closed type-system
+surface; the round-count budget compresses accordingly.
+
+This is a calibration expectation, not a hard ceiling. If
+Round 1's adversarial pass surfaces a substrate finding that
+warrants a Round 2 architectural reframe (e.g., a corpus-shape
+disposition that requires amending a §1-frozen surface), the
+round-count budget reopens substrate-anchored per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).
+The expectation calibrates reviewers' attention budget, not
+the rigor of any individual round.
+
 ---
 
 ## 1. Locked-by-2c/2d/2f substrate (frozen; 2g cannot change without reopening earlier rounds)
@@ -351,6 +388,32 @@ lines 81–216 + [`CMakeLists.txt`](../../CMakeLists.txt) line 503:
   `randomx_init_dataset` / `randomx_dataset_item_count` are not
   needed because 2g exercises light-mode VM only). The full
   enumeration belongs in R1-D2.
+- **Fork-pin coupling (substrate-anchored maintenance pin).** Under
+  R1-D2's default expectation (option (c): a Shekyl-introduced
+  `randomx-v2-sys` sub-crate that owns the hand-written `extern "C"`
+  declarations + `build.rs` linker directives), the sub-crate does
+  not exist in upstream `tevador/RandomX` or in Monero — it is a
+  Shekyl-side artifact whose `extern "C"` declarations must match
+  the symbol signatures exposed by
+  [`external/randomx-v2/src/randomx.h`](../../external/randomx-v2/src/randomx.h)
+  at the pinned fork commit (`aaafe71`). **The sub-crate's update
+  cadence is coupled to the fork pin, not to Shekyl's release
+  cadence.** Any future PR that advances the `external/randomx-v2`
+  fork pin (e.g., a security-patch cherry-pick from upstream, a
+  v2.0.2 update) is responsible for diffing the new pin's
+  `randomx.h` against the prior pin's `randomx.h`, identifying any
+  signature changes on the 7-symbol minimal subset (or additions
+  to the canonical export list 2g consumes), and updating the
+  `randomx-v2-sys` declarations in lockstep. The PR description
+  for any fork-pin-advance cites the signature-diff verification
+  step explicitly so reviewers do not assume the bindings
+  "just work" against the new pin. Reopen criterion for R1-D2 /
+  R1-D13: if upstream RandomX v2 changes its C ABI (e.g., adding
+  a parameter to `randomx_calculate_hash` or renaming a symbol),
+  the fork-pin-advance PR cannot land without amending the
+  sub-crate. (For comparable cross-component verification-step
+  discipline see `RANDOMX_V2_PHASE2D_PLAN.md` §3.4 "audit-against-actual-code"
+  framing applied to fork-derived dependencies.)
 
 ---
 
@@ -602,6 +665,36 @@ will return to it explicitly. Round 0 names the framing here so a
 reviewer reading 2g's plan does not mistake "the differential
 harness passes" for "the verifier is canonical RandomX v2" — the
 harness is the safety net for legs 1 and 2.
+
+**Round 0 amplification: leg 3 as catch-of-last-resort.** The
+verbatim §10.5 framing names leg 3 as "the backstop that catches
+divergences leg 1 and leg 2 missed." Operationally this is
+catch-of-last-resort: bugs that slipped past the spec-faithful
+implementation discipline (leg 1) and the C-reference audit
+discipline (leg 2) — bugs caused by auditor-side errors reading
+the wrong line range, transcribing the spec text but missing an
+implementation detail, or applying the C-reference audit to a
+surface the spec is silent on but the auditor assumed was
+spec-defined — are detectable nowhere else in the audit posture.
+The 2c §5.11.8 "audit-against-actual-code" recurrence record
+(`mp` correction at 2c Round 3; R1-D3 frequency-decode finding
+at 2d Round 1; R6-D2 frequency-completeness finding at 2d
+Round 6) shows the discipline catching real findings before the
+harness was in place; absent the discipline catching them at
+read-time, leg 3 would have been the catch. **Corollary: corpus
+coverage is itself a load-bearing property of the audit
+posture, not "completeness of testing."** Thin corpus coverage
+thins the catch-of-last-resort surface; the harness's coverage
+profile (random per R1-D4 + adversarial per R1-D5/R1-D6 +
+worst-case timing per R1-D8) is the substrate that determines
+how much of leg 3's possible catch is actually delivered. The
+distinction matters for Round 1's R1-D4 / R1-D5 / R1-D6 / R1-D8
+dispositions: under-investment in corpus shape is not
+"good-enough testing pragmatism"; it is reducing the audit
+posture's residual catch capacity. The corpus-coverage-as-leg-3-completeness
+framing is pinned in §4 (Round-1-close obligation) so Round 1's
+threat-model close treats it as load-bearing rather than
+adjacent to the F1–F7-style attack classes.
 
 ### 2.6 From `RANDOMX_V2_PLAN.md` §6 — performance targets (average ≤3.0×, worst-case ≤5.0×)
 
@@ -1024,6 +1117,23 @@ placeholder once the new home is wired. The harness crate's
 `[[bin]]` target shares code with a `[lib]` target so the test
 can consume the same in-process bindings as the binary.
 
+**Placeholder end-of-life audit-trail pin.** Phase 2c §13
+R3-minor-2 created the placeholder pending 2g implementation
+(see [`rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs`](../../rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs)
++ [`rust/shekyl-pow-randomx/Cargo.toml`](../../rust/shekyl-pow-randomx/Cargo.toml)
+lines 149–159). 2g's R1-D7 disposition (c) is the **planned
+end-of-life** for the placeholder, not architectural drift —
+the placeholder's removal is the substrate change R1-D7 (c)
+records. The implementation-PR commit message that performs
+the deletion cites "closes Phase 2c R3-minor-2" so the audit
+trail is mechanically grep-discoverable per
+[`90-commits.mdc`](../../.cursor/rules/90-commits.mdc) "reference
+the work the commit addresses." Per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+the placeholder's reversion-clause shape was always "delete on
+2g's implementation"; 2g's R1-D7 (c) is the planned trigger
+firing.
+
 **Reopen criterion (sketch for Round 1).** Reopen if (c) requires
 restructuring R1-D1 or R1-D13 in a way that re-litigates the
 workspace-placement disposition.
@@ -1120,9 +1230,33 @@ on line 30)?
   §3.5 R1-D5 Round 1 substrate-correction). Round 1 pins the
   numeric value (likely 4 + 1 = 5 on the reference machine).
 - Iteration count per worker (per-worker hashes computed).
-- Success criterion: no panic, no deadlock, byte-equality of
-  each pair of hashes for the same `(seedhash, data)` input
+- **Correctness criterion:** no panic, no deadlock, byte-equality
+  of each pair of hashes for the same `(seedhash, data)` input
   regardless of which worker computed it.
+- **Adversarial criterion (Phase 2F F2 backstop).** Memory
+  usage during concurrent execution stays bounded; no per-call
+  `Arc<PreparedCache>` leak grows the resident set
+  indefinitely. Measure RSS before the concurrent test and at
+  steady-state during the test; assert the growth is bounded
+  by `CacheStore`'s capacity-2 invariant per Phase 2F §4 F2
+  disposition (≤ 2 × 256 MiB derived-cache holdings + a small
+  per-worker working-set overhead for the `VmState` /
+  `Scratchpad` per-call allocations, bounded by worker-count ×
+  ~2 MiB scratchpad + register-file). Without the RSS-bound
+  assertion the test verifies only the correctness criterion;
+  with it the test backstops 2F's F2 disposition under load —
+  the F2 mitigation (canonical non-eviction; transient
+  displace-on-publish; `Arc` reach-through carrying live
+  references) holds in single-threaded scenarios by
+  construction, but a concurrent-load regression that
+  accidentally retained `Arc`s beyond their derivation scope
+  (e.g., a future caller-side cache or a leaked
+  `lookup_or_derive` clone) would surface as RSS growth that
+  the correctness criterion alone would not catch. Round 1
+  pins the RSS-bound numeric ceiling against the chosen
+  worker-count, the measurement methodology (`/proc/self/statm`
+  vs. equivalent platform primitive), and the assertion
+  tolerance band.
 
 **Default expectation.** (a) — `std::thread::spawn` workers.
 Minimizes dep surface; matches the daemon's threadpool-shaped
@@ -1132,7 +1266,12 @@ already-established `compute_hash`-against-`CacheStore` shape.
 **Reopen criterion (sketch for Round 1).** Reopen if a future
 daemon-side architectural change moves parallel verification to
 an async (tokio) shape; the test's substrate-anchored shape
-would re-anchor against the new daemon model.
+would re-anchor against the new daemon model. RSS-bound
+adversarial criterion reopens if a future caller-side discipline
+note (per [Phase 2F §3 caller hand-off Arc-lifetime
+discipline](./RANDOMX_V2_PHASE2F_PLAN.md)) authorizes longer
+`Arc` retention windows, in which case the RSS-bound ceiling
+re-anchors against the new caller-discipline bound.
 
 **Round 1 disposition: TBD.**
 
@@ -1182,6 +1321,32 @@ with the named substrate-anchored reopening criterion.
 **Reopen criterion (sketch for Round 1).** Per [Phase 2F §10.4](./RANDOMX_V2_PHASE2F_PLAN.md):
 2g's differential pass surfaces a divergence and bisection
 without per-iteration trace visibility is intractable.
+
+**Reopen-criterion class (post-closure pin).** The R1-D10
+reopen criterion is **future-deferred**, not substrate-anchored
+at Round-1-evaluation-time. There is no Round-1-time test of
+the criterion — it fires only at a future Round-N+M when an
+actual divergence surfaces and bisection from final-hash output
+proves intractable. This contrasts with the substrate-anchored
+reopen-criterion shape of (e.g.) R1-D5 ("reopen if grinding
+wall-time on the reference machine exceeds 1 day"), which is
+evaluable against current-Round-1 substrate. Both classes are
+legitimate per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+"reject-now-with-named-reopening-criteria" — the discipline's
+load-bearing requirement is that the criterion be *named*
+specifically enough that a future maintainer can determine
+whether it has fired without re-deriving the original
+reasoning. Future-deferred criteria satisfy this when the
+trigger event itself is future-only (a divergence that has not
+yet occurred at Round-1-evaluation-time). 2F §10.4's
+post-closure pin used the same future-deferred class for the
+pre-pin; R1-D10's reopen is the same shape inherited forward.
+A future Round-N opening R1-D10's reopening does not need new
+Round-1 evidence; the divergence itself is the
+substrate-anchored evidence. The §11 round-history entry
+opening that reopening cites the divergence's `(seedhash,
+data)` pair and the bisection-attempt artefact as the reopen's
+substrate trigger.
 
 **Round 1 disposition: TBD.**
 
@@ -1340,6 +1505,101 @@ re-evaluates (a) vs. (b).
 
 **Round 1 disposition: TBD.**
 
+### R1-D14 — Equivalent-cache-state precondition
+
+**Decision.** How does the harness establish cache-state
+byte-equivalence between Rust and C as a **precondition** for
+the per-`(seedhash, data)` byte-equality test on `compute_hash`
+output?
+
+**Substrate.** The byte-equality test compares Rust-side
+`compute_hash(&prepared, data)` output against C-side
+`randomx_calculate_hash(cache, vm, data, hash_out)` output. For
+the comparison to be meaningful — i.e., for a divergence to
+mean "the implementations disagree" rather than "the inputs
+disagree" — both sides must operate against byte-identical
+cache state derived from the same seedhash. The Rust side
+derives via `PreparedCache::derive(seedhash)`; the C side
+derives via `randomx_init_cache(cache, seedhash, seedhash_size)`.
+If these two paths produce byte-different caches for the same
+seedhash, the byte-equality test is testing the wrong thing —
+"given divergent caches, do divergent hashes result?" rather
+than "given the same cache, do the implementations agree?"
+
+**Options.**
+
+- **(a)** **Implicit.** Assume the spec-faithful implementation
+  discipline (leg 1 per §2.5) makes the two cache-derivation
+  paths byte-identical; do not test the assumption. Failure
+  mode: a `compute_hash`-output divergence cannot be
+  attributed to cache-derivation vs. dispatch — the failure
+  is ambiguous between the two layers.
+- **(b)** **Explicit upstream test.** Separate harness pass
+  per seedhash derives both caches and asserts byte-equality
+  before any `compute_hash` test runs against that seedhash;
+  per-`(seedhash, data)` byte-equality on `compute_hash`
+  output is the load-bearing test. Failure mode: cache
+  divergence fails the precondition test with the seedhash
+  named; dispatch divergence fails the `compute_hash` test
+  with `(seedhash, data)` named. The two failure classes are
+  cleanly separable.
+- **(c)** **Inlined assertion.** Every per-hash test re-derives
+  both caches and asserts byte-equality before computing.
+  Functionally equivalent to (b) but pays the
+  cache-derivation cost (~150–200 ms per seedhash for
+  Argon2d-512 fill) per `compute_hash` call rather than per
+  seedhash. With ~32 + 5–10 seedhashes × N (R1-D12-tunable)
+  data values per seedhash, (c)'s redundant derivation
+  overwhelms the per-call ~300 ms cost.
+
+**Criteria.**
+
+- Failure-mode separability: (b) and (c) cleanly distinguish
+  cache-derivation vs. dispatch divergence; (a) cannot.
+- Cost: (a) pays nothing; (b) pays one extra
+  cache-derivation per seedhash (~150–200 ms × ~40 seedhashes
+  ≈ 6–8 s, one-shot per harness run); (c) pays per
+  `compute_hash` call (orders-of-magnitude more).
+- R1-D11 interaction: the bisection-divergence failure-mode
+  question (R1-D11) is bounded by R1-D14 — a (a) disposition
+  means R1-D11's output cannot distinguish cache-derivation
+  from dispatch divergence even when R1-D10's optional
+  per-iteration trace is included; the trace surfaces the
+  *symptom* (intermediate-state mismatch from instruction K
+  onward) but not the *layer* (was the cache the divergence
+  seed, or did instruction K's handler diverge?).
+
+**Pins required for Round 1.** Whether the cache-byte-equality
+test compares the full cache (256 MiB × 2 sides; significant
+memory pressure during the test) or a deterministic subset
+(e.g., first 64 KiB; sampled rows; SHA-256 of full cache);
+which side runs first; whether the test runs in the harness
+binary, the test-harness library surface (per R1-D7), or both;
+how the test reports the divergence offset when the assertion
+fails.
+
+**Default expectation.** (b) — explicit upstream test per
+seedhash. Cache-equivalence is a precondition; per-`(seedhash,
+data)` byte-equality on `compute_hash` output is the
+load-bearing test. The (a) cost (failure-mode ambiguity) is
+substrate-anchored against §2.5's leg-3-as-catch-of-last-resort
+framing: if the harness cannot distinguish a cache-derivation
+divergence from a dispatch divergence, leg 3's diagnostic
+value to a future maintainer chasing a corpus failure is
+substantially weakened. The (b) cost (one-shot ~6–8 s per
+harness run) is negligible relative to the byte-equality
+corpus pass's per-PR budget.
+
+**Reopen criterion (sketch for Round 1).** Reopen if the
+full-cache comparison's memory pressure (256 MiB × 2 = 512 MiB
+peak during the test, on top of the harness's running
+working-set) exceeds the CI runner-class budget; the
+sub-disposition (full vs. subset vs. hash) closes
+substrate-anchored against the measured runner-class memory
+ceiling.
+
+**Round 1 disposition: TBD.**
+
 ---
 
 ## 4. Threat model (Round-N placeholder)
@@ -1363,6 +1623,33 @@ inputs.
 explicitly so a Round-N pass adds substance against the
 substrate captured in §§1–3 rather than against a
 substrate-free framing.
+
+**Round-1-close obligation (corpus-coverage-as-leg-3-completeness
+framing).** Per §2.5's Round-0-amplification block, the three
+corpus-coverage classes — random per R1-D4 ("typical inputs"),
+adversarial per R1-D5/R1-D6 ("rare-path inputs"), worst-case
+timing per R1-D8 ("timing pathology") — are not redundant; they
+catch different bug classes. A random corpus catches divergences
+in opcodes that fire on common inputs; an adversarial corpus
+catches divergences in opcodes that fire on rare inputs (which
+would otherwise slip past a random corpus by definition);
+worst-case-timing tests catch timing divergences that produce
+byte-identical output but reach it through structurally different
+code paths (the Rust may match the C output but take 10× as long
+due to a different code-shape choice). Each is a different
+coverage profile of leg 3's catch-of-last-resort surface; thin
+coverage in any one class thins the residual catch capacity in
+that direction. **Round 1's threat-model close must treat
+corpus-coverage as load-bearing**, not adjacent to (or weaker
+than) F1–F7-style attack-class enumeration. This obligation is
+the substrate Round 1 closes against; the absence of explicit
+corpus-coverage-class framing in the Round-1 threat-model close
+is grounds for reviewer challenge per the §0 round-count
+expectation calibration (Round 1's three-round expectation does
+not authorize cutting corners on substrate-load-bearing
+disposition). The framing is cross-referenced from §2.5's
+Round-0 amplification and from R1-D4 / R1-D5 / R1-D6 / R1-D8
+default-expectation rationales.
 
 ---
 
@@ -1584,6 +1871,18 @@ What 2g hands off to subsequent phases:
 
 ## 11. Round history
 
+**Round-count expectation (per §0 calibration block).** 2g's
+Round 1 is expected to converge in ≤3 rounds because there is
+no new public API surface; the substantive decisions are
+corpus shape, CI placement, and harness wiring, all bounded by
+the §1 substrate. The expectation calibrates reviewer attention
+budget; it is not a hard ceiling per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+reversion-clause discipline, and substrate findings that
+warrant a Round-2 architectural reframe legitimately reopen
+the round-count budget.
+
 | Round | Date | Outcome |
 |-------|------|---------|
-| Round 0 (Scaffold) | 2026-05-24 | This document. Pins the substrate carry-forwards from [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §6 + §7 line 248 + Phase 2 sub-PR 2g todo, [`RANDOMX_V2_PHASE2C_PLAN.md`](./RANDOMX_V2_PHASE2C_PLAN.md) §5.11.5 + §5.11.8, [`RANDOMX_V2_PHASE2D_PLAN.md`](./RANDOMX_V2_PHASE2D_PLAN.md) §3.4, and [`RANDOMX_V2_PHASE2F_PLAN.md`](./RANDOMX_V2_PHASE2F_PLAN.md) §1.1 (current public API) + §10.1 (precursor PR) + §10.4 (`compute_hash_with_trace` pre-pin) + §10.5 (three-leg audit posture). Enumerates §3 Round 1 decision points R1-D1 (workspace placement) through R1-D13 (crate-invariant compatibility) with named option sets, criteria, default expectations, and reopen-criterion sketches. Out-of-scope items pinned in front-matter (no per-PR per-hash latency CI gate at 2g — Phase 3a-land; no binary-level `nm` check — Phase 3c-land; no 600k-block sync test — release-gate-suite-land; no parallel `Cache::derive` — FOLLOWUPS-land; no side-channel timing differential — out-of-2g; no C-side miner state-machine — parent-plan line 30 explicit). §4 threat model, §5 implementation hand-off contract, §6 test plan, §8 commit table are placeholders reserved for Round-N close. §7 generator/fixtures plan confirms 2g introduces no new committed reference vectors (the harness consumes the C reference at runtime as ground truth per 2c §5.11.5 leg 3 framing); adversarial seedhash bytes (R1-D5 + R1-D6) commit under the harness crate per the R1-D5 default expectation. §9 CI gates split between "2g adds" (per-PR byte-equality differential pass; nightly full corpus; release-gate worst-case ratio; per-hash latency placeholder body via R1-D7; concurrent-call thread-safety test via R1-D9) and "2g inherits unchanged" (`check_randomx_fpu_rounding.sh`, `check_randomx_crate_invariants.sh`, fmt/clippy/test, debug-vs-release equivalence). §10 forward path names the 3a / 3c / release-gate / documentation-closure hand-offs. Round 1 supersedes this scaffold's §3 / §4 / §5 / §6 / §8 with closed-decision content; the scaffold remains the substrate-capture provenance per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) plan-doc Round-0 framing. |
+| Round 0 (Scaffold) | 2026-05-24 | This document. Pins the substrate carry-forwards from [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §6 + §7 line 248 + Phase 2 sub-PR 2g todo, [`RANDOMX_V2_PHASE2C_PLAN.md`](./RANDOMX_V2_PHASE2C_PLAN.md) §5.11.5 + §5.11.8, [`RANDOMX_V2_PHASE2D_PLAN.md`](./RANDOMX_V2_PHASE2D_PLAN.md) §3.4, and [`RANDOMX_V2_PHASE2F_PLAN.md`](./RANDOMX_V2_PHASE2F_PLAN.md) §1.1 (current public API) + §10.1 (precursor PR) + §10.4 (`compute_hash_with_trace` pre-pin) + §10.5 (three-leg audit posture). Enumerates §3 Round 1 decision points R1-D1 (workspace placement) through R1-D14 (cache-state byte-equivalence precondition) with named option sets, criteria, default expectations, and reopen-criterion sketches. Out-of-scope items pinned in front-matter (no per-PR per-hash latency CI gate at 2g — Phase 3a-land; no binary-level `nm` check — Phase 3c-land; no 600k-block sync test — release-gate-suite-land; no parallel `Cache::derive` — FOLLOWUPS-land; no side-channel timing differential — out-of-2g; no C-side miner state-machine — parent-plan line 30 explicit). §4 threat model, §5 implementation hand-off contract, §6 test plan, §8 commit table are placeholders reserved for Round-N close. §7 generator/fixtures plan confirms 2g introduces no new committed reference vectors (the harness consumes the C reference at runtime as ground truth per 2c §5.11.5 leg 3 framing); adversarial seedhash bytes (R1-D5 + R1-D6) commit under the harness crate per the R1-D5 default expectation. §9 CI gates split between "2g adds" (per-PR byte-equality differential pass; nightly full corpus; release-gate worst-case ratio; per-hash latency placeholder body via R1-D7; concurrent-call thread-safety test via R1-D9) and "2g inherits unchanged" (`check_randomx_fpu_rounding.sh`, `check_randomx_crate_invariants.sh`, fmt/clippy/test, debug-vs-release equivalence). §10 forward path names the 3a / 3c / release-gate / documentation-closure hand-offs. Round 1 supersedes this scaffold's §3 / §4 / §5 / §6 / §8 with closed-decision content; the scaffold remains the substrate-capture provenance per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) plan-doc Round-0 framing. |
+| Round 0 calibration corrections | 2026-05-24 | Post-scaffold calibration pass against the Round 0 doc, applied as substrate-tightening additions (no decision-reopening; Round 0 closed no decisions). Eight observations incorporated. **(1)** §3 new decision point **R1-D14 (cache-state byte-equivalence precondition)** added after R1-D13: how the harness establishes Rust/C cache byte-equivalence as a precondition for the per-`(seedhash, data)` byte-equality test on `compute_hash` output; options (a) implicit / (b) explicit upstream test / (c) inlined assertion; default (b); reopen criterion against full-cache memory pressure vs. CI runner-class budget. The R1-D11 bisection-failure-mode question is bounded by R1-D14: a (a)-disposition makes R1-D11's output unable to distinguish cache-derivation from dispatch divergence even when R1-D10's optional per-iteration trace is included. **(2)** §0 **round-count expectation calibration block** added: 2g's Round 1 expected to converge in ≤3 rounds (substrate-anchored against no-new-public-API; type-system surface closed by Phase 2F Rounds 2–3); calibration precedent traced through 2c (3 rounds) / 2d (multi-round with R0-D5 pre-flight) / 2f (5+ rounds for new public API surface); expectation is reviewer-attention budget, not hard ceiling (per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc) round-count budget reopens substrate-anchored). **(3)** §1.7 **fork-pin coupling maintenance pin** added: `randomx-v2-sys`'s `extern "C"` declarations are coupled to the `external/randomx-v2` fork pin (commit `aaafe71`); any future fork-pin-advance PR diffs the new pin's `randomx.h` against the prior pin's, identifies signature changes on the 7-symbol minimal subset, updates sub-crate declarations in lockstep, and cites the signature-diff verification step in the PR description. Reopen criterion for R1-D2 / R1-D13 if upstream changes RandomX v2's C ABI. **(4)** §2.5 **Round 0 amplification: leg 3 as catch-of-last-resort** added: reframes leg 3 from "redundant safety net" to "catch-of-last-resort for leg-1/leg-2 discipline failures" (auditor-side read errors, transcription misses on details the C reference defines but the spec is silent on); 2c §5.11.8 audit-against-actual-code recurrence record cited as evidence that the discipline catches real findings before the harness is in place, but absent the catch, leg 3 would have been the catch. Corollary: corpus coverage is itself a load-bearing property of the audit posture; thin corpus coverage thins the catch-of-last-resort surface. **(5)** §3.7 R1-D7 **placeholder end-of-life audit-trail pin** added: 2c §13 R3-minor-2's `tests/perf/per_hash_latency.rs` placeholder reaches planned end-of-life under R1-D7 (c); implementation-PR commit message cites "closes Phase 2c R3-minor-2" so the audit trail is grep-discoverable per [`90-commits.mdc`](../../.cursor/rules/90-commits.mdc). Per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc) the placeholder's reversion-clause shape was always "delete on 2g's implementation"; R1-D7 (c) is the planned trigger firing, not architectural drift. **(6)** §3.9 R1-D9 **RSS-bound adversarial criterion + Phase 2F F2 backstop framing** added: success criterion bifurcated into correctness criterion (no panic, no deadlock, byte-equality of each pair of hashes for the same `(seedhash, data)` input regardless of worker) and adversarial criterion (RSS growth during concurrent execution bounded by `CacheStore`'s capacity-2 invariant per Phase 2F §4 F2 disposition: ≤ 2 × 256 MiB derived-cache holdings + worker-count × ~2 MiB scratchpad + register-file). Without the RSS-bound assertion the test verifies correctness only; with it the test backstops 2F's F2 disposition under load (catches a regression that accidentally retained `Arc`s beyond derivation scope). Round 1 pins numeric ceiling, measurement methodology (`/proc/self/statm` vs. platform equivalent), and tolerance band. **(7)** §3.10 R1-D10 **future-deferred reopen-criterion class** made explicit: R1-D10's reopen criterion is future-deferred (the trigger event — divergence + intractable bisection — has not occurred at Round-1-evaluation-time), legitimate per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc); future Round-N opening R1-D10 cites the divergence's `(seedhash, data)` pair as the reopen's substrate trigger rather than re-deriving Round-1 evidence. **(8)** §4 **Round-1-close obligation: corpus-coverage-as-leg-3-completeness framing** pinned: the three corpus-coverage classes (random per R1-D4 / adversarial per R1-D5 + R1-D6 / worst-case timing per R1-D8) catch different bug classes; thin coverage in any one class thins the residual catch capacity in that direction. Round 1's threat-model close must treat corpus-coverage as load-bearing, not adjacent to F1–F7-style attack-class enumeration; absence of explicit corpus-coverage-class framing in Round-1 close is grounds for reviewer challenge. None of (1)–(8) reopens a frozen surface from §1; all eight are substrate-tightening additions to the scaffold per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) plan-doc-Round-0 framing. |
