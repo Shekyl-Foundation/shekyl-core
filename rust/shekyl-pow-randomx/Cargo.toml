@@ -11,6 +11,36 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# Enables the cfg-gated `VmStatePool` + `compute_hash_with_pool` shim
+# per `docs/design/RANDOMX_V2_PHASE2F_PLAN.md` §3.3 Round 3. The pool
+# body is implemented behind `#[cfg(any(test, feature = "internal-pool-bench"))]`
+# regardless of the §3.4 R1-D4 outcome; the bench harness measures
+# both the no-pool path (always) and the pool path (only when this
+# feature is enabled). Branch A (per §3.4 Round 3) keeps the pool
+# bench-only; Branch C (per the same section) flips the cfg-gate to
+# default-on, at which point this feature flag is removed by §8
+# commit 5.
+#
+# Production builds NEVER enable this feature. The feature does not
+# carry any reverse-dependency: nothing in the workspace's
+# `[dependencies]` graph activates it. Phase 2F's CI grep gate
+# (`scripts/ci/check_randomx_crate_invariants.sh`) does not need to
+# match-against this gate, because the pool body's internal state
+# stays inside `VmStatePool`. The type is `#[doc(hidden)] pub` (so
+# the criterion bench in `benches/compute_hash_alloc.rs`, a separate
+# cargo target, can name `VmStatePool::new` and
+# `compute_hash_with_pool` across the crate boundary; `pub(crate)`
+# would forbid that). The whole `vm_pool` module is gated by
+# `#[cfg(any(test, feature = "internal-pool-bench"))]`, so the
+# no-feature production build never compiles the type at all. When
+# the type *does* compile and `Default::default()` is called outside
+# `#[cfg(test)]`, it `panic!`s to enforce the §3.5 Round 3
+# discipline that Phase 3a's FFI shim must pass an explicit
+# R1-D5-derived capacity rather than silently inheriting a stale
+# impl-PR-baked default.
+internal-pool-bench = []
+
 [dependencies]
 # AES round primitive for AesGenerator1R/4R + AesHash1R per `specs.md`
 # §§3.2-3.4. See workspace `Cargo.toml` for the verification record.
@@ -82,19 +112,38 @@ name = "cache_derive"
 harness = false
 
 [[bench]]
-# `compute_hash(&cache, &SEEDHASH, &DATA)` end-to-end under stub-NOP
-# dispatch (the Phase 2c `dispatch_instruction` NOP body; Phase 2d's
-# real per-opcode body will grow this bench's per-call cost).
-# Measures the *full pipeline* under stub-NOP, not the VmState
-# allocation skeleton in isolation. Phase 2c informational baseline
-# (~296 ms median per call on the reference machine per
-# `BENCH_RESULTS.md`); §5.8's planned ≤100 µs budget targeted the
-# allocation-only sub-bench (not landed yet) — full-pipeline numbers
+# `compute_hash(&prepared, &DATA)` end-to-end. Measures the *full
+# pipeline* (`VmState` alloc + scratchpad init + 8 chains × 2048-iter
+# execution + Blake2b chaining + final hash). Phase 2c informational
+# baseline (~296 ms median per call on the reference machine per
+# `BENCH_RESULTS.md`); Phase 2d real-dispatch update (~303 ms). Phase
+# 2F §6.3 Round 3 extends this file with B-pool-off / B-pool-on
+# A/B benches (B-pool-on requires `--features internal-pool-bench`).
+# §5.8's planned ≤100 µs budget targeted the allocation-only
+# sub-bench (B-2 / B-3 in `per_call_alloc.rs`); full-pipeline numbers
 # include the per-chain hash math + AES f/e mix + Blake2b chaining,
-# all of which dominate the one-shot allocation. R0-D12 reconciliation
-# in `RANDOMX_V2_PHASE2C_PLAN.md` §14 tracks the disposition. See
-# `benches/compute_hash_alloc.rs` for the harness rationale.
+# all of which dominate the one-shot allocation. R0-D12
+# reconciliation in `RANDOMX_V2_PHASE2C_PLAN.md` §14 tracks the
+# disposition. See `benches/compute_hash_alloc.rs` for the harness
+# rationale.
 name = "compute_hash_alloc"
+harness = false
+
+[[bench]]
+# Phase 2F §3.3 Round 3 component-floor benches (B-2 + B-3): per-call
+# allocation cost of the two heap allocations performed by
+# `VmState::new` — the 2 MiB zero-init scratchpad (B-2) and the
+# `Box<Program>` register-file synth (B-3). Their sum is the §3.4
+# R1-D4 component-floor (the "no-pool path's per-call allocation
+# cost lower bound"). Always runs; Branch A vs. Branch C disposition
+# in `BENCH_RESULTS.md` is decided by the A/B delta from
+# `compute_hash_alloc`'s `with_no_pool` vs. `with_pool` numbers, not
+# by these component benches in isolation. The component benches
+# survive Round 3 as a sanity cross-check that the no-pool A/B
+# measurement does not undercut the floor (which would indicate
+# bench misconfiguration). See `benches/per_call_alloc.rs` for the
+# harness rationale.
+name = "per_call_alloc"
 harness = false
 
 [[test]]

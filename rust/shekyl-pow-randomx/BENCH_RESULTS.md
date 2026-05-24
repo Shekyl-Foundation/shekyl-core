@@ -3,9 +3,11 @@
 Phase 2c PR-merge baseline per [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
 §5.8 + §8. Downstream phases (2d, 2f, 2g) compare against these
 numbers; regression >10% triggers investigation per the §5.8
-disposition. Phase 2d real-dispatch results below recorded per
+disposition. Phase 2d real-dispatch results recorded per
 [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2D_PLAN.md)
-§9.
+§9. Phase 2F cfg-gated A/B harness recorded per
+[`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2F_PLAN.md)
+§3.3 / §3.4 / §6.3 Round 3.
 
 ## Run conditions
 
@@ -36,6 +38,183 @@ disposition. Phase 2d real-dispatch results below recorded per
 |-------|--------|--------------------|---------|
 | `cache_derive::derive` | not re-measured | — | Phase 2d does not touch the cache derivation path. |
 | `compute_hash_alloc::per_call` | 303.60 ms | +2.6% | Real bytecode dispatch over 2048 iterations x 8 chains x 384 instructions per program; well under the §5.8 +/-10% regression-trigger threshold. |
+
+### Phase 2F cfg-gated A/B harness (commit 4)
+
+Per
+[`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2F_PLAN.md)
+§3.3 / §3.4 / §6.3 Round 3, Phase 2F lands a cfg-gated `VmStatePool`
+plus a four-bench A/B harness so the §3.4 R1-D4 pool-promotion
+disposition (Branch A / Branch B / Branch C) can be decided on
+empirical evidence rather than estimate. The pool body lives behind
+`#[cfg(any(test, feature = "internal-pool-bench"))]` regardless of
+the disposition, closing the Round 1 circular-sequencing problem
+("can't bench the pool without implementing the pool").
+
+#### Bench harness
+
+Four benches measure the production no-pool path, the cfg-gated
+pool path, and the per-call allocation components:
+
+| Bench | Source | Mode | Always-runs |
+|-------|--------|------|-------------|
+| `compute_hash_alloc::per_call` | `benches/compute_hash_alloc.rs` | Phase 2c / 2d baseline (full pipeline). | Yes |
+| `compute_hash_alloc::with_no_pool::per_call` | `benches/compute_hash_alloc.rs` | Phase 2F §6.3 Round 3 `B-pool-off` (production no-pool path; identical to `per_call` in measurement target). | Yes |
+| `compute_hash_alloc::with_pool::per_call` | `benches/compute_hash_alloc.rs`, `--features internal-pool-bench` | Phase 2F §6.3 Round 3 `B-pool-on` (cfg-gated pool path; pre-allocated `VmStatePool` of capacity 4). | Only with feature flag |
+| `per_call_alloc::vmstate_alloc_scratchpad_zeroed` | `benches/per_call_alloc.rs` | Phase 2F §6.3 Round 3 `B-2` (per-call 2 MiB zero-init scratchpad alloc). | Yes |
+| `per_call_alloc::vmstate_alloc_register_file` | `benches/per_call_alloc.rs` | Phase 2F §6.3 Round 3 `B-3` (per-call `Box<Program>` alloc). | Yes |
+
+Run instructions:
+
+```bash
+# B-pool-off + Phase 2c/2d baseline (no feature flag).
+cargo bench --bench compute_hash_alloc
+
+# B-pool-off + B-pool-on + Phase 2c/2d baseline (feature on).
+cargo bench --bench compute_hash_alloc --features internal-pool-bench
+
+# B-2 + B-3 component floor (always; no feature flag).
+cargo bench --bench per_call_alloc
+```
+
+#### Methodology
+
+The A/B disposition rule per §3.4 R1-D4 Round 3 (component-floor
+table folded into the A/B delta):
+
+| A/B delta (`B-pool-off` − `B-pool-on`) | Branch | Disposition |
+|-----------------------------------------|--------|-------------|
+| < 50 µs | Branch A | No pool. Cfg-gated pool stays in source as bench-only artifact. §8 commit 5 omitted. |
+| ≥ 50 µs and < 100 µs | Branch B | Ambiguity band; impl-PR pre-flight escalates per §3.3 Round 3 reversion clause #1. |
+| ≥ 100 µs | Branch C | Pool promoted to production. §8 commit 5 flips the cfg-gate to unconditional; `compute_hash` rewires through the pool. |
+
+The component-floor sum (B-2 median + B-3 median) is the sanity
+check that the no-pool A/B median (`B-pool-off`) does not undercut
+the per-call allocation cost lower bound. A no-pool A/B median
+below the component-floor sum would indicate bench misconfiguration
+(e.g., the `b.iter` body is being optimized out, or the
+`PreparedCache` is being re-derived inside the timed loop).
+
+Pool capacity for the bench harness is **4**, mirroring the §3.5
+R1-D5 Round 3 test-default. Phase 3a's FFI shim derives the actual
+deployment capacity via the methodology pinned at §3.5 (Round 1):
+`capacity = binding_fanout + 1` where binding fanout is
+`min(threadpool_max, m_max_prepare_blocks_threads)` at the
+daemon's runtime state. The bench's choice of 4 is informational
+for the A/B delta; capacity ≥ 1 measures the steady-state pool-hit
+cost in a single-bench-thread harness.
+
+#### Measurements (2026-05-23, commit 4 reference machine)
+
+| Bench | Median | 95% CI | Sample size | Measurement context |
+|-------|--------|--------|-------------|---------------------|
+| `compute_hash_alloc::per_call` (Phase 2c/2d baseline replay) | 307.42 ms | [306.26, 308.94] | 100 | 2048-iter dispatch over 8 chains. |
+| `compute_hash_alloc::with_no_pool::per_call` (B-pool-off) | **304.44 ms** | [303.14, 305.96] | 100 | Production no-pool path; `VmState::new()` per call. |
+| `compute_hash_alloc::with_pool::per_call` (B-pool-on) | **303.72 ms** | [302.71, 304.88] | 100 | Cfg-gated pool path; `VmStatePool::new(4)` pre-allocated outside the timed loop. |
+| `per_call_alloc::vmstate_alloc_scratchpad_zeroed` (B-2) | **47.66 µs** | [47.47, 47.87] | 200 | 2 MiB zero-init via `Box::new_zeroed_slice(N)` + `assume_init` — mirrors the production `crate::vm::alloc_zeroed_scratchpad` carve-out exactly (re-measured on review-fix commit; see §"B-2 methodology refinement" below). |
+| `per_call_alloc::vmstate_alloc_register_file` (B-3) | **93.2 ns** | [92.32, 94.30] | 200 | `Box::new(Program::default())` — re-measured alongside B-2. |
+
+Run conditions: 11th Gen Intel Core i9-11950H @ 2.60 GHz, 128 GiB
+DDR4, Debian 13 (kernel `6.12.88+deb13-amd64`), system glibc
+allocator (no `mimalloc`/`jemalloc` override), Rust workspace MSRV
+`1.85`, Criterion `0.5.1`, machine quiescent at measurement time.
+
+##### B-2 methodology refinement (review-fix commit, 2026-05-24)
+
+Initial commit-4 B-2 used `vec![0u8; N].into_boxed_slice()` as
+the zero-initialized 2 MiB allocation idiom. A PR review noted the
+discrepancy against production: `crate::vm::alloc_zeroed_scratchpad`
+goes through `Box::new_zeroed_slice(N) + assume_init`, which is
+the stabilized (Rust 1.82+) path that routes directly to the
+allocator's `alloc_zeroed`. The `vec![0u8; N]` form *also* folds
+to `alloc_zeroed` on current `rustc` via the `IsZero`
+specialization in `Vec::from_elem`, so the timing converged on
+this hardware — but the convergence is a stdlib-implementation
+property rather than a contract. The bench was switched to the
+production-mirror form to remove the dependency on that
+specialization holding across future stdlib versions.
+
+Re-measurement under the new form yielded **B-2 = 47.66 µs**
+(prev. 48.6 µs) and **B-3 = 93.2 ns** (prev. 81.7 ns; B-3's
+allocation path was not changed, so the ~14% shift is run-to-run
+variance at sub-100 ns scale). Component-floor sum:
+**~47.75 µs** (prev. ~48.7 µs). The shift is below 1 µs in
+absolute terms and well within the run-to-run noise band already
+documented for these benches; the Branch A disposition below is
+unaffected.
+
+#### A/B delta and disposition: Branch A
+
+- **Component-floor sum** (B-2 + B-3 ≈ 47.66 µs + 0.093 µs ≈ 47.75
+  µs; updated post-review-fix per §"B-2 methodology refinement"
+  above; prior estimate ≈ 48.7 µs): the theoretical maximum pool
+  savings on this hardware. Pool amortization saves at most the
+  per-call allocation cost; the component floor is the upper bound
+  on `B-pool-off − B-pool-on`.
+- **Measured A/B point-estimate delta**: 304.44 ms − 303.72 ms ≈
+  **0.72 ms ≈ 720 µs**.
+- **CI-overlap check**: the 95% CIs `[303.14, 305.96]` and
+  `[302.71, 304.88]` overlap heavily — each median lies inside the
+  other's CI. The point-estimate 720 µs delta is **statistically
+  indistinguishable from zero** at this sample size.
+- **Substrate reconciliation**: the measured 720 µs delta cannot
+  be pool savings because the component-floor analysis caps
+  achievable pool savings at ≈ 47.75 µs. The 720 µs is run-to-run
+  measurement noise (allocator state, CPU thermal/scheduling
+  variance, large-page TLB warmup) rather than pool benefit.
+
+**Disposition: Branch A** per §3.4 R1-D4 Round 3. The achievable
+pool savings (component-floor cap ≈ 47.75 µs) is below the 50 µs
+threshold; pooling produces no production-relevant performance
+improvement on this hardware class. The cfg-gated `VmStatePool`
+stays in source as a bench-only artifact (cfg-gated under
+`#[cfg(any(test, feature = "internal-pool-bench"))]`); §8 commit
+5 (cfg-gate flip to default-on) is **omitted**. Phase 3a's FFI
+shim sees the unchanged production `compute_hash` body
+(`VmState::new()` per call).
+
+#### Prediction-vs-measured reconciliation per §8 Round 3
+
+- **Predicted branch** (§8 plan-doc): two competing predictions
+  recorded — Branch C (≥ 100 µs) plausible if PR-66's per-call
+  alloc cost was dominated by scratchpad zero-init / register-file
+  alloc; Branch A (< 50 µs) plausible if modern glibc/mmap-backed
+  allocators amortize the 2 MiB scratchpad zero-init to tens of µs.
+- **Measured branch**: Branch A.
+- **Reconciliation**: **prediction A held.** B-2 measured at 47.66
+  µs (post-review-fix; initial 48.6 µs under the
+  `vec![0u8; N].into_boxed_slice()` shape) on this hardware,
+  consistent with the §8 "modern allocators amortize 2 MiB
+  zero-init to tens of µs" framing (mmap-backed glibc on Linux
+  kernel 6.12 large-page-aware allocator). PR-66's per-call
+  full-pipeline cost was dominated by dispatch-loop overhead
+  (2048 iterations × 8 chains × per-iter AES + scratchpad RW +
+  dataset reads), not allocation-specific cost. Pooling cannot
+  amortize dispatch-loop cost; only allocation cost can be
+  amortized, and the component-floor cap (≈ 47.75 µs) is below
+  the Branch B/C threshold.
+
+The substrate finding: on this hardware class, RandomX
+`compute_hash`'s per-call allocation cost is structurally below
+the threshold at which pooling produces production-relevant
+benefit. The cfg-gated pool was the right shape to land regardless
+of branch (Round 3's circular-sequencing fix); the empirical
+result confirms it stays as a bench-only artifact rather than
+becoming a production rewire.
+
+**Reopening criterion** per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc):
+the Branch A disposition reopens when (a) a hardware class with
+substantially different allocator behavior is benched and yields
+A/B delta ≥ 100 µs (e.g., an allocator without large-page
+amortization, or a CI runner where 2 MiB zero-init is in the
+hundreds-of-µs range); or (b) Phase 3a's FFI shim's binding
+fanout produces a steady-state pool-hit pattern that the
+single-bench-thread harness does not capture; or (c) Phase 2g's
+per-hash latency deliverable surfaces an A/B-delta-relevant cost
+on production-target hardware. Reopening is via a fresh §3.4
+disposition pin in the relevant phase's plan-doc, not by reflex
+re-derivation of the Round 3 cfg-gate flip.
 
 ## Threshold reconciliation
 
