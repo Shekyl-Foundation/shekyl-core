@@ -3,9 +3,11 @@
 Phase 2c PR-merge baseline per [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2C_PLAN.md)
 §5.8 + §8. Downstream phases (2d, 2f, 2g) compare against these
 numbers; regression >10% triggers investigation per the §5.8
-disposition. Phase 2d real-dispatch results below recorded per
+disposition. Phase 2d real-dispatch results recorded per
 [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2D_PLAN.md)
-§9.
+§9. Phase 2F cfg-gated A/B harness recorded per
+[`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2F_PLAN.md)
+§3.3 / §3.4 / §6.3 Round 3.
 
 ## Run conditions
 
@@ -36,6 +38,93 @@ disposition. Phase 2d real-dispatch results below recorded per
 |-------|--------|--------------------|---------|
 | `cache_derive::derive` | not re-measured | — | Phase 2d does not touch the cache derivation path. |
 | `compute_hash_alloc::per_call` | 303.60 ms | +2.6% | Real bytecode dispatch over 2048 iterations x 8 chains x 384 instructions per program; well under the §5.8 +/-10% regression-trigger threshold. |
+
+### Phase 2F cfg-gated A/B harness (commit 4)
+
+Per
+[`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2F_PLAN.md)
+§3.3 / §3.4 / §6.3 Round 3, Phase 2F lands a cfg-gated `VmStatePool`
+plus a four-bench A/B harness so the §3.4 R1-D4 pool-promotion
+disposition (Branch A / Branch B / Branch C) can be decided on
+empirical evidence rather than estimate. The pool body lives behind
+`#[cfg(any(test, feature = "internal-pool-bench"))]` regardless of
+the disposition, closing the Round 1 circular-sequencing problem
+("can't bench the pool without implementing the pool").
+
+#### Bench harness
+
+Four benches measure the production no-pool path, the cfg-gated
+pool path, and the per-call allocation components:
+
+| Bench | Source | Mode | Always-runs |
+|-------|--------|------|-------------|
+| `compute_hash_alloc::per_call` | `benches/compute_hash_alloc.rs` | Phase 2c / 2d baseline (full pipeline). | Yes |
+| `compute_hash_alloc::with_no_pool::per_call` | `benches/compute_hash_alloc.rs` | Phase 2F §6.3 Round 3 `B-pool-off` (production no-pool path; identical to `per_call` in measurement target). | Yes |
+| `compute_hash_alloc::with_pool::per_call` | `benches/compute_hash_alloc.rs`, `--features internal-pool-bench` | Phase 2F §6.3 Round 3 `B-pool-on` (cfg-gated pool path; pre-allocated `VmStatePool` of capacity 4). | Only with feature flag |
+| `per_call_alloc::vmstate_alloc_scratchpad_zeroed` | `benches/per_call_alloc.rs` | Phase 2F §6.3 Round 3 `B-2` (per-call 2 MiB zero-init scratchpad alloc). | Yes |
+| `per_call_alloc::vmstate_alloc_register_file` | `benches/per_call_alloc.rs` | Phase 2F §6.3 Round 3 `B-3` (per-call `Box<Program>` alloc). | Yes |
+
+Run instructions:
+
+```bash
+# B-pool-off + Phase 2c/2d baseline (no feature flag).
+cargo bench --bench compute_hash_alloc
+
+# B-pool-off + B-pool-on + Phase 2c/2d baseline (feature on).
+cargo bench --bench compute_hash_alloc --features internal-pool-bench
+
+# B-2 + B-3 component floor (always; no feature flag).
+cargo bench --bench per_call_alloc
+```
+
+#### Methodology
+
+The A/B disposition rule per §3.4 R1-D4 Round 3 (component-floor
+table folded into the A/B delta):
+
+| A/B delta (`B-pool-off` − `B-pool-on`) | Branch | Disposition |
+|-----------------------------------------|--------|-------------|
+| < 50 µs | Branch A | No pool. Cfg-gated pool stays in source as bench-only artifact. §8 commit 5 omitted. |
+| ≥ 50 µs and < 100 µs | Branch B | Ambiguity band; impl-PR pre-flight escalates per §3.3 Round 3 reversion clause #1. |
+| ≥ 100 µs | Branch C | Pool promoted to production. §8 commit 5 flips the cfg-gate to unconditional; `compute_hash` rewires through the pool. |
+
+The component-floor sum (B-2 median + B-3 median) is the sanity
+check that the no-pool A/B median (`B-pool-off`) does not undercut
+the per-call allocation cost lower bound. A no-pool A/B median
+below the component-floor sum would indicate bench misconfiguration
+(e.g., the `b.iter` body is being optimized out, or the
+`PreparedCache` is being re-derived inside the timed loop).
+
+Pool capacity for the bench harness is **4**, mirroring the §3.5
+R1-D5 Round 3 test-default. Phase 3a's FFI shim derives the actual
+deployment capacity via the methodology pinned at §3.5 (Round 1):
+`capacity = binding_fanout + 1` where binding fanout is
+`min(threadpool_max, m_max_prepare_blocks_threads)` at the
+daemon's runtime state. The bench's choice of 4 is informational
+for the A/B delta; capacity ≥ 1 measures the steady-state pool-hit
+cost in a single-bench-thread harness.
+
+#### Measurements
+
+The empirical numbers populate at impl-PR time, not at plan-doc
+close. The impl-PR description must include both the **predicted
+branch** (named in §8 of the plan-doc) and the **measured branch**
+(named by commit 4's bench output), with explicit reconciliation
+per §8 Round 3's prediction-vs-measured discipline. The
+reconciliation surfaces substrate findings (allocator amortization,
+hardware-class differences, dispatch-loop dominance) where the
+prediction would otherwise be silently absorbed.
+
+| Bench | Median | 95% CI | Sample size | Measurement context |
+|-------|--------|--------|-------------|---------------------|
+| `compute_hash_alloc::with_no_pool::per_call` | TBD (impl-PR) | TBD | 100 | Reference machine per "Run conditions" above. |
+| `compute_hash_alloc::with_pool::per_call` | TBD (impl-PR, `--features internal-pool-bench`) | TBD | 100 | Reference machine; capacity 4. |
+| `per_call_alloc::vmstate_alloc_scratchpad_zeroed` | TBD (impl-PR) | TBD | 200 | 2 MiB zero-init via `vec![0u8; 2 * 1024 * 1024].into_boxed_slice()`. |
+| `per_call_alloc::vmstate_alloc_register_file` | TBD (impl-PR) | TBD | 200 | `Box::new(Program::default())`. |
+
+Component-floor sum: TBD (impl-PR).
+A/B delta: TBD (impl-PR).
+Branch disposition: TBD (impl-PR; see §8 commit 5 conditional).
 
 ## Threshold reconciliation
 

@@ -2285,6 +2285,63 @@ fn dispatch_instruction(instr: &Instruction, state: &mut VmState) {
 /// to the C reference under stub-NOP dispatch) and the Phase 2g
 /// shape is production-fast.
 pub fn compute_hash(prepared: &crate::PreparedCache, data: &[u8]) -> [u8; 32] {
+    let mut state = VmState::new();
+    compute_hash_inner(&mut state, prepared, data)
+}
+
+/// Inner `compute_hash` body, factored out so the Phase 2F cfg-gated
+/// `vm_pool::VmStatePool` path can share the dispatch logic with the
+/// production no-pool [`compute_hash`] entry point. The pool module
+/// is gated by `#[cfg(any(test, feature = "internal-pool-bench"))]`,
+/// so the rustdoc link cannot be hard-coded — production builds
+/// (no feature flag) do not compile the module.
+///
+/// Per `docs/design/RANDOMX_V2_PHASE2F_PLAN.md` §3.3 Round 3, the
+/// pool body is implemented behind
+/// `#[cfg(any(test, feature = "internal-pool-bench"))]` and the
+/// bench harness measures both paths directly. Both paths feed
+/// through this inner function so the dispatch loop is a single
+/// source of truth — duplicating the body would fork the
+/// consensus-relevant code path between two call sites.
+///
+/// # Pool-reuse safety
+///
+/// The function takes `&mut VmState` rather than allocating one
+/// internally. When called from the pool path, `state` may be a
+/// recycled instance whose fields carry residue from a prior call.
+/// Every field that is *read* before being written by the dispatch
+/// pipeline is re-initialized below or by [`VmState::execute_program`]
+/// at chain entry:
+///
+/// - `r[]` is zero-set by [`VmState::execute_program`] at every
+///   chain entry (mirroring the C reference's `NativeRegisterFile`
+///   per-chain reconstruction; see that function's rustdoc).
+/// - `f[]`, `e[]` are overwritten by iteration 0's `nreg.f[i]` /
+///   `nreg.e[i]` writes before any read.
+/// - `a[]` is overwritten by [`VmState::init_program`].
+/// - `scratchpad` is overwritten byte-for-byte by
+///   [`VmState::init_scratchpad`].
+/// - `e_mask`, `ma`, `mx`, `read_reg`, `dataset_offset`,
+///   `program.instructions`, `program.cbranch_table` are written by
+///   [`VmState::init_program`].
+/// - `branch_pc` / `exec_pc` are set per-instruction by the
+///   iteration loop before being read.
+/// - `temp_hash` is unread by the current production path
+///   (see the field's rustdoc; `compute_hash` uses a local
+///   `temp_hash: [u8; 64]` buffer).
+///
+/// The only field whose carry-over could be observable is
+/// [`VmState::fprc`], the FPU rounding-mode tracker that Phase 2d's
+/// CFROUND handler writes. The C reference's `nreg.fprc` resets to
+/// 0 at chain entry; the Rust port mirrors that here at function
+/// entry for pool-reuse safety. The hardware FPU rounding-mode
+/// register is independently reset via
+/// [`crate::fpu_rounding::set_rounding_mode`].
+pub(crate) fn compute_hash_inner(
+    state: &mut VmState,
+    prepared: &crate::PreparedCache,
+    data: &[u8],
+) -> [u8; 32] {
     // The cache-seedhash binding travels in the `PreparedCache`
     // bundle per Phase 2F §1.1 Round 2. The dispatch loop reads
     // the inner `Cache` via `prepared.cache_ref()`; the seedhash
@@ -2301,7 +2358,14 @@ pub fn compute_hash(prepared: &crate::PreparedCache, data: &[u8]) -> [u8; 32] {
 
     crate::fpu_rounding::set_rounding_mode(0);
 
-    let mut state = VmState::new();
+    // Pool-reuse safety: reset `fprc` so a recycled `VmState` from
+    // [`crate::vm_pool::VmStatePool`] does not carry forward the
+    // prior call's CFROUND mode in the in-memory tracker. The
+    // hardware FPU register is reset by `set_rounding_mode(0)` above;
+    // this line keeps the in-memory shadow consistent. For a
+    // freshly-constructed [`VmState`] from [`VmState::new`] the
+    // assignment is a no-op (the field already starts at 0).
+    state.fprc = 0;
 
     // Step 1: temp_hash = Blake2b-512(data). Output is 64 bytes,
     // which becomes the seed for `init_scratchpad`.
@@ -2326,7 +2390,7 @@ pub fn compute_hash(prepared: &crate::PreparedCache, data: &[u8]) -> [u8; 32] {
         state.execute_program(cache);
 
         let mut hasher = Blake2b512::new();
-        feed_register_file_to_hasher(&state, &mut hasher);
+        feed_register_file_to_hasher(&*state, &mut hasher);
         let out = hasher.finalize();
         temp_hash.copy_from_slice(&out);
     }
@@ -2362,7 +2426,7 @@ pub fn compute_hash(prepared: &crate::PreparedCache, data: &[u8]) -> [u8; 32] {
     // outputs, byte-equivalent to the C ref's `nreg`-to-`reg` writeback)
     // and the raw `a_bytes` for the AES-hashed slot.
     let mut hasher = Blake2b::<U32>::new();
-    feed_register_file_to_hasher_with_raw_a(&state, &a_bytes, &mut hasher);
+    feed_register_file_to_hasher_with_raw_a(&*state, &a_bytes, &mut hasher);
     let out = hasher.finalize();
     let mut output = [0u8; 32];
     output.copy_from_slice(&out);

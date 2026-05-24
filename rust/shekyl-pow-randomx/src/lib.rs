@@ -156,8 +156,25 @@ mod seedhash;
 pub(crate) mod superscalar;
 mod vm;
 
+// Phase 2F §3.3 Round 3 cfg-gated `VmStatePool` body. The module is
+// only compiled when the test harness is active or the
+// `internal-pool-bench` feature is enabled (the bench harness's
+// gate); production builds never see the pool body. See the module's
+// rustdoc for the full visibility / promotion discipline.
+#[cfg(any(test, feature = "internal-pool-bench"))]
+mod vm_pool;
+
 pub(crate) use cache::Cache;
 pub use cache_store::CacheStore;
 pub use prepared_cache::PreparedCache;
 pub use seedhash::Seedhash;
 pub use vm::compute_hash;
+
+// Bench-only re-exports per Phase 2F §3.3 Round 3. `#[doc(hidden)]`
+// keeps the surface out of the published rustdoc so the production
+// API surface (the items above) is unchanged regardless of feature
+// state. Production builds (no feature flag) never compile these
+// bindings.
+#[cfg(any(test, feature = "internal-pool-bench"))]
+#[doc(hidden)]
+pub use vm_pool::{compute_hash_with_pool, VmStatePool};
