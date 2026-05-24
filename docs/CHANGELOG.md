@@ -154,6 +154,66 @@
   `compute_hash_alloc::per_call` 307.42 ms vs. Phase 2d baseline
   303.60 ms (+1.27%; under §9's ±10% regression-trigger threshold).
 
+- **RandomX v2 Track A Phase 2f — review-cycle fix (PR #72
+  Copilot finding NF7, fourth pass)**
+  (`feat/randomx-v2-phase2f-impl`, 2026-05-24). One finding
+  surfaced by the fourth Copilot review pass against `321b89edb`
+  and addressed in-place. NF7 is a CI-gate completeness defect
+  against §3.6 R1-E1 Pattern A; the architectural disposition is
+  unchanged. Plan-doc round history records the fix as audit
+  trail per `21-reversion-clause-discipline.mdc`'s post-closure-pin
+  discipline.
+
+  - **NF7 — `PATTERN_RUNTIME_STATE` regex bypassed by
+    rustfmt-default multi-line grouped imports.** §3.6 Round 3
+    froze Pattern A as a column-0-anchored `grep -E` regex
+    matching banned identifiers (`once_cell` / `lazy_static` /
+    `OnceLock` / `LazyLock`) anywhere on the same line as a
+    `use` statement. The single-line grouped form
+    `use std::sync::{Arc, OnceLock};` is correctly caught
+    (`OnceLock` appears on the same line as the column-0 `use`);
+    the rustfmt-default multi-line grouped form, where the `use`
+    opener carries no banned identifier and the indented
+    identifier lines fail the column-0 anchor, bypasses entirely:
+    `use std::sync::{\n    Arc,\n    OnceLock,\n};` matches none
+    of the per-line patterns. rustfmt's default
+    `imports_granularity = "Preserve"` accepts the multi-line
+    form and a `cargo fmt`-mediated rewrite from the single-line
+    form is a one-`max_width`-overflow away (or a future
+    `imports_granularity = "Crate"` config change), so the
+    bypass is reachable in production-discipline workflows. The
+    Round 3 R1-E1 Pattern A invariant is "no module-level
+    imports of these types," not "no module-level imports in a
+    specific formatting style"; the gate's stated property and
+    its mechanical coverage diverged.
+
+    **Fix.** Added a per-file POSIX `awk` scanner that
+    complements the single-line `grep` regex in
+    [`scripts/ci/check_randomx_crate_invariants.sh`](../scripts/ci/check_randomx_crate_invariants.sh).
+    The scanner triggers on any column-0 `use` statement opening
+    an unclosed brace block, accumulates subsequent lines
+    tracking nested-brace depth via balanced `{`/`}` counts (so
+    `use foo::{bar::{baz, OnceLock}}` spread across lines is
+    handled correctly), and on depth-zero closure scans the
+    accumulated buffer against the same banned-token alternation
+    `(once_cell|lazy_static|OnceLock|LazyLock)`. The two arms
+    (single-line `grep`, multi-line `awk`) jointly enforce
+    Pattern A regardless of rustfmt grouping style.
+
+    **Verification.** Plant-revert positive-side tests:
+    synthesized multi-line bypass file → gate FAILS (exit 1)
+    with the banned token cited; nested-brace multi-line bypass
+    → gate FAILS; clean multi-line `use` (no banned tokens) →
+    gate PASSES; baseline crate state → gate PASSES. The
+    cargo-test wrapper
+    [`tests/crate_invariants.rs`](../rust/shekyl-pow-randomx/tests/crate_invariants.rs)
+    invokes the unmodified bash entry point so the test surface
+    continues to assert exit-zero discipline; the documentation
+    comment was extended with a multi-line bypass would-match
+    example mirroring the single-line / Pattern B / Pattern C
+    citations so the regression-detection mechanism is
+    auditable for the new arm too.
+
 - **RandomX v2 Track A Phase 2f — review-cycle fixes (PR #72
   Copilot findings NF3 + NF4 + NF5 + NF6, second pass)**
   (`feat/randomx-v2-phase2f-impl`, 2026-05-24). Four findings

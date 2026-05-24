@@ -135,6 +135,16 @@ fn t_ci_3_pattern_c_returns_zero_hits() {
 //   use std::sync::OnceLock;
 //   use once_cell::sync::Lazy;
 //
+// Pattern A multi-line bypass closure (PR #72 NF7) would-match
+// example (kept as comment). The single-line grep above does not
+// match this shape on its own; the per-file awk scanner in
+// `check_randomx_crate_invariants.sh` accumulates the use block
+// until the closing brace and scans the accumulated buffer:
+//   use std::sync::{
+//       Mutex,
+//       OnceLock,
+//   };
+//
 // Pattern B would-match example (kept as comment):
 //   static GLOBAL_STATE: AtomicUsize = AtomicUsize::new(0);
 //   pub static GLOBAL_TABLE: [u8; 16] = [0; 16];

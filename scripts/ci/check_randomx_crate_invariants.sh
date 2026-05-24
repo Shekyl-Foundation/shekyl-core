@@ -55,19 +55,37 @@ fi
 # (rejected via column-0 anchor; in-fn `use` is indented per rustfmt).
 # Permitted exception: NONE.
 #
-# The pattern matches a column-0 import (with optional `pub` /
-# `pub(crate)` / `pub(super)` / `pub(in path)` prefix, mirroring
-# Pattern B's prefix coverage) whose right-hand side mentions any
-# of the banned identifiers anywhere on the line. This catches:
+# The single-line regex below matches a column-0 import (with
+# optional `pub` / `pub(crate)` / `pub(super)` / `pub(in path)`
+# prefix, mirroring Pattern B's prefix coverage) whose right-hand
+# side mentions any of the banned identifiers *on the same line*.
+# This catches:
 #
 #   - `use std::sync::OnceLock;`
 #   - `use std::sync::OnceLock as Foo;`
 #   - `pub use std::sync::OnceLock;`
 #   - `pub(crate) use std::sync::OnceLock;`
-#   - `use std::sync::{OnceLock, Mutex};` (grouped form)
+#   - `use std::sync::{OnceLock, Mutex};` (single-line grouped form)
 #   - `use once_cell::sync::Lazy;`
 #   - `use lazy_static::lazy_static;`
 #   - `lazy_static! { ... }` (column-0 macro invocation)
+#
+# It does *not*, on its own, catch the rustfmt-default multi-line
+# grouped form (PR #72 Copilot finding NF7), where the `use` opener
+# carries no banned identifier and the indented identifier lines
+# fail the column-0 anchor:
+#
+#   use std::sync::{
+#       Mutex,
+#       OnceLock,    // <-- bypasses the single-line regex
+#   };
+#
+# The bypass is closed by a per-file POSIX awk scanner below
+# (`SCAN_USE_BLOCKS_AWK`), which accumulates any column-0 `use`
+# statement that opens an unclosed brace block until the matching
+# closing brace is seen, then scans the accumulated buffer for the
+# same banned tokens. The awk scanner and the single-line regex
+# together cover both grouping styles.
 #
 # False-positive surface (banned identifier as a substring of an
 # unrelated path component) is bounded: the banned tokens
@@ -77,6 +95,33 @@ fi
 # resolved by tightening the regex; the failure mode is loud, not
 # silent.
 PATTERN_RUNTIME_STATE='^(pub(\([^)]+\))?[[:space:]]+)?use[[:space:]]+.*(once_cell|lazy_static|OnceLock|LazyLock)|^lazy_static!'
+
+# Multi-line bypass closure for Pattern A (PR #72 NF7). Per-file
+# POSIX awk scanner: when a column-0 `use` line opens an unclosed
+# brace block, accumulate subsequent lines (tracking nested braces
+# via balanced `{`/`}` counts so `use foo::{bar::{baz, OnceLock}}`
+# spread across lines is handled correctly) until depth returns to
+# zero, then scan the accumulated buffer for the same banned
+# tokens as the single-line regex. The two arms (single-line grep
+# regex above, multi-line awk scanner here) jointly enforce the
+# Pattern A invariant regardless of import-formatting style.
+RUNTIME_STATE_TOKENS='(once_cell|lazy_static|OnceLock|LazyLock)'
+SCAN_USE_BLOCKS_AWK='
+  function count_open(s,    tmp) { tmp = s; return gsub(/\{/, "&", tmp) }
+  function count_close(s,    tmp) { tmp = s; return gsub(/\}/, "&", tmp) }
+  /^(pub(\([^)]+\))?[[:space:]]+)?use[[:space:]]+.*\{[^}]*$/ {
+    start = NR
+    buf = $0
+    depth = count_open($0) - count_close($0)
+    while (depth > 0 && (getline line) > 0) {
+      buf = buf " " line
+      depth += count_open(line) - count_close(line)
+    }
+    if (buf ~ tokens) {
+      print FILENAME ":" start ":" buf
+    }
+  }
+'
 
 # Pattern B: ban module-level `static` items (mut or otherwise).
 # Function-local statics are inside fn bodies (indented per rustfmt);
@@ -122,6 +167,18 @@ for pat_name in PATTERN_RUNTIME_STATE PATTERN_MODULE_STATIC PATTERN_FFI_EXPORT; 
     failures=$((failures + 1))
   fi
 done
+
+# Multi-line bypass closure for Pattern A: per-file awk pass over
+# every `.rs` source under `${CRATE_SRC}`. See SCAN_USE_BLOCKS_AWK
+# definition above for the rationale and PR #72 NF7 reference.
+while IFS= read -r f; do
+  HITS_MULTI="$(awk -v tokens="${RUNTIME_STATE_TOKENS}" "${SCAN_USE_BLOCKS_AWK}" "${f}")"
+  if [[ -n "${HITS_MULTI}" ]]; then
+    echo "FATAL: PATTERN_RUNTIME_STATE matched multi-line use block in ${CRATE_SRC}:" >&2
+    echo "${HITS_MULTI}" >&2
+    failures=$((failures + 1))
+  fi
+done < <(find "${CRATE_SRC}" -name '*.rs' -type f)
 
 if [[ ${failures} -ne 0 ]]; then
   exit 1
