@@ -27,8 +27,18 @@ license.workspace = true
 # `[dependencies]` graph activates it. Phase 2F's CI grep gate
 # (`scripts/ci/check_randomx_crate_invariants.sh`) does not need to
 # match-against this gate, because the pool body's internal state
-# stays inside `VmStatePool` (a `pub(crate)` type whose `Default`
-# panics in non-test builds per §3.5 Round 3).
+# stays inside `VmStatePool`. The type is `#[doc(hidden)] pub` (so
+# the criterion bench in `benches/compute_hash_alloc.rs`, a separate
+# cargo target, can name `VmStatePool::new` and
+# `compute_hash_with_pool` across the crate boundary; `pub(crate)`
+# would forbid that). The whole `vm_pool` module is gated by
+# `#[cfg(any(test, feature = "internal-pool-bench"))]`, so the
+# no-feature production build never compiles the type at all. When
+# the type *does* compile and `Default::default()` is called outside
+# `#[cfg(test)]`, it `panic!`s to enforce the §3.5 Round 3
+# discipline that Phase 3a's FFI shim must pass an explicit
+# R1-D5-derived capacity rather than silently inheriting a stale
+# impl-PR-baked default.
 internal-pool-bench = []
 
 [dependencies]

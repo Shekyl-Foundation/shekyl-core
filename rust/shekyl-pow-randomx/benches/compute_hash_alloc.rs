@@ -3,8 +3,18 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `compute_hash` per-call criterion bench (full pipeline under
-//! stub-NOP dispatch) plus Phase 2F §6.3 Round 3 A/B harness.
+//! `compute_hash` per-call criterion bench (full pipeline) plus
+//! Phase 2F §6.3 Round 3 A/B harness.
+//!
+//! The Phase 2c baseline numbers in `BENCH_RESULTS.md` were taken
+//! under the then-current stub-NOP `dispatch_instruction` body;
+//! Phase 2d replaced the dispatch with the real table-driven
+//! per-opcode handlers (per
+//! [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2D_PLAN.md)
+//! §3) and recorded the new full-pipeline baseline alongside the
+//! 2c number. References to "stub-NOP" further down describe the
+//! original Phase 2c framing of the bench's cost composition;
+//! current measurements run under real dispatch.
 //!
 //! # Two harnesses live here
 //!
@@ -44,19 +54,22 @@
 //!
 //! # Per-call cost composition
 //!
-//! Under the stub-NOP `dispatch_instruction` body, the per-call cost
-//! is dominated by the per-chain hash-math pipeline plus the
-//! inter-chain Blake2b chaining:
+//! Per-call cost is dominated by the iteration-loop bodies, the
+//! per-iteration dataset reads, and the inter-chain Blake2b
+//! chaining:
 //!
 //! - `VmState` allocation (2 MiB scratchpad + register file)
 //!   — one-shot, sub-millisecond.
 //! - `fillAes1Rx4` scratchpad seeding (1 round × 2 MiB / 64 B
 //!   blocks) — per chain, 8 times.
 //! - 8 × per-program init from entropy (`init_program`).
-//! - 8 × 2048 stub-NOP iteration-loop bodies (sp_mix, register
-//!   loads, AES f/e mix, dataset reads via `derive_item`'s
-//!   superscalar program execution, scratchpad writes, register
-//!   write-back — but no per-instruction work since dispatch is NOP).
+//! - 8 × 2048 iteration-loop bodies (sp_mix, register loads, AES
+//!   f/e mix, dataset reads via `derive_item`'s superscalar
+//!   program execution, per-instruction dispatch, scratchpad
+//!   writes, register write-back). Phase 2c measured this with a
+//!   stub-NOP `dispatch_instruction` body; Phase 2d's real
+//!   table-driven dispatch adds the per-instruction execution
+//!   work at this step.
 //! - 7 × `feed_register_file_to_hasher` + Blake2b-512 for inter-
 //!   chain `temp_hash` overwrites (Step 3 of `compute_hash`).
 //! - `getFinalResult` (`hashAes1Rx4` over 2 MiB + Blake2b-256
@@ -65,6 +78,9 @@
 //! The dominant cost in this composition is the iteration-loop
 //! bodies + `derive_item`'s SuperScalar execution + the
 //! `hashAes1Rx4` final pass, **not** the one-shot allocation.
+//! Under Phase 2d real dispatch the per-instruction work inside
+//! the iteration body becomes a measurable fraction of the
+//! per-call wall-clock cost as well.
 //!
 //! # Status: informational, not PR-gating
 //!
@@ -85,10 +101,11 @@
 //! Until then, CI does not fail on this bench's output, and the
 //! ≤100 µs claim should not be read as currently enforced.
 //!
-//! Phase 2d's real per-opcode dispatch will grow this bench's per-
-//! call cost further by the per-instruction work (8 × 2048 = 16384
+//! Phase 2d's real per-opcode dispatch (now landed) grew the
+//! per-call cost by the per-instruction work (8 × 2048 = 16384
 //! opcode executions per call), making the bench-split decision
-//! more pressing.
+//! more pressing. The post-2d baseline is recorded in
+//! `BENCH_RESULTS.md` alongside the 2c stub-NOP numbers.
 //!
 //! # Threshold enforcement mechanism (when the gate is re-enabled)
 //!
@@ -121,14 +138,16 @@ const BENCH_DATA: &[u8] =
 /// Common sample-size pin for every per-call full-pipeline bench in
 /// this file. §5.8's nominal sample-size is N=10000. Implementation-
 /// PR-time observation (recorded in `BENCH_RESULTS.md`): the per-
-/// call wall-clock cost of `compute_hash` under stub-NOP dispatch is
-/// dominated by the iteration-loop overhead (8 chains × 2048 iters
-/// × per-iteration AES f/e mix + scratchpad RW + dataset reads via
-/// `derive_item`'s superscalar program execution) plus the final
-/// `hashAes1Rx4` over 2 MiB plus Blake2b-256 finalization. That sums
-/// to ~300 ms per call on the reference machine (i9-11950H per
-/// `BENCH_RESULTS.md`), making 10000 samples take 30+ minutes wall-
-/// clock per bench run — not tractable for the developer loop.
+/// call wall-clock cost of `compute_hash` is dominated by the
+/// iteration-loop overhead (8 chains × 2048 iters × per-iteration
+/// AES f/e mix + scratchpad RW + dataset reads via `derive_item`'s
+/// superscalar program execution + Phase 2d real per-opcode
+/// dispatch) plus the final `hashAes1Rx4` over 2 MiB plus
+/// Blake2b-256 finalization. That sums to ~300 ms per call on the
+/// reference machine (i9-11950H per `BENCH_RESULTS.md`, with
+/// post-2d numbers slightly above the 2c stub-NOP baseline due to
+/// per-instruction work), making 10000 samples take 30+ minutes
+/// wall-clock per bench run — not tractable for the developer loop.
 ///
 /// `sample_size = 100` keeps the bench measurement within criterion's
 /// adaptive measurement-time budget (~1–2 minutes wall-clock per run)

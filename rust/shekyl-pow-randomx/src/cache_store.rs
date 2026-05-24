@@ -115,6 +115,22 @@ use crate::Seedhash;
 /// in-flight map holds only currently-derivating seedhashes; size
 /// is bounded by the concurrency level, not by total derivations
 /// seen.
+///
+/// **Leader-abort path (PR #72 NF6):** if the leader panics inside
+/// [`PreparedCache::derive`] (or otherwise exits without
+/// publishing), an internal RAII guard in
+/// [`Self::lookup_or_derive`]'s leader branch broadcasts
+/// `LeaderAborted` to wake followers and removes the in-flight
+/// entry on `Drop`. Followers' [`Self::lookup_or_derive`] panic
+/// with a diagnostic message rather than blocking forever on the
+/// Condvar. Subsequent callers for the same seedhash see an empty
+/// in-flight map and re-enter the lookup flow as a fresh leader
+/// rather than joining the orphaned slot. Production builds
+/// (`panic = "abort"`) terminate the process before any of this
+/// matters; the guard is load-bearing under
+/// `panic = "unwind"` profiles (notably the test harness, which
+/// `cargo` always builds with `panic = "unwind"` even when the
+/// workspace profile sets `abort`).
 pub struct CacheStore {
     /// Canonical slot — sticky against eviction by
     /// [`Self::lookup_or_derive`]; only [`Self::set_canonical`] can
@@ -136,18 +152,61 @@ pub struct CacheStore {
     in_flight: Mutex<HashMap<Seedhash, Arc<DerivationSlot>>>,
 }
 
+/// Outcome a [`DerivationSlot`] can hold.
+///
+/// Followers loop on [`DerivationSlot::cv`] until the slot leaves
+/// the [`DerivationOutcome::Pending`] state. The leader transitions
+/// the slot to [`DerivationOutcome::Published`] on success;
+/// [`LeaderGuard`]'s [`Drop`] transitions it to
+/// [`DerivationOutcome::LeaderAborted`] if the leader exits without
+/// publishing (panic during [`PreparedCache::derive`], or any
+/// future early-return path). The two terminal states are absorbing
+/// — once a slot leaves `Pending`, no further state changes occur
+/// (see [`DerivationSlot::publish_aborted_if_pending`] for the
+/// no-op-after-publish guard).
+///
+/// The `LeaderAborted` arm closes the PR #72 NF6 deadlock class:
+/// pre-fix, a leader panic left the slot stuck in `Some(None)`-
+/// equivalent state and every follower (and every later caller
+/// that became a follower of the orphaned slot) blocked forever
+/// on the [`Condvar`]. With this enum, panic-unwind paths broadcast
+/// `LeaderAborted` via [`LeaderGuard::drop`] and followers panic
+/// with a diagnostic message rather than hanging.
+enum DerivationOutcome {
+    /// Initial state. Leader has not yet finished
+    /// [`PreparedCache::derive`].
+    Pending,
+    /// Leader ran [`PreparedCache::derive`] successfully and
+    /// published the result. Followers clone this Arc.
+    Published(Arc<PreparedCache>),
+    /// Leader exited without publishing (panic during
+    /// [`PreparedCache::derive`], or any future early-return path).
+    /// Followers see this and panic-propagate via
+    /// [`DerivationSlot::wait_for_result`] rather than blocking
+    /// indefinitely.
+    LeaderAborted,
+}
+
 /// Per-seedhash derivation rendezvous used by the in-flight map.
 ///
 /// One leader thread runs [`PreparedCache::derive`] outside any
 /// [`CacheStore`] lock; followers blocked on the same novel
-/// seedhash wait on the [`Condvar`] until the leader broadcasts
-/// the resulting [`Arc<PreparedCache>`].
+/// seedhash wait on the [`Condvar`] until the leader broadcasts an
+/// outcome. The outcome is one of [`DerivationOutcome::Published`]
+/// (success — followers clone the resulting Arc) or
+/// [`DerivationOutcome::LeaderAborted`] (leader exited without
+/// publishing — followers panic-propagate). The PR #72 NF6 fix
+/// added the `LeaderAborted` path so leader panics no longer
+/// translate into follower deadlocks; see [`LeaderGuard`].
 struct DerivationSlot {
-    /// Set to `Some(prepared)` exactly once by the leader. Followers
-    /// wait on [`Self::cv`] while this is `None`.
-    inner: Mutex<Option<Arc<PreparedCache>>>,
-    /// Notified by [`Self::publish`] after [`Self::inner`] becomes
-    /// `Some`. Followers loop on `inner.is_none()` to absorb spurious
+    /// Slot outcome. Starts at [`DerivationOutcome::Pending`];
+    /// transitions exactly once to `Published(...)` (success) or
+    /// `LeaderAborted` (leader exited without publishing).
+    /// Followers loop on [`Self::cv`] while this is `Pending`.
+    inner: Mutex<DerivationOutcome>,
+    /// Notified by [`Self::publish`] / [`Self::publish_aborted_if_pending`]
+    /// after [`Self::inner`] leaves the `Pending` state. Followers
+    /// re-check the outcome on every wake to absorb spurious
     /// wakeups.
     cv: Condvar,
 }
@@ -155,28 +214,154 @@ struct DerivationSlot {
 impl DerivationSlot {
     fn new() -> DerivationSlot {
         DerivationSlot {
-            inner: Mutex::new(None),
+            inner: Mutex::new(DerivationOutcome::Pending),
             cv: Condvar::new(),
         }
     }
 
     /// Set the derivation result and wake all waiting followers.
-    /// Called by the leader exactly once.
+    /// Called by the leader exactly once on the success path. The
+    /// abort path (leader panic / early return) calls
+    /// [`Self::publish_aborted_if_pending`] from
+    /// [`LeaderGuard::drop`] instead.
     fn publish(&self, result: Arc<PreparedCache>) {
-        let mut guard = self.inner.lock().unwrap();
-        *guard = Some(result);
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = DerivationOutcome::Published(result);
         self.cv.notify_all();
     }
 
-    /// Block until [`Self::publish`] runs, then return a clone of
-    /// the leader's [`Arc<PreparedCache>`]. The follower never
-    /// derives.
-    fn wait_for_result(&self) -> Arc<PreparedCache> {
-        let mut guard = self.inner.lock().unwrap();
-        while guard.is_none() {
-            guard = self.cv.wait(guard).unwrap();
+    /// Transition the slot to [`DerivationOutcome::LeaderAborted`]
+    /// and wake all waiting followers, but only when the slot is
+    /// still [`DerivationOutcome::Pending`]. Called from
+    /// [`LeaderGuard::drop`] on the abort path.
+    ///
+    /// The `_if_pending` guard makes the call idempotent against
+    /// the success path: when [`LeaderGuard::mark_success`] flagged
+    /// success but the guard's [`Drop`] still runs (always — Rust
+    /// drops `&mut self` guards regardless of the success flag),
+    /// the slot is already in `Published(...)` state and this
+    /// method no-ops. A subsequent panic anywhere between
+    /// [`Self::publish`] and the leader's return therefore cannot
+    /// downgrade an already-broadcast result to `LeaderAborted`.
+    fn publish_aborted_if_pending(&self) {
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if matches!(*guard, DerivationOutcome::Pending) {
+            *guard = DerivationOutcome::LeaderAborted;
+            self.cv.notify_all();
         }
-        Arc::clone(guard.as_ref().unwrap())
+    }
+
+    /// Block until the slot leaves the `Pending` state, then
+    /// return a clone of the leader's [`Arc<PreparedCache>`] (on
+    /// success) or panic (on `LeaderAborted`). The follower never
+    /// derives.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the slot resolves to
+    /// [`DerivationOutcome::LeaderAborted`] — the leader thread
+    /// exited without publishing a result, and the follower has
+    /// no usable cached value to return. The panic propagates the
+    /// failure to the test/bench harness (or to `panic = "abort"`
+    /// in production builds, which terminates the process); the
+    /// alternative — block forever on the [`Condvar`] — is the
+    /// PR #72 NF6 deadlock class this method exists to close.
+    fn wait_for_result(&self) -> Arc<PreparedCache> {
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        loop {
+            match &*guard {
+                DerivationOutcome::Published(p) => return Arc::clone(p),
+                DerivationOutcome::LeaderAborted => {
+                    panic!(
+                        "shekyl_pow_randomx::CacheStore: derivation leader \
+                         aborted before publishing a PreparedCache; the \
+                         follower has no usable result. The leader thread \
+                         likely panicked inside PreparedCache::derive \
+                         (e.g. allocation failure during the 256 MiB \
+                         Argon2d-512 fill). See PR #72 NF6."
+                    )
+                }
+                DerivationOutcome::Pending => {
+                    guard = self
+                        .cv
+                        .wait(guard)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                }
+            }
+        }
+    }
+}
+
+/// RAII guard for the leader's [`DerivationSlot`] entry in the
+/// [`CacheStore::in_flight`] map.
+///
+/// The guard owns a clone of the leader's `Arc<DerivationSlot>` and
+/// a borrow of the [`CacheStore::in_flight`] mutex; its [`Drop`]
+/// always removes the in-flight entry (so subsequent callers don't
+/// become followers of an orphaned slot) and, on the abort path
+/// (success flag never set), broadcasts
+/// [`DerivationOutcome::LeaderAborted`] so blocked followers
+/// panic-propagate rather than hang.
+///
+/// The guard is the substrate for the PR #72 NF6 fix. Pre-fix,
+/// a leader panic during [`PreparedCache::derive`] left the
+/// slot stuck in `Pending` and the in-flight entry stuck in the
+/// map, deadlocking every follower and every subsequent caller
+/// that joined the map while the orphaned entry was present. The
+/// guard's [`Drop`] runs on both the success path (no-op for the
+/// abort broadcast; in-flight removal is the cleanup-on-publish
+/// step that previously lived inline in `lookup_or_derive`) and
+/// the panic-unwind path (broadcasts abort + removes in-flight).
+struct LeaderGuard<'cs> {
+    slot: Arc<DerivationSlot>,
+    in_flight: &'cs Mutex<HashMap<Seedhash, Arc<DerivationSlot>>>,
+    seedhash: Seedhash,
+    success: bool,
+}
+
+impl<'cs> LeaderGuard<'cs> {
+    fn new(
+        slot: Arc<DerivationSlot>,
+        in_flight: &'cs Mutex<HashMap<Seedhash, Arc<DerivationSlot>>>,
+        seedhash: Seedhash,
+    ) -> LeaderGuard<'cs> {
+        LeaderGuard {
+            slot,
+            in_flight,
+            seedhash,
+            success: false,
+        }
+    }
+
+    /// Flag the leader's work as having published successfully.
+    /// The guard's [`Drop`] still runs (and still removes the
+    /// in-flight entry — that is the cleanup-on-publish step), but
+    /// it skips the abort broadcast, leaving the slot in its
+    /// already-`Published` state.
+    fn mark_success(&mut self) {
+        self.success = true;
+    }
+}
+
+impl Drop for LeaderGuard<'_> {
+    fn drop(&mut self) {
+        if !self.success {
+            self.slot.publish_aborted_if_pending();
+        }
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        in_flight.remove(&self.seedhash);
     }
 }
 
@@ -277,6 +462,19 @@ impl CacheStore {
     ///   cost — dominated by the 256 MiB Argon2d-512 fill).
     /// - Miss with contenders: same ~150–200 ms wall time across
     ///   all contenders; only the leader pays CPU.
+    ///
+    /// # Panics
+    ///
+    /// Followers panic-propagate (rather than block forever) if the
+    /// in-flight derivation leader exits without publishing — i.e.,
+    /// if [`PreparedCache::derive`] panics on the leader's stack.
+    /// This is the PR #72 NF6 leader-abort path; see the
+    /// `# In-flight deduplication` section on [`CacheStore`] for
+    /// the substrate. Production builds (`panic = "abort"`)
+    /// terminate the process on the leader's original panic before
+    /// any follower observes the abort; the panic-propagation path
+    /// is load-bearing under `panic = "unwind"` profiles (notably
+    /// `cargo test`, which always uses unwind).
     pub fn lookup_or_derive(&self, seedhash: &Seedhash) -> Arc<PreparedCache> {
         if let Some(p) = self.lookup(seedhash) {
             return p;
@@ -299,16 +497,24 @@ impl CacheStore {
 
         match role {
             DerivationRole::Leader(slot) => {
+                // RAII guard. On the success path, `mark_success` flags
+                // the published-already state and the guard's Drop
+                // performs the cleanup-on-publish in-flight removal as
+                // its sole side effect. On the panic-unwind path
+                // (PreparedCache::derive panics), Drop broadcasts
+                // DerivationOutcome::LeaderAborted to wake followers
+                // (so they panic-propagate rather than block forever
+                // on the Condvar) and then removes the in-flight entry
+                // (so subsequent callers don't become followers of the
+                // orphaned slot). PR #72 NF6 fix.
+                let mut guard = LeaderGuard::new(Arc::clone(&slot), &self.in_flight, *seedhash);
                 let prepared = Arc::new(PreparedCache::derive(*seedhash));
                 slot.publish(Arc::clone(&prepared));
                 {
                     let mut t = self.transient.write().unwrap();
                     *t = Some(Arc::clone(&prepared));
                 }
-                {
-                    let mut in_flight = self.in_flight.lock().unwrap();
-                    in_flight.remove(seedhash);
-                }
+                guard.mark_success();
                 prepared
             }
             DerivationRole::Follower(slot) => slot.wait_for_result(),
@@ -763,5 +969,96 @@ mod tests {
         slot.publish(Arc::clone(&prepared));
         let observed = h.join().unwrap();
         assert!(Arc::ptr_eq(&prepared, &observed));
+    }
+
+    // ---- T-CS-13 ------------------------------------------------
+
+    #[test]
+    fn cachestore_leader_abort_wakes_followers_and_cleans_in_flight() {
+        // PR #72 NF6 regression test: the buggy `DerivationSlot`
+        // used `Mutex<Option<Arc<PreparedCache>>>`, so a leader
+        // thread that panicked inside `PreparedCache::derive` left
+        // the slot stuck in `None` and every follower (current and
+        // future) blocked forever on the `Condvar`. The fix
+        // replaces the `Option` with a `DerivationOutcome` enum
+        // (`Pending` / `Published(...)` / `LeaderAborted`) and adds
+        // a `LeaderGuard` whose `Drop` publishes `LeaderAborted`
+        // when `mark_success` was never called and unconditionally
+        // removes the in-flight entry.
+        //
+        // **Setup.** A standalone `Mutex<HashMap<Seedhash,
+        // Arc<DerivationSlot>>>` mock of `CacheStore::in_flight`
+        // (so the test can construct a `LeaderGuard` directly
+        // without invoking the ~150–200 ms `PreparedCache::derive`
+        // path), pre-populated with one slot. A follower thread
+        // calls `slot.wait_for_result()` and parks on the slot's
+        // condvar.
+        //
+        // **Trigger.** `LeaderGuard::new(...)` is bound to a local
+        // and dropped without `mark_success` — exactly the shape
+        // the leader stack frame would be torn down in if
+        // `PreparedCache::derive` panicked while the guard was in
+        // scope.
+        //
+        // **Asserted invariants.**
+        //   1. `LeaderGuard::drop` removed the in-flight entry
+        //      (cascading-deadlock avoidance: subsequent callers
+        //      for the same seedhash do not become followers of
+        //      the dead slot).
+        //   2. The slot is in `LeaderAborted` state (the broadcast
+        //      reached the underlying `inner` mutex).
+        //   3. The follower panic-propagated rather than blocking
+        //      forever on the condvar (the deadlock class NF6
+        //      closes is gone).
+        //
+        // With the buggy implementation, assertion (3) would hang
+        // the test indefinitely; with the fixed implementation
+        // the follower's `wait_for_result()` panics the moment it
+        // observes `LeaderAborted` (whether reached on the first
+        // outcome check or after a `cv.wait` wake — every ordering
+        // resolves through the panic arm rather than the
+        // re-loop-on-spurious-wake arm).
+        use super::{DerivationOutcome, LeaderGuard};
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+
+        let in_flight: Mutex<HashMap<Seedhash, Arc<DerivationSlot>>> = Mutex::new(HashMap::new());
+        let slot = Arc::new(DerivationSlot::new());
+        let s_a = seedhash_a();
+        in_flight.lock().unwrap().insert(s_a, Arc::clone(&slot));
+
+        let slot_for_follower = Arc::clone(&slot);
+        let follower = thread::spawn(move || slot_for_follower.wait_for_result());
+
+        {
+            let _guard = LeaderGuard::new(Arc::clone(&slot), &in_flight, s_a);
+            // Drop runs at end of scope without mark_success — abort
+            // path: publish_aborted_if_pending + in_flight removal.
+        }
+
+        assert!(
+            in_flight.lock().unwrap().is_empty(),
+            "in_flight entry not removed by LeaderGuard::drop on the \
+             abort path (PR #72 NF6 cleanup-on-panic invariant)"
+        );
+
+        let outcome_guard = slot
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(
+            matches!(*outcome_guard, DerivationOutcome::LeaderAborted),
+            "DerivationSlot not in LeaderAborted state after \
+             LeaderGuard::drop on the abort path (PR #72 NF6 \
+             abort-broadcast invariant)"
+        );
+        drop(outcome_guard);
+
+        let join_result = follower.join();
+        assert!(
+            join_result.is_err(),
+            "follower thread did not panic on LeaderAborted — \
+             the NF6 deadlock class is not closed"
+        );
     }
 }

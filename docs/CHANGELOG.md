@@ -155,6 +155,121 @@
   303.60 ms (+1.27%; under §9's ±10% regression-trigger threshold).
 
 - **RandomX v2 Track A Phase 2f — review-cycle fixes (PR #72
+  Copilot findings NF3 + NF4 + NF5 + NF6, second pass)**
+  (`feat/randomx-v2-phase2f-impl`, 2026-05-24). Four findings
+  surfaced by the second Copilot review pass against `d4d88bdc1`
+  and addressed in-place. Three (NF3, NF4, NF5) are documentation
+  drift inherited from Phase 2c phrasing or from PR #72 NF2's
+  prior commit; one (NF6) is an implementation defect on the
+  in-flight-derivation rendezvous architecturally specified in
+  Round 2 but under-specified at the panic-unwind boundary. None
+  reopen Round 2 / Round 3 / post-closure-pin architectural
+  dispositions. Plan-doc round history records the fixes as audit
+  trail per `21-reversion-clause-discipline.mdc`'s post-closure-pin
+  discipline.
+
+  - **NF3 — `lib.rs` crate-level rustdoc still framed
+    `dispatch_instruction` as having a NOP body** ("Phase 2d
+    replaces the dispatch body in-place per §5.1.1 of the plan
+    doc"). The bullet was correct as of Phase 2c's PR landing;
+    Phase 2d (PR #70 → `dev`) replaced the body in-place with
+    the real table-driven per-opcode dispatch and added the T16
+    reference vector for end-to-end real-dispatch parity, but
+    the rustdoc was not updated to record the now-landed state.
+    **Fix:** rephrased the dispatch bullet to reflect both the
+    Phase-2c-landed NOP and the Phase-2d-landed real dispatch,
+    named T16 as the current end-to-end consensus-parity gate,
+    and reframed "Subsequent sub-PRs" to "Sub-PR ladder" with
+    explicit `(landed)` / `(planned)` markers on 2d / 2f / 2g.
+    Also updated the bench bullet's `compute_hash_alloc`
+    description to record the post-2d baseline alongside the 2c
+    stub-NOP number.
+
+  - **NF4 — `benches/compute_hash_alloc.rs` rustdoc framed the
+    per-call cost composition under the stub-NOP body**
+    ("Under the stub-NOP `dispatch_instruction` body, the
+    per-call cost is dominated by …"; "8 × 2048 stub-NOP
+    iteration-loop bodies … no per-instruction work since
+    dispatch is NOP"). Same drift as NF3. **Fix:** rephrased the
+    cost-composition section to describe the pipeline neutrally
+    (per-iteration dispatch is a step in the iteration body;
+    Phase 2c measured under stub-NOP, Phase 2d adds per-
+    instruction work at that step), and updated the file-header
+    summary + the `PER_CALL_SAMPLE_SIZE` rationale to record the
+    post-2d baseline.
+
+  - **NF5 — `Cargo.toml` `internal-pool-bench` feature comment
+    claimed `VmStatePool` is a `pub(crate)` type whose `Default`
+    panics in non-test builds.** First half is wrong post-PR-72
+    F2 (the type is `#[doc(hidden)] pub` so the criterion bench
+    in `benches/compute_hash_alloc.rs`, a separate cargo target,
+    can name `VmStatePool::new` and `compute_hash_with_pool`
+    across the crate boundary; `pub(crate)` would forbid that).
+    Second half is incomplete (the panic is gated specifically
+    by `cfg(all(not(test), feature = "internal-pool-bench"))`;
+    the no-feature production build never compiles `vm_pool` at
+    all). **Fix:** rewrote the comment to record the actual
+    visibility (`#[doc(hidden)] pub`), the actual gating shape
+    (whole module behind `#[cfg(any(test, feature =
+    "internal-pool-bench"))]`), and the actual panic discipline
+    (panic only when `Default::default()` is called outside
+    `#[cfg(test)]`, enforcing §3.5 R1-D5 explicit-capacity at
+    Phase 3a).
+
+  - **NF6 — `DerivationSlot::wait_for_result` deadlocks on
+    leader thread panic** in
+    [`rust/shekyl-pow-randomx/src/cache_store.rs`](../rust/shekyl-pow-randomx/src/cache_store.rs).
+    Round 2 §3.1 pinned the in-flight-derivation rendezvous as
+    `Mutex<HashMap<Seedhash, Shared<DerivationFuture>>>` at the
+    architecture level; the implementation used a
+    `Mutex<Option<Arc<PreparedCache>>>` per-slot rendezvous with
+    a `Condvar` for follower wake-up. Pre-fix, if the leader
+    thread panicked inside `PreparedCache::derive` (e.g.,
+    allocation failure during the 256 MiB Argon2d-512 fill),
+    `slot.publish` never ran, the `inner` mutex stayed at
+    `None`, the `Condvar` was never broadcast, and (a) every
+    follower already parked on `cv.wait` blocked forever; (b)
+    the `in_flight` HashMap entry was never removed, so
+    subsequent callers for the same seedhash acquired
+    `in_flight.lock()`, found the orphaned slot, became
+    followers of the dead leader, and joined the deadlock
+    cascade. Production builds set `panic = "abort"` for
+    `dev` / `release` (process aborts before any of this
+    matters), but `cargo test` always builds with
+    `panic = "unwind"` per the test-harness contract — so a
+    test exercising the failure path would hang rather than
+    fail with a diagnostic message. **Fix:** replaced
+    `Mutex<Option<Arc<PreparedCache>>>` with
+    `Mutex<DerivationOutcome>`
+    (`Pending` / `Published(Arc<PreparedCache>)` /
+    `LeaderAborted`); added `LeaderGuard<'cs>` that owns the
+    leader's slot Arc + a borrow of the in-flight mutex + a
+    `success: bool` flag, with `Drop` that always removes the
+    in-flight entry (cleanup-on-publish + cleanup-on-panic in
+    one path) and conditionally broadcasts `LeaderAborted` via
+    `publish_aborted_if_pending` when `mark_success` was never
+    called; `wait_for_result` now panics with a diagnostic
+    message on `LeaderAborted` instead of looping on the
+    condvar. The `lookup_or_derive` leader branch wraps its
+    `PreparedCache::derive` + `slot.publish` + `transient.write`
+    sequence in the guard's scope with a `mark_success` flag
+    flip after the transient write — on success the guard's
+    drop is a no-op for the abort broadcast and the in-flight
+    removal becomes the cleanup-on-publish step that previously
+    lived inline. **Test added — T-CS-13
+    `cachestore_leader_abort_wakes_followers_and_cleans_in_flight`:**
+    white-box test using a standalone
+    `Mutex<HashMap<Seedhash, Arc<DerivationSlot>>>` mock so the
+    test runs without paying the ~150–200 ms
+    `PreparedCache::derive` cost; spawns a follower thread on
+    `slot.wait_for_result()`, drops a `LeaderGuard` without
+    `mark_success`, and asserts (1) in-flight entry removed;
+    (2) slot in `LeaderAborted`; (3) follower panic-propagated
+    rather than hanging. With the pre-fix slot type the test
+    would hang indefinitely on assertion (3); with the fix it
+    passes deterministically.
+
+- **RandomX v2 Track A Phase 2f — review-cycle fixes (PR #72
   Copilot findings NF1 + NF2)** (`feat/randomx-v2-phase2f-impl`,
   2026-05-24). Two implementation defects surfaced by the post-fix
   Copilot review against `7b5302ee9` and addressed in-place. Both
