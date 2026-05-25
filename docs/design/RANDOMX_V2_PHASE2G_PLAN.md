@@ -3056,6 +3056,390 @@ multi-mode orchestrator-actor; the shape it pins is reusable.
   evaluates against the §3.15 framing as substrate, not as
   competing scope.
 
+### §3.16 Round 4 — Implementation-correctness decisions (R4-D1 through R4-D8)
+
+Round 4 is an **implementation-correctness round** opened before
+the implementation PR to close gaps that would otherwise require
+implementer guesswork. None of R4-D1 through R4-D8 reopen a
+Round 1/2/3 architectural disposition; all are specification pins
+surfaced by reading the actual substrate (CMakeLists.txt,
+`randomx.h`, `rust/Cargo.toml`, `rust/shekyl-pow-randomx/Cargo.toml`,
+the lockfile). Round count advances to 4; the ≤3 estimate in §0
+is superseded by substrate reality.
+
+---
+
+#### R4-D1 — Workspace dependency additions (`sha2`, `rand_chacha`, `serde_json`)
+
+**Finding.** §5.1.15 lists `sha2`, `rand_chacha`, and `serde_json`
+as `(workspace)` dependencies, but none are present in
+`rust/Cargo.toml`'s `[workspace.dependencies]` section. They exist
+only as transitive lockfile entries. Per `17-dependency-discipline.mdc`
+verification protocol, workspace-state must be verified before
+recommending a dependency; this finding closes the verification gap.
+
+**Substrate.** From the lockfile: `sha2 = "0.10.9"` (via transitive
+deps); `rand_chacha = "0.3.1"` and `"0.9.0"` (two versions; the
+harness should pin the lower 0.3.x to avoid conflict); `serde_json
+= "1.0.149"`. From `rust/Cargo.toml`: `serde = { version = "1",
+features = ["derive"] }` is a workspace dep. The three target deps
+must be promoted to workspace-level for `shekyl-randomx-differential`
+to reference them as `{ workspace = true }`.
+
+**Options.**
+
+(a) Add all three to `[workspace.dependencies]` in `rust/Cargo.toml`:
+`sha2 = "0.10"` (matching the lockfile minor); `rand_chacha = "0.3"`
+(matching the lower lockfile pin); `serde_json = "1"` (matching
+the lockfile major). The harness `Cargo.toml` then references them
+with `{ workspace = true }`.
+
+(b) Add sha2 and rand_chacha to workspace; reference serde_json
+without workspace using a direct per-crate version pin.
+
+**Default expectation: (a).** All three added as workspace deps at
+their lockfile-matching bounds. The C1 commit (or a pre-C1 commit
+0 amending the workspace manifest) lands the three additions; C1
+is the first commit that proves the workspace compiles with the new
+members. The workspace addition is a zero-surface change to other
+workspace members (no other crate gains a transitive dep it didn't
+already have via the lockfile).
+
+**Reopen criterion.** A future workspace dep-version bump that
+changes `sha2`, `rand_chacha`, or `serde_json`'s version constraint
+is a `17-dependency-discipline.mdc` re-verification trigger.
+
+---
+
+#### R4-D2 — Static library filename in `build.rs`
+
+**Finding.** §5.2.2 specifies `cargo:rustc-link-lib=static=
+shekyl_randomx_v2`, but `shekyl_randomx_v2` is the CMake **imported
+target** name. The `ExternalProject_Add` in
+`external/CMakeLists.txt` produces a file named
+`librandomx${CMAKE_STATIC_LIBRARY_SUFFIX}` in the install prefix's
+`lib/` directory (per `RANDOMX_V2_LIB =
+"${RANDOMX_V2_INSTALL}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}randomx
+${CMAKE_STATIC_LIBRARY_SUFFIX}"`). Cargo's link directive requires
+the file name, not the CMake target name.
+
+**Default expectation:** `cargo:rustc-link-lib=static=randomx`.
+The static library is `librandomx.a` on Linux/macOS and `randomx.lib`
+on Windows; Cargo infers the platform-appropriate prefix/suffix from
+the `static=randomx` bare name per the Cargo reference. §5.2.2 is
+amended accordingly.
+
+**Reopen criterion.** If the CMake build is restructured to produce
+a different filename (e.g., a rename to `librandomx_v2.a`), the
+`build.rs` link directive must match.
+
+---
+
+#### R4-D3 — `build.rs` search-path discovery mechanism
+
+**Finding.** §5.2.2 says "The search path is configured from
+`BUILD_RANDOMX_V2_MINER_LIB`'s output directory" but does not name
+the mechanism. Cargo's `build.rs` runs outside the CMake configure
+step; CMake cannot inject the install-dir path into Cargo's
+environment without an explicit hand-off mechanism.
+
+**Options.**
+
+(a) Environment variable `RANDOMX_V2_INSTALL_DIR`: the user (or a
+wrapper script / CI step) sets `RANDOMX_V2_INSTALL_DIR` to the
+CMake install prefix before running `cargo build`. `build.rs` reads
+`env::var("RANDOMX_V2_INSTALL_DIR")`, emits
+`cargo:rustc-link-search=native={dir}/lib` and
+`cargo:rustc-link-lib=static=randomx`. If not set, `build.rs`
+emits `cargo:warning=RANDOMX_V2_INSTALL_DIR not set; …` and
+`process::exit(1)` with a pointer to `BUILD_RANDOMX_V2_DIFFERENTIAL_
+HARNESS`. The CMake step in CI sets the env var before invoking
+`cargo build`.
+
+(b) `links = "randomx_v2"` in `Cargo.toml` plus a
+`DEP_RANDOMX_V2_*` protocol — requires a non-existent upstream
+`randomx_v2-sys`-style `package.links` declaration, which
+over-engineers the hand-off.
+
+(c) Hard-code a build-directory-relative path (fragile; breaks out-of-
+tree builds).
+
+**Default expectation: (a).** `RANDOMX_V2_INSTALL_DIR` is the
+canonical mechanism; it is set by the CMake+Cargo CI wrapper script
+(in `.github/workflows/`) to `${CMAKE_BINARY_DIR}/external/randomx-
+v2-install`. The env var is recorded in §5.2.2 (amended) and in
+the harness `README.md` (§5.1.16). The `Cargo.toml` does **not**
+declare `links =` for `randomx-v2-sys`; the env-var mechanism is
+sufficient and simpler.
+
+**Reopen criterion.** If the Shekyl build system adopts a unified
+`CMake+Cargo` wrapper (e.g., `cmake --build` driving `cargo` via
+`ExternalProject_Add` or `corrosion`), the env-var mechanism may
+be superseded by the wrapper's native mechanism at that point.
+
+---
+
+#### R4-D4 — Seven `extern "C"` signatures (explicit enumeration)
+
+**Finding.** §5.2.1 says "Seven hand-written `extern "C"`
+declarations per R1-D2 disposition table" but R1-D2 never
+enumerated the seven. The harness uses light mode (cache only,
+no dataset) per R4-D5. From `external/randomx-v2/src/randomx.h`
+read at source, the seven required functions are:
+
+```rust
+// rust/randomx-v2-sys/src/lib.rs — extern "C" block
+use std::os::raw::{c_int, c_void};
+
+#[repr(C)]
+pub struct RandomxCache(u8); // opaque; allocated by C
+#[repr(C)]
+pub struct RandomxVm(u8);    // opaque; allocated by C
+
+pub type RandomxFlags = c_int;
+pub const RANDOMX_FLAG_DEFAULT: RandomxFlags = 0;
+
+extern "C" {
+    // Allocate + initialize the cache
+    pub fn randomx_alloc_cache(flags: RandomxFlags) -> *mut RandomxCache;
+    pub fn randomx_init_cache(cache: *mut RandomxCache,
+                              key: *const c_void, key_size: usize);
+
+    // Read cache memory for SHA-256 precondition (R4-D5 / R1-D14)
+    pub fn randomx_get_cache_memory(cache: *mut RandomxCache) -> *mut c_void;
+
+    // Release cache
+    pub fn randomx_release_cache(cache: *mut RandomxCache);
+
+    // Create + destroy VM (light mode: cache != NULL, dataset = NULL)
+    pub fn randomx_create_vm(flags: RandomxFlags,
+                             cache: *mut RandomxCache,
+                             dataset: *mut c_void) -> *mut RandomxVm;
+    pub fn randomx_destroy_vm(machine: *mut RandomxVm);
+
+    // Compute one hash
+    pub fn randomx_calculate_hash(machine: *mut RandomxVm,
+                                  input: *const c_void, input_size: usize,
+                                  output: *mut c_void);
+}
+```
+
+**Default expectation.** The above seven declarations are the
+authoritative §5.2.1 surface. `randomx_get_flags` is **not**
+declared (per R4-D5 below: the harness uses `RANDOMX_FLAG_DEFAULT`
+for cache allocation and `randomx_get_flags()` for VM creation —
+wait; see R4-D5 for the flag choice). `RandomxCache` and `RandomxVm`
+are opaque structs (single-byte bodies per the Rust FFI idiom for
+C opaque pointers). `RandomxFlags` is `c_int` (the `randomx_flags`
+C enum is `int`-sized per C99). Dataset-related functions are
+out-of-scope (light mode only). The pipeline hash functions
+(`randomx_calculate_hash_first/next/last`) and
+`randomx_calculate_commitment` are out-of-scope.
+
+**Reopen criterion.** If the harness needs a VM-reinit path
+(`randomx_vm_set_cache`) for seedhash rotation without VM realloc,
+or if `randomx_get_flags` must be declared (see R4-D5), extend
+§5.2.1 with the additional signature; no other Round-1/2/3
+disposition changes.
+
+---
+
+#### R4-D5 — C-oracle VM mode and lifecycle
+
+**Finding.** §5.1.8 says "lifetime + error-translation discipline"
+but does not specify: (a) the `randomx_flags` passed to
+`randomx_alloc_cache` and `randomx_create_vm`, (b) whether VM
+instances are re-used across hashes or allocated per-hash, or (c)
+whether the cache instance is re-used across seedhash iterations.
+
+**Options for flags.**
+
+(a) `RANDOMX_FLAG_DEFAULT` (0) — software-only, no JIT, no
+large-pages; most portable; slowest; deterministic across platforms.
+
+(b) `randomx_get_flags()` — recommended flags for the current
+machine; includes JIT on x86_64 Linux; faster but requires
+declaring the function in §5.2.1 (adding one more extern "C").
+
+(c) A fixed combination: `RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_HARD_AES`
+— software AES accelerated; intermediate.
+
+**Default expectation: (a)** `RANDOMX_FLAG_DEFAULT` for both
+`randomx_alloc_cache` and `randomx_create_vm`. Rationale: the
+harness's purpose is byte-equality verification, not performance
+benchmarking of the C oracle; any valid flags produce the same
+hash output in light mode; `RANDOMX_FLAG_DEFAULT` is maximally
+portable and requires no additional `extern "C"` declaration. The
+flags value is included in the M4 invocation banner for
+reproducibility audits.
+
+**VM lifecycle (pinned).** One `randomx_cache` + one `randomx_vm`
+per seedhash iteration, in `c_oracle.rs`:
+
+```
+for each seedhash in corpus:
+    cache = randomx_alloc_cache(RANDOMX_FLAG_DEFAULT)
+    randomx_init_cache(cache, seedhash.as_bytes(), 32)
+    vm    = randomx_create_vm(RANDOMX_FLAG_DEFAULT, cache, NULL)
+    for each data value for this seedhash:
+        randomx_calculate_hash(vm, data, data.len(), &mut output)
+        assert byte-equality
+    randomx_destroy_vm(vm)
+    randomx_release_cache(cache)
+```
+
+The VM is reused across data values for the same seedhash (correct:
+the VM is bound to the cache, which is seedhash-specific). Cache
+and VM are freed before the next seedhash iteration — this ensures
+peak memory is ≤ one cache (~256 MiB) + one VM scratchpad (~2 MiB)
+per iteration, not O(seedhash-count × 256 MiB). This lifecycle
+shape is compatible with R1-D14's SHA-256 precondition: the
+precondition runs against the same `cache` pointer before the VM
+is created (via `randomx_get_cache_memory`), then the VM is created
+and the per-hash tests run.
+
+**Reopen criterion.** If per-hash latency results show `RANDOMX_
+FLAG_DEFAULT` (software AES) makes the nightly harness wall-clock
+exceed the §5.5.2 budget (~25 min), reopen R4-D5 with option (b)
+(`randomx_get_flags()`), adding the declaration to §5.2.1.
+
+---
+
+#### R4-D6 — Corpus-size CLI parameter
+
+**Finding.** §6.1 T1 specifies different corpus sizes for per-PR
+(16 seedhashes × 8 data values = 128 pairs) vs. nightly (32 × 32
+= 1024 pairs), but the mechanism for selecting between them is not
+pinned. An implementer cannot know what CLI flag to add.
+
+**Default expectation.** The harness's `--mode=correctness`
+subcommand accepts two sizing flags:
+
+- `--random-corpus-seedhashes <N>` (default: 32): number of random
+  seedhashes to generate from the R1-D4 ChaCha20 seed. Per-PR CI
+  passes `--random-corpus-seedhashes=16`.
+- `--random-corpus-data-per-seedhash <M>` (default: 32): number of
+  random data values per seedhash. Per-PR CI passes
+  `--random-corpus-data-per-seedhash=8`.
+
+Both flags affect only the random corpus (§5.1.5 `corpus_random`);
+the adversarial corpus (§5.1.6) is always included in full
+regardless of these flags (it is a committed fixed-size set). The
+flags are documented in `--help` output and in §5.1.16 README.md.
+The per-PR CI workflow passes both flags explicitly; the nightly
+workflow uses defaults.
+
+§3.15.1 mode-state table for the `correctness` mode is amended:
+the `CorpusConfig { random_seedhashes: usize, data_per_seedhash:
+usize }` struct holds the parsed flag values and is initialized
+during the correctness-mode setup phase (§3.15.4 lifecycle).
+
+**Reopen criterion.** If the per-PR wall-clock budget (§5.5.1 ~7
+min) proves infeasible even at 16×8 + adversarial, reduce the
+per-PR default via flag; no disposition change.
+
+---
+
+#### R4-D7 — Canonical outputs first-generation (chicken-and-egg resolution)
+
+**Finding.** C5 commits `CANONICAL_HASHES` and `CANONICAL_CACHE_
+SHAS` (§5.1.17), but these require running the C oracle against the
+corpus to generate. At C5, the harness binary has only the skeleton
+(C4) + corpus structures; the correctness mode (§5.1.10) is C7.
+The C oracle (`randomx-v2-sys`) is available after C3.
+
+**Resolution.** Add a generation binary to the harness crate:
+`[[bin]] name = "gen-canonical-outputs"`, `path =
+"src/bin/gen_canonical_outputs.rs"`. This binary:
+
+1. Reads the corpus from §5.1.5 + §5.1.6 (deterministic from the
+   pinned seed and the committed adversarial bytes).
+2. Calls the C oracle (`randomx-v2-sys`) to produce `(seedhash,
+   data) → hash` pairs and `seedhash → cache_sha256` values.
+3. Prints the `canonical_outputs.rs` module content to stdout for
+   review and paste.
+
+The generation binary only requires `randomx-v2-sys` (available
+after C3) and `sha2` + `rand_chacha` (R4-D1). It does not depend
+on the correctness mode. C5's revised scope:
+
+- Commits `src/corpus_random.rs`, `src/adversarial_corpus.rs`,
+  `src/canonical_outputs.rs`, and
+  `src/bin/gen_canonical_outputs.rs`.
+- `CANONICAL_HASHES` and `CANONICAL_CACHE_SHAS` are generated by
+  running `cargo run --bin gen-canonical-outputs` after C3's lib
+  is built, then reviewed and committed.
+- C5's bisection invariant is extended: "`cargo run --bin gen-
+  canonical-outputs` succeeds (C oracle linkage established at C3);
+  T9, T10, T16 unit tests pass."
+
+**Reopen criterion.** If the generation binary becomes load-bearing
+for canonical-output maintenance (used by future regeneration PRs),
+promote it from `src/bin/` to a documented tool with its own
+README entry in §5.1.16.
+
+---
+
+#### R4-D8 — T11 `failure_output` test shape
+
+**Finding.** T11's description says "a test-only mode
+(`--mode=test-failure`)". This mode does not appear in §3.15.1's
+mode enumeration and would require adding a mode that is never
+used in production. The failure-output schema (§5.1.14) is pure
+Rust data + serialization — there is no reason it cannot be tested
+as a unit test within `src/failure_output.rs`.
+
+**Default expectation.** T11 is a `#[cfg(test)] mod tests` unit
+test in `src/failure_output.rs` that:
+
+1. Constructs a `FailureOutput` value with injected synthetic data
+   (all required fields filled).
+2. Serializes it to JSON via `serde_json::to_string`.
+3. Asserts the resulting JSON is valid (`serde_json::from_str`
+   round-trip succeeds) and that all required field names from
+   R1-D11's schema are present as JSON keys.
+
+No `--mode=test-failure` flag is added. §3.15.1 mode table is
+unchanged. T11's §6.5 row is amended: `Surface` changes from
+`failure_output` (§5.1.14) + `--mode=test-failure` to
+`failure_output` (§5.1.14) unit tests; `Cadence` changes from
+`per-PR` (via binary invocation) to `per-PR` (via `cargo test`).
+T11 requires no mode-dispatch infrastructure.
+
+**Reopen criterion.** If a future contributor requires an
+end-to-end test that exercises the full harness binary's stderr
+output (not just the serialization unit), add a
+`tests/integration/` test that invokes the binary and captures
+stderr; that is an addition, not a reshape of T11.
+
+---
+
+#### §3.16 summary: what Round 4 amends
+
+The following contract rows are amended by R4-D1 through R4-D8:
+
+| Decision | Amendment location |
+|---|---|
+| R4-D1 workspace deps | §5.1.15 (Cargo.toml dep list); new C0 commit (workspace additions) |
+| R4-D2 lib name | §5.2.2 (`cargo:rustc-link-lib=static=randomx`) |
+| R4-D3 env var | §5.2.2 (`RANDOMX_V2_INSTALL_DIR` mechanism) + §5.1.16 README |
+| R4-D4 extern sigs | §5.2.1 (7 explicit Rust signatures) |
+| R4-D5 VM lifecycle | §5.1.8 (flags + per-seedhash alloc/free shape) |
+| R4-D6 corpus CLI | §5.1.5 (`--random-corpus-seedhashes` + `--data-per-seedhash` flags); §5.5.1/§5.5.2 CI step CLI |
+| R4-D7 canonical gen | C5 bisection invariant; new §5.2.6 gen-canonical-outputs binary |
+| R4-D8 T11 unit test | §6.5 T11 row; §5.1.14 unit-test shape (no mode flag) |
+
+The implementation PR commit budget expands by one: **C0** (workspace
+manifest additions: sha2, rand_chacha, serde_json) is inserted
+before C1, yielding an 11-commit sequence. Per
+[`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) rule 2,
+the ≤10-commit guidance applies per review-window; Round 4's
+amendment justifies the 11th commit as a scope-bounded workspace-
+manifest addition that is separately bisectable and mechanically
+reviewable. Alternatively, C0's three lines can be absorbed into
+C1 (the `randomx-v2-sys` skeleton also needs the deps) — the
+implementer chooses; either shape is within rule-2's spirit.
+
 ---
 
 ## 4. Threat model (Round-N placeholder)
@@ -5032,17 +5416,17 @@ per [Phase 2F §5](./RANDOMX_V2_PHASE2F_PLAN.md) precedent.
 | 5.1.2 | `[lib]` `shekyl_randomx_differential` | library (`#[doc(hidden)]`) | R1-D7 | Test-harness surface; consumed by `tests/`; not a public-API crate |
 | 5.1.3 | `src/main.rs` | binary entry point | R1-D1, R1-D11 | Argparse + subcommand dispatch + JSON-to-stderr failure output per R1-D11 |
 | 5.1.4 | `src/lib.rs` | library entry point | R1-D7 | Re-exports modules below for `tests/` consumption |
-| 5.1.5 | `src/corpus_random.rs` | `pub(crate)` | R1-D4 | `ChaCha20Rng`-seeded random corpus generator; 32-byte seed pinned per R1-D4 |
+| 5.1.5 | `src/corpus_random.rs` | `pub(crate)` | R1-D4, R4-D6 | `ChaCha20Rng`-seeded random corpus generator; 32-byte seed pinned per R1-D4; corpus size controlled via `--random-corpus-seedhashes <N>` (default 32) and `--random-corpus-data-per-seedhash <M>` (default 32) CLI flags per R4-D6; per-PR CI passes `--random-corpus-seedhashes=16 --random-corpus-data-per-seedhash=8` |
 | 5.1.6 | `src/adversarial_corpus.rs` | `pub(crate)` | R1-D5, R1-D6 | Committed hex byte arrays for adversarial seedhashes + u128 edge-case data; tagged by class (CFROUND, FDIV_M, Cache-miss, CBRANCH, Combined-heavy, div-by-zero, signed-div overflow, shift-by-width, u128-trunc-high) |
 | 5.1.7 | `src/cache_precondition.rs` | `pub(crate)` | R1-D14 | SHA-256 cache-equivalence precondition test; `--debug-cache-divergence` mode performs byte-by-byte diff |
-| 5.1.8 | `src/c_oracle.rs` | `pub(crate)` | R1-D2 | Thin wrapper over `randomx-v2-sys` `extern "C"` declarations; lifetime + error-translation discipline |
+| 5.1.8 | `src/c_oracle.rs` | `pub(crate)` | R1-D2, R4-D5 | Thin wrapper over `randomx-v2-sys` `extern "C"` declarations; flags: `RANDOMX_FLAG_DEFAULT` (0) for both cache and VM allocation per R4-D5; lifecycle: one `randomx_cache` + one `randomx_vm` allocated per seedhash iteration (VM reused across data values for same seedhash), freed before next seedhash; cache memory pointer via `randomx_get_cache_memory` for SHA-256 precondition; null-pointer error translation: `randomx_alloc_cache` / `randomx_create_vm` returning NULL → Rust `Error::COracleAlloc` with context |
 | 5.1.9 | `src/rust_subject.rs` | `pub(crate)` | R1-D14, Phase 2F §5 | Calls `PreparedCache::derive` + `compute_hash` per the Phase 2F R3-frozen public surface; no internals access |
 | 5.1.10 | `src/mode_correctness.rs` | `pub(crate)` | R1-D4, R1-D5, R1-D6, R1-D14 | Per-seedhash: precondition (R1-D14) then per-data byte-equality (R1-D4 + R1-D5 + R1-D6) |
 | 5.1.11 | `src/mode_worst_case.rs` | `pub(crate)` | R1-D8 | Per-(adversarial-seedhash, u128-edge-data) per-hash latency measurement; aggregates median and per-class breakdown |
 | 5.1.12 | `src/mode_latency.rs` | `pub(crate)` | R1-D7 | Replaces deleted `rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs`; interleaved Rust/C measurement methodology pinned per R1-D7 |
 | 5.1.13 | `src/mode_concurrent.rs` | `pub(crate)` | R1-D9 | `std::thread::spawn` workers; RSS-bound assertion via `/proc/self/statm`; byte-equality assertion per worker |
 | 5.1.14 | `src/failure_output.rs` | `pub(crate)` | R1-D11 | Structured JSON failure schema; fields enumerated in R1-D11 disposition |
-| 5.1.15 | `Cargo.toml` | manifest | R1-D1, R1-D2, R1-D4 | Workspace member; depends on `shekyl-pow-randomx` (workspace), `randomx-v2-sys` (workspace path), `rand_chacha` (workspace), `sha2` (workspace), `serde_json` (workspace, for R1-D11) |
+| 5.1.15 | `Cargo.toml` | manifest | R1-D1, R1-D2, R1-D4, R4-D1 | Workspace member; depends on `shekyl-pow-randomx` (workspace), `randomx-v2-sys` (workspace path), `rand_chacha = { workspace = true }`, `sha2 = { workspace = true }`, `serde_json = { workspace = true }` (for R1-D11 failure-output schema); **R4-D1 precondition**: `rand_chacha`, `sha2`, `serde_json` must be added to `rust/Cargo.toml` `[workspace.dependencies]` (sha2 = "0.10", rand_chacha = "0.3", serde_json = "1") before or alongside C1; they are not currently workspace-level deps (verified at source per `17-dependency-discipline.mdc`) |
 | 5.1.16 | `README.md` | doc | R1-D11 | How to read a failure output; how to invoke `--debug-cache-divergence`; how to re-grind the adversarial corpus (R1-D5/R1-D6 grinding budget per F3); canonical-regeneration discipline per §4.6 M1 |
 | 5.1.17 | `src/canonical_outputs.rs` | `pub(crate)` | §4.6 M1 (Round-3 amendment) | Committed canonical hashes (`CANONICAL_HASHES` per-`(seedhash, data)` pair) + committed canonical cache SHA-256 (`CANONICAL_CACHE_SHAS` per seedhash); asserted by T16 alongside the `rust == c` byte-equality; defends against T-A1, T-A2, T-A3, T-A10; regeneration is a tracked auditable action per §5.7 + §8.3 discipline |
 | 5.1.18 | `src/invocation_banner.rs` | `pub(crate)` | §4.6 M4 (Round-3 amendment) | Stderr-emitted disposition-source banner printed before any test output; banner names plan-doc round + §4.5 T-A coverage + §2.5 leg-3-backstop framing + modification-discipline pointer; asserted by T17; defends against T-A7, T-A8, T-A11 |
@@ -5051,11 +5435,17 @@ per [Phase 2F §5](./RANDOMX_V2_PHASE2F_PLAN.md) precedent.
 
 | # | Surface | Visibility | Anchor | Notes |
 |---|---|---|---|---|
-| 5.2.1 | `src/lib.rs` | `pub` | R1-D2 | Seven hand-written `extern "C"` declarations per R1-D2 disposition table |
-| 5.2.2 | `build.rs` | build | R1-D2, R1-D3 | Emits `cargo:rustc-link-lib=static=shekyl_randomx_v2` + `cargo:rustc-link-search=…`; the search path is configured from `BUILD_RANDOMX_V2_MINER_LIB`'s output directory per R1-D3's CMake wiring |
+| 5.2.1 | `src/lib.rs` | `pub` | R1-D2, R4-D4 | Seven hand-written `extern "C"` declarations with exact Rust signatures pinned in §3.16 R4-D4: `randomx_alloc_cache`, `randomx_init_cache`, `randomx_get_cache_memory`, `randomx_release_cache`, `randomx_create_vm`, `randomx_destroy_vm`, `randomx_calculate_hash`; `RandomxCache` and `RandomxVm` as opaque single-byte structs; `RandomxFlags = c_int`; `RANDOMX_FLAG_DEFAULT = 0` constant |
+| 5.2.2 | `build.rs` | build | R1-D2, R1-D3, R4-D2, R4-D3 | Reads env var `RANDOMX_V2_INSTALL_DIR` (set by CI to `${CMAKE_BINARY_DIR}/external/randomx-v2-install`); emits `cargo:rustc-link-search=native={RANDOMX_V2_INSTALL_DIR}/lib` and `cargo:rustc-link-lib=static=randomx` (file is `librandomx.a`, not `libshekyl_randomx_v2.a` — corrected per R4-D2; `shekyl_randomx_v2` is the CMake imported-target name only); if env var unset, emits `cargo:warning=…` and panics with pointer to `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS` cmake option per R4-D3 |
 | 5.2.3 | `Cargo.toml` | manifest | R1-D2 | Workspace member; build-dep none beyond stdlib; consumers list = `shekyl-randomx-differential` only |
 | 5.2.4 | `Cargo.toml` `[package.metadata.shekyl]` | metadata | R1-D2 | `fork-pin-coupled = true` marker per R1-D2 future-maintenance hardening; advances to `external/randomx-v2` require re-verifying signatures |
 | 5.2.5 | `README.md` | doc | R1-D2, R1-D13 | "This crate's only consumer is `shekyl-randomx-differential`. Pattern C invariant exempt per R1-D13. Fork-pin coupling per §1.7." |
+
+#### §5.2.6 Harness crate addition: canonical-outputs generation binary (R4-D7)
+
+| # | Surface | Visibility | Anchor | Notes |
+|---|---|---|---|---|
+| 5.2.6 | `[[bin]] name = "gen-canonical-outputs"` at `src/bin/gen_canonical_outputs.rs` in `shekyl-randomx-differential` | internal tool (not installed) | R4-D7 | Uses `randomx-v2-sys` C oracle + `rand_chacha` corpus + `sha2` SHA-256 to generate `canonical_outputs.rs` content; invoked once (post C3, pre-C5 commit) to produce `CANONICAL_HASHES` + `CANONICAL_CACHE_SHAS` for review and commit; included in the C5 commit alongside the generated constants; generation command documented in §5.1.16 README.md |
 
 #### §5.3 Verifier-crate-side additions (`rust/shekyl-pow-randomx/`)
 
@@ -5198,7 +5588,7 @@ on threat-model findings).
 
 | # | Test | Surface | Input | Assertion | Cadence | Anchor |
 |---|---|---|---|---|---|---|
-| T11 | `failure_output_schema_round_trip` | `failure_output` (§5.1.14) | Injected synthetic divergence in a test-only mode (separate `--mode=test-failure` subcommand) | Stderr emits valid JSON; required fields per R1-D11 schema present (`seedhash`, `data`, `rust_hash`, `c_hash`, `rust_cache_sha256`, `c_cache_sha256`, `mode`, `class_tag`, `timestamp`, `harness_version`, `fork_pin`); stdout emits human-readable log | per-PR | R1-D11 |
+| T11 | `failure_output_schema_round_trip` | `failure_output` (§5.1.14) `#[cfg(test)]` unit test | Synthetic `FailureOutput` struct with all required fields set to test values | JSON serializes cleanly (`serde_json::to_string` succeeds); round-trip succeeds (`serde_json::from_str` after serialization); all required field names from R1-D11 schema present as JSON keys (`seedhash`, `data`, `rust_hash`, `c_hash`, `rust_cache_sha256`, `c_cache_sha256`, `mode`, `class_tag`, `timestamp`, `harness_version`, `fork_pin`); **no `--mode=test-failure` binary mode** — amended per R4-D8 (unit test in `src/failure_output.rs #[cfg(test)]`, no mode-dispatch infrastructure) | per-PR (via `cargo test`) | R1-D11, R4-D8 |
 
 #### §6.6 Category F: Build-system + crate-invariant
 
@@ -5353,11 +5743,11 @@ workspace, not behavioral correctness against the C reference).
 | C2 | `randomx-v2-diff: wire CMake BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS option` | §5.4.1, §5.4.2, §5.4.3 | Configure with the new option succeeds; `BUILD_RANDOMX_V2_MINER_LIB` auto-flips with warning per T12; existing CMake builds unchanged when option is OFF |
 | C3 | `randomx-v2-diff: implement randomx-v2-sys build.rs linker directives` | §5.2.2 | `cargo build -p randomx-v2-sys` succeeds when `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON` was configured; otherwise emits a clear build-time error pointing to the CMake option |
 | C4 | `randomx-v2-diff: introduce shekyl-randomx-differential crate skeleton` | §5.1.1, §5.1.2, §5.1.3, §5.1.4, §5.1.15, §5.1.16 | Builds; clippy clean; `[[bin]]` + `[lib]` targets present; `main.rs` argparse + subcommand-dispatch skeleton in place; runs with `--help` |
-| C5 | `randomx-v2-diff: implement random + adversarial corpora + canonical outputs` | §5.1.5, §5.1.6, §5.1.17, T9, T10, T16 | Builds; clippy clean; T9 + T10 + T16 unit tests pass; R1-D4 32-byte seed pinned; R1-D5/R1-D6 adversarial hex byte arrays committed with per-class tags per R1-D5 / R1-D6; `CANONICAL_HASHES` + `CANONICAL_CACHE_SHAS` committed per §4.6 M1 (Round-3 amendment; absorbed at the corpus boundary because canonical-outputs are the corpus's third-leg-of-comparison artifact) |
+| C5 | `randomx-v2-diff: implement random + adversarial corpora + canonical outputs` | §5.1.5, §5.1.6, §5.1.17, §5.2.6, T9, T10, T16 | Builds; clippy clean; T9 + T10 + T16 unit tests pass; R1-D4 32-byte seed pinned; `--random-corpus-seedhashes` + `--random-corpus-data-per-seedhash` flags wired per R4-D6; R1-D5/R1-D6 adversarial hex byte arrays committed with per-class tags; `CANONICAL_HASHES` + `CANONICAL_CACHE_SHAS` committed per §4.6 M1 — **generation method per R4-D7**: canonical values produced by running `cargo run --bin gen-canonical-outputs` (§5.2.6) after C3's C oracle linkage is established, reviewed and committed; `gen-canonical-outputs` binary also committed in this commit; commit message cites "canonical values generated by gen-canonical-outputs at fork-pin SHA [pin]" |
 | C6 | `randomx-v2-diff: implement cache-precondition + Rust/C oracle wrappers` | §5.1.7, §5.1.8, §5.1.9, T3, T4 | Builds; clippy clean; `--debug-cache-divergence` flag wired per T4; SHA-256 default path wired per R1-D14 + T3 |
 | C7 | `randomx-v2-diff: implement correctness + worst-case + latency modes` | §5.1.10, §5.1.11, §5.1.12, T1, T2, T5, T6 | Builds; clippy clean; subcommand dispatch routes `--mode={correctness,worst-case,latency}` to the right module; smoke-test against a 1-seedhash, 1-data corpus passes byte-equality |
 | C8 | `randomx-v2-diff: implement concurrent mode + RSS-bound assertion` | §5.1.13, T7, T8 | Builds; clippy clean; T7 + T8 pass on a 4+1-worker × 256-hash run; `/proc/self/statm` RSS-sampling methodology in place per F4 |
-| C9 | `randomx-v2-diff: implement failure-output JSON schema + invocation banner + delete placeholder` | §5.1.14, §5.1.18, §5.3.2, T11, T17 | Builds; clippy clean; T11 passes against the synthetic `--mode=test-failure` injection; T17 asserts the stderr banner emission per §4.6 M4 (Round-3 amendment; absorbed at the failure-output boundary because both surfaces govern stderr/structured output); `rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs` deletion commits with message "closes Phase 2c R3-minor-2" per R1-D7 audit-trail discipline |
+| C9 | `randomx-v2-diff: implement failure-output JSON schema + invocation banner + delete placeholder` | §5.1.14, §5.1.18, §5.3.2, T11, T17 | Builds; clippy clean; T11 passes as a `#[cfg(test)]` unit test in `src/failure_output.rs` (no `--mode=test-failure` binary mode — amended per R4-D8); T17 asserts the stderr banner emission per §4.6 M4 (Round-3 amendment; absorbed at the failure-output boundary because both surfaces govern stderr/structured output); `rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs` deletion commits with message "closes Phase 2c R3-minor-2" per R1-D7 audit-trail discipline |
 | C10 | `randomx-v2-diff: wire CI gates + PR template + mutants + extend crate-invariant script` | §5.5.1, §5.5.2, §5.5.3, §5.5.4, §5.5.5, §5.5.6, T13, T14, T15, T18 | Per-PR + nightly + release-gate workflows configured per R1-D12 cadence; crate-invariant script extended per R1-D13; PR-template discipline checklist added per §4.6 M3 (Round-3 amendment); nightly `cargo-mutants` workflow + `.cargo/mutants.toml` added per §4.6 M2 (Round-3 amendment); T13/T14/T15 pass in CI; T18 cargo-mutants nightly job successfully invokes and reports survival ≤ skip-list bound |
 
 **Round-3 substrate-completeness amendment absorption.** The
@@ -5424,7 +5814,9 @@ Per [`90-commits.mdc`](../../.cursor/rules/90-commits.mdc) and
   it deletes a placeholder, not a surface
 - No commit re-implements anything 2c/2d/2f already landed
 - No commit introduces dependencies beyond those listed in
-  §5.1.15 + §5.2.3
+  §5.1.15 + §5.2.3; the three workspace-dep additions (sha2, rand_chacha,
+  serde_json per R4-D1) land in C0 or C1 and are the only additions
+  to `rust/Cargo.toml`
 - No commit re-shapes the Round 1 dispositions; any
   implementation-time discovery that requires a R1-D# reshape
   triggers a Round-2 design-round entry, not a commit-table
@@ -5580,4 +5972,5 @@ the round-count budget.
 | Round 1 (Decisions close + §4 deferral + §5/§6/§8 substance) | 2026-05-24 | Closes all 14 §3 decision points (R1-D1 through R1-D14) at their Round-0-named default expectations, each with substrate-anchored rationale, named sub-disposition pins where the option set carried multiple branches (e.g., R1-D5 + R1-D6 corpus-storage formats, R1-D11 failure-output schema, R1-D14 SHA-256-vs-byte-diff comparison shape), and full reversion-clause shape per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc) (rejection / reopening criteria / re-evaluation shape). **Five Round-0-defaults-supporting substrate findings surfaced and pinned:** **F1** R1-D14 comparison-shape (SHA-256 of full cache by default; `--debug-cache-divergence` flag for byte-by-byte diff on post-failure manual re-run; memory pressure within 16 GB runner budget); **F2** R1-D4 numeric pins (16 seedhashes × 8 data values for per-PR cadence; 32 × 32 for nightly; bimodal block-template-shaped data-length distribution; 32-byte ChaCha20 seed; deterministic regeneration verified via T9); **F3** R1-D5 + R1-D6 grinding budget (4 hours wall-clock per class on a 16-core baseline; per-class targets enumerated for CFROUND, FDIV_M, Cache-miss, CBRANCH, Combined-heavy seedhashes + div-by-zero, signed-div overflow, shift-by-width, u128-truncation data); **F4** R1-D9 RSS-bound pin (640 MiB ceiling with ±10% tolerance, measured via `/proc/self/statm` field 2; sampled at 100 ms intervals during concurrent execution); **F5** R1-D12 runner-class pin (`ubuntu-latest` per GitHub Actions specs: 4 vCPU / 16 GB RAM / x86_64; wall-clock budgets ~7 min per-PR / ~25 min nightly / ~10 min release-gate, all within the 6 h runner ceiling). **R1-D11 ↔ R1-D14 dependency edge surfaced and absorbed (F6):** R1-D11's structured-failure-output schema includes `rust_cache_sha256` + `c_cache_sha256` fields populated from R1-D14's precondition test; a precondition test failure aborts the corpus pass for that seedhash before per-`(seedhash, data)` tests run, so a divergent-cache-sha256 in the R1-D11 failure output is a harness bug (the precondition should have caught it first). **§4 threat-model close deferred to Round 2** per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) A3 timing discipline ("threat-model addenda is typically late-design-rounds: after feature completeness, before closure"); the Round-0 Round-1-close obligation (corpus-coverage-as-leg-3-completeness framing) re-anchors as the Round-2-close obligation with no content change, and the Round-2 enumeration sketch pre-binds 7 attack classes against the differential-harness surface (corpus-generation bug, R1-D14 precondition bypass, CMake-trigger bypass, R1-D11 failure-output incompleteness, CacheStore `Arc` retention regression, adversarial-corpus drift, reviewer-blind nightly failures). **§5 implementation hand-off contract initial substance** lands: 16-row table for the harness crate (`shekyl-randomx-differential` `[[bin]]` + `[lib]` + 14 module surfaces), 5-row table for `randomx-v2-sys` sub-crate (`lib.rs` extern declarations + `build.rs` + manifests + README), 2-row verifier-crate side (no new surfaces per R1-D10 (b); placeholder deletion per R1-D7 (c)), 3-row CMake wiring (R1-D3 option + implication mechanism + zero new targets), 4-row CI surface (per-PR + nightly + release-gate workflows + crate-invariant script extension), explicit §5.6 negative-space pin (no new verifier API; no committed reference vectors; no additional `randomx-v2-sys` consumers; no `harness-trace` feature; no Phase 2F surface modification), and §5.7 drift-prevention discipline (reviewer rejection criterion for implementation-PR surfaces outside the table per [`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)). **§6 test plan initial substance** lands: 15-row test matrix across 7 categories (T1–T2 correctness; T3–T4 cache precondition; T5–T6 performance; T7–T8 thread-safety + RSS-bound; T9–T10 reproducibility; T11 failure-output schema; T12–T14 build-system + crate-invariant; T15 fork-pin coupling), cadence summary (9 per-PR / 7 nightly / 6 release-gate / 1 manual-post-failure), explicit §6.9 negative-space pin (no proptest, no fuzz, no mutation testing, no cross-platform — all out-of-scope-by-omission with future-deferred FOLLOWUPS pickup criteria), and §6.10 drift-prevention discipline. **§8 commit table initial substance** lands: 10-commit implementation-PR sequence within the [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) rule-2 ceiling (≤10 commits, ≤5 working days), each commit anchored to §5 surfaces and §6 T# rows, with per-commit bisection invariants ("every commit passes `cargo build` + `cargo clippy -D warnings` + `cargo fmt --check`"), §8.2 boundary-strengthening pins at C4→C5 (skeleton-without-corpora) and C9→C10 (harness-without-CI) for bisection legibility, §8.3 scope-discipline pin (no verifier-API modification; no re-implementation of 2c/2d/2f; no out-of-table dependencies; no in-place R1-D# reshape), and §8.4 PR-opening citation discipline. None of Round 1's closures reshapes the §1 substrate; all closures fall within the option sets enumerated at Round 0. Round 2 follows per the §0 round-count expectation (target ≤3 rounds total) and the §4 deferral pin (Round 2 closes §4 against the Round-1-anchored substrate). |
 | Round 2 (Architectural tightenings + §3.15 harness actor shape + §4 re-anchor to Round 3) | 2026-05-24 | Adversarial pass against the Round-1 close through the **workspace actor-paradigm lens** ("all our other clients are Actors") surfaces five substrate-tightening findings — none reopens a Round-1 disposition; each names a discipline the disposition collection already determines but did not surface explicitly. **(T1) §3.15 new section — harness actor shape (load-bearing architectural framing).** The `shekyl-randomx-differential` binary is the workspace's first multi-mode orchestration-actor consumer of the verifier's pure-transform surface; the R1-D1/D7/D8/D10/D11/D12/D14 disposition collection collectively determines its mode set (4 modes — correctness / worst-case / latency / concurrent — plus reserved trace), per-mode state shape (CacheStore presence + C-side Cache+Vm pair + accumulators + RSS-bound applicability), mode-dispatch surface (`--mode=` mutually exclusive top-level flag with mode-scoped sub-args; default behavior is loud-failure per [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc) `user-protection-defaults-in-user-absent-contexts` inversion), and orchestration lifecycle (init → corpus-load → [precondition-all-seedhashes for correctness] → per-iteration loop → accumulate → report → exit, with §3.15.4 phase-boundary discipline load-bearing for the R1-D9 + R1-D14 amendment pins). Process-scoped (not session-scoped) so each invocation is independent — the contract Phase 3a / 3c / release-gate consumers inherit. **(T2) §0 layer-separation positive observation.** The disposition collection operationalizes a **four-crate layering** (`shekyl-pow-randomx` verifier as pure-transforms + `CacheStore` state-holder + `randomx-v2-sys` C-bindings boundary + `shekyl-randomx-differential` orchestrator-actor) that is the concrete-template realization of the workspace's actor-paradigm discipline. R1-D1 (a) / R1-D2 (c) / R1-D7 (c) / R1-D10 (b) / R1-D13 (c) each individually land at the option that respects this layering; the disposition collection's coherence is the discipline applied to a new sub-problem yielding the structurally-clean shape by construction. The four-crate template is the load-bearing layout future Rust extractions (Phase 3a / 3c; signing-engine extractions) target by default. **(T3) R1-D9 amendment — RSS-bound mode-scoping pin.** The RSS-bound assertion (640 MiB ceiling per F4) is scoped to the concurrent-call test mode only; other modes (latency, worst-case, future trace) do not inherit it. The F2 backstop's measurement is meaningful only when the harness's own accumulator state is minimal — in modes whose per-mode accumulator state grows with corpus size, the measured RSS would shift without the verifier-side F2 mitigation having regressed (false-positive bound failure). Implementation: RSS sampler thread spawned only inside the `--mode=concurrent` dispatch branch (per §3.15 actor shape). Prevents inheritance-by-default for new mode additions. **(T4) R1-D13 amendment — harness stateful-pattern exemption pin.** The harness crate's stateful mode-dispatch (`OnceLock` / `LazyLock` / `static` for CLI arg parsing, accumulator state, mode-dispatch enum) is appropriately outside the verifier-crate-scoped Pattern A and Pattern B invariants. Per-crate scoping of the invariant grep gate (R1-D13 (c) close) is what enables this — Pattern A and Pattern B remain workspace-wide in scan-scope (all three crates), but the verifier-crate-specific stateful-construct-forbidding patterns anchor to `rust/shekyl-pow-randomx/` only. The per-crate scoping is now load-bearing, not incidental; a future workspace-wide stateful-pattern grep gate would fail this pin's substrate check (the layer separation per T2 is what makes the verifier-side prohibition load-bearing without requiring the same prohibition orchestrator-actor-side). **(T5) R1-D14 amendment — drop discipline + CacheStore-empty-during-precondition pin.** The SHA-256 incremental shape's ~256 MiB per-seedhash memory peak depends on `drop(rust_cache)` being load-bearing — the explicit drop releases the `Arc<Cache>` strong reference and the backing allocation is freed only if the drop-side is the last holder. The precondition test owns the only `Arc<PreparedCache>` clone for each seedhash; the `CacheStore` is empty during the precondition phase (precondition test calls `PreparedCache::derive` directly, not `CacheStore::get_or_derive`; the sticky-canonical slot stays unpopulated until the byte-equality phase begins). Phase-boundary enforcement at the §3.15.4 lifecycle level. **§4 threat-model close re-anchored from Round 2 to Round 3.** Round 2 absorbed the five architectural tightenings instead of closing §4; the §4 close re-anchors against the Round-1 + Round-2 substrate, with the §3.15 actor-shape framing becoming load-bearing for §4's adversarial probe. Three new Round-3-close obligations land at Round 2 for §4 to absorb: mode-boundary violations, phase-boundary violations, and per-mode-state-shape regression — alongside the seven Round-1 pre-bound attack classes and the corpus-coverage-as-leg-3-completeness obligation inherited forward. **Round-count budget unchanged:** Round 0 + Round 0 calibration + Round 1 + Round 2 + Round 3 = 3 substantive close-rounds within the §0 ≤3-round expectation (calibration counts as substrate-tightening, not a separate close-round). **Project-posture observation (broader project record).** 2g is the **fourth substantive sub-PR of the RandomX v2 migration to close Round 1 cleanly without an adversarial reframe** (2c closed in 3 rounds; 2d closed via R0-D5 pre-flight; 2f closed in 5+ rounds with substantial type-system reframe; 2g closes Round 1 at defaults with Round 2 handling tightenings rather than reframes). The pattern suggests the project's design discipline has matured to the point where Round 1's "default expectation" entries are usually right; converged-state-of-project-posture per [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc) discovery-cadence-compounding-substrate framing. None of T1–T5 reopens a frozen surface from §1 or reshapes a closed Round-1 disposition; all five are substrate-tightening additions per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc). Round 3 follows per the §4 Round-2 amendment re-anchor (Round 3 closes §4 against the Round-1- + Round-2-anchored substrate; transitions to implementation-PR after close). |
 | Round 3 substrate-completeness amendment (active threat surface + mitigation patterns) | 2026-05-24 | Post-Round-3-close substrate amendment incorporating "harness as attack vector" framing not present in the initial Round 3 close. **§4 restructured** into passive threat surface (§4.4 A1–A10; failures from substrate drift, discipline gaps, or accidental regression) and **active threat surface** (§4.5 T-A1–T-A11; failures from deliberate modification of harness code, corpus, assertions, or measurement); five attacker-objective groupings (silent-pass / fail-loud-DoS / oracle / laundering / rubber-stamp). **§4.6 mitigation patterns (M1–M4)** added: **M1 committed canonical outputs** (`canonical_outputs.rs` per §5.1.17; `rust == c == committed_canonical` three-leg comparison; defends T-A1/T-A2/T-A3/T-A10); **M2 mutation testing via `cargo-mutants`** (nightly cadence on both harness and verifier crates per §5.5.6; absorbed as Round-3-pinned 2g substrate per user directive — was Round-1 out-of-scope per §6.9; defends T-A1/T-A3/T-A9); **M3 PR-template discipline** (convention-enforced checklist in `.github/pull_request_template.md` per §5.5.5; harness-modification cite + verifier-modification audit-against-actual-code line range cite + harness-pass-as-evidence audit co-citation; defends T-A1 through T-A8/T-A10/T-A11); **M4 invocation banner** (`invocation_banner.rs` per §5.1.18; stderr-emitted disposition-source + leg-3-backstop framing + modification-discipline pointer; defends T-A7/T-A8/T-A11). **§4.7 negative space** renumbered from §4.5 (N1–N5 unchanged); **§4.8 implementation-PR transition gate** renumbered from §4.6 and updated to 13-row substrate-completeness table reflecting the new §4.5/§4.6 rows and §5/§6/§8 absorptions. **§5 hand-off contract extended** with §5.1.17 + §5.1.18 (harness-crate surfaces) + §5.5.5 + §5.5.6 (CI surfaces); §5.7 drift-prevention extended with canonical-output regeneration discipline (regeneration is its own PR with dedicated commit message + audit-against-actual-code verification at regeneration-PR review time). **§6 test plan extended** with §6.7.5 Category H active-threat-surface defense: T16 canonical-output assertion (per-PR + nightly + release-gate; budget absorbed into existing T1+T3 runs) + T17 invocation-banner emission (per-PR) + T18 cargo-mutants zero-survival or skip-list-justified (nightly only — slow per F5 budget; separate workflow per §5.5.6); §6.9 Round-1 "Mutation testing — out-of-scope" entry explicitly **closed by amendment**. **§8 commit table preserved at 10 commits** per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) rule-2 ceiling; M1/M3/M4/M2 absorbed into existing commit boundaries (M1 → C5 corpus; M4 → C9 failure-output/stderr; M3+M2 → C10 CI-wiring) per §8.1 Round-3 absorption note + §8.3 scope-discipline preservation. **One new reopen-criterion class** added to §4.8 post-implementation reopen criteria: M2 mutation-pass surviving-mutation skip-list contestation triggers a discipline-amendment round (alongside the existing four post-implementation reopen classes). **Why an amendment, not Round 4.** The active-threat-surface framing extends the threat-model surface but does not reframe the architectural dispositions: none of T-A1–T-A11 reopens a Round-1 or Round-2 disposition; none reshapes the §3.15 actor-shape framing; none reshapes the §4.1/§4.2/§4.3 load-bearing-property discharges. The amendment is substrate-completeness work the initial Round 3 close was missing — a substrate-anchored completion of the §4 threat-model close, not a new design round per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc) (the substrate-change is "active-threat-surface framing surfaced post-Round-3-close"; the re-evaluation shape is "substrate-completeness amendment that extends §4 + §5 + §6 + §8 + §11 without re-opening prior rounds"). **Round count unchanged at 3 substantive close-rounds** per §0 calibration; the amendment is an extension of Round 3's close-substrate, not a Round 4 opening. **Project-posture observation (broader project record).** The amendment is the first instance of the **"substrate-completeness amendment" round-shape** in the project; the shape's auditability comes from: (a) explicit citation of why it is not a new round (substrate-extending, not architecture-reframing), (b) the §11 row naming both what changed and what didn't, and (c) the preserved-≤10-commit absorption into existing §8.1 boundaries demonstrating the amendment fits within the rule-2 ceiling. The shape complements the iterative-design-round shape; future plan-docs facing the same post-close-substrate-extension pattern can reach for the amendment shape directly rather than re-deriving the disposition. **Deferred-threat-model-closure pattern validated.** The Round-2 → Round-3 sequence (architecture in Round 2, threats against that architecture in Round 3) is now substrate-anchored evidence that the "deferred threat-model closure" pattern is correct. The §3.15 actor-shape framing was the load-bearing input for §4.5's eleven active-threat-surface classes: without §3.15's enumeration of modes, state, dispatch surface, and orchestration lifecycle, the T-A attack classes would have been substantially weaker (e.g., "T-A1 comparison-operator tampering" is meaningfully characterizable only after §3.15.1 defines the multi-mode dispatch surface that the tampered operator operates within). The pattern predicts that §4 closes more completely when §3 is closed first — architecture-first, threats-against-architecture-second — and this amendment is the first measured instance of that prediction being correct. Future plan-docs should record this cross-round dependency explicitly in §3's final disposition ("§3 closed; §4 threat-model close deferred to Round N to benefit from seeing the architectural substrate closed first"). |
+| Round 4 (Implementation-correctness decisions R4-D1 through R4-D8) | 2026-05-25 | Pre-implementation-PR correctness round opened to close eight specification gaps that would otherwise require implementer guesswork. Supersedes the §11 Round 3 terminal observation ("no Round 4 expected"); the ≤3-round estimate in §0 is superseded by substrate reality (the gaps required reading the actual CMakeLists.txt, randomx.h, Cargo.toml, and lockfile — not reconstructible from the design-round-time substrate). **R4-D1**: `sha2`, `rand_chacha`, `serde_json` not in workspace `[dependencies]` — verified at source per `17-dependency-discipline.mdc`; must be added to `rust/Cargo.toml` at sha2="0.10", rand_chacha="0.3", serde_json="1" before C1. **R4-D2**: `build.rs` link directive corrected from `static=shekyl_randomx_v2` (CMake imported-target name) to `static=randomx` (actual filename `librandomx.a` per ExternalProject_Add `RANDOMX_V2_LIB` in CMakeLists.txt). **R4-D3**: `RANDOMX_V2_INSTALL_DIR` env var pinned as the mechanism by which `build.rs` discovers the CMake install prefix; reads `env::var("RANDOMX_V2_INSTALL_DIR")`, emits `cargo:rustc-link-search=native={dir}/lib`; panics with pointer to `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS` if unset. **R4-D4**: All seven `extern "C"` signatures enumerated explicitly from randomx.h read: `randomx_alloc_cache`, `randomx_init_cache`, `randomx_get_cache_memory`, `randomx_release_cache`, `randomx_create_vm`, `randomx_destroy_vm`, `randomx_calculate_hash`; opaque `RandomxCache`/`RandomxVm` struct bodies; `RandomxFlags = c_int`; dataset-family and pipeline-family functions out-of-scope. **R4-D5**: C oracle uses `RANDOMX_FLAG_DEFAULT` (0) for both cache and VM allocation; light mode (cache only, no dataset); one cache+VM allocated per seedhash, VM reused across data values for same seedhash, freed before next seedhash; `randomx_get_cache_memory` used for SHA-256 precondition. **R4-D6**: Corpus-size CLI flags `--random-corpus-seedhashes <N>` (default 32) and `--random-corpus-data-per-seedhash <M>` (default 32) pin the mechanism for per-PR (16×8) vs nightly (32×32) corpus-size selection; adversarial corpus always included in full. **R4-D7**: Canonical-outputs chicken-and-egg resolved by `[[bin]] gen-canonical-outputs` generation binary in harness crate (§5.2.6); uses C oracle + corpus + SHA-256 to produce `canonical_outputs.rs` content; runs after C3 linkage is established; output committed in C5; eliminates implementer's guesswork about how CANONICAL_HASHES are first produced. **R4-D8**: T11 (`failure_output_schema_round_trip`) reframed as a `#[cfg(test)]` unit test in `src/failure_output.rs` exercising JSON serialization + required-field presence; `--mode=test-failure` binary mode removed (was never in §3.15 mode table; would have required mode-dispatch infrastructure for a test-only path). **Implementation commit budget extended to 11**: C0 (workspace manifest: add sha2/rand_chacha/serde_json) precedes C1; alternatively the three lines absorb into C1. None of R4-D1 through R4-D8 reopens a Round-1/2/3 architectural disposition; all eight close implementation-specification gaps surfaced by reading the actual substrate. The implementation PR per §8 is now authorized at this more complete substrate. |
 | Round 3 (§4 threat-model close + implementation-PR transition gate) | 2026-05-24 | Closes §4 against the Round-1- + Round-2-anchored substrate with **ten attack classes (A1–A10) + five negative-space classes (N1–N5) + three load-bearing-property discharges + an implementation-PR transition gate**. **Three load-bearing-property discharges land before the attack-class enumeration**, each named explicitly so the discharges are auditable as their own dispositions rather than buried inside individual attack-class entries: **§4.1 corpus-coverage-as-leg-3-completeness discharge** (closes the inherited Round-0 → Round-1 → Round-2 obligation; pins all three corpus-coverage classes — random per R1-D4, adversarial per R1-D5+R1-D6, worst-case timing per R1-D8 — as substrate-load-bearing with substrate-anchored reopening criteria that catch silent thinning; the discharge is the explicit pinning of each class as load-bearing-against-substrate-anchored-numeric-criteria, not "the three classes exist therefore the obligation is satisfied"); **§4.2 harness-as-actor-invariants discharge** (closes the inherited Round-2 obligation; A8/A9/A10 dispositions explicitly cite §3.15.2 mode-boundary, §3.15.4 phase-boundary + R1-D14 amendment + R1-D9 amendment, §3.15.6 framing as load-bearing substrate); **§4.3 three-leg audit-posture rebalance discharge** (operationalizes the leg-3 catch surface as two structurally-distinct mitigation classes — leg-3-catch-of-verifier-bug for A1/A2/A6 and leg-3-catch-capacity-degradation for A3/A4/A5/A7/A8/A9/A10 — so future contributors can classify changes against the two-kind framework without re-deriving substrate). **§4.4 attack-class enumeration (A1–A10)** uses the [Phase 2F §4](./RANDOMX_V2_PHASE2F_PLAN.md) F1–F7 precedent shape (Attack / Round 3 disposition / Test coverage / Reversion clause where applicable). **A1 corpus-generation false-agreement bug** mitigated by T9 (determinism gate) + T10 (drift-detection pin); residual accepted as audit-against-actual-code-discipline catch at PR-review time. **A2 R1-D14 precondition bypass** mitigated by §3.15.4 phase-boundary discipline + T3 + T11 (synthetic-divergence round-trip); residual accepted as multi-component discipline-failure-mode requiring concerted bypass. **A3 CMake-trigger bypass** mitigated by R1-D3 (c) implication mechanism + T12; residual accepted at §3.15-style review discipline. **A4 R1-D11 failure-output incompleteness** mitigated by T11 (11-required-fields schema round-trip) + forward-deferred extension shape (R1-D10 + R1-D14 future-deferred reopens); residual accepted as future-deferred reopen criterion. **A5 CacheStore Arc retention regression (F2 backstop bypass)** mitigated by R1-D9 amendment mode-scoping + T8 measurement methodology + Phase 2F F2 caller-discipline boundary; residual accepted at PR-review discipline. **A6 adversarial-corpus drift** mitigated by §1.7 fork-pin coupling + T15 signature audit + T10 corpus-hash; residual accepted at §1.7 fork-pin-advance PR discipline. **A7 reviewer-blind nightly failures** mitigated by R1-D12 split-cadence-with-required-status-check + §1.7 + R1-D12 + T10/T15 composition; residual accepted for V3.0 small-team substrate (reversion criterion: >7-day discovery gap triggers active monitoring). **A8 mode-boundary violation (§3.15.2 process-scoping bypass)** mitigated by §3.15.3 mode-mutual-exclusion pin + §3.15.2 free-between-modes pin + §3.15.6 framing; residual accepted at §3.15-frame audit time. **A9 phase-boundary violation (R1-D14 + R1-D9 amendment invariants)** mitigated by §3.15.4 phase-boundary discipline pin + R1-D14 CacheStore-empty + R1-D9 RSS-sampler-scoping invariants + indirect catch via T3/T7/T8; residual accepted at §3.15-frame audit time. **A10 per-mode-state-shape regression (R1-D9 RSS-bound inheritance-by-default)** mitigated by R1-D9 amendment mode-scoping + §3.15.2 per-mode-state-shape table + indirect catch via T8 per-mode applicability; residual accepted at §3.15-frame audit time. **§4.5 negative space (N1–N5)** explicitly enumerates classes 2g does NOT defend against with substrate-anchored reopening criteria: **N1** V4 lattice-transition substrate shift (out of scope for V3.x; reopen on NIST lattice standardization); **N2** multi-platform corpus determinism (out of scope for V3.0; reopen on macOS/Windows CI matrix expansion); **N3** PoW consensus attacks (out of scope permanently — operates upstream of verifier; cross-link to Phase 0 / [Phase 2F F7](./RANDOMX_V2_PHASE2F_PLAN.md) / [LWMA-1](./DAA_LWMA1_PLAN.md)); **N4** side-channel attacks (out of scope; cross-link to [Phase 2c §5.11.4](./RANDOMX_V2_PHASE2C_PLAN.md) public-input-only scope note); **N5** adversarial CI infrastructure (out of scope; cross-link to reproducible-Guix-build + signed-release-tag disciplines per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) + [`docs/SIGNING.md`](../SIGNING.md)). **§4.6 implementation-PR transition gate** verifies all 11 substrate rows are either closed or scaffolded with sufficient substance: §1 (frozen at Phase 2F R3) + §2 (absorbed Round 0) + §3 R1-D1–R1-D14 (closed Round 1 + tightened Round 2) + §3.15 (substantive Round 2 — six subsections covering modes/state/dispatch/lifecycle/forward-template/negative-space) + §4 A1–A10+N1–N5 (this round) + §5 (Round 1 initial substance: 16+5+2+3+4 = 30 rows) + §6 (Round 1 initial substance: 15-row T# matrix) + §7 (Round 0 scaffold sufficient) + §8 (Round 1 initial substance: 10-commit sequence) + §9 (Round 0 scaffold sufficient) + §10 (Round 0 scaffold sufficient). Implementation-PR opening is **authorized** per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) rule 2 (short-lived branch, ≤10 commits, ≤5 working days) with §8.4 PR-opening citation discipline + [`90-commits.mdc`](../../.cursor/rules/90-commits.mdc); subsequent plan-doc changes are substrate-anchored reopens per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc), not iterative design-rounds. **Four post-implementation-PR reopen-criterion classes named** (substrate-anchored, not preference-anchored): §1 substrate gap, §3.15 actor-shape discipline gap, A1–A10 disposition gap, R1-D# numeric pin substrate-unsoundness. **Project-posture observation (broader project record).** Round 3 closes the design-phase substrate; 2g transitions to implementation-PR with **3 substantive close-rounds within the §0 ≤3-round target** (Round 0 + Round 0 calibration + Round 1 + Round 2 + Round 3, where Round 0 calibration is substrate-tightening rather than a separate close-round). The pattern reaffirms the §11 Round 2 fourth-clean-Round-1 project-posture observation — converged-state-of-project-posture per [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc) discovery-cadence-compounding-substrate framing. Round 3's adversarial pass against the Round-1+Round-2 substrate surfaces no new attack-class reframe; the §4.4 enumeration absorbs the seven Round-1 pre-bound classes + three Round-2 obligations + five negative-space classes without restructuring. None of the Round 3 close reopens a §1-frozen surface, reshapes a Round-1 disposition, reshapes a Round-2 amendment, or reshapes the §3.15 actor-shape framing; all Round 3 additions are substrate-anchored attack-class dispositions or substrate-anchored discharge of inherited obligations. **The plan-doc design rounds are closed.** The implementation PR per §8 starts at the current substrate state; the next plan-doc activity is reactive (post-implementation-PR reopen against substrate-anchored evidence) not iterative (no Round 4 expected; if one arrives, it is substrate-reopen-driven per the four post-implementation reopen classes). |
