@@ -493,6 +493,69 @@ impl Cache {
         }
         out
     }
+
+    /// Stream the Argon2d-derived cache memory as little-endian
+    /// 1-KiB block chunks, one per [`argon2::Block`].
+    ///
+    /// Used exclusively by
+    /// [`crate::PreparedCache::cache_block_bytes_for_testing`] (the
+    /// `test-internals`-feature-gated public accessor), which the
+    /// Phase 2g Rust/C differential harness consumes for the R1-D14
+    /// SHA-256 cache-equivalence precondition. See the corresponding
+    /// `PreparedCache` rustdoc for the full visitor-shape rationale
+    /// (avoiding the `&[Block]` → `&[u8]` reinterpretation that
+    /// would require either `unsafe_code`, a 256-MiB heap
+    /// materialization, or a new workspace dependency).
+    ///
+    /// `pub(crate)` per the §5.3.1 "no new production surfaces"
+    /// discipline. Gated on the same `test-internals` feature as
+    /// the public [`PreparedCache::cache_block_bytes_for_testing`]
+    /// accessor so the default-features build (no production
+    /// consumer) does not flag the helper as dead code under the
+    /// crate's `#[warn(dead_code)]` default lint.
+    ///
+    /// # Layout
+    ///
+    /// Each yielded `[u8; 1024]` is the little-endian byte
+    /// serialization of one `argon2::Block`'s `[u64; 128]` words,
+    /// matching the C reference's `load64_native` reads on
+    /// little-endian targets and remaining correct on big-endian
+    /// targets per the LE convention applied uniformly across the
+    /// crate (see [`Cache::item_bytes`] rationale + the
+    /// `argon2d::tests::blocks_to_le_bytes` precedent at
+    /// `argon2d.rs:237`).
+    ///
+    /// # Memory budget
+    ///
+    /// Iterator yields owned 1-KiB arrays by value; per-iteration
+    /// stack cost is 1 KiB and no heap allocation is performed.
+    /// The R1-D14 drop-discipline memory budget (~256 MiB peak per
+    /// seedhash) is preserved: the harness's SHA-256 streaming
+    /// consumer holds at most one chunk at a time.
+    ///
+    /// # Programs field excluded
+    ///
+    /// The eight `SuperscalarProgram`s stored alongside the memory
+    /// are *not* yielded. The R1-D14 precondition compares against
+    /// the C reference's `randomx_get_cache_memory(cache)` return,
+    /// which exposes only the Argon2d-derived `memory` buffer (not
+    /// the C-side `reciprocalCache` or any program representation).
+    /// The cache-derive determinism property (T1' in this file's
+    /// `#[cfg(test)] mod tests` block) covers the program side
+    /// in-crate; the R1-D14 precondition covers the Argon2d-fill
+    /// side cross-implementation. See
+    /// [`RANDOMX_V2_PHASE2G_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2G_PLAN.md)
+    /// §3.17 R5-D1 for the full disposition.
+    #[cfg(feature = "test-internals")]
+    pub(crate) fn block_bytes_le(&self) -> impl Iterator<Item = [u8; 1024]> + '_ {
+        self.memory.iter().map(|block| {
+            let mut buf = [0u8; 1024];
+            for (chunk, &word) in buf.chunks_exact_mut(8).zip(block.as_ref()) {
+                chunk.copy_from_slice(&word.to_le_bytes());
+            }
+            buf
+        })
+    }
 }
 
 impl Drop for Cache {

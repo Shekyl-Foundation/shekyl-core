@@ -41,6 +41,26 @@ license.workspace = true
 # impl-PR-baked default.
 internal-pool-bench = []
 
+# `test-internals` exposes a feature-gated accessor on
+# `PreparedCache` for use by the Phase 2g Rust/C differential
+# harness (`rust/shekyl-randomx-differential/`). Per the
+# `RANDOMX_V2_PHASE2G_PLAN.md` Round 5 R5-D1 amendment, this
+# feature carves out a cfg-gated test-infrastructure surface that
+# is invisible in default-features builds and exists exclusively to
+# satisfy R1-D14's SHA-256 cache-equivalence precondition.
+#
+# Production builds NEVER enable this feature. The §5.3.1
+# "zero new production surfaces" discipline is preserved by the
+# gate: the only item gated by the feature is a visitor-style
+# iterator (`PreparedCache::cache_block_bytes_for_testing`)
+# returning by-value `[u8; 1024]` chunks; no static, no
+# `OnceLock`, no FFI export — Patterns A/B/C in
+# `scripts/ci/check_randomx_crate_invariants.sh` are unaffected.
+# The sole consumer is `shekyl-randomx-differential`; any further
+# downstream activation requires a plan-doc amendment (§5.3
+# carve-out reopening criteria).
+test-internals = []
+
 [dependencies]
 # AES round primitive for AesGenerator1R/4R + AesHash1R per `specs.md`
 # §§3.2-3.4. See workspace `Cargo.toml` for the verification record.
