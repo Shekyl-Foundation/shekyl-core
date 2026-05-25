@@ -4,40 +4,65 @@
 // BSD-3-Clause
 
 //! Adversarial seedhash + u128-edge-case data corpus
-//! (§5.1.6 + R1-D5 + R1-D6 + §3.18 R6-D2).
+//! (§5.1.6 + R1-D5 + R1-D6 + §3.18 R6-D2 + §3.19 R7-D1/R7-D2/R7-D4).
 //!
-//! Per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §3 R1-D5 close, the
-//! adversarial corpus complements the §5.1.5 random corpus by
-//! exercising rare-path inputs that random sampling almost never
-//! hits: high-frequency rare opcode classes (CFROUND, FDIV_M, Cache-
-//! miss, CBRANCH), combined-heavy seedhashes, and u128 edge-case
-//! data (div-by-zero, signed-div overflow, shift-by-width, u128
-//! truncation high-bit). Per R1-D5 the seedhashes are *grinded*
-//! (each chosen by frequency-counting opcode classes in the AES4R-
-//! of-scratchpad-derived program for that seedhash) and committed as
-//! hex bytes; per R1-D6 the u128 edge-case data values are
-//! hand-derived from spec analysis and committed as hex bytes.
+//! Per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §3 R1-D5 / R1-D6 close
+//! (historical), the adversarial corpus was to complement the §5.1.5
+//! random corpus by exercising rare-path inputs: high-frequency rare
+//! opcode classes (CFROUND, FDIV_M, Cache-miss, CBRANCH),
+//! combined-heavy seedhashes, and u128 edge-case data
+//! (div-by-zero, signed-div overflow, shift-by-width, u128
+//! truncation high-bit).
 //!
-//! ## C5a scope (§3.18 R6-D2)
+//! ## R7-D1/R7-D2 reopening — deferred from 2g
 //!
-//! This module is the **scaffolded-empty** form per §3.18 R6-D2's
-//! C5a/C5b split:
+//! **R1-D5 and R1-D6 are reopened per
+//! `RANDOMX_V2_PHASE2G_PLAN.md` §3.19 R7-D1 + R7-D2 (Round 7
+//! substrate-completeness amendment).** Two independent substrate
+//! findings against R1-D5's class-heaviness grinding methodology:
 //!
-//! - C5a (this commit) ships the nine per-class arrays with the
-//!   structurally-correct shape (`&[ [u8; 32] ]` for seedhash
-//!   classes; `&[ Vec<u8> ]` materialized at module-load time for
-//!   data classes) but **empty**. T10
-//!   (`adversarial_corpus_hash_pin`) asserts SHA-256 of the
-//!   empty-scaffold contents at C5a.
-//! - C5b refills each array against grinded bytes (R1-D5 grinding
-//!   tool + R1-D6 hand-derivation) and refreshes T10's SHA-256 pin.
+//! 1. **Verifier-accessor gap.** The grinding methodology requires
+//!    a `test-internals`-gated opcode-stream accessor on
+//!    `shekyl-pow-randomx` whose implementation duplicates
+//!    `compute_hash_inner` under a feature gate.
+//! 2. **Statistical-infeasibility gap.** R1-D5's ≥40% per-class /
+//!    ≥60% combined acceptance criteria were calibrated against
+//!    V1's PROGRAM_SIZE = 256 and are unreachable by random
+//!    grinding against V2's PROGRAM_SIZE = 384 — per-class σ-gaps
+//!    run from 6.8σ (CACHE_MISS) to ~125σ (CFROUND).
 //!
-//! The class names below are pinned at C5a to anchor the §5.7
-//! surface contract; C5b adds the grinding-tool surface via a
-//! plan-doc amendment per §3.18 R6-D2 + R5-D2's substrate-amendment-
-//! then-code precedent.
+//! Together the two findings met the
+//! `21-reversion-clause-discipline.mdc` reopening threshold for
+//! R1-D5; R1-D6 is reopened by structural analogy under R7-D2.
+//! Adversarial-corpus methodology design + implementation deferred
+//! to a post-2g design round tracked in `docs/FOLLOWUPS.md` V3.0
+//! pre-genesis queue.
 //!
-//! ## Class taxonomy
+//! ## Module disposition through 2g ship
+//!
+//! Per §3.19 R7-D4, this module **stays at C5a's scaffolded-empty
+//! shape through 2g ship**:
+//!
+//! - The nine per-class arrays remain empty; the surface contract
+//!   (class names + iterators + SHA-256 pin shape) is preserved so
+//!   T10 (`adversarial_corpus_hash_pin`) continues to detect
+//!   tamper of the empty scaffold across 2g ship.
+//! - `ADVERSARIAL_SEEDHASH_COUNT` and `ADVERSARIAL_DATA_COUNT`
+//!   remain `0`; `iter_adversarial_seedhashes` and
+//!   `iter_adversarial_data` yield zero pairs.
+//! - `ADVERSARIAL_CORPUS_SHA256` continues to assert the
+//!   empty-scaffold SHA-256.
+//! - The post-2g design round repurposes or replaces this module
+//!   under the new methodology; the class names below may not
+//!   survive the round (the V2-substrate-anchored methodology may
+//!   define a different class taxonomy entirely).
+//!
+//! The class taxonomy below is preserved as the historical R1-D5 /
+//! R1-D6 framing; it is **not** the active design surface. The
+//! active disposition is "no adversarial corpus ships at 2g; the
+//! post-2g round produces the methodology + implementation."
+//!
+//! ## Class taxonomy (R1-D5 / R1-D6 historical framing; not the active design surface)
 //!
 //! Five seedhash classes (R1-D5 grinding categories) and four data
 //! classes (R1-D6 u128 edge-case derivations):
@@ -54,18 +79,23 @@
 //! | `SHIFT_BY_WIDTH_DATA` | R1-D6 | Data that forces shift-by-≥-bit-width truncation path |
 //! | `U128_TRUNC_HIGH_DATA` | R1-D6 | Data that forces high-bit truncation in u128 ops |
 //!
-//! The class names are stable; the per-class arrays grow with
-//! C5b's grinding output without changing the surface contract.
+//! Per §3.19 R7-D4, the per-class arrays do **not** grow at C5b.
+//! The historical "the class names are stable; the per-class
+//! arrays grow with C5b's grinding output" framing is superseded
+//! by R7-D1's reopening — the post-2g design round may redefine
+//! the class taxonomy under the V2-substrate-anchored methodology.
 
 use sha2::{Digest, Sha256};
 use shekyl_pow_randomx::Seedhash;
 
-/// Grinded seedhashes targeting ≥40% CFROUND opcode density.
+/// (R1-D5 historical) Grinded seedhashes targeting ≥40% CFROUND
+/// opcode density.
 ///
-/// Per §3.18 R6-D2 C5a scope, the array is intentionally empty;
-/// C5b fills it from the grinding tool's output. The class name
-/// is committed at C5a so the §5.7 drift-prevention boundary
-/// recognizes the surface.
+/// **Stays empty through 2g ship per §3.19 R7-D4** (R1-D5 reopened
+/// by R7-D1; methodology deferred to a post-2g design round). The
+/// class name is preserved for surface-contract continuity with the
+/// scaffolded-empty C5a shape; the post-2g round may redefine the
+/// taxonomy.
 pub const CFROUND_SEEDHASHES: &[[u8; 32]] = &[];
 
 /// Grinded seedhashes targeting ≥40% FDIV_M opcode density.
@@ -99,17 +129,19 @@ pub const SHIFT_BY_WIDTH_DATA: &[&[u8]] = &[];
 pub const U128_TRUNC_HIGH_DATA: &[&[u8]] = &[];
 
 /// SHA-256 pin of the per-class arrays' canonical serialization,
-/// per §3.18 R6-D2.
+/// per §3.18 R6-D2 + §3.19 R7-D4.
 ///
-/// At C5a the pin asserts the SHA-256 of the empty-scaffold
-/// contents; at C5b the pin **refreshes** against the grinded
-/// bytes and the refresh is cited in C5b's commit message per
-/// §8.1 C5b. The constant is `pub` so T10 can re-derive the
-/// SHA-256 at runtime via [`compute_adversarial_corpus_hash`] and
-/// assert equality.
+/// **Stays at C5a's empty-scaffold SHA-256 through 2g ship per
+/// §3.19 R7-D4** (the C5b refresh-against-grinded-bytes intent is
+/// superseded by R7-D1's reopening; the post-2g round produces the
+/// corpus and refreshes the pin). The constant is `pub` so T10 can
+/// re-derive the SHA-256 at runtime via
+/// [`compute_adversarial_corpus_hash`] and assert equality —
+/// continues to detect tamper of the empty scaffold through 2g
+/// ship.
 ///
-/// Per R1-D5 the SHA-256 covers a canonical byte serialization of
-/// the per-class contents in declaration order. See
+/// The SHA-256 covers a canonical byte serialization of the
+/// per-class contents in declaration order. See
 /// [`compute_adversarial_corpus_hash`] for the serialization
 /// shape.
 pub const ADVERSARIAL_CORPUS_SHA256: [u8; 32] = [
@@ -119,9 +151,10 @@ pub const ADVERSARIAL_CORPUS_SHA256: [u8; 32] = [
 
 /// Total number of seedhashes across all R1-D5 classes.
 ///
-/// At C5a this is `0`; at C5b it equals the grinded count
-/// (~25–50 per R1-D5 F3 budget). Exposed for documentation and
-/// for the structural-stub T16 (canonical_outputs) sizing check.
+/// **Stays at `0` through 2g ship per §3.19 R7-D4** (R1-D5
+/// reopened by R7-D1; the post-2g round produces the corpus).
+/// Exposed for documentation and for the structural-stub T16
+/// (canonical_outputs) sizing check.
 pub const ADVERSARIAL_SEEDHASH_COUNT: usize = CFROUND_SEEDHASHES.len()
     + FDIV_M_SEEDHASHES.len()
     + CACHE_MISS_SEEDHASHES.len()
@@ -130,7 +163,8 @@ pub const ADVERSARIAL_SEEDHASH_COUNT: usize = CFROUND_SEEDHASHES.len()
 
 /// Total number of data values across all R1-D6 classes.
 ///
-/// At C5a this is `0`; at C5b it equals the hand-derived count.
+/// **Stays at `0` through 2g ship per §3.19 R7-D4** (R1-D6
+/// reopened by R7-D2; the post-2g round produces the corpus).
 pub const ADVERSARIAL_DATA_COUNT: usize = DIV_BY_ZERO_DATA.len()
     + SIGNED_DIV_OVERFLOW_DATA.len()
     + SHIFT_BY_WIDTH_DATA.len()
@@ -238,21 +272,23 @@ mod tests {
     use super::*;
 
     /// T10 — adversarial-corpus drift-detection SHA-256 pin
-    /// (§3.18 R6-D2).
+    /// (§3.18 R6-D2 + §3.19 R7-D4).
     ///
     /// Asserts that the runtime-computed SHA-256 of the committed
-    /// per-class arrays equals [`ADVERSARIAL_CORPUS_SHA256`]. At
-    /// C5a the pin is computed against the empty-scaffold contents;
-    /// at C5b the pin refreshes against the grinded bytes and the
-    /// commit message cites "T10 SHA-256 pin refresh against grinded
-    /// bytes per §3.18 R6-D2."
+    /// per-class arrays equals [`ADVERSARIAL_CORPUS_SHA256`].
+    /// Through 2g ship the pin asserts the SHA-256 of the
+    /// empty-scaffold contents per §3.19 R7-D4; the post-2g
+    /// adversarial-corpus design round refreshes the pin against
+    /// whatever corpus contents that round produces.
     ///
     /// Failure mode: drift between the committed arrays and the pin
     /// — almost always either a code-review-time mistake (an array
     /// edited without refreshing the pin) or an attacker-style T-A2
     /// corpus tamper (a malicious diff that swaps adversarial bytes
     /// without refreshing the pin). Per the §4.5 T-A2 disposition,
-    /// the T10 pin is the leg-3-catch-of-tamper surface.
+    /// the T10 pin is the leg-3-catch-of-tamper surface even at the
+    /// empty-scaffold size — a non-empty diff against the empty
+    /// scaffold without a pin refresh fails the test.
     #[test]
     fn adversarial_corpus_hash_pin() {
         let computed = compute_adversarial_corpus_hash();
@@ -268,13 +304,14 @@ mod tests {
         );
     }
 
-    /// C5a structural invariant: the scaffolded module ships every
-    /// class but every class is empty.
+    /// Structural invariant: the scaffolded module ships every
+    /// class but every class is empty through 2g ship.
     ///
-    /// Per §3.18 R6-D2 C5a scope, the per-class arrays are pinned
-    /// empty at C5a and refilled at C5b. The test catches a
-    /// mistaken partial-fill at C5a that would shift T10's pin
-    /// computation away from the empty-scaffold reference.
+    /// Per §3.18 R6-D2's C5a scope and §3.19 R7-D4's deferral of
+    /// the R6-D2 C5b refill, the per-class arrays remain empty
+    /// through 2g ship. The test catches a mistaken partial-fill
+    /// that would shift T10's pin computation away from the
+    /// empty-scaffold reference.
     #[test]
     fn c5a_scaffold_is_empty() {
         assert_eq!(
@@ -284,11 +321,12 @@ mod tests {
         assert_eq!(ADVERSARIAL_DATA_COUNT, 0, "C5a data scaffold not empty");
     }
 
-    /// Class-label round trip via the iterator surfaces. At C5a
-    /// the iterators yield zero pairs; the test verifies the
-    /// iteration shape (no panics, well-formed labels) so the
-    /// C5b grinding-tool consumer has a stable surface to count
-    /// against.
+    /// Class-label round trip via the iterator surfaces. Through
+    /// 2g ship the iterators yield zero pairs (per §3.19 R7-D4);
+    /// the test verifies the iteration shape (no panics,
+    /// well-formed labels) so the post-2g consumer has a stable
+    /// surface to count against if the post-2g round retains this
+    /// class taxonomy.
     #[test]
     fn class_iterators_yield_well_formed_labels() {
         let seedhash_labels: Vec<&str> = iter_adversarial_seedhashes()
