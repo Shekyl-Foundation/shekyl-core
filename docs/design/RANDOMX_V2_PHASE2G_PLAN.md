@@ -3189,6 +3189,25 @@ sufficient and simpler.
 `ExternalProject_Add` or `corrosion`), the env-var mechanism may
 be superseded by the wrapper's native mechanism at that point.
 
+**Refinement at R5-D2 (implementation-time substrate-completeness).**
+R5-D2 (§3.17) softens this disposition from `process::exit(1)` to
+`return` after the `cargo:warning=…`. The substrate-discovery is
+that the workspace-wide cargo invocations in §8's per-commit
+bisection invariant (`cargo build --workspace --all-targets`,
+`cargo clippy --workspace --all-targets`, `cargo test --locked
+--workspace`) compile `randomx-v2-sys`'s `build.rs` even though
+they never link `randomx-v2-sys` into a binary; `process::exit(1)`
+therefore produces a false-positive workspace-build failure for the
+C3-through-C10 intermediate states (and for all PRs against the
+existing CI workflow at
+[`.github/workflows/build.yml`](../../.github/workflows/build.yml)
+line 596). R5-D2's soft-fail lets the link step itself report the
+failure when a link is actually attempted (`shekyl-randomx-differential`'s
+binary build); R4-D3's intent (actionable error pointing to
+`BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS`) is preserved via the
+`cargo:warning=…` text that remains in the build log, providing
+context for the subsequent linker error.
+
 ---
 
 #### R4-D4 — Seven `extern "C"` signatures (explicit enumeration)
@@ -3540,16 +3559,24 @@ implementer chooses; either shape is within rule-2's spirit.
 
 ---
 
-### §3.17 Round 5 — `test-internals` feature-gate carve-out (R5-D1)
+### §3.17 Round 5 — pre-implementation substrate-completeness amendments (R5-D1, R5-D2)
 
-A pre-C6 substrate-completeness round opened to close a single
-substrate-anchored contradiction that surfaced during the
-implementation-PR pre-flight, before C6 (the first commit that
-runs the R1-D14 SHA-256 cache-equivalence precondition). The
-contradiction is real and is documented here for audit-trail
-discoverability per
+A pre-implementation substrate-completeness round opened to close
+substrate-anchored contradictions that surfaced during the
+implementation-PR pre-flight and at the C3 implementation boundary,
+before the affected commits land. Each amendment closes a single
+contradiction; together they constitute the Round 5 cluster.
+Documented here for audit-trail discoverability per
 [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
 named-criteria principle.
+
+- **R5-D1** (pre-C6): test-infrastructure carve-out for cfg-gated
+  `test-internals` feature on `shekyl-pow-randomx` — closes the
+  R1-D14 / §5.3.1 contradiction at the verifier-surface boundary.
+- **R5-D2** (pre-C3): `build.rs` soft-fail refinement of R4-D3's
+  `process::exit(1)` disposition — closes the R4-D3 / §8
+  per-commit-invariant contradiction at the workspace-wide
+  cargo-invocation boundary.
 
 #### R5-D1 — Test-infrastructure carve-out for cfg-gated `test-internals` feature on `shekyl-pow-randomx`
 
@@ -3693,11 +3720,219 @@ an item under `#[cfg(feature = "test-internals")]` requires the
 same plan-doc amendment discipline as a production-surface
 addition.
 
+#### R5-D2 — `build.rs` soft-fail refinement of R4-D3's `process::exit(1)` disposition
+
+**Finding (pre-C3 substrate-gap).** R4-D3's close (§3.16) specifies
+that `randomx-v2-sys`'s `build.rs` emits `cargo:warning=…` and
+`process::exit(1)` when `RANDOMX_V2_INSTALL_DIR` is unset, with the
+warning text pointing to `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS`.
+The disposition was substrate-anchored against "the cargo
+invocation that needs the link directives" — implicitly, the
+harness binary's link step. The disposition does **not** account for
+the workspace-wide cargo invocations articulated in §8's per-commit
+bisection invariant (lines 6035–6038):
+
+> "every commit passes `cargo build --workspace --all-targets`,
+> `cargo clippy --workspace --all-targets --keep-going -- -D
+> warnings`, and `cargo fmt --all -- --check`"
+
+— nor the existing CI gates inherited unchanged from 2c/2d/2f per
+§9.2:
+
+> "`cargo clippy --workspace --all-targets --keep-going -- -D
+> warnings` ([`.github/workflows/build.yml`](../../.github/workflows/build.yml)
+> line 596)."
+
+Cargo runs a member's `build.rs` for every compilation of that
+member (`cargo check`, `cargo build`, `cargo test`), regardless of
+whether a binary that consumes the rlib is being linked downstream.
+A `build.rs` that `process::exit(1)`s when the env var is unset
+therefore hard-fails every workspace-wide cargo invocation that
+doesn't first export `RANDOMX_V2_INSTALL_DIR`. After C3 lands the
+`build.rs`:
+
+- **Local developer impact.** `cargo check --workspace` from
+  `rust/` fails for any developer who hasn't exported the env var
+  — including developers whose change is unrelated to RandomX v2.
+- **CI impact.** `.github/workflows/build.yml` line 596 fails on
+  every PR from C3 onward until the C10 CI amendment lands.
+- **Per-commit bisection-invariant impact.** C3 itself cannot
+  satisfy §8's per-commit invariant locally without env-var
+  ceremony; every subsequent C4-through-C9 intermediate state also
+  fails the invariant for the same reason. The "land C10's CI
+  amendment to absorb the regression" plan accumulates a ~7-commit
+  window where bisection against the workspace's default cargo path
+  reports false positives.
+
+R4-D3 + §8 per-commit invariant + §9.2 inherited gates are mutually
+unsatisfiable as written for the C3-through-C9 intermediate states.
+
+**Option set (substrate-anchored).** The pre-C3 review enumerated
+three structural option classes:
+
+- **Class A** — implement R4-D3 strictly + amend CI + amend dev
+  workflow. C3 lands `process::exit(1)`; C10 amends CI to set
+  `RANDOMX_V2_INSTALL_DIR` before workspace-wide invocations (or
+  passes `--exclude randomx-v2-sys` to the `--workspace` cargo
+  invocations); local developers must set the env var before
+  running `cargo check --workspace`. **Rejected.** Breaks the §8
+  per-commit invariant for ~7 commits (C3-C9) for every developer
+  who hasn't set the env var; breaks `.github/workflows/build.yml`
+  line 596 for all PRs in that window. The §8 invariant is
+  load-bearing for bisection discipline; the "we'll fix CI at
+  C10" plan accumulates a 7-commit window of broken workspace-default
+  state that any unrelated PR in that window would also experience.
+- **Class B** — soft-fail at `build.rs`. Replace `process::exit(1)`
+  with `return` after the `cargo:warning=…`. Rlib compiles cleanly;
+  downstream link of `shekyl-randomx-differential`'s binary fails
+  with a linker error if the env var was unset (the linker reports
+  "library not found" for `-lrandomx` or equivalent on the
+  platform, and the `cargo:warning=…` emitted earlier in the build
+  log provides the actionable `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS`
+  pointer in context). R4-D3's intent (clear error pointing to the
+  cmake option) is preserved at link time rather than at
+  `build.rs` time. One-line code change in `build.rs`; preserves
+  §8 per-commit invariant for all C3-C10 commits without env-var
+  ceremony.
+- **Class C** — workspace partition. Move `randomx-v2-sys` +
+  `shekyl-randomx-differential` into a sub-workspace at
+  `rust/randomx-v2-harness/Cargo.toml`; main `--workspace` doesn't
+  reach them. **Rejected.** Structural change rippling back to C1
+  (which placed `randomx-v2-sys` in the main workspace `members =`
+  list); requires revisiting C1's shape and re-running C1's
+  bisection-invariant verification; introduces a sub-workspace
+  boundary in `rust/` that adds review surface for every future
+  cargo-workflow review. The sub-workspace shape is technically
+  feasible but the cost is disproportionate to the gap's actual
+  size.
+
+**Default expectation (closure).** **Class B — soft-fail at
+`build.rs`.** Adopt the standard pattern for "warn at build-script
+time; let the link step report the failure with context":
+
+- `build.rs` reads `env::var("RANDOMX_V2_INSTALL_DIR")`.
+  - **When set:** emit `cargo:rustc-link-search=native={dir}/lib`
+    and `cargo:rustc-link-lib=static=randomx` per R4-D2 + R4-D3
+    option (a).
+  - **When unset:** emit a `cargo:warning=…` text that names the
+    env var, the cmake option `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS`,
+    and the relationship between the two; then `return` cleanly
+    from `build.rs::main`. The rlib compiles; no link directives
+    are emitted.
+- `build.rs` also emits `cargo:rerun-if-env-changed=RANDOMX_V2_INSTALL_DIR`
+  so that subsequent invocations re-evaluate the env-var presence
+  without `cargo clean`.
+- A downstream consumer (`shekyl-randomx-differential`'s binary
+  per §5.1.16) that depends on `randomx-v2-sys` and is being
+  linked without the env var set produces a linker error
+  (typically "cannot find -lrandomx" on Linux/macOS or "LNK1181
+  cannot open file 'randomx.lib'" on Windows). The
+  `cargo:warning=…` text emitted earlier in the build log remains
+  visible to the user and carries the actionable
+  `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS` cmake-option pointer.
+
+**Implementation form (per R4-D2 + R4-D3 + R5-D2).**
+
+```rust
+// rust/randomx-v2-sys/build.rs
+use std::env;
+
+fn main() {
+    println!("cargo:rerun-if-env-changed=RANDOMX_V2_INSTALL_DIR");
+    match env::var("RANDOMX_V2_INSTALL_DIR") {
+        Ok(dir) => {
+            println!("cargo:rustc-link-search=native={dir}/lib");
+            println!("cargo:rustc-link-lib=static=randomx");
+        }
+        Err(_) => {
+            // R5-D2 soft-fail (refinement of R4-D3): emit an
+            // actionable warning and return cleanly; defer the
+            // failure to link time so workspace-wide cargo
+            // invocations that compile but do not link this rlib
+            // still satisfy §8's per-commit invariant.
+            println!(
+                "cargo:warning=RANDOMX_V2_INSTALL_DIR not set; \
+                 randomx-v2-sys's rlib will compile but linking \
+                 any binary that depends on it (e.g., the Phase \
+                 2g shekyl-randomx-differential harness) will \
+                 fail. To build the harness: configure CMake with \
+                 -DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON, build \
+                 the librandomx.a artifact, then export \
+                 RANDOMX_V2_INSTALL_DIR pointing to the install \
+                 prefix (typically \
+                 ${{CMAKE_BINARY_DIR}}/external/randomx-v2-install) \
+                 before running cargo. See \
+                 docs/design/RANDOMX_V2_PHASE2G_PLAN.md §3.16 \
+                 R4-D3 + §3.17 R5-D2 + §5.2.2."
+            );
+        }
+    }
+}
+```
+
+**Why soft-fail rather than hard-fail.** R4-D3's `process::exit(1)`
+was decided at Round 4 against the substrate "the cargo invocation
+that needs the link directives." R5-D2's substrate-discovery is
+that the workspace contains other cargo invocations (workspace-wide
+check / clippy / test) that compile `randomx-v2-sys` as an rlib
+without linking it. For those invocations, the link directives are
+not needed; the `process::exit(1)` produces a false positive
+("build script reports failure" even though no link is being
+attempted). Soft-failing at `build.rs` lets the link step itself
+report the failure when a link is actually being attempted; this is
+the precise diagnostic shape the substrate calls for.
+
+**Cargo's `links` / `package.links` mechanism (alternative
+considered, declined).** Cargo has a `links = "randomx_v2"` field
+in `Cargo.toml` that could in principle gate the link directives
+through a more structured mechanism (Cargo enforces only one
+crate-version per `links` value across the dependency graph,
+preventing duplicate-link collisions). R4-D3 option (b) already
+considered this and rejected on "over-engineers the hand-off"
+grounds. R5-D2 inherits the rejection: the env var + soft-fail
+shape is sufficient and simpler for a single-consumer sub-crate.
+
+**Reopening criteria (substrate-anchored).**
+
+- If a future CI / build-system change introduces a unified
+  `CMake+Cargo` wrapper (per R4-D3's reopen criterion —
+  `corrosion` or `ExternalProject_Add`-driven cargo invocations),
+  the env-var mechanism itself may be superseded; R5-D2's soft-fail
+  disposition is reopened jointly with R4-D3 in that case.
+- If the workspace structure changes such that `randomx-v2-sys` is
+  no longer a member of the main `rust/Cargo.toml` workspace
+  (e.g., Class C above is adopted via a future PR), the soft-fail
+  disposition becomes vestigial — workspace-wide cargo invocations
+  no longer touch `randomx-v2-sys` and the original R4-D3
+  `process::exit(1)` becomes safe to restore. The reopen trigger
+  is the workspace-partition decision itself; R5-D2's disposition
+  is reopened against the new workspace topology.
+- If a future Cargo version adds a "build.rs runs only when the
+  crate is being linked" mode (currently unavailable as of
+  2026-05; Cargo's `build.rs` runs at every compile of the member),
+  the soft-fail can be replaced with a hard-fail under that mode.
+  The reopen trigger is the upstream Cargo capability; R5-D2 is
+  reopened against the new capability.
+
+**Re-evaluation shape.** Substrate-anchored amendment per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+— a **refinement** of R4-D3, not a disposition reversal. R4-D3's
+intent (clear error pointing to
+`BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS`) is preserved; the error's
+emission point shifts from `build.rs` (where it produces a
+false-positive workspace-wide-cargo failure) to link time (where it
+produces a true-positive binary-link failure). The
+`cargo:warning=…` text is the carrier of R4-D3's actionable context
+across both timing points. The §8 per-commit invariant is
+preserved; the implementation cost is a one-line code change at
+C3.
+
 #### §3.17 summary: what Round 5 amends
 
 | Decision | Amendment location |
 |---|---|
 | R5-D1 `test-internals` feature gate | §5.3.1 (carve-out note); new §5.3.3 row (the accessor); §5.1.7 + §5.1.9 (consumption cite); §5.1.15 (`features = ["test-internals"]` on harness dep); §5.6 (clarified to "no new *production* surfaces"); §5.7 (cfg-gated carve-out clause) |
+| R5-D2 `build.rs` soft-fail refinement | §3.16 R4-D3 (forward-pointer to this entry; refinement-not-reversal annotation); §5.2.2 (surface-row wording shifted from "panics with pointer to `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS`" to "`cargo:warning=…` + `return`; defers failure to link time"); §8 (per-commit invariant cited as load-bearing for the closure rationale) |
 
 R5-D1 reopens no Round-1/2/3/4 disposition; the §5.3.1 / §5.6 /
 §5.7 prohibitions are unmodified in their *production-surface*
@@ -3707,6 +3942,20 @@ feature is `test-internals`, not a generic "internals" flag;
 (b) the sole consumer is `shekyl-randomx-differential`; (c) any
 extension of the feature's surface (a second `pub fn`, a new
 type re-export) requires a plan-doc amendment.
+
+R5-D2 **refines** (not reverses) R4-D3's `process::exit(1)`
+disposition; R4-D3's intent — actionable error pointing to
+`BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS` — is preserved via the
+`cargo:warning=…` text emitted at `build.rs` time plus the linker
+error emitted at link time. The refinement's auditable boundaries:
+(a) the soft-fail applies only when `RANDOMX_V2_INSTALL_DIR` is
+unset (env-var-set path is unchanged from R4-D3); (b) the
+`cargo:warning=…` text is the load-bearing artifact carrying
+R4-D3's actionable context across the timing shift; (c) any future
+change that wants to restore `process::exit(1)` (per the R5-D2
+reopen criterion for workspace partition or Cargo "build.rs runs
+only at link time" capability) requires the same plan-doc amendment
+discipline.
 
 **Pre-implementation-round forward-action queued (R5-D1 +
 project-discipline).** The R4 implementation-correctness round
@@ -3726,6 +3975,35 @@ implementation-PR's commit messages cite (e.g.,
 "consumes `PreparedCache::cache_block_bytes_for_testing` under
 `test-internals` per plan-doc §5.3.3"). This action is not
 landed in this amendment; it is queued for rule-26's next
+substrate-completeness pass.
+
+**Pre-implementation-round forward-action queued (R5-D2 +
+project-discipline).** The R4 implementation-correctness round
+also did not catch this gap because R4's checklist evaluated each
+new build-system surface (R4-D2 / R4-D3) in isolation against its
+own substrate (the `librandomx.a` filename, the env-var-handoff
+mechanism) without cross-referencing the new surface against the
+project's *workspace-wide* invariants (the §8 per-commit invariant
+and the §9.2 inherited CI gates). R4-D3's `process::exit(1)` is
+locally consistent with the env-var-handoff substrate it was
+decided against; the gap is in the **cross-invariant impact
+analysis** — "what happens to the workspace-wide cargo invocations
+in §8 + §9.2 when this new build-system surface lands?" The check
+is mechanical (`rg 'cargo (check|build|test|clippy).*workspace'`
+across `.github/workflows/` + against the plan-doc's own §8 / §9
+text) and would have caught R5-D2 one round earlier. Forward-action
+queued for the same
+[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+amendment: pre-implementation rounds add a **"cross-invariant
+impact analysis pass"** — for each new build-system / workspace /
+CI-touching surface a round closes, enumerate the project's
+existing workspace-wide invariants (per-commit bisection, CI gates,
+dev-workflow defaults) and confirm the new surface preserves each.
+The pre-flight output is the verified-cross-invariant enumeration
+that the implementation-PR's commit messages cite (e.g.,
+"preserves §8 per-commit `cargo build --workspace` invariant per
+R5-D2"). This action is also not landed in this amendment; it is
+queued jointly with the R5-D1 forward-action for rule-26's next
 substrate-completeness pass.
 
 ---
@@ -5724,7 +6002,7 @@ per [Phase 2F §5](./RANDOMX_V2_PHASE2F_PLAN.md) precedent.
 | # | Surface | Visibility | Anchor | Notes |
 |---|---|---|---|---|
 | 5.2.1 | `src/lib.rs` | `pub` | R1-D2, R4-D4 | Seven hand-written `extern "C"` declarations with exact Rust signatures pinned in §3.16 R4-D4: `randomx_alloc_cache`, `randomx_init_cache`, `randomx_get_cache_memory`, `randomx_release_cache`, `randomx_create_vm`, `randomx_destroy_vm`, `randomx_calculate_hash`; `RandomxCache` and `RandomxVm` as opaque single-byte structs; `RandomxFlags = c_int`; `RANDOMX_FLAG_DEFAULT = 0` constant |
-| 5.2.2 | `build.rs` | build | R1-D2, R1-D3, R4-D2, R4-D3 | Reads env var `RANDOMX_V2_INSTALL_DIR` (set by CI to `${CMAKE_BINARY_DIR}/external/randomx-v2-install`); emits `cargo:rustc-link-search=native={RANDOMX_V2_INSTALL_DIR}/lib` and `cargo:rustc-link-lib=static=randomx` (file is `librandomx.a`, not `libshekyl_randomx_v2.a` — corrected per R4-D2; `shekyl_randomx_v2` is the CMake imported-target name only); if env var unset, emits `cargo:warning=…` and panics with pointer to `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS` cmake option per R4-D3 |
+| 5.2.2 | `build.rs` | build | R1-D2, R1-D3, R4-D2, R4-D3, R5-D2 | Emits `cargo:rerun-if-env-changed=RANDOMX_V2_INSTALL_DIR` unconditionally; reads env var `RANDOMX_V2_INSTALL_DIR` (set by CI to `${CMAKE_BINARY_DIR}/external/randomx-v2-install`); when set, emits `cargo:rustc-link-search=native={RANDOMX_V2_INSTALL_DIR}/lib` and `cargo:rustc-link-lib=static=randomx` (file is `librandomx.a`, not `libshekyl_randomx_v2.a` — corrected per R4-D2; `shekyl_randomx_v2` is the CMake imported-target name only); when **unset**, emits `cargo:warning=…` naming the env var + the `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS` cmake option + the env-var-handoff relationship between the two, then `return`s cleanly from `build.rs::main` deferring the failure to link time per R5-D2 (refinement of R4-D3 for workspace-wide cargo compatibility; the linker error on a downstream binary link surfaces the actionable context via the earlier `cargo:warning=…` log entry) |
 | 5.2.3 | `Cargo.toml` | manifest | R1-D2 | Workspace member; build-dep none beyond stdlib; consumers list = `shekyl-randomx-differential` only |
 | 5.2.4 | `Cargo.toml` `[package.metadata.shekyl]` | metadata | R1-D2 | `fork-pin-coupled = true` marker per R1-D2 future-maintenance hardening; advances to `external/randomx-v2` require re-verifying signatures |
 | 5.2.5 | `README.md` | doc | R1-D2, R1-D13 | "This crate's only consumer is `shekyl-randomx-differential`. Pattern C invariant exempt per R1-D13. Fork-pin coupling per §1.7." |
@@ -6280,3 +6558,4 @@ the round-count budget.
 | Round 4 (Implementation-correctness decisions R4-D1 through R4-D8) | 2026-05-25 | Pre-implementation-PR correctness round opened to close eight specification gaps that would otherwise require implementer guesswork. Supersedes the §11 Round 3 terminal observation ("no Round 4 expected"); the ≤3-round estimate in §0 is superseded by substrate reality (the gaps required reading the actual CMakeLists.txt, randomx.h, Cargo.toml, and lockfile — not reconstructible from the design-round-time substrate). **R4-D1**: `sha2`, `rand_chacha`, `serde_json` not in workspace `[dependencies]` — verified at source per `17-dependency-discipline.mdc`; must be added to `rust/Cargo.toml` at sha2="0.10", rand_chacha="0.3", serde_json="1" before C1. **R4-D2**: `build.rs` link directive corrected from `static=shekyl_randomx_v2` (CMake imported-target name) to `static=randomx` (actual filename `librandomx.a` per ExternalProject_Add `RANDOMX_V2_LIB` in CMakeLists.txt). **R4-D3**: `RANDOMX_V2_INSTALL_DIR` env var pinned as the mechanism by which `build.rs` discovers the CMake install prefix; reads `env::var("RANDOMX_V2_INSTALL_DIR")`, emits `cargo:rustc-link-search=native={dir}/lib`; panics with pointer to `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS` if unset. **R4-D4**: All seven `extern "C"` signatures enumerated explicitly from randomx.h read: `randomx_alloc_cache`, `randomx_init_cache`, `randomx_get_cache_memory`, `randomx_release_cache`, `randomx_create_vm`, `randomx_destroy_vm`, `randomx_calculate_hash`; opaque `RandomxCache`/`RandomxVm` struct bodies; `RandomxFlags = c_int`; dataset-family and pipeline-family functions out-of-scope. **R4-D5**: C oracle uses `RANDOMX_FLAG_DEFAULT` (0) for both cache and VM allocation; light mode (cache only, no dataset); one cache+VM allocated per seedhash, VM reused across data values for same seedhash, freed before next seedhash; `randomx_get_cache_memory` used for SHA-256 precondition. **R4-D6**: Corpus-size CLI flags `--random-corpus-seedhashes <N>` (default 32) and `--random-corpus-data-per-seedhash <M>` (default 32) pin the mechanism for per-PR (16×8) vs nightly (32×32) corpus-size selection; adversarial corpus always included in full. **R4-D7**: Canonical-outputs chicken-and-egg resolved by `[[bin]] gen-canonical-outputs` generation binary in harness crate (§5.2.6); uses C oracle + corpus + SHA-256 to produce `canonical_outputs.rs` content; runs after C3 linkage is established; output committed in C5; eliminates implementer's guesswork about how CANONICAL_HASHES are first produced. **R4-D8**: T11 (`failure_output_schema_round_trip`) reframed as a `#[cfg(test)]` unit test in `src/failure_output.rs` exercising JSON serialization + required-field presence; `--mode=test-failure` binary mode removed (was never in §3.15 mode table; would have required mode-dispatch infrastructure for a test-only path). **Implementation commit budget extended to 11**: C0 (workspace manifest: add sha2/rand_chacha/serde_json) precedes C1; alternatively the three lines absorb into C1. None of R4-D1 through R4-D8 reopens a Round-1/2/3 architectural disposition; all eight close implementation-specification gaps surfaced by reading the actual substrate. **Round 4 substrate-completeness amendment (R4-D9 + pins):** Three additional items pinned in the same session: (1) R4-D1 cargo audit/deny preflight check added to the C0/C1 preflight discipline; (2) R4-D5 lifecycle-symmetry-as-measurement-discipline framing added, NULL-handling forward reference to §5.1.8 added, concurrent C-oracle thread-safety recorded as architectural N/A (concurrent mode uses only the Rust verifier, C oracle not called); (3) R4-D9 new decision: C-side CMake build mode must be Release — `ExternalProject_Add` inherits `CMAKE_BUILD_TYPE` from parent (verified at source, `external/CMakeLists.txt` line 146); Debug-mode C oracle inflates timing measurements and can exceed §5.5.2 nightly budget; CI workflow must pin `-DCMAKE_BUILD_TYPE=Release` explicitly. **Project-posture observation (broader project record):** Round 4 is the **second instance of a pre-implementation round** in the project (first instance: Phase 2d's R0-D5 pre-flight, which tested the design against measurement before implementing; Round 4 tests the specification against substrate before implementing). Two instances is the rule-26 promotion threshold; the "pre-implementation round" discipline is now substrate-anchored and is queued for the next `26-sub-pr-design-discipline.mdc` amendment as: "Substantive design rounds (Round 1-N) close architecture and threat model. A pre-implementation round (Pre-Flight or Implementation-Correctness) closes specification gaps surfaced by reading the actual substrate the implementation will be written against. The pre-implementation round is not optional; it is the gate between design-phase close and implementation-PR open." FOLLOWUPS item queued; this amendment does not open a Round 5. **Four project-level disciplines accumulated in the 2g arc** (each citable by future sub-PRs and by the next rule-26 amendment): (a) PreparedCache reframe absorbed from 2f (forward-action from 2f §10.4); (b) four-crate layering pattern (Round 2 §3.15 actor shape — harness as orchestrator-actor, canonical template for future Rust extraction sub-PRs); (c) defense-in-depth threat model with active threat surface framing (Round 3 §4.5 T-A1–T-A11 + M1–M4 mitigation patterns — first instance of active-threat-surface enumeration in the project); (d) pre-implementation implementation-correctness round discipline (Round 4 — second instance of pre-implementation round after Phase 2d pre-flight, promoted to rule-26 amendment candidate). The implementation PR per §8 is now authorized against this complete substrate. |
 | Round 3 (§4 threat-model close + implementation-PR transition gate) | 2026-05-24 | Closes §4 against the Round-1- + Round-2-anchored substrate with **ten attack classes (A1–A10) + five negative-space classes (N1–N5) + three load-bearing-property discharges + an implementation-PR transition gate**. **Three load-bearing-property discharges land before the attack-class enumeration**, each named explicitly so the discharges are auditable as their own dispositions rather than buried inside individual attack-class entries: **§4.1 corpus-coverage-as-leg-3-completeness discharge** (closes the inherited Round-0 → Round-1 → Round-2 obligation; pins all three corpus-coverage classes — random per R1-D4, adversarial per R1-D5+R1-D6, worst-case timing per R1-D8 — as substrate-load-bearing with substrate-anchored reopening criteria that catch silent thinning; the discharge is the explicit pinning of each class as load-bearing-against-substrate-anchored-numeric-criteria, not "the three classes exist therefore the obligation is satisfied"); **§4.2 harness-as-actor-invariants discharge** (closes the inherited Round-2 obligation; A8/A9/A10 dispositions explicitly cite §3.15.2 mode-boundary, §3.15.4 phase-boundary + R1-D14 amendment + R1-D9 amendment, §3.15.6 framing as load-bearing substrate); **§4.3 three-leg audit-posture rebalance discharge** (operationalizes the leg-3 catch surface as two structurally-distinct mitigation classes — leg-3-catch-of-verifier-bug for A1/A2/A6 and leg-3-catch-capacity-degradation for A3/A4/A5/A7/A8/A9/A10 — so future contributors can classify changes against the two-kind framework without re-deriving substrate). **§4.4 attack-class enumeration (A1–A10)** uses the [Phase 2F §4](./RANDOMX_V2_PHASE2F_PLAN.md) F1–F7 precedent shape (Attack / Round 3 disposition / Test coverage / Reversion clause where applicable). **A1 corpus-generation false-agreement bug** mitigated by T9 (determinism gate) + T10 (drift-detection pin); residual accepted as audit-against-actual-code-discipline catch at PR-review time. **A2 R1-D14 precondition bypass** mitigated by §3.15.4 phase-boundary discipline + T3 + T11 (synthetic-divergence round-trip); residual accepted as multi-component discipline-failure-mode requiring concerted bypass. **A3 CMake-trigger bypass** mitigated by R1-D3 (c) implication mechanism + T12; residual accepted at §3.15-style review discipline. **A4 R1-D11 failure-output incompleteness** mitigated by T11 (11-required-fields schema round-trip) + forward-deferred extension shape (R1-D10 + R1-D14 future-deferred reopens); residual accepted as future-deferred reopen criterion. **A5 CacheStore Arc retention regression (F2 backstop bypass)** mitigated by R1-D9 amendment mode-scoping + T8 measurement methodology + Phase 2F F2 caller-discipline boundary; residual accepted at PR-review discipline. **A6 adversarial-corpus drift** mitigated by §1.7 fork-pin coupling + T15 signature audit + T10 corpus-hash; residual accepted at §1.7 fork-pin-advance PR discipline. **A7 reviewer-blind nightly failures** mitigated by R1-D12 split-cadence-with-required-status-check + §1.7 + R1-D12 + T10/T15 composition; residual accepted for V3.0 small-team substrate (reversion criterion: >7-day discovery gap triggers active monitoring). **A8 mode-boundary violation (§3.15.2 process-scoping bypass)** mitigated by §3.15.3 mode-mutual-exclusion pin + §3.15.2 free-between-modes pin + §3.15.6 framing; residual accepted at §3.15-frame audit time. **A9 phase-boundary violation (R1-D14 + R1-D9 amendment invariants)** mitigated by §3.15.4 phase-boundary discipline pin + R1-D14 CacheStore-empty + R1-D9 RSS-sampler-scoping invariants + indirect catch via T3/T7/T8; residual accepted at §3.15-frame audit time. **A10 per-mode-state-shape regression (R1-D9 RSS-bound inheritance-by-default)** mitigated by R1-D9 amendment mode-scoping + §3.15.2 per-mode-state-shape table + indirect catch via T8 per-mode applicability; residual accepted at §3.15-frame audit time. **§4.5 negative space (N1–N5)** explicitly enumerates classes 2g does NOT defend against with substrate-anchored reopening criteria: **N1** V4 lattice-transition substrate shift (out of scope for V3.x; reopen on NIST lattice standardization); **N2** multi-platform corpus determinism (out of scope for V3.0; reopen on macOS/Windows CI matrix expansion); **N3** PoW consensus attacks (out of scope permanently — operates upstream of verifier; cross-link to Phase 0 / [Phase 2F F7](./RANDOMX_V2_PHASE2F_PLAN.md) / [LWMA-1](./DAA_LWMA1_PLAN.md)); **N4** side-channel attacks (out of scope; cross-link to [Phase 2c §5.11.4](./RANDOMX_V2_PHASE2C_PLAN.md) public-input-only scope note); **N5** adversarial CI infrastructure (out of scope; cross-link to reproducible-Guix-build + signed-release-tag disciplines per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) + [`docs/SIGNING.md`](../SIGNING.md)). **§4.6 implementation-PR transition gate** verifies all 11 substrate rows are either closed or scaffolded with sufficient substance: §1 (frozen at Phase 2F R3) + §2 (absorbed Round 0) + §3 R1-D1–R1-D14 (closed Round 1 + tightened Round 2) + §3.15 (substantive Round 2 — six subsections covering modes/state/dispatch/lifecycle/forward-template/negative-space) + §4 A1–A10+N1–N5 (this round) + §5 (Round 1 initial substance: 16+5+2+3+4 = 30 rows) + §6 (Round 1 initial substance: 15-row T# matrix) + §7 (Round 0 scaffold sufficient) + §8 (Round 1 initial substance: 10-commit sequence) + §9 (Round 0 scaffold sufficient) + §10 (Round 0 scaffold sufficient). Implementation-PR opening is **authorized** per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) rule 2 (short-lived branch, ≤10 commits, ≤5 working days) with §8.4 PR-opening citation discipline + [`90-commits.mdc`](../../.cursor/rules/90-commits.mdc); subsequent plan-doc changes are substrate-anchored reopens per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc), not iterative design-rounds. **Four post-implementation-PR reopen-criterion classes named** (substrate-anchored, not preference-anchored): §1 substrate gap, §3.15 actor-shape discipline gap, A1–A10 disposition gap, R1-D# numeric pin substrate-unsoundness. **Project-posture observation (broader project record).** Round 3 closes the design-phase substrate; 2g transitions to implementation-PR with **3 substantive close-rounds within the §0 ≤3-round target** (Round 0 + Round 0 calibration + Round 1 + Round 2 + Round 3, where Round 0 calibration is substrate-tightening rather than a separate close-round). The pattern reaffirms the §11 Round 2 fourth-clean-Round-1 project-posture observation — converged-state-of-project-posture per [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc) discovery-cadence-compounding-substrate framing. Round 3's adversarial pass against the Round-1+Round-2 substrate surfaces no new attack-class reframe; the §4.4 enumeration absorbs the seven Round-1 pre-bound classes + three Round-2 obligations + five negative-space classes without restructuring. None of the Round 3 close reopens a §1-frozen surface, reshapes a Round-1 disposition, reshapes a Round-2 amendment, or reshapes the §3.15 actor-shape framing; all Round 3 additions are substrate-anchored attack-class dispositions or substrate-anchored discharge of inherited obligations. **The plan-doc design rounds are closed.** The implementation PR per §8 starts at the current substrate state; the next plan-doc activity is reactive (post-implementation-PR reopen against substrate-anchored evidence) not iterative (no Round 4 expected; if one arrives, it is substrate-reopen-driven per the four post-implementation reopen classes). |
 | Round 5 (Pre-C6 substrate-completeness amendment — R5-D1 `test-internals` feature-gate carve-out) | 2026-05-25 | Pre-C6 substrate amendment opened to close a single substrate-anchored contradiction surfaced during implementation-PR pre-flight, *before* the first commit that exercises R1-D14 (C6's `cache_precondition` module). The contradiction is real: R1-D14 prescribes a SHA-256 fingerprint comparison between the Rust-derived `PreparedCache`'s 256-MiB Argon2d-fill memory and the C reference's `randomx_get_cache_memory(cache)` return; §5.3.1 / §5.6 / §5.7 forbid the verifier crate from gaining new public surface in 2g; the existing `PreparedCache` exposes no public accessor for cache memory and the inner `Cache` is `pub(crate)`. R1-D14 + §5.3.1 are mutually unsatisfiable as written. **R5-D1**: closed at **Option C2 (feature-gated accessor)** per the standard Rust pattern for "expose internals to test infrastructure without exposing to production." Three structural option classes evaluated; the chosen disposition is the one that preserves §5.3.1's spirit (production surface untouched) while satisfying R1-D14's evidence requirement (cache-byte access at runtime). Implementation: (1) new feature `test-internals = []` on `shekyl-pow-randomx`'s `Cargo.toml`; (2) new accessor `PreparedCache::cache_block_bytes_for_testing(&self) -> impl Iterator<Item = [u8; 1024]> + '_` gated on `#[cfg(feature = "test-internals")]`; (3) harness crate (`shekyl-randomx-differential`) declares `features = ["test-internals"]` on its `shekyl-pow-randomx` dep, the *sole* consumer of the feature. The visitor shape (`impl Iterator<Item = [u8; 1024]>`) avoids returning `&[u8]` directly because the verifier's `Box<[argon2::Block]>` representation cannot be reinterpreted as `&[u8]` without either `unsafe_code` (forbidden by `#![deny(unsafe_code)]` at `lib.rs:166`), a 256-MiB `Vec<u8>` materialization (defeats the R1-D14 drop-discipline memory budget), or a new workspace dep (`bytemuck`/`zerocopy`, declined per `17-dependency-discipline.mdc`); the visitor yields owned 1-KiB arrays with ~1 KiB stack-transient cost per block. **Plan-doc surfaces amended:** §3.17 (new section with the R5-D1 decision + reopening criteria + pre-implementation-surface-enumeration forward-action), §5.3.1 (production-surface scope clarified; carve-out cite), new §5.3.3 row (the accessor + feature), §5.1.7 (consumption cite in `cache_precondition.rs`), §5.1.9 (`rust_subject.rs` carries no internals access, only the precondition module does), §5.1.15 (harness Cargo.toml `features = ["test-internals"]`), §5.6 (negative space updated to clarify "no new *production* surface"; explicit not-`harness-trace` distinction), §5.7 (drift-prevention discipline extended with test-infrastructure carve-out clause naming the auditable boundaries: feature name `test-internals`, sole consumer `shekyl-randomx-differential`, sole `pub` item §5.3.3 accessor). **Substrate-anchored amendment shape, not disposition reversal,** per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc): the §5.3.1 / §5.6 / §5.7 prohibitions were correctly framed for *production* surface and remain unmodified in that scope; R5-D1 carves out an additional class (`cfg(feature = "test-internals")`-gated test-infrastructure) that is *not new production surface* in the §5.3.1 sense, mirroring Round 2's T2 layer-separation framing. Any addition of an item under the same feature gate (a second `pub fn`, a type re-export, downstream activation by a crate other than the harness) requires the same plan-doc amendment discipline as a production-surface addition. **R4-blind-spot finding queued for rule-26 amendment:** R4 missed this gap because its implementation-correctness checklist enumerated the plan-doc substrate (workspace deps, CMake wiring, ABI signatures) but did not enumerate the *actual* verifier-crate surface against the plan-doc's references. The check is mechanical (`cargo doc` + `rg`) and would have caught R5-D1 at R4-evaluation time. The forward-action queued for the next [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) amendment is a **"surface enumeration pass"** added to pre-implementation rounds: for each consumer the plan-doc references, confirm the consumed surface actually exists in the consumed crate at the workspace-pinned version. This forward-action is not landed in this amendment; it is queued for rule-26's next substrate-completeness pass. **None of R5-D1 reopens a Round-1 / 2 / 3 / 4 disposition;** the §5.3.1 production-surface prohibition is unchanged in scope, the R1-D14 SHA-256 comparison shape is unchanged, the Round-2 T2 layer-separation framing is reaffirmed. The amendment is substrate-completeness work — the second instance of the "substrate-completeness amendment" round-shape in the project (first instance: the Round 3 amendment with active-threat-surface framing). The shape's value is now substrate-anchored: amendments that extend the substrate without reframing closed dispositions are not new design rounds; they are completion of work the prior round did not fully cover. **Implementation PR precursor sequencing:** this amendment lands as its own short-lived branch (`feat/randomx-v2-phase2g-r5-d1-test-internals-gate`) per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc), separate from the §8 implementation PR. The implementation PR proceeds C0–C5 unchanged (none touches the verifier crate or invokes `PreparedCache::derive`), then C6 onward consumes the §5.3.3 accessor under the `test-internals` feature gate per the amended §5.1.7 + §5.1.15. **Round count.** Round 5 is the first post-design-close substrate amendment that adds a *decision* (R5-D1) rather than a substrate-extension pin; the precedent in 2g is the Round 3 substrate-completeness amendment, which was extension-only (the §4 restructure into passive/active + M1–M4 mitigation patterns). The §0 "≤3 substantive close-rounds" calibration is preserved in the project-record sense (architecture closed at Round 2; threats at Round 3; implementation correctness at Round 4 + Round 5 = pre-implementation correctness across two rounds rather than one); R5-D1's existence reaffirms the rule-26 pre-implementation-round discipline rather than violating the close-round-count expectation. |
+| Round 5 cont. (Pre-C3 substrate-completeness amendment — R5-D2 `build.rs` soft-fail refinement) | 2026-05-25 | Pre-C3 substrate amendment opened to close a substrate-anchored contradiction surfaced at the C3 implementation boundary, *before* C3 lands `randomx-v2-sys`'s `build.rs`. The contradiction is real and is bracketed by two simultaneously-load-bearing substrate commitments: **(i)** R4-D3 (§3.16) closes at "emit `cargo:warning=…` and `process::exit(1)` from `build.rs` when `RANDOMX_V2_INSTALL_DIR` is unset" — substrate-anchored against "the cargo invocation that needs the link directives" (implicitly, the harness binary's link step). **(ii)** §8 per-commit bisection invariant (lines 6035–6038) requires "every commit passes `cargo build --workspace --all-targets`, `cargo clippy --workspace --all-targets --keep-going -- -D warnings`, and `cargo fmt --all -- --check`"; §9.2 cites the existing CI gates inherited unchanged from 2c/2d/2f including `.github/workflows/build.yml` line 596 (`cargo clippy --workspace --all-targets --keep-going -- -D warnings`). Cargo runs a member's `build.rs` for every compilation of that member regardless of whether a downstream binary is being linked; a `build.rs` that `process::exit(1)`s on unset env var therefore hard-fails every workspace-wide cargo invocation that doesn't first export `RANDOMX_V2_INSTALL_DIR`. After C3 lands, all C3-through-C9 intermediate states violate §8's per-commit invariant locally, every PR against `.github/workflows/build.yml` line 596 fails until C10's CI amendment lands, and `cargo check --workspace` from `rust/` breaks for any developer who hasn't exported the env var (including developers whose change is unrelated to RandomX v2). R4-D3 + §8 per-commit invariant + §9.2 inherited gates are mutually unsatisfiable as written for the C3-through-C9 intermediate states. **R5-D2**: closed at **Option B (soft-fail at `build.rs`)** — replace `process::exit(1)` with `return` after the `cargo:warning=…`. Three structural option classes evaluated: (A) implement R4-D3 strictly + amend CI + amend dev workflow (rejected: breaks §8 per-commit invariant for ~7 commits + breaks `.github/workflows/build.yml` line 596 across all PRs in that window; the §8 invariant is load-bearing for bisection discipline and the "we'll fix CI at C10" plan accumulates 7-commit window of broken workspace-default state that any unrelated PR in that window would also experience); (B) soft-fail at `build.rs` (chosen); (C) workspace partition into `rust/randomx-v2-harness/Cargo.toml` sub-workspace (rejected: structural change rippling back to C1 + requires revisiting C1's bisection-invariant verification + introduces a sub-workspace boundary in `rust/` adding review surface for every future cargo-workflow review). The chosen disposition (B) preserves §8's per-commit invariant for all C3-C10 commits without env-var ceremony; the R4-D3 intent (clear error pointing to `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS`) is preserved across a timing shift — the `cargo:warning=…` text emitted at `build.rs` time remains in the build log providing actionable context; the linker error emitted at downstream binary link time provides the true-positive failure when a link is actually attempted. The diagnostic surface is two redundant signals rather than one hard-fail. Implementation: `match env::var("RANDOMX_V2_INSTALL_DIR") { Ok(dir) => emit link directives; Err(_) => emit cargo:warning + return cleanly }`; also emit `cargo:rerun-if-env-changed=RANDOMX_V2_INSTALL_DIR` unconditionally so the `build.rs` re-evaluates env-var presence on every subsequent invocation without `cargo clean`. **Plan-doc surfaces amended:** §3.16 R4-D3 (forward-pointer to R5-D2 with substrate-discovery and refinement-not-reversal annotation), §3.17 (extended from R5-D1-only to R5-D1 + R5-D2 cluster; section title + intro paragraph updated; new R5-D2 entry mirroring R5-D1 shape; summary table extended; new commentary paragraph for refinement-not-reversal framing; new pre-implementation-cross-invariant-impact forward-action paragraph queued jointly with R5-D1's surface-enumeration forward-action for rule-26 amendment), §5.2.2 surface table row (wording shifted from "panics with pointer to `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS`" to "`cargo:warning=…` + `return`; defers failure to link time per R5-D2 (refinement of R4-D3 for workspace-wide cargo compatibility)"; R5-D2 added to the decision-citation column alongside R1-D2 / R1-D3 / R4-D2 / R4-D3). **Substrate-anchored amendment shape — refinement, not reversal — per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).** R4-D3's intent is preserved; R5-D2 shifts the error's emission point from `build.rs` (false-positive workspace-wide-cargo failure) to link time (true-positive binary-link failure). The `cargo:warning=…` text is the carrier of R4-D3's actionable context across both timing points. The refinement's auditable boundaries: (a) soft-fail applies only when `RANDOMX_V2_INSTALL_DIR` is unset (env-var-set path unchanged from R4-D3); (b) `cargo:warning=…` text is the load-bearing artifact carrying R4-D3's actionable context across the timing shift; (c) any future change that wants to restore `process::exit(1)` (per the R5-D2 reopen criterion for workspace partition or Cargo "build.rs runs only at link time" capability) requires the same plan-doc amendment discipline. **R4-blind-spot finding queued for rule-26 amendment (R5-D2 class).** R4 also missed this gap because its implementation-correctness checklist evaluated each new build-system surface (R4-D2 / R4-D3) in isolation against its own substrate (the `librandomx.a` filename, the env-var-handoff mechanism) without cross-referencing the new surface against the project's *workspace-wide* invariants (the §8 per-commit invariant and the §9.2 inherited CI gates). R4-D3's `process::exit(1)` is locally consistent with the env-var-handoff substrate it was decided against; the gap is in the **cross-invariant impact analysis** — "what happens to the workspace-wide cargo invocations in §8 + §9.2 when this new build-system surface lands?" The check is mechanical (`rg 'cargo (check\|build\|test\|clippy).*workspace'` across `.github/workflows/` + against the plan-doc's own §8 / §9 text) and would have caught R5-D2 one round earlier. Forward-action queued jointly with the R5-D1 surface-enumeration forward-action for [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) amendment: pre-implementation rounds add a **"cross-invariant impact analysis pass"** — for each new build-system / workspace / CI-touching surface a round closes, enumerate the project's existing workspace-wide invariants (per-commit bisection, CI gates, dev-workflow defaults) and confirm the new surface preserves each. **None of R5-D2 reopens a Round-1 / 2 / 3 / 4 disposition in the architectural sense;** R4-D3 is *refined* (not reversed) — the env-var-handoff mechanism (option (a)) is unchanged, the link directives are unchanged, the cmake-option pointer in the warning text is unchanged, the env-var-set-path behavior is unchanged. The only change is the unset-path's failure timing: `build.rs::exit(1)` → `build.rs::return` + link-time linker error. The amendment is substrate-completeness work — the **third instance of the "substrate-completeness amendment" round-shape** in the project (first: Round 3 active-threat-surface; second: R5-D1 test-internals carve-out; third: R5-D2 build.rs soft-fail refinement). The shape's auditability is now established across three diverse instances: extension-only (Round 3), carve-out (R5-D1), refinement (R5-D2). **Implementation PR precursor sequencing:** this amendment lands as its own short-lived branch (`feat/randomx-v2-phase2g-r5-d2-build-rs-soft-fail`) per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc), separate from the §8 implementation PR; the implementation branch (`feat/randomx-v2-phase2g-impl`, currently at C0+C1+C2) rebases onto the new `dev` tip after merge. C3 then implements `build.rs` per the amended §5.2.2 + R5-D2 disposition. **Round count.** R5-D2 is the second decision under the Round 5 umbrella (R5-D1 was the first). The §0 "≤3 substantive close-rounds" calibration is preserved in the project-record sense (architecture at Round 2; threats at Round 3; implementation correctness at Round 4 + Round 5 cluster = pre-implementation correctness across two rounds + one substrate-completeness cluster rather than a single round). R5-D2's existence reaffirms the rule-26 pre-implementation-round discipline and adds the cross-invariant impact analysis class to the queued rule-26 amendment alongside R5-D1's surface enumeration class. |
