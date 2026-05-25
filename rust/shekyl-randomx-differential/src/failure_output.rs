@@ -427,8 +427,7 @@ mod tests {
                 tag.to_string(),
             );
             let json = f.to_json_line().expect("serialize");
-            let recovered: FailureOutput =
-                serde_json::from_str(&json).expect("deserialize");
+            let recovered: FailureOutput = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(recovered.class_tag, tag, "class_tag round-trip");
         }
     }

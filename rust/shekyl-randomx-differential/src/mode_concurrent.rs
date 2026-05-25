@@ -226,10 +226,7 @@ impl fmt::Display for ConcurrentReport {
                 "concurrent mode: workers={}, hashes_per_worker={}, \
                  total_hashes={}, wall_clock_ms={} \
                  (RSS-bound assertion skipped per Linux-only methodology pin)",
-                self.workers,
-                self.hashes_per_worker,
-                self.total_hashes,
-                self.wall_clock_ms,
+                self.workers, self.hashes_per_worker, self.total_hashes, self.wall_clock_ms,
             )
         }
     }
@@ -420,11 +417,8 @@ pub fn run(workers: usize) -> Result<ConcurrentReport, ConcurrentError> {
     let stop_sampler = Arc::new(AtomicBool::new(false));
     let samples = Arc::new(Mutex::new(Vec::<(Duration, u64)>::new()));
     let test_start = Instant::now();
-    let sampler_handle = spawn_rss_sampler(
-        Arc::clone(&stop_sampler),
-        Arc::clone(&samples),
-        test_start,
-    );
+    let sampler_handle =
+        spawn_rss_sampler(Arc::clone(&stop_sampler), Arc::clone(&samples), test_start);
 
     let mut worker_handles: Vec<JoinHandle<Vec<[u8; RANDOMX_HASH_SIZE]>>> =
         Vec::with_capacity(workers);
@@ -694,9 +688,8 @@ fn evaluate_rss(
         return Ok((None, None, false));
     };
     let delta = max_steady_state.saturating_sub(baseline);
-    let ceiling_with_tolerance = RSS_CEILING_BYTES
-        .saturating_mul(RSS_TOLERANCE_NUMERATOR)
-        / RSS_TOLERANCE_DENOMINATOR;
+    let ceiling_with_tolerance =
+        RSS_CEILING_BYTES.saturating_mul(RSS_TOLERANCE_NUMERATOR) / RSS_TOLERANCE_DENOMINATOR;
     if delta > ceiling_with_tolerance {
         return Err(ConcurrentError::RssBoundExceeded {
             baseline_bytes: baseline,
@@ -811,8 +804,8 @@ mod tests {
     /// `ceiling_with_tolerance_bytes` field carries.
     #[test]
     fn ceiling_with_tolerance_matches_640_mib_times_1_10() {
-        let cwt = RSS_CEILING_BYTES.saturating_mul(RSS_TOLERANCE_NUMERATOR)
-            / RSS_TOLERANCE_DENOMINATOR;
+        let cwt =
+            RSS_CEILING_BYTES.saturating_mul(RSS_TOLERANCE_NUMERATOR) / RSS_TOLERANCE_DENOMINATOR;
         // 640 × 1024 × 1024 × 11 / 10 = 738_197_504
         assert_eq!(cwt, 738_197_504);
         // The bound is the headroom plus the ceiling; rounded to
