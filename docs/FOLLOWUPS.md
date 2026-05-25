@@ -1649,6 +1649,20 @@ sustainability is unaffected by the recalibration.
   R1-D3 (post-promotion audit example). Downstream authors cite
   `26-sub-pr-design-discipline.mdc` explicitly for process shape.
 
+  **Pending amendment (V3.0 pre-genesis queue).** Phase 2d's R0-D5
+  pre-flight pass and Phase 2g's Round 4 implementation-correctness
+  round are now two instances of a "pre-implementation round" discipline
+  not yet named in `26-sub-pr-design-discipline.mdc`. Two instances is
+  the rule-26 promotion threshold. The amendment adds: "Substantive
+  design rounds close architecture and threat model. A pre-implementation
+  round (Pre-Flight or Implementation-Correctness) closes specification
+  gaps surfaced by reading the actual substrate the implementation will be
+  written against. The pre-implementation round is not optional; it is the
+  gate between design-phase close and implementation-PR open."
+  Source: `RANDOMX_V2_PHASE2G_PLAN.md` §11 Round 4 history row. Target:
+  the next `26-sub-pr-design-discipline.mdc` amendment PR (sibling off
+  `dev`, separate from 2g implementation PR).
+
 ---
 
 ## V3.1 — audit response and stressnet gates
