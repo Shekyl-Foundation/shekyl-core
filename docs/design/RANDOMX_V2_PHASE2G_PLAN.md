@@ -86,6 +86,73 @@ round-count budget reopens substrate-anchored per
 The expectation calibrates reviewers' attention budget, not
 the rigor of any individual round.
 
+### Layer-separation discipline (Round 2 observation)
+
+The Round 1 disposition collection operationalizes the
+workspace's actor-paradigm discipline more rigorously than
+Round 1's own framing credits. Every other Rust crate in the
+workspace adheres to the same shape: **stateless transforms**
+(`Cache::derive`, `compute_hash`, `lwma1_next`, the existing
+`shekyl-pow-randomx` public surface) and **state-holders confined
+to crates that explicitly own them** (`shekyl-engine-state`,
+`CacheStore`'s sticky-canonical invariant). Pure transforms are
+the load-bearing arithmetic; state-holders are the explicit
+owners of any mutability; the boundary between the two is the
+project's load-bearing layer separation.
+
+2g's disposition collection realizes a **four-crate layering**
+that maps the workspace's actor paradigm onto the
+differential-harness problem:
+
+1. **`shekyl-pow-randomx` (verifier).** Pure transforms;
+   public surface frozen at Phase 2F R3; no test-infrastructure
+   accretion (R1-D7 (c) moves the placeholder *out*; R1-D10 (b)
+   declines to add a trace surface).
+2. **`CacheStore` (state-holder, lives inside the verifier
+   crate).** Explicit state owner; capacity-2 sticky-canonical
+   invariant; the only crate-public mutable holder in 2g's
+   substrate.
+3. **`randomx-v2-sys` (C-bindings boundary).** Sole-purpose:
+   the seven `extern "C"` declarations + linker directives.
+   Pattern-C-exempt per R1-D13 (c); no other crate holds
+   `extern "C"`.
+4. **`shekyl-randomx-differential` (harness orchestrator).**
+   Long-running orchestration actor; holds mode-dispatch state,
+   per-mode accumulators, per-iteration results; the only crate
+   in 2g's substrate where `OnceLock` / `LazyLock` / `static`
+   mutable state appears (per R1-D13's per-crate scoping
+   discipline).
+
+The four crates are the concrete-template realization of the
+**verifier-as-pure-transform / state-holder-explicit / FFI-boundary-isolated / orchestrator-as-actor** layering
+the workspace has been converging toward. R1-D1's (a) (separate
+crate for the harness), R1-D2's (c) (separate sub-crate for the
+C-bindings), R1-D7's (c) (placeholder migration out of the
+verifier crate), R1-D10's (b) (verifier crate stays minimal),
+and R1-D13's (c) (per-crate invariant scoping with crate-level
+exemption rather than file-level exemption) each individually
+land at the option that respects the layering; the disposition
+collection's coherence is not coincidence — it is the workspace's
+actor-paradigm discipline applied to a new sub-problem and
+yielding the structurally clean shape by construction.
+
+The framing matters forward. **Future Rust extractions
+(Phase 3a per-PR latency gate; Phase 3c symbol-isolation check;
+release-gate suites; future signing-engine extractions) inherit
+this template:** the four-crate shape is the load-bearing layout
+that subsequent multi-component Rust work should target by
+default, not a one-off 2g shape. The §3.15 *harness actor shape*
+disposition operationalizes the orchestrator-actor crate's
+internal contract; the layer separation between the four crates
+is the project-discipline substrate the §3.15 disposition rests
+on.
+
+This observation is a *recognition of the disposition collection's
+structural achievement*, not a correction. The discipline already
+landed in Round 1; Round 2 names it explicitly so future
+contributors inherit the layering as a documented template rather
+than reconstructing it from the disposition collection.
+
 ---
 
 ## 1. Locked-by-2c/2d/2f substrate (frozen; 2g cannot change without reopening earlier rounds)
@@ -1893,6 +1960,52 @@ cost now.
   caller-discipline substrate-change evidence; the RSS-bound
   numeric pin updates with measurement-anchored justification.
 
+**Round 2 amendment: mode-scoping pin.** The RSS-bound assertion
+is **scoped to the concurrent-call test mode only**; other
+harness modes (latency per R1-D7, worst-case per R1-D8, future
+trace per a R1-D10 reopen) do **not** inherit the RSS-bound
+assertion. The F2 backstop's measurement is meaningful only when
+the harness's own accumulator state is minimal — in the
+concurrent-call mode, the harness holds the corpus iteration
+state, the worker pool, and the `CacheStore`'s capacity-2
+holdings, with no per-iteration accumulators large enough to
+shift the steady-state RSS measurement. In other modes (e.g.,
+the worst-case mode accumulates per-(seedhash, data) timing
+samples; a future trace mode would accumulate per-iteration
+register snapshots), the harness's own accumulator state grows
+with corpus size and would push the measured RSS above the
+640 MiB ceiling without the verifier-side F2 mitigation having
+regressed — i.e., a false-positive RSS-bound failure.
+
+The mode-scoping is implemented at the §3.15 mode-dispatch
+boundary: the RSS-sampler thread (per
+`mode_concurrent.rs` per §5.1.13) is spawned only inside the
+`--mode=concurrent` dispatch branch; other modes do not spawn
+it and do not assert against the 640 MiB ceiling.
+
+The substrate cross-reference: **R1-D9 is the F2 backstop, not
+a generic memory-pressure guard for the harness binary.** A
+future Round-N that adds a new harness mode with a large
+accumulator state (e.g., a trace-collection mode buffering
+per-iteration register snapshots) does *not* inherit the R1-D9
+RSS-bound; if memory pressure for that new mode becomes a
+concern, the new mode's design surfaces its own
+mode-scoped memory-pressure disposition. **This pin prevents
+inheritance-by-default** of the RSS-bound assertion in contexts
+where the measurement is structurally meaningless. Per the
+§3.15 actor-shape framing, each mode is responsible for its own
+load-bearing invariants; R1-D9's invariant is one such per-mode
+load-bearing invariant, not a binary-wide assertion.
+
+**Reopen criterion for the mode-scoping pin.** If a future
+substrate change makes the harness's per-mode accumulator state
+small enough that the RSS-bound assertion remains meaningful
+across modes (e.g., a Round-N redesign that moves accumulator
+state out of process and into a separate reporter), the
+mode-scoping pin reopens toward binary-wide RSS-bound assertion.
+Future-deferred; substrate trigger is the accumulator
+relocation.
+
 ### R1-D10 — `compute_hash_with_trace` decision (per 2f §10.4 pre-pin)
 
 **Decision.** Does 2g add the optional cfg-gated entry point
@@ -2373,6 +2486,64 @@ gate).
   or a script-level pattern that supersedes per-crate
   exemption.
 
+**Round 2 amendment: harness stateful-pattern exemption pin.**
+The harness crate's stateful mode-dispatch is **appropriately
+outside the verifier-crate-scoped Pattern A and Pattern B
+invariants**. Per §0 layer-separation discipline and §3.15
+harness actor shape, `shekyl-randomx-differential` is the
+workspace's orchestrator-actor for the differential-harness
+problem; orchestrator actors hold accumulator state, mode-dispatch
+state, and CLI argument parsing — all patterns that the
+verifier-crate-scoped invariants forbid (and that the verifier
+crate's pure-transform discipline requires forbidding).
+
+The harness crate may therefore legitimately use:
+
+- **`OnceLock<T>` / `LazyLock<T>` / `static` mutable state**
+  for CLI argument parsing (e.g., a `static REGEX:
+  OnceLock<Regex>` for parsing the `--debug-cache-divergence`
+  flag's seedhash hex argument; a `static CORPUS:
+  OnceLock<Vec<Seedhash>>` for one-time corpus-load
+  initialization).
+- **Module-level accumulator state** for per-mode aggregation
+  (e.g., a `static RSS_SAMPLES: OnceLock<Mutex<Vec<u64>>>`
+  for the R1-D9 RSS sampler; a `static TIMING_HISTOGRAM:
+  OnceLock<Mutex<Histogram>>` for the R1-D8 worst-case mode).
+- **Multi-mode dispatch state** via `enum Mode { ... }` +
+  match-dispatch in `src/main.rs` (per §5.1.3).
+
+The grep gate's **per-crate scoping** (R1-D13 (c) close above)
+is precisely what enables this — Pattern A (`#[no_mangle]`
+absence) and Pattern B (`extern "C"` absence outside FFI shim)
+remain in force across all three crates in scan-scope
+(`shekyl-pow-randomx`, `randomx-v2-sys`, `shekyl-randomx-differential`),
+but the verifier-crate-specific patterns that forbid stateful
+constructs are anchored to `rust/shekyl-pow-randomx/` only. The
+harness crate's stateful patterns don't accidentally constrain
+the verifier's invariants (the gate doesn't scan for these
+patterns inside the verifier crate as a Round-2-side-effect),
+and the verifier's invariants don't accidentally constrain the
+harness's legitimate orchestrator-actor patterns (the gate's
+per-crate scoping isolates them).
+
+**The pin makes the per-crate scoping load-bearing**, not
+incidental. A future Round-N that proposes to add a workspace-wide
+stateful-pattern grep gate (e.g., "no `OnceLock` anywhere in
+the workspace") would fail this pin's substrate check: the
+harness crate's legitimate orchestrator-actor patterns are
+exactly the patterns such a gate would forbid; the layer
+separation per §0 is what makes the verifier-side
+stateful-construct prohibition load-bearing without
+requiring the same prohibition on the orchestrator-actor side.
+
+**Substrate cross-reference.** Per §0 layer-separation
+discipline observation: the four-crate layering (verifier /
+state-holder / C-bindings / orchestrator-actor) is the workspace's
+actor-paradigm template; each crate's invariant footprint
+should be scoped to its role in the layering, not applied
+binary-wide. R1-D13's per-crate scoping is the operational
+form of this principle in the invariant-script substrate.
+
 ### R1-D14 — Equivalent-cache-state precondition
 
 **Decision.** How does the harness establish cache-state
@@ -2567,6 +2738,324 @@ property.
   surface extends with the new precondition variant per
   R1-D8's subcommand discipline.
 
+**Round 2 amendment: drop discipline + CacheStore-empty-during-precondition
+pin.** The SHA-256 incremental shape relies on **sequential
+release** of the Rust cache before the C cache is allocated, to
+keep peak per-seedhash memory at ~256 MiB rather than the
+~512 MiB worst case where both sides are held concurrently. The
+sequencing per the (user-pinned) pseudocode:
+
+```rust
+for seedhash in corpus {
+    let rust_cache = PreparedCache::derive(seedhash);
+    let rust_hash = sha256_full(rust_cache.bytes());   // ~256 MiB peak
+    drop(rust_cache);                                  // explicit release
+
+    let c_cache = unsafe {
+        let p = randomx_v2_sys::randomx_alloc_cache(flags);
+        randomx_v2_sys::randomx_init_cache(p, seedhash.as_bytes().as_ptr(), 32);
+        p
+    };
+    let c_hash = sha256_full_c_cache(c_cache);         // ~256 MiB peak
+    unsafe { randomx_v2_sys::randomx_release_cache(c_cache); }
+
+    assert_eq!(rust_hash, c_hash);
+}
+```
+
+The `drop(rust_cache)` is **load-bearing**: with Rust's
+`Arc<PreparedCache>` shape (per Phase 2F R3 `PreparedCache`
+internals — `Arc<Cache>` held inside the bundle), the explicit
+`drop` releases the strong reference, and the cache's backing
+allocation is freed *only if* the `drop`-side is the **last
+holder**. If any other code path holds a clone of the same
+`Arc<Cache>` for the same seedhash at precondition-time, the
+backing allocation persists past the `drop` and the peak
+memory measurement degrades to ~512 MiB before stabilizing
+when the other holder releases.
+
+**CacheStore-empty-during-precondition invariant.** The
+precondition test owns the **only** `Arc<PreparedCache>` clone
+for each seedhash in the corpus during the precondition phase.
+Specifically:
+
+- The `CacheStore` is **empty** when the precondition tests
+  run; **no `CacheStore::get_or_derive(seedhash)` call has
+  inserted any entry yet**. The precondition phase derives
+  fresh via `PreparedCache::derive(seedhash)` directly (not
+  via the `CacheStore`), and drops the result before the
+  next iteration; the `CacheStore`'s sticky-canonical
+  slot stays unpopulated.
+- The byte-equality test phase (which runs *after* all
+  precondition tests have passed for all seedhashes) is the
+  first phase that populates the `CacheStore` per-seedhash.
+- The phase boundary is enforced at the §3.15 lifecycle level
+  (init → corpus-load → precondition-all-seedhashes →
+  byte-equality-per-(seedhash,data) → accumulate → report);
+  no `CacheStore::get_or_derive` calls leak from the
+  byte-equality phase back into the precondition phase.
+
+The invariant is **implementation-PR-side**, not just a
+documented convention: the precondition test's source code
+calls `PreparedCache::derive` directly (per §5.1.9 `rust_subject`
+module), not `CacheStore::get_or_derive` (per Phase 2F
+`CacheStore` public surface); a Pattern-D extension to the
+R1-D13 invariant script could optionally enforce this at CI
+time by grepping for `CacheStore::` references inside
+`cache_precondition.rs` (per §5.1.7) — but Round 2 declines
+to add the Pattern-D extension because the module-level
+co-location of the precondition logic in a single 50-100 LoC
+module makes the discipline manually verifiable at review
+time without script enforcement.
+
+**Why the invariant matters for Round 2.** The SHA-256 memory
+peak (~256 MiB per seedhash) is the load-bearing memory budget
+under F5's 16 GB runner ceiling; if the precondition phase's
+peak silently degraded to ~512 MiB due to a `CacheStore`-leak,
+the precondition tests for a large corpus would push the
+process's RSS past the runner's budget headroom for the
+*other* concurrent test (R1-D9's 640 MiB ceiling). Per §3.15
+phase-boundary discipline, the precondition phase runs
+sequentially per seedhash and completes before the concurrent
+phase begins; F5's 16 GB headroom comfortably absorbs the
+256 MiB-per-seedhash peak even with the worst-case 32 nightly
+seedhashes processed sequentially.
+
+**Reopen criterion for the drop-discipline pin.** If a future
+substrate change shifts the `PreparedCache` internals away from
+`Arc<Cache>` (e.g., a Round-N redesign that adopts a different
+ownership shape), the `drop` discipline reopens against the
+new ownership model. Future-deferred; substrate trigger is the
+Phase 2F R3-frozen `PreparedCache` internals shifting.
+
+### §3.15 Harness actor shape (Round 2 architectural framing)
+
+**Scope.** This section makes explicit what the §3.1–§3.14
+disposition collection determines implicitly: the
+`shekyl-randomx-differential` binary is a **multi-mode
+orchestration actor** with mode-dispatched state, per-cadence
+invocation, and a structured lifecycle. The disposition
+collection already pins the answers (R1-D1 workspace placement
++ R1-D7 latency mode + R1-D8 worst-case mode + R1-D10 trace-mode
+deferral + R1-D11 failure-output schema + R1-D12 cadence
+mapping + R1-D14 cache-precondition phase); §3.15 names the
+actor shape explicitly so future consumers (Phase 3a per-PR
+latency gate, Phase 3c symbol-isolation check, release-gate
+suites) inherit a documented contract rather than reconstructing
+one from the disposition collection.
+
+**Substrate-anchored framing.** The workspace's actor paradigm
+(per §0 layer-separation discipline observation) shapes the
+disposition collection's coherence: the harness crate is the
+sole workspace-side orchestration actor in the 2g substrate,
+and its internal contract should be specified with the same
+discipline as the verifier crate's pure-transform contract.
+"All our other clients are Actors" — the harness is a client
+of the verifier's pure transforms and an orchestration actor
+in its own right; §3.15 specifies the orchestrator-actor
+contract.
+
+#### §3.15.1 Mode set
+
+The harness binary exposes **four modes** via the top-level
+`--mode={correctness,worst-case,latency,concurrent}` CLI flag,
+mutually exclusive per invocation:
+
+| Mode | Source disposition | CI cadence (per R1-D12) | Section anchor |
+|---|---|---|---|
+| `correctness` | R1-D4 + R1-D5 + R1-D6 + R1-D14 | per-PR (subset) + nightly (full) + release-gate (full) | §5.1.10 (`mode_correctness`) |
+| `worst-case` | R1-D8 | nightly + release-gate | §5.1.11 (`mode_worst_case`) |
+| `latency` | R1-D7 | nightly + release-gate | §5.1.12 (`mode_latency`) |
+| `concurrent` | R1-D9 | nightly + release-gate | §5.1.13 (`mode_concurrent`) |
+
+A **fifth mode is reserved** but not currently implemented:
+
+| Mode | Source disposition | Status | Reopen criterion |
+|---|---|---|---|
+| `trace` (future) | R1-D10 (closed at (b) — omit) | Reserved, not implemented | A future divergence + intractable bisection (per R1-D10 future-deferred reopen) |
+
+The default behavior when invoked without `--mode` is **error
+with a usage message**, not implicit-default-to-correctness;
+the substrate rationale per the `user-protection-defaults-in-user-absent-contexts`
+anti-pattern discipline
+([`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)):
+"graceful degradation under unknown input" inverts to "loud
+failure" pre-genesis. The CI workflow steps (per §5.5) always
+pass `--mode=...` explicitly; a missing `--mode` indicates an
+operator misuse and should not silently pick a mode.
+
+A reserved sixth orchestration surface exists for the
+`--debug-cache-divergence --seedhash <hex>` post-failure
+diagnostic mode (per R1-D14 sub-disposition). This is invoked
+*as a flag combination on the `correctness` mode*, not as a
+separate `--mode=` value; the flag triggers a different
+in-mode codepath (full byte-diff instead of SHA-256
+comparison). Per the §3.15.3 dispatch surface table.
+
+#### §3.15.2 State shape per mode
+
+Each mode initializes a distinct combination of state holders;
+modes do not share state across invocations (the process exits
+after one mode completes):
+
+| Mode | `CacheStore`? | `Cache + Vm` pair (C)? | Per-mode accumulator state | RSS-bound assertion (R1-D9)? |
+|---|---|---|---|---|
+| `correctness` | Yes (capacity 2; populated during byte-equality phase, *not* during precondition phase per R1-D14 amendment) | Yes (allocated per-seedhash; released between seedhashes) | Per-`(seedhash, data)` byte-equality result (pass/fail bit); failure output buffer populated per R1-D11 schema | No |
+| `worst-case` | Yes (capacity 2) | Yes (one per-seedhash) | Per-`(seedhash, data, class_tag)` per-hash latency sample (ring buffer; class-tagged); per-class median + max accumulator | No |
+| `latency` | Yes (capacity 2; one seedhash) | Yes (one `Cache + Vm`) | N=1024 per-hash latency samples (interleaved Rust/C); two `Vec<u64>` (Rust samples, C samples); per-side median + p95 + max accumulator | No |
+| `concurrent` | Yes (capacity 2; shared across 5 workers) | Yes (one per-worker `Vm`; shared `Cache` via `CacheStore` get_or_derive) | Per-worker `Vec<[u8; 32]>` of computed hashes; RSS sampler thread's `Mutex<Vec<u64>>` of RSS samples | **Yes** (per R1-D9 amendment: scoped to this mode only) |
+| `trace` (reserved) | TBD (a future R1-D10 reopen specifies) | TBD | TBD: per-iteration register snapshots; trace-buffer accumulator | TBD; per the R1-D9 amendment, would not inherit the RSS-bound by default |
+
+**Free-between-modes discipline.** Each mode is invoked in its
+own process (one `cargo run` per invocation; one CI step per
+mode). No state survives across modes. The orchestrator-actor
+shape is **process-scoped**, not session-scoped; the lifecycle
+per §3.15.4 always begins from a clean state and ends at process
+exit.
+
+This matters for the §3.15 actor framing: the harness is *not*
+a long-lived daemon-style actor (like the daemon-side
+`shekyl-engine-state` actor with multi-request lifetime); it
+is a **per-invocation orchestration actor** whose state lives
+only inside one mode's run. The simplification matters for
+future consumers — Phase 3a's per-PR latency gate doesn't have
+to reason about state surviving across `--mode=latency`
+invocations; each invocation is independent.
+
+#### §3.15.3 Mode-dispatch surface (CLI argument shape)
+
+The argument shape is **mode-mutually-exclusive at the top
+level, with mode-scoped sub-arguments below**:
+
+```text
+shekyl-randomx-differential
+  --mode={correctness,worst-case,latency,concurrent}
+  [--corpus-size={per-pr,nightly,release-gate}]    # default: per-pr; controls R1-D4 corpus size; valid on all modes
+  [--seed=<hex32>]                                  # default: pinned per R1-D4; valid on correctness only
+  [--debug-cache-divergence --seedhash=<hex32>]     # post-failure diagnostic; valid on correctness only
+  [--workers=<u32>]                                 # default: 5; valid on concurrent only
+  [--samples=<u32>]                                 # default: 1024; valid on latency only
+  [--mode=test-failure]                             # synthetic failure injection for T11; not a real mode
+```
+
+The dispatch is implemented at `src/main.rs` (per §5.1.3) as
+argument parsing → `enum Mode { Correctness, WorstCase, Latency,
+Concurrent, TestFailure }` → `match`-dispatch to the
+mode-specific module. Mode-scoped sub-arguments are rejected
+at parse-time with a clear error message when used outside
+their mode (e.g., `--workers=8 --mode=latency` errors with
+"the --workers flag is valid only for --mode=concurrent").
+
+**No mode composition.** A single invocation runs exactly one
+mode. The substrate rationale: mode composition would require
+the orchestrator to manage state-handoff across modes (e.g.,
+`--mode=correctness,latency` would need to decide whether to
+share the corpus state or re-derive); the per-invocation
+process-scoping per §3.15.2 avoids the question by construction.
+Each CI step invokes its own process per mode (per §5.5).
+
+#### §3.15.4 Orchestration lifecycle
+
+Every mode follows the same lifecycle skeleton; per-mode
+specialization happens at the per-iteration step:
+
+```text
+[init]
+  → parse_args() / argument validation
+  → init_logging() (stderr + stdout sinks)
+  → init_oracle() (C-side: load randomx-v2-sys symbols; ready Cache+Vm allocator)
+  → init_subject() (Rust-side: ready PreparedCache::derive path; configure CacheStore capacity)
+
+[corpus-load]
+  → load_corpus(mode, corpus_size_flag)
+       (mode == Correctness: random per R1-D4 + adversarial per R1-D5 + u128-edge per R1-D6)
+       (mode == WorstCase: R1-D5 + R1-D6 union per R1-D8)
+       (mode == Latency: single seedhash, N data samples per R1-D7)
+       (mode == Concurrent: per-PR-size random corpus per R1-D9)
+
+[mode == Correctness only: precondition-all-seedhashes]
+  → for each seedhash in corpus:
+       precondition_test(seedhash)  // per R1-D14 + drop-discipline pin
+  → abort-on-first-failure (per R1-D14 + R1-D11 fail-fast discipline)
+
+[per-iteration loop]
+  → mode-specific per-iteration step:
+       (Correctness: per-(seedhash, data) byte-equality)
+       (WorstCase: per-(seedhash, data) timing measurement, class-tagged)
+       (Latency: per-iteration interleaved Rust/C timing measurement)
+       (Concurrent: spawn 5 workers; each worker runs 256 hashes; RSS sampler thread per R1-D9 amendment)
+
+[accumulate]
+  → per-mode aggregation (median / max / per-class breakdown)
+  → write BENCH_RESULTS.md updates if perf mode (Latency, WorstCase, Concurrent)
+
+[report]
+  → success: stdout summary; exit 0
+  → failure: stderr JSON per R1-D11 schema; stdout human-readable; exit 1
+
+[exit]
+  → drop all state holders (Rust drop order)
+  → cleanup oracle (free C-side Cache+Vm allocations)
+  → process exit
+```
+
+**Phase boundaries are load-bearing.** Per the R1-D14 amendment,
+the precondition phase runs to completion before the per-iteration
+phase begins; per R1-D11's fail-fast discipline, the
+per-iteration phase aborts on first failure rather than
+continuing to accumulate divergences. Per R1-D9's amendment,
+the RSS-bound assertion is scoped to the concurrent mode's
+per-iteration phase only (the sampler thread is spawned
+inside that phase, not during init or corpus-load).
+
+#### §3.15.5 Forward-template for Phase 3a / 3c / release-gate
+
+The §3.15 actor shape is **the contract Phase 3a's per-PR
+latency gate consumes**: the 3a CI step invokes
+`shekyl-randomx-differential --mode=latency` (per §3.15.1
+mode set) and parses the stdout summary (per §3.15.4 report
+phase); the 3a wiring does not need to understand the harness's
+internal state shape because the actor's per-invocation
+process-scoping (per §3.15.2) means each 3a invocation is
+independent.
+
+Similarly, **Phase 3c's symbol-isolation check** can consume
+the harness as a binary whose Cargo build product is queryable
+via `nm` (per parent-plan line 26); the §3.15 actor shape's
+process-scoped lifecycle means the symbol-isolation check
+operates on the static linker output, not on a running-process
+state.
+
+**Future signing-engine extractions** (per Phase 4+ post-V3
+forward path) inherit the §3.15 template: per-invocation
+process-scoped orchestrator actors with mode-dispatched state,
+phase-boundary-load-bearing lifecycles, and explicit-mode CLI
+argument shapes. The harness is the workspace's first
+multi-mode orchestrator-actor; the shape it pins is reusable.
+
+#### §3.15.6 What §3.15 is not
+
+- **Not a substrate reframe.** §3.15 makes explicit what the
+  R1-D1/D7/D8/D9/D10/D11/D12/D14 disposition collection
+  already determines. The actor shape lands by composition of
+  closed dispositions; §3.15 surfaces the composition rather
+  than introducing new substrate.
+- **Not a runtime specification.** The mode-dispatch
+  implementation details (argument-parser library, error
+  message wording, exit-code mapping) are implementation-PR
+  concerns; §3.15 specifies the contract surface, not the
+  implementation.
+- **Not a threat-model.** Round 3 (deferred per §4) closes the
+  threat-model addenda for the harness surface; §3.15 is
+  architectural framing, not adversarial enumeration. The
+  §4 Round-3 enumeration sketch's "harness surface attack
+  classes" (corpus-generation bug, R1-D14 precondition
+  bypass, CMake-trigger bypass, R1-D11 failure-output
+  incompleteness, CacheStore `Arc` retention regression,
+  adversarial-corpus drift, reviewer-blind nightly failures)
+  evaluates against the §3.15 framing as substrate, not as
+  competing scope.
+
 ---
 
 ## 4. Threat model (Round-N placeholder)
@@ -2710,6 +3199,67 @@ explicitly (the obligation is not closed by enumerating the
 seven categories above; it is closed by the Round-2 framing
 naming corpus coverage as substrate-load-bearing in the same
 sense the seven categories are substrate-load-bearing).
+
+### Round 2 amendment (re-anchor §4 close to Round 3)
+
+**Substrate-anchored re-anchor, not drop.** Round 2 absorbed
+five architectural tightenings (per §11 Round 2 row) and the
+new §3.15 harness-actor-shape framing rather than closing §4's
+threat-model addenda. The §4 close re-anchors from Round 2 to
+**Round 3**; the Round-1 deferral's reopening criterion
+("Round 2 closes §4 against the Round-1-anchored substrate")
+re-points to "**Round 3** closes §4 against the **Round-1- +
+Round-2-anchored substrate** — the §3.15 actor-shape framing
+becomes part of the substrate that §4 evaluates against."
+
+**Why Round 2 chose tightenings over §4 close.** The
+architectural-tightening findings surfaced through a fresh
+adversarial read of the Round-1 close (per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+"what does this actually deliver against the threat model?"
+discipline). Specifically: the harness-as-orchestration-actor
+framing is itself substrate that §4's adversarial probe needs
+to operate against — the seven pre-bound attack classes above
+(corpus-generation bug, R1-D14 precondition bypass, etc.) each
+evaluate against the actor shape's mode-boundary discipline,
+phase-boundary discipline, and per-mode state shape; closing
+§4 before §3.15 lands would force §4 to either (a) re-derive
+the actor framing per attack class or (b) close against an
+implicit-rather-than-explicit substrate. Round 2 lands §3.15
+to give §4 the named substrate it adversarially probes.
+
+The §0 round-count expectation (≤3 rounds total) accommodates
+the re-anchor: Round 0 (Scaffold) + Round 0 calibration + Round
+1 + Round 2 + Round 3 = 3 substantive rounds (Round 0
+calibration counts as substrate-tightening against Round 0,
+not a separate close-round). Round 3's scope is §4 close +
+optional adversarial-pass findings against the §3.15 substrate
++ implementation-PR transition gate.
+
+**Round-3-close obligation (inherits the corpus-coverage +
+actor-shape framings).** The Round-2-close obligation
+(corpus-coverage-as-leg-3-completeness) re-anchors as the
+**Round-3-close obligation** with no content change. **A new
+load-bearing obligation lands at Round 2 for Round 3 to absorb:**
+the §3.15 harness-actor-shape framing is substrate that §4's
+attack-class enumeration must explicitly probe against,
+specifically:
+
+- Mode-boundary violations (a §4 attack class would surface
+  if a future contributor accidentally lets state leak across
+  mode boundaries despite §3.15.2's process-scoped framing).
+- Phase-boundary violations (per the R1-D14 amendment's
+  CacheStore-empty-during-precondition invariant; per the
+  R1-D9 amendment's RSS-sampler-spawned-in-concurrent-mode-only
+  invariant).
+- Per-mode-state-shape regression (a §4 attack class would
+  surface if a future mode addition silently inherits an
+  invariant that no longer applies, per the R1-D9 amendment's
+  inheritance-by-default prevention).
+
+The Round-3 close must enumerate these three attack classes
+explicitly, alongside the seven Round-1 / Round-2 pre-bound
+classes; the absence is grounds for reviewer challenge per the
+same discipline that the corpus-coverage obligation enforces.
 
 ---
 
@@ -3227,3 +3777,4 @@ the round-count budget.
 | Round 0 (Scaffold) | 2026-05-24 | This document. Pins the substrate carry-forwards from [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §6 + §7 line 248 + Phase 2 sub-PR 2g todo, [`RANDOMX_V2_PHASE2C_PLAN.md`](./RANDOMX_V2_PHASE2C_PLAN.md) §5.11.5 + §5.11.8, [`RANDOMX_V2_PHASE2D_PLAN.md`](./RANDOMX_V2_PHASE2D_PLAN.md) §3.4, and [`RANDOMX_V2_PHASE2F_PLAN.md`](./RANDOMX_V2_PHASE2F_PLAN.md) §1.1 (current public API) + §10.1 (precursor PR) + §10.4 (`compute_hash_with_trace` pre-pin) + §10.5 (three-leg audit posture). Enumerates §3 Round 1 decision points R1-D1 (workspace placement) through R1-D14 (cache-state byte-equivalence precondition) with named option sets, criteria, default expectations, and reopen-criterion sketches. Out-of-scope items pinned in front-matter (no per-PR per-hash latency CI gate at 2g — Phase 3a-land; no binary-level `nm` check — Phase 3c-land; no 600k-block sync test — release-gate-suite-land; no parallel `Cache::derive` — FOLLOWUPS-land; no side-channel timing differential — out-of-2g; no C-side miner state-machine — parent-plan line 30 explicit). §4 threat model, §5 implementation hand-off contract, §6 test plan, §8 commit table are placeholders reserved for Round-N close. §7 generator/fixtures plan confirms 2g introduces no new committed reference vectors (the harness consumes the C reference at runtime as ground truth per 2c §5.11.5 leg 3 framing); adversarial seedhash bytes (R1-D5 + R1-D6) commit under the harness crate per the R1-D5 default expectation. §9 CI gates split between "2g adds" (per-PR byte-equality differential pass; nightly full corpus; release-gate worst-case ratio; per-hash latency placeholder body via R1-D7; concurrent-call thread-safety test via R1-D9) and "2g inherits unchanged" (`check_randomx_fpu_rounding.sh`, `check_randomx_crate_invariants.sh`, fmt/clippy/test, debug-vs-release equivalence). §10 forward path names the 3a / 3c / release-gate / documentation-closure hand-offs. Round 1 supersedes this scaffold's §3 / §4 / §5 / §6 / §8 with closed-decision content; the scaffold remains the substrate-capture provenance per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) plan-doc Round-0 framing. |
 | Round 0 calibration corrections | 2026-05-24 | Post-scaffold calibration pass against the Round 0 doc, applied as substrate-tightening additions (no decision-reopening; Round 0 closed no decisions). Eight observations incorporated. **(1)** §3 new decision point **R1-D14 (cache-state byte-equivalence precondition)** added after R1-D13: how the harness establishes Rust/C cache byte-equivalence as a precondition for the per-`(seedhash, data)` byte-equality test on `compute_hash` output; options (a) implicit / (b) explicit upstream test / (c) inlined assertion; default (b); reopen criterion against full-cache memory pressure vs. CI runner-class budget. The R1-D11 bisection-failure-mode question is bounded by R1-D14: a (a)-disposition makes R1-D11's output unable to distinguish cache-derivation from dispatch divergence even when R1-D10's optional per-iteration trace is included. **(2)** §0 **round-count expectation calibration block** added: 2g's Round 1 expected to converge in ≤3 rounds (substrate-anchored against no-new-public-API; type-system surface closed by Phase 2F Rounds 2–3); calibration precedent traced through 2c (3 rounds) / 2d (multi-round with R0-D5 pre-flight) / 2f (5+ rounds for new public API surface); expectation is reviewer-attention budget, not hard ceiling (per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc) round-count budget reopens substrate-anchored). **(3)** §1.7 **fork-pin coupling maintenance pin** added: `randomx-v2-sys`'s `extern "C"` declarations are coupled to the `external/randomx-v2` fork pin (commit `aaafe71`); any future fork-pin-advance PR diffs the new pin's `randomx.h` against the prior pin's, identifies signature changes on the 7-symbol minimal subset, updates sub-crate declarations in lockstep, and cites the signature-diff verification step in the PR description. Reopen criterion for R1-D2 / R1-D13 if upstream changes RandomX v2's C ABI. **(4)** §2.5 **Round 0 amplification: leg 3 as catch-of-last-resort** added: reframes leg 3 from "redundant safety net" to "catch-of-last-resort for leg-1/leg-2 discipline failures" (auditor-side read errors, transcription misses on details the C reference defines but the spec is silent on); 2c §5.11.8 audit-against-actual-code recurrence record cited as evidence that the discipline catches real findings before the harness is in place, but absent the catch, leg 3 would have been the catch. Corollary: corpus coverage is itself a load-bearing property of the audit posture; thin corpus coverage thins the catch-of-last-resort surface. **(5)** §3.7 R1-D7 **placeholder end-of-life audit-trail pin** added: 2c §13 R3-minor-2's `tests/perf/per_hash_latency.rs` placeholder reaches planned end-of-life under R1-D7 (c); implementation-PR commit message cites "closes Phase 2c R3-minor-2" so the audit trail is grep-discoverable per [`90-commits.mdc`](../../.cursor/rules/90-commits.mdc). Per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc) the placeholder's reversion-clause shape was always "delete on 2g's implementation"; R1-D7 (c) is the planned trigger firing, not architectural drift. **(6)** §3.9 R1-D9 **RSS-bound adversarial criterion + Phase 2F F2 backstop framing** added: success criterion bifurcated into correctness criterion (no panic, no deadlock, byte-equality of each pair of hashes for the same `(seedhash, data)` input regardless of worker) and adversarial criterion (RSS growth during concurrent execution bounded by `CacheStore`'s capacity-2 invariant per Phase 2F §4 F2 disposition: ≤ 2 × 256 MiB derived-cache holdings + worker-count × ~2 MiB scratchpad + register-file). Without the RSS-bound assertion the test verifies correctness only; with it the test backstops 2F's F2 disposition under load (catches a regression that accidentally retained `Arc`s beyond derivation scope). Round 1 pins numeric ceiling, measurement methodology (`/proc/self/statm` vs. platform equivalent), and tolerance band. **(7)** §3.10 R1-D10 **future-deferred reopen-criterion class** made explicit: R1-D10's reopen criterion is future-deferred (the trigger event — divergence + intractable bisection — has not occurred at Round-1-evaluation-time), legitimate per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc); future Round-N opening R1-D10 cites the divergence's `(seedhash, data)` pair as the reopen's substrate trigger rather than re-deriving Round-1 evidence. **(8)** §4 **Round-1-close obligation: corpus-coverage-as-leg-3-completeness framing** pinned: the three corpus-coverage classes (random per R1-D4 / adversarial per R1-D5 + R1-D6 / worst-case timing per R1-D8) catch different bug classes; thin coverage in any one class thins the residual catch capacity in that direction. Round 1's threat-model close must treat corpus-coverage as load-bearing, not adjacent to F1–F7-style attack-class enumeration; absence of explicit corpus-coverage-class framing in Round-1 close is grounds for reviewer challenge. None of (1)–(8) reopens a frozen surface from §1; all eight are substrate-tightening additions to the scaffold per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) plan-doc-Round-0 framing. |
 | Round 1 (Decisions close + §4 deferral + §5/§6/§8 substance) | 2026-05-24 | Closes all 14 §3 decision points (R1-D1 through R1-D14) at their Round-0-named default expectations, each with substrate-anchored rationale, named sub-disposition pins where the option set carried multiple branches (e.g., R1-D5 + R1-D6 corpus-storage formats, R1-D11 failure-output schema, R1-D14 SHA-256-vs-byte-diff comparison shape), and full reversion-clause shape per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc) (rejection / reopening criteria / re-evaluation shape). **Five Round-0-defaults-supporting substrate findings surfaced and pinned:** **F1** R1-D14 comparison-shape (SHA-256 of full cache by default; `--debug-cache-divergence` flag for byte-by-byte diff on post-failure manual re-run; memory pressure within 16 GB runner budget); **F2** R1-D4 numeric pins (16 seedhashes × 8 data values for per-PR cadence; 32 × 32 for nightly; bimodal block-template-shaped data-length distribution; 32-byte ChaCha20 seed; deterministic regeneration verified via T9); **F3** R1-D5 + R1-D6 grinding budget (4 hours wall-clock per class on a 16-core baseline; per-class targets enumerated for CFROUND, FDIV_M, Cache-miss, CBRANCH, Combined-heavy seedhashes + div-by-zero, signed-div overflow, shift-by-width, u128-truncation data); **F4** R1-D9 RSS-bound pin (640 MiB ceiling with ±10% tolerance, measured via `/proc/self/statm` field 2; sampled at 100 ms intervals during concurrent execution); **F5** R1-D12 runner-class pin (`ubuntu-latest` per GitHub Actions specs: 4 vCPU / 16 GB RAM / x86_64; wall-clock budgets ~7 min per-PR / ~25 min nightly / ~10 min release-gate, all within the 6 h runner ceiling). **R1-D11 ↔ R1-D14 dependency edge surfaced and absorbed (F6):** R1-D11's structured-failure-output schema includes `rust_cache_sha256` + `c_cache_sha256` fields populated from R1-D14's precondition test; a precondition test failure aborts the corpus pass for that seedhash before per-`(seedhash, data)` tests run, so a divergent-cache-sha256 in the R1-D11 failure output is a harness bug (the precondition should have caught it first). **§4 threat-model close deferred to Round 2** per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) A3 timing discipline ("threat-model addenda is typically late-design-rounds: after feature completeness, before closure"); the Round-0 Round-1-close obligation (corpus-coverage-as-leg-3-completeness framing) re-anchors as the Round-2-close obligation with no content change, and the Round-2 enumeration sketch pre-binds 7 attack classes against the differential-harness surface (corpus-generation bug, R1-D14 precondition bypass, CMake-trigger bypass, R1-D11 failure-output incompleteness, CacheStore `Arc` retention regression, adversarial-corpus drift, reviewer-blind nightly failures). **§5 implementation hand-off contract initial substance** lands: 16-row table for the harness crate (`shekyl-randomx-differential` `[[bin]]` + `[lib]` + 14 module surfaces), 5-row table for `randomx-v2-sys` sub-crate (`lib.rs` extern declarations + `build.rs` + manifests + README), 2-row verifier-crate side (no new surfaces per R1-D10 (b); placeholder deletion per R1-D7 (c)), 3-row CMake wiring (R1-D3 option + implication mechanism + zero new targets), 4-row CI surface (per-PR + nightly + release-gate workflows + crate-invariant script extension), explicit §5.6 negative-space pin (no new verifier API; no committed reference vectors; no additional `randomx-v2-sys` consumers; no `harness-trace` feature; no Phase 2F surface modification), and §5.7 drift-prevention discipline (reviewer rejection criterion for implementation-PR surfaces outside the table per [`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)). **§6 test plan initial substance** lands: 15-row test matrix across 7 categories (T1–T2 correctness; T3–T4 cache precondition; T5–T6 performance; T7–T8 thread-safety + RSS-bound; T9–T10 reproducibility; T11 failure-output schema; T12–T14 build-system + crate-invariant; T15 fork-pin coupling), cadence summary (9 per-PR / 7 nightly / 6 release-gate / 1 manual-post-failure), explicit §6.9 negative-space pin (no proptest, no fuzz, no mutation testing, no cross-platform — all out-of-scope-by-omission with future-deferred FOLLOWUPS pickup criteria), and §6.10 drift-prevention discipline. **§8 commit table initial substance** lands: 10-commit implementation-PR sequence within the [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) rule-2 ceiling (≤10 commits, ≤5 working days), each commit anchored to §5 surfaces and §6 T# rows, with per-commit bisection invariants ("every commit passes `cargo build` + `cargo clippy -D warnings` + `cargo fmt --check`"), §8.2 boundary-strengthening pins at C4→C5 (skeleton-without-corpora) and C9→C10 (harness-without-CI) for bisection legibility, §8.3 scope-discipline pin (no verifier-API modification; no re-implementation of 2c/2d/2f; no out-of-table dependencies; no in-place R1-D# reshape), and §8.4 PR-opening citation discipline. None of Round 1's closures reshapes the §1 substrate; all closures fall within the option sets enumerated at Round 0. Round 2 follows per the §0 round-count expectation (target ≤3 rounds total) and the §4 deferral pin (Round 2 closes §4 against the Round-1-anchored substrate). |
+| Round 2 (Architectural tightenings + §3.15 harness actor shape + §4 re-anchor to Round 3) | 2026-05-24 | Adversarial pass against the Round-1 close through the **workspace actor-paradigm lens** ("all our other clients are Actors") surfaces five substrate-tightening findings — none reopens a Round-1 disposition; each names a discipline the disposition collection already determines but did not surface explicitly. **(T1) §3.15 new section — harness actor shape (load-bearing architectural framing).** The `shekyl-randomx-differential` binary is the workspace's first multi-mode orchestration-actor consumer of the verifier's pure-transform surface; the R1-D1/D7/D8/D10/D11/D12/D14 disposition collection collectively determines its mode set (4 modes — correctness / worst-case / latency / concurrent — plus reserved trace), per-mode state shape (CacheStore presence + C-side Cache+Vm pair + accumulators + RSS-bound applicability), mode-dispatch surface (`--mode=` mutually exclusive top-level flag with mode-scoped sub-args; default behavior is loud-failure per [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc) `user-protection-defaults-in-user-absent-contexts` inversion), and orchestration lifecycle (init → corpus-load → [precondition-all-seedhashes for correctness] → per-iteration loop → accumulate → report → exit, with §3.15.4 phase-boundary discipline load-bearing for the R1-D9 + R1-D14 amendment pins). Process-scoped (not session-scoped) so each invocation is independent — the contract Phase 3a / 3c / release-gate consumers inherit. **(T2) §0 layer-separation positive observation.** The disposition collection operationalizes a **four-crate layering** (`shekyl-pow-randomx` verifier as pure-transforms + `CacheStore` state-holder + `randomx-v2-sys` C-bindings boundary + `shekyl-randomx-differential` orchestrator-actor) that is the concrete-template realization of the workspace's actor-paradigm discipline. R1-D1 (a) / R1-D2 (c) / R1-D7 (c) / R1-D10 (b) / R1-D13 (c) each individually land at the option that respects this layering; the disposition collection's coherence is the discipline applied to a new sub-problem yielding the structurally-clean shape by construction. The four-crate template is the load-bearing layout future Rust extractions (Phase 3a / 3c; signing-engine extractions) target by default. **(T3) R1-D9 amendment — RSS-bound mode-scoping pin.** The RSS-bound assertion (640 MiB ceiling per F4) is scoped to the concurrent-call test mode only; other modes (latency, worst-case, future trace) do not inherit it. The F2 backstop's measurement is meaningful only when the harness's own accumulator state is minimal — in modes whose per-mode accumulator state grows with corpus size, the measured RSS would shift without the verifier-side F2 mitigation having regressed (false-positive bound failure). Implementation: RSS sampler thread spawned only inside the `--mode=concurrent` dispatch branch (per §3.15 actor shape). Prevents inheritance-by-default for new mode additions. **(T4) R1-D13 amendment — harness stateful-pattern exemption pin.** The harness crate's stateful mode-dispatch (`OnceLock` / `LazyLock` / `static` for CLI arg parsing, accumulator state, mode-dispatch enum) is appropriately outside the verifier-crate-scoped Pattern A and Pattern B invariants. Per-crate scoping of the invariant grep gate (R1-D13 (c) close) is what enables this — Pattern A and Pattern B remain workspace-wide in scan-scope (all three crates), but the verifier-crate-specific stateful-construct-forbidding patterns anchor to `rust/shekyl-pow-randomx/` only. The per-crate scoping is now load-bearing, not incidental; a future workspace-wide stateful-pattern grep gate would fail this pin's substrate check (the layer separation per T2 is what makes the verifier-side prohibition load-bearing without requiring the same prohibition orchestrator-actor-side). **(T5) R1-D14 amendment — drop discipline + CacheStore-empty-during-precondition pin.** The SHA-256 incremental shape's ~256 MiB per-seedhash memory peak depends on `drop(rust_cache)` being load-bearing — the explicit drop releases the `Arc<Cache>` strong reference and the backing allocation is freed only if the drop-side is the last holder. The precondition test owns the only `Arc<PreparedCache>` clone for each seedhash; the `CacheStore` is empty during the precondition phase (precondition test calls `PreparedCache::derive` directly, not `CacheStore::get_or_derive`; the sticky-canonical slot stays unpopulated until the byte-equality phase begins). Phase-boundary enforcement at the §3.15.4 lifecycle level. **§4 threat-model close re-anchored from Round 2 to Round 3.** Round 2 absorbed the five architectural tightenings instead of closing §4; the §4 close re-anchors against the Round-1 + Round-2 substrate, with the §3.15 actor-shape framing becoming load-bearing for §4's adversarial probe. Three new Round-3-close obligations land at Round 2 for §4 to absorb: mode-boundary violations, phase-boundary violations, and per-mode-state-shape regression — alongside the seven Round-1 pre-bound attack classes and the corpus-coverage-as-leg-3-completeness obligation inherited forward. **Round-count budget unchanged:** Round 0 + Round 0 calibration + Round 1 + Round 2 + Round 3 = 3 substantive close-rounds within the §0 ≤3-round expectation (calibration counts as substrate-tightening, not a separate close-round). **Project-posture observation (broader project record).** 2g is the **fourth substantive sub-PR of the RandomX v2 migration to close Round 1 cleanly without an adversarial reframe** (2c closed in 3 rounds; 2d closed via R0-D5 pre-flight; 2f closed in 5+ rounds with substantial type-system reframe; 2g closes Round 1 at defaults with Round 2 handling tightenings rather than reframes). The pattern suggests the project's design discipline has matured to the point where Round 1's "default expectation" entries are usually right; converged-state-of-project-posture per [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc) discovery-cadence-compounding-substrate framing. None of T1–T5 reopens a frozen surface from §1 or reshapes a closed Round-1 disposition; all five are substrate-tightening additions per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc). Round 3 follows per the §4 Round-2 amendment re-anchor (Round 3 closes §4 against the Round-1- + Round-2-anchored substrate; transitions to implementation-PR after close). |
