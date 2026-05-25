@@ -10,13 +10,15 @@ per [`RANDOMX_V2_PHASE2G_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2G_PLAN.md)
 §2.5: spec-faithful implementation (leg 1) + property tests (leg 2) +
 this differential harness as the catch-of-last-resort backstop (leg 3).
 
-## Status (C4 skeleton)
+## Status (C6 landed; mode implementations land at C7+)
 
-This is the **C4 skeleton** per §8.1: argument parsing and
-`--mode=<MODE>` dispatch are wired, but the actual mode implementations
-land at C5–C9. Invoking any mode at C4 returns a clear "corpus modules
-not yet wired" diagnostic per the §8.2 C4 → C5 bisection boundary
-invariant.
+Per §8.1 the C4 skeleton (argparse + `--mode=<MODE>` dispatch shell),
+the C5a corpora + canonical outputs, the C5b Round 7 substrate
+amendment, and the C6 cache-precondition + Rust/C oracle wrappers
+have landed on this branch. Mode dispatch is still gated behind the
+"corpus modules wired; mode implementations not yet" diagnostic
+until the C7 + C8 mode-module commits land per the §8.2 C4 → C5
+bisection boundary invariant (carried forward through C6).
 
 ```text
 $ cargo run --bin shekyl-randomx-differential -- --help
@@ -24,10 +26,9 @@ shekyl-randomx-differential — Phase 2g Rust/C differential test harness
 ...
 
 $ cargo run --bin shekyl-randomx-differential -- --mode=correctness
-error: shekyl-randomx-differential is at the C4 skeleton (per
+error: shekyl-randomx-differential is at the C6 boundary (per
 RANDOMX_V2_PHASE2G_PLAN.md §8.1); mode 'correctness' dispatch requires
-the corpus modules (§5.1.5, §5.1.6) and the C oracle / Rust subject /
-cache-precondition modules (§5.1.7–§5.1.9), which land at C5–C6.
+the mode modules (§§5.1.10, 5.1.12, 5.1.13), which land at C7–C9.
 Re-run after the corresponding commits land on this branch.
 ```
 
@@ -35,11 +36,12 @@ The C4 → C9 commit sequence per §8.1 fills in:
 
 | Commit | Surface |
 |---|---|
-| **C5** | `corpus_random.rs` + `adversarial_corpus.rs` + `canonical_outputs.rs` + `gen-canonical-outputs` binary |
-| **C6** | `cache_precondition.rs` + `c_oracle.rs` + `rust_subject.rs` (consumes `PreparedCache::cache_block_bytes_for_testing` under `test-internals`) |
-| **C7** | `mode_correctness.rs` + `failure_output.rs` + `invocation_banner.rs` |
-| **C8** | `mode_worst_case.rs` + `mode_latency.rs` |
-| **C9** | `mode_concurrent.rs` + `tests/perf/per_hash_latency.rs` deletion + `main.rs` dispatch wire-up |
+| **C5a** | `corpus_random.rs` (populated per R6-D1) + `adversarial_corpus.rs` (scaffolded-empty per R6-D2; arrays populated per R7-D4 deferral to post-2g) + `canonical_outputs.rs` (1024 random-corpus hashes + 32 cache-SHA-256 fingerprints) + `gen-canonical-outputs` binary |
+| **C5b** | Round 7 substrate-completeness amendment (per §3.19 R7-D1 through R7-D5): R1-D5 + R1-D6 disposition reopening, adversarial-corpus methodology deferred to a post-2g design round, `adversarial_corpus.rs` doc-comment refresh. No new code surface. |
+| **C6** | `cache_precondition.rs` + `c_oracle.rs` + `rust_subject.rs` (consumes `PreparedCache::cache_block_bytes_for_testing` under `test-internals`) + `--debug-cache-divergence` flag wired into argparse |
+| **C7** | `mode_correctness.rs` + `mode_latency.rs` (`mode_worst_case` deferred per §3.19 R7-D4 to the post-2g adversarial-corpus design round) |
+| **C8** | `mode_concurrent.rs` + RSS-bound assertion (T7 + T8) |
+| **C9** | `failure_output.rs` + `invocation_banner.rs` + `rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs` deletion |
 
 ## Build prerequisites
 

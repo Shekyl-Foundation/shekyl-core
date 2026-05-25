@@ -88,18 +88,28 @@
 use std::os::raw::{c_int, c_void};
 
 /// Opaque handle to a `randomx_cache` allocated by
-/// [`randomx_alloc_cache`]. Single-byte body per the standard Rust
-/// FFI idiom for incomplete C types; never dereferenced by Rust
-/// code.
+/// [`randomx_alloc_cache`]. Zero-sized `_opaque: [u8; 0]` body
+/// matches the established Shekyl FFI pattern (see
+/// `rust/shekyl-daemon-rpc/src/ffi.rs` `CoreRpcHandle`) and avoids
+/// implying a concrete size for an incomplete C type. Never
+/// constructed or dereferenced by Rust code; only used through
+/// `*mut RandomxCache` pointers returned by the C library.
 #[repr(C)]
-pub struct RandomxCache(u8);
+pub struct RandomxCache {
+    _opaque: [u8; 0],
+}
 
 /// Opaque handle to a `randomx_vm` allocated by
-/// [`randomx_create_vm`]. Single-byte body per the standard Rust
-/// FFI idiom for incomplete C types; never dereferenced by Rust
-/// code.
+/// [`randomx_create_vm`]. Zero-sized `_opaque: [u8; 0]` body
+/// matches the established Shekyl FFI pattern (see
+/// `rust/shekyl-daemon-rpc/src/ffi.rs` `CoreRpcHandle`) and avoids
+/// implying a concrete size for an incomplete C type. Never
+/// constructed or dereferenced by Rust code; only used through
+/// `*mut RandomxVm` pointers returned by the C library.
 #[repr(C)]
-pub struct RandomxVm(u8);
+pub struct RandomxVm {
+    _opaque: [u8; 0],
+}
 
 /// `randomx_flags` is a C `enum` with compiler-chosen integer
 /// width; the type alias to [`c_int`] matches the C99 default of

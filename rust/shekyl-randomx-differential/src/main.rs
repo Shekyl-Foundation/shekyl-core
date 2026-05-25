@@ -29,20 +29,32 @@
 //!   modules not yet wired" error rather than silently producing
 //!   empty output; the [`Command::Mode`] arm in [`main`] enforces
 //!   this.
-//! - **C7–C9:** failure output schema (§5.1.14), invocation banner
-//!   (§5.1.18), and the mode implementations (§§5.1.10, 5.1.12,
-//!   5.1.13; §5.1.11 / `--mode=worst-case` deferred per §3.19
-//!   R7-D4).
+//! - **C7:** `mode_correctness` (§5.1.10) + `mode_latency`
+//!   (§5.1.12) implementations; `--mode={correctness,latency}`
+//!   dispatch wires through to the module entry points
+//!   (§5.1.11 / `mode_worst_case` / `--mode=worst-case` deferred
+//!   per §3.19 R7-D4 to the post-2g adversarial-corpus design
+//!   round).
+//! - **C8:** `mode_concurrent` (§5.1.13) implementation +
+//!   `--mode=concurrent` dispatch wire-through + RSS-bound
+//!   assertion (T7 + T8).
+//! - **C9:** `failure_output` (§5.1.14) JSON schema +
+//!   `invocation_banner` (§5.1.18) stderr emission + deletion of
+//!   the `rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs`
+//!   placeholder (per §8.1's C9 row).
 //!
 //! ## §5.1.18 invocation banner placeholder
 //!
 //! Per §5.1.18 + §4.6 M4, the harness must emit a disposition-source
 //! banner on stderr before any test output. The banner module lands
 //! at C9 alongside the failure-output module (per §8.1's C9
-//! "failure-output JSON schema + invocation banner" boundary). At C4,
+//! "failure-output JSON schema + invocation banner" boundary). At C4
 //! no banner is emitted because no test output is produced; the
-//! discipline gap closes when C9 wires both the banner and the
-//! `--mode=*` real dispatch in the same commit.
+//! discipline gap closes incrementally — C7 + C8 wire each mode's
+//! dispatch through `--mode=*`, and C9 lands the banner alongside
+//! the failure-output schema. The brief C7 → C9 window where mode
+//! output is produced without a banner is a bounded transitional
+//! state per §8.2's bisection-invariant framing.
 
 use std::env;
 use std::process::ExitCode;

@@ -18,9 +18,18 @@ license.workspace = true
 # `randomx-v2-sys` extern-"C" wrapper crate). Per §5.6 + R1-D13 it has
 # no downstream consumers — it is a binary-only harness, with an
 # `#[doc(hidden)]` `[lib]` surface that exists solely so integration
-# tests under `tests/` can reach the harness's `pub(crate)` modules
-# (lands at C5+ per §8.1; the C4 skeleton's `src/lib.rs` is intentionally
-# empty per §5.1.4).
+# tests under `tests/` and the `src/bin/gen_canonical_outputs.rs`
+# binary (a separately-compiled crate per Cargo convention) can
+# reach the harness's modules. Items are declared `pub` rather than
+# `pub(crate)` because integration tests and binaries consume the
+# library as a separate crate; the §5.6 sole-binary invariant + the
+# crate-level `#![doc(hidden)]` attribute preserve the spirit of
+# `pub(crate)` (no production consumer outside the harness; T14
+# asserts via `cargo metadata`). The plan-doc's `pub(crate)` text
+# in §5.1.5–§5.1.14 / §5.1.17 / §5.1.18 is a minor imprecision
+# corrected in `src/lib.rs`'s "Visibility note" docstring at C5a.
+# Modules land at C5+ per §8.1; the C4 skeleton's `src/lib.rs` is
+# intentionally empty per §5.1.4.
 #
 # §5.1.15 dep wiring:
 #   - `shekyl-pow-randomx = { path = "...", features = ["test-internals"] }`

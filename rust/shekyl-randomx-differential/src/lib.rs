@@ -7,12 +7,18 @@
 //!
 //! Per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.1.2 + §5.1.4, this
 //! `[lib]` target exists **solely** so integration tests under
-//! `tests/` and the §5.2.6 `gen-canonical-outputs` binary can call
-//! into the harness's modules at C5+; it is not a public-API crate.
-//! The crate-level `#![doc(hidden)]` attribute hides the entire
-//! surface from rustdoc per §5.1.2's `#[doc(hidden)]` annotation,
-//! so consumers reading `cargo doc --workspace` output do not see
-//! the harness's internals as a documented surface.
+//! `tests/` and the §5.2.6 `gen-canonical-outputs` binary (a
+//! separately-compiled `src/bin/*.rs` crate per Cargo's binary
+//! convention) can call into the harness's `pub` modules at C5+;
+//! it is not a public-API crate. Module items are declared `pub`
+//! rather than `pub(crate)` because integration tests and binaries
+//! consume the library as a separate crate — see the "Visibility
+//! note" section below for the substrate correction against the
+//! plan-doc's `pub(crate)` text. The crate-level `#![doc(hidden)]`
+//! attribute hides the entire surface from rustdoc per §5.1.2's
+//! `#[doc(hidden)]` annotation, so consumers reading
+//! `cargo doc --workspace` output do not see the harness's
+//! internals as a documented surface.
 //!
 //! ## Visibility note
 //!

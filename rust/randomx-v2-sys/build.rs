@@ -85,7 +85,7 @@ fn main() {
                  the librandomx.a artifact, then export \
                  RANDOMX_V2_INSTALL_DIR pointing to the install \
                  prefix (typically \
-                 ${{CMAKE_BINARY_DIR}}/external/randomx-v2-install) \
+                 <build-dir>/external/randomx-v2-install) \
                  before running cargo. See \
                  docs/design/RANDOMX_V2_PHASE2G_PLAN.md §3.16 R4-D3 + \
                  §3.17 R5-D2 + §5.2.2."
