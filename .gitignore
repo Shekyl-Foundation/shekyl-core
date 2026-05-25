@@ -86,6 +86,12 @@ cmake-build-debug/
 .metadata
 .gradle
 bin/
+# Phase 2g RandomX v2 Rust/C differential test harness binaries.
+# Per RANDOMX_V2_PHASE2G_PLAN.md §5.1.2 + §5.2.6, this directory holds
+# the harness's auxiliary binary sources (gen_canonical_outputs.rs et
+# al.) that are part of the crate's tracked source tree, not build
+# artifacts.
+!rust/shekyl-randomx-differential/src/bin/
 tmp/
 *.tmp
 *.bak
@@ -152,3 +158,7 @@ release/
 # Nested build trees (eg tools/genesis_builder/build)
 **/build/
 build-sync/
+# Phase 2g RandomX v2 Rust/C differential test harness out-of-tree
+# build directory (CMake -B build-randomx-v2-diff per
+# RANDOMX_V2_PHASE2G_PLAN.md §5.4.2 + R6-D3).
+build-randomx-v2-diff/

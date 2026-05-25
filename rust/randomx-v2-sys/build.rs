@@ -15,7 +15,7 @@
 // variable) is the substrate that R4-D3 (§3.16) closes against and
 // R5-D2 (§3.17) refines.
 //
-// Behavior summary (per §5.2.2 + R5-D2):
+// Behavior summary (per §5.2.2 + R5-D2 + §3.18 R6-D3):
 //
 //   - Always emit `cargo:rerun-if-env-changed=RANDOMX_V2_INSTALL_DIR`
 //     so subsequent `cargo` invocations re-evaluate env-var presence
@@ -28,6 +28,18 @@
 //     `librandomx.a`. The link-lib name is the on-disk filename
 //     (`librandomx.a`), **not** the CMake imported-target name
 //     `shekyl_randomx_v2` — R4-D2 (§3.16) is explicit on this.
+//
+//   - The C reference is a C++ static archive; downstream binary
+//     links need the host C++ runtime to resolve `__cxa_*`,
+//     `operator new`, `std::__cxx11::basic_string`, etc. The C++
+//     runtime is platform-specific (`stdc++` on GNU/Linux, `c++` on
+//     macOS, MSVC runtime on Windows); §3.18 R6-D3 documents this
+//     substrate-correction. Per the workspace's CI matrix (Linux +
+//     macOS for the harness; Windows out-of-scope for Phase 2g),
+//     `target_os` is matched to emit the correct runtime link
+//     directive. Without this, the binary link step fails with ~50
+//     "undefined symbol" errors against the C++ runtime — surfaced
+//     at C5a binary-build time.
 //
 //   - When `RANDOMX_V2_INSTALL_DIR` is unset: emit a `cargo:warning=…`
 //     naming the env var, the
@@ -51,6 +63,15 @@ fn main() {
         Ok(dir) => {
             println!("cargo:rustc-link-search=native={dir}/lib");
             println!("cargo:rustc-link-lib=static=randomx");
+            // §3.18 R6-D3: librandomx.a is a C++ static archive;
+            // downstream binary links require the host C++ runtime.
+            // Platform-specific because the runtime library name
+            // differs by toolchain (GNU/libstdc++ vs. LLVM/libc++).
+            let cxx_runtime = match env::var("CARGO_CFG_TARGET_OS").as_deref() {
+                Ok("macos" | "ios" | "freebsd" | "openbsd") => "c++",
+                _ => "stdc++",
+            };
+            println!("cargo:rustc-link-lib=dylib={cxx_runtime}");
         }
         Err(_) => {
             println!(

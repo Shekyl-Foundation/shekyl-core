@@ -1282,19 +1282,31 @@ catches divergences in the common-input path before grinding
 against the rare-path corpus (R1-D5) catches the
 rare-path-specific divergences.
 
-**Deterministic test-seed pin.** 32-byte ChaCha20Rng seed:
+**Deterministic test-seed pin.** 32-byte ChaCha20Rng seed,
+**derived per §3.18 R6-D1 substrate-correction** from a named
+source string:
 
 ```
-"shekyl-randomx-differential-corpus-v1\x00"  // padded to 32 bytes
+RANDOM_CORPUS_SEED_V1_SOURCE = "shekyl-randomx-differential-corpus-v1"
+RANDOM_CORPUS_SEED_V1        = SHA-256(RANDOM_CORPUS_SEED_V1_SOURCE)
 ```
 
-The seed string is recorded in the harness source file as a
-named constant
+The substrate-correction (R6-D1) closes the literal-arithmetic
+slip in this section's original close (the source string is 37
+ASCII bytes; the trailing NUL makes it 38 bytes; "padded to 32
+bytes" does not fit `ChaCha20Rng::from_seed`'s `[u8; 32]`). The
+SHA-256 derivation preserves the named source string in full and
+is fully reproducible from the source-string comment alone. The
+seed string is recorded in the harness source file as a named
+constant
 (`pub const RANDOM_CORPUS_SEED_V1: [u8; 32] = ...`) with the
 `-v1` suffix anchoring the reversion-clause: a future R1-D4
 reopen toward a different distribution lands as `RANDOM_CORPUS_SEED_V2`
 in a new constant, leaving the v1 seed intact for historical
-reproduction.
+reproduction. The unit test `seed_v1_matches_source_sha256`
+re-derives the SHA-256 at runtime and asserts equality with the
+committed `[u8; 32]`, catching comment-vs-bytes drift (per §3.18
+R6-D1 disposition).
 
 **Reversion clause.**
 
@@ -4046,6 +4058,426 @@ substrate-completeness pass.
 
 ---
 
+### §3.18 Round 6 — pre-C5 + C5a-integration substrate-completeness amendments (R6-D1, R6-D2, R6-D3, R6-D4)
+
+A pre-C5 substrate-completeness round opened to close two
+substrate-anchored contradictions surfaced at the C5 implementation
+boundary, before C5 lands the random + adversarial corpora +
+canonical outputs. Two further C5a-integration-time amendments
+landed in the same Round 6 cluster as the `gen-canonical-outputs`
+binary was first built and run. The four amendments are
+structurally distinct (a literal-arithmetic correction; a
+§5-surface-vs-R1-D5 contradiction; a C++ runtime link directive
+gap; a canonical-output sizing gap) but were discovered in close
+sequence (C5 pre-flight → C5a integration); they are documented as
+a single Round 6 cluster for the same audit-trail-discoverability
+reason §3.17 grouped R5-D1 + R5-D2.
+
+- **R6-D1** (pre-C5): SHA-256 derivation of `RANDOM_CORPUS_SEED_V1`
+  substrate-correction — closes the §3 R1-D4 38-byte source string
+  vs. 32-byte `ChaCha20Rng` seed length contradiction.
+- **R6-D2** (pre-C5): split §8.1 C5 row into C5a (random corpus +
+  canonical outputs + gen-canonical-outputs + scaffolded-empty
+  adversarial corpus) and C5b (adversarial-corpus grinding via a
+  new opcode-class-tally accessor) — closes the R1-D5 grinding-tool
+  vs. §5.7 surface contract contradiction.
+- **R6-D3** (C5a-integration): C++ runtime link directive in
+  `randomx-v2-sys/build.rs` — closes the missing-runtime-link
+  contradiction that surfaces at the first downstream binary link
+  step (~50 undefined-symbol errors against the C++ runtime).
+- **R6-D4** (C5a-integration): canonical-output flat-array shape
+  — closes the embedded-`data` canonical sizing contradiction that
+  would produce a ~150 MB `canonical_outputs.rs` at nightly
+  cadence.
+
+#### R6-D1 — `RANDOM_CORPUS_SEED_V1` SHA-256 derivation (substrate-correction of §3 R1-D4)
+
+**Finding (pre-C5 literal-arithmetic substrate-correction).** §3
+R1-D4's "Deterministic test-seed pin" close pins the 32-byte
+`ChaCha20Rng` seed as:
+
+```
+"shekyl-randomx-differential-corpus-v1\x00"  // padded to 32 bytes
+```
+
+The string literal is 37 ASCII bytes (verified by character-count
+at C5 pre-flight); adding the trailing `\x00` makes it 38 bytes.
+`rand_chacha::ChaCha20Rng::from_seed` requires a `[u8; 32]`. The
+plan-doc text "padded to 32 bytes" is a literal-arithmetic slip —
+the string overflows 32 bytes, no NUL padding fits. The `_V1`
+reversion-clause anchor lives on the **constant name**
+(`RANDOM_CORPUS_SEED_V1`) per the surrounding R1-D4 paragraph, not
+on the seed bytes themselves; the bytes can be any deterministic-
+from-source 32-byte value.
+
+**Disposition.** `RANDOM_CORPUS_SEED_V1` is derived as
+`SHA-256("shekyl-randomx-differential-corpus-v1")` (the 37-byte
+source string without trailing NUL — the trailing `\x00` was part
+of the "padding" intent and is not part of the named source). The
+SHA-256 derivation is the substrate-correct interpretation
+because: (a) it preserves the plan-doc's exact named source string
+without truncation or renaming; (b) it is fully reproducible from
+the comment alone (any reader can recompute and verify); (c) the
+unit test re-derives the SHA-256 at runtime and asserts equality
+with the committed `[u8; 32]` constant, catching any future drift
+between the named source string and the committed bytes (per the
+"comment-vs-bytes drift catch" framing surfaced at the C5
+disposition close); (d) future `_V2` revisions follow the same
+`sha256(source_string_for_v2)` pattern, preserving the reversion-
+clause discipline.
+
+**Implementation shape.**
+
+```rust
+/// Source string from which RANDOM_CORPUS_SEED_V1 is derived per
+/// `RANDOMX_V2_PHASE2G_PLAN.md` §3 R1-D4 + §3.18 R6-D1.
+pub const RANDOM_CORPUS_SEED_V1_SOURCE: &str =
+    "shekyl-randomx-differential-corpus-v1";
+
+/// 32-byte ChaCha20Rng seed.
+/// Asserted equal to `SHA-256(RANDOM_CORPUS_SEED_V1_SOURCE)` by the
+/// `seed_v1_matches_source_sha256` unit test in this module.
+pub const RANDOM_CORPUS_SEED_V1: [u8; 32] = [/* SHA-256 bytes */];
+```
+
+The unit test:
+
+```rust
+#[test]
+fn seed_v1_matches_source_sha256() {
+    use sha2::{Digest, Sha256};
+    let computed: [u8; 32] =
+        Sha256::digest(RANDOM_CORPUS_SEED_V1_SOURCE.as_bytes()).into();
+    assert_eq!(computed, RANDOM_CORPUS_SEED_V1,
+        "RANDOM_CORPUS_SEED_V1 must equal SHA-256 of \
+         RANDOM_CORPUS_SEED_V1_SOURCE; drift indicates the constant \
+         and the named source disagree per §3.18 R6-D1 discipline");
+}
+```
+
+The runtime recompute is a deliberate choice over hard-coded hex
+verification: if a future `_V2` revision shifts the constant and
+the comment-cited source drift apart, the recompute catches it; a
+hard-coded hex check would pass even if the constant and the
+comment drifted.
+
+**Substrate-anchored amendment shape — substrate-correction, not
+disposition reversal**, per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).
+R1-D4's intent — deterministic, name-anchored 32-byte seed with a
+`_V1` reversion-clause anchor — is preserved. The "padded to 32
+bytes" text was an arithmetic slip in the close; the
+substrate-correct interpretation (SHA-256 derivation) preserves
+the spirit of "32-byte deterministic-from-named-source seed"
+while removing the ambiguity of "padding" applied to an over-
+length string.
+
+**Reopening criteria.** Reopen if (i) the workspace removes
+`sha2` from `[workspace.dependencies]` (substrate-change in
+workspace-state per
+[`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc));
+(ii) a future R1-D4 reopen toward a different distribution lands
+as `RANDOM_CORPUS_SEED_V2` in a new constant, leaving the v1 seed
+intact per the R1-D4 reversion clause — the SHA-256 derivation
+pattern carries forward to v2.
+
+#### R6-D2 — Split §8.1 C5 into C5a + C5b for adversarial-corpus grinding
+
+**Finding (pre-C5 §5.7 surface-contract vs. R1-D5 contradiction).**
+§3 R1-D5 close pins the adversarial-corpus grinding tool at
+`rust/shekyl-randomx-differential/tools/grind_adversarial_corpus.rs`
+as a separate binary that produces the hex-bytes the §5.1.6 surface
+commits. §5.7 close says "the §5.1–§5.5 tables are the **only**
+new surfaces the 2g implementation PR may introduce." §5.1's
+enumeration includes `[[bin]] shekyl-randomx-differential` (§5.1.1)
+and `[[bin]] gen-canonical-outputs` (§5.2.6) — **no grinding-tool
+`[[bin]]` entry exists**, nor any opcode-class-tally accessor on the
+verifier or the `randomx-v2-sys` crate that the grinding tool would
+need. R1-D5 + §5.7 are mutually unsatisfiable as written.
+
+A second-order substrate gap compounds the first: the grinding
+tool requires per-(seedhash, data) opcode-class frequency observation
+to evaluate the ≥40% per-class / ≥60% combined criteria pinned in
+R1-D5's F3 grinding budget. Opcode-class tallying requires running
+the AES4R-of-scratchpad program-derivation pipeline; the verifier's
+program-decode infrastructure (`InstructionType` enum +
+`decode_instruction_type`) is `pub(crate)` per
+`rust/shekyl-pow-randomx/src/vm.rs` (verified at C5 pre-flight),
+not exposed via the §5.3 surface. The grinding tool requires a new
+verifier surface to be usable; the new verifier surface is itself
+a §5.3 addition that is not in §5.7's enumeration.
+
+**Disposition.** Split §8.1's C5 row into two reviewable commits:
+
+- **C5a** — random corpus + canonical outputs + gen-canonical-outputs
+  binary + scaffolded-empty adversarial corpus + R6-D1 + R6-D2
+  plan-doc amendment. The §5.1.6 `adversarial_corpus.rs` ships with
+  the nine per-class arrays scaffolded structurally (each class
+  named per R1-D5 / R1-D6 tagging) but the arrays are empty. T10
+  (`adversarial_corpus_hash_pin`) asserts SHA-256 of whatever is
+  committed; the empty-scaffold SHA-256 is pinned at C5a and
+  refreshed at C5b once grinded bytes land. T16 (canonical-output
+  assertion) lands as a structural stub at C5a (asserts
+  `CANONICAL_HASHES.len() == RANDOM_CORPUS_PAIR_COUNT` and similar
+  shape invariants); the full per-(seedhash, data) lookup form lands
+  at C7 alongside `mode_correctness` per the original §8.1 sequence.
+
+- **C5b** — adversarial-corpus grinding infrastructure + grinded
+  bytes + T10 SHA-256 pin refresh. The substrate-completeness
+  amendment that lands at C5b will add either a §5.3.4 verifier
+  surface (`InstructionTypeTally::compute(&self, data: &[u8]) -> [u32; N_CLASSES]`
+  or similar, gated on the `test-internals` feature per R5-D1
+  precedent) or a §5.2.7 C-shim surface in `randomx-v2-sys`; the
+  choice between these two paths is itself a substrate decision
+  deferred to C5b's pre-flight per the same discovery-cadence
+  discipline that produced R5-D1 + R5-D2. C5b's pre-flight names
+  the surface explicitly; C5b's commit lands the chosen surface +
+  the grinding-tool `[[bin]]` + the grinded bytes + the refreshed
+  T10 SHA-256 pin.
+
+The split preserves §8.1's bisection invariant at each commit
+(C5a: T9 + T10-against-empty-scaffold + T16-structural-stub pass;
+C5b: T10 SHA-256 pin refreshes against grinded bytes). It also
+preserves §5.7's surface-contract discipline (C5b's surface
+additions land via the same substrate-completeness amendment shape
+as R5-D1, with a Round 7 amendment or a §3.18 cont. entry naming
+the surface in advance of the commit).
+
+**Sequencing.** C5a + R6-D1 + R6-D2 land in a single commit at the
+implementation-PR's HEAD (`feat/randomx-v2-phase2g-impl`); the
+plan-doc amendment is cherry-pick-folded into the implementation
+commit per the R5-D2 precedent (substrate amendment + the code it
+authorizes ride together). C5b opens with its own pre-flight pass
+naming the §5.3.4 / §5.2.7 surface and lands as a separate commit
+on the same branch.
+
+**Substrate-anchored amendment shape — split-for-reviewability,
+not disposition reversal — per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).**
+R1-D5's grinded-corpus disposition is unchanged in *intent*; the
+amendment partitions the C5 commit boundary so the grinding
+infrastructure lands together with the bytes it produces, rather
+than the bytes ostensibly produced by a "tool that does not exist
+in the §5 surface contract." The amendment preserves §5.7's
+surface-contract discipline (the C5b pre-flight pass formally adds
+the surface via a Round 7 amendment) and the
+[`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)
+"no placeholders without target version" discipline (the
+scaffolded-empty C5a `adversarial_corpus.rs` has a named target
+commit C5b; not "TODO someday").
+
+**Reopening criteria.** Reopen if (i) the grinding-tool surface
+chosen at C5b's pre-flight turns out to be structurally infeasible
+(e.g., the verifier-side `test-internals` opcode-tally accessor
+introduces a measurement-cost regression that violates the §5.5.1
+per-PR ~7 min budget, *substrate-anchored against the C5b pre-flight
+measurement*) — the disposition reopens toward the §5.2.7 C-shim
+path or toward 2D-style hand-picked-not-grinded corpus
+(rejected at C5 pre-flight per R1-D6, but reopenable if grinding
+infrastructure proves cost-prohibitive at C5b); (ii) the C5b
+pre-flight surfaces a third structural option not enumerated at C5
+pre-flight (substrate-extension reopen per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+named-criteria principle).
+
+**Forward-action queued for rule-26 amendment (R6-D2 class:
+multi-stage-surface-contract gap).** The R6-D2 finding generalizes
+the R5-D1 class (surface enumeration pass) and the R5-D2 class
+(cross-invariant impact analysis pass) to a third class: **"multi-
+stage surface-contract feasibility analysis."** R1-D5's grinded-
+corpus disposition was structurally complete at Round-1 review time
+*as a methodology* (grind via a tool; commit hex bytes); the gap
+is that the methodology's *implementation* requires intermediate
+surfaces (the opcode-class-tally accessor) not enumerated at the
+plan-doc surface contract. The check is two-staged: (a) does the
+methodology's implementation require surfaces not in §5? (b) if
+yes, are those surfaces themselves enumerated for addition in the
+same plan-doc? The forward-action queued: pre-implementation rounds
+add a **"methodology-vs-surface-contract reconciliation pass"** —
+for each methodology a round closes that requires implementation
+surfaces (a generation binary, a tally accessor, an instrumentation
+hook), confirm the required surfaces are enumerated in §5; if any
+are missing, the round either adds them or names them as deferred
+to a named future round. This action is not landed in this
+amendment; it is queued alongside R5-D1's surface-enumeration
+forward-action and R5-D2's cross-invariant impact analysis
+forward-action for rule-26's next substrate-completeness pass.
+
+#### R6-D3 — C++ runtime link directive in `randomx-v2-sys/build.rs` (substrate-correction of §5.2.2 / R4-D2)
+
+**Finding (C5a integration-time substrate-correction).** §5.2.2's
+build.rs implementation (landed at C3 per R4-D2 + R5-D2) emits
+`cargo:rustc-link-lib=static=randomx` when `RANDOMX_V2_INSTALL_DIR`
+is set. C5a's first attempt to build the
+`gen-canonical-outputs` binary against the freshly-built
+`librandomx.a` fails at link time with ~50 `rust-lld: error:
+undefined symbol` errors targeting C++ runtime symbols
+(`__cxa_allocate_exception`, `__cxa_throw`, `operator new`,
+`std::__cxx11::basic_string<…>::_M_replace`, vtables for
+`std::bad_alloc` / `std::invalid_argument`, etc.). The C reference
+is a C++ static archive (the upstream `external/randomx-v2/CMakeLists.txt`
+declares CXX sources); downstream Rust binaries that link
+`librandomx.a` need the host platform's C++ runtime to resolve
+exception machinery, `std::string` internals, and `operator
+new`/`operator delete`. The R4-D2 close named the on-disk lib name
+(`randomx`) but did not enumerate the implied C++ runtime
+dependency.
+
+**Disposition.** `randomx-v2-sys/build.rs`'s set-branch emits a
+platform-conditional dylib link directive for the host C++ runtime
+in addition to the static-archive directive:
+
+```rust
+let cxx_runtime = match env::var("CARGO_CFG_TARGET_OS").as_deref() {
+    Ok("macos") | Ok("ios") | Ok("freebsd") | Ok("openbsd") => "c++",
+    _ => "stdc++",
+};
+println!("cargo:rustc-link-lib=dylib={cxx_runtime}");
+```
+
+The `CARGO_CFG_TARGET_OS` env var is set by Cargo for every
+`build.rs` invocation per the Cargo reference's
+"Environment variables Cargo sets for build scripts" section.
+GNU/Linux (and Linux-like Unix targets) use `libstdc++`; LLVM-based
+targets (macOS, iOS, FreeBSD, OpenBSD) use `libc++`; Windows is
+out-of-scope for Phase 2g per §5.5's CI matrix (Linux + macOS
+only). A future Windows port adds an `Ok("windows")` arm linking
+against `msvcrt`/`vcruntime` per the MSVC C++ runtime conventions.
+
+**Why discovered at C5a, not C3.** C3 verified that the
+`randomx-v2-sys` rlib *compiles* and that the build.rs `set` /
+`unset` branches dispatch correctly; the verification did not
+exercise a *downstream binary link* because no downstream binary
+existed yet (the harness binary skeleton at C4 was a stub that
+did not call any `randomx-v2-sys` symbol — `cargo build` of the
+C4 main.rs did not actually link against `librandomx.a`). C5a
+introduces `gen-canonical-outputs` (the first downstream consumer
+calling the seven `randomx_*` FFI symbols), which forces the link
+step to resolve every transitively-required symbol — surfacing the
+C++ runtime dependency.
+
+**Reopen criterion.** Reopen if (a) a future Windows CI target is
+added (the `match` adds a `windows` arm), (b) the upstream RandomX
+v2 fork rewrites the C++ implementation in pure C (the
+`stdc++`/`c++` directive becomes unnecessary and can be removed),
+or (c) Cargo or the LLD toolchain begins to auto-link the host
+C++ runtime for static archives that need it (the directive
+becomes redundant). None of these are imminent.
+
+**Forward-action.** Add to the rule-26 next-substrate-completeness-pass
+queue: pre-C-FFI-link pre-flight should enumerate the FFI archive's
+language and add the corresponding runtime link directive. The
+discipline is mechanical (`file external/.../librandomx.a` →
+"current ar archive"; `nm --demangle librandomx.a | grep -c "::"`
+→ C++ symbols present); the check would have caught R6-D3 at C3
+pre-flight rather than at C5a integration time.
+
+#### R6-D4 — canonical-output flat-array shape (substrate-correction of §5.1.17 / R4-D7)
+
+**Finding (C5a integration-time substrate-correction).** §5.1.17's
+`CanonicalHash { seedhash, data, expected_hash }` struct shape
+embeds the per-pair `data: &'static [u8]` directly in the const
+array. R1-D4's data-length distribution emits up to ~600 KiB per
+data value; at the nightly cadence of 1024 pairs, the embedded-data
+shape produces a canonical_outputs.rs source file of order
+~150 MB (each byte expands to ~6 chars of hex literal). Even at
+the per-PR cadence of 128 pairs the file is ~20 MB; `rustfmt` runs
+out of memory parsing the source, and the workspace's source tree
+would dwarf every other crate combined.
+
+**Substrate analysis.** The random corpus is fully deterministic
+(R1-D4: `ChaCha20Rng::from_seed(RANDOM_CORPUS_SEED_V1)` + bimodal
+length distribution + `RngCore::fill_bytes`); the harness re-derives
+identical `data` bytes from the corpus generator at test time. The
+canonical only needs to commit *what the C oracle's hash was* for
+the *i*-th `(seedhash, data)` pair in the generator's emission
+order; the `data` field is redundant because the harness can look
+it up by index from the corpus.
+
+**Disposition.** `canonical_outputs.rs` ships **flat hash arrays
+indexed by corpus position**:
+
+- `CANONICAL_RANDOM_HASHES: &[[u8; 32]]` — the *i*-th entry is the
+  C oracle's hash for the *i*-th pair in
+  `generate_random_corpus(NIGHTLY_SEEDHASH_COUNT,
+  NIGHTLY_DATA_PER_SEEDHASH).iter().enumerate()`.
+- `CANONICAL_CACHE_SHAS: &[[u8; 32]]` — the *j*-th entry is the
+  SHA-256 of the 256-MiB cache memory for the *j*-th seedhash
+  in the nightly-sized corpus.
+
+The harness always iterates the nightly-sized corpus (1024 pairs);
+per-PR runs check the first `PER_PR_SEEDHASH_COUNT *
+PER_PR_DATA_PER_SEEDHASH = 128` pairs; nightly runs check all
+1024. Both cadences share the same canonical pin; the canonical
+file size is bounded by `1024 * (32 bytes * 6 chars) ≈ 200 KB`,
+plus the cache-SHA table (`32 * 200 chars ≈ 6 KB`). Total
+canonical file size: ~200 KB — comfortably committable.
+
+**Adversarial-corpus canonicals (C5b).** The adversarial corpus
+(R1-D6 + R1-D5) has at most ~50 seedhashes + ~10 data values per
+the F3 budget, with short hand-derived data patterns targeting
+u128 edge cases. C5b adds a parallel
+`CANONICAL_ADVERSARIAL_HASHES: &[(seedhash_idx_into_class,
+data_idx_into_class, [u8; 32])]` table (or equivalent
+class-indexed form) keyed against the
+`iter_adversarial_seedhashes` / `iter_adversarial_data` orderings.
+The data IS the canonical reference for the adversarial corpus
+(it isn't re-derived from anywhere); embedding short hand-derived
+data values in the const array is bounded and tractable.
+
+**Why discovered at C5a, not earlier.** §5.1.17's struct shape was
+designed against §4.6 M1's third-leg property (canonical pin
+catches T-A1 / T-A2 / T-A3 / T-A10) without simultaneously
+modeling the canonical file's *size*. The size implication of
+"every pair carries its data field" was not surfaced until C5a's
+first `gen-canonical-outputs` run produced a 2.3 MB file for a
+trivial 4-pair smoke test. The structural property
+(M1 third-leg) is preserved by the flat-array shape; only the
+serialization shape changes.
+
+**Reopen criterion.** Reopen if a future cadence requires
+canonical-output coverage of *non-deterministic* corpus inputs
+(i.e., inputs not derivable from a fixed seed). At that point
+the canonical needs to commit both data and hash, and the
+file-size constraint is re-evaluated. None imminent.
+
+**Forward-action.** Add to rule-26 next-substrate-completeness-pass
+queue: per-trait PR pre-flight should include a
+"committed-canonical-output sizing pass" — for each canonical
+table whose entries embed variable-length data, compute the
+worst-case serialized size against the corpus's largest possible
+input. If the worst case exceeds 1 MB / 10 MB / 100 MB
+thresholds (rough informal tiers), the canonical's shape needs
+restructuring (indexed reference; SHA-of-data; or smaller
+corpus). The check is mechanical (size formula known at pre-flight
+time); discipline catches R6-D4 at design time rather than at
+generation time.
+
+#### §3.18 summary: what Round 6 amends
+
+| Decision | Amendment location |
+|---|---|
+| R6-D1 SHA-256 seed derivation | §3 R1-D4 close (substrate-correction note); §5.1.5 (`RANDOM_CORPUS_SEED_V1_SOURCE` + `RANDOM_CORPUS_SEED_V1` constant pair shape + `seed_v1_matches_source_sha256` unit test wiring); T9 row note (unit test re-derives SHA-256 at runtime, not hard-coded hex) |
+| R6-D2 C5 split (C5a + C5b) | §5.1.6 surface table row (scaffolded-empty at C5a; grinded bytes at C5b); §8.1 commit table row C5 split into C5a + C5b; T10 row note (SHA-256 pin refreshes at C5b); §5.7 surface-contract note (C5b's grinding-tool surface lands via a forthcoming amendment at C5b pre-flight, parallel to R5-D1 / R5-D2 precedent) |
+| R6-D3 C++ runtime link directive | §5.2.2 (`randomx-v2-sys/build.rs` set-branch emits platform-conditional dylib runtime link); §3.16 R4-D2 substrate-correction note (C++ runtime dependency was implicit in the C reference's language but not enumerated in the link directives); §3.17 R5-D2 cross-reference (the soft-fail unset-branch is unchanged; only the set-branch grows the runtime directive) |
+| R6-D4 canonical-output flat-array shape | §5.1.17 (`CanonicalHash` struct dropped; flat `CANONICAL_RANDOM_HASHES: &[[u8; 32]]` + `CANONICAL_CACHE_SHAS: &[[u8; 32]]` indexed by corpus position); §5.2.6 generator binary emits flat arrays at nightly sizing; T16 stub asserts empty at C5a → filled at C5a's generator run → cross-check against `generate_random_corpus(NIGHTLY_*).len()`; §3.16 R4-D7 substrate-correction (`data` field removal — random data is corpus-derived; adversarial canonicals keep embedded data per the C5b class-indexed shape) |
+
+Both amendments are substrate-corrections / scope-splits, not
+architectural reframes; neither reopens a Round-1 / 2 / 3 / 4 / 5
+disposition. Together they extend the project's
+"substrate-completeness amendment" precedent from three instances
+(Round 3 extension; R5-D1 carve-out; R5-D2 refinement) to six
+(R6-D1 literal-arithmetic correction; R6-D2 commit-boundary split
+with deferred surface-contract amendment; R6-D3 C++ runtime
+link; R6-D4 canonical flat-array shape). The R6-D3 + R6-D4
+amendments are integration-time discoveries (first downstream
+binary link; first generator run against the corpus); both have
+named forward-actions for rule-26's next substrate-completeness
+pass so the discipline catches similar gaps at design time
+rather than at C5+ integration time.
+
+---
+
 ## 4. Threat model (Round-N placeholder)
 
 Reserved for Round-N's adversarial pass against the 2g
@@ -6020,8 +6452,8 @@ per [Phase 2F §5](./RANDOMX_V2_PHASE2F_PLAN.md) precedent.
 | 5.1.2 | `[lib]` `shekyl_randomx_differential` | library (`#[doc(hidden)]`) | R1-D7 | Test-harness surface; consumed by `tests/`; not a public-API crate |
 | 5.1.3 | `src/main.rs` | binary entry point | R1-D1, R1-D11 | Argparse + subcommand dispatch + JSON-to-stderr failure output per R1-D11 |
 | 5.1.4 | `src/lib.rs` | library entry point | R1-D7 | Re-exports modules below for `tests/` consumption |
-| 5.1.5 | `src/corpus_random.rs` | `pub(crate)` | R1-D4, R4-D6 | `ChaCha20Rng`-seeded random corpus generator; 32-byte seed pinned per R1-D4; corpus size controlled via `--random-corpus-seedhashes <N>` (default 32) and `--random-corpus-data-per-seedhash <M>` (default 32) CLI flags per R4-D6; per-PR CI passes `--random-corpus-seedhashes=16 --random-corpus-data-per-seedhash=8` |
-| 5.1.6 | `src/adversarial_corpus.rs` | `pub(crate)` | R1-D5, R1-D6 | Committed hex byte arrays for adversarial seedhashes + u128 edge-case data; tagged by class (CFROUND, FDIV_M, Cache-miss, CBRANCH, Combined-heavy, div-by-zero, signed-div overflow, shift-by-width, u128-trunc-high) |
+| 5.1.5 | `src/corpus_random.rs` | `pub(crate)` | R1-D4, R4-D6, R6-D1 | `ChaCha20Rng`-seeded random corpus generator; 32-byte seed pinned per R1-D4 **as `SHA-256("shekyl-randomx-differential-corpus-v1")` per §3.18 R6-D1 substrate-correction** (the source string is exposed as the named constant `RANDOM_CORPUS_SEED_V1_SOURCE`; the seed is `RANDOM_CORPUS_SEED_V1: [u8; 32]`; the unit test `seed_v1_matches_source_sha256` re-derives the SHA-256 at runtime, not hard-coded hex); corpus size controlled via `--random-corpus-seedhashes <N>` (default 32) and `--random-corpus-data-per-seedhash <M>` (default 32) CLI flags per R4-D6; per-PR CI passes `--random-corpus-seedhashes=16 --random-corpus-data-per-seedhash=8` |
+| 5.1.6 | `src/adversarial_corpus.rs` | `pub(crate)` | R1-D5, R1-D6, R6-D2 | Per-class scaffolded hex byte arrays for adversarial seedhashes + u128 edge-case data; tagged by class (CFROUND, FDIV_M, Cache-miss, CBRANCH, Combined-heavy, div-by-zero, signed-div overflow, shift-by-width, u128-trunc-high). **Per §3.18 R6-D2 C5 split:** C5a ships the file with each per-class array structurally scaffolded (named per R1-D5 / R1-D6 tagging) but **empty**; T10 (`adversarial_corpus_hash_pin`) asserts SHA-256 of the empty-scaffold contents at C5a and refreshes against grinded bytes at C5b. C5b lands the grinding-tool surface (named at C5b pre-flight per the R5-D1 / R5-D2 precedent) + the grinded bytes |
 | 5.1.7 | `src/cache_precondition.rs` | `pub(crate)` | R1-D14, R5-D1 | SHA-256 cache-equivalence precondition test; consumes `PreparedCache::cache_block_bytes_for_testing` (§5.3.3) under the `test-internals` feature gate (per §3.17 R5-D1 amendment) to stream the 256-MiB Rust cache through a `Sha256` hasher without heap allocation; compares against the C oracle's `randomx_get_cache_memory(cache)` SHA-256 (§5.1.8); `--debug-cache-divergence` mode performs byte-by-byte diff |
 | 5.1.8 | `src/c_oracle.rs` | `pub(crate)` | R1-D2, R4-D5 | Thin wrapper over `randomx-v2-sys` `extern "C"` declarations; flags: `RANDOMX_FLAG_DEFAULT` (0) for both cache and VM allocation per R4-D5; lifecycle: one `randomx_cache` + one `randomx_vm` allocated per seedhash iteration (VM reused across data values for same seedhash), freed before next seedhash; cache memory pointer via `randomx_get_cache_memory` for SHA-256 precondition; null-pointer error translation: `randomx_alloc_cache` / `randomx_create_vm` returning NULL → Rust `Error::COracleAlloc` with context |
 | 5.1.9 | `src/rust_subject.rs` | `pub(crate)` | R1-D14, R5-D1, Phase 2F §5 | Calls `PreparedCache::derive` + `compute_hash` per the Phase 2F R3-frozen production public surface; the only `test-internals`-gated consumption is `PreparedCache::cache_block_bytes_for_testing` from `src/cache_precondition.rs` (§5.1.7 + §5.3.3), not from `rust_subject.rs` itself — the hot-path hash-compute call sites carry no internals access |
@@ -6117,6 +6549,23 @@ feature name is `test-internals` (not generic); (b) the sole
 consumer is the harness crate; (c) the only `pub` item under the
 gate is the §5.3.3 accessor.
 
+**R6-D2 grinding-tool surface — deferred to C5b pre-flight.** Per
+§3.18 R6-D2, the adversarial-corpus grinding-tool surface is
+**not** yet enumerated in §5.1–§5.5; the C5a commit (which lands
+the §5.1.6 scaffolded-empty `adversarial_corpus.rs` + the R6-D1
++ R6-D2 plan-doc amendments) does not add the grinding-tool
+surface. C5b opens with its own pre-flight pass naming the
+chosen surface (either §5.3.4 — a `test-internals`-gated
+verifier-side opcode-class-tally accessor parallel to §5.3.3 — or
+§5.2.7 — a `randomx-v2-sys` C-shim surface) and a `tools/grind_adversarial_corpus.rs`
+(or `[[bin]] grind-adversarial-corpus`) entry; the C5b commit
+lands both the surface and the grinded bytes that refresh
+T10's SHA-256 pin. Reviewer rejection criterion for C5b's
+implementation: the grinding-tool surface must be named in a
+plan-doc amendment landed in C5b's first commit (the
+substrate-amendment-then-code precedent set by R5-D2's
+cherry-pick into C3), not introduced silently.
+
 **Round 2 may reshape this contract.** Per
 [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 A1 + A3, the threat-model pass in Round 2 may surface findings
@@ -6202,8 +6651,8 @@ on threat-model findings).
 
 | # | Test | Surface | Input | Assertion | Cadence | Anchor |
 |---|---|---|---|---|---|---|
-| T9 | `random_corpus_seed_determinism` | `corpus_random` (§5.1.5) | Two independent invocations with the same 32-byte seed (R1-D4 pin) | Byte-identical corpus output across invocations; assert in unit test (no external dependency) | per-PR | R1-D4 |
-| T10 | `adversarial_corpus_hash_pin` | `adversarial_corpus` (§5.1.6) | SHA-256 of the entire adversarial-corpus module's hex byte arrays | SHA-256 matches a pinned constant; failure indicates accidental drift in the committed corpus, surfaces in code review | per-PR | R1-D5, R1-D6 |
+| T9 | `random_corpus_seed_determinism` + `seed_v1_matches_source_sha256` | `corpus_random` (§5.1.5) | (a) Two independent invocations with the same 32-byte seed (R1-D4 pin) yield byte-identical corpora; (b) the committed `RANDOM_CORPUS_SEED_V1: [u8; 32]` equals the runtime-recomputed `SHA-256(RANDOM_CORPUS_SEED_V1_SOURCE)` per §3.18 R6-D1 | (a) Byte-identical corpus output across invocations; (b) `RANDOM_CORPUS_SEED_V1 == Sha256::digest(RANDOM_CORPUS_SEED_V1_SOURCE)`; both asserted in unit tests (no external dependency); the SHA-256 re-derivation catches comment-vs-bytes drift per R6-D1 discipline (not hard-coded hex) | per-PR | R1-D4, R6-D1 |
+| T10 | `adversarial_corpus_hash_pin` | `adversarial_corpus` (§5.1.6) | SHA-256 of the entire adversarial-corpus module's hex byte arrays | SHA-256 matches a pinned constant; failure indicates accidental drift in the committed corpus, surfaces in code review. **Per §3.18 R6-D2**: the pin is asserted against the *empty-scaffold* contents at C5a and **refreshes** to a new constant against the *grinded* contents at C5b; the refresh is an audit-visible event (commit message cites "T10 SHA-256 pin refresh against grinded bytes per R6-D2") | per-PR | R1-D5, R1-D6, R6-D2 |
 
 #### §6.5 Category E: Failure-output contract
 
@@ -6364,7 +6813,8 @@ workspace, not behavioral correctness against the C reference).
 | C2 | `randomx-v2-diff: wire CMake BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS option` | §5.4.1, §5.4.2, §5.4.3 | Configure with the new option succeeds; `BUILD_RANDOMX_V2_MINER_LIB` auto-flips with warning per T12; existing CMake builds unchanged when option is OFF |
 | C3 | `randomx-v2-diff: implement randomx-v2-sys build.rs linker directives` | §5.2.2 | `cargo build -p randomx-v2-sys` succeeds when `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON` was configured; otherwise emits a clear build-time error pointing to the CMake option |
 | C4 | `randomx-v2-diff: introduce shekyl-randomx-differential crate skeleton` | §5.1.1, §5.1.2, §5.1.3, §5.1.4, §5.1.15, §5.1.16 | Builds; clippy clean; `[[bin]]` + `[lib]` targets present; `main.rs` argparse + subcommand-dispatch skeleton in place; runs with `--help` |
-| C5 | `randomx-v2-diff: implement random + adversarial corpora + canonical outputs` | §5.1.5, §5.1.6, §5.1.17, §5.2.6, T9, T10, T16 | Builds; clippy clean; T9 + T10 + T16 unit tests pass; R1-D4 32-byte seed pinned; `--random-corpus-seedhashes` + `--random-corpus-data-per-seedhash` flags wired per R4-D6; R1-D5/R1-D6 adversarial hex byte arrays committed with per-class tags; `CANONICAL_HASHES` + `CANONICAL_CACHE_SHAS` committed per §4.6 M1 — **generation method per R4-D7**: canonical values produced by running `cargo run --bin gen-canonical-outputs` (§5.2.6) after C3's C oracle linkage is established, reviewed and committed; `gen-canonical-outputs` binary also committed in this commit; commit message cites "canonical values generated by gen-canonical-outputs at fork-pin SHA [pin]" |
+| C5a | `randomx-v2-diff: implement random corpus + canonical outputs + adversarial scaffold + R6 amendments` | §5.1.5, §5.1.6 (scaffolded-empty), §5.1.17, §5.2.6, T9, T10 (against empty scaffold), T16 (structural stub), §3.18 R6-D1 + R6-D2 plan-doc amendments | Builds; clippy clean; T9 + T10 (asserting SHA-256 of the empty-scaffold contents) + T16 structural-stub unit tests pass; **R6-D1**: `RANDOM_CORPUS_SEED_V1_SOURCE` + `RANDOM_CORPUS_SEED_V1` constant pair landed; `seed_v1_matches_source_sha256` unit test re-derives SHA-256 at runtime and asserts equality (not hard-coded hex); `--random-corpus-seedhashes` + `--random-corpus-data-per-seedhash` flags wired per R4-D6; **R6-D2**: R1-D5/R1-D6 per-class arrays in `adversarial_corpus.rs` structurally scaffolded but empty (named per R1-D5 / R1-D6 tagging); `CANONICAL_HASHES` + `CANONICAL_CACHE_SHAS` committed per §4.6 M1 — **generation method per R4-D7**: canonical values produced by running `cargo run --bin gen-canonical-outputs` (§5.2.6) after C3's C oracle linkage is established, reviewed and committed; `gen-canonical-outputs` binary also committed in this commit; commit message cites "canonical values generated by gen-canonical-outputs at fork-pin SHA [pin]"; commit message also cites "closes §3.18 R6-D1 + R6-D2 (cherry-pick-folded per R5-D2 precedent)" |
+| C5b | `randomx-v2-diff: implement adversarial-corpus grinding + grinded bytes` | §5.1.6 (filled), grinding-tool surface (named at C5b pre-flight per §3.18 R6-D2), T10 refresh, optionally §5.3.4 / §5.2.7 | Builds; clippy clean; **C5b pre-flight names the grinding-tool surface** (either §5.3.4 `test-internals`-gated verifier accessor or §5.2.7 `randomx-v2-sys` C-shim) in a plan-doc amendment landed in C5b's first commit per R5-D2 substrate-amendment-then-code precedent; grinding tool runs per R1-D5 F3 budget (4 h wall-clock per class on 16-core baseline) producing the per-class hex byte arrays; `adversarial_corpus.rs` arrays refilled with grinded bytes; T10 `adversarial_corpus_hash_pin` refreshes against grinded bytes (new SHA-256 pin); commit message cites "closes §3.18 R6-D2 C5b" |
 | C6 | `randomx-v2-diff: implement cache-precondition + Rust/C oracle wrappers` | §5.1.7, §5.1.8, §5.1.9, T3, T4 | Builds; clippy clean; `--debug-cache-divergence` flag wired per T4; SHA-256 default path wired per R1-D14 + T3 |
 | C7 | `randomx-v2-diff: implement correctness + worst-case + latency modes` | §5.1.10, §5.1.11, §5.1.12, T1, T2, T5, T6 | Builds; clippy clean; subcommand dispatch routes `--mode={correctness,worst-case,latency}` to the right module; smoke-test against a 1-seedhash, 1-data corpus passes byte-equality |
 | C8 | `randomx-v2-diff: implement concurrent mode + RSS-bound assertion` | §5.1.13, T7, T8 | Builds; clippy clean; T7 + T8 pass on a 4+1-worker × 256-hash run; `/proc/self/statm` RSS-sampling methodology in place per F4 |
@@ -6374,9 +6824,15 @@ workspace, not behavioral correctness against the C reference).
 **Round-3 substrate-completeness amendment absorption.** The
 four §4.6 mitigation patterns (M1 canonical outputs / M2
 mutation testing / M3 PR-template discipline / M4 invocation
-banner) absorb into the existing 10-commit sequence without
+banner) absorb into the existing 10-commit sequence (Round 4
+extended to C0–C10 = 11 commits; §3.18 R6-D2 further extends
+to C0–C10 = 12 commits with C5 split into C5a + C5b) without
 exceeding [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc)
-rule-2's ≤10-commit ceiling:
+rule-2's commit-count guideline meaningfully — the branch
+remains short-lived and the count overrun is explicitly
+authorized per the user disposition for this PR ("the 10 commit
+rule is a guideline or tripwire, not an absolute"; branch
+completes before other work lands on `dev`):
 
 - **M1 (§5.1.17 canonical_outputs)** → C5 (corpus boundary;
   canonical outputs are the corpus's third-leg-of-comparison
@@ -6597,3 +7053,4 @@ the round-count budget.
 | Round 3 (§4 threat-model close + implementation-PR transition gate) | 2026-05-24 | Closes §4 against the Round-1- + Round-2-anchored substrate with **ten attack classes (A1–A10) + five negative-space classes (N1–N5) + three load-bearing-property discharges + an implementation-PR transition gate**. **Three load-bearing-property discharges land before the attack-class enumeration**, each named explicitly so the discharges are auditable as their own dispositions rather than buried inside individual attack-class entries: **§4.1 corpus-coverage-as-leg-3-completeness discharge** (closes the inherited Round-0 → Round-1 → Round-2 obligation; pins all three corpus-coverage classes — random per R1-D4, adversarial per R1-D5+R1-D6, worst-case timing per R1-D8 — as substrate-load-bearing with substrate-anchored reopening criteria that catch silent thinning; the discharge is the explicit pinning of each class as load-bearing-against-substrate-anchored-numeric-criteria, not "the three classes exist therefore the obligation is satisfied"); **§4.2 harness-as-actor-invariants discharge** (closes the inherited Round-2 obligation; A8/A9/A10 dispositions explicitly cite §3.15.2 mode-boundary, §3.15.4 phase-boundary + R1-D14 amendment + R1-D9 amendment, §3.15.6 framing as load-bearing substrate); **§4.3 three-leg audit-posture rebalance discharge** (operationalizes the leg-3 catch surface as two structurally-distinct mitigation classes — leg-3-catch-of-verifier-bug for A1/A2/A6 and leg-3-catch-capacity-degradation for A3/A4/A5/A7/A8/A9/A10 — so future contributors can classify changes against the two-kind framework without re-deriving substrate). **§4.4 attack-class enumeration (A1–A10)** uses the [Phase 2F §4](./RANDOMX_V2_PHASE2F_PLAN.md) F1–F7 precedent shape (Attack / Round 3 disposition / Test coverage / Reversion clause where applicable). **A1 corpus-generation false-agreement bug** mitigated by T9 (determinism gate) + T10 (drift-detection pin); residual accepted as audit-against-actual-code-discipline catch at PR-review time. **A2 R1-D14 precondition bypass** mitigated by §3.15.4 phase-boundary discipline + T3 + T11 (synthetic-divergence round-trip); residual accepted as multi-component discipline-failure-mode requiring concerted bypass. **A3 CMake-trigger bypass** mitigated by R1-D3 (c) implication mechanism + T12; residual accepted at §3.15-style review discipline. **A4 R1-D11 failure-output incompleteness** mitigated by T11 (11-required-fields schema round-trip) + forward-deferred extension shape (R1-D10 + R1-D14 future-deferred reopens); residual accepted as future-deferred reopen criterion. **A5 CacheStore Arc retention regression (F2 backstop bypass)** mitigated by R1-D9 amendment mode-scoping + T8 measurement methodology + Phase 2F F2 caller-discipline boundary; residual accepted at PR-review discipline. **A6 adversarial-corpus drift** mitigated by §1.7 fork-pin coupling + T15 signature audit + T10 corpus-hash; residual accepted at §1.7 fork-pin-advance PR discipline. **A7 reviewer-blind nightly failures** mitigated by R1-D12 split-cadence-with-required-status-check + §1.7 + R1-D12 + T10/T15 composition; residual accepted for V3.0 small-team substrate (reversion criterion: >7-day discovery gap triggers active monitoring). **A8 mode-boundary violation (§3.15.2 process-scoping bypass)** mitigated by §3.15.3 mode-mutual-exclusion pin + §3.15.2 free-between-modes pin + §3.15.6 framing; residual accepted at §3.15-frame audit time. **A9 phase-boundary violation (R1-D14 + R1-D9 amendment invariants)** mitigated by §3.15.4 phase-boundary discipline pin + R1-D14 CacheStore-empty + R1-D9 RSS-sampler-scoping invariants + indirect catch via T3/T7/T8; residual accepted at §3.15-frame audit time. **A10 per-mode-state-shape regression (R1-D9 RSS-bound inheritance-by-default)** mitigated by R1-D9 amendment mode-scoping + §3.15.2 per-mode-state-shape table + indirect catch via T8 per-mode applicability; residual accepted at §3.15-frame audit time. **§4.5 negative space (N1–N5)** explicitly enumerates classes 2g does NOT defend against with substrate-anchored reopening criteria: **N1** V4 lattice-transition substrate shift (out of scope for V3.x; reopen on NIST lattice standardization); **N2** multi-platform corpus determinism (out of scope for V3.0; reopen on macOS/Windows CI matrix expansion); **N3** PoW consensus attacks (out of scope permanently — operates upstream of verifier; cross-link to Phase 0 / [Phase 2F F7](./RANDOMX_V2_PHASE2F_PLAN.md) / [LWMA-1](./DAA_LWMA1_PLAN.md)); **N4** side-channel attacks (out of scope; cross-link to [Phase 2c §5.11.4](./RANDOMX_V2_PHASE2C_PLAN.md) public-input-only scope note); **N5** adversarial CI infrastructure (out of scope; cross-link to reproducible-Guix-build + signed-release-tag disciplines per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) + [`docs/SIGNING.md`](../SIGNING.md)). **§4.6 implementation-PR transition gate** verifies all 11 substrate rows are either closed or scaffolded with sufficient substance: §1 (frozen at Phase 2F R3) + §2 (absorbed Round 0) + §3 R1-D1–R1-D14 (closed Round 1 + tightened Round 2) + §3.15 (substantive Round 2 — six subsections covering modes/state/dispatch/lifecycle/forward-template/negative-space) + §4 A1–A10+N1–N5 (this round) + §5 (Round 1 initial substance: 16+5+2+3+4 = 30 rows) + §6 (Round 1 initial substance: 15-row T# matrix) + §7 (Round 0 scaffold sufficient) + §8 (Round 1 initial substance: 10-commit sequence) + §9 (Round 0 scaffold sufficient) + §10 (Round 0 scaffold sufficient). Implementation-PR opening is **authorized** per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) rule 2 (short-lived branch, ≤10 commits, ≤5 working days) with §8.4 PR-opening citation discipline + [`90-commits.mdc`](../../.cursor/rules/90-commits.mdc); subsequent plan-doc changes are substrate-anchored reopens per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc), not iterative design-rounds. **Four post-implementation-PR reopen-criterion classes named** (substrate-anchored, not preference-anchored): §1 substrate gap, §3.15 actor-shape discipline gap, A1–A10 disposition gap, R1-D# numeric pin substrate-unsoundness. **Project-posture observation (broader project record).** Round 3 closes the design-phase substrate; 2g transitions to implementation-PR with **3 substantive close-rounds within the §0 ≤3-round target** (Round 0 + Round 0 calibration + Round 1 + Round 2 + Round 3, where Round 0 calibration is substrate-tightening rather than a separate close-round). The pattern reaffirms the §11 Round 2 fourth-clean-Round-1 project-posture observation — converged-state-of-project-posture per [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc) discovery-cadence-compounding-substrate framing. Round 3's adversarial pass against the Round-1+Round-2 substrate surfaces no new attack-class reframe; the §4.4 enumeration absorbs the seven Round-1 pre-bound classes + three Round-2 obligations + five negative-space classes without restructuring. None of the Round 3 close reopens a §1-frozen surface, reshapes a Round-1 disposition, reshapes a Round-2 amendment, or reshapes the §3.15 actor-shape framing; all Round 3 additions are substrate-anchored attack-class dispositions or substrate-anchored discharge of inherited obligations. **The plan-doc design rounds are closed.** The implementation PR per §8 starts at the current substrate state; the next plan-doc activity is reactive (post-implementation-PR reopen against substrate-anchored evidence) not iterative (no Round 4 expected; if one arrives, it is substrate-reopen-driven per the four post-implementation reopen classes). |
 | Round 5 (Pre-C6 substrate-completeness amendment — R5-D1 `test-internals` feature-gate carve-out) | 2026-05-25 | Pre-C6 substrate amendment opened to close a single substrate-anchored contradiction surfaced during implementation-PR pre-flight, *before* the first commit that exercises R1-D14 (C6's `cache_precondition` module). The contradiction is real: R1-D14 prescribes a SHA-256 fingerprint comparison between the Rust-derived `PreparedCache`'s 256-MiB Argon2d-fill memory and the C reference's `randomx_get_cache_memory(cache)` return; §5.3.1 / §5.6 / §5.7 forbid the verifier crate from gaining new public surface in 2g; the existing `PreparedCache` exposes no public accessor for cache memory and the inner `Cache` is `pub(crate)`. R1-D14 + §5.3.1 are mutually unsatisfiable as written. **R5-D1**: closed at **Option C2 (feature-gated accessor)** per the standard Rust pattern for "expose internals to test infrastructure without exposing to production." Three structural option classes evaluated; the chosen disposition is the one that preserves §5.3.1's spirit (production surface untouched) while satisfying R1-D14's evidence requirement (cache-byte access at runtime). Implementation: (1) new feature `test-internals = []` on `shekyl-pow-randomx`'s `Cargo.toml`; (2) new accessor `PreparedCache::cache_block_bytes_for_testing(&self) -> impl Iterator<Item = [u8; 1024]> + '_` gated on `#[cfg(feature = "test-internals")]`; (3) harness crate (`shekyl-randomx-differential`) declares `features = ["test-internals"]` on its `shekyl-pow-randomx` dep, the *sole* consumer of the feature. The visitor shape (`impl Iterator<Item = [u8; 1024]>`) avoids returning `&[u8]` directly because the verifier's `Box<[argon2::Block]>` representation cannot be reinterpreted as `&[u8]` without either `unsafe_code` (forbidden by `#![deny(unsafe_code)]` at `lib.rs:166`), a 256-MiB `Vec<u8>` materialization (defeats the R1-D14 drop-discipline memory budget), or a new workspace dep (`bytemuck`/`zerocopy`, declined per `17-dependency-discipline.mdc`); the visitor yields owned 1-KiB arrays with ~1 KiB stack-transient cost per block. **Plan-doc surfaces amended:** §3.17 (new section with the R5-D1 decision + reopening criteria + pre-implementation-surface-enumeration forward-action), §5.3.1 (production-surface scope clarified; carve-out cite), new §5.3.3 row (the accessor + feature), §5.1.7 (consumption cite in `cache_precondition.rs`), §5.1.9 (`rust_subject.rs` carries no internals access, only the precondition module does), §5.1.15 (harness Cargo.toml `features = ["test-internals"]`), §5.6 (negative space updated to clarify "no new *production* surface"; explicit not-`harness-trace` distinction), §5.7 (drift-prevention discipline extended with test-infrastructure carve-out clause naming the auditable boundaries: feature name `test-internals`, sole consumer `shekyl-randomx-differential`, sole `pub` item §5.3.3 accessor). **Substrate-anchored amendment shape, not disposition reversal,** per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc): the §5.3.1 / §5.6 / §5.7 prohibitions were correctly framed for *production* surface and remain unmodified in that scope; R5-D1 carves out an additional class (`cfg(feature = "test-internals")`-gated test-infrastructure) that is *not new production surface* in the §5.3.1 sense, mirroring Round 2's T2 layer-separation framing. Any addition of an item under the same feature gate (a second `pub fn`, a type re-export, downstream activation by a crate other than the harness) requires the same plan-doc amendment discipline as a production-surface addition. **R4-blind-spot finding queued for rule-26 amendment:** R4 missed this gap because its implementation-correctness checklist enumerated the plan-doc substrate (workspace deps, CMake wiring, ABI signatures) but did not enumerate the *actual* verifier-crate surface against the plan-doc's references. The check is mechanical (`cargo doc` + `rg`) and would have caught R5-D1 at R4-evaluation time. The forward-action queued for the next [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) amendment is a **"surface enumeration pass"** added to pre-implementation rounds: for each consumer the plan-doc references, confirm the consumed surface actually exists in the consumed crate at the workspace-pinned version. This forward-action is not landed in this amendment; it is queued for rule-26's next substrate-completeness pass. **None of R5-D1 reopens a Round-1 / 2 / 3 / 4 disposition;** the §5.3.1 production-surface prohibition is unchanged in scope, the R1-D14 SHA-256 comparison shape is unchanged, the Round-2 T2 layer-separation framing is reaffirmed. The amendment is substrate-completeness work — the second instance of the "substrate-completeness amendment" round-shape in the project (first instance: the Round 3 amendment with active-threat-surface framing). The shape's value is now substrate-anchored: amendments that extend the substrate without reframing closed dispositions are not new design rounds; they are completion of work the prior round did not fully cover. **Implementation PR precursor sequencing:** this amendment lands as its own short-lived branch (`feat/randomx-v2-phase2g-r5-d1-test-internals-gate`) per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc), separate from the §8 implementation PR. The implementation PR proceeds C0–C5 unchanged (none touches the verifier crate or invokes `PreparedCache::derive`), then C6 onward consumes the §5.3.3 accessor under the `test-internals` feature gate per the amended §5.1.7 + §5.1.15. **Round count.** Round 5 is the first post-design-close substrate amendment that adds a *decision* (R5-D1) rather than a substrate-extension pin; the precedent in 2g is the Round 3 substrate-completeness amendment, which was extension-only (the §4 restructure into passive/active + M1–M4 mitigation patterns). The §0 "≤3 substantive close-rounds" calibration is preserved in the project-record sense (architecture closed at Round 2; threats at Round 3; implementation correctness at Round 4 + Round 5 = pre-implementation correctness across two rounds rather than one); R5-D1's existence reaffirms the rule-26 pre-implementation-round discipline rather than violating the close-round-count expectation. |
 | Round 5 cont. (Pre-C3 substrate-completeness amendment — R5-D2 `build.rs` soft-fail refinement) | 2026-05-25 | Pre-C3 substrate amendment opened to close a substrate-anchored contradiction surfaced at the C3 implementation boundary, *before* C3 lands `randomx-v2-sys`'s `build.rs`. The contradiction is real and is bracketed by two simultaneously-load-bearing substrate commitments: **(i)** R4-D3 (§3.16) closes at "emit `cargo:warning=…` and `process::exit(1)` from `build.rs` when `RANDOMX_V2_INSTALL_DIR` is unset" — substrate-anchored against "the cargo invocation that needs the link directives" (implicitly, the harness binary's link step). **(ii)** §8 per-commit bisection invariant (lines 6035–6038) requires "every commit passes `cargo build --workspace --all-targets`, `cargo clippy --workspace --all-targets --keep-going -- -D warnings`, and `cargo fmt --all -- --check`"; §9.2 cites the existing CI gates inherited unchanged from 2c/2d/2f including `.github/workflows/build.yml` line 596 (`cargo clippy --workspace --all-targets --keep-going -- -D warnings`). Cargo runs a member's `build.rs` for every compilation of that member regardless of whether a downstream binary is being linked; a `build.rs` that `process::exit(1)`s on unset env var therefore hard-fails every workspace-wide cargo invocation that doesn't first export `RANDOMX_V2_INSTALL_DIR`. After C3 lands, all C3-through-C9 intermediate states violate §8's per-commit invariant locally, every PR against `.github/workflows/build.yml` line 596 fails until C10's CI amendment lands, and `cargo check --workspace` from `rust/` breaks for any developer who hasn't exported the env var (including developers whose change is unrelated to RandomX v2). R4-D3 + §8 per-commit invariant + §9.2 inherited gates are mutually unsatisfiable as written for the C3-through-C9 intermediate states. **R5-D2**: closed at **Option B (soft-fail at `build.rs`)** — replace `process::exit(1)` with `return` after the `cargo:warning=…`. Three structural option classes evaluated: (A) implement R4-D3 strictly + amend CI + amend dev workflow (rejected: breaks §8 per-commit invariant for ~7 commits + breaks `.github/workflows/build.yml` line 596 across all PRs in that window; the §8 invariant is load-bearing for bisection discipline and the "we'll fix CI at C10" plan accumulates 7-commit window of broken workspace-default state that any unrelated PR in that window would also experience); (B) soft-fail at `build.rs` (chosen); (C) workspace partition into `rust/randomx-v2-harness/Cargo.toml` sub-workspace (rejected: structural change rippling back to C1 + requires revisiting C1's bisection-invariant verification + introduces a sub-workspace boundary in `rust/` adding review surface for every future cargo-workflow review). The chosen disposition (B) preserves §8's per-commit invariant for all C3-C10 commits without env-var ceremony; the R4-D3 intent (clear error pointing to `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS`) is preserved across a timing shift — the `cargo:warning=…` text emitted at `build.rs` time remains in the build log providing actionable context; the linker error emitted at downstream binary link time provides the true-positive failure when a link is actually attempted. The diagnostic surface is two redundant signals rather than one hard-fail. Implementation: `match env::var("RANDOMX_V2_INSTALL_DIR") { Ok(dir) => emit link directives; Err(_) => emit cargo:warning + return cleanly }`; also emit `cargo:rerun-if-env-changed=RANDOMX_V2_INSTALL_DIR` unconditionally so the `build.rs` re-evaluates env-var presence on every subsequent invocation without `cargo clean`. **Plan-doc surfaces amended:** §3.16 R4-D3 (forward-pointer to R5-D2 with substrate-discovery and refinement-not-reversal annotation), §3.17 (extended from R5-D1-only to R5-D1 + R5-D2 cluster; section title + intro paragraph updated; new R5-D2 entry mirroring R5-D1 shape; summary table extended; new commentary paragraph for refinement-not-reversal framing; new pre-implementation-cross-invariant-impact forward-action paragraph queued jointly with R5-D1's surface-enumeration forward-action for rule-26 amendment), §5.2.2 surface table row (wording shifted from "panics with pointer to `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS`" to "`cargo:warning=…` + `return`; defers failure to link time per R5-D2 (refinement of R4-D3 for workspace-wide cargo compatibility)"; R5-D2 added to the decision-citation column alongside R1-D2 / R1-D3 / R4-D2 / R4-D3). **Substrate-anchored amendment shape — refinement, not reversal — per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).** R4-D3's intent is preserved; R5-D2 shifts the error's emission point from `build.rs` (false-positive workspace-wide-cargo failure) to link time (true-positive binary-link failure). The `cargo:warning=…` text is the carrier of R4-D3's actionable context across both timing points. The refinement's auditable boundaries: (a) soft-fail applies only when `RANDOMX_V2_INSTALL_DIR` is unset (env-var-set path unchanged from R4-D3); (b) `cargo:warning=…` text is the load-bearing artifact carrying R4-D3's actionable context across the timing shift; (c) any future change that wants to restore `process::exit(1)` (per the R5-D2 reopen criterion for workspace partition or Cargo "build.rs runs only at link time" capability) requires the same plan-doc amendment discipline. **R4-blind-spot finding queued for rule-26 amendment (R5-D2 class).** R4 also missed this gap because its implementation-correctness checklist evaluated each new build-system surface (R4-D2 / R4-D3) in isolation against its own substrate (the `librandomx.a` filename, the env-var-handoff mechanism) without cross-referencing the new surface against the project's *workspace-wide* invariants (the §8 per-commit invariant and the §9.2 inherited CI gates). R4-D3's `process::exit(1)` is locally consistent with the env-var-handoff substrate it was decided against; the gap is in the **cross-invariant impact analysis** — "what happens to the workspace-wide cargo invocations in §8 + §9.2 when this new build-system surface lands?" The check is mechanical (`rg 'cargo (check\|build\|test\|clippy).*workspace'` across `.github/workflows/` + against the plan-doc's own §8 / §9 text) and would have caught R5-D2 one round earlier. Forward-action queued jointly with the R5-D1 surface-enumeration forward-action for [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) amendment: pre-implementation rounds add a **"cross-invariant impact analysis pass"** — for each new build-system / workspace / CI-touching surface a round closes, enumerate the project's existing workspace-wide invariants (per-commit bisection, CI gates, dev-workflow defaults) and confirm the new surface preserves each. **None of R5-D2 reopens a Round-1 / 2 / 3 / 4 disposition in the architectural sense;** R4-D3 is *refined* (not reversed) — the env-var-handoff mechanism (option (a)) is unchanged, the link directives are unchanged, the cmake-option pointer in the warning text is unchanged, the env-var-set-path behavior is unchanged. The only change is the unset-path's failure timing: `build.rs::exit(1)` → `build.rs::return` + link-time linker error. The amendment is substrate-completeness work — the **third instance of the "substrate-completeness amendment" round-shape** in the project (first: Round 3 active-threat-surface; second: R5-D1 test-internals carve-out; third: R5-D2 build.rs soft-fail refinement). The shape's auditability is now established across three diverse instances: extension-only (Round 3), carve-out (R5-D1), refinement (R5-D2). **Implementation PR precursor sequencing:** this amendment lands as its own short-lived branch (`feat/randomx-v2-phase2g-r5-d2-build-rs-soft-fail`) per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc), separate from the §8 implementation PR; the implementation branch (`feat/randomx-v2-phase2g-impl`, currently at C0+C1+C2) rebases onto the new `dev` tip after merge. C3 then implements `build.rs` per the amended §5.2.2 + R5-D2 disposition. **Round count.** R5-D2 is the second decision under the Round 5 umbrella (R5-D1 was the first). The §0 "≤3 substantive close-rounds" calibration is preserved in the project-record sense (architecture at Round 2; threats at Round 3; implementation correctness at Round 4 + Round 5 cluster = pre-implementation correctness across two rounds + one substrate-completeness cluster rather than a single round). R5-D2's existence reaffirms the rule-26 pre-implementation-round discipline and adds the cross-invariant impact analysis class to the queued rule-26 amendment alongside R5-D1's surface enumeration class. |
+| Round 6 (Pre-C5 + C5a-integration substrate-completeness amendments — R6-D1 SHA-256 seed derivation + R6-D2 C5 split for adversarial-corpus grinding + R6-D3 C++ runtime link directive + R6-D4 canonical-output flat-array shape) | 2026-05-25 | Pre-C5 substrate-completeness round opened to close two substrate-anchored contradictions surfaced at the C5 implementation boundary, *before* C5 lands the random + adversarial corpora + canonical outputs. **R6-D1** (substrate-correction of §3 R1-D4): the plan-doc's "padded to 32 bytes" close on the seed string `"shekyl-randomx-differential-corpus-v1\x00"` is a literal-arithmetic slip — the source string is 37 bytes (38 with trailing NUL), not ≤32, so no NUL-padding shape fits `ChaCha20Rng::from_seed`'s `[u8; 32]`. Disposition: `RANDOM_CORPUS_SEED_V1 = SHA-256("shekyl-randomx-differential-corpus-v1")`. The substrate-correct interpretation preserves the full named source string (no truncation or renaming), is fully reproducible from the comment alone, is verified by a unit test that re-derives the SHA-256 at runtime against the committed `[u8; 32]` constant (catching comment-vs-bytes drift), and carries forward to future `_V2` revisions under the same `sha256(source_string)` pattern. The `_V1` reversion-clause anchor lives on the constant name; the SHA-256 derivation is implementation-method, not architectural reversal. **R6-D2** (substrate-correction of §5.7 surface contract vs. §3 R1-D5 grinding tool): R1-D5 pins the adversarial-corpus grinding tool at `rust/shekyl-randomx-differential/tools/grind_adversarial_corpus.rs`, but §5.7 close says the §5.1–§5.5 enumeration is the **only** new surface the 2g implementation PR may introduce — and no grinding-tool `[[bin]]` entry exists in §5.1, nor any opcode-class-tally accessor on the verifier or in `randomx-v2-sys`. Compounding the gap: the grinding tool requires per-(seedhash, data) opcode-class tallying to evaluate R1-D5's F3 ≥40% per-class / ≥60% combined criteria, and the verifier's program-decode infrastructure (`InstructionType` + `decode_instruction_type`) is `pub(crate)` (verified at C5 pre-flight). The grinding tool requires a new verifier (or `randomx-v2-sys`) surface; that surface is itself a §5.3 / §5.2 addition not in §5.7's enumeration. R1-D5 + §5.7 are mutually unsatisfiable as written. Disposition: split §8.1 C5 row into **C5a** (random corpus + canonical outputs + `[[bin]] gen-canonical-outputs` + scaffolded-empty adversarial corpus + this Round 6 plan-doc amendment) and **C5b** (adversarial-corpus grinding infrastructure + grinded bytes + T10 SHA-256 pin refresh + the surface-contract amendment naming the opcode-tally accessor). C5a ships `adversarial_corpus.rs` with the nine per-class arrays structurally scaffolded (named per R1-D5 / R1-D6 tagging) but empty; T10 (`adversarial_corpus_hash_pin`) asserts SHA-256 of whatever is committed (the empty-scaffold SHA-256 at C5a; refreshes against grinded bytes at C5b). T16 (canonical-output assertion) lands at C5a as a structural stub (length / shape invariants); the full per-(seedhash, data) lookup form lands at C7 per the original §8.1 sequence. The C5b pre-flight chooses between a §5.3.4 verifier surface (`test-internals`-gated per R5-D1 precedent — `InstructionTypeTally::compute` or similar) and a §5.2.7 `randomx-v2-sys` C-shim surface; the choice is itself a substrate decision deferred to C5b's pre-flight per the same discovery-cadence discipline that produced R5-D1 + R5-D2. **Sequencing:** R6-D1 + R6-D2 plan-doc amendments cherry-pick-fold into the C5a commit per the R5-D2 precedent (substrate amendment + the code it authorizes ride together); C5b opens with its own pre-flight pass naming the §5.3.4 / §5.2.7 surface and lands as a separate commit on the same branch (`feat/randomx-v2-phase2g-impl`). **Substrate-anchored amendment shape — substrate-corrections / scope-splits, not architectural reframes, per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).** Neither R6-D1 nor R6-D2 reopens a Round-1 / 2 / 3 / 4 / 5 disposition. R1-D4's deterministic-name-anchored-seed intent and R1-D5's grinded-corpus disposition are preserved in *intent*; both amendments are refinements of *how* the intent is satisfied against the substrate the implementation will be written against. **R4/R5-blind-spot finding queued for rule-26 amendment (R6-D2 class).** The R6-D2 finding generalizes the R5-D1 class (surface enumeration pass) and the R5-D2 class (cross-invariant impact analysis pass) to a third class: **"methodology-vs-surface-contract reconciliation pass."** R1-D5's grinded-corpus disposition was structurally complete at Round-1 review time *as a methodology* (grind via a tool; commit hex bytes); the gap is that the methodology's *implementation* requires intermediate surfaces (the opcode-class-tally accessor) not enumerated at the plan-doc surface contract. The forward-action queued: pre-implementation rounds add a methodology-vs-surface-contract reconciliation pass — for each methodology a round closes that requires implementation surfaces, confirm the required surfaces are enumerated in §5; if any are missing, the round either adds them or names them as deferred to a named future round. This action joins R5-D1's surface-enumeration forward-action and R5-D2's cross-invariant impact analysis forward-action for rule-26's next substrate-completeness pass. **None of R6-D1 / R6-D2 reopens a frozen surface from §1;** §1 is unchanged. The amendment is substrate-completeness work — the **fourth instance of the "substrate-completeness amendment" round-shape** in the project (first: Round 3 active-threat-surface; second: R5-D1 test-internals carve-out; third: R5-D2 build.rs soft-fail refinement; fourth: R6-D1 + R6-D2 cluster). The shape's auditability is now established across four diverse instances: extension-only (Round 3), carve-out (R5-D1), refinement (R5-D2), substrate-correction + commit-boundary split (R6). **R6-D3 + R6-D4 (C5a-integration substrate-corrections).** Two additional findings surfaced at C5a integration time, after R6-D1 + R6-D2 landed and as the `gen-canonical-outputs` binary was first built and run. **R6-D3** (substrate-correction of §5.2.2 / R4-D2): the C reference is a C++ static archive; the C3 build.rs emits the `static=randomx` directive but not the host C++ runtime (libstdc++ / libc++) runtime directive, so downstream binary links fail with ~50 undefined-symbol errors against `__cxa_*`, `operator new`, `std::__cxx11::basic_string<…>`, etc. Disposition: `randomx-v2-sys/build.rs`'s set-branch emits a platform-conditional `cargo:rustc-link-lib=dylib={stdc++|c++}` directive keyed on `CARGO_CFG_TARGET_OS` (`stdc++` on GNU/Linux; `c++` on macOS / iOS / FreeBSD / OpenBSD). Why not caught at C3: C3 verified `build.rs` dispatch via `cargo check` (rlib compile-only), not via downstream binary link (no downstream consumer existed until C5a). Forward-action queued: pre-C-FFI-link pre-flight enumerates the archive's language and adds the runtime directive. **R6-D4** (substrate-correction of §5.1.17 / R4-D7): the canonical-output struct shape `CanonicalHash { seedhash, data, expected_hash }` embeds variable-length `data` (up to ~600 KiB per R1-D4); at nightly cadence 1024 pairs the canonical_outputs.rs source file is ~150 MB. Substrate analysis: the random corpus is fully deterministic; the harness can re-derive `data` at test time, so the canonical only needs to commit `(corpus_index, expected_hash)`. Disposition: flat hash arrays `CANONICAL_RANDOM_HASHES: &[[u8; 32]]` + `CANONICAL_CACHE_SHAS: &[[u8; 32]]` indexed by corpus position. Adversarial canonicals (C5b) keep embedded data because the adversarial corpus is hand-derived; the bounded ~50 entries × short patterns keeps adversarial-canonical file size tractable. Forward-action queued: per-trait PR pre-flight adds a "committed-canonical sizing pass" — worst-case serialized canonical size against the corpus's largest input is computed at design time; if it exceeds informal tiers (1 MB / 10 MB / 100 MB) the canonical shape is restructured before implementation. **Both R6-D3 and R6-D4 are substrate-corrections** that preserve the intent of the corrected rounds (R4-D2 still names the lib correctly; R4-D7 still anchors the M1 third-leg property — only the serialization shape changes). Together with R6-D1 and R6-D2 the Round 6 cluster spans both pre-C5 surface-feasibility analysis and C5a integration-time discovery; the discovery-cadence discipline catches all four with named forward-actions for rule-26's next pass. **Round count.** R6 is the third Round-N umbrella under which substrate-completeness amendments cluster (R5 grouped R5-D1 + R5-D2; R6 groups R6-D1 + R6-D2 + R6-D3 + R6-D4). The §0 "≤3 substantive close-rounds" calibration is preserved in the project-record sense (architecture at Round 2; threats at Round 3; implementation correctness across Round 4 + Round 5 + Round 6 = pre-implementation correctness across three substrate-completeness clusters rather than a single round). R6's existence reaffirms the rule-26 pre-implementation-round discipline and adds the methodology-vs-surface-contract reconciliation class (R6-D2), the C-FFI-link language-enumeration class (R6-D3), and the committed-canonical-sizing class (R6-D4) to the queued rule-26 amendment alongside R5-D1's surface enumeration class and R5-D2's cross-invariant impact analysis class. |
