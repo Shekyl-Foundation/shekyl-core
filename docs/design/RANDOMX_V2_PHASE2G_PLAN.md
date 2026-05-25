@@ -3540,6 +3540,196 @@ implementer chooses; either shape is within rule-2's spirit.
 
 ---
 
+### §3.17 Round 5 — `test-internals` feature-gate carve-out (R5-D1)
+
+A pre-C6 substrate-completeness round opened to close a single
+substrate-anchored contradiction that surfaced during the
+implementation-PR pre-flight, before C6 (the first commit that
+runs the R1-D14 SHA-256 cache-equivalence precondition). The
+contradiction is real and is documented here for audit-trail
+discoverability per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+named-criteria principle.
+
+#### R5-D1 — Test-infrastructure carve-out for cfg-gated `test-internals` feature on `shekyl-pow-randomx`
+
+**Finding (pre-C6 substrate-gap).** R1-D14 prescribes a SHA-256
+fingerprint comparison between the Rust-derived `PreparedCache`'s
+memory and the C reference's `randomx_get_cache_memory(cache)`
+return as the precondition for the per-`(seedhash, data)` byte-
+equality test. The Rust side requires byte-level access to the
+`PreparedCache`'s 256-MiB Argon2d-fill memory. §5.3.1 forbids
+the verifier crate from gaining new public surfaces in 2g; the
+existing `PreparedCache` exposes no public accessor for cache
+memory, and the inner `Cache` type is `pub(crate)`. Hence: R1-D14
++ §5.3.1 are mutually unsatisfiable as written, and the gap is
+not resolvable by re-reading the Round-1/2/3/4 substrate — it
+requires a substrate amendment.
+
+**Option set (substrate-anchored).** The pre-C6 review enumerated
+three structural option classes (full enumeration recorded in the
+parent-conversation transcript; abbreviated here):
+
+- **Class A** — modify the verifier surface. Sub-variants:
+  - A1: `PreparedCache::cache_bytes(&self) -> &[u8]`.
+  - A2: `PreparedCache::cache(&self) -> &Cache` (promotes `Cache`
+    to `pub`).
+  - A3: `PreparedCache::sha256_fingerprint(&self) -> [u8; 32]`
+    (computes the fingerprint inside the verifier).
+  - **Rejected.** Each adds production public surface that
+    becomes a forever-compatibility commitment constraining
+    future verifier refactors. A3 additionally commits the
+    verifier to "SHA-256 is forever the right fingerprint
+    algorithm." Violates §5.3.1 / §5.6 / §5.7.
+- **Class B** — move the comparison through M1's committed
+  canonicals + leg-1 spec-faithful implementation discipline,
+  eliminating the runtime byte-comparison.
+  - **Rejected.** Removes the runtime backstop that §2.5's
+    "leg 3 as catch-of-last-resort" framing depends on for the
+    cache-equivalence property. Future Rust-side `Cache::derive`
+    divergences that coincide on committed-canonical seedhashes
+    but diverge on novel seedhashes would be silently passed by
+    the M1-only check; the runtime byte-comparison catches them
+    for every corpus entry.
+- **Class C** — cfg-gated test-only API on `shekyl-pow-randomx`.
+  Sub-variants:
+  - C1: `#[cfg(test)]` accessor (rejected — `#[cfg(test)]`-gated
+    items are invisible to downstream consumers like the harness
+    crate; only the gated crate's own tests see them).
+  - C2: feature-gated accessor (`#[cfg(feature = "test-internals")]
+    pub fn`); harness crate enables the feature in `Cargo.toml`;
+    production consumers see nothing.
+  - C3: separate `shekyl-randomx-test-utils` helper crate.
+    Rejected as over-engineering — adds a crate boundary for one
+    accessor.
+
+**Default expectation (closure).** **C2 — feature-gated
+accessor.** Adopt the standard Rust pattern for "expose internals
+to test infrastructure without exposing to production":
+
+- A new feature `test-internals = []` on `shekyl-pow-randomx`'s
+  `Cargo.toml`. Default `cargo` invocations and any release build
+  never see the feature active.
+- A new accessor `PreparedCache::cache_block_bytes_for_testing
+  (&self) -> impl Iterator<Item = [u8; 1024]> + '_`, gated on
+  `#[cfg(feature = "test-internals")]`.
+- The accessor consumption site (the harness crate
+  `shekyl-randomx-differential`) declares
+  `shekyl-pow-randomx = { workspace = true, features =
+  ["test-internals"] }` so the feature is active in the harness's
+  build but not in production builds.
+- The accessor's function name (`..._for_testing`) is load-bearing
+  — it signals at every call site that the surface is
+  test-infrastructure, not production API. Combined with the
+  feature gate, the test-only intent is documented twice
+  (`Cargo.toml` feature declaration + function-name suffix).
+
+**Why a visitor (`impl Iterator<Item = [u8; 1024]>`) rather than
+`&[u8]`.** The verifier's `Cache::memory` is `Box<[argon2::Block]>`
+(256 MiB). Producing a flat `&[u8]` view would require either
+(a) `unsafe_code` to reinterpret `&[Block]` as `&[u8]`, forbidden
+by the crate's `#![deny(unsafe_code)]` at `lib.rs:166`; (b) a
+256-MiB `Vec<u8>` materialization, which defeats the R1-D14
+drop-discipline memory-budget pin (§2.5 R1-D14 sub-pin: peak per-
+seedhash ~256 MiB rather than ~512 MiB); or (c) adding a new
+workspace dependency (`bytemuck` / `zerocopy`), declined per
+[`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)'s
+no-new-deps-without-justification discipline. The visitor shape
+avoids all three: no unsafe, ~1 KiB stack-transient per block,
+no new dep. The harness consumes the iterator with a SHA-256
+streaming hasher (`for block in
+prepared.cache_block_bytes_for_testing() {
+hasher.update(&block); }`), preserving the R1-D14 memory-budget
+pin.
+
+**`SuperscalarProgram` field excluded.** The yielded chunks are
+the Argon2d-derived `memory` buffer only; the eight
+`SuperscalarProgram`s stored alongside it are not yielded. The
+R1-D14 precondition compares against the C reference's
+`randomx_get_cache_memory(cache)`, which exposes only the
+`memory` buffer (not the C-side `reciprocalCache` or any program
+representation). The program-side determinism is covered in-crate
+by the T1' tests in `cache.rs::#[cfg(test)] mod tests` (per Phase
+2c §5.11.1). The R1-D14 precondition covers the Argon2d-fill side
+cross-implementation; the T1' tests cover the program side
+in-crate. Together they discharge the cache-equivalence property
+on both sides of the Block-vs-program distinction.
+
+**Reopening criteria (substrate-anchored).**
+
+- If `argon2`-crate upstream changes `Block`'s in-memory
+  representation (e.g., adds padding or non-canonical fields), the
+  little-endian byte-stream layout assumption fails and the
+  visitor's per-Block `to_le_bytes` loop must be re-anchored
+  against the new layout. The `test-internals` feature persists;
+  only the visitor body changes.
+- If a future Rust extraction (Phase 3a / 3c) surfaces a
+  *production* need for cache-memory byte access (e.g., a
+  block-explorer indexer that wants to hash cache memory for some
+  consensus-adjacent reason), reopen the §5.3.1 prohibition with
+  a fresh design-round 1 — *do not* relax the cfg gate by
+  default-enabling the `test-internals` feature in production
+  consumers. The gate's invisibility-in-default-features property
+  is the load-bearing discipline; widening the surface requires a
+  dedicated design pass.
+- If a future verifier refactor makes `Box<[Block]>` no longer
+  the in-memory cache representation (e.g., a packed
+  representation), reopen the visitor's body shape against the new
+  representation; the gate persists, but the per-Block 1-KiB
+  chunk size and `to_le_bytes` loop are representation-specific
+  details that may need re-anchoring.
+
+**Re-evaluation shape.** Substrate-anchored amendment per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+— not a disposition reversal. The §5.3.1 / §5.6 / §5.7
+prohibitions are correctly framed for *production* surface; this
+amendment carves out an additional class (`cfg(feature =
+"test-internals")`-gated test-infrastructure surfaces) that is
+*not new production surface* in the §5.3.1 sense. Round 2's T2
+layer-separation framing is the precedent: the verifier stays
+minimal; test infrastructure lives in a feature-gated parallel
+surface; the gate is reviewable, not invisible. Any addition of
+an item under `#[cfg(feature = "test-internals")]` requires the
+same plan-doc amendment discipline as a production-surface
+addition.
+
+#### §3.17 summary: what Round 5 amends
+
+| Decision | Amendment location |
+|---|---|
+| R5-D1 `test-internals` feature gate | §5.3.1 (carve-out note); new §5.3.3 row (the accessor); §5.1.7 + §5.1.9 (consumption cite); §5.1.15 (`features = ["test-internals"]` on harness dep); §5.6 (clarified to "no new *production* surfaces"); §5.7 (cfg-gated carve-out clause) |
+
+R5-D1 reopens no Round-1/2/3/4 disposition; the §5.3.1 / §5.6 /
+§5.7 prohibitions are unmodified in their *production-surface*
+scope, and gain a carve-out clause for cfg-gated test-
+infrastructure. The carve-out's auditable boundaries: (a) the
+feature is `test-internals`, not a generic "internals" flag;
+(b) the sole consumer is `shekyl-randomx-differential`; (c) any
+extension of the feature's surface (a second `pub fn`, a new
+type re-export) requires a plan-doc amendment.
+
+**Pre-implementation-round forward-action queued (R5-D1 +
+project-discipline).** The R4 implementation-correctness round
+did not catch this gap because R4's checklist enumerated the
+plan-doc substrate (workspace deps, CMake wiring, ABI
+signatures) but did not enumerate the *actual* verifier-crate
+surface against the plan-doc references. The check is
+mechanical (`cargo doc` + `rg`) and would have caught R5-D1 two
+rounds earlier. Forward-action queued for the next
+[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+amendment: pre-implementation rounds add a **"surface
+enumeration pass"** — for each consumer the plan-doc
+references, confirm the consumed surface actually exists in the
+consumed crate at the workspace-pinned version. The pre-flight
+output is the verified-surface enumeration that the
+implementation-PR's commit messages cite (e.g.,
+"consumes `PreparedCache::cache_block_bytes_for_testing` under
+`test-internals` per plan-doc §5.3.3"). This action is not
+landed in this amendment; it is queued for rule-26's next
+substrate-completeness pass.
+
+---
+
 ## 4. Threat model (Round-N placeholder)
 
 Reserved for Round-N's adversarial pass against the 2g
@@ -5516,15 +5706,15 @@ per [Phase 2F §5](./RANDOMX_V2_PHASE2F_PLAN.md) precedent.
 | 5.1.4 | `src/lib.rs` | library entry point | R1-D7 | Re-exports modules below for `tests/` consumption |
 | 5.1.5 | `src/corpus_random.rs` | `pub(crate)` | R1-D4, R4-D6 | `ChaCha20Rng`-seeded random corpus generator; 32-byte seed pinned per R1-D4; corpus size controlled via `--random-corpus-seedhashes <N>` (default 32) and `--random-corpus-data-per-seedhash <M>` (default 32) CLI flags per R4-D6; per-PR CI passes `--random-corpus-seedhashes=16 --random-corpus-data-per-seedhash=8` |
 | 5.1.6 | `src/adversarial_corpus.rs` | `pub(crate)` | R1-D5, R1-D6 | Committed hex byte arrays for adversarial seedhashes + u128 edge-case data; tagged by class (CFROUND, FDIV_M, Cache-miss, CBRANCH, Combined-heavy, div-by-zero, signed-div overflow, shift-by-width, u128-trunc-high) |
-| 5.1.7 | `src/cache_precondition.rs` | `pub(crate)` | R1-D14 | SHA-256 cache-equivalence precondition test; `--debug-cache-divergence` mode performs byte-by-byte diff |
+| 5.1.7 | `src/cache_precondition.rs` | `pub(crate)` | R1-D14, R5-D1 | SHA-256 cache-equivalence precondition test; consumes `PreparedCache::cache_block_bytes_for_testing` (§5.3.3) under the `test-internals` feature gate (per §3.17 R5-D1 amendment) to stream the 256-MiB Rust cache through a `Sha256` hasher without heap allocation; compares against the C oracle's `randomx_get_cache_memory(cache)` SHA-256 (§5.1.8); `--debug-cache-divergence` mode performs byte-by-byte diff |
 | 5.1.8 | `src/c_oracle.rs` | `pub(crate)` | R1-D2, R4-D5 | Thin wrapper over `randomx-v2-sys` `extern "C"` declarations; flags: `RANDOMX_FLAG_DEFAULT` (0) for both cache and VM allocation per R4-D5; lifecycle: one `randomx_cache` + one `randomx_vm` allocated per seedhash iteration (VM reused across data values for same seedhash), freed before next seedhash; cache memory pointer via `randomx_get_cache_memory` for SHA-256 precondition; null-pointer error translation: `randomx_alloc_cache` / `randomx_create_vm` returning NULL → Rust `Error::COracleAlloc` with context |
-| 5.1.9 | `src/rust_subject.rs` | `pub(crate)` | R1-D14, Phase 2F §5 | Calls `PreparedCache::derive` + `compute_hash` per the Phase 2F R3-frozen public surface; no internals access |
+| 5.1.9 | `src/rust_subject.rs` | `pub(crate)` | R1-D14, R5-D1, Phase 2F §5 | Calls `PreparedCache::derive` + `compute_hash` per the Phase 2F R3-frozen production public surface; the only `test-internals`-gated consumption is `PreparedCache::cache_block_bytes_for_testing` from `src/cache_precondition.rs` (§5.1.7 + §5.3.3), not from `rust_subject.rs` itself — the hot-path hash-compute call sites carry no internals access |
 | 5.1.10 | `src/mode_correctness.rs` | `pub(crate)` | R1-D4, R1-D5, R1-D6, R1-D14 | Per-seedhash: precondition (R1-D14) then per-data byte-equality (R1-D4 + R1-D5 + R1-D6) |
 | 5.1.11 | `src/mode_worst_case.rs` | `pub(crate)` | R1-D8 | Per-(adversarial-seedhash, u128-edge-data) per-hash latency measurement; aggregates median and per-class breakdown |
 | 5.1.12 | `src/mode_latency.rs` | `pub(crate)` | R1-D7 | Replaces deleted `rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs`; interleaved Rust/C measurement methodology pinned per R1-D7 |
 | 5.1.13 | `src/mode_concurrent.rs` | `pub(crate)` | R1-D9 | `std::thread::spawn` workers; RSS-bound assertion via `/proc/self/statm`; byte-equality assertion per worker |
 | 5.1.14 | `src/failure_output.rs` | `pub(crate)` | R1-D11 | Structured JSON failure schema; fields enumerated in R1-D11 disposition |
-| 5.1.15 | `Cargo.toml` | manifest | R1-D1, R1-D2, R1-D4, R4-D1 | Workspace member; depends on `shekyl-pow-randomx` (workspace), `randomx-v2-sys` (workspace path), `rand_chacha = { workspace = true }`, `sha2 = { workspace = true }`, `serde_json = { workspace = true }` (for R1-D11 failure-output schema); **R4-D1 precondition**: `rand_chacha`, `sha2`, `serde_json` must be added to `rust/Cargo.toml` `[workspace.dependencies]` (sha2 = "0.10", rand_chacha = "0.3", serde_json = "1") before or alongside C1; they are not currently workspace-level deps (verified at source per `17-dependency-discipline.mdc`) |
+| 5.1.15 | `Cargo.toml` | manifest | R1-D1, R1-D2, R1-D4, R4-D1, R5-D1 | Workspace member; depends on `shekyl-pow-randomx = { workspace = true, features = ["test-internals"] }` (per §3.17 R5-D1: the harness is the sole consumer of the `test-internals` feature; the gate carves out §5.3.3's cache-byte-access accessor without expanding the verifier's production surface), `randomx-v2-sys` (workspace path), `rand_chacha = { workspace = true }`, `sha2 = { workspace = true }`, `serde_json = { workspace = true }` (for R1-D11 failure-output schema); **R4-D1 precondition**: `rand_chacha`, `sha2`, `serde_json` must be added to `rust/Cargo.toml` `[workspace.dependencies]` (sha2 = "0.10", rand_chacha = "0.3", serde_json = "1") before or alongside C1; they are not currently workspace-level deps (verified at source per `17-dependency-discipline.mdc`) |
 | 5.1.16 | `README.md` | doc | R1-D11 | How to read a failure output; how to invoke `--debug-cache-divergence`; how to re-grind the adversarial corpus (R1-D5/R1-D6 grinding budget per F3); canonical-regeneration discipline per §4.6 M1 |
 | 5.1.17 | `src/canonical_outputs.rs` | `pub(crate)` | §4.6 M1 (Round-3 amendment) | Committed canonical hashes (`CANONICAL_HASHES` per-`(seedhash, data)` pair) + committed canonical cache SHA-256 (`CANONICAL_CACHE_SHAS` per seedhash); asserted by T16 alongside the `rust == c` byte-equality; defends against T-A1, T-A2, T-A3, T-A10; regeneration is a tracked auditable action per §5.7 + §8.3 discipline |
 | 5.1.18 | `src/invocation_banner.rs` | `pub(crate)` | §4.6 M4 (Round-3 amendment) | Stderr-emitted disposition-source banner printed before any test output; banner names plan-doc round + §4.5 T-A coverage + §2.5 leg-3-backstop framing + modification-discipline pointer; asserted by T17; defends against T-A7, T-A8, T-A11 |
@@ -5549,8 +5739,9 @@ per [Phase 2F §5](./RANDOMX_V2_PHASE2F_PLAN.md) precedent.
 
 | # | Surface | Visibility | Anchor | Notes |
 |---|---|---|---|---|
-| 5.3.1 | (none) | — | R1-D10 | R1-D10 closes at (b) — no `compute_hash_with_trace` cfg-gated entry point. The verifier crate gains zero new surfaces in 2g. |
+| 5.3.1 | (none) | — | R1-D10, R5-D1 | R1-D10 closes at (b) — no `compute_hash_with_trace` cfg-gated entry point. The verifier crate gains zero new **production** surfaces in 2g. R5-D1 (§3.17) amendment carves out a `cfg(feature = "test-internals")`-gated test-infrastructure surface (§5.3.3) that is invisible in default-features builds; the production surface is unchanged. |
 | 5.3.2 | **Deletion**: `tests/perf/per_hash_latency.rs` | — | R1-D7 | Placeholder deletion; the 2g implementation PR commit closing R1-D7 marks "closes Phase 2c R3-minor-2" per R1-D7's audit-trail discipline |
+| 5.3.3 | `PreparedCache::cache_block_bytes_for_testing(&self) -> impl Iterator<Item = [u8; 1024]> + '_` + new `test-internals` feature on `shekyl-pow-randomx` `Cargo.toml` `[features]` | `pub fn` gated on `#[cfg(feature = "test-internals")]` | R5-D1, R1-D14 | Visitor-style iterator yielding the 262_144 1-KiB Argon2d-derived cache-memory blocks in little-endian byte order, consumed by the harness's R1-D14 SHA-256 cache-equivalence precondition (§5.1.7). Zero heap allocation, no `unsafe_code`, no new workspace deps; per-iteration stack cost 1 KiB. The `test-internals` feature is enabled exclusively by `shekyl-randomx-differential` (§5.1.15); production builds never see the accessor. Any future addition under the same feature gate requires the same plan-doc amendment discipline as a production-surface addition per §3.17 R5-D1. |
 
 #### §5.4 CMake wiring (`external/CMakeLists.txt`)
 
@@ -5576,11 +5767,11 @@ per [Phase 2F §5](./RANDOMX_V2_PHASE2F_PLAN.md) precedent.
 
 The implementation PR does **not** introduce:
 
-- Any new verifier-crate-side API surface (per R1-D10 (b) close)
+- Any new verifier-crate-side **production** API surface (per R1-D10 (b) close)
 - Any new committed reference vectors (per §7 disposition; the C reference is runtime ground truth)
 - Any consumption of the harness's `randomx-v2-sys` from other workspace members (per R1-D13 (c) close; `randomx-v2-sys` is sole-consumer-locked to `shekyl-randomx-differential`)
-- Any cfg flag or feature gate on `shekyl-pow-randomx` for harness-only behavior (per R1-D10 (b) close; no `harness-trace` feature)
-- Any modification to the existing Phase 2F R3-frozen public surface (`PreparedCache`, `Seedhash`, `compute_hash`, `CacheStore`); the harness consumes the surface as-is
+- Any cfg flag or feature gate on `shekyl-pow-randomx` for **production** behavior modification (per R1-D10 (b) close; no `harness-trace` feature). The R5-D1 (§3.17) `test-internals` feature is a *test-infrastructure* carve-out: invisible in default-features builds, enabled exclusively by `shekyl-randomx-differential` (§5.1.15), and gating only the §5.3.3 cache-byte-access accessor. It is not "harness-only behavior" in the §5.3.1 sense — no production code path branches on it.
+- Any modification to the existing Phase 2F R3-frozen production public surface (`PreparedCache`, `Seedhash`, `compute_hash`, `CacheStore`); the harness consumes the production surface as-is. The R5-D1 carve-out adds `PreparedCache::cache_block_bytes_for_testing` as a feature-gated public method on the same type, but the production-surface methods (`derive`, `seedhash`) remain unmodified.
 
 #### §5.7 Drift-prevention discipline
 
@@ -5594,6 +5785,21 @@ in §5.6) is grounds for scope-creep rejection per
 "while we're here is the enemy" discipline. The implementation PR
 commit message cites the contract entry it closes against (e.g.,
 "closes §5.1.7 R1-D14 cache-precondition module").
+
+**Test-infrastructure carve-out (R5-D1).** The §5.3.3 surface
+(`PreparedCache::cache_block_bytes_for_testing` + `test-internals`
+feature) is `cfg`-gated test infrastructure per §3.17 R5-D1; it is
+not "new production surface" in the §5.3.1 sense. Reviewer
+rejection criterion is unchanged in spirit: any extension of the
+`test-internals` feature surface beyond §5.3.3 (a second public
+function gated on `test-internals`, a new type re-export gated on
+`test-internals`, downstream activation of the feature by a crate
+other than `shekyl-randomx-differential`) requires a plan-doc
+amendment matching the same discipline as a production-surface
+addition. The R5-D1 carve-out's auditable boundaries are: (a) the
+feature name is `test-internals` (not generic); (b) the sole
+consumer is the harness crate; (c) the only `pub` item under the
+gate is the §5.3.3 accessor.
 
 **Round 2 may reshape this contract.** Per
 [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
@@ -6073,3 +6279,4 @@ the round-count budget.
 | Round 3 substrate-completeness amendment (active threat surface + mitigation patterns) | 2026-05-24 | Post-Round-3-close substrate amendment incorporating "harness as attack vector" framing not present in the initial Round 3 close. **§4 restructured** into passive threat surface (§4.4 A1–A10; failures from substrate drift, discipline gaps, or accidental regression) and **active threat surface** (§4.5 T-A1–T-A11; failures from deliberate modification of harness code, corpus, assertions, or measurement); five attacker-objective groupings (silent-pass / fail-loud-DoS / oracle / laundering / rubber-stamp). **§4.6 mitigation patterns (M1–M4)** added: **M1 committed canonical outputs** (`canonical_outputs.rs` per §5.1.17; `rust == c == committed_canonical` three-leg comparison; defends T-A1/T-A2/T-A3/T-A10); **M2 mutation testing via `cargo-mutants`** (nightly cadence on both harness and verifier crates per §5.5.6; absorbed as Round-3-pinned 2g substrate per user directive — was Round-1 out-of-scope per §6.9; defends T-A1/T-A3/T-A9); **M3 PR-template discipline** (convention-enforced checklist in `.github/pull_request_template.md` per §5.5.5; harness-modification cite + verifier-modification audit-against-actual-code line range cite + harness-pass-as-evidence audit co-citation; defends T-A1 through T-A8/T-A10/T-A11); **M4 invocation banner** (`invocation_banner.rs` per §5.1.18; stderr-emitted disposition-source + leg-3-backstop framing + modification-discipline pointer; defends T-A7/T-A8/T-A11). **§4.7 negative space** renumbered from §4.5 (N1–N5 unchanged); **§4.8 implementation-PR transition gate** renumbered from §4.6 and updated to 13-row substrate-completeness table reflecting the new §4.5/§4.6 rows and §5/§6/§8 absorptions. **§5 hand-off contract extended** with §5.1.17 + §5.1.18 (harness-crate surfaces) + §5.5.5 + §5.5.6 (CI surfaces); §5.7 drift-prevention extended with canonical-output regeneration discipline (regeneration is its own PR with dedicated commit message + audit-against-actual-code verification at regeneration-PR review time). **§6 test plan extended** with §6.7.5 Category H active-threat-surface defense: T16 canonical-output assertion (per-PR + nightly + release-gate; budget absorbed into existing T1+T3 runs) + T17 invocation-banner emission (per-PR) + T18 cargo-mutants zero-survival or skip-list-justified (nightly only — slow per F5 budget; separate workflow per §5.5.6); §6.9 Round-1 "Mutation testing — out-of-scope" entry explicitly **closed by amendment**. **§8 commit table preserved at 10 commits** per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) rule-2 ceiling; M1/M3/M4/M2 absorbed into existing commit boundaries (M1 → C5 corpus; M4 → C9 failure-output/stderr; M3+M2 → C10 CI-wiring) per §8.1 Round-3 absorption note + §8.3 scope-discipline preservation. **One new reopen-criterion class** added to §4.8 post-implementation reopen criteria: M2 mutation-pass surviving-mutation skip-list contestation triggers a discipline-amendment round (alongside the existing four post-implementation reopen classes). **Why an amendment, not Round 4.** The active-threat-surface framing extends the threat-model surface but does not reframe the architectural dispositions: none of T-A1–T-A11 reopens a Round-1 or Round-2 disposition; none reshapes the §3.15 actor-shape framing; none reshapes the §4.1/§4.2/§4.3 load-bearing-property discharges. The amendment is substrate-completeness work the initial Round 3 close was missing — a substrate-anchored completion of the §4 threat-model close, not a new design round per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc) (the substrate-change is "active-threat-surface framing surfaced post-Round-3-close"; the re-evaluation shape is "substrate-completeness amendment that extends §4 + §5 + §6 + §8 + §11 without re-opening prior rounds"). **Round count unchanged at 3 substantive close-rounds** per §0 calibration; the amendment is an extension of Round 3's close-substrate, not a Round 4 opening. **Project-posture observation (broader project record).** The amendment is the first instance of the **"substrate-completeness amendment" round-shape** in the project; the shape's auditability comes from: (a) explicit citation of why it is not a new round (substrate-extending, not architecture-reframing), (b) the §11 row naming both what changed and what didn't, and (c) the preserved-≤10-commit absorption into existing §8.1 boundaries demonstrating the amendment fits within the rule-2 ceiling. The shape complements the iterative-design-round shape; future plan-docs facing the same post-close-substrate-extension pattern can reach for the amendment shape directly rather than re-deriving the disposition. **Deferred-threat-model-closure pattern validated.** The Round-2 → Round-3 sequence (architecture in Round 2, threats against that architecture in Round 3) is now substrate-anchored evidence that the "deferred threat-model closure" pattern is correct. The §3.15 actor-shape framing was the load-bearing input for §4.5's eleven active-threat-surface classes: without §3.15's enumeration of modes, state, dispatch surface, and orchestration lifecycle, the T-A attack classes would have been substantially weaker (e.g., "T-A1 comparison-operator tampering" is meaningfully characterizable only after §3.15.1 defines the multi-mode dispatch surface that the tampered operator operates within). The pattern predicts that §4 closes more completely when §3 is closed first — architecture-first, threats-against-architecture-second — and this amendment is the first measured instance of that prediction being correct. Future plan-docs should record this cross-round dependency explicitly in §3's final disposition ("§3 closed; §4 threat-model close deferred to Round N to benefit from seeing the architectural substrate closed first"). |
 | Round 4 (Implementation-correctness decisions R4-D1 through R4-D8) | 2026-05-25 | Pre-implementation-PR correctness round opened to close eight specification gaps that would otherwise require implementer guesswork. Supersedes the §11 Round 3 terminal observation ("no Round 4 expected"); the ≤3-round estimate in §0 is superseded by substrate reality (the gaps required reading the actual CMakeLists.txt, randomx.h, Cargo.toml, and lockfile — not reconstructible from the design-round-time substrate). **R4-D1**: `sha2`, `rand_chacha`, `serde_json` not in workspace `[dependencies]` — verified at source per `17-dependency-discipline.mdc`; must be added to `rust/Cargo.toml` at sha2="0.10", rand_chacha="0.3", serde_json="1" before C1. **R4-D2**: `build.rs` link directive corrected from `static=shekyl_randomx_v2` (CMake imported-target name) to `static=randomx` (actual filename `librandomx.a` per ExternalProject_Add `RANDOMX_V2_LIB` in CMakeLists.txt). **R4-D3**: `RANDOMX_V2_INSTALL_DIR` env var pinned as the mechanism by which `build.rs` discovers the CMake install prefix; reads `env::var("RANDOMX_V2_INSTALL_DIR")`, emits `cargo:rustc-link-search=native={dir}/lib`; panics with pointer to `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS` if unset. **R4-D4**: All seven `extern "C"` signatures enumerated explicitly from randomx.h read: `randomx_alloc_cache`, `randomx_init_cache`, `randomx_get_cache_memory`, `randomx_release_cache`, `randomx_create_vm`, `randomx_destroy_vm`, `randomx_calculate_hash`; opaque `RandomxCache`/`RandomxVm` struct bodies; `RandomxFlags = c_int`; dataset-family and pipeline-family functions out-of-scope. **R4-D5**: C oracle uses `RANDOMX_FLAG_DEFAULT` (0) for both cache and VM allocation; light mode (cache only, no dataset); one cache+VM allocated per seedhash, VM reused across data values for same seedhash, freed before next seedhash; `randomx_get_cache_memory` used for SHA-256 precondition. **R4-D6**: Corpus-size CLI flags `--random-corpus-seedhashes <N>` (default 32) and `--random-corpus-data-per-seedhash <M>` (default 32) pin the mechanism for per-PR (16×8) vs nightly (32×32) corpus-size selection; adversarial corpus always included in full. **R4-D7**: Canonical-outputs chicken-and-egg resolved by `[[bin]] gen-canonical-outputs` generation binary in harness crate (§5.2.6); uses C oracle + corpus + SHA-256 to produce `canonical_outputs.rs` content; runs after C3 linkage is established; output committed in C5; eliminates implementer's guesswork about how CANONICAL_HASHES are first produced. **R4-D8**: T11 (`failure_output_schema_round_trip`) reframed as a `#[cfg(test)]` unit test in `src/failure_output.rs` exercising JSON serialization + required-field presence; `--mode=test-failure` binary mode removed (was never in §3.15 mode table; would have required mode-dispatch infrastructure for a test-only path). **Implementation commit budget extended to 11**: C0 (workspace manifest: add sha2/rand_chacha/serde_json) precedes C1; alternatively the three lines absorb into C1. None of R4-D1 through R4-D8 reopens a Round-1/2/3 architectural disposition; all eight close implementation-specification gaps surfaced by reading the actual substrate. **Round 4 substrate-completeness amendment (R4-D9 + pins):** Three additional items pinned in the same session: (1) R4-D1 cargo audit/deny preflight check added to the C0/C1 preflight discipline; (2) R4-D5 lifecycle-symmetry-as-measurement-discipline framing added, NULL-handling forward reference to §5.1.8 added, concurrent C-oracle thread-safety recorded as architectural N/A (concurrent mode uses only the Rust verifier, C oracle not called); (3) R4-D9 new decision: C-side CMake build mode must be Release — `ExternalProject_Add` inherits `CMAKE_BUILD_TYPE` from parent (verified at source, `external/CMakeLists.txt` line 146); Debug-mode C oracle inflates timing measurements and can exceed §5.5.2 nightly budget; CI workflow must pin `-DCMAKE_BUILD_TYPE=Release` explicitly. **Project-posture observation (broader project record):** Round 4 is the **second instance of a pre-implementation round** in the project (first instance: Phase 2d's R0-D5 pre-flight, which tested the design against measurement before implementing; Round 4 tests the specification against substrate before implementing). Two instances is the rule-26 promotion threshold; the "pre-implementation round" discipline is now substrate-anchored and is queued for the next `26-sub-pr-design-discipline.mdc` amendment as: "Substantive design rounds (Round 1-N) close architecture and threat model. A pre-implementation round (Pre-Flight or Implementation-Correctness) closes specification gaps surfaced by reading the actual substrate the implementation will be written against. The pre-implementation round is not optional; it is the gate between design-phase close and implementation-PR open." FOLLOWUPS item queued; this amendment does not open a Round 5. **Four project-level disciplines accumulated in the 2g arc** (each citable by future sub-PRs and by the next rule-26 amendment): (a) PreparedCache reframe absorbed from 2f (forward-action from 2f §10.4); (b) four-crate layering pattern (Round 2 §3.15 actor shape — harness as orchestrator-actor, canonical template for future Rust extraction sub-PRs); (c) defense-in-depth threat model with active threat surface framing (Round 3 §4.5 T-A1–T-A11 + M1–M4 mitigation patterns — first instance of active-threat-surface enumeration in the project); (d) pre-implementation implementation-correctness round discipline (Round 4 — second instance of pre-implementation round after Phase 2d pre-flight, promoted to rule-26 amendment candidate). The implementation PR per §8 is now authorized against this complete substrate. |
 | Round 3 (§4 threat-model close + implementation-PR transition gate) | 2026-05-24 | Closes §4 against the Round-1- + Round-2-anchored substrate with **ten attack classes (A1–A10) + five negative-space classes (N1–N5) + three load-bearing-property discharges + an implementation-PR transition gate**. **Three load-bearing-property discharges land before the attack-class enumeration**, each named explicitly so the discharges are auditable as their own dispositions rather than buried inside individual attack-class entries: **§4.1 corpus-coverage-as-leg-3-completeness discharge** (closes the inherited Round-0 → Round-1 → Round-2 obligation; pins all three corpus-coverage classes — random per R1-D4, adversarial per R1-D5+R1-D6, worst-case timing per R1-D8 — as substrate-load-bearing with substrate-anchored reopening criteria that catch silent thinning; the discharge is the explicit pinning of each class as load-bearing-against-substrate-anchored-numeric-criteria, not "the three classes exist therefore the obligation is satisfied"); **§4.2 harness-as-actor-invariants discharge** (closes the inherited Round-2 obligation; A8/A9/A10 dispositions explicitly cite §3.15.2 mode-boundary, §3.15.4 phase-boundary + R1-D14 amendment + R1-D9 amendment, §3.15.6 framing as load-bearing substrate); **§4.3 three-leg audit-posture rebalance discharge** (operationalizes the leg-3 catch surface as two structurally-distinct mitigation classes — leg-3-catch-of-verifier-bug for A1/A2/A6 and leg-3-catch-capacity-degradation for A3/A4/A5/A7/A8/A9/A10 — so future contributors can classify changes against the two-kind framework without re-deriving substrate). **§4.4 attack-class enumeration (A1–A10)** uses the [Phase 2F §4](./RANDOMX_V2_PHASE2F_PLAN.md) F1–F7 precedent shape (Attack / Round 3 disposition / Test coverage / Reversion clause where applicable). **A1 corpus-generation false-agreement bug** mitigated by T9 (determinism gate) + T10 (drift-detection pin); residual accepted as audit-against-actual-code-discipline catch at PR-review time. **A2 R1-D14 precondition bypass** mitigated by §3.15.4 phase-boundary discipline + T3 + T11 (synthetic-divergence round-trip); residual accepted as multi-component discipline-failure-mode requiring concerted bypass. **A3 CMake-trigger bypass** mitigated by R1-D3 (c) implication mechanism + T12; residual accepted at §3.15-style review discipline. **A4 R1-D11 failure-output incompleteness** mitigated by T11 (11-required-fields schema round-trip) + forward-deferred extension shape (R1-D10 + R1-D14 future-deferred reopens); residual accepted as future-deferred reopen criterion. **A5 CacheStore Arc retention regression (F2 backstop bypass)** mitigated by R1-D9 amendment mode-scoping + T8 measurement methodology + Phase 2F F2 caller-discipline boundary; residual accepted at PR-review discipline. **A6 adversarial-corpus drift** mitigated by §1.7 fork-pin coupling + T15 signature audit + T10 corpus-hash; residual accepted at §1.7 fork-pin-advance PR discipline. **A7 reviewer-blind nightly failures** mitigated by R1-D12 split-cadence-with-required-status-check + §1.7 + R1-D12 + T10/T15 composition; residual accepted for V3.0 small-team substrate (reversion criterion: >7-day discovery gap triggers active monitoring). **A8 mode-boundary violation (§3.15.2 process-scoping bypass)** mitigated by §3.15.3 mode-mutual-exclusion pin + §3.15.2 free-between-modes pin + §3.15.6 framing; residual accepted at §3.15-frame audit time. **A9 phase-boundary violation (R1-D14 + R1-D9 amendment invariants)** mitigated by §3.15.4 phase-boundary discipline pin + R1-D14 CacheStore-empty + R1-D9 RSS-sampler-scoping invariants + indirect catch via T3/T7/T8; residual accepted at §3.15-frame audit time. **A10 per-mode-state-shape regression (R1-D9 RSS-bound inheritance-by-default)** mitigated by R1-D9 amendment mode-scoping + §3.15.2 per-mode-state-shape table + indirect catch via T8 per-mode applicability; residual accepted at §3.15-frame audit time. **§4.5 negative space (N1–N5)** explicitly enumerates classes 2g does NOT defend against with substrate-anchored reopening criteria: **N1** V4 lattice-transition substrate shift (out of scope for V3.x; reopen on NIST lattice standardization); **N2** multi-platform corpus determinism (out of scope for V3.0; reopen on macOS/Windows CI matrix expansion); **N3** PoW consensus attacks (out of scope permanently — operates upstream of verifier; cross-link to Phase 0 / [Phase 2F F7](./RANDOMX_V2_PHASE2F_PLAN.md) / [LWMA-1](./DAA_LWMA1_PLAN.md)); **N4** side-channel attacks (out of scope; cross-link to [Phase 2c §5.11.4](./RANDOMX_V2_PHASE2C_PLAN.md) public-input-only scope note); **N5** adversarial CI infrastructure (out of scope; cross-link to reproducible-Guix-build + signed-release-tag disciplines per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) + [`docs/SIGNING.md`](../SIGNING.md)). **§4.6 implementation-PR transition gate** verifies all 11 substrate rows are either closed or scaffolded with sufficient substance: §1 (frozen at Phase 2F R3) + §2 (absorbed Round 0) + §3 R1-D1–R1-D14 (closed Round 1 + tightened Round 2) + §3.15 (substantive Round 2 — six subsections covering modes/state/dispatch/lifecycle/forward-template/negative-space) + §4 A1–A10+N1–N5 (this round) + §5 (Round 1 initial substance: 16+5+2+3+4 = 30 rows) + §6 (Round 1 initial substance: 15-row T# matrix) + §7 (Round 0 scaffold sufficient) + §8 (Round 1 initial substance: 10-commit sequence) + §9 (Round 0 scaffold sufficient) + §10 (Round 0 scaffold sufficient). Implementation-PR opening is **authorized** per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) rule 2 (short-lived branch, ≤10 commits, ≤5 working days) with §8.4 PR-opening citation discipline + [`90-commits.mdc`](../../.cursor/rules/90-commits.mdc); subsequent plan-doc changes are substrate-anchored reopens per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc), not iterative design-rounds. **Four post-implementation-PR reopen-criterion classes named** (substrate-anchored, not preference-anchored): §1 substrate gap, §3.15 actor-shape discipline gap, A1–A10 disposition gap, R1-D# numeric pin substrate-unsoundness. **Project-posture observation (broader project record).** Round 3 closes the design-phase substrate; 2g transitions to implementation-PR with **3 substantive close-rounds within the §0 ≤3-round target** (Round 0 + Round 0 calibration + Round 1 + Round 2 + Round 3, where Round 0 calibration is substrate-tightening rather than a separate close-round). The pattern reaffirms the §11 Round 2 fourth-clean-Round-1 project-posture observation — converged-state-of-project-posture per [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc) discovery-cadence-compounding-substrate framing. Round 3's adversarial pass against the Round-1+Round-2 substrate surfaces no new attack-class reframe; the §4.4 enumeration absorbs the seven Round-1 pre-bound classes + three Round-2 obligations + five negative-space classes without restructuring. None of the Round 3 close reopens a §1-frozen surface, reshapes a Round-1 disposition, reshapes a Round-2 amendment, or reshapes the §3.15 actor-shape framing; all Round 3 additions are substrate-anchored attack-class dispositions or substrate-anchored discharge of inherited obligations. **The plan-doc design rounds are closed.** The implementation PR per §8 starts at the current substrate state; the next plan-doc activity is reactive (post-implementation-PR reopen against substrate-anchored evidence) not iterative (no Round 4 expected; if one arrives, it is substrate-reopen-driven per the four post-implementation reopen classes). |
+| Round 5 (Pre-C6 substrate-completeness amendment — R5-D1 `test-internals` feature-gate carve-out) | 2026-05-25 | Pre-C6 substrate amendment opened to close a single substrate-anchored contradiction surfaced during implementation-PR pre-flight, *before* the first commit that exercises R1-D14 (C6's `cache_precondition` module). The contradiction is real: R1-D14 prescribes a SHA-256 fingerprint comparison between the Rust-derived `PreparedCache`'s 256-MiB Argon2d-fill memory and the C reference's `randomx_get_cache_memory(cache)` return; §5.3.1 / §5.6 / §5.7 forbid the verifier crate from gaining new public surface in 2g; the existing `PreparedCache` exposes no public accessor for cache memory and the inner `Cache` is `pub(crate)`. R1-D14 + §5.3.1 are mutually unsatisfiable as written. **R5-D1**: closed at **Option C2 (feature-gated accessor)** per the standard Rust pattern for "expose internals to test infrastructure without exposing to production." Three structural option classes evaluated; the chosen disposition is the one that preserves §5.3.1's spirit (production surface untouched) while satisfying R1-D14's evidence requirement (cache-byte access at runtime). Implementation: (1) new feature `test-internals = []` on `shekyl-pow-randomx`'s `Cargo.toml`; (2) new accessor `PreparedCache::cache_block_bytes_for_testing(&self) -> impl Iterator<Item = [u8; 1024]> + '_` gated on `#[cfg(feature = "test-internals")]`; (3) harness crate (`shekyl-randomx-differential`) declares `features = ["test-internals"]` on its `shekyl-pow-randomx` dep, the *sole* consumer of the feature. The visitor shape (`impl Iterator<Item = [u8; 1024]>`) avoids returning `&[u8]` directly because the verifier's `Box<[argon2::Block]>` representation cannot be reinterpreted as `&[u8]` without either `unsafe_code` (forbidden by `#![deny(unsafe_code)]` at `lib.rs:166`), a 256-MiB `Vec<u8>` materialization (defeats the R1-D14 drop-discipline memory budget), or a new workspace dep (`bytemuck`/`zerocopy`, declined per `17-dependency-discipline.mdc`); the visitor yields owned 1-KiB arrays with ~1 KiB stack-transient cost per block. **Plan-doc surfaces amended:** §3.17 (new section with the R5-D1 decision + reopening criteria + pre-implementation-surface-enumeration forward-action), §5.3.1 (production-surface scope clarified; carve-out cite), new §5.3.3 row (the accessor + feature), §5.1.7 (consumption cite in `cache_precondition.rs`), §5.1.9 (`rust_subject.rs` carries no internals access, only the precondition module does), §5.1.15 (harness Cargo.toml `features = ["test-internals"]`), §5.6 (negative space updated to clarify "no new *production* surface"; explicit not-`harness-trace` distinction), §5.7 (drift-prevention discipline extended with test-infrastructure carve-out clause naming the auditable boundaries: feature name `test-internals`, sole consumer `shekyl-randomx-differential`, sole `pub` item §5.3.3 accessor). **Substrate-anchored amendment shape, not disposition reversal,** per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc): the §5.3.1 / §5.6 / §5.7 prohibitions were correctly framed for *production* surface and remain unmodified in that scope; R5-D1 carves out an additional class (`cfg(feature = "test-internals")`-gated test-infrastructure) that is *not new production surface* in the §5.3.1 sense, mirroring Round 2's T2 layer-separation framing. Any addition of an item under the same feature gate (a second `pub fn`, a type re-export, downstream activation by a crate other than the harness) requires the same plan-doc amendment discipline as a production-surface addition. **R4-blind-spot finding queued for rule-26 amendment:** R4 missed this gap because its implementation-correctness checklist enumerated the plan-doc substrate (workspace deps, CMake wiring, ABI signatures) but did not enumerate the *actual* verifier-crate surface against the plan-doc's references. The check is mechanical (`cargo doc` + `rg`) and would have caught R5-D1 at R4-evaluation time. The forward-action queued for the next [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) amendment is a **"surface enumeration pass"** added to pre-implementation rounds: for each consumer the plan-doc references, confirm the consumed surface actually exists in the consumed crate at the workspace-pinned version. This forward-action is not landed in this amendment; it is queued for rule-26's next substrate-completeness pass. **None of R5-D1 reopens a Round-1 / 2 / 3 / 4 disposition;** the §5.3.1 production-surface prohibition is unchanged in scope, the R1-D14 SHA-256 comparison shape is unchanged, the Round-2 T2 layer-separation framing is reaffirmed. The amendment is substrate-completeness work — the second instance of the "substrate-completeness amendment" round-shape in the project (first instance: the Round 3 amendment with active-threat-surface framing). The shape's value is now substrate-anchored: amendments that extend the substrate without reframing closed dispositions are not new design rounds; they are completion of work the prior round did not fully cover. **Implementation PR precursor sequencing:** this amendment lands as its own short-lived branch (`feat/randomx-v2-phase2g-r5-d1-test-internals-gate`) per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc), separate from the §8 implementation PR. The implementation PR proceeds C0–C5 unchanged (none touches the verifier crate or invokes `PreparedCache::derive`), then C6 onward consumes the §5.3.3 accessor under the `test-internals` feature gate per the amended §5.1.7 + §5.1.15. **Round count.** Round 5 is the first post-design-close substrate amendment that adds a *decision* (R5-D1) rather than a substrate-extension pin; the precedent in 2g is the Round 3 substrate-completeness amendment, which was extension-only (the §4 restructure into passive/active + M1–M4 mitigation patterns). The §0 "≤3 substantive close-rounds" calibration is preserved in the project-record sense (architecture closed at Round 2; threats at Round 3; implementation correctness at Round 4 + Round 5 = pre-implementation correctness across two rounds rather than one); R5-D1's existence reaffirms the rule-26 pre-implementation-round discipline rather than violating the close-round-count expectation. |
