@@ -36,7 +36,8 @@
 //!   per §3.19 R7-D4 to the post-2g adversarial-corpus design
 //!   round).
 //! - **C8:** `mode_concurrent` (§5.1.13) implementation +
-//!   `--mode=concurrent` dispatch wire-through + RSS-bound
+//!   `--mode=concurrent` dispatch wire-through + `--workers=<N>`
+//!   flag wired (R1-D9 + §3.15.3 default = 5) + RSS-bound
 //!   assertion (T7 + T8).
 //! - **C9:** `failure_output` (§5.1.14) JSON schema +
 //!   `invocation_banner` (§5.1.18) stderr emission + deletion of
@@ -59,7 +60,7 @@
 use std::env;
 use std::process::ExitCode;
 
-use shekyl_randomx_differential::{mode_correctness, mode_latency};
+use shekyl_randomx_differential::{mode_concurrent, mode_correctness, mode_latency};
 
 /// R4-D6 default for `--random-corpus-seedhashes` (nightly sizing
 /// per §6.1 T1; per-PR CI passes `--random-corpus-seedhashes=16`).
@@ -74,6 +75,16 @@ const DEFAULT_RANDOM_CORPUS_DATA_PER_SEEDHASH: usize = 32;
 /// count). Per the §3.15.3 CLI sketch's "[--samples=<u32>] # default:
 /// 1024; valid on latency only" line.
 const DEFAULT_LATENCY_SAMPLES: usize = 1024;
+
+/// R1-D9 / §3.15.3 default for `--workers` (concurrent mode worker
+/// count). Per the §3.15.3 CLI sketch's "[--workers=<u32>] # default:
+/// 5; valid on concurrent only" line; the constant is also re-
+/// exposed as [`mode_concurrent::DEFAULT_WORKER_COUNT`] for the
+/// mode-module's internal references. Re-stating the literal here
+/// keeps the CLI-default substrate at the binary boundary (a
+/// reviewer reading `main.rs` sees the default without spelunking
+/// the library).
+const DEFAULT_CONCURRENT_WORKERS: usize = 5;
 
 /// Modes enumerated by §5.1.1 (CLI surface) + §5.7 (drift-prevention).
 ///
@@ -152,6 +163,9 @@ struct ModeInvocation {
     /// `--samples=<N>` override (R1-D7; valid on latency only;
     /// default [`DEFAULT_LATENCY_SAMPLES`]).
     samples: Option<usize>,
+    /// `--workers=<N>` override (R1-D9; valid on concurrent only;
+    /// default [`DEFAULT_CONCURRENT_WORKERS`]).
+    workers: Option<usize>,
 }
 
 /// Top-level parsed command. The C4 skeleton recognized only
@@ -221,6 +235,7 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
     let mut random_corpus_seedhashes: Option<usize> = None;
     let mut random_corpus_data_per_seedhash: Option<usize> = None;
     let mut samples: Option<usize> = None;
+    let mut workers: Option<usize> = None;
     for arg in args {
         if arg == "--help" || arg == "-h" {
             return Ok(Command::Help);
@@ -271,6 +286,13 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             samples = Some(parse_positive_usize("samples", value)?);
             continue;
         }
+        if let Some(value) = arg.strip_prefix("--workers=") {
+            if workers.is_some() {
+                return Err("--workers specified more than once".to_owned());
+            }
+            workers = Some(parse_positive_usize("workers", value)?);
+            continue;
+        }
         return Err(format!("unknown argument '{arg}'; pass --help for usage"));
     }
     let mode = mode.ok_or_else(|| "no --mode specified; pass --help for usage".to_owned())?;
@@ -318,12 +340,19 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             mode.as_str()
         ));
     }
+    if workers.is_some() && mode != Mode::Concurrent {
+        return Err(format!(
+            "--workers is valid only with --mode=concurrent; got --mode={}",
+            mode.as_str()
+        ));
+    }
     Ok(Command::Mode(ModeInvocation {
         mode,
         debug_cache_divergence_seedhash,
         random_corpus_seedhashes,
         random_corpus_data_per_seedhash,
         samples,
+        workers,
     }))
 }
 
@@ -352,7 +381,8 @@ fn print_help() {
              --seedhash=<64-char-lowercase-hex>        Seedhash for --debug-cache-divergence\n  \
              --random-corpus-seedhashes=<N>            Random corpus seedhash count (default 32; correctness only)\n  \
              --random-corpus-data-per-seedhash=<M>     Random corpus data-per-seedhash count (default 32; correctness only)\n  \
-             --samples=<N>                             Latency mode sample count (default 1024; latency only)\n\
+             --samples=<N>                             Latency mode sample count (default 1024; latency only)\n  \
+             --workers=<N>                             Concurrent mode worker count (default 5; concurrent only)\n\
          \n\
          --debug-cache-divergence requires --seedhash=<hex> and is valid\n\
          only with --mode=correctness (per §5.1.7 + T4).\n\
@@ -389,16 +419,15 @@ fn main() -> ExitCode {
 /// Per §8.1's C7 → C9 sequencing:
 ///
 /// - **C7**: `correctness` (§5.1.10) + `latency` (§5.1.12) wired.
-/// - **C8**: `concurrent` (§5.1.13) wired alongside `worst-case`.
+/// - **C8**: `concurrent` (§5.1.13) wired with `--workers=<N>`.
 /// - **C9**: `failure_output` JSON schema + invocation banner +
 ///   `mode_worst_case` per §3.19 R7-D4 deferral resolution (or
 ///   permanent deferral if the post-2g adversarial-corpus design
 ///   round confirms infeasibility).
 ///
-/// Until then, `worst-case` and `concurrent` surface clean
-/// "deferred" / "not yet wired" errors with the relevant plan-doc
-/// anchors so the C7 → C9 transitional state is reviewer-attributable
-/// per §8.2's bisection invariant.
+/// Until then, `worst-case` surfaces a clean "deferred" error
+/// with the R7-D4 anchor so the C7 → C9 transitional state is
+/// reviewer-attributable per §8.2's bisection invariant.
 fn dispatch(invocation: &ModeInvocation) -> ExitCode {
     match invocation.mode {
         Mode::Correctness => {
@@ -456,16 +485,17 @@ fn dispatch(invocation: &ModeInvocation) -> ExitCode {
             ExitCode::FAILURE
         }
         Mode::Concurrent => {
-            // §8.1 C8: --mode=concurrent lands at C8 alongside
-            // RSS-bound assertion (§5.1.13 + T7 + T8). Surface a
-            // clean "lands at C8" error in the C7 → C8 window
-            // rather than silently exiting zero.
-            eprintln!(
-                "error: --mode=concurrent dispatch lands at C8 \
-                 per RANDOMX_V2_PHASE2G_PLAN.md §8.1; re-run \
-                 after the C8 commit lands on this branch."
-            );
-            ExitCode::FAILURE
+            let workers = invocation.workers.unwrap_or(DEFAULT_CONCURRENT_WORKERS);
+            match mode_concurrent::run(workers) {
+                Ok(report) => {
+                    println!("{report}");
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    ExitCode::FAILURE
+                }
+            }
         }
     }
 }
@@ -532,6 +562,51 @@ mod tests {
                 "mode {s}: --random-corpus-data-per-seedhash default unset"
             );
             assert_eq!(parsed.samples, None, "mode {s}: --samples default unset");
+            assert_eq!(parsed.workers, None, "mode {s}: --workers default unset");
+        }
+    }
+
+    /// `--workers=<N>` on `--mode=concurrent` parses cleanly. Pins
+    /// R1-D9's `--workers` override path.
+    #[test]
+    fn parse_workers_on_concurrent() {
+        let a = args(&["--mode=concurrent", "--workers=4"]);
+        let parsed = expect_mode(parse_args(&a));
+        assert_eq!(parsed.mode, Mode::Concurrent);
+        assert_eq!(parsed.workers, Some(4));
+    }
+
+    /// `--workers=0` is rejected at parse time.
+    #[test]
+    fn parse_workers_zero_rejected() {
+        let a = args(&["--mode=concurrent", "--workers=0"]);
+        let err = parse_args(&a).expect_err("expected Err for --workers=0");
+        assert!(err.contains("must be >= 1"), "got: {err}");
+    }
+
+    /// `--workers=<N>` specified twice errors.
+    #[test]
+    fn parse_workers_twice_errors() {
+        let a = args(&["--mode=concurrent", "--workers=4", "--workers=5"]);
+        let err = parse_args(&a).expect_err("expected Err for duplicate flag");
+        assert!(
+            err.contains("--workers specified more than once"),
+            "got: {err}"
+        );
+    }
+
+    /// `--workers=<N>` on a non-concurrent mode errors with the
+    /// mode-scope-violation diagnostic.
+    #[test]
+    fn parse_workers_on_non_concurrent_errors() {
+        for non_concurrent in ["correctness", "worst-case", "latency"] {
+            let a = args(&[&format!("--mode={non_concurrent}"), "--workers=4"]);
+            let err =
+                parse_args(&a).expect_err(&format!("expected Err for --mode={non_concurrent}"));
+            assert!(
+                err.contains("--mode=concurrent"),
+                "for --mode={non_concurrent}: got {err}"
+            );
         }
     }
 

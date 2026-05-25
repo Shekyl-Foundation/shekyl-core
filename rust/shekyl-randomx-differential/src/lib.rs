@@ -51,9 +51,12 @@
 //! - **C6:** `c_oracle` (§5.1.8 safe FFI wrapper) + `rust_subject`
 //!   (§5.1.9 Phase-2F-frozen-surface wrapper) +
 //!   `cache_precondition` (§5.1.7 R1-D14 SHA-256 + T4 byte-diff).
-//! - **C7–C9:** mode modules (correctness / latency / concurrent;
-//!   worst-case deferred per §3.19 R7-D4) + failure output +
-//!   invocation banner per §8.1.
+//! - **C7:** `mode_correctness` (§5.1.10) + `mode_latency`
+//!   (§5.1.12) implementations.
+//! - **C8:** `mode_concurrent` (§5.1.13) implementation +
+//!   RSS-bound assertion (T7 + T8).
+//! - **C9:** failure output (§5.1.14) + invocation banner
+//!   (§5.1.18); worst-case deferred per §3.19 R7-D4.
 //!
 //! ## §5.7 drift-prevention boundary
 //!
@@ -69,6 +72,7 @@ pub mod c_oracle;
 pub mod cache_precondition;
 pub mod canonical_outputs;
 pub mod corpus_random;
+pub mod mode_concurrent;
 pub mod mode_correctness;
 pub mod mode_latency;
 pub mod rust_subject;
