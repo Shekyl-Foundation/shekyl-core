@@ -68,6 +68,14 @@ members = [
     # invariant via `cargo metadata`. Fork-pin coupled per §1.7 +
     # §5.2.4 `[package.metadata.shekyl] fork-pin-sha`.
     "randomx-v2-sys",
+
+    # Phase 2g Rust/C differential test harness binary. Compares
+    # the `shekyl-pow-randomx` verifier against the `external/randomx-v2`
+    # C reference (via `randomx-v2-sys`). Sole consumer of the
+    # `randomx-v2-sys` crate (per R1-D13) and sole consumer of the
+    # `shekyl-pow-randomx` `test-internals` feature (per R5-D1).
+    # See `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.1 + §8.
+    "shekyl-randomx-differential",
 ]
 # Local-only harnesses that must not participate in the parent
 # workspace. Excluded here (rather than relying on the nested

@@ -3353,6 +3353,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-randomx-differential"
+version = "3.1.0"
+dependencies = [
+ "rand_chacha 0.3.1",
+ "randomx-v2-sys",
+ "serde_json",
+ "sha2",
+ "shekyl-pow-randomx",
+]
+
+[[package]]
 name = "shekyl-rpc"
 version = "0.1.0"
 dependencies = [
