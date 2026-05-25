@@ -55,8 +55,13 @@
 //!   (§5.1.12) implementations.
 //! - **C8:** `mode_concurrent` (§5.1.13) implementation +
 //!   RSS-bound assertion (T7 + T8).
-//! - **C9:** failure output (§5.1.14) + invocation banner
-//!   (§5.1.18); worst-case deferred per §3.19 R7-D4.
+//! - **C9:** `failure_output` (§5.1.14) `FailureOutput` schema +
+//!   T11 round-trip + `invocation_banner` (§5.1.18) §4.6 M4
+//!   stderr banner + T17 substring assertions; the
+//!   `tests/perf/per_hash_latency.rs` C++-era placeholder in
+//!   `shekyl-pow-randomx` is deleted per §5.3.2 + R1-D7 audit-
+//!   trail discipline ("closes Phase 2c R3-minor-2"); worst-case
+//!   stays deferred per §3.19 R7-D4.
 //!
 //! ## §5.7 drift-prevention boundary
 //!
@@ -72,6 +77,8 @@ pub mod c_oracle;
 pub mod cache_precondition;
 pub mod canonical_outputs;
 pub mod corpus_random;
+pub mod failure_output;
+pub mod invocation_banner;
 pub mod mode_concurrent;
 pub mod mode_correctness;
 pub mod mode_latency;

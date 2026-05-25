@@ -50,6 +50,11 @@ license.workspace = true
 #     C0 (per R4-D1 + Copilot PR #75 correction); they are widely used
 #     direct deps elsewhere in the workspace, and the harness inherits
 #     the workspace-level pin for consistency.
+#   - `serde` (with `derive` feature, workspace-pinned) added at C9 for
+#     the §5.1.14 `FailureOutput` `#[derive(Serialize, Deserialize)]`
+#     surface (T11 round-trip). The workspace dep is already pinned at
+#     `serde = { version = "1", features = ["derive"] }`; no new
+#     supply-chain surface is added by enabling it here.
 #
 # Per §5.3 the harness does NOT enable the `internal-pool-bench`
 # feature on `shekyl-pow-randomx`; only `test-internals`.
@@ -67,6 +72,7 @@ shekyl-pow-randomx = { path = "../shekyl-pow-randomx", features = ["test-interna
 randomx-v2-sys = { path = "../randomx-v2-sys" }
 rand_chacha = { workspace = true }
 sha2 = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Workspace clippy lint set per `rust/Cargo.toml`. The C4 skeleton has

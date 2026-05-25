@@ -44,23 +44,24 @@
 //!   the `rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs`
 //!   placeholder (per §8.1's C9 row).
 //!
-//! ## §5.1.18 invocation banner placeholder
+//! ## §5.1.18 invocation banner
 //!
-//! Per §5.1.18 + §4.6 M4, the harness must emit a disposition-source
-//! banner on stderr before any test output. The banner module lands
-//! at C9 alongside the failure-output module (per §8.1's C9
-//! "failure-output JSON schema + invocation banner" boundary). At C4
-//! no banner is emitted because no test output is produced; the
-//! discipline gap closes incrementally — C7 + C8 wire each mode's
-//! dispatch through `--mode=*`, and C9 lands the banner alongside
-//! the failure-output schema. The brief C7 → C9 window where mode
-//! output is produced without a banner is a bounded transitional
-//! state per §8.2's bisection-invariant framing.
+//! Per §5.1.18 + §4.6 M4, the harness emits a disposition-source
+//! banner on stderr before any test output begins. The banner is
+//! emitted in [`dispatch`] right after the help-branch returns,
+//! before any mode-module entry point runs. T17 (per §6.7.5)
+//! pins the banner content via [`invocation_banner`]'s
+//! `#[cfg(test)]` unit tests; emission failures are absorbed
+//! (logged to stderr) rather than aborting the harness — a
+//! broken stderr channel must not block the divergence-detection
+//! pipeline the banner exists to attest to.
 
 use std::env;
 use std::process::ExitCode;
 
-use shekyl_randomx_differential::{mode_concurrent, mode_correctness, mode_latency};
+use shekyl_randomx_differential::{
+    invocation_banner, mode_concurrent, mode_correctness, mode_latency,
+};
 
 /// R4-D6 default for `--random-corpus-seedhashes` (nightly sizing
 /// per §6.1 T1; per-PR CI passes `--random-corpus-seedhashes=16`).
@@ -429,6 +430,14 @@ fn main() -> ExitCode {
 /// with the R7-D4 anchor so the C7 → C9 transitional state is
 /// reviewer-attributable per §8.2's bisection invariant.
 fn dispatch(invocation: &ModeInvocation) -> ExitCode {
+    // §5.1.18 + §4.6 M4: emit the disposition-source banner to
+    // stderr before any mode-module entry point runs. Emission
+    // failures are absorbed (logged with `error: invocation_banner
+    // emit failed:`) per `emit_banner_to_stderr`'s contract;
+    // the divergence-detection pipeline must not be blocked by
+    // a broken stderr channel.
+    invocation_banner::emit_banner_to_stderr(invocation.mode.as_str());
+
     match invocation.mode {
         Mode::Correctness => {
             let seedhashes = invocation
