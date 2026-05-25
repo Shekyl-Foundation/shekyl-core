@@ -68,9 +68,9 @@ cache-equivalence precondition). All fourteen are bounded by
 the §1 substrate — none require reopening a frozen surface.
 
 Calibration precedent. Round counts scale with how much
-type-system reframe the sub-PR does: 2c closed in 3 rounds
-(modest reframe — `Cache` + `Vm` + stub-NOP dispatch); 2d
-closed across multiple rounds including R0-D5 pre-flight
+type-system reframe the sub-PR does: 2c closed across multiple
+rounds including R0-D5 pre-flight (modest reframe — `Cache` +
+`Vm` + stub-NOP dispatch); 2d closed across multiple rounds
 (dispatch-body replacement); 2f closed in 5+ rounds (substantial
 reframe — `PreparedCache` + `Seedhash` newtype + `Cache`
 visibility transition + `CacheStore` API + cfg-gated pool).
