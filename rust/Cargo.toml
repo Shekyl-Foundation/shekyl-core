@@ -108,6 +108,52 @@ aes = { version = "0.9", default-features = false, features = ["hazmat"] }
 # its `blake2` dep. Cargo unifies; no additional build cost.
 blake2 = { version = "0.10", default-features = false }
 
+# Phase 2g Rust/C differential harness primitives. See
+# `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §3.16 R4-D1 (the
+# implementation-correctness decision that pins these as workspace
+# deps) and §5.1.15 (the consumption surface in
+# `shekyl-randomx-differential`'s `Cargo.toml`). All three already
+# exist in the lockfile as transitives; this section promotes them
+# to direct workspace deps so the harness can reference them with
+# `{ workspace = true }` without introducing new transitive edges.
+# Lockfile-verified per `17-dependency-discipline.mdc`: sha2 0.10.9,
+# rand_chacha 0.3.1, serde_json 1.0.149. The harness is the sole
+# direct consumer; no other workspace member references these.
+#
+# `rand_chacha` provides `ChaCha20Rng` for the deterministic
+# corpus-generation path per R1-D4 (32-byte seed produces a
+# reproducible draw of `(seedhash, data)` pairs across runs;
+# determinism is load-bearing for the corpus-coverage proof, per
+# §4.6 M1). Pinned at `0.3` to match the lower of two lockfile
+# entries (the workspace already pulls `0.3.1` transitively; the
+# `0.9.0` entry comes from an unrelated leaf and stays where it
+# is — Cargo unifies on the workspace pin without forcing a graph
+# rewrite).
+rand_chacha = "0.3"
+#
+# `sha2` provides `Sha256` for the R1-D14 cache-equivalence
+# precondition: the Rust-derived `PreparedCache`'s 256 MiB
+# Argon2d-fill memory is streamed through a `Sha256` hasher (via
+# the §5.3.3 `test-internals`-gated visitor accessor) and the
+# digest is compared against `SHA-256(randomx_get_cache_memory(c))`
+# computed by the C reference. The digest output is public (a
+# correctness fingerprint, not a secret); no `Zeroize`-on-Drop
+# discipline applies per `35-secure-memory.mdc`. Hasher state
+# does hold transient block residue but is dropped synchronously
+# after the digest call; the harness's drop-discipline memory
+# budget (§3.15.4) is preserved.
+sha2 = "0.10"
+#
+# `serde_json` provides the failure-output JSON schema serializer
+# per R1-D11 + T11. On byte-equality divergence the harness emits
+# a structured JSON record to stderr enumerating the 11 required
+# fields (seedhash, data, expected/actual hex, mode, worker_id,
+# timestamp, etc. per §5.1.14); T11 (`src/failure_output.rs`'s
+# `#[cfg(test)]` module) round-trips a synthetic divergence record
+# through `serde_json::to_string` + `serde_json::from_str` and
+# asserts all 11 fields are present in the parsed map.
+serde_json = "1"
+
 # Compile crypto-heavy crates with optimizations even in dev
 [profile.dev.package]
 subtle = { opt-level = 3 }
