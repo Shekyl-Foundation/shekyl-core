@@ -3073,18 +3073,29 @@ is superseded by substrate reality.
 
 **Finding.** §5.1.15 lists `sha2`, `rand_chacha`, and `serde_json`
 as `(workspace)` dependencies, but none are present in
-`rust/Cargo.toml`'s `[workspace.dependencies]` section. They exist
-only as transitive lockfile entries. Per `17-dependency-discipline.mdc`
+`rust/Cargo.toml`'s `[workspace.dependencies]` section. All three
+**are** already widely-used direct deps across the workspace with
+independent per-crate pins (`sha2` in `shekyl-engine-core`,
+`shekyl-crypto-pq`, `shekyl-proofs`, `shekyl-engine-prefs`;
+`rand_chacha` in `shekyl-engine-core`, `shekyl-crypto-pq`,
+`shekyl-fcmp`, `shekyl-oxide/fcmp/fcmp++`; `serde_json` across
+~14 crates). The missing surface is the `[workspace.dependencies]`
+entries that would let new crates reference them via
+`{ workspace = true }`. Per `17-dependency-discipline.mdc`
 verification protocol, workspace-state must be verified before
 recommending a dependency; this finding closes the verification gap.
 
-**Substrate.** From the lockfile: `sha2 = "0.10.9"` (via transitive
-deps); `rand_chacha = "0.3.1"` and `"0.9.0"` (two versions; the
-harness should pin the lower 0.3.x to avoid conflict); `serde_json
-= "1.0.149"`. From `rust/Cargo.toml`: `serde = { version = "1",
-features = ["derive"] }` is a workspace dep. The three target deps
-must be promoted to workspace-level for `shekyl-randomx-differential`
-to reference them as `{ workspace = true }`.
+**Substrate.** From the lockfile (already-resolved versions driven
+by the existing direct consumers, not transitives): `sha2 = "0.10.9"`;
+`rand_chacha = "0.3.1"` and `"0.9.0"` (two versions; the harness
+should pin the lower 0.3.x to match the dominant existing consumer
+set and avoid forcing a graph rewrite); `serde_json = "1.0.149"`.
+From `rust/Cargo.toml`: `serde = { version = "1", features =
+["derive"] }` is a workspace dep. The three target deps must be
+added to `[workspace.dependencies]` for `shekyl-randomx-differential`
+to reference them as `{ workspace = true }`; the existing per-crate
+pins continue to work unchanged (Cargo unifies on the lockfile-resolved
+version regardless of declaration style).
 
 **Options.**
 
@@ -3102,8 +3113,12 @@ their lockfile-matching bounds. The C1 commit (or a pre-C1 commit
 0 amending the workspace manifest) lands the three additions; C1
 is the first commit that proves the workspace compiles with the new
 members. The workspace addition is a zero-surface change to other
-workspace members (no other crate gains a transitive dep it didn't
-already have via the lockfile).
+workspace members: their existing per-crate pins are unaffected
+(Cargo unifies on the same lockfile-resolved version regardless of
+declaration style); no new crates are introduced into the workspace
+dep graph (these are already resolved via the existing direct
+consumers); the only new surface is the three `[workspace.dependencies]`
+entries that the harness will reference via `{ workspace = true }`.
 
 **Reopen criterion.** A future workspace dep-version bump that
 changes `sha2`, `rand_chacha`, or `serde_json`'s version constraint
@@ -3113,13 +3128,36 @@ is a `17-dependency-discipline.mdc` re-verification trigger.
 additions land (C0 or absorbed into C1), run `cargo audit` (or `cargo
 deny check advisories` if the workspace has a `deny.toml`) against the
 post-addition workspace. Compare the findings count against the pre-addition
-baseline. Expected result: zero new findings (the three dependencies are
-already in the lockfile as transitives; promoting them to direct workspace
-deps does not introduce new transitive edges). If new findings appear, they
-are substrate R4-D1 did not anticipate; open a Round 5 minor amendment
-before cutting the implementation PR. This check costs ~30 seconds in CI
-and is the difference between "landed cleanly" and "implementation PR fails
-on first push due to audit gate."
+baseline. Expected result: zero new findings (the three crates are
+already in the resolved workspace dep graph via the existing direct
+consumers in `shekyl-engine-core` / `shekyl-crypto-pq` / `shekyl-proofs` /
+etc.; adding `[workspace.dependencies]` entries does not introduce new
+crates or new transitive edges into the dep graph). If new findings
+appear, they are substrate R4-D1 did not anticipate; open a Round 5
+minor amendment before cutting the implementation PR. This check costs
+~30 seconds in CI and is the difference between "landed cleanly" and
+"implementation PR fails on first push due to audit gate."
+
+**Substrate correction (post-C0, Copilot finding on PR #75).** The
+original R4-D1 narrative above was substrate-corrected from "exist
+only as transitive lockfile entries" / "via transitive deps" / "the
+three dependencies are already in the lockfile as transitives" to
+the accurate framing ("already widely-used direct deps in many
+workspace members with independent per-crate pins"). The
+**disposition (Option (a): promote all three to
+`[workspace.dependencies]` at lockfile-matching bounds) is unchanged**;
+only the rationale paragraphs needed substrate-accurate replacement.
+The correction is auditable against `git grep -E
+'^\s*(sha2|rand_chacha|serde_json)\s*=' rust/*/Cargo.toml`
+(reported >20 direct-consumer sites). The substrate-reading gap that
+produced the original error is queued forward-action for the
+[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+amendment alongside R5-D1's surface-enumeration class and R5-D2's
+cross-invariant-impact class: **"per-crate-dep-survey pass"** — for
+each workspace-level dependency addition a round closes, enumerate
+the existing per-crate consumers via `git grep` against
+`rust/*/Cargo.toml` before claiming "transitive only" / "first direct
+consumer" / similar.
 
 ---
 
