@@ -116,9 +116,7 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             mode = Some(Mode::parse(value)?);
             continue;
         }
-        return Err(format!(
-            "unknown argument '{arg}'; pass --help for usage"
-        ));
+        return Err(format!("unknown argument '{arg}'; pass --help for usage"));
     }
     mode.map(Command::Mode)
         .ok_or_else(|| "no --mode specified; pass --help for usage".to_owned())
@@ -269,7 +267,12 @@ mod tests {
 
     #[test]
     fn mode_as_str_round_trips() {
-        for m in [Mode::Correctness, Mode::WorstCase, Mode::Latency, Mode::Concurrent] {
+        for m in [
+            Mode::Correctness,
+            Mode::WorstCase,
+            Mode::Latency,
+            Mode::Concurrent,
+        ] {
             assert_eq!(Mode::parse(m.as_str()).unwrap(), m);
         }
     }
