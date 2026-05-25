@@ -1,0 +1,48 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "randomx-v2-sys"
+description = "Hand-written extern \"C\" bindings for external/randomx-v2 (Phase 2g differential harness only)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Phase 2g R1-D2 (option (c) closed):
+# This crate is a Shekyl-introduced `*-sys`-shaped sub-crate that owns
+# the hand-written `extern "C"` declarations + (at C3 per §8.1) the
+# `build.rs` linker directives for `external/randomx-v2`'s 7-symbol
+# cache + VM surface (R4-D4 enumeration). The sole consumer is
+# `shekyl-randomx-differential` (lands at C4 per §8.1); per §5.2.3
+# + §5.2.5 + R1-D13 disposition, no other workspace member may depend
+# on this crate. T14 (§6.6) asserts the sole-consumer invariant
+# mechanically via `cargo metadata`.
+#
+# Per §5.2.3 the crate has no `[dependencies]`, no
+# `[dev-dependencies]`, and (at C1) no `[build-dependencies]`. C3
+# (§5.2.2) lands the `build.rs` that emits
+# `cargo:rustc-link-search=native={RANDOMX_V2_INSTALL_DIR}/lib` and
+# `cargo:rustc-link-lib=static=randomx`; even then, no Rust deps
+# beyond `std` are needed.
+
+[package.metadata.shekyl]
+# Per Phase 2g §5.2.4 + R1-D2 future-maintenance hardening. The
+# `fork-pin-coupled = true` marker signals to T15 (§6.7) and to
+# any future fork-pin-bump PR that this crate's `src/lib.rs`
+# declarations are coupled to a specific upstream pin; any advance
+# requires the 7-signature re-audit per R1-D2 reopening criterion.
+# T15 asserts `fork-pin-sha` matches `external/randomx-v2`'s HEAD
+# at per-PR cadence.
+fork-pin-coupled = true
+fork-pin-sha = "aaafe71322df6602c21a5c72937ac284724ae561"
+
+# Workspace clippy lint set per `rust/Cargo.toml` lines 144-199;
+# the FFI-declarations-only surface (no function bodies, no casts,
+# no match arms) does not require per-crate `[lints.clippy]`
+# overrides — verified at C1 close by `cargo clippy --workspace
+# --all-targets --keep-going -- -D warnings`.
+[lints]
+workspace = true

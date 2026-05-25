@@ -59,6 +59,15 @@ members = [
     # Pure-software RandomX v2 verifier (docs/design/RANDOMX_V2_PLAN.md,
     # RANDOMX_V2_RUST.md). Consumed by shekyl-ffi (Phase 3); not the miner.
     "shekyl-pow-randomx",
+
+    # Phase 2g Rust/C differential harness substrate: hand-written
+    # `extern "C"` bindings for `external/randomx-v2` per R1-D2
+    # option (c) close in `docs/design/RANDOMX_V2_PHASE2G_PLAN.md`
+    # §3.5. Sole consumer is `shekyl-randomx-differential` (lands
+    # at C4 per §8.1); T14 (§6.6) asserts the sole-consumer
+    # invariant via `cargo metadata`. Fork-pin coupled per §1.7 +
+    # §5.2.4 `[package.metadata.shekyl] fork-pin-sha`.
+    "randomx-v2-sys",
 ]
 # Local-only harnesses that must not participate in the parent
 # workspace. Excluded here (rather than relying on the nested
