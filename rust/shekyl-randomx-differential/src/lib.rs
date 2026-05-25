@@ -69,4 +69,6 @@ pub mod c_oracle;
 pub mod cache_precondition;
 pub mod canonical_outputs;
 pub mod corpus_random;
+pub mod mode_correctness;
+pub mod mode_latency;
 pub mod rust_subject;

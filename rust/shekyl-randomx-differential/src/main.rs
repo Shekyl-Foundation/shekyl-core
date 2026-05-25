@@ -59,6 +59,22 @@
 use std::env;
 use std::process::ExitCode;
 
+use shekyl_randomx_differential::{mode_correctness, mode_latency};
+
+/// R4-D6 default for `--random-corpus-seedhashes` (nightly sizing
+/// per §6.1 T1; per-PR CI passes `--random-corpus-seedhashes=16`).
+const DEFAULT_RANDOM_CORPUS_SEEDHASHES: usize = 32;
+
+/// R4-D6 default for `--random-corpus-data-per-seedhash` (nightly
+/// sizing per §6.1 T1; per-PR CI passes
+/// `--random-corpus-data-per-seedhash=8`).
+const DEFAULT_RANDOM_CORPUS_DATA_PER_SEEDHASH: usize = 32;
+
+/// R1-D7 / §3.15.3 default for `--samples` (latency mode iteration
+/// count). Per the §3.15.3 CLI sketch's "[--samples=<u32>] # default:
+/// 1024; valid on latency only" line.
+const DEFAULT_LATENCY_SAMPLES: usize = 1024;
+
 /// Modes enumerated by §5.1.1 (CLI surface) + §5.7 (drift-prevention).
 ///
 /// The variant set is closed: any addition is a §5.7 contract reshape
@@ -125,6 +141,17 @@ struct ModeInvocation {
     /// validated at parse time so a malformed hex string fails
     /// before any mode-module work begins.
     debug_cache_divergence_seedhash: Option<[u8; 32]>,
+    /// `--random-corpus-seedhashes=<N>` override (R4-D6; valid on
+    /// correctness only; default
+    /// [`DEFAULT_RANDOM_CORPUS_SEEDHASHES`]).
+    random_corpus_seedhashes: Option<usize>,
+    /// `--random-corpus-data-per-seedhash=<M>` override (R4-D6;
+    /// valid on correctness only; default
+    /// [`DEFAULT_RANDOM_CORPUS_DATA_PER_SEEDHASH`]).
+    random_corpus_data_per_seedhash: Option<usize>,
+    /// `--samples=<N>` override (R1-D7; valid on latency only;
+    /// default [`DEFAULT_LATENCY_SAMPLES`]).
+    samples: Option<usize>,
 }
 
 /// Top-level parsed command. The C4 skeleton recognized only
@@ -163,6 +190,24 @@ fn parse_seedhash_hex(value: &str) -> Result<[u8; 32], String> {
     Ok(out)
 }
 
+/// Parse a `--<flag>=<value>` integer argument, surfacing the flag
+/// name in any error diagnostic so reviewers don't have to map
+/// "invalid value 'foo'" back to "which flag was that for again?".
+///
+/// `0` is rejected explicitly because every flag wired here
+/// (`--random-corpus-seedhashes`, `--random-corpus-data-per-seedhash`,
+/// `--samples`) is meaningless at zero; the modes' invariants
+/// require at least one iteration.
+fn parse_positive_usize(flag: &str, value: &str) -> Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|e| format!("--{flag}: invalid integer '{value}': {e}"))?;
+    if parsed == 0 {
+        return Err(format!("--{flag}: must be >= 1; got 0"));
+    }
+    Ok(parsed)
+}
+
 /// Hand-rolled argv parser. Returns a clean diagnostic for any
 /// unknown / malformed argument so reviewers reading CI logs see the
 /// specific argument that broke the invocation.
@@ -173,6 +218,9 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
     let mut mode: Option<Mode> = None;
     let mut debug_cache_divergence = false;
     let mut seedhash_hex: Option<[u8; 32]> = None;
+    let mut random_corpus_seedhashes: Option<usize> = None;
+    let mut random_corpus_data_per_seedhash: Option<usize> = None;
+    let mut samples: Option<usize> = None;
     for arg in args {
         if arg == "--help" || arg == "-h" {
             return Ok(Command::Help);
@@ -198,6 +246,31 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             seedhash_hex = Some(parse_seedhash_hex(value)?);
             continue;
         }
+        if let Some(value) = arg.strip_prefix("--random-corpus-seedhashes=") {
+            if random_corpus_seedhashes.is_some() {
+                return Err("--random-corpus-seedhashes specified more than once".to_owned());
+            }
+            random_corpus_seedhashes =
+                Some(parse_positive_usize("random-corpus-seedhashes", value)?);
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--random-corpus-data-per-seedhash=") {
+            if random_corpus_data_per_seedhash.is_some() {
+                return Err("--random-corpus-data-per-seedhash specified more than once".to_owned());
+            }
+            random_corpus_data_per_seedhash = Some(parse_positive_usize(
+                "random-corpus-data-per-seedhash",
+                value,
+            )?);
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--samples=") {
+            if samples.is_some() {
+                return Err("--samples specified more than once".to_owned());
+            }
+            samples = Some(parse_positive_usize("samples", value)?);
+            continue;
+        }
         return Err(format!("unknown argument '{arg}'; pass --help for usage"));
     }
     let mode = mode.ok_or_else(|| "no --mode specified; pass --help for usage".to_owned())?;
@@ -220,9 +293,37 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             return Err("--seedhash=<hex> is valid only with --debug-cache-divergence".to_owned())
         }
     };
+    // §3.15.3 mode-scope-violation enforcement: corpus-sizing flags
+    // are valid on correctness only; --samples is valid on latency
+    // only. Reject at parse time with a clear "flag X is valid only
+    // for --mode=Y" message rather than letting the mode-module
+    // ignore it silently.
+    if random_corpus_seedhashes.is_some() && mode != Mode::Correctness {
+        return Err(format!(
+            "--random-corpus-seedhashes is valid only with --mode=correctness; \
+             got --mode={}",
+            mode.as_str()
+        ));
+    }
+    if random_corpus_data_per_seedhash.is_some() && mode != Mode::Correctness {
+        return Err(format!(
+            "--random-corpus-data-per-seedhash is valid only with --mode=correctness; \
+             got --mode={}",
+            mode.as_str()
+        ));
+    }
+    if samples.is_some() && mode != Mode::Latency {
+        return Err(format!(
+            "--samples is valid only with --mode=latency; got --mode={}",
+            mode.as_str()
+        ));
+    }
     Ok(Command::Mode(ModeInvocation {
         mode,
         debug_cache_divergence_seedhash,
+        random_corpus_seedhashes,
+        random_corpus_data_per_seedhash,
+        samples,
     }))
 }
 
@@ -246,18 +347,22 @@ fn print_help() {
              concurrent    Per-PR multi-worker concurrent correctness + RSS bound\n\
          \n\
          FLAGS:\n  \
-             --help, -h                          Print this message and exit\n  \
-             --debug-cache-divergence            Post-failure cache byte-diff (T4 §5.1.7)\n  \
-             --seedhash=<64-char-lowercase-hex>  Seedhash for --debug-cache-divergence\n\
+             --help, -h                                Print this message and exit\n  \
+             --debug-cache-divergence                  Post-failure cache byte-diff (T4 §5.1.7)\n  \
+             --seedhash=<64-char-lowercase-hex>        Seedhash for --debug-cache-divergence\n  \
+             --random-corpus-seedhashes=<N>            Random corpus seedhash count (default 32; correctness only)\n  \
+             --random-corpus-data-per-seedhash=<M>     Random corpus data-per-seedhash count (default 32; correctness only)\n  \
+             --samples=<N>                             Latency mode sample count (default 1024; latency only)\n\
          \n\
          --debug-cache-divergence requires --seedhash=<hex> and is valid\n\
          only with --mode=correctness (per §5.1.7 + T4).\n\
          \n\
+         Per-PR CI passes --random-corpus-seedhashes=16\n\
+         --random-corpus-data-per-seedhash=8 (per §6.1 T1 sizing);\n\
+         nightly + release-gate run defaults (32×32) per R4-D6.\n\
+         \n\
          See docs/design/RANDOMX_V2_PHASE2G_PLAN.md §3 + §5.1 for the\n\
-         authoritative CLI surface and mode semantics. Additional flags\n\
-         (--random-corpus-seedhashes, --random-corpus-data-per-seedhash, …)\n\
-         land alongside their module surfaces in subsequent commits\n\
-         (C5–C9 per §8.1).\n"
+         authoritative CLI surface and mode semantics.\n"
     );
 }
 
@@ -268,38 +373,98 @@ fn main() -> ExitCode {
             print_help();
             ExitCode::SUCCESS
         }
-        Ok(Command::Mode(invocation)) => {
-            // C6 bisection boundary invariant (§8.2): C5 + C6 have
-            // landed the corpus, C oracle, Rust subject, and
-            // cache-precondition modules; the mode-module dispatch
-            // (mode_correctness / mode_latency / mode_concurrent
-            // per §§5.1.10, 5.1.12, 5.1.13) lands at C7 + C8 + C9.
-            // Until then, surface a clean, attributable error
-            // rather than silently exiting zero. The
-            // `--debug-cache-divergence` flag is parsed for
-            // forward-compatibility per §8.1 C6's "flag wired per
-            // T4" acceptance criterion, but the byte-diff path
-            // lives in mode_correctness at C7.
-            eprintln!(
-                "error: shekyl-randomx-differential is at the C6 \
-                 boundary (per RANDOMX_V2_PHASE2G_PLAN.md §8.1); \
-                 mode '{}' dispatch requires the mode modules \
-                 (§§5.1.10, 5.1.12, 5.1.13), which land at C7–C9. \
-                 Re-run after the corresponding commits land on this \
-                 branch.",
-                invocation.mode.as_str()
-            );
-            if invocation.debug_cache_divergence_seedhash.is_some() {
-                eprintln!(
-                    "note: --debug-cache-divergence --seedhash=<hex> was parsed \
-                     successfully; the diagnostic precondition path lands at C7 \
-                     alongside mode_correctness (per §8.1 C7 row)."
-                );
-            }
-            ExitCode::FAILURE
-        }
+        Ok(Command::Mode(invocation)) => dispatch(&invocation),
         Err(msg) => {
             eprintln!("error: {msg}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Dispatch a parsed `ModeInvocation` to the corresponding mode
+/// module. Pulled out of `main` so the dispatch surface is unit-
+/// testable structurally (the `ExitCode` return is opaque, but the
+/// mode-module entry points are integration-testable in isolation).
+///
+/// Per §8.1's C7 → C9 sequencing:
+///
+/// - **C7**: `correctness` (§5.1.10) + `latency` (§5.1.12) wired.
+/// - **C8**: `concurrent` (§5.1.13) wired alongside `worst-case`.
+/// - **C9**: `failure_output` JSON schema + invocation banner +
+///   `mode_worst_case` per §3.19 R7-D4 deferral resolution (or
+///   permanent deferral if the post-2g adversarial-corpus design
+///   round confirms infeasibility).
+///
+/// Until then, `worst-case` and `concurrent` surface clean
+/// "deferred" / "not yet wired" errors with the relevant plan-doc
+/// anchors so the C7 → C9 transitional state is reviewer-attributable
+/// per §8.2's bisection invariant.
+fn dispatch(invocation: &ModeInvocation) -> ExitCode {
+    match invocation.mode {
+        Mode::Correctness => {
+            let seedhashes = invocation
+                .random_corpus_seedhashes
+                .unwrap_or(DEFAULT_RANDOM_CORPUS_SEEDHASHES);
+            let data_per_seedhash = invocation
+                .random_corpus_data_per_seedhash
+                .unwrap_or(DEFAULT_RANDOM_CORPUS_DATA_PER_SEEDHASH);
+            match mode_correctness::run(
+                seedhashes,
+                data_per_seedhash,
+                invocation.debug_cache_divergence_seedhash,
+            ) {
+                Ok(report) => {
+                    println!("{report}");
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Mode::Latency => {
+            let samples = invocation.samples.unwrap_or(DEFAULT_LATENCY_SAMPLES);
+            match mode_latency::run(samples) {
+                Ok(report) => {
+                    println!("{report}");
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Mode::WorstCase => {
+            // §3.19 R7-D4: --mode=worst-case is deferred to the
+            // post-2g adversarial-corpus design round per the
+            // statistical-infeasibility finding against R1-D5's
+            // grinded-corpus methodology. Surface a clean,
+            // attributable error so a reviewer reading CI output
+            // can locate the disposition without spelunking.
+            eprintln!(
+                "error: --mode=worst-case is deferred per \
+                 RANDOMX_V2_PHASE2G_PLAN.md §3.19 R7-D4 \
+                 (adversarial-corpus methodology design round \
+                 deferred to post-2g per V3.0 pre-genesis queue \
+                 in docs/FOLLOWUPS.md); the mode dispatch is \
+                 retained in the CLI surface for forward-\
+                 compatibility but produces no output until the \
+                 post-2g design round resolves R1-D5 + R1-D6."
+            );
+            ExitCode::FAILURE
+        }
+        Mode::Concurrent => {
+            // §8.1 C8: --mode=concurrent lands at C8 alongside
+            // RSS-bound assertion (§5.1.13 + T7 + T8). Surface a
+            // clean "lands at C8" error in the C7 → C8 window
+            // rather than silently exiting zero.
+            eprintln!(
+                "error: --mode=concurrent dispatch lands at C8 \
+                 per RANDOMX_V2_PHASE2G_PLAN.md §8.1; re-run \
+                 after the C8 commit lands on this branch."
+            );
             ExitCode::FAILURE
         }
     }
@@ -358,7 +523,113 @@ mod tests {
                 parsed.debug_cache_divergence_seedhash, None,
                 "mode {s}: --debug-cache-divergence default unset"
             );
+            assert_eq!(
+                parsed.random_corpus_seedhashes, None,
+                "mode {s}: --random-corpus-seedhashes default unset"
+            );
+            assert_eq!(
+                parsed.random_corpus_data_per_seedhash, None,
+                "mode {s}: --random-corpus-data-per-seedhash default unset"
+            );
+            assert_eq!(parsed.samples, None, "mode {s}: --samples default unset");
         }
+    }
+
+    /// Per-PR CI passes `--random-corpus-seedhashes=16` +
+    /// `--random-corpus-data-per-seedhash=8`. Pins the §6.1 T1
+    /// per-PR sizing parse path.
+    #[test]
+    fn parse_random_corpus_sizing_per_pr() {
+        let a = args(&[
+            "--mode=correctness",
+            "--random-corpus-seedhashes=16",
+            "--random-corpus-data-per-seedhash=8",
+        ]);
+        let parsed = expect_mode(parse_args(&a));
+        assert_eq!(parsed.mode, Mode::Correctness);
+        assert_eq!(parsed.random_corpus_seedhashes, Some(16));
+        assert_eq!(parsed.random_corpus_data_per_seedhash, Some(8));
+    }
+
+    /// `--samples=2048` on `--mode=latency` parses cleanly. Pins
+    /// R1-D7's `--samples` override path.
+    #[test]
+    fn parse_samples_on_latency() {
+        let a = args(&["--mode=latency", "--samples=2048"]);
+        let parsed = expect_mode(parse_args(&a));
+        assert_eq!(parsed.mode, Mode::Latency);
+        assert_eq!(parsed.samples, Some(2048));
+    }
+
+    /// `--random-corpus-seedhashes=0` is rejected at parse time
+    /// (every flag's zero value is meaningless for the modes that
+    /// consume them).
+    #[test]
+    fn parse_zero_value_flags_rejected() {
+        for (flag, mode) in [
+            ("--random-corpus-seedhashes=0", "correctness"),
+            ("--random-corpus-data-per-seedhash=0", "correctness"),
+            ("--samples=0", "latency"),
+        ] {
+            let a = args(&[&format!("--mode={mode}"), flag]);
+            let err = parse_args(&a).expect_err(&format!("expected Err for {flag}"));
+            assert!(err.contains("must be >= 1"), "for {flag}: got {err}");
+        }
+    }
+
+    /// Corpus-sizing flags on a non-correctness mode error with
+    /// the mode-scope-violation diagnostic.
+    #[test]
+    fn parse_corpus_flags_on_non_correctness_errors() {
+        for non_correct in ["worst-case", "latency", "concurrent"] {
+            let a = args(&[
+                &format!("--mode={non_correct}"),
+                "--random-corpus-seedhashes=16",
+            ]);
+            let err = parse_args(&a).expect_err(&format!("expected Err for --mode={non_correct}"));
+            assert!(
+                err.contains("--mode=correctness"),
+                "for --mode={non_correct}: got {err}"
+            );
+        }
+    }
+
+    /// `--samples=<N>` on a non-latency mode errors with the
+    /// mode-scope-violation diagnostic.
+    #[test]
+    fn parse_samples_on_non_latency_errors() {
+        for non_latency in ["correctness", "worst-case", "concurrent"] {
+            let a = args(&[&format!("--mode={non_latency}"), "--samples=1024"]);
+            let err = parse_args(&a).expect_err(&format!("expected Err for --mode={non_latency}"));
+            assert!(
+                err.contains("--mode=latency"),
+                "for --mode={non_latency}: got {err}"
+            );
+        }
+    }
+
+    /// `--random-corpus-seedhashes=<N>` specified twice errors.
+    #[test]
+    fn parse_random_corpus_seedhashes_twice_errors() {
+        let a = args(&[
+            "--mode=correctness",
+            "--random-corpus-seedhashes=16",
+            "--random-corpus-seedhashes=8",
+        ]);
+        let err = parse_args(&a).expect_err("expected Err for duplicate flag");
+        assert!(
+            err.contains("--random-corpus-seedhashes specified more than once"),
+            "got: {err}"
+        );
+    }
+
+    /// `--random-corpus-seedhashes=foo` errors with the
+    /// "invalid integer" diagnostic.
+    #[test]
+    fn parse_random_corpus_seedhashes_non_integer_errors() {
+        let a = args(&["--mode=correctness", "--random-corpus-seedhashes=foo"]);
+        let err = parse_args(&a).expect_err("expected Err for non-integer");
+        assert!(err.contains("invalid integer 'foo'"), "got: {err}");
     }
 
     /// `--debug-cache-divergence` + `--seedhash=<hex>` on
