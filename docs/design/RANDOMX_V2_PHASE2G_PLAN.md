@@ -4,14 +4,14 @@
 
 | Field | Value |
 |-------|-------|
-| Status | Scaffold (Round 0); Round 1 to follow on `feat/randomx-v2-phase2g-plan` |
+| Status | Active plan document; scaffold established in Round 0, with design Rounds 1–4 completed on `feat/randomx-v2-phase2g-plan` |
 | Parent plan | [`docs/design/RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) — Track A Phase 2g todo (`phase2g-differential-harness`, line 30) |
 | Sibling plans | [`RANDOMX_V2_PHASE2C_PLAN.md`](./RANDOMX_V2_PHASE2C_PLAN.md) (§5.11.5 / §5.11.8 forward-actions); [`RANDOMX_V2_PHASE2D_PLAN.md`](./RANDOMX_V2_PHASE2D_PLAN.md) (§3.4 u128 / `__int128_t` edge-case discipline); [`RANDOMX_V2_PHASE2F_PLAN.md`](./RANDOMX_V2_PHASE2F_PLAN.md) (§1.1 frozen public API; §10.4 `compute_hash_with_trace` pre-pin; §10.5 three-leg audit posture) |
 | Base commit (`dev` tip at scaffold) | `e50fdd299aca17979d30735db3fb03ee1a77ae1e` — "Merge pull request #72 from Shekyl-Foundation/feat/randomx-v2-phase2f-impl" |
 | Fork pin | `external/randomx-v2` at `aaafe71` (v2.0.1); unchanged by 2g per the hard-constraint substrate |
 | Scaffold branch | `chore/randomx-v2-phase2g-plan` (this PR; plan-doc only; ≤5 working days per [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) rule 2) |
-| Round 1 branch (planned) | `feat/randomx-v2-phase2g-plan` (Round 1+ design rounds; opens after Round 0 lands on `dev`) |
-| Implementation branch (planned) | `feat/randomx-v2-phase2g-impl` (opens after Round 1 closes per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) rounds discipline) |
+| Round 1 branch | `feat/randomx-v2-phase2g-plan` (used for the completed Round 1+ design rounds) |
+| Implementation branch | `feat/randomx-v2-phase2g-impl` (implementation branch for Phase 2g work per [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc) rounds discipline) |
 | Round 0 scope envelope | Substrate capture only: lock the 2c/2d/2f-frozen surfaces against which 2g operates; enumerate Round 1 decision points without closing them; reserve threat-model / hand-off-contract / test-plan / commit-table sections for Round-N. No production Rust code; no harness binary; no CI step; no FOLLOWUPS reflow; no `tests/perf/per_hash_latency.rs` body change. |
 | Out of scope (forward-deferred) | (a) Per-PR per-hash latency CI gate — activates at Phase 3a per [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) §6 line 243; 2g produces the harness binary, 3a's FFI-shim PR wires the per-PR step. (b) Binary-level `nm`-on-`shekyld` symbol-isolation check — Phase 3c per [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) "RandomX v2 Phase 3c — `aes`-crate symbol-surface check" entry. (c) 600k-block initial-sync wall-time test — release-gate suite per parent plan §6 line 242. (d) Parallel `Cache::derive` / SuperscalarHash thread-pool — separate FOLLOWUPS item if benchmarks justify; out of 2g. (e) Side-channel timing differential beyond byte-equality + median latency — out of 2g; reopen if a future threat-model surfaces a reason to add it. (f) C-side miner state-machine scenarios (epoch transition, secondary cache, async rebuild) — explicitly out of scope per [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) line 30. |
 
