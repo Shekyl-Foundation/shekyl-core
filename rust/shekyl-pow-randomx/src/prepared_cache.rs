@@ -238,13 +238,18 @@ mod tests {
     fn cache_block_bytes_for_testing_yields_full_cache_in_kib_chunks() {
         use crate::cache::CACHE_SIZE;
 
-        // `RANDOMX_ARGON_BLOCKS` is `pub(crate)` in `argon2d.rs`
+        // `RANDOMX_ARGON_BLOCKS` is `pub(crate)` in `argon2d.rs:104`
         // and re-asserted here as a literal so the test does not
         // depend on the constant's accessibility from this module.
-        // The literal equals `262_144` per
-        // `RANDOMX_V2_PHASE2A_PLAN.md` § Argon2d parameters; the
-        // `CACHE_SIZE` assertion below cross-checks the literal
-        // against the crate's own constant.
+        // The literal equals `262_144` per `argon2d.rs:78`
+        // (`RANDOMX_ARGON_MEMORY = 262_144`, sourced from
+        // `external/randomx-v2/doc/configuration.md` at pin
+        // `aaafe71`); `argon2d::tests::constants_match_spec`
+        // (`argon2d.rs:185-193`) pins the same value against the
+        // same upstream source. The `CACHE_SIZE` assertion below
+        // cross-checks this literal against the crate's own
+        // `CACHE_SIZE = RANDOMX_ARGON_BLOCKS * Block::SIZE`
+        // (`cache.rs:140`).
         const EXPECTED_BLOCKS: usize = 262_144;
         assert_eq!(CACHE_SIZE, EXPECTED_BLOCKS * 1024);
 
