@@ -444,8 +444,21 @@ fn generate_family_1() -> Result<(), String> {
         let canonical: [u8; 32] = hasher.finalize().into();
         canonicals.push(canonical);
 
-        let rationale_excerpt = if recipe.rationale.len() > 60 {
-            format!("{}…", &recipe.rationale[..60])
+        // UTF-8-safe truncation: `&recipe.rationale[..60]` would
+        // panic if byte index 60 falls inside a multi-byte char (any
+        // non-ASCII content in a future rationale). `chars().take(N)`
+        // truncates on char-boundaries by construction. The 60-char
+        // bound is the human-readability comment-width pin; the unit
+        // is chars (visible glyphs for ASCII; codepoints for non-
+        // ASCII), not bytes.
+        const RATIONALE_EXCERPT_CHARS: usize = 60;
+        let rationale_excerpt = if recipe.rationale.chars().count() > RATIONALE_EXCERPT_CHARS {
+            let truncated: String = recipe
+                .rationale
+                .chars()
+                .take(RATIONALE_EXCERPT_CHARS)
+                .collect();
+            format!("{truncated}…")
         } else {
             recipe.rationale.to_string()
         };

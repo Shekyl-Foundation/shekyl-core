@@ -351,10 +351,22 @@ mod tests {
         eprintln!("=== C5 Family-1 canonical SHA-256 values ===");
         for (recipe, canonical) in corpus.iter().zip(canonicals.iter()) {
             eprintln!("    // recipe: {}", recipe.name);
-            // Print a 40-char excerpt of the rationale for the
-            // inline comment readability.
-            let rationale_excerpt = if recipe.rationale.len() > 60 {
-                format!("{}…", &recipe.rationale[..60])
+            // Print a 60-char excerpt of the rationale for the
+            // inline-comment readability. UTF-8-safe truncation via
+            // `chars().take(N)` — `&recipe.rationale[..60]` would
+            // panic if byte index 60 lands inside a multi-byte char
+            // (any non-ASCII rationale would trigger). The bound is
+            // chars (visible glyphs for ASCII; codepoints for non-
+            // ASCII), matching the equivalent helper in
+            // `bin/gen_canonical_outputs.rs`.
+            const RATIONALE_EXCERPT_CHARS: usize = 60;
+            let rationale_excerpt = if recipe.rationale.chars().count() > RATIONALE_EXCERPT_CHARS {
+                let truncated: String = recipe
+                    .rationale
+                    .chars()
+                    .take(RATIONALE_EXCERPT_CHARS)
+                    .collect();
+                format!("{truncated}…")
             } else {
                 recipe.rationale.to_string()
             };
