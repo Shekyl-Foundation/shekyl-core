@@ -4,6 +4,285 @@
 
 ### Added
 
+- **RandomX v2 Track A Phase 2g differential-test harness landed**
+  (`feat/randomx-v2-phase2g-impl`, PR #75, merge commit
+  `33d22a83b`, 2026-05-25). Final sub-PR of the Rust pure-software
+  RandomX v2 verifier port per
+  [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
+  §"Track A — Phase 2" and the design plan
+  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](design/RANDOMX_V2_PHASE2G_PLAN.md).
+  Twenty-one-commit stack landing a separate test-only artifact
+  (`rust/shekyl-randomx-differential`) that links the Rust verifier
+  (`shekyl-pow-randomx`) and the v2 fork's C reference (via the new
+  `rust/randomx-v2-sys` bindings crate) and asserts byte equality
+  across a corpus of `(seedhash, data)` inputs per Phase 0 §7's
+  differential-harness-as-separate-artifact discipline (no
+  dev-dependency edge from `shekyl-pow-randomx`; the verifier
+  crate's `cargo test` still succeeds without the C library
+  present). Preceded by the R5-D1 substrate-amendment PR #74
+  (merge `93d1155bb`) that landed the `test-internals` feature
+  gate on `shekyl-pow-randomx` exposing
+  `PreparedCache::cache_bytes_for_testing` (gated by
+  `cfg(feature = "test-internals")`), resolving the contradiction
+  between R1-D14's cache-equivalence precondition requiring
+  byte-level access to the Rust cache and §5.3.1's "zero new
+  production surfaces" disposition. The feature is enabled
+  exclusively by the harness crate; production builds see no new
+  surface.
+
+  - **Workspace deps + `randomx-v2-sys` skeleton + CMake gate**
+    (commits `8d8d4a109`, `013984118`, `e8d2eaccf`, `8b67d7775`,
+    `e8dec6278`, `432162ddb`; C0–C4). New
+    [`rust/randomx-v2-sys`](../rust/randomx-v2-sys) crate is the
+    sole consumer of the v2 fork's C ABI per §5.3 R1-D14; its
+    `build.rs` resolves `RANDOMX_V2_INSTALL_DIR` (preferred) or
+    falls back to the in-tree install layout under
+    `<build-dir>/external/randomx-v2-install` per the
+    R5-D2-refined R4-D3 soft-fail discipline (commit
+    `429044cf8`'s plan-doc refinement landed the
+    soft-fail-on-missing-library framing before C3's
+    implementation). The harness crate
+    [`rust/shekyl-randomx-differential`](../rust/shekyl-randomx-differential)
+    is a `bin` with hand-rolled argument parsing (no `clap`
+    dependency) and dispatches `--mode=correctness`,
+    `--mode=latency`, `--mode=concurrent`, plus a deferred
+    `--mode=worst-case` that exits with an informative diagnostic
+    pointing at the post-2g design round per §3.19 R7-D4.
+    `CMakeLists.txt` gains the `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS`
+    option (default OFF; flipped ON in CI) per Phase 0's
+    miner-only-build-flag pattern.
+
+  - **C5a corpus + canonical outputs (R6 cluster)**
+    (`5e00f457e`, `12884d945`). `corpus.rs` builds the random
+    `(seedhash, data)` corpus with a bimodal block-template-shaped
+    `[200 .. 600·1024)` byte distribution per §3.16, and
+    `canonical_outputs.rs` carries 1024 pre-computed
+    `(seedhash, data) → hash` canonicals generated against the
+    pinned C reference at the workspace-pinned fork SHA (per §5.4
+    R6 cluster's canonical-pinning discipline). The
+    `gen_canonical_outputs.rs` tooling binary regenerates the
+    canonicals as a separate operation outside the harness's
+    runtime modes (skip-listed in `.cargo/mutants.toml` per
+    cargo-mutants skip-list discipline).
+
+  - **R7 adversarial-corpus deferral**
+    (`c41a6c7f8`, `5598adea0`). Plan-doc Round 7 reopens R1-D5
+    (adversarial seedhash corpus) and R1-D6 (u128/`__int128_t`
+    edge-case data corpus) under two independent substrate
+    findings: (i) the verifier-accessor gap (the class-heaviness
+    grinding methodology requires a `test-internals`-gated
+    opcode-stream accessor whose implementation would duplicate
+    `compute_hash_inner` under a feature gate); (ii) the
+    statistical-infeasibility gap (R1-D5's ≥40% per-class /
+    ≥60% combined acceptance criteria were calibrated against
+    V1's PROGRAM_SIZE = 256 and are unreachable by random
+    grinding against V2's PROGRAM_SIZE = 384 with per-class
+    σ-gaps from 6.8 (CACHE_MISS) to ~125 (CFROUND); fewer
+    than 10⁻⁸ threshold-meeting candidates expected within any
+    realistic compute budget). R7-D3 defers R1-D8 (worst-case
+    timing test T6) by the same reasoning; R7-D4 routes the
+    deferred work to the post-2g design round; R7-D5 carries
+    the §6 T2 deferral. The post-2g round is queued in
+    [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) (V3.0 pre-genesis
+    queue) as "Post-2g adversarial-corpus methodology +
+    implementation."
+
+  - **Cache-precondition + Rust/C oracle wrappers**
+    (`558eba59a`). `cache_precondition.rs` derives the Rust and
+    C caches from the same seedhash, compares them block-by-block
+    via the `test-internals`-gated `cache_bytes_for_testing`
+    accessor, and emits an O(1)-block divergence window when
+    they differ (window construction refactored under Copilot
+    Round 2 below from the naïve O(N) re-iteration to the
+    streaming form). `rust_subject.rs` wraps
+    `shekyl-pow-randomx`'s `PreparedCache` + `compute_hash`
+    surface; `c_oracle.rs` wraps `randomx-v2-sys`'s
+    `randomx_alloc_cache` / `randomx_init_cache` /
+    `randomx_create_vm` / `randomx_calculate_hash` lifecycle.
+    The C oracle is `!Send + !Sync` (the C library's VM holds
+    a per-thread JIT page); the harness pre-computes C-side
+    reference hashes single-threadedly before spawning workers.
+
+  - **Correctness + latency + concurrent modes**
+    (`71f5077d2`, `f25e6356f`). `mode_correctness` walks the
+    random corpus + canonical-output corpus, asserting
+    Rust hash = C hash = canonical hash at every entry.
+    `mode_latency` benchmarks per-hash latency over the random
+    corpus, reporting median/p95/max in `(Rust, C)` pairs with
+    upper-median statistic for even-length samples (matching
+    standard benchmark convention; doc-comment corrected under
+    Copilot Round 2). `mode_concurrent` orchestrates
+    multi-worker correctness assertion plus Linux-specific
+    RSS-ceiling enforcement via `/proc/self/statm` sampling
+    (`RSS_CEILING_BYTES`, `RSS_TOLERANCE`,
+    `RSS_SAMPLE_INTERVAL`, `RSS_STEADY_STATE_WARMUP_HASHES`
+    constants documented inline); the smoke test surfaced the
+    known V3.0 `compute_hash` divergence at large data inputs
+    per `docs/FOLLOWUPS.md`'s V3.0 pre-genesis queue, which
+    validates the harness's detection capability rather than
+    indicating a Phase 2g regression.
+
+  - **Failure output schema + invocation banner**
+    (`cadacf7a3`, `b63cd2592`). `failure_output.rs` defines the
+    11-field structured-JSON failure schema (M4/T11) emitted to
+    stderr on Rust vs. C divergence; the schema carries `mode`,
+    `seedhash`, `data_sha256`, `rust_hash`, `c_hash`,
+    `canonical_hash` (optional), `rust_subject_version`,
+    `c_oracle_version`, `fork_pin_sha`, `timestamp`, plus the
+    divergence-window blob from `cache_precondition.rs` when
+    relevant. `invocation_banner.rs` emits the M4/T17 banner to
+    stderr before any test output, recording mode, corpus sizes,
+    seedhash count, fork pin, and the `test-internals` feature-
+    gate citation as the harness's authority-claim line. The
+    rustfmt drift commit `b63cd2592` absorbed mechanical
+    formatting changes from C8 to keep the C9 commit scope-clean.
+
+  - **CI wiring + crate-invariant extension + mutants + PR
+    template** (`dd984d115`). New
+    [`.github/workflows/randomx-v2-differential.yml`](../.github/workflows/randomx-v2-differential.yml)
+    runs the `structural-validate` job per-PR
+    (build cleanliness, unit/integration tests, invariant-script
+    coverage, `cargo fmt` + `clippy`) and the `mutants` job on a
+    staggered weekly cron; runtime modes (correctness, latency,
+    concurrent end-to-end) are deferred behind
+    `continue-on-error: true` with a comment pointing at the
+    `docs/FOLLOWUPS.md` V3.0 `compute_hash` divergence entry,
+    and become merge-blocking once that V3.0 work lands. The
+    workflow builds the C reference library out-of-band by
+    invoking the submodule's own CMakeLists.txt
+    (`external/randomx-v2`) directly with Ninja + ccache; this
+    avoids pulling the parent project's C++ dependencies into
+    the harness build path. `.github/workflows/build.yml` and
+    `.github/workflows/codeql.yml` gain `--exclude
+    shekyl-randomx-differential` on their workspace `cargo build`
+    / `cargo test` invocations so the daemon CI matrix does not
+    link against the C library it does not need; `build.yml`'s
+    `lint-rust-debug-macros` step gains a `*/src/bin/*` exclusion
+    so `gen_canonical_outputs.rs`'s `println!` (legitimate CLI
+    output) is not flagged.
+    [`scripts/ci/check_randomx_crate_invariants.sh`](../scripts/ci/check_randomx_crate_invariants.sh)
+    is extended to scan `randomx-v2-sys` and
+    `shekyl-randomx-differential` for Pattern A
+    (`OnceCell`/`OnceLock`/`Lazy` imports) and Pattern B
+    (column-0 `static` declarations);
+    `shekyl-randomx-differential` is also scanned for Pattern C
+    (FFI exports), while `randomx-v2-sys` is exempt from
+    Pattern C (it is the FFI consumer crate). New
+    [`rust/shekyl-randomx-differential/tests/crate_invariants.rs`](../rust/shekyl-randomx-differential/tests/crate_invariants.rs)
+    integration tests T13 (script coverage), T14 (`randomx-v2-sys`
+    sole-consumer property — verified by walking
+    `cargo metadata` to confirm no other workspace member
+    depends on `randomx-v2-sys`), and T15 (`randomx-v2-sys`
+    signature-audit pin — matches the bindings file's fork-pin
+    SHA against the submodule HEAD at
+    `external/randomx-v2`). New
+    [`.cargo/mutants.toml`](../.cargo/mutants.toml) configures
+    `cargo-mutants` with `timeout_multiplier = 5.0` and skip-globs
+    for tooling binaries (`src/bin/**`) and canonical outputs
+    (`canonical_outputs.rs`) per the skip-list discipline. New
+    [`.github/pull_request_template.md`](../.github/pull_request_template.md)
+    carries the three-line discipline checklist for harness /
+    verifier modifications (amendment-cite, audit-line-range cite,
+    harness-pass-as-evidence with audit co-citation).
+
+  - **Copilot Round 1 — inline review responses**
+    (`3ac2d777f`). Four findings against the implementation
+    diff: (1) `build.rs` warning message uses
+    `<build-dir>/external/randomx-v2-install` as the
+    documented fallback path string;
+    (2) `RANDOMX_V2_PHASE2G_PLAN.md` §3992's embedded `build.rs`
+    example matches the live wording; (3) the `randomx-v2-sys`
+    bindings file gains the fork-pin signature comment with the
+    exact submodule SHA for T15 to assert against;
+    (4) cross-citation provenance lines for cache-precondition
+    and Rust/C oracle hand-off discipline.
+
+  - **Copilot Round 2 — post-implementation findings**
+    (`d60186fa9`, `90a536219`). Five substantive findings:
+    (1) `parse_seedhash_hex` now explicitly rejects uppercase
+    A–F with a load-bearing diagnostic
+    (`--seedhash: character {i}: uppercase hex rejected; use
+    lowercase per Seedhash::Display`), pinning the lowercase
+    convention shared with the verifier's `Seedhash::Display`
+    via a new `parse_seedhash_hex_rejects_uppercase`
+    regression test; (2) `mode_latency::median_p95_max`'s
+    doc-comment now states `samples[n/2]` is the upper-median
+    for even-length samples (the prior wording said "lower
+    median" but the implementation has always been upper-median;
+    fixing the doc rather than the code preserves existing
+    test expectations); (3) `RustSubjectSession::seedhash`'s
+    doc-comment recommends `*session.seedhash()` (the idiomatic
+    deref for a `Copy` type) over `.clone()`;
+    (4) `failure_output::timestamp_increases_across_constructions`
+    is replaced by `timestamp_is_nonzero_and_recent`, which
+    asserts the timestamp is non-zero and within a plausible
+    epoch window (post-2020 / pre-2200) instead of relying on
+    `SystemTime::now()` monotonicity through a
+    `thread::sleep(1s)` (the prior test was flaky under clock
+    adjustments); (5) `cache_precondition::build_divergence_window`
+    is refactored from O(N) re-iteration of the cache block
+    stream to O(1)-block streaming construction by passing the
+    `current_block`, buffering the `prev_block`, and accepting
+    the `remainder_iter` as a mutable iterator — the
+    doc-comment claim ("at-most-two 1-KiB blocks") was true of
+    the window contents but not of the cost to construct it,
+    and the refactor brings cost in line with the doc with four
+    new unit tests covering interior, crosses-backwards,
+    crosses-forwards, and at-cache-start windows.
+    Stale README + `canonical_outputs.rs` doc-comments that
+    referenced C5b / C6 boundaries and a placeholder error
+    (pre-R7-D4 framing) are updated to reflect the post-2g
+    deferral and the completed C4–C10 sequence.
+
+  **§9 / Phase 2g gate confirmation (HEAD at PR #75 merge =
+  `33d22a83b`):** Format `cargo fmt --all -- --check` ✓; Lint
+  `cargo clippy -p shekyl-randomx-differential -p randomx-v2-sys
+  --all-targets -- -D warnings` ✓; Test
+  `cargo test -p shekyl-randomx-differential -p randomx-v2-sys
+  --release` ✓ (unit + integration including T13/T14/T15);
+  Crate-invariant gate
+  `scripts/ci/check_randomx_crate_invariants.sh` ✓ (extended
+  scan scope across `shekyl-pow-randomx`, `randomx-v2-sys`,
+  `shekyl-randomx-differential`); FPU unsafe grep
+  `scripts/ci/check_randomx_fpu_rounding.sh` ✓ (inherited from
+  2d); workspace test
+  `cargo test --workspace --exclude shekyl-randomx-differential`
+  ✓ on the daemon CI matrix (the harness crate's tests are
+  exercised on the `randomx-v2-differential.yml` matrix that has
+  the C library available). Four substantive Copilot review
+  threads on PR #75 resolved with provenance citations to the
+  commits that addressed each finding; 14 outdated threads were
+  auto-greyed by GitHub as the surrounding code shifted.
+
+  **Deferrals named, with reopening criteria per
+  `21-reversion-clause-discipline.mdc`:**
+
+  - **`mode_worst_case` + adversarial-corpus methodology
+    (R7-D1/R7-D2/R7-D3/R7-D4).** Deferred to a post-2g design
+    round; tracked in `docs/FOLLOWUPS.md` V3.0 pre-genesis
+    queue. Reopens via the design round's plan-doc landing
+    (the methodology must be V2-substrate-anchored; class-
+    heaviness grinding is V1-shaped and statistically
+    infeasible against V2 substrate). Phase 2g's
+    `--mode=worst-case` flag is reachable but emits the
+    deferral diagnostic referencing the FOLLOWUPS entry.
+  - **`compute_hash` divergence at large data inputs.**
+    Surfaced by Phase 2g C7's first end-to-end smoke test
+    against a 387,581-byte data input in R1-D4's bimodal
+    upper-half distribution; cache-equivalence precondition
+    passes (caches byte-identical); divergence is in
+    `compute_hash`'s VM path. Already tracked in
+    `docs/FOLLOWUPS.md` V3.0 pre-genesis queue. The harness's
+    detection of this divergence is itself validation of its
+    M4 detection capability. Per-PR runtime modes are kept
+    `continue-on-error: true` until the V3.0 fix lands; the
+    structural-validate job remains merge-blocking.
+  - **Per-hash latency CI gate (≤3.0× ratio).** Phase 2g
+    produces the harness binary that the Phase 3a per-PR CI
+    mechanism (`RANDOMX_V2_RUST.md` §8) consumes; the gate
+    activates when Phase 3a's FFI shim lands. Phase 2g itself
+    runs `mode_latency` informationally, not as a CI gate.
+
 - **RandomX v2 Track A Phase 2f implementation core landed**
   (`feat/randomx-v2-phase2f-impl`, 2026-05-23). Implements
   [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md)
