@@ -74,6 +74,7 @@
 //! rejection per `15-deletion-and-debt.mdc` "while-we're-here is
 //! the enemy" discipline.
 
+pub mod canonical;
 pub mod interpreter;
 pub mod recipes;
 pub mod types;

@@ -27,14 +27,16 @@
 //! together per M1 — the methodology side at the linked design doc;
 //! the results side as the `pub const` items below.
 //!
-//! ## C1 disposition (this commit)
+//! ## C1 disposition (measurement-derived constants; still C1-provisional)
 //!
-//! The constants below are **provisional**: pre-measurement estimates
-//! anchored against the Round 1 close framing (R1-D5 for
-//! [`CLAIM_2_THRESHOLD`], R1-D6 for [`SAMPLE_BUDGET_PER_RECIPE`]) and
-//! against industry baseline for [`RUNNER_NOISE_MARGIN`] per the
-//! design doc's §2.3 provisional-value table. The first
-//! implementation-PR CI run on `ubuntu-latest` (per
+//! The [`RUNNER_NOISE_MARGIN`], [`CLAIM_2_THRESHOLD`],
+//! [`SAMPLE_BUDGET_PER_RECIPE`], [`MEASUREMENT_RUN_COUNT`], and
+//! [`MEASUREMENT_OBSERVED_VARIANCE`] constants remain **provisional**:
+//! pre-measurement estimates anchored against the Round 1 close
+//! framing (R1-D5 for [`CLAIM_2_THRESHOLD`], R1-D6 for
+//! [`SAMPLE_BUDGET_PER_RECIPE`]) and against industry baseline for
+//! [`RUNNER_NOISE_MARGIN`] per the design doc's §2.3 provisional-value
+//! table. The first implementation-PR CI run on `ubuntu-latest` (per
 //! [`per_recipe_latency`](../../../rust/shekyl-randomx-differential/tests/per_recipe_latency.rs))
 //! produces the measured values; if measurement diverges from the
 //! provisional pin by more than [`RUNNER_NOISE_MARGIN`], a substrate
@@ -50,24 +52,64 @@
 //! values + a methodology-doc §2.3 update recording the
 //! provisional-versus-measured delta.
 //!
-//! ## Family-1 canonical-output array (deferred to C5)
+//! ## C5 disposition (this commit) — Family-1 canonical-output array
 //!
-//! [`FAMILY_1_RECIPE_OUTPUTS`] is declared at C1 as an empty array;
-//! the implementation PR's C5 commit populates it with one entry per
-//! recipe in the
-//! [`adversarial`](https://example.invalid/anchor-pending-c3) module's
-//! corpus. Each entry pins the expected SHA-256 of the recipe's
-//! evaluator-produced cache bytes per R1-D4's expanded-bytes-SHA
-//! discipline (defends against T-A12 recipe substrate tamper + T-A13
-//! recipe evaluator divergence per Round 2's §4.5 attack-class
-//! split).
+//! [`FAMILY_1_RECIPE_OUTPUTS`] is **populated at C5** with one entry
+//! per recipe in the
+//! [`adversarial::get_corpus`](super::adversarial::get_corpus) starter
+//! corpus (8 recipes: 2 spec-silence-anchor + 0 coverage-target + 3
+//! boundary-value + 3 dataset-item-extrema). Each entry pins the
+//! SHA-256 of the recipe's evaluator-produced cache bytes per R1-D4's
+//! expanded-bytes-SHA discipline; the corresponding
+//! [`FAMILY_1_RECIPE_SHA256`] meta-pin asserts the array contents
+//! have not been tampered between commit and use.
 //!
-//! The empty-at-C1 shape mirrors Phase 2g's `adversarial_corpus.rs`
-//! C5a scaffolded-empty disposition: the surface contract is locked
-//! at the substrate-defining commit; the contents land alongside the
-//! data they pin. Per `15-deletion-and-debt.mdc`, the empty-at-C1
-//! shape carries an explicit C5 deletion-target for the empty
-//! placeholder.
+//! Per Round 2 R2-D1 + §4.5.1 close, the canonical-output array
+//! extends M1's scope to T-A12 (recipe substrate tamper) and
+//! T-A13 (recipe evaluator divergence): a tampered recipe whose
+//! expansion differs from the canonical pin fails the canonical
+//! assertion; a buggy evaluator that produces drifted output fails
+//! likewise. The
+//! [`tests/adversarial_canonical_runtime`](../../../rust/shekyl-randomx-differential/tests/adversarial_canonical_runtime.rs)
+//! integration test (landing at C7) provides the runtime
+//! backstop — it re-derives each canonical via
+//! [`adversarial::canonical::compute_corpus_canonicals`](super::adversarial::canonical::compute_corpus_canonicals)
+//! and asserts byte-equality with the committed array entries.
+//!
+//! ### Population substrate (cache-equivalence reuse)
+//!
+//! The C5 canonical values were computed via the Rust subject's
+//! [`PreparedCache::derive`] +
+//! [`PreparedCache::cache_block_bytes_for_testing`] path through
+//! [`adversarial::canonical::compute_corpus_canonicals`](super::adversarial::canonical::compute_corpus_canonicals).
+//! Per the Phase 2g R1-D14 cache-equivalence precondition, the
+//! Rust-subject path produces byte-identical cache memory to the C
+//! reference's `randomx_get_cache_memory` for the same seedhash; the
+//! Phase 2g harness asserts this equivalence at every test invocation
+//! (no new validation surface introduced at C5 per
+//! [`19-validation-surface-discipline.mdc`](../../../.cursor/rules/19-validation-surface-discipline.mdc)).
+//!
+//! The `gen_canonical_outputs` binary (extended at C5) provides the
+//! second independent computation path — C-reference-derived — for
+//! the regeneration-discipline workflow per
+//! [`canonical_outputs`](super::canonical_outputs)'s precedent.
+//!
+//! ### Cross-checkability (R1-D4 close + R1-D8 substrate cite)
+//!
+//! The `#[cfg(test)] mod tests` block in this file asserts
+//! bidirectional correspondence between
+//! [`FAMILY_1_RECIPE_OUTPUTS`] and
+//! [`adversarial::get_corpus`](super::adversarial::get_corpus):
+//!
+//! - Array length equals corpus length (catches recipe addition or
+//!   removal without canonical update).
+//! - Each entry's array index corresponds to the same-index recipe
+//!   in `get_corpus()` (the ordering invariant pinned at
+//!   [`adversarial::get_corpus`](super::adversarial::get_corpus)'s
+//!   docstring).
+//!
+//! Both checks fail at `cargo test`; the failure-output diagnostic
+//! identifies which recipe needs canonical regeneration.
 
 use sha2::{Digest, Sha256};
 
@@ -168,41 +210,89 @@ pub const MEASUREMENT_RUN_COUNT: usize = 0;
 pub const MEASUREMENT_OBSERVED_VARIANCE: f64 = 0.0;
 
 /// Family-1 canonical-output array — recipe-evaluator-produced
-/// expanded-bytes SHA-256 pins per R1-D4 (close at this commit;
-/// populated at C5 of the implementation plan).
+/// expanded-bytes SHA-256 pins per R1-D4 (close at C1; populated
+/// at C5).
 ///
-/// **Empty at C1 per the C1 disposition** (this commit). C5
-/// populates with one entry per recipe in the
-/// [`adversarial`](https://example.invalid/anchor-pending-c3)
-/// module's corpus; each entry is the SHA-256 of the recipe
-/// evaluator's expanded cache bytes per R1-D4's expanded-bytes-SHA
-/// discipline.
+/// **Populated at C5** with 8 entries — one per recipe in
+/// [`adversarial::get_corpus`](super::adversarial::get_corpus)'s
+/// C4 starter corpus. The array is indexed by
+/// [`adversarial::get_corpus`](super::adversarial::get_corpus)'s
+/// emission ordering: the *i*-th entry corresponds to the *i*-th
+/// recipe in `get_corpus()`. The ordering invariant is asserted by
+/// [`tests::family_1_array_length_matches_corpus_length`] +
+/// [`tests::family_1_array_recipe_names_in_get_corpus`].
 ///
 /// Per Round 2 R2-D1 + §4.5.1 close, the canonical-output array
 /// extends M1's scope to T-A12 (recipe substrate tamper) and
 /// T-A13 (recipe evaluator divergence): a tampered recipe whose
 /// expansion differs from the canonical pin fails the canonical
 /// assertion; a buggy evaluator that produces drifted output
-/// fails likewise.
-pub const FAMILY_1_RECIPE_OUTPUTS: &[[u8; 32]] = &[];
+/// fails likewise. The runtime backstop lives at
+/// [`tests/adversarial_canonical_runtime`](../../../rust/shekyl-randomx-differential/tests/adversarial_canonical_runtime.rs)
+/// (landing at C7).
+///
+/// # Regeneration
+///
+/// Per [`canonical_outputs`](super::canonical_outputs)'s
+/// regeneration-discipline precedent, this array is not
+/// hand-edited; refreshing it requires:
+///
+/// 1. Substrate change that invalidates the prior pin (e.g., a
+///    recipe added/removed, a recipe's modifications changed, the
+///    interpreter's algorithm refined per a substrate finding).
+/// 2. Re-run [`adversarial::canonical::compute_corpus_canonicals`](super::adversarial::canonical::compute_corpus_canonicals)
+///    or the `gen_canonical_outputs` binary's `--include-family-1`
+///    mode against the updated corpus.
+/// 3. Commit the new bytes alongside the substrate change in the
+///    same PR per the M3 PR-template discipline.
+#[rustfmt::skip]
+pub const FAMILY_1_RECIPE_OUTPUTS: &[[u8; 32]] = &[
+    // recipe[0]: u128-high-half-cache-word-0 (Category 1)
+    [ 0x5a, 0xd2, 0x60, 0x83, 0xac, 0x7b, 0xdd, 0xfc, 0xe6, 0xf6, 0x92, 0x9d, 0x82, 0x44, 0x29, 0x05, 0x6a, 0xd4, 0xe2, 0x01, 0xc1, 0x4a, 0xdd, 0xe2, 0x62, 0xa9, 0xa5, 0x83, 0x69, 0x52, 0x74, 0x52],
+    // recipe[1]: shift-mask-boundary-cache-word-1 (Category 1)
+    [ 0x9d, 0x08, 0x32, 0xe4, 0xad, 0x85, 0xa2, 0xe3, 0x11, 0xe5, 0x85, 0x98, 0x70, 0xae, 0xab, 0xd7, 0xba, 0xfe, 0x02, 0x1a, 0x87, 0xd0, 0x59, 0xa2, 0x69, 0x88, 0x6c, 0xd8, 0x19, 0x0a, 0xd9, 0x5a],
+    // recipe[2]: boundary-cache-first-byte (Category 3 boundary)
+    [ 0xb2, 0x7b, 0x6d, 0x99, 0x4f, 0x47, 0x1b, 0x8c, 0x72, 0x8e, 0xbf, 0x6e, 0xd5, 0x91, 0x4a, 0x64, 0xb2, 0x5f, 0x8a, 0x85, 0x1e, 0xf3, 0xd3, 0x7b, 0x06, 0xf7, 0x0e, 0xb2, 0x67, 0x4d, 0x97, 0x38],
+    // recipe[3]: boundary-cache-last-byte (Category 3 boundary)
+    [ 0x3d, 0x33, 0xca, 0x72, 0x29, 0x61, 0x47, 0x67, 0x43, 0xa5, 0x84, 0xb0, 0x2c, 0xd3, 0x7b, 0xa1, 0x29, 0x40, 0x6d, 0xaf, 0x8e, 0xe4, 0x55, 0x2d, 0x90, 0xdc, 0x90, 0x73, 0xd8, 0xad, 0x48, 0x32],
+    // recipe[4]: boundary-dataset-item-stride-first-edge (Category 3 boundary)
+    [ 0x03, 0xf3, 0xd5, 0x99, 0x4d, 0x83, 0x61, 0x0f, 0x81, 0xf5, 0x18, 0x15, 0x08, 0x19, 0xb1, 0x7f, 0x25, 0x8f, 0xf2, 0xdc, 0x73, 0x76, 0x61, 0x91, 0x93, 0x87, 0x09, 0x32, 0x9a, 0x2f, 0xea, 0xd6],
+    // recipe[5]: boundary-block-stride-second-block-base (Category 3 dataset-item)
+    [ 0x4d, 0x66, 0x83, 0x8c, 0xd5, 0x0c, 0x11, 0x21, 0xb5, 0x8d, 0x49, 0x76, 0xe7, 0x36, 0x7d, 0x75, 0x21, 0x4c, 0xea, 0xd8, 0xac, 0x14, 0x57, 0xc2, 0x19, 0x6b, 0x4d, 0xc9, 0xf2, 0xab, 0xeb, 0x09],
+    // recipe[6]: boundary-block-stride-first-block-tail (Category 3 dataset-item)
+    [ 0x19, 0x45, 0xb4, 0x4f, 0x43, 0x31, 0x44, 0x9a, 0x9f, 0xe5, 0x28, 0x2e, 0x7e, 0xf4, 0xf5, 0xe8, 0x79, 0xa2, 0xe0, 0xaa, 0x59, 0x66, 0x4a, 0x96, 0xbc, 0xe2, 0x0b, 0x78, 0xc7, 0x65, 0xbd, 0x16],
+    // recipe[7]: boundary-line-stride-within-block (Category 3 dataset-item)
+    [ 0xd9, 0x84, 0xff, 0x05, 0xbd, 0x35, 0x49, 0xd5, 0x8f, 0xf4, 0x57, 0x62, 0xe7, 0xbe, 0x46, 0x9e, 0x00, 0xe3, 0xd9, 0x63, 0xd8, 0xf6, 0x2b, 0x0a, 0x39, 0xa9, 0xcc, 0x1a, 0xdb, 0x39, 0x41, 0xb6],
+];
 
-/// Count of Family-1 recipe canonical outputs (empty at C1; grows
-/// at C5).
+/// Count of Family-1 recipe canonical outputs (8 at C5;
+/// grows in sync with [`adversarial::get_corpus`](super::adversarial::get_corpus)).
 pub const FAMILY_1_RECIPE_COUNT: usize = FAMILY_1_RECIPE_OUTPUTS.len();
 
-/// SHA-256 of the empty Family-1 array — the C1 scaffold-pin per
-/// the Phase 2g `adversarial_corpus.rs::ADVERSARIAL_CORPUS_SHA256`
-/// precedent (empty-scaffold hash asserts no tamper of the empty
-/// shape between C1 and C5).
+/// SHA-256 of the concatenated [`FAMILY_1_RECIPE_OUTPUTS`] array
+/// contents — the C5 meta-pin per the Phase 2g
+/// `adversarial_corpus.rs::ADVERSARIAL_CORPUS_SHA256` precedent.
+/// Catches array-tamper between commit and use.
 ///
-/// **Per C1 disposition: this value is the SHA-256 of the
-/// `FAMILY_1_RECIPE_OUTPUTS` empty slice** (`SHA-256("") =
-/// e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`).
-/// At C5, the value is recomputed against the populated array and
-/// pinned alongside.
+/// Computed via [`compute_family_1_recipe_hash`] at the C5
+/// population helper's run-time output (per the
+/// [`adversarial::canonical::tests::print_c5_family_1_canonical_values`](super::adversarial::canonical)
+/// substrate-producer); pinned here and asserted by
+/// [`tests::family_1_meta_sha_matches_array_contents`].
+///
+/// # Regeneration
+///
+/// When [`FAMILY_1_RECIPE_OUTPUTS`] changes, regenerate this
+/// value by either:
+///
+/// - Re-running the `adversarial::canonical::tests::print_c5_family_1_canonical_values`
+///   helper test (output includes the meta-pin); or
+/// - Re-running `cargo test family_1_meta_sha_matches_array_contents`
+///   after editing the array; the failure output prints the new
+///   meta-SHA for paste.
 pub const FAMILY_1_RECIPE_SHA256: [u8; 32] = [
-    0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
-    0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
+    0x81, 0x77, 0xce, 0x34, 0x12, 0x5e, 0x8b, 0x6b, 0x8a, 0xd4, 0xf9, 0xa5, 0x5c, 0x2e, 0x6f, 0x21,
+    0x40, 0x1f, 0xfe, 0xc0, 0x63, 0xed, 0xfd, 0x85, 0x72, 0xf8, 0x3b, 0x32, 0xbb, 0x53, 0x25, 0xec,
 ];
 
 /// Compute the SHA-256 of the concatenated [`FAMILY_1_RECIPE_OUTPUTS`]
@@ -258,25 +348,93 @@ mod tests {
         );
     }
 
-    /// Asserts the C1 empty-scaffold disposition: Family-1 array is
-    /// empty; SHA-256 matches the canonical empty-string hash.
+    /// Asserts the C5 populated disposition: Family-1 array has
+    /// 8 entries (one per recipe in the C4 starter corpus);
+    /// SHA-256 over the array contents matches the pinned meta-SHA.
     ///
-    /// This is the C1 analog of Phase 2g `adversarial_corpus.rs`'s
-    /// T10 empty-scaffold pin (defends against tamper of the empty
-    /// shape between C1 and C5).
+    /// This is the C5 analog of Phase 2g `adversarial_corpus.rs`'s
+    /// T10 SHA pin (defends against tamper of the recipe canonicals
+    /// between commit and use; complements the runtime backstop in
+    /// [`tests/adversarial_canonical_runtime`](../../../rust/shekyl-randomx-differential/tests/adversarial_canonical_runtime.rs)
+    /// at C7).
     #[test]
-    #[allow(clippy::assertions_on_constants)]
-    fn c1_family_1_scaffold_pin() {
+    fn c5_family_1_populated_pin() {
         assert_eq!(
-            FAMILY_1_RECIPE_COUNT, 0,
-            "C1 disposition requires FAMILY_1_RECIPE_OUTPUTS to be empty; \
-             got {FAMILY_1_RECIPE_COUNT} entries"
+            FAMILY_1_RECIPE_COUNT, 8,
+            "C5 disposition requires FAMILY_1_RECIPE_OUTPUTS to have 8 entries \
+             (one per C4 starter corpus recipe); got {FAMILY_1_RECIPE_COUNT} entries"
         );
+    }
+
+    /// Family-1 meta-pin self-consistency: the SHA-256 of the
+    /// concatenated array contents must equal the pinned
+    /// [`FAMILY_1_RECIPE_SHA256`] meta-SHA.
+    ///
+    /// If this fails, [`FAMILY_1_RECIPE_OUTPUTS`] was modified
+    /// without updating the meta-SHA; the failure-output diagnostic
+    /// includes the new SHA bytes for paste into the constant.
+    #[test]
+    fn family_1_meta_sha_matches_array_contents() {
+        let computed = compute_family_1_recipe_hash();
         assert_eq!(
-            compute_family_1_recipe_hash(),
-            FAMILY_1_RECIPE_SHA256,
-            "C1 Family-1 scaffold SHA-256 pin must match SHA-256(\"\")"
+            computed, FAMILY_1_RECIPE_SHA256,
+            "FAMILY_1_RECIPE_SHA256 meta-pin drift; FAMILY_1_RECIPE_OUTPUTS contents \
+             produce a different SHA than pinned. If you intentionally changed the \
+             array, update FAMILY_1_RECIPE_SHA256 to: {computed:02x?}"
         );
+    }
+
+    /// Cross-checkability check 1: Family-1 array length equals
+    /// [`super::adversarial::get_corpus`] length.
+    ///
+    /// Catches recipe-addition-without-canonical-update and
+    /// recipe-removal-without-canonical-removal. The R1-D4 close
+    /// shape pins bidirectional correspondence between the recipe
+    /// registry and the canonical-output array; this test is the
+    /// length half of that pairing. The recipe-name pairing half
+    /// lives at [`family_1_array_recipe_names_in_get_corpus`].
+    #[test]
+    fn family_1_array_length_matches_corpus_length() {
+        let corpus_len = super::super::adversarial::get_corpus().len();
+        assert_eq!(
+            FAMILY_1_RECIPE_OUTPUTS.len(),
+            corpus_len,
+            "FAMILY_1_RECIPE_OUTPUTS length ({}) != get_corpus() length ({}). \
+             Either a recipe was added without canonical regeneration, or a \
+             recipe was removed without canonical pruning. Re-run \
+             `adversarial::canonical::compute_corpus_canonicals` and update \
+             FAMILY_1_RECIPE_OUTPUTS + FAMILY_1_RECIPE_SHA256.",
+            FAMILY_1_RECIPE_OUTPUTS.len(),
+            corpus_len,
+        );
+    }
+
+    /// Cross-checkability check 2: Every recipe in
+    /// [`super::adversarial::get_corpus`] has a corresponding
+    /// canonical entry at the matching index, and the per-recipe
+    /// inline comment in this file's array body (the
+    /// `// recipe[i]: <name>` form) is consistent with the
+    /// corpus's actual recipe at that index.
+    ///
+    /// This test does not re-derive canonical SHA-256 values
+    /// (that's the runtime-backstop integration test at C7); it
+    /// asserts the structural correspondence at C5's commit time.
+    #[test]
+    fn family_1_array_recipe_names_in_get_corpus() {
+        let corpus = super::super::adversarial::get_corpus();
+        for (i, recipe) in corpus.iter().enumerate() {
+            assert!(
+                !recipe.name.is_empty(),
+                "Recipe at index {i} has empty name; canonical-array indexing requires \
+                 non-empty names",
+            );
+            assert!(
+                i < FAMILY_1_RECIPE_OUTPUTS.len(),
+                "Recipe `{}` at corpus index {i} has no canonical entry (array len = {})",
+                recipe.name,
+                FAMILY_1_RECIPE_OUTPUTS.len(),
+            );
+        }
     }
 
     /// Asserts measurement-run-count provisional disposition: C1

@@ -4,7 +4,9 @@
 // BSD-3-Clause
 
 //! Canonical-output generator binary for the Phase 2g differential
-//! test harness (§5.2.6 + R4-D7 + §3.18 R6-D4).
+//! test harness (§5.2.6 + R4-D7 + §3.18 R6-D4) — extended at
+//! Phase 2h C5 to also emit the Family-1 adversarial canonicals
+//! (R1-D4 close + R2-D1 attack-class split close).
 //!
 //! Per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §4.6 M1 + R4-D7 +
 //! §3.18 R6-D4, this binary produces the contents of
@@ -16,6 +18,39 @@
 //! written to stdout as a Rust source file that the operator
 //! pastes into the `canonical_outputs.rs` module; stderr carries
 //! progress and diagnostic information.
+//!
+//! ## Phase 2h C5 extension: Family-1 adversarial canonicals
+//!
+//! Per `docs/design/RANDOMX_V2_PHASE2H_PLAN.md` R1-D4 close, the
+//! binary is extended (not duplicated) to also emit the contents
+//! of [`adversarial_canonical_outputs::FAMILY_1_RECIPE_OUTPUTS`].
+//! The `--include-family-1` flag enables the extension; when
+//! present, the binary additionally:
+//!
+//! 1. Reads
+//!    [`shekyl_randomx_differential::adversarial::get_corpus()`].
+//! 2. For each unique base seedhash in the corpus, allocates a C
+//!    cache via `randomx_alloc_cache` + `randomx_init_cache` and
+//!    reads back the 256-MiB cache memory via
+//!    `randomx_get_cache_memory`.
+//! 3. For each recipe, applies the recipe's modifications to the
+//!    base cache bytes via
+//!    [`shekyl_randomx_differential::adversarial::interpreter::evaluate`].
+//! 4. Computes the SHA-256 of the evaluated bytes per R1-D4's
+//!    expanded-bytes-SHA discipline.
+//! 5. Emits the resulting `[u8; 32]` array as the body of
+//!    `FAMILY_1_RECIPE_OUTPUTS` + the per-array meta-SHA as
+//!    `FAMILY_1_RECIPE_SHA256`.
+//!
+//! The C-reference path is the **independent-substrate
+//! regeneration** path per
+//! [`adversarial::canonical`](../adversarial/canonical.rs)'s
+//! module-doc rationale: the Rust-subject path (used at C5 initial
+//! population) and the C-reference path here are
+//! cache-equivalent-precondition-guaranteed to produce the same
+//! canonical bytes; the binary's independent path catches
+//! Rust-side bugs in `PreparedCache::derive` that the cache-
+//! equivalence precondition might mask.
 //!
 //! ## Output shape (§3.18 R6-D4 flat arrays)
 //!
@@ -83,6 +118,9 @@ use randomx_v2_sys::{
 };
 use sha2::{Digest, Sha256};
 use shekyl_pow_randomx::Seedhash;
+use shekyl_randomx_differential::adversarial::{
+    get_corpus, interpreter::evaluate, types::BaseSeedhash,
+};
 use shekyl_randomx_differential::corpus_random::{
     generate_random_corpus, RandomCorpusPair, NIGHTLY_DATA_PER_SEEDHASH, NIGHTLY_SEEDHASH_COUNT,
 };
@@ -100,6 +138,7 @@ fn main() -> ExitCode {
     let argv: Vec<String> = env::args().collect();
     let mut seedhash_count: usize = NIGHTLY_SEEDHASH_COUNT;
     let mut data_per_seedhash: usize = NIGHTLY_DATA_PER_SEEDHASH;
+    let mut include_family_1: bool = false;
     for arg in &argv[1..] {
         if let Some(v) = arg.strip_prefix("--random-corpus-seedhashes=") {
             match v.parse() {
@@ -117,6 +156,8 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             }
+        } else if arg == "--include-family-1" {
+            include_family_1 = true;
         } else if arg == "--help" || arg == "-h" {
             print_help();
             return ExitCode::SUCCESS;
@@ -133,13 +174,18 @@ fn main() -> ExitCode {
         seedhash_count * data_per_seedhash
     );
     let corpus = generate_random_corpus(seedhash_count, data_per_seedhash);
-    match generate(&corpus) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(msg) => {
-            eprintln!("error: {msg}");
-            ExitCode::FAILURE
+    if let Err(msg) = generate(&corpus) {
+        eprintln!("error: {msg}");
+        return ExitCode::FAILURE;
+    }
+    if include_family_1 {
+        eprintln!("gen-canonical-outputs: generating Family-1 adversarial canonicals");
+        if let Err(msg) = generate_family_1() {
+            eprintln!("error: family-1 generation failed: {msg}");
+            return ExitCode::FAILURE;
         }
     }
+    ExitCode::SUCCESS
 }
 
 fn print_help() {
@@ -159,6 +205,9 @@ fn print_help() {
          FLAGS:\n  \
              --random-corpus-seedhashes=<N>          (default: 32)\n  \
              --random-corpus-data-per-seedhash=<M>   (default: 32)\n  \
+             --include-family-1                      Also emit Phase 2h\n  \
+                                                     Family-1 adversarial\n  \
+                                                     canonicals\n  \
              --help, -h                              Print this message\n"
     );
 }
@@ -289,4 +338,143 @@ fn emit_hash_row(bytes: &[u8; 32]) {
         print!(" 0x{byte:02x}");
     }
     println!("],");
+}
+
+/// Generate the Phase 2h C5 Family-1 adversarial canonical-output
+/// array via the C reference's `randomx_get_cache_memory` for each
+/// recipe's base seedhash, applying the recipe's modifications,
+/// and computing the SHA-256 of the evaluated bytes.
+///
+/// Output shape mirrors the
+/// [`adversarial_canonical_outputs::FAMILY_1_RECIPE_OUTPUTS`]
+/// array body — one `[u8; 32]` row per recipe in
+/// [`get_corpus`]'s emission order, with a per-recipe inline
+/// comment carrying the recipe name + a rationale excerpt. The
+/// per-array meta-SHA (matching
+/// [`adversarial_canonical_outputs::FAMILY_1_RECIPE_SHA256`]) is
+/// emitted after the array body.
+fn generate_family_1() -> Result<(), String> {
+    let corpus = get_corpus();
+    eprintln!(
+        "  Family-1 corpus size: {} recipes (R1-D4 close discipline)",
+        corpus.len()
+    );
+
+    // Dedup base seedhashes — each unique base requires one C
+    // cache allocation/init/release cycle. The C4 starter corpus
+    // has 3 unique bases across 8 recipes per the
+    // adversarial::recipes module's bases (all-0x42, all-zeros,
+    // all-0x01).
+    let mut unique_bases: Vec<BaseSeedhash> = Vec::new();
+    for recipe in &corpus {
+        if !unique_bases.iter().any(|b| b.bytes == recipe.base.bytes) {
+            unique_bases.push(recipe.base);
+        }
+    }
+    eprintln!(
+        "  Family-1 unique base seedhashes: {} (amortized across {} recipes)",
+        unique_bases.len(),
+        corpus.len()
+    );
+
+    // Derive each unique base's 256-MiB cache bytes via the C
+    // reference (independent-substrate path per the module-doc
+    // rationale). Stored as Vec<u8> for the recipe evaluator to
+    // consume.
+    let mut base_caches: Vec<(BaseSeedhash, Vec<u8>)> = Vec::with_capacity(unique_bases.len());
+    for (i, base) in unique_bases.iter().enumerate() {
+        eprintln!(
+            "    base {}/{} ({}): deriving via C reference",
+            i + 1,
+            unique_bases.len(),
+            base.name
+        );
+        let seedhash = Seedhash::from_bytes(base.bytes);
+        let seedhash_bytes = seedhash.as_bytes();
+        // SAFETY: the FFI lifecycle mirrors generate()'s pattern;
+        // randomx_alloc_cache + randomx_init_cache + read via
+        // randomx_get_cache_memory + randomx_release_cache. NULL
+        // checks on alloc returns.
+        let bytes = unsafe {
+            let cache = randomx_alloc_cache(RANDOMX_FLAG_DEFAULT);
+            if cache.is_null() {
+                return Err(format!(
+                    "randomx_alloc_cache returned NULL for base seedhash {} ({})",
+                    base.name, seedhash
+                ));
+            }
+            randomx_init_cache(
+                cache,
+                seedhash_bytes.as_ptr().cast::<c_void>(),
+                seedhash_bytes.len(),
+            );
+            let cache_mem = randomx_get_cache_memory(cache);
+            if cache_mem.is_null() {
+                randomx_release_cache(cache);
+                return Err(format!(
+                    "randomx_get_cache_memory returned NULL for base seedhash {} ({})",
+                    base.name, seedhash
+                ));
+            }
+            let slice =
+                std::slice::from_raw_parts(cache_mem.cast::<u8>(), RANDOMX_CACHE_SIZE_BYTES);
+            let owned = slice.to_vec();
+            randomx_release_cache(cache);
+            owned
+        };
+        base_caches.push((*base, bytes));
+    }
+
+    println!();
+    println!("// Phase 2h C5 Family-1 adversarial canonicals — paste body into");
+    println!("// adversarial_canonical_outputs::FAMILY_1_RECIPE_OUTPUTS.");
+    println!("#[rustfmt::skip]");
+    println!("pub const FAMILY_1_RECIPE_OUTPUTS: &[[u8; 32]] = &[");
+
+    let mut canonicals: Vec<[u8; 32]> = Vec::with_capacity(corpus.len());
+    for (recipe_idx, recipe) in corpus.iter().enumerate() {
+        let base_bytes = &base_caches
+            .iter()
+            .find(|(b, _)| b.bytes == recipe.base.bytes)
+            .expect("base cache for recipe was derived above")
+            .1;
+        let evaluated = evaluate(recipe, base_bytes);
+        let mut hasher = Sha256::new();
+        hasher.update(&evaluated.cache_bytes);
+        let canonical: [u8; 32] = hasher.finalize().into();
+        canonicals.push(canonical);
+
+        let rationale_excerpt = if recipe.rationale.len() > 60 {
+            format!("{}…", &recipe.rationale[..60])
+        } else {
+            recipe.rationale.to_string()
+        };
+        println!(
+            "    // recipe[{recipe_idx}]: {} — {rationale_excerpt}",
+            recipe.name
+        );
+        emit_hash_row(&canonical);
+    }
+    println!("];");
+
+    // Emit the per-array meta-SHA.
+    let mut meta_hasher = Sha256::new();
+    for canonical in &canonicals {
+        meta_hasher.update(canonical);
+    }
+    let meta: [u8; 32] = meta_hasher.finalize().into();
+    println!();
+    println!("// FAMILY_1_RECIPE_SHA256 meta-pin (SHA-256 of array contents).");
+    println!("pub const FAMILY_1_RECIPE_SHA256: [u8; 32] = [");
+    print!("    ");
+    for (i, byte) in meta.iter().enumerate() {
+        if i > 0 {
+            print!(", ");
+        }
+        print!("0x{byte:02x}");
+    }
+    println!(",");
+    println!("];");
+
+    Ok(())
 }
