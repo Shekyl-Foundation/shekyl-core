@@ -244,38 +244,47 @@ mod tests {
         );
     }
 
-    /// [`compute_corpus_canonicals`] returns one entry per recipe
-    /// in the input corpus, preserving ordering. The test uses a
-    /// synthetic corpus to avoid the ~30-second Argon2d cost of
-    /// the real corpus; the ordering invariant is structural and
-    /// does not depend on the derivation path.
+    /// [`compute_recipe_canonical`] produces distinct outputs for
+    /// recipes that differ only in their modification list. This
+    /// is the per-recipe correctness substrate that makes the
+    /// corpus-level ordering invariant of [`compute_corpus_canonicals`]
+    /// meaningful — if two recipes with distinct modifications
+    /// canonicalized to the same value, the ordering pin would
+    /// degenerate. The test uses synthetic base bytes to avoid the
+    /// ~30-second Argon2d cost of [`derive_base_cache_bytes`].
+    ///
+    /// The full corpus-level ordering invariant of
+    /// [`compute_corpus_canonicals`] (one output per recipe, in
+    /// input order) is checked under `#[ignore]` by
+    /// [`compute_corpus_canonicals_full_corpus_shape`] below, which
+    /// pays the Argon2d derive cost; this cheap test exercises the
+    /// per-recipe canonicalization substrate the ordering depends
+    /// on. A `compute_corpus_canonicals` variant that accepts an
+    /// injected base-cache provider would let this test cover the
+    /// corpus-level loop directly, but the public surface intentionally
+    /// hides the base-cache cache; the rename above closes Copilot's
+    /// review comment without expanding the public API.
     #[test]
-    fn compute_corpus_canonicals_preserves_recipe_ordering() {
-        // Two recipes sharing the same base — exercise the
-        // amortization path AND the ordering invariant.
+    fn compute_recipe_canonical_distinguishes_modifications() {
         let base = BaseSeedhash {
             name: "test-base",
             bytes: [0xab; 32],
         };
         let recipe_a = CacheRecipe {
             name: "rec-a",
-            rationale: "Category 3: ordering test recipe A",
+            rationale: "Category 3: distinguishability test recipe A",
             base,
             modifications: &[(0, 0x11)],
         };
         let recipe_b = CacheRecipe {
             name: "rec-b",
-            rationale: "Category 3: ordering test recipe B",
+            rationale: "Category 3: distinguishability test recipe B",
             base,
             modifications: &[(0, 0x22)],
         };
-        let corpus = [recipe_a, recipe_b];
-        // Use synthetic base bytes via compute_recipe_canonical's
-        // input — bypasses the slow Argon2d derive. The ordering
-        // assertion below works regardless of the base content.
         let base_bytes = vec![0x33u8; BASE_CACHE_BYTES_LEN];
-        let canonical_a = compute_recipe_canonical(&corpus[0], &base_bytes);
-        let canonical_b = compute_recipe_canonical(&corpus[1], &base_bytes);
+        let canonical_a = compute_recipe_canonical(&recipe_a, &base_bytes);
+        let canonical_b = compute_recipe_canonical(&recipe_b, &base_bytes);
         assert_ne!(
             canonical_a, canonical_b,
             "Recipes with distinct modifications must produce distinct canonicals",
