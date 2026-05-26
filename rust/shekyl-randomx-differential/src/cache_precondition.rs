@@ -226,13 +226,16 @@ impl std::error::Error for ByteDivergence {}
 ///
 /// # Cost
 ///
-/// One full traversal of the 256-MiB cache on each side, plus the
-/// 1-KiB-per-iteration block-compare cost. Roughly comparable to
-/// the SHA-256 default path but with no hashing overhead. The
-/// peak-memory cost is bounded at 1 KiB on the Rust side (the
-/// visitor iterator yields one block at a time) and ~256 MiB on
-/// the C side (the contiguous cache view), well within the
-/// strict-mode 512-MiB peak per R1-D14 §F1.
+/// One full traversal of the 256-MiB cache on each side until the
+/// first divergent block is found, plus the 1-KiB-per-iteration
+/// block-compare cost. On divergence, the ±64-byte window is
+/// assembled from at most three sources — the previous block
+/// (buffered as we iterate), the current block (already in hand),
+/// and the next block (fetched via one more `iter.next()`) — with
+/// no second 256-MiB traversal. Peak memory is bounded at 2 KiB on
+/// the Rust side (current block + buffered previous block) and
+/// ~256 MiB on the C side (the contiguous cache view), well within
+/// the strict-mode 512-MiB peak per R1-D14 §F1.
 ///
 /// # Errors
 ///
@@ -249,13 +252,27 @@ pub fn byte_diff(
     let c_bytes = c_oracle.cache_bytes();
     debug_assert_eq!(c_bytes.len(), RANDOMX_CACHE_SIZE_BYTES);
     let mut absolute_offset: usize = 0;
-    for rust_block in rust_subject.prepared().cache_block_bytes_for_testing() {
+    // The window may include a one-block trailing context (when the
+    // divergent byte falls within the first
+    // `DIVERGENCE_WINDOW_HALF_WIDTH` bytes of the current block, the
+    // previous block carries the leading half of the window). We
+    // retain the most recent block in `prev_block` so that case
+    // does not require a re-traversal.
+    let mut prev_block: Option<(usize, [u8; 1024])> = None;
+    let mut iter = rust_subject.prepared().cache_block_bytes_for_testing();
+    while let Some(rust_block) = iter.next() {
         let block_len = rust_block.len();
         let c_block = &c_bytes[absolute_offset..absolute_offset + block_len];
         if let Some(offset_in_block) = find_first_divergence(&rust_block, c_block) {
             let divergent_offset = absolute_offset + offset_in_block;
-            let (window_start, rust_window, c_window) =
-                build_divergence_window(divergent_offset, rust_subject, c_bytes);
+            let (window_start, rust_window, c_window) = build_divergence_window(
+                divergent_offset,
+                absolute_offset,
+                &rust_block,
+                prev_block.as_ref().map(|(start, b)| (*start, b)),
+                &mut iter,
+                c_bytes,
+            );
             return Err(ByteDivergence {
                 seedhash: *rust_subject.seedhash(),
                 offset: divergent_offset,
@@ -264,6 +281,7 @@ pub fn byte_diff(
                 c_window,
             });
         }
+        prev_block = Some((absolute_offset, rust_block));
         absolute_offset += block_len;
     }
     debug_assert_eq!(absolute_offset, RANDOMX_CACHE_SIZE_BYTES);
@@ -283,14 +301,23 @@ fn find_first_divergence(rust: &[u8], c: &[u8]) -> Option<usize> {
 /// Build the ±[`DIVERGENCE_WINDOW_HALF_WIDTH`] window for a byte
 /// divergence at `offset` in both caches.
 ///
-/// The Rust side re-iterates `cache_block_bytes_for_testing` to
-/// reach the window's blocks (the iterator is consumed once per
-/// pass; the second pass is bounded to the at-most-two 1-KiB blocks
-/// that overlap the window, not the full 256 MiB). The C side
-/// slices directly from the contiguous `cache_bytes` view.
+/// The Rust side reuses the `current_block` (already in hand from
+/// [`byte_diff`]'s active iteration); when the window's leading edge
+/// crosses into the previous block, `prev_block` (the most recent
+/// block buffered by `byte_diff`) supplies the leading bytes; when
+/// the window's trailing edge crosses into the next block,
+/// `remainder_iter.next()` fetches it (advancing the same iterator
+/// `byte_diff` was using). Because the half-width is 64 bytes and
+/// the block size is 1024 bytes, the window spans at most two
+/// adjacent blocks; the three sources cover every case without a
+/// second 256-MiB traversal. The C side slices directly from the
+/// contiguous `cache_bytes` view.
 fn build_divergence_window(
     offset: usize,
-    rust_subject: &RustSubjectSession,
+    current_block_start: usize,
+    current_block: &[u8],
+    prev_block: Option<(usize, &[u8; 1024])>,
+    remainder_iter: &mut impl Iterator<Item = [u8; 1024]>,
     c_bytes: &[u8],
 ) -> (usize, Vec<u8>, Vec<u8>) {
     let window_start = offset.saturating_sub(DIVERGENCE_WINDOW_HALF_WIDTH);
@@ -298,23 +325,36 @@ fn build_divergence_window(
     let window_len = window_end - window_start;
     let c_window = c_bytes[window_start..window_end].to_vec();
     let mut rust_window: Vec<u8> = Vec::with_capacity(window_len);
-    let mut absolute: usize = 0;
-    for rust_block in rust_subject.prepared().cache_block_bytes_for_testing() {
-        let block_len = rust_block.len();
-        let block_start = absolute;
-        let block_end = absolute + block_len;
-        if block_end <= window_start {
-            absolute = block_end;
-            continue;
-        }
-        if block_start >= window_end {
-            break;
-        }
-        let copy_start = window_start.saturating_sub(block_start);
-        let copy_end = (window_end - block_start).min(block_len);
-        rust_window.extend_from_slice(&rust_block[copy_start..copy_end]);
-        absolute = block_end;
+
+    let current_block_end = current_block_start + current_block.len();
+    debug_assert!(
+        offset >= current_block_start && offset < current_block_end,
+        "divergent offset must lie within the current block"
+    );
+
+    // Leading slice: previous block, if window crosses backwards.
+    if window_start < current_block_start {
+        let (prev_start, prev_bytes) =
+            prev_block.expect("window crosses backwards but no previous block buffered");
+        debug_assert_eq!(prev_start + prev_bytes.len(), current_block_start);
+        let copy_start = window_start - prev_start;
+        rust_window.extend_from_slice(&prev_bytes[copy_start..]);
     }
+
+    // Body slice: current block, clipped to the window's intersection.
+    let current_copy_start = window_start.saturating_sub(current_block_start);
+    let current_copy_end = (window_end - current_block_start).min(current_block.len());
+    rust_window.extend_from_slice(&current_block[current_copy_start..current_copy_end]);
+
+    // Trailing slice: next block, if window crosses forwards.
+    if window_end > current_block_end {
+        let next_bytes = remainder_iter
+            .next()
+            .expect("window crosses forwards but no next block available");
+        let copy_end = window_end - current_block_end;
+        rust_window.extend_from_slice(&next_bytes[..copy_end]);
+    }
+
     debug_assert_eq!(rust_window.len(), window_len);
     (window_start, rust_window, c_window)
 }
@@ -418,5 +458,112 @@ mod tests {
     fn hex_lower_emits_lowercase_no_separator() {
         assert_eq!(hex_lower(&[0x0a, 0xb1, 0xc2]), "0ab1c2");
         assert_eq!(hex_lower(&[]), "");
+    }
+
+    /// Synthesize a single 1-KiB block filled with a sentinel byte
+    /// so window-construction tests can identify which source
+    /// (previous / current / next) supplied each window byte.
+    fn fill_block(sentinel: u8) -> [u8; 1024] {
+        [sentinel; 1024]
+    }
+
+    /// Window fully contained in the current block: only the
+    /// current-block source contributes; `prev_block` is unread and
+    /// the iterator is not advanced.
+    #[test]
+    fn build_divergence_window_interior_uses_current_block_only() {
+        let prev = fill_block(0xAA);
+        let current = fill_block(0xBB);
+        let next = fill_block(0xCC);
+        let mut iter = std::iter::once(next);
+        let (window_start, rust_window, c_window) = build_divergence_window(
+            // Divergence in the middle of the current block, where
+            // the ±64 window cannot cross either boundary.
+            1024 + 500,
+            1024,
+            &current,
+            Some((0, &prev)),
+            &mut iter,
+            &vec![0xFF_u8; 4096],
+        );
+        assert_eq!(window_start, 1024 + 500 - 64);
+        assert_eq!(rust_window.len(), 129);
+        assert!(
+            rust_window.iter().all(|&b| b == 0xBB),
+            "all bytes must come from current block"
+        );
+        assert_eq!(c_window.len(), 129);
+        // The remainder iterator must not have been advanced.
+        assert_eq!(iter.count(), 1, "next block must still be available");
+    }
+
+    /// Window crosses backwards into the previous block: leading
+    /// bytes come from `prev_block`, trailing from `current_block`;
+    /// the iterator is not advanced.
+    #[test]
+    fn build_divergence_window_crosses_backwards_into_prev_block() {
+        let prev = fill_block(0xAA);
+        let current = fill_block(0xBB);
+        let next = fill_block(0xCC);
+        let mut iter = std::iter::once(next);
+        let (window_start, rust_window, _c_window) = build_divergence_window(
+            // Divergence 10 bytes into the current block: the
+            // window's leading 54 bytes lie in the previous block.
+            1024 + 10,
+            1024,
+            &current,
+            Some((0, &prev)),
+            &mut iter,
+            &vec![0xFF_u8; 4096],
+        );
+        assert_eq!(window_start, 1024 + 10 - 64);
+        assert_eq!(rust_window.len(), 129);
+        let prev_count = rust_window.iter().filter(|&&b| b == 0xAA).count();
+        let current_count = rust_window.iter().filter(|&&b| b == 0xBB).count();
+        assert_eq!(prev_count, 54, "54 leading bytes from previous block");
+        assert_eq!(current_count, 75, "75 trailing bytes from current block");
+        assert_eq!(prev_count + current_count, rust_window.len());
+        assert_eq!(iter.count(), 1, "next block must still be available");
+    }
+
+    /// Window crosses forwards into the next block: leading bytes
+    /// from `current_block`, trailing from the iterator's next
+    /// item; `prev_block` is unread.
+    #[test]
+    fn build_divergence_window_crosses_forwards_into_next_block() {
+        let current = fill_block(0xBB);
+        let next = fill_block(0xCC);
+        let mut iter = std::iter::once(next);
+        let (window_start, rust_window, _c_window) = build_divergence_window(
+            // Divergence 10 bytes before the current block's end:
+            // the window's trailing 54 bytes lie in the next block.
+            1024 + 1013,
+            1024,
+            &current,
+            None,
+            &mut iter,
+            &vec![0xFF_u8; 4096],
+        );
+        assert_eq!(window_start, 1024 + 1013 - 64);
+        assert_eq!(rust_window.len(), 129);
+        let current_count = rust_window.iter().filter(|&&b| b == 0xBB).count();
+        let next_count = rust_window.iter().filter(|&&b| b == 0xCC).count();
+        assert_eq!(current_count, 75, "75 leading bytes from current block");
+        assert_eq!(next_count, 54, "54 trailing bytes from next block");
+        assert_eq!(iter.count(), 0, "next block must have been consumed");
+    }
+
+    /// Window at the cache's first byte (`offset = 0`): the
+    /// `saturating_sub` shapes `window_start = 0`, so no previous
+    /// block is needed even though one is offered.
+    #[test]
+    fn build_divergence_window_at_cache_start_saturates_to_zero() {
+        let current = fill_block(0xBB);
+        let mut iter = std::iter::empty::<[u8; 1024]>();
+        let (window_start, rust_window, _c_window) =
+            build_divergence_window(0, 0, &current, None, &mut iter, &vec![0xFF_u8; 4096]);
+        assert_eq!(window_start, 0);
+        assert_eq!(rust_window.len(), 65, "0..65 (offset + half_width + 1)");
+        assert!(rust_window.iter().all(|&b| b == 0xBB));
     }
 }
