@@ -240,8 +240,15 @@ done < <(grep -nE "${PLAN_DOC_PATTERN}" "${RECIPES_DIR}"/*.rs || true)
 #   - `<line>` / `<start>` / `<end>` are positive integers.
 #
 # Resolution: each match is looked up under the extension-specific
-# workspace root. Missing files OR cited line numbers exceeding the
-# file's line count fail the gate.
+# workspace root. Three failure surfaces fail the gate:
+#
+#   - missing file under the extension's workspace root;
+#   - cited line numbers exceeding the file's line count
+#     (`end_line > wc -l`);
+#   - malformed line numbers: `start < 1` (source files are
+#     1-indexed) or `end < start` (reversed range like
+#     `foo.rs:10-1`). These would otherwise pass the `end_line
+#     > file_lines` check but are author-side typos.
 #
 # False-positive surface (named carve-outs):
 #
@@ -294,6 +301,26 @@ while IFS= read -r line; do
     end_line=$(echo "${bare}" | sed -E 's/^[A-Za-z0-9_]+\.[a-z]+:[0-9]+(-([0-9]+))?.*$/\2/')
     if [[ -z "${end_line}" ]]; then
       end_line="${start_line}"
+    fi
+    # Reject malformed line-number cites before the file-resolution
+    # step. Source-file line numbers are 1-indexed and any single
+    # cite or range must satisfy `1 <= start <= end`. A `:0` cite
+    # or a reversed range (e.g. `foo.rs:10-1`) would pass the
+    # existing `end_line > file_lines` check but is clearly an
+    # author-side typo; surfacing it here keeps the M5 gate honest
+    # under the reviewer-trust assumption that cites that *resolve*
+    # were *intended*.
+    if (( start_line < 1 )); then
+      echo "FATAL: ${file_path}:${line_number}: cite uses zero/negative start line (1-indexed required):" >&2
+      echo "  ${bare}" >&2
+      failures=$((failures + 1))
+      continue
+    fi
+    if (( end_line < start_line )); then
+      echo "FATAL: ${file_path}:${line_number}: cite range ${start_line}-${end_line} is reversed (end < start):" >&2
+      echo "  ${bare}" >&2
+      failures=$((failures + 1))
+      continue
     fi
     # Resolve the extension to a workspace root via parallel-array
     # lookup. Unknown extensions are skipped (the FILE_ROOT_BY_EXT
