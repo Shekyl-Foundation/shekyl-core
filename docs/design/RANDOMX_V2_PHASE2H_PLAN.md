@@ -166,14 +166,36 @@ hashes).
 
 **Pre-implementation round** is mandatory per the queued rule-26
 amendment (R7-D5 + the R5-D1 R4-blind-spot finding). The round
-performs four passes: (1) surface enumeration against the actual
+performs five passes: (1) surface enumeration against the actual
 verifier source (no production surface grows); (2) dependency
 discipline per [`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)
 on any methodology-required crate (`cargo-fuzz` / `bolero` /
 `proptest` / `honggfuzz` / `arbitrary` etc. — read the actual
 `Cargo.toml`s under `~/.cargo/registry/src/`, do not rely on
 training-data recall); (3) substrate-derived constant validation
-per R7-D5; (4) corpus-size budget verification against runner class.
+per R7-D5 (verify every numeric threshold the methodology cites
+is reachable against V2 substrate); (4) corpus-size budget
+verification against runner class; (5) **methodology-vs-substrate
+consistency check** — verify the chosen methodology's operational
+substrate exists and behaves as the methodology assumes. Concrete
+shape per methodology: for tail-percentile grinding, confirm the
+chosen percentile is reachable in the chosen budget against the
+actual V2 opcode-frequency distribution (`RANDOMX_FREQ_*` table
+in `randomx-v2-sys`'s vendored `configuration.h`, read at source);
+for coverage-guided fuzzing, confirm the coverage metric (line,
+branch, edge) is actually reported by the chosen fuzzer against
+the verifier's instruction code (read the fuzzer's docs at source,
+do not assume); for spec-derived rare-path enumeration, confirm
+the spec actually documents the rare paths the methodology depends
+on (read the spec at source, do not assume rare-path enumeration
+exists). Pass 5 is structurally adjacent to Pass 3 — Pass 3
+validates numeric constants against substrate, Pass 5 validates
+methodology operational substrate against assumptions — but is
+the discipline that would have caught the original R1-D5 failure
+mode if applied at original methodology-selection time. Round 1
+or the pre-implementation round determines whether Pass 5 is a
+distinct discipline class (a fifth) or a refinement of Pass 3
+(a sub-pass) for the rule-26 amendment queue per R1-D9.
 
 Calibration precedent. Phase 2g closed in 8 substrate-anchored
 rounds (Round 0 scaffold + Rounds 1–7 covering architecture,
@@ -390,6 +412,19 @@ cannot quietly reabsorb the scope:
   the standard
   [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) ≤10-commit
   / ≤5-working-day budget applies.
+- **Do not reopen the §1.1 + §1.5 verifier-surface freeze to
+  accommodate R1-D1 option (g)** (constructed opcode streams at
+  fixed density). Option (g) is enumerated in §3 R1-D1 for
+  option-set completeness so the rejection is auditable against
+  the named substrate rather than re-derived at Round 1; both
+  sub-paths of (g) (pipeline reversal; post-program-generation
+  `data` field) either reverse the AES4R-derived program-
+  generation pipeline or test the verifier against inputs
+  production never produces, which contradicts §0's audit-posture
+  framing of real production behavior and the §1.1 + §1.5
+  verifier-crate production surface freeze. Round 1 closes (g)
+  by citing this §1.7 bullet plus §1.1 + §1.5; no re-litigation
+  required.
 
 ## 2. Forward-actions absorbed from prior phases
 
@@ -397,6 +432,19 @@ This section consolidates the forward-actions Phase 2g routed to
 this round, the FOLLOWUPS V3.0 scope items, and the queued rule-26
 amendments. Each item is named with its origin cite so a future
 round's reviewer can trace the carry-forward without re-deriving it.
+
+**2g→2h carry-forward inventory** (at-a-glance auditability of
+the substrate-mapping per [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+"Continuous discipline as inheritance prevention"):
+
+| 2g deferral | 2h scope absorption | Status |
+|---|---|---|
+| R7-D1 adversarial-corpus methodology | §2.1 + §3 R1-D1 + R1-D8 | Open at Round 1 |
+| R7-D2 u128 edge-case corpus | §2.2 + §3 R1-D1 by structural analogy | Open at Round 1 |
+| R7-D3 §2.5 leg-3 framing restoration | §2.3 + §1.5 substrate freeze on `test-internals` | Pending Round-1 close; plan-doc edit lands at 2h impl PR close |
+| R7-D4 surface-contract scope re-additions | §2.4 + §3 R1-D2 / R1-D3 / R1-D5 / R1-D6 | Open at Round 1 |
+| R7-D5 substrate-derived constant validation | §2.5 + pre-implementation round Pass 4 | Discipline-amendment queued; R1-D9 disposition |
+| FOLLOWUPS V3.0 scope items 1–6 | §2.6 (absorbed by §2.1–§2.4 mapping) | Closes by replacement at 2h impl PR close |
 
 ### 2.1 §3.19 R7-D1 — Adversarial-corpus methodology design + implementation
 
@@ -513,14 +561,16 @@ the implementation PR (small, single-purpose), or formally cite
 2h's pre-implementation round as the precedent the amendment
 captures and defer the rule edit to a separate chore-PR.
 
-The 2h pre-implementation round runs all four passes:
+The 2h pre-implementation round runs all five passes (the fifth
+is a 2h-introduced refinement; see below for its candidate
+disposition under R1-D9):
 
 1. **Surface-enumeration pass** (R5-D1 carry-forward). Confirm any
    chosen accessor's surface matches §1.1 + §1.5 — `test-internals`
    feature gate, sole consumer is the harness crate, no production
    surface grows.
 2. **Cross-invariant impact analysis** (R5-D2 carry-forward).
-   Confirm the methodology + accessor + grinding tool + corpus
+   Confirm the methodology, accessor, grinding tool, and corpus
    contents do not interact with the §1.2 four-crate layering, the
    §1.6 canonical-output pinning, or the §1.4 R1-D14 precondition
    in ways the Round 1 / Round 2 substrate did not account for.
@@ -537,6 +587,24 @@ The 2h pre-implementation round runs all four passes:
    frequency distribution, expected mean + variance under the
    substrate), compute the reachability calculus, confirm the
    threshold is achievable within the substrate's named budget.
+5. **Methodology-vs-substrate consistency check** (2h-introduced;
+   candidate fifth discipline class). Confirm the chosen
+   methodology's *operational* substrate exists and behaves as the
+   methodology assumes, distinct from Pass 4's *numeric* substrate
+   validation. For tail-percentile grinding: confirm the chosen
+   percentile is reachable in the chosen budget against the actual
+   V2 opcode-frequency distribution (`RANDOMX_FREQ_*` table in
+   `randomx-v2-sys`'s vendored `configuration.h`, read at source).
+   For coverage-guided fuzzing: confirm the coverage metric (line /
+   branch / edge) is actually reported by the chosen fuzzer against
+   the verifier's instruction code (read the fuzzer's docs at
+   source). For spec-derived rare-path enumeration: confirm the
+   spec actually documents the rare paths the methodology depends
+   on (read the spec at source). Pass 5 is the discipline that
+   would have caught the original R1-D5 failure mode at original
+   methodology-selection time; whether it counts as a distinct
+   fifth discipline class or a refinement of Pass 4 is a
+   substrate question Round 1 / pre-implementation closes per R1-D9.
 
 ### 2.6 FOLLOWUPS V3.0 scope items 1–6
 
@@ -575,6 +643,25 @@ evidence shifts it), and the reopen-criterion sketch per
 review the multi-round discipline exists to deliver.** Round 1+
 performs the closure with full Round-1 substrate context.
 
+**Procedural sequencing for Round 1: close R1-D8 first.** R1-D8
+(statistical-realism acceptance criterion) is enumerated eighth
+in this list for thematic ordering — methodology / accessor /
+tooling / format / mode / tests / CI / criterion — but is
+*structurally* the load-bearing decision per §3.19 R7-D1. R1-D1
+through R1-D7 each evaluate against a "statistical realism"
+criterion that R1-D8 defines; closing R1-D1's methodology before
+R1-D8's acceptance criterion reproduces the same failure mode
+R7-D1 surfaced (a methodology shape chosen against thresholds
+that turn out to be unreachable on V2 substrate). Round 1
+therefore works R1-D8 first; R1-D1's option evaluation explicitly
+cites R1-D8's chosen acceptance criterion when weighing each
+option's statistical-realism property; R1-D2 through R1-D7 fall
+out of the R1-D8 + R1-D1 close in the order their dependencies
+allow. The R1-D8-first sequencing is a Round 1 procedural anchor
+(not a Round 0 closure of R1-D8) — Round 1's substrate-anchored
+review still closes R1-D8 against its option set, but does so
+before R1-D1 rather than after.
+
 ### R1-D1 — V2-substrate-anchored adversarial-corpus methodology
 
 **Option set (named for Round 1; not closed):**
@@ -612,7 +699,17 @@ performs the closure with full Round-1 substrate context.
   program-generation pipeline to find seedhashes whose generated
   programs match the constructed streams (or accepting that the
   corpus's `data` field is post-program-generation, which changes
-  the verifier surface). Open per Round 0.
+  the verifier surface). **Option (g) is enumerated for option-set
+  completeness but is closed by §1.7 + §1.1 + §1.5 frozen
+  substrate** — both sub-paths (pipeline reversal; post-program-
+  generation `data`) reopen the verifier-crate production surface
+  freeze (§1.1) or bypass AES4R-derived program generation, which
+  tests the verifier against inputs production never produces and
+  contradicts §0's audit-posture framing of real production
+  behavior. Included so Round 1's rejection is auditable against
+  the named substrate rather than re-derived; Round 1 closes (g)
+  by citing §1.7 + §1.1 + §1.5 rather than re-litigating the
+  rejection.
 
 **Criteria (substrate-anchored):**
 
@@ -1102,14 +1199,36 @@ amendment is a separate single-purpose chore-PR that cites 2h's
 pre-implementation round as the second instance promoting the
 discipline.
 
-**Reopen-criterion sketch:** R1-D9 is **open if Round 1 surfaces
-it** — if Round 1 closes without naming this decision, the
-default disposition is (b) and the chore-PR queues alongside the
-implementation. Reopen the decision if Round 1's adversarial pass
-surfaces that the rule-26 amendment's substrate has shifted
-(e.g., the discipline classes' phrasings need revision based on
-the 2h second-instance experience) and the chore-PR's scope
-exceeds the single-purpose budget.
+**Opening criterion (mechanical):** R1-D9 opens at Round 1 if
+**either** (a) **a third confirmed instance of substrate-derived
+constant gaps surfaces during 2h's pre-implementation round** —
+R5-D1 was the first instance, R7-D5 named the discipline class,
+2h's pre-implementation pass would be the third instance and the
+pattern is triple-confirmed (the rule-26 amendment is still
+warranted at two instances per prior conversation, but a third
+makes the amendment urgent rather than queued); **or** (b) **a
+new pre-implementation discipline class emerges during 2h that
+doesn't fit the existing four/five categories** (surface
+enumeration / cross-invariant impact analysis / methodology-vs-
+surface-contract reconciliation / substrate-derived constant
+validation / methodology-vs-substrate consistency — see §2.5 +
+§0). A new class is a substrate-amendment trigger that the
+rule-26 amendment must cover, and waiting for a separate chore-PR
+risks the class being forgotten between 2h and the amendment PR.
+Otherwise R1-D9 defers to a forward-action for a future
+discipline-promotion PR; the queue stays as-is and the default
+disposition is (b) (separate chore-PR after 2h close).
+
+**Reopen-criterion sketch:** Reopen R1-D9 after Round 1 closure
+if Round 2 / pre-implementation rounds surface either trigger
+(a) or (b) above retroactively — the opening criterion is
+mechanical at Round 1 but the substrate evidence may arrive
+later (substrate-derived constant gaps surface during the
+pre-implementation pass; new discipline class surfaces during
+the implementation PR's surface-enumeration audit). Re-evaluation
+shape: amend R1-D9's closure in §11's round-history table and
+land the rule-26 amendment in the implementation PR's final
+commit or as a follow-on chore-PR per the trigger's timing.
 
 ## 4. Threat model
 
@@ -1283,10 +1402,13 @@ Round 0 history row.
   not invoked.
 - The forward-actions absorbed from prior phases in §2 — the
   R7-D1..R7-D5 specifications + FOLLOWUPS V3.0 scope items +
-  the four pre-implementation discipline classes (surface
-  enumeration, cross-invariant impact analysis,
+  the four carry-forward pre-implementation discipline classes
+  (surface enumeration, cross-invariant impact analysis,
   methodology-vs-surface-contract reconciliation,
-  substrate-derived constant validation).
+  substrate-derived constant validation) + the 2h-introduced
+  candidate fifth class (methodology-vs-substrate consistency
+  check; distinct-class-vs-Pass-4-refinement disposition closes
+  per R1-D9).
 - The R1-D1..R1-D8 decision-point enumeration in §3 (option
   sets, criteria, Round-0 default-expectation sketches,
   reopen-criterion sketches), plus the optional R1-D9 for
@@ -1294,7 +1416,8 @@ Round 0 history row.
 - The pre-implementation round's mandatory shape per §2.5 and
   the Round-count expectation in §0 — surface enumeration,
   dependency discipline, substrate-derived constant validation,
-  and corpus-size budget verification.
+  corpus-size budget verification, and methodology-vs-substrate
+  consistency check (five passes total).
 
 **What this round defers.**
 
