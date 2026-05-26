@@ -164,13 +164,14 @@ pub fn evaluate(recipe: &CacheRecipe, base_cache_bytes: &[u8]) -> EvaluatedRecip
     }
 }
 
-/// Stable cache-derivation key for the `base_caches` amortization
-/// layer landing at C6.
+/// Stable byte-equality key for per-consumer base-cache
+/// amortization (see [`super`]'s "Base-cache amortization"
+/// module-level docs for the consumer enumeration).
 ///
 /// The key is `BaseSeedhash::bytes` (not `name`) so two recipes
-/// citing the same base bytes under different display names share a
-/// cache entry — see [`BaseSeedhash`] rustdoc for the name-is-label
-/// rationale.
+/// citing the same base bytes under different display names share
+/// an amortization entry — see [`BaseSeedhash`] rustdoc for the
+/// name-is-label rationale.
 pub fn base_cache_cache_key(base: &BaseSeedhash) -> [u8; 32] {
     base.bytes
 }

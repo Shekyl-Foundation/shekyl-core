@@ -52,16 +52,19 @@
 /// appearing in multiple recipes shares its name across all
 /// citations, so a reviewer reading the recipe directory can
 /// identify which base-derivation work is shared without comparing
-/// 32-byte arrays. The named wrapper also lets the
-/// [`super::interpreter::base_cache_cache_key`] hash-map key remain
-/// human-readable in diagnostic output.
+/// 32-byte arrays. The named wrapper keeps
+/// [`super::interpreter::base_cache_cache_key`]'s byte-equality
+/// key human-readable in diagnostic output.
 ///
-/// The `base_caches` module (added at C6) keys its derivation
-/// cache by `bytes` (not `name`); the cache amortizes the
-/// ~150-200 ms Argon2d-fill cost across all recipes sharing the
-/// same base seedhash. Two recipes citing the same `bytes` under
-/// different `name`s share a cache entry but report distinct names
-/// in diagnostics — the name is a label, not a key.
+/// Per-consumer base-cache amortization (per
+/// [`super`]'s "Base-cache amortization" module-level docs) keys
+/// off `bytes` (not `name`); the per-consumer
+/// `Vec<(base_bytes_key, derived_bytes)>` lookup amortizes the
+/// ~150-200 ms Argon2d-fill cost (per `Cache::derive`'s documented
+/// baseline) across all recipes sharing the same base seedhash.
+/// Two recipes citing the same `bytes` under different `name`s
+/// share an amortization entry but report distinct names in
+/// diagnostics — the name is a label, not a key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BaseSeedhash {
     /// Audit-trail anchor for the base seedhash. Surfaces in
