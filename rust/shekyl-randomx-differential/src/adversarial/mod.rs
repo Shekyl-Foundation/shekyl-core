@@ -127,20 +127,51 @@ pub fn get_corpus() -> Vec<CacheRecipe> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adversarial::interpreter::BASE_CACHE_BYTES_LEN;
 
-    /// At Phase 2h C3, `get_corpus()` returns an empty slice (all
-    /// four category arrays are scaffold-empty). C4 will populate
-    /// the arrays and this test will need to be updated to assert
-    /// the populated count (or split into a test asserting the
-    /// shape and a test asserting the count separately).
+    /// Phase 2h C4 starter corpus size pin.
+    ///
+    /// At C4, the corpus carries:
+    /// - 2 `spec_silence_anchors` (Category 1) recipes
+    ///   (`u128-high-half-cache-word-0`,
+    ///   `shift-mask-boundary-cache-word-1`).
+    /// - 0 `coverage_targets` (Category 2) recipes (deferred per
+    ///   R1-D1 close Category-2 reopen criterion; coverage-tooling
+    ///   reproducibility verification not yet performed).
+    /// - 3 `boundary_values` (Category 3) recipes
+    ///   (`boundary-cache-first-byte`,
+    ///   `boundary-cache-last-byte`,
+    ///   `boundary-dataset-item-stride-first-edge`).
+    /// - 3 `dataset_item_extrema` (Category 3) recipes
+    ///   (`boundary-block-stride-second-block-base`,
+    ///   `boundary-block-stride-first-block-tail`,
+    ///   `boundary-line-stride-within-block`).
+    ///
+    /// Total: **8 recipes** at C4.
+    ///
+    /// Per R1-D1 close: the target full-corpus size is 50-200
+    /// entries across all categories. C4's 8-recipe starter set
+    /// establishes the methodology end-to-end (each category
+    /// represented or explicitly deferred); subsequent commits and
+    /// post-genesis FOLLOWUPS expand the corpus toward the R1-D1
+    /// target.
+    ///
+    /// This count is the M1 substrate anchor for the canonical-
+    /// output array landing at C5 — `FAMILY_1_RECIPE_OUTPUTS` must
+    /// have one entry per `get_corpus()` element with matching
+    /// recipe-index ordering per [`get_corpus`]'s aggregation-
+    /// order pin.
     #[test]
-    fn c3_corpus_is_scaffold_empty() {
+    fn c4_starter_corpus_size_pin() {
         let corpus = get_corpus();
         assert_eq!(
             corpus.len(),
-            0,
-            "Phase 2h C3 corpus is scaffold-only; populating at C4 requires updating \
-             this test to assert the new count. Got {got} recipes; expected 0.",
+            8,
+            "Phase 2h C4 starter corpus size drift: expected 8 recipes (2 \
+             spec_silence + 0 coverage + 3 boundary + 3 dataset_item_extrema); got \
+             {got}. If this is intentional (recipe added or removed), update this \
+             test's expected count AND the C5 FAMILY_1_RECIPE_OUTPUTS array AND any \
+             documentation in this module's `c4_starter_corpus_size_pin` rustdoc.",
             got = corpus.len(),
         );
     }
@@ -149,15 +180,78 @@ mod tests {
     /// per-category sub-modules. A test-time invocation of
     /// `get_corpus()` ensures any future refactor that breaks the
     /// `pub mod` declarations or the per-category constant names
-    /// is caught at C3's test surface, not at C4's first-recipe-
+    /// is caught at C3's test surface, not at a future-recipe-
     /// addition PR.
     #[test]
     fn get_corpus_links_all_four_category_modules() {
-        // The mere fact that this compiles + runs without panicking
-        // pins the linkage. The assertion is structural: we're not
-        // checking the corpus's contents (covered by
-        // c3_corpus_is_scaffold_empty above), just that the
-        // four-module aggregation surface exists.
         let _ = get_corpus();
+    }
+
+    /// Recipe-data well-formedness: every recipe in the C4 starter
+    /// corpus has non-empty `name`, non-empty `rationale`, and
+    /// `modifications` whose offsets all lie within
+    /// `BASE_CACHE_BYTES_LEN`.
+    ///
+    /// Catches recipe-author mistakes at test time rather than at
+    /// `interpreter::evaluate`'s panic surface — the panic is the
+    /// hard backstop, but the test surfaces the bug at PR review
+    /// without requiring an interpreter run.
+    #[test]
+    fn corpus_recipes_are_well_formed() {
+        let corpus = get_corpus();
+        for recipe in &corpus {
+            assert!(!recipe.name.is_empty(), "Recipe `name` must be non-empty",);
+            assert!(
+                !recipe.rationale.is_empty(),
+                "Recipe `{}` rationale must be non-empty (R1-D8 inclusion criterion)",
+                recipe.name,
+            );
+            // Per R1-D8 + R2-D4 M5 citation-validation script, the
+            // rationale field must cite a category identifier in the
+            // form "Category N: ..." where N is 1, 2, or 3. The
+            // syntactic check here catches authoring drift; the C9
+            // M5 script provides the mechanical pipeline check.
+            assert!(
+                recipe.rationale.starts_with("Category 1:")
+                    || recipe.rationale.starts_with("Category 2:")
+                    || recipe.rationale.starts_with("Category 3:"),
+                "Recipe `{}` rationale must start with `Category N:` (N = 1/2/3) per \
+                 R1-D8 inclusion criterion + R2-D4 M5 citation-format discipline. \
+                 Got rationale prefix: `{}...`",
+                recipe.name,
+                &recipe.rationale[..recipe.rationale.len().min(40)],
+            );
+            for (mod_idx, &(offset, _value)) in recipe.modifications.iter().enumerate() {
+                assert!(
+                    offset < BASE_CACHE_BYTES_LEN,
+                    "Recipe `{}` modifications[{}].offset = {} exceeds BASE_CACHE_BYTES_LEN \
+                     ({}). Recipe-author bug.",
+                    recipe.name,
+                    mod_idx,
+                    offset,
+                    BASE_CACHE_BYTES_LEN,
+                );
+            }
+        }
+    }
+
+    /// Recipe-name uniqueness: no two recipes in the C4 starter
+    /// corpus share a `name`. Names serve as diagnostic anchors
+    /// in failure-output diagnostics and as keys for the M5
+    /// citation-validation script's reverse mapping; duplicate
+    /// names break both.
+    #[test]
+    fn corpus_recipe_names_unique() {
+        let corpus = get_corpus();
+        let mut names: Vec<&str> = corpus.iter().map(|r| r.name).collect();
+        let original_len = names.len();
+        names.sort();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            original_len,
+            "Duplicate recipe names detected in C4 starter corpus; names must be \
+             unique for diagnostic + M5-script keying",
+        );
     }
 }
