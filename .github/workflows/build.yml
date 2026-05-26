@@ -48,9 +48,19 @@ jobs:
           # uneditable through comment text. False negatives from a
           # `dbg!(` substring inside a string literal are accepted as a
           # contrived corner case.
+          # `*/src/bin/*` excluded because tooling binaries (e.g.
+          # `shekyl-randomx-differential::src/bin/gen_canonical_outputs.rs`,
+          # per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.1.5) emit
+          # operator-facing diagnostics + canonical Rust source on stdout;
+          # the lint's "no debug macros in production Rust" framing is
+          # designed against library code, not CLI tools whose contract is
+          # to print. The exclusion is the same shape as `main.rs` (also
+          # excluded above): binary-target source whose `println!` /
+          # `eprintln!` calls are part of the documented surface.
           FOUND=0
           for f in $(find rust/shekyl-*/src -name '*.rs' \
                      ! -name 'build.rs' ! -name 'main.rs' ! -path '*/examples/*' \
+                     ! -path '*/src/bin/*' \
                      ! -path '*/shekyl-cli/*'); do
             TEST_LINE=$(grep -n '#\[cfg(test)\]' "$f" | head -1 | cut -d: -f1)
             if [ -n "$TEST_LINE" ]; then
@@ -599,7 +609,21 @@ jobs:
         run: cargo build --locked -p shekyl-fcmp
       - name: cargo test (all workspace crates)
         working-directory: rust
-        run: cargo test --locked --workspace
+        # `shekyl-randomx-differential` excluded from the workspace-wide
+        # test because its `c_oracle` module links against the C
+        # reference's `librandomx.a` via `randomx-v2-sys`, which requires
+        # the `RANDOMX_V2_INSTALL_DIR` env var to point at a CMake-built
+        # install prefix (per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md`
+        # §5.1.16 + §5.2.2 R5-D2). The `rust-audit-and-test` job does not
+        # configure CMake or build the C library; that work lives in the
+        # dedicated `.github/workflows/randomx-v2-differential.yml`
+        # workflow (per §5.5.1 + R1-D12), which builds the C library and
+        # runs `cargo test -p shekyl-randomx-differential` with the env
+        # var set. Excluding here is the discipline-correct shape:
+        # workspace-wide test asserts every crate that builds in the
+        # bare-Rust environment passes; the differential harness asserts
+        # under its own substrate-correct environment.
+        run: cargo test --locked --workspace --exclude shekyl-randomx-differential
       - name: "Gate 1: proptest (--release for speed)"
         working-directory: rust
         run: cargo test --locked --release -p shekyl-crypto-pq --test prop_round_trip

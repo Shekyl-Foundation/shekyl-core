@@ -1,0 +1,82 @@
+# cargo-mutants configuration for the RandomX v2 differential
+# harness + verifier per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md`
+# §5.5.6 + §4.6 M2 (Round-3-pinned 2g substrate).
+#
+# # Invocation
+#
+# The §5.5.6 contract pins:
+#
+#   cargo mutants --package shekyl-randomx-differential \
+#                 --package shekyl-pow-randomx \
+#                 --in-place --check
+#
+# Cadence: nightly only (per F5 budget; mutation testing is
+# ~30 min for a small crate and infeasible per-PR). The
+# `.github/workflows/randomx-v2-differential.yml` `mutants-nightly`
+# job invokes this configuration via the standard `cargo mutants`
+# entry point.
+#
+# # Skip-list discipline
+#
+# Per §4.6 M2's skip-list discipline (mirrored in
+# `21-reversion-clause-discipline.mdc`'s named-criteria principle):
+# every entry in `exclude_globs` / `exclude_re` must cite a
+# substrate-anchored justification in the inline comment, and any
+# surviving-mutation acknowledgment must cite:
+#
+#   (a) which corpus class (random / canonical / adversarial-once-2h)
+#       or which adversarial-seedhash extension would kill the
+#       mutation, and
+#   (b) a `docs/FOLLOWUPS.md` entry that queues the corpus-coverage
+#       extension under V3.x.
+#
+# Skip-list entries without a FOLLOWUPS cite are discipline failures
+# auditable at PR-review time per §5.7 drift-prevention.
+#
+# # Initial state (C10 landing)
+#
+# The skip-list begins **empty** at C10 landing. The discipline is
+# that the nightly run surfaces what survives; the first nightly
+# run's surviving-mutation report becomes the first skip-list
+# discussion. Pre-populating speculative skips here would violate
+# the user-protection-defaults-in-user-absent-contexts anti-pattern
+# (per `16-architectural-inheritance.mdc`) — the substrate at C10
+# landing is "no nightly run has happened yet," so the correct
+# disposition is "the skip-list starts empty and grows under the
+# named discipline."
+
+# Test timeout multiplier. The differential harness's tests
+# include integration tests that invoke shell scripts (T13) and
+# `cargo metadata` subprocesses (T14); the verifier's tests
+# include benches and FPU-dependent paths. The default timeout
+# (3× normal test wall-clock) can be too aggressive for these.
+# A 5× multiplier preserves the discipline (slow tests are still
+# bounded) while accommodating the heaviest legitimate paths.
+timeout_multiplier = 5.0
+
+# Files excluded from mutation analysis. Justification for each
+# entry is in the inline comment; per the skip-list discipline,
+# entries without justification are review failures.
+exclude_globs = [
+    # `src/bin/gen_canonical_outputs.rs` is a tooling binary, not
+    # harness logic: it's invoked at canonical-output generation
+    # time (per §5.2.6 + R4-D7), commits its output as
+    # `src/canonical_outputs.rs`, and is not executed during the
+    # nightly differential pass. Mutations here would either be
+    # caught by `gen-canonical-outputs`'s own unit tests
+    # (mechanical, low signal) or not caught at all (the binary's
+    # output is committed, not regenerated per-CI). Per §4.6 M2
+    # substrate text: "mutation testing of the harness" scopes to
+    # the harness's runtime behavior, not its build-time tooling.
+    "rust/shekyl-randomx-differential/src/bin/**",
+
+    # `src/canonical_outputs.rs` is a committed-hex-bytes data
+    # file; the only "code" is `pub const` array declarations.
+    # cargo-mutants's only available mutation is constant-flipping,
+    # and a flipped canonical-output constant is by-definition
+    # caught by T16 (per §6.7.5 M1 — every per-PR T16 run asserts
+    # `compute_hash` output equals the committed canonical). The
+    # mutation-vs-T16 relationship is tautological; excluding here
+    # avoids the noise.
+    "rust/shekyl-randomx-differential/src/canonical_outputs.rs",
+]

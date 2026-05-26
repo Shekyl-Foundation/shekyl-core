@@ -4,12 +4,25 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# Per `docs/design/RANDOMX_V2_PHASE2F_PLAN.md` §3.6 R1-E1:
-# enforce the three crate-level isolation invariants for
-# `rust/shekyl-pow-randomx/`. Modeled on
-# `scripts/ci/check_randomx_fpu_rounding.sh` shape: `set -euo
-# pipefail` preamble, fixed-pattern grep with zero-hit assertion,
-# exit non-zero on any match with line-number output to stderr.
+# Per `docs/design/RANDOMX_V2_PHASE2F_PLAN.md` §3.6 R1-E1 and
+# `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.5.4 + R1-D13:
+# enforce the three crate-level isolation invariants for the three
+# RandomX v2 Rust crates:
+#
+#   - `rust/shekyl-pow-randomx/` (verifier; Phase 2F R1-E1)
+#   - `rust/randomx-v2-sys/` (differential-harness FFI bindings;
+#     Phase 2g R1-D13 + §5.5.4) — Pattern C exempted (the crate's
+#     legitimate purpose is to declare `extern "C" { fn ... }`
+#     import blocks; the inline-form regex Pattern C uses does not
+#     match the block form today, so the exemption is defensive
+#     rather than load-bearing, but it explicit per §5.5.4)
+#   - `rust/shekyl-randomx-differential/` (differential harness;
+#     Phase 2g R1-D13 + §5.5.4)
+#
+# Modeled on `scripts/ci/check_randomx_fpu_rounding.sh` shape:
+# `set -euo pipefail` preamble, fixed-pattern grep with zero-hit
+# assertion, exit non-zero on any match with line-number output to
+# stderr.
 #
 # Pattern A bans runtime-mutable lazy-state types from being
 # imported at non-test module scope. The crate's threat model
@@ -65,13 +78,45 @@ set -euo pipefail
 # blocks remain allowed (they don't carry `fn` after `"C"`). The
 # scope expansion adds no new false-positive surface today (verified
 # at landing: zero column-0 banned shapes in `tests/` or `benches/`).
-CRATE_SRC=(
+#
+# Per Phase 2g §5.5.4 + R1-D13, the scan scope extends to two
+# additional crates: `randomx-v2-sys` and
+# `shekyl-randomx-differential`. The split into PATTERN_AB_SRC vs
+# PATTERN_C_SRC encodes the §5.5.4 carve-out: Pattern C is enforced
+# against the verifier crate (Phase 2F Decision #5: FFI exports
+# live in `shekyl-ffi`, not this crate) and the differential crate
+# (the harness consumes `randomx-v2-sys`'s FFI declarations; it
+# does not export its own); Pattern C is *exempted* against
+# `randomx-v2-sys` because that crate's legitimate purpose is to
+# declare FFI imports. The exemption is defensive (the inline-form
+# Pattern C regex does not match the block-form `extern "C" { fn
+# ... }` declarations `randomx-v2-sys` uses today, so the empirical
+# scan is already clean), and it is named explicitly here so a
+# future contributor cannot accidentally extend `randomx-v2-sys` to
+# add inline-form `pub extern "C" fn ...` exports without tripping
+# the gate's missing-coverage review.
+PATTERN_AB_SRC=(
   "rust/shekyl-pow-randomx/src"
   "rust/shekyl-pow-randomx/tests"
   "rust/shekyl-pow-randomx/benches"
+  "rust/randomx-v2-sys/src"
+  "rust/shekyl-randomx-differential/src"
+  "rust/shekyl-randomx-differential/tests"
 )
 
-for d in "${CRATE_SRC[@]}"; do
+# Pattern C scope excludes `randomx-v2-sys/src` per §5.5.4 carve-out
+# (FFI-binding crate's legitimate purpose is to declare extern "C"
+# imports; the exemption is auditable here, not buried in the
+# per-crate Cargo.toml).
+PATTERN_C_SRC=(
+  "rust/shekyl-pow-randomx/src"
+  "rust/shekyl-pow-randomx/tests"
+  "rust/shekyl-pow-randomx/benches"
+  "rust/shekyl-randomx-differential/src"
+  "rust/shekyl-randomx-differential/tests"
+)
+
+for d in "${PATTERN_AB_SRC[@]}"; do
   if [[ ! -d "${d}" ]]; then
     echo "FATAL: ${d} not found" >&2
     exit 1
@@ -191,28 +236,40 @@ failures=0
 # generated `*.bin` vectors, not the Rust verifier code) and carry
 # legitimate column-0 `static` declarations under C/C++ semantics; they
 # are out of scope for this Rust-targeted invariant gate.
-for pat_name in PATTERN_RUNTIME_STATE PATTERN_MODULE_STATIC PATTERN_FFI_EXPORT; do
+#
+# Patterns A and B run against PATTERN_AB_SRC (all three RandomX v2
+# Rust crates); Pattern C runs against PATTERN_C_SRC (verifier +
+# differential harness; `randomx-v2-sys` carved out per §5.5.4 as
+# documented above).
+for pat_name in PATTERN_RUNTIME_STATE PATTERN_MODULE_STATIC; do
   pat="${!pat_name}"
-  HITS="$(grep -rEn --include='*.rs' "${pat}" "${CRATE_SRC[@]}" || true)"
+  HITS="$(grep -rEn --include='*.rs' "${pat}" "${PATTERN_AB_SRC[@]}" || true)"
   if [[ -n "${HITS}" ]]; then
-    echo "FATAL: ${pat_name} matched in ${CRATE_SRC[*]}:" >&2
+    echo "FATAL: ${pat_name} matched in ${PATTERN_AB_SRC[*]}:" >&2
     echo "${HITS}" >&2
     failures=$((failures + 1))
   fi
 done
 
+HITS="$(grep -rEn --include='*.rs' "${PATTERN_FFI_EXPORT}" "${PATTERN_C_SRC[@]}" || true)"
+if [[ -n "${HITS}" ]]; then
+  echo "FATAL: PATTERN_FFI_EXPORT matched in ${PATTERN_C_SRC[*]}:" >&2
+  echo "${HITS}" >&2
+  failures=$((failures + 1))
+fi
+
 # Multi-line bypass closure for Pattern A: per-file awk pass over
-# every `.rs` source under each `${CRATE_SRC[@]}` directory. See
-# SCAN_USE_BLOCKS_AWK definition above for the rationale and PR #72
-# NF7 reference.
+# every `.rs` source under each `${PATTERN_AB_SRC[@]}` directory.
+# See SCAN_USE_BLOCKS_AWK definition above for the rationale and
+# PR #72 NF7 reference.
 while IFS= read -r f; do
   HITS_MULTI="$(awk -v tokens="${RUNTIME_STATE_TOKENS}" "${SCAN_USE_BLOCKS_AWK}" "${f}")"
   if [[ -n "${HITS_MULTI}" ]]; then
-    echo "FATAL: PATTERN_RUNTIME_STATE matched multi-line use block in ${CRATE_SRC[*]}:" >&2
+    echo "FATAL: PATTERN_RUNTIME_STATE matched multi-line use block in ${PATTERN_AB_SRC[*]}:" >&2
     echo "${HITS_MULTI}" >&2
     failures=$((failures + 1))
   fi
-done < <(find "${CRATE_SRC[@]}" -name '*.rs' -type f)
+done < <(find "${PATTERN_AB_SRC[@]}" -name '*.rs' -type f)
 
 if [[ ${failures} -ne 0 ]]; then
   exit 1
