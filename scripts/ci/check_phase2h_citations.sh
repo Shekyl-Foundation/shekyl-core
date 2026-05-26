@@ -176,7 +176,15 @@ for i in "${!CATEGORY_FILES[@]}"; do
     continue
   fi
   while IFS= read -r line; do
-    content=$(echo "${line}" | sed -E 's/^[[:space:]]*rationale:[[:space:]]*"//')
+    # printf '%s\n' (not echo) handles backslashes and leading
+    # dashes deterministically across shells. The matched
+    # `rationale: "..."` lines may contain backslash-escaped
+    # quotes or backslash-continuations; `echo`'s behavior on
+    # backslashes varies by shell (bash with/without
+    # `posix-defaults`, dash, ksh), where `printf '%s\n'` is
+    # POSIX-mandated literal output. PR #78 Round-3 Copilot
+    # finding F9 (comment 3307323153).
+    content=$(printf '%s\n' "${line}" | sed -E 's/^[[:space:]]*rationale:[[:space:]]*"//')
     case "${content}" in
       "${expected_prefix}"*)
         ;;
