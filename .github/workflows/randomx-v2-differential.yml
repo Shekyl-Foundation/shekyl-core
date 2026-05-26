@@ -172,45 +172,37 @@ jobs:
         # `compute_hash` divergence; once that closes a future
         # amendment adds runtime-mode invocations here.
         #
-        # T2 (`adversarial_corpus_byte_equality`) is also a runtime
-        # mode by transitivity — its byte-equality assertion
-        # currently surfaces the same V3.0 verifier-divergence
-        # FOLLOWUP (docs/FOLLOWUPS.md lines 50-82) — so it is
-        # `#[ignore]`-gated at the test layer and skipped by the
-        # default `cargo test` invocation here. The Phase 2h C7
-        # close documents the inheritance; the Phase 2h C8 close
-        # records that no extra deferral plumbing is required at the
-        # workflow level because the test-layer `#[ignore]` already
-        # excludes T2 from this step. The follow-up un-ignore step
-        # below activates T2 the moment the FOLLOWUP closes — a
-        # single-line workflow edit (remove the `if: false`
-        # condition) mirrors the single-line test-layer edit
-        # (remove the `#[ignore]` attribute).
+        # T2 (`adversarial_corpus_byte_equality`) was originally
+        # `#[ignore]`-gated behind the V3.0 verifier-divergence
+        # FOLLOWUP (closed on `dev` by PR #79, 989610cac, 2026-05-26)
+        # so the default debug-mode `cargo test` invocation below
+        # skipped it. PR #78's post-rebase commit (`c71ce2413`)
+        # extended PR #79's `RANDOMX_FLAG_V2` fix to
+        # `COracleSession::from_raw_for_testing` and lifted T2's
+        # `#[ignore]` attribute. T2 now runs as part of the dedicated
+        # release-mode step below; the default step retains its
+        # original scope (unit + invariant tests; T2 runs once,
+        # release-mode, in the dedicated step to keep its observed
+        # runtime aligned with R1-D6 close Reframe 2's
+        # `T2_PER_PR_BUDGET_MS` budget — debug-mode RandomX is
+        # multi-minute slow without JIT).
         run: |
-          cargo test --locked -p shekyl-randomx-differential -p randomx-v2-sys
-      - name: cargo test --ignored T2 adversarial_corpus_byte_equality
+          cargo test --locked -p shekyl-randomx-differential -p randomx-v2-sys \
+            -- --skip t2_adversarial_corpus_byte_equality
+      - name: cargo test --release T2 adversarial_corpus_byte_equality
         working-directory: rust
-        # Phase 2h C7 + C8 close: T2 (`adversarial_corpus_byte_equality`)
-        # activates here when the V3.0 verifier-divergence FOLLOWUP
-        # closes (docs/FOLLOWUPS.md lines 50-82). Until then, the
-        # step is no-op'd by `if: false`. The step body is the
-        # mechanical activation surface — when the FOLLOWUP closes,
-        # the M3 PR-template review pass removes the `#[ignore]`
-        # attribute on `t2_adversarial_corpus_byte_equality` and
-        # this `if: false` in the same PR; CI then runs T2 per-PR
-        # against the C4 starter corpus (~3-5 seconds release mode)
-        # per RANDOMX_V2_PHASE2H_PLAN.md R1-D6 close Reframe 2
-        # (per-PR while fits in `T2_PER_PR_BUDGET_MS`).
-        #
-        # Per Phase 2h R1-D7 sub-A close, T2 lands in this existing
-        # workflow (not a new dedicated workflow), inheriting the
-        # `randomx-v2-differential.yml` per-PR + push cadence. The
-        # `--release` flag matches the existing manual invocation
-        # documented in the test's rustdoc.
-        if: false
+        # Per-PR release-mode T2 invocation (post-PR-#79 FOLLOWUP
+        # closure + PR #78 post-rebase `c71ce2413` operational close).
+        # Runs T2 against the Phase 2h C4 starter corpus (~10 s
+        # release-mode wall on `ubuntu-latest`-class hardware via the
+        # PR #78 C7 base-cache amortization, fits R1-D6 close
+        # Reframe 2's `T2_PER_PR_BUDGET_MS` budget). Per Phase 2h
+        # R1-D7 sub-A close, T2 lands in this existing workflow (not
+        # a new dedicated workflow), inheriting the
+        # `randomx-v2-differential.yml` per-PR + push cadence.
         run: |
           cargo test --release --locked -p shekyl-randomx-differential \
-            --test adversarial_corpus_byte_equality -- --ignored
+            --test adversarial_corpus_byte_equality
       - name: cargo test --features test-internals (verifier)
         working-directory: rust
         # Per §5.3.3 R5-D1: the verifier crate's

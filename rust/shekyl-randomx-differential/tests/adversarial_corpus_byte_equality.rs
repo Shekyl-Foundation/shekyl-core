@@ -48,59 +48,54 @@
 //! R1-D6 close Reframe 2 — but that demotion is corpus-state-driven
 //! and adjusts at policy time, not by editing this file.
 //!
-//! ## C7 close: `#[ignore]` gate inherits verifier-divergence FOLLOWUP
+//! ## Active per-PR cadence (post-PR-#79 closure)
 //!
-//! C7 implementation surfaced via diagnostic that the Rust verifier's
-//! [`shekyl_pow_randomx::compute_hash`] currently diverges from the C
-//! reference's `randomx_calculate_hash` for *every* `(seedhash, data)`
-//! pair tested — uniform-byte seedhashes, random ChaCha20-derived
-//! seedhashes, short and long data inputs. The Rust↔C cache-byte
-//! SHA precondition (Phase 2g §5.1.7 R1-D14) passes byte-identically
-//! on all tested seedhashes; the divergence is in the post-cache
-//! VM-execution / hash-composition path on the Rust side.
+//! T2 originally landed `#[ignore]`-gated behind the V3.0 verifier-
+//! divergence FOLLOWUP: C7 diagnostics surfaced that the Rust
+//! verifier's [`shekyl_pow_randomx::compute_hash`] diverged from the
+//! C reference's `randomx_calculate_hash` for *every* `(seedhash,
+//! data)` pair tested while the cache-byte SHA precondition passed —
+//! a substrate-broken state, not a methodology gap.
 //!
-//! This is the **same** divergence tracked by the V3.0 FOLLOWUP
-//! "Investigate `shekyl-pow-randomx::compute_hash` divergence from C
-//! reference at large data sizes" ([`docs/FOLLOWUPS.md`](../../../docs/FOLLOWUPS.md)
-//! lines 50–82), whose characterization as "large data sizes only"
-//! was a Phase 2g-time approximation against a single 387-KiB
-//! reproducer. The C7 diagnostic widens the symptom surface: divergence
-//! is universal, not size-gated. The FOLLOWUP entry is amended at C10
-//! to reflect the corrected characterization.
-//!
-//! Per [`docs/design/RANDOMX_V2_PHASE2H_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2H_PLAN.md)
-//! §0 frame "Out of scope (forward-deferred): (a) `compute_hash`
-//! divergence from C reference at large data sizes — separate
-//! FOLLOWUPS V3.0 entry with its own trigger; 2h consumes the harness
-//! as-is. 2h benefits if the divergence lands first; if not, 2h
-//! proceeds independently against the random + canonical-output
-//! corpora plus the new adversarial corpus." T2 inherits the same
-//! deferral that gates T1/T3/T5/T7/T8/T16 at the CI-workflow level:
-//! the test is committed in its final shape, ignored under
-//! `cargo test`, and reopens automatically when the FOLLOWUP closes
-//! and the verifier ships a corrected `compute_hash`.
+//! The FOLLOWUP closed on `dev` via
+//! [PR #79](https://github.com/Shekyl-Foundation/shekyl-core/pull/79)
+//! (merge commit `989610cac`, 2026-05-26). Post-merge substrate
+//! triage (`tests/divergence_triage.rs` D1) identified the root
+//! cause as the V1 algorithm bit being selected at
+//! `randomx_create_vm` time when the surrounding substrate (Argon2d
+//! cache, finalize hash) is V2-shaped; passing `RANDOMX_FLAG_V2` at
+//! VM creation closes the divergence. PR #78's post-rebase commit
+//! extended the same fix to
+//! [`COracleSession::from_raw_for_testing`](shekyl_randomx_differential::c_oracle::COracleSession::from_raw_for_testing)
+//! (the constructor T2 exercises) and lifted T2's `#[ignore]`
+//! attribute as the operational close.
 //!
 //! Per [`21-reversion-clause-discipline.mdc`](../../../.cursor/rules/21-reversion-clause-discipline.mdc),
-//! the gate's reopening criterion is **substrate-anchored** (FOLLOWUP
-//! closure — i.e. `cargo test --ignored` against this file returns
-//! clean), not author-preference-anchored. Removing the `#[ignore]`
-//! attribute is the documented re-evaluation shape; the C10
-//! plan-doc closure records the inheritance.
+//! the reopening criterion for re-`#[ignore]`'ing T2 is **substrate-
+//! anchored**: a regression that reintroduces post-cache
+//! hash-composition divergence between
+//! [`shekyl_pow_randomx::compute_hash`] and
+//! `randomx_calculate_hash`. Preference-anchored re-gating ("the
+//! test is slow", "fails intermittently in CI") is rejected by the
+//! same rule — the test exists to surface real substrate breakage,
+//! and `#[ignore]`-ing it for non-substrate reasons hides exactly
+//! the failure mode it was designed to catch.
 //!
-//! ### Why this is *not* the `#[ignore]`-ladder anti-pattern
+//! ### R1-D6 close Reframe 1: substrate-broken vs ignore-ladder
 //!
-//! R1-D6 close Reframe 1 rejected the `#[ignore]` ladder pattern
-//! for **corpus-availability** deferrals — "test exists but ignored
-//! pending a methodology decision that will eventually land." The
-//! verifier-divergence deferral is a **substrate-broken** deferral:
-//! the substrate the test exercises (`compute_hash`) is known-broken
-//! against the C reference, and the FOLLOWUP's named scope is fixing
-//! it. The test's substrate is the corpus + the cache-equivalence
-//! precondition; both are ready. The deferral lives until the
-//! third substrate (verifier hash equivalence) catches up.
-//!
-//! Invoke manually via `cargo test --release --ignored
-//! --test adversarial_corpus_byte_equality`.
+//! The pre-lift deferral was *not* the `#[ignore]`-ladder
+//! anti-pattern that R1-D6 close Reframe 1 rejected for
+//! corpus-availability deferrals ("test exists but ignored pending
+//! a methodology decision that will eventually land"). The
+//! verifier-divergence deferral was a substrate-broken deferral:
+//! the substrate the test exercises (`compute_hash` ↔
+//! `randomx_calculate_hash` agreement) was known-broken and the
+//! FOLLOWUP's named scope was fixing it. The substrate was
+//! repaired (PR #79 + this PR's post-rebase commit); the gate
+//! lifted; the distinction between substrate-broken (defer
+//! legitimately, lift on substrate fix) and corpus-availability
+//! (anti-pattern, never defer this way) is recorded here as the
+//! discipline's authoritative instance.
 //!
 //! ## Actionable failure semantics (R1-D6 close Reframe 3)
 //!
@@ -146,14 +141,6 @@ fn hex_lower(bytes: &[u8; 32]) -> String {
 }
 
 #[test]
-#[ignore = "Phase 2h T2 (adversarial_corpus_byte_equality): blocked behind the V3.0 \
-            FOLLOWUP `shekyl-pow-randomx::compute_hash` divergence from C reference \
-            (docs/FOLLOWUPS.md lines 50–82). Inherits the same CI-deferral that gates \
-            T1/T3/T5/T7/T8/T16 per RANDOMX_V2_PHASE2G_PLAN.md §6.8 + the \
-            randomx-v2-differential.yml workflow's runtime-modes-deferred comment. \
-            Reopens automatically on FOLLOWUP closure (remove this attribute). Invoke \
-            manually with `cargo test --release --ignored \
-            --test adversarial_corpus_byte_equality`."]
 fn t2_adversarial_corpus_byte_equality() {
     let corpus = get_corpus();
     assert!(
