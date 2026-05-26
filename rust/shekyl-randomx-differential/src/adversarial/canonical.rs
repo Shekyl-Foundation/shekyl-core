@@ -131,13 +131,22 @@ pub fn compute_recipe_canonical(recipe: &CacheRecipe, base_cache_bytes: &[u8]) -
 /// # Cost
 ///
 /// The full [`PreparedCache::derive`] runs the Argon2d-512 cache
-/// fill (~5-30 seconds on `ubuntu-latest`-class hardware
-/// depending on memory-bandwidth headroom). The byte
-/// materialization adds ~1 second per derivation (256 MiB +
-/// 256 MiB allocation + iterator-driven copy). Callers that need
-/// canonicals for multiple recipes sharing a base seedhash should
-/// use [`derive_base_cache_bytes_batched`] to amortize the
-/// derivation across recipes.
+/// fill at the documented baseline of ~150-200 ms on modern
+/// hardware (see `prepared_cache.rs` `derive`'s rustdoc, which is
+/// the workspace's authoritative cost record for the Argon2d-fill
+/// path). The byte materialization adds the cost of allocating
+/// 256 MiB and copying it block-by-block from the
+/// `cache_block_bytes_for_testing` iterator — memory-bandwidth-
+/// bound, ~50-100 ms on `ubuntu-latest`-class runners. Net per
+/// call: ~250-300 ms.
+///
+/// Callers that need canonicals for multiple recipes sharing a
+/// base seedhash should amortize using the
+/// `Vec<(base_bytes_key, derived_bytes)>` pattern documented in
+/// [`super`]'s "Base-cache amortization" module-level rustdoc;
+/// [`compute_corpus_canonicals`] is the in-crate exemplar for the
+/// canonical-array case, and [`crate::mode_adversarial_ratio::run`]
+/// is the exemplar for the per-recipe-ratio measurement case.
 #[must_use]
 pub fn derive_base_cache_bytes(base: &BaseSeedhash) -> Vec<u8> {
     let seedhash = Seedhash::from_bytes(base.bytes);

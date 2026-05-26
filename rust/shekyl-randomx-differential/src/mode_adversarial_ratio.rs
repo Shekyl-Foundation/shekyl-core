@@ -54,12 +54,18 @@
 //!    recipes sharing a `base.bytes` byte sequence share a single
 //!    Argon2d-fill invocation. The C4 starter corpus has 3 unique
 //!    base byte patterns (all-zeros, all-0x42, all-0x01) across
-//!    its 8 recipes — without amortization, T6 would pay 8 ×
-//!    `derive_base_cache_bytes` (~80 s of Argon2d on
-//!    `ubuntu-latest`-class hardware); with amortization it pays
-//!    3 × derive (~30 s). The unique-base count grows much more
-//!    slowly than the recipe count as new categories land, so the
-//!    amortization's value compounds over corpus growth.
+//!    its 8 recipes. Per `Cache::derive`'s documented baseline
+//!    (~150-200 ms Argon2d-dominated) plus ~50-100 ms 256-MiB
+//!    materialization, each `derive_base_cache_bytes` call costs
+//!    ~250-300 ms. Without amortization, T6 would pay 8 × ~300 ms
+//!    ≈ ~2.4 s of base-derivation; with amortization it pays
+//!    3 × ~300 ms ≈ ~900 ms — a ~1.5 s savings on the C4 corpus,
+//!    dwarfed by the per-recipe sampling cost (~100 samples per
+//!    side × 8 recipes ≈ the wall-time dominator). The
+//!    amortization is structurally correct (no redundant Argon2d
+//!    work) rather than wall-time-critical at the C4 scale; its
+//!    value compounds as the unique-base count grows much more
+//!    slowly than the recipe count when new categories land.
 //! 2. **Evaluate the recipe** via
 //!    [`crate::adversarial::interpreter::evaluate`] to produce the
 //!    `(seedhash, cache_bytes)` pair.
