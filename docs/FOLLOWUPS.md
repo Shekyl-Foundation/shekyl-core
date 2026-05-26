@@ -5957,7 +5957,10 @@ Retained for citation in review; each links to the canonical record.
 
   **Cross-references.**
   [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
-  §X.Y post-mortem entry (substrate-triage closure);
+  §11 Round history Round 8 entry (post-merge substrate-triage
+  amendment — R8-D1 verifier-divergence root-cause closure +
+  R8-D2 cache-vs-VM-flag asymmetry pin + R8-D3 missed-altitude
+  finding queued for rule-26);
   [`docs/CHANGELOG.md`](./CHANGELOG.md) "RandomX v2 Phase 2g"
   entry (substrate-triage closure); the diagnostic-triage
   test at
