@@ -4,10 +4,10 @@ overview: "Post-2g adversarial-corpus methodology + implementation. Closes the P
 todos:
   - id: phase2h-round-0
     content: "Round 0 scaffold: front-matter + §0 framing + §1 frozen substrate (six items with cite paths) + §2 forward-actions absorbed (R7-D1..R7-D5 specifications, FOLLOWUPS V3.0 scope items 1–6, rule-26 surface-enumeration-pass + substrate-derived constant validation pass) + §3 R1-D1..R1-D8 decision points (open; not closed at Round 0) + §11 Round 0 history row. §4–§10 reserved as placeholders for Round 1+ substantive content. Land on chore/randomx-v2-phase2h-plan as one design-phase commit per 06-branching.mdc rule 2."
-    status: in_progress
+    status: completed
   - id: phase2h-round-1
-    content: "Round 1 architecture close: close R1-D1 (V2-substrate-anchored adversarial-corpus methodology) + R1-D2 (verifier-side or C-shim accessor) + R1-D3 (grinding/construction tool location and shape) + R1-D4 (on-disk corpus format) + R1-D5 (mode_worst_case implementation surface + ≤5.0× ratio substrate-anchored realism check) + R1-D6 (T2/T6 reactivation cadence) + R1-D7 (CI cadence + workflow placement) + R1-D8 (statistical-realism acceptance criterion replacing R1-D5's V1-shaped thresholds; load-bearing per §3.19 R7-D1). Each close carries explicit reopen-criteria per 21-reversion-clause-discipline.mdc. Open R1-D9 only if substrate surfaces it (rule-26 amendment shape)."
-    status: pending
+    content: "Round 1 architecture close (collaborative): R1-D1 (specified-outliers methodology as composition of three definitions — audit-anchored spec-silence enumeration primary, per-opcode boundary-value supplementary, coverage-metric validation; definition (1) rejected as substrate-unreachable; corpus size 50-200 entries; additively maintainable as load-bearing substrate property), R1-D2 (PreparedCache::from_raw_for_testing under cfg(feature=\"test-internals\") + C-side symmetry via existing randomx_get_cache_memory + production-equivalence constraint pinned as substrate principle), R1-D3 (lib module in shekyl-randomx-differential + declarative C1 recipes primary with C2 imperative escape hatch + B2 runtime expansion + first-class recipe evaluator + executable-specification recipes pinned as substrate property), R1-D4 (Family 1 Rust source const array at adversarial_canonical_outputs.rs + compile-time bidirectional cross-checkability + gen_canonical_outputs.rs bin extension + derive-substrate-inputs/cache-attestation-outputs pinned as substrate principle), R1-D5 (mode_worst_case renamed to mode_adversarial_ratio + Claim 1 per-recipe max-ratio (5.0×−margin) with single-retry noise filter as hard gate + Claim 2 no-per-class-systematic-regression as regression-tracking signal + vocabulary-shift cascade to §2.5/§4/parent §6), R1-D6 (continuous enforcement from first recipe + cadence-corpus alignment as substrate policy + actionable failure semantics pinned as substrate principle), R1-D7 (T2 in existing workflow + T6 in new dedicated workflow with workflow_dispatch pre-genesis + M3 PR-template discipline expansion to .github/workflows/ files + GitHub-hosted runner class with committed RUNNER_NOISE_MARGIN under M1/M3 disciplines + self-hosted runners deferred), R1-D8 (substrate-anchored recipe-acceptance criterion via three evidence categories — audit-anchored / coverage-attested / substrate-derived + corpus directory taxonomy mirrors three categories + M3 PR-template discipline rejects recipes without rationale citation + statistical-realism satisfied by construction), R1-D9 (evaporates — §0 mechanical opening criteria not met; seven substrate-discipline observations queued for future rule-26 amendment PR). Each close carries explicit reopen-criteria per 21-reversion-clause-discipline.mdc. Collaboration-discipline pin: unilateral mid-round close attempt was reverted before push per the collaborative-design principle that closing a round before all participants provide input opens the round again every time."
+    status: completed
   - id: phase2h-round-2
     content: "Round 2 threat-model close: §4 passive + active surfaces under the new corpus methodology. Adversarial corpus changes both surfaces (per Phase 2g §4.4/§4.5/§4.6 precedent: T-A1 silent-disposition-degradation now applies to the adversarial corpus's tamper detection, T-A2 corpus-tamper applies to the adversarial entries, M1 canonical-output property extends to the adversarial canonical hashes). Confirm §35-secure-memory.mdc / §36-secret-locality.mdc remain N/A per Phase 2c §5.11.4 (cache memory public-input-only; the 2h work does not introduce secret-bearing intermediate state)."
     status: pending
@@ -769,6 +769,110 @@ mismatch). Re-evaluation shape: Round 2 of the implementation PR
 if the finding surfaces during implementation; a new design round
 on the same plan-doc if the finding surfaces post-implementation.
 
+#### Round 1 disposition (closes R1-D1) — collaborative close
+
+**Close at substantive reframe.** R1-D1 closes on a **composition of
+three "rare paths" definitions** rather than a single methodology
+selection from the Round-0 option set:
+
+1. **Primary coverage target: definition (4) — audit-anchored
+   spec-silence enumeration.** Recipes drawn directly from the §3.4
+   audit's spec-silence enumeration (committed in
+   `RANDOMX_V2_PHASE2D_PLAN.md §3.4` and equivalent locations). The
+   corpus is *constructed from the audit* rather than *discovered
+   by grinding*.
+2. **Supplementary coverage target: definition (2) — per-opcode
+   boundary-value testing.** Specific edge values per opcode
+   (overflow, sign-bit, divide-by-zero, etc.) as explicit corpus
+   entries.
+3. **Validation mechanism: definition (3) — coverage-metric
+   evidence.** Each recipe is tested against the verifier with a
+   coverage tool to confirm it actually reaches the rare paths it
+   claims to reach. A recipe that doesn't increase coverage past
+   random baseline is redundant, not adversarial.
+
+**Definition (1) "programs with unusual opcode distributions" is
+rejected** as substrate-unreachable per §3.19 R7-D1's per-class
+σ-gap analysis against V2's `PROGRAM_SIZE = 384` and the
+`RANDOMX_FREQ_*` table at
+[`external/randomx-v2/src/configuration.h:88-125`](../../external/randomx-v2/src/configuration.h).
+
+**Option-set rejections:**
+
+- **(a) tail-percentile grinding:** rejected as *primary*
+  methodology. May contribute corpus entries if they pass
+  coverage-metric validation; not the methodology backbone. The
+  per-class σ-gaps that reopened R5 (6.8 to ~125) make grinding's
+  signal-to-noise too poor to anchor leg-3 coverage on by itself.
+- **(g) constructed opcode streams at fixed density:** **closed by
+  §1.7 frozen substrate.** Constructing streams that bypass
+  AES4R-derived program generation means testing the verifier
+  against inputs production never produces. Per §1.7 the verifier
+  crate's production surface stays frozen; tests on
+  production-unreachable inputs catch artifacts rather than
+  operational bugs.
+- **(b) hybrid synthetic + grinded:** subsumed by the composition
+  above; synthetic per (2)+(4); grinded contributes iff
+  coverage-validated.
+- **(d) coverage-guided fuzzing, (e) property-based testing,
+  (f) mutation-derived corpora:** evaluated per the "does this
+  produce coverage-validated rare-path entries?" criterion. Each
+  may contribute entries; none is the backbone because none
+  operates against the audit-anchored spec-silence enumeration
+  that delivers leg-3's load-bearing audit story.
+
+**Corpus size estimate.** 50-200 entries — small enough to be
+reviewable at PR time per
+[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc);
+large enough to span the §3.4 audit's spec-silence enumeration plus
+per-opcode boundary-value coverage plus coverage-validated
+additions.
+
+**Load-bearing methodology property (recorded as substrate, not
+just close text).** *The specified-outliers methodology produces an
+additively maintainable corpus.* Future rare-pair discoveries
+(post-genesis incidents, audit findings, fuzzing-tool revelations,
+operator-reported anomalies) land as PR additions — one recipe +
+one cited rationale + one canonical-output entry — with no
+methodology re-derivation per discovery. Per
+[`00-mission.mdc`](../../.cursor/rules/00-mission.mdc)'s "outlast
+the team" framing: operational substrate accommodates discovery
+without substantive design work each time. Future-addition
+discipline is pinned by R1-D8's substrate-anchor criterion.
+
+**R1-D8 cascade.** Statistical-realism is *satisfied by
+construction* — every recipe is constructed against a named
+rare-path target with cited rationale, not grinded against a
+statistical threshold. R1-D8's substantive scope shifts from
+"statistical-threshold reachability" to "substrate-anchored recipe
+acceptance"; see R1-D8 close.
+
+**R1-D2 / R1-D3 / R1-D4 cascade.** The corpus's substrate becomes
+*recipes* (R1-D3: declarative `CacheRecipe` data structures) rather
+than *(seedhash, data) tuples*. The accessor required becomes
+*cache-level* (R1-D2: `PreparedCache::from_raw_for_testing`) rather
+than *opcode-stream-level*. The committed artifact becomes *recipe
+data + canonical outputs Rust source* (R1-D4: Family 1) rather than
+*committed hex bytes per entry*.
+
+**Reopen criteria** (overrides Round-0 sketch).
+
+- (i) The §3.4 audit substrate is substantively restructured or
+  invalidated (Category-1 anchor breaks under R1-D8's taxonomy).
+- (ii) Coverage tooling becomes unreliable (Category-2 anchor
+  breaks under R1-D8's taxonomy).
+- (iii) A Phase-2 audit finding surfaces a rare-path divergence at
+  genesis the composition does not catch (coverage scope reopens;
+  new recipes land via R1-D8's discipline; the methodology itself
+  does not reopen).
+
+Re-evaluation shape: design-round on the same plan-doc pre-genesis;
+FOLLOWUPS entry under
+[`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)
+discipline post-genesis. **Individual recipe addition is the
+regular operational mode under R1-D8's PR-template discipline, not
+a methodology-reopening event.**
+
 ### R1-D2 — Verifier-side or C-shim accessor for the methodology
 
 **Option set:**
@@ -832,6 +936,124 @@ discipline allows; (iii) a Phase-2 audit finding requires the
 methodology to inspect intermediate state the chosen accessor
 does not expose.
 
+#### Round 1 disposition (closes R1-D2) — collaborative close
+
+**Close at substantive reframe.** R1-D2 closes on a **cache-level
+accessor** that lets the harness construct production-equivalent
+adversarial inputs against the production code path, not on
+opcode-stream-level access for unit-style handler testing. The
+Round-0 sketch's `compute_hash_opcode_streams_for_testing` framing
+was solving the unit-style testing problem; the right framing is
+integration-style — *test the actual path* by steering production
+input selection.
+
+**Accessor surface:**
+
+```rust
+#[cfg(feature = "test-internals")]
+pub fn from_raw_for_testing(
+    seedhash: Seedhash,
+    cache_bytes: &[u8],
+) -> PreparedCache
+```
+
+The accessor lets the harness construct a `PreparedCache` with
+arbitrary cache contents and a declared seedhash; the bundling
+property (seedhash matches cache) is *broken by construction* in
+test contexts. Production uses `PreparedCache::derive`; test code
+uses `from_raw_for_testing` to construct adversarial bundles. The
+accessor lives under the same `cfg(feature = "test-internals")`
+gate as the existing `cache_block_bytes_for_testing` accessor per
+§1.5 R5-D1 discipline; no production surface grows.
+
+**C-side symmetry (no new C-side surface required).** The harness
+calls `randomx_init_cache(cache, declared_seedhash)` to initialize
+the C cache, then overwrites the cache memory via the existing
+`randomx_get_cache_memory` accessor (Phase 2g R4-D4; the pointer's
+target is mutable). The C reference then runs its full hash
+computation against the now-crafted cache contents. Both verifiers
+run the *production code path* against crafted cache contents; both
+observe the resulting hash; the differential test asserts
+byte-equality. Symmetric input control without new `extern "C"`
+bindings.
+
+**Substrate principle pinned (production-equivalence constraint).**
+*Any new `test-internals` accessor must let the harness construct
+production-reachable states.* `from_raw_for_testing` qualifies
+because Argon2d's image is all 256MB byte strings — every crafted
+cache corresponds to some hypothetical seedhash-derived state, even
+infeasible-to-discover ones. The constraint becomes a substrate
+property future test-infrastructure additions are evaluated
+against:
+
+- Accessors constructing production-reachable states are
+  legitimate.
+- Accessors constructing production-unreachable states are
+  rejected.
+
+Worth recording in §4 threat-model close as a reserved Round-2
+forward-action substrate principle; §4's passive surface absorbs
+this principle without re-deriving.
+
+**Option-set rejections:**
+
+- **(a) `compute_hash_opcode_streams_for_testing` (Round-0
+  default sketch):** rejected. Surface is wrong shape — unit-style
+  handler exposure rather than integration-style input crafting.
+  Bugs that fire only when handlers run in dispatch context
+  (interaction effects, allocator state, branch prediction) aren't
+  catchable.
+- **Program-override accessor (`override_program_for_testing` or
+  equivalent):** rejected. Potentially *production-unreachable* —
+  not every byte string is a valid AES4R derivation of some cache
+  state. Would need an additional constraint mechanism to stay
+  production-equivalent; deferred per
+  [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+  with reopen criterion "a constraint mechanism emerges that lets
+  the harness override programs with provably AES4R-reachable
+  bytes."
+- **`pub(crate)` handler exports for unit-style testing:**
+  rejected per shape mismatch above.
+- **(b) black-box / no new accessor:** insufficient. The
+  methodology needs to steer the production path toward specific
+  rare-path executions; seedhash-grinding can't deliver that at any
+  feasible budget for any path requiring specific intermediate
+  state.
+- **(c) C-shim-only accessor:** rejected. Testing the C reference's
+  behavior in isolation doesn't catch Rust-side bugs; the
+  symmetric-overwrite shape above achieves equivalent test coverage
+  without losing Rust-side visibility.
+- **(d) callback hook:** subsumed by the cache-level accessor —
+  callbacks would expose intermediate state, but the methodology's
+  coverage targets are achieved by controlling *inputs* (cache
+  contents) rather than *intermediate state*.
+
+**R1-D3 / R1-D4 / R1-D5 cascade.** Corpus tuples become
+`(declared_seedhash, cache_bytes, data)` rather than
+`(seedhash, data)`. Recipes (R1-D3) operate on cache contents.
+Canonical outputs (R1-D4) attest against `(declared_seedhash,
+expanded_cache_sha, data, expected_hash)`. Per-recipe ratio
+measurement (R1-D5) runs against the production code path with
+crafted inputs.
+
+**Reopen criteria** (override Round-0 sketch).
+
+- (i) Pre-implementation surface-enumeration pass surfaces that the
+  verifier source does not support the `from_raw_for_testing`
+  signature without a reshape that breaks the §1.5 R5-D1 discipline.
+- (ii) A Phase-2 audit finding requires the methodology to inspect
+  intermediate state the cache-level accessor does not expose; new
+  accessor candidates evaluated against the production-equivalence
+  constraint before approval.
+- (iii) Argon2d's output-space properties change in a way that
+  invalidates the production-equivalence argument (substrate-anchored
+  but currently true — every 256MB byte string is a valid Argon2d
+  output for some seedhash).
+
+Re-evaluation shape: a new R1-D2 close in §11's Round-N history
+table if pre-implementation; design-round on the same plan-doc if
+post-implementation surfaces the trigger.
+
 ### R1-D3 — Grinding/construction tool location and shape
 
 **Option set:**
@@ -889,6 +1111,151 @@ amendment to V2's opcode-frequency distribution requires the tool
 to be re-run, and the regeneration discipline surfaces that the
 tool's encapsulation is the wrong shape for the regeneration
 workflow.
+
+#### Round 1 disposition (closes R1-D3) — collaborative close
+
+**Close at substantive reframe.** Under R1-D1 + R1-D2's recipe-as-
+substrate framing, R1-D3 is no longer "where does the grinding
+tool live" — it's "where does the *recipe substrate* live, what's
+its committed shape, and how does it interface to the methodology."
+The close composes three sub-decisions.
+
+**Sub-A: codebase location.** Lib module within
+`shekyl-randomx-differential` (the four-crate-layered orchestrator-
+actor crate per §1.2). Structure:
+
+```text
+rust/shekyl-randomx-differential/src/
+├── adversarial/
+│   ├── mod.rs                  # Public API: get_corpus() -> &[CacheRecipe]
+│   ├── recipes/                # One module per evidence category (R1-D8)
+│   │   ├── spec_silence_anchors.rs   # Category 1: audit-substrate-cited
+│   │   ├── coverage_targets.rs       # Category 2: coverage-metric-attested
+│   │   ├── boundary_values.rs        # Category 3: substrate-derived
+│   │   └── dataset_item_extrema.rs   # Category 3: substrate-derived
+│   ├── interpreter.rs          # Recipe evaluation
+│   └── base_caches.rs          # Base seedhash → derived bytes (cached)
+├── adversarial_canonical_outputs.rs  # M1 substrate (R1-D4 close)
+└── ...
+```
+
+Not a bin-target (the harness binary consumes recipes at runtime;
+no offline corpus generation step); not a standalone crate (no
+cross-crate consumers); not an integration test (the corpus is
+consumed by multiple test surfaces, not local to one).
+
+**Sub-B: corpus interface — B2 runtime recipes.** The committed
+artifact is the **recipe data** (declarative `CacheRecipe`
+entries); expanded cache bytes are **build artifacts** cached under
+`target/` (or equivalent expansion-cache directory). Recipes are
+kilobytes; expanded bytes are gigabytes (256MB × N entries) —
+committing the recipe is the audit anchor, expansion is downstream
+tooling.
+
+Rationale for B2 over B1 (committed bytes): the recipe is what
+makes the entry adversarial; the bytes are just its output. The
+recipe is what reviewers read to understand what's tested; the
+bytes are opaque hex unless paired with the recipe. Committing
+both is redundant, and recipes outcompete bytes on auditability.
+
+Expansion-cost mitigations:
+
+- **Recipe expansion is cacheable across test runs.** Once expanded,
+  the bytes live in a build artifact and are re-used. Only the first
+  run pays the expansion cost.
+- **Recipes derive from compact base caches.** Most recipes are
+  "take this cache, modify byte at offset X to value Y." The base
+  cache is derived from a small set of base seedhashes (probably
+  4-8 covering the corpus); modifications are surgical. Argon2d
+  derivation work is bounded.
+- **Cadence discipline subsets recipes per run** (R1-D6 close).
+  Per-PR runs a curated smoke subset; nightly + release-gate runs
+  the full corpus.
+
+**Sub-C: methodology interface — C1 declarative recipes (primary)
+with C2 imperative escape hatch.** Recipe shape:
+
+```rust
+pub struct CacheRecipe {
+    pub name: &'static str,
+    pub rationale: &'static str,  // cites the rare path (R1-D8 close)
+    pub base: BaseSeedhash,        // derive base cache from this
+    pub modifications: &'static [(usize, u8)],  // (offset, value)
+}
+```
+
+Declarative recipes are the primary form — recipes-as-data
+interpreted by the recipe evaluator. The recipe language is a
+small DSL (~50 lines, auditable) covering byte overrides, fill
+patterns, and boundary-value primitives. Imperative recipes
+(Rust functions producing `CacheRecipe`-equivalent data) are
+reserved for cases the declarative form cannot express; each
+imperative recipe carries a substrate-anchored justification for
+its imperativeness per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).
+
+**Recipe evaluator is first-class code (substrate principle).**
+*The recipe evaluator's correctness is load-bearing for the
+corpus's correctness.* Failure mode: a bug in the evaluator
+silently mis-constructs the entire adversarial corpus. Mitigations:
+
+- Dedicated `interpreter::tests` covering evaluation invariants
+  (no-op identity: a recipe with no modifications produces the
+  base cache's exact bytes; idempotence: re-evaluating an
+  already-expanded recipe yields the same bytes).
+- Canonical-output assertion on expanded-bytes SHA-256 (R1-D4
+  close): each canonical entry pairs `expected_hash` with
+  `expanded_bytes_sha256`; an evaluator bug shifting the
+  expanded bytes is caught by the SHA mismatch before the hash
+  comparison runs.
+- Small declarative DSL: fewer corners than imperative code; the
+  interpreter is auditable end-to-end.
+
+**Executable-specification property (substrate, not just close
+text).** *Recipes constitute an executable specification of the
+rare-path coverage; the project's audit story for leg-3 coverage
+cites the recipe directory as the evidence, with each recipe's
+`rationale` field serving as the audit-trail anchor.* This matches
+the broader pattern across the migration: substrate is documented
+in the code that implements it, not in narrative docs that drift.
+
+**Option-set rejections.**
+
+- **(a) bin-target `grind_adversarial_corpus.rs`:** rejected.
+  Grinding is no longer the methodology per R1-D1; no separate
+  binary required for offline generation under B2 runtime recipes.
+  Recipe generation logic lives in `adversarial::interpreter`; the
+  existing `gen_canonical_outputs.rs` bin is *extended* (not
+  duplicated) to also emit adversarial canonical outputs per
+  R1-D4.
+- **(c) standalone crate:** rejected. Cross-crate consumption is
+  N=1 (the harness binary); the harness crate is the natural home.
+- **(d) integration test:** rejected. The corpus is consumed by
+  T2 (byte-equality differential) and T6 (per-recipe ratio
+  measurement); making it integration-test-local breaks reuse.
+- **(e) no tool / inline recipes:** rejected. Inline recipes
+  defeat the executable-specification property — recipes scattered
+  across test files lose their audit-anchor role.
+
+**R1-D4 cascade.** Canonical outputs live in
+`adversarial_canonical_outputs.rs` as a Family-1 Rust source const
+array (see R1-D4 close); the `gen_canonical_outputs.rs` bin is
+extended for adversarial entries.
+
+**Reopen criteria** (overrides Round-0 sketch).
+
+- (i) Pre-implementation corpus-size budget verification (per §2.5
+  Pass 4) surfaces that runtime expansion cost exceeds CI cadence
+  budgets (per R1-D7); reopen to consider partial pre-expansion
+  committed under LFS or equivalent.
+- (ii) An imperative recipe lands without substrate-anchored
+  justification (reviewer-caught at PR-template stage); the recipe
+  is rejected, not the close.
+- (iii) The recipe DSL's expressive limits surface a class of
+  rare-path target that cannot be expressed declaratively; the
+  DSL is extended (not the location decision).
+
+Re-evaluation shape: design-round on the same plan-doc.
 
 ### R1-D4 — Adversarial corpus on-disk format
 
@@ -948,6 +1315,109 @@ introduces a new classification dimension the chosen format
 cannot represent without ambiguity; (iii) post-2h corpus
 regeneration encounters review-bandwidth limits the chosen
 format does not amortize.
+
+#### Round 1 disposition (closes R1-D4) — collaborative close
+
+**Close on Family 1 — Rust source file with const arrays.** R1-D4
+closes on the Phase 2g canonical-outputs pattern extended to the
+adversarial corpus. The canonical outputs file lives at
+[`rust/shekyl-randomx-differential/src/adversarial_canonical_outputs.rs`](../../rust/shekyl-randomx-differential/src/adversarial_canonical_outputs.rs)
+(new file at implementation time) and contains:
+
+```rust
+pub(crate) struct AdversarialCanonicalEntry {
+    pub recipe_name: &'static str,
+    pub rationale_cite: &'static str,
+    pub expanded_bytes_sha256: [u8; 32],
+    pub expected_hash: [u8; 32],
+}
+
+pub(crate) const ADVERSARIAL_CANONICAL_OUTPUTS:
+    &[AdversarialCanonicalEntry] = &[
+    // One entry per recipe in adversarial::get_corpus()
+];
+```
+
+**Compile-time cross-checkability discipline.**
+`#[cfg(test)] mod tests` asserts bidirectional correspondence
+between the canonical-outputs entries and the recipe registry:
+
+- Every canonical-output references an existing recipe (catches
+  T-A1 tampering: deleting a recipe without deleting its
+  canonical output).
+- Every recipe has a canonical output (catches
+  recipe-addition-without-attestation drift).
+
+Both checks fail at `cargo test`; the cross-checkability is
+compile-checked at the type level (recipe names are `&'static
+str` from both sides, comparable as set membership).
+
+**Substrate principle pinned (refinement of derive-don't-cache).**
+*Derive substrate inputs; cache attestation outputs.* Recipes
+(R1-D3) are substrate inputs — derived at runtime from committed
+declarative data. Canonical outputs are *attestations* — committed
+bytes asserting "at fork-pin SHA X, with recipe Y, the verifier
+produced hash Z." Re-deriving attestations at runtime would defeat
+M1: an attacker tampering with the verifier could tamper with the
+canonical-output recomputation in parallel.
+
+This is a refinement of the broader "derive-don't-cache" principle
+worth recording as a candidate for the rule-26 amendment queue
+(see R1-D9): the principle applies asymmetrically — derive
+substrate inputs to keep their source-of-truth single; cache
+attestation outputs to preserve their as-of-attestation snapshot
+against parallel tampering.
+
+**M1/M3 discipline application.** Modifications to
+`adversarial_canonical_outputs.rs` trigger M3 PR-template review;
+modifications must be paired with a corresponding fork-pin advance
+or recipe-registry change. This is the same discipline as
+Phase 2g's `canonical_outputs.rs`; the M3 trigger surface expands
+to include the adversarial canonical outputs file.
+
+**`gen_canonical_outputs.rs` bin extension.** The existing
+canonical-output generator is extended (not duplicated) for
+adversarial entries. The bin reads
+`adversarial::get_corpus()`, expands each recipe via the recipe
+interpreter (per R1-D3), computes the expanded-bytes SHA-256 and
+the verifier's expected hash, and emits the Rust source file
+content for `ADVERSARIAL_CANONICAL_OUTPUTS`.
+
+**Option-set rejections.**
+
+- **(b) hex bytes committed in `adversarial_corpus.rs` (Round-0
+  default sketch):** rejected under R1-D3's recipe-as-substrate
+  close. The corpus's substrate is the recipe directory, not raw
+  hex bytes; committing both is redundant and bytes lose to
+  recipes on auditability.
+- **(c) separate file per class:** rejected. Per-class
+  modularization happens at the *recipe* level (recipe directory
+  taxonomy per R1-D3 + R1-D8), not at the *canonical outputs*
+  level. Single canonical-outputs file matches the existing
+  Phase 2g pattern and enables compile-time cross-checking.
+- **Family 2 (JSON/TOML/YAML):** rejected. Cross-checkability
+  requires deserialization + runtime comparison; type-safety is
+  runtime, not compile time; diverges from Phase 2g pattern;
+  adds parser as new attack surface (T-A1 class).
+- **Family 3 (hex-byte annotated text):** rejected. Custom parser
+  becomes its own attack surface; no schema validation; no IDE
+  integration.
+
+**Reopen criteria** (overrides Round-0 sketch).
+
+- (i) The compile-time cross-checkability assertion surfaces as
+  infeasible against the recipe registry's shape (e.g., recipe
+  names become non-`&'static str` for substrate reasons); reopen
+  to consider runtime cross-check or schema migration.
+- (ii) The `gen_canonical_outputs.rs` bin extension exceeds the
+  R1-D3 corpus-size budget; reopen to consider canonical-output
+  partitioning.
+- (iii) An external auditor's review surfaces that Rust-source
+  format impedes their workflow disproportionately; reopen to
+  consider supplementary JSON export (Family 2 as a documentation
+  artifact, not the load-bearing substrate).
+
+Re-evaluation shape: design-round on the same plan-doc.
 
 ### R1-D5 — `mode_worst_case` implementation surface (reactivates §5.1.11)
 
@@ -1010,6 +1480,129 @@ pre-implementation runtime-budget verification surfaces that
 release-gate cadence is incompatible with the corpus size R1-D4
 produces.
 
+#### Round 1 disposition (closes R1-D5) — collaborative close
+
+**Close at vocabulary reframe + dual-claim measurement.** R1-D5
+closes on a substantive shift from statistical-worst-case framing
+to recipe-derivation framing, catalyzed by R1-D1's methodology
+reframe. The shift is itself substrate, not just nomenclature.
+
+**Mode rename.** `mode_worst_case` → **`mode_adversarial_ratio`**
+(or `mode_per_recipe_ratio` / `mode_recipe_ratio` — substantive
+choice is dropping "worst case"; final naming pinned at
+implementation). Statistical-worst-case framing presupposes
+inputs-drawn-from-a-distribution; recipe-derivation presupposes
+inputs-constructed-against-named-targets. The vocabulary loses its
+natural anchor under R1-D1's reframe.
+
+**Two distinct claims (the measurement substrate):**
+
+- **Claim 1 — per-recipe ratio bound (hard gate).** For every
+  corpus entry, Rust verifier max-ratio latency is within
+  **`(5.0× − margin)`** of C reference max-ratio latency, where
+  `margin` is the documented GitHub-hosted runner noise floor
+  per R1-D7's Sub-C close (committed as `RUNNER_NOISE_MARGIN` in
+  `adversarial_canonical_outputs.rs` substrate; M1/M3 disciplines
+  apply). Asserted per recipe. Gate: any per-recipe max-ratio
+  exceeding the bound fails CI, with **single-retry noise filter**
+  (one retry before declaring failure).
+- **Claim 2 — no per-class systematic regression (regression-
+  tracking signal).** No class of input (FP-heavy, branch-heavy,
+  cache-miss-heavy, etc., per R1-D8's evidence-category taxonomy)
+  shows median ratio significantly higher than corpus-wide median
+  (proposed threshold: `>1.5× corpus_median`). Asserted across
+  recipes grouped by exercised rare-path class. Class-level
+  outliers are *surfaced* as regression-tracking signal —
+  informational rather than hard-gating.
+
+The two claims answer different audit questions:
+
+- Claim 1 answers *"does the verifier handle this specific
+  adversarial input within budget?"*
+- Claim 2 answers *"is there a class of input where Rust falls
+  behind in a way that's not just noise?"*
+
+A corpus that satisfies Claim 1 for every entry but has all
+FP-heavy recipes at 4.5× while integer-targeted recipes run at
+1.5× passes Claim 1 but violates Claim 2 — a systematic regression
+worth surfacing even when no individual entry exceeds the bound.
+
+**Measurement infrastructure.** Per-recipe statistics: ~100
+samples per recipe per side; report median, p95, max latency for
+each side; compute per-recipe max/median/p95 ratios. Per-class
+aggregation (for Claim 2): group recipes by exercised rare-path
+class (per R1-D8 directory taxonomy); compute per-class median
+of per-recipe median ratios; compare against corpus-wide median.
+
+**Cadence.** Release-gate, invariant of corpus size (the
+~100-samples-per-recipe-per-side measurement is too expensive for
+per-PR cadence even at 20-entry corpus). See R1-D6 for activation
+discipline; see R1-D7 for workflow placement.
+
+**Vocabulary-shift cascade (forward-action).** The methodology
+shift from statistical-grinding to recipe-derivation isn't just a
+different way to build a corpus; it's a different way to think
+about what the corpus is and what it tests. The vocabulary of
+performance measurement — "worst case," "tail latency,"
+"percentile" — was shaped by the statistical-distribution framing
+and loses its natural anchor under recipe-derivation. The
+vocabulary shift propagates through audit-posture documentation:
+
+- **§2.5 (three-leg framing) leg-3 wording** updates from
+  "statistical-worst-case corpus coverage" to "specified-outliers
+  rare-path coverage." Consumed by Round 2's threat-model close
+  per §4 forward-action.
+- **§4 (threat model) performance-regression attack class
+  wording** updates from "statistical-tail-latency divergence" to
+  "per-recipe / per-class systematic ratio divergence." Consumed
+  by Round 2's threat-model close.
+- **Parent [`RANDOMX_V2_PLAN.md`](RANDOMX_V2_PLAN.md) §6 ≤5.0×
+  bound wording** updates from statistical-worst-case framing to
+  per-recipe interpretation: *"Rust verifier per-recipe max-ratio
+  latency remains within `(5.0× − margin)` of C reference per-
+  recipe max-ratio latency across the adversarial corpus, with no
+  per-recipe ratio exceeding the bound and no per-class
+  systematic regression."* Lands alongside the §2.5 R5-D3
+  substrate amendment in the implementation-PR docs-close commit
+  per
+  [`91-documentation-after-plans.mdc`](../../.cursor/rules/91-documentation-after-plans.mdc).
+
+**Substrate property worth recording.** *Reframing the methodology
+produced a smaller and better-focused decision space rather than
+punting the original question.* The original R1-D5 (Phase 2g) was
+a hard question — what statistical threshold is reachable against
+V2 substrate? The reframed R1-D5 (Phase 2h) is a tractable
+question — what's the per-recipe bound and what's the systematic-
+regression detector? Worth recording in §11 Round-1 history.
+
+**Option-set rejections.**
+
+- **(b) Rust per-hash latency only (no C ratio):** rejected. Loses
+  the "ratio drift over time" failure detection — the C reference
+  is the audit anchor per §2.5 leg 2; ratio measurement against C
+  is load-bearing for leg-3.
+- **(c) Combined (a) + (b) reporting in one mode:** subsumed by
+  Claim 2's per-class systematic-regression detector. The
+  combined-reporting framing is operational under Claim 2 without
+  needing a separate mode.
+
+**Reopen criteria** (overrides Round-0 sketch).
+
+- (i) Pre-implementation noise-baseline pass on the GitHub-hosted
+  runner class produces a measured noise floor incompatible with
+  the `(5.0× − margin)` bound being meaningful (e.g., noise floor
+  approaches 5.0× itself); reopen to consider runner-class change
+  (R1-D7 Sub-C reopen cascade) or bound adjustment.
+- (ii) Per-class taxonomy from R1-D8's evidence-category structure
+  produces too few or too many classes for Claim 2 to be
+  meaningful (e.g., one class dominates the corpus); reopen to
+  consider alternate grouping dimension.
+- (iii) The vocabulary-shift cascade's parent-§6 wording amendment
+  is rejected by review; reopen to consider whether the per-recipe
+  framing is the wrong substrate for the parent's audit story.
+
+Re-evaluation shape: design-round on the same plan-doc.
+
 ### R1-D6 — Test reactivation cadence (T2 + T6)
 
 **Option set:**
@@ -1056,6 +1649,113 @@ promotion); (iii) the corpus subsetting in (d) introduces a
 deterministic-subset selection bias that the methodology's
 catch-capacity calculus did not account for.
 
+#### Round 1 disposition (closes R1-D6) — collaborative close
+
+**Close at three substrate-shaping reframes.** R1-D6 closes on
+substrate principles that govern activation rather than on the
+Round-0 cadence-pick decision, because R1-D1's reframe changed
+what the corpus *is* and therefore what activation timing means.
+
+**Reframe 1 — `#[ignore]` is wrong substrate; continuous
+enforcement from the first recipe is right substrate.** Tests
+activate when they're useful, which is *as soon as a corpus exists
+to run them against.* Concretely:
+
+- **T2 activates immediately** when the corpus has its first
+  recipe (week 1 of implementation). Run per-PR from that point
+  forward.
+- **T6 activates** when both the mode infrastructure exists and
+  the corpus has its first recipe. Run at the appropriate cadence
+  from that point forward.
+
+The `#[ignore]` ladder pattern (test exists but ignored, then
+unignored later) introduces a window where the test is committed
+substrate but contributes no audit evidence. Under continuous
+enforcement, tests are either *not yet committed* (no corpus, no
+test) or *active* (corpus exists, test runs). The intermediate
+state ("test committed but not running") doesn't exist as
+substrate.
+
+**Reframe 2 — cadence is determined by corpus size, not fixed at
+R1-D6.** The cadence question is real but its answer is dynamic.
+Substrate policy:
+
+- **T2 cadence policy:** *T2 runs per-PR if the full corpus fits
+  in the per-PR budget. Otherwise T2 runs per-PR over a smoke
+  subset and nightly over the full corpus.* The threshold is
+  measured against actual CI runtime; documented as
+  `T2_PER_PR_BUDGET_MS` constant in the harness substrate.
+- **T6 cadence policy:** *T6 runs nightly during pre-genesis and
+  release-gate post-genesis.* Pre-genesis the constants are still
+  drifting (recipes being added, RUNNER_NOISE_MARGIN being
+  baselined); nightly runs catch regressions early. Post-genesis
+  the constants stabilize; release-gate cadence dominates the
+  per-PR cost of T6.
+
+This is *cadence-corpus alignment*, not a fixed cadence choice.
+The policy is substrate; the per-PR/nightly/release-gate slot a
+test occupies at any given moment is determined by the corpus
+state at that moment.
+
+**Reframe 3 — actionable failure semantics are
+substrate-load-bearing.** When T2 or T6 fails, the failure message
+contains specific diagnostic info:
+
+- Recipe name (cites the rare-path target).
+- Recipe rationale (cites the audit substrate or coverage
+  attestation per R1-D8).
+- Expanded-bytes SHA-256 (catches recipe-vs-canonical-output
+  drift independent of hash mismatch).
+- Verifier hash (Rust + C side).
+- Per-side latency statistics (for T6 failures).
+- Per-class aggregation context (for T6 Claim 2 failures).
+
+Diagnostic content is *part of the test definition*, not an
+afterthought. Substrate principle: *if a test failure isn't
+mechanically actionable, the test isn't fully implemented.* The
+discipline is consumed by §5 implementation hand-off contract.
+
+**Substrate principle worth recording (refinement).** *Cadence is
+a function of corpus size, not a fixed decision.* The discipline
+applies to the random corpus (Phase 2g §9.3's per-PR/nightly/
+release split is itself a cadence-corpus-alignment instance, not
+a separate decision) and to future-added test families. Worth
+forwarding to §11 Round-1 history as discipline-refinement.
+
+**Option-set rejections.**
+
+- **(a) T2 per-PR, T6 release-gate (Round-0 default):** subsumed
+  by Reframe 2's dynamic policy — (a) is the corpus-state-driven
+  output of the policy at corpus-fits-in-PR-budget; the close is
+  the *policy*, not the *static cadence pick*.
+- **(b) Both per-PR with subsetting:** subsumed by Reframe 2's
+  smoke-subset clause for T2; T6 isn't per-PR-able even with
+  subsetting due to ~100-samples-per-recipe measurement cost.
+- **(c) Both release-gate only:** rejected. T2's byte-equality
+  assertion is cheap per recipe; making it release-gate-only
+  delays catching divergences for no substrate gain.
+- **(d) T2 nightly, T6 release-gate:** rejected. T2 is per-PR if
+  it fits per Reframe 2's policy; demoting to nightly is the
+  output of the policy when corpus exceeds per-PR budget, not a
+  default choice.
+
+**Reopen criteria** (overrides Round-0 sketch).
+
+- (i) The corpus state at any time falsifies `T2_PER_PR_BUDGET_MS`
+  (corpus expansion cost outgrows the budget faster than CI
+  runner specs can absorb); reopen the budget constant, not the
+  cadence policy.
+- (ii) A post-implementation audit surfaces that nightly cadence
+  on T6 missed a regression release-gate cadence would have
+  caught (or vice versa); reopen the T6 pre/post-genesis split.
+- (iii) Actionable-failure-semantics discipline produces test
+  output that's too noisy to be useful (over-diagnostic);
+  refine the diagnostic format, not the discipline.
+
+Re-evaluation shape: substrate-constant amendments via M3 PR
+template; cadence policy amendments via design-round on the same
+plan-doc.
+
 ### R1-D7 — CI cadence + workflow placement
 
 **Option set:**
@@ -1096,6 +1796,124 @@ the `continue-on-error` discipline forces a cadence demotion
 until the V3.0 `compute_hash` divergence lands; (iii) a
 post-implementation maintenance event (CI-runner cost shift,
 GitHub Actions usage cap, etc.) requires workflow reshape.
+
+#### Round 1 disposition (closes R1-D7) — collaborative close
+
+**Close at three coordinated sub-decisions.** R1-D7 closes on
+workflow placement, scope-discipline expansion, and runner-class
+margin — three sub-questions surfaced by R1-D6's continuous-
+enforcement framing and the broader committed-substrate question
+("what governs the CI substrate, and how do we discover what we
+need").
+
+**Sub-A — Workflow placement.** Mostly extend existing files; one
+new file for T6 dedication. Concretely:
+
+- **T2** lands in the existing
+  [`.github/workflows/randomx-v2-differential.yml`](../../.github/workflows/randomx-v2-differential.yml)
+  per Phase 2g precedent. Per-PR slot for the smoke-subset run;
+  nightly slot for the full corpus (per R1-D6 Reframe 2's
+  corpus-size-driven policy).
+- **T6** lands in a new dedicated workflow file (suggested
+  `.github/workflows/randomx-v2-adversarial-ratio.yml`,
+  final name pinned at implementation) with **`workflow_dispatch`**
+  trigger only during pre-genesis. Pre-genesis: T6 runs are
+  manually triggered (or scheduled via `workflow_dispatch`-only
+  cron-equivalent) per R1-D6's nightly policy. Post-genesis:
+  release-gate trigger added.
+
+  Rationale for separate workflow: T6 runs heavy measurement
+  (~100 samples per recipe per side); dedicated workflow keeps
+  the gate's status separable from the always-on differential
+  workflow. `workflow_dispatch` during pre-genesis avoids burning
+  CI cycles on a gate whose constants are still drifting
+  (recipes being added, RUNNER_NOISE_MARGIN being baselined).
+
+**Sub-B — M3 PR-template discipline expands to cover
+`.github/workflows/` files.** The CI substrate is gate-determining
+substrate: a workflow file modification is no different in audit
+posture from an `adversarial_canonical_outputs.rs` modification.
+Both pin gate behavior the project's audit story depends on.
+
+Concretely: M3 PR-template review (added at Phase 2g R6 cluster)
+treats `.github/workflows/randomx-v2-*.yml` changes the same as
+canonical-output changes — every modification cites the change
+class (recipe addition, runner-class change, cadence change,
+diagnostic format change) and the substrate evidence justifying
+it. The expansion is queued as a rule-26 amendment candidate
+under R1-D9.
+
+**Sub-C — Runner-class is committed substrate;
+`RUNNER_NOISE_MARGIN` is a discovered constant under M1/M3
+discipline.** Runner choice for T6 measurement is part of the
+gate's substrate, not implementation detail:
+
+- **Runner class:** GitHub-hosted standard runners (`ubuntu-latest`
+  or a specific pinned version, final pin determined at
+  implementation). Runner-spec details (CPU model, RAM, kernel
+  version available via `uname`) documented in
+  `adversarial_canonical_outputs.rs`'s file-doc-comment as
+  committed substrate.
+- **Noise floor:** `RUNNER_NOISE_MARGIN: f64` committed as a
+  named constant in `adversarial_canonical_outputs.rs` substrate,
+  discovered by a **pre-implementation noise-baseline pass** on
+  the chosen runner class (per §2.5 pre-implementation discipline,
+  formalizes the runner-class-noise-baseline as part of Pass 4
+  corpus-size budget verification or as a new explicit pass).
+  Subject to M1 (canonical-output discipline) and M3 (PR-template
+  review) disciplines. Stable across releases until the runner
+  class changes; runner-class change triggers re-baselining.
+
+The `(5.0× − margin)` bound from R1-D5's Claim 1 reads the margin
+from this constant at runtime; the constant's value is the
+substrate the gate runs against.
+
+**Self-hosted runners deferred** to a later FOLLOWUPS item per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc):
+disposition rejected at V3.0 (GitHub-hosted runners are
+sufficient with documented margin); reopened if (i) noise-baseline
+pass surfaces a margin that defeats the gate's discriminatory
+value (e.g., margin approaches 5.0×), or (ii) post-genesis Phase
+3 introduces measurement requirements GitHub-hosted variance
+cannot accommodate.
+
+**Substrate principle worth recording.** *The infrastructure
+running the gates is substrate that determines what the gates
+mean.* The principle is broader than R1-D7: it applies to test
+runners, fork-pin SHA, dependency versions, and rule-config files
+generally. Worth forwarding to §11 Round-1 history as
+discipline-promotion candidate; queued under R1-D9 for the
+rule-26 amendment.
+
+**Option-set rejections.**
+
+- **(b) nightly + release-gate only:** rejected per R1-D6's
+  cadence-corpus alignment — T2 is per-PR-capable for a smoke
+  subset; locking it out of per-PR foregoes early-catch value
+  for no substrate gain.
+- **(c) release-gate only:** rejected per (b) reasoning.
+- **(d) new workflow file dedicated to the adversarial corpus:**
+  partially adopted (Sub-A's T6 disposition); T2 stays in the
+  existing workflow per Phase 2g precedent.
+
+**Reopen criteria** (overrides Round-0 sketch).
+
+- (i) Pre-implementation noise-baseline pass surfaces a runner-
+  class margin incompatible with the R1-D5 bound being
+  meaningful; reopen Sub-C (runner-class change → self-hosted
+  consideration).
+- (ii) GitHub Actions usage cap or pricing shift makes the
+  chosen cadence infeasible; reopen Sub-A (workflow placement
+  reshape, possibly self-hosted runner adoption).
+- (iii) M3 expansion to workflow files surfaces a class of
+  modification that doesn't fit the PR-template discipline
+  (e.g., upstream GitHub Actions API changes require workflow
+  edits that aren't gate-determining); refine the M3 trigger,
+  not the discipline.
+
+Re-evaluation shape: substrate-constant amendments via M3 PR
+template; workflow-shape amendments via design-round on the same
+plan-doc.
 
 ### R1-D8 — Statistical-realism acceptance criterion (load-bearing per §3.19 R7-D1)
 
@@ -1151,6 +1969,130 @@ methodology changes shape (mechanical reopening); (iii) a
 post-implementation audit surfaces that the chosen criterion
 admits a corpus that is not materially adversarial (the §4 T-A1
 silent-disposition-degradation failure mode).
+
+#### Round 1 disposition (closes R1-D8) — collaborative close
+
+**Close at substantive reframe.** R1-D8 closes on a **substrate-
+anchored recipe-acceptance criterion** rather than the Round-0
+sketched statistical-realism thresholds. The reframe is forced by
+R1-D1's specified-outliers methodology: statistical-realism is
+*satisfied by construction* (every recipe is constructed against a
+named rare-path target with cited rationale), so R1-D8's
+substantive scope shifts from "what threshold is reachable" to
+"what makes a recipe legitimately adversarial under the new
+methodology."
+
+**Acceptance criterion (three-evidence-category structure).** A
+recipe is accepted into the corpus iff its `rationale` field
+cites at least one of the following evidence categories:
+
+- **Category 1 — Audit-anchored.** Cites a specific audit-document
+  spec silence, ambiguity, or rare-path enumeration (e.g.,
+  `RANDOMX_V2_PHASE2D_PLAN.md §3.4 spec-silence #N`,
+  `RANDOMX_V2_PHASE2E_PLAN.md §X audit finding #Y`).
+- **Category 2 — Coverage-attested.** Cites a coverage-tool
+  measurement (e.g., `cargo-tarpaulin` line/branch report,
+  `llvm-cov` region report) showing the recipe exercises a
+  rare-path the corpus's other recipes don't reach. The
+  attestation snapshot is committed alongside the recipe.
+- **Category 3 — Substrate-derived.** Cites a specific V2
+  configuration constant or boundary value (e.g.,
+  `configuration.h:88 RANDOMX_FREQ_IADD_RS = ...`,
+  per-opcode integer-overflow boundaries, dataset-item-offset
+  extrema at boundaries of
+  `RANDOMX_DATASET_BASE_SIZE + RANDOMX_DATASET_EXTRA_SIZE`).
+
+Recipes whose `rationale` cites none of the three categories are
+**rejected at PR review** per the M3 PR-template discipline (see
+"M3 expansion" below); the rejection is mechanical, not
+judgmental.
+
+**Corpus directory taxonomy (cascade into R1-D3).** The recipe
+directory structure mirrors the three categories:
+
+```text
+adversarial/recipes/
+├── spec_silence_anchors.rs    # Category 1
+├── coverage_targets.rs        # Category 2
+├── boundary_values.rs         # Category 3
+└── dataset_item_extrema.rs    # Category 3
+```
+
+Per-category split enables Claim 2's per-class systematic-
+regression detection (R1-D5 close): per-class grouping is the
+evidence-category grouping. The taxonomy is itself substrate; new
+recipes land in the matching category directory by the PR-template
+discipline.
+
+**M3 PR-template discipline expansion.** Every recipe-addition PR
+attaches a substrate-anchored rationale per the three-evidence-
+category structure. Template prompt: "For each new recipe, cite
+the audit-substrate spec silence (Category 1), the coverage-
+attestation snapshot (Category 2), or the substrate-derived
+constant (Category 3) that justifies the recipe's inclusion. Land
+the citation in the recipe's `rationale` field." Recipe-addition
+without rationale citation is rejected at PR review per
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+"audits-are-clean-so-compress" anti-pattern (acceptance discipline
+doesn't get to coast on past success).
+
+**Statistical-realism handling (forward-action absorbed).** The
+original R1-D5 (Phase 2g) statistical-realism question — "the
+corpus is statistically representative of worst-case real-world
+inputs" — is reframed under R1-D1's methodology as: *the corpus
+exercises rare paths real-world inputs may hit by happenstance.*
+The "may hit" claim is itself substrate-anchored — the §3.4 audit
+enumerates spec silences that real production code paths can
+traverse; the recipe constructs the input that traverses them.
+The statistical-realism claim is preserved (production inputs can
+hit these paths) without requiring statistical-grinding's
+unreachable thresholds.
+
+**§2.5 leg-3 wording forward-action.** Per R1-D5's
+vocabulary-shift cascade, §2.5 leg-3 wording moves from
+"statistical-worst-case corpus coverage" to "specified-outliers
+rare-path coverage with audit-substrate + coverage-attestation +
+substrate-derived evidence." The amendment lands in the
+implementation-PR docs-close commit per
+[`91-documentation-after-plans.mdc`](../../.cursor/rules/91-documentation-after-plans.mdc).
+
+**Option-set rejections.**
+
+- **(a) V2-substrate-anchored percentile criterion:** rejected.
+  R1-D1's reframe makes percentile-grinding the wrong question —
+  the corpus is constructed against named targets, not grinded
+  against a percentile.
+- **(b) V2-substrate-anchored absolute-count criterion:**
+  rejected. Same reasoning as (a). Substrate-derived counts
+  appear as boundary values per Category 3 (substrate-derived),
+  not as a corpus-wide acceptance criterion.
+- **(c) Spec-derived rare-path enumeration criterion:** partially
+  adopted as Category 1 of the three-evidence-category structure;
+  not the sole acceptance criterion.
+- **(d) Coverage-instrumented criterion:** partially adopted as
+  Category 2; not the sole acceptance criterion.
+- **(e) Property-based criterion:** rejected as a standalone
+  criterion. Property predicates may inform recipe construction
+  but do not stand alone as acceptance evidence — the recipe's
+  `rationale` must cite one of the three evidence categories.
+
+**Reopen criteria** (overrides Round-0 sketch).
+
+- (i) The §3.4 audit substrate or equivalent Category-1 source
+  becomes structurally invalid (audit-substrate amendment that
+  invalidates the spec-silence enumeration); reopen Category 1.
+- (ii) Coverage tooling becomes unreliable or unavailable on the
+  workspace's pinned toolchain; reopen Category 2.
+- (iii) A class of legitimate adversarial recipe surfaces that
+  fits none of the three categories (Category 4 emergence);
+  reopen the taxonomy. Worth pinning explicitly: the taxonomy is
+  *substrate-anchored*, not *exhaustive-by-decree*; new categories
+  emerge under substrate evidence, not under preference.
+
+Re-evaluation shape: design-round on the same plan-doc pre-genesis;
+FOLLOWUPS entry under
+[`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)
+discipline post-genesis.
 
 ### R1-D9 (open if Round 1 surfaces it) — Rule-26 amendment shape
 
@@ -1228,6 +2170,62 @@ the implementation PR's surface-enumeration audit). Re-evaluation
 shape: amend R1-D9's closure in §11's round-history table and
 land the rule-26 amendment in the implementation PR's final
 commit or as a follow-on chore-PR per the trigger's timing.
+
+#### Round 1 disposition (closes R1-D9) — collaborative close
+
+**Close: R1-D9 evaporates at Round 1; trigger conditions not met.**
+The optional decision's mechanical opening criteria per §0 are
+not met:
+
+- **(a) "Third confirmed instance of substrate-derived constant
+  gaps":** not triggered at Round 1. R5-D1 was instance 1; R7-D5
+  named the discipline class. 2h's pre-implementation
+  substrate-derived constant validation pass (§2.5 Pass 3) has
+  not yet run, so a third instance has not yet been surfaced
+  within Round 1's scope. If the pre-implementation pass
+  surfaces a third instance, the reopen-criterion sketch
+  applies (R1-D9 retroactively opens via §11 round-history
+  amendment).
+- **(b) "New pre-implementation discipline class beyond the
+  existing five categories":** not triggered at Round 1. The
+  five categories (surface enumeration / cross-invariant impact
+  analysis / methodology-vs-surface-contract reconciliation /
+  substrate-derived constant validation / methodology-vs-substrate
+  consistency check) cover the discipline shapes surfaced by
+  R1-D1..R1-D8 closes. No sixth class has emerged.
+
+**Substrate-discipline observations queue persists.** Round 1's
+closes surface multiple discipline-refinement candidates worth
+forwarding to the rule-26 amendment queue (not Round 1's scope):
+
+- **Derive substrate inputs; cache attestation outputs** (R1-D4
+  close refinement of derive-don't-cache).
+- **Production-equivalence constraint on test-internals accessors**
+  (R1-D2 close substrate principle).
+- **Cadence-corpus alignment** (R1-D6 close substrate principle).
+- **Actionable failure semantics as substrate** (R1-D6 close
+  substrate principle).
+- **Infrastructure-as-substrate** (R1-D7 close substrate
+  principle).
+- **Executable-specification recipes** (R1-D3 close substrate
+  property).
+- **Substrate-anchored taxonomies are open by substrate evidence,
+  not exhaustive by decree** (R1-D8 close substrate principle).
+
+These persist as queue items for a future rule-26 amendment PR
+per §3 R1-D9 Round-0 option (c) (cite 2h as precedent; defer the
+rule edit further until additional substrate accumulates). No
+Round 1 substrate-amendment is required; R1-D9 stays closed at
+the default disposition with reopening triggered only by the §0
+mechanical criteria above.
+
+**Re-evaluation shape (unchanged from Round-0 sketch).** Reopen
+R1-D9 if Round 2 / pre-implementation rounds surface either
+trigger (a) or (b) retroactively. Re-evaluation venue: amend
+R1-D9's closure in §11's round-history table and land the rule-26
+amendment in the implementation PR's final commit (option (a) per
+§3 R1-D9 option set) or as a follow-on chore-PR (option (b)) per
+the trigger's timing.
 
 ## 4. Threat model
 
@@ -1434,3 +2432,172 @@ Round 0 history row.
 - Any code surface — Round 0 references no new code; the
   plan-doc work is markdown-only per the Round-0 scope
   envelope.
+
+### Round 1 — architecture close (collaborative)
+
+**Scope.** Collaborative close of R1-D1..R1-D8 plus R1-D9
+evaporation. All eight substantive decisions closed at substantive
+reframes catalyzed by R1-D1's methodology pivot from
+statistical-grinding to specified-outliers; no closes adopted
+their Round-0 default sketch verbatim. The round was collaborative
+in the load-bearing sense — user-provided framing drove each
+close's substantive reframe; assistant-provided integration mapping
+preserved cross-decision consistency.
+
+**Methodology pivot (load-bearing).** R1-D1 closed on a
+composition of three "rare paths" definitions — audit-anchored
+spec-silence enumeration (primary), per-opcode boundary-value
+testing (supplementary), and coverage-metric evidence (validation)
+— rather than a single methodology selection from the Round-0
+option set. Definition (1) ("programs with unusual opcode
+distributions") was rejected as substrate-unreachable per
+§3.19 R7-D1's per-class σ-gap analysis. The pivot collapsed
+R1-D2..R1-D8's option-space into substrate-aligned dispositions:
+the corpus's substrate is *recipes*, not *(seedhash, data)*
+tuples; the accessor needed is *cache-level*, not *opcode-stream-
+level*; the committed artifact is *recipe data + canonical
+outputs Rust source*, not *committed hex bytes*; performance
+measurement is *per-recipe ratio*, not *statistical worst-case*.
+
+**What this round pins (per-close one-paragraph summary).**
+
+- **R1-D1 — specified-outliers methodology** as a composition of
+  three "rare paths" definitions (audit-anchored / boundary-value
+  / coverage-attested). Definition (1) rejected as substrate-
+  unreachable. Corpus size estimate 50-200 entries. Additively
+  maintainable corpus as load-bearing substrate property.
+- **R1-D2 — `PreparedCache::from_raw_for_testing`** as the
+  cache-level accessor under `cfg(feature = "test-internals")`;
+  C-side symmetry via the existing `randomx_get_cache_memory`
+  pointer. Production-equivalence constraint pinned as substrate
+  principle for future `test-internals` accessor additions.
+- **R1-D3 — lib module in `shekyl-randomx-differential`** with
+  declarative C1 recipes (primary) + C2 imperative escape hatch
+  (with substrate-anchored justification per recipe); B2 runtime
+  expansion (recipes are committed substrate, expanded bytes are
+  build artifacts); first-class recipe evaluator with dedicated
+  tests; executable-specification property pinned as substrate.
+- **R1-D4 — Family 1 (Rust source const array)** at
+  `adversarial_canonical_outputs.rs` with compile-time
+  bidirectional cross-checkability between recipe registry and
+  canonical-outputs entries; `gen_canonical_outputs.rs` bin
+  extended (not duplicated) to emit adversarial entries;
+  "derive substrate inputs; cache attestation outputs" pinned as
+  substrate-principle refinement of derive-don't-cache.
+- **R1-D5 — `mode_worst_case` renamed to
+  `mode_adversarial_ratio`** with two distinct claims:
+  Claim 1 (per-recipe max-ratio bound `(5.0× − margin)` with
+  single-retry noise filter; hard gate) and Claim 2 (no
+  per-class systematic regression; regression-tracking signal).
+  Vocabulary-shift cascade lands §2.5 leg-3 + §4 + parent §6
+  amendments at implementation-PR docs-close.
+- **R1-D6 — continuous enforcement from first recipe** (no
+  `#[ignore]` ladder); cadence-corpus alignment as substrate
+  policy (T2 per-PR for smoke subset / nightly for full corpus
+  per `T2_PER_PR_BUDGET_MS`; T6 nightly pre-genesis /
+  release-gate post-genesis); actionable failure semantics
+  pinned as substrate principle (test failure includes recipe
+  name + rationale + SHA + hash + latency + class context).
+- **R1-D7 — workflow placement** (T2 in existing
+  `randomx-v2-differential.yml`, T6 in new dedicated workflow
+  with `workflow_dispatch` trigger pre-genesis); M3 PR-template
+  discipline expansion to cover `.github/workflows/` files (CI
+  substrate is gate-determining substrate); GitHub-hosted
+  standard runners with `RUNNER_NOISE_MARGIN` committed in
+  canonical-outputs substrate (discovered by pre-implementation
+  noise-baseline pass; subject to M1/M3 disciplines); self-hosted
+  runners deferred per §21 reversion-clause discipline.
+- **R1-D8 — substrate-anchored recipe-acceptance criterion**
+  via three evidence categories (Category 1 audit-anchored /
+  Category 2 coverage-attested / Category 3 substrate-derived);
+  corpus directory taxonomy mirrors the three categories;
+  M3 PR-template discipline rejects recipes without rationale
+  citation per the three categories; statistical-realism
+  satisfied by construction.
+- **R1-D9 — evaporates.** §0 mechanical opening criteria
+  (third confirmed substrate-derived-constant-gap instance OR
+  new pre-implementation discipline class) not met at Round 1.
+  Substrate-discipline observations from R1-D1..R1-D8 queue as
+  candidates for a future rule-26 amendment PR.
+
+**Substrate-discipline observations queued for the rule-26
+amendment queue (forward-action; not Round 1 scope).** Seven
+candidate refinements surfaced during the round; each carries
+its closing-decision provenance:
+
+- Derive substrate inputs; cache attestation outputs (R1-D4
+  refinement of derive-don't-cache).
+- Production-equivalence constraint on `test-internals` accessors
+  (R1-D2 substrate principle).
+- Cadence-corpus alignment (R1-D6 substrate principle).
+- Actionable failure semantics as substrate (R1-D6 substrate
+  principle).
+- Infrastructure-as-substrate (R1-D7 substrate principle).
+- Executable-specification recipes (R1-D3 substrate property).
+- Substrate-anchored taxonomies are open by substrate evidence,
+  not exhaustive by decree (R1-D8 substrate principle).
+
+**Methodology-shift produced a smaller and better-focused
+decision space rather than punting the original question.** The
+original R1-D5 (Phase 2g) was a hard question — what statistical
+threshold is reachable against V2 substrate? The reframed R1-D5
+(Phase 2h) is a tractable question — what's the per-recipe bound
+and what's the systematic-regression detector? The same pattern
+applies across R1-D1..R1-D8: each reframe traded an unreachable
+threshold for a substrate-anchored criterion. Worth recording as
+load-bearing observation about Round 1's shape.
+
+**Collaboration discipline pinned.** A unilateral mid-round close
+attempt was reverted before push per the collaborative-design
+principle: *closing a round before all participants provide
+input opens the round again every time.* The corrective action
+was `git reset --hard HEAD~1` to revert the local unilateral
+commit, push only the authorized Round-0 scaffold, and re-engage
+under the collaborative-close discipline. Worth recording as
+process-discipline observation; queues as candidate for §26
+amendment under "round-closure requires all participants'
+explicit input."
+
+**Forward-actions absorbed by Round 1 closes (queued for §5 / §4
+/ implementation PR).**
+
+- §2.5 leg-3 wording amendment from "statistical-worst-case" to
+  "specified-outliers rare-path coverage" — lands at
+  implementation-PR docs-close per §91-documentation-after-plans.mdc
+  (R1-D5 + R1-D8 cascade).
+- §4 threat-model wording amendment from "statistical-tail-
+  latency divergence" to "per-recipe / per-class systematic ratio
+  divergence" — lands at Round 2 close (R1-D5 cascade).
+- Parent [`RANDOMX_V2_PLAN.md`](RANDOMX_V2_PLAN.md) §6 ≤5.0×
+  bound wording amendment to per-recipe interpretation — lands
+  at implementation-PR docs-close (R1-D5 cascade).
+- M3 PR-template expansion to cover `.github/workflows/` files
+  and `adversarial_canonical_outputs.rs` — lands at
+  implementation PR (R1-D4 + R1-D7).
+- `RUNNER_NOISE_MARGIN` discovery via pre-implementation
+  noise-baseline pass — lands at pre-implementation round
+  (R1-D7 Sub-C).
+- §3 R1-D9 substrate-discipline observations queue carry-forward
+  to future rule-26 amendment PR.
+
+**What this round defers.**
+
+- The §4 threat model substantive content (Round 2's
+  deliverable; passive + active surfaces reshape under
+  recipe-as-substrate framing per R1-D1..R1-D8 closes).
+- The §5 implementation hand-off contract substantive content
+  (pre-implementation round's deliverable; Round 2 integrates
+  threat-model-derived amendments).
+- The §6 test plan, §7 generator/fixtures plan, §8 commit
+  table, §9 CI gates, §10 forward path substantive content
+  (pre-implementation round / implementation PR deliverables).
+- The pre-implementation round's five-pass discipline outputs
+  (Pass 1 surface enumeration, Pass 2 dependency verification,
+  Pass 3 substrate-derived constant validation including
+  `RUNNER_NOISE_MARGIN` baseline, Pass 4 corpus-size budget
+  verification, Pass 5 methodology-vs-substrate consistency
+  check).
+- Any code surface — Round 1 references substrate principles
+  and structural decisions but introduces no new code; the
+  plan-doc work remains markdown-only per the design-phase
+  scope envelope.
