@@ -274,12 +274,33 @@
     against a 387,581-byte data input in R1-D4's bimodal
     upper-half distribution; cache-equivalence precondition
     passes (caches byte-identical); divergence is in
-    `compute_hash`'s VM path. Already tracked in
-    `docs/FOLLOWUPS.md` V3.0 pre-genesis queue. The harness's
-    detection of this divergence is itself validation of its
-    M4 detection capability. Per-PR runtime modes are kept
-    `continue-on-error: true` until the V3.0 fix lands; the
-    structural-validate job remains merge-blocking.
+    `compute_hash`'s VM path. **Closed 2026-05-26 by
+    substrate-triage** on
+    `chore/randomx-v2-c-oracle-flag-v2` — root cause was the
+    harness's C oracle and canonical-output generator both
+    passing `RANDOMX_FLAG_DEFAULT` (v1, PROGRAM_SIZE = 256)
+    to `randomx_create_vm` against a Rust verifier
+    implementing v2 (PROGRAM_SIZE = 384). The Rust verifier
+    was correct throughout. Fix: expose
+    `RANDOMX_FLAG_V2 = 128` in `randomx-v2-sys` with cache-
+    vs-VM flag-split docs (cache memory is V2-flag-invariant
+    per `external/randomx-v2/src/randomx.cpp:79`'s
+    `(JIT | LARGE_PAGES)` mask at `randomx_alloc_cache`;
+    only `randomx_create_vm` honors the V2 bit); switch the
+    two callsites at `c_oracle.rs` + `gen_canonical_outputs.rs`;
+    regenerate `CANONICAL_RANDOM_HASHES` under the v2 flag
+    (`v1-c5a-nightly-1024` → `v2-flag-nightly-1024`;
+    `CANONICAL_CACHE_SHAS` unchanged, as predicted by the
+    mask). End-to-end `--mode=correctness` re-runs the
+    nightly corpus (1024 random pairs / 32 seedhashes) with
+    three-way agreement (Rust ≡ C ≡ canonical, exit 0). Full
+    closure record + lessons-into-substrate dispositions in
+    `docs/FOLLOWUPS.md` "Recently resolved (audit trail)"
+    section; post-mortem with the missed-altitude finding in
+    `docs/design/RANDOMX_V2_PHASE2G_PLAN.md`. The harness's
+    detection of this divergence (and the diagnostic-triage
+    test that bisected it) is end-to-end validation of its
+    M4 detection capability against a real substrate gap.
   - **Per-hash latency CI gate (≤3.0× ratio).** Phase 2g
     produces the harness binary that the Phase 3a per-PR CI
     mechanism (`RANDOMX_V2_RUST.md` §8) consumes; the gate
