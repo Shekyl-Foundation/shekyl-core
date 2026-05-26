@@ -104,7 +104,23 @@ use shekyl_randomx_differential::mode_adversarial_ratio::{
 #[test]
 #[ignore = "Phase 2h T6 (worst_case_ratio): ~40 s on the C4 corpus, nightly/release-gate cadence per R1-D6 close; invoke with --ignored"]
 fn t6_worst_case_ratio() {
-    let report = match mode_adversarial_ratio::run(None) {
+    // Per-PR-#78 Round-3 finding F10: the
+    // `randomx-v2-adversarial-ratio.yml` workflow's
+    // `samples_per_recipe` workflow_dispatch input is wired
+    // through the `T6_SAMPLES_PER_RECIPE` environment variable.
+    // Parsing as `usize` is strict: an unparseable value is a
+    // workflow-author bug (the dispatch UI passes a free-form
+    // string), surfaced loudly with `expect`. An empty/unset
+    // variable means "use the default `SAMPLE_BUDGET_PER_RECIPE`"
+    // per the workflow's input `default: ''` shape.
+    let samples_override: Option<usize> = match std::env::var("T6_SAMPLES_PER_RECIPE") {
+        Ok(s) if s.is_empty() => None,
+        Ok(s) => Some(s.parse::<usize>().expect(
+            "T6_SAMPLES_PER_RECIPE must be a non-negative integer (workflow_dispatch input)",
+        )),
+        Err(_) => None,
+    };
+    let report = match mode_adversarial_ratio::run(samples_override) {
         Ok(report) => report,
         Err(AdversarialRatioError::Claim1BoundExceeded {
             report,

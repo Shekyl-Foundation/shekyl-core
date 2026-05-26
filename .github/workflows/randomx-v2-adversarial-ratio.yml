@@ -143,6 +143,17 @@ jobs:
         # `T6_CLAIM_2_TRACKING:` JSON-line records to the workflow
         # log for the regression-tracking dashboard harvester
         # (R1-D6 close Reframe 3).
+        #
+        # `T6_SAMPLES_PER_RECIPE` env var carries the
+        # `samples_per_recipe` workflow_dispatch input through to
+        # T6's `mode_adversarial_ratio::run` call (PR #78 Round-3
+        # Copilot finding F10 / comment 3307323165). An empty
+        # value (the input's `default: ''`) means "use the
+        # `SAMPLE_BUDGET_PER_RECIPE` default"; a non-empty value
+        # overrides the per-recipe sample count for the dispatch
+        # run.
+        env:
+          T6_SAMPLES_PER_RECIPE: ${{ github.event.inputs.samples_per_recipe }}
         run: |
           cargo test --release --locked -p shekyl-randomx-differential \
             --test worst_case_ratio -- --ignored --nocapture
