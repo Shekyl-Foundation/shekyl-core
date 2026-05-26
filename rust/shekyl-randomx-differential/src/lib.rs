@@ -66,12 +66,27 @@
 //! ## §5.7 drift-prevention boundary
 //!
 //! The re-export surface is limited to modules enumerated in
-//! §5.1.5–§5.1.14 + §5.1.17 + §5.1.18. Per §5.7's reviewer
-//! rejection criterion, any added module not listed in §5.1 is
-//! grounds for scope-creep rejection.
+//! Phase 2g §5.1.5–§5.1.14 + §5.1.17 + §5.1.18 plus modules added
+//! by Phase 2h's implementation-commit plan per
+//! [`docs/design/RANDOMX_V2_PHASE2H_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2H_PLAN.md).
+//! Per the parent drift-prevention discipline, any module added
+//! outside an enumerated commit is grounds for scope-creep
+//! rejection.
+//!
+//! ## Phase 2h additions
+//!
+//! Phase 2h extends the harness with recipe-derived adversarial
+//! corpus, first-class recipe evaluator, Family-1 canonical outputs,
+//! and `--mode=adversarial-ratio`. Module additions:
+//!
+//! - **C1:** `adversarial_canonical_outputs` (Round 3 Pass-3
+//!   measurement-derived constants + Family-1 canonical-output
+//!   array scaffold per R1-D4); the array's contents populate at
+//!   C5 alongside the recipe corpus that produces them.
 
 #![doc(hidden)]
 
+pub mod adversarial_canonical_outputs;
 pub mod adversarial_corpus;
 pub mod c_oracle;
 pub mod cache_precondition;
