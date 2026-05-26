@@ -20,32 +20,28 @@
 # is added at that round of plan-doc amendment (per the §11 history
 # row that records the genesis transition).
 #
-# ## Verifier-divergence deferral
+# ## Post-PR-#79 substrate note (FOLLOWUP closed)
 #
-# Per Phase 2h C7 close + the V3.0 FOLLOWUP
-# `shekyl-pow-randomx::compute_hash` divergence from C reference
-# (`docs/FOLLOWUPS.md` lines 50-82): T6's underlying
-# `mode_adversarial_ratio` orchestrator invokes the same
-# `(seedhash, data)` → hash path that the verifier-divergence
-# affects. While T6 measures latency rather than asserting
-# byte-equality, its ratio interpretation requires the Rust and C
-# paths to be doing semantically equivalent work; until the
-# FOLLOWUP closes the Rust hash chain is incomplete relative to C
-# and the ratio's load-bearing meaning is suspect.
+# Originally Phase 2h C7 close paired this workflow's T6-execution
+# step with `if: false` until the V3.0
+# `shekyl-pow-randomx::compute_hash`-divergence-from-C-reference
+# FOLLOWUP closed: T6's `mode_adversarial_ratio` orchestrator
+# invokes the same `(seedhash, data)` → hash path the divergence
+# affected, and ratio-interpretation requires the Rust and C paths
+# to be doing semantically equivalent work. The FOLLOWUP closed on
+# `dev` via PR #79 (`989610cac`, 2026-05-26; root cause:
+# `RANDOMX_FLAG_V2` missing at `randomx_create_vm`); PR #78's
+# post-rebase commit (`c71ce2413`) extended the same fix to
+# `COracleSession::from_raw_for_testing` (the constructor
+# `mode_adversarial_ratio` consumes). T6's ratio measurements are
+# now semantically load-bearing; the `if: false` gate has been
+# lifted in this PR.
 #
-# Therefore the `cargo test --ignored` step that exercises T6 is
-# **gated behind `if: false`** until the FOLLOWUP closes. The step
-# body is the mechanical activation surface — when the FOLLOWUP
-# closes, the M3 PR-template review pass removes the
-# `#[ignore = "..."]` attribute on `t6_worst_case_ratio` and this
-# `if: false` in the same PR; subsequent `workflow_dispatch`
-# triggers then run T6 against the corpus.
-#
-# The workflow scaffold lands at C8 so that the activation surface
-# exists in committed substrate from the moment the FOLLOWUP closes;
-# absent the scaffold, the FOLLOWUP closure would also require a
-# parallel CI-substrate creation step which would split the
-# attention across two PRs.
+# T6 itself remains `#[ignore]`-gated at the test layer for
+# runtime-cost reasons unrelated to the FOLLOWUP — per-recipe
+# sample cost (~40 s) keeps T6 outside the per-PR cadence budget
+# per R1-D6 close Reframe 2. The `--ignored` flag below is
+# accordingly retained.
 #
 # ## Runner pin
 #
@@ -128,11 +124,15 @@ jobs:
           cp external/randomx-v2/src/randomx.h "${RANDOMX_V2_INSTALL_DIR}/include/"
       - name: cargo test --ignored t6_worst_case_ratio
         working-directory: rust
-        # Phase 2h C7 + C8 close: gated behind `if: false` until the
-        # V3.0 verifier-divergence FOLLOWUP closes. The step body is
-        # the mechanical activation surface — removing `if: false`
-        # in the same PR that removes the `#[ignore]` attribute on
-        # `t6_worst_case_ratio` activates the gate.
+        # Post-PR-#79 + c71ce2413 substrate closure: T6 activates on
+        # `workflow_dispatch` (and post-genesis release-gate, when
+        # added per R1-D7 Sub-A close). The previous `if: false`
+        # gate paired with the V3.0 verifier-divergence FOLLOWUP
+        # has been lifted; T6 itself retains its test-layer
+        # `#[ignore]` attribute for runtime-cost reasons unrelated
+        # to the FOLLOWUP (per-recipe sample cost ≈40 s, outside
+        # per-PR budget per R1-D6 close Reframe 2), so the
+        # `--ignored` flag below is retained.
         #
         # `--release` is required: T6 measures latency, and debug-
         # mode `compute_hash` runs are ~50× slower than release —
@@ -143,7 +143,6 @@ jobs:
         # `T6_CLAIM_2_TRACKING:` JSON-line records to the workflow
         # log for the regression-tracking dashboard harvester
         # (R1-D6 close Reframe 3).
-        if: false
         run: |
           cargo test --release --locked -p shekyl-randomx-differential \
             --test worst_case_ratio -- --ignored --nocapture

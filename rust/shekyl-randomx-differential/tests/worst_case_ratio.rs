@@ -54,22 +54,28 @@
 //! this on `workflow_dispatch` and on the nightly schedule per R1-D7
 //! close's separate-workflow disposition.
 //!
-//! ## C7 close: verifier-divergence FOLLOWUP also blocks meaningful T6
+//! ## Post-PR-#79 substrate note (FOLLOWUP closed)
 //!
 //! T6's measurement orchestrator (`mode_adversarial_ratio::run`)
-//! invokes the same `(seedhash, data)` → hash path that T2 surfaces a
-//! divergence on per the V3.0 FOLLOWUP "Investigate
-//! `shekyl-pow-randomx::compute_hash` divergence from C reference"
-//! ([`docs/FOLLOWUPS.md`](../../../docs/FOLLOWUPS.md) lines 50–82).
-//! While T6 measures *latency* rather than asserting *byte-equality*,
-//! its ratio interpretation requires the Rust and C paths to be doing
-//! semantically equivalent work; until the divergence FOLLOWUP closes
-//! the Rust hash chain is incomplete relative to C, and the ratio's
-//! load-bearing meaning is suspect. T6 inherits the same FOLLOWUP gate
-//! as T2 for that reason (in addition to its baseline nightly/release-
-//! gate cadence). Mechanically the gate composes with the existing
-//! `#[ignore]` — invocation always already requires `--ignored`; the
-//! note here is plan-doc-cross-reference substrate for C10.
+//! invokes the same `(seedhash, data)` → hash path that T2
+//! exercises. Originally that path diverged from the C reference per
+//! the V3.0 verifier-divergence FOLLOWUP, which made T6's ratio
+//! interpretation suspect (the Rust hash chain was incomplete
+//! relative to C; latency comparisons against semantically
+//! non-equivalent work are meaningless). The FOLLOWUP closed on
+//! `dev` via [PR #79](https://github.com/Shekyl-Foundation/shekyl-core/pull/79)
+//! (`989610cac`, 2026-05-26; root cause: `RANDOMX_FLAG_V2` missing
+//! at `randomx_create_vm`); PR #78's post-rebase commit
+//! (`c71ce2413`) extended the same fix to
+//! [`COracleSession::from_raw_for_testing`](shekyl_randomx_differential::c_oracle::COracleSession::from_raw_for_testing)
+//! (the constructor `mode_adversarial_ratio` uses). T6's ratio
+//! measurements are now semantically load-bearing.
+//!
+//! T6's `#[ignore]` attribute persists for an unrelated
+//! (runtime-cost) reason — the per-recipe sample cost still puts T6
+//! outside the per-PR cadence budget per R1-D6 close Reframe 2.
+//! The C8 workflow's `if: false` gate, which was paired with the
+//! now-closed FOLLOWUP, lifts in this PR.
 //!
 //! ## Actionable failure semantics (R1-D6 close Reframe 3)
 //!
