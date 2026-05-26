@@ -339,12 +339,7 @@ impl COracleSession {
         // size, and the harness's R4-D5 lifecycle guarantees no
         // concurrent FFI mutation of this buffer. The returned
         // slice's lifetime is bounded by `&self`.
-        unsafe {
-            slice::from_raw_parts(
-                self.cache_memory.cast::<u8>(),
-                RANDOMX_CACHE_SIZE_BYTES,
-            )
-        }
+        unsafe { slice::from_raw_parts(self.cache_memory.cast::<u8>(), RANDOMX_CACHE_SIZE_BYTES) }
     }
 
     /// SHA-256 of the C reference's 256-MiB cache memory.

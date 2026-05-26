@@ -393,7 +393,8 @@ pub fn run(
     for recipe in &corpus {
         let base_bytes = derive_base_cache_bytes(&recipe.base);
         let evaluated = evaluate(recipe, &base_bytes);
-        let rust = RustSubjectSession::from_raw_for_testing(evaluated.seedhash, &evaluated.cache_bytes);
+        let rust =
+            RustSubjectSession::from_raw_for_testing(evaluated.seedhash, &evaluated.cache_bytes);
         let c = COracleSession::from_raw_for_testing(evaluated.seedhash, &evaluated.cache_bytes)?;
 
         let mut rust_samples_ns: Vec<u64> = Vec::with_capacity(samples_per_recipe);

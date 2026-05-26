@@ -125,7 +125,9 @@ use shekyl_randomx_differential::adversarial::canonical::derive_base_cache_bytes
 use shekyl_randomx_differential::adversarial::get_corpus;
 use shekyl_randomx_differential::adversarial::interpreter::evaluate;
 use shekyl_randomx_differential::c_oracle::COracleSession;
-use shekyl_randomx_differential::mode_adversarial_ratio::{recipe_category, ADVERSARIAL_RATIO_DATA};
+use shekyl_randomx_differential::mode_adversarial_ratio::{
+    recipe_category, ADVERSARIAL_RATIO_DATA,
+};
 use shekyl_randomx_differential::rust_subject::RustSubjectSession;
 
 /// Format a 32-byte hash as lowercase hex without separators.
@@ -201,7 +203,7 @@ fn t2_adversarial_corpus_byte_equality() {
             name = recipe.name,
             category = category,
             rationale = recipe.rationale,
-             seedhash = hex_lower(evaluated.seedhash.as_bytes()),
+            seedhash = hex_lower(evaluated.seedhash.as_bytes()),
             rust_hex = hex_lower(&rust_hash),
             c_hex = hex_lower(&c_hash),
         );
