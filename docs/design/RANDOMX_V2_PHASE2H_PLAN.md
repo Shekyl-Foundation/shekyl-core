@@ -9,8 +9,8 @@ todos:
     content: "Round 1 architecture close (collaborative): R1-D1 (specified-outliers methodology as composition of three definitions — audit-anchored spec-silence enumeration primary, per-opcode boundary-value supplementary, coverage-metric validation; definition (1) rejected as substrate-unreachable; corpus size 50-200 entries; additively maintainable as load-bearing substrate property), R1-D2 (PreparedCache::from_raw_for_testing under cfg(feature=\"test-internals\") + C-side symmetry via existing randomx_get_cache_memory + production-equivalence constraint pinned as substrate principle), R1-D3 (lib module in shekyl-randomx-differential + declarative C1 recipes primary with C2 imperative escape hatch + B2 runtime expansion + first-class recipe evaluator + executable-specification recipes pinned as substrate property), R1-D4 (Family 1 Rust source const array at adversarial_canonical_outputs.rs + compile-time bidirectional cross-checkability + gen_canonical_outputs.rs bin extension + derive-substrate-inputs/cache-attestation-outputs pinned as substrate principle), R1-D5 (mode_worst_case renamed to mode_adversarial_ratio + Claim 1 per-recipe max-ratio (5.0×−margin) with single-retry noise filter as hard gate + Claim 2 no-per-class-systematic-regression as regression-tracking signal + vocabulary-shift cascade to §2.5/§4/parent §6), R1-D6 (continuous enforcement from first recipe + cadence-corpus alignment as substrate policy + actionable failure semantics pinned as substrate principle), R1-D7 (T2 in existing workflow + T6 in new dedicated workflow with workflow_dispatch pre-genesis + M3 PR-template discipline expansion to .github/workflows/ files + GitHub-hosted runner class with committed RUNNER_NOISE_MARGIN under M1/M3 disciplines + self-hosted runners deferred), R1-D8 (substrate-anchored recipe-acceptance criterion via three evidence categories — audit-anchored / coverage-attested / substrate-derived + corpus directory taxonomy mirrors three categories + M3 PR-template discipline rejects recipes without rationale citation + statistical-realism satisfied by construction), R1-D9 (evaporates — Round 1's substrate findings did not produce a third instance of substrate-derived constant gaps (R5-D1's surface enumeration and R7-D5's substrate-derived constant validation pass remain the two precedents) or a new pre-implementation discipline class (extensions of existing classes, not a sixth); trigger conditions not met; closes as no-decision; eight substrate-discipline observations queued for future rule-26 amendment PR — including R1-D9's own contribution that scaffolded optional decisions close as no-decision when triggers don't fire and manufacturing decision work to fill scaffolded slots is anti-discipline). Each close carries explicit reopen-criteria per 21-reversion-clause-discipline.mdc. Collaboration-discipline pin: unilateral mid-round close attempt was reverted before push per the collaborative-design principle that closing a round before all participants provide input opens the round again every time."
     status: completed
   - id: phase2h-round-2
-    content: "Round 2 threat-model close: §4 passive + active surfaces under the new corpus methodology. Adversarial corpus changes both surfaces (per Phase 2g §4.4/§4.5/§4.6 precedent: T-A1 silent-disposition-degradation now applies to the adversarial corpus's tamper detection, T-A2 corpus-tamper applies to the adversarial entries, M1 canonical-output property extends to the adversarial canonical hashes). Confirm §35-secure-memory.mdc / §36-secret-locality.mdc remain N/A per Phase 2c §5.11.4 (cache memory public-input-only; the 2h work does not introduce secret-bearing intermediate state)."
-    status: pending
+    content: "Round 2 threat-model open (scaffold landed; collaborative close pending): §4 placeholder replaced with substantive Round 2 opening — inherited substrate from Phase 2g §4.4 (A1-A10) / §4.5 (T-A1-T-A11) / §4.6 (M1-M4); methodology cascade pre-bound; four R2-D# decision points enumerated (R2-D1 passive surface — five new tamper surfaces from Round 1 closes with option-set per-surface A-class disposition; R2-D2 active surface — T-A2 corpus-tamper extension + new `PreparedCache::from_raw_for_testing` accessor production-equivalence-bypass surface; R2-D3 T-A1 silent-disposition-degradation vocabulary alignment cascade from R1-D5; R2-D4 adversarial-recipe-injection / rationale-fraud disposition with passive-vs-active classification); §4.5 §35-secure-memory.mdc / §36-secret-locality.mdc N/A confirmation by substrate enumeration (recipes / recipe evaluator output / canonical-outputs Rust source / RUNNER_NOISE_MARGIN / workflow files / from_raw_for_testing accessor all public-input-only per Phase 2c §5.11.4). Each R2-D# carries option set + criteria + Round-1 default-expectation sketch + reopen-criterion sketch per 21-reversion-clause-discipline.mdc. R2-D5 (M1-M4 extension) and R2-D6 (inherited A1-A10/T-A1-T-A11/M1-M4 confirmation pass) explicitly NOT pre-scaffolded per 16-architectural-inheritance.mdc 'audits-are-clean-so-compress' guard and per the R1-D9 close substrate-discipline observation that manufacturing decision work to fill scaffolded slots is anti-discipline; emerge only if Round 2 close surfaces substrate evidence requiring them. Round 2 closes when R2-D1..R2-D4 land collaborative-close dispositions and §4.5's N/A enumeration is confirmed against the final Round-1-anchored substrate. Collaborative-close discipline per Round 1 pin: assistant drafts scaffold; user provides substantive framing; closure requires both."
+    status: in_progress
   - id: phase2h-pre-implementation
     content: "Pre-implementation round (mandatory per 26-sub-pr-design-discipline.mdc + the R5-D1 R4-blind-spot finding queued for rule-26 amendment; second instance of the discipline after Phase 2g, promoting it to amendment-ready status): surface-enumeration pass against the actual verifier source (confirm any chosen accessor's surface matches §1 frozen items; no production surface grows; test-internals feature gate's discipline is preserved); dependency-discipline pass per 17-dependency-discipline.mdc (any methodology-required crate — cargo-fuzz / bolero / proptest / honggfuzz / arbitrary — verified at source for workspace state, API existence, property existence, feature-flag plumbing); substrate-derived constant validation pass per §3.19 R7-D5 (any numeric threshold the methodology cites — percentile cutoffs, candidate counts, σ values, ratio bounds — verified against V2 substrate's reachability calculus); corpus-size budget verification against runner class (per-PR vs. nightly vs. release-gate sizing fits within existing CI runtime budgets per Phase 2g §9.3 precedent)."
     status: pending
@@ -29,7 +29,7 @@ isProject: false
 
 | Field | Value |
 |-------|-------|
-| Status | Active plan document; Round 0 scaffold + Round 1 architecture close landed on `chore/randomx-v2-phase2h-plan`; Round 2 (threat model) and pre-implementation round pending |
+| Status | Active plan document; Round 0 scaffold + Round 1 architecture close + Round 2 threat-model open (scaffold landed; collaborative close pending) on `chore/randomx-v2-phase2h-plan`; pre-implementation round pending |
 | Parent plan | [`docs/design/RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) — Track A Phase 2 status note (2026-05-25; line 304); parent plan-doc's `todos:` list does not yet carry a `phase2h-*` entry — this plan-doc's closure adds one |
 | Sibling plans | [`RANDOMX_V2_PHASE2G_PLAN.md`](./RANDOMX_V2_PHASE2G_PLAN.md) §3.19 R7-D1/R7-D2/R7-D3/R7-D4/R7-D5 (the routing decision); §3 R1-D5 / R1-D6 / R1-D8 close annotations (reopened banners); §2.5 Round 7 amplification (corpus-coverage-as-leg-3-completeness restoration target); §6 T2 / T6 (deferred tests this round reactivates); §5.1.11 (deferred `mode_worst_case`); §3.17 R5-D1 (`test-internals` feature-gate carve-out precedent); §3.18 R6 cluster (canonical-output pinning discipline) |
 | Base commit (`dev` tip at scaffold) | `33d22a83b44918da7efcab2e3dcc8f543c9495fa` — "Merge pull request #75 from Shekyl-Foundation/feat/randomx-v2-phase2g-impl" (2026-05-25) |
@@ -2244,33 +2244,473 @@ the trigger's timing.
 
 ## 4. Threat model
 
-**Reserved for Round-2 close.** Per Phase 2g §4.4 / §4.5 / §4.6
-precedent, Round 2 closes the passive + active threat surfaces
-under the new corpus methodology. Round-0 expectations (named
-here so Round 2's framing is anchored, not closed):
+**Round 2 opening — scaffold for collaborative close.** Round 2
+closes §4 against the Round-1-anchored substrate (R1-D1..R1-D8
+closes). The methodology pivot from statistical-grinding to
+specified-outliers reshapes both passive and active threat
+surfaces: the corpus's substrate is *recipes* (R1-D3) not
+*(seedhash, data)* tuples; the committed artifact is *recipe
+data + canonical outputs Rust source* (R1-D4 Family 1) not
+*committed hex bytes*; the accessor is *cache-level* (R1-D2
+`PreparedCache::from_raw_for_testing`) not *opcode-stream-level*;
+performance measurement is *per-recipe ratio* (R1-D5) not
+*statistical worst-case*; CI infrastructure carries a committed
+`RUNNER_NOISE_MARGIN` constant (R1-D7 Sub-C) and gate-determining
+workflow files under M3 PR-template discipline (R1-D7 Sub-B).
 
-- **Passive surface.** T-A1 (silent-disposition-degradation;
-  per Phase 2g §4.4) extends to the adversarial corpus's
-  tamper-detection — the corpus's `ADVERSARIAL_CORPUS_SHA256`
-  pin per §1.6 catches tamper across this round's ship; the
-  T10 (`adversarial_corpus_hash_pin`) test reactivates at
-  implementation alongside T2 + T6.
-- **Active surface.** T-A2 (corpus-tamper) extends to the
-  adversarial entries; the §3.18 R6 cluster M1 canonical-output
-  property (`rust == canonical && c == canonical`) extends to
-  the adversarial canonical hashes (per §1.6 close).
-- **§35-secure-memory.mdc / §36-secret-locality.mdc N/A
-  confirmation.** Round 2 confirms 2h does not introduce
-  secret-bearing intermediate state per Phase 2c §5.11.4
-  (cache memory public-input-only). The methodology, accessor,
-  grinding tool, and corpus contents are all public-input
-  derivations; no secret material flows through 2h's
-  substrate.
+**Inherited substrate from Phase 2g §4.** Phase 2g's §4.4 A1-A10
+passive attack-class enumeration, §4.5 T-A1-T-A11 active threat
+surface, and §4.6 M1-M4 mitigation patterns apply by inheritance
+to Phase 2h's substrate. Round 2's scope is the **incremental
+disposition of new tamper surfaces and attack classes introduced
+by Round 1's closes**, not a re-enumeration of the inherited
+classes. Phase 2g classes that still hold against Phase 2h
+substrate carry forward by reference; classes that need extension
+or new entries are disposed under R2-D1..R2-D4 below.
 
-Round 2 closes against Round-1 substrate (R1-D1 through R1-D8
-closes). The passive + active threat surfaces reshape as
-R1-D1's methodology choice constrains the corpus's tamper
-surface and the accessor's leak surface.
+**Scope envelope.** Round 2 closes the four R2-D# decision
+points enumerated below plus the §35/§36 N/A confirmation by
+enumeration (§4.5). Forward-action items that depend on Round
+2 substrate (e.g., M1-M4 extension dispositions, full A1-A10 /
+T-A1-T-A11 re-confirmation pass) may surface during Round 2
+close and queue as forward-actions for the pre-implementation
+round or implementation PR, but are not pre-scaffolded as
+R2-D# decisions per
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+"audits-are-clean-so-compress" anti-pattern — pre-allocating
+decision slots for derived inheritance audits is the failure
+mode that produces the next discovery. Round 2 closes what
+substrate evidence requires; additional dispositions emerge if
+substrate evidence requires them.
+
+**Methodology cascade pre-bound (not closed here; surfaces in
+R2-D# scope below).** R1-D5's vocabulary shift —
+"statistical-tail-latency divergence" → "per-recipe / per-class
+systematic ratio divergence" — is a Phase 2g §4.5 T-A1
+amendment that lands at Round 2 close per the §11 Round 1
+forward-actions queue. R2-D3 carries the disposition.
+
+### R2-D1 — Passive surface: new tamper surfaces from Round 1 closes
+
+**Option set (named for Round 2; not closed):**
+
+Round 1's closes introduce five new tamper surfaces. Each surface's
+attack-class disposition is open:
+
+- **(i) Recipe substrate** —
+  `rust/shekyl-randomx-differential/src/adversarial/recipes/*.rs`
+  declarative `CacheRecipe` modules per R1-D3.
+- **(ii) Recipe evaluator correctness** — the interpreter mapping
+  recipes → cache bytes at
+  `rust/shekyl-randomx-differential/src/adversarial/interpreter.rs`
+  per R1-D3.
+- **(iii) `adversarial_canonical_outputs.rs` Family-1 Rust source** —
+  the `AdversarialCanonicalEntry` const array per R1-D4 M1/M3
+  disciplines.
+- **(iv) `RUNNER_NOISE_MARGIN` committed constant** — discovered
+  by the pre-implementation noise-baseline pass; lands in
+  `adversarial_canonical_outputs.rs` per R1-D7 Sub-C under
+  M1/M3 disciplines.
+- **(v) `.github/workflows/randomx-v2-*.yml` files** — the
+  existing `randomx-v2-differential.yml` (T2 placement) plus the
+  new dedicated workflow for T6 per R1-D7 Sub-B M3 expansion.
+
+**Disposition options (per surface):**
+
+- **(a) Phase 2g A1 (corpus-generation false-agreement bug)
+  extension.** Extend A1's attack description and mitigation
+  surface to cover the new committed substrate. T9
+  (determinism gate) + T10 (drift-detection pin) extend
+  mechanically to the new files.
+- **(b) New A-class.** Allocate a new A11+ attack class for
+  surfaces whose tamper-detection differs structurally from
+  A1's symmetric-corpus-bug shape (e.g., recipe-evaluator
+  correctness is a derivation surface, not a committed-data
+  surface — a divergent evaluator passes T10 because the
+  evaluator is the production path).
+- **(c) Combination per surface.** (i), (iii), (iv), (v)
+  absorb into A1 by extension; (ii) needs a new A11 because
+  its attack shape (derivation correctness, not data tamper)
+  doesn't match A1's data-tamper framing.
+
+**Criteria (substrate-anchored):**
+
+1. **Attack-class structural match.** A new A-class is justified
+   only when the attack's mitigation pattern differs structurally
+   from the inherited A-class — derivation-correctness vs.
+   data-tamper, build-time-correctness vs. test-time-attestation.
+   Per [`19-validation-surface-discipline.mdc`](../../.cursor/rules/19-validation-surface-discipline.mdc)
+   bundling discipline: an A-class collapse is appropriate when
+   the validation surfaces are the same; an A-class split is
+   appropriate when the validation surfaces are structurally
+   distinct.
+2. **Test coverage discipline.** Each disposition pins the test
+   coverage that defends against the surface. Surface (ii)
+   recipe-evaluator-correctness has no inherited T# coverage from
+   Phase 2g; Round 2 close pins the test row that defends it (a
+   `test_recipe_evaluator_correctness` test under §6 T2's row
+   group, or equivalent).
+3. **M3 PR-template discipline alignment.** R1-D7 extends M3 to
+   cover `.github/workflows/` files and `adversarial_canonical_outputs.rs`;
+   R1-D8 extends M3 to recipes-without-rationale-citation. Round
+   2 close confirms the M3 surface enumeration is complete against
+   the five new tamper surfaces.
+
+**Round-1 default-expectation sketch.**
+
+Option (c) is the load-bearing combination per the criteria above:
+
+- **(i) Recipe substrate → A1 extension.** Recipes are committed
+  data; tamper is caught by T10 SHA-256 drift-detection extended
+  to the recipes directory. The disposition is mechanical — A1's
+  attack description gets an amendment row for "extends to recipe
+  substrate; tamper-detection via T10 drift-detection over
+  `adversarial/recipes/*.rs`."
+- **(ii) Recipe evaluator correctness → new A11.** The recipe
+  evaluator's correctness is a derivation surface — a bug in
+  `interpreter.rs` that maps a `CacheRecipe { name: "X", ... }` to
+  the wrong bytes passes T10 (the recipe source is unchanged) but
+  produces wrong cache state for downstream `compute_hash`. The
+  attack class is "evaluator-divergence-bug." Mitigation: the
+  M1 canonical-output property — the `expected_hash` in
+  `adversarial_canonical_outputs.rs` is computed from the
+  evaluator's output and pinned; a divergent evaluator's hash
+  fails the M1 property. The disposition is structural: A11
+  inherits A1's framing but pivots from "data-tamper" to
+  "derivation-correctness" because the mitigation pattern
+  differs.
+- **(iii) Canonical outputs Rust source → A1 extension.** Same
+  shape as (i); T10 extends to the file via §3.18 R6 cluster
+  M1 canonical-output property.
+- **(iv) `RUNNER_NOISE_MARGIN` constant → A1 extension.** Same
+  shape; tamper-detection via T10 over the constant declaration
+  in `adversarial_canonical_outputs.rs`.
+- **(v) Workflow files → new A12 OR M3-only disposition.**
+  Workflow tamper has no T# coverage — the workflow file is
+  itself the test substrate (a workflow whose `runs-on` was
+  silently changed from `ubuntu-latest` to a fork-controlled
+  self-hosted runner would invalidate the `RUNNER_NOISE_MARGIN`
+  baseline without any T# failing). Mitigation is M3 (PR-template
+  plus reviewer attention), not a runtime check. Open whether this
+  warrants a new A12 attack class (substrate that has only M3
+  defense and no T# defense) or whether the M3 expansion
+  per R1-D7 is the disposition itself with no new A-class.
+
+The default sketch is the load-bearing question Round 2 closes,
+not the close itself. User-provided substantive framing supersedes.
+
+**Reopen-criterion sketch.**
+
+- (i) If Round 2 close discovers that surfaces (iii) and (iv)
+  warrant their own A-classes rather than A1 extension, the
+  sketch updates and reviewers re-confirm.
+- (ii) If post-genesis a recipe-evaluator-correctness incident
+  surfaces a defense the M1 canonical-output property didn't
+  catch, A11's mitigation reopens for amendment.
+- (iii) If the M3-only disposition for surface (v) proves
+  insufficient (a workflow tamper bypasses M3 review),
+  Round 2's close reopens at the next phase to add a runtime
+  check (e.g., workflow content SHA pinning).
+
+Re-evaluation shape: design-round on this plan-doc pre-genesis;
+FOLLOWUPS entry under
+[`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)
+discipline post-genesis.
+
+### R2-D2 — Active surface: T-A2 extension + accessor production-equivalence
+
+**Option set (named for Round 2; not closed):**
+
+Round 1's closes introduce two new active-surface considerations:
+
+- **Surface 1: T-A2 corpus-tamper extension.** The Phase 2g §4.5
+  T-A2 attack class (corpus-tamper) extends mechanically to the
+  five new tamper surfaces from R2-D1 plus the recipe-evaluator
+  attack shape. Round 2 closes the extension wording and confirms
+  no structural reshape is needed.
+- **Surface 2: `PreparedCache::from_raw_for_testing` accessor
+  production-equivalence bypass.** An attacker with the same
+  `test-internals` feature-gate access who lands a non-production-
+  reachable accessor variant (e.g., an accessor that bypasses
+  one of the production validation steps R1-D2 closure pinned)
+  bypasses the substrate principle even while preserving M1
+  canonical-output property. The attack vector is "land a sibling
+  `from_raw_for_testing_bypass` accessor under the same gate,
+  reroute the adversarial corpus to it, claim production-
+  equivalence without verification."
+
+**Disposition options:**
+
+- **(a) T-A2 extension covers both surfaces.** Treat
+  production-equivalence-bypass as a sub-case of T-A2 corpus-
+  tamper — both are "tamper that bypasses the substrate's
+  defense by exploiting test-only surface."
+- **(b) New T-A12: accessor-production-equivalence-bypass.**
+  Allocate a new T-A class because the mitigation pattern
+  differs structurally — T-A2's mitigation is M1 canonical-
+  output property; production-equivalence-bypass's mitigation
+  is the R1-D2 close's substrate principle ("test-internals
+  accessors must construct states reachable by production
+  inputs") enforced at PR-review time, not at test time.
+- **(c) Discipline absorption.** No new T-A class; the
+  production-equivalence constraint is absorbed into R1-D7's
+  M3 PR-template discipline as a checklist item for `test-internals`
+  accessor PRs ("does the accessor construct only production-
+  reachable states?").
+
+**Criteria (substrate-anchored):**
+
+1. **Mitigation-pattern distinction.** Per R2-D1 criterion 1's
+   shape: new T-A class is justified only when the mitigation
+   pattern differs structurally. Production-equivalence bypass's
+   defense is reviewer-attention against the substrate principle
+   from R1-D2 close, not a runtime check.
+2. **Substrate principle visibility.** Per R1-D9 close's pinned
+   substrate-discipline observation about "production-equivalence
+   constraint on `test-internals` accessors" — Round 2 close
+   confirms the principle is recorded somewhere a future
+   `test-internals` accessor PR's reviewer will see it. The
+   reviewer-visibility question is whether the principle lives in
+   M3 PR-template (option (c)), in a new T-A12 attack class
+   (option (b)), or absorbed into T-A2 framing (option (a)).
+3. **`test-internals` carve-out auditability.** Per §1.5 frozen
+   substrate, the `test-internals` feature gate is the sole
+   carve-out from §1.1's verifier-public-surface freeze. The
+   carve-out's continued auditability requires that each
+   `test-internals` accessor's production-equivalence claim
+   is mechanically verifiable. Round 2 close pins where this
+   verification lives.
+
+**Round-1 default-expectation sketch.**
+
+Option (b) + (c) combination — both T-A12 attack class AND M3
+PR-template discipline checklist item. The attack class names
+the surface so reviewers reading §4.5 inheritance understand
+the threat; the M3 checklist item is the mitigation enforcement.
+Option (a) alone underrecords the structural distinction (T-A2
+is data-tamper; production-equivalence-bypass is surface-tamper).
+Option (c) alone underrecords the threat-surface visibility
+(a future reviewer reading only §4.5 would not see the
+production-equivalence-bypass class without the §4.5 amendment).
+
+The default sketch is the load-bearing question; user-provided
+substantive framing supersedes.
+
+**Reopen-criterion sketch.**
+
+- (i) If a Phase-2-or-later audit finding surfaces a
+  `test-internals` accessor PR that violated the production-
+  equivalence constraint without M3 catching it, the M3 checklist
+  item's effectiveness reopens for re-design.
+- (ii) If the workspace adds a third or subsequent `test-internals`
+  accessor and the production-equivalence-verification cadence
+  becomes a bottleneck, the disposition reopens for runtime-check
+  augmentation (e.g., a fuzz test that constructs production
+  inputs and confirms the accessor's outputs match a production-
+  path traversal).
+
+Re-evaluation shape: as for R2-D1; design-round pre-genesis,
+FOLLOWUPS entry post-genesis.
+
+### R2-D3 — T-A1 silent-disposition-degradation vocabulary alignment (R1-D5 cascade)
+
+**Option set (named for Round 2; not closed):**
+
+R1-D5's vocabulary shift cascades to Phase 2g §4.5 T-A1's
+description. T-A1 currently describes the attack class as
+"silent-disposition-degradation against statistical-tail-latency
+divergence"; under R1-D5 the corpus measurement is per-recipe
+ratio (Claim 1) + per-class systematic regression (Claim 2),
+not statistical-tail-latency.
+
+- **(a) T-A1 amendment row.** Add a Phase-2h amendment row to
+  Phase 2g §4.5 T-A1's description, citing R1-D5 close. T-A1's
+  attack and mitigation remain the same class; only the
+  "what-divergence-looks-like" wording shifts.
+- **(b) Split T-A1 into T-A1a + T-A1b.** Allocate T-A1a for
+  per-recipe ratio degradation (Claim 1) and T-A1b for
+  per-class systematic regression (Claim 2). The split is
+  structurally accurate — Claim 1 and Claim 2 measure different
+  failure modes — but adds taxonomy weight.
+- **(c) Absorbed into R2-D2's T-A2 extension.** Treat the
+  vocabulary shift as part of T-A2's corpus-tamper extension
+  rather than a T-A1 amendment.
+
+**Criteria (substrate-anchored):**
+
+1. **Vocabulary-shift scope.** R1-D5 close text specifies the
+   §4 amendment as "wording-only" (per the §11 Round 1
+   forward-actions queue). Option (a) matches this scope; (b)
+   and (c) exceed it.
+2. **Audit-trail clarity.** T-A1's Phase 2g framing is well-
+   established; reviewers expect T-A1 to mean what Phase 2g
+   said it meant. An amendment row is the lowest-friction shape
+   for future reviewers reading both 2g and 2h.
+
+**Round-1 default-expectation sketch.**
+
+Option (a) — minimal amendment row. The R1-D5 vocabulary shift
+is wording-only; the underlying threat (silent disposition
+degradation that the random + canonical corpora don't catch)
+is unchanged. Phase 2g §4.5 T-A1's amendment row lands at
+implementation-PR docs-close per the §11 Round 1 forward-actions
+queue. Round 2 close pins the amendment text; the actual
+edit-to-Phase-2g-§4.5 happens at implementation-PR docs-close.
+
+**Reopen-criterion sketch.**
+
+- (i) If implementation-PR docs-close discovers the per-recipe-
+  ratio framing requires a structurally distinct mitigation
+  from T-A1's Phase 2g framing (e.g., a regression-tracking
+  signal that's qualitatively different from silent-disposition-
+  degradation defense), the disposition reopens for split or
+  new T-A class allocation.
+
+### R2-D4 — Adversarial-recipe-injection / rationale-fraud disposition
+
+**Option set (named for Round 2; not closed):**
+
+R1-D8's substrate-anchored recipe-acceptance criterion (three
+evidence categories: audit-anchored / coverage-attested / substrate-
+derived) is enforced via M3 PR-template discipline at PR review
+time. The discipline depends on reviewers cross-checking each new
+recipe's `rationale` field against the cited substrate. An attacker
+landing a recipe whose `rationale` cites Category 1 fraudulently
+(claims to cite an audit-substrate item that doesn't exist or
+doesn't match the recipe's actual coverage) bypasses M3 if the
+reviewer doesn't cross-check.
+
+- **(a) New T-A class (active surface; deliberate misrepresentation).**
+  Allocate T-A13: rationale-citation-fraud. The attack class
+  names a deliberate-tamper surface; the mitigation is M3 plus
+  a reviewer checklist item ("verify rationale citation resolves").
+- **(b) New A-class (passive surface; substrate drift bypasses
+  discipline).** Allocate A11+: recipe-acceptance-discipline-
+  drift. The attack class names the failure mode where rationale-
+  citation discipline gradually erodes (recipes land without
+  citation-verification across multiple PRs) without any single
+  attacker action.
+- **(c) Absorbed into Phase 2g §5.7 drift-prevention
+  discipline.** No new threat class; the discipline-failure-mode
+  is audit-time per [Phase 2g §5.7's drift-prevention framing](RANDOMX_V2_PHASE2G_PLAN.md),
+  which the Phase 2c §5.11.8 audit-against-actual-code framework
+  catches at PR-review time.
+- **(d) Combination (a) + (c).** Pin T-A13 to name the attack
+  surface; absorb mitigation into §5.7 drift-prevention + M3
+  PR-template (reviewer checklist for rationale-resolution).
+
+**Criteria (substrate-anchored):**
+
+1. **Passive-vs-active classification.** Is rationale-fraud a
+   deliberate-tamper attack (T-A class; active) or a
+   discipline-drift failure mode (A-class; passive)? The
+   attacker-intentionality criterion distinguishes — fraud is
+   deliberate by definition; drift is accidental by definition.
+   Both can occur; the question is whether both warrant separate
+   classes or whether one is sufficient.
+2. **Mitigation surface match.** Per R2-D1 criterion 1 / R2-D2
+   criterion 1: a new class is justified only when the mitigation
+   pattern differs structurally. Rationale-fraud's mitigation is
+   reviewer attention against the rationale-resolution criterion;
+   discipline-drift's mitigation is the §5.7 audit-against-actual-
+   code framework. The mitigation surfaces overlap but aren't
+   identical — fraud catches at first-PR; drift catches at audit-
+   time.
+3. **R1-D8 substrate principle visibility.** Per R1-D9 close's
+   pinned substrate observation that "scaffolded optional
+   decisions close as 'no decision' when their trigger conditions
+   don't fire": Round 2's close confirms the rationale-citation
+   discipline has a substrate-visible enforcement path, not a
+   substrate-invisible reliance on reviewer good intentions.
+
+**Round-1 default-expectation sketch.**
+
+Option (d) — T-A13 names the attack surface for reviewers reading
+§4.5 inheritance; mitigation absorbs into §5.7 drift-prevention
+plus M3 PR-template reviewer checklist. The split reflects the
+attacker-intentionality criterion: fraud is active (named in
+§4.5 as T-A13); drift is passive (absorbed into §5.7's substrate
+without a new A-class — the §5.7 framework is itself the
+discipline that catches drift). Neither class needs a runtime
+T# check because the failure is audit-time; the M3 checklist
+item enforces at PR-review time.
+
+The default sketch is the load-bearing question; user-provided
+substantive framing supersedes.
+
+**Reopen-criterion sketch.**
+
+- (i) If a Phase-2-or-later audit finding surfaces a recipe
+  that landed with a fraudulent rationale citation and M3
+  didn't catch it, the M3 checklist item's effectiveness
+  reopens.
+- (ii) If post-genesis the recipe-acceptance discipline drifts
+  measurably (multiple recipes landing with weak rationale
+  citations), the §5.7 framework reopens for tightening.
+- (iii) If the rationale-fraud attack surfaces a structurally
+  distinct mitigation requirement (e.g., automated rationale-
+  resolution check at CI time), Round 2's close reopens to
+  add a T# row.
+
+### 4.5 §35-secure-memory.mdc / §36-secret-locality.mdc N/A confirmation
+
+**Confirmation by enumeration, not decision point.** Round 2
+confirms 2h does not introduce secret-bearing intermediate state
+per Phase 2c §5.11.4 (cache memory is public-input-only). The
+2h substrate enumerated below carries no secret material; the
+[`35-secure-memory.mdc`](../../.cursor/rules/35-secure-memory.mdc)
+wipe-on-drop discipline and
+[`36-secret-locality.mdc`](../../.cursor/rules/36-secret-locality.mdc)
+secret-locality discipline are N/A for the 2h work.
+
+**Substrate enumeration (Round 1 + 2h additions):**
+
+- **Recipes.** Declarative `CacheRecipe` data structures
+  carrying `name`, `rationale`, `base: BaseSeedhash`, and
+  `modifications: &'static [(usize, u8)]`. No secret material;
+  seedhashes are public test inputs per §2.5 leg-3 audit-posture
+  framing.
+- **Recipe evaluator output.** Cache bytes produced by the
+  interpreter from a recipe; identical in shape to a production-
+  derived `PreparedCache` and carrying the same N/A status per
+  Phase 2c §5.11.4.
+- **`adversarial_canonical_outputs.rs` const array.** Public
+  test-vector data — recipe names, rationale cites, expanded
+  bytes SHA-256, expected hashes. No secret material by
+  construction.
+- **`RUNNER_NOISE_MARGIN` committed constant.** Public CI-
+  infrastructure baseline; no secret material.
+- **Workflow files (`.github/workflows/randomx-v2-*.yml`).**
+  Public CI configuration; no secret material.
+- **`PreparedCache::from_raw_for_testing` accessor.** Constructs
+  the same `PreparedCache` shape as production; the public-
+  input-only property per Phase 2c §5.11.4 holds because the
+  accessor's input (recipe-derived bytes) is itself derived from
+  public seedhashes via the recipe interpreter. Production-
+  equivalence constraint (R1-D2 close substrate principle)
+  enforces that the accessor cannot construct states unreachable
+  by production inputs; transitively, no secret-bearing state
+  is constructible.
+
+**No further §35/§36 dispositions arise.** Round 2 closes the
+N/A confirmation at this enumeration; no further amendment to
+Phase 2c §5.11.4 is required.
+
+### Round 2 — close obligation
+
+Round 2 closes when R2-D1..R2-D4 land collaborative-close
+dispositions and §4.5's N/A enumeration is confirmed against
+the final Round-1-anchored substrate. Per
+[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
+late-rounds threat-model timing: Round 2 is the threat-model
+adversarial pass against the closed Round-1 substrate, not a
+re-litigation of Round 1 dispositions. Round 1's closes are
+*frozen substrate for Round 2 to adversarially probe*; if Round
+2 surfaces evidence that a Round-1 close was load-bearing-wrong
+against the threat model, the surface that triggers Round 1
+reopening is named per
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+discipline rather than absorbed silently into Round 2.
 
 ## 5. Implementation hand-off contract
 
@@ -2627,3 +3067,109 @@ explicit input."
   and structural decisions but introduces no new code; the
   plan-doc work remains markdown-only per the design-phase
   scope envelope.
+
+### Round 2 — threat-model open (scaffold landed; collaborative close pending)
+
+**Scope.** Round 2 opening. §4 placeholder replaced with
+substantive Round 2 framing: opening framing plus inherited
+substrate from Phase 2g §4 plus scope envelope plus methodology
+cascade pre-binding plus four R2-D# decision points (R2-D1..R2-D4)
+plus §35/§36 N/A confirmation by enumeration plus Round 2 close
+obligation framing. The round opens with scaffold ready for
+collaborative-close framing per the discipline pinned at Round
+1 close — closing a round before all participants provide input
+opens the round again every time.
+
+**What this round opens (per-decision one-paragraph framing).**
+
+- **R2-D1 — Passive surface: new tamper surfaces from Round 1
+  closes.** Five new tamper surfaces enumerated (recipe substrate
+  / recipe evaluator correctness / canonical-outputs Rust source
+  / `RUNNER_NOISE_MARGIN` constant / workflow files). Option set
+  is (a) Phase 2g A1 extension per surface, (b) new A-class per
+  novel-mitigation-pattern surface, (c) combination per surface.
+  Round-1 default-expectation sketch points at option (c): (i),
+  (iii), (iv) → A1 extension; (ii) recipe-evaluator-correctness
+  → new A11 because mitigation pivots from data-tamper to
+  derivation-correctness; (v) workflow files → open between new
+  A12 or M3-only disposition.
+- **R2-D2 — Active surface: T-A2 extension + accessor production-
+  equivalence.** Two new active-surface considerations: T-A2
+  corpus-tamper extension to the new tamper surfaces (mechanical)
+  and `PreparedCache::from_raw_for_testing` accessor production-
+  equivalence-bypass (novel — an attacker landing a non-production-
+  reachable accessor under the same `test-internals` gate bypasses
+  R1-D2's substrate principle while preserving M1). Option set is
+  (a) T-A2 extension covers both, (b) new T-A12 for production-
+  equivalence-bypass, (c) discipline absorption into M3 PR-template.
+  Round-1 default sketch is (b) + (c) combination.
+- **R2-D3 — T-A1 silent-disposition-degradation vocabulary
+  alignment (R1-D5 cascade).** R1-D5's vocabulary shift from
+  statistical-tail-latency to per-recipe / per-class systematic
+  ratio cascades to Phase 2g §4.5 T-A1's description. Option set
+  is (a) amendment row, (b) T-A1 split into T-A1a / T-A1b, (c)
+  absorption into T-A2 extension. Round-1 default sketch is (a)
+  — minimal amendment row, R1-D5 close specifies wording-only.
+- **R2-D4 — Adversarial-recipe-injection / rationale-fraud
+  disposition.** An attacker landing a recipe with fraudulent
+  rationale citation bypasses R1-D8's M3 mechanical-rejection
+  discipline if reviewer doesn't cross-check. Option set is (a)
+  T-A13 (active-surface; deliberate misrepresentation), (b) A11+
+  (passive-surface; discipline-drift), (c) absorption into Phase
+  2g §5.7 drift-prevention discipline, (d) combination (a) + (c).
+  Round-1 default sketch is (d) — T-A13 names the attack surface
+  for §4.5 inheritance; mitigation absorbs into §5.7 + M3
+  PR-template reviewer checklist.
+
+**§35/§36 N/A confirmation enumerated in §4.5** (not a R2-D#
+decision; confirmation by substrate enumeration that recipes,
+recipe evaluator output, canonical outputs Rust source,
+`RUNNER_NOISE_MARGIN`, workflow files, and `from_raw_for_testing`
+accessor all carry public-input-only state per Phase 2c §5.11.4).
+
+**Methodology cascade pre-bound (not closed at opening).** R1-D5's
+vocabulary-shift cascade lands at Round 2 close per the §11 Round
+1 forward-actions queue; R2-D3 carries the disposition. The
+implementation-PR docs-close step is downstream of Round 2's
+amendment-text pin.
+
+**Scope envelope.** Round 2 closes the four R2-D# decisions plus
+§4.5's N/A enumeration. Forward-action items that depend on
+Round 2 substrate (e.g., M1-M4 mitigation extension dispositions,
+full A1-A10 / T-A1-T-A11 re-confirmation pass) may surface during
+Round 2 close and queue as forward-actions for the pre-
+implementation round or implementation PR, but are not pre-
+scaffolded as R2-D# decisions per
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+"audits-are-clean-so-compress" anti-pattern guard. Round 2 closes
+what substrate evidence requires; additional dispositions emerge
+if substrate evidence requires them.
+
+**Substrate-discipline observation absorbed (forward-action
+candidate).** Round 2's scaffold inherits the discipline R1-D9
+pinned: pre-allocating decision slots for *anticipated* inheritance-
+audit confirmations is anti-discipline; scaffold the decisions
+that substrate evidence requires, not the decisions a future
+reviewer might expect. R2-D5 (M1-M4 extension) and R2-D6
+(inherited A1-A10 / T-A1-T-A11 / M1-M4 confirmation pass) are
+explicitly *not* scaffolded — they emerge only if Round 2 close
+surfaces substrate evidence requiring them. The observation
+records as a Round 2 opening procedural discipline application,
+not a new substrate-discipline observation for the rule-26
+amendment queue (it's a re-application of R1-D9's existing pin).
+
+**What this round defers (to Round 2 collaborative close).**
+
+- The R2-D1..R2-D4 collaborative-close dispositions (substantive
+  framing from user input, integration mapping from assistant,
+  per R1's collaboration-discipline pattern).
+- The §4.5 N/A enumeration's final confirmation against the
+  Round-2-frozen R2-D1..R2-D4 substrate (mechanical at close
+  time once dispositions are final).
+- Any §5 / §6 / §7 / §8 / §9 / §10 substantive content (pre-
+  implementation round and implementation PR deliverables;
+  Round 2 close-derived amendments to §5's threat-model
+  integration land at the next phase).
+- Any code surface — Round 2 references threat-model dispositions
+  but introduces no new code; the plan-doc work remains markdown-
+  only per the design-phase scope envelope.
