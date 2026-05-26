@@ -3637,3 +3637,64 @@ closes, the gate fires via two single-line edits (the
 on each workflow step). The post-2g forward-actions cluster
 that motivated Phase 2h's existence is closed; the parent
 plan-doc's Track A Phase 2 status note refreshes accordingly.
+
+### Post-rebase amendment: operational close of the V3.0 verifier-divergence FOLLOWUP
+
+The "T2/T6's activation surface is mechanical" predicate above
+fired during Round 4's post-rebase work. The V3.0
+`shekyl-pow-randomx::compute_hash`-divergence-from-C-reference
+FOLLOWUP closed on `dev` via
+[PR #79](https://github.com/Shekyl-Foundation/shekyl-core/pull/79)
+(`989610cac`, 2026-05-26; root cause: `RANDOMX_FLAG_V2` missing
+at `randomx_create_vm` in `COracleSession::new`). This PR
+rebased onto post-#79 `dev` and landed four commits discharging
+the activation-surface contract:
+
+1. **`c71ce2413` — `RANDOMX_FLAG_V2` extension to
+   `COracleSession::from_raw_for_testing` + T17 round-trip
+   backstop.** Mirrors PR #79's fix at the testing constructor
+   so substrate-overwrite-based session creation is
+   flag-equivalent to `Self::new`. New
+   [`tests/c_oracle_session_round_trip.rs`](../../rust/shekyl-randomx-differential/tests/c_oracle_session_round_trip.rs)
+   (T17) asserts cache-byte SHA + hash parity between the two
+   constructors for a fixed `(seedhash, payload)` pair.
+2. **`6fc059e1e` — lift T2 `#[ignore]` + workflow `if: false`
+   gating.** Removes `#[ignore]` on
+   `t2_adversarial_corpus_byte_equality`; reframes the
+   docstring as past-tense "Active per-PR cadence
+   (post-PR-#79 closure)" naming the substrate-anchored
+   reopening criterion per
+   [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).
+   The differential-workflow's dedicated T2 step lifts
+   `if: false`; the preceding default `cargo test` step gains
+   `-- --skip t2_adversarial_corpus_byte_equality` so T2 runs
+   exactly once per CI invocation (release-mode) within the
+   R1-D6 close Reframe 2 `T2_PER_PR_BUDGET_MS` budget.
+3. **`1b1bda7df` — lift T6 workflow `if: false` gating +
+   reframe T6 docs.** Rewrites the `worst_case_ratio` module's
+   docstring "C7 close" section as past-tense
+   "Post-PR-#79 substrate note (FOLLOWUP closed)"; lifts the
+   adversarial-ratio workflow's `if: false`. T6 itself retains
+   `#[ignore]` for runtime-cost reasons orthogonal to the
+   FOLLOWUP (~40 s per recipe, outside per-PR cadence per
+   R1-D6 close Reframe 2); the `--ignored` flag persists on
+   that basis. `workflow_dispatch` cadence is unchanged.
+4. **`72a4a9eed` — reframe T16 docs as regression guard.**
+   Rewrites `divergence_triage` module rustdoc from past-tense
+   D1 substrate-triage investigation tool to forward-tense
+   three-way (Rust ↔ C ↔ fixture) byte-equality regression
+   guard at the canonical input. T16 stays `#[ignore]`-gated
+   for runtime-cost reasons (256-MiB Argon2d-512 cache; ~10–30
+   s wall); reason text updated to surface the runtime-cost-
+   only basis. Historical D1 context (three-hypothesis
+   enumeration, outcome (A) confirmation, D2 → PR #79
+   diagnostic terminus) is preserved.
+
+The conditional language scattered above ("when the FOLLOWUP
+closes...", "until the divergence FOLLOWUP closes...") is now
+past-tense factual in this amendment; the in-narrative
+conditional shape is preserved as the as-landed Round 4
+substrate so the design-discipline arc (Phase 2g C7 discovery
+→ Phase 2h C7/C8 activation-surface scaffolding → PR #79
+substrate close → this PR's operational close) reads
+chronologically.

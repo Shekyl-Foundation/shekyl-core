@@ -64,18 +64,23 @@ sustainability is unaffected by the recalibration.
   (`adversarial_canonical_outputs.rs`); the worst-case-ratio
   measurement mode lands at C6
   (`mode_adversarial_ratio`); T2/T6 reactivate at C7 with
-  inherited `#[ignore]` gating behind the universal-divergence
-  FOLLOWUP above; the CI workflow wiring lands at C8
+  inherited `#[ignore]` gating behind the (then-open) V3.0
+  `shekyl-pow-randomx::compute_hash`-divergence-from-C-reference
+  FOLLOWUP; the CI workflow wiring lands at C8
   (per-PR T2 step in `randomx-v2-differential.yml` +
   workflow_dispatch T6 in `randomx-v2-adversarial-ratio.yml`,
   both `if: false`-gated until the divergence FOLLOWUP closes);
   the M5 mechanical citation-validation script lands at C9
-  (`scripts/ci/check_phase2h_citations.sh`). T2/T6's
-  activation surface is committed substrate; the gate fires
-  the moment the verifier-divergence FOLLOWUP closes and
-  removes the `#[ignore]` attributes + the `if: false`
-  conditions in a single PR. Original framing preserved
-  below for historical context.* Phase 2g
+  (`scripts/ci/check_phase2h_citations.sh`). The divergence
+  FOLLOWUP itself closed on `dev` via PR #79 (`989610cac`,
+  2026-05-26; root cause: `RANDOMX_FLAG_V2` missing at
+  `randomx_create_vm`). PR #78's post-rebase work (`c71ce2413`
+  extending the same fix to `COracleSession::from_raw_for_testing`
+  plus the operational close: lifting T2's `#[ignore]`,
+  reframing T6's docs, and lifting both workflows' `if: false`
+  gates) discharges the activation-surface contract recorded
+  above. Original framing preserved below for historical
+  context.* Phase 2g
   [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
   §3.19 R7-D1 reopens R1-D5 (adversarial seedhash corpus) under
   two independent substrate findings: (i) the verifier-accessor

@@ -17,9 +17,15 @@
   attestation; Category 3 substrate-derived boundary values).
   The methodology ships first-class evaluator + declarative
   recipe DSL + canonical-output pinning + per-PR M5 mechanical
-  citation-validation; T2/T6 inherit the Phase 2g runtime-test
-  `#[ignore]` gating behind the (now universal-across-inputs;
-  see FOLLOWUPS amendment) `compute_hash` divergence FOLLOWUP.
+  citation-validation. T2/T6 originally inherited the Phase 2g
+  runtime-test `#[ignore]` gating behind the (then-open)
+  universal-across-inputs `compute_hash` divergence FOLLOWUP;
+  that FOLLOWUP closed on `dev` via
+  [PR #79](https://github.com/Shekyl-Foundation/shekyl-core/pull/79)
+  (`989610cac`, 2026-05-26; root cause: `RANDOMX_FLAG_V2` missing
+  at `randomx_create_vm`), and the post-rebase substrate-close
+  commits in this PR (see C11 below) lift the FOLLOWUP-gated
+  attributes and workflow conditions.
 
   - **C1 canonical-output substrate + Pass-3 measurement
     constants.** New
@@ -145,6 +151,65 @@
     192-byte `t16` vector continues to pass only because it
     pins the seedhash + input combination at the known-good
     point). Both edits land in C10.
+
+  - **C11 post-rebase substrate-close (V3.0 verifier-divergence
+    FOLLOWUP closed by PR #79; this PR carries the operational
+    close).** PR #79 (`989610cac`, 2026-05-26) closed the V3.0
+    `shekyl-pow-randomx::compute_hash`-divergence-from-C-reference
+    FOLLOWUP by passing `RANDOMX_FLAG_V2` at `randomx_create_vm`
+    in `COracleSession::new`. Following PR #79's merge, this PR
+    rebased onto the post-#79 `dev` and landed four commits
+    discharging the activation-surface contract that C7/C8
+    established:
+    1. **`c71ce2413` — `RANDOMX_FLAG_V2` extension to
+       `COracleSession::from_raw_for_testing` + T17 round-trip
+       backstop.** Mirrors PR #79's fix at the testing constructor
+       so substrate-overwrite-based session creation (the path
+       T2/T6 exercise) is flag-equivalent to `Self::new`. New
+       [`rust/shekyl-randomx-differential/tests/c_oracle_session_round_trip.rs`](../rust/shekyl-randomx-differential/tests/c_oracle_session_round_trip.rs)
+       (T17) asserts cache-byte SHA + hash parity between the
+       two constructors for a fixed `(seedhash, payload)` pair;
+       bracket-tested by temporary V1 revert to confirm it
+       catches flag drift.
+    2. **`6fc059e1e` — lift T2 `#[ignore]` + workflow `if: false`
+       gating.** Removes the `#[ignore]` attribute on
+       `t2_adversarial_corpus_byte_equality`; rewrites the test
+       module's "C7 close" docstring as past-tense "Active
+       per-PR cadence (post-PR-#79 closure)" naming the
+       substrate-anchored reopening criterion per
+       `21-reversion-clause-discipline.mdc`; preserves the
+       R1-D6 close Reframe 1 substrate-broken vs ignore-ladder
+       distinction as the discipline's authoritative instance.
+       The `randomx-v2-differential.yml` workflow's `if: false`
+       gate on the dedicated T2 step is lifted; the preceding
+       default `cargo test` step gains
+       `-- --skip t2_adversarial_corpus_byte_equality` so T2
+       runs exactly once per CI invocation (release-mode via the
+       dedicated step) within R1-D6 close Reframe 2's
+       `T2_PER_PR_BUDGET_MS` budget.
+    3. **`1b1bda7df` — lift T6 workflow `if: false` gating +
+       reframe T6 docs.** Rewrites the `worst_case_ratio` module
+       rustdoc's "C7 close" section as past-tense
+       "Post-PR-#79 substrate note (FOLLOWUP closed)" and lifts
+       the `randomx-v2-adversarial-ratio.yml` workflow step's
+       `if: false` gate. T6 itself retains its test-layer
+       `#[ignore]` attribute for runtime-cost reasons orthogonal
+       to the FOLLOWUP (~40 s per recipe, outside per-PR cadence
+       per R1-D6 close Reframe 2); the inline comment and step
+       body record that the `--ignored` flag persists on this
+       basis. `workflow_dispatch` cadence is unchanged.
+    4. **`72a4a9eed` — reframe T16 docs as regression guard.**
+       Rewrites `divergence_triage` module rustdoc from past-tense
+       D1 substrate-triage investigation tool to forward-tense
+       three-way (Rust ↔ C ↔ fixture) byte-equality regression
+       guard at the canonical input. Preserves the D1 historical
+       context (the three-hypothesis enumeration, outcome (A)
+       confirmation, D2 → PR #79 diagnostic terminus); cites the
+       substrate-anchored reopening criterion; cross-references
+       T17 as the lighter-weight per-PR-cadence backstop. T16
+       stays `#[ignore]`-gated for runtime-cost reasons (256-MiB
+       Argon2d-512 cache + ~10–30 s wall); `#[ignore]` reason
+       text updated to surface the runtime-cost-only basis.
 
 - **RandomX v2 Track A Phase 2g differential-test harness landed**
   (`feat/randomx-v2-phase2g-impl`, PR #75, merge commit
