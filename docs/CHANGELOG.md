@@ -11,7 +11,10 @@
   [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
   §"Track A — Phase 2" and the design plan
   [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](design/RANDOMX_V2_PHASE2G_PLAN.md).
-  Twenty-one-commit stack landing a separate test-only artifact
+  Stack landed across the planned C0–C10 work commits plus follow-ups
+  (two Copilot review rounds, two mechanical `rustfmt` absorptions, the
+  R5-D2 plan-doc soft-fail refinement, and the R7 adversarial-corpus
+  deferral cluster) landing a separate test-only artifact
   (`rust/shekyl-randomx-differential`) that links the Rust verifier
   (`shekyl-pow-randomx`) and the v2 fork's C reference (via the new
   `rust/randomx-v2-sys` bindings crate) and asserts byte equality
@@ -22,7 +25,7 @@
   present). Preceded by the R5-D1 substrate-amendment PR #74
   (merge `93d1155bb`) that landed the `test-internals` feature
   gate on `shekyl-pow-randomx` exposing
-  `PreparedCache::cache_bytes_for_testing` (gated by
+  `PreparedCache::cache_block_bytes_for_testing` (gated by
   `cfg(feature = "test-internals")`), resolving the contradiction
   between R1-D14's cache-equivalence precondition requiring
   byte-level access to the Rust cache and §5.3.1's "zero new
@@ -90,7 +93,7 @@
   - **Cache-precondition + Rust/C oracle wrappers**
     (`558eba59a`). `cache_precondition.rs` derives the Rust and
     C caches from the same seedhash, compares them block-by-block
-    via the `test-internals`-gated `cache_bytes_for_testing`
+    via the `test-internals`-gated `cache_block_bytes_for_testing`
     accessor, and emits an O(1)-block divergence window when
     they differ (window construction refactored under Copilot
     Round 2 below from the naïve O(N) re-iteration to the
