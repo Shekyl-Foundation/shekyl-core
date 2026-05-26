@@ -3,50 +3,62 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! D1 substrate triage for the universal-divergence FOLLOWUP.
+//! Three-way byte-equality regression guard for the V3.0 canonical
+//! `(seedhash, data)` pair (post-PR-#79 closure).
 //!
-//! Per the interim-branch plan recorded against
-//! `arbeit/randomx-v2-compute-hash-divergence-diagnostic`, D1's
-//! goal is to determine whether the `t16` (seedhash, data) pair
-//! from
-//! `shekyl-pow-randomx::vm::tests::t16_vm_compute_hash_real_matches_fork_reference`
-//! agrees Rust-subject ↔ C-oracle ↔ static-fixture *under the
-//! Phase 2g differential harness's substrate* — i.e., when the
-//! C reference is the harness's separately-built `librandomx.a`
-//! at the submodule pin (verified at branch-open as
-//! `aaafe71322df6602c21a5c72937ac284724ae561`, matching the t16
-//! fixture's "fork pin `aaafe71`").
+//! ## Present-tense role
 //!
-//! ## Three possible outcomes
+//! The test asserts that all three RandomX-v2 substrate layers agree
+//! byte-for-byte on the canonical
+//! `(CANONICAL_SEEDHASH_BYTES, T8_DATA_INPUT)` input:
 //!
-//! - **(A) Three-way agreement.** All three values (Rust-subject
-//!   `compute_hash`, C-oracle `calculate_hash`, static fixture)
-//!   are byte-identical. This confirms the V3.0 FOLLOWUP
-//!   characterization: the t16 fixture *is* current with the
-//!   harness's C reference, and the universal-divergence surface
-//!   engages on inputs *other than* the canonical (seedhash, data)
-//!   pair. D2 (checkpoint instrumentation) becomes the next step.
+//! 1. Rust subject ([`RustSubjectSession::compute_hash`]).
+//! 2. C oracle ([`COracleSession::compute_hash`], the harness's
+//!    separately-built `librandomx.a` at the submodule pin).
+//! 3. Static fixture (`t16_vm_compute_hash_real.bin` — the bytes
+//!    that pinned the V3.0 verifier-correctness expectation).
 //!
-//! - **(B) Rust agrees with fixture but disagrees with C oracle.**
-//!   The fixture is stale relative to the harness's `librandomx.a`
-//!   build even though both name the same fork pin. Likely
-//!   surface: build-time configuration drift (compile flags,
-//!   feature defaults, JIT enablement) makes the two C-side
-//!   binaries semantically non-equivalent. Reshapes the
-//!   investigation toward the C-build-config delta rather than
-//!   the Rust VM.
+//! A pass means the three-layer chain is intact at the canonical
+//! input. A failure identifies *which* layer regressed: the
+//! `--nocapture` output prints each layer's hash bytes so the
+//! offending pair is mechanically visible, and the panic message
+//! names the disagreement class (Rust↔C, Rust↔fixture, C↔fixture).
 //!
-//! - **(C) Other (no two agree, or unexpected pattern).** Record
-//!   exact bytes for analysis; the divergence story is more
-//!   complex than either of the above hypotheses.
+//! ## Historical context (D1 substrate triage)
 //!
-//! ## How to invoke
+//! The test was originally written as the D1 substrate triage tool
+//! for the V3.0 verifier-divergence FOLLOWUP, distinguishing three
+//! candidate hypotheses for the universal Rust↔C disagreement:
+//! (A) three-way agreement (Rust↔C↔fixture), (B) fixture-vs-C-build
+//! drift, (C) other. Outcome (A) was confirmed at D1; D2 instrumented
+//! the checkpoint chain to identify *which* `compute_hash` substep
+//! diverged on non-canonical inputs; that diagnosis ended with
+//! [PR #79](https://github.com/Shekyl-Foundation/shekyl-core/pull/79)
+//! (`989610cac`, 2026-05-26), which closed the FOLLOWUP by passing
+//! `RANDOMX_FLAG_V2` at `randomx_create_vm` time. PR #78's post-
+//! rebase commit (`c71ce2413`) extended the same fix to
+//! [`COracleSession::from_raw_for_testing`](shekyl_randomx_differential::c_oracle::COracleSession::from_raw_for_testing)
+//! and added T17 (`tests/c_oracle_session_round_trip.rs`) as the
+//! constructor-equivalence backstop.
 //!
-//! The test is `#[ignore]`'d because it derives a 256-MiB
-//! Argon2d-512 cache (~10–30 s on `ubuntu-latest`-class
-//! hardware) and links against the C reference (requires
-//! `RANDOMX_V2_INSTALL_DIR` to be set per the harness build
-//! contract). Run with:
+//! The investigation tool now serves as a regression guard: the
+//! three-way agreement that confirmed at D1 is the invariant the
+//! test asserts forward. The reopening criterion per
+//! [`21-reversion-clause-discipline.mdc`](../../../.cursor/rules/21-reversion-clause-discipline.mdc)
+//! is substrate-anchored: a regression that re-introduces
+//! divergence at the canonical input fails this test fast and points
+//! the next diagnostic at the offending layer.
+//!
+//! ## Why still `#[ignore]`'d
+//!
+//! The test derives a 256-MiB Argon2d-512 cache (~10-30 s on
+//! `ubuntu-latest`-class hardware) and links against the C reference
+//! (requires `RANDOMX_V2_INSTALL_DIR` to be set per the harness
+//! build contract). The `#[ignore]` gate persists for runtime-cost
+//! reasons unrelated to the now-closed FOLLOWUP; T17's lighter-
+//! weight round-trip backstop (~negligible after base-cache
+//! amortization) carries the per-PR cadence load for constructor
+//! equivalence. T16 stays manually-invoked / nightly:
 //!
 //! ```bash
 //! RANDOMX_V2_INSTALL_DIR=<install-prefix> \
@@ -56,9 +68,9 @@
 //!     -- --ignored --nocapture
 //! ```
 //!
-//! `--nocapture` is required to surface the hash bytes regardless
-//! of pass/fail outcome — the bytes themselves are the D1
-//! deliverable.
+//! `--nocapture` is required to surface the per-layer hash bytes
+//! regardless of pass/fail outcome — the bytes themselves are the
+//! diagnostic deliverable on a regression.
 
 use shekyl_pow_randomx::Seedhash;
 use shekyl_randomx_differential::c_oracle::COracleSession;
@@ -102,9 +114,11 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 #[test]
-#[ignore = "D1 substrate triage: derives a 256-MiB Argon2d-512 cache \
-            (~10-30s on ubuntu-latest); requires RANDOMX_V2_INSTALL_DIR. \
-            Run with `cargo test --ignored t16_substrate_triage -- --nocapture`."]
+#[ignore = "T16 three-way byte-equality regression guard (Rust↔C↔fixture at \
+            canonical input): derives a 256-MiB Argon2d-512 cache \
+            (~10-30s on ubuntu-latest), requires RANDOMX_V2_INSTALL_DIR. \
+            Runtime-cost gated only; the post-PR-#79 FOLLOWUP-gating is lifted. \
+            Run with `cargo test --release --ignored t16_substrate_triage -- --nocapture`."]
 fn t16_substrate_triage_three_way_byte_equality() {
     assert_eq!(
         T8_DATA_INPUT.len(),
