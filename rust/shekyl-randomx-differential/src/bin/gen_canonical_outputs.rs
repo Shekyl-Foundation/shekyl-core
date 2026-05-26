@@ -79,6 +79,7 @@ use std::ptr;
 use randomx_v2_sys::{
     randomx_alloc_cache, randomx_calculate_hash, randomx_create_vm, randomx_destroy_vm,
     randomx_get_cache_memory, randomx_init_cache, randomx_release_cache, RANDOMX_FLAG_DEFAULT,
+    RANDOMX_FLAG_V2,
 };
 use sha2::{Digest, Sha256};
 use shekyl_pow_randomx::Seedhash;
@@ -210,6 +211,13 @@ fn generate(corpus: &[RandomCorpusPair]) -> Result<(), String> {
         // safety section; lifecycle follows R4-D5 (cache + VM
         // allocated per seedhash; VM reused across datas; released
         // before next seedhash). NULL checks on alloc returns.
+        //
+        // Flag selection (per verifier-divergence FOLLOWUP closure):
+        // cache allocation passes RANDOMX_FLAG_DEFAULT (V2 bit is
+        // masked at alloc per `randomx.cpp:79`, so it'd be inert);
+        // VM creation passes RANDOMX_FLAG_V2 to select the v2
+        // algorithm — without this, the generator would emit C-v1
+        // hashes and pin Rust-v2 against them, the original divergence.
         unsafe {
             let cache = randomx_alloc_cache(RANDOMX_FLAG_DEFAULT);
             if cache.is_null() {
@@ -239,7 +247,7 @@ fn generate(corpus: &[RandomCorpusPair]) -> Result<(), String> {
             let cache_sha: [u8; 32] = hasher.finalize().into();
             cache_shas.push(cache_sha);
 
-            let vm = randomx_create_vm(RANDOMX_FLAG_DEFAULT, cache, ptr::null_mut());
+            let vm = randomx_create_vm(RANDOMX_FLAG_V2, cache, ptr::null_mut());
             if vm.is_null() {
                 randomx_release_cache(cache);
                 return Err(format!(

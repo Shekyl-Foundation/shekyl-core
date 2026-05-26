@@ -33,15 +33,29 @@
 //! intermediate logic between [`COracleSession::cache_sha256`] and
 //! [`COracleSession::calculate_hash`].
 //!
-//! ## Flags (R4-D5)
+//! ## Flags (R4-D5 + verifier-divergence FOLLOWUP closure)
 //!
-//! All allocations pass [`RANDOMX_FLAG_DEFAULT`] (`= 0`):
+//! Cache allocation passes [`RANDOMX_FLAG_DEFAULT`] (`= 0`):
 //! software-only execution, no JIT, no large-pages, no AES-NI. This
 //! is the slowest but most deterministic path; the byte-equality
 //! property the harness asserts holds across heterogeneous runners
 //! only at this flag value. The deterministic-execution rationale
-//! is pinned in §3.16 R4-D5; consumers in other modes do not pass
-//! different flags.
+//! is pinned in §3.16 R4-D5.
+//!
+//! VM creation passes [`RANDOMX_FLAG_V2`] (`= 128`) per the v2
+//! algorithm selection. Pre-FOLLOWUP-closure this was
+//! `RANDOMX_FLAG_DEFAULT`, which silently constructed v1 VMs
+//! (`PROGRAM_SIZE = 256`) against Rust v2 subjects
+//! (`PROGRAM_SIZE = 384`) — the root cause of the V3.0
+//! "verifier divergence on T1/T2 large random data" FOLLOWUP,
+//! localized by `tests/divergence_triage.rs`'s D1 substrate
+//! triage. See `randomx-v2-sys::RANDOMX_FLAG_V2`'s doc for the
+//! upstream evidence; the cache-vs-VM flag split here matches
+//! `external/randomx-v2/src/randomx.cpp:79`'s `(JIT | LARGE_PAGES)`
+//! mask on `randomx_alloc_cache` (V2 bit is silently ignored at
+//! cache allocation, so passing it would be inert) and the
+//! upstream test pattern at
+//! `external/randomx-v2/src/tests/tests.cpp:1032`.
 //!
 //! ## Null-pointer error translation (§5.1.8)
 //!
@@ -89,7 +103,7 @@ use std::slice;
 use randomx_v2_sys::{
     randomx_alloc_cache, randomx_calculate_hash, randomx_create_vm, randomx_destroy_vm,
     randomx_get_cache_memory, randomx_init_cache, randomx_release_cache, RandomxCache, RandomxVm,
-    RANDOMX_FLAG_DEFAULT,
+    RANDOMX_FLAG_DEFAULT, RANDOMX_FLAG_V2,
 };
 use sha2::{Digest, Sha256};
 use shekyl_pow_randomx::Seedhash;
@@ -203,8 +217,12 @@ impl COracleSession {
     ///   returns NULL (the cache is released before returning).
     pub fn new(seedhash: Seedhash) -> Result<Self, COracleError> {
         // SAFETY: see module-level docs. All FFI calls here are the
-        // R4-D5 light-mode shape: `RANDOMX_FLAG_DEFAULT` for both
-        // cache and VM, NULL dataset to indicate light mode.
+        // R4-D5 light-mode shape: `RANDOMX_FLAG_DEFAULT` for cache
+        // allocation (V2 bit is masked out at alloc per
+        // `randomx.cpp:79`, so passing it here would be inert),
+        // `RANDOMX_FLAG_V2` for VM creation (selects the v2
+        // algorithm per the verifier-divergence FOLLOWUP closure),
+        // NULL dataset to indicate light mode.
         unsafe {
             let cache = randomx_alloc_cache(RANDOMX_FLAG_DEFAULT);
             if cache.is_null() {
@@ -221,7 +239,7 @@ impl COracleSession {
                 randomx_release_cache(cache);
                 return Err(COracleError::CacheMemoryNull { seedhash });
             }
-            let vm = randomx_create_vm(RANDOMX_FLAG_DEFAULT, cache, ptr::null_mut());
+            let vm = randomx_create_vm(RANDOMX_FLAG_V2, cache, ptr::null_mut());
             if vm.is_null() {
                 randomx_release_cache(cache);
                 return Err(COracleError::VmCreateFailed { seedhash });
