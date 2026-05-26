@@ -82,8 +82,13 @@ pub const BASE_CACHE_BYTES_LEN: usize = 256 * 1024 * 1024;
 /// - `base_cache_bytes`: the 256-MiB cache memory derived from
 ///   `recipe.base.bytes` via the C reference's
 ///   `randomx_get_cache_memory` (per R1-D2 C-side-symmetry close).
-///   The harness's `base_caches` module (lands at C6) amortizes
-///   this derivation across all recipes sharing a base seedhash.
+///   Callers amortize this derivation across all recipes sharing a
+///   base seedhash; the amortization shape lives at each consumer
+///   per the [`super`] module's "Base-cache amortization" docs
+///   (the canonicalizer, the adversarial-ratio binary, the
+///   canonical-regeneration helper, and the T2 integration test
+///   each carry the same `Vec<(base_bytes_key, derived_bytes)>`
+///   pattern).
 ///
 /// # Behavior
 ///
@@ -129,8 +134,12 @@ pub fn evaluate(recipe: &CacheRecipe, base_cache_bytes: &[u8]) -> EvaluatedRecip
         BASE_CACHE_BYTES_LEN,
         "evaluate: base_cache_bytes.len() must equal BASE_CACHE_BYTES_LEN \
          ({BASE_CACHE_BYTES_LEN} bytes = 256 MiB); got {actual} bytes. \
-         This is a harness-author bug — base_caches must supply a full \
-         cache derivation for recipe `{recipe_name}`.",
+         This is a harness-author bug — the caller's base-cache \
+         derivation (see `derive_base_cache_bytes` in \
+         `adversarial/canonical.rs` and the per-consumer amortization \
+         loops in `mode_adversarial_ratio::run`, the T2 integration \
+         test, and `gen_canonical_outputs`) must supply a full cache \
+         derivation for recipe `{recipe_name}`.",
         actual = base_cache_bytes.len(),
         recipe_name = recipe.name,
     );

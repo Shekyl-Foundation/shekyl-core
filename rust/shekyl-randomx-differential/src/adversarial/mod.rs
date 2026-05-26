@@ -39,12 +39,33 @@
 //! expanded_bytes_sha256, expected_hash, data)` tuples that pin the
 //! corpus's expected verifier output at each fork-pin SHA.
 //!
-//! `base_caches.rs` (planned for Phase 2h C6) carries the
-//! amortization layer for the base-seedhash → C-derived-cache-bytes
-//! lookup; the harness's hot path consumes
-//! [`get_corpus`] + [`interpreter::evaluate`] + the C-side base
-//! cache via [`base_caches`] to materialize each recipe once per CI
-//! run.
+//! Base-cache amortization (the base-seedhash →
+//! C-derived-cache-bytes lookup that avoids paying Argon2d once per
+//! recipe when multiple recipes share a base) lives **in the
+//! consumers** rather than as a dedicated `adversarial/base_caches.rs`
+//! module:
+//!
+//! - [`canonical::compute_corpus_canonicals`] amortizes by
+//!   constructing a `Vec<(BaseSeedhash, Vec<u8>)>` keyed by
+//!   `base.bytes` during C5 canonical-output generation.
+//! - [`crate::mode_adversarial_ratio::run`] amortizes via an
+//!   identical `Vec<([u8; 32], Vec<u8>)>` keyed by `base.bytes`
+//!   during T6 per-recipe-ratio measurement.
+//! - [`crate::bin::gen_canonical_outputs`] amortizes the same way
+//!   during the canonical-regeneration helper run.
+//! - The T2 integration test
+//!   (`tests/adversarial_corpus_byte_equality.rs`) amortizes
+//!   identically during byte-equality verification.
+//!
+//! The four consumers were each written to the same `Vec<(key,
+//! bytes)>` shape rather than factoring out a shared helper at C6;
+//! per
+//! [`15-deletion-and-debt.mdc`](../../../../.cursor/rules/15-deletion-and-debt.mdc)
+//! "while-we're-here is the enemy" discipline, the helper extracts
+//! when a fifth consumer emerges with a substrate-anchored need (so
+//! the shape's invariants — single-pass linear scan, no allocation
+//! on hit, `Vec` over `HashMap` to keep deterministic iteration —
+//! can be reviewed once rather than re-derived per site).
 //!
 //! # Phase 2h C3 implementation scope
 //!
