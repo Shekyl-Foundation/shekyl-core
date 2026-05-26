@@ -1,0 +1,149 @@
+# Phase 2h T6 adversarial-ratio measurement workflow.
+#
+# Per `docs/design/RANDOMX_V2_PHASE2H_PLAN.md` Round 1 R1-D7 sub-A
+# close: T6 (`worst_case_ratio` in
+# `rust/shekyl-randomx-differential/tests/worst_case_ratio.rs`) lands
+# in a **new dedicated workflow** rather than the existing
+# `randomx-v2-differential.yml` because T6 runs heavy measurement
+# (~100 samples per recipe per side ≈ 40 s on the C4 corpus; grows
+# with corpus size). Dedicated workflow keeps the gate's status
+# separable from the always-on differential workflow.
+#
+# ## Trigger cadence (R1-D7 Sub-A)
+#
+# Per R1-D6 close Reframe 2 + R1-D7 Sub-A: T6 runs on
+# **`workflow_dispatch`** during pre-genesis. Pre-genesis the
+# constants are still drifting (recipes being added,
+# `RUNNER_NOISE_MARGIN` being baselined); `workflow_dispatch`
+# during pre-genesis avoids burning CI cycles on a gate whose
+# constants are still drifting. Post-genesis: release-gate trigger
+# is added at that round of plan-doc amendment (per the §11 history
+# row that records the genesis transition).
+#
+# ## Verifier-divergence deferral
+#
+# Per Phase 2h C7 close + the V3.0 FOLLOWUP
+# `shekyl-pow-randomx::compute_hash` divergence from C reference
+# (`docs/FOLLOWUPS.md` lines 50-82): T6's underlying
+# `mode_adversarial_ratio` orchestrator invokes the same
+# `(seedhash, data)` → hash path that the verifier-divergence
+# affects. While T6 measures latency rather than asserting
+# byte-equality, its ratio interpretation requires the Rust and C
+# paths to be doing semantically equivalent work; until the
+# FOLLOWUP closes the Rust hash chain is incomplete relative to C
+# and the ratio's load-bearing meaning is suspect.
+#
+# Therefore the `cargo test --ignored` step that exercises T6 is
+# **gated behind `if: false`** until the FOLLOWUP closes. The step
+# body is the mechanical activation surface — when the FOLLOWUP
+# closes, the M3 PR-template review pass removes the
+# `#[ignore = "..."]` attribute on `t6_worst_case_ratio` and this
+# `if: false` in the same PR; subsequent `workflow_dispatch`
+# triggers then run T6 against the corpus.
+#
+# The workflow scaffold lands at C8 so that the activation surface
+# exists in committed substrate from the moment the FOLLOWUP closes;
+# absent the scaffold, the FOLLOWUP closure would also require a
+# parallel CI-substrate creation step which would split the
+# attention across two PRs.
+#
+# ## Runner pin
+#
+# `ubuntu-latest` per R1-D7 Sub-C: runner class is committed
+# substrate. The `RUNNER_NOISE_MARGIN` constant in
+# `rust/shekyl-randomx-differential/src/adversarial_canonical_outputs.rs`
+# is baselined against this runner class via the pre-implementation
+# noise-baseline pass; runner-class change triggers re-baselining
+# per R1-D7 Sub-C close.
+#
+# ## M3 PR-template discipline (R1-D7 Sub-B)
+#
+# Per R1-D7 Sub-B close: workflow file modifications are gate-
+# determining substrate. The M3 PR-template review pass treats
+# `.github/workflows/randomx-v2-*.yml` changes the same as
+# canonical-output changes. Every modification to this file cites
+# the change class (recipe addition, runner-class change, cadence
+# change, FOLLOWUP-closure activation, diagnostic format change)
+# and the substrate evidence justifying it.
+
+name: randomx-v2-adversarial-ratio
+
+on:
+  workflow_dispatch:
+    inputs:
+      samples_per_recipe:
+        description: 'Samples per recipe (default: SAMPLE_BUDGET_PER_RECIPE from adversarial_canonical_outputs.rs)'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CMAKE_BUILD_PARALLEL_LEVEL: 2
+  # Same install-prefix convention as randomx-v2-differential.yml;
+  # the harness `randomx-v2-sys/build.rs` reads
+  # `RANDOMX_V2_INSTALL_DIR` for the link path.
+  RANDOMX_V2_BUILD_DIR: ${{ github.workspace }}/build-randomx-v2
+  RANDOMX_V2_INSTALL_DIR: ${{ github.workspace }}/build-randomx-v2/install
+
+jobs:
+  adversarial-ratio:
+    # Pre-genesis: `workflow_dispatch` only per R1-D7 Sub-A close.
+    # Post-genesis a release-gate trigger is added.
+    name: 't6: cargo test --ignored worst_case_ratio'
+    runs-on: ubuntu-latest
+    # T6 runtime ≈ 40 s on the C4 corpus + ~3 min C-reference build
+    # + ~2 min Rust compile. 30 minutes covers the C4 size; future
+    # corpus expansions may need an amendment per R1-D7 Sub-A close.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install CMake + Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build
+      - name: Configure + build randomx-v2 C reference
+        # Same build invocation as randomx-v2-differential.yml's
+        # structural-validate job (byte-identical librandomx.a).
+        # The duplication is intentional per Phase 2h R1-D7 Sub-A
+        # close: T6's dedicated workflow stays independent of the
+        # differential workflow so its activation/failure surface
+        # is decoupled.
+        run: |
+          mkdir -p "${RANDOMX_V2_INSTALL_DIR}/lib" "${RANDOMX_V2_INSTALL_DIR}/include"
+          cmake -G Ninja \
+            -S external/randomx-v2 \
+            -B "${RANDOMX_V2_BUILD_DIR}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build "${RANDOMX_V2_BUILD_DIR}" --target randomx
+          cp "${RANDOMX_V2_BUILD_DIR}/librandomx.a" "${RANDOMX_V2_INSTALL_DIR}/lib/"
+          cp external/randomx-v2/src/randomx.h "${RANDOMX_V2_INSTALL_DIR}/include/"
+      - name: cargo test --ignored t6_worst_case_ratio
+        working-directory: rust
+        # Phase 2h C7 + C8 close: gated behind `if: false` until the
+        # V3.0 verifier-divergence FOLLOWUP closes. The step body is
+        # the mechanical activation surface — removing `if: false`
+        # in the same PR that removes the `#[ignore]` attribute on
+        # `t6_worst_case_ratio` activates the gate.
+        #
+        # `--release` is required: T6 measures latency, and debug-
+        # mode `compute_hash` runs are ~50× slower than release —
+        # the ratio numbers would be debug-mode-skewed nonsense
+        # without `--release`.
+        #
+        # `--nocapture` propagates the `T6_OBSERVATION:` +
+        # `T6_CLAIM_2_TRACKING:` JSON-line records to the workflow
+        # log for the regression-tracking dashboard harvester
+        # (R1-D6 close Reframe 3).
+        if: false
+        run: |
+          cargo test --release --locked -p shekyl-randomx-differential \
+            --test worst_case_ratio -- --ignored --nocapture
