@@ -152,7 +152,7 @@ pub const RANDOMX_FLAG_DEFAULT: RandomxFlags = 0;
 /// (`randomx_create_vm(RANDOMX_FLAG_V2, cache, nullptr)`).
 ///
 /// **Provenance.** The D1 substrate triage at
-/// [`rust/shekyl-randomx-differential/tests/divergence_triage.rs`]
+/// [`rust/shekyl-randomx-differential/tests/divergence_triage.rs`](../../../rust/shekyl-randomx-differential/tests/divergence_triage.rs)
 /// localized the "RandomX v2 verifier divergence on T1/T2 large
 /// random data" FOLLOWUP (V3.0 pre-genesis queue) to the harness
 /// silently constructing v1 VMs against Rust-v2 subjects, by
