@@ -195,6 +195,21 @@ fn parse_seedhash_hex(value: &str) -> Result<[u8; 32], String> {
             value.len()
         ));
     }
+    // Reject `[A-F]` explicitly. `u8::from_str_radix(_, 16)` accepts
+    // both cases, but the lowercase pin (matching `Seedhash::Display`
+    // in `seedhash.rs:75-77`) is load-bearing: CI emits failing
+    // seedhashes lowercase, and a copy-paste-into-`--seedhash=`
+    // workflow needs the parser to refuse mixed-case input rather
+    // than silently accept it and produce a value that no longer
+    // round-trips through Display. The discipline parallels the
+    // `Seedhash::from_hex_string` pattern in the verifier crate.
+    for (i, byte) in value.bytes().enumerate() {
+        if byte.is_ascii_uppercase() {
+            return Err(format!(
+                "--seedhash: character {i}: uppercase hex rejected; use lowercase per Seedhash::Display"
+            ));
+        }
+    }
     let mut out = [0u8; 32];
     for (i, chunk) in value.as_bytes().chunks(2).enumerate() {
         let hex_byte = std::str::from_utf8(chunk)
@@ -844,6 +859,28 @@ mod tests {
         let hex_str: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         let parsed = parse_seedhash_hex(&hex_str).expect("valid hex");
         assert_eq!(parsed, bytes);
+    }
+
+    #[test]
+    fn parse_seedhash_hex_rejects_uppercase() {
+        // The lowercase pin is load-bearing per the function's doc-
+        // comment cross-reference to `Seedhash::Display`; CI output
+        // is lowercase by construction, and a mixed-case input that
+        // silently parsed would produce a `Seedhash` that no longer
+        // round-trips through `Display`. The test pairs with the
+        // explicit rejection branch above.
+        let upper = "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566778899";
+        let err = parse_seedhash_hex(upper).expect_err("uppercase must reject");
+        assert!(
+            err.contains("uppercase hex rejected"),
+            "diagnostic should name uppercase rejection; got: {err}"
+        );
+        // Mixed case also rejects (the first uppercase char wins).
+        let mixed = "aaBBccddeeff00112233445566778899aabbccddeeff00112233445566778899";
+        assert!(parse_seedhash_hex(mixed).is_err());
+        // Lowercase still works (parallel positive case).
+        let lower = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
+        assert!(parse_seedhash_hex(lower).is_ok());
     }
 
     #[test]

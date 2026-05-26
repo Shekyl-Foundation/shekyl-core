@@ -319,9 +319,13 @@ fn duration_to_ns(d: std::time::Duration) -> u64 {
 /// slice in place; callers that need the original ordering
 /// preserved must clone first.
 ///
-/// `median` is the lower-median for even-length samples (no
-/// interpolation), per the conventional benchmark-statistics
-/// shape. `p95` is the index `(samples * 95) / 100`, the standard
+/// `median` is the upper-median for even-length samples
+/// (`samples[n / 2]`, no interpolation): for `n = 10` the result
+/// is `samples[5]`, not `samples[4]`. The upper-median is the
+/// integer-percentile convention used by hyperfine/criterion and
+/// matches the verifier's existing latency-bench scripts; the
+/// `median_p95_max_known_values` test below pins the convention.
+/// `p95` is the index `(samples * 95) / 100`, the standard
 /// integer-percentile shape. `max` is the last element after
 /// sorting.
 fn median_p95_max(samples: &mut [u64]) -> (u64, u64, u64) {

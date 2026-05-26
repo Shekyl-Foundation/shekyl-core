@@ -344,26 +344,21 @@ mod tests {
         assert_eq!(f.fork_pin, "aaafe71");
     }
 
-    /// Timestamp is monotonic-non-decreasing across two
-    /// constructions within the same test (`SystemTime::now()` is
-    /// not guaranteed monotonic in general, but on a CI runner
-    /// with stable wall-clock the two constructions cannot
-    /// reorder by epoch-second granularity). Catches a future
-    /// regression that hard-codes the timestamp to `0`.
+    /// Timestamp is non-zero and within a plausible epoch window.
+    /// Catches a future regression that hard-codes the field to
+    /// `0` or substitutes a relative tick count.
+    ///
+    /// We do **not** assert monotonicity across two constructions:
+    /// `SystemTime::now()` can move backwards under NTP / VM-clock
+    /// adjustments, and even on stable CI runners a sub-second
+    /// adjustment between two `now()` calls is rare-but-possible.
+    /// The non-zero + plausible-window check covers the
+    /// hard-coded-zero regression without inheriting the flakiness;
+    /// epoch-second resolution is enforced by the field's `u64`
+    /// shape per the `FailureOutput::new` constructor.
     #[test]
-    fn timestamp_increases_across_constructions() {
-        let f1 = FailureOutput::new(
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            String::new(),
-            "correctness",
-            String::new(),
-        );
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        let f2 = FailureOutput::new(
+    fn timestamp_is_nonzero_and_recent() {
+        let f = FailureOutput::new(
             String::new(),
             String::new(),
             String::new(),
@@ -374,14 +369,27 @@ mod tests {
             String::new(),
         );
         assert!(
-            f2.timestamp >= f1.timestamp,
-            "timestamp non-monotonic: f1={}, f2={}",
-            f1.timestamp,
-            f2.timestamp
-        );
-        assert!(
-            f2.timestamp > 0,
+            f.timestamp > 0,
             "timestamp saturated to zero: clock-skew sentinel hit"
+        );
+        // Sanity-bound to the post-2020 epoch window (any pre-2020
+        // value indicates a clock-skew bug or a hard-coded
+        // constant slipped in). Upper bound is also load-bearing:
+        // a future `f.timestamp = u64::MAX` regression should
+        // surface here rather than passing silently.
+        const POST_2020_EPOCH_SECONDS: u64 = 1_577_836_800; // 2020-01-01 UTC
+        const PRE_YEAR_2200_SECONDS: u64 = 7_258_118_400; // 2200-01-01 UTC
+        assert!(
+            f.timestamp >= POST_2020_EPOCH_SECONDS,
+            "timestamp {} pre-dates 2020-01-01 epoch second {POST_2020_EPOCH_SECONDS}; \
+             clock-skew or hard-coded-constant regression",
+            f.timestamp
+        );
+        assert!(
+            f.timestamp < PRE_YEAR_2200_SECONDS,
+            "timestamp {} past plausible upper bound \
+             {PRE_YEAR_2200_SECONDS}; saturation regression",
+            f.timestamp
         );
     }
 

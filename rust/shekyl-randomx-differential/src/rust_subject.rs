@@ -83,8 +83,8 @@ impl RustSubjectSession {
     ///
     /// Returns the [`Seedhash`] by reference per the verifier
     /// crate's `PreparedCache::seedhash` shape; callers that need
-    /// the owned value can clone via `seedhash().clone()` (the
-    /// [`Seedhash`] type is `Copy`).
+    /// the owned value dereference with `*session.seedhash()` (the
+    /// [`Seedhash`] type is `Copy`, so no explicit clone is needed).
     pub fn seedhash(&self) -> &Seedhash {
         self.prepared.seedhash()
     }

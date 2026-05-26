@@ -85,12 +85,16 @@
 //! nightly's 32 seedhashes — both share the same `ChaCha20Rng`
 //! seed and emission order).
 //!
-//! Adversarial-corpus canonicals are deferred to C5b (the
-//! adversarial corpus is empty at C5a per §3.18 R6-D2 + §5.1.6).
-//! C5b refills both the adversarial corpus and a separate
-//! adversarial-canonical table per the R6-D4 disposition note
-//! (adversarial canonicals keep embedded data because the
-//! adversarial corpus is hand-derived, not seed-derived).
+//! Adversarial-corpus canonicals are deferred post-2g per §3.19
+//! R7-D4 (statistical-infeasibility finding against R1-D5's
+//! grinded-corpus methodology). The adversarial corpus stays
+//! empty through the 2g ship; the corresponding canonical table
+//! is unused at runtime and is intentionally not generated. A
+//! post-2g design round resolves R1-D5 + R1-D6 with a new
+//! methodology (per-instruction differential testing +
+//! spec-silence enumeration are the candidate shapes flagged
+//! in `docs/FOLLOWUPS.md` V3.0 entry); the regeneration step
+//! lands with that design round, not in 2g.
 //!
 //! ## Provenance
 //!
@@ -1211,21 +1215,23 @@ mod tests {
 
     use crate::corpus_random::{NIGHTLY_DATA_PER_SEEDHASH, NIGHTLY_SEEDHASH_COUNT};
 
-    /// T16 — canonical-output structural stub at C5a (§3.18 R6-D2
-    /// + R6-D4).
+    /// T16 — canonical-output structural stub (§3.18 R6-D2 +
+    /// R6-D4; §3.19 R7-D4 for the post-2g adversarial deferral).
     ///
-    /// The full per-`(seedhash, data)` lookup form of T16 lands at
-    /// C7 alongside `mode_correctness` (§5.1.10) per §8.1; the
-    /// C5a stub asserts shape invariants that hold at every C5a–C7
-    /// commit:
+    /// The full per-`(seedhash, data)` lookup form of T16 is
+    /// exercised at C7 by `mode_correctness` (§5.1.10) per §8.1;
+    /// this stub asserts shape invariants that hold at every
+    /// C5a–C10 commit:
     ///
     /// 1. [`CANONICAL_RANDOM_HASHES`] length equals the
     ///    nightly-cadence pair count
     ///    `NIGHTLY_SEEDHASH_COUNT * NIGHTLY_DATA_PER_SEEDHASH`.
     /// 2. [`CANONICAL_CACHE_SHAS`] length equals
     ///    `NIGHTLY_SEEDHASH_COUNT`.
-    /// 3. Cross-module sanity: the adversarial corpus is empty at
-    ///    C5a per §3.18 R6-D2 (refills at C5b).
+    /// 3. Cross-module sanity: the adversarial corpus stays empty
+    ///    through 2g per §3.19 R7-D4 (post-2g design round
+    ///    decides the replacement methodology; the adversarial
+    ///    canonicals are regenerated there, not in 2g).
     #[test]
     fn canonical_output_assertion_structural_stub() {
         let expected_random_pairs = NIGHTLY_SEEDHASH_COUNT * NIGHTLY_DATA_PER_SEEDHASH;
@@ -1245,18 +1251,23 @@ mod tests {
         );
         assert_eq!(
             ADVERSARIAL_SEEDHASH_COUNT, 0,
-            "adversarial seedhashes non-empty at C5a (cross-check)"
+            "adversarial seedhashes non-empty (R7-D4 cross-check: \
+             adversarial corpus must stay empty through 2g ship)"
         );
         assert_eq!(
             ADVERSARIAL_DATA_COUNT, 0,
-            "adversarial data non-empty at C5a (cross-check)"
+            "adversarial data non-empty (R7-D4 cross-check: \
+             adversarial corpus must stay empty through 2g ship)"
         );
     }
 
     /// Generator-version pin records the C5a nightly-1024
-    /// generation. C5b adds the adversarial canonicals and bumps
-    /// the pin; any subsequent regeneration PR bumps it again per
-    /// §5.7 regeneration discipline.
+    /// generation. The pin remains `v1-c5a-nightly-1024` through
+    /// the 2g ship because the adversarial corpus is deferred
+    /// post-2g per §3.19 R7-D4; the post-2g design round that
+    /// resolves R1-D5 + R1-D6 bumps the pin alongside the
+    /// regenerated adversarial canonicals per §5.7's regeneration
+    /// discipline.
     #[test]
     fn generator_version_at_c5a_nightly_1024() {
         assert_eq!(CANONICAL_OUTPUTS_GENERATOR_VERSION, "v1-c5a-nightly-1024");

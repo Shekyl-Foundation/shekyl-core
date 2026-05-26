@@ -10,29 +10,38 @@ per [`RANDOMX_V2_PHASE2G_PLAN.md`](../../docs/design/RANDOMX_V2_PHASE2G_PLAN.md)
 §2.5: spec-faithful implementation (leg 1) + property tests (leg 2) +
 this differential harness as the catch-of-last-resort backstop (leg 3).
 
-## Status (C6 landed; mode implementations land at C7+)
+## Status (C4 → C10 landed; harness is feature-complete pending V3.0 follow-ups)
 
-Per §8.1 the C4 skeleton (argparse + `--mode=<MODE>` dispatch shell),
-the C5a corpora + canonical outputs, the C5b Round 7 substrate
-amendment, and the C6 cache-precondition + Rust/C oracle wrappers
-have landed on this branch. Mode dispatch is still gated behind the
-"corpus modules wired; mode implementations not yet" diagnostic
-until the C7 + C8 mode-module commits land per the §8.2 C4 → C5
-bisection boundary invariant (carried forward through C6).
+Per §8.1 the full C4 → C10 commit sequence has landed: argparse skeleton,
+C5a corpora + canonical outputs, C5b Round 7 substrate amendment, C6
+cache-precondition + Rust/C oracle wrappers, C7 correctness + latency
+modes, C8 concurrent mode + RSS-bound assertion, C9 failure-output JSON
+schema + invocation banner, and C10 CI gates + crate-invariant script
+extension + cargo-mutants config + PR template.
+
+`mode_worst_case` is deferred per §3.19 R7-D4 to a post-2g
+adversarial-corpus design round; `--mode=worst-case` emits a clean
+deferred-mode diagnostic per §5.1.11. The known `compute_hash`
+divergence on large random-corpus inputs is tracked in
+`docs/FOLLOWUPS.md` (V3.0 target); once that closes, the runtime
+modes in `.github/workflows/randomx-v2-differential.yml` move from
+the queued state into the merge-blocking gates per §6.8 cadence.
 
 ```text
 $ cargo run --bin shekyl-randomx-differential -- --help
 shekyl-randomx-differential — Phase 2g Rust/C differential test harness
 ...
 
-$ cargo run --bin shekyl-randomx-differential -- --mode=correctness
-error: shekyl-randomx-differential is at the C6 boundary (per
-RANDOMX_V2_PHASE2G_PLAN.md §8.1); mode 'correctness' dispatch requires
-the mode modules (§§5.1.10, 5.1.12, 5.1.13), which land at C7–C9.
-Re-run after the corresponding commits land on this branch.
+$ cargo run --bin shekyl-randomx-differential -- --mode=worst-case
+error: --mode=worst-case is deferred per RANDOMX_V2_PHASE2G_PLAN.md
+§3.19 R7-D4 (adversarial-corpus methodology design round deferred to
+post-2g per V3.0 pre-genesis queue in docs/FOLLOWUPS.md); the mode
+dispatch is retained in the CLI surface for forward-compatibility
+but produces no output until the post-2g design round resolves R1-D5
++ R1-D6.
 ```
 
-The C4 → C9 commit sequence per §8.1 fills in:
+The C4 → C10 commit sequence per §8.1:
 
 | Commit | Surface |
 |---|---|
@@ -42,6 +51,7 @@ The C4 → C9 commit sequence per §8.1 fills in:
 | **C7** | `mode_correctness.rs` + `mode_latency.rs` (`mode_worst_case` deferred per §3.19 R7-D4 to the post-2g adversarial-corpus design round) |
 | **C8** | `mode_concurrent.rs` + RSS-bound assertion (T7 + T8) |
 | **C9** | `failure_output.rs` + `invocation_banner.rs` + `rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs` deletion |
+| **C10** | `.github/workflows/randomx-v2-differential.yml` (per-PR structural + nightly + weekly mutants) + `.cargo/mutants.toml` (skip-list discipline) + `.github/pull_request_template.md` (harness/verifier modification checklist) + `scripts/ci/check_randomx_crate_invariants.sh` extension (T13 + T14 + T15) + `tests/crate_invariants.rs` integration tests |
 
 ## Build prerequisites
 
