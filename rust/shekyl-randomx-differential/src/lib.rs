@@ -95,6 +95,15 @@
 //!   scaffolded-empty shape) stays in place at C3 and is
 //!   decommissioned at C5 once the new methodology's M1
 //!   canonical-output surface fully supersedes T10's role.
+//! - **C6:** `mode_adversarial_ratio` (Phase 2h R1-D5 close;
+//!   replaces the Phase 2g `mode_worst_case` deferred-stub
+//!   dispatch at `main.rs:492-510`). Implements the per-recipe
+//!   ratio + per-class systematic-regression measurement against
+//!   paired
+//!   [`rust_subject::RustSubjectSession::from_raw_for_testing`] /
+//!   [`c_oracle::COracleSession::from_raw_for_testing`] sessions
+//!   (R1-D2 close cache-level test-internals surface + C-side
+//!   symmetric counterpart).
 
 #![doc(hidden)]
 
@@ -107,6 +116,7 @@ pub mod canonical_outputs;
 pub mod corpus_random;
 pub mod failure_output;
 pub mod invocation_banner;
+pub mod mode_adversarial_ratio;
 pub mod mode_concurrent;
 pub mod mode_correctness;
 pub mod mode_latency;

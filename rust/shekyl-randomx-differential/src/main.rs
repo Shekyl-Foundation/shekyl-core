@@ -7,8 +7,12 @@
 //!
 //! Per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.1.1 + §5.1.3, this
 //! is the single binary surface for the differential harness; it
-//! dispatches `--mode={correctness,worst-case,latency,concurrent}` to
-//! the four mode modules (§§5.1.10–5.1.13). Argument parsing is
+//! dispatches `--mode={correctness,adversarial-ratio,latency,concurrent}`
+//! to the four mode modules (§§5.1.10–5.1.13). The Phase 2g
+//! `worst-case` mode name was renamed to `adversarial-ratio` per
+//! Phase 2h R1-D5 close; see
+//! [`RANDOMX_V2_PHASE2H_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2H_PLAN.md)
+//! Round 1. Argument parsing is
 //! hand-rolled with `std::env::args()` because the §5.1.15 dep list
 //! intentionally excludes `clap` — the harness's CLI surface is small,
 //! flag-style, and stable per §5.7's drift-prevention discipline.
@@ -44,6 +48,18 @@
 //!   the `rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs`
 //!   placeholder (per §8.1's C9 row).
 //!
+//! ## Phase 2h additions
+//!
+//! - **C6:** `mode_worst_case` deferred-stub dispatch arm replaced
+//!   by `mode_adversarial_ratio` (Phase 2h R1-D5 close); the
+//!   `Mode::WorstCase` variant renamed to `Mode::AdversarialRatio`
+//!   with CLI string `"adversarial-ratio"`. The new dispatch arm
+//!   calls
+//!   [`mode_adversarial_ratio::run`](shekyl_randomx_differential::mode_adversarial_ratio::run);
+//!   per-recipe sample count is overridable via the
+//!   `--samples-per-recipe=<N>` CLI flag (default
+//!   [`adversarial_canonical_outputs::SAMPLE_BUDGET_PER_RECIPE`](shekyl_randomx_differential::adversarial_canonical_outputs::SAMPLE_BUDGET_PER_RECIPE)).
+//!
 //! ## §5.1.18 invocation banner
 //!
 //! Per §5.1.18 + §4.6 M4, the harness emits a disposition-source
@@ -60,7 +76,7 @@ use std::env;
 use std::process::ExitCode;
 
 use shekyl_randomx_differential::{
-    invocation_banner, mode_concurrent, mode_correctness, mode_latency,
+    invocation_banner, mode_adversarial_ratio, mode_concurrent, mode_correctness, mode_latency,
 };
 
 /// R4-D6 default for `--random-corpus-seedhashes` (nightly sizing
@@ -92,14 +108,26 @@ const DEFAULT_CONCURRENT_WORKERS: usize = 5;
 /// The variant set is closed: any addition is a §5.7 contract reshape
 /// that requires a plan-doc round per §3.15 forward-template + §5.7
 /// "Round 2 may reshape this contract" discipline.
+///
+/// **Phase 2h C6 rename.** Phase 2g's `Mode::WorstCase` /
+/// `--mode=worst-case` was renamed to `Mode::AdversarialRatio` /
+/// `--mode=adversarial-ratio` per
+/// [`RANDOMX_V2_PHASE2H_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2H_PLAN.md)
+/// Round 1 R1-D5 close. The Phase 2g name's statistical-worst-case
+/// framing lost its natural anchor under R1-D1's recipe-derived
+/// methodology pivot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     /// `correctness` — per-PR byte-equality across `(seedhash, data)`
     /// pairs over the random + adversarial corpora (§5.1.10).
     Correctness,
-    /// `worst-case` — adversarial-corpus per-hash latency
-    /// measurement; release-gate cadence (§5.1.11).
-    WorstCase,
+    /// `adversarial-ratio` — recipe-derived per-hash latency
+    /// measurement against the adversarial corpus (Phase 2h R1-D5
+    /// close); two-claim shape (Claim 1 per-recipe hard gate, Claim
+    /// 2 per-class systematic-regression tracking signal); nightly
+    /// pre-genesis / release-gate post-genesis cadence per R1-D6
+    /// close.
+    AdversarialRatio,
     /// `latency` — interleaved Rust/C per-hash latency benchmark;
     /// nightly cadence; replaces the deleted Phase 2c
     /// `tests/perf/per_hash_latency.rs` per R1-D7 (§5.1.12).
@@ -115,11 +143,11 @@ impl Mode {
     fn parse(value: &str) -> Result<Self, String> {
         match value {
             "correctness" => Ok(Self::Correctness),
-            "worst-case" => Ok(Self::WorstCase),
+            "adversarial-ratio" => Ok(Self::AdversarialRatio),
             "latency" => Ok(Self::Latency),
             "concurrent" => Ok(Self::Concurrent),
             other => Err(format!(
-                "unknown mode '{other}'; valid modes: correctness, worst-case, latency, concurrent"
+                "unknown mode '{other}'; valid modes: correctness, adversarial-ratio, latency, concurrent"
             )),
         }
     }
@@ -128,7 +156,7 @@ impl Mode {
     fn as_str(self) -> &'static str {
         match self {
             Self::Correctness => "correctness",
-            Self::WorstCase => "worst-case",
+            Self::AdversarialRatio => "adversarial-ratio",
             Self::Latency => "latency",
             Self::Concurrent => "concurrent",
         }
@@ -167,6 +195,10 @@ struct ModeInvocation {
     /// `--workers=<N>` override (R1-D9; valid on concurrent only;
     /// default [`DEFAULT_CONCURRENT_WORKERS`]).
     workers: Option<usize>,
+    /// `--samples-per-recipe=<N>` override (Phase 2h R1-D5 close;
+    /// valid on `adversarial-ratio` only; default is
+    /// [`shekyl_randomx_differential::adversarial_canonical_outputs::SAMPLE_BUDGET_PER_RECIPE`]).
+    samples_per_recipe: Option<usize>,
 }
 
 /// Top-level parsed command. The C4 skeleton recognized only
@@ -252,6 +284,7 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
     let mut random_corpus_data_per_seedhash: Option<usize> = None;
     let mut samples: Option<usize> = None;
     let mut workers: Option<usize> = None;
+    let mut samples_per_recipe: Option<usize> = None;
     for arg in args {
         if arg == "--help" || arg == "-h" {
             return Ok(Command::Help);
@@ -309,6 +342,13 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             workers = Some(parse_positive_usize("workers", value)?);
             continue;
         }
+        if let Some(value) = arg.strip_prefix("--samples-per-recipe=") {
+            if samples_per_recipe.is_some() {
+                return Err("--samples-per-recipe specified more than once".to_owned());
+            }
+            samples_per_recipe = Some(parse_positive_usize("samples-per-recipe", value)?);
+            continue;
+        }
         return Err(format!("unknown argument '{arg}'; pass --help for usage"));
     }
     let mode = mode.ok_or_else(|| "no --mode specified; pass --help for usage".to_owned())?;
@@ -362,6 +402,12 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
             mode.as_str()
         ));
     }
+    if samples_per_recipe.is_some() && mode != Mode::AdversarialRatio {
+        return Err(format!(
+            "--samples-per-recipe is valid only with --mode=adversarial-ratio; got --mode={}",
+            mode.as_str()
+        ));
+    }
     Ok(Command::Mode(ModeInvocation {
         mode,
         debug_cache_divergence_seedhash,
@@ -369,6 +415,7 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
         random_corpus_data_per_seedhash,
         samples,
         workers,
+        samples_per_recipe,
     }))
 }
 
@@ -386,10 +433,10 @@ fn print_help() {
              shekyl-randomx-differential --mode=<MODE> [FLAGS]\n\
          \n\
          MODES:\n  \
-             correctness   Per-PR byte-equality across random + adversarial corpora\n  \
-             worst-case    Release-gate adversarial latency measurement\n  \
-             latency       Nightly per-hash latency benchmark\n  \
-             concurrent    Per-PR multi-worker concurrent correctness + RSS bound\n\
+             correctness         Per-PR byte-equality across random + adversarial corpora\n  \
+             adversarial-ratio   Nightly/release-gate adversarial latency measurement (Phase 2h)\n  \
+             latency             Nightly per-hash latency benchmark\n  \
+             concurrent          Per-PR multi-worker concurrent correctness + RSS bound\n\
          \n\
          FLAGS:\n  \
              --help, -h                                Print this message and exit\n  \
@@ -398,7 +445,8 @@ fn print_help() {
              --random-corpus-seedhashes=<N>            Random corpus seedhash count (default 32; correctness only)\n  \
              --random-corpus-data-per-seedhash=<M>     Random corpus data-per-seedhash count (default 32; correctness only)\n  \
              --samples=<N>                             Latency mode sample count (default 1024; latency only)\n  \
-             --workers=<N>                             Concurrent mode worker count (default 5; concurrent only)\n\
+             --workers=<N>                             Concurrent mode worker count (default 5; concurrent only)\n  \
+             --samples-per-recipe=<N>                  Adversarial-ratio per-recipe sample count (adversarial-ratio only)\n\
          \n\
          --debug-cache-divergence requires --seedhash=<hex> and is valid\n\
          only with --mode=correctness (per §5.1.7 + T4).\n\
@@ -436,14 +484,14 @@ fn main() -> ExitCode {
 ///
 /// - **C7**: `correctness` (§5.1.10) + `latency` (§5.1.12) wired.
 /// - **C8**: `concurrent` (§5.1.13) wired with `--workers=<N>`.
-/// - **C9**: `failure_output` JSON schema + invocation banner +
-///   `mode_worst_case` per §3.19 R7-D4 deferral resolution (or
-///   permanent deferral if the post-2g adversarial-corpus design
-///   round confirms infeasibility).
+/// - **C9**: `failure_output` JSON schema + invocation banner.
 ///
-/// Until then, `worst-case` surfaces a clean "deferred" error
-/// with the R7-D4 anchor so the C7 → C9 transitional state is
-/// reviewer-attributable per §8.2's bisection invariant.
+/// Phase 2h C6: the historical `mode_worst_case` deferred-stub
+/// arm is replaced by `Mode::AdversarialRatio` dispatching to
+/// [`mode_adversarial_ratio::run`]; the R7-D4 deferral
+/// resolution lands in
+/// [`RANDOMX_V2_PHASE2H_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2H_PLAN.md)
+/// Round 1.
 fn dispatch(invocation: &ModeInvocation) -> ExitCode {
     // §5.1.18 + §4.6 M4: emit the disposition-source banner to
     // stderr before any mode-module entry point runs. Emission
@@ -489,24 +537,22 @@ fn dispatch(invocation: &ModeInvocation) -> ExitCode {
                 }
             }
         }
-        Mode::WorstCase => {
-            // §3.19 R7-D4: --mode=worst-case is deferred to the
-            // post-2g adversarial-corpus design round per the
-            // statistical-infeasibility finding against R1-D5's
-            // grinded-corpus methodology. Surface a clean,
-            // attributable error so a reviewer reading CI output
-            // can locate the disposition without spelunking.
-            eprintln!(
-                "error: --mode=worst-case is deferred per \
-                 RANDOMX_V2_PHASE2G_PLAN.md §3.19 R7-D4 \
-                 (adversarial-corpus methodology design round \
-                 deferred to post-2g per V3.0 pre-genesis queue \
-                 in docs/FOLLOWUPS.md); the mode dispatch is \
-                 retained in the CLI surface for forward-\
-                 compatibility but produces no output until the \
-                 post-2g design round resolves R1-D5 + R1-D6."
-            );
-            ExitCode::FAILURE
+        Mode::AdversarialRatio => {
+            // Phase 2h R1-D5 close: the deferred Phase 2g
+            // --mode=worst-case stub is replaced with the
+            // recipe-derived --mode=adversarial-ratio mode.
+            // `samples_per_recipe == None` falls through to
+            // SAMPLE_BUDGET_PER_RECIPE inside the mode module.
+            match mode_adversarial_ratio::run(invocation.samples_per_recipe) {
+                Ok(report) => {
+                    println!("{report}");
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    ExitCode::FAILURE
+                }
+            }
         }
         Mode::Concurrent => {
             let workers = invocation.workers.unwrap_or(DEFAULT_CONCURRENT_WORKERS);
@@ -566,7 +612,7 @@ mod tests {
     fn parse_each_mode() {
         for (s, want) in [
             ("correctness", Mode::Correctness),
-            ("worst-case", Mode::WorstCase),
+            ("adversarial-ratio", Mode::AdversarialRatio),
             ("latency", Mode::Latency),
             ("concurrent", Mode::Concurrent),
         ] {
@@ -587,6 +633,10 @@ mod tests {
             );
             assert_eq!(parsed.samples, None, "mode {s}: --samples default unset");
             assert_eq!(parsed.workers, None, "mode {s}: --workers default unset");
+            assert_eq!(
+                parsed.samples_per_recipe, None,
+                "mode {s}: --samples-per-recipe default unset"
+            );
         }
     }
 
@@ -623,7 +673,7 @@ mod tests {
     /// mode-scope-violation diagnostic.
     #[test]
     fn parse_workers_on_non_concurrent_errors() {
-        for non_concurrent in ["correctness", "worst-case", "latency"] {
+        for non_concurrent in ["correctness", "adversarial-ratio", "latency"] {
             let a = args(&[&format!("--mode={non_concurrent}"), "--workers=4"]);
             let err =
                 parse_args(&a).expect_err(&format!("expected Err for --mode={non_concurrent}"));
@@ -680,7 +730,7 @@ mod tests {
     /// the mode-scope-violation diagnostic.
     #[test]
     fn parse_corpus_flags_on_non_correctness_errors() {
-        for non_correct in ["worst-case", "latency", "concurrent"] {
+        for non_correct in ["adversarial-ratio", "latency", "concurrent"] {
             let a = args(&[
                 &format!("--mode={non_correct}"),
                 "--random-corpus-seedhashes=16",
@@ -697,7 +747,7 @@ mod tests {
     /// mode-scope-violation diagnostic.
     #[test]
     fn parse_samples_on_non_latency_errors() {
-        for non_latency in ["correctness", "worst-case", "concurrent"] {
+        for non_latency in ["correctness", "adversarial-ratio", "concurrent"] {
             let a = args(&[&format!("--mode={non_latency}"), "--samples=1024"]);
             let err = parse_args(&a).expect_err(&format!("expected Err for --mode={non_latency}"));
             assert!(
@@ -774,7 +824,7 @@ mod tests {
     #[test]
     fn parse_debug_cache_divergence_on_non_correctness_mode_errors() {
         let seedhash_hex = "33".repeat(32);
-        for non_correct in ["worst-case", "latency", "concurrent"] {
+        for non_correct in ["adversarial-ratio", "latency", "concurrent"] {
             let a = args(&[
                 &format!("--mode={non_correct}"),
                 "--debug-cache-divergence",
@@ -918,11 +968,58 @@ mod tests {
     fn mode_as_str_round_trips() {
         for m in [
             Mode::Correctness,
-            Mode::WorstCase,
+            Mode::AdversarialRatio,
             Mode::Latency,
             Mode::Concurrent,
         ] {
             assert_eq!(Mode::parse(m.as_str()).unwrap(), m);
+        }
+    }
+
+    /// `--samples-per-recipe=<N>` on `--mode=adversarial-ratio`
+    /// parses cleanly. Pins the Phase 2h R1-D5 close override path.
+    #[test]
+    fn parse_samples_per_recipe_on_adversarial_ratio() {
+        let a = args(&["--mode=adversarial-ratio", "--samples-per-recipe=64"]);
+        let parsed = expect_mode(parse_args(&a));
+        assert_eq!(parsed.mode, Mode::AdversarialRatio);
+        assert_eq!(parsed.samples_per_recipe, Some(64));
+    }
+
+    /// `--samples-per-recipe=0` rejects at parse time.
+    #[test]
+    fn parse_samples_per_recipe_zero_rejected() {
+        let a = args(&["--mode=adversarial-ratio", "--samples-per-recipe=0"]);
+        let err = parse_args(&a).expect_err("expected Err for --samples-per-recipe=0");
+        assert!(err.contains("must be >= 1"), "got: {err}");
+    }
+
+    /// `--samples-per-recipe=<N>` specified twice errors.
+    #[test]
+    fn parse_samples_per_recipe_twice_errors() {
+        let a = args(&[
+            "--mode=adversarial-ratio",
+            "--samples-per-recipe=64",
+            "--samples-per-recipe=128",
+        ]);
+        let err = parse_args(&a).expect_err("expected Err for duplicate flag");
+        assert!(
+            err.contains("--samples-per-recipe specified more than once"),
+            "got: {err}"
+        );
+    }
+
+    /// `--samples-per-recipe=<N>` on a non-adversarial-ratio mode
+    /// errors with the mode-scope-violation diagnostic.
+    #[test]
+    fn parse_samples_per_recipe_on_non_adversarial_ratio_errors() {
+        for non_ar in ["correctness", "latency", "concurrent"] {
+            let a = args(&[&format!("--mode={non_ar}"), "--samples-per-recipe=64"]);
+            let err = parse_args(&a).expect_err(&format!("expected Err for --mode={non_ar}"));
+            assert!(
+                err.contains("--mode=adversarial-ratio"),
+                "for --mode={non_ar}: got {err}"
+            );
         }
     }
 }

@@ -79,6 +79,29 @@ impl RustSubjectSession {
         }
     }
 
+    /// Construct a session whose `PreparedCache` carries the
+    /// supplied `cache_bytes` under the declared `seedhash`,
+    /// via [`PreparedCache::from_raw_for_testing`] (Phase 2h R1-D2
+    /// close).
+    ///
+    /// Mirrors
+    /// [`crate::c_oracle::COracleSession::from_raw_for_testing`]
+    /// on the Rust side; both sides run the production hash path
+    /// against the recipe-evaluator-crafted cache contents. Used
+    /// exclusively by `crate::mode_adversarial_ratio` to construct
+    /// paired Rust/C sessions for per-recipe ratio measurement.
+    ///
+    /// The `test-internals` feature flag is always enabled in the
+    /// harness crate's `Cargo.toml` `[dependencies]` entry for
+    /// `shekyl-pow-randomx` (the harness is itself a test-only
+    /// artifact); production builds of the verifier crate do not
+    /// enable it.
+    pub fn from_raw_for_testing(seedhash: Seedhash, cache_bytes: &[u8]) -> Self {
+        Self {
+            prepared: PreparedCache::from_raw_for_testing(seedhash, cache_bytes),
+        }
+    }
+
     /// The seedhash this session's cache was derived from.
     ///
     /// Returns the [`Seedhash`] by reference per the verifier
