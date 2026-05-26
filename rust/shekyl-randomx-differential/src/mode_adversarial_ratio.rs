@@ -47,15 +47,19 @@
 //!
 //! Per recipe:
 //!
-//! 1. **Derive base cache bytes once** via
-//!    [`crate::adversarial::canonical::derive_base_cache_bytes`].
-//!    The base derivation pays the ~150–200 ms Argon2d-fill cost
-//!    once per recipe; subsequent samples reuse the derived bytes.
-//!    Future commits may amortize across recipes sharing the same
-//!    base seedhash; the C6 disposition is one derivation per
-//!    recipe for simplicity (the corpus's C4 starter set shares a
-//!    single base seedhash, so the optimization is no-op at the
-//!    current scale).
+//! 1. **Derive base cache bytes once per unique base seedhash**
+//!    via [`crate::adversarial::canonical::derive_base_cache_bytes`],
+//!    using the same amortization pattern as
+//!    [`crate::adversarial::canonical::compute_corpus_canonicals`]:
+//!    recipes sharing a `base.bytes` byte sequence share a single
+//!    Argon2d-fill invocation. The C4 starter corpus has 3 unique
+//!    base byte patterns (all-zeros, all-0x42, all-0x01) across
+//!    its 8 recipes — without amortization, T6 would pay 8 ×
+//!    `derive_base_cache_bytes` (~80 s of Argon2d on
+//!    `ubuntu-latest`-class hardware); with amortization it pays
+//!    3 × derive (~30 s). The unique-base count grows much more
+//!    slowly than the recipe count as new categories land, so the
+//!    amortization's value compounds over corpus growth.
 //! 2. **Evaluate the recipe** via
 //!    [`crate::adversarial::interpreter::evaluate`] to produce the
 //!    `(seedhash, cache_bytes)` pair.
@@ -390,9 +394,31 @@ pub fn run(
     }
 
     let mut per_recipe: Vec<PerRecipeReport> = Vec::with_capacity(corpus.len());
+    // Base-cache amortization keyed by `recipe.base.bytes`. The
+    // C4 starter corpus has 3 unique base byte patterns across 8
+    // recipes; without amortization T6 pays the ~10s Argon2d-fill
+    // cost 8 times (~80s) instead of 3 times (~30s). The pattern
+    // mirrors `compute_corpus_canonicals` (per
+    // `canonical.rs:188-209`); a future commit may factor out the
+    // shared iter-with-amortized-base-bytes helper if a third
+    // consumer emerges.
+    let mut base_cache_cache: Vec<([u8; 32], Vec<u8>)> = Vec::new();
     for recipe in &corpus {
-        let base_bytes = derive_base_cache_bytes(&recipe.base);
-        let evaluated = evaluate(recipe, &base_bytes);
+        let base_bytes = match base_cache_cache
+            .iter()
+            .find(|(key, _)| key == &recipe.base.bytes)
+        {
+            Some((_, bytes)) => bytes,
+            None => {
+                let new_bytes = derive_base_cache_bytes(&recipe.base);
+                base_cache_cache.push((recipe.base.bytes, new_bytes));
+                &base_cache_cache
+                    .last()
+                    .expect("base_cache_cache non-empty after push")
+                    .1
+            }
+        };
+        let evaluated = evaluate(recipe, base_bytes);
         let rust =
             RustSubjectSession::from_raw_for_testing(evaluated.seedhash, &evaluated.cache_bytes);
         let c = COracleSession::from_raw_for_testing(evaluated.seedhash, &evaluated.cache_bytes)?;
