@@ -6,7 +6,7 @@ todos:
     content: "Round 0 scaffold: front-matter + §0 framing + §1 frozen substrate (six items with cite paths) + §2 forward-actions absorbed (R7-D1..R7-D5 specifications, FOLLOWUPS V3.0 scope items 1–6, rule-26 surface-enumeration-pass + substrate-derived constant validation pass) + §3 R1-D1..R1-D8 decision points (open; not closed at Round 0) + §11 Round 0 history row. §4–§10 reserved as placeholders for Round 1+ substantive content. Land on chore/randomx-v2-phase2h-plan as one design-phase commit per 06-branching.mdc rule 2."
     status: completed
   - id: phase2h-round-1
-    content: "Round 1 architecture close (collaborative): R1-D1 (specified-outliers methodology as composition of three definitions — audit-anchored spec-silence enumeration primary, per-opcode boundary-value supplementary, coverage-metric validation; definition (1) rejected as substrate-unreachable; corpus size 50-200 entries; additively maintainable as load-bearing substrate property), R1-D2 (PreparedCache::from_raw_for_testing under cfg(feature=\"test-internals\") + C-side symmetry via existing randomx_get_cache_memory + production-equivalence constraint pinned as substrate principle), R1-D3 (lib module in shekyl-randomx-differential + declarative C1 recipes primary with C2 imperative escape hatch + B2 runtime expansion + first-class recipe evaluator + executable-specification recipes pinned as substrate property), R1-D4 (Family 1 Rust source const array at adversarial_canonical_outputs.rs + compile-time bidirectional cross-checkability + gen_canonical_outputs.rs bin extension + derive-substrate-inputs/cache-attestation-outputs pinned as substrate principle), R1-D5 (mode_worst_case renamed to mode_adversarial_ratio + Claim 1 per-recipe max-ratio (5.0×−margin) with single-retry noise filter as hard gate + Claim 2 no-per-class-systematic-regression as regression-tracking signal + vocabulary-shift cascade to §2.5/§4/parent §6), R1-D6 (continuous enforcement from first recipe + cadence-corpus alignment as substrate policy + actionable failure semantics pinned as substrate principle), R1-D7 (T2 in existing workflow + T6 in new dedicated workflow with workflow_dispatch pre-genesis + M3 PR-template discipline expansion to .github/workflows/ files + GitHub-hosted runner class with committed RUNNER_NOISE_MARGIN under M1/M3 disciplines + self-hosted runners deferred), R1-D8 (substrate-anchored recipe-acceptance criterion via three evidence categories — audit-anchored / coverage-attested / substrate-derived + corpus directory taxonomy mirrors three categories + M3 PR-template discipline rejects recipes without rationale citation + statistical-realism satisfied by construction), R1-D9 (evaporates — §0 mechanical opening criteria not met; seven substrate-discipline observations queued for future rule-26 amendment PR). Each close carries explicit reopen-criteria per 21-reversion-clause-discipline.mdc. Collaboration-discipline pin: unilateral mid-round close attempt was reverted before push per the collaborative-design principle that closing a round before all participants provide input opens the round again every time."
+    content: "Round 1 architecture close (collaborative): R1-D1 (specified-outliers methodology as composition of three definitions — audit-anchored spec-silence enumeration primary, per-opcode boundary-value supplementary, coverage-metric validation; definition (1) rejected as substrate-unreachable; corpus size 50-200 entries; additively maintainable as load-bearing substrate property), R1-D2 (PreparedCache::from_raw_for_testing under cfg(feature=\"test-internals\") + C-side symmetry via existing randomx_get_cache_memory + production-equivalence constraint pinned as substrate principle), R1-D3 (lib module in shekyl-randomx-differential + declarative C1 recipes primary with C2 imperative escape hatch + B2 runtime expansion + first-class recipe evaluator + executable-specification recipes pinned as substrate property), R1-D4 (Family 1 Rust source const array at adversarial_canonical_outputs.rs + compile-time bidirectional cross-checkability + gen_canonical_outputs.rs bin extension + derive-substrate-inputs/cache-attestation-outputs pinned as substrate principle), R1-D5 (mode_worst_case renamed to mode_adversarial_ratio + Claim 1 per-recipe max-ratio (5.0×−margin) with single-retry noise filter as hard gate + Claim 2 no-per-class-systematic-regression as regression-tracking signal + vocabulary-shift cascade to §2.5/§4/parent §6), R1-D6 (continuous enforcement from first recipe + cadence-corpus alignment as substrate policy + actionable failure semantics pinned as substrate principle), R1-D7 (T2 in existing workflow + T6 in new dedicated workflow with workflow_dispatch pre-genesis + M3 PR-template discipline expansion to .github/workflows/ files + GitHub-hosted runner class with committed RUNNER_NOISE_MARGIN under M1/M3 disciplines + self-hosted runners deferred), R1-D8 (substrate-anchored recipe-acceptance criterion via three evidence categories — audit-anchored / coverage-attested / substrate-derived + corpus directory taxonomy mirrors three categories + M3 PR-template discipline rejects recipes without rationale citation + statistical-realism satisfied by construction), R1-D9 (evaporates — Round 1's substrate findings did not produce a third instance of substrate-derived constant gaps (R5-D1's surface enumeration and R7-D5's substrate-derived constant validation pass remain the two precedents) or a new pre-implementation discipline class (extensions of existing classes, not a sixth); trigger conditions not met; closes as no-decision; eight substrate-discipline observations queued for future rule-26 amendment PR — including R1-D9's own contribution that scaffolded optional decisions close as no-decision when triggers don't fire and manufacturing decision work to fill scaffolded slots is anti-discipline). Each close carries explicit reopen-criteria per 21-reversion-clause-discipline.mdc. Collaboration-discipline pin: unilateral mid-round close attempt was reverted before push per the collaborative-design principle that closing a round before all participants provide input opens the round again every time."
     status: completed
   - id: phase2h-round-2
     content: "Round 2 threat-model close: §4 passive + active surfaces under the new corpus methodology. Adversarial corpus changes both surfaces (per Phase 2g §4.4/§4.5/§4.6 precedent: T-A1 silent-disposition-degradation now applies to the adversarial corpus's tamper detection, T-A2 corpus-tamper applies to the adversarial entries, M1 canonical-output property extends to the adversarial canonical hashes). Confirm §35-secure-memory.mdc / §36-secret-locality.mdc remain N/A per Phase 2c §5.11.4 (cache memory public-input-only; the 2h work does not introduce secret-bearing intermediate state)."
@@ -2174,8 +2174,16 @@ commit or as a follow-on chore-PR per the trigger's timing.
 #### Round 1 disposition (closes R1-D9) — collaborative close
 
 **Close: R1-D9 evaporates at Round 1; trigger conditions not met.**
-The optional decision's mechanical opening criteria per §0 are
-not met:
+Round 1's substrate findings did not produce a third instance of
+substrate-derived constant gaps (R5-D1's surface enumeration and
+R7-D5's substrate-derived constant validation pass remain the two
+precedents) or a new pre-implementation discipline class (the
+observations are extensions of existing classes, not a sixth
+category beyond the five pinned in §2.5). Trigger conditions for
+R1-D9 opening are not met; the optional decision closes as
+no-decision.
+
+The mechanical opening criteria per §0 in detail:
 
 - **(a) "Third confirmed instance of substrate-derived constant
   gaps":** not triggered at Round 1. R5-D1 was instance 1; R7-D5
@@ -2211,6 +2219,13 @@ forwarding to the rule-26 amendment queue (not Round 1's scope):
   property).
 - **Substrate-anchored taxonomies are open by substrate evidence,
   not exhaustive by decree** (R1-D8 close substrate principle).
+- **Scaffolded optional decisions close as "no decision" when
+  their trigger conditions don't fire; manufacturing decision
+  work to fill scaffolded slots is anti-discipline** (R1-D9
+  close substrate principle; the discipline is itself what
+  R1-D9 modeled at Round 1 — closure auditable against named
+  trigger conditions, not against pressure to produce a
+  decision because the slot exists).
 
 These persist as queue items for a future rule-26 amendment PR
 per §3 R1-D9 Round-0 option (c) (cite 2h as precedent; defer the
@@ -2514,14 +2529,20 @@ measurement is *per-recipe ratio*, not *statistical worst-case*.
   M3 PR-template discipline rejects recipes without rationale
   citation per the three categories; statistical-realism
   satisfied by construction.
-- **R1-D9 — evaporates.** §0 mechanical opening criteria
-  (third confirmed substrate-derived-constant-gap instance OR
-  new pre-implementation discipline class) not met at Round 1.
-  Substrate-discipline observations from R1-D1..R1-D8 queue as
-  candidates for a future rule-26 amendment PR.
+- **R1-D9 — evaporates.** Round 1's substrate findings did not
+  produce a third instance of substrate-derived constant gaps
+  (R5-D1's surface enumeration and R7-D5's substrate-derived
+  constant validation pass remain the two precedents) or a new
+  pre-implementation discipline class (the observations are
+  extensions of existing classes, not a sixth category beyond
+  the five pinned in §2.5). Trigger conditions for R1-D9
+  opening are not met; the optional decision closes as
+  no-decision. Substrate-discipline observations from
+  R1-D1..R1-D9 queue as candidates for a future rule-26
+  amendment PR.
 
 **Substrate-discipline observations queued for the rule-26
-amendment queue (forward-action; not Round 1 scope).** Seven
+amendment queue (forward-action; not Round 1 scope).** Eight
 candidate refinements surfaced during the round; each carries
 its closing-decision provenance:
 
@@ -2536,6 +2557,11 @@ its closing-decision provenance:
 - Executable-specification recipes (R1-D3 substrate property).
 - Substrate-anchored taxonomies are open by substrate evidence,
   not exhaustive by decree (R1-D8 substrate principle).
+- Scaffolded optional decisions close as "no decision" when
+  their trigger conditions don't fire; manufacturing decision
+  work to fill scaffolded slots is anti-discipline (R1-D9
+  substrate principle; the discipline R1-D9 itself modeled
+  at Round 1).
 
 **Methodology-shift produced a smaller and better-focused
 decision space rather than punting the original question.** The
