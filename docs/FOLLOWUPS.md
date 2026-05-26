@@ -47,6 +47,116 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Investigate `shekyl-pow-randomx::compute_hash` divergence
+  from C reference at large data sizes (target: V3.0;
+  trigger: RandomX v2 Phase 2g C7 smoke test).** The Phase 2g
+  differential harness's first end-to-end smoke test
+  (`--mode=correctness --random-corpus-seedhashes=1
+  --random-corpus-data-per-seedhash=1`) surfaced a byte
+  divergence between
+  [`shekyl-pow-randomx::compute_hash`](../rust/shekyl-pow-randomx/src/vm.rs)
+  and the C reference (`external/randomx-v2`'s
+  `randomx_calculate_hash`, called via `randomx-v2-sys` per
+  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
+  §5.1.8) for a 387,581-byte data input (in the upper half of
+  R1-D4's bimodal `[200 .. 600·1024)` block-template-shaped
+  distribution per
+  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
+  §3.16). The §5.1.7 R1-D14 cache-equivalence precondition
+  passes (both sides derive byte-identical 256-MiB cache
+  memory); the C-side output matches `CANONICAL_RANDOM_HASHES[0]`
+  exactly (i.e. the C reference and the gen-canonical-outputs
+  run are consistent); only the Rust `compute_hash` output
+  diverges. The existing
+  [`vm::tests::t16_vm_compute_hash_real_matches_fork_reference`](../rust/shekyl-pow-randomx/src/vm.rs)
+  spec-vector test at 192-byte input continues to pass byte-
+  equality against the same C reference, so the divergence is
+  input-size-dependent — the most likely failure modes are in
+  the per-chunk Blake2b seed expansion or the AES-round chain
+  across multi-chunk inputs (spec §4.1 vs C reference
+  `randomx.cpp:392-394`). Investigation requires a smaller
+  reproducer (find the threshold at which divergence begins),
+  followed by isolation in the Rust-side hash composition
+  versus C reference. The harness itself is the right
+  artifact for the investigation — bisect the input size in
+  one binary-search-style pass with `mode=correctness`.
+
+- **Post-2g adversarial-corpus methodology + implementation
+  (trigger: RandomX v2 Phase 2g Round 7 R7-D1/R7-D2 reopening
+  of R1-D5 + R1-D6).** Phase 2g
+  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
+  §3.19 R7-D1 reopens R1-D5 (adversarial seedhash corpus) under
+  two independent substrate findings: (i) the verifier-accessor
+  gap (the grinding methodology requires a `test-internals`-gated
+  opcode-stream accessor on `shekyl-pow-randomx` whose
+  implementation duplicates `compute_hash_inner` under a feature
+  gate); (ii) the statistical-infeasibility gap (R1-D5's
+  ≥40% per-class / ≥60% combined acceptance criteria were
+  calibrated against V1's PROGRAM_SIZE = 256 and are unreachable
+  by random grinding against V2's PROGRAM_SIZE = 384 — per-class
+  σ-gaps run from 6.8σ (CACHE_MISS) to ~125σ (CFROUND); zero
+  threshold-meeting candidates expected within any realistic
+  compute budget). §3.19 R7-D2 reopens R1-D6 (u128 / `__int128_t`
+  edge-case data corpus) by structural analogy — same
+  program-generation pipeline, same V2 substrate. §3.19 R7-D3
+  defers R1-D8 (worst-case timing) along with them, since R1-D8's
+  required input is the deferred R1-D5 + R1-D6 union corpus.
+
+  **Scope.** The post-2g design round produces:
+
+  1. **A V2-substrate-anchored adversarial-corpus methodology.**
+     The class-heaviness framing is V1-shaped. A V2 framing is
+     required. Candidate shapes named for the round's consideration
+     (not closed here): tail-percentile grinding (define
+     "adversarial" as the top 99.99th percentile of class-X
+     density across a fixed candidate budget, reachable by
+     construction); hybrid synthetic + grinded construction;
+     spec-derived rare-path enumeration. The round closes one of
+     these or names a new shape with substrate evidence.
+  2. **The verifier-side or C-shim accessor** the chosen
+     methodology requires. The R7-D1 sketch
+     (`compute_hash_opcode_streams_for_testing` under `cfg(feature
+     = "test-internals")`) is one shape; the round re-derives the
+     accessor under the new methodology's constraints, which may
+     differ.
+  3. **The grinding tool** (if the chosen methodology grinds) at
+     `rust/shekyl-randomx-differential/src/bin/grind_adversarial_corpus.rs`
+     or analogous.
+  4. **The adversarial corpus contents** committed as hex bytes
+     in `rust/shekyl-randomx-differential/src/adversarial_corpus.rs`.
+  5. **Reactivate §6 T2** (`adversarial_corpus_byte_equality`)
+     and §6 T6 (`worst_case_ratio`) in the test plan; reactivate
+     §5.1.11 `mode_worst_case` at the harness binary.
+  6. **Plan-doc amendment**: append a Round-N close documenting
+     the post-2g resolution; close R7-D1 + R7-D2 + R7-D3 + R7-D4
+     by replacement.
+
+  **Pre-genesis target rationale.** The 2g harness ships with
+  common-path leg-3 coverage (random corpus + canonical outputs
+  + cache-equivalence). Rare-path coverage is carried in the
+  interim by legs 1 (spec-faithful implementation discipline)
+  and 2 (C-reference audit). Per
+  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
+  §2.5's corpus-coverage-as-leg-3-completeness pin, the deferral
+  reduces leg-3's residual catch capacity until the post-2g
+  round lands. Landing pre-genesis preserves the "Shekyl's
+  verifier is canonical RandomX v2" claim's full audit-posture
+  evidence at genesis cut.
+
+  **Reopening criterion (escalation ahead of V3.0 target).**
+  Per [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  priority-1 security override rule: a Phase-2 audit finding
+  that surfaces a rare-path divergence at genesis the random +
+  canonical-output corpus misses forces this item ahead of its
+  V3.0 target version.
+
+  **Cross-references.**
+  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
+  §3.19 R7-D1 + R7-D2 + R7-D3 + R7-D4 + R7-D5; §2.5 Round 7
+  amplification; §3 R1-D5 / R1-D6 / R1-D8 close annotations
+  (reopened banners); §6 T2 / T6 (deferred); §8.1 C5b / C7
+  commit rows (rescoped).
+
 - **Refresh bandwidth tradeoff under α — round-trip-bound block
   fetches on cold sync (trigger: PR 4 Round 1 disposition;
   V3.0 RC stabilization).** Stage 1 PR 4 (`RefreshEngine`

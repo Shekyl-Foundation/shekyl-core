@@ -166,17 +166,5 @@ harness = false
 name = "per_call_alloc"
 harness = false
 
-[[test]]
-# Phase 2g per-hash latency placeholder per
-# `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.8 disposition #3 + §13
-# R3-minor-2: lands at the canonical 2g-deliverable path under
-# `tests/perf/` so 2g's author finds it by grep. Cargo's default test
-# discovery only auto-detects files at the top of `tests/`; the
-# explicit `path` makes the under-`perf/` placement discoverable
-# without losing the perf namespace. The body is `#[ignore]`'d so
-# `cargo test` doesn't run it; 2g replaces the body in-place.
-name = "per_hash_latency"
-path = "tests/perf/per_hash_latency.rs"
-
 [lints]
 workspace = true

@@ -1,0 +1,249 @@
+# Phase 2g RandomX v2 differential-harness CI gates.
+#
+# Per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.5.1-§5.5.3 + §5.5.6
+# + §6.6/§6.7.5 + §6.8 cadence:
+#
+# * Per-PR + push + workflow_dispatch + every scheduled cron:
+#   `structural-validate` — builds the C reference's `librandomx.a` via
+#   the submodule's own CMakeLists, then runs the Rust workspace's
+#   structural gates against the differential harness crate
+#   (`cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`).
+#   Covers T9, T10, T11, T13, T14, T15, T17 (per §6 test plan).
+#   Runtime modes (T1, T3, T5, T7, T8, T16 — those that invoke the
+#   harness binary's `--mode=...` subcommands) are deferred behind
+#   the V3.0 `compute_hash` divergence (per `docs/FOLLOWUPS.md`'s
+#   "Investigate `shekyl-pow-randomx::compute_hash` divergence from
+#   C reference at large data sizes" entry); per §6.8 cadence the
+#   runtime gates become merge-blocking once the V3.0 investigation
+#   closes and the verifier ships a corrected `compute_hash`.
+#
+# * Weekly cron (`0 6 * * 1`): `cargo-mutants` per §5.5.6 + §4.6 M2.
+#   Mutation-tests the harness + verifier under the §1.4 sole-consumer
+#   discipline. Skip-list discipline lives in `.cargo/mutants.toml`.
+#
+# Path-filtered triggers per the R1-D12 close: per-PR job runs on
+# every PR by default but is skipped for PRs that touch only `docs/`,
+# `*.md`, or non-RandomX surfaces (positive `paths:` filter, which is
+# the inversion of `build.yml`'s `paths-ignore:` filter pin per the
+# §3.x R1-D12 path-filtered per-PR trigger discussion). The positive
+# filter is justified here because the differential-harness scope is
+# narrower than the workspace-wide CI (a positive filter is brittle
+# *for the workspace-wide gate* per R1-D12; for the harness-scoped
+# gate, the positive filter is the substrate-correct shape).
+#
+# Runner pin: `ubuntu-latest` per R1-D12 + F5 (4 vCPU / 16 GB RAM
+# verified at Round 1 close; cron schedules staggered from existing
+# `nightly.yml` 03:00 UTC + `codeql.yml` Monday 04:30 UTC to avoid
+# resource collisions).
+#
+# Cron offset: `0 5 * * *` for daily structural-validate runs;
+# `0 6 * * 1` for the weekly cargo-mutants run.
+
+name: randomx-v2-differential
+
+on:
+  push:
+    paths:
+      - 'rust/shekyl-randomx-differential/**'
+      - 'rust/randomx-v2-sys/**'
+      - 'rust/shekyl-pow-randomx/**'
+      - 'external/randomx-v2/**'
+      - 'external/CMakeLists.txt'
+      - 'scripts/ci/check_randomx_crate_invariants.sh'
+      - '.github/workflows/randomx-v2-differential.yml'
+      - '.cargo/mutants.toml'
+  pull_request:
+    paths:
+      - 'rust/shekyl-randomx-differential/**'
+      - 'rust/randomx-v2-sys/**'
+      - 'rust/shekyl-pow-randomx/**'
+      - 'external/randomx-v2/**'
+      - 'external/CMakeLists.txt'
+      - 'scripts/ci/check_randomx_crate_invariants.sh'
+      - '.github/workflows/randomx-v2-differential.yml'
+      - '.cargo/mutants.toml'
+  schedule:
+    # Daily structural-validate at 05:00 UTC. Staggered from existing
+    # `nightly.yml` (03:00 UTC) + `shekyl-oxide-divergence.yml`
+    # (Mon 04:00 UTC) + `codeql.yml` (Mon 04:30 UTC).
+    - cron: "0 5 * * *"
+    # Weekly `cargo-mutants` on Monday at 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CMAKE_BUILD_PARALLEL_LEVEL: 2
+  # `external/randomx-v2/` is configured as a self-contained CMake
+  # project per its own `CMakeLists.txt`; the install prefix is
+  # `<workspace>/build-randomx-v2/install`. The parent project's
+  # `external/CMakeLists.txt` `ExternalProject_Add` wrapper is the
+  # production CMake wiring (per §5.4); the CI workflow takes a
+  # narrower path because the workspace-CMake configure step requires
+  # Boost + OpenSSL + ~ a dozen other C++ dependencies that the
+  # harness build itself does not need.
+  RANDOMX_V2_BUILD_DIR: ${{ github.workspace }}/build-randomx-v2
+  RANDOMX_V2_INSTALL_DIR: ${{ github.workspace }}/build-randomx-v2/install
+
+jobs:
+  structural-validate:
+    # Per-PR + push + workflow_dispatch + daily cron. Always runs (no
+    # `if:` filter) because the structural gates are merge-blocking
+    # and cadence-independent. The mutants job's `if:` filter
+    # (below) keeps the weekly mutation run from triggering this
+    # job's full setup twice on Monday at 06:00 UTC.
+    name: 'structural: build + cargo test (T9-T15, T17)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name != 'schedule' || github.event.schedule == '0 5 * * *'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install CMake + Ninja
+        # `ubuntu-latest` images carry CMake by default, but we pin
+        # Ninja explicitly because the submodule's CMakeLists builds
+        # ~50 translation units and Ninja's parallelism is materially
+        # faster than the default Makefile generator on the 4-vCPU
+        # runner. Cost: a few seconds of `apt install`.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build
+      - name: Configure + build randomx-v2 C reference
+        # Build the submodule's own CMakeLists out-of-band rather than
+        # going through the parent project's `external/CMakeLists.txt`
+        # `ExternalProject_Add` wrapper. The wrapper is the production
+        # wiring (per §5.4) but the parent project requires Boost +
+        # OpenSSL + ~ a dozen other deps the harness build never
+        # touches. Building the submodule directly via its self-
+        # contained CMakeLists produces byte-identical `librandomx.a`
+        # at substantially smaller install footprint, which is
+        # justified for the CI cost — the harness's audit-against-
+        # actual-code discipline (per §4.5 T-A11 + §4.3) is
+        # independent of which CMake invocation produced the lib, so
+        # long as the lib is built from the fork-pinned submodule SHA
+        # (verified at runtime by T15 — `randomx-v2-sys/Cargo.toml`'s
+        # `fork-pin-sha` matches `git -C external/randomx-v2 rev-parse
+        # HEAD`).
+        run: |
+          mkdir -p "${RANDOMX_V2_INSTALL_DIR}/lib" "${RANDOMX_V2_INSTALL_DIR}/include"
+          cmake -G Ninja \
+            -S external/randomx-v2 \
+            -B "${RANDOMX_V2_BUILD_DIR}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build "${RANDOMX_V2_BUILD_DIR}" --target randomx
+          # The submodule's CMakeLists does not declare an `install`
+          # target; copy the static lib + header manually to mirror
+          # the layout that `randomx-v2-sys/build.rs` expects
+          # (`<prefix>/lib/librandomx.a` + `<prefix>/include/randomx.h`).
+          cp "${RANDOMX_V2_BUILD_DIR}/librandomx.a" "${RANDOMX_V2_INSTALL_DIR}/lib/"
+          cp external/randomx-v2/src/randomx.h "${RANDOMX_V2_INSTALL_DIR}/include/"
+      - name: cargo fmt --check (harness + sys)
+        working-directory: rust
+        run: cargo fmt --all -- --check
+      - name: cargo clippy -D warnings (harness + sys)
+        working-directory: rust
+        # Targeted at the two new crates. The workspace-wide clippy
+        # gate runs in `build.yml`'s `rust-audit-and-test` job; this
+        # narrower invocation re-runs clippy against the harness in
+        # the substrate-correct environment (with
+        # `RANDOMX_V2_INSTALL_DIR` set, so `gen_canonical_outputs`
+        # and the harness binary link successfully under clippy's
+        # `cargo check` phase).
+        run: |
+          cargo clippy --locked -p shekyl-randomx-differential -p randomx-v2-sys --all-targets -- -D warnings
+      - name: cargo test (harness lib + integration)
+        working-directory: rust
+        # Covers T9 (corpus-determinism), T10 (adversarial pin),
+        # T11 (failure_output schema), T13 (crate-invariant script),
+        # T14 (sole consumer), T15 (fork-pin SHA), T17 (invocation
+        # banner). Per §6.7.5 + §6.8 the runtime-mode tests (T1,
+        # T3, T5, T7, T8, T16) are deferred behind the V3.0
+        # `compute_hash` divergence; once that closes a future
+        # amendment adds runtime-mode invocations here.
+        run: |
+          cargo test --locked -p shekyl-randomx-differential -p randomx-v2-sys
+      - name: cargo test --features test-internals (verifier)
+        working-directory: rust
+        # Per §5.3.3 R5-D1: the verifier crate's
+        # `cache_block_bytes_for_testing` accessor is gated behind
+        # the `test-internals` feature and is exercised exclusively
+        # by the differential harness. The structural gate runs
+        # `cargo test --features test-internals` once to confirm
+        # the feature-gated build compiles cleanly and the verifier
+        # crate's own tests still pass under the feature (no
+        # production code path branches on `test-internals`, per
+        # §5.6 + R1-D10 (b) close).
+        run: cargo test --locked -p shekyl-pow-randomx --features test-internals
+      - name: extended crate-invariant script
+        # Per §5.5.4 + R1-D13 + the C10 script extension: assert
+        # the workspace-wide crate-isolation invariants extend to
+        # `randomx-v2-sys` (Pattern C exempt — FFI shim) and
+        # `shekyl-randomx-differential` (Pattern A + B + C
+        # enforced; harness scope per §5.5.4 row).
+        run: scripts/ci/check_randomx_crate_invariants.sh
+
+  mutants:
+    # Weekly cargo-mutants run per §5.5.6 + §4.6 M2 (Round-3
+    # substrate-completeness amendment). Mutation testing is
+    # nightly-only (not per-PR) per the F5 budget — `cargo mutants`
+    # against the harness + verifier surfaces is multi-hour work; the
+    # weekly cadence balances substrate signal against runner cost.
+    #
+    # Skip-list discipline lives in `.cargo/mutants.toml`
+    # (`exclude_globs` for the tooling binaries + canonical-output
+    # data file per §5.5.6 row). Each entry in the skip list is a
+    # substrate-anchored carve-out; new skip-list entries require a
+    # §5.5.6-row plan-doc amendment.
+    name: 'weekly: cargo-mutants (T18)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    if: github.event_name == 'schedule' && github.event.schedule == '0 6 * * 1' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install CMake + Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build
+      - name: Configure + build randomx-v2 C reference
+        run: |
+          mkdir -p "${RANDOMX_V2_INSTALL_DIR}/lib" "${RANDOMX_V2_INSTALL_DIR}/include"
+          cmake -G Ninja \
+            -S external/randomx-v2 \
+            -B "${RANDOMX_V2_BUILD_DIR}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build "${RANDOMX_V2_BUILD_DIR}" --target randomx
+          cp "${RANDOMX_V2_BUILD_DIR}/librandomx.a" "${RANDOMX_V2_INSTALL_DIR}/lib/"
+          cp external/randomx-v2/src/randomx.h "${RANDOMX_V2_INSTALL_DIR}/include/"
+      - name: Install cargo-mutants
+        # `cargo install --locked` is idempotent: on workflow re-run
+        # the binary is already present in `~/.cargo/bin`. The
+        # `--locked` flag pins against `cargo-mutants`' own
+        # `Cargo.lock`; absent that pin a transitive dep can shift
+        # the binary's behavior between runs.
+        run: cargo install cargo-mutants --locked
+      - name: cargo mutants (harness + verifier)
+        working-directory: rust
+        # Per `.cargo/mutants.toml`: invokes mutation testing across
+        # `shekyl-randomx-differential` + `shekyl-pow-randomx` with
+        # the skip-list discipline. T18 asserts that survival rate
+        # is bounded by the skip-list; new survivors require either
+        # (a) a §5.5.6-row plan-doc amendment justifying the skip
+        # addition, or (b) a verifier/harness-side change that
+        # collapses the survivor.
+        #
+        # `--in-place` runs mutations inline rather than in a
+        # parallel worktree; the runner's 14 GB SSD is tight for
+        # multi-worktree mutation runs at workspace scale.
+        run: cargo mutants --package shekyl-randomx-differential --package shekyl-pow-randomx --in-place

@@ -2412,6 +2412,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "randomx-v2-sys"
+version = "3.1.0"
+
+[[package]]
 name = "rayon"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3346,6 +3350,18 @@ dependencies = [
  "shekyl-generators",
  "thiserror",
  "zeroize",
+]
+
+[[package]]
+name = "shekyl-randomx-differential"
+version = "3.1.0"
+dependencies = [
+ "rand_chacha 0.3.1",
+ "randomx-v2-sys",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shekyl-pow-randomx",
 ]
 
 [[package]]

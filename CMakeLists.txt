@@ -503,6 +503,61 @@ option(BUILD_TESTS "Build tests." OFF)
 option(BUILD_RANDOMX_V2_MINER_LIB
   "Build RandomX v2 (Shekyl-Foundation fork) miner library out-of-tree; default OFF in Phase 1, wired into miner consumers in Phase 3."
   OFF)
+
+# Phase 2g Rust/C differential test harness build toggle.
+# OFF (default): no harness build configured; existing CMake builds
+# are byte-identical to a no-flag build (preserves the Phase 1 §4.1
+# daemon-byte-equivalence contract).
+# ON: implies BUILD_RANDOMX_V2_MINER_LIB=ON (auto-flipped below with
+# a CMake WARNING per the §5.4.2 disposition in
+# RANDOMX_V2_PHASE2G_PLAN.md). The implication is unidirectional:
+# the harness needs the C reference's static library; the miner-lib
+# build itself does not need the harness.
+#
+# The harness's Cargo build runs out-of-band from CMake (per
+# §5.4.3); CMake's role is exclusively building the C reference's
+# librandomx.a + headers for randomx-v2-sys (R1-D2) to link
+# against. No new CMake target is added in 2g.
+#
+# See docs/design/RANDOMX_V2_PHASE2G_PLAN.md §§3.5 (R1-D3 close),
+# 5.4.1, 5.4.2, 5.4.3, and §6.6 T12 (per-PR auto-flip assertion).
+option(BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS
+  "Build the Phase 2g Rust/C differential test harness (implies BUILD_RANDOMX_V2_MINER_LIB=ON). Default OFF; preserves the daemon-build byte-equivalence contract when not set."
+  OFF)
+
+# §5.4.2 implication mechanism. Per R1-D3 option (c) close, enabling
+# BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON unconditionally requires
+# BUILD_RANDOMX_V2_MINER_LIB=ON. When the user passes
+# -DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON without also passing
+# -DBUILD_RANDOMX_V2_MINER_LIB=ON (or with an explicit
+# -DBUILD_RANDOMX_V2_MINER_LIB=OFF), CMake auto-flips the latter to
+# ON with a WARNING so the auto-flip is observable in configure logs.
+# T12 (§6.6, per-PR) asserts the warning text + the resulting cache
+# value mechanically.
+#
+# CACHE BOOL ... FORCE updates the cache value rather than just the
+# current-configure-pass variable; the auto-flip persists across
+# subsequent configures of the same build tree (the cached ON value
+# satisfies the if-condition below on re-configure, suppressing
+# repeated WARNINGs). Passing -DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=OFF
+# on a subsequent configure leaves the cached MINER_LIB=ON in place;
+# the user explicitly sets MINER_LIB=OFF to undo (deliberate
+# non-sticky-reversal: the implication is one-shot at flip time,
+# not a permanent coupling).
+if(BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS AND NOT BUILD_RANDOMX_V2_MINER_LIB)
+  message(WARNING
+    "BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON requires "
+    "BUILD_RANDOMX_V2_MINER_LIB=ON (the harness consumes the C "
+    "reference's static library via the randomx-v2-sys sub-crate). "
+    "Auto-flipping BUILD_RANDOMX_V2_MINER_LIB to ON. Pass "
+    "-DBUILD_RANDOMX_V2_MINER_LIB=ON explicitly to silence this "
+    "warning. See docs/design/RANDOMX_V2_PHASE2G_PLAN.md §5.4.2 "
+    "and R1-D3 for the disposition.")
+  set(BUILD_RANDOMX_V2_MINER_LIB ON CACHE BOOL
+    "Auto-set by BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON per Phase 2g §5.4.2."
+    FORCE)
+endif()
+
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
   set(DEFAULT_BUILD_DEBUG_UTILITIES ON)
 else()
