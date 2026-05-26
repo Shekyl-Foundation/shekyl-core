@@ -3519,11 +3519,24 @@ rule 2.
 - **C3 — Recipe types + first-class evaluator.** Lands the
   `src/adversarial/` module per R1-D3 close: `types.rs`
   (`BaseSeedhash`, `CacheRecipe`, `EvaluatedRecipe`),
-  `interpreter.rs` (declarative-recipe evaluator with C-side
-  base-cache amortization via `base_caches` HashMap),
-  `canonical.rs` (base-cache derivation helpers), and the
-  `recipes/` submodule scaffold (one file per category subdivision
-  per R1-D8 close taxonomy).
+  `interpreter.rs` (declarative-recipe evaluator; takes
+  pre-derived `base_cache_bytes` as input — base-cache
+  amortization lives at each consumer site as a
+  `Vec<(base_bytes_key, derived_bytes)>` linear-scan cache per
+  the [`adversarial/mod.rs`](../../rust/shekyl-randomx-differential/src/adversarial/mod.rs)
+  "Base-cache amortization" rustdoc, not as a shared
+  `base_caches` HashMap; the four-consumer enumeration —
+  `compute_corpus_canonicals`, `mode_adversarial_ratio::run`,
+  `gen_canonical_outputs`, the T2 integration test — was held
+  to the per-consumer shape per
+  [`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)
+  "while we're here is the enemy" discipline until a fifth
+  consumer with a substrate-anchored need emerges),
+  `canonical.rs` (base-cache derivation helpers including
+  `derive_base_cache_bytes` and the canonical-array amortization
+  exemplar `compute_corpus_canonicals`), and the `recipes/`
+  submodule scaffold (one file per category subdivision per
+  R1-D8 close taxonomy).
 - **C4 — Initial recipe corpus (8 recipes; Cat 1 + 3).** The
   starter corpus lands at the four `recipes/*.rs` files: two
   Category 1 spec-silence anchors, three Category 3
