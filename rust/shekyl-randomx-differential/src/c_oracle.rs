@@ -33,15 +33,92 @@
 //! intermediate logic between [`COracleSession::cache_sha256`] and
 //! [`COracleSession::calculate_hash`].
 //!
-//! ## Flags (R4-D5)
+//! ## Flags (R4-D5 + verifier-divergence FOLLOWUP closure)
 //!
-//! All allocations pass [`RANDOMX_FLAG_DEFAULT`] (`= 0`):
-//! software-only execution, no JIT, no large-pages, no AES-NI. This
-//! is the slowest but most deterministic path; the byte-equality
-//! property the harness asserts holds across heterogeneous runners
-//! only at this flag value. The deterministic-execution rationale
-//! is pinned in §3.16 R4-D5; consumers in other modes do not pass
-//! different flags.
+//! The C reference splits flag handling between cache allocation
+//! and VM creation; the two callsites honor disjoint subsets of
+//! `randomx_flags`, and the harness's flag selection reflects that
+//! split rather than a single "all allocations use flag X" pattern.
+//!
+//! ### Cache allocation: `randomx_alloc_cache(RANDOMX_FLAG_DEFAULT)`
+//!
+//! `randomx_alloc_cache` masks its `flags` argument to
+//! `(RANDOMX_FLAG_JIT | RANDOMX_FLAG_LARGE_PAGES)` only (see
+//! `external/randomx-v2/src/randomx.cpp:79`). Every other bit —
+//! AES-NI, AVX2, SECURE, ARGON2_*, **the V2 algorithm-selection
+//! bit** — is silently dropped at cache-allocation time and has
+//! no observable effect on the resulting `randomx_cache`. The
+//! cache memory layout is identical for v1 and v2 (the
+//! algorithm-version distinction is runtime-only and lives
+//! entirely in the VM), so a single `randomx_cache` instance can
+//! back either VM flavor.
+//!
+//! Passing [`RANDOMX_FLAG_DEFAULT`] (`= 0`) at cache allocation
+//! is therefore the same as passing [`RANDOMX_FLAG_V2`] at cache
+//! allocation — both are masked to zero, JIT and large-pages both
+//! stay off. The harness uses [`RANDOMX_FLAG_DEFAULT`] to make
+//! the "JIT and large-pages off" intent explicit at the cache
+//! callsite, not because the V2 bit would be honored.
+//!
+//! ### VM creation: `randomx_create_vm(RANDOMX_FLAG_V2, …)`
+//!
+//! `randomx_create_vm` is where the V2 bit is honored — the VM
+//! constructor stores `flags` in `vmFlags`, and
+//! `external/randomx-v2/src/program.hpp:57`'s
+//! `(flags & RANDOMX_FLAG_V2) ? RANDOMX_PROGRAM_SIZE_V2
+//! : RANDOMX_PROGRAM_SIZE_V1` selects the per-block program size
+//! (384 vs 256) that the AES-round chain consumes. JIT,
+//! large-pages, AES-NI, SECURE, etc. are *also* VM-creation
+//! flags — they affect *execution method* at the VM, not the
+//! algorithm version.
+//!
+//! ### Cross-runner determinism
+//!
+//! The byte-equality property the harness asserts depends on
+//! every VM-creation flag that affects *execution method* being
+//! held constant at the no-platform-acceleration baseline:
+//!
+//! - JIT off (no x86-64 emit; pure interpreter loop).
+//! - Large-pages off (no `MAP_HUGETLB`-dependent allocator
+//!   variance).
+//! - AES-NI off (no AES-NI instructions; software AES round).
+//! - SECURE off (no per-VM `mprotect` guard pages; identical
+//!   page-table behavior across runners).
+//!
+//! All of these are bits the harness deliberately does *not* set
+//! in the `randomx_create_vm` flag argument. The
+//! algorithm-version bit ([`RANDOMX_FLAG_V2`]) is orthogonal —
+//! it selects which algorithm the VM executes (v1 or v2), not
+//! how the VM executes it. Setting [`RANDOMX_FLAG_V2`] does not
+//! introduce execution-method nondeterminism; clearing it would
+//! silently select v1, which is what the
+//! verifier-divergence FOLLOWUP root cause was.
+//!
+//! Pre-FOLLOWUP-closure, `randomx_create_vm` was called with
+//! [`RANDOMX_FLAG_DEFAULT`], which selected v1
+//! (`PROGRAM_SIZE = 256`) against Rust v2 subjects
+//! (`PROGRAM_SIZE = 384`) — the root cause of the V3.0
+//! "verifier divergence on T1/T2 large random data" FOLLOWUP,
+//! localized by `tests/divergence_triage.rs`'s D1 substrate
+//! triage. See `randomx-v2-sys::RANDOMX_FLAG_V2`'s doc for the
+//! upstream evidence and the upstream test pattern at
+//! `external/randomx-v2/src/tests/tests.cpp:1032`
+//! (`randomx_create_vm(RANDOMX_FLAG_V2, cache, nullptr)`).
+//!
+//! ### Summary
+//!
+//! - Cache callsite: `RANDOMX_FLAG_DEFAULT` (V2 bit would be
+//!   masked anyway; explicit zero documents "JIT/large-pages
+//!   off" intent).
+//! - VM callsite: `RANDOMX_FLAG_V2` (algorithm-version
+//!   selection; required for v1/v2 agreement with Rust). All
+//!   execution-method bits left clear for deterministic
+//!   cross-runner byte-equality per R4-D5.
+//! - Any future flag added at the VM callsite must be evaluated
+//!   against the "execution-method bit vs algorithm-version
+//!   bit" distinction per `randomx-v2-sys::RandomxFlags`'s docs
+//!   and the FOLLOWUP-closure discipline pin in
+//!   `docs/FOLLOWUPS.md` "Recently resolved" section.
 //!
 //! ## Null-pointer error translation (§5.1.8)
 //!
@@ -89,7 +166,7 @@ use std::slice;
 use randomx_v2_sys::{
     randomx_alloc_cache, randomx_calculate_hash, randomx_create_vm, randomx_destroy_vm,
     randomx_get_cache_memory, randomx_init_cache, randomx_release_cache, RandomxCache, RandomxVm,
-    RANDOMX_FLAG_DEFAULT,
+    RANDOMX_FLAG_DEFAULT, RANDOMX_FLAG_V2,
 };
 use sha2::{Digest, Sha256};
 use shekyl_pow_randomx::Seedhash;
@@ -203,8 +280,12 @@ impl COracleSession {
     ///   returns NULL (the cache is released before returning).
     pub fn new(seedhash: Seedhash) -> Result<Self, COracleError> {
         // SAFETY: see module-level docs. All FFI calls here are the
-        // R4-D5 light-mode shape: `RANDOMX_FLAG_DEFAULT` for both
-        // cache and VM, NULL dataset to indicate light mode.
+        // R4-D5 light-mode shape: `RANDOMX_FLAG_DEFAULT` for cache
+        // allocation (V2 bit is masked out at alloc per
+        // `randomx.cpp:79`, so passing it here would be inert),
+        // `RANDOMX_FLAG_V2` for VM creation (selects the v2
+        // algorithm per the verifier-divergence FOLLOWUP closure),
+        // NULL dataset to indicate light mode.
         unsafe {
             let cache = randomx_alloc_cache(RANDOMX_FLAG_DEFAULT);
             if cache.is_null() {
@@ -221,7 +302,7 @@ impl COracleSession {
                 randomx_release_cache(cache);
                 return Err(COracleError::CacheMemoryNull { seedhash });
             }
-            let vm = randomx_create_vm(RANDOMX_FLAG_DEFAULT, cache, ptr::null_mut());
+            let vm = randomx_create_vm(RANDOMX_FLAG_V2, cache, ptr::null_mut());
             if vm.is_null() {
                 randomx_release_cache(cache);
                 return Err(COracleError::VmCreateFailed { seedhash });

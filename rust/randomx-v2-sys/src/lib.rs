@@ -114,8 +114,9 @@ pub struct RandomxVm {
 /// `randomx_flags` is a C `enum` with compiler-chosen integer
 /// width; the type alias to [`c_int`] matches the C99 default of
 /// `int`-sized enums on every platform the harness targets. The
-/// harness uses [`RANDOMX_FLAG_DEFAULT`] for both cache and VM
-/// allocation per R4-D5.
+/// harness uses [`RANDOMX_FLAG_DEFAULT`] for cache allocation and
+/// [`RANDOMX_FLAG_V2`] for VM creation; see each constant's doc
+/// for the per-call-site rationale.
 pub type RandomxFlags = c_int;
 
 /// `RANDOMX_FLAG_DEFAULT = 0` per
@@ -126,6 +127,44 @@ pub type RandomxFlags = c_int;
 /// on heterogeneous runners (per R4-D5 cache-flag choice
 /// rationale).
 pub const RANDOMX_FLAG_DEFAULT: RandomxFlags = 0;
+
+/// `RANDOMX_FLAG_V2 = 128` per
+/// [`external/randomx-v2/src/randomx.h`](../../../external/randomx-v2/src/randomx.h)'s
+/// `randomx_flags` enum. Selects the v2 algorithm at VM execution
+/// time: `external/randomx-v2/src/program.hpp:57` reads
+/// `(flags & RANDOMX_FLAG_V2) ? RANDOMX_PROGRAM_SIZE_V2
+/// : RANDOMX_PROGRAM_SIZE_V1`, switching the per-block program
+/// size from v1's 256 to v2's 384. The VM constructor stores the
+/// flag in `vmFlags` (per `external/randomx-v2/src/virtual_machine.hpp:63`)
+/// and the `randomx::v2_changes` / `executeBytecode` paths
+/// branch on `(vmFlags & RANDOMX_FLAG_V2)` at runtime.
+///
+/// **Pass to [`randomx_create_vm`], not [`randomx_alloc_cache`].**
+/// `randomx_alloc_cache` masks its `flags` argument to
+/// `(RANDOMX_FLAG_JIT | RANDOMX_FLAG_LARGE_PAGES)` only
+/// (`external/randomx-v2/src/randomx.cpp:79`); the V2 bit is
+/// silently ignored at cache-allocation time. The cache memory
+/// layout is identical for v1 and v2, so a single `randomx_cache`
+/// instance can back either VM flavor — the distinction is
+/// runtime-only and lives entirely in the VM. This matches the
+/// upstream test pattern at
+/// `external/randomx-v2/src/tests/tests.cpp:1032`
+/// (`randomx_create_vm(RANDOMX_FLAG_V2, cache, nullptr)`).
+///
+/// **Provenance.** The D1 substrate triage at
+/// [`rust/shekyl-randomx-differential/tests/divergence_triage.rs`](../../../rust/shekyl-randomx-differential/tests/divergence_triage.rs)
+/// localized the "RandomX v2 verifier divergence on T1/T2 large
+/// random data" FOLLOWUP (V3.0 pre-genesis queue) to the harness
+/// silently constructing v1 VMs against Rust-v2 subjects, by
+/// observing that the t16 fixture
+/// (`rust/shekyl-pow-randomx/tests/vectors/reference/vm/t16_vm_compute_hash_real.meta.txt`
+/// line 21: `vm flags = RANDOMX_FLAG_V2`) agreed with Rust but
+/// disagreed with the harness's `randomx_calculate_hash` output.
+/// Exposing the constant here is the substrate change that lets
+/// `c_oracle.rs` and `gen_canonical_outputs.rs` fix the
+/// misconfiguration in their respective `randomx_create_vm`
+/// call sites.
+pub const RANDOMX_FLAG_V2: RandomxFlags = 128;
 
 extern "C" {
     /// Allocate a `randomx_cache` instance. Returns NULL on

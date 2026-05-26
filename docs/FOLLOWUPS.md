@@ -47,40 +47,6 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **Investigate `shekyl-pow-randomx::compute_hash` divergence
-  from C reference at large data sizes (target: V3.0;
-  trigger: RandomX v2 Phase 2g C7 smoke test).** The Phase 2g
-  differential harness's first end-to-end smoke test
-  (`--mode=correctness --random-corpus-seedhashes=1
-  --random-corpus-data-per-seedhash=1`) surfaced a byte
-  divergence between
-  [`shekyl-pow-randomx::compute_hash`](../rust/shekyl-pow-randomx/src/vm.rs)
-  and the C reference (`external/randomx-v2`'s
-  `randomx_calculate_hash`, called via `randomx-v2-sys` per
-  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
-  §5.1.8) for a 387,581-byte data input (in the upper half of
-  R1-D4's bimodal `[200 .. 600·1024)` block-template-shaped
-  distribution per
-  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
-  §3.16). The §5.1.7 R1-D14 cache-equivalence precondition
-  passes (both sides derive byte-identical 256-MiB cache
-  memory); the C-side output matches `CANONICAL_RANDOM_HASHES[0]`
-  exactly (i.e. the C reference and the gen-canonical-outputs
-  run are consistent); only the Rust `compute_hash` output
-  diverges. The existing
-  [`vm::tests::t16_vm_compute_hash_real_matches_fork_reference`](../rust/shekyl-pow-randomx/src/vm.rs)
-  spec-vector test at 192-byte input continues to pass byte-
-  equality against the same C reference, so the divergence is
-  input-size-dependent — the most likely failure modes are in
-  the per-chunk Blake2b seed expansion or the AES-round chain
-  across multi-chunk inputs (spec §4.1 vs C reference
-  `randomx.cpp:392-394`). Investigation requires a smaller
-  reproducer (find the threshold at which divergence begins),
-  followed by isolation in the Rust-side hash composition
-  versus C reference. The harness itself is the right
-  artifact for the investigation — bisect the input size in
-  one binary-search-style pass with `mode=correctness`.
-
 - **Post-2g adversarial-corpus methodology + implementation
   (trigger: RandomX v2 Phase 2g Round 7 R7-D1/R7-D2 reopening
   of R1-D5 + R1-D6).** Phase 2g
@@ -5890,6 +5856,118 @@ reference.
 ## Recently resolved (audit trail)
 
 Retained for citation in review; each links to the canonical record.
+
+- **RandomX v2 Phase 2g "Investigate `shekyl-pow-randomx::compute_hash`
+  divergence from C reference at large data sizes" — substrate-
+  triage closure (closed 2026-05-26, resolution staged on
+  `chore/randomx-v2-c-oracle-flag-v2`; merge SHA backfilled on
+  `dev` merge).** Phase 2g's C7 smoke test surfaced a byte
+  divergence between
+  [`shekyl-pow-randomx::compute_hash`](../rust/shekyl-pow-randomx/src/vm.rs)
+  and the C reference (`randomx-v2-sys::randomx_calculate_hash`).
+  The investigation entry hypothesized "per-chunk Blake2b seed
+  expansion or the AES-round chain across multi-chunk inputs"
+  as the most likely Rust-side failure modes; the actual root
+  cause was a substrate misconfiguration on the C side. The
+  harness's C oracle (`c_oracle.rs::COracleSession`) and the
+  canonical-output generator (`gen_canonical_outputs.rs`) both
+  called `randomx_create_vm(RANDOMX_FLAG_DEFAULT, ...)`, which
+  selects v1 (PROGRAM_SIZE = 256), against a Rust verifier
+  implementing v2 (PROGRAM_SIZE = 384). The divergence was
+  systematic by construction at every data size that triggered
+  an opcode-stream long enough for v1/v2's PROGRAM_SIZE delta
+  to register in the AES-round chain; T16's static 192-byte
+  spec-vector fixture happened to land below that threshold
+  and pass, masking the substrate gap until C7's nightly-
+  cadence corpus pushed past it.
+
+  **Triage trajectory.** The diagnostic branch
+  `arbeit/randomx-v2-compute-hash-divergence-diagnostic`
+  landed a single ignore-gated test
+  ([`tests/divergence_triage.rs`](../rust/shekyl-randomx-differential/tests/divergence_triage.rs))
+  that runs T16's seedhash + data triple through Rust, through
+  the C oracle, and against the T16 static fixture, producing
+  Outcome A (three-way agreement) / Outcome B (Rust ≡ fixture;
+  C oracle diverges) / Outcome C (anything else). The first
+  run produced Outcome B, which inverted the
+  Rust-is-suspect hypothesis: Rust matched the static fixture
+  byte-for-byte; only the C oracle diverged. T16's fixture
+  metadata then named the substrate (the fixture was generated
+  with `RANDOMX_FLAG_V2`); the C reference's `randomx.cpp:79`
+  `(JIT | LARGE_PAGES)` mask at `randomx_alloc_cache` then
+  named the asymmetry (cache memory is V2-flag-invariant; only
+  `randomx_create_vm` honors the V2 bit). The fix exposed
+  `RANDOMX_FLAG_V2 = 128` in `randomx-v2-sys::lib.rs` (with
+  cache-vs-VM-flag rationale) and switched both callsites to
+  pass it at VM creation. Outcome A confirmed; the
+  canonical-output table regenerated under the v2 flag (cache
+  SHAs unchanged, as predicted by the mask); end-to-end
+  `--mode=correctness` re-ran the nightly corpus (32 seedhashes
+  × 32 data = 1024 random pairs) with three-way agreement
+  (exit 0) before this entry was written.
+
+  **Substrate disposition.** The Rust verifier was correct
+  throughout the investigation window; the FOLLOWUP's
+  speculative Rust-side hypothesis is retired by replacement.
+  No Rust implementation work was required. The generator-
+  version pin bumped `v1-c5a-nightly-1024 → v2-flag-nightly-
+  1024` to record the substrate change per §5.7's regeneration
+  discipline; `canonical_outputs.rs`'s "Provenance lineage"
+  section carries the audit trail. Per
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  continuous-discipline framing, the harness's design-time
+  pre-flight should have caught this — the v1-vs-v2 flag
+  asymmetry is exactly the kind of "what does this trait
+  deliver against the threat model?" question that the §3.16
+  R4-D5 light-mode-shape decision documented at one altitude
+  (light-vs-full-mode) but not at the other (v1-vs-v2
+  algorithm). The plan-doc post-mortem records the missed-
+  altitude finding for future audits.
+
+  **Lessons-into-substrate disposition (per
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  §"Continuous discipline as inheritance prevention").** Three
+  surface improvements landed alongside the fix:
+
+  1. `randomx-v2-sys::RANDOMX_FLAG_V2`'s doc explicitly
+     enumerates the cache-vs-VM flag split with citations to
+     `randomx.cpp:79` (cache-alloc mask) and the v2 algorithm-
+     selection callsite in `randomx_vm.cpp`, so future
+     consumers of the FFI surface cannot reasonably pass
+     `RANDOMX_FLAG_DEFAULT` at VM creation without seeing the
+     consequence in the type docs.
+  2. `c_oracle.rs`'s module-level safety prose explains the
+     cache-vs-VM flag selection in the same terms.
+  3. `gen_canonical_outputs.rs`'s inline safety comment at
+     the `randomx_create_vm` callsite cross-references the
+     FOLLOWUP closure so a future regeneration cannot
+     re-introduce the v1 flag without confronting the prior
+     resolution.
+
+  The pattern is "surface the substrate decision at every
+  altitude where the wrong choice could land," and is now
+  load-bearing for any future flag additions to
+  `randomx-v2-sys` (per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)'s
+  named-substrate-change discipline: the reopening criterion
+  for relaxing any of these three docstrings is a substrate-
+  anchored reason they are no longer load-bearing, e.g.,
+  upstream restructuring that collapses the cache-vs-VM
+  flag distinction).
+
+  **Cross-references.**
+  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
+  §11 Round history Round 8 entry (post-merge substrate-triage
+  amendment — R8-D1 verifier-divergence root-cause closure +
+  R8-D2 cache-vs-VM-flag asymmetry pin + R8-D3 missed-altitude
+  finding queued for rule-26);
+  [`docs/CHANGELOG.md`](./CHANGELOG.md) "RandomX v2 Phase 2g"
+  entry (substrate-triage closure); the diagnostic-triage
+  test at
+  [`rust/shekyl-randomx-differential/tests/divergence_triage.rs`](../rust/shekyl-randomx-differential/tests/divergence_triage.rs);
+  the lineage record in
+  [`rust/shekyl-randomx-differential/src/canonical_outputs.rs`](../rust/shekyl-randomx-differential/src/canonical_outputs.rs)
+  "Provenance lineage" section.
 
 - **Stage 1 PR 4 Phase 0d — `RefreshEngine` checkpoint 3 mid-scan-
   reorg-abort extension: struck, not deferred (closed 2026-05-20,
