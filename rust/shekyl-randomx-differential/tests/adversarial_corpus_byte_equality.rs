@@ -163,9 +163,32 @@ fn t2_adversarial_corpus_byte_equality() {
          corpus must be populated for T2 to assert anything."
     );
 
+    // Base-cache amortization keyed by `recipe.base.bytes`, mirroring
+    // the pattern in `mode_adversarial_ratio::run` (per the
+    // adversarial-ratio binary's `base_cache_cache` comment). The C4
+    // starter corpus has 3 unique base byte patterns across 8
+    // recipes; without amortization T2 pays the ~10s Argon2d-fill +
+    // 256-MiB allocation cost 8 times (~80s + 2 GiB peak) instead of
+    // 3 times (~30s + 768 MiB peak). The Vec<(key, bytes)> shape
+    // matches the binary's identical structure for grep-ability;
+    // when a third consumer emerges this lifts to a shared helper.
+    let mut base_cache_cache: Vec<([u8; 32], Vec<u8>)> = Vec::new();
     for recipe in &corpus {
-        let base_bytes = derive_base_cache_bytes(&recipe.base);
-        let evaluated = evaluate(recipe, &base_bytes);
+        let base_bytes = match base_cache_cache
+            .iter()
+            .find(|(key, _)| key == &recipe.base.bytes)
+        {
+            Some((_, bytes)) => bytes,
+            None => {
+                let new_bytes = derive_base_cache_bytes(&recipe.base);
+                base_cache_cache.push((recipe.base.bytes, new_bytes));
+                &base_cache_cache
+                    .last()
+                    .expect("base_cache_cache non-empty after push")
+                    .1
+            }
+        };
+        let evaluated = evaluate(recipe, base_bytes);
         let category = recipe_category(recipe);
 
         let rust =
