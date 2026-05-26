@@ -98,25 +98,41 @@ bench harness):
 
 ### 3.1 Bench harness invocation
 
-The measurement is produced by the integration test
-[`rust/shekyl-randomx-differential/tests/per_recipe_latency.rs`](../../rust/shekyl-randomx-differential/tests/per_recipe_latency.rs)
-(landed at this commit; populated with real recipe set at C4 per
-the Phase 2h implementation commit plan).
+The measurement is produced by the
+[`mode_adversarial_ratio::run`](../../rust/shekyl-randomx-differential/src/mode_adversarial_ratio.rs)
+orchestrator (the R1-D5 close measurement mode that replaced the
+historical `mode_worst_case` deferred stub) and is exercised at
+the test layer by the
+[`worst_case_ratio`](../../rust/shekyl-randomx-differential/tests/worst_case_ratio.rs)
+T6 integration test. The "per-recipe latency" measurement and
+T6 share an implementation rather than living as separate
+integration tests; the early-plan `tests/per_recipe_latency.rs`
+shape consolidated into T6 during R1-D5 close because the
+ratio's per-recipe sampling and the latency's per-recipe
+sampling consume the same evaluator output.
 
-Invocation:
+Invocation (release-mode, `RANDOMX_V2_INSTALL_DIR` set per the
+harness build contract; see
+[`randomx-v2-adversarial-ratio.yml`](../../.github/workflows/randomx-v2-adversarial-ratio.yml)
+for the CI invocation shape):
 
 ```bash
-cargo test --release \
-  --package shekyl-randomx-differential \
-  --test per_recipe_latency \
-  -- --ignored --nocapture
+RANDOMX_V2_INSTALL_DIR=<install-prefix> \
+  cargo test --release --locked \
+    --package shekyl-randomx-differential \
+    --test worst_case_ratio \
+    -- --ignored --nocapture
 ```
 
 The test is `#[ignore]`-gated at the source level so it does not
 run on default `cargo test` invocations (per Phase 2g §5.3 / §9
-test-cadence discipline); the per-PR CI cadence invokes it
-explicitly via `--ignored` per R1-D7's T2-in-existing-workflow
-landing at C8 of the implementation plan.
+test-cadence discipline). Per R1-D6 close Reframe 2 + R1-D7
+Sub-A close, T6 runs at the `workflow_dispatch` cadence
+(pre-genesis) and at the release-gate cadence (post-genesis) via
+the dedicated `randomx-v2-adversarial-ratio.yml` workflow rather
+than the per-PR `randomx-v2-differential.yml` workflow — the
+~100-samples-per-recipe-per-side budget is too expensive for
+per-PR cadence even at C4 starter-corpus scale.
 
 ### 3.2 What gets measured
 

@@ -36,12 +36,17 @@
 //! framing (R1-D5 for [`CLAIM_2_THRESHOLD`], R1-D6 for
 //! [`SAMPLE_BUDGET_PER_RECIPE`]) and against industry baseline for
 //! [`RUNNER_NOISE_MARGIN`] per the design doc's §2.3 provisional-value
-//! table. The first implementation-PR CI run on `ubuntu-latest` (per
-//! [`per_recipe_latency`](../../../rust/shekyl-randomx-differential/tests/per_recipe_latency.rs))
-//! produces the measured values; if measurement diverges from the
-//! provisional pin by more than [`RUNNER_NOISE_MARGIN`], a substrate
-//! finding is recorded per the design doc's §5 R4 reopening criterion
-//! and an amendment commit refines the values.
+//! table. The first measurement-cadence CI run on `ubuntu-latest`
+//! (T6 / `worst_case_ratio.rs`, via the dedicated
+//! `randomx-v2-adversarial-ratio.yml` workflow per R1-D7 Sub-A close
+//! — the per-recipe-latency and per-recipe-ratio measurements share
+//! the [`crate::mode_adversarial_ratio::run`] orchestrator per R1-D5
+//! close rather than living in a separate `tests/per_recipe_latency.rs`
+//! integration test as the early plan-doc framed) produces the
+//! measured values; if measurement diverges from the provisional pin
+//! by more than [`RUNNER_NOISE_MARGIN`], a substrate finding is
+//! recorded per the design doc's §5 R4 reopening criterion and an
+//! amendment commit refines the values.
 //!
 //! Per
 //! [`21-reversion-clause-discipline.mdc`](../../../.cursor/rules/21-reversion-clause-discipline.mdc),
