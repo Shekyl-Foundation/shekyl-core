@@ -50,6 +50,7 @@ on:
       - 'external/randomx-v2/**'
       - 'external/CMakeLists.txt'
       - 'scripts/ci/check_randomx_crate_invariants.sh'
+      - 'scripts/ci/check_phase2h_citations.sh'
       - '.github/workflows/randomx-v2-differential.yml'
       - '.github/workflows/randomx-v2-adversarial-ratio.yml'
       - '.cargo/mutants.toml'
@@ -61,6 +62,7 @@ on:
       - 'external/randomx-v2/**'
       - 'external/CMakeLists.txt'
       - 'scripts/ci/check_randomx_crate_invariants.sh'
+      - 'scripts/ci/check_phase2h_citations.sh'
       - '.github/workflows/randomx-v2-differential.yml'
       - '.github/workflows/randomx-v2-adversarial-ratio.yml'
       - '.cargo/mutants.toml'
@@ -228,6 +230,23 @@ jobs:
         # `shekyl-randomx-differential` (Pattern A + B + C
         # enforced; harness scope per §5.5.4 row).
         run: scripts/ci/check_randomx_crate_invariants.sh
+      - name: M5 citation-validation script
+        # Per Phase 2h R2-D4 close + the pre-implementation round
+        # Pass 2 disposition: M5 — Mechanical citation validation
+        # script (lands at `scripts/ci/check_phase2h_citations.sh`
+        # per the Phase 2f precedent + the C9 commit). Per-PR
+        # cadence — runs in the structural-validate job alongside
+        # the crate-invariant script. Sub-second runtime on the
+        # C4 starter corpus (8 recipes); scales linearly with
+        # corpus size and remains sub-second through R1-D1's
+        # 50-200-recipe target.
+        #
+        # Catches: missing plan-doc cites, missing source-file
+        # cites, out-of-range line numbers, per-category prefix
+        # mismatches (R1-D8 taxonomy invariant). Composes with
+        # M3 PR-template discipline (semantic verification) per
+        # R2-D3 T-A15 mitigation chain.
+        run: scripts/ci/check_phase2h_citations.sh
 
   mutants:
     # Weekly cargo-mutants run per §5.5.6 + §4.6 M2 (Round-3
