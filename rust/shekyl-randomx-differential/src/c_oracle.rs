@@ -399,7 +399,17 @@ impl COracleSession {
             cache_bytes.len()
         );
         // SAFETY: see module-level docs + Self::new for the
-        // allocation/init/release contract. The post-init overwrite
+        // allocation/init/release contract. Flag choices mirror
+        // Self::new's exactly — cache: `RANDOMX_FLAG_DEFAULT`
+        // (V2 bit is masked out at alloc per `randomx.cpp:79`, so
+        // passing it would be inert); VM: `RANDOMX_FLAG_V2`
+        // (selects the v2 algorithm per the verifier-divergence
+        // FOLLOWUP closure landed on `dev` by `chore/randomx-v2-
+        // c-oracle-flag-v2`, PR #79). Flag drift between Self::new
+        // and Self::from_raw_for_testing is guarded structurally by
+        // `tests/c_oracle_session_round_trip.rs` (T17), which
+        // asserts hash parity between the two constructors for a
+        // fixed (seedhash, payload) pair. The post-init overwrite
         // uses `randomx_get_cache_memory`'s documented-mutable
         // pointer (Phase 2g R4-D4) per Phase 2h R1-D2 close's
         // C-side-symmetry disposition; `randomx_init_cache` has
@@ -436,7 +446,7 @@ impl COracleSession {
                 cache_memory.cast::<u8>(),
                 RANDOMX_CACHE_SIZE_BYTES,
             );
-            let vm = randomx_create_vm(RANDOMX_FLAG_DEFAULT, cache, ptr::null_mut());
+            let vm = randomx_create_vm(RANDOMX_FLAG_V2, cache, ptr::null_mut());
             if vm.is_null() {
                 randomx_release_cache(cache);
                 return Err(COracleError::VmCreateFailed { seedhash });
