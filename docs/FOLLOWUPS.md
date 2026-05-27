@@ -4442,18 +4442,47 @@ one place to confirm each item's relationship to the wallet stack.
     time. Forecloses adversary evasion via wallet-restart
     cycles. Binding on `PeerReputationActor` and
     `ViewTagAnomalyDetector` design rounds in particular.
+  - **Temporal- and distributional-projection disciplines
+    (Stage 1 PR 5 segment 2h F5+F6 scope expansion).** Field
+    projection (PR 4 §5.4.8 #4's recursive trust boundary)
+    bounds *which fields* cross a trust boundary; it does
+    not bound *when* events fire or *which variant
+    distribution* a longitudinal observer sees. PR 5
+    segment 2h pinned the V3.0 prose-level discipline at
+    §5.0.3's seventh contract (event coalescing, bucketed
+    emission, strategy-aligned emission delay, projection-
+    time noise injection on the temporal axis;
+    variant-distribution rate-limiting, `DiscardReason`
+    aggregation policy, distributional-noise injection on
+    the distributional axis). V3.x's first cross-trust-
+    boundary consumer-actor PR is the per-consumer
+    threat-model trigger; the consumer's projection MUST
+    address temporal + distributional axes alongside field
+    projection. `DIAGNOSTIC_STREAM.md`'s per-stream
+    sections record the per-consumer projection
+    disposition. Binding on `ReorgAmplificationDetector`,
+    `PeerReputationActor`, `ViewTagAnomalyDetector` (any
+    consumer whose external surface admits a longitudinal
+    observer).
 
   **Trigger:** *when the first V3.x consumer actor
   (`ReorgAmplificationDetector`, `PeerReputationActor`,
   `RecoveryActor`, or `ViewTagAnomalyDetector`) enters
   design rounds.* The doc seeds with PR 4's §5.4.6 / §5.4.7
-  R6 / §5.4.8 content and grows additively as consumers are
+  R6 / §5.4.8 content + PR 5 segment 2h's §5.0.3 seventh
+  contract (temporal- and distributional-projection
+  discipline) and grows additively as consumers are
   designed. Cross-references:
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.6 (trait-surface contract pins, including the four
   pins recorded above), §5.4.7 R6 reframe (trait contract
   definition), §5.4.8 (attack-surface enumeration with
-  mitigation pins).
+  mitigation pins);
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0.3 seventh contract (segment 2h F5+F6
+  temporal/distributional projection pin), §5.6.5 F5+F6
+  (V3.x reopening criteria), §5.6.7 (V3.x FOLLOWUPS
+  scope expansion substrate).
 
 - **`RefreshEngine` (c) split-producer/recoverer view-material
   shape (Stage 1 PR 4 R4 deferral; migration cost reduced by
@@ -4519,7 +4548,7 @@ one place to confirm each item's relationship to the wallet stack.
 
 - **`ReservationTTLActor` consumer actor (Stage 1 PR 5 R8
   composition home; reservation TTL / leak prevention; closure
-  amended in segment 2e).** PR 5's Round 1 reframe of
+  amended in segments 2e and 2h).** PR 5's Round 1 reframe of
   [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §5.4 R8 reframed reservation TTL / leak prevention as a
   composition-side disposition under the §5.0 actor-mesh
@@ -4529,7 +4558,19 @@ one place to confirm each item's relationship to the wallet stack.
   consumer-actor PR is additive-only — no V3.x trait revision,
   no V3.x enum revision, no V3.x consumer-side breaking change
   per [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
-  continuous-discipline corollary.
+  continuous-discipline corollary. **Segment 2h (2026-05-26)
+  amended the closure with (i) the Phase 0l per-collection
+  `ReservationTTLConfig { consumer_held: Duration, in_flight:
+  Duration }` V3.0 surface (F7 disposition), (ii) the
+  `InFlightSubmit { snapshot_id, created_at, submitted_at }`
+  field set permitting either age-from-creation or
+  age-from-submission V3.x policy (P5 disposition), (iii)
+  removal of `DiscardReason::SnapshotRotationAutoDiscard`
+  under lazy R5 (V3.x eager-discard opt-in reintroduces it
+  per the eager-discard FOLLOWUPS entry below), and (iv) the
+  payload-bearing `DiscardReason::DaemonRejectedTerminal {
+  kind: TerminalErrorKind }` variant shape replacing the
+  segment-2f bare `DaemonRejectedTerminal` variant.**
   `ReservationTTLActor` subscribes to **both
   reservation-creation events and reservation-terminal
   events** on `PendingTxActor`'s diagnostic-stream surface,
@@ -4563,28 +4604,31 @@ one place to confirm each item's relationship to the wallet stack.
     submit).
   - **`PendingTxDiagnostic::Discarded { reservation_id,
     reason }`** — remove `reservation_id` from the
-    age-tracking map regardless of `reason`. Covers
-    `ConsumerExplicit`, `SnapshotRotationAutoDiscard`,
-    `DaemonRejectedTerminal` (R9 segment-2f), and
-    `TTLAutoDiscard` (the actor's own auto-discard fires;
-    self-cleanup).
+    age-tracking map regardless of `reason`. Under segment 2h
+    the surviving `DiscardReason` variants are
+    `ConsumerExplicit`, `DaemonRejectedTerminal { kind:
+    TerminalErrorKind }` (R9 reshape), and `TTLAutoDiscard`
+    (the actor's own auto-discard fires; self-cleanup).
+    `SnapshotRotationAutoDiscard` is removed under lazy R5;
+    no V3.0 emitter.
 
-  **What `SubmitFailed` does *not* close.** Per segment-2f
-  R9's two-stage submit flow (Finding-2 daemon-side
-  authority disposition), `SubmitFailed` on
-  `DaemonTimeout` / `DaemonUnavailable` keeps the
-  reservation in `SubmitPendingDaemonAck` — the
-  reservation is still outstanding, still output-locking,
-  and still ages. The TTL actor **does not** remove the
-  reservation on `SubmitFailed`; terminal cleanup is only
-  `SubmitSucceeded` or `Discarded` per the contract above.
-  Optional V3.x refinement: the actor may subscribe to
-  `SubmitAttempted` to apply a shorter TTL on
-  `SubmitPendingDaemonAck`-state reservations (the
-  daemon-side ambiguity window has a different
-  policy-acceptable age than a never-attempted
-  reservation); this is a V3.x consumer-actor policy
-  choice, not a V3.0 diagnostic-stream-surface requirement.
+  **What `SubmitPendingResolution` does *not* close (segment
+  2h reshape).** Per the segment-2h collection-moves table,
+  `SubmitPendingResolution { reservation_id, kind:
+  AmbiguousErrorKind }` is emitted on daemon timeout /
+  unavailable where the reservation stays in the actor's
+  `in_flight` collection (Finding-2 daemon-side authority
+  disposition). The TTL actor **does not** remove the
+  reservation on `SubmitPendingResolution`; terminal cleanup
+  is only `SubmitSucceeded` or `Discarded` per the contract
+  above. **Per-collection TTL pin (segment 2h F7
+  disposition).** The V3.0 surface is the Phase 0l
+  `ReservationTTLConfig { consumer_held: Duration, in_flight:
+  Duration }` constructor parameter on `LocalPendingTx`.
+  V3.x's `ReservationTTLActor` reads the config and applies
+  per-collection aging policy (age-from-`created_at` or
+  age-from-`submitted_at` for `in_flight`) without trait or
+  enum revision.
 
   **Memory-bound property.** With the full subscription
   contract above, the actor's age-tracking map is bounded
@@ -4593,28 +4637,49 @@ one place to confirm each item's relationship to the wallet stack.
   not by the cumulative count of all reservations the
   wallet has ever created.
 
-  **V3.0 deliverables (pinned at segment-2e closure).**
-  PR 5 ships: (1) `PendingTxDiagnostic::BuildSucceeded`
-  emitted at the `build`-success path in `LocalPendingTx::build`
-  / `PendingTxActor::handle_build` (Phase 1 call-site review
-  confirms); (2) `PendingTxDiagnostic::Discarded { reason:
-  SnapshotRotationAutoDiscard }` emitted at `submit`'s
-  snapshot-mismatch path (R5's lazy-discard semantics); (3)
-  `PendingTxDiagnostic::ReservationOutstanding` variant exists
-  in the `#[non_exhaustive]` enum (no V3.0 emitter; V3.x
-  `ReservationTTLActor` is the first emitter); (4) **new in
-  segment 2e:** `DiscardReason::TTLAutoDiscard` variant in the
+  **V3.0 deliverables (pinned at segment-2e closure; updated
+  under segment 2h).** PR 5 ships: (1)
+  `PendingTxDiagnostic::BuildSucceeded` emitted at the
+  `build`-success path in `LocalPendingTx::build` /
+  `PendingTxActor::handle_build` (Phase 1 call-site review
+  confirms); (2) `PendingTxDiagnostic::SubmitSnapshotInvalidated`
+  emitted at `submit`'s snapshot-mismatch path with rich
+  `(reservation_snapshot, current_snapshot)` context (R5's
+  lazy disposition under segment 2h; the prior
+  `Discarded { SnapshotRotationAutoDiscard }` emission at
+  this site is dropped under segment 2h, since lazy R5
+  requires consumer-explicit `discard(rid, ConsumerExplicit)`
+  to release `output_locks`); (3)
+  `PendingTxDiagnostic::ReservationOutstanding` variant
+  exists in the `#[non_exhaustive]` enum (no V3.0 emitter;
+  V3.x `ReservationTTLActor` is the first emitter); (4)
+  `DiscardReason::TTLAutoDiscard` variant in the
   `#[non_exhaustive] DiscardReason` set so V3.x's
   `ReservationTTLActor` can trigger `Discarded { reason:
-  TTLAutoDiscard }` without a V3.x enum revision.
+  TTLAutoDiscard }` without a V3.x enum revision; (5)
+  **new in segment 2h:** Phase 0l `ReservationTTLConfig {
+  consumer_held: Duration, in_flight: Duration }` constructor
+  parameter; `InFlightSubmit { snapshot_id, created_at,
+  submitted_at }` field set; `DiscardReason::DaemonRejectedTerminal
+  { kind: TerminalErrorKind }` payload-bearing variant
+  shape; `PendingTxDiagnostic::SubmitPendingResolution {
+  reservation_id, kind: AmbiguousErrorKind }` ambiguous-
+  outcome diagnostic; `DiscardReason::SnapshotRotationAutoDiscard`
+  removed under lazy R5 (V3.x eager-discard opt-in
+  reintroduces it).
 
-  **R5 ↔ R8 coherence (segment 2e verification).** R5's
-  `SnapshotRotationAutoDiscard` is the reactive cleanup path
-  (cleanup-on-use); R8's `TTLAutoDiscard` is the proactive
-  complement (age-based policy on never-used reservations).
-  Both share the `DiscardReason`/`Discarded` event
-  infrastructure; downstream consumers see a unified
-  `Discarded` event stream with discriminated reasons.
+  **R5 ↔ R8 coherence (segment 2e verification; segment 2h
+  refinement).** R5's lazy disposition emits
+  `SubmitError::SnapshotInvalidated` + the
+  `SubmitSnapshotInvalidated` diagnostic; the consumer's
+  follow-up `discard(rid, ConsumerExplicit)` emits
+  `Discarded { ConsumerExplicit }` and releases the
+  reservation's `output_locks`. R8's `TTLAutoDiscard` is
+  the proactive complement (per-collection age-based policy
+  via the Phase 0l `ReservationTTLConfig`). Both paths
+  share the `DiscardReason`/`Discarded` event infrastructure;
+  downstream consumers see a unified `Discarded` event
+  stream with discriminated reasons.
 
   **Hard mitigation pins (binding on this entry).**
   - **Restart-amnesia per PR 4 §5.4.8 #1 (binding on PR 5 too).**
@@ -4639,10 +4704,10 @@ one place to confirm each item's relationship to the wallet stack.
 
   **Round 2 disposition for PR 5 (trait-side dependency).**
   Confirm that `PendingTxDiagnostic::BuildSucceeded` /
-  `ReservationOutstanding` / `Discarded { reason:
-  SnapshotRotationAutoDiscard }` events are emitted from the
-  right call sites; the variant set in PR 5 §5.0.2 is
-  `#[non_exhaustive]` so future variants land additively
+  `ReservationOutstanding` / `SubmitSnapshotInvalidated` /
+  `SubmitPendingResolution` / `Discarded` events are emitted
+  from the right call sites; the variant set in PR 5 §5.0.2
+  is `#[non_exhaustive]` so future variants land additively
   without trait revision.
 
   **Trigger:** *when Stage 4 actor mesh stabilizes.*
@@ -4860,6 +4925,224 @@ one place to confirm each item's relationship to the wallet stack.
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.8 #4 (recursive trust-boundary discipline).
 
+- **Cancel-during-`in_flight` ergonomic alternative
+  ((c) shape; Stage 1 PR 5 segment 2h F2 V3.x trigger).**
+  PR 5 segment 2h closed F2 (consumer `discard` arriving
+  during the in-flight daemon round-trip) as **ownership-
+  boundary disposition (a)**: `PendingTxError::DiscardBlockedPendingDaemonAck
+  { reservation_id }` is returned; the consumer must wait
+  for daemon resolution or R8 TTL safety-net. Disposition
+  (c) — `discard_requested: bool` flag on `InFlightSubmit`
+  that records the consumer's intent and reconciles at
+  `SubmitCompleted` arrival — is the V3.x ergonomic-refinement
+  candidate.
+
+  **V3.x implementation sketch.**
+
+  ```rust
+  struct InFlightSubmit {
+      snapshot_id: SnapshotId,
+      created_at: Instant,
+      submitted_at: Instant,
+      discard_requested: bool,    // V3.x
+  }
+  ```
+
+  Reconciliation at `SubmitCompleted` arrival:
+
+  - `Accepted ∧ discard_requested` → tx is live on network;
+    consumer's discard intent is unenforceable. Outputs are
+    spent on-chain. Emit
+    `SubmissionAcceptedDespiteDiscard { rid }` (new V3.x
+    diagnostic) for consumer transparency; suppress standard
+    `SubmitSucceeded` in favor of the override-class.
+  - `Accepted ∧ !discard_requested` → standard
+    `SubmitSucceeded`.
+  - `TerminalErrorKind::* ∧ discard_requested` → treat as
+    consumer's intent satisfied; emit
+    `Discarded { ConsumerExplicit }` (not
+    `Discarded { DaemonRejectedTerminal::* }`; the daemon's
+    rejection is moot to the consumer's intent).
+    **Audit/debug-visibility sub-note (V3.x design-rounds
+    question).** The daemon's rejection reason is
+    structurally hidden in this case; whether V3.x emits
+    dual events (`Discarded { ConsumerExplicit }` plus a
+    separate `DaemonRejectionMooted { rid, kind:
+    TerminalErrorKind }` diagnostic for audit visibility)
+    is a V3.x design-rounds question. The decision interacts
+    with the temporal/distributional projection discipline
+    (F5+F6) — dual emission adds a wallet-attributable
+    event class that consumer-actor projection must handle.
+  - `TerminalErrorKind::* ∧ !discard_requested` → standard
+    `Discarded { DaemonRejectedTerminal::* }`.
+
+  **Threat-model regression note (V3.x design-rounds
+  question).** V3.x's `SubmissionStrategyActor` deliberately
+  delays broadcast to obscure wallet-network correlation.
+  Under (c), a consumer's discard arriving before strategy-
+  actor-broadcast could legitimately cancel; arriving
+  after-broadcast is unenforceable. Distinguishing these
+  cases at the consumer-visible API level (e.g.,
+  `Discarded { ConsumerExplicit, broadcast_avoided: bool }`)
+  would create a timing side-channel that leaks the
+  strategy actor's broadcast timing back to the consumer.
+  **(c)'s V3.x implementation MUST present the two cases
+  identically at the consumer surface, OR the strategy
+  actor's timing-obscurity property is degraded.** The
+  design-rounds work to settle (c) reopens the strategy-
+  actor threat model — the V3.x PR is necessarily a
+  coordinated `PendingTxEngine` + `SubmissionStrategyActor`
+  + `DIAGNOSTIC_STREAM.md` design-rounds pass.
+
+  **Reopening criteria (per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).**
+
+  - Telemetry surfaces consumer-impatience patterns under
+    the V3.0 disposition (a) — `DiscardBlockedPendingDaemonAck`
+    errors observed in production at non-trivial frequency
+    across operational deployments.
+  - AND the coordinated V3.x design-rounds bandwidth is
+    available (`PendingTxEngine` + `SubmissionStrategyActor`
+    + `DIAGNOSTIC_STREAM.md`).
+
+  **Re-evaluation shape.** A V3.x design-rounds pass owned
+  jointly by the per-trait PR template
+  ([`shekyl-core/.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc))
+  and the strategy-actor introduction PR.
+
+  **Trigger:** *V3.x telemetry surfaces (a) friction at
+  production scale.*
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.6.5 F2 (ownership-boundary disposition under lean
+  shape), §5.6.7 (segment 2h V3.x FOLLOWUPS substrate); R15
+  `SubmissionStrategyActor` FOLLOWUPS entry above.
+
+- **Eager-discard-on-`SnapshotMerged` opt-in (Stage 1 PR 5
+  segment 2h P9 V3.x trigger).** PR 5 segment 2h preserved
+  segment-2e's lazy R5 disposition: snapshot rotation drives
+  no automatic collection moves at V3.0; consumer learns at
+  submit-time via `SubmitError::SnapshotInvalidated` and
+  releases `output_locks` via consumer-explicit
+  `discard(rid, ConsumerExplicit)`. Eager-discard — where
+  the `SnapshotMerged` handler unilaterally drops stale
+  reservations from `consumer_held` and releases their
+  `output_locks` — is the V3.x opt-in.
+
+  **What V3.x lands.**
+
+  - **`DiscardReason::SnapshotRotationAutoDiscard` variant
+    reintroduction** (the variant was removed under segment-2h
+    lazy R5; V3.x adds it back as the eager-discard handler's
+    emission reason).
+  - **`ConsumerHeldEntry { created_at, snapshot_id }`
+    substrate refinement** — the V3.0
+    `HashMap<ReservationId, Instant>` shape doesn't admit
+    selective eager discard (otherwise eager becomes
+    sweeping). V3.x expands `consumer_held` to
+    `HashMap<ReservationId, ConsumerHeldEntry { created_at,
+    snapshot_id }>` so the eager handler can filter "discard
+    only entries built against prior snapshots."
+  - **Eager-discard policy as opt-in** — the V3.x
+    `ReservationPolicyConfig` (extension of the V3.0
+    `ReservationTTLConfig`) gains an
+    `eager_discard_on_rotation: bool` field; default off
+    preserves V3.0 lazy semantics; opt-in users get
+    eager-cleanup.
+
+  **Reopening criteria (per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).**
+
+  - V3.0 production telemetry surfaces a fast-snapshot-
+    rotation workload where consumer rebuild rates against
+    `SubmitError::SnapshotInvalidated` indicate the lazy-
+    cleanup performance characteristics are load-bearing
+    at scale.
+  - OR a V3.x performance-policy design rounds names the
+    lazy-vs-eager tradeoff as a reservation-policy
+    configuration surface (parallel to F7's per-collection
+    TTL).
+  - AND the substrate refinement to support selective
+    eager-discard lands as part of the V3.x reopen.
+
+  **Re-evaluation shape.** A V3.x design-rounds pass on R5
+  reservation-policy refinement; outcome either lands
+  eager-discard as an opt-in policy (reintroducing
+  `DiscardReason::SnapshotRotationAutoDiscard` +
+  selective-discard substrate) or confirms lazy as the
+  V3.x shape with consumer-policy-driven abandonment via
+  `discard(rid)` as the alternative.
+
+  **Trigger:** *V3.0 deployment telemetry surfaces fast-
+  snapshot-rotation friction; OR V3.x performance-policy
+  design rounds opens.*
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.4 R5 (lazy R5 preservation under lean shape), §5.6.5
+  F5+F6 / §5.6.6 P9 (segment 2h disposition substrate),
+  §5.6.7 P9 (V3.x reopening criteria);
+  `ReservationTTLActor` FOLLOWUPS entry above (Phase 0l
+  per-collection TTL config precedent).
+
+- **Optional inverse-index seam under `PendingTxActor`'s
+  (γ) lean state (Stage 1 PR 5 segment 2h perf trigger).**
+  Under the segment-2h (γ) shape, discard operations scan
+  `output_locks` for rid-matching entries — O(n) over the
+  count of locked outputs. At V3.0 wallet scale (per
+  `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.4 implementation note;
+  hundreds-to-low-thousands of locked outputs), the scan
+  cost is nanoseconds and the actor's mailbox processing
+  rate dominates by orders of magnitude. If V3.x telemetry
+  surfaces wallet sizes where the scan dominates handler
+  latency, V3.x adds a maintained-by-actor inverse index:
+
+  ```rust
+  reservation_to_outputs: HashMap<ReservationId, BTreeSet<OutputId>>
+  ```
+
+  **What V3.x lands.** The inverse index alongside the
+  existing `output_locks` collection. Mutations are
+  doubled: every `output_locks` insert/remove pairs with
+  a `reservation_to_outputs` insert/remove. The audit
+  obligation grows by the maintained-invariant property
+  (`output_locks.iter().all(|(oid, rid)|
+  reservation_to_outputs[rid].contains(oid))` and the
+  reverse).
+
+  **Why this is a perf shape, not an audit shape change.**
+  `output_locks` remains the single source of truth for
+  "which outputs are claimed by what reservation."
+  `reservation_to_outputs` is a maintained-side index for
+  scan-avoidance; correctness audits read against
+  `output_locks` only. The denormalization (which the
+  segment-2h (γ) shape rejected for the consumer_held +
+  in_flight collections) is acceptable here because it's
+  a perf optimization that doesn't change the safety
+  property and the maintained invariant is auditable in a
+  bounded scope.
+
+  **Reopening criteria (per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).**
+
+  - V3.0 telemetry surfaces wallet sizes where `output_locks`
+    scan latency dominates handler processing.
+  - The maintained-invariant audit obligation is named and
+    accepted as the re-evaluation compensating discipline.
+
+  **Re-evaluation shape.** A V3.x perf-optimization PR
+  scoped to the `PendingTxEngine` actor; design rounds
+  cover the maintained-invariant audit obligation and the
+  test substrate that enforces it (`output_locks_inverse_index_invariant_holds`
+  property test). The PR does not alter trait surfaces,
+  enum shapes, or external contracts.
+
+  **Trigger:** *V3.0 telemetry surfaces O(n) scan latency
+  as load-bearing.*
+  Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.6.2 ((γ) lean state shape; perf-seam disposition),
+  §5.6.7 (V3.x perf-trigger substrate).
+
 - **HW-wallet integration as a `Signer`-impl substitution
   (Stage 1 PR 5 R11 (b) substrate; V3.x).** PR 5's Round 2
   segment 2b reframe of
@@ -5070,13 +5353,44 @@ one place to confirm each item's relationship to the wallet stack.
   walking the four-pronged criteria is non-compliant with
   the post-F1 hardening.
 
+  **Segment 2h scope amendment (2026-05-26; F8 disposition
+  pin).** Under the (γ) lean state shape pinned in PR 5
+  segment 2h (§5.6.2), the `PendingTxActor` carries an
+  `in_flight: HashMap<ReservationId, InFlightSubmit>`
+  collection holding reservations awaiting daemon
+  resolution. Per PR 4 §5.4.8 #1's structural drop-on-close
+  rule, wallet restart during a non-empty `in_flight` drops
+  the in-memory state while the daemon-side tx remains
+  potentially live on-network — a re-sync-then-rebuild
+  flow may re-select the same outputs and produce a
+  `TerminalErrorKind::DoubleSpend` on the second submit
+  (the on-chain outputs are already spent by the original
+  in-flight tx that confirmed during the restart gap).
+  Segment 2h §5.4 R17 explicitly accepts this consequence
+  at V3.0; consumer-visible behavior is "submit appears to
+  fail with double-spend; re-refresh and rebuild yields
+  the post-confirmation balance." **This is the specific
+  surface the encrypted-persistence opt-in would close.**
+  The four-pronged reopening criteria above are unchanged;
+  the segment 2h amendment names restart-during-`in_flight`
+  as the specific class of (a) use case that, if surfaced
+  at production scale, satisfies the criterion-(a)
+  triggers. Per segment 2h §5.6.5 F8, the V3.0 disposition
+  is accepted explicitly, not by oversight; the surface is
+  load-bearing to the (γ) lean-state shape and the
+  reopening criteria.
+
   Cross-references:
   [`STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
   §5.4.8 #1 (post-F1 hardened drop-on-close pin), §5.4.8 #6
   (encrypted-cache-for-RPC-recovery; F7 hardened
   rejection), §5.4.9 F1 / F7 (review-pass disposition);
   [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
-  §5.4 R17 (post-F1-carryover hardened disposition).
+  §5.4 R17 (post-F1-carryover hardened disposition;
+  segment 2h F8 explicit V3.0 acceptance amendment),
+  §5.6.5 F8 (restart-during-`in_flight` disposition
+  substrate), §5.6.7 (V3.x FOLLOWUPS scope-grows-by
+  surface naming).
 
 - **Diagnostic-stream consumer-actor PR `diagnostic_consumer_discipline`
   CI lint (Stage 1 PR 4 Round 4 review pass F5 forward-

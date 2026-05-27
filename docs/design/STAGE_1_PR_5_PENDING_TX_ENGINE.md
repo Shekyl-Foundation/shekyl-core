@@ -1,18 +1,28 @@
 # Stage 1 PR 5 — `PendingTxEngine` extraction — design
 
 **Status.** **Round 1 closed (2026-05-13); Round 2 closed
-(2026-05-14); Round 3 closed (2026-05-26) — §7.X Phase 1
-commit decomposition appended: eight commits C0–C8 (with C2 /
-C4 / C5 sub-decomposed per `90-commits.mdc` bisection
-discipline) load-bearing-ordered, every Phase 0a–0k binding-
-form mapped to a specific commit, every §6 review-checklist
-item mapped to a specific commit's test deliverable, every
-existing pre-PR-5 substrate entry inventoried with its diff
-scope. The `feat/stage-1-pr5-pending-tx-engine` short-lived
-branch (per `06-branching.mdc` rule 2; ≤5 days, ≤10 commits)
-cuts off the post-Round-3 dev tip; the PR opens against `dev`
-after C8 lands locally with a passing CI run. — all seven
-Round 2 segments landed: 2a (audit-readiness),
+(2026-05-14), segment 2h reopen-and-close (2026-05-26) for
+actor-state-shape refinement; Round 3 closed (2026-05-26) —
+§7.X Phase 1 commit decomposition appended: eight commits
+C0–C8 (with C2 / C4 / C5 sub-decomposed per `90-commits.mdc`
+bisection discipline) load-bearing-ordered, every Phase
+0a–0l binding-form mapped to a specific commit, every §6
+review-checklist item mapped to a specific commit's test
+deliverable, every existing pre-PR-5 substrate entry
+inventoried with its diff scope. Segment 2h's §7.X delta
+applied per §5.6.8 (commit list and load-bearing ordering
+unchanged; within-commit content updated for the (γ) lean
+actor-state-shape, the `SubmitError` / `SubmitErrorKind`
+reshape into `TerminalErrorKind` + `AmbiguousErrorKind`,
+the `PendingTxDiagnostic::SubmitFailed` removal +
+`SubmitPendingResolution` addition, the
+`DiscardReason::SnapshotRotationAutoDiscard` removal under
+lazy R5, and the F1–F8 + P1–P9 dispositions). The
+`feat/stage-1-pr5-pending-tx-engine` short-lived branch
+(per `06-branching.mdc` rule 2; ≤5 days, ≤10 commits)
+cuts off the post-Round-3 dev tip; the PR opens against
+`dev` after C8 lands locally with a passing CI run. —
+all eight Round 2 segments landed: 2a (audit-readiness),
 2b (R11 signing-actor split reframe to (b); R14 reservation
 extensibility seam), 2c (closure-rule and lens-applicability
 refinements paired with R13 / R15 / R16 / R17 named with
@@ -36,10 +46,23 @@ true`; `shekyl-crypto-hash` is unconditional in production
 deps at line 28); §5.0.3 diagnostic-stream-doc
 generalization closed as (a) rename to
 `DIAGNOSTIC_STREAM.md`; §6 review checklist filled with all
-binding-check / test-substrate / call-site-sweep items).
-Round 3 (commit decomposition + Phase 1 commit list) closed
-2026-05-26 — see §7.X below for the eight-commit Phase 1
-deliverable.** This
+binding-check / test-substrate / call-site-sweep items), and
+2h (post-Round-3-readiness actor-state-shape refinement;
+(γ) lean three-collection shape replacing the segment-2f
+internal `ReservationState` enum; SubmitError /
+SubmitErrorKind reshape into TerminalErrorKind +
+AmbiguousErrorKind split; PendingTxDiagnostic::SubmitFailed
+removal + SubmitPendingResolution addition; lazy R5
+preservation with DiscardReason::SnapshotRotationAutoDiscard
+removal at V3.0 and V3.x eager-discard FOLLOWUPS reopening
+trigger; F1–F8 + P1–P9 dispositions; new Phase 0l
+ReservationTTLConfig binding-form pin; §5.0.3 seventh
+temporal- and distributional-projection contract pin;
+§5.6 holds the load-bearing substrate). Round 3 (commit
+decomposition + Phase 1 commit list) closed 2026-05-26 —
+see §7.X below for the eight-commit Phase 1 deliverable;
+§5.6.8 records the segment-2h within-commit delta against
+§7.X.** This
 document was opened as a seed immediately after Stage 1 PR 4's
 design substrate landed on `dev` (merge commit `6de8335d5`,
 PR #42). Round 1 closes here in one round — not deferred to
@@ -402,6 +425,135 @@ its own pre-implementation review pass; tracking is
 orthogonal. No PR 5 trait surface change; the hardening
 refines the §5.0.3 contract pin without restructuring.
 
+**Round 2 segment 2h (2026-05-26) — actor-state-shape
+refinement (post-Round-3-readiness review).** Round 3
+readiness review against the substrate landed through
+segment 2g surfaced eight findings (F1–F8) and nine probes
+(P1–P9). Three load-bearing classes clustered: (i)
+**substrate-representation cost** — segment 2f's R9 closure
+pinned an internal `ReservationState ∈ {Active,
+SubmitPendingDaemonAck, Resolved}` enum carrying
+representation that doesn't load-bear (F2's discard-during-pending-ack
+and F7's per-state-TTL surface as state-machine-row questions
+that dissolve under a leaner shape where the reservation's
+collection-location encodes its lifecycle); (ii)
+**submission-error reshape** — `PendingTxDiagnostic::SubmitFailed`
+has no surviving emission site under P4's collection-moves
+table, and unified `SubmitErrorKind` conflates terminal-vs-
+ambiguous lifecycle consequences in a single type that
+the collection-moves disposition makes legible only by
+variant-set pattern-matching (type-correctness regression);
+(iii) **lazy R5 vs eager R5 framing inconsistency** — P9
+read as eager-discard but segment-2e's R5 closure pinned
+lazy (stale reservations linger until consumer submits;
+staleness detected at submit-time field comparison; rich
+`SubmitError::SnapshotInvalidated` context). Segment 2h
+reopens R5 / R8 / R9 per the §7 strengthened closure rule
+and the
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+named-criteria reopening principle, and lands the **(γ)
+three-collection lean state shape** —
+`output_locks: HashMap<OutputId, ReservationId>` as single
+source of truth for output ownership; `consumer_held:
+HashMap<ReservationId, Instant>` for explicit consumer-held
+membership and TTL aging; `in_flight: HashMap<ReservationId,
+InFlightSubmit>` for explicit in-flight membership with
+snapshot-id, creation, and submission timestamps; **no
+`ReservationState` enum**. Lifecycle is encoded by
+collection membership: in `output_locks` only → never
+existed (gone); in `consumer_held` → consumer-held; in
+`in_flight` → actor-owned during daemon round-trip; in
+none → resolved (gone). The **SubmitError /
+SubmitErrorKind reshape** splits `SubmitErrorKind` into
+`TerminalErrorKind { DoubleSpend | FeeTooLow | Malformed }`
+and `AmbiguousErrorKind { DaemonTimeout | DaemonUnavailable }`
+(lifecycle distinction load-bearing at the type level);
+removes `PendingTxDiagnostic::SubmitFailed` (no surviving
+emission site under the P4 table); adds
+`PendingTxDiagnostic::SubmitPendingResolution { rid,
+kind: AmbiguousErrorKind }` for ambiguous-outcome
+emission; adds `SubmitError::DaemonRejectedTerminal`,
+`SubmitError::DaemonAmbiguous`,
+`SubmitError::ReservationNotFound`,
+`SubmitError::SubmitAlreadyPending`,
+`PendingTxError::DiscardBlockedPendingDaemonAck`,
+`PendingTxError::SubmitAlreadyPending`,
+`PendingTxError::ReservationNotFound`,
+`OutputSelectorError::ReturnedIndicesNotSubset`. **Lazy
+R5 preserved** per segment-2e's original disposition;
+snapshot rotation drives no automatic collection moves
+at V3.0; consumer learns at submit-time via
+`SubmitError::SnapshotInvalidated`;
+`DiscardReason::SnapshotRotationAutoDiscard` drops at V3.0
+with V3.x eager-discard FOLLOWUPS reopening trigger
+(reopening criteria: telemetry-anchored performance need
++ selective-discard substrate refinement to
+`HashMap<ReservationId, ConsumerHeldEntry { created_at,
+snapshot_id }>`). **Per-finding dispositions** (full
+substrate in §5.6.5): F1 Stage 1 / Stage 4
+staleness-detection-property asymmetry pinned in §5.0 /
+§5.0.1 / §5.0.2 prose (Stage 1 lock-based delivery is
+exact; Stage 4 mailbox-FIFO delivery is best-effort per
+the contract's "up to actor-local ledger view"
+qualification; R9 daemon-side authority is the
+consensus-correct ground); F2 ownership-boundary
+disposition (consumer-initiated `discard` on `in_flight`
+reservation → `PendingTxError::DiscardBlockedPendingDaemonAck`;
+symmetric for re-submit via
+`PendingTxError::SubmitAlreadyPending`); F3 §3.1
+`Signer::Error` / `FeeEstimatorError` /
+`OutputSelectorError` `Debug` / `Display` sensitive-material
+discipline pin; F4 caller-side `OutputSelector` subset
+re-verification + C5β binding test; F5 + F6 §5.0.3 seventh
+temporal- and distributional-projection contract pin
+(V3.0 ships field-projection only; temporal/distributional
+disciplines deferred to `DIAGNOSTIC_STREAM.md` V3.x); F7
+per-collection `ReservationTTLConfig { consumer_held,
+in_flight }` V3.0 surface admitting V3.x
+`ReservationTTLActor` per-collection aging policy (new
+Phase 0l); F8 explicit V3.0 acceptance of
+restart-during-`in_flight` consequence (V3.x
+encrypted-persistence opt-in closes per existing R17
+FOLLOWUPS scope). **Per-probe dispositions** (full
+substrate in §5.6.6): P1 `outstanding() -> usize`
+retained per §2.4 binding (no trait revision; §2.4
+ownership-prose amendment is implementation-note
+refinement only); P2
+`PendingTxError::{DiscardBlockedPendingDaemonAck,
+SubmitAlreadyPending, ReservationNotFound}` discriminated
+taxonomy; P3 unified `ReservationNotFound` for
+never-existed / already-resolved at the actor level
+(diagnostic stream is the consumer-side reconstruction
+surface for "was it ever there"); P4 collection-moves
+table replaces enum-state-transitions table; P5
+`InFlightSubmit { snapshot_id, created_at, submitted_at }`
+admits either V3.x TTL aging policy (age-from-creation or
+age-from-submission); P6 filter-then-select-then-subset-check
+ordering pinned in §5.0.1; P7 actor handler-atomicity
+(lock-claim + collection-insert + diagnostic-emit; no
+`.await` between steps) pinned in §5.0.1 for Stage 1 and
+Stage 4; P8 Stage 4 test-deliverable inheritance named in
+§5.0.1 so Stage 4 actor-migration PR design rounds
+inherit the obligation without re-derivation; P9 lazy R5
+preservation (eager V3.x FOLLOWUPS with selective-discard
+substrate trigger). **(c) FOLLOWUPS lean-shape rewrite**:
+V3.x `discard_requested: bool` field on `InFlightSubmit`
+reconciled at `SubmitCompleted` arrival; dual-emission
+sub-note for `Rejected* ∧ discard_requested` cases
+(audit/debug visibility design-rounds question);
+strategy-actor threat-model regression note (V3.x
+implementation MUST present the cancel-before-broadcast
+and cancel-after-broadcast cases identically at the
+consumer surface, OR the V3.x
+`SubmissionStrategyActor`'s timing-obscurity property
+is degraded). **Round 3 §7.X commit decomposition
+stands** (commit list and load-bearing ordering
+unchanged); within-commit content updated per §5.6.8 for
+C0 / C2α / C2β / C2γ / C3 / C4α / C4β / C5β / C7 / C8.
+The R1 disposition still holds; segment 2h is substrate
+refinement that finalizes the actor-internal state shape
+for design purposes ahead of Phase 1 implementation.
+
 Subsequent revisions land each design round inline (the
 precedent set by PR 3's
 [`STAGE_1_PR_3_KEY_ENGINE.md`](./STAGE_1_PR_3_KEY_ENGINE.md) and
@@ -645,6 +797,36 @@ check completes here.
   outside `build` / `submit` / `discard`. The trait shape
   enforces this by exposing exactly those three mutators (plus
   the read-only `outstanding`).
+- **Secret-locality discipline extends to delegate-trait error
+  projections (segment 2h F3 pin).** Per
+  [`36-secret-locality.mdc`](../../.cursor/rules/36-secret-locality.mdc),
+  Phase 0h `Signer::Error` and (by extension) `FeeEstimatorError`
+  / `OutputSelectorError` types carry `Debug + Display + Send +
+  Sync + 'static` bounds. The `Debug` / `Display` projections
+  routinely land in logs through standard tracing/log
+  infrastructure; an HW-wallet `Signer` impl whose `Error`
+  carries device-side attestation challenges, intermediate
+  signing scalars, partial-signature material, or other
+  Zeroize-required state would leak via the standard log
+  surface. The trait bounds cannot syntactically enforce
+  "no sensitive material in `Error` projections"; the
+  discipline pin is documentary, binding `Signer` / `FeeEstimator`
+  / `OutputSelector` impl authors and reviewers. **`Signer::Error`
+  and its `Debug` / `Display` projections MUST NOT carry
+  sensitive material** — spend-secret bytes, intermediate
+  signing scalars, partial-signature material, HW-wallet
+  device-side attestation challenges, or any intermediate
+  state classified as Zeroize-required by §3.1's secret-locality
+  taxonomy. Implementors structure their error types so
+  `Debug` projects only the discriminant plus non-sensitive
+  context; sensitive material returned by HW devices is
+  consumed via `Zeroizing<…>` during Error construction,
+  leaving the outward-facing Error free of secret material.
+  The discipline transitively covers `FeeEstimatorError` and
+  `OutputSelectorError` at reduced priority (these types
+  don't normally hold spend material but the discipline pin
+  is uniform across the secret-locality boundary). See §5.6.5
+  F3 for the segment-2h substrate.
 
 ### §3.2 Architectural-inheritance audit
 
@@ -727,36 +909,81 @@ this enumeration in Round 3.
 **Currently identified candidates (post-Round-1; finalized in
 segment 2g).**
 
-- **Phase 0a — `SubmitError` enum + `SubmitErrorKind` enum
-  in §2.4 spec (binding form pinned in segment 2f).** Both
-  `#[non_exhaustive]`. The `SnapshotInvalidated` variant is
-  the original Phase 0a content from the seed projection;
-  `DaemonRejected { kind: SubmitErrorKind }` is the segment-2f
-  R9 closure. Binding signature:
+- **Phase 0a — `SubmitError` enum + `TerminalErrorKind` /
+  `AmbiguousErrorKind` split enums + `PendingTxError`
+  discriminated variants + `OutputSelectorError` subset-violation
+  variant (binding form pinned in segment 2f; reshaped in
+  segment 2h under the (γ) lean state shape + P4 collection-moves
+  table + F2 / F4 / P2 / P3 dispositions; see §5.6.4 for the
+  reshape rationale).** All `#[non_exhaustive]`. Binding
+  signature:
 
   ```rust
+  #[non_exhaustive]
+  pub enum TerminalErrorKind {
+      DoubleSpend,
+      FeeTooLow,
+      Malformed,
+  }
+
+  #[non_exhaustive]
+  pub enum AmbiguousErrorKind {
+      DaemonTimeout,
+      DaemonUnavailable,
+  }
+
   #[non_exhaustive]
   pub enum SubmitError {
       SnapshotInvalidated {
           reservation_snapshot: SnapshotId,
           current_snapshot: SnapshotId,
       },
-      DaemonRejected { kind: SubmitErrorKind },
+      DaemonRejectedTerminal { kind: TerminalErrorKind },
+      DaemonAmbiguous {
+          kind: AmbiguousErrorKind,
+          reservation_id: ReservationId,
+      },
+      ReservationNotFound { reservation_id: ReservationId },
+      SubmitAlreadyPending { reservation_id: ReservationId },
   }
 
   #[non_exhaustive]
-  pub enum SubmitErrorKind {
-      DoubleSpend,
-      FeeTooLow,
-      Malformed,
-      DaemonTimeout,
-      DaemonUnavailable,
+  pub enum PendingTxError {
+      // ... build-side variants (BuildErrorKind family;
+      // unchanged from segment 2g) ...
+      DiscardBlockedPendingDaemonAck { reservation_id: ReservationId },
+      SubmitAlreadyPending { reservation_id: ReservationId },
+      ReservationNotFound { reservation_id: ReservationId },
+  }
+
+  #[non_exhaustive]
+  pub enum OutputSelectorError {
+      // ... existing variants ...
+      ReturnedIndicesNotSubset { offending_index: OutputIndex },
   }
   ```
 
   Lives in `shekyl-engine-core::engine::pending_tx` (or the
   module that hosts the `PendingTxEngine` trait surface;
   Phase 1 review pins the precise location).
+
+  **Type-correctness rationale (segment 2h).** The
+  `TerminalErrorKind` / `AmbiguousErrorKind` split makes the
+  lifecycle distinction (reservation gone vs. reservation
+  still in `in_flight` per the P4 collection-moves table)
+  load-bearing at the type level. Unified `SubmitErrorKind`
+  conflated the two; consumer code matching the unified enum
+  needed wildcard arms to handle lifecycle distinctions that
+  the type system already knows about. The split exposes the
+  distinction; consumers match on `SubmitError::DaemonRejectedTerminal`
+  vs. `SubmitError::DaemonAmbiguous` and the type system
+  enforces correct handling of each. The
+  `PendingTxError::{DiscardBlockedPendingDaemonAck,
+  SubmitAlreadyPending, ReservationNotFound}` taxonomy
+  similarly makes the consumer-error class explicit (P2
+  / P3 dispositions per §5.6.6). `OutputSelectorError::ReturnedIndicesNotSubset`
+  satisfies the F4 caller-side subset re-verification contract
+  (§5.6.5 F4).
 
 - **Phase 0b — `SnapshotId` opaque type + hash primitive
   (binding form pinned in segment 2g per R2's segment-2d
@@ -932,8 +1159,9 @@ segment 2g).**
   module per Phase 1 location review.
 
 - **Phase 0e — Reservation lifecycle prose in §2.4
-  (binding form pinned in segment 2g; incorporates R5 +
-  R9 segment-2f + R10 dissolution).** Pin the
+  (binding form pinned in segment 2g; reshaped in segment 2h
+  under the (γ) lean state shape — collection-moves replace
+  enum-state-transitions; see §5.6.3).** Pin the
   build/submit/discard atomicity contract and the
   snapshot-invalidation + daemon-rejection dispositions
   under §5.0:
@@ -941,51 +1169,95 @@ segment 2g).**
   - `submit`'s staleness check is a **field comparison in
     the actor's message handler** (Stage 4) or under the
     trait's `&self` mutation discipline (Stage 1); not a CAS
-    in the contract sense.
+    in the contract sense. Stage 1 lock-based delivery is
+    exact ("up to ledger truth"); Stage 4 mailbox-FIFO
+    delivery is best-effort ("up to actor-local ledger
+    view") per the segment-2h F1 staleness-detection
+    asymmetry pin (§5.6.5 F1); R9 daemon-side authority is
+    the consensus-correct ground.
   - On staleness mismatch, `submit` emits
     `PendingTxDiagnostic::SubmitSnapshotInvalidated` and
-    replies `SubmitError::SnapshotInvalidated`; the
-    reservation auto-releases on this failure (lazy
-    auto-discard policy per §5.4 R5); consumer rebuilds
-    against the new snapshot.
-  - **(segment-2f addition)** On daemon round-trip
-    completion with rejection, the per-error-class
-    disposition table per §5.4 R9 applies; the actor's
-    internal `ReservationState` machine
-    (`Active | SubmitPendingDaemonAck | Resolved`) drives
-    the transitions; Finding 2's daemon-side authority
-    disposition keeps timed-out / unavailable reservations
-    in `SubmitPendingDaemonAck` until consumer-explicit
-    `discard(id, ConsumerExplicit)` or R8 TTL safety-net
-    fires.
+    replies `SubmitError::SnapshotInvalidated`. **Lazy R5
+    disposition (segment-2h preservation):** the
+    reservation does **not** auto-release on staleness
+    mismatch; the consumer's `Reservation` value retains
+    its `consumer_held` slot in the actor's tracker; the
+    consumer is responsible for `discard(rid,
+    ConsumerExplicit)` after receiving the error.
+    Consumer's recourse: rebuild against the new snapshot
+    (the rebuild's `discard` releases the stale
+    reservation's `output_locks` cleanly). The R8 TTL
+    safety-net handles consumer abandonment.
+  - **(segment 2h reshape; replaces segment-2f addition)**
+    On daemon round-trip completion, the **collection-moves
+    table** per §5.4 R9 applies (§5.6.4 P4 table): for each
+    `TerminalErrorKind` variant — drop from `in_flight`,
+    release `output_locks` for the rid, emit `Discarded {
+    rid, DaemonRejectedTerminal::* }`, return
+    `Err(DaemonRejectedTerminal::*)`; for each
+    `AmbiguousErrorKind` variant — retain in `in_flight`,
+    retain `output_locks` for the rid (Finding-2 daemon-side
+    authority), emit `SubmitPendingResolution { rid, kind }`,
+    return `Err(DaemonAmbiguous { kind, rid })`. The actor
+    does **not** carry a `ReservationState` enum — the
+    reservation's `in_flight` / `consumer_held` /
+    (none/gone) membership encodes the lifecycle. F2
+    ownership-boundary: consumer-initiated `discard` on
+    a reservation in `in_flight` returns
+    `PendingTxError::DiscardBlockedPendingDaemonAck`;
+    R8's V3.x `ReservationTTLActor` per-collection TTL
+    safety-net fires on `in_flight[rid].submitted_at` (or
+    `created_at`, per V3.x policy) for abandoned
+    daemon-ambiguous reservations.
   - Concurrent `build` / `submit` / `discard` semantics are
     delivered by the actor's mailbox FIFO (Stage 4) or by
     `&self` interior mutability under
     `Mutex<ReservationTracker>` (Stage 1). Both satisfy
     the trait contract; the "messages process serially per
     actor instance" property is the actor-system invariant
-    per §5.4 R10's dissolution.
+    per §5.4 R10's dissolution. Per-handler atomicity (lock
+    operations + collection-insert + diagnostic-emit all
+    within a single handler invocation; no `.await` between
+    mutation steps) is the segment-2h P7 discipline pin.
 
 - **Phase 0f — `PendingTxDiagnostic` enum +
   constructor-bound `DiagnosticSink` parameter on
   `LocalPendingTx` (binding form pinned in segment 2g;
-  incorporates R14 extensibility pattern + segment-2f sink-
-  binding closure).** Parallel to PR 4's Phase 0e
-  diagnostic-stream seam. Binding signature pinned in
-  §5.0.2 (`PendingTxDiagnostic` variant set,
-  `DiscardReason` variant set including segment-2e
-  `TTLAutoDiscard`). Constructor-vs-per-method shape
-  **closed as constructor-bound** in segment 2f per
+  reshaped in segment 2h under the (γ) lean state shape +
+  P4 collection-moves table + lazy R5 preservation; see
+  §5.6.4 for the reshape rationale).** Parallel to PR 4's
+  Phase 0e diagnostic-stream seam. Binding signature pinned
+  in §5.0.2 (`PendingTxDiagnostic` variant set,
+  `DiscardReason` variant set). Constructor-vs-per-method
+  shape **closed as constructor-bound** in segment 2f per
   §5.0.2.1's five-point rationale (engine-identity coupling;
   Stage 4 actor wiring alignment; call-site cleanliness;
   runtime-swap surface preserved via sink-side indirection;
   no load-bearing reason for per-method override in
   production engines).
 
+  **Segment-2h variant-set updates.** `PendingTxDiagnostic::SubmitFailed`
+  REMOVED — no surviving emission site under the P4
+  collection-moves table; terminal errors emit via
+  `Discarded { rid, DaemonRejectedTerminal::* }`, ambiguous
+  errors emit via the new `SubmitPendingResolution { rid,
+  kind: AmbiguousErrorKind }`. `DiscardReason::SnapshotRotationAutoDiscard`
+  REMOVED — segment-2h pins lazy R5; snapshot rotation
+  drives no automatic collection moves at V3.0; consumer
+  learns at submit-time via `SubmitError::SnapshotInvalidated`;
+  V3.x eager-discard opt-in FOLLOWUPS (§5.6.7 P9 trigger)
+  reintroduces the variant alongside selective-discard
+  substrate. `DiscardReason::DaemonRejectedTerminal`
+  ADDED with `{ kind: TerminalErrorKind }` payload.
+  `PendingTxDiagnostic::SubmitPendingResolution { rid, kind:
+  AmbiguousErrorKind }` ADDED.
+
   Cross-cutting `DiagnosticSink` contracts (non-blocking
   emit, emission/return coherence, recursive trust boundary,
   restart-amnesia detection, producer panic-safety,
-  concurrent emit) bind to PR 5 verbatim per §5.0.3.
+  concurrent emit, and the segment-2h seventh
+  temporal- and distributional-projection contract per
+  §5.0.3 / §5.6.5 F5+F6) bind to PR 5 verbatim per §5.0.3.
 
 - **Phase 0g — `LedgerDiagnostic::SnapshotMerged`
   variant addition (binding form pinned in segment 2g).**
@@ -1157,17 +1429,61 @@ segment 2g).**
   Phase 0 deliverable; the actor's introduction is V3.x
   work.
 
-**Net Phase 0 change vs. seed projection (segment-2g final
+- **Phase 0l — `ReservationTTLConfig` V3.0 surface (binding
+  form pinned in segment 2h per F7 disposition; see §5.6.5
+  F7).** Per-collection TTL configuration. Both fields default
+  to `DEFAULT_RESERVATION_TTL`; the per-collection shape
+  admits V3.x `ReservationTTLActor` per-collection aging
+  policy without locking V3.x into uniform-TTL.
+  `#[non_exhaustive]`. Binding signature:
+
+  ```rust
+  #[non_exhaustive]
+  pub struct ReservationTTLConfig {
+      pub consumer_held: Duration,
+      pub in_flight: Duration,
+  }
+
+  impl Default for ReservationTTLConfig {
+      fn default() -> Self {
+          Self {
+              consumer_held: DEFAULT_RESERVATION_TTL,
+              in_flight: DEFAULT_RESERVATION_TTL,
+          }
+      }
+      // Note: DEFAULT_RESERVATION_TTL value pinned in Phase 1
+      // implementation; provisional 24h order-of-magnitude per
+      // segment-2e R8 wargaming substrate.
+  }
+  ```
+
+  Lives alongside `SubmitError` / `PendingTxError` in the
+  `PendingTxEngine` module. **V3.0 consumer.** Constructor
+  parameter on `LocalPendingTx::new(...)`; the engine's
+  `outstanding()` / TTL-cleanup background scan reads
+  `config.consumer_held` for `consumer_held[rid].created_at`
+  aging and `config.in_flight` for either
+  `in_flight[rid].created_at` or `in_flight[rid].submitted_at`
+  aging (V3.x policy via `ReservationTTLActor`; V3.0 uses a
+  uniform "age from creation" default for both collections,
+  matching the V3.0 ergonomic-default disposition). **V3.x
+  consumer.** `ReservationTTLActor` reads the same
+  `ReservationTTLConfig` and applies per-collection aging
+  policy (age-from-creation vs. age-from-submission) without
+  trait revision.
+
+**Net Phase 0 change vs. seed projection (segment-2h final
 summary).** One amendment removed (0c — load-bearing
 cross-trait synchronous query); two diagnostic-stream
-amendments added (0f, 0g — additive surface); four
+amendments added (0f, 0g — additive surface); five
 trait-/topology-seam amendments added (0h `Signer`, 0i
 `OutputSelector`, 0j `FeeEstimator`, 0k
-`SubmissionStrategyActor` topology slot). Surface complexity
-grows on the V3.0 trait-parameter side
-(`LocalPendingTx<S, O, F>`) but contracts on the cross-trait
-synchronous-coupling side (Phase 0c removed). The structural
-trade is exactly the
+`SubmissionStrategyActor` topology slot, 0l
+`ReservationTTLConfig`). Surface complexity grows on the V3.0
+trait-parameter side (`LocalPendingTx<S, O, F>`) and the
+constructor-parameter side (`ReservationTTLConfig`) but
+contracts on the cross-trait synchronous-coupling side
+(Phase 0c removed). The structural trade is exactly the
 [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
 continuous-discipline corollary: structural cleanup of
 load-bearing surfaces at small additive cost on per-engine
@@ -1220,34 +1536,85 @@ and identical across Stage 1 (`LocalPendingTx`) and Stage 4
 for `RefreshEngine`. Implementation strategy diverges between
 stages without trait revision:
 
+**Segment-2h (γ) lean state shape (see §5.6.2 for the
+substrate, §5.6.3 for the collection-moves discipline).** The
+actor / engine holds three collections and a snapshot; the
+reservation's lifecycle is encoded by collection membership,
+not by a `ReservationState` enum. Stage 1 and Stage 4 share
+the same internal shape:
+
 ```rust
+struct InFlightSubmit {
+    snapshot_id: SnapshotId,
+    created_at: Instant,    // preserved across consumer_held → in_flight
+    submitted_at: Instant,  // when submit moved the rid into in_flight
+    // V3.x: discard_requested: bool;  // see §5.6.7 (c) FOLLOWUPS entry
+}
+
+struct PendingTxState {
+    current_snapshot: SnapshotId,
+    output_locks: HashMap<OutputId, ReservationId>,
+    consumer_held: HashMap<ReservationId, Instant>,   // explicit
+                                                       // membership;
+                                                       // tracks creation
+    in_flight: HashMap<ReservationId, InFlightSubmit>,
+}
+
 // Stage 1: LocalPendingTx (in-process, &self, interior mutability)
-struct LocalPendingTx<S: Signer> {
-    inner: Mutex<ReservationTracker>,
+struct LocalPendingTx<S: Signer, O: OutputSelector, F: FeeEstimator> {
+    state: Mutex<PendingTxState>,
     sink: Arc<dyn DiagnosticSink>,
-    ledger: L,                 // for current_snapshot reads in Stage 1
-    signer: Arc<S>,            // §5.4 R11 (b): sole holder of spend
-                               // material; LocalPendingTx never holds
-                               // spend_secret directly
+    ttl: ReservationTTLConfig,  // Phase 0l per-collection TTL
+    ledger: L,                  // for current_snapshot reads at submit-time
+                                // (Stage 1 lock-based; exact per F1 pin)
+    signer: Arc<S>,             // §5.4 R11 (b): sole holder of spend
+                                // material; LocalPendingTx never holds
+                                // spend_secret directly
+    output_selector: Arc<O>,    // Phase 0i
+    fee_estimator: Arc<F>,      // Phase 0j
 }
 
 // Stage 4: PendingTxActor (push-driven from diagnostic stream)
 struct PendingTxActor {
-    current_snapshot: SnapshotId,         // updated from
+    state: PendingTxState,                // current_snapshot updated from
                                           // LedgerDiagnostic::SnapshotMerged
-    reservations: HashMap<ReservationId, Reservation>,
     sink: Arc<dyn DiagnosticSink>,        // emits PendingTxDiagnostic
+    ttl: ReservationTTLConfig,            // Phase 0l per-collection TTL
     signer: ActorRef<SigningActor>,       // §5.4 R11 (b): sole holder
                                           // of spend material; never
                                           // held by PendingTxActor
+    output_selector: Arc<dyn OutputSelector>,
+    fee_estimator: Arc<dyn FeeEstimator>,
     // No mutex: mailbox FIFO is the serialization point.
 }
 ```
 
-The `Mutex<ReservationTracker>` from §2.4 Round 3 is a Stage 1
-implementation detail — it satisfies the `&self` trait surface
-under in-process call-graph semantics. The Stage 4 actor doesn't
-need it because mailbox-FIFO is the serialization point.
+The `Mutex<PendingTxState>` is a Stage 1 implementation detail
+— it satisfies the `&self` trait surface under in-process
+call-graph semantics. The Stage 4 actor doesn't need it because
+mailbox-FIFO is the serialization point. **Handler-atomicity
+discipline (segment-2h P7 pin).** Every message-handler that
+mutates state must hold the lock (Stage 1) or run start-to-end
+within a single mailbox-handler invocation (Stage 4) across
+all of: lock claim/release on `output_locks` + collection
+insert/remove on `consumer_held` / `in_flight` + sink emit. No
+`.await` between mutation steps. Stage 1 satisfies this by
+holding the `Mutex<PendingTxState>` guard across the
+sequence; Stage 4 satisfies it by performing all mutations
+synchronously within the handler before yielding to the
+mailbox. **Staleness-detection asymmetry (segment-2h F1 pin).**
+Stage 1's lock-based `current_snapshot` read is exact ("up to
+ledger truth"); Stage 4's mailbox-FIFO `current_snapshot` read
+is best-effort ("up to actor-local ledger view") because
+`SnapshotMerged` and `submit` messages compete for FIFO
+ordering. R9 daemon-side authority is the consensus-correct
+ground in both cases. **Stage 4 test inheritance (segment-2h
+P8 pin).** The Stage 1 test list (concurrent-build
+serialization, etc.) is named in §6 review checklist; the
+Stage 4 actor-migration PR inherits the test obligation —
+the equivalent test under mailbox-FIFO serialization must
+land in the Stage 4 PR's review checklist without being
+re-derived from scratch.
 
 The `signer` field is the §5.4 R11 (b) signing-actor-split
 substrate (closed in segment 2b): spend material lives in a
@@ -1265,8 +1632,12 @@ Parallel to PR 4's `RefreshDiagnostic`, PR 5 defines its own
 event surface. The seam shape is identical; the events differ:
 
 ```rust
+// Segment-2h variant set (replaces segment-2g segment-2f baseline).
+// See §5.6.4 for the reshape substrate.
+
 #[non_exhaustive]
 pub enum PendingTxDiagnostic {
+    BuildAttempted { request_summary: BuildRequestSummary },
     BuildSucceeded {
         reservation_id: ReservationId,
         snapshot_id: SnapshotId,
@@ -1275,7 +1646,13 @@ pub enum PendingTxDiagnostic {
     BuildFailed { kind: BuildErrorKind },
     SubmitAttempted { reservation_id: ReservationId },
     SubmitSucceeded { reservation_id: ReservationId, tx_hash: TxHash },
-    SubmitFailed { reservation_id: ReservationId, kind: SubmitErrorKind },
+    // SubmitPendingResolution: ambiguous daemon outcome; reservation
+    // stays in in_flight; consumer learns at SubmitCompleted arrival
+    // or via R8 TTL safety-net (segment-2h F2 / P4 disposition).
+    SubmitPendingResolution {
+        reservation_id: ReservationId,
+        kind: AmbiguousErrorKind,
+    },
     SubmitSnapshotInvalidated {
         reservation_id: ReservationId,
         reservation_snapshot: SnapshotId,
@@ -1286,45 +1663,130 @@ pub enum PendingTxDiagnostic {
         reservation_id: ReservationId,
         age: Duration,
     },
+    // SubmitFailed REMOVED in segment 2h — no surviving emission site
+    // under the P4 collection-moves table (terminal errors emit via
+    // Discarded { DaemonRejectedTerminal { kind } }; ambiguous
+    // errors emit via SubmitPendingResolution). The lifecycle-class
+    // distinction is load-bearing on the emission side, parallel to
+    // the type-correctness motivation for splitting SubmitErrorKind
+    // on the error-return side.
 }
 
 #[non_exhaustive]
 pub enum DiscardReason {
     ConsumerExplicit,
-    SnapshotRotationAutoDiscard,   // R5 lazy-discard variant
-    DaemonRejectedTerminal,        // R9 disposition
+    DaemonRejectedTerminal { kind: TerminalErrorKind },  // R9 disposition
     TTLAutoDiscard,                // R8 segment-2e variant (V3.x emitter:
                                    // ReservationTTLActor; no V3.0 emitter)
+    // SnapshotRotationAutoDiscard REMOVED in segment 2h — lazy R5
+    // preservation per §5.6.5 F5+F6 / §5.6.6 P9. Snapshot rotation
+    // drives no automatic collection moves at V3.0; consumer learns
+    // at submit-time via SubmitError::SnapshotInvalidated. V3.x
+    // eager-discard opt-in (§5.6.7 P9 trigger) reintroduces the
+    // variant alongside selective-discard substrate; the V3.x
+    // emitter is the eager-discard handler keyed off SnapshotMerged.
 }
 
-// R9 segment-2f closure: SubmitError + SubmitErrorKind pinned.
-// Returned from `submit(reservation_id)` per the trait surface.
+// R9 segment-2h closure: SubmitError reshape + TerminalErrorKind /
+// AmbiguousErrorKind split. Returned from `submit(reservation_id)`
+// per the trait surface.
+
+#[non_exhaustive]
+pub enum TerminalErrorKind {
+    DoubleSpend,   // R9: terminal; outputs genuinely gone
+    FeeTooLow,     // R9: outputs released to pool; consumer rebuilds
+    Malformed,     // R9: outputs released; bug surfaces diagnostically
+}
+
+#[non_exhaustive]
+pub enum AmbiguousErrorKind {
+    DaemonTimeout,      // R9 Finding 2: ambiguous; reservation stays
+                        // in in_flight (daemon-side authority);
+                        // consumer-explicit discard blocked per F2
+                        // ownership-boundary; R8 TTL is the safety net
+    DaemonUnavailable,  // R9 Finding 2: ambiguous; same disposition
+                        // as DaemonTimeout
+}
 
 #[non_exhaustive]
 pub enum SubmitError {
-    // R5: pre-daemon staleness check failed; reservation
-    // auto-released; consumer rebuilds against the new snapshot.
+    // R5: pre-daemon staleness check failed (segment-2h lazy R5;
+    // reservation does NOT auto-release; consumer must call
+    // discard(rid, ConsumerExplicit) to release output_locks).
     SnapshotInvalidated {
         reservation_snapshot: SnapshotId,
         current_snapshot: SnapshotId,
     },
-    // R9: daemon round-trip completed with an error; `kind`
-    // discriminates the per-error-class disposition per
-    // §5.4 R9's state-transition table.
-    DaemonRejected { kind: SubmitErrorKind },
+    // R9: daemon round-trip completed with a terminal error; rid
+    // dropped from in_flight; output_locks released; consumer's
+    // recourse is to rebuild against the current snapshot.
+    DaemonRejectedTerminal { kind: TerminalErrorKind },
+    // R9: daemon round-trip completed with an ambiguous error; rid
+    // stays in in_flight; output_locks retained until consumer-
+    // explicit discard (blocked per F2 ownership-boundary, so the
+    // path is R8 TTL safety-net) or until daemon resolves.
+    DaemonAmbiguous {
+        kind: AmbiguousErrorKind,
+        reservation_id: ReservationId,
+    },
+    // P3: rid not in consumer_held ∧ not in in_flight at submit
+    // entry; never existed or already resolved.
+    ReservationNotFound { reservation_id: ReservationId },
+    // P2: rid found in in_flight at submit entry; second-submit
+    // attempt on a reservation whose first submit is daemon-
+    // pending.
+    SubmitAlreadyPending { reservation_id: ReservationId },
 }
 
+// PendingTxError: build-side + non-submit-side error taxonomy.
+// (Submit returns SubmitError; build / discard return
+// PendingTxError.)
+
 #[non_exhaustive]
-pub enum SubmitErrorKind {
-    DoubleSpend,         // R9: terminal; outputs genuinely gone
-    FeeTooLow,           // R9: outputs released to pool; consumer rebuilds
-    Malformed,           // R9: outputs released; bug surfaces diagnostically
-    DaemonTimeout,       // R9 Finding 2: ambiguous; reservation stays
-                         // in SubmitPendingDaemonAck (daemon-side
-                         // authority); consumer-explicit discard
-                         // resolves; R8 TTL is the safety net
-    DaemonUnavailable,   // R9 Finding 2: ambiguous; same disposition
-                         // as DaemonTimeout
+pub enum PendingTxError {
+    // ... build-side variants (BuildErrorKind family; unchanged from
+    // segment 2g) ...
+    // F2: consumer-initiated discard on a reservation in in_flight.
+    DiscardBlockedPendingDaemonAck { reservation_id: ReservationId },
+    // P2 mirror on the discard-side: rid in in_flight; discard
+    // blocked.
+    SubmitAlreadyPending { reservation_id: ReservationId },
+    // P3: rid not in consumer_held ∧ not in in_flight at discard
+    // entry; never existed or already resolved.
+    ReservationNotFound { reservation_id: ReservationId },
+}
+```
+
+**Concurrent-submit / discard-error handler shape (segment-2h
+P2 / P3 cleanup; the prior P2 sketch placed an `unreachable!`
+on `(false, true)`, which is the discard-success path, not
+unreachable).** The submit-error-discriminating switch covers
+three error cases, not four — the success path returns
+`Ok(...)` before the switch runs:
+
+```rust
+// inside fn submit handler — error-discriminating switch
+match (state.consumer_held.contains_key(&rid),
+       state.in_flight.contains_key(&rid)) {
+    (false, false) => SubmitError::ReservationNotFound { reservation_id: rid },
+    (false, true)  => SubmitError::SubmitAlreadyPending { reservation_id: rid },
+    (true,  true)  => unreachable!("invariant: rid is in at most one of \
+                                    consumer_held / in_flight"),
+    // (true, false) is the success path; consumer_held → in_flight
+    // move runs before this switch is reached.
+}
+
+// inside fn discard handler — error-discriminating switch
+match (state.consumer_held.contains_key(&rid),
+       state.in_flight.contains_key(&rid)) {
+    (false, false) => PendingTxError::ReservationNotFound { reservation_id: rid },
+    (false, true)  => PendingTxError::DiscardBlockedPendingDaemonAck {
+        reservation_id: rid,
+    },
+    (true,  true)  => unreachable!("invariant: rid is in at most one of \
+                                    consumer_held / in_flight"),
+    // (true, false) is the success path; consumer_held → (gone) +
+    // output_locks release runs before this switch is reached.
 }
 ```
 
@@ -1465,6 +1927,34 @@ bind here verbatim — they're general properties of any
   distinct emitters without first constraining ordering
   via a causal-context field. See PR 4 §5.4.8 #4 V3.x
   forward-template item 4 for the lint's full scope.
+- **Temporal- and distributional-projection discipline
+  (segment 2h F5+F6 pin).** Field projection per
+  PR 4 §5.4.8 #4 (recursive trust boundary) bounds *which
+  fields* cross-boundary consumers observe, but doesn't
+  bound *when events fire* or *what their long-run
+  frequency distribution is*. Both surfaces fingerprint the
+  producing wallet independently of any field elision:
+  stable submit-attempted-to-submit-succeeded latencies are
+  consumer-attributable broadcast-timing on the wallet side
+  (complementing the V3.x `SubmissionStrategyActor`'s on-
+  network jitter); long-run `DiscardReason` distributions
+  fingerprint wallet behavior (frequent `TTLAutoDiscard` ⇒
+  build-without-submit pattern possibly indicating multisig
+  coordination; frequent `DaemonRejectedTerminal {
+  DoubleSpend }` ⇒ decoy-resimulation pattern). **V3.0
+  disposition.** The diagnostic surface ships **field-
+  projection only** at V3.0; temporal smoothing (event
+  coalescing, bucketed emission, strategy-aligned emission
+  delays) and distributional smoothing (aggregated
+  `Discarded` counts over windows, suppressing per-event
+  emission for the noisy-distribution `DiscardReason`
+  variants) are out of scope for V3.0. The disposition is
+  named here so V3.0 reviewers do not mistake the omission
+  for an oversight; the F5+F6 reopening criteria are
+  documented in §5.6.5 F5+F6 and the V3.x
+  `DIAGNOSTIC_STREAM.md` introduction PR inherits the
+  temporal/distributional smoothing question as a design-
+  rounds item.
 
 **Generalization question (closed in Round 2 segment 2g
 as (a) — rename to `DIAGNOSTIC_STREAM.md`).** PR 4's
@@ -2109,24 +2599,66 @@ to Round 2 with the dispositions framed below.
   default carries forward as lazy auto-discard at next submit.
   Round 2 hygiene; possible §4 Phase 0e prose pin.
 - **R5 — Outstanding-reservations behavior on snapshot rotation
-  (dissolved as trait-surface question; survives as policy
-  question).** Under §5.0, this is `PendingTxActor`'s
-  `SnapshotMerged` event handler — a policy decision **local to
-  the actor**, not a trait-surface question. The three
-  sub-options ((a) eager auto-discard on snapshot rotation;
-  (b) lazy auto-discard at next submit per (1)'s
-  field-comparison; (c) explicit consumer-driven discard)
-  become implementation choices the actor makes; the trait
-  contract just specifies that `outstanding()` reflects whichever
-  policy is in effect.
+  (closed in Round 2 segment 2e as **lazy auto-discard**, with
+  consumer-explicit discard required to release `output_locks`;
+  reopen-and-close in Round 2 segment 2h preserves the lazy
+  disposition under the (γ) lean state shape — see §5.6.5 F5+F6
+  and §5.6.6 P9 for the preservation substrate).** Under
+  §5.0, this is the `SnapshotMerged` event handler — a policy
+  decision **local to the actor**, not a trait-surface
+  question. The three sub-options ((a) eager auto-discard on
+  snapshot rotation; (b) lazy auto-discard at next submit per
+  (1)'s field-comparison; (c) explicit consumer-driven
+  discard) become implementation choices the actor makes; the
+  trait contract just specifies that `outstanding()` reflects
+  whichever policy is in effect.
 
-  Round 2 disposes which policy ships in `LocalPendingTx`, **not
-  what the trait surface requires**. Working default is
-  lazy-discard (matches the field-comparison semantics);
-  eager-discard is a future optimization if leak-pressure
-  becomes measurable. R8's `ReservationTTLActor` provides the
-  composition path for explicit-discard policy without trait
-  revision.
+  **Segment 2h preservation (closes the segment-2h R5 reopen
+  for lazy-vs-eager).** The original segment-2e closure as
+  **lazy auto-discard** stands under the lean state shape:
+  staleness is detected at submit-time field comparison and
+  surfaced via `SubmitError::SnapshotInvalidated` (with rich
+  `reservation_snapshot` / `current_snapshot` context); the
+  consumer's `discard(rid, ConsumerExplicit)` releases the
+  reservation's `output_locks` after they receive the error;
+  R8 TTL is the safety-net for consumer abandonment. The
+  P9 mechanism rewrite under (γ) preserves lazy semantics:
+  the consumer-explicit discard's collection operations drop
+  the rid from `consumer_held` and release the matching
+  `output_locks` entries — no `ReservationState` field is
+  set; collection-membership is the lifecycle encoding.
+  `DiscardReason::SnapshotRotationAutoDiscard` is **removed**
+  from the V3.0 surface (no V3.0 emitter under lazy); V3.x
+  eager-discard opt-in (FOLLOWUPS §5.6.7 P9 trigger)
+  reintroduces the variant alongside the selective-discard
+  substrate (`ConsumerHeldEntry { created_at, snapshot_id }`
+  expansion).
+
+  **Lazy-vs-eager substrate (preserved from segment-2e wargaming).**
+  Eager auto-discard releases `output_locks` proactively
+  (faster availability for next build) but is hostile to
+  consumer UX under fast snapshot rotation — on a sync-rate
+  chain rotating snapshots every ~30s, a consumer who calls
+  `build` and takes 60s to confirm submit loses their
+  reservation mid-decision; their eventual submit returns
+  `SubmitError::ReservationNotFound` (less context-rich than
+  `SnapshotInvalidated`). Eager also requires the
+  `consumer_held` entry to carry `snapshot_id` so the actor
+  can filter "discard only entries built against prior
+  snapshots" — otherwise eager becomes sweeping (discard
+  everything on every `SnapshotMerged`, which is the
+  operationally-hostile extreme). The V3.0 `consumer_held:
+  HashMap<ReservationId, Instant>` shape doesn't admit
+  selective eager discard; the V3.x eager-discard opt-in
+  requires a substrate refinement to
+  `HashMap<ReservationId, ConsumerHeldEntry { created_at,
+  snapshot_id }>` per the FOLLOWUPS reopening criteria.
+  Lazy holds `output_locks` longer (R8 TTL safety-net) but
+  preserves consumer reservation lifetime across snapshot
+  rotations; consumer gets rich error context when they
+  eventually submit; cleanup-on-use semantics rather than
+  cleanup-on-event. **Lazy is the V3.0 disposition;** eager
+  V3.x opt-in is the named reopening clause.
 - **R6 — `outstanding()` semantics under snapshot pinning
   (Round 2 hygiene).** Does `outstanding()` count reservations
   against the current snapshot only, or across all snapshots
@@ -2139,7 +2671,9 @@ to Round 2 with the dispositions framed below.
 - **R8 — Reservation TTL / leak prevention (closed in Round 2
   segment 2e as `ReservationTTLActor` consumer-actor
   composition; V3.0 ships the diagnostic-stream seam complete;
-  V3.x lands the actor).** What happens to reservations that
+  V3.x lands the actor; refined in Round 2 segment 2h via
+  Phase 0l `ReservationTTLConfig` and the (γ) lean state shape
+  — see §5.6.5 F7).** What happens to reservations that
   are neither submitted nor discarded? Under shape (1),
   staleness detection at submit invalidates reservations at
   snapshot rotation, but rotation only happens when refresh
@@ -2186,31 +2720,42 @@ to Round 2 with the dispositions framed below.
     consumed by submit."
   - **`PendingTxDiagnostic::Discarded { reservation_id,
     reason }`** — remove `reservation_id` from the
-    age-tracking map regardless of `reason`. Covers
-    `ConsumerExplicit` (consumer called `discard`),
-    `SnapshotRotationAutoDiscard` (R5 lazy-discard at submit
-    time), `DaemonRejectedTerminal` (R9 terminal rejection
-    per segment-2f's per-error-class table), and
-    `TTLAutoDiscard` (the actor's own auto-discard fires;
-    self-cleanup). Transition: "terminal — reservation
+    age-tracking map regardless of `reason`. Under segment-2h
+    the surviving `DiscardReason` variants are
+    `ConsumerExplicit` (consumer called `discard`, including
+    the explicit-discard-after-`SnapshotInvalidated` path R5
+    requires under lazy semantics), `DaemonRejectedTerminal {
+    kind: TerminalErrorKind }` (R9 terminal rejection per
+    segment-2h's collection-moves table), and `TTLAutoDiscard`
+    (the actor's own auto-discard fires; self-cleanup).
+    `SnapshotRotationAutoDiscard` is removed under lazy R5;
+    no V3.0 emitter. Transition: "terminal — reservation
     released."
 
-  **What `SubmitFailed` does *not* close.** Per segment-2f
-  R9's two-stage submit flow, `SubmitFailed` is emitted on
-  daemon timeout / network errors where the reservation
-  goes to `SubmitPendingDaemonAck` and remains
-  outstanding (Finding 2 daemon-side authority). The TTL
-  actor **does not** remove the reservation from its
-  tracking map on `SubmitFailed`; the reservation is still
-  output-locking and still ages. The terminal cleanup
-  happens only on `SubmitSucceeded` or `Discarded` per the
-  contract above. Optional V3.x refinement: the actor may
-  subscribe to `SubmitAttempted` to apply a shorter TTL on
-  reservations that enter `SubmitPendingDaemonAck` (the
-  daemon-side ambiguity window has a different
-  policy-acceptable age than a never-attempted reservation);
-  this is a V3.x consumer-actor policy choice, not a V3.0
-  diagnostic-stream-surface requirement.
+  **What `SubmitPendingResolution` does *not* close (segment
+  2h reshape).** Per the segment-2h collection-moves table
+  (§5.6.4 P4), `SubmitPendingResolution { reservation_id,
+  kind: AmbiguousErrorKind }` is emitted on daemon timeout /
+  unavailable where the reservation stays in the actor's
+  `in_flight` collection (Finding 2 daemon-side authority).
+  The TTL actor **does not** remove the reservation from its
+  tracking map on `SubmitPendingResolution`; the reservation
+  is still output-locking and still ages. The terminal
+  cleanup happens only on `SubmitSucceeded` or `Discarded`
+  per the contract above. **Per-collection TTL pin
+  (segment-2h F7 disposition; closes the prior "Optional
+  V3.x refinement" with a binding V3.0 surface).** The
+  V3.0 surface is the Phase 0l
+  `ReservationTTLConfig { consumer_held: Duration, in_flight:
+  Duration }` constructor parameter on `LocalPendingTx`.
+  The two collections age on independent clocks; V3.x's
+  `ReservationTTLActor` reads the config and applies per-
+  collection aging policy without trait revision. Whether
+  `in_flight` aging is age-from-`InFlightSubmit::created_at`
+  or age-from-`InFlightSubmit::submitted_at` is a V3.x
+  consumer-actor policy choice; the `InFlightSubmit` struct
+  carries both fields per the segment-2h P5 disposition so
+  either policy is admissible without struct revision.
 
   **Memory-bound property.** With the full subscription
   contract above, the actor's age-tracking map is bounded
@@ -2239,13 +2784,21 @@ to Round 2 with the dispositions framed below.
      reservation is recorded in `ReservationTracker` /
      `reservations` HashMap and before the reply is sent. Phase
      1 call-site review (Round 3) confirms emission discipline.
-  2. **`PendingTxDiagnostic::Discarded { reservation_id,
-     reason: SnapshotRotationAutoDiscard }`** — emitted at
-     `submit`'s snapshot-mismatch path (R5's lazy-discard
-     semantics) when the field-comparison handler detects a
-     stale reservation. The reservation auto-releases on this
-     event; `submit` returns `SubmitError::SnapshotInvalidated`
-     to the consumer.
+  2. **`PendingTxDiagnostic::SubmitSnapshotInvalidated {
+     reservation_id, reservation_snapshot, current_snapshot }`**
+     — emitted at `submit`'s snapshot-mismatch path (R5's
+     lazy-discard semantics; segment-2h preservation) when
+     the field-comparison handler detects a stale reservation.
+     Under segment-2h lazy R5, the reservation does **not**
+     auto-release on this event; the consumer's explicit
+     `discard(rid, ConsumerExplicit)` after receiving
+     `SubmitError::SnapshotInvalidated` is what triggers the
+     `Discarded { ConsumerExplicit }` emission that the TTL
+     actor uses to drop the reservation from its tracking
+     map. (The prior segment-2e V3.0 deliverable shape that
+     emitted `Discarded { SnapshotRotationAutoDiscard }` at
+     this site is dropped under segment-2h; V3.x eager-
+     discard opt-in per §5.6.7 P9 reintroduces the variant.)
   3. **`PendingTxDiagnostic::ReservationOutstanding {
      reservation_id, age }` variant exists in the
      `#[non_exhaustive]` enum** but is **not emitted in V3.0**
@@ -2258,12 +2811,15 @@ to Round 2 with the dispositions framed below.
      discipline makes the emission-introduction additive at the
      consumer side.
   4. **`DiscardReason::TTLAutoDiscard` variant pin (segment 2e
-     addition).** The current `#[non_exhaustive] enum
-     DiscardReason` set (`ConsumerExplicit`,
-     `SnapshotRotationAutoDiscard`, `DaemonRejectedTerminal`)
-     does not name TTL-triggered discards. Segment 2e adds
-     `TTLAutoDiscard` so V3.x's `ReservationTTLActor` can
-     trigger `PendingTxActor` to emit `Discarded { reason:
+     addition; segment 2h preserves; the `DaemonRejectedTerminal`
+     variant grows a `{ kind: TerminalErrorKind }` payload per
+     §5.6.4).** The segment-2h `#[non_exhaustive] enum
+     DiscardReason` set is `ConsumerExplicit`,
+     `DaemonRejectedTerminal { kind: TerminalErrorKind }`, and
+     `TTLAutoDiscard`. The segment-2e `SnapshotRotationAutoDiscard`
+     variant is removed under lazy R5; V3.x eager-discard opt-in
+     reintroduces it. V3.x's `ReservationTTLActor` can trigger
+     `PendingTxActor` to emit `Discarded { reason:
      TTLAutoDiscard }` events without a V3.x `DiscardReason`
      enum revision. The variant exists pre-V3.0; no V3.0
      emitter; V3.x `ReservationTTLActor` is the first emitter.
@@ -2291,22 +2847,28 @@ to Round 2 with the dispositions framed below.
     drop-oldest-on-overflow with aggregate age-band counts
     preserves the warning function at scale.
 
-  **R5 ↔ R8 coherence (segment 2e verification).** R5's lazy
-  auto-discard at submit time (`SnapshotRotationAutoDiscard`)
-  is the **reactive** cleanup path — reservations against
-  rotated snapshots get cleaned up when the consumer tries to
-  use them. R8's `ReservationTTLActor` is the **proactive**
-  complement — reservations that *never get used at all*
-  (idle wallet; consumer crash; build-but-never-submit bug)
-  get cleaned up by age-based policy. The two are
-  architecturally distinct (R5 lives in `PendingTxActor`'s
-  `submit` handler; R8 lives in a separate consumer actor)
-  but use the same `DiscardReason`/`Discarded` event
-  infrastructure. R5 emits `SnapshotRotationAutoDiscard`; R8
-  emits (via `AutoDiscardMessage` round-trip to
-  `PendingTxActor`) `TTLAutoDiscard`. Downstream consumers
-  see a unified `Discarded` event stream with discriminated
-  reasons.
+  **R5 ↔ R8 coherence (segment 2e verification; segment 2h
+  refinement).** R5's lazy disposition at submit time
+  (`SubmitError::SnapshotInvalidated`) is the **diagnostic-
+  emission point**; the consumer's `discard(rid,
+  ConsumerExplicit)` after receiving the error is the
+  **reactive cleanup path** — reservations against rotated
+  snapshots get cleaned up when the consumer acknowledges
+  the staleness explicitly. R8's `ReservationTTLActor` is
+  the **proactive** complement — reservations that *never
+  get used at all* (idle wallet; consumer crash; build-but-
+  never-submit bug) get cleaned up by per-collection age-
+  based policy via the Phase 0l `ReservationTTLConfig`. The
+  two are architecturally distinct (R5 lives in
+  `LocalPendingTx::submit` / `PendingTxActor`'s submit
+  handler; R8 lives in a separate consumer actor) but use
+  the same `DiscardReason`/`Discarded` event infrastructure.
+  R5 emits `SubmitError::SnapshotInvalidated`; the consumer's
+  follow-up `discard` emits `Discarded { ConsumerExplicit }`;
+  R8 emits (via `AutoDiscardMessage` round-trip to
+  `PendingTxActor`) `Discarded { TTLAutoDiscard }`.
+  Downstream consumers see a unified `Discarded` event
+  stream with discriminated reasons.
 
   **Why architectural-integrity-now for V3.0 even though the
   actor lives in V3.x.** Per
@@ -2339,7 +2901,15 @@ to Round 2 with the dispositions framed below.
   (closed in Round 2 segment 2f as two-stage submit flow with
   intermediate `SubmitPendingDaemonAck` state; daemon-side
   authority disposition for ambiguous outcomes; per-error-class
-  state-transition table pinned).** R4 covers the
+  state-transition table pinned; reopen-and-close in Round 2
+  segment 2h refines the disposition under the (γ) lean state
+  shape — collection-moves table replaces the
+  `ReservationState` state-transition table; the
+  `TerminalErrorKind` / `AmbiguousErrorKind` split replaces
+  the unified `SubmitErrorKind`; `PendingTxDiagnostic::SubmitFailed`
+  is removed; `PendingTxDiagnostic::SubmitPendingResolution`
+  is added. See §5.6.3 collection-moves discipline, §5.6.4
+  reshape substrate, and §5.6.5 F1 / F2 dispositions.** R4 covers the
   staleness-fails case (snapshot-invalidated → auto-release →
   rebuild). It does **not** cover the staleness-passes-but-
   daemon-rejects case: `submit` consumed the reservation and the
@@ -2357,13 +2927,21 @@ to Round 2 with the dispositions framed below.
   intermediate state that **must** be explicit in the actor's
   internal state machine (not the trait surface).
 
-  **Three-state internal state machine (closed in segment 2f).**
+  **Three-state internal state machine (closed in segment 2f;
+  dissolved in segment 2h under the (γ) lean state shape).**
+  The segment-2f closure pinned an explicit internal enum:
 
   ```rust
-  // Internal to LocalPendingTx / PendingTxActor; NOT a trait
-  // surface property. The trait surface exposes outstanding()
-  // which counts reservations in {Active, SubmitPendingDaemonAck}
-  // (both reserve outputs).
+  // SEGMENT-2H NOTE: the enum below is the segment-2f closure
+  // shape, retained here for traceability. It is DISSOLVED by
+  // segment 2h's collection-membership encoding (§5.6.2): the
+  // reservation's location across `output_locks`,
+  // `consumer_held`, and `in_flight` encodes the lifecycle.
+  // No `ReservationState` enum exists in the V3.0 substrate.
+  // The variants below map onto collection states as: Active ↔
+  // {rid ∈ consumer_held}; SubmitPendingDaemonAck ↔
+  // {rid ∈ in_flight}; Resolved ↔ {rid ∉ consumer_held ∧ rid ∉
+  // in_flight}.
   enum ReservationState {
       Active,                    // build successful; submit not started
       SubmitPendingDaemonAck,    // submit started; awaiting daemon reply
@@ -2387,49 +2965,68 @@ to Round 2 with the dispositions framed below.
   `SubmitPendingDaemonAck` — `outstanding()`'s aggregate count
   is the load-bearing query.
 
-  **Per-error-class disposition (closed in segment 2f).** All
-  daemon responses map to a single trait-return + diagnostic-
-  event-sequence + internal state-transition tuple. Each
-  bullet below carries (1) **trait return**, (2) **diagnostic
-  event sequence**, (3) **internal state transition**.
+  **Per-error-class disposition (closed in segment 2f;
+  reshaped in segment 2h to collection-moves + `Terminal` /
+  `Ambiguous` split per §5.6.4 P4 table; see that section for
+  the binding form. The segment-2f text below is retained for
+  traceability and reads against the segment-2h collection-
+  membership encoding in place of the dissolved
+  `ReservationState` enum.).** All daemon responses map to a
+  single trait-return + diagnostic-event-sequence + internal
+  collection-move tuple. Each bullet below carries (1)
+  **trait return**, (2) **diagnostic event sequence**, (3)
+  **internal collection move** (segment-2h substitution for
+  the segment-2f "state transition" terminology).
 
   - **`Accepted`** —
     `Ok(SubmitSuccess { tx_hash })`;
     `SubmitAttempted` → `SubmitSucceeded`;
-    → `Resolved` (entry removed from tracker).
+    drop rid from `in_flight`; release matching
+    `output_locks` entries.
   - **`AlreadyInMempool`** —
     `Ok(SubmitSuccess { tx_hash })` (idempotent);
     `SubmitAttempted` → `SubmitSucceeded`;
-    → `Resolved` (entry removed from tracker).
+    drop rid from `in_flight`; release matching
+    `output_locks` entries.
   - **`DoubleSpend`** —
-    `Err(SubmitError::DaemonRejected { kind: DoubleSpend })`;
-    `SubmitAttempted` → `SubmitFailed{DoubleSpend}` →
-    `Discarded{DaemonRejectedTerminal}`;
-    → `Resolved` (outputs genuinely gone; output-state
-    subtlety below).
+    `Err(SubmitError::DaemonRejectedTerminal { kind:
+    TerminalErrorKind::DoubleSpend })`;
+    `SubmitAttempted` → `Discarded { kind:
+    TerminalErrorKind::DoubleSpend }`;
+    drop rid from `in_flight`; release matching
+    `output_locks` entries (output-state subtlety below).
   - **`FeeTooLow`** —
-    `Err(SubmitError::DaemonRejected { kind: FeeTooLow })`;
-    `SubmitAttempted` → `SubmitFailed{FeeTooLow}`;
-    → `Resolved` (outputs released to the available pool;
-    consumer rebuilds with higher fee).
+    `Err(SubmitError::DaemonRejectedTerminal { kind:
+    TerminalErrorKind::FeeTooLow })`;
+    `SubmitAttempted` → `Discarded { kind:
+    TerminalErrorKind::FeeTooLow }`;
+    drop rid from `in_flight`; release matching
+    `output_locks` entries (consumer rebuilds with higher
+    fee).
   - **`Malformed`** —
-    `Err(SubmitError::DaemonRejected { kind: Malformed })`;
-    `SubmitAttempted` → `SubmitFailed{Malformed}`
+    `Err(SubmitError::DaemonRejectedTerminal { kind:
+    TerminalErrorKind::Malformed })`;
+    `SubmitAttempted` → `Discarded { kind:
+    TerminalErrorKind::Malformed }`
     (+ producer-side `InternalInvariantViolation` if the
     malformation is wallet-attributable);
-    → `Resolved` (outputs released; bug surfaces
-    diagnostically; consumer should not auto-retry).
+    drop rid from `in_flight`; release matching
+    `output_locks` entries (bug surfaces diagnostically;
+    consumer should not auto-retry).
   - **`Timeout`** —
-    `Err(SubmitError::DaemonRejected { kind: DaemonTimeout })`;
-    `SubmitAttempted` → `SubmitFailed{DaemonTimeout}`;
-    **stays in `SubmitPendingDaemonAck`** (see Finding 2
-    below — daemon-side authority for ambiguous outcomes).
+    `Err(SubmitError::DaemonAmbiguous { kind:
+    AmbiguousErrorKind::DaemonTimeout, reservation_id })`;
+    `SubmitAttempted` → `SubmitPendingResolution { kind:
+    AmbiguousErrorKind::DaemonTimeout }`;
+    **rid stays in `in_flight`**; `output_locks` retained
+    (Finding 2 daemon-side authority).
   - **`Network error`** —
-    `Err(SubmitError::DaemonRejected { kind: DaemonUnavailable })`;
-    `SubmitAttempted` → `SubmitFailed{DaemonUnavailable}`;
-    **stays in `SubmitPendingDaemonAck`** (see Finding 2
-    below — same daemon-side authority disposition as
-    Timeout).
+    `Err(SubmitError::DaemonAmbiguous { kind:
+    AmbiguousErrorKind::DaemonUnavailable, reservation_id })`;
+    `SubmitAttempted` → `SubmitPendingResolution { kind:
+    AmbiguousErrorKind::DaemonUnavailable }`;
+    **rid stays in `in_flight`**; `output_locks` retained
+    (same daemon-side authority disposition as Timeout).
 
   **DoubleSpend output-state subtlety.** On `DoubleSpend`, the
   outputs are genuinely gone (spent on-chain in some other tx
@@ -2526,75 +3123,82 @@ to Round 2 with the dispositions framed below.
   daemon-side check we can't guarantee under
   adversarial-daemon framing.
 
-  **`SubmitError` + `SubmitErrorKind` enum pins (segment 2f
-  closure).** Pinned in §5.0.2; both are `#[non_exhaustive]`
-  for future-additive variants:
+  **`SubmitError` + `TerminalErrorKind` / `AmbiguousErrorKind`
+  enum pins (segment 2h reshape; replaces segment 2f's unified
+  `SubmitErrorKind`).** Pinned in §5.0.2; all
+  `#[non_exhaustive]` for future-additive variants. The split
+  makes the lifecycle-class distinction (terminal: rid dropped;
+  ambiguous: rid retained) load-bearing at the type level; see
+  §5.6.4 for the substrate. The full binding signature lives in
+  Phase 0a (§4) and §5.0.2; the schematic shape under R9 is:
 
   ```rust
   #[non_exhaustive]
-  pub enum SubmitError {
-      // R5: pre-daemon staleness check failed; reservation
-      // auto-released; consumer rebuilds against new snapshot.
-      SnapshotInvalidated {
-          reservation_snapshot: SnapshotId,
-          current_snapshot: SnapshotId,
-      },
-      // R9: daemon-round-trip completed with an error; kind
-      // discriminates the per-error-class disposition above.
-      DaemonRejected { kind: SubmitErrorKind },
-  }
+  pub enum TerminalErrorKind { DoubleSpend, FeeTooLow, Malformed }
 
   #[non_exhaustive]
-  pub enum SubmitErrorKind {
-      DoubleSpend,         // R9: terminal; outputs genuinely gone
-      FeeTooLow,           // R9: outputs released to pool
-      Malformed,           // R9: outputs released; bug surfaces
-      DaemonTimeout,       // R9 Finding 2: ambiguous; stays in
-                           // SubmitPendingDaemonAck
-      DaemonUnavailable,   // R9 Finding 2: ambiguous; stays in
-                           // SubmitPendingDaemonAck
+  pub enum AmbiguousErrorKind { DaemonTimeout, DaemonUnavailable }
+
+  #[non_exhaustive]
+  pub enum SubmitError {
+      SnapshotInvalidated { … },
+      DaemonRejectedTerminal { kind: TerminalErrorKind },
+      DaemonAmbiguous { kind: AmbiguousErrorKind, reservation_id: ReservationId },
+      ReservationNotFound { reservation_id: ReservationId },
+      SubmitAlreadyPending { reservation_id: ReservationId },
   }
   ```
 
-  **R5 ↔ R8 ↔ R9 coherence (segment 2f verification).** All
-  three residuals share the `DiscardReason`/`Discarded` event
-  infrastructure pinned in §5.0.2:
+  **R5 ↔ R8 ↔ R9 coherence (segment 2f verification; segment
+  2h refinement).** All three residuals share the
+  `DiscardReason`/`Discarded` event infrastructure pinned in
+  §5.0.2:
 
-  - **R5 (reactive cleanup-on-use)** — `submit`'s pre-daemon
-    staleness check fails → `Discarded { reason:
-    SnapshotRotationAutoDiscard }`. Wallet-internal authority
-    (the wallet sees the snapshot rotated; no daemon round-trip
-    needed).
+  - **R5 (lazy-discard diagnostic-emission)** — `submit`'s
+    pre-daemon staleness check fails → `SubmitSnapshotInvalidated`
+    diagnostic + `SubmitError::SnapshotInvalidated` return.
+    Consumer's follow-up `discard(rid, ConsumerExplicit)`
+    triggers `Discarded { reason: ConsumerExplicit }` and
+    releases the reservation's `output_locks`. Wallet-internal
+    authority (the wallet sees the snapshot rotated; no
+    daemon round-trip needed; explicit consumer step required
+    under lazy semantics per segment 2h §5.6.5 F5+F6 / §5.6.6
+    P9).
   - **R8 (proactive cleanup-on-age)** — V3.x
-    `ReservationTTLActor` observes per-reservation age →
-    sends `AutoDiscardMessage` → `PendingTxActor` emits
-    `Discarded { reason: TTLAutoDiscard }`. Wallet-internal
-    authority (the wallet sees age threshold exceeded). R8's
-    per-state TTL config covers Finding 2's safety net
-    (shorter TTL on `SubmitPendingDaemonAck`).
+    `ReservationTTLActor` observes per-collection age via the
+    Phase 0l `ReservationTTLConfig { consumer_held, in_flight }`
+    surface → sends `AutoDiscardMessage` → `PendingTxActor`
+    emits `Discarded { reason: TTLAutoDiscard }`. Wallet-
+    internal authority (the wallet sees age threshold
+    exceeded). R8's per-collection TTL config covers
+    Finding 2's safety net (independent age threshold on
+    `in_flight` vs `consumer_held` per segment 2h F7).
   - **R9 (daemon-authority cleanup-on-rejection)** — daemon
-    rejects definitively (`DoubleSpend`) → `Discarded { reason:
-    DaemonRejectedTerminal }`. Wallet defers to daemon
-    authority for terminal-rejection visibility (Finding 2
-    closure).
+    rejects definitively (terminal kinds) → `Discarded {
+    reason: DaemonRejectedTerminal { kind: TerminalErrorKind } }`.
+    Wallet defers to daemon authority for terminal-rejection
+    visibility. For ambiguous kinds, no `Discarded` emission
+    — `SubmitPendingResolution { rid, kind }` is emitted and
+    the rid stays in `in_flight` (Finding 2 closure).
 
   Downstream consumers see a unified `Discarded` event stream
-  with discriminated reasons covering all three closure paths.
+  with discriminated reasons covering R5's consumer-explicit
+  path, R8's age-driven path, and R9's terminal-rejection path.
 
-  **Why no new `PendingTxDiagnostic` variants needed in
-  segment 2f.** The existing variant set (`SubmitAttempted`,
-  `SubmitSucceeded`, `SubmitFailed{kind}`, `Discarded{reason}`)
-  is sufficient to observe the full R9 state machine. The
-  intermediate `SubmitPendingDaemonAck` state is observed via
-  the **absence** of a terminating event after
-  `SubmitAttempted` (per PR 4's emission/return-coherence
-  contract pinned in §5.0.3); consumers that need explicit
-  visibility implement their own per-reservation state
-  tracking. No `SubmitPending` variant is added because it
-  would duplicate `SubmitAttempted`'s semantics; no
-  `SubmitTimedOut` distinct from `SubmitFailed{DaemonTimeout}`
-  is needed because the `kind` discriminator already carries
-  the Finding-2 disposition signal.
+  **Why segment 2h adds `SubmitPendingResolution` (and
+  removes `SubmitFailed`).** The segment-2f variant set
+  conflated terminal and ambiguous lifecycles into a single
+  `SubmitFailed { kind }` event; segment 2h's split routes
+  terminal cases through `Discarded { DaemonRejectedTerminal
+  { kind } }` (since the rid is actually leaving the
+  tracker) and ambiguous cases through `SubmitPendingResolution
+  { rid, kind }` (since the rid stays in `in_flight`).
+  `SubmitFailed` is removed under segment 2h because the
+  routing leaves no surviving emission site; the lifecycle-
+  class distinction is now load-bearing on the emission side,
+  parallel to the type-correctness motivation for splitting
+  `SubmitErrorKind` on the error-return side. See §5.6.4 for
+  the substrate.
 
   **No new trait surface methods needed in segment 2f.**
   `discard(id, ConsumerExplicit)` is sufficient for consumer-
@@ -3223,7 +3827,10 @@ to Round 2 with the dispositions framed below.
   (named with disposition in Round 2 segment 2c; V3.0
   default drop-on-close; V3.x optional encrypted persistence
   consumer; refines the diagnostic-stream restart-amnesia
-  contract).** PR 4 §5.4.8 #1's restart-amnesia rule
+  contract; reopen-and-close in Round 2 segment 2h amends
+  the segment 2c F8 / restart-during-`in_flight` consequence
+  pin under the (γ) lean state shape — see §5.6.5 F8).** PR 4
+  §5.4.8 #1's restart-amnesia rule
   (in-memory only, drop on close) is a privacy default:
   applied to PR 5, `PendingTxDiagnostic` events do not
   persist; wallet crash mid-transaction loses reservation
@@ -3381,6 +3988,29 @@ to Round 2 with the dispositions framed below.
   carries no version target and is closed automatically if
   V3.0 deployments do not surface the criterion-(a) use
   case within the V3.0 + V3.1 window.
+
+  **Segment-2h F8 explicit-acceptance amendment.** Under the
+  segment-2h (γ) lean state shape, a wallet restart that
+  drops the actor's `in_flight` collection while a tx is
+  live on-network produces a consumer-observable double-
+  spend rejection on rebuild: the next refresh reconciles
+  the confirmed tx (the wallet's output state catches up
+  with chain state), but during the restart-to-refresh gap
+  a consumer rebuild may re-select the same outputs and
+  produce a `submit` whose daemon outcome is
+  `DaemonRejectedTerminal { kind: TerminalErrorKind::DoubleSpend }`.
+  The consequence is **explicitly accepted at V3.0** —
+  drop-on-close is structurally final per the R17 hardened
+  disposition above; the F8 surface is the named instance
+  of that finality. **Mitigation surface:** the R17 V3.x
+  conditional-reopening bookmark is the structural
+  mitigation. The four-pronged criteria for reopening (per
+  R17 above) do not change under F8 — F8 names a specific
+  consequence of the V3.0 disposition rather than a new
+  reopening trigger. The Phase 9 audit-readiness substrate
+  documents F8 explicitly so reviewers do not mistake the
+  surface for an oversight; see §5.6.5 F8 for the segment-2h
+  pin.
 
 ### §5.5 Round 1 disposition — shape (1), actor-mesh framing
 
@@ -3580,7 +4210,1293 @@ PR 4 Round 3 confirmation per §5.2.
 
 ---
 
-## §6 Review checklist (filled in Round 2 segment 2g)
+## §5.6 Round 2 segment 2h — actor-state-shape refinement (post-Round-3-readiness review)
+
+**Trigger.** Round 3 readiness review against the substrate
+landed through segment 2g surfaced eight findings (F1–F8)
+and nine probes (P1–P9) clustering into three load-bearing
+classes:
+
+1. **Substrate-representation cost.** Segment 2f's R9
+   closure pinned an explicit internal `ReservationState ∈
+   {Active, SubmitPendingDaemonAck, Resolved}` enum field
+   on the `Reservation` record held inside the actor's
+   `reservations: HashMap<ReservationId, Reservation>`
+   tracker. Round 3 readiness review surfaced that **the
+   state-enum is carrying representation that doesn't
+   load-bear** — the per-record lifecycle stage is encoded
+   redundantly in the enum field and in the actor's
+   collection membership. F2 (consumer-initiated `discard`
+   during `SubmitPendingDaemonAck`) and F7 (per-state TTL
+   configurability) surfaced as state-machine-row questions
+   that **dissolve under a leaner shape** where the
+   reservation's location encodes its lifecycle stage.
+2. **Submission-error reshape.** The R9 closure also pinned
+   a unified `SubmitErrorKind = DoubleSpend | FeeTooLow |
+   Malformed | DaemonTimeout | DaemonUnavailable` enum and a
+   `PendingTxDiagnostic::SubmitFailed { kind: SubmitErrorKind
+   }` diagnostic variant. P4's collection-moves table
+   surfaced that **`SubmitFailed` has no surviving emission
+   site** under the lean shape — terminal errors emit via
+   `Discarded { reason: DaemonRejectedTerminal::* }`,
+   ambiguous errors emit via a new `SubmitPendingResolution
+   { rid, kind: AmbiguousErrorKind }`. The unified
+   `SubmitErrorKind` also conflates **terminal-vs-ambiguous
+   lifecycle consequences** in a single type, which the
+   collection-moves disposition makes legible only by
+   pattern-matching on the variant set — a type-correctness
+   regression the split closes.
+3. **Lazy R5 vs. eager R5 framing inconsistency.** P9
+   surfaced that the segment-2g §5.0.2 prose around
+   snapshot-rotation cleanup reads as eager-discard
+   (`DiscardReason::SnapshotRotationAutoDiscard` variant
+   suggests an emission site at `LedgerDiagnostic::SnapshotMerged`
+   handling); segment-2e's R5 closure was explicitly
+   **lazy** (stale reservations linger until consumer
+   submits; staleness detection at submit-time field
+   comparison; rich `SubmitError::SnapshotInvalidated`
+   error context). The two readings disagree at substantive
+   consequence — eager releases output_locks proactively but
+   is hostile to consumer UX under fast snapshot rotation;
+   lazy preserves reservation lifetime across rotations and
+   delivers rich error context to the consumer. Lazy is the
+   load-bearing disposition; segment 2h pins it explicitly
+   and resolves the variant-without-emitter consequence.
+
+The three classes are entangled — F2's framing, F7's
+framing, P4's table, and the SnapshotRotationAutoDiscard
+disposition all depend on which state-shape the actor uses
+internally. Segment 2h closes the substrate refinement
+holistically per the §7 strengthened closure rule and the
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)
+named-criteria reopening principle — **new shapes
+surfacing in Round 3 readiness review reopen Round 2 rather
+than slipping past closure**.
+
+### §5.6.1 Sequencing — fold F1+F2+F7 into a single segment-2h reopen
+
+Two dispositions were evaluated:
+
+- **(A) Bundle into segment 2h.** F1's prose-tightening,
+  F2's state-machine-row gap, and F7's per-state-TTL
+  configurability surface together as a single segment-2h
+  scope. F3/F5/F6/F8 ride along as Phase-1-binding-pin
+  documentation discipline (no state-shape impact).
+  Probes P1–P9 land as implementation-discipline pins
+  inside §5.0 / §5.0.1 / §5.0.2 / §5.4 prose, with two
+  probes (P4 and P9) carrying state-shape consequences
+  that segment 2h's R5 / R8 / R9 reopens absorb.
+- **(B) Open Round 3 directly; surface findings as
+  Phase 1 review.** Lower upfront design cost; risk of
+  finding a structural F2-shaped gap mid-Phase-1 and
+  retreading. §7's strengthened closure rule reads
+  toward (A) for F2 specifically — it's a
+  state-transition the substrate doesn't cover, not
+  closure-time-known wargaming residual.
+
+**Disposition: (A).** F2's ownership-boundary framing
+becomes load-bearing in the right way (ownership, not
+state-machine bookkeeping); F7's per-state config collapses
+to per-collection config under the lean shape with the same
+V3.0-surface-for-V3.x-consumer discipline; shipping the
+state-machine framing in C0 knowing we'd refine it later
+is the cost-benefit-defer-to-later anti-pattern per
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc).
+The substrate refinement is the architectural-integrity-now
+disposition; segment 2h lands it ahead of C0 implementation.
+
+### §5.6.2 The (γ) three-collection lean state shape
+
+The actor's internal state under segment 2h is bounded by
+the three structures that load-bear for the safety
+properties the threat model requires. Two intermediate
+shapes were considered and rejected during segment 2h
+substrate review:
+
+- **(α) Minimum state with implicit consumer-held
+  membership.**
+
+  ```rust
+  struct PendingTxState {
+      current_snapshot: SnapshotId,
+      output_locks: HashMap<OutputId, ReservationId>,
+      created_at: HashMap<ReservationId, Instant>,   // TTL aging
+      in_flight: HashMap<ReservationId, InFlightSubmit>,
+  }
+  ```
+
+  Consumer-held membership is the set difference
+  `created_at.keys() − in_flight.keys()`. Implicit;
+  awkward to assert against.
+
+- **(β) Symmetric with per-collection metadata carrying
+  outputs.**
+
+  ```rust
+  struct ConsumerHeldEntry { outputs: BTreeSet<OutputId>, created_at: Instant }
+  struct InFlightSubmit    { outputs: BTreeSet<OutputId>, snapshot_id: SnapshotId, submitted_at: Instant }
+
+  struct PendingTxState {
+      current_snapshot: SnapshotId,
+      output_locks: HashMap<OutputId, ReservationId>,   // inverted index
+      consumer_held: HashMap<ReservationId, ConsumerHeldEntry>,
+      in_flight: HashMap<ReservationId, InFlightSubmit>,
+  }
+  ```
+
+  Type-level symmetry; constant-time reverse-lookup for
+  discard / terminal-resolution lock release. **Rejected
+  on audit-surface grounds.** The duplication —
+  `OutputId` lives in `output_locks` AND in
+  `consumer_held[rid].outputs` (or `in_flight[rid].outputs`)
+  — creates a runtime invariant ("the two views agree")
+  that every mutation site must preserve. A refactor that
+  updates one view but not the other produces lock-leak
+  (claims unowned by any reservation) or false safety
+  (metadata claims outputs the lock map doesn't enforce).
+  The "grep-able union" property is a test-assertion
+  convenience masquerading as audit value; the runtime
+  safety property is "an output is reserved iff some
+  active reservation claims it," which holds under any
+  shape where `output_locks` is single source of truth.
+
+- **(γ) (γ) — (α) with explicit consumer-held collection;
+  no denormalization. The segment-2h pin.**
+
+  ```rust
+  struct InFlightSubmit {
+      snapshot_id: SnapshotId,
+      created_at: Instant,    // preserved across the consumer_held → in_flight move
+      submitted_at: Instant,  // when submit moved the rid into in_flight
+      // V3.x: discard_requested: bool;  // see §5.6.7 (c) FOLLOWUPS entry
+  }
+
+  struct PendingTxState {
+      current_snapshot: SnapshotId,
+      output_locks: HashMap<OutputId, ReservationId>,
+      consumer_held: HashMap<ReservationId, Instant>,    // explicit membership; tracks creation
+      in_flight: HashMap<ReservationId, InFlightSubmit>,
+  }
+  ```
+
+**Why (γ).**
+
+- **Symmetry argument met without denormalization.**
+  Both per-reservation collections are
+  `HashMap<ReservationId, T>` with `T` carrying a
+  timestamp plus collection-specific extras. The
+  parallel structure is at the type level; no
+  duplicated state to keep in sync.
+- **`output_locks` remains single source of truth.**
+  The wallet-layer anti-double-spend invariant lives
+  on `output_locks`: "an output is reserved iff
+  `output_locks.contains_key(oid)`." No other view
+  contradicts this; no invariant maintenance discipline
+  required across two views.
+- **Membership is explicit.** Under (α) the
+  consumer-held set is computed; under (γ) the set is a
+  collection the actor reads directly. Discard handlers
+  can assert `consumer_held.contains_key(rid)` before
+  scanning `output_locks`; the scan is guaranteed to
+  find ≥ 1 entry rather than potentially-vacuous.
+- **Discard is O(n) scan over `output_locks`.** Same as
+  (α). At wallet scale (hundreds-to-low-thousands of
+  locked outputs), nanoseconds; the actor's mailbox
+  processing rate dominates by orders of magnitude.
+- **Audit-assertion shape.** "For each `(output_id,
+  reservation_id)` in `output_locks`, `reservation_id ∈
+  consumer_held.keys() ∪ in_flight.keys()`." Checkable
+  without state duplication; the assertion is the
+  invariant the audit verifies, not state to maintain.
+
+**Optional V3.x perf seam.** If wallet scale grows beyond
+the point where the O(n) scan dominates handler latency
+(unlikely under V3.0 wallet usage patterns; never observed
+across PR 1 / PR 2 / PR 4 implementations), the actor can
+add a maintained-by-actor inverse index `reservation_to_outputs:
+HashMap<ReservationId, BTreeSet<OutputId>>` as a perf
+optimization. The inverse index reintroduces (β)'s
+denormalization but with explicit framing: perf seam,
+audit verifies invariance against `output_locks`, single
+mutation discipline (every `output_locks` mutation pairs
+with a `reservation_to_outputs` mutation in the same
+handler-atomicity scope per §5.6.6 P7). V3.0 does not
+ship the inverse index; FOLLOWUPS entry per §5.6.7.
+
+### §5.6.3 Collection-moves discipline (replaces enum-state-transitions)
+
+The actor's state-mutating handlers under the (γ) shape:
+
+- **`build(request)`** —
+  1. Fetch raw candidate outputs from `LedgerEngine`.
+  2. **Filter** against `output_locks.keys()` (only the
+     actor sees `output_locks`; this is the
+     P6-mandated filter-then-select discipline).
+  3. Hand filtered candidates to `OutputSelector::select_outputs`.
+  4. **Verify subset.** The returned `SelectedOutputs`
+     indices MUST be in the filtered set passed to the
+     selector (P-F4 caller-side subset re-verification;
+     rejects with `OutputSelectorError::ReturnedIndicesNotSubset
+     { offending_index }` if violated).
+  5. Allocate a fresh `ReservationId`.
+  6. **Atomically (P7):** insert `(oid, rid)` into
+     `output_locks` for each selected output; insert
+     `(rid, now)` into `consumer_held`; emit
+     `BuildSucceeded { reservation_id, snapshot_id, ... }`;
+     return the `Reservation` value to the caller.
+
+- **`submit(reservation)`** — the consumer passes the
+  full `Reservation` value back (containing
+  `reservation_id`, `snapshot_id`, `outputs`,
+  `tx_bytes`, and `extensions`).
+  1. Match `(in_flight.contains_key(rid), consumer_held.contains_key(rid))`:
+     - `(true, _)` → return `PendingTxError::SubmitAlreadyPending
+       { reservation_id }`. The actor owns this reservation
+       (in-flight to the daemon); the consumer's re-submit
+       is a duplicate.
+     - `(false, false)` → return `PendingTxError::ReservationNotFound
+       { reservation_id }`. The reservation never existed
+       or was already resolved; gone is gone (P3).
+     - `(false, true)` → **success path; proceed.**
+  2. **Staleness check (lazy R5 disposition).** Compare
+     `reservation.snapshot_id` to `self.current_snapshot`.
+     Mismatch → emit `PendingTxDiagnostic::SubmitSnapshotInvalidated
+     { reservation_id, reservation_snapshot,
+     current_snapshot }` and return `SubmitError::SnapshotInvalidated
+     { reservation_snapshot, current_snapshot }`. **Do
+     not** drop the reservation from `consumer_held`;
+     consumer is responsible for `discard(rid)` after
+     receiving the error. (See §5.6.5 F1 for the Stage 1
+     vs. Stage 4 staleness-detection-property asymmetry
+     pin.)
+  3. **Move atomically (P7):**
+     - Remove `rid` from `consumer_held` (capturing the
+       `created_at` timestamp).
+     - Insert into `in_flight[rid] = InFlightSubmit {
+       snapshot_id: reservation.snapshot_id, created_at,
+       submitted_at: now }`.
+     - `output_locks` entries for `reservation.outputs`
+       remain claimed (the reservation is still locked;
+       only the lifecycle bucket changes).
+     - Emit `SubmitAttempted { reservation_id }`.
+  4. **Dispatch.** Hand `reservation.tx_bytes` to the
+     `Signer` for signing (Stage 1: synchronous call;
+     Stage 4: `signer: ActorRef<SigningActor>` message),
+     then to `DaemonEngine::submit_tx` (Stage 1: direct
+     call; Stage 4: through `SubmissionStrategyActor`
+     per §5.4 R15 topology slot).
+  5. **Reconcile** at daemon response per §5.6.4's P4
+     collection-moves table.
+
+- **`discard(reservation_id, reason)`** —
+  1. Match `(in_flight.contains_key(rid), consumer_held.contains_key(rid))`:
+     - `(true, _)` → return `PendingTxError::DiscardBlockedPendingDaemonAck
+       { reservation_id }`. **F2 ownership-boundary
+       disposition.** The actor owns the reservation
+       (in-flight to the daemon; daemon has authority
+       over its terminal state). The consumer's
+       resolution surface for `in_flight` reservations
+       is (i) wait for the daemon round-trip; (ii) the
+       R8 TTL safety-net (V3.x `ReservationTTLActor`
+       per §5.4 R8); (iii) restart and accept the F8
+       surface (see §5.6.5 F8).
+     - `(false, true)` → **success path.** Remove from
+       `consumer_held`. **Atomically (P7):** for each
+       `(oid, rid')` in `output_locks` where `rid' ==
+       rid`, remove the entry. Emit `Discarded {
+       reservation_id, reason }`.
+     - `(false, false)` → return `PendingTxError::ReservationNotFound
+       { reservation_id }`. Never existed or already
+       resolved (P3).
+
+- **`outstanding() -> usize`** — returns
+  `consumer_held.len() + in_flight.len()`. The
+  projection is count, not ID-enumeration; ID-enumeration
+  is recoverable from diagnostic-stream subscription
+  (`BuildSucceeded`, `Discarded`, `SubmitSucceeded`,
+  `Discarded` events carry `ReservationId`). Pins §2.4
+  binding (P1); §5.0.1 prose names the ID-via-diagnostic-stream
+  pattern.
+
+**Snapshot-rotation cascade (lazy R5; P9; segment-2e
+preservation).** When `LedgerDiagnostic::SnapshotMerged
+{ new, prior }` arrives in Stage 4 (Stage 1 reads
+synchronously from `LedgerEngine::snapshot()` per
+§5.4 R12 (a)):
+
+1. Update `current_snapshot ← new`.
+2. **No collection sweep.** Consumer-held entries
+   linger in `consumer_held`; their `output_locks`
+   entries remain claimed. The reservation is now
+   stale-against-current-snapshot but the wallet does
+   not proactively reclaim.
+3. **Staleness is detected at submit time** per the
+   `submit` flow above. The consumer's `Reservation`
+   value carries `snapshot_id`; the submit handler
+   compares against `self.current_snapshot`; mismatch
+   surfaces as `SubmitError::SnapshotInvalidated` with
+   rich `(reservation_snapshot, current_snapshot)`
+   context the consumer can act on (rebuild against
+   current snapshot or `discard`).
+4. **`R8` TTL is the cleanup safety-net** for
+   never-submitted stale reservations: aging fires on
+   `consumer_held[rid]` (creation timestamp); emits
+   `Discarded { reason: TTLAutoDiscard }`.
+
+In-flight reservations are **not** swept by snapshot
+rotation. The reservation is committed to the daemon
+round-trip; the daemon's authority resolves whether the
+tx survives the rotation (accept → on-chain; reject
+`DoubleSpend` → terminal class moves the reservation
+out of `in_flight` per the P4 table). The actor never
+unilaterally discards an in-flight reservation; the
+ownership boundary that motivates F2's disposition is
+the same boundary that protects in-flight reservations
+from automatic snapshot-rotation cleanup.
+
+**Eager-discard alternative (P9 rejected at V3.0;
+FOLLOWUPS V3.x trigger).** Eager-discard at SnapshotMerged
+handling — proactive release of `output_locks` for
+consumer-held stale reservations — was considered and
+rejected at V3.0. Eager has two costs lazy avoids: (i)
+hostile consumer UX under fast snapshot rotation (a
+build that takes 60s to confirm submits against a
+chain rotating every 30s loses its reservation
+mid-decision; `ReservationNotFound` is less context-rich
+than `SnapshotInvalidated`); (ii) selective discard
+requires the actor to know each consumer-held
+reservation's `snapshot_id`, which expands `consumer_held`'s
+metadata beyond the (γ) shape's `Instant`-only timestamp
+(`ConsumerHeldEntry { snapshot_id, created_at }`). The
+V3.x eager-discard opt-in FOLLOWUPS entry (§5.6.7
+P9 trigger) reintroduces the variant and substrate
+when a V3.x performance-policy design rounds settles it.
+
+### §5.6.4 SubmitError / SubmitErrorKind reshape
+
+Segment 2h reshapes the segment-2g binding-form pins
+under P4's collection-moves table.
+
+**Type-correctness motivation.** Under P4 the actor's
+reconciliation at daemon response is per-error-class:
+terminal errors release output_locks and drop in_flight
+(reservation gone); ambiguous errors retain output_locks
+and in_flight (reservation pending daemon resolution).
+The unified `SubmitErrorKind = DoubleSpend | FeeTooLow |
+Malformed | DaemonTimeout | DaemonUnavailable` conflates
+these two lifecycle classes in a single type; a consumer
+matching `SubmitErrorKind` to decide "is my reservation
+gone or pending?" must pattern-match on the variant set,
+losing the lifecycle-class distinction at the type level.
+Splitting `SubmitErrorKind` into `TerminalErrorKind` and
+`AmbiguousErrorKind` makes the lifecycle distinction
+load-bearing at the type system; consumer code matching
+`TerminalErrorKind` knows by type that the reservation
+is gone; consumer code matching `AmbiguousErrorKind`
+knows the reservation is still in flight.
+
+**Binding-form replacement (Phase 0a amendment).**
+
+```rust
+#[non_exhaustive]
+pub enum TerminalErrorKind {
+    DoubleSpend,
+    FeeTooLow,
+    Malformed,
+}
+
+#[non_exhaustive]
+pub enum AmbiguousErrorKind {
+    DaemonTimeout,
+    DaemonUnavailable,
+}
+
+#[non_exhaustive]
+pub enum SubmitError {
+    SnapshotInvalidated {
+        reservation_snapshot: SnapshotId,
+        current_snapshot: SnapshotId,
+    },
+    DaemonRejectedTerminal { kind: TerminalErrorKind },
+    DaemonAmbiguous { kind: AmbiguousErrorKind, reservation_id: ReservationId },
+    ReservationNotFound { reservation_id: ReservationId },
+    SubmitAlreadyPending { reservation_id: ReservationId },
+}
+
+#[non_exhaustive]
+pub enum PendingTxError {
+    // ... build-side variants (unchanged from segment 2g) ...
+    DiscardBlockedPendingDaemonAck { reservation_id: ReservationId },
+    SubmitAlreadyPending { reservation_id: ReservationId },
+    ReservationNotFound { reservation_id: ReservationId },
+}
+
+#[non_exhaustive]
+pub enum OutputSelectorError {
+    // ... existing variants ...
+    ReturnedIndicesNotSubset { offending_index: OutputIndex },
+}
+```
+
+**Diagnostic-stream replacement (Phase 0f amendment).**
+
+```rust
+#[non_exhaustive]
+pub enum PendingTxDiagnostic {
+    BuildAttempted { request_summary: BuildRequestSummary },
+    BuildSucceeded { reservation_id: ReservationId, snapshot_id: SnapshotId, outputs_count: u32 },
+    BuildFailed { kind: BuildErrorKind },
+    SubmitAttempted { reservation_id: ReservationId },
+    SubmitSucceeded { reservation_id: ReservationId, tx_hash: TxHash },
+    SubmitPendingResolution { reservation_id: ReservationId, kind: AmbiguousErrorKind },
+    SubmitSnapshotInvalidated {
+        reservation_id: ReservationId,
+        reservation_snapshot: SnapshotId,
+        current_snapshot: SnapshotId,
+    },
+    Discarded { reservation_id: ReservationId, reason: DiscardReason },
+    ReservationOutstanding { reservation_id: ReservationId, age: Duration },
+    // SubmitFailed REMOVED — no surviving emission site under the P4
+    // collection-moves table; terminal errors emit via Discarded with
+    // DaemonRejectedTerminal reason; ambiguous errors emit via
+    // SubmitPendingResolution. The lifecycle-class distinction is
+    // load-bearing on the emission side, parallel to the type-correctness
+    // motivation for splitting SubmitErrorKind on the error-return side.
+}
+
+#[non_exhaustive]
+pub enum DiscardReason {
+    ConsumerExplicit,
+    DaemonRejectedTerminal { kind: TerminalErrorKind },
+    TTLAutoDiscard,
+    // SnapshotRotationAutoDiscard REMOVED — segment-2h pins lazy R5;
+    // snapshot rotation drives no automatic collection moves at V3.0;
+    // consumer learns at submit-time via SubmitError::SnapshotInvalidated.
+    // V3.x eager-discard opt-in (FOLLOWUPS §5.6.7 P9 trigger) reintroduces
+    // the variant alongside selective-discard substrate.
+}
+```
+
+**P4 collection-moves table.** For each `SubmitErrorKind`
+the daemon returns at the round-trip completion:
+
+| Outcome | `in_flight[rid]` move | `output_locks` for rid | Diagnostic emission | Trait return |
+|---|---|---|---|---|
+| `Accepted` | drop | release | `SubmitSucceeded { rid, tx_hash }` | `Ok(tx_hash)` |
+| `TerminalErrorKind::DoubleSpend` | drop | release | `Discarded { rid, DaemonRejectedTerminal::DoubleSpend }` | `Err(DaemonRejectedTerminal::DoubleSpend)` |
+| `TerminalErrorKind::FeeTooLow` | drop | release | `Discarded { rid, DaemonRejectedTerminal::FeeTooLow }` | `Err(DaemonRejectedTerminal::FeeTooLow)` |
+| `TerminalErrorKind::Malformed` | drop | release | `Discarded { rid, DaemonRejectedTerminal::Malformed }` | `Err(DaemonRejectedTerminal::Malformed)` |
+| `AmbiguousErrorKind::DaemonTimeout` | retain | retain | `SubmitPendingResolution { rid, DaemonTimeout }` | `Err(DaemonAmbiguous { DaemonTimeout, rid })` |
+| `AmbiguousErrorKind::DaemonUnavailable` | retain | retain | `SubmitPendingResolution { rid, DaemonUnavailable }` | `Err(DaemonAmbiguous { DaemonUnavailable, rid })` |
+
+The ambiguous cases preserve in-flight ownership per the
+F2 ownership-boundary disposition; the terminal cases
+release the locks because the daemon's authority has
+resolved the reservation's lifecycle. The consumer
+distinguishes the two classes by matching on `SubmitError::DaemonRejectedTerminal`
+vs. `SubmitError::DaemonAmbiguous`; pattern matching
+reaches the variant set without losing lifecycle context.
+
+### §5.6.5 Per-finding dispositions
+
+**F1 — Stage 1 / Stage 4 staleness-detection asymmetry
+pin (prose tightening; §5.0 / §5.0.1 / §5.0.2).** Segment
+2g's framing ("submit-time staleness is detected by field
+comparison in the message handler; not a CAS in the
+contract sense") is correct on the no-CAS-needed point
+but overstates what mailbox-FIFO delivers under Stage 4.
+The trait contract is "submit-time staleness is detected
+up to actor-local ledger view"; the property the trait
+**actually delivers** differs between stages:
+
+- **Stage 1 (`LocalPendingTx`).** `Engine::submit_pending_tx`
+  reads `self.ledger.snapshot()` synchronously at the
+  orchestration-layer wrapper before calling
+  `self.pending.submit(&snapshot, reservation)`. Submit-time
+  staleness detection is **exact** because the snapshot
+  is sourced from the same `&mut Engine`-locked
+  `LedgerEngine` at the moment `submit` runs. The
+  "field comparison" framing is sound under Stage 1 by
+  virtue of lock-based serialization.
+
+- **Stage 4 (`PendingTxActor`).** `current_snapshot` is
+  push-driven from `LedgerDiagnostic::SnapshotMerged`
+  events that compete with `Submit` messages in the
+  same mailbox FIFO. If `Submit(reservation)` arrives
+  ahead of `SnapshotMerged { new, prior }` in the
+  mailbox, the field comparison reads the stale
+  `current_snapshot` (which still equals the
+  reservation's `snapshot_id`), the staleness check
+  passes, and the stale tx ships to the daemon. The
+  daemon's authority resolves: accept → outputs unspent
+  on-chain; reject `DoubleSpend` → outputs spent. **No
+  consensus violation; submit-time staleness detection
+  is best-effort under actor mailbox ordering, not
+  exact.** R9 daemon-side authority is the
+  consensus-correct ground.
+
+The trait surface invariance pin per §5.0.1 is unchanged
+— the method signature is invariant Stage 1 ↔ Stage 4;
+the staleness-detection property delivered by the
+synchronous trait surface differs between stages but
+**both stages satisfy the trait contract** ("up to
+actor-local ledger view"). Stage 1 delivers the stronger
+"up to ledger truth" property by virtue of synchronous
+access. The pin closes the prose ambiguity without
+reshaping the contract.
+
+**F2 — ownership-boundary disposition (state-machine
+gap closure; segment-2f R9 table reshape).** The
+state-machine-row framing of segment-2f's R9 per-error-class
+table didn't cover consumer-initiated transitions on
+in-flight reservations. Under the lean shape, the
+disposition is structurally cleaner — the actor owns
+the reservation while it's in `in_flight`; the consumer
+transferred ownership on `submit`; the only way out is
+daemon resolution or TTL safety-net. The disposition
+table reshape (§5.6.3 `discard` flow; §5.6.4 P4 table)
+returns `PendingTxError::DiscardBlockedPendingDaemonAck
+{ reservation_id }` for the F2 case and the symmetric
+`PendingTxError::SubmitAlreadyPending { reservation_id
+}` for the re-submit-during-in-flight case.
+
+The consumer's resolution surface for in-flight
+reservations is enumerated: (i) wait for the daemon
+round-trip; (ii) the R8 TTL safety-net (V3.x
+`ReservationTTLActor` per §5.4 R8, configured with
+`in_flight` per-collection TTL per F7); (iii) restart
+and accept the F8 surface.
+
+**(c) ergonomic alternative considered; FOLLOWUPS V3.x
+entry.** Two non-disposition shapes were enumerated:
+(b) queue cancel-after-complete (consensus-dangerous —
+consumer thinks cancelled, tx live on network, wallet
+treats outputs as released, next build may re-spend);
+(c) `discard_requested: bool` flag on `InFlightSubmit`,
+reconciled at `SubmitCompleted` arrival. (c) is
+consensus-honest about the surface ("discard during
+daemon round-trip is a request, not a guarantee;
+daemon authority resolves") but adds state-machine
+complexity; V3.0 ships (a) with (c) as the FOLLOWUPS
+V3.x ergonomic refinement (§5.6.7 (c) entry).
+
+**F3 — `Signer::Error` / `FeeEstimatorError` /
+`OutputSelectorError` formatter-trait discipline pin
+(§3.1 documentation).** Phase 0h pins `type Error:
+Debug + Display + Send + Sync + 'static`; Debug/Display
+outputs routinely land in logs through standard
+tracing/log infrastructure. An HW-wallet `Signer` impl
+whose `Error` carries device-side attestation challenges,
+intermediate signing state, or partial-signature
+material leaks via standard log infrastructure. The
+trait bounds can't syntactically enforce "no sensitive
+material in Error projections"; a §3.1 documentation
+pin names the discipline:
+
+> **`Signer::Error` and its `Debug` / `Display`
+> projections MUST NOT carry sensitive material** —
+> spend-secret bytes, intermediate signing scalars,
+> partial-signature material, HW-wallet device-side
+> attestation challenges, or any intermediate state
+> that downstream review would classify as
+> Zeroize-required. Implementors structure their
+> error types so `Debug` projects only the discriminant
+> plus non-sensitive context; sensitive material
+> returned by HW devices is wiped from the Error
+> structure (via `Zeroizing<…>` wrapping that is then
+> consumed during Error construction, leaving the
+> outward-facing Error free of secret material).
+
+The discipline transitively covers `FeeEstimatorError`
+and `OutputSelectorError` at reduced priority (these
+types don't normally hold spend material but the
+discipline pin is uniform across the secret-locality
+boundary).
+
+**F4 — `OutputSelector` subset-verification caller-side
+discipline (P-F4 binding test; C5β body amendment).**
+Phase 0i's `fn select_outputs(&self, candidates:
+&[OutputCandidate], target: Amount) -> Result<SelectedOutputs,
+SelectionError>` has no syntactic constraint that
+`SelectedOutputs ⊆ candidates`. A bug or malicious
+`OutputSelector` impl returning outputs not in
+`candidates` either fails downstream at tx construction
+or silently corrupts (depending on what downstream
+verifies).
+
+**Caller-side discipline (lands in `LocalPendingTx::build`
+body; C5β scope amendment).** Post-`select_outputs` call,
+verify each returned index against the filtered
+candidate set; reject with `OutputSelectorError::ReturnedIndicesNotSubset
+{ offending_index }` if violated. The check is in the
+caller's body, not the trait surface — the trait can't
+syntactically enforce subset, but the caller's
+verification is structural. C5β's test deliverable
+inventory grows by `wallet_greedy_selector_returns_subset`
+(regression for the default impl) and
+`faulty_selector_returns_non_subset_rejected` (using a
+`FaultyOutputSelector` test impl that returns an index
+outside the candidate set).
+
+**F5 + F6 — temporal- and distributional-projection
+disciplines named in §5.0.3 (V3.x deferred).** The
+recursive-trust-boundary contract per §5.0.3 (and PR 4
+§5.4.8 #4) addresses **field-level projection**: what
+each event reveals about wallet-internal state. It
+doesn't address:
+
+- **Temporal projection (F5).** `SubmitAttempted →
+  SubmitSucceeded` firing at a stable wallet-internal
+  delay before the daemon-side network broadcast is a
+  wallet-attribution surface independent of any field
+  elision. R15's `SubmissionStrategyActor` slot
+  mitigates on-network timing (jitter, batched
+  submission, circuit rotation) but not on-stream
+  timing for cross-trust-boundary diagnostic consumers
+  that observe the emission delay between
+  `SubmitAttempted` and `SubmitSucceeded`.
+
+- **Distributional projection (F6).** Distinct from F5
+  but same category. Over wallet lifetime, the
+  distribution of the `DiscardReason` variants
+  fingerprints wallet behavior even with
+  `reservation_id` elided (frequent `TTLAutoDiscard` =
+  build-without-submit patterns possibly indicating
+  multisig coordination; frequent `DaemonRejectedTerminal::DoubleSpend`
+  = aggressive re-quote workflows; etc.).
+
+**§5.0.3 amendment.** The contract list grows by a
+seventh discipline:
+
+> **Temporal and distributional projection
+> (§5.0.3 amendment).** Field-level projection
+> (§5.0.3 recursive-trust-boundary) addresses what
+> each event reveals; **temporal-level projection**
+> addresses what the timing of events between actors
+> reveals; **distributional-level projection** addresses
+> what the long-running shape of the event stream
+> reveals. Cross-trust-boundary consumers MUST apply
+> all three disciplines. **V3.0 ships field-projection
+> only.** The V3.x consumer-actor PRs (the first PR
+> introducing the first cross-trust-boundary
+> diagnostic consumer) land the temporal- and
+> distributional-projection disciplines as part of
+> the consumer-actor's design rounds, settling the
+> specific patterns (event coalescing, bucketed
+> emission, strategy-aligned emission delay,
+> variant-distribution rate-limiting, distributional-noise-injection)
+> against the threat model of the specific consumer.
+> `DIAGNOSTIC_STREAM.md` (V3.x; rename-from-`REFRESH_DIAGNOSTIC_STREAM.md`
+> closed in segment 2g (a)) carries the patterns'
+> spec content.
+
+The §5.0.3 prose grows by a single new bullet under
+the existing six-bullet contract list; FOLLOWUPS for
+`DIAGNOSTIC_STREAM.md` is amended to include the
+temporal/distributional discipline as scope (§5.6.7).
+
+**F7 — per-collection `ReservationTTLConfig` V3.0
+surface (Phase 0l addition; segment-2e R8 amendment).**
+Under the lean shape, the two collections age on
+distinct clocks: `consumer_held` ages from creation
+timestamp (consumer-side decision delay; rebuilding
+recommended after TTL); `in_flight` ages from
+submission timestamp (daemon-side ambiguity; R8's V3.x
+`ReservationTTLActor` is the safety-net consumer per
+§5.4 R8). The V3.0 surface admits per-collection TTL
+configuration; the V3.x `ReservationTTLActor` consumes
+the per-collection config without requiring a V3.0
+surface revision.
+
+**New Phase 0l binding form.**
+
+```rust
+#[non_exhaustive]
+pub struct ReservationTTLConfig {
+    pub consumer_held: Duration,
+    pub in_flight: Duration,
+}
+
+impl Default for ReservationTTLConfig {
+    fn default() -> Self {
+        Self {
+            consumer_held: DEFAULT_RESERVATION_TTL,
+            in_flight: DEFAULT_RESERVATION_TTL,
+        }
+    }
+}
+```
+
+V3.0 carries no emitter (no V3.0 component ages
+reservations against the config; the type is the V3.0
+surface the V3.x `ReservationTTLActor` consumes).
+V3.0 default is uniform across collections; V3.x
+admits any per-collection aging policy without V3.0
+surface revision. **Architectural-integrity-now
+disposition:** if V3.0 ships `pub struct ReservationTTLConfig(Duration)`
+(collapsed), V3.x inherits a uniform-TTL constraint
+that V3.x's threat-model analysis is likely to relax,
+requiring a V3.0-surface revision at V3.x landing
+time. Per-collection surface from the start forecloses
+the revision.
+
+**F8 — restart-during-`in_flight` consequence
+explicit V3.0 acceptance pin (§5.4 R17 prose
+tightening).** Per PR 4 §5.4.8 #1 carryover (already
+pinned in §5.4 R17), V3.0 drops in-memory reservation
+state on close. A reservation in `in_flight` at
+restart-time is gone from the tracker; the daemon-broadcast
+tx may be live on the network. F8 makes the explicit
+consequence load-bearing:
+
+> **Restart-during-`in_flight` consequence (V3.0
+> acceptance).** A reservation in `in_flight` at
+> restart-time is gone from the tracker. Next-refresh
+> reconciles the on-chain state if the daemon
+> confirmed the tx before restart; during the
+> reconciliation gap, a consumer rebuild may
+> re-select the same outputs and produce a daemon
+> `DoubleSpend` rejection on the rebuild's submit.
+> **V3.0 accepts this surface explicitly** — the
+> rebuild's `DoubleSpend` is consensus-correct (the
+> outputs *are* spent on-chain by the prior tx); the
+> consumer rebuilds against the post-reconciliation
+> snapshot. **V3.x R17 encrypted-persistence opt-in
+> closes the gap** for institutional / long-running /
+> multi-day workflows that cannot tolerate the
+> rebuild rejection; reopening criteria per §5.4 R17
+> hardened disposition (PR 4 Round 4 review pass F1
+> carryover).
+
+### §5.6.6 Per-probe dispositions
+
+**P1 — `outstanding() -> usize` retained per §2.4
+binding.** V3_ENGINE_TRAIT_BOUNDARIES.md §2.4
+binds the projection as count
+(`fn outstanding(&self) -> usize`); segment 2h
+preserves the binding without surface revision.
+ID-enumeration semantics are recoverable from
+diagnostic-stream subscription (`BuildSucceeded`,
+`Discarded`, `SubmitSucceeded`, `Discarded` events
+each carry `ReservationId`); committing the
+synchronous trait surface to ID-enumeration would
+expand the trait contract beyond what V3.0
+substrate needs. §5.0.1 prose names the
+ID-via-diagnostic-stream pattern explicitly so the
+implementation discipline is visible to reviewers.
+
+**§2.4 ownership-prose amendment.** The §2.4
+ownership clause currently names the tracker shape
+as `BTreeMap<ReservationId, Reservation>`. Segment
+2h amends the ownership prose to name the (γ)
+three-collection lean shape (`output_locks` +
+`consumer_held` + `in_flight`); the §2.4 trait
+surface (the rust block) is unchanged. The
+amendment is an implementation-note refinement
+that PR 5 lands without revisiting the §2.4 trait
+binding.
+
+**P2 — discriminated error taxonomy across re-submit
+and consumer error cases.** Under (γ) the actor
+distinguishes (consumer's reservation is in
+`in_flight` → owner-boundary), (consumer's
+reservation never existed or already resolved →
+gone) at the handler level. The discriminated
+taxonomy lands two new error variants beyond F2's
+`DiscardBlockedPendingDaemonAck`:
+
+- `PendingTxError::SubmitAlreadyPending { reservation_id }`
+  — the re-submit case (consumer's `Reservation`
+  was already moved to `in_flight` by a prior
+  `submit` call); ownership-boundary parallel to
+  F2's discard case.
+- `PendingTxError::ReservationNotFound
+  { reservation_id }` — never existed or already
+  resolved; gone is gone (P3).
+
+**P3 — unified `ReservationNotFound` for never-existed
+/ already-resolved cases.** Distinguishing at the
+actor level requires the actor to retain ghost
+state (resolved-rid set; potentially unbounded
+growth without TTL); V3.0 substrate doesn't need the
+distinction. The diagnostic stream's emission
+history (`BuildSucceeded` and `Discarded` events for
+the rid) is the consumer-side reconstruction surface
+for "was it ever there." Gone is gone at the actor
+level; the diagnostic stream answers the
+"was it ever there" question for consumers who need
+it.
+
+**P4 — collection-moves table replaces enum-state-transitions
+table.** See §5.6.4 above for the table; segment-2f
+R9's per-error-class state-transition table is
+wholesale-replaced (not amended) under segment 2h.
+
+**P5 — `InFlightSubmit { snapshot_id, created_at,
+submitted_at }` admits either V3.x TTL aging policy.**
+Per §5.6.3's `submit` flow, the consumer-held
+creation timestamp is preserved across the
+collection move; the submission timestamp is stamped
+fresh. The V3.x `ReservationTTLActor` chooses its
+aging clock per-collection: "age from creation"
+reads `in_flight[rid].created_at`; "age from
+submission" reads `in_flight[rid].submitted_at`;
+neither V3.0 surface ages reservations against
+either field. The V3.0 surface admits both policies.
+
+**P6 — filter-then-select-then-subset-check ordering
+pinned in §5.0.1.** The build handler's invariant
+ordering:
+
+1. Fetch raw candidates from `LedgerEngine`.
+2. Filter against `output_locks.keys()` — only the
+   actor sees `output_locks`; this filtering step
+   is the wallet-layer anti-double-spend protection
+   the OutputSelector cannot bypass.
+3. Hand filtered candidates to `OutputSelector::select_outputs`.
+4. F4 caller-side subset check: returned indices ⊆
+   filtered candidates.
+
+C5β implementation must follow this ordering. The
+discipline pin lives in §5.0.1 prose. Bypassing
+filter-and-relying-on-subset-check-after-fact is a
+discipline violation; the actor's filtering step is
+load-bearing for anti-double-spend even if the
+selector is well-behaved, because output_locks may
+have entries the selector never sees.
+
+**P7 — actor handler-atomicity pin in §5.0.1.** The
+build handler's steps (lock-claim + consumer_held
+insert + diagnostic emit + return) and the submit
+handler's steps (consumer_held remove + in_flight
+insert + dispatch-initiate) and the discard
+handler's steps (consumer_held remove + output_locks
+removal + diagnostic emit) are atomic under both
+Stage 1 (lock-based execution holding `Mutex<ReservationTracker>`)
+and Stage 4 (mailbox-FIFO + standard actor-framework
+handler-runs-to-completion semantics). No `.await`
+between mutation steps; no opportunity for `discard
+(id)` to interleave against a partial-state
+reservation.
+
+Standard actor frameworks (kameo, riker, actix) deliver
+handler-atomicity by default — handlers run to
+completion before the next message is processed —
+but the discipline is named explicitly in §5.0.1 so
+C5β's implementation doesn't accidentally introduce
+an await between insert and emit, and so the Stage 4
+actor-migration PR doesn't accidentally choose a
+framework variant or configuration that breaks the
+atomicity property.
+
+**P8 — Stage 4 test-deliverable inheritance pin in
+§5.0.1.** The C5β test list (Stage 1) lands the
+atomicity properties for the in-process implementor
+(`concurrent_build_serialized_by_engine_lock`,
+`submit_moves_from_consumer_held_to_in_flight_atomically`,
+`discard_atomic_against_output_locks_release`). The
+Stage 4 actor-migration PR inherits the obligation
+to land the Stage 4 equivalents against the kameo
+actor harness: `concurrent_build_serialized_by_mailbox_fifo`,
+`submit_dispatch_does_not_yield_between_collection_move_and_daemon_initiate`,
+`discard_atomic_across_mailbox_under_concurrent_load`.
+
+Naming the inheritance here in §5.0.1 forecloses
+re-derivation in the Stage 4 actor-migration PR's
+design rounds; the Stage 4 PR picks up the
+obligation and confirms the actor framework's
+handler-atomicity guarantee delivers it.
+
+**P9 — lazy R5 preservation; eager R5 V3.x FOLLOWUPS
+trigger.** Covered in §5.6.3 above. The V3.x
+eager-discard opt-in FOLLOWUPS entry (§5.6.7 P9
+trigger) tracks the reopening criteria.
+
+### §5.6.7 V3.x FOLLOWUPS updates
+
+**(c) ergonomic alternative (F2 V3.x trigger).** The
+(c) `discard_requested: bool` shape implements the
+cancel-after-complete intent under the lean state:
+
+```rust
+struct InFlightSubmit {
+    snapshot_id: SnapshotId,
+    created_at: Instant,
+    submitted_at: Instant,
+    discard_requested: bool,    // V3.x
+}
+```
+
+V3.x `discard(rid)` on an `in_flight` reservation
+sets `discard_requested = true` (instead of returning
+`DiscardBlockedPendingDaemonAck`); reconciliation
+at `SubmitCompleted` arrival:
+
+- `Accepted ∧ discard_requested` → tx is live on
+  network; consumer's discard intent is
+  unenforceable. Outputs are spent on-chain; emit
+  `SubmissionAcceptedDespiteDiscard { rid }` (new
+  V3.x diagnostic) for consumer transparency.
+  Standard `SubmitSucceeded` emission suppressed in
+  favor of the override-class.
+- `Accepted ∧ !discard_requested` → standard
+  `SubmitSucceeded`.
+- `TerminalErrorKind::* ∧ discard_requested` →
+  treat as consumer's intent satisfied; emit
+  `Discarded { rid, ConsumerExplicit }` (not
+  `Discarded { DaemonRejectedTerminal::* }` — the
+  daemon's rejection is moot to the consumer's
+  intent). **Audit/debug-visibility sub-note:** the
+  daemon's rejection reason is structurally hidden
+  in this case; whether V3.x emits dual events
+  (`Discarded { ConsumerExplicit }` + a separate
+  `DaemonRejectionMooted { rid, kind:
+  TerminalErrorKind }` diagnostic for audit visibility)
+  is a V3.x design-rounds question.
+- `TerminalErrorKind::* ∧ !discard_requested` →
+  standard `Discarded { DaemonRejectedTerminal::* }`.
+
+**Threat-model regression note (V3.x design-rounds
+question).** V3.x's `SubmissionStrategyActor`
+deliberately delays broadcast to obscure
+wallet-network correlation. Under (c), a consumer's
+discard arriving before strategy-actor-broadcast
+could legitimately cancel; arriving after-broadcast
+is unenforceable. Distinguishing these cases at the
+consumer-visible API level (e.g., `Discarded {
+ConsumerExplicit, broadcast_avoided: bool }`)
+would create a timing side-channel that leaks the
+strategy actor's broadcast timing back to the
+consumer. **(c)'s V3.x implementation MUST present
+the two cases identically at the consumer surface,
+OR the strategy actor's timing-obscurity property
+is degraded.** The design-rounds work to settle (c)
+reopens the strategy-actor threat model.
+
+**V3.x trigger.** "Telemetry surfaces consumer-impatience
+patterns under (a) (`DiscardBlockedPendingDaemonAck`
+errors observed in production at non-trivial frequency
+across operational deployments)." Reopening lands in
+a coordinated `PendingTxEngine` + `SubmissionStrategyActor`
++ `DIAGNOSTIC_STREAM.md` V3.x design-rounds pass.
+
+**Temporal- and distributional-projection
+disciplines (F5+F6 V3.x trigger).** The
+`DIAGNOSTIC_STREAM.md` V3.x deferred deliverable
+(rename-from-`REFRESH_DIAGNOSTIC_STREAM.md` per
+segment-2g closure (a)) gains scope to cover
+temporal-projection patterns (event coalescing,
+bucketed emission, strategy-aligned emission delay,
+projection-time noise injection) and
+distributional-projection patterns (variant-distribution
+rate-limiting, `DiscardReason` aggregation policy,
+distributional-noise-injection). The doc is created
+in the V3.x PR introducing the first cross-trust-boundary
+diagnostic consumer; the doc's per-stream sections
+inherit the temporal/distributional disciplines
+alongside field-projection.
+
+**V3.x trigger.** "First V3.x consumer-actor PR
+enters design rounds that requires cross-trust-boundary
+diagnostic-stream consumption." The doc-creation
+work rides on the first-consumer PR; per-consumer
+threat-model evaluation drives the specific
+disciplines the doc captures.
+
+**V3.x eager-discard-on-snapshot-merge opt-in (P9
+trigger).** Reopening criteria:
+
+- Performance telemetry from V3.0 production
+  deployment surfaces a fast-snapshot-rotation
+  workload where consumer rebuild rates against
+  `SubmitError::SnapshotInvalidated` indicate the
+  lazy-cleanup performance characteristics are
+  load-bearing at scale.
+- OR a V3.x performance policy design rounds names
+  the lazy-vs-eager tradeoff as a reservation-policy
+  configuration surface (similar to F7's per-collection
+  TTL).
+- AND the substrate refinement to support selective
+  eager-discard (expand `consumer_held` to
+  `HashMap<ReservationId, ConsumerHeldEntry { created_at,
+  snapshot_id }>`) lands as part of the V3.x reopen.
+
+Re-evaluation shape: a V3.x design-rounds pass
+covering `R5` reservation-policy refinement; outcome
+either lands eager-discard as an opt-in policy
+(reintroducing `DiscardReason::SnapshotRotationAutoDiscard`
++ selective-discard substrate) or confirms lazy as
+the only V3.x shape (consumer-policy-driven
+abandonment via `discard(rid)` is the
+alternative).
+
+**F7 V3.x consumer (already FOLLOWUPS'd; segment 2h
+amends).** The V3.x `ReservationTTLActor` FOLLOWUPS
+entry per §5.4 R8 segment-2e closure is amended to
+name the per-collection `ReservationTTLConfig`
+consumption pattern. No new FOLLOWUPS entry;
+existing entry's scope grows.
+
+**F8 V3.x encrypted-persistence opt-in (already
+FOLLOWUPS'd; segment 2h amends).** The V3.x
+encrypted-persistence opt-in FOLLOWUPS entry per
+§5.4 R17 hardened disposition (PR 4 Round 4 review
+pass F1 carryover) is amended to name the
+restart-during-`in_flight` consequence as the
+specific surface this opt-in closes. No new
+FOLLOWUPS entry; existing entry's scope grows.
+
+**V3.x optional inverse-index seam (γ perf trigger).**
+If V3.0 wallet usage telemetry surfaces wallet sizes
+where O(n) `output_locks` scans dominate handler
+latency (unlikely; V3.0 wallet scale per V3_ENGINE_TRAIT_BOUNDARIES.md
+§2.4 implementation note bounds the scan), V3.x adds
+a maintained-by-actor inverse index
+`reservation_to_outputs: HashMap<ReservationId,
+BTreeSet<OutputId>>` per §5.6.2's optional perf
+seam. Reopening criteria: telemetry-anchored
+demonstration of perf regression; the inverse index
+is a perf optimization, not an audit shape change.
+The maintained-invariant audit obligation is the
+re-evaluation shape's compensating discipline.
+
+### §5.6.8 Round 3 §7.X commit-decomposition delta
+
+The §7.X eight-commit Phase 1 commit list (C0–C8)
+load-bearing ordering and sub-decomposition (C2 / C4
+/ C5) survive segment 2h unchanged. The delta is
+within-commit content for six commits:
+
+- **C0 (Phase 0 spec amendment; doc-only).** Scope
+  grows to include all segment-2h amendments:
+  - §3.1 F3 discipline pin (Signer::Error / FeeEstimatorError
+    / OutputSelectorError sensitive-material discipline).
+  - §4 Phase 0a reshape (TerminalErrorKind / AmbiguousErrorKind
+    split; SubmitError variant set; PendingTxError variant set;
+    OutputSelectorError variant addition).
+  - §4 Phase 0e lifecycle prose rewrite under lean shape
+    (lazy R5 disposition explicit; collection-moves not
+    state-transitions).
+  - §4 Phase 0f PendingTxDiagnostic reshape (SubmitFailed
+    removed; SubmitPendingResolution added; DiscardReason
+    variant set reduced under lazy R5).
+  - §4 new Phase 0l (`ReservationTTLConfig { consumer_held,
+    in_flight }`).
+  - §5.0.1 actor-internal state sketch rewrite under (γ)
+    lean shape; P6 / P7 / P8 prose pins.
+  - §5.0.2 collection-moves table replaces enum-state-transitions
+    table; SubmitError reshape; P4 ambiguous-vs-terminal
+    framing.
+  - §5.0.3 seventh contract pin (F5+F6 temporal- and
+    distributional-projection discipline).
+  - §5.4 R5 lazy disposition explicit under lean shape;
+    SnapshotRotationAutoDiscard removal note + V3.x
+    eager FOLLOWUPS pointer.
+  - §5.4 R8 per-collection TTL config V3.0 surface pin.
+  - §5.4 R9 wholesale rewrite (collection-moves table
+    replaces enum-state-transitions table).
+  - §5.4 R17 explicit V3.0 acceptance of
+    restart-during-`in_flight` surface; V3.x
+    encrypted-persistence opt-in closure pointer.
+
+  Plus the corresponding `V3_ENGINE_TRAIT_BOUNDARIES.md`
+  §2.4 ownership-prose amendment (tracker shape from
+  `BTreeMap<ReservationId, Reservation>` to (γ) lean
+  shape; trait surface unchanged) and
+  `V3_WALLET_DECISION_LOG.md` entries.
+
+  Net C0 size grows ~30%; still doc-only.
+
+- **C1 (`SnapshotId` opaque type).** Unchanged from
+  Round 3 §7.X.
+
+- **C2α (error / discriminant enums; sub-commit
+  α).** Scope changes:
+  - **Removes:** `ReservationState` enum (no longer
+    needed under (γ)); `SubmitErrorKind` unified enum
+    (split into `TerminalErrorKind` + `AmbiguousErrorKind`).
+  - **Adds:** `TerminalErrorKind`, `AmbiguousErrorKind`,
+    `SubmitError::SnapshotInvalidated`,
+    `SubmitError::DaemonRejectedTerminal { kind }`,
+    `SubmitError::DaemonAmbiguous { kind, reservation_id }`,
+    `SubmitError::ReservationNotFound { reservation_id }`,
+    `SubmitError::SubmitAlreadyPending { reservation_id }`,
+    `PendingTxError::DiscardBlockedPendingDaemonAck { reservation_id }`,
+    `PendingTxError::SubmitAlreadyPending { reservation_id }`,
+    `PendingTxError::ReservationNotFound { reservation_id }`,
+    `OutputSelectorError::ReturnedIndicesNotSubset { offending_index }`.
+
+- **C2β (discriminant projections; sub-commit β).**
+  Scope follows C2α. The `BuildFailureClass`
+  projection grows by `SelectorContractViolation`
+  (mirrors `OutputSelectorError::ReturnedIndicesNotSubset`
+  in the projection taxonomy).
+
+- **C2γ (timestamps / config types; sub-commit γ).**
+  Scope changes:
+  - **Removes:** `Reservation::state` field (no longer
+    needed under (γ)).
+  - **Adds:** `ReservationTTLConfig { consumer_held,
+    in_flight }` with `Default` impl yielding uniform
+    `DEFAULT_RESERVATION_TTL`; `InFlightSubmit
+    { snapshot_id, created_at, submitted_at }` as
+    actor-private type.
+
+- **C3 (`PendingTxDiagnostic` enum + emission
+  infrastructure).** Scope changes:
+  - **Removes:** `PendingTxDiagnostic::SubmitFailed`
+    (no surviving emission site under P4 table).
+  - **Adds:** `PendingTxDiagnostic::SubmitPendingResolution
+    { reservation_id, kind: AmbiguousErrorKind }`.
+  - **Updates:** `DiscardReason` variant set —
+    `SnapshotRotationAutoDiscard` removed under lazy
+    R5 (V3.x eager-discard opt-in FOLLOWUPS
+    reintroduces); `DaemonRejectedTerminal` payload
+    changes from no-payload to `{ kind: TerminalErrorKind }`.
+
+- **C4 (`Signer` / `OutputSelector` / `FeeEstimator`
+  trait surfaces + default impls).** Scope unchanged
+  at the trait-surface level. C4α `Signer` trait
+  documentation grows by the F3 sensitive-material
+  discipline pin (doc-comments on `type Error`).
+  C4β `OutputSelector` trait documentation grows by
+  the F4 caller-side subset re-verification
+  discipline pin (doc-comments on `select_outputs`
+  naming the caller's responsibility).
+
+- **C5β (`PendingTxEngine` trait-impl bodies;
+  `LocalPendingTx` internals).** Bodies are
+  wholesale-rewritten as collection-moves rather
+  than enum-state-mutations:
+  - `LocalPendingTx::build` body:
+    1. Fetch raw candidates from `LedgerEngine`.
+    2. Filter against `output_locks.keys()` (P6).
+    3. Call `OutputSelector::select_outputs` on
+       filtered candidates.
+    4. Subset-verification check on returned indices
+       (F4; rejects via
+       `OutputSelectorError::ReturnedIndicesNotSubset`).
+    5. Allocate fresh `ReservationId`.
+    6. Atomically (P7): insert `output_locks` entries;
+       insert `consumer_held[rid] = now`; emit
+       `BuildSucceeded`; return `Reservation`.
+  - `LocalPendingTx::submit` body:
+    1. Match `(in_flight.contains_key, consumer_held.contains_key)`
+       per §5.6.3 success/error dispatch.
+    2. Staleness check vs `current_snapshot` (lazy R5).
+    3. Atomic move (P7): `consumer_held → in_flight`
+       with preserved `created_at` + fresh `submitted_at`.
+    4. Dispatch to `Signer` and `DaemonEngine`.
+    5. Reconcile per P4 table at daemon response.
+  - `LocalPendingTx::discard` body:
+    1. Match `(in_flight, consumer_held)` per
+       §5.6.3 dispatch (F2 `DiscardBlockedPendingDaemonAck`
+       for in_flight; `ReservationNotFound` for both-empty).
+    2. Atomic (P7): remove from `consumer_held`;
+       sweep `output_locks` for rid-matching entries;
+       emit `Discarded { rid, reason }`.
+  - `LocalPendingTx::outstanding` body: returns
+    `consumer_held.len() + in_flight.len()`.
+
+  Test deliverables grow:
+  - `wallet_greedy_selector_returns_subset` (F4
+    regression).
+  - `faulty_selector_returns_non_subset_rejected`
+    (F4 negative case via `FaultyOutputSelector`).
+  - `discard_blocked_during_in_flight` (F2).
+  - `submit_already_pending_during_in_flight` (P2).
+  - `consumer_held_reservation_releases_locks_on_discard`.
+  - `submit_moves_from_consumer_held_to_in_flight`.
+  - `submit_completed_terminal_releases_locks` (one
+    per `TerminalErrorKind` variant).
+  - `submit_completed_ambiguous_retains_in_flight`
+    (one per `AmbiguousErrorKind` variant).
+  - `concurrent_build_serialized_by_engine_lock`
+    (Stage 1 atomicity property).
+  - `stage_1_submit_time_staleness_is_exact` (F1
+    Stage 1 property).
+  - `snapshot_rotation_does_not_sweep_consumer_held`
+    (lazy R5).
+  - `output_locks_invariant_across_handler_atomicity`
+    (P7).
+
+- **C6 (`Engine<S, D, L, R, P>` parameterization +
+  orchestration-layer dispatch migration).** Scope
+  unchanged from Round 3 §7.X. The dispatch wiring
+  passes the consumer's `Reservation` value (already
+  the trait surface).
+
+- **C7 (`FaultInjecting<P: PendingTxEngine>` +
+  property tests + R9 per-error-class coverage).**
+  Scope changes:
+  - **Removes:** Property tests asserting
+    `ReservationState` transitions (no longer
+    applicable under (γ)).
+  - **Adds:** Property tests for collection
+    invariants:
+    - `output_locks_membership_iff_some_collection_claims`
+      (every `(oid, rid)` in `output_locks` has
+      `rid ∈ consumer_held ∪ in_flight`).
+    - `consumer_held_and_in_flight_are_disjoint`
+      (no rid in both at the same time).
+    - `lock_claim_is_monotonic_until_terminal_resolution`
+      (a rid's outputs claim doesn't change between
+      build and terminal resolution; only the
+      collection-membership changes).
+  - **R9 per-error-class coverage** (P4 table):
+    - `FaultInjecting` configured to yield each
+      `TerminalErrorKind` and `AmbiguousErrorKind`
+      variant; properties verify the table's
+      collection-moves, lock-release, and emission
+      claims.
+  - **F2 ownership-boundary coverage:** Configure
+    `FaultInjecting` to yield `AmbiguousErrorKind::DaemonTimeout`
+    → reservation enters `in_flight`; consumer calls
+    `discard(rid, ConsumerExplicit)` → assert
+    `Err(DiscardBlockedPendingDaemonAck)` returned;
+    fault-injector then yields
+    `TerminalErrorKind::DoubleSpend` → consumer's
+    subsequent `discard(rid)` returns
+    `ReservationNotFound` (rid was already moved
+    to "gone" by the daemon-resolved terminal class).
+
+- **C8 (docs propagation + CHANGELOG).** FOLLOWUPS
+  amendments inventory grows by:
+  - F2 (c) V3.x ergonomic refinement candidate (new
+    entry; includes the dual-emission sub-note and
+    the strategy-actor threat-model regression
+    note).
+  - F5+F6 temporal- and distributional-projection
+    disciplines in `DIAGNOSTIC_STREAM.md` V3.x
+    deferred deliverable (existing
+    `DIAGNOSTIC_STREAM.md` FOLLOWUPS entry scope
+    grows).
+  - F7 V3.x `ReservationTTLActor` per-collection
+    consumer (existing R8 FOLLOWUPS entry scope
+    grows).
+  - F8 V3.x encrypted-persistence opt-in
+    restart-during-`in_flight` closure (existing
+    R17 FOLLOWUPS entry scope grows).
+  - P9 V3.x eager-discard-on-snapshot-merge opt-in
+    (new entry; includes selective-discard substrate
+    trigger and reservation-policy design-rounds
+    re-evaluation shape).
+  - V3.x optional inverse-index seam (γ perf
+    trigger; new entry; telemetry-anchored
+    reopening criteria).
+
+The §7.X commit decomposition's load-bearing
+ordering is unchanged: C0 lands the doc-only
+substrate; C1 lands `SnapshotId`; C2α/β/γ land the
+type substrate that subsequent commits consume; C3
+lands diagnostic infrastructure; C4α/β/γ land the
+trait surfaces; C5α/β lands the aggregate; C6 lands
+the orchestration migration; C7 lands the
+property-test harness; C8 closes with documentation.
+
+---
+
+
 
 Shape mirrors PR 4's §6. Round 2 closes here; Round 3 (commit
 decomposition) consumes this checklist as the substrate
