@@ -160,6 +160,7 @@ pub mod error;
 pub(crate) mod fault_injecting_ledger;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_refresh;
+pub mod fee_estimator;
 pub mod lifecycle;
 pub(crate) mod local_keys;
 pub(crate) mod local_ledger;
@@ -184,6 +185,7 @@ pub use diagnostics::{
     TracingDiagnosticSink,
 };
 pub use error::{IoError, KeyError, OpenError, PendingTxError, RefreshError, SendError, TxError};
+pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 pub use local_ledger::LocalLedger;
 pub use local_refresh::LocalRefresh;

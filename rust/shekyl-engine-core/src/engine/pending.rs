@@ -85,7 +85,6 @@
 //! [`Engine::submit_pending_tx`]: super::Engine::submit_pending_tx
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
 use shekyl_address::Network;
@@ -181,27 +180,12 @@ impl ReservationId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TxHash(pub [u8; 32]);
 
-/// Caller-supplied fee preference for [`Engine::build_pending_tx`].
-///
-/// Cross-cutting lock 8 binds this surface; Phase 2a will resolve each
-/// variant against the daemon's `get_fee_estimates`. Phase 1 ignores
-/// the variant and uses [`STUB_FEE_ATOMIC_UNITS`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FeePriority {
-    /// Slowest tier; cheapest. Targets confirmation within a few
-    /// blocks rather than the next block.
-    Economy,
-    /// Default tier; balanced cost vs. confirmation time.
-    Standard,
-    /// Fastest tier short of fee-spiking; targets next-block
-    /// inclusion under normal mempool conditions.
-    Priority,
-    /// Caller-pinned feerate in atomic-units-per-byte. The daemon's
-    /// estimate is bypassed entirely (and so are
-    /// [`TxError::DaemonFeeUnreasonable`](super::error::TxError)
-    /// sanity checks).
-    Custom(NonZeroU64),
-}
+// `FeePriority` migrated to `engine::fee_estimator` per PR 5
+// C4γ (`STAGE_1_PR_5_PENDING_TX_ENGINE.md` §7.X "trait-surface
+// is the canonical citation" pin). Re-exported here for
+// backward source-text compatibility within the crate; the
+// `engine::mod` re-export surface is unchanged.
+pub use super::fee_estimator::FeePriority;
 
 /// One transfer destination for [`TxRequest`].
 #[derive(Clone, Debug)]
