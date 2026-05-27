@@ -166,6 +166,7 @@ pub(crate) mod local_ledger;
 pub(crate) mod local_refresh;
 pub mod merge;
 pub mod network;
+pub mod output_selector;
 pub mod pending;
 pub mod refresh;
 pub mod signer;
@@ -187,6 +188,9 @@ pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngi
 pub use local_ledger::LocalLedger;
 pub use local_refresh::LocalRefresh;
 pub use network::Network;
+pub use output_selector::{
+    OutputCandidate, OutputSelector, SelectedOutputs, WalletGreedyOutputSelector,
+};
 pub use pending::{
     FeePriority, PendingTx, ReservationExtension, ReservationId, ReservationTTLConfig, SnapshotId,
     TxHash, TxRecipient, TxRecipientSummary, TxRequest, DEFAULT_RESERVATION_TTL,
