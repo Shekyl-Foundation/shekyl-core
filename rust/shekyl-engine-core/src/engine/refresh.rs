@@ -146,16 +146,10 @@ impl LedgerSnapshot {
 ///
 /// Bound to a `v1` suffix so a future encoding change can co-exist
 /// with the current derivation under a `v2` prefix without colliding
-/// on bytes; current callers pin to `v1`.
-///
-/// `#[allow(dead_code)]`: the production caller lands in C2γ
-/// (`Reservation` / `PendingTx` field augmentation) per the
-/// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §7.X commit decomposition; C1
-/// ships the type-and-derivation substrate plus unit tests. The
-/// in-test consumer in `refresh_driver_tests` does not satisfy the
-/// `dead_code` lint because `#[cfg(test)]` modules are excluded
-/// from non-test compilations.
-#[allow(dead_code)]
+/// on bytes; current callers pin to `v1`. C2γ wired
+/// `derive_snapshot_id` into `build_pending_tx_in_state` per the
+/// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §7.X commit decomposition,
+/// so the prefix is transitively consumed by production code.
 pub(crate) const SNAPSHOT_ID_DOMAIN: &[u8] = b"shekyl-snapshot-id-v1";
 
 /// Derive the opaque [`SnapshotId`] for a [`LedgerSnapshot`].
@@ -183,13 +177,6 @@ pub(crate) const SNAPSHOT_ID_DOMAIN: &[u8] = b"shekyl-snapshot-id-v1";
 /// `pub(crate)`: callers in [`super::pending`] derive `SnapshotId`
 /// from an engine-internal snapshot read; consumers never pass a
 /// `SnapshotId` into the trait surface from outside.
-///
-/// `#[allow(dead_code)]`: the production caller lands in C2γ
-/// (`Reservation` / `PendingTx` field augmentation) per the
-/// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §7.X commit decomposition;
-/// C1 ships the derivation substrate plus its unit tests in
-/// `refresh_driver_tests`.
-#[allow(dead_code)]
 pub(crate) fn derive_snapshot_id(snapshot: &LedgerSnapshot) -> SnapshotId {
     let n_blocks = snapshot.reorg_blocks.blocks.len();
     let mut buf = Vec::with_capacity(SNAPSHOT_ID_DOMAIN.len() + 8 + 8 + n_blocks * (8 + 32));

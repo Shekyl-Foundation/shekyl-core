@@ -187,8 +187,8 @@ pub use local_ledger::LocalLedger;
 pub use local_refresh::LocalRefresh;
 pub use network::Network;
 pub use pending::{
-    FeePriority, PendingTx, ReservationExtension, ReservationId, SnapshotId, TxHash, TxRecipient,
-    TxRecipientSummary, TxRequest,
+    FeePriority, PendingTx, ReservationExtension, ReservationId, ReservationTTLConfig, SnapshotId,
+    TxHash, TxRecipient, TxRecipientSummary, TxRequest, DEFAULT_RESERVATION_TTL,
 };
 pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,

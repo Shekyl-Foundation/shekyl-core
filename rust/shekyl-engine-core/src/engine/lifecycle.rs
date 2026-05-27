@@ -1240,6 +1240,8 @@ mod tests {
             selected_transfer_indices: Vec::new(),
             built_at_height: 0,
             built_at_tip_hash: [0u8; 32],
+            snapshot_id: super::super::pending::SnapshotId([0u8; 16]),
+            extensions: Vec::new(),
             fee_atomic_units: 0,
             recipients: Vec::new(),
             priority: super::super::pending::FeePriority::Standard,

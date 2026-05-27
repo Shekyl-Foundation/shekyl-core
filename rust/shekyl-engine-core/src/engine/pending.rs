@@ -86,6 +86,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
+use std::time::{Duration, Instant};
 
 use shekyl_address::Network;
 use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SubaddressIndex};
@@ -93,6 +94,7 @@ use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SubaddressIndex};
 use crate::engine::{
     error::{PendingTxError, SendError},
     local_ledger::LocalLedger,
+    refresh::{derive_snapshot_id, LedgerSnapshot},
     traits::DaemonEngine,
     Engine, EngineSignerKind,
 };
@@ -112,8 +114,7 @@ pub const STUB_FEE_ATOMIC_UNITS: u64 = 1_000;
 /// `snapshot_id` against the engine's current `snapshot_id`. The bytes
 /// are an engine-internal projection, never accepted from a caller
 /// (the trait surface always derives `SnapshotId` from a freshly-read
-/// [`LedgerSnapshot`](super::refresh::LedgerSnapshot) inside the
-/// engine).
+/// [`LedgerSnapshot`] inside the engine).
 ///
 /// Derived inside the `engine::refresh` module over the snapshot's
 /// deterministic fields, hashed by Keccak-256 (via `shekyl-crypto-hash`'s
@@ -309,6 +310,35 @@ pub(crate) struct Reservation {
     /// [`PendingTxError::ChainStateChanged`] compares this against
     /// the wallet's current view at submit time.
     pub built_at_tip_hash: [u8; 32],
+    /// [`SnapshotId`] derived at build time over the wallet's
+    /// ledger snapshot. C5β's rewritten `submit` handler compares
+    /// this against the engine's `current_snapshot` and emits
+    /// `SubmitError::SnapshotInvalidated` on mismatch (lazy R5
+    /// per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §5.6.5 F5+F6 /
+    /// §5.6.6 P9). C2γ populates the field; C5β wires the read
+    /// site.
+    ///
+    /// `dead_code` allow: the field is consumed only by the
+    /// `Debug` derive until C5β's handler-body rewrite reads it
+    /// for the staleness check. Pattern matches the surrounding
+    /// `fee_atomic_units` / `recipients` / `priority` fields
+    /// whose production readers also land in later commits.
+    #[allow(dead_code)]
+    pub snapshot_id: SnapshotId,
+    /// R14 reservation-extension payload set. V3.0 ships with
+    /// the always-empty vector (the
+    /// [`ReservationExtension`] enum is uninhabited in V3.0
+    /// per Phase 0d binding form — see the enum's doc-comment
+    /// for the reopening-criteria-shaped reversion-clause
+    /// disposition). V3.x extensions land additively via new
+    /// `ReservationExtension` variants and matching engine-side
+    /// dispatch.
+    ///
+    /// `dead_code` allow: the field is consumed only by the
+    /// `Debug` derive until V3.x extensions land with their
+    /// dispatch code.
+    #[allow(dead_code)]
+    pub extensions: Vec<ReservationExtension>,
     /// Fee in atomic units. Phase 1: [`STUB_FEE_ATOMIC_UNITS`].
     ///
     /// `dead_code` allow: the field is consumed only by the `Debug`
@@ -350,11 +380,142 @@ pub struct PendingTx {
     pub built_at_tip_hash: [u8; 32],
     /// Fee in atomic units captured at build time (Phase 1 stub).
     pub fee_atomic_units: u64,
+    /// [`SnapshotId`] derived at build time from the wallet's
+    /// ledger snapshot — mirrors the value stored on the
+    /// engine-internal `Reservation` side. Caller-visible so
+    /// diagnostics surfaces (and Stage 4's `MempoolMonitorActor`)
+    /// can correlate handle equality across the wallet/consumer
+    /// boundary without reaching into engine-private state. Per
+    /// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 Phase 0b binding
+    /// form.
+    pub snapshot_id: SnapshotId,
     /// Constructed transaction bytes. Empty in Phase 1; Phase 2a
     /// fills this from `shekyl-tx-builder`.
     pub tx_bytes: Vec<u8>,
     /// Recipient summary for display.
     pub recipients: Vec<TxRecipientSummary>,
+}
+
+/// Default reservation TTL used by both
+/// [`ReservationTTLConfig::consumer_held`] and
+/// [`ReservationTTLConfig::in_flight`].
+///
+/// Provisional 24-hour order-of-magnitude per segment-2e R8
+/// wargaming substrate (`STAGE_1_PR_5_PENDING_TX_ENGINE.md`
+/// §5.6.7 V3.x FOLLOWUPS). The value is intentionally
+/// "definitively long" rather than "tuned" — V3.0's R8 safety-net
+/// posture is to bound stale-reservation lifetime so the wallet
+/// eventually self-heals from forgotten reservations, without
+/// imposing a short window that would conflict with legitimate
+/// long-form approval workflows (hardware wallets, offline
+/// signing, scheduled releases).
+///
+/// V3.x's `ReservationTTLActor` may tune per-collection values
+/// independently; the constant is the V3.0 baseline that both
+/// collections start from.
+pub const DEFAULT_RESERVATION_TTL: Duration = Duration::from_secs(60 * 60 * 24);
+
+/// Per-collection reservation TTL configuration. Phase 0l binding
+/// form per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 (segment-2h F7
+/// disposition; see §5.6.5 F7).
+///
+/// Both fields default to [`DEFAULT_RESERVATION_TTL`]; the
+/// per-collection shape admits V3.x `ReservationTTLActor`
+/// independent per-collection aging policy
+/// (age-from-`created_at` vs. age-from-`submitted_at`) without
+/// locking V3.0 into uniform-TTL.
+///
+/// `#[non_exhaustive]` per the reversion-clause discipline:
+/// future TTL refinements (e.g., a per-collection bound on
+/// `discard_requested`-marked reservations once that V3.x
+/// substrate lands) extend the struct additively.
+///
+/// # V3.0 consumer (planned, C5α)
+///
+/// `LocalPendingTx::new(..., ttl: ReservationTTLConfig)`
+/// constructor parameter. The engine's `outstanding()` and
+/// TTL-cleanup background scan read `config.consumer_held` and
+/// `config.in_flight` for per-collection aging.
+///
+/// # V3.x consumer (planned)
+///
+/// `ReservationTTLActor` reads the same `ReservationTTLConfig`
+/// and applies per-collection policy without trait revision.
+///
+/// `dead_code` allow: no V3.0-time reader until C5α wires the
+/// constructor parameter; the type lands in C2γ alongside the
+/// `Reservation`/`PendingTx` field augmentation per the §7.X
+/// commit decomposition's "type substrate before consumers"
+/// ordering.
+#[allow(dead_code)]
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReservationTTLConfig {
+    /// TTL applied to reservations in the `consumer_held`
+    /// collection. The collection holds reservations that the
+    /// engine has built but the consumer has not yet submitted;
+    /// aging from `created_at` is the V3.0 default.
+    pub consumer_held: Duration,
+    /// TTL applied to reservations in the `in_flight` collection.
+    /// The collection holds reservations whose `submit` is mid-
+    /// flight (daemon round-trip outstanding). V3.0 defaults to
+    /// age-from-`created_at` for parity with `consumer_held`;
+    /// V3.x's `ReservationTTLActor` may switch to
+    /// age-from-`submitted_at` per F7's per-collection-policy
+    /// substrate.
+    pub in_flight: Duration,
+}
+
+impl Default for ReservationTTLConfig {
+    /// Uniform [`DEFAULT_RESERVATION_TTL`] across both
+    /// collections — V3.0's R8 safety-net default per the
+    /// segment-2e wargaming substrate.
+    fn default() -> Self {
+        Self {
+            consumer_held: DEFAULT_RESERVATION_TTL,
+            in_flight: DEFAULT_RESERVATION_TTL,
+        }
+    }
+}
+
+/// Actor-private in-flight reservation record. Phase 0a binding
+/// form per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 (segment-2h P5
+/// disposition; see §5.6.6 P5).
+///
+/// Created when a reservation moves from `consumer_held` to
+/// `in_flight` at submit-dispatch time. The struct is
+/// `pub(crate)` because it lives inside the engine's state
+/// machine — consumers learn about its contents via the
+/// `PendingTxDiagnostic` stream (`SubmitAttempted` /
+/// `SubmitSucceeded` / `SubmitPendingResolution` emissions
+/// project the fields they need to surface), never by reading
+/// the struct directly. C5β introduces the `in_flight:
+/// HashMap<ReservationId, InFlightSubmit>` collection that
+/// stores values; C2γ lands the type ahead of the storage so
+/// the type-substrate sub-commit is a coherent compile unit.
+///
+/// `dead_code` allow: no V3.0-time reader until C5β wires the
+/// `in_flight` collection. Pattern matches the
+/// `ReservationTTLConfig` allow above.
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct InFlightSubmit {
+    /// [`SnapshotId`] the reservation was built against;
+    /// preserved verbatim from the source `Reservation` at the
+    /// `consumer_held → in_flight` transition.
+    pub snapshot_id: SnapshotId,
+    /// When the reservation was originally built (the
+    /// `consumer_held` insert timestamp). Preserved across the
+    /// `consumer_held → in_flight` move so the `consumer_held`
+    /// TTL semantics are not lost. V3.0's uniform "age from
+    /// creation" aging policy reads this field for both
+    /// collections.
+    pub created_at: Instant,
+    /// When the reservation entered `in_flight` (the submit-
+    /// dispatch timestamp). V3.x's `ReservationTTLActor`
+    /// age-from-submission policy reads this field for
+    /// `in_flight` aging without trait revision.
+    pub submitted_at: Instant,
 }
 
 // ---------------------------------------------------------------------------
@@ -449,10 +610,24 @@ pub(crate) fn build_pending_tx_in_state(
         })
         .collect();
 
+    // Derive the SnapshotId from a freshly-read LedgerSnapshot view
+    // of the same LedgerBlock the rest of this body used for
+    // candidate selection. The minor allocation (one ReorgBlocks
+    // clone, capped at DEFAULT_REORG_BLOCKS_CAPACITY) is bounded by
+    // the wallet's reorg-window length and dominated by the rest of
+    // the build pipeline's allocations.
+    //
+    // Per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 Phase 0b binding
+    // form: the engine derives `SnapshotId` over the snapshot's
+    // deterministic fields; consumers never construct one.
+    let snapshot_id = derive_snapshot_id(&LedgerSnapshot::from_ledger(ledger));
+
     let reservation = Reservation {
         selected_transfer_indices: selected,
         built_at_height: synced,
         built_at_tip_hash: tip_hash,
+        snapshot_id,
+        extensions: Vec::new(),
         fee_atomic_units: fee,
         recipients: summary.clone(),
         priority: request.priority,
@@ -463,6 +638,7 @@ pub(crate) fn build_pending_tx_in_state(
         built_at_height: synced,
         built_at_tip_hash: tip_hash,
         fee_atomic_units: fee,
+        snapshot_id,
         tx_bytes: Vec::new(),
         recipients: summary,
     };
