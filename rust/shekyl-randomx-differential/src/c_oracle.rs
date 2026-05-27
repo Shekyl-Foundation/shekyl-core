@@ -356,6 +356,110 @@ impl COracleSession {
         hasher.finalize().into()
     }
 
+    /// Allocate a cache + VM pair and overwrite the cache memory
+    /// with `cache_bytes`, declaring `seedhash` as the binding
+    /// seedhash for diagnostics.
+    ///
+    /// Mirrors
+    /// [`shekyl_pow_randomx::PreparedCache::from_raw_for_testing`]
+    /// on the C side per Phase 2h R1-D2 close's "C-side symmetry"
+    /// disposition: `randomx_init_cache` is called first to derive
+    /// the SuperscalarPrograms from `seedhash`, then the cache
+    /// memory is overwritten with `cache_bytes` via the existing
+    /// `randomx_get_cache_memory` accessor. The C reference then
+    /// runs its full hash computation against the crafted cache
+    /// contents — production code path, crafted inputs.
+    ///
+    /// Used exclusively by
+    /// [`crate::mode_adversarial_ratio`] to construct
+    /// recipe-evaluated cache states symmetric to the Rust
+    /// subject's `PreparedCache::from_raw_for_testing` consumption.
+    ///
+    /// # Errors
+    ///
+    /// - [`COracleError::CacheAllocFailed`] /
+    ///   [`COracleError::CacheMemoryNull`] /
+    ///   [`COracleError::VmCreateFailed`] under the same conditions
+    ///   as [`COracleSession::new`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `cache_bytes.len() != RANDOMX_CACHE_SIZE_BYTES`.
+    /// The harness's recipe-evaluator path always produces a full
+    /// 256-MiB cache; the panic is a structural invariant rather
+    /// than a runtime error path.
+    pub fn from_raw_for_testing(
+        seedhash: Seedhash,
+        cache_bytes: &[u8],
+    ) -> Result<Self, COracleError> {
+        assert_eq!(
+            cache_bytes.len(),
+            RANDOMX_CACHE_SIZE_BYTES,
+            "from_raw_for_testing: cache_bytes must be exactly RANDOMX_CACHE_SIZE_BYTES ({RANDOMX_CACHE_SIZE_BYTES} bytes); got {} bytes",
+            cache_bytes.len()
+        );
+        // SAFETY: see module-level docs + Self::new for the
+        // allocation/init/release contract. Flag choices mirror
+        // Self::new's exactly — cache: `RANDOMX_FLAG_DEFAULT`
+        // (V2 bit is masked out at alloc per `randomx.cpp:79`, so
+        // passing it would be inert); VM: `RANDOMX_FLAG_V2`
+        // (selects the v2 algorithm per the verifier-divergence
+        // FOLLOWUP closure landed on `dev` by `chore/randomx-v2-
+        // c-oracle-flag-v2`, PR #79). Flag drift between Self::new
+        // and Self::from_raw_for_testing is guarded structurally by
+        // `tests/c_oracle_session_round_trip.rs` (T17), which
+        // asserts hash parity between the two constructors for a
+        // fixed (seedhash, payload) pair. The post-init overwrite
+        // uses `randomx_get_cache_memory`'s documented-mutable
+        // pointer (Phase 2g R4-D4) per Phase 2h R1-D2 close's
+        // C-side-symmetry disposition; `randomx_init_cache` has
+        // already populated the SuperscalarPrograms from
+        // `seedhash`, so the subsequent memory overwrite leaves
+        // program-derivation state seedhash-consistent while
+        // crafting the cache-memory contents.
+        unsafe {
+            let cache = randomx_alloc_cache(RANDOMX_FLAG_DEFAULT);
+            if cache.is_null() {
+                return Err(COracleError::CacheAllocFailed { seedhash });
+            }
+            let seedhash_bytes = seedhash.as_bytes();
+            randomx_init_cache(
+                cache,
+                seedhash_bytes.as_ptr().cast::<c_void>(),
+                seedhash_bytes.len(),
+            );
+            let cache_memory = randomx_get_cache_memory(cache);
+            if cache_memory.is_null() {
+                randomx_release_cache(cache);
+                return Err(COracleError::CacheMemoryNull { seedhash });
+            }
+            // Overwrite the Argon2d-derived cache memory with the
+            // recipe-evaluated bytes. `std::ptr::copy_nonoverlapping`
+            // is sound here: source is a Rust slice (alive for the
+            // duration of the call); destination is the C cache's
+            // owned 256-MiB region; the two ranges are
+            // non-overlapping (C-side allocation vs. Rust-side
+            // borrow). Both pointers are properly aligned for `u8`
+            // copies (alignment 1).
+            std::ptr::copy_nonoverlapping(
+                cache_bytes.as_ptr(),
+                cache_memory.cast::<u8>(),
+                RANDOMX_CACHE_SIZE_BYTES,
+            );
+            let vm = randomx_create_vm(RANDOMX_FLAG_V2, cache, ptr::null_mut());
+            if vm.is_null() {
+                randomx_release_cache(cache);
+                return Err(COracleError::VmCreateFailed { seedhash });
+            }
+            Ok(Self {
+                cache,
+                vm,
+                cache_memory,
+                seedhash,
+            })
+        }
+    }
+
     /// Compute one C-reference RandomX hash of `data` under this
     /// session's `(seedhash, cache, vm)` binding.
     ///

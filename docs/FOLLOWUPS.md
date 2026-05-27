@@ -49,7 +49,38 @@ sustainability is unaffected by the recalibration.
 
 - **Post-2g adversarial-corpus methodology + implementation
   (trigger: RandomX v2 Phase 2g Round 7 R7-D1/R7-D2 reopening
-  of R1-D5 + R1-D6).** Phase 2g
+  of R1-D5 + R1-D6; *closed by Phase 2h implementation PR*).**
+  *Phase 2h closes this item by replacement: the methodology
+  lands as the recipe-based adversarial corpus per
+  [`docs/design/RANDOMX_V2_PHASE2H_PLAN.md`](./design/RANDOMX_V2_PHASE2H_PLAN.md)
+  R1-D1 (specified-outliers composition); the accessor lands
+  at C2 as `PreparedCache::from_raw_for_testing`
+  (`rust/shekyl-pow-randomx/src/prepared_cache.rs` under the
+  `test-internals` feature gate, with C-side symmetry via
+  `randomx_get_cache_memory` per R1-D2 close); the recipe
+  corpus + evaluator land at C3/C4
+  (`rust/shekyl-randomx-differential/src/adversarial/`); the
+  canonical-output pinning lands at C5
+  (`adversarial_canonical_outputs.rs`); the worst-case-ratio
+  measurement mode lands at C6
+  (`mode_adversarial_ratio`); T2/T6 reactivate at C7 with
+  inherited `#[ignore]` gating behind the (then-open) V3.0
+  `shekyl-pow-randomx::compute_hash`-divergence-from-C-reference
+  FOLLOWUP; the CI workflow wiring lands at C8
+  (per-PR T2 step in `randomx-v2-differential.yml` +
+  workflow_dispatch T6 in `randomx-v2-adversarial-ratio.yml`,
+  both `if: false`-gated until the divergence FOLLOWUP closes);
+  the M5 mechanical citation-validation script lands at C9
+  (`scripts/ci/check_phase2h_citations.sh`). The divergence
+  FOLLOWUP itself closed on `dev` via PR #79 (`989610cac`,
+  2026-05-26; root cause: `RANDOMX_FLAG_V2` missing at
+  `randomx_create_vm`). PR #78's post-rebase work (`c71ce2413`
+  extending the same fix to `COracleSession::from_raw_for_testing`
+  plus the operational close: lifting T2's `#[ignore]`,
+  reframing T6's docs, and lifting both workflows' `if: false`
+  gates) discharges the activation-surface contract recorded
+  above. Original framing preserved below for historical
+  context.* Phase 2g
   [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](./design/RANDOMX_V2_PHASE2G_PLAN.md)
   §3.19 R7-D1 reopens R1-D5 (adversarial seedhash corpus) under
   two independent substrate findings: (i) the verifier-accessor

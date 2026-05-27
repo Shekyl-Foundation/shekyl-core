@@ -50,7 +50,9 @@ on:
       - 'external/randomx-v2/**'
       - 'external/CMakeLists.txt'
       - 'scripts/ci/check_randomx_crate_invariants.sh'
+      - 'scripts/ci/check_phase2h_citations.sh'
       - '.github/workflows/randomx-v2-differential.yml'
+      - '.github/workflows/randomx-v2-adversarial-ratio.yml'
       - '.cargo/mutants.toml'
   pull_request:
     paths:
@@ -60,7 +62,9 @@ on:
       - 'external/randomx-v2/**'
       - 'external/CMakeLists.txt'
       - 'scripts/ci/check_randomx_crate_invariants.sh'
+      - 'scripts/ci/check_phase2h_citations.sh'
       - '.github/workflows/randomx-v2-differential.yml'
+      - '.github/workflows/randomx-v2-adversarial-ratio.yml'
       - '.cargo/mutants.toml'
   schedule:
     # Daily structural-validate at 05:00 UTC. Staggered from existing
@@ -167,8 +171,38 @@ jobs:
         # T3, T5, T7, T8, T16) are deferred behind the V3.0
         # `compute_hash` divergence; once that closes a future
         # amendment adds runtime-mode invocations here.
+        #
+        # T2 (`adversarial_corpus_byte_equality`) was originally
+        # `#[ignore]`-gated behind the V3.0 verifier-divergence
+        # FOLLOWUP (closed on `dev` by PR #79, 989610cac, 2026-05-26)
+        # so the default debug-mode `cargo test` invocation below
+        # skipped it. PR #78's post-rebase commit (`c71ce2413`)
+        # extended PR #79's `RANDOMX_FLAG_V2` fix to
+        # `COracleSession::from_raw_for_testing` and lifted T2's
+        # `#[ignore]` attribute. T2 now runs as part of the dedicated
+        # release-mode step below; the default step retains its
+        # original scope (unit + invariant tests; T2 runs once,
+        # release-mode, in the dedicated step to keep its observed
+        # runtime aligned with R1-D6 close Reframe 2's
+        # `T2_PER_PR_BUDGET_MS` budget — debug-mode RandomX is
+        # multi-minute slow without JIT).
         run: |
-          cargo test --locked -p shekyl-randomx-differential -p randomx-v2-sys
+          cargo test --locked -p shekyl-randomx-differential -p randomx-v2-sys \
+            -- --skip t2_adversarial_corpus_byte_equality
+      - name: cargo test --release T2 adversarial_corpus_byte_equality
+        working-directory: rust
+        # Per-PR release-mode T2 invocation (post-PR-#79 FOLLOWUP
+        # closure + PR #78 post-rebase `c71ce2413` operational close).
+        # Runs T2 against the Phase 2h C4 starter corpus (~10 s
+        # release-mode wall on `ubuntu-latest`-class hardware via the
+        # PR #78 C7 base-cache amortization, fits R1-D6 close
+        # Reframe 2's `T2_PER_PR_BUDGET_MS` budget). Per Phase 2h
+        # R1-D7 sub-A close, T2 lands in this existing workflow (not
+        # a new dedicated workflow), inheriting the
+        # `randomx-v2-differential.yml` per-PR + push cadence.
+        run: |
+          cargo test --release --locked -p shekyl-randomx-differential \
+            --test adversarial_corpus_byte_equality
       - name: cargo test --features test-internals (verifier)
         working-directory: rust
         # Per §5.3.3 R5-D1: the verifier crate's
@@ -188,6 +222,23 @@ jobs:
         # `shekyl-randomx-differential` (Pattern A + B + C
         # enforced; harness scope per §5.5.4 row).
         run: scripts/ci/check_randomx_crate_invariants.sh
+      - name: M5 citation-validation script
+        # Per Phase 2h R2-D4 close + the pre-implementation round
+        # Pass 2 disposition: M5 — Mechanical citation validation
+        # script (lands at `scripts/ci/check_phase2h_citations.sh`
+        # per the Phase 2f precedent + the C9 commit). Per-PR
+        # cadence — runs in the structural-validate job alongside
+        # the crate-invariant script. Sub-second runtime on the
+        # C4 starter corpus (8 recipes); scales linearly with
+        # corpus size and remains sub-second through R1-D1's
+        # 50-200-recipe target.
+        #
+        # Catches: missing plan-doc cites, missing source-file
+        # cites, out-of-range line numbers, per-category prefix
+        # mismatches (R1-D8 taxonomy invariant). Composes with
+        # M3 PR-template discipline (semantic verification) per
+        # R2-D3 T-A15 mitigation chain.
+        run: scripts/ci/check_phase2h_citations.sh
 
   mutants:
     # Weekly cargo-mutants run per §5.5.6 + §4.6 M2 (Round-3

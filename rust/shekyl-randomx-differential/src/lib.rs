@@ -66,12 +66,49 @@
 //! ## §5.7 drift-prevention boundary
 //!
 //! The re-export surface is limited to modules enumerated in
-//! §5.1.5–§5.1.14 + §5.1.17 + §5.1.18. Per §5.7's reviewer
-//! rejection criterion, any added module not listed in §5.1 is
-//! grounds for scope-creep rejection.
+//! Phase 2g §5.1.5–§5.1.14 + §5.1.17 + §5.1.18 plus modules added
+//! by Phase 2h's implementation-commit plan per
+//! [`docs/design/RANDOMX_V2_PHASE2H_PLAN.md`](../../../docs/design/RANDOMX_V2_PHASE2H_PLAN.md).
+//! Per the parent drift-prevention discipline, any module added
+//! outside an enumerated commit is grounds for scope-creep
+//! rejection.
+//!
+//! ## Phase 2h additions
+//!
+//! Phase 2h extends the harness with recipe-derived adversarial
+//! corpus, first-class recipe evaluator, Family-1 canonical outputs,
+//! and `--mode=adversarial-ratio`. Module additions:
+//!
+//! - **C1:** `adversarial_canonical_outputs` (Round 3 Pass-3
+//!   measurement-derived constants + Family-1 canonical-output
+//!   array scaffold per R1-D4); the array's contents populate at
+//!   C5 alongside the recipe corpus that produces them.
+//! - **C3:** `adversarial` (R1-D3 close recipe-based corpus
+//!   methodology). Lands the `adversarial/types.rs` `CacheRecipe`
+//!   + `BaseSeedhash` + `EvaluatedRecipe` data types, the
+//!   `adversarial/interpreter.rs` first-class recipe evaluator
+//!   (per R1-D3 close + R2-D1 T-A13 evaluator-divergence
+//!   mitigation anchor), the per-category `adversarial/recipes/`
+//!   sub-modules (scaffold-empty at C3; C4 populates), and the
+//!   `adversarial::get_corpus()` aggregation surface. The
+//!   pre-Phase-2h `adversarial_corpus.rs` module (Phase 2g R7-D4
+//!   scaffolded-empty shape) stays in place at C3 and is
+//!   decommissioned at C5 once the new methodology's M1
+//!   canonical-output surface fully supersedes T10's role.
+//! - **C6:** `mode_adversarial_ratio` (Phase 2h R1-D5 close;
+//!   replaces the Phase 2g `mode_worst_case` deferred-stub
+//!   dispatch at `main.rs:492-510`). Implements the per-recipe
+//!   ratio + per-class systematic-regression measurement against
+//!   paired
+//!   [`rust_subject::RustSubjectSession::from_raw_for_testing`] /
+//!   [`c_oracle::COracleSession::from_raw_for_testing`] sessions
+//!   (R1-D2 close cache-level test-internals surface + C-side
+//!   symmetric counterpart).
 
 #![doc(hidden)]
 
+pub mod adversarial;
+pub mod adversarial_canonical_outputs;
 pub mod adversarial_corpus;
 pub mod c_oracle;
 pub mod cache_precondition;
@@ -79,6 +116,7 @@ pub mod canonical_outputs;
 pub mod corpus_random;
 pub mod failure_output;
 pub mod invocation_banner;
+pub mod mode_adversarial_ratio;
 pub mod mode_concurrent;
 pub mod mode_correctness;
 pub mod mode_latency;

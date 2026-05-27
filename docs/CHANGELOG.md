@@ -4,6 +4,213 @@
 
 ### Added
 
+- **RandomX v2 Track A Phase 2h adversarial-corpus methodology
+  landed** (`feat/randomx-v2-phase2h-impl`, target PR; commits
+  C1–C10 per
+  [`docs/design/RANDOMX_V2_PHASE2H_PLAN.md`](design/RANDOMX_V2_PHASE2H_PLAN.md)
+  §8). Closes the Phase 2g R7-D1/R7-D2/R7-D3/R7-D4 deferrals by
+  replacing the V1-shaped class-heaviness grinding methodology
+  (unreachable under V2's PROGRAM_SIZE = 384 σ-gaps) with the
+  V2-substrate-anchored recipe-based corpus per R1-D1's
+  three-category composition (Category 1 audit-anchored
+  spec-silence enumeration; Category 2 coverage-metric
+  attestation; Category 3 substrate-derived boundary values).
+  The methodology ships first-class evaluator + declarative
+  recipe DSL + canonical-output pinning + per-PR M5 mechanical
+  citation-validation. T2/T6 originally inherited the Phase 2g
+  runtime-test `#[ignore]` gating behind the (then-open)
+  universal-across-inputs `compute_hash` divergence FOLLOWUP;
+  that FOLLOWUP closed on `dev` via
+  [PR #79](https://github.com/Shekyl-Foundation/shekyl-core/pull/79)
+  (`989610cac`, 2026-05-26; root cause: `RANDOMX_FLAG_V2` missing
+  at `randomx_create_vm`), and the post-rebase substrate-close
+  commits in this PR (see C11 below) lift the FOLLOWUP-gated
+  attributes and workflow conditions.
+
+  - **C1 canonical-output substrate + Pass-3 measurement
+    constants.** New
+    [`rust/shekyl-randomx-differential/src/adversarial_canonical_outputs.rs`](../rust/shekyl-randomx-differential/src/adversarial_canonical_outputs.rs)
+    lands the M1 canonical-output discipline for adversarial
+    recipes plus the Pass-3 measurement-bundle constants
+    (`RUNNER_NOISE_MARGIN`, per-class regression threshold,
+    `SAMPLE_BUDGET_PER_RECIPE`). The Family-1 array
+    (`FAMILY_1_RECIPE_OUTPUTS`) is regenerated at C5 alongside
+    the recipe-corpus expansion and pinned via
+    `gen_canonical_outputs.rs` Family-1 branch.
+
+  - **C2 `PreparedCache::from_raw_for_testing` accessor.** The
+    R1-D2 close cache-level test-internals accessor lands on
+    [`rust/shekyl-pow-randomx/src/prepared_cache.rs`](../rust/shekyl-pow-randomx/src/prepared_cache.rs)
+    under the existing `test-internals` feature gate (R5-D1
+    carve-out shape; sole consumer is
+    `shekyl-randomx-differential`). C-side symmetry via the
+    pre-existing `randomx_get_cache_memory` extraction path
+    keeps the production surface unchanged. A round-trip test
+    asserts that `from_raw_for_testing(seedhash, bytes)` of a
+    fresh `derive` output's bytes reproduces the same
+    `PreparedCache` (cache-bytes byte-identical; superscalar
+    programs re-derived from the seedhash).
+
+  - **C3 recipe types + first-class evaluator.** New
+    [`rust/shekyl-randomx-differential/src/adversarial/`](../rust/shekyl-randomx-differential/src/adversarial/)
+    module landing `types.rs` (`BaseSeedhash`, `CacheRecipe`,
+    `EvaluatedRecipe`), `interpreter.rs` (declarative recipe →
+    `(seedhash, cache_bytes)` evaluator with C-side base-cache
+    derivation amortization), `canonical.rs` (base-cache bytes
+    derivation helpers), and the `recipes/` submodule scaffold
+    (`spec_silence_anchors.rs`, `coverage_targets.rs`,
+    `boundary_values.rs`, `dataset_item_extrema.rs`) per R1-D3
+    close.
+
+  - **C4 initial recipe corpus (8 recipes; Cat 1 + 3).** The
+    starter corpus lands with two Category 1 spec-silence
+    anchors (`u128-high-half-cache-word-0`,
+    `shift-mask-boundary-cache-word-1`), three Category 3
+    boundary-value recipes (`boundary-cache-first-byte`,
+    `boundary-cache-last-byte`,
+    `boundary-dataset-item-stride-first-edge`), and three
+    Category 3 dataset-item-extrema recipes
+    (`boundary-block-stride-second-block-base`,
+    `boundary-block-stride-first-block-tail`,
+    `boundary-line-stride-within-block`). Each recipe's
+    rationale field cites the specific V2 substrate (plan-doc
+    section, configuration constant, or cache-implementation
+    line range) per R1-D8's three-evidence-category structure.
+    Coverage-targets module ships empty per R1-D1's
+    coverage-tooling-reproducibility reopen criterion.
+
+  - **C5 `FAMILY_1_RECIPE_OUTPUTS` + Family-1 generator
+    branch.** The canonical-output array is regenerated
+    alongside the C4 recipe expansion via the
+    `gen_canonical_outputs.rs` Family-1 generator branch; each
+    entry pins the expected `(seedhash, hash)` against the C
+    reference per M1 canonical-output discipline.
+
+  - **C6 `mode_adversarial_ratio` binary mode.** New
+    [`rust/shekyl-randomx-differential/src/mode_adversarial_ratio.rs`](../rust/shekyl-randomx-differential/src/mode_adversarial_ratio.rs)
+    implements the worst-case-ratio measurement mode replacing
+    the §3.19 R7-D4 diagnostic-only branch at
+    `main.rs`'s `--mode=adversarial-ratio` dispatch (renamed
+    from `--mode=worst-case` per the methodology shift).
+    Measures Rust-to-C latency ratios over the recipe corpus
+    against R1-D6's Claim 1 (per-recipe bound) + Claim 2
+    (corpus-median regression-tracking signal); emits structured
+    `T6_OBSERVATION` / `T6_CLAIM_2_TRACKING` JSON for the
+    regression-tracking dashboard harvester.
+
+  - **C7 T2 + T6 reactivation with inherited deferral gating.**
+    Phase 2g §6 T2 (`adversarial_corpus_byte_equality`) and T6
+    (`worst_case_ratio`) reactivate as new integration tests
+    under
+    [`rust/shekyl-randomx-differential/tests/`](../rust/shekyl-randomx-differential/tests/).
+    T2 asserts byte-equality between Rust and C across the
+    recipe corpus; T6 invokes `mode_adversarial_ratio` and
+    enforces Claim 1 + emits Claim 2 tracking signals. C7
+    cross-input diagnostics revealed that the Phase 2g
+    `compute_hash` FOLLOWUP's "large data sizes" framing was
+    incomplete — the divergence surfaces universally across all
+    tested seedhashes and data inputs, including 32-byte
+    fixed inputs. T2/T6 inherit the same `#[ignore]` deferral
+    as the Phase 2g runtime tests (T1/T3/T5/T7/T8/T16); the
+    FOLLOWUPS amendment records the revised characterization.
+
+  - **C8 CI workflow wiring (per-PR T2 + workflow_dispatch T6).**
+    [`.github/workflows/randomx-v2-differential.yml`](../.github/workflows/randomx-v2-differential.yml)
+    gains a per-PR `cargo test --ignored T2` step gated behind
+    `if: false` until the divergence FOLLOWUP closes. New
+    [`.github/workflows/randomx-v2-adversarial-ratio.yml`](../.github/workflows/randomx-v2-adversarial-ratio.yml)
+    workflow_dispatch-only T6 workflow scaffolds the
+    activation surface for measurement-mode runs (heavy enough
+    to warrant a separate workflow gate per R1-D7 Sub-A close);
+    same `if: false` gating mechanism. The activation surface
+    is one-line workflow edits + one-line test-attribute edits
+    when the FOLLOWUP closes.
+
+  - **C9 M5 mechanical citation-validation script.** New
+    [`scripts/ci/check_phase2h_citations.sh`](../scripts/ci/check_phase2h_citations.sh)
+    implements R2-D4's mechanical citation validation: parses
+    recipe `rationale` fields and validates per-category prefix
+    (R1-D8 taxonomy invariant), cited plan-doc existence under
+    `docs/design/`, cited source-file existence under
+    `rust/shekyl-pow-randomx/src/` (for `*.rs`) or
+    `external/randomx-v2/src/` (for `*.{c,cpp,h,hpp}`), and
+    cited line-number validity against the file's actual line
+    count. Composes with M3 PR-template discipline (the
+    procedural ceiling for semantic verification) per the T-A15
+    mitigation chain. Wired into the per-PR `structural-validate`
+    job as a fifth gate step. Sub-second runtime on the C4
+    starter corpus (8 recipes); scales through R1-D1's 50–200
+    target.
+
+  - **FOLLOWUPS reflow.** The "Post-2g adversarial-corpus
+    methodology + implementation" entry is annotated as closed
+    by Phase 2h with cross-citations to C1–C9; the
+    "Investigate `shekyl-pow-randomx::compute_hash` divergence"
+    entry is amended to record the Phase 2h cross-input
+    findings (universal-across-inputs scope correction; the
+    192-byte `t16` vector continues to pass only because it
+    pins the seedhash + input combination at the known-good
+    point). Both edits land in C10.
+
+  - **C11 post-rebase substrate-close (V3.0 verifier-divergence
+    FOLLOWUP closed by PR #79; this PR carries the operational
+    close).** PR #79 (`989610cac`, 2026-05-26) closed the V3.0
+    `shekyl-pow-randomx::compute_hash`-divergence-from-C-reference
+    FOLLOWUP by passing `RANDOMX_FLAG_V2` at `randomx_create_vm`
+    in `COracleSession::new`. Following PR #79's merge, this PR
+    rebased onto the post-#79 `dev` and landed four commits
+    discharging the activation-surface contract that C7/C8
+    established:
+    1. **`c71ce2413` — `RANDOMX_FLAG_V2` extension to
+       `COracleSession::from_raw_for_testing` + T17 round-trip
+       backstop.** Mirrors PR #79's fix at the testing constructor
+       so substrate-overwrite-based session creation (the path
+       T2/T6 exercise) is flag-equivalent to `Self::new`. New
+       [`rust/shekyl-randomx-differential/tests/c_oracle_session_round_trip.rs`](../rust/shekyl-randomx-differential/tests/c_oracle_session_round_trip.rs)
+       (T17) asserts cache-byte SHA + hash parity between the
+       two constructors for a fixed `(seedhash, payload)` pair;
+       bracket-tested by temporary V1 revert to confirm it
+       catches flag drift.
+    2. **`6fc059e1e` — lift T2 `#[ignore]` + workflow `if: false`
+       gating.** Removes the `#[ignore]` attribute on
+       `t2_adversarial_corpus_byte_equality`; rewrites the test
+       module's "C7 close" docstring as past-tense "Active
+       per-PR cadence (post-PR-#79 closure)" naming the
+       substrate-anchored reopening criterion per
+       `21-reversion-clause-discipline.mdc`; preserves the
+       R1-D6 close Reframe 1 substrate-broken vs ignore-ladder
+       distinction as the discipline's authoritative instance.
+       The `randomx-v2-differential.yml` workflow's `if: false`
+       gate on the dedicated T2 step is lifted; the preceding
+       default `cargo test` step gains
+       `-- --skip t2_adversarial_corpus_byte_equality` so T2
+       runs exactly once per CI invocation (release-mode via the
+       dedicated step) within R1-D6 close Reframe 2's
+       `T2_PER_PR_BUDGET_MS` budget.
+    3. **`1b1bda7df` — lift T6 workflow `if: false` gating +
+       reframe T6 docs.** Rewrites the `worst_case_ratio` module
+       rustdoc's "C7 close" section as past-tense
+       "Post-PR-#79 substrate note (FOLLOWUP closed)" and lifts
+       the `randomx-v2-adversarial-ratio.yml` workflow step's
+       `if: false` gate. T6 itself retains its test-layer
+       `#[ignore]` attribute for runtime-cost reasons orthogonal
+       to the FOLLOWUP (~40 s per recipe, outside per-PR cadence
+       per R1-D6 close Reframe 2); the inline comment and step
+       body record that the `--ignored` flag persists on this
+       basis. `workflow_dispatch` cadence is unchanged.
+    4. **`72a4a9eed` — reframe T16 docs as regression guard.**
+       Rewrites `divergence_triage` module rustdoc from past-tense
+       D1 substrate-triage investigation tool to forward-tense
+       three-way (Rust ↔ C ↔ fixture) byte-equality regression
+       guard at the canonical input. Preserves the D1 historical
+       context (the three-hypothesis enumeration, outcome (A)
+       confirmation, D2 → PR #79 diagnostic terminus); cites the
+       substrate-anchored reopening criterion; cross-references
+       T17 as the lighter-weight per-PR-cadence backstop. T16
+       stays `#[ignore]`-gated for runtime-cost reasons (256-MiB
+       Argon2d-512 cache + ~10–30 s wall); `#[ignore]` reason
+       text updated to surface the runtime-cost-only basis.
+
 - **RandomX v2 Track A Phase 2g differential-test harness landed**
   (`feat/randomx-v2-phase2g-impl`, PR #75, merge commit
   `33d22a83b`, 2026-05-25). Final sub-PR of the Rust pure-software

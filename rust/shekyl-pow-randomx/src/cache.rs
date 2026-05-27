@@ -556,6 +556,117 @@ impl Cache {
             buf
         })
     }
+
+    /// Construct a [`Cache`] from `(seedhash, cache_bytes)`,
+    /// bypassing Argon2d while still re-deriving the eight
+    /// [`SuperscalarProgram`]s from `seedhash`.
+    ///
+    /// **TEST-INFRASTRUCTURE ONLY.** This is the in-crate
+    /// implementation that backs
+    /// [`crate::PreparedCache::from_raw_for_testing`]; production
+    /// callers MUST go through [`Cache::derive`] /
+    /// [`crate::PreparedCache::derive`], which performs the full
+    /// Argon2d-512 fill required by the spec. Production-equivalence
+    /// for this constructor's `(seedhash, cache_bytes)` pair is
+    /// discussed at the [`crate::PreparedCache::from_raw_for_testing`]
+    /// rustdoc (the Phase 2h Round 2 R2-D2 / T-A14 cite anchor for
+    /// `*_for_testing` accessors).
+    ///
+    /// # Behavior
+    ///
+    /// - `programs`: re-derived from `seedhash` via
+    ///   [`Blake2Generator`] + [`generate_superscalar`] — identical
+    ///   to [`Cache::derive`]'s second half, so the program-side
+    ///   determinism is byte-identical to a production-derived
+    ///   cache for the same seedhash.
+    /// - `memory`: deserialized from `cache_bytes` (256 MiB of
+    ///   little-endian `u64` words per the
+    ///   [`Cache::block_bytes_le`] inverse), bypassing Argon2d.
+    ///   The recipe evaluator at
+    ///   `shekyl-randomx-differential::adversarial::interpreter`
+    ///   supplies the bytes — typically derived from a base
+    ///   seedhash's C-reference cache output with targeted
+    ///   modifications applied per the recipe specification per
+    ///   Phase 2h R1-D3 close.
+    ///
+    /// # Length contract
+    ///
+    /// `cache_bytes.len()` must equal [`CACHE_SIZE`] (256 MiB =
+    /// 268_435_456 bytes). The function panics on mismatch with a
+    /// diagnostic message — this is test infra, not production;
+    /// length-mismatch is a test-author bug and `Result` plumbing
+    /// at every recipe call site would obscure the bug class
+    /// without preventing it.
+    ///
+    /// # Visibility
+    ///
+    /// `pub(crate)` per the §5.3.1 "no new production surfaces"
+    /// discipline. The public test-internals accessor is
+    /// [`crate::PreparedCache::from_raw_for_testing`].
+    #[cfg(feature = "test-internals")]
+    pub(crate) fn from_raw_for_testing(seedhash: &crate::Seedhash, cache_bytes: &[u8]) -> Cache {
+        assert_eq!(
+            cache_bytes.len(),
+            CACHE_SIZE,
+            "Cache::from_raw_for_testing: `cache_bytes.len()` must equal CACHE_SIZE \
+             ({CACHE_SIZE} bytes = 256 MiB); got {actual} bytes. This is a test-author \
+             bug — recipes' evaluator must supply exactly CACHE_SIZE bytes of \
+             little-endian cache memory.",
+            actual = cache_bytes.len(),
+        );
+
+        // Deserialize cache_bytes into Box<[Block]>. Each Block is
+        // [u64; 128] = 1024 bytes; the byte stream is little-endian
+        // u64 words per the LE convention applied uniformly across
+        // the crate (matches Cache::block_bytes_le's inverse and the
+        // C reference's load64_native reads on little-endian targets).
+        // No unsafe required: we allocate Box<[Block]> via the same
+        // alloc_zeroed_cache_blocks helper used by Cache::derive
+        // (which encapsulates the single Phase 2c unsafe-code carve-
+        // out per §1 covenant 7), then overwrite each block's u64
+        // words from the bytes.
+        let mut memory = alloc_zeroed_cache_blocks(RANDOMX_ARGON_BLOCKS);
+        for (block_idx, block_chunk) in cache_bytes.chunks_exact(Block::SIZE).enumerate() {
+            // chunks_exact yields exactly RANDOMX_ARGON_BLOCKS chunks
+            // by the length assertion above; the .as_mut() conversion
+            // is the inverse of block.as_ref() used in block_bytes_le.
+            let block_words: &mut [u64] = memory[block_idx].as_mut();
+            for (word_slot, word_bytes) in block_words.iter_mut().zip(block_chunk.chunks_exact(8)) {
+                // u64::from_le_bytes requires a &[u8; 8]; chunks_exact(8)
+                // yields &[u8] of length 8 which must be try_into'd to
+                // an array reference. The try_into is infallible by
+                // chunks_exact's contract; the expect is contract
+                // assertion for future refactor-time safety.
+                let array_ref: &[u8; 8] = word_bytes
+                    .try_into()
+                    .expect("chunks_exact(8) yields slices of length exactly 8 by construction");
+                *word_slot = u64::from_le_bytes(*array_ref);
+            }
+        }
+
+        // Re-derive programs from seedhash identically to Cache::derive
+        // (same Blake2Generator seed; same generate_superscalar loop;
+        // same RANDOMX_CACHE_ACCESSES count). The recipe evaluator's
+        // (seedhash, cache_bytes) pair carries the base seedhash whose
+        // programs determine spec-faithful dataset-item derivation;
+        // the cache_bytes carry the (possibly modified) cache memory.
+        let bytes = seedhash.as_bytes();
+        let mut gen = Blake2Generator::new(bytes, 0);
+        let programs: Box<[SuperscalarProgram]> = (0..RANDOMX_CACHE_ACCESSES)
+            .map(|_| generate_superscalar(&mut gen))
+            .collect();
+
+        debug_assert_eq!(
+            programs.len(),
+            RANDOMX_CACHE_ACCESSES,
+            "Cache::from_raw_for_testing program-count invariant: \
+             `programs.len()` must equal `RANDOMX_CACHE_ACCESSES` \
+             ({RANDOMX_CACHE_ACCESSES}); got {actual}",
+            actual = programs.len(),
+        );
+
+        Cache { memory, programs }
+    }
 }
 
 impl Drop for Cache {
