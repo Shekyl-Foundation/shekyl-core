@@ -1139,6 +1139,24 @@ mod tests {
         a
     }
 
+    /// Golden HKDF outputs for KAT `file_kek` + `expected_classical_address`.
+    /// Tripwire against unintentional formula or info-string drift.
+    #[test]
+    fn hkdf_golden_outputs_kat_profile() {
+        const R1: [u8; FILE_KEK_BYTES] = [
+            146, 74, 110, 113, 243, 58, 14, 95, 184, 29, 119, 97, 7, 191, 250, 191, 14, 164, 133,
+            22, 152, 170, 137, 68, 159, 190, 195, 234, 226, 85, 160, 18,
+        ];
+        const R2: [u8; FILE_KEK_BYTES] = [
+            200, 171, 223, 169, 7, 117, 109, 9, 112, 251, 12, 186, 60, 96, 136, 137, 182, 233, 134,
+            176, 218, 122, 95, 106, 251, 69, 182, 143, 58, 49, 203, 65,
+        ];
+        let r1 = derive_wrap_key_region_1(&KAT_FILE_KEK_SEED);
+        let r2 = derive_wrap_key_region_2(&KAT_FILE_KEK_SEED, &KAT_EXPECTED_ADDRESS);
+        assert_eq!(r1.as_ref(), &R1);
+        assert_eq!(r2.as_ref(), &R2);
+    }
+
     #[test]
     fn hkdf_region_wrap_keys_are_distinct() {
         let file_kek = KAT_FILE_KEK_SEED;

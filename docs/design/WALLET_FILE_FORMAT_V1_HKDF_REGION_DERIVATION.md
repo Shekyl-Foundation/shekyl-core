@@ -97,6 +97,7 @@ separately on the orchestrator solely for re-derivation.
 - [x] `wallet_envelope.rs` — `derive_wrap_key_region_{1,2}` per §3
 - [x] Tier-3 KAT regeneration
 - [ ] Stage 1 PR 6 — `StateWrapKey`, session cache, F5(b) zeroization
+  (substrate pins in [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](STAGE_1_PR_6_PERSISTENCE_ENGINE.md))
 
 ## 6. Reversion clause
 
