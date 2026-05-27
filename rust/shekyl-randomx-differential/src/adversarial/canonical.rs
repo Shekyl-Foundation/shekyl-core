@@ -181,8 +181,9 @@ pub fn derive_base_cache_bytes(base: &BaseSeedhash) -> Vec<u8> {
 ///
 /// # Cost
 ///
-/// Bounded above by `(unique_bases × derive_base_cache_bytes_cost)
-/// + (recipes × evaluate_cost) + (recipes × sha256_cost)`. Per
+/// Total runtime is bounded above by the sum of three terms:
+/// `unique_bases × derive_base_cache_bytes_cost`, plus
+/// `recipes × evaluate_cost`, plus `recipes × sha256_cost`. Per
 /// [`derive_base_cache_bytes`]'s rustdoc cost section, each base
 /// derivation is ~250-300 ms (Argon2d ~150-200 ms +
 /// materialization ~50-100 ms); per [`super::interpreter::evaluate`]'s
