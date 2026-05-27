@@ -1500,69 +1500,328 @@ invariants; the implementor swap (`LocalRefresh` →
 
 ### 2.4 `PendingTxEngine`
 
-**Ownership.** The reservation tracker (`BTreeMap<ReservationId,
-Reservation>`), the monotonic `next_reservation_id` counter, and
-the two-phase build/submit/discard state machine pinned in the
-*Pending-tx protocol* decision-log entry (2026-04-27).
+**Reframed across Round 2 segments 2b–2g (binding-form pins) and
+Round 2 segment 2h / 2i (post-Round-3-readiness state-shape
+refinement + wider-ecosystem-lessons substrate).** The
+Round 1 surface stub (four-method trait; `Self::Error`-only
+return shape; opaque ownership of a `BTreeMap`-shaped reservation
+tracker) closes against the Round 2 / Round 3 design substrate
+pinned in
+[`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+§4 (Phase 0a–0m binding-form enumeration), §5.0.1 (the (γ) lean
+state shape), §5.0.2 (the diagnostic-stream + enum block), and
+§5.0.3 (the seven cross-cutting `DiagnosticSink` contracts). The
+surface below is the as-designed Stage 1 trait shape; the §7.X
+commit decomposition in the design doc records the eight-commit
+landing plan (C0–C8) for the `feat/stage-1-pr5-pending-tx-engine`
+short-lived branch.
 
-**Stage 1 surface.**
+**Ownership.** The (γ) lean state shape per
+[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+§5.0.1: three collections (`output_locks: HashMap<OutputId,
+ReservationId>` reservation-output lock map; `consumer_held:
+HashMap<ReservationId, Instant>` post-build / pre-submit
+reservations awaiting consumer-side `submit` or `discard`;
+`in_flight: HashMap<ReservationId, InFlightSubmit>` reservations
+whose `submit` has dispatched to the daemon and is awaiting
+resolution) and a `current_snapshot: SnapshotId` field; plus a
+monotonic `next_reservation_id: u64` counter. The reservation's
+lifecycle is encoded by collection membership, not by a
+`ReservationState` enum (the segment-2g enum disposition was
+dissolved into collection membership in segment 2h per the
+"refusal-forever vs. reject-with-reopening-criteria" framing in
+[`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc);
+see §5.6.2 of the design doc for the substrate). The
+build / submit / discard state machine surfaces externally via
+the trait below; the `signal_mempool_evicted` method (Phase 0m,
+segment 2i) admits a narrow consumer-observed mempool-eviction
+signal per the F2 ownership-boundary adjudication discipline.
+
+**Stage 1 surface (Round 3-closed; lands via PR 5 §7.X commits
+C0–C8 on `feat/stage-1-pr5-pending-tx-engine`).** The trait is
+declared at `engine/traits/pending_tx.rs` (PR 5 C5α); the
+supporting `SubmitError` / `TerminalErrorKind` /
+`AmbiguousErrorKind` / `PendingTxError` / `DiscardReason` /
+`SnapshotId` / `ReservationExtension` / `PendingTxDiagnostic`
+enums + the augmented `Reservation` / `PendingTx` types
+land in `engine/error.rs` / `engine/diagnostics.rs` /
+`engine/pending.rs` (PR 5 C2 / C3); the `LocalPendingTx<S: Signer,
+O: OutputSelector, F: FeeEstimator>` aggregate implementor lands
+at `engine/local_pending_tx.rs` (PR 5 C5β); the `Engine<S, D, L,
+R, P>` five-parameter wiring lands in `engine/mod.rs` (PR 5 C6).
+The trait surface (Phase 0a + 0e + 0f + 0m binding form) is:
 
 ```rust
-pub trait PendingTxEngine {
-    type Error: Into<PendingTxError>;
-
+pub trait PendingTxEngine: Send + Sync + 'static {
+    /// Build a pending transaction against the current ledger
+    /// snapshot; reserves the selected inputs in `consumer_held`
+    /// and returns the `PendingTx` handle to the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SendError` for build-time validation failures
+    /// (insufficient funds, no spendable outputs, selector
+    /// rejected the request, fee estimator unavailable, etc.).
+    /// Per the Round 2 Q9.8 closure (kept), `SendError` is the
+    /// build-time vocabulary; runtime invariants surface through
+    /// `PendingTxError` on later trait calls.
     async fn build(
         &self,
         request: TxRequest,
     ) -> Result<PendingTx, SendError>;
 
+    /// Submit the named reservation to the daemon.
+    ///
+    /// **Collection-move discipline (segment-2h P4 table).** On
+    /// entry, `rid` MUST be in `consumer_held` (else return
+    /// `SubmitError::ReservationNotFound` or
+    /// `SubmitAlreadyPending` per the P3 / P2 discriminating
+    /// switch). On `submit` dispatch, the rid moves from
+    /// `consumer_held` to `in_flight`; on daemon resolution, the
+    /// rid either (a) drops from `in_flight` on
+    /// `TerminalErrorKind` outcomes (and the engine emits
+    /// `Discarded { rid, DaemonRejectedTerminal { kind } }`), or
+    /// (b) stays in `in_flight` on `AmbiguousErrorKind` outcomes
+    /// (R9 daemon-side-authority per Finding 2; the engine emits
+    /// `SubmitPendingResolution { rid, tx_hash, kind }`), or (c)
+    /// drops from `in_flight` on accept (and the engine emits
+    /// `SubmitSucceeded { rid, tx_hash }`).
+    ///
+    /// **Staleness check (segment-2h F1 pin).** Before dispatching
+    /// to the daemon, the handler reads `current_snapshot` (Stage 1
+    /// reads exact ledger truth under the
+    /// `Mutex<PendingTxState>` guard; Stage 4's actor-local view
+    /// is best-effort under mailbox-FIFO ordering against
+    /// `LedgerDiagnostic::SnapshotMerged` arrivals) and compares
+    /// against the reservation's `snapshot_id`. On mismatch:
+    /// **lazy R5 disposition (segment 2h)** — the engine emits
+    /// `SubmitSnapshotInvalidated { rid, reservation_snapshot,
+    /// current_snapshot }`, returns
+    /// `SubmitError::SnapshotInvalidated`, and **does NOT
+    /// auto-release** the reservation; the consumer must call
+    /// `discard(rid, ConsumerExplicit)` to release
+    /// `output_locks`. R8 TTL safety-net handles consumer
+    /// abandonment.
+    ///
+    /// **Stage 4 multi-step decomposition (segment-2i G4 pin).**
+    /// Under Stage 4, the handler decomposes into a three-step
+    /// self-continuation pattern (`submit_start` →
+    /// `submit_signed` → `submit_completed`) with **deferred-reply
+    /// semantics** to absorb the HW-wallet signing-latency window
+    /// and the daemon-round-trip window without blocking the
+    /// actor's main mailbox. The Stage 4 actor-migration PR's
+    /// framework-selection pre-flight MUST confirm deferred-reply
+    /// substrate support per the
+    /// [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+    /// §5.0.1 G4 pin; if no candidate framework supports it, G4's
+    /// disposition reopens at the framework-selection altitude
+    /// (NOT retroactively against PR 5; PR 5's V3.0 trait surface
+    /// stays synchronous regardless).
     async fn submit(
         &self,
         id: ReservationId,
-    ) -> Result<TxHash, Self::Error>;
+    ) -> Result<TxHash, SubmitError>;
 
-    async fn discard(
+    /// Discard the named reservation with an explicit reason.
+    ///
+    /// **F2 ownership-boundary discipline (segment-2h pin).**
+    /// Consumer-initiated `discard` on a reservation in
+    /// `in_flight` returns
+    /// `PendingTxError::DiscardBlockedPendingDaemonAck`; the
+    /// daemon owns the resolution authority while the rid is
+    /// `in_flight` (Finding-2 ambiguous-outcome handling). On
+    /// `consumer_held` rids, the handler atomically removes the
+    /// rid from `consumer_held`, releases `output_locks` for the
+    /// rid, and emits
+    /// `Discarded { rid, reason }`.
+    fn discard(
         &self,
         id: ReservationId,
-    ) -> Result<(), Self::Error>;
+        reason: DiscardReason,
+    ) -> Result<(), PendingTxError>;
 
+    /// Signal that a previously-submitted reservation's tx has
+    /// been observed evicted from the daemon's mempool (Phase 0m
+    /// per segment-2i G1 disposition).
+    ///
+    /// **F2 ownership-boundary adjudication (segment-2i G1 pin).**
+    /// Mempool eviction is an *observation* the consumer made
+    /// that the actor couldn't make itself (the actor has no
+    /// direct visibility into the daemon's mempool state); the
+    /// observation is *of a state already terminal at the
+    /// network level* (the tx is gone from the mempool; the
+    /// daemon will never `Accept` it). The signal admits one
+    /// specific observation under F2; it does NOT admit
+    /// consumer-side terminal *decisions* (a hypothetical
+    /// `signal_user_force_cancel` shape that F2 forbids). The
+    /// narrow-vs-wide method-shape question is adjudicated
+    /// per-method: each new "consumer signals terminal"
+    /// candidate gets its own narrow method and its own F2
+    /// adjudication entry. A wider
+    /// `signal_external_terminal(rid, reason)` shape would
+    /// silently admit decision-class signals; the narrow shape
+    /// preserves the per-method F2 adjudication grep-ability
+    /// that the wider shape forecloses. See
+    /// [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+    /// §5.6.10 G1 for the full F2 adjudication record.
+    ///
+    /// On success: the rid drops from `in_flight`,
+    /// `output_locks` are released for the rid, and the engine
+    /// emits `Discarded { rid, reason:
+    /// DiscardReason::MempoolEvicted }` (all within a single
+    /// P7-atomic handler step). Returns
+    /// `PendingTxError::ReservationNotFound` if `rid` is not in
+    /// `in_flight` — including rids in `consumer_held`
+    /// (eviction is meaningful only for in-flight reservations;
+    /// consumer-held reservations were never submitted to the
+    /// daemon).
+    fn signal_mempool_evicted(
+        &self,
+        rid: ReservationId,
+    ) -> Result<(), PendingTxError>;
+
+    /// Total in-process reservations awaiting resolution. Sum of
+    /// `consumer_held.len() + in_flight.len()` per the (γ) lean
+    /// state shape.
     fn outstanding(&self) -> usize;
 }
 ```
 
-**Stage 1 implementing-type note (Round 3).** `LocalPendingTx`
-holds `Mutex<ReservationTracker>` for interior mutability. All
-mutating calls (`build`, `submit`, `discard`) acquire the mutex
-internally; `outstanding` reads through the mutex briefly. The
-choice is `Mutex` (not `RwLock`) because `PendingTxEngine`'s
-operations are predominantly write-style — even `outstanding` is a
-read against state that mutates on every other call, so the
-many-readers-one-writer pattern that justified `RwLock` for
-`LedgerEngine` does not apply here. Stage 4's `ActorRef<PendingTxActor>`
-provides equivalent serialization through its mailbox.
+**`Send + Sync + 'static` on the trait (parallel to §2.3 / PR 4
+precedent).** The supertrait bound supports the Stage 4
+`kameo`-equivalent actor wrap of `LocalPendingTx` as the actor
+body. Listing it at the trait surface catches the common failure
+mode where a trait that "happens to be `Send + Sync + 'static`
+today" gains a non-`Send` field (a `Signer` impl holding a
+non-`Send` HSM handle, a `FeeEstimator` impl holding a non-`Send`
+RPC client) before the actor wrap forces the issue. The bound is
+**not** `Clone`: `LocalPendingTx` holds `Arc<S: Signer>` (spend
+material; not safely `Clone`-derived per the architectural-
+inheritance discipline per
+[`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)),
+so a forced `Clone` would re-introduce the secret-duplication
+hazard.
+
+**Trait-parameter slots and constructor-bound dependencies.**
+The implementor (`LocalPendingTx<S: Signer, O: OutputSelector,
+F: FeeEstimator>`) is parameterized on three trait surfaces from
+the Phase 0h / 0i / 0j enumeration; a fourth constructor parameter
+binds the diagnostic-stream sink (`sink: Arc<dyn DiagnosticSink>`,
+segment-2f §5.0.2.1 sink-binding closure). The constructor also
+takes the `ReservationTTLConfig` (Phase 0l per-collection TTL;
+both fields default to `DEFAULT_RESERVATION_TTL`, per-collection
+shape per F7 disposition) and the `LedgerEngine` handle for
+`current_snapshot` reads at submit-time. Stage 4's `PendingTxActor`
+preserves the trait-parameter taxonomy via spawn-time DI
+(`signer: ActorRef<SigningActor>`, `output_selector: Arc<dyn
+OutputSelector>`, `fee_estimator: Arc<dyn FeeEstimator>`); the
+trait surface is identical across both stages.
+
+**Stage 1 implementing-type note (Round 3 + segment 2h).**
+`LocalPendingTx` holds `Mutex<PendingTxState>` for interior
+mutability over the (γ) three-collection shape. All mutating
+calls (`build`, `submit`, `discard`, `signal_mempool_evicted`)
+acquire the mutex internally per the **handler-atomicity
+discipline (P7 pin)**: lock claim/release on `output_locks` +
+collection insert/remove on `consumer_held` / `in_flight` + sink
+emit all run within a single guard window; no `.await` between
+mutation steps. `outstanding` reads through the mutex briefly.
+The choice remains `Mutex` (not `RwLock`) because
+`PendingTxEngine`'s operations are predominantly write-style —
+even `outstanding` is a read against state that mutates on every
+other call. Stage 4's `ActorRef<PendingTxActor>` provides
+equivalent serialization through its mailbox; the
+handler-atomicity discipline is satisfied by performing all
+mutations synchronously within the handler before yielding to
+the mailbox.
 
 **Round 3 disposition (the &mut → & sweep).** Originally `&mut
 self` on `build`, `submit`, `discard`; revised to `&self` per the
-Round 3 trait-surface sweep. Same rationale as §2.2's
+§2 `&mut → &self` sweep. Same rationale as §2.2's
 `apply_scan_result` change: Stage 4's `ActorRef<…>` cannot satisfy
 `&mut self`. Interior mutability in `LocalPendingTx` (the Stage 1
 type) replaces compile-time borrow checking with runtime mutex
 serialization; Stage 4's mailbox replaces the runtime mutex with
 message FIFO. The trait surface is identical across both stages.
+`signal_mempool_evicted` (added in segment 2i, post-sweep) is
+`&self` by construction.
 
-**Round 2 dispositions.**
+**Concrete return types (segment-2h `Self::Error` retirement).**
+The trait no longer declares an associated `Error` type. The
+original `type Error: Into<PendingTxError>` shape conflated the
+build / submit / discard / signal_mempool_evicted error
+vocabularies behind a single associated type; the segment-2h
+reshape split the vocabularies (`SendError` for build, `SubmitError`
+for submit, `PendingTxError` for discard /
+`signal_mempool_evicted`) and concrete-typed each return. The
+type system now enforces the lifecycle-class distinction
+(`TerminalErrorKind` vs. `AmbiguousErrorKind` inside
+`SubmitError`; `DiscardBlockedPendingDaemonAck` vs.
+`ReservationNotFound` inside `PendingTxError`) without consumer-
+side wildcard matching. See
+[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+§5.0.2 for the enum block; §5.6.4 / §5.6.5 / §5.6.6 for the
+P-discipline and F-discipline substrate.
+
+**Round 2 dispositions (preserved).**
 
 - **Q9.8 (`build` returns `SendError` vs. `Self::Error`): closed
-  keep `SendError`.** The split exists today because `SendError`
+  keep `SendError`.** The split exists because `SendError`
   covers build-time validation (insufficient funds, no spendable
-  outputs); `PendingTxError` covers runtime invariants. The two
-  vocabularies are distinct domains; collapsing them would force
-  callers to discriminate by variant rather than by error type.
+  outputs, selector contract violation per F4); `PendingTxError`
+  covers runtime invariants (discard-side / signal-side
+  classification). The two vocabularies are distinct domains;
+  collapsing them would force callers to discriminate by variant
+  rather than by error type.
 - **Q9.9 (V3.1 multisig methods inclusion): closed not in Stage 1
   surface; additive at Stage 4.** `inspect`, `adjust_fee`,
   `sign_partial` from the *Pending-tx protocol* decision-log entry
   are V3.1+ multisig concerns; Stage 4's actor-shaped trait
   implementation can add them without re-opening the §2.4 surface.
+
+**Phase 0 substrate (design provenance).** The §2.4 surface
+above lands in two stages:
+
+- **Phase 0 (this section, doc-only)** — the Phase 0a–0m
+  binding-form pins per
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §4: `Send + Sync + 'static` supertrait bound; concrete-typed
+  return shapes (`SendError` / `SubmitError` / `PendingTxError`);
+  five-method trait surface (`build` / `submit` / `discard` /
+  `signal_mempool_evicted` / `outstanding`); the supporting
+  `TerminalErrorKind` + `AmbiguousErrorKind` + `SubmitError` +
+  `PendingTxError` + `DiscardReason` + `SnapshotId` +
+  `ReservationExtension` + `PendingTxDiagnostic` enums; the
+  `OutputSelectorError::ReturnedIndicesNotSubset` F4-enforcement
+  variant; the `ReservationTTLConfig { consumer_held, in_flight
+  }` per-collection TTL substrate; the `Signer`, `OutputSelector`,
+  and `FeeEstimator` trait surfaces (Phase 0h / 0i / 0j); the
+  `SubmissionStrategyActor` topology slot (Phase 0k; V3.0-
+  reserved, V3.x-introduced); the `LedgerDiagnostic::SnapshotMerged`
+  variant stub (Phase 0g; deferred to V3.x consumer-actor PR per
+  segment-2g closure). C0 lands as the doc-only Phase 0 spec
+  amendment per the §7.X commit decomposition.
+- **Phase 1 (PR 5 §7.X commits C1–C8)** —
+  `pub(crate) trait PendingTxEngine` lands in
+  `engine::traits::pending_tx`; the enum families and augmented
+  `Reservation` / `PendingTx` types ship in `engine::pending` /
+  `engine::error` / `engine::diagnostics`; `LocalPendingTx<S, O,
+  F>` ships as the Stage 1 concrete substrate;
+  `Engine<S, D, L, R, P>` five-parameter wiring rewires
+  orchestration-layer dispatch to delegate through `P:
+  PendingTxEngine`. The §7.X commit decomposition ordering is
+  load-bearing for the Phase 1 bisection-discipline gate; the
+  segment-2h within-commit deltas (§5.6.8) and segment-2i
+  delta-on-delta (§5.6.12) refine the C0–C8 commit bodies in
+  place per the synthesis-banner pinned at the top of the design
+  doc's §7.X.
+
+Stage 4 cutover preserves the §2.4 surface verbatim per §7's
+invariants; the implementor swap (`LocalPendingTx` → `kameo`-
+backed `PendingTxActor` body) does not touch the trait shape.
+The Stage 4 multi-step submit + deferred-reply substrate-
+confirmation pin (segment-2i G4) lives at the actor-migration PR's
+framework-selection pre-flight, not at this trait surface.
 
 ### 2.5 `DaemonEngine` (revised in Round 2)
 
