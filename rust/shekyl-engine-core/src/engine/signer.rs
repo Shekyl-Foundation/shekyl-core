@@ -114,9 +114,7 @@ pub struct TransferSigningContext {
 
 impl TransferSigningContext {
     /// Construct a Phase 1 stub context. Crate-internal only —
-    /// `LocalPendingTx::build` (C5) is the sole production caller;
-    /// dead until C5 lands the build pipeline.
-    #[allow(dead_code)]
+    /// `LocalPendingTx::build_sync` is the production caller.
     pub(crate) fn phase1_stub() -> Self {
         Self { _phase1_stub: () }
     }
@@ -302,9 +300,7 @@ pub struct LocalSigner {
 impl LocalSigner {
     /// Construct a [`LocalSigner`] from the engine's shared key
     /// blob. Crate-internal: only the engine's open / construct
-    /// pipeline calls this; external `Signer` impls are
-    /// independent. Dead until C5 / engine construction wires
-    /// the open-time `AllKeysBlob` into a signer instance.
+    /// pipeline calls this; external `Signer` impls are independent.
     pub(crate) fn new(keys: Arc<AllKeysBlob>) -> Self {
         Self { keys }
     }

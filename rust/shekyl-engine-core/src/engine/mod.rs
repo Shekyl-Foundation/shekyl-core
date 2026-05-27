@@ -330,7 +330,8 @@ pub struct Engine<
     ///   transfers, bookkeeping (subaddress registry, labels, address
     ///   book, account tags), tx metadata (`tx_keys`, scanned pool
     ///   txs), and the sync-state block. **Reservations do not live
-    ///   here** — see [`pending`](crate::engine::local_pending_tx) below.
+    ///   here** — see [`local_pending_tx`](crate::engine::local_pending_tx)
+    ///   below (reservations live in `LocalPendingTx`, not in the ledger).
     /// - The [`shekyl_engine_state::LedgerIndexes`] — runtime-only
     ///   indexes derived from chain replay (key-image / pubkey lookup
     ///   maps, staker-pool accrual aggregate). Per the

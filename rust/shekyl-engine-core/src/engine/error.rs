@@ -965,7 +965,7 @@ pub enum OutputSelectorError {
     },
 }
 
-/// Failures from `FeeEstimator::estimate`. Phase 0j binding form
+/// Failures from `FeeEstimator::estimate_fee`. Phase 0j binding form
 /// per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 (R16 segment-2c closure
 /// with segment-2d V3.0-lift evaluation).
 ///
@@ -993,7 +993,7 @@ pub enum FeeEstimatorError {
     },
 }
 
-/// Failures from `Signer::sign_transaction`. Phase 0h binding form
+/// Failures from `Signer::sign_transfer`. Phase 0h binding form
 /// per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 (R11 (b) segment-2b
 /// closure as separate `LocalSigner` / `SigningActor`).
 ///

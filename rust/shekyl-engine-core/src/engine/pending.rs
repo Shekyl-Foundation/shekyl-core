@@ -716,14 +716,43 @@ use std::future::Future;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
 
-/// Poll a future that completes without pending (Stage 1 `LocalPendingTx`
-/// uses `std::future::ready` internally).
-fn poll_immediate<F: Future>(future: F) -> F::Output {
+use super::error::AmbiguousErrorKind;
+
+/// Poll a future that the V3.0 sync `Engine` API expects to complete
+/// immediately.
+///
+/// Stage 1 [`LocalPendingTx`](super::local_pending_tx::LocalPendingTx)
+/// satisfies this by returning `std::future::ready` from `build` /
+/// `submit`. A future `PendingTxEngine` that performs real async I/O
+/// must pair with async `Engine` methods (or documented `block_on`
+/// policy) — the sync wrappers return structured errors rather than
+/// panicking when a future returns [`Poll::Pending`].
+fn poll_immediate_build<F>(future: F) -> Result<PendingTx, SendError>
+where
+    F: Future<Output = Result<PendingTx, SendError>>,
+{
     let mut cx = Context::from_waker(Waker::noop());
     let mut pinned = pin!(future);
     match pinned.as_mut().poll(&mut cx) {
         Poll::Ready(val) => val,
-        Poll::Pending => panic!("poll_immediate: future not ready"),
+        Poll::Pending => Err(SendError::CannotSign {
+            reason: "sync Engine::build_pending_tx requires an immediately-ready PendingTxEngine future",
+        }),
+    }
+}
+
+fn poll_immediate_submit<F>(id: ReservationId, future: F) -> Result<TxHash, SubmitError>
+where
+    F: Future<Output = Result<TxHash, SubmitError>>,
+{
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut pinned = pin!(future);
+    match pinned.as_mut().poll(&mut cx) {
+        Poll::Ready(val) => val,
+        Poll::Pending => Err(SubmitError::DaemonAmbiguous {
+            kind: AmbiguousErrorKind::DaemonUnavailable,
+            reservation_id: id,
+        }),
     }
 }
 
@@ -747,20 +776,24 @@ impl<
 
     /// Build a [`PendingTx`] via [`PendingTxEngine::build`].
     pub fn build_pending_tx(&mut self, request: &TxRequest) -> Result<PendingTx, SendError> {
-        poll_immediate(self.pending.build(request.clone()))
+        poll_immediate_build(self.pending.build(request.clone()))
     }
 
     /// Submit a [`PendingTx`] handle via [`PendingTxEngine::submit`].
     pub fn submit_pending_tx(&mut self, id: ReservationId) -> Result<TxHash, SubmitError> {
-        poll_immediate(self.pending.submit(id))
+        poll_immediate_submit(id, self.pending.submit(id))
     }
 
     /// Discard a reservation via [`PendingTxEngine::discard`].
     ///
     /// Orchestration always passes [`DiscardReason::ConsumerExplicit`].
+    /// Unknown handles are idempotent: [`PendingTxError::ReservationNotFound`]
+    /// from the engine maps to `Ok(())` per cross-cutting lock 4.
     pub fn discard_pending_tx(&mut self, id: ReservationId) -> Result<(), PendingTxError> {
-        self.pending
-            .discard(id, DiscardReason::ConsumerExplicit)
+        match self.pending.discard(id, DiscardReason::ConsumerExplicit) {
+            Ok(()) | Err(PendingTxError::ReservationNotFound { .. }) => Ok(()),
+            Err(err) => Err(err),
+        }
     }
 }
 

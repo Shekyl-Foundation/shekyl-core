@@ -9,8 +9,10 @@
 //!
 //! Mirrors [`super::fault_injecting_refresh::FaultInjecting`] and
 //! [`super::fault_injecting_ledger::FaultInjecting`]: three independent
-//! FIFO queues (one per fallible method), pop-before-delegate semantics,
-//! drain inspector, and `debug_assert!` on [`Drop`].
+//! FIFO queues for the injectable fallible paths (`build`, `submit`,
+//! `discard`), pop-before-delegate semantics, drain inspector, and
+//! `debug_assert!` on [`Drop`]. [`PendingTxEngine::signal_mempool_evicted`]
+//! delegates without a queue (V3.0 tests cover it via the inner engine).
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -198,6 +200,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::manual_async_fn)]
     impl PendingTxEngine for DelegationStub {
         fn build(
             &self,

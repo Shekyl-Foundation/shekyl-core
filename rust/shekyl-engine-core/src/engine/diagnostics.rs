@@ -442,6 +442,10 @@ pub enum BuildErrorKind {
     /// `LedgerSnapshot`.
     LedgerNotReady,
 
+    /// Daemon-side I/O during build (fee estimation, spend-status
+    /// RPC, etc.). Mirrors [`SendError::Io`](super::error::SendError::Io).
+    DaemonUnavailable,
+
     /// The configured `OutputSelector` returned a set whose
     /// indices were not a subset of the candidate set the engine
     /// supplied — the F4 caller-side subset re-verification
