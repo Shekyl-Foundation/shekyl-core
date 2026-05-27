@@ -194,7 +194,9 @@ pub use pending::{
 pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
 };
-pub use signer::{EngineSignerKind, SoloSigner};
+pub use signer::{
+    EngineSignerKind, LocalSigner, SignedTransfer, Signer, SoloSigner, TransferSigningContext,
+};
 pub use view_material::ViewMaterial;
 
 use std::collections::BTreeMap;
