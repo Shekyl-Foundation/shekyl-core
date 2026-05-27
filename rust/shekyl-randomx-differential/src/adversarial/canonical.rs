@@ -181,9 +181,19 @@ pub fn derive_base_cache_bytes(base: &BaseSeedhash) -> Vec<u8> {
 ///
 /// # Cost
 ///
-/// Bounded above by `(unique_bases × cache_derive_time) + (recipes
-/// × cache_bytes_clone_time)`. For the C4 starter corpus:
-/// 3 × ~10s + 8 × ~1s ≈ 38s on `ubuntu-latest`-class hardware.
+/// Bounded above by `(unique_bases × derive_base_cache_bytes_cost)
+/// + (recipes × evaluate_cost) + (recipes × sha256_cost)`. Per
+/// [`derive_base_cache_bytes`]'s rustdoc cost section, each base
+/// derivation is ~250-300 ms (Argon2d ~150-200 ms +
+/// materialization ~50-100 ms); per [`super::interpreter::evaluate`]'s
+/// rustdoc cost section, each recipe expansion is dominated by a
+/// 256-MiB clone (~tens of ms, memory-bandwidth-bound); SHA-256
+/// over 256 MiB is similarly memory-bandwidth-bound (~tens of ms).
+/// For the C4 starter corpus (3 unique bases, 8 recipes):
+/// 3 × ~300 ms + 8 × ~50 ms + 8 × ~50 ms ≈ ~1.7 s on
+/// `ubuntu-latest`-class hardware. The 768-MiB peak working set
+/// (3 derived bases held simultaneously through the loop)
+/// dominates the memory footprint.
 ///
 /// # Ordering pin
 ///
@@ -260,7 +270,9 @@ mod tests {
     /// meaningful — if two recipes with distinct modifications
     /// canonicalized to the same value, the ordering pin would
     /// degenerate. The test uses synthetic base bytes to avoid the
-    /// ~30-second Argon2d cost of [`derive_base_cache_bytes`].
+    /// 256-MiB allocation + ~250-300 ms Argon2d-fill cost of
+    /// [`derive_base_cache_bytes`] (per that function's rustdoc
+    /// cost section).
     ///
     /// The full corpus-level ordering invariant of
     /// [`compute_corpus_canonicals`] (one output per recipe, in
@@ -303,18 +315,42 @@ mod tests {
     /// [`compute_corpus_canonicals`] returns the correct shape
     /// against the actual C4 starter corpus. The expensive
     /// derivation runs only under `--ignored` to keep the default
-    /// `cargo test` fast; the corresponding integration test
-    /// in [`tests/adversarial_canonical_runtime.rs`] runs the
-    /// full computation under the cache-equivalence precondition.
+    /// `cargo test` fast.
     ///
-    /// Marked `#[ignore]` because it derives 3 × 256-MiB Argon2d
-    /// caches (~30-60 seconds total); run with `cargo test -p
+    /// This in-module `#[ignore]`-gated test is the C4 starter
+    /// corpus's runtime backstop for the
+    /// [`compute_corpus_canonicals`] shape invariant. A dedicated
+    /// `tests/adversarial_canonical_runtime.rs` integration test
+    /// that re-derives canonicals and asserts byte-equality
+    /// against
+    /// [`super::super::adversarial_canonical_outputs::FAMILY_1_RECIPE_OUTPUTS`]
+    /// was scoped in early planning but consolidated into the
+    /// existing substrate: the compile-time
+    /// [`super::super::adversarial_canonical_outputs::FAMILY_1_RECIPE_SHA256`]
+    /// meta-pin (with the
+    /// `family_1_recipe_sha256_meta_pin` unit test enforcing the
+    /// no-tampering guard) covers the array-tampering surface;
+    /// the [`bin::gen_canonical_outputs`](../../bin/gen_canonical_outputs.rs)
+    /// helper covers the array-regeneration surface. The
+    /// re-derive-and-compare-at-runtime backstop is deferred
+    /// (`#[ignore]`-gated `compute_corpus_canonicals_full_corpus_shape`
+    /// is the closest in-tree exerciser); reopen if evaluator-drift
+    /// regressions surface that the compile-time pin doesn't catch.
+    ///
+    /// Marked `#[ignore]` because it allocates 3 × 256-MiB Argon2d
+    /// caches simultaneously (~768 MiB peak working set), plus the
+    /// ~250-300 ms per-base derive cost (per
+    /// [`derive_base_cache_bytes`]'s rustdoc) and per-recipe
+    /// SHA-256/clone overhead — total runtime is bounded but the
+    /// memory footprint is large enough to risk OOM on
+    /// memory-constrained runners. Run with `cargo test -p
     /// shekyl-randomx-differential --release -- --ignored
     /// compute_corpus_canonicals_full_corpus_shape` when
     /// re-validating the C5 canonical pin.
     #[test]
-    #[ignore = "Phase 2h C5 expensive: derives 3 × 256-MiB caches (~30-60s on \
-                ubuntu-latest); run with --ignored to validate C5 canonicals."]
+    #[ignore = "Phase 2h C5 expensive: allocates 3 × 256-MiB caches simultaneously \
+                (~768 MiB peak); runtime ≈ ~1-2s on ubuntu-latest. Memory footprint, \
+                not runtime, is the gate basis. Run with --ignored to validate C5 canonicals."]
     fn compute_corpus_canonicals_full_corpus_shape() {
         let corpus = get_corpus();
         let canonicals = compute_corpus_canonicals(&corpus);

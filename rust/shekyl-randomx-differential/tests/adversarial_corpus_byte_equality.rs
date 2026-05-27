@@ -154,11 +154,19 @@ fn t2_adversarial_corpus_byte_equality() {
     // the pattern in `mode_adversarial_ratio::run` (per the
     // adversarial-ratio binary's `base_cache_cache` comment). The C4
     // starter corpus has 3 unique base byte patterns across 8
-    // recipes; without amortization T2 pays the ~10s Argon2d-fill +
-    // 256-MiB allocation cost 8 times (~80s + 2 GiB peak) instead of
-    // 3 times (~30s + 768 MiB peak). The Vec<(key, bytes)> shape
-    // matches the binary's identical structure for grep-ability;
-    // when a third consumer emerges this lifts to a shared helper.
+    // recipes. Per `derive_base_cache_bytes`'s rustdoc cost section
+    // (~250-300 ms Argon2d-fill + materialization, ~256-MiB
+    // allocation per call): without amortization T2 pays 8 ×
+    // ~300 ms ≈ ~2.4 s base-derivation + 2-GiB allocation churn;
+    // with amortization 3 × ~300 ms ≈ ~900 ms + 768-MiB peak
+    // working set. The amortization's primary value at C4 scale is
+    // structural correctness (no redundant Argon2d work) and
+    // allocation footprint; the wall-time savings (~1.5 s) are
+    // dwarfed by per-recipe hash computation. The Vec<(key, bytes)>
+    // shape matches the binary's identical structure for
+    // grep-ability; when a fifth consumer emerges this lifts to a
+    // shared helper per `adversarial/mod.rs`'s "Base-cache
+    // amortization" module-level rustdoc disposition.
     let mut base_cache_cache: Vec<([u8; 32], Vec<u8>)> = Vec::new();
     for recipe in &corpus {
         let base_bytes = match base_cache_cache
