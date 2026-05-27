@@ -140,8 +140,9 @@ for wrap-layer re-derivation policy in §4.3 of the parent spec.
       shape.
 - [ ] `docs/test_vectors/WALLET_FILE_FORMAT_V1/` — regenerate three sealed blobs +
       manifest.
-- [ ] Stage 1 PR 6 — update F5(b) narrative once implementation lands; remove
-      "honest scope note" about shared `file_kek`.
+- [x] Stage 1 PR 6 — F5(b) narrative updated in
+      [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](STAGE_1_PR_6_PERSISTENCE_ENGINE.md)
+      §5.9 (substrate amendment pin; `StateWrapKey` = `wrap_key_region_2`).
 
 ## 6. Reversion clause
 

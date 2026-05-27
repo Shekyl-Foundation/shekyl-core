@@ -47,6 +47,20 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Stage 1 trait-extraction chain — closeout audit (2026-05-27;
+  PR #81 merged).** The §8.1 critical-path chain is landed on `dev`:
+  `DaemonEngine` → `LedgerEngine` → (`RefreshEngine` ∥
+  `PendingTxEngine`), with `KeyEngine` trait + `LocalKeys` implementor
+  in parallel. Inventory, orchestrator shape (`Engine<S, D, L, R, P>`),
+  gaps (`PersistenceEngine`, `EconomicsEngine`, `K: KeyEngine` on
+  `Engine`), and ordered next steps:
+  [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](./design/STAGE_1_COMPLETION_AUDIT.md).
+  **Still V3.0 pre-genesis but not “missing Stage 1 PR”:** P1 async
+  refresh post-pass, wallet BIP-39 FFI, optional persistence/economics
+  trait PRs, economics §3.3 benches. **Rewrite plan:**
+  [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
+  Phases 0–6; Stage 1 was prerequisite, Phase 1+ continues `Engine`.
+
 - **Post-2g adversarial-corpus methodology + implementation
   (trigger: RandomX v2 Phase 2g Round 7 R7-D1/R7-D2 reopening
   of R1-D5 + R1-D6; *closed by Phase 2h implementation PR*).**
@@ -3877,6 +3891,21 @@ one place to confirm each item's relationship to the wallet stack.
 ---
 
 ## V3.2 — Rust cutover and cleanup
+
+- **`WalletFile` handle slimming (post–PR 6 `PersistenceEngine`).**
+  `shekyl-engine-file::WalletFile` retains `keys_file_bytes`, opened
+  `file_kek`, and other material beyond what steady-state
+  `PersistenceEngine` methods need. Memory disclosure of the **whole
+  handle** is a strictly larger blast radius than orchestrator-held
+  `StateWrapKey` / `PrefsHmacKey` alone (see
+  `docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md` §5.9; post-HKDF amendment,
+  steady-state cache is `wrap_key_region_2`, not `file_kek`).
+  **Work:** narrow `WalletFile`'s held state to the minimum the trait
+  implementor requires; keep open/rotate paths able to re-derive sealing
+  keys without retaining redundant secret-bearing fields across
+  steady-state sync. **Target:** V3.2. **Reopen when:** PR 6 lands and
+  `PersistenceEngine` call sites are stable enough to measure what the
+  implementor actually reads per method.
 
 - **FFI C ABI symbol rename: `shekyl_wallet_*` → `shekyl_engine_*`,
   `ShekylWallet` → `ShekylEngine` (paired with `wallet2.cpp` retirement).**
