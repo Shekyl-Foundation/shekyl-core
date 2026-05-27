@@ -1,8 +1,9 @@
 # Stage 1 PR 6 — `PersistenceEngine` extraction — design
 
-**Status.** **Design closed — Round 3 complete (2026-05-27).** Ready for
-Phase 1 on `feat/stage-1-pr6-persistence-engine` after HKDF implementation
-PR merges to `dev`. Planning doc branch:
+**Status.** **Design closed — Round 3 complete (2026-05-27); lessons canvass
+supplement landed same day (§5.12).** Ready for Phase 1 on
+`feat/stage-1-pr6-persistence-engine` after HKDF implementation PR merges to
+`dev`. Planning doc branch:
 `feat/stage-1-pr6-persistence-engine-design` → PR to `dev`. Opened from `dev`
 tip `b9c03dc24` (post–PR #81 `PendingTxEngine` merge). This document follows
 [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) and
@@ -266,7 +267,12 @@ open.
 | Password not cached in `WalletFile` | Implementor receives borrowed sealing keys per call; no password cache in implementor |
 | Post-`rotate_password` cache | Orchestrator **must** re-derive `StateWrapKey` / `PrefsHmacKey`; stale handles fail loud (Poly1305) — trait rustdoc pin (Phase 0o / C1) |
 | Advisory lock single-writer | `WalletFile` + `KeysFileLock`; **process lifetime** may exceed single `Engine::close` for wallet-RPC daemon (§6.1) |
-| Atomic state writes + durability contract | `atomic_write_file`: tmp → fsync(file) → rename → fsync(parent) (`shekyl-engine-file/src/atomic.rs`). Trait rustdoc: **`Ok(())` = durable across power loss** (Phase 0b / C1) |
+| Atomic state writes + durability contract | `atomic_write_file`: tmp → fsync(file) → rename → fsync(parent) (`shekyl-engine-file/src/atomic.rs`). Trait rustdoc: **`Ok(())` = durable across power loss** (Phase 0b / C1). **Not** the region-2 AEAD nonce source — nonces are `OsRng` in `seal_state_file` (§5.12 L7). |
+| Region-2 AEAD nonce provenance | Each `save_state` draws a fresh 24-byte `region2_nonce` via `fresh_random_bytes()` → `OsRng` (`wallet_envelope.rs`). Trait rustdoc pins **never counter-derived** (§5.12 L7, Phase **0r** / C1). |
+| Ledger snapshot consistency | `save_state` receives a **point-in-time** `WalletLedger` snapshot (Stage 1: `LocalLedger::read()` under guard before call). Snapshot is **immutable** from capture until the implementor finishes serialization (Monero save-during-refresh lesson; §5.12 L5, Stage 4 **2d D4**). |
+| mlock / swap exposure (F5(b) contingent) | `StateWrapKey` / `PrefsHmacKey` **SHOULD** live in `mlock`ed pages where the OS permits (`RLIMIT_MEMLOCK` on Linux — default 64 KiB is tight for RPC + Argon2). **Failure to mlock:** log **warning** at `Engine` open; cold-boot/swap exposure possible — not silent success (§5.12 L8, Phase **0s** / C1 rustdoc + deployment guide cross-ref). |
+| Panic / crash telemetry redaction | Redacted `Debug` on sealing types does **not** extend to Rust's default panic hook (Slope 2022 lesson). §6.2 panic-hook gate in **C6**; custom hook + subscriber redaction is wallet-RPC / tracing work beyond the trait (§5.12 L1). |
+| Release binary integrity | F5(b) blast-radius discipline is moot if the distributed binary is compromised (Atomic Wallet 2023). Upstream defense: signed release tags per [`docs/SIGNING.md`](../SIGNING.md) — cite in §3.7 / C1 module rustdoc (§5.12 L4). |
 | Save failure typing | **R10:** `type Error: Into<PersistenceError>` (not `OpenError`; §5.10) |
 | Close refuses in-flight pending | Unchanged — `outstanding_pending_txs()` before persist |
 | No `load_state` on trait | Q9.11 — construction-only |
@@ -296,7 +302,10 @@ doc-only** per §8.2.
 | **0i** | `WalletFile::base_path() -> state_path()` | **C2b** |
 | **0j** | Q9.11: no `load_state` on trait | **C0** (doc confirm) |
 | **0k** | §6.4: no `MockPersistence` | **C6** |
-| **0l** | Stage 4: `ActorRef<PersistenceActor>` same trait | doc only |
+| **0l** | Stage 4: `ActorRef<PersistenceActor>` same trait; **D3–D6** mailbox/supervisor/runtime pins | doc only |
+| **0r** | Region-2 nonce: `OsRng` per save; never counter-derived (trait rustdoc) | C1 |
+| **0s** | mlock attempt + warn-on-failure for sealing keys (§3.7 honest F5(b)) | C1 rustdoc + open path when types land |
+| **0t** | Bounded mailbox + save coalescing (Stage 4 implementor; cross-ref **2d D3**) | C0/C1 rustdoc |
 | **0m** | R6: §2.6 forward-compatible with V3.1 multisig per §5.4.1; amendment triggers named | **C0** (doc confirm) |
 | **0n** | Additive `save_state_with_key(&StateWrapKey, &WalletLedger)`; consumes HKDF region keys from **prerequisite PR**; old `save_state(password, …)` stays until **C7** | **C2c** |
 
@@ -713,7 +722,7 @@ unless the user requests finer splits).
 | **2a** | Audit-readiness: close vs refresh / pending; **R8** §2.8.6 | R1, R8 | **Closed** |
 | **2b** | `change_password` prefs flush; lifecycle parity | R2 | **Closed** |
 | **2c** | Test matrix + call-site sweep pins | R3 | **Closed** |
-| **2d** | **R7** Stage 4 mailbox keys; **F3** implementor rustdoc | R7 | **Closed** |
+| **2d** | **R7** mailbox; **F3** rustdoc; **D3–D6** bounded mailbox / supervisor / runtime | R7 | **Closed** (amended §5.12) |
 | **2g** | Close-out: §4 / §6 / Round 3 gate; **R5**, **R10** | R5, R10 | **Closed** |
 | **2h** | Open-path HKDF ritual + `file_kek` non-retention gate | — | **Closed** (Round 3) |
 | **2i** | Wider-substrate audit (template §6 — after 2g) | R4 | **Closed** |
@@ -856,6 +865,7 @@ caller must know which side of the line they're on.
 | **`stale_state_wrap_key_fails_after_rotate`** | `shekyl-engine-core` | **C1** — open → `save_state(k)` ok → `rotate_password` ok → `save_state(k_stale)` → `PersistenceError::WalletFile` with `WalletEnvelopeError::InvalidPasswordOrCorrupt` (region-2 AEAD MAC failure) |
 | **`rederived_state_wrap_key_succeeds_after_rotate`** | `shekyl-engine-core` | **C1** — same, but re-derive `StateWrapKey` from open ritual → `save_state` ok |
 | **`open_does_not_retain_file_kek`** | `shekyl-engine-core` | **0p / C6** — after `open_full`, orchestrator/`WalletFile` holds `wrap_key_region_2` + `prefs_hmac_key`, not `file_kek` |
+| **`panic_hook_does_not_leak_state_wrap_key`** | `shekyl-engine-core` | **§5.12 L1 / C6** — forced panic with `StateWrapKey` in scope; no raw key bytes in panic message |
 | HKDF region KATs | `docs/test_vectors/…` | **Prerequisite PR** — not PR 6 C6 |
 
 **Disposition.** R3 **closed**; **C1** tests are load-bearing for F5(b) fail-loud
@@ -882,13 +892,46 @@ session `Zeroizing<StateWrapKey>` / `Zeroizing<PrefsHmacKey>`; each flush
 
 **D1 (Round 3) — mailbox queueing for secrets.**
 
-- `SaveState` / `SavePrefs`: `send` is acceptable (sealing keys only; bounded
-  clone lifetime in queue).
-- **`RotatePassword`:** use **`ActorRef::call`** (request/reply), not unbounded
+- **`RotatePassword`:** use **`ActorRef::call`** (request/reply), not queued
   `send`, so password material is not parked in a deep mailbox queue under
   backpressure.
+- **`SaveState` / `SavePrefs`:** bounded mailbox + back-pressure (lessons
+  canvass **§5.12 L3**; amends prior "unrestricted `send`" reading).
 
-Document in Phase **0l** (C0/C1 rustdoc).
+**D3 (lessons canvass, 2026-05-27) — bounded mailbox, coalescing, OOM.**
+
+| Property | Pin |
+|----------|-----|
+| Mailbox depth | **Bounded** default for `PersistenceActor` (`try_send` → `Full`). Unbounded mailbox is a **justified exception** only with documented worst-case memory bound — not the Stage 4 default. |
+| Back-pressure | Orchestrator on `Full`: coalesce or skip intermediate saves; never unbounded-queue full `WalletLedger` snapshots. |
+| Save coalescing | When multiple `SaveState` are queued, actor **MAY** drop superseded snapshots and process only the latest (**last-write-wins** per §4 idempotency). Final flush before `close` **must** process. |
+| OOM class | Unbounded `SaveState` under per-block autosave is a **real** Stage 4 attack surface (each message clones ledger). |
+
+Document in Phase **0l** + **0t** (C0/C1 rustdoc; Stage 4 implementor spec).
+
+**D4 (lessons canvass) — ledger snapshot immutability.**
+
+`SaveState` carries an **owned snapshot** of `WalletLedger` taken at send time;
+the actor must not read a live `Arc`/`RwLock` guard across `.await`. Rustdoc:
+*"snapshot immutable from capture until serialization completes."*
+
+**D5 (lessons canvass) — `PersistenceActor` crash / supervisor.**
+
+Per `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.8.5: persistence actor failure is
+**non-recoverable** at the trait level. Concrete pin for Stage 4:
+
+- Supervisor strategy: **`stop`** (do not restart the actor and continue).
+- Orchestrator observes actor stop during `Engine::close` final flush →
+  `PersistenceError::ActorCrashed` (or equivalent) surfaced to caller.
+- **Not** "restart actor and resume" — wallet may be torn mid-write.
+
+**D6 (lessons canvass) — tokio runtime shutdown without `close`.**
+
+§2.8.6 row: if the tokio runtime is dropped while `Engine` still holds
+`ActorRef<PersistenceActor>`, in-flight saves are lost. **wallet-RPC** SIGTERM
+handler **MUST** call `Engine::close` (or equivalent drain) before runtime drop.
+
+Document in Phase **0l** (C0 cross-ref to §2.8.6).
 
 **F3 — `rotate_password` cross-record invariant (implementor rustdoc).**
 
@@ -945,8 +988,14 @@ surfaced in Round 2.
 | F5(b) grep gates | §6.2 | C6 / CI |
 | Atomic-write tests cited | §6.3 | `shekyl-engine-file/src/atomic.rs` tests |
 | G4 backup rustdoc | **2i** | **C1** (blocking) |
+| §5.12 lessons canvass blocking items | §5.12 | C1/C6 + **2d** Stage 4 pins |
+| Panic-hook redaction test | §5.12 L1 | **C6** |
+| KDF-in-AAD / HKDF address | §5.12 L6, L9 | Verified — no substrate amend |
 
 **Round 3 readiness gate (template §8.3) — closed.**
+
+**Lessons canvass supplement (2026-05-27):** §5.12 landed; design remains closed;
+Phase 1 inherits new §6.2 panic gate and §3.7 / **2d** pins.
 
 - [x] Round 1 closed (§5.7).
 - [x] Round 2 segments 2a–2d, **2h**, 2g, 2i closed (+ Round 3 precision amendments).
@@ -1064,6 +1113,49 @@ Review gate: any PR that caches `file_kek` on `WalletFile` past step 5 is a
 
 ---
 
+## §5.12 External lessons canvass (2026-05-27)
+
+Second-pass review: historical wallet failures, OS discipline F5(b) depends on,
+actor-model gaps at Stage 4, substrate precision, and governance. Disposition
+table matches reviewer prioritization (**blocking PR 6** vs **FOLLOWUPS**).
+
+### Blocking PR 6 (spec pins, §6 gates, or verified substrate)
+
+| ID | Lesson | Disposition |
+|----|--------|-------------|
+| **L1** | **Slope / Solana 2022** — seed phrases in crash telemetry | Redaction discipline (type + subscriber) does **not** cover the **default Rust panic hook**. **C6:** `#[should_panic]` test: panic with `StateWrapKey` in scope; assert panic payload has **no** raw 32-byte key material (§6.2). Custom panic hook for wallet-RPC is **FOLLOWUPS** if product ships crash reporting. |
+| **L2** | **Monero wallet2** — save during refresh serializes torn ledger | Stage 1: `LocalLedger::read()` guard before `save_state` (§6.1). Stage 4: **2d D4** snapshot immutability. |
+| **L3** | **Actor mailbox OOM** — unbounded `SaveState` queues | **2d D3:** bounded mailbox, `try_send` back-pressure, save coalescing (last-write-wins). |
+| **L4** | **Atomic Wallet 2023** — compromised release binary | Not trait-enforceable. **C1** module rustdoc cites [`SIGNING.md`](../SIGNING.md) as upstream defense. |
+| **L5** | **Parity multisig 2017** — shared dependency blast radius | Stage 1: `Send`/`Sync` + cancellation-safety tests on `WalletFile` path (**2c** / C6) even though Stage 4 is where actor wrapping pays off. |
+| **L6** | **KDF params tampering** | **Verified closed** — [`WALLET_FILE_FORMAT_V1.md`](../WALLET_FILE_FORMAT_V1.md) §2.1: `kdf_*` + `wrap_salt` are plaintext **AAD to the wrap AEAD** (`bytes[0..29)`). Tampering invalidates wrap decryption before region 1/2. Region 1 intentionally excludes wrap fields from AAD (rotation without re-encrypting region 1) — not a gap. |
+| **L7** | **Android SecureRandom / nonce reuse** | Region-2 nonce: `OsRng` per save (`wallet_envelope.rs` `fresh_random_bytes`). **Not** `atomic_write_file` (raw bytes only). **C1** trait rustdoc pins CSPRNG nonce (Phase **0r**). |
+| **L8** | **mlock / RLIMIT_MEMLOCK** | §3.7 + Phase **0s**: attempt mlock; warn on failure; honest F5(b) contingent claim. |
+| **L9** | **HKDF `address` binding ambiguity** | **Verified closed** — HKDF doc: `addr` = 65-byte `expected_classical_address` from region 1 plaintext. |
+| **L10** | **Actor crash supervisor** | **2d D5:** `stop`, no restart-and-continue; `ActorCrashed` on close path. |
+| **L11** | **`ActorRef` leakage** | §6.2 grep: no `ActorRef<PersistenceEngine>` / persistence actor ref stored outside `Engine` field scope (Stage 4 gate; pin now for reviewer map). |
+
+### FOLLOWUPS (not PR 6 blocking)
+
+| ID | Lesson | Target | Work |
+|----|--------|--------|------|
+| **F1** | **Bitcoin Core** — wallet dir in cloud sync | **V3.1** | Platform markers: macOS `com.apple.metadata:com_apple_backup_excludeItem`, Linux `chattr +d`, Windows `FILE_ATTRIBUTE_NOT_CONTENT_INDEXED`, `.nobackup` sentinel. `WalletFile::create` / implementor rustdoc pin (trait cites implementor responsibility). |
+| **F2** | **Core dumps** — secrets in core files | **V3.1** | `prctl(PR_SET_DUMPABLE, 0)` (Linux) at wallet-RPC startup; §3.7 deployment property. |
+| **F3** | **Argon2 stack copies** | **V3.1** | Cryptographer review: stack-resident intermediates in Argon2id path. |
+| **F4** | **Rust + C++ dual open** | **V3.1** | Integration test: Rust `WalletFile` holds lock; C++ `wallet2` open same path → lock failure. |
+| **F5** | **File metadata leaks** (size, mtime) | **V3.x** | Size-class padding; mtime obfuscation. |
+| **F6** | **Empty-wallet fingerprint** | **V3.x** | Pad `.wallet` to size class. |
+| **F7** | **Crypto agility / V4 migration** | **V3.x** | Format evolution path. |
+
+### Cryptographer review bundle (add if not already on the four-target list)
+
+- F5(b) session-key derivation ritual (**2h**).
+- HKDF per-region correctness ([`WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md)).
+- Argon2 implementation stack hygiene (**F3**).
+- PR 6 trait surface + WALLET_FILE_FORMAT §4.3 steady-state save model.
+
+---
+
 ## §6 Review checklist (Round 3 — finalized)
 
 Fill binding-check matrix at Round 2 segment **2g**. Mechanical gates:
@@ -1101,7 +1193,17 @@ rg 'derive.*Serialize.*PrefsHmacKey|PrefsHmacKey.*Serialize' rust/
 
 # Redacted Debug (no raw key bytes in format strings)
 rg 'impl Debug for StateWrapKey|impl Debug for PrefsHmacKey' rust/
+
+# Stage 4: persistence actor ref must not escape Engine (§5.12 L11)
+rg 'ActorRef.*Persistence|PersistenceActor' rust/shekyl-engine-core/src/engine/
 ```
+
+**Panic-hook gate (§5.12 L1 — C6 test, not grep).** `#[should_panic]` test
+constructs `StateWrapKey` from known bytes, panics with it in scope (e.g.
+`panic!("{key:?}")` or `panic!("{}", …)`), captures `std::panic::catch_unwind`
+payload or hook output, asserts **none** of the 32 key bytes appear. Documents
+that default hook + `Debug` redaction are **insufficient** for production crash
+reporting — custom hook required if Sentry-style telemetry is added.
 
 **Reviewer interpretation:** `file_kek` may appear in **open** / **rotate**
 functions and local temporaries; it must not appear as a field on
@@ -1131,7 +1233,8 @@ caller yet):**
 **`Engine::close` (PR 6 target):**
 
 1. Refuse if `pending.outstanding() > 0`.
-2. `LocalLedger::read()` → `persistence.save_state(&state_key, &ledger).await`.
+2. `LocalLedger::read()` → **snapshot** → `persistence.save_state(&state_key, &ledger).await`
+   (snapshot must not mutate between read and serialize — **§5.12 L2**, **2d D4**).
 3. `persistence.save_prefs(&prefs_key, &prefs).await`.
 4. Drop `self` → `WalletFile::drop` releases advisory lock on `<base>.wallet.keys`.
 
@@ -1234,6 +1337,13 @@ pub trait PersistenceEngine {
     /// On `Ok`, `.wallet` bytes are durable across power loss
     /// (`atomic_write_file`: tmp → fsync → rename → fsync parent).
     ///
+    /// Region-2 AEAD uses a fresh 24-byte nonce from the OS CSPRNG (`OsRng`)
+    /// on every save — never counter-derived (see `seal_state_file` in
+    /// `shekyl-crypto-pq`).
+    ///
+    /// `ledger` is a point-in-time snapshot; the implementor must not observe
+    /// concurrent mutation after the caller captured it (§5.12 L2).
+    ///
     /// Steady-state region-2 AEAD key (`wrap_key_region_2` per
     /// WALLET_FILE_FORMAT_V1 §2.6 / HKDF region derivation doc). Does not
     /// decrypt region 1 (spend keys) when `file_kek` and
@@ -1293,6 +1403,12 @@ PR 6 must not break:
 | MFA per-save on trait | §5.9.1 R11 | Product requires touch-per-autosave |
 | `WalletFile` handle slimming | FOLLOWUPS V3.2 | Narrow held state to `PersistenceEngine` needs only |
 | Separate redb/LMDB backend | §5.8 | New §1.5 trait or implementor PR |
+| Platform "do not back up" markers | §5.12 F1 | V3.1 — `WalletFile::create` |
+| `prctl(PR_SET_DUMPABLE, 0)` | §5.12 F2 | V3.1 — wallet-RPC startup |
+| Argon2 stack hygiene review | §5.12 F3 | V3.1 — cryptographer bundle |
+| Rust + C++ advisory-lock cross-test | §5.12 F4 | V3.1 — rewrite-era dual stack |
+| Wallet file size / mtime obfuscation | §5.12 F5–F6 | V3.x |
+| Custom panic hook for crash telemetry | §5.12 L1 | Product adds Sentry-equivalent |
 
 ---
 

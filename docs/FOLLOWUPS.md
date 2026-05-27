@@ -1788,6 +1788,35 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1 — audit response and stressnet gates
 
+- **Wallet file backup-exclusion markers (PR 6 lessons canvass §5.12 F1).**
+  Users sync `~/.shekyl` via Dropbox/iCloud; encrypted blobs still leak to
+  third-party storage. **Work:** at `WalletFile::create`, set platform markers
+  (macOS `com.apple.metadata:com_apple_backup_excludeItem`, Linux `chattr +d`
+  where supported, Windows `FILE_ATTRIBUTE_NOT_CONTENT_INDEXED`, `.nobackup`
+  sentinel). `PersistenceEngine` trait rustdoc pins implementor responsibility.
+  **Target:** V3.1. **Reopen when:** PR 6 lands and wallet path creation is
+  stable. **Ref:**
+  [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](./design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md)
+  §5.12 F1.
+
+- **Process core-dump disable at wallet-RPC startup (PR 6 §5.12 F2).**
+  Default Linux core dumps can capture stack copies of secrets after Argon2 /
+  sealing-key use. **Work:** `prctl(PR_SET_DUMPABLE, 0)` (and platform
+  equivalents) in `shekyl-wallet-rpc` main before wallet open. **Target:**
+  V3.1. **Reopen when:** wallet-RPC binary hardening pass.
+
+- **Argon2 stack-resident secret copies — cryptographer review (PR 6 §5.12 F3).**
+  Heap `ZeroizeOnDrop` does not bound stack copies inside the Argon2id
+  implementation. Add to the external cryptographer engagement bundle alongside
+  F5(b) ritual and HKDF region derivation. **Target:** V3.1. **Reopen when:**
+  cryptographer scope is finalized.
+
+- **Rust `WalletFile` vs C++ `wallet2` advisory-lock cross-test (PR 6 §5.12 F4).**
+  Rewrite-era may have both stacks live. **Work:** open with Rust
+  `WalletFile`, attempt C++ open on same path, expect lock failure. **Target:**
+  V3.1. **Reopen when:** C++ wallet path still coexists with Rust engine file
+  handle.
+
 - **Shekyl-native end-to-end wallet/daemon test harness
   (replacement for the deleted `tests/functional_tests/`).**
   The Monero-inherited Python+C++ functional-test harness under
@@ -3907,6 +3936,12 @@ one place to confirm each item's relationship to the wallet stack.
   facing wallet docs; evaluate `flock` vs `fcntl` posture if remote home
   directories are a deployment target. **Target:** V3.2. **Reopen when:**
   a supported deployment explicitly requires network-backed wallet paths.
+
+- **Wallet file metadata obfuscation (PR 6 §5.12 F5–F6).** File size and mtime
+  leak wallet presence and activity without decryption. **Work:** pad `.wallet`
+  to fixed size classes; optional mtime scheduling independent of saves; fresh-
+  wallet fingerprint mitigation. **Target:** V3.x. **Reopen when:** threat
+  model review names local filesystem observer as in-scope.
 
 - **`WalletFile` handle slimming (post–PR 6 `PersistenceEngine`).**
   `shekyl-engine-file::WalletFile` retains `keys_file_bytes`, opened

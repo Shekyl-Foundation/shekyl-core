@@ -12,6 +12,17 @@
   unchanged; reference implementation and Tier-3 KAT regeneration tracked in
   [`docs/design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md).
 
+### Documentation
+
+- **Stage 1 PR 6 — external lessons canvass (§5.12).**
+  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md)
+  records historical wallet-disaster lessons, OS discipline for F5(b), Stage 4
+  actor-model pins (bounded mailbox, save coalescing, supervisor `stop`), and
+  substrate verification (KDF params in wrap AAD; HKDF `address` = 65-byte
+  classical address). Blocking PR 6: panic-hook redaction test, mlock honest
+  contract, region-2 `OsRng` nonce rustdoc. V3.1/V3.x items in
+  [`docs/FOLLOWUPS.md`](FOLLOWUPS.md).
+
 ### Added
 
 - **RandomX v2 Track A Phase 2h adversarial-corpus methodology
@@ -2442,6 +2453,15 @@
     caller rewire, no deletion of `src/crypto/rx-slow-hash.c`
     (those are Phase 3a/3b/3c/4). Phase 2b lands AES round +
     SuperScalarHash next.
+
+- **Stage 1 closeout audit** (2026-05-27, post–PR #81). Adds
+  [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](design/STAGE_1_COMPLETION_AUDIT.md):
+  merge ledger, trait matrix, orchestrator shape, done vs remaining,
+  FOLLOWUPS cross-walk, and mapping to
+  [`docs/design/WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md).
+  Updates `V3_ENGINE_TRAIT_BOUNDARIES.md` status banner, aligns the
+  rewrite plan inventory with `Engine` / landed Stage 1, and pins the
+  audit from `FOLLOWUPS.md` V3.0 queue.
 
 - **Stage 1 PR 5 — `PendingTxEngine` trait surface and Phase 1
   substrate** (`feat/stage-1-pr5-pending-tx-engine`, 2026-05-27).
