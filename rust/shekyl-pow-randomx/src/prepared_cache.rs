@@ -228,25 +228,45 @@ impl PreparedCache {
     /// 2); composition makes the production-equivalence principle
     /// enforceable rather than convention-asserted.
     ///
-    /// **Cite for this accessor.** Argon2d-512 is the spec-defined
-    /// key-derivation function whose image is the full
-    /// `CACHE_SIZE`-byte space (256-MiB byte strings); every
-    /// possible `cache_bytes` value corresponds to some
-    /// hypothetical seedhash-derived state, even if that seedhash
-    /// is infeasible to discover (the discovery problem is
-    /// equivalent to inverting Argon2d, a one-way function). The
-    /// `(seedhash, cache_bytes)` pair this accessor accepts is
-    /// thus "operationally equivalent" to two seedhashes: the
-    /// `seedhash` parameter drives the `SuperscalarProgram`
-    /// derivation (the program-side state the recipe wants to keep
-    /// fixed to a known-good base seedhash); a hypothetical
-    /// `seedhash*` such that `Argon2d-512(seedhash*) =
-    /// cache_bytes` drives the cache-memory state (the memory-side
-    /// state the recipe wants to modify to trigger a rare-path).
-    /// Production code never constructs cache state with mismatched
-    /// `(programs(s1), memory(s2))` for `s1 ≠ s2` — but every byte
-    /// of the constructed state IS reachable in production from
-    /// SOME pair of (program-seedhash, memory-seedhash) combination.
+    /// **Cite for this accessor.** The production-reachability
+    /// property is anchored at the **consumer**, not at Argon2d's
+    /// image: [`Cache::compute_hash`] reads cache memory as an
+    /// opaque 256-MiB byte string and does not re-derive it from a
+    /// seedhash, verify its provenance, or otherwise consume any
+    /// property beyond the byte content. Per Phase 2c §5.11.4 the
+    /// cache memory is public-input-only; no secret material is
+    /// constructible via the accessor.
+    ///
+    /// This makes the constructed `(programs(s1), cache_bytes)`
+    /// pair **observationally indistinguishable** from a
+    /// production `(programs(s_prod), Argon2d-512(s_prod))` pair
+    /// for the purposes of `compute_hash`'s code-path coverage,
+    /// provided two equalities hold: `programs(s_prod) =
+    /// programs(s1)` (satisfied by construction when
+    /// `s_prod = s1`) and `Argon2d-512(s_prod) = cache_bytes`.
+    /// The second equality may not hold for any feasible
+    /// `s_prod` — Argon2d-512 is a one-way function whose
+    /// 32-byte-seedhash domain (2^256 elements) is many orders of
+    /// magnitude smaller than the 256-MiB cache-bytes codomain
+    /// (2^(8 · 256 · 2^20) elements), so Argon2d-512 is provably
+    /// not surjective onto the cache-bytes space — but
+    /// `compute_hash` cannot detect this: it executes the same
+    /// instructions on the same `(programs, cache_bytes)` content
+    /// regardless of whether `cache_bytes` was Argon2d-derived
+    /// from some `s_prod` or test-constructed.
+    ///
+    /// The `seedhash` parameter drives the `SuperscalarProgram`
+    /// derivation (the program-side state the recipe wants to
+    /// keep fixed to a known-good base seedhash); the
+    /// `cache_bytes` parameter drives the cache-memory state (the
+    /// memory-side state the recipe wants to modify to trigger a
+    /// rare-path). Production code never constructs cache state
+    /// with mismatched `(programs(s1), memory(s2))` for
+    /// `s1 ≠ s2` — but every code path `compute_hash` would
+    /// execute on the constructed state is a code path it would
+    /// execute on any production state with the same
+    /// `(programs, cache_bytes)` byte content, because `compute_hash`'s
+    /// behavior is a pure function of those bytes.
     ///
     /// **Bundling property broken by construction.** Per the Phase
     /// 2h Round 1 R1-D2 close framing, the `PreparedCache`
