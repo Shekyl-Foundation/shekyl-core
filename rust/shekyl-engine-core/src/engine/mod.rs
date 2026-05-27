@@ -185,7 +185,9 @@ pub use diagnostics::{
     NoopDiagnosticSink, PendingTxDiagnostic, ProtocolErrorKind, RefreshDiagnostic, SuppressedClass,
     TracingDiagnosticSink,
 };
-pub use error::{IoError, KeyError, OpenError, PendingTxError, RefreshError, SendError, TxError};
+pub use error::{
+    IoError, KeyError, OpenError, PendingTxError, RefreshError, SendError, SubmitError, TxError,
+};
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 pub use local_ledger::LocalLedger;
@@ -207,8 +209,8 @@ pub use signer::{
 };
 pub use view_material::ViewMaterial;
 
-use std::collections::BTreeMap;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_engine_file::WalletFile;
@@ -216,7 +218,7 @@ use shekyl_engine_prefs::WalletPrefs;
 use shekyl_engine_state::WalletLedger;
 
 use crate::engine::local_ledger::LedgerState;
-use crate::engine::traits::{DaemonEngine, LedgerEngine, RefreshEngine};
+use crate::engine::traits::{DaemonEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
 
 /// The Shekyl V3 wallet domain orchestrator.
 ///
@@ -293,6 +295,12 @@ pub struct Engine<
     D: DaemonEngine = DaemonClient,
     L: LedgerEngine = LocalLedger,
     R: RefreshEngine = LocalRefresh,
+    P: PendingTxEngine = LocalPendingTx<
+        LocalSigner,
+        WalletGreedyOutputSelector,
+        DaemonFeeEstimator,
+        LocalLedger,
+    >,
 > {
     /// On-disk envelope: `.wallet.keys` (region 1) +
     /// `.wallet` (region 2). Owns the advisory lock and the
@@ -309,7 +317,7 @@ pub struct Engine<
     /// Read by [`Engine::keys`]; that accessor is `pub(crate)` and used
     /// by `Engine::refresh` (to assemble a `Scanner` per attempt) and
     /// by Phase 2 sign / proof code paths inside this crate.
-    keys: AllKeysBlob,
+    keys: Arc<AllKeysBlob>,
 
     /// Persistent wallet state plus its runtime-only index projection,
     /// aggregated under a single [`std::sync::RwLock`] by [`LocalLedger`].
@@ -320,8 +328,7 @@ pub struct Engine<
     ///   transfers, bookkeeping (subaddress registry, labels, address
     ///   book, account tags), tx metadata (`tx_keys`, scanned pool
     ///   txs), and the sync-state block. **Reservations do not live
-    ///   here** — see `reservations` below and the `pending` module's
-    ///   docstring.
+    ///   here** — see [`pending`](crate::engine::local_pending_tx) below.
     /// - The [`shekyl_engine_state::LedgerIndexes`] — runtime-only
     ///   indexes derived from chain replay (key-image / pubkey lookup
     ///   maps, staker-pool accrual aggregate). Per the
@@ -339,32 +346,17 @@ pub struct Engine<
     /// Stage 1 implementor.
     ///
     /// [`LedgerEngine`]: traits::LedgerEngine
-    ledger: L,
+    ledger: Arc<L>,
 
-    /// Runtime-only reservation tracker for in-flight
-    /// [`PendingTx`](pending::PendingTx) handles. Cross-cutting lock
-    /// 4 binds the build / submit / discard state machine; the
-    /// 2026-04-26 follow-up Decision Log entry refines storage from
-    /// "persisted in `WalletLedger.bookkeeping`" to "runtime field on
-    /// `Engine<S>`." See [`pending`] for the full rationale (the
-    /// "why runtime-only" section explains why crash-survival is the
-    /// wrong design).
+    /// [`PendingTxEngine`] implementor for the build / submit / discard
+    /// lifecycle. Shares the same [`Arc`] ledger handle as
+    /// [`Engine::ledger`] at assembly time (C6).
     ///
-    /// `Engine::close` (lifecycle commit) consults
-    /// `outstanding_pending_txs()` and refuses with
+    /// `Engine::close` consults `outstanding_pending_txs()` and refuses
+    /// with
     /// [`OpenError::OutstandingPendingTx`](error::OpenError::OutstandingPendingTx)
-    /// when any reservation is in flight, so the only crash-recovery
-    /// path that could lose data here is one where the user never
-    /// gets to call submit / discard — and on that path the right
-    /// behavior is "the reservation is gone, the outputs become
-    /// spendable again."
-    pub(crate) reservations: BTreeMap<pending::ReservationId, pending::Reservation>,
-
-    /// Monotonic counter that produces [`pending::ReservationId`] values.
-    /// Process-local; resets to zero on every `Engine::open*`. The
-    /// counter is only exposed through the `pending` helpers, never
-    /// directly to callers.
-    pub(crate) next_reservation_id: u64,
+    /// when any reservation is in flight.
+    pub(crate) pending: P,
 
     /// User preferences per the layer-2 plaintext+HMAC contract in
     /// [`docs/WALLET_PREFS.md`]. Loaded at open, saved on
@@ -470,8 +462,13 @@ pub struct Engine<
     _signer: PhantomData<S>,
 }
 
-impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine, R: RefreshEngine>
-    std::fmt::Debug for Engine<S, D, L, R>
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine + std::fmt::Debug,
+        L: LedgerEngine,
+        R: RefreshEngine,
+        P: PendingTxEngine,
+    > std::fmt::Debug for Engine<S, D, L, R, P>
 {
     /// Redacted debug output. Specific reasons each field is or is not
     /// printed:
@@ -496,14 +493,8 @@ impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine, R:
     ///   [`shekyl_simple_request_rpc::SimpleRequestRpc`]).
     /// - `network`, `capability` — printed verbatim; these are cached
     ///   public values from region 1 of the wallet file.
-    /// - `reservations` — printed as a count, not contents. The
-    ///   reservations carry recipient addresses and amounts; we expose
-    ///   only the cardinality so a `Debug` dump cannot leak in-flight
-    ///   transaction recipients.
-    /// - `next_reservation_id` — printed verbatim. The counter is a
-    ///   process-local monotonic `u64` with no observable secret
-    ///   content; surfacing it helps debugging without leaking
-    ///   reservation details.
+    /// - `pending` — printed as an outstanding-count via
+    ///   [`PendingTxEngine::outstanding`], not reservation contents.
     /// - `refresh` — printed as an opaque `<redacted: RefreshEngine>`
     ///   marker. The producer holds view-and-spend material per
     ///   §5.4.7 R4; surfacing the implementor's `Debug` would risk
@@ -517,8 +508,7 @@ impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine, R:
             .field("file", &self.file)
             .field("keys", &"<redacted: AllKeysBlob>")
             .field("ledger", &"<…>")
-            .field("reservations", &self.reservations.len())
-            .field("next_reservation_id", &self.next_reservation_id)
+            .field("outstanding_pending_txs", &self.pending.outstanding())
             .field("prefs", &"<…>")
             .field("daemon", &self.daemon)
             .field("network", &self.network)
@@ -576,7 +566,14 @@ impl std::ops::Deref for LedgerReadGuard<'_> {
 // `D: DaemonEngine` and `L: LedgerEngine` private-bound: see the
 // rationale on the `pub struct Engine` definition in this file.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> Engine<S, D, L, R> {
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        L: LedgerEngine,
+        R: RefreshEngine,
+        P: PendingTxEngine,
+    > Engine<S, D, L, R, P>
+{
     /// Network this wallet is bound to. Cached from
     /// [`WalletFile`]'s region 1 at construction; stable for the life
     /// of the open wallet.
@@ -650,7 +647,7 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> En
     // shape.
     #[allow(dead_code)]
     pub(crate) fn keys(&self) -> &AllKeysBlob {
-        &self.keys
+        self.keys.as_ref()
     }
 
     /// Test-only constructor: rebuild the engine with `refresh`
@@ -718,13 +715,12 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> En
     /// the first consumer.
     #[cfg(any(test, feature = "test-helpers"))]
     #[allow(dead_code)]
-    pub(crate) fn replace_refresh<R2: RefreshEngine>(self, refresh: R2) -> Engine<S, D, L, R2> {
+    pub(crate) fn replace_refresh<R2: RefreshEngine>(self, refresh: R2) -> Engine<S, D, L, R2, P> {
         let Engine {
             file,
             keys,
             ledger,
-            reservations,
-            next_reservation_id,
+            pending,
             prefs,
             daemon,
             network,
@@ -737,14 +733,54 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> En
             file,
             keys,
             ledger,
-            reservations,
-            next_reservation_id,
+            pending,
             prefs,
             daemon,
             network,
             capability,
             refresh_slot,
             refresh: std::sync::Arc::new(refresh),
+            _signer,
+        }
+    }
+
+    /// Test-only constructor: rebuild the engine with `pending`
+    /// substituted, leaving every other field unchanged.
+    ///
+    /// Mirrors [`Self::replace_refresh`] for the `P: PendingTxEngine`
+    /// slot (PR 5 C6). Hybrid tests that need a
+    /// [`super::fault_injecting_pending::FaultInjecting`] wrapper
+    /// (C7) compose this with the other `replace_*` helpers.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[allow(dead_code)]
+    pub(crate) fn replace_pending_tx<P2: PendingTxEngine>(
+        self,
+        pending: P2,
+    ) -> Engine<S, D, L, R, P2> {
+        let Engine {
+            file,
+            keys,
+            ledger,
+            pending: _old,
+            prefs,
+            daemon,
+            network,
+            capability,
+            refresh_slot,
+            refresh,
+            _signer,
+        } = self;
+        Engine {
+            file,
+            keys,
+            ledger,
+            pending,
+            prefs,
+            daemon,
+            network,
+            capability,
+            refresh_slot,
+            refresh,
             _signer,
         }
     }
@@ -758,7 +794,9 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> En
 // `LedgerEngine` to a richer surface (or replaces this accessor
 // with a trait-level read-state method), this block dissolves.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine> Engine<S, D, LocalLedger, R> {
+impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine, P: PendingTxEngine>
+    Engine<S, D, LocalLedger, R, P>
+{
     /// Borrow the persistent ledger for read-only queries (transfers,
     /// bookkeeping entries, tx metadata, sync cursor). Mutation goes
     /// through the methods on [`Engine`] that the lifecycle / refresh /

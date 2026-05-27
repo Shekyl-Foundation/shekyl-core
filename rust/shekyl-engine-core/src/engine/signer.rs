@@ -305,7 +305,6 @@ impl LocalSigner {
     /// pipeline calls this; external `Signer` impls are
     /// independent. Dead until C5 / engine construction wires
     /// the open-time `AllKeysBlob` into a signer instance.
-    #[allow(dead_code)]
     pub(crate) fn new(keys: Arc<AllKeysBlob>) -> Self {
         Self { keys }
     }

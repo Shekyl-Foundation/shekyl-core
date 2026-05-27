@@ -137,10 +137,16 @@ pub enum OpenedEngine<
     D: DaemonEngine = DaemonClient,
     L: LedgerEngine = LocalLedger,
     R: RefreshEngine = LocalRefresh,
+    P: super::traits::PendingTxEngine = super::LocalPendingTx<
+        super::LocalSigner,
+        super::WalletGreedyOutputSelector,
+        super::DaemonFeeEstimator,
+        super::LocalLedger,
+    >,
 > {
     /// `.wallet` was present and decoded successfully. The wallet is
     /// fully loaded against the persisted ledger.
-    Loaded(Engine<S, D, L, R>),
+    Loaded(Engine<S, D, L, R, P>),
 
     /// `.wallet` was missing. The keys file was intact and the wallet
     /// was reconstructed with an empty ledger anchored at
@@ -148,15 +154,20 @@ pub enum OpenedEngine<
     /// state, then `save_state` the rebuilt ledger.
     Restored {
         /// The reconstructed wallet, ready for refresh.
-        wallet: Engine<S, D, L, R>,
+        wallet: Engine<S, D, L, R, P>,
         /// Block height the synthesized ledger anchors at; equals the
         /// keys-file's `restore_height_hint` widened to `u64`.
         from_height: u64,
     },
 }
 
-impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine, R: RefreshEngine>
-    std::fmt::Debug for OpenedEngine<S, D, L, R>
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine + std::fmt::Debug,
+        L: LedgerEngine,
+        R: RefreshEngine,
+        P: super::traits::PendingTxEngine,
+    > std::fmt::Debug for OpenedEngine<S, D, L, R, P>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -176,11 +187,16 @@ impl<S: EngineSignerKind, D: DaemonEngine + std::fmt::Debug, L: LedgerEngine, R:
 // `D: DaemonEngine` and `L: LedgerEngine` private-bound: see the
 // rationale on the `pub struct Engine` definition in `engine/mod.rs`.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine>
-    OpenedEngine<S, D, L, R>
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        L: LedgerEngine,
+        R: RefreshEngine,
+        P: super::traits::PendingTxEngine,
+    > OpenedEngine<S, D, L, R, P>
 {
     /// Borrow the underlying wallet regardless of the variant.
-    pub fn wallet(&self) -> &Engine<S, D, L, R> {
+    pub fn wallet(&self) -> &Engine<S, D, L, R, P> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -188,7 +204,7 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine>
     }
 
     /// Mutably borrow the underlying wallet regardless of the variant.
-    pub fn wallet_mut(&mut self) -> &mut Engine<S, D, L, R> {
+    pub fn wallet_mut(&mut self) -> &mut Engine<S, D, L, R, P> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -198,7 +214,7 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine>
     /// Consume the outcome and return the wallet, discarding the
     /// recovery-path signal. Use only when the caller has already
     /// surfaced the lost-state branch through some other channel.
-    pub fn into_wallet(self) -> Engine<S, D, L, R> {
+    pub fn into_wallet(self) -> Engine<S, D, L, R, P> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -681,12 +697,23 @@ impl Engine<SoloSigner> {
             })?;
         let refresh = std::sync::Arc::new(super::local_refresh::LocalRefresh::new(view_material));
 
+        let keys = std::sync::Arc::new(keys);
+        let ledger = std::sync::Arc::new(super::local_ledger::LocalLedger::new(ledger, indexes));
+        let pending = super::LocalPendingTx::new(
+            std::sync::Arc::new(super::LocalSigner::new(std::sync::Arc::clone(&keys))),
+            super::WalletGreedyOutputSelector,
+            super::DaemonFeeEstimator,
+            std::sync::Arc::clone(&ledger),
+            std::sync::Arc::new(super::TracingDiagnosticSink),
+            super::pending::ReservationTTLConfig::default(),
+            network,
+        );
+
         Ok(Self {
             file,
             keys,
-            ledger: super::local_ledger::LocalLedger::new(ledger, indexes),
-            reservations: std::collections::BTreeMap::new(),
-            next_reservation_id: 0,
+            ledger,
+            pending,
             prefs,
             daemon,
             network,
@@ -700,7 +727,14 @@ impl Engine<SoloSigner> {
 
 #[cfg(test)]
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine, R: RefreshEngine> Engine<S, D1, L, R> {
+impl<
+        S: EngineSignerKind,
+        D1: DaemonEngine,
+        L: LedgerEngine,
+        R: RefreshEngine,
+        P: super::traits::PendingTxEngine,
+    > Engine<S, D1, L, R, P>
+{
     /// Test-only constructor: rebuild the engine with `daemon`
     /// substituted in place of the existing one, leaving every
     /// other field unchanged.
@@ -747,13 +781,12 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine, R: RefreshEngine> E
     /// test surface; production paths cannot reach it because
     /// `pub(crate) #[cfg(test)]` excludes them from the published
     /// API and from the non-test build.
-    pub(crate) fn replace_daemon<D2: DaemonEngine>(self, daemon: D2) -> Engine<S, D2, L, R> {
+    pub(crate) fn replace_daemon<D2: DaemonEngine>(self, daemon: D2) -> Engine<S, D2, L, R, P> {
         let Engine {
             file,
             keys,
             ledger,
-            reservations,
-            next_reservation_id,
+            pending,
             prefs,
             daemon: _old,
             network,
@@ -766,8 +799,7 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine, R: RefreshEngine> E
             file,
             keys,
             ledger,
-            reservations,
-            next_reservation_id,
+            pending,
             prefs,
             daemon,
             network,
@@ -826,13 +858,12 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine, R: RefreshEngine> E
     /// The retirement commit deletes both `replace_daemon` and
     /// `replace_ledger` together; production paths are unaffected
     /// because they never named these methods.
-    pub(crate) fn replace_ledger<L2: LedgerEngine>(self, ledger: L2) -> Engine<S, D1, L2, R> {
+    pub(crate) fn replace_ledger<L2: LedgerEngine>(self, ledger: L2) -> Engine<S, D1, L2, R, P> {
         let Engine {
             file,
             keys,
             ledger: _old,
-            reservations,
-            next_reservation_id,
+            pending,
             prefs,
             daemon,
             network,
@@ -844,9 +875,8 @@ impl<S: EngineSignerKind, D1: DaemonEngine, L: LedgerEngine, R: RefreshEngine> E
         Engine {
             file,
             keys,
-            ledger,
-            reservations,
-            next_reservation_id,
+            ledger: std::sync::Arc::new(ledger),
+            pending,
             prefs,
             daemon,
             network,
@@ -905,7 +935,9 @@ fn is_default_overrides(overrides: &SafetyOverrides) -> bool {
 // Phase 0c amendment block in
 // `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.2).
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
+impl<S: EngineSignerKind, D: DaemonEngine, P: super::traits::PendingTxEngine>
+    Engine<S, D, LocalLedger, super::LocalRefresh, P>
+{
     /// Rotate the wallet password, optionally also rotating the KDF
     /// parameters of the on-disk envelope wrap.
     ///
@@ -940,7 +972,7 @@ impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
     ///    `view_sk`, `ml_kem_dk`, and (for uniform write patterns)
     ///    the public-key fields (see
     ///    `shekyl_crypto_pq::account::AllKeysBlob::drop`).
-    /// 3. `self.ledger`, `self.indexes`, `self.reservations`,
+    /// 3. `self.ledger`, `self.pending`,
     ///    `self.prefs` — no special drop semantics; ordinary heap
     ///    frees.
     ///
@@ -1228,26 +1260,29 @@ mod tests {
         let seed = fixed_seed();
 
         let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
-        let mut wallet =
+        let wallet =
             Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
 
-        // Inject a synthetic reservation directly through the
-        // `pub(crate)` field; we don't need a real `build_pending_tx`
-        // here — the lifecycle invariant is just that close refuses
-        // when the reservation map is non-empty.
+        use std::time::Instant;
+
+        use super::super::local_pending_tx::ConsumerHeldEntry;
+
         let id = super::super::pending::ReservationId::new(0);
-        let reservation = super::super::pending::Reservation {
-            selected_transfer_indices: Vec::new(),
-            built_at_height: 0,
-            built_at_tip_hash: [0u8; 32],
-            snapshot_id: super::super::pending::SnapshotId([0u8; 16]),
-            extensions: Vec::new(),
-            fee_atomic_units: 0,
-            recipients: Vec::new(),
-            priority: super::super::pending::FeePriority::Standard,
-        };
-        wallet.reservations.insert(id, reservation);
-        wallet.next_reservation_id = 1;
+        wallet
+            .pending
+            .state
+            .lock()
+            .expect("pending state lock not poisoned")
+            .consumer_held
+            .insert(
+                id,
+                ConsumerHeldEntry {
+                    created_at: Instant::now(),
+                    snapshot_id: super::super::pending::SnapshotId([0u8; 16]),
+                    built_at_height: 0,
+                    built_at_tip_hash: [0u8; 32],
+                },
+            );
 
         let count_before = wallet.outstanding_pending_txs();
         assert_eq!(count_before, 1);

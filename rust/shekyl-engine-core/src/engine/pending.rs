@@ -84,19 +84,25 @@
 //! [`OpenError::OutstandingPendingTx`]: super::error::OpenError::OutstandingPendingTx
 //! [`Engine::submit_pending_tx`]: super::Engine::submit_pending_tx
 
+#[cfg(test)]
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
 use shekyl_address::Network;
-use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SubaddressIndex};
+#[cfg(test)]
+use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants};
+use shekyl_engine_state::SubaddressIndex;
 
 use crate::engine::{
-    error::{PendingTxError, SendError},
-    local_ledger::LocalLedger,
-    refresh::{derive_snapshot_id, LedgerSnapshot},
-    traits::DaemonEngine,
+    diagnostics::DiscardReason,
+    error::{PendingTxError, SendError, SubmitError},
+    traits::{DaemonEngine, LedgerEngine, PendingTxEngine, RefreshEngine},
     Engine, EngineSignerKind,
 };
+
+#[cfg(test)]
+use crate::engine::refresh::{derive_snapshot_id, LedgerSnapshot};
 
 /// Stub fee for Phase 1 [`Engine::build_pending_tx`].
 ///
@@ -282,6 +288,9 @@ pub enum ReservationExtension {}
 /// the `Engine::*_pending_tx` methods, never directly. The submit /
 /// discard path consumes the entry by removing it from the
 /// reservation map.
+/// Legacy free-function state shape; retained for `pending` module unit
+/// tests until those tests migrate to [`LocalPendingTx`] (C7).
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(crate) struct Reservation {
     /// Indices into [`LedgerBlock::transfers`] selected to fund the
@@ -513,8 +522,9 @@ pub(crate) struct InFlightSubmit {
 /// Build a [`PendingTx`] against a free state triple. Inserts the
 /// resulting [`Reservation`] into `reservations` and bumps `next_id`.
 ///
-/// See [`Engine::build_pending_tx`] for the contract; this helper is
-/// the same body, exposed for in-crate tests.
+/// See [`Engine::build_pending_tx`] for the contract; legacy helper for
+/// `pending` module unit tests (C7 migrates to [`LocalPendingTx`]).
+#[cfg(test)]
 pub(crate) fn build_pending_tx_in_state(
     ledger: &LedgerBlock,
     reservations: &mut BTreeMap<ReservationId, Reservation>,
@@ -636,6 +646,7 @@ pub(crate) fn build_pending_tx_in_state(
 /// as locally spent, and return the (Phase-1 stubbed) tx hash.
 ///
 /// See [`Engine::submit_pending_tx`] for the contract.
+#[cfg(test)]
 pub(crate) fn submit_pending_tx_in_state(
     ledger: &mut LedgerBlock,
     reservations: &mut BTreeMap<ReservationId, Reservation>,
@@ -689,6 +700,7 @@ pub(crate) fn submit_pending_tx_in_state(
 /// `false` otherwise — the caller-facing `Engine::discard_pending_tx`
 /// is `Ok(())` in either case (cross-cutting lock 4: discard is
 /// idempotent and silent on unknown handles).
+#[cfg(test)]
 pub(crate) fn discard_pending_tx_in_state(
     reservations: &mut BTreeMap<ReservationId, Reservation>,
     id: ReservationId,
@@ -697,96 +709,58 @@ pub(crate) fn discard_pending_tx_in_state(
 }
 
 // ---------------------------------------------------------------------------
-// `Engine<S>` methods.
+// `Engine<S, D, L, R, P>` pending dispatch (C6).
 // ---------------------------------------------------------------------------
 
-// `D: DaemonEngine` private-bound: see the rationale on the
-// `pub struct Engine` definition in `engine/mod.rs`. The
-// `L = LocalLedger` specialization is intentional: `build_pending_tx`
-// and `submit_pending_tx` borrow the `WalletLedger` directly through
-// `self.ledger.read()` / `self.ledger.write()`, which are
-// `LocalLedger` inherent methods. The `LedgerEngine` trait surface
-// does not yet expose borrowed-state read/write accessors; once a
-// future commit (Stage 4 design space — see the Phase 0c amendment
-// in `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.2) adds them, this
-// block generalizes to `impl<S, D, L: LedgerEngine>`.
+use std::future::Future;
+use std::pin::pin;
+use std::task::{Context, Poll, Waker};
+
+/// Poll a future that completes without pending (Stage 1 `LocalPendingTx`
+/// uses `std::future::ready` internally).
+fn poll_immediate<F: Future>(future: F) -> F::Output {
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut pinned = pin!(future);
+    match pinned.as_mut().poll(&mut cx) {
+        Poll::Ready(val) => val,
+        Poll::Pending => panic!("poll_immediate: future not ready"),
+    }
+}
+
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        L: LedgerEngine,
+        R: RefreshEngine,
+        P: PendingTxEngine,
+    > Engine<S, D, L, R, P>
+{
     /// Number of in-flight reservations on this wallet handle.
     ///
-    /// `Engine::close` (lifecycle commit) calls this and refuses with
+    /// `Engine::close` refuses with
     /// [`OpenError::OutstandingPendingTx`](super::error::OpenError::OutstandingPendingTx)
-    /// when the count is non-zero. Tests and callers that want to
-    /// poll the count outside `close` use this accessor.
+    /// when the count is non-zero.
     pub fn outstanding_pending_txs(&self) -> usize {
-        self.reservations.len()
+        self.pending.outstanding()
     }
 
-    /// Build a [`PendingTx`] against the wallet's current state.
-    ///
-    /// Phase 1 contract:
-    ///
-    /// - Selects unspent, mature, non-reserved outputs covering
-    ///   `Σ recipient_amount + STUB_FEE_ATOMIC_UNITS`.
-    /// - Captures `synced_height` and the recorded block hash at that
-    ///   height as the reservation's chain-state tags.
-    /// - Records the selection and tags in the wallet's runtime
-    ///   reservation map.
-    /// - Returns a [`PendingTx`] with `tx_bytes = Vec::new()` (Phase
-    ///   2a wires `shekyl-tx-builder`).
-    ///
-    /// # Errors
-    ///
-    /// - [`SendError::InvalidRecipient`] for an empty `recipients`
-    ///   list or amount overflow.
-    /// - [`SendError::CannotSign`] when the wallet has not ingested
-    ///   any block yet (no tip hash to anchor against).
-    /// - [`SendError::InsufficientFunds`] when the available
-    ///   non-reserved spendable balance cannot cover `amount + fee`.
+    /// Build a [`PendingTx`] via [`PendingTxEngine::build`].
     pub fn build_pending_tx(&mut self, request: &TxRequest) -> Result<PendingTx, SendError> {
-        let guard = self.ledger.read();
-        build_pending_tx_in_state(
-            &guard.ledger.ledger,
-            &mut self.reservations,
-            &mut self.next_reservation_id,
-            request,
-        )
-        // `guard` is dropped at end of expression, releasing the
-        // LocalLedger read lock once the result has been computed.
+        poll_immediate(self.pending.build(request.clone()))
     }
 
-    /// Submit a [`PendingTx`] handle.
-    ///
-    /// Runs the cross-cutting-lock-4 invariants
-    /// ([`PendingTxError::TooOld`], [`PendingTxError::ChainStateChanged`],
-    /// [`PendingTxError::UnknownHandle`]) and on success removes the
-    /// reservation, marks its inputs locally spent (with
-    /// `spent_height = None` to reflect the still-unconfirmed state),
-    /// and returns a [`TxHash`].
-    ///
-    /// Phase 1 stub: the body does not call the daemon; the returned
-    /// `TxHash` is synthesized from the [`ReservationId`]. Phase 2a
-    /// replaces this body with a real broadcast call. The invariant
-    /// checks themselves are the same in both phases.
-    pub fn submit_pending_tx(&mut self, id: ReservationId) -> Result<TxHash, PendingTxError> {
-        let mut guard = self.ledger.write();
-        submit_pending_tx_in_state(
-            &mut guard.ledger.ledger,
-            &mut self.reservations,
-            self.network,
-            id,
-        )
+    /// Submit a [`PendingTx`] handle via [`PendingTxEngine::submit`].
+    pub fn submit_pending_tx(&mut self, id: ReservationId) -> Result<TxHash, SubmitError> {
+        poll_immediate(self.pending.submit(id))
     }
 
-    /// Discard a reservation.
+    /// Discard a reservation via [`PendingTxEngine::discard`].
     ///
-    /// Idempotent: `Ok(())` whether or not `id` is currently
-    /// recognized. Per cross-cutting lock 4, `submit_pending_tx`
-    /// raises [`PendingTxError::UnknownHandle`] for an unknown handle
-    /// while `discard_pending_tx` does not.
+    /// Orchestration always passes [`DiscardReason::ConsumerExplicit`].
     pub fn discard_pending_tx(&mut self, id: ReservationId) -> Result<(), PendingTxError> {
-        let _ = discard_pending_tx_in_state(&mut self.reservations, id);
-        Ok(())
+        self.pending
+            .discard(id, DiscardReason::ConsumerExplicit)
     }
 }
 

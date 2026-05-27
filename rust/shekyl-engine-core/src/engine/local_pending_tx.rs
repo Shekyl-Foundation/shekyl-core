@@ -126,6 +126,19 @@ impl Stage1LedgerSpendableAccess for LocalLedger {
     }
 }
 
+impl<L> Stage1LedgerSpendableAccess for Arc<L>
+where
+    L: Stage1LedgerSpendableAccess,
+{
+    fn with_ledger_block<R>(&self, f: impl FnOnce(&LedgerBlock) -> R) -> R {
+        self.as_ref().with_ledger_block(f)
+    }
+
+    fn with_ledger_block_mut<R>(&self, f: impl FnOnce(&mut LedgerBlock) -> R) -> R {
+        self.as_ref().with_ledger_block_mut(f)
+    }
+}
+
 // ============================================================================
 // PendingTxState (γ three-collection lean shape)
 // ============================================================================
@@ -269,9 +282,9 @@ where
     /// Fee-estimation strategy; held by value for the same reason
     /// as `output_selector`.
     pub(crate) fee_estimator: F,
-    /// `LedgerEngine` handle used for `current_snapshot` reads at
-    /// submit-time and balance / matured-output projection.
-    pub(crate) ledger: L,
+    /// Shared `LedgerEngine` handle (same `Arc` as [`Engine`](super::Engine)'s
+    /// `ledger` field at C6 assembly).
+    pub(crate) ledger: Arc<L>,
     /// Diagnostic sink (segment-2f §5.0.2.1 sink-binding closure).
     pub(crate) sink: Arc<dyn DiagnosticSink>,
     /// Per-collection reservation TTL config (Phase 0l). Consumed by
@@ -673,6 +686,7 @@ where
         Ok(())
     }
 
+    #[allow(dead_code)] // trait surface only; production wiring lands with mempool eviction (V3.x).
     fn signal_mempool_evicted_sync(&self, rid: ReservationId) -> Result<(), PendingTxError> {
         let mut state = self
             .state
@@ -711,12 +725,11 @@ where
     /// C5α lands the constructor; C6 wires the first orchestrator-
     /// side construction site (`Engine::create` / `Engine::open_*`
     /// in `engine/lifecycle.rs`).
-    #[allow(dead_code)]
     pub fn new(
         signer: Arc<S>,
         output_selector: O,
         fee_estimator: F,
-        ledger: L,
+        ledger: Arc<L>,
         sink: Arc<dyn DiagnosticSink>,
         ttl: ReservationTTLConfig,
         network: Network,
@@ -851,7 +864,7 @@ mod tests {
             Arc::new(LocalSigner::new(keys)),
             WalletGreedyOutputSelector,
             DaemonFeeEstimator,
-            test_ledger(),
+            Arc::new(test_ledger()),
             Arc::new(TracingDiagnosticSink),
             ReservationTTLConfig::default(),
             Network::Mainnet,
@@ -928,7 +941,7 @@ mod tests {
         }
     }
 
-    fn test_pending_tx(ledger: LocalLedger) -> LocalPendingTx<LocalSigner, WalletGreedyOutputSelector, DaemonFeeEstimator, LocalLedger> {
+    fn test_pending_tx(ledger: Arc<LocalLedger>) -> LocalPendingTx<LocalSigner, WalletGreedyOutputSelector, DaemonFeeEstimator, LocalLedger> {
         LocalPendingTx::new(
             Arc::new(LocalSigner::new(test_keys())),
             WalletGreedyOutputSelector,
@@ -942,9 +955,9 @@ mod tests {
 
     #[tokio::test]
     async fn build_then_submit_marks_outputs_spent() {
-        let ledger = test_ledger();
+        let ledger = Arc::new(test_ledger());
         populate_ledger(
-            &ledger,
+            ledger.as_ref(),
             1,
             vec![
                 make_recovered_output(1, 100, 10_000),
@@ -952,7 +965,7 @@ mod tests {
             ],
             20,
         );
-        let pending = test_pending_tx(ledger);
+        let pending = test_pending_tx(Arc::clone(&ledger));
 
         let built = pending
             .build(standard_request(7_000))
@@ -979,9 +992,9 @@ mod tests {
 
     #[tokio::test]
     async fn discard_releases_output_locks() {
-        let ledger = test_ledger();
+        let ledger = Arc::new(test_ledger());
         populate_ledger(
-            &ledger,
+            ledger.as_ref(),
             1,
             vec![
                 make_recovered_output(1, 100, 10_000),
@@ -989,7 +1002,7 @@ mod tests {
             ],
             20,
         );
-        let pending = test_pending_tx(ledger);
+        let pending = test_pending_tx(Arc::clone(&ledger));
 
         let first = pending
             .build(standard_request(7_000))
@@ -1009,14 +1022,14 @@ mod tests {
 
     #[tokio::test]
     async fn discard_blocked_while_in_flight() {
-        let ledger = test_ledger();
+        let ledger = Arc::new(test_ledger());
         populate_ledger(
-            &ledger,
+            ledger.as_ref(),
             1,
             vec![make_recovered_output(1, 100, 10_000)],
             20,
         );
-        let pending = test_pending_tx(ledger);
+        let pending = test_pending_tx(Arc::clone(&ledger));
 
         let built = pending
             .build(standard_request(1_000))

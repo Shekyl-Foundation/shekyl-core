@@ -887,8 +887,9 @@ const _: fn() = || {
 /// path always delivers `Ok(summary)`; consumers that want to
 /// abandon a successful refresh in flight have to drop the handle
 /// and reconcile against the next `progress().borrow()`.
-async fn run_refresh_task<S, D: DaemonEngine, L, R: RefreshEngine>(
-    engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S, D, L, R>>>,
+#[allow(clippy::type_complexity)]
+async fn run_refresh_task<S, D: DaemonEngine, L, R: RefreshEngine, P>(
+    engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S, D, L, R, P>>>,
     opts: RefreshOptions,
     cancel: CancellationToken,
     progress: tokio::sync::watch::Sender<RefreshProgress>,
@@ -897,7 +898,8 @@ async fn run_refresh_task<S, D: DaemonEngine, L, R: RefreshEngine>(
 ) where
     S: EngineSignerKind + Send + Sync + 'static,
     L: LedgerEngine + Send + Sync + 'static,
-    Engine<S, D, L, R>: Send + Sync,
+    P: super::traits::PendingTxEngine + Send + Sync + 'static,
+    Engine<S, D, L, R, P>: Send + Sync,
 {
     // Producer-side observability sink. `TracingDiagnosticSink` is the
     // V3.0 canonical projection per `engine/diagnostics.rs` F9: each
@@ -1169,7 +1171,14 @@ fn summarize(result: &ScanResult, merge_attempts: u32) -> RefreshSummary {
 // retained until the sync entry points either acquire a runtime
 // handle path or are themselves migrated to `async fn`.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> Engine<S, D, L, R> {
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        L: LedgerEngine,
+        R: RefreshEngine,
+        P: super::traits::PendingTxEngine,
+    > Engine<S, D, L, R, P>
+{
     /// Spawn an async refresh task and return a [`RefreshHandle`]
     /// for observing and controlling it.
     ///
@@ -1302,7 +1311,9 @@ impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine> En
 // sync call site; the cost is not currently justified by a consumer
 // of `Engine::refresh` against a non-`LocalLedger` ledger.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine> Engine<S, D, LocalLedger, R> {
+impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine, P: super::traits::PendingTxEngine>
+    Engine<S, D, LocalLedger, R, P>
+{
     /// Drive a refresh against the configured daemon: pull a snapshot
     /// of the wallet's ledger, ask the producer to scan
     /// `synced_height + 1 .. daemon_tip + 1`, and merge the result

@@ -110,7 +110,6 @@ use crate::engine::pending::{PendingTx, ReservationId, TxHash, TxRequest};
 /// itself takes no generic parameters).
 ///
 /// [`LocalPendingTx`]: super::super::local_pending_tx::LocalPendingTx
-#[allow(dead_code)] // C6 lands the first orchestrator-side dispatch through this trait.
 pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     /// Build a pending transaction against the current ledger
     /// snapshot; reserves the selected inputs in `consumer_held`
@@ -183,8 +182,10 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     ///
     /// Returns [`SubmitError`] for the full submit-time outcome
     /// taxonomy; see [`SubmitError`]'s rustdoc.
-    fn submit(&self, id: ReservationId)
-        -> impl Future<Output = Result<TxHash, SubmitError>> + Send;
+    fn submit(
+        &self,
+        id: ReservationId,
+    ) -> impl Future<Output = Result<TxHash, SubmitError>> + Send;
 
     /// Discard the named reservation with an explicit reason.
     ///
@@ -206,7 +207,11 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     ///   resolved).
     /// - [`PendingTxError::DiscardBlockedPendingDaemonAck`] if
     ///   `id` is in `in_flight` (F2 ownership-boundary rejection).
-    fn discard(&self, id: ReservationId, reason: DiscardReason) -> Result<(), PendingTxError>;
+    fn discard(
+        &self,
+        id: ReservationId,
+        reason: DiscardReason,
+    ) -> Result<(), PendingTxError>;
 
     /// Signal that a previously-submitted reservation's tx has
     /// been observed evicted from the daemon's mempool (Phase 0m
@@ -243,7 +248,11 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     ///   `in_flight` — including rids in `consumer_held` (eviction
     ///   is meaningful only for in-flight reservations; consumer-
     ///   held reservations were never submitted to the daemon).
-    fn signal_mempool_evicted(&self, rid: ReservationId) -> Result<(), PendingTxError>;
+    #[allow(dead_code)] // V3.x mempool-eviction surface; no production caller at C6.
+    fn signal_mempool_evicted(
+        &self,
+        rid: ReservationId,
+    ) -> Result<(), PendingTxError>;
 
     /// Total in-process reservations awaiting resolution. Sum of
     /// `consumer_held.len() + in_flight.len()` per the (γ) lean
