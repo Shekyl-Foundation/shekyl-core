@@ -35,8 +35,8 @@ operational properties the envelope guarantees.
 
 3. **Two-level KEK for fast password rotation.** The password stretches
    to a `wrap_key` via Argon2id. `wrap_key` decrypts a random 32-byte
-   `file_kek`. `file_kek` in turn encrypts the seed region (region 1) of
-   `.wallet.keys` and every save of `.wallet`. Password rotation
+   `file_kek`. `file_kek` is the PRK for HKDF-derived per-region AEAD keys
+   (§2.6); it does not encrypt regions directly. Password rotation
    rewrites only the wrap layer of `.wallet.keys`; region 1 ciphertext,
    region 1 Poly1305 tag, and every byte of `.wallet` are
    byte-identical. No re-encryption, no Argon2 against the new password
@@ -72,7 +72,7 @@ operational properties the envelope guarantees.
 | `[30..54)`   | 24    | `wrap_nonce`            | Plaintext.                              |
 | `[54..102)`  | 48    | `wrap_ct \|\| wrap_tag` | 32 B ciphertext of `file_kek` + 16 B tag. |
 | `[102..126)` | 24    | `region1_nonce`         | Plaintext.                              |
-| `[126..N-16)`| var   | `region1_ct`            | Ciphertext under `file_kek`.            |
+| `[126..N-16)`| var   | `region1_ct`            | Ciphertext under `wrap_key_region_1`.   |
 | `[N-16..N)`  | 16    | `region1_tag`           | Poly1305 tag. `seed_block_tag` value.   |
 
 AEAD for all ciphertexts is XChaCha20-Poly1305 (192-bit nonce).
@@ -123,8 +123,8 @@ it would derive from `cap_content` under the declared
 `restore_height_hint` is the block height at wallet creation; the lost
 `.wallet` recovery path uses it as the rescan floor.
 
-Region 1 ciphertext is `XChaCha20-Poly1305(key = file_kek, nonce =
-region1_nonce, aad = bytes[0..9), plaintext = region-1-plaintext)`.
+Region 1 ciphertext is `XChaCha20-Poly1305(key = wrap_key_region_1, nonce =
+region1_nonce, aad = bytes[0..9), plaintext = region-1-plaintext)` (see §2.6).
 Only `magic || file_version` is AAD-bound here: the wrap-layer fields
 (`kdf_*`, `wrap_salt`, `wrap_*`) are *not* AAD to region 1, because we
 want password rotation to be a wrap-layer-only rewrite. If those fields
@@ -184,7 +184,7 @@ is read in this order, with each step refusing in a typed way rather
 than falling back:
 
 1. **Successful AEAD.** Region 1's Poly1305 tag verifies against
-   `file_kek` and the `[magic || file_version]` AAD. Any byte tamper
+   `wrap_key_region_1` and the `[magic || file_version]` AAD. Any byte tamper
    on the AAD, the ciphertext, or the tag surfaces as
    `InvalidPasswordOrCorrupt` — deliberately indistinguishable from a
    wrong-password guess so the decryption path cannot be used as an
@@ -235,6 +235,48 @@ posture in at the integration layer: every `(mode, len)` shape
 outside the closed set is expected to surface a typed refusal, not a
 fallback.
 
+### 2.6 Region wrap key derivation
+
+Each AEAD-encrypted region uses a 32-byte wrap key derived from `file_kek`
+via HKDF-SHA-256 Expand (no Extract step — `file_kek` is already a uniform
+32-byte PRK). The derivation matches the prefs HMAC pattern in
+[`WALLET_PREFS.md`](WALLET_PREFS.md) §2.2 and the per-output secret labels in
+[`POST_QUANTUM_CRYPTOGRAPHY.md`](POST_QUANTUM_CRYPTOGRAPHY.md): domain-separated
+`info` strings, address binding, `-v1` suffix for future algorithm bumps.
+
+Let `addr` be the 65-byte `expected_classical_address` inside region 1
+plaintext (§2.2). At **seal** time the address is known from the capability
+being written; at **open** time it is read from decrypted region 1 before
+region 2 is decrypted.
+
+```
+wrap_key_region_1 = HKDF-Expand(
+    prk  = file_kek,
+    info = b"shekyl-region1-aead-v1" || addr,
+    L    = 32,
+)
+
+wrap_key_region_2 = HKDF-Expand(
+    prk  = file_kek,
+    info = b"shekyl-region2-aead-v1" || addr,
+    L    = 32,
+)
+```
+
+**Rationale.** Region 1 (spend authority) and region 2 (ledger cache) have
+different threat tiers. Sharing `file_kek` as the AEAD key for both collapses
+their blast radii in memory-disclosure scenarios that AEAD AAD does not address:
+AAD prevents ciphertext swapping between regions; it does not prevent decryption
+when the attacker holds the key. Per-region HKDF keys let steady-state session
+code cache only `wrap_key_region_2` (and other derived subkeys such as
+`prefs_hmac_key`) while zeroizing `file_kek` and `wrap_key_region_1` after open.
+
+**Pre-genesis note.** On-disk **layout** is unchanged; **ciphertext** produced
+under a pre-amendment implementation that keyed region AEAD with raw `file_kek`
+does not decrypt under this prescription. Regenerate wallets and Tier-3 KATs;
+no migration code. Design record:
+[`docs/design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md).
+
 ## 3. `<name>.wallet` layout
 
 | Range       | Bytes | Field                 | Visibility          |
@@ -242,18 +284,20 @@ fallback.
 | `[0..8)`    | 8     | `magic = "SHEKYLWS"`  | Plaintext. AAD.     |
 | `[8..9)`    | 1     | `state_version = 0x01`| Plaintext. AAD.     |
 | `[9..33)`   | 24    | `region2_nonce`       | Plaintext.          |
-| `[33..M-16)`| var   | `region2_ct`          | Ciphertext.         |
+| `[33..M-16)`| var   | `region2_ct`          | Ciphertext under `wrap_key_region_2`. |
 | `[M-16..M)` | 16    | `region2_tag`         | Poly1305 tag.       |
 
 ```
 region2_aad = bytes[0..9)                             // "SHEKYLWS" || 0x01
             || seed_block_tag                          // 16 B Poly1305 tag of
                                                       //   region 1 of .wallet.keys
-region2_ct  = XChaCha20-Poly1305(key = file_kek,
+region2_ct  = XChaCha20-Poly1305(key = wrap_key_region_2,
                                  nonce = region2_nonce,
                                  aad = region2_aad,
                                  plaintext = state-serialization-bytes)
 ```
+
+(`wrap_key_region_2` from §2.6; `addr` taken from decrypted region 1.)
 
 `seed_block_tag` is not stored inside `.wallet`; it is recovered from
 `.wallet.keys` at open time. A mismatch (someone swapped
@@ -301,10 +345,13 @@ guarantees : .wallet.keys bytes on disk are untouched by auto-save
 ```
 
 Each auto-save re-runs the Argon2id wrap derivation. The design accepts
-this per-save latency in exchange for the invariant that `file_kek`
-never leaves its scoped use inside a single `seal_state_file` /
-`open_state_file` / `open_keys_file` call. No cached `file_kek`, no
-cached password.
+this per-save latency in exchange for the invariant that `file_kek` is
+transient at open: derived from the password, used to HKDF the region wrap
+keys (§2.6) and prefs integrity key, then zeroized. Steady-state auto-save
+may cache `wrap_key_region_2` (not `file_kek`, not `wrap_key_region_1`) for
+the unlocked session; see
+[`docs/design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md)
+§4.3. No cached password.
 
 ### 4.4 Wallet creation ordering
 
@@ -386,10 +433,10 @@ work, then `XChaCha20-Poly1305-Verify` per candidate, to confirm a
 guess. Choose `m_log2` and `t` to make that cost multiplicative
 expensive against feasible adversaries.
 
-**`region1_nonce`, `region1_ct`, `region1_tag`.** Opaque. Region 1's
-plaintext includes the `mode_byte` and `network` — deliberately hidden
-from filesystem scans so "is this a VIEW_ONLY stagenet wallet?" is not
-answerable without the password.
+**`region1_nonce`, `region1_ct`, `region1_tag`.** Opaque under
+`wrap_key_region_1` (§2.6). Region 1's plaintext includes the `mode_byte`
+and `network` — deliberately hidden from filesystem scans so "is this a
+VIEW_ONLY stagenet wallet?" is not answerable without the password.
 
 **`expected_classical_address` (inside region 1).** Loader uses this
 both for sanity (derivation agrees) and for UX (displayable before any

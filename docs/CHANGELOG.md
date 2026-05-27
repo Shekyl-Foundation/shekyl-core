@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Wallet file format v1: per-region HKDF wrap keys (spec amendment).**
+  [`docs/WALLET_FILE_FORMAT_V1.md`](WALLET_FILE_FORMAT_V1.md) §2.6 now
+  prescribes `wrap_key_region_1` and `wrap_key_region_2` via HKDF-SHA-256
+  Expand from `file_kek` (domain-separated labels + address binding), replacing
+  direct `file_kek` AEAD for regions 1 and 2. On-disk layout and `file_version`
+  unchanged; reference implementation and Tier-3 KAT regeneration tracked in
+  [`docs/design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md).
+
 ### Added
 
 - **RandomX v2 Track A Phase 2h adversarial-corpus methodology
