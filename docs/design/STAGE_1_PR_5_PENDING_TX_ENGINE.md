@@ -1506,8 +1506,8 @@ segment 2g).**
     table** per §5.4 R9 applies (§5.6.4 P4 table): for each
     `TerminalErrorKind` variant — drop from `in_flight`,
     release `output_locks` for the rid, emit `Discarded {
-    rid, DaemonRejectedTerminal::* }`, return
-    `Err(DaemonRejectedTerminal::*)`; for each
+    rid, DaemonRejectedTerminal { kind } }`, return
+    `Err(DaemonRejectedTerminal { kind })`; for each
     `AmbiguousErrorKind` variant — retain in `in_flight`,
     retain `output_locks` for the rid (Finding-2 daemon-side
     authority), emit `SubmitPendingResolution { rid, kind }`,
@@ -1555,9 +1555,9 @@ segment 2g).**
   **Segment-2h variant-set updates.** `PendingTxDiagnostic::SubmitFailed`
   REMOVED — no surviving emission site under the P4
   collection-moves table; terminal errors emit via
-  `Discarded { rid, DaemonRejectedTerminal::* }`, ambiguous
-  errors emit via the new `SubmitPendingResolution { rid,
-  kind: AmbiguousErrorKind }`. `DiscardReason::SnapshotRotationAutoDiscard`
+  `Discarded { rid, DaemonRejectedTerminal { kind } }`,
+  ambiguous errors emit via the new `SubmitPendingResolution
+  { rid, kind: AmbiguousErrorKind }`. `DiscardReason::SnapshotRotationAutoDiscard`
   REMOVED — segment-2h pins lazy R5; snapshot rotation
   drives no automatic collection moves at V3.0; consumer
   learns at submit-time via `SubmitError::SnapshotInvalidated`;
@@ -3712,8 +3712,13 @@ to Round 2 with the dispositions framed below.
   the wallet's authority to decide based on chain observation;
   the composition-side hook the V3.x `TimeoutResolverActor`
   consumes is the conjunction of (i) the
-  `SubmitFailed { kind: DaemonTimeout | DaemonUnavailable }`
-  event and (ii) a chain-observation mechanism for the
+  `SubmitPendingResolution { rid, kind:
+  AmbiguousErrorKind::DaemonTimeout |
+  AmbiguousErrorKind::DaemonUnavailable }` event (the
+  post-segment-2h variant carrying the ambiguous-failure
+  signal; segment-2f's `SubmitFailed { kind: ... }` was
+  removed under the P4 collection-moves table) and (ii) a
+  chain-observation mechanism for the
   timed-out `tx_hash` that the V3.x consumer-actor PR will
   design (additive `LedgerDiagnostic` variant carrying
   tx-confirmation payloads, additive `LedgerEngine`
@@ -5000,7 +5005,7 @@ classes:
    }` diagnostic variant. P4's collection-moves table
    surfaced that **`SubmitFailed` has no surviving emission
    site** under the lean shape — terminal errors emit via
-   `Discarded { reason: DaemonRejectedTerminal::* }`,
+   `Discarded { reason: DaemonRejectedTerminal { kind } }`,
    ambiguous errors emit via a new `SubmitPendingResolution
    { rid, kind: AmbiguousErrorKind }`. The unified
    `SubmitErrorKind` also conflates **terminal-vs-ambiguous
@@ -5445,9 +5450,9 @@ the daemon returns at the round-trip completion:
 | Outcome | `in_flight[rid]` move | `output_locks` for rid | Diagnostic emission | Trait return |
 |---|---|---|---|---|
 | `Accepted` | drop | release | `SubmitSucceeded { rid, tx_hash }` | `Ok(tx_hash)` |
-| `TerminalErrorKind::DoubleSpend` | drop | release | `Discarded { rid, DaemonRejectedTerminal::DoubleSpend }` | `Err(DaemonRejectedTerminal::DoubleSpend)` |
-| `TerminalErrorKind::FeeTooLow` | drop | release | `Discarded { rid, DaemonRejectedTerminal::FeeTooLow }` | `Err(DaemonRejectedTerminal::FeeTooLow)` |
-| `TerminalErrorKind::Malformed` | drop | release | `Discarded { rid, DaemonRejectedTerminal::Malformed }` | `Err(DaemonRejectedTerminal::Malformed)` |
+| `TerminalErrorKind::DoubleSpend` | drop | release | `Discarded { rid, DaemonRejectedTerminal { kind: TerminalErrorKind::DoubleSpend } }` | `Err(DaemonRejectedTerminal { kind: TerminalErrorKind::DoubleSpend })` |
+| `TerminalErrorKind::FeeTooLow` | drop | release | `Discarded { rid, DaemonRejectedTerminal { kind: TerminalErrorKind::FeeTooLow } }` | `Err(DaemonRejectedTerminal { kind: TerminalErrorKind::FeeTooLow })` |
+| `TerminalErrorKind::Malformed` | drop | release | `Discarded { rid, DaemonRejectedTerminal { kind: TerminalErrorKind::Malformed } }` | `Err(DaemonRejectedTerminal { kind: TerminalErrorKind::Malformed })` |
 | `AmbiguousErrorKind::DaemonTimeout` | retain | retain | `SubmitPendingResolution { rid, DaemonTimeout }` | `Err(DaemonAmbiguous { DaemonTimeout, rid })` |
 | `AmbiguousErrorKind::DaemonUnavailable` | retain | retain | `SubmitPendingResolution { rid, DaemonUnavailable }` | `Err(DaemonAmbiguous { DaemonUnavailable, rid })` |
 
@@ -5624,7 +5629,8 @@ doesn't address:
   fingerprints wallet behavior even with
   `reservation_id` elided (frequent `TTLAutoDiscard` =
   build-without-submit patterns possibly indicating
-  multisig coordination; frequent `DaemonRejectedTerminal::DoubleSpend`
+  multisig coordination; frequent
+  `DaemonRejectedTerminal { kind: TerminalErrorKind::DoubleSpend }`
   = aggressive re-quote workflows; etc.).
 
 **§5.0.3 amendment.** The contract list grows by a
@@ -5906,8 +5912,8 @@ at `SubmitCompleted` arrival:
 - `TerminalErrorKind::* ∧ discard_requested` →
   treat as consumer's intent satisfied; emit
   `Discarded { rid, ConsumerExplicit }` (not
-  `Discarded { DaemonRejectedTerminal::* }` — the
-  daemon's rejection is moot to the consumer's
+  `Discarded { DaemonRejectedTerminal { kind } }` —
+  the daemon's rejection is moot to the consumer's
   intent). **Audit/debug-visibility sub-note:** the
   daemon's rejection reason is structurally hidden
   in this case; whether V3.x emits dual events
@@ -5916,7 +5922,7 @@ at `SubmitCompleted` arrival:
   TerminalErrorKind }` diagnostic for audit visibility)
   is a V3.x design-rounds question.
 - `TerminalErrorKind::* ∧ !discard_requested` →
-  standard `Discarded { DaemonRejectedTerminal::* }`.
+  standard `Discarded { DaemonRejectedTerminal { kind } }`.
 
 **Threat-model regression note (V3.x design-rounds
 question).** V3.x's `SubmissionStrategyActor`

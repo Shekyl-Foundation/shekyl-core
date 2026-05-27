@@ -4760,44 +4760,75 @@ one place to confirm each item's relationship to the wallet stack.
   composition-side counterpart that detects patterns across
   failures rather than reacting to single events.
 
-  **Segment-2f closure status (2026-05-14; variant-name
-  corrections in Copilot-fix follow-up).** R9 closed in
+  **Segment-2f closure status (2026-05-14).** R9 closed in
   Round 2 segment 2f with two-stage submit flow + internal
   `ReservationState` machine + daemon-side authority
-  disposition for Finding 2 ambiguous outcomes. The
-  analyzer's shape is **unchanged by segment 2f**; the
-  `PendingTxDiagnostic` events it subscribes to
-  (`SubmitFailed`, `SubmitSnapshotInvalidated`) are the
-  same; `SubmitErrorKind` now pinned as
-  `DoubleSpend | FeeTooLow | Malformed | DaemonTimeout |
-  DaemonUnavailable` per segment 2f. The analyzer subscribes
-  to all five kinds; the pattern-detection bullets below
-  remain accurate (with `DaemonTimeout` / `DaemonUnavailable`
-  covering the segment-2f "Timeout" disposition).
-  `SubmitFailureAnalyzer` subscribes to
-  `PendingTxDiagnostic::SubmitFailed` and
-  `PendingTxDiagnostic::SubmitSnapshotInvalidated` events;
-  detects patterns:
+  disposition for Finding 2 ambiguous outcomes.
+
+  **Segment-2h reconciliation (2026-05-27; supersedes the
+  segment-2f variant-set narrative above).** Segment 2h's
+  (γ) lean three-collection state shape (`output_locks` +
+  `consumer_held` + `in_flight`) dissolved the internal
+  `ReservationState` enum into collection membership, and
+  segment 2h's `SubmitErrorKind` reshape split the unified
+  enum into **terminal** vs. **ambiguous** kinds with
+  diagnostic-variant-level reflection of the split:
+
+  - `SubmitErrorKind` → `TerminalErrorKind { DoubleSpend |
+    FeeTooLow | Malformed }` (lifecycle-gone) + `AmbiguousErrorKind
+    { DaemonTimeout | DaemonUnavailable }` (lifecycle-in-flight).
+  - `PendingTxDiagnostic::SubmitFailed` **removed** — the
+    variant had no surviving emission site under the P4
+    collection-moves table. Terminal failures emit
+    `PendingTxDiagnostic::Discarded { rid,
+    DaemonRejectedTerminal { kind: TerminalErrorKind } }`;
+    ambiguous failures emit
+    `PendingTxDiagnostic::SubmitPendingResolution { rid,
+    kind: AmbiguousErrorKind }`.
+  - `ReservationState::SubmitPendingDaemonAck` (the
+    segment-2f state-machine state) → `in_flight` collection
+    membership. F2 ownership-boundary: consumer-initiated
+    `discard` on an `in_flight` reservation returns
+    `PendingTxError::DiscardBlockedPendingDaemonAck`.
+
+  `SubmitFailureAnalyzer` subscribes to the **post-segment-2h**
+  variant set:
+  `PendingTxDiagnostic::Discarded { reason:
+  DaemonRejectedTerminal { kind } }`,
+  `PendingTxDiagnostic::SubmitPendingResolution { kind }`,
+  `PendingTxDiagnostic::SubmitSnapshotInvalidated`. Pattern
+  detection re-anchored to the new variant shape:
+
   - **Many `SubmitSnapshotInvalidated` in a row** →
     adversarial reorg-churn signal; surfaces to
     `PeerReputationActor` (via cross-actor signal or shared
     event consumption) for rotation-policy input.
-  - **Recurring `SubmitFailed { kind: FeeTooLow }`** → fee
-    estimator drift signal; surfaces to a fee-estimator actor
-    (when one exists) or to user-facing UI as a fee-update
+  - **Recurring
+    `Discarded { reason: DaemonRejectedTerminal { kind:
+    TerminalErrorKind::FeeTooLow } }`** → fee estimator
+    drift signal; surfaces to a fee-estimator actor (when
+    one exists) or to user-facing UI as a fee-update
     suggestion.
-  - **Recurring `SubmitFailed { kind: Malformed }`** →
-    wallet-side bug or daemon-byzantine path; logs loudly
-    (subject to recursive trust-boundary discipline) and may
-    trigger error-reporting if per-consumer policy allows.
-  - **Recurring `SubmitFailed { kind: DaemonTimeout }` or
-    `SubmitFailed { kind: DaemonUnavailable }`** → daemon
+  - **Recurring
+    `Discarded { reason: DaemonRejectedTerminal { kind:
+    TerminalErrorKind::Malformed } }`** → wallet-side bug
+    or daemon-byzantine path; logs loudly (subject to
+    recursive trust-boundary discipline) and may trigger
+    error-reporting if per-consumer policy allows.
+  - **Recurring
+    `SubmitPendingResolution { kind:
+    AmbiguousErrorKind::DaemonTimeout }` or
+    `SubmitPendingResolution { kind:
+    AmbiguousErrorKind::DaemonUnavailable }`** → daemon
     transient failure or peer-rotation candidate; signals
     `PeerReputationActor` for graduated response. (Both
     ambiguous-failure kinds carry the same operational
-    signal under daemon-side authority disposition per
-    segment 2f; the analyzer treats them as a single
-    pattern source.)
+    signal under daemon-side authority disposition; the
+    analyzer treats them as a single pattern source. The
+    underlying reservations remain in `in_flight`, awaiting
+    consumer-explicit `discard(rid, ConsumerExplicit)` or
+    `signal_mempool_evicted(rid)` per segment-2i's G1
+    handler.)
 
   **Hard mitigation pins (binding).**
   - **Recursive trust boundary per PR 4 §5.4.8 #4 (binding).**
@@ -4826,17 +4857,30 @@ one place to confirm each item's relationship to the wallet stack.
   [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §5.4 R9 closed Finding 2 (mailbox-ordering vs daemon-side
   authority for terminal-rejection visibility) as
-  **daemon-side authority**: on `SubmitErrorKind::DaemonTimeout`
-  or `DaemonUnavailable`, the reservation stays in
-  `SubmitPendingDaemonAck`; consumer-explicit `discard(id,
-  ConsumerExplicit)` is the resolution path; R8's
-  `ReservationTTLActor` is the safety net for forgotten
-  resolutions. `TimeoutResolverActor` is the V3.x ergonomic
-  complement that automates the consumer-side resolution
-  loop:
+  **daemon-side authority**. **Post-segment-2h shape**
+  (the segment-2f-narrative substrate is superseded; see
+  `SubmitFailureAnalyzer` entry above for the full
+  reconciliation): on
+  `AmbiguousErrorKind::{DaemonTimeout, DaemonUnavailable}`,
+  the reservation stays in the `in_flight` collection;
+  consumer-explicit `discard(id, ConsumerExplicit)` is the
+  resolution path; R8's `ReservationTTLActor` is the
+  safety net for forgotten resolutions. Segment 2i adds
+  `signal_mempool_evicted(rid)` as a second resolution
+  path for the mempool-eviction subclass (per the F2
+  ownership-boundary discipline pinned at Phase 0m).
+  `TimeoutResolverActor` is the V3.x ergonomic complement
+  that automates the consumer-side resolution loop:
 
-  - Subscribes to `PendingTxDiagnostic::SubmitFailed { kind:
-    DaemonTimeout | DaemonUnavailable }` events.
+  - Subscribes to
+    `PendingTxDiagnostic::SubmitPendingResolution { rid,
+    kind: AmbiguousErrorKind::DaemonTimeout |
+    AmbiguousErrorKind::DaemonUnavailable }` events
+    (the post-segment-2h variant carrying the ambiguous-
+    failure signal; the pre-segment-2h
+    `PendingTxDiagnostic::SubmitFailed { kind: ... }`
+    variant was removed under the P4 collection-moves
+    table).
   - **Chain-observation mechanism (design owned by the
     V3.x consumer-actor PR; Copilot-fix follow-up note).**
     To determine whether the timed-out `tx_hash` landed on
@@ -4879,8 +4923,10 @@ one place to confirm each item's relationship to the wallet stack.
   **Why V3.x, not V3.0.** Segment 2f's daemon-side authority
   disposition is wallet-correct without the resolver actor —
   R8's `ReservationTTLActor` already covers forgotten
-  resolutions via per-state TTL configuration with shorter
-  TTL on `SubmitPendingDaemonAck`. The `TimeoutResolverActor`
+  resolutions via per-collection TTL configuration with
+  shorter TTL on `in_flight` (the post-segment-2h
+  equivalent of the segment-2f `SubmitPendingDaemonAck`
+  state). The `TimeoutResolverActor`
   is **operational ergonomics**, not a wallet-correctness
   primitive; deferring it to V3.x preserves V3.0's "do less,
   do it right" posture and lets the actor's design land
@@ -4912,8 +4958,9 @@ one place to confirm each item's relationship to the wallet stack.
   prerequisite for the chain-observation correlation path.*
   Cross-references:
   [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
-  §5.0.2 (`SubmitErrorKind` variant set; `DaemonTimeout` /
-  `DaemonUnavailable`), §5.4 R9 (Finding 2 daemon-side
+  §5.0.2 (`AmbiguousErrorKind` variant set: `DaemonTimeout` /
+  `DaemonUnavailable` per segment-2h split of the segment-2f
+  unified `SubmitErrorKind`), §5.4 R9 (Finding 2 daemon-side
   authority closure; segment-2f V3.x deliverable named the
   V3.x ergonomic-API candidate `resolve_pending(id,
   chain_observation)`); R8 `ReservationTTLActor` entry above
@@ -4992,8 +5039,8 @@ one place to confirm each item's relationship to the wallet stack.
   - `TerminalErrorKind::* ∧ discard_requested` → treat as
     consumer's intent satisfied; emit
     `Discarded { ConsumerExplicit }` (not
-    `Discarded { DaemonRejectedTerminal::* }`; the daemon's
-    rejection is moot to the consumer's intent).
+    `Discarded { DaemonRejectedTerminal { kind } }`; the
+    daemon's rejection is moot to the consumer's intent).
     **Audit/debug-visibility sub-note (V3.x design-rounds
     question).** The daemon's rejection reason is
     structurally hidden in this case; whether V3.x emits
@@ -5005,7 +5052,7 @@ one place to confirm each item's relationship to the wallet stack.
     (F5+F6) — dual emission adds a wallet-attributable
     event class that consumer-actor projection must handle.
   - `TerminalErrorKind::* ∧ !discard_requested` → standard
-    `Discarded { DaemonRejectedTerminal::* }`.
+    `Discarded { DaemonRejectedTerminal { kind } }`.
 
   **Threat-model regression note (V3.x design-rounds
   question).** V3.x's `SubmissionStrategyActor` deliberately
