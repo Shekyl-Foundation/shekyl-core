@@ -219,12 +219,20 @@ done
 # carve-out shape if the convention extends.
 PLAN_DOC_PATTERN='[A-Z][A-Z0-9_]*_PLAN\.md'
 while IFS= read -r line; do
-  # Format: <file>:<lineno>:<match content>
-  file_path=$(echo "${line}" | cut -d: -f1)
-  line_number=$(echo "${line}" | cut -d: -f2)
-  match=$(echo "${line}" | cut -d: -f3-)
+  # Format: <file>:<lineno>:<match content>.
+  #
+  # `printf '%s\n'` (not `echo`) is used for the cut/grep pipelines
+  # below per Check 1's rationale at line 179: the matched lines may
+  # carry backslash-escaped quotes or Rust string continuations, and
+  # `echo`'s backslash handling is shell/setting dependent (bash
+  # with/without `posix-defaults`, dash, ksh) where `printf '%s\n'`
+  # is POSIX-mandated literal output. PR #78 Round-6 Copilot finding
+  # F11 (comment 3307805538).
+  file_path=$(printf '%s\n' "${line}" | cut -d: -f1)
+  line_number=$(printf '%s\n' "${line}" | cut -d: -f2)
+  match=$(printf '%s\n' "${line}" | cut -d: -f3-)
   # Extract every plan-doc cite from the matched line.
-  for plan_doc in $(echo "${match}" | grep -oE "${PLAN_DOC_PATTERN}" | sort -u); do
+  for plan_doc in $(printf '%s\n' "${match}" | grep -oE "${PLAN_DOC_PATTERN}" | sort -u); do
     resolved="docs/design/${plan_doc}"
     if [[ ! -f "${resolved}" ]]; then
       echo "FATAL: ${file_path}:${line_number}: cited plan-doc not found at ${resolved}:" >&2
@@ -284,9 +292,14 @@ done < <(grep -nE "${PLAN_DOC_PATTERN}" "${RECIPES_DIR}"/*.rs || true)
 # alphanumeric byte to land at the bare cite.
 SOURCE_CITE_PATTERN='(^|[^/A-Za-z0-9_.])([A-Za-z0-9_]+)\.(rs|c|cpp|h|hpp):([0-9]+)(-([0-9]+))?'
 while IFS= read -r line; do
-  file_path=$(echo "${line}" | cut -d: -f1)
-  line_number=$(echo "${line}" | cut -d: -f2)
-  content=$(echo "${line}" | cut -d: -f3-)
+  # `printf '%s\n'` (not `echo`) is used for the cut/sed pipelines
+  # below per Check 1's rationale at line 179: rationale strings
+  # frequently carry Rust line-continuation backslashes that `echo`
+  # handles non-deterministically across shells. PR #78 Round-6
+  # Copilot finding F12 (comment 3307805556).
+  file_path=$(printf '%s\n' "${line}" | cut -d: -f1)
+  line_number=$(printf '%s\n' "${line}" | cut -d: -f2)
+  content=$(printf '%s\n' "${line}" | cut -d: -f3-)
   # Iterate over every cite on the line.
   while IFS= read -r raw_match; do
     [[ -z "${raw_match}" ]] && continue
@@ -303,10 +316,10 @@ while IFS= read -r line; do
         bare="${bare#?}"
         ;;
     esac
-    basename=$(echo "${bare}" | sed -E 's/^([A-Za-z0-9_]+)\..*$/\1/')
-    ext=$(echo "${bare}" | sed -E 's/^[A-Za-z0-9_]+\.([a-z]+):.*$/\1/')
-    start_line=$(echo "${bare}" | sed -E 's/^[A-Za-z0-9_]+\.[a-z]+:([0-9]+).*$/\1/')
-    end_line=$(echo "${bare}" | sed -E 's/^[A-Za-z0-9_]+\.[a-z]+:[0-9]+(-([0-9]+))?.*$/\2/')
+    basename=$(printf '%s\n' "${bare}" | sed -E 's/^([A-Za-z0-9_]+)\..*$/\1/')
+    ext=$(printf '%s\n' "${bare}" | sed -E 's/^[A-Za-z0-9_]+\.([a-z]+):.*$/\1/')
+    start_line=$(printf '%s\n' "${bare}" | sed -E 's/^[A-Za-z0-9_]+\.[a-z]+:([0-9]+).*$/\1/')
+    end_line=$(printf '%s\n' "${bare}" | sed -E 's/^[A-Za-z0-9_]+\.[a-z]+:[0-9]+(-([0-9]+))?.*$/\2/')
     if [[ -z "${end_line}" ]]; then
       end_line="${start_line}"
     fi
@@ -357,7 +370,7 @@ while IFS= read -r line; do
       echo "  ${bare}" >&2
       failures=$((failures + 1))
     fi
-  done < <(echo "${content}" | grep -oE "${SOURCE_CITE_PATTERN}" || true)
+  done < <(printf '%s\n' "${content}" | grep -oE "${SOURCE_CITE_PATTERN}" || true)
 done < <(grep -nE "${SOURCE_CITE_PATTERN}" "${RECIPES_DIR}"/*.rs || true)
 
 if [[ ${failures} -ne 0 ]]; then
