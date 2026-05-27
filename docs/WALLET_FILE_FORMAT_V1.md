@@ -238,21 +238,37 @@ fallback.
 ### 2.6 Region wrap key derivation
 
 Each AEAD-encrypted region uses a 32-byte wrap key derived from `file_kek`
-via HKDF-SHA-256 Expand (no Extract step — `file_kek` is already a uniform
-32-byte PRK). The derivation matches the prefs HMAC pattern in
-[`WALLET_PREFS.md`](WALLET_PREFS.md) §2.2 and the per-output secret labels in
-[`POST_QUANTUM_CRYPTOGRAPHY.md`](POST_QUANTUM_CRYPTOGRAPHY.md): domain-separated
-`info` strings, address binding, `-v1` suffix for future algorithm bumps.
+via HKDF-SHA-256 in **expand-only** mode with `file_kek` as the PRK
+(`HKDF-Expand`; no Extract step; no salt). Implementations MUST NOT use
+extract-then-expand with a separate salt. The derivation matches the prefs HMAC
+pattern in [`WALLET_PREFS.md`](WALLET_PREFS.md) §2.2: domain-separated `info`
+strings, `-v1` suffix aligned with `file_version` 0x01. A future format bump
+(`file_version` 0x02) gets new labels (e.g. `-v2`); info strings are not
+reused across versions.
 
-Let `addr` be the 65-byte `expected_classical_address` inside region 1
-plaintext (§2.2). At **seal** time the address is known from the capability
-being written; at **open** time it is read from decrypted region 1 before
-region 2 is decrypted.
+**`file_kek` provenance (normative).** `file_kek` MUST be generated from a
+cryptographically secure random source at wallet creation (see §2.1). It MUST
+NOT be derived from the user's password, seed phrase, or any other
+reproducible input. Two wallets sharing a `file_kek` value collapse the security
+properties of per-region HKDF labels.
+
+**Normative info labels** (byte-exact; authoritative for implementations):
+
+| Label | Bytes | Used in |
+|-------|-------|---------|
+| `shekyl-region1-aead-v1` | 22 | Region 1 only — label-only, no `\|\| addr` |
+| `shekyl-region2-aead-v1` | 22 | Region 2 — concatenated with `addr` below |
+
+Let `addr` be the 65-byte `expected_classical_address` inside region 1 plaintext
+(§2.2). Region 1 uses **label-only** HKDF so open can derive the decrypt key
+before reading `addr` from ciphertext (Minimum-Leak: `addr` is not duplicated
+outside region 1). Region 2 and prefs HMAC read `addr` from decrypted region 1
+before deriving their keys.
 
 ```
 wrap_key_region_1 = HKDF-Expand(
     prk  = file_kek,
-    info = b"shekyl-region1-aead-v1" || addr,
+    info = b"shekyl-region1-aead-v1",
     L    = 32,
 )
 
@@ -267,8 +283,11 @@ wrap_key_region_2 = HKDF-Expand(
 different threat tiers. Sharing `file_kek` as the AEAD key for both collapses
 their blast radii in memory-disclosure scenarios that AEAD AAD does not address:
 AAD prevents ciphertext swapping between regions; it does not prevent decryption
-when the attacker holds the key. Per-region HKDF keys let steady-state session
-code cache only `wrap_key_region_2` (and other derived subkeys such as
+when the attacker holds the key. Per-region HKDF labels deliver load-bearing
+separation; address binding on region 1 was redundant under CSPRNG-random
+per-wallet `file_kek` and is omitted so bootstrap ordering stays clean.
+Region 2 and prefs retain `\|\| addr` binding. Steady-state session code may
+cache only `wrap_key_region_2` (and other derived subkeys such as
 `prefs_hmac_key`) while zeroizing `file_kek` and `wrap_key_region_1` after open.
 
 **Pre-genesis note.** On-disk **layout** is unchanged; **ciphertext** produced

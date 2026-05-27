@@ -31,7 +31,8 @@
 //!                                   nonce    = wrap_nonce
 //!                                   aad      = bytes [0..29)
 //!   [102..126) 24 region1_nonce
-//!   [126..N)   _  region1_ct_with_tag = AEAD(plaintext, tag)  under file_kek
+//!   [126..N)   _  region1_ct_with_tag = AEAD(plaintext, tag)  under wrap_key_region_1
+//!                                       wrap_key_region_1 = HKDF(file_kek, "shekyl-region1-aead-v1")
 //!                                       nonce = region1_nonce
 //!                                       aad   = bytes [0..9)
 //!
@@ -58,7 +59,8 @@
 //!   [0..8)   8   magic = "SHEKYLWS"                        ┐
 //!   [8..9)   1   state_version = 0x01                      │ AAD
 //!   [9..33)  24  region2_nonce (fresh per save)
-//!   [33..M)  _   region2_ct_with_tag = AEAD(state, tag)    under file_kek
+//!   [33..M)  _   region2_ct_with_tag = AEAD(state, tag)    under wrap_key_region_2
+//!                                       wrap_key_region_2 = HKDF(file_kek, "shekyl-region2-aead-v1" || addr)
 //!                                       nonce = region2_nonce
 //!                                       aad   = bytes [0..9)
 //!                                               || state_tag_of_seed_block[16]
@@ -83,8 +85,9 @@
 //!   lost by encrypting fields that are read after decrypt. See
 //!   `.cursor/rules/36-secret-locality.mdc` for the secret-material policy.
 //! - **Two-level KEK**: password → Argon2id → wrap_key → unwraps
-//!   file_kek → decrypts region 1 and region 2. Password rotation only
-//!   rewrites the wrapped_kek section; region 1 bytes stay byte-identical.
+//!   file_kek → HKDF-derived per-region wrap keys → decrypts region 1 and
+//!   region 2. Password rotation only rewrites the wrapped_kek section;
+//!   region 1 bytes stay byte-identical.
 //! - **Pinned sizes + length-prefixed capability content**: Poly1305 prevents
 //!   malformed content from surviving, but defensive `cap_content_len`
 //!   parsing gives typed errors rather than buffer-overrun risk on any
@@ -95,7 +98,9 @@ use chacha20poly1305::{
     aead::{AeadInPlace, KeyInit},
     XChaCha20Poly1305, XNonce,
 };
+use hkdf::Hkdf;
 use rand::{rngs::OsRng, RngCore};
+use sha2::Sha256;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -144,6 +149,14 @@ pub const EXPECTED_CLASSICAL_ADDRESS_BYTES: usize = 65;
 
 /// File-kek length, matching XChaCha20-Poly1305 key size.
 const FILE_KEK_BYTES: usize = 32;
+
+/// HKDF `info` label for region 1 AEAD. Label-only (no `|| addr`) so open
+/// can derive the decrypt key before reading `addr` from ciphertext.
+/// Normative: [`docs/WALLET_FILE_FORMAT_V1.md`](../../docs/WALLET_FILE_FORMAT_V1.md) §2.6.
+pub const HKDF_INFO_REGION1_AEAD_V1: &[u8] = b"shekyl-region1-aead-v1";
+
+/// HKDF `info` prefix for region 2 AEAD; implementations concatenate `addr`.
+pub const HKDF_INFO_REGION2_AEAD_V1: &[u8] = b"shekyl-region2-aead-v1";
 /// Argon2id-derived wrap_key length, matching XChaCha20-Poly1305 key size.
 const WRAP_KEY_BYTES: usize = 32;
 /// Argon2id salt length. 16 bytes is above the birthday bound for any
@@ -466,6 +479,105 @@ fn derive_wrap_key(
     Ok(out)
 }
 
+/// HKDF-SHA-256 Expand from `file_kek` (PRK) with domain-separated `info`.
+fn hkdf_expand_32(file_kek: &[u8; FILE_KEK_BYTES], info: &[u8]) -> Zeroizing<[u8; FILE_KEK_BYTES]> {
+    let hk = Hkdf::<Sha256>::from_prk(file_kek.as_slice())
+        .expect("file_kek is 32 bytes; from_prk is infallible for SHA-256");
+    let mut out = Zeroizing::new([0u8; FILE_KEK_BYTES]);
+    hk.expand(info, out.as_mut())
+        .expect("HKDF-Expand at 32 bytes is within the 255-block limit");
+    out
+}
+
+/// Region 1 AEAD key per WALLET_FILE_FORMAT_V1 §2.6 (label-only).
+pub fn derive_wrap_key_region_1(
+    file_kek: &[u8; FILE_KEK_BYTES],
+) -> Zeroizing<[u8; FILE_KEK_BYTES]> {
+    hkdf_expand_32(file_kek, HKDF_INFO_REGION1_AEAD_V1)
+}
+
+/// Region 2 AEAD key per WALLET_FILE_FORMAT_V1 §2.6 (`info || addr`).
+pub fn derive_wrap_key_region_2(
+    file_kek: &[u8; FILE_KEK_BYTES],
+    expected_classical_address: &[u8; EXPECTED_CLASSICAL_ADDRESS_BYTES],
+) -> Zeroizing<[u8; FILE_KEK_BYTES]> {
+    let mut info =
+        Vec::with_capacity(HKDF_INFO_REGION2_AEAD_V1.len() + EXPECTED_CLASSICAL_ADDRESS_BYTES);
+    info.extend_from_slice(HKDF_INFO_REGION2_AEAD_V1);
+    info.extend_from_slice(expected_classical_address);
+    hkdf_expand_32(file_kek, &info)
+}
+
+fn unwrap_file_kek(
+    password: &[u8],
+    bytes: &[u8],
+    view: &KeysFileHeaderView,
+) -> Result<Zeroizing<[u8; FILE_KEK_BYTES]>, WalletEnvelopeError> {
+    let wrap_key = derive_wrap_key(password, &view.wrap_salt, view.kdf)?;
+    let wrap_nonce: [u8; AEAD_NONCE_BYTES] = bytes[OFF_WRAP_NONCE..OFF_WRAP_CT]
+        .try_into()
+        .expect("slice length pinned by constants");
+    let mut file_kek_buf: Zeroizing<Vec<u8>> =
+        Zeroizing::new(bytes[OFF_WRAP_CT..OFF_WRAP_CT + FILE_KEK_BYTES].to_vec());
+    let wrap_tag: [u8; AEAD_TAG_BYTES] = bytes[OFF_WRAP_CT + FILE_KEK_BYTES..OFF_WRAP_CT_END]
+        .try_into()
+        .expect("slice length pinned by constants");
+    let wrap_aad: &[u8] = &bytes[OFF_MAGIC..OFF_WRAP_COUNT];
+    aead_decrypt(
+        &wrap_key,
+        &wrap_nonce,
+        wrap_aad,
+        file_kek_buf.as_mut_slice(),
+        &wrap_tag,
+    )?;
+    let mut file_kek = [0u8; FILE_KEK_BYTES];
+    file_kek.copy_from_slice(&file_kek_buf);
+    Ok(Zeroizing::new(file_kek))
+}
+
+fn decrypt_region1_plaintext(
+    file_kek: &[u8; FILE_KEK_BYTES],
+    bytes: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, WalletEnvelopeError> {
+    let wrap_key_region_1 = derive_wrap_key_region_1(file_kek);
+    let region1_nonce: [u8; AEAD_NONCE_BYTES] = bytes[OFF_REGION1_NONCE..OFF_REGION1_CT]
+        .try_into()
+        .expect("slice length pinned by constants");
+    let region1_total_len = bytes.len() - OFF_REGION1_CT;
+    if region1_total_len < AEAD_TAG_BYTES + R1_MIN_PLAINTEXT_BYTES {
+        return Err(WalletEnvelopeError::TooShort);
+    }
+    let region1_ct_end = bytes.len() - AEAD_TAG_BYTES;
+    let mut region1_plain: Zeroizing<Vec<u8>> =
+        Zeroizing::new(bytes[OFF_REGION1_CT..region1_ct_end].to_vec());
+    let region1_tag: [u8; AEAD_TAG_BYTES] = bytes[region1_ct_end..]
+        .try_into()
+        .expect("slice length pinned above");
+    let region1_aad: &[u8] = &bytes[OFF_MAGIC..OFF_KDF_ALGO];
+    aead_decrypt(
+        &wrap_key_region_1,
+        &region1_nonce,
+        region1_aad,
+        region1_plain.as_mut_slice(),
+        &region1_tag,
+    )?;
+    Ok(region1_plain)
+}
+
+fn expected_address_from_region1_plain(
+    region1_plain: &[u8],
+) -> Result<[u8; EXPECTED_CLASSICAL_ADDRESS_BYTES], WalletEnvelopeError> {
+    if region1_plain.len() < R1_MIN_PLAINTEXT_BYTES {
+        return Err(WalletEnvelopeError::InvalidPasswordOrCorrupt);
+    }
+    let mut addr = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
+    addr.copy_from_slice(
+        &region1_plain
+            [R1_OFF_EXPECTED_ADDR..R1_OFF_EXPECTED_ADDR + EXPECTED_CLASSICAL_ADDRESS_BYTES],
+    );
+    Ok(addr)
+}
+
 fn fresh_random_bytes<const N: usize>() -> [u8; N] {
     let mut out = [0u8; N];
     OsRng.fill_bytes(&mut out);
@@ -697,8 +809,14 @@ pub(crate) fn seal_keys_file_with_entropy(
     region1_plain.extend_from_slice(&restore_height_hint.to_le_bytes());
 
     let region1_aad: &[u8] = &out[OFF_MAGIC..OFF_KDF_ALGO]; // magic||ver
+    let wrap_key_region_1 = derive_wrap_key_region_1(file_kek_seed);
     let mut region1_ct: Vec<u8> = region1_plain.as_slice().to_vec();
-    let region1_tag = aead_encrypt(&file_kek_z, region1_nonce, region1_aad, &mut region1_ct)?;
+    let region1_tag = aead_encrypt(
+        &wrap_key_region_1,
+        region1_nonce,
+        region1_aad,
+        &mut region1_ct,
+    )?;
     out.extend_from_slice(&region1_ct);
     out.extend_from_slice(&region1_tag);
 
@@ -723,50 +841,12 @@ pub fn open_keys_file(
     let view = parse_header_view(bytes)?;
     expect_at_least(bytes, OFF_REGION1_CT + AEAD_TAG_BYTES)?;
 
-    // Recover file_kek.
-    let wrap_key = derive_wrap_key(password, &view.wrap_salt, view.kdf)?;
-    let wrap_nonce: [u8; AEAD_NONCE_BYTES] = bytes[OFF_WRAP_NONCE..OFF_WRAP_CT]
-        .try_into()
-        .expect("slice length pinned by constants");
-    let mut file_kek_buf: Zeroizing<Vec<u8>> =
-        Zeroizing::new(bytes[OFF_WRAP_CT..OFF_WRAP_CT + FILE_KEK_BYTES].to_vec());
-    let wrap_tag: [u8; AEAD_TAG_BYTES] = bytes[OFF_WRAP_CT + FILE_KEK_BYTES..OFF_WRAP_CT_END]
-        .try_into()
-        .expect("slice length pinned by constants");
-    let wrap_aad: &[u8] = &bytes[OFF_MAGIC..OFF_WRAP_COUNT];
-    aead_decrypt(
-        &wrap_key,
-        &wrap_nonce,
-        wrap_aad,
-        file_kek_buf.as_mut_slice(),
-        &wrap_tag,
-    )?;
-    let mut file_kek = [0u8; FILE_KEK_BYTES];
-    file_kek.copy_from_slice(&file_kek_buf);
-    let file_kek_z = Zeroizing::new(file_kek);
-
-    // Decrypt region 1.
-    let region1_nonce: [u8; AEAD_NONCE_BYTES] = bytes[OFF_REGION1_NONCE..OFF_REGION1_CT]
-        .try_into()
-        .expect("slice length pinned by constants");
-    let region1_total_len = bytes.len() - OFF_REGION1_CT;
-    if region1_total_len < AEAD_TAG_BYTES + R1_MIN_PLAINTEXT_BYTES {
-        return Err(WalletEnvelopeError::TooShort);
-    }
+    let file_kek_z = unwrap_file_kek(password, bytes, &view)?;
+    let region1_plain = decrypt_region1_plaintext(&file_kek_z, bytes)?;
     let region1_ct_end = bytes.len() - AEAD_TAG_BYTES;
-    let mut region1_plain: Zeroizing<Vec<u8>> =
-        Zeroizing::new(bytes[OFF_REGION1_CT..region1_ct_end].to_vec());
     let region1_tag: [u8; AEAD_TAG_BYTES] = bytes[region1_ct_end..]
         .try_into()
         .expect("slice length pinned above");
-    let region1_aad: &[u8] = &bytes[OFF_MAGIC..OFF_KDF_ALGO];
-    aead_decrypt(
-        &file_kek_z,
-        &region1_nonce,
-        region1_aad,
-        region1_plain.as_mut_slice(),
-        &region1_tag,
-    )?;
 
     // Parse plaintext. Any arithmetic here that could overflow is bounded
     // by u16 cap_len; buffer length is already authenticated.
@@ -942,27 +1022,10 @@ pub(crate) fn seal_state_file_with_entropy(
     let view = parse_header_view(keys_file_bytes)?;
     expect_at_least(keys_file_bytes, OFF_REGION1_CT + AEAD_TAG_BYTES)?;
 
-    let wrap_key = derive_wrap_key(password, &view.wrap_salt, view.kdf)?;
-    let wrap_nonce: [u8; AEAD_NONCE_BYTES] = keys_file_bytes[OFF_WRAP_NONCE..OFF_WRAP_CT]
-        .try_into()
-        .expect("pinned");
-    let mut file_kek_buf: Zeroizing<Vec<u8>> =
-        Zeroizing::new(keys_file_bytes[OFF_WRAP_CT..OFF_WRAP_CT + FILE_KEK_BYTES].to_vec());
-    let wrap_tag: [u8; AEAD_TAG_BYTES] = keys_file_bytes
-        [OFF_WRAP_CT + FILE_KEK_BYTES..OFF_WRAP_CT_END]
-        .try_into()
-        .expect("pinned");
-    let wrap_aad: &[u8] = &keys_file_bytes[OFF_MAGIC..OFF_WRAP_COUNT];
-    aead_decrypt(
-        &wrap_key,
-        &wrap_nonce,
-        wrap_aad,
-        file_kek_buf.as_mut_slice(),
-        &wrap_tag,
-    )?;
-    let mut file_kek = [0u8; FILE_KEK_BYTES];
-    file_kek.copy_from_slice(&file_kek_buf);
-    let file_kek_z = Zeroizing::new(file_kek);
+    let file_kek_z = unwrap_file_kek(password, keys_file_bytes, &view)?;
+    let region1_plain = decrypt_region1_plaintext(&file_kek_z, keys_file_bytes)?;
+    let addr = expected_address_from_region1_plain(region1_plain.as_slice())?;
+    let wrap_key_region_2 = derive_wrap_key_region_2(&file_kek_z, &addr);
 
     // seed_block_tag = last 16 bytes of keys_file_bytes.
     let mut seed_block_tag = [0u8; AEAD_TAG_BYTES];
@@ -976,7 +1039,7 @@ pub(crate) fn seal_state_file_with_entropy(
     let aad = state_aad(magic_version, &seed_block_tag);
 
     let mut region2_ct = state_plaintext.to_vec();
-    let region2_tag = aead_encrypt(&file_kek_z, region2_nonce, &aad, &mut region2_ct)?;
+    let region2_tag = aead_encrypt(&wrap_key_region_2, region2_nonce, &aad, &mut region2_ct)?;
     out.extend_from_slice(&region2_ct);
     out.extend_from_slice(&region2_tag);
     Ok(out)
@@ -1006,27 +1069,10 @@ pub fn open_state_file(
     // Recover file_kek via the same path as open_keys_file.
     let view = parse_header_view(keys_file_bytes)?;
     expect_at_least(keys_file_bytes, OFF_REGION1_CT + AEAD_TAG_BYTES)?;
-    let wrap_key = derive_wrap_key(password, &view.wrap_salt, view.kdf)?;
-    let wrap_nonce: [u8; AEAD_NONCE_BYTES] = keys_file_bytes[OFF_WRAP_NONCE..OFF_WRAP_CT]
-        .try_into()
-        .expect("pinned");
-    let mut file_kek_buf: Zeroizing<Vec<u8>> =
-        Zeroizing::new(keys_file_bytes[OFF_WRAP_CT..OFF_WRAP_CT + FILE_KEK_BYTES].to_vec());
-    let wrap_tag: [u8; AEAD_TAG_BYTES] = keys_file_bytes
-        [OFF_WRAP_CT + FILE_KEK_BYTES..OFF_WRAP_CT_END]
-        .try_into()
-        .expect("pinned");
-    let wrap_aad: &[u8] = &keys_file_bytes[OFF_MAGIC..OFF_WRAP_COUNT];
-    aead_decrypt(
-        &wrap_key,
-        &wrap_nonce,
-        wrap_aad,
-        file_kek_buf.as_mut_slice(),
-        &wrap_tag,
-    )?;
-    let mut file_kek = [0u8; FILE_KEK_BYTES];
-    file_kek.copy_from_slice(&file_kek_buf);
-    let file_kek_z = Zeroizing::new(file_kek);
+    let file_kek_z = unwrap_file_kek(password, keys_file_bytes, &view)?;
+    let region1_plain = decrypt_region1_plaintext(&file_kek_z, keys_file_bytes)?;
+    let addr = expected_address_from_region1_plain(region1_plain.as_slice())?;
+    let wrap_key_region_2 = derive_wrap_key_region_2(&file_kek_z, &addr);
 
     // Compute seed_block_tag from the keys file bytes.
     let mut seed_block_tag = [0u8; AEAD_TAG_BYTES];
@@ -1051,7 +1097,7 @@ pub fn open_state_file(
     // is a seed_block swap. But we cannot distinguish without running both
     // checks. Prefer a generic error here.
     if aead_decrypt(
-        &file_kek_z,
+        &wrap_key_region_2,
         &region2_nonce,
         &aad,
         region2_plain.as_mut_slice(),
@@ -1091,6 +1137,47 @@ mod tests {
             *b = u8::try_from(i & 0xff).expect("i masked to u8 range");
         }
         a
+    }
+
+    /// Golden HKDF outputs for KAT `file_kek` + `expected_classical_address`.
+    /// Tripwire against unintentional formula or info-string drift.
+    #[test]
+    fn hkdf_golden_outputs_kat_profile() {
+        const R1: [u8; FILE_KEK_BYTES] = [
+            146, 74, 110, 113, 243, 58, 14, 95, 184, 29, 119, 97, 7, 191, 250, 191, 14, 164, 133,
+            22, 152, 170, 137, 68, 159, 190, 195, 234, 226, 85, 160, 18,
+        ];
+        const R2: [u8; FILE_KEK_BYTES] = [
+            200, 171, 223, 169, 7, 117, 109, 9, 112, 251, 12, 186, 60, 96, 136, 137, 182, 233, 134,
+            176, 218, 122, 95, 106, 251, 69, 182, 143, 58, 49, 203, 65,
+        ];
+        let r1 = derive_wrap_key_region_1(&KAT_FILE_KEK_SEED);
+        let r2 = derive_wrap_key_region_2(&KAT_FILE_KEK_SEED, &KAT_EXPECTED_ADDRESS);
+        assert_eq!(r1.as_ref(), &R1);
+        assert_eq!(r2.as_ref(), &R2);
+    }
+
+    #[test]
+    fn hkdf_region_wrap_keys_are_distinct() {
+        let file_kek = KAT_FILE_KEK_SEED;
+        let addr = KAT_EXPECTED_ADDRESS;
+        let r1 = derive_wrap_key_region_1(&file_kek);
+        let r2 = derive_wrap_key_region_2(&file_kek, &addr);
+        assert_ne!(r1.as_ref(), r2.as_ref());
+        assert_ne!(r1.as_ref(), file_kek.as_ref());
+    }
+
+    #[test]
+    fn hkdf_region1_is_independent_of_address() {
+        let file_kek = KAT_FILE_KEK_SEED;
+        let mut addr2 = KAT_EXPECTED_ADDRESS;
+        addr2[10] ^= 0x01;
+        let r1_a = derive_wrap_key_region_1(&file_kek);
+        let r1_b = derive_wrap_key_region_1(&file_kek);
+        let r2_a = derive_wrap_key_region_2(&file_kek, &KAT_EXPECTED_ADDRESS);
+        let r2_b = derive_wrap_key_region_2(&file_kek, &addr2);
+        assert_eq!(r1_a.as_ref(), r1_b.as_ref());
+        assert_ne!(r2_a.as_ref(), r2_b.as_ref());
     }
 
     #[test]
