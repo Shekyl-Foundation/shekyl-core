@@ -66,6 +66,23 @@ rule.
   branch; commit message captures nine operational-tightening
   items plus the panic-strategy enumeration extension surfaced
   by the Round 5 pre-drafting gap-check.
+- **Round 6 record:** the commit landing this amendment; doc-only;
+  adds §8.3 (cross-PR discipline inheritance) capturing the
+  disciplines that emerged across Stage 1 PRs 3, 4, and 5; lands as
+  a single docs-only PR after PR 5's design substrate closes
+  (segment 2i) and before PR 5's implementation branch
+  (`feat/stage-1-pr5-pending-tx-engine`) cuts from `dev`. The
+  amendment is additive to §7's invariants (no trait-surface
+  change; no method-signature change; no async-ness or error-type
+  change) per §8.2's amendment discipline; the discipline statements
+  are inheritance-by-default for PR 6+ rather than re-derivation
+  per per-engine PR.
+
+The "Round 5 was the final design-review round" framing in the status
+banner is retained — Round 6 is **a doc-only inheritance-discipline
+capture**, not a design re-litigation. Case A from Round 5 still holds:
+the trait-surface structural decisions are settled; §8.3 captures
+*process* learnings, not *surface* changes.
 
 **Planned trajectory.** Round 4 is split into 4a and 4b; 4b is
 further split into Phase 1 (carry-forwards) and Phase 2
@@ -1500,69 +1517,337 @@ invariants; the implementor swap (`LocalRefresh` →
 
 ### 2.4 `PendingTxEngine`
 
-**Ownership.** The reservation tracker (`BTreeMap<ReservationId,
-Reservation>`), the monotonic `next_reservation_id` counter, and
-the two-phase build/submit/discard state machine pinned in the
-*Pending-tx protocol* decision-log entry (2026-04-27).
+**Reframed across Round 2 segments 2b–2g (binding-form pins) and
+Round 2 segment 2h / 2i (post-Round-3-readiness state-shape
+refinement + wider-ecosystem-lessons substrate).** The
+Round 1 surface stub (four-method trait; `Self::Error`-only
+return shape; opaque ownership of a `BTreeMap`-shaped reservation
+tracker) closes against the Round 2 / Round 3 design substrate
+pinned in
+[`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+§4 (Phase 0a–0m binding-form enumeration), §5.0.1 (the (γ) lean
+state shape), §5.0.2 (the diagnostic-stream + enum block), and
+§5.0.3 (the seven cross-cutting `DiagnosticSink` contracts). The
+surface below is the as-designed Stage 1 trait shape; the §7.X
+commit decomposition in the design doc records the eight-commit
+landing plan (C0–C8) for the `feat/stage-1-pr5-pending-tx-engine`
+short-lived branch.
 
-**Stage 1 surface.**
+**Ownership.** The (γ) lean state shape per
+[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+§5.0.1: three collections (`output_locks: HashMap<OutputId,
+ReservationId>` reservation-output lock map; `consumer_held:
+HashMap<ReservationId, Instant>` post-build / pre-submit
+reservations awaiting consumer-side `submit` or `discard`;
+`in_flight: HashMap<ReservationId, InFlightSubmit>` reservations
+whose `submit` has dispatched to the daemon and is awaiting
+resolution) and a `current_snapshot: SnapshotId` field; plus a
+monotonic `next_reservation_id: u64` counter. The reservation's
+lifecycle is encoded by collection membership, not by a
+`ReservationState` enum (the segment-2g enum disposition was
+dissolved into collection membership in segment 2h per the
+"refusal-forever vs. reject-with-reopening-criteria" framing in
+[`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc);
+see §5.6.2 of the design doc for the substrate). The
+build / submit / discard state machine surfaces externally via
+the trait below; the `signal_mempool_evicted` method (Phase 0m,
+segment 2i) admits a narrow consumer-observed mempool-eviction
+signal per the F2 ownership-boundary adjudication discipline.
+
+**Stage 1 surface (Round 3-closed; landed via PR 5 §7.X commits
+C0–C8 on `feat/stage-1-pr5-pending-tx-engine`; implementation tip
+`ca7622558` at C7, C8 doc commit follows).** The trait is
+declared at
+[`engine/traits/pending_tx.rs`](../rust/shekyl-engine-core/src/engine/traits/pending_tx.rs)
+(PR 5 C5α = `ecc86c741`); the supporting `SubmitError` /
+`TerminalErrorKind` / `AmbiguousErrorKind` / `PendingTxError` /
+`DiscardReason` / `SnapshotId` / `ReservationExtension` /
+`PendingTxDiagnostic` enums + the augmented `Reservation` /
+`PendingTx` types land in `engine/error.rs` /
+`engine/diagnostics.rs` / `engine/pending.rs` (PR 5 C2 =
+`fa5981e9d` / `316f5c15e` / `8f8e4c863`; C3 = `58fb6174f`); the
+`LocalPendingTx<S: Signer, O: OutputSelector, F: FeeEstimator>`
+aggregate implementor lands at
+[`engine/local_pending_tx.rs`](../rust/shekyl-engine-core/src/engine/local_pending_tx.rs)
+(PR 5 C5β = `a137cc234`); the `Engine<S, D, L, R, P>` five-
+parameter wiring lands in `engine/mod.rs` (PR 5 C6 =
+`0713591bf`).
+The trait surface (Phase 0a + 0e + 0f + 0m binding form) is:
 
 ```rust
-pub trait PendingTxEngine {
-    type Error: Into<PendingTxError>;
-
+pub trait PendingTxEngine: Send + Sync + 'static {
+    /// Build a pending transaction against the current ledger
+    /// snapshot; reserves the selected inputs in `consumer_held`
+    /// and returns the `PendingTx` handle to the caller.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SendError` for build-time validation failures
+    /// (insufficient funds, no spendable outputs, selector
+    /// rejected the request, fee estimator unavailable, etc.).
+    /// Per the Round 2 Q9.8 closure (kept), `SendError` is the
+    /// build-time vocabulary; runtime invariants surface through
+    /// `PendingTxError` on later trait calls.
     async fn build(
         &self,
         request: TxRequest,
     ) -> Result<PendingTx, SendError>;
 
+    /// Submit the named reservation to the daemon.
+    ///
+    /// **Collection-move discipline (segment-2h P4 table).** On
+    /// entry, `rid` MUST be in `consumer_held` (else return
+    /// `SubmitError::ReservationNotFound` or
+    /// `SubmitAlreadyPending` per the P3 / P2 discriminating
+    /// switch). On `submit` dispatch, the rid moves from
+    /// `consumer_held` to `in_flight`; on daemon resolution, the
+    /// rid either (a) drops from `in_flight` on
+    /// `TerminalErrorKind` outcomes (and the engine emits
+    /// `Discarded { rid, DaemonRejectedTerminal { kind } }`), or
+    /// (b) stays in `in_flight` on `AmbiguousErrorKind` outcomes
+    /// (R9 daemon-side-authority per Finding 2; the engine emits
+    /// `SubmitPendingResolution { rid, tx_hash, kind }`), or (c)
+    /// drops from `in_flight` on accept (and the engine emits
+    /// `SubmitSucceeded { rid, tx_hash }`).
+    ///
+    /// **Staleness check (segment-2h F1 pin).** Before dispatching
+    /// to the daemon, the handler reads `current_snapshot` (Stage 1
+    /// reads exact ledger truth under the
+    /// `Mutex<PendingTxState>` guard; Stage 4's actor-local view
+    /// is best-effort under mailbox-FIFO ordering against
+    /// `LedgerDiagnostic::SnapshotMerged` arrivals) and compares
+    /// against the reservation's `snapshot_id`. On mismatch:
+    /// **lazy R5 disposition (segment 2h)** — the engine emits
+    /// `SubmitSnapshotInvalidated { rid, reservation_snapshot,
+    /// current_snapshot }`, returns
+    /// `SubmitError::SnapshotInvalidated`, and **does NOT
+    /// auto-release** the reservation; the consumer must call
+    /// `discard(rid, ConsumerExplicit)` to release
+    /// `output_locks`. R8 TTL safety-net handles consumer
+    /// abandonment.
+    ///
+    /// **Stage 4 multi-step decomposition (segment-2i G4 pin).**
+    /// Under Stage 4, the handler decomposes into a three-step
+    /// self-continuation pattern (`submit_start` →
+    /// `submit_signed` → `submit_completed`) with **deferred-reply
+    /// semantics** to absorb the HW-wallet signing-latency window
+    /// and the daemon-round-trip window without blocking the
+    /// actor's main mailbox. The Stage 4 actor-migration PR's
+    /// framework-selection pre-flight MUST confirm deferred-reply
+    /// substrate support per the
+    /// [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+    /// §5.0.1 G4 pin; if no candidate framework supports it, G4's
+    /// disposition reopens at the framework-selection altitude
+    /// (NOT retroactively against PR 5; PR 5's V3.0 trait surface
+    /// stays synchronous regardless).
     async fn submit(
         &self,
         id: ReservationId,
-    ) -> Result<TxHash, Self::Error>;
+    ) -> Result<TxHash, SubmitError>;
 
-    async fn discard(
+    /// Discard the named reservation with an explicit reason.
+    ///
+    /// **F2 ownership-boundary discipline (segment-2h pin).**
+    /// Consumer-initiated `discard` on a reservation in
+    /// `in_flight` returns
+    /// `PendingTxError::DiscardBlockedPendingDaemonAck`; the
+    /// daemon owns the resolution authority while the rid is
+    /// `in_flight` (Finding-2 ambiguous-outcome handling). On
+    /// `consumer_held` rids, the handler atomically removes the
+    /// rid from `consumer_held`, releases `output_locks` for the
+    /// rid, and emits
+    /// `Discarded { rid, reason }`.
+    fn discard(
         &self,
         id: ReservationId,
-    ) -> Result<(), Self::Error>;
+        reason: DiscardReason,
+    ) -> Result<(), PendingTxError>;
 
+    /// Signal that a previously-submitted reservation's tx has
+    /// been observed evicted from the daemon's mempool (Phase 0m
+    /// per segment-2i G1 disposition).
+    ///
+    /// **F2 ownership-boundary adjudication (segment-2i G1 pin).**
+    /// Mempool eviction is an *observation* the consumer made
+    /// that the actor couldn't make itself (the actor has no
+    /// direct visibility into the daemon's mempool state); the
+    /// observation is *of a state already terminal at the
+    /// network level* (the tx is gone from the mempool; the
+    /// daemon will never `Accept` it). The signal admits one
+    /// specific observation under F2; it does NOT admit
+    /// consumer-side terminal *decisions* (a hypothetical
+    /// `signal_user_force_cancel` shape that F2 forbids). The
+    /// narrow-vs-wide method-shape question is adjudicated
+    /// per-method: each new "consumer signals terminal"
+    /// candidate gets its own narrow method and its own F2
+    /// adjudication entry. A wider
+    /// `signal_external_terminal(rid, reason)` shape would
+    /// silently admit decision-class signals; the narrow shape
+    /// preserves the per-method F2 adjudication grep-ability
+    /// that the wider shape forecloses. See
+    /// [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+    /// §5.6.10 G1 for the full F2 adjudication record.
+    ///
+    /// On success: the rid drops from `in_flight`,
+    /// `output_locks` are released for the rid, and the engine
+    /// emits `Discarded { rid, reason:
+    /// DiscardReason::MempoolEvicted }` (all within a single
+    /// P7-atomic handler step). Returns
+    /// `PendingTxError::ReservationNotFound` if `rid` is not in
+    /// `in_flight` — including rids in `consumer_held`
+    /// (eviction is meaningful only for in-flight reservations;
+    /// consumer-held reservations were never submitted to the
+    /// daemon).
+    fn signal_mempool_evicted(
+        &self,
+        rid: ReservationId,
+    ) -> Result<(), PendingTxError>;
+
+    /// Total in-process reservations awaiting resolution. Sum of
+    /// `consumer_held.len() + in_flight.len()` per the (γ) lean
+    /// state shape.
     fn outstanding(&self) -> usize;
 }
 ```
 
-**Stage 1 implementing-type note (Round 3).** `LocalPendingTx`
-holds `Mutex<ReservationTracker>` for interior mutability. All
-mutating calls (`build`, `submit`, `discard`) acquire the mutex
-internally; `outstanding` reads through the mutex briefly. The
-choice is `Mutex` (not `RwLock`) because `PendingTxEngine`'s
-operations are predominantly write-style — even `outstanding` is a
-read against state that mutates on every other call, so the
-many-readers-one-writer pattern that justified `RwLock` for
-`LedgerEngine` does not apply here. Stage 4's `ActorRef<PendingTxActor>`
-provides equivalent serialization through its mailbox.
+**`Send + Sync + 'static` on the trait (parallel to §2.3 / PR 4
+precedent).** The supertrait bound supports the Stage 4
+`kameo`-equivalent actor wrap of `LocalPendingTx` as the actor
+body. Listing it at the trait surface catches the common failure
+mode where a trait that "happens to be `Send + Sync + 'static`
+today" gains a non-`Send` field (a `Signer` impl holding a
+non-`Send` HSM handle, a `FeeEstimator` impl holding a non-`Send`
+RPC client) before the actor wrap forces the issue. The bound is
+**not** `Clone`: `LocalPendingTx` holds `Arc<S: Signer>` (spend
+material; not safely `Clone`-derived per the architectural-
+inheritance discipline per
+[`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)),
+so a forced `Clone` would re-introduce the secret-duplication
+hazard.
+
+**Trait-parameter slots and constructor-bound dependencies.**
+The implementor (`LocalPendingTx<S: Signer, O: OutputSelector,
+F: FeeEstimator>`) is parameterized on three trait surfaces from
+the Phase 0h / 0i / 0j enumeration; a fourth constructor parameter
+binds the diagnostic-stream sink (`sink: Arc<dyn DiagnosticSink>`,
+segment-2f §5.0.2.1 sink-binding closure). The constructor also
+takes the `ReservationTTLConfig` (Phase 0l per-collection TTL;
+both fields default to `DEFAULT_RESERVATION_TTL`, per-collection
+shape per F7 disposition) and the `LedgerEngine` handle for
+`current_snapshot` reads at submit-time. Stage 4's `PendingTxActor`
+preserves the trait-parameter taxonomy via spawn-time DI
+(`signer: ActorRef<SigningActor>`, `output_selector: Arc<dyn
+OutputSelector>`, `fee_estimator: Arc<dyn FeeEstimator>`); the
+trait surface is identical across both stages.
+
+**Stage 1 implementing-type note (Round 3 + segment 2h).**
+`LocalPendingTx` holds `Mutex<PendingTxState>` for interior
+mutability over the (γ) three-collection shape. All mutating
+calls (`build`, `submit`, `discard`, `signal_mempool_evicted`)
+acquire the mutex internally per the **handler-atomicity
+discipline (P7 pin)**: lock claim/release on `output_locks` +
+collection insert/remove on `consumer_held` / `in_flight` + sink
+emit all run within a single guard window; no `.await` between
+mutation steps. `outstanding` reads through the mutex briefly.
+The choice remains `Mutex` (not `RwLock`) because
+`PendingTxEngine`'s operations are predominantly write-style —
+even `outstanding` is a read against state that mutates on every
+other call. Stage 4's `ActorRef<PendingTxActor>` provides
+equivalent serialization through its mailbox; the
+handler-atomicity discipline is satisfied by performing all
+mutations synchronously within the handler before yielding to
+the mailbox.
 
 **Round 3 disposition (the &mut → & sweep).** Originally `&mut
 self` on `build`, `submit`, `discard`; revised to `&self` per the
-Round 3 trait-surface sweep. Same rationale as §2.2's
+§2 `&mut → &self` sweep. Same rationale as §2.2's
 `apply_scan_result` change: Stage 4's `ActorRef<…>` cannot satisfy
 `&mut self`. Interior mutability in `LocalPendingTx` (the Stage 1
 type) replaces compile-time borrow checking with runtime mutex
 serialization; Stage 4's mailbox replaces the runtime mutex with
 message FIFO. The trait surface is identical across both stages.
+`signal_mempool_evicted` (added in segment 2i, post-sweep) is
+`&self` by construction.
 
-**Round 2 dispositions.**
+**Concrete return types (segment-2h `Self::Error` retirement).**
+The trait no longer declares an associated `Error` type. The
+original `type Error: Into<PendingTxError>` shape conflated the
+build / submit / discard / signal_mempool_evicted error
+vocabularies behind a single associated type; the segment-2h
+reshape split the vocabularies (`SendError` for build, `SubmitError`
+for submit, `PendingTxError` for discard /
+`signal_mempool_evicted`) and concrete-typed each return. The
+type system now enforces the lifecycle-class distinction
+(`TerminalErrorKind` vs. `AmbiguousErrorKind` inside
+`SubmitError`; `DiscardBlockedPendingDaemonAck` vs.
+`ReservationNotFound` inside `PendingTxError`) without consumer-
+side wildcard matching. See
+[`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+§5.0.2 for the enum block; §5.6.4 / §5.6.5 / §5.6.6 for the
+P-discipline and F-discipline substrate.
+
+**Round 2 dispositions (preserved).**
 
 - **Q9.8 (`build` returns `SendError` vs. `Self::Error`): closed
-  keep `SendError`.** The split exists today because `SendError`
+  keep `SendError`.** The split exists because `SendError`
   covers build-time validation (insufficient funds, no spendable
-  outputs); `PendingTxError` covers runtime invariants. The two
-  vocabularies are distinct domains; collapsing them would force
-  callers to discriminate by variant rather than by error type.
+  outputs, selector contract violation per F4); `PendingTxError`
+  covers runtime invariants (discard-side / signal-side
+  classification). The two vocabularies are distinct domains;
+  collapsing them would force callers to discriminate by variant
+  rather than by error type.
 - **Q9.9 (V3.1 multisig methods inclusion): closed not in Stage 1
   surface; additive at Stage 4.** `inspect`, `adjust_fee`,
   `sign_partial` from the *Pending-tx protocol* decision-log entry
   are V3.1+ multisig concerns; Stage 4's actor-shaped trait
   implementation can add them without re-opening the §2.4 surface.
+
+**Phase 0 substrate (design provenance).** The §2.4 surface
+above lands in two stages:
+
+- **Phase 0 (this section, doc-only)** — the Phase 0a–0m
+  binding-form pins per
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §4: `Send + Sync + 'static` supertrait bound; concrete-typed
+  return shapes (`SendError` / `SubmitError` / `PendingTxError`);
+  five-method trait surface (`build` / `submit` / `discard` /
+  `signal_mempool_evicted` / `outstanding`); the supporting
+  `TerminalErrorKind` + `AmbiguousErrorKind` + `SubmitError` +
+  `PendingTxError` + `DiscardReason` + `SnapshotId` +
+  `ReservationExtension` + `PendingTxDiagnostic` enums; the
+  `OutputSelectorError::ReturnedIndicesNotSubset` F4-enforcement
+  variant; the `ReservationTTLConfig { consumer_held, in_flight
+  }` per-collection TTL substrate; the `Signer`, `OutputSelector`,
+  and `FeeEstimator` trait surfaces (Phase 0h / 0i / 0j); the
+  `SubmissionStrategyActor` topology slot (Phase 0k; V3.0-
+  reserved, V3.x-introduced); the `LedgerDiagnostic::SnapshotMerged`
+  variant stub (Phase 0g; deferred to V3.x consumer-actor PR per
+  segment-2g closure). C0 lands as the doc-only Phase 0 spec
+  amendment per the §7.X commit decomposition.
+- **Phase 1 (PR 5 §7.X commits C0–C8 — landed 2026-05-27)** —
+  `pub trait PendingTxEngine` landed in
+  `engine::traits::pending_tx` (C5α); the enum families and
+  augmented `Reservation` / `PendingTx` types shipped in
+  `engine::pending` / `engine::error` / `engine::diagnostics`
+  (C2/C3); `LocalPendingTx<S, O, F>` shipped as the Stage 1
+  concrete substrate (C5β); `Engine<S, D, L, R, P>` five-
+  parameter wiring rewired orchestration-layer dispatch to
+  delegate through `P: PendingTxEngine` (C6); `FaultInjecting<P>`
+  + C7 property tests shipped under `test-helpers` (C7). The
+  §7.X commit decomposition ordering was load-bearing for the
+  Phase 1 bisection-discipline gate; segment-2h within-commit
+  deltas (§5.6.8) and segment-2i delta-on-delta (§5.6.12) are
+  reflected in the landed code, not the pre-segment-2h
+  `ReservationState` / `SubmitFailed` shapes in older §7.X prose.
+  Locator: [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §6 landing-SHA table.
+
+Stage 4 cutover preserves the §2.4 surface verbatim per §7's
+invariants; the implementor swap (`LocalPendingTx` → `kameo`-
+backed `PendingTxActor` body) does not touch the trait shape.
+The Stage 4 multi-step submit + deferred-reply substrate-
+confirmation pin (segment-2i G4) lives at the actor-migration PR's
+framework-selection pre-flight, not at this trait surface.
 
 ### 2.5 `DaemonEngine` (revised in Round 2)
 
@@ -4423,6 +4708,438 @@ this method added and why?" would have to grep commit history
 rather than reading the spec). Reviewers applying §8.2
 mechanically check all three bullets; missing any one weakens
 the discipline's enforcement against the corresponding audience.
+
+### 8.3 Cross-PR discipline inheritance
+
+PRs 1, 2, 3, 4, and 5 each surfaced disciplines that compound across
+subsequent per-engine PRs. The per-engine PR design rounds
+([Stage 1 PR 3 (`KeyEngine`)](design/STAGE_1_PR_3_KEY_ENGINE.md),
+[Stage 1 PR 4 (`RefreshEngine`)](design/STAGE_1_PR_4_REFRESH_ENGINE.md),
+[Stage 1 PR 5 (`PendingTxEngine`)](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md))
+produced disciplines whose value is **compound-by-inheritance**: each
+discipline saves rounds-budget on subsequent per-engine PRs that would
+otherwise re-derive it under adversarial review.
+
+§8.3 pins these disciplines as inheritance-by-default for PR 6+ and
+for the Phase 2b additive trait (`StakeEngine`). The discipline
+statements are not novel claims — each is a worked-example summary
+of substrate that landed in a prior per-engine PR; §8.3 promotes them
+from per-PR discovery to spec-level inheritance.
+
+**Reading discipline.** Per-engine PR pre-flights cite §8.3 as the
+inheritance substrate, not as the source. The source is the prior PR's
+design doc; §8.3 is the index that makes the substrate grep-able from
+the spec. New disciplines that emerge from PR 6+ extend §8.3 via the
+same Round-6-style amendment vehicle this section landed under.
+
+#### 8.3.1 Design lenses (apply when structure admits)
+
+Three design lenses compound across the engines they apply to. Each
+lens has explicit **applicability conditions**; engines whose structure
+satisfies the conditions inherit the lens's payoff (rounds-budget
+savings, sharpened wargaming surface); engines whose structure doesn't
+satisfy them use the synchronous framing without penalty. Per-engine
+PR pre-flights test applicability rather than presume it.
+
+**Lens 1 — Actor-mesh framing.** Surfaced in
+[PR 4 Round 2 reframe](design/STAGE_1_PR_4_REFRESH_ENGINE.md);
+applied in [PR 5 Round 1](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+under §5.0; named with three applicability conditions in
+[PR 5 segment 2c §5.0.4](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md).
+The trait surface is the *synchronous decision point* consumers branch
+on; the rich semantic surface lives on the *diagnostic-stream seam*
+(`DiagnosticSink` parameter; typed event enum). The two channels carry
+different artifacts with different consumers and different security
+properties.
+
+Applicability conditions (all three must hold):
+
+1. **Trait surface mediates state-mutation across actors.** Engines
+   whose surface is purely-functional (no actor mediation; e.g., a pure
+   cryptographic primitive trait) do not admit the lens —
+   synchronous call signatures are the right shape.
+2. **Adversarial review surfaces a cross-actor liveness or quiescence
+   dependency.** Engines whose adversarial review surfaces no such
+   structural property derive no payoff from the lens — the
+   synchronous framing already makes everything visible the lens would.
+3. **Stage 4 actor-migration target is non-trivial.** Engines whose
+   Stage 4 shape is "co-located with another actor" or "no Stage 4
+   actor at all" derive bounded payoff.
+
+| Trait | Lens applies? | Substrate citation |
+|---|---|---|
+| `KeyEngine` | yes — (1) keys mediate cross-actor signing/decoding; (2) HW-wallet latency surfaces a quiescence dependency; (3) Stage 4 actor non-trivial | [PR 3 design doc](design/STAGE_1_PR_3_KEY_ENGINE.md) substrate; not lens-reframed but admissible |
+| `LedgerEngine` | yes — (1) ledger snapshot mediates state-mutation; (2) reorg cascade surfaces quiescence dependency; (3) Stage 4 actor non-trivial | [PR 2 design doc](design/STAGE_1_PR_2_LEDGER_ENGINE.md); landed pre-lens; future LedgerEngine refinement PRs apply |
+| `RefreshEngine` | yes | [PR 4 Round 2 reframe](design/STAGE_1_PR_4_REFRESH_ENGINE.md) — original lens-application instance |
+| `EconomicsEngine` | bounded — surface is parameter-derivation; (2) fails | synchronous framing correct; no payoff lost |
+| `DaemonEngine` | yes — (1) connection state mediates RPC fan-out; (2) adversarial-daemon liveness; (3) Stage 4 non-trivial | [PR 1 design doc](design/STAGE_1_PR_1_DAEMON_ENGINE.md); landed pre-lens |
+| `PersistenceEngine` | bounded — single-runtime-consumer; (3) bounded payoff | synchronous framing correct |
+| `PendingTxEngine` | yes | [PR 5 Round 1](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) — second lens-application instance |
+| `StakeEngine` (Phase 2b) | yes — (1) stake records mediate cross-actor claim/unstake; (2) reorg + adaptive-burn surfaces quiescence; (3) Stage 4 non-trivial | Phase 2b design rounds apply the lens by inheritance |
+
+**Lens 2 — State-as-collection-membership.** Surfaced in
+[PR 5 segment 2h](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.2's
+(γ) lean shape. When the actor-mesh lens applies, lifecycle state is
+*implicit in collection membership* rather than carried as an explicit
+`State` enum field on per-record structures. The actor's collections
+*are* the state; the per-record state-machine dissolves.
+
+Applicability conditions:
+
+1. **Lens 1 applies to the same engine.** State-as-collection-membership
+   is a refinement of lens 1, not an independent discipline.
+2. **The engine has a per-record lifecycle with discrete stages.** If
+   the engine has only one stage (e.g., snapshot is either current or
+   stale; no intermediate states), there's no state-machine to dissolve.
+
+The PR 5 (γ) worked example: `PendingTxActor`'s state is `output_locks`
+(double-spend prevention substrate) + `consumer_held` (consumer-owned
+reservations) + `in_flight` (actor-owned reservations in daemon
+round-trip). Lifecycle state — "Active / SubmitPendingDaemonAck /
+Resolved" in the segment-2f enum framing — dissolves into collection
+membership: in `consumer_held` only = Active; in `in_flight` = pending
+daemon ack; in neither = resolved-or-never-existed.
+
+**Engine pre-check for PR 6+:** when applying lens 1, also test whether
+the engine's lifecycle state can be expressed as collection membership.
+The (γ) reframe in PR 5 saved a state-machine row enumeration that
+would otherwise have grown per V3.x consumer-actor PR; subsequent
+engines with similar lifecycle shapes inherit the same reframe.
+
+**Lens 3 — Recursive trust boundary, three projection axes.** Surfaced
+in [PR 4 §5.4.8 #4](design/STAGE_1_PR_4_REFRESH_ENGINE.md) (field
+projection); extended in
+[PR 5 §5.0.3](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) (temporal and
+distributional projections). Cross-trust-boundary diagnostic consumers
+must apply all three projection axes:
+
+1. **Field projection.** What does each event reveal? Sensitive fields
+   (block heights, raw identifiers, address material) are projected
+   to non-sensitive equivalents at the trust boundary.
+2. **Temporal projection.** What does the *timing* of events between
+   actors reveal? Event coalescing, bucketed emission, strategy-aligned
+   emission delay close the temporal-leak surface.
+3. **Distributional projection.** What does the *long-running shape* of
+   the event stream reveal? Variant-distribution rate-limiting,
+   `Discarded { reason }` aggregation policy close the distributional-
+   leak surface.
+
+V3.0 ships field projection only; temporal and distributional
+disciplines deferred to `DIAGNOSTIC_STREAM.md` (V3.x — sequenced by
+the first V3.x consumer-actor PR per
+[PR 5 segment 2g](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.0.3
+introduction-PR disposition). The doc lands at first V3.x
+consumer-actor PR introduction; subsequent V3.x PRs amend rather than
+diverge.
+
+#### 8.3.2 Anti-pattern discipline citations
+
+Three anti-patterns earned named-rule citations from the per-engine PR
+design rounds. Each is a recurring failure mode whose grep-able
+discipline pin saves re-litigation cost.
+
+**Anti-pattern 1 — Cost-benefit-defer-to-later at R-residual altitude.**
+Named in
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+at load-bearing-question altitude; extended in
+[PR 5 segment 2b](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) to
+R-residual disposition altitude. The pattern: a residual disposition
+appears to favor the incremental (a)-shape on cost-benefit grounds; the
+architectural-integrity-now reading favors the structural (b)-shape;
+the discipline-correct default for security-load-bearing residuals is
+structural-now unless the cost is genuinely prohibitive.
+
+Worked example: PR 5 R11 (signing-actor split). Round 1 closed (a)
+with V3.x HW-wallet trigger; segment 2b identified the (a)-disposition
+as the anti-pattern recurring in a residual and reframed as (b). The
+cost-asymmetry argument that justified PR 4 R4's tactical (a) (Scanner
+already existed; restructuring was the deferral trigger) did not apply
+to PR 5 R11 because `LocalPendingTx` was being designed fresh.
+
+**Inheritance read for PR 6+:** R-residual dispositions are subject to
+the same architectural-integrity-now discipline as load-bearing
+questions. PR pre-flights run the anti-pattern check at *both* altitudes,
+not just the load-bearing-question altitude.
+
+**Anti-pattern 2 — Pre-provision-for-flexibility.** Named in
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc);
+worked-example in
+[PR 5 segment 2i](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10 G1.
+The pattern: a wider trait-surface or enum shape *appears* extensible
+in a way the narrow shape isn't; the wider shape silently admits
+decision-class signals or operations that an established discipline
+(e.g., F2 ownership-boundary per
+[PR 5 §5.4 R9 segment-2f](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md))
+forbids on adjudicated grounds.
+
+Worked example: PR 5 G1's narrow `signal_mempool_evicted(rid)` over
+wider `signal_external_terminal(rid, reason)`. The wider shape would
+silently admit a hypothetical `signal_user_force_cancel` candidate that
+F2's discipline forbids; the narrow shape preserves per-method F2
+adjudication grep-ability.
+
+**Inheritance read for PR 6+:** new "consumer signals X" or "consumer
+configures Y" candidates undergo per-candidate adjudication against
+the established discipline (F2 for terminal transitions; analogous
+disciplines for other domains). Wider-shape consolidation is admitted
+only when *three or more narrow methods accumulate AND all three pass
+adjudication on identical grounds*; consolidation is substrate-anchored,
+not convenience-anchored.
+
+**Anti-pattern 3 — Priority-hierarchy-rejection-as-evaluation.** Named
+in [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) priority
+ordering; worked-example in
+[PR 5 segment 2i](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10 G3.
+The pattern: a feature whose privacy cost (priority 2) is bounded but
+real, and whose UX benefit (priority 3-or-below) is substantial, is
+framed as "evaluate-in-V3.x" rather than rejected at the design-rounds
+altitude. The framing treats priority hierarchy as *magnitude
+comparison* rather than *ordering*; any priority-2 cost wins against
+any priority-3 benefit regardless of magnitudes per
+`00-mission.mdc`.
+
+Worked example: PR 5 G3 transaction replacement / fee-bump. Replacement
+creates a mempool-observer linked-tx-pair fingerprint (bounded privacy
+cost) in exchange for stuck-tx-recovery UX (substantial UX benefit).
+The disposition: structural rejection at design-rounds altitude with
+two named reopening criteria — (1) FCMP++ cryptographic
+fingerprint-unobservability analysis; (2) R16 V3.x `WalletSideEstimator`
+telemetry-driven priority-class re-classification (stuck-tx-recovery
+promotes from priority-3 UX to priority-1 security/integrity).
+
+**Inheritance read for PR 6+:** features that trade priority-N cost for
+priority-(N+1)-or-below benefit are rejected at design-rounds altitude,
+not evaluated. Reopening requires named substrate-anchored criteria,
+not user-impact rate. The substrate-anchoring is the load-bearing
+discipline; without it the rejection is re-litigable on consumer
+complaints, which `00-mission.mdc` already rejects.
+
+#### 8.3.3 Closure-rule operational discipline
+
+Three operational disciplines govern how per-engine PR rounds close
+and what subsequent per-engine PRs inherit from the closure record.
+
+**Discipline 1 — Round-N closure pins what was known at closure time.**
+Strengthened in
+[PR 5 §7 segment-2c](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md). Round-N
+closes when the wargaming surface *known at closure time* is genuinely
+exhausted; new shapes surfacing in Round-N+1 (or later) **reopen
+Round N explicitly** rather than slipping past closure as quiet
+revisions.
+
+Worked example: PR 5 segment 2h (R9 actor-state-shape refinement) was
+a Round-2 reopen for F2's state-machine row that segment-2f had not
+covered; PR 5 segment 2i (G1–G8 ecosystem-lessons substrate) was a
+second Round-2 reopen for substrate residuals that pre-Phase-1 review
+surfaced. Both are *Round-2-reopens*, not Round-3-advances — that
+framing is the discipline-correct accounting.
+
+**Inheritance read for PR 6+:** "Round-N closed" is provenance, not
+foreclosure. PR pre-flights inherit Round-N closure substrate but
+re-open Round-N when new shapes warrant; the reopen is explicit (banner
+amendment naming the segment) rather than implicit (substrate-creep
+across segments).
+
+**Discipline 2 — Pre-Phase-1 wider-substrate audit.** Surfaced in
+[PR 5 segment 2i](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10.
+The audit asks "what have other coins / wallet ecosystems taught us
+that we haven't named in this PR's substrate?" The question is
+*distinct from* the R-residual sweep: residuals enumerate what the
+PR's own design rounds surfaced; the ecosystem-lessons audit
+enumerates what *other projects' deployed failures* have surfaced that
+the PR's design rounds haven't asked about.
+
+The audit happens *after* the R-residual segments close substrate and
+*before* §7.X commit-decomposition drafts. The yield is typically 3-8
+items per per-engine PR; some land as V3.0 substrate (variant pre-pins
+required for V3.x consumer actors per architectural-integrity-now),
+some land as V3.x FOLLOWUPS entries, some land as priority-hierarchy
+rejections with named reopening criteria.
+
+**Inheritance read for PR 6+:** every per-engine PR has a
+pre-Phase-1 wider-substrate audit segment. Skipping it leaves
+V3.0-surface-revision obligations on V3.x consumer-actor PRs that the
+architectural-integrity-now discipline forbids.
+
+**Discipline 3 — Discipline-citation matrix as audit-attention
+surface.** Pattern surfaced in
+[PR 5 §5.6.9](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md). Each
+per-engine PR produces a matrix recording **what the PR is getting
+right by construction** versus the failure modes other cryptocurrency
+wallets have absorbed. Each entry pairs the discipline with the
+failure mode it forecloses and the segment / closure that landed it.
+
+The matrix is not documentation theater. It is **the answer to "why
+this substrate shape over the obvious-from-other-coins shape?"** — the
+question Phase 9 audit reviewers will ask first.
+
+**Inheritance read for PR 6+:** every per-engine PR produces a
+§5.6.X-equivalent discipline-citation matrix. New disciplines that
+emerge extend the prior PR's matrix or land their own. The matrices
+compound across PRs the same way §8.3 itself compounds.
+
+#### 8.3.4 Per-PR process discipline
+
+Three process disciplines emerged from the per-engine PR commit
+decompositions and are pinned here as inheritance-by-default.
+
+**Discipline 1 — §7.X synthesis-banner for multi-round commit
+decompositions.** Worked example surfaced from
+[PR 5 segment-2h / segment-2i deltas](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+landing upstream of the Round-3 §7.X commit list. Implementer reading
+§7.X verbatim sees Round-3-original substrate; segment-2h and
+segment-2i deltas (§5.6.8 / §5.6.12) are authoritative; without a
+synthesis-banner, implementer-time synthesis cost is paid by every
+reviewer.
+
+The discipline pin: every §7.X commit decomposition opens with a
+synthesis-banner pointing at within-commit deltas recorded in prior
+segments, listing the commits affected. The banner is doc-only; the
+deltas remain authoritative; the commit bodies retain their
+closure-rule-correct Round-N-original substrate.
+
+**Inheritance read for PR 6+:** if §7.X drafts before all Round-N
+segments close, the synthesis-banner is the navigation-aid against
+the delta-cluster. If §7.X drafts after all segments close (no
+reopens), the banner is unnecessary but cheap.
+
+**Discipline 2 — Sub-commit decomposition for bisection.** Pattern
+inherited from PR 4 (C5α / C5β); extended in PR 5 (C2α / C2β / C2γ;
+C4α / C4β / C4γ; C5α / C5β). Each sub-commit isolates one type of
+change so bisection lands at the right granularity.
+
+The discipline is grep-able from PR 4 onward but is pinned at §8.3
+altitude here for explicit inheritance. The decomposition discipline:
+within-commit content sorts into sub-commits by *type-of-change*
+(types added, traits declared, bodies extracted, tests landed), not
+by *bytes-of-diff* or *files-touched*. The α/β/γ sub-commits are
+revertible independently of each other for bisection isolation.
+
+**Inheritance read for PR 6+:** §7.X drafts use the α/β/γ
+decomposition discipline by default. Single-commit decomposition is
+admissible only when the commit's content is genuinely one
+type-of-change (rare in trait-extraction PRs).
+
+**Discipline 3 — Workspace-state verification before dependency
+recommendations.** Named in
+[`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc);
+worked-example in
+[PR 5 segment 2g Copilot-fix follow-up](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md).
+The pattern: a dependency recommendation cites a Cargo.toml line as
+"workspace-available"; subsequent inspection reveals the line is
+dev-deps-only or feature-gated; the recommendation has to be reworked.
+
+Worked example: segment 2g's `SnapshotId` hash-primitive binding cited
+`sha2 = "0.10"` at Cargo.toml line 115 as workspace-available, but
+line 115 was `[dev-dependencies]`; production `sha2` at line 33 was
+`optional = true`. The Copilot-fix follow-up switched the binding to
+`shekyl-crypto-hash::cn_fast_hash` (unconditional `[dependencies]`
+entry per Cargo.toml line 28).
+
+**Inheritance read for PR 6+:** dependency recommendations cite the
+*actual* production-dependency graph, not prose descriptions of it.
+Pre-recommendation, `cargo tree -e features` (or equivalent) verifies
+the dependency's presence in the production graph; dev-deps and
+feature-gated entries are flagged explicitly.
+
+#### 8.3.5 Threat-model anchors strengthened
+
+Two threat-model anchors sharpened across the per-engine PR design
+rounds, beyond the baseline established at Round-5 acceptance.
+
+**Anchor 1 — Adversary-controlled-daemon as expected deployment.**
+Strengthened in
+[PR 5 segment 2a](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) per
+[`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md). Shekyl's Tor/I2P-first
+deployment posture means wallets routinely connect to daemons under
+adversary control — anonymous-network exit operators, hosted-wallet
+deployments, mixed-trust environments where the daemon operator's
+identity and posture are unknown. The adversary-controlled-daemon case
+is the **expected deployment**, not an exception the design tolerates.
+
+Designs that admit structural single-peer DoS of transaction
+submission, refresh, or any other engine operation are
+**structurally incompatible with the project's primary deployment
+model** — the rejection ground is not "we can tolerate this in some
+deployments and harden against it in others"; it is "this contract
+shape contradicts the deployment model the design serves."
+
+**Inheritance read for PR 6+:** adversarial-daemon resistance is a
+load-bearing criterion in every per-engine PR's wargaming surface, not
+an optional steelman. Designs that fail it on structural grounds are
+rejected at design-rounds altitude.
+
+**Anchor 2 — HW-wallet as core, not edge.** Sharpened in
+[PR 5 segment 2b](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) per
+[`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) §1 (security as
+precondition, not optimization). Hardware-backed secure-storage paths
+(Trezor / Ledger / YubiKey-class) are dominant for privacy-conscious
+users; the Shekyl Foundation's own release-key signing already uses
+hardware-backed key storage.
+
+Designing trait surfaces so spend material never enters the consuming
+actor is the threat-model-correct baseline, not an optimization
+deferred to V3.x with a HW-wallet trigger. HW-wallet integration in
+V3.x is a `Signer`-impl substitution against the same boundary
+established at V3.0, not a refactor.
+
+**Inheritance read for PR 6+:** trait surfaces that hold spend material
+on a "primary" path with HW-wallet integration as a "secondary" path
+are reversed — HW-wallet is primary at the design altitude; software
+keys are the default *implementation* of the same primary surface.
+This is the R11 (b) split applied as inheritance, not as PR-5-specific
+disposition.
+
+#### 8.3.6 Scope-guard meta-pattern (extension)
+
+§1.5 named six scope guards as "the spec's most durable structural
+feature." §8.3 extends the scope-guard catalog with three new entries
+captured here for grep-ability:
+
+- **Round-N-closure-pins-known-at-closure-time** (in §8.3.3 discipline
+  1) rejects closure-rule violations where new shapes slip past
+  closure as quiet revisions rather than reopening Round N explicitly.
+- **Pre-provision-for-flexibility-as-extensibility-theater** (in
+  §8.3.2 anti-pattern 2) rejects wider trait-surface or enum shapes
+  that silently admit decision-class signals an established discipline
+  forbids.
+- **Priority-hierarchy-as-ordering-not-magnitude** (in §8.3.2
+  anti-pattern 3) rejects priority-hierarchy framings that treat the
+  hierarchy as cost-benefit-balance rather than ordering.
+
+Scope-guard inheritance from §1.5 holds: silent omission invites future
+contributors to propose the rejected pattern; explicit rejection with
+named reasoning closes the question; proposals that would violate a
+scope guard require explicit revisit of the guard, not silent
+extension.
+
+---
+
+### Inheritance-pattern summary
+
+The disciplines pinned in §8.3 categorize by altitude:
+
+| Discipline category | Altitude | Inheritance vehicle |
+|---|---|---|
+| Design lenses (§8.3.1) | Per-engine PR Round 1 pre-flight | Lens-applicability test against three structural conditions |
+| Anti-pattern citations (§8.3.2) | Per-engine PR design-rounds adjudication | `.mdc` rule citation + worked-example reference |
+| Closure-rule operational discipline (§8.3.3) | Per-engine PR Round-N closure + pre-Phase-1 audit | Segment-naming discipline + matrix-producing obligation |
+| Per-PR process discipline (§8.3.4) | Per-engine PR Round-3 §7.X drafting | Synthesis-banner + α/β/γ decomposition + dependency-verification |
+| Threat-model anchors (§8.3.5) | Per-engine PR wargaming-surface construction | Load-bearing criterion in every PR's adversarial review |
+
+The inheritance vehicle for each category is **the per-engine PR
+pre-flight checklist**. PRs 6+ inherit §8.3 by citing this section in
+their pre-flight; substrate that emerges from PR 6+ extends §8.3 via
+the same Round-6-style amendment vehicle this section landed under.
+
+**Continuous-discipline corollary.** Per
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc),
+the disciplines compound only as long as the per-engine PR design
+rounds *cite them at pre-flight*. The inheritance is not automatic;
+it is paid for by the pre-flight citation discipline. §8.3 makes the
+citation grep-able from a single section; per-engine PRs pay the
+citation cost (one paragraph at design-rounds open) and inherit the
+substrate.
 
 ---
 

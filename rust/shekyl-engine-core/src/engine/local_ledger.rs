@@ -366,3 +366,23 @@ impl LedgerEngine for LocalLedger {
             .map(|_| ())
     }
 }
+
+impl<L: LedgerEngine> LedgerEngine for std::sync::Arc<L> {
+    type Error = L::Error;
+
+    fn synced_height(&self) -> u64 {
+        (**self).synced_height()
+    }
+
+    fn snapshot(&self) -> LedgerSnapshot {
+        (**self).snapshot()
+    }
+
+    fn balance(&self) -> BalanceSummary {
+        (**self).balance()
+    }
+
+    async fn apply_scan_result(&self, scan_result: ScanResult) -> Result<(), RefreshError> {
+        (**self).apply_scan_result(scan_result).await
+    }
+}

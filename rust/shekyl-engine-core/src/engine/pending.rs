@@ -84,18 +84,25 @@
 //! [`OpenError::OutstandingPendingTx`]: super::error::OpenError::OutstandingPendingTx
 //! [`Engine::submit_pending_tx`]: super::Engine::submit_pending_tx
 
+#[cfg(test)]
 use std::collections::{BTreeMap, BTreeSet};
-use std::num::NonZeroU64;
+use std::time::{Duration, Instant};
 
+#[cfg(test)]
 use shekyl_address::Network;
-use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants, SubaddressIndex};
+use shekyl_engine_state::SubaddressIndex;
+#[cfg(test)]
+use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants};
 
 use crate::engine::{
-    error::{PendingTxError, SendError},
-    local_ledger::LocalLedger,
-    traits::DaemonEngine,
+    diagnostics::DiscardReason,
+    error::{PendingTxError, SendError, SubmitError},
+    traits::{DaemonEngine, LedgerEngine, PendingTxEngine, RefreshEngine},
     Engine, EngineSignerKind,
 };
+
+#[cfg(test)]
+use crate::engine::refresh::{derive_snapshot_id, LedgerSnapshot};
 
 /// Stub fee for Phase 1 [`Engine::build_pending_tx`].
 ///
@@ -104,6 +111,42 @@ use crate::engine::{
 /// that lifecycle tests exercising [`Reservation::fee_atomic_units`]
 /// run against a real value rather than zero-as-special-case.
 pub const STUB_FEE_ATOMIC_UNITS: u64 = 1_000;
+
+/// Opaque 16-byte content-derived ledger-snapshot digest.
+///
+/// Identifies the wallet's ledger state at the moment a reservation
+/// was built; submit-time staleness checks compare a reservation's
+/// `snapshot_id` against the engine's current `snapshot_id`. The bytes
+/// are an engine-internal projection, never accepted from a caller
+/// (the trait surface always derives `SnapshotId` from a freshly-read
+/// [`LedgerSnapshot`] inside the engine).
+///
+/// Derived inside the `engine::refresh` module over the snapshot's
+/// deterministic fields, hashed by Keccak-256 (via `shekyl-crypto-hash`'s
+/// [`cn_fast_hash`](shekyl_crypto_hash::cn_fast_hash)) with a
+/// domain-separation prefix and truncated to 128 bits per the
+/// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 Phase 0b binding-form pin.
+/// The 128-bit truncation is sized for bounded-population second-
+/// preimage resistance, not generic collision resistance (≪ 2⁴⁰
+/// snapshots over the wallet's operational lifetime); see the
+/// `2026-05-26` `V3_WALLET_DECISION_LOG.md` entry, R2 disposition,
+/// for the full security framing.
+///
+/// `Clone + Copy + PartialEq + Eq` is required by the submit-handler
+/// field-comparison contract; `Hash + Ord` lets V3.x consumer-actor
+/// surfaces key indexes off `SnapshotId` (zero V3.0-time cost via
+/// derive).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SnapshotId(pub(crate) [u8; 16]);
+
+impl SnapshotId {
+    /// Underlying 16-byte digest. Exposed for diagnostics, log lines,
+    /// and equality assertions in tests; the bytes are stable across
+    /// reads but carry no meaning across processes.
+    pub fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
+    }
+}
 
 /// Process-local identifier for a [`Reservation`] / [`PendingTx`].
 ///
@@ -123,10 +166,10 @@ impl ReservationId {
 
     /// Construct a [`ReservationId`] from a raw counter value. Crate-
     /// internal; production code goes through `build_pending_tx` (which
-    /// owns the monotonic counter on `Engine<S>`). Tests in sibling
-    /// modules use this to synthesize a recognizable id without
+    /// owns the monotonic counter on `Engine<S>`) or
+    /// [`super::local_pending_tx::LocalPendingTx`] (C5β). Tests in
+    /// sibling modules use this to synthesize a recognizable id without
     /// running the full build pipeline.
-    #[cfg(test)]
     pub(crate) fn new(v: u64) -> Self {
         Self(v)
     }
@@ -143,27 +186,12 @@ impl ReservationId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TxHash(pub [u8; 32]);
 
-/// Caller-supplied fee preference for [`Engine::build_pending_tx`].
-///
-/// Cross-cutting lock 8 binds this surface; Phase 2a will resolve each
-/// variant against the daemon's `get_fee_estimates`. Phase 1 ignores
-/// the variant and uses [`STUB_FEE_ATOMIC_UNITS`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FeePriority {
-    /// Slowest tier; cheapest. Targets confirmation within a few
-    /// blocks rather than the next block.
-    Economy,
-    /// Default tier; balanced cost vs. confirmation time.
-    Standard,
-    /// Fastest tier short of fee-spiking; targets next-block
-    /// inclusion under normal mempool conditions.
-    Priority,
-    /// Caller-pinned feerate in atomic-units-per-byte. The daemon's
-    /// estimate is bypassed entirely (and so are
-    /// [`TxError::DaemonFeeUnreasonable`](super::error::TxError)
-    /// sanity checks).
-    Custom(NonZeroU64),
-}
+// `FeePriority` migrated to `engine::fee_estimator` per PR 5
+// C4γ (`STAGE_1_PR_5_PENDING_TX_ENGINE.md` §7.X "trait-surface
+// is the canonical citation" pin). Re-exported here for
+// backward source-text compatibility within the crate; the
+// `engine::mod` re-export surface is unchanged.
+pub use super::fee_estimator::FeePriority;
 
 /// One transfer destination for [`TxRequest`].
 #[derive(Clone, Debug)]
@@ -201,6 +229,57 @@ pub struct TxRecipientSummary {
     pub amount_atomic_units: u64,
 }
 
+/// R14 reservation-extensibility seam.
+///
+/// `Reservation::extensions: Vec<ReservationExtension>` (added in
+/// C2γ) carries the V3.x extension payload set associated with a
+/// reservation — coinjoin coordination state, atomic-swap pre-image
+/// commitments, time-locked / multi-stage build directives, and
+/// other extensibility primitives that the V3.0 design intentionally
+/// does not pre-provision. Phase 0d binding form per
+/// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 (R14 closure, segment 2b).
+///
+/// # V3.0 variant set: empty
+///
+/// V3.0 ships `ReservationExtension` with **no variants**. The
+/// uninhabited shape means `Vec<ReservationExtension>` is
+/// permanently empty in V3.0 — consumers cannot construct a
+/// `ReservationExtension` value, so `Reservation::extensions` is
+/// always `Vec::new()` at C2γ build-pending-tx sites and there is
+/// no engine-side variant-dispatch logic to land for V3.0.
+///
+/// The empty variant set is the named reopening criterion per
+/// `21-reversion-clause-discipline.mdc`: the seam exists so V3.x
+/// extension surfaces (each pinned in `docs/FOLLOWUPS.md` with a
+/// target version) land additively by adding a variant here and
+/// the matching dispatch in the affected engine paths. The current
+/// state's disposition is reject-now-with-named-reopening (V3.x
+/// per-extension FOLLOWUPS); it is neither pre-provisioned (no
+/// hypothetical variants) nor refused-forever (the substrate is
+/// here for V3.x to land into).
+///
+/// # Why `#[non_exhaustive]` on an already-uninhabited enum
+///
+/// Defense-in-depth against the V3.x activation pattern: when the
+/// first variant lands, downstream crates that constructed
+/// `ReservationExtension` values via the (currently impossible)
+/// "match on no variants" idiom must still write a wildcard arm or
+/// recompile. `#[non_exhaustive]` makes the V3.x variant addition a
+/// non-breaking change for downstream consumers per the standard
+/// reversion-clause discipline applied to enum surfaces.
+///
+/// # Why `pub` rather than `pub(crate)`
+///
+/// V3.x consumer code (test fixtures, actor-side variant-dispatch,
+/// extension authors) needs to name the type. Restricting visibility
+/// to `pub(crate)` now would force a V3.x compatibility break when
+/// the first extension lands. The empty-variant-set is the
+/// load-bearing privacy mechanism for V3.0 — consumers cannot
+/// construct values, so visibility is information-only.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ReservationExtension {}
+
 /// Runtime-only reservation: which transfers are earmarked for the
 /// in-flight build, the chain state at build time, the fee, and the
 /// recipient summary.
@@ -209,6 +288,9 @@ pub struct TxRecipientSummary {
 /// the `Engine::*_pending_tx` methods, never directly. The submit /
 /// discard path consumes the entry by removing it from the
 /// reservation map.
+/// Legacy free-function state shape; retained for `pending` module unit
+/// tests until those tests migrate to [`LocalPendingTx`] (C7).
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(crate) struct Reservation {
     /// Indices into [`LedgerBlock::transfers`] selected to fund the
@@ -221,6 +303,35 @@ pub(crate) struct Reservation {
     /// [`PendingTxError::ChainStateChanged`] compares this against
     /// the wallet's current view at submit time.
     pub built_at_tip_hash: [u8; 32],
+    /// [`SnapshotId`] derived at build time over the wallet's
+    /// ledger snapshot. C5β's rewritten `submit` handler compares
+    /// this against the engine's `current_snapshot` and emits
+    /// `SubmitError::SnapshotInvalidated` on mismatch (lazy R5
+    /// per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §5.6.5 F5+F6 /
+    /// §5.6.6 P9). C2γ populates the field; C5β wires the read
+    /// site.
+    ///
+    /// `dead_code` allow: the field is consumed only by the
+    /// `Debug` derive until C5β's handler-body rewrite reads it
+    /// for the staleness check. Pattern matches the surrounding
+    /// `fee_atomic_units` / `recipients` / `priority` fields
+    /// whose production readers also land in later commits.
+    #[allow(dead_code)]
+    pub snapshot_id: SnapshotId,
+    /// R14 reservation-extension payload set. V3.0 ships with
+    /// the always-empty vector (the
+    /// [`ReservationExtension`] enum is uninhabited in V3.0
+    /// per Phase 0d binding form — see the enum's doc-comment
+    /// for the reopening-criteria-shaped reversion-clause
+    /// disposition). V3.x extensions land additively via new
+    /// `ReservationExtension` variants and matching engine-side
+    /// dispatch.
+    ///
+    /// `dead_code` allow: the field is consumed only by the
+    /// `Debug` derive until V3.x extensions land with their
+    /// dispatch code.
+    #[allow(dead_code)]
+    pub extensions: Vec<ReservationExtension>,
     /// Fee in atomic units. Phase 1: [`STUB_FEE_ATOMIC_UNITS`].
     ///
     /// `dead_code` allow: the field is consumed only by the `Debug`
@@ -262,11 +373,142 @@ pub struct PendingTx {
     pub built_at_tip_hash: [u8; 32],
     /// Fee in atomic units captured at build time (Phase 1 stub).
     pub fee_atomic_units: u64,
+    /// [`SnapshotId`] derived at build time from the wallet's
+    /// ledger snapshot — mirrors the value stored on the
+    /// engine-internal `Reservation` side. Caller-visible so
+    /// diagnostics surfaces (and Stage 4's `MempoolMonitorActor`)
+    /// can correlate handle equality across the wallet/consumer
+    /// boundary without reaching into engine-private state. Per
+    /// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 Phase 0b binding
+    /// form.
+    pub snapshot_id: SnapshotId,
     /// Constructed transaction bytes. Empty in Phase 1; Phase 2a
     /// fills this from `shekyl-tx-builder`.
     pub tx_bytes: Vec<u8>,
     /// Recipient summary for display.
     pub recipients: Vec<TxRecipientSummary>,
+}
+
+/// Default reservation TTL used by both
+/// [`ReservationTTLConfig::consumer_held`] and
+/// [`ReservationTTLConfig::in_flight`].
+///
+/// Provisional 24-hour order-of-magnitude per segment-2e R8
+/// wargaming substrate (`STAGE_1_PR_5_PENDING_TX_ENGINE.md`
+/// §5.6.7 V3.x FOLLOWUPS). The value is intentionally
+/// "definitively long" rather than "tuned" — V3.0's R8 safety-net
+/// posture is to bound stale-reservation lifetime so the wallet
+/// eventually self-heals from forgotten reservations, without
+/// imposing a short window that would conflict with legitimate
+/// long-form approval workflows (hardware wallets, offline
+/// signing, scheduled releases).
+///
+/// V3.x's `ReservationTTLActor` may tune per-collection values
+/// independently; the constant is the V3.0 baseline that both
+/// collections start from.
+pub const DEFAULT_RESERVATION_TTL: Duration = Duration::from_secs(60 * 60 * 24);
+
+/// Per-collection reservation TTL configuration. Phase 0l binding
+/// form per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 (segment-2h F7
+/// disposition; see §5.6.5 F7).
+///
+/// Both fields default to [`DEFAULT_RESERVATION_TTL`]; the
+/// per-collection shape admits V3.x `ReservationTTLActor`
+/// independent per-collection aging policy
+/// (age-from-`created_at` vs. age-from-`submitted_at`) without
+/// locking V3.0 into uniform-TTL.
+///
+/// `#[non_exhaustive]` per the reversion-clause discipline:
+/// future TTL refinements (e.g., a per-collection bound on
+/// `discard_requested`-marked reservations once that V3.x
+/// substrate lands) extend the struct additively.
+///
+/// # V3.0 consumer (planned, C5α)
+///
+/// `LocalPendingTx::new(..., ttl: ReservationTTLConfig)`
+/// constructor parameter. The engine's `outstanding()` and
+/// TTL-cleanup background scan read `config.consumer_held` and
+/// `config.in_flight` for per-collection aging.
+///
+/// # V3.x consumer (planned)
+///
+/// `ReservationTTLActor` reads the same `ReservationTTLConfig`
+/// and applies per-collection policy without trait revision.
+///
+/// `dead_code` allow: no V3.0-time reader until C5α wires the
+/// constructor parameter; the type lands in C2γ alongside the
+/// `Reservation`/`PendingTx` field augmentation per the §7.X
+/// commit decomposition's "type substrate before consumers"
+/// ordering.
+#[allow(dead_code)]
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReservationTTLConfig {
+    /// TTL applied to reservations in the `consumer_held`
+    /// collection. The collection holds reservations that the
+    /// engine has built but the consumer has not yet submitted;
+    /// aging from `created_at` is the V3.0 default.
+    pub consumer_held: Duration,
+    /// TTL applied to reservations in the `in_flight` collection.
+    /// The collection holds reservations whose `submit` is mid-
+    /// flight (daemon round-trip outstanding). V3.0 defaults to
+    /// age-from-`created_at` for parity with `consumer_held`;
+    /// V3.x's `ReservationTTLActor` may switch to
+    /// age-from-`submitted_at` per F7's per-collection-policy
+    /// substrate.
+    pub in_flight: Duration,
+}
+
+impl Default for ReservationTTLConfig {
+    /// Uniform [`DEFAULT_RESERVATION_TTL`] across both
+    /// collections — V3.0's R8 safety-net default per the
+    /// segment-2e wargaming substrate.
+    fn default() -> Self {
+        Self {
+            consumer_held: DEFAULT_RESERVATION_TTL,
+            in_flight: DEFAULT_RESERVATION_TTL,
+        }
+    }
+}
+
+/// Actor-private in-flight reservation record. Phase 0a binding
+/// form per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 (segment-2h P5
+/// disposition; see §5.6.6 P5).
+///
+/// Created when a reservation moves from `consumer_held` to
+/// `in_flight` at submit-dispatch time. The struct is
+/// `pub(crate)` because it lives inside the engine's state
+/// machine — consumers learn about its contents via the
+/// `PendingTxDiagnostic` stream (`SubmitAttempted` /
+/// `SubmitSucceeded` / `SubmitPendingResolution` emissions
+/// project the fields they need to surface), never by reading
+/// the struct directly. C5β introduces the `in_flight:
+/// HashMap<ReservationId, InFlightSubmit>` collection that
+/// stores values; C2γ lands the type ahead of the storage so
+/// the type-substrate sub-commit is a coherent compile unit.
+///
+/// `dead_code` allow: no V3.0-time reader until C5β wires the
+/// `in_flight` collection. Pattern matches the
+/// `ReservationTTLConfig` allow above.
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub(crate) struct InFlightSubmit {
+    /// [`SnapshotId`] the reservation was built against;
+    /// preserved verbatim from the source `Reservation` at the
+    /// `consumer_held → in_flight` transition.
+    pub snapshot_id: SnapshotId,
+    /// When the reservation was originally built (the
+    /// `consumer_held` insert timestamp). Preserved across the
+    /// `consumer_held → in_flight` move so the `consumer_held`
+    /// TTL semantics are not lost. V3.0's uniform "age from
+    /// creation" aging policy reads this field for both
+    /// collections.
+    pub created_at: Instant,
+    /// When the reservation entered `in_flight` (the submit-
+    /// dispatch timestamp). V3.x's `ReservationTTLActor`
+    /// age-from-submission policy reads this field for
+    /// `in_flight` aging without trait revision.
+    pub submitted_at: Instant,
 }
 
 // ---------------------------------------------------------------------------
@@ -280,8 +522,9 @@ pub struct PendingTx {
 /// Build a [`PendingTx`] against a free state triple. Inserts the
 /// resulting [`Reservation`] into `reservations` and bumps `next_id`.
 ///
-/// See [`Engine::build_pending_tx`] for the contract; this helper is
-/// the same body, exposed for in-crate tests.
+/// See [`Engine::build_pending_tx`] for the contract; legacy helper for
+/// `pending` module unit tests (C7 migrates to [`LocalPendingTx`]).
+#[cfg(test)]
 pub(crate) fn build_pending_tx_in_state(
     ledger: &LedgerBlock,
     reservations: &mut BTreeMap<ReservationId, Reservation>,
@@ -361,10 +604,24 @@ pub(crate) fn build_pending_tx_in_state(
         })
         .collect();
 
+    // Derive the SnapshotId from a freshly-read LedgerSnapshot view
+    // of the same LedgerBlock the rest of this body used for
+    // candidate selection. The minor allocation (one ReorgBlocks
+    // clone, capped at DEFAULT_REORG_BLOCKS_CAPACITY) is bounded by
+    // the wallet's reorg-window length and dominated by the rest of
+    // the build pipeline's allocations.
+    //
+    // Per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 Phase 0b binding
+    // form: the engine derives `SnapshotId` over the snapshot's
+    // deterministic fields; consumers never construct one.
+    let snapshot_id = derive_snapshot_id(&LedgerSnapshot::from_ledger(ledger));
+
     let reservation = Reservation {
         selected_transfer_indices: selected,
         built_at_height: synced,
         built_at_tip_hash: tip_hash,
+        snapshot_id,
+        extensions: Vec::new(),
         fee_atomic_units: fee,
         recipients: summary.clone(),
         priority: request.priority,
@@ -375,6 +632,7 @@ pub(crate) fn build_pending_tx_in_state(
         built_at_height: synced,
         built_at_tip_hash: tip_hash,
         fee_atomic_units: fee,
+        snapshot_id,
         tx_bytes: Vec::new(),
         recipients: summary,
     };
@@ -388,6 +646,7 @@ pub(crate) fn build_pending_tx_in_state(
 /// as locally spent, and return the (Phase-1 stubbed) tx hash.
 ///
 /// See [`Engine::submit_pending_tx`] for the contract.
+#[cfg(test)]
 pub(crate) fn submit_pending_tx_in_state(
     ledger: &mut LedgerBlock,
     reservations: &mut BTreeMap<ReservationId, Reservation>,
@@ -441,6 +700,7 @@ pub(crate) fn submit_pending_tx_in_state(
 /// `false` otherwise — the caller-facing `Engine::discard_pending_tx`
 /// is `Ok(())` in either case (cross-cutting lock 4: discard is
 /// idempotent and silent on unknown handles).
+#[cfg(test)]
 pub(crate) fn discard_pending_tx_in_state(
     reservations: &mut BTreeMap<ReservationId, Reservation>,
     id: ReservationId,
@@ -449,96 +709,92 @@ pub(crate) fn discard_pending_tx_in_state(
 }
 
 // ---------------------------------------------------------------------------
-// `Engine<S>` methods.
+// `Engine<S, D, L, R, P>` pending dispatch (C6).
 // ---------------------------------------------------------------------------
 
-// `D: DaemonEngine` private-bound: see the rationale on the
-// `pub struct Engine` definition in `engine/mod.rs`. The
-// `L = LocalLedger` specialization is intentional: `build_pending_tx`
-// and `submit_pending_tx` borrow the `WalletLedger` directly through
-// `self.ledger.read()` / `self.ledger.write()`, which are
-// `LocalLedger` inherent methods. The `LedgerEngine` trait surface
-// does not yet expose borrowed-state read/write accessors; once a
-// future commit (Stage 4 design space — see the Phase 0c amendment
-// in `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.2) adds them, this
-// block generalizes to `impl<S, D, L: LedgerEngine>`.
+use std::future::Future;
+use std::pin::pin;
+use std::task::{Context, Poll, Waker};
+
+use super::error::AmbiguousErrorKind;
+
+/// Poll a future that the V3.0 sync `Engine` API expects to complete
+/// immediately.
+///
+/// Stage 1 [`LocalPendingTx`](super::local_pending_tx::LocalPendingTx)
+/// satisfies this by returning `std::future::ready` from `build` /
+/// `submit`. A future `PendingTxEngine` that performs real async I/O
+/// must pair with async `Engine` methods (or documented `block_on`
+/// policy) — the sync wrappers return structured errors rather than
+/// panicking when a future returns [`Poll::Pending`].
+fn poll_immediate_build<F>(future: F) -> Result<PendingTx, SendError>
+where
+    F: Future<Output = Result<PendingTx, SendError>>,
+{
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut pinned = pin!(future);
+    match pinned.as_mut().poll(&mut cx) {
+        Poll::Ready(val) => val,
+        Poll::Pending => Err(SendError::CannotSign {
+            reason:
+                "sync Engine::build_pending_tx requires an immediately-ready PendingTxEngine future",
+        }),
+    }
+}
+
+fn poll_immediate_submit<F>(id: ReservationId, future: F) -> Result<TxHash, SubmitError>
+where
+    F: Future<Output = Result<TxHash, SubmitError>>,
+{
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut pinned = pin!(future);
+    match pinned.as_mut().poll(&mut cx) {
+        Poll::Ready(val) => val,
+        Poll::Pending => Err(SubmitError::DaemonAmbiguous {
+            kind: AmbiguousErrorKind::DaemonUnavailable,
+            reservation_id: id,
+        }),
+    }
+}
+
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine> Engine<S, D, LocalLedger> {
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        L: LedgerEngine,
+        R: RefreshEngine,
+        P: PendingTxEngine,
+    > Engine<S, D, L, R, P>
+{
     /// Number of in-flight reservations on this wallet handle.
     ///
-    /// `Engine::close` (lifecycle commit) calls this and refuses with
+    /// `Engine::close` refuses with
     /// [`OpenError::OutstandingPendingTx`](super::error::OpenError::OutstandingPendingTx)
-    /// when the count is non-zero. Tests and callers that want to
-    /// poll the count outside `close` use this accessor.
+    /// when the count is non-zero.
     pub fn outstanding_pending_txs(&self) -> usize {
-        self.reservations.len()
+        self.pending.outstanding()
     }
 
-    /// Build a [`PendingTx`] against the wallet's current state.
-    ///
-    /// Phase 1 contract:
-    ///
-    /// - Selects unspent, mature, non-reserved outputs covering
-    ///   `Σ recipient_amount + STUB_FEE_ATOMIC_UNITS`.
-    /// - Captures `synced_height` and the recorded block hash at that
-    ///   height as the reservation's chain-state tags.
-    /// - Records the selection and tags in the wallet's runtime
-    ///   reservation map.
-    /// - Returns a [`PendingTx`] with `tx_bytes = Vec::new()` (Phase
-    ///   2a wires `shekyl-tx-builder`).
-    ///
-    /// # Errors
-    ///
-    /// - [`SendError::InvalidRecipient`] for an empty `recipients`
-    ///   list or amount overflow.
-    /// - [`SendError::CannotSign`] when the wallet has not ingested
-    ///   any block yet (no tip hash to anchor against).
-    /// - [`SendError::InsufficientFunds`] when the available
-    ///   non-reserved spendable balance cannot cover `amount + fee`.
+    /// Build a [`PendingTx`] via [`PendingTxEngine::build`].
     pub fn build_pending_tx(&mut self, request: &TxRequest) -> Result<PendingTx, SendError> {
-        let guard = self.ledger.read();
-        build_pending_tx_in_state(
-            &guard.ledger.ledger,
-            &mut self.reservations,
-            &mut self.next_reservation_id,
-            request,
-        )
-        // `guard` is dropped at end of expression, releasing the
-        // LocalLedger read lock once the result has been computed.
+        poll_immediate_build(self.pending.build(request.clone()))
     }
 
-    /// Submit a [`PendingTx`] handle.
-    ///
-    /// Runs the cross-cutting-lock-4 invariants
-    /// ([`PendingTxError::TooOld`], [`PendingTxError::ChainStateChanged`],
-    /// [`PendingTxError::UnknownHandle`]) and on success removes the
-    /// reservation, marks its inputs locally spent (with
-    /// `spent_height = None` to reflect the still-unconfirmed state),
-    /// and returns a [`TxHash`].
-    ///
-    /// Phase 1 stub: the body does not call the daemon; the returned
-    /// `TxHash` is synthesized from the [`ReservationId`]. Phase 2a
-    /// replaces this body with a real broadcast call. The invariant
-    /// checks themselves are the same in both phases.
-    pub fn submit_pending_tx(&mut self, id: ReservationId) -> Result<TxHash, PendingTxError> {
-        let mut guard = self.ledger.write();
-        submit_pending_tx_in_state(
-            &mut guard.ledger.ledger,
-            &mut self.reservations,
-            self.network,
-            id,
-        )
+    /// Submit a [`PendingTx`] handle via [`PendingTxEngine::submit`].
+    pub fn submit_pending_tx(&mut self, id: ReservationId) -> Result<TxHash, SubmitError> {
+        poll_immediate_submit(id, self.pending.submit(id))
     }
 
-    /// Discard a reservation.
+    /// Discard a reservation via [`PendingTxEngine::discard`].
     ///
-    /// Idempotent: `Ok(())` whether or not `id` is currently
-    /// recognized. Per cross-cutting lock 4, `submit_pending_tx`
-    /// raises [`PendingTxError::UnknownHandle`] for an unknown handle
-    /// while `discard_pending_tx` does not.
+    /// Orchestration always passes [`DiscardReason::ConsumerExplicit`].
+    /// Unknown handles are idempotent: [`PendingTxError::ReservationNotFound`]
+    /// from the engine maps to `Ok(())` per cross-cutting lock 4.
     pub fn discard_pending_tx(&mut self, id: ReservationId) -> Result<(), PendingTxError> {
-        let _ = discard_pending_tx_in_state(&mut self.reservations, id);
-        Ok(())
+        match self.pending.discard(id, DiscardReason::ConsumerExplicit) {
+            Ok(()) | Err(PendingTxError::ReservationNotFound { .. }) => Ok(()),
+            Err(err) => Err(err),
+        }
     }
 }
 

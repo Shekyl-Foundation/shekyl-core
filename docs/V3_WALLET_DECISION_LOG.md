@@ -3585,4 +3585,377 @@ work. This entry only pins what Branch 2 ships now.
 
 ---
 
+## 2026-05-26 — Stage 1 PR 5 `PendingTxEngine`: Round 2 / Round 3 binding-form pins (R-residuals + segment-2h state shape + segment-2i ecosystem audit)
+
+**Decision.** The `PendingTxEngine` Stage 1 surface is pinned at
+the Round-3-closed shape per
+[`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md).
+The corresponding amendment to
+[`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+§2.4 lands in PR 5 commit C0 (doc-only). Phase 1 implementation
+proceeds on the short-lived branch
+`feat/stage-1-pr5-pending-tx-engine` against this surface as the
+eight-commit C0–C8 decomposition.
+
+This entry consolidates the binding-form pins from Round 2's
+segments 2b–2g (R-residual closures) and the post-Round-3-readiness
+substrate refinements of segments 2h (actor-state-shape) and 2i
+(wider-ecosystem-lessons audit). The design doc holds the
+substrate; this entry captures the load-bearing decisions and
+the cross-reference back to the design's section anchors so they
+survive the chat-log they were decided in.
+
+### R-residual binding-form pins (segments 2b–2g)
+
+- **R11 (b) — signing-actor split.** `LocalSigner` (Stage 1) /
+  `SigningActor` (Stage 4) is the sole holder of spend material;
+  `LocalPendingTx` / `PendingTxActor` delegates via a narrow
+  `Signer` trait (Stage 1) / mailbox surface (Stage 4). The
+  Round 1 working disposition leaning (a) — `PendingTxActor` holds
+  spend material itself, "matches PR 4 R4's instance-scoped
+  pattern" — was identified in segment 2b as the
+  cost-benefit-defer-to-later anti-pattern recurring in a
+  residual (per
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)):
+  the cost-asymmetry argument that justified PR 4 R4's tactical
+  (a) does not apply to PR 5 R11 because `LocalPendingTx` does
+  not yet exist (the choice is the same cost either way; we are
+  designing one or the other from scratch, not moving from one
+  to the other). HW-wallet integration in V3.x plugs into the
+  existing architecture as an alternative `Signer` impl
+  (`HardwareSigner`) — substitution, not refactor. The
+  segment-2b §5.4 R11 closure records the full rationale.
+
+- **R12 (a) — content-derived `SnapshotId`.** Stage 1's
+  `LocalPendingTx` derives `SnapshotId` from
+  `LedgerEngine::snapshot()` (the pre-existing trait method)
+  rather than via a cross-trait synchronous-query amendment to
+  `LedgerEngine` (the seed-projected Phase 0c
+  `current_snapshot_id() -> SnapshotId` method). Closes the
+  cross-trait coupling residue identified in Round 1 by
+  resolving snapshot-identity *flow* into the actor-mesh
+  diagnostic-stream surface (Phase 0g
+  `LedgerDiagnostic::SnapshotMerged` for actor consumers) rather
+  than a new synchronous trait method. **Phase 0c is removed
+  from the Phase 0 enumeration**; no Phase 1 commit decomposition
+  entry. Segment-2d §5.4 R12 (a) closure records the
+  trait-surface load-bearing coupling does not exist at V3.0 or
+  in any V3.x trajectory currently named.
+
+- **R2 — `SnapshotId` 16-byte content-addressed digest.** The
+  opaque token is `[u8; 16]` derived from `LedgerSnapshot`'s
+  deterministic fields via `shekyl-crypto-hash::cn_fast_hash`
+  (Keccak-256 with original padding) truncated to the first 128
+  bits, domain-separated by the prefix `b"shekyl-snapshot-id-v1"`.
+  The hash-primitive choice is `cn_fast_hash` (revised from a
+  prior `sha2`-based binding) per the
+  [`17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc)
+  workspace-state reuse rule against the actual production-dep
+  graph: `sha2` in `shekyl-engine-core` is `optional = true` in
+  `[dependencies]` and bare in `[dev-dependencies]`;
+  `shekyl-crypto-hash` is unconditional in `[dependencies]`.
+  Security rationale is bounded-population second-preimage
+  resistance, not generic collision resistance — the wallet
+  observes ≪ 2⁴⁰ snapshots over its operational lifetime
+  (≤ ~10⁷ over 100 years), and the impact bound under
+  successful attack is at-most "wallet's submit-staleness check
+  passes incorrectly against a daemon-injected snapshot
+  replacement; the wallet submits a tx valid against the prior
+  snapshot; the daemon could have rejected the tx anyway via
+  `DoubleSpend` if the prior snapshot's outputs are now spent
+  on-chain. No consensus violation; no wallet-state corruption
+  that refresh cannot reconcile." Segment-2d §5.4 R2 closure
+  records the full security framing; the design doc's §4 Phase
+  0b carries the Copilot-fix follow-up revision.
+
+- **R8 — `DiscardReason::TTLAutoDiscard` variant + V3.x
+  `ReservationTTLActor` composition closure.** The TTL-aging
+  enforcement lives in a V3.x `ReservationTTLActor` topology
+  slot consuming `Tick` messages and re-emitting `Discard`
+  messages to `PendingTxActor`. The discard reason taxonomy
+  pins a `TTLAutoDiscard` variant for the auto-discard emission
+  path; no V3.0 in-process emitter (the V3.0 `LocalPendingTx`
+  does not run the TTL background scan). Pre-V3.x test
+  fixtures hand-roll the call to exercise the variant.
+  Segment-2e §5.4 R8 closure records the composition rationale.
+
+- **R9 — Two-stage submit flow with daemon-side authority for
+  Finding-2 ambiguous outcomes.** The `submit` handler decomposes
+  into (a) pre-daemon staleness check + collection move
+  (`consumer_held → in_flight`); (b) daemon round-trip; (c)
+  post-daemon collection-moves table per `TerminalErrorKind` /
+  `AmbiguousErrorKind`. For `AmbiguousErrorKind` outcomes
+  (DaemonTimeout / DaemonUnavailable), the rid stays in
+  `in_flight` and the engine emits
+  `SubmitPendingResolution { rid, tx_hash, kind }` (Finding 2:
+  the daemon owns the resolution authority; the wallet must
+  not unilaterally release outputs while the daemon may still
+  resolve the tx). Segment-2f §5.4 R9 closure records the
+  staleness-then-daemon flow; segment-2h §5.6.4 P4
+  collection-moves table refines the post-daemon shape under
+  the (γ) lean state.
+
+- **R13 (b) — `OutputSelector` trait seam.** Output selection
+  is a trait surface (`Phase 0i`) rather than a free function:
+  `Wallet2GreedySelector` is the V3.0 default; V3.x alternatives
+  (`RandomizedSelector`, `EntropyMaximizingSelector`) land per
+  the FOLLOWUPS R13 entry without changes to `LocalPendingTx`.
+  Segment-2c §5.4 R13 closure records the trait-narrow shape;
+  selection-algorithm details are the impl's responsibility,
+  not the trait surface's.
+
+- **R15 (b) — `SubmissionStrategyActor` topology slot.** Stage 4
+  reserves an actor-topology slot between `PendingTxActor` and
+  `DaemonEngine` for submission strategies (`DirectStrategy`,
+  `JitteredSubmissionStrategy`, `CircuitRotationStrategy`,
+  `BroadcastStrategy`, `BatchedStrategy`). V3.0's
+  `LocalPendingTx` calls `DaemonEngine::submit_tx()` directly
+  with no intermediate actor (the `DirectStrategy` is implicit
+  in the direct call); the trait surface does not grow at
+  V3.0. V3.x consumer-actor PRs land the
+  `SubmissionStrategyActor` itself; **no Phase 1 commit
+  decomposition entry** for the slot at V3.0 (forward-looking
+  documentation pin). Segment-2c §5.4 R15 closure records the
+  forward-template.
+
+- **R16 (b) — `FeeEstimator` trait seam.** Fee estimation is a
+  trait surface (`Phase 0j`) rather than a hardcoded call:
+  `DaemonRecommendationEstimator` (asks the daemon via
+  `DaemonEngine::get_fee_estimates`) is the V3.0 default;
+  `ExplicitFeeEstimator` is a V3.0 alternative for
+  wallet-UI / API explicit-fee workflows; `WalletSideEstimator`
+  is the V3.x privacy-enhancing implementation analyzing
+  `LedgerEngine` historical block-fee distribution. R16 (c)
+  (the privacy-driven V3.0-lift evaluation) **does not lift to
+  V3.0**; lands as a coordinated `LedgerEngine` +
+  `FeeEstimator` PR in V3.x per segment-2d §5.4 R16.
+
+- **R17 (a) — Drop-on-close for in-flight reservations.** When
+  the wallet closes with `in_flight` reservations outstanding,
+  the engine drops the reservation set; consumer learns at
+  `outstanding()` poll time that the set is empty. The
+  alternative (R17 (b) encrypted-persistence-on-close + drop-on-
+  open) is rejected at V3.0 per `21-reversion-clause-discipline.mdc`'s
+  rejection-with-reopening shape: the V3.0 disposition is "no
+  in-flight persistence"; the V3.x FOLLOWUPS entry tracking
+  encrypted-persistence opt-in carries the reopening criteria
+  (demonstrated need + threat-model review +
+  `AUDIT_SCOPE.md` amendment). Segment-2c §5.4 R17 closure
+  records the rejection rationale.
+
+### Segment-2h state-shape refinement (2026-05-26)
+
+- **(γ) lean three-collection state shape.** The
+  `PendingTxState` aggregate holds `output_locks: HashMap<OutputId,
+  ReservationId>`, `consumer_held: HashMap<ReservationId,
+  Instant>`, `in_flight: HashMap<ReservationId, InFlightSubmit>`,
+  and `current_snapshot: SnapshotId`. The segment-2g working
+  `ReservationState { Active | SubmitPendingDaemonAck | Resolved }`
+  enum + `Reservation::state: ReservationState` field are
+  **dissolved into collection membership** (per the
+  refusal-forever-vs-reject-with-reopening framing in
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc));
+  the rid's lifecycle is encoded by which collection it is in
+  (or none/gone). Reopening criterion: a load-bearing consumer
+  emerges that requires explicit state-projection beyond
+  collection-membership inspection — none identified at V3.0;
+  none anticipated in V3.x. Design doc §5.6.2 / §5.6.3 holds the
+  substrate.
+
+- **`SubmitErrorKind` split into `TerminalErrorKind` +
+  `AmbiguousErrorKind`.** Type-correctness motivation: the
+  unified enum conflated the lifecycle distinction (reservation
+  gone vs. reservation still in `in_flight` per the P4
+  collection-moves table); consumer code matching the unified
+  enum needed wildcard arms to handle lifecycle distinctions
+  that the type system already knows about. The split exposes
+  the distinction; consumers match on
+  `SubmitError::DaemonRejectedTerminal` vs.
+  `SubmitError::DaemonAmbiguous` and the type system enforces
+  correct handling of each. Design doc §5.6.4 P4 holds the
+  collection-moves table; §4 Phase 0a holds the enum block.
+
+- **`PendingTxDiagnostic::SubmitFailed` removal +
+  `SubmitPendingResolution` addition.** Under the P4
+  collection-moves table, no surviving emission site for the
+  unified `SubmitFailed` variant exists: terminal errors emit
+  via `Discarded { rid, DaemonRejectedTerminal { kind } }` on
+  the discard-side; ambiguous errors emit via the new
+  `SubmitPendingResolution { rid, kind }` on the submit-side.
+  The lifecycle-class distinction is load-bearing on the
+  emission side too, parallel to the type-correctness motivation
+  for the error-return-side split.
+
+- **Lazy R5 preservation with `DiscardReason::SnapshotRotationAutoDiscard`
+  removed at V3.0.** Snapshot rotation drives no automatic
+  collection moves at V3.0; consumer learns at submit-time via
+  `SubmitError::SnapshotInvalidated`. The eager-discard
+  alternative (rotate-time auto-release of stale `consumer_held`
+  reservations) is rejected at V3.0 per the
+  `21-reversion-clause-discipline.mdc` shape; V3.x FOLLOWUPS
+  reopening trigger reintroduces the variant alongside
+  selective-discard substrate. Design doc §5.6.5 F5+F6 / §5.6.6
+  P9 record the substrate.
+
+- **F1–F8 + P1–P9 dispositions.** The full adversarial-pass
+  finding set (F1 staleness-detection asymmetry; F2
+  ownership-boundary discipline; F3 sensitive-material discipline
+  in `Signer::Error` / `FeeEstimatorError` / `OutputSelectorError`;
+  F4 caller-side subset re-verification; F5+F6 temporal- and
+  distributional-projection discipline; F7 per-collection TTL
+  config; F8 R10 dissolution by composition) and the
+  internal-state probe set (P1–P9 covering collection-moves,
+  handler-atomicity, staleness-detection symmetry under Stage 4
+  mailbox-FIFO, etc.) are recorded per §5.6.5 / §5.6.6 / §5.6.7
+  of the design doc.
+
+- **Phase 0l — `ReservationTTLConfig { consumer_held, in_flight }`.**
+  Per-collection TTL configuration with `Default` impl yielding
+  uniform `DEFAULT_RESERVATION_TTL`. The per-collection shape
+  admits V3.x `ReservationTTLActor` per-collection aging
+  policy (age-from-creation vs. age-from-submission) without
+  locking V3.x into uniform-TTL. F7 disposition.
+
+### Segment-2i wider-ecosystem-lessons audit (2026-05-27)
+
+The segment-2i audit ran the post-segment-2h surface against
+seven what-the-wallet-ecosystem-has-taught items (G1–G8). The
+five V3.0 substrate dispositions land at PR 5; three V3.x
+FOLLOWUPS dispositions defer to subsequent PRs. Discipline-
+citation matrix per design doc §5.6.9; G1–G5 V3.0 dispositions
+per §5.6.10; G6–G8 V3.x FOLLOWUPS per §5.6.11.
+
+- **G1 — Mempool eviction.** Diagnostic-stream variant
+  (`DiscardReason::MempoolEvicted`) + projection field
+  (`tx_hash: TxHash` on `PendingTxDiagnostic::SubmitSucceeded`
+  and `SubmitPendingResolution`) + new narrow
+  `PendingTxEngine::signal_mempool_evicted(rid)` trait method
+  (Phase 0m) with F2 ownership-boundary adjudication doc-
+  comment. The narrow-vs-wide method-shape question is
+  adjudicated per-method: each new "consumer signals terminal"
+  candidate gets its own narrow method and its own F2
+  adjudication entry (a wider `signal_external_terminal(rid,
+  reason)` shape would silently admit decision-class signals;
+  the narrow shape preserves the per-method F2 adjudication
+  grep-ability that the wider shape forecloses). The V3.x
+  `MempoolMonitorActor` (FOLLOWUPS entry) is the natural
+  producer; pre-V3.x test fixtures hand-roll the call.
+
+- **G2 — Long-range reorg of confirmed txs.** Disposed as
+  `LedgerDiagnostic`-domain out-of-`PendingTxEngine`-scope. The
+  V3.0-accepted UX surface is parallel to F8 (the wallet's
+  next refresh reconciles the local ledger; the user sees the
+  confirmed tx state revert via the refresh-side
+  `RefreshSummary`). The R5 scope-extension to "long-range
+  reorg of confirmed txs" is **named and rejected** per
+  `21-reversion-clause-discipline.mdc`'s shape; reopening
+  criterion: a load-bearing consumer emerges that needs
+  in-`PendingTxEngine`-state visibility into reorgs of
+  confirmed txs — none identified. Design doc §5.4 R5 +
+  §5.6.10 G2 records the disposition.
+
+- **G3 — Transaction replacement / fee-bump.** Structurally
+  rejected per `00-mission.mdc` priority-ordering-not-magnitude
+  framing: transaction replacement contradicts the
+  privacy-priority commitment (fee-bump replacement is a
+  fingerprintable transaction lifecycle pattern that fails
+  FCMP++ membership-proof unobservability; the
+  fingerprint-vs-stuck-tx-recovery trade is the classic
+  priority-1-vs-priority-3 conflict the hierarchy
+  arbitrates). The disposition's reopening criteria are
+  sharpened to **two named criteria** per
+  `21-reversion-clause-discipline.mdc`: (a) FCMP++ fingerprint-
+  unobservability cryptographic analysis demonstrates
+  replacement is non-fingerprintable under the threat model,
+  OR (b) R16's V3.x `WalletSideEstimator` telemetry
+  demonstrates fee-estimation insufficiency at a
+  user-impact-significant rate that re-classifies stuck-tx-
+  recovery from priority-3 UX to priority-1
+  security/integrity. The disposition lands as new §5.4 R18
+  closure in the design doc.
+
+- **G4 — HW-wallet signing latency under Stage 4.** Stage 4
+  multi-step submit pattern: `submit_start` → `submit_signed`
+  → `submit_completed` self-continuation with deferred-reply
+  semantics to absorb the HW-wallet signing-latency window
+  (5–30s for user confirmation) and the daemon-round-trip
+  window without blocking the actor's main mailbox. The
+  Stage 4 actor-migration PR's framework-selection pre-flight
+  MUST confirm deferred-reply substrate support; if no
+  candidate framework supports it, G4's disposition reopens at
+  the framework-selection altitude (NOT retroactively against
+  PR 5). PR 5's V3.0 trait surface stays synchronous
+  (`fn submit(&self, ...) -> Result<TxHash, SubmitError>`)
+  regardless. Design doc §5.0.1 holds the multi-step substrate.
+
+- **G5 — Output maturity filtering.** Disposed as `LedgerEngine`
+  trait-contract domain forward-template per design doc §5.6.10
+  G5. The `OutputSelector` receives only mature outputs by
+  construction (the `LedgerEngine`-side `mature_outputs()` is
+  the canonical mature-output enumeration); `PendingTxEngine`
+  has no maturity-filtering responsibility. FOLLOWUPS amendment
+  on the `LedgerEngine` area carries the V3.x maturity-filter
+  forward-template.
+
+- **G6 / G7 / G8 — V3.x FOLLOWUPS.** Tx-confirmation tracker
+  actor (G6), cancel-build refinement (G7), wallet-locked-during-
+  `in_flight` (G8) land as `docs/FOLLOWUPS.md` entries with
+  named target versions and substrate-anchored reopening
+  criteria. Design doc §5.6.11 records the V3.x dispositions;
+  the FOLLOWUPS entries themselves carry the per-item
+  triggers.
+
+### Phase 0 enumeration (Round 3 close)
+
+Phase 0a (`SubmitError` + split-kind enums + `PendingTxError`),
+Phase 0b (`SnapshotId` + `cn_fast_hash` derivation), Phase 0d
+(`Reservation` shape with `extensions: Vec<ReservationExtension>`
+extensibility seam per R14), Phase 0e (lifecycle prose under
+(γ) lean shape), Phase 0f (`PendingTxDiagnostic` + sink-bound
+constructor parameter), Phase 0g (`LedgerDiagnostic::SnapshotMerged`
+variant stub — deferred to V3.x consumer-actor PR), Phase 0h
+(`Signer` trait), Phase 0i (`OutputSelector` trait), Phase 0j
+(`FeeEstimator` trait), Phase 0k (`SubmissionStrategyActor`
+topology slot — V3.0-reserved), Phase 0l (`ReservationTTLConfig`
+per-collection TTL), Phase 0m (`signal_mempool_evicted` trait
+method). Phase 0c is **removed** (R12 (a) closure).
+
+**Cross-references.**
+
+- *2026-04-27 — Engine architecture: actor model with staged
+  migration from composition*: the actor-mesh framing that
+  Round 1 (§5.0) closed PR 5's load-bearing question against.
+- *2026-04-27 — Pending-tx protocol: two-phase
+  build/submit/discard over single-phase callback*: the
+  protocol pin that PR 5's `PendingTxEngine` trait surface
+  is the Stage-1-and-Stage-4 invariant of.
+- *2026-04-27 — Engine binary boundary: pure message-passing
+  over shared handle*: the binary boundary that
+  `LocalPendingTx`'s Stage 4 cutover (`PendingTxActor` actor
+  body) preserves.
+- *2026-04-25 — `PendingTx` lifecycle: chain-state-tagged,
+  reservation-bearing, three-method API*: the original PR 5
+  R-set seed; closed across Round 2 / Round 3 segments at this
+  entry.
+- [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.4 — the PendingTxEngine trait-surface spec; PR 5 commit
+  C0 lands the §2.4 amendment.
+- [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  — the full PR 5 design doc, including §4 (Phase 0a–0m
+  binding-form enumeration), §5.0.1 (state-shape and Stage 4
+  substrate), §5.0.2 (diagnostic stream + enum block),
+  §5.0.3 (DiagnosticSink contracts), §5.4 (R-residual
+  closures including R18 G3 closure), §5.6.* (segment-2h /
+  segment-2i substrate), §7.X (the eight-commit C0–C8 Phase 1
+  decomposition).
+- `docs/FOLLOWUPS.md` — the V3.x entries that the
+  reversion-clause dispositions in this PR queue against
+  (G1 `MempoolMonitorActor`; G3 transaction-replacement
+  rejection; G6 `TxConfirmationTrackerActor`; G7 cancel-build;
+  G8 wallet-locked-during-`in_flight`; G5 `LedgerEngine`
+  maturity-filter forward-template; G2 `LedgerDiagnostic::TxReorgedOut`
+  amendment).
+
+---
+
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->

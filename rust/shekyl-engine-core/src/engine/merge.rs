@@ -105,8 +105,12 @@ use crate::{
 // async, and driving it from a sync `&self` wrapper without a
 // runtime in scope is not currently viable).
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, R: super::traits::RefreshEngine>
-    Engine<S, D, LocalLedger, R>
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        R: super::traits::RefreshEngine,
+        P: super::traits::PendingTxEngine,
+    > Engine<S, D, LocalLedger, R, P>
 {
     /// Current scanned-chain height: the highest block height the
     /// wallet's persisted ledger has fully ingested. `0` for a
