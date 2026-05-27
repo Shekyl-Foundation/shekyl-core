@@ -113,11 +113,30 @@ fn t6_worst_case_ratio() {
     // string), surfaced loudly with `expect`. An empty/unset
     // variable means "use the default `SAMPLE_BUDGET_PER_RECIPE`"
     // per the workflow's input `default: ''` shape.
+    //
+    // Per-PR-#78 Round-6 finding F13 (comment 3307805569): zero
+    // is also rejected at parse time to match the CLI's
+    // `parse_positive_usize` contract (in `src/main.rs`) and the
+    // orchestrator's `AdversarialRatioError::ZeroSamples`
+    // precondition. Without this check, a dispatch value of `0`
+    // would parse successfully here and fail later in
+    // `mode_adversarial_ratio::run` with a less direct error;
+    // rejecting at parse time keeps the dispatch-input semantics
+    // identical to the CLI's per-flag contract.
     let samples_override: Option<usize> = match std::env::var("T6_SAMPLES_PER_RECIPE") {
         Ok(s) if s.is_empty() => None,
-        Ok(s) => Some(s.parse::<usize>().expect(
-            "T6_SAMPLES_PER_RECIPE must be a non-negative integer (workflow_dispatch input)",
-        )),
+        Ok(s) => {
+            let parsed: usize = s.parse().expect(
+                "T6_SAMPLES_PER_RECIPE must be a positive integer (workflow_dispatch input); \
+                 unparseable value is a workflow-author bug",
+            );
+            assert!(
+                parsed >= 1,
+                "T6_SAMPLES_PER_RECIPE must be >= 1; got 0 (matches `parse_positive_usize` CLI contract \
+                 + `AdversarialRatioError::ZeroSamples` orchestrator precondition)",
+            );
+            Some(parsed)
+        }
         Err(_) => None,
     };
     let report = match mode_adversarial_ratio::run(samples_override) {
