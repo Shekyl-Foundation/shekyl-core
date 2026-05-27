@@ -66,6 +66,23 @@ rule.
   branch; commit message captures nine operational-tightening
   items plus the panic-strategy enumeration extension surfaced
   by the Round 5 pre-drafting gap-check.
+- **Round 6 record:** the commit landing this amendment; doc-only;
+  adds §8.3 (cross-PR discipline inheritance) capturing the
+  disciplines that emerged across Stage 1 PRs 3, 4, and 5; lands as
+  a single docs-only PR after PR 5's design substrate closes
+  (segment 2i) and before PR 5's implementation branch
+  (`feat/stage-1-pr5-pending-tx-engine`) cuts from `dev`. The
+  amendment is additive to §7's invariants (no trait-surface
+  change; no method-signature change; no async-ness or error-type
+  change) per §8.2's amendment discipline; the discipline statements
+  are inheritance-by-default for PR 6+ rather than re-derivation
+  per per-engine PR.
+
+The "Round 5 was the final design-review round" framing in the status
+banner is retained — Round 6 is **a doc-only inheritance-discipline
+capture**, not a design re-litigation. Case A from Round 5 still holds:
+the trait-surface structural decisions are settled; §8.3 captures
+*process* learnings, not *surface* changes.
 
 **Planned trajectory.** Round 4 is split into 4a and 4b; 4b is
 further split into Phase 1 (carry-forwards) and Phase 2
@@ -4691,6 +4708,438 @@ this method added and why?" would have to grep commit history
 rather than reading the spec). Reviewers applying §8.2
 mechanically check all three bullets; missing any one weakens
 the discipline's enforcement against the corresponding audience.
+
+### 8.3 Cross-PR discipline inheritance
+
+PRs 1, 2, 3, 4, and 5 each surfaced disciplines that compound across
+subsequent per-engine PRs. The per-engine PR design rounds
+([Stage 1 PR 3 (`KeyEngine`)](design/STAGE_1_PR_3_KEY_ENGINE.md),
+[Stage 1 PR 4 (`RefreshEngine`)](design/STAGE_1_PR_4_REFRESH_ENGINE.md),
+[Stage 1 PR 5 (`PendingTxEngine`)](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md))
+produced disciplines whose value is **compound-by-inheritance**: each
+discipline saves rounds-budget on subsequent per-engine PRs that would
+otherwise re-derive it under adversarial review.
+
+§8.3 pins these disciplines as inheritance-by-default for PR 6+ and
+for the Phase 2b additive trait (`StakeEngine`). The discipline
+statements are not novel claims — each is a worked-example summary
+of substrate that landed in a prior per-engine PR; §8.3 promotes them
+from per-PR discovery to spec-level inheritance.
+
+**Reading discipline.** Per-engine PR pre-flights cite §8.3 as the
+inheritance substrate, not as the source. The source is the prior PR's
+design doc; §8.3 is the index that makes the substrate grep-able from
+the spec. New disciplines that emerge from PR 6+ extend §8.3 via the
+same Round-6-style amendment vehicle this section landed under.
+
+#### 8.3.1 Design lenses (apply when structure admits)
+
+Three design lenses compound across the engines they apply to. Each
+lens has explicit **applicability conditions**; engines whose structure
+satisfies the conditions inherit the lens's payoff (rounds-budget
+savings, sharpened wargaming surface); engines whose structure doesn't
+satisfy them use the synchronous framing without penalty. Per-engine
+PR pre-flights test applicability rather than presume it.
+
+**Lens 1 — Actor-mesh framing.** Surfaced in
+[PR 4 Round 2 reframe](design/STAGE_1_PR_4_REFRESH_ENGINE.md);
+applied in [PR 5 Round 1](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+under §5.0; named with three applicability conditions in
+[PR 5 segment 2c §5.0.4](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md).
+The trait surface is the *synchronous decision point* consumers branch
+on; the rich semantic surface lives on the *diagnostic-stream seam*
+(`DiagnosticSink` parameter; typed event enum). The two channels carry
+different artifacts with different consumers and different security
+properties.
+
+Applicability conditions (all three must hold):
+
+1. **Trait surface mediates state-mutation across actors.** Engines
+   whose surface is purely-functional (no actor mediation; e.g., a pure
+   cryptographic primitive trait) do not admit the lens —
+   synchronous call signatures are the right shape.
+2. **Adversarial review surfaces a cross-actor liveness or quiescence
+   dependency.** Engines whose adversarial review surfaces no such
+   structural property derive no payoff from the lens — the
+   synchronous framing already makes everything visible the lens would.
+3. **Stage 4 actor-migration target is non-trivial.** Engines whose
+   Stage 4 shape is "co-located with another actor" or "no Stage 4
+   actor at all" derive bounded payoff.
+
+| Trait | Lens applies? | Substrate citation |
+|---|---|---|
+| `KeyEngine` | yes — (1) keys mediate cross-actor signing/decoding; (2) HW-wallet latency surfaces a quiescence dependency; (3) Stage 4 actor non-trivial | [PR 3 design doc](design/STAGE_1_PR_3_KEY_ENGINE.md) substrate; not lens-reframed but admissible |
+| `LedgerEngine` | yes — (1) ledger snapshot mediates state-mutation; (2) reorg cascade surfaces quiescence dependency; (3) Stage 4 actor non-trivial | [PR 2 design doc](design/STAGE_1_PR_2_LEDGER_ENGINE.md); landed pre-lens; future LedgerEngine refinement PRs apply |
+| `RefreshEngine` | yes | [PR 4 Round 2 reframe](design/STAGE_1_PR_4_REFRESH_ENGINE.md) — original lens-application instance |
+| `EconomicsEngine` | bounded — surface is parameter-derivation; (2) fails | synchronous framing correct; no payoff lost |
+| `DaemonEngine` | yes — (1) connection state mediates RPC fan-out; (2) adversarial-daemon liveness; (3) Stage 4 non-trivial | [PR 1 design doc](design/STAGE_1_PR_1_DAEMON_ENGINE.md); landed pre-lens |
+| `PersistenceEngine` | bounded — single-runtime-consumer; (3) bounded payoff | synchronous framing correct |
+| `PendingTxEngine` | yes | [PR 5 Round 1](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) — second lens-application instance |
+| `StakeEngine` (Phase 2b) | yes — (1) stake records mediate cross-actor claim/unstake; (2) reorg + adaptive-burn surfaces quiescence; (3) Stage 4 non-trivial | Phase 2b design rounds apply the lens by inheritance |
+
+**Lens 2 — State-as-collection-membership.** Surfaced in
+[PR 5 segment 2h](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.2's
+(γ) lean shape. When the actor-mesh lens applies, lifecycle state is
+*implicit in collection membership* rather than carried as an explicit
+`State` enum field on per-record structures. The actor's collections
+*are* the state; the per-record state-machine dissolves.
+
+Applicability conditions:
+
+1. **Lens 1 applies to the same engine.** State-as-collection-membership
+   is a refinement of lens 1, not an independent discipline.
+2. **The engine has a per-record lifecycle with discrete stages.** If
+   the engine has only one stage (e.g., snapshot is either current or
+   stale; no intermediate states), there's no state-machine to dissolve.
+
+The PR 5 (γ) worked example: `PendingTxActor`'s state is `output_locks`
+(double-spend prevention substrate) + `consumer_held` (consumer-owned
+reservations) + `in_flight` (actor-owned reservations in daemon
+round-trip). Lifecycle state — "Active / SubmitPendingDaemonAck /
+Resolved" in the segment-2f enum framing — dissolves into collection
+membership: in `consumer_held` only = Active; in `in_flight` = pending
+daemon ack; in neither = resolved-or-never-existed.
+
+**Engine pre-check for PR 6+:** when applying lens 1, also test whether
+the engine's lifecycle state can be expressed as collection membership.
+The (γ) reframe in PR 5 saved a state-machine row enumeration that
+would otherwise have grown per V3.x consumer-actor PR; subsequent
+engines with similar lifecycle shapes inherit the same reframe.
+
+**Lens 3 — Recursive trust boundary, three projection axes.** Surfaced
+in [PR 4 §5.4.8 #4](design/STAGE_1_PR_4_REFRESH_ENGINE.md) (field
+projection); extended in
+[PR 5 §5.0.3](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) (temporal and
+distributional projections). Cross-trust-boundary diagnostic consumers
+must apply all three projection axes:
+
+1. **Field projection.** What does each event reveal? Sensitive fields
+   (block heights, raw identifiers, address material) are projected
+   to non-sensitive equivalents at the trust boundary.
+2. **Temporal projection.** What does the *timing* of events between
+   actors reveal? Event coalescing, bucketed emission, strategy-aligned
+   emission delay close the temporal-leak surface.
+3. **Distributional projection.** What does the *long-running shape* of
+   the event stream reveal? Variant-distribution rate-limiting,
+   `Discarded { reason }` aggregation policy close the distributional-
+   leak surface.
+
+V3.0 ships field projection only; temporal and distributional
+disciplines deferred to `DIAGNOSTIC_STREAM.md` (V3.x — sequenced by
+the first V3.x consumer-actor PR per
+[PR 5 segment 2g](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.0.3
+introduction-PR disposition). The doc lands at first V3.x
+consumer-actor PR introduction; subsequent V3.x PRs amend rather than
+diverge.
+
+#### 8.3.2 Anti-pattern discipline citations
+
+Three anti-patterns earned named-rule citations from the per-engine PR
+design rounds. Each is a recurring failure mode whose grep-able
+discipline pin saves re-litigation cost.
+
+**Anti-pattern 1 — Cost-benefit-defer-to-later at R-residual altitude.**
+Named in
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc)
+at load-bearing-question altitude; extended in
+[PR 5 segment 2b](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) to
+R-residual disposition altitude. The pattern: a residual disposition
+appears to favor the incremental (a)-shape on cost-benefit grounds; the
+architectural-integrity-now reading favors the structural (b)-shape;
+the discipline-correct default for security-load-bearing residuals is
+structural-now unless the cost is genuinely prohibitive.
+
+Worked example: PR 5 R11 (signing-actor split). Round 1 closed (a)
+with V3.x HW-wallet trigger; segment 2b identified the (a)-disposition
+as the anti-pattern recurring in a residual and reframed as (b). The
+cost-asymmetry argument that justified PR 4 R4's tactical (a) (Scanner
+already existed; restructuring was the deferral trigger) did not apply
+to PR 5 R11 because `LocalPendingTx` was being designed fresh.
+
+**Inheritance read for PR 6+:** R-residual dispositions are subject to
+the same architectural-integrity-now discipline as load-bearing
+questions. PR pre-flights run the anti-pattern check at *both* altitudes,
+not just the load-bearing-question altitude.
+
+**Anti-pattern 2 — Pre-provision-for-flexibility.** Named in
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc);
+worked-example in
+[PR 5 segment 2i](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10 G1.
+The pattern: a wider trait-surface or enum shape *appears* extensible
+in a way the narrow shape isn't; the wider shape silently admits
+decision-class signals or operations that an established discipline
+(e.g., F2 ownership-boundary per
+[PR 5 §5.4 R9 segment-2f](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md))
+forbids on adjudicated grounds.
+
+Worked example: PR 5 G1's narrow `signal_mempool_evicted(rid)` over
+wider `signal_external_terminal(rid, reason)`. The wider shape would
+silently admit a hypothetical `signal_user_force_cancel` candidate that
+F2's discipline forbids; the narrow shape preserves per-method F2
+adjudication grep-ability.
+
+**Inheritance read for PR 6+:** new "consumer signals X" or "consumer
+configures Y" candidates undergo per-candidate adjudication against
+the established discipline (F2 for terminal transitions; analogous
+disciplines for other domains). Wider-shape consolidation is admitted
+only when *three or more narrow methods accumulate AND all three pass
+adjudication on identical grounds*; consolidation is substrate-anchored,
+not convenience-anchored.
+
+**Anti-pattern 3 — Priority-hierarchy-rejection-as-evaluation.** Named
+in [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) priority
+ordering; worked-example in
+[PR 5 segment 2i](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10 G3.
+The pattern: a feature whose privacy cost (priority 2) is bounded but
+real, and whose UX benefit (priority 3-or-below) is substantial, is
+framed as "evaluate-in-V3.x" rather than rejected at the design-rounds
+altitude. The framing treats priority hierarchy as *magnitude
+comparison* rather than *ordering*; any priority-2 cost wins against
+any priority-3 benefit regardless of magnitudes per
+`00-mission.mdc`.
+
+Worked example: PR 5 G3 transaction replacement / fee-bump. Replacement
+creates a mempool-observer linked-tx-pair fingerprint (bounded privacy
+cost) in exchange for stuck-tx-recovery UX (substantial UX benefit).
+The disposition: structural rejection at design-rounds altitude with
+two named reopening criteria — (1) FCMP++ cryptographic
+fingerprint-unobservability analysis; (2) R16 V3.x `WalletSideEstimator`
+telemetry-driven priority-class re-classification (stuck-tx-recovery
+promotes from priority-3 UX to priority-1 security/integrity).
+
+**Inheritance read for PR 6+:** features that trade priority-N cost for
+priority-(N+1)-or-below benefit are rejected at design-rounds altitude,
+not evaluated. Reopening requires named substrate-anchored criteria,
+not user-impact rate. The substrate-anchoring is the load-bearing
+discipline; without it the rejection is re-litigable on consumer
+complaints, which `00-mission.mdc` already rejects.
+
+#### 8.3.3 Closure-rule operational discipline
+
+Three operational disciplines govern how per-engine PR rounds close
+and what subsequent per-engine PRs inherit from the closure record.
+
+**Discipline 1 — Round-N closure pins what was known at closure time.**
+Strengthened in
+[PR 5 §7 segment-2c](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md). Round-N
+closes when the wargaming surface *known at closure time* is genuinely
+exhausted; new shapes surfacing in Round-N+1 (or later) **reopen
+Round N explicitly** rather than slipping past closure as quiet
+revisions.
+
+Worked example: PR 5 segment 2h (R9 actor-state-shape refinement) was
+a Round-2 reopen for F2's state-machine row that segment-2f had not
+covered; PR 5 segment 2i (G1–G8 ecosystem-lessons substrate) was a
+second Round-2 reopen for substrate residuals that pre-Phase-1 review
+surfaced. Both are *Round-2-reopens*, not Round-3-advances — that
+framing is the discipline-correct accounting.
+
+**Inheritance read for PR 6+:** "Round-N closed" is provenance, not
+foreclosure. PR pre-flights inherit Round-N closure substrate but
+re-open Round-N when new shapes warrant; the reopen is explicit (banner
+amendment naming the segment) rather than implicit (substrate-creep
+across segments).
+
+**Discipline 2 — Pre-Phase-1 wider-substrate audit.** Surfaced in
+[PR 5 segment 2i](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) §5.6.10.
+The audit asks "what have other coins / wallet ecosystems taught us
+that we haven't named in this PR's substrate?" The question is
+*distinct from* the R-residual sweep: residuals enumerate what the
+PR's own design rounds surfaced; the ecosystem-lessons audit
+enumerates what *other projects' deployed failures* have surfaced that
+the PR's design rounds haven't asked about.
+
+The audit happens *after* the R-residual segments close substrate and
+*before* §7.X commit-decomposition drafts. The yield is typically 3-8
+items per per-engine PR; some land as V3.0 substrate (variant pre-pins
+required for V3.x consumer actors per architectural-integrity-now),
+some land as V3.x FOLLOWUPS entries, some land as priority-hierarchy
+rejections with named reopening criteria.
+
+**Inheritance read for PR 6+:** every per-engine PR has a
+pre-Phase-1 wider-substrate audit segment. Skipping it leaves
+V3.0-surface-revision obligations on V3.x consumer-actor PRs that the
+architectural-integrity-now discipline forbids.
+
+**Discipline 3 — Discipline-citation matrix as audit-attention
+surface.** Pattern surfaced in
+[PR 5 §5.6.9](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md). Each
+per-engine PR produces a matrix recording **what the PR is getting
+right by construction** versus the failure modes other cryptocurrency
+wallets have absorbed. Each entry pairs the discipline with the
+failure mode it forecloses and the segment / closure that landed it.
+
+The matrix is not documentation theater. It is **the answer to "why
+this substrate shape over the obvious-from-other-coins shape?"** — the
+question Phase 9 audit reviewers will ask first.
+
+**Inheritance read for PR 6+:** every per-engine PR produces a
+§5.6.X-equivalent discipline-citation matrix. New disciplines that
+emerge extend the prior PR's matrix or land their own. The matrices
+compound across PRs the same way §8.3 itself compounds.
+
+#### 8.3.4 Per-PR process discipline
+
+Three process disciplines emerged from the per-engine PR commit
+decompositions and are pinned here as inheritance-by-default.
+
+**Discipline 1 — §7.X synthesis-banner for multi-round commit
+decompositions.** Worked example surfaced from
+[PR 5 segment-2h / segment-2i deltas](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+landing upstream of the Round-3 §7.X commit list. Implementer reading
+§7.X verbatim sees Round-3-original substrate; segment-2h and
+segment-2i deltas (§5.6.8 / §5.6.12) are authoritative; without a
+synthesis-banner, implementer-time synthesis cost is paid by every
+reviewer.
+
+The discipline pin: every §7.X commit decomposition opens with a
+synthesis-banner pointing at within-commit deltas recorded in prior
+segments, listing the commits affected. The banner is doc-only; the
+deltas remain authoritative; the commit bodies retain their
+closure-rule-correct Round-N-original substrate.
+
+**Inheritance read for PR 6+:** if §7.X drafts before all Round-N
+segments close, the synthesis-banner is the navigation-aid against
+the delta-cluster. If §7.X drafts after all segments close (no
+reopens), the banner is unnecessary but cheap.
+
+**Discipline 2 — Sub-commit decomposition for bisection.** Pattern
+inherited from PR 4 (C5α / C5β); extended in PR 5 (C2α / C2β / C2γ;
+C4α / C4β / C4γ; C5α / C5β). Each sub-commit isolates one type of
+change so bisection lands at the right granularity.
+
+The discipline is grep-able from PR 4 onward but is pinned at §8.3
+altitude here for explicit inheritance. The decomposition discipline:
+within-commit content sorts into sub-commits by *type-of-change*
+(types added, traits declared, bodies extracted, tests landed), not
+by *bytes-of-diff* or *files-touched*. The α/β/γ sub-commits are
+revertible independently of each other for bisection isolation.
+
+**Inheritance read for PR 6+:** §7.X drafts use the α/β/γ
+decomposition discipline by default. Single-commit decomposition is
+admissible only when the commit's content is genuinely one
+type-of-change (rare in trait-extraction PRs).
+
+**Discipline 3 — Workspace-state verification before dependency
+recommendations.** Named in
+[`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc);
+worked-example in
+[PR 5 segment 2g Copilot-fix follow-up](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md).
+The pattern: a dependency recommendation cites a Cargo.toml line as
+"workspace-available"; subsequent inspection reveals the line is
+dev-deps-only or feature-gated; the recommendation has to be reworked.
+
+Worked example: segment 2g's `SnapshotId` hash-primitive binding cited
+`sha2 = "0.10"` at Cargo.toml line 115 as workspace-available, but
+line 115 was `[dev-dependencies]`; production `sha2` at line 33 was
+`optional = true`. The Copilot-fix follow-up switched the binding to
+`shekyl-crypto-hash::cn_fast_hash` (unconditional `[dependencies]`
+entry per Cargo.toml line 28).
+
+**Inheritance read for PR 6+:** dependency recommendations cite the
+*actual* production-dependency graph, not prose descriptions of it.
+Pre-recommendation, `cargo tree -e features` (or equivalent) verifies
+the dependency's presence in the production graph; dev-deps and
+feature-gated entries are flagged explicitly.
+
+#### 8.3.5 Threat-model anchors strengthened
+
+Two threat-model anchors sharpened across the per-engine PR design
+rounds, beyond the baseline established at Round-5 acceptance.
+
+**Anchor 1 — Adversary-controlled-daemon as expected deployment.**
+Strengthened in
+[PR 5 segment 2a](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) per
+[`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md). Shekyl's Tor/I2P-first
+deployment posture means wallets routinely connect to daemons under
+adversary control — anonymous-network exit operators, hosted-wallet
+deployments, mixed-trust environments where the daemon operator's
+identity and posture are unknown. The adversary-controlled-daemon case
+is the **expected deployment**, not an exception the design tolerates.
+
+Designs that admit structural single-peer DoS of transaction
+submission, refresh, or any other engine operation are
+**structurally incompatible with the project's primary deployment
+model** — the rejection ground is not "we can tolerate this in some
+deployments and harden against it in others"; it is "this contract
+shape contradicts the deployment model the design serves."
+
+**Inheritance read for PR 6+:** adversarial-daemon resistance is a
+load-bearing criterion in every per-engine PR's wargaming surface, not
+an optional steelman. Designs that fail it on structural grounds are
+rejected at design-rounds altitude.
+
+**Anchor 2 — HW-wallet as core, not edge.** Sharpened in
+[PR 5 segment 2b](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md) per
+[`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) §1 (security as
+precondition, not optimization). Hardware-backed secure-storage paths
+(Trezor / Ledger / YubiKey-class) are dominant for privacy-conscious
+users; the Shekyl Foundation's own release-key signing already uses
+hardware-backed key storage.
+
+Designing trait surfaces so spend material never enters the consuming
+actor is the threat-model-correct baseline, not an optimization
+deferred to V3.x with a HW-wallet trigger. HW-wallet integration in
+V3.x is a `Signer`-impl substitution against the same boundary
+established at V3.0, not a refactor.
+
+**Inheritance read for PR 6+:** trait surfaces that hold spend material
+on a "primary" path with HW-wallet integration as a "secondary" path
+are reversed — HW-wallet is primary at the design altitude; software
+keys are the default *implementation* of the same primary surface.
+This is the R11 (b) split applied as inheritance, not as PR-5-specific
+disposition.
+
+#### 8.3.6 Scope-guard meta-pattern (extension)
+
+§1.5 named six scope guards as "the spec's most durable structural
+feature." §8.3 extends the scope-guard catalog with three new entries
+captured here for grep-ability:
+
+- **Round-N-closure-pins-known-at-closure-time** (in §8.3.3 discipline
+  1) rejects closure-rule violations where new shapes slip past
+  closure as quiet revisions rather than reopening Round N explicitly.
+- **Pre-provision-for-flexibility-as-extensibility-theater** (in
+  §8.3.2 anti-pattern 2) rejects wider trait-surface or enum shapes
+  that silently admit decision-class signals an established discipline
+  forbids.
+- **Priority-hierarchy-as-ordering-not-magnitude** (in §8.3.2
+  anti-pattern 3) rejects priority-hierarchy framings that treat the
+  hierarchy as cost-benefit-balance rather than ordering.
+
+Scope-guard inheritance from §1.5 holds: silent omission invites future
+contributors to propose the rejected pattern; explicit rejection with
+named reasoning closes the question; proposals that would violate a
+scope guard require explicit revisit of the guard, not silent
+extension.
+
+---
+
+### Inheritance-pattern summary
+
+The disciplines pinned in §8.3 categorize by altitude:
+
+| Discipline category | Altitude | Inheritance vehicle |
+|---|---|---|
+| Design lenses (§8.3.1) | Per-engine PR Round 1 pre-flight | Lens-applicability test against three structural conditions |
+| Anti-pattern citations (§8.3.2) | Per-engine PR design-rounds adjudication | `.mdc` rule citation + worked-example reference |
+| Closure-rule operational discipline (§8.3.3) | Per-engine PR Round-N closure + pre-Phase-1 audit | Segment-naming discipline + matrix-producing obligation |
+| Per-PR process discipline (§8.3.4) | Per-engine PR Round-3 §7.X drafting | Synthesis-banner + α/β/γ decomposition + dependency-verification |
+| Threat-model anchors (§8.3.5) | Per-engine PR wargaming-surface construction | Load-bearing criterion in every PR's adversarial review |
+
+The inheritance vehicle for each category is **the per-engine PR
+pre-flight checklist**. PRs 6+ inherit §8.3 by citing this section in
+their pre-flight; substrate that emerges from PR 6+ extends §8.3 via
+the same Round-6-style amendment vehicle this section landed under.
+
+**Continuous-discipline corollary.** Per
+[`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc),
+the disciplines compound only as long as the per-engine PR design
+rounds *cite them at pre-flight*. The inheritance is not automatic;
+it is paid for by the pre-flight citation discipline. §8.3 makes the
+citation grep-able from a single section; per-engine PRs pay the
+citation cost (one paragraph at design-rounds open) and inherit the
+substrate.
 
 ---
 
