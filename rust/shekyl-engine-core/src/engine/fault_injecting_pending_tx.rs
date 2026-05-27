@@ -167,10 +167,7 @@ impl<P: PendingTxEngine> PendingTxEngine for FaultInjecting<P> {
         self.inner.discard(id, reason)
     }
 
-    fn signal_mempool_evicted(
-        &self,
-        rid: ReservationId,
-    ) -> Result<(), PendingTxError> {
+    fn signal_mempool_evicted(&self, rid: ReservationId) -> Result<(), PendingTxError> {
         self.inner.signal_mempool_evicted(rid)
     }
 
@@ -224,9 +221,7 @@ mod tests {
             &self,
             _id: ReservationId,
         ) -> impl std::future::Future<Output = Result<TxHash, SubmitError>> + Send {
-            async {
-                Ok(TxHash([1u8; 32]))
-            }
+            async { Ok(TxHash([1u8; 32])) }
         }
 
         fn discard(
@@ -238,10 +233,7 @@ mod tests {
             Ok(())
         }
 
-        fn signal_mempool_evicted(
-            &self,
-            _rid: ReservationId,
-        ) -> Result<(), PendingTxError> {
+        fn signal_mempool_evicted(&self, _rid: ReservationId) -> Result<(), PendingTxError> {
             Ok(())
         }
 
@@ -286,7 +278,10 @@ mod tests {
         assert!(matches!(err, SendError::InsufficientFunds { .. }));
         assert_eq!(wrapper.queued_build_failures(), 0);
 
-        let pending = wrapper.build(standard_request()).await.expect("second build");
+        let pending = wrapper
+            .build(standard_request())
+            .await
+            .expect("second build");
         assert_eq!(wrapper.outstanding(), 1);
         wrapper
             .discard(pending.id, DiscardReason::ConsumerExplicit)
@@ -300,9 +295,7 @@ mod tests {
             needed: 1,
             available: 0,
         });
-        wrapper.queue_build_failure(SendError::CannotSign {
-            reason: "fifo-2",
-        });
+        wrapper.queue_build_failure(SendError::CannotSign { reason: "fifo-2" });
 
         assert!(matches!(
             wrapper.build(standard_request()).await,
@@ -350,9 +343,7 @@ mod tests {
             needed: 1,
             available: 0,
         });
-        wrapper.queue_build_failure(SendError::CannotSign {
-            reason: "fifo-2",
-        });
+        wrapper.queue_build_failure(SendError::CannotSign { reason: "fifo-2" });
         assert_eq!(wrapper.queued_build_failures(), 2);
 
         assert!(wrapper.build(standard_request()).await.is_err());
@@ -368,9 +359,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "FaultInjecting<P> dropped with 1 queued failure(s) un-consumed"
-    )]
+    #[should_panic(expected = "FaultInjecting<P> dropped with 1 queued failure(s) un-consumed")]
     fn drop_debug_assert_on_leftover_build_failure() {
         let wrapper = FaultInjecting::new(DelegationStub::new());
         wrapper.queue_build_failure(SendError::InsufficientFunds {

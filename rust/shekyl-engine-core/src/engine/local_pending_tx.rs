@@ -487,15 +487,19 @@ where
             return Err(err);
         }
 
+        let recipient_count = u32::try_from(request.recipients.len()).map_err(|_| {
+            fail_build_after_attempted(
+                self.sink.as_ref(),
+                SendError::InvalidRecipient {
+                    reason: "recipient count overflowed u32",
+                },
+            )
+        })?;
         emit_pending_tx_diagnostic(
             self.sink.as_ref(),
             PendingTxDiagnostic::BuildAttempted {
                 request_summary: BuildRequestSummary {
-                    recipient_count: u32::try_from(request.recipients.len()).map_err(|_| {
-                        SendError::InvalidRecipient {
-                            reason: "recipient count overflowed u32",
-                        }
-                    })?,
+                    recipient_count,
                     priority: request.priority,
                 },
             },

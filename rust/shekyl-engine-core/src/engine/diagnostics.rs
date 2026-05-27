@@ -573,8 +573,7 @@ pub enum DiscardReason {
 /// `SubmitPendingResolution`. The lifecycle-class distinction is
 /// load-bearing on the emission side, parallel to the
 /// type-correctness motivation for splitting
-/// [`SubmitErrorKind`](https://example.invalid) into
-/// [`TerminalErrorKind`] + [`AmbiguousErrorKind`] on the
+/// [`SubmitError`] into [`TerminalErrorKind`] + [`AmbiguousErrorKind`] on the
 /// error-return side.
 ///
 /// # Trust boundary

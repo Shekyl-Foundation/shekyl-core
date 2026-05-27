@@ -90,9 +90,9 @@ use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use shekyl_address::Network;
+use shekyl_engine_state::SubaddressIndex;
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants};
-use shekyl_engine_state::SubaddressIndex;
 
 use crate::engine::{
     diagnostics::DiscardReason,
@@ -736,7 +736,8 @@ where
     match pinned.as_mut().poll(&mut cx) {
         Poll::Ready(val) => val,
         Poll::Pending => Err(SendError::CannotSign {
-            reason: "sync Engine::build_pending_tx requires an immediately-ready PendingTxEngine future",
+            reason:
+                "sync Engine::build_pending_tx requires an immediately-ready PendingTxEngine future",
         }),
     }
 }
