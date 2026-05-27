@@ -238,6 +238,57 @@ pub struct TxRecipientSummary {
     pub amount_atomic_units: u64,
 }
 
+/// R14 reservation-extensibility seam.
+///
+/// `Reservation::extensions: Vec<ReservationExtension>` (added in
+/// C2γ) carries the V3.x extension payload set associated with a
+/// reservation — coinjoin coordination state, atomic-swap pre-image
+/// commitments, time-locked / multi-stage build directives, and
+/// other extensibility primitives that the V3.0 design intentionally
+/// does not pre-provision. Phase 0d binding form per
+/// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 (R14 closure, segment 2b).
+///
+/// # V3.0 variant set: empty
+///
+/// V3.0 ships `ReservationExtension` with **no variants**. The
+/// uninhabited shape means `Vec<ReservationExtension>` is
+/// permanently empty in V3.0 — consumers cannot construct a
+/// `ReservationExtension` value, so `Reservation::extensions` is
+/// always `Vec::new()` at C2γ build-pending-tx sites and there is
+/// no engine-side variant-dispatch logic to land for V3.0.
+///
+/// The empty variant set is the named reopening criterion per
+/// `21-reversion-clause-discipline.mdc`: the seam exists so V3.x
+/// extension surfaces (each pinned in `docs/FOLLOWUPS.md` with a
+/// target version) land additively by adding a variant here and
+/// the matching dispatch in the affected engine paths. The current
+/// state's disposition is reject-now-with-named-reopening (V3.x
+/// per-extension FOLLOWUPS); it is neither pre-provisioned (no
+/// hypothetical variants) nor refused-forever (the substrate is
+/// here for V3.x to land into).
+///
+/// # Why `#[non_exhaustive]` on an already-uninhabited enum
+///
+/// Defense-in-depth against the V3.x activation pattern: when the
+/// first variant lands, downstream crates that constructed
+/// `ReservationExtension` values via the (currently impossible)
+/// "match on no variants" idiom must still write a wildcard arm or
+/// recompile. `#[non_exhaustive]` makes the V3.x variant addition a
+/// non-breaking change for downstream consumers per the standard
+/// reversion-clause discipline applied to enum surfaces.
+///
+/// # Why `pub` rather than `pub(crate)`
+///
+/// V3.x consumer code (test fixtures, actor-side variant-dispatch,
+/// extension authors) needs to name the type. Restricting visibility
+/// to `pub(crate)` now would force a V3.x compatibility break when
+/// the first extension lands. The empty-variant-set is the
+/// load-bearing privacy mechanism for V3.0 — consumers cannot
+/// construct values, so visibility is information-only.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ReservationExtension {}
+
 /// Runtime-only reservation: which transfers are earmarked for the
 /// in-flight build, the chain state at build time, the fee, and the
 /// recipient summary.
