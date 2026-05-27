@@ -56,7 +56,8 @@ use super::diagnostics::{
     DiscardReason, PendingTxDiagnostic,
 };
 use super::error::{
-    FeeEstimatorError, OutputSelectorError, PendingTxError, SendError, SignerError, SubmitError,
+    AmbiguousErrorKind, FeeEstimatorError, OutputSelectorError, PendingTxError, SendError,
+    SignerError, SubmitError, TerminalErrorKind,
 };
 use super::fee_estimator::{FeeEstimationContext, FeeEstimator};
 use super::local_ledger::LocalLedger;
@@ -298,6 +299,11 @@ where
     /// Engine state guarded by [`Mutex`] for interior mutability;
     /// see [`PendingTxState`] rustdoc.
     pub(crate) state: Mutex<PendingTxState>,
+    /// Test-only: overrides the Phase 1 daemon stub on the next
+    /// `submit` after `SubmitAttempted` (PR 5 C7 R9 per-error-class
+    /// coverage). FIFO not required — one slot consumed per submit.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub(crate) submit_daemon_outcome: Mutex<Option<Result<TxHash, SubmitError>>>,
 }
 
 #[allow(private_bounds)]
@@ -359,6 +365,97 @@ where
 {
     fn refresh_current_snapshot(&self, state: &mut PendingTxState) {
         state.current_snapshot = derive_snapshot_id(&self.ledger.snapshot());
+    }
+
+    #[allow(clippy::unused_self)] // `self` is used only under `test` / `test-helpers` cfgs.
+    fn take_queued_submit_outcome(&self) -> Option<Result<TxHash, SubmitError>> {
+        #[cfg(any(test, feature = "test-helpers"))]
+        {
+            self.submit_daemon_outcome
+                .lock()
+                .expect("submit_daemon_outcome lock poisoned")
+                .take()
+        }
+        #[cfg(not(any(test, feature = "test-helpers")))]
+        {
+            None
+        }
+    }
+
+    fn finalize_submit_accept(
+        &self,
+        state: &mut PendingTxState,
+        id: ReservationId,
+        tx_hash: TxHash,
+    ) -> TxHash {
+        let selected_indices: Vec<OutputId> = state
+            .output_locks
+            .iter()
+            .filter_map(|(output_id, owner)| (*owner == id).then_some(*output_id))
+            .collect();
+
+        state.in_flight.remove(&id);
+        release_output_locks_for(state, id);
+
+        self.ledger.with_ledger_block_mut(|ledger| {
+            for index in selected_indices {
+                if let Some(td) = ledger.transfer_mut(index) {
+                    td.spent = true;
+                }
+            }
+        });
+
+        emit_pending_tx_diagnostic(
+            self.sink.as_ref(),
+            PendingTxDiagnostic::SubmitSucceeded {
+                reservation_id: id,
+                tx_hash,
+            },
+        );
+
+        tx_hash
+    }
+
+    fn finalize_submit_terminal(
+        &self,
+        state: &mut PendingTxState,
+        id: ReservationId,
+        kind: TerminalErrorKind,
+    ) -> SubmitError {
+        state.in_flight.remove(&id);
+        release_output_locks_for(state, id);
+
+        emit_pending_tx_diagnostic(
+            self.sink.as_ref(),
+            PendingTxDiagnostic::Discarded {
+                reservation_id: id,
+                reason: DiscardReason::DaemonRejectedTerminal { kind },
+            },
+        );
+
+        SubmitError::DaemonRejectedTerminal { kind }
+    }
+
+    fn finalize_submit_ambiguous(
+        &self,
+        id: ReservationId,
+        kind: AmbiguousErrorKind,
+    ) -> SubmitError {
+        let tx_hash = phase1_tx_hash(id);
+
+        emit_pending_tx_diagnostic(
+            self.sink.as_ref(),
+            PendingTxDiagnostic::SubmitPendingResolution {
+                reservation_id: id,
+                tx_hash,
+                kind,
+            },
+        );
+
+        SubmitError::DaemonAmbiguous {
+            kind,
+            reservation_id: id,
+        }
     }
 
     fn build_sync(&self, request: &TxRequest) -> Result<PendingTx, SendError> {
@@ -458,7 +555,16 @@ where
         let selected: SelectedOutputs = self
             .output_selector
             .select_outputs(&candidates, needed)
-            .map_err(|err| map_output_selector_error(&err.into()))?;
+            .map_err(|err| {
+                let mapped = map_output_selector_error(&err.into());
+                emit_pending_tx_diagnostic(
+                    self.sink.as_ref(),
+                    PendingTxDiagnostic::BuildFailed {
+                        kind: build_error_kind(&mapped),
+                    },
+                );
+                mapped
+            })?;
 
         let candidate_indices: HashSet<OutputId> = candidates.iter().map(|c| c.index).collect();
         for index in &selected.indices {
@@ -613,36 +719,31 @@ where
             PendingTxDiagnostic::SubmitAttempted { reservation_id: id },
         );
 
+        if let Some(outcome) = self.take_queued_submit_outcome() {
+            return match outcome {
+                Ok(tx_hash) => Ok(self.finalize_submit_accept(&mut state, id, tx_hash)),
+                Err(SubmitError::DaemonRejectedTerminal { kind }) => {
+                    Err(self.finalize_submit_terminal(&mut state, id, kind))
+                }
+                Err(SubmitError::DaemonAmbiguous { kind, reservation_id }) => {
+                    debug_assert_eq!(
+                        reservation_id, id,
+                        "queued DaemonAmbiguous must name the reservation under submit"
+                    );
+                    Err(self.finalize_submit_ambiguous(id, kind))
+                }
+                Err(e) => {
+                    state.in_flight.remove(&id);
+                    release_output_locks_for(&mut state, id);
+                    Err(e)
+                }
+            };
+        }
+
         // Phase 1 stub: daemon always accepts; Phase 2a replaces with
         // a real broadcast call.
         let tx_hash = phase1_tx_hash(id);
-
-        let selected_indices: Vec<OutputId> = state
-            .output_locks
-            .iter()
-            .filter_map(|(output_id, owner)| (*owner == id).then_some(*output_id))
-            .collect();
-
-        state.in_flight.remove(&id);
-        release_output_locks_for(&mut state, id);
-
-        self.ledger.with_ledger_block_mut(|ledger| {
-            for index in selected_indices {
-                if let Some(td) = ledger.transfer_mut(index) {
-                    td.spent = true;
-                }
-            }
-        });
-
-        emit_pending_tx_diagnostic(
-            self.sink.as_ref(),
-            PendingTxDiagnostic::SubmitSucceeded {
-                reservation_id: id,
-                tx_hash,
-            },
-        );
-
-        Ok(tx_hash)
+        Ok(self.finalize_submit_accept(&mut state, id, tx_hash))
     }
 
     fn discard_sync(
@@ -752,7 +853,21 @@ where
             ttl,
             network,
             state,
+            #[cfg(any(test, feature = "test-helpers"))]
+            submit_daemon_outcome: Mutex::new(None),
         }
+    }
+
+    /// Queue the daemon round-trip outcome for the next `submit`
+    /// (test / `test-helpers` only). Consumed after
+    /// `SubmitAttempted` is emitted and the rid moves to `in_flight`.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[allow(dead_code)] // Canonical C7 R9 test-driver API; hybrid tests land in C7.
+    pub(crate) fn queue_submit_daemon_outcome(&self, outcome: Result<TxHash, SubmitError>) {
+        *self
+            .submit_daemon_outcome
+            .lock()
+            .expect("submit_daemon_outcome lock poisoned") = Some(outcome);
     }
 }
 
@@ -812,8 +927,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::diagnostics::{DiscardReason, TracingDiagnosticSink};
-    use crate::engine::error::PendingTxError;
+    use crate::engine::diagnostics::{
+        AssertionSink, DiagnosticSink, DiscardReason, PanickingSink, PanickingSinkTrigger,
+        PendingTxDiagnostic, TracingDiagnosticSink,
+    };
+    use crate::engine::error::{AmbiguousErrorKind, PendingTxError, TerminalErrorKind};
     use crate::engine::fee_estimator::DaemonFeeEstimator;
     use crate::engine::output_selector::WalletGreedyOutputSelector;
     use crate::engine::pending::{FeePriority, TxRecipient, STUB_FEE_ATOMIC_UNITS};
@@ -953,6 +1071,35 @@ mod tests {
         )
     }
 
+    fn test_pending_tx_with_sink(
+        ledger: Arc<LocalLedger>,
+        sink: Arc<dyn DiagnosticSink>,
+    ) -> LocalPendingTx<LocalSigner, WalletGreedyOutputSelector, DaemonFeeEstimator, LocalLedger> {
+        LocalPendingTx::new(
+            Arc::new(LocalSigner::new(test_keys())),
+            WalletGreedyOutputSelector,
+            DaemonFeeEstimator,
+            ledger,
+            sink,
+            ReservationTTLConfig::default(),
+            Network::Mainnet,
+        )
+    }
+
+    fn funded_ledger() -> Arc<LocalLedger> {
+        let ledger = Arc::new(test_ledger());
+        populate_ledger(
+            ledger.as_ref(),
+            1,
+            vec![
+                make_recovered_output(1, 100, 10_000),
+                make_recovered_output(2, 101, 5_000),
+            ],
+            20,
+        );
+        ledger
+    }
+
     #[tokio::test]
     async fn build_then_submit_marks_outputs_spent() {
         let ledger = Arc::new(test_ledger());
@@ -1060,5 +1207,319 @@ mod tests {
             err,
             PendingTxError::DiscardBlockedPendingDaemonAck { .. }
         ));
+    }
+
+    // ── C7 R9 per-error-class (segment-2h emission shape) ─────────
+
+    #[tokio::test]
+    async fn submit_double_spend_emits_terminal_discarded() {
+        let sink = Arc::new(AssertionSink::new());
+        let pending = test_pending_tx_with_sink(funded_ledger(), Arc::clone(&sink) as Arc<dyn DiagnosticSink>);
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedTerminal {
+            kind: TerminalErrorKind::DoubleSpend,
+        }));
+
+        let err = pending.submit(built.id).await.unwrap_err();
+        assert!(matches!(
+            err,
+            SubmitError::DaemonRejectedTerminal {
+                kind: TerminalErrorKind::DoubleSpend
+            }
+        ));
+        assert_eq!(pending.outstanding(), 0);
+
+        let events = sink.recorded_pending();
+        assert!(
+            matches!(
+                events.as_slice(),
+                [
+                    PendingTxDiagnostic::BuildAttempted { .. },
+                    PendingTxDiagnostic::BuildSucceeded { .. },
+                    PendingTxDiagnostic::SubmitAttempted { .. },
+                    PendingTxDiagnostic::Discarded {
+                        reason: DiscardReason::DaemonRejectedTerminal {
+                            kind: TerminalErrorKind::DoubleSpend
+                        },
+                        ..
+                    },
+                ]
+            ),
+            "unexpected pending diagnostic stream: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_fee_too_low_releases_outputs() {
+        let sink = Arc::new(AssertionSink::new());
+        let ledger = funded_ledger();
+        let pending = test_pending_tx_with_sink(Arc::clone(&ledger), Arc::clone(&sink) as Arc<dyn DiagnosticSink>);
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedTerminal {
+            kind: TerminalErrorKind::FeeTooLow,
+        }));
+        let err = pending.submit(built.id).await.unwrap_err();
+        assert!(matches!(
+            err,
+            SubmitError::DaemonRejectedTerminal {
+                kind: TerminalErrorKind::FeeTooLow
+            }
+        ));
+        assert_eq!(pending.outstanding(), 0);
+
+        let second = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("outputs released after terminal reject");
+        assert_eq!(second.id.raw(), 1);
+        let events = sink.recorded_pending();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(
+                    e,
+                    PendingTxDiagnostic::Discarded {
+                        reason: DiscardReason::DaemonRejectedTerminal {
+                            kind: TerminalErrorKind::FeeTooLow
+                        },
+                        ..
+                    }
+                )),
+            "expected terminal Discarded emission: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_malformed_releases_outputs() {
+        let pending = test_pending_tx(funded_ledger());
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonRejectedTerminal {
+            kind: TerminalErrorKind::Malformed,
+        }));
+        assert!(matches!(
+            pending.submit(built.id).await,
+            Err(SubmitError::DaemonRejectedTerminal {
+                kind: TerminalErrorKind::Malformed
+            })
+        ));
+        assert_eq!(pending.outstanding(), 0);
+        pending
+            .build(standard_request(7_000))
+            .await
+            .expect("outputs released");
+    }
+
+    #[tokio::test]
+    async fn submit_timeout_keeps_reservation_in_flight() {
+        let sink = Arc::new(AssertionSink::new());
+        let pending = test_pending_tx_with_sink(funded_ledger(), Arc::clone(&sink) as Arc<dyn DiagnosticSink>);
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonAmbiguous {
+            kind: AmbiguousErrorKind::DaemonTimeout,
+            reservation_id: built.id,
+        }));
+
+        let err = pending.submit(built.id).await.unwrap_err();
+        assert!(matches!(
+            err,
+            SubmitError::DaemonAmbiguous {
+                kind: AmbiguousErrorKind::DaemonTimeout,
+                ..
+            }
+        ));
+        assert_eq!(pending.outstanding(), 1);
+
+        let events = sink.recorded_pending();
+        assert!(
+            matches!(
+                events.last(),
+                Some(PendingTxDiagnostic::SubmitPendingResolution {
+                    kind: AmbiguousErrorKind::DaemonTimeout,
+                    ..
+                })
+            ),
+            "expected SubmitPendingResolution, got {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                PendingTxDiagnostic::Discarded { .. }
+            )),
+            "ambiguous submit must not emit Discarded: {events:?}"
+        );
+
+        let discard_err = pending
+            .discard(built.id, DiscardReason::ConsumerExplicit)
+            .unwrap_err();
+        assert!(matches!(
+            discard_err,
+            PendingTxError::DiscardBlockedPendingDaemonAck { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn submit_daemon_unavailable_same_as_timeout() {
+        let pending = test_pending_tx(funded_ledger());
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonAmbiguous {
+            kind: AmbiguousErrorKind::DaemonUnavailable,
+            reservation_id: built.id,
+        }));
+        assert!(matches!(
+            pending.submit(built.id).await,
+            Err(SubmitError::DaemonAmbiguous {
+                kind: AmbiguousErrorKind::DaemonUnavailable,
+                ..
+            })
+        ));
+        assert_eq!(pending.outstanding(), 1);
+    }
+
+    // ── C7 emission/return coherence ──────────────────────────────
+
+    #[tokio::test]
+    async fn pending_tx_build_emission_return_coherence() {
+        let sink = Arc::new(AssertionSink::new());
+        let pending = test_pending_tx_with_sink(funded_ledger(), Arc::clone(&sink) as Arc<dyn DiagnosticSink>);
+        let err = pending
+            .build(standard_request(999_999_999))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SendError::InsufficientFunds { .. }));
+        let events = sink.recorded_pending();
+        assert!(
+            matches!(
+                events.as_slice(),
+                [
+                    PendingTxDiagnostic::BuildAttempted { .. },
+                    PendingTxDiagnostic::BuildFailed { .. },
+                ]
+            ),
+            "build error must emit BuildFailed before return: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_tx_submit_snapshot_invalidated_coherence() {
+        let sink = Arc::new(AssertionSink::new());
+        let ledger = funded_ledger();
+        let build_snapshot = derive_snapshot_id(&ledger.snapshot());
+        let pending = test_pending_tx_with_sink(Arc::clone(&ledger), Arc::clone(&sink) as Arc<dyn DiagnosticSink>);
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        assert_eq!(built.snapshot_id, build_snapshot);
+
+        populate_ledger(
+            ledger.as_ref(),
+            21,
+            vec![make_recovered_output(3, 200, 1_000)],
+            25,
+        );
+
+        let err = pending.submit(built.id).await.unwrap_err();
+        let SubmitError::SnapshotInvalidated {
+            reservation_snapshot,
+            current_snapshot,
+        } = err
+        else {
+            panic!("expected SnapshotInvalidated, got {err:?}");
+        };
+        assert_eq!(reservation_snapshot, build_snapshot);
+        assert_ne!(current_snapshot, build_snapshot);
+        assert_eq!(pending.outstanding(), 1);
+
+        let events = sink.recorded_pending();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                PendingTxDiagnostic::SubmitSnapshotInvalidated { .. }
+            )),
+            "SnapshotInvalidated must emit SubmitSnapshotInvalidated: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(
+                e,
+                PendingTxDiagnostic::Discarded { .. }
+            )),
+            "lazy R5: no auto-Discarded on snapshot invalidation: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_tx_panicking_sink_unwind_safe_on_build() {
+        let sink = Arc::new(PanickingSink::new(PanickingSinkTrigger::Any));
+        let pending = test_pending_tx_with_sink(funded_ledger(), sink);
+        let join = tokio::spawn(async move {
+            pending.build(standard_request(7_000)).await
+        })
+        .await;
+        assert!(
+            join.is_err(),
+            "PanickingSink::Any must panic the spawned build task"
+        );
+
+        let recovery = test_pending_tx(funded_ledger());
+        assert_eq!(recovery.outstanding(), 0);
+        recovery
+            .build(standard_request(7_000))
+            .await
+            .expect("engine usable after sink panic");
+        assert_eq!(recovery.outstanding(), 1);
+    }
+
+    /// Hybrid-style snapshot rotation: build at S1, advance ledger,
+    /// submit observes lazy-R5 `SnapshotInvalidated` (segment-2h).
+    #[tokio::test]
+    async fn hybrid_pending_tx_snapshot_rotation_on_submit() {
+        let sink = Arc::new(AssertionSink::new());
+        let ledger = funded_ledger();
+        let s1 = derive_snapshot_id(&ledger.snapshot());
+        let pending = test_pending_tx_with_sink(Arc::clone(&ledger), Arc::clone(&sink) as Arc<dyn DiagnosticSink>);
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build at S1");
+        assert_eq!(built.snapshot_id, s1);
+
+        populate_ledger(
+            ledger.as_ref(),
+            21,
+            vec![make_recovered_output(9, 300, 2_000)],
+            30,
+        );
+        let s2 = derive_snapshot_id(&ledger.snapshot());
+        assert_ne!(s1, s2);
+
+        let SubmitError::SnapshotInvalidated {
+            reservation_snapshot,
+            current_snapshot,
+        } = pending.submit(built.id).await.unwrap_err()
+        else {
+            panic!("submit after rotation must return SnapshotInvalidated");
+        };
+        assert_eq!(reservation_snapshot, s1);
+        assert_eq!(current_snapshot, s2);
+
+        pending
+            .discard(built.id, DiscardReason::ConsumerExplicit)
+            .expect("consumer releases stale reservation");
+        assert_eq!(pending.outstanding(), 0);
     }
 }

@@ -159,6 +159,8 @@ pub mod error;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_ledger;
 #[cfg(any(test, feature = "test-helpers"))]
+pub(crate) mod fault_injecting_pending_tx;
+#[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_refresh;
 pub mod fee_estimator;
 pub mod lifecycle;

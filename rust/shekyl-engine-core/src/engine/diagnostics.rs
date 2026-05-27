@@ -1136,6 +1136,8 @@ pub struct AssertionSink {
     /// snapshot, and the C7 tests do not race readers against the
     /// producer task.
     events: std::sync::Mutex<Vec<RefreshDiagnostic>>,
+    /// PR 5 C7 companion buffer for [`PendingTxDiagnostic`] events.
+    pending_events: std::sync::Mutex<Vec<PendingTxDiagnostic>>,
 }
 
 #[cfg(any(test, feature = "test-helpers"))]
@@ -1146,6 +1148,7 @@ impl AssertionSink {
     pub fn new() -> Self {
         Self {
             events: std::sync::Mutex::new(Vec::new()),
+            pending_events: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -1172,6 +1175,24 @@ impl AssertionSink {
             .expect("AssertionSink events poisoned")
             .len()
     }
+
+    /// Snapshot the recorded [`PendingTxDiagnostic`] stream (PR 5 C7).
+    #[allow(dead_code)] // Phase 1 author: canonical C7 pending coherence-test inspector.
+    pub fn recorded_pending(&self) -> Vec<PendingTxDiagnostic> {
+        self.pending_events
+            .lock()
+            .expect("AssertionSink pending_events poisoned")
+            .clone()
+    }
+
+    /// Number of pending-tx events observed since construction.
+    #[allow(dead_code)] // Phase 1 author: convenience inspector for count-only assertions.
+    pub fn count_pending(&self) -> usize {
+        self.pending_events
+            .lock()
+            .expect("AssertionSink pending_events poisoned")
+            .len()
+    }
 }
 
 #[cfg(any(test, feature = "test-helpers"))]
@@ -1180,6 +1201,13 @@ impl DiagnosticSink for AssertionSink {
         self.events
             .lock()
             .expect("AssertionSink events poisoned")
+            .push(event);
+    }
+
+    fn emit_pending_tx(&self, event: PendingTxDiagnostic) {
+        self.pending_events
+            .lock()
+            .expect("AssertionSink pending_events poisoned")
             .push(event);
     }
 }
@@ -1322,6 +1350,15 @@ impl DiagnosticSink for PanickingSink {
         if fires {
             panic!(
                 "PanickingSink configured trigger {:?} fired on emission {:?}",
+                self.trigger, event
+            );
+        }
+    }
+
+    fn emit_pending_tx(&self, event: PendingTxDiagnostic) {
+        if self.trigger == PanickingSinkTrigger::Any {
+            panic!(
+                "PanickingSink configured trigger {:?} fired on pending-tx emission {:?}",
                 self.trigger, event
             );
         }
