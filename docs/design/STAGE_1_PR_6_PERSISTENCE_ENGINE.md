@@ -1,13 +1,14 @@
 # Stage 1 PR 6 — `PersistenceEngine` extraction — design
 
-**Status.** **Design open — Round 2 closed (2026-05-27); Round 3 not
-started.** Planning branch `feat/stage-1-pr6-persistence-engine-design`; PR
-to `dev` after Round 3 closes §7.X + readiness gate. Opened from `dev` tip
-`b9c03dc24` (post–PR #81 `PendingTxEngine` merge). This document follows
+**Status.** **Design closed — Round 3 complete (2026-05-27).** Ready for
+Phase 1 on `feat/stage-1-pr6-persistence-engine` after HKDF implementation
+PR merges to `dev`. Planning doc branch:
+`feat/stage-1-pr6-persistence-engine-design` → PR to `dev`. Opened from `dev`
+tip `b9c03dc24` (post–PR #81 `PendingTxEngine` merge). This document follows
 [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) and
 [`26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc).
-**Implementation is out of scope until Round 3 closes** — lands on
-`feat/stage-1-pr6-persistence-engine` after the §6 readiness gate.
+**Phase 1 implementation** lands on `feat/stage-1-pr6-persistence-engine`
+after §6.3 prerequisites (HKDF PR merged to `dev`).
 
 **Round 1 closure pin (2026-05-27).** Load-bearing question disposed:
 **F5(b)** — minimum derived keys at trait surface (§5.9); R9 **not**
@@ -21,9 +22,9 @@ in Round 1. Lens 1 **bounded** at trait surface (§5.0).
 ratified per-region HKDF wrap keys (`wrap_key_region_1`, `wrap_key_region_2`).
 §5.9 narrative updated below: **`StateWrapKey` = `wrap_key_region_2`** — F5(b)
 steady-state blast radius is **region-2 (ledger cache) at this rotation**,
-not shared-`file_kek` "full wallet." HKDF implementation + KAT regen are
-**out of PR 6** (separate commits); PR 6 spec-amends and implements against
-the amended prescription.
+not shared-`file_kek` "full wallet." **HKDF envelope implementation + KAT
+regen are a prerequisite PR** merged to `dev` before the PR 6 implementation
+branch cuts; PR 6 spec-amends (C0) and consumes the landed derivation (C2c).
 
 **Reopen criterion:** quiescence/close-ordering the trait cannot express;
 multisig §5.4.1 trigger fires; **or** steady-state trait methods regain
@@ -269,7 +270,7 @@ open.
 | Save failure typing | **R10:** `type Error: Into<PersistenceError>` (not `OpenError`; §5.10) |
 | Close refuses in-flight pending | Unchanged — `outstanding_pending_txs()` before persist |
 | No `load_state` on trait | Q9.11 — construction-only |
-| Cross-record consistency under `rotate_password` | **Implementor-internal invariant; not exposed at trait.** Region 1 (`.wallet.keys`) rewrap preserves bytes used as AEAD AAD for region 2; `keys_file_bytes` cache updated so subsequent `save_state` anti-swap binding unchanged (`handle.rs:500–506`). Trait exposes `rotate_password` only; Poly1305 / `state_tag` contract stays inside `WalletFile`. Round 2 **2d** may add rustdoc pin on impl, not new trait methods. |
+| Cross-record consistency under `rotate_password` | Region-2 AAD binds `seed_block_tag` (region-1 Poly1305 tag), not wrap header — **2d D2**. `keys_file_bytes` cache updated on rewrap; region-1 ciphertext unchanged. |
 
 ---
 
@@ -282,7 +283,8 @@ doc-only** per §8.2.
 |-----|--------------|-----------------|
 | **0a** | §2.6 three-method shape: `StateWrapKey` / `PrefsHmacKey` / `Credentials` on rotate only + §4 async rows | **C0** |
 | **0a′** | Parent spec §4.3 + HKDF region derivation doc cross-ref in §2.6 / Round 6 note: cache **`wrap_key_region_2`** only; `file_kek` transient at open. **Layout unchanged; no `file_version` bump.** Tier-3 KAT regen when `wallet_envelope` implements HKDF — **not in PR 6 C0.** | **C0** (with 0a) |
-| **0o** | Trait rustdoc: `StateWrapKey` = `wrap_key_region_2`; `rotate_password` invalidates cached sealing keys | **C1** |
+| **0o** | `StateWrapKey` / `PrefsHmacKey` types: `ZeroizeOnDrop`; redacted `Debug`/`Display`; **no** `Serialize`/`Deserialize`; trait rustdoc (HKDF mapping, rotate invalidates cache, G4 backup warning) | **C1** |
+| **0p** | Open-path ritual: derive subkeys → zeroize `file_kek` + `wrap_key_region_1` before returning `Engine`; test gate | **C5** + **C6** |
 | **0b** | §2.6: `PersistenceError`; durability rustdoc (`Ok` = power-loss safe) | **C0** |
 | **0b′** | §2.6 Round 6 note: minimum-key-at-trait + blast-radius rationale (§5.9 wargame) | **C0** |
 | **0c** | Confirm §4 idempotency rows for persistence methods | **C0** (confirm only) |
@@ -296,7 +298,7 @@ doc-only** per §8.2.
 | **0k** | §6.4: no `MockPersistence` | **C6** |
 | **0l** | Stage 4: `ActorRef<PersistenceActor>` same trait | doc only |
 | **0m** | R6: §2.6 forward-compatible with V3.1 multisig per §5.4.1; amendment triggers named | **C0** (doc confirm) |
-| **0n** | `seal_state_*` uses `wrap_key_region_2` (session-cached or re-HKDF from transient `file_kek` at open only) — no Argon2 per autosave | **C2c** (engine-file / crypto-pq; depends on HKDF impl commit) |
+| **0n** | Additive `save_state_with_key(&StateWrapKey, &WalletLedger)`; consumes HKDF region keys from **prerequisite PR**; old `save_state(password, …)` stays until **C7** | **C2c** |
 
 ---
 
@@ -604,24 +606,56 @@ per periodic `save_state`** (e.g. touch YubiKey every autosave).
 file**; **seed** gates **identity recovery**. Document in wallet UX, not
 PR 6 trait.
 
-### §5.10 R10 — `type Error` must not be `OpenError` (F6 — Round 1 pin)
+### §5.10 R10 — `type Error` must not be `OpenError` (F6 — Round 1; **Round 3 amendment**)
 
 Pinned §2.6 has `type Error: Into<OpenError>`. `OpenError` is lifecycle-
 open vocabulary (wrong password, network mismatch, outstanding pending).
 Save failures (disk full, atomic rename failure, fsync error, oversize
 blob) are **lossy and misleading** when squeezed into open-shaped variants.
 
-**Round 1 disposition (proposed).** Phase 0a amends §2.6 to:
+**Trait error (Phase 0a / C0):**
 
 ```rust
-type Error: Into<PersistenceError>;  // new enum in engine/error.rs
+type Error: Into<PersistenceError>;  // engine/error.rs
 ```
 
-`map_persistence_error(WalletFileError, …) -> PersistenceError` at the
-Engine boundary; `OpenError` remains for `create` / `open_*` / `close`
-orchestration only. Wallet-file errors from save map through
-`PersistenceError::WalletFile { .. }` or `#[from]` via `IoError` — exact
-shape closed in **2g**; direction fixed in Round 1.
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum PersistenceError {
+    #[error("wallet file error: {0}")]
+    WalletFile(#[from] shekyl_engine_file::WalletFileError),
+    #[error("prefs error: {0}")]
+    Prefs(#[from] shekyl_engine_prefs::PrefsError),
+}
+```
+
+**Orchestrator mapping (Round 3 pin — do not collapse back into `Io`).**
+
+| Path | Error type | Rationale |
+|------|------------|-----------|
+| `PersistenceEngine::{save_state, save_prefs, rotate_password}` | `PersistenceError` | R10 — save/rotate vocabulary |
+| `Engine::close` | `OpenError::Persistence(#[from] PersistenceError)` | **New variant** — preserves type-level separation at the lifecycle boundary |
+| `Engine::change_password` | `ChangePasswordError` (below) | Partial-failure semantics (**2b** amendment) |
+
+```rust
+#[derive(Debug, thiserror::Error)]
+pub enum OpenError {
+    // … existing variants …
+    #[error("persistence failure during close: {0}")]
+    Persistence(#[from] PersistenceError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ChangePasswordError {
+    #[error("password rotation failed: {0}")]
+    RotateFailed(#[from] PersistenceError),
+    #[error("password rotated but prefs flush failed: {0}")]
+    RotatedButPrefsFlushFailed(#[from] PersistenceError),
+}
+```
+
+Mapping `PersistenceError` → `OpenError::Io(IoError::WalletFile { … })` is
+**rejected** — it undoes R10. C3/C5 wire the shapes above mechanically.
 
 ### §5.11 Engine vs `Wallet` orchestrator (F7)
 
@@ -681,9 +715,12 @@ unless the user requests finer splits).
 | **2c** | Test matrix + call-site sweep pins | R3 | **Closed** |
 | **2d** | **R7** Stage 4 mailbox keys; **F3** implementor rustdoc | R7 | **Closed** |
 | **2g** | Close-out: §4 / §6 / Round 3 gate; **R5**, **R10** | R5, R10 | **Closed** |
+| **2h** | Open-path HKDF ritual + `file_kek` non-retention gate | — | **Closed** (Round 3) |
 | **2i** | Wider-substrate audit (template §6 — after 2g) | R4 | **Closed** |
 
 ### Round 2 segment 2a (2026-05-27) — audit-readiness (R1, R8)
+
+*Round 3 amendments: **A1**, **A2** below.*
 
 **R1 — close vs concurrent refresh.**
 
@@ -693,9 +730,17 @@ task calls `close` and persists a stale ledger snapshot — classic TOCTOU on
 wallet state.
 
 **Stage 1 structural defense (today).** [`Engine::close`](../../rust/shekyl-engine-core/src/engine/lifecycle.rs)
-takes `self` by value. Any in-flight `refresh` / `apply_scan_result` on the
-**same** `Engine` instance cannot run concurrently: the type system forbids
-`&mut self` refresh while `close(self)` is prepared. `close` sequence:
+takes `self` by value. Direct calls on one `Engine` value cannot race `&mut self`
+refresh with `close(self)`.
+
+**A1 (Round 3) — `Arc` / background refresh.** Production refresh uses
+`Arc<RwLock<Engine<…>>>` (background task holds a clone). `close` requires:
+(1) stop/join the refresh task so no live `Arc` holders remain;
+(2) `Arc::try_unwrap` (or equivalent) to recover unique `Engine` ownership;
+(3) then `close`. Failure at step 2 is a **runtime** error, not a borrow-checker
+error. §6.1 gates orchestrator discipline: **refresh quiesced before close**.
+
+`close` sequence (unique ownership assumed):
 
 1. `outstanding_pending_txs() == 0` (PR 5 lock).
 2. `ledger.read()` → `save_state` → `save_prefs`.
@@ -728,12 +773,22 @@ task.
 **Stage 4.** Same await rule as R1: `close` awaits persistence replies.
 Trait methods remain `async` so the await point exists at the orchestrator.
 
-**Disposition.** R8 **closed** with the same §2.8.6 pin; does not expand PR 6
-scope beyond documentation + §6.1 reviewer gate.
+**A2 (Round 3) — cancellation safety on `close`.** Pin in `Engine::close`
+rustdoc (C5) and §6.1:
+
+| When `close` future is dropped | Persist outcome | Caller obligation |
+|-------------------------------|-----------------|-------------------|
+| Before `save_state` await starts | Not saved | Safe to treat as not closed |
+| During `save_state` / `save_prefs` await | **Unknown** | Must reopen and verify ledger/prefs; do not assume durability |
+| After successful await | Saved | Normal close |
+
+**Disposition.** R8 **closed** with §2.8.6 await pin + **A2** cancellation table.
 
 ---
 
 ### Round 2 segment 2b (2026-05-27) — R2 `change_password` prefs flush
+
+*Round 3 amendment: **B1**.*
 
 **Question.** Should `change_password` also persist `.prefs.toml`?
 
@@ -752,21 +807,27 @@ prefs edits even though the new password unlocks the wallet.
 
 - **`PersistenceEngine` stays three methods.** Password rotation is
   `rotate_password`; prefs durability is `save_prefs`.
-- **`Engine::change_password` (C5)** calls, in order:
-  1. `persistence.rotate_password(old, new, new_kdf).await`
-  2. On `Ok`, re-derive / refresh orchestrator `StateWrapKey` +
-     `PrefsHmacKey` if rotation path ever changes `file_kek` (today unchanged —
-     cache remains valid; document explicitly).
-  3. `persistence.save_prefs(&prefs_key, &self.prefs).await` — **best-effort
-     durability** of prefs alongside the password ceremony.
+- **`Engine::change_password` (C5)** returns `Result<(), ChangePasswordError>`
+  (§5.10) and calls, in order:
+  1. `persistence.rotate_password(old, new, new_kdf).await` →
+     `ChangePasswordError::RotateFailed` on failure.
+  2. On success: orchestrator sealing keys remain valid today (`file_kek`
+     unchanged); document explicitly. If a future rotation replaces `file_kek`,
+     orchestrator **must** re-derive `StateWrapKey` + `PrefsHmacKey`.
+  3. `persistence.save_prefs(&prefs_key, &self.prefs).await` →
+     **`ChangePasswordError::RotatedButPrefsFlushFailed`** on failure (password
+     **did** rotate on disk; caller may retry `save_prefs` only).
 
-**Rejected:** new `rotate_password_and_prefs` trait method (bundling violates
-validation-surface discipline); skipping prefs flush (user-visible data loss on
-crash between rotate and close).
+**B1 (Round 3).** Reject silent prefs failure after successful rotate. The
+caller must know which side of the line they're on.
+
+**Rejected:** new `rotate_password_and_prefs` trait method; skipping prefs flush.
 
 ---
 
 ### Round 2 segment 2c (2026-05-27) — R3 test matrix + call-site sweep
+
+*Round 3 amendments: **C1** (stale-key tests), **C2** (`save_as`).*
 
 **Call-site sweep (V3.0 production).**
 
@@ -777,7 +838,7 @@ crash between rotate and close).
 | `WalletFile::save_state` | `handle.rs` | Trait impl; `StateWrapKey` param (**C2c**, **C3**) |
 | `WalletFile::save_prefs` | `handle.rs` | Trait impl; `PrefsHmacKey` param (**C3**) |
 | `WalletFile::rotate_password` | `handle.rs` | Trait impl (**C3**) |
-| `WalletFile::save_as` | `handle.rs` | **Out of trait** — stays inherent; takes password until HKDF+C2c land |
+| `WalletFile::save_as` | `handle.rs` | **Out of trait** — inherent clone-to-new-path; runs full open password → Argon2 → seal for a **new** wallet pair with caller-supplied password (**C2**). Not session `StateWrapKey` |
 | FFI / GUI | downstream | Unchanged in PR 6; still supply password per save until rewrite |
 
 **Grep gates (§6):** no `MockPersistence`; steady-state paths use sealing keys.
@@ -792,14 +853,19 @@ crash between rotate and close).
 | `create` → `close` round-trip | `lifecycle.rs` | Keep — ledger bytes durable |
 | **`persistence_trait_save_state_round_trip`** | `shekyl-engine-core` | **New** — `WalletFile` via `PersistenceEngine`, tempfile, sealing keys from open |
 | **`change_password_flushes_prefs`** | `shekyl-engine-core` | **New** — mutate prefs in memory, rotate, reopen, read prefs file |
-| HKDF region KATs | `docs/test_vectors/…` | **Separate commit** per HKDF doc §5 — not C6 |
+| **`stale_state_wrap_key_fails_after_rotate`** | `shekyl-engine-core` | **C1** — open → `save_state(k)` ok → `rotate_password` ok → `save_state(k_stale)` → `PersistenceError::WalletFile` with `WalletEnvelopeError::InvalidPasswordOrCorrupt` (region-2 AEAD MAC failure) |
+| **`rederived_state_wrap_key_succeeds_after_rotate`** | `shekyl-engine-core` | **C1** — same, but re-derive `StateWrapKey` from open ritual → `save_state` ok |
+| **`open_does_not_retain_file_kek`** | `shekyl-engine-core` | **0p / C6** — after `open_full`, orchestrator/`WalletFile` holds `wrap_key_region_2` + `prefs_hmac_key`, not `file_kek` |
+| HKDF region KATs | `docs/test_vectors/…` | **Prerequisite PR** — not PR 6 C6 |
 
-**Disposition.** R3 **closed.** Matrix binds to §7.X commits; no property tests
-for disk-full (covered by error typing in **2g** / **2i**).
+**Disposition.** R3 **closed**; **C1** tests are load-bearing for F5(b) fail-loud
+discipline (Round 3 **F-R3.8**).
 
 ---
 
 ### Round 2 segment 2d (2026-05-27) — R7 mailbox + F3 implementor rustdoc
+
+*Round 3 amendments: **D1**, **D2**; open ritual in **2h**.*
 
 **R7 — `Credentials` / sealing-key lifetimes in Stage 4 messages.**
 
@@ -814,22 +880,34 @@ session `Zeroizing<StateWrapKey>` / `Zeroizing<PrefsHmacKey>`; each flush
 **clones** 32-byte keys into the message (negligible vs disk IO). Reject
 `&Credentials` in mailbox (non-`'static` borrow).
 
-Document in Phase **0l** (trait module rustdoc) and `V3_ENGINE_TRAIT_BOUNDARIES.md`
-§2.6 amendment note — **C0** doc pin, not PR 6 actor code.
+**D1 (Round 3) — mailbox queueing for secrets.**
+
+- `SaveState` / `SavePrefs`: `send` is acceptable (sealing keys only; bounded
+  clone lifetime in queue).
+- **`RotatePassword`:** use **`ActorRef::call`** (request/reply), not unbounded
+  `send`, so password material is not parked in a deep mailbox queue under
+  backpressure.
+
+Document in Phase **0l** (C0/C1 rustdoc).
 
 **F3 — `rotate_password` cross-record invariant (implementor rustdoc).**
 
 Pin on `WalletFile` / `PersistenceEngine` impl (C3):
 
-- Rewrap updates `keys_file_bytes` cache so region-2 AAD binding stays
-  consistent with on-disk `.wallet.keys`.
-- Does **not** rewrite region 1 AEAD ciphertext or `.wallet` (spec §4.2).
-- On success, orchestrator sealing keys remain valid when `file_kek` unchanged;
-  if a future rotation path replaces `file_kek`, orchestrator must re-derive
-  (already pinned on trait `rotate_password` — Appendix A).
+- Rewrap updates `keys_file_bytes` cache (wrap layer changes; region-1
+  ciphertext bytes unchanged).
+- Region-2 AEAD AAD is `magic \|\| version \|\| seed_block_tag` per
+  [`WALLET_FILE_FORMAT_V1.md`](../WALLET_FILE_FORMAT_V1.md) §2.2 — **`seed_block_tag`
+  is the region-1 Poly1305 tag** (immutable across password rotation because
+  region-1 ciphertext is unchanged). AAD does **not** bind to the wrap header.
+- Does **not** rewrite `.wallet` region-2 ciphertext on rotate (spec §4.2).
+- Orchestrator sealing keys remain valid when `file_kek` unchanged (**2b**).
 
-**Disposition.** F3 **closed** as implementor rustdoc in C3; no trait API
-change.
+**D2 (Round 3).** F3 rustdoc must state the `seed_block_tag` AAD binding
+explicitly — avoids the self-contradictory "whole keys_file_bytes as AAD"
+reading.
+
+**Disposition.** F3 **closed** as implementor rustdoc in C1/C3.
 
 ---
 
@@ -845,29 +923,9 @@ change.
 budget **and** profiling attributes it to persist IO on the async runtime
 thread — then evaluate `spawn_blocking` in a dedicated perf PR, not PR 6.
 
-**R10 — `PersistenceError` binding form (finalized).**
-
-```rust
-// rust/shekyl-engine-core/src/engine/error.rs (new)
-#[derive(Debug, thiserror::Error)]
-pub enum PersistenceError {
-    /// Wallet-file orchestrator failure on save / rotate (envelope, payload,
-    /// atomic rename, advisory lock, …). Mapped verbatim — not collapsed into
-    /// [`OpenError::IncorrectPassword`] (save path must not grow a password
-    /// oracle).
-    #[error("wallet file error: {0}")]
-    WalletFile(#[from] shekyl_engine_file::WalletFileError),
-
-    /// Prefs sidecar failure on `save_prefs`.
-    #[error("prefs error: {0}")]
-    Prefs(#[from] shekyl_engine_prefs::PrefsError),
-}
-```
-
-`PersistenceEngine::type Error: Into<PersistenceError>`. `Engine::close` maps
-`PersistenceError` → `OpenError::Io(IoError::WalletFile { detail })` (or a
-dedicated `OpenError::Persistence` variant if review prefers — **pick one in
-C3**, direction fixed here).
+**R10 — `PersistenceError` + lifecycle mapping (finalized Round 3).** See
+§5.10. `Engine::close` uses **`OpenError::Persistence(PersistenceError)`** —
+not `OpenError::Io`. C3/C5 are mechanical.
 
 **§4 Phase 0.** All pins in §4 table are **binding-form-pinned**; no new pins
 surfaced in Round 2.
@@ -883,17 +941,19 @@ surfaced in Round 2.
 | Real `WalletFile` tests only | §6.4 | C6 |
 | §6.1 flush / close ordering | §6.1, **2a** | C5, C6 |
 | `change_password` prefs flush | **2b** | C5 |
-| HKDF region keys in envelope | HKDF doc | **Separate** from C0 |
+| HKDF region keys in envelope | HKDF doc | **Prerequisite PR** merged before implementation branch |
+| F5(b) grep gates | §6.2 | C6 / CI |
+| Atomic-write tests cited | §6.3 | `shekyl-engine-file/src/atomic.rs` tests |
+| G4 backup rustdoc | **2i** | **C1** (blocking) |
 
-**Round 3 readiness gate (template §8.3).**
+**Round 3 readiness gate (template §8.3) — closed.**
 
 - [x] Round 1 closed (§5.7).
-- [x] Round 2 segments 2a–2d, 2g, 2i closed.
+- [x] Round 2 segments 2a–2d, **2h**, 2g, 2i closed (+ Round 3 precision amendments).
 - [x] §4 Phase 0 pins enumerated with commit mapping (§7.X).
-- [x] §6 mechanical gates listed; §6.1 reviewer gate written.
-- [x] §7.X commit decomposition present.
-- [ ] Round 3: adversarial pass on §7.X ordering + §6 gate completeness
-  (next step).
+- [x] §6 mechanical + F5(b) grep gates + prerequisites (§6.2–§6.3).
+- [x] §7.X: ten commits, build-at-every-commit order, additive C2c (F-R3.2).
+- [x] R10 / `ChangePasswordError` shapes decided (§5.10).
 
 ### §5.6.9 Discipline-citation matrix (Round 2 segment 2g)
 
@@ -902,7 +962,7 @@ surfaced in Round 2.
 | §8.3.1 lens 1 (bounded) | §3.3, §5.0, **2a** | Trait surface only; teardown in §2.8.6 |
 | §8.3.2 anti-patterns | §5.6, **2b** (no bundle rotate+prefs on trait) | PR 5 MockPersistence precedent |
 | §8.3.3 closure rule | Status banner, §5.7, segment headers dated | PR 5 structure |
-| §8.3.4 §7.X / sub-commits | §7.X, **2c** test→commit map | Seven commits; HKDF impl outside C0 |
+| §8.3.4 §7.X / sub-commits | §7.X, **2c** test→commit map | Ten commits C0/C1/C2a–c/C3–C7; HKDF prerequisite PR |
 | Principles 4–8 | §3.2 | WALLET_REWRITE_PLAN 4–8 |
 | Architectural inheritance | §3.4, HKDF amendment | Implementor Shekyl-native; trait earned |
 | Wider-substrate audit | **2i** | G1–G6 below |
@@ -931,8 +991,15 @@ Lesson: torn writes without tmp→rename→fsync discipline.
 
 Shekyl: `atomic_write_file` + trait rustdoc `Ok(())` = durable (Phase **0b**).
 
-**PR 6 disposition:** Already pinned; C6 adds no fault injection (defer power-loss
-simulation to `shekyl-engine-file` atomic tests if missing).
+**PR 6 disposition (Round 3 **I1** — resolved).** Existing tests in
+[`shekyl-engine-file/src/atomic.rs`](../../rust/shekyl-engine-file/src/atomic.rs):
+`writes_to_fresh_target`, `overwrites_existing_target_atomically`,
+`multiple_writes_to_same_target_each_land_fully` — prove tmp→rename semantics
+and no torn hybrid files under normal OS behavior. **No** simulated power-loss
+crash injection in-tree today. PR 6 does not add crash injection; durability
+contract is enforced by `atomic_write_file` discipline + trait rustdoc. True
+power-loss fault injection is a **V3.2 FOLLOWUPS** candidate if auditors require
+it beyond unit-level atomic tests.
 
 **G3 — Disk full / quota / read-only filesystem.**
 
@@ -951,8 +1018,11 @@ Lesson: `wallet.dat` copy mid-write produces unreadable backup.
 Shekyl: docs should say: copy only when wallet closed or use `save_as` to a
 quiescent path. **Not** a trait method.
 
-**PR 6 disposition:** One sentence in wallet-file module rustdoc; optional
-`docs/WALLET_FILE_FORMAT_V1.md` §user-ops pointer in C7 — not blocking.
+**PR 6 disposition (Round 3 **I2** — blocking).** One sentence in
+`PersistenceEngine` / `WalletFile` module rustdoc (**C1**): do not copy the
+wallet directory while the advisory lock is held; use `close` + filesystem
+copy or `save_as` to a quiescent path. Optional `WALLET_FILE_FORMAT_V1.md`
+user-ops cross-ref in **C7**.
 
 **G5 — Network filesystem / NFS close-to-open.**
 
@@ -972,7 +1042,29 @@ G1–G4 and G6 land in PR 6 docs/tests as above.
 
 ---
 
-## §6 Review checklist (Round 2 close-out target)
+### Round 2 segment 2h (2026-05-27) — open-path ritual (Round 3 **H1**)
+
+**Problem.** F5(b) blast-radius is true only if `file_kek` and `wrap_key_region_1`
+do not survive past open. The sequence must be explicit and test-gated.
+
+**Open ritual (normative for `Engine::open_full` / `open_*` after PR 6):**
+
+1. Argon2(password) → unwrap `file_kek`.
+2. HKDF → `wrap_key_region_1`, `wrap_key_region_2`, `prefs_hmac_key`.
+3. Decrypt region 1 with `wrap_key_region_1`; read `expected_classical_address`.
+4. Decrypt region 2 with `wrap_key_region_2` (or defer if lost-`.wallet` path).
+5. **Zeroize `file_kek` and `wrap_key_region_1`.**
+6. Return `Engine` holding only `Zeroizing<StateWrapKey>` (`wrap_key_region_2`)
+   + `Zeroizing<PrefsHmacKey>` on the orchestrator; implementor must not retain
+   `file_kek` in `WalletFile` steady-state fields (**0p** test).
+
+**Disposition.** **Closed.** Lands in C5 (open path wiring) + C6 (`open_does_not_retain_file_kek`).
+Review gate: any PR that caches `file_kek` on `WalletFile` past step 5 is a
+**blast-radius regression**.
+
+---
+
+## §6 Review checklist (Round 3 — finalized)
 
 Fill binding-check matrix at Round 2 segment **2g**. Mechanical gates:
 
@@ -984,6 +1076,47 @@ Fill binding-check matrix at Round 2 segment **2g**. Mechanical gates:
 - [ ] §8.2: spec amendment commit (C0) separate from consumer commits
 - [ ] Grep: no `MockPersistence`
 - [ ] Grep: steady-state `save_state` / `save_prefs` use sealing keys; `rotate_password` uses `Credentials`
+- [ ] §6.2 F5(b) blast-radius greps (CI)
+- [ ] §6.3 HKDF prerequisite PR merged before implementation branch cuts
+- [ ] §6.3 atomic-write test suite green on prerequisite branch
+
+### §6.2 F5(b) blast-radius grep gates (Round 3 **F-R3.6**)
+
+Run on every PR 6 commit (or at minimum C6):
+
+```bash
+# No password material on steady-state save paths (trait + WalletFile)
+rg 'save_state\s*\([^)]*password' rust/shekyl-engine-core rust/shekyl-engine-file
+rg 'save_prefs\s*\([^)]*password' rust/shekyl-engine-core rust/shekyl-engine-file
+
+# No long-lived file_kek on implementor state (field names; adjust if refactored)
+rg 'file_kek' rust/shekyl-engine-file/src/handle.rs
+
+# Sealing types: ZeroizeOnDrop at definition (manual read of type defs)
+rg 'struct StateWrapKey|struct PrefsHmacKey' rust/
+
+# No accidental wire serialization of sealing keys
+rg 'derive.*Serialize.*StateWrapKey|StateWrapKey.*Serialize' rust/
+rg 'derive.*Serialize.*PrefsHmacKey|PrefsHmacKey.*Serialize' rust/
+
+# Redacted Debug (no raw key bytes in format strings)
+rg 'impl Debug for StateWrapKey|impl Debug for PrefsHmacKey' rust/
+```
+
+**Reviewer interpretation:** `file_kek` may appear in **open** / **rotate**
+functions and local temporaries; it must not appear as a field on
+`WalletFile` / `WalletFileState` after **2h** lands. `rg file_kek` hits require
+per-line disposition in PR review.
+
+### §6.3 Implementation prerequisites (Round 3 **F-R3.7**, **F-R3.9**)
+
+Before cutting `feat/stage-1-pr6-persistence-engine` from `dev`:
+
+1. **HKDF amendment implementation PR** merged — `wrap_key_region_{1,2}`
+   derivation in `shekyl-crypto-pq` / `shekyl-engine-file`; Tier-3 KAT vectors
+   under `docs/test_vectors/WALLET_FILE_FORMAT_V1/` regenerated and CI-green.
+2. **`cargo test -p shekyl-engine-file atomic::`** — atomic write tests pass
+   (see **2i G2** / **I1**).
 
 ### §6.1 Reviewer gate — flush paths, `Engine::close`, advisory lock
 
@@ -1015,8 +1148,9 @@ period. PR 6 does not change that model.
 `Wallet::close` will inherit the same persistence sequence via
 `PersistenceEngine` (§5.11).
 
-**`change_password`:** `PersistenceEngine::rotate_password` with
-`Credentials`; envelope rewrap only.
+**`change_password`:** `rotate_password` then `save_prefs`; returns
+`ChangePasswordError` (**2b** / §5.10). **Refresh quiescence** required before
+`close` when using `Arc` (**2a A1**). **Cancellation** table (**2a A2**).
 
 ---
 
@@ -1024,9 +1158,9 @@ period. PR 6 does not change that model.
 
 | Round | Deliverable | Status |
 |-------|-------------|--------|
-| **Round 2** | Segments 2a–2g + 2i wider-substrate audit; §4/§6 finalized; §5.6.9 discipline matrix | **Not started** |
-| **Round 3** | §7.X commit decomposition + readiness gate | **Not started** |
-| **Phase 1** | C0–C7 on `feat/stage-1-pr6-persistence-engine` | Blocked on Round 3 |
+| **Round 2** | Segments 2a–2d, 2g, 2h, 2i + §4/§6 | **Closed** |
+| **Round 3** | §7.X + §6 gates + Round 2 amendments | **Closed** |
+| **Phase 1** | C0–C7 on `feat/stage-1-pr6-persistence-engine` | **Ready** (after §6.3 prerequisites) |
 
 ### §7.1 Stage 1 closeout (do not conflate with PR 6 alone)
 
@@ -1035,31 +1169,55 @@ spec §1 banner only after **PR 6 + PR 7** land.
 
 ---
 
-## §7.X Phase 1 commit decomposition (Round 3 deliverable — provisional)
+## §7.X Phase 1 commit decomposition (Round 3 — closed)
 
 **Deviation from template §8.2 eight-commit default:** Persistence has no
 `SnapshotId`, no diagnostic enum, no `Signer`/`OutputSelector` secondary
-traits, no `FaultInjecting` wrapper at V3.0 (bounded lens). **Seven commits
-C0–C7** with named rationale recorded here per template §8.2.
+traits, no `FaultInjecting` wrapper at V3.0 (bounded lens).
 
-| Commit | Scope | Phase 0 pins |
-|--------|-------|--------------|
-| **C0** | Doc-only: §2.6 three-method shape; `PersistenceError`; `WALLET_FILE_FORMAT` §4.3; this doc | 0a–0c, 0a′, 0j, 0m |
-| **C2c** | HKDF region keys in envelope + `seal_state_*` with `wrap_key_region_2`; `WalletFile::save_state(StateWrapKey, …)` | 0n (+ HKDF impl dep) |
-| **C1** | `traits/persistence.rs` + re-export; trait rustdoc (0o: `StateWrapKey`, `rotate_password` cache invalidation) | 0e, 0o |
-| **C2a** | `shekyl-engine-file`: `WalletFileState` + `Mutex`; `rotate_password` → `&self` | 0d |
-| **C2b** | `shekyl-engine-file`: `base_path()`; `save_as` internal paths | 0i |
-| **C3** | `impl PersistenceEngine for WalletFile` + `map_persistence_error` | 0h |
-| **C4** | `Engine<…, P, F>` + `persistence` field + `assemble` / accessors | 0g |
-| **C5** | `lifecycle.rs`: `change_password` / `close` via `F`; keep `LocalLedger` bound | 0f |
-| **C6** | Tests (lifecycle + `shekyl-engine-file`); no Mock | 0k |
-| **C7** | `CHANGELOG.md`, rustdoc, design doc landed banner | — |
+**Commit count (F-R3.1 resolved):** **Ten commits** — **C0**, **C1**, **C2a**,
+**C2b**, **C2c**, **C3**, **C4**, **C5**, **C6**, **C7**. (Not "seven" — the
+C2 subgroup is three commits, not one.)
 
-**§6 mapping:** CI gates every commit; full test gate **C6**; close/advisory
-question verified in **C5/C6**.
+**Build-at-every-commit (F-R3.2 — additive migration).** C2c **adds**
+`save_state_with_key(&StateWrapKey, …)` alongside existing
+`save_state(password, …)`; lifecycle callers migrate in **C5**; **C7** removes
+the password-taking inherent method (no `[[deprecated]]` per pre-genesis
+discipline — delete once migration is proven in C6).
 
-**Synthesis banner:** Not required unless Round 2 segments 2h/2i amend §7.X
-bodies post–Round-3-original (template §8.4).
+**HKDF scope (F-R3.3).** C2c **does not** implement HKDF. Prerequisite PR lands
+region-key derivation in `shekyl-crypto-pq` / envelope first. C2c only consumes
+it for the additive API.
+
+| Order | Commit | Scope | Phase 0 pins | Builds because |
+|-------|--------|-------|--------------|----------------|
+| 1 | **C0** | Doc-only: §2.6 shape; `PersistenceError`; `OpenError::Persistence`; `ChangePasswordError`; WALLET_FILE_FORMAT §4.3 cross-ref; this doc landed | 0a–0c, 0a′, 0j, 0m, 0l | Doc-only |
+| 2 | **C1** | `StateWrapKey` / `PrefsHmacKey` types (`ZeroizeOnDrop`, redacted `Debug`); `traits/persistence.rs` + re-export; trait + module rustdoc (**0o**, G4 backup warning) | 0e, 0o | Types + trait, no callers yet |
+| 3 | **C2a** | `WalletFileState` + `Mutex`; `rotate_password` → `&self` | 0d | Interior mutability only |
+| 4 | **C2b** | `base_path()`; `save_as` internal paths unchanged | 0i | Mechanical |
+| 5 | **C2c** | **Additive** `save_state_with_key(&StateWrapKey, &WalletLedger)` using prerequisite HKDF path; keep `save_state(password, …)` | 0n | Old callers unchanged |
+| 6 | **C3** | `impl PersistenceEngine for WalletFile`; `PersistenceError` mapping | 0h | Trait wired to new method |
+| 7 | **C4** | `Engine<…, P, F>`; field `persistence: F`; accessors | 0g | Engine holds `F`, may still call old inherent APIs |
+| 8 | **C5** | `lifecycle.rs`: open ritual (**2h**); `close` / `change_password` via `F` + sealing keys; `OpenError::Persistence`; `ChangePasswordError` | 0f, 0p | Callers migrated |
+| 9 | **C6** | Tests: **2c** matrix incl. stale-key + open ritual; no Mock | 0k | Full gate |
+| 10 | **C7** | Remove `save_state(password, …)`; `CHANGELOG.md`; design doc implementation banner | — | Deletion after proof |
+
+**§6 mapping:** `cargo fmt` / `clippy` every commit; **`cargo test -p shekyl-engine-core -p shekyl-engine-file`** at **C6** (and after C5 if C5 touches open).
+
+### Round 3 findings log (disposition summary)
+
+| ID | Finding | Disposition |
+|----|---------|-------------|
+| F-R3.1 | Commit count header vs table | Ten commits C0/C1/C2a–c/C3–C7 |
+| F-R3.2 | C2c before C1 breaks build | Additive API; delete in C7 |
+| F-R3.3 | C2c vs HKDF banner conflict | HKDF = prerequisite PR; C2c = API migration only |
+| F-R3.4 | Phase 0o not in §4 | Row added (**0o**, **0p**) |
+| F-R3.5 | R10 mapping undecided | `OpenError::Persistence` + `ChangePasswordError` (§5.10) |
+| F-R3.6 | Missing F5(b) greps | §6.2 |
+| F-R3.7 | HKDF prerequisite | §6.3 |
+| F-R3.8 | Stale-key test | **2c** / C6 |
+| F-R3.9 | Atomic durability test | Cite `atomic.rs` tests; crash injection FOLLOWUPS |
+| F-R3.10 | G4 optional | Blocking in C1 rustdoc |
 
 ---
 

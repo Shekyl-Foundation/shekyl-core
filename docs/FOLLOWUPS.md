@@ -3892,6 +3892,14 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.2 — Rust cutover and cleanup
 
+- **`atomic_write_file` power-loss crash-injection tests.** PR 6 cites
+  existing unit tests in `shekyl-engine-file/src/atomic.rs` (overwrite
+  semantics, no stray temps) but not simulated crash mid-fsync. If audit
+  requires stronger durability evidence than unit tests, add fault-injection
+  tests (e.g. kill between tmp write and rename) in `shekyl-engine-file`.
+  **Target:** V3.2. **Reopen when:** external audit names power-loss simulation
+  as a release gate.
+
 - **Wallet on network filesystems (NFS / SMB).** Advisory lock + atomic
   rename semantics are validated for local POSIX filesystems only. PR 6
   segment 2i (G5) records that multi-client network mounts can break
