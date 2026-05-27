@@ -47,6 +47,7 @@ use tracing::debug;
 use super::diagnostics::TracingDiagnosticSink;
 use super::error::RefreshError;
 use super::local_ledger::LocalLedger;
+use super::pending::SnapshotId;
 use super::signer::EngineSignerKind;
 use super::traits::{DaemonEngine, LedgerEngine, RefreshEngine};
 use super::Engine;
@@ -139,6 +140,70 @@ impl LedgerSnapshot {
             .find(|(h, _)| *h == height)
             .map(|(_, hash)| *hash)
     }
+}
+
+/// Domain-separation prefix for [`derive_snapshot_id`].
+///
+/// Bound to a `v1` suffix so a future encoding change can co-exist
+/// with the current derivation under a `v2` prefix without colliding
+/// on bytes; current callers pin to `v1`.
+///
+/// `#[allow(dead_code)]`: the production caller lands in C2γ
+/// (`Reservation` / `PendingTx` field augmentation) per the
+/// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §7.X commit decomposition; C1
+/// ships the type-and-derivation substrate plus unit tests. The
+/// in-test consumer in `refresh_driver_tests` does not satisfy the
+/// `dead_code` lint because `#[cfg(test)]` modules are excluded
+/// from non-test compilations.
+#[allow(dead_code)]
+pub(crate) const SNAPSHOT_ID_DOMAIN: &[u8] = b"shekyl-snapshot-id-v1";
+
+/// Derive the opaque [`SnapshotId`] for a [`LedgerSnapshot`].
+///
+/// Per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 Phase 0b: the digest is
+/// `cn_fast_hash` (Keccak-256, original padding via
+/// [`shekyl_crypto_hash::cn_fast_hash`]) over a canonical byte-encoding
+/// of the snapshot's deterministic fields, truncated to the first 128
+/// bits. The encoding is:
+///
+/// ```text
+///   SNAPSHOT_ID_DOMAIN           (21 bytes, "shekyl-snapshot-id-v1")
+/// ‖ snapshot.synced_height       (LE u64, 8 bytes)
+/// ‖ reorg_blocks.blocks.len()    (LE u64, 8 bytes; length prefix)
+/// ‖ for each (h, hash) in window:
+///     LE u64 height (8 bytes) ‖ 32-byte block hash
+/// ```
+///
+/// The length-prefixed reorg-window count forecloses extension /
+/// concatenation collisions against same-tip ledgers with different
+/// reorg-window depth; the versioned prefix excludes collisions
+/// against any other domain-separated `cn_fast_hash` input that ever
+/// shipped in the workspace.
+///
+/// `pub(crate)`: callers in [`super::pending`] derive `SnapshotId`
+/// from an engine-internal snapshot read; consumers never pass a
+/// `SnapshotId` into the trait surface from outside.
+///
+/// `#[allow(dead_code)]`: the production caller lands in C2γ
+/// (`Reservation` / `PendingTx` field augmentation) per the
+/// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §7.X commit decomposition;
+/// C1 ships the derivation substrate plus its unit tests in
+/// `refresh_driver_tests`.
+#[allow(dead_code)]
+pub(crate) fn derive_snapshot_id(snapshot: &LedgerSnapshot) -> SnapshotId {
+    let n_blocks = snapshot.reorg_blocks.blocks.len();
+    let mut buf = Vec::with_capacity(SNAPSHOT_ID_DOMAIN.len() + 8 + 8 + n_blocks * (8 + 32));
+    buf.extend_from_slice(SNAPSHOT_ID_DOMAIN);
+    buf.extend_from_slice(&snapshot.synced_height.to_le_bytes());
+    buf.extend_from_slice(&(n_blocks as u64).to_le_bytes());
+    for (height, hash) in &snapshot.reorg_blocks.blocks {
+        buf.extend_from_slice(&height.to_le_bytes());
+        buf.extend_from_slice(hash);
+    }
+    let digest = shekyl_crypto_hash::cn_fast_hash(&buf);
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&digest[..16]);
+    SnapshotId(out)
 }
 
 /// Configuration for [`Engine::refresh`].
@@ -1510,7 +1575,7 @@ mod refresh_driver_tests {
     use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
     use shekyl_engine_state::{BlockchainTip, LedgerBlock, ReorgBlocks};
 
-    use super::{summarize, LedgerSnapshot, RefreshReorgEvent};
+    use super::{derive_snapshot_id, summarize, LedgerSnapshot, RefreshReorgEvent, SnapshotId};
 
     // ── Test fixtures ──────────────────────────────────────────
 
@@ -1982,6 +2047,143 @@ mod refresh_driver_tests {
         assert_eq!(snap.reorg_blocks.blocks.len(), 2);
         assert_eq!(snap.block_hash_at(1234), Some([0xAA; 32]));
         assert_eq!(snap.block_hash_at(1232), None);
+    }
+
+    // ── SnapshotId derivation (Stage 1 PR 5 — Phase 0b) ────────
+
+    /// Synthesize a `LedgerSnapshot` directly from the in-crate
+    /// fields. Avoids the `LedgerBlock::new` round-trip that the
+    /// surrounding tests use; the C1 derivation tests do not need a
+    /// `LedgerBlock` — they exercise `derive_snapshot_id` over the
+    /// snapshot's fields directly.
+    fn snapshot_from_parts(synced_height: u64, blocks: Vec<(u64, [u8; 32])>) -> LedgerSnapshot {
+        LedgerSnapshot {
+            synced_height,
+            reorg_blocks: ReorgBlocks { blocks },
+        }
+    }
+
+    /// Identical snapshots derive identical ids; snapshots that
+    /// differ in `synced_height` or `reorg_blocks` derive distinct
+    /// ids. The 16-byte digest is content-derived; this is the
+    /// substrate the submit-time staleness check depends on per
+    /// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §5.0 ground 2.
+    #[test]
+    fn derive_snapshot_id_deterministic() {
+        let snap_a = snapshot_from_parts(100, vec![(99, [0x11; 32]), (100, [0x22; 32])]);
+        let snap_a_again = snapshot_from_parts(100, vec![(99, [0x11; 32]), (100, [0x22; 32])]);
+        assert_eq!(
+            derive_snapshot_id(&snap_a),
+            derive_snapshot_id(&snap_a_again),
+            "identical snapshot fields must derive identical ids"
+        );
+
+        let snap_b_height = snapshot_from_parts(101, vec![(99, [0x11; 32]), (100, [0x22; 32])]);
+        assert_ne!(
+            derive_snapshot_id(&snap_a),
+            derive_snapshot_id(&snap_b_height),
+            "different synced_height must change the id"
+        );
+
+        let snap_b_blocks = snapshot_from_parts(100, vec![(99, [0x11; 32]), (100, [0x33; 32])]);
+        assert_ne!(
+            derive_snapshot_id(&snap_a),
+            derive_snapshot_id(&snap_b_blocks),
+            "different reorg-window contents must change the id"
+        );
+
+        // SnapshotId bytes are stable across reads.
+        let id = derive_snapshot_id(&snap_a);
+        assert_eq!(id.as_bytes(), &id.0);
+    }
+
+    /// The versioned domain-separation prefix is load-bearing in
+    /// the derivation: two synthetic Keccak-256 inputs that share
+    /// every byte after the prefix but differ in the prefix bytes
+    /// must hash to different digests. The test computes the raw
+    /// `cn_fast_hash` directly with the production prefix and with
+    /// a counter-factual prefix of the same length, then truncates
+    /// both to 16 bytes and asserts inequality. This regression-
+    /// gates the canonical-encoding promise that the prefix is part
+    /// of the hashed input, not implicit in some other shape.
+    #[test]
+    fn derive_snapshot_id_domain_separated() {
+        let snap = snapshot_from_parts(7, vec![(7, [0xAB; 32])]);
+        let n_blocks = snap.reorg_blocks.blocks.len();
+
+        // Build the canonical post-prefix tail exactly as
+        // `derive_snapshot_id` does. The factual hash applies the
+        // production prefix; the counter-factual hash applies a
+        // same-length but lexically-different prefix to the same
+        // tail. Truncated to 16 bytes, the digests must differ —
+        // that is what a load-bearing prefix delivers.
+        let mut tail = Vec::new();
+        tail.extend_from_slice(&snap.synced_height.to_le_bytes());
+        tail.extend_from_slice(&(n_blocks as u64).to_le_bytes());
+        for (height, hash) in &snap.reorg_blocks.blocks {
+            tail.extend_from_slice(&height.to_le_bytes());
+            tail.extend_from_slice(hash);
+        }
+
+        let production_prefix = super::SNAPSHOT_ID_DOMAIN;
+        let mut counterfactual_prefix = production_prefix.to_vec();
+        counterfactual_prefix[0] ^= 0x01;
+        assert_eq!(
+            counterfactual_prefix.len(),
+            production_prefix.len(),
+            "counter-factual prefix must be the same length to isolate the prefix-bytes signal"
+        );
+
+        let mut factual_input = Vec::with_capacity(production_prefix.len() + tail.len());
+        factual_input.extend_from_slice(production_prefix);
+        factual_input.extend_from_slice(&tail);
+        let factual = shekyl_crypto_hash::cn_fast_hash(&factual_input);
+
+        let mut counterfactual_input = Vec::with_capacity(counterfactual_prefix.len() + tail.len());
+        counterfactual_input.extend_from_slice(&counterfactual_prefix);
+        counterfactual_input.extend_from_slice(&tail);
+        let counterfactual = shekyl_crypto_hash::cn_fast_hash(&counterfactual_input);
+
+        assert_ne!(
+            &factual[..16],
+            &counterfactual[..16],
+            "domain-separation prefix must be part of the hashed input"
+        );
+
+        // And the production derivation matches the factual hash.
+        let id = derive_snapshot_id(&snap);
+        assert_eq!(
+            id.as_bytes()[..],
+            factual[..16],
+            "derive_snapshot_id must apply the documented canonical encoding verbatim"
+        );
+    }
+
+    /// `reorg_blocks` of length 0 vs. 1 vs. 2 over the same
+    /// `synced_height` must produce three distinct ids. Without the
+    /// `n_blocks` length prefix in the canonical encoding, the
+    /// concatenation `(8-byte height) ‖ (32-byte hash)` of one block
+    /// could in principle collide with the same bytes appearing as
+    /// part of a two-block window; the length prefix forecloses
+    /// that. Regression-gates the canonical-encoding promise per
+    /// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 Phase 0b.
+    #[test]
+    fn derive_snapshot_id_length_prefix_separates_neighbours() {
+        let snap_zero = snapshot_from_parts(50, Vec::new());
+        let snap_one = snapshot_from_parts(50, vec![(49, [0x77; 32])]);
+        let snap_two = snapshot_from_parts(50, vec![(49, [0x77; 32]), (50, [0x88; 32])]);
+
+        let id_zero = derive_snapshot_id(&snap_zero);
+        let id_one = derive_snapshot_id(&snap_one);
+        let id_two = derive_snapshot_id(&snap_two);
+
+        assert_ne!(id_zero, id_one);
+        assert_ne!(id_one, id_two);
+        assert_ne!(id_zero, id_two);
+
+        // The id type carries the 16-byte digest unchanged.
+        assert_eq!(id_zero.as_bytes().len(), 16);
+        let _ty_check: SnapshotId = id_zero;
     }
 }
 
