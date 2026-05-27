@@ -178,8 +178,9 @@ pub(crate) mod test_support;
 pub use capability::Capability;
 pub use daemon::DaemonClient;
 pub use diagnostics::{
-    DaemonOp, DiagnosticSink, MalformedKind, NoopDiagnosticSink, ProtocolErrorKind,
-    RefreshDiagnostic, SuppressedClass, TracingDiagnosticSink,
+    BuildErrorKind, BuildRequestSummary, DaemonOp, DiagnosticSink, DiscardReason, MalformedKind,
+    NoopDiagnosticSink, PendingTxDiagnostic, ProtocolErrorKind, RefreshDiagnostic, SuppressedClass,
+    TracingDiagnosticSink,
 };
 pub use error::{IoError, KeyError, OpenError, PendingTxError, RefreshError, SendError, TxError};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};

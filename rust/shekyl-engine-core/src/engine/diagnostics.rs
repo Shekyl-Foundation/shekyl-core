@@ -74,6 +74,9 @@ use std::time::Duration;
 
 use tracing::{event, Level};
 
+use super::error::{AmbiguousErrorKind, TerminalErrorKind};
+use super::pending::{FeePriority, ReservationId, SnapshotId, TxHash};
+
 /// Classification of a producer-side malformed-block detection.
 ///
 /// Maps to scanner-rejection causes today
@@ -374,6 +377,368 @@ pub enum RefreshDiagnostic {
     },
 }
 
+// ----------------------------------------------------------------------------
+// PR 5 — `PendingTxEngine` diagnostic-stream surface
+// ----------------------------------------------------------------------------
+//
+// The types below are PR 5's analog of `RefreshDiagnostic` + supporting
+// projections. Per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 Phase 0f, the
+// PR 5 producer (`LocalPendingTx`) emits onto the same `DiagnosticSink`
+// trait introduced in PR 4 — extended above with the
+// [`emit_pending_tx`](DiagnosticSink::emit_pending_tx) default-method
+// shape so PR 4's existing implementors continue to compile unmodified.
+//
+// C3 (this commit) lands the type substrate + emission-helper
+// infrastructure. Production emission sites live in C5 per the
+// emission/return coherence contract (§5.0.3): a method's emissions and
+// its terminal return discriminant land together so the contract is
+// expressible at a single review surface.
+
+/// Build-side error projection for
+/// [`PendingTxDiagnostic::BuildFailed`].
+///
+/// Distinguishes the broad build-failure classes a consumer needs to
+/// react to (or surface to the user) without leaking
+/// [`SendError`](super::error::SendError)'s `reason: &'static str`
+/// payloads across the diagnostic-stream's recursive-trust-boundary
+/// (PR 4 §5.4.8 #4). The projection taxonomy is intentionally coarser
+/// than `SendError`'s; the orchestrator-side error carries the
+/// fielded discriminants for callers that need them.
+///
+/// Per segment-2h's `BuildFailureClass`-renamed-to-`BuildErrorKind`
+/// convention (matches [`TerminalErrorKind`] / [`AmbiguousErrorKind`]
+/// from C2α), the enum lives in this module rather than in
+/// `engine::error` because it is the diagnostic-side projection,
+/// not the trait-return-side error. `#[non_exhaustive]` per the PR 4
+/// /segment-2b extensibility discipline.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BuildErrorKind {
+    /// A [`TxRecipient`](super::pending::TxRecipient) failed
+    /// recipient-side validation (zero amount, malformed address,
+    /// etc.).
+    InvalidRecipient,
+
+    /// Wallet output coverage is insufficient for the requested
+    /// transfer + fee; orchestrator-side
+    /// [`SendError::InsufficientFunds`](super::error::SendError::InsufficientFunds)
+    /// carries the fielded `needed` / `available` payload.
+    InsufficientFunds,
+
+    /// The configured `Signer` surface is unavailable (e.g., HW
+    /// signer disconnected; cooperative-signing peer offline).
+    /// V3.0 surface uses `LocalSigner` exclusively, so this
+    /// variant is reserved for V3.x; lands as part of the
+    /// projection enumeration to forestall an additive break.
+    /// `Signer` trait lands in C4α.
+    SignerUnavailable,
+
+    /// `LedgerEngine` reports the snapshot is not yet ready for
+    /// build (e.g., wallet has not yet completed its first scan).
+    /// V3.0 has no caller-visible "engine not ready" variant on
+    /// [`SendError`](super::error::SendError); this projection
+    /// reserves the slot for C5α's classification of the cases
+    /// where `build` early-rejects against an uninitialized
+    /// `LedgerSnapshot`.
+    LedgerNotReady,
+
+    /// The configured `OutputSelector` returned a set whose
+    /// indices were not a subset of the candidate set the engine
+    /// supplied — the F4 caller-side subset re-verification
+    /// rejected the result. Mirrors
+    /// [`OutputSelectorError::ReturnedIndicesNotSubset`](super::error::OutputSelectorError::ReturnedIndicesNotSubset)
+    /// in the projection taxonomy. Segment-2h C2β addition per
+    /// §5.6.5 F4. `OutputSelector` trait lands in C4β.
+    SelectorContractViolation,
+}
+
+/// Coarse-grained projection of a
+/// [`TxRequest`](super::pending::TxRequest) for diagnostic emission.
+///
+/// Phase 0f recursive-trust-boundary projection per PR 4 §5.4.8 #4:
+/// the diagnostic stream's trust boundary is in-process only, but
+/// the projection still avoids exposing fingerprintable / linkable
+/// material. Recipient addresses, amounts, and the from-subaddress
+/// filter are not projected (correlation-attack surface for any
+/// future intra-process consumer). The projection exposes:
+///
+/// - `recipient_count` — the number of distinct
+///   [`TxRecipient`](super::pending::TxRecipient) entries in the
+///   request.
+/// - `priority` — the requested
+///   [`FeePriority`](super::pending::FeePriority) tier (already
+///   public-API by virtue of being on the caller-facing request).
+///
+/// Bounded numeric + bounded enum projections; no caller-attacker
+/// `String` payloads (§5.4.7 R6 memory-amplifier closure carries
+/// to PR 5 verbatim).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuildRequestSummary {
+    /// Number of recipients in the requested transfer.
+    pub recipient_count: u32,
+
+    /// Fee-priority tier from the request.
+    pub priority: FeePriority,
+}
+
+/// Reason supplied to `PendingTxEngine::discard` (the trait lands
+/// in C5α) and reported on [`PendingTxDiagnostic::Discarded`].
+///
+/// Per §5.6.4 segment-2h disposition and §5.6.12 segment-2i
+/// disposition:
+///
+/// - `ConsumerExplicit` — the consumer called `discard` (deliberate
+///   release of a `consumer_held` reservation).
+/// - `DaemonRejectedTerminal { kind }` — the daemon round-trip
+///   completed with a [`TerminalErrorKind`] result; the
+///   reservation's outputs are released back to the pool. R9
+///   disposition.
+/// - `TTLAutoDiscard` — the reservation aged past its
+///   [`ReservationTTLConfig`](super::pending::ReservationTTLConfig)
+///   budget. R8 segment-2e variant; V3.x emitter is the
+///   `ReservationTTLActor` (no V3.0 emitter — variant pre-pinned
+///   so the V3.x consumer-actor PR lands additively).
+/// - `MempoolEvicted` — the daemon's mempool observation surface
+///   confirmed the in-flight tx has been evicted; segment-2i G1
+///   addition. V3.0 has no in-process emitter (the V3.x
+///   `MempoolMonitorActor` consumer-actor PR introduces the
+///   emitter); pre-V3.x test fixtures exercise the call site
+///   directly.
+///
+/// Segment-2h pinning **REMOVED**
+/// `DiscardReason::SnapshotRotationAutoDiscard`. Snapshot
+/// rotation does not drive automatic collection-moves at V3.0
+/// per the lazy R5 preservation (§5.6.5 F5+F6 / §5.6.6 P9);
+/// consumers learn at submit-time via
+/// [`SubmitError::SnapshotInvalidated`](super::error::SubmitError::SnapshotInvalidated).
+/// V3.x eager-discard opt-in (FOLLOWUPS §5.6.7 P9 trigger)
+/// reintroduces the variant alongside the selective-discard
+/// substrate.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DiscardReason {
+    /// Consumer called `discard` explicitly.
+    ConsumerExplicit,
+
+    /// Daemon round-trip completed with a terminal error; the
+    /// reservation's outputs are released back to the pool.
+    DaemonRejectedTerminal {
+        /// Which terminal sub-class the daemon reported.
+        kind: TerminalErrorKind,
+    },
+
+    /// The reservation aged past its
+    /// [`ReservationTTLConfig`](super::pending::ReservationTTLConfig)
+    /// budget (R8 segment-2e; V3.x `ReservationTTLActor`
+    /// emitter; no V3.0 in-process emitter).
+    TTLAutoDiscard,
+
+    /// The daemon's mempool observation surface confirmed the
+    /// in-flight tx has been evicted (segment-2i G1; V3.x
+    /// `MempoolMonitorActor` emitter; no V3.0 in-process
+    /// emitter).
+    MempoolEvicted,
+}
+
+/// Producer-side diagnostic event for the `PendingTxEngine` trait
+/// (the trait lands in C5α).
+///
+/// Parallel to PR 4's [`RefreshDiagnostic`]; the variant set is
+/// pinned in §5.0.2 of `STAGE_1_PR_5_PENDING_TX_ENGINE.md` per
+/// the segment-2h reshape (lazy R5 preservation + P4 collection-
+/// moves table) and the segment-2i G1 amendments (mempool
+/// eviction + `tx_hash` projection on success/pending variants).
+///
+/// # Per-variant emission sites (segment-2h §5.6.4 P4 table)
+///
+/// | Variant | Emission site |
+/// |---|---|
+/// | `BuildAttempted` | C5 `LocalPendingTx::build` entry, after request validation. |
+/// | `BuildSucceeded` | C5 `LocalPendingTx::build` exit, after `Reservation` + `output_locks` inserted (P7-atomic). |
+/// | `BuildFailed` | C5 `LocalPendingTx::build` error paths; mapped from [`SendError`](super::error::SendError) via [`BuildErrorKind`]. |
+/// | `SubmitAttempted` | C5 `LocalPendingTx::submit` entry, after F2 ownership-boundary dispatch. |
+/// | `SubmitSucceeded` | C5 `LocalPendingTx::submit` happy-path exit; paired with daemon-`Accepted` outcome. |
+/// | `SubmitPendingResolution` | C5 `LocalPendingTx::submit` ambiguous-daemon-outcome exit; reservation stays in `in_flight` per F2 ownership-boundary. |
+/// | `SubmitSnapshotInvalidated` | C5 `LocalPendingTx::submit` lazy-R5 staleness-check exit before daemon dispatch. |
+/// | `Discarded` | C5 `LocalPendingTx::discard` exit; C5 daemon-terminal-error path; C5β `signal_mempool_evicted` (segment-2i G1). |
+/// | `ReservationOutstanding` | V3.x `ReservationTTLActor` emitter only; no V3.0 in-process emitter (variant pre-pinned for the V3.x consumer-actor PR). |
+///
+/// **No `SubmitFailed` variant.** Segment-2h removed the variant —
+/// terminal errors emit via `Discarded { reason:
+/// DaemonRejectedTerminal { kind } }`; ambiguous errors emit via
+/// `SubmitPendingResolution`. The lifecycle-class distinction is
+/// load-bearing on the emission side, parallel to the
+/// type-correctness motivation for splitting
+/// [`SubmitErrorKind`](https://example.invalid) into
+/// [`TerminalErrorKind`] + [`AmbiguousErrorKind`] on the
+/// error-return side.
+///
+/// # Trust boundary
+///
+/// In-process only per PR 4 §5.4.6 + §5.4.8 #4; the
+/// [`DiagnosticSink`] trait carries no serialization surface.
+/// The `tx_hash: TxHash` projections on `SubmitSucceeded` and
+/// `SubmitPendingResolution` are admissible at the recursive-
+/// trust-boundary discipline (PR 4 §5.4.8 #4) because the hash
+/// is on-chain by construction — not secret material.
+///
+/// # `#[non_exhaustive]`
+///
+/// Variant set additions ride along with consumer-actor PRs in
+/// V3.x; the `#[non_exhaustive]` discipline forecloses additive
+/// breakage at the `match` level (PR 4 / segment-2b pattern).
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub enum PendingTxDiagnostic {
+    /// `build` was invoked; emitted at handler entry after request
+    /// validation. Carries a [`BuildRequestSummary`] projection
+    /// rather than the raw `TxRequest`.
+    BuildAttempted {
+        /// Bounded projection of the request shape (no recipient
+        /// addresses / amounts / from-subaddress filter).
+        request_summary: BuildRequestSummary,
+    },
+
+    /// `build` succeeded; a fresh `Reservation` was registered.
+    BuildSucceeded {
+        /// The newly-allocated reservation's id.
+        reservation_id: ReservationId,
+
+        /// The ledger [`SnapshotId`] the reservation was built
+        /// against (lazy R5 surface — staleness is detected at
+        /// next `submit` / `discard` against the engine's
+        /// current_snapshot).
+        snapshot_id: SnapshotId,
+
+        /// Number of outputs claimed by the new reservation
+        /// (projection over `Reservation`'s output set).
+        outputs_count: u32,
+    },
+
+    /// `build` failed; mapped from [`SendError`](super::error::SendError)
+    /// via [`BuildErrorKind`].
+    BuildFailed {
+        /// Which build-failure class the engine surfaced.
+        kind: BuildErrorKind,
+    },
+
+    /// `submit` was invoked on a reservation; emitted at handler
+    /// entry after F2 ownership-boundary dispatch.
+    SubmitAttempted {
+        /// The reservation the consumer asked to submit.
+        reservation_id: ReservationId,
+    },
+
+    /// Daemon accepted the submitted tx; reservation released
+    /// from `in_flight` and `output_locks` swept.
+    SubmitSucceeded {
+        /// The reservation that succeeded.
+        reservation_id: ReservationId,
+
+        /// The accepted tx's hash. Segment-2i G1 projection —
+        /// required by the V3.x `MempoolMonitorActor` consumer
+        /// to correlate mempool observation results back to
+        /// rids. On-chain by construction (admissible at the
+        /// recursive-trust-boundary).
+        tx_hash: TxHash,
+    },
+
+    /// Daemon round-trip completed with an
+    /// [`AmbiguousErrorKind`] outcome; reservation stays in
+    /// `in_flight` per F2 ownership-boundary. Consumer learns
+    /// terminal resolution via `SubmitSucceeded` /
+    /// `Discarded { DaemonRejectedTerminal }` /
+    /// `Discarded { MempoolEvicted }` arriving later, or via R8
+    /// TTL safety-net.
+    SubmitPendingResolution {
+        /// The reservation whose submit ended in an ambiguous
+        /// state.
+        reservation_id: ReservationId,
+
+        /// The submitted tx's hash — segment-2i G1 projection;
+        /// V3.x `MempoolMonitorActor` observes mempool-
+        /// presence-disappears as one resolution path even when
+        /// the daemon's eventual response is the other.
+        tx_hash: TxHash,
+
+        /// Which ambiguous sub-class the daemon round-trip
+        /// surfaced.
+        kind: AmbiguousErrorKind,
+    },
+
+    /// Lazy-R5 staleness check at `submit` entry: the
+    /// reservation's `snapshot_id` did not match the engine's
+    /// `current_snapshot`. Reservation does NOT auto-release;
+    /// consumer must call `discard(rid, ConsumerExplicit)` to
+    /// free `output_locks` (segment-2h F2 disposition).
+    SubmitSnapshotInvalidated {
+        /// The stale reservation.
+        reservation_id: ReservationId,
+
+        /// The reservation's recorded snapshot id (the one it
+        /// was built against).
+        reservation_snapshot: SnapshotId,
+
+        /// The engine's current snapshot id (the rotated one
+        /// the staleness check fired against).
+        current_snapshot: SnapshotId,
+    },
+
+    /// A reservation was discarded (the `output_locks` for the
+    /// rid were swept and the rid removed from its collection).
+    /// The [`DiscardReason`] discriminant carries the cause.
+    Discarded {
+        /// The discarded reservation's id.
+        reservation_id: ReservationId,
+
+        /// Why the discard occurred.
+        reason: DiscardReason,
+    },
+
+    /// A reservation has been outstanding past its
+    /// [`ReservationTTLConfig`](super::pending::ReservationTTLConfig)
+    /// budget. V3.x `ReservationTTLActor` emitter only; pre-
+    /// pinned for the V3.x consumer-actor PR (no V3.0 in-
+    /// process emitter).
+    ReservationOutstanding {
+        /// Which reservation has aged out.
+        reservation_id: ReservationId,
+
+        /// How long the reservation has been outstanding.
+        age: Duration,
+    },
+}
+
+/// Emit one [`PendingTxDiagnostic`] event onto the given sink.
+///
+/// Helper parallel to the inline `sink.emit(event)` pattern PR 4's
+/// `LocalRefresh` body uses for [`RefreshDiagnostic`]; consolidating
+/// the dispatch behind a free function makes the C5 emission-site
+/// rewrites a search-and-call rather than a search-and-method-
+/// rewrite (and forecloses sink-method-name drift between the
+/// type and the dispatch).
+///
+/// C3 (this commit) lands the helper; C5 wires its call sites in
+/// `LocalPendingTx`'s extracted method bodies per the emission/
+/// return coherence contract pin (§5.0.3) — emission helpers land
+/// in their own commit; emission sites land with the methods that
+/// emit, so the coherence-property review surface is the method
+/// body, not the helper definition.
+///
+/// `#[allow(dead_code)]`: the helper has no production caller until
+/// C5α's `LocalPendingTx::build` skeleton lands the first emission
+/// site. Same template as
+/// [`derive_snapshot_id`](super::refresh::derive_snapshot_id) in C1
+/// → C2γ (where the function was annotated with `dead_code` until
+/// `build_pending_tx_in_state` consumed it; here the dead-code
+/// annotation lifts at C5α). The annotation is itself a discipline
+/// pin: a future maintainer who wants to remove the helper must
+/// confirm no C5+ consumer exists first.
+#[allow(dead_code)]
+pub(crate) fn emit_pending_tx_diagnostic(sink: &dyn DiagnosticSink, event: PendingTxDiagnostic) {
+    sink.emit_pending_tx(event);
+}
+
 /// Producer-side sink for [`RefreshDiagnostic`] events.
 ///
 /// Per [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §5.4.6 the
@@ -456,6 +821,57 @@ pub trait DiagnosticSink: Send + Sync + 'static {
     ///   producer cannot recover from sink failure and the trait
     ///   surface does not expose that information.
     fn emit(&self, event: RefreshDiagnostic);
+
+    /// Emit one [`PendingTxDiagnostic`] event onto the sink.
+    ///
+    /// Companion to [`emit`](Self::emit) for the PR 5
+    /// `PendingTxEngine` producer per
+    /// `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §4 Phase 0f.
+    ///
+    /// # Default impl
+    ///
+    /// Default discards the event. Per-trait-method-with-default
+    /// preserves backward compatibility for V3.0's existing
+    /// `RefreshDiagnostic`-only consumers: PR 4's
+    /// [`NoopDiagnosticSink`] / [`TracingDiagnosticSink`] /
+    /// `AssertionSink` / `PanickingSink` continue to compile
+    /// against this trait without modification — and the default
+    /// `{}` body matches `NoopDiagnosticSink`'s intent already.
+    /// C5β (the trait-impl-bodies sub-commit) introduces production
+    /// `emit_pending_tx` emission sites; the C5α / C7
+    /// sink-side overrides for assertion-coverage and
+    /// observability follow the same template `RefreshDiagnostic`
+    /// established.
+    ///
+    /// # Contract
+    ///
+    /// All seven `DiagnosticSink` contract pins carry verbatim to
+    /// this method:
+    ///
+    /// 1. **Non-blocking emit** — implementors MUST NOT block.
+    /// 2. **Emission/return coherence** — sink stream up to the
+    ///    trait return must agree with the discriminant of the
+    ///    return value per §5.0.3.
+    /// 3. **Per-emitter FIFO** — single-producer / single-sink
+    ///    pairings preserve call-order; cross-emitter ordering is
+    ///    undefined.
+    /// 4. **In-process trust boundary** — no serialization
+    ///    surface; events do not cross a process boundary. The
+    ///    `tx_hash: TxHash` field on `SubmitSucceeded` /
+    ///    `SubmitPendingResolution` is admissible at this
+    ///    boundary because the hash is on-chain by construction
+    ///    (segment-2i G1 per PR 4 §5.4.8 #4 field-level
+    ///    recursive-trust-boundary discipline).
+    /// 5. **Restart-amnesia is deliberate** — producer-side per-
+    ///    attempt state is cleared at attempt start.
+    /// 6. **Implementor liveness** — `Send + Sync + 'static`.
+    /// 7. **Drop is the cancel-checkpoint** — Drop handles
+    ///    background resource teardown.
+    #[allow(unused_variables)]
+    fn emit_pending_tx(&self, event: PendingTxDiagnostic) {
+        // Default: drop. C5 overrides per-sink for assertion-
+        // and observability-class coverage.
+    }
 }
 
 /// Drop-everything [`DiagnosticSink`] implementation.
