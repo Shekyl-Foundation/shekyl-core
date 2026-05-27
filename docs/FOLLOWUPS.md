@@ -4699,8 +4699,14 @@ one place to confirm each item's relationship to the wallet stack.
   not by the cumulative count of all reservations the
   wallet has ever created.
 
+  **Phase 1 landed (2026-05-27).** V3.0 substrate items (1)–(5)
+  below shipped on `feat/stage-1-pr5-pending-tx-engine` (C5β =
+  `a137cc234` through C7 = `ca7622558`). This FOLLOWUPS entry
+  remains open for the V3.x **consumer actor** (`ReservationTTLActor`);
+  trigger unchanged: Stage 4 actor mesh stabilizes.
+
   **V3.0 deliverables (pinned at segment-2e closure; updated
-  under segment 2h).** PR 5 ships: (1)
+  under segment 2h).** PR 5 shipped: (1)
   `PendingTxDiagnostic::BuildSucceeded` emitted at the
   `build`-success path in `LocalPendingTx::build` /
   `PendingTxActor::handle_build` (Phase 1 call-site review
@@ -4795,6 +4801,13 @@ one place to confirm each item's relationship to the wallet stack.
   Round 2 segment 2f with two-stage submit flow + internal
   `ReservationState` machine + daemon-side authority
   disposition for Finding 2 ambiguous outcomes.
+
+  **Phase 1 landed (2026-05-27).** V3.0 diagnostic substrate and
+  per-error-class disposition table shipped on
+  `feat/stage-1-pr5-pending-tx-engine` (C7 = `ca7622558` property-
+  test coverage). This entry remains open for the V3.x
+  **`SubmitFailureAnalyzer` consumer actor**; trigger unchanged:
+  Stage 4 actor mesh stabilizes.
 
   **Segment-2h reconciliation (2026-05-27; supersedes the
   segment-2f variant-set narrative above).** Segment 2h's
@@ -4950,6 +4963,14 @@ one place to confirm each item's relationship to the wallet stack.
     policy-configurable) → calls `discard(id,
     ConsumerExplicit)` to release outputs back to the pool;
     consumer's rebuild loop picks up.
+
+  **Phase 1 landed (2026-05-27).** Segment 2f/2h daemon-side
+  authority disposition and `SubmitPendingResolution` / `in_flight`
+  substrate shipped on `feat/stage-1-pr5-pending-tx-engine` (C5β/C7).
+  This entry remains open for the V3.x **`TimeoutResolverActor`**
+  ergonomic complement; trigger unchanged: Stage 4 actor mesh
+  stabilizes plus chain-observation mechanism design in the V3.x
+  consumer-actor PR.
 
   **Why V3.x, not V3.0.** Segment 2f's daemon-side authority
   disposition is wallet-correct without the resolver actor —
@@ -5737,7 +5758,9 @@ one place to confirm each item's relationship to the wallet stack.
   with the contract-altitude maturity filter).
 
 - **HW-wallet integration as a `Signer`-impl substitution
-  (Stage 1 PR 5 R11 (b) substrate; V3.x).** PR 5's Round 2
+  (Stage 1 PR 5 R11 (b) substrate; V3.x).** **Phase 1 landed
+  (2026-05-27):** `Signer` trait + `LocalSigner` shipped (C4α =
+  `1b14d0113`); HW integration trigger is unchanged. PR 5's Round 2
   segment 2b reframe of
   [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
   §5.4 R11 closed the signing-actor split question as **(b) —
@@ -5816,7 +5839,9 @@ one place to confirm each item's relationship to the wallet stack.
 
 - **Submission-strategy actors under
   `SubmissionStrategyActor` seam (Stage 1 PR 5 R15 substrate;
-  V3.x).** PR 5 segment 2c named submission-time observability
+  V3.x).** **Phase 1 landed (2026-05-27):** V3.0 ships the submit
+  path topology slot (direct `PendingTxEngine` → daemon); V3.x
+  strategy actors remain deferred. PR 5 segment 2c named submission-time observability
   as a wallet-layer privacy weakness and closed the
   disposition as **V3.0 ships the
   `SubmissionStrategyActor` seam (intermediate actor in the
@@ -5854,7 +5879,11 @@ one place to confirm each item's relationship to the wallet stack.
 
 - **Wallet-side fee estimator (`WalletSideEstimator`) under
   `FeeEstimator` trait seam (Stage 1 PR 5 R16 substrate;
-  V3.x with conditional V3.0 lift).** PR 5 segment 2c named
+  V3.x with conditional V3.0 lift).** **Phase 1 landed
+  (2026-05-27):** `FeeEstimator` trait + `DaemonFeeEstimator`
+  default shipped (C4γ = `df60d2424`); `WalletSideEstimator`
+  trigger unchanged (`LedgerEngine` historical-block fee accessor).
+  PR 5 segment 2c named
   daemon-recommended fees as a wallet-fingerprint exploit
   surface against an adversary-controlled daemon and closed
   the disposition as **V3.0 ships

@@ -1537,18 +1537,24 @@ the trait below; the `signal_mempool_evicted` method (Phase 0m,
 segment 2i) admits a narrow consumer-observed mempool-eviction
 signal per the F2 ownership-boundary adjudication discipline.
 
-**Stage 1 surface (Round 3-closed; lands via PR 5 §7.X commits
-C0–C8 on `feat/stage-1-pr5-pending-tx-engine`).** The trait is
-declared at `engine/traits/pending_tx.rs` (PR 5 C5α); the
-supporting `SubmitError` / `TerminalErrorKind` /
-`AmbiguousErrorKind` / `PendingTxError` / `DiscardReason` /
-`SnapshotId` / `ReservationExtension` / `PendingTxDiagnostic`
-enums + the augmented `Reservation` / `PendingTx` types
-land in `engine/error.rs` / `engine/diagnostics.rs` /
-`engine/pending.rs` (PR 5 C2 / C3); the `LocalPendingTx<S: Signer,
-O: OutputSelector, F: FeeEstimator>` aggregate implementor lands
-at `engine/local_pending_tx.rs` (PR 5 C5β); the `Engine<S, D, L,
-R, P>` five-parameter wiring lands in `engine/mod.rs` (PR 5 C6).
+**Stage 1 surface (Round 3-closed; landed via PR 5 §7.X commits
+C0–C8 on `feat/stage-1-pr5-pending-tx-engine`; implementation tip
+`ca7622558` at C7, C8 doc commit follows).** The trait is
+declared at
+[`engine/traits/pending_tx.rs`](../rust/shekyl-engine-core/src/engine/traits/pending_tx.rs)
+(PR 5 C5α = `ecc86c741`); the supporting `SubmitError` /
+`TerminalErrorKind` / `AmbiguousErrorKind` / `PendingTxError` /
+`DiscardReason` / `SnapshotId` / `ReservationExtension` /
+`PendingTxDiagnostic` enums + the augmented `Reservation` /
+`PendingTx` types land in `engine/error.rs` /
+`engine/diagnostics.rs` / `engine/pending.rs` (PR 5 C2 =
+`fa5981e9d` / `316f5c15e` / `8f8e4c863`; C3 = `58fb6174f`); the
+`LocalPendingTx<S: Signer, O: OutputSelector, F: FeeEstimator>`
+aggregate implementor lands at
+[`engine/local_pending_tx.rs`](../rust/shekyl-engine-core/src/engine/local_pending_tx.rs)
+(PR 5 C5β = `a137cc234`); the `Engine<S, D, L, R, P>` five-
+parameter wiring lands in `engine/mod.rs` (PR 5 C6 =
+`0713591bf`).
 The trait surface (Phase 0a + 0e + 0f + 0m binding form) is:
 
 ```rust
@@ -1801,20 +1807,23 @@ above lands in two stages:
   variant stub (Phase 0g; deferred to V3.x consumer-actor PR per
   segment-2g closure). C0 lands as the doc-only Phase 0 spec
   amendment per the §7.X commit decomposition.
-- **Phase 1 (PR 5 §7.X commits C1–C8)** —
-  `pub(crate) trait PendingTxEngine` lands in
-  `engine::traits::pending_tx`; the enum families and augmented
-  `Reservation` / `PendingTx` types ship in `engine::pending` /
-  `engine::error` / `engine::diagnostics`; `LocalPendingTx<S, O,
-  F>` ships as the Stage 1 concrete substrate;
-  `Engine<S, D, L, R, P>` five-parameter wiring rewires
-  orchestration-layer dispatch to delegate through `P:
-  PendingTxEngine`. The §7.X commit decomposition ordering is
-  load-bearing for the Phase 1 bisection-discipline gate; the
-  segment-2h within-commit deltas (§5.6.8) and segment-2i
-  delta-on-delta (§5.6.12) refine the C0–C8 commit bodies in
-  place per the synthesis-banner pinned at the top of the design
-  doc's §7.X.
+- **Phase 1 (PR 5 §7.X commits C0–C8 — landed 2026-05-27)** —
+  `pub trait PendingTxEngine` landed in
+  `engine::traits::pending_tx` (C5α); the enum families and
+  augmented `Reservation` / `PendingTx` types shipped in
+  `engine::pending` / `engine::error` / `engine::diagnostics`
+  (C2/C3); `LocalPendingTx<S, O, F>` shipped as the Stage 1
+  concrete substrate (C5β); `Engine<S, D, L, R, P>` five-
+  parameter wiring rewired orchestration-layer dispatch to
+  delegate through `P: PendingTxEngine` (C6); `FaultInjecting<P>`
+  + C7 property tests shipped under `test-helpers` (C7). The
+  §7.X commit decomposition ordering was load-bearing for the
+  Phase 1 bisection-discipline gate; segment-2h within-commit
+  deltas (§5.6.8) and segment-2i delta-on-delta (§5.6.12) are
+  reflected in the landed code, not the pre-segment-2h
+  `ReservationState` / `SubmitFailed` shapes in older §7.X prose.
+  Locator: [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §6 landing-SHA table.
 
 Stage 4 cutover preserves the §2.4 surface verbatim per §7's
 invariants; the implementor swap (`LocalPendingTx` → `kameo`-

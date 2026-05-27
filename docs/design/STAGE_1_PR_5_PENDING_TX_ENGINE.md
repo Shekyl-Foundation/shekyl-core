@@ -1,6 +1,12 @@
 # Stage 1 PR 5 — `PendingTxEngine` extraction — design
 
-**Status.** **Round 1 closed (2026-05-13); Round 2 closed
+**Status.** **Phase 1 landed (2026-05-27).** Commits C0–C8 on
+`feat/stage-1-pr5-pending-tx-engine` (implementation branch;
+tip `ca7622558` at C7; C8 doc commit follows). The PR opens
+against `dev` after C8 lands locally with a passing CI run.
+Per-commit landing SHAs are recorded in [§6](#6-review-checklist)
+and in each [§7.X](#7x-phase-1-commit-decomposition-round-3-deliverable)
+`Landed:` line. **Round 1 closed (2026-05-13); Round 2 closed
 (2026-05-14), segment 2h reopen-and-close (2026-05-26) for
 actor-state-shape refinement, segment 2i reopen-and-close
 (2026-05-27) for wider-ecosystem-lessons audit (G1–G8
@@ -6983,22 +6989,21 @@ performs the sweep).**
   `build`-success path in `LocalPendingTx::build` /
   `PendingTxActor::handle_build` (R8 segment-2e
   deliverable 1; Phase 1 confirms).
+- [x] `PendingTxDiagnostic::SubmitSnapshotInvalidated`
+  emitted at `submit`'s snapshot-mismatch path (R5 lazy-
+  discard semantics under segment 2h; no
+  `SnapshotRotationAutoDiscard` emission — Phase 1 confirms).
 - [x] `PendingTxDiagnostic::Discarded { reason:
-  SnapshotRotationAutoDiscard }` emitted at `submit`'s
-  snapshot-mismatch path (R5 lazy-discard semantics;
-  Phase 1 confirms).
-- [x] `PendingTxDiagnostic::Discarded { reason:
-  DaemonRejectedTerminal }` emitted on `DoubleSpend`
-  daemon-rejection per R9 segment-2f per-error-class
-  table (Phase 1 confirms).
-- [x] `PendingTxDiagnostic::SubmitFailed { kind: ... }`
-  emitted for all `SubmitErrorKind` variants per R9
-  segment-2f per-error-class table (Phase 1 confirms).
-- [x] `PendingTxDiagnostic::SubmitAttempted` emitted
-  on submit-handler entry; `SubmitSucceeded` /
-  `SubmitFailed` emitted on `SubmitCompleted`
-  self-message arrival per R9 segment-2f self-
-  continuation pattern (Phase 1 confirms).
+  DaemonRejectedTerminal { kind } }` emitted on terminal
+  daemon-rejection per R9 segment-2h per-error-class table
+  (Phase 1 confirms via C7 property tests).
+- [x] `PendingTxDiagnostic::SubmitPendingResolution { kind }`
+  emitted on ambiguous daemon outcomes (`DaemonTimeout` /
+  `DaemonUnavailable`); reservation stays `in_flight` (Phase 1
+  confirms; `SubmitFailed` retired in segment 2h).
+- [x] `PendingTxDiagnostic::SubmitAttempted` emitted on
+  submit-handler entry; `SubmitSucceeded` on accept path
+  (Phase 1 confirms).
 - [x] No emission paths bypass the sink — every
   `&self` mutation event has an emit at the call
   site per §5.0.3 emission/return-coherence
@@ -7020,6 +7025,26 @@ for the segment-2g `DIAGNOSTIC_STREAM.md` rename. Round 3
 proceed against the §4 enumeration. Round 3 produces the
 Phase 1 commit-decomposition deliverable per the
 PR 1 / PR 2 / PR 3 / PR 4 precedent.
+
+**Phase 1 landing SHAs (`feat/stage-1-pr5-pending-tx-engine`).**
+Cross-reference for §6 checklist items and bisection audit:
+
+| Commit | SHA | Subject (abbrev.) |
+|--------|-----|-------------------|
+| C0 | `4466d153e` | docs: PR 5 C0 — propagate PendingTxEngine surface |
+| C1 | `3424c9fd9` | SnapshotId + cn_fast_hash derivation |
+| C2α | `fa5981e9d` | submit/collaborator error vocabulary |
+| C2β | `316f5c15e` | ReservationExtension seam |
+| C2γ | `8f8e4c863` | Reservation/PendingTx augmentation |
+| C3 | `58fb6174f` | PendingTxDiagnostic + emission infra |
+| C4α | `1b14d0113` | Signer trait + LocalSigner |
+| C4β | `042c974a0` | OutputSelector + greedy impl |
+| C4γ | `df60d2424` | FeeEstimator + Daemon impl |
+| C5α | `ecc86c741` | PendingTxEngine trait + skeleton |
+| C5β | `a137cc234` | LocalPendingTx trait bodies |
+| C6 | `0713591bf` | Engine fifth-parameter pending dispatch |
+| C7 | `ca7622558` | FaultInjecting + property tests |
+| C8 | *(this commit)* | docs propagation + CHANGELOG |
 
 ---
 
@@ -7864,6 +7889,9 @@ intra-doc-link warnings against `pending.rs` / `traits/`
 referenced from the new §2.5 prose); the existing 170-test
 suite is unchanged.
 
+**Landed: `4466d153e`** (`docs: PR 5 C0 — propagate PendingTxEngine
+post-Round-3 surface`).
+
 ---
 
 ### Commit C1 — `SnapshotId` opaque type + `cn_fast_hash` derivation + domain-separation prefix
@@ -7944,6 +7972,9 @@ C1's scope:
 C1 is the smallest type-and-derivation commit; the existing
 test suite still runs (the new type has no callers yet);
 new tests in `engine/refresh.rs::tests` cover the derivation.
+
+**Landed: `3424c9fd9`** (`crypto-pq: PR 5 C1 — SnapshotId opaque type +
+cn_fast_hash derivation`).
 
 ---
 
@@ -8106,6 +8137,10 @@ the standard `Debug` derive ordering). The CI gate is
 --all-targets -- -D warnings` clean + `cargo test --lib`
 green.
 
+**Landed:** **C2α** `fa5981e9d`; **C2β** `316f5c15e`; **C2γ**
+`8f8e4c863` (submit/collaborator error vocabulary;
+`ReservationExtension`; reservation / `PendingTx` augmentation).
+
 ---
 
 ### Commit C3 — `PendingTxDiagnostic` enum + diagnostics emission infrastructure
@@ -8199,6 +8234,9 @@ ride along with C7).
 CI gate: `cargo fmt --check` + clippy clean + `cargo test
 --lib` green (no functional change); `cargo doc --no-deps`
 clean.
+
+**Landed: `58fb6174f`** (`crypto-pq: PR 5 C3 — PendingTxDiagnostic
+enum + emission infrastructure`).
 
 ---
 
@@ -8393,6 +8431,10 @@ tests across the three sub-commits. CI gate at each
 sub-commit boundary: clippy + fmt + lib-tests pass; the
 extracted helpers in C4β preserve byte-for-byte output
 parity with the pre-PR-5 selection loop.
+
+**Landed:** **C4α** `1b14d0113`; **C4β** `042c974a0`; **C4γ**
+`df60d2424` (`Signer` / `OutputSelector` / `FeeEstimator` trait
+surfaces + default impls).
 
 ---
 
@@ -8708,6 +8750,9 @@ CI gate at C5 commit boundary: clippy + fmt + lib-tests
 green; pre-PR-5 in-state tests all still pass (via
 migration); new augmentation tests pass.
 
+**Landed:** **C5α** `ecc86c741`; **C5β** `a137cc234`
+(`PendingTxEngine` trait + `LocalPendingTx` extraction).
+
 ---
 
 ### Commit C6 — `Engine<S, D, L, R, P>` parameterization + orchestration-layer dispatch migration
@@ -8881,6 +8926,9 @@ verbatim modulo the documented `discard_pending_tx` reason
 drop (which is documented in the CHANGELOG C8 commit per
 the standard test-call-site narrowing pattern).
 
+**Landed: `0713591bf`** (`crypto-pq: PR 5 C6 — Engine pending dispatch
+via LocalPendingTx`).
+
 ---
 
 ### Commit C7 — `FaultInjecting<P: PendingTxEngine>` wrapper + property tests + R9 per-error-class coverage
@@ -9047,6 +9095,13 @@ CI gate: clippy under both default-features and
 green; `cargo doc --features test-helpers --no-deps`
 green.
 
+**Landed: `ca7622558`** (`crypto-pq: PR 5 C7 — FaultInjecting pending
+wrapper + property tests`). **Implementation note (segment-2h):**
+C7 property tests exercise the landed (γ) lean collection shape via
+`LocalPendingTx` + `queue_submit_daemon_outcome` (not the pre-segment-2h
+`ReservationState` enum or `SubmitFailed` / `SnapshotRotationAutoDiscard`
+diagnostic variants retired in segment 2h).
+
 ---
 
 ### Commit C8 — Docs propagation + CHANGELOG
@@ -9114,6 +9169,19 @@ C8's scope:
 
 C8 is the docs / changelog commit; the PR opens with C8
 as the tip.
+
+**Landed: this commit** (`docs: PR 5 C8 — PendingTxEngine docs
+propagation + CHANGELOG`). C8's scope as executed: the Status-
+banner Phase 1 landed paragraph; per-`Commit Cn` `Landed:` lines
+in this §7.X section (C0–C8 plus C2α/β/γ, C4α/β/γ, C5α/β); the
+[`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
+§2.4 past-tense reframe with implementation-locator SHAs; the
+[`CHANGELOG`](../CHANGELOG.md) `[Unreleased]` PR 5 entries; and
+the [`FOLLOWUPS`](../FOLLOWUPS.md) Phase 1 landed status pins on
+the V3.x consumer-actor entries (R8 / R9 / R15 / R16 / HW-wallet).
+PR 5 §7.X commits C0–C8 landed on
+`feat/stage-1-pr5-pending-tx-engine`; PR opens against `dev` after
+C8 push.
 
 ---
 

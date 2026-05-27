@@ -2433,6 +2433,37 @@
     (those are Phase 3a/3b/3c/4). Phase 2b lands AES round +
     SuperScalarHash next.
 
+- **Stage 1 PR 5 — `PendingTxEngine` trait surface and Phase 1
+  substrate** (`feat/stage-1-pr5-pending-tx-engine`, 2026-05-27).
+  Lands the Round-3-closed `PendingTxEngine` trait, the (γ) lean
+  three-collection reservation model, secondary-engine trait seams,
+  and `Engine<S, D, L, R, P>` orchestration dispatch per
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §4 / §5.0 / §7.X (C0 = `4466d153e` … C7 = `ca7622558`; C8 doc
+  commit follows).
+  - `pub trait PendingTxEngine: Send + Sync + 'static` at
+    [`engine/traits/pending_tx.rs`](../rust/shekyl-engine-core/src/engine/traits/pending_tx.rs)
+    with `build` / `submit` / `discard` / `outstanding` / optional
+    `signal_mempool_evicted` (C5α/β).
+  - `pub struct LocalPendingTx<S, O, F>` at
+    [`engine/local_pending_tx.rs`](../rust/shekyl-engine-core/src/engine/local_pending_tx.rs)
+    as the V3.0 production `P` parameter default for
+    `Engine<S, D, L, R, P>` (C5β).
+  - `pub struct SnapshotId([u8; 16])` and domain-separated
+    `derive_snapshot_id(&LedgerSnapshot)` (C1).
+  - Submit-path error vocabulary: `SubmitError`,
+    `TerminalErrorKind`, `AmbiguousErrorKind`, `DiscardReason`,
+    `ReservationExtension`, `PendingTxError` augmentations (C2).
+  - `pub enum PendingTxDiagnostic` + `emit_pending_tx` helper on
+    `DiagnosticSink` (C3); `AssertionSink` / `PanickingSink`
+    pending-event recording for tests (C7).
+  - Secondary-engine traits: `Signer` + `LocalSigner` (C4α),
+    `OutputSelector` + `WalletGreedyOutputSelector` (C4β),
+    `FeeEstimator` + `DaemonFeeEstimator` (C4γ).
+  - `FaultInjecting<P: PendingTxEngine>` FIFO fault-injection
+    wrapper under `#[cfg(any(test, feature = "test-helpers"))]`
+    (C7); `Engine::replace_pending_tx` test hook (C6).
+
 - **Stage 1 PR 4 — `RefreshEngine` trait surface**
   (`feat/stage-1-pr4-refresh-engine`, 2026-05-15 → 2026-05-20).
   Lands the Phase-0a-binding `RefreshEngine` trait and the
@@ -4750,6 +4781,38 @@
   the FCMP/RCT keys it already consumed).
 
 ### Changed
+
+- **Stage 1 PR 5 — `Engine` parameterized over `P: PendingTxEngine`
+  (fifth type parameter)** (`feat/stage-1-pr5-pending-tx-engine`,
+  C6 = `0713591bf`; default `P = LocalPendingTx<LocalSigner,
+  WalletGreedyOutputSelector, DaemonFeeEstimator>`). Orchestrator
+  methods `build_pending_tx` / `submit_pending_tx` /
+  `discard_pending_tx` / `outstanding_reservations` dispatch through
+  `self.pending` rather than reading `Engine`'s former inline
+  reservation map. `Engine::replace_pending_tx` (test-helpers) mirrors
+  PR 4's `replace_refresh` pattern.
+
+- **Stage 1 PR 5 — `Engine::discard_pending_tx` reason-parameter
+  drop at orchestrator boundary** (C6). The orchestrator-facing
+  `discard_pending_tx(id)` no longer accepts `DiscardReason`; the
+  trait surface retains `discard(id, reason)` for V3.x consumer
+  actors (`ReservationTTLActor`, etc.). Test call sites narrowed per
+  the PR 4 precedent.
+
+- **Stage 1 PR 5 — reservation / pending-tx data-shape augmentation**
+  (C2γ). `Reservation` gains `snapshot_id`, `extensions`, and
+  collection-membership encoding (no `ReservationState` enum under
+  segment 2h); `PendingTx` gains `snapshot_id`. Submit snapshot
+  staleness returns `SubmitError::SnapshotInvalidated` with rich ids;
+  terminal daemon failures emit `Discarded { DaemonRejectedTerminal }`;
+  ambiguous failures emit `SubmitPendingResolution` and keep the
+  reservation `in_flight`.
+
+- **Stage 1 PR 5 — `engine/pending.rs` free-function extraction**
+  (C5β). Production paths live on `LocalPendingTx`; legacy
+  `build_pending_tx_in_state` / `submit_pending_tx_in_state` /
+  `discard_pending_tx_in_state` remain under `#[cfg(test)]` for
+  migrated unit tests.
 
 - **Stage 1 PR 4 — `Engine` parameterized over `R: RefreshEngine`
   (fourth type parameter)** (`feat/stage-1-pr4-refresh-engine`,
