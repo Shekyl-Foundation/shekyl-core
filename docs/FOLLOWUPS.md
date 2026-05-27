@@ -3892,6 +3892,14 @@ one place to confirm each item's relationship to the wallet stack.
 
 ## V3.2 — Rust cutover and cleanup
 
+- **Wallet on network filesystems (NFS / SMB).** Advisory lock + atomic
+  rename semantics are validated for local POSIX filesystems only. PR 6
+  segment 2i (G5) records that multi-client network mounts can break
+  single-writer assumptions. **Work:** document "local disk only" in user-
+  facing wallet docs; evaluate `flock` vs `fcntl` posture if remote home
+  directories are a deployment target. **Target:** V3.2. **Reopen when:**
+  a supported deployment explicitly requires network-backed wallet paths.
+
 - **`WalletFile` handle slimming (post–PR 6 `PersistenceEngine`).**
   `shekyl-engine-file::WalletFile` retains `keys_file_bytes`, opened
   `file_kek`, and other material beyond what steady-state
