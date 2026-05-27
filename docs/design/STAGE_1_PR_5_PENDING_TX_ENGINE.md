@@ -1,7 +1,18 @@
 # Stage 1 PR 5 — `PendingTxEngine` extraction — design
 
 **Status.** **Round 1 closed (2026-05-13); Round 2 closed
-(2026-05-14) — all seven segments landed: 2a (audit-readiness),
+(2026-05-14); Round 3 closed (2026-05-26) — §7.X Phase 1
+commit decomposition appended: eight commits C0–C8 (with C2 /
+C4 / C5 sub-decomposed per `90-commits.mdc` bisection
+discipline) load-bearing-ordered, every Phase 0a–0k binding-
+form mapped to a specific commit, every §6 review-checklist
+item mapped to a specific commit's test deliverable, every
+existing pre-PR-5 substrate entry inventoried with its diff
+scope. The `feat/stage-1-pr5-pending-tx-engine` short-lived
+branch (per `06-branching.mdc` rule 2; ≤5 days, ≤10 commits)
+cuts off the post-Round-3 dev tip; the PR opens against `dev`
+after C8 lands locally with a passing CI run. — all seven
+Round 2 segments landed: 2a (audit-readiness),
 2b (R11 signing-actor split reframe to (b); R14 reservation
 extensibility seam), 2c (closure-rule and lens-applicability
 refinements paired with R13 / R15 / R16 / R17 named with
@@ -26,8 +37,9 @@ deps at line 28); §5.0.3 diagnostic-stream-doc
 generalization closed as (a) rename to
 `DIAGNOSTIC_STREAM.md`; §6 review checklist filled with all
 binding-check / test-substrate / call-site-sweep items).
-Round 3 (commit decomposition + Phase 1 commit list) is the
-next forward step.** This
+Round 3 (commit decomposition + Phase 1 commit list) closed
+2026-05-26 — see §7.X below for the eight-commit Phase 1
+deliverable.** This
 document was opened as a seed immediately after Stage 1 PR 4's
 design substrate landed on `dev` (merge commit `6de8335d5`,
 PR #42). Round 1 closes here in one round — not deferred to
@@ -4214,4 +4226,1521 @@ work, by round:
 - §7 commit decomposition + Phase 1 commit list (per the PR 1
   / PR 2 / PR 3 / PR 4 precedent). Substrate: this document at
   segment-2g close-out; §4 Phase 0 enumeration; §6 review
-  checklist; PR 4 Round 3 confirmation per §5.2.
+  checklist; PR 4 Round 3 confirmation per §5.2. Lands as
+  §7.X below.
+
+---
+
+## §7.X Phase 1 commit decomposition (Round 3 deliverable)
+
+Per the PR 1 / PR 2 / PR 3 / PR 4 precedent, Round 3 produces
+the Phase 1 commit list as the substrate the implementation
+branch (`feat/stage-1-pr5-pending-tx-engine`) cuts against. The
+commits are **load-bearing-ordered** — each commit's preconditions
+are the cumulative state of the prior commits; bisection isolates
+each behaviour change to one commit boundary.
+
+The commit list assumes the implementation branch cuts off the
+post-Round-3 dev tip (post-PR-#60 [PR 4 RefreshEngine merge,
+`fd6005e2a`]; post-PR-#79 [RandomX v2 c_oracle Flags merge,
+`989610cac`]; the design branch's lifetime ends at Round 3
+close). PR 5 implementation lands as **eight commits**; the PR
+opens after C8 lands locally with a passing CI run.
+
+### Pre-flight: existing substrate inventory
+
+The existing `rust/shekyl-engine-core/src/engine/pending.rs`
+(1036 lines, landed pre-PR-4) is the **source substrate** for
+the trait extraction. PR 5 extracts and augments rather than
+rewriting — per §3.2 architectural-inheritance audit and the
+"moves not rewrites" pattern PR 3 / PR 4 established. The
+inventory below names what is present today and what each
+commit alters; reviewers cross-reference this table when
+auditing each commit's diff scope.
+
+**Types already in `engine/pending.rs` (pre-PR-5).**
+
+- `ReservationId(u64)` — the monotone counter token; unchanged.
+- `TxHash([u8; 32])` — opaque submit-result token; unchanged.
+- `FeePriority { Economy | Standard | Priority | Custom(NonZeroU64) }` —
+  caller-facing fee tier enum. Pre-PR-5 it is owned by `pending.rs`;
+  PR 5 C4 *re-homes* it under the `FeeEstimator` trait surface
+  (`Phase 0j`) so the trait's `estimate_fee(priority: FeePriority,
+  ...) -> Result<u64, FeeEstimatorError>` signature is the canonical
+  citation, with `pending.rs` re-exporting for backward source-text
+  compatibility within the crate. No callers see a type change.
+- `TxRecipient { address, amount_atomic_units }` — unchanged.
+- `TxRequest { recipients, priority, from_subaddress }` — unchanged.
+- `TxRecipientSummary { address, amount_atomic_units }` — unchanged.
+- `Reservation { selected_transfer_indices, built_at_height,
+  built_at_tip_hash, fee_atomic_units, recipients, priority }`
+  (`pub(crate)`) — augmented in C2 with `snapshot_id: SnapshotId`
+  (R12 (a) per §5.4) and `extensions: Vec<ReservationExtension>`
+  (R14 per §5.4 / segment-2b) and `state: ReservationState`
+  (R9 segment-2f). Existing fields retained.
+- `PendingTx { id, built_at_height, built_at_tip_hash,
+  fee_atomic_units, tx_bytes, recipients }` — augmented in C2
+  with `snapshot_id: SnapshotId` (caller-visible token for
+  symmetry with `Reservation`'s pinning; submit's
+  field-comparison handler reads off the reservation, not the
+  handle, per §5.0 — but the handle carries the same id so a
+  caller can correlate diagnostic events without round-tripping
+  through `outstanding()`).
+- `build_pending_tx_in_state(...)` — free function; **extracted in
+  C5 into `LocalPendingTx::build` method body** with the
+  `SnapshotId`-pinning addition (per C2's augmented `Reservation`
+  shape). No business logic changes; the function body becomes
+  the method body verbatim with the snapshot-id stamping inserted
+  at reservation insertion.
+- `submit_pending_tx_in_state(...)` — free function; **extracted in
+  C5 into `LocalPendingTx::submit` method body** with the
+  snapshot-mismatch staleness check + state-machine transition
+  (`Active → SubmitPendingDaemonAck → Resolved`) inserted per R9
+  segment-2f. The existing tip-hash-comparison invariant
+  (`PendingTxError::ChainStateChanged`) is preserved as a
+  defense-in-depth check inside the `Active → ...` transition
+  (the snapshot-id check is the load-bearing one; tip-hash
+  comparison is a redundant cross-check that catches any
+  derivation bug in `SnapshotId`).
+- `discard_pending_tx_in_state(...)` — free function; **extracted
+  in C5 into `LocalPendingTx::discard` method body**. The
+  current signature returns `Result<(), PendingTxError>` on
+  unknown id; the trait surface preserves that shape.
+- `impl<S, D> Engine<S, D, LocalLedger> for build_pending_tx /
+  submit_pending_tx / discard_pending_tx / outstanding_reservations`
+  — Engine-side dispatch methods; **rewired in C6** to delegate
+  through the `P: PendingTxEngine` generic parameter rather than
+  reading `Engine`'s own `reservations` field directly. The
+  `Engine` struct's `reservations: BTreeMap<ReservationId,
+  Reservation>` and `next_reservation_id: u64` fields **migrate to
+  `LocalPendingTx`'s interior state** in C5; `Engine` no longer
+  owns them after C6.
+
+**Types not present today (introduced in PR 5).**
+
+- `SnapshotId([u8; 16])` opaque type (Phase 0b) — C2.
+- `SubmitError`, `SubmitErrorKind` (Phase 0a) — C2.
+- `DiscardReason { ConsumerExplicit | SnapshotRotationAutoDiscard
+  | DaemonRejectedTerminal | TTLAutoDiscard }`
+  (`#[non_exhaustive]`) — C2.
+- `ReservationExtension` (`#[non_exhaustive]`, empty V3.0
+  variant set; Phase 0d / R14) — C2.
+- `ReservationState { Active | SubmitPendingDaemonAck | Resolved }`
+  internal enum (R9 segment-2f) — C2.
+- `PendingTxDiagnostic` enum (`#[non_exhaustive]`; Phase 0f) — C3.
+- `Signer` trait (Phase 0h / R11 (b)) — C4.
+- `LocalSigner` default impl of `Signer` over `AllKeysBlob` —
+  C4.
+- `OutputSelector` trait (Phase 0i / R13) — C4.
+- `WalletGreedyOutputSelector` default impl (matches existing
+  `build_pending_tx_in_state` selection logic verbatim) — C4.
+- `FeeEstimator` trait (Phase 0j / R16) — C4.
+- `DaemonFeeEstimator` default impl (Phase 1 stub returning
+  `STUB_FEE_ATOMIC_UNITS`; V3.0 wire-up to `get_fee_estimates`
+  is deferred to Phase 2a per the existing
+  `STUB_FEE_ATOMIC_UNITS` docstring) — C4.
+- `PendingTxEngine` trait (Phase 0a..0f composite) — C5.
+- `LocalPendingTx<S, O, F>` aggregate impl of `PendingTxEngine` — C5.
+- `FaultInjecting<P: PendingTxEngine>` test wrapper — C7.
+
+**File-tree changes anticipated.**
+
+- New file: `rust/shekyl-engine-core/src/engine/traits/pending_tx.rs`
+  — trait definition (C5).
+- New file: `rust/shekyl-engine-core/src/engine/local_pending_tx.rs`
+  — `LocalPendingTx` aggregate (C5; mirrors
+  `local_refresh.rs` / `local_ledger.rs` layout).
+- New file: `rust/shekyl-engine-core/src/engine/fault_injecting_pending_tx.rs`
+  — wrapper (C7; mirrors `fault_injecting_refresh.rs` /
+  `fault_injecting_ledger.rs`).
+- Existing file: `rust/shekyl-engine-core/src/engine/pending.rs`
+  — augmented C2 (data-type fields); free functions removed in
+  C5 (bodies migrated to `LocalPendingTx`); the file shrinks to
+  hold only the wire-facing types (`ReservationId`, `TxHash`,
+  `FeePriority`, `TxRecipient`, `TxRequest`, `TxRecipientSummary`,
+  `PendingTx`) plus the new opaque types from C2.
+- Existing file: `rust/shekyl-engine-core/src/engine/signer.rs`
+  — augmented in C4 to add the new `Signer` trait + `LocalSigner`
+  impl alongside the existing `EngineSignerKind` sealed-trait
+  surface. The two are orthogonal: `EngineSignerKind` is the
+  compile-time mode discriminator on `Engine<S>` (`SoloSigner` /
+  multisig); `Signer` is the runtime spend-secret holder
+  interface for `LocalPendingTx` per R11 (b).
+- Existing file: `rust/shekyl-engine-core/src/engine/error.rs`
+  — augmented in C2 with `SubmitError` / `SubmitErrorKind` /
+  `FeeEstimatorError` / `OutputSelectorError` / `SignerError`
+  variants. Existing `SendError` / `PendingTxError` retained;
+  per §5.0.2 the trait surface returns `SendError` from `build`
+  and `SubmitError` / `PendingTxError` from `submit` / `discard`
+  per the segment-2f closure.
+- Existing file: `rust/shekyl-engine-core/src/engine/diagnostics.rs`
+  — augmented in C3 with `PendingTxDiagnostic` enum +
+  emission-helper additions. `DiagnosticSink` trait is reused
+  verbatim from PR 4 per §5.0.3 (no trait-shape change; the
+  emit method already accepts `&dyn Debug` per PR 4's design).
+- Existing file: `rust/shekyl-engine-core/src/engine/mod.rs`
+  — augmented in C6 with the fifth type parameter on `Engine<S,
+  D, L, R, P>`; orchestration-layer dispatch methods rewired to
+  delegate through `P` rather than reading `engine.reservations`.
+- Existing file: `rust/shekyl-engine-core/src/engine/lifecycle.rs`
+  — augmented in C6 with the `replace_pending_tx` consume-and-
+  rebuild constructor (mirrors PR 4's C7 `replace_refresh`
+  refactor at `8f0fbf2bb` per PR 4 §7.X), gated
+  `#[cfg(any(test, feature = "test-helpers"))]`.
+- Existing file: `rust/shekyl-engine-core/src/engine/traits/mod.rs`
+  — augmented in C5 with the `pub use traits::pending_tx::*;`
+  re-export.
+- Existing file: `rust/shekyl-engine-core/Cargo.toml` — the
+  `test-helpers` feature already exists (PR 4 C6α landed it);
+  no `Cargo.toml` change needed for C7. The `shekyl-crypto-hash`
+  dependency is already unconditional in `[dependencies]`
+  (line 28); C2 imports `cn_fast_hash` without a Cargo.toml
+  change.
+
+---
+
+### Commit C0 — Phase 0 spec amendment (doc-only, prerequisite)
+
+C0 lands the Phase 0 binding-form pins enumerated in §4 into
+the cross-cutting design surface, so the implementation
+commits (C1–C8) have a single authoritative spec citation per
+trait surface, opaque type, and topology slot. No code change;
+doc-only.
+
+C0's scope:
+
+- [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
+  gains §2.5 `PendingTxEngine — Stage 1 surface` with the
+  trait method signatures (`build` / `submit` / `discard` /
+  `outstanding`), the four trait-parameter slots (`S: Signer`,
+  `O: OutputSelector`, `F: FeeEstimator`, plus the
+  diagnostic-stream sink-binding constructor parameter), the
+  `SubmitError` / `SubmitErrorKind` / `DiscardReason` / `SnapshotId`
+  / `ReservationExtension` / `PendingTxDiagnostic` enum
+  enumerations, and the cross-reference back to this design
+  doc's §4 enumeration.
+- [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §1.x lifecycle status table gains the PR 5 row, marked
+  `Round 3 closed; Phase 1 lands as commits C0–C8`. The
+  cross-trait coupling row for `PendingTxEngine ↔ LedgerEngine`
+  is noted as **additive-only** (Phase 0g
+  `LedgerDiagnostic::SnapshotMerged` deferred to V3.x
+  consumer-actor PR per segment-2g; no trait amendment in
+  PR 5).
+- [`docs/V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md)
+  gains entries for each binding-form pin landed in Round 2's
+  segments 2b–2g (R11 (b) signer split; R12 (a) content-derived
+  `SnapshotId`; R2 16-byte truncation; R8 `TTLAutoDiscard`
+  variant; R9 two-stage submit flow; R13 (b) `OutputSelector`
+  trait seam; R15 (b) `SubmissionStrategyActor` topology slot;
+  R16 (b) `FeeEstimator` trait seam; R17 (a) drop-on-close).
+  Each entry cross-references the corresponding §5.4 R-residual
+  section in this doc.
+- [`docs/design/WALLET_REWRITE_PLAN.md`](./WALLET_REWRITE_PLAN.md)
+  the Stage-1-PR-table row for "PR 5 — PendingTxEngine
+  extraction" gains the design-doc cross-reference and the
+  "Round 3 closed; ready for Phase 1" status note. (The plan's
+  high-level phase enumeration is untouched.)
+- This design doc (`STAGE_1_PR_5_PENDING_TX_ENGINE.md`) Status
+  banner gains the **Round 3 closed; Phase 1 commits C0–C8
+  enumerated below** marker before "Round 3 (commit
+  decomposition + Phase 1 commit list) is the next forward
+  step" line.
+
+C0 is doc-only; CI gate: `cargo doc --no-deps` clean (no new
+intra-doc-link warnings against `pending.rs` / `traits/`
+referenced from the new §2.5 prose); the existing 170-test
+suite is unchanged.
+
+---
+
+### Commit C1 — `SnapshotId` opaque type + `cn_fast_hash` derivation + domain-separation prefix
+
+C1 lands the smallest type-level prerequisite: the opaque
+16-byte `SnapshotId` token plus the domain-separated derivation
+function over `LedgerSnapshot`'s deterministic fields. The
+derivation is `pub(crate)` (Stage 1's `LocalPendingTx` calls
+it; the trait surface never accepts a `SnapshotId` from a
+caller — it is always engine-derived).
+
+C1's scope:
+
+- New module declaration in
+  [`engine/mod.rs`](../../rust/shekyl-engine-core/src/engine/mod.rs)
+  for the new file (if separate) or inline addition to
+  [`engine/pending.rs`](../../rust/shekyl-engine-core/src/engine/pending.rs)
+  per the file-tree decision below.
+- `pub struct SnapshotId([u8; 16])`. `#[derive(Clone, Copy,
+  Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]`. Per
+  `21-reversion-clause-discipline.mdc`'s rejection-with-reopening
+  shape: `Clone + Copy + PartialEq + Eq` is required by the
+  submit-handler field-comparison contract (§5.0 ground 2);
+  `Hash + Ord` is required so consumers can use `SnapshotId` as
+  a map key (V3.x consumer-actor PRs subscribing to
+  `LedgerDiagnostic::SnapshotMerged` events will key indexes
+  off it; the V3.0-time-cost is zero — the trait `Hash` and
+  `Ord` impls are derived). Reopening criterion: none — the
+  type's identity-as-bytes is structural to its purpose.
+- `pub(crate) fn derive_snapshot_id(snapshot:
+  &LedgerSnapshot) -> SnapshotId` in
+  [`engine/refresh.rs`](../../rust/shekyl-engine-core/src/engine/refresh.rs)'s
+  `impl LedgerSnapshot` block (the function reads
+  `pub(crate)` fields `synced_height` and `reorg_blocks`, so
+  it must live in the same module the fields are declared
+  in). Implementation:
+
+  ```rust
+  pub(crate) fn derive_snapshot_id(snapshot: &LedgerSnapshot) -> SnapshotId {
+      let mut buf = Vec::with_capacity(
+          b"shekyl-snapshot-id-v1".len()
+              + 8
+              + 8
+              + snapshot.reorg_blocks.blocks.len() * (8 + 32),
+      );
+      buf.extend_from_slice(b"shekyl-snapshot-id-v1");
+      buf.extend_from_slice(&snapshot.synced_height.to_le_bytes());
+      buf.extend_from_slice(&(snapshot.reorg_blocks.blocks.len() as u64).to_le_bytes());
+      for (height, hash) in &snapshot.reorg_blocks.blocks {
+          buf.extend_from_slice(&height.to_le_bytes());
+          buf.extend_from_slice(hash);
+      }
+      let digest = shekyl_crypto_hash::cn_fast_hash(&buf);
+      let mut out = [0u8; 16];
+      out.copy_from_slice(&digest.as_bytes()[..16]);
+      SnapshotId(out)
+  }
+  ```
+
+  Domain-separated by the versioned prefix per segment-2g
+  rationale; length-prefixed `reorg_blocks` count
+  forecloses extension/concatenation collisions against
+  same-tip ledgers with different reorg-window depth (per
+  the cryptographic discipline of canonical encoding).
+- Unit tests at the bottom of `engine/refresh.rs`:
+  - `derive_snapshot_id_deterministic` — same snapshot →
+    same id; different snapshot (different height or
+    different reorg-window contents) → different id.
+  - `derive_snapshot_id_domain_separated` — synthetic
+    snapshots with identical post-prefix bytes hash
+    differently iff the prefix bytes differ (verifies the
+    prefix is load-bearing in the derivation).
+  - `derive_snapshot_id_length_prefix_separates_neighbours` —
+    `reorg_blocks` of length 0 vs. length 1 vs. length 2
+    over the same `synced_height` produce distinct ids;
+    canonical-encoding regression test.
+
+C1 is the smallest type-and-derivation commit; the existing
+test suite still runs (the new type has no callers yet);
+new tests in `engine/refresh.rs::tests` cover the derivation.
+
+---
+
+### Commit C2 — Error / discriminant enums + `Reservation` augmentation + `ReservationState` machine
+
+C2 lands the Phase 0a / 0d / 0e / 0f-prerequisite type-level
+additions in one bisection-coherent commit: the error enums,
+the reservation extensibility seam, the snapshot-id pin on
+existing `Reservation` / `PendingTx`, and the internal state
+machine for R9's two-stage submit flow. No business-logic
+change — these are data-shape additions whose consumers land
+in subsequent commits.
+
+C2 is decomposed into three sub-commits per bisection
+discipline (per `90-commits.mdc`'s scope-per-commit rule and
+PR 4's C5 / C5α / C5β precedent):
+
+- **C2α — error enums (`SubmitError` + `SubmitErrorKind`;
+  ancillary error enums for downstream traits).**
+
+  Adds to
+  [`engine/error.rs`](../../rust/shekyl-engine-core/src/engine/error.rs):
+
+  ```rust
+  #[derive(Debug)]
+  #[non_exhaustive]
+  pub enum SubmitError {
+      SnapshotInvalidated {
+          reservation_snapshot: SnapshotId,
+          current_snapshot: SnapshotId,
+      },
+      DaemonRejected { kind: SubmitErrorKind },
+  }
+
+  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+  #[non_exhaustive]
+  pub enum SubmitErrorKind {
+      DoubleSpend,
+      FeeTooLow,
+      Malformed,
+      DaemonTimeout,
+      DaemonUnavailable,
+  }
+
+  #[derive(Debug)]
+  #[non_exhaustive]
+  pub enum FeeEstimatorError {
+      DaemonUnreachable,
+      DaemonResponseInvalid { reason: &'static str },
+  }
+
+  #[derive(Debug)]
+  #[non_exhaustive]
+  pub enum OutputSelectorError {
+      InsufficientFunds { needed: u64, available: u64 },
+      NoEligibleOutputs,
+  }
+
+  #[derive(Debug)]
+  #[non_exhaustive]
+  pub enum SignerError {
+      Unavailable,                                         // capability-bound
+      RemoteFailure { reason: &'static str },              // HW-wallet trigger
+  }
+  ```
+
+  All five enums `#[non_exhaustive]` per `21-reversion-clause-
+  discipline.mdc`'s named-criteria pattern — the V3.0
+  variant set is the audited surface, V3.x variants land
+  additively without major-version breakage. Stage 4
+  actor-migration may add `Cancelled` variants to
+  `SignerError` / `FeeEstimatorError` / `OutputSelectorError`
+  if the actor mailbox surfaces it; `#[non_exhaustive]`
+  permits that addition without a trait-surface breaking
+  change.
+
+  Unit tests confirm `Debug` impls produce parseable output;
+  no other test additions in C2α (the variants have no
+  emission sites yet).
+
+- **C2β — `DiscardReason` + `ReservationExtension` enums +
+  `ReservationState` machine.**
+
+  Adds to
+  [`engine/pending.rs`](../../rust/shekyl-engine-core/src/engine/pending.rs):
+
+  ```rust
+  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+  #[non_exhaustive]
+  pub enum DiscardReason {
+      ConsumerExplicit,
+      SnapshotRotationAutoDiscard,
+      DaemonRejectedTerminal,
+      TTLAutoDiscard,                 // V3.x emitter only
+  }
+
+  #[derive(Debug, Clone)]
+  #[non_exhaustive]
+  pub enum ReservationExtension {
+      // V3.0 variant set: empty. V3.x adds coinjoin /
+      // atomic-swap / time-locked / multi-stage / composable
+      // variants without a trait revision.
+  }
+
+  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+  pub(crate) enum ReservationState {
+      Active,
+      SubmitPendingDaemonAck,
+      Resolved,
+  }
+  ```
+
+  `ReservationState` is `pub(crate)` — invisible to
+  consumers per §5.0.2 segment-2f pin (consumers observe
+  state via diagnostic-stream events, not via trait
+  surface).
+
+- **C2γ — `Reservation` / `PendingTx` field augmentation.**
+
+  Augments existing structs in `engine/pending.rs`:
+
+  ```rust
+  pub(crate) struct Reservation {
+      // existing fields ...
+      pub snapshot_id: SnapshotId,             // C1; pin per R12 (a)
+      pub extensions: Vec<ReservationExtension>, // R14
+      pub state: ReservationState,             // R9 segment-2f
+  }
+
+  pub struct PendingTx {
+      // existing fields ...
+      pub snapshot_id: SnapshotId,             // caller-visible for diagnostics
+  }
+  ```
+
+  Stub construction sites in
+  `build_pending_tx_in_state` populate the new fields with
+  the to-be-implemented `derive_snapshot_id(&ledger_snapshot)`
+  / `Vec::new()` / `ReservationState::Active`. The C2γ
+  commit makes the field-augmentation visible without yet
+  exercising the state-machine transitions (those land in
+  C5's extracted method bodies).
+
+  The `synced_height` / `reorg_blocks` reads needed for
+  `derive_snapshot_id` require the `LedgerBlock` to expose
+  a synthetic `LedgerSnapshot` view; the simplest path is to
+  call `LedgerSnapshot::from_ledger(ledger)` at the
+  build-pending-tx free function. The minor allocation
+  (a `ReorgBlocks` clone, capped at
+  `DEFAULT_REORG_BLOCKS_CAPACITY`) is bounded.
+
+C2 (composite) leaves the test suite green: the augmented
+data types have stub constructors at the existing free
+functions; the existing assertion suite reads the existing
+fields and the new fields are populated but unread (the
+`Debug` derive provides a smoke-test surface; the existing
+debug-format tests continue to match the augmented shape per
+the standard `Debug` derive ordering). The CI gate is
+`cargo fmt --all -- --check` clean + `cargo clippy
+--all-targets -- -D warnings` clean + `cargo test --lib`
+green.
+
+---
+
+### Commit C3 — `PendingTxDiagnostic` enum + diagnostics emission infrastructure
+
+C3 lands the Phase 0f event enum and the emission-helper
+infrastructure on the existing `DiagnosticSink` substrate
+from PR 4. No production emission sites land yet — those
+ride along with the C5 trait-impl extraction so the emission/
+return coherence contract per §5.0.3 lands atomically with
+the methods that emit.
+
+C3's scope:
+
+- Augments
+  [`engine/diagnostics.rs`](../../rust/shekyl-engine-core/src/engine/diagnostics.rs)
+  with the `PendingTxDiagnostic` enum:
+
+  ```rust
+  #[derive(Debug, Clone)]
+  #[non_exhaustive]
+  pub enum PendingTxDiagnostic {
+      BuildSucceeded {
+          reservation_id: ReservationId,
+          snapshot_id: SnapshotId,
+          fee_atomic_units: u64,
+          recipient_count: usize,
+      },
+      BuildFailed {
+          reason: BuildFailureClass,
+      },
+      SubmitAttempted {
+          reservation_id: ReservationId,
+          snapshot_id: SnapshotId,
+      },
+      SubmitSucceeded {
+          reservation_id: ReservationId,
+          tx_hash: TxHash,
+      },
+      SubmitFailed {
+          reservation_id: ReservationId,
+          kind: SubmitErrorKind,
+      },
+      SubmitSnapshotInvalidated {
+          reservation_id: ReservationId,
+          reservation_snapshot: SnapshotId,
+          current_snapshot: SnapshotId,
+      },
+      Discarded {
+          reservation_id: ReservationId,
+          reason: DiscardReason,
+      },
+      ReservationOutstanding {       // V3.x ReservationTTLActor emitter
+          reservation_id: ReservationId,
+          age_secs: u64,
+      },
+  }
+
+  #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+  #[non_exhaustive]
+  pub enum BuildFailureClass {
+      InvalidRecipient,
+      InsufficientFunds,
+      SignerUnavailable,
+      LedgerNotReady,
+  }
+  ```
+
+  `#[non_exhaustive]` on both per the extensibility pattern
+  PR 4 / segment-2b established. `BuildFailureClass` is
+  the projection-side discriminant for `BuildFailed`'s
+  emission — sufficient for V3.0 consumer-actor template
+  needs without leaking `SendError`'s `reason: &'static
+  str` payloads across the recursive-trust-boundary per
+  §5.0.3.
+- Emission-helper additions: `pub(crate) fn
+  emit_pending_tx_diagnostic(sink: &Arc<dyn DiagnosticSink>,
+  event: PendingTxDiagnostic)` matches PR 4's
+  `emit_refresh_diagnostic` shape. C3 lands the helper; C5
+  wires its call sites in `LocalPendingTx`'s extracted
+  method bodies.
+- `AssertionSink` / `PanickingSink` from PR 4 C7 (`c9e65bbc6`)
+  are already reused verbatim — no PR-5-specific sink
+  variants needed. The existing `#[cfg(any(test, feature =
+  "test-helpers"))]` gating covers both streams without
+  modification.
+
+C3 is doc + type addition; emission sites land in C5; no
+test additions in C3 (the emission-coherence property tests
+ride along with C7).
+
+CI gate: `cargo fmt --check` + clippy clean + `cargo test
+--lib` green (no functional change); `cargo doc --no-deps`
+clean.
+
+---
+
+### Commit C4 — `Signer` / `OutputSelector` / `FeeEstimator` trait surfaces + default impls
+
+C4 lands the three secondary-engine trait surfaces (Phase 0h
+/ 0i / 0j per segment-2g) with their default V3.0 implementors
+so the upcoming `PendingTxEngine` trait (C5) can dispatch
+through them. The `Signer` trait is the load-bearing one (R11
+(b) per segment-2b — `LocalPendingTx` never holds spend
+material; `LocalSigner` is the sole holder; HW-wallet
+integration in V3.x plugs in as an alternative `Signer` impl);
+the `OutputSelector` / `FeeEstimator` traits are V3.0 narrow
+seams whose default impls match wallet2-greedy / stub-fee
+behavior verbatim, preserving the existing test surface.
+
+C4 is decomposed into three sub-commits per bisection
+discipline:
+
+- **C4α — `Signer` trait + `LocalSigner` impl (R11 (b)).**
+
+  Adds to
+  [`engine/signer.rs`](../../rust/shekyl-engine-core/src/engine/signer.rs)
+  alongside the existing `EngineSignerKind` sealed-trait
+  surface:
+
+  ```rust
+  pub trait Signer: Send + Sync + 'static {
+      type Error: Into<SignerError>;
+      fn sign_transfer(
+          &self,
+          context: &TransferSigningContext,
+      ) -> Result<SignedTransfer, Self::Error>;
+  }
+
+  pub struct LocalSigner {
+      keys: Arc<AllKeysBlob>,
+  }
+
+  impl LocalSigner {
+      pub(crate) fn new(keys: Arc<AllKeysBlob>) -> Self { Self { keys } }
+  }
+
+  impl Signer for LocalSigner {
+      type Error = SignerError;
+      fn sign_transfer(
+          &self,
+          context: &TransferSigningContext,
+      ) -> Result<SignedTransfer, SignerError> {
+          // Phase 1 stub: returns SignedTransfer with empty
+          // body bytes (matches existing
+          // build_pending_tx_in_state which sets
+          // tx_bytes: Vec::new() per the existing
+          // pending.rs:267 stub). Phase 2a wires
+          // shekyl-tx-builder against `keys`.
+          Ok(SignedTransfer::empty_phase1_stub(context))
+      }
+  }
+  ```
+
+  `TransferSigningContext` / `SignedTransfer` newtype shells
+  ship as `pub(crate)` placeholders (Phase 2a fills them
+  out). The signer's `Arc<AllKeysBlob>` is the sole holder
+  of spend material in Stage 1 per R11 (b); Stage 4's
+  `SigningActor` will hold the same `Arc` behind an
+  `ActorRef` indirection (substitution-not-refactor at the
+  V3.x migration).
+
+  Tests cover:
+  - `local_signer_holds_keys` — the `Arc<AllKeysBlob>`
+    refcount discipline matches the design-time pin
+    (one strong refcount per signer instance).
+  - `local_signer_phase1_stub_succeeds` — the Phase 1 stub
+    returns `Ok` for any well-formed context.
+
+- **C4β — `OutputSelector` trait + `WalletGreedyOutputSelector`
+  impl (R13).**
+
+  New module `engine/output_selector.rs`:
+
+  ```rust
+  pub trait OutputSelector: Send + Sync + 'static {
+      type Error: Into<OutputSelectorError>;
+      fn select_outputs(
+          &self,
+          context: &OutputSelectionContext<'_>,
+      ) -> Result<SelectedOutputs, Self::Error>;
+  }
+
+  pub struct OutputSelectionContext<'a> {
+      pub ledger: &'a LedgerSnapshot,
+      pub from_subaddress: Option<SubaddressIndex>,
+      pub already_reserved: &'a BTreeSet<usize>,
+      pub needed_amount: u64,
+  }
+
+  pub struct SelectedOutputs {
+      pub indices: Vec<usize>,
+      pub total_covered: u64,
+  }
+
+  pub struct WalletGreedyOutputSelector;
+
+  impl OutputSelector for WalletGreedyOutputSelector {
+      type Error = OutputSelectorError;
+      fn select_outputs(
+          &self,
+          context: &OutputSelectionContext<'_>,
+      ) -> Result<SelectedOutputs, OutputSelectorError> {
+          // Body: extracted verbatim from
+          // build_pending_tx_in_state lines 320–347
+          // (the `candidates: Vec<(usize, u64)>`
+          // construction + the largest-first selection
+          // loop). No algorithmic change; only the
+          // free-function-to-trait extraction.
+          ...
+      }
+  }
+  ```
+
+  Tests cover:
+  - `wallet_greedy_selects_largest_first` — regression
+    test verifying the selection ordering matches the
+    pre-PR-5 behavior byte-for-byte.
+  - `wallet_greedy_insufficient_funds` — the
+    `OutputSelectorError::InsufficientFunds` variant fires
+    on under-coverage; the `needed` / `available` fields
+    match the pre-PR-5 `SendError::InsufficientFunds`
+    payload.
+  - `wallet_greedy_no_eligible_outputs` — empty candidate
+    set surfaces `NoEligibleOutputs` (new V3.0 surface;
+    pre-PR-5 collapsed to `InsufficientFunds { needed: ...,
+    available: 0 }`; the new surface is more precise but
+    the orchestrator's `From<OutputSelectorError>` for
+    `SendError` impl collapses it back to
+    `InsufficientFunds { needed, available: 0 }` so the
+    consumer-facing `SendError` surface is unchanged).
+
+- **C4γ — `FeeEstimator` trait + `DaemonFeeEstimator` impl
+  (R16).**
+
+  New module `engine/fee_estimator.rs`:
+
+  ```rust
+  pub trait FeeEstimator: Send + Sync + 'static {
+      type Error: Into<FeeEstimatorError>;
+      fn estimate_fee(
+          &self,
+          priority: FeePriority,
+          context: &FeeEstimationContext<'_>,
+      ) -> Result<u64, Self::Error>;
+  }
+
+  pub struct FeeEstimationContext<'a> {
+      pub ledger: &'a LedgerSnapshot,
+      pub recipient_count: usize,
+      pub input_count: usize,
+  }
+
+  pub struct DaemonFeeEstimator;
+
+  impl FeeEstimator for DaemonFeeEstimator {
+      type Error = FeeEstimatorError;
+      fn estimate_fee(
+          &self,
+          _priority: FeePriority,
+          _context: &FeeEstimationContext<'_>,
+      ) -> Result<u64, FeeEstimatorError> {
+          // Phase 1 stub: returns STUB_FEE_ATOMIC_UNITS
+          // verbatim. Phase 2a wires daemon
+          // get_fee_estimates against `_priority`.
+          Ok(crate::engine::pending::STUB_FEE_ATOMIC_UNITS)
+      }
+  }
+  ```
+
+  The `FeePriority` enum migrates from `engine/pending.rs`
+  to `engine/fee_estimator.rs` per the
+  "trait-surface is the canonical citation" pin above;
+  `engine/pending.rs` re-exports for backward source-text
+  compatibility within the crate
+  (`pub use crate::engine::fee_estimator::FeePriority;`).
+  No external API breakage.
+
+  Tests cover:
+  - `daemon_fee_estimator_phase1_stub_returns_constant` —
+    regression: any priority + context yields
+    `STUB_FEE_ATOMIC_UNITS`.
+
+C4 (composite) leaves the test suite green plus six new
+tests across the three sub-commits. CI gate at each
+sub-commit boundary: clippy + fmt + lib-tests pass; the
+extracted helpers in C4β preserve byte-for-byte output
+parity with the pre-PR-5 selection loop.
+
+---
+
+### Commit C5 — `PendingTxEngine` trait declaration + `LocalPendingTx` aggregate (extraction)
+
+C5 is the **load-bearing extraction commit**: declares the
+trait surface (Phase 0a..0f composite) and extracts the
+free-function bodies from `engine/pending.rs` into the new
+`LocalPendingTx` aggregate's trait impl. The trait surface
+is method-shape-preserved per §5.0.1's invariance pin; the
+extraction adds the snapshot-id pinning, the state-machine
+transitions, the diagnostic emissions, and the dispatch
+through C4's `Signer` / `OutputSelector` / `FeeEstimator`
+traits.
+
+C5 is decomposed into two sub-commits per bisection
+discipline:
+
+- **C5α — `PendingTxEngine` trait declaration +
+  `LocalPendingTx` skeleton.**
+
+  New file `engine/traits/pending_tx.rs`:
+
+  ```rust
+  pub trait PendingTxEngine: Send + Sync + 'static {
+      type BuildError: Into<SendError>;
+      type SubmitError: Into<SubmitError>;
+      type DiscardError: Into<PendingTxError>;
+
+      fn build(
+          &mut self,
+          ledger: &LedgerSnapshot,
+          request: &TxRequest,
+      ) -> Result<PendingTx, Self::BuildError>;
+
+      fn submit(
+          &mut self,
+          ledger: &LedgerSnapshot,
+          reservation_id: ReservationId,
+      ) -> Result<TxHash, Self::SubmitError>;
+
+      fn discard(
+          &mut self,
+          reservation_id: ReservationId,
+          reason: DiscardReason,
+      ) -> Result<(), Self::DiscardError>;
+
+      fn outstanding(&self) -> usize;
+  }
+  ```
+
+  Method signatures match §5.0.1's invariance pin; the
+  `&mut self` receivers are explicit serialization points
+  (`Engine`-wrapped under `Arc<RwLock<Engine>>` in the RPC
+  binary per cross-cutting lock 3; Stage 4 actor-mailbox
+  serialization preserves the same contract). The
+  `ledger: &LedgerSnapshot` parameter is the
+  `LedgerEngine::snapshot()`-returned view per R12 (a) — the
+  engine reads the snapshot once per call from
+  the caller-provided `LedgerEngine` and threads it through;
+  this preserves the no-cross-trait-synchronous-query
+  contract per §5.0 ground 1 (Stage 1 internally; Stage 4
+  via `LedgerDiagnostic::SnapshotMerged`).
+
+  New file `engine/local_pending_tx.rs`:
+
+  ```rust
+  pub struct LocalPendingTx<S: Signer, O: OutputSelector, F: FeeEstimator> {
+      signer: Arc<S>,
+      selector: O,
+      estimator: F,
+      sink: Arc<dyn DiagnosticSink>,
+      reservations: BTreeMap<ReservationId, Reservation>,
+      next_id: u64,
+      network: Network,
+  }
+
+  impl<S: Signer, O: OutputSelector, F: FeeEstimator>
+      LocalPendingTx<S, O, F>
+  {
+      pub fn new(
+          signer: Arc<S>,
+          selector: O,
+          estimator: F,
+          sink: Arc<dyn DiagnosticSink>,
+          network: Network,
+      ) -> Self {
+          Self {
+              signer,
+              selector,
+              estimator,
+              sink,
+              reservations: BTreeMap::new(),
+              next_id: 0,
+              network,
+          }
+      }
+  }
+  ```
+
+  Per §5.0.2.1 segment-2f sink-binding closure: the
+  `Arc<dyn DiagnosticSink>` is constructor-bound. Per R11
+  (b) segment-2b: `signer: Arc<S>` is constructor-bound as
+  well; `LocalPendingTx` holds an `Arc` to the signer but
+  delegates all spend-secret access through the `Signer`
+  trait — no direct field access to `AllKeysBlob`. The
+  struct's `reservations` + `next_id` fields are the
+  pre-PR-5 `Engine`-side fields, migrated here per the
+  extraction.
+
+  C5α's trait impl body for `PendingTxEngine` is **stub**:
+  each method returns `unimplemented!("filled in C5β")`.
+  The skeleton compiles green so C5β's diff is a body-fill
+  rather than a structural change.
+
+  Tests added: `local_pending_tx_new_constructs` smoke test
+  only (struct field-set sanity); the trait-impl tests
+  ride along with C5β.
+
+- **C5β — `PendingTxEngine` trait-impl bodies (extraction
+  with augmentation).**
+
+  Fills out the three trait-method bodies in
+  `engine/local_pending_tx.rs`:
+
+  ```rust
+  impl<S: Signer, O: OutputSelector, F: FeeEstimator>
+      PendingTxEngine for LocalPendingTx<S, O, F>
+  {
+      type BuildError = SendError;
+      type SubmitError = SubmitError;
+      type DiscardError = PendingTxError;
+
+      fn build(...) -> Result<PendingTx, SendError> {
+          // Body extracted from
+          // build_pending_tx_in_state(...) at
+          // engine/pending.rs:285-385, with the following
+          // augmentations:
+          //   1. Output selection dispatches through
+          //      self.selector.select_outputs(...) per C4β
+          //      (replaces the inline candidate-construction
+          //      and greedy-loop; same algorithm, trait-
+          //      indirect).
+          //   2. Fee resolution dispatches through
+          //      self.estimator.estimate_fee(...) per C4γ
+          //      (replaces the inline STUB_FEE_ATOMIC_UNITS
+          //      constant).
+          //   3. Signing dispatches through
+          //      self.signer.sign_transfer(...) per C4α
+          //      (Phase 1 stub: returns empty bytes;
+          //      `tx_bytes: Vec::new()` per the existing
+          //      pending.rs:267 stub semantics).
+          //   4. The reservation gains
+          //      snapshot_id: derive_snapshot_id(ledger) per
+          //      C1+C2γ (R12 (a) pin).
+          //   5. The reservation gains
+          //      state: ReservationState::Active per C2β
+          //      (R9 segment-2f initial state).
+          //   6. The reservation gains
+          //      extensions: Vec::new() per R14 (V3.0
+          //      empty seam).
+          //   7. PendingTxDiagnostic::BuildSucceeded is
+          //      emitted via self.sink on the success path
+          //      per §5.0.3 emission/return coherence (R8
+          //      segment-2e deliverable 1).
+          //   8. PendingTxDiagnostic::BuildFailed { reason }
+          //      is emitted on each error path before
+          //      returning Err(...) per §5.0.3 emission/
+          //      return coherence; the BuildFailureClass
+          //      projection is constructed at the emission
+          //      site (InvalidRecipient / InsufficientFunds /
+          //      SignerUnavailable / LedgerNotReady — the
+          //      Class is the discriminant the consumer
+          //      observes; the &'static str payload stays
+          //      inside SendError and is not leaked across
+          //      the recursive-trust-boundary per §5.0.3).
+          ...
+      }
+
+      fn submit(...) -> Result<TxHash, SubmitError> {
+          // Body extracted from
+          // submit_pending_tx_in_state(...) at
+          // engine/pending.rs:391-443, with the following
+          // augmentations:
+          //   1. Pre-daemon staleness check: compare
+          //      reservation.snapshot_id against
+          //      derive_snapshot_id(ledger). On mismatch:
+          //      reservation removed; emit
+          //      PendingTxDiagnostic::SubmitSnapshotInvalidated
+          //      + PendingTxDiagnostic::Discarded
+          //      { reason: SnapshotRotationAutoDiscard };
+          //      return Err(SubmitError::SnapshotInvalidated
+          //      { reservation_snapshot, current_snapshot })
+          //      per R5 lazy-discard semantics.
+          //   2. State transition Active → SubmitPendingDaemonAck
+          //      pre-daemon-call (R9 segment-2f); emit
+          //      PendingTxDiagnostic::SubmitAttempted.
+          //   3. Daemon-call dispatch is a Phase 1 stub:
+          //      returns Ok(TxHash) with id-encoded bytes
+          //      (matches pre-PR-5 stub behavior in
+          //      submit_pending_tx_in_state line 411-425).
+          //      Phase 2a replaces with daemon broadcast.
+          //   4. State transition SubmitPendingDaemonAck →
+          //      Resolved on Ok path; emit
+          //      PendingTxDiagnostic::SubmitSucceeded.
+          //   5. Per R9 segment-2f Finding 2: the Phase 1
+          //      stub has no Timeout / DaemonUnavailable
+          //      path (always returns Ok); the per-error-
+          //      class disposition table is exercised by
+          //      C7's property tests injecting
+          //      FaultInjecting<P>-queued failures, not by
+          //      production code-path coverage in C5β.
+          //   6. The existing tip-hash-comparison
+          //      defense-in-depth check (PendingTxError::
+          //      ChainStateChanged) is preserved as a
+          //      redundant cross-check after the
+          //      snapshot-id check.
+          ...
+      }
+
+      fn discard(...) -> Result<(), PendingTxError> {
+          // Body extracted from
+          // discard_pending_tx_in_state(...) at
+          // engine/pending.rs:444-465, with the following
+          // augmentations:
+          //   1. PendingTxDiagnostic::Discarded { reason }
+          //      emitted on success path; `reason` is the
+          //      caller-provided DiscardReason (typically
+          //      ConsumerExplicit per Phase 1; V3.x
+          //      ReservationTTLActor passes TTLAutoDiscard
+          //      via the same surface).
+          //   2. The existing UnknownHandle error variant
+          //      is preserved verbatim (no diagnostic
+          //      emission on the unknown-id path per
+          //      §5.0.3 coherence: emission is for
+          //      successful state changes; the error is
+          //      caller-visible).
+          ...
+      }
+
+      fn outstanding(&self) -> usize {
+          // Counts Active + SubmitPendingDaemonAck per R9
+          // segment-2f (both reserve outputs); excludes
+          // Resolved (terminal). Pre-PR-5
+          // outstanding_reservations on Engine counted
+          // self.reservations.len() — the migration
+          // changes the counted set per the R9 state-machine
+          // refinement.
+          self.reservations
+              .values()
+              .filter(|r| matches!(
+                  r.state,
+                  ReservationState::Active
+                      | ReservationState::SubmitPendingDaemonAck,
+              ))
+              .count()
+      }
+  }
+  ```
+
+  The free functions
+  `build_pending_tx_in_state` / `submit_pending_tx_in_state`
+  / `discard_pending_tx_in_state` are **removed** in C5β;
+  the existing in-state unit tests in `engine/pending.rs`'s
+  `tests` module are migrated to drive
+  `LocalPendingTx::build` / `submit` / `discard` directly
+  (using `LocalSigner::new(Arc::new(AllKeysBlob::fixture()))`
+  / `WalletGreedyOutputSelector` / `DaemonFeeEstimator`
+  /`Arc::new(NoopSink)` from the test-helper
+  re-exports). The pre-PR-5 test coverage is preserved
+  byte-for-byte after the migration — the test bodies
+  change only at the construction site, not at the
+  assertion logic.
+
+  Tests added or migrated:
+  - All existing pre-PR-5 `tests` in `engine/pending.rs`
+    migrate to call `LocalPendingTx::*` rather than the
+    free functions. Migration is mechanical; no
+    coverage loss.
+  - New tests covering the augmentations:
+    - `build_emits_build_succeeded_diagnostic` —
+      AssertionSink records BuildSucceeded on success.
+    - `build_emits_build_failed_on_each_error_class` —
+      AssertionSink records the corresponding
+      BuildFailureClass for each `SendError` variant.
+    - `submit_emits_submit_snapshot_invalidated_on_stale` —
+      reservation built against snapshot S1; ledger
+      advanced to S2; submit returns
+      SubmitError::SnapshotInvalidated with matching
+      ids; AssertionSink records the matching event
+      sequence (SubmitAttempted is *not* emitted because
+      the snapshot check pre-empts entry into
+      SubmitPendingDaemonAck per R5 + R9
+      coherence).
+    - `discard_emits_discarded_with_reason` —
+      AssertionSink records the Discarded event with
+      the caller-provided reason.
+    - `outstanding_excludes_resolved_reservations` —
+      after a successful submit, `outstanding()`
+      decrements; after a snapshot-invalidated submit,
+      `outstanding()` decrements (the reservation is
+      auto-discarded per R5).
+
+C5 is the **largest commit in the PR**. The diff is bounded
+by the extraction scope: ~1000 lines of `engine/pending.rs`
+shrink to ~300 lines (wire-facing types only); ~900 lines
+of new `engine/local_pending_tx.rs` (struct + trait impl);
+~70 lines of `engine/traits/pending_tx.rs` (trait surface).
+Net code is roughly even with PR 4's C5's local_refresh.rs
+expansion.
+
+CI gate at C5 commit boundary: clippy + fmt + lib-tests
+green; pre-PR-5 in-state tests all still pass (via
+migration); new augmentation tests pass.
+
+---
+
+### Commit C6 — `Engine<S, D, L, R, P>` parameterization + orchestration-layer dispatch migration
+
+C6 lands the fifth generic parameter on `Engine` and rewires
+the orchestration-layer methods (`build_pending_tx` /
+`submit_pending_tx` / `discard_pending_tx` /
+`outstanding_reservations`) to dispatch through `P:
+PendingTxEngine` rather than reading
+`Engine`'s own `reservations` field directly. The
+`Engine.reservations` / `Engine.next_reservation_id` fields
+are **removed** in C6 — the state lives on the
+`LocalPendingTx` aggregate now.
+
+C6's scope:
+
+- `Engine<S, D, L, R, P>` type signature updated in
+  [`engine/mod.rs`](../../rust/shekyl-engine-core/src/engine/mod.rs)
+  to add the fifth parameter. Default type
+  `P = LocalPendingTx<LocalSigner,
+  WalletGreedyOutputSelector, DaemonFeeEstimator>`
+  preserves the existing concrete-typed shape for
+  production callers (CLI / RPC binary), mirroring PR 4's
+  C5 / C5α / C5β `R = LocalRefresh` precedent.
+- Field migration: `Engine.reservations`,
+  `Engine.next_reservation_id`, and the `_signer:
+  PhantomData<S>` are restructured. The `signer` mode is
+  still discriminated by the `S: EngineSignerKind`
+  parameter; the runtime spend-secret holder is now the
+  `pending: P` field's interior `Arc<Signer>` per C5's
+  `LocalPendingTx` construction. The `_signer:
+  PhantomData<S>` stays (it remains compile-time
+  discriminator for capability surfaces); the
+  `reservations` + `next_reservation_id` fields are
+  removed.
+- Orchestration-layer rewires in
+  [`engine/pending.rs`](../../rust/shekyl-engine-core/src/engine/pending.rs)
+  (the `impl<S, D> Engine<S, D, LocalLedger>` block at
+  line 466 in the pre-C6 file):
+
+  ```rust
+  impl<S, D, L, R, P> Engine<S, D, L, R, P>
+  where
+      S: EngineSignerKind,
+      D: DaemonEngine,
+      L: LedgerEngine,
+      R: RefreshEngine,
+      P: PendingTxEngine,
+      P::BuildError: Into<SendError>,
+      P::SubmitError: Into<SubmitError>,
+      P::DiscardError: Into<PendingTxError>,
+  {
+      pub fn build_pending_tx(
+          &mut self,
+          request: &TxRequest,
+      ) -> Result<PendingTx, SendError> {
+          let snapshot = self.ledger.snapshot();
+          self.pending.build(&snapshot, request)
+              .map_err(Into::into)
+      }
+
+      pub fn submit_pending_tx(
+          &mut self,
+          id: ReservationId,
+      ) -> Result<TxHash, SubmitError> {
+          let snapshot = self.ledger.snapshot();
+          self.pending.submit(&snapshot, id).map_err(Into::into)
+      }
+
+      pub fn discard_pending_tx(
+          &mut self,
+          id: ReservationId,
+      ) -> Result<(), PendingTxError> {
+          self.pending
+              .discard(id, DiscardReason::ConsumerExplicit)
+              .map_err(Into::into)
+      }
+
+      pub fn outstanding_reservations(&self) -> usize {
+          self.pending.outstanding()
+      }
+  }
+  ```
+
+  Note: `Engine::discard_pending_tx`'s public surface
+  drops the `reason` parameter; orchestration-layer
+  callers always pass `ConsumerExplicit`. The internal
+  trait `discard(id, reason)` retains the parameter for
+  R8's V3.x `ReservationTTLActor` to call with
+  `TTLAutoDiscard` and for the C5β snapshot-mismatch path
+  that calls with `SnapshotRotationAutoDiscard` from
+  inside `submit`. The orchestration layer is the
+  caller-facing surface; the broader `DiscardReason` set
+  is internal.
+- Lifecycle constructors (`Engine::create`, `Engine::open_*`)
+  updated to construct the default `LocalPendingTx` per
+  the new field-set in
+  [`engine/lifecycle.rs`](../../rust/shekyl-engine-core/src/engine/lifecycle.rs):
+
+  ```rust
+  pending: LocalPendingTx::new(
+      Arc::new(LocalSigner::new(Arc::new(keys.clone()))),
+      WalletGreedyOutputSelector,
+      DaemonFeeEstimator,
+      sink.clone(),
+      network,
+  ),
+  ```
+
+  The `sink` is the `Arc<dyn DiagnosticSink>` already
+  threaded through the lifecycle constructor per PR 4.
+  The `keys.clone()` creates the second `Arc<AllKeysBlob>`
+  refcount handle; one stays on `Engine`'s `keys` field
+  (for view-side derivations on refresh / scan), one
+  flows into the signer. Both are `Arc`-strong references;
+  drop discipline is unchanged.
+- `replace_pending_tx` consume-and-rebuild constructor on
+  `Engine` for the test-helpers surface:
+
+  ```rust
+  #[cfg(any(test, feature = "test-helpers"))]
+  impl<S, D, L, R, P> Engine<S, D, L, R, P>
+  where
+      S: EngineSignerKind,
+      D: DaemonEngine,
+      L: LedgerEngine,
+      R: RefreshEngine,
+      P: PendingTxEngine,
+  {
+      pub fn replace_pending_tx<P2: PendingTxEngine>(
+          self,
+          pending: P2,
+      ) -> Engine<S, D, L, R, P2> {
+          Engine {
+              file: self.file,
+              keys: self.keys,
+              ledger: self.ledger,
+              indexes: self.indexes,
+              prefs: self.prefs,
+              daemon: self.daemon,
+              network: self.network,
+              capability: self.capability,
+              refresh: self.refresh,
+              pending,
+              sink: self.sink,
+              _signer: self._signer,
+          }
+      }
+  }
+  ```
+
+  Mirrors PR 4's C7 `replace_refresh` constructor at
+  `8f0fbf2bb` per §6 test-substrate preservation list.
+- Call-site sweep in
+  [`engine/test_support.rs`](../../rust/shekyl-engine-core/src/engine/test_support.rs)
+  to update `make_test_engine_with_blocks` / equivalents
+  to construct the default `LocalPendingTx` per the new
+  field-set. Mechanical; no test logic change.
+
+C6 leaves the test suite green: orchestration-layer methods
+preserve their public signatures (modulo the
+`discard_pending_tx` reason-parameter drop noted above —
+which has no callers outside the test suite per the
+call-site sweep). Pre-PR-5 integration tests against
+`Engine::build_pending_tx` etc. continue to pass through
+the dispatch-through-`P` indirection.
+
+CI gate: clippy + fmt + lib-tests pass; the public-API
+surface of `Engine::build_pending_tx` etc. is preserved
+verbatim modulo the documented `discard_pending_tx` reason
+drop (which is documented in the CHANGELOG C8 commit per
+the standard test-call-site narrowing pattern).
+
+---
+
+### Commit C7 — `FaultInjecting<P: PendingTxEngine>` wrapper + property tests + R9 per-error-class coverage
+
+C7 lands the test substrate that exercises the
+`PendingTxEngine` trait through the same no-Mock
+composition-paradigm wrapper PR 4 §6 settled. The wrapper
+follows F-Mock-1..F-Mock-8 / Two-Enum-Architecture pins
+from PR 4 §6.1 / §6.1.1 verbatim — no new substrate
+discipline.
+
+C7's scope:
+
+- New file
+  `rust/shekyl-engine-core/src/engine/fault_injecting_pending_tx.rs`:
+
+  ```rust
+  #[cfg(any(test, feature = "test-helpers"))]
+  pub struct FaultInjecting<P: PendingTxEngine> {
+      inner: P,
+      queued_build_failures: VecDeque<SendError>,
+      queued_submit_failures: VecDeque<SubmitError>,
+      queued_discard_failures: VecDeque<PendingTxError>,
+  }
+
+  impl<P: PendingTxEngine> FaultInjecting<P> {
+      pub fn new(inner: P) -> Self { ... }
+      pub fn queue_build_failure(&mut self, e: SendError) { ... }
+      pub fn queue_submit_failure(&mut self, e: SubmitError) { ... }
+      pub fn queue_discard_failure(&mut self, e: PendingTxError) { ... }
+      pub fn queued_build_failures(&self) -> usize { ... }
+      pub fn queued_submit_failures(&self) -> usize { ... }
+      pub fn queued_discard_failures(&self) -> usize { ... }
+  }
+
+  impl<P: PendingTxEngine> Drop for FaultInjecting<P> {
+      fn drop(&mut self) {
+          debug_assert!(
+              self.queued_build_failures.is_empty()
+                  && self.queued_submit_failures.is_empty()
+                  && self.queued_discard_failures.is_empty(),
+              "FaultInjecting<P> dropped with un-consumed queued failures"
+          );
+      }
+  }
+
+  impl<P: PendingTxEngine> PendingTxEngine for FaultInjecting<P> {
+      type BuildError = SendError;
+      type SubmitError = SubmitError;
+      type DiscardError = PendingTxError;
+
+      fn build(...) -> Result<PendingTx, SendError> {
+          if let Some(e) = self.queued_build_failures.pop_front() {
+              return Err(e);
+          }
+          self.inner.build(ledger, request).map_err(Into::into)
+      }
+      // submit / discard mirror identically.
+
+      fn outstanding(&self) -> usize { self.inner.outstanding() }
+  }
+  ```
+
+  The wrapper carries three independent queues (one per
+  fallible method) per the F-Mock-3-sharpening
+  trait-reachable-vs-orchestrator-constructed variant
+  pattern PR 4 settled. Each queue is FIFO; the
+  per-method semantics match PR 4's
+  `FaultInjecting<R: RefreshEngine>` (`fault_injecting_refresh.rs`)
+  one-to-one.
+- Property tests in
+  `engine/fault_injecting_pending_tx.rs::tests`:
+  - Wrapper smoke tests (Class 1 per PR 4 §6.1.1):
+    empty-queue passthrough; single-injection-then-
+    delegation; multi-injection FIFO; queue-drain-on-
+    teardown; Drop-time `debug_assert!` panic
+    verification.
+  - Per-error-class disposition tests (Class 2 per §6
+    test-substrate preservation list; segment-2f
+    per-error-class table coverage):
+    - `submit_double_spend_emits_terminal_discarded` —
+      queue `SubmitErrorKind::DoubleSpend`; assert
+      `submit` returns
+      `SubmitError::DaemonRejected { kind: DoubleSpend }`;
+      assert AssertionSink records
+      `[SubmitAttempted, SubmitFailed { DoubleSpend },
+      Discarded { DaemonRejectedTerminal }]` in order
+      (the wrapper's injection drives the
+      orchestrator-side state-machine through Active →
+      SubmitPendingDaemonAck → Resolved).
+    - `submit_fee_too_low_releases_outputs` — queue
+      `SubmitErrorKind::FeeTooLow`; assert outputs
+      return to the pool (`outstanding()` decrements;
+      next `build` can select the same outputs);
+      AssertionSink records `[SubmitAttempted,
+      SubmitFailed { FeeTooLow }, Discarded
+      { DaemonRejectedTerminal }]`.
+    - `submit_malformed_releases_outputs` — same
+      shape as FeeTooLow but with `Malformed`.
+    - `submit_timeout_keeps_reservation_in_submit_pending` —
+      queue `SubmitErrorKind::DaemonTimeout`; assert
+      `outstanding()` still counts the reservation
+      (Finding 2 disposition (B) — daemon-side
+      authority); AssertionSink records
+      `[SubmitAttempted, SubmitFailed { DaemonTimeout }]`
+      with no `Discarded` event; consumer-explicit
+      `discard(id, ConsumerExplicit)` resolves;
+      AssertionSink then records `Discarded
+      { ConsumerExplicit }`.
+    - `submit_daemon_unavailable_same_as_timeout` —
+      structurally identical to the timeout case.
+  - Coherence property tests (mirrors PR 4's
+    `produce_scan_result_emission_return_coherence` /
+    `produce_scan_result_panicking_sink_unwind_safe`):
+    - `pending_tx_build_emission_return_coherence` —
+      every non-`Cancelled` error from `build` produces
+      at least one matching `BuildFailed` event before
+      the error returns.
+    - `pending_tx_submit_emission_return_coherence` —
+      every non-`SnapshotInvalidated` `SubmitError`
+      produces at least one matching `SubmitFailed`
+      event; `SnapshotInvalidated` produces
+      `SubmitSnapshotInvalidated` + `Discarded
+      { SnapshotRotationAutoDiscard }`.
+    - `pending_tx_panicking_sink_unwind_safe` —
+      `PanickingSink` injection during build / submit /
+      discard panics the call; assert no
+      `LocalPendingTx` interior-state corruption
+      (reservation count unchanged; next-id counter
+      unchanged from pre-panic; `outstanding()` agrees).
+- Hybrid test in `engine/pending.rs::tests` (the
+  orchestration-layer integration test, mirroring PR 4's
+  `hybrid_refresh_engine_orchestrator_cancellation_retries`):
+  - `hybrid_pending_tx_engine_orchestrator_snapshot_rotation` —
+    exercises the build/submit cycle across a snapshot
+    rotation:
+    1. Construct `Engine<SoloSigner, TestDaemon,
+       FaultInjecting<LocalLedger>, FaultInjecting<LocalRefresh>,
+       FaultInjecting<LocalPendingTx<LocalSigner,
+       WalletGreedyOutputSelector, DaemonFeeEstimator>>>`.
+    2. Build pending-tx at snapshot S1; reservation
+       carries `snapshot_id = derive_snapshot_id(S1)`.
+    3. Inject a fresh ledger block via
+       `LocalLedger::from_test_blocks` substrate;
+       refresh-engine produces a ScanResult that
+       advances to S2.
+    4. Submit pending-tx; assert `SubmitError::
+       SnapshotInvalidated { reservation_snapshot:
+       S1_id, current_snapshot: S2_id }` returns.
+    5. Assert AssertionSink recorded the expected
+       event sequence including the `Discarded
+       { SnapshotRotationAutoDiscard }`.
+- `proptest` already in `[dev-dependencies]` per PR 4 C7;
+  no Cargo.toml change.
+
+C7 is the property-test commit; CI exercises the Wrapper
+Class 1, Class 2, Coherence, Panic-safety, and Hybrid
+classes. The PanickingSink unwind-safety is the load-bearing
+LocalPendingTx-internal-state-zeroization deliverable per
+§3.1 secret-locality / §35 secure-memory inheritance.
+
+CI gate: clippy under both default-features and
+`test-helpers`; fmt; `cargo test --features test-helpers --lib`
+green; `cargo doc --features test-helpers --no-deps`
+green.
+
+---
+
+### Commit C8 — Docs propagation + CHANGELOG
+
+Final commit; doc-only.
+
+C8's scope:
+
+- This design doc
+  (`STAGE_1_PR_5_PENDING_TX_ENGINE.md`) Status banner is
+  updated marking Phase 1 as landed; §6 review checklist
+  gains the per-commit landing-SHA cross-references
+  (mirrors PR 4 C8 / §6 landing-SHA discipline).
+- The `Commit Cn — Landed:` lines in this §7.X section
+  (C0–C8 plus the per-sub-commit C2α/β/γ, C4α/β/γ,
+  C5α/β) are filled in with the implementation
+  branch's actual commit SHAs.
+- [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.5 prose past-tenses the "Stage 1 surface" section to
+  reflect the landed implementation; cross-references
+  this PR's merge SHA for the implementation locator.
+- [`docs/CHANGELOG.md`](../CHANGELOG.md) `[Unreleased]` /
+  `Added` section gains the `PendingTxEngine` trait + the
+  `PendingTxDiagnostic` enum + the `Signer` /
+  `OutputSelector` / `FeeEstimator` trait surfaces with
+  their default impls + the `SnapshotId` opaque type +
+  the `SubmitError` / `SubmitErrorKind` / `DiscardReason`
+  / `ReservationExtension` enums; `Changed` section gains
+  the `Engine<S, D, L, R, P>` fifth-parameter entry, the
+  `Engine::discard_pending_tx` `reason`-parameter drop
+  note, the `Reservation` struct's three new fields
+  (`snapshot_id`, `extensions`, `state`), and the
+  `PendingTx` struct's `snapshot_id` field; `Internal`
+  section notes the `engine/pending.rs` free-function-to-
+  method extraction.
+- [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) gains:
+  - HW-wallet integration entry (Signer-impl substitution
+    against the existing architecture; trigger:
+    HW-wallet support is requested) — replaces the
+    pre-segment-2b deferred "V3.x PendingTxEngine
+    signer-actor split" entry per §8 Round-2 segment-2b
+    FOLLOWUPS amendment.
+  - `WalletSideEstimator` entry (R16 V3.x; trigger:
+    `LedgerEngine` historical-block fee-data
+    accessor lands).
+  - `SubmissionStrategyActor` instantiation entry (R15;
+    V3.x; trigger: first V3.x consumer-actor PR or
+    user-controlled deployment-strategy demand).
+  - `ReservationTTLActor` instantiation entry (R8; V3.x;
+    trigger: forgotten-reservation telemetry surfaces
+    realistic V3.x-time workload need) — entry already
+    exists per segment-2e; C8 closes the status-line
+    "design segment 2e closed; awaiting V3.x consumer
+    PR".
+  - `SubmitFailureAnalyzer` entry (R9 segment-2f
+    closure; V3.x) — already exists per segment-2f;
+    C8 closes the status-line as above.
+  - `TimeoutResolverActor` entry (R9 Finding 2
+    daemon-side authority complement; V3.x) — already
+    exists per segment-2f; C8 closes the status-line.
+- The `feat/stage-1-pr5-pending-tx-engine` branch's PR
+  description references this §7.X commit list as the
+  contract; CI green at every commit per the Phase 1
+  bisection-discipline gate.
+
+C8 is the docs / changelog commit; the PR opens with C8
+as the tip.
+
+---
+
+### Round 3 closure rule
+
+Per the §7 closure rule strengthened in segment-2c, Round 3
+closes when the wargaming surface **known at closure time**
+is genuinely exhausted. Round 3's wargaming surface is the
+**commit-decomposition substrate** — eight commits with
+load-bearing-ordered bisection discipline, each commit's
+scope bounded by the §4 Phase 0 binding-form pins, §6
+review checklist items, and the existing-substrate
+inventory above. The exhaustion test: every Phase 0a–0k
+binding form maps to a specific commit; every §6
+review-checklist item maps to a specific commit's test
+deliverable; every existing pre-PR-5 substrate entry maps
+to a specific commit's diff scope.
+
+No commit-decomposition shape known at closure time
+remains unexplored. New shapes surfacing in Round 4 (or
+later — the implementation phase's adversarial review
+may surface them) reopen Round 3 per the strengthened
+closure rule; Round 3 closes here.
+
+---
+
+### Round 4 (implementation; outside the design-doc scope)
+
+Round 4 is the implementation phase — the
+`feat/stage-1-pr5-pending-tx-engine` short-lived branch
+cuts off the post-Round-3 dev tip and lands C0–C8 per
+this §7.X commit list. Per `06-branching.mdc` rule 2 the
+branch is short-lived (target: ≤5 working days; ≤10 commits
+— eight commits per this list, comfortably under the
+ceiling). Per `06-branching.mdc` default workflow rule 5
+the branch does not push to remote without explicit user
+authorization.
+
+The PR opens against `dev` after C8 lands locally with a
+passing CI run. The PR description cross-references this
+§7.X commit list as the contract and includes the
+per-commit landing-SHA table once filled in.
