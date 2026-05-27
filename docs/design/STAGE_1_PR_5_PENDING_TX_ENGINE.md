@@ -6182,6 +6182,27 @@ within-commit content for six commits:
   - `output_locks_invariant_across_handler_atomicity`
     (P7).
 
+  **Stage 4 P8 inheritance pointer.** The Stage-1-side
+  P7 / P8 atomicity tests above
+  (`concurrent_build_serialized_by_engine_lock`,
+  `submit_moves_from_consumer_held_to_in_flight`
+  + collection-move sub-tests,
+  `output_locks_invariant_across_handler_atomicity`)
+  exercise the in-process `Arc<RwLock<Engine>>` lock
+  serialization (Stage 1). The Stage 4 actor-migration
+  PR inherits the obligation to land the actor-mailbox-
+  serialization equivalents
+  (`concurrent_build_serialized_by_mailbox_fifo`,
+  `submit_dispatch_does_not_yield_between_collection_move_and_daemon_initiate`,
+  `discard_atomic_across_mailbox_under_concurrent_load`)
+  against the chosen actor framework (e.g., kameo's
+  handler-atomicity guarantee) per the test-deliverable
+  inheritance pin in §5.0.1 P8. The cross-reference is
+  grep-able from §5.0.1 P8 → §5.6.8 C5β → the Stage 4
+  actor-migration PR's design rounds, foreclosing
+  re-derivation of the obligation in the Stage 4 PR's
+  pre-flight investigation.
+
 - **C6 (`Engine<S, D, L, R, P>` parameterization +
   orchestration-layer dispatch migration).** Scope
   unchanged from Round 3 §7.X. The dispatch wiring
@@ -7516,6 +7537,107 @@ work, by round:
 ---
 
 ## §7.X Phase 1 commit decomposition (Round 3 deliverable)
+
+**Implementer synthesis-banner (segment-2h / segment-2i deltas).**
+The C0–C8 commit bodies below preserve the **Round-3-original
+substrate** (segment-2g state at Round 3 closure) per the
+[§7 closure-rule discipline](#round-3-closure-rule) — what
+was known at closure time stays pinned; new substrate reopens
+explicitly through the segment mechanism rather than rewriting
+upstream history. Before executing each commit, **apply the
+within-commit deltas recorded in [§5.6.8](#568-round-3-7x-commit-decomposition-delta)
+(segment-2h refinements) and [§5.6.12](#5612-7x-commit-decomposition-delta-on-delta)
+(segment-2i delta-on-delta)**. Commits affected: **C0, C2α, C2β,
+C2γ, C3, C4α, C4β, C5α, C5β, C7, C8**. The deltas are
+authoritative; the §7.X bodies below are audit-trail substrate
+that the deltas refine.
+
+Explicit deltas not visible in the §7.X bodies below (apply
+during implementation):
+
+- **C2β / C2γ — `ReservationState` enum removed; `Reservation::state`
+  field removed.** §5.6.8 C2β / C2γ entries. The
+  `{ Active | SubmitPendingDaemonAck | Resolved }` enum and the
+  `state` field documented in §7.X's C2 bodies are
+  segment-2g-shape artifacts that segment 2h dissolved into
+  collection membership (the (γ) three-collection lean shape:
+  `output_locks` + `consumer_held` + `in_flight`). State is
+  implicit in collection membership; no enum.
+- **C3 — `PendingTxDiagnostic` variant set re-shaped.** §5.6.8 C3
+  + §5.6.12 C3 entries. Segment 2h removes
+  `PendingTxDiagnostic::SubmitFailed` (no surviving emission
+  site under the (γ) lean shape + the
+  `SubmitErrorKind → TerminalErrorKind / AmbiguousErrorKind`
+  split) and removes `DiscardReason::SnapshotRotationAutoDiscard`
+  (lazy R5 — staleness detected at submit-time, not via eager
+  sweep). Segment 2h adds `PendingTxDiagnostic::SubmitPendingResolution`.
+  Segment 2i adds `DiscardReason::MempoolEvicted` and adds
+  `tx_hash: TxHash` projection fields on `SubmitSucceeded` and
+  `SubmitPendingResolution`.
+- **C5α — `PendingTxEngine` trait receivers: `&mut self → &self`.**
+  The C5α trait declaration body below (lines ~8297–8313) shows
+  `&mut self` on `build` / `submit` / `discard`; the
+  [V3_ENGINE_TRAIT_BOUNDARIES.md §2.4](V3_ENGINE_TRAIT_BOUNDARIES.md)
+  Round 3 `&mut → &self` sweep moved all PR 5 trait surfaces
+  to `&self` per §2.4's canonical trait spec. Implementer
+  applies the sweep to C5α's declaration verbatim from §2.4;
+  `LocalPendingTx` carries internal `Mutex<PendingTxState>`
+  per the (γ) lean shape (P7 handler-atomicity per §5.0.1)
+  to satisfy the interior-mutability surface. The
+  `Engine`-side `Arc<RwLock<Engine>>` wrapper (cross-cutting
+  lock 3) is unchanged; the trait-surface receiver is now
+  `&self` for actor-substitution symmetry. The C5α trait
+  declaration is the §2.4 canonical surface; §7.X C5α's
+  body is the closure-time substrate.
+- **C5α — `signal_mempool_evicted` trait method added.** Phase
+  0m + §5.6.12 C5α entries. The C5α trait declaration grows
+  a fourth signal-shaped method:
+  `fn signal_mempool_evicted(&self, rid: ReservationId) ->
+  Result<(), PendingTxError>`. Body lands in C5β per §5.6.12.
+- **C5β — Implementation bodies follow the (γ) collection-moves
+  shape, not enum-state-mutations.** §5.6.8 C5β + §5.6.12 C5β
+  entries. The §7.X C5β bodies describe an enum-state-mutation
+  shape (`Active → SubmitPendingDaemonAck → Resolved`
+  transitions). Segment 2h replaced this with collection-move
+  bodies (`consumer_held → in_flight`, `in_flight → gone`
+  via removal + `output_locks` sweep) per the P4 collection-moves
+  table. Segment 2i adds the `signal_mempool_evicted` body
+  per the steps recorded in §5.6.12.
+- **C0 — Phase 0 substrate growth.** §5.6.8 C0 + §5.6.12 C0
+  entries. Phase 0a–0l from segment 2g plus Phase 0m
+  (`signal_mempool_evicted` trait method declaration) from
+  segment 2i.
+- **C4α / C4β — Test substrate growth.** §5.6.8 C4α / C4β
+  entries. Segment 2h's F4 subset-verification test
+  (`faulty_selector_returns_non_subset_rejected`) and P-F4
+  binding test land in C4α / C4β.
+- **C7 — Property-test scope.** §5.6.8 C7 + §5.6.12 C7
+  entries. Property tests remove `ReservationState`-transition
+  assertions (no longer applicable under (γ)) and add
+  collection-invariant properties; segment 2i adds the
+  `signal_mempool_evicted_ownership_boundary` property.
+- **C8 — FOLLOWUPS / CHANGELOG additions.** §5.6.8 C8 +
+  §5.6.12 C8 entries. The FOLLOWUPS inventory grows with the
+  G1–G8 entries (G1 `MempoolMonitorActor`, G3 transaction-
+  replacement rejection, G6 `TxConfirmationTrackerActor`, G7
+  cancel-build refinement, G8 wallet-locked-during-in_flight,
+  G5 `LedgerEngine` maturity-filter forward-template, G2
+  `LedgerDiagnostic::TxReorgedOut` amendment).
+
+**Rationale (why preserve the §7.X bodies below at closure-time
+substrate).** The §7 closure-rule discipline pins each round's
+deliverable at the substrate-state that was known when the round
+closed — substrate change reopens explicitly through the segment
+mechanism rather than rewriting upstream history. The cost of
+preserving the bodies-at-closure is the implementer-time
+synthesis cost named in this banner; the benefit is that an
+auditor reading the round in 18 months reconstructs the
+round-by-round substrate evolution without forensic git
+archaeology. The synthesis-banner is the cheap mitigation that
+delivers both properties — closure-rule provenance is intact
+*and* the implementation-time hazard is foreclosed.
+
+---
 
 Per the PR 1 / PR 2 / PR 3 / PR 4 precedent, Round 3 produces
 the Phase 1 commit list as the substrate the implementation
