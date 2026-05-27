@@ -377,7 +377,11 @@ mod tests {
         // is by ascending index, so the selector picks index
         // 0 (then 1, etc.) when target requires the
         // smallest-index candidate first.
-        let candidates = vec![candidate(2, 1_000), candidate(0, 1_000), candidate(1, 1_000)];
+        let candidates = vec![
+            candidate(2, 1_000),
+            candidate(0, 1_000),
+            candidate(1, 1_000),
+        ];
         let target = 1_000;
         let selected = WalletGreedyOutputSelector
             .select_outputs(&candidates, target)
@@ -390,7 +394,11 @@ mod tests {
 
     #[test]
     fn wallet_greedy_total_covered_matches_indices() {
-        let candidates = vec![candidate(5, 7_000), candidate(2, 4_000), candidate(9, 2_000)];
+        let candidates = vec![
+            candidate(5, 7_000),
+            candidate(2, 4_000),
+            candidate(9, 2_000),
+        ];
         let target = 10_000;
         let selected = WalletGreedyOutputSelector
             .select_outputs(&candidates, target)
@@ -405,7 +413,9 @@ mod tests {
                 candidates
                     .iter()
                     .find(|c| c.index == *i)
-                    .expect("selected index appears in candidates (F4 caller-side check is structural)")
+                    .expect(
+                        "selected index appears in candidates (F4 caller-side check is structural)",
+                    )
                     .amount
             })
             .sum();
