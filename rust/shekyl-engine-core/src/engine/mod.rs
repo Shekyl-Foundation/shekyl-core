@@ -164,6 +164,7 @@ pub mod fee_estimator;
 pub mod lifecycle;
 pub(crate) mod local_keys;
 pub(crate) mod local_ledger;
+pub mod local_pending_tx;
 pub(crate) mod local_refresh;
 pub mod merge;
 pub mod network;
@@ -188,6 +189,7 @@ pub use error::{IoError, KeyError, OpenError, PendingTxError, RefreshError, Send
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
 pub use local_ledger::LocalLedger;
+pub use local_pending_tx::LocalPendingTx;
 pub use local_refresh::LocalRefresh;
 pub use network::Network;
 pub use output_selector::{
