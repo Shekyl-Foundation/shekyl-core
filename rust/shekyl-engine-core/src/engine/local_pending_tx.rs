@@ -951,7 +951,9 @@ mod tests {
         AssertionSink, DiagnosticSink, DiscardReason, PanickingSink, PanickingSinkTrigger,
         PendingTxDiagnostic, TracingDiagnosticSink,
     };
-    use crate::engine::error::{AmbiguousErrorKind, PendingTxError, TerminalErrorKind};
+    use crate::engine::error::{
+        AmbiguousErrorKind, PendingTxError, SubmitError, TerminalErrorKind,
+    };
     use crate::engine::fee_estimator::DaemonFeeEstimator;
     use crate::engine::output_selector::WalletGreedyOutputSelector;
     use crate::engine::pending::{FeePriority, TxRecipient, STUB_FEE_ATOMIC_UNITS};
@@ -1418,6 +1420,127 @@ mod tests {
             })
         ));
         assert_eq!(pending.outstanding(), 1);
+    }
+
+    // ── Phase 0m: signal_mempool_evicted (STAGE_1_PR_5 §5.6.12 C5β) ─
+
+    async fn build_in_flight_via_daemon_timeout(
+        pending: &LocalPendingTx<
+            LocalSigner,
+            WalletGreedyOutputSelector,
+            DaemonFeeEstimator,
+            LocalLedger,
+        >,
+    ) -> PendingTx {
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        pending.queue_submit_daemon_outcome(Err(SubmitError::DaemonAmbiguous {
+            kind: AmbiguousErrorKind::DaemonTimeout,
+            reservation_id: built.id,
+        }));
+        assert!(matches!(
+            pending.submit(built.id).await,
+            Err(SubmitError::DaemonAmbiguous {
+                kind: AmbiguousErrorKind::DaemonTimeout,
+                ..
+            })
+        ));
+        assert_eq!(pending.outstanding(), 1);
+        built
+    }
+
+    #[tokio::test]
+    async fn signal_mempool_evicted_on_in_flight_succeeds() {
+        let pending = test_pending_tx(funded_ledger());
+        let built = build_in_flight_via_daemon_timeout(&pending).await;
+        pending
+            .signal_mempool_evicted(built.id)
+            .expect("in_flight eviction succeeds");
+        assert_eq!(pending.outstanding(), 0);
+    }
+
+    #[tokio::test]
+    async fn signal_mempool_evicted_on_consumer_held_returns_not_found() {
+        let pending = test_pending_tx(funded_ledger());
+        let built = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("build ok");
+        let err = pending
+            .signal_mempool_evicted(built.id)
+            .expect_err("consumer_held is not eviction-relevant");
+        assert!(matches!(err, PendingTxError::ReservationNotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn signal_mempool_evicted_on_never_existed_returns_not_found() {
+        let pending = test_pending_tx(funded_ledger());
+        let err = pending
+            .signal_mempool_evicted(ReservationId::new(99))
+            .expect_err("unknown rid");
+        assert!(matches!(err, PendingTxError::ReservationNotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn signal_mempool_evicted_emits_mempool_evicted_diagnostic() {
+        let sink = Arc::new(AssertionSink::new());
+        let pending = test_pending_tx_with_sink(
+            funded_ledger(),
+            Arc::clone(&sink) as Arc<dyn DiagnosticSink>,
+        );
+        let built = build_in_flight_via_daemon_timeout(&pending).await;
+        pending
+            .signal_mempool_evicted(built.id)
+            .expect("eviction ok");
+        let events = sink.recorded_pending();
+        assert!(
+            matches!(
+                events.last(),
+                Some(PendingTxDiagnostic::Discarded {
+                    reason: DiscardReason::MempoolEvicted,
+                    ..
+                })
+            ),
+            "expected MempoolEvicted diagnostic, got {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn signal_mempool_evicted_releases_output_locks() {
+        let pending = test_pending_tx(funded_ledger());
+        let built = build_in_flight_via_daemon_timeout(&pending).await;
+        pending
+            .signal_mempool_evicted(built.id)
+            .expect("eviction releases locks");
+        assert_eq!(pending.outstanding(), 0);
+        let second = pending
+            .build(standard_request(7_000))
+            .await
+            .expect("outputs released after eviction");
+        assert_eq!(second.id.raw(), 1);
+    }
+
+    /// F2 ownership boundary: ambiguous `in_flight` admits eviction signal;
+    /// post-eviction `discard` is idempotent-not-found, not blocked.
+    #[tokio::test]
+    async fn signal_mempool_evicted_ownership_boundary() {
+        let pending = test_pending_tx(funded_ledger());
+        let built = build_in_flight_via_daemon_timeout(&pending).await;
+
+        pending
+            .discard(built.id, DiscardReason::ConsumerExplicit)
+            .expect_err("consumer cannot force-discard ambiguous in_flight");
+        pending
+            .signal_mempool_evicted(built.id)
+            .expect("eviction observation succeeds");
+        assert_eq!(pending.outstanding(), 0);
+
+        let err = pending
+            .discard(built.id, DiscardReason::ConsumerExplicit)
+            .expect_err("rid gone after eviction");
+        assert!(matches!(err, PendingTxError::ReservationNotFound { .. }));
     }
 
     // ── C7 emission/return coherence ──────────────────────────────
