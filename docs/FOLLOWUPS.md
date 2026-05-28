@@ -47,6 +47,24 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
+- **Stage 1 trait-extraction chain — closeout audit (2026-05-27;
+  PR #81 merged).** The §8.1 critical-path chain is landed on `dev`:
+  `DaemonEngine` → `LedgerEngine` → (`RefreshEngine` ∥
+  `PendingTxEngine`), with `KeyEngine` trait + `LocalKeys` implementor
+  in parallel. Inventory, orchestrator shape (`Engine<S, D, L, R, P>`),
+  gaps (`PersistenceEngine`, `EconomicsEngine`, `K: KeyEngine` on
+  `Engine`), and ordered next steps:
+  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md) §8.1 /
+  §1 status banner; per-PR design docs under `docs/design/STAGE_1_PR_*`.
+  **Dedicated audit markdown** (`STAGE_1_COMPLETION_AUDIT.md`) — **not yet
+  landed** (CHANGELOG entry was aspirational; add in a doc-only PR or fold
+  into post–PR 7 closeout).
+  **Still V3.0 pre-genesis but not “missing Stage 1 PR”:** P1 async
+  refresh post-pass, wallet BIP-39 FFI, optional persistence/economics
+  trait PRs, economics §3.3 benches. **Rewrite plan:**
+  [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
+  Phases 0–6; Stage 1 was prerequisite, Phase 1+ continues `Engine`.
+
 - **Post-2g adversarial-corpus methodology + implementation
   (trigger: RandomX v2 Phase 2g Round 7 R7-D1/R7-D2 reopening
   of R1-D5 + R1-D6; *closed by Phase 2h implementation PR*).**
@@ -1773,6 +1791,35 @@ sustainability is unaffected by the recalibration.
 ---
 
 ## V3.1 — audit response and stressnet gates
+
+- **Wallet file backup-exclusion markers (PR 6 lessons canvass §5.12 F1).**
+  Users sync `~/.shekyl` via Dropbox/iCloud; encrypted blobs still leak to
+  third-party storage. **Work:** at `WalletFile::create`, set platform markers
+  (macOS `com.apple.metadata:com_apple_backup_excludeItem`, Linux `chattr +d`
+  where supported, Windows `FILE_ATTRIBUTE_NOT_CONTENT_INDEXED`, `.nobackup`
+  sentinel). `PersistenceEngine` trait rustdoc pins implementor responsibility.
+  **Target:** V3.1. **Reopen when:** PR 6 lands and wallet path creation is
+  stable. **Ref:**
+  [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](./design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md)
+  §5.12 F1.
+
+- **Process core-dump disable at wallet-RPC startup (PR 6 §5.12 F2).**
+  Default Linux core dumps can capture stack copies of secrets after Argon2 /
+  sealing-key use. **Work:** `prctl(PR_SET_DUMPABLE, 0)` (and platform
+  equivalents) in `shekyl-wallet-rpc` main before wallet open. **Target:**
+  V3.1. **Reopen when:** wallet-RPC binary hardening pass.
+
+- **Argon2 stack-resident secret copies — cryptographer review (PR 6 §5.12 F3).**
+  Heap `ZeroizeOnDrop` does not bound stack copies inside the Argon2id
+  implementation. Add to the external cryptographer engagement bundle alongside
+  F5(b) ritual and HKDF region derivation. **Target:** V3.1. **Reopen when:**
+  cryptographer scope is finalized.
+
+- **Rust `WalletFile` vs C++ `wallet2` advisory-lock cross-test (PR 6 §5.12 F4).**
+  Rewrite-era may have both stacks live. **Work:** open with Rust
+  `WalletFile`, attempt C++ open on same path, expect lock failure. **Target:**
+  V3.1. **Reopen when:** C++ wallet path still coexists with Rust engine file
+  handle.
 
 - **Shekyl-native end-to-end wallet/daemon test harness
   (replacement for the deleted `tests/functional_tests/`).**
@@ -3877,6 +3924,43 @@ one place to confirm each item's relationship to the wallet stack.
 ---
 
 ## V3.2 — Rust cutover and cleanup
+
+- **`atomic_write_file` power-loss crash-injection tests.** PR 6 cites
+  existing unit tests in `shekyl-engine-file/src/atomic.rs` (overwrite
+  semantics, no stray temps) but not simulated crash mid-fsync. If audit
+  requires stronger durability evidence than unit tests, add fault-injection
+  tests (e.g. kill between tmp write and rename) in `shekyl-engine-file`.
+  **Target:** V3.2. **Reopen when:** external audit names power-loss simulation
+  as a release gate.
+
+- **Wallet on network filesystems (NFS / SMB).** Advisory lock + atomic
+  rename semantics are validated for local POSIX filesystems only. PR 6
+  segment 2i (G5) records that multi-client network mounts can break
+  single-writer assumptions. **Work:** document "local disk only" in user-
+  facing wallet docs; evaluate `flock` vs `fcntl` posture if remote home
+  directories are a deployment target. **Target:** V3.2. **Reopen when:**
+  a supported deployment explicitly requires network-backed wallet paths.
+
+- **Wallet file metadata obfuscation (PR 6 §5.12 F5–F6).** File size and mtime
+  leak wallet presence and activity without decryption. **Work:** pad `.wallet`
+  to fixed size classes; optional mtime scheduling independent of saves; fresh-
+  wallet fingerprint mitigation. **Target:** V3.x. **Reopen when:** threat
+  model review names local filesystem observer as in-scope.
+
+- **`WalletFile` handle slimming (post–PR 6 `PersistenceEngine`).**
+  `shekyl-engine-file::WalletFile` retains `keys_file_bytes`, opened
+  `file_kek`, and other material beyond what steady-state
+  `PersistenceEngine` methods need. Memory disclosure of the **whole
+  handle** is a strictly larger blast radius than orchestrator-held
+  `StateWrapKey` / `PrefsHmacKey` alone (see
+  `docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md` §5.9; post-HKDF amendment,
+  steady-state cache is `wrap_key_region_2`, not `file_kek`).
+  **Work:** narrow `WalletFile`'s held state to the minimum the trait
+  implementor requires; keep open/rotate paths able to re-derive sealing
+  keys without retaining redundant secret-bearing fields across
+  steady-state sync. **Target:** V3.2. **Reopen when:** PR 6 lands and
+  `PersistenceEngine` call sites are stable enough to measure what the
+  implementor actually reads per method.
 
 - **FFI C ABI symbol rename: `shekyl_wallet_*` → `shekyl_engine_*`,
   `ShekylWallet` → `ShekylEngine` (paired with `wallet2.cpp` retirement).**
