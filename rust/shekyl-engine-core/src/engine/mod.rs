@@ -188,7 +188,8 @@ pub use diagnostics::{
     TracingDiagnosticSink,
 };
 pub use error::{
-    IoError, KeyError, OpenError, PendingTxError, RefreshError, SendError, SubmitError, TxError,
+    ChangePasswordError, IoError, KeyError, OpenError, PendingTxError, PersistenceError,
+    RefreshError, SendError, SubmitError, TxError,
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};

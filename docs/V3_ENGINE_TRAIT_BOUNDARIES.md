@@ -25,9 +25,18 @@ trait surface narrowing), and Phase 0c
 drop `transfers()` for `!Clone` discipline). The
 [Stage 1 PR 2 design doc](design/STAGE_1_PR_2_LEDGER_ENGINE.md)
 §2.2 captures the lifecycle-not-just-pre-flight discipline pattern
-that this drift count surfaced. Subsequent per-trait PRs follow
-§8.1's within-stage-1 ordering and §8.2's amendment co-landing
-rule.
+that this drift count surfaced. **Stage 1 PR 3 (`KeyEngine`, PRs
+#31–#41, M3a–M3e) landed 2026-05-11.** **Stage 1 PR 4
+(`RefreshEngine`, PR #60) landed 2026-05-20.** **Stage 1 PR 5
+(`PendingTxEngine`, PR #81) landed 2026-05-27** — completing the
+§8.1 critical-path chain `DaemonEngine` → `LedgerEngine` →
+(`RefreshEngine` ∥ `PendingTxEngine`) on `dev` (merge
+`b9c03dc24`). `PersistenceEngine` and `EconomicsEngine` remain
+spec-only trait surfaces (no `engine/traits/{persistence,economics}.rs`
+yet); §8.1 permits them off the critical path. Post-closeout inventory:
+[`docs/design/STAGE_1_COMPLETION_AUDIT.md`](design/STAGE_1_COMPLETION_AUDIT.md).
+Subsequent per-trait PRs follow §8.1's within-stage-1 ordering and
+§8.2's amendment co-landing rule.
 
 - **Round 1 record:** `d387bff1d` (initial draft on this branch);
   content originally landed on `dev` outside the review-round
@@ -1973,7 +1982,7 @@ the existing follow-up.
 
 ```rust
 pub trait PersistenceEngine {
-    type Error: Into<OpenError>;
+    type Error: Into<PersistenceError>;
 
     fn base_path(&self) -> &Path;
     fn network(&self) -> Network;
@@ -1981,11 +1990,13 @@ pub trait PersistenceEngine {
 
     async fn save_state(
         &self,
+        state_key: &StateWrapKey<'_>,
         ledger: &WalletLedger,
     ) -> Result<(), Self::Error>;
 
     async fn save_prefs(
         &self,
+        prefs_key: &PrefsHmacKey<'_>,
         prefs: &WalletPrefs,
     ) -> Result<(), Self::Error>;
 
@@ -1997,6 +2008,17 @@ pub trait PersistenceEngine {
     ) -> Result<(), Self::Error>;
 }
 ```
+
+**PR 6 Phase 0a amendment (F5(b), 2026-05-27).** Steady-state saves take
+HKDF-derived sealing keys (`StateWrapKey` = `wrap_key_region_2`,
+`PrefsHmacKey` from `shekyl-engine-prefs`), not `Credentials` or password
+bytes. `type Error` is [`PersistenceError`](../../rust/shekyl-engine-core/src/engine/error.rs)
+(not [`OpenError`](../../rust/shekyl-engine-core/src/engine/error.rs));
+[`Engine::close`](../../rust/shekyl-engine-core/src/engine/lifecycle.rs) maps
+persist failures via `OpenError::Persistence`. [`Engine::change_password`](../../rust/shekyl-engine-core/src/engine/lifecycle.rs)
+uses [`ChangePasswordError`](../../rust/shekyl-engine-core/src/engine/error.rs).
+Binding form, open ritual, and commit plan:
+[`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
 
 **Stage 1 implementing-type note (Round 3).** `WalletFile` (the
 default Stage 1 type) holds two distinct categories of state:
@@ -3171,7 +3193,7 @@ discipline tells contributors what to write.
 // pre-apply snapshot it was handed and the arms do overlap.
 let (apply_result, persist_result) = tokio::join!(
     engine.ledger.apply_scan_result(scan),
-    engine.persist.save_state(&engine.ledger.snapshot()),
+    engine.persist.save_state(&state_key, &engine.ledger.snapshot()),
 );
 ```
 
