@@ -61,9 +61,11 @@ use zeroize::Zeroizing;
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::wallet_envelope::{
-    open_keys_file, open_state_file, rewrap_keys_file_password, seal_keys_file, seal_state_file,
-    CapabilityContent, KdfParams, OpenedKeysFile, EXPECTED_CLASSICAL_ADDRESS_BYTES,
+    open_keys_file, open_state_file, rewrap_keys_file_password, seal_keys_file,
+    seal_state_file, seal_state_file_with_wrap_key_region_2, CapabilityContent, KdfParams,
+    OpenedKeysFile, EXPECTED_CLASSICAL_ADDRESS_BYTES,
 };
+use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
 use shekyl_engine_prefs::{
     load_prefs as prefs_load_prefs, save_prefs as prefs_save_prefs,
     LoadOutcome as PrefsLoadOutcome, PrefsHmacKey, WalletPrefs,
@@ -510,6 +512,28 @@ impl WalletFile {
             .keys_file_bytes
             .clone();
         let state_bytes = seal_state_file(password, &keys_file_bytes, &framed)?;
+        atomic_write_file(&self.state_path, &state_bytes)?;
+        Ok(())
+    }
+
+    /// Same as [`Self::save_state`] but seals with a session-cached
+    /// `wrap_key_region_2` (no Argon2id on the save path).
+    pub fn save_state_with_wrap_key_region_2(
+        &self,
+        wrap_key_region_2: &[u8; FILE_KEK_BYTES],
+        ledger: &WalletLedger,
+    ) -> Result<(), WalletFileError> {
+        ledger.preflight_save()?;
+        let body = ledger.to_postcard_bytes()?;
+        let framed = encode_payload(PayloadKind::WalletLedgerPostcard, &body)?;
+        let keys_file_bytes = self
+            .state
+            .lock()
+            .expect("wallet file mutex poisoned")
+            .keys_file_bytes
+            .clone();
+        let state_bytes =
+            seal_state_file_with_wrap_key_region_2(wrap_key_region_2, &keys_file_bytes, &framed)?;
         atomic_write_file(&self.state_path, &state_bytes)?;
         Ok(())
     }
