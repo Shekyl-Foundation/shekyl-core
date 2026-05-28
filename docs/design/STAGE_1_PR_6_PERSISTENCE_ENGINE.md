@@ -7,7 +7,7 @@ supplement landed same day (§5.12).** Ready for Phase 1 on
 `feat/stage-1-pr6-persistence-engine-design` → PR to `dev`. Opened from `dev`
 tip `b9c03dc24` (post–PR #81 `PendingTxEngine` merge). This document follows
 [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) and
-[`26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc).
+[`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
 **Phase 1 implementation** lands on `feat/stage-1-pr6-persistence-engine`
 after §6.3 prerequisites (HKDF PR merged to `dev`).
 
@@ -99,11 +99,11 @@ Round 3 produces §7.X commit decomposition.
 
 ## §1 Mission posture
 
-Per [`00-mission.mdc`](../.cursor/rules/00-mission.mdc):
+Per [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc):
 
 | Priority | How this PR touches it |
 |----------|-------------------------|
-| **1 — Security** | Open/rotate: Argon2 + `file_kek` unwrap; steady-state: HKDF-derived `wrap_key_region_2` + `prefs_hmac_key` only (§5.9). `Credentials` on `rotate_password` and open path only. Aligns with [`35-secure-memory.mdc`](../.cursor/rules/35-secure-memory.mdc) and [`36-secret-locality.mdc`](../.cursor/rules/36-secret-locality.mdc). |
+| **1 — Security** | Open/rotate: Argon2 + `file_kek` unwrap; steady-state: HKDF-derived `wrap_key_region_2` + `prefs_hmac_key` only (§5.9). `Credentials` on `rotate_password` and open path only. Aligns with [`35-secure-memory.mdc`](../../.cursor/rules/35-secure-memory.mdc) and [`36-secret-locality.mdc`](../../.cursor/rules/36-secret-locality.mdc). |
 | **2 — Privacy** | Indirect: persisted ledger/prefs are already encrypted at rest; trait extraction does not change wire/crypto semantics. |
 | **3 — System longevity** | **Primary.** Extract `PersistenceEngine` so Stage 4 can swap `WalletFile` for `ActorRef<PersistenceActor>` without re-touching `Engine::close` orchestration. |
 
@@ -179,16 +179,18 @@ This section pays the **citation cost** for
   mismatch); isolatable subsystem with explicit lifecycle (open, save,
   rotate, close-with-flush). **Refinement PR** on existing spec surface,
   not additive trait — cite §8.1 row for `PersistenceEngine`.
-- [x] **Surface amend vs preserve.** **Amends** §2.6: `save_state` gains
-  `credentials: &Credentials<'_>` per §8.2 (Round 1 disposition). All other
-  methods preserved; `rotate_password` already uses `Credentials` in spec.
+- [x] **Surface amend vs preserve.** **Amends** §2.6: steady-state
+  `save_state` / `save_prefs` take **`StateWrapKey` / `PrefsHmacKey`**
+  (F5(b), §5.9); `rotate_password` keeps `Credentials`. Open/rotate password
+  paths stay off-trait (Q9.11). Round 1 **rejected** steady-state
+  `Credentials` on `save_state`.
 
 ### §3.2 Plan-altitude principles (template §3.2 — `WALLET_REWRITE_PLAN.md`)
 
 | Principle | Applicability |
 |-----------|----------------|
-| **4 — architectural-integrity-now** | **Always applies.** Governs: direct `WalletFile` impl (no `LocalPersistence` deferral); `Mutex` now for `&self` trait; §8.2 amendment now for `Credentials` on `save_state`. Rules: `16-architectural-inheritance.mdc`, `21-reversion-clause-discipline.mdc`. |
-| **5 — closure-rule + audit trail** | **Always applies.** Round 1 **not closed** — reviewer walkthrough; Round 2 segment structure (2a–2g, 2d, 2i); Round 3 → §7.X; reopen criterion in status banner. |
+| **4 — architectural-integrity-now** | **Always applies.** Governs: direct `WalletFile` impl (no `LocalPersistence` deferral); `Mutex` now for `&self` trait; §8.2 / F5(b) amendment now for sealing keys on steady-state saves (not password-on-every-save). Rules: [`16-architectural-inheritance.mdc`](../../.cursor/rules/16-architectural-inheritance.mdc), [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc). |
+| **5 — closure-rule + audit trail** | **Always applies.** Round 1–3 **closed**; lessons canvass §5.12 landed; §7.X commit plan pinned; reopen criterion in status banner. |
 | **6 — wider-substrate audit** | **Applies.** Closed in Round 2 segment **2i** (§5.6.9, G1–G6). |
 | **7 — threat-model anchors** | **Applies with narrowing.** Adversary-controlled **daemon** is N/A for persistence IO; wargaming focuses on **memory disclosure** (password caching), **close ordering** (pending tx / refresh vs flush), and **corrupt-prefs** paths already in `WalletFile`. HW-wallet anchor N/A. |
 | **8 — priority-hierarchy** | **Applies** to password-cache vs UX trade-off (reject cache = priority 1). No priority-3 feature trade-offs in scope. |
@@ -217,7 +219,7 @@ Two substrates — **do not conflate**:
 
 ### §3.5 Branch posture (template §3.5)
 
-- [x] [`06-branching.mdc`](../.cursor/rules/06-branching.mdc) rule 2: design
+- [x] [`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) rule 2: design
   branch `feat/stage-1-pr6-persistence-engine-design`; implementation
   `feat/stage-1-pr6-persistence-engine`; ≤5 days / ≤10 commits target.
 - [x] No push without user authorization.
@@ -241,7 +243,7 @@ Two substrates — **do not conflate**:
 
 | Method | Spec §2.6 | `handle.rs` | Gap |
 |--------|-----------|-------------|-----|
-| `save_state` | `(&self, ledger)` | `(&self, password, ledger)` :480–484 | **Needs `Credentials` in trait** (§8.2) |
+| `save_state` | `(&self, state_key, ledger)` (Phase 0a / §5.9) | `(&self, password, ledger)` :480–484 | **F5(b): `StateWrapKey` on trait** (C2c/C3/C7) |
 | `rotate_password` | `&self` + `Credentials` | `&mut self` :507–512 | **`Mutex` interior mutability** |
 | `base_path` | `&Path` | missing | Delegate to `state_path()` (`paths.rs`) |
 
@@ -251,7 +253,7 @@ open.
 
 | R0-D | Finding | Disposition |
 |------|---------|-------------|
-| R0-D1 | `save_state` password | Phase 0a §8.2 amendment |
+| R0-D1 | `save_state` password on every call | F5(b): `StateWrapKey` on trait (Phase 0a / §5.9) |
 | R0-D2 | `rotate_password` `&mut self` | C2 `shekyl-engine-file` Mutex |
 | R0-D3 | `base_path()` | C2b |
 | R0-D4 | No `F` on `Engine` | C4 append `F` |
@@ -388,7 +390,7 @@ The old framing ("how do we pass `Credentials` at the trait boundary?") is
 #### §5.4.1 R6 — V3.1 multisig forward compatibility (Round 1 pin — reviewer read)
 
 **Question.** Does V3.1 multisig require a different `PersistenceEngine`
-shape than `save_state(credentials, ledger)` + `save_prefs` +
+shape than `save_state(&StateWrapKey, ledger)` + `save_prefs(&PrefsHmacKey, …)` +
 `rotate_password`?
 
 **Substrate ([`PQC_MULTISIG.md`](../PQC_MULTISIG.md) read 2026-05-27).**
@@ -1163,7 +1165,7 @@ Fill binding-check matrix at Round 2 segment **2g**. Mechanical gates:
 - [ ] `cargo fmt --check`
 - [ ] `cargo clippy -p shekyl-engine-core -p shekyl-engine-file --all-targets -- -D warnings`
 - [ ] `cargo test -p shekyl-engine-core -p shekyl-engine-file`
-- [ ] No new workspace deps without [`17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc)
+- [ ] No new workspace deps without [`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)
 - [ ] §3.3 benches: **none expected** for persistence hot path
 - [ ] §8.2: spec amendment commit (C0) separate from consumer commits
 - [ ] Grep: no `MockPersistence`
@@ -1414,4 +1416,4 @@ PR 6 must not break:
 
 *Template:* [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md).
 *Spec:* [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §2.6, §2.8, §3, §6.4, §8.1–§8.3.
-*Process:* [`26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc).
+*Process:* [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
