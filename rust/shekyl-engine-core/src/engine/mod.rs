@@ -224,7 +224,9 @@ use shekyl_engine_prefs::WalletPrefs;
 use shekyl_engine_state::WalletLedger;
 
 use crate::engine::local_ledger::LedgerState;
-use crate::engine::traits::{DaemonEngine, LedgerEngine, PendingTxEngine, RefreshEngine};
+use crate::engine::traits::{
+    DaemonEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
+};
 
 /// The Shekyl V3 wallet domain orchestrator.
 ///
@@ -307,12 +309,18 @@ pub struct Engine<
         DaemonFeeEstimator,
         LocalLedger,
     >,
+    F: PersistenceEngine = WalletFile,
 > {
-    /// On-disk envelope: `.wallet.keys` (region 1) +
-    /// `.wallet` (region 2). Owns the advisory lock and the
-    /// per-session `prefs_hmac_key`. Region 1 is write-once after
-    /// [`Engine::create`]; only `change_password` rewraps the file_kek.
-    file: WalletFile,
+    /// On-disk persistence: `.wallet.keys` (region 1) + `.wallet` (region 2).
+    /// Stage 1 implementor: [`WalletFile`]; Stage 4: actor-backed `F`.
+    persistence: F,
+
+    /// HKDF-derived `wrap_key_region_2` for steady-state ledger seals (F5(b)).
+    state_wrap_key: StateWrapKey,
+
+    /// HKDF-derived prefs integrity key; copied from the open path before
+    /// [`WalletFile::zeroize_transient_file_kek`].
+    prefs_hmac_key: shekyl_engine_prefs::PrefsHmacKey,
 
     /// Identity material rederived from the master seed at every open.
     /// Holds Ed25519 spend / view scalars and the ML-KEM-768 decap key;
@@ -512,7 +520,9 @@ impl<
     ///   secret-free.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Engine")
-            .field("file", &self.file)
+            .field("persistence", &"<redacted>")
+            .field("state_wrap_key", &self.state_wrap_key)
+            .field("prefs_hmac_key", &self.prefs_hmac_key)
             .field("keys", &"<redacted: AllKeysBlob>")
             .field("ledger", &"<…>")
             .field("outstanding_pending_txs", &self.pending.outstanding())
@@ -579,7 +589,8 @@ impl<
         L: LedgerEngine,
         R: RefreshEngine,
         P: PendingTxEngine,
-    > Engine<S, D, L, R, P>
+        F: PersistenceEngine,
+    > Engine<S, D, L, R, P, F>
 {
     /// Network this wallet is bound to. Cached from
     /// [`WalletFile`]'s region 1 at construction; stable for the life
@@ -595,12 +606,20 @@ impl<
         self.capability
     }
 
-    /// Borrow the underlying [`WalletFile`] for filesystem-path,
-    /// safety-overrides, and prefs-HMAC-key access. The file's
-    /// `network()` and `capability()` accessors agree with the
-    /// cache on `Engine`.
-    pub fn file(&self) -> &WalletFile {
-        &self.file
+    /// Borrow the [`PersistenceEngine`] implementor.
+    pub fn persistence(&self) -> &F {
+        &self.persistence
+    }
+
+    /// Steady-state region-2 sealing key for this session.
+    pub(crate) fn state_wrap_key(&self) -> &StateWrapKey {
+        &self.state_wrap_key
+    }
+
+    /// Session prefs HMAC key (orchestrator copy; see [`WalletFile`] for the
+    /// handle's cached copy used by inherent prefs I/O).
+    pub(crate) fn prefs_hmac_key(&self) -> &shekyl_engine_prefs::PrefsHmacKey {
+        &self.prefs_hmac_key
     }
 
     /// Borrow user preferences. Read-only; preference rotation goes
@@ -722,9 +741,14 @@ impl<
     /// the first consumer.
     #[cfg(any(test, feature = "test-helpers"))]
     #[allow(dead_code)]
-    pub(crate) fn replace_refresh<R2: RefreshEngine>(self, refresh: R2) -> Engine<S, D, L, R2, P> {
+    pub(crate) fn replace_refresh<R2: RefreshEngine>(
+        self,
+        refresh: R2,
+    ) -> Engine<S, D, L, R2, P, F> {
         let Engine {
-            file,
+            persistence,
+            state_wrap_key,
+            prefs_hmac_key,
             keys,
             ledger,
             pending,
@@ -737,7 +761,9 @@ impl<
             _signer,
         } = self;
         Engine {
-            file,
+            persistence,
+            state_wrap_key,
+            prefs_hmac_key,
             keys,
             ledger,
             pending,
@@ -763,9 +789,11 @@ impl<
     pub(crate) fn replace_pending_tx<P2: PendingTxEngine>(
         self,
         pending: P2,
-    ) -> Engine<S, D, L, R, P2> {
+    ) -> Engine<S, D, L, R, P2, F> {
         let Engine {
-            file,
+            persistence,
+            state_wrap_key,
+            prefs_hmac_key,
             keys,
             ledger,
             pending: _old,
@@ -778,7 +806,9 @@ impl<
             _signer,
         } = self;
         Engine {
-            file,
+            persistence,
+            state_wrap_key,
+            prefs_hmac_key,
             keys,
             ledger,
             pending,
@@ -790,6 +820,16 @@ impl<
             refresh,
             _signer,
         }
+    }
+}
+
+impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine, P: PendingTxEngine>
+    Engine<S, D, L, R, P, WalletFile>
+{
+    /// Borrow the Stage 1 [`WalletFile`] implementor. Prefer
+    /// [`Self::persistence`] for trait-shaped save/rotate paths.
+    pub fn file(&self) -> &WalletFile {
+        &self.persistence
     }
 }
 

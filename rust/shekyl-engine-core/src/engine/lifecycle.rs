@@ -665,7 +665,7 @@ impl Engine<SoloSigner> {
     /// (network, capability) are established in exactly one place.
     #[allow(clippy::too_many_arguments)]
     fn assemble(
-        file: WalletFile,
+        mut file: WalletFile,
         keys: AllKeysBlob,
         ledger: WalletLedger,
         indexes: LedgerIndexes,
@@ -674,6 +674,11 @@ impl Engine<SoloSigner> {
         network: Network,
         capability: Capability,
     ) -> Result<Self, OpenError> {
+        let state_wrap_key = super::sealing_keys::state_wrap_key_from_wallet_file(&file);
+        let prefs_hmac_key = shekyl_engine_prefs::PrefsHmacKey::derive(
+            &file.opened_keys().file_kek,
+            file.expected_classical_address(),
+        );
         // Construct the producer's view-and-spend material once, from
         // the freshly-derived `AllKeysBlob`, and move it into the
         // `LocalRefresh` aggregate per
@@ -710,7 +715,9 @@ impl Engine<SoloSigner> {
         );
 
         Ok(Self {
-            file,
+            persistence: file,
+            state_wrap_key,
+            prefs_hmac_key,
             keys,
             ledger,
             pending,
@@ -733,7 +740,8 @@ impl<
         L: LedgerEngine,
         R: RefreshEngine,
         P: super::traits::PendingTxEngine,
-    > Engine<S, D1, L, R, P>
+        F: super::traits::PersistenceEngine,
+    > Engine<S, D1, L, R, P, F>
 {
     /// Test-only constructor: rebuild the engine with `daemon`
     /// substituted in place of the existing one, leaving every
@@ -781,9 +789,14 @@ impl<
     /// test surface; production paths cannot reach it because
     /// `pub(crate) #[cfg(test)]` excludes them from the published
     /// API and from the non-test build.
-    pub(crate) fn replace_daemon<D2: DaemonEngine>(self, daemon: D2) -> Engine<S, D2, L, R, P> {
+    pub(crate) fn replace_daemon<D2: DaemonEngine>(
+        self,
+        daemon: D2,
+    ) -> Engine<S, D2, L, R, P, F> {
         let Engine {
-            file,
+            persistence,
+            state_wrap_key,
+            prefs_hmac_key,
             keys,
             ledger,
             pending,
@@ -796,7 +809,9 @@ impl<
             _signer,
         } = self;
         Engine {
-            file,
+            persistence,
+            state_wrap_key,
+            prefs_hmac_key,
             keys,
             ledger,
             pending,
@@ -858,9 +873,14 @@ impl<
     /// The retirement commit deletes both `replace_daemon` and
     /// `replace_ledger` together; production paths are unaffected
     /// because they never named these methods.
-    pub(crate) fn replace_ledger<L2: LedgerEngine>(self, ledger: L2) -> Engine<S, D1, L2, R, P> {
+    pub(crate) fn replace_ledger<L2: LedgerEngine>(
+        self,
+        ledger: L2,
+    ) -> Engine<S, D1, L2, R, P, F> {
         let Engine {
-            file,
+            persistence,
+            state_wrap_key,
+            prefs_hmac_key,
             keys,
             ledger: _old,
             pending,
@@ -873,7 +893,9 @@ impl<
             _signer,
         } = self;
         Engine {
-            file,
+            persistence,
+            state_wrap_key,
+            prefs_hmac_key,
             keys,
             ledger: std::sync::Arc::new(ledger),
             pending,
@@ -936,7 +958,7 @@ fn is_default_overrides(overrides: &SafetyOverrides) -> bool {
 // `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.2).
 #[allow(private_bounds)]
 impl<S: EngineSignerKind, D: DaemonEngine, P: super::traits::PendingTxEngine>
-    Engine<S, D, LocalLedger, super::LocalRefresh, P>
+    Engine<S, D, LocalLedger, super::LocalRefresh, P, WalletFile>
 {
     /// Rotate the wallet password, optionally also rotating the KDF
     /// parameters of the on-disk envelope wrap.
@@ -956,7 +978,7 @@ impl<S: EngineSignerKind, D: DaemonEngine, P: super::traits::PendingTxEngine>
         new: &Credentials<'_>,
         new_kdf: Option<KdfParams>,
     ) -> Result<(), OpenError> {
-        self.file
+        self.persistence
             .rotate_password(old.password(), new.password(), new_kdf)
             .map_err(|e| map_wallet_file_error(e, self.network))
     }
@@ -1005,11 +1027,11 @@ impl<S: EngineSignerKind, D: DaemonEngine, P: super::traits::PendingTxEngine>
         // writers exist at this point; the read guard is structural,
         // not for contention.
         let ledger_guard = self.ledger.read();
-        self.file
+        self.persistence
             .save_state(credentials.password(), &ledger_guard.ledger)
             .map_err(|e| map_wallet_file_error(e, self.network))?;
         drop(ledger_guard);
-        self.file.save_prefs(&self.prefs).map_err(|e| {
+        self.persistence.save_prefs(&self.prefs).map_err(|e| {
             OpenError::Io(IoError::WalletFile {
                 detail: e.to_string(),
             })

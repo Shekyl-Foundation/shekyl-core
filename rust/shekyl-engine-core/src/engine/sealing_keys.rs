@@ -47,3 +47,15 @@ impl fmt::Display for StateWrapKey {
         f.write_str("<redacted>")
     }
 }
+
+/// Derive session `wrap_key_region_2` from an opened [`WalletFile`](shekyl_engine_file::WalletFile).
+pub(crate) fn state_wrap_key_from_wallet_file(
+    file: &shekyl_engine_file::WalletFile,
+) -> StateWrapKey {
+    use shekyl_crypto_pq::wallet_envelope::derive_wrap_key_region_2;
+
+    let file_kek = &file.opened_keys().file_kek;
+    let addr = file.expected_classical_address();
+    let wrap_key_region_2 = derive_wrap_key_region_2(file_kek, addr);
+    StateWrapKey::from_region2_key(wrap_key_region_2)
+}

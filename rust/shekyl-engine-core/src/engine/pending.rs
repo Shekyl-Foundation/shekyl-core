@@ -764,7 +764,8 @@ impl<
         L: LedgerEngine,
         R: RefreshEngine,
         P: PendingTxEngine,
-    > Engine<S, D, L, R, P>
+        F: super::traits::PersistenceEngine,
+    > Engine<S, D, L, R, P, F>
 {
     /// Number of in-flight reservations on this wallet handle.
     ///
