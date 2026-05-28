@@ -829,6 +829,7 @@ impl<
     }
 }
 
+#[allow(private_bounds)]
 impl<
         S: EngineSignerKind,
         D: DaemonEngine,

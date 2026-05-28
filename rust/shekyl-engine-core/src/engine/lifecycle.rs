@@ -997,7 +997,7 @@ impl<
             .map_err(|e| super::ChangePasswordError::RotateFailed(e.into()))?;
         drive_persistence(
             self.persistence
-                .save_prefs(&self.prefs_hmac_key, &self.prefs),
+                .save_prefs(self.prefs_hmac_key(), &self.prefs),
         )
         .map_err(|e| super::ChangePasswordError::RotatedButPrefsFlushFailed(e.into()))?;
         Ok(())
@@ -1047,13 +1047,13 @@ impl<
         let ledger_guard = self.ledger.read();
         drive_persistence(
             self.persistence
-                .save_state(&self.state_wrap_key, &ledger_guard.ledger),
+                .save_state(self.state_wrap_key(), &ledger_guard.ledger),
         )
         .map_err(|e| OpenError::Persistence(e.into()))?;
         drop(ledger_guard);
         drive_persistence(
             self.persistence
-                .save_prefs(&self.prefs_hmac_key, &self.prefs),
+                .save_prefs(self.prefs_hmac_key(), &self.prefs),
         )
         .map_err(|e| OpenError::Persistence(e.into()))?;
 
@@ -1077,8 +1077,10 @@ mod tests {
     use std::path::PathBuf;
 
     use shekyl_crypto_pq::wallet_envelope::KdfParams;
+    use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
     use shekyl_simple_request_rpc::SimpleRequestRpc;
     use tempfile::TempDir;
+    use zeroize::Zeroizing;
 
     /// Produce a `DaemonClient` against a never-resolved URL. The
     /// lifecycle methods covered here do not issue any RPC calls;
@@ -1101,6 +1103,29 @@ mod tests {
             *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(7);
         }
         s
+    }
+
+    fn fixed_seed_other() -> [u8; MASTER_SEED_BYTES] {
+        let mut s = fixed_seed();
+        s[0] ^= 0x55;
+        s[31] ^= 0xAA;
+        s
+    }
+
+    fn state_wrap_key_from_bytes(bytes: &[u8; FILE_KEK_BYTES]) -> super::super::sealing_keys::StateWrapKey {
+        use super::super::sealing_keys::StateWrapKey;
+        StateWrapKey::from_region2_key(Zeroizing::new(*bytes))
+    }
+
+    fn assert_open_state_aead_failure(err: OpenError) {
+        use super::super::error::PersistenceError;
+        match err {
+            OpenError::Persistence(PersistenceError::WalletFile(WalletFileError::Envelope(
+                WalletEnvelopeError::InvalidPasswordOrCorrupt,
+            )))
+            | OpenError::Io(IoError::WalletFile { .. }) => {}
+            other => panic!("expected state AEAD failure on reopen, got {other:?}"),
+        }
     }
 
     struct CreateFixture {
@@ -1462,7 +1487,6 @@ mod tests {
         let _wallet = opened.into_wallet();
     }
 
-    use super::super::error::PersistenceError;
     use super::super::traits::PersistenceEngine;
     use super::drive_persistence;
     use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
@@ -1532,7 +1556,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_state_wrap_key_fails_after_rotate() {
+    fn password_rotate_preserves_state_wrap_key_bytes() {
         let fix = make_create_fixture();
         let p_old: &[u8] = b"old password";
         let p_new: &[u8] = b"new password";
@@ -1541,57 +1565,131 @@ mod tests {
         let seed = fixed_seed();
 
         let params = EngineCreateParams::for_test_full(&fix.base_path, &creds_old, &seed);
-        let network = params.network;
         let mut wallet =
             Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        let before = *wallet.state_wrap_key().as_bytes();
+        wallet
+            .change_password(&creds_old, &creds_new, None)
+            .expect("rotate password");
+        assert_eq!(
+            before,
+            *wallet.state_wrap_key().as_bytes(),
+            "wrap_key_region_2 is unchanged when file_kek plaintext is unchanged"
+        );
+    }
+
+    /// Design §2c / F-R3.8: open → save_state(k) ok → rotate ok → save_state(k_stale)
+    /// without re-derive must fail loud when keys-file bytes used for AAD drift.
+    #[test]
+    fn stale_state_wrap_key_fails_after_rotate_without_rederive() {
+        use shekyl_engine_file::paths::keys_path_from;
+
+        let fix_a = make_create_fixture();
+        let tmp_b = tempfile::tempdir().expect("tempdir");
+        let base_b = tmp_b.path().join("other.wallet");
+        let p_old: &[u8] = b"old password";
+        let p_new: &[u8] = b"new password";
+        let creds_old = Credentials::password_only(p_old);
+        let creds_new = Credentials::password_only(p_new);
+        let seed_a = fixed_seed();
+        let seed_b = fixed_seed_other();
+
+        let params_a = EngineCreateParams::for_test_full(&fix_a.base_path, &creds_old, &seed_a);
+        let network = params_a.network;
+        let mut wallet =
+            Engine::<SoloSigner>::create(params_a, dummy_daemon()).expect("create wallet A");
         let ledger_guard = wallet.ledger.read();
-        let ledger = &ledger_guard.ledger;
         drive_persistence(PersistenceEngine::save_state(
             wallet.persistence(),
             wallet.state_wrap_key(),
-            ledger,
+            &ledger_guard.ledger,
         ))
         .expect("save before rotate");
         drop(ledger_guard);
+
+        let k_stale = state_wrap_key_from_bytes(wallet.state_wrap_key().as_bytes());
+
         wallet
             .change_password(&creds_old, &creds_new, None)
             .expect("rotate password");
 
-        // Password rotation preserves `file_kek` plaintext, so the orchestrator's
-        // pre-rotate `StateWrapKey` remains valid for sealing. Simulate a stale
-        // cached key (post-rotate re-derive drift) with a deliberately wrong key.
-        let mut bogus_bytes = *wallet.state_wrap_key().as_bytes();
-        bogus_bytes[0] ^= 0xFF;
-        let bogus_key = super::super::sealing_keys::StateWrapKey::from_region2_key(
-            zeroize::Zeroizing::new(bogus_bytes),
-        );
+        // Wallet B: different seed → different seed_block_tag in keys file.
+        let params_b = EngineCreateParams::for_test_full(&base_b, &creds_old, &seed_b);
+        Engine::<SoloSigner>::create(params_b, dummy_daemon())
+            .expect("create wallet B")
+            .close(&creds_old)
+            .expect("close B");
+        let foreign_keys = std::fs::read(keys_path_from(&base_b)).expect("read B keys file");
+
+        // Orchestrator still holds k_stale; in-memory keys bytes drift to another wallet.
+        wallet
+            .file()
+            .replace_keys_file_bytes_in_memory_for_tests(foreign_keys);
 
         let ledger_guard = wallet.ledger.read();
         drive_persistence(PersistenceEngine::save_state(
             wallet.persistence(),
-            &bogus_key,
+            &k_stale,
             &ledger_guard.ledger,
         ))
-        .expect("save with wrong wrap key still seals");
+        .expect("save seals with stale key + mismatched keys-file AAD");
         drop(ledger_guard);
-        // Do not call `close` here: it would re-save with the correct session key.
         drop(wallet);
 
         let err = Engine::<SoloSigner>::open_full(
-            &fix.base_path,
+            &fix_a.base_path,
             &creds_new,
             network,
             dummy_daemon(),
             SafetyOverrides::none(),
         )
+        .expect_err("reopen must reject state sealed with stale wrap key");
+        assert_open_state_aead_failure(err);
+    }
+
+    #[test]
+    fn wrong_state_wrap_key_sealed_state_fails_on_reopen() {
+        let fix = make_create_fixture();
+        let password: &[u8] = b"correct horse battery staple";
+        let creds = Credentials::password_only(password);
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+        let network = params.network;
+        let wallet =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        let ledger_guard = wallet.ledger.read();
+        drive_persistence(PersistenceEngine::save_state(
+            wallet.persistence(),
+            wallet.state_wrap_key(),
+            &ledger_guard.ledger,
+        ))
+        .expect("save baseline");
+        drop(ledger_guard);
+
+        let mut wrong_bytes = *wallet.state_wrap_key().as_bytes();
+        wrong_bytes[0] ^= 0xFF;
+        let wrong_key = state_wrap_key_from_bytes(&wrong_bytes);
+
+        let ledger_guard = wallet.ledger.read();
+        drive_persistence(PersistenceEngine::save_state(
+            wallet.persistence(),
+            &wrong_key,
+            &ledger_guard.ledger,
+        ))
+        .expect("save with wrong wrap key still seals");
+        drop(ledger_guard);
+        drop(wallet);
+
+        let err = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
         .expect_err("reopen must reject state sealed with wrong wrap key");
-        match err {
-            OpenError::Persistence(PersistenceError::WalletFile(WalletFileError::Envelope(
-                WalletEnvelopeError::InvalidPasswordOrCorrupt,
-            ))) => {}
-            OpenError::Io(IoError::WalletFile { .. }) => {}
-            other => panic!("expected state AEAD failure on reopen, got {other:?}"),
-        }
+        assert_open_state_aead_failure(err);
     }
 
     #[test]

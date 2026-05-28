@@ -36,6 +36,14 @@
 //! against the same wallet pair cannot coexist in the same process by
 //! construction: the advisory lock will refuse the second `acquire`.
 //!
+//! # Backup and quiescent copy (G4)
+//!
+//! Do not copy the wallet directory while the advisory lock on
+//! `<base>.wallet.keys` is held (for example during an open wallet-RPC
+//! session). Use [`Self::close`] (or process shutdown that runs the
+//! close flush) and copy from the filesystem, or [`Self::save_as`] to a
+//! quiescent destination path.
+//!
 //! # This commit's scope
 //!
 //! Per the plan split ("2h happy-path"): `create`, `save_state`,
@@ -754,6 +762,18 @@ impl WalletFile {
         &self.wrap_key_region_2
     }
 
+    /// Replace in-memory keys-file bytes without writing disk.
+    ///
+    /// Used by integration tests that model orchestrator/cache drift relative to
+    /// the on-disk keys pair. Production callers must not use this.
+    #[doc(hidden)]
+    pub fn replace_keys_file_bytes_in_memory_for_tests(&self, bytes: Vec<u8>) {
+        self.state
+            .lock()
+            .expect("wallet file mutex poisoned")
+            .keys_file_bytes = bytes;
+    }
+
     /// Zeroize transient `file_kek` after HKDF session subkeys are cached
     /// on the orchestrator (amended `WALLET_FILE_FORMAT_V1` §4.1 / PR 6 §5.9).
     pub fn zeroize_transient_file_kek(&mut self) {
@@ -1098,7 +1118,7 @@ mod tests {
         let cap = fx.capability();
         let ledger = WalletLedger::empty();
 
-        let mut handle = {
+        let handle = {
             let params = make_params(&fx, &base, b"old", &ledger, &cap);
             WalletFile::create(&params).expect("create")
         };

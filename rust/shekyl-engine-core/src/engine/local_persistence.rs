@@ -47,6 +47,14 @@ impl PersistenceEngine for WalletFile {
         Ok(())
     }
 
+    /// Password-handling moment: rewraps the `file_kek` wrap layer in `.wallet.keys`.
+    ///
+    /// Region-1 ciphertext and `.wallet` region-2 bytes are unchanged on success
+    /// (spec §4.2). Region-2 AEAD AAD is `magic \|\| version \|\| seed_block_tag`
+    /// per [`docs/WALLET_FILE_FORMAT_V1.md`](../../../../docs/WALLET_FILE_FORMAT_V1.md)
+    /// §2.2 — `seed_block_tag` is the region-1 Poly1305 tag (16 bytes at the tail of
+    /// the keys file), not the wrap-header nonce/ciphertext. The in-memory
+    /// `keys_file_bytes` cache is updated after a successful rewrap.
     async fn rotate_password(
         &self,
         old: &Credentials<'_>,

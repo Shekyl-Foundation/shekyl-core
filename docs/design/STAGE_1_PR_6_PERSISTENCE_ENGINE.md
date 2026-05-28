@@ -867,7 +867,9 @@ caller must know which side of the line they're on.
 | `create` → `close` round-trip | `lifecycle.rs` | Keep — ledger bytes durable |
 | **`persistence_trait_save_state_round_trip`** | `shekyl-engine-core` | **New** — `WalletFile` via `PersistenceEngine`, tempfile, sealing keys from open |
 | **`change_password_flushes_prefs`** | `shekyl-engine-core` | **New** — mutate prefs in memory, rotate, reopen, read prefs file |
-| **`stale_state_wrap_key_fails_after_rotate`** | `shekyl-engine-core` | **C1** — open → `save_state(k)` ok → `rotate_password` ok → `save_state(k_stale)` → `PersistenceError::WalletFile` with `WalletEnvelopeError::InvalidPasswordOrCorrupt` (region-2 AEAD MAC failure) |
+| **`stale_state_wrap_key_fails_after_rotate_without_rederive`** | `shekyl-engine-core` | **C1** — open → `save_state(k)` ok → `rotate_password` ok → in-memory keys-file drift without orchestrator re-derive → `save_state(k_stale)` → reopen fails (`InvalidPasswordOrCorrupt` / wallet-file IO) |
+| **`password_rotate_preserves_state_wrap_key_bytes`** | `shekyl-engine-core` | **C1** — documents V3.0 substrate: wrap-only rotation leaves `wrap_key_region_2` bytes unchanged |
+| **`wrong_state_wrap_key_sealed_state_fails_on_reopen`** | `shekyl-engine-core` | **C1** — deliberately wrong `StateWrapKey` → reopen MAC failure |
 | **`rederived_state_wrap_key_succeeds_after_rotate`** | `shekyl-engine-core` | **C1** — same, but re-derive `StateWrapKey` from open ritual → `save_state` ok |
 | **`open_does_not_retain_file_kek`** | `shekyl-engine-core` | **0p / C6** — after `open_full`, orchestrator/`WalletFile` holds `wrap_key_region_2` + `prefs_hmac_key`, not `file_kek` |
 | **`panic_hook_does_not_leak_state_wrap_key`** | `shekyl-engine-core` | **§5.12 L1 / C6** — forced panic with `StateWrapKey` in scope; no raw key bytes in panic message |

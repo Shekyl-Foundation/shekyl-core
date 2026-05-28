@@ -18,6 +18,15 @@
 //! third-party storage; offline password guessing remains a threat. Operators
 //! should exclude wallet paths from cloud backup where the platform allows.
 //!
+//! Do not copy the wallet directory while the advisory lock on
+//! `<base>.wallet.keys` is held. Use [`Engine::close`](super::super::Engine::close)
+//! (or process shutdown that runs the close flush) and copy from the filesystem,
+//! or [`WalletFile::save_as`](shekyl_engine_file::WalletFile::save_as) to a
+//! quiescent destination path.
+//!
+//! Release binaries should be verified per [`docs/SIGNING.md`](../../../../../docs/SIGNING.md)
+//! (L4 — compromised wallet binaries defeat session-key blast-radius discipline).
+//!
 //! # Durability and nonces
 //!
 //! On `Ok`, `.wallet` bytes are durable across power loss (`atomic_write_file`:
@@ -48,15 +57,25 @@ pub(crate) trait PersistenceEngine: Send + Sync + 'static {
     /// Save/rotate vocabulary — not [`OpenError`](super::super::OpenError).
     type Error: Into<PersistenceError>;
 
+    // Stage 4 / wallet-RPC surfaces; V3.0 `Engine` caches network/capability at open.
+    #[allow(dead_code)]
     fn base_path(&self) -> &Path;
+    #[allow(dead_code)]
     fn network(&self) -> Network;
+    #[allow(dead_code)]
     fn capability(&self) -> Capability;
 
     /// Seal and atomically write `.wallet` for `ledger`.
     ///
-    /// `state_key` is `wrap_key_region_2` for this session. After a successful
-    /// [`rotate_password`](Self::rotate_password), previously cached keys are
-    /// **stale** — re-derive before the next save (Poly1305 MAC failure).
+    /// `state_key` is `wrap_key_region_2` for this session.
+    ///
+    /// V3.0 password rotation rewraps the wrap layer only; `file_kek` plaintext is
+    /// unchanged, so the same `wrap_key_region_2` bytes remain valid across
+    /// [`rotate_password`](Self::rotate_password). A cached orchestrator key becomes
+    /// **stale** when it no longer matches the keys-file bytes used for region-2 AAD
+    /// (for example after external keys-file replacement without re-derive). Saving
+    /// with a stale key seals state that fails authentication on the next open
+    /// (Poly1305 MAC failure).
     async fn save_state(
         &self,
         state_key: &StateWrapKey,
