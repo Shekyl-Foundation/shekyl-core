@@ -1982,30 +1982,30 @@ the existing follow-up.
 
 ```rust
 pub trait PersistenceEngine {
-    type Error: Into<PersistenceError>;
+    type Error: Into<PersistenceError> + Send;
 
     fn base_path(&self) -> &Path;
     fn network(&self) -> Network;
     fn capability(&self) -> Capability;
 
-    async fn save_state(
+    fn save_state(
         &self,
         state_key: &StateWrapKey,
         ledger: &WalletLedger,
-    ) -> Result<(), Self::Error>;
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
-    async fn save_prefs(
+    fn save_prefs(
         &self,
         prefs_key: &PrefsHmacKey,
         prefs: &WalletPrefs,
-    ) -> Result<(), Self::Error>;
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
-    async fn rotate_password(
+    fn rotate_password(
         &self,
         old: &Credentials<'_>,
         new: &Credentials<'_>,
-        new_kdf: KdfParams,
-    ) -> Result<(), Self::Error>;
+        new_kdf: Option<KdfParams>,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 ```
 

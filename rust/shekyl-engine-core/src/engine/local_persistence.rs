@@ -6,17 +6,18 @@
 //! Stage 1 [`PersistenceEngine`](super::traits::PersistenceEngine) implementor:
 //! [`shekyl_engine_file::WalletFile`].
 
-use shekyl_engine_file::{WalletFile, WalletFileError};
+use shekyl_engine_file::WalletFile;
 use shekyl_engine_prefs::{PrefsHmacKey, WalletPrefs};
 use shekyl_engine_state::WalletLedger;
 
+use super::error::PersistenceError;
 use super::lifecycle::Credentials;
 use super::sealing_keys::StateWrapKey;
 use super::traits::PersistenceEngine;
 use super::Capability;
 
 impl PersistenceEngine for WalletFile {
-    type Error = WalletFileError;
+    type Error = PersistenceError;
 
     fn base_path(&self) -> &std::path::Path {
         WalletFile::base_path(self)
@@ -30,21 +31,26 @@ impl PersistenceEngine for WalletFile {
         WalletFile::capability(self)
     }
 
-    async fn save_state(
+    fn save_state(
         &self,
         state_key: &StateWrapKey,
         ledger: &WalletLedger,
-    ) -> Result<(), Self::Error> {
-        self.save_state(state_key.as_bytes(), ledger)
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        std::future::ready(
+            self.save_state(state_key.as_bytes(), ledger)
+                .map_err(PersistenceError::WalletFile),
+        )
     }
 
-    async fn save_prefs(
+    fn save_prefs(
         &self,
         prefs_key: &PrefsHmacKey,
         prefs: &WalletPrefs,
-    ) -> Result<(), Self::Error> {
-        shekyl_engine_prefs::save_prefs(self.state_path(), prefs_key, prefs)?;
-        Ok(())
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        std::future::ready(
+            shekyl_engine_prefs::save_prefs(self.state_path(), prefs_key, prefs)
+                .map_err(PersistenceError::Prefs),
+        )
     }
 
     /// Password-handling moment: rewraps the `file_kek` wrap layer in `.wallet.keys`.
@@ -55,12 +61,15 @@ impl PersistenceEngine for WalletFile {
     /// §2.2 — `seed_block_tag` is the region-1 Poly1305 tag (16 bytes at the tail of
     /// the keys file), not the wrap-header nonce/ciphertext. The in-memory
     /// `keys_file_bytes` cache is updated after a successful rewrap.
-    async fn rotate_password(
+    fn rotate_password(
         &self,
         old: &Credentials<'_>,
         new: &Credentials<'_>,
         new_kdf: Option<shekyl_crypto_pq::wallet_envelope::KdfParams>,
-    ) -> Result<(), Self::Error> {
-        self.rotate_password(old.password(), new.password(), new_kdf)
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        std::future::ready(
+            self.rotate_password(old.password(), new.password(), new_kdf)
+                .map_err(PersistenceError::WalletFile),
+        )
     }
 }

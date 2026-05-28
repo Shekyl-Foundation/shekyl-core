@@ -733,19 +733,47 @@ impl Engine<SoloSigner> {
     }
 }
 
-/// Run a [`PersistenceEngine`] future from sync lifecycle entry points.
+/// Run a [`PersistenceEngine`] future from sync lifecycle entry points
+/// ([`Engine::close`](super::Engine::close), [`Engine::change_password`](super::Engine::change_password)).
+///
+/// # Tokio embedding
+///
+/// Callers may invoke these sync methods from a thread that already runs a
+/// Tokio runtime (typical wallet-RPC path). A naïve [`Handle::block_on`] on a
+/// worker thread panics (nested `block_on`). This helper:
+///
+/// - On a **multi-thread** runtime: [`tokio::task::block_in_place`] then
+///   `block_on` on the active handle (same class of fix as JSON-RPC handlers
+///   driving [`Engine::refresh`](super::Engine::refresh) via `spawn_blocking`).
+/// - Otherwise (no runtime, or **current-thread** runtime): runs the future on
+///   a short-lived current-thread runtime in a [`std::thread::scope`] thread so
+///   nested-runtime panics are avoided.
+///
+/// Dedicated async lifecycle entry points remain a V3.1 follow-up when an
+/// embedder needs cooperative cancellation across close/rotate; see
+/// `docs/FOLLOWUPS.md` (V3.1 — sync close / `change_password` vs Tokio).
 pub(crate) fn drive_persistence<Fut, T>(fut: Fut) -> T
 where
-    Fut: std::future::Future<Output = T>,
+    Fut: std::future::Future<Output = T> + Send,
+    T: Send,
 {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        return handle.block_on(fut);
+        if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
+            return tokio::task::block_in_place(|| handle.block_on(fut));
+        }
     }
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("persistence drive runtime");
-    rt.block_on(fut)
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("persistence drive runtime");
+                rt.block_on(fut)
+            })
+            .join()
+            .expect("persistence drive thread")
+    })
 }
 
 #[cfg(test)]
@@ -1122,6 +1150,15 @@ mod tests {
     ) -> super::super::sealing_keys::StateWrapKey {
         use super::super::sealing_keys::StateWrapKey;
         StateWrapKey::from_region2_key(Zeroizing::new(*bytes))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn drive_persistence_from_tokio_worker_does_not_panic() {
+        tokio::spawn(async {
+            super::drive_persistence(std::future::ready(()));
+        })
+        .await
+        .expect("join");
     }
 
     fn assert_open_state_aead_failure(err: OpenError) {

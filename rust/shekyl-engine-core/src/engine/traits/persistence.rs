@@ -56,7 +56,7 @@ use crate::engine::Capability;
 /// constructors per Q9.11 — not on this trait.
 pub(crate) trait PersistenceEngine: Send + Sync + 'static {
     /// Save/rotate vocabulary — not [`OpenError`](super::super::OpenError).
-    type Error: Into<PersistenceError>;
+    type Error: Into<PersistenceError> + Send;
 
     // Stage 4 / wallet-RPC surfaces; V3.0 `Engine` caches network/capability at open.
     #[allow(dead_code)]
@@ -77,24 +77,28 @@ pub(crate) trait PersistenceEngine: Send + Sync + 'static {
     /// (for example after external keys-file replacement without re-derive). Saving
     /// with a stale key seals state that fails authentication on the next open
     /// (Poly1305 MAC failure).
-    async fn save_state(
+    /// Returns a [`Send`] future so sync lifecycle code can drive persistence
+    /// from a Tokio worker via [`drive_persistence`](super::lifecycle::drive_persistence)
+    /// (`block_in_place` + `block_on`). Matches [`RefreshEngine`](super::refresh::RefreshEngine)
+    /// precedent (`impl Future + Send`, not `async fn` on the trait).
+    fn save_state(
         &self,
         state_key: &StateWrapKey,
         ledger: &WalletLedger,
-    ) -> Result<(), Self::Error>;
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
-    async fn save_prefs(
+    fn save_prefs(
         &self,
         prefs_key: &PrefsHmacKey,
         prefs: &WalletPrefs,
-    ) -> Result<(), Self::Error>;
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
     /// Password-handling moment: Argon2 rewrap of the keys file. Does not
     /// rewrite region-2 ciphertext on success (spec §4.2).
-    async fn rotate_password(
+    fn rotate_password(
         &self,
         old: &Credentials<'_>,
         new: &Credentials<'_>,
         new_kdf: Option<KdfParams>,
-    ) -> Result<(), Self::Error>;
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 }

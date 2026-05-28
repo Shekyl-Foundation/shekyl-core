@@ -1821,22 +1821,15 @@ sustainability is unaffected by the recalibration.
   V3.1. **Reopen when:** C++ wallet path still coexists with Rust engine file
   handle.
 
-- **Sync `Engine::close` / `change_password` vs nested Tokio `block_on`
-  (PR 6 implementation review, PR #83).** `drive_persistence` in
-  `shekyl-engine-core/src/engine/lifecycle.rs` calls
-  `Handle::block_on` when a Tokio runtime is already active. Calling
-  `Engine::close` or `Engine::change_password` from inside an async task
-  (typical wallet-RPC / server path) can panic per Tokio's nested-`block_on`
-  rule — same class as the `Engine::refresh` constraint documented in
-  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md) §4.2.
-  **Work:** provide async lifecycle entry points (`close_async`,
-  `change_password_async`) and/or require an explicit runtime handle at the
-  call site (mirror refresh's documented precondition); until then, document
-  that sync close/rotate must not run on a Tokio worker thread. **Target:**
-  V3.1. **Reopen when:** wallet-RPC or another async embedder needs in-runtime
-  close or password rotation. **Ref:**
-  [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](./design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md);
-  PR #83 review.
+- **Async `Engine::close` / `change_password` lifecycle (PR 6 PR #83).**
+  Sync close/rotate now use `drive_persistence` with `block_in_place` on
+  multi-thread runtimes and a scoped-thread fallback otherwise (PR #83
+  robustness pass). **Remaining work:** dedicated async entry points with
+  cooperative cancellation when wallet-RPC stops wrapping the whole sync call
+  in `spawn_blocking`. **Target:** V3.1. **Reopen when:** wallet-RPC needs
+  in-runtime close or password rotation without a blocking wrapper.
+  **Ref:** [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §4.2; [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](./design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
 
 - **Shekyl-native end-to-end wallet/daemon test harness
   (replacement for the deleted `tests/functional_tests/`).**
@@ -3978,21 +3971,6 @@ one place to confirm each item's relationship to the wallet stack.
   steady-state sync. **Target:** V3.2. **Reopen when:** PR 6 lands and
   `PersistenceEngine` call sites are stable enough to measure what the
   implementor actually reads per method.
-
-- **`PersistenceEngine::Error` taxonomy — envelope vs prefs (PR 6 PR #83
-  review).** Stage 1 `impl PersistenceEngine for WalletFile` sets
-  `type Error = WalletFileError`. Prefs failures from `save_prefs` are
-  wrapped as `WalletFileError::Prefs` and then convert into
-  `PersistenceError::WalletFile` at the lifecycle boundary, so the
-  `PersistenceError::Prefs` variant in `shekyl-engine-core/src/engine/error.rs`
-  is effectively unreachable despite the PR 6 R10 / §2.6 vocabulary split.
-  **Work:** set `type Error = PersistenceError` on the implementor (or map at
-  the impl site) so callers can distinguish envelope atomic-write failures
-  from prefs HMAC/sidecar failures without parsing nested variants. **Target:**
-  V3.2. **Reopen when:** PR 6 lands and `close` / `change_password` error
-  matching is stable. **Ref:**
-  [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](./design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md)
-  §2.6; PR #83 review.
 
 - **FFI C ABI symbol rename: `shekyl_wallet_*` → `shekyl_engine_*`,
   `ShekylWallet` → `ShekylEngine` (paired with `wallet2.cpp` retirement).**
