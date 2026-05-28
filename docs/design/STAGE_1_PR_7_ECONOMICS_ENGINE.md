@@ -1,9 +1,10 @@
 # Stage 1 PR 7 — `EconomicsEngine` extraction — design
 
-**Status.** **Round 0 closed (2026-05-27);** feedback folded same day. Round 1
-open — load-bearing
-question reframed to `ChainEconomicsSource` + shared primitives; **F4 grep
-closed** (see §3.5). Planning doc branch:
+**Status.** **Round 0 closed (2026-05-27).** Round 1 **in progress** — segment
+**2b drafted** (2026-05-27): §2.7 naming amendment locked (C0);
+`base_emission_at` = pure `shekyl-economics` projection under interpretation
+**(A)**; `ChainEconomicsSource` shrunk to **one read**. Segments **2a**, **2c**,
+**2d**, **2g** pending. Planning doc branch:
 `feat/stage-1-pr7-economics-engine-design` → PR to `dev`. Opened from `dev`
 tip `2cf4cbfde` (post–PR #82 `PersistenceEngine` design merge). This document
 follows [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) and cites
@@ -52,7 +53,7 @@ PR 4 / PR 5 precedent.
     carried `unimplemented!()` stubs; PR 7 flips away from that trajectory.
   - **2026-04-08 — stake-claim timing.** Consensus recomputes accrual/burn
     independently. Wrong wallet-side derivation → **failed-send / wrong-display**,
-    not theft. Anchors `burn_fraction` threat narrowing (§3.2).
+    not theft. Anchors `burn_amount` threat narrowing (§3.2).
 - **Per-PR template / process.**
   [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md),
   [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
@@ -61,7 +62,7 @@ PR 4 / PR 5 precedent.
   [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
 - **Performance gates.**
   [`PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md) — deferred benches
-  `engine_trait_bench_economics_current_emission`,
+  `engine_trait_bench_economics_base_emission_at`,
   `engine_trait_bench_economics_parameters_snapshot`.
 - **Test vectors (real-path).**
   [`docs/economics_sim_results.json`](../economics_sim_results.json),
@@ -141,25 +142,30 @@ release-multiplier / activity inputs) **without wiring them now**.
    re-export (`pub(crate)`).
 2. **`LocalEconomics` implementor** — `engine/local_economics.rs`; thin wrapper
    over `shekyl-economics` + **`ChainEconomicsSource`** (§3.9).
-3. **`ChainEconomicsSource` seam** — narrow implementor-side trait: exactly two
-   reads — `already_generated_coins()` and `active_weighted_stake()`. One
-   production adapter over **recorded real chain-mirror state** (regtest/testnet
-   accrual table + real `already_generated` values). **No** `LedgerEngine`
-   amendment (§8.2 co-land avoided); **no** type-erased closures.
+3. **`ChainEconomicsSource` seam** — narrow implementor-side trait: **one read**
+   at V3.0 — `active_weighted_stake()` only. Production adapter over chain-mirror
+   accrual state. `already_generated_coins()` is **not** on the source at V3.0
+   (interpretation **(A)** — projection is crate-side; §5.2). **No**
+   `LedgerEngine` amendment; **no** type-erased closures.
 4. **Supporting types** — `EconomicsError`, `EconomicsParametersSnapshot`
    (incl. `as_of` / calibration-generation tag), `ActivityMetric`.
 5. **`Engine` parameterization** — `E: EconomicsEngine = LocalEconomics`;
    field `economics: E`. Incremental order: `E` after `L` (§3.10).
 6. **Workspace wiring** — `shekyl-economics` dep on `shekyl-engine-core`.
-7. **0h primitive** — `base_block_reward(already_generated_coins: u64) -> u64`
-   in `shekyl-economics`; shared with `shekyl-economics-sim` and FFI. Emission is
-   path-dependent ([`DESIGN_CONCEPTS.md`](../DESIGN_CONCEPTS.md) — honest input.
-8. **Real-path tests** — `LocalEconomics` over production `ChainEconomicsSource`
+7. **0h + projection primitives** — in `shekyl-economics`, shared with sim and FFI:
+   `base_block_reward(already_generated_coins, params)` (0h) and
+   `projected_already_generated(height, params)` (interpretation **(A)** neutral
+   trajectory). `base_emission_at(height)` composes both. Path-dependent emission
+   per [`DESIGN_CONCEPTS.md`](../DESIGN_CONCEPTS.md).
+8. **§2.7 naming amendment (C0)** — `current_emission` → `base_emission_at`;
+   `burn_fraction` → `burn_amount` (absolute atomic units). Co-land
+   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §2.7.
+9. **Real-path tests** — `LocalEconomics` over production `ChainEconomicsSource`
    + recorded fixtures (`economics_sim_results.json` spirit; regtest accrual
    tables). **Headline:** engine-vs-sim **differential** — both call 0h; any
    inequality is Bug-2-class drift. **No mock** in the loop.
-9. **Performance gates** — both deferred economics benches + baseline rows.
-10. **Docs** — this design doc, `CHANGELOG.md`, trait rustdoc, calibration
+10. **Performance gates** — both deferred economics benches + baseline rows.
+11. **Docs** — this design doc, `CHANGELOG.md`, trait rustdoc, calibration
     banners in economic docs.
 
 ### §2.2 Out-of-scope
@@ -189,16 +195,16 @@ release-multiplier / activity inputs) **without wiring them now**.
 
 - [x] **§2.7 binding** — four sync `&self` methods; `Into<EconomicsError>`.
 - [x] **§1.5** — additive 7th trait; Stage 4 leaf actor.
-- [x] **Surface amend vs preserve** — **Preserves** four-method shape. Phase 0
-  amendment **unlikely** for `ChainEconomicsSource` / `as_of` (implementor-side);
-  confirm at Round 2 segment **2g** (R7).
+- [x] **Surface amend vs preserve** — **Preserves** four-method shape; **C0**
+  naming-only §2.7 amendment locked (§5.1). `ChainEconomicsSource` / `as_of` are
+  implementor-side. At **2g**, confirm no *other* §2.7 change beyond C0 (R7).
 
 ### §3.2 Plan-altitude principles
 
 | Principle | Applicability |
 |-----------|----------------|
 | **4 — architectural-integrity-now** | Build mechanism in force now; values marked `CALIBRATION-PENDING`. |
-| **5 — closure-rule** | Round 0 feedback folded; Round 1 open. |
+| **5 — closure-rule** | Round 0 closed; Round 1 segment 2b drafted. |
 | **6 — wider-substrate audit** | After Round 2 **2g** (§6). |
 | **7 — threat-model anchors** | **Corrected** — daemon trust is present on chain-derived inputs, bounded by consensus recompute and absent V3.0 consumers (§3.3.5). |
 | **8 — priority-hierarchy** | `CALIBRATION-PENDING` real body ≠ deferred body. Stubbing = priority-1 failure; calibration-marking ≠ stubbing. |
@@ -247,14 +253,14 @@ is read-only aggregate over that collection — reinforces narrow
 - **§8.3.3** — Round N closure + §9 banners.
 - **§8.3.4** — §7.X synthesis banner if Round 2 amends commits.
 - **§8.3.5 — threat-model anchors (corrected).** Daemon trust is **present but
-  bounded** on chain-derived inputs (`ActivityMetric`, `already_generated_coins`,
-  `active_weighted_stake`):
+  bounded** on chain-derived inputs (`ActivityMetric`, `active_weighted_stake`;
+  `base_emission_at` is **not** chain-sourced at V3.0 — §5.2 B.1):
 
-  - Lying daemon → skewed `burn_fraction`. **Bounded:** consensus recomputes
+  - Lying daemon → skewed `burn_amount`. **Bounded:** consensus recomputes
     burn, rejects divergence → failed-send, not theft (2026-04-08).
-  - Stale/wrong `already_generated` or weighted total → wrong
-    `current_emission` / `pool_weighted_total`. **Bounded at V3.0:** no consumer
-    acts on output; tx-gating values recomputed by consensus.
+  - Stale/wrong `active_weighted_stake` → wrong `pool_weighted_total`.
+    **Bounded at V3.0:** no consumer acts on output; tx-gating values recomputed
+    by consensus.
 
   **Residual:** future consumers acting on `EconomicsEngine` output without
   consensus backstop must validate chain-source inputs through a consistent,
@@ -264,7 +270,7 @@ is read-only aggregate over that collection — reinforces narrow
 
 | Substrate | Disposition |
 |-----------|-------------|
-| `shekyl-economics` + sim | Factor **0h** `base_block_reward(already_generated)` into crate; sim calls shared API — no third curve copy. |
+| `shekyl-economics` + sim | **0h** `base_block_reward` + **`projected_already_generated`** in crate; sim calls 0h with its per-block `ag`; no third curve copy. |
 | `shekyl-engine-core` | No economics dep; stake paths use `StakerPoolState` accrual mirror for **estimation**, not canonical `EconomicsEngine`. |
 | Bug 2 / 7 / 13 | Preventive — `pool_weighted_total` is single canonical denominator. |
 
@@ -274,7 +280,7 @@ is read-only aggregate over that collection — reinforces narrow
 |----------|-------------|------------------|
 | `engine/traits/mod.rs` | No `economics.rs` | Create |
 | `Engine<…>` | `S, D, L, R, P` — no `E` | Add `E`, `economics` field |
-| `shekyl-engine-core` / `shekyl-engine-state` | **No `already_generated_coins` mirror** (F4 grep 2026-05-27) | **`current_emission` interpretation (A)** — neutral-curve projection: iterate from genesis / fixture-supplied path; **do not invent mirror in PR 7** |
+| `shekyl-engine-core` / `shekyl-engine-state` | **No `already_generated_coins` mirror** (F4 grep 2026-05-27) | **`base_emission_at` interpretation (A)** — `projected_already_generated` in `shekyl-economics`; **does not read** `ChainEconomicsSource`; **do not invent mirror in PR 7** |
 | `StakerPoolState` / `AccrualRecord.total_weighted_stake` | Chain-reported accrual mirror | **`active_weighted_stake()`** via `ChainEconomicsSource` production adapter |
 | `shekyl-staking::Registry::total_weighted_stake` | Wallet-local | **Not** canonical pool total — Bug 2 risk |
 | C++ `blockchain_db` | `get_block_already_generated_coins` | Consensus truth; not wallet-engine mirror today |
@@ -288,11 +294,12 @@ rg 'already_generated' rust/shekyl-engine-core rust/shekyl-engine-state
 # → no matches (2026-05-27)
 ```
 
-**`current_emission` contract pin (Round 0 feedback):** returns **base block
-subsidy only** (`base_block_reward(already_generated)` after `>> ESF` and
-`FINAL_SUBSIDY` floor). Signature has no activity argument → **release-multiplier
-modulation is not `current_emission`**; document in trait rustdoc so the name is
-not read as effective reward. Release path is consumer / future-method territory.
+**`base_emission_at` contract pin (Round 1 segment 2b):** returns **base block
+subsidy only** on the **neutral trajectory** at `height`:
+`base_block_reward(projected_already_generated(height, params), params)`.
+Not effective reward (no activity input); not realized emission (actual path
+uses realized multipliers). Name + rustdoc carry the neutral-vs-realized caveat
+(§5.2 B.4). Under **(A)**, `Err` is overflow-only (B.7).
 
 ### §3.6 Reversion clauses
 
@@ -313,26 +320,26 @@ with PR 6 `F` slot (§5.4).
 
 | Bench | Notes |
 |-------|-------|
-| `engine_trait_bench_economics_current_emission` | Fixture uses real `ChainEconomicsSource` + representative `already_generated` path; if **(A)** projection, workload may be O(height)-ish — capture at authoring |
+| `engine_trait_bench_economics_base_emission_at` | **(A)** workload: naive `projected_already_generated(height)` — **O(height)** from genesis; bench at representative height; FOLLOWUPS checkpoint table if hot consumer lands (§5.2 B.6) |
 | `engine_trait_bench_economics_parameters_snapshot` | Likely trivial pure-read at V3.0; confirm at authoring |
 
 ### §3.9 Implementor shape — `ChainEconomicsSource`
 
 ```rust
-// Illustrative — binding form pinned at Round 1/2; not final API names.
+// Illustrative — binding form pinned at Round 1 segment 2b.
 
 pub trait ChainEconomicsSource: Send + Sync {
-    /// Coins minted strictly before the chain tip the wallet treats as current.
-    /// Interpretation (A) at V3.0 if no mirror: supplied by fixture / projection.
-    fn already_generated_coins(&self) -> u64;
-
     /// Canonical pool denominator — chain-mirror aggregate, not wallet registry.
     fn active_weighted_stake(&self) -> u128;
 }
 ```
 
+- **V3.0: one method only.** `already_generated_coins()` cut — no V3.0 caller
+  under **(A)**; wrong shape for both (A) and future (B) (§5.2 B.3). Re-add
+  `already_generated_coins(&self, height) -> Result<u64, _>` when mirror + realized
+  consumer exist (gated initiative).
 - **Exactly one production implementor** — adapter over `StakerPoolState` /
-  latest accrual record (snapshot-bound read contract in Round 2).
+  latest accrual record (snapshot-bound read contract — R3, segment 2b).
 - **`LocalEconomics<S: ChainEconomicsSource>`** holds `params: EconomicParams`
   + `chain: S`.
 - **Tests** construct `LocalEconomics::new(params, RecordedChainFixture::…)` —
@@ -348,9 +355,8 @@ pub trait ChainEconomicsSource: Send + Sync {
 
 ## §4 Round 1 — Load-bearing question (OPEN)
 
-> **Round 1 status:** OPEN. **F4 closed** — interpretation **(A)** for
-> `current_emission` unless a separate initiative mirrors `already_generated` into
-> engine (out of PR 7 scope).
+> **Round 1 status:** IN PROGRESS — segment **2b drafted**. **F4 closed** →
+> interpretation **(A)** for `base_emission_at`. **C0 naming locked** (§5.1).
 
 ### §4.1–§4.3
 
@@ -362,7 +368,8 @@ See §1, §2, §3.
 |----|--------------|--------|-------|
 | **0a** | `trait EconomicsEngine` | `traits/economics.rs` | §2.7 verbatim |
 | **0b** | `LocalEconomics<S: ChainEconomicsSource>` | `local_economics.rs` | |
-| **0b′** | `trait ChainEconomicsSource` | `chain_economics_source.rs` | Two reads only |
+| **0b′** | `trait ChainEconomicsSource` | `chain_economics_source.rs` | **One read** at V3.0 (`active_weighted_stake`) |
+| **0h′** | `projected_already_generated(height, params) -> u64` | `shekyl-economics` | Neutral-trajectory **(A)**; pairs with 0h |
 | **0c** | `EconomicsError` | `engine/error.rs` | |
 | **0d** | `EconomicsParametersSnapshot` + `as_of` | economics types | Calibration-generation tag |
 | **0e** | `ActivityMetric` | same | Field-projected daemon/orchestrator input |
@@ -373,10 +380,10 @@ See §1, §2, §3.
 
 ### §4.5 Load-bearing question (reframed)
 
-**How does `LocalEconomics` over a narrow `ChainEconomicsSource` feed
-`shekyl-economics` primitives for both `pool_weighted_total` and
-`current_emission` without (i) a third emission-curve copy, (ii) wallet-registry
-math (Bug 2), or (iii) per-entity state on `EconomicsEngine`?**
+**How does `LocalEconomics` feed `shekyl-economics` primitives for
+`pool_weighted_total` (chain read) and `base_emission_at` (pure projection)
+without (i) a third emission-curve copy, (ii) wallet-registry math (Bug 2), or
+(iii) per-entity state on `EconomicsEngine`?**
 
 #### §4.5.1 Candidate shapes
 
@@ -384,23 +391,23 @@ math (Bug 2), or (iii) per-entity state on `EconomicsEngine`?**
 |-------|---------|-------------|
 | **(1)** | Type-erased `Arc<dyn Fn() -> …>` injection | **Reject** — hidden coordination; prefer named seam |
 | **(2)** | `Arc<L: LedgerEngine>` + new ledger accessor | **Reject** — §8.2 co-land; couples traits |
-| **(2′)** | **`ChainEconomicsSource`** — two named reads; production adapter + `RecordedChainFixture` | **Accepted (Round 0)** — Round 1 confirms, does not relitigate |
+| **(2′)** | **`ChainEconomicsSource`** — one V3.0 read (`active_weighted_stake`); production adapter + `RecordedChainFixture` | **Accepted** — Round 1 segment 2b shrinks from two reads |
 | **(3)** | Amend trait signatures for caller-supplied totals | **Reject** — §2.7 pinned |
 | **(4)** | `todo!()` / defer bodies | **Reject** — priority-1 failure |
 | **(5)** | `MockEconomics` | **Reject** — struck (C-1) |
 
-**Emission (paired, C-4):** `base_block_reward(already_generated)` in
-`shekyl-economics`. At V3.0 without mirror, source supplies projected
-`already_generated` along the height path (**(A)**). `current_emission(height)`
-maps height → coins-already-generated along the projection, then 0h. **Base subsidy
-only** — not release-multiplier-effective reward.
+**Emission (segment 2b, §5.2):** Projection lives in **`shekyl-economics`**, not
+the source adapter. `base_emission_at(height)` =
+`base_block_reward(projected_already_generated(height, &p), &p)`. Reads **nothing**
+from `ChainEconomicsSource`. **Base subsidy on neutral trajectory only** — not
+effective or realized reward (rustdoc per §5.2 B.4).
 
 #### §4.5.2 Implications for prior PRs
 
 | PR | Impact |
 |----|--------|
 | PR 2 | **No** `LedgerEngine` amendment if **(2′)** holds |
-| PR 5 | Future `FeeEstimator` → `burn_fraction` — out of PR 7 |
+| PR 5 | Future `FeeEstimator` → `burn_amount` — out of PR 7 |
 | PR 6 | `Engine<…>` merge coordination |
 
 #### §4.5.3 Criteria rationale (draft)
@@ -416,39 +423,103 @@ only** — not release-multiplier-effective reward.
 
 | ID | Topic | Segment |
 |----|-------|---------|
-| **R1** | `burn_fraction` return unit + overflow KAT | 2a |
-| **R2** | `EconomicsParametersSnapshot` + `as_of` layout | 2a |
-| **R3** | `active_weighted_stake` snapshot-bound read contract | 2b |
-| **R4** | Folds into C-3 — **(A)** projection details + bench workload | 2b |
-| **R5** | Differential test + fixture format | 2c |
-| **R6** | Consumer wiring boundary | 2d |
-| **R7** | Phase 0 §2.7 amendment necessity | 2g |
+| **R1** | `burn_amount` name + unit **locked**; overflow KAT **locked**. **Open:** `ActivityMetric` layout + caller-trust doc | 2a |
+| **R2** | `EconomicsParametersSnapshot` + `as_of`. **Open:** which `EconomicParams` fields surface | 2a |
+| **R3** | Snapshot-bound `active_weighted_stake` read contract. **Open:** wording | 2b |
+| **R4** | **Specified §5.2** — projection in crate; source one read; bench O(height); overflow-only `Err` under **(A)** | 2b — **closed pending drafting** |
+| **R5** | Two-test split (§5.2 B.5). **Open:** `RecordedChainFixture` format | 2c |
+| **R6** | No V3.0 `Engine` callers; fee-path wiring **follow-up, not built**. **Open:** boundary statement | 2d |
+| **R7** | **Flipped** — C0 naming amendment required; confirm no *other* §2.7 change at 2g | 2g |
 
 #### §4.5.5 Round 1 disposition
 
-**Open** for R1–R7 wargaming only. **Closed at Round 0 (do not reopen):** trait
-identity; MockEconomics struck; lens dispositions; **(2′)** seam; 0h shape;
-F4 → interpretation **(A)**.
+**Open** for segments 2a, 2c, 2d, 2g. **Closed (do not reopen):** items in §5.4.
 
 ---
 
-## §5 Round 1 readiness (feedback closure)
+## §5 Round 1 — Segment 2b and naming amendment (2026-05-27)
 
-**Do not reopen in Round 1:**
+Consolidated Round 1 input. Round 0 stays closed — trait identity and scope
+guard unchanged.
 
-- Trait identity / consume-not-subsume — 2026-05-08.
-- `MockEconomics` — removed; real-path + differential (C-1).
-- Lens 1 bounded; Lens 2/3 N/A with sharpenings recorded.
-- 0h = `base_block_reward(already_generated)`.
-- Implementor seam = **(2′)** `ChainEconomicsSource`.
+### §5.1 Phase 0 naming amendment (C0) — locked
 
-**Still open for Round 1 closure:**
+Single §2.7 amendment (co-land §8.2). No implementation consumers yet — cheapest
+rename moment.
 
-- **R1** — `burn_fraction` return semantics + overflow.
-- **R2** — snapshot layout incl. `as_of`.
-- **R3** — read consistency (snapshot-bound).
-- **R4** — **(A)** projection mechanics + bench implications.
-- **R7** — likely no §2.7 amendment.
+| Old | New | Rationale |
+|-----|-----|-----------|
+| `current_emission` | `base_emission_at` | `current` incoherent with `height` arg; `base` = no release multiplier; `_at` = height-keyed |
+| `burn_fraction` | `burn_amount` | Returns absolute atomic units to burn, not a ratio |
+
+`pool_weighted_total` and `parameters_snapshot` unchanged. Identifier sweep:
+`engine_trait_bench_economics_base_emission_at`, `PERFORMANCE_BASELINE.md`,
+§4.4, Appendix A, §3.5 pin. **R7 flipped:** C0 **is** a §2.7 amendment.
+
+### §5.2 Segment 2b — `base_emission_at` under interpretation **(A)** (R4)
+
+F4 closed: no `already_generated_coins` mirror in engine Rust. V3.0 uses **(A)**.
+
+**B.1 — `base_emission_at` reads nothing from `ChainEconomicsSource`.** Under
+**(A)**, neutral trajectory (`release_multiplier = 1`) makes `already_generated` at
+height `h` a pure function of `(height, params)` — **computed, not read**.
+
+**B.2 — Projection in `shekyl-economics`.** Not in the source adapter (would be
+a third curve copy / Bug-2 drift). Add alongside 0h:
+
+```rust
+fn base_block_reward(already_generated_coins: u64, params: &EconomicParams) -> u64;
+fn projected_already_generated(height: u64, params: &EconomicParams) -> u64;
+```
+
+Composition: `base_emission_at(h)` =
+`base_block_reward(projected_already_generated(h, &p), &p)`. Pure free function —
+memoization/checkpoint table is a non-breaking add later.
+
+**B.3 — Source shrinks to one method.** Cut `already_generated_coins()` — no V3.0
+caller; wrong shape for (A) and (B). Future (B): add
+`already_generated_coins(&self, height) -> Result<u64, _>` when mirror + realized
+consumer exist.
+
+**B.4 — Semantics.** Neutral-trajectory base subsidy at `height`; not effective or
+realized emission. Residual caveat in trait rustdoc (ESF-22 milestones; forward-ref
+`realized_emission_at` if (B) lands).
+
+**B.5 — Two distinct tests.**
+
+| Test class | What it exercises | Churn |
+|------------|-------------------|-------|
+| Generation-invariant differential (0i) | `base_block_reward(ag)` engine vs sim for **identical** `ag` from fixtures | Survives recalibration |
+| Calibration-tagged vectors | `base_emission_at(height)` at known neutral milestones | Per calibration generation |
+
+Fixture supplies recorded real `ag` for differential only — **not** the projection.
+
+**B.6 — Bench.** Naive O(height) `projected_already_generated`; bench and capture.
+FOLLOWUPS checkpoint table if hot consumer lands — do not build now.
+
+**B.7 — `Result` under (A).** Overflow-only `Err` (defensive KAT; no inherited
+`div128_64` omission). Unsynced-height `Err` deferred to (B).
+
+### §5.3 R-residuals (remaining segments)
+
+See §4.5.4 — R4 closed pending inline drafting; R1/R2/R3/R5/R6 open.
+
+### §5.4 Closed / open fence
+
+**Closed — do not reopen in Round 1:**
+
+- Trait identity / consume-not-subsume (2026-05-08).
+- `MockEconomics` struck (C-1).
+- Lens 1 bounded; Lens 2/3 N/A with sharpenings.
+- 0h + `projected_already_generated`.
+- **(2′)** `ChainEconomicsSource` — **one read** at V3.0.
+- F4 → **(A)** for `base_emission_at`.
+- **Method names: `base_emission_at`, `burn_amount`.**
+- R4 disposition (§5.2).
+
+**Open for segment wargaming:** `ActivityMetric` layout (R1); snapshot field layout
+(R2); read-contract wording (R3); fixture format (R5); consumer-boundary statement
+(R6); 2g confirm no other §2.7 change (R7).
 
 ---
 
@@ -482,9 +553,9 @@ Runs after **2g**, before §7.X. Yield: G1–Gn in segment **2i**.
 
 | Commit | Scope |
 |--------|--------|
-| **C0** | Phase 0 spec amendment if **2g** requires |
+| **C0** | Phase 0 §2.7 naming amendment (`base_emission_at`, `burn_amount`) + doc co-land |
 | **C1** | `EconomicsError`, `ActivityMetric`, `EconomicsParametersSnapshot` + `as_of` |
-| **C2** | `shekyl-economics`: `base_block_reward(already_generated)` + unit tests; sim rewired |
+| **C2** | `shekyl-economics`: `base_block_reward` + `projected_already_generated` + unit tests; sim rewired to 0h |
 | **C2b** | `ChainEconomicsSource` + production adapter |
 | **C3** | `EconomicsEngine` + `LocalEconomics` impl; `CALIBRATION-PENDING` doc comments |
 | **C4** | Real-path tests: generation-invariant engine-vs-sim differential + calibration-tagged vectors |
@@ -518,16 +589,34 @@ After **PR 6 + PR 7** implementation merge — not either alone.
 |-------|--------|
 | Round 0 close | `Round 0 closed 2026-05-27; pre-flight + substrate inventory.` |
 | **Round 0 feedback folded** | `Round 0 feedback folded 2026-05-27; lens citations refreshed to PR-5 five-category form; MockEconomics struck (real-path testing); load-bearing question reframed to ChainEconomicsSource (2′) + shekyl-economics primitives; calibration-vs-structural boundary added; F4 grep closed — already_generated not mirrored in engine (interpretation A for current_emission). Reopen Round 0 only if trait identity / scope guard challenged.` |
-| Round 1 close | *(pending)* |
+| **Round 1 segment 2b drafted** | `Round 1 segment 2b drafted 2026-05-27; §2.7 naming amendment locked (current_emission→base_emission_at, burn_fraction→burn_amount, C0); base_emission_at = pure shekyl-economics projection under (A), reads nothing from ChainEconomicsSource; source shrunk to one read (active_weighted_stake).` |
+| Round 1 close | *(pending — after 2a, 2c, 2d, 2g)* |
 
 ---
 
 ## Appendix A — Spec trait surface (reference)
 
-See [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §2.7.
+See [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §2.7 (C0
+amendment applied).
 
-**Implementer note:** `current_emission` at V3.0 = **base subsidy** from
-`base_block_reward(already_generated)`, not release-multiplier-effective reward.
+```rust
+pub trait EconomicsEngine {
+    type Error: Into<EconomicsError>;
+
+    fn base_emission_at(&self, height: u64) -> Result<u64, Self::Error>;
+    fn burn_amount(
+        &self,
+        fee: u64,
+        activity: ActivityMetric,
+    ) -> Result<u64, Self::Error>;
+    fn pool_weighted_total(&self) -> u128;
+    fn parameters_snapshot(&self) -> EconomicsParametersSnapshot;
+}
+```
+
+**Implementer note:** `base_emission_at` at V3.0 = neutral-trajectory base
+subsidy via `projected_already_generated` + `base_block_reward` — not effective or
+realized emission. `burn_amount` = absolute atomic units to burn.
 
 ---
 
@@ -543,7 +632,7 @@ Unchanged — both PRs required for Stage 1 trait inventory; coordinate `Engine<
 |----|------------|
 | **C-1** | Strike `MockEconomics`; real-path + differential |
 | **C-2** | Reframe §4.5.1; add **(2′)** |
-| **C-3** | F4 grep; **(A)** vs **(B)** for `current_emission` |
+| **C-3** | F4 grep; **(A)** for `base_emission_at` |
 | **C-4** | 0h keyed on `already_generated`; base subsidy semantics |
 | **C-5** | Calibration boundary + KAT split + CALIBRATION milestone |
 | **C-6** | Five-category lens review (§3.3) |
