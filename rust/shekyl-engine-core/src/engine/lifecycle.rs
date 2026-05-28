@@ -973,12 +973,8 @@ fn is_default_overrides(overrides: &SafetyOverrides) -> bool {
 // Phase 0c amendment block in
 // `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.2).
 #[allow(private_bounds)]
-impl<
-        S: EngineSignerKind,
-        D: DaemonEngine,
-        P: super::traits::PendingTxEngine,
-        F: super::traits::PersistenceEngine,
-    > Engine<S, D, LocalLedger, super::LocalRefresh, P, F>
+impl<S: EngineSignerKind, D: DaemonEngine, P: super::traits::PendingTxEngine>
+    Engine<S, D, LocalLedger, super::LocalRefresh, P, WalletFile>
 {
     /// Rotate the wallet password, optionally also rotating the KDF
     /// parameters of the on-disk envelope wrap.
@@ -997,16 +993,10 @@ impl<
         old: &Credentials<'_>,
         new: &Credentials<'_>,
         new_kdf: Option<KdfParams>,
-    ) -> Result<(), super::ChangePasswordError> {
-        let kdf = new_kdf.unwrap_or(KdfParams::default());
-        drive_persistence(self.persistence.rotate_password(old, new, kdf))
-            .map_err(|e| super::ChangePasswordError::RotateFailed(e.into()))?;
-        drive_persistence(
-            self.persistence
-                .save_prefs(&self.prefs_hmac_key, &self.prefs),
-        )
-        .map_err(|e| super::ChangePasswordError::RotatedButPrefsFlushFailed(e.into()))?;
-        Ok(())
+    ) -> Result<(), OpenError> {
+        self.persistence
+            .rotate_password(old.password(), new.password(), new_kdf)
+            .map_err(|e| map_wallet_file_error(e, self.network))
     }
 
     /// Close the wallet. Errors if `outstanding_pending_txs() > 0`.
@@ -1036,7 +1026,7 @@ impl<
     /// - [`OpenError::OutstandingPendingTx`] when one or more
     ///   reservations are still in flight.
     /// - [`OpenError::Io`] for state-save / prefs-save failures.
-    pub fn close(self, _credentials: &Credentials<'_>) -> Result<(), OpenError> {
+    pub fn close(self, credentials: &Credentials<'_>) -> Result<(), OpenError> {
         let count = self.outstanding_pending_txs();
         if count > 0 {
             return Err(OpenError::OutstandingPendingTx { count });
@@ -1053,17 +1043,15 @@ impl<
         // writers exist at this point; the read guard is structural,
         // not for contention.
         let ledger_guard = self.ledger.read();
-        drive_persistence(self.persistence.save_state(
-            &self.state_wrap_key,
-            &ledger_guard.ledger,
-        ))
-        .map_err(|e| OpenError::Persistence(e.into()))?;
+        self.persistence
+            .save_state(credentials.password(), &ledger_guard.ledger)
+            .map_err(|e| map_wallet_file_error(e, self.network))?;
         drop(ledger_guard);
-        drive_persistence(
-            self.persistence
-                .save_prefs(&self.prefs_hmac_key, &self.prefs),
-        )
-        .map_err(|e| OpenError::Persistence(e.into()))?;
+        self.persistence.save_prefs(&self.prefs).map_err(|e| {
+            OpenError::Io(IoError::WalletFile {
+                detail: e.to_string(),
+            })
+        })?;
 
         // Explicit drop so the chain documented above runs at a
         // named program point rather than at the end of the function
@@ -1468,6 +1456,263 @@ mod tests {
         )
         .expect("reopen succeeds even when prefs are tampered");
         let _wallet = opened.into_wallet();
+    }
+
+    use super::super::error::PersistenceError;
+    use super::super::traits::PersistenceEngine;
+    use super::drive_persistence;
+    use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
+    use shekyl_engine_file::WalletFileError;
+
+    #[test]
+    fn persistence_trait_save_state_round_trip() {
+        let fix = make_create_fixture();
+        let password: &[u8] = b"correct horse battery staple";
+        let creds = Credentials::password_only(password);
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+        let network = params.network;
+        let wallet =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        let ledger_guard = wallet.ledger.read();
+        drive_persistence(PersistenceEngine::save_state(
+            wallet.persistence(),
+            wallet.state_wrap_key(),
+            &ledger_guard.ledger,
+        ))
+        .expect("trait save_state");
+        drop(ledger_guard);
+        wallet.close(&creds).expect("close");
+
+        let opened = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("reopen after trait save");
+        assert!(matches!(opened, OpenedEngine::Loaded(_)));
+    }
+
+    #[test]
+    fn change_password_flushes_prefs() {
+        let fix = make_create_fixture();
+        let p_old: &[u8] = b"old password";
+        let p_new: &[u8] = b"new password";
+        let creds_old = Credentials::password_only(p_old);
+        let creds_new = Credentials::password_only(p_new);
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds_old, &seed);
+        let network = params.network;
+        let mut wallet =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        wallet.prefs_mut().cosmetic.default_decimal_point = 9;
+        wallet
+            .change_password(&creds_old, &creds_new, None)
+            .expect("rotate password");
+        wallet.close(&creds_new).expect("close after rotate");
+
+        let reopened = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds_new,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("reopen with new password")
+        .into_wallet();
+        assert_eq!(reopened.prefs().cosmetic.default_decimal_point, 9);
+    }
+
+    #[test]
+    fn stale_state_wrap_key_fails_after_rotate() {
+        let fix = make_create_fixture();
+        let p_old: &[u8] = b"old password";
+        let p_new: &[u8] = b"new password";
+        let creds_old = Credentials::password_only(p_old);
+        let creds_new = Credentials::password_only(p_new);
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds_old, &seed);
+        let network = params.network;
+        let mut wallet =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        let ledger_guard = wallet.ledger.read();
+        let ledger = &ledger_guard.ledger;
+        drive_persistence(PersistenceEngine::save_state(
+            wallet.persistence(),
+            wallet.state_wrap_key(),
+            ledger,
+        ))
+        .expect("save before rotate");
+        drop(ledger_guard);
+        wallet
+            .change_password(&creds_old, &creds_new, None)
+            .expect("rotate password");
+
+        // Password rotation preserves `file_kek` plaintext, so the orchestrator's
+        // pre-rotate `StateWrapKey` remains valid for sealing. Simulate a stale
+        // cached key (post-rotate re-derive drift) with a deliberately wrong key.
+        let mut bogus_bytes = *wallet.state_wrap_key().as_bytes();
+        bogus_bytes[0] ^= 0xFF;
+        let bogus_key = super::super::sealing_keys::StateWrapKey::from_region2_key(
+            zeroize::Zeroizing::new(bogus_bytes),
+        );
+
+        let ledger_guard = wallet.ledger.read();
+        drive_persistence(PersistenceEngine::save_state(
+            wallet.persistence(),
+            &bogus_key,
+            &ledger_guard.ledger,
+        ))
+        .expect("save with wrong wrap key still seals");
+        drop(ledger_guard);
+        // Do not call `close` here: it would re-save with the correct session key.
+        drop(wallet);
+
+        let err = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds_new,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect_err("reopen must reject state sealed with wrong wrap key");
+        match err {
+            OpenError::Persistence(PersistenceError::WalletFile(WalletFileError::Envelope(
+                WalletEnvelopeError::InvalidPasswordOrCorrupt,
+            ))) => {}
+            OpenError::Io(IoError::WalletFile { .. }) => {}
+            other => panic!("expected state AEAD failure on reopen, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rederived_state_wrap_key_succeeds_after_rotate() {
+        let fix = make_create_fixture();
+        let p_old: &[u8] = b"old password";
+        let p_new: &[u8] = b"new password";
+        let creds_old = Credentials::password_only(p_old);
+        let creds_new = Credentials::password_only(p_new);
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds_old, &seed);
+        let network = params.network;
+        let mut wallet =
+            Engine::<SoloSigner>::create(params, dummy_daemon()).expect("create FULL wallet");
+        wallet
+            .change_password(&creds_old, &creds_new, None)
+            .expect("rotate password");
+        wallet.close(&creds_new).expect("close after rotate");
+
+        let wallet = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds_new,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("reopen after rotate")
+        .into_wallet();
+        let ledger_guard = wallet.ledger.read();
+        drive_persistence(PersistenceEngine::save_state(
+            wallet.persistence(),
+            wallet.state_wrap_key(),
+            &ledger_guard.ledger,
+        ))
+        .expect("save with re-derived wrap key");
+    }
+
+    #[test]
+    fn open_does_not_retain_file_kek() {
+        let fix = make_create_fixture();
+        let password: &[u8] = b"correct horse";
+        let creds = Credentials::password_only(password);
+        let seed = fixed_seed();
+
+        let params = EngineCreateParams::for_test_full(&fix.base_path, &creds, &seed);
+        let network = params.network;
+        Engine::<SoloSigner>::create(params, dummy_daemon())
+            .expect("create FULL wallet")
+            .close(&creds)
+            .expect("close after create");
+
+        let wallet = Engine::<SoloSigner>::open_full(
+            &fix.base_path,
+            &creds,
+            network,
+            dummy_daemon(),
+            SafetyOverrides::none(),
+        )
+        .expect("open_full")
+        .into_wallet();
+        assert!(
+            wallet.file().opened_keys().file_kek.iter().all(|&b| b == 0),
+            "file_kek must be zeroized after open ritual"
+        );
+        assert_ne!(
+            wallet.state_wrap_key().as_bytes(),
+            &[0u8; 32],
+            "session must hold derived wrap_key_region_2"
+        );
+    }
+
+    #[test]
+    fn panic_hook_does_not_leak_state_wrap_key() {
+        use std::sync::{Arc, Mutex};
+
+        use super::super::sealing_keys::StateWrapKey;
+        use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
+        use zeroize::Zeroizing;
+
+        let marker = [0x42u8; FILE_KEK_BYTES];
+        let key = StateWrapKey::from_region2_key(Zeroizing::new(marker));
+        let captured = Arc::new(Mutex::new(String::new()));
+        let captured_hook = Arc::clone(&captured);
+        let previous = std::panic::take_hook();
+        struct RestorePanicHook(
+            Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Send + Sync + 'static>,
+        );
+        impl Drop for RestorePanicHook {
+            fn drop(&mut self) {
+                std::panic::set_hook(std::mem::replace(
+                    &mut self.0,
+                    Box::new(|_| {}),
+                ));
+            }
+        }
+        let _restore = RestorePanicHook(previous);
+        std::panic::set_hook(Box::new(move |info| {
+            captured_hook
+                .lock()
+                .expect("panic capture lock")
+                .push_str(&info.to_string());
+        }));
+
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _hold = &key;
+            panic!("forced persistence test panic");
+        }));
+        assert!(payload.is_err());
+
+        let text = captured.lock().expect("panic capture lock");
+        assert!(
+            text.contains("forced persistence test panic"),
+            "sanity: panic message present"
+        );
+        for chunk in marker.chunks(4) {
+            let needle = chunk
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            assert!(
+                !text.contains(&needle),
+                "panic output leaked key bytes as hex: {text}"
+            );
+        }
     }
 
     /// Sanity-check that `for_test_full` produces a `EngineCreateParams`

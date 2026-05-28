@@ -629,6 +629,12 @@ impl<
         &self.prefs
     }
 
+    /// Test-only: mutate in-memory prefs before `change_password` flush tests.
+    #[cfg(test)]
+    pub(crate) fn prefs_mut(&mut self) -> &mut WalletPrefs {
+        &mut self.prefs
+    }
+
     /// Borrow the daemon RPC client. Cloneable for handing to the
     /// scanner / tx-submission paths.
     ///
