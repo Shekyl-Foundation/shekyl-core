@@ -33,10 +33,12 @@ multisig §5.4.1 trigger fires; **or** steady-state trait methods regain
 periodic-flush path requires fresh MFA proof per save (R11 trigger).
 
 **Stage 1 is not complete after this PR.** PR 7 (`EconomicsEngine`)
-remains. [`STAGE_1_COMPLETION_AUDIT.md`](STAGE_1_COMPLETION_AUDIT.md) and
-the §1 status banner in
-[`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) update
-only after **both** PR 6 and PR 7 land.
+remains. §1 status banner in
+[`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) and
+[`FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 closeout inventory update only after
+**both** PR 6 and PR 7 land. A dedicated
+`STAGE_1_COMPLETION_AUDIT.md` is **not yet in the tree** — do not link to it
+until that doc PR lands.
 
 **Branch (design).** `feat/stage-1-pr6-persistence-engine-design` off `dev`
 at `b9c03dc24` — **doc-only** revisions until Phase 0 amends
@@ -150,7 +152,7 @@ Per [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc):
 | Item | Where |
 |------|--------|
 | `EconomicsEngine` | PR 7 |
-| `KeyEngine` on `Engine<S, …>` | Follow-up; `Arc<AllKeysBlob>` remains per completion audit §3.3 |
+| `KeyEngine` on `Engine<S, …>` | Follow-up; `Arc<AllKeysBlob>` remains per `V3_ENGINE_TRAIT_BOUNDARIES.md` / FOLLOWUPS V3.0 inventory |
 | Full §3 reorder `<S, K, L, E, D, F, R, P>` | Chore when `K` + `E` wire; PR 6 appends `F` only |
 | Stage 4 actors, spawn timeouts, teardown cascade | §2.8.3–2.8.6 |
 | `load_state` / open on trait | Q9.11 closed no |
@@ -1171,7 +1173,7 @@ Fill binding-check matrix at Round 2 segment **2g**. Mechanical gates:
 - [ ] Grep: no `MockPersistence`
 - [ ] Grep: steady-state `save_state` / `save_prefs` use sealing keys; `rotate_password` uses `Credentials`
 - [ ] §6.2 F5(b) blast-radius greps (CI)
-- [ ] §6.3 HKDF prerequisite PR merged before implementation branch cuts
+- [x] §6.3 HKDF prerequisite PR merged before implementation branch cuts (on `dev` post–`241a51ef6`)
 - [ ] §6.3 atomic-write test suite green on prerequisite branch
 
 ### §6.2 F5(b) blast-radius grep gates (Round 3 **F-R3.6**)
@@ -1219,6 +1221,8 @@ Before cutting `feat/stage-1-pr6-persistence-engine` from `dev`:
 1. **HKDF amendment implementation PR** merged — `wrap_key_region_{1,2}`
    derivation in `shekyl-crypto-pq` / `shekyl-engine-file`; Tier-3 KAT vectors
    under `docs/test_vectors/WALLET_FILE_FORMAT_V1/` regenerated and CI-green.
+   **Satisfied on `dev`** after `torvaldsl/wallet-hkdf-region-keys` (merged
+   `47db00065`; this branch includes it via merge `241a51ef6`).
 2. **`cargo test -p shekyl-engine-file atomic::`** — atomic write tests pass
    (see **2i G2** / **I1**).
 
@@ -1269,8 +1273,9 @@ period. PR 6 does not change that model.
 
 ### §7.1 Stage 1 closeout (do not conflate with PR 6 alone)
 
-Update [`STAGE_1_COMPLETION_AUDIT.md`](STAGE_1_COMPLETION_AUDIT.md) and
-spec §1 banner only after **PR 6 + PR 7** land.
+Update `V3_ENGINE_TRAIT_BOUNDARIES.md` §1 banner and FOLLOWUPS V3.0 inventory
+only after **PR 6 + PR 7** land. Dedicated `STAGE_1_COMPLETION_AUDIT.md` is
+**outstanding** (see FOLLOWUPS V3.0 closeout item).
 
 ---
 

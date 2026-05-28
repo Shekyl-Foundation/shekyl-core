@@ -54,7 +54,11 @@ sustainability is unaffected by the recalibration.
   in parallel. Inventory, orchestrator shape (`Engine<S, D, L, R, P>`),
   gaps (`PersistenceEngine`, `EconomicsEngine`, `K: KeyEngine` on
   `Engine`), and ordered next steps:
-  [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](./design/STAGE_1_COMPLETION_AUDIT.md).
+  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md) §8.1 /
+  §1 status banner; per-PR design docs under `docs/design/STAGE_1_PR_*`.
+  **Dedicated audit markdown** (`STAGE_1_COMPLETION_AUDIT.md`) — **not yet
+  landed** (CHANGELOG entry was aspirational; add in a doc-only PR or fold
+  into post–PR 7 closeout).
   **Still V3.0 pre-genesis but not “missing Stage 1 PR”:** P1 async
   refresh post-pass, wallet BIP-39 FFI, optional persistence/economics
   trait PRs, economics §3.3 benches. **Rewrite plan:**
