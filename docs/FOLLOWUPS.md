@@ -78,34 +78,33 @@ sustainability is unaffected by the recalibration.
   introduces `base_block_reward(already_generated)` in `shekyl-economics` for
   wallet/sim/engine — a **second implementation** of consensus-critical math.
 
-  **Must-build before treating 0h as correct (implementation PR 7, C2a):**
-  Rust-vs-C++ cross-check KAT in the `lwma1_cross_check.cpp` /
-  `mining_parity.cpp` mold: same inputs
-  `(median_weight, current_block_weight, already_generated_coins, version[,
-  tx_volume_avg])` → assert `base_block_reward(...) == get_block_reward(...)`.
-  The engine-vs-sim differential (both Rust) is **insufficient** — it only
-  proves Rust internal consistency.
-
   **Disposition (ratified 2026-05-27): migration path; C++ cutover in V3.0.**
   `base_block_reward` in `shekyl-economics` is the canonical formula.
-  `cryptonote::get_block_reward` and coinbase validation **cut over in the same
-  PR 7 implementation** (not deferred to V3.1): add `shekyl_base_block_reward`
-  (+ release-multiplier composition) FFI and rewire C++ call sites to match
-  burn/DAA/LWMA-1 pattern. Wallet-only re-expression with a permanent
-  cross-check bridge is **rejected**.
+  `get_block_reward` becomes a thin C++ wrapper (same shape as
+  `compute_fee_burn` / `compute_emission_split` in `economics.h`) calling
+  `shekyl_base_block_reward` (+ release-multiplier FFI). Wallet-only
+  re-expression with a permanent cross-check bridge is **rejected**.
 
-  **Implementation scope (PR 7, V3.0):**
+  **Implementation scope (PR 7, V3.0) — commit order is load-bearing:**
 
-  - **C2a** — Rust `base_block_reward` + `projected_already_generated` in crate;
+  - **C2** — Rust `base_block_reward` + `projected_already_generated` in crate;
     sim rewired to 0h.
-  - **C2a′** — Rust-vs-C++ cross-check KAT (must pass before cutover merges).
-  - **C2c** — `shekyl_base_block_reward` FFI; `get_block_reward` in
-    `cryptonote_basic_impl.cpp` calls Rust for base subsidy (+ existing release
-    multiplier FFI for the activity overload). Delete duplicated C++ tail
-    formula once KAT proves byte-identical outputs on the pinned grid.
+  - **C2a′** — **Separate commit.** Dual-leg KAT (§5.8 H1): (A) Rust ==
+    legacy C++ `get_block_reward`; (B) Rust == spec/sim oracle independent of
+    C++. Multi-block `already_generated` accumulation grid (H2), not
+    single-block subsidy only. CI required check.
+  - **C2c** — **Separate commit after C2a′.** `shekyl_base_block_reward` FFI;
+    rewire all consensus consumers (`validate_miner_transaction`, fee estimate,
+    `already_generated` accumulator, pop_block reversal — H2). Delete duplicated
+    C++ base-subsidy body only after both KAT legs pass. **C2c message cites
+    C2a′ commit hash** (H3).
 
-  **Close this FOLLOWUPS item when:** C2a′ KAT is in CI and C2c cutover is
-  merged on `dev`. **Design:**
+  **Merge-time hazards (§5.8 H1–H3):** C++-only oracle certifies reproducing C++
+  bugs (H1); blast radius includes accumulation (H2); soft "gates" are
+  insufficient — enforce commit order + required CI (H3).
+
+  **Close this FOLLOWUPS item when:** C2a′ (both legs + accumulation grid) is
+  in CI green and C2c is merged on `dev` with C2a′ as ancestor. **Design:**
   [`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](./design/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
   §5.8. **Target:** V3.0 (PR 7 implementation).
 

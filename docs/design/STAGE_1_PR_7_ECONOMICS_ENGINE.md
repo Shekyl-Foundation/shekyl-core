@@ -780,38 +780,88 @@ binding pins for C2/C4 and segment **2i**.
 |---------|-------------------|-----------|
 | DAA (LWMA-1) | Rust `shekyl-difficulty` | Yes — cross-checked (`tests/difficulty/lwma1_cross_check.cpp`) |
 | Burn / emission-share / release | Rust `shekyl-economics` | Yes — C++ orchestrates |
-| **Base CryptoNote subsidy** | **C++ only** `get_block_reward` in `cryptonote_basic_impl.cpp` | **No** — no `shekyl_base_block_reward` |
+| **Base CryptoNote subsidy** | **C++ only** today (`get_block_reward` in `cryptonote_basic_impl.cpp`); **no FFI seam yet** | **After C2c:** thin wrapper like `compute_fee_burn` — `get_block_reward` → `shekyl_base_block_reward` (+ release-multiplier FFI) |
 
-`already_generated` accumulation also runs C++-side (`blockchain.cpp` coinbase
-path). PR 7 `base_block_reward(already_generated)` introduces a **second**
-implementation of a **live consensus** formula.
+**Target end-state (C2c, reviewable pattern).** After cutover, `get_block_reward`
+is structurally identical to `shekyl::compute_fee_burn` / `compute_emission_split`
+in [`economics.h`](../../src/shekyl/economics.h): C++ gathers inputs, calls Rust
+FFI, returns the result. The duplicated `(MONEY_SUPPLY − ag) >> ESF` body in
+`cryptonote_basic_impl.cpp` is deleted only after KAT legs pass (H1).
+
+`already_generated` accumulation also runs C++-side (`blockchain.cpp` — accept
+path, fee estimate, `bei.already_generated_coins` at ~2293, **pop_block**
+reversal). Per-block subsidy rounding differences **compound** across height;
+single-block KAT grids are necessary but not sufficient (H2).
 
 **Test trap:** engine-vs-sim differential (both Rust) proves **Rust self-consistency
-only** — it cannot catch divergence from `get_block_reward`. Consensus-critical
-guard for 0h:
-
-- **C2a′ (must-build, gates C2c):** Rust `base_block_reward` vs legacy C++
-  `get_block_reward` cross-check KAT — same mold as `lwma1_cross_check.cpp` /
-  `mining_parity.cpp` (grid of
-  `(median_weight, block_weight, already_generated, version[, tx_volume_avg])`
-  tuples from `economics_params.json`). Run **before** C++ cutover merges.
-- **C2c (V3.0 cutover):** `shekyl_base_block_reward` FFI; rewire
-  `get_block_reward` to Rust; remove duplicated C++ base-subsidy body after KAT
-  passes.
-- **Out of scope for differential:** `projected_already_generated` and
-  `base_emission_at` neutral trajectory remain wallet-only; no consensus consumer.
+only** — not consensus correctness vs C++, and not accumulation over a chain.
 
 **Disposition (ratified 2026-05-27):** **Migration path; C++ cutover in V3.0**
 (same PR 7 implementation). Wallet-only re-expression is rejected. See
 [`FOLLOWUPS.md`](../FOLLOWUPS.md).
+
+#### Cutover execution hazards (H1–H3) — merge-time, not review-time
+
+Wargame of executing the ratified disposition. **Does not reopen the fork.**
+
+**H1 — C2a′ must have two legs; C++ alone is not an oracle.**
+
+Asserting `base_block_reward(...) == get_block_reward(...)` only proves the Rust
+port reproduces C++. If `get_block_reward` carries a latent bug (e.g. `div128_64`
+overflow-guard shape in the weight-penalty path), the KAT certifies reproducing
+the bug; C2c deletes the C++ original; the bug becomes canonical with its only
+witness gone.
+
+**C2a′ requires two independent assertions before C2c deletes C++:**
+
+| Leg | Assertion | Oracle |
+|-----|-----------|--------|
+| **A** | `base_block_reward(...) == get_block_reward(...)` | Legacy C++ (extract witness **before** deletion) |
+| **B** | `base_block_reward(...) == spec_oracle(...)` | Independent of C++: hand-derived grid from `(MONEY_SUPPLY − ag) >> ESF` + `FINAL_SUBSIDY` floor per `economics_params.json`, **and/or** `shekyl-economics-sim` value vectors (spec-driven emission, not `get_block_reward`) |
+
+If leg A and leg B disagree, that is a **consensus bug found pre-cutover** — the
+point of doing this pre-genesis. "Rust == C++" and "Rust == spec" are different
+claims; require **both** before deleting C++.
+
+**H2 — C2c blast radius is every consensus site that reads block subsidy, including accumulation.**
+
+C2c is not "rewire one function." `blockchain.cpp` consumes base reward at
+least:
+
+| Site | Role |
+|------|------|
+| `validate_miner_transaction` (~1583) | Accept path — coinbase vs expected subsidy |
+| Fee-estimate path (~3987) | Template / expectation |
+| `bei.already_generated_coins` (~2293) | Running `already_generated` accumulator |
+| **pop_block** reversal | Uses the same accumulation arithmetic — must stay atomic with connect |
+
+A one-atomic-unit per-block delta on any height moves **all** sites in lockstep.
+C2a′ grid must include:
+
+- Single-block tuples `(median_weight, block_weight, already_generated, version[, tx_volume_avg])`.
+- **Multi-block accumulation:** replay N blocks (e.g. 1000-height sequence),
+  compare `already_generated` trajectory Rust-vs-C++ (or vs spec oracle) — a
+  single-block grid can pass while accumulation silently drifts into a chain split.
+
+**H3 — "C2a′ gates C2c" needs teeth, not an honor-system comment.**
+
+Within one PR, C2a′ and C2c land on `dev` together unless structurally enforced.
+**Required discipline:**
+
+1. **Separate commits** in order: C2 → **C2a′** (both KAT legs green) → **C2c** (FFI + rewire + C++ body deletion).
+2. **C2c commit message** cites the **C2a′ commit hash** as precondition (same pattern as merge-commit release boundaries).
+3. **CI:** cross-check test target is a **required check** on the PR; C2c commit must not appear on the branch until C2a′ is an ancestor (enforce via commit order + reviewer map, not a comment in FOLLOWUPS).
+
+Soft "gates" on a consensus-formula swap is genuinely dangerous; treat H3 as
+load-bearing for implementation PR review.
 
 #### Segment 2i carry list (wider-substrate audit)
 
 | ID | Finding | Disposition |
 |----|---------|-------------|
 | **G1** | Cross-language single formation for `stake_ratio` + burn ActivityMetric entry shape | §5.3 + C1/C3 implementation |
-| **G2** | 0h Rust-vs-C++ cross-check KAT + C++ `get_block_reward` FFI cutover (V3.0) | **Must-build** C2a′ then **C2c**; engine-vs-sim is supplementary only |
-| **G3** | R5 fixture validity when `total_staked > 0` requires live staking aggregation | §5.4 table row |
+| **G2** | 0h dual-leg KAT (H1) + multi-block accumulation (H2) + commit-ordered cutover (H3) | C2a′ → C2c; see hazards above |
+| **G3** | R5 fixture: when `total_staked > 0`, `stake_ratio` / burn fields must come from a run where `add_staked_outputs` populated the cache — **not** the stubbed-zero `get_stake_ratio` path | §5.4 `staking_state: live`; 2i verifies fixture metadata matches evidence from `blockchain.cpp` stake scan |
 | **G4** | Fee/burn input staleness at send time (`ActivityMetric` vs block-connect snapshot) | 2i audit (unchanged) |
 | **G5** | `parameters_snapshot` cache poison | 2i audit (unchanged) |
 
@@ -849,11 +899,11 @@ Runs after **2g**, before §7.X. Yield: G1–Gn in segment **2i**.
 | **C0** | Phase 0 §2.7 naming amendment (`base_emission_at`, `burn_amount`) + doc co-land |
 | **C1** | `EconomicsError`, `ActivityMetric` (§5.3 R1), `EconomicsParametersSnapshot` + `CalibrationStamp` (§5.3 R2) |
 | **C2** | `shekyl-economics`: `base_block_reward` + `projected_already_generated` + `calc_stake_ratio` + `calc_burn_pct_from_activity`; sim rewired to 0h |
-| **C2a′** | **Must-build:** Rust `base_block_reward` vs legacy C++ `get_block_reward` cross-check KAT (`mining_parity` / `lwma1_cross_check` mold) — gates C2c |
-| **C2c** | **`shekyl_base_block_reward` FFI**; rewire `get_block_reward` (`cryptonote_basic_impl.cpp`) to Rust; delete duplicated C++ base-subsidy body after KAT — §5.8 V3.0 cutover |
+| **C2a′** | Dual-leg KAT (H1): leg A Rust==C++ `get_block_reward`; leg B Rust==spec/sim oracle; **multi-block** `already_generated` accumulation grid (H2). Dedicated commit; CI required check |
+| **C2c** | `shekyl_base_block_reward` FFI; rewire **all** `get_block_reward` consumers + accumulation sites (H2); target = `economics.h` thin-wrapper shape; delete C++ formula only after C2a′ hash cited in message (H3) |
 | **C2b** | `ChainEconomicsSource` + production adapter |
 | **C3** | `EconomicsEngine` + `LocalEconomics` impl; `CALIBRATION-PENDING` doc comments |
-| **C4** | Real-path tests: `RecordedChainFixture` (§5.4) + engine-vs-sim differential (supplementary) + **C2a′** cross-check (consensus-critical 0h gate) |
+| **C4** | `RecordedChainFixture` (§5.4) + engine-vs-sim differential (supplementary only); consensus 0h gate is **C2a′** dual-leg + accumulation (H1–H2), not C4 |
 | **C5** | `Engine` `E` slot + `economics` field |
 | **C6** | Benches + `PERFORMANCE_BASELINE.md` |
 | **C7** | Docs: CHANGELOG, rustdoc, design doc Phase 1 landed; calibration banners |
@@ -887,7 +937,7 @@ After **PR 6 + PR 7** implementation merge — not either alone.
 | **Round 0 feedback folded** | `Round 0 feedback folded 2026-05-27; lens citations refreshed to PR-5 five-category form; MockEconomics struck (real-path testing); load-bearing question reframed to ChainEconomicsSource (2′) + shekyl-economics primitives; calibration-vs-structural boundary added; F4 grep closed — already_generated not mirrored in engine (interpretation A for current_emission). Reopen Round 0 only if trait identity / scope guard challenged.` |
 | **Round 1 segment 2b drafted** | `Round 1 segment 2b drafted 2026-05-27; §2.7 naming amendment locked (current_emission→base_emission_at, burn_fraction→burn_amount, C0); base_emission_at = pure shekyl-economics projection under (A), reads nothing from ChainEconomicsSource; source shrunk to one read (active_weighted_stake).` |
 | **Round 1 closed** | `Round 1 closed 2026-05-27; segments 2a/2c/2d/2g disposed. ActivityMetric = raw integer observables (calc_burn_pct owns ratios). Snapshot = rulebook constants + as_of (not dashboard). RecordedChainFixture = sim-recorded, params-digest-pinned, two-array (differential vs neutral milestones). No V3.0 consumer call sites. §2.7 surface changes are C0-only.` |
-| **Round 2 substrate pins** | `§5.8 2026-05-27: burn/stake_ratio single-source Rust; base emission migration ratified — C2a′ KAT + C2c C++ get_block_reward FFI cutover in V3.0 (PR 7 impl). R5 staking-state-live fixture rule.` |
+| **Round 2 substrate pins** | `§5.8 2026-05-27: migration ratified V3.0; H1 dual-leg KAT, H2 multi-block accumulation + full blast radius, H3 commit-ordered cutover; G3 add_staked_outputs vs stub.` |
 
 ---
 
