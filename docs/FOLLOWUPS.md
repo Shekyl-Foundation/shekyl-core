@@ -3658,6 +3658,34 @@ one place to confirm each item's relationship to the wallet stack.
   ([`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md),
   2026-04-25).**
 
+- **`ActivityMetric` producer actor (wallet-side coherent bundle).** Surfaced by
+  Stage 1 PR 7 segment **2i** G4 disposition
+  ([`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](design/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
+  §6.3). `ActivityMetric` is a validated four-field bundle (`tx_volume`,
+  `circulating_supply`, `total_staked`, `as_of_height`); all four must reflect
+  one chain state at `as_of_height`. `EconomicsEngine` trusts the bundle by type;
+  **production construction** belongs to a wallet actor with atomic-read capability
+  over its upstream (local LMDB mirror: one read transaction; daemon RPC: see
+  conditional entry below). Responsibility: read upstream atomically, call
+  `ActivityMetric::new`, pass to `burn_amount` / display paths. Natural owner:
+  post–Rust-cutover chain-state mirroring actor (descendant of M3a refresh/mirror
+  work). **Trigger:** Stage 4 actor mesh design (post-V3.0). **Target: V3.1+**
+  actor-mesh PR. Cross-link: PR 7 C1 (`ActivityMetric::new`), §5.5 R6 (no V3.0
+  consumer).
+
+- **Daemon atomic activity snapshot RPC (conditional on RPC upstream).** Same G4
+  substrate. If the wallet's `ActivityMetric` producer reads from **daemon RPC**
+  rather than a local LMDB mirror, the daemon must expose a **single** endpoint
+  that returns all four fields from **one** LMDB read transaction on its side
+  (e.g. `get_activity_at_height(h)` or equivalent). Three sequential RPCs
+  (`get_tx_volume`, `get_info` fields, stake query, …) are **not** equivalent —
+  the daemon can advance between calls and produce an inconsistent snapshot that
+  passes `ActivityMetric::new` invariants but not consensus. If the producer's
+  upstream is exclusively a local mirror, this entry is **moot**. **Target: V3.1**
+  daemon release when V3.0 wallet runs against `shekyld` without a mirror.
+  Cross-link: [`docs/WALLET_RPC_RUST.md`](WALLET_RPC_RUST.md) / daemon RPC rust
+  cutover docs when scoped.
+
 - **Workspace clippy `-D warnings` cleanup.** Surfaced by the Phase 0
   comprehensive audit (2026-04-25). The Rust workspace is **not**
   `cargo clippy --workspace --all-targets --no-deps -- -D warnings`

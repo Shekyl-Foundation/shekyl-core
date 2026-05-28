@@ -1,9 +1,10 @@
 # Stage 1 PR 7 — `EconomicsEngine` extraction — design
 
 **Status.** **Round 0 closed (2026-05-27).** **Round 1 closed (2026-05-27)** —
-segments 2a–2d and 2g disposed; 2b drafted earlier same day. Round **2** open
-(2i wider-substrate audit after 2g close-out in Round 2 segment plan). Planning
-doc branch:
+segments 2a–2d disposed; Round 1 segment **2g** (R7 C0-only, §5.6) closed same
+day; 2b drafted earlier same day. Round **2** — segment **2i** closed (2026-05-28,
+§6.3 G4/G5); Round 2 close-out (§6.2 segment **2g**) in progress. Round **3**
+opens when §6.2 items 2, 4, 5 complete. Planning doc branch:
 `feat/stage-1-pr7-economics-engine-design` → PR to `dev`. Opened from `dev`
 tip `2cf4cbfde` (post–PR #82 `PersistenceEngine` design merge). This document
 follows [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) and cites
@@ -21,14 +22,15 @@ implementation) may still be in flight on `dev`; PR 7 is the **remaining
 required trait surface** for the seven-trait Stage 1 inventory. Update
 [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §1 status
 banner and [`FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 closeout inventory only after
-**both** PR 6 implementation and PR 7 implementation land. Do not link to
+**both** PR 6 implementation and **all three PR 7 implementation PRs** (7-base,
+7-cutover, 7-trait — §7.0) land. Do not link to
 `STAGE_1_COMPLETION_AUDIT.md` — that doc is not yet in the tree (per FOLLOWUPS).
 
 **Branch (design).** `feat/stage-1-pr7-economics-engine-design` off `dev` at
 `2cf4cbfde` — **doc-only** revisions until Round 3 closes and Phase 0 amends
-§2.7 if Round 2 close-out confirms no surface amendment. Implementation branch
-`feat/stage-1-pr7-economics-engine` cuts the post–Phase-0 `dev` tip per PR 2 /
-PR 4 / PR 5 precedent.
+§2.7 if Round 2 close-out confirms no surface amendment. **Implementation PRs**
+(§7.0): `feat/stage-1-pr7-economics-base` → then `feat/stage-1-pr7-economics-cutover`
+and `feat/stage-1-pr7-economics-engine` as siblings off post–7-base `dev`.
 
 **Cross-references.**
 
@@ -370,8 +372,8 @@ See §1, §2, §3.
 | **0b′** | `trait ChainEconomicsSource` | `chain_economics_source.rs` | **One read** at V3.0 (`active_weighted_stake`) |
 | **0h′** | `projected_already_generated(height, params) -> u64` | `shekyl-economics` | Neutral-trajectory **(A)**; pairs with 0h |
 | **0c** | `EconomicsError` | `engine/error.rs` | |
-| **0d** | `EconomicsParametersSnapshot` + `CalibrationStamp` | economics types | Rulebook constants + `as_of` — §5.3 R2 |
-| **0e** | `ActivityMetric` | economics types | Raw integer observables — §5.3 R1 |
+| **0d** | `EconomicsParametersSnapshot` + `CalibrationStamp` | economics types | Rulebook constants + `as_of { generation, params_digest }` — §5.3 R2, §6.3 G5 |
+| **0e** | `ActivityMetric` + `ActivityInvariantViolation` | economics types | Raw observables + `as_of_height` + `::new` — §5.3 R1, §6.3 G4 |
 | **0j** | `RecordedChainFixture` JSON schema | `docs/test_vectors/economics/` | §5.4 R5 — sim-recorded, two arrays |
 | **0f** | `Engine<…, E>` + `economics: E` | `mod.rs`, lifecycle, … | |
 | **0g** | `RecordedChainFixture` + production `ChainMirrorSource` | `test_support` / `local_economics.rs` | **Replaces MockEconomics** — real recorded chain state |
@@ -556,13 +558,28 @@ not hand-roll `stake_ratio`).
 pub struct ActivityMetric {
     /// Rolling 720-block window aggregate (daemon-reported).
     pub tx_volume: u64,
-    /// `already_generated − destroyed` (chain-derived).
+    /// Prev-block `already_generated` at `as_of_height` (consensus burn site quantity).
     pub circulating_supply: u64,
     /// Principal-pool total staked amount (chain-mirror; not wallet registry).
     pub total_staked: u128,
+    /// Height all four fields were sampled for (0 = genesis).
+    pub as_of_height: u64,
 }
 ```
 
+**2i additive amendment (G4, §6.3):** fourth raw field + validated constructor —
+does **not** reopen the raw-observables / no-precomputed-ratios pin.
+
+- **Single constructor** — `ActivityMetric::new(tx_volume, circulating_supply,
+  total_staked, as_of_height) -> Result<Self, ActivityInvariantViolation>` in
+  `shekyl-economics`. Validates structural invariants (cap, can't-stake-more-than-
+  exists, height sanity). **No** `#[cfg(test)]` bypass — tests use the same `new()`
+  with `RecordedChainFixture` / JSON vectors ("real path, real fixture").
+- **Coherence contract** — all four fields must reflect **one chain state** at
+  `as_of_height`. Enforced by the **producer** (one LMDB read txn or one daemon
+  atomic endpoint), documented in rustdoc; not re-checkable inside `burn_amount`
+  without chain access. See §6.3 G4 + FOLLOWUPS (wallet producer actor; conditional
+  daemon endpoint).
 - **Not pre-computed ratios** — orchestrator must not pass `volume_ratio` /
   `supply_ratio` / `stake_ratio`; that relocates derivation → Bug 2 class.
 - **`stake_ratio` formation is single-source today:** consensus
@@ -573,10 +590,14 @@ pub struct ActivityMetric {
   `calc_stake_ratio(total_staked, circulating_supply)`) and have both
   `calc_burn_pct_from_activity(...)` and the FFI call it. **Do not** divide in
   `LocalEconomics` or C++.
-- **`circulating_supply` quantity:** consensus passes `already_generated_coins`
-  as circulating supply at the burn site (`blockchain.cpp` ~2023). `ActivityMetric.circulating_supply`
-  must be that same quantity (typically `already_generated − destroyed` when the
-  wallet has both; document in rustdoc).
+- **`circulating_supply` quantity:** consensus passes **`already_generated` at
+  height−1** at the burn site (`validate_miner_transaction`, same as `/get_info`
+  today). **Not** `already_generated − total_burned` unless a future consensus
+  amendment changes the burn site — do not "fix" wallet to a different quantity
+  without that amendment.
+- **Genesis edge (`as_of_height = 0`):** when `circulating_supply = 0`,
+  `calc_burn_pct` treats `stake_ratio = 0` (vacuous denominator) → `burn_amount`
+  returns 0. One-line guard in `calc_burn_pct` (C3), not a trait `Err`.
 - **Canonical burn entry point (implementation PR):** add an outer
   `calc_burn_pct_from_activity` / `burned_amount_from_activity` that (1) forms
   `stake_ratio` via the shared ratio helper, (2) calls the existing
@@ -587,11 +608,17 @@ pub struct ActivityMetric {
 - **Integers only** — fixed-point math per [`STAKER_REWARD_DISBURSEMENT.md`](../STAKER_REWARD_DISBURSEMENT.md)
   (no float across FFI/trait; divergent rounding fails consensus).
 
-**Caller-trust rustdoc (field-projection lens):** all three fields are
-daemon-reported / orchestrator-assembled. State explicitly: advisory inputs;
-`burn_amount` is a wallet-side estimate; consensus recomputes burn and rejects
-divergence → failed-send / wrong-display, not theft (2026-04-08). Must not claim
-authoritative burn.
+**Caller-trust rustdoc (field-projection lens):** all fields are wallet-actor-
+assembled from an atomic upstream read. State explicitly: advisory inputs;
+`burn_amount(fee, activity)` returns the burn consensus **would compute at
+`activity.as_of_height`**; on-chain burn at block-connect may differ if the block
+lands at a different height — **consumer** decides whether staleness is
+acceptable (no tolerance/range in the trait — pre-provision-for-flexibility).
+At V3.0 the only named future consumer is display (`PendingTxEngine` fee path
+is a FOLLOWUPS seam, not a live caller). Failure mode is **wrong display**, not
+failed send, theft, or user consensus risk: consensus recomputes burn at accept;
+miner coinbase must match or the **block** is invalid. Must not claim
+authoritative on-chain burn.
 
 **Locked:** `burn_amount` name; absolute atomic-unit return; overflow KAT.
 
@@ -618,16 +645,37 @@ pub struct EconomicsParametersSnapshot {
     pub staker_emission_share_bp: u16,      // BASE share — not decayed effective
     pub staker_emission_decay_milli: u16,
     pub tiers: TierTable,                   // read from `shekyl-staking::tiers` — not redefined
-    pub as_of: CalibrationStamp,            // calibration-generation + optional param-epoch
+    pub as_of: CalibrationStamp,            // staleness detection — §6.3 G5
+}
+
+pub struct CalibrationStamp {
+    /// Monotonic calibration generation (pre-genesis recalibration; V3.x adaptive-burn epoch).
+    pub generation: u32,
+    /// Blake2b-256 of canonical-serialized resolved `EconomicParams` (not raw JSON bytes).
+    pub params_digest: [u8; 32],
 }
 ```
+
+**2i additive amendment (G5, §6.3):** `CalibrationStamp` gains structured
+`generation` + `params_digest` — replaces Round 1 "optional param-epoch" placeholder;
+does **not** reopen §2.7 (implementor-side 0d layout).
 
 - **Base values, not decayed.** Effective `staker_emission_share` is height-varying
   even at V3.0; snapshot carries base + decay rate; consumer applies decay.
 - **Tiers by reference** — single source `shekyl-staking::tiers`; no duplicated
   lock-block pairs in economics types.
 - **Integers** — basis points / milli-units; same no-float discipline as R1.
-- **No-cache** — already in §2.7 rustdoc; `as_of` detects stale calibration generation.
+- **No-cache** — already in §2.7 rustdoc; `as_of` lets consumers detect stale copies.
+- **`params_digest` encoding (pinned):** digest over **canonical serialization of the
+  resolved `EconomicParams` struct** (encoding pinned in `shekyl-economics/build.rs`
+  / C1 docs), **not** raw `economics_params.json` bytes — avoids false positives from
+  JSON whitespace/key-order drift. Same defense-in-depth role as consensus-constants
+  build-time sentinels; economics field values are calibration, not static-asserted to
+  spec.
+- **Independent from G4 at V3.0:** `generation` is a configuration epoch index, not a
+  chain height. No `generation_active_at(height)` at V3.0; rustdoc notes V3.x adaptive
+  burn may bind calibration to heights (FOLLOWUPS). `ActivityMetric.as_of_height` and
+  `CalibrationStamp.generation` are formally independent staleness surfaces.
 
 **Dashboard alternative (rejected for this method):** a one-shot "current economic
 state" readout (live burn %, release multiplier, yield) is a **composed UX view**
@@ -710,6 +758,14 @@ lands the trait, `LocalEconomics`, the one-read `ChainEconomicsSource`, and the
 Pre-provision-for-flexibility at consumer altitude: surface pre-wired for Phase 2b;
 no V3.0 consumer exists. Boundary = **reachable + tested, not yet called**.
 
+**G4 pin (§6.3):** any future `burn_amount` consumer must consult
+`activity.as_of_height` and apply its own staleness policy; the method does not
+gate on freshness.
+
+**G5 pin (§6.3):** any future `parameters_snapshot` consumer must compare
+`as_of.generation` and `as_of.params_digest` before trusting a cached copy; the
+method does not gate on freshness.
+
 ### §5.6 Round 1 segment 2g — R7 C0-only confirmation (2026-05-27)
 
 **Confirmed:** the only §2.7 **surface** changes in PR 7 are **C0**:
@@ -730,8 +786,8 @@ remains the sole §2.7 amendment.**
 **Closed — do not reopen:**
 
 - §5.4 fence items (trait identity through R4).
-- R1 `ActivityMetric` layout + caller-trust.
-- R2 rulebook snapshot + `as_of`.
+- R1 `ActivityMetric` layout + caller-trust (+ **2i G4 additive:** `as_of_height`, `::new`, `ActivityInvariantViolation`).
+- R2 rulebook snapshot + structured `CalibrationStamp` (`generation`, `params_digest`).
 - R3 read contract + `pool_weighted_total` 0-semantics.
 - R5 fixture schema (two-array, sim-recorded).
 - R6 zero V3.0 consumer call sites.
@@ -796,9 +852,13 @@ single-block KAT grids are necessary but not sufficient (H2).
 **Test trap:** engine-vs-sim differential (both Rust) proves **Rust self-consistency
 only** — not consensus correctness vs C++, and not accumulation over a chain.
 
-**Disposition (ratified 2026-05-27):** **Migration path; C++ cutover in V3.0**
-(same PR 7 implementation). Wallet-only re-expression is rejected. See
-[`FOLLOWUPS.md`](../FOLLOWUPS.md).
+**Disposition (ratified 2026-05-27):** **Migration path; C++ cutover in V3.0.**
+Wallet-only re-expression is rejected. See [`FOLLOWUPS.md`](../FOLLOWUPS.md).
+
+**Implementation PR scope (amended Round 2 close-out §6.2 item 1, 2026-05-28):**
+cutover lands in V3.0; **three implementation PRs** off a shared keystone
+(7-base → 7-cutover ∥ 7-trait). The migration *decision* is unchanged; the
+*packaging* splits at the C2/C2c seam, not at "consensus vs trait."
 
 #### Cutover execution hazards (H1–H3) — merge-time, not review-time
 
@@ -825,45 +885,261 @@ claims; require **both** before deleting C++.
 
 **H2 — C2c blast radius is every consensus site that reads block subsidy, including accumulation.**
 
-C2c is not "rewire one function." `blockchain.cpp` consumes base reward at
-least:
+C2c is not "rewire one function." Production `cryptonote::get_block_reward`
+call sites are enumerated in §6.2 (7-cutover PR map). **Accumulation is a
+separate derived quantity** — see **C2a′ grid spec** below; it is **not**
+`base_block_reward(ag)` chained naively.
 
-| Site | Role |
-|------|------|
-| `validate_miner_transaction` (~1583) | Accept path — coinbase vs expected subsidy |
-| Fee-estimate path (~3987) | Template / expectation |
-| `bei.already_generated_coins` (~2293) | Running `already_generated` accumulator |
-| **pop_block** reversal | Uses the same accumulation arithmetic — must stay atomic with connect |
+| Concern | Verified locus | Role |
+|---------|----------------|------|
+| Accept / coinbase bound | `validate_miner_transaction` (`blockchain.cpp:1583`) | Validates **Q3** locally; out-param = **`Q_full_emission`** after fix **α** (today overwritten to **`Q_miner_base`**) |
+| Fee gates / estimates | `check_fee` (:3987), `get_dynamic_base_fee_estimate_2021_scaling` (:4071) | **Q_subsidy** (4-arg) |
+| Staker accrual inflow | `handle_block_to_main_chain` (:5021) | **Q2** → pool only — **unchanged** by fix **α** |
+| LMDB `already_generated_coins` | `handle_block_to_main_chain` (:4946) | **`Q4_spec`** after fix **α**; today **`Q4_cpp`** via site **1** overwrite bug |
+| Alt metadata (provisional) | `handle_alternative_block` (:2291–2293) | **Throwaway** `get_outs_money_amount(miner_tx)` — not promoted path |
+| Reorg | `switch_to_alternative_blockchain` + `pop_block_from_blockchain` (:799–824) | Pop + replay through main connect |
 
-A one-atomic-unit per-block delta on any height moves **all** sites in lockstep.
-C2a′ grid must include:
-
-- Single-block tuples `(median_weight, block_weight, already_generated, version[, tx_volume_avg])`.
-- **Multi-block accumulation:** replay N blocks (e.g. 1000-height sequence),
-  compare `already_generated` trajectory Rust-vs-C++ (or vs spec oracle) — a
-  single-block grid can pass while accumulation silently drifts into a chain split.
+A one-atomic-unit per-block delta on **Q_chain_ag** moves accept, fee, and subsidy
+input in lockstep. C2a′ must exercise **per-quantity** single-block grids **and**
+**Q_chain_ag** multi-block + pop-replay grids (not subsidy-only chaining).
 
 **H3 — "C2a′ gates C2c" needs teeth, not an honor-system comment.**
 
-Within one PR, C2a′ and C2c land on `dev` together unless structurally enforced.
-**Required discipline:**
+**Preferred enforcement (§6.2 item 1 — three-PR split):** **7-cutover branches off
+7-base.** C2a′ is an ancestor of C2c by branch topology — the KAT-before-cutover
+invariant is structural, not reviewer-map discipline alone.
 
-1. **Separate commits** in order: C2 → **C2a′** (both KAT legs green) → **C2c** (FFI + rewire + C++ body deletion).
-2. **C2c commit message** cites the **C2a′ commit hash** as precondition (same pattern as merge-commit release boundaries).
-3. **CI:** cross-check test target is a **required check** on the PR; C2c commit must not appear on the branch until C2a′ is an ancestor (enforce via commit order + reviewer map, not a comment in FOLLOWUPS).
+**Fallback (bundled single PR):** separate commits in order C2 → C2a′ → C2c; C2c
+message cites C2a′ hash; CI cross-check is a required check on the PR.
+
+1. **Separate commits** in order: C2 → **C2a′** (both KAT legs green) → **C2c** (FFI + rewire + C++ body deletion) — required in bundled mode; in split mode C2a′ lives only on **7-base**, C2c only on **7-cutover**.
+2. **C2c commit message** cites the **C2a′ commit hash** (or **7-base merge commit**
+   on `dev`) as precondition.
+3. **CI:** dual-leg + accumulation cross-check is a **required check** on **7-base**
+   before **7-cutover** merges; cutover PR must not target `dev` until **7-base** is
+   merged.
 
 Soft "gates" on a consensus-formula swap is genuinely dangerous; treat H3 as
 load-bearing for implementation PR review.
+
+#### C2a′ grid spec — three-quantity KAT matrix (amended 2026-05-28, disposition pinned)
+
+**Substrate (code-verified, 2026-05-28).**
+
+| Locus | What happens |
+|-------|----------------|
+| `:1583–1609` | Site **1**: `get_block_reward` → full **`base_reward`**; validates coinbase against **`miner_base_reward`** + fees; **overwrites out-param** with `miner_base_reward` ("for caller tracking") |
+| `:4927–4946` | **Only** `validate_miner_transaction` caller: reads out-param at `:4946` as **`already_generated += base_reward`** |
+| `:5021–5052` | Site **4**: separate 4-arg `get_block_reward` → pool — **does not write `already_generated`** |
+| Claim connect | `blockchain_db.cpp:220–226`: pool decremented; claim outputs minted — **no `already_generated` update** |
+
+**Root cause (not missing site-4 increment):** the under-count is the **`:1608–1609` overwrite**
+that renames the out-param from full block subsidy to miner share. `:4946` reads
+`base_reward` expecting block emission (the natural meaning of the name); the overwrite
+hands it **`Q_miner_base`**. Site **4** was never a second accumulation writer — the bug
+is upstream in site **1**.
+
+**`validate_miner_transaction` out-param consumers (7-base entry check, settled):**
+
+```text
+rg 'validate_miner_transaction\(' src/
+→ blockchain.cpp:4927 only (production)
+→ out-param used at :4946 only
+```
+
+Site **4** does not consume the out-param (recomputes `full_block_emission`). Fee paths,
+pop, and alt metadata do not call site **1**. The "for caller tracking" overwrite targets
+**:4946** exclusively; removing it is unconditionally correct for that caller. Miner-share
+needs inside site **1** stay on local **`miner_base_reward`**.
+
+**Site 4 verification (settled):** staker inflow → **`staker_pool_balance`** only — unchanged
+by the pinned fix.
+
+##### Accumulation disposition (spec-fixed — not an open Reading 1 vs 2 gate)
+
+[`DESIGN_CONCEPTS.md`](../DESIGN_CONCEPTS.md) Component 4 is explicit: **no new coins
+created**; staker share is redirected **from** `block_emission`; **total emission per
+block is unchanged**; the `2^32` ceiling is unaffected. The interdependency diagram is
+`block_emission → STAKER_EMISSION_SHARE + MINER_EMISSION (remainder)`.
+
+**Reading 1 (miner-only `already_generated`, staker mint "additional") is ruled out.**
+If `already_generated` tracked miner share only while staker coins were real minted
+supply, total issuance would outrun the ESF curve input, the cap would break, and the
+spec's "total emission unchanged" property would be violated.
+
+**Reading 2 (spec disposition):** `already_generated` must track **full block emission**
+(`Q_full_emission` / post-release effective reward) for ESF / cap integrity. Component 4
+redistributes **within** that total; it does not create a second issuance axis.
+
+Running C++ under-counts because site **1** overwrites the out-param before `:4946` reads
+it — not because site **4** fails to compensate.
+
+##### Pinned fix — option α (7-base, before 7-cutover)
+
+**Do:** Remove the **`base_reward = miner_base_reward`** overwrite at
+`validate_miner_transaction` `:1608–1609`. Leave the out-param as full post-`get_block_reward`
+subsidy ( **`Q_full_emission`** at connect weights). `:4946` then accumulates spec-correct
+emission in **one** LMDB write path. Site **4** unchanged on `already_generated`.
+
+**Coinbase bound check (verified 2026-05-28):** validation at `:1598–1606` compares
+`money_in_use` against **`miner_base_reward + effective_fee`** (local variables), **not**
+the out-param. The overwrite at `:1609` serves **`:4946` only** — removing it does **not**
+widen the accept bound or let a miner claim the staker share. Implementer scope: **delete
+the overwrite line**; no bound retarget required.
+
+**Do not (option β — rejected):** Add **`Q_staker_emission`** to `already_generated` at
+site **4** to compensate for the overwrite. Correct if arithmetic is perfect, but:
+
+1. **Two writers per block** — read-modify-write on `already_generated` across two connect
+   sites inside one block txn instead of one authoritative increment.
+2. **Pop/reorg mental model** — row-pop still works, but reversal tracks a two-site sequence
+   rather than a single `:4946` write.
+3. **Cap invariant demoted** — full-emission accounting becomes a **runtime sum across sites**
+   instead of a **structural property of one accumulation site**.
+
+Pre-genesis structural fix beats compensating patch. Same rationale as single-site-of-truth
+elsewhere (HandleTable disposition).
+
+**Cap-integrity invariant (defense-in-depth after fix α):**
+
+```text
+Δ_main_to_ag + Δ_accrual_to_ag == Q_full_emission     // post-fix: Δ_accrual_to_ag == 0
+```
+
+Under fix α, **`Δ_accrual_to_ag = 0`** structurally — site **4** stays pool-only. Layer 2
+still asserts the invariant on connect replay so a future regression reintroducing a
+second writer or re-overwriting the out-param fails CI without relying on B-accum alone.
+
+**7-base obligation:** Land fix **α**; A-accum and B-accum **converge** on **`Q4_spec`**;
+cap invariant green; then 7-cutover.
+
+##### Derived quantities (name → definition)
+
+| ID | Symbol | Definition |
+|----|--------|------------|
+| **Q0** | `Q_subsidy` | Return value of `cryptonote::get_block_reward(...)` for the call's arity/weights (4-arg = no release multiplier; 5-arg = release applied) |
+| **Q1** | `Q_miner_base` | `shekyl::compute_emission_split(Q_subsidy, height, …).miner_emission` |
+| **Q1s** | `Q_staker_emission` | `emission_split(Q_subsidy, height, …).staker_emission` (= `Q_full_emission − Q_miner_base` when split inputs match) |
+| **Q2** | `Q_full_emission` | Full block emission for height *h*: `Q_subsidy` at site-4 weights `(0, 0, prev_ag, 4-arg)` — equals pre-split block reward for cap / ESF stepping |
+| **Q3** | `Q_miner_coinbase` | `Q_miner_base + burn.miner_fee_income` (coinbase template / accept bound) |
+| **Q4_spec** | `Q_chain_ag` (spec) | **`prev_ag + Q_full_emission`** per block (capped at `MONEY_SUPPLY`) — ESF / sim / post-fix LMDB |
+| **Q4_cpp** | `Q_chain_ag` (broken C++) | **`prev_ag + Q_miner_base`** at `:4946` today — **overwrite bug**; leg A pre-fix reproduction only |
+
+**Cap-integrity invariant** — see fix **α** above (defense-in-depth; structurally
+`Δ_accrual_to_ag = 0` after fix).
+
+**Sim oracle (leg B):** `shekyl-economics-sim` (`engine.rs:166`) steps **`effective_reward`**
+(full pre-split emission) — aligns with **`Q4_spec`**, not **`Q4_cpp`**, on unfixed C++.
+
+**Alt-chain metadata (`blockchain.cpp:2291–2293`):** provisional
+`get_outs_money_amount(miner_tx)` — **not** promotion path. C2a′ **must not** assert alt == main.
+
+##### Per-site target quantity (C2c must not conflate)
+
+| Site | Target quantity | C2c note |
+|------|-----------------|----------|
+| **1** `validate_miner_transaction` | Validates **Q3** (local `miner_base_reward`); out-param to `:4946` = **`Q_full_emission`** (fix **α**: no overwrite) | Remove `:1608–1609` overwrite |
+| **2** `check_fee` | **Q_subsidy** (4-arg) | Fee math input |
+| **3** `get_dynamic_base_fee_estimate_*` | **Q_subsidy** (4-arg) | Fee estimate tiers |
+| **4** post-`add_block` staker accrual | **Q2** → pool inflow only | **Unchanged** on `already_generated` |
+| **5** `construct_miner_tx` | **Q_subsidy** → **Q3** | Template coinbase |
+| **6–7** `fill_block_template` | **Q_subsidy** (+ fees) | Pool optimization |
+| **Accum** `:4946` | **`Q4_spec`** after fix **α** | Single accumulation site |
+
+Uniform `shekyl_base_block_reward` substitution at every site **without** this map
+is a consensus conflation hazard.
+
+##### C2a′ test matrix (7-base, CI required)
+
+**Layer 1 — Single-block, per-quantity (legs A + B on each Q*)**
+
+Grid tuples: `(median_weight, block_weight, already_generated, version[, tx_volume_avg])`.
+
+| Quantity | Leg A | Leg B |
+|----------|-------|-------|
+| **Q_subsidy** | Rust compose == C++ | Rust == spec/hand grid (ESF + penalty + release if 5-arg) |
+| **Q_miner_base** / **Q_staker_emission** | Rust compose == C++ split | Spec split of **Q_subsidy** |
+| **Q_full_emission** | Site-4 call shape == C++ | Same |
+| **Q_miner_coinbase** | Template/validate == C++ | Spec compose (split + burn miner leg) |
+
+**Layer 2 — Multi-block accumulation (legs A + B + cap invariant)**
+
+Two composed trajectories for N blocks (≥1000-height sequence recommended):
+
+**A-accum (C++ reproduction — miner-only loop, matches LMDB today):**
+
+```text
+ag := genesis_fixture
+for each block h:
+  prev := ag
+  Q_sub  := get_block_reward(..., prev, ...)          // connect weights/volume
+  Q_min  := emission_split(Q_sub, h).miner
+  ag     := min(MONEY_SUPPLY, prev + Q_min)             // :4946 shape → Q4_cpp
+```
+
+**B-accum (spec / sim oracle — full emission):**
+
+```text
+ag := genesis_fixture
+for each block h:
+  prev := ag
+  Q_full := Q_full_emission(prev, h)                    // match site-4 / sim stepping
+  ag     := min(MONEY_SUPPLY, prev + Q_full)            // Q4_spec
+```
+
+**Per-block cap invariant (same scenario):**
+
+```text
+assert Δ_main_to_ag + Δ_accrual_to_ag == Q_full_emission
+```
+
+using live C++ increments from connect replay (expected **fail** until 7-base fix).
+
+| Leg | Assertion |
+|-----|-----------|
+| **A-accum** | A-loop == `get_block_already_generated_coins(h)` after connect-path replay |
+| **B-accum** | B-loop == `shekyl-economics-sim` macro `already_generated` stepping (`engine.rs:166`) |
+| **Cap invariant** | Two-site / full-emission sum == **Q_full_emission**; **must pass on fixed chain** |
+| **A vs B** | **Equal after fix α.** Pre-fix: A = **`Q4_cpp`**, B = **`Q4_spec`** — expected divergence blocks cutover |
+
+**Do not** silence A vs B by modeling miner-only in the B oracle (mirror phantom-pass).
+**Do not** implement option β to make B pass while leaving the overwrite in place.
+
+**Layer 3 — Pop-replay (reorg coupling)**
+
+After N-block main-chain build capturing `already_generated` at tip:
+
+1. `pop_block` K times.
+2. Replay K blocks through `handle_block_to_main_chain`.
+3. Assert `get_block_already_generated_coins` **byte-identical** to pre-pop tip.
+
+Uses post-fix **α** semantics (`:4946` = full emission; site **4** pool-only).
+
+##### C2a′ commit deliverables (7-base)
+
+- [ ] **`validate_miner_transaction` caller grep** — single consumer `:4946` (pinned above)
+- [ ] **Fix α:** remove `:1608–1609` overwrite; `:4946` accumulates full `base_reward`
+- [ ] Layer 1 per-quantity; Layer 2 A-accum + B-accum + cap invariant; Layer 3 pop-replay
+- [ ] CI **required**; A-accum == B-accum == **`Q4_spec`** before 7-cutover merges
+
+##### C2a′ amendment record
+
+- **2026-05-28a:** Post-split `:4946` only; guard raw-subsidy phantom-pass.
+- **2026-05-28b:** Spec pins Reading 2; **`Q4_spec` vs `Q4_cpp`**; site **4** pool-only;
+  B-accum enforces spec/sim.
+- **2026-05-28c:** Root cause = site **1** overwrite `:1608–1609`; caller grep settled;
+  **fix α pinned** (un-overwrite; single-site `:4946`); option β rejected; cap invariant
+  = defense-in-depth.
 
 #### Segment 2i carry list (wider-substrate audit)
 
 | ID | Finding | Disposition |
 |----|---------|-------------|
 | **G1** | Cross-language single formation for `stake_ratio` + burn ActivityMetric entry shape | §5.3 + C1/C3 implementation |
-| **G2** | 0h dual-leg KAT (H1) + multi-block accumulation (H2) + commit-ordered cutover (H3) | C2a′ → C2c; see hazards above |
+| **G2** | 0h dual-leg KAT (H1) + multi-block accumulation (H2) + cutover gated on KAT (H3) | **7-base** (C2+C2a′) → **7-cutover** (C2c); **7-trait** off 7-base only — §6.2 item 1 |
 | **G3** | R5 fixture: when `total_staked > 0`, `stake_ratio` / burn fields must come from a run where `add_staked_outputs` populated the cache — **not** the stubbed-zero `get_stake_ratio` path | §5.4 `staking_state: live`; 2i verifies fixture metadata matches evidence from `blockchain.cpp` stake scan |
-| **G4** | Fee/burn input staleness at send time (`ActivityMetric` vs block-connect snapshot) | 2i audit (unchanged) |
-| **G5** | `parameters_snapshot` cache poison | 2i audit (unchanged) |
+| **G4** | Fee/burn input staleness at send time | **Converged §6.3** — display-only advisory; `as_of_height` + coherent bundle; `ActivityMetric::new` |
+| **G5** | `parameters_snapshot` cache poison | **Converged §6.3** — display-only; `CalibrationStamp { generation, params_digest }` |
 
 ---
 
@@ -874,8 +1150,313 @@ work is close-out + wider-substrate audit.
 
 | Segment | Scope | Status |
 |---------|-------|--------|
-| **2g** | Close-out — refresh §4/§6 binding matrix; Round 3 readiness gate | **Open** |
-| **2i** | Wider-substrate audit — §5.8 G1–G5; fee staleness; snapshot cache | **Open** (G1–G3 pre-pinned) |
+| **2g** | Close-out — §6.2 checklist; refresh §4 binding matrix + §7.X scope; Round 3 readiness gate | **Open** |
+| **2i** | Wider-substrate audit — §5.8 G1–G5; fee staleness; snapshot cache | **Closed** (§6.3 — G4/G5 converged 2026-05-28) |
+
+> **Segment ID note.** Round 1 segment **2g** (§5.6, R7 C0-only) is **closed**.
+> Round 2 segment **2g** (this table) is **close-out bookkeeping** — same label,
+> different round. In prose, prefer "Round 2 close-out (§6.2)" vs "Round 1
+> segment 2g (R7)" when ambiguity matters.
+
+### §6.2 Round 2 close-out checklist (segment 2g — in progress)
+
+Per [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) §5.3 closure
+criteria and PR 5 segment-2g precedent. **No new Round 1 dispositions** — reconcile
+what moved in Round 1 (C0, C2a′/C2c, H1–H3, §5.8 pins) against §4/§7.X and
+confirm Round 3 may open.
+
+#### Item 1 — Implementation PR scope: cut at the C2/C2c seam (disposition recorded)
+
+G2 ratified base-emission migration in V3.0 (§5.8). C2a′ and C2c enlarge scope
+beyond the wallet trait. **Decide before §7.X is treated as binding** what
+"PR 7" denotes for review, audit, and merge sequencing.
+
+**Three layers (fault line is not "consensus vs trait"):**
+
+| Layer | Commits | Role | Depends on |
+|-------|---------|------|------------|
+| **Keystone (7-base)** | **C2 + C2a′** (+ **fix α** in C++) | Canonical Rust `base_block_reward`; dual-leg /
+  multi-block harness (H1–H2); **`already_generated` accumulation correction**
+  (`:1608–1609` un-overwrite — small consensus semantics fix, not FFI cutover) | — |
+| **Consensus cutover (7-cutover)** | **C2c** | FFI + rewire all `get_block_reward` consumers +
+  delete duplicated C++ ESF body (H2 blast radius) | Keystone green (C2a′ incl. fix α) |
+| **Wallet trait (7-trait)** | **C0, C1, C2b, C3, C4, C5, C6, C7** | §2.7 surface +
+  `LocalEconomics` + fixtures + `E` slot | **C2 in crate only** — blind to C2c |
+
+**Load-bearing dependency pin:** C3 `LocalEconomics` calls `shekyl-economics`
+directly — needs **C2**, not **C2c**. **Do not place C2 inside the cutover PR**
+or the trait serializes behind the consensus audit for no technical reason.
+
+| Option | Shape | For | Against |
+|--------|-------|-----|---------|
+| **A — Bundled** | One implementation PR; commit order C2 → C2a′ → C2c → … | Minimal moving parts; G2 migration unchanged in one merge | Trait merge blocked on cutover audit; H3 = honor-system + reviewer map; mixed audit profile |
+| **B — Three-PR split (ratified)** | **7-base:** C2+C2a′ → `dev`. **7-cutover:** C2c off 7-base. **7-trait:** C0…C7 off 7-base; **no** dependency on 7-cutover | H3 hard by branch topology; isolated external-audit unit (7-cutover); independent rollback; trait not blocked on cutover | Three PRs to land (solo maintainer: parallelism benefit ≈ 0 — gate + audit + rollback isolation still load-bearing) |
+| **C — Two-PR "consensus first"** | 7a = C2+C2a′+C2c; 7b = trait off 7a | Isolates cutover vs trait labels | **Wrong seam:** bundles keystone with cutover; 7b needs C2 only but waits on cutover audit — same coupling as A, relabeled |
+| **D — Trait before cutover** | Trait + C2 without C2c; cutover follow-up | Unblocks trait early | **Rejected:** C++/Rust 0h asymmetry on chain — violates G2 migration; reopen only via explicit G2 amendment |
+
+**Decision record (Round 2 close-out §6.2 item 1 — 2026-05-28):**
+
+- [x] **Chosen option:** **B — three-PR split** (keystone → cutover ∥ trait)
+- [x] **Branches:** `feat/stage-1-pr7-economics-base` (7-base) →
+  `feat/stage-1-pr7-economics-cutover` (7-cutover) and
+  `feat/stage-1-pr7-economics-engine` (7-trait), both off post–7-base `dev`
+- [x] **Merge order:** 7-base → then **7-cutover and 7-trait in either order**
+  (siblings; no inter-PR dependency)
+- [x] **§7.0** table added; §5.8 G2 row + H3 enforcement updated
+- [x] **7-cutover PR description:** reviewer-map + rollback procedure below (H2
+  sites verified in tree at `dev` tip via `rg`, 2026-05-28)
+
+**7-base scope summary (amended 2026-05-28c — labeling refresh, not re-architecture):**
+
+Round 2 item 1 framed **7-base** as keystone + proof harness and **7-cutover** as the
+first **consensus-rule** touch (FFI swap + C++ ESF deletion). **Fix α** narrows that
+split without moving the C2/C2c seam:
+
+| What | Where | Notes |
+|------|-------|-------|
+| Rust canonical 0h + sim | **7-base** C2 | No chain behavior change |
+| Dual-leg / accumulation KAT | **7-base** C2a′ | Harness on `dev` |
+| **`already_generated` semantics** | **7-base** fix **α** | One-line C++ delete at `:1608–1609`; changes **stored `ag` trajectory** — small consensus footprint, **not** the FFI/formula cutover |
+| FFI + `get_block_reward` rewire + ESF body delete | **7-cutover** C2c | Unchanged blast radius |
+
+**Why fix α cannot wait for 7-cutover:** C2a′'s **A-accum == B-accum == `Q4_spec`**
+gate is a **7-base** required check. Without fix **α** in C++, that gate stays red
+until cutover — defeating the foundation-PR pattern (trait and cutover both branch off
+a proven keystone). Fix lands in **7-base** alongside the harness that enforces it.
+
+**Testnet:** pre-genesis posture — no live state to preserve; any testnet syncs from
+genesis post-fix **α** (no in-band migration).
+
+**Implementer scope for fix α:** delete `:1608–1609` overwrite only; coinbase bound
+already uses `miner_base_reward` locally (`:1598–1606` verified).
+
+#### PR 7-cutover — draft description (`feat/stage-1-pr7-economics-cutover`)
+
+Use as the GitHub PR body when opening **7-cutover** off post–**7-base** `dev`.
+
+---
+
+## Summary
+
+Consensus cutover (Stage 1 PR 7 **C2c**): replace the C++-native base block
+subsidy formula in `cryptonote::get_block_reward` with the canonical Rust
+primitive landed in **7-base** (C2 + C2a′), rewire every production caller,
+and delete the duplicated ESF body only after **7-base** is merged and the
+dual-leg KAT is green on `dev`.
+
+**Prerequisite:** **7-base** merged to `dev` (C2 + C2a′ required check). This PR
+must branch from that merge commit; C2a′ is an ancestor by branch topology (H3).
+
+**Out of scope:** wallet `EconomicsEngine` trait (7-trait), Phase 0 §2.7
+amendment, new economics parameters.
+
+## `07-consensus-atomic-cutovers.mdc` disposition
+
+| Criterion | Met? | Note |
+|-----------|------|------|
+| 1 — Consensus-rule boundary | **Yes** | Block subsidy bytes at accept, template, fee-check, and staker-accrual paths must agree chain-wide. |
+| 2 — Indivisible under flag decomposition | **Yes** | No flag stages “old subsidy on chain / new subsidy in wallet”; cutover is all-or-nothing once C++ body is deleted. |
+| 3 — Surface enumerated below | **Yes** | Grep-verified production call sites + accumulation coupling (this PR). |
+| 4 — Rollback procedure below | **Yes** | |
+
+Split packaging (7-base → 7-cutover ∥ 7-trait) is per
+[`STAGE_1_PR_7_ECONOMICS_ENGINE.md`](STAGE_1_PR_7_ECONOMICS_ENGINE.md) §6.2
+item 1; this PR is the isolated consensus artifact for external review.
+
+## H2 — Production `cryptonote::get_block_reward` call sites (verified)
+
+Enumeration command (must be re-run at PR open; paste output into PR if diff
+from below):
+
+```bash
+rg -n 'get_block_reward\(' \
+  src/cryptonote_basic/cryptonote_basic_impl.cpp \
+  src/cryptonote_core/blockchain.cpp \
+  src/cryptonote_core/cryptonote_tx_utils.cpp \
+  src/cryptonote_core/tx_pool.cpp
+```
+
+| # | File | Line | Function / path | Overload | Target quantity | Role |
+|---|------|------|-----------------|----------|-----------------|------|
+| **D** | `src/cryptonote_basic/cryptonote_basic_impl.cpp` | 77–122 | `cryptonote::get_block_reward` (4-arg) | def | **Q_subsidy** core | **Delete target:** ESF + penalty → Rust FFI |
+| **D′** | `src/cryptonote_basic/cryptonote_basic_impl.cpp` | 124–141 | `cryptonote::get_block_reward` (5-arg) | def | **Q_subsidy** (+ release) | Release wrapper (existing FFI) |
+| 1 | `src/cryptonote_core/blockchain.cpp` | 1583 | `Blockchain::validate_miner_transaction` | 5-arg | Out-param **`Q_full_emission`** (fix **α**); validates **Q3** locally | Remove `:1608–1609` overwrite |
+| 2 | `src/cryptonote_core/blockchain.cpp` | 3987 | `Blockchain::check_fee` | 4-arg | **Q_subsidy** | Mempool min-fee |
+| 3 | `src/cryptonote_core/blockchain.cpp` | 4071 | `Blockchain::get_dynamic_base_fee_estimate_2021_scaling` | 4-arg | **Q_subsidy** | Fee estimate RPC |
+| 4 | `src/cryptonote_core/blockchain.cpp` | 5021 | `handle_block_to_main_chain` (post-`add_block`) | 4-arg | **Q2** → pool only | Unchanged by fix **α** |
+| 5 | `src/cryptonote_core/cryptonote_tx_utils.cpp` | 100 | `construct_miner_tx` | 5-arg | **Q_subsidy** → **Q3** | Template coinbase |
+| 6 | `src/cryptonote_core/tx_pool.cpp` | 1630 | `tx_memory_pool::fill_block_template` | 5-arg | **Q_subsidy** (+ fees) | Empty baseline |
+| 7 | `src/cryptonote_core/tx_pool.cpp` | 1684 | `tx_memory_pool::fill_block_template` | 5-arg | **Q_subsidy** (+ fees) | Per-tx optimization |
+| **Acc** | `src/cryptonote_core/blockchain.cpp` | 4946 | `handle_block_to_main_chain` | — | **`Q4_spec`** after fix **α** | Single LMDB increment site |
+
+Quantity definitions: §5.8 C2a′ grid spec (`Q0`–`Q4`).
+
+**Public API (unchanged signatures):** `src/cryptonote_basic/cryptonote_basic_impl.h` lines 66–67.
+
+### Explicitly out of H2 blast radius (grep false positives)
+
+| Symbol | Location | Why excluded |
+|--------|----------|--------------|
+| `core_rpc_server::get_block_reward(const block&)` | `src/rpc/core_rpc_server.cpp:2317` | Sums `miner_tx.vout` amounts — **not** `cryptonote::get_block_reward` |
+| `miner::get_block_reward()` | `src/cryptonote_basic/miner.h:91` | Cached template field accessor |
+| `lMiner.get_block_reward()` | `src/rpc/core_rpc_server.cpp:1465` | Miner object accessor |
+
+Tests under `tests/` that call `cryptonote::get_block_reward` directly remain
+regression witnesses; update only if FFI changes observable behavior (expected:
+unchanged vs C2a′ grid).
+
+## H2 — `already_generated_coins` accumulation coupling (verified)
+
+See §5.8 **C2a′ grid spec** for normative tests. Summary:
+
+| Site | File:line | Mechanism |
+|------|-----------|-----------|
+| **A** | `blockchain.cpp:4927–4946` | **`ag` += out-param from site **1** — full emission after fix **α**; miner-only today (overwrite bug) |
+| **B** | `blockchain.cpp:5021–5052` | Site **4**: pool only — **unchanged** by fix **α** |
+| **C** | `blockchain.cpp:799–824` | Pop reverses staker accrual keyed to site **4** |
+| **D** | `switch_to_alternative_blockchain` | Pop + replay → re-exercises **A** |
+| **E** | `blockchain_db/*` | Pop drops top block; prev height **`ag`** authoritative |
+
+**Spec disposition (pinned):** `already_generated` must track **full block emission**
+(`Q4_spec`). **Fix α (pinned):** remove site **1** overwrite `:1608–1609`; `:4946`
+single-site increment; site **4** unchanged. **7-base** before **7-cutover**.
+
+**C2a′ (7-base):** Layer 2 A-accum + B-accum converge after fix **α**; cap invariant
+defense-in-depth; Layer 3 pop-replay.
+
+## Implementation scope (C2c commits)
+
+1. Add FFI + `economics.h` wrappers so **`get_block_reward` preserves per-site target
+   quantities** (§5.8 quantity map) — not a uniform `shekyl_base_block_reward` drop-in.
+2. Add thin wrapper(s) in `src/shekyl/economics.h` (same pattern as
+   `compute_fee_burn` / `compute_emission_split`).
+3. Rewire **D/D′** so the ESF duplicate in `cryptonote_basic_impl.cpp` is
+   **deleted**; all behavior flows through Rust canonical from **7-base**.
+4. Touch sites **1–7** only if needed for includes/types — **no logic drift**.
+5. PR description cites **7-base merge commit** (and C2a′ commit hash therein).
+
+## H3 gate
+
+- [ ] **7-base** is merged to `dev` before this branch is opened.
+- [ ] CI: C2a′ dual-leg + multi-block accumulation targets are **required checks**
+  on **7-base** and remain green on `dev` when this PR merges.
+- [ ] This PR does not land until C2a′ is an **ancestor** (branch topology).
+
+## Reviewer map
+
+| Subsection | Review priority | Files |
+|------------|-----------------|-------|
+| **Consensus-affecting** | **Primary** | `cryptonote_basic_impl.cpp` (D/D′ deletion), `economics.h`, `shekyl_ffi.*`, any change at blockchain.cpp **1,2,3,4**, `cryptonote_tx_utils.cpp` **5**, `tx_pool.cpp` **6,7** |
+| **Mechanical** | Secondary | Include wiring, `CMakeLists.txt` / crate linkage if touched |
+| **Tests** | Verify unchanged vs C2a′ | `tests/unit_tests/block_reward.cpp`, `tests/unit_tests/mining_parity.cpp` — run, don't rewrite expectations without substrate finding |
+
+## Rollback procedure
+
+If consensus divergence is observed post-merge (subsidy mismatch, fee gate
+false rejects, accumulation drift, reorg failure):
+
+1. **Revert the 7-cutover merge commit on `dev`** (restores C++ `get_block_reward`
+   body and pre-cutover call graph). **Do not revert 7-base** unless the Rust
+   primitive itself is wrong (separate bisect).
+2. **Minimal file rollback** (if revert is conflicted): restore these paths from
+   parent of the 7-cutover merge:
+   - `src/cryptonote_basic/cryptonote_basic_impl.cpp` (full `get_block_reward`
+     implementations)
+   - `src/shekyl/economics.h` (remove `shekyl_base_block_reward` wrapper if added)
+   - `rust/shekyl-ffi/src/lib.rs` + `src/shekyl/shekyl_ffi.h` (remove new FFI
+     exports)
+   - Any `blockchain.cpp` / `tx_pool.cpp` / `cryptonote_tx_utils.cpp` hunks that
+     changed behavior (expected: none beyond impl delegation)
+3. **Verify rollback:** run C2a′ cross-check targets (still on `dev` from
+   **7-base**) — leg A must pass again against restored C++.
+4. **Chain recovery:** operators on a divergent tip must re-sync; no in-band
+   migration (pre-genesis posture).
+
+**7-trait rollback is independent** — reverting this PR does not revert wallet
+trait work on a sibling branch.
+
+## Test plan
+
+- [ ] C2a′ required CI green on `dev` from **7-base** (pre-merge gate for 7-cutover)
+- [ ] Layer 1: per-quantity KAT (Q_subsidy … Q_miner_coinbase), legs A + B
+- [ ] Fix **α** (`:1608–1609` un-overwrite) + Layer 2 A/B-accum converge + cap invariant
+- [ ] Layer 3: pop-replay grid (K-block pop + replay, `already_generated` identical)
+- [ ] `tests/unit_tests/block_reward`, `tests/unit_tests/mining_parity`
+- [ ] `tests/core_tests/block_reward` (accumulation / construct_miner_tx paths)
+- [ ] Manual: mine block on regtest/stagenet — coinbase accepts, fee estimate
+  RPC sane, `pop_block` + reorg path (staker accrual reversal at
+  `blockchain.cpp:799–824`) without pool/burn corruption
+
+## Design reference
+
+- [`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](STAGE_1_PR_7_ECONOMICS_ENGINE.md) §5.8 (H1–H3), §6.2 item 1, §7.0
+- [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) — base emission migration item
+
+---
+
+
+**Bundled-A remains defensible** for minimal pre-genesis moving parts if threat
+profile shifts — but **C must stay rejected** (asymmetry window), and **wrong-seam
+two-PR (old "consensus first") stays rejected** regardless.
+
+#### Item 2 — §4 Phase 0 binding matrix refresh
+
+Reconcile §4.4 against Round 1 + §5.8. Confirm every Phase 0 row is
+**binding-form-pinned** (type + module + notes). Additions since pre-enumeration:
+
+| ID | Round 1 / §5.8 delta | Binding pin status |
+|----|----------------------|-------------------|
+| **C0** | §2.7 rename (`base_emission_at`, `burn_amount`) | Locked §5.1 — Phase 0 co-land |
+| **C2a′** | §5.8 C2a′ grid spec: C2 + harness + fix **α**; A/B-accum **`Q4_spec`** | §5.8 — **7-base** |
+| **C2c** | FFI + full blast radius (H2 sites) + C++ deletion post–7-base (H3) | §5.8 — **7-cutover** only |
+| **0h / 0h′** | Pair locked §5.2 B.2 | Unchanged |
+| **G3** | Fixture `staking_state: live` when `total_staked > 0` | §5.4 — metadata pin |
+
+- [ ] §4.4 table updated with C2a′/C2c as implementation commits (cross-ref §7.X)
+- [ ] No orphan Phase 0 IDs (0a–0j) without module path
+- [ ] §2 scope bullets (§2.1) still match §4.4 — no drift
+
+#### Item 3 — Inside-the-fence polish (non-blocking, land in 2g if cheap)
+
+Closed Round 1 dispositions; doc-only:
+
+- [ ] **R3 read contract** (§5.2 B.8, line ~518): fold "wording polish open" into
+  §2.7-facing prose or mark explicitly **normative, polish closed**
+- [x] **R2 `CalibrationStamp` / `as_of` field shape:** pinned §5.3 + §6.3 G5 —
+  `generation: u32`, `params_digest: [u8; 32]`; canonical struct digest; no §2.7 amendment
+
+#### Item 4 — §7.X commit decomposition vs item 1
+
+- [x] §7.0 three-PR table reflects item 1 (7-base / 7-cutover / 7-trait)
+- [ ] Per-PR commit lists match §7.0; no C2 on 7-cutover or 7-trait-only branches
+- [ ] C4 remains **supplementary**; consensus 0h gate = **7-base** C2a′ only (§5.8)
+
+#### Item 5 — §6 review checklist (implementation PR gate)
+
+Fill before Round 3 closes (PR 5 precedent — may start in 2g, finalize after 2i):
+
+| Check | Enumeration source |
+|-------|-------------------|
+| Binding-check matrix | §4.4 + `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.7 verbatim copy (B.9) |
+| Test-substrate preservation | `RecordedChainFixture` schema §5.4; C2a′ legs A/B; no `MockEconomics` |
+| Call-site sweep | R6 zero V3.0 `Engine` consumers; C2c `get_block_reward` grep (H2) |
+| Performance gates | `PERFORMANCE_BASELINE.md` deferred benches; Stage 0 harness names §3.8 |
+| PR 6 coordination | `Engine<…>` `E`/`F` slot merge §6.1 |
+
+- [ ] Checklist section stub → filled (or pointer to filled subsection post-2i)
+
+#### Item 6 — Round 3 readiness gate
+
+All must be true before §7.X is **closed** and Phase 1 branch cuts:
+
+- [x] Item 1 scope decision recorded (three-PR split, §6.2 item 1)
+- [ ] §4 Phase 0 binding matrix refreshed (item 2)
+- [x] Round 2 segment **2i** closed — G4/G5 converged; G1–G3 carry-only confirmed, not reopened
+- [x] §2.7 surface still **C0-only** (R7) — G4/G5 are implementor-side layout only
+- [x] §9 banner: Round 2 close-out + 2i disposition lines added
+- [ ] FOLLOWUPS amended only for item 1 split or deferred work — not for G1–G3
+
+**Round 3 opens when:** items 1–2 complete and item 6 checklist satisfied after 2i.
 
 ### §6.1 PR 6 / PR 7 merge
 
@@ -883,9 +1464,251 @@ Coordinate `Engine<…>` type-parameter edit when both land.
 
 ---
 
-## §6 Pre-Round-3 wider-substrate audit (PLACEHOLDER)
+## §6.3 Round 2 segment 2i — wider-substrate audit (2026-05-28)
 
-Runs after **2g**, before §7.X. Yield: G1–Gn in segment **2i**.
+**Status:** **Closed** 2026-05-28 — G4 and G5 converged; G1–G3 carry-only (no reopen).
+
+### Pre-pinned carry confirmation (G1–G3)
+
+| ID | 2i question | Disposition |
+|----|-------------|-------------|
+| **G1** | Cross-language single formation for `stake_ratio` + burn inputs | **Carry** — §5.3 R1 + C1/C3; `calc_stake_ratio` / `calc_burn_pct_from_activity` in `shekyl-economics`; C++ passes FFI-formed ratio only |
+| **G2** | Cutover discipline | **Carry** — §5.8 H1–H3 + §6.2 three-PR split + fix **α** |
+| **G3** | Fixture `staking_state: live` when `total_staked > 0` | **Carry** — §5.4; 2i confirms metadata contract only |
+
+No substrate finding reopens G1–G3.
+
+---
+
+### G4 — `ActivityMetric` staleness vs consensus burn snapshot (CONVERGED)
+
+#### Audit question
+
+When a wallet calls `burn_amount(fee, activity)` at send time, can `ActivityMetric`
+fields be **stale vs the block-connect snapshot** consensus uses? What is the bounded
+failure mode, and what caller obligation must rustdoc pin?
+
+#### Evidence trace (consensus — verified 2026-05-28)
+
+**Authoritative fee-burn path for coinbase acceptance** — `validate_miner_transaction`
+(`blockchain.cpp:1578–1596`):
+
+| Input | Source at height *h* |
+|-------|----------------------|
+| `tx_volume` | `get_tx_volume_avg(h)` — mean tx count over **`SHEKYL_TX_VOLUME_WINDOW`** (720) blocks `[h−720, h)` |
+| `circulating_supply` | `already_generated_coins` passed in (= prev-block LMDB `ag`, not `ag − total_burned`) |
+| `stake_ratio` | `get_stake_ratio(h)` — incremental stake scan + `shekyl_calc_stake_ratio` |
+| `total_fees` | Block's summed tx fees (`fee_summary`) |
+
+**Secondary connect burn** — site **4** staker accrual (`blockchain.cpp:5027–5028`):
+
+```cpp
+compute_fee_burn(fee_summary, 0, prev_already_generated, stake_ratio_at_height, …)
+//                              ^ tx_volume forced to 0
+```
+
+Site **4** is **not** the wallet `burn_amount` oracle. With `tx_volume = 0`,
+`calc_burn_pct` → 0 → fee pool from burn is zero; staker inflow at site **4** is
+dominated by **emission split**, not fee-burn pool. Wallet fee estimates must
+trace **`validate_miner_transaction`**, not site **4**.
+
+**Daemon `/get_info` today** (`core_rpc_server.cpp:585–592`) mirrors the **validate**
+shape (not site **4**): `get_tx_volume_avg(height)`, `already_generated` at
+`height−1`, `get_stake_ratio(height)`, `shekyl_calc_burn_pct(...)`.
+
+**Wallet path today:** no `EconomicsEngine` / `burn_amount` production caller (§5.5
+R6). GUI reads `burn_pct` from `/get_info` for display only (`shekyl-gui-wallet`
+`daemon_rpc.rs`).
+
+#### Staleness axes (load-bearing)
+
+| Axis | Mechanism | Effect on `burn_amount` |
+|------|-----------|-------------------------|
+| **Height skew** | Wallet reads tip *H*; tx mines at *H+k* | `tx_volume_avg`, `stake_ratio`, `circulating_supply` all height-indexed — each block advance can change burn_pct |
+| **Sync lag** | Orchestrator uses cached daemon snapshot while chain moves | Same as height skew; unbounded if refresh never happens |
+| **Window roll** | 720-block `tx_volume` window drops old blocks each height | Slow drift; step change when window boundary crosses |
+| **Post–fix-α `ag` step** | Full-emission `ag` increments faster than pre-fix | `circulating_supply / total_supply` term moves; wallet must use current prev-`ag` |
+| **Mempool / fee** | Wallet estimates burn on proposed fee; consensus uses actual included fee | Fee input is intentional user choice — not staleness; burn scales linearly in fee |
+
+**Not a theft surface:** consensus recomputes burn independently at accept
+(`STAKER_REWARD_DISBURSEMENT.md`, §5.3 R1).
+
+**Threat-model pivot (2026-05-28 design comments):** the 2026-04-08 anchor
+("wrong daemon → failed send or wrong display") is **too strong for G4**. Stale
+wallet `ActivityMetric` → **inaccurate advisory display only** at V3.0. The
+user's tx does not fail on burn miscalculation; the miner's block fails if
+coinbase split is wrong. G4 pins the **contract for the eventual display/UI
+consumer**, not send gating.
+
+#### Converged disposition (G4 — Round 1 convergence, 2026-05-28)
+
+**Accept T0/T1 drift** under explicit height binding and consumer-side staleness
+policy. **Do not** add tolerance/range to `burn_amount` (trait stays a point
+estimate). **Do not** add consensus-side wallet ActivityMetric validation at V3.0.
+
+**Structural pins for C1 / C3 / rustdoc (7-trait):**
+
+1. **`ActivityMetric` + `as_of_height: u64`** — fourth raw integer (R1 preserved);
+   R7 remains C0-only (implementor-side layout). `as_of_height` visible to
+   consumers — no hiding for shoulder-surfing (activity disclosure dominates).
+2. **`ActivityMetric::new(...) -> Result<Self, ActivityInvariantViolation>`** —
+   in `shekyl-economics`; validates **internal-consistency** invariants only:
+   `circulating_supply ≤ MONEY_SUPPLY`, `total_staked ≤ circulating_supply`,
+   height sanity. **Coherence** ("these four values are one chain view at
+   `as_of_height`") is a **constructor-caller obligation** documented in rustdoc:
+   production from non-atomic reads of separate sources violates the contract.
+   **No** `#[cfg(test)]` backdoor constructor.
+3. **`EconomicsError::ActivityInvariantViolation`** — implementor-side discriminator
+   for which invariant failed.
+4. **`burn_amount` rustdoc** — returns burn consensus would compute at
+   `activity.as_of_height`; actual on-chain burn at block-connect may differ;
+   consumer applies staleness policy. Oracle path = **`validate_miner_transaction`
+   input shape** (`tx_volume_avg`, prev-`ag`, `stake_ratio` at target height),
+   **not** site **4** (`tx_volume = 0`).
+5. **`circulating_supply` quantity** — prev-block **`already_generated`** at
+   `as_of_height` (same as `/get_info` today). Not net-of-burn unless consensus
+   amends.
+6. **`tx_volume` window** — rustdoc cites **`SHEKYL_TX_VOLUME_WINDOW = 720`** and
+   mean-over-window semantics matching `get_tx_volume_avg`.
+7. **Genesis guard** — `as_of_height = 0`, `circulating_supply = 0` →
+   `stake_ratio = 0` in `calc_burn_pct` → `burn_amount` = 0 (C3 one-liner, not
+   `Err` for valid genesis input).
+8. **Errors at two altitudes** — structural impossibilities → `Err` from `new()`;
+   lying-but-invariant-passing daemon input → display-only wrong estimate
+   (threat model absorbs explicitly). Snapshot incoherence from three sequential
+   RPCs must not reach `new()` — producer uses atomic upstream read.
+9. **No `RecordedActivityFixture` type** — tests use `Vec<ActivityMetric>` JSON +
+   expected burn outputs; same type as production debug logs.
+10. **Bundle architecture** — wallet actor produces `ActivityMetric`;
+    `EconomicsEngine` trusts by type (no re-validation). Upstream = local LMDB
+    mirror (one read txn) **or** daemon atomic endpoint (not three RPCs). Which
+    upstream is post–PR-7 actor-mesh work; both paths satisfy the trait surface.
+
+**FOLLOWUPS (downstream of PR 7 — see `docs/FOLLOWUPS.md`):**
+
+| Entry | Scope |
+|-------|--------|
+| **Wallet `ActivityMetric` producer actor** | Stage 4 actor mesh: designated chain-mirror owner performs single-transaction read, validates, constructs bundle. **Unconditional** (post-V3.0). |
+| **Daemon atomic activity snapshot RPC** | If producer upstream is daemon RPC: one endpoint returning all four fields in one LMDB read txn (`get_activity_at_height` or equivalent). Three separate RPCs **not** equivalent. **Conditional** — moot if upstream is local mirror only. |
+
+**Reopen clause:** Re-evaluate if (a) a V3.0 production caller caches
+`ActivityMetric` across an await without height check, or (b) consensus burn inputs
+change (e.g. circulating definition moves to net-of-burn) — requires §2.7 amendment +
+G4 re-audit.
+
+---
+
+### G5 — `parameters_snapshot` cache poison (CONVERGED)
+
+#### Audit question
+
+Can a caller cache `parameters_snapshot()` across calibration regen or param-epoch
+change and **silently use poisoned constants** despite `as_of`?
+
+#### Evidence trace (verified 2026-05-28)
+
+| Fact | Source |
+|------|--------|
+| **V3.0 production consumers** | **Zero** (§5.5 R6) — trait + tests only; narrower than G4 (no fee-construction consumer named) |
+| **Constants source** | `config/economics_params.json` → compile-time: C++ via
+  `cmake/generate_economics_params.py`; Rust via `shekyl-economics/build.rs`
+  (`EconomicParams::default()` from generated constants) |
+| **Runtime regen** | Changing JSON requires **rebuild** (both languages). No in-process
+  hot reload at V3.0 |
+| **§2.7 contract** | `parameters_snapshot` rustdoc: **do not cache beyond immediate
+  use**; capture at start of logical operation if needed (`V3_ENGINE_TRAIT_BOUNDARIES.md`
+  §2.7) |
+| **`LocalEconomics` V3.0 shape** | Stateless pure wrappers — no mutable param cache
+  (§2.7 Stage 1 note) |
+| **Fixture staleness guard** | `RecordedChainFixture.params_digest` + `calibration_generation`
+  (§5.4) — same lineage as snapshot `CalibrationStamp` |
+
+#### Threat-model pivot (2026-05-28 design comments)
+
+Snapshot contents are **constants** (ESF, money supply, burn coefficients, tiers).
+At V3.0 they do not change within a deployed binary. A cached snapshot is stale only
+relative to a **later calibration generation not yet deployed**, or at V3.x when
+adaptive burn moves coefficients.
+
+**Consequence envelope:** same as G4 — **display-only advisory**. Cached snapshot →
+wallet shows wrong parameters or estimates burn against stale coefficients. Consensus
+is authoritative; no theft, no failed send. Bound is **tighter than G4** because no
+fee-construction consumer exists or is named at V3.0.
+
+**Load-bearing question:** not "what damage does poisoned cache do" (wrong display,
+bounded) — but **what makes poisoning detectable** for the consumer that would care?
+
+#### Converged disposition (G5 — Round 1 convergence, 2026-05-28)
+
+**Accept caller-cache violation** at V3.0 under existing §2.7 no-cache discipline +
+structured `CalibrationStamp`. Consumer applies own staleness policy; trait does not
+gate on freshness.
+
+**`CalibrationStamp` detection surface (mandatory, C1 / 0d):**
+
+| Field | Type | Answers |
+|-------|------|---------|
+| `generation` | `u32` | "Is this snapshot from the current calibration epoch?" Cheap compare; human-readable logging ("estimate from generation 7; current is 8"). |
+| `params_digest` | `[u8; 32]` | "Is this snapshot bit-exact identical to current?" Blake2b-256 of **canonical-serialized resolved `EconomicParams`** (encoding pinned in `build.rs` — **not** raw JSON bytes). Catches generation increment with no param change; catches silent serialization drift. |
+
+**Consumer comparison rule (rustdoc):** stale if `generation` differs (likely real
+change); suspicious if `generation` matches but `params_digest` differs (build-system
+bug at V3.0, not an attack vector).
+
+**Pre-provision-for-flexibility:** both fields pass the bar — named consumers and
+named failure modes (`generation` → display epoch label / silent-stale-coefficient-display;
+`params_digest` → config-pipeline integrity / JSON-authority drift not caught by
+consensus static_asserts).
+
+**7-trait obligation (implementor-side, R7 C0-only):**
+
+1. **`parameters_snapshot()`** returns `EconomicsParametersSnapshot { ..., as_of:
+   CalibrationStamp }` with both fields always populated from current build-time
+   loader (`EconomicParams::default()` or equivalent).
+2. **`LocalEconomics::parameters_snapshot`** — build fresh **on every call**; **no**
+   instance-level snapshot cache at V3.0.
+3. **C7 rustdoc** — repeat §2.7 no-cache rule; cite G5; consumer must compare
+   `as_of` before trusting a cached copy.
+4. **Display-only paths** (GUI `/get_info` economics fields) — out of trait scope.
+
+**Rejected at V3.0:** `Arc<EconomicsParametersSnapshot>` actor mailbox (Stage 4);
+process-wide singleton cache; refresh heuristic without `as_of` check; tolerance/range
+on trait surface.
+
+**Cross-reference with G4:** at V3.0, `CalibrationStamp.generation` and
+`ActivityMetric.as_of_height` are **formally independent** (configuration epoch vs
+chain height). V3.x adaptive burn may introduce height-bound calibration epochs
+(`generation_active_at(height)`) — **rustdoc note only at V3.0**; no structural
+coupling between the two staleness surfaces in PR 7.
+
+**Reopen clause:** Mandatory structural mitigation when **first production caller**
+caches snapshot beyond a single logical operation **or** V3.x adaptive-burn adds mutable
+state to `LocalEconomics` — then require explicit `as_of` comparison or engine-held
+generation counter (design round, not drive-by cache).
+
+---
+
+### G4 / G5 threat-model through-line (2i closer)
+
+| | **G4 `ActivityMetric`** | **G5 `ParametersSnapshot`** |
+|--|-------------------------|------------------------------|
+| **Threat envelope** | Display-only advisory; consensus authoritative | Display-only advisory; constants don't gate anything at V3.0 |
+| **Staleness detection** | `as_of_height: u64` (mandatory) | `CalibrationStamp { generation, params_digest }` (mandatory) |
+| **Validation altitude** | Internal-invariant in `new()` + producer-coherence | Build-time generation tag; runtime digest = defense-in-depth |
+| **Consumer obligation** | Apply own staleness policy (display gate, warn, refuse) | Apply own staleness policy (typically: refresh if `generation` differs) |
+| **Caller bypass** | `new()` always validates; no `#[cfg(test)]` backdoor | `parameters_snapshot()` always returns current; stamp always populated |
+
+---
+
+### 2i close checklist
+
+- [x] G4 disposition converged (§6.3 — 2026-05-28 design comments integrated)
+- [x] G5 disposition converged (§6.3 — 2026-05-28 design comments integrated)
+- [x] G1–G3 carry-only confirmed (no edits)
+- [x] §6.2 item 6 + §9 banner updated on close
+- [x] C1/C3/C7 rustdoc hooks reflected in §7.1 commit text (CalibrationStamp fields; G4/G5 rustdoc pins)
+
+**Segment 2i → Closed.** Round 3 readiness item 6 unblocks (pending items 2, 4, 5 in §6.2).
 
 ---
 
@@ -894,13 +1717,31 @@ Runs after **2g**, before §7.X. Yield: G1–Gn in segment **2i**.
 **Deviation:** No diagnostic enum; no secondary traits; no `MockEconomics`; no
 `FaultInjecting` at V3.0.
 
+### §7.0 Implementation PR split (§6.2 item 1 — ratified 2026-05-28)
+
+| PR | Branch (conventional) | Commits | Merge prerequisite |
+|----|----------------------|---------|-------------------|
+| **7-base** | `feat/stage-1-pr7-economics-base` | **C2**, **C2a′** (incl. fix **α** `:1608–1609`) | Post–Phase-0 `dev` |
+| **7-cutover** | `feat/stage-1-pr7-economics-cutover` | **C2c** | **7-base** on `dev` (C2a′ ancestor) |
+| **7-trait** | `feat/stage-1-pr7-economics-engine` | **C0**, **C1**, **C2b**, **C3**, **C4**, **C5**, **C6**, **C7** | **7-base** on `dev` — **not** 7-cutover |
+
+**7-cutover** and **7-trait** are **siblings** after 7-base; merge order between
+them is unconstrained. Stage 1 economics closeout (§7.1) requires **all three**
+on `dev`. External cryptographer review targets **7-cutover** as the isolated
+consensus-subsidy artifact.
+
+**Bundled fallback (option A):** single branch carries all commits below in H3
+order — use only if item 1 disposition is explicitly reopened.
+
+### §7.1 Commit inventory (by ID)
+
 | Commit | Scope |
 |--------|--------|
 | **C0** | Phase 0 §2.7 naming amendment (`base_emission_at`, `burn_amount`) + doc co-land |
-| **C1** | `EconomicsError`, `ActivityMetric` (§5.3 R1), `EconomicsParametersSnapshot` + `CalibrationStamp` (§5.3 R2) |
+| **C1** | `EconomicsError` (+ `ActivityInvariantViolation`), `ActivityMetric` + `::new` (§5.3 R1, §6.3 G4), `EconomicsParametersSnapshot` + `CalibrationStamp { generation, params_digest }` (§5.3 R2, §6.3 G5); canonical `EconomicParams` digest encoding in `build.rs` |
 | **C2** | `shekyl-economics`: `base_block_reward` + `projected_already_generated` + `calc_stake_ratio` + `calc_burn_pct_from_activity`; sim rewired to 0h |
-| **C2a′** | Dual-leg KAT (H1): leg A Rust==C++ `get_block_reward`; leg B Rust==spec/sim oracle; **multi-block** `already_generated` accumulation grid (H2). Dedicated commit; CI required check |
-| **C2c** | `shekyl_base_block_reward` FFI; rewire **all** `get_block_reward` consumers + accumulation sites (H2); target = `economics.h` thin-wrapper shape; delete C++ formula only after C2a′ hash cited in message (H3) |
+| **C2a′** | **§5.8 C2a′ grid spec:** harness (Layer 1–3); **fix α** (`:1608–1609` delete — bound check already on `miner_base_reward`); A/B-accum converge on **`Q4_spec`**; cap invariant defense-in-depth | **7-base** |
+| **C2c** | `shekyl_base_block_reward` FFI; rewire **all** `get_block_reward` consumers + accumulation sites (H2); target = `economics.h` thin-wrapper shape; delete C++ formula only after C2a′ on `dev` (H3) |
 | **C2b** | `ChainEconomicsSource` + production adapter |
 | **C3** | `EconomicsEngine` + `LocalEconomics` impl; `CALIBRATION-PENDING` doc comments |
 | **C4** | `RecordedChainFixture` (§5.4) + engine-vs-sim differential (supplementary only); consensus 0h gate is **C2a′** dual-leg + accumulation (H1–H2), not C4 |
@@ -908,9 +1749,10 @@ Runs after **2g**, before §7.X. Yield: G1–Gn in segment **2i**.
 | **C6** | Benches + `PERFORMANCE_BASELINE.md` |
 | **C7** | Docs: CHANGELOG, rustdoc, design doc Phase 1 landed; calibration banners |
 
-### §7.1 Stage 1 closeout
+### §7.2 Stage 1 closeout
 
-After **PR 6 + PR 7** implementation merge — not either alone.
+After **PR 6** and **all three PR 7 implementation PRs** (7-base, 7-cutover,
+7-trait) merge — not any single PR alone.
 
 ---
 
@@ -923,7 +1765,7 @@ After **PR 6 + PR 7** implementation merge — not either alone.
 | 2 | Narrow `ChainEconomicsSource` | Wide observer-feed pre-provision |
 | 3 | Real-path fixtures | Mock-driven false confidence |
 | 4 | Calibration vs structural split | "Adjust on testnet" → accidental fork |
-| 5 | `as_of` temporal projection | Silent snapshot cache poison |
+| 5 | `as_of` / `CalibrationStamp` temporal projection | Silent snapshot cache poison (G5) |
 | 6 | Daemon trust documented | False "N/A adversary" claim |
 | 7 | Scope guard §2.7 | Wallet enforcement illusion |
 
@@ -938,6 +1780,10 @@ After **PR 6 + PR 7** implementation merge — not either alone.
 | **Round 1 segment 2b drafted** | `Round 1 segment 2b drafted 2026-05-27; §2.7 naming amendment locked (current_emission→base_emission_at, burn_fraction→burn_amount, C0); base_emission_at = pure shekyl-economics projection under (A), reads nothing from ChainEconomicsSource; source shrunk to one read (active_weighted_stake).` |
 | **Round 1 closed** | `Round 1 closed 2026-05-27; segments 2a/2c/2d/2g disposed. ActivityMetric = raw integer observables (calc_burn_pct owns ratios). Snapshot = rulebook constants + as_of (not dashboard). RecordedChainFixture = sim-recorded, params-digest-pinned, two-array (differential vs neutral milestones). No V3.0 consumer call sites. §2.7 surface changes are C0-only.` |
 | **Round 2 substrate pins** | `§5.8 2026-05-27: migration ratified V3.0; H1 dual-leg KAT, H2 multi-block accumulation + full blast radius, H3 commit-ordered cutover; G3 add_staked_outputs vs stub.` |
+| **Round 2 close-out item 1** | `§6.2 2026-05-28: three-PR split — 7-base (C2+C2a′) → 7-cutover (C2c) ∥ 7-trait (C0–C7 off base only); H3 hard via branch topology; wrong-seam two-PR and trait-before-cutover rejected.` |
+| **C2a′ grid amended** | `§5.8 2026-05-28c: root cause site 1 overwrite :1608–1609; fix α pinned; option β rejected; caller grep = :4946 only.` |
+| **7-base scope amended** | `§6.2 2026-05-28c: 7-base = C2 + C2a′ harness + fix α (small ag semantics); cutover = FFI/ESF delete only; bound check verified on miner_base_reward.` |
+| **2i closed** | `§6.3 2026-05-28: segment 2i closed. G4: display-only advisory; ActivityMetric.as_of_height + ::new; coherent bundle. G5: display-only; CalibrationStamp { generation: u32, params_digest: [u8;32] }; canonical struct digest; independent from as_of_height at V3.0. G1–G3 carry-only.` |
 
 ---
 
