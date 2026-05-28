@@ -156,6 +156,7 @@ pub mod capability;
 pub mod daemon;
 pub(crate) mod diagnostics;
 pub mod error;
+pub(crate) mod sealing_keys;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_ledger;
 #[cfg(any(test, feature = "test-helpers"))]
@@ -193,6 +194,7 @@ pub use error::{
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
+pub use sealing_keys::StateWrapKey;
 pub use local_ledger::LocalLedger;
 pub use local_pending_tx::LocalPendingTx;
 pub use local_refresh::LocalRefresh;
