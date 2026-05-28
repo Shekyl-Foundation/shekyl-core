@@ -1,10 +1,9 @@
 # Stage 1 PR 7 — `EconomicsEngine` extraction — design
 
-**Status.** **Round 0 closed (2026-05-27).** Round 1 **in progress** — segment
-**2b drafted** (2026-05-27): §2.7 naming amendment locked (C0);
-`base_emission_at` = pure `shekyl-economics` projection under interpretation
-**(A)**; `ChainEconomicsSource` shrunk to **one read**. Segments **2a**, **2c**,
-**2d**, **2g** pending. Planning doc branch:
+**Status.** **Round 0 closed (2026-05-27).** **Round 1 closed (2026-05-27)** —
+segments 2a–2d and 2g disposed; 2b drafted earlier same day. Round **2** open
+(2i wider-substrate audit after 2g close-out in Round 2 segment plan). Planning
+doc branch:
 `feat/stage-1-pr7-economics-engine-design` → PR to `dev`. Opened from `dev`
 tip `2cf4cbfde` (post–PR #82 `PersistenceEngine` design merge). This document
 follows [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) and cites
@@ -147,8 +146,8 @@ release-multiplier / activity inputs) **without wiring them now**.
    accrual state. `already_generated_coins()` is **not** on the source at V3.0
    (interpretation **(A)** — projection is crate-side; §5.2). **No**
    `LedgerEngine` amendment; **no** type-erased closures.
-4. **Supporting types** — `EconomicsError`, `EconomicsParametersSnapshot`
-   (incl. `as_of` / calibration-generation tag), `ActivityMetric`.
+4. **Supporting types** — `EconomicsError`, `ActivityMetric` (§5.3 R1),
+   `EconomicsParametersSnapshot` + `CalibrationStamp` (§5.3 R2 rulebook).
 5. **`Engine` parameterization** — `E: EconomicsEngine = LocalEconomics`;
    field `economics: E`. Incremental order: `E` after `L` (§3.10).
 6. **Workspace wiring** — `shekyl-economics` dep on `shekyl-engine-core`.
@@ -204,7 +203,7 @@ release-multiplier / activity inputs) **without wiring them now**.
 | Principle | Applicability |
 |-----------|----------------|
 | **4 — architectural-integrity-now** | Build mechanism in force now; values marked `CALIBRATION-PENDING`. |
-| **5 — closure-rule** | Round 0 closed; Round 1 segment 2b drafted. |
+| **5 — closure-rule** | Round 0 closed; **Round 1 closed** (2026-05-27). |
 | **6 — wider-substrate audit** | After Round 2 **2g** (§6). |
 | **7 — threat-model anchors** | **Corrected** — daemon trust is present on chain-derived inputs, bounded by consensus recompute and absent V3.0 consumers (§3.3.5). |
 | **8 — priority-hierarchy** | `CALIBRATION-PENDING` real body ≠ deferred body. Stubbing = priority-1 failure; calibration-marking ≠ stubbing. |
@@ -355,8 +354,8 @@ pub trait ChainEconomicsSource: Send + Sync {
 
 ## §4 Round 1 — Load-bearing question (OPEN)
 
-> **Round 1 status:** IN PROGRESS — segment **2b drafted**. **F4 closed** →
-> interpretation **(A)** for `base_emission_at`. **C0 naming locked** (§5.1).
+> **Round 1 status:** **CLOSED (2026-05-27).** Dispositions in §5.3–§5.6. Round 2
+> opens on the segment plan in §6 (2i after Round 2 close-out).
 
 ### §4.1–§4.3
 
@@ -371,8 +370,9 @@ See §1, §2, §3.
 | **0b′** | `trait ChainEconomicsSource` | `chain_economics_source.rs` | **One read** at V3.0 (`active_weighted_stake`) |
 | **0h′** | `projected_already_generated(height, params) -> u64` | `shekyl-economics` | Neutral-trajectory **(A)**; pairs with 0h |
 | **0c** | `EconomicsError` | `engine/error.rs` | |
-| **0d** | `EconomicsParametersSnapshot` + `as_of` | economics types | Calibration-generation tag |
-| **0e** | `ActivityMetric` | same | Field-projected daemon/orchestrator input |
+| **0d** | `EconomicsParametersSnapshot` + `CalibrationStamp` | economics types | Rulebook constants + `as_of` — §5.3 R2 |
+| **0e** | `ActivityMetric` | economics types | Raw integer observables — §5.3 R1 |
+| **0j** | `RecordedChainFixture` JSON schema | `docs/test_vectors/economics/` | §5.4 R5 — sim-recorded, two arrays |
 | **0f** | `Engine<…, E>` + `economics: E` | `mod.rs`, lifecycle, … | |
 | **0g** | `RecordedChainFixture` + production `ChainMirrorSource` | `test_support` / `local_economics.rs` | **Replaces MockEconomics** — real recorded chain state |
 | **0h** | `base_block_reward(already_generated_coins: u64) -> u64` | `shekyl-economics` | Single source for engine, FFI, sim |
@@ -423,17 +423,18 @@ effective or realized reward (rustdoc per §5.2 B.4).
 
 | ID | Topic | Segment |
 |----|-------|---------|
-| **R1** | `burn_amount` name + unit **locked**; overflow KAT **locked**. **Open:** `ActivityMetric` layout + caller-trust doc | 2a |
-| **R2** | `EconomicsParametersSnapshot` + `as_of`. **Open:** which `EconomicParams` fields surface | 2a |
-| **R3** | `active_weighted_stake` snapshot-bound read + `pool_weighted_total` **0-semantics** (§2.7 rustdoc pinned). **Open:** snapshot/reorg wording polish only | 2b |
-| **R4** | **Specified §5.2** — projection in crate; source one read; bench O(height); overflow-only `Err` under **(A)** | 2b — **closed pending drafting** |
-| **R5** | Two-test split (§5.2 B.5). **Open:** `RecordedChainFixture` format | 2c |
-| **R6** | No V3.0 `Engine` callers; fee-path wiring **follow-up, not built**. **Open:** boundary statement | 2d |
-| **R7** | **Flipped** — C0 naming amendment required; confirm no *other* §2.7 change at 2g | 2g |
+| **R1** | **Disposed §5.3** — `ActivityMetric` raw integer observables; `calc_burn_pct` owns ratios | 2a |
+| **R2** | **Disposed §5.3** — rulebook snapshot + `as_of`; not dashboard | 2a |
+| **R3** | **Disposed §5.2 B.8** — 0-semantics + read contract (wording in §2.7) | 2b |
+| **R4** | **Disposed §5.2** — projection in crate; one read; bench O(height) | 2b |
+| **R5** | **Disposed §5.4** — `RecordedChainFixture` two-array schema | 2c |
+| **R6** | **Disposed §5.5** — V3.0 zero consumer call sites | 2d |
+| **R7** | **Confirmed §5.6** — C0-only §2.7 surface change | 2g |
 
 #### §4.5.5 Round 1 disposition
 
-**Open** for segments 2a, 2c, 2d, 2g. **Closed (do not reopen):** items in §5.4.
+**Closed (2026-05-27).** All R-residuals disposed; fence in §5.7. Round 2
+segment placeholders remain in §6.
 
 ---
 
@@ -528,42 +529,213 @@ for the public method: §2.7 `pool_weighted_total` rustdoc above.
 from Appendix A — otherwise neutral-vs-realized, no-cache, and zero-denominator
 caveats evaporate at the copy step.
 
-### §5.3 R-residuals (remaining segments)
+### §5.3 Round 1 segment 2a — R1 + R2 (2026-05-27)
 
-See §4.5.4 — R4 closed pending inline drafting; R1/R2/R3/R5/R6 open.
+**Coherence (R1 + R2).** Chain-derived observables cross the boundary in
+`ActivityMetric` (R1); constants live in `EconomicParams` / the snapshot (R2);
+`burn_amount` combines them inside `shekyl-economics` via `self.params`. The
+snapshot is the same constants exposed for display — one source, no duplication.
 
-### §5.4 Closed / open fence
+#### R1 — `ActivityMetric` + caller-trust
 
-**Closed — do not reopen in Round 1:**
+Burn formula ([`DESIGN_CONCEPTS.md`](../DESIGN_CONCEPTS.md) Component 2):
 
-- Trait identity / consume-not-subsume (2026-05-08).
-- `MockEconomics` struck (C-1).
-- Lens 1 bounded; Lens 2/3 N/A with sharpenings.
-- 0h + `projected_already_generated`.
-- **(2′)** `ChainEconomicsSource` — **one read** at V3.0.
-- F4 → **(A)** for `base_emission_at`.
-- **Method names: `base_emission_at`, `burn_amount`.**
-- R4 disposition (§5.2).
+```text
+burn_pct = min(BURN_CAP,
+    BURN_BASE_RATE · √(tx_volume/tx_baseline)
+                   · (circulating_supply/total_supply)
+                   · (1 + stake_ratio)),
+stake_ratio = total_staked / circulating_supply
+```
 
-**Open for segment wargaming:** `ActivityMetric` layout (R1); snapshot field layout
-(R2); R3 snapshot/reorg **wording polish** only (0-semantics pinned §5.2 B.8);
-fixture format (R5); consumer-boundary statement (R6); 2g confirm no other §2.7
-change (R7).
+**Disposition:** raw integer observables on the struct; all ratio/burn math stays in
+`shekyl-economics::calc_burn_pct` (implementation PR may add an
+`ActivityMetric`-aware wrapper; FFI/KAT path stays aligned with consensus math).
+
+```rust
+pub struct ActivityMetric {
+    /// Rolling 720-block window aggregate (daemon-reported).
+    pub tx_volume: u64,
+    /// `already_generated − destroyed` (chain-derived).
+    pub circulating_supply: u64,
+    /// Principal-pool total staked amount (chain-mirror; not wallet registry).
+    pub total_staked: u128,
+}
+```
+
+- **Not pre-computed ratios** — orchestrator must not pass `volume_ratio` /
+  `supply_ratio` / `stake_ratio`; that relocates derivation → Bug 2 class.
+- **`calc_burn_pct` forms `stake_ratio`** from `total_staked / circulating_supply`
+  internally. `circulating_supply` appears in supply-maturity and stake-ratio
+  denominator — single implementation site.
+- **Integers only** — fixed-point math per [`STAKER_REWARD_DISBURSEMENT.md`](../STAKER_REWARD_DISBURSEMENT.md)
+  (no float across FFI/trait; divergent rounding fails consensus).
+
+**Caller-trust rustdoc (field-projection lens):** all three fields are
+daemon-reported / orchestrator-assembled. State explicitly: advisory inputs;
+`burn_amount` is a wallet-side estimate; consensus recomputes burn and rejects
+divergence → failed-send / wrong-display, not theft (2026-04-08). Must not claim
+authoritative burn.
+
+**Locked:** `burn_amount` name; absolute atomic-unit return; overflow KAT.
+
+#### R2 — `EconomicsParametersSnapshot` (rulebook, not dashboard)
+
+`parameters_snapshot()` is infallible, no-arg, no chain read.
+
+**Disposition: rulebook.** Snapshot = `EconomicParams` constants + `as_of` tag.
+**Not** time-varying derived state (`release_multiplier`, live `burn_pct`,
+effective emission share, annualized yield). Those compose from the other three
+methods + chain inputs.
+
+```rust
+pub struct EconomicsParametersSnapshot {
+    pub emission_speed_factor: u8,          // 22 (locked)
+    pub money_supply_atomic: u64,           // 2^32 · 10^9
+    pub final_subsidy_per_minute: u64,      // 0h floor — see calibration note below
+    pub tx_volume_baseline: u64,
+    pub release_min_milli: u32,             // e.g. 800 → 0.800×
+    pub release_max_milli: u32,             // e.g. 1300 → 1.300×
+    pub burn_base_rate_bp: u16,
+    pub burn_cap_bp: u16,
+    pub staker_fee_pool_share_bp: u16,
+    pub staker_emission_share_bp: u16,      // BASE share — not decayed effective
+    pub staker_emission_decay_milli: u16,
+    pub tiers: TierTable,                   // read from `shekyl-staking::tiers` — not redefined
+    pub as_of: CalibrationStamp,            // calibration-generation + optional param-epoch
+}
+```
+
+- **Base values, not decayed.** Effective `staker_emission_share` is height-varying
+  even at V3.0; snapshot carries base + decay rate; consumer applies decay.
+- **Tiers by reference** — single source `shekyl-staking::tiers`; no duplicated
+  lock-block pairs in economics types.
+- **Integers** — basis points / milli-units; same no-float discipline as R1.
+- **No-cache** — already in §2.7 rustdoc; `as_of` detects stale calibration generation.
+
+**Dashboard alternative (rejected for this method):** a one-shot "current economic
+state" readout (live burn %, release multiplier, yield) is a **composed UX view**
+from `base_emission_at` + `burn_amount` + `pool_weighted_total` + chain inputs —
+not this infallible constants method.
+
+**`FINAL_SUBSIDY` doc conflict (reconcile before recording value vectors).**
+[`DESIGN_CONCEPTS.md`](../DESIGN_CONCEPTS.md) §2 still cites historical Monero
+`FINAL_SUBSIDY_PER_MINUTE = 3 × 10¹¹` (inherited baseline); the resolved Shekyl
+tables (§§533–541 / 594–617 area) pin **300_000_000** atomic units from
+`economics_params.json`. **Authoritative for PR 7:** JSON + snapshot field
+`final_subsidy_per_minute` = **300_000_000**; historical §2 line is Monero
+reference only. Implementation PR updates §2 prose or adds an explicit
+disambiguation cross-ref when KATs/fixtures are recorded.
+
+### §5.4 Round 1 segment 2c — R5 `RecordedChainFixture` (2026-05-27)
+
+Two-test split (§5.2 B.5): one fixture file, **two arrays**, recorded from real
+`shekyl-economics-sim` output (no hand-authored expectations, no mock).
+
+```jsonc
+{
+  "calibration_generation": 7,
+  "params_digest": "blake2b:…",
+  "scenario": "baseline_steady_state",
+  "records": [
+    {
+      "height": 1234,
+      "already_generated_coins": 987654321,
+      "base_block_reward": 4521,
+      "release_multiplier_milli": 1000,
+      "tx_volume": 48,
+      "circulating_supply": 987654321,
+      "total_staked": 12345678,
+      "burn_pct_bp": 4283,
+      "total_weighted_stake_lo": 18000000,
+      "total_weighted_stake_hi": 0,
+      "staker_emission": 678,
+      "staker_fee_pool": 211,
+      "actually_destroyed": 633
+    }
+  ],
+  "neutral_milestones": [
+    {
+      "height": 5788000,
+      "base_emission_at_neutral": 2110,
+      "note": "≈50% emitted, ~yr 11 (ESF-22 milestone)"
+    }
+  ]
+}
+```
+
+| Decision | Rationale |
+|----------|-----------|
+| Sim-recorded `records` | Generation-invariant differential: engine `base_block_reward(ag)` must equal sim for **identical** recorded `ag` |
+| Separate `neutral_milestones` | `base_emission_at` uses neutral projection (multiplier = 1); must not assert against realized-ag rows |
+| `params_digest` + `calibration_generation` | Fixture staleness guard — mismatch rejects run instead of silent pass |
+| `total_weighted_stake` as lo/hi | Exercises u128 reconstruction (LMDB/FFI boundary) |
+| Integers only | bp / milli in expectations — no float |
+
+Land under `docs/test_vectors/economics/` (exact path at C4); regen when
+`economics_params.json` or sim scenario changes.
+
+### §5.5 Round 1 segment 2d — R6 consumer boundary (2026-05-27)
+
+At **V3.0**, **no** `Engine<…>` method calls any `EconomicsEngine` method. PR 7
+lands the trait, `LocalEconomics`, the one-read `ChainEconomicsSource`, and the
+`E` slot with **zero orchestrator call sites**. Methods are **reachable and tested**
+(`RecordedChainFixture` + engine-vs-sim differential) only — not production-called.
+
+**Named follow-ups (not built in PR 7):**
+
+| Consumer | Seam |
+|----------|------|
+| Fee path / `PendingTxEngine` | `burn_amount` |
+| Phase 2b `StakeEngine` | `pool_weighted_total`, `base_emission_at` |
+| Display / governance | `parameters_snapshot` |
+
+Pre-provision-for-flexibility at consumer altitude: surface pre-wired for Phase 2b;
+no V3.0 consumer exists. Boundary = **reachable + tested, not yet called**.
+
+### §5.6 Round 1 segment 2g — R7 C0-only confirmation (2026-05-27)
+
+**Confirmed:** the only §2.7 **surface** changes in PR 7 are **C0**:
+
+1. `current_emission` → `base_emission_at`; `burn_fraction` → `burn_amount`
+   (absolute-amount return pin).
+2. Rustdoc clarifications in spec: `base_emission_at` neutral-vs-realized +
+   overflow-only `Err` under **(A)**; `pool_weighted_total` 0-semantics;
+   `parameters_snapshot` no-cache.
+
+No method added, removed, or re-signatured. **R1/R2 field layouts do not force a
+further §2.7 amendment** — `ActivityMetric` and `EconomicsParametersSnapshot` were
+already named in §2.7 signatures; layouts are implementor-side (0d/0e, C1). **C0
+remains the sole §2.7 amendment.**
+
+### §5.7 Closed / open fence (Round 1)
+
+**Closed — do not reopen:**
+
+- §5.4 fence items (trait identity through R4).
+- R1 `ActivityMetric` layout + caller-trust.
+- R2 rulebook snapshot + `as_of`.
+- R3 read contract + `pool_weighted_total` 0-semantics.
+- R5 fixture schema (two-array, sim-recorded).
+- R6 zero V3.0 consumer call sites.
+- R7 C0-only.
+
+**Round 2 (not Round 1):** segment **2i** wider-substrate audit; Round 2 close-out
+§4/§6 refresh; Round 3 §7.X.
 
 ---
 
 ## §6 Round 2 — Segment placeholders
 
-| Segment | Scope |
-|---------|--------|
-| **2a** | R1 + R2 |
-| **2b** | R3 + R4 — chain source + **(A)** emission projection |
-| **2c** | R5 — differential test + `RecordedChainFixture` format |
-| **2d** | R6 — consumer wiring boundary |
-| **2g** | Close-out — §4, §6, Round 3 gate |
-| **2i** | Wider-substrate audit (fee staleness, snapshot cache, gas-style activity) |
+Round 1 segments **2a–2d** and **2g** are **closed** (§5.3–§5.6). Round 2
+work is close-out + wider-substrate audit.
 
-### §5.4 PR 6 / PR 7 merge
+| Segment | Scope | Status |
+|---------|-------|--------|
+| **2g** | Close-out — refresh §4/§6 binding matrix; Round 3 readiness gate | **Open** |
+| **2i** | Wider-substrate audit (fee staleness, snapshot cache, gas-style activity) | **Open** |
+
+### §6.1 PR 6 / PR 7 merge
 
 Coordinate `Engine<…>` type-parameter edit when both land.
 
@@ -583,11 +755,11 @@ Runs after **2g**, before §7.X. Yield: G1–Gn in segment **2i**.
 | Commit | Scope |
 |--------|--------|
 | **C0** | Phase 0 §2.7 naming amendment (`base_emission_at`, `burn_amount`) + doc co-land |
-| **C1** | `EconomicsError`, `ActivityMetric`, `EconomicsParametersSnapshot` + `as_of` |
+| **C1** | `EconomicsError`, `ActivityMetric` (§5.3 R1), `EconomicsParametersSnapshot` + `CalibrationStamp` (§5.3 R2) |
 | **C2** | `shekyl-economics`: `base_block_reward` + `projected_already_generated` + unit tests; sim rewired to 0h |
 | **C2b** | `ChainEconomicsSource` + production adapter |
 | **C3** | `EconomicsEngine` + `LocalEconomics` impl; `CALIBRATION-PENDING` doc comments |
-| **C4** | Real-path tests: generation-invariant engine-vs-sim differential + calibration-tagged vectors |
+| **C4** | Real-path tests: `RecordedChainFixture` (§5.4) + differential + calibration-tagged vectors |
 | **C5** | `Engine` `E` slot + `economics` field |
 | **C6** | Benches + `PERFORMANCE_BASELINE.md` |
 | **C7** | Docs: CHANGELOG, rustdoc, design doc Phase 1 landed; calibration banners |
@@ -619,7 +791,7 @@ After **PR 6 + PR 7** implementation merge — not either alone.
 | Round 0 close | `Round 0 closed 2026-05-27; pre-flight + substrate inventory.` |
 | **Round 0 feedback folded** | `Round 0 feedback folded 2026-05-27; lens citations refreshed to PR-5 five-category form; MockEconomics struck (real-path testing); load-bearing question reframed to ChainEconomicsSource (2′) + shekyl-economics primitives; calibration-vs-structural boundary added; F4 grep closed — already_generated not mirrored in engine (interpretation A for current_emission). Reopen Round 0 only if trait identity / scope guard challenged.` |
 | **Round 1 segment 2b drafted** | `Round 1 segment 2b drafted 2026-05-27; §2.7 naming amendment locked (current_emission→base_emission_at, burn_fraction→burn_amount, C0); base_emission_at = pure shekyl-economics projection under (A), reads nothing from ChainEconomicsSource; source shrunk to one read (active_weighted_stake).` |
-| Round 1 close | *(pending — after 2a, 2c, 2d, 2g)* |
+| **Round 1 closed** | `Round 1 closed 2026-05-27; segments 2a/2c/2d/2g disposed. ActivityMetric = raw integer observables (calc_burn_pct owns ratios). Snapshot = rulebook constants + as_of (not dashboard). RecordedChainFixture = sim-recorded, params-digest-pinned, two-array (differential vs neutral milestones). No V3.0 consumer call sites. §2.7 surface changes are C0-only.` |
 
 ---
 
