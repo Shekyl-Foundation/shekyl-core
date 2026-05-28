@@ -106,8 +106,8 @@ argon2 = { version = "0.5", default-features = false, features = ["alloc", "zero
 # nonces are collision-safe for the entire lifetime of a wallet file).
 # Used for:
 #   - the wrap AEAD that encrypts file_kek under the Argon2id-derived wrap_key
-#   - the region 1 AEAD that encrypts the seed / capability content under file_kek
-#   - the region 2 AEAD that encrypts the state JSON under file_kek
+#   - the region 1 AEAD under HKDF(file_kek, "shekyl-region1-aead-v1")
+#   - the region 2 AEAD under HKDF(file_kek, "shekyl-region2-aead-v1" || addr)
 # All three AEADs use the same primitive; the distinctions are (key, nonce,
 # AAD) tuples, never the cipher.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
