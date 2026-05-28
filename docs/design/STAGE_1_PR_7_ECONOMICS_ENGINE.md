@@ -1,10 +1,9 @@
 # Stage 1 PR 7 — `EconomicsEngine` extraction — design
 
-**Status.** **Round 0 closed (2026-05-27).** **Round 1 closed (2026-05-27)** —
-segments 2a–2d disposed; Round 1 segment **2g** (R7 C0-only, §5.6) closed same
-day; 2b drafted earlier same day. Round **2** — segment **2i** closed (2026-05-28,
-§6.3 G4/G5); Round 2 close-out (§6.2 segment **2g**) in progress. Round **3**
-opens when §6.2 items 2, 4, 5 complete. Planning doc branch:
+**Status.** **Round 0 closed (2026-05-27).** **Round 1 closed (2026-05-27).**
+**Round 2 closed (2026-05-28)** — close-out §6.2 + segment **2i** (G4/G5). **Round 3
+open** — §7.X commit decomposition binding; Phase 0 / implementation PRs may cut
+after §2.7 C0 co-lands on `dev`. Planning doc branch:
 `feat/stage-1-pr7-economics-engine-design` → PR to `dev`. Opened from `dev`
 tip `2cf4cbfde` (post–PR #82 `PersistenceEngine` design merge). This document
 follows [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) and cites
@@ -27,10 +26,11 @@ banner and [`FOLLOWUPS.md`](../FOLLOWUPS.md) V3.0 closeout inventory only after
 `STAGE_1_COMPLETION_AUDIT.md` — that doc is not yet in the tree (per FOLLOWUPS).
 
 **Branch (design).** `feat/stage-1-pr7-economics-engine-design` off `dev` at
-`2cf4cbfde` — **doc-only** revisions until Round 3 closes and Phase 0 amends
-§2.7 if Round 2 close-out confirms no surface amendment. **Implementation PRs**
+`2cf4cbfde` — design branch remains authoritative for §7.X until **Round 3 closes**
+(all three implementation PRs + PR 6 on `dev`). **Implementation PRs authorized**
 (§7.0): `feat/stage-1-pr7-economics-base` → then `feat/stage-1-pr7-economics-cutover`
-and `feat/stage-1-pr7-economics-engine` as siblings off post–7-base `dev`.
+and `feat/stage-1-pr7-economics-engine` as siblings off post–7-base `dev`. Phase 0
+**C0** may co-land with first implementation branch.
 
 **Cross-references.**
 
@@ -168,6 +168,9 @@ release-multiplier / activity inputs) **without wiring them now**.
 10. **Performance gates** — both deferred economics benches + baseline rows.
 11. **Docs** — this design doc, `CHANGELOG.md`, trait rustdoc, calibration
     banners in economic docs.
+12. **Implementation PR split (§6.2 item 1, §7.0)** — **7-base** (C2 + C2a′ +
+    fix **α**), **7-cutover** (C2c), **7-trait** (C0, C1, C2b–C7); cutover and
+    trait are siblings off 7-base.
 
 ### §2.2 Out-of-scope
 
@@ -198,15 +201,15 @@ release-multiplier / activity inputs) **without wiring them now**.
 - [x] **§1.5** — additive 7th trait; Stage 4 leaf actor.
 - [x] **Surface amend vs preserve** — **Preserves** four-method shape; **C0**
   naming-only §2.7 amendment locked (§5.1). `ChainEconomicsSource` / `as_of` are
-  implementor-side. At **2g**, confirm no *other* §2.7 change beyond C0 (R7).
+  implementor-side. Round 2 close-out confirmed: no §2.7 change beyond C0 (R7).
 
 ### §3.2 Plan-altitude principles
 
 | Principle | Applicability |
 |-----------|----------------|
 | **4 — architectural-integrity-now** | Build mechanism in force now; values marked `CALIBRATION-PENDING`. |
-| **5 — closure-rule** | Round 0 closed; **Round 1 closed** (2026-05-27). |
-| **6 — wider-substrate audit** | After Round 2 **2g** (§6). |
+| **5 — closure-rule** | Round 0 closed; Round 1 closed; **Round 2 closed** (2026-05-28); **Round 3 open**. |
+| **6 — wider-substrate audit** | Segment **2i** closed §6.3 (2026-05-28). |
 | **7 — threat-model anchors** | **Corrected** — daemon trust is present on chain-derived inputs, bounded by consensus recompute and absent V3.0 consumers (§3.3.5). |
 | **8 — priority-hierarchy** | `CALIBRATION-PENDING` real body ≠ deferred body. Stubbing = priority-1 failure; calibration-marking ≠ stubbing. |
 
@@ -354,31 +357,42 @@ pub trait ChainEconomicsSource: Send + Sync {
 
 ---
 
-## §4 Round 1 — Load-bearing question (OPEN)
+## §4 Round 1 — Load-bearing question (CLOSED)
 
-> **Round 1 status:** **CLOSED (2026-05-27).** Dispositions in §5.3–§5.6. Round 2
-> opens on the segment plan in §6 (2i after Round 2 close-out).
+> **Round 1 status:** **CLOSED (2026-05-27).** Dispositions in §5.3–§5.6.
+> **Round 2 closed (2026-05-28).** **Round 3 open** — §7.X binding.
 
 ### §4.1–§4.3
 
 See §1, §2, §3.
 
-### §4.4 Phase 0 candidates (pre-enumeration)
+### §4.4 Phase 0 binding matrix (closed Round 2 — 2026-05-28)
 
-| ID | Binding form | Module | Notes |
-|----|--------------|--------|-------|
-| **0a** | `trait EconomicsEngine` | `traits/economics.rs` | §2.7 **signatures + rustdoc** verbatim — **not** Appendix A (signature-only) |
-| **0b** | `LocalEconomics<S: ChainEconomicsSource>` | `local_economics.rs` | |
-| **0b′** | `trait ChainEconomicsSource` | `chain_economics_source.rs` | **One read** at V3.0 (`active_weighted_stake`) |
-| **0h′** | `projected_already_generated(height, params) -> u64` | `shekyl-economics` | Neutral-trajectory **(A)**; pairs with 0h |
-| **0c** | `EconomicsError` | `engine/error.rs` | |
-| **0d** | `EconomicsParametersSnapshot` + `CalibrationStamp` | economics types | Rulebook constants + `as_of { generation, params_digest }` — §5.3 R2, §6.3 G5 |
-| **0e** | `ActivityMetric` + `ActivityInvariantViolation` | economics types | Raw observables + `as_of_height` + `::new` — §5.3 R1, §6.3 G4 |
-| **0j** | `RecordedChainFixture` JSON schema | `docs/test_vectors/economics/` | §5.4 R5 — sim-recorded, two arrays |
-| **0f** | `Engine<…, E>` + `economics: E` | `mod.rs`, lifecycle, … | |
-| **0g** | `RecordedChainFixture` + production `ChainMirrorSource` | `test_support` / `local_economics.rs` | **Replaces MockEconomics** — real recorded chain state |
-| **0h** | `base_block_reward(already_generated_coins: u64) -> u64` | `shekyl-economics` | Single source for engine, FFI, sim |
-| **0i** | Engine-vs-sim differential test | `shekyl-engine-core` tests | Generation-invariant; no mock |
+Cross-ref §7.0 / §7.1 for implementation commit placement. All IDs bound.
+
+| ID | Binding form | Module / PR | Notes |
+|----|--------------|-------------|-------|
+| **C0** | §2.7 rename co-land | `V3_ENGINE_TRAIT_BOUNDARIES.md` + **7-trait** | `base_emission_at`, `burn_amount` — §5.1 |
+| **0a** | `trait EconomicsEngine` | `traits/economics.rs` — **7-trait** C3 | §2.7 **signatures + rustdoc** verbatim — **not** Appendix A (§5.2 B.9) |
+| **0b** | `LocalEconomics<S: ChainEconomicsSource>` | `local_economics.rs` — **7-trait** C3 | |
+| **0b′** / **C2b** | `trait ChainEconomicsSource` + adapter | `chain_economics_source.rs` — **7-trait** C2b | **One read** at V3.0 (`active_weighted_stake`); R3 read contract §5.2 B.8 |
+| **0c** / **C1** | `EconomicsError` + `ActivityInvariantViolation` | `engine/error.rs` — **7-trait** C1 | |
+| **0d** / **C1** | `EconomicsParametersSnapshot` + `CalibrationStamp` | economics types — **7-trait** C1 | `generation`, `params_digest` (custom LE digest — §6.3 G5) |
+| **0e** / **C1** | `ActivityMetric` + `::new` | `shekyl-economics` — **7-trait** C1 | `as_of_height`; §6.3 G4 |
+| **0f** / **C5** | `Engine<…, E>` + `economics: E` | `mod.rs`, lifecycle — **7-trait** C5 | Coordinate PR 6 §6.1 |
+| **0g** / **C4** | `RecordedChainFixture` + `ChainMirrorSource` | `test_support` — **7-trait** C4 | **Replaces MockEconomics**; `staking_state: live` when `total_staked > 0` (G3) |
+| **0h** / **C2** | `base_block_reward(already_generated_coins: u64) -> u64` | `shekyl-economics` — **7-base** C2 | Single source for engine, FFI, sim |
+| **0h′** / **C2** | `projected_already_generated(height, params) -> u64` | `shekyl-economics` — **7-base** C2 | Neutral **(A)**; pairs with 0h |
+| **0i** / **C4** | Engine-vs-sim differential test | `shekyl-engine-core` tests — **7-trait** C4 | Supplementary; **0h gate = C2a′** (H1–H2), not C4 |
+| **0j** / **C4** | `RecordedChainFixture` JSON schema | `docs/test_vectors/economics/` — **7-trait** C4 | §5.4 R5 — sim-recorded, two arrays |
+| **C2a′** | Dual-leg + accumulation harness + fix **α** | C++ `blockchain.cpp` + tests — **7-base** | A/B-accum == **`Q4_spec`**; `:1608–1609` delete — §5.8 |
+| **C2c** | FFI + `get_block_reward` rewire + ESF delete | C++ + `shekyl-ffi` — **7-cutover** | Post–7-base only (H3); H2 blast radius in §6.2 item 1 |
+| **C6** | Benches + baseline | **7-trait** | `PERFORMANCE_BASELINE.md` |
+| **C7** | Docs closeout | **7-trait** | CHANGELOG, rustdoc, G4/G5 pins |
+
+**Orphan check:** all Phase 0 IDs **0a–0j** mapped. §2.1 scope bullets 1–12 align
+with rows above. **C2** does not appear on 7-cutover or 7-trait-only branches except
+as **7-base** ancestor dependency.
 
 ### §4.5 Load-bearing question (reframed)
 
@@ -517,12 +531,13 @@ gap. Pinned in binding spec (not reopening `-> u128`):
    infallibility-collapse note, now in rustdoc). Consumers that must distinguish
    check sync state separately.
 
-**R3 read contract (normative; wording polish open):** `active_weighted_stake()`
+**R3 read contract (normative; polish closed Round 2 — 2026-05-28):** `active_weighted_stake()`
 reads through the engine's consistent ledger view at a height-bound snapshot —
 not a racy direct DB peek outside that view. `pop_block` / accrual-mirror
 atomicity covers the reorg boundary (implementation detail at C2b). Return
 feeds `pool_weighted_total()` verbatim (single aggregation path). Zero-semantics
-for the public method: §2.7 `pool_weighted_total` rustdoc above.
+for the public method: §2.7 `pool_weighted_total` rustdoc above. Copy into
+§2.7-facing prose at C0/C2b if not already verbatim.
 
 **B.9 — Implementer guard (0a vs Appendix A).** Candidate **0a** is §2.7
 **verbatim including all doc comments.** Appendix A is signature-only reference;
@@ -666,12 +681,13 @@ does **not** reopen §2.7 (implementor-side 0d layout).
   lock-block pairs in economics types.
 - **Integers** — basis points / milli-units; same no-float discipline as R1.
 - **No-cache** — already in §2.7 rustdoc; `as_of` lets consumers detect stale copies.
-- **`params_digest` encoding (pinned):** digest over **canonical serialization of the
-  resolved `EconomicParams` struct** (encoding pinned in `shekyl-economics/build.rs`
-  / C1 docs), **not** raw `economics_params.json` bytes — avoids false positives from
-  JSON whitespace/key-order drift. Same defense-in-depth role as consensus-constants
-  build-time sentinels; economics field values are calibration, not static-asserted to
-  spec.
+- **`params_digest` encoding (pinned):** Blake2b-256 over **custom canonical byte
+  layout** of the resolved `EconomicParams` struct — little-endian, fixed-width fields
+  in documented order (`shekyl-economics` module rustdoc + `build.rs` helper). **Not**
+  raw `economics_params.json` bytes (JSON formatting drift). **Not bincode** — rejected
+  2026-05-28: library-version and cross-toolchain serialization drift (MSVC vs GCC;
+  prior platform drift incidents) at a calibration-critical surface; matches
+  consensus-constants hand-canonicalization pattern.
 - **Independent from G4 at V3.0:** `generation` is a configuration epoch index, not a
   chain height. No `generation_active_at(height)` at V3.0; rustdoc notes V3.x adaptive
   burn may bind calibration to heights (FOLLOWUPS). `ActivityMetric.as_of_height` and
@@ -793,8 +809,8 @@ remains the sole §2.7 amendment.**
 - R6 zero V3.0 consumer call sites.
 - R7 C0-only.
 
-**Round 2 (not Round 1):** segment **2i** wider-substrate audit (§5.8 pins); Round 2
-close-out §4/§6 refresh; Round 3 §7.X.
+**Round 2 (not Round 1):** segment **2i** wider-substrate audit (§5.8 pins) — **closed**
+§6.3. Round 2 close-out §4/§6 — **closed**. Round **3** §7.X — **open**.
 
 ### §5.8 Round 2 substrate pins — economics surface asymmetry (2026-05-27)
 
@@ -1120,7 +1136,8 @@ Uses post-fix **α** semantics (`:4946` = full emission; site **4** pool-only).
 - [ ] **`validate_miner_transaction` caller grep** — single consumer `:4946` (pinned above)
 - [ ] **Fix α:** remove `:1608–1609` overwrite; `:4946` accumulates full `base_reward`
 - [ ] Layer 1 per-quantity; Layer 2 A-accum + B-accum + cap invariant; Layer 3 pop-replay
-- [ ] CI **required**; A-accum == B-accum == **`Q4_spec`** before 7-cutover merges
+- [ ] CI **required workflow** landed (§7.4 E1) — skeleton on `dev`; layer jobs green when harness registers
+- [ ] A-accum == B-accum == **`Q4_spec`** before 7-cutover merges
 
 ##### C2a′ amendment record
 
@@ -1143,14 +1160,14 @@ Uses post-fix **α** semantics (`:4946` = full emission; site **4** pool-only).
 
 ---
 
-## §6 Round 2 — Segment placeholders
+## §6 Round 2 — Segment placeholders (CLOSED 2026-05-28)
 
 Round 1 segments **2a–2d** and **2g** are **closed** (§5.3–§5.6). Round 2
-work is close-out + wider-substrate audit.
+close-out + **2i** audit **closed** — Round **3** open (§7).
 
 | Segment | Scope | Status |
 |---------|-------|--------|
-| **2g** | Close-out — §6.2 checklist; refresh §4 binding matrix + §7.X scope; Round 3 readiness gate | **Open** |
+| **2g** | Close-out — §6.2 checklist; refresh §4 binding matrix + §7.X scope; Round 3 readiness gate | **Closed** (2026-05-28) |
 | **2i** | Wider-substrate audit — §5.8 G1–G5; fee staleness; snapshot cache | **Closed** (§6.3 — G4/G5 converged 2026-05-28) |
 
 > **Segment ID note.** Round 1 segment **2g** (§5.6, R7 C0-only) is **closed**.
@@ -1158,7 +1175,7 @@ work is close-out + wider-substrate audit.
 > different round. In prose, prefer "Round 2 close-out (§6.2)" vs "Round 1
 > segment 2g (R7)" when ambiguity matters.
 
-### §6.2 Round 2 close-out checklist (segment 2g — in progress)
+### §6.2 Round 2 close-out checklist (segment 2g — closed 2026-05-28)
 
 Per [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) §5.3 closure
 criteria and PR 5 segment-2g precedent. **No new Round 1 dispositions** — reconcile
@@ -1412,55 +1429,65 @@ Reconcile §4.4 against Round 1 + §5.8. Confirm every Phase 0 row is
 | **0h / 0h′** | Pair locked §5.2 B.2 | Unchanged |
 | **G3** | Fixture `staking_state: live` when `total_staked > 0` | §5.4 — metadata pin |
 
-- [ ] §4.4 table updated with C2a′/C2c as implementation commits (cross-ref §7.X)
-- [ ] No orphan Phase 0 IDs (0a–0j) without module path
-- [ ] §2 scope bullets (§2.1) still match §4.4 — no drift
+- [x] §4.4 table updated with C2a′/C2c as implementation commits (cross-ref §7.X)
+- [x] No orphan Phase 0 IDs (0a–0j) without module path
+- [x] §2 scope bullets (§2.1) still match §4.4 — no drift (bullet 12 added for PR split)
 
 #### Item 3 — Inside-the-fence polish (non-blocking, land in 2g if cheap)
 
 Closed Round 1 dispositions; doc-only:
 
-- [ ] **R3 read contract** (§5.2 B.8, line ~518): fold "wording polish open" into
-  §2.7-facing prose or mark explicitly **normative, polish closed**
+- [x] **R3 read contract** (§5.2 B.8): normative; polish closed — copy at C0/C2b if needed
 - [x] **R2 `CalibrationStamp` / `as_of` field shape:** pinned §5.3 + §6.3 G5 —
-  `generation: u32`, `params_digest: [u8; 32]`; canonical struct digest; no §2.7 amendment
+  `generation: u32`, `params_digest: [u8; 32]`; custom fixed-width LE digest; no §2.7 amendment
 
 #### Item 4 — §7.X commit decomposition vs item 1
 
 - [x] §7.0 three-PR table reflects item 1 (7-base / 7-cutover / 7-trait)
-- [ ] Per-PR commit lists match §7.0; no C2 on 7-cutover or 7-trait-only branches
-- [ ] C4 remains **supplementary**; consensus 0h gate = **7-base** C2a′ only (§5.8)
+- [x] Per-PR commit lists match §7.0; no C2 on 7-cutover or 7-trait-only branches
+- [x] C4 remains **supplementary**; consensus 0h gate = **7-base** C2a′ only (§5.8)
 
 #### Item 5 — §6 review checklist (implementation PR gate)
 
-Fill before Round 3 closes (PR 5 precedent — may start in 2g, finalize after 2i):
+Filled at Round 2 close-out; verified at each implementation PR merge.
 
-| Check | Enumeration source |
-|-------|-------------------|
-| Binding-check matrix | §4.4 + `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.7 verbatim copy (B.9) |
-| Test-substrate preservation | `RecordedChainFixture` schema §5.4; C2a′ legs A/B; no `MockEconomics` |
-| Call-site sweep | R6 zero V3.0 `Engine` consumers; C2c `get_block_reward` grep (H2) |
-| Performance gates | `PERFORMANCE_BASELINE.md` deferred benches; Stage 0 harness names §3.8 |
-| PR 6 coordination | `Engine<…>` `E`/`F` slot merge §6.1 |
+| Check | Enumeration source | Gate |
+|-------|-------------------|------|
+| Binding-check matrix | §4.4 + `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.7 verbatim copy (B.9) | **7-trait** C0 opens; C3 closes trait surface |
+| Test-substrate preservation | `RecordedChainFixture` schema §5.4; C2a′ legs A/B; no `MockEconomics` | **7-base** C2a′ required CI; **7-trait** C4 differential |
+| Call-site sweep | R6 zero V3.0 `Engine` consumers; C2c `get_block_reward` grep (H2) | **7-trait** grep before merge; **7-cutover** H2 table in §6.2 |
+| Performance gates | `PERFORMANCE_BASELINE.md` deferred benches; Stage 0 harness names §3.8 | **7-trait** C6 |
+| PR 6 coordination | `Engine<…>` `E`/`F` slot merge §6.1 | **7-trait** C5 + PR 6 landing order |
 
-- [ ] Checklist section stub → filled (or pointer to filled subsection post-2i)
+- [x] Checklist enumerated (§6.2 item 5 — Round 2 close-out)
 
 #### Item 6 — Round 3 readiness gate
 
 All must be true before §7.X is **closed** and Phase 1 branch cuts:
 
 - [x] Item 1 scope decision recorded (three-PR split, §6.2 item 1)
-- [ ] §4 Phase 0 binding matrix refreshed (item 2)
+- [x] §4 Phase 0 binding matrix refreshed (item 2)
 - [x] Round 2 segment **2i** closed — G4/G5 converged; G1–G3 carry-only confirmed, not reopened
 - [x] §2.7 surface still **C0-only** (R7) — G4/G5 are implementor-side layout only
 - [x] §9 banner: Round 2 close-out + 2i disposition lines added
-- [ ] FOLLOWUPS amended only for item 1 split or deferred work — not for G1–G3
+- [x] FOLLOWUPS amended for item 1 split + G4 downstream (`ActivityMetric` producer; conditional daemon RPC) — not for G1–G3 reopen
 
-**Round 3 opens when:** items 1–2 complete and item 6 checklist satisfied after 2i.
+**Round 3 opened:** 2026-05-28. §7.X binding; Phase 0 C0 may co-land with first implementation branch.
 
 ### §6.1 PR 6 / PR 7 merge
 
-Coordinate `Engine<…>` type-parameter edit when both land.
+**Coordination shape (pinned Round 3 entry — 2026-05-28):** PR 6 is
+`PersistenceEngine` (**`F` slot**), not `PendingTxEngine` (`P` landed PR 5). PR 6
+and **7-trait** have **no runtime dependency** at V3.0 (R6: zero `Engine` economics
+callers; PR 6 does not touch `EconomicsEngine`). They **merge in parallel** off
+post–7-base `dev`.
+
+**Pre-agreed landing signature:** `Engine<S, D, L, E, R, P, F>` with defaults
+`E: EconomicsEngine = LocalEconomics`, `F: PersistenceEngine = WalletFile`. PR 7
+**C5** inserts **`E`** after **`L`**; PR 6 **C4** appends **`F`** after **`P`**. The
+second PR to merge resolves a mechanical `engine/mod.rs` conflict only — neither
+waits on the other's trait behavior. If both PRs are open simultaneously, rebase
+the later merge onto the earlier and preserve the full six-parameter shape above.
 
 ---
 
@@ -1649,7 +1676,7 @@ gate on freshness.
 | Field | Type | Answers |
 |-------|------|---------|
 | `generation` | `u32` | "Is this snapshot from the current calibration epoch?" Cheap compare; human-readable logging ("estimate from generation 7; current is 8"). |
-| `params_digest` | `[u8; 32]` | "Is this snapshot bit-exact identical to current?" Blake2b-256 of **canonical-serialized resolved `EconomicParams`** (encoding pinned in `build.rs` — **not** raw JSON bytes). Catches generation increment with no param change; catches silent serialization drift. |
+| `params_digest` | `[u8; 32]` | "Is this snapshot bit-exact identical to current?" Blake2b-256 of **custom canonical `EconomicParams` bytes** (fixed-width LE field order in module rustdoc — not JSON, not bincode). Catches generation increment with no param change; catches silent serialization drift. |
 
 **Consumer comparison rule (rustdoc):** stale if `generation` differs (likely real
 change); suspicious if `generation` matches but `params_digest` differs (build-system
@@ -1686,6 +1713,12 @@ caches snapshot beyond a single logical operation **or** V3.x adaptive-burn adds
 state to `LocalEconomics` — then require explicit `as_of` comparison or engine-held
 generation counter (design round, not drive-by cache).
 
+**Encoding format (pinned 2026-05-28):** custom documented fixed-width little-endian
+field order in `shekyl-economics` — same discipline as consensus-constants
+hand-canonicalization. **Bincode rejected:** strict cross-platform stability required;
+bincode couples digest to library version and risks MSVC/GCC/toolchain serialization
+drift. C1 implements + documents byte layout; C4 fixtures call the same helper.
+
 ---
 
 ### G4 / G5 threat-model through-line (2i closer)
@@ -1708,14 +1741,17 @@ generation counter (design round, not drive-by cache).
 - [x] §6.2 item 6 + §9 banner updated on close
 - [x] C1/C3/C7 rustdoc hooks reflected in §7.1 commit text (CalibrationStamp fields; G4/G5 rustdoc pins)
 
-**Segment 2i → Closed.** Round 3 readiness item 6 unblocks (pending items 2, 4, 5 in §6.2).
+**Segment 2i → Closed.** Round 3 opened 2026-05-28 (§6.2 item 6).
 
 ---
 
-## §7 Round 3 — §7.X commit decomposition (PLACEHOLDER)
+## §7 Round 3 — §7.X commit decomposition (OPEN 2026-05-28)
 
-**Deviation:** No diagnostic enum; no secondary traits; no `MockEconomics`; no
-`FaultInjecting` at V3.0.
+**Status:** binding for Phase 0 + three implementation PRs. Round 3 closes when all
+three PRs merge to `dev` and §7.2 Stage 1 closeout criteria met (with PR 6).
+
+**Deviation (unchanged):** No diagnostic enum; no secondary traits; no
+`MockEconomics`; no `FaultInjecting` at V3.0.
 
 ### §7.0 Implementation PR split (§6.2 item 1 — ratified 2026-05-28)
 
@@ -1738,21 +1774,122 @@ order — use only if item 1 disposition is explicitly reopened.
 | Commit | Scope |
 |--------|--------|
 | **C0** | Phase 0 §2.7 naming amendment (`base_emission_at`, `burn_amount`) + doc co-land |
-| **C1** | `EconomicsError` (+ `ActivityInvariantViolation`), `ActivityMetric` + `::new` (§5.3 R1, §6.3 G4), `EconomicsParametersSnapshot` + `CalibrationStamp { generation, params_digest }` (§5.3 R2, §6.3 G5); canonical `EconomicParams` digest encoding in `build.rs` |
-| **C2** | `shekyl-economics`: `base_block_reward` + `projected_already_generated` + `calc_stake_ratio` + `calc_burn_pct_from_activity`; sim rewired to 0h |
-| **C2a′** | **§5.8 C2a′ grid spec:** harness (Layer 1–3); **fix α** (`:1608–1609` delete — bound check already on `miner_base_reward`); A/B-accum converge on **`Q4_spec`**; cap invariant defense-in-depth | **7-base** |
+| **C1** | `EconomicsError` (+ `ActivityInvariantViolation`), `ActivityMetric` + `::new` (§5.3 R1, §6.3 G4), `EconomicsParametersSnapshot` + `CalibrationStamp { generation, params_digest }` (§5.3 R2, §6.3 G5); **`EconomicParams` canonical digest** — custom fixed-width LE byte layout in `build.rs` + module rustdoc (bincode rejected §5.3 R2 / §6.3 G5) |
+| **C2** | `shekyl-economics`: `base_block_reward` + `projected_already_generated` + `calc_stake_ratio` + `calc_burn_pct_from_activity`; extend `build.rs` / `EconomicParams` with ESF + `final_subsidy_per_minute` (§7.4 E3); sim rewired to 0h |
+| **C2a′** | **§5.8 C2a′ grid spec:** harness (Layer 1–3); **fix α** (`:1608–1609` delete); A/B-accum converge on **`Q4_spec`**; cap invariant; **required CI workflow** (§7.4 E1) | **7-base** |
 | **C2c** | `shekyl_base_block_reward` FFI; rewire **all** `get_block_reward` consumers + accumulation sites (H2); target = `economics.h` thin-wrapper shape; delete C++ formula only after C2a′ on `dev` (H3) |
 | **C2b** | `ChainEconomicsSource` + production adapter |
 | **C3** | `EconomicsEngine` + `LocalEconomics` impl; `CALIBRATION-PENDING` doc comments |
-| **C4** | `RecordedChainFixture` (§5.4) + engine-vs-sim differential (supplementary only); consensus 0h gate is **C2a′** dual-leg + accumulation (H1–H2), not C4 |
+| **C4** | `RecordedChainFixture` (§5.4) + engine-vs-sim differential (supplementary only); **`params_digest` uses same canonical encoder as C1**; consensus 0h gate is **C2a′** dual-leg + accumulation (H1–H2), not C4 |
 | **C5** | `Engine` `E` slot + `economics` field |
 | **C6** | Benches + `PERFORMANCE_BASELINE.md` |
 | **C7** | Docs: CHANGELOG, rustdoc, design doc Phase 1 landed; calibration banners |
 
-### §7.2 Stage 1 closeout
+#### Implementation pins (C1)
+
+| Pin | Disposition | Commit |
+|-----|-------------|--------|
+| **`params_digest` canonical encoding** | Custom fixed-width little-endian field order; documented byte layout in `shekyl-economics` rustdoc; single `build.rs` helper shared with C4 fixtures. **Bincode rejected** (2026-05-28): cross-platform / cross-toolchain drift risk at calibration surface. | **C1** (+ **C4** consumer) |
+
+### §7.2 Per-PR commit assignment (§6.2 item 4 — verified)
+
+| PR | Commits on branch only | Must not include |
+|----|------------------------|------------------|
+| **7-base** | **C2**, **C2a′** (incl. fix **α**) | C2c, C0–C1, C2b, C3–C7 |
+| **7-cutover** | **C2c** | C2 (except as merged ancestor on `dev`), trait commits |
+| **7-trait** | **C0**, **C1**, **C2b**, **C3**, **C4**, **C5**, **C6**, **C7** | C2c; C2 lands only via **7-base** on `dev` |
+
+**Consensus 0h gate:** **7-base** C2a′ (H1–H2). **C4** differential is supplementary only.
+
+### §7.3 Stage 1 closeout
 
 After **PR 6** and **all three PR 7 implementation PRs** (7-base, 7-cutover,
-7-trait) merge — not any single PR alone.
+7-trait) merge — not any single PR alone. **Round 3 design closes** when this
+criterion is met and §6.2 item 5 review gate is green on each PR.
+
+**PR 6 coordination:** parallel with **7-trait**; no wait on `EconomicsEngine`
+consumption (§6.1). Stage 1 closeout requires both **`E`** (7-trait C5) and **`F`**
+(PR 6 C4) on `Engine<…>` — order of merge between those two PRs is unconstrained
+beyond the pre-agreed signature in §6.1.
+
+### §7.4 Round 3 entry items (surfaced at Round 2→3 boundary)
+
+Not Round 2 misses — absorb in first implementation branches so discovery does not
+wait for code review.
+
+#### E1 — H3 CI teeth (7-base first deliverable)
+
+§5.8 H1–H3 pin dual-leg + accumulation KATs and branch-topology gating.
+**Workflow landed (skeleton):** `.github/workflows/economics-c2a-prime.yml`
+(`ci/economics-c2a-prime`) + `scripts/ci/run_economics_c2a_prime.sh`.
+
+| Job | Subcommand | Passes today? |
+|-----|------------|---------------|
+| `Economics C2a′ preflight (oracle constants)` | `preflight` | **Yes** — JSON + scoped literal grep |
+| `Economics C2a′ Layer 1 (dual-leg per-quantity KAT)` | `layer1` | **No** — awaits harness in 7-base |
+| `Economics C2a′ Layer 2 (accumulation + cap invariant)` | `layer2` | **No** |
+| `Economics C2a′ Layer 3 (pop-replay reorg coupling)` | `layer3` | **No** |
+
+Layer jobs **fail with a pinpoint message** until gtest/core_tests/Rust harness
+cases register under the naming contract in the runner script header. That is
+intentional H3 teeth — not a workflow bug.
+
+**After 7-base merges:** mark all four jobs **required** on `dev` in branch
+protection (alongside `ci/consensus-invariants` and `ci/gh-actions/cli`) before
+**7-cutover** merges.
+
+**7-cutover PR** additionally cites **7-base merge commit** (C2a′ ancestor) in body;
+branch topology remains primary enforcement.
+
+#### E2 — PR 6 / 7-trait `Engine` slot coordination
+
+See §6.1 — **parallel merge**, pre-agreed `Engine<S, D, L, E, R, P, F>`. No
+V3.0 caller coupling; conflict surface is `engine/mod.rs` signature + field list only.
+
+#### E3 — `FINAL_SUBSIDY` oracle source (grep before C2a′)
+
+**Authoritative:** `config/economics_params.json` → `final_subsidy_per_minute =
+300_000_000` → C++ `FINAL_SUBSIDY_PER_MINUTE` via `cmake/generate_economics_params.py`;
+C++ tests use the generated `#define`.
+
+**Not authoritative for leg B:** `DESIGN_CONCEPTS.md` §2 still cites historical
+Monero `3 × 10¹¹` — documentation only (§5.3 R2 reconciliation).
+
+**Sim (leg B oracle):** `shekyl-economics-sim` uses `300_000_000` in
+`SimParams::default()` but **`sim_defaults_match_canonical_economics_config`** asserts
+equality with `economics_params.json` — no stale `3×10¹¹` in sim/test paths (grep
+2026-05-28).
+
+**C2 / C2a′ implementer guard:** leg B and `base_block_reward` must read
+`final_subsidy_per_minute` / ESF from **generated params** (`build.rs` /
+`EconomicParams` — extend in **C2**; not yet in `shekyl-economics` `EconomicParams`
+today). Do not copy from DESIGN_CONCEPTS or hardcode Monero-era literals in KAT
+grids.
+
+### §7.5 Mission review — decisions and flags (00-mission hierarchy)
+
+Evaluated at Round 3 open. **Priority 1 (security / consensus)** items first.
+
+| Item | Mission tier | Disposition | Decision needed? |
+|------|--------------|-------------|------------------|
+| **Fix α (`ag` semantics)** | P1 — consensus | Pinned 7-base; small footprint, load-bearing for C2a′ gate | **No** — landed in design |
+| **H3 without CI** | P1 — consensus integrity | E1 — 7-base ships required workflow | **No** — implement |
+| **C2a′ leg B oracle constants** | P1 — false confidence / phantom-pass | E3 — JSON/generated only | **No** — implement; extend `build.rs` in C2 |
+| **`Engine<E,F>` merge** | P3 — system longevity (Stage 1 inventory) | §6.1 parallel + pre-agreed signature | **No** — pinned |
+| **G4/G5 display-only staleness** | P2/P3 — no user fund loss at V3.0 | Converged §6.3; consumer-side policy | **No** |
+| **ActivityMetric daemon atomic RPC** | P2 — coherent display | FOLLOWUPS conditional | **No** at V3.0 |
+| **`params_digest` encoding** | P1 — calibration drift | Custom LE layout pinned | **No** |
+| **V3.x `Mutex<AdaptiveBurnState>` on `LocalEconomics`** | P1 deferred | G5 reopen clause when first mutable caller | **No** at V3.0 |
+| **§2.7 vs G4:** `PendingTxEngine` burn consumer | Spec drift risk | §2.7 still names future fee-path consumer; R6 + G4 pin **display-only** at V3.0 — no send gating | **Optional doc pin:** amend §2.7 rustdoc at C0 to match G4 display-only envelope (no trait change) |
+
+**No blocking decisions remain** for Round 3 branch cuts. **One optional polish:** C0
+§2.7 rustdoc alignment with G4 display-only `burn_amount` threat envelope (spec text
+still reads like wallet enforcement in places — implementation rustdoc must follow
+G4 regardless).
+
+**Structural payoff (user note):** 7-base first → 7-cutover ∥ 7-trait as siblings
+makes H3 **branch-ancestry hard**; trait work does not serialize behind cutover
+external audit. That is the intended return on the foundation split.
 
 ---
 
@@ -1783,7 +1920,10 @@ After **PR 6** and **all three PR 7 implementation PRs** (7-base, 7-cutover,
 | **Round 2 close-out item 1** | `§6.2 2026-05-28: three-PR split — 7-base (C2+C2a′) → 7-cutover (C2c) ∥ 7-trait (C0–C7 off base only); H3 hard via branch topology; wrong-seam two-PR and trait-before-cutover rejected.` |
 | **C2a′ grid amended** | `§5.8 2026-05-28c: root cause site 1 overwrite :1608–1609; fix α pinned; option β rejected; caller grep = :4946 only.` |
 | **7-base scope amended** | `§6.2 2026-05-28c: 7-base = C2 + C2a′ harness + fix α (small ag semantics); cutover = FFI/ESF delete only; bound check verified on miner_base_reward.` |
-| **2i closed** | `§6.3 2026-05-28: segment 2i closed. G4: display-only advisory; ActivityMetric.as_of_height + ::new; coherent bundle. G5: display-only; CalibrationStamp { generation: u32, params_digest: [u8;32] }; canonical struct digest; independent from as_of_height at V3.0. G1–G3 carry-only.` |
+| **2i closed** | `§6.3 2026-05-28: segment 2i closed. G4: display-only advisory; ActivityMetric.as_of_height + ::new; coherent bundle. G5: display-only; CalibrationStamp { generation: u32, params_digest: [u8;32] }; custom fixed-width LE digest (bincode rejected); independent from as_of_height at V3.0. G1–G3 carry-only.` |
+| **Round 2 closed** | `Round 2 closed 2026-05-28; §6.2 close-out complete — §4.4 binding matrix, §7.2 per-PR commits, implementation review gate §6.2 item 5; segment 2g + 2i closed.` |
+| **Round 3 open** | `Round 3 open 2026-05-28; §7.X binding — 7-base (C2+C2a′+fix α) → 7-cutover (C2c) ∥ 7-trait (C0–C7); Phase 0 C0 may co-land; Round 3 closes when all three implementation PRs + PR 6 land on dev.` |
+| **Round 3 entry items** | `§7.4 E1: ci/economics-c2a-prime workflow + run_economics_c2a_prime.sh (preflight green; layer jobs await harness). E2: Engine<S,D,L,E,R,P,F> parallel PR6/7-trait. E3: leg-B oracle from economics_params.json only.` |
 
 ---
 
@@ -1817,7 +1957,10 @@ duplicated here.
 
 ## Appendix B — PR 6 linkage
 
-Unchanged — both PRs required for Stage 1 trait inventory; coordinate `Engine<…>`.
+Both PRs required for Stage 1 trait inventory. **Parallel merge** at V3.0 — see
+§6.1 / §7.4 E2. Pre-agreed landing:
+`Engine<S, D, L, E, R, P, F>` (`E` = PR 7 C5, `F` = PR 6 C4). Neither PR waits
+on the other's trait methods; Stage 1 closeout requires both slots on `dev`.
 
 ---
 

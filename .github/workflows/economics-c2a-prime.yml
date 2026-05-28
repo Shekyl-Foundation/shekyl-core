@@ -1,0 +1,142 @@
+# C2a′ economics dual-leg + accumulation CI gates.
+#
+# Per `docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md` §5.8 (H1–H3) + §7.4 E1:
+#
+# * Required on PRs to `dev` that touch the economics keystone surface.
+# * Three merge-blocking layer jobs (Layer 1 dual-leg KAT, Layer 2
+#   accumulation + cap invariant, Layer 3 pop-replay) plus a fast
+#   preflight job (JSON oracle + stale-constant grep).
+# * Harness tests land in 7-base (`feat/stage-1-pr7-economics-base`);
+#   until registered, layer jobs fail with a pinpoint message from
+#   `scripts/ci/run_economics_c2a_prime.sh` (intentional — H3 teeth).
+#
+# After 7-base merges, mark these checks required on `dev` in branch
+# protection alongside `ci/consensus-invariants` and `ci/gh-actions/cli`.
+
+name: ci/economics-c2a-prime
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "config/economics_params.json"
+      - "cmake/generate_economics_params.py"
+      - "src/cryptonote_basic/**"
+      - "src/cryptonote_core/blockchain.cpp"
+      - "src/cryptonote_core/blockchain.h"
+      - "rust/shekyl-economics/**"
+      - "rust/shekyl-economics-sim/**"
+      - "rust/shekyl-ffi/**"
+      - "tests/unit_tests/**"
+      - "tests/core_tests/**"
+      - "scripts/ci/run_economics_c2a_prime.sh"
+      - ".github/workflows/economics-c2a-prime.yml"
+  push:
+    branches: [dev]
+    paths:
+      - "config/economics_params.json"
+      - "cmake/generate_economics_params.py"
+      - "src/cryptonote_basic/**"
+      - "src/cryptonote_core/blockchain.cpp"
+      - "src/cryptonote_core/blockchain.h"
+      - "rust/shekyl-economics/**"
+      - "rust/shekyl-economics-sim/**"
+      - "rust/shekyl-ffi/**"
+      - "tests/unit_tests/**"
+      - "tests/core_tests/**"
+      - "scripts/ci/run_economics_c2a_prime.sh"
+      - ".github/workflows/economics-c2a-prime.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  BUILD_DIR: ${{ github.workspace }}/build
+  BUILD_DEFAULT_LINUX: >-
+    cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON
+    -D CMAKE_BUILD_TYPE=Release
+    && cmake --build build --target unit_tests core_tests
+  APT_INSTALL_LINUX: >-
+    apt -y install build-essential cmake libboost-all-dev miniupnpc
+    libunbound-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev
+    libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev
+    protobuf-compiler ccache git curl ripgrep python3
+  INSTALL_RUST: |
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+  CCACHE_SETTINGS: |
+    ccache --max-size=150M
+    ccache --set-config=compression=true
+
+jobs:
+  preflight:
+    name: "Economics C2a′ preflight (oracle constants)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run C2a′ preflight guards
+        run: scripts/ci/run_economics_c2a_prime.sh preflight
+
+  layer:
+    name: "Economics C2a′ Layer ${{ matrix.layer }} (${{ matrix.label }})"
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - layer: 1
+            label: dual-leg per-quantity KAT
+            subcommand: layer1
+          - layer: 2
+            label: accumulation + cap invariant
+            subcommand: layer2
+          - layer: 3
+            label: pop-replay reorg coupling
+            subcommand: layer3
+    container:
+      image: ubuntu:22.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+        CCACHE_TEMPDIR: /tmp/.ccache-temp
+        CCACHE_DIR: ~/.ccache
+      options: --privileged
+    steps:
+      - name: set apt conf
+        run: |
+          tee -a /etc/apt/apt.conf.d/80-custom << EOF
+          Acquire::Retries "3";
+          Acquire::http::Timeout "120";
+          Acquire::ftp::Timeout "120";
+          EOF
+      - name: update apt
+        run: apt update
+      - name: install build dependencies
+        run: ${{ env.APT_INSTALL_LINUX }}
+      - name: install Rust
+        run: ${{ env.INSTALL_RUST }}
+      - name: configure git
+        run: git config --global --add safe.directory '*'
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: actions/cache@v5
+        with:
+          path: ~/.ccache
+          key: ccache-economics-c2a-layer${{ matrix.layer }}-${{ github.sha }}
+          restore-keys: ccache-economics-c2a-layer${{ matrix.layer }}-
+      - name: create dummy disk drives for testing
+        run: tests/create_test_disks.sh >> $GITHUB_ENV
+      - uses: ./.github/actions/set-make-job-count
+      - name: build test binaries (unit_tests + core_tests)
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{ env.MAKE_JOB_COUNT }}
+        run: |
+          ${{ env.CCACHE_SETTINGS }}
+          ${{ env.BUILD_DEFAULT_LINUX }}
+      - name: Run C2a′ Layer ${{ matrix.layer }}
+        run: scripts/ci/run_economics_c2a_prime.sh ${{ matrix.subcommand }}
