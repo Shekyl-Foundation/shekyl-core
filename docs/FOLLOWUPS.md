@@ -86,26 +86,28 @@ sustainability is unaffected by the recalibration.
   The engine-vs-sim differential (both Rust) is **insufficient** — it only
   proves Rust internal consistency.
 
-  **Scope decision required (do not leave implicit).** Two defensible end
-  states:
+  **Disposition (ratified 2026-05-27): migration path; C++ cutover in V3.0.**
+  `base_block_reward` in `shekyl-economics` is the canonical formula.
+  `cryptonote::get_block_reward` and coinbase validation **cut over in the same
+  PR 7 implementation** (not deferred to V3.1): add `shekyl_base_block_reward`
+  (+ release-multiplier composition) FFI and rewire C++ call sites to match
+  burn/DAA/LWMA-1 pattern. Wallet-only re-expression with a permanent
+  cross-check bridge is **rejected**.
 
-  1. **Migration path (preferred under “one canonical source” posture):**
-     `base_block_reward` in Rust becomes canonical; `get_block_reward` and
-     coinbase validation eventually call `shekyl_base_block_reward` (+ release
-     multiplier FFI) like DAA/burn. PR 7 lands Rust + cross-check; C++ cutover
-     is a follow-on PR (may be V3.0 if touch surface is bounded, else V3.1).
+  **Implementation scope (PR 7, V3.0):**
 
-  2. **Wallet-only re-expression:** 0h stays wallet/sim/engine-only with a
-     **permanent** Rust-vs-C++ cross-check in CI until migration is scheduled.
-     C++ remains authoritative for minting until an explicit cutover PR.
+  - **C2a** — Rust `base_block_reward` + `projected_already_generated` in crate;
+    sim rewired to 0h.
+  - **C2a′** — Rust-vs-C++ cross-check KAT (must pass before cutover merges).
+  - **C2c** — `shekyl_base_block_reward` FFI; `get_block_reward` in
+    `cryptonote_basic_impl.cpp` calls Rust for base subsidy (+ existing release
+    multiplier FFI for the activity overload). Delete duplicated C++ tail
+    formula once KAT proves byte-identical outputs on the pinned grid.
 
-  **Action.** Record the chosen disposition in the PR 7 implementation PR
-  description and close this FOLLOWUPS item when (a) C2a KAT lands and (b)
-  either C++ calls Rust for base reward **or** the wallet-only branch is
-  explicitly ratified with a named migration FOLLOWUPS successor. **Design:**
+  **Close this FOLLOWUPS item when:** C2a′ KAT is in CI and C2c cutover is
+  merged on `dev`. **Design:**
   [`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](./design/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
-  §5.8. **Target:** V3.0 — cross-check **must** land with PR 7 implementation;
-  migration-vs-wallet-only decision **before** PR 7 implementation merges.
+  §5.8. **Target:** V3.0 (PR 7 implementation).
 
 - **Post-2g adversarial-corpus methodology + implementation
   (trigger: RandomX v2 Phase 2g Round 7 R7-D1/R7-D2 reopening
