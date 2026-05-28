@@ -1857,6 +1857,23 @@ C++ tests use the generated `#define`.
 **Not authoritative for leg B:** `DESIGN_CONCEPTS.md` §2 still cites historical
 Monero `3 × 10¹¹` — documentation only (§5.3 R2 reconciliation).
 
+**Stale-literal regex (preflight self-check):** Monero scale 3×10¹¹ = twelve digits
+after the leading 3. Preflight runs an embedded probe set before the source grep:
+
+| Probe input | Expected |
+|-------------|----------|
+| `300_000_000_000` | match (Monero underscore form) |
+| `300000000000` | match (Monero bare integer) |
+| `3 * 10^11` | match (prose form) |
+| `300000000` | **no match** (Shekyl authoritative JSON value) |
+| `30000000000` | **no match** (3×10¹⁰ near-miss / typo class) |
+
+**Build artifact layout (layer jobs):** tarball is `build/` minus object/archive
+artifacts; must include `unit_tests`, `core_tests`, and shared libs under
+`build/src/**` (binaries link with absolute RPATH). `tests/data/` is **not** in the
+tarball — repo checkout supplies it (`DEFAULT_DATA_DIR` / `--data-dir`).
+`create_test_disks.sh` runs per layer-3 job (runtime loop state, not packaged).
+
 **Sim (leg B oracle):** `shekyl-economics-sim` uses `300_000_000` in
 `SimParams::default()` but **`sim_defaults_match_canonical_economics_config`** asserts
 equality with `economics_params.json` — no stale `3×10¹¹` in sim/test paths (grep

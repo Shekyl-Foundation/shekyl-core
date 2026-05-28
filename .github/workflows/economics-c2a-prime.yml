@@ -136,6 +136,26 @@ jobs:
         run: |
           tar --exclude='**/CMakeFiles' --exclude='**/*.o' --exclude='**/*.a' \
             -czf economics-c2a-build.tar.gz build/
+      - name: Verify artifact manifest (binaries + shared libs)
+        run: |
+          set -euo pipefail
+          required=(
+            build/tests/unit_tests/unit_tests
+            build/tests/core_tests/core_tests
+            build/src/cryptonote_core/libcryptonote_core.so
+            build/src/cryptonote_basic/libcryptonote_basic.so
+          )
+          listing="$(tar tzf economics-c2a-build.tar.gz)"
+          for path in "${required[@]}"; do
+            if ! grep -qx "$path" <<< "$listing"; then
+              echo "FATAL: economics-c2a-build.tar.gz missing $path" >&2
+              echo "tar tf (first 40 entries):" >&2
+              head -40 <<< "$listing" >&2
+              exit 1
+            fi
+          done
+          echo "OK: artifact contains test binaries and representative shared libs"
+          echo "Note: tests/data/ is repo-tracked — layer jobs read it from checkout, not tarball"
       - uses: actions/upload-artifact@v4
         with:
           name: economics-c2a-build

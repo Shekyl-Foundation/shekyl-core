@@ -64,6 +64,61 @@ require_ripgrep() {
   fi
 }
 
+verify_stale_subsidy_regex_probes() {
+  # Self-check the Monero-scale (3×10¹¹) stale-literal regex before grep runs.
+  # Documented probe set (§7.4 E3):
+  #   300_000_000_000, 300000000000, 3 * 10^11  → match (positives)
+  #   300000000 (Shekyl authoritative), 30000000000 (3×10¹⁰ near-miss) → no match
+  local line matched expect
+  _probe() {
+    line="$1"
+    expect="$2" # match | nomatch
+    if printf '%s\n' "$line" | rg -q "$STALE_FINAL_SUBSIDY_RG"; then
+      matched=1
+    else
+      matched=0
+    fi
+    if [[ "$expect" == match && "$matched" -eq 0 ]]; then
+      die "stale-subsidy regex probe failed: '${line}' should match"
+    fi
+    if [[ "$expect" == nomatch && "$matched" -eq 1 ]]; then
+      die "stale-subsidy regex probe failed: '${line}' should not match"
+    fi
+    echo "OK: regex probe ${expect} — '${line}'"
+  }
+  _probe '300_000_000_000' match
+  _probe '300000000000' match
+  _probe '3 * 10^11' match
+  _probe '300000000' nomatch
+  _probe '30000000000' nomatch
+}
+
+verify_build_artifact_layout() {
+  # Layer jobs consume the build/ tarball from the build job. Binaries link
+  # against shared libs under build/src/** (absolute RPATH at link time).
+  # tests/data/ is repo-tracked and comes from checkout, not the tarball.
+  local missing=0
+  local required=(
+    "$BUILD_DIR/tests/unit_tests/unit_tests"
+    "$BUILD_DIR/tests/core_tests/core_tests"
+    "$BUILD_DIR/src/cryptonote_core/libcryptonote_core.so"
+    "$BUILD_DIR/src/cryptonote_basic/libcryptonote_basic.so"
+  )
+  for path in "${required[@]}"; do
+    if [[ ! -e "$path" ]]; then
+      echo "FATAL: build artifact missing ${path#"$REPO_ROOT/"}" >&2
+      missing=1
+    fi
+  done
+  if [[ "$missing" -ne 0 ]]; then
+    die "build artifact layout incomplete — expand tarball or fix build job packaging"
+  fi
+  if [[ ! -d "$REPO_ROOT/tests/data" ]]; then
+    die "tests/data/ missing from checkout — unit_tests needs --data-dir or DEFAULT_DATA_DIR"
+  fi
+  echo "OK: build artifact layout (binaries + shared libs); tests/data from checkout"
+}
+
 count_gtest_cases() {
   local filter="$1"
   # --gtest_list_tests is a boolean flag; the suite filter is --gtest_filter.
@@ -136,6 +191,7 @@ run_rust_layer2() {
 cmd_preflight() {
   require_repo_root
   require_ripgrep
+  verify_stale_subsidy_regex_probes
 
   if ! command -v python3 >/dev/null 2>&1; then
     die "python3 required for economics_params.json oracle check"
@@ -173,6 +229,7 @@ PY
 
 cmd_layer1() {
   require_repo_root
+  verify_build_artifact_layout
   require_build_tree
   require_gtest_harness 1 'EconomicsC2aPrime/Layer1.*'
   run_gtest_layer 'EconomicsC2aPrime/Layer1.*'
@@ -181,6 +238,7 @@ cmd_layer1() {
 
 cmd_layer2() {
   require_repo_root
+  verify_build_artifact_layout
   require_build_tree
   require_gtest_harness 2 'EconomicsC2aPrime/Layer2.*'
   run_gtest_layer 'EconomicsC2aPrime/Layer2.*'
@@ -189,6 +247,7 @@ cmd_layer2() {
 
 cmd_layer3() {
   require_repo_root
+  verify_build_artifact_layout
   require_build_tree
   local filter='economics_c2a_prime_layer3*'
   local count
