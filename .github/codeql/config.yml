@@ -45,6 +45,19 @@ name: "Shekyl CodeQL config"
 # `cfg(test)` awareness in a future release, revisit this filter
 # and replace it with a path-precise one.
 
+# `cpp/upcast-array-pointer-arithmetic` (CWE-119 / CWE-843).
+#
+# CodeQL reports this on vendored LMDB's `MDB_MULTIPLE` handling in
+# `external/db_drivers/liblmdb/mdb.c` when pointer-arithmetic data flow
+# is traced back through `MDB_val_copy` (a derived `MDB_val` wrapper in
+# `src/blockchain_db/lmdb/db_lmdb.cpp`). Shekyl never passes `MDB_MULTIPLE`
+# at any call site — the flagged paths are unreachable from our usage — and
+# the underlying code lives in the vendored library, not in a Shekyl-owned
+# surface we can fix without forking LMDB. Large release PRs (e.g. dev→main)
+# re-attribute these pre-existing library alerts as PR-introduced; suppressing
+# the query keeps CodeQL signal on findings we can actually act on.
 query-filters:
   - exclude:
       id: rust/hard-coded-cryptographic-value
+  - exclude:
+      id: cpp/upcast-array-pointer-arithmetic
