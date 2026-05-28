@@ -1117,7 +1117,9 @@ mod tests {
         s
     }
 
-    fn state_wrap_key_from_bytes(bytes: &[u8; FILE_KEK_BYTES]) -> super::super::sealing_keys::StateWrapKey {
+    fn state_wrap_key_from_bytes(
+        bytes: &[u8; FILE_KEK_BYTES],
+    ) -> super::super::sealing_keys::StateWrapKey {
         use super::super::sealing_keys::StateWrapKey;
         StateWrapKey::from_region2_key(Zeroizing::new(*bytes))
     }
