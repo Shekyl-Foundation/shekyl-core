@@ -32,6 +32,7 @@ set(unit_tests_sources
   blockchain_db.cpp
   block_queue.cpp
   block_reward.cpp
+  economics_c2a_prime.cpp
   bootstrap_node_selector.cpp
   bulletproofs_plus.cpp
   canonical_amounts.cpp
