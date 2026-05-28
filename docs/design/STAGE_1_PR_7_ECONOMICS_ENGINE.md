@@ -366,7 +366,7 @@ See §1, §2, §3.
 
 | ID | Binding form | Module | Notes |
 |----|--------------|--------|-------|
-| **0a** | `trait EconomicsEngine` | `traits/economics.rs` | §2.7 verbatim |
+| **0a** | `trait EconomicsEngine` | `traits/economics.rs` | §2.7 **signatures + rustdoc** verbatim — **not** Appendix A (signature-only) |
 | **0b** | `LocalEconomics<S: ChainEconomicsSource>` | `local_economics.rs` | |
 | **0b′** | `trait ChainEconomicsSource` | `chain_economics_source.rs` | **One read** at V3.0 (`active_weighted_stake`) |
 | **0h′** | `projected_already_generated(height, params) -> u64` | `shekyl-economics` | Neutral-trajectory **(A)**; pairs with 0h |
@@ -425,7 +425,7 @@ effective or realized reward (rustdoc per §5.2 B.4).
 |----|-------|---------|
 | **R1** | `burn_amount` name + unit **locked**; overflow KAT **locked**. **Open:** `ActivityMetric` layout + caller-trust doc | 2a |
 | **R2** | `EconomicsParametersSnapshot` + `as_of`. **Open:** which `EconomicParams` fields surface | 2a |
-| **R3** | Snapshot-bound `active_weighted_stake` read contract. **Open:** wording | 2b |
+| **R3** | `active_weighted_stake` snapshot-bound read + `pool_weighted_total` **0-semantics** (§2.7 rustdoc pinned). **Open:** snapshot/reorg wording polish only | 2b |
 | **R4** | **Specified §5.2** — projection in crate; source one read; bench O(height); overflow-only `Err` under **(A)** | 2b — **closed pending drafting** |
 | **R5** | Two-test split (§5.2 B.5). **Open:** `RecordedChainFixture` format | 2c |
 | **R6** | No V3.0 `Engine` callers; fee-path wiring **follow-up, not built**. **Open:** boundary statement | 2d |
@@ -500,6 +500,34 @@ FOLLOWUPS checkpoint table if hot consumer lands — do not build now.
 **B.7 — `Result` under (A).** Overflow-only `Err` (defensive KAT; no inherited
 `div128_64` omission). Unsynced-height `Err` deferred to (B).
 
+**B.8 — R3 / `pool_weighted_total` zero-semantics (segment 2b).** Three of four
+methods carry forward-compat caveats in §2.7 rustdoc; `pool_weighted_total` was the
+gap. Pinned in binding spec (not reopening `-> u128`):
+
+1. **`0` is valid** — no active stake at the mirrored height; consensus burns
+   the pool contribution ([`STAKER_REWARD_DISBURSEMENT.md`](../STAKER_REWARD_DISBURSEMENT.md)
+   §"Empty-staker-set behavior").
+2. **Denominator guard** — `StakeEngine::projected_yield` (May-8 reason this
+   method exists) must not divide blindly; `0` is live divide-by-zero.
+3. **`0` overloaded** — legitimate empty pool vs unsynced/stale mirror both
+   surface as `0`; infallible return cannot signal "unknown" (Round 0
+   infallibility-collapse note, now in rustdoc). Consumers that must distinguish
+   check sync state separately.
+
+**R3 read contract (normative; wording polish open):** `active_weighted_stake()`
+reads through the engine's consistent ledger view at a height-bound snapshot —
+not a racy direct DB peek outside that view. `pop_block` / accrual-mirror
+atomicity covers the reorg boundary (implementation detail at C2b). Return
+feeds `pool_weighted_total()` verbatim (single aggregation path). Zero-semantics
+for the public method: §2.7 `pool_weighted_total` rustdoc above.
+
+**B.9 — Implementer guard (0a vs Appendix A).** Candidate **0a** is §2.7
+**verbatim including all doc comments.** Appendix A is signature-only reference;
+`traits/economics.rs` must copy rustdoc from
+[`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §2.7, not
+from Appendix A — otherwise neutral-vs-realized, no-cache, and zero-denominator
+caveats evaporate at the copy step.
+
 ### §5.3 R-residuals (remaining segments)
 
 See §4.5.4 — R4 closed pending inline drafting; R1/R2/R3/R5/R6 open.
@@ -518,8 +546,9 @@ See §4.5.4 — R4 closed pending inline drafting; R1/R2/R3/R5/R6 open.
 - R4 disposition (§5.2).
 
 **Open for segment wargaming:** `ActivityMetric` layout (R1); snapshot field layout
-(R2); read-contract wording (R3); fixture format (R5); consumer-boundary statement
-(R6); 2g confirm no other §2.7 change (R7).
+(R2); R3 snapshot/reorg **wording polish** only (0-semantics pinned §5.2 B.8);
+fixture format (R5); consumer-boundary statement (R6); 2g confirm no other §2.7
+change (R7).
 
 ---
 
@@ -596,8 +625,10 @@ After **PR 6 + PR 7** implementation merge — not either alone.
 
 ## Appendix A — Spec trait surface (reference)
 
-See [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §2.7 (C0
-amendment applied).
+**Signature-only.** Full contract (rustdoc) lives in
+[`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §2.7. When
+implementing **0a** (`traits/economics.rs`), copy **signatures and doc comments
+from §2.7**, not from this appendix — see §5.2 B.9.
 
 ```rust
 pub trait EconomicsEngine {
@@ -614,9 +645,9 @@ pub trait EconomicsEngine {
 }
 ```
 
-**Implementer note:** `base_emission_at` at V3.0 = neutral-trajectory base
-subsidy via `projected_already_generated` + `base_block_reward` — not effective or
-realized emission. `burn_amount` = absolute atomic units to burn.
+Signatures above match §2.7 (verified Round 1 segment 2b). Shorthand only —
+`base_emission_at` / `burn_amount` / `pool_weighted_total` caveats are not
+duplicated here.
 
 ---
 
