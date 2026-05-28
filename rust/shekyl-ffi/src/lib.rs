@@ -783,14 +783,7 @@ pub extern "C" fn shekyl_stake_max_claim_range() -> u64 {
 /// Compute stake_ratio = total_staked / circulating_supply (fixed-point SCALE).
 #[no_mangle]
 pub extern "C" fn shekyl_calc_stake_ratio(total_staked: u64, circulating_supply: u64) -> u64 {
-    if circulating_supply == 0 {
-        return 0;
-    }
-    #[allow(clippy::cast_possible_truncation)]
-    {
-        (u128::from(total_staked) * u128::from(shekyl_economics::params::SCALE)
-            / u128::from(circulating_supply)) as u64
-    }
+    shekyl_economics::calc_stake_ratio(total_staked, circulating_supply)
 }
 
 // ─── Emission Share (Component 4) ───────────────────────────────────────────
