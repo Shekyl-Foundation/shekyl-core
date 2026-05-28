@@ -2,16 +2,16 @@
 #
 # Per `docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md` §5.8 (H1–H3) + §7.4 E1:
 #
-# * Required on PRs to `dev` that touch the economics keystone surface.
-# * Three merge-blocking layer jobs (Layer 1 dual-leg KAT, Layer 2
-#   accumulation + cap invariant, Layer 3 pop-replay) plus a fast
-#   preflight job (JSON oracle + stale-constant grep).
-# * Harness tests land in 7-base (`feat/stage-1-pr7-economics-base`);
-#   until registered, layer jobs fail with a pinpoint message from
-#   `scripts/ci/run_economics_c2a_prime.sh` (intentional — H3 teeth).
+# * One build job produces test binaries; three layer jobs run tests in
+#   parallel against a shared artifact (avoids triple redundant builds).
+# * Preflight (JSON oracle + stale-constant grep) is fast and merge-blocking.
+# * Layer jobs fail with pinpoint messages until the 7-base harness registers.
 #
-# After 7-base merges, mark these checks required on `dev` in branch
-# protection alongside `ci/consensus-invariants` and `ci/gh-actions/cli`.
+# Container `--privileged` is required by `tests/create_test_disks.sh` (loop
+# devices for core_tests). Tighten to `--device=/dev/loop-control` +
+# `--cap-add=SYS_ADMIN` if that script's requirements narrow.
+#
+# After 7-base merges, mark all jobs required on `dev` in branch protection.
 
 name: ci/economics-c2a-prime
 
@@ -48,6 +48,10 @@ on:
       - ".github/workflows/economics-c2a-prime.yml"
   workflow_dispatch:
 
+concurrency:
+  group: economics-c2a-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -77,33 +81,25 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep
       - name: Run C2a′ preflight guards
         run: scripts/ci/run_economics_c2a_prime.sh preflight
 
-  layer:
-    name: "Economics C2a′ Layer ${{ matrix.layer }} (${{ matrix.label }})"
+  build:
+    name: "Economics C2a′ build (unit_tests + core_tests)"
     needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - layer: 1
-            label: dual-leg per-quantity KAT
-            subcommand: layer1
-          - layer: 2
-            label: accumulation + cap invariant
-            subcommand: layer2
-          - layer: 3
-            label: pop-replay reorg coupling
-            subcommand: layer3
     container:
       image: ubuntu:22.04
       env:
         DEBIAN_FRONTEND: noninteractive
         CCACHE_TEMPDIR: /tmp/.ccache-temp
         CCACHE_DIR: ~/.ccache
+      # create_test_disks.sh sets up loop-backed block devices for core_tests.
       options: --privileged
     steps:
       - name: set apt conf
@@ -117,8 +113,6 @@ jobs:
         run: apt update
       - name: install build dependencies
         run: ${{ env.APT_INSTALL_LINUX }}
-      - name: install Rust
-        run: ${{ env.INSTALL_RUST }}
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
@@ -127,8 +121,8 @@ jobs:
       - uses: actions/cache@v5
         with:
           path: ~/.ccache
-          key: ccache-economics-c2a-layer${{ matrix.layer }}-${{ github.sha }}
-          restore-keys: ccache-economics-c2a-layer${{ matrix.layer }}-
+          key: ccache-economics-c2a-build-${{ github.sha }}
+          restore-keys: ccache-economics-c2a-build-
       - name: create dummy disk drives for testing
         run: tests/create_test_disks.sh >> $GITHUB_ENV
       - uses: ./.github/actions/set-make-job-count
@@ -138,5 +132,87 @@ jobs:
         run: |
           ${{ env.CCACHE_SETTINGS }}
           ${{ env.BUILD_DEFAULT_LINUX }}
+      - name: Pack build tree for layer jobs
+        run: |
+          tar --exclude='**/CMakeFiles' --exclude='**/*.o' --exclude='**/*.a' \
+            -czf economics-c2a-build.tar.gz build/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: economics-c2a-build
+          path: economics-c2a-build.tar.gz
+          retention-days: 2
+
+  layer:
+    name: "Economics C2a′ Layer ${{ matrix.layer }} (${{ matrix.label }})"
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - layer: 1
+            label: dual-leg per-quantity KAT
+            subcommand: layer1
+            needs_rust: true
+            needs_disks: false
+          - layer: 2
+            label: accumulation + cap invariant
+            subcommand: layer2
+            needs_rust: true
+            needs_disks: false
+          - layer: 3
+            label: pop-replay reorg coupling
+            subcommand: layer3
+            needs_rust: false
+            needs_disks: true
+    container:
+      image: ubuntu:22.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      options: --privileged
+    steps:
+      - name: set apt conf
+        run: |
+          tee -a /etc/apt/apt.conf.d/80-custom << EOF
+          Acquire::Retries "3";
+          Acquire::http::Timeout "120";
+          Acquire::ftp::Timeout "120";
+          EOF
+      - name: update apt
+        run: apt update
+      - name: install runtime dependencies
+        run: |
+          apt -y install ripgrep python3 libboost-system1.74.0 libboost-filesystem1.74.0 \
+            libboost-thread1.74.0 libboost-chrono1.74.0 libboost-regex1.74.0 \
+            libssl3 libsodium23 libunbound8 libprotobuf23
+      - name: install Rust
+        if: matrix.needs_rust
+        run: ${{ env.INSTALL_RUST }}
+      - name: configure git
+        run: git config --global --add safe.directory '*'
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: actions/download-artifact@v4
+        with:
+          name: economics-c2a-build
+      - name: Unpack build tree
+        run: tar -xzf economics-c2a-build.tar.gz
+      - name: create dummy disk drives for testing
+        if: matrix.needs_disks
+        run: tests/create_test_disks.sh >> $GITHUB_ENV
       - name: Run C2a′ Layer ${{ matrix.layer }}
-        run: scripts/ci/run_economics_c2a_prime.sh ${{ matrix.subcommand }}
+        id: layer_run
+        env:
+          CTEST_OUTPUT_ON_FAILURE: ON
+        run: |
+          scripts/ci/run_economics_c2a_prime.sh ${{ matrix.subcommand }} \
+            2>&1 | tee "economics-c2a-layer${{ matrix.layer }}.log"
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: economics-c2a-layer${{ matrix.layer }}-failure-${{ github.run_id }}
+          path: economics-c2a-layer${{ matrix.layer }}.log
+          retention-days: 14

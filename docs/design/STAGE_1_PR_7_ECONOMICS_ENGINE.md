@@ -1821,14 +1821,16 @@ wait for code review.
 
 §5.8 H1–H3 pin dual-leg + accumulation KATs and branch-topology gating.
 **Workflow landed (skeleton):** `.github/workflows/economics-c2a-prime.yml`
-(`ci/economics-c2a-prime`) + `scripts/ci/run_economics_c2a_prime.sh`.
+(`ci/economics-c2a-prime`) + `scripts/ci/run_economics_c2a_prime.sh`. One **build**
+job uploads `unit_tests` + `core_tests` artifacts; three **layer** jobs run tests
+in parallel (no triple redundant builds). `concurrency` cancels superseded runs;
+failure logs upload as artifacts.
 
 | Job | Subcommand | Passes today? |
 |-----|------------|---------------|
-| `Economics C2a′ preflight (oracle constants)` | `preflight` | **Yes** — JSON + scoped literal grep |
-| `Economics C2a′ Layer 1 (dual-leg per-quantity KAT)` | `layer1` | **No** — awaits harness in 7-base |
-| `Economics C2a′ Layer 2 (accumulation + cap invariant)` | `layer2` | **No** |
-| `Economics C2a′ Layer 3 (pop-replay reorg coupling)` | `layer3` | **No** |
+| `Economics C2a′ preflight (oracle constants)` | `preflight` | **Yes** — JSON + scoped literal grep (`rg` required) |
+| `Economics C2a′ build (unit_tests + core_tests)` | (artifact producer) | **Yes** — when economics paths trigger workflow |
+| `Economics C2a′ Layer 1/2/3` | `layer1`–`layer3` | **No** — awaits harness in 7-base |
 
 Layer jobs **fail with a pinpoint message** until gtest/core_tests/Rust harness
 cases register under the naming contract in the runner script header. That is

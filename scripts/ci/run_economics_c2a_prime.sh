@@ -37,6 +37,9 @@ UNIT_TESTS="$BUILD_DIR/tests/unit_tests/unit_tests"
 CORE_TESTS="$BUILD_DIR/tests/core_tests/core_tests"
 ECONOMICS_JSON="$REPO_ROOT/config/economics_params.json"
 
+# Monero-era tail subsidy (3×10¹¹) — twelve digits after the leading 3.
+STALE_FINAL_SUBSIDY_RG='(\b300_?000_?000_?000\b|\b300000000000\b|3\s*\*\s*10\s*\^\s*11)'
+
 die() {
   echo "FATAL: $*" >&2
   exit 1
@@ -55,9 +58,16 @@ require_build_tree() {
   fi
 }
 
+require_ripgrep() {
+  if ! command -v rg >/dev/null 2>&1; then
+    die "ripgrep (rg) is required for economics C2a′ preflight — install via apt"
+  fi
+}
+
 count_gtest_cases() {
   local filter="$1"
-  "$UNIT_TESTS" --gtest_list_tests="$filter" 2>/dev/null | grep -c '^  ' || true
+  # --gtest_list_tests is a boolean flag; the suite filter is --gtest_filter.
+  "$UNIT_TESTS" --gtest_list_tests --gtest_filter="$filter" 2>/dev/null | grep -c '^  ' || true
 }
 
 count_core_tests() {
@@ -88,11 +98,17 @@ run_core_tests_layer() {
   "$CORE_TESTS" --filter="$filter"
 }
 
+rust_test_exists() {
+  local crate="$1" pattern="$2"
+  cargo test --locked -p "$crate" -- --list 2>/dev/null | grep -q "$pattern"
+}
+
 run_rust_layer1() {
   echo "==> cargo test shekyl-economics (Layer 1 leg B)"
   (
     cd "$REPO_ROOT/rust"
-    if cargo test --locked -p shekyl-economics -- --list 2>/dev/null | grep -q c2a_prime_layer1; then
+    cargo test --locked -p shekyl-economics --no-run
+    if rust_test_exists shekyl-economics c2a_prime_layer1; then
       cargo test --locked -p shekyl-economics c2a_prime_layer1
     else
       die "no Rust Layer 1 leg-B test (c2a_prime_layer1*) in shekyl-economics — land with C2 in 7-base"
@@ -104,10 +120,12 @@ run_rust_layer2() {
   echo "==> cargo test shekyl-economics-sim (Layer 2 leg B / B-accum)"
   (
     cd "$REPO_ROOT/rust"
+    cargo test --locked -p shekyl-economics-sim --no-run
+    cargo test --locked -p shekyl-economics --no-run
     cargo test --locked -p shekyl-economics-sim sim_defaults_match_canonical_economics_config
-    if cargo test --locked -p shekyl-economics -- --list 2>/dev/null | grep -q c2a_prime_layer2; then
+    if rust_test_exists shekyl-economics c2a_prime_layer2; then
       cargo test --locked -p shekyl-economics c2a_prime_layer2
-    elif cargo test --locked -p shekyl-economics-sim -- --list 2>/dev/null | grep -q c2a_prime_layer2; then
+    elif rust_test_exists shekyl-economics-sim c2a_prime_layer2; then
       cargo test --locked -p shekyl-economics-sim c2a_prime_layer2
     else
       die "no Rust Layer 2 B-accum test (c2a_prime_layer2*) — land with C2/C2a′ in 7-base"
@@ -117,6 +135,7 @@ run_rust_layer2() {
 
 cmd_preflight() {
   require_repo_root
+  require_ripgrep
 
   if ! command -v python3 >/dev/null 2>&1; then
     die "python3 required for economics_params.json oracle check"
@@ -141,21 +160,15 @@ if val != 300_000_000:
 print(f"OK: {key}={val} (authoritative JSON oracle)")
 PY
 
-  if command -v rg >/dev/null 2>&1; then
-    # Monero-era tail subsidy scale (3×10¹¹) — not hash vectors, not amount tables.
-    # Scoped to economics oracle surfaces only (§7.4 E3).
-    if rg -n \
-      '300_?000_?000_?000_?00\b|300000000000\b|3\s*\*\s*10\s*\^\s*11' \
-      rust/shekyl-economics \
-      rust/shekyl-economics-sim/src \
-      cmake/generate_economics_params.py \
-      config/economics_params.json 2>/dev/null; then
-      die "stale Monero-scale final_subsidy literal in economics oracle path (§7.4 E3)"
-    fi
-    echo "OK: no Monero-scale final_subsidy literals in economics oracle paths"
-  else
-    echo "WARN: ripgrep missing; skipping final_subsidy literal grep (install rg for full preflight)"
+  # Monero-era tail subsidy scale (3×10¹¹) — economics oracle paths only (§7.4 E3).
+  if rg -n "$STALE_FINAL_SUBSIDY_RG" \
+    rust/shekyl-economics \
+    rust/shekyl-economics-sim/src \
+    cmake/generate_economics_params.py \
+    config/economics_params.json 2>/dev/null; then
+    die "stale Monero-scale final_subsidy literal in economics oracle path (§7.4 E3)"
   fi
+  echo "OK: no Monero-scale final_subsidy literals in economics oracle paths"
 }
 
 cmd_layer1() {
