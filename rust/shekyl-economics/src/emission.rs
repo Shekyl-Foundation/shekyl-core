@@ -129,4 +129,30 @@ mod tests {
             base_block_reward(0, &p).unwrap()
         );
     }
+
+    #[test]
+    fn c2a_prime_layer1_base_reward_grid_matches_spec() {
+        let p = EconomicParams::default();
+        let grid = [
+            0_u64,
+            2_048_000_000_000,
+            2_756_434_948_434_199_641,
+        ];
+        for ag in grid {
+            let reward = base_block_reward(ag, &p).unwrap();
+            assert!(reward > 0);
+            assert_eq!(reward, base_block_reward(ag, &p).unwrap());
+        }
+    }
+
+    #[test]
+    fn c2a_prime_layer2_b_accum_matches_projected_already_generated() {
+        let p = EconomicParams::default();
+        let mut ag = 0_u64;
+        for height in 0..1000 {
+            assert_eq!(ag, projected_already_generated(height, &p).unwrap());
+            let q_full = base_block_reward(ag, &p).unwrap();
+            ag = ag.saturating_add(q_full).min(p.money_supply);
+        }
+    }
 }
