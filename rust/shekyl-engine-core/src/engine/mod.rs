@@ -156,7 +156,6 @@ pub mod capability;
 pub mod daemon;
 pub(crate) mod diagnostics;
 pub mod error;
-pub(crate) mod sealing_keys;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_ledger;
 #[cfg(any(test, feature = "test-helpers"))]
@@ -167,14 +166,15 @@ pub mod fee_estimator;
 pub mod lifecycle;
 pub(crate) mod local_keys;
 pub(crate) mod local_ledger;
-pub(crate) mod local_persistence;
 pub mod local_pending_tx;
+pub(crate) mod local_persistence;
 pub(crate) mod local_refresh;
 pub mod merge;
 pub mod network;
 pub mod output_selector;
 pub mod pending;
 pub mod refresh;
+pub(crate) mod sealing_keys;
 pub mod signer;
 pub(crate) mod traits;
 pub mod view_material;
@@ -195,7 +195,6 @@ pub use error::{
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
-pub use sealing_keys::StateWrapKey;
 pub use local_ledger::LocalLedger;
 pub use local_pending_tx::LocalPendingTx;
 pub use local_refresh::LocalRefresh;
@@ -210,6 +209,7 @@ pub use pending::{
 pub use refresh::{
     RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
 };
+pub use sealing_keys::StateWrapKey;
 pub use signer::{
     EngineSignerKind, LocalSigner, SignedTransfer, Signer, SoloSigner, TransferSigningContext,
 };
@@ -829,8 +829,13 @@ impl<
     }
 }
 
-impl<S: EngineSignerKind, D: DaemonEngine, L: LedgerEngine, R: RefreshEngine, P: PendingTxEngine>
-    Engine<S, D, L, R, P, WalletFile>
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        L: LedgerEngine,
+        R: RefreshEngine,
+        P: PendingTxEngine,
+    > Engine<S, D, L, R, P, WalletFile>
 {
     /// Borrow the Stage 1 [`WalletFile`] implementor. Prefer
     /// [`Self::persistence`] for trait-shaped save/rotate paths.

@@ -805,10 +805,7 @@ impl<
     /// test surface; production paths cannot reach it because
     /// `pub(crate) #[cfg(test)]` excludes them from the published
     /// API and from the non-test build.
-    pub(crate) fn replace_daemon<D2: DaemonEngine>(
-        self,
-        daemon: D2,
-    ) -> Engine<S, D2, L, R, P, F> {
+    pub(crate) fn replace_daemon<D2: DaemonEngine>(self, daemon: D2) -> Engine<S, D2, L, R, P, F> {
         let Engine {
             persistence,
             state_wrap_key,
@@ -889,10 +886,7 @@ impl<
     /// The retirement commit deletes both `replace_daemon` and
     /// `replace_ledger` together; production paths are unaffected
     /// because they never named these methods.
-    pub(crate) fn replace_ledger<L2: LedgerEngine>(
-        self,
-        ledger: L2,
-    ) -> Engine<S, D1, L2, R, P, F> {
+    pub(crate) fn replace_ledger<L2: LedgerEngine>(self, ledger: L2) -> Engine<S, D1, L2, R, P, F> {
         let Engine {
             persistence,
             state_wrap_key,
@@ -1051,10 +1045,10 @@ impl<
         // writers exist at this point; the read guard is structural,
         // not for contention.
         let ledger_guard = self.ledger.read();
-        drive_persistence(self.persistence.save_state(
-            &self.state_wrap_key,
-            &ledger_guard.ledger,
-        ))
+        drive_persistence(
+            self.persistence
+                .save_state(&self.state_wrap_key, &ledger_guard.ledger),
+        )
         .map_err(|e| OpenError::Persistence(e.into()))?;
         drop(ledger_guard);
         drive_persistence(
@@ -1688,10 +1682,7 @@ mod tests {
         );
         impl Drop for RestorePanicHook {
             fn drop(&mut self) {
-                std::panic::set_hook(std::mem::replace(
-                    &mut self.0,
-                    Box::new(|_| {}),
-                ));
+                std::panic::set_hook(std::mem::replace(&mut self.0, Box::new(|_| {})));
             }
         }
         let _restore = RestorePanicHook(previous);
@@ -1714,10 +1705,7 @@ mod tests {
             "sanity: panic message present"
         );
         for chunk in marker.chunks(4) {
-            let needle = chunk
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>();
+            let needle = chunk.iter().map(|b| format!("{b:02x}")).collect::<String>();
             assert!(
                 !text.contains(&needle),
                 "panic output leaked key bytes as hex: {text}"

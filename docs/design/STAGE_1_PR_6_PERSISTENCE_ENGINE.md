@@ -1,9 +1,10 @@
 # Stage 1 PR 6 — `PersistenceEngine` extraction — design
 
-**Status.** **Design closed — Round 3 complete (2026-05-27); lessons canvass
-supplement landed same day (§5.12).** Ready for Phase 1 on
-`feat/stage-1-pr6-persistence-engine` after HKDF implementation PR merges to
-`dev`. Planning doc branch:
+**Status.** **Design closed — Round 3 complete (2026-05-27); Phase 1 C0–C7
+landed on `feat/stage-1-pr6-persistence-engine` (C7: 2026-05-27 removes
+password-taking `WalletFile::save_state`; steady-state sealing is
+`wrap_key_region_2` only).** Lessons canvass supplement (§5.12). Planning doc
+branch:
 `feat/stage-1-pr6-persistence-engine-design` → PR to `dev`. Opened from `dev`
 tip `b9c03dc24` (post–PR #81 `PendingTxEngine` merge). This document follows
 [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) and
@@ -1269,7 +1270,7 @@ period. PR 6 does not change that model.
 |-------|-------------|--------|
 | **Round 2** | Segments 2a–2d, 2g, 2h, 2i + §4/§6 | **Closed** |
 | **Round 3** | §7.X + §6 gates + Round 2 amendments | **Closed** |
-| **Phase 1** | C0–C7 on `feat/stage-1-pr6-persistence-engine` | **Ready** (after §6.3 prerequisites) |
+| **Phase 1** | C0–C7 on `feat/stage-1-pr6-persistence-engine` | **Complete** (C7 landed 2026-05-27) |
 
 ### §7.1 Stage 1 closeout (do not conflate with PR 6 alone)
 

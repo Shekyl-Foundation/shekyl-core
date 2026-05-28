@@ -1525,7 +1525,6 @@ bool shekyl_wallet_export_ledger_postcard(
  * save. */
 bool shekyl_wallet_save_state(
     ShekylWallet* h,
-    const uint8_t* password_ptr, size_t password_len,
     const uint8_t* ledger_postcard_ptr, size_t ledger_postcard_len,
     uint32_t* out_error);
 

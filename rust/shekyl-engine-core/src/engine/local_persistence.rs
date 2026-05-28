@@ -35,7 +35,7 @@ impl PersistenceEngine for WalletFile {
         state_key: &StateWrapKey,
         ledger: &WalletLedger,
     ) -> Result<(), Self::Error> {
-        self.save_state_with_wrap_key_region_2(state_key.as_bytes(), ledger)
+        self.save_state(state_key.as_bytes(), ledger)
     }
 
     async fn save_prefs(
@@ -56,4 +56,3 @@ impl PersistenceEngine for WalletFile {
         self.rotate_password(old.password(), new.password(), Some(new_kdf))
     }
 }
-

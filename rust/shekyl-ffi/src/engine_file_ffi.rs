@@ -34,7 +34,7 @@
 //!                      ├─► ShekylWallet*    (owns WalletFile + WalletLedger)
 //! open(base, pw, net) ─┘                     (advisory lock held for lifetime)
 //!
-//! save_state(h, pw, new_ledger_postcard)
+//! save_state(h, new_ledger_postcard)
 //! rotate_password(h, old_pw, new_pw)
 //! export_ledger_postcard(h, buf, cap, len_required)
 //! get_metadata(h, out)
@@ -858,22 +858,13 @@ pub unsafe extern "C" fn shekyl_wallet_export_ledger_postcard(
 
 /// Seal a new `.wallet` from the given ledger postcard bytes.
 ///
-/// The bytes are parsed as a [`WalletLedger`] first (so malformed input
-/// is rejected before Argon2id runs), then sealed via the
-/// orchestrator's `save_state`. On success the handle's in-memory
-/// ledger is replaced with the fresh one so subsequent
+/// The bytes are parsed as a [`WalletLedger`] first, then sealed via the
+/// orchestrator's session-cached `wrap_key_region_2` (`save_state`).
+/// On success the handle's in-memory ledger is replaced so subsequent
 /// [`shekyl_wallet_export_ledger_postcard`] calls reflect the save.
-///
-/// # Password discipline
-///
-/// The password is required on every call because the envelope's
-/// `seal_state_file` must re-derive `file_kek` via Argon2id (no
-/// caching — see spec §4.3).
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_wallet_save_state(
     h: *mut ShekylWallet,
-    password_ptr: *const u8,
-    password_len: usize,
     ledger_postcard_ptr: *const u8,
     ledger_postcard_len: usize,
     out_error: *mut u32,
@@ -882,13 +873,6 @@ pub unsafe extern "C" fn shekyl_wallet_save_state(
         set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
         return false;
     }
-    let password = match make_slice(password_ptr, password_len) {
-        Some(s) => s,
-        None => {
-            set_err(out_error, SHEKYL_WALLET_ERR_NULL_POINTER);
-            return false;
-        }
-    };
     let ledger_bytes = match make_slice(ledger_postcard_ptr, ledger_postcard_len) {
         Some(s) => s,
         None => {
@@ -906,7 +890,8 @@ pub unsafe extern "C" fn shekyl_wallet_save_state(
     };
 
     let w = &mut *h;
-    if let Err(e) = w.inner.save_state(password, &new_ledger) {
+    let wrap_key = w.inner.session_wrap_key_region_2();
+    if let Err(e) = w.inner.save_state(wrap_key, &new_ledger) {
         set_err(out_error, map_wallet_file_err(&e));
         return false;
     }
@@ -1497,8 +1482,6 @@ mod tests {
             let mut err = 0u32;
             assert!(shekyl_wallet_save_state(
                 h,
-                b"pw".as_ptr(),
-                2,
                 exported.as_ptr(),
                 exported.len(),
                 &raw mut err,
