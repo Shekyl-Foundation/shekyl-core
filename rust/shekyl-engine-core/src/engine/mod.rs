@@ -167,6 +167,7 @@ pub mod fee_estimator;
 pub mod lifecycle;
 pub(crate) mod local_keys;
 pub(crate) mod local_ledger;
+pub(crate) mod local_persistence;
 pub mod local_pending_tx;
 pub(crate) mod local_refresh;
 pub mod merge;
