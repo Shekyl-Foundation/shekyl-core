@@ -1,9 +1,10 @@
 # Stage 1 PR 6 — `PersistenceEngine` extraction — design
 
-**Status.** **Design closed — Round 3 complete (2026-05-27); lessons canvass
-supplement landed same day (§5.12).** Ready for Phase 1 on
-`feat/stage-1-pr6-persistence-engine` after HKDF implementation PR merges to
-`dev`. Planning doc branch:
+**Status.** **Design closed — Round 3 complete (2026-05-27); Phase 1 C0–C7
+landed on `feat/stage-1-pr6-persistence-engine` (C7: 2026-05-27 removes
+password-taking `WalletFile::save_state`; steady-state sealing is
+`wrap_key_region_2` only).** Lessons canvass supplement (§5.12). Planning doc
+branch:
 `feat/stage-1-pr6-persistence-engine-design` → PR to `dev`. Opened from `dev`
 tip `b9c03dc24` (post–PR #81 `PendingTxEngine` merge). This document follows
 [`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) and
@@ -866,7 +867,9 @@ caller must know which side of the line they're on.
 | `create` → `close` round-trip | `lifecycle.rs` | Keep — ledger bytes durable |
 | **`persistence_trait_save_state_round_trip`** | `shekyl-engine-core` | **New** — `WalletFile` via `PersistenceEngine`, tempfile, sealing keys from open |
 | **`change_password_flushes_prefs`** | `shekyl-engine-core` | **New** — mutate prefs in memory, rotate, reopen, read prefs file |
-| **`stale_state_wrap_key_fails_after_rotate`** | `shekyl-engine-core` | **C1** — open → `save_state(k)` ok → `rotate_password` ok → `save_state(k_stale)` → `PersistenceError::WalletFile` with `WalletEnvelopeError::InvalidPasswordOrCorrupt` (region-2 AEAD MAC failure) |
+| **`stale_state_wrap_key_fails_after_rotate_without_rederive`** | `shekyl-engine-core` | **C1** — open → `save_state(k)` ok → `rotate_password` ok → in-memory keys-file drift without orchestrator re-derive → `save_state(k_stale)` → reopen fails (`InvalidPasswordOrCorrupt` / wallet-file IO) |
+| **`password_rotate_preserves_state_wrap_key_bytes`** | `shekyl-engine-core` | **C1** — documents V3.0 substrate: wrap-only rotation leaves `wrap_key_region_2` bytes unchanged |
+| **`wrong_state_wrap_key_sealed_state_fails_on_reopen`** | `shekyl-engine-core` | **C1** — deliberately wrong `StateWrapKey` → reopen MAC failure |
 | **`rederived_state_wrap_key_succeeds_after_rotate`** | `shekyl-engine-core` | **C1** — same, but re-derive `StateWrapKey` from open ritual → `save_state` ok |
 | **`open_does_not_retain_file_kek`** | `shekyl-engine-core` | **0p / C6** — after `open_full`, orchestrator/`WalletFile` holds `wrap_key_region_2` + `prefs_hmac_key`, not `file_kek` |
 | **`panic_hook_does_not_leak_state_wrap_key`** | `shekyl-engine-core` | **§5.12 L1 / C6** — forced panic with `StateWrapKey` in scope; no raw key bytes in panic message |
@@ -1269,7 +1272,7 @@ period. PR 6 does not change that model.
 |-------|-------------|--------|
 | **Round 2** | Segments 2a–2d, 2g, 2h, 2i + §4/§6 | **Closed** |
 | **Round 3** | §7.X + §6 gates + Round 2 amendments | **Closed** |
-| **Phase 1** | C0–C7 on `feat/stage-1-pr6-persistence-engine` | **Ready** (after §6.3 prerequisites) |
+| **Phase 1** | C0–C7 on `feat/stage-1-pr6-persistence-engine` | **Complete** (C7 landed 2026-05-27) |
 
 ### §7.1 Stage 1 closeout (do not conflate with PR 6 alone)
 

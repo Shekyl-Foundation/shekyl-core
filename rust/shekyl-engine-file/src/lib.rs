@@ -21,8 +21,8 @@
 //!    write-once enforcement on `.wallet.keys`.
 //!
 //! The public surface is deliberately small: one struct
-//! ([`WalletFile`]), four methods (`create`, `open`, `save_state`,
-//! `rotate_password`), and a dedicated error type
+//! ([`WalletFile`]), lifecycle methods (`create`, `open`, `save_state`,
+//! `rotate_password`, …), and a dedicated error type
 //! ([`WalletFileError`]).
 //!
 //! # What lives where

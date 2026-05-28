@@ -1026,7 +1026,37 @@ pub(crate) fn seal_state_file_with_entropy(
     let region1_plain = decrypt_region1_plaintext(&file_kek_z, keys_file_bytes)?;
     let addr = expected_address_from_region1_plain(region1_plain.as_slice())?;
     let wrap_key_region_2 = derive_wrap_key_region_2(&file_kek_z, &addr);
+    seal_state_file_with_wrap_key_region_2_and_entropy(
+        &wrap_key_region_2,
+        keys_file_bytes,
+        state_plaintext,
+        region2_nonce,
+    )
+}
 
+/// Seal a `.wallet` state file using a session-cached `wrap_key_region_2`
+/// (HKDF-derived at open). Skips Argon2id on the save path (F5(b) /
+/// [`docs/WALLET_FILE_FORMAT_V1.md`](../../docs/WALLET_FILE_FORMAT_V1.md) §4.3).
+pub fn seal_state_file_with_wrap_key_region_2(
+    wrap_key_region_2: &[u8; FILE_KEK_BYTES],
+    keys_file_bytes: &[u8],
+    state_plaintext: &[u8],
+) -> Result<Vec<u8>, WalletEnvelopeError> {
+    let region2_nonce: [u8; AEAD_NONCE_BYTES] = fresh_random_bytes();
+    seal_state_file_with_wrap_key_region_2_and_entropy(
+        wrap_key_region_2,
+        keys_file_bytes,
+        state_plaintext,
+        &region2_nonce,
+    )
+}
+
+fn seal_state_file_with_wrap_key_region_2_and_entropy(
+    wrap_key_region_2: &[u8; FILE_KEK_BYTES],
+    keys_file_bytes: &[u8],
+    state_plaintext: &[u8],
+    region2_nonce: &[u8; AEAD_NONCE_BYTES],
+) -> Result<Vec<u8>, WalletEnvelopeError> {
     // seed_block_tag = last 16 bytes of keys_file_bytes.
     let mut seed_block_tag = [0u8; AEAD_TAG_BYTES];
     seed_block_tag.copy_from_slice(&keys_file_bytes[keys_file_bytes.len() - AEAD_TAG_BYTES..]);
@@ -1039,7 +1069,7 @@ pub(crate) fn seal_state_file_with_entropy(
     let aad = state_aad(magic_version, &seed_block_tag);
 
     let mut region2_ct = state_plaintext.to_vec();
-    let region2_tag = aead_encrypt(&wrap_key_region_2, region2_nonce, &aad, &mut region2_ct)?;
+    let region2_tag = aead_encrypt(wrap_key_region_2, region2_nonce, &aad, &mut region2_ct)?;
     out.extend_from_slice(&region2_ct);
     out.extend_from_slice(&region2_tag);
     Ok(out)
