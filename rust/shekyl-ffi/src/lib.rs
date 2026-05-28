@@ -786,6 +786,14 @@ pub extern "C" fn shekyl_calc_stake_ratio(total_staked: u64, circulating_supply:
     shekyl_economics::calc_stake_ratio(total_staked, circulating_supply)
 }
 
+/// Base block subsidy before weight penalty and release multiplier (0h KAT export).
+#[no_mangle]
+pub extern "C" fn shekyl_base_block_reward(already_generated_coins: u64) -> u64 {
+    let params = shekyl_economics::params::EconomicParams::default();
+    shekyl_economics::base_block_reward(already_generated_coins, &params)
+        .expect("canonical params keep base_block_reward in range")
+}
+
 // ─── Emission Share (Component 4) ───────────────────────────────────────────
 
 /// Calculate the effective staker emission share at a given block height.
