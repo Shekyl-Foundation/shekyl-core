@@ -59,8 +59,8 @@ impl PersistenceEngine for WalletFile {
         &self,
         old: &Credentials<'_>,
         new: &Credentials<'_>,
-        new_kdf: shekyl_crypto_pq::wallet_envelope::KdfParams,
+        new_kdf: Option<shekyl_crypto_pq::wallet_envelope::KdfParams>,
     ) -> Result<(), Self::Error> {
-        self.rotate_password(old.password(), new.password(), Some(new_kdf))
+        self.rotate_password(old.password(), new.password(), new_kdf)
     }
 }

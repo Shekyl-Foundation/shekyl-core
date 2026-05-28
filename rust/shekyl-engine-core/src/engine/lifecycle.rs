@@ -983,17 +983,17 @@ impl<
     ///
     /// # Errors
     ///
-    /// - [`OpenError::IncorrectPassword`] when `old` does not unlock
-    ///   the existing envelope.
-    /// - [`super::ChangePasswordError`] for rotation or prefs-flush failures.
+    /// - [`super::ChangePasswordError::RotateFailed`] when `old` does not unlock
+    ///   the existing envelope or the keys-file rewrap fails.
+    /// - [`super::ChangePasswordError::RotatedButPrefsFlushFailed`] when rotation
+    ///   succeeds but the prefs HMAC flush fails.
     pub fn change_password(
         &mut self,
         old: &Credentials<'_>,
         new: &Credentials<'_>,
         new_kdf: Option<KdfParams>,
     ) -> Result<(), super::ChangePasswordError> {
-        let kdf = new_kdf.unwrap_or(KdfParams::default());
-        drive_persistence(self.persistence.rotate_password(old, new, kdf))
+        drive_persistence(self.persistence.rotate_password(old, new, new_kdf))
             .map_err(|e| super::ChangePasswordError::RotateFailed(e.into()))?;
         drive_persistence(
             self.persistence
@@ -1007,8 +1007,9 @@ impl<
     ///
     /// On success, `self` is consumed and the drop sequence runs:
     ///
-    /// 1. `self.file: WalletFile` — `Drop` releases the advisory lock
-    ///    on `<base>.keys` (see
+    /// 1. `self.persistence` — when the default [`WalletFile`] implementor is
+    ///    used, `Drop` releases the advisory lock on the keys file (`<base>.keys`,
+    ///    where `base` is the `.wallet` path; see
     ///    `shekyl_engine_file::handle::WalletFile::drop`).
     /// 2. `self.keys: AllKeysBlob` — `Drop` zeroizes `spend_sk`,
     ///    `view_sk`, `ml_kem_dk`, and (for uniform write patterns)
@@ -1030,6 +1031,10 @@ impl<
     /// - [`OpenError::OutstandingPendingTx`] when one or more
     ///   reservations are still in flight.
     /// - [`OpenError::Persistence`] for state-save / prefs-save failures.
+    ///
+    /// `credentials` is ignored on the steady-state close path (region-2 sealing
+    /// uses the session [`StateWrapKey`](super::sealing_keys::StateWrapKey)); the
+    /// parameter remains for API stability with pre-F5(b) callers.
     pub fn close(self, _credentials: &Credentials<'_>) -> Result<(), OpenError> {
         let count = self.outstanding_pending_txs();
         if count > 0 {

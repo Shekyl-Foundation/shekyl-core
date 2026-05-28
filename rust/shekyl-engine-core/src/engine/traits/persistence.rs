@@ -18,8 +18,9 @@
 //! third-party storage; offline password guessing remains a threat. Operators
 //! should exclude wallet paths from cloud backup where the platform allows.
 //!
-//! Do not copy the wallet directory while the advisory lock on
-//! `<base>.wallet.keys` is held. Use [`Engine::close`](super::super::Engine::close)
+//! Do not copy the wallet directory while the advisory lock on the keys file
+//! (`<base>.keys`, where `base` is the `.wallet` path) is held. Use
+//! [`Engine::close`](super::super::Engine::close)
 //! (or process shutdown that runs the close flush) and copy from the filesystem,
 //! or [`WalletFile::save_as`](shekyl_engine_file::WalletFile::save_as) to a
 //! quiescent destination path.
@@ -94,6 +95,6 @@ pub(crate) trait PersistenceEngine: Send + Sync + 'static {
         &self,
         old: &Credentials<'_>,
         new: &Credentials<'_>,
-        new_kdf: KdfParams,
+        new_kdf: Option<KdfParams>,
     ) -> Result<(), Self::Error>;
 }

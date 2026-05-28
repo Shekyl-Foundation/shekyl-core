@@ -38,9 +38,9 @@
 //!
 //! # Backup and quiescent copy (G4)
 //!
-//! Do not copy the wallet directory while the advisory lock on
-//! `<base>.wallet.keys` is held (for example during an open wallet-RPC
-//! session). Use [`Self::close`] (or process shutdown that runs the
+//! Do not copy the wallet directory while the advisory lock on the keys file
+//! (`<base>.keys`, where `base` is the `.wallet` path) is held (for example
+//! during an open wallet-RPC session). Use [`Self::close`] (or process shutdown that runs the
 //! close flush) and copy from the filesystem, or [`Self::save_as`] to a
 //! quiescent destination path.
 //!

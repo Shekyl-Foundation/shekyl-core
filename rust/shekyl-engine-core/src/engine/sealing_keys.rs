@@ -18,8 +18,9 @@ use zeroize::{ZeroizeOnDrop, Zeroizing};
 /// Steady-state ledger seal key: HKDF-derived `wrap_key_region_2`.
 ///
 /// Orchestrator holds `Zeroizing<StateWrapKey>` after open; trait methods take
-/// `&StateWrapKey<'_>` (borrowed view). Not [`Clone`] — re-derive after
-/// `rotate_password` when the wrap layer changes.
+/// `&StateWrapKey`. Not [`Clone`]. V3.0 password rotation rewraps the wrap
+/// layer only; `file_kek` and `wrap_key_region_2` bytes are unchanged, so the
+/// same session key remains valid until keys-file bytes drift without re-derive.
 #[derive(ZeroizeOnDrop)]
 pub struct StateWrapKey(Zeroizing<[u8; FILE_KEK_BYTES]>);
 

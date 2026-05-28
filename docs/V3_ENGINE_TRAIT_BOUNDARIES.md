@@ -1990,13 +1990,13 @@ pub trait PersistenceEngine {
 
     async fn save_state(
         &self,
-        state_key: &StateWrapKey<'_>,
+        state_key: &StateWrapKey,
         ledger: &WalletLedger,
     ) -> Result<(), Self::Error>;
 
     async fn save_prefs(
         &self,
-        prefs_key: &PrefsHmacKey<'_>,
+        prefs_key: &PrefsHmacKey,
         prefs: &WalletPrefs,
     ) -> Result<(), Self::Error>;
 
