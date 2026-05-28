@@ -2458,8 +2458,8 @@
   Stage 1 trait-extraction status in [`FOLLOWUPS.md`](FOLLOWUPS.md) V3.0
   queue and cross-refs [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
   §8.1 / §1 banner plus [`WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md).
-  Dedicated [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](design/STAGE_1_COMPLETION_AUDIT.md)
-  remains **outstanding** (do not link until that doc lands).
+  Dedicated `docs/design/STAGE_1_COMPLETION_AUDIT.md` remains **outstanding**
+  (filename reserved; add in a follow-up doc PR).
 
 - **Stage 1 PR 5 — `PendingTxEngine` trait surface and Phase 1
   substrate** (`feat/stage-1-pr5-pending-tx-engine`, 2026-05-27).
