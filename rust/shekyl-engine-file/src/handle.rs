@@ -56,6 +56,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use zeroize::Zeroizing;
 
 use shekyl_address::Network;
@@ -196,12 +197,20 @@ pub struct CreateParams<'a> {
 /// Opaque handle representing one opened wallet pair. Drop releases
 /// the advisory lock.
 ///
+/// Mutable on-disk coordination: keys-file bytes updated by
+/// [`rotate_password`](WalletFile::rotate_password). Held behind a
+/// [`Mutex`] so trait-shaped `&self` saves and rotation can serialize
+/// (PR 6 / §2.6 Round 3 note).
+struct WalletFileState {
+    keys_file_bytes: Vec<u8>,
+}
+
 /// `Debug` is hand-rolled to redact the cached keys-file bytes so the
 /// sealed-but-AAD-visible fields never land in a panic message.
 pub struct WalletFile {
     keys_path: PathBuf,
     state_path: PathBuf,
-    keys_file_bytes: Vec<u8>,
+    state: Mutex<WalletFileState>,
     opened_keys: Zeroizing<OpenedKeysFileOwned>,
     /// Decoded once at open/create time so the public `network()` and
     /// `capability()` accessors can be infallible.
@@ -229,7 +238,7 @@ impl std::fmt::Debug for WalletFile {
         f.debug_struct("WalletFile")
             .field("keys_path", &self.keys_path)
             .field("state_path", &self.state_path)
-            .field("keys_file_bytes", &"<redacted>")
+            .field("state", &"<redacted>")
             .field("opened_keys", &"<redacted>")
             .field("network", &self.network)
             .field("capability", &self.capability)
@@ -333,7 +342,9 @@ impl WalletFile {
         Ok(Self {
             keys_path,
             state_path,
-            keys_file_bytes: keys_bytes,
+            state: Mutex::new(WalletFileState {
+                keys_file_bytes: keys_bytes,
+            }),
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
             network,
             capability,
@@ -458,7 +469,9 @@ impl WalletFile {
         let handle = Self {
             keys_path,
             state_path,
-            keys_file_bytes: keys_bytes,
+            state: Mutex::new(WalletFileState {
+                keys_file_bytes: keys_bytes,
+            }),
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
             network,
             capability,
@@ -490,7 +503,13 @@ impl WalletFile {
         ledger.preflight_save()?;
         let body = ledger.to_postcard_bytes()?;
         let framed = encode_payload(PayloadKind::WalletLedgerPostcard, &body)?;
-        let state_bytes = seal_state_file(password, &self.keys_file_bytes, &framed)?;
+        let keys_file_bytes = self
+            .state
+            .lock()
+            .expect("wallet file mutex poisoned")
+            .keys_file_bytes
+            .clone();
+        let state_bytes = seal_state_file(password, &keys_file_bytes, &framed)?;
         atomic_write_file(&self.state_path, &state_bytes)?;
         Ok(())
     }
@@ -505,15 +524,20 @@ impl WalletFile {
     /// is the same, so the anti-swap AAD binding to `.wallet` is
     /// unchanged).
     pub fn rotate_password(
-        &mut self,
+        &self,
         old_password: &[u8],
         new_password: &[u8],
         new_kdf: Option<KdfParams>,
     ) -> Result<(), WalletFileError> {
-        let new_keys_bytes =
-            rewrap_keys_file_password(old_password, new_password, &self.keys_file_bytes, new_kdf)?;
+        let mut state = self.state.lock().expect("wallet file mutex poisoned");
+        let new_keys_bytes = rewrap_keys_file_password(
+            old_password,
+            new_password,
+            &state.keys_file_bytes,
+            new_kdf,
+        )?;
         atomic_write_file(&self.keys_path, &new_keys_bytes)?;
-        self.keys_file_bytes = new_keys_bytes;
+        state.keys_file_bytes = new_keys_bytes;
         Ok(())
     }
 
@@ -608,7 +632,13 @@ impl WalletFile {
         ledger.preflight_save()?;
         let body = ledger.to_postcard_bytes()?;
         let framed = encode_payload(PayloadKind::WalletLedgerPostcard, &body)?;
-        let state_bytes = seal_state_file(password, &self.keys_file_bytes, &framed)?;
+        let keys_file_bytes = self
+            .state
+            .lock()
+            .expect("wallet file mutex poisoned")
+            .keys_file_bytes
+            .clone();
+        let state_bytes = seal_state_file(password, &keys_file_bytes, &framed)?;
 
         // Step 4: rename keys file. Atomic within a filesystem; the
         // advisory lock survives the rename (per-OFD on POSIX, per-
