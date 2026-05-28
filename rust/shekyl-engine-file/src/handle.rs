@@ -743,6 +743,12 @@ impl WalletFile {
         &self.state_path
     }
 
+    /// Wallet cluster base path (the `.wallet` file path). Alias for
+    /// [`Self::state_path`] per `PersistenceEngine::base_path` (PR 6 C2b).
+    pub fn base_path(&self) -> &Path {
+        &self.state_path
+    }
+
     /// Read-only view of the decrypted keys-file metadata.
     pub fn opened_keys(&self) -> &OpenedKeysFile {
         &self.opened_keys.0
