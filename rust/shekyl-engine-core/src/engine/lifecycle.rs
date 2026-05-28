@@ -679,6 +679,7 @@ impl Engine<SoloSigner> {
             &file.opened_keys().file_kek,
             file.expected_classical_address(),
         );
+        file.zeroize_transient_file_kek();
         // Construct the producer's view-and-spend material once, from
         // the freshly-derived `AllKeysBlob`, and move it into the
         // `LocalRefresh` aggregate per
@@ -730,6 +731,21 @@ impl Engine<SoloSigner> {
             _signer: std::marker::PhantomData,
         })
     }
+}
+
+/// Run a [`PersistenceEngine`] future from sync lifecycle entry points.
+pub(crate) fn drive_persistence<Fut, T>(fut: Fut) -> T
+where
+    Fut: std::future::Future<Output = T>,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        return handle.block_on(fut);
+    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("persistence drive runtime");
+    rt.block_on(fut)
 }
 
 #[cfg(test)]
@@ -957,8 +973,12 @@ fn is_default_overrides(overrides: &SafetyOverrides) -> bool {
 // Phase 0c amendment block in
 // `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.2).
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, P: super::traits::PendingTxEngine>
-    Engine<S, D, LocalLedger, super::LocalRefresh, P, WalletFile>
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        P: super::traits::PendingTxEngine,
+        F: super::traits::PersistenceEngine,
+    > Engine<S, D, LocalLedger, super::LocalRefresh, P, F>
 {
     /// Rotate the wallet password, optionally also rotating the KDF
     /// parameters of the on-disk envelope wrap.
@@ -977,10 +997,16 @@ impl<S: EngineSignerKind, D: DaemonEngine, P: super::traits::PendingTxEngine>
         old: &Credentials<'_>,
         new: &Credentials<'_>,
         new_kdf: Option<KdfParams>,
-    ) -> Result<(), OpenError> {
-        self.persistence
-            .rotate_password(old.password(), new.password(), new_kdf)
-            .map_err(|e| map_wallet_file_error(e, self.network))
+    ) -> Result<(), super::ChangePasswordError> {
+        let kdf = new_kdf.unwrap_or(KdfParams::default());
+        drive_persistence(self.persistence.rotate_password(old, new, kdf))
+            .map_err(|e| super::ChangePasswordError::RotateFailed(e.into()))?;
+        drive_persistence(
+            self.persistence
+                .save_prefs(&self.prefs_hmac_key, &self.prefs),
+        )
+        .map_err(|e| super::ChangePasswordError::RotatedButPrefsFlushFailed(e.into()))?;
+        Ok(())
     }
 
     /// Close the wallet. Errors if `outstanding_pending_txs() > 0`.
@@ -1010,7 +1036,7 @@ impl<S: EngineSignerKind, D: DaemonEngine, P: super::traits::PendingTxEngine>
     /// - [`OpenError::OutstandingPendingTx`] when one or more
     ///   reservations are still in flight.
     /// - [`OpenError::Io`] for state-save / prefs-save failures.
-    pub fn close(self, credentials: &Credentials<'_>) -> Result<(), OpenError> {
+    pub fn close(self, _credentials: &Credentials<'_>) -> Result<(), OpenError> {
         let count = self.outstanding_pending_txs();
         if count > 0 {
             return Err(OpenError::OutstandingPendingTx { count });
@@ -1027,15 +1053,17 @@ impl<S: EngineSignerKind, D: DaemonEngine, P: super::traits::PendingTxEngine>
         // writers exist at this point; the read guard is structural,
         // not for contention.
         let ledger_guard = self.ledger.read();
-        self.persistence
-            .save_state(credentials.password(), &ledger_guard.ledger)
-            .map_err(|e| map_wallet_file_error(e, self.network))?;
+        drive_persistence(self.persistence.save_state(
+            &self.state_wrap_key,
+            &ledger_guard.ledger,
+        ))
+        .map_err(|e| OpenError::Persistence(e.into()))?;
         drop(ledger_guard);
-        self.persistence.save_prefs(&self.prefs).map_err(|e| {
-            OpenError::Io(IoError::WalletFile {
-                detail: e.to_string(),
-            })
-        })?;
+        drive_persistence(
+            self.persistence
+                .save_prefs(&self.prefs_hmac_key, &self.prefs),
+        )
+        .map_err(|e| OpenError::Persistence(e.into()))?;
 
         // Explicit drop so the chain documented above runs at a
         // named program point rather than at the end of the function

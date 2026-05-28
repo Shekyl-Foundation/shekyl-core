@@ -57,7 +57,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::wallet_envelope::{
@@ -776,6 +776,12 @@ impl WalletFile {
     /// Read-only view of the decrypted keys-file metadata.
     pub fn opened_keys(&self) -> &OpenedKeysFile {
         &self.opened_keys.0
+    }
+
+    /// Zeroize transient `file_kek` after HKDF session subkeys are cached
+    /// on the orchestrator (amended `WALLET_FILE_FORMAT_V1` §4.1 / PR 6 §5.9).
+    pub fn zeroize_transient_file_kek(&mut self) {
+        self.opened_keys.0.file_kek.zeroize();
     }
 
     /// Network this wallet is bound to. Decoded once at open/create
