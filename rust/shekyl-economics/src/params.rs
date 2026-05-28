@@ -37,6 +37,16 @@ impl Default for EconomicParams {
     }
 }
 
+/// `stake_ratio = total_staked / circulating_supply` in fixed-point SCALE units.
+#[inline]
+#[allow(clippy::cast_possible_truncation)]
+pub fn calc_stake_ratio(total_staked: u64, circulating_supply: u64) -> u64 {
+    if circulating_supply == 0 {
+        return 0;
+    }
+    (u128::from(total_staked) * u128::from(SCALE) / u128::from(circulating_supply)) as u64
+}
+
 /// Clamp a value to [lo, hi].
 #[inline]
 pub fn clamp(value: u64, lo: u64, hi: u64) -> u64 {
