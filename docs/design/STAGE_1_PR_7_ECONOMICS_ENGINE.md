@@ -549,8 +549,8 @@ stake_ratio = total_staked / circulating_supply
 ```
 
 **Disposition:** raw integer observables on the struct; all ratio/burn math stays in
-`shekyl-economics::calc_burn_pct` (implementation PR may add an
-`ActivityMetric`-aware wrapper; FFI/KAT path stays aligned with consensus math).
+`shekyl-economics` (see §5.8 — burn is already single-source Rust; wallet must
+not hand-roll `stake_ratio`).
 
 ```rust
 pub struct ActivityMetric {
@@ -565,9 +565,25 @@ pub struct ActivityMetric {
 
 - **Not pre-computed ratios** — orchestrator must not pass `volume_ratio` /
   `supply_ratio` / `stake_ratio`; that relocates derivation → Bug 2 class.
-- **`calc_burn_pct` forms `stake_ratio`** from `total_staked / circulating_supply`
-  internally. `circulating_supply` appears in supply-maturity and stake-ratio
-  denominator — single implementation site.
+- **`stake_ratio` formation is single-source today:** consensus
+  `Blockchain::get_stake_ratio` aggregates `txout_to_staked_key` state, then calls
+  `shekyl_calc_stake_ratio(total_staked, circulating_supply)` (Rust FFI —
+  `rust/shekyl-ffi/src/lib.rs`). Wallet `ActivityMetric` must use the **same**
+  primitive: move ratio arithmetic into `shekyl-economics` (e.g.
+  `calc_stake_ratio(total_staked, circulating_supply)`) and have both
+  `calc_burn_pct_from_activity(...)` and the FFI call it. **Do not** divide in
+  `LocalEconomics` or C++.
+- **`circulating_supply` quantity:** consensus passes `already_generated_coins`
+  as circulating supply at the burn site (`blockchain.cpp` ~2023). `ActivityMetric.circulating_supply`
+  must be that same quantity (typically `already_generated − destroyed` when the
+  wallet has both; document in rustdoc).
+- **Canonical burn entry point (implementation PR):** add an outer
+  `calc_burn_pct_from_activity` / `burned_amount_from_activity` that (1) forms
+  `stake_ratio` via the shared ratio helper, (2) calls the existing
+  `calc_burn_pct(..., stake_ratio, ...)` core. The precomputed-`stake_ratio`
+  signature remains for C++ `compute_fee_burn` but is **not** a second formation
+  site — C++ must keep passing a ratio already produced by
+  `shekyl_calc_stake_ratio`, not a locally computed division.
 - **Integers only** — fixed-point math per [`STAKER_REWARD_DISBURSEMENT.md`](../STAKER_REWARD_DISBURSEMENT.md)
   (no float across FFI/trait; divergent rounding fails consensus).
 
@@ -671,6 +687,7 @@ Two-test split (§5.2 B.5): one fixture file, **two arrays**, recorded from real
 | `params_digest` + `calibration_generation` | Fixture staleness guard — mismatch rejects run instead of silent pass |
 | `total_weighted_stake` as lo/hi | Exercises u128 reconstruction (LMDB/FFI boundary) |
 | Integers only | bp / milli in expectations — no float |
+| **Staking state live** | If any `records[]` row has `total_staked > 0`, the recording run must use **non-stub** `get_stake_ratio` / real stake aggregation. `params_digest` alone does not catch `(1 + stake_ratio)` collapsed to `1` because consensus still returns ratio `0` while sim models staking. Fixture metadata: `staking_state: "live" \| "stub"`; reject generation when `total_staked > 0` and `staking_state != "live"`. |
 
 Land under `docs/test_vectors/economics/` (exact path at C4); regen when
 `economics_params.json` or sim scenario changes.
@@ -720,8 +737,82 @@ remains the sole §2.7 amendment.**
 - R6 zero V3.0 consumer call sites.
 - R7 C0-only.
 
-**Round 2 (not Round 1):** segment **2i** wider-substrate audit; Round 2 close-out
-§4/§6 refresh; Round 3 §7.X.
+**Round 2 (not Round 1):** segment **2i** wider-substrate audit (§5.8 pins); Round 2
+close-out §4/§6 refresh; Round 3 §7.X.
+
+### §5.8 Round 2 substrate pins — economics surface asymmetry (2026-05-27)
+
+Post–Round 1 evidence from `blockchain.cpp`, `economics.h`, `cryptonote_basic_impl.cpp`,
+and FFI inventory. **Does not reopen §D-fenced decisions** (R1 raw observables, R2
+rulebook snapshot, dashboard rejection). Converts implementation heads-up into
+binding pins for C2/C4 and segment **2i**.
+
+#### Three-layer model (mining vs staking vs wallet engine)
+
+| Layer | Authoritative today | PR 7 role |
+|-------|-------------------|-----------|
+| **Mining output** | C++: `get_block_reward`, `validate_miner_transaction`, `construct_miner_tx`, `rx_slow_hash` | Wallet reads **projections** via Rust; eventual Rust-canonical migration TBD (FOLLOWUPS) |
+| **Staking consensus** | C++ orchestration + LMDB (`check_stake_claim_input`, accrual/pool/watermarks, stake-ratio cache) over **Rust FFI math** | `pool_weighted_total` reads **accrual mirror** (`StakerPoolState` / `staker_accrual_record` lo/hi) — **not** `StakeRegistry` / `distribute_staker_rewards` (wallet/sim only) |
+| **Economics formulas (non-base)** | Rust canonical; C++ thin wrappers (`compute_fee_burn`, `compute_emission_split`) | `EconomicsEngine` = wallet consumer of same Rust primitives FFI already uses |
+
+#### Burn / emission-share / release — single-source Rust (concern closed)
+
+- `shekyl::compute_fee_burn` → `shekyl_calc_burn_pct` + `shekyl_compute_burn_split`
+  (`shekyl-economics/src/burn.rs`). No independent C++ burn formula.
+- Burn is **wired** on block connect (`blockchain.cpp` ~5015–5060) but
+  `compute_fee_burn` **short-circuits** when `hf_version < HF_VERSION_SHEKYL_NG`
+  (present-but-dormant pre-NG; live from genesis on V3 NG chain).
+- PR 7 `burn_amount` calls the same primitive stack; R1 anti–Bug-2 value is
+  enforcing **one ratio-formation helper** for the `stake_ratio` *input* to that
+  stack (§5.3), not inventing parallel burn math.
+
+#### `stake_ratio` — single-source (concern closed)
+
+- `Blockchain::get_stake_ratio` returns `shekyl_calc_stake_ratio(total_staked,
+  circulating_supply)` after C++ aggregation — **not** a second division
+  implementation.
+- Wallet must route `ActivityMetric.total_staked` + `circulating_supply` through
+  the same helper (relocate FFI body into `shekyl-economics` per §5.3).
+
+#### Base emission (0h) — genuine asymmetry; must-build cross-check
+
+| Formula | Canonical location | FFI seam? |
+|---------|-------------------|-----------|
+| DAA (LWMA-1) | Rust `shekyl-difficulty` | Yes — cross-checked (`tests/difficulty/lwma1_cross_check.cpp`) |
+| Burn / emission-share / release | Rust `shekyl-economics` | Yes — C++ orchestrates |
+| **Base CryptoNote subsidy** | **C++ only** `get_block_reward` in `cryptonote_basic_impl.cpp` | **No** — no `shekyl_base_block_reward` |
+
+`already_generated` accumulation also runs C++-side (`blockchain.cpp` coinbase
+path). PR 7 `base_block_reward(already_generated)` introduces a **second**
+implementation of a **live consensus** formula.
+
+**Test trap:** engine-vs-sim differential (both Rust) proves **Rust self-consistency
+only** — it cannot catch divergence from `get_block_reward`. Consensus-critical
+guard for 0h:
+
+- **Must-build (implementation PR, C4 or dedicated commit):** Rust
+  `base_block_reward` vs C++ `get_block_reward` cross-check KAT — same mold as
+  `lwma1_cross_check.cpp` / `mining_parity.cpp` (grid of
+  `(median_weight, block_weight, already_generated, version[, tx_volume_avg])`
+  tuples from `economics_params.json`).
+- **Out of scope for differential:** `projected_already_generated` and
+  `base_emission_at` neutral trajectory remain wallet-only; no consensus consumer.
+
+**Scope decision (recorded in FOLLOWUPS, not left implicit):** Is 0h the first
+step toward migrating `get_block_reward` to Rust-canonical-via-FFI (like DAA/burn),
+or a wallet-only re-expression cross-checked until that migration? See
+[`FOLLOWUPS.md`](../FOLLOWUPS.md) — *Base emission: Rust 0h cross-check and
+get_block_reward migration disposition*.
+
+#### Segment 2i carry list (wider-substrate audit)
+
+| ID | Finding | Disposition |
+|----|---------|-------------|
+| **G1** | Cross-language single formation for `stake_ratio` + burn ActivityMetric entry shape | §5.3 + C1/C3 implementation |
+| **G2** | 0h Rust-vs-C++ cross-check KAT (not engine-vs-sim) | **Must-build** C4; FOLLOWUPS migration decision |
+| **G3** | R5 fixture validity when `total_staked > 0` requires live staking aggregation | §5.4 table row |
+| **G4** | Fee/burn input staleness at send time (`ActivityMetric` vs block-connect snapshot) | 2i audit (unchanged) |
+| **G5** | `parameters_snapshot` cache poison | 2i audit (unchanged) |
 
 ---
 
@@ -733,7 +824,7 @@ work is close-out + wider-substrate audit.
 | Segment | Scope | Status |
 |---------|-------|--------|
 | **2g** | Close-out — refresh §4/§6 binding matrix; Round 3 readiness gate | **Open** |
-| **2i** | Wider-substrate audit (fee staleness, snapshot cache, gas-style activity) | **Open** |
+| **2i** | Wider-substrate audit — §5.8 G1–G5; fee staleness; snapshot cache | **Open** (G1–G3 pre-pinned) |
 
 ### §6.1 PR 6 / PR 7 merge
 
@@ -756,10 +847,11 @@ Runs after **2g**, before §7.X. Yield: G1–Gn in segment **2i**.
 |--------|--------|
 | **C0** | Phase 0 §2.7 naming amendment (`base_emission_at`, `burn_amount`) + doc co-land |
 | **C1** | `EconomicsError`, `ActivityMetric` (§5.3 R1), `EconomicsParametersSnapshot` + `CalibrationStamp` (§5.3 R2) |
-| **C2** | `shekyl-economics`: `base_block_reward` + `projected_already_generated` + unit tests; sim rewired to 0h |
+| **C2** | `shekyl-economics`: `base_block_reward` + `projected_already_generated` + `calc_stake_ratio` + `calc_burn_pct_from_activity`; sim rewired to 0h |
+| **C2a** | **Must-build:** Rust `base_block_reward` vs C++ `get_block_reward` cross-check KAT (`mining_parity` / `lwma1_cross_check` mold) — §5.8 |
 | **C2b** | `ChainEconomicsSource` + production adapter |
 | **C3** | `EconomicsEngine` + `LocalEconomics` impl; `CALIBRATION-PENDING` doc comments |
-| **C4** | Real-path tests: `RecordedChainFixture` (§5.4) + differential + calibration-tagged vectors |
+| **C4** | Real-path tests: `RecordedChainFixture` (§5.4, incl. staking-state-live guard) + engine-vs-sim differential (Rust-internal) + **C2a** cross-check (consensus-critical 0h) |
 | **C5** | `Engine` `E` slot + `economics` field |
 | **C6** | Benches + `PERFORMANCE_BASELINE.md` |
 | **C7** | Docs: CHANGELOG, rustdoc, design doc Phase 1 landed; calibration banners |
@@ -774,7 +866,8 @@ After **PR 6 + PR 7** implementation merge — not either alone.
 
 | # | Discipline | Failure mode foreclosed |
 |---|------------|-------------------------|
-| 1 | Canonical derivation + 0h single source | Bug 2/7 drift between engine/sim/FFI |
+| 1 | Canonical derivation; 0h + Rust-vs-C++ KAT | Bug 2/7; false confidence from Rust-only differential |
+| 1b | `calc_stake_ratio` single helper (wallet + FFI) | Cross-language stake_ratio divergence |
 | 2 | Narrow `ChainEconomicsSource` | Wide observer-feed pre-provision |
 | 3 | Real-path fixtures | Mock-driven false confidence |
 | 4 | Calibration vs structural split | "Adjust on testnet" → accidental fork |
@@ -792,6 +885,7 @@ After **PR 6 + PR 7** implementation merge — not either alone.
 | **Round 0 feedback folded** | `Round 0 feedback folded 2026-05-27; lens citations refreshed to PR-5 five-category form; MockEconomics struck (real-path testing); load-bearing question reframed to ChainEconomicsSource (2′) + shekyl-economics primitives; calibration-vs-structural boundary added; F4 grep closed — already_generated not mirrored in engine (interpretation A for current_emission). Reopen Round 0 only if trait identity / scope guard challenged.` |
 | **Round 1 segment 2b drafted** | `Round 1 segment 2b drafted 2026-05-27; §2.7 naming amendment locked (current_emission→base_emission_at, burn_fraction→burn_amount, C0); base_emission_at = pure shekyl-economics projection under (A), reads nothing from ChainEconomicsSource; source shrunk to one read (active_weighted_stake).` |
 | **Round 1 closed** | `Round 1 closed 2026-05-27; segments 2a/2c/2d/2g disposed. ActivityMetric = raw integer observables (calc_burn_pct owns ratios). Snapshot = rulebook constants + as_of (not dashboard). RecordedChainFixture = sim-recorded, params-digest-pinned, two-array (differential vs neutral milestones). No V3.0 consumer call sites. §2.7 surface changes are C0-only.` |
+| **Round 2 substrate pins** | `§5.8 2026-05-27: burn/stake_ratio single-source Rust confirmed; wallet must use calc_stake_ratio helper + ActivityMetric outer burn entry. Base emission = C++-only — 0h needs Rust-vs-C++ KAT (not engine-vs-sim). R5 staking-state-live fixture rule. FOLLOWUPS: base_block_reward migration disposition.` |
 
 ---
 

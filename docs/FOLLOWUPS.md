@@ -65,6 +65,48 @@ sustainability is unaffected by the recalibration.
   [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   Phases 0–6; Stage 1 was prerequisite, Phase 1+ continues `Engine`.
 
+- **Base emission: Rust `base_block_reward` (0h) cross-check and
+  `get_block_reward` migration disposition (2026-05-27; Stage 1 PR 7
+  substrate audit §5.8).** **Evidence.** Shekyl economics is Rust-canonical
+  for burn, emission-share, release-multiplier, and stake-ratio *division*
+  (`shekyl_calc_stake_ratio` FFI; burn via `shekyl_calc_burn_pct` in
+  `shekyl-economics/src/burn.rs`; C++ `compute_fee_burn` is orchestration
+  only). **Base CryptoNote subsidy is not:** `cryptonote::get_block_reward`
+  in `src/cryptonote_basic/cryptonote_basic_impl.cpp` is the live consensus
+  minting formula; `already_generated` accumulation is C++-side on block
+  connect. There is no `shekyl_base_block_reward` FFI today. PR 7
+  introduces `base_block_reward(already_generated)` in `shekyl-economics` for
+  wallet/sim/engine — a **second implementation** of consensus-critical math.
+
+  **Must-build before treating 0h as correct (implementation PR 7, C2a):**
+  Rust-vs-C++ cross-check KAT in the `lwma1_cross_check.cpp` /
+  `mining_parity.cpp` mold: same inputs
+  `(median_weight, current_block_weight, already_generated_coins, version[,
+  tx_volume_avg])` → assert `base_block_reward(...) == get_block_reward(...)`.
+  The engine-vs-sim differential (both Rust) is **insufficient** — it only
+  proves Rust internal consistency.
+
+  **Scope decision required (do not leave implicit).** Two defensible end
+  states:
+
+  1. **Migration path (preferred under “one canonical source” posture):**
+     `base_block_reward` in Rust becomes canonical; `get_block_reward` and
+     coinbase validation eventually call `shekyl_base_block_reward` (+ release
+     multiplier FFI) like DAA/burn. PR 7 lands Rust + cross-check; C++ cutover
+     is a follow-on PR (may be V3.0 if touch surface is bounded, else V3.1).
+
+  2. **Wallet-only re-expression:** 0h stays wallet/sim/engine-only with a
+     **permanent** Rust-vs-C++ cross-check in CI until migration is scheduled.
+     C++ remains authoritative for minting until an explicit cutover PR.
+
+  **Action.** Record the chosen disposition in the PR 7 implementation PR
+  description and close this FOLLOWUPS item when (a) C2a KAT lands and (b)
+  either C++ calls Rust for base reward **or** the wallet-only branch is
+  explicitly ratified with a named migration FOLLOWUPS successor. **Design:**
+  [`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](./design/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
+  §5.8. **Target:** V3.0 — cross-check **must** land with PR 7 implementation;
+  migration-vs-wallet-only decision **before** PR 7 implementation merges.
+
 - **Post-2g adversarial-corpus methodology + implementation
   (trigger: RandomX v2 Phase 2g Round 7 R7-D1/R7-D2 reopening
   of R1-D5 + R1-D6; *closed by Phase 2h implementation PR*).**
