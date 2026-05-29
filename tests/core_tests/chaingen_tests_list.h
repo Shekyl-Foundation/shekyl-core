@@ -37,7 +37,6 @@
 #include "chain_switch_1.h"
 #include "integer_overflow.h"
 #include "bulletproof_plus.h"
-#include "economics_c2a_prime.h"
 /************************************************************************/
 /*                                                                      */
 /************************************************************************/

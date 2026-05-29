@@ -78,26 +78,6 @@ pub fn calc_burn_pct(
     clamp(result, 0, burn_cap)
 }
 
-/// Burn percentage from raw activity inputs; forms `stake_ratio` via shared helper.
-pub fn calc_burn_pct_from_activity(
-    tx_volume: u64,
-    tx_baseline: u64,
-    circulating_supply: u64,
-    total_staked: u64,
-    params: &crate::params::EconomicParams,
-) -> u64 {
-    let stake_ratio = crate::params::calc_stake_ratio(total_staked, circulating_supply);
-    calc_burn_pct(
-        tx_volume,
-        tx_baseline,
-        circulating_supply,
-        params.money_supply,
-        stake_ratio,
-        params.burn_base_rate,
-        params.burn_cap,
-    )
-}
-
 /// Compute the three-way fee split for a block.
 ///
 /// # Arguments

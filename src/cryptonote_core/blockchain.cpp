@@ -1605,7 +1605,8 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
     MDEBUG("coinbase transaction doesn't use full amount of block reward:  spent: " << money_in_use << ",  block reward " << miner_base_reward + effective_fee << "(" << miner_base_reward << "+" << effective_fee << ")");
     return false;
   }
-  // base_reward out-param stays full post-get_block_reward subsidy for :4946 (fix α).
+  // Update base_reward to reflect what the miner actually received (for caller tracking)
+  base_reward = miner_base_reward;
   return true;
 }
 //------------------------------------------------------------------
