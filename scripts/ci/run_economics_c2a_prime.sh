@@ -94,15 +94,17 @@ verify_stale_subsidy_regex_probes() {
 }
 
 verify_build_artifact_layout() {
-  # Layer jobs consume the build/ tarball from the build job. Binaries link
-  # against shared libs under build/src/** (absolute RPATH at link time).
+  # Layer jobs consume the build/ tarball from the build job. The CALIBRATION
+  # build is CMAKE_BUILD_TYPE=Release, so BUILD_SHARED_LIBS defaults OFF
+  # (CMakeLists.txt:608-612 flips it ON only for Debug). Internal libraries are
+  # static .a archives and the test binaries are statically linked against them,
+  # so no internal .so files exist — the binaries are self-contained. This must
+  # stay in lockstep with the build job's manifest step in economics-c2a-prime.yml.
   # tests/data/ is repo-tracked and comes from checkout, not the tarball.
   local missing=0
   local required=(
     "$BUILD_DIR/tests/unit_tests/unit_tests"
     "$BUILD_DIR/tests/core_tests/core_tests"
-    "$BUILD_DIR/src/cryptonote_core/libcryptonote_core.so"
-    "$BUILD_DIR/src/cryptonote_basic/libcryptonote_basic.so"
   )
   for path in "${required[@]}"; do
     if [[ ! -e "$path" ]]; then
@@ -116,7 +118,7 @@ verify_build_artifact_layout() {
   if [[ ! -d "$REPO_ROOT/tests/data" ]]; then
     die "tests/data/ missing from checkout — unit_tests needs --data-dir or DEFAULT_DATA_DIR"
   fi
-  echo "OK: build artifact layout (binaries + shared libs); tests/data from checkout"
+  echo "OK: build artifact layout (statically-linked test binaries); tests/data from checkout"
 }
 
 count_gtest_cases() {
