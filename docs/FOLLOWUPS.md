@@ -598,34 +598,6 @@ sustainability is unaffected by the recalibration.
 
   **Target.** V3.0, Phase 7.7 stressnet.
 
-- **`scripts/bench/compare.py`: treat baseline=0 as informational,
-  not fail (trigger: cut chore PR off `dev` immediately; pre-RC1).**
-  The CI bench gate at `scripts/bench/compare.py:218–219` computes
-  `delta_pct = inf` when the rolling baseline records
-  `instructions=0` for an entry but the PR-side capture is
-  non-zero, and `verdict_for("hot_path_bench", inf)` returns
-  `fail`. This contradicts the protocol intent documented in
-  `docs/benchmarks/README.md`: "An entry present in the PR but
-  not the baseline is informational; the first merge to `dev`
-  seeds it into the rolling baseline." The current logic treats
-  baseline-present-with-zero as a real measurement rather than
-  as missing data. Surfaced when M3b's PR #34 hit `+inf%` fail
-  verdicts on `hot_path_bench_ledger_postcard_{serialize,
-  deserialize}/with_setup_{0,1,2}` against a `bench-baseline`
-  branch (refreshed at `647f82d59`) where those six entries have
-  `instructions=0` in `baseline.iai.snapshot` (likely Valgrind
-  timed out during baseline capture for the larger
-  `with_setup_2` (10k transfers) runs, and the snapshot wrote
-  zeros for the entire group).
-
-  **Disposition.** Cut a focused chore PR off `dev` —
-  `chore(bench): treat baseline=0 as informational in compare.py`
-  — extending `compare.py:218–219` to emit `verdict = "info"` (not
-  `"fail"`) when `base_val == 0` and `pr_val > 0`, mirroring the
-  added-in-PR informational path. Estimate: ~5 lines in one
-  Python file, no workspace code changes. Lands before any
-  subsequent PR that hits the bench gate. Pre-RC1.
-
 - **Stage 1 PR 3 engine-property test re-location (trigger: V3.2
   unified `KeyEngine` / `LedgerEngine` / `DaemonEngine`
   `pub(crate) → pub` visibility-promotion bundle per
