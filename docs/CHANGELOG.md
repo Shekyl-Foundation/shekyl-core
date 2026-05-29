@@ -4,6 +4,12 @@
 
 ### Changed
 
+- **Stage 1 PR 6 — PersistenceEngine C7: remove password `save_state`.**
+  `WalletFile::save_state` now takes session-cached `wrap_key_region_2` only;
+  password-taking steady-state save deleted. `shekyl_wallet_save_state` FFI
+  drops the password parameters. Design:
+  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
+
 - **Wallet file format v1: per-region HKDF wrap keys (spec + implementation).**
   [`docs/WALLET_FILE_FORMAT_V1.md`](WALLET_FILE_FORMAT_V1.md) §2.6 prescribes
   `wrap_key_region_1` (label-only HKDF) and `wrap_key_region_2`
@@ -24,6 +30,17 @@
   [`docs/FOLLOWUPS.md`](FOLLOWUPS.md).
 
 ### Added
+
+- **Stage 1 PR 6 — PersistenceEngine Phase 0–2c (trait surface + file layer).**
+  [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md) §2.6
+  amends steady-state `save_state` / `save_prefs` to F5(b) sealing keys;
+  `shekyl-engine-core` adds `PersistenceError`, `OpenError::Persistence`,
+  `ChangePasswordError`, `StateWrapKey`, and the `PersistenceEngine` trait
+  module; `shekyl-crypto-pq` adds `seal_state_file_with_wrap_key_region_2`;
+  `shekyl-engine-file` adds `Mutex<WalletFileState>`, `rotate_password` on
+  `&self`, additive `save_state_with_wrap_key_region_2`, and `base_path()`.
+  `WalletFile` trait impl and `Engine<F>` wiring follow in C3–C5. Design:
+  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
 
 - **RandomX v2 Track A Phase 2h adversarial-corpus methodology
   landed** (`feat/randomx-v2-phase2h-impl`, target PR; commits

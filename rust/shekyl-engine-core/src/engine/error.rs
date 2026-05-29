@@ -124,6 +124,12 @@ pub enum OpenError {
         count: usize,
     },
 
+    /// Final ledger/prefs flush during [`super::Engine::close`] failed.
+    /// Distinct from [`Self::Io`] so save-path vocabulary is not
+    /// squeezed into open-shaped variants (PR 6 R10 / §2.6).
+    #[error("persistence failure during close: {0}")]
+    Persistence(#[from] PersistenceError),
+
     /// **TRANSIENT — DELETE WHEN VIEW/HW BODIES LAND.**
     ///
     /// Tracked in `docs/FOLLOWUPS.md` § V3.0 → "View/HW lifecycle bodies".
@@ -139,6 +145,39 @@ pub enum OpenError {
         /// Capability the stub method represents.
         capability: super::Capability,
     },
+}
+
+// --- Persistence -----------------------------------------------------------
+
+/// Failures from [`super::traits::persistence::PersistenceEngine`] steady-state
+/// save / rotate paths (`save_state`, `save_prefs`, `rotate_password`).
+///
+/// Mapped at the lifecycle boundary: [`OpenError::Persistence`] on
+/// [`super::Engine::close`](super::Engine::close);
+/// [`ChangePasswordError`] on [`super::Engine::change_password`](super::Engine::change_password).
+#[derive(Debug, thiserror::Error)]
+pub enum PersistenceError {
+    /// On-disk wallet envelope / atomic-write failure.
+    #[error("wallet file error: {0}")]
+    WalletFile(#[from] shekyl_engine_file::WalletFileError),
+
+    /// Prefs sidecar load/save/HMAC failure.
+    #[error("prefs error: {0}")]
+    Prefs(#[from] shekyl_engine_prefs::PrefsError),
+}
+
+/// Failures from [`super::Engine::change_password`](super::Engine::change_password)
+/// when rotation and prefs flush are separate steps (PR 6 §5.10 / segment 2b).
+#[derive(Debug, thiserror::Error)]
+pub enum ChangePasswordError {
+    /// Password rotation (keys-file rewrap) failed before prefs were touched.
+    #[error("password rotation failed: {0}")]
+    RotateFailed(#[from] PersistenceError),
+
+    /// Keys-file rotation succeeded but prefs flush failed — on-disk password
+    /// and prefs may be inconsistent until the user retries or restores.
+    #[error("password rotated but prefs flush failed: {0}")]
+    RotatedButPrefsFlushFailed(PersistenceError),
 }
 
 // --- Refresh ---------------------------------------------------------------

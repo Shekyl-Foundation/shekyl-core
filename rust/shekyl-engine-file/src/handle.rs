@@ -13,31 +13,20 @@
 //! ```text
 //! WalletFile::create(base, password, …, initial_ledger) → Handle
 //! WalletFile::open  (base, password)                    → (Handle, OpenOutcome)
-//! handle.save_state     (&ledger)                             → ()
+//! handle.save_state     (wrap_key_region_2, &ledger)           → ()
 //! handle.rotate_password(old, new, new_kdf_opt)               → ()
 //! ```
 //!
 //! The handle owns:
 //!
-//! - The decrypted [`OpenedKeysFile`], kept alive so that every
-//!   auto-save can re-bind `.wallet` to the same `seed_block_tag`
-//!   without re-running Argon2.
-//! - Wait — we *do* re-run Argon2 per auto-save (this is a design
-//!   tradeoff documented in §4.3 of `docs/WALLET_FILE_FORMAT_V1.md`:
-//!   "each auto-save re-runs the Argon2id wrap derivation"). So the
-//!   handle holds the keys-file *bytes* (for region-2 AAD binding) and
-//!   the user's password is passed in fresh on each save. The
-//!   [`OpenedKeysFile`] is kept for read-only metadata access
-//!   (creation_timestamp, restore_height_hint, network, …) and is
-//!   never used as the file_kek source — that derivation always goes
-//!   back through the envelope.
-//!
-//! Actually, re-reading §4.3 carefully: the envelope's
-//! `seal_state_file` takes `(password, keys_file_bytes,
-//! state_plaintext)`, so the password is required per-save. The
-//! handle's job is to hold the keys-file bytes and the advisory lock,
-//! not the password. Callers (the FFI, the GUI) supply the password
-//! on each save.
+//! - The decrypted [`OpenedKeysFile`] for read-only metadata
+//!   (creation_timestamp, restore_height_hint, network, …).
+//! - Session-cached HKDF `wrap_key_region_2` and [`PrefsHmacKey`]
+//!   derived once at open/create so steady-state `save_state` /
+//!   prefs I/O avoid Argon2id (amended `docs/WALLET_FILE_FORMAT_V1.md`
+//!   §4.3 / PR 6 F5(b)).
+//! - The keys-file *bytes* (for region-2 AAD binding), behind a
+//!   [`Mutex`] so trait-shaped `&self` saves and rotation serialize.
 //!
 //! # Thread safety
 //!
@@ -46,6 +35,14 @@
 //! metadata are safe (all fields are immutable bytes). Two handles
 //! against the same wallet pair cannot coexist in the same process by
 //! construction: the advisory lock will refuse the second `acquire`.
+//!
+//! # Backup and quiescent copy (G4)
+//!
+//! Do not copy the wallet directory while the advisory lock on the keys file
+//! (`<base>.keys`, where `base` is the `.wallet` path) is held (for example
+//! during an open wallet-RPC session). Use [`Self::close`] (or process shutdown that runs the
+//! close flush) and copy from the filesystem, or [`Self::save_as`] to a
+//! quiescent destination path.
 //!
 //! # This commit's scope
 //!
@@ -56,13 +53,16 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use zeroize::Zeroizing;
+use std::sync::Mutex;
+use zeroize::{Zeroize, Zeroizing};
 
 use shekyl_address::Network;
 use shekyl_crypto_pq::wallet_envelope::{
-    open_keys_file, open_state_file, rewrap_keys_file_password, seal_keys_file, seal_state_file,
-    CapabilityContent, KdfParams, OpenedKeysFile, EXPECTED_CLASSICAL_ADDRESS_BYTES,
+    derive_wrap_key_region_2, open_keys_file, open_state_file, rewrap_keys_file_password,
+    seal_keys_file, seal_state_file, seal_state_file_with_wrap_key_region_2, CapabilityContent,
+    KdfParams, OpenedKeysFile, EXPECTED_CLASSICAL_ADDRESS_BYTES,
 };
+use shekyl_engine_prefs::hmac_key::FILE_KEK_BYTES;
 use shekyl_engine_prefs::{
     load_prefs as prefs_load_prefs, save_prefs as prefs_save_prefs,
     LoadOutcome as PrefsLoadOutcome, PrefsHmacKey, WalletPrefs,
@@ -196,12 +196,20 @@ pub struct CreateParams<'a> {
 /// Opaque handle representing one opened wallet pair. Drop releases
 /// the advisory lock.
 ///
+/// Mutable on-disk coordination: keys-file bytes updated by
+/// [`rotate_password`](WalletFile::rotate_password). Held behind a
+/// [`Mutex`] so trait-shaped `&self` saves and rotation can serialize
+/// (PR 6 / §2.6 Round 3 note).
+struct WalletFileState {
+    keys_file_bytes: Vec<u8>,
+}
+
 /// `Debug` is hand-rolled to redact the cached keys-file bytes so the
 /// sealed-but-AAD-visible fields never land in a panic message.
 pub struct WalletFile {
     keys_path: PathBuf,
     state_path: PathBuf,
-    keys_file_bytes: Vec<u8>,
+    state: Mutex<WalletFileState>,
     opened_keys: Zeroizing<OpenedKeysFileOwned>,
     /// Decoded once at open/create time so the public `network()` and
     /// `capability()` accessors can be infallible.
@@ -220,6 +228,9 @@ pub struct WalletFile {
     /// Zeroized on drop via [`PrefsHmacKey`]'s `Zeroizing<[u8; 32]>`
     /// interior; callers never see the raw bytes.
     prefs_hmac_key: PrefsHmacKey,
+    /// HKDF-derived region-2 wrap key, cached for the session so
+    /// [`Self::save_state`] does not re-run Argon2id.
+    wrap_key_region_2: Zeroizing<[u8; FILE_KEK_BYTES]>,
     /// Held for Drop semantics; not read after construction.
     _lock: KeysFileLock,
 }
@@ -229,12 +240,13 @@ impl std::fmt::Debug for WalletFile {
         f.debug_struct("WalletFile")
             .field("keys_path", &self.keys_path)
             .field("state_path", &self.state_path)
-            .field("keys_file_bytes", &"<redacted>")
+            .field("state", &"<redacted>")
             .field("opened_keys", &"<redacted>")
             .field("network", &self.network)
             .field("capability", &self.capability)
             .field("overrides", &self.overrides)
             .field("prefs_hmac_key", &self.prefs_hmac_key)
+            .field("wrap_key_region_2", &"<redacted>")
             .field("_lock", &self._lock)
             .finish()
     }
@@ -329,17 +341,22 @@ impl WalletFile {
         // for the derivation formula and security argument.
         let prefs_hmac_key =
             PrefsHmacKey::derive(&opened.file_kek, &opened.expected_classical_address);
+        let wrap_key_region_2 =
+            derive_wrap_key_region_2(&opened.file_kek, &opened.expected_classical_address);
 
         Ok(Self {
             keys_path,
             state_path,
-            keys_file_bytes: keys_bytes,
+            state: Mutex::new(WalletFileState {
+                keys_file_bytes: keys_bytes,
+            }),
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
             network,
             capability,
             // Provisioning path: no user session → no overrides.
             overrides: SafetyOverrides::none(),
             prefs_hmac_key,
+            wrap_key_region_2,
             _lock: lock,
         })
     }
@@ -454,16 +471,21 @@ impl WalletFile {
         // session so prefs I/O does not pay Argon2id per call.
         let prefs_hmac_key =
             PrefsHmacKey::derive(&opened.file_kek, &opened.expected_classical_address);
+        let wrap_key_region_2 =
+            derive_wrap_key_region_2(&opened.file_kek, &opened.expected_classical_address);
 
         let handle = Self {
             keys_path,
             state_path,
-            keys_file_bytes: keys_bytes,
+            state: Mutex::new(WalletFileState {
+                keys_file_bytes: keys_bytes,
+            }),
             opened_keys: Zeroizing::new(OpenedKeysFileOwned(opened)),
             network,
             capability,
             overrides,
             prefs_hmac_key,
+            wrap_key_region_2,
             _lock: lock,
         };
         Ok((handle, outcome))
@@ -474,23 +496,25 @@ impl WalletFile {
     /// (the function physically never names that path as a write
     /// target) and belt-and-braces by the atomic-write helper.
     ///
-    /// Requires the password on every call because the envelope's
-    /// `seal_state_file` runs Argon2id to recover `file_kek` (no
-    /// caching — see §4.3 of the spec).
+    /// Seals with HKDF-derived `wrap_key_region_2` (session-cached on
+    /// the handle via [`Self::session_wrap_key_region_2`]; no Argon2id
+    /// on the save path — amended `docs/WALLET_FILE_FORMAT_V1.md` §4.3).
     pub fn save_state(
         &self,
-        password: &[u8],
+        wrap_key_region_2: &[u8; FILE_KEK_BYTES],
         ledger: &WalletLedger,
     ) -> Result<(), WalletFileError> {
-        // Aggregator-level invariants fire BEFORE we spend an
-        // Argon2id derivation on the write path. Debug builds route
-        // through `debug_assert!` so test runs abort loudly with the
-        // full panic message; release builds return the typed error
-        // so a live-user save cannot panic.
         ledger.preflight_save()?;
         let body = ledger.to_postcard_bytes()?;
         let framed = encode_payload(PayloadKind::WalletLedgerPostcard, &body)?;
-        let state_bytes = seal_state_file(password, &self.keys_file_bytes, &framed)?;
+        let keys_file_bytes = self
+            .state
+            .lock()
+            .expect("wallet file mutex poisoned")
+            .keys_file_bytes
+            .clone();
+        let state_bytes =
+            seal_state_file_with_wrap_key_region_2(wrap_key_region_2, &keys_file_bytes, &framed)?;
         atomic_write_file(&self.state_path, &state_bytes)?;
         Ok(())
     }
@@ -505,15 +529,16 @@ impl WalletFile {
     /// is the same, so the anti-swap AAD binding to `.wallet` is
     /// unchanged).
     pub fn rotate_password(
-        &mut self,
+        &self,
         old_password: &[u8],
         new_password: &[u8],
         new_kdf: Option<KdfParams>,
     ) -> Result<(), WalletFileError> {
+        let mut state = self.state.lock().expect("wallet file mutex poisoned");
         let new_keys_bytes =
-            rewrap_keys_file_password(old_password, new_password, &self.keys_file_bytes, new_kdf)?;
+            rewrap_keys_file_password(old_password, new_password, &state.keys_file_bytes, new_kdf)?;
         atomic_write_file(&self.keys_path, &new_keys_bytes)?;
-        self.keys_file_bytes = new_keys_bytes;
+        state.keys_file_bytes = new_keys_bytes;
         Ok(())
     }
 
@@ -562,11 +587,12 @@ impl WalletFile {
     ///
     /// # Password
     ///
-    /// `password` is the wallet's *current* password. It is required
-    /// because `seal_state_file` runs Argon2id on every save and the
-    /// handle does not cache the password (see §4.3 of the spec). Use
-    /// [`Self::rotate_password`] separately if you also want to change
-    /// the password — `save_as` does not couple the two.
+    /// `password` is the wallet's *current* password. `save_as` uses
+    /// the envelope's password path to seal the relocated state file
+    /// (one-time Argon2id at relocation). Steady-state
+    /// [`Self::save_state`] uses session-cached `wrap_key_region_2`
+    /// instead. Use [`Self::rotate_password`] separately if you also
+    /// want to change the password — `save_as` does not couple the two.
     ///
     /// # Companion files
     ///
@@ -608,7 +634,13 @@ impl WalletFile {
         ledger.preflight_save()?;
         let body = ledger.to_postcard_bytes()?;
         let framed = encode_payload(PayloadKind::WalletLedgerPostcard, &body)?;
-        let state_bytes = seal_state_file(password, &self.keys_file_bytes, &framed)?;
+        let keys_file_bytes = self
+            .state
+            .lock()
+            .expect("wallet file mutex poisoned")
+            .keys_file_bytes
+            .clone();
+        let state_bytes = seal_state_file(password, &keys_file_bytes, &framed)?;
 
         // Step 4: rename keys file. Atomic within a filesystem; the
         // advisory lock survives the rename (per-OFD on POSIX, per-
@@ -713,9 +745,39 @@ impl WalletFile {
         &self.state_path
     }
 
+    /// Wallet cluster base path (the `.wallet` file path). Alias for
+    /// [`Self::state_path`] per `PersistenceEngine::base_path` (PR 6 C2b).
+    pub fn base_path(&self) -> &Path {
+        &self.state_path
+    }
+
     /// Read-only view of the decrypted keys-file metadata.
     pub fn opened_keys(&self) -> &OpenedKeysFile {
         &self.opened_keys.0
+    }
+
+    /// Session-cached HKDF `wrap_key_region_2` for region-2 state sealing.
+    #[must_use]
+    pub fn session_wrap_key_region_2(&self) -> &[u8; FILE_KEK_BYTES] {
+        &self.wrap_key_region_2
+    }
+
+    /// Replace in-memory keys-file bytes without writing disk.
+    ///
+    /// Used by integration tests that model orchestrator/cache drift relative to
+    /// the on-disk keys pair. Production callers must not use this.
+    #[doc(hidden)]
+    pub fn replace_keys_file_bytes_in_memory_for_tests(&self, bytes: Vec<u8>) {
+        self.state
+            .lock()
+            .expect("wallet file mutex poisoned")
+            .keys_file_bytes = bytes;
+    }
+
+    /// Zeroize transient `file_kek` after HKDF session subkeys are cached
+    /// on the orchestrator (amended `WALLET_FILE_FORMAT_V1` §4.1 / PR 6 §5.9).
+    pub fn zeroize_transient_file_kek(&mut self) {
+        self.opened_keys.0.file_kek.zeroize();
     }
 
     /// Network this wallet is bound to. Decoded once at open/create
@@ -1012,8 +1074,9 @@ mod tests {
             let params = make_params(&fx, &base, b"pw", &ledger, &cap);
             WalletFile::create(&params).expect("create")
         };
-        handle.save_state(b"pw", &ledger).expect("save1");
-        handle.save_state(b"pw", &ledger).expect("save2");
+        let wk = *handle.session_wrap_key_region_2();
+        handle.save_state(&wk, &ledger).expect("save1");
+        handle.save_state(&wk, &ledger).expect("save2");
         drop(handle);
 
         let (_, outcome) =
@@ -1036,8 +1099,9 @@ mod tests {
         };
 
         let keys_before = std::fs::read(handle.keys_path()).unwrap();
+        let wk = *handle.session_wrap_key_region_2();
         for _ in 0..8 {
-            handle.save_state(b"pw", &ledger).expect("save");
+            handle.save_state(&wk, &ledger).expect("save");
         }
         let keys_after = std::fs::read(handle.keys_path()).unwrap();
         assert_eq!(
@@ -1054,7 +1118,7 @@ mod tests {
         let cap = fx.capability();
         let ledger = WalletLedger::empty();
 
-        let mut handle = {
+        let handle = {
             let params = make_params(&fx, &base, b"old", &ledger, &cap);
             WalletFile::create(&params).expect("create")
         };
@@ -1225,7 +1289,8 @@ mod tests {
                     .expect("open-lost");
             assert!(outcome.is_lost());
             let ledger = outcome.into_ledger();
-            handle.save_state(b"pw", &ledger).expect("save");
+            let wk = *handle.session_wrap_key_region_2();
+            handle.save_state(&wk, &ledger).expect("save");
             ledger
         };
 

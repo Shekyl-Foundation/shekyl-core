@@ -80,6 +80,7 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: c-cpp
+          config-file: ./.github/codeql/config.yml
 
       - name: Configure and Build C++
         run: |

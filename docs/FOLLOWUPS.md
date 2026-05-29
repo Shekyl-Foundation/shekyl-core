@@ -1864,6 +1864,16 @@ sustainability is unaffected by the recalibration.
   V3.1. **Reopen when:** C++ wallet path still coexists with Rust engine file
   handle.
 
+- **Async `Engine::close` / `change_password` lifecycle (PR 6 PR #83).**
+  Sync close/rotate now use `drive_persistence` with `block_in_place` on
+  multi-thread runtimes and a scoped-thread fallback otherwise (PR #83
+  robustness pass). **Remaining work:** dedicated async entry points with
+  cooperative cancellation when wallet-RPC stops wrapping the whole sync call
+  in `spawn_blocking`. **Target:** V3.1. **Reopen when:** wallet-RPC needs
+  in-runtime close or password rotation without a blocking wrapper.
+  **Ref:** [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §4.2; [`STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](./design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
+
 - **Shekyl-native end-to-end wallet/daemon test harness
   (replacement for the deleted `tests/functional_tests/`).**
   The Monero-inherited Python+C++ functional-test harness under

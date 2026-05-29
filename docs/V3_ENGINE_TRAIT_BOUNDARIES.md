@@ -31,10 +31,11 @@ that this drift count surfaced. **Stage 1 PR 3 (`KeyEngine`, PRs
 (`PendingTxEngine`, PR #81) landed 2026-05-27** — completing the
 §8.1 critical-path chain `DaemonEngine` → `LedgerEngine` →
 (`RefreshEngine` ∥ `PendingTxEngine`) on `dev` (merge
-`b9c03dc24`). `PersistenceEngine` and `EconomicsEngine` remain
-spec-only trait surfaces (no `engine/traits/{persistence,economics}.rs`
-yet); §8.1 permits them off the critical path. Post-closeout inventory: [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) (dedicated
-`STAGE_1_COMPLETION_AUDIT.md` is not yet in the tree — add after PR 6 + PR 7 land).
+`b9c03dc24`). `PersistenceEngine` Phase 0–2c landed on `dev` (trait module + file layer;
+`WalletFile` wiring follows). **`EconomicsEngine` remains spec-only**
+(no `engine/traits/economics.rs` yet); §8.1 permits it off the critical path.
+Post-closeout inventory: [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) (dedicated
+`STAGE_1_COMPLETION_AUDIT.md` is not yet in the tree — add after Stage 1 PR 7 lands).
 Subsequent per-trait PRs follow §8.1's within-stage-1 ordering and
 §8.2's amendment co-landing rule.
 

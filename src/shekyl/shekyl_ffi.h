@@ -1519,13 +1519,12 @@ bool shekyl_wallet_export_ledger_postcard(
     uint32_t* out_error);
 
 /* Seal a new `.wallet` from the given ledger postcard bytes. The bytes
- * are re-parsed before Argon2id runs so malformed input is rejected
- * cheaply. On success the handle's in-memory ledger is replaced so
- * subsequent `shekyl_wallet_export_ledger_postcard` calls reflect the
- * save. */
+ * are re-parsed before AEAD sealing so malformed input is rejected cheaply.
+ * Steady-state saves use the session-cached `wrap_key_region_2` (no Argon2).
+ * On success the handle's in-memory ledger is replaced so subsequent
+ * `shekyl_wallet_export_ledger_postcard` calls reflect the save. */
 bool shekyl_wallet_save_state(
     ShekylWallet* h,
-    const uint8_t* password_ptr, size_t password_len,
     const uint8_t* ledger_postcard_ptr, size_t ledger_postcard_len,
     uint32_t* out_error);
 
