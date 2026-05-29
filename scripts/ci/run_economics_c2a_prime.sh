@@ -17,8 +17,8 @@
 # Harness naming contract (implementer MUST match — CI selects by these filters):
 #
 #   unit_tests (gtest):
-#     EconomicsC2aPrime/Layer1.*
-#     EconomicsC2aPrime/Layer2.*
+#     EconomicsC2aPrime.Layer1*
+#     EconomicsC2aPrime.Layer2*
 #
 #   core_tests (--filter glob):
 #     economics_c2a_prime_layer3*
@@ -231,8 +231,8 @@ cmd_layer1() {
   require_repo_root
   verify_build_artifact_layout
   require_build_tree
-  require_gtest_harness 1 'EconomicsC2aPrime/Layer1.*'
-  run_gtest_layer 'EconomicsC2aPrime/Layer1.*'
+  require_gtest_harness 1 'EconomicsC2aPrime.Layer1*'
+  run_gtest_layer 'EconomicsC2aPrime.Layer1*'
   run_rust_layer1
 }
 
@@ -240,8 +240,8 @@ cmd_layer2() {
   require_repo_root
   verify_build_artifact_layout
   require_build_tree
-  require_gtest_harness 2 'EconomicsC2aPrime/Layer2.*'
-  run_gtest_layer 'EconomicsC2aPrime/Layer2.*'
+  require_gtest_harness 2 'EconomicsC2aPrime.Layer2*'
+  run_gtest_layer 'EconomicsC2aPrime.Layer2*'
   run_rust_layer2
 }
 
