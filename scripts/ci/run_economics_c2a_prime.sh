@@ -12,6 +12,7 @@
 #   layer1      — Layer 1 per-quantity dual-leg KAT (legs A + B)
 #   layer2      — Layer 2 multi-block accumulation + cap invariant + A vs B
 #   layer3      — Layer 3 pop-replay reorg coupling
+#   layer{1,2,3}-probe — exit 0 when harness registered, 1 when pending
 #   all         — preflight + layers 1–3 (local developer convenience)
 #
 # Harness naming contract (implementer MUST match — CI selects by these filters):
@@ -127,7 +128,9 @@ count_gtest_cases() {
 
 count_core_tests() {
   local filter="$1"
-  "$CORE_TESTS" --list_tests 2>/dev/null | grep -c "$filter" || true
+  # core_tests --filter uses glob; strip trailing * for fixed-string prefix match.
+  local prefix="${filter%\*}"
+  "$CORE_TESTS" --list_tests 2>/dev/null | grep -cF "$prefix" || true
 }
 
 require_gtest_harness() {
@@ -155,7 +158,10 @@ run_core_tests_layer() {
 
 rust_test_exists() {
   local crate="$1" pattern="$2"
-  cargo test --locked -p "$crate" -- --list 2>/dev/null | grep -q "$pattern"
+  (
+    cd "$REPO_ROOT/rust"
+    cargo test --locked -p "$crate" -- --list 2>/dev/null | grep -q "$pattern"
+  )
 }
 
 run_rust_layer1() {
@@ -169,6 +175,67 @@ run_rust_layer1() {
       die "no Rust Layer 1 leg-B test (c2a_prime_layer1*) in shekyl-economics — land with C2 in 7-base"
     fi
   )
+}
+
+layer1_harness_ready() {
+  [[ -x "$UNIT_TESTS" ]] || return 1
+  local count
+  count="$(count_gtest_cases 'EconomicsC2aPrime/Layer1.*')"
+  if [[ "$count" -eq 0 ]]; then
+    count="$(count_gtest_cases 'EconomicsC2aPrime.Layer1*')"
+  fi
+  [[ "$count" -gt 0 ]] || return 1
+  rust_test_exists shekyl-economics c2a_prime_layer1 || return 1
+}
+
+layer2_harness_ready() {
+  [[ -x "$UNIT_TESTS" ]] || return 1
+  local count
+  count="$(count_gtest_cases 'EconomicsC2aPrime/Layer2.*')"
+  if [[ "$count" -eq 0 ]]; then
+    count="$(count_gtest_cases 'EconomicsC2aPrime.Layer2*')"
+  fi
+  [[ "$count" -gt 0 ]] || return 1
+  if rust_test_exists shekyl-economics c2a_prime_layer2; then
+    return 0
+  fi
+  rust_test_exists shekyl-economics-sim c2a_prime_layer2
+}
+
+layer3_harness_ready() {
+  [[ -x "$CORE_TESTS" ]] || return 1
+  local filter='economics_c2a_prime_layer3*'
+  [[ "$(count_core_tests "$filter")" -gt 0 ]]
+}
+
+cmd_layer1_probe() {
+  require_repo_root
+  if layer1_harness_ready; then
+    echo "Layer 1 harness registered"
+    return 0
+  fi
+  echo "Layer 1 harness pending (7-base)"
+  return 1
+}
+
+cmd_layer2_probe() {
+  require_repo_root
+  if layer2_harness_ready; then
+    echo "Layer 2 harness registered"
+    return 0
+  fi
+  echo "Layer 2 harness pending (7-base)"
+  return 1
+}
+
+cmd_layer3_probe() {
+  require_repo_root
+  if layer3_harness_ready; then
+    echo "Layer 3 harness registered"
+    return 0
+  fi
+  echo "Layer 3 harness pending (7-base)"
+  return 1
 }
 
 run_rust_layer2() {
@@ -261,7 +328,7 @@ Land pop-replay harness per STAGE_1_PR_7 §5.8."
 }
 
 usage() {
-  echo "Usage: $(basename "$0") {preflight|layer1|layer2|layer3|all}" >&2
+  echo "Usage: $(basename "$0") {preflight|layer1|layer2|layer3|layer{1,2,3}-probe|all}" >&2
   exit 2
 }
 
@@ -269,6 +336,9 @@ main() {
   local cmd="${1:-}"
   case "$cmd" in
     preflight) cmd_preflight ;;
+    layer1-probe) cmd_layer1_probe ;;
+    layer2-probe) cmd_layer2_probe ;;
+    layer3-probe) cmd_layer3_probe ;;
     layer1) cmd_layer1 ;;
     layer2) cmd_layer2 ;;
     layer3) cmd_layer3 ;;
