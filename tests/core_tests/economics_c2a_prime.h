@@ -21,4 +21,6 @@ public:
 private:
   static constexpr unsigned k_chain_blocks = 100;
   static constexpr unsigned k_pop_count = 10;
+
+  mutable cryptonote::account_base m_miner;
 };
