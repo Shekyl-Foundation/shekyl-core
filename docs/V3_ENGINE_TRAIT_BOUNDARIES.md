@@ -34,8 +34,8 @@ that this drift count surfaced. **Stage 1 PR 3 (`KeyEngine`, PRs
 `b9c03dc24`). `PersistenceEngine` Phase 0–2c landed on `dev` (trait module + file layer;
 `WalletFile` wiring follows). **`EconomicsEngine` remains spec-only**
 (no `engine/traits/economics.rs` yet); §8.1 permits it off the critical path.
-Post-closeout inventory: [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) (dedicated
-`STAGE_1_COMPLETION_AUDIT.md` is not yet in the tree — add after Stage 1 PR 7 lands).
+Post-closeout inventory: [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) and
+[`docs/design/STAGE_1_COMPLETION_AUDIT.md`](design/STAGE_1_COMPLETION_AUDIT.md).
 Subsequent per-trait PRs follow §8.1's within-stage-1 ordering and
 §8.2's amendment co-landing rule.
 

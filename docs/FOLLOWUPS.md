@@ -47,66 +47,46 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **Stage 1 trait-extraction chain — closeout audit (2026-05-27;
-  PR #81 merged).** The §8.1 critical-path chain is landed on `dev`:
+- **Stage 1 trait-extraction chain — closeout audit (2026-05-29;
+  post–PR #88 update).** The §8.1 critical-path chain is landed on `dev`:
   `DaemonEngine` → `LedgerEngine` → (`RefreshEngine` ∥
   `PendingTxEngine`), with `KeyEngine` trait + `LocalKeys` implementor
-  in parallel. Inventory, orchestrator shape (`Engine<S, D, L, R, P>`),
-  gaps (`PersistenceEngine`, `EconomicsEngine`, `K: KeyEngine` on
-  `Engine`), and ordered next steps:
+  in parallel; `PersistenceEngine` substrate also landed (PR #83).
+  Inventory, orchestrator shape (`Engine<S, D, L, R, P>`), ordered
+  next steps, and off-critical-path trait status:
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md) §8.1 /
   §1 status banner; per-PR design docs under `docs/design/STAGE_1_PR_*`.
-  **Dedicated audit markdown** (`STAGE_1_COMPLETION_AUDIT.md`) — **not yet
-  landed** (CHANGELOG entry was aspirational; add in a doc-only PR or fold
-  into post–PR 7 closeout).
+  **Dedicated audit markdown landed:**
+  [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](./design/STAGE_1_COMPLETION_AUDIT.md).
   **Still V3.0 pre-genesis but not “missing Stage 1 PR”:** P1 async
   refresh post-pass, wallet BIP-39 FFI, optional persistence/economics
   trait PRs, economics §3.3 benches. **Rewrite plan:**
   [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   Phases 0–6; Stage 1 was prerequisite, Phase 1+ continues `Engine`.
 
-- **Base emission: Rust `base_block_reward` (0h) cross-check and
-  `get_block_reward` migration disposition (2026-05-27; Stage 1 PR 7
-  substrate audit §5.8).** **Evidence.** Shekyl economics is Rust-canonical
-  for burn, emission-share, release-multiplier, and stake-ratio *division*
-  (`shekyl_calc_stake_ratio` FFI; burn via `shekyl_calc_burn_pct` in
-  `shekyl-economics/src/burn.rs`; C++ `compute_fee_burn` is orchestration
-  only). **Base CryptoNote subsidy is not:** `cryptonote::get_block_reward`
-  in `src/cryptonote_basic/cryptonote_basic_impl.cpp` is the live consensus
-  minting formula; `already_generated` accumulation is C++-side on block
-  connect. There is no `shekyl_base_block_reward` FFI today. PR 7
-  introduces `base_block_reward(already_generated)` in `shekyl-economics` for
-  wallet/sim/engine — a **second implementation** of consensus-critical math.
+- **Base emission migration (Stage 1 PR 7 §5.8) — C2/C2a′ landed; C2c still
+  open (updated 2026-05-29).** PR #88 landed C2 and C2a′ on `dev`:
+  Rust `base_block_reward` + `projected_already_generated`, dual-leg KAT
+  harnesses (`tests/unit_tests/economics_c2a_prime.cpp`,
+  `tests/core_tests/economics_c2a_prime.cpp`), and required CI checks.
+  `shekyl_base_block_reward` FFI now exists
+  (`rust/shekyl-ffi/src/lib.rs`, `src/shekyl/shekyl_ffi.h`).
 
-  **Disposition (ratified 2026-05-27): migration path; C++ cutover in V3.0.**
-  `base_block_reward` in `shekyl-economics` is the canonical formula.
-  `get_block_reward` becomes a thin C++ wrapper (same shape as
-  `compute_fee_burn` / `compute_emission_split` in `economics.h`) calling
-  `shekyl_base_block_reward` (+ release-multiplier FFI). Wallet-only
-  re-expression with a permanent cross-check bridge is **rejected**.
+  **Still open:** C2c cutover. Live consensus path
+  `cryptonote::get_block_reward` in
+  `src/cryptonote_basic/cryptonote_basic_impl.cpp` still computes base subsidy
+  in C++; production callsites do not yet route through
+  `shekyl_base_block_reward`.
 
-  **Implementation scope (PR 7, V3.0) — commit order is load-bearing:**
+  **Disposition (unchanged):** migration path; C++ cutover in V3.0.
+  `base_block_reward` in `shekyl-economics` is canonical; `get_block_reward`
+  becomes a thin wrapper (`shekyl_base_block_reward` + release multiplier).
+  Wallet-only permanent cross-check bridge remains rejected.
 
-  - **C2** — Rust `base_block_reward` + `projected_already_generated` in crate;
-    sim rewired to 0h.
-  - **C2a′** — **Separate commit.** Dual-leg KAT (§5.8 H1): (A) Rust ==
-    legacy C++ `get_block_reward`; (B) Rust == spec/sim oracle independent of
-    C++. Multi-block `already_generated` accumulation grid (H2), not
-    single-block subsidy only. CI required check.
-  - **C2c** — **Separate commit after C2a′.** `shekyl_base_block_reward` FFI;
-    rewire all consensus consumers (`validate_miner_transaction`, fee estimate,
-    `already_generated` accumulator, pop_block reversal — H2). Delete duplicated
-    C++ base-subsidy body only after both KAT legs pass. **C2c message cites
-    C2a′ commit hash** (H3).
-
-  **Merge-time hazards (§5.8 H1–H3):** C++-only oracle certifies reproducing C++
-  bugs (H1); blast radius includes accumulation (H2); soft "gates" are
-  insufficient — enforce commit order + required CI (H3).
-
-  **Close this FOLLOWUPS item when:** C2a′ (both legs + accumulation grid) is
-  in CI green and C2c is merged on `dev` with C2a′ as ancestor. **Design:**
+  **Close this FOLLOWUPS item when:** C2c is merged on `dev` with C2a′
+  ancestor and duplicated C++ base-subsidy body removed. **Design:**
   [`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](./design/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
-  §5.8. **Target:** V3.0 (PR 7 implementation).
+  §5.8. **Target:** V3.0 (PR 7 completion).
 
 - **Post-2g adversarial-corpus methodology + implementation
   (trigger: RandomX v2 Phase 2g Round 7 R7-D1/R7-D2 reopening
