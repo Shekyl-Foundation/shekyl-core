@@ -65,6 +65,49 @@ sustainability is unaffected by the recalibration.
   [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   Phases 0–6; Stage 1 was prerequisite, Phase 1+ continues `Engine`.
 
+- **Base emission: Rust `base_block_reward` (0h) cross-check and
+  `get_block_reward` migration disposition (2026-05-27; Stage 1 PR 7
+  substrate audit §5.8).** **Evidence.** Shekyl economics is Rust-canonical
+  for burn, emission-share, release-multiplier, and stake-ratio *division*
+  (`shekyl_calc_stake_ratio` FFI; burn via `shekyl_calc_burn_pct` in
+  `shekyl-economics/src/burn.rs`; C++ `compute_fee_burn` is orchestration
+  only). **Base CryptoNote subsidy is not:** `cryptonote::get_block_reward`
+  in `src/cryptonote_basic/cryptonote_basic_impl.cpp` is the live consensus
+  minting formula; `already_generated` accumulation is C++-side on block
+  connect. There is no `shekyl_base_block_reward` FFI today. PR 7
+  introduces `base_block_reward(already_generated)` in `shekyl-economics` for
+  wallet/sim/engine — a **second implementation** of consensus-critical math.
+
+  **Disposition (ratified 2026-05-27): migration path; C++ cutover in V3.0.**
+  `base_block_reward` in `shekyl-economics` is the canonical formula.
+  `get_block_reward` becomes a thin C++ wrapper (same shape as
+  `compute_fee_burn` / `compute_emission_split` in `economics.h`) calling
+  `shekyl_base_block_reward` (+ release-multiplier FFI). Wallet-only
+  re-expression with a permanent cross-check bridge is **rejected**.
+
+  **Implementation scope (PR 7, V3.0) — commit order is load-bearing:**
+
+  - **C2** — Rust `base_block_reward` + `projected_already_generated` in crate;
+    sim rewired to 0h.
+  - **C2a′** — **Separate commit.** Dual-leg KAT (§5.8 H1): (A) Rust ==
+    legacy C++ `get_block_reward`; (B) Rust == spec/sim oracle independent of
+    C++. Multi-block `already_generated` accumulation grid (H2), not
+    single-block subsidy only. CI required check.
+  - **C2c** — **Separate commit after C2a′.** `shekyl_base_block_reward` FFI;
+    rewire all consensus consumers (`validate_miner_transaction`, fee estimate,
+    `already_generated` accumulator, pop_block reversal — H2). Delete duplicated
+    C++ base-subsidy body only after both KAT legs pass. **C2c message cites
+    C2a′ commit hash** (H3).
+
+  **Merge-time hazards (§5.8 H1–H3):** C++-only oracle certifies reproducing C++
+  bugs (H1); blast radius includes accumulation (H2); soft "gates" are
+  insufficient — enforce commit order + required CI (H3).
+
+  **Close this FOLLOWUPS item when:** C2a′ (both legs + accumulation grid) is
+  in CI green and C2c is merged on `dev` with C2a′ as ancestor. **Design:**
+  [`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](./design/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
+  §5.8. **Target:** V3.0 (PR 7 implementation).
+
 - **Post-2g adversarial-corpus methodology + implementation
   (trigger: RandomX v2 Phase 2g Round 7 R7-D1/R7-D2 reopening
   of R1-D5 + R1-D6; *closed by Phase 2h implementation PR*).**
@@ -3624,6 +3667,34 @@ one place to confirm each item's relationship to the wallet stack.
   V3 wallet decision log entry "shekyld fee policy version absence"
   ([`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md),
   2026-04-25).**
+
+- **`ActivityMetric` producer actor (wallet-side coherent bundle).** Surfaced by
+  Stage 1 PR 7 segment **2i** G4 disposition
+  ([`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](design/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
+  §6.3). `ActivityMetric` is a validated four-field bundle (`tx_volume`,
+  `circulating_supply`, `total_staked`, `as_of_height`); all four must reflect
+  one chain state at `as_of_height`. `EconomicsEngine` trusts the bundle by type;
+  **production construction** belongs to a wallet actor with atomic-read capability
+  over its upstream (local LMDB mirror: one read transaction; daemon RPC: see
+  conditional entry below). Responsibility: read upstream atomically, call
+  `ActivityMetric::new`, pass to `burn_amount` / display paths. Natural owner:
+  post–Rust-cutover chain-state mirroring actor (descendant of M3a refresh/mirror
+  work). **Trigger:** Stage 4 actor mesh design (post-V3.0). **Target: V3.1+**
+  actor-mesh PR. Cross-link: PR 7 C1 (`ActivityMetric::new`), §5.5 R6 (no V3.0
+  consumer).
+
+- **Daemon atomic activity snapshot RPC (conditional on RPC upstream).** Same G4
+  substrate. If the wallet's `ActivityMetric` producer reads from **daemon RPC**
+  rather than a local LMDB mirror, the daemon must expose a **single** endpoint
+  that returns all four fields from **one** LMDB read transaction on its side
+  (e.g. `get_activity_at_height(h)` or equivalent). Three sequential RPCs
+  (`get_tx_volume`, `get_info` fields, stake query, …) are **not** equivalent —
+  the daemon can advance between calls and produce an inconsistent snapshot that
+  passes `ActivityMetric::new` invariants but not consensus. If the producer's
+  upstream is exclusively a local mirror, this entry is **moot**. **Target: V3.1**
+  daemon release when V3.0 wallet runs against `shekyld` without a mirror.
+  Cross-link: [`docs/WALLET_RPC_RUST.md`](WALLET_RPC_RUST.md) / daemon RPC rust
+  cutover docs when scoped.
 
 - **Workspace clippy `-D warnings` cleanup.** Surfaced by the Phase 0
   comprehensive audit (2026-04-25). The Rust workspace is **not**

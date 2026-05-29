@@ -31,10 +31,11 @@ that this drift count surfaced. **Stage 1 PR 3 (`KeyEngine`, PRs
 (`PendingTxEngine`, PR #81) landed 2026-05-27** — completing the
 §8.1 critical-path chain `DaemonEngine` → `LedgerEngine` →
 (`RefreshEngine` ∥ `PendingTxEngine`) on `dev` (merge
-`b9c03dc24`). `PersistenceEngine` and `EconomicsEngine` remain
-spec-only trait surfaces (no `engine/traits/{persistence,economics}.rs`
-yet); §8.1 permits them off the critical path. Post-closeout inventory:
-[`docs/design/STAGE_1_COMPLETION_AUDIT.md`](design/STAGE_1_COMPLETION_AUDIT.md).
+`b9c03dc24`). `PersistenceEngine` Phase 0–2c landed on `dev` (trait module + file layer;
+`WalletFile` wiring follows). **`EconomicsEngine` remains spec-only**
+(no `engine/traits/economics.rs` yet); §8.1 permits it off the critical path.
+Post-closeout inventory: [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) (dedicated
+`STAGE_1_COMPLETION_AUDIT.md` is not yet in the tree — add after Stage 1 PR 7 lands).
 Subsequent per-trait PRs follow §8.1's within-stage-1 ordering and
 §8.2's amendment co-landing rule.
 
@@ -263,7 +264,7 @@ every key access should inline into a single audited compilation
 unit so that the compiler's cross-function analysis sees the entire
 secret-handling path. The argument is materially weaker at
 `PersistenceEngine::save_prefs`, `LedgerEngine::balance`, or
-`EconomicsEngine::current_emission`, where `dyn`-dispatch overhead
+`EconomicsEngine::base_emission_at`, where `dyn`-dispatch overhead
 is irrelevant and the auditing bar is lower. We choose the same
 generic-bounded shape across all seven traits anyway, because (a)
 consistency makes the §3 composition section's mental model
@@ -2012,11 +2013,11 @@ pub trait PersistenceEngine {
 **PR 6 Phase 0a amendment (F5(b), 2026-05-27).** Steady-state saves take
 HKDF-derived sealing keys (`StateWrapKey` = `wrap_key_region_2`,
 `PrefsHmacKey` from `shekyl-engine-prefs`), not `Credentials` or password
-bytes. `type Error` is [`PersistenceError`](../../rust/shekyl-engine-core/src/engine/error.rs)
-(not [`OpenError`](../../rust/shekyl-engine-core/src/engine/error.rs));
-[`Engine::close`](../../rust/shekyl-engine-core/src/engine/lifecycle.rs) maps
-persist failures via `OpenError::Persistence`. [`Engine::change_password`](../../rust/shekyl-engine-core/src/engine/lifecycle.rs)
-uses [`ChangePasswordError`](../../rust/shekyl-engine-core/src/engine/error.rs).
+bytes. `type Error` is [`PersistenceError`](../rust/shekyl-engine-core/src/engine/error.rs)
+(not [`OpenError`](../rust/shekyl-engine-core/src/engine/error.rs));
+[`Engine::close`](../rust/shekyl-engine-core/src/engine/lifecycle.rs) maps
+persist failures via `OpenError::Persistence`. [`Engine::change_password`](../rust/shekyl-engine-core/src/engine/lifecycle.rs)
+uses [`ChangePasswordError`](../rust/shekyl-engine-core/src/engine/error.rs).
 Binding form, open ritual, and commit plan:
 [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
 
@@ -2098,7 +2099,7 @@ consumes it.
 multipliers, base burn rate, ESF, release bounds, pool-share
 constants, emission-decay constants) and the canonical
 derivations of values from those parameters and from chain
-state (current emission, burn fraction for a given fee,
+state (base emission at a height, burn amount for a given fee,
 pool-weighted stake total). At V3.0 these are pure functions
 over `shekyl-economics` constants; at V3.x Component 3 they
 gain internal state for adaptive-burn observation, but the
@@ -2182,35 +2183,62 @@ guard, not silent extension. See §1.5's scope-guard
 meta-pattern for the broader discipline this instance
 participates in.
 
-**Stage 1 surface.**
+**Stage 1 surface.** **Round 1 naming amendment (PR 7 design, C0):**
+`current_emission` → `base_emission_at`; `burn_fraction` → `burn_amount`
+(absolute burn amount, not a ratio). Co-land per §8.2.
 
 ```rust
 pub trait EconomicsEngine {
     type Error: Into<EconomicsError>;
 
-    /// Per-block emission at the given height. Reads from
-    /// chain-state-derived parameters; pure given the height
-    /// at V3.0; at V3.x with adaptive burn the value depends
-    /// on the implementor's observed activity state but the
-    /// caller's interface does not change.
-    fn current_emission(&self, height: u64) -> Result<u64, Self::Error>;
+    /// Base block subsidy at `height` on the **neutral trajectory**
+    /// (`release_multiplier = 1` at every block) — not effective
+    /// reward (no activity / release-multiplier input) and not
+    /// realized emission (actual chain path uses realized multipliers
+    /// and burn-adjusted `already_generated`). Legitimate consumers:
+    /// supply-curve / schedule projections (e.g. ESF-22 milestones in
+    /// [`DESIGN_CONCEPTS.md`](DESIGN_CONCEPTS.md)). Realized emission at a
+    /// height requires a future mirror + `realized_emission_at` if the
+    /// gated (B) initiative lands.
+    ///
+    /// At V3.0 (interpretation **(A)**): pure function of `(height, params)`
+    /// via `shekyl-economics` — does **not** read `ChainEconomicsSource`.
+    /// `Err` is arithmetic overflow only (defensive; should not occur with
+    /// checked math). When per-height chain mirror exists, `Err` may gain an
+    /// unsynced-height arm without renaming this method.
+    fn base_emission_at(&self, height: u64) -> Result<u64, Self::Error>;
 
-    /// Burn fraction for a transaction with the given fee at
-    /// the activity metric reported by the caller (or, at
-    /// V3.x, observed by the implementor). Pure given the
-    /// inputs at V3.0; stateful at V3.x with the surface
-    /// preserved.
-    fn burn_fraction(
+    /// Absolute atomic-unit amount to burn from `fee`, modulated by
+    /// `activity` — not a ratio or basis-points field.
+    fn burn_amount(
         &self,
         fee: u64,
         activity: ActivityMetric,
     ) -> Result<u64, Self::Error>;
 
-    /// Total weighted stake across the principal pool,
-    /// computed canonically from current pool state. `u128`
-    /// per the audit Bug 7 fix that promoted aggregation
-    /// arithmetic to `u128` to prevent overflow at large
-    /// pool sizes.
+    /// Canonical total weighted stake across the principal pool — the
+    /// denominator intended for Phase 2b's `StakeEngine::projected_yield`
+    /// (2026-05-08 disposition). Sourced from chain-mirror state via
+    /// `ChainEconomicsSource::active_weighted_stake`, not from wallet-local
+    /// `shekyl-staking::Registry` (Bug 2 class).
+    ///
+    /// **`u128` per Bug 7** — aggregation uses `u128` to prevent overflow at
+    /// large pool sizes.
+    ///
+    /// **Zero is valid, not an error.** A return of `0` means no active stake
+    /// at the mirrored height — consensus burns the block's pool contribution
+    /// rather than carrying it ([`STAKER_REWARD_DISBURSEMENT.md`](STAKER_REWARD_DISBURSEMENT.md)
+    /// §"Empty-staker-set behavior"). Do not treat `0` as a failed read.
+    ///
+    /// **Callers using this as a denominator must guard division.** `0` is a
+    /// live divide-by-zero for yield-style computations; check before dividing.
+    ///
+    /// **`0` is overloaded.** The same value can mean (a) no active stake at
+    /// the relevant height (legitimate) or (b) wallet not synced to that height
+    /// / stale mirror (must not be used as denominator). This method is
+    /// infallible (`-> u128`) and cannot signal "unknown." Consumers that must
+    /// distinguish the cases must verify sync state separately before
+    /// interpreting `0`.
     fn pool_weighted_total(&self) -> u128;
 
     /// Parameter snapshot for governance / display.
@@ -3084,7 +3112,7 @@ The gate has three pinned components:
    gate. The hot paths under measurement are at minimum
    `KeyEngine::account_public_address`,
    `LedgerEngine::balance`, `LedgerEngine::synced_height`,
-   `EconomicsEngine::current_emission`, and
+   `EconomicsEngine::base_emission_at`, and
    `EconomicsEngine::parameters_snapshot`. Additional paths
    are measured if reviewer judgment identifies them as
    hot-path during PR review (UI render-loop callers,
@@ -3290,7 +3318,7 @@ address it are sent back for amendment.
 
 #### 3.3.6 EconomicsEngine reads at Stage 4 (Round 4a Resolution C)
 
-`EconomicsEngine` reads (`current_emission`, `burn_fraction`,
+`EconomicsEngine` reads (`base_emission_at`, `burn_amount`,
 `pool_weighted_total`, `parameters_snapshot`) are pure-function
 or pure-snapshot at V3.0. The trait surface in §2.7 returns the
 **value type** `EconomicsParametersSnapshot` (no `Arc` in the
@@ -3426,7 +3454,7 @@ Three classes:
 
 - **Class a** is most read-style methods: `balance`,
   `synced_height`, `get_fee_estimates`,
-  `current_emission`, `burn_fraction`, `pool_weighted_total`,
+  `base_emission_at`, `burn_amount`, `pool_weighted_total`,
   `parameters_snapshot`. Reading these has no observable effect;
   dropping them at any stage is a no-op. All four
   `EconomicsEngine` methods are class a at V3.0; V3.x's
@@ -3682,8 +3710,8 @@ not the cancellation surface; the token is).
 | `PersistenceEngine` | `save_state` | async | yes (last-write-wins; saving the same state twice yields the same final on-disk bytes) | **b** (writes file; Stage 4 drop after enqueue is observation-only) |
 | `PersistenceEngine` | `save_prefs` | async | yes (last-write-wins) | **b** |
 | `PersistenceEngine` | `rotate_password` | async | no (state changes per call; old credentials are no longer valid after a successful rotation) | **b** (writes file; Stage 4 drop is observation-only — rotation may complete after caller drops) |
-| `EconomicsEngine` | `current_emission` | sync | yes (read-only; deterministic given height at V3.0; deterministic given height plus observed-activity state at V3.x — observable via `parameters_snapshot`) | n/a |
-| `EconomicsEngine` | `burn_fraction` | sync | yes (read-only; deterministic given inputs at V3.0; deterministic given inputs plus state at V3.x) | n/a |
+| `EconomicsEngine` | `base_emission_at` | sync | yes (read-only; deterministic given height at V3.0 neutral projection; V3.x adaptive-burn state may affect other methods — not this height-keyed projection) | n/a |
+| `EconomicsEngine` | `burn_amount` | sync | yes (read-only; deterministic given inputs at V3.0; deterministic given inputs plus state at V3.x) | n/a |
 | `EconomicsEngine` | `pool_weighted_total` | sync | yes (read-only; canonical derivation from current pool state) | n/a |
 | `EconomicsEngine` | `parameters_snapshot` | sync | yes (read-only; returns owned snapshot) | n/a |
 
@@ -4109,7 +4137,7 @@ trivially safe: multiple invocations produce identical observable
 behavior. Callers retry without consulting the idempotency column.
 Examples: `LedgerEngine::balance`, `LedgerEngine::synced_height`,
 `KeyEngine::account_public_address`,
-`EconomicsEngine::current_emission`,
+`EconomicsEngine::base_emission_at`,
 `EconomicsEngine::parameters_snapshot`. The class-a contract is
 "retry until success or `Permanent`."
 
@@ -5619,7 +5647,7 @@ is cutover-time and structurally distinct.
 `criterion`-driven benchmarks of read-path overhead for the
 hot paths enumerated in §3.3 (`KeyEngine::account_public_address`,
 `LedgerEngine::balance`, `LedgerEngine::synced_height`,
-`EconomicsEngine::current_emission`,
+`EconomicsEngine::base_emission_at`,
 `EconomicsEngine::parameters_snapshot`), plus any additional
 hot paths reviewer judgment identifies during PR review.
 Results land in `docs/PERFORMANCE_BASELINE.md` (template

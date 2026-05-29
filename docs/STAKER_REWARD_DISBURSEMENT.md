@@ -1,6 +1,22 @@
 # Staker Reward Disbursement Model
 
-> **Last updated:** 2026-04-07
+> **Last updated:** 2026-05-28
+
+## CALIBRATION gate (pre-genesis)
+
+Staking economics coefficients (tier multipliers, emission-share decay, pool
+shares) are **calibration-tunable** via `config/economics_params.json` until the
+**CALIBRATION** milestone closes. The wallet `EconomicsEngine` surface and the
+`ChainEconomicsSource` injection seam are **structural** — see
+[`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](design/STAGE_1_PR_7_ECONOMICS_ENGINE.md).
+
+**Wallet vs consensus (2026-04-08).** Consensus recomputes accrual and burn
+independently and rejects divergence. A wrong wallet-side derivation is a
+**failed-send / wrong-display** problem, not fund theft — it bounds daemon-trust
+on `ActivityMetric` and chain-mirror inputs without relaxing the consensus-as-truth
+pin.
+
+---
 
 ## Decision
 

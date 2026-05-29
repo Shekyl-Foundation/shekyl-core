@@ -1,6 +1,32 @@
 # Shekyl Design Concepts
 
-> **Last updated:** 2026-04-03
+> **Last updated:** 2026-05-28
+
+## CALIBRATION gate (pre-genesis)
+
+**Mechanism is structural; coefficient values are provisional until the
+CALIBRATION milestone closes.**
+
+Structural choices (trait surfaces, injection seams, primitive locations,
+JSON-authority loading patterns, conservation invariants) are designed to
+last — changing them after genesis is a planning failure. Tunable coefficients
+(`burn_base_rate`, release-multiplier clamps, staker-pool shares, `FINAL_SUBSIDY`
+floor, and the specific numeric values behind them) live behind
+`config/economics_params.json` / `EconomicParams` so recalibration is a config
+regen, not a code-shape or hard-fork event.
+
+The **CALIBRATION** milestone (distinct from stressnet / Phase 7.7 load testing)
+answers: *are the coefficients economically right on testnet?* Stressnet answers:
+*does the stack survive load?* Exit criteria differ.
+
+Implementation and tests for economics surfaces are split per
+[`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](design/STAGE_1_PR_7_ECONOMICS_ENGINE.md):
+generation-invariant differential tests (engine vs `shekyl-economics-sim` on the
+shared primitive) vs calibration-tagged value vectors (expected to churn each
+generation). See that doc for `CALIBRATION-PENDING` code markers and the
+`as_of` / param-epoch calibration-generation tag.
+
+---
 
 ## Monetary Supply and Denomination Policy (Next Generation Shekyl)
 
@@ -53,9 +79,15 @@ Historical constants from the original chain configuration:
 - `MONEY_SUPPLY = 2^32`
 - `COIN = 10^12`
 - `CRYPTONOTE_DISPLAY_DECIMAL_POINT = 12`
-- `FINAL_SUBSIDY_PER_MINUTE = 3 * 10^11` atomic units
+- `FINAL_SUBSIDY_PER_MINUTE = 3 * 10^11` atomic units (**historical Monero
+  reference only** — not Shekyl `economics_params.json`)
 
 ### Critical interpretation detail
+
+**Shekyl authoritative floor:** `FINAL_SUBSIDY_PER_MINUTE = 300_000_000` atomic
+units (0.3 SHEKYL/min) per the parameter tables below and
+`config/economics_params.json`. The `3 × 10¹¹` figure above is inherited Monero
+baseline prose; do not use it for fixtures, KATs, or `EconomicsParametersSnapshot`.
 
 In Cryptonote-family code, `MONEY_SUPPLY` is interpreted in **atomic units**, not whole coins. Therefore:
 
