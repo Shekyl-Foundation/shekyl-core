@@ -29,6 +29,9 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
     let out_file = out_dir.join("params_generated.rs");
 
+    // SHEKYL_DAA_TARGET_SECONDS — consensus constant, not in economics_params.json.
+    const DAA_TARGET_SECONDS: u64 = 120;
+
     let output = format!(
         "pub const GENERATED_SCALE: u64 = {scale};\n\
          pub const GENERATED_RELEASE_MIN: u64 = {release_min};\n\
@@ -37,7 +40,10 @@ fn main() {
          pub const GENERATED_BURN_BASE_RATE: u64 = {burn_base_rate};\n\
          pub const GENERATED_BURN_CAP: u64 = {burn_cap};\n\
          pub const GENERATED_STAKER_POOL_SHARE: u64 = {staker_pool_share};\n\
-         pub const GENERATED_MONEY_SUPPLY: u64 = {money_supply};\n",
+         pub const GENERATED_MONEY_SUPPLY: u64 = {money_supply};\n\
+         pub const GENERATED_EMISSION_SPEED_FACTOR_PER_MINUTE: u64 = {esf};\n\
+         pub const GENERATED_FINAL_SUBSIDY_PER_MINUTE: u64 = {final_subsidy};\n\
+         pub const GENERATED_DAA_TARGET_SECONDS: u64 = {daa_target};\n",
         scale = get_u64(&map, "shekyl_fixed_point_scale"),
         release_min = get_u64(&map, "shekyl_release_min"),
         release_max = get_u64(&map, "shekyl_release_max"),
@@ -46,6 +52,9 @@ fn main() {
         burn_cap = get_u64(&map, "shekyl_burn_cap"),
         staker_pool_share = get_u64(&map, "shekyl_staker_pool_share"),
         money_supply = get_u64(&map, "money_supply"),
+        esf = get_u64(&map, "emission_speed_factor_per_minute"),
+        final_subsidy = get_u64(&map, "final_subsidy_per_minute"),
+        daa_target = DAA_TARGET_SECONDS,
     );
 
     fs::write(&out_file, output).expect("failed writing generated Rust economics params");
