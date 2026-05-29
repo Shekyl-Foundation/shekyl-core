@@ -95,10 +95,20 @@ TEST(EconomicsC2aPrime, Layer1PerQuantityLegAComposesSplitAndCoinbase) {
           << "ag=" << ag << " h=" << height;
 
       // Q_miner_coinbase = Q_miner_base + miner fee income; fee-free collapses
-      // to Q_miner_base (the Layer-3 empty-block scenario).
+      // to Q_miner_base (the Layer-3 empty-block scenario). Pin the fee-burn
+      // legs to zero independently so the coinbase collapse is a real check:
+      // a regression where compute_fee_burn returned a nonzero miner leg for
+      // zero fees would now fail here rather than pass tautologically.
       const shekyl::BurnResult no_fee = shekyl::compute_fee_burn(0, 0, ag, 0, 1);
-      EXPECT_EQ(q_miner_base + no_fee.miner_fee_income, q_miner_base)
-          << "ag=" << ag << " h=" << height;
+      EXPECT_EQ(no_fee.miner_fee_income, UINT64_C(0))
+          << "fee-free miner leg nonzero: ag=" << ag << " h=" << height;
+      EXPECT_EQ(no_fee.staker_pool_amount, UINT64_C(0))
+          << "fee-free staker pool nonzero: ag=" << ag << " h=" << height;
+      EXPECT_EQ(no_fee.actually_destroyed, UINT64_C(0))
+          << "fee-free burn nonzero: ag=" << ag << " h=" << height;
+      const uint64_t q_miner_coinbase = q_miner_base + no_fee.miner_fee_income;
+      EXPECT_EQ(q_miner_coinbase, q_miner_base)
+          << "fee-free coinbase != Q_miner_base: ag=" << ag << " h=" << height;
     }
   }
 }

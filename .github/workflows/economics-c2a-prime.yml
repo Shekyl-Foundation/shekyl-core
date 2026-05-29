@@ -138,15 +138,19 @@ jobs:
         run: |
           tar --exclude='**/CMakeFiles' --exclude='**/*.o' --exclude='**/*.a' \
             -czf economics-c2a-build.tar.gz build/
-      - name: Verify artifact manifest (binaries + shared libs)
+      - name: Verify artifact manifest (test binaries)
         shell: bash
         run: |
           set -euo pipefail
+          # The CALIBRATION build is CMAKE_BUILD_TYPE=Release, so BUILD_SHARED_LIBS
+          # defaults OFF (it only flips ON for Debug, CMakeLists.txt:608-612). Internal
+          # libraries are therefore static .a archives and the test binaries are
+          # statically linked against them — no internal .so files exist, and the
+          # binaries are self-contained for the layer jobs. The deliverable to verify
+          # is the two test binaries themselves; the tar already excludes *.a and *.o.
           required=(
             build/tests/unit_tests/unit_tests
             build/tests/core_tests/core_tests
-            build/src/cryptonote_core/libcryptonote_core.so
-            build/src/cryptonote_basic/libcryptonote_basic.so
           )
           listing="$(tar tzf economics-c2a-build.tar.gz)"
           for path in "${required[@]}"; do
@@ -157,7 +161,7 @@ jobs:
               exit 1
             fi
           done
-          echo "OK: artifact contains test binaries and representative shared libs"
+          echo "OK: artifact contains statically-linked unit_tests + core_tests binaries"
           echo "Note: tests/data/ is repo-tracked — layer jobs read it from checkout, not tarball"
       - uses: actions/upload-artifact@v4
         with:
