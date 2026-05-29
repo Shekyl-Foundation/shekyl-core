@@ -831,24 +831,6 @@ sustainability is unaffected by the recalibration.
   discipline" entry for the lemma that generalizes from this
   recurrence.
 
-- **CHANGELOG backfill for Stage 0 PR-A and PR-C.** Stage 0
-  preparatory PRs PR-A (`3d313256c` — symmetry rule),
-  PR-A-extension (`2e5309ad3` — boundary rule), and PR-C
-  (`93d515123` — hoisting rule) merged to `dev` without
-  `## [Unreleased] / ### Documentation` entries in
-  [`docs/CHANGELOG.md`](CHANGELOG.md). Per
-  [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)
-  the CHANGELOG is part of the documentation update each PR owes;
-  these three PRs left a process-discipline gap that was surfaced
-  during Stage 0 PR-B drafting. Close-condition: backfill commit
-  on `dev` adds three entries under the existing `## [Unreleased]
-  / ### Documentation` section covering (1) §4.2 symmetry rule
-  and §4.4 sanity-check restructure, (2) §4.2 boundary rule and
-  §4.4 component-model framing, (3) §4.2 hoisting rule and §4.4
-  two-anchor static check. Each entry references its merge SHA
-  and the structural finding it closes. Target: V3.0, can land
-  any time before V3.0 cut.
-
 - **`kameo` dependency pin and MSRV alignment before Stage 2 cuts.**
   The Path B boundary decision (*2026-04-27 — Engine binary boundary:
   pure message-passing over shared handle* in

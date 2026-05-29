@@ -29,6 +29,31 @@
   contract, region-2 `OsRng` nonce rustdoc. V3.1/V3.x items in
   [`docs/FOLLOWUPS.md`](FOLLOWUPS.md).
 
+- **Stage 0 PR-A — iai-callgrind symmetry rule** (`3d313256c`). Backfill.
+  [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.2 codifies
+  the symmetry rule (setup *and* fixture teardown excluded from the measured
+  region; criterion amortizes `Drop` via `b.iter`, iai-callgrind does not) and
+  adds Finding 5 to the §4.4 gap-check inventory. Closes the
+  Drop-contamination capture (`synced_height` reported 60,033 instructions vs
+  the expected low-tens, a property-preservation gap), class-level across every
+  `engine_trait_bench_*` bench.
+
+- **Stage 0 PR-A-extension — iai-callgrind boundary rule** (`2e5309ad3`).
+  Backfill. [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.2
+  adds the boundary rule (iai-callgrind measures function-boundary value
+  movement; `Engine<SoloSigner>` is 6,296 bytes, so by-value fixture passing
+  cost ~600 instructions of memcpy) and the §4.4 unified
+  `(Box<Engine<S>>, TempDir)` component-model fixture shape. Closes the
+  memcpy-at-boundary finding.
+
+- **Stage 0 PR-C — iai-callgrind hoisting rule** (`93d515123`). Backfill.
+  [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.2 adds the
+  hoisting rule (criterion-side `b.iter` iter-amortization can elide
+  state-dependent compute the author meant to count) and the §4.4 two-anchor
+  static check (predict criterion `median_ns` from iai instructions by workload
+  class). Closes Finding 7 (criterion-vs-iai workload-class disagreement),
+  completing the symmetry/boundary/hoisting rule-triple.
+
 ### Added
 
 - **Stage 1 PR 6 — PersistenceEngine Phase 0–2c (trait surface + file layer).**
