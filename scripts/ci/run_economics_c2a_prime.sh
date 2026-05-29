@@ -150,7 +150,7 @@ run_gtest_layer() {
 run_core_tests_layer() {
   local filter="$1"
   echo "==> core_tests --filter=${filter}"
-  "$CORE_TESTS" --filter="$filter"
+  "$CORE_TESTS" --generate_and_play_test_data --filter="$filter"
 }
 
 rust_test_exists() {
