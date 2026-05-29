@@ -350,8 +350,25 @@ bool test_generator::construct_block(cryptonote::block& blk, uint64_t height, co
   //blk.tree_root_hash = get_tx_tree_hash(blk);
 
   fill_nonce(blk, get_test_difficulty(hf_ver), height);
-  const uint64_t block_reward = get_outs_money_amount(blk.miner_tx) - total_fee;
-  add_block(blk, txs_weight, block_weights, already_generated_coins, block_reward, hf_ver ? *hf_ver : 1);
+  // Mirror Blockchain::validate_miner_transaction's base_reward out-param so the
+  // harness's already_generated_coins stays byte-identical to the daemon's LMDB
+  // accumulation. For h>=1 (fix alpha, :1609) that out-param is the FULL emission
+  // subsidy (miner + staker legs); the coinbase carries only the miner leg, so
+  // summing get_outs_money_amount would undercount and desync later blocks. The
+  // genesis (h==0) takes the daemon's height-0 branch (:1565), which accumulates
+  // money_in_use (the coinbase outputs), not the subsidy formula.
+  uint64_t accum_reward = 0;
+  if (height == 0)
+  {
+    accum_reward = get_outs_money_amount(blk.miner_tx);
+  }
+  else
+  {
+    get_block_reward(misc_utils::median(block_weights), target_block_weight,
+                     already_generated_coins, accum_reward,
+                     hf_ver ? *hf_ver : 1, /*tx_volume_avg=*/0);
+  }
+  add_block(blk, txs_weight, block_weights, already_generated_coins, accum_reward, hf_ver ? *hf_ver : 1);
 
   return true;
 }
@@ -420,8 +437,15 @@ bool test_generator::construct_block_manually(block& blk, const block& prev_bloc
   difficulty_type a_diffic = actual_params & bf_diffic ? diffic : get_test_difficulty(hf_version);
   fill_nonce(blk, a_diffic, height);
 
-  const uint64_t block_reward = get_outs_money_amount(blk.miner_tx) - fees;
-  add_block(blk, txs_weight, block_weights, already_generated_coins, block_reward, hf_version);
+  // construct_block_manually always builds h>=1 (prev_block+1); accumulate the
+  // full emission subsidy matching fix alpha (:1609) — coinbase only carries
+  // the miner leg so get_outs_money_amount would undercount.
+  uint64_t full_base_reward = 0;
+  get_block_reward(misc_utils::median(block_weights),
+                   txs_weight + get_transaction_weight(blk.miner_tx),
+                   already_generated_coins, full_base_reward, hf_version,
+                   /*tx_volume_avg=*/0);
+  add_block(blk, txs_weight, block_weights, already_generated_coins, full_base_reward, hf_version);
 
   return true;
 }

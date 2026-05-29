@@ -213,9 +213,11 @@ mod tests {
                     q_full,
                     "emission split not conservative at ag={ag} h={h}"
                 );
-                // Spec staker leg: floor(Q_full * share / SCALE).
+                // Spec staker leg: floor(Q_full * share / SCALE). share ≤ SCALE,
+                // so the quotient ≤ q_full ≤ u64::MAX — the conversion is infallible.
                 let spec_staker =
-                    (u128::from(q_full) * u128::from(share) / u128::from(SCALE)) as u64;
+                    u64::try_from(u128::from(q_full) * u128::from(share) / u128::from(SCALE))
+                        .expect("staker leg ≤ q_full ≤ u64::MAX");
                 assert_eq!(
                     q_staker_emission, spec_staker,
                     "Q_staker_emission off-spec at ag={ag} h={h}"
