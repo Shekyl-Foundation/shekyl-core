@@ -210,7 +210,10 @@ jobs:
         run: apt update
       - name: install runtime dependencies
         run: |
-          apt -y install ripgrep python3 libboost-system1.74.0 libboost-filesystem1.74.0 \
+          # git is required by the "configure git" step and actions/checkout@v5
+          # (submodules: recursive). The build job gets it via APT_INSTALL_LINUX;
+          # the layer jobs install a minimal runtime set and must add it here.
+          apt -y install git ripgrep python3 libboost-system1.74.0 libboost-filesystem1.74.0 \
             libboost-thread1.74.0 libboost-chrono1.74.0 libboost-regex1.74.0 \
             libssl3 libsodium23 libunbound8 libprotobuf23
       - name: install build toolchain for Rust tests
