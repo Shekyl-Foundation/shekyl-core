@@ -28,6 +28,32 @@ generation). See that doc for `CALIBRATION-PENDING` code markers and the
 
 ---
 
+## CALIBRATION gate (pre-genesis)
+
+**Mechanism is structural; coefficient values are provisional until the
+CALIBRATION milestone closes.**
+
+Structural choices (trait surfaces, injection seams, primitive locations,
+JSON-authority loading patterns, conservation invariants) are designed to
+last — changing them after genesis is a planning failure. Tunable coefficients
+(`burn_base_rate`, release-multiplier clamps, staker-pool shares, `FINAL_SUBSIDY`
+floor, and the specific numeric values behind them) live behind
+`config/economics_params.json` / `EconomicParams` so recalibration is a config
+regen, not a code-shape or hard-fork event.
+
+The **CALIBRATION** milestone (distinct from stressnet / Phase 7.7 load testing)
+answers: *are the coefficients economically right on testnet?* Stressnet answers:
+*does the stack survive load?* Exit criteria differ.
+
+Implementation and tests for economics surfaces are split per
+[`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](design/STAGE_1_PR_7_ECONOMICS_ENGINE.md):
+generation-invariant differential tests (engine vs `shekyl-economics-sim` on the
+shared primitive) vs calibration-tagged value vectors (expected to churn each
+generation). See that doc for `CALIBRATION-PENDING` code markers and the
+`as_of` / param-epoch calibration-generation tag.
+
+---
+
 ## Monetary Supply and Denomination Policy (Next Generation Shekyl)
 
 This document proposes a concrete monetary design set for next-generation Shekyl, with rationale grounded in:

@@ -5,8 +5,7 @@
 # * One build job produces test binaries; three layer jobs run tests in
 #   parallel against a shared artifact (avoids triple redundant builds).
 # * Preflight (JSON oracle + stale-constant grep) is fast and merge-blocking.
-# * Layer jobs skip (green) until the 7-base harness registers; then they run
-#   and fail with pinpoint messages on regression.
+# * Layer jobs fail with pinpoint messages until the 7-base harness registers.
 #
 # Container `--privileged` is required by `tests/create_test_disks.sh` (loop
 # devices for core_tests). Tighten to `--device=/dev/loop-control` +
@@ -140,6 +139,7 @@ jobs:
           tar --exclude='**/CMakeFiles' --exclude='**/*.o' --exclude='**/*.a' \
             -czf economics-c2a-build.tar.gz build/
       - name: Verify artifact manifest (binaries + shared libs)
+        shell: bash
         run: |
           set -euo pipefail
           required=(
@@ -233,11 +233,6 @@ jobs:
         env:
           CTEST_OUTPUT_ON_FAILURE: ON
         run: |
-          set -o pipefail
-          if ! scripts/ci/run_economics_c2a_prime.sh "${{ matrix.subcommand }}-probe"; then
-            echo "::notice title=Harness pending::Layer ${{ matrix.layer }} skipped — register harness in 7-base (STAGE_1_PR_7 §5.8)"
-            exit 0
-          fi
           scripts/ci/run_economics_c2a_prime.sh ${{ matrix.subcommand }} \
             2>&1 | tee "economics-c2a-layer${{ matrix.layer }}.log"
       - name: Upload failure diagnostics

@@ -1,7 +1,10 @@
 use serde::Serialize;
 use shekyl_economics::{
-    burn::compute_burn_split, calc_burn_pct, calc_effective_emission_share,
-    calc_release_multiplier, params::SCALE, release::apply_release_multiplier,
+    base_block_reward,
+    burn::compute_burn_split,
+    calc_burn_pct, calc_effective_emission_share, calc_release_multiplier,
+    params::{EconomicParams, SCALE},
+    release::apply_release_multiplier,
     split_block_emission,
 };
 
@@ -87,9 +90,18 @@ impl Default for SimParams {
 const COIN: f64 = 1_000_000_000.0;
 
 pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResult {
-    let target_minutes: u64 = 2;
-    let esf = params.emission_speed_factor_per_minute - (target_minutes - 1);
-    let tail_per_block = params.final_subsidy_per_minute * target_minutes;
+    let economic = EconomicParams {
+        release_min: params.release_min,
+        release_max: params.release_max,
+        tx_volume_baseline: params.tx_volume_baseline,
+        burn_base_rate: params.burn_base_rate,
+        burn_cap: params.burn_cap,
+        staker_pool_share: params.staker_pool_share,
+        money_supply: params.money_supply,
+        emission_speed_factor_per_minute: params.emission_speed_factor_per_minute,
+        final_subsidy_per_minute: params.final_subsidy_per_minute,
+        daa_target_seconds: EconomicParams::default().daa_target_seconds,
+    };
 
     let total_blocks = params.blocks_per_year * config.sim_years;
 
@@ -114,10 +126,9 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         }
 
         let remaining = money_supply.saturating_sub(already_generated);
-        let mut base_reward = (remaining >> esf) as u64;
-        if base_reward < tail_per_block {
-            base_reward = tail_per_block;
-        }
+        let base_reward =
+            base_block_reward(already_generated.min(u64::MAX as u128) as u64, &economic)
+                .expect("sim neutral trajectory stays within supply bounds");
 
         let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
         let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
@@ -255,6 +266,10 @@ mod tests {
         let p = SimParams::default();
 
         assert_eq!(p.money_supply, cfg_u64(&cfg, "money_supply"));
+        assert_eq!(
+            p.emission_speed_factor_per_minute,
+            cfg_u64(&cfg, "emission_speed_factor_per_minute")
+        );
         assert_eq!(
             p.final_subsidy_per_minute,
             cfg_u64(&cfg, "final_subsidy_per_minute")

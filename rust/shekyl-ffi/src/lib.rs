@@ -783,14 +783,24 @@ pub extern "C" fn shekyl_stake_max_claim_range() -> u64 {
 /// Compute stake_ratio = total_staked / circulating_supply (fixed-point SCALE).
 #[no_mangle]
 pub extern "C" fn shekyl_calc_stake_ratio(total_staked: u64, circulating_supply: u64) -> u64 {
-    if circulating_supply == 0 {
-        return 0;
-    }
-    #[allow(clippy::cast_possible_truncation)]
-    {
-        (u128::from(total_staked) * u128::from(shekyl_economics::params::SCALE)
-            / u128::from(circulating_supply)) as u64
-    }
+    shekyl_economics::calc_stake_ratio(total_staked, circulating_supply)
+}
+
+/// Base block subsidy before weight penalty and release multiplier (0h KAT export).
+///
+/// Saturating at `money_supply`: past full emission the base curve yields the
+/// tail floor, so clamping the input keeps `base_block_reward` in range and this
+/// `extern "C"` export cannot panic (or unwind) across the FFI boundary. The
+/// consensus connect path already caps `already_generated_coins` at
+/// `MONEY_SUPPLY`, so the clamp is only reached by out-of-range callers.
+#[no_mangle]
+pub extern "C" fn shekyl_base_block_reward(already_generated_coins: u64) -> u64 {
+    let params = shekyl_economics::params::EconomicParams::default();
+    let clamped = already_generated_coins.min(params.money_supply);
+    // After clamping `clamped <= money_supply`, so the only residual error is a
+    // tail-subsidy overflow that canonical params never trigger; fall back to 0
+    // deterministically rather than panicking.
+    shekyl_economics::base_block_reward(clamped, &params).unwrap_or(0)
 }
 
 // ─── Emission Share (Component 4) ───────────────────────────────────────────
