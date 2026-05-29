@@ -12,15 +12,11 @@
 #![deny(unsafe_code)]
 
 pub mod burn;
-pub mod emission;
 pub mod emission_share;
 pub mod params;
 pub mod release;
 
-pub use burn::{calc_burn_pct, calc_burn_pct_from_activity, BurnSplit};
-pub use emission::{
-    base_block_reward, base_emission_at, projected_already_generated, EmissionError,
-};
+pub use burn::{calc_burn_pct, BurnSplit};
 pub use emission_share::{calc_effective_emission_share, split_block_emission};
-pub use params::{calc_stake_ratio, EconomicParams};
+pub use params::EconomicParams;
 pub use release::calc_release_multiplier;

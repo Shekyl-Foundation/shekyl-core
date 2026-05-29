@@ -94,7 +94,7 @@ Per [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
 |---|---|---|---|
 | `LedgerEngine` | `synced_height` | `engine_trait_bench_ledger_synced_height` | Stage 0 PR-2 |
 | `LedgerEngine` | `balance` | `engine_trait_bench_ledger_balance` | Stage 1 PR 2 |
-| `EconomicsEngine` | `base_emission_at` | `engine_trait_bench_economics_base_emission_at` | Deferred to EconomicsEngine PR |
+| `EconomicsEngine` | `current_emission` | `engine_trait_bench_economics_current_emission` | Deferred to EconomicsEngine PR |
 | `EconomicsEngine` | `parameters_snapshot` | `engine_trait_bench_economics_parameters_snapshot` | Deferred to EconomicsEngine PR |
 | `KeyEngine` | `account_public_address` | `engine_trait_bench_key_account_public_address` | Deferred to KeyEngine PR |
 
@@ -363,7 +363,7 @@ is markedly more stable than `synced_height`'s trivial pure-read
 across CPUs because the per-call body's compute dominates the
 optimizer-amortization noise floor.
 
-## Bench: `engine_trait_bench_economics_base_emission_at`
+## Bench: `engine_trait_bench_economics_current_emission`
 
 **Status:** Deferred to EconomicsEngine PR.
 
@@ -372,12 +372,12 @@ introducing commit lands; same template as
 `engine_trait_bench_ledger_synced_height` above.
 
 Per §4.6's per-bench deferred assignment, this bench is introduced
-alongside the `EconomicsEngine::base_emission_at(height)` trait
-method. At V3.0 interpretation **(A)** the workload is
-`projected_already_generated(height)` + `base_block_reward` — likely
-**O(height)** naive iteration from genesis (§3.8 / PR 7 §5.2 B.6);
-capture median at authoring. Checkpoint/memoization is a FOLLOWUPS
-optimization if a hot consumer lands — not pre-provisioned now.
+alongside the `EconomicsEngine::current_emission(height)` trait
+method on a fixture appropriate to economics-layer state. Workload
+class is determined when the bench is authored (likely
+state-dependent compute given the `height` parameter dependency,
+but pre-stated formally in the introducing PR's description per
+§4.4's normative checklist item 5).
 
 ## Bench: `engine_trait_bench_economics_parameters_snapshot`
 

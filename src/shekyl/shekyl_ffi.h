@@ -247,8 +247,6 @@ uint32_t shekyl_stake_tier_count(void);
 const char *shekyl_stake_tier_name(uint8_t tier_id);
 uint64_t shekyl_stake_max_claim_range(void);
 uint64_t shekyl_calc_stake_ratio(uint64_t total_staked, uint64_t circulating_supply);
-/// Base block subsidy before weight penalty and release multiplier (0h KAT export).
-uint64_t shekyl_base_block_reward(uint64_t already_generated_coins);
 
 /// Calculate emission share (Component 4) based on chain age and decay curve.
 uint64_t shekyl_calc_emission_share(

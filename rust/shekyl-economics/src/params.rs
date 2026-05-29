@@ -15,9 +15,6 @@ pub struct EconomicParams {
     pub burn_cap: u64,
     pub staker_pool_share: u64,
     pub money_supply: u64,
-    pub emission_speed_factor_per_minute: u64,
-    pub final_subsidy_per_minute: u64,
-    pub daa_target_seconds: u64,
 }
 
 impl Default for EconomicParams {
@@ -30,21 +27,8 @@ impl Default for EconomicParams {
             burn_cap: GENERATED_BURN_CAP,
             staker_pool_share: GENERATED_STAKER_POOL_SHARE,
             money_supply: GENERATED_MONEY_SUPPLY,
-            emission_speed_factor_per_minute: GENERATED_EMISSION_SPEED_FACTOR_PER_MINUTE,
-            final_subsidy_per_minute: GENERATED_FINAL_SUBSIDY_PER_MINUTE,
-            daa_target_seconds: GENERATED_DAA_TARGET_SECONDS,
         }
     }
-}
-
-/// `stake_ratio = total_staked / circulating_supply` in fixed-point SCALE units.
-#[inline]
-#[allow(clippy::cast_possible_truncation)]
-pub fn calc_stake_ratio(total_staked: u64, circulating_supply: u64) -> u64 {
-    if circulating_supply == 0 {
-        return 0;
-    }
-    (u128::from(total_staked) * u128::from(SCALE) / u128::from(circulating_supply)) as u64
 }
 
 /// Clamp a value to [lo, hi].
