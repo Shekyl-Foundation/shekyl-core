@@ -155,7 +155,9 @@ run_core_tests_layer() {
 
 rust_test_exists() {
   local crate="$1" pattern="$2"
-  cargo test --locked -p "$crate" -- --list 2>/dev/null | grep -q "$pattern"
+  local listing
+  listing="$(cargo test --locked -p "$crate" -- --list 2>/dev/null)" || true
+  printf '%s\n' "$listing" | rg -q "$pattern"
 }
 
 run_rust_layer1() {
