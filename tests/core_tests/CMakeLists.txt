@@ -34,6 +34,7 @@ set(core_tests_sources
   chaingen.cpp
   chaingen001.cpp
   chaingen_main.cpp
+  economics_c2a_prime.cpp
   integer_overflow.cpp
   transaction_tests.cpp
   tx_pool.cpp
@@ -47,6 +48,7 @@ set(core_tests_headers
   chain_switch_1.h
   chaingen.h
   chaingen_tests_list.h
+  economics_c2a_prime.h
   integer_overflow.h
   tx_pool.h
   transaction_tests.h
