@@ -56,6 +56,53 @@ TEST(EconomicsC2aPrime, Layer1SubsidyWithReleaseLegAMatchesRust) {
   }
 }
 
+TEST(EconomicsC2aPrime, Layer1PerQuantityLegAComposesSplitAndCoinbase) {
+  // Layer-1 leg A (STAGE_1_PR_7 §5.8) — per-quantity coverage for the derived
+  // emission quantities beyond Q_subsidy: Q_full_emission →
+  // {Q_miner_base, Q_staker_emission} → Q_miner_coinbase. Composes via the
+  // production C++ helpers (compute_emission_split / compute_fee_burn) and
+  // cross-checks them against the Rust FFI primitives those helpers wrap.
+  const uint64_t ag_grid[] = {
+      0, UINT64_C(2048000000000), UINT64_C(2756434948434199641)};
+  const uint64_t height_grid[] = {1, 131400, 262800, 1314000};
+
+  for (const uint64_t ag : ag_grid) {
+    // Q_subsidy → Q_full_emission (release applied at empty-block volume 0).
+    uint64_t q_full = 0;
+    ASSERT_TRUE(get_block_reward(
+        0, kStandardBlockWeight, ag, q_full, 1, /*tx_volume_avg=*/0));
+
+    for (const uint64_t height : height_grid) {
+      // Q_miner_base / Q_staker_emission via the production split.
+      const shekyl::EmissionSplit split =
+          shekyl::compute_emission_split(q_full, height, /*genesis_ng_height=*/0, 1);
+      const uint64_t q_miner_base = split.miner_emission;
+      const uint64_t q_staker_emission = split.staker_emission;
+
+      // Cross-check against the Rust FFI primitives the helper wraps.
+      const uint64_t share = shekyl_calc_emission_share(
+          height, 0, SHEKYL_STAKER_EMISSION_SHARE, SHEKYL_STAKER_EMISSION_DECAY,
+          SHEKYL_BLOCKS_PER_YEAR);
+      const ShekylEmissionSplit rust_split =
+          shekyl_split_block_emission(q_full, share);
+      EXPECT_EQ(q_miner_base, rust_split.miner_emission)
+          << "ag=" << ag << " h=" << height;
+      EXPECT_EQ(q_staker_emission, rust_split.staker_emission)
+          << "ag=" << ag << " h=" << height;
+
+      // Conservation: the split redistributes within Q_full_emission.
+      EXPECT_EQ(q_miner_base + q_staker_emission, q_full)
+          << "ag=" << ag << " h=" << height;
+
+      // Q_miner_coinbase = Q_miner_base + miner fee income; fee-free collapses
+      // to Q_miner_base (the Layer-3 empty-block scenario).
+      const shekyl::BurnResult no_fee = shekyl::compute_fee_burn(0, 0, ag, 0, 1);
+      EXPECT_EQ(q_miner_base + no_fee.miner_fee_income, q_miner_base)
+          << "ag=" << ag << " h=" << height;
+    }
+  }
+}
+
 TEST(EconomicsC2aPrime, Layer2FullEmissionAccumulationLegABEqual) {
   uint64_t ag_cpp = 0;
   uint64_t ag_rust = 0;

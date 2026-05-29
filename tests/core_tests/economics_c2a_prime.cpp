@@ -5,6 +5,8 @@
 #include "economics_c2a_prime.h"
 
 #include "cryptonote_basic/cryptonote_format_utils.h"
+#include "cryptonote_config.h"
+#include "shekyl/shekyl_ffi.h"
 
 using namespace cryptonote;
 
@@ -88,6 +90,32 @@ bool economics_c2a_prime_layer3_pop_replay::verify_pop_replay(
         std::list<cryptonote::transaction>{}));
     CHECK_TEST_CONDITION(add_block_to_core(c, blk));
     const uint64_t ag_after = db.get_block_already_generated_coins(db.height() - 1);
+
+    // Cap invariant (STAGE_1_PR_7 §5.8) — locks in fix α. The live
+    // already_generated delta MUST equal the FULL block subsidy (miner emission
+    // + staker emission), recomputed independently from the Rust 0h curve and
+    // the release multiplier the chain applies to these empty blocks
+    // (tx_volume_avg == 0 → RELEASE_MIN, since get_tx_volume_avg counts only
+    // non-coinbase txs). If validate_miner_transaction's base_reward out-param is
+    // ever overwritten with the miner-only emission again (the :1608 regression),
+    // the connect path at blockchain.cpp :4945 accumulates the miner share
+    // instead of the full subsidy and this equality fails.
+    const uint64_t raw_base = shekyl_base_block_reward(already_generated);
+    const uint64_t release_mult = shekyl_calc_release_multiplier(
+        /*tx_volume_avg=*/0, SHEKYL_TX_VOLUME_BASELINE, SHEKYL_RELEASE_MIN, SHEKYL_RELEASE_MAX);
+    uint64_t q_full = shekyl_apply_release_multiplier(raw_base, release_mult);
+    const uint64_t remaining = MONEY_SUPPLY - already_generated;
+    if (q_full > remaining)
+      q_full = remaining;
+    CHECK_TEST_CONDITION(ag_after - already_generated == q_full);
+
+    // Defense in depth: the staker emission share is carved out of the full
+    // subsidy at these (pre-decay) heights, so the full emission strictly
+    // exceeds the miner coinbase output. This confirms the split is real, i.e.
+    // that the equality above is genuinely distinguishing full from miner-only.
+    const uint64_t miner_coinbase = get_outs_money_amount(blk.miner_tx);
+    CHECK_TEST_CONDITION(q_full > miner_coinbase);
+
     std::vector<size_t> resync_weights;
     generator.add_block(blk, 0, resync_weights, already_generated, ag_after - already_generated, blk.major_version);
     chain_blocks.push_back(blk);
