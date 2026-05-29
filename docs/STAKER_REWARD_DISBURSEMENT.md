@@ -1,6 +1,6 @@
 # Staker Reward Disbursement Model
 
-> **Last updated:** 2026-04-07
+> **Last updated:** 2026-05-28
 
 ## CALIBRATION gate (pre-genesis)
 

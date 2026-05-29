@@ -1,6 +1,6 @@
 # Shekyl Design Concepts
 
-> **Last updated:** 2026-04-03
+> **Last updated:** 2026-05-28
 
 ## CALIBRATION gate (pre-genesis)
 

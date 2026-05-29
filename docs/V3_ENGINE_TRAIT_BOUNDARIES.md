@@ -33,8 +33,8 @@ that this drift count surfaced. **Stage 1 PR 3 (`KeyEngine`, PRs
 (`RefreshEngine` ∥ `PendingTxEngine`) on `dev` (merge
 `b9c03dc24`). `PersistenceEngine` and `EconomicsEngine` remain
 spec-only trait surfaces (no `engine/traits/{persistence,economics}.rs`
-yet); §8.1 permits them off the critical path. Post-closeout inventory:
-[`docs/design/STAGE_1_COMPLETION_AUDIT.md`](design/STAGE_1_COMPLETION_AUDIT.md).
+yet); §8.1 permits them off the critical path. Post-closeout inventory: [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) (dedicated
+`STAGE_1_COMPLETION_AUDIT.md` is not yet in the tree — add after PR 6 + PR 7 land).
 Subsequent per-trait PRs follow §8.1's within-stage-1 ordering and
 §8.2's amendment co-landing rule.
 
@@ -2012,11 +2012,11 @@ pub trait PersistenceEngine {
 **PR 6 Phase 0a amendment (F5(b), 2026-05-27).** Steady-state saves take
 HKDF-derived sealing keys (`StateWrapKey` = `wrap_key_region_2`,
 `PrefsHmacKey` from `shekyl-engine-prefs`), not `Credentials` or password
-bytes. `type Error` is [`PersistenceError`](../../rust/shekyl-engine-core/src/engine/error.rs)
-(not [`OpenError`](../../rust/shekyl-engine-core/src/engine/error.rs));
-[`Engine::close`](../../rust/shekyl-engine-core/src/engine/lifecycle.rs) maps
-persist failures via `OpenError::Persistence`. [`Engine::change_password`](../../rust/shekyl-engine-core/src/engine/lifecycle.rs)
-uses [`ChangePasswordError`](../../rust/shekyl-engine-core/src/engine/error.rs).
+bytes. `type Error` is [`PersistenceError`](../rust/shekyl-engine-core/src/engine/error.rs)
+(not [`OpenError`](../rust/shekyl-engine-core/src/engine/error.rs));
+[`Engine::close`](../rust/shekyl-engine-core/src/engine/lifecycle.rs) maps
+persist failures via `OpenError::Persistence`. [`Engine::change_password`](../rust/shekyl-engine-core/src/engine/lifecycle.rs)
+uses [`ChangePasswordError`](../rust/shekyl-engine-core/src/engine/error.rs).
 Binding form, open ritual, and commit plan:
 [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
 
