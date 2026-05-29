@@ -1,7 +1,10 @@
 use serde::Serialize;
 use shekyl_economics::{
-    base_block_reward, burn::compute_burn_split, calc_burn_pct, calc_effective_emission_share,
-    calc_release_multiplier, params::{EconomicParams, SCALE}, release::apply_release_multiplier,
+    base_block_reward,
+    burn::compute_burn_split,
+    calc_burn_pct, calc_effective_emission_share, calc_release_multiplier,
+    params::{EconomicParams, SCALE},
+    release::apply_release_multiplier,
     split_block_emission,
 };
 
@@ -123,11 +126,9 @@ pub fn run_scenario(params: &SimParams, config: &ScenarioConfig) -> ScenarioResu
         }
 
         let remaining = money_supply.saturating_sub(already_generated);
-        let base_reward = base_block_reward(
-            already_generated.min(u64::MAX as u128) as u64,
-            &economic,
-        )
-        .expect("sim neutral trajectory stays within supply bounds");
+        let base_reward =
+            base_block_reward(already_generated.min(u64::MAX as u128) as u64, &economic)
+                .expect("sim neutral trajectory stays within supply bounds");
 
         let tx_volume = (config.volume.get_volume)(block, params.blocks_per_year);
         let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
