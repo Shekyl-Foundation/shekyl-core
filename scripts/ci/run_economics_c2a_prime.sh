@@ -127,7 +127,9 @@ count_gtest_cases() {
 
 count_core_tests() {
   local filter="$1"
-  "$CORE_TESTS" --list_tests 2>/dev/null | grep -c "$filter" || true
+  # core_tests --filter uses glob; strip trailing * for fixed-string prefix match.
+  local prefix="${filter%\*}"
+  "$CORE_TESTS" --list_tests 2>/dev/null | grep -cF "$prefix" || true
 }
 
 require_gtest_harness() {
@@ -156,8 +158,11 @@ run_core_tests_layer() {
 rust_test_exists() {
   local crate="$1" pattern="$2"
   local listing
-  listing="$(cargo test --locked -p "$crate" -- --list 2>/dev/null)" || true
-  printf '%s\n' "$listing" | rg -q "$pattern"
+  (
+    cd "$REPO_ROOT/rust"
+    listing="$(cargo test --locked -p "$crate" -- --list 2>/dev/null)" || true
+    printf '%s\n' "$listing" | rg -q "$pattern"
+  )
 }
 
 run_rust_layer1() {
