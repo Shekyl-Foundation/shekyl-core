@@ -26,6 +26,29 @@
   [`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md`](design/STAGE_1_PR_3_M3B_PREFLIGHT.md)
   §3.
 
+### Documentation
+
+- **Inter-stage cleanup: tech-debt tracker consolidation + stale-ref fixes.**
+  Post-P2 audit of Stage 1 (trait-extraction) closure. (1) Consolidated open
+  structural-debt tracking into a single file: the three orphan MSVC/Windows
+  build items (`libunbound` stub, vendored-code warnings, vcpkg manifest-mode)
+  moved from [`docs/STRUCTURAL_TODO.md`](STRUCTURAL_TODO.md) into
+  [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) §"V3.2 — Rust cutover and cleanup";
+  `STRUCTURAL_TODO.md` repurposed as a structural-reference / reviewer-rubric
+  doc (retains the 32-bit "bit-width carve-out" security argument and
+  migration-on-touch rubric that other docs/code cite as canonical), not an
+  open-todo list. Inbound refs in `rust/shekyl-logging/src/legacy.rs` and
+  `.cursor/rules/93-legacy-symbol-migration.mdc` retargeted to `FOLLOWUPS.md`.
+  (2) Fixed stale `scan_range_start` / `effective_floor_at_tip` references in
+  `FOLLOWUPS.md` and `STAGE_1_PR_4_REFRESH_ENGINE.md` (helpers removed in the
+  P2 TOCTOU fix, commit `87264a3a2`; the producer now derives its scan start
+  from the anchored snapshot). (3) Added a dated closure checkpoint to
+  [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](design/STAGE_1_COMPLETION_AUDIT.md)
+  recording P1/P2/P3 closure and confirming C2c economics cutover remains the
+  sole open V3.0 economics item (standalone 7-cutover PR per
+  `STAGE_1_PR_7_ECONOMICS_ENGINE.md` §6.2, not eligible for chore bundling).
+  Docs-only; no code or consensus changes.
+
 ### Changed
 
 - **Refresh: wallet-birthday scan floor (P2).** `LocalRefresh` carries
