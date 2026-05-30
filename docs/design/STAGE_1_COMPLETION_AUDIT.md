@@ -26,7 +26,7 @@ Stage 1 reference substrate:
 | PR 5 - `PendingTxEngine` extraction | Landed | `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` status banner; `engine/traits/pending_tx.rs` |
 | PR 6 - `PersistenceEngine` extraction and file-layer substrate | Landed | merged PR #83; `engine/traits/persistence.rs` |
 | PR 7 - Economics C2/C2a' (`base_block_reward`, dual-leg KAT, accumulation harness, CI) | Landed | merged PR #88; `tests/unit_tests/economics_c2a_prime.cpp`, `tests/core_tests/economics_c2a_prime.cpp`, `rust/shekyl-economics/src/emission.rs`, `ci/economics-c2a-prime` checks |
-| PR 7 - C2c cutover (`get_block_reward` wrapper to Rust base-reward FFI) | **Open** | `src/cryptonote_basic/cryptonote_basic_impl.cpp` still computes base reward in C++; `shekyl_base_block_reward` exists but current production call sites are tests/FFI only |
+| PR 7 - C2c cutover (`get_block_reward` wrapper to Rust base-reward FFI) | Landed | `feat/stage-1-pr7-economics-cutover` (off post–7-base `dev`); `cryptonote::get_block_reward` delegates base subsidy to `shekyl_base_block_reward` via `shekyl::base_subsidy_before_penalty` (`src/shekyl/economics.h`); C++ ESF body deleted from `cryptonote_basic_impl.cpp`; see dated section below |
 | `EconomicsEngine` trait module (`engine/traits/economics.rs`) | **Open / optional per §8.1 off critical path** | `engine/traits/mod.rs` re-export list has no economics module |
 
 ## Audit conclusion
@@ -37,21 +37,19 @@ Stage 1's critical-path trait extraction objective is achieved on `dev`:
 
 with `KeyEngine` landed in parallel and `PersistenceEngine` substrate landed.
 
-PR 7 landed the C2/C2a' economics substrate and CI hardening. The remaining
-economics cutover is the explicit C2c migration item:
+PR 7 landed the C2/C2a' economics substrate and CI hardening; C2c then
+completed the base-emission cutover (see dated section below):
 
-- replace live C++ base-subsidy computation in `get_block_reward` with a thin
-  wrapper over `shekyl_base_block_reward` (+ release multiplier),
-- then retire duplicated C++ base-subsidy body.
+- live C++ base-subsidy computation in `get_block_reward` now delegates to
+  `shekyl_base_block_reward` via a thin wrapper (+ release multiplier),
+- the duplicated C++ base-subsidy body is retired.
 
-That item remains a V3.0 pre-genesis follow-up, not a blocker to recording
-Stage 1 closeout status.
+The base-emission migration is delivered for V3.0 pre-genesis.
 
 ## Still-open post-Stage-1 follow-through (not "missing Stage 1 PR")
 
 Tracked in `docs/FOLLOWUPS.md` and/or `docs/design/WALLET_REWRITE_PLAN.md`:
 
-- C2c economics cutover (above)
 - P1 async refresh post-pass
 - wallet BIP-39 FFI
 - optional persistence/economics trait PRs
@@ -67,17 +65,17 @@ Ground-truthed against code, not doc claims (per the inter-stage cleanup PR).
 | P1 - async-path refresh post-pass skipped | Closed (2026-05-29) | `refresh/p1-async-path-post-pass`; `LedgerEngine::apply_scan_result` trait method + `LocalLedger` impl removed; async path routes through `Engine::apply_scan_result` |
 | P3 - `apply_scan_result_to_state` `Vec<usize>` discard | Closed (2026-05-29) | Same commit as P1 (shape (b)); discard sites disappeared with the removed trait method |
 | P2 - wallet-birthday plumbing into producer start-height | Closed (2026-05-30) | merged PR #91 (`refresh/p2-wallet-birthday-plumbing`); Shape A ledger anchor — `effective_scan_floor` + `ensure_birthday_anchor` in `engine/scan_floor.rs`; producer derives start from anchored `snapshot.synced_height + 1` (TOCTOU-safe; `scan_range_start`/`effective_floor_at_tip` helpers removed in `87264a3a2`) |
-| C2c economics cutover (`get_block_reward` -> Rust FFI) | **Still open** | `src/cryptonote_basic/cryptonote_basic_impl.cpp:77-122` still computes base reward in C++; `shekyl_base_block_reward` (`rust/shekyl-ffi/src/lib.rs:797`) exists but no consensus call site wires it. Remains a **standalone 7-cutover PR** per `STAGE_1_PR_7_ECONOMICS_ENGINE.md` §6.2 Option B (bundling rejected); H1-H3 hazards apply |
+| C2c economics cutover (`get_block_reward` -> Rust FFI) | Closed (2026-05-30) | `feat/stage-1-pr7-economics-cutover` (PR #93, off post–7-base `dev`); `cryptonote::get_block_reward` (4-arg) delegates the base subsidy to `shekyl_base_block_reward` via `shekyl::base_subsidy_before_penalty` (`src/shekyl/economics.h`); C++ ESF body deleted from `cryptonote_basic_impl.cpp`. Landed as the **standalone 7-cutover PR** per `STAGE_1_PR_7_ECONOMICS_ENGINE.md` §6.2 Option B; H1-H3 satisfied (C2a′ ancestor; dual-leg KAT green). See dated section below |
 
-**Stage 1 disposition unchanged:** critical-path trait extraction is complete;
-the sole remaining V3.0 pre-genesis economics item is the C2c cutover, which is
-explicitly scoped as its own consensus-path PR (not eligible for doc/chore
-bundling per `20-rust-vs-cpp-policy.mdc` and `07-consensus-atomic-cutovers.mdc`).
+**Stage 1 disposition:** critical-path trait extraction is complete, and the
+last V3.0 pre-genesis economics item — the C2c base-subsidy cutover — has now
+landed as its own consensus-path PR (kept out of doc/chore bundling per
+`20-rust-vs-cpp-policy.mdc` and `07-consensus-atomic-cutovers.mdc`).
 
-**Tech-debt tracker consolidation (this PR):** open structural-debt
-*tracking* now lives in a single place — `docs/FOLLOWUPS.md`. The three
-orphan MSVC/Windows build items (`libunbound` stub, vendored-code warnings,
-vcpkg manifest-mode) migrated from `docs/STRUCTURAL_TODO.md` into the
+**Tech-debt tracker consolidation (inter-stage cleanup PR #92):** open
+structural-debt *tracking* now lives in a single place — `docs/FOLLOWUPS.md`.
+The three orphan MSVC/Windows build items (`libunbound` stub, vendored-code
+warnings, vcpkg manifest-mode) migrated from `docs/STRUCTURAL_TODO.md` into the
 FOLLOWUPS V3.2 section. `STRUCTURAL_TODO.md` is **repurposed** (not deleted)
 as a structural-reference / reviewer-rubric doc — it retains the 32-bit
 "bit-width carve-out" security argument and migration-on-touch rubric that
@@ -86,8 +84,35 @@ as a structural-reference / reviewer-rubric doc — it retains the 32-bit
 `FOLLOWUPS.md` cite as canonical. Git history remains the authoritative
 archive.
 
+## C2c cutover landed (2026-05-30)
+
+The base-emission migration (Stage 1 PR 7 §5.8) is complete. C2c, the
+7-cutover consensus artifact, branched from the post–7-base `dev` tip
+(7-base merge `fed6f594b`; C2a′ ancestor by branch topology, satisfying the
+H3 gate) and:
+
+- replaced the duplicated C++ ESF base-subsidy formula in
+  `cryptonote::get_block_reward` (4-arg) with a delegation to
+  `shekyl_base_block_reward` through the `shekyl::base_subsidy_before_penalty`
+  thin wrapper (`src/shekyl/economics.h`), mirroring the `compute_fee_burn` /
+  `compute_emission_split` shape;
+- deleted the C++ ESF body
+  (`(MONEY_SUPPLY - already_generated) >> esf` + tail floor) from
+  `src/cryptonote_basic/cryptonote_basic_impl.cpp`;
+- left the weight penalty (`mul128` / `div128_64`) and the 5-arg release
+  multiplier path in C++, behavior-identical to the C2a′ witnesses.
+
+Per-site target quantities (§5.8 quantity map) were preserved: only the
+4-arg definition body (site D) changed; call sites 1–7 are untouched
+(signatures unchanged), and fix α (`:1608–1609`) was already landed in
+7-base. No production path computes the ESF curve in C++.
+
+Verification (local, Debug build tree): `scripts/ci/run_economics_c2a_prime.sh
+all` green (preflight + Layer 1–3, including pop-replay reorg); `block_reward`
++ `mining_parity` unit suites green; `cargo test -p shekyl-economics` green;
+`gen_block_low_coinbase` core test green. Leg A of the Layer 1 dual-leg KAT
+(`get_block_reward` vs `shekyl_base_block_reward`) remains bit-identical.
+
 ## Notes for future edits
 
 - Keep this document append-only for closure checkpoints.
-- When C2c lands, add a dated section here and update `FOLLOWUPS.md` to close
-  the base-emission migration item.
