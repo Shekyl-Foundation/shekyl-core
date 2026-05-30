@@ -852,6 +852,12 @@ const _: fn() = || {
 ///
 /// The cancellation token is checked at four points:
 ///
+/// 0. **Pre-anchor** — before the birthday-anchor preflight. The
+///    anchor fetches a block hash from the daemon and advances
+///    `LocalLedger` to `floor - 1`; both are refresh-side side
+///    effects. A cancel observed here short-circuits to `Cancelled`
+///    without committing them, so an already-cancelled task does not
+///    mutate wallet state.
 /// 1. **Top of each attempt** — covers the boundary between attempts,
 ///    including the gap between a `Retrying` publish and the next
 ///    snapshot.
@@ -873,7 +879,7 @@ const _: fn() = || {
 ///    the work that produced it. This is the trade-off cancellation
 ///    asks us to make.
 ///
-/// On observation at any of the four points, a final `Cancelled`
+/// On observation at any of these points, a final `Cancelled`
 /// progress update is best-effort emitted — preserving the last
 /// published `height` / `blocks_processed` / `blocks_total` so
 /// subscribers don't observe a misleading rollback to zero — and
@@ -901,12 +907,25 @@ async fn run_refresh_task<S, D: DaemonEngine, R, P>(
     P: super::traits::PendingTxEngine + Send + Sync + 'static,
     Engine<S, D, LocalLedger, R, P>: Send + Sync,
 {
+    // Pre-anchor cancellation checkpoint (point 0 in the cancellation
+    // contract above). The birthday anchor fetches a block hash from
+    // the daemon and advances `LocalLedger` to `floor - 1`; both are
+    // refresh-side side effects. A cancel observed before the anchor
+    // must short-circuit to `Cancelled` without committing them, so a
+    // handle dropped or cancelled before the task runs does not mutate
+    // wallet state.
+    if cancel.is_cancelled() {
+        let mut terminal = *progress.borrow();
+        terminal.phase = RefreshPhase::Cancelled;
+        _ = progress.send(terminal);
+        _ = completion.send(Err(RefreshError::Cancelled));
+        return;
+    }
     {
         let g = engine_arc.read().await;
         let floor = g.refresh.scan_start_floor();
         let daemon = g.daemon().clone();
-        if let Err(e) = super::scan_floor::ensure_birthday_anchor(&g.ledger, &daemon, floor).await
-        {
+        if let Err(e) = super::scan_floor::ensure_birthday_anchor(&g.ledger, &daemon, floor).await {
             _ = completion.send(Err(e));
             return;
         }
