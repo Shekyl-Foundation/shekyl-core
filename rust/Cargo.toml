@@ -91,14 +91,21 @@ resolver = "2"
 [workspace.package]
 version = "3.1.0"
 edition = "2021"
-# MSRV pinned for `aes = "0.9"` (edition 2024). Per
+# MSRV binding constraint: `kameo = "=0.20.0"` declares `rust-version
+# = 1.88.0` (verified at source via the crates.io index, 2026-05-29:
+# kameo 0.20.0, msrv 1.88.0, not yanked). This raises the floor above
+# the previous `aes = "0.9"` (edition 2024) driver of 1.85. Per
 # `RANDOMX_V2_PHASE2B_PLAN.md` §9: locking the pin produces a clean
 # "your rustc is too old" message from cargo rather than a cryptic
-# compile failure deep in the dependency graph. The Guix substrate
+# compile failure deep in the dependency graph. CI builds on
+# `dtolnay/rust-toolchain@stable` (≥ 1.88 in 2026), so no
+# `rust-toolchain.toml` is added — pinning a fixed channel would
+# change both CI and local build behavior without serving the gate's
+# intent, which is the MSRV *declaration* below. The Guix substrate
 # does not exist today per `RANDOMX_V2_RUST.md` §22 ("forward work");
-# when Guix lands, its rustc must already be ≥ 1.85 to build this
+# when Guix lands, its rustc must already be ≥ 1.88 to build this
 # workspace.
-rust-version = "1.85"
+rust-version = "1.88"
 license = "BSD-3-Clause"
 repository = "https://github.com/radawson/Shekyl"
 
@@ -179,6 +186,35 @@ sha2 = "0.10"
 # through `serde_json::to_string` + `serde_json::from_str` and
 # asserts all 11 fields are present in the parsed map.
 serde_json = "1"
+
+# `kameo` actor framework — Stage 2 gate (per `docs/FOLLOWUPS.md`
+# "kameo dependency pin and MSRV alignment before Stage 2 cuts" and
+# the 2026-04-27 *Engine binary boundary* decision in
+# `docs/V3_WALLET_DECISION_LOG.md`). Verified at source via the
+# crates.io index 2026-05-29: 0.20.0 is the newest stable (released
+# 2026-04-07, not yanked); supervision support shipped in 0.20.0 and
+# the v0.19.x/v0.20.0 line carries the no-cycle-DAG deadlock fixes
+# this project's topology depends on. MSRV 1.88.0 (reflected in the
+# workspace `rust-version` bump above). Pinned with an exact
+# patch-level cap (`=0.20.0`) per the FOLLOWUP precondition: an actor
+# framework is a coordination-load-bearing dependency where a silent
+# minor bump could alter mailbox/supervision semantics under us.
+#
+# Declared here only; no workspace member consumes it yet, so it is
+# inert in the build graph. Stage 2's first commit adds the live
+# `kameo = { workspace = true }` consumer (the `KeyEngine` actor crate)
+# and closes the FOLLOWUP. The supervision/mailbox API surface is
+# verified at source at that consumption point per
+# `17-dependency-discipline.mdc` (the pin alone calls no API).
+#
+# Bounded-mailbox default convention (FOLLOWUP precondition 3): every
+# actor declares a bounded mailbox; the workspace default is
+# `mailbox(64)` unless an actor documents a measured reason to differ.
+# Unbounded mailboxes are forbidden under Path B for memory-pressure
+# reasons. Per-actor overrides carry an inline rationale at the
+# `#[actor(mailbox = ...)]` site naming the back-pressure or
+# throughput measurement that justifies the deviation.
+kameo = "=0.20.0"
 
 # Compile crypto-heavy crates with optimizations even in dev
 [profile.dev.package]

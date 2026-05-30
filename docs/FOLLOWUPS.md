@@ -844,19 +844,39 @@ sustainability is unaffected by the recalibration.
      pinning. Rationale: supervision support shipped in v0.20.0
      (2026-04-07); v0.19.x and v0.20.0 included deadlock fixes
      relevant to the no-cycle DAG topology this project commits to.
+     **Satisfied (chore/stage_1_cleanup, 2026-05-29):** `kameo =
+     "=0.20.0"` declared in `[workspace.dependencies]`. Verified at
+     source via the crates.io index — 0.20.0 is the newest stable
+     (2026-04-07, not yanked); no newer version to re-pin to.
   2. **MSRV alignment.** kameo requires Rust `>= 1.88`. Confirm the
      Shekyl workspace MSRV is at or above 1.88 (or raise it explicitly
      in the same commit, with a `rust-toolchain.toml` update and a
      CHANGELOG entry under "Changed").
+     **Satisfied (chore/stage_1_cleanup, 2026-05-29):** workspace
+     `rust-version` raised 1.85 → 1.88; CHANGELOG "Changed" entry
+     added. `rust-toolchain.toml` intentionally *not* added — CI
+     builds on `dtolnay/rust-toolchain@stable` (≥ 1.88 in 2026); a
+     pinned channel file would change CI/local build behavior without
+     serving the gate's intent (the MSRV declaration), and no such
+     file exists today.
   3. **Bounded-mailbox sizing default.** Choose a workspace-wide
      bounded-mailbox default (e.g., `mailbox(64)`) with documented
      rationale, and capture the per-actor override convention. Pure
      unbounded mailboxes are forbidden under Path B for memory-pressure
      reasons.
+     **Satisfied (chore/stage_1_cleanup, 2026-05-29):** `mailbox(64)`
+     default + per-actor override convention documented inline at the
+     `kameo` `[workspace.dependencies]` entry.
 
-  This entry is the gate on Stage 2; Stage 2's first commit is the
-  one that adds the `kameo` dependency, and that commit references
-  this follow-up by closure. Target: V3.0, pre-Stage-2.
+  **Status (2026-05-29).** All three preconditions are satisfied by
+  the `chore/stage_1_cleanup` verification commit. The pin is
+  declared-only (no workspace member consumes `kameo` yet, so it is
+  inert in the build graph). **This entry stays open** until Stage 2's
+  first commit adds the live `kameo = { workspace = true }` consumer
+  (the `KeyEngine` actor crate), verifies the supervision/mailbox API
+  surface at source per `17-dependency-discipline.mdc` at that
+  consumption point, and closes this follow-up. Target: V3.0,
+  pre-Stage-2.
 
 - **View/HW lifecycle bodies in `shekyl-wallet-core`.**
   `Wallet::open_view_only` and `Wallet::open_hardware_offload` ship as

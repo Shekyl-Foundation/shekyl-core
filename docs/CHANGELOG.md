@@ -4,6 +4,18 @@
 
 ### Changed
 
+- **Workspace MSRV raised 1.85 → 1.88; `kameo = "=0.20.0"` pinned (Stage 2
+  gate).** Satisfies the three preconditions in the `docs/FOLLOWUPS.md`
+  "kameo dependency pin and MSRV alignment before Stage 2 cuts" entry:
+  (1) exact-patch pin of the actor framework in `[workspace.dependencies]`
+  (declared-only; no consumer yet, so inert in the build graph),
+  (2) MSRV bump to kameo 0.20.0's required 1.88.0 (verified at source via
+  the crates.io index), and (3) the workspace bounded-mailbox default
+  (`mailbox(64)`, overrides documented at the actor site). No
+  `rust-toolchain.toml` added — CI builds on `@stable` (≥ 1.88); the gate's
+  intent is the MSRV declaration, not a pinned channel. Stage 2's first
+  commit adds the live consumer and closes the FOLLOWUP.
+
 - **Stage 1 PR 6 — PersistenceEngine C7: remove password `save_state`.**
   `WalletFile::save_state` now takes session-cached `wrap_key_region_2` only;
   password-taking steady-state save deleted. `shekyl_wallet_save_state` FFI
