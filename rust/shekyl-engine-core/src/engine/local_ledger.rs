@@ -42,11 +42,13 @@
 //!   `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.2.
 //!
 //! Holding a `std::sync::RwLock` guard across `.await` would risk a
-//! deadlock once Stage 4's actor surface introduces async handlers;
-//! the trait surface (`apply_scan_result` returns `impl Future`) is
-//! shaped such that the implementor — not the caller — chooses when
-//! to acquire the lock, so the synchronous lock stays inside the
-//! synchronous merge body and never crosses an await boundary.
+//! deadlock once Stage 4's actor surface introduces async handlers.
+//! The ledger merge runs through
+//! [`Engine::apply_scan_result`](super::Engine::apply_scan_result),
+//! which acquires the write guard, runs the synchronous merge body,
+//! and drops the guard before returning — the synchronous lock stays
+//! inside the synchronous merge body and never crosses an await
+//! boundary.
 //!
 //! If a future read or write method needs to hold the lock across
 //! `await`, swap to `tokio::sync::RwLock` at that time. The trait
@@ -82,13 +84,7 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use shekyl_engine_state::{LedgerIndexes, WalletLedger};
 use shekyl_scanner::{BalanceSummary, LedgerBlockExt};
 
-use super::{
-    error::{LedgerError, RefreshError},
-    merge::apply_scan_result_to_state,
-    refresh::LedgerSnapshot,
-    traits::LedgerEngine,
-};
-use crate::scan::ScanResult;
+use super::{error::LedgerError, refresh::LedgerSnapshot, traits::LedgerEngine};
 
 /// The wallet's confirmed-chain state, paired with the runtime-only
 /// [`LedgerIndexes`] derived from it.
@@ -190,11 +186,14 @@ impl LocalLedger {
     /// production-only replacement for the parallel-implementation
     /// `MockLedger::with_seed(...)` per the Round 5 substrate-decision
     /// amendment (commit `8484e669a`) and the no-Mock substrate
-    /// discipline established by PR 3 §2.1.2. Pairs with
-    /// [`super::fault_injecting_ledger::FaultInjecting`] (the C6β
-    /// composable failure-injection wrapper) for failure-injection
-    /// scenarios; the constructor itself is the success-path
-    /// equivalent of `MockLedger::with_seed`.
+    /// discipline established by PR 3 §2.1.2. The constructor is the
+    /// success-path equivalent of `MockLedger::with_seed`. Merge-race
+    /// failure-injection scenarios are driven producer-side (a stale
+    /// [`ScanResult`](crate::scan::ScanResult) that the real merge
+    /// rejects with [`RefreshError::ConcurrentMutation`](super::RefreshError::ConcurrentMutation)),
+    /// because the [`LedgerEngine`] trait is read-only as of the
+    /// FOLLOWUPS P1 async-post-pass fix — there is no ledger-side
+    /// mutation seam to wrap.
     ///
     /// # V3.0 substrate scope
     ///
@@ -235,7 +234,6 @@ impl LocalLedger {
     ///
     /// `pub(crate)` and gated by `#[cfg(any(test, feature =
     /// "test-helpers"))]`, matching the
-    /// [`super::fault_injecting_ledger::FaultInjecting`] /
     /// [`super::fault_injecting_refresh::FaultInjecting`] /
     /// [`super::Engine::replace_refresh`] gating per the Round 5
     /// sub-pin extension F-Mock-1 cfg-gating-symmetry disposition.
@@ -251,7 +249,7 @@ impl LocalLedger {
     ///   [`super::test_support::tests`] and
     ///   [`super::refresh::start_refresh_integration_tests`] are
     ///   the canonical consumers. Symmetric with the sibling
-    ///   [`super::fault_injecting_ledger::FaultInjecting::new`]
+    ///   [`super::fault_injecting_refresh::FaultInjecting::new`]
     ///   disposition.
     /// - `clippy::needless_pass_by_value` allow: the `Vec<Block>`
     ///   signature is load-bearing per the V3.1 substrate-
@@ -316,25 +314,18 @@ impl LocalLedger {
 
 /// Stage 1 in-process implementation of [`LedgerEngine`].
 ///
-/// Each method acquires its own [`RwLock`] guard for the duration of
-/// the call. The three read methods take a [`RwLockReadGuard`] and
-/// project owned values (`u64`, [`LedgerSnapshot`],
-/// [`BalanceSummary`]); the lone mutator takes a
-/// [`RwLockWriteGuard`] and delegates to
-/// [`apply_scan_result_to_state`], the merge body shared with
-/// [`Engine::apply_scan_result`](super::Engine::apply_scan_result).
-///
-/// The mutator is written as `async fn`; Rust desugars this to the
-/// trait's `-> impl Future<Output = Result<(), RefreshError>> +
-/// Send` RPITIT signature (the two forms are interchangeable for
-/// implementing in-trait async per Rust 1.75+). The future body is
-/// wholly synchronous — no `.await` runs while the write guard is
-/// held — so the synchronous [`std::sync::RwLock`] is sound (per
-/// the module-level lock-shape rationale). The `Send` bound on
-/// the trait method's return type is satisfied automatically: the
-/// future captures only `&self` (which is `Sync`) and an owned
-/// `ScanResult`, both `Send`, and the body's local `RwLockWrite-
-/// Guard` is dropped before the function returns.
+/// Each method acquires its own [`RwLock`] read guard for the
+/// duration of the call: the three read methods take a
+/// [`RwLockReadGuard`] and project owned values (`u64`,
+/// [`LedgerSnapshot`], [`BalanceSummary`]). The trait carries no
+/// mutator — the ledger merge (snapshot fold plus the engine
+/// handle-field post-pass) lives on
+/// [`Engine::apply_scan_result`](super::Engine::apply_scan_result),
+/// which acquires the write guard and runs the shared merge body
+/// [`apply_scan_result_to_state`](super::merge::apply_scan_result_to_state)
+/// together with the post-pass under
+/// a single guard (FOLLOWUPS P1: the post-pass needs the engine's
+/// `view_secret`, which the trait implementor does not hold).
 impl LedgerEngine for LocalLedger {
     type Error = LedgerError;
 
@@ -352,19 +343,6 @@ impl LedgerEngine for LocalLedger {
         let ledger = &guard.ledger.ledger;
         ledger.balance(ledger.height())
     }
-
-    async fn apply_scan_result(&self, scan_result: ScanResult) -> Result<(), RefreshError> {
-        let mut guard = self.write();
-        let state = &mut *guard;
-        // The trait surface is bookkeeping-only: trait-public callers
-        // do not run the engine post-pass, so the inserted-index list
-        // returned by `apply_scan_result_to_state` (used by the
-        // engine post-pass at `populate_engine_handle_fields` for
-        // O(k) iteration) has no consumer here. Discard via
-        // `.map(|_| ())` to keep the trait surface stable.
-        apply_scan_result_to_state(&mut state.ledger.ledger, &mut state.indexes, scan_result)
-            .map(|_| ())
-    }
 }
 
 impl<L: LedgerEngine> LedgerEngine for std::sync::Arc<L> {
@@ -380,9 +358,5 @@ impl<L: LedgerEngine> LedgerEngine for std::sync::Arc<L> {
 
     fn balance(&self) -> BalanceSummary {
         (**self).balance()
-    }
-
-    async fn apply_scan_result(&self, scan_result: ScanResult) -> Result<(), RefreshError> {
-        (**self).apply_scan_result(scan_result).await
     }
 }

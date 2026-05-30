@@ -94,16 +94,21 @@ use crate::{
 // `L = LocalLedger` specialization remains because
 // [`Engine::apply_scan_result`] drives the merge body via
 // `self.ledger.write()` — a `LocalLedger` inherent method — to
-// acquire the synchronous write guard. As of PR 2 commit 5,
-// [`Engine::synced_height`] has been migrated to the
+// acquire the synchronous write guard, and then runs the M3b
+// engine post-pass ([`populate_engine_handle_fields`]) under that
+// same guard using the engine's `view_secret`. As of PR 2 commit 5,
+// [`Engine::synced_height`] reads through the
 // [`LedgerEngine::synced_height`] trait method (no longer a direct
 // inherent call), and `apply_scan_result` flipped from `&mut self`
 // to `&self` (the interior `LocalLedger` `RwLock` provides the
-// audited mutation point). Full generalization of this block to
-// `impl<S, D, L: LedgerEngine>` is deferred until the trait surface
-// gains a sync mutator wrapper (the trait's `apply_scan_result` is
-// async, and driving it from a sync `&self` wrapper without a
-// runtime in scope is not currently viable).
+// audited mutation point). The `LedgerEngine` trait is read-only
+// (no mutator method) as of the FOLLOWUPS P1 async-post-pass fix:
+// the merge-plus-post-pass cannot be a trait method because the
+// post-pass needs key material the implementor does not hold, and
+// must share one write guard with the merge. Full generalization of
+// this block to `impl<S, D, L: LedgerEngine>` is therefore deferred
+// to the Stage 4 actor that owns key material and can run the
+// post-pass internally.
 #[allow(private_bounds)]
 impl<
         S: EngineSignerKind,

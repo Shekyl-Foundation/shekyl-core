@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **refresh: async path no longer skips the engine post-pass
+  (FOLLOWUPS P1/P3).** The asynchronous refresh path
+  (`Engine::start_refresh` → `run_refresh_task`) merged scan results
+  through `LedgerEngine::apply_scan_result`, which discarded the
+  inserted-index `Vec<usize>` and never ran
+  `populate_engine_handle_fields`, leaving newly-merged transfers
+  without `output_handle` / `source_ciphertext`. The mutator is
+  removed from the `LedgerEngine` trait (now read-only:
+  `synced_height` / `snapshot` / `balance`); `run_refresh_task` and
+  `Engine::start_refresh` are specialized to `LocalLedger` and merge
+  through the inherent `Engine::apply_scan_result`, which runs the
+  merge body and the M3b post-pass under one `LocalLedger` write
+  guard. This closes P1 (post-pass skip) and P3 (discarded
+  `Vec<usize>` allocation) in a single commit. The dead
+  `FaultInjecting<LocalLedger>` test wrapper and `replace_ledger`
+  test helper were deleted; hybrid retry tests drive
+  `ConcurrentMutation` producer-side. Shape (b) per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §8; atomicity rationale per
+  [`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md`](design/STAGE_1_PR_3_M3B_PREFLIGHT.md)
+  §3.
+
 ### Changed
 
 - **Workspace MSRV raised 1.85 → 1.88; `kameo = "=0.20.0"` pinned (Stage 2

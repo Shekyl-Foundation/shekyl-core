@@ -157,8 +157,6 @@ pub mod daemon;
 pub(crate) mod diagnostics;
 pub mod error;
 #[cfg(any(test, feature = "test-helpers"))]
-pub(crate) mod fault_injecting_ledger;
-#[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_pending_tx;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_refresh;
@@ -687,14 +685,12 @@ impl<
     /// [`RefreshEngine`](super::traits::RefreshEngine) implementor,
     /// leaving every other field unchanged.
     ///
-    /// Mirrors [`super::Engine::replace_daemon`] /
-    /// [`super::Engine::replace_ledger`] for the `R: RefreshEngine`
-    /// slot added in PR 4 C5a. Hybrid tests that need a
-    /// fully-constructed `Engine<SoloSigner>` but want to wrap the
-    /// production [`super::local_refresh::LocalRefresh`] in a
+    /// Mirrors [`super::Engine::replace_daemon`] for the
+    /// `R: RefreshEngine` slot added in PR 4 C5a. Hybrid tests that
+    /// need a fully-constructed `Engine<SoloSigner>` but want to wrap
+    /// the production [`super::local_refresh::LocalRefresh`] in a
     /// [`super::fault_injecting_refresh::FaultInjecting`] failure-
-    /// injection wrapper compose this with `replace_daemon` and
-    /// `replace_ledger`:
+    /// injection wrapper compose this with `replace_daemon`:
     ///
     /// ```ignore
     /// let real = Engine::<SoloSigner>::create(params, dummy_daemon())?;
@@ -702,10 +698,9 @@ impl<
     /// // Engine::create uses internally at assemble time):
     /// let vm = ViewMaterial::try_from_keys(real.keys())?;
     /// let refresh = FaultInjecting::new(LocalRefresh::new(vm));
-    /// let hybrid: Engine<SoloSigner, TestDaemon, FaultInjecting<LocalLedger>, FaultInjecting<LocalRefresh>> =
+    /// let hybrid: Engine<SoloSigner, TestDaemon, LocalLedger, FaultInjecting<LocalRefresh>> =
     ///     real
     ///         .replace_daemon(test_daemon)
-    ///         .replace_ledger(FaultInjecting::new(LocalLedger::from_test_blocks(Vec::new())))
     ///         .replace_refresh(refresh);
     /// ```
     ///
@@ -723,8 +718,8 @@ impl<
     ///
     /// `pub(crate)` and gated by `#[cfg(any(test, feature =
     /// "test-helpers"))]` per the C6α F-Mock-1 symmetry pin (asymmetric
-    /// with sibling `replace_daemon` / `replace_ledger`, which are
-    /// `#[cfg(test)]`-only: those methods predate the `test-helpers`
+    /// with sibling `replace_daemon`, which is
+    /// `#[cfg(test)]`-only: that method predates the `test-helpers`
     /// feature and exist purely for crate-internal tests, while
     /// `replace_refresh` lands alongside the `FaultInjecting<R>`
     /// wrapper that is itself `test-helpers`-feature-callable for
@@ -739,9 +734,9 @@ impl<
     /// `LocalRefresh` to `FaultInjecting<LocalRefresh>`, which the
     /// `&mut self` shape cannot express. The consume-and-rebuild
     /// signature here matches the precedent set by `replace_daemon`
-    /// / `replace_ledger` and lets the four-parameter
-    /// `Engine<S, D, L, R>` compose cleanly across all three slot
-    /// substitutions. Per the C6α docstring's "Phase 1 author
+    /// and lets the four-parameter
+    /// `Engine<S, D, L, R>` compose cleanly across the daemon and
+    /// refresh slot substitutions. Per the C6α docstring's "Phase 1 author
     /// commitment note", `replace_refresh` had no consumers in
     /// C6α/C6β/C6γ, so the signature change is non-breaking; C7 is
     /// the first consumer.

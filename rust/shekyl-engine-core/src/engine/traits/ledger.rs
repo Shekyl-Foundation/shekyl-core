@@ -16,18 +16,36 @@
 //! directly from the underlying `LedgerBlock` rather than through
 //! the trait — see the Phase 0c section below.
 //!
-//! # Round 3 disposition: `&self` over `&mut self`
+//! # Read-only trait surface (FOLLOWUPS P1 async post-pass fix)
 //!
-//! The trait's mutating method [`LedgerEngine::apply_scan_result`]
-//! takes `&self`, not `&mut self`, because Stage 1's default
-//! implementing type `LocalLedger` carries
-//! `RwLock<LedgerState>` for interior mutability. The trait would
-//! otherwise force every reader/writer in `Engine` to hold an
-//! exclusive borrow across an `await`, which conflicts with the
-//! `Arc<…>` clone-and-share pattern that `tokio::spawn` uses to
-//! schedule the producer task in `run_refresh_task`. The lock is
-//! acquired internally by the implementor; the trait surface
-//! exposes the `&self` shape uniformly to callers.
+//! `LedgerEngine` exposes only confirmed-chain *reads*
+//! ([`synced_height`](LedgerEngine::synced_height),
+//! [`snapshot`](LedgerEngine::snapshot),
+//! [`balance`](LedgerEngine::balance)). All take `&self`, not
+//! `&mut self`, because Stage 1's default implementing type
+//! `LocalLedger` carries `RwLock<LedgerState>` for interior
+//! mutability, so callers never hold an exclusive borrow across an
+//! `await` (which would conflict with the `Arc<…>` clone-and-share
+//! pattern `tokio::spawn` uses for the producer task in
+//! `run_refresh_task`).
+//!
+//! The ledger *mutation* — the snapshot-merge plus the engine
+//! handle-field post-pass that populates `source_ciphertext` /
+//! `output_handle` — is **not** a trait method. It lives on
+//! [`Engine::apply_scan_result`](super::super::Engine::apply_scan_result),
+//! which holds the engine's `view_secret` and runs the merge and
+//! post-pass under a single `LocalLedger` write guard. A trait-level
+//! `apply_scan_result` once existed but structurally could not run
+//! the post-pass (the implementor has no `view_secret`), so the
+//! async refresh path that dispatched the merge through it skipped
+//! handle population entirely (FOLLOWUPS P1). Routing the async
+//! merge through [`Engine::apply_scan_result`] closed P1 and
+//! preserves the atomicity discipline
+//! (`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md` §3 rejected
+//! alternative (ζ): the merge and post-pass must share one write
+//! guard). A future Stage 4 actor that owns key material can
+//! re-introduce a trait-level mutator that runs the post-pass
+//! internally.
 //!
 //! # Stage-4 swap-in (§7)
 //!
@@ -94,9 +112,8 @@
 
 use shekyl_scanner::BalanceSummary;
 
-use crate::engine::error::{LedgerError, RefreshError};
+use crate::engine::error::LedgerError;
 use crate::engine::refresh::LedgerSnapshot;
-use crate::scan::ScanResult;
 
 /// Engine-side view of the confirmed-chain ledger surface (§2.2).
 ///
@@ -125,11 +142,11 @@ use crate::scan::ScanResult;
 ///
 /// The trait declares an [`Self::Error`] associated type for
 /// forward compatibility. None of the Stage 1 methods surface
-/// `Self::Error` today: the three read methods are infallible and
-/// `apply_scan_result` returns [`RefreshError`] because the
-/// failure mode crosses the `LedgerEngine` / `RefreshEngine`
-/// boundary (§1.5). The bound is the named landing pad for
-/// future additive variants per §8.2.
+/// `Self::Error` today: the trait is read-only (the three read
+/// methods are infallible) and the ledger merge lives off-trait on
+/// [`Engine::apply_scan_result`](super::super::Engine::apply_scan_result).
+/// The bound is the named landing pad for future additive variants
+/// per §8.2.
 ///
 /// [`DaemonEngine`]: super::daemon::DaemonEngine
 /// [`LedgerBlock`]: shekyl_engine_state::LedgerBlock
@@ -152,7 +169,7 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     ///
     /// **Yes** per §4: a snapshot read of the wallet's recorded
     /// `synced_height`. Repeated calls observe whatever value the
-    /// last [`Self::apply_scan_result`] write left in place.
+    /// last ledger merge left in place.
     ///
     /// # Panics
     ///
@@ -188,7 +205,7 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     ///
     /// **Yes** per §4: builds an owned [`LedgerSnapshot`] from the
     /// current `LedgerBlock`. Repeated calls produce equivalent
-    /// snapshots until the next [`Self::apply_scan_result`] write.
+    /// snapshots until the next ledger merge.
     ///
     /// # Panics
     ///
@@ -217,8 +234,7 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     ///
     /// **Yes** per §4: a deterministic projection of the current
     /// `LedgerBlock`. Repeated calls return equivalent
-    /// [`BalanceSummary`] values until the next
-    /// [`Self::apply_scan_result`] write.
+    /// [`BalanceSummary`] values until the next ledger merge.
     ///
     /// # Panics
     ///
@@ -227,48 +243,4 @@ pub(crate) trait LedgerEngine: Send + Sync + 'static {
     /// return is by design.
     #[allow(dead_code)] // Stage 1 PR 2: production call sites migrate in commit 5.
     fn balance(&self) -> BalanceSummary;
-
-    /// Apply a producer-emitted [`ScanResult`] to the ledger,
-    /// advancing `synced_height` and folding new transfers /
-    /// outputs into the projection.
-    ///
-    /// Returns [`RefreshError::ConcurrentMutation`] if the scan
-    /// result's `processed_height_range.start` no longer matches
-    /// `synced_height + 1` — i.e., another `apply_scan_result`
-    /// merged between the producer's snapshot and this call. The
-    /// refresh driver retries with a fresh snapshot per §5.2.
-    ///
-    /// # Cancellation
-    ///
-    /// Class **b** per §4: a side-effecting write under the
-    /// `RwLock` write guard. The implementor's lock-ordering rules
-    /// (cross-cutting lock 4 in `docs/V3_WALLET_DECISION_LOG.md`)
-    /// state that the merge runs to completion or fails atomically;
-    /// dropping the future before completion does not leave the
-    /// ledger in a partial state because the implementor only
-    /// commits after the per-height apply loop succeeds in full.
-    ///
-    /// # Idempotency
-    ///
-    /// **Conditionally** per §4. Re-applying the *same*
-    /// `ScanResult` after a successful merge is a
-    /// `ConcurrentMutation` (because `synced_height` has advanced),
-    /// which is the correct retry signal: the caller observes that
-    /// the work has already landed and re-snapshots. Re-applying a
-    /// `ScanResult` whose `start_height` does match
-    /// `synced_height + 1` after a transient task panic is safe
-    /// because the implementor commits atomically.
-    ///
-    /// # Panics
-    ///
-    /// Never panics on contract violations: a
-    /// [`MalformedScanResult`](RefreshError::MalformedScanResult)
-    /// from the producer is surfaced through `Result`, not panic.
-    /// Lock-poisoning is the only panic source — a previous holder
-    /// of the write guard panicked mid-merge — and is treated as
-    /// an unrecoverable wallet-state defect per §5.1.
-    fn apply_scan_result(
-        &self,
-        scan_result: ScanResult,
-    ) -> impl std::future::Future<Output = Result<(), RefreshError>> + Send;
 }

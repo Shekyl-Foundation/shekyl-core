@@ -35,16 +35,12 @@
 //!
 //! The wrapper carries `type Error = RefreshError` rather than
 //! `type Error = R::Error`: the queue holds `RefreshError` values
-//! directly, uniform across all `R`. Cross-wrapper symmetry with
-//! the eventual `FaultInjecting<L: LedgerEngine>` is the load-
-//! bearing rationale —
-//! [`engine/traits/ledger.rs:270–273`](../traits/ledger.rs) defines
-//! [`LedgerEngine::apply_scan_result`](../traits/ledger::LedgerEngine::apply_scan_result)
-//! as returning `Result<(), RefreshError>` directly with no
-//! `Self::Error` indirection, so `FaultInjecting<L>` must queue
-//! `RefreshError`; matching `FaultInjecting<R>` to the same shape
-//! gives both wrappers a single uniform queue type the smoke-test
-//! surface can be shaped against.
+//! directly, uniform across all `R`. This matches the
+//! [`RefreshEngine`] trait's own `Error` shape (the production
+//! [`LocalRefresh`](super::local_refresh::LocalRefresh) uses
+//! `type Error = RefreshError`), so the queue type and the trait
+//! surface line up without a `Self::Error` indirection, giving the
+//! smoke-test surface a single uniform queue type to shape against.
 //!
 //! Direct injection of any [`RefreshError`] variant is allowed —
 //! including `MalformedScanResult`, `ConcurrentMutation`, and
@@ -220,10 +216,9 @@ impl<R: RefreshEngine> RefreshEngine for FaultInjecting<R> {
     /// `type Error = RefreshError` per the Option (i) wrapper API
     /// (module-level rustdoc). The wrapper exposes the
     /// orchestrator-side `RefreshError` surface uniformly across all
-    /// `R`; cross-wrapper symmetry with
-    /// [`LedgerEngine::apply_scan_result`](super::traits::ledger::LedgerEngine::apply_scan_result)
-    /// (which returns `Result<(), RefreshError>` directly) is the
-    /// load-bearing rationale.
+    /// `R`, matching the production
+    /// [`LocalRefresh`](super::local_refresh::LocalRefresh)'s own
+    /// `type Error = RefreshError`.
     type Error = RefreshError;
 
     // The trait method explicitly uses `-> impl Future + Send` (not
