@@ -850,7 +850,7 @@ const _: fn() = || {
 ///
 /// # Cancellation
 ///
-/// The cancellation token is checked at four points:
+/// The cancellation token is checked at five points:
 ///
 /// 0. **Pre-anchor** — before the birthday-anchor preflight. The
 ///    anchor fetches a block hash from the daemon and advances
@@ -921,11 +921,21 @@ async fn run_refresh_task<S, D: DaemonEngine, R, P>(
         _ = completion.send(Err(RefreshError::Cancelled));
         return;
     }
+    // Clone the ledger handle and daemon under a brief read guard, then
+    // drop the guard before the network-bound anchor await. The rest of
+    // this driver follows the same clone-then-drop discipline so daemon
+    // I/O never holds the outer `engine_arc` read lock and never blocks
+    // a writer for the duration of an RPC round-trip.
     {
-        let g = engine_arc.read().await;
-        let floor = g.refresh.scan_start_floor();
-        let daemon = g.daemon().clone();
-        if let Err(e) = super::scan_floor::ensure_birthday_anchor(&g.ledger, &daemon, floor).await {
+        let (ledger, daemon, floor) = {
+            let g = engine_arc.read().await;
+            (
+                std::sync::Arc::clone(&g.ledger),
+                g.daemon().clone(),
+                g.refresh.scan_start_floor(),
+            )
+        };
+        if let Err(e) = super::scan_floor::ensure_birthday_anchor(&ledger, &daemon, floor).await {
             _ = completion.send(Err(e));
             return;
         }
