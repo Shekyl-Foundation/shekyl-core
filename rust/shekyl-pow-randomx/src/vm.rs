@@ -520,7 +520,7 @@ const _: () = assert!(
 );
 
 const _: () = assert!(
-    PROGRAM_BUFFER_SIZE % 64 == 0,
+    PROGRAM_BUFFER_SIZE.is_multiple_of(64),
     "PROGRAM_BUFFER_SIZE must be a multiple of 64 per the \
      `aes::fill_aes_4r_x4` output-length contract \
      (the AES-4R-x4 generator emits in 64-byte chunks)"
@@ -833,7 +833,7 @@ fn fp_reg(index: u8) -> usize {
 }
 
 fn mod_mem(instr: &Instruction) -> bool {
-    instr.mod_ % 4 != 0
+    !instr.mod_.is_multiple_of(4)
 }
 
 fn mod_shift(instr: &Instruction) -> u32 {
