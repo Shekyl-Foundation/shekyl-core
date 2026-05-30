@@ -181,6 +181,15 @@ impl<R: RefreshEngine> FaultInjecting<R> {
     }
 }
 
+impl<R> super::scan_floor::ScanStartFloorProvider for FaultInjecting<R>
+where
+    R: super::scan_floor::ScanStartFloorProvider + RefreshEngine,
+{
+    fn scan_start_floor(&self) -> u64 {
+        self.inner.scan_start_floor()
+    }
+}
+
 impl<R: RefreshEngine> Drop for FaultInjecting<R> {
     /// Panic if a test left the wrapper without draining its
     /// injected failures. Per the F-Mock-2 contract in the

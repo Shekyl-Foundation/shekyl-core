@@ -448,7 +448,10 @@ impl Engine<SoloSigner> {
         let mut expected_classical_address = [0u8; EXPECTED_CLASSICAL_ADDRESS_BYTES];
         expected_classical_address.copy_from_slice(&blob.classical_address_bytes);
 
-        let initial_ledger = WalletLedger::empty();
+        let mut initial_ledger = WalletLedger::empty();
+        if restore_height_hint > 0 {
+            initial_ledger.sync_state.restore_from_height = u64::from(restore_height_hint);
+        }
         let cap_content = CapabilityContent::Full { master_seed_64 };
 
         let file_params = FileCreateParams {
@@ -701,7 +704,15 @@ impl Engine<SoloSigner> {
                     detail: format!("ViewMaterial construction failed: {other:?}"),
                 }),
             })?;
-        let refresh = std::sync::Arc::new(super::local_refresh::LocalRefresh::new(view_material));
+        let scan_start_floor = super::scan_floor::effective_scan_floor(
+            ledger.sync_state.restore_from_height,
+            file.effective_skip_to_height(),
+            file.effective_refresh_from_block_height(),
+        );
+        let refresh = std::sync::Arc::new(super::local_refresh::LocalRefresh::new(
+            view_material,
+            scan_start_floor,
+        ));
 
         let keys = std::sync::Arc::new(keys);
         let ledger = std::sync::Arc::new(super::local_ledger::LocalLedger::new(ledger, indexes));

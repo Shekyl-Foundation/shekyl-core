@@ -888,7 +888,7 @@ const _: fn() = || {
 /// abandon a successful refresh in flight have to drop the handle
 /// and reconcile against the next `progress().borrow()`.
 #[allow(clippy::type_complexity)]
-async fn run_refresh_task<S, D: DaemonEngine, R: RefreshEngine, P>(
+async fn run_refresh_task<S, D: DaemonEngine, R, P>(
     engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S, D, LocalLedger, R, P>>>,
     opts: RefreshOptions,
     cancel: CancellationToken,
@@ -897,9 +897,20 @@ async fn run_refresh_task<S, D: DaemonEngine, R: RefreshEngine, P>(
     _slot_guard: SlotGuard,
 ) where
     S: EngineSignerKind + Send + Sync + 'static,
+    R: RefreshEngine + super::scan_floor::ScanStartFloorProvider + Send + Sync + 'static,
     P: super::traits::PendingTxEngine + Send + Sync + 'static,
     Engine<S, D, LocalLedger, R, P>: Send + Sync,
 {
+    {
+        let g = engine_arc.read().await;
+        let floor = g.refresh.scan_start_floor();
+        let daemon = g.daemon().clone();
+        if let Err(e) = g.ledger.ensure_birthday_anchor(&daemon, floor).await {
+            _ = completion.send(Err(e));
+            return;
+        }
+    }
+
     // Producer-side observability sink. `TracingDiagnosticSink` is the
     // V3.0 canonical projection per `engine/diagnostics.rs` F9: each
     // RefreshDiagnostic variant is routed to a typed `tracing` span
@@ -1293,8 +1304,12 @@ impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine, P: super::traits::P
 // sync entry points here and the async `start_refresh` path share this
 // `Engine::apply_scan_result` merge entry point.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine, P: super::traits::PendingTxEngine>
-    Engine<S, D, LocalLedger, R, P>
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        R: RefreshEngine + super::scan_floor::ScanStartFloorProvider,
+        P: super::traits::PendingTxEngine,
+    > Engine<S, D, LocalLedger, R, P>
 {
     /// Drive a refresh against the configured daemon: pull a snapshot
     /// of the wallet's ledger, ask the producer to scan
@@ -1383,7 +1398,16 @@ impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine, P: super::traits::P
         &self,
         opts: &RefreshOptions,
         runtime: &tokio::runtime::Handle,
-    ) -> Result<RefreshSummary, RefreshError> {
+    ) -> Result<RefreshSummary, RefreshError>
+    where
+        R: super::scan_floor::ScanStartFloorProvider,
+    {
+        let floor = self.refresh.scan_start_floor();
+        runtime.block_on(super::scan_floor::ensure_birthday_anchor(
+            &self.ledger,
+            &self.daemon,
+            floor,
+        ))?;
         // Producer dispatch via the [`RefreshEngine`] trait surface
         // (`R: RefreshEngine`, default `LocalRefresh`). The trait
         // implementor owns scanner construction, daemon-tip read,
@@ -3257,8 +3281,9 @@ mod start_refresh_integration_tests {
             // `StaleThenRealRefresh` to drive the one-shot retry.
             let vm = ViewMaterial::try_from_keys(engine.keys())
                 .expect("ViewMaterial::try_from_keys against engine keys");
-            let refresh =
-                StaleThenRealRefresh::new(FaultInjectingRefresh::new(LocalRefresh::new(vm)));
+            let refresh = StaleThenRealRefresh::new(FaultInjectingRefresh::new(
+                LocalRefresh::new(vm, 0),
+            ));
             let hybrid = engine.replace_refresh(refresh);
             Arc::new(RwLock::new(hybrid))
         };
