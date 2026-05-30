@@ -28,6 +28,14 @@
 
 ### Changed
 
+- **Refresh: wallet-birthday scan floor (P2).** `LocalRefresh` carries
+  `scan_start_floor` from `sync_state.restore_from_height` and session
+  `skip_to_height` / `refresh_from_block_height` overrides. Refresh
+  preflight anchors the ledger at `floor - 1` when needed so the merge gate
+  stays `start == synced_height + 1`; the producer scans from the floor through
+  tip. `Engine::create` persists `restore_height_hint` into
+  `sync_state.restore_from_height`.
+
 - **Workspace MSRV raised 1.85 → 1.88; `kameo = "=0.20.0"` pinned (Stage 2
   gate).** Satisfies the three preconditions in the `docs/FOLLOWUPS.md`
   "kameo dependency pin and MSRV alignment before Stage 2 cuts" entry:

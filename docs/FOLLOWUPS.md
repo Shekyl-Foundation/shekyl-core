@@ -380,70 +380,22 @@ sustainability is unaffected by the recalibration.
   for the full trace, and the PR 4 design doc §5.5 named-home
   table row for P1 for the substrate-post-Phase-1 cross-ref.
 
-- **P2: wallet-birthday plumbing not wired into producer
-  start-height (re-anchored 2026-05-20 after PR 4 Phase 1 landed
-  without absorption; pre-RC1).** `refresh_from_block_height`
-  and `skip_to_height` exist in the Rust prefs/state layer
-  (`rust/shekyl-engine-prefs/`) but are not threaded into the
-  producer's start-height calculation in
-  `rust/shekyl-engine-core/src/engine/local_refresh.rs`'s
-  `produce_scan_result` body (verified by grep — zero references
-  to either preference field under `engine/`). A wallet restored
-  from seed with a non-zero birthday scans every block from
-  genesis, ignoring the birthday hint.
+- ~~**P2: wallet-birthday plumbing not wired into producer
+  start-height**~~ **Closed (2026-05-30, branch
+  `refresh/p2-wallet-birthday-plumbing`).** Landed Shape A
+  (ledger anchor before scan): `effective_scan_floor` from
+  `sync_state.restore_from_height` plus
+  `WalletFile::effective_skip_to_height` /
+  `effective_refresh_from_block_height`; `scan_start_floor` on
+  `LocalRefresh::new`; `ensure_birthday_anchor` before refresh;
+  producer `scan_range_start` and progress `blocks_total` use the
+  effective start. `Engine::create` seeds
+  `sync_state.restore_from_height` from `restore_height_hint`.
 
-  **Severity.** P2 — performance regression for restored-from-seed
-  wallets only. No correctness impact; the scan finds the same
-  outputs, just slower.
-
-  **Post-PR-4-Phase-1 substrate.** PR 4 Phase 1 (commits C0–C9 on
-  `feat/stage-1-pr4-refresh-engine`; close-out at PR #60) landed
-  the α producer-shape disposition per
-  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
-  §5.4 Round 1 (preserved current shape). The pre-Phase-1
-  disposition assumed the producer's start-height surface would
-  be reshaped by α/β/γ Round 1; α preserved it, so no plumbing
-  rode along with the reshape. P2 remains open against the same
-  unplumbed surface, with the substrate now well-defined for the
-  plumbing PR: `LocalRefresh::new` is the V3.0 production
-  implementor (PR 4 C4 = `ac100e1ab`) and the start-height
-  computation lives inside `produce_scan_result`.
-
-  **Disposition (re-anchored 2026-05-20).** Defer to a focused
-  follow-up PR off `dev` named
-  `refresh/p2-wallet-birthday-plumbing` (or equivalent),
-  landing V3.0 pre-genesis. Shape: thread
-  `refresh_from_block_height` / `skip_to_height` from the
-  `shekyl-engine-prefs` layer into either (i) a new
-  `LocalRefresh::new` parameter (e.g.,
-  `start_height_floor: Option<u64>`) consumed at
-  `produce_scan_result` start-height computation, or (ii) the
-  existing `RefreshOptions` carrying the floor as a hint. Choice
-  between (i) and (ii) falls out of the call-site audit at PR
-  open: (i) is appropriate if the floor is constructor-time
-  static (set once when the wallet is opened); (ii) is
-  appropriate if the floor is per-refresh dynamic (e.g.,
-  rescan-from-height runtime user action). The PR is small
-  enough to fit `06-branching.mdc`'s splitting guidance.
-
-  **Reopening criteria (per
-  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).**
-  This entry closes when the focused plumbing PR lands. The
-  entry reopens with higher severity (P1) if a binary integrates
-  `start_refresh` against a restored-from-seed wallet and the
-  full-chain rescan time materially degrades the wallet open
-  flow (e.g., dominates p99 first-refresh latency on the
-  Phase 7.7 stressnet measurement against commodity Windows
-  hardware).
-
-  **Originating context.** Surfaced alongside the async-path-skip
-  finding during `perf/merge-insertion-indices` pre-flight; both
-  items were originally bundled as "M3b.1" before being unbundled
-  into per-validation-surface scopes per
-  `.cursor/rules/19-validation-surface-discipline.mdc`. See
-  `docs/design/PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md` §9.3,
-  and the PR 4 design doc §5.5 named-home table row for P2 for
-  the substrate-post-Phase-1 cross-ref.
+  **Reopening criteria (unchanged).** Reopens as P1 if a binary
+  integrates `start_refresh` on restored-from-seed wallets and
+  cold-sync latency still dominates wallet open despite this
+  plumbing (regression or incomplete wiring).
 
 - ~~**P3: `apply_scan_result_to_state` allocates `Vec<usize>` even
   for trait-impl callers that discard it (re-anchored 2026-05-20
