@@ -2,6 +2,7 @@
 name = "shekyl-economics"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Four-component economic system: release rate, burn, emission share, staker rewards"

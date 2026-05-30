@@ -8,6 +8,7 @@ name = "shekyl-engine-file"
 description = "On-disk orchestrator for the Shekyl v1 two-file wallet envelope (.wallet.keys + .wallet): SWSP payload framing, advisory locking, atomic writes, and write-once enforcement."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

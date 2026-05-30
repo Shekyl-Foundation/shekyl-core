@@ -2,6 +2,7 @@
 name = "shekyl-engine-core"
 version = "2.0.0"
 edition = "2021"
+rust-version.workspace = true
 license = "BSD-3-Clause"
 description = "Shekyl engine core: orchestrator and transaction builders for stake, unstake, and claim operations"
 # Build script reads `config/consensus_constants.json` (the same JSON

@@ -8,6 +8,7 @@ name = "shekyl-engine-state"
 description = "Canonical Shekyl engine state types: TransferDetails, RuntimeWalletState, StakerPoolState, and the blocks persisted to the wallet file ledger section."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

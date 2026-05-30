@@ -8,6 +8,7 @@ name = "shekyl-scanner"
 description = "Transaction scanner for the Shekyl protocol with FCMP++, PQC, and staking support"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

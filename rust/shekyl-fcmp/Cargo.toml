@@ -8,6 +8,7 @@ name = "shekyl-fcmp"
 description = "FCMP++ full-chain membership proofs with Shekyl PQC extensions (4-scalar leaf)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

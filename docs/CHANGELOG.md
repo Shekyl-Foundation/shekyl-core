@@ -4,6 +4,21 @@
 
 ### Changed
 
+- **Workspace MSRV raised 1.85 → 1.88; `kameo = "=0.20.0"` pinned (Stage 2
+  gate).** Satisfies the three preconditions in the `docs/FOLLOWUPS.md`
+  "kameo dependency pin and MSRV alignment before Stage 2 cuts" entry:
+  (1) exact-patch pin of the actor framework in `[workspace.dependencies]`
+  (declared-only; no consumer yet, so inert in the build graph),
+  (2) MSRV bump to kameo 0.20.0's required 1.88.0 (verified at source via
+  the crates.io index), propagated per-crate via `rust-version.workspace =
+  true` across all first-party members so the gate is enforced workspace-wide
+  rather than declared only on the virtual root, and (3) the workspace
+  bounded-mailbox default
+  (`mailbox(64)`, overrides documented at the actor site). No
+  `rust-toolchain.toml` added — CI builds on `@stable` (≥ 1.88); the gate's
+  intent is the MSRV declaration, not a pinned channel. Stage 2's first
+  commit adds the live consumer and closes the FOLLOWUP.
+
 - **Stage 1 PR 6 — PersistenceEngine C7: remove password `save_state`.**
   `WalletFile::save_state` now takes session-cached `wrap_key_region_2` only;
   password-taking steady-state save deleted. `shekyl_wallet_save_state` FFI
@@ -28,6 +43,31 @@
   classical address). Blocking PR 6: panic-hook redaction test, mlock honest
   contract, region-2 `OsRng` nonce rustdoc. V3.1/V3.x items in
   [`docs/FOLLOWUPS.md`](FOLLOWUPS.md).
+
+- **Stage 0 PR-A — iai-callgrind symmetry rule** (`3d313256c`). Backfill.
+  [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.2 codifies
+  the symmetry rule (setup *and* fixture teardown excluded from the measured
+  region; criterion amortizes `Drop` via `b.iter`, iai-callgrind does not) and
+  adds Finding 5 to the §4.4 gap-check inventory. Closes the
+  Drop-contamination capture (`synced_height` reported 60,033 instructions vs
+  the expected low-tens, a property-preservation gap), class-level across every
+  `engine_trait_bench_*` bench.
+
+- **Stage 0 PR-A-extension — iai-callgrind boundary rule** (`2e5309ad3`).
+  Backfill. [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.2
+  adds the boundary rule (iai-callgrind measures function-boundary value
+  movement; `Engine<SoloSigner>` is 6,296 bytes, so by-value fixture passing
+  cost ~600 instructions of memcpy) and the §4.4 unified
+  `(Box<Engine<S>>, TempDir)` component-model fixture shape. Closes the
+  memcpy-at-boundary finding.
+
+- **Stage 0 PR-C — iai-callgrind hoisting rule** (`93d515123`). Backfill.
+  [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.2 adds the
+  hoisting rule (criterion-side `b.iter` iter-amortization can elide
+  state-dependent compute the author meant to count) and the §4.4 two-anchor
+  static check (predict criterion `median_ns` from iai instructions by workload
+  class). Closes Finding 7 (criterion-vs-iai workload-class disagreement),
+  completing the symmetry/boundary/hoisting rule-triple.
 
 ### Added
 
@@ -2471,12 +2511,13 @@
     (those are Phase 3a/3b/3c/4). Phase 2b lands AES round +
     SuperScalarHash next.
 
-- **Stage 1 closeout audit tracking** (2026-05-27, post–PR #81). Records
-  Stage 1 trait-extraction status in [`FOLLOWUPS.md`](FOLLOWUPS.md) V3.0
-  queue and cross-refs [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
-  §8.1 / §1 banner plus [`WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md).
-  Dedicated `docs/design/STAGE_1_COMPLETION_AUDIT.md` remains **outstanding**
-  (filename reserved; add in a follow-up doc PR).
+- **Stage 1 closeout audit tracking** (2026-05-27, post–PR #81; updated
+  2026-05-29 post–PR #88). Records Stage 1 trait-extraction status in
+  [`FOLLOWUPS.md`](FOLLOWUPS.md) V3.0 queue and cross-refs
+  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md) §8.1 /
+  §1 banner plus [`WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md).
+  Dedicated audit markdown now landed:
+  [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](design/STAGE_1_COMPLETION_AUDIT.md).
 
 - **Stage 1 PR 5 — `PendingTxEngine` trait surface and Phase 1
   substrate** (`feat/stage-1-pr5-pending-tx-engine`, 2026-05-27).

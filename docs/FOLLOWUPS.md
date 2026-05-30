@@ -47,66 +47,46 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **Stage 1 trait-extraction chain — closeout audit (2026-05-27;
-  PR #81 merged).** The §8.1 critical-path chain is landed on `dev`:
+- **Stage 1 trait-extraction chain — closeout audit (2026-05-29;
+  post–PR #88 update).** The §8.1 critical-path chain is landed on `dev`:
   `DaemonEngine` → `LedgerEngine` → (`RefreshEngine` ∥
   `PendingTxEngine`), with `KeyEngine` trait + `LocalKeys` implementor
-  in parallel. Inventory, orchestrator shape (`Engine<S, D, L, R, P>`),
-  gaps (`PersistenceEngine`, `EconomicsEngine`, `K: KeyEngine` on
-  `Engine`), and ordered next steps:
+  in parallel; `PersistenceEngine` substrate also landed (PR #83).
+  Inventory, orchestrator shape (`Engine<S, D, L, R, P>`), ordered
+  next steps, and off-critical-path trait status:
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md) §8.1 /
   §1 status banner; per-PR design docs under `docs/design/STAGE_1_PR_*`.
-  **Dedicated audit markdown** (`STAGE_1_COMPLETION_AUDIT.md`) — **not yet
-  landed** (CHANGELOG entry was aspirational; add in a doc-only PR or fold
-  into post–PR 7 closeout).
+  **Dedicated audit markdown landed:**
+  [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](./design/STAGE_1_COMPLETION_AUDIT.md).
   **Still V3.0 pre-genesis but not “missing Stage 1 PR”:** P1 async
   refresh post-pass, wallet BIP-39 FFI, optional persistence/economics
   trait PRs, economics §3.3 benches. **Rewrite plan:**
   [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   Phases 0–6; Stage 1 was prerequisite, Phase 1+ continues `Engine`.
 
-- **Base emission: Rust `base_block_reward` (0h) cross-check and
-  `get_block_reward` migration disposition (2026-05-27; Stage 1 PR 7
-  substrate audit §5.8).** **Evidence.** Shekyl economics is Rust-canonical
-  for burn, emission-share, release-multiplier, and stake-ratio *division*
-  (`shekyl_calc_stake_ratio` FFI; burn via `shekyl_calc_burn_pct` in
-  `shekyl-economics/src/burn.rs`; C++ `compute_fee_burn` is orchestration
-  only). **Base CryptoNote subsidy is not:** `cryptonote::get_block_reward`
-  in `src/cryptonote_basic/cryptonote_basic_impl.cpp` is the live consensus
-  minting formula; `already_generated` accumulation is C++-side on block
-  connect. There is no `shekyl_base_block_reward` FFI today. PR 7
-  introduces `base_block_reward(already_generated)` in `shekyl-economics` for
-  wallet/sim/engine — a **second implementation** of consensus-critical math.
+- **Base emission migration (Stage 1 PR 7 §5.8) — C2/C2a′ landed; C2c still
+  open (updated 2026-05-29).** PR #88 landed C2 and C2a′ on `dev`:
+  Rust `base_block_reward` + `projected_already_generated`, dual-leg KAT
+  harnesses (`tests/unit_tests/economics_c2a_prime.cpp`,
+  `tests/core_tests/economics_c2a_prime.cpp`), and required CI checks.
+  `shekyl_base_block_reward` FFI now exists
+  (`rust/shekyl-ffi/src/lib.rs`, `src/shekyl/shekyl_ffi.h`).
 
-  **Disposition (ratified 2026-05-27): migration path; C++ cutover in V3.0.**
-  `base_block_reward` in `shekyl-economics` is the canonical formula.
-  `get_block_reward` becomes a thin C++ wrapper (same shape as
-  `compute_fee_burn` / `compute_emission_split` in `economics.h`) calling
-  `shekyl_base_block_reward` (+ release-multiplier FFI). Wallet-only
-  re-expression with a permanent cross-check bridge is **rejected**.
+  **Still open:** C2c cutover. Live consensus path
+  `cryptonote::get_block_reward` in
+  `src/cryptonote_basic/cryptonote_basic_impl.cpp` still computes base subsidy
+  in C++; production callsites do not yet route through
+  `shekyl_base_block_reward`.
 
-  **Implementation scope (PR 7, V3.0) — commit order is load-bearing:**
+  **Disposition (unchanged):** migration path; C++ cutover in V3.0.
+  `base_block_reward` in `shekyl-economics` is canonical; `get_block_reward`
+  becomes a thin wrapper (`shekyl_base_block_reward` + release multiplier).
+  Wallet-only permanent cross-check bridge remains rejected.
 
-  - **C2** — Rust `base_block_reward` + `projected_already_generated` in crate;
-    sim rewired to 0h.
-  - **C2a′** — **Separate commit.** Dual-leg KAT (§5.8 H1): (A) Rust ==
-    legacy C++ `get_block_reward`; (B) Rust == spec/sim oracle independent of
-    C++. Multi-block `already_generated` accumulation grid (H2), not
-    single-block subsidy only. CI required check.
-  - **C2c** — **Separate commit after C2a′.** `shekyl_base_block_reward` FFI;
-    rewire all consensus consumers (`validate_miner_transaction`, fee estimate,
-    `already_generated` accumulator, pop_block reversal — H2). Delete duplicated
-    C++ base-subsidy body only after both KAT legs pass. **C2c message cites
-    C2a′ commit hash** (H3).
-
-  **Merge-time hazards (§5.8 H1–H3):** C++-only oracle certifies reproducing C++
-  bugs (H1); blast radius includes accumulation (H2); soft "gates" are
-  insufficient — enforce commit order + required CI (H3).
-
-  **Close this FOLLOWUPS item when:** C2a′ (both legs + accumulation grid) is
-  in CI green and C2c is merged on `dev` with C2a′ as ancestor. **Design:**
+  **Close this FOLLOWUPS item when:** C2c is merged on `dev` with C2a′
+  ancestor and duplicated C++ base-subsidy body removed. **Design:**
   [`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](./design/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
-  §5.8. **Target:** V3.0 (PR 7 implementation).
+  §5.8. **Target:** V3.0 (PR 7 completion).
 
 - **Post-2g adversarial-corpus methodology + implementation
   (trigger: RandomX v2 Phase 2g Round 7 R7-D1/R7-D2 reopening
@@ -618,34 +598,6 @@ sustainability is unaffected by the recalibration.
 
   **Target.** V3.0, Phase 7.7 stressnet.
 
-- **`scripts/bench/compare.py`: treat baseline=0 as informational,
-  not fail (trigger: cut chore PR off `dev` immediately; pre-RC1).**
-  The CI bench gate at `scripts/bench/compare.py:218–219` computes
-  `delta_pct = inf` when the rolling baseline records
-  `instructions=0` for an entry but the PR-side capture is
-  non-zero, and `verdict_for("hot_path_bench", inf)` returns
-  `fail`. This contradicts the protocol intent documented in
-  `docs/benchmarks/README.md`: "An entry present in the PR but
-  not the baseline is informational; the first merge to `dev`
-  seeds it into the rolling baseline." The current logic treats
-  baseline-present-with-zero as a real measurement rather than
-  as missing data. Surfaced when M3b's PR #34 hit `+inf%` fail
-  verdicts on `hot_path_bench_ledger_postcard_{serialize,
-  deserialize}/with_setup_{0,1,2}` against a `bench-baseline`
-  branch (refreshed at `647f82d59`) where those six entries have
-  `instructions=0` in `baseline.iai.snapshot` (likely Valgrind
-  timed out during baseline capture for the larger
-  `with_setup_2` (10k transfers) runs, and the snapshot wrote
-  zeros for the entire group).
-
-  **Disposition.** Cut a focused chore PR off `dev` —
-  `chore(bench): treat baseline=0 as informational in compare.py`
-  — extending `compare.py:218–219` to emit `verdict = "info"` (not
-  `"fail"`) when `base_val == 0` and `pr_val > 0`, mirroring the
-  added-in-PR informational path. Estimate: ~5 lines in one
-  Python file, no workspace code changes. Lands before any
-  subsequent PR that hits the bench gate. Pre-RC1.
-
 - **Stage 1 PR 3 engine-property test re-location (trigger: V3.2
   unified `KeyEngine` / `LedgerEngine` / `DaemonEngine`
   `pub(crate) → pub` visibility-promotion bundle per
@@ -879,24 +831,6 @@ sustainability is unaffected by the recalibration.
   discipline" entry for the lemma that generalizes from this
   recurrence.
 
-- **CHANGELOG backfill for Stage 0 PR-A and PR-C.** Stage 0
-  preparatory PRs PR-A (`3d313256c` — symmetry rule),
-  PR-A-extension (`2e5309ad3` — boundary rule), and PR-C
-  (`93d515123` — hoisting rule) merged to `dev` without
-  `## [Unreleased] / ### Documentation` entries in
-  [`docs/CHANGELOG.md`](CHANGELOG.md). Per
-  [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)
-  the CHANGELOG is part of the documentation update each PR owes;
-  these three PRs left a process-discipline gap that was surfaced
-  during Stage 0 PR-B drafting. Close-condition: backfill commit
-  on `dev` adds three entries under the existing `## [Unreleased]
-  / ### Documentation` section covering (1) §4.2 symmetry rule
-  and §4.4 sanity-check restructure, (2) §4.2 boundary rule and
-  §4.4 component-model framing, (3) §4.2 hoisting rule and §4.4
-  two-anchor static check. Each entry references its merge SHA
-  and the structural finding it closes. Target: V3.0, can land
-  any time before V3.0 cut.
-
 - **`kameo` dependency pin and MSRV alignment before Stage 2 cuts.**
   The Path B boundary decision (*2026-04-27 — Engine binary boundary:
   pure message-passing over shared handle* in
@@ -910,19 +844,45 @@ sustainability is unaffected by the recalibration.
      pinning. Rationale: supervision support shipped in v0.20.0
      (2026-04-07); v0.19.x and v0.20.0 included deadlock fixes
      relevant to the no-cycle DAG topology this project commits to.
+     **Satisfied (chore/stage_1_cleanup, 2026-05-29):** `kameo =
+     "=0.20.0"` declared in `[workspace.dependencies]`. Verified at
+     source via the crates.io index — 0.20.0 is the newest stable
+     (2026-04-07, not yanked); no newer version to re-pin to.
   2. **MSRV alignment.** kameo requires Rust `>= 1.88`. Confirm the
      Shekyl workspace MSRV is at or above 1.88 (or raise it explicitly
      in the same commit, with a `rust-toolchain.toml` update and a
      CHANGELOG entry under "Changed").
+     **Satisfied (chore/stage_1_cleanup, 2026-05-29):** workspace
+     `rust-version` raised 1.85 → 1.88; CHANGELOG "Changed" entry
+     added. The declaration is inherited per-crate via
+     `rust-version.workspace = true` in every first-party member's
+     `[package]` (not only the 3 RandomX crates that previously opted
+     in) — cargo enforces a crate's MSRV only when the crate declares
+     `rust-version`, so the propagation is what makes the gate real
+     rather than a virtual-root annotation. `rust-toolchain.toml`
+     intentionally *not* added — CI builds on
+     `dtolnay/rust-toolchain@stable` (≥ 1.88 in 2026); a pinned
+     channel file would change CI/local build behavior without serving
+     the gate's intent (the MSRV declaration), and no such file exists
+     today.
   3. **Bounded-mailbox sizing default.** Choose a workspace-wide
      bounded-mailbox default (e.g., `mailbox(64)`) with documented
      rationale, and capture the per-actor override convention. Pure
      unbounded mailboxes are forbidden under Path B for memory-pressure
      reasons.
+     **Satisfied (chore/stage_1_cleanup, 2026-05-29):** `mailbox(64)`
+     default + per-actor override convention documented inline at the
+     `kameo` `[workspace.dependencies]` entry.
 
-  This entry is the gate on Stage 2; Stage 2's first commit is the
-  one that adds the `kameo` dependency, and that commit references
-  this follow-up by closure. Target: V3.0, pre-Stage-2.
+  **Status (2026-05-29).** All three preconditions are satisfied by
+  the `chore/stage_1_cleanup` verification commit. The pin is
+  declared-only (no workspace member consumes `kameo` yet, so it is
+  inert in the build graph). **This entry stays open** until Stage 2's
+  first commit adds the live `kameo = { workspace = true }` consumer
+  (the `KeyEngine` actor crate), verifies the supervision/mailbox API
+  surface at source per `17-dependency-discipline.mdc` at that
+  consumption point, and closes this follow-up. Target: V3.0,
+  pre-Stage-2.
 
 - **View/HW lifecycle bodies in `shekyl-wallet-core`.**
   `Wallet::open_view_only` and `Wallet::open_hardware_offload` ship as
