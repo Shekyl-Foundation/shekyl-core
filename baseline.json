@@ -1,10 +1,10 @@
 {
   "schema_version": "shekyl_rust_v0",
   "captured_on": {
-    "git_rev": "702a2dff9cc3d4e186550b65d4a85f2cfd593c61",
+    "git_rev": "ccefca1af12fa934db3b748a299c539ec7c443e1",
     "git_dirty": "clean",
     "kernel": "Linux 6.17.0-1015-azure #15~24.04.1-Ubuntu SMP Wed May  6 22:37:49 UTC 2026 x86_64 GNU/Linux",
-    "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+    "cpu_model": "AMD EPYC 7763 64-Core Processor",
     "rustc_version": "rustc 1.96.0 (ac68faa20 2026-05-25)",
     "cargo_version": "cargo 1.96.0 (30a34c682 2026-05-25)",
     "valgrind_version": "valgrind-3.22.0",
@@ -17,10 +17,10 @@
       "value_str": null,
       "full_id": "crypto_bench_transfer_e2e_1in_2out/bulletproofs_plus_2_outputs",
       "throughput": null,
-      "mean_ns": 23876437.829999994,
-      "median_ns": 23859230.833333336,
-      "std_dev_ns": 128809.27341438178,
-      "median_abs_dev_ns": 29052.287784218788
+      "mean_ns": 21368953.276666664,
+      "median_ns": 21352650.166666664,
+      "std_dev_ns": 132065.6377099226,
+      "median_abs_dev_ns": 137998.18165004253
     },
     {
       "group_id": "crypto_bench_transfer_e2e_1in_2out",
@@ -28,10 +28,10 @@
       "value_str": null,
       "full_id": "crypto_bench_transfer_e2e_1in_2out/hybrid_sign_1_input",
       "throughput": null,
-      "mean_ns": 1120590.9846048069,
-      "median_ns": 1122531.0896567297,
-      "std_dev_ns": 123859.44432863891,
-      "median_abs_dev_ns": 113827.02625425936
+      "mean_ns": 1059785.5332530942,
+      "median_ns": 1041722.1565891473,
+      "std_dev_ns": 166456.38034484917,
+      "median_abs_dev_ns": 117854.17142469963
     },
     {
       "group_id": "crypto_bench_wallet_open_cold",
@@ -39,10 +39,10 @@
       "value_str": null,
       "full_id": "crypto_bench_wallet_open_cold/default_kdf",
       "throughput": null,
-      "mean_ns": 184937488.53123015,
-      "median_ns": 184917481.7638889,
-      "std_dev_ns": 415717.30288843025,
-      "median_abs_dev_ns": 165814.85208370676
+      "mean_ns": 173641532.29779762,
+      "median_ns": 173614950.01190478,
+      "std_dev_ns": 1154622.700030647,
+      "median_abs_dev_ns": 1322173.557951706
     },
     {
       "group_id": "engine_trait_bench_ledger_balance",
@@ -50,10 +50,10 @@
       "value_str": null,
       "full_id": "engine_trait_bench_ledger_balance",
       "throughput": null,
-      "mean_ns": 1841.0533651574237,
-      "median_ns": 1832.4178871186714,
-      "std_dev_ns": 36.15262027737,
-      "median_abs_dev_ns": 4.95214448723624
+      "mean_ns": 1648.8420548157183,
+      "median_ns": 1643.764198874483,
+      "std_dev_ns": 19.40481371641322,
+      "median_abs_dev_ns": 4.080797257910716
     },
     {
       "group_id": "engine_trait_bench_ledger_synced_height",
@@ -61,10 +61,10 @@
       "value_str": null,
       "full_id": "engine_trait_bench_ledger_synced_height",
       "throughput": null,
-      "mean_ns": 6.338986781042864,
-      "median_ns": 6.327617862601404,
-      "std_dev_ns": 0.06243609156014366,
-      "median_abs_dev_ns": 0.0036663498273175523
+      "mean_ns": 5.563309011549163,
+      "median_ns": 5.553691676803477,
+      "std_dev_ns": 0.0631845564590095,
+      "median_abs_dev_ns": 0.003836768193633591
     },
     {
       "group_id": "hot_path_bench_balance_compute",
@@ -74,10 +74,10 @@
       "throughput": {
         "Elements": 100
       },
-      "mean_ns": 159.91319459821435,
-      "median_ns": 159.7488283086763,
-      "std_dev_ns": 1.0583456125690383,
-      "median_abs_dev_ns": 0.18961327128028954
+      "mean_ns": 166.22721404307214,
+      "median_ns": 166.42731549234924,
+      "std_dev_ns": 2.637392380892006,
+      "median_abs_dev_ns": 1.5381151897834981
     },
     {
       "group_id": "hot_path_bench_balance_compute",
@@ -87,10 +87,10 @@
       "throughput": {
         "Elements": 1000
       },
-      "mean_ns": 1641.3342261044804,
-      "median_ns": 1639.0811784119587,
-      "std_dev_ns": 10.284309539078906,
-      "median_abs_dev_ns": 2.4123100632017698
+      "mean_ns": 1634.403088282773,
+      "median_ns": 1630.702286587813,
+      "std_dev_ns": 35.84012992262053,
+      "median_abs_dev_ns": 15.270558197724684
     },
     {
       "group_id": "hot_path_bench_balance_compute",
@@ -100,10 +100,10 @@
       "throughput": {
         "Elements": 10000
       },
-      "mean_ns": 28067.741751364178,
-      "median_ns": 28223.53347578348,
-      "std_dev_ns": 1496.9271644467942,
-      "median_abs_dev_ns": 1361.9679336711831
+      "mean_ns": 27192.62072036462,
+      "median_ns": 27152.704680290044,
+      "std_dev_ns": 228.57856540206245,
+      "median_abs_dev_ns": 93.76927442673876
     },
     {
       "group_id": "hot_path_bench_ledger_postcard_roundtrip",
@@ -113,10 +113,10 @@
       "throughput": {
         "Elements": 100
       },
-      "mean_ns": 629447.2416762441,
-      "median_ns": 627202.8325098814,
-      "std_dev_ns": 11595.737669224032,
-      "median_abs_dev_ns": 674.5528925114533
+      "mean_ns": 575450.6876480258,
+      "median_ns": 574253.4727040817,
+      "std_dev_ns": 8143.966536022987,
+      "median_abs_dev_ns": 720.1231438914174
     },
     {
       "group_id": "hot_path_bench_ledger_postcard_roundtrip",
@@ -126,10 +126,10 @@
       "throughput": {
         "Elements": 1000
       },
-      "mean_ns": 6268820.58375,
-      "median_ns": 6266853.25,
-      "std_dev_ns": 8270.749244364062,
-      "median_abs_dev_ns": 4892.487250640988
+      "mean_ns": 5745268.375555554,
+      "median_ns": 5743315.055555556,
+      "std_dev_ns": 7965.785480959432,
+      "median_abs_dev_ns": 5085.400276383378
     },
     {
       "group_id": "hot_path_bench_ledger_postcard_roundtrip",
@@ -139,10 +139,10 @@
       "throughput": {
         "Elements": 10000
       },
-      "mean_ns": 62772484.98,
-      "median_ns": 62750955.0,
-      "std_dev_ns": 85589.64449834531,
-      "median_abs_dev_ns": 40847.85317480564
+      "mean_ns": 57522127.82,
+      "median_ns": 57498488.5,
+      "std_dev_ns": 152172.13536015153,
+      "median_abs_dev_ns": 79081.14129602909
     },
     {
       "group_id": "hot_path_bench_ledger_postcard_roundtrip",
@@ -152,10 +152,10 @@
       "throughput": {
         "Elements": 100
       },
-      "mean_ns": 536265.8456607924,
-      "median_ns": 535464.3996364838,
-      "std_dev_ns": 5026.643553590746,
-      "median_abs_dev_ns": 491.06236435880254
+      "mean_ns": 484101.7893931781,
+      "median_ns": 482751.6685999186,
+      "std_dev_ns": 4743.8710199079605,
+      "median_abs_dev_ns": 508.6633119371699
     },
     {
       "group_id": "hot_path_bench_ledger_postcard_roundtrip",
@@ -165,10 +165,10 @@
       "throughput": {
         "Elements": 1000
       },
-      "mean_ns": 5346461.808999997,
-      "median_ns": 5344028.4,
-      "std_dev_ns": 11988.641079612697,
-      "median_abs_dev_ns": 4020.0698286294937
+      "mean_ns": 4818775.530909091,
+      "median_ns": 4813037.954545455,
+      "std_dev_ns": 44821.373642961415,
+      "median_abs_dev_ns": 3482.4251654482005
     },
     {
       "group_id": "hot_path_bench_ledger_postcard_roundtrip",
@@ -178,10 +178,10 @@
       "throughput": {
         "Elements": 10000
       },
-      "mean_ns": 53444682.55,
-      "median_ns": 53429835.5,
-      "std_dev_ns": 66329.60825072347,
-      "median_abs_dev_ns": 50074.0728110075
+      "mean_ns": 48136286.605,
+      "median_ns": 48130782.5,
+      "std_dev_ns": 35518.125161548,
+      "median_abs_dev_ns": 25752.76154279709
     },
     {
       "group_id": "hot_path_bench_scan_block",
@@ -191,10 +191,10 @@
       "throughput": {
         "Elements": 1
       },
-      "mean_ns": 79.90279319522186,
-      "median_ns": 79.6312639540276,
-      "std_dev_ns": 1.6164913883297831,
-      "median_abs_dev_ns": 0.17341214112580863
+      "mean_ns": 74.0173801115532,
+      "median_ns": 73.85632123085509,
+      "std_dev_ns": 0.987722524765914,
+      "median_abs_dev_ns": 0.10602203626083165
     },
     {
       "group_id": "hot_path_bench_scan_block",
@@ -204,10 +204,10 @@
       "throughput": {
         "Elements": 5
       },
-      "mean_ns": 28691.786309024064,
-      "median_ns": 28665.492941176468,
-      "std_dev_ns": 174.03030718593396,
-      "median_abs_dev_ns": 68.6659282238037
+      "mean_ns": 26102.790222164233,
+      "median_ns": 26075.711611519608,
+      "std_dev_ns": 145.85068080374964,
+      "median_abs_dev_ns": 53.433874866512994
     },
     {
       "group_id": "hot_path_bench_scan_block",
@@ -217,10 +217,10 @@
       "throughput": {
         "Elements": 50
       },
-      "mean_ns": 286036.0618404128,
-      "median_ns": 285829.6341463415,
-      "std_dev_ns": 1097.4480707339542,
-      "median_abs_dev_ns": 466.9724408049806
+      "mean_ns": 259133.87011913405,
+      "median_ns": 259287.33461750136,
+      "std_dev_ns": 1122.7602832454002,
+      "median_abs_dev_ns": 730.5249676807908
     }
   ],
   "iai_callgrind": [
@@ -387,11 +387,11 @@
       "setup": "prepared_wallet()",
       "metrics": {
         "instructions": 2050548,
-        "l1_hits": 2578905,
-        "ll_hits": 23982,
+        "l1_hits": 2578500,
+        "ll_hits": 24387,
         "ram_hits": 330,
         "total_read_write": 2603217,
-        "estimated_cycles": 2710365
+        "estimated_cycles": 2711985
       }
     },
     {
@@ -437,12 +437,12 @@
       "run_id": "with_setup_2",
       "setup": "build_state_and_outputs(50)",
       "metrics": {
-        "instructions": 2308448,
-        "l1_hits": 2683140,
-        "ll_hits": 1710,
+        "instructions": 2308390,
+        "l1_hits": 2683062,
+        "ll_hits": 1718,
         "ram_hits": 1038,
-        "total_read_write": 2685888,
-        "estimated_cycles": 2728020
+        "total_read_write": 2685818,
+        "estimated_cycles": 2727982
       }
     },
     {
@@ -489,11 +489,11 @@
       "setup": "build_engine_fixture()",
       "metrics": {
         "instructions": 50,
-        "l1_hits": 76,
+        "l1_hits": 75,
         "ll_hits": 1,
-        "ram_hits": 3,
+        "ram_hits": 4,
         "total_read_write": 80,
-        "estimated_cycles": 186
+        "estimated_cycles": 220
       }
     },
     {
@@ -506,11 +506,11 @@
       "setup": "build_engine_fixture_with_default_balance()",
       "metrics": {
         "instructions": 20581,
-        "l1_hits": 23434,
+        "l1_hits": 23433,
         "ll_hits": 2318,
-        "ram_hits": 11,
+        "ram_hits": 12,
         "total_read_write": 25763,
-        "estimated_cycles": 35409
+        "estimated_cycles": 35443
       }
     }
   ]
