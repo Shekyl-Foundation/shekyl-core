@@ -1,0 +1,237 @@
+---
+description: Verify dependencies before recommending them. Workspace state, API surface, and security properties get checked at source, not at vibes.
+alwaysApply: true
+---
+
+# Dependency discipline
+
+A recommendation that says "use crate X with feature Y" is a
+specification: it claims X exists in (or can be cleanly added to)
+the workspace, that X has the capability the recommendation
+attributes to it, and that feature Y unlocks that capability in
+the way the recommendation describes. When any of those claims
+is wrong, the recommendation is wrong, even when the surrounding
+analysis is right.
+
+This rule applies to the AI assistant and to humans reviewing
+its recommendations. The assistant has a recurrence pattern of
+recommending dependencies (or features on dependencies) without
+the verification this rule mandates; the rule names the
+verification explicitly so the recurrence stops.
+
+## Scope
+
+This rule applies whenever a recommendation introduces a new
+dependency, enables a new feature on an existing dependency, or
+attributes a security-load-bearing property to a dependency.
+"Security-load-bearing" includes wipe-on-drop, constant-time
+execution, side-channel resistance, well-defined error behavior
+at unexpected inputs, audit-posture claims, and PQC primitives.
+
+The rule applies most strongly to dependencies under
+`30-cryptography.mdc` / `35-secure-memory.mdc` /
+`36-secret-locality.mdc` jurisdiction. It applies more loosely
+to general-purpose dependencies (parsers, async runtimes,
+collections), where API-existence verification matters but
+property-existence verification is less load-bearing.
+
+## The verification protocol
+
+Before recommending a dependency or a feature on a dependency,
+verify each of the following at source. "At source" means
+reading the actual crate's `Cargo.toml`, source files, and
+feature-flag gating — not relying on docs.rs summaries, AI
+training-data recall, or general expectation of how the crate
+"should" behave.
+
+### 1. Workspace state
+
+Verify whether the crate is already a workspace dependency. If
+it is:
+
+- Pin the recommendation to the existing version and feature
+  set; the workspace's existing pinning constrains what is
+  available.
+- If the recommendation requires a new feature, name the feature
+  explicitly and the consumption site that needs it.
+- If the recommendation requires a different version, name the
+  bump and justify it (security advisory, capability the current
+  version lacks, etc.).
+
+If the crate is not a workspace dependency:
+
+- Justify the addition against the workspace's
+  dependency-additions cost (review surface, supply-chain
+  posture, audit fan-out).
+- Prefer reuse of an existing workspace dependency that provides
+  equivalent capability.
+- Cite the addition's downstream consumers; a one-site addition
+  is harder to justify than a multi-site one.
+
+Check via `git grep -E '^\s*<crate-name>\s*=' rust/*/Cargo.toml`
+or by reading the workspace `Cargo.toml`'s `[workspace.dependencies]`
+section and the crate's individual `Cargo.toml`.
+
+### 2. API existence
+
+Verify that the API the recommendation cites exists in the
+specific version pinned in the workspace. The crate's
+top-of-`lib.rs` re-exports and the relevant module's `pub`
+surface are the authoritative source. Common failure modes:
+
+- The API exists in a newer version than the workspace pin.
+- The API exists under a different module path than the
+  recommendation states.
+- The API existed in an older version and was renamed or moved.
+- The API exists in a "core" / "low-level" sub-crate but not in
+  the front-door crate the recommendation cites.
+
+`cargo doc --open` against the workspace's pinned version, or
+`Read`-ing the crate source under `~/.cargo/registry/src/`,
+verifies. Reading the assistant's training-data recollection of
+the crate does not.
+
+### 3. Property existence (for security-load-bearing usage)
+
+Verify that the property the recommendation attributes to the
+crate is actually present in the consumption path. For each
+property class:
+
+- **Wipe-on-drop / `Zeroize` / `ZeroizeOnDrop`.** The crate's
+  `impl Zeroize for <Type>` must be visible (either gated behind
+  a feature flag the recommendation enables, or unconditional).
+  If the type's internal state (the part holding the secret)
+  is private and has no `Zeroize` impl, the property is absent
+  regardless of how the type's public API behaves on drop.
+- **Constant-time.** The crate's audit posture must explicitly
+  claim constant-time execution for the operation in question.
+  "Looks like it should be constant time" is not a verification.
+  Per `30-cryptography.mdc`'s constant-time-or-explicit-rejection
+  rule, the absence of the claim is a claim of absence.
+- **PQC primitive well-formedness.** The crate must implement
+  the published spec the recommendation names (e.g., FIPS 203
+  for ML-KEM-768, FIPS 205 for SLH-DSA, SP 800-185 for cSHAKE).
+  Implementations that diverge from the spec — even in
+  parameter naming — are a source of subtle interoperability
+  bugs.
+- **Public reset / overwrite paths.** If the recommendation
+  relies on the consumer overwriting the crate's internal state
+  (e.g., to clear a secret-bearing buffer between uses), the
+  reset method must be public, documented, and tested. A
+  private internal state with no public reset path forecloses
+  the consumer's ability to satisfy a downstream wipe contract.
+
+Read the crate's source for the relevant module. The assistant
+has training-data recall of common crates' general shape but
+does not reliably know which feature flags gate which `Zeroize`
+impls in the workspace's pinned version.
+
+### 4. Feature-flag plumbing
+
+Verify the consumption path's feature-flag plumbing. Common
+failure modes:
+
+- The feature is enabled on a transitive dep but not on the
+  direct dep the recommended type lives under, so the type's
+  feature-gated impls are not in scope at the consumption site.
+- The feature is enabled in `[dev-dependencies]` but not in
+  `[dependencies]`, so production builds lack the property.
+- The feature exists on a different crate name (e.g., the
+  "core" crate vs. the front-door crate).
+
+The verification: `grep` the consumption site's `Cargo.toml`
+for the dependency line, confirm the feature is listed in the
+`features = [...]` array, and confirm the feature is
+load-bearing by reading the gated impl in the crate source.
+
+## The motivating example
+
+The cSHAKE256 implementation choice for `STAGE_1_PR_3_KEY_ENGINE.md`
+§7.12 is the recurrence pattern this rule was written against.
+Three dependency-discipline failures surfaced before the
+correct disposition was reached:
+
+1. **Initial recommendation: `tiny-keccak` for cSHAKE.** Cited
+   because `tiny_keccak::CShake` exists and matches the
+   SP 800-185 surface. Verification at source: `tiny-keccak`'s
+   inner `KeccakState` is private, has no `Zeroize` impl, no
+   `Drop` impl, and no public `reset()` method. The wipe-on-drop
+   property required by `35-secure-memory.mdc` is absent;
+   satisfying the property under `tiny-keccak` would require
+   `unsafe` transmute against a private type's layout.
+   Recommendation withdrawn.
+
+2. **Counter-recommendation: `sha3` doesn't expose cSHAKE256.**
+   Cited because the assistant's recall of `sha3`'s public
+   surface emphasized SHA-3 + SHAKE, not cSHAKE. Verification
+   at source: `sha3 = "0.10"` does expose `CShake256`
+   directly with the SP 800-185 idiomatic API
+   (`CShake256::new(customization)` matching the
+   non-NIST-application case). Recommendation reversed.
+
+3. **Workspace-state assumption: needs a new dependency.**
+   Cited because the recommendation framed `sha3` as "should be
+   added." Verification at source: `sha3 = "0.10"` is already a
+   workspace dependency via `shekyl-crypto-pq`'s ML-KEM
+   bindings; no new direct dependency is needed, only enabling
+   the `zeroize` feature flag on the existing import.
+
+Each failure was an instance of recommending without verifying.
+The correct disposition (cSHAKE256 via `sha3` + `zeroize`
+feature) is the disposition that emerges from applying this
+rule's protocol from the start.
+
+## When the discipline relaxes
+
+The discipline does not require re-verification at every
+consumption site. Once a dependency's API surface and properties
+have been verified for the workspace's pinned version, that
+verification is good for the version's lifetime. Re-verification
+triggers on:
+
+- Workspace dep version bumps (`cargo update` followed by
+  intentional pinning changes).
+- Feature-flag changes (adding or removing features alters the
+  consumption surface).
+- Audit-posture changes (the upstream crate's audit status
+  changing — e.g., security advisory, deprecation of a
+  primitive).
+
+The discipline applies at recommendation time. Once a
+recommendation is verified and lands in a design doc or a PR,
+subsequent references to that recommendation can cite the
+landing without re-verifying.
+
+## Related rules
+
+- **`00-mission.mdc`** — priority hierarchy. The
+  dependency-discipline rule operates within priority-1
+  (security) constraints; recommendations whose security
+  property fails verification are rejected per the hierarchy.
+- **`16-architectural-inheritance.mdc`** — discipline-application
+  cadence. The dependency-discipline rule is one application
+  of the broader principle that internal consistency is
+  necessary but not sufficient; what the recommendation
+  delivers against the threat model is the load-bearing
+  question.
+- **`20-rust-vs-cpp-policy.mdc`** — Rust if any of: touches a
+  secret. The dependency-discipline rule's strongest application
+  is in the secret-touching surfaces this policy directs to
+  Rust.
+- **`25-rust-architecture.mdc`** — workspace dependency
+  governance. The dependency-discipline rule operates within
+  this rule's framing for how dependencies are added,
+  versioned, and feature-gated.
+- **`30-cryptography.mdc`** — constant-time-or-explicit-rejection
+  rule and PQC-primitive selection guidance. The
+  dependency-discipline rule's property-existence check is the
+  operational form of these rules' selection criteria.
+- **`35-secure-memory.mdc`** — wipe-on-drop / `Zeroize`
+  discipline. The dependency-discipline rule's
+  `Zeroize`-verification is the operational form of this
+  rule's structural-memwipe requirement.
+- **`36-secret-locality.mdc`** — Rust owns secrets at the
+  C++/Rust boundary. The dependency-discipline rule extends to
+  which-Rust-crate-owns-secrets, since a crate that holds
+  secret-bearing intermediate state is a secret-locality
+  participant by transitivity.

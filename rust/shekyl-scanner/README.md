@@ -17,8 +17,10 @@ monero-oxide wallet library, extended with Shekyl-specific features:
 - **Staking detection**: Identifies staked outputs with tier and lock period
 - **Balance breakdown**: Staking-aware balance computation (total, unlocked,
   timelocked, staked matured/locked, frozen)
-- **Background sync loop**: Polls daemon for new blocks, scans, detects
-  spends, handles reorgs, and emits progress events
+
+The scanner is a pure scanning library: block fetch, daemon polling,
+reorg handling, and wallet-state mutation are owned by
+`shekyl-engine-core::Engine::refresh` (Phase 2a snapshot-merge driver).
 
 ## Architecture
 
@@ -27,15 +29,14 @@ shekyl-scanner
 ├── scan.rs          # Block/tx/output scanning pipeline (Scanner)
 │                    # Hybrid KEM: parse 0x06, view-tag pre-filter,
 │                    # scan_output_recover, subaddress lookup, key image
-├── sync.rs          # Background sync loop with reorg detection,
-│                    # retry-with-backoff, cancellation, flush strategy
 ├── extra.rs         # Transaction extra field parsing (extended with PQC tags)
 ├── view_pair.rs     # ViewPair with X25519 + ML-KEM decapsulation keys
 ├── output.rs        # WalletOutput representation
-├── transfer.rs      # TransferDetails with staking + PQC + FCMP++ fields
-│                    # Zeroize + ZeroizeOnDrop for all secrets
-├── wallet_state.rs  # In-memory state management (key images, spend tracking,
-│                    # reorg rollback, block hash chain). Wipes secrets on drop.
+├── transfer.rs      # Re-export shim for shekyl_engine_state::TransferDetails
+│                    # (canonical type, with staking + PQC + FCMP++ fields)
+├── ledger_ext.rs    # Scanner-side extension traits for LedgerBlock + LedgerIndexes
+│                    # (TransferDetailsExt, LedgerIndexesExt, LedgerBlockExt). The
+│                    # canonical persisted/runtime split lives in shekyl-engine-state.
 ├── balance.rs       # Balance computation with staking categories
 ├── coin_select.rs   # Coin selection for transaction building
 ├── staker_pool.rs   # Staker pool accrual data for reward estimation
@@ -55,12 +56,17 @@ shekyl-scanner
 
 ## Usage
 
-The scanner is consumed by `shekyl-wallet-rpc` (behind the `rust-scanner`
-feature flag) and the GUI wallet's `wallet_bridge.rs`. It is not intended
-to be used directly by end users.
+The scanner is consumed by `shekyl-engine-core::Engine::refresh` (the
+production refresh driver), `shekyl-wallet-rpc` (behind its
+`rust-scanner` feature flag, slated for retirement in Phase 4b), and the
+GUI wallet's `wallet_bridge.rs`. It is not intended to be used directly
+by end users.
 
 ```rust
-use shekyl_scanner::{Scanner, ViewPair, WalletState};
+use shekyl_scanner::{
+    LedgerBlock, LedgerBlockExt, LedgerIndexes, LedgerIndexesExt,
+    Scanner, ViewPair,
+};
 
 // Create a scanner from wallet keys (includes KEM secret keys for hybrid scanning)
 let view_pair = ViewPair::new(
@@ -72,42 +78,31 @@ let scanner = Scanner::new(view_pair, spend_secret);
 // Scan a block (from daemon RPC)
 let outputs = scanner.scan(scannable_block)?;
 
-// Track outputs in wallet state
-let mut state = WalletState::new();
-state.process_scanned_outputs(block_height, block_hash, outputs);
+// Track outputs in the (LedgerBlock, LedgerIndexes) pair: persisted state
+// in `ledger`, runtime-only derived indexes in `indexes`.
+let mut ledger = LedgerBlock::empty();
+let mut indexes = LedgerIndexes::empty();
+indexes.process_scanned_outputs(&mut ledger, block_height, block_hash, outputs);
 
 // Detect spends from block inputs
-state.detect_spends(block_height, &key_images_from_block);
+indexes.detect_spends(&mut ledger, block_height, &key_images_from_block);
 
-// Query balance
-let balance = state.balance(current_height);
+// Query balance (read-only against the persisted ledger)
+let balance = ledger.balance(current_height);
 ```
 
-### Background sync loop
+### Driving sync
 
-With the `rust-scanner` feature, a full background sync loop is available:
-
-```rust
-use shekyl_scanner::sync::run_sync_loop;
-
-run_sync_loop(
-    rpc,
-    scanner,
-    state,
-    cancel_token,
-    poll_interval,
-    flush_every_block,   // true on mobile, false on desktop
-    |progress| { /* update UI */ },
-    |state| { /* persist to disk */ },
-).await?;
-```
-
-The sync loop:
-- Fetches blocks with retry and exponential backoff
-- Detects chain reorgs by comparing parent hashes and rolls back
-- Emits `SyncProgress` events per block
-- Flushes every 100 blocks (desktop) or every block (mobile)
-- Shuts down cleanly via `CancellationToken`
+The block-fetch / poll / reorg-detect / wallet-state-mutate loop is owned
+by `shekyl-engine-core::Engine::refresh`, which calls
+`produce_scan_result` against a borrowed `LedgerSnapshot` and merges via
+`Engine::apply_scan_result` under a brief `&mut self` window. See the
+Phase 2a refresh-driver decision-log entries (2026-04-25 / 2026-04-26)
+in `docs/V3_WALLET_DECISION_LOG.md` for the snapshot-merge rationale.
+This crate intentionally provides no top-level driver of its own —
+running two sync loops over the same daemon connection (one in the
+scanner, one in the wallet) was the inconsistency surface the
+refresh-driver split was designed to remove.
 
 ## Feature Status
 
@@ -121,6 +116,5 @@ The sync loop:
 | Transfer details with staking + PQC secrets | ✅ Complete, ZeroizeOnDrop |
 | Wallet state management | ✅ Complete with reorg handling |
 | Balance computation | ✅ Complete with staking breakdown |
-| Background sync loop | ✅ With reorg detection, retry, cancellation |
 | Coin selection | ✅ Complete |
 | FCMP++ path precompute | ⬜ Needs daemon RPC for `/get_curve_tree_path` |

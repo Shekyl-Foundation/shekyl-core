@@ -76,7 +76,6 @@ using namespace epee;
 #include "serialization/binary_utils.h"
 #include "serialization/string.h"
 #include "cryptonote_basic/blobdatatype.h"
-#include "mnemonics/electrum-words.h"
 #include "common/i18n.h"
 #include "common/util.h"
 #include "common/apply_permutation.h"
@@ -178,8 +177,8 @@ namespace {
 
 #define IGNORE_LONG_PAYMENT_ID_FROM_BLOCK_VERSION 12
 
-#define DEFAULT_UNLOCK_TIME (CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE * DIFFICULTY_TARGET_V2)
-#define RECENT_SPEND_WINDOW (15 * DIFFICULTY_TARGET_V2)
+#define DEFAULT_UNLOCK_TIME (CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE * SHEKYL_DAA_TARGET_SECONDS)
+#define RECENT_SPEND_WINDOW (15 * SHEKYL_DAA_TARGET_SECONDS)
 
 static const std::string ASCII_OUTPUT_MAGIC = "ShekylAsciiDataV1";
 
@@ -238,10 +237,19 @@ namespace
   }
 }
 
-namespace
-{
-// Create on-demand to prevent static initialization order fiasco issues.
-struct options {
+namespace tools {
+// Phase-1 BIP-39 restore-from-phrase access surface per
+// `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10.1. The struct lives in
+// `namespace tools` rather than the anonymous namespace at this TU's
+// file scope so that `class wallet2` can `friend
+// tools::generate_from_json(...)` in `wallet2.h` (the friend declaration
+// matches `tools::generate_from_json` via unqualified name lookup from
+// `tools::wallet2`'s enclosing scope; an anonymous-namespace function
+// would not be the same entity). The rename from the historical
+// `options` to `wallet_args_options` disambiguates from `std::options`-
+// adjacent identifiers and makes the wallet-arg-descriptors semantic
+// explicit at every call site.
+struct wallet_args_options {
   const command_line::arg_descriptor<std::string> daemon_address = {"daemon-address", tools::wallet2::tr("Use daemon instance at <host>:<port>"), ""};
   const command_line::arg_descriptor<std::string> daemon_host = {"daemon-host", tools::wallet2::tr("Use daemon instance at host <arg> instead of localhost"), ""};
   const command_line::arg_descriptor<std::string> proxy = {"proxy", tools::wallet2::tr("[<ip>:]<port> socks proxy to use for daemon connections"), {}, true};
@@ -269,7 +277,10 @@ struct options {
   const command_line::arg_descriptor<std::string> extra_entropy = {"extra-entropy", tools::wallet2::tr("File containing extra entropy to initialize the PRNG (any data, aim for 256 bits of entropy to be useful, which typically means more than 256 bits of data)")};
   const command_line::arg_descriptor<bool> allow_mismatched_daemon_version = {"allow-mismatched-daemon-version", tools::wallet2::tr("Allow communicating with a daemon that uses a different version"), false};
 };
+} // namespace tools
 
+namespace
+{
 void do_prepare_file_names(const std::string& file_path, std::string& keys_file, std::string& wallet_file)
 {
   keys_file = file_path;
@@ -306,7 +317,7 @@ std::string get_weight_string(const cryptonote::transaction &tx, size_t blob_siz
   return get_weight_string(get_transaction_weight(tx, blob_size));
 }
 
-std::unique_ptr<tools::wallet2> make_basic(const boost::program_options::variables_map& vm, bool unattended, const options& opts, const std::function<std::optional<tools::password_container>(const char *, bool)> &password_prompter)
+std::unique_ptr<tools::wallet2> make_basic(const boost::program_options::variables_map& vm, bool unattended, const tools::wallet_args_options& opts, const std::function<std::optional<tools::password_container>(const char *, bool)> &password_prompter)
 {
   const bool testnet = command_line::get_arg(vm, opts.testnet);
   const bool stagenet = command_line::get_arg(vm, opts.stagenet);
@@ -489,7 +500,7 @@ std::unique_ptr<tools::wallet2> make_basic(const boost::program_options::variabl
   return wallet;
 }
 
-std::optional<tools::password_container> get_password(const boost::program_options::variables_map& vm, const options& opts, const std::function<std::optional<tools::password_container>(const char*, bool)> &password_prompter, const bool verify)
+std::optional<tools::password_container> get_password(const boost::program_options::variables_map& vm, const tools::wallet_args_options& opts, const std::function<std::optional<tools::password_container>(const char*, bool)> &password_prompter, const bool verify)
 {
   if (command_line::has_arg(vm, opts.password) && !command_line::is_arg_defaulted(vm, opts.password_file))
   {
@@ -518,8 +529,22 @@ std::optional<tools::password_container> get_password(const boost::program_optio
 
   return password_prompter(verify ? tools::wallet2::tr("Enter a new password for the wallet") : tools::wallet2::tr("Wallet password"), verify);
 }
+} // namespace (anonymous)
 
-std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_from_json(const std::string& json_file, const boost::program_options::variables_map& vm, bool unattended, const options& opts, const std::function<std::optional<tools::password_container>(const char *, bool)> &password_prompter)
+// `tools::generate_from_json` lives in `namespace tools` (not the anonymous
+// namespace above) so that `class tools::wallet2` can grant it friendship
+// in `wallet2.h` for the Phase-1 BIP-39 restore-from-phrase access surface
+// per `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10.1. The friend
+// declaration's unqualified name lookup resolves to `tools::generate_from_json`,
+// not to a TU-local anonymous-namespace function; thus the function must
+// live in `namespace tools` for the friendship to take effect. See the
+// CI tripwire at `tests/unit_tests/wallet_storage.cpp:42-144` which
+// forbids a public `wallet2::generate_from_bip39` method; this friendship
+// is the access mechanism that lets the JSON-restore-from-phrase
+// orchestration inline directly into `generate_from_json` without
+// expanding `wallet2`'s public surface.
+namespace tools {
+std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_from_json(const std::string& json_file, const boost::program_options::variables_map& vm, bool unattended, const wallet_args_options& opts, const std::function<std::optional<tools::password_container>(const char *, bool)> &password_prompter)
 {
   const bool testnet = command_line::get_arg(vm, opts.testnet);
   const bool stagenet = command_line::get_arg(vm, opts.stagenet);
@@ -592,23 +617,52 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
     }
 
     GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, seed, std::string, String, false, std::string());
-    std::string old_language;
-    crypto::secret_key recovery_key;
-    bool restore_deterministic_wallet = false;
+    GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, seed_passphrase, std::string, String, false, std::string());
+    bool restore_from_bip39 = false;
     if (field_seed_found)
     {
-      if (!crypto::ElectrumWords::words_to_bytes(field_seed, recovery_key, old_language))
+      // Phase 1 atomic-deliverable BIP-39 rewire per
+      // `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.5.1 Surface A and
+      // §4.10.1. The JSON `seed` field is interpreted as a 24-word
+      // BIP-39 English mnemonic; the JSON `seed_passphrase` field is
+      // consumed *inside* the BIP-39 PBKDF2-HMAC-SHA512 derivation by
+      // the orchestration block inlined below (no post-hoc
+      // `cryptonote::decrypt_key` step — the passphrase semantic
+      // shifts from Monero-encrypt_key to BIP-39 spec compliance).
+      // The orchestration inlines into this function rather than
+      // wrapping in a `wallet2::generate_from_bip39` method per the
+      // §4.10.1 disposition / CI tripwire at
+      // `tests/unit_tests/wallet_storage.cpp:42-144`.
+      //
+      // V6 25-word UX hint per
+      // `docs/design/ELECTRUM_WORDS_REMOVAL_PLAN.md` §Phase 1 work-
+      // item 10: count whitespace-separated tokens in `field_seed`;
+      // if exactly 25, surface a hint pointing at the BIP-39
+      // requirement before the bare validation error. The check is
+      // pre-validation UX — the underlying BIP-39 validation in the
+      // inlined `shekyl_bip39_mnemonic_to_entropy` call still rejects
+      // any non-24-word input.
       {
-        THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, tools::wallet2::tr("Electrum-style word list failed verification"));
+        std::vector<std::string> tokens;
+        boost::split(tokens, field_seed, boost::is_any_of(" \t\n\r"),
+                     boost::token_compress_on);
+        // boost::split with token_compress_on still emits a trailing
+        // empty token for `"a b "`; strip empties.
+        tokens.erase(std::remove_if(tokens.begin(), tokens.end(),
+                                    [](const std::string &t) { return t.empty(); }),
+                     tokens.end());
+        if (tokens.size() == 25)
+        {
+          THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error,
+              tools::wallet2::tr(
+                  "Shekyl uses 24-word BIP-39 mnemonics. 25-word phrases "
+                  "from other wallets (Monero, CryptoNote-based projects) "
+                  "are not compatible — Shekyl begins at its own genesis "
+                  "and does not support legacy seed formats. See "
+                  "docs/USER_GUIDE.md for the BIP-39 seed format details."));
+        }
       }
-      restore_deterministic_wallet = true;
-
-      GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, seed_passphrase, std::string, String, false, std::string());
-      if (field_seed_passphrase_found)
-      {
-        if (!field_seed_passphrase.empty())
-          recovery_key = cryptonote::decrypt_key(recovery_key, field_seed_passphrase);
-      }
+      restore_from_bip39 = true;
     }
 
     GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, address, std::string, String, false, std::string());
@@ -619,11 +673,11 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
     // compatibility checks
     if (!field_seed_found && !field_viewkey_found && !field_spendkey_found)
     {
-      THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, tools::wallet2::tr("At least one of either an Electrum-style word list, private view key, or private spend key must be specified"));
+      THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, tools::wallet2::tr("At least one of either a BIP-39 mnemonic phrase, private view key, or private spend key must be specified"));
     }
     if (field_seed_found && (field_viewkey_found || field_spendkey_found))
     {
-      THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, tools::wallet2::tr("Both Electrum-style word list and private key(s) specified"));
+      THROW_WALLET_EXCEPTION(tools::error::wallet_internal_error, tools::wallet2::tr("Both BIP-39 mnemonic phrase and private key(s) specified"));
     }
 
     // if an address was given, we check keys against it, and deduce the spend
@@ -657,22 +711,147 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
       }
     }
 
-    const bool deprecated_wallet = restore_deterministic_wallet && ((old_language == crypto::ElectrumWords::old_language_name) ||
-      crypto::ElectrumWords::get_is_old_style_seed(field_seed));
-    THROW_WALLET_EXCEPTION_IF(deprecated_wallet, tools::error::wallet_internal_error,
-      tools::wallet2::tr("Cannot generate deprecated wallets from JSON"));
+    // No deprecated-wallet detection: Phase 1 atomically retires the
+    // Electrum-words subsystem from the JSON-restore path
+    // (`docs/design/ELECTRUM_WORDS_REMOVAL.md` §6.1 — "BIP-39 from
+    // genesis, no legacy seed-format compatibility branch").
+    // 25-word phrases are caught earlier by the V6 UX-hint guard.
 
     wallet.reset(make_basic(vm, unattended, opts, password_prompter).release());
     wallet->set_refresh_from_block_height(field_scan_from_height);
     wallet->explicit_refresh_from_block_height(field_scan_from_height_found);
-    if (!old_language.empty())
-      wallet->set_seed_language(old_language);
 
     try
     {
-      if (!field_seed.empty())
+      if (restore_from_bip39)
       {
-        wallet->generate(field_filename, field_password, recovery_key, recover, false, create_address_file);
+        // Phase 1 atomic-deliverable BIP-39 orchestration per
+        // `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10 + §4.5.1
+        // Surface A, inlined here (rather than wrapped in a
+        // `wallet2::generate_from_bip39` member) per §4.10.1 and the
+        // CI tripwire at `tests/unit_tests/wallet_storage.cpp:42-144`.
+        // The orchestration chain is: BIP-39 phrase validation +
+        // entropy-extract (`shekyl_bip39_mnemonic_to_entropy`) →
+        // account material derivation (`m_account.generate_from_bip39`
+        // — the BIP-39 spec's PBKDF2-HMAC-SHA512 → master-seed →
+        // HKDF account pipeline) → entropy-persist
+        // (`m_bip39_entropy`) → keys-file-create (`create_keys_file`).
+        //
+        // Access to `wallet`'s private members (`m_account`,
+        // `m_bip39_entropy`, `m_nettype`, `m_refresh_from_block_height`,
+        // and the private setup methods) is granted via
+        // `class wallet2`'s friend declaration on
+        // `tools::generate_from_json` in `wallet2.h`. No new
+        // `wallet2` public method is introduced; when wallet2 itself
+        // is deleted at Rust-rewrite Phase 5, this orchestration
+        // disappears with it (removal-as-no-op) rather than cascading
+        // through public-method dependents (removal-as-breaking-change).
+        //
+        // The phrase and passphrase are passed through
+        // `epee::wipeable_string` so the cross-boundary zeroization
+        // contract per §4.7 holds end-to-end down to the FFI call.
+        // Mainnet/Stagenet only — the underlying FFI rejects testnet
+        // / fakechain `(network, BIP-39)` pairs (those nettypes use
+        // the raw-seed `generate(...)` overload).
+        const epee::wipeable_string phrase_wipe(field_seed);
+        const epee::wipeable_string passphrase_wipe(field_seed_passphrase);
+
+        wallet->clear();
+        wallet->prepare_file_names(field_filename);
+
+        // `wallet->clear()` resets `m_refresh_from_block_height` and the
+        // explicit-flag state to defaults, dropping the values applied at
+        // lines 721-722 above. Re-apply them here so the JSON
+        // `scan_from_height` (and its presence flag) survive the BIP-39
+        // branch's mid-stream clear; legacy non-BIP-39 paths (the
+        // `generate(...)` overload below) do not call `clear()` and
+        // therefore retain the line-721/722 values without re-application.
+        wallet->set_refresh_from_block_height(field_scan_from_height);
+        wallet->explicit_refresh_from_block_height(field_scan_from_height_found);
+
+        if (!field_filename.empty())
+        {
+          boost::system::error_code ignored_ec;
+          THROW_WALLET_EXCEPTION_IF(boost::filesystem::exists(wallet->m_wallet_file, ignored_ec), error::file_exists, wallet->m_wallet_file);
+          THROW_WALLET_EXCEPTION_IF(boost::filesystem::exists(wallet->m_keys_file,   ignored_ec), error::file_exists, wallet->m_keys_file);
+        }
+
+        // Recover the 32-byte canonical entropy from the validated
+        // phrase (the Phase 1 fifth-FFI surface per substrate §4.10 +
+        // §3.1). This is the load-bearing call for `m_bip39_entropy`
+        // persistence; if the phrase fails BIP-39 validation here,
+        // the keyfile is not created and no wallet state is left
+        // behind.
+        std::array<uint8_t, 32> entropy_buf{};
+        const bool entropy_ok = shekyl_bip39_mnemonic_to_entropy(
+            reinterpret_cast<const uint8_t*>(phrase_wipe.data()),
+            phrase_wipe.size(),
+            entropy_buf.data());
+        THROW_WALLET_EXCEPTION_IF(!entropy_ok, error::wallet_internal_error,
+            tools::wallet2::tr("invalid BIP-39 mnemonic phrase"));
+
+        // Derive account material from (phrase, passphrase).
+        // `m_account` owns the full PBKDF2-HMAC-SHA512 → HKDF
+        // derivation across the FFI; this site only orchestrates.
+        // `account_base::generate_from_bip39` accepts
+        // `epee::wipeable_string` directly (post-Phase-1 Copilot-fix
+        // signature change), so the wipe-on-drop discipline of
+        // `phrase_wipe` / `passphrase_wipe` extends end-to-end down
+        // to the FFI call: no `std::string` intermediate is created
+        // and no manual `memwipe` of a short-string-optimization
+        // payload is required (the SSO / libstdc++ COW paths could
+        // otherwise leave plaintext residue beyond the reach of an
+        // `&s[0]` memwipe). On exception we still scrub the
+        // entropy_buf transit copy explicitly because the
+        // `set_null()` inside `generate_from_bip39` does not see it.
+        try
+        {
+          wallet->m_account.generate_from_bip39(phrase_wipe, passphrase_wipe, wallet->m_nettype);
+        }
+        catch (...)
+        {
+          memwipe(entropy_buf.data(), entropy_buf.size());
+          throw;
+        }
+
+        wallet->init_type(hw::device::device_type::SOFTWARE);
+        wallet->setup_keys(field_password);
+
+        // Persist the canonical entropy. The optional is set on the
+        // mainline path; raw-seed / from-keys / hardware paths leave
+        // `m_bip39_entropy` at default-constructed `std::nullopt`
+        // per §4.10 "The field is not set during".
+        {
+          epee::mlocked<tools::scrubbed_arr<uint8_t, 32>> entropy_locked{};
+          std::copy(entropy_buf.begin(), entropy_buf.end(), entropy_locked.data());
+          wallet->m_bip39_entropy = std::move(entropy_locked);
+        }
+        // Wipe the stack-resident transit buffer; the canonical copy
+        // now lives under mlock inside `m_bip39_entropy`.
+        memwipe(entropy_buf.data(), entropy_buf.size());
+
+        // Calculate a starting refresh height (BIP-39 restore always
+        // takes the recover-path defaults; the substrate does not
+        // pin a specific refresh height for restored wallets — fall
+        // through to `estimate_blockchain_height` which the legacy
+        // `generate(...)` overload uses for `!recover` wallets). Gate
+        // on the JSON-presence flag rather than on the numeric value
+        // so that a user-supplied `scan_from_height: 0` (an explicit
+        // from-genesis rescan request) is preserved instead of being
+        // overwritten by the daemon-derived estimate.
+        if (!field_scan_from_height_found)
+        {
+          wallet->m_refresh_from_block_height = wallet->estimate_blockchain_height();
+        }
+
+        wallet->create_keys_file(field_filename, false, field_password,
+            wallet->m_nettype != MAINNET || create_address_file);
+
+        wallet->setup_new_blockchain();
+
+        if (!field_filename.empty())
+          wallet->store();
+
         password = field_password;
       }
       else if (field_viewkey.empty() && !field_spendkey.empty())
@@ -730,7 +909,10 @@ std::pair<std::unique_ptr<tools::wallet2>, tools::password_container> generate_f
   }
   return {nullptr, tools::password_container{}};
 }
+} // namespace tools
 
+namespace
+{
 std::string strjoin(const std::vector<size_t> &V, const char *sep)
 {
   std::stringstream ss;
@@ -994,6 +1176,59 @@ namespace tools
 constexpr const std::chrono::seconds wallet2::rpc_timeout;
 const char* wallet2::tr(const char* str) { return i18n_translate(str, "tools::wallet2"); }
 
+// ShekylWallet handle deleter (2k.a). Out-of-line so the
+// `shekyl_wallet_free` symbol stays confined to this translation unit;
+// every other TU that includes `wallet2.h` sees only the forward
+// declaration. Null-tolerant per the FFI contract, noexcept per the
+// standard `unique_ptr` deleter requirement.
+void shekyl_wallet_deleter::operator()(::ShekylWallet *h) const noexcept
+{
+  if (h != nullptr)
+  {
+    ::shekyl_wallet_free(h);
+  }
+}
+
+namespace
+{
+  // 2k.a RAII container for the transitional rederivation inputs
+  // returned by `shekyl_wallet_extract_rederivation_inputs`. Option A'
+  // collapsed the payload to a single 64-byte master seed; we wrap it
+  // in `epee::mlocked` (pages locked against swap-out) + the
+  // `scrubbed_arr` self-wiping container so the seed is zeroed at
+  // destructor time even on unwind between the FFI call and the
+  // `account_base::load_from_shkw1` hand-off.
+  //
+  // Slated for deletion alongside `shekyl_wallet_extract_rederivation_inputs`
+  // in 2m-keys once wallet2 reads classical scalars directly from the
+  // handle instead of mirroring them inside `m_account`.
+  struct TransitionalRederivationInputs
+  {
+    epee::mlocked<::tools::scrubbed_arr<uint8_t, 64>> master_seed_64;
+  };
+
+  // Address layout version byte emitted by `ShekylWalletMetadata`
+  // and `ShekylOpenedKeysInfo`. Mirrors the Rust constant pinned by
+  // `handle.rs` (`handle.expected_classical_address()[0] == 0x01`).
+  // Not a network-address byte — the network byte lives in
+  // `ShekylOpenedKeysInfo::network` / `::ShekylWalletMetadata::network`.
+  constexpr uint8_t SHKW1_CLASSICAL_ADDRESS_LAYOUT_V1 = 0x01;
+
+  // Encode `m_account.m_account_address` into the 65-byte
+  // `version(1) || spend_pk(32) || view_pk(32)` layout so it can be
+  // compared against the envelope's AAD-authenticated
+  // `expected_classical_address`. Used by both `load_keys` (post-
+  // rederive) and the instance `verify_password` overload (handle-
+  // repoint defense).
+  void encode_classical_address(const cryptonote::account_public_address &addr,
+                                uint8_t out[SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES])
+  {
+    out[0] = SHKW1_CLASSICAL_ADDRESS_LAYOUT_V1;
+    std::memcpy(out + 1,  addr.m_spend_public_key.data, 32);
+    std::memcpy(out + 33, addr.m_view_public_key.data,  32);
+  }
+} // anonymous namespace
+
 boost::mutex wallet_keys_unlocker::lockers_lock;
 unsigned int wallet_keys_unlocker::lockers = 0;
 wallet_keys_unlocker::wallet_keys_unlocker(wallet2 &w, const std::optional<tools::password_container> &password):
@@ -1160,12 +1395,12 @@ wallet2::~wallet2()
 
 bool wallet2::has_testnet_option(const boost::program_options::variables_map& vm)
 {
-  return command_line::get_arg(vm, options().testnet);
+  return command_line::get_arg(vm, wallet_args_options().testnet);
 }
 
 bool wallet2::has_stagenet_option(const boost::program_options::variables_map& vm)
 {
-  return command_line::get_arg(vm, options().stagenet);
+  return command_line::get_arg(vm, wallet_args_options().stagenet);
 }
 
 bool wallet2::has_proxy_option() const
@@ -1175,17 +1410,17 @@ bool wallet2::has_proxy_option() const
 
 std::string wallet2::device_name_option(const boost::program_options::variables_map& vm)
 {
-  return command_line::get_arg(vm, options().hw_device);
+  return command_line::get_arg(vm, wallet_args_options().hw_device);
 }
 
 std::string wallet2::device_derivation_path_option(const boost::program_options::variables_map &vm)
 {
-  return command_line::get_arg(vm, options().hw_device_derivation_path);
+  return command_line::get_arg(vm, wallet_args_options().hw_device_derivation_path);
 }
 
 void wallet2::init_options(boost::program_options::options_description& desc_params)
 {
-  const options opts{};
+  const wallet_args_options opts{};
   command_line::add_arg(desc_params, opts.daemon_address);
   command_line::add_arg(desc_params, opts.daemon_host);
   command_line::add_arg(desc_params, opts.proxy);
@@ -1216,14 +1451,14 @@ void wallet2::init_options(boost::program_options::options_description& desc_par
 
 std::pair<std::unique_ptr<wallet2>, tools::password_container> wallet2::make_from_json(const boost::program_options::variables_map& vm, bool unattended, const std::string& json_file, const std::function<std::optional<tools::password_container>(const char *, bool)> &password_prompter)
 {
-  const options opts{};
+  const wallet_args_options opts{};
   return generate_from_json(json_file, vm, unattended, opts, password_prompter);
 }
 
 std::pair<std::unique_ptr<wallet2>, password_container> wallet2::make_from_file(
   const boost::program_options::variables_map& vm, bool unattended, const std::string& wallet_file, const std::function<std::optional<tools::password_container>(const char *, bool)> &password_prompter)
 {
-  const options opts{};
+  const wallet_args_options opts{};
   auto pwd = get_password(vm, opts, password_prompter, false);
   if (!pwd)
   {
@@ -1239,7 +1474,7 @@ std::pair<std::unique_ptr<wallet2>, password_container> wallet2::make_from_file(
 
 std::pair<std::unique_ptr<wallet2>, password_container> wallet2::make_new(const boost::program_options::variables_map& vm, bool unattended, const std::function<std::optional<password_container>(const char *, bool)> &password_prompter)
 {
-  const options opts{};
+  const wallet_args_options opts{};
   auto pwd = get_password(vm, opts, password_prompter, true);
   if (!pwd)
   {
@@ -1250,7 +1485,7 @@ std::pair<std::unique_ptr<wallet2>, password_container> wallet2::make_new(const 
 
 std::unique_ptr<wallet2> wallet2::make_dummy(const boost::program_options::variables_map& vm, bool unattended, const std::function<std::optional<tools::password_container>(const char *, bool)> &password_prompter)
 {
-  const options opts{};
+  const wallet_args_options opts{};
   return make_basic(vm, unattended, opts, password_prompter);
 }
 
@@ -1316,30 +1551,23 @@ bool wallet2::is_deterministic() const
       reinterpret_cast<const unsigned char*>(get_account().get_keys().m_view_secret_key.data)) == 0;
 }
 //----------------------------------------------------------------------------------------------------
-bool wallet2::get_seed(epee::wipeable_string& electrum_words, const epee::wipeable_string &passphrase) const
+bool wallet2::get_seed(epee::wipeable_string& /*electrum_words*/, const epee::wipeable_string& /*passphrase*/) const
 {
-  bool keys_deterministic = is_deterministic();
-  if (!keys_deterministic)
-  {
-    std::cout << "This is not a deterministic wallet" << std::endl;
-    return false;
-  }
-  if (seed_language.empty())
-  {
-    std::cout << "seed_language not set" << std::endl;
-    return false;
-  }
-
-  crypto::secret_key key = get_account().get_keys().m_spend_secret_key;
-  if (!passphrase.empty())
-    key = cryptonote::encrypt_key(key, passphrase);
-  if (!crypto::ElectrumWords::bytes_to_words(key, electrum_words, seed_language))
-  {
-    std::cout << "Failed to create seed from key for language: " << seed_language << std::endl;
-    return false;
-  }
-
-  return true;
+  // Phase 1 atomic-deliverable: `wallet2::get_seed` is left dead-but-
+  // extant per `docs/design/ELECTRUM_WORDS_REMOVAL.md` §6 / Phase 4
+  // Commit A disposition. The only call sites — the FFI dispatch
+  // branch at `wallet2_ffi.cpp:643` and the equivalent
+  // `wallet_rpc_server.cpp` `query_key("mnemonic")` handler — were
+  // rewired in this same Phase 1 commit to read `bip39_entropy()` and
+  // call `shekyl_bip39_mnemonic_from_entropy` directly, so this body
+  // has no live callers. The Electrum-words subsystem is also deleted
+  // from wallet2.cpp's compilation surface in Phase 1 (the
+  // `#include "mnemonics/electrum-words.h"` directive at L79 is
+  // removed in the same atomic commit), so this body cannot reach
+  // the old `crypto::ElectrumWords::bytes_to_words` path. The
+  // method's declaration in `wallet2.h` and this gutted body are
+  // both deleted in Phase 4 Commit A (per substrate §2.2 inventory).
+  return false;
 }
 //----------------------------------------------------------------------------------------------------
 bool wallet2::reconnect_device()
@@ -2177,18 +2405,21 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
     {
       // assume coinbase isn't for us
     }
-    else if (tx.version >= 3 && !m_account.get_keys().m_pqc_secret_key.empty())
+    else if (tx.version >= 3 && !m_account.get_keys().m_ml_kem_decap_key.empty())
     {
       // v3 scan: use Rust scan_output_recover for subaddress-aware HKDF scanning.
+      // The X25519 secret is literally m_view_secret_key (unclamped, per the
+      // Edwards→Montgomery birational map from view_pub to x25519_pub); the
+      // ML-KEM decapsulation key lives in the dedicated m_ml_kem_decap_key
+      // buffer that rederive_from_master_seed populates on wallet open.
       cryptonote::tx_extra_pqc_kem_ciphertext kem_ct_field;
       bool has_kem = find_tx_extra_field_by_type(tx_extra_fields, kem_ct_field);
       if (has_kem)
       {
-        static constexpr size_t X25519_SK_BYTES = 32;
-        const auto& pqc_sk = m_account.get_keys().m_pqc_secret_key;
-        const uint8_t* sk_x25519 = pqc_sk.data();
-        const uint8_t* sk_ml_kem = pqc_sk.data() + X25519_SK_BYTES;
-        const size_t sk_ml_kem_len = pqc_sk.size() - X25519_SK_BYTES;
+        const auto& acct_keys = m_account.get_keys();
+        const uint8_t* sk_x25519 = reinterpret_cast<const uint8_t*>(&acct_keys.m_view_secret_key);
+        const uint8_t* sk_ml_kem = acct_keys.m_ml_kem_decap_key.data();
+        const size_t   sk_ml_kem_len = acct_keys.m_ml_kem_decap_key.size();
 
         for (size_t i = 0; i < tx.vout.size(); ++i)
         {
@@ -4579,6 +4810,16 @@ bool wallet2::deinit()
     m_is_initialized = false;
     unlock_keys_file();
     unlock_background_keys_file();
+    // 2k.a: drop the Rust handle BEFORE `m_account.deinit()`. The
+    // handle's `shekyl_wallet_free` destructor does not read from
+    // `m_account`, so either order is correct on its own — but
+    // matching the reverse-member-destruction order that ~wallet2()
+    // will apply implicitly keeps the explicit and implicit shutdown
+    // paths behaviorally identical. The `m_account` wipe runs next,
+    // scrubbing spend/view scalars and m_ml_kem_decap_key on the C++
+    // side; the master seed was already scrubbed at load time
+    // (Option β, see `load_keys`).
+    m_shekyl_wallet.reset();
     m_account.deinit();
   }
   return true;
@@ -4724,7 +4965,9 @@ std::optional<wallet2::keys_file_data> wallet2::get_keys_file_data(const crypto:
   CHECK_AND_ASSERT_MES(r, std::nullopt, "failed to serialize wallet keys");
   std::optional<wallet2::keys_file_data> keys_file_data = wallet2::keys_file_data{};
 
-  // Create a JSON object with "key_data" and "seed_language" as keys.
+  // Create a JSON object with "key_data" / "seed_language" /
+  // "bip39_entropy" as keys. The whole JSON is xchacha20-encrypted
+  // below; on-disk surface is ciphertext only.
   rapidjson::Document json;
   json.SetObject();
   rapidjson::Value value(rapidjson::kStringType);
@@ -4734,6 +4977,30 @@ std::optional<wallet2::keys_file_data> wallet2::get_keys_file_data(const crypto:
   {
     value.SetString(seed_language.c_str(), seed_language.length());
     json.AddMember("seed_language", value, json.GetAllocator());
+  }
+
+  // Persist `m_bip39_entropy` (32 bytes, hex-encoded) when set, per
+  // `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10. The hex encoding
+  // is for keyfile JSON readability; the entropy bytes themselves are
+  // inside the xchacha20-encrypted envelope (the whole JSON is
+  // encrypted below at the `xchacha20(buffer...)` call), so the on-
+  // disk surface is ciphertext only. Net-new field in Phase 1;
+  // coexists with `seed_language` until Phase 4 Commit B deletes the
+  // latter.
+  if (m_bip39_entropy)
+  {
+    const std::string entropy_hex =
+        epee::string_tools::buff_to_hex_nodelimer(
+            std::string(reinterpret_cast<const char*>(m_bip39_entropy->data()),
+                        m_bip39_entropy->size()));
+    // Use the allocator-form of SetString so the document owns its
+    // own copy of the hex string; `entropy_hex` is a local whose
+    // lifetime ends with this block, and the surrounding
+    // `seed_language` SetString pattern is only safe because
+    // `seed_language` is a member of the enclosing `store_keys`
+    // caller scope.
+    value.SetString(entropy_hex.c_str(), entropy_hex.length(), json.GetAllocator());
+    json.AddMember("bip39_entropy", value, json.GetAllocator());
   }
 
   rapidjson::Value value2(rapidjson::kNumberType);
@@ -4995,7 +5262,182 @@ bool wallet2::load_keys(const std::string& keys_file_name, const epee::wipeable_
   bool r = load_from_file(keys_file_name, keys_file_buf);
   THROW_WALLET_EXCEPTION_IF(!r, error::file_read_error, keys_file_name);
 
-  // Load keys from buffer
+  // 2k.a: magic-sniff for SHKW1. Cheap (header memcmp on the
+  // Rust side, no password touch, no key derivation). When the
+  // magic matches we take the handle-based load path; otherwise we
+  // fall through to the legacy JSON body in `load_keys_buf`.
+  ShekylKeysFileHeaderView header_view{};
+  uint32_t inspect_err = SHEKYL_WALLET_ERR_OK;
+  const bool is_shkw1 = ::shekyl_wallet_keys_inspect(
+      reinterpret_cast<const uint8_t*>(keys_file_buf.data()), keys_file_buf.size(),
+      &header_view, &inspect_err);
+
+  if (is_shkw1)
+  {
+    // Handle-based SHKW1 load. Collapses the Monero-era binary-
+    // serialization + manual `m_account` population into:
+    //
+    //   1. shekyl_wallet_open         file lock + envelope decrypt
+    //   2. metadata consistency gates capability, network
+    //   3. extract_rederivation_inputs 64-byte master seed (Option A')
+    //   4. account_base::load_from_shkw1 atomic rederive + install
+    //   5. account_base::forget_master_seed  Option β: scrub C++ copy
+    //   6. init_type + set_createtime        header-driven metadata
+    //   7. address-match sanity check        AAD <-> rederived address
+    //   8. setup_keys(password)              populate m_cache_key
+    //   9. stash handle in m_shekyl_wallet   (write target in 2k.a;
+    //                                         becomes read source in 2l)
+    ::ShekylWallet *raw_handle = nullptr;
+    bool state_lost = false;
+    uint64_t restore_from_height = 0;
+    uint32_t open_err = SHEKYL_WALLET_ERR_OK;
+    const bool opened = ::shekyl_wallet_open(
+        m_wallet_file.data(), m_wallet_file.size(),
+        reinterpret_cast<const uint8_t*>(password.data()), password.size(),
+        static_cast<uint8_t>(m_nettype),
+        nullptr /* SafetyOverrides: GUI default */,
+        &raw_handle,
+        &state_lost,
+        &restore_from_height,
+        &open_err);
+    std::unique_ptr<::ShekylWallet, shekyl_wallet_deleter> handle(raw_handle);
+
+    if (!opened)
+    {
+      LOG_ERROR("shekyl_wallet_open failed for SHKW1 wallet "
+                << keys_file_name << ": err=" << open_err);
+      return false;
+    }
+
+    ShekylWalletMetadata meta{};
+    uint32_t meta_err = SHEKYL_WALLET_ERR_OK;
+    THROW_WALLET_EXCEPTION_IF(
+        !::shekyl_wallet_get_metadata(handle.get(), &meta, &meta_err),
+        error::wallet_internal_error,
+        "shekyl_wallet_get_metadata failed with err="
+        + std::to_string(meta_err));
+
+    // Structural gates fire BEFORE any secret-material extraction so a
+    // configuration mismatch (wrong --mainnet/--testnet flag, stale
+    // capability wiring) can never reach the derivation path. Each gate
+    // throws a distinguishable typed exception — see wallet_errors.h —
+    // so callers can tell "user picked the wrong CLI" apart from
+    // "wallet file is corrupt or HKDF policy drifted" apart from
+    // "capability is valid but not yet wired in 2k.a".
+
+    // Gate 1: capability. 2k.a is FULL-only. VIEW_ONLY needs a
+    // view-secret-only population path; HARDWARE_OFFLOAD needs the
+    // device-init loop. Both land in follow-up commits.
+    THROW_WALLET_EXCEPTION_IF(
+        meta.capability_mode != SHEKYL_WALLET_CAPABILITY_FULL,
+        error::wallet_keys_unsupported_capability,
+        meta.capability_mode);
+
+    // Gate 2: network. `shekyl_wallet_open` already verifies this
+    // against its `expected_network` argument; we re-assert against
+    // the metadata so the refusal is still typed and distinguishable
+    // at the wallet2 layer in the (unexpected) event the FFI gate is
+    // bypassed by a future caller. ALWAYS a runtime check; never an
+    // `assert()` (which would compile out under NDEBUG).
+    THROW_WALLET_EXCEPTION_IF(
+        meta.network != static_cast<uint8_t>(m_nettype),
+        error::wallet_keys_wrong_network,
+        static_cast<uint8_t>(m_nettype),
+        meta.network);
+
+    // Past this point we touch the master seed. Every refusal below
+    // this line is a cryptographic-inconsistency event (not a config
+    // mismatch); the distinction lets operators triage quickly.
+
+    // Extract the 64-byte master seed into an auto-scrubbing RAII
+    // container. Per Rule 40 the Rust side zeroes the output buffer on
+    // failure; the RAII wipe on success happens at the end of this
+    // scope regardless of success/failure path.
+    TransitionalRederivationInputs inputs{};
+    uint32_t extract_err = SHEKYL_WALLET_ERR_OK;
+    THROW_WALLET_EXCEPTION_IF(
+        !::shekyl_wallet_extract_rederivation_inputs(
+            handle.get(), inputs.master_seed_64.data(), &extract_err),
+        error::wallet_internal_error,
+        "shekyl_wallet_extract_rederivation_inputs failed with err="
+        + std::to_string(extract_err));
+
+    // Atomic population: set_null -> install_master_seed -> rederive.
+    // `load_from_shkw1` internally calls `set_null` on any thrown
+    // exception so partial-population cannot leak.
+    m_account.load_from_shkw1(
+        inputs.master_seed_64.data(),
+        meta.seed_format,
+        m_nettype);
+
+    // Option β (2k.a design pin 12): the master seed's job ends once
+    // `rederive_from_master_seed` has built `m_ml_kem_decap_key` and
+    // the classical scalars. Scrub the C++ copy immediately; the
+    // Rust handle retains its Zeroizing copy as the single source of
+    // truth for any future re-derivation.
+    m_account.forget_master_seed();
+
+    // Cryptographic sanity: the envelope's AAD-authenticated
+    // `expected_classical_address` must equal the address that the
+    // rederived keys land on. A mismatch means either the AAD was
+    // signed against a different address (file corruption past the
+    // envelope), the derivation pipeline has drifted from the sealer's
+    // (HKDF salt change unmatched between sealer and opener), or the
+    // keys file was swapped under a live handle. Any of these is a
+    // distinct class of failure from the config-mismatch gates above.
+    {
+      uint8_t derived[SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES];
+      encode_classical_address(m_account.get_keys().m_account_address, derived);
+      if (std::memcmp(derived, meta.expected_classical_address,
+              SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES) != 0)
+      {
+        // Scrub the partially-populated account state before surfacing
+        // the error; the unwind path should not leave classical
+        // scalars live in m_account for a file we refuse to load.
+        m_account.deinit();
+        THROW_WALLET_EXCEPTION(error::wallet_keys_aad_address_mismatch,
+                               keys_file_name);
+      }
+    }
+
+    // `init_type` sets m_account_public_address, m_watch_only=false,
+    // m_original_keys_available=false, and m_key_device_type in one
+    // atomic write. 2k.a is FULL-only → SOFTWARE.
+    init_type(hw::device::device_type::SOFTWARE);
+    m_account.set_createtime(meta.creation_timestamp);
+
+    if (state_lost)
+    {
+      // The ledger/state side still lives on the legacy cache path in
+      // 2k.a; 2l moves it under the handle. For now surface the
+      // state-loss event at L0 so CLI/GUI can drive a rescan.
+      LOG_PRINT_L0("SHKW1 open reported state_lost=true; restore_from_height="
+                   << restore_from_height);
+    }
+
+    // Populate `m_cache_key` via the existing Argon2-derived chacha
+    // key. Cache encryption stays on the legacy path in 2k.a;
+    // `setup_keys` already no-ops the re-encrypt branch for
+    // `m_watch_only=false, m_unattended`-dependent cases.
+    if (!m_is_background_wallet)
+      setup_keys(password);
+
+    // Stash the handle last so a failure above leaves `m_shekyl_wallet`
+    // null (the caller can retry with a different password without a
+    // dangling half-populated state). After assignment, reverse
+    // member destruction order + our explicit `deinit()` ordering
+    // guarantee the handle drops before `m_account` gets wiped.
+    m_shekyl_wallet = std::move(handle);
+    return true;
+  }
+
+  // ---- Legacy JSON path ----
+  // SHKW1 is the target format; the legacy branch below exists
+  // transitionally so in-tree wallet2 tests whose fixtures have not
+  // yet been regenerated to SHKW1 continue to load. The re-encryption
+  // dance has the same semantics as before 2k.a and is slated for
+  // deletion in 2m-keys along with the rest of the legacy JSON body
+  // in `load_keys_buf`.
   std::optional<crypto::chacha_key> keys_to_encrypt;
   r = wallet2::load_keys_buf(keys_file_buf, password, keys_to_encrypt);
 
@@ -5023,6 +5465,30 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
 }
 //----------------------------------------------------------------------------------------------------
 bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_string& password, std::optional<crypto::chacha_key>& keys_to_encrypt) {
+
+  // 2k.a: SHKW1-format files cannot be loaded via the detached-buffer
+  // path. SHKW1 requires filesystem access for advisory locking (via
+  // `fd-lock`) and for atomic state-loss recovery (the orchestrator
+  // synthesizes a fresh `.wallet` ledger when the state file is
+  // missing). A caller reaching here with SHKW1 bytes is almost
+  // certainly a test harness that has not been migrated to the
+  // `load_keys`-with-path entry point; refuse loudly rather than
+  // attempt a silent incomplete parse.
+  {
+    ShekylKeysFileHeaderView header_view{};
+    uint32_t inspect_err = SHEKYL_WALLET_ERR_OK;
+    const bool is_shkw1 = ::shekyl_wallet_keys_inspect(
+        reinterpret_cast<const uint8_t*>(keys_buf.data()), keys_buf.size(),
+        &header_view, &inspect_err);
+    if (is_shkw1)
+    {
+      LOG_ERROR("wallet2::load_keys_buf refuses SHKW1-format input; "
+                "use wallet2::load_keys with a filesystem path so the "
+                "handle-based load path can apply advisory locking and "
+                "atomic state-loss recovery");
+      return false;
+    }
+  }
 
   // Decrypt the contents
   rapidjson::Document json;
@@ -5080,6 +5546,37 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
     if (field_seed_language_found)
     {
       set_seed_language(field_seed_language);
+    }
+    // Phase 1 BIP-39 entropy load (`docs/design/ELECTRUM_WORDS_REMOVAL.md`
+    // §4.10 + §V4). Wallets created via `generate_from_bip39` write
+    // the field; wallets created via raw-seed / from-keys / hardware
+    // paths leave the field absent and `m_bip39_entropy` stays at
+    // default-constructed `std::nullopt`. The 32-byte payload is
+    // hex-encoded inside the xchacha20-encrypted envelope (the
+    // surrounding ciphertext was already decrypted into `account_data`
+    // upstream of this JSON parse).
+    GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, bip39_entropy, std::string, String, false, std::string());
+    if (field_bip39_entropy_found && !field_bip39_entropy.empty())
+    {
+      cryptonote::blobdata entropy_bin;
+      if (!epee::string_tools::parse_hexstr_to_binbuff(field_bip39_entropy, entropy_bin) ||
+          entropy_bin.size() != 32)
+      {
+        // Symmetric with the rest of `load_keys_buf`: sibling
+        // `GET_FIELD_FROM_JSON_RETURN_ON_ERROR` paths surface
+        // malformed-field errors as `LOG_ERROR; return false;` rather
+        // than as exceptions. Throwing here would force callers into a
+        // mixed result-style (false on most malformed fields, exception
+        // on this one) — keep the loader's single-path contract.
+        LOG_ERROR("wallet keyfile carries a malformed bip39_entropy field");
+        if (!entropy_bin.empty())
+          memwipe(&entropy_bin[0], entropy_bin.size());
+        return false;
+      }
+      epee::mlocked<tools::scrubbed_arr<uint8_t, 32>> entropy_locked{};
+      std::memcpy(entropy_locked.data(), entropy_bin.data(), entropy_bin.size());
+      m_bip39_entropy = std::move(entropy_locked);
+      memwipe(&entropy_bin[0], entropy_bin.size());
     }
     GET_FIELD_FROM_JSON_RETURN_ON_ERROR(json, watch_only, int, Int, false, false);
     m_watch_only = field_watch_only;
@@ -5356,7 +5853,73 @@ bool wallet2::load_keys_buf(const std::string& keys_buf, const epee::wipeable_st
  */
 bool wallet2::verify_password(const epee::wipeable_string& password, crypto::secret_key &spend_key_out)
 {
-  // this temporary unlocking is necessary for Windows (otherwise the file couldn't be loaded).
+  // 2k.a: handle-based verification when the wallet was loaded as
+  // SHKW1. We do NOT run the legacy binary-struct deserializer for
+  // these wallets — a successful envelope decrypt (via
+  // `shekyl_wallet_keys_open`) is definitional proof of password
+  // correctness. `spend_key_out` is deliberately set to
+  // `crypto::null_skey`: the 2k.a call-site survey confirmed that
+  // no in-tree caller of this overload consumes the spend key (the
+  // returned value is either ignored or flows into
+  // `update_pool_state`'s cold-wallet branch which re-queries
+  // on-demand). Wiring spend-key extraction here would
+  // (a) re-run Argon2 twice for no caller-visible benefit and
+  // (b) duplicate the transitional scrubbing logic from `load_keys`.
+  if (m_shekyl_wallet)
+  {
+    std::string keys_file_buf;
+    if (!load_from_file(m_keys_file, keys_file_buf))
+    {
+      spend_key_out = crypto::null_skey;
+      return false;
+    }
+
+    // First-pass sizing call. We do not need the cap payload for
+    // verification, so we pass `cap_content_cap=0`: the envelope is
+    // still fully decrypted and `info` is populated; the FFI just
+    // reports `BUFFER_TOO_SMALL` for the missing buffer. Either
+    // `OK` or `BUFFER_TOO_SMALL` proves the envelope decrypted under
+    // the candidate password.
+    ShekylOpenedKeysInfo info{};
+    uint32_t err = SHEKYL_WALLET_ERR_OK;
+    ::shekyl_wallet_keys_open(
+        reinterpret_cast<const uint8_t*>(password.data()), password.size(),
+        reinterpret_cast<const uint8_t*>(keys_file_buf.data()), keys_file_buf.size(),
+        &info,
+        nullptr, 0,
+        &err);
+    const bool password_ok =
+        (err == SHEKYL_WALLET_ERR_OK) ||
+        (err == SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL);
+    if (!password_ok)
+    {
+      spend_key_out = crypto::null_skey;
+      return false;
+    }
+
+    // Handle-repoint defense (2k.a design pin — belt-and-suspenders).
+    // If `prepare_file_names` or similar was called to repoint
+    // `m_keys_file` at a different wallet without reopening
+    // `m_shekyl_wallet`, the decrypted `info` now describes a
+    // DIFFERENT wallet than the keys currently installed in
+    // `m_account`. Throw `wallet_keys_aad_address_mismatch` (not a
+    // bool false) so the caller sees the same distinguished error
+    // it would get from `load_keys` for an AAD/derivation drift —
+    // the two conditions look identical from the defender's side.
+    spend_key_out = crypto::null_skey;
+    uint8_t derived[SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES];
+    encode_classical_address(m_account.get_keys().m_account_address, derived);
+    THROW_WALLET_EXCEPTION_IF(
+        std::memcmp(derived, info.expected_classical_address,
+            SHEKYL_WALLET_EXPECTED_CLASSICAL_ADDRESS_BYTES) != 0,
+        error::wallet_keys_aad_address_mismatch,
+        m_keys_file);
+    return true;
+  }
+
+  // Legacy JSON path.
+  // The temporary unlock is necessary on Windows (otherwise the file
+  // couldn't be re-opened by the static overload below).
   unlock_keys_file();
   const bool no_spend_key = m_account.get_device().device_protocol() == hw::device::PROTOCOL_COLD || m_watch_only || m_is_background_wallet;
   bool r = verify_password(m_keys_file, password, no_spend_key, m_account.get_device(), m_kdf_rounds, spend_key_out);
@@ -5385,6 +5948,47 @@ bool wallet2::verify_password(const std::string& keys_file_name, const epee::wip
   bool encrypted_secret_keys = false;
   bool r = load_from_file(keys_file_name, buf);
   THROW_WALLET_EXCEPTION_IF(!r, error::file_read_error, keys_file_name);
+
+  // 2k.a: magic-sniff for SHKW1. This static overload has no instance
+  // state, so there's no in-memory account for an address-match
+  // cross-check; the 2k.a call-site survey confirmed that every
+  // in-tree caller either passes `no_spend_key=true` or discards
+  // `spend_key_out`. We return `null_skey` unconditionally and emit
+  // an L1 diagnostic when a caller requested the spend key so a
+  // future regression (a new caller that actually depends on the
+  // output) trips in test output rather than silently receiving
+  // zeros.
+  {
+    ShekylKeysFileHeaderView header_view{};
+    uint32_t inspect_err = SHEKYL_WALLET_ERR_OK;
+    const bool is_shkw1 = ::shekyl_wallet_keys_inspect(
+        reinterpret_cast<const uint8_t*>(buf.data()), buf.size(),
+        &header_view, &inspect_err);
+    if (is_shkw1)
+    {
+      if (!no_spend_key)
+      {
+        LOG_PRINT_L1("wallet2::verify_password(static): SHKW1 wallet at "
+                     << keys_file_name << "; no_spend_key=false but the "
+                     "transitional FFI does not thread the spend key through "
+                     "this overload. Returning null_skey; any caller that "
+                     "genuinely needs the spend key must migrate to the "
+                     "instance overload on a live m_shekyl_wallet handle.");
+      }
+
+      ShekylOpenedKeysInfo info{};
+      uint32_t err = SHEKYL_WALLET_ERR_OK;
+      ::shekyl_wallet_keys_open(
+          reinterpret_cast<const uint8_t*>(password.data()), password.size(),
+          reinterpret_cast<const uint8_t*>(buf.data()), buf.size(),
+          &info,
+          nullptr, 0,
+          &err);
+      spend_key_out = crypto::null_skey;
+      return (err == SHEKYL_WALLET_ERR_OK) ||
+             (err == SHEKYL_WALLET_ERR_BUFFER_TOO_SMALL);
+    }
+  }
 
   // Decrypt the contents
   r = ::serialization::parse_binary(buf, keys_file_data);
@@ -5571,7 +6175,12 @@ crypto::secret_key wallet2::generate(const std::string& wallet_, const epee::wip
     THROW_WALLET_EXCEPTION_IF(boost::filesystem::exists(m_keys_file,   ignored_ec), error::file_exists, m_keys_file);
   }
 
-  crypto::secret_key retval = m_account.generate(recovery_param, recover, two_random);
+  // Pass `m_nettype` so the raw-seed derivation salt matches the wallet's
+  // network. Previously the legacy 3-arg overload hardcoded FAKECHAIN,
+  // which silently produced wallets that failed to round-trip on
+  // `wallet2::load` for any non-FAKECHAIN nettype. See
+  // `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` (Bug 4-adjacent).
+  crypto::secret_key retval = m_account.generate(recovery_param, recover, two_random, m_nettype);
 
   init_type(hw::device::device_type::SOFTWARE);
   setup_keys(password);
@@ -5595,7 +6204,7 @@ crypto::secret_key wallet2::generate(const std::string& wallet_, const epee::wip
  {
    // -1 month for fluctuations in block time and machine date/time setup.
    // avg seconds per block
-   const int seconds_per_block = DIFFICULTY_TARGET_V2;
+   const int seconds_per_block = SHEKYL_DAA_TARGET_SECONDS;
    // ~num blocks per month
    const uint64_t blocks_per_month = 60*60*24*30/seconds_per_block;
 
@@ -5693,15 +6302,20 @@ void wallet2::generate(const std::string& wallet_, const epee::wipeable_string& 
   }
 
   m_account.create_from_keys(account_public_address, spendkey, viewkey);
-  // Legacy restore paths can provide key material without PQC components.
-  // Generate PQC keys so post-HF17 v3 tx construction can succeed.
-  if (m_account.get_keys().m_account_address.m_pqc_public_key.empty() &&
-      m_account.get_keys().m_pqc_secret_key.empty())
+  // In v1 there is no way to rebuild the ML-KEM decapsulation key from
+  // spend+view keys alone; the full master seed is required. A wallet
+  // created via create_from_keys is therefore genuinely view-only-with-
+  // signing: it can construct classical transaction inputs but cannot
+  // decapsulate scan keys for v3 output recovery. Users who want full
+  // capability must restore via the BIP-39 (mainnet/stagenet) or raw-seed
+  // (testnet/fakechain) flows, which run derivation end-to-end through
+  // the shekyl_account_* FFIs. The old generate_pqc_for_restored_address
+  // helper that attempted to synthesize PQC material post-hoc has been
+  // removed because it produced non-reproducible ML-KEM keys.
+  if (m_account.get_keys().m_account_address.m_pqc_public_key.empty())
   {
-    THROW_WALLET_EXCEPTION_IF(
-      !m_account.generate_pqc_for_restored_address(),
-      error::wallet_internal_error,
-      "Failed to generate PQC key material for restored wallet");
+    MWARNING("Wallet restored from keys without PQC material; v3 transaction "
+             "sending will be unavailable. Restore from seed to enable PQC.");
   }
   init_type(hw::device::device_type::SOFTWARE);
   m_account_public_address = account_public_address;
@@ -5776,6 +6390,26 @@ void wallet2::rewrite(const std::string& wallet_name, const epee::wipeable_strin
   THROW_WALLET_EXCEPTION_IF(m_background_syncing || m_is_background_wallet, error::wallet_internal_error,
     "cannot change wallet settings from background wallet");
   prepare_file_names(wallet_name);
+
+  // 2k.a: `rewrite` is a no-op for SHKW1 wallets. SHKW1 keys files are
+  // cryptographically append-only from wallet2's perspective:
+  //   - Preference changes land via `shekyl_wallet_prefs_set_json`
+  //     (handled by the prefs subsystem, separate from the keys file).
+  //   - Password rotation goes through `change_password`, which is
+  //     rewired to `shekyl_wallet_keys_rewrap_password` independently.
+  // A caller reaching here for an SHKW1 wallet is issuing a legacy
+  // "rewrite the settings blob into the keys file" request that has
+  // no analogue in SHKW1 and collapses to a no-op. Log at L1 so the
+  // no-op doesn't silently hide behavior drift during the 2k.a → 2l
+  // transition window.
+  if (m_shekyl_wallet)
+  {
+    LOG_PRINT_L1("wallet2::rewrite: no-op for SHKW1 wallet "
+                 << m_keys_file << " (settings persist via WalletPrefs; "
+                 "password via change_password)");
+    return;
+  }
+
   boost::system::error_code ignored_ec;
   THROW_WALLET_EXCEPTION_IF(!boost::filesystem::exists(m_keys_file, ignored_ec), error::file_not_found, m_keys_file);
   bool r = store_keys(m_keys_file, password, m_watch_only);
@@ -6067,18 +6701,28 @@ void wallet2::load(const std::string& wallet_, const epee::wipeable_string& pass
 
   wallet_keys_unlocker unlocker(*this, m_ask_password == AskPasswordToDecrypt && !m_unattended && !m_watch_only && !m_is_background_wallet, password);
 
-  //keys loaded ok!
-  // Post-load invariant: m_pqc_secret_key[0..32] must equal m_view_secret_key.
-  // After the X25519-from-view-key derivation change, these are the same bytes.
-  // A mismatch indicates a corrupted or pre-derivation-era wallet file.
-  if (!m_watch_only && m_account.get_keys().m_pqc_secret_key.size() >= SHEKYL_X25519_PK_BYTES)
+  // Keys loaded ok. For v1 wallets (m_master_seed_present), rebuild every
+  // transient derivation output in-place from the decrypted master seed so
+  // that m_ml_kem_decap_key is populated for downstream v3-scan paths. This
+  // is the wallet-open hot path the address-derivation audit called out;
+  // shekyl_account_rederive internally re-runs the whole pipeline and
+  // throws on any inconsistency (FFI-level KAT tripwire).
+  //
+  // Pre-v1 wallets (legacy 25-word Electrum seed, or keys-only restore) do
+  // not carry a master seed, so there's nothing to rederive; they simply
+  // operate with m_ml_kem_decap_key empty and v3 send disabled until the
+  // user restores from a BIP-39 mnemonic or raw seed on this version.
+  if (!m_watch_only && m_account.get_keys().m_master_seed_present)
   {
+    const cryptonote::account_public_address on_disk_address =
+        m_account.get_keys().m_account_address;
+    m_account.rederive_from_master_seed(m_nettype);
     THROW_WALLET_EXCEPTION_IF(
-      memcmp(m_account.get_keys().m_pqc_secret_key.data(),
-             &m_account.get_keys().m_view_secret_key, SHEKYL_X25519_PK_BYTES) != 0,
-      error::wallet_internal_error,
-      "Wallet PQC secret key X25519 prefix does not match view secret key. "
-      "Wallet file may be corrupted or from a pre-derivation version.");
+        !(m_account.get_keys().m_account_address == on_disk_address),
+        error::wallet_internal_error,
+        "Wallet master seed does not rederive to the stored account address; "
+        "refusing to open. File may be corrupted or a seed-format / network "
+        "mismatch has been introduced.");
   }
 
   //try to load wallet cache. but even if we failed, it is not big problem
@@ -6406,6 +7050,28 @@ void wallet2::store_to(const std::string &path, const epee::wipeable_string &pas
 
   THROW_WALLET_EXCEPTION_IF(m_is_background_wallet && !same_file, error::wallet_internal_error,
     "Cannot save background wallet files to a different location");
+
+  // 2k.b: the keys-save branch below (line ~"if (!same_file || force_rewrite_keys)")
+  // is the legacy store_keys JSON path. For SHKW1-backed wallets we cannot route
+  // through it — it would produce a non-SHKW1 file under a valid SHKW1 filename,
+  // permanently corrupting the on-disk wallet. The two triggers that would reach
+  // that branch are save-as (path != current) and password-change (reached from
+  // wallet2::change_password via force_rewrite_keys=true). Both require FFI that
+  // has not landed yet (shekyl_wallet_save_as, shekyl_wallet_rotate_password) —
+  // scheduled for 2l alongside the cache-side rewire. Refuse *before* touching
+  // prepare_file_names / directory creation / cache serialization so the wallet
+  // state stays untouched on the throw. Same-file cache-only saves (the common
+  // wallet2::store() path during sync) continue through the legacy cache path;
+  // that rewire is 2l territory.
+  if (m_shekyl_wallet && (!same_file || force_rewrite_keys))
+  {
+    const std::string operation = !same_file
+      ? std::string("save-as (path change)")
+      : std::string("password change (force_rewrite_keys)");
+    THROW_WALLET_EXCEPTION(error::wallet_shkw1_operation_unsupported,
+                           operation,
+                           m_keys_file);
+  }
 
   if (!same_file)
   {
@@ -7837,7 +8503,38 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
       // real one in our rings
       LOG_PRINT_L2("generating dummy address for 0 change");
       cryptonote::account_base dummy;
-      dummy.generate();
+      // Intentionally derives on FAKECHAIN regardless of the wallet's
+      // `m_nettype`. This dummy account is a one-shot transient — only
+      // its public keys (view_pk, spend_pk, pqc_pk) are used to derive
+      // the 0-amount output's one-time output key + ML-KEM ciphertext.
+      // The dummy's secret keys are never used to sign anything, never
+      // returned to a caller, and never reconstruct any wallet state;
+      // they live in the local `dummy` stack object until it goes out of
+      // scope a few statements below (`account_base` has no destructor
+      // wipe, so they persist as ordinary stack residue until reused).
+      // No `set_null` / `forget_master_seed` is issued here because the
+      // dummy itself goes away with the enclosing block; if a future
+      // refactor extends the dummy's lifetime, reconsider explicit
+      // wiping at that point.
+      //
+      // The transaction serializes the derived output key and the PQC
+      // ciphertext, not any human-readable address or network prefix —
+      // so the FAKECHAIN-vs-other-network choice has no observable
+      // on-wire effect. It only selects which HKDF salt drives the
+      // dummy's internal key derivation; the resulting output is
+      // unspendable for everyone (the dummy's secret keys are never
+      // retained by anyone), which is the whole point of a 0-change
+      // dummy destination.
+      //
+      // FAKECHAIN is required here because RAW32 is not permitted on
+      // MAINNET / STAGENET by `account_base::generate(..., nettype)`.
+      // A future refactor to a deterministic per-network burn address
+      // would remove the per-tx randomness from this call and save a
+      // derivation; tracked in FOLLOWUPS V3.2. The 4-arg call form
+      // with explicit FAKECHAIN replaced the legacy 3-arg overload's
+      // hidden default at V3.0; behavior is identical.
+      dummy.generate(crypto::secret_key{}, /*recover=*/false,
+                     /*two_random=*/false, cryptonote::FAKECHAIN);
       change_dts.addr = dummy.get_keys().m_account_address;
       LOG_PRINT_L2("generated dummy address for 0 change");
       splitted_dsts.push_back(change_dts);
@@ -11080,7 +11777,7 @@ uint64_t wallet2::get_approximate_blockchain_height() const
   // v2 fork block
   const uint64_t fork_block = m_nettype == TESTNET ? 624634 : m_nettype == STAGENET ? 32000 : 1009827;
   // avg seconds per block
-  const int seconds_per_block = DIFFICULTY_TARGET_V2;
+  const int seconds_per_block = SHEKYL_DAA_TARGET_SECONDS;
   // Calculated blockchain height
   uint64_t approx_blockchain_height = fork_block + (time(NULL) - fork_time)/seconds_per_block;
   // testnet and stagenet got some huge rollbacks, so the estimation is way off

@@ -1,0 +1,152 @@
+# Transform vs state — type placement and byte-layout discipline
+
+Some types are defined by a function over inputs (transform-shaped).
+Some types are defined by a semantic owner's choice (state-shaped).
+The two shapes have different homes. This is a question to ask
+whenever a new type is introduced and its crate placement is
+non-obvious — especially for types whose serialization is
+cryptographically consumed.
+
+The shape isn't always obvious from the type's surface; both
+shapes can be `[u8; N]` newtypes with similar APIs. The lens is
+about *who defines the canonical value* — a function, or an actor's
+choice — not about how the value is represented.
+
+## Two shapes
+
+**Transform-shaped types.** Defined by a function. The canonical
+definition is the function; storage of the value is a memo of the
+function's output. Anyone with the function's inputs can recompute
+the value.
+
+Examples in Shekyl:
+
+- `OutputHandle` — defined by `derive_output_handle(view_secret,
+  tx_hash, output_index)`
+- `KeyImage` — defined by `H_p(P) * x` over wallet keys
+- `SharedSecret` — defined by KEM decapsulation
+- HKDF / cSHAKE outputs of various kinds
+
+**State-shaped types.** Defined by a semantic owner's choice. The
+canonical definition is "the wallet's third subaddress" or "the
+chain's block 12345." Anyone without the owner's allocation table
+or progression record cannot reconstruct the value.
+
+Examples:
+
+- `SubaddressIndex` — defined by the wallet's allocation policy
+- `BlockHeight` — defined by chain progression
+- `TxId` / `OutputIndex` — defined by transaction structure
+- Any nonce or sequence number controlled by an actor
+
+## Where each shape lives
+
+- **Transform-shaped types live in the crate of their defining
+  function.** `OutputHandle` lives in `shekyl-crypto-pq` because
+  `derive_output_handle` lives there. Other crates re-export from
+  the canonical home; they do not redefine.
+- **State-shaped types live in the crate of their semantic owner.**
+  `SubaddressIndex` lives in the wallet-state-owning crate
+  (`shekyl-engine-state` for V3.0) because the wallet allocates
+  and persists subaddress positions. Cryptographic crates that
+  consume the state's bytes do not own the type.
+
+## State-shaped types whose bytes are cryptographically consumed
+
+The hard case: a state-shaped type's bytes flow into a cryptographic
+function (HKDF input, sponge absorption, signature commitment). The
+cryptographic function needs a fixed byte representation; changing
+that representation invalidates every previously-derived value.
+
+The pattern: the state-shaped type provides a `to_canonical_bytes()`
+accessor. The cryptographic function takes pre-converted bytes
+(`&[u8; N]`), not the typed value.
+
+```rust
+// In the wallet-state-owning crate:
+pub struct SubaddressIndex(u32);
+
+impl SubaddressIndex {
+    /// Canonical byte representation for cryptographic input.
+    /// This encoding is the contract that derivation functions
+    /// rely on; changing it invalidates all previously-derived
+    /// per-subaddress keys.
+    pub fn to_canonical_bytes(&self) -> [u8; 4] {
+        self.0.to_le_bytes()
+    }
+}
+
+// In the cryptographic crate:
+pub fn derive_subaddress_kem_keypair(
+    view_secret: &[u8; 32],
+    subaddress_canonical_bytes: &[u8; 4],
+) -> (X25519SecretKey, MlKem768SecretKey) { /* ... */ }
+
+// At the call site (in engine-core, where SubaddressIndex is in scope):
+let bytes = idx.to_canonical_bytes();
+let kp = derive_subaddress_kem_keypair(&view_secret, &bytes);
+```
+
+Three properties this delivers:
+
+1. **Byte-layout discipline is concentrated.** The canonical-bytes
+   accessor is the single point of truth. If the layout ever
+   changes, the change happens in one place.
+2. **Cryptographic crates stay foundational.** They take byte
+   primitives; they do not import wallet-state types. Layering
+   stays clean.
+3. **The discipline-bearing test simplifies.** Cross-crate
+   consistency reduces to "is the conversion correct?" — a
+   single-site question.
+
+## Wrong patterns
+
+Each of these is what happens when the transform-vs-state question
+is skipped or answered backwards.
+
+- **State-shaped type pulled into the cryptographic crate because
+  its bytes are consumed there.** Conflates "byte representation
+  is cryptographically load-bearing" with "the type belongs where
+  its bytes flow." Those are different questions. The cryptographic
+  crate ends up importing wallet-state vocabulary; layering
+  inverts.
+- **Transform-shaped type defined in the consuming crate because
+  that's where it's most visibly used.** Conflates "where the
+  value is used most often" with "where the value is defined."
+  The defining function is the home, not the most-trafficked
+  consumer. Re-exports give consumers ergonomic access without
+  ceding ownership.
+- **Transform-shaped type redefined in a downstream crate.** Even
+  if the redefinition is byte-identical today, it invites drift:
+  the upstream definition can change and the downstream copy
+  silently diverges. Re-export from the crate of the defining
+  function; never redefine.
+- **Canonical-bytes accessor dropped, with `to_le_bytes` inlined
+  at every call site.** Spreads the byte-layout discipline across
+  every consumer; future changes touch every site. The accessor
+  is what makes the discipline auditable from a single grep.
+
+## Forward-template
+
+When introducing a new type whose crate placement is non-obvious,
+ask in this order:
+
+1. Is this type defined by a function over inputs, or by a
+   semantic owner's choice?
+2. If transform-shaped, where does the defining function live?
+3. If state-shaped, who is the semantic owner?
+4. If state-shaped and its bytes flow into cryptographic
+   functions, what is the canonical-bytes accessor's contract?
+
+Record the disposition in the introducing PR's design notes or
+commit body. PR 3 (`KeyEngine`) sets the precedent for V3.x:
+
+- `OutputHandle` — transform-shaped — `shekyl-crypto-pq` with
+  `derive_output_handle`.
+- `SubaddressIndex` — state-shaped — `shekyl-engine-state` with a
+  `to_canonical_bytes() -> [u8; 4]` accessor.
+
+PR 4–7 pre-flight investigations (and any work in V3.x or beyond
+that introduces new types crossing the wallet-state ↔
+cryptographic boundary) should run this classification for each
+new type before deciding crate placement.

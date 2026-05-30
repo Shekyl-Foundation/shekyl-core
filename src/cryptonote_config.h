@@ -35,6 +35,7 @@
 #include <string>
 #include <boost/uuid/uuid.hpp>
 #include "shekyl/economics_params_generated.h"
+#include "shekyl/consensus_constants_generated.h"
 
 #define CRYPTONOTE_DNS_TIMEOUT_MS                       20000
 
@@ -47,12 +48,9 @@
 #define CURRENT_TRANSACTION_VERSION                     3
 #define CURRENT_BLOCK_MAJOR_VERSION                     1
 #define CURRENT_BLOCK_MINOR_VERSION                     0
-#define CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT              60*60*2
 #define CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE             10
 /** Depth (in blocks) below the chain tip before tx verification data may be pruned (~7d at 120s/block). */
 #define CRYPTONOTE_TX_PRUNE_DEPTH                       5000
-
-#define BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW               60
 
 // MONEY_SUPPLY/COIN/emission constants are generated from config/economics_params.json.
 
@@ -78,20 +76,18 @@
 #define ORPHANED_BLOCKS_MAX_COUNT                       100
 
 
-#define DIFFICULTY_TARGET_V2                            120  // seconds
-#define DIFFICULTY_TARGET_V1                            60  // seconds - before first fork
-#define DIFFICULTY_WINDOW                               720 // blocks
-#define DIFFICULTY_LAG                                  15  // !!!
-#define DIFFICULTY_CUT                                  60  // timestamps to cut after sorting
-#define DIFFICULTY_BLOCKS_COUNT                         DIFFICULTY_WINDOW + DIFFICULTY_LAG
+// Difficulty constants: LWMA-1 sources N (window size), T (target block
+// time), and the derived FTL/MTP from `config/consensus_constants.json`
+// via `shekyl/consensus_constants_generated.h` (`SHEKYL_DAA_WINDOW_N`,
+// `SHEKYL_DAA_TARGET_SECONDS`, `SHEKYL_DAA_FTL_SECONDS`,
+// `SHEKYL_DAA_MTP_WINDOW`). The inherited CryptoNote `DIFFICULTY_*`
+// `#define`s (V1/V2 targets, WINDOW/LAG/CUT/BLOCKS_COUNT, the
+// V1 BLOCKS_ESTIMATE_TIMESPAN alias) were deleted in Phase 4 of the
+// LWMA-1 migration; see `docs/design/DAA_LWMA1.md` §9.2 and the
+// `docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md` §3 disposition.
 
-
-#define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1   DIFFICULTY_TARGET_V1 * CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS
-#define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V2   DIFFICULTY_TARGET_V2 * CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS
+#define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V2   SHEKYL_DAA_TARGET_SECONDS * CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS
 #define CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_BLOCKS       1
-
-
-#define DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN             DIFFICULTY_TARGET_V1 //just alias; used by tests
 
 
 #define BLOCKS_IDS_SYNCHRONIZING_DEFAULT_COUNT          10000  //by default, blocks ids count in synchronizing
@@ -200,12 +196,39 @@
 // (coinbase: MINED_MONEY_UNLOCK_WINDOW, regular: DEFAULT_TX_SPENDABLE_AGE,
 // staked: max(effective_lock_until, DEFAULT_TX_SPENDABLE_AGE)).  MIN_AGE is a reorg
 // safety margin ensuring the referenced tree state is stable.
-#define FCMP_REFERENCE_BLOCK_MAX_AGE            100  // ~3.3 hours at 2-min blocks; max referenceBlock staleness
-#define FCMP_REFERENCE_BLOCK_MIN_AGE            5    // reorg safety margin; maturity enforced by deferred tree insertion
+//
+// `FCMP_REFERENCE_BLOCK_{MIN,MAX}_AGE` come from the JSON authority at
+// `config/consensus_constants.json` (generated into
+// `shekyl/consensus_constants_generated.h` by
+// `cmake/generate_consensus_constants.py`). The Rust multisig wallet
+// at `rust/shekyl-engine-core/src/multisig/v31/intent.rs` consumes the
+// same JSON via `rust/shekyl-engine-core/build.rs` so the two sides
+// cannot drift. Bug 3 of the 2026-05-05 FFI constant-drift audit
+// motivated the JSON authority; see
+// `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+#define FCMP_REFERENCE_BLOCK_MAX_AGE            SHEKYL_FCMP_REFERENCE_BLOCK_MAX_AGE
+#define FCMP_REFERENCE_BLOCK_MIN_AGE            SHEKYL_FCMP_REFERENCE_BLOCK_MIN_AGE
 #define FCMP_MAX_INPUTS_PER_TX                  8    // bounds proof generation time and tx size
 constexpr uint64_t FCMP_CURVE_TREE_CHECKPOINT_INTERVAL = 10000;
 static_assert(FCMP_REFERENCE_BLOCK_MAX_AGE > FCMP_REFERENCE_BLOCK_MIN_AGE,
   "FCMP_REFERENCE_BLOCK_MAX_AGE must be > MIN_AGE to give wallets a valid reference block window");
+// Sentinel against silent loss-of-meaning if the JSON authority is bumped
+// without thinking. Decision 14 (commit `6561278d9`, 2026-04-04) locked
+// MIN_AGE = 5 once universal deferred curve-tree insertion made the
+// value a reorg-safety margin only. Loosening below 5 needs a fresh
+// consensus review; tightening above ~10 starts rejecting legitimate
+// proposers' reference blocks. If you genuinely need to change either,
+// edit `config/consensus_constants.json`, update the Decision 14
+// rationale in the changelog, and only then bump these sentinel
+// values. The Rust side has matching const-evaluated `assert!` sentinels
+// (`const _: () = assert!(...)` blocks; the `static_assertions` crate's
+// `const_assert!` macro is intentionally not used so no extra dependency
+// is pulled in for a single sentinel call site) in
+// `rust/shekyl-engine-core/src/multisig/v31/intent.rs`.
+static_assert(FCMP_REFERENCE_BLOCK_MIN_AGE == 5,
+  "FCMP_REFERENCE_BLOCK_MIN_AGE diverged from Decision 14 baseline (5); review consensus implications before updating the sentinel");
+static_assert(FCMP_REFERENCE_BLOCK_MAX_AGE == 100,
+  "FCMP_REFERENCE_BLOCK_MAX_AGE diverged from baseline (100); review consensus implications before updating the sentinel");
 
 #define PER_KB_FEE_QUANTIZATION_DECIMALS        6 // Keep fee quantization at 1e-6 SKL while display precision is 1e-9 SKL.
 #define CRYPTONOTE_SCALING_2021_FEE_ROUNDING_PLACES 2

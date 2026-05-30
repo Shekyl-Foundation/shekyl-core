@@ -29,9 +29,22 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: rust
+          config-file: ./.github/codeql/config.yml
 
       - name: Build Rust workspace
-        run: cargo build --release --workspace --exclude shekyl-cli --exclude shekyl-wallet-rpc
+        # `shekyl-randomx-differential` excluded because its `c_oracle`
+        # module (and the `gen_canonical_outputs` tooling binary) link
+        # against the C reference's `librandomx.a` via `randomx-v2-sys`,
+        # which requires `RANDOMX_V2_INSTALL_DIR` to be set to a CMake
+        # install prefix (per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md`
+        # §5.1.16 + §5.2.2 R5-D2). The CodeQL Rust analysis runs in a
+        # bare-toolchain environment without CMake or the C library; the
+        # dedicated `.github/workflows/randomx-v2-differential.yml` job
+        # (per §5.5.1) configures CMake, builds the C library, and runs
+        # the harness build there. CodeQL Rust analysis of the
+        # differential harness is queued for V3.x once the workflow's
+        # CodeQL coverage can stand up the C library at analysis time.
+        run: cargo build --release --workspace --exclude shekyl-cli --exclude shekyl-engine-rpc --exclude shekyl-randomx-differential
         working-directory: rust
 
       - name: Perform CodeQL Analysis
@@ -67,6 +80,7 @@ jobs:
         uses: github/codeql-action/init@v4
         with:
           languages: c-cpp
+          config-file: ./.github/codeql/config.yml
 
       - name: Configure and Build C++
         run: |

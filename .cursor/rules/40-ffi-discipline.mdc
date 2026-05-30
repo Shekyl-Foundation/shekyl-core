@@ -49,6 +49,90 @@ memcpy(&td.m_y.data[0], y_scratch, 32);
 memwipe(y_scratch, 32);  // hope you remembered
 ```
 
+## Secret material always uses raw output pointers
+
+The variable-length versus fixed-length distinction governs non-secret data.
+Secret material — private keys, seeds, shared secrets, KEM decapsulation
+keys, commitment masks, any HKDF intermediate that derives to a secret — is
+output exclusively via raw `*mut u8` pointers into a destination buffer that
+C++ controls. Never via `ShekylBuffer`.
+
+Rationale. A `ShekylBuffer` holds bytes in Rust's heap until the caller
+frees it. For secret material this means the bytes exist in un-`mlock`'d,
+non-`MADV_DONTDUMP`'d memory for the window between Rust's allocation and
+C++'s copy-and-free. The destination-owns-the-buffer pattern eliminates
+that window: C++ places the buffer on an already-`mlock`'d page or inside
+a zeroizing struct, and Rust writes directly into it.
+
+This rule composes with "coarse calls over fine calls." If a coarse call
+outputs secret material, it does so via an out-pointer into the final
+destination, not via a `ShekylBuffer` that will be moved afterward.
+
+The rule applies to what crosses the FFI boundary, not to what is
+manipulated inside the function. A coarse call like
+`shekyl_sign_fcmp_transaction` may handle many secrets internally while
+returning a `ShekylBuffer` for the (public) proof blob — the
+`ShekylBuffer` return is governed by the variable-length-non-secret rule;
+the internal secrets never cross the boundary at all.
+
+Length is not the criterion for secret material. Even when a secret is
+variable-length (rare; most secrets are fixed-size), the output pattern
+is still `*mut u8` with a documented maximum length plus a length-out
+parameter. Never `ShekylBuffer` for a secret.
+
+## Constant-time failure discipline
+
+Secret-dependent code paths must produce identical observable behavior on
+success and failure. "Observable" includes:
+
+- CPU cycles spent (timing side-channel)
+- Memory write pattern to the output buffer
+- Branch pattern inside the Rust function
+
+For FFI functions that take a secret as input and return an error code,
+the failure path must write to the output buffer with the same timing
+and access pattern as the success path — typically by zeroing the full
+output region before returning the error code. The caller is entitled to
+assume that on any non-NULL-check return, the output buffer has been
+written to, even if the contents are zero on failure.
+
+```rust
+// Good: output buffer gets written identically on both paths
+pub unsafe extern "C" fn shekyl_scalar_wide_reduce(
+    in64_ptr: *const u8,
+    out32_ptr: *mut u8,
+) -> i32 {
+    if in64_ptr.is_null() || out32_ptr.is_null() {
+        return -4;  // NULL_POINTER; no write, see below
+    }
+    let in64 = unsafe { slice::from_raw_parts(in64_ptr, 64) };
+    let scalar = Scalar::from_bytes_mod_order_wide(
+        &in64.try_into().expect("slice::from_raw_parts guarantees len 64")
+    );
+    let bytes = scalar.to_bytes();
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out32_ptr, 32) };
+    0
+}
+
+// Bad: success writes 32 bytes, failure writes 0 bytes; observable timing
+pub unsafe extern "C" fn shekyl_scalar_wide_reduce_bad(
+    in64_ptr: *const u8,
+    out32_ptr: *mut u8,
+) -> i32 {
+    let scalar = Scalar::from_bytes_mod_order_wide(&read_64(in64_ptr));
+    if scalar == Scalar::ZERO {
+        return -3;  // out32_ptr NOT written — timing differs from success path
+    }
+    write_32(out32_ptr, scalar.to_bytes());
+    0
+}
+```
+
+The NULL-pointer check is the one exception: NULL input means the caller
+gave us no buffer to write to, and there is no secret-dependent work
+being done at that point. NULL checks may return early without writing.
+All other failures must write.
+
 ## Error handling: distinct codes, not booleans
 
 FFI returns specific error codes for distinct failure modes:

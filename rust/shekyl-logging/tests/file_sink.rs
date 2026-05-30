@@ -101,8 +101,7 @@ fn emit_flush_and_mode_0600_roundtrip() {
     // Re-apply the 0600 chmod after the write lands. The appender may
     // have opened the file after our first walk; this ensures we are
     // asserting on the steady state.
-    shekyl_logging::__test_only_reapply_file_modes(&dir, prefix)
-        .expect("reapply modes");
+    shekyl_logging::__test_only_reapply_file_modes(&dir, prefix).expect("reapply modes");
 
     let meta = fs::metadata(&file_path).expect("file metadata");
     let mode = meta.permissions().mode() & 0o777;

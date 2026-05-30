@@ -5,7 +5,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use shekyl_fcmp::proof::{verify, ShekylFcmpProof};
+use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
 use shekyl_fcmp::leaf::PqcLeafScalar;
 
 /// Simulates deserializing the prunable portion of an RCTTypeFcmpPlusPlusPqc
@@ -72,7 +72,8 @@ fuzz_target!(|data: &[u8]| {
         tree_root.copy_from_slice(&data[2..34]);
     }
 
-    let key_images: Vec<[u8; 32]> = vec![[0u8; 32]; num_inputs];
+    let key_images: Vec<KeyImage> =
+        vec![KeyImage::from_canonical_bytes([0u8; 32]); num_inputs];
 
     let mut signable_tx_hash = [0u8; 32];
     if data.len() >= 66 {
@@ -101,7 +102,8 @@ fuzz_target!(|data: &[u8]| {
 
     // Wrong number of inputs (mismatched arrays)
     if num_inputs > 1 {
-        let fewer_ki: Vec<[u8; 32]> = vec![[0u8; 32]; num_inputs - 1];
+        let fewer_ki: Vec<KeyImage> =
+            vec![KeyImage::from_canonical_bytes([0u8; 32]); num_inputs - 1];
         if !proof_data.is_empty() {
             let proof = ShekylFcmpProof {
                 data: proof_data.to_vec(),

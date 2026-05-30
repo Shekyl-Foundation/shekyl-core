@@ -249,12 +249,8 @@ fn all_preset_fixtures_parse_as_envfilter() {
 fn translator_numeric_presets_equal_fixtures() {
     for level in 0..=4u8 {
         let spec = level.to_string();
-        let report = shekyl_logging::directives_from_legacy_categories(
-            None,
-            &spec,
-            Level::WARN,
-        )
-        .unwrap_or_else(|e| panic!("LEVEL {level} failed: {e:?}"));
+        let report = shekyl_logging::directives_from_legacy_categories(None, &spec, Level::WARN)
+            .unwrap_or_else(|e| panic!("LEVEL {level} failed: {e:?}"));
 
         let expected = load_fixture(level);
         assert_eq!(

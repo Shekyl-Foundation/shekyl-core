@@ -3,6 +3,7 @@ name = "shekyl-proofs"
 description = "Transaction proof and reserve proof protocol for Shekyl V3 (tx_proof, reserve_proof)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

@@ -99,7 +99,7 @@ only the appropriate build config. For example:
 
 ```
 $(package)_cflags_release = -O3
-$(package)_cflags_i686_debug = -g
+$(package)_cflags_x86_64_debug = -g
 $(package)_config_opts_release = --disable-debug
 ```
 

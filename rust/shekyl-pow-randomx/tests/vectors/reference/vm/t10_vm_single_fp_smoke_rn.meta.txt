@@ -1,0 +1,62 @@
+Phase 2d reference vector — t10_vm_single_fp_smoke_rn.bin
+=========================================================
+
+Spec attestation
+----------------
+T10 attests Rust `dispatch_instruction` byte-for-byte parity with
+the v2 RandomX fork's `executeInstruction` for the FP-arithmetic
+opcode classes under round-to-nearest (MXCSR mode 0). Four single-
+opcode probes:
+
+  - FADD_R  : opcode 124, dst=0, src=0
+              — fdst += a[src]
+  - FMUL_R  : opcode 172, dst=1, src=2
+              — edst *= a[src]
+  - FDIV_M  : opcode 204, dst=2, src=3, mod=0 (L2 mask), imm32=0x040
+              — edst /= maskRegisterExponentMantissa(load[spAddr])
+  - FSQRT_R : opcode 208, dst=3
+              — edst = sqrt(edst)
+
+Each probe runs against a fresh canonical NativeRegisterFile and
+emits a 256-byte T4-layout snapshot.
+
+A T10 divergence under RN isolates a bug in the corresponding FP
+dispatch arm independent of rounding mode (T11-T14 cover RD/RU/RZ).
+
+Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2.
+
+Inputs / scratchpad
+-------------------
+Same canonical NativeRegisterFile + scratchpad pattern as T9
+(documented in gen.cpp's CANONICAL_* tables). MXCSR set via
+`rx_set_rounding_mode(0)` before each probe.
+
+Output layout
+-------------
+4 × 256-byte NativeRegisterFile snapshots, one per probe in the
+order listed above. Total: 1024 bytes.
+
+Generator
+---------
+source      = ./_generator/phase2d/gen.cpp (mode t10)
+command     = ./gen t10 > t10_vm_single_fp_smoke_rn.bin
+output_size = 1024 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/bytecode_machine.cpp / .hpp (FP exe_* kernels:
+                exe_FADD_R, exe_FMUL_R, exe_FDIV_M, exe_FSQRT_R),
+              src/intrin_portable.h (rx_add_vec_f128 / rx_mul_vec_f128
+                / rx_div_vec_f128 / rx_sqrt_vec_f128,
+                rx_set_rounding_mode, maskRegisterExponentMantissa)
+function    = randomx::BytecodeMachine::executeInstruction with
+              flags=RANDOMX_FLAG_V2
+
+Phase
+-----
+Phase 2d (`docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 / §8 commit
+5a). Consumed by Rust test
+`t10_vm_single_fp_smoke_rn_matches_fork_reference` in
+`rust/shekyl-pow-randomx/src/vm.rs#mod tests`.

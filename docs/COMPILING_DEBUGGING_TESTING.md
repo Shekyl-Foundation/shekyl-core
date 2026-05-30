@@ -192,9 +192,9 @@ CL!CloseTypeServerPDB()+0x1b7502
 The crash is in MSVC's shared PDB (Program Database) type server.  It
 reproduces on both MSVC 14.44 (VS 2022) and 14.50 (VS 2026).  The root
 cause is `CryptonightR_JIT.c` -- on MSVC, the function body is dead code
-(the entire JIT path is `#ifdef __i386 || __x86_64__`), but its
-heavyweight includes (`variant4_random_math.h` with 70 unrolled switch
-cases, `CryptonightR_template.h` with 514 assembly symbol declarations)
+(the entire JIT path is `#ifdef __x86_64__`), but its heavyweight
+includes (`variant4_random_math.h` with 70 unrolled switch cases,
+`CryptonightR_template.h` with 514 assembly symbol declarations)
 overwhelm the PDB type server during the "Generating Code..." phase.
 
 **Fix:** `src/crypto/CryptonightR_JIT_stub.c` provides the same
@@ -208,8 +208,8 @@ full implementation with assembly template is used as before.
   groups (`hash`, `ops`, `slowhash`, `rx`, `jit`, `cpp`).  This reduces
   per-target TU count and is harmless on all compilers.
 - `src/crypto/CryptonightR_JIT.c` guards `#include "CryptonightR_template.h"`
-  behind `__i386 || __x86_64__` (GCC/Clang only) since the 514 assembly
-  symbol declarations it contains are dead on MSVC.
+  behind `__x86_64__` (GCC/Clang only) since the 514 assembly symbol
+  declarations it contains are dead on MSVC.
 - `src/crypto/c_threads.h` includes `<process.h>` on Windows for correct
   `_beginthreadex` prototype (prevents handle truncation on 64-bit).
 - `src/crypto/slow-hash.c` extends the `force_software_aes()` guard to

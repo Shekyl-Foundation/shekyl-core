@@ -56,11 +56,29 @@ namespace cryptonote
      * @return true if valid, else false
      */
     bool check_hash_64(const crypto::hash &hash, uint64_t difficulty);
-    uint64_t next_difficulty_64(std::vector<std::uint64_t> timestamps, std::vector<uint64_t> cumulative_difficulties, size_t target_seconds);
 
     bool check_hash_128(const crypto::hash &hash, difficulty_type difficulty);
     bool check_hash(const crypto::hash &hash, difficulty_type difficulty);
-    difficulty_type next_difficulty(std::vector<std::uint64_t> timestamps, std::vector<difficulty_type> cumulative_difficulties, size_t target_seconds);
+
+    // Difficulty-adjustment selection: LWMA-1 is the canonical
+    // post-genesis DAA. The inherited CryptoNote cut-windowed-average
+    // `next_difficulty` and `next_difficulty_64` were deleted in Phase 4
+    // of the LWMA-1 migration (`docs/design/DAA_LWMA1.md` §9.1, drift
+    // F6 in `docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md` §2). Consumers
+    // call `shekyl_difficulty_lwma1_next` via two pieces that live
+    // together but distinctly:
+    //
+    //   * The `lwma1_next_difficulty` helper defined in the anonymous
+    //     namespace of `src/cryptonote_core/blockchain.cpp` builds the
+    //     FFI argument arrays and dispatches the call.
+    //   * Non-zero FFI return codes are translated into the
+    //     `cryptonote::difficulty_computation_error` exception declared
+    //     in `src/cryptonote_core/difficulty_engine_error.h`.
+    //
+    // No DAA helper lives in this header any more; the only inhabitants
+    // are the `check_hash*` PoW predicates and the `hex` formatter,
+    // both of which are language-mechanical utilities orthogonal to
+    // the algorithm choice.
 
     std::string hex(difficulty_type v);
 }

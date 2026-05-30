@@ -9,11 +9,12 @@ members = [
     "shekyl-economics",
     "shekyl-staking",
     "shekyl-economics-sim",
-    "shekyl-wallet-rpc",
+    "shekyl-engine-rpc",
     "shekyl-tx-builder",
     "shekyl-daemon-rpc",
     "shekyl-encoding",
     "shekyl-address",
+    "shekyl-difficulty",
 
     # Vendored monero-oxide protocol crates
     "shekyl-oxide/crypto/helioselene",
@@ -34,29 +35,194 @@ members = [
     # Shekyl-native scanner crate
     "shekyl-scanner",
 
+    # Canonical engine state types (transfers, runtime state, staker pool)
+    "shekyl-engine-state",
+
+    # v1 two-file wallet envelope orchestrator (.wallet.keys + .wallet)
+    "shekyl-engine-file",
+
+    # Plaintext-with-HMAC user preferences (layer 2 of WALLET_PREFS.md)
+    "shekyl-engine-prefs",
+
     # V3 proof protocol (tx_proof, reserve_proof)
     "shekyl-proofs",
 
-    # Shekyl wallet core: transaction builders
-    "shekyl-wallet-core",
+    # Shekyl engine core: orchestrator and transaction builders
+    "shekyl-engine-core",
 
-    # Interactive CLI wallet (replacement for simplewallet)
+    # Interactive CLI engine (replacement for simplewallet)
     "shekyl-cli",
 
     # Unified tracing-based logger init for all Rust binaries
     "shekyl-logging",
+
+    # Pure-software RandomX v2 verifier (docs/design/RANDOMX_V2_PLAN.md,
+    # RANDOMX_V2_RUST.md). Consumed by shekyl-ffi (Phase 3); not the miner.
+    "shekyl-pow-randomx",
+
+    # Phase 2g Rust/C differential harness substrate: hand-written
+    # `extern "C"` bindings for `external/randomx-v2` per R1-D2
+    # option (c) close in `docs/design/RANDOMX_V2_PHASE2G_PLAN.md`
+    # §3.5. Sole consumer is `shekyl-randomx-differential` (lands
+    # at C4 per §8.1); T14 (§6.6) asserts the sole-consumer
+    # invariant via `cargo metadata`. Fork-pin coupled per §1.7 +
+    # §5.2.4 `[package.metadata.shekyl] fork-pin-sha`.
+    "randomx-v2-sys",
+
+    # Phase 2g Rust/C differential test harness binary. Compares
+    # the `shekyl-pow-randomx` verifier against the `external/randomx-v2`
+    # C reference (via `randomx-v2-sys`). Sole consumer of the
+    # `randomx-v2-sys` crate (per R1-D13) and sole consumer of the
+    # `shekyl-pow-randomx` `test-internals` feature (per R5-D1).
+    # See `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.1 + §8.
+    "shekyl-randomx-differential",
+]
+# Local-only harnesses that must not participate in the parent
+# workspace. Excluded here (rather than relying on the nested
+# `[workspace]` table inside each one) so that `cargo check
+# --workspace` on stable never tries to resolve libfuzzer-sys, which
+# only builds under `cargo +nightly fuzz build`. Hardening-pass
+# commit 8 (`docs/MID_REWIRE_HARDENING.md` §3.8).
+exclude = [
+    "shekyl-engine-state/fuzz",
 ]
 resolver = "2"
 
 [workspace.package]
 version = "3.1.0"
 edition = "2021"
+# MSRV binding constraint: `kameo = "=0.20.0"` declares `rust-version
+# = 1.88.0` (verified at source via the crates.io index, 2026-05-29:
+# kameo 0.20.0, msrv 1.88.0, not yanked). This raises the floor above
+# the previous `aes = "0.9"` (edition 2024) driver of 1.85. Per
+# `RANDOMX_V2_PHASE2B_PLAN.md` §9: locking the pin produces a clean
+# "your rustc is too old" message from cargo rather than a cryptic
+# compile failure deep in the dependency graph. CI builds on
+# `dtolnay/rust-toolchain@stable` (≥ 1.88 in 2026), so no
+# `rust-toolchain.toml` is added — pinning a fixed channel would
+# change both CI and local build behavior without serving the gate's
+# intent, which is the MSRV *declaration* below. The Guix substrate
+# does not exist today per `RANDOMX_V2_RUST.md` §22 ("forward work");
+# when Guix lands, its rustc must already be ≥ 1.88 to build this
+# workspace.
+#
+# Enforcement: this declaration is inherited by every first-party crate
+# via `rust-version.workspace = true` in each member's `[package]`. The
+# `[workspace.package]` value alone does not gate member crates —
+# cargo only enforces a crate's MSRV when that crate declares
+# `rust-version` (literal or `.workspace = true`). Propagating the
+# inherit to all members makes the gate real per-crate rather than a
+# virtual-root annotation; a future bump touches only the value here.
+rust-version = "1.88"
 license = "BSD-3-Clause"
 repository = "https://github.com/radawson/Shekyl"
 
 [workspace.dependencies]
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
+
+# RandomX v2 verifier primitives (Phase 2b). Both verified at source
+# in `RANDOMX_V2_PHASE2B_PLAN.md` §4 and §5.6.
+#
+# `aes` provides the `hazmat::cipher_round` / `equiv_inv_cipher_round`
+# round primitives for AesGenerator1R/4R and AesHash1R per `specs.md`
+# §§3.2-3.4. The `hazmat` feature gates the single-round API per
+# `aes-0.9.0/Cargo.toml:43-44`; without it the API is unreachable.
+# Soft fallback is constant-time fixslicing per `aes-0.9.0/src/lib.rs:20-22`
+# (not load-bearing for RandomX since the "keys" are public, but
+# strictly better than `soft_aes.cpp`'s LUT path).
+aes = { version = "0.9", default-features = false, features = ["hazmat"] }
+#
+# `blake2` provides `Blake2b512` for the §3.5 BlakeGenerator's
+# "S = Hash512(S)" rebuild step. Currently transitive via `argon2 →
+# blake2` in `shekyl-pow-randomx`; promoted to direct dep here so the
+# consumption surface is honest and unaffected if `argon2` later drops
+# its `blake2` dep. Cargo unifies; no additional build cost.
+blake2 = { version = "0.10", default-features = false }
+
+# Phase 2g Rust/C differential harness primitives. See
+# `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §3.16 R4-D1 (the
+# implementation-correctness decision that pins these as workspace
+# deps) and §5.1.15 (the consumption surface in
+# `shekyl-randomx-differential`'s `Cargo.toml`). All three are
+# already widely-used direct deps across the workspace with
+# independent per-crate pins (`sha2` in `shekyl-engine-core`,
+# `shekyl-crypto-pq`, `shekyl-proofs`, `shekyl-engine-prefs`;
+# `rand_chacha` in `shekyl-engine-core`, `shekyl-crypto-pq`,
+# `shekyl-fcmp`, `shekyl-oxide/fcmp/fcmp++`; `serde_json` across
+# ~14 crates). This section adds them to `[workspace.dependencies]`
+# so the new `shekyl-randomx-differential` crate can reference them
+# via `{ workspace = true }` and inherit a single shared pin; the
+# existing per-crate pins are unaffected (Cargo unifies on the
+# lockfile-resolved version regardless of declaration style).
+# Lockfile-verified per `17-dependency-discipline.mdc`: sha2 0.10.9,
+# rand_chacha 0.3.1, serde_json 1.0.149. The workspace addition
+# introduces zero new transitive edges into the workspace dep graph
+# (these crates are already resolved into the graph via the
+# existing direct consumers).
+#
+# `rand_chacha` provides `ChaCha20Rng` for the deterministic
+# corpus-generation path per R1-D4 (32-byte seed produces a
+# reproducible draw of `(seedhash, data)` pairs across runs;
+# determinism is load-bearing for the corpus-coverage proof, per
+# §4.6 M1). Pinned at `0.3` to match the lower of two lockfile
+# entries (the workspace already pulls `0.3.1` transitively; the
+# `0.9.0` entry comes from an unrelated leaf and stays where it
+# is — Cargo unifies on the workspace pin without forcing a graph
+# rewrite).
+rand_chacha = "0.3"
+#
+# `sha2` provides `Sha256` for the R1-D14 cache-equivalence
+# precondition: the Rust-derived `PreparedCache`'s 256 MiB
+# Argon2d-fill memory is streamed through a `Sha256` hasher (via
+# the §5.3.3 `test-internals`-gated visitor accessor) and the
+# digest is compared against `SHA-256(randomx_get_cache_memory(c))`
+# computed by the C reference. The digest output is public (a
+# correctness fingerprint, not a secret); no `Zeroize`-on-Drop
+# discipline applies per `35-secure-memory.mdc`. Hasher state
+# does hold transient block residue but is dropped synchronously
+# after the digest call; the harness's drop-discipline memory
+# budget (§3.15.4) is preserved.
+sha2 = "0.10"
+#
+# `serde_json` provides the failure-output JSON schema serializer
+# per R1-D11 + T11. On byte-equality divergence the harness emits
+# a structured JSON record to stderr enumerating the 11 required
+# fields (seedhash, data, expected/actual hex, mode, worker_id,
+# timestamp, etc. per §5.1.14); T11 (`src/failure_output.rs`'s
+# `#[cfg(test)]` module) round-trips a synthetic divergence record
+# through `serde_json::to_string` + `serde_json::from_str` and
+# asserts all 11 fields are present in the parsed map.
+serde_json = "1"
+
+# `kameo` actor framework — Stage 2 gate (per `docs/FOLLOWUPS.md`
+# "kameo dependency pin and MSRV alignment before Stage 2 cuts" and
+# the 2026-04-27 *Engine binary boundary* decision in
+# `docs/V3_WALLET_DECISION_LOG.md`). Verified at source via the
+# crates.io index 2026-05-29: 0.20.0 is the newest stable (released
+# 2026-04-07, not yanked); supervision support shipped in 0.20.0 and
+# the v0.19.x/v0.20.0 line carries the no-cycle-DAG deadlock fixes
+# this project's topology depends on. MSRV 1.88.0 (reflected in the
+# workspace `rust-version` bump above). Pinned with an exact
+# patch-level cap (`=0.20.0`) per the FOLLOWUP precondition: an actor
+# framework is a coordination-load-bearing dependency where a silent
+# minor bump could alter mailbox/supervision semantics under us.
+#
+# Declared here only; no workspace member consumes it yet, so it is
+# inert in the build graph. Stage 2's first commit adds the live
+# `kameo = { workspace = true }` consumer (the `KeyEngine` actor crate)
+# and closes the FOLLOWUP. The supervision/mailbox API surface is
+# verified at source at that consumption point per
+# `17-dependency-discipline.mdc` (the pin alone calls no API).
+#
+# Bounded-mailbox default convention (FOLLOWUP precondition 3): every
+# actor declares a bounded mailbox; the workspace default is
+# `mailbox(64)` unless an actor documents a measured reason to differ.
+# Unbounded mailboxes are forbidden under Path B for memory-pressure
+# reasons. Per-actor overrides carry an inline rationale at the
+# `#[actor(mailbox = ...)]` site naming the back-pressure or
+# throughput measurement that justifies the deviation.
+kameo = "=0.20.0"
 
 # Compile crypto-heavy crates with optimizations even in dev
 [profile.dev.package]

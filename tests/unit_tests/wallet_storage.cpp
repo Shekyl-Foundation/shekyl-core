@@ -33,67 +33,189 @@
 #include "wallet/wallet2.h"
 #include "common/util.h"
 
+#include <type_traits>
+#include <string>
+
 using namespace boost::filesystem;
 using namespace epee::file_io_utils;
 
-static constexpr const char WALLET_00fd416a_PRIMARY_ADDRESS[] =
-    "45p2SngJAPSJbqSiUvYfS3BfhEdxZmv8pDt25oW1LzxrZv9Uq6ARagiFViMGUE3gJk5VPWingCXVf1p2tyAy6SUeSHPhbve";
+// ===========================================================================
+// CI tripwire: wallet2 must NOT have a `generate_from_bip39` member.
+// ===========================================================================
+//
+// Bug 4 (audit 2026-05-05): wallet2 has no BIP-39 entry point by design.
+// The Rust derivation path (shekyl-crypto-pq::generate_account_from_bip39)
+// and the FFI (shekyl_account_generate_from_bip39) and the lower-level C++
+// glue (account_base::generate_from_bip39) all exist and are tested. The
+// wallet2-level wrapper is intentionally absent because:
+//
+//   - wallet2.cpp is scheduled for wholesale deletion at Phase 5 of the
+//     Rust wallet rewrite; any wrapper added now would be deleted by that
+//     phase as a removal-as-breaking-change rather than removal-as-no-op.
+//   - The Rust derivation path is the actual functional guarantee
+//     (shekyl-crypto-pq::tests::generate_from_bip39_mainnet_roundtrips_to_rederive).
+//   - No mainnet wallets exist yet; the next beta ships before the Rust
+//     rewrite lands, so any "transitional" wrapper would have a lifespan
+//     shorter than its review burden.
+//
+// If the static_assert below starts failing, either:
+//
+//   (a) The Rust wallet rewrite Phase 5 has landed and wallet2.cpp is
+//       being deleted — in which case this entire file is being removed
+//       and this tripwire goes with it. Action: just delete the assert
+//       along with the rest of wallet2.cpp test scaffolding.
+//
+//   (b) Someone added wallet2::generate_from_bip39 without first reading
+//       docs/FOLLOWUPS.md §"V3.1+ Legacy C++ → Rust rewrite scope"
+//       entry on this exact decision. Action: remove the wrapper, read
+//       the FOLLOWUPS entry, and reopen the architectural question
+//       there if you still think the wrapper should exist.
+//
+// See docs/audit_trail/2026-05-ffi-constant-drift-audit.md for the
+// Bug 4 framing and the discovery pattern that surfaced it.
+//
+// SFINAE detectors. **Honest scope (read carefully):** the FOLLOWUPS
+// architectural decision forbids *any* `wallet2::generate_from_bip39`
+// entry point. C++ doesn't make "any member named X" easy to detect at
+// compile time without ADL gymnastics or reflection, so this tripwire
+// is *targeted at the most plausible future signatures*, not exhaustive.
+// A contributor who genuinely wants to slip in a wrapper with an
+// exotic signature could still get past the detector — the FOLLOWUPS
+// entry is the load-bearing artifact, not the SFINAE.
+//
+// What's covered:
+//
+//   1. `(const std::string&, const std::string&, network_type)` —
+//      mirrors `account_base::generate_from_bip39`.
+//   2. `(const epee::wipeable_string&, const epee::wipeable_string&,
+//       network_type)` — the most plausible variant given that
+//      `wallet2::generate(name, password)` already takes
+//      `epee::wipeable_string` for the password.
+//   3. `(const std::string&, network_type)` — single-string variant
+//      (mnemonic only, defaulted passphrase).
+//
+// If a wrapper appears with a different signature, the right response
+// is to (a) delete the wrapper per the FOLLOWUPS decision, or (b) reopen
+// the architectural question in FOLLOWUPS and, if the wrapper is being
+// kept, add a fresh detector overload for the new signature.
 
-TEST(wallet_storage, store_to_file2file)
-{
-    GTEST_SKIP() << "Requires missing wallet fixture wallet_00fd416a in tests/data.";
-    const path source_wallet_file = unit_test::data_dir / "wallet_00fd416a";
-    const path interm_wallet_file = unit_test::data_dir / "wallet_00fd416a_copy_file2file";
-    const path target_wallet_file = unit_test::data_dir / "wallet_00fd416a_new_file2file";
+template <typename, typename = void>
+struct has_generate_from_bip39_wallet2_string : std::false_type {};
 
-    ASSERT_TRUE(is_file_exist(source_wallet_file.string()));
-    ASSERT_TRUE(is_file_exist(source_wallet_file.string() + ".keys"));
+template <typename T>
+struct has_generate_from_bip39_wallet2_string<
+    T,
+    std::void_t<decltype(std::declval<T &>().generate_from_bip39(
+        std::declval<const std::string &>(),
+        std::declval<const std::string &>(),
+        std::declval<cryptonote::network_type>()))>> : std::true_type {};
 
-    tools::copy_file(source_wallet_file.string(), interm_wallet_file.string());
-    tools::copy_file(source_wallet_file.string() + ".keys", interm_wallet_file.string() + ".keys");
+template <typename, typename = void>
+struct has_generate_from_bip39_wallet2_wipeable : std::false_type {};
 
-    ASSERT_TRUE(is_file_exist(interm_wallet_file.string()));
-    ASSERT_TRUE(is_file_exist(interm_wallet_file.string() + ".keys"));
+template <typename T>
+struct has_generate_from_bip39_wallet2_wipeable<
+    T,
+    std::void_t<decltype(std::declval<T &>().generate_from_bip39(
+        std::declval<const epee::wipeable_string &>(),
+        std::declval<const epee::wipeable_string &>(),
+        std::declval<cryptonote::network_type>()))>> : std::true_type {};
 
-    if (is_file_exist(target_wallet_file.string()))
-        remove(target_wallet_file);
-    if (is_file_exist(target_wallet_file.string() + ".keys"))
-        remove(target_wallet_file.string() + ".keys");
-    ASSERT_FALSE(is_file_exist(target_wallet_file.string()));
-    ASSERT_FALSE(is_file_exist(target_wallet_file.string() + ".keys"));
+template <typename, typename = void>
+struct has_generate_from_bip39_wallet2_string_only : std::false_type {};
 
-    epee::wipeable_string password("beepbeep");
+template <typename T>
+struct has_generate_from_bip39_wallet2_string_only<
+    T,
+    std::void_t<decltype(std::declval<T &>().generate_from_bip39(
+        std::declval<const std::string &>(),
+        std::declval<cryptonote::network_type>()))>> : std::true_type {};
 
-    const auto files_are_expected = [&]()
-    {
-        EXPECT_FALSE(is_file_exist(interm_wallet_file.string()));
-        EXPECT_FALSE(is_file_exist(interm_wallet_file.string() + ".keys"));
-        EXPECT_TRUE(is_file_exist(target_wallet_file.string()));
-        EXPECT_TRUE(is_file_exist(target_wallet_file.string() + ".keys"));
-    };
+static_assert(
+    !has_generate_from_bip39_wallet2_string<tools::wallet2>::value &&
+    !has_generate_from_bip39_wallet2_wipeable<tools::wallet2>::value &&
+    !has_generate_from_bip39_wallet2_string_only<tools::wallet2>::value,
+    "wallet2::generate_from_bip39 must not exist; BIP-39 wallet creation "
+    "lives in the Rust wallet path post-migration. See "
+    "docs/FOLLOWUPS.md §\"V3.1+ Legacy C++ → Rust rewrite scope\" entry "
+    "on `wallet2 has no generate_from_bip39 entry point` before adding it. "
+    "(The detectors above cover the three most plausible signatures; an "
+    "exotic signature could slip past them, in which case the FOLLOWUPS "
+    "entry — not this assertion — is the load-bearing artifact.)");
 
-    {
-        tools::wallet2 w;
-        w.load(interm_wallet_file.string(), password);
-        const std::string primary_address = w.get_address_as_str();
-        EXPECT_EQ(WALLET_00fd416a_PRIMARY_ADDRESS, primary_address);
-        w.store_to(target_wallet_file.string(), password);
-        files_are_expected();
-    }
+// Compile-time positive controls for the SFINAE detectors. Without
+// these, a refactor that breaks any detector (e.g. typo in the SFINAE
+// signature, missing #include) would silently make the static_assert
+// above pass for the wrong reason. Each synthetic type has the
+// corresponding member; each detector must report `true`. Any failure
+// here is a detector bug, not a wallet2 bug.
+namespace tripwire_self_test {
+struct synthetic_has_member_string {
+    void generate_from_bip39(
+        const std::string &, const std::string &, cryptonote::network_type) {}
+};
+struct synthetic_has_member_wipeable {
+    void generate_from_bip39(
+        const epee::wipeable_string &, const epee::wipeable_string &,
+        cryptonote::network_type) {}
+};
+struct synthetic_has_member_string_only {
+    void generate_from_bip39(const std::string &, cryptonote::network_type) {}
+};
+struct synthetic_lacks_member {};
 
-    files_are_expected();
+static_assert(
+    has_generate_from_bip39_wallet2_string<synthetic_has_member_string>::value,
+    "SFINAE detector (string overload) is broken: must report `true` for "
+    "a type that has the member.");
+static_assert(
+    has_generate_from_bip39_wallet2_wipeable<synthetic_has_member_wipeable>::value,
+    "SFINAE detector (wipeable_string overload) is broken: must report "
+    "`true` for a type that has the member.");
+static_assert(
+    has_generate_from_bip39_wallet2_string_only<synthetic_has_member_string_only>::value,
+    "SFINAE detector (single-string overload) is broken: must report "
+    "`true` for a type that has the member.");
+static_assert(
+    !has_generate_from_bip39_wallet2_string<synthetic_lacks_member>::value &&
+    !has_generate_from_bip39_wallet2_wipeable<synthetic_lacks_member>::value &&
+    !has_generate_from_bip39_wallet2_string_only<synthetic_lacks_member>::value,
+    "SFINAE detectors are broken: must report `false` for a type that "
+    "lacks all three members.");
+} // namespace tripwire_self_test
 
-    {
-        tools::wallet2 w;
-        w.load(target_wallet_file.string(), password);
-        const std::string primary_address = w.get_address_as_str();
-        EXPECT_EQ(WALLET_00fd416a_PRIMARY_ADDRESS, primary_address);
-        w.store_to("", "");
-        files_are_expected();
-    }
-
-    files_are_expected();
-}
+// Three Monero-era keys-file round-trip tests (`store_to_file2file`,
+// `change_password_same_file`, `change_password_different_file`) and their
+// `wallet_00fd416a` / `wallet_9svHk1` fixtures were removed in this commit.
+// Rationale (per `.cursor/rules/15-deletion-and-debt.mdc`'s "default: delete"):
+// the fixtures are pre-master-seed Monero v0/v1 keys files inherited from
+// upstream; v3-from-genesis Shekyl reads SHKW1 envelopes only, so these
+// fixtures cannot be loaded under any version of the current keystore. The
+// tests had been gated behind `GTEST_SKIP()` for that reason and were
+// providing zero coverage.
+//
+// **Residual coverage gap (acknowledged, not closed by this branch):** the
+// deleted tests were the only coverage for two `wallet2::store_to`
+// branches, even gated/skipped:
+//
+//   - `store_to_file2file` exercised `store_to(target, password, false)`
+//     with `target != m_wallet_file` on a wallet that had been *loaded*
+//     from disk (not just generated in-memory). This is the
+//     `!same_file && force_rewrite_keys == false` save-as-from-loaded
+//     branch, which the surviving `store_to_mem2file` test does not
+//     reach — that test uses a wallet that was just `generate()`'d.
+//   - `change_password_same_file` exercised `store_to(m_wallet_file,
+//     new_password, true)` on a loaded wallet — the
+//     `same_file && force_rewrite_keys == true` rewrite-keys-in-place
+//     branch. The surviving `change_password_mem2file` is also from a
+//     freshly-generated wallet, not a loaded one.
+//
+// Both branches still execute on the production load→re-store path; they
+// are simply uncovered by direct unit test. Filed as a V3.0 entry under
+// FOLLOWUPS.md ("wallet_storage: cover loaded-wallet save-as branches"),
+// targeted to land before the wallet2 → Rust cutover deletes wallet2.cpp
+// outright (V3.2). At that point the residual gap retires with the
+// surrounding code.
 
 TEST(wallet_storage, store_to_mem2file)
 {
@@ -108,8 +230,30 @@ TEST(wallet_storage, store_to_mem2file)
 
     epee::wipeable_string password("beepbeep2");
 
+    // FAKECHAIN nettype must match the network the legacy `account_base::generate()`
+    // wrapper hardcodes for raw-seed derivation. A default-constructed wallet2
+    // inherits MAINNET, which doesn't permit RAW32, so the rederive on `load`
+    // would fail with "(network, seed_format) pair disallowed". The hardcoded
+    // FAKECHAIN inside `account_base::generate()` is itself a footgun on the
+    // raw-seed path used by `wallet2::generate("", password)` test code and by
+    // `wallet_rpc_server::stop_background_sync`; it is fixed in sibling branch
+    // `fix/legacy-account-generate-network-guard` (the "Bug 4-adjacent"
+    // finding in `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`).
+    // Bug 4 itself — the absent `wallet2::generate_from_bip39` wrapper — is
+    // resolved by an architectural decision NOT to add the wrapper pre-
+    // migration, defended by a static_assert tripwire at the top of this
+    // file; see the corresponding FOLLOWUPS.md entry.
     {
-        tools::wallet2 w;
+        tools::wallet2 w(cryptonote::FAKECHAIN, 1, false);
+        // Pre-set the refresh height so `wallet2::generate(name, password)`
+        // does not run `estimate_blockchain_height()`, which performs a
+        // daemon HTTP call. In CI the asio layer occasionally lets
+        // `boost::system::system_error` escape on a connection failure
+        // rather than returning the error code path that wallet2 expects,
+        // making the test flaky. The wallet under test never refreshes
+        // (no daemon is configured); only the in-memory store/load
+        // round-trip matters here.
+        w.set_refresh_from_block_height(1);
         w.generate("", password);
         w.store_to(target_wallet_file.string(), password);
 
@@ -121,7 +265,7 @@ TEST(wallet_storage, store_to_mem2file)
     EXPECT_TRUE(is_file_exist(target_wallet_file.string() + ".keys"));
 
     {
-        tools::wallet2 w;
+        tools::wallet2 w(cryptonote::FAKECHAIN, 1, false);
         w.load(target_wallet_file.string(), password);
 
         EXPECT_TRUE(is_file_exist(target_wallet_file.string()));
@@ -132,99 +276,28 @@ TEST(wallet_storage, store_to_mem2file)
     EXPECT_TRUE(is_file_exist(target_wallet_file.string() + ".keys"));
 }
 
-TEST(wallet_storage, change_password_same_file)
-{
-    GTEST_SKIP() << "Requires missing wallet fixture wallet_00fd416a in tests/data.";
-    const path source_wallet_file = unit_test::data_dir / "wallet_00fd416a";
-    const path interm_wallet_file = unit_test::data_dir / "wallet_00fd416a_copy_change_password_same";
-
-    ASSERT_TRUE(is_file_exist(source_wallet_file.string()));
-    ASSERT_TRUE(is_file_exist(source_wallet_file.string() + ".keys"));
-
-    tools::copy_file(source_wallet_file.string(), interm_wallet_file.string());
-    tools::copy_file(source_wallet_file.string() + ".keys", interm_wallet_file.string() + ".keys");
-
-    ASSERT_TRUE(is_file_exist(interm_wallet_file.string()));
-    ASSERT_TRUE(is_file_exist(interm_wallet_file.string() + ".keys"));
-
-    epee::wipeable_string old_password("beepbeep");
-    epee::wipeable_string new_password("meepmeep");
-
-    {
-        tools::wallet2 w;
-        w.load(interm_wallet_file.string(), old_password);
-        const std::string primary_address = w.get_address_as_str();
-        EXPECT_EQ(WALLET_00fd416a_PRIMARY_ADDRESS, primary_address);
-        w.change_password(w.get_wallet_file(), old_password, new_password);
-    }
-
-    {
-        tools::wallet2 w;
-        w.load(interm_wallet_file.string(), new_password);
-        const std::string primary_address = w.get_address_as_str();
-        EXPECT_EQ(WALLET_00fd416a_PRIMARY_ADDRESS, primary_address);
-    }
-
-    {
-        tools::wallet2 w;
-        EXPECT_THROW(w.load(interm_wallet_file.string(), old_password), tools::error::invalid_password);
-    }
-}
-
-TEST(wallet_storage, change_password_different_file)
-{
-    GTEST_SKIP() << "Requires missing wallet fixture wallet_00fd416a in tests/data.";
-    const path source_wallet_file = unit_test::data_dir / "wallet_00fd416a";
-    const path interm_wallet_file = unit_test::data_dir / "wallet_00fd416a_copy_change_password_diff";
-    const path target_wallet_file = unit_test::data_dir / "wallet_00fd416a_new_change_password_diff";
-
-    ASSERT_TRUE(is_file_exist(source_wallet_file.string()));
-    ASSERT_TRUE(is_file_exist(source_wallet_file.string() + ".keys"));
-
-    tools::copy_file(source_wallet_file.string(), interm_wallet_file.string());
-    tools::copy_file(source_wallet_file.string() + ".keys", interm_wallet_file.string() + ".keys");
-
-    ASSERT_TRUE(is_file_exist(interm_wallet_file.string()));
-    ASSERT_TRUE(is_file_exist(interm_wallet_file.string() + ".keys"));
-
-    if (is_file_exist(target_wallet_file.string()))
-        remove(target_wallet_file);
-    if (is_file_exist(target_wallet_file.string() + ".keys"))
-        remove(target_wallet_file.string() + ".keys");
-    ASSERT_FALSE(is_file_exist(target_wallet_file.string()));
-    ASSERT_FALSE(is_file_exist(target_wallet_file.string() + ".keys"));
-
-    epee::wipeable_string old_password("beepbeep");
-    epee::wipeable_string new_password("meepmeep");
-
-    {
-        tools::wallet2 w;
-        w.load(interm_wallet_file.string(), old_password);
-        const std::string primary_address = w.get_address_as_str();
-        EXPECT_EQ(WALLET_00fd416a_PRIMARY_ADDRESS, primary_address);
-        w.change_password(target_wallet_file.string(), old_password, new_password);
-    }
-
-    EXPECT_FALSE(is_file_exist(interm_wallet_file.string()));
-    EXPECT_FALSE(is_file_exist(interm_wallet_file.string() + ".keys"));
-    EXPECT_TRUE(is_file_exist(target_wallet_file.string()));
-    EXPECT_TRUE(is_file_exist(target_wallet_file.string() + ".keys"));
-
-    {
-        tools::wallet2 w;
-        w.load(target_wallet_file.string(), new_password);
-        const std::string primary_address = w.get_address_as_str();
-        EXPECT_EQ(WALLET_00fd416a_PRIMARY_ADDRESS, primary_address);
-    }
-}
-
 TEST(wallet_storage, change_password_in_memory)
 {
     const epee::wipeable_string password1("monero");
     const epee::wipeable_string password2("means money");
     const epee::wipeable_string password_wrong("is traceable");
 
-    tools::wallet2 w;
+    // FAKECHAIN nettype: same reasoning as `store_to_mem2file` /
+    // `change_password_mem2file` above. `wallet2::generate("", password)`
+    // routes through `account_base::generate(..., m_nettype)`, which
+    // rejects (MAINNET, RAW32) at the FFI's `permitted_seed_format`
+    // check. See `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`
+    // Bug 4-adjacent.
+    //
+    // `unattended=false` so `change_password` performs the password-
+    // verification round-trip rather than skipping it, which is the
+    // behaviour this test exercises.
+    tools::wallet2 w(cryptonote::FAKECHAIN, 1, false);
+    // Skip `estimate_blockchain_height()` inside `wallet2::generate(...)` to
+    // avoid the asio HTTP-connect flake described in `store_to_mem2file`
+    // above. The test only exercises in-memory password rotation; no
+    // daemon refresh is involved.
+    w.set_refresh_from_block_height(1);
     w.generate("", password1);
     const std::string primary_address_1 = w.get_address_as_str();
     w.change_password("", password1, password2);
@@ -250,8 +323,21 @@ TEST(wallet_storage, change_password_mem2file)
         "https://csrc.nist.gov/csrc/media/projects/crypto-standards-development-process/documents/dualec_in_x982_and_sp800-90.pdf");
     
     std::string primary_address_1, primary_address_2;
+    // FAKECHAIN nettype must match the network the legacy
+    // `account_base::generate()` wrapper hardcodes for raw-seed derivation
+    // (see the comment on `wallet_storage.store_to_mem2file` above).
+    //
+    // `unattended = false` is load-bearing here: with `unattended = true`,
+    // `wallet2::change_password()` skips the `decrypt_keys(original_password)`
+    // call (`src/wallet/wallet2.cpp` ~line 5046) and the test would no longer
+    // verify that the old password is actually checked before the rotation.
     {
-        tools::wallet2 w;
+        tools::wallet2 w(cryptonote::FAKECHAIN, 1, false);
+        // Skip `estimate_blockchain_height()` inside `wallet2::generate(...)`
+        // to avoid the asio HTTP-connect flake described in
+        // `store_to_mem2file` above. The test only exercises password
+        // rotation + on-disk persistence; no daemon refresh is involved.
+        w.set_refresh_from_block_height(1);
         w.generate("", password1);
         primary_address_1 = w.get_address_as_str();
         w.change_password(target_wallet_file.string(), password1, password2);
@@ -261,7 +347,7 @@ TEST(wallet_storage, change_password_mem2file)
     EXPECT_TRUE(is_file_exist(target_wallet_file.string() + ".keys"));
 
     {
-        tools::wallet2 w;
+        tools::wallet2 w(cryptonote::FAKECHAIN, 1, false);
         w.load(target_wallet_file.string(), password2);
         primary_address_2 = w.get_address_as_str();
     }

@@ -1,0 +1,246 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! `LedgerEngine` trait surface.
+//!
+//! Per [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`] §2.2, `LedgerEngine` is
+//! the wallet-side trait that owns the confirmed-chain ledger:
+//! `LedgerBlock` (the chain projection scanned out of daemon blocks),
+//! the matured-output index, and the balance projection. It is the
+//! reservation-agnostic half of the wallet's spendable-state surface;
+//! the spendable-balance projection that subtracts in-flight
+//! `PendingTx` reservations lives on `PendingTxEngine` (§2.4) per
+//! the Round 3 ownership decision. Per-transaction history is read
+//! directly from the underlying `LedgerBlock` rather than through
+//! the trait — see the Phase 0c section below.
+//!
+//! # Read-only trait surface (FOLLOWUPS P1 async post-pass fix)
+//!
+//! `LedgerEngine` exposes only confirmed-chain *reads*
+//! ([`synced_height`](LedgerEngine::synced_height),
+//! [`snapshot`](LedgerEngine::snapshot),
+//! [`balance`](LedgerEngine::balance)). All take `&self`, not
+//! `&mut self`, because Stage 1's default implementing type
+//! `LocalLedger` carries `RwLock<LedgerState>` for interior
+//! mutability, so callers never hold an exclusive borrow across an
+//! `await` (which would conflict with the `Arc<…>` clone-and-share
+//! pattern `tokio::spawn` uses for the producer task in
+//! `run_refresh_task`).
+//!
+//! The ledger *mutation* — the snapshot-merge plus the engine
+//! handle-field post-pass that populates `source_ciphertext` /
+//! `output_handle` — is **not** a trait method. It lives on
+//! [`Engine::apply_scan_result`](super::super::Engine::apply_scan_result),
+//! which holds the engine's `view_secret` and runs the merge and
+//! post-pass under a single `LocalLedger` write guard. A trait-level
+//! `apply_scan_result` once existed but structurally could not run
+//! the post-pass (the implementor has no `view_secret`), so the
+//! async refresh path that dispatched the merge through it skipped
+//! handle population entirely (FOLLOWUPS P1). Routing the async
+//! merge through [`Engine::apply_scan_result`] closed P1 and
+//! preserves the atomicity discipline
+//! (`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md` §3 rejected
+//! alternative (ζ): the merge and post-pass must share one write
+//! guard). A future Stage 4 actor that owns key material can
+//! re-introduce a trait-level mutator that runs the post-pass
+//! internally.
+//!
+//! # Stage-4 swap-in (§7)
+//!
+//! At Stage 4 the `LedgerEngine` bound is satisfied by an
+//! `ActorRef<LedgerActor>` rather than by the in-process
+//! [`LocalLedger`] wrapping `RwLock<LedgerState>`. Trait method
+//! signatures do not change; only the implementor type does.
+//! Callers that bind against `L: LedgerEngine` get the swap-in
+//! for free.
+//!
+//! # Reservation tracker placement
+//!
+//! Per the §2.2 / §2.4 amendment landed in PR #22, the
+//! `PendingReservations` tracker is owned by `PendingTxEngine`,
+//! not [`LedgerEngine`]. [`LedgerEngine::balance`] returns the
+//! reservation-agnostic [`BalanceSummary`] computed from
+//! `LedgerBlock` alone; the spendable-balance projection that
+//! subtracts in-flight reservations lives on `PendingTxEngine`
+//! (§2.4 surface, lands in PR 6). The split keeps `LedgerEngine`
+//! identifiable as the §1.5 actor that owns confirmed-chain state
+//! and lets `PendingTxEngine` own all reservation lifecycle in one
+//! place.
+//!
+//! # `BalanceSummary` over `Balance` (Phase 0b)
+//!
+//! [`LedgerEngine::balance`] returns [`BalanceSummary`] (the
+//! `shekyl_scanner` aggregate the codebase uses today: `confirmed`,
+//! `pending`, `total`), not a `Balance` newtype. Per the §2.2
+//! Phase 0b amendment landed in PR #23, the `BalanceSummary`-vs-
+//! `Balance` rename is a §7 out-of-scope follow-up; PR 2 takes the
+//! existing aggregate as-is to keep the trait extraction small and
+//! reviewable.
+//!
+//! # No `transfers()` trait method (Phase 0c)
+//!
+//! Per the §2.2 Phase 0c amendment landed in PR #25, the trait
+//! surface does **not** include a `transfers()` method.
+//! `TransferDetails` is deliberately non-`Clone` per the privacy/
+//! security discipline pinned at
+//! `rust/shekyl-engine-state/src/transfer.rs` (cloning would
+//! duplicate `Zeroizing<[u8; N]>` secrets into a heap allocation
+//! the compiler cannot track). A `fn transfers(&self) ->
+//! Vec<TransferDetails>` ownership-transfer signature is therefore
+//! unsatisfiable without breaking that discipline; per
+//! `.cursor/rules/00-mission.mdc` priority 1 ("security and
+//! quantum resilience are preconditions"), the trait method is
+//! removed rather than the discipline relaxed. Wallet-internal
+//! callers consume the `LedgerBlock::transfers(&self) ->
+//! &[TransferDetails]` slice accessor directly (the borrow is
+//! `Clone`-discipline-respecting by construction); a future
+//! Stage 4 actor consumer that needs trait-level enumeration can
+//! re-introduce the surface via a non-secret view type designed
+//! against its concrete threat model.
+//!
+//! [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`]: ../../../../../docs/V3_ENGINE_TRAIT_BOUNDARIES.md
+//! [`LocalLedger`]: super::super::local_ledger::LocalLedger
+//! [`BalanceSummary`]: shekyl_scanner::BalanceSummary
+//!
+//! `PendingTxEngine` is referenced as plain code (not as an
+//! intra-doc link) because the type does not yet exist in this
+//! workspace; it lands in a future per-trait PR per §2.4 of the
+//! contract document. References below render as backticked code
+//! rather than rustdoc links until that PR is merged.
+
+use shekyl_scanner::BalanceSummary;
+
+use crate::engine::error::LedgerError;
+use crate::engine::refresh::LedgerSnapshot;
+
+/// Engine-side view of the confirmed-chain ledger surface (§2.2).
+///
+/// Implementors carry the wallet's [`LedgerBlock`] (and the matured-
+/// output index it projects) under interior mutability. Callers
+/// ([`Engine<S>`](super::super::Engine) orchestration,
+/// `RefreshEngine::merge_into_ledger`, balance accessors) bind
+/// against the trait, not the concrete type, so the Stage 4 swap-in
+/// does not require call-site changes.
+///
+/// # Supertrait bounds
+///
+/// - `Send + Sync + 'static` — `LedgerEngine` instances are shared
+///   across the orchestration future and the producer task in
+///   `run_refresh_task`'s `tokio::spawn`'d future, typically as
+///   `Arc<L>`. `LocalLedger` (Stage 1) and `ActorRef<LedgerActor>`
+///   (Stage 4) both satisfy these bounds; `Arc<RwLock<…>>` is
+///   `Send + Sync` whenever its contents are.
+/// - **Not** `Clone` — unlike [`DaemonEngine`], `LedgerEngine`
+///   instances wrap `RwLock<…>` (or, at Stage 4, an `ActorRef`)
+///   and are shared by `Arc`, not by clone. Implementors that
+///   need a clone for refresh-task scheduling clone the `Arc`
+///   wrapper, not the trait object.
+///
+/// # `type Error: Into<LedgerError>`
+///
+/// The trait declares an [`Self::Error`] associated type for
+/// forward compatibility. None of the Stage 1 methods surface
+/// `Self::Error` today: the trait is read-only (the three read
+/// methods are infallible) and the ledger merge lives off-trait on
+/// [`Engine::apply_scan_result`](super::super::Engine::apply_scan_result).
+/// The bound is the named landing pad for future additive variants
+/// per §8.2.
+///
+/// [`DaemonEngine`]: super::daemon::DaemonEngine
+/// [`LedgerBlock`]: shekyl_engine_state::LedgerBlock
+pub(crate) trait LedgerEngine: Send + Sync + 'static {
+    /// Implementor-specific error. Convertible into
+    /// [`LedgerError`] so [`Engine<S>`](super::super::Engine)
+    /// orchestration code can propagate uniform errors regardless
+    /// of implementor.
+    type Error: Into<LedgerError>;
+
+    /// Highest block height the wallet has fully ingested.
+    /// Equivalent to [`LedgerBlock::height()`].
+    ///
+    /// # Cancellation
+    ///
+    /// Class **a** per §4: a synchronous read with no side effect.
+    /// Not awaitable; cancellation is not a concept on this method.
+    ///
+    /// # Idempotency
+    ///
+    /// **Yes** per §4: a snapshot read of the wallet's recorded
+    /// `synced_height`. Repeated calls observe whatever value the
+    /// last ledger merge left in place.
+    ///
+    /// # Panics
+    ///
+    /// The Stage 1 implementor `LocalLedger` panics on
+    /// [`RwLock`] poisoning (the inner `expect("LocalLedger lock
+    /// poisoned")` in `LocalLedger::read`). The synchronous
+    /// infallible return type of this method (`u64`, no
+    /// [`Result`]) is deliberate per §2.2's Round-3 disposition
+    /// — poisoning indicates a deeper invariant violation upstream
+    /// (a panic while a write guard was held) rather than a
+    /// recoverable error worth threading through every call site.
+    ///
+    /// Stage 4's actor implementor will route handler panics
+    /// through the supervisor's restart mechanism per §5.1's
+    /// `RuntimeFailure` discipline; the trait surface is unchanged
+    /// at that point, so callers continue to treat this method as
+    /// "panics on actor-level failure, returns a `u64` otherwise."
+    ///
+    /// [`LedgerBlock::height()`]: shekyl_engine_state::LedgerBlock::height
+    /// [`RwLock`]: std::sync::RwLock
+    #[allow(dead_code)] // Stage 1 PR 2: production call sites migrate in commit 5.
+    fn synced_height(&self) -> u64;
+
+    /// Snapshot the reorg-detection window the producer needs for
+    /// parent-hash compares and the fork-point walk.
+    ///
+    /// # Cancellation
+    ///
+    /// Class **a** per §4: a synchronous read with no side effect.
+    /// Not awaitable.
+    ///
+    /// # Idempotency
+    ///
+    /// **Yes** per §4: builds an owned [`LedgerSnapshot`] from the
+    /// current `LedgerBlock`. Repeated calls produce equivalent
+    /// snapshots until the next ledger merge.
+    ///
+    /// # Panics
+    ///
+    /// Same as [`Self::synced_height`] — the Stage 1 `LocalLedger`
+    /// implementor panics on `RwLock` poisoning; sync infallible
+    /// return is by design.
+    #[allow(dead_code)] // Stage 1 PR 2: production call sites migrate in commit 5.
+    fn snapshot(&self) -> LedgerSnapshot;
+
+    /// Reservation-agnostic balance computed from `LedgerBlock`
+    /// alone.
+    ///
+    /// Per the §2.2 / §2.4 split, this method returns the
+    /// committed-chain projection without subtracting in-flight
+    /// `PendingTx` reservations. The reservation-aware
+    /// "spendable balance" projection lives on `PendingTxEngine`
+    /// (§2.4, lands in PR 6; type does not yet exist in this
+    /// workspace, so the reference renders as plain code).
+    ///
+    /// # Cancellation
+    ///
+    /// Class **a** per §4: a synchronous read; the projection
+    /// runs in-line under the read guard.
+    ///
+    /// # Idempotency
+    ///
+    /// **Yes** per §4: a deterministic projection of the current
+    /// `LedgerBlock`. Repeated calls return equivalent
+    /// [`BalanceSummary`] values until the next ledger merge.
+    ///
+    /// # Panics
+    ///
+    /// Same as [`Self::synced_height`] — the Stage 1 `LocalLedger`
+    /// implementor panics on `RwLock` poisoning; sync infallible
+    /// return is by design.
+    #[allow(dead_code)] // Stage 1 PR 2: production call sites migrate in commit 5.
+    fn balance(&self) -> BalanceSummary;
+}

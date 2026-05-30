@@ -17,11 +17,80 @@
     non_snake_case
 )]
 
+// ---------------------------------------------------------------------------
+// 64-bit-only gate — Chore #3, v3.1.0-alpha.5 (Tripwire B —
+// structural-not-observable).
+//
+// This tripwire is DUPLICATED BY DESIGN. In the current workspace shape,
+// `shekyl-ffi` always depends (transitively) on `shekyl-crypto-pq` whose
+// Tripwire A would already fire; this gate is NOT expected to be the one
+// that "catches" a 32-bit build in practice. Its job is different:
+//
+//   1. Preserve the refusal under a future refactor that might split
+//      the FFI boundary from the PQC crate.
+//   2. Make the refusal legible at the FFI seam, where downstream C++
+//      consumers discover what Rust will and will not link against.
+//
+// Do NOT delete this gate on the grounds that it "never fires". Its
+// value is structural, not observable. See Tripwire A in
+// rust/shekyl-crypto-pq/src/lib.rs for the primary CT argument; Tripwire C
+// in rust/shekyl-tx-builder/src/lib.rs for the fips204 transaction-signing
+// gate; and Tripwire D at the top of CMakeLists.txt for the C++-side
+// configure-time refusal.
+// ---------------------------------------------------------------------------
+#[cfg(not(target_pointer_width = "64"))]
+compile_error!(
+    "shekyl-ffi refuses to build on non-64-bit targets. This is \
+     Tripwire B (structural-not-observable): duplicated by design to \
+     preserve the 64-bit refusal at the FFI seam under future refactors \
+     that might split this crate from shekyl-crypto-pq. See Tripwire A \
+     in shekyl-crypto-pq for the primary ML-KEM/ML-DSA constant-time \
+     argument; see docs/CHANGELOG.md 'Retired 32-bit build targets' \
+     before attempting to revert this gate."
+);
+
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
 };
 use std::os::raw::c_char;
 use std::sync::Mutex;
+
+// Stabilized v1 account-derivation FFI surface. See `account_ffi.rs` for
+// per-function docs and the fail-closed / out-pointer / pinned-size
+// disciplines. The legacy `shekyl_kem_keypair_generate` and
+// `shekyl_seed_derive_{spend,view,ml_kem}` FFIs in this file remain for
+// the duration of the wallet-account-rewire slice; they are replaced by
+// `shekyl_account_*` callers and removed once C++ no longer references
+// them.
+pub mod account_ffi;
+
+// Engine-file envelope (WALLET_FILE_FORMAT_V1) FFI surface. Six entry points
+// matching `shekyl_crypto_pq::wallet_envelope`:
+//   - shekyl_wallet_keys_inspect    (AAD-only header view)
+//   - shekyl_wallet_keys_seal       (create .wallet.keys)
+//   - shekyl_wallet_keys_open       (decrypt .wallet.keys)
+//   - shekyl_wallet_keys_rewrap_password (rotate wrapping password)
+//   - shekyl_engine_state_seal      (seal .wallet)
+//   - shekyl_engine_state_open      (open .wallet)
+// Each function follows the two-call sizing + zeroize-on-failure + narrow
+// error-code discipline documented in the module header. Consumed by
+// wallet2.cpp in the commit 2 slice.
+pub mod wallet_envelope_ffi;
+
+// Opaque high-level `ShekylWallet` handle wrapping `WalletFile` and
+// the loaded `WalletLedger`. Where `wallet_envelope_ffi` exposes the raw
+// envelope primitives so C++ can compose its own orchestration, this
+// module exposes a single lifecycle surface (create / open / save /
+// rotate / free) plus a non-secret metadata getter and a postcard ledger
+// export. Consumed by wallet2.cpp in the 2k/2l rewire slices.
+pub mod engine_file_ffi;
+
+// LWMA-1 difficulty-adjustment FFI export. Wraps `shekyl_difficulty::
+// lwma1_next` in a C-ABI surface using the `ShekylU128` two-u64
+// decomposition per `DAA_LWMA1.md` §6.1. Consumed by the Phase 2
+// cross-check harness (`tests/difficulty/lwma1_cross_check.cpp`) and
+// (Phase 3 onward) by the daemon's difficulty path.
+pub mod difficulty_ffi;
 
 static CONSENSUS_REGISTRY: Mutex<Option<shekyl_consensus::ConsensusRegistry>> = Mutex::new(None);
 
@@ -714,14 +783,24 @@ pub extern "C" fn shekyl_stake_max_claim_range() -> u64 {
 /// Compute stake_ratio = total_staked / circulating_supply (fixed-point SCALE).
 #[no_mangle]
 pub extern "C" fn shekyl_calc_stake_ratio(total_staked: u64, circulating_supply: u64) -> u64 {
-    if circulating_supply == 0 {
-        return 0;
-    }
-    #[allow(clippy::cast_possible_truncation)]
-    {
-        (u128::from(total_staked) * u128::from(shekyl_economics::params::SCALE)
-            / u128::from(circulating_supply)) as u64
-    }
+    shekyl_economics::calc_stake_ratio(total_staked, circulating_supply)
+}
+
+/// Base block subsidy before weight penalty and release multiplier (0h KAT export).
+///
+/// Saturating at `money_supply`: past full emission the base curve yields the
+/// tail floor, so clamping the input keeps `base_block_reward` in range and this
+/// `extern "C"` export cannot panic (or unwind) across the FFI boundary. The
+/// consensus connect path already caps `already_generated_coins` at
+/// `MONEY_SUPPLY`, so the clamp is only reached by out-of-range callers.
+#[no_mangle]
+pub extern "C" fn shekyl_base_block_reward(already_generated_coins: u64) -> u64 {
+    let params = shekyl_economics::params::EconomicParams::default();
+    let clamped = already_generated_coins.min(params.money_supply);
+    // After clamping `clamped <= money_supply`, so the only residual error is a
+    // tail-subsidy overflow that canonical params never trigger; fall back to 0
+    // deterministically rather than panicking.
+    shekyl_economics::base_block_reward(clamped, &params).unwrap_or(0)
 }
 
 // ─── Emission Share (Component 4) ───────────────────────────────────────────
@@ -1440,14 +1519,14 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
         tree_depth,
     };
 
-    let mut key_images = Vec::with_capacity(ki_count);
+    let mut key_images: Vec<shekyl_fcmp::proof::KeyImage> = Vec::with_capacity(ki_count);
     let mut pseudo_outs = Vec::with_capacity(po_count);
     let mut pqc_hashes = Vec::with_capacity(pqc_hash_count);
 
     for i in 0..ki_count {
         let mut ki = [0u8; 32];
         ki.copy_from_slice(&ki_bytes[i * 32..(i + 1) * 32]);
-        key_images.push(ki);
+        key_images.push(shekyl_fcmp::proof::KeyImage::from_canonical_bytes(ki));
 
         let mut po = [0u8; 32];
         po.copy_from_slice(&po_bytes[i * 32..(i + 1) * 32]);
@@ -3811,7 +3890,7 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
         let Ok(ki_result) = compute_output_key_image_from_ho(&recovered.ho, b_key, hp) else {
             return false;
         };
-        std::ptr::copy_nonoverlapping(ki_result.key_image.as_ptr(), key_image_out, 32);
+        std::ptr::copy_nonoverlapping(ki_result.key_image.as_bytes().as_ptr(), key_image_out, 32);
     } else {
         std::ptr::write_bytes(key_image_out, 0, 32);
     }
@@ -3859,7 +3938,7 @@ pub unsafe extern "C" fn shekyl_compute_output_key_image(
 
     match shekyl_crypto_pq::output::compute_output_key_image(&ss, output_index, &b, &hp) {
         Ok(result) => {
-            std::ptr::copy_nonoverlapping(result.key_image.as_ptr(), out_ki, 32);
+            std::ptr::copy_nonoverlapping(result.key_image.as_bytes().as_ptr(), out_ki, 32);
             true
         }
         Err(_) => false,
@@ -3896,7 +3975,7 @@ pub unsafe extern "C" fn shekyl_compute_output_key_image_from_ho(
 
     match shekyl_crypto_pq::output::compute_output_key_image_from_ho(&ho_arr, &b, &hp) {
         Ok(result) => {
-            std::ptr::copy_nonoverlapping(result.key_image.as_ptr(), out_ki, 32);
+            std::ptr::copy_nonoverlapping(result.key_image.as_bytes().as_ptr(), out_ki, 32);
             true
         }
         Err(_) => false,
@@ -3940,7 +4019,7 @@ pub unsafe extern "C" fn shekyl_derive_proof_secrets(
     true
 }
 
-// ─── Wallet cache AEAD encryption ────────────────────────────────────────────
+// ─── Engine cache AEAD encryption ────────────────────────────────────────────
 
 /// Encrypt wallet cache plaintext with XChaCha20-Poly1305 AEAD.
 ///
@@ -4032,7 +4111,7 @@ pub unsafe extern "C" fn shekyl_decrypt_wallet_cache(
     }
 }
 
-// ─── Wallet proof FFI exports ────────────────────────────────────────────────
+// ─── Engine proof FFI exports ────────────────────────────────────────────────
 //
 // These FFI wrappers delegate to shekyl_proofs::{tx_proof, reserve_proof}.
 // The C++ caller gathers wallet/blockchain data into flat byte arrays; Rust
@@ -4498,7 +4577,7 @@ pub unsafe extern "C" fn shekyl_generate_reserve_proof(
 
             shekyl_proofs::reserve_proof::ReserveOutputEntry {
                 proof_secrets: shekyl_crypto_pq::output::ProofSecrets { ho, y, z, k_amount },
-                key_image: ki,
+                key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
                 spend_secret: ss,
                 output_key: ok,
             }

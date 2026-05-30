@@ -1,0 +1,14 @@
+{
+  "_comment": "Single source of truth for consensus-affecting constants whose drift between C++ and Rust would cause silent wrong-output (rather than fail-closed-on-load). Generated into both languages by cmake/generate_consensus_constants.py (C++) and rust/shekyl-engine-core/build.rs / rust/shekyl-difficulty/build.rs (Rust). Hand-maintained values on either side have been deleted and replaced with `static_assert` sentinels against the generated values. Bug class motivated by Bug 3 of the 2026-05-05 FFI constant-drift audit (see docs/audit_trail/2026-05-ffi-constant-drift-audit.md). Adding entries: keep the audit doc's 'Constants confirmed aligned' table in sync with this file.",
+
+  "fcmp_reference_block_min_age": 5,
+  "fcmp_reference_block_max_age": 100,
+  "rct_type_fcmp_plus_plus_pqc": 7,
+
+  "_comment_daa": "LWMA-1 difficulty adjustment parameters per docs/design/DAA_LWMA1.md §4. Consumed by rust/shekyl-difficulty (Phase 1, ratified 2026-05-18). Window-shape constants only: N, T, FTL, MTP window length, and the genesis difficulty constant. The bias factor 99/200, the solvetime clamp 6, and the min-L floor 1/20 deliberately do NOT live here per the Round 3 disposition (DAA_LWMA1.md §4) — they appear as bare integer literals inside src/lwma1.rs because changing them is a deviation from the canonical zawy12 reference, not a tunable parameter.",
+  "daa_window_n": 90,
+  "daa_target_seconds": 120,
+  "daa_ftl_seconds": 540,
+  "daa_mtp_window": 11,
+  "daa_genesis_difficulty": 100
+}

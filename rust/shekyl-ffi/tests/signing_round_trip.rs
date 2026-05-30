@@ -12,8 +12,8 @@
 use shekyl_ffi::{
     shekyl_buffer_free, shekyl_construct_curve_tree_leaf, shekyl_construct_output,
     shekyl_curve_tree_hash_grow_selene, shekyl_fcmp_verify, shekyl_kem_keypair_generate,
-    shekyl_output_data_free, shekyl_scan_and_recover, shekyl_sign_fcmp_transaction,
-    ShekylBuffer, ShekylOutputData,
+    shekyl_output_data_free, shekyl_scan_and_recover, shekyl_sign_fcmp_transaction, ShekylBuffer,
+    ShekylOutputData,
 };
 
 use ciphersuite::group::GroupEncoding;
@@ -156,6 +156,17 @@ fn construct_output_ffi(
     result
 }
 
+/// Scratch buffer for the `shekyl_scan_and_recover` FFI roundtrip.
+///
+/// `key_image` stays `[u8; 32]` (not `KeyImage`) because this is a
+/// boundary-internal scratch buffer: the C ABI fills the field via a
+/// raw `*mut u8` write at `key_image.as_mut_ptr()`, and the bytes are
+/// re-handed to a C-side FFI call via `.as_ptr()` later in the same
+/// test. Wrapping in `KeyImage` here would inject a
+/// `from_canonical_bytes` / `as_bytes` shuffle at every FFI seam
+/// without adding type protection — the C ABI is the authoritative
+/// raw-byte boundary on both sides. Engine-side storage and the
+/// `shekyl_fcmp::proof::verify` API both use the typed `KeyImage`.
 #[allow(dead_code)]
 struct ScannedSecrets {
     ho: [u8; 32],
@@ -258,11 +269,7 @@ fn scan_output_ffi(
 ///
 /// The root is the Selene hash of the single leaf chunk. With layers=1
 /// the root IS the leaf-layer hash, so no branch layers are needed.
-fn build_selene_root(
-    output_key: &[u8; 32],
-    commitment: &[u8; 32],
-    h_pqc: &[u8; 32],
-) -> [u8; 32] {
+fn build_selene_root(output_key: &[u8; 32], commitment: &[u8; 32], h_pqc: &[u8; 32]) -> [u8; 32] {
     let mut leaf = [0u8; 128];
     let ok = unsafe {
         shekyl_construct_curve_tree_leaf(
@@ -321,8 +328,7 @@ fn build_test_case(iteration: u32) {
     );
 
     eprintln!("  [signing_round_trip] iteration {iteration}: building curve tree...");
-    let tree_root =
-        build_selene_root(&input_out.output_key, &input_out.commitment, &scanned.h_pqc);
+    let tree_root = build_selene_root(&input_out.output_key, &input_out.commitment, &scanned.h_pqc);
 
     let hp_of_o_point = shekyl_generators::biased_hash_to_point(input_out.output_key);
     let hp_of_o: [u8; 32] = hp_of_o_point.compress().to_bytes();

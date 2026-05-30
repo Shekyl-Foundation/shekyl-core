@@ -1,7 +1,7 @@
 #ifndef CRYPTONIGHTR_TEMPLATE_H
 #define CRYPTONIGHTR_TEMPLATE_H
 
-#if defined __i386 || defined __x86_64__
+#if defined __x86_64__
 
 void CryptonightR_instruction0(void);
 void CryptonightR_instruction1(void);

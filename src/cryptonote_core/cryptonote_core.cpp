@@ -1814,7 +1814,21 @@ namespace cryptonote
       return true;
     }
 
-    static constexpr double threshold = 1. / (864000 / DIFFICULTY_TARGET_V2); // one false positive every 10 days
+    // LWMA-1 Phase 4 §7 calibration: the stall-detection thresholds
+    // depend on the block-target time T. The 1/7200 false-positive rate
+    // (one in 10 days) and the {45, 30, 15, 10, 5} expected-block counts
+    // for the {5400, 3600, 1800, 1200, 600}-second windows assume
+    // SHEKYL_DAA_TARGET_SECONDS == 120. If T ever changes, both the
+    // threshold and the expected counts must be re-derived per
+    // docs/design/DAA_LWMA1.md §11, not silently scaled. The regression
+    // test that pins this calibration lives at
+    // tests/unit_tests/stall_detection_calibration.cpp; see
+    // docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md §7.
+    static_assert(SHEKYL_DAA_TARGET_SECONDS == 120,
+        "Stall-detection calibration: the 1/7200 false-positive "
+        "threshold and the {45, 30, 15, 10, 5} expected-block counts "
+        "assume the 120-second block target.");
+    static constexpr double threshold = 1. / (864000 / SHEKYL_DAA_TARGET_SECONDS); // one false positive every 10 days
     static constexpr unsigned int max_blocks_checked = 150;
 
     const time_t now = time(NULL);
@@ -1826,7 +1840,7 @@ namespace cryptonote
       unsigned int b = 0;
       const time_t time_boundary = now - static_cast<time_t>(seconds[n]);
       for (time_t ts: timestamps) b += ts >= time_boundary;
-      const double p = probability(b, seconds[n] / DIFFICULTY_TARGET_V2);
+      const double p = probability(b, seconds[n] / SHEKYL_DAA_TARGET_SECONDS);
       MDEBUG("blocks in the last " << seconds[n] / 60 << " minutes: " << b << " (probability " << p << ")");
       if (p < threshold)
       {
@@ -1835,7 +1849,7 @@ namespace cryptonote
         std::shared_ptr<tools::Notify> block_rate_notify = m_block_rate_notify;
         if (block_rate_notify)
         {
-          auto expected = seconds[n] / DIFFICULTY_TARGET_V2;
+          auto expected = seconds[n] / SHEKYL_DAA_TARGET_SECONDS;
           block_rate_notify->notify("%t", std::to_string(seconds[n] / 60).c_str(), "%b", std::to_string(b).c_str(), "%e", std::to_string(expected).c_str(), NULL);
         }
 

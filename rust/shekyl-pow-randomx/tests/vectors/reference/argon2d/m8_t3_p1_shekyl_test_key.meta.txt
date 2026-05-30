@@ -1,0 +1,49 @@
+Argon2d derived test vector — m8_t3_p1_shekyl_test_key.bin
+==========================================================
+
+Spec attestation
+----------------
+Cross-checks shekyl-pow-randomx's `argon2d::fill_cache` against the
+v2 RandomX fork's reference Argon2 implementation at the boundary
+case `m_cost = MIN_M_COST = 2 * SYNC_POINTS = 8`. Per
+`external/randomx-v2/doc/specs.md` §7.1 the Cache derivation is an
+omit-finalizer Argon2d fill; this vector exercises that surface at
+the smallest legal m_cost.
+
+Parameters
+----------
+algorithm   = Argon2d (discriminant 0)
+version     = 0x13 (ARGON2_VERSION_13)
+m_cost      = 8        (1 KiB blocks; total 8 KiB output)
+t_cost      = 3        (matches RANDOMX_ARGON_ITERATIONS)
+p_cost      = 1        (matches RANDOMX_ARGON_LANES)
+salt        = "RandomX\x03"  (8 bytes; RANDOMX_ARGON_SALT)
+key         = "Shekyl RandomX v2 Phase 2a test key"
+output_len  = 0        (omit finalizer; output is the filled memory)
+
+Generator
+---------
+source      = ./_generator/gen.c
+build       = ./_generator/Makefile (`make gen`)
+command     = ./gen raw 8 3 1 "Shekyl RandomX v2 Phase 2a test key"
+output_size = 8192 bytes (8 blocks × 1024 bytes/block)
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/argon2_ref.c, src/argon2_core.c, src/blake2/blake2b.c
+fill_block  = randomx_argon2_fill_segment_ref (the portable, non-SIMD
+              reference; produces bytes that are instruction-set-
+              independent — no AVX2/SSSE3 codegen variance. The on-disk
+              `.bin` format is a little-endian u64 stream — the same
+              format `blocks_to_le_bytes` produces in the Rust test
+              and the format the C generator's raw `fwrite` of
+              `block { uint64_t v[128] }` happens to produce on
+              little-endian hosts.)
+
+Phase
+-----
+Phase 2a (`docs/design/RANDOMX_V2_PLAN.md` §"Track A — Phase 2") —
+inner-loop spec-vector parity. Phase 2g will add the live
+differential harness at the full RandomX parameters.

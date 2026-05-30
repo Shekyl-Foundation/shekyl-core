@@ -1,0 +1,64 @@
+Phase 2c reference vector — t3_vm_scratchpad_init.bin
+======================================================
+
+Spec attestation
+----------------
+T3 attests Rust scratchpad initialization byte-for-byte parity with
+the v2 RandomX fork's `fillAes1Rx4<softAes=true>` from a 64-byte
+seed into a 2 MiB scratchpad. The fingerprint is Blake2b-256 over
+the entire 2 MiB scratchpad to keep the committed bytes small
+(32 bytes) without sacrificing collision-resistance for byte-
+diff attribution.
+
+A T3 divergence isolates a fillAes1Rx4 codegen bug from the prior
+single-subsystem AES vectors (`aes/gen_1r_state*`), which only
+covered short scratchpads. T3 covers the full ScratchpadSize
+(2_097_152 B) and exercises the L1 / L2 / L3 cache-line stride
+patterns over the full scratchpad.
+
+Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 (F7 T3).
+
+Inputs (hardcoded in `_generator/phase2c/gen.cpp`)
+--------------------------------------------------
+seed   = CANONICAL_TEMP_HASH (64 B)
+       = Blake2b-512(b"shekyl-randomx-v2-phase2c-canonical-input")
+       = b8 4e b7 92 f6 cf 73 e0 3a 89 32 0d 42 d6 a4 50
+         92 a7 3b 2f a9 bf 51 9e ad ad 44 e5 e6 27 92 48
+         01 c8 ce 2e 2f b2 b1 29 66 ff a0 83 d1 62 72 be
+         a3 45 ce 3d ad 43 48 4c 5f e7 52 de 77 78 de 78
+
+softAes = true   — portability pin (matches Rust port)
+size    = randomx::ScratchpadSize = 2_097_152 (2 MiB)
+
+Output layout
+-------------
+Output = Blake2b-256(scratchpad bytes after fillAes1Rx4) = 32 B.
+
+The scratchpad-content fingerprint shape mirrors the Phase 2b AES
+`hash_1r_*.bin` vectors but covers the full 2 MiB scratchpad size
+that the production VM allocates.
+
+Total bytes for this vector: 32.
+
+Generator
+---------
+source      = ./_generator/phase2c/gen.cpp (mode t3)
+build       = ./_generator/phase2c/Makefile (`make gen`)
+command     = ./gen t3 > t3_vm_scratchpad_init.bin
+output_size = 32 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/aes_hash.cpp (fillAes1Rx4 template instantiation),
+              src/soft_aes.cpp (soft_aesenc / soft_aesdec),
+              src/blake2/blake2b.c
+function    = ::fillAes1Rx4<softAes=true>(seed, ScratchpadSize, out)
+
+Phase
+-----
+Phase 2c (`docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.7 / F7 T3,
+§9 commit 7) — scratchpad init parity. Consumed by Rust test
+`t3_vm_scratchpad_init_matches_fork_reference` in
+`rust/shekyl-pow-randomx/src/vm.rs#mod tests`.

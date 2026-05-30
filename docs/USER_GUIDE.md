@@ -803,8 +803,7 @@ building applications on top of Shekyl.
 
 All methods are called via `POST /json_rpc`. Key groups:
 
-- **Wallet lifecycle:** `create_wallet`, `open_wallet`, `close_wallet`,
-  `restore_deterministic_wallet`
+- **Wallet lifecycle:** `create_wallet`, `open_wallet`, `close_wallet`
 - **Balance and address:** `get_balance`, `get_address`, `create_address`,
   `get_accounts`
 - **Transfers:** `transfer`, `transfer_split`, `sweep_all`, `sweep_single`,

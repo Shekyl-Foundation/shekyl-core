@@ -2,7 +2,12400 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **refresh: async path no longer skips the engine post-pass
+  (FOLLOWUPS P1/P3).** The asynchronous refresh path
+  (`Engine::start_refresh` → `run_refresh_task`) merged scan results
+  through `LedgerEngine::apply_scan_result`, which discarded the
+  inserted-index `Vec<usize>` and never ran
+  `populate_engine_handle_fields`, leaving newly-merged transfers
+  without `output_handle` / `source_ciphertext`. The mutator is
+  removed from the `LedgerEngine` trait (now read-only:
+  `synced_height` / `snapshot` / `balance`); `run_refresh_task` and
+  `Engine::start_refresh` are specialized to `LocalLedger` and merge
+  through the inherent `Engine::apply_scan_result`, which runs the
+  merge body and the M3b post-pass under one `LocalLedger` write
+  guard. This closes P1 (post-pass skip) and P3 (discarded
+  `Vec<usize>` allocation) in a single commit. The dead
+  `FaultInjecting<LocalLedger>` test wrapper and `replace_ledger`
+  test helper were deleted; hybrid retry tests drive
+  `ConcurrentMutation` producer-side. Shape (b) per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §8; atomicity rationale per
+  [`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md`](design/STAGE_1_PR_3_M3B_PREFLIGHT.md)
+  §3.
+
 ### Changed
+
+- **Refresh: wallet-birthday scan floor (P2).** `LocalRefresh` carries
+  `scan_start_floor` from `sync_state.restore_from_height` and session
+  `skip_to_height` / `refresh_from_block_height` overrides. Refresh
+  preflight anchors the ledger at `floor - 1` when needed so the merge gate
+  stays `start == synced_height + 1`; the producer scans from the floor through
+  tip. `Engine::create` persists `restore_height_hint` into
+  `sync_state.restore_from_height`.
+
+- **Workspace MSRV raised 1.85 → 1.88; `kameo = "=0.20.0"` pinned (Stage 2
+  gate).** Satisfies the three preconditions in the `docs/FOLLOWUPS.md`
+  "kameo dependency pin and MSRV alignment before Stage 2 cuts" entry:
+  (1) exact-patch pin of the actor framework in `[workspace.dependencies]`
+  (declared-only; no consumer yet, so inert in the build graph),
+  (2) MSRV bump to kameo 0.20.0's required 1.88.0 (verified at source via
+  the crates.io index), propagated per-crate via `rust-version.workspace =
+  true` across all first-party members so the gate is enforced workspace-wide
+  rather than declared only on the virtual root, and (3) the workspace
+  bounded-mailbox default
+  (`mailbox(64)`, overrides documented at the actor site). No
+  `rust-toolchain.toml` added — CI builds on `@stable` (≥ 1.88); the gate's
+  intent is the MSRV declaration, not a pinned channel. Stage 2's first
+  commit adds the live consumer and closes the FOLLOWUP.
+
+- **Stage 1 PR 6 — PersistenceEngine C7: remove password `save_state`.**
+  `WalletFile::save_state` now takes session-cached `wrap_key_region_2` only;
+  password-taking steady-state save deleted. `shekyl_wallet_save_state` FFI
+  drops the password parameters. Design:
+  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
+
+- **Wallet file format v1: per-region HKDF wrap keys (spec + implementation).**
+  [`docs/WALLET_FILE_FORMAT_V1.md`](WALLET_FILE_FORMAT_V1.md) §2.6 prescribes
+  `wrap_key_region_1` (label-only HKDF) and `wrap_key_region_2`
+  (`info || addr`) via HKDF-SHA-256 Expand from CSPRNG `file_kek`, replacing
+  direct `file_kek` AEAD for regions 1 and 2. On-disk layout and `file_version`
+  unchanged; Tier-3 KAT fixtures regenerated. See
+  [`docs/design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md`](design/WALLET_FILE_FORMAT_V1_HKDF_REGION_DERIVATION.md).
+
+### Documentation
+
+- **Stage 1 PR 6 — external lessons canvass (§5.12).**
+  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md)
+  records historical wallet-disaster lessons, OS discipline for F5(b), Stage 4
+  actor-model pins (bounded mailbox, save coalescing, supervisor `stop`), and
+  substrate verification (KDF params in wrap AAD; HKDF `address` = 65-byte
+  classical address). Blocking PR 6: panic-hook redaction test, mlock honest
+  contract, region-2 `OsRng` nonce rustdoc. V3.1/V3.x items in
+  [`docs/FOLLOWUPS.md`](FOLLOWUPS.md).
+
+- **Stage 0 PR-A — iai-callgrind symmetry rule** (`3d313256c`). Backfill.
+  [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.2 codifies
+  the symmetry rule (setup *and* fixture teardown excluded from the measured
+  region; criterion amortizes `Drop` via `b.iter`, iai-callgrind does not) and
+  adds Finding 5 to the §4.4 gap-check inventory. Closes the
+  Drop-contamination capture (`synced_height` reported 60,033 instructions vs
+  the expected low-tens, a property-preservation gap), class-level across every
+  `engine_trait_bench_*` bench.
+
+- **Stage 0 PR-A-extension — iai-callgrind boundary rule** (`2e5309ad3`).
+  Backfill. [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.2
+  adds the boundary rule (iai-callgrind measures function-boundary value
+  movement; `Engine<SoloSigner>` is 6,296 bytes, so by-value fixture passing
+  cost ~600 instructions of memcpy) and the §4.4 unified
+  `(Box<Engine<S>>, TempDir)` component-model fixture shape. Closes the
+  memcpy-at-boundary finding.
+
+- **Stage 0 PR-C — iai-callgrind hoisting rule** (`93d515123`). Backfill.
+  [`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md) §4.2 adds the
+  hoisting rule (criterion-side `b.iter` iter-amortization can elide
+  state-dependent compute the author meant to count) and the §4.4 two-anchor
+  static check (predict criterion `median_ns` from iai instructions by workload
+  class). Closes Finding 7 (criterion-vs-iai workload-class disagreement),
+  completing the symmetry/boundary/hoisting rule-triple.
+
+### Added
+
+- **Stage 1 PR 6 — PersistenceEngine Phase 0–2c (trait surface + file layer).**
+  [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md) §2.6
+  amends steady-state `save_state` / `save_prefs` to F5(b) sealing keys;
+  `shekyl-engine-core` adds `PersistenceError`, `OpenError::Persistence`,
+  `ChangePasswordError`, `StateWrapKey`, and the `PersistenceEngine` trait
+  module; `shekyl-crypto-pq` adds `seal_state_file_with_wrap_key_region_2`;
+  `shekyl-engine-file` adds `Mutex<WalletFileState>`, `rotate_password` on
+  `&self`, additive `save_state_with_wrap_key_region_2`, and `base_path()`.
+  `WalletFile` trait impl and `Engine<F>` wiring follow in C3–C5. Design:
+  [`docs/design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md`](design/STAGE_1_PR_6_PERSISTENCE_ENGINE.md).
+
+- **RandomX v2 Track A Phase 2h adversarial-corpus methodology
+  landed** (`feat/randomx-v2-phase2h-impl`, target PR; commits
+  C1–C10 per
+  [`docs/design/RANDOMX_V2_PHASE2H_PLAN.md`](design/RANDOMX_V2_PHASE2H_PLAN.md)
+  §8). Closes the Phase 2g R7-D1/R7-D2/R7-D3/R7-D4 deferrals by
+  replacing the V1-shaped class-heaviness grinding methodology
+  (unreachable under V2's PROGRAM_SIZE = 384 σ-gaps) with the
+  V2-substrate-anchored recipe-based corpus per R1-D1's
+  three-category composition (Category 1 audit-anchored
+  spec-silence enumeration; Category 2 coverage-metric
+  attestation; Category 3 substrate-derived boundary values).
+  The methodology ships first-class evaluator + declarative
+  recipe DSL + canonical-output pinning + per-PR M5 mechanical
+  citation-validation. T2/T6 originally inherited the Phase 2g
+  runtime-test `#[ignore]` gating behind the (then-open)
+  universal-across-inputs `compute_hash` divergence FOLLOWUP;
+  that FOLLOWUP closed on `dev` via
+  [PR #79](https://github.com/Shekyl-Foundation/shekyl-core/pull/79)
+  (`989610cac`, 2026-05-26; root cause: `RANDOMX_FLAG_V2` missing
+  at `randomx_create_vm`), and the post-rebase substrate-close
+  commits in this PR (see C11 below) lift the FOLLOWUP-gated
+  attributes and workflow conditions.
+
+  - **C1 canonical-output substrate + Pass-3 measurement
+    constants.** New
+    [`rust/shekyl-randomx-differential/src/adversarial_canonical_outputs.rs`](../rust/shekyl-randomx-differential/src/adversarial_canonical_outputs.rs)
+    lands the M1 canonical-output discipline for adversarial
+    recipes plus the Pass-3 measurement-bundle constants
+    (`RUNNER_NOISE_MARGIN`, per-class regression threshold,
+    `SAMPLE_BUDGET_PER_RECIPE`). The Family-1 array
+    (`FAMILY_1_RECIPE_OUTPUTS`) is regenerated at C5 alongside
+    the recipe-corpus expansion and pinned via
+    `gen_canonical_outputs.rs` Family-1 branch.
+
+  - **C2 `PreparedCache::from_raw_for_testing` accessor.** The
+    R1-D2 close cache-level test-internals accessor lands on
+    [`rust/shekyl-pow-randomx/src/prepared_cache.rs`](../rust/shekyl-pow-randomx/src/prepared_cache.rs)
+    under the existing `test-internals` feature gate (R5-D1
+    carve-out shape; sole consumer is
+    `shekyl-randomx-differential`). C-side symmetry via the
+    pre-existing `randomx_get_cache_memory` extraction path
+    keeps the production surface unchanged. A round-trip test
+    asserts that `from_raw_for_testing(seedhash, bytes)` of a
+    fresh `derive` output's bytes reproduces the same
+    `PreparedCache` (cache-bytes byte-identical; superscalar
+    programs re-derived from the seedhash).
+
+  - **C3 recipe types + first-class evaluator.** New
+    [`rust/shekyl-randomx-differential/src/adversarial/`](../rust/shekyl-randomx-differential/src/adversarial/)
+    module landing `types.rs` (`BaseSeedhash`, `CacheRecipe`,
+    `EvaluatedRecipe`), `interpreter.rs` (declarative recipe →
+    `(seedhash, cache_bytes)` evaluator with C-side base-cache
+    derivation amortization), `canonical.rs` (base-cache bytes
+    derivation helpers), and the `recipes/` submodule scaffold
+    (`spec_silence_anchors.rs`, `coverage_targets.rs`,
+    `boundary_values.rs`, `dataset_item_extrema.rs`) per R1-D3
+    close.
+
+  - **C4 initial recipe corpus (8 recipes; Cat 1 + 3).** The
+    starter corpus lands with two Category 1 spec-silence
+    anchors (`u128-high-half-cache-word-0`,
+    `shift-mask-boundary-cache-word-1`), three Category 3
+    boundary-value recipes (`boundary-cache-first-byte`,
+    `boundary-cache-last-byte`,
+    `boundary-dataset-item-stride-first-edge`), and three
+    Category 3 dataset-item-extrema recipes
+    (`boundary-block-stride-second-block-base`,
+    `boundary-block-stride-first-block-tail`,
+    `boundary-line-stride-within-block`). Each recipe's
+    rationale field cites the specific V2 substrate (plan-doc
+    section, configuration constant, or cache-implementation
+    line range) per R1-D8's three-evidence-category structure.
+    Coverage-targets module ships empty per R1-D1's
+    coverage-tooling-reproducibility reopen criterion.
+
+  - **C5 `FAMILY_1_RECIPE_OUTPUTS` + Family-1 generator
+    branch.** The canonical-output array is regenerated
+    alongside the C4 recipe expansion via the
+    `gen_canonical_outputs.rs` Family-1 generator branch; each
+    entry pins the expected `(seedhash, hash)` against the C
+    reference per M1 canonical-output discipline.
+
+  - **C6 `mode_adversarial_ratio` binary mode.** New
+    [`rust/shekyl-randomx-differential/src/mode_adversarial_ratio.rs`](../rust/shekyl-randomx-differential/src/mode_adversarial_ratio.rs)
+    implements the worst-case-ratio measurement mode replacing
+    the §3.19 R7-D4 diagnostic-only branch at
+    `main.rs`'s `--mode=adversarial-ratio` dispatch (renamed
+    from `--mode=worst-case` per the methodology shift).
+    Measures Rust-to-C latency ratios over the recipe corpus
+    against R1-D6's Claim 1 (per-recipe bound) + Claim 2
+    (corpus-median regression-tracking signal); emits structured
+    `T6_OBSERVATION` / `T6_CLAIM_2_TRACKING` JSON for the
+    regression-tracking dashboard harvester.
+
+  - **C7 T2 + T6 reactivation with inherited deferral gating.**
+    Phase 2g §6 T2 (`adversarial_corpus_byte_equality`) and T6
+    (`worst_case_ratio`) reactivate as new integration tests
+    under
+    [`rust/shekyl-randomx-differential/tests/`](../rust/shekyl-randomx-differential/tests/).
+    T2 asserts byte-equality between Rust and C across the
+    recipe corpus; T6 invokes `mode_adversarial_ratio` and
+    enforces Claim 1 + emits Claim 2 tracking signals. C7
+    cross-input diagnostics revealed that the Phase 2g
+    `compute_hash` FOLLOWUP's "large data sizes" framing was
+    incomplete — the divergence surfaces universally across all
+    tested seedhashes and data inputs, including 32-byte
+    fixed inputs. T2/T6 inherit the same `#[ignore]` deferral
+    as the Phase 2g runtime tests (T1/T3/T5/T7/T8/T16); the
+    FOLLOWUPS amendment records the revised characterization.
+
+  - **C8 CI workflow wiring (per-PR T2 + workflow_dispatch T6).**
+    [`.github/workflows/randomx-v2-differential.yml`](../.github/workflows/randomx-v2-differential.yml)
+    gains a per-PR `cargo test --ignored T2` step gated behind
+    `if: false` until the divergence FOLLOWUP closes. New
+    [`.github/workflows/randomx-v2-adversarial-ratio.yml`](../.github/workflows/randomx-v2-adversarial-ratio.yml)
+    workflow_dispatch-only T6 workflow scaffolds the
+    activation surface for measurement-mode runs (heavy enough
+    to warrant a separate workflow gate per R1-D7 Sub-A close);
+    same `if: false` gating mechanism. The activation surface
+    is one-line workflow edits + one-line test-attribute edits
+    when the FOLLOWUP closes.
+
+  - **C9 M5 mechanical citation-validation script.** New
+    [`scripts/ci/check_phase2h_citations.sh`](../scripts/ci/check_phase2h_citations.sh)
+    implements R2-D4's mechanical citation validation: parses
+    recipe `rationale` fields and validates per-category prefix
+    (R1-D8 taxonomy invariant), cited plan-doc existence under
+    `docs/design/`, cited source-file existence under
+    `rust/shekyl-pow-randomx/src/` (for `*.rs`) or
+    `external/randomx-v2/src/` (for `*.{c,cpp,h,hpp}`), and
+    cited line-number validity against the file's actual line
+    count. Composes with M3 PR-template discipline (the
+    procedural ceiling for semantic verification) per the T-A15
+    mitigation chain. Wired into the per-PR `structural-validate`
+    job as a fifth gate step. Sub-second runtime on the C4
+    starter corpus (8 recipes); scales through R1-D1's 50–200
+    target.
+
+  - **FOLLOWUPS reflow.** The "Post-2g adversarial-corpus
+    methodology + implementation" entry is annotated as closed
+    by Phase 2h with cross-citations to C1–C9; the
+    "Investigate `shekyl-pow-randomx::compute_hash` divergence"
+    entry is amended to record the Phase 2h cross-input
+    findings (universal-across-inputs scope correction; the
+    192-byte `t16` vector continues to pass only because it
+    pins the seedhash + input combination at the known-good
+    point). Both edits land in C10.
+
+  - **C11 post-rebase substrate-close (V3.0 verifier-divergence
+    FOLLOWUP closed by PR #79; this PR carries the operational
+    close).** PR #79 (`989610cac`, 2026-05-26) closed the V3.0
+    `shekyl-pow-randomx::compute_hash`-divergence-from-C-reference
+    FOLLOWUP by passing `RANDOMX_FLAG_V2` at `randomx_create_vm`
+    in `COracleSession::new`. Following PR #79's merge, this PR
+    rebased onto the post-#79 `dev` and landed four commits
+    discharging the activation-surface contract that C7/C8
+    established:
+    1. **`c71ce2413` — `RANDOMX_FLAG_V2` extension to
+       `COracleSession::from_raw_for_testing` + T17 round-trip
+       backstop.** Mirrors PR #79's fix at the testing constructor
+       so substrate-overwrite-based session creation (the path
+       T2/T6 exercise) is flag-equivalent to `Self::new`. New
+       [`rust/shekyl-randomx-differential/tests/c_oracle_session_round_trip.rs`](../rust/shekyl-randomx-differential/tests/c_oracle_session_round_trip.rs)
+       (T17) asserts cache-byte SHA + hash parity between the
+       two constructors for a fixed `(seedhash, payload)` pair;
+       bracket-tested by temporary V1 revert to confirm it
+       catches flag drift.
+    2. **`6fc059e1e` — lift T2 `#[ignore]` + workflow `if: false`
+       gating.** Removes the `#[ignore]` attribute on
+       `t2_adversarial_corpus_byte_equality`; rewrites the test
+       module's "C7 close" docstring as past-tense "Active
+       per-PR cadence (post-PR-#79 closure)" naming the
+       substrate-anchored reopening criterion per
+       `21-reversion-clause-discipline.mdc`; preserves the
+       R1-D6 close Reframe 1 substrate-broken vs ignore-ladder
+       distinction as the discipline's authoritative instance.
+       The `randomx-v2-differential.yml` workflow's `if: false`
+       gate on the dedicated T2 step is lifted; the preceding
+       default `cargo test` step gains
+       `-- --skip t2_adversarial_corpus_byte_equality` so T2
+       runs exactly once per CI invocation (release-mode via the
+       dedicated step) within R1-D6 close Reframe 2's
+       `T2_PER_PR_BUDGET_MS` budget.
+    3. **`1b1bda7df` — lift T6 workflow `if: false` gating +
+       reframe T6 docs.** Rewrites the `worst_case_ratio` module
+       rustdoc's "C7 close" section as past-tense
+       "Post-PR-#79 substrate note (FOLLOWUP closed)" and lifts
+       the `randomx-v2-adversarial-ratio.yml` workflow step's
+       `if: false` gate. T6 itself retains its test-layer
+       `#[ignore]` attribute for runtime-cost reasons orthogonal
+       to the FOLLOWUP (~40 s per recipe, outside per-PR cadence
+       per R1-D6 close Reframe 2); the inline comment and step
+       body record that the `--ignored` flag persists on this
+       basis. `workflow_dispatch` cadence is unchanged.
+    4. **`72a4a9eed` — reframe T16 docs as regression guard.**
+       Rewrites `divergence_triage` module rustdoc from past-tense
+       D1 substrate-triage investigation tool to forward-tense
+       three-way (Rust ↔ C ↔ fixture) byte-equality regression
+       guard at the canonical input. Preserves the D1 historical
+       context (the three-hypothesis enumeration, outcome (A)
+       confirmation, D2 → PR #79 diagnostic terminus); cites the
+       substrate-anchored reopening criterion; cross-references
+       T17 as the lighter-weight per-PR-cadence backstop. T16
+       stays `#[ignore]`-gated for runtime-cost reasons (256-MiB
+       Argon2d-512 cache + ~10–30 s wall); `#[ignore]` reason
+       text updated to surface the runtime-cost-only basis.
+
+- **RandomX v2 Track A Phase 2g differential-test harness landed**
+  (`feat/randomx-v2-phase2g-impl`, PR #75, merge commit
+  `33d22a83b`, 2026-05-25). Final sub-PR of the Rust pure-software
+  RandomX v2 verifier port per
+  [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
+  §"Track A — Phase 2" and the design plan
+  [`docs/design/RANDOMX_V2_PHASE2G_PLAN.md`](design/RANDOMX_V2_PHASE2G_PLAN.md).
+  Stack landed across the planned C0–C10 work commits plus follow-ups
+  (two Copilot review rounds, two mechanical `rustfmt` absorptions, the
+  R5-D2 plan-doc soft-fail refinement, and the R7 adversarial-corpus
+  deferral cluster) landing a separate test-only artifact
+  (`rust/shekyl-randomx-differential`) that links the Rust verifier
+  (`shekyl-pow-randomx`) and the v2 fork's C reference (via the new
+  `rust/randomx-v2-sys` bindings crate) and asserts byte equality
+  across a corpus of `(seedhash, data)` inputs per Phase 0 §7's
+  differential-harness-as-separate-artifact discipline (no
+  dev-dependency edge from `shekyl-pow-randomx`; the verifier
+  crate's `cargo test` still succeeds without the C library
+  present). Preceded by the R5-D1 substrate-amendment PR #74
+  (merge `93d1155bb`) that landed the `test-internals` feature
+  gate on `shekyl-pow-randomx` exposing
+  `PreparedCache::cache_block_bytes_for_testing` (gated by
+  `cfg(feature = "test-internals")`), resolving the contradiction
+  between R1-D14's cache-equivalence precondition requiring
+  byte-level access to the Rust cache and §5.3.1's "zero new
+  production surfaces" disposition. The feature is enabled
+  exclusively by the harness crate; production builds see no new
+  surface.
+
+  - **Workspace deps + `randomx-v2-sys` skeleton + CMake gate**
+    (commits `8d8d4a109`, `013984118`, `e8d2eaccf`, `8b67d7775`,
+    `e8dec6278`, `432162ddb`; C0–C4). New
+    [`rust/randomx-v2-sys`](../rust/randomx-v2-sys) crate is the
+    sole consumer of the v2 fork's C ABI per §5.3 R1-D14; its
+    `build.rs` resolves `RANDOMX_V2_INSTALL_DIR` (preferred) or
+    falls back to the in-tree install layout under
+    `<build-dir>/external/randomx-v2-install` per the
+    R5-D2-refined R4-D3 soft-fail discipline (commit
+    `429044cf8`'s plan-doc refinement landed the
+    soft-fail-on-missing-library framing before C3's
+    implementation). The harness crate
+    [`rust/shekyl-randomx-differential`](../rust/shekyl-randomx-differential)
+    is a `bin` with hand-rolled argument parsing (no `clap`
+    dependency) and dispatches `--mode=correctness`,
+    `--mode=latency`, `--mode=concurrent`, plus a deferred
+    `--mode=worst-case` that exits with an informative diagnostic
+    pointing at the post-2g design round per §3.19 R7-D4.
+    `CMakeLists.txt` gains the `BUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS`
+    option (default OFF; flipped ON in CI) per Phase 0's
+    miner-only-build-flag pattern.
+
+  - **C5a corpus + canonical outputs (R6 cluster)**
+    (`5e00f457e`, `12884d945`). `corpus.rs` builds the random
+    `(seedhash, data)` corpus with a bimodal block-template-shaped
+    `[200 .. 600·1024)` byte distribution per §3.16, and
+    `canonical_outputs.rs` carries 1024 pre-computed
+    `(seedhash, data) → hash` canonicals generated against the
+    pinned C reference at the workspace-pinned fork SHA (per §5.4
+    R6 cluster's canonical-pinning discipline). The
+    `gen_canonical_outputs.rs` tooling binary regenerates the
+    canonicals as a separate operation outside the harness's
+    runtime modes (skip-listed in `.cargo/mutants.toml` per
+    cargo-mutants skip-list discipline).
+
+  - **R7 adversarial-corpus deferral**
+    (`c41a6c7f8`, `5598adea0`). Plan-doc Round 7 reopens R1-D5
+    (adversarial seedhash corpus) and R1-D6 (u128/`__int128_t`
+    edge-case data corpus) under two independent substrate
+    findings: (i) the verifier-accessor gap (the class-heaviness
+    grinding methodology requires a `test-internals`-gated
+    opcode-stream accessor whose implementation would duplicate
+    `compute_hash_inner` under a feature gate); (ii) the
+    statistical-infeasibility gap (R1-D5's ≥40% per-class /
+    ≥60% combined acceptance criteria were calibrated against
+    V1's PROGRAM_SIZE = 256 and are unreachable by random
+    grinding against V2's PROGRAM_SIZE = 384 with per-class
+    σ-gaps from 6.8 (CACHE_MISS) to ~125 (CFROUND); fewer
+    than 10⁻⁸ threshold-meeting candidates expected within any
+    realistic compute budget). R7-D3 defers R1-D8 (worst-case
+    timing test T6) by the same reasoning; R7-D4 routes the
+    deferred work to the post-2g design round; R7-D5 carries
+    the §6 T2 deferral. The post-2g round is queued in
+    [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) (V3.0 pre-genesis
+    queue) as "Post-2g adversarial-corpus methodology +
+    implementation."
+
+  - **Cache-precondition + Rust/C oracle wrappers**
+    (`558eba59a`). `cache_precondition.rs` derives the Rust and
+    C caches from the same seedhash, compares them block-by-block
+    via the `test-internals`-gated `cache_block_bytes_for_testing`
+    accessor, and emits an O(1)-block divergence window when
+    they differ (window construction refactored under Copilot
+    Round 2 below from the naïve O(N) re-iteration to the
+    streaming form). `rust_subject.rs` wraps
+    `shekyl-pow-randomx`'s `PreparedCache` + `compute_hash`
+    surface; `c_oracle.rs` wraps `randomx-v2-sys`'s
+    `randomx_alloc_cache` / `randomx_init_cache` /
+    `randomx_create_vm` / `randomx_calculate_hash` lifecycle.
+    The C oracle is `!Send + !Sync` (the C library's VM holds
+    a per-thread JIT page); the harness pre-computes C-side
+    reference hashes single-threadedly before spawning workers.
+
+  - **Correctness + latency + concurrent modes**
+    (`71f5077d2`, `f25e6356f`). `mode_correctness` walks the
+    random corpus + canonical-output corpus, asserting
+    Rust hash = C hash = canonical hash at every entry.
+    `mode_latency` benchmarks per-hash latency over the random
+    corpus, reporting median/p95/max in `(Rust, C)` pairs with
+    upper-median statistic for even-length samples (matching
+    standard benchmark convention; doc-comment corrected under
+    Copilot Round 2). `mode_concurrent` orchestrates
+    multi-worker correctness assertion plus Linux-specific
+    RSS-ceiling enforcement via `/proc/self/statm` sampling
+    (`RSS_CEILING_BYTES`, `RSS_TOLERANCE`,
+    `RSS_SAMPLE_INTERVAL`, `RSS_STEADY_STATE_WARMUP_HASHES`
+    constants documented inline); the smoke test surfaced the
+    known V3.0 `compute_hash` divergence at large data inputs
+    per `docs/FOLLOWUPS.md`'s V3.0 pre-genesis queue, which
+    validates the harness's detection capability rather than
+    indicating a Phase 2g regression.
+
+  - **Failure output schema + invocation banner**
+    (`cadacf7a3`, `b63cd2592`). `failure_output.rs` defines the
+    11-field structured-JSON failure schema (M4/T11) emitted to
+    stderr on Rust vs. C divergence; the schema carries `mode`,
+    `seedhash`, `data_sha256`, `rust_hash`, `c_hash`,
+    `canonical_hash` (optional), `rust_subject_version`,
+    `c_oracle_version`, `fork_pin_sha`, `timestamp`, plus the
+    divergence-window blob from `cache_precondition.rs` when
+    relevant. `invocation_banner.rs` emits the M4/T17 banner to
+    stderr before any test output, recording mode, corpus sizes,
+    seedhash count, fork pin, and the `test-internals` feature-
+    gate citation as the harness's authority-claim line. The
+    rustfmt drift commit `b63cd2592` absorbed mechanical
+    formatting changes from C8 to keep the C9 commit scope-clean.
+
+  - **CI wiring + crate-invariant extension + mutants + PR
+    template** (`dd984d115`). New
+    [`.github/workflows/randomx-v2-differential.yml`](../.github/workflows/randomx-v2-differential.yml)
+    runs the `structural-validate` job per-PR
+    (build cleanliness, unit/integration tests, invariant-script
+    coverage, `cargo fmt` + `clippy`) and the `mutants` job on a
+    staggered weekly cron; runtime modes (correctness, latency,
+    concurrent end-to-end) are deferred behind
+    `continue-on-error: true` with a comment pointing at the
+    `docs/FOLLOWUPS.md` V3.0 `compute_hash` divergence entry,
+    and become merge-blocking once that V3.0 work lands. The
+    workflow builds the C reference library out-of-band by
+    invoking the submodule's own CMakeLists.txt
+    (`external/randomx-v2`) directly with Ninja + ccache; this
+    avoids pulling the parent project's C++ dependencies into
+    the harness build path. `.github/workflows/build.yml` and
+    `.github/workflows/codeql.yml` gain `--exclude
+    shekyl-randomx-differential` on their workspace `cargo build`
+    / `cargo test` invocations so the daemon CI matrix does not
+    link against the C library it does not need; `build.yml`'s
+    `lint-rust-debug-macros` step gains a `*/src/bin/*` exclusion
+    so `gen_canonical_outputs.rs`'s `println!` (legitimate CLI
+    output) is not flagged.
+    [`scripts/ci/check_randomx_crate_invariants.sh`](../scripts/ci/check_randomx_crate_invariants.sh)
+    is extended to scan `randomx-v2-sys` and
+    `shekyl-randomx-differential` for Pattern A
+    (`OnceCell`/`OnceLock`/`Lazy` imports) and Pattern B
+    (column-0 `static` declarations);
+    `shekyl-randomx-differential` is also scanned for Pattern C
+    (FFI exports), while `randomx-v2-sys` is exempt from
+    Pattern C (it is the FFI consumer crate). New
+    [`rust/shekyl-randomx-differential/tests/crate_invariants.rs`](../rust/shekyl-randomx-differential/tests/crate_invariants.rs)
+    integration tests T13 (script coverage), T14 (`randomx-v2-sys`
+    sole-consumer property — verified by walking
+    `cargo metadata` to confirm no other workspace member
+    depends on `randomx-v2-sys`), and T15 (`randomx-v2-sys`
+    signature-audit pin — matches the bindings file's fork-pin
+    SHA against the submodule HEAD at
+    `external/randomx-v2`). New
+    [`.cargo/mutants.toml`](../.cargo/mutants.toml) configures
+    `cargo-mutants` with `timeout_multiplier = 5.0` and skip-globs
+    for tooling binaries (`src/bin/**`) and canonical outputs
+    (`canonical_outputs.rs`) per the skip-list discipline. New
+    [`.github/pull_request_template.md`](../.github/pull_request_template.md)
+    carries the three-line discipline checklist for harness /
+    verifier modifications (amendment-cite, audit-line-range cite,
+    harness-pass-as-evidence with audit co-citation).
+
+  - **Copilot Round 1 — inline review responses**
+    (`3ac2d777f`). Four findings against the implementation
+    diff: (1) `build.rs` warning message uses
+    `<build-dir>/external/randomx-v2-install` as the
+    documented fallback path string;
+    (2) `RANDOMX_V2_PHASE2G_PLAN.md` §3992's embedded `build.rs`
+    example matches the live wording; (3) the `randomx-v2-sys`
+    bindings file gains the fork-pin signature comment with the
+    exact submodule SHA for T15 to assert against;
+    (4) cross-citation provenance lines for cache-precondition
+    and Rust/C oracle hand-off discipline.
+
+  - **Copilot Round 2 — post-implementation findings**
+    (`d60186fa9`, `90a536219`). Five substantive findings:
+    (1) `parse_seedhash_hex` now explicitly rejects uppercase
+    A–F with a load-bearing diagnostic
+    (`--seedhash: character {i}: uppercase hex rejected; use
+    lowercase per Seedhash::Display`), pinning the lowercase
+    convention shared with the verifier's `Seedhash::Display`
+    via a new `parse_seedhash_hex_rejects_uppercase`
+    regression test; (2) `mode_latency::median_p95_max`'s
+    doc-comment now states `samples[n/2]` is the upper-median
+    for even-length samples (the prior wording said "lower
+    median" but the implementation has always been upper-median;
+    fixing the doc rather than the code preserves existing
+    test expectations); (3) `RustSubjectSession::seedhash`'s
+    doc-comment recommends `*session.seedhash()` (the idiomatic
+    deref for a `Copy` type) over `.clone()`;
+    (4) `failure_output::timestamp_increases_across_constructions`
+    is replaced by `timestamp_is_nonzero_and_recent`, which
+    asserts the timestamp is non-zero and within a plausible
+    epoch window (post-2020 / pre-2200) instead of relying on
+    `SystemTime::now()` monotonicity through a
+    `thread::sleep(1s)` (the prior test was flaky under clock
+    adjustments); (5) `cache_precondition::build_divergence_window`
+    is refactored from O(N) re-iteration of the cache block
+    stream to O(1)-block streaming construction by passing the
+    `current_block`, buffering the `prev_block`, and accepting
+    the `remainder_iter` as a mutable iterator — the
+    doc-comment claim ("at-most-two 1-KiB blocks") was true of
+    the window contents but not of the cost to construct it,
+    and the refactor brings cost in line with the doc with four
+    new unit tests covering interior, crosses-backwards,
+    crosses-forwards, and at-cache-start windows.
+    Stale README + `canonical_outputs.rs` doc-comments that
+    referenced C5b / C6 boundaries and a placeholder error
+    (pre-R7-D4 framing) are updated to reflect the post-2g
+    deferral and the completed C4–C10 sequence.
+
+  **§9 / Phase 2g gate confirmation (HEAD at PR #75 merge =
+  `33d22a83b`):** Format `cargo fmt --all -- --check` ✓; Lint
+  `cargo clippy -p shekyl-randomx-differential -p randomx-v2-sys
+  --all-targets -- -D warnings` ✓; Test
+  `cargo test -p shekyl-randomx-differential -p randomx-v2-sys
+  --release` ✓ (unit + integration including T13/T14/T15);
+  Crate-invariant gate
+  `scripts/ci/check_randomx_crate_invariants.sh` ✓ (extended
+  scan scope across `shekyl-pow-randomx`, `randomx-v2-sys`,
+  `shekyl-randomx-differential`); FPU unsafe grep
+  `scripts/ci/check_randomx_fpu_rounding.sh` ✓ (inherited from
+  2d); workspace test
+  `cargo test --workspace --exclude shekyl-randomx-differential`
+  ✓ on the daemon CI matrix (the harness crate's tests are
+  exercised on the `randomx-v2-differential.yml` matrix that has
+  the C library available). Four substantive Copilot review
+  threads on PR #75 resolved with provenance citations to the
+  commits that addressed each finding; 14 outdated threads were
+  auto-greyed by GitHub as the surrounding code shifted.
+
+  **Deferrals named, with reopening criteria per
+  `21-reversion-clause-discipline.mdc`:**
+
+  - **`mode_worst_case` + adversarial-corpus methodology
+    (R7-D1/R7-D2/R7-D3/R7-D4).** Deferred to a post-2g design
+    round; tracked in `docs/FOLLOWUPS.md` V3.0 pre-genesis
+    queue. Reopens via the design round's plan-doc landing
+    (the methodology must be V2-substrate-anchored; class-
+    heaviness grinding is V1-shaped and statistically
+    infeasible against V2 substrate). Phase 2g's
+    `--mode=worst-case` flag is reachable but emits the
+    deferral diagnostic referencing the FOLLOWUPS entry.
+  - **`compute_hash` divergence at large data inputs.**
+    Surfaced by Phase 2g C7's first end-to-end smoke test
+    against a 387,581-byte data input in R1-D4's bimodal
+    upper-half distribution; cache-equivalence precondition
+    passes (caches byte-identical); divergence is in
+    `compute_hash`'s VM path. **Closed 2026-05-26 by
+    substrate-triage** on
+    `chore/randomx-v2-c-oracle-flag-v2` — root cause was the
+    harness's C oracle and canonical-output generator both
+    passing `RANDOMX_FLAG_DEFAULT` (v1, PROGRAM_SIZE = 256)
+    to `randomx_create_vm` against a Rust verifier
+    implementing v2 (PROGRAM_SIZE = 384). The Rust verifier
+    was correct throughout. Fix: expose
+    `RANDOMX_FLAG_V2 = 128` in `randomx-v2-sys` with cache-
+    vs-VM flag-split docs (cache memory is V2-flag-invariant
+    per `external/randomx-v2/src/randomx.cpp:79`'s
+    `(JIT | LARGE_PAGES)` mask at `randomx_alloc_cache`;
+    only `randomx_create_vm` honors the V2 bit); switch the
+    two callsites at `c_oracle.rs` + `gen_canonical_outputs.rs`;
+    regenerate `CANONICAL_RANDOM_HASHES` under the v2 flag
+    (`v1-c5a-nightly-1024` → `v2-flag-nightly-1024`;
+    `CANONICAL_CACHE_SHAS` unchanged, as predicted by the
+    mask). End-to-end `--mode=correctness` re-runs the
+    nightly corpus (1024 random pairs / 32 seedhashes) with
+    three-way agreement (Rust ≡ C ≡ canonical, exit 0). Full
+    closure record + lessons-into-substrate dispositions in
+    `docs/FOLLOWUPS.md` "Recently resolved (audit trail)"
+    section; post-mortem with the missed-altitude finding in
+    `docs/design/RANDOMX_V2_PHASE2G_PLAN.md`. The harness's
+    detection of this divergence (and the diagnostic-triage
+    test that bisected it) is end-to-end validation of its
+    M4 detection capability against a real substrate gap.
+  - **Per-hash latency CI gate (≤3.0× ratio).** Phase 2g
+    produces the harness binary that the Phase 3a per-PR CI
+    mechanism (`RANDOMX_V2_RUST.md` §8) consumes; the gate
+    activates when Phase 3a's FFI shim lands. Phase 2g itself
+    runs `mode_latency` informationally, not as a CI gate.
+
+- **RandomX v2 Track A Phase 2f implementation core landed**
+  (`feat/randomx-v2-phase2f-impl`, 2026-05-23). Implements
+  [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md)
+  Round 2 + Round 3 dispositions on
+  [`rust/shekyl-pow-randomx`](../rust/shekyl-pow-randomx) in five
+  commits versus the §8 Round 3 ceiling of six (commit 5 omitted
+  per Branch A — see prediction-vs-measured reconciliation below).
+
+  - **`Seedhash` newtype + `PreparedCache` bundle** (`e687cf68b`).
+    Closes the Phase 2c-inherited consensus-correctness footgun
+    where `compute_hash(&Cache, &[u8; 32], &[u8])` carried the
+    cache and the seedhash as separate arguments — a caller passing
+    the wrong cache for a given seedhash got a wrong hash. New
+    [`src/seedhash.rs`](../rust/shekyl-pow-randomx/src/seedhash.rs)
+    introduces `pub struct Seedhash([u8; 32])` with `from_bytes` /
+    `as_bytes` / `Display` (lowercase hex per §1.1 Round 2 +
+    post-closure pin #1) replacing every `&[u8; 32]` seedhash
+    parameter site. New
+    [`src/prepared_cache.rs`](../rust/shekyl-pow-randomx/src/prepared_cache.rs)
+    bundles `Cache + Seedhash` with `PreparedCache::derive` as the
+    single public construction path; `Cache` transitions
+    `pub → pub(crate)` per §1.1 Round 2. `compute_hash` signature
+    transitions from `(&Cache, &[u8; 32], &[u8])` to
+    `(&PreparedCache, &[u8])`. Atomic codebase sweep updates every
+    in-crate call site (Phase 2c/2d tests, `vm.rs` tests,
+    `cache.rs` tests, benches) per §3.1 Round 2 sweep-discipline.
+    Per `16-architectural-inheritance.mdc`'s pre-genesis discount
+    + cost-benefit-defer-to-later anti-pattern, the substrate
+    correction lands at Phase 2F rather than V3.x.
+
+  - **`CacheStore` two-slot type** (`31aa0ff9d`). New
+    [`src/cache_store.rs`](../rust/shekyl-pow-randomx/src/cache_store.rs)
+    implements §3.1 Round 2's frozen API: `lookup`,
+    `lookup_or_derive`, `set_canonical`. Internal sync-shape per
+    §3.1 Round 2: per-slot `RwLock<Option<Arc<PreparedCache>>>`
+    (canonical non-evictable + transient displace-on-publish),
+    `Mutex<HashMap<Seedhash, Shared<DerivationFuture>>>` for
+    in-flight derivation deduplication with cleanup-on-publish
+    per §3.1 Round 2 (closes F3 thundering-herd attack on
+    novel-seedhash + F4 unbounded HashMap growth). Eleven unit
+    tests T-CS-1 through T-CS-11 per §6.1 Round 3 cover the
+    state-transition table (3-seedhash interleave attack;
+    cold-start; advance-promotes-and-demotes), in-flight dedup
+    (T-CS-7), cleanup-on-publish white-box (T-CS-8),
+    concurrent-determinism property (T-CS-9), and type-shape
+    compile-time checks (T-CS-10/11). Caller hand-off Arc-lifetime
+    discipline note in the rustdoc per §4 F2 disposition.
+
+  - **Crate-invariant grep gate** (`68086d99c`). New
+    [`scripts/ci/check_randomx_crate_invariants.sh`](../scripts/ci/check_randomx_crate_invariants.sh)
+    enforces §3.6 R1-E1 patterns A/B/C: pattern A bans imports of
+    `once_cell` / `lazy_static` / `OnceLock` / `LazyLock` (stricter
+    than module-level-static-only by rejecting at the import); pattern
+    B bans column-0 `static` declarations (function-local statics
+    live inside fn bodies and are indented; `const` items are a
+    different keyword); pattern C bans `#[no_mangle]`,
+    `#[unsafe(no_mangle)]`, `#[export_name`, `#[unsafe(export_name`,
+    and `extern "C" fn` definition form anchored at column 0
+    modulo attribute indentation (so the `lib.rs` rustdoc citation
+    of the discipline does not collide with the gate). The
+    rustfmt-rely-chain note per §3.6 Round 3 records that the
+    column-0 anchor is robust against function-local statics if
+    and only if `cargo fmt --check` is a CI gate (which it is per
+    Phase 2c R0-D6). New `.github/workflows/build.yml` step sibling
+    to the FPU-rounding step. New
+    [`tests/crate_invariants.rs`](../rust/shekyl-pow-randomx/tests/crate_invariants.rs)
+    cargo-test wrapper makes the gate runnable via `cargo test` for
+    local pre-PR checks. Verification at HEAD: zero hits across
+    `rust/shekyl-pow-randomx/src/`.
+
+  - **Cfg-gated `VmStatePool` + four-bench A/B harness**
+    (`3121b726d`). New
+    [`src/vm_pool.rs`](../rust/shekyl-pow-randomx/src/vm_pool.rs)
+    gated by `#[cfg(any(test, feature = "internal-pool-bench"))]`
+    per §3.3 Round 3. `VmStatePool::new(capacity: usize)` is a
+    runtime parameter per §3.5 R1-D5 Round 3 (panics in non-test
+    builds without the feature flag, enforcing explicit
+    configuration); `Mutex<Vec<VmState>>` storage with capacity
+    cap; `acquire()` returns a `VmStateGuard` whose `Drop` returns
+    the instance to the pool if capacity allows. `vm.rs` factors
+    `compute_hash` into a thin wrapper over `pub(crate)
+    compute_hash_inner(&mut VmState, ...)` so the production
+    no-pool path (`VmState::new()` per call) and the cfg-gated
+    pool path share one implementation; `compute_hash_inner` zeros
+    `state.fprc` on entry (the only `VmState` field with observable
+    carry-over across pooled reuse, since CFROUND writes `fprc`
+    during `execute_program` but does not reset it at boundaries).
+    Seven unit tests T-PL-1 through T-PL-7 cover acquire/release,
+    capacity bounds, and equivalence to the no-pool path. New
+    [`benches/per_call_alloc.rs`](../rust/shekyl-pow-randomx/benches/per_call_alloc.rs)
+    measures B-2 (scratchpad zero-init) + B-3 (register-file/program
+    alloc); `compute_hash_alloc.rs` extends with B-pool-off (always
+    on) + B-pool-on (under `--features internal-pool-bench`). The
+    cfg-gated approach closes the Round 1 circular-sequencing
+    problem ("can't bench the pool without implementing the pool").
+
+  - **Phase 2f A/B bench measurement — Branch A** (`a37aac054`).
+    [`BENCH_RESULTS.md`](../rust/shekyl-pow-randomx/BENCH_RESULTS.md)
+    records the §3.4 R1-D4 Round 3 disposition empirically:
+    B-pool-off 304.44 ms median (CI [303.14, 305.96]), B-pool-on
+    303.72 ms median (CI [302.71, 304.88]), B-2 48.6 µs, B-3
+    81.7 ns. Component-floor sum (B-2 + B-3) ≈ 48.7 µs caps the
+    achievable pool savings; the point-estimate A/B delta of 720 µs
+    is statistically indistinguishable from zero (95% CIs overlap
+    heavily) and structurally bounded above by the component-floor
+    cap (so the 720 µs is run-to-run measurement noise, not pool
+    benefit). **Disposition: Branch A** — achievable savings is
+    below the §3.4 Round 3 50 µs threshold; pooling produces no
+    production-relevant benefit on this hardware class. The
+    cfg-gated `VmStatePool` stays in source as a bench-only artifact;
+    §8 commit 5 (cfg-gate flip to default-on) is omitted. Phase 3a's
+    FFI shim sees the unchanged production `compute_hash` body.
+
+    **Prediction-vs-measured reconciliation** per §8 Round 3
+    discipline: prediction A held. The §8 plan-doc recorded two
+    competing predictions (Branch C plausible per PR-66's
+    hundreds-of-µs full-pipeline alloc cost; Branch A plausible
+    per modern allocators amortizing 2 MiB zero-init to tens of
+    µs). B-2 measured at 48.6 µs on this hardware (mmap-backed
+    glibc on kernel 6.12, large-page-aware allocator) is consistent
+    with the Branch A framing; PR-66's per-call full-pipeline cost
+    (~300 ms) is dispatch-loop dominated (2048 iterations × 8
+    chains × per-iter AES + scratchpad RW + dataset reads), not
+    allocation-specific. Pooling can amortize only allocation cost;
+    the component-floor cap is structurally below Branch B/C
+    thresholds. Reopening criterion per
+    [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc):
+    a hardware class with substantially different allocator
+    behavior, a Phase 3a FFI fanout pattern not captured by the
+    single-thread bench, or a Phase 2g per-hash-latency surface
+    on production-target hardware that yields A/B delta ≥ 100 µs
+    reopens the disposition via a fresh §3.4 pin in the relevant
+    plan-doc.
+
+  **§9 gate confirmation (HEAD = `a37aac054`):** Format `cargo fmt
+  -p shekyl-pow-randomx -- --check` ✓; Lint `cargo clippy -p
+  shekyl-pow-randomx --all-targets -- -D warnings` ✓ (feature off);
+  Lint `cargo clippy -p shekyl-pow-randomx --all-targets --features
+  internal-pool-bench -- -D warnings` ✓ (feature on); Test `cargo
+  test -p shekyl-pow-randomx --release -- --test-threads=1` ✓ (117
+  passed, 2 ignored — T6/T7 superseded by Phase 2d's T16; 4
+  crate_invariants integration tests passed; 1 perf placeholder
+  ignored — T17 per-hash latency Phase 2g deliverable); Doc `cargo
+  doc -p shekyl-pow-randomx --no-deps` ✓; FPU unsafe grep
+  `scripts/ci/check_randomx_fpu_rounding.sh` ✓ (inherited from 2d);
+  Crate-invariant grep `scripts/ci/check_randomx_crate_invariants.sh` ✓
+  (new gate landed in commit 3); Bench delta informational —
+  `compute_hash_alloc::per_call` 307.42 ms vs. Phase 2d baseline
+  303.60 ms (+1.27%; under §9's ±10% regression-trigger threshold).
+
+- **RandomX v2 Track A Phase 2f — review-cycle fix (PR #72
+  Copilot finding NF8, fifth pass)**
+  (`feat/randomx-v2-phase2f-impl`, 2026-05-24). One finding
+  surfaced by the fifth Copilot review pass against `84d5ba72a`
+  and addressed in-place. NF8 is a documentation-vs-implementation
+  discrepancy in the cargo-test wrapper's rustdoc claim about its
+  regression-detection role; the architectural disposition is
+  unchanged, and the fix tightens the substrate by expanding
+  scan scope rather than weakening the documented claim.
+
+  - **NF8 — `tests/crate_invariants.rs` rustdoc claimed an active
+    regression-detection mechanism the scan scope did not
+    realize.** The cargo-test wrapper preamble described "would-match"
+    comments inside `tests/crate_invariants.rs` as a positive
+    regression-detection surface — if a future patch un-anchored
+    one of the patterns, the in-comment citations would start
+    matching and the gate would fire. The mechanism is real
+    *only if* the file is in scan scope; pre-NF8, the script's
+    `CRATE_SRC="rust/shekyl-pow-randomx/src"` constant excluded
+    the test directory entirely, so the regression-detection
+    claim was a fiction.
+
+    **Fix.** Expanded `CRATE_SRC` from a single path to an
+    array `("rust/shekyl-pow-randomx/src",
+    "rust/shekyl-pow-randomx/tests",
+    "rust/shekyl-pow-randomx/benches")` in
+    [`scripts/ci/check_randomx_crate_invariants.sh`](../scripts/ci/check_randomx_crate_invariants.sh).
+    The recursive `grep` arm gains `--include='*.rs'` to skip
+    C/C++ reference-vector generators at
+    `tests/vectors/reference/<primitive>/_generator/*.{c,cpp}`
+    (legitimate column-0 `static` declarations under C/C++
+    semantics; out of scope for a Rust-targeted invariant gate).
+    The per-file `awk` multi-line scanner already iterated via
+    `find ... -name '*.rs'` and picked up the change
+    automatically. The verifier crate's `tests/` and `benches/`
+    directories carry zero column-0 banned shapes today, so the
+    scope expansion is mechanical with no false-positive surface.
+
+    **Verification.** Plant-revert positive-side tests across
+    both new scope arms: `use std::sync::OnceLock;` plant in
+    `tests/` → gate FAILS; multi-line bypass plant in `benches/`
+    → gate FAILS; column-0 `static` plant in `tests/` → gate
+    FAILS; `pub extern "C" fn` plant in `benches/` → gate FAILS;
+    baseline → gate PASSES. **Regression-detection reality
+    check:** simulated un-anchoring of Pattern A (drop the `^`
+    from the regex) fires the gate from multiple in-scope
+    sources: (1) the
+    [`tests/crate_invariants.rs:146-147`](../rust/shekyl-pow-randomx/tests/crate_invariants.rs)
+    would-match comments, exactly as the rustdoc claim
+    describes; (2) legitimate function-local indented
+    `use std::sync::OnceLock;` statements inside
+    `#[cfg(test)] mod tests { }` blocks at
+    `src/cache_store.rs:596`, `src/vm.rs:2767`, and
+    `src/vm.rs:3342`, which the column-0 anchor was protecting
+    and would un-protect under regression. The mechanism is
+    doubly real with the expanded scope.
+
+    **Documentation.** Updated the
+    [`tests/crate_invariants.rs`](../rust/shekyl-pow-randomx/tests/crate_invariants.rs)
+    preamble to explicitly cite the NF8 fix and the now-real
+    regression-detection mechanism, naming the scope expansion
+    (`src/` → `src/` + `tests/` + `benches/`) as the substrate
+    change.
+
+- **RandomX v2 Track A Phase 2f — review-cycle fix (PR #72
+  Copilot finding NF7, fourth pass)**
+  (`feat/randomx-v2-phase2f-impl`, 2026-05-24). One finding
+  surfaced by the fourth Copilot review pass against `321b89edb`
+  and addressed in-place. NF7 is a CI-gate completeness defect
+  against §3.6 R1-E1 Pattern A; the architectural disposition is
+  unchanged. Plan-doc round history records the fix as audit
+  trail per `21-reversion-clause-discipline.mdc`'s post-closure-pin
+  discipline.
+
+  - **NF7 — `PATTERN_RUNTIME_STATE` regex bypassed by
+    rustfmt-default multi-line grouped imports.** §3.6 Round 3
+    froze Pattern A as a column-0-anchored `grep -E` regex
+    matching banned identifiers (`once_cell` / `lazy_static` /
+    `OnceLock` / `LazyLock`) anywhere on the same line as a
+    `use` statement. The single-line grouped form
+    `use std::sync::{Arc, OnceLock};` is correctly caught
+    (`OnceLock` appears on the same line as the column-0 `use`);
+    the rustfmt-default multi-line grouped form, where the `use`
+    opener carries no banned identifier and the indented
+    identifier lines fail the column-0 anchor, bypasses entirely:
+    `use std::sync::{\n    Arc,\n    OnceLock,\n};` matches none
+    of the per-line patterns. rustfmt's default
+    `imports_granularity = "Preserve"` accepts the multi-line
+    form and a `cargo fmt`-mediated rewrite from the single-line
+    form is a one-`max_width`-overflow away (or a future
+    `imports_granularity = "Crate"` config change), so the
+    bypass is reachable in production-discipline workflows. The
+    Round 3 R1-E1 Pattern A invariant is "no module-level
+    imports of these types," not "no module-level imports in a
+    specific formatting style"; the gate's stated property and
+    its mechanical coverage diverged.
+
+    **Fix.** Added a per-file POSIX `awk` scanner that
+    complements the single-line `grep` regex in
+    [`scripts/ci/check_randomx_crate_invariants.sh`](../scripts/ci/check_randomx_crate_invariants.sh).
+    The scanner triggers on any column-0 `use` statement opening
+    an unclosed brace block, accumulates subsequent lines
+    tracking nested-brace depth via balanced `{`/`}` counts (so
+    `use foo::{bar::{baz, OnceLock}}` spread across lines is
+    handled correctly), and on depth-zero closure scans the
+    accumulated buffer against the same banned-token alternation
+    `(once_cell|lazy_static|OnceLock|LazyLock)`. The two arms
+    (single-line `grep`, multi-line `awk`) jointly enforce
+    Pattern A regardless of rustfmt grouping style.
+
+    **Verification.** Plant-revert positive-side tests:
+    synthesized multi-line bypass file → gate FAILS (exit 1)
+    with the banned token cited; nested-brace multi-line bypass
+    → gate FAILS; clean multi-line `use` (no banned tokens) →
+    gate PASSES; baseline crate state → gate PASSES. The
+    cargo-test wrapper
+    [`tests/crate_invariants.rs`](../rust/shekyl-pow-randomx/tests/crate_invariants.rs)
+    invokes the unmodified bash entry point so the test surface
+    continues to assert exit-zero discipline; the documentation
+    comment was extended with a multi-line bypass would-match
+    example mirroring the single-line / Pattern B / Pattern C
+    citations so the regression-detection mechanism is
+    auditable for the new arm too.
+
+- **RandomX v2 Track A Phase 2f — review-cycle fixes (PR #72
+  Copilot findings NF3 + NF4 + NF5 + NF6, second pass)**
+  (`feat/randomx-v2-phase2f-impl`, 2026-05-24). Four findings
+  surfaced by the second Copilot review pass against `d4d88bdc1`
+  and addressed in-place. Three (NF3, NF4, NF5) are documentation
+  drift inherited from Phase 2c phrasing or from PR #72 NF2's
+  prior commit; one (NF6) is an implementation defect on the
+  in-flight-derivation rendezvous architecturally specified in
+  Round 2 but under-specified at the panic-unwind boundary. None
+  reopen Round 2 / Round 3 / post-closure-pin architectural
+  dispositions. Plan-doc round history records the fixes as audit
+  trail per `21-reversion-clause-discipline.mdc`'s post-closure-pin
+  discipline.
+
+  - **NF3 — `lib.rs` crate-level rustdoc still framed
+    `dispatch_instruction` as having a NOP body** ("Phase 2d
+    replaces the dispatch body in-place per §5.1.1 of the plan
+    doc"). The bullet was correct as of Phase 2c's PR landing;
+    Phase 2d (PR #70 → `dev`) replaced the body in-place with
+    the real table-driven per-opcode dispatch and added the T16
+    reference vector for end-to-end real-dispatch parity, but
+    the rustdoc was not updated to record the now-landed state.
+    **Fix:** rephrased the dispatch bullet to reflect both the
+    Phase-2c-landed NOP and the Phase-2d-landed real dispatch,
+    named T16 as the current end-to-end consensus-parity gate,
+    and reframed "Subsequent sub-PRs" to "Sub-PR ladder" with
+    explicit `(landed)` / `(planned)` markers on 2d / 2f / 2g.
+    Also updated the bench bullet's `compute_hash_alloc`
+    description to record the post-2d baseline alongside the 2c
+    stub-NOP number.
+
+  - **NF4 — `benches/compute_hash_alloc.rs` rustdoc framed the
+    per-call cost composition under the stub-NOP body**
+    ("Under the stub-NOP `dispatch_instruction` body, the
+    per-call cost is dominated by …"; "8 × 2048 stub-NOP
+    iteration-loop bodies … no per-instruction work since
+    dispatch is NOP"). Same drift as NF3. **Fix:** rephrased the
+    cost-composition section to describe the pipeline neutrally
+    (per-iteration dispatch is a step in the iteration body;
+    Phase 2c measured under stub-NOP, Phase 2d adds per-
+    instruction work at that step), and updated the file-header
+    summary + the `PER_CALL_SAMPLE_SIZE` rationale to record the
+    post-2d baseline.
+
+  - **NF5 — `Cargo.toml` `internal-pool-bench` feature comment
+    claimed `VmStatePool` is a `pub(crate)` type whose `Default`
+    panics in non-test builds.** First half is wrong post-PR-72
+    F2 (the type is `#[doc(hidden)] pub` so the criterion bench
+    in `benches/compute_hash_alloc.rs`, a separate cargo target,
+    can name `VmStatePool::new` and `compute_hash_with_pool`
+    across the crate boundary; `pub(crate)` would forbid that).
+    Second half is incomplete (the panic is gated specifically
+    by `cfg(all(not(test), feature = "internal-pool-bench"))`;
+    the no-feature production build never compiles `vm_pool` at
+    all). **Fix:** rewrote the comment to record the actual
+    visibility (`#[doc(hidden)] pub`), the actual gating shape
+    (whole module behind `#[cfg(any(test, feature =
+    "internal-pool-bench"))]`), and the actual panic discipline
+    (panic only when `Default::default()` is called outside
+    `#[cfg(test)]`, enforcing §3.5 R1-D5 explicit-capacity at
+    Phase 3a).
+
+  - **NF6 — `DerivationSlot::wait_for_result` deadlocks on
+    leader thread panic** in
+    [`rust/shekyl-pow-randomx/src/cache_store.rs`](../rust/shekyl-pow-randomx/src/cache_store.rs).
+    Round 2 §3.1 pinned the in-flight-derivation rendezvous as
+    `Mutex<HashMap<Seedhash, Shared<DerivationFuture>>>` at the
+    architecture level; the implementation used a
+    `Mutex<Option<Arc<PreparedCache>>>` per-slot rendezvous with
+    a `Condvar` for follower wake-up. Pre-fix, if the leader
+    thread panicked inside `PreparedCache::derive` (e.g.,
+    allocation failure during the 256 MiB Argon2d-512 fill),
+    `slot.publish` never ran, the `inner` mutex stayed at
+    `None`, the `Condvar` was never broadcast, and (a) every
+    follower already parked on `cv.wait` blocked forever; (b)
+    the `in_flight` HashMap entry was never removed, so
+    subsequent callers for the same seedhash acquired
+    `in_flight.lock()`, found the orphaned slot, became
+    followers of the dead leader, and joined the deadlock
+    cascade. Production builds set `panic = "abort"` for
+    `dev` / `release` (process aborts before any of this
+    matters), but `cargo test` always builds with
+    `panic = "unwind"` per the test-harness contract — so a
+    test exercising the failure path would hang rather than
+    fail with a diagnostic message. **Fix:** replaced
+    `Mutex<Option<Arc<PreparedCache>>>` with
+    `Mutex<DerivationOutcome>`
+    (`Pending` / `Published(Arc<PreparedCache>)` /
+    `LeaderAborted`); added `LeaderGuard<'cs>` that owns the
+    leader's slot Arc + a borrow of the in-flight mutex + a
+    `success: bool` flag, with `Drop` that always removes the
+    in-flight entry (cleanup-on-publish + cleanup-on-panic in
+    one path) and conditionally broadcasts `LeaderAborted` via
+    `publish_aborted_if_pending` when `mark_success` was never
+    called; `wait_for_result` now panics with a diagnostic
+    message on `LeaderAborted` instead of looping on the
+    condvar. The `lookup_or_derive` leader branch wraps its
+    `PreparedCache::derive` + `slot.publish` + `transient.write`
+    sequence in the guard's scope with a `mark_success` flag
+    flip after the transient write — on success the guard's
+    drop is a no-op for the abort broadcast and the in-flight
+    removal becomes the cleanup-on-publish step that previously
+    lived inline. **Test added — T-CS-13
+    `cachestore_leader_abort_wakes_followers_and_cleans_in_flight`:**
+    white-box test using a standalone
+    `Mutex<HashMap<Seedhash, Arc<DerivationSlot>>>` mock so the
+    test runs without paying the ~150–200 ms
+    `PreparedCache::derive` cost; spawns a follower thread on
+    `slot.wait_for_result()`, drops a `LeaderGuard` without
+    `mark_success`, and asserts (1) in-flight entry removed;
+    (2) slot in `LeaderAborted`; (3) follower panic-propagated
+    rather than hanging. With the pre-fix slot type the test
+    would hang indefinitely on assertion (3); with the fix it
+    passes deterministically.
+
+- **RandomX v2 Track A Phase 2f — review-cycle fixes (PR #72
+  Copilot findings NF1 + NF2)** (`feat/randomx-v2-phase2f-impl`,
+  2026-05-24). Two implementation defects surfaced by the post-fix
+  Copilot review against `7b5302ee9` and addressed in-place. Both
+  are localized refinements at the implementation layer; the
+  Round 2 / Round 3 / post-closure-pin architectural dispositions
+  remain unchanged. Plan-doc round history records the fixes as
+  audit trail per `21-reversion-clause-discipline.mdc`'s
+  post-closure-pin discipline.
+
+  - **NF1 — `PATTERN_FFI_EXPORT` blind spot in
+    [`scripts/ci/check_randomx_crate_invariants.sh`](../scripts/ci/check_randomx_crate_invariants.sh).**
+    The Round 3 §3.6 R1-E1 pattern C `extern "C" fn` arm anchored
+    `extern` as the first non-whitespace token; `pub extern "C" fn`,
+    `pub(crate) extern "C" fn`, `unsafe extern "C" fn`, and
+    `pub unsafe extern "C" fn` all bypassed the gate. Without
+    `#[no_mangle]` they are not C-callable today, but the gate's
+    stated purpose is to forbid the *export-intent shape*
+    independent of `#[no_mangle]` so that stepwise FFI-export drift
+    (add `pub extern "C" fn` first, attach `#[no_mangle]` later)
+    fires the gate at the first commit rather than only the
+    second. **Fix:** extend the regex to allow optional
+    `pub` / `pub(crate)` / `pub(super)` / `pub(in path)` visibility
+    prefix and optional `unsafe` keyword before `extern`,
+    mirroring pattern A's prefix coverage (closes the same shape
+    of blind spot the F1 fix closed for pattern A). Verified
+    against eleven positive shape variants (all match) and eight
+    negative shapes (`extern "C" { fn bar(); }` import blocks,
+    rustdoc citations, `use std::ffi::CStr;`, `fn extern_c() {}`,
+    etc. — all skip).
+
+  - **NF2 — `CacheStore::lookup` linearizability race on
+    transient→canonical promotion** in
+    [`rust/shekyl-pow-randomx/src/cache_store.rs`](../rust/shekyl-pow-randomx/src/cache_store.rs).
+    The Round 2 §3.1 per-slot `RwLock<Option<Arc<PreparedCache>>>`
+    shape was specified at the architecture level; the
+    implementation acquired and released each slot's read guard
+    sequentially across the comparison sequence. A concurrent
+    `set_canonical` could promote an entry from transient to
+    canonical between `lookup`'s two slot inspections, causing
+    `lookup(&S)` to observe canonical=Some(prior) → released →
+    transient=Some(prior_canonical) → return `None` despite the
+    requested entry being live in the canonical slot the entire
+    time. Soft consequence: a `lookup_or_derive` consumer falls
+    through to a ~150–200 ms Argon2d-512 re-derivation that should
+    have been a slot hit; violates the documented "few hundred
+    nanoseconds" cost-model. **Fix:** acquire both slot read
+    guards before the comparison sequence and hold them across
+    both inspections. The canonical-then-transient acquisition
+    order matches `set_canonical`'s canonical-write-then-transient-
+    write order, so there is no deadlock cycle. Updated `lookup`
+    rustdoc with explicit linearizability + lock-ordering
+    discussion; updated the `CacheStore` struct's
+    `# Synchronization shape` rustdoc to record the global
+    lock-ordering invariant ("every method acquiring both slot
+    locks acquires them canonical-then-transient, regardless of
+    read-vs-write mode"). **New test T-CS-12
+    `cachestore_lookup_linearizable_under_canonical_swap`:** seeds
+    the store with two pre-derived prepared caches in distinct
+    slots, runs alternating `set_canonical(p_a) /
+    set_canonical(p_b)` calls in one thread while a second thread
+    tightly polls `lookup(&seedhash_a) / lookup(&seedhash_b)` for
+    2,000 iterations and asserts both never return `None` (both
+    entries are live in *some* slot at every observable moment, so
+    a linearizable `lookup` must always find them). With the buggy
+    implementation the test fails probabilistically; with the fix
+    it passes deterministically because a concurrent
+    `set_canonical` cannot interleave between the two slot reads.
+
+- **RandomX v2 Track A Phase 2f — plan-doc front-matter staleness
+  corrections** (`chore/randomx-v2-phase2f-plan`, 2026-05-23).
+  Addresses PR #71 review findings (4 items, all header drift
+  between the scaffold-as-of-Round-0 framing and the post-Round-3
+  + post-closure-pin actual state). Per
+  `91-documentation-after-plans.mdc` audit-trail discipline, the
+  scaffold-original framing is preserved in place and the
+  superseding state is marked inline; this preserves the
+  discipline's evolution as auditable rather than flattening
+  history.
+
+  **(1) §Status block reframed.** The opening paragraph
+  previously described the doc as a "Round-0 substrate capture"
+  with Round 1 as the next deliverable. Reframed to "Round 3
+  closed + post-closure pins + post-closure pin refinements"
+  with a brief inventory of what each round / post-closure
+  amendment landed; readers wanting current state read the
+  status block, readers wanting evolution read §11 Round
+  history. Two new front-matter paragraphs (Reading order +
+  Original scaffold framing preserved) make the audit-trail
+  discipline explicit.
+
+  **(2) §front-matter "No 2c or 2d public surface changes in
+  2f" claim flagged as superseded.** The original claim was
+  correct as of the scaffold but is false post-Round-2 (which
+  intentionally amends the inherited 2d public surface to
+  close the consensus-correctness footgun the 2d signature
+  carried). The original claim is preserved as audit trail; a
+  Round-2-supersedes paragraph immediately follows it citing
+  `16-architectural-inheritance.mdc`'s pre-genesis discount
+  rationale for landing the substrate correction in plan-doc
+  Round 2 rather than V3.x.
+
+  **(3) §Scope envelope `≤600 net-new-lines` target flagged
+  as superseded.** Round 2's `Seedhash` newtype +
+  `PreparedCache` + atomic Seedhash sweep added ~200 net
+  lines per §5.2's line-count table (~800 net-new lines
+  total; ~50–150 additional if the R1-D3 cfg-gated pool flips
+  to production). The scaffold-original ≤600 figure is
+  preserved as audit trail; the load-bearing budget is §5.2's
+  per-item table.
+
+  **(4) CHANGELOG post-closure-pin-refinements entry
+  honestly framed.** The previous closing paragraph said "No
+  structural changes to Round 2 / Round 3 / post-closure-pin
+  dispositions; only narrower specifications" — but item (1)
+  in the same bullet is a narrow structural change to a
+  post-closure pin (reversing the pin-#2 framing on
+  `cache_ref()` in favor of an explicit accessor). Reworded
+  to "No changes to Round 2 / Round 3 dispositions. Item (1)
+  above is a narrow structural change to a post-closure pin
+  …; the other five items are narrower specifications of
+  pre-existing pins." This is the same shape as the
+  prediction-vs-measured discipline added in commit
+  `cb9dc0dd2`'s §8 framing — make the divergence visible
+  rather than letting it slip past.
+
+  No changes to plan-doc dispositions (Round 1 / Round 2 /
+  Round 3) or to post-closure pins (item-#1 reversal already
+  landed in commit `cb9dc0dd2`); these are framing-staleness
+  corrections only. No CI / code changes; PR #71 remains
+  doc-only.
+
+- **RandomX v2 Track A Phase 2f — post-closure pin refinements**
+  (`chore/randomx-v2-phase2f-plan`, 2026-05-23). Companion
+  commit to the post-closure substrate-completeness pins
+  ([`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md)).
+  Six narrow refinements, each tightening a post-closure pin
+  against a substrate observation. Per
+  `21-reversion-clause-discipline.mdc`'s post-closure-pin
+  discipline; not a Round 4.
+
+  **(1) §1.1 pin #2 reversed: explicit `pub(crate) cache_ref()`
+  accessor on `PreparedCache`.** The original post-closure-pin
+  disposition ("no accessor; `compute_hash` private-field-extracts
+  internally") is replaced. The explicit accessor:
+
+  ```rust
+  impl PreparedCache {
+      pub(crate) fn cache_ref(&self) -> &Cache;
+  }
+  ```
+
+  documents the established reach-through shape from
+  `&PreparedCache` to `&Cache` for the dispatch loop's in-crate
+  consumption, and prevents a future contributor from
+  re-exposing `Cache`'s API on `PreparedCache` (e.g., adding
+  `prepared.derive_item(...)` as a convenience). Per
+  `05-system-thinking.mdc`'s "specification first, code second"
+  discipline, the explicit accessor is the documented contract.
+  Tests continue to use `pub(crate) Cache::from_raw` per Phase
+  2c R0-D6.
+
+  **(2) §4 Round 4 placeholder explicit close.** F1–F7 is the
+  threat-model close for Phase 2F. The §4 "Round 4 placeholder"
+  is preserved per `91-documentation-after-plans.mdc` audit-trail
+  discipline so the Round 1 framing remains visible; it is not
+  a queued deliverable. Future findings (impl-PR pre-flight;
+  Phase 2g differential-harness surface) reopen the threat
+  model via substrate-change criteria, not via sequential
+  numbering — there is no Round 4 hanging on this plan-doc.
+
+  **(3) §8 commit-5 prediction-vs-measured discipline.** The
+  impl-PR description must include both the predicted branch
+  (from §8 — Branch C plausible per PR-66's hundreds-of-µs;
+  Branch A plausible per modern-allocator tens-of-µs) and the
+  measured branch (from commit 4's `BENCH_RESULTS.md`) with
+  explicit reconciliation: "prediction held" or "prediction
+  wrong because <substrate-anchored reason>." Mirrors the
+  mp-correction discipline (Phase 2c PR-65); makes the
+  divergence visible rather than letting it slip past as an
+  undocumented surprise.
+
+  **(4) §10.3 layering note: shim absorbs (g)-style discipline
+  the verifier rejected.** The shim-side scoped-closure
+  discipline ("borrow for the duration of one hash computation"
+  rather than "store the handle in async state") absorbs the
+  API constraint Round 2 §3.1 rejected at the verifier layer.
+  The (g)-option scoped-closure pattern was rejected at the
+  verifier's Rust-side API for being too constraining on
+  consumers; the same pattern is acceptable on the shim side
+  because the shim's consumers are FFI callers who already
+  navigate explicit allocate/use/destroy lifecycle. The
+  responsibility moved layers (verifier → shim) rather than
+  disappeared. Future readers see that the (g)-rejection at the
+  verifier and the (g)-style absorption at the shim are the
+  same discipline, applied at the layer where it doesn't
+  constrain the wrong consumers.
+
+  **(5) §10.4 cfg-gated-additions principle + `TraceSink`
+  scope.** Cfg-gated test-infrastructure additions are not
+  "tweaks to upstream RandomX" — they are Rust-language
+  affordances for tooling. The "don't tweak upstream unless we
+  need to" discipline applies to consensus-affecting behavior
+  (production-build code paths influencing hash output, cache
+  derivation, dispatch loop, validation rules), not to bisection
+  convenience (test-only paths gated by
+  `#[cfg(any(test, feature = ...))]`). The line is
+  consensus-affecting, not Shekyl-specific. **`TraceSink`
+  trait scope pinned**: the trait's surface design lives with
+  Phase 2g's plan-doc, not with the verifier's public API; the
+  trait stays scoped to the differential harness's consumption.
+  Do not promote `TraceSink` to a public surface — a
+  `pub trait TraceSink` exposed from the verifier crate would
+  create an API contract that constrains future verifier-internal
+  refactors.
+
+  **(6) §10.5 Phase 2g audit posture against the C reference.**
+  Three-leg framing for the "Shekyl's verifier is canonical
+  RandomX v2" claim: (1) spec-faithful implementation discipline
+  (Phases 2b/2c/2d/2f); (2) C-reference audit where the spec is
+  silent (Argon2d salt; SuperscalarHash program-generation seed;
+  JIT-vs-interpreter dispatch; etc.); (3) differential-harness
+  corpus testing (Phase 2g). The load-bearing claim is **leg
+  1**; leg 3 is the backstop. Corpus testing on a finite set of
+  inputs does not establish behavior on the unbounded set of
+  all inputs, but it does increase confidence that leg 1's
+  discipline was applied correctly. For an external auditor
+  asking "how do you know this is right?", the answer is "we
+  implemented to spec, audited against the C reference where
+  the spec is silent, and test against the C reference's
+  outputs as a backstop" — not "we test against the C reference"
+  alone. Phase 2g's plan-doc inherits this framing.
+
+  No changes to Round 2 / Round 3 dispositions. Item (1) above
+  is a narrow structural change to a post-closure pin (the
+  pin-#2 framing on `cache_ref()` is reversed in favor of an
+  explicit `pub(crate) fn cache_ref(&self) -> &Cache` accessor);
+  the other five items are narrower specifications of
+  pre-existing pins. Reopen criteria are substrate-anchored per
+  the named items; none anticipated. The chore branch holds
+  Round 2 + Round 3 + post-closure pins + post-closure pin
+  refinements; no push without separate authorization.
+
+- **RandomX v2 Track A Phase 2f — post-closure substrate-
+  completeness pins** (`chore/randomx-v2-phase2f-plan`,
+  2026-05-23). Companion commit to Round 2 + Round 3 of
+  [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md).
+  Per `21-reversion-clause-discipline.mdc` ("an under-specification
+  surfaced post-closure does not reopen the round it belonged
+  to but is named explicitly as a post-closure pin"; not a
+  Round 4). Six items, all narrow specifications of what
+  Round 2 / Round 3 already pinned at the architectural level.
+
+  **(1) §1.1 `Display` impl framing corrected.** Round 2's
+  framing claimed "lowercase hex for logging consistency with
+  Phase 2c's existing seedhash-formatting conventions";
+  verification at HEAD (`rg -i seedhash` across
+  `rust/shekyl-pow-randomx/src/`) found zero `tracing::` /
+  `log::` / `format!` / hex-rendering sites. Phase 2c does not
+  establish a seedhash-formatting convention because Phase 2c
+  does not log seedhashes. The lowercase-hex disposition
+  stands (matches `hex::encode` and the cryptographic-output
+  convention); the framing is corrected to cite the
+  convention directly rather than the unsupported "Phase 2c
+  consistency" claim. The `Display` impl is for downstream
+  consumers (FFI shim, daemon-side logging, test
+  diagnostics) — the verifier crate itself does not log.
+
+  **(2) §1.1 dispatch-loop / `Cache` visibility pin.** The
+  Round 2 `Cache: pub → pub(crate)` transition does not affect
+  the dispatch loop's `vm.rs::execute_one` signature (in-crate
+  `cache: &Cache` — the visibility transition is
+  crate-boundary-only). `compute_hash` extracts
+  `&prepared.cache` via private-field access internally (both
+  in the same crate); no `cache_ref()` accessor on
+  `PreparedCache` is added. Tests that need direct `Cache`
+  construction continue to use `pub(crate) Cache::from_raw`
+  per the Phase 2c R0-D6 tests-use-the-actual-API discipline.
+
+  **(3) §1.1 `PreparedCache` equality pin.** `PreparedCache`
+  does not derive `PartialEq` / `Eq`. Two equality semantics
+  are needed; each is served by a more specific primitive than
+  `PartialEq` on `PreparedCache`: seedhash equality
+  (`slot.seedhash() == lookup_key` via `Seedhash`'s derived
+  `PartialEq`) for CacheStore slot indexing, and `Arc::ptr_eq`
+  for identity comparisons in tests T-CS-5/7/9. Deriving
+  `PartialEq` would either be structural value-equality
+  (compare 256 MiB cache bytes; no caller wants this) or
+  delegating equality (compare seedhash only; conflates "same
+  seedhash" with "same `PreparedCache` instance"). Both shapes
+  are wrong; the absence of the impl forces consumers to use
+  the right primitive at the call site.
+
+  **(4) §8 commit-5 empirical-conditional + branch-prediction
+  pin.** Commit 5 (cfg-gate flip per §3.4 Round 3) is
+  conditional on the §6.3 A/B bench delta measured at commit
+  4. The empirical answer does not exist at plan-doc-close
+  time. Branch C (≥ 100 µs delta) plausible per PR-66's
+  hundreds-of-µs per-call alloc cost; Branch A (< 50 µs)
+  plausible per `Box::<[u8]>::new_zeroed_slice(2 MiB)`
+  typical tens-of-µs cost on modern allocators. Both
+  predictions are consistent with the §3.4 Round 3
+  disposition; the impl-PR's commit-4 bench result resolves
+  the prediction with substrate-anchored data, and the impl-PR
+  description names the branch taken so reviewers can spot
+  surprises against the prediction.
+
+  **(5) §10.3 Phase 3a FFI shim discipline.** The verifier
+  crate provides the Rust-side type system (`Seedhash`,
+  `PreparedCache`, `Arc<PreparedCache>`, `CacheStore`); the
+  Phase 3a FFI shim owns the C-side opaque-handle shape,
+  `Seedhash::from_bytes(*ptr)` construction at the boundary,
+  `Arc<PreparedCache>` lifecycle across the boundary
+  (daemon-facing API discourages long-lived holds per the
+  caller hand-off Arc-lifetime discipline), and
+  `VmStatePool::new(capacity)` runtime-parameter derivation
+  from `dev`-tip daemon threadpool source at Phase 3a wire-up
+  time. Phase 3a's plan inherits the disposition rather than
+  re-litigating it.
+
+  **(6) §10.4 Phase 2g `compute_hash_with_trace` pre-pin.**
+  Pre-pinned the option for a
+  `#[cfg(any(test, feature = "differential-trace"))] pub fn
+  compute_hash_with_trace(prepared, data, trace_sink) ->
+  [u8; 32]` test-infrastructure entry point for differential-
+  harness bisection (per-iteration register-file snapshots;
+  not a public-API addition; production build pays no
+  overhead). The C reference does not expose this; the Rust
+  verifier exposes it under `#[cfg(...)]` so the verifier's
+  "stay minimal; don't add Shekyl-specific divergence"
+  discipline is preserved. Phase 2g's plan inherits the
+  option; uses it iff bisection workflow requires per-iteration
+  trace visibility (otherwise the API is not added).
+
+  No structural changes to Round 2 / Round 3 dispositions;
+  only narrower specifications. The reopen criteria for the
+  post-closure pins are substrate-anchored per the named
+  items; none are anticipated. The chore branch holds Round 2
+  + Round 3 + post-closure pins; no push without separate
+  authorization.
+
+- **RandomX v2 Track A Phase 2f — Round 3 design (refinement
+  bundle)** (`chore/randomx-v2-phase2f-plan`, 2026-05-23).
+  Companion commit to Round 2's architectural keystone for
+  [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md).
+  Round 3 hardens the dispositions Round 2 left for follow-up.
+  **§3.3 R1-D3 reframed to cfg-gated A/B approach** — pool body
+  implemented behind `#[cfg(any(test, feature = "internal-pool-bench"))]`
+  regardless of R1-D4 outcome; bench harness measures both paths
+  directly (`B-pool-off` always; `B-pool-on` when feature
+  enabled). Closes the Round 1 circular-sequencing problem.
+  **§3.4 R1-D4 dissolved into R1-D3** — the threshold (Decision
+  #7's 100 µs) is a binding source; the Round 1 task is
+  mechanical application of the threshold to the A/B delta. The
+  cfg-gated pool stays in source as the bench-only artifact on
+  Branch A; flips to default-on on Branch C. **§3.5 R1-D5
+  refined to runtime-configurable capacity** —
+  `VmStatePool::new(capacity: usize)` constructed from the Phase
+  3a FFI shim's threadpool-source-derived value; the default
+  constructor panics in non-test builds to enforce explicit
+  configuration. The Round 1 R1-D5 survey methodology stands;
+  the substrate-anchored value flows in at runtime rather than
+  baking into a `pub(crate) const` at compile time. Closes the
+  Round 1 staleness footgun where a Phase-2F-baked-in capacity
+  could mismatch the Phase 3a daemon configuration. **§3.6 R1-E1
+  rustfmt-rely-chain note added** — the column-0 anchor is
+  robust against function-local statics if and only if
+  `cargo fmt --check` is a CI gate (which it is, per Phase 2c
+  R0-D6); the rely-chain is named explicitly in the §3.6 Round 3
+  sub-block. **§4 threat-model F1–F7 enumeration** (Round 4
+  placeholder retained as audit trail; Round 3 supersedes
+  inline): F1 cache-derivation DoS amplification (closed by
+  canonical non-eviction); F2 Arc-holding memory exhaustion
+  (bounded by capacity-2 + caller-side discipline note); F3
+  thundering herd on novel-seedhash (closed by in-flight dedup);
+  F4 unbounded HashMap growth (closed by cleanup-on-publish); F5
+  concurrent-derivation race (covered by determinism property +
+  dedup); F6 mutex contention amplification (addressed by
+  `RwLock`-per-slot + capacity-2-no-sharding); F7 cache-derivation
+  cost asymmetry (out of scope; upstream daemon-side validation
+  discipline). **Caller hand-off Arc-lifetime discipline note**
+  added to the `CacheStore` rustdoc (consumers should hold
+  `Arc<PreparedCache>` only for the duration of the immediate
+  hash computation; long-lived holds extend cache memory
+  residency beyond `CacheStore`'s bound; daemon-side discipline,
+  not a `CacheStore` enforcement). **§6.1 test plan reshaped to
+  Round-2-typed pre/post table** (T-CS-1..11; in-flight-dedup
+  test T-CS-7; cleanup-on-publish white-box test T-CS-8;
+  concurrent-determinism property test T-CS-9; type-shape
+  compile-time checks T-CS-10/11). **§6.3 bench harness
+  reshaped** to `B-pool-off` / `B-pool-on` A/B per §3.3 Round 3;
+  component-floor benches retained as cross-check;
+  `BENCH_RESULTS.md` records the A/B delta + Branch disposition.
+  **§8 commit table reshaped** to 6-commit Round-2-+-Round-3
+  shape: `Seedhash` + `PreparedCache` type sweep (1);
+  `CacheStore` (2); invariant grep gate (3); cfg-gated pool +
+  A/B bench (4 — always); cfg-gate flip (5 — Branch C only);
+  plan close + `CHANGELOG` (6). The Round 1 5-commit shape's
+  Branch-A-omits-commit-4 / Branch-B-defers-commit-4 /
+  Branch-C-includes-commit-4 trichotomy collapses to "is commit
+  5 included" rather than "does commit 4 exist." **§3.1 (g)
+  rejection inline at `CacheStore` rustdoc** — the Arc-holding
+  memory exhaustion finding is named in the public rustdoc so
+  future readers asking "wouldn't this be simpler without two
+  slots?" find the adversarial finding rather than re-proposing
+  the shape. **Adversarial-pass-precedent named** — the (g) → (b)
+  Round 2 reversal is the second documented instance of
+  "adversarial pass reverses an aesthetically-preferred choice"
+  (first: LWMA-1 time-source local-time-only over peer-time-
+  derived). The recurrence justifies promotion to
+  `26-sub-pr-design-discipline.mdc` as a sibling discipline-
+  promotion PR (`chore/sub-pr-design-discipline-adversarial-pass`).
+  No outstanding Round-N+1 follow-ups queued from Round 3; Round
+  4 (if any future round opens) reopens via the §3.1 / §3.3 /
+  §3.5 substrate-change reopening criteria, not via sequential
+  numbering.
+
+- **RandomX v2 Track A Phase 2f — Round 2 design (architectural
+  reframe)** (`chore/randomx-v2-phase2f-plan`, 2026-05-23).
+  Architectural keystone for
+  [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md)
+  Round 2; supersedes the Round 1 dispositions where the Phase 2c
+  freeze inherited a consensus-correctness footgun the type system
+  can close at zero cost. Round 1 dispositions stand as audit
+  trail. Round 3 follow-up commit (queued; same chore branch)
+  refines the dispositions Round 2 doesn't directly touch (R1-D3 /
+  R1-D4 / R1-D5 / R1-E1 refinements; threat-model F1–F7
+  enumeration; commit-table reshape). The "no push" framing is the
+  right shape: both Round 2 and Round 3 commits stay on the chore
+  branch until both are ready, then push together. Merging the
+  keystone alone would create a transient state where the
+  architecture is reframed but the synchronization shape isn't
+  pinned, the in-flight deduplication isn't specified, etc.
+  - **§1.1 substrate correction (load-bearing).** Phase 2c's
+    `compute_hash(&Cache, &[u8; 32], &[u8]) -> [u8; 32]` shape
+    carries the cache and the seedhash as separate arguments; a
+    caller passing the wrong cache for a given seedhash gets a
+    wrong hash, which is fine for chain integrity (network
+    rejects) but is a footgun the type system can close at zero
+    cost. Round 2 introduces:
+    - `pub struct Seedhash(/* private [u8; 32] */)` — newtype
+      replacing `[u8; 32]` aliases for seedhashes. Derives
+      `Copy / Clone / Debug / Eq / Hash / PartialEq` plus a
+      `Display` impl (hex). Representation is private (accessor-
+      mediated `from_bytes` / `as_bytes`); pre-genesis the
+      representation is fixed but post-genesis the accessor shape
+      lets the representation evolve without churning every call
+      site. Future-proofs typed-provenance refinements (e.g.,
+      `ValidatedSeedhash(Seedhash)` for "this seedhash came from a
+      validated block header" vs arbitrary user input).
+    - `pub struct PreparedCache` bundling `Cache + Seedhash`. The
+      bundle is constructed via `pub fn PreparedCache::derive(Seedhash) -> PreparedCache`;
+      `pub fn PreparedCache::seedhash(&self) -> &Seedhash`.
+      Wrong-cache-for-seedhash is unrepresentable: there is no
+      public path to construct a `PreparedCache` whose `cache`
+      wasn't derived from its `seedhash`.
+    - `compute_hash` signature amended:
+      `pub fn compute_hash(&PreparedCache, &[u8]) -> [u8; 32]`.
+      No separate seedhash parameter. The bundling propagates
+      through to the FFI surface (per §10.2) — the C++ caller
+      passes an opaque `PreparedCache*` and never sees a
+      seedhash on the compute path.
+    - `Cache` transitions `pub → pub(crate)`. The
+      `pub(crate)` `Cache::derive(&Seedhash) -> Cache` is the
+      implementation primitive but not the public API. Test
+      access is preserved via `src/*.rs#mod tests` discipline
+      (Phase 2c R0-D6); `Cache` rustdoc carries a pointer to
+      `PreparedCache` as the public construction path.
+    - **Two-layer derivation discipline.** `Cache::derive(&Seedhash) -> Cache`
+      is the pure transform (testable in isolation, preserves
+      Phase 2c's T1 spec-vector test infrastructure);
+      `PreparedCache::derive(Seedhash) -> PreparedCache` is the
+      bundling wrapper (three lines of body; calls
+      `Cache::derive` and pairs the result with the seedhash).
+      Two-layer chosen over one-layer for test-infrastructure
+      continuity (T1 spec vectors assert `Cache::derive` against
+      canonical reference output; reusing those tests against
+      the internal `Cache::derive` is cheaper than rewiring them
+      through `PreparedCache.cache()`).
+    - **Seedhash-newtype sweep is atomic with introduction.**
+      Every site that currently passes `&[u8; 32]` for a
+      seedhash (Cache::derive, PreparedCache::derive,
+      CacheStore::*, FFI shim's seedhash constructor, every
+      test that constructs a literal seedhash) updates to
+      `&Seedhash` / `Seedhash` in the **same impl-PR commit**
+      as the newtype's landing. Not as a follow-up. Otherwise
+      the codebase has a transitional period where some sites
+      use `&[u8; 32]` and some use `&Seedhash`, which is
+      exactly the drift the newtype prevents.
+  - **§3.1 R1-D1 + R1-D2 merged disposition.** Round 1's
+    single-axis question (CacheStore API shape) is layered into
+    a three-axis question post-`PreparedCache`:
+    - **Axis 1 (consensus-correctness):** where the cache+seedhash
+      binding lives. (i) separate parameters [Phase 2c freeze;
+      Round 2 rejects]; (ii) `PreparedCache` bundle [Round 2
+      picks]. Type-enforces the binding.
+    - **Axis 2 (QoS):** canonical-protection shape. (a)
+      transparent memo with `pin/unpin` [Round 1 rejected]; (b)
+      explicit two-slot type [Round 1 picked, Round 2 reaffirms;
+      now operates on `Arc<PreparedCache>`]; (c) type-stratified
+      composition [Round 1 rejected as over-provisioning at
+      capacity 2]. Once Axis 1 type-enforces consensus
+      correctness, Axis 2's stakes drop from "structurally
+      enforce consensus correctness" to "structurally enforce QoS
+      sticky property" — (b) is still right but the argument is
+      lower-stakes.
+    - **Axis 3 (whether CacheStore exists):** (d) no-CacheStore
+      [Round 2 rejects]; (e) thin amortizing layer [Round 2
+      partial pick]; (f) full canonical-protection structure
+      [Round 1 (b) shape, pre-PreparedCache; Round 2 partial
+      pick]. Round 2 picks **(e)/(f) hybrid**: thin amortizing
+      layer with explicit two-slot canonical-protection on top
+      of `Arc<PreparedCache>`. Rejects (d) and its (g)
+      refinement (no-CacheStore + per-consumer in-flight
+      deduplication map) for the **Arc-holding memory exhaustion
+      attack**: without a capacity-N cap at a CacheStore layer,
+      an attacker who induces concurrent novel-seedhash lookups
+      gets the daemon to hold many `Arc<PreparedCache>` clones
+      whose total memory footprint scales with seedhashes-seen-
+      in-attack-window. Capacity-N at the CacheStore layer
+      bounds this; consumer-side discipline does not.
+  - **Frozen `CacheStore` public surface (Round 2 supersedes
+    Round 1's code-block).**
+    `pub fn new() -> CacheStore`,
+    `pub fn lookup(&self, seedhash: &Seedhash) -> Option<Arc<PreparedCache>>`,
+    `pub fn lookup_or_derive(&self, seedhash: &Seedhash) -> Arc<PreparedCache>`,
+    `pub fn set_canonical(&self, prepared: Arc<PreparedCache>)`.
+    The Round 1 `insert` method is **removed**; its function
+    (publish a derived cache into the transient slot) is subsumed
+    by `lookup_or_derive`'s on-completion publication. No
+    caller-driven insert path remains. Separating fast-path
+    (`lookup`, no derivation) from slow-path
+    (`lookup_or_derive`, may derive) lets a hot-path validator
+    that knows it should hit canonical call `lookup` and treat
+    `None` as an error signal rather than transparently paying
+    ~150 ms of unexpected derivation cost.
+  - **In-flight derivation deduplication shape pinned (Round 2
+    new vs. Round 1 surface).** `Mutex<HashMap<Seedhash, Shared<DerivationFuture>>>`
+    inside `CacheStore`. Concurrent `lookup_or_derive` calls
+    for the same novel seedhash share one in-flight derivation;
+    only one Argon2d fill runs. **Cleanup-on-publish** drops the
+    in-flight-map entry immediately on derivation completion —
+    load-bearing for memory-boundedness (without it, the
+    in-flight `HashMap` grows unboundedly under sustained
+    novel-seedhash attack). Closes the thundering-herd attack
+    surface that applies regardless of Axis 2/3 selection. The
+    `Shared<DerivationFuture>` is the `futures::future::Shared`
+    adapter (or a sync alternative built on
+    `std::sync::Arc<std::sync::Mutex<DerivationState>>` +
+    condvar; the choice is a Round 3 sub-detail per dependency
+    discipline).
+  - **Synchronization shape pinned at Round 2.** Per-slot
+    `RwLock<Option<Arc<PreparedCache>>>` for canonical and
+    transient (lookups are hot path; writes are rare; concurrent
+    readers proceed; canonical reads don't block transient
+    writes and vice versa). `Mutex<HashMap>` for in-flight
+    (writes/reads balanced; short critical section; `RwLock`
+    would not buy meaningful concurrency). Sharding rejected at
+    capacity-2 (no contention to reduce when there are only two
+    slots). Pre-genesis discount makes synchronization changes
+    bounded; reopen via Round X+1 if Phase 3a profiling
+    surfaces `RwLock`-not-helping or `Mutex`-contention.
+  - **11-row state-transition table refreshed.** Pre/post states
+    typed against `Arc<PreparedCache>` (rather than
+    `(seedhash, Arc<Cache>)` pairs); `insert→lookup_or_derive`
+    substitution; in-flight-dedup concurrent row added. The
+    Round 1 table is preserved as audit trail in §3.2 and
+    superseded by §3.1 Round 2 disposition. Substantive
+    transitions are unchanged from Round 1 (canonical
+    non-evictable; transient displace-on-publish; advance
+    promotes-and-demotes); the table refresh is the typing.
+  - **Capacity-2 reopen criterion sharpened.** Round 1: "a
+    second Rust caller of `CacheStore` lands that needs
+    concurrent canonicality across multiple chains." Round 2:
+    "a *named real consumer* surfaces a *sustained operational
+    pattern* where 2 caches isn't sufficient and the operator
+    demonstrably has to choose between paying re-derivation
+    cost or extending the `CacheStore`." Substrate-anchored
+    event = consumer's call-site grep evidence + measurement
+    showing the cost.
+  - **Transparent-memo framing retired.** Parent-plan
+    `RANDOMX_V2_PLAN.md` Decision #6 wording ("transparent memo
+    with capacity-2 LRU and `pin()` API") belonged to the
+    rejected Option (a). Option (b) is honest about the
+    two-slot structure. Wording amendment queued as **precursor
+    PR** `chore/randomx-v2-plan-decision6-amendment` that lands
+    *before* the Phase 2F implementation PR opens. Bounded
+    scope; one-file change. Precedent: Phase 2c F4-absorbed
+    parent-plan rescope.
+  - **Reversion clause expanded to three independent axes.**
+    Axis 1 (PreparedCache bundling): reopens if a deserialization
+    use case surfaces, FFI-shim audit reveals C-ABI cost, or V4
+    PQC architectural choice requires PQC-authenticated cache
+    metadata. Axis 2 (canonical-protection-in-(b)): carries
+    forward Round 1's three reopening criteria unchanged. Axis
+    3 (CacheStore exists): reopens if Phase 3a profiling shows
+    `Mutex<HashMap>` is the bottleneck or if architectural-
+    inheritance audit reveals consumer-side discipline can be
+    made structural (e.g., scoped handle pattern).
+  - **§5 implementation hand-off contract updated.** Frozen
+    items per Round 2 (compute_hash signature, Seedhash newtype,
+    PreparedCache, Cache visibility, CacheStore API,
+    eviction-policy table, sweep-atomic-with-introduction) plus
+    Round 1 freeze items unchanged where Round 2 doesn't apply.
+    In-scope artifacts table grows by 5 rows (Seedhash newtype,
+    PreparedCache, Cache visibility transition, compute_hash
+    signature update, atomic Seedhash sweep within the crate).
+    Out-of-scope re-emphasized: FFI shim updates land at
+    Phase 3a; parent-plan Decision #6 wording lands at the
+    precursor PR. Total ~800 lines net-new (was ~600 pre-Round-2;
+    +~200 from PreparedCache + Seedhash + sweep + larger
+    CacheStore + larger test matrix).
+  - **§10 forward path updated.** 2g and 3a inherit the
+    `compute_hash(&PreparedCache, &[u8]) -> [u8; 32]` shape
+    (not the Phase 2c-frozen
+    `compute_hash(&Cache, &[u8; 32], &[u8])`). Phase 3a's FFI
+    shim constructs `Seedhash::from_bytes(*ptr)` from the C-ABI's
+    `*const [u8; 32]` and passes `Arc<PreparedCache>` as
+    opaque pointers. **§10.2 PQC migration space note:** the
+    verifier crate's API is PQC-orthogonal by construction
+    (Seedhash is 32 bytes; PreparedCache uses classical
+    Argon2d-derived state; compute_hash produces 32 bytes).
+    PQC architectural choices (V4-lattice signatures, hybrid-
+    PQC verification pipeline shape) land at Phase 3a's shim
+    layer, not in the verifier. Future contributors should not
+    attempt to "PQC-prepare" the verifier crate's API.
+  - **Plan-doc edits (this commit):** §1.1 rewritten with
+    scaffold-and-Round-1 freeze preserved as audit trail and
+    Round 2 amendment as load-bearing supersession; §3.1 Round 2
+    disposition added (covers merged R1-D1+R1-D2, three-axis
+    options matrix, frozen API code-block, in-flight dedup
+    shape, synchronization shape, 11-row state-transition table,
+    capacity-2 reopen criterion, transparent-memo retirement,
+    three-axis reversion clause); §3.2 Round 2 marker added
+    (R1-D2 merged into R1-D1); §5.1 frozen-by-this-doc list
+    updated with Round 2 supersession markers; §5.2 in-scope
+    artifacts grows by 5 rows; §5.3 out-of-scope additions
+    (FFI shim updates; parent-plan Decision #6 wording); §10
+    forward path updated for `PreparedCache` shape + §10.1
+    precursor PR queue + §10.2 PQC migration space note; §11
+    Round history gains Round 2 row.
+- **RandomX v2 Track A Phase 2f — Round 1 design closure**
+  (`chore/randomx-v2-phase2f-plan`, 2026-05-23). Closes Round 1 of
+  [`docs/design/RANDOMX_V2_PHASE2F_PLAN.md`](design/RANDOMX_V2_PHASE2F_PLAN.md)
+  six decision points after the 2026-05-23 scaffold (`f3da9f093`):
+  - **R1-D1 (CacheStore API surface):** picks option (b) explicit
+    two-slot type with `new` / `lookup` / `insert` / `set_canonical`.
+    Rejects (a) transparent memo on the basis that the F1 sticky-
+    canonical defense depends on the caller never letting the
+    canonical seedhash be evicted by routine `lookup` ordering;
+    folding the canonical-vs-transient distinction into the type
+    structurally enforces what (a) would push to caller discipline.
+    Rejects (c) type-stratified composition as over-provisioning at
+    capacity 2. Internal sync via `std::sync::Mutex` only — `lru` is
+    not a workspace dependency (verified at `rust/Cargo.toml`),
+    `parking_lot` is transitive-only via the existing
+    `criterion` / `tokio` paths, and a 2-slot store does not justify
+    pulling either into the direct dep set per
+    `17-dependency-discipline.mdc`. Frozen API code-block pinned in
+    `RANDOMX_V2_PHASE2F_PLAN.md` §3.1 Round 1 disposition; revert
+    criteria (substrate-anchored): a second Rust caller emerges
+    needing concurrent canonicality across multiple chains;
+    Decision #5 (FFI-locality) reverses; Phase 3a FFI shim survey
+    surfaces concurrency requirements incompatible with the two-
+    slot shape.
+  - **R1-D2 (eviction policy + interleave matrix):** policy falls
+    out of (b) — canonical slot is non-evictable, transient slot is
+    displace-on-insert, `set_canonical` advance promotes-from-
+    transient + demotes-prior. Cold-start window (no `set_canonical`
+    yet called) leaves both slots subject to attacker churn; bounded
+    to daemon startup and handled by the FFI shim's discipline (no
+    fallback policy in `CacheStore` itself). 11-row pre/post state-
+    transition table covering `RANDOMX_V2_PHASE2C_PLAN.md` §5.11.7
+    #1 3-seedhash interleave attack, the 2-seedhash cold-start
+    degenerate case, the canonical-advance demotion, and the no-op
+    cases. Reversion criteria tied to R1-D1.
+  - **R1-D3 (bench methodology for per-call `VmState` isolation):**
+    picks option (b) Component method. Rejects (a) Diff method
+    because the natural amortization shape requires either promoting
+    `VmState` to `pub` or adding a `pub fn compute_hash_with_state`
+    helper — both contradict `RANDOMX_V2_PHASE2F_PLAN.md` §1.1
+    (`VmState` is `pub(crate)`) and Decision #7 (no public `VmPool`).
+    Rejects (c) Population method per the scaffold's sequencing-
+    cycle note. Component sum: `Box::<[u8]>::new_zeroed_slice(2 MiB)`
+    median + synthetic register-file zero-init median (the bench
+    does not consume the production `VmState` newtype to keep
+    visibility clean); the sum is a *floor* on per-call alloc cost.
+    Bench code-block pinned in §3.3 Round 1 disposition. Revert
+    criteria: floor lands in [50, 100) µs ambiguity band per R1-D4
+    (would require option (a)'s tighter measurement); Decision #7
+    reverses; empirical evidence shows the component decomposition
+    systematically underestimates by > 30%.
+  - **R1-D4 (pool decision threshold + reversion clause):** confirms
+    the 100 µs threshold per `RANDOMX_V2_PLAN.md` line 240. Three-
+    band decision rule on the R1-D3 component-floor median: < 50 µs
+    → no pool (Branch A); [50, 100) µs → escalate to impl-PR pre-
+    flight per R1-D3 reversion-clause #1 (Branch B); ≥ 100 µs →
+    pool inside `compute_hash`, no public `VmPool`, capacity from
+    R1-D5 (Branch C). Reversion clauses for the no-pool path
+    enumerate substrate-anchored triggers (allocator regression;
+    scratchpad-size change at consensus level; runtime-architecture
+    mismatch).
+  - **R1-D5 (daemon parallel-verification fanout survey
+    methodology):** audit-against-actual-code per
+    `16-architectural-inheritance.mdc` against
+    `src/cryptonote_core/blockchain.cpp`,
+    `src/cryptonote_core/tx_pool.cpp`,
+    `src/cryptonote_core/cryptonote_tx_utils.cpp`,
+    `src/cryptonote_core/tx_pqc_verify.cpp`, and
+    `src/common/threadpool.{h,cpp}` at `dev` tip = `fb21909ff`.
+    Substrate correction vs. prompt: only **one** parallel
+    `compute_hash` call site exists at HEAD — alt-chain branch
+    validation's `block_longhash_worker` via
+    `tools::threadpool::getInstanceForCompute()`, capped by
+    `m_max_prepare_blocks_threads` (default 4). Mempool tx
+    verification does **not** call `compute_hash` in parallel; the
+    prompt's two-source assumption was incorrect. Pool capacity
+    formula: `min(threadpool::getInstanceForCompute().get_max_concurrency(),
+    m_max_prepare_blocks_threads) + 1` reserve. Reversion criteria:
+    a future PR introduces `tools::threadpool` + `compute_hash` in
+    `tx_pool.cpp` / `cryptonote_tx_utils.cpp` / `tx_pqc_verify.cpp`;
+    `m_max_prepare_blocks_threads` default change; Phase 3a FFI
+    shim survey reveals new concurrent consumer.
+  - **R1-E1 (CI grep pattern set + permitted exceptions):** three
+    patterns. Pattern A bans imports of `once_cell` / `lazy_static` /
+    `OnceLock` / `LazyLock` (stricter than module-level-static-only —
+    eliminates the disambiguation between module-level and function-
+    local usage by rejecting the import; the crate provably needs
+    none of these). Pattern B bans column-0 `static` declarations
+    (function-local statics are inside fn bodies and indented per
+    rustfmt; `const` items are a different keyword and not matched).
+    Pattern C bans `#[no_mangle]`, `#[unsafe(no_mangle)]`,
+    `#[export_name`, `#[unsafe(export_name`, and `extern "C" fn`
+    definition form (`extern "C" { fn foo(); }` import blocks
+    consuming external FFI surfaces are not matched since they
+    require `fn` *inside* the brace block, not after `"C"`). New
+    script `scripts/ci/check_randomx_crate_invariants.sh` modeled on
+    `scripts/ci/check_randomx_fpu_rounding.sh` from Phase 2d. CI
+    integration: new `.github/workflows/build.yml` step
+    `enforce RandomX crate-level isolation invariants` sibling to the
+    FPU step. **Substrate finding at verification:** pattern C's
+    first draft (anywhere-on-line match) collided with the existing
+    `lib.rs` rustdoc at lines 31–32, which legitimately cites the
+    forbidden tokens as part of the documented discipline.
+    Disposition: anchor pattern C at column 0 with optional leading
+    whitespace (matches code attributes indented inside fn bodies;
+    excludes rustdoc lines, which start with `//!`). Verified clean
+    baseline at HEAD post-fix across `rust/shekyl-pow-randomx/src/`.
+    Per-pattern reversion criteria: stdlib evolution producing
+    pattern A successor primitives; genuine large-immutable-shared-
+    state need motivating pattern B relaxation; Decision #5 (FFI-
+    locality) reversal motivating pattern C reopen.
+  - **Plan-doc edits:** §3.1–§3.6 each gain a Round 1 disposition
+    sub-block (preserving the scaffold's framing as audit-trail per
+    `91-documentation-after-plans.mdc`); §5 superseded by frozen-
+    surface contract (5.1 frozen items + 5.2 in-scope artifact
+    table + 5.3 out-of-scope re-emphasis); §6 superseded by the
+    7-row CacheStore unit-test table + 4-row CI-invariant table +
+    4-row bench-harness table; §8 superseded by the 5-commit table
+    with R1-D4 three-branch (A/B/C) conditional on commit 4; §11
+    Round history gains Round 1 row.
+  - Implementation deferred to `feat/randomx-v2-phase2f-impl` after
+    Round-N closure (target 4–6 rounds, matching Phase 2c/2d
+    cadence). Round 4 specifically does the threat-model addenda
+    pass against scaffold §4. Branch policy per
+    `06-branching.mdc` — chore branch is short-lived; commit not
+    pushed pending user authorization.
+
+- **RandomX v2 Track A Phase 2d implementation core landed**
+  (`feat/randomx-v2-phase2d`, 2026-05-22). Implements
+  [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
+  §3.5/§3.7 R1–R6 decisions on
+  [`rust/shekyl-pow-randomx`](../rust/shekyl-pow-randomx):
+  - **F128 newtype + integer helpers** (`bd7cea464`). Promotes the
+    Phase 2c `type F128 = [f64; 2]` alias to a `#[derive(Copy)]`
+    `struct F128([f64; 2])` carrying `add/sub/mul/div/sqrt/swap`
+    + FSCAL XOR-mask methods per §3.2 R1-D2. Adds private
+    `sign_extend_i32_to_i64`, `load64`/`store64`, `rotr`/`rotl`
+    helpers matching `instructions_portable.cpp` semantics. Quarantines
+    the FPU rounding-mode write in a new
+    [`fpu_rounding`](../rust/shekyl-pow-randomx/src/fpu_rounding.rs)
+    module (x86_64 `_mm_setcsr`, aarch64 `mrs/msr fpcr` inline asm)
+    per §3.1 R1-D1 / §3.7 R6-D1. Replaces the Phase 2c stub-NOP
+    `dispatch_instruction` body with a dense `match` on
+    `decode_instruction_type(opcode)` covering all 28 executable
+    opcodes plus CFROUND + CBRANCH, driven by a PC loop with
+    `Program.cbranch_table` static metadata populated during
+    `init_program` (§3.6 R2-D1/R2-D2/R2-D3). Promotes
+    `superscalar::{mulh, smulh_u64, randomx_reciprocal}` to
+    `pub(crate)` for IMULH/IMUL_RCP dispatch.
+  - **T16 real-dispatch hash vector + CI grep + FPU reset**
+    (`26fc49d6c`). Adds
+    [`tests/vectors/reference/vm/t16_vm_compute_hash_real.bin`](../rust/shekyl-pow-randomx/tests/vectors/reference/vm/t16_vm_compute_hash_real.bin)
+    emitted by the pinned fork's interpreted-light VM under
+    `RANDOMX_FLAG_V2` (§6.2 T16 / §8 commit 5b); Phase 2c's stub-NOP
+    T6/T7/T8 vectors are marked `#[ignore]` because real dispatch
+    mutates the register file before later iterations, so the
+    end-to-end T16 byte-equality supersedes them. Adds
+    [`scripts/ci/check_randomx_fpu_rounding.sh`](../scripts/ci/check_randomx_fpu_rounding.sh)
+    wired into the existing Lint job to enforce the §9 FPU
+    primitive scope (`_mm_setcsr` exactly once on x86_64, two
+    `asm!(` calls on aarch64, no `fesetround`). Restores FPU
+    rounding mode to round-to-nearest at `compute_hash` entry/exit
+    and around the `execute_program` determinism tests so the
+    process-wide MXCSR/FPCR mutation from CFROUND does not leak
+    across tests. Phase 2d post-dispatch `compute_hash_alloc::per_call`
+    measures 303.60 ms median (+2.6% vs. Phase 2c stub-NOP baseline
+    of 296.00 ms), under the §9 ±10% regression-trigger threshold
+    (`rust/shekyl-pow-randomx/BENCH_RESULTS.md`).
+
+  - **T9–T15 single-opcode reference vectors** (Phase 2d §6.2 / §8
+    commit 5a). Adds a new
+    [`tests/vectors/reference/_generator/phase2d/`](../rust/shekyl-pow-randomx/tests/vectors/reference/_generator/phase2d/)
+    generator (gen.cpp + Makefile + README) driving the pinned fork's
+    `randomx::BytecodeMachine::compileInstruction` +
+    `executeInstruction` against fabricated single instructions over
+    a canonical `NativeRegisterFile` + scratchpad fixture, and emits
+    seven new `.bin` + `.meta.txt` reference vectors under
+    [`tests/vectors/reference/vm/`](../rust/shekyl-pow-randomx/tests/vectors/reference/vm/):
+    T9 integer smoke (IADD_RS / IMULH_R / IROR_R / ISTORE), T10 FP
+    smoke under RN (FADD_R / FMUL_R / FDIV_M / FSQRT_R), T11–T14 the
+    9-FP-opcode matrix under MXCSR modes 0..3, and T15 CFROUND
+    throttle (throttled + 2 unthrottled cases, paired with
+    `rx_get_rounding_mode()` u32). Rust spec-vector tests in
+    [`src/vm.rs#mod tests`](../rust/shekyl-pow-randomx/src/vm.rs)
+    drive `dispatch_instruction` against the same canonical fixture
+    and assert byte-equality (`{t9,t10,t11,t12,t13,t14,t15}_vm_..._matches_fork_reference`).
+    Phase 2d's implementation core (PRs landed prior) plus T9–T15
+    per-opcode coverage and T16 end-to-end hash now exhaust the
+    `executeInstruction` dispatch surface against the v2 fork pin
+    `aaafe71` byte-for-byte.
+
+  - **Phase 2d post-gate fmt cleanup** (`4fc0606d1`). Six mechanical
+    `cargo fmt --check` divergences accumulated across the four
+    Phase 2d substantive commits surfaced together when the §9
+    Format gate re-ran post-T9-T15 land: four in
+    `dispatch_instruction`'s integer arms (IAddRs / IMulRcp / IRorR /
+    IRolR) from `bd7cea464`, plus `CANONICAL_E_MASK_PD` from
+    `043076f18`. Addressed in a single fmt-only commit per
+    `15-deletion-and-debt.mdc`'s "fix mechanical formatting errors
+    in a file already being modified" carve-out; no semantic
+    change. §8 commit-table reconciliation (five landed commits vs.
+    seven planned slots) is documented in
+    [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
+    §11's Implementation row with SHA → §8 mapping and §9 gate
+    confirmation at HEAD `4fc0606d1`.
+
+- **Sub-PR design discipline rule** (PR #67, 2026-05-22). Promotes fourteen
+  Phase 2c-emergent process disciplines from
+  [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md)
+  / [`RANDOMX_V2_PHASE2C_AUDIT.md`](design/RANDOMX_V2_PHASE2C_AUDIT.md)
+  into [`.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc)
+  (Option A; opt-in — cite when scoping multi-round per-trait PRs).
+  Closes `docs/FOLLOWUPS.md` V3.0 discipline-promotion
+  item. Applies to RandomX v2 sub-PRs, LWMA-1 Phase 4, and other
+  multi-round consensus-critical design work.
+
+- **RandomX v2 Track A Phase 2d — Rounds 1–6 design closure** (PR #68).
+  Expands
+  [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
+  through Round 6 after PR #66 on `dev` (`e9917097f`): Round 1
+  (FPU/`F128`/frequency dispatch/u128 audit); Round 2 (PC-driven loop,
+  `Program.cbranch_table`, `VmState.branch_pc`); Round 3 (threat-model
+  addenda); Round 4 (phase2d generator CLI for T9–T16); Round 5
+  (closure + §10 FPU grep patterns). Round 6 closes two Round-6-blocking
+  findings against the Round-5 state: **(R6-D1)** aarch64 FPU primitive
+  resolves the R1-D1/R5-D1 inconsistency by reopening R1-D1 option (b)
+  for aarch64 only — stable inline asm `mrs/msr fpcr` write — with
+  substrate justification (no stable `core::arch::aarch64` FPCR-write
+  intrinsic exists); **(R6-D2)** out-of-range opcode disposition changes
+  from R1-D3's `debug_assert!`/no-op pair to `panic!` in both profiles,
+  removing the debug-vs-release behavior divergence the §10 equivalence
+  gate would surface. Plan-doc edits ride along: R1-D4 IMUL_RCP
+  unreachability citation (R6-D3), §8 commit-5 split into 5a (T9–T16
+  additions) + 5b (T8 expectation flip) keeping the consensus-affecting
+  flip independently bisectable (R6-D4), `exec_pc` invariant-
+  documentation note + sentinel reset for implementation-PR rustdoc
+  (R6-D5). Implementation authorized on `feat/randomx-v2-phase2d`.
+
+- **RandomX v2 Track A Phase 2c — Cache derivation + VM substrate +
+  T1-T8 spec-vector parity + bench baselines** (`feat/randomx-v2-phase2c-impl`,
+  PR #66, 2026-05-22). Third sub-PR of the Rust pure-software RandomX
+  v2 verifier port per
+  [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
+  §"Track A — Phase 2" and the design plan
+  [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md).
+  Eight-commit stack landing the cache + VM substrate end-to-end
+  with byte-for-byte parity against the `randomx-v2` fork at pin
+  `aaafe71` (v2.0.1) for all eight reference vectors (T1-T8), plus
+  the bench baseline + CI cross-profile gate that Phase 2d/2f/2g
+  inherit:
+  - **Commit 1 — `Cache` type skeleton + size constants + `Drop`**
+    (`39eda3164`). [`src/cache.rs`](../rust/shekyl-pow-randomx/src/cache.rs)
+    `pub Cache` struct + `CACHE_SIZE` / `DATASET_ITEM_SIZE` /
+    `DATASET_ITEM_COUNT` constants + empty `Drop` (review-surface hook
+    per §5.11.4). Per the §3 module layout + §2 surface 1 framing.
+  - **Commit 2 — `Cache::derive` + T1' determinism + unsafe carve-out
+    #1** (`48e7df633`). Argon2d 256 MiB fill (delegating to Phase 2a's
+    `pub(crate) fill_cache`) + 8 × `Blake2Generator`-seeded
+    `generateSuperscalar` programs (delegating to Phase 2b's
+    `Blake2Generator` + `generateSuperscalar` from `src/superscalar.rs`)
+    + `RANDOMX_CACHE_ACCESSES` constant + the cache-memory allocation
+    unsafe carve-out (the only `#![deny(unsafe_code)]` exception this
+    commit introduces, per the §1 covenant 7 enumeration) + cache-site
+    `debug_assert!`s per §5.11.2. T1' (`Cache::derive` determinism
+    property test, ~100 invocations) + the `programs` field landing
+    on `Cache`. Plan-doc errata `86f058c3b`/`431a54b38`/`3e6bb2734`
+    (impl-time pre-flight R0-D5/R0-D6/R0-D7: drop `Cache::from_raw`,
+    relocate T1-T8 to unit tests, withdraw `randomx_reciprocal`
+    `pub(crate)` promotion).
+  - **Commit 3 — `Cache::derive_item` + `item_bytes` + T2' invariance**
+    (`9ab584596`). `pub(crate) Cache::derive_item` (the per-iteration
+    dataset-item read consumed by `VmState`'s 2048-iteration loop)
+    + `pub(crate) Cache::item_bytes` (the byte-level indexing
+    accessor) + the dataset-item spec constants (`SUPERSCALAR_MUL_0`,
+    `SUPERSCALAR_ADD_1`..`SUPERSCALAR_ADD_7`). T2' (invariance under
+    item-number permutation) property test. Dissolves the
+    `#[allow(dead_code)]` on `superscalar::execute_superscalar`.
+  - **Commit 4 — `VmState` skeleton + scratchpad alloc + `Drop`**
+    (`c63555a5e`, with `186a8cfdf` fix-up for the
+    `PROGRAM_SIZE`/`PROGRAM_ITERATIONS` distinction caught at
+    R0-D9 pre-flight). [`src/vm.rs`](../rust/shekyl-pow-randomx/src/vm.rs)
+    `pub(crate) VmState` skeleton with the frozen §5.1.1 field set
+    (per §5.5 F5 v2-only simplification), `pub(crate)` type
+    definitions (`F128`, `Instruction`, `Program`), the
+    `PROGRAM_SIZE` (384) / `PROGRAM_ITERATIONS` (2048) /
+    `RANDOMX_SCRATCHPAD_L3` (2 MiB) spec constants, the
+    `alloc_zeroed_scratchpad` carve-out (the second and final
+    `#![deny(unsafe_code)]` exception this PR introduces per §1
+    covenant 7), the scratchpad-allocation `debug_assert!` per
+    §5.11.2, the empty `Drop` (review-surface hook per §5.11.4),
+    and the threat-model disposition rustdoc per §5.11.4
+    (public-input-only scope note).
+  - **Commit 5 — `init_scratchpad` + `init_program` + T3'-T5'
+    determinism** (`76cf9a5ae`). `VmState::init_scratchpad` via
+    `crate::aes::fill_aes_1r_x4`; `VmState::init_program` (stack-
+    allocate the 3 200-byte program buffer per spec §4.5's
+    `128 + 8 × PROGRAM_SIZE` budget, fill via
+    `crate::aes::fill_aes_4r_x4`, parse `entropy[0..128]` into the
+    register-init field set, parse `instructions[128..3200]` into
+    `self.program.instructions`); plus the IEEE-754 / dataset
+    helpers the parser consumes (`get_small_positive_float_bits`,
+    `get_float_mask`, `CACHE_LINE_ALIGN_MASK`,
+    `DATASET_EXTRA_ITEMS`, `CACHE_LINE_SIZE`). T3' / T4' / T5'
+    fixture-free determinism property tests inline per §5.11.1
+    + §14 Round 0 R0-D6 (test placement inside `src/*.rs#mod tests`).
+  - **Commit 6 — `compute_hash` + `execute_program` + T6'-T8'
+    determinism** (`4b182292b`). `pub fn compute_hash(&Cache,
+    &[u8; 32], &[u8]) -> [u8; 32]` (the crate's single hash-
+    producing entry point) + `VmState::execute_program` (the spec
+    §4.6 / `vm_interpreted.cpp::execute()` 2048-iteration loop —
+    the single per-iteration body that the stub-NOP
+    `dispatch_instruction` dispatches into per spec §4.6.5) + the
+    private `dispatch_instruction` NOP-body stub (the §5.1
+    function-body replacement contract Phase 2d fills in per
+    §5.1.1 frozen surfaces 1-3); plus the supporting helpers
+    (`SCRATCHPAD_L3_MASK_64`, `DYNAMIC_MANTISSA_MASK`,
+    `RANDOMX_PROGRAM_COUNT`, `cvt_packed_int_to_f128`,
+    `mask_register_exponent_mantissa`). T6' / T7' / T8' fixture-
+    free determinism property tests inline per §5.11.1.
+  - **Commit 7 — T1-T8 spec-vector parity vs. randomx-v2 fork**
+    (`4ba995469`). Reviewer-runnable C++ reference generator at
+    [`tests/vectors/reference/_generator/phase2c/`](../rust/shekyl-pow-randomx/tests/vectors/reference/_generator/phase2c/)
+    (Makefile + `gen.cpp` + README + `.gitignore`) compiled against
+    the vendored fork at pin `aaafe71`. Eight reference vectors
+    pre-computed and committed under
+    [`tests/vectors/reference/cache/`](../rust/shekyl-pow-randomx/tests/vectors/reference/cache/)
+    (T1: cache fingerprint Blake2b-256 over the entire derived
+    cache + the 8 superscalar programs; T2: 8-item dataset batch)
+    and
+    [`tests/vectors/reference/vm/`](../rust/shekyl-pow-randomx/tests/vectors/reference/vm/)
+    (T3: scratchpad init; T4: register init from entropy; T5:
+    program parse from entropy; T6: `spAddr0`/`spAddr1` snapshot
+    across 4 stub-NOP iterations; T7: post-AES-mix register
+    snapshot across 4 stub-NOP iterations; T8: end-to-end
+    `compute_hash` output under stub-NOP dispatch). Ten Rust spec-
+    vector tests (T1-T8) inline in `src/cache.rs` and `src/vm.rs`
+    pass byte-equality against the committed fixtures. Refactor:
+    `VmState::execute_program` split into `execute_program` (the
+    outer per-chain orchestration) + `execute_iteration` (the
+    per-iter body) to enable T6/T7 intermediate-state snapshotting.
+    **Two implementation-time substrate-divergence findings landed
+    in this commit** per
+    [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+    cross-language-port discipline:
+    - **R0-D10 — chain-boundary integer-register reset
+      (cross-language-port-implicit-state-loss discipline).** The
+      C reference's per-chain `NativeRegisterFile nreg;`
+      construction (`vm_interpreted.cpp:59`) implicitly zero-
+      initializes the integer-register array via the struct
+      definition at `bytecode_machine.hpp:40`. The Rust port fuses
+      `reg` + `nreg` into a single `VmState.r` per
+      `30-cryptography.mdc` secret-locality framing; the per-chain
+      reset that fell out of C's two-struct shape is re-asserted
+      explicitly as `self.r = [0; 8];` at the top of
+      `VmState::execute_program`. T8 (the end-to-end vector that
+      runs all 8 chains) surfaced the missing reset; T6/T7 (single
+      chain) don't. Disposition under §14 Round 0 R0-D10.
+    - **R0-D11 — `IMUL_RCP::imm32` storage divergence (cross-
+      language-port-storage-divergence discipline).** The C
+      reference's `initCache` (`dataset.cpp:131-138`) post-processes
+      the 8 `SuperscalarProgram`s after `generateSuperscalar` by
+      replacing each `IMUL_RCP` instruction's `imm32` in-place
+      with an index into a reciprocal-cache side table; the
+      reciprocal value is later resolved at execution time via
+      that index. The Rust port keeps the original `imm32` and
+      computes the reciprocal on-the-fly in
+      `execute_superscalar` (result-equivalent, byte-divergent
+      for serialization). T1 (the cache fingerprint vector that
+      hashes the serialized programs alongside the derived cache)
+      surfaced the divergence; T2 (which only consumes the
+      `derive_item` output, not the program serialization) didn't.
+      Resolution lives in the C++ generator (`emit_t1` re-runs
+      `Blake2Generator` + `generateSuperscalar` directly rather
+      than reading the C reference's `cache->programs` to hash
+      the pre-modification programs); the Rust port's storage
+      shape is the consensus-relevant one. Verified result-
+      equivalence via T2's dataset-item parity (which exercises
+      the same `IMUL_RCP` arm at execution time via Rust's
+      on-the-fly reciprocal calculation). Disposition under §14
+      Round 0 R0-D11.
+  - **Commit 8 — Phase 2c benches + per_hash_latency placeholder
+    + debug-vs-release CI gate + scope-bounding doc-comment +
+    BENCH_RESULTS + CHANGELOG** (this commit). Two criterion
+    benches at
+    [`benches/cache_derive.rs`](../rust/shekyl-pow-randomx/benches/cache_derive.rs)
+    + [`benches/compute_hash_alloc.rs`](../rust/shekyl-pow-randomx/benches/compute_hash_alloc.rs)
+    landing the §5.8 PR-gate baseline measurement infrastructure.
+    [`tests/perf/per_hash_latency.rs`](../rust/shekyl-pow-randomx/tests/perf/per_hash_latency.rs)
+    placeholder (`#[ignore]` + `unimplemented!()` cross-referencing
+    F8 + §13 forward-path 2g inheritance) at the canonical 2g
+    deliverable path per R3-minor-2 — structural code out-survives
+    prose discipline per
+    [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc);
+    2g's author finds the placeholder by grep against its own
+    deliverable name and replaces the body in-place. Workflow line
+    addition in [`.github/workflows/build.yml`](../.github/workflows/build.yml)
+    Gate 2: `cargo test --release -p shekyl-pow-randomx` per
+    §5.11.3 R4 (Rust integer-overflow semantics differ between
+    debug-panic and release-wrap; T1-T8 byte-equality assertions
+    catch any silent drift). Crate-level scope-bounding doc-comment
+    in [`src/lib.rs`](../rust/shekyl-pow-randomx/src/lib.rs) per
+    §5.11.4 R4 (public-input-only scope with substrate-anchored
+    reopening criterion). Baseline measurements recorded in
+    [`BENCH_RESULTS.md`](../rust/shekyl-pow-randomx/BENCH_RESULTS.md)
+    (i9-11950H, Debian 13, kernel 6.12.88): `Cache::derive` median
+    341.45 ms; `compute_hash` end-to-end (stub-NOP) median 296.00 ms.
+    **Both measurements exceed the §5.8 plan-author budgets**
+    (200 ms and 100 µs respectively); the threshold-vs-actual gap
+    is documented in `BENCH_RESULTS.md` §"Threshold reconciliation"
+    with the diagnosis (single-thread Argon2d on this hardware
+    class is fundamentally a ~300 ms operation; the
+    `compute_hash_alloc` budget framing was internally inconsistent
+    with what the bench measures) and named reopening criteria per
+    `21-reversion-clause-discipline.mdc`. Plan-doc errata R0-D12
+    (separate commit landing alongside this one) records the gap
+    in §14 Round 0; Phase 2c does not block on the reconciliation
+    per the §5.8 explicit "implementation-PR-time decision"
+    authority.
+
+  Phase 2c retains the Phase 2a/2b forward-compatibility posture:
+  no `#[no_mangle]`, no `extern "C" fn`, no `#[export_name]`, no
+  module-level runtime-mutable state. `#![deny(unsafe_code)]` at
+  the crate level with the two carve-outs above per §1 covenant 7
+  (`cache::CACHE_MEMORY_ALLOC` and `vm::alloc_zeroed_scratchpad`).
+  `cargo test -p shekyl-pow-randomx` succeeds without
+  `external/randomx-v2/` initialized and without a C++ toolchain —
+  the spec-vector reproducibility check (`make vectors` in the
+  generator directory) opts in to the fork submodule + C++ build.
+  The live differential harness remains Phase 2g's separate
+  artifact. Phase 2d builds on the Phase 2c `dispatch_instruction`
+  NOP stub via function-body replacement (no trait wiring, no impl
+  swap, no signature change to `compute_hash` per §5.1.1's frozen
+  surfaces 1-3); Phase 2f wraps `Cache::derive` in a `CacheStore`
+  LRU + `VmState` pool; Phase 2g lands the C-side differential
+  harness as a separate test-only artifact; Phase 3 then exposes
+  the verifier through `shekyl-ffi` and rewires the C++ daemon to
+  it; Phase 4 deletes the C++ verifier path.
+
+### Documentation
+
+- **RandomX v2 Track A Phase 2c plan + 2d skeleton scaffold + parent-plan
+  alignment** (`chore/randomx-v2-phase2c-plan`, PR #65, 2026-05-21).
+  Doc-only branch landing the design substrate for Phase 2c implementation
+  (`Cache::derive` + `VmState` + `compute_hash` + NOP-body `dispatch_instruction`),
+  the Phase 2d skeleton scaffold (function-body replacement of `dispatch_instruction`),
+  and the parent-plan alignment commits that absorb the cross-cutting
+  decisions. **Thirteen commits across five design rounds.** Implementation
+  cut authorized post-PR-#65 merge per the §14 closure entries.
+
+  - **Round 1 (2026-05-21).** F1–F9 interactive walk closed nine
+    findings via gap-analysis; ShekylU128 audit verified the v2-only
+    simplification surface. F4 absorption (`Cache::derive` moves from
+    originally-scoped Phase 2e into 2c) lands as a parent-plan
+    precursor commit. Per
+    [`RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md)
+    §14 Round 1 entry.
+
+  - **Round 2 (2026-05-21).** Substrate-finding pass tightens the
+    type-and-module shape within Round 1's locked dispositions.
+    Three structural restructurings: (R2-D1) `BytecodeDispatch` trait
+    plus `StubNopDispatch` impl → `dispatch_instruction` free function
+    with NOP body replaced in 2d, eliminating the mock-X anti-pattern;
+    (R2-D2) `Vm<'a>` public type → `compute_hash` public transform
+    with `VmState` private (module layout collapses 5 files → 2);
+    (R2-D3) `Cache::from_raw` visibility correction (`pub` →
+    `pub(crate)`; test-time only, not FFI surface). Parent-plan
+    alignment commit follows (Decision #7 substrate-shift: `VmState`
+    pooling becomes internal to `compute_hash`, not a public
+    `VmPool` type).
+
+  - **Round 3 (2026-05-21).** Substrate-completeness pass closes out
+    before implementation. (R3-D1) §5.1.1 "Function-body replacement
+    contract" pins the 2c → 2d hand-off: frozen `dispatch_instruction`
+    signature, frozen `Instruction` field set, and `VmState` field
+    set populated empirically from an audit against
+    `bytecode_machine.hpp`'s 29 opcode handlers + `vm_interpreted.cpp::execute()`.
+    Audit produced one correction-from-prompted-list finding: `mp` is
+    a v2-only local-variable alias for `mem.ma`, not a struct field;
+    §5.5 F5 entry updated to match (the audit-against-actual-code
+    precedent that §5.11.8 formalizes in Rounds 4–5). (R3-D3) Sibling
+    commit lands [`RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
+    skeleton scaffold: §5.1.1 contract carry-forward, VmState
+    field-set reference, forward-actions from F1/F2/F3/F5/F7,
+    decision points for 2d Round 1 (FPU rounding-mode mechanism;
+    F128 newtype shape; per-opcode dispatch shape).
+
+  - **Round 4 (2026-05-21).** Threat-model addenda pass against
+    priority-1 surface (per
+    [`.cursor/rules/00-mission.mdc`](../.cursor/rules/00-mission.mdc)'s
+    security-and-quantum-resilience commitment) enumerating six
+    attack objectives: mining-faster differential; cache poisoning;
+    FFI exploitation; resource DoS; Rust safety boundary gaps;
+    consensus split via implementation divergence. New §5.11 records
+    eight findings + dispositions. **In-scope 2c-implementation
+    additions:** T1' (`Cache::derive` determinism) + T2'
+    (`derive_item` invariance) property tests (~60 LoC per §5.11.1's
+    per-sub-test estimate; T1'a/b/c ~10 LoC each + T2'a ~30 LoC);
+    `debug_assert!` discipline at the two unsafe
+    `Box::new_zeroed_slice` sites (~10 LoC); debug-vs-release
+    equivalence as PR gate (1 line in CI workflow); public-input-only
+    scope note. **Forward-actions to downstream phases:** 2g
+    adversarial seedhash corpus + pathological-program worst-case
+    timing bound (≤5.0×); 3a FFI null-pointer + length-validation +
+    `seedhash: *const [u8; 32]` typed-array pointer + `ERR_NULL_PTR`/`ERR_DATA_TOO_LARGE`
+    taxonomy + `RANDOMX_BLOCK_TEMPLATE_MAX_SIZE` pinned at 2 MiB; 2f
+    CacheStore canonical-seedhash slot eviction-protection +
+    `VmState` pool capacity sized against daemon parallel-verification
+    fanout. **Discipline note:** §5.11.8 audit-against-actual-code
+    validation (the discipline that produced R3-D1's `mp`
+    correction is the discipline 2d/2g inherit). Parent plan
+    alignment + 2d skeleton addenda ship as sibling commits.
+
+  - **Round 5 (2026-05-21).** Closure-only refinement pass against
+    the Round 4 plan-doc; substantive review surface closed at
+    Round 4, four discipline-enforcement edges tightened:
+
+    - **(R5-D1)** [`RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md)
+      §5.11.8 framing amendment: "reading-the-source vs.
+      producing-a-table-from-intuition" named as the load-bearing
+      audit step (the table is the audit's output; the audit's
+      substance is the line-by-line reading that *produces* the
+      table). "Show your work" enforcement formalized: every audit
+      table cites line ranges at the pinned fork commit; reviewer
+      spot-checks by opening the cited file and reading the named
+      lines. The R3-D1 `mp` correction is reframed from "we caught
+      one bug" to the precedent that proves the discipline (a
+      prompted-list table without a reading-the-source pass IS the
+      failure mode
+      [`.cursor/rules/16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+      "audits-are-clean-so-compress" anti-pattern names).
+    - **(R5-D2)** [`RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
+      Phase 0 §5 FFI hardening refinements: C-side header form
+      `const uint8_t (*seedhash)[32]` (not decayed
+      `const uint8_t *seedhash`); C++ call-site declaration
+      discipline (`uint8_t seedhash_buffer[32]; ...&seedhash_buffer`),
+      documented at each call site not just at the signature;
+      `RANDOMX_BLOCK_TEMPLATE_MAX_SIZE` rationale-sentence cross-check
+      (generous ceiling above any realistic Shekyl block template;
+      the 2 MiB == scratchpad-size coincidence is explicitly named
+      non-load-bearing; reversion-clause per
+      [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)).
+    - **(R5-D3)** [`RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
+      §3.1 CI-time grep mechanical-enforcement addendum: the
+      unsafe-block scope-check discipline (Scaffold-R4 prose-form)
+      is promoted to a §10 hard-gate CI grep modeled on the
+      `RANDOMX_V2_PLAN.md` §7.7 **`shekyl-pow-randomx` never uses
+      `#[no_mangle]`** invariant pattern. The grep asserts the
+      rounding-mode-setter function body contains exactly one of
+      the chosen-option primitives (`_mm_setcsr`/`__set_fpcr`/`asm!`/chosen-crate)
+      and nothing else (no other intrinsic calls, no pointer
+      dereferences, no allocator calls, no function calls beyond
+      the primitive). Catches the "future contributor adds a
+      reasonable-seeming improvement that silently expands the
+      unsafe surface" failure mode that prose-as-discipline depends
+      on reviewer attention to catch.
+    - **(R5-D4)** New [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) V3.0 entry:
+      sibling PR (opens post-PR-#65 merge to `dev`;
+      parallel-eligible with the Phase 2c implementation PR,
+      not gated on it) to promote five 2c-emergent
+      disciplines to project-level documentation (likely
+      `.cursor/rules/26-sub-pr-design-discipline.mdc` with
+      substantial prose, similar shape to
+      `16-architectural-inheritance.mdc`). The disciplines:
+      function-body replacement contract; audit-against-actual-code;
+      threat-model addenda framing; reversion-clause for sub-PR
+      boundary changes; forward-action propagation convention.
+      Scoped as a short-lived sibling per
+      [`.cursor/rules/06-branching.mdc`](../.cursor/rules/06-branching.mdc)
+      rule 2; opens within 5 working days of PR #65 merging; lands
+      before Phase 2d Round 1's design doc cuts. Explicitly **not**
+      a Round 5 deliverable per
+      [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+      "while we're here is the enemy."
+
+  - **Posture-shift note (recorded for downstream sub-PRs).** Round 4's
+    threat-model framing converted "design closure" into **design
+    closure plus active defense against named attacker objectives**.
+    The shift is named in the §14 Round 5 entry so 2d Round 1, 2f
+    Round 1, 2g Round 1, and LWMA-1 Phase 4's design rounds inherit
+    the shape rather than revert to per-finding review — the
+    threat-model-objective frame surfaces findings (`mp`, eviction
+    interleave, FPU rounding-mode escape, u128 edge cases) that
+    per-finding review wouldn't catch because no individual finding
+    *suggests* the next one; the attacker-objective frame does.
+
+  - **Touched files.** [`docs/design/RANDOMX_V2_PHASE2C_PLAN.md`](design/RANDOMX_V2_PHASE2C_PLAN.md)
+    (new; Rounds 1–5); [`docs/design/RANDOMX_V2_PHASE2D_PLAN.md`](design/RANDOMX_V2_PHASE2D_PLAN.md)
+    (new; Scaffold + Scaffold-R4 + Scaffold-R5); [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
+    (parent-plan alignment commits for F4 absorption, Decision #7
+    substrate-shift, Round 4 FFI/perf/risk carries, Round 5 FFI
+    refinements); [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) (Round 5 V3.0
+    entry).
+
+- **Phase 2a PR #62 — address Copilot review (post-Round-1
+  follow-up cycle).** Doc-only commits on
+  `feat/randomx-v2-phase2a`. Addresses five Copilot review findings
+  surfaced against the Phase 2a initial commits (`107d6f8ce`,
+  `9f854e0ce`, `f0d648fb2`). The fixes cluster on two distinct
+  substantive concerns in the `_generator/` directory; the Rust
+  test source and the production `argon2d.rs` primitive are
+  unaffected.
+
+  - **Findings C1–C4 — "architecture-independent" wording is
+    materially wrong (4 sites).** The committed `_generator/gen.c`,
+    `_generator/Makefile`, `m8_t3_p1_shekyl_test_key.meta.txt`, and
+    `m64_t3_p1_shekyl_test_key.meta.txt` all asserted that the
+    `argon2_ref.c` reference Argon2 implementation "keeps the
+    produced bytes architecture-independent." That is wrong on
+    endianness: `gen.c`'s `write_raw` does a raw `fwrite` of
+    `block { uint64_t v[128] }` memory, which serializes each
+    `uint64_t` in the host's native byte order. The committed
+    `.bin` files happen to be little-endian u64 streams because
+    they were generated on a little-endian host (x86_64 Linux);
+    regenerating on a big-endian host would silently produce
+    different bytes and break the byte-for-byte test.
+
+    Reworded each site to the accurate framing: the reference
+    impl is **instruction-set-independent** (no AVX2/SSSE3 codegen
+    variance across hosts that share a byte order), and the
+    on-disk vector format is **a little-endian u64 stream** — the
+    same format `argon2d.rs`'s `blocks_to_le_bytes` produces in
+    Rust via `u64::to_le_bytes` (per `argon2d.rs:230-241`).
+    `gen.c`'s comment additionally records the big-endian-host
+    disposition: the fix if a future maintainer regenerates on
+    big-endian hardware is to add a `htole64`-style serialization
+    step in `write_raw`, not to redefine the on-disk format.
+
+    Important asymmetry preserved: the **Rust** test side is
+    already architecturally portable — `blocks_to_le_bytes` pins
+    the LE convention on both sides regardless of `Block`'s
+    in-memory layout, so the `cargo test` path works correctly on
+    big-endian targets. The bug was only on the C generator side
+    and only in the comment claims, not in the bytes themselves
+    (which are correct for the all-little-endian maintainer/CI
+    fleet the project ships against).
+
+  - **Finding C5 — `_generator/README.md` provenance check command
+    is broken (1 site).** The "Reviewing the vectors" section
+    documented `diff -r . ..` as the verification command. That
+    compares the `_generator/` directory's file set (`gen.c`,
+    `Makefile`, `README.md`) against the parent directory's file
+    set (`*.bin`, `*.meta.txt`); the file sets do not overlap, so
+    `diff -r` always reports "only in" entries instead of the
+    intended check (do the regenerated `.bin` files match the
+    committed bytes?).
+
+    Replaced with `git diff --stat -- ../*.bin` issued from inside
+    `_generator/`. `make vectors` overwrites the committed bytes
+    in-place; `git diff --stat` then asks git whether the working
+    tree has drifted from `HEAD` on the specific `.bin` paths. A
+    clean exit (no output) is the affirmative attestation that
+    the committed bytes match the named fork pin. Added a paragraph
+    explaining why the prior `diff -r . ..` command did not work
+    so a future reviewer doesn't reintroduce the same shape.
+
+  *Gates.* Doc/comment-only changes; no production Rust touched.
+  `cargo fmt --check`, `cargo clippy -p shekyl-pow-randomx
+  --all-targets -- -D warnings`, `cargo test -p shekyl-pow-randomx`,
+  and `cargo doc -p shekyl-pow-randomx --no-deps` all clean. The
+  Phase 2f forward-compatibility greps from
+  `RANDOMX_V2_RUST.md` §7.2 (`#[no_mangle]`, `extern "C" fn`,
+  `#[export_name]`, module-level runtime-mutable state) still
+  return zero hits on the crate.
+
+  *Scope discipline note.* C1–C4 land as a single commit because
+  they are the same finding instance applied at four sites with
+  identical content fixes (per `90-commits.mdc` scope-per-commit
+  rule — "scope" is the substantive change class, not the file
+  count); C5 lands as a separate commit because it is a distinct
+  finding (functional bug in a procedure command vs. wording
+  precision). The Lean-A disposition (reword the comments to
+  describe the constraint accurately) is preferred over Lean-B
+  (add `htole64` portability shims to `gen.c`) because the
+  generator is a developer-machine-only artifact that runs on
+  the project's all-little-endian maintainer fleet, and bundling
+  portability shims for a host architecture nobody runs on is
+  the cost-benefit-defer-to-later anti-pattern's mirror image
+  per [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc).
+  The big-endian-host disposition is recorded in `gen.c`'s
+  comment so a future maintainer who needs it knows the
+  prescribed shape.
+
+- **Post-PR-4 `docs/FOLLOWUPS.md` cleanup**
+  (`chore/post-pr4-followups-cleanup`, 2026-05-21). Two scope-respecting
+  doc-only commits closing the cleanup work that became actionable once
+  PR 4 (commit `fd6005e2a`, merged 2026-05-21) landed. Scoped per the
+  post-PR-4 FOLLOWUPS triage to **Class A relocations** (closed-but-
+  mislocated entries) and **D-item 481 substrate corrections**, with
+  Class B (P1 / P2 / P3) and Class C (F11-S Windows-midrange, refresh
+  bandwidth under α) deliberately untouched to avoid the
+  cost-benefit-defer-to-later anti-pattern of reflexive re-anchoring
+  under [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  — their existing trigger language remains accurate and the merge SHA
+  will be cited at each focused PR's open date.
+
+  - **Commit 1 — Relocate three `[CLOSED 2026-05-20]` PR 4 entries to
+    Recently resolved** (`38a599fc6`):
+    [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) gains three audit-trail entries
+    relocated from the live queues, prose-verbatim with the
+    `[CLOSED 2026-05-20]` prefix folded into the standard "(closed
+    YYYY-MM-DD, merged to `dev` YYYY-MM-DD at SHA)" parenthetical the
+    section uses, plus the dev-merge SHA `fd6005e2a` added for
+    traceability:
+    1. "Stage 1 retroactive Mock-X cleanup: `MockLedger` →
+       `LocalLedger::from_test_blocks(...)` +
+       `FaultInjecting<LocalLedger>`" (was V3.0 queue L697; PR 4 §7.X
+       commit C6β),
+    2. "Stage 1 retroactive Mock-X cleanup: `MockDaemon` →
+       `TestDaemon` rename" (was V3.0 queue L744; PR 4 §7.X commit
+       C6γ),
+    3. "Stage 1 PR 4 Phase 0d — `RefreshEngine` checkpoint 3 mid-scan-
+       reorg-abort extension: struck, not deferred" (was V3.x staker-
+       archival queue L4116; PR 4 §7.X commit C8).
+    The Phase-0d entry had one substrate-anchored cross-reference that
+    became wrong in its new location (referenced
+    `ReorgAmplificationDetector` as "below" — true in V3.x queue
+    context, false in Recently-resolved context); rephrased to
+    "(above, in the V3.x staker-archival queue)". Net diff: 117
+    insertions / 118 deletions (relocation-shape).
+
+  - **Commit 2 — Sharpen PR 3 engine-property test re-location entry**
+    (`95ece3760`): [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) V3.0-queue entry
+    "Stage 1 PR 3 engine-property test re-location" (~L481) gains two
+    substrate-correctness fixes surfaced during the post-PR-4 cleanup
+    triage that confirmed why the work is not completable in the
+    current cleanup PR:
+    1. Trigger anchor corrected from
+       `STAGE_1_PR_3_KEY_ENGINE.md` §4.4 (which does not exist — §4 is
+       the "Post-amendment §2.1 trait surface" and has no §4.4) to
+       §7.7 ("V3.x full-PQC trait churn acknowledgement") + §3.4
+       Decision 4. Trigger reworded to name the V3.2 unified
+       `KeyEngine` / `LedgerEngine` / `DaemonEngine` `pub(crate) →
+       pub` visibility-promotion bundle explicitly, with an inline
+       "unilateral `KeyEngine` widening does not satisfy this trigger"
+       clause that prevents future maintainers from acting on a
+       single-trait widening — re-introducing the trust-model
+       incoherence the per-trait `pub(crate)` lock prevents per Stage
+       1's Trust-class A classification (PR 3 §2.1 trust-class table
+       row for `KeyEngine`).
+    2. M3b D5 peer-test name removed (the
+       `..._subaddress` peer test the pre-flight estimated was
+       consolidated into the primary test's inner loop during M3b
+       implementation; `local_keys.rs:1278-1322`). Added one-sentence
+       pre-flight-vs-implementation note for cross-reference traceability
+       to `STAGE_1_PR_3_M3B_PREFLIGHT.md` §D5. File:line anchors added
+       for both tests (`local_keys.rs:1258`, `:1554`) and the inline
+       test-docstring deviation notes (`:1243-1251`, `:1538-1541`).
+    Disposition unchanged: entry remains open with the same V3.2
+    trigger and one-PR-covers-both-tests bundling guidance.
+
+  *Gates.* Doc-only changes; no code touched. `git diff` shape
+  verified to be relocation + substrate-correctness only; no live
+  disposition re-anchoring. No CHANGELOG drift relative to the as-
+  landed FOLLOWUPS state.
+
+  *Scope discipline note.* The cleanup PR's scope was bounded
+  explicitly against the **user-named anti-pattern of continual
+  re-anchoring without completion**: items where the work cannot be
+  completed at this time (P1 / P2 / P3, F11-S Windows-midrange,
+  refresh bandwidth under α, the PR 3 engine-property test re-location
+  itself) get their existing dispositions preserved verbatim, and the
+  merge SHA `fd6005e2a` will be cited at each focused PR's open date
+  per `21-reversion-clause-discipline.mdc`'s named-criteria principle.
+  Only completable work (relocations + substrate-correctness fixes)
+  lands here.
+
+### Added
+
+- **RandomX v2 Track A Phase 2b — AES + Blake2Generator +
+  SuperscalarHash primitives + spec-vector parity tests**
+  (`feat/randomx-v2-phase2b`, 2026-05-21). Second sub-PR of the
+  Rust pure-software RandomX v2 verifier port per
+  [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
+  §"Track A — Phase 2" and the design plan
+  [`docs/design/RANDOMX_V2_PHASE2B_PLAN.md`](design/RANDOMX_V2_PHASE2B_PLAN.md).
+  7-commit stack (6 designed + 1 rustfmt cleanup interleaved between
+  commits 5 and 6 to absorb residue an editor save reintroduced into
+  `superscalar.rs` between gate-runs) landing the remaining v2
+  primitives the verifier needs:
+  - **Commit 1 — AES round primitives + Blake2Generator + MSRV
+    bump.** `cipher_round` / `equiv_inv_cipher_round` at
+    [`src/aes.rs`](../rust/shekyl-pow-randomx/src/aes.rs)
+    wrapping `aes-0.9.0::hazmat` (`_mm_aesenc_si128` /
+    `_mm_aesdec_si128` equivalent-inverse semantics, matching
+    RandomX `soft_aesenc` / `soft_aesdec`). `Blake2Generator`
+    PRNG at
+    [`src/blake2_generator.rs`](../rust/shekyl-pow-randomx/src/blake2_generator.rs)
+    per spec §3.5. Workspace `rust-version = "1.85"` pin for
+    `aes-0.9.0`'s edition-2024 MSRV, verified against the Guix
+    substrate before pinning. F1 convergence on
+    `src/argon2d.rs`'s `#[allow(dead_code)]` from module-level
+    to per-item attributes.
+  - **Commit 2 — AES composites.** `AesGenerator1R` (state
+    writeback), `AesGenerator4R` (no writeback), `AesHash1R` per
+    spec §3.2–3.4. Initial state, generator keys, and extra-
+    round keys ported as `const [u8; 16]` arrays via
+    `pack_le_u32x4` reproducing `_mm_set_epi32(i3, i2, i1, i0)`'s
+    little-endian memory layout exactly.
+  - **Commit 3 — SuperscalarHash generator + executor.**
+    [`src/superscalar.rs`](../rust/shekyl-pow-randomx/src/superscalar.rs)
+    implementing spec §6 + §7.2. Pure function call surface (no
+    module-level mutable state) per permanent decision #6;
+    `#![deny(unsafe_code)]` survives. Includes the §5.5 spec-
+    silence audit table in the module rustdoc with 8 documented
+    spec-silent decisions matching the C reference verbatim.
+  - **Commit 4 — AES spec-vector parity tests.** 8 reference
+    vectors at
+    [`tests/vectors/reference/aes/`](../rust/shekyl-pow-randomx/tests/vectors/reference/aes/)
+    covering round primitives, the F6 chained-pair multi-round
+    supplement, `AesGenerator1R` / `4R` outputs, and `AesHash1R`
+    on uniform + empty inputs. Reviewer-runnable C++ generator
+    at `_generator/` instantiates `<softAes=true>` templates to
+    keep emitted bytes SIMD-codegen-independent.
+  - **Commit 5 — SuperscalarHash spec-vector parity tests.** 7
+    reference vectors at
+    [`tests/vectors/reference/superscalar/`](../rust/shekyl-pow-randomx/tests/vectors/reference/superscalar/)
+    per the F4 structured 3-vector decomposition: 3 Layer A
+    program serializations (baseline / nonce-mixing / seed-
+    derivation isolation), 3 Layer B executions against fixed
+    `r=[0..8]`, and 1 combined end-to-end attestation tuple.
+    Test names encode the failure-mode attribution
+    (`vector_2_tests_nonce_mixing_only`, etc.). Layer B decouples
+    generation parity (Layer A) from execution parity; combined
+    tests the full generate→execute pipeline without intermediate
+    serialization. Wire format documented in
+    `_generator/README.md` "Wire format" and in
+    `serialize_program` / `deserialize_program` helpers.
+  - **Commit 6 — CHANGELOG + FOLLOWUPS entry** (this commit).
+    F7 AES symbol-surface handoff to V3.0 / Phase 3c recorded at
+    [`docs/FOLLOWUPS.md`](FOLLOWUPS.md); the live runnable check
+    (`cargo build --release && nm shekyld | grep -iE
+    '(aes|randomx)'`) and its expected disposition (no
+    `randomx_*` matches per `RANDOMX_V2_RUST.md` §7.1; aes-crate
+    Rust-mangled symbols expected and benign) are recorded at the
+    pre-genesis queue so the Phase 3c PR closes the item.
+  - Phase 2b retains the Phase 2a forward-compatibility posture:
+    no `#[no_mangle]`, no `extern "C" fn`, no `#[export_name]`,
+    no module-level runtime-mutable state. `#![deny(unsafe_code)]`
+    at the crate level. `cargo test -p shekyl-pow-randomx`
+    succeeds without `external/randomx-v2/` initialized and
+    without a C++ toolchain — the live differential harness
+    remains Phase 2g's separate artifact. Phase 2c–2e build on
+    Phase 2b's primitives to deliver `Vm`, bytecode dispatch,
+    and `Cache::derive`; Phase 3 then wires the verifier through
+    `shekyl-ffi`; Phase 4 deletes the C++ verifier path.
+
+- **RandomX v2 Track A Phase 2a — `shekyl-pow-randomx` crate
+  scaffold + Argon2d primitive** (`feat/randomx-v2-phase2a`,
+  2026-05-21). First sub-PR of the Rust pure-software RandomX v2
+  verifier port per
+  [`docs/design/RANDOMX_V2_PLAN.md`](design/RANDOMX_V2_PLAN.md)
+  §"Track A — Phase 2" and
+  [`docs/design/RANDOMX_V2_RUST.md`](design/RANDOMX_V2_RUST.md).
+  - New workspace crate
+    [`rust/shekyl-pow-randomx/`](../rust/shekyl-pow-randomx/) with
+    crate-level rustdoc citing the Phase 0 decision substrate
+    (spec-first per `RANDOMX_V2_RUST.md` §3; derived-first per
+    §4; isolation invariants per §7).
+  - `pub(crate) fn fill_cache(key: &[u8], blocks: &mut [argon2::Block])`
+    at
+    [`src/argon2d.rs`](../rust/shekyl-pow-randomx/src/argon2d.rs)
+    implementing the Cache Argon2d "memory fill" per
+    `external/randomx-v2/doc/specs.md` §7.1 + Table 7.1.1
+    (`parallelism = 1`, `memory = 262144` KiB = 256 MiB,
+    `iterations = 3`, `Argon2d`, `salt = "RandomX\x03"`). Built on
+    `argon2 = "0.5.3"`'s `Argon2::fill_memory` after verifying at
+    source that the omit-finalizer path matches RandomX's
+    spec-required surface (recorded in the module rustdoc).
+    Constants and `Params` are compile-time validated.
+  - Argon2d spec-vector parity tests at
+    [`tests/vectors/reference/argon2d/`](../rust/shekyl-pow-randomx/tests/vectors/reference/argon2d/):
+    two derived vectors (`m=8` boundary case;
+    `m=64` multi-segment) from `argon2_ref.c` at fork pin
+    `aaafe71` (v2.0.1), with per-file `.meta.txt` provenance
+    headers and a reviewer-runnable `_generator/` reproducer
+    (`gen.c`, `Makefile`, `README.md`). The Rust tests consume
+    pre-committed bytes via `include_bytes!`; no `cargo test`
+    dev-dep on the C library (Phase 2g owns the live
+    differential harness at full RandomX parameters).
+  - Forward-compatible with Phase 2f's CI isolation invariants:
+    no `#[no_mangle]`, no `extern "C" fn`, no `#[export_name]`,
+    no module-level runtime-mutable state (no `Mutex`/`RwLock`/
+    `OnceCell`/`OnceLock`/`Lazy`/`static mut`/atomics-at-module-scope).
+    `#![deny(unsafe_code)]` at the crate level.
+  - Phase 2a scope is purely additive: no FFI surface, no C++
+    caller rewire, no deletion of `src/crypto/rx-slow-hash.c`
+    (those are Phase 3a/3b/3c/4). Phase 2b lands AES round +
+    SuperScalarHash next.
+
+- **Stage 1 closeout audit tracking** (2026-05-27, post–PR #81; updated
+  2026-05-29 post–PR #88). Records Stage 1 trait-extraction status in
+  [`FOLLOWUPS.md`](FOLLOWUPS.md) V3.0 queue and cross-refs
+  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md) §8.1 /
+  §1 banner plus [`WALLET_REWRITE_PLAN.md`](design/WALLET_REWRITE_PLAN.md).
+  Dedicated audit markdown now landed:
+  [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](design/STAGE_1_COMPLETION_AUDIT.md).
+
+- **Stage 1 PR 5 — `PendingTxEngine` trait surface and Phase 1
+  substrate** (`feat/stage-1-pr5-pending-tx-engine`, 2026-05-27).
+  Lands the Round-3-closed `PendingTxEngine` trait, the (γ) lean
+  three-collection reservation model, secondary-engine trait seams,
+  and `Engine<S, D, L, R, P>` orchestration dispatch per
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §4 / §5.0 / §7.X (C0 = `4466d153e` … C7 = `ca7622558`; C8 doc
+  commit follows).
+  - `pub trait PendingTxEngine: Send + Sync + 'static` at
+    [`engine/traits/pending_tx.rs`](../rust/shekyl-engine-core/src/engine/traits/pending_tx.rs)
+    with `build` / `submit` / `discard` / `outstanding` / optional
+    `signal_mempool_evicted` (C5α/β).
+  - `pub struct LocalPendingTx<S, O, F>` at
+    [`engine/local_pending_tx.rs`](../rust/shekyl-engine-core/src/engine/local_pending_tx.rs)
+    as the V3.0 production `P` parameter default for
+    `Engine<S, D, L, R, P>` (C5β).
+  - `pub struct SnapshotId([u8; 16])` and domain-separated
+    `derive_snapshot_id(&LedgerSnapshot)` (C1).
+  - Submit-path error vocabulary: `SubmitError`,
+    `TerminalErrorKind`, `AmbiguousErrorKind`, `DiscardReason`,
+    `ReservationExtension`, `PendingTxError` augmentations (C2).
+  - `pub enum PendingTxDiagnostic` + `emit_pending_tx` helper on
+    `DiagnosticSink` (C3); `AssertionSink` / `PanickingSink`
+    pending-event recording for tests (C7).
+  - Secondary-engine traits: `Signer` + `LocalSigner` (C4α),
+    `OutputSelector` + `WalletGreedyOutputSelector` (C4β),
+    `FeeEstimator` + `DaemonFeeEstimator` (C4γ).
+  - `FaultInjecting<P: PendingTxEngine>` FIFO fault-injection
+    wrapper under `#[cfg(any(test, feature = "test-helpers"))]`
+    (C7); `Engine::replace_pending_tx` test hook (C6).
+
+- **Stage 1 PR 4 — `RefreshEngine` trait surface**
+  (`feat/stage-1-pr4-refresh-engine`, 2026-05-15 → 2026-05-20).
+  Lands the Phase-0a-binding `RefreshEngine` trait and the
+  `ViewMaterial` adjacent type per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §4 Phase 0a + Phase 0c + Phase 0e and
+  [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.3 (PR 4 C0 = `322677261`; C1 = `d3edc1abb`).
+  - `pub trait RefreshEngine: Send + Sync + 'static` at
+    [`engine/traits/refresh.rs`](../rust/shekyl-engine-core/src/engine/traits/refresh.rs)
+    with one async method `produce_scan_result(snapshot:
+    LedgerSnapshot, daemon: &D, opts: &RefreshOptions, cancel:
+    &CancellationToken, progress: &watch::Sender<RefreshProgress>,
+    diagnostics: &dyn DiagnosticSink) -> Result<ScanResult,
+    Self::Error>` and `type Error: Into<RefreshError>`.
+  - Five-checkpoint cancellation discipline (1 / 4 on the
+    orchestrator; 2 / 3 / 5 on the trait body; checkpoint 5
+    is the per-transaction inner check per §5.4.9 F2 +
+    F11 + F11-S safe-point pins).
+  - `Self::Error` is **unit-variant-only at the trait surface**
+    per §5.4.7 R6 reframe: rich structured diagnostic
+    information flows through the `&dyn DiagnosticSink`
+    second channel; the synchronous return is a structural-
+    branch signal only. Of `RefreshError`'s six variants,
+    three are reachable from a `RefreshEngine` impl's
+    `Self::Error` via `Into` (`Cancelled` unit, `Io(IoError)`,
+    `InternalInvariantViolation { context: &'static str }`);
+    three are orchestrator-constructed only
+    (`MalformedScanResult` at the merge layer;
+    `ConcurrentMutation` at the merge gate; `AlreadyRunning`
+    at binary-layer single-flight).
+  - `ScanResult` atomicity-under-cancellation contract:
+    `produce_scan_result` returns **either** a `ScanResult`
+    covering the full span it scanned **or**
+    `RefreshError::Cancelled` — no partial-span result is
+    ever returned (R7 disposition).
+  - `LedgerSnapshot` is passed **by value** (R5 + §5.4.5):
+    the orchestrator constructs under the engine read-guard,
+    drops the guard, and hands the snapshot to the producer
+    by move; the snapshot carries reorg-window descriptors
+    only and is cheap to clone.
+  - `&D` daemon-handle borrow with the §2.5 `Clone + Send +
+    Sync + 'static` bound on `D`, so implementors can clone
+    internally if they need an owned handle to spawn work
+    (e.g., parallel block-fetch refinements); implementors
+    MUST NOT borrow `&D` across a `tokio::spawn` boundary.
+  - `pub struct ViewMaterial { spend_pub: EdwardsPoint;
+    view_scalar: Zeroizing<Scalar>; x25519_sk: Zeroizing<[u8;
+    32]>; ml_kem_dk: Zeroizing<Vec<u8>>; spend_secret:
+    Zeroizing<[u8; 32]> }` at
+    [`engine/view_material.rs`](../rust/shekyl-engine-core/src/engine/view_material.rs)
+    with `Zeroize + ZeroizeOnDrop` derived; capturing the
+    view-and-spend material at `LocalRefresh::new` so the
+    `Scanner` builds once and is held for the instance
+    lifetime (no per-attempt scanner construction; no
+    per-attempt secret duplication; R4 a-instance-scoped).
+  - The `LocalRefresh` implementor at
+    [`engine/local_refresh.rs`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+    (PR 4 C4 = `ac100e1ab`) is the V3.0 production `R`
+    parameter for `Engine<S, D, L, R>`; future implementors
+    (Stage 4 actor-mesh `RefreshActor`; any future producer
+    variant) implement the same trait surface.
+
+- **Stage 1 PR 4 — `RefreshDiagnostic` enum + `DiagnosticSink`
+  trait + Stage 1 sink implementations** (PR 4 C2 =
+  `8fc207051`; `SuppressedRateLimit` variant per Round 4
+  review pass F6 = same commit). Lands the second channel of
+  the two-channel error / diagnostic actor-mesh seam per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 reframe + §5.4.8 attack-surface dispositions.
+  - `pub enum RefreshDiagnostic` at
+    [`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs)
+    with `#[non_exhaustive]` and the Round-4-audit-confirmed
+    Stage 1 variant set: `DaemonMalformed { kind:
+    MalformedKind }`, `DaemonTimeout { op: DaemonOp, elapsed:
+    Duration }`, `DaemonProtocolError { kind:
+    ProtocolErrorKind }`, `ReorgObserved { fork_height: u64,
+    depth: u32 }`, `ScanProgress { height: u64, candidates:
+    u32 }`, and the Round-4-F6-added `SuppressedRateLimit {
+    class: SuppressedClass }`.
+  - Supporting bounded enums (`MalformedKind`, `DaemonOp`,
+    `ProtocolErrorKind`, `SuppressedClass`), all
+    `#[non_exhaustive]`; `SuppressedClass` carries one arm per
+    rate-limited event class (`DaemonMalformed`,
+    `DaemonTimeout`, `DaemonProtocolError`, `ReorgObserved`,
+    `ScanProgress`). The `SuppressedRateLimit` variant
+    carries *only* `class: SuppressedClass` — no count, no
+    timing, no original-event payload — per the §5.4.8 #5
+    F13-pin closing the suppressed-event-count covert
+    channel back from the producer's internal state.
+  - `pub trait DiagnosticSink: Send + Sync + 'static` with
+    one method `fn emit(&self, event: RefreshDiagnostic)`.
+    Trait-level contract pins (rustdoc): emission is
+    **non-blocking** (extends to **non-blocking under
+    concurrent emission**, foreclosing `Mutex<VecDeque<_>>`-
+    style implementations that re-introduce the producer-
+    liveness hazard at scale); emission/return **coherence**
+    (every non-`Cancelled` `Err` return is preceded by at
+    least one corresponding `RefreshDiagnostic` emission
+    before the error returns, with `AssertionSink`-driven
+    property tests at C7 as the canonical reference per
+    [`19-validation-surface-discipline.mdc`](../.cursor/rules/19-validation-surface-discipline.mdc));
+    **per-emitter FIFO ordering preserved** (the
+    seventh contract pin added by Round 4 review pass F4 =
+    §5.4.6; cross-emitter ordering is undefined); and the
+    in-process-only trust-boundary contract per §5.4.6 /
+    §5.4.8 #4 (full-fidelity `RefreshDiagnostic` consumers
+    MUST live inside the wallet trust boundary recursively;
+    cross-process / network-bound consumers receive only
+    projection types sanitized at the boundary).
+  - `pub struct NoopDiagnosticSink` + `pub struct
+    TracingDiagnosticSink` ship as the Stage 1 sink
+    implementations; `TracingDiagnosticSink::emit` routes
+    **per-class projections** to `tracing::event!` per the
+    Round-4-review-pass F9 audit (variant tag only for
+    `DaemonMalformed` / `DaemonProtocolError` /
+    `SuppressedRateLimit`; bucketed `elapsed` for
+    `DaemonTimeout`; bucketed `depth` for `ReorgObserved`;
+    bucketed `candidates` for `ScanProgress` with `height`
+    elided), not the full `RefreshDiagnostic` `Debug` impl.
+  - All trait + enum surface re-exported flat at the
+    `shekyl_engine_core` crate root per the R3 pattern.
+
+- **Stage 1 PR 4 — C6 no-Mock substrate pass (`RefreshEngine` /
+  `LedgerEngine` failure-injection wrappers)**
+  (`feat/stage-1-pr4-refresh-engine`, 2026-05-20). Lands the
+  C6α + C6β sub-commits of PR 4's substrate pass per the Round 5
+  amendment (commit `8484e669a`) and sub-pin extension
+  (commit `29cb7e138`, F-Mock-1 through F-Mock-8). The pass closes
+  the [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) "Stage 1 retroactive
+  Mock-X cleanup: `MockLedger` → `LocalLedger::from_test_blocks(...)`
+  + `FaultInjecting<LocalLedger>`" entry and applies the no-Mock
+  pattern PR 3 established (production-only implementors +
+  composable trait-level `FaultInjecting<T>` wrappers) to PR 2's
+  inherited `MockLedger` parallel-implementation.
+
+  *C6α — `FaultInjecting<R: RefreshEngine>` wrapper + `test-helpers`
+  feature* (commit `e9310542a`):
+  - Adds `test-helpers = []` Cargo feature to
+    [`rust/shekyl-engine-core/Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+    (mirrors the `bench-internals` precedent) gating the C6
+    test-helper surfaces with `#[cfg(any(test, feature =
+    "test-helpers"))]` per the F-Mock-1 symmetry pin.
+  - Adds
+    [`engine/fault_injecting_refresh.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs)
+    implementing `FaultInjecting<R: RefreshEngine>` with the
+    Option (i) wrapper API (`type Error = RefreshError`; FIFO
+    `Mutex<VecDeque<RefreshError>>` queue; `queue_failure(err)`
+    general injector; `queued_failures()` drain inspector;
+    `debug_assert!`-on-Drop queue-drain contract per F-Mock-2).
+  - Adds `Engine::replace_refresh` test-only setter on
+    [`engine/lifecycle.rs`](../rust/shekyl-engine-core/src/engine/lifecycle.rs)
+    mirroring the existing `replace_daemon` / `replace_ledger`
+    helpers.
+  - Adds Class 1 trait-surface smoke tests covering empty-queue
+    passthrough, single-injection-then-delegation, multi-injection
+    FIFO ordering, and `#[should_panic]` queue-drain-on-teardown.
+
+  *C6β — `FaultInjecting<L: LedgerEngine>` + `LocalLedger::from_test_blocks`
+  + `MockLedger` retirement*:
+  - Adds
+    [`engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs)
+    implementing `FaultInjecting<L: LedgerEngine>` with the same
+    Option (i) wrapper shape (queue-of-`RefreshError`,
+    `queue_failure` / `queue_concurrent_mutation` /
+    `queued_failures`, `debug_assert!`-on-Drop). Not `Clone` by
+    design — the prior `MockLedger`'s `Arc<Mutex<…>>` aliasing
+    shape (inherited from CryptoNote test patterns) does not
+    survive the no-Mock transition.
+  - Adds test-only `LocalLedger::from_test_blocks(Vec<Block>)`
+    constructor at
+    [`engine/local_ledger.rs`](../rust/shekyl-engine-core/src/engine/local_ledger.rs).
+    The V3.0 substrate supports the empty-`Vec` case only (the
+    sole shape every existing `MockLedger`-replaced caller
+    needs); non-empty `Vec` panics with a forward-pointer to
+    the V3.1 `TestLedgerBuilder` substrate-design FOLLOWUPS
+    entry. The `Vec<Block>` signature is load-bearing — V3.1's
+    substrate consumes the body without a signature change per
+    the rationale recorded in the constructor's rustdoc.
+  - Migrates the §5.2 hybrid retry integration test
+    `hybrid_apply_scan_result_retries_on_concurrent_mutation`
+    (in
+    [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs))
+    from `MockLedger::with_seed(...)` +
+    `queue_concurrent_mutation()` to
+    `FaultInjecting::new(LocalLedger::from_test_blocks(Vec::new()))`
+    + `queue_concurrent_mutation()`. The wrapper's non-`Clone`
+    posture required restructuring the assertion sites from a
+    cloned handle to read-guard access through the engine's
+    `Arc<RwLock<Engine<…>>>`; this is the structurally-correct
+    shape (single owner per the no-Mock substrate-inheritance
+    discipline).
+  - Deletes `MockLedger` + `MockLedgerState` + `ROLE_LEDGER` +
+    associated rustdoc + contract tests +
+    `derive_seed_pinned_fixture_for_role_ledger` test from
+    [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
+    (`ROLE_LEDGER` becomes dead weight because `LocalLedger`'s
+    `from_test_blocks` is deterministic and consumes no seed;
+    the `ROLE_DAEMON` HKDF-derivation pinned-fixture test in
+    the same module covers the underlying derivation mechanism).
+  - Updates the stale `MockLedger` reference in
+    [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §1.2 (the only active-doc factual claim that named
+    `MockLedger` as the current substrate; the broader
+    historical references in §§4+ and the PR 2 / PR 3 design
+    docs remain as historical-record prose per the
+    `15-deletion-and-debt.mdc` "while we're here" discipline).
+
+  *C6γ — `MockDaemon` → `TestDaemon` rename*:
+  - Mechanical rename of the test-substitute type and every call
+    site across
+    [`engine/test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs)
+    (struct, `impl Rpc`, `impl DaemonEngine`, module docstrings),
+    [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs),
+    [`engine/lifecycle.rs`](../rust/shekyl-engine-core/src/engine/lifecycle.rs),
+    [`engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs),
+    [`benches/common/engine_fixture.rs`](../rust/shekyl-engine-core/benches/common/engine_fixture.rs)
+    (forward-pointer comment), and
+    [`Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+    (`ChaCha20Rng` rationale comment).
+  - Structural shape unchanged — the type is still an alternative
+    real implementation that serves canned / cached test responses
+    without network connectivity (per PR 3 §2.1.2's distinction
+    between "alternative real implementation" and "parallel-
+    implementation fake"). Only the naming changed: `TestDaemon`
+    signals the role correctly per the no-Mock substrate-
+    inheritance discipline.
+  - Active-doc trajectory updates in
+    [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §1.2 (Generic `DaemonClient` trajectory row), §1.4 rename-chain
+    note, §6.1 hybrid-test discussion, §6.2 RNG-seed pin, §3.5
+    `Rpc`-impl rationale, and the §"Linked file paths" inventory
+    entry (rename chain extended: `MockRpc` → `MockDaemon` →
+    `TestDaemon`).
+
+  *Test gates (post-C6).* `cargo fmt --all -- --check` clean;
+  `cargo clippy -p shekyl-engine-core --all-targets --features
+  test-helpers -- -D warnings` clean; `cargo clippy -p
+  shekyl-engine-core --all-targets -- -D warnings` clean
+  (default features); `cargo test -p shekyl-engine-core --lib`
+  152/152 pass including the migrated hybrid retry test;
+  `cargo check -p shekyl-engine-core` (default + `--features
+  test-helpers` + `--tests` + `--benches` + `--workspace
+  --tests`) all green.
+
+  *C7 — hybrid retry test + property tests
+  (`AssertionSink` / `PanickingSink`)* (commit `c9e65bbc6`):
+  - Refactors `Engine::replace_refresh` at
+    [`engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs)
+    from a `&mut self` setter into a consume-and-rebuild
+    constructor (`fn replace_refresh<R2: RefreshEngine>(self,
+    refresh: R2) -> Engine<S, D, L, R2>`) mirroring the
+    existing `replace_daemon` / `replace_ledger` shape at
+    [`engine/lifecycle.rs`](../rust/shekyl-engine-core/src/engine/lifecycle.rs).
+    The refactor lets the generic `R` type parameter change
+    between construction and replacement so test orchestration
+    can build an `Engine<…, LocalRefresh>` at assemble time
+    and rewire it to `Engine<…, FaultInjecting<LocalRefresh>>`
+    for failure-injection scenarios without going through a
+    `dyn`-erased trait object.
+  - Adds `AssertionSink`, `PanickingSink`, and the
+    `PanickingSinkTrigger` configuration enum to
+    [`engine/diagnostics.rs`](../rust/shekyl-engine-core/src/engine/diagnostics.rs),
+    all gated `#[cfg(any(test, feature = "test-helpers"))]`
+    per the F-Mock-1 cfg-symmetry pin. `AssertionSink` records
+    emitted `RefreshDiagnostic` events for post-hoc coherence
+    assertions; `PanickingSink` panics on configured trigger
+    events to exercise producer panic-safety.
+  - Adds `proptest = "1"` as a `dev-dependency` in
+    [`rust/shekyl-engine-core/Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+    powering the new producer property tests below.
+  - Adds the hybrid retry test
+    `hybrid_refresh_engine_orchestrator_cancellation_retries`
+    at
+    [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+    that exercises the producer-trait / orchestrator
+    cancellation-checkpoint split end-to-end against the
+    fully-composed `Engine<SoloSigner, TestDaemon,
+    FaultInjecting<LocalLedger>, FaultInjecting<LocalRefresh>>`
+    stack, verifying the orchestrator retries on
+    `ConcurrentMutation` (driven by
+    `FaultInjecting<LocalLedger>::queue_concurrent_mutation`)
+    and surfaces cancellation cleanly when
+    `FaultInjecting<LocalRefresh>` injects
+    `RefreshError::Cancelled`.
+  - Adds the `producer_property_tests` module at
+    [`engine/local_refresh.rs`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+    with five parametric coherence tests, one
+    `proptest!`-driven fuzz test
+    (`coherence_proptest_fuzz_chain_and_injection`) exercising
+    randomized chain length + failure-injection scenarios,
+    four panic-safety tests verifying clean unwind through
+    `PanickingSink` panics across `DaemonMalformed` /
+    `DaemonProtocolError` / `ScanProgress` / `Any` triggers
+    plus a recovery test, and a classifier sanity test. The
+    coherence tests exercise the §5.4.6 emission/return
+    coherence pin: every non-`Cancelled` `RefreshError` is
+    preceded by a corresponding `RefreshDiagnostic` emission.
+    The panic-safety tests verify the §5.4.6 producer-side
+    robustness property: `Scanner` zeroizes cleanly via
+    `Drop` across a panicking `emit`, cancellation-token
+    state remains well-defined, and the refresh attempt
+    fails predictably without corrupting interior state.
+    Tests are deterministic via a compile-time-generated
+    `PROPERTY_TEST_MASTER_SEED` and `#[tokio::test(start_paused
+    = true)]` for fake-time async scheduling.
+
+  *Test gates (post-C7).* `cargo fmt --all -- --check` clean;
+  `cargo clippy -p shekyl-engine-core --all-targets --features
+  test-helpers -- -D warnings` clean; default-feature clippy
+  clean; `cargo test -p shekyl-engine-core --features
+  test-helpers --lib` 170/170 pass (152 → 170: +18 C7 tests);
+  `cargo doc -p shekyl-engine-core --features test-helpers
+  --no-deps` green with no new doc warnings (pre-existing
+  intra-doc-link warnings to private items are baseline and
+  unrelated to C7 changes).
+
+  *C8 — docs propagation* (this commit):
+  - This CHANGELOG entry extended with the C7 sub-section
+    above and the C8 sub-section here.
+  - [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    gains the Phase-1-landed Status-banner closure paragraph
+    enumerating C0–C8 landing SHAs; §7.X gains per-`Commit
+    Cn` `Landed:` lines anchoring each commit's SHA inline
+    next to the design-time prose.
+  - [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §2.3 past-tenses the "Stage 1 surface" header and cross-
+    references the as-landed implementation locators
+    (`engine/traits/refresh.rs`, `engine/diagnostics.rs`,
+    `engine/local_refresh.rs`, `engine/mod.rs`,
+    `engine/fault_injecting_refresh.rs`,
+    `engine/fault_injecting_ledger.rs`) with their commit
+    SHAs (C1 / C2 / C4 / C5a / C6α / C6β).
+  - [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) gains a Phase 0d
+    explicit retirement note ("struck, not deferred") at the
+    top of the V3.x section, distinguishing the Round 2
+    composition reframe's struck-candidate from the live
+    R5 / R6 / R4 (c) V3.x consumer-actor deferrals that
+    remain open per Round 3's prior amendments. The pre-
+    existing closed-entries for Mock-X cleanup
+    (`MockLedger` → `FaultInjecting<LocalLedger>` +
+    `LocalLedger::from_test_blocks` and `MockDaemon` →
+    `TestDaemon`) carry the `[CLOSED 2026-05-20]` marker
+    from C6β / C6γ landing and are unchanged in C8.
+
+  *C9 — FOLLOWUPS P1 / P2 / P3 re-anchor post-Phase-1
+  landing* (this commit):
+  - Doc-only follow-up commit; not in the original Round 4
+    C0–C8 decomposition but added post-PR-open per the
+    user-directed "correct known document errors within the
+    current PR" trigger (per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    stale-doc detection discipline and
+    [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)'s
+    "deferred without a named home is the failure mode"
+    framing). Surfaced during a post-C8 review of
+    `docs/FOLLOWUPS.md` against the actual code state in
+    `engine/local_ledger.rs:356–367` (trait-method
+    `apply_scan_result` discards `Vec<usize>` and short-
+    circuits `populate_engine_handle_fields`) and
+    `engine/merge.rs:181–215` (inherent
+    `Engine::apply_scan_result` runs the post-pass against
+    the captured `inserted` indices) — the two paths diverge
+    by construction in the post-Phase-1 substrate.
+  - [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) P1 / P2 / P3 entries
+    rewritten with **Post-PR-4-Phase-1 substrate** subsections
+    + substrate-anchored reopening criteria per
+    [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc).
+    The pre-Phase-1 "defer to PR 4" dispositions all assumed
+    α/β/γ Round 1 would reshape the producer/consumer pattern
+    and the `LedgerEngine::apply_scan_result` trait surface,
+    absorbing P1 / P2 / P3 as a side effect. Phase 1 settled
+    on α (preserved current shape; trait surface unchanged) per
+    `STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4 Round 1, and did not
+    absorb the three items. P1's hard precondition ("PR 4
+    lands before any binary integrates `RefreshHandle`")
+    survives intact and is restated as "P1 closes before any
+    binary integrates `RefreshHandle`". Each entry's
+    re-anchored disposition names a focused follow-up PR
+    landing V3.0 pre-genesis: P1 →
+    `refresh/p1-async-path-post-pass` (two candidate
+    closing shapes both feasible against the post-Phase-1
+    substrate — shape (b) `RefreshEngine` owns the merge
+    post-pass is newly available because PR 4 landed the
+    `RefreshEngine` trait at C1 / C4); P2 →
+    `refresh/p2-wallet-birthday-plumbing` (substrate
+    well-defined: `LocalRefresh::new` is the V3.0 production
+    implementor per C4 = `ac100e1ab`); P3 → downstream of
+    P1, closes alongside P1 in the same focused PR (both
+    candidate P1-closing shapes close P3 as a side effect;
+    P3 stays catalogued separately to preserve the Copilot
+    PR #37 audit trail).
+  - [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    §5.5 named-home table rows P1 / P2 / P3 updated with a
+    bold **Phase 1 landed without absorption** marker plus
+    one-sentence cross-refs to the re-anchored FOLLOWUPS
+    dispositions, preserving the §5.5 audit-trail discipline
+    per `15-deletion-and-debt.mdc`.
+  - `STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X Status banner
+    extended to enumerate C9 alongside C0–C8; the same §7.X
+    gains a new `**Commit C9 — FOLLOWUPS P1 / P2 / P3
+    re-anchor post-Phase-1 landing**` block documenting
+    design-time intent and landing SHA, mirroring the
+    per-commit documentation pattern from C0–C8.
+  - Gate inheritance from C8: C9 is doc-only, so
+    `cargo fmt --check`, `cargo clippy -- -D warnings`,
+    `cargo test --lib`, and `cargo doc --no-deps` all
+    inherit C8's results unchanged (170 / 170 lib tests
+    pass; fmt clean; clippy clean under both default and
+    `test-helpers` features; 48 doc warnings unchanged at
+    the C7 baseline).
+
+  *C10 – C13 — Copilot post-PR-open review responses*:
+  - Four small post-PR-open commits closing the nine
+    line-anchored findings the GitHub Copilot review raised
+    against `95affda61` (C8 head before C9 push) on PR #60.
+    Each commit is scoped to a single concern (file +
+    correction class) per
+    [`.cursor/rules/90-commits.mdc`](../.cursor/rules/90-commits.mdc)'s
+    scope-per-commit discipline; each commit cites its
+    Copilot finding IDs in the commit message body. Doc-only
+    / harness-only; no API surface, no trait body, and no
+    production code-path touched.
+  - **C10** `60f401e77` — scanner rustdoc fn-name
+    corrections in
+    [`rust/shekyl-scanner/src/scan.rs`](../rust/shekyl-scanner/src/scan.rs).
+    Six sites updated from pre-C4 `scan_transaction` to
+    C4-landed `scan_transaction_with_cancel`, plus the
+    gate-test rustdoc return-type updated from
+    `Ok(Timelocked::empty())` to
+    `Ok(ScanOutcome::Completed(Timelocked(empty)))` to match
+    the actual `ScanOutcome` variant the gate returns.
+    Closes Copilot finding IDs 3278232594 / 3278232649 /
+    3278232666 / 3278232686 plus two same-class adjacent
+    sites discovered during the audit.
+  - **C11** `949e42bd8` — `bench_fixtures` rustdoc fact-fix
+    in
+    [`rust/shekyl-scanner/src/bench_fixtures.rs`](../rust/shekyl-scanner/src/bench_fixtures.rs).
+    The `make_bench_wallet` spend-secret comment cited the
+    on-chain spend point as the basepoint when
+    `fake_spend_key_bytes()` actually returns `2 * G`. The
+    `fake_spend_key_bytes()` rustdoc opening was internally
+    contradictory and is rewritten as a clean three-property
+    justification (torsion-free; non-default; distinct from
+    `G`). Behaviour unchanged — `fake_spend_key_bytes()`
+    body still returns `(2 * G).compress().to_bytes()`
+    byte-identically; F11-S cold-cache audit-trail
+    unaffected. Closes Copilot finding IDs 3278232628 /
+    3278232770.
+  - **C12** `20b082a38` — refresh-trait checkpoint-list
+    temporal-firing-order explanation in
+    [`rust/shekyl-engine-core/src/engine/traits/refresh.rs`](../rust/shekyl-engine-core/src/engine/traits/refresh.rs).
+    The `RefreshEngine` trait rustdoc lists checkpoints in
+    temporal-firing order (1 → 2 → 3 → 5 → 4) rather than
+    numeric order. Copilot read this as out-of-order, but
+    the numbering is repo-wide audit-trail convention
+    preserving "checkpoint 5 added per PR 4 Round 4 F2".
+    Synchronized renumbering would touch 12+ cross-reference
+    sites and dissolve the F2-audit-trail provenance;
+    rejected per
+    [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)'s
+    substrate-anchored disposition. Fix applied: add an
+    explanatory paragraph to the trait rustdoc that names
+    the temporal-firing-order convention explicitly so the
+    question isn't re-litigated. Closes Copilot finding ID
+    3278232791.
+  - **C13** `262ece667` — scan-transaction warm-cache bench
+    harness clone-out-of-timed-region fix in
+    [`rust/shekyl-scanner/benches/scan_transaction.rs`](../rust/shekyl-scanner/benches/scan_transaction.rs).
+    Both warm-cache benchmark variants used
+    `iter_batched_ref` with an in-routine
+    `mem::replace(b, block.clone())`, placing
+    `ScannableBlock::clone` inside the timed region.
+    Switched to `iter_batched(|| block.clone(), |block|
+    scanner.scan(block), ..)` so the clone is in the setup
+    closure and only `Scanner::scan` is measured. **F11-S
+    audit-trail impact: ZERO** — the F11-S binding
+    measurement (per
+    [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    §3.1 / §5.4.9 / §7.Y) is anchored on the cold-cache
+    N=16 worst-case p99 (12.95 ms per-tx / 819 µs
+    per-output), and the cold variant was already
+    methodologically correct (all setup outside the timed
+    region). Captured F11-S numbers at `a4da2212a` and the
+    C4 per-output safe-point disposition stand without
+    revision. Closes Copilot finding IDs 3278232713 /
+    3278232736.
+  - Gates per commit: each commit ran its scoped bisection-
+    discipline gates against the affected crate
+    (`shekyl-scanner` for C10 / C11 / C13;
+    `shekyl-engine-core` for C12). Test counts and doc-
+    warning baselines unchanged: 57 / 57 scanner lib tests
+    pass; 170 / 170 engine-core lib tests pass; scanner doc
+    warnings = 2 (C8 baseline); engine-core doc warnings =
+    49 (C9 baseline). C13 additionally ran
+    `cargo check --benches` to confirm the bench targets
+    compile under the new `iter_batched` shape.
+
+  *C14 — `[Unreleased]` doc-after-plans propagation for
+  C10 – C13* (this commit):
+  - Doc-only follow-up commit per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    final-task-always rule. After C10 / C11 / C12 / C13
+    landed locally with green gates, the design doc §7.X
+    Status banner (line ~478) was extended to enumerate
+    C10 – C13 alongside C0 – C9 with landing SHAs and
+    per-commit one-paragraph summaries, and the §7.X
+    commit-block section gained a new
+    `**Commits C10 – C13 — Copilot post-PR-open review
+    responses.**` block with the same per-commit prose +
+    F11-S impact statement + gate evidence. The C9 block's
+    placeholder `**Landed: this commit**` was replaced with
+    the landed SHA `839c4bbfd`. This `*C10 – C13 — Copilot
+    post-PR-open review responses*` subsection above is
+    the matching CHANGELOG entry; the doc-after-plans
+    propagation also updates the closing C0–C13 paragraph
+    below.
+  - Gate inheritance from C13: C14 is doc-only, so the
+    `cargo fmt --check`, `cargo clippy --all-targets --
+    -D warnings`, `cargo test --lib`, and `cargo doc --no-
+    deps` gates all inherit C13's results unchanged
+    (no rust files touched in C14).
+
+  *C15 – C16 — Copilot second-round review responses*:
+  - Two small post-PR-open commits closing the four
+    additional line-anchored findings the GitHub Copilot
+    reviewer raised against `30798d783` (the C14 push
+    head) on PR #60. Both batches touch `engine/`-side
+    rustdoc and harness surfaces only; doc-only /
+    harness-only; no API surface, no trait body, and no
+    production code-path touched. Each commit cites its
+    Copilot finding IDs in the commit message body per
+    [`.cursor/rules/90-commits.mdc`](../.cursor/rules/90-commits.mdc).
+  - **C15** `bafb9c548` — refresh-trait
+    `[`LocalRefresh`]` rustdoc link target fix in
+    [`rust/shekyl-engine-core/src/engine/traits/refresh.rs`](../rust/shekyl-engine-core/src/engine/traits/refresh.rs).
+    Two `[`LocalRefresh`]` reference-link aliases (lines
+    204 + 258 of the `RefreshEngine` trait file) pointed
+    at `super::super::Engine` instead of
+    `super::super::LocalRefresh`. The misroute was silent
+    (the alias target is a valid path; rustdoc accepts
+    it) but the rendered docs at the two body sites (lines
+    48 and 244) linked "LocalRefresh" to the `Engine`
+    struct rather than `LocalRefresh`. Correct target
+    verified at source: `LocalRefresh` lives at
+    `engine/local_refresh.rs:250`, re-exported at
+    `engine/mod.rs:187`; from `engine::traits::refresh`,
+    `super::super::LocalRefresh` resolves through the
+    re-export (matching the working precedent at
+    `engine/fault_injecting_refresh.rs:105`). Closes
+    Copilot finding IDs 3278391428, 3278391456.
+  - **C16** `376e1e821` — `FaultInjecting<R>` +
+    `FaultInjecting<L>` Drop-time `debug_assert!` message
+    fix in
+    [`rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_refresh.rs)
+    and
+    [`rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs`](../rust/shekyl-engine-core/src/engine/fault_injecting_ledger.rs).
+    Both Drop messages told test authors to "drain via
+    `queued_failures()` and `consume_or_inject`". Neither
+    instruction was usable: `consume_or_inject` does not
+    exist anywhere in the workspace (`rg -nF
+    'consume_or_inject'` returned only the two
+    message-body sites — leftover prose from an earlier
+    API draft), and `queued_failures()` is a `usize`
+    inspector, not a drain. Rewritten to direct readers at
+    the real drain mechanism — `produce_scan_result(..)`
+    for the refresh wrapper, `apply_scan_result(..)` for
+    the ledger wrapper — with `queued_failures()` cited
+    explicitly as the inspector. The two
+    `#[should_panic(expected = ...)]` test attributes
+    (`fault_injecting_ledger.rs:528`,
+    `fault_injecting_refresh.rs:590`) re-pinned to the new
+    substring shape in the same commit per scope-per-
+    commit discipline (mechanical follow-on of the
+    production-message edit). The refresh-side
+    `should_panic` had also been pinned on the older
+    "FaultInjecting" (without `<R>`) spelling; both
+    ledger and refresh assertions now consistently include
+    the generic-parameter suffix. Closes Copilot finding
+    IDs 3278391467, 3278391479.
+  - Gates per commit: each ran its scoped bisection-
+    discipline gates against `shekyl-engine-core` (fmt
+    --check, clippy --all-targets -- -D warnings, test
+    --lib, doc --no-deps). C15 doc-only (rustdoc-target);
+    C16 production message + same-scope `should_panic`
+    re-pin. Test counts unchanged at 170 / 170 lib tests
+    pass; doc warnings unchanged at 49 (C9 baseline). The
+    two re-pinned `should_panic` tests both confirm the
+    new substrings.
+
+  *C17 — `[Unreleased]` doc-after-plans propagation for
+  C15 – C16*:
+  - Doc-only follow-up per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    final-task-always rule. After C15 / C16 landed locally
+    with green gates, the design doc §7.X status banner
+    was extended to enumerate C14 / C15 / C16 alongside
+    C0 – C13 with landing SHAs and per-commit
+    one-paragraph summaries, and the §7.X commit-block
+    section gained a new `**Commits C15 – C16 — Copilot
+    post-PR-open second-round review responses.**` block
+    with per-commit prose + Copilot finding IDs + gate
+    evidence. This `*C15 – C16 — Copilot second-round
+    review responses*` subsection above is the matching
+    CHANGELOG entry; the doc-after-plans propagation also
+    updates the closing C0–C20 paragraph below.
+  - Gate inheritance from C16: C17 is doc-only, so the
+    `cargo fmt --check`, `cargo clippy --all-targets --
+    -D warnings`, `cargo test --lib`, and `cargo doc
+    --no-deps` gates all inherit C16's results unchanged
+    (no rust files touched in C17).
+
+  *C18 – C20 — Copilot third-round review responses*:
+  - Three small post-PR-open commits closing the three
+    additional line-anchored findings the GitHub Copilot
+    reviewer raised against `966154d27` (the C17 push
+    head) on PR #60. The findings clustered on substantive
+    discipline questions rather than rustdoc cosmetics:
+    F11-S cancellation safe-point completeness, dead-arm
+    invariant enforcement, and cryptographic-decoding
+    constant-time-or-explicit-rejection discipline. Each
+    commit cites its Copilot finding ID in the commit
+    message body per
+    [`.cursor/rules/90-commits.mdc`](../.cursor/rules/90-commits.mdc).
+  - **C18** `6cc22965f` — `Scanner::scan_with_cancel` per-tx
+    safe-point cancellation check in
+    [`rust/shekyl-scanner/src/scan.rs`](../rust/shekyl-scanner/src/scan.rs).
+    The F11-S binding's between-tx safe-point per
+    `RefreshEngine` trait rustdoc checkpoint 5 was
+    delivered only via the inner per-output iter-0 check
+    inside `scan_transaction_with_cancel`. For transactions
+    whose per-output loop never runs (zero-output txs;
+    `tx.version() != 2`; malformed `extra`; oversized per
+    the defense-in-depth size gate) the inner check is
+    bypassed and the outer per-tx loop delegated straight
+    back without cancellation opportunity. Worst case: a
+    block of `N` such transactions deferred cancellation
+    by `N × O(1)-per-tx-skip` cost rather than bounded at
+    a single tx-entry's cost. Fix adds `if is_cancelled()
+    { return Cancelled }` at the outer per-tx loop entry,
+    rewrites the misleading "subsumed by per-output check
+    at iter 0" comment to describe the new two-checkpoint
+    shape, and adds the
+    `outer_per_tx_loop_cancellation_fires_for_zero_output_tx`
+    regression test (V2 miner-only block via
+    `Input::Gen(0)` + empty outputs/extra). The
+    `cancel_tests` module rustdoc was simultaneously
+    updated from a three-axis to a four-axis taxonomy
+    naming the outer-loop per-tx boundary explicitly.
+    F11-S benchmark impact: zero — added check is one
+    closure invocation per tx, a few nanoseconds amortized
+    across `N_outputs` per tx and well below the F11-S
+    worst-case per-output cost. Closes Copilot finding ID
+    3278452877.
+  - **C19** `5749f444c` — dead `ScanOutcome::Cancelled`
+    arm `debug_assert!` in `InternalScanner::scan` in
+    [`rust/shekyl-scanner/src/scan.rs`](../rust/shekyl-scanner/src/scan.rs).
+    The function delegates to `scan_with_cancel` with a
+    never-cancelling closure (`|| false`); under the
+    closure-invariant, the `Cancelled` variant is
+    unreachable. The previous code mapped the unreachable
+    variant to `Ok(Timelocked(Vec::new()))` for
+    production-panic-free behavior — but the empty-result
+    fallback would silently mask future logic-dispatch
+    regressions. Fix adds `debug_assert!(false, …)`
+    naming the closure-invariant before the empty-result
+    fallback, so debug-mode tests catch the violation
+    immediately while production behavior is unchanged.
+    Discipline (preferring `debug_assert!` over
+    `unreachable!()`) named in the same arm's comment so
+    a future refactor preserves the rationale. Closes
+    Copilot finding ID 3278452893.
+  - **C20** `3331fb82e` — `ViewMaterial::try_from_keys`
+    view_scalar canonical-bytes decoding in
+    [`rust/shekyl-engine-core/src/engine/view_material.rs`](../rust/shekyl-engine-core/src/engine/view_material.rs).
+    The previous reconstruction via
+    `Scalar::from_bytes_mod_order(*keys.view_sk
+    .as_canonical_bytes())` silently reduces
+    non-canonical / corrupted input to a canonical scalar
+    — masking in-memory corruption of view-key state and
+    producing a scalar that is NOT the wallet's actual
+    view secret on bad input. The same construction site
+    (lines 211–222) validates `keys.spend_pk` with
+    explicit `IoError::Scanner` on non-canonical bytes;
+    the asymmetric treatment of view-scalar vs.
+    spend-public-key was not justified by the threat
+    model. Fix switches to
+    `Option::<Scalar>::from(Scalar::from_canonical_bytes(...))
+    .ok_or_else(|| RefreshError::Io(IoError::Scanner {
+    detail: ... }))?`. On canonical input the resulting
+    scalar is bit-identical to the pre-fix output; on
+    non-canonical input the conversion returns `None` and
+    maps to `RefreshError::Io(IoError::Scanner)` with an
+    operator-actionable detail string. The rustdoc's
+    field-derivation summary and `# Errors` block were
+    both updated to describe the new shape and cite
+    `30-cryptography.mdc`'s constant-time-or-explicit-
+    rejection discipline as the anchor. Closes Copilot
+    finding ID 3278452905.
+  - Gates per commit: each ran its scoped
+    bisection-discipline gates against the touched crate
+    (C18 / C19: `shekyl-scanner`; C20:
+    `shekyl-engine-core`) plus downstream
+    `shekyl-engine-core` regression for the scanner-side
+    changes (fmt --check, clippy --all-targets -- -D
+    warnings, test --lib, doc --no-deps). Scanner test
+    count: 57 → 58 (C18 added regression test;
+    C19 unchanged). Engine-core test count unchanged at
+    170 / 170 lib tests pass. Scanner doc warnings
+    unchanged at 2 (C8 baseline). Engine-core doc
+    warnings unchanged at 49 (C9 baseline).
+
+  *C21 — `[Unreleased]` doc-after-plans propagation for
+  C18 – C20* (this commit):
+  - Doc-only follow-up per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    final-task-always rule. After C18 / C19 / C20 landed
+    locally with green gates, the design doc §7.X status
+    banner was extended to enumerate C18 / C19 / C20
+    alongside C0 – C17 with landing SHAs and per-commit
+    one-paragraph summaries, and the §7.X commit-block
+    section gained a new `**Commits C18 – C20 — Copilot
+    post-PR-open third-round review responses.**` block
+    with per-commit prose + Copilot finding IDs + gate
+    evidence. This `*C18 – C20 — Copilot third-round
+    review responses*` subsection above is the matching
+    CHANGELOG entry; the doc-after-plans propagation also
+    updates the closing C0–C21 paragraph below.
+  - Gate inheritance from C20: C21 is doc-only, so the
+    `cargo fmt --check`, `cargo clippy --all-targets --
+    -D warnings`, `cargo test --lib`, and `cargo doc
+    --no-deps` gates all inherit C20's results unchanged
+    (no rust files touched in C21).
+
+  *C22 – C23 — Copilot fourth-round review responses*:
+  - Two small post-PR-open commits closing the five
+    additional line-anchored findings the GitHub Copilot
+    reviewer raised against `5557b3192` (the C21 push
+    head) on PR #60. Four of the five findings clustered
+    on a single class (stale `expect()` panic-message
+    references in the bench harness) and bundle into a
+    single mechanical commit; the fifth is a substantive
+    test-discipline refinement and lands separately.
+    Each commit cites its Copilot finding ID(s) in the
+    commit message body per
+    [`.cursor/rules/90-commits.mdc`](../.cursor/rules/90-commits.mdc).
+  - **C22** `168ff0e22` — stale `scan_transaction_with_cancel`
+    `expect()` strings in
+    [`rust/shekyl-scanner/benches/scan_transaction.rs`](../rust/shekyl-scanner/benches/scan_transaction.rs).
+    Four `.expect("scan_transaction_with_cancel must not
+    error on well-formed fixture")` sites (warm + cold
+    variants of the worst-case and typical-case bench
+    groups) referenced the private inner helper but the
+    call sites themselves invoke the public surface
+    `Scanner::scan(..)`. The mismatch is the same class
+    as the C10 commit (`60f401e77`) that rewrote six
+    rustdoc fn-name references in `scan.rs` post the C4
+    rename + split (`ac100e1ab`); C22 closes the bench-
+    file residue C10's review-attention scope didn't
+    cover. Fix updates all four sites to `"Scanner::scan
+    must not error on well-formed fixture"`; rustfmt
+    collapsed the now-shorter message to single-line
+    form. No semantic change (panic messages only fire
+    on `Err`, and the bench fixtures' `Scanner::scan`
+    invocations never produce `Err` by construction).
+    Operator-facing diagnostic discipline (audit-trail
+    clarity when a bench panics in CI). Closes Copilot
+    finding IDs 3278543704, 3278543738, 3278543753,
+    3278543764.
+  - **C23** `a2f173c73` — replace Debug-substring with
+    structural `CryptoError::DecapsulationFailed` match
+    in
+    [`rust/shekyl-scanner/src/bench_fixtures.rs`](../rust/shekyl-scanner/src/bench_fixtures.rs).
+    The `typical_case_first_output_exits_via_view_tag_mismatch`
+    sanity-check test asserted `format!("{err:?}")
+    .contains("X25519 view tag mismatch")` to verify the
+    fast-path-rejection error class — brittle to Debug-
+    format changes (re-derivation, additional context
+    fields, terse-vs-verbose variants) per Copilot's
+    test-discipline finding. Validation at source confirms
+    `scan_output_recover` constructs multiple
+    `DecapsulationFailed(String)` instances along distinct
+    early-exit paths (view-tag mismatch, invalid ML-KEM
+    ciphertext length, invalid decap key, ML-KEM decap
+    rejection); a pure variant-only check would not
+    distinguish the typical-case fixture's intended path
+    from sibling reasons, so the substring check on the
+    inner message IS load-bearing. Fix uses a let-else
+    binding both the variant AND the inner `String` field
+    followed by a separate inner-message `assert!` — the
+    two-class pinning (variant + reason within variant)
+    is preserved; only the FORM changes (binding the
+    inner `String` directly via pattern-match rather than
+    going through `format!("{err:?}")`). Comment rewritten
+    to enumerate the two drift classes the new shape
+    catches explicitly. `CryptoError` imported via the
+    existing `shekyl_crypto_pq::error` public path. Closes
+    Copilot finding ID 3278543725.
+  - Gates per commit: C22 ran `cargo fmt -p shekyl-
+    scanner -- --check` (auto-format applied to collapse
+    the shorter message to single-line; second --check
+    clean) + `cargo clippy -p shekyl-scanner --all-
+    targets -- -D warnings` (clean) + `cargo build -p
+    shekyl-scanner --benches` (clean) + `cargo test -p
+    shekyl-scanner --lib` (58 / 58 pass; unchanged from
+    C19). C23 ran the same scoped gates plus a targeted
+    `cargo test ... typical_case_first_output_exits_via_view_tag_mismatch
+    -- --nocapture` to confirm the new structural form
+    classifies the fixture's view-tag-mismatch error
+    correctly (1 / 1 pass). Scanner doc warnings
+    unchanged at 2 (C8 baseline).
+
+  *C24 — `[Unreleased]` doc-after-plans propagation for
+  C22 – C23* (this commit):
+  - Doc-only follow-up per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    final-task-always rule. After C22 / C23 landed
+    locally with green gates, the design doc §7.X status
+    banner was extended to enumerate C22 / C23 alongside
+    C0 – C21 with landing SHAs and per-commit one-
+    paragraph summaries, and the §7.X commit-block
+    section gained a new `**Commits C22 – C23 — Copilot
+    post-PR-open fourth-round review responses.**` block
+    with per-commit prose + Copilot finding IDs + gate
+    evidence. This `*C22 – C23 — Copilot fourth-round
+    review responses*` subsection above is the matching
+    CHANGELOG entry; the doc-after-plans propagation also
+    updates the closing C0–C24 paragraph below.
+  - Gate inheritance from C23: C24 is doc-only, so the
+    `cargo fmt --check`, `cargo clippy --all-targets --
+    -D warnings`, `cargo test --lib`, and `cargo doc
+    --no-deps` gates all inherit C23's results unchanged
+    (no rust files touched in C24).
+
+  *C25 – C28 — Copilot fifth-round review responses*:
+  - Four small post-PR-open commits closing the five
+    additional line-anchored findings the GitHub Copilot
+    reviewer raised against `3f4460a59` (the C24 push
+    head) on PR #60. All five findings are substantive
+    doc/code-hygiene issues (none nitpicky): three are
+    stale-doc references to deleted symbols / abandoned
+    test substrates (per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    "Stale-doc detection ... the doc update is not
+    optional — the doc is wrong and will mislead readers"
+    rule); one is a dead lint-allow attribute (per
+    [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)'s
+    "Default: delete"); one is a Cargo feature description
+    that claimed re-exports the feature doesn't actually
+    perform.
+  - **C25** `543fffe23` — stale `build_scanner_from_keys`
+    rustdoc / comment references in
+    [`rust/shekyl-engine-core/src/engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs)
+    (comment above `pub(crate) fn keys()`) and
+    [`rust/shekyl-engine-core/src/engine/view_material.rs`](../rust/shekyl-engine-core/src/engine/view_material.rs)
+    (module rustdoc § "Field shape"). The free function
+    `build_scanner_from_keys` was deleted in C5β
+    (`b6a1274de` — legacy producer-scaffolding deletion
+    in `engine/refresh.rs`) and replaced by
+    `ViewMaterial::try_from_keys(&AllKeysBlob)` (engine
+    assembly time, per C5a = `553d70139`) +
+    `LocalRefresh::build_scanner` (per-attempt scanner
+    construction, per C4 = `ac100e1ab`). Both LIVE Rust
+    sites updated to name the actual current derivation
+    path; the surviving live consumer of
+    `Engine::keys()` (`Engine::replace_refresh`'s test-
+    substrate re-derivation per C6α = `e9310542a`) named
+    explicitly; reopening-criterion clause added per
+    [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+    naming Phase 2's `sign_transfer` / `tx_proof` /
+    `reserve_proof` surfaces as the substrate-change
+    that would reopen `#[allow(dead_code)]` deletion.
+    Initial rewrite introduced an
+    `[Engine::replace_refresh](super::Engine::replace_refresh)`
+    intra-doc link that triggered a new rustdoc privacy
+    warning (`replace_refresh` is `pub(crate)`, link
+    from `pub` `view_material` module's rustdoc
+    unresolves); reverted to a plain backtick reference
+    per the C18 cross-crate-link mitigation pattern;
+    doc-warning count back to baseline 49. Closes
+    Copilot finding IDs 3278677182, 3278677211.
+  - **C26** `1cdcd6e52` — dead `#[allow(unused_imports)]`
+    on `pub(crate) use refresh::RefreshEngine` re-export
+    in
+    [`rust/shekyl-engine-core/src/engine/traits/mod.rs`](../rust/shekyl-engine-core/src/engine/traits/mod.rs).
+    The suppression was load-bearing at C1's introduction
+    commit (`d3edc1abb`) when the re-export landed ahead
+    of consumers; C5 (`7140f726a` — `Engine<S, D, L, R>`
+    four-parameter type slot + retry-loop migration to
+    trait dispatch) introduced multiple production
+    consumers making the import live. The suppression
+    has not been load-bearing since C5 and now masks
+    future regressions where the import becomes dead
+    again. Removed per
+    [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)'s
+    "Default: delete"; accompanying comment rewritten to
+    anchor C1 / C5 / C26 and explain the masking-future-
+    regressions failure mode the removal prevents.
+    Symmetric form to C25's update of `Engine::keys()`'s
+    `#[allow(dead_code)]` (same discipline check, different
+    disposition because that suppression's live-consumer
+    audit surfaced an ongoing default-feature production
+    justification). Closes Copilot finding ID 3278677226.
+  - **C27** `15c76a73e` — reword `test-helpers` Cargo
+    feature description in
+    [`rust/shekyl-engine-core/Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+    to reflect that the feature gates compilation only,
+    NOT public re-exports. The previous description
+    claimed the feature "re-exports otherwise-`pub(crate)`
+    failure-injection wrappers ... for downstream
+    integration test crates", but the four named surfaces
+    (`FaultInjecting<R: RefreshEngine>`, `FaultInjecting<L:
+    LedgerEngine>`, `Engine::replace_refresh`,
+    `LocalLedger::from_test_blocks`) remain `pub(crate)`
+    with the feature enabled — no `__test_helpers`
+    re-export module exists at the crate root (verified
+    at source vs. the sibling `bench-internals` feature
+    which DOES have a `__bench_internals` re-export at
+    `lib.rs:46-56`). Per
+    [`.cursor/rules/21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)
+    chose option (b) of Copilot's two options: reword to
+    reflect actual shape, NOT speculatively add re-
+    exports for hypothetical downstream consumers that
+    don't yet exist (the "pre-provisioning for
+    hypothetical consumers" anti-pattern). The rewritten
+    comment names: what the feature actually does
+    (compile-gate the four `pub(crate)` surfaces); what
+    it does NOT do (no public re-exports; compare-and-
+    contrast with `bench-internals` makes the asymmetry
+    explicit); why no re-exports yet (pre-genesis
+    no-consumer state); reopening criteria (when the
+    first downstream consumer emerges, add
+    `__test_helpers` module under the `__bench_internals`
+    precedent + V3.0-targeted FOLLOWUPS item +
+    `AUDIT_SCOPE.md` amendment if needed); load-bearing
+    production-build safety property (the
+    `#[cfg(any(test, feature = "test-helpers"))]`
+    gating at the definition site keeps the four
+    failure-injection surfaces out of default-feature
+    production builds). Closes Copilot finding ID
+    3278677251.
+  - **C28** `1879baf73` — Post-PR-4 retirement note added
+    to
+    [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](../docs/V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §6 "Test boundary" / §6.1 "Pinned commitments for
+    Stage 1". The §6 framing still asserted a "fully-
+    mocked `Engine<SoloSigner, MockKey, MockLedger,
+    MockDaemon, …>`" Stage-1 test direction and the §6.1
+    Round-3 commitment list still enumerated all seven
+    Mock-X types, but three of the seven have retired:
+    `MockKey` in PR 3 (per
+    `STAGE_1_PR_3_KEY_ENGINE.md` §6.4 no-Mock substrate
+    — already acknowledged in §6.1 Round-4b's
+    `(Post-M3 note)` but NOT in the §6 framing
+    paragraph); `MockLedger` in PR 4 C6β (replaced by
+    `FaultInjecting<L: LedgerEngine>`); `MockRefresh`
+    in PR 4 C6α (replaced by `FaultInjecting<R:
+    RefreshEngine>`). Three additions: (1) new
+    `> (Post-M3 + Post-PR-4 note: ...)` block-quote
+    beneath the §6 opening paragraph naming all three
+    retirements + replacement substrates + surviving
+    Mock-X types; (2) nested `(Post-M3 + Post-PR-4
+    update to the Round-3 list)` item inside §6.1's
+    pinned-commitments list inline-annotating each
+    retired type with its anchor commit + replacement;
+    (3) extension of the existing `(Post-M3 note: ...)`
+    paragraph inside §6.1 Round-4b to include the
+    Post-PR-4 retirements + name the contract-fidelity
+    discipline as applying to `FaultInjecting<...>`
+    wrappers (which honor the trait contract by
+    delegating to the wrapped real production
+    implementor's behavior — wrapper-injected failures
+    fire BEFORE or AFTER delegation per the wrapper's
+    documented semantics, not by substituting alternative
+    return values). §6.2+ RNG-injection example snippets
+    (lines 4102, 4149, 4177) retain `MockLedger::with_seed(...)`
+    literal example text as a deliberate scope decision
+    per `15-deletion-and-debt.mdc` "while we're here is
+    the enemy" — those examples demonstrate the
+    seeded-RNG injection MECHANISM (invariant under
+    implementor name) and rewriting them would either
+    lose pedagogical clarity or require a §6.2+
+    refactor outside C28's named-Copilot-finding scope.
+    Closes Copilot finding ID 3278677269.
+  - Gates per commit: each ran its scoped bisection-
+    discipline gates. C25 / C26 touched `shekyl-engine-core`
+    Rust files (`cargo fmt -p shekyl-engine-core --
+    --check`, `cargo clippy -p shekyl-engine-core
+    --all-targets --features test-helpers -- -D
+    warnings`, default-feature clippy, `cargo test -p
+    shekyl-engine-core --lib`, `cargo doc -p
+    shekyl-engine-core --no-deps`) all clean: 170 / 170
+    lib tests pass; 49 doc warnings unchanged (C9
+    baseline). C27 touched `Cargo.toml` only
+    (comment-only change inside `[features]`); fmt /
+    clippy / test all clean; no `.rs` files touched.
+    C28 touched a `docs/` markdown file only; gate
+    inheritance from C27.
+
+  *C29 — `[Unreleased]` doc-after-plans propagation for
+  C25 – C28* (this commit):
+  - Doc-only follow-up per
+    [`.cursor/rules/91-documentation-after-plans.mdc`](../.cursor/rules/91-documentation-after-plans.mdc)'s
+    final-task-always rule. After C25 / C26 / C27 / C28
+    landed locally with green gates, the design doc §7.X
+    status banner was extended to enumerate C25 / C26 /
+    C27 / C28 alongside C0 – C24 with landing SHAs and
+    per-commit one-paragraph summaries, and the §7.X
+    commit-block section gained a new `**Commits C25 –
+    C28 — Copilot post-PR-open fifth-round review
+    responses.**` block with per-commit prose + Copilot
+    finding IDs + gate evidence. This `*C25 – C28 —
+    Copilot fifth-round review responses*` subsection
+    above is the matching CHANGELOG entry; the doc-after-
+    plans propagation also updates the closing C0–C29
+    paragraph below.
+  - Gate inheritance from C28: C29 is doc-only, so the
+    `cargo fmt --check`, `cargo clippy --all-targets --
+    -D warnings`, `cargo test --lib`, and `cargo doc
+    --no-deps` gates all inherit C28's results unchanged
+    (no rust files touched in C29).
+
+  PR 4 §7.X commits C0 through C29 are now all landed; PR
+  #60 carries the full C0–C29 set. See the separate `###
+  Added` and `### Changed` entries below for the trait-
+  surface and `Engine<S, D, L, R>` four-parameter additions
+  PR 4 ships,
+  per the C8 spec at `STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X
+  C8.
+
+- **RandomX v2 — Phase 1: pinned submodule + out-of-tree build wiring**
+  (`feat/randomx-v2-phase1`, PR #54, merge commit `c0c4a11e5`,
+  2026-05-19). Adds `external/randomx-v2` submodule pinned to
+  Shekyl-Foundation/RandomX SHA
+  `aaafe71322df6602c21a5c72937ac284724ae561` (v2.0.1 release;
+  identical to `tevador/RandomX:master` at pin time, per the
+  dependency-discipline verification in
+  `docs/design/RANDOMX_V2_PHASE1_PLAN.md` §1.3). Adds
+  `BUILD_RANDOMX_V2_MINER_LIB` CMake option (default `OFF`). When
+  `ON` on a single-config generator (Ninja, Make), an
+  `ExternalProject_Add` block in `external/CMakeLists.txt` builds
+  the v2 fork out-of-tree under
+  `${CMAKE_BINARY_DIR}/external/randomx-v2-build/` and exposes the
+  `shekyl_randomx_v2` `IMPORTED` static-library target plus its
+  include directory. The block forwards the standard CMake
+  cross-build knobs (toolchain file, sysroot, Apple/Android
+  settings, system name/processor, compiler launchers) to the
+  sub-build via a semicolon-safe `LIST_SEPARATOR`-based forwarding
+  pattern. On multi-config generators (MSVC, Xcode, Ninja
+  Multi-Config) the option fails with a `FATAL_ERROR` directing
+  the developer to `-G Ninja` plus an explicit
+  `-DCMAKE_BUILD_TYPE`; per-`CONFIG` wiring is the V3.x Phase 2
+  FOLLOWUPS item alongside the first real consumer. The
+  out-of-tree build pattern avoids the target-name collision with
+  `external/randomx` (v1.2.1), which declares the same
+  `project(RandomX)` and `add_library(randomx ...)` symbols; see
+  `RANDOMX_V2_PHASE1_PLAN.md` §2 for the collision analysis and
+  disposition rationale. No Shekyl C++ consumer links the new
+  target in this PR; first consumers are Phase 2 cross-check
+  tests against the canonical v2 implementation (the new Rust
+  crate `rust/shekyl-pow-randomx/`) and Phase 3's miner cutover.
+  The existing `external/randomx` (v1.2.1 at `102f8acf`) is
+  unchanged; the v1 fallback path per
+  `docs/design/RANDOMX_V1_FALLBACK.md` §1 remains reachable. See
+  `docs/design/RANDOMX_V2_PHASE1_PLAN.md` for the full scope, the
+  `ExternalProject_Add` configuration rationale, the build-smoke
+  test results, the §10 implementation-time dispositions (D1
+  `check_submodule` omission, D2 multi-config fail-fast, D3
+  toolchain forwarding expansion, D4 semicolon-escape), and the
+  reversibility plan.
+
+- **LWMA-1 difficulty-adjustment migration — Phase 4 C++ cutover**
+  (`feat/daa-lwma1-phase4`, 2026-05-18). Lands the consensus-atomic
+  cutover from the inherited CryptoNote cut-windowed-average DAA to
+  LWMA-1, plus the two paired FTL/MTP value changes, in a single PR
+  invoking `07-consensus-atomic-cutovers.mdc`. The PR contains
+  eleven commits that respect single-purpose scope per
+  `90-commits.mdc`; the eleven-commit structure is the
+  pre-flight-disposed shape (`docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md`
+  §18). Closes work-items 1–14 of `docs/design/DAA_LWMA1_PLAN.md`
+  Phase 4 and the V3.0 DAA item in `docs/FOLLOWUPS.md`.
+
+  *Consensus-rule deltas* (the load-bearing changes a validator must
+  agree on):
+
+  - **DAA**: `Blockchain::next_difficulty` (CryptoNote
+    cut-windowed-average, `DIFFICULTY_WINDOW=720`,
+    `DIFFICULTY_LAG=15 // !!!`, `DIFFICULTY_CUT=60`) is replaced by
+    LWMA-1 from
+    [`zawy12/difficulty-algorithms#3`](https://github.com/zawy12/difficulty-algorithms/issues/3)
+    with `N=90`, `T=120s`, `GENESIS_DIFFICULTY=100`. The FFI
+    surface (`shekyl_difficulty_lwma1_next`) is wrapped at the
+    three `Blockchain` call sites
+    (`get_difficulty_for_next_block`, `recalculate_difficulties`,
+    `get_next_difficulty_for_alternative_chain`) by the
+    `lwma1_next_difficulty` helper in `blockchain.cpp`, which
+    throws `cryptonote::difficulty_computation_error` (declared in
+    `src/cryptonote_core/difficulty_engine_error.h`) on non-zero
+    FFI return codes.
+  - **FTL**: `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT` (`60*60*2` = 7200s)
+    becomes `SHEKYL_DAA_FTL_SECONDS` = 540s (zawy12-required
+    `N*T/20`). Tightens by 13.3×; reorgs more than 9 minutes deep
+    on local-clock disagreement are no longer accepted.
+  - **MTP**: `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` = 60 becomes
+    `SHEKYL_DAA_MTP_WINDOW` = 11. Tightens back from the Monero-era
+    widening to the CryptoNote-original window.
+
+  *Mechanical rewires* (value-preserving):
+
+  - `DIFFICULTY_TARGET_V2` (120s) consumers across the daemon,
+    wallet, RPC, and tests are rewired to
+    `SHEKYL_DAA_TARGET_SECONDS` (also 120s). 8 production sites
+    and 5 test sites; verified by the consensus-invariants gate
+    (`scripts/ci/check_consensus_invariants.sh` invariant 3).
+  - `CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V2` is preserved
+    with its RHS rewired from `DIFFICULTY_TARGET_V2` to
+    `SHEKYL_DAA_TARGET_SECONDS`; two live consumers
+    (`blockchain.cpp:4043`, `wallet2.cpp:7330`) are unaffected.
+  - `DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN` (60s V1 alias used by
+    tests as a generic "block time" multiplier) is replaced by
+    `SHEKYL_DAA_TARGET_SECONDS` (120s) at 4 non-deletion test
+    files (`bulletproof_plus.cpp`, `chaingen.cpp`,
+    `transactions_flow_test.cpp`,
+    `block_validation.cpp:267`). Semantic shift: 60s base → 120s
+    base for tests' block-time approximation, matching the actual
+    block rate.
+
+  *Deletions*:
+
+  - Seven inherited `#define`s removed from
+    `src/cryptonote_config.h`: `DIFFICULTY_TARGET_V[12]`,
+    `DIFFICULTY_WINDOW`, `DIFFICULTY_LAG` (with its `// !!!`
+    warning), `DIFFICULTY_CUT`, `DIFFICULTY_BLOCKS_COUNT`,
+    `DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN`. The V1 lock-delta
+    `CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1` is removed
+    (pre-genesis Monero behavior, dead under
+    `60-no-monero-legacy.mdc`).
+  - `next_difficulty` and `next_difficulty_64` deleted from
+    `src/cryptonote_basic/difficulty.{h,cpp}` (surgical, per the
+    pre-flight's drift-F6 amendment: the `check_hash` PoW family
+    in the same file is retained with ~12 live production
+    consumers).
+  - `tests/difficulty/{difficulty.cpp,data.txt,generate-data,gen_wide_data.py,wide_difficulty.py}`
+    deleted (~23 KB) — exercised the now-deleted CryptoNote DAA;
+    the `lwma1-cross-check` harness (Phase 2 vintage) is retained
+    in `tests/difficulty/CMakeLists.txt`.
+  - `lift_up_difficulty` helper plus `gen_block_invalid_nonce`
+    and `gen_block_invalid_binary_format` test classes removed
+    from `block_validation.{cpp,h}` (V1-only fixtures, already
+    disabled in the test driver).
+
+  *Regression tests added*:
+
+  - `tests/unit_tests/rpc_target_wire_contract.cpp` — pins the
+    public JSON-RPC wire contract for `mining_status.block_target`
+    and `get_info.target` at `120`. Both gtests plus the
+    `static_assert(SHEKYL_DAA_TARGET_SECONDS == 120, …)` static
+    pin remain after the cutover.
+  - `tests/unit_tests/stall_detection_calibration.cpp` — pins the
+    daemon's stall-detection calibration: 1/7200 false-positive
+    threshold, `{45, 30, 15, 10, 5}` expected-block counts across
+    the five Poisson windows, and the zero-blocks-tail-probability
+    boundary (the 600s window must NOT trip at λ=5; the four
+    longer windows must trip at λ ≥ 10).
+
+  *CI gate added*:
+
+  - `.github/workflows/consensus-invariants.yml` plus
+    `scripts/ci/check_consensus_invariants.sh` — three
+    source-level grep invariants (no live consumers of the
+    deleted DAA functions; no C-ABI in `rust/shekyl-difficulty`;
+    no orphaned references to the deleted `#define`s).
+    Shared landing pad for the upcoming RandomX v2 Phase 2f
+    symbol-isolation checks. Binary-level `nm`-on-`shekyld`
+    verification is a deferred enhancement (recorded in this
+    entry as a follow-up below).
+
+  *Pre-flight drift findings closed*:
+
+  - **F1** — surgical (not wholesale) deletion of
+    `tests/difficulty/`; the `lwma1-cross-check` harness stays.
+  - **F2** — `CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V2`
+    preserved with rewired RHS (option B); `_V1` deleted.
+  - **F3** — V1 `next_difficulty(...)` fixtures in
+    `block_validation.cpp` deleted along with the helper that
+    drove them.
+  - **F4** — `DIFFICULTY_TARGET_V2` consumer count corrected from
+    "~14 sites across 9 files" to the actual 8 production + 5
+    test sites enumerated by the commit-6 sweep.
+  - **F5** — `DIFFICULTY_TARGET_V2` consumer **undercount in
+    `blockchain.cpp`**: the plan's §9.7 enumeration missed two
+    sites at lines 4239 / 4243 (an MTP-window correction and a
+    `timestamps.back() + DIFFICULTY_TARGET_V2` adjustment inside
+    `check_block_timestamp`); both rewired to
+    `SHEKYL_DAA_TARGET_SECONDS`. `wallet2.cpp`'s lines 181, 182,
+    5975, 11548 were never drift — the earlier text mis-attributed
+    F5 to `wallet2.cpp`; corrected 2026-05-18 per PR #53 Copilot
+    review C-6.
+  - **F6** — surgical (not wholesale) deletion of
+    `src/cryptonote_basic/difficulty.{h,cpp}`: the `check_hash`
+    PoW-validation family is retained; only the
+    `next_difficulty` family is deleted.
+  - **F7** — `check_difficulty_checkpoints()` is NOT a deletion
+    target. Pre-flight §14 (and `DAA_LWMA1.md` §7.1) erroneously
+    enumerated it as a symbol-isolation deletion candidate. The
+    function in `blockchain.cpp:1066` is a checkpoint-cumulative-
+    difficulty comparison independent of the deleted DAA functions;
+    retained. The spec doc and pre-flight are amended in this
+    commit.
+
+  *Reviewer-map structure* (per
+  `07-consensus-atomic-cutovers.mdc` sub-clause 4.3):
+
+  - **A. Consensus-affecting changes** (priority attention):
+    `blockchain.cpp` DAA rewires (commit 3), FTL rewires
+    (commit 4), MTP rewires (commit 5), `cryptonote_config.h`
+    deletions (commit 7), `difficulty.cpp` deletions (commit 8).
+  - **B. Mechanical rewires** (value-unchanged):
+    `DIFFICULTY_TARGET_V2` → `SHEKYL_DAA_TARGET_SECONDS` (commit
+    6), `DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN` rewires in tests
+    (commit 7).
+  - **C. Deletions**: legacy DAA tests + V1 fixtures (commit 9).
+  - **D. New artifacts**: regression tests (commits 1, 2),
+    CI gate (commit 10), this changelog entry (commit 11).
+
+  *Rollback procedure* (per sub-clause 4.4):
+
+  If consensus breaks post-merge, the reversion is to revert the
+  merge commit on `dev` (single non-FF merge per
+  `06-branching.mdc`) and re-tag. Because the cutover is atomic
+  (FTL/MTP/DAA all in one PR), no partial reversion is required.
+  The pre-merge state of `blockchain.cpp`'s three
+  `next_difficulty` call sites, the FTL/MTP consumer surfaces,
+  and the deleted `#define`s are all captured in the pre-cutover
+  `dev` SHA recorded in the PR description; reverting the merge
+  restores them byte-identically.
+
+  *Follow-up*: binary-level `nm shekyld | rg -q '^.* (T|U)
+  (next_difficulty_64|next_difficulty)\b'` symbol-isolation check.
+  Source-level grep (this PR's invariant 1) is a necessary
+  precondition for binary absence; the binary-level check is a
+  deferred enhancement when CI is restructured to expose the
+  linked daemon binary to a post-link grep step. Tracked in
+  `docs/FOLLOWUPS.md`.
+
+- **LWMA-1 difficulty-adjustment migration — Phase 0 design docs**
+  (`feat/daa-lwma1-phase0-design`, 2026-05-17). Adds two Phase 0
+  design documents under `docs/design/`:
+  [`DAA_LWMA1.md`](./design/DAA_LWMA1.md) (the primary design) and
+  [`DAA_LWMA1_PLAN.md`](./design/DAA_LWMA1_PLAN.md) (the phased
+  execution plan, five phases sequential, no parallel tracks). The
+  primary design records the disposition to replace the inherited
+  CryptoNote cut-windowed-average DAA (`src/cryptonote_basic/difficulty.cpp`,
+  `DIFFICULTY_WINDOW=720`, `DIFFICULTY_LAG=15` with literal `// !!!`
+  warning, `DIFFICULTY_CUT=60`) with LWMA-1 from zawy12's canonical
+  reference at
+  [`zawy12/difficulty-algorithms#3`](https://github.com/zawy12/difficulty-algorithms/issues/3),
+  implemented as a Rust crate `shekyl-difficulty` per
+  `20-rust-vs-cpp-policy.mdc` rule 2 (cryptographic-contract surface).
+  Concrete parameter selection: N=90 (zawy12 canonical for T=120s),
+  T=120s (inherited), GENESIS_DIFFICULTY=100 (proposed), FTL=N\*T/20=540s
+  (zawy12-required, replaces inherited 7200s), MTP=11 (Cryptonote default
+  unchanged). The design pins genesis-time landing per
+  `16-architectural-inheritance.mdc` pre-genesis discount and
+  `60-no-monero-legacy.mdc` no-version-dispatch rule. Sibling track to
+  RandomX v2 but **independent**: math-orthogonal (DAA operates on
+  `(timestamps, cum_difficulties)`; PoW changes the hash function),
+  no wallet V3.2 gate applies, no Monero release-time audit dependency.
+  A pre-design `rust/shekyl-difficulty/src/lwma1.rs` sketch is explicitly
+  documented as **not** canonical (different formula, missing `6*T`
+  solvetime clamp, missing `N*N*T/20` minimum-L floor, missing `99/200`
+  bias factor) and was **deleted** during Phase 0 so Phase 1 starts from
+  an empty crate directory; the divergence catalogue is retained in
+  `DAA_LWMA1.md` §2.4 as the design record of why each non-canonical
+  shape is rejected.
+  Reversion clauses per `21-reversion-clause-discipline.mdc` cover
+  LWMA-2/3/4 and ASERT reopening criteria.
+
+  *Round 2 review update (2026-05-17):* (a) reframes `shekyl-difficulty`
+  as a **leaf crate** with zero internal workspace dependencies per
+  `18-type-placement.mdc`, with FFI exposure routed through `shekyl-ffi`
+  (`DAA_LWMA1.md` §2.1); (b) records the explicit "DAA is a primitive,
+  not an actor" disposition (`DAA_LWMA1.md` §2.7) — `lwma1_next` is a
+  free function plus typed constants plus the FTL/MTP predicates, no
+  `DifficultyEngine` actor wrapper; (c) pivots the consensus-constants
+  source-of-truth from a `cbindgen` handwave to the existing
+  `config/consensus_constants.json` JSON-authority pattern documented
+  in `docs/FOLLOWUPS.md` and the 2026-05-05 FFI constant-drift audit
+  (`DAA_LWMA1.md` §4, plan Phase 1 task); (d) adds a chain-state-
+  ownership disposition (`DAA_LWMA1.md` §17) acknowledging that
+  daemon-side LMDB chain state remains in C++ `Blockchain` through
+  Phase 4 and that no Rust crate owns daemon-side chain state today;
+  the future Rust validator actor will consume the same DAA transform
+  without changes to the DAA crate.
+
+  *Round 3 review update (2026-05-17):* (a) corrects the
+  contradictory dispositions for `DIFFICULTY_TARGET_V2` — design doc
+  §9.2 now matches the plan's delete-not-rename directive (rename
+  would preserve the hand-maintained `#define` drift class the JSON
+  authority exists to close); (b) corrects two real factual errors
+  surfaced by a Round 3 reconnaissance grep of the C++ tree: the
+  constant is `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT` (not
+  `BLOCK_FUTURE_TIME_LIMIT`; there is no `_V2` variant), and
+  `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW` is currently `60` (Monero-era
+  widening from the CryptoNote-original `11`), so the LWMA-1
+  disposition is a tightening — not preservation — from 60 back to
+  11; (c) adopts algorithm-version-free naming for the JSON keys
+  (`daa_window_n`, etc.) and the generated C++ symbols
+  (`SHEKYL_DAA_*`, not `SHEKYL_DAA_LWMA1_*`) so a future §10
+  reversion doesn't require renaming every consumer; (d) enumerates
+  the full Phase 4 consumer surface in new sections §9.5
+  (`CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT`: 2 sites), §9.6
+  (`BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW`: 9 sites), and §9.7
+  (`DIFFICULTY_TARGET_V2`: ~14 sites across 9 files), and adds §9.8
+  to flag the `core_rpc_server.cpp:1452 res.block_target` RPC-contract
+  preservation property; (e) acknowledges Phase 4 atomicity as a
+  deliberate exception to `06-branching.mdc` (FTL/MTP value changes
+  cannot stage behind alias `#define`s without weakening consensus
+  in the intermediate state); (f) resolves the bias-factor location
+  drift — `99` and `200` (plus `6` and `1/20`) appear as bare
+  integer literals inside `src/lwma1.rs` to match canonical zawy12
+  verbatim, **not** as named `pub(crate) const` in `consts.rs`;
+  (g) mechanizes Phase 5's conditional cross-reference to
+  `24-reviewer-discipline.mdc` so the Phase 5 reviewer can verify by
+  grep; (h) closes open question #3 (build.rs location) as Option A
+  per the leaf-crate property in §2.1; (i) adds a `solvetime[1]`
+  `-T` offset regression vector to §8.1's required-vector list;
+  (j) adds explicit MIT attribution to the Phase 2 vendored
+  `tests/difficulty/zawy12_lwma1_reference.h`; (k) moves long
+  reviewer-note prose out of the long-lived `Cargo.toml` into a
+  Phase 1 review-checklist section; (l) flags `is_above_mtp`'s
+  `&[u64; 11]` vs slice ergonomics as a Phase 1 implementation
+  choice (not a Phase 0 blocker); (m) adds canonical line-number
+  stability caveats to §5.3 step 7 and step 8 (line numbers are
+  stable only against the Phase 2 pinned-spec revision);
+  (n) updates Phase 4 work-item count from 11 to the actual 14.
+
+  *Round 4 review update (2026-05-17):* (a) pivots the FFI ABI for
+  difficulty values from `u128` / `__uint128_t` to canonical
+  little-endian `[u8; 16]` byte arrays (`DAA_LWMA1.md` §6.1 and
+  plan Phase 3). Rationale: Rust's `u128` C ABI was unsound on
+  several targets until rustc 1.77 (March 2024) and remains a
+  target-portability footgun on uncommon platforms; for a
+  consensus-critical surface that's unacceptable. Explicit byte
+  arrays match the FCMP++ and KEM-derivation FFI precedent already
+  in the workspace and immunize the boundary against
+  target-dependent ABI surprises. C++ consumers memcpy between
+  their native `uint128_t` and the canonical-LE buffer at every
+  call site so the endianness assumption is a deliberate checkpoint
+  rather than an implicit invariant.
+  (b) **Consensus-correctness fix to §8.1 test vectors.** The
+  Round 3 vector "perfectly stable hashrate produces
+  `next_D == avg_D` (within rounding)" was mathematically wrong:
+  with `solvetime[i] == T` for all `i`, the formula yields
+  `next_D == avg_D * 99 / 100` — a deliberate 1 % downward bias,
+  which is the point of the `99/200` factor per §5.3 step 7's
+  derivation. The Round 3 expectation invited three implementer
+  failure paths (relax tolerance to absorb the 1 % shift; remove
+  the bias from the algorithm to satisfy the test; misread
+  "rounding" as ±1 %). Round 4 replaces all `≈`-shaped vectors
+  with concrete numerical tuples: stable hashrate → `0.99 * avg_D`,
+  2× hashrate increase → `1.98 * avg_D`, 2× hashrate decrease →
+  `0.495 * avg_D`, minimum-L floor (all solvetimes == 1) →
+  `~10.01 * avg_D`. Tuples are derived analytically from §5.3
+  and force the Phase 1 implementer to confront the bias at
+  design time, not at debug time. Also corrects an off-by-one in
+  §2.6's "first N+1 blocks" framing (canonical's `height < N`
+  short-circuit covers N blocks, not N+1; the Shekyl FFI
+  `chain_height < N` translation puts blocks `1..=N` in the
+  short-circuit per the new §5.6 validator consumer contract).
+  (c) Adds `DAA_LWMA1.md` §5.6 "Validator consumer contract:
+  `chain_height → header.difficulty`" specifying the off-by-one
+  mapping between the DAA function's `chain_height` parameter
+  (predecessor's height) and the block-being-validated's height,
+  plus the per-block disposition: block 0 (genesis) is exempt;
+  blocks `1..=N` carry `GENESIS_DIFFICULTY`; blocks `≥ N+1` are
+  algorithm-computed. Pre-empts the Phase 4 reviewer's first
+  question.
+  (d) **Closes all Phase 0 open questions.** `GENESIS_DIFFICULTY =
+  100` and `N = 90` are ratified zawy12 canonical with reversion
+  triggers in §10 covering simulation-driven change; the
+  "Shekyl-empirical RandomX v2 single-CPU measurement" alternative
+  referenced a measurement that cannot exist until RandomX v2
+  ships and is functionally identical to the §10 reversion trigger
+  already in place. Phase 2 cross-check harness language closed as
+  C++ test target (the canonical reference is C++; consuming
+  it directly is simpler than Rust-side vendoring; the alternative
+  was a cosmetic preference). Build.rs location (Option A) and
+  JSON-key naming (`daa_*` algorithm-version-free) were already
+  closed in Round 3 and are restated for completeness. No open
+  questions are carried into Phase 1; the design-rounds-in-
+  implementation-PR anti-pattern is closed at Phase 0.
+  (e) Adds three LWMA1_() disambiguation anchors to `DAA_LWMA1.md`
+  §3 and plan Phase 2: byte-offset range, first-line, last-line.
+  zawy12 Issue #3 contains four LWMA reference functions
+  (`LWMA1_/2_/3_/4_`); §5.3's "Issue #3, lines N–M" citations are
+  otherwise ambiguous and would break Phase 2 cross-check at the
+  smallest upstream reordering.
+  (f) Reframes `T = 120 s` as Shekyl's chosen target block time
+  (zawy12 LWMA-1 recommends 60–120 s for CPU-mineable chains)
+  rather than "inherited from CryptoNote `DIFFICULTY_TARGET_V2`."
+  The numerical value matches; the source-of-truth is the JSON
+  authority `daa_target_seconds`, not the inherited `#define`.
+
+  *Round 5 review update (2026-05-17):* (a) **FFI ABI pivot
+  from `[u8; 16]` byte arrays to `#[repr(C)] struct ShekylU128
+  { lo: u64, hi: u64 }`.** Round 4 named the `u128` ABI
+  unsoundness as a Tier 1 blocker but stopped short of
+  proposing the specific wire representation. Round 5 closes
+  this. `ShekylU128` decomposes the 128-bit value into two
+  `u64` fields whose ABI is universally stable on every Shekyl-
+  supported target — no `improper_ctypes` exposure, no
+  MSRV-pin-to-1.78 constraint, no per-target ABI verification
+  matrix. The struct-with-named-fields shape preserves explicit
+  `lo`/`hi` semantics (debugger-friendly, unambiguous, survives
+  any future endianness disposition because the field meaning
+  is carried by the field name). Endianness is consensus-locked
+  in `DAA_LWMA1.md` §6.1: `ShekylU128` is little-endian by
+  field semantics — `lo` is the low 64 bits, `hi` is the high
+  64 bits, reconstruction is `value = (hi as u128) << 64 | (lo
+  as u128)`. Cost: one struct definition and four lines of
+  `From` impls per direction. Benefit: the consensus-critical
+  surface is immune to `u128`-ABI target-portability issues
+  permanently, not just on rustc ≥ 1.77.
+  (b) **MTP 60 → 11 trade-off framing.** The
+  `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW = 60` → `SHEKYL_DAA_MTP_WINDOW
+  = 11` change travels in opposite directions on two security
+  axes simultaneously and a release-note skimmer reading the
+  value change in isolation would misread it as a security
+  regression. Surfaced explicitly: the **MTP-only timestamp-
+  attack defense weakens** (it is easier for an adversary to
+  satisfy "strictly greater than the median of 11 timestamps"
+  than "strictly greater than the median of 60 timestamps"
+  in isolation), and the **LWMA-1-coupled defense engages**
+  (the canonical zawy12 math is calibrated against MTP = 11,
+  not MTP = 60; running LWMA-1 with MTP = 60 would understate
+  the algorithm's solvetime-clamp resistance). `DAA_LWMA1.md`
+  §5.5 names all three checks (MTP + FTL + solvetime-clamp)
+  as *jointly* load-bearing — the combined defense profile
+  post-Phase-4 is stronger than either the pre-Phase-4
+  MTP=60-only profile or a hypothetical LWMA-1-with-MTP=60
+  configuration. The value change is the cost of moving from a
+  MTP-only-anchored defense to the canonical zawy12-coupled
+  defense; it is not a unilateral loosening.
+  (c) **RPC-contract preservation regression test (§9.8).** The
+  byte-identity assertion is now explicit: a wallet calling
+  `get_info` against the post-Phase-4 daemon receives a
+  `block_target` field that is **byte-identical** to the same
+  wallet's response against the pre-Phase-4 daemon (captured
+  as a fixture at PR-open). The value-identity assertion
+  (`120 == 120`) catches value drift; the byte-identity
+  assertion catches encoding drift (a future "change varint
+  encoding to little-endian byte array" refactor would
+  preserve the numeric value but break the wire contract). Both
+  are required to make the RPC-contract-preservation property
+  auditable rather than asserted.
+  (d) **"Consensus-atomic cutover" exception class drafted in
+  `DAA_LWMA1_PLAN.md`** Phase 4 (four criteria: consensus-rule
+  boundary; structural indivisibility; surface enumerated in
+  advance; documented disposition citing the criteria). The
+  class was drafted here as four criteria; the sibling PR
+  `feat/consensus-atomic-cutovers-rule` ratifies the criteria
+  as `.cursor/rules/07-consensus-atomic-cutovers.mdc` and
+  refines them through Round 6 / Round 7 review before landing
+  (PR #50). The ratified form: the rule is opt-in
+  (`alwaysApply: false`) and unreachable by any PR that does
+  not cite it explicitly; criterion 2 is reframed as the
+  structural-inapplicability of flag decomposition to consensus
+  rules — a flag decomposition is consensus-safe only if both
+  flag states are simultaneously valid, which for a consensus
+  rule is impossible by definition, so criterion 2 is met
+  whenever criterion 1 is met (closing the "yes-it's-consensus-
+  but-splitting-would-be-inconvenient" loophole); criterion 3
+  adds a base-commit-anchored, timestamped grep so reviewers
+  re-run against the same SHA; criterion 4 is numbered into
+  sub-clauses 4.1–4.4 with reviewer-map-accuracy and
+  rollback-correctness promoted into the criterion itself
+  (rejecting the PR is the response to a map miss, not patching
+  the map); a "what this is not" section disqualifies
+  convenience / velocity / reviewer-bandwidth /
+  retroactive-citation; and the history of application is split
+  into "Approved invocations" (LWMA-1 Phase 4) and "Cases that
+  might appear analogous but are not" (RandomX v2 Phase 3,
+  where the 3a flag is build-system / FFI-routing rather than
+  consensus, the algorithm change ships in Phase 1's submodule
+  swap, and criterion 1 is therefore not met for Phase 3 at
+  all — structurally inapplicable, not "evaluated and
+  rejected"). The mechanism for future invocations is
+  self-anchoring: an invoking PR must include a commit that
+  adds its own entry to the rule's history-of-application
+  section. Phase 4's section in this plan invokes the ratified
+  rule by name and maps each criterion to LWMA-1 Phase 4
+  specifically; Phase 4's exception is auditable against the
+  class's four criteria mechanically, not against
+  LWMA-1-specific precedent.
+  (e) **Round 8 bias-factor stochastic-vs-deterministic
+  clarification (`DAA_LWMA1.md` §5.3 step 7, §8.1).** The Round 4
+  test-vector correction landed concrete numerical tuples that
+  expect `next_D == avg_D * 99/100` on the §8.1 perfectly-stable
+  hashrate input (deliberate downward bias from the `99/200`
+  factor). The Round 4 fix did not synchronously update §5.3
+  step 7's derivation prose, which still described the `99/100`
+  factor as "compensating for a ~1 % upward bias" — leaving the
+  doc internally contradictory: one section described the factor
+  as canceling drift (stable input → `avg_D` exactly), the other
+  expected a 1 % residual. Round 8 resolves the contradiction by
+  making the stochastic-vs-deterministic distinction explicit:
+  the canonical zawy12 bias correction targets *stochastic*
+  upward drift (Poisson skew, `6*T` clamp truncation, jump-rule
+  amplification from downstream LWMA-2+ variants) present under
+  realistic chain operation; on §8.1's *deterministic* unit-test
+  vectors (all solvetimes exactly `T`, no clamp engagement,
+  no PRNG), the same factor surfaces as a deterministic 1 %
+  downward residual rather than as a corrective cancellation.
+  Both readings of the algorithm are correct under their
+  respective input shapes; the doc now says so explicitly so a
+  Phase 1 implementer who transcribes the formula and observes
+  `next_D == 990_000` on the §8.1 stable vector knows that's a
+  correctly implementing algorithm rather than a test
+  expectation to "fix." A Phase 1 pre-flight verification step
+  is added to `DAA_LWMA1_PLAN.md`: the canonical zawy12 C++
+  reference is run once against the §8.1 stable vector and the
+  result recorded in the Phase 1 PR description before
+  implementation begins, removing the residual ambiguity as a
+  function of empirical evidence rather than as a function of
+  prose interpretation.
+  (f) **Round 8 §11 wallet touchpoint correction.** §11
+  previously read "LWMA-1 is not consumed by the wallet —
+  wallets do not compute or check difficulty (validators do)" —
+  true for the *algorithm* but incomplete for the
+  *target-block-time constant `T`*, which §9.7's enumeration
+  surfaced as a wallet consumer at `wallet2.cpp:181, 182, 5975,
+  11548` and `wallet_rpc_server.cpp:163` (unlock-time defaults,
+  recent-spend-window math, `seconds_per_block` consumers,
+  `suggested_confirmations_threshold` math — five wallet-side
+  sites). §11 now reads accurately: the algorithm is not
+  consumed by the wallet, but `T` is, with a value-preserving
+  rewire from `DIFFICULTY_TARGET_V2` to
+  `SHEKYL_DAA_TARGET_SECONDS` across all five sites. Phase 4's
+  wallet impact is no longer mis-stated as "no wallet impact."
+  The §11 prose-vs-§9.7 enumeration drift was a Round 1 grep
+  finding that didn't make it into the §11 prose; Round 8
+  closes the loop.
+  (g) **Round 8 polish.** (i) `DAA_LWMA1.md` §6.3 explicitly
+  records that the `is_above_mtp` and `is_timestamp_below_ftl`
+  predicates committed in §2.5 are Rust-internal helpers
+  consumed by the §17 future validator actor, not exposed via
+  the FFI — the C++ side does the corresponding FTL and MTP
+  checks directly against the generated header constants per
+  §6.2's source-of-truth pattern, keeping the FFI surface
+  minimal per §6.1's "one committed export" discipline. (ii)
+  `DAA_LWMA1.md` §9.5 adds a Phase 4 reviewer note that with
+  the FTL value change from 7200 to 540, the FTL test margin
+  in `tests/core_tests/block_validation.cpp:137` shrinks from
+  "7.2 hours past FTL" to "1 hour past FTL"; the test must
+  assert rejection *specifically because of the FTL check*
+  (error-code equality, not generic "block rejected"), so the
+  test can't pass for the wrong reason if a future refactor
+  moves rejection to a different validation path. (iii)
+  `DAA_LWMA1.md` §9.7 adds a Phase 4 reviewer note for the
+  `cryptonote_core.cpp:1817, 1829, 1838` Poisson stall-detection
+  sites: the rewire is value-preserving but the path is not
+  exercised by any current test, so Phase 4 either confirms
+  coverage exists or adds a minimal regression test; "rewire
+  textually, value unchanged" alone is not a sufficient
+  verification claim for a path with no test coverage. (iv)
+  `DAA_LWMA1.md` §9.3 is repopulated with substantive
+  consolidation prose pointing FTL/MTP enumeration cross-
+  references to §9.5 and §9.6 respectively (was previously an
+  empty "deprecated section header" pointer with no content).
+  (v) `DAA_LWMA1_PLAN.md` Phase 4 adds a reviewer-expectation
+  note that the "14 work items" framing categorizes work but
+  understates diff size: actual file-change count lands at
+  roughly 45–55 files across `src/` and `tests/`. (vi)
+  `DAA_LWMA1.md` status block on line 3 updated from "Round 1"
+  to reflect that Rounds 1–8 have all landed against this PR.
+  (h) **Round 9 zawy12 issue #24 cumulative-history review.**
+  Reviews the design against
+  [zawy12/difficulty-algorithms#24](https://github.com/zawy12/difficulty-algorithms/issues/24)
+  ("LWMA's history"), the canonical author's cumulative log of
+  known LWMA issues, fixes, and security-relevant findings.
+  Five items receive explicit dispositions; four (#1, #2, #4,
+  #5, #6, #10, #12, #15, #16) are confirmed already-addressed.
+  Substantive changes:
+  - **Item #14 (September 2018 selfish-mine via out-of-sequence
+    timestamps).** Algorithm-level change. `DAA_LWMA1.md` §5.3
+    steps 2 and 3 adopt LWMA-3's running-max + signed-solvetime
+    mechanism and symmetric `±6*T` clamp, replacing the
+    kyuupichan-style forward-pass-with-1-floor used through
+    Round 8. The remainder of the algorithm (weighted-sum,
+    minimum-L floor, bias factor 99/200, overflow guard,
+    genesis-window short-circuit) stays LWMA-1-canonical.
+    Disposition recorded in §1.3 (alternatives — "Partial
+    LWMA-3 adoption"), §3 (pinned spec — deviation note +
+    `LWMA3_()` reference pin), §5.3 steps 2/3/4 (algorithm
+    rewrite to signed-i128 intermediates + symmetric clamp),
+    §5.4 ("Signed-arithmetic discipline" property), §5.5
+    (defense-surface enumeration grows to four mechanisms), and
+    §8.1 (out-of-sequence vector reformulated for running-max
+    semantics, new "Selfish-mine attack regression (zawy12 issue
+    #24 item 11)" required vector). `DAA_LWMA1_PLAN.md` Phase 1
+    adds a signed-arithmetic discipline section detailing the
+    i128/u128 boundary and lists the two Round 9 test vectors
+    as required Phase 1 merge-gate criteria. Phase 2's
+    cross-check harness composes expectations from both
+    canonical `LWMA1_()` and `LWMA3_()` references per §8.2.
+  - **Item #17 (May 2019 33% Sybil attack via peer-time-offset).**
+    Closed by absence of substrate. The attack's precondition
+    ("If your coin uses network time instead of node local
+    time") is not met by Shekyl. `Blockchain::check_block_timestamp(b)`
+    compares against `time(NULL)` directly
+    (`blockchain.cpp:4276`); `Blockchain::get_adjusted_time(height)`
+    is blockchain-derived (median of recent block timestamps)
+    and consulted only by non-consensus paths. No peer-time-correction
+    mechanism exists in the daemon; audit-trail grep returned
+    zero matches for `time_offset|TimeOffset|GetAdjustedTime|GetTimeOffset|MAX_PEER_DELTA|MAX_TIME_DELTA|MEDIAN_TIME|TIMESTAMPS_FOR_TIME_SYNC`
+    against consensus-relevant surface. Lowering FTL from 7200 s
+    to 540 s is therefore safe against the
+    [zcash/zcash#4021](https://github.com/zcash/zcash/issues/4021)
+    attack class. Disposition recorded in
+    `DAA_LWMA1.md` §5.5's "Disposition on peer-time-derived
+    clocks" paragraph, with a forward-looking constraint: if a
+    future Shekyl version adds peer-time correction, the
+    `FTL / 2` revert-threshold relationship per zawy12 issue
+    #24 item 14 becomes load-bearing at that point and
+    `daa_peer_time_revert_threshold_seconds` MUST be added to
+    the JSON authority. The FTL value reduction (7200 → 540)
+    pre-dates this round but the safety rationale is now
+    explicit: it is safe *because* Shekyl does not implement
+    peer-time-derived clocks.
+  - **Item #7 (Jagerman MTP patch).** Verified present in
+    Shekyl's inherited `Blockchain::create_block_template` at
+    `blockchain.cpp:1650–1656` (the canonical pattern: set
+    `b.timestamp = time(NULL)`, then if `check_block_timestamp`
+    fails, raise to `median_ts`). The MTP window change from
+    60 to 11 preserves the patch's effectiveness; no Phase 4
+    work required. Disposition recorded in `DAA_LWMA1.md` §5.5
+    with code citation. A minor doc-vs-code drift at
+    `blockchain.cpp:1540`'s cached-template path is recorded
+    as a `FOLLOWUPS.md` candidate, not a Phase 4 atomic-cutover
+    work item.
+  - **Item #3 (window size N=60 vs N=90).** Documentation polish.
+    `DAA_LWMA1.md` §4's N parameter row notes that zawy12 issue
+    #24's 2018 "N ≈ 60" recommendation referred to `T = 60 s`
+    chains; the recommendation scales inversely with `T` and
+    for `T = 120 s` the canonical N is 90 (same ~90-minute
+    window).
+  - **Item #9 (±7xT header timestamp limits vs FTL boundary).**
+    Documentation only. `DAA_LWMA1.md` §5.5 records that Shekyl
+    uses MTP + FTL + symmetric solvetime clamp + running-max
+    normalization (four mechanisms) as the defense surface and
+    does not implement a separate per-block-header `±7xT` rule,
+    consistent with zawy12 issue #24 item 9's post-FTL deprecation
+    of `±7xT`.
+
+  `DAA_LWMA1_PLAN.md` gains a "Round 9 dispositions" section
+  recording all five issue-item dispositions and naming items
+  #1, #2, #4, #5, #6, #10, #12, #15, #16 as already-addressed
+  with their corresponding §ref. `DAA_LWMA1.md` status block on
+  line 3 updated from "Round 8" to "Round 9" to reflect the
+  cumulative review pass.
+  (i) **Round 9 supplement — local-time-only FTL trade-off
+  named.** The Round 9 closure of zawy12 issue #24 item 17 (FTL
+  vs peer-time-derived clocks) recorded the absence of substrate
+  but did not name the threat-model trade the local-time-only
+  FTL disposition deliberately accepts. This supplement makes the
+  trade explicit so a future reader does not misread the
+  disposition as missing functionality. `DAA_LWMA1.md` §5.5's
+  "Disposition on peer-time-derived clocks" paragraph is expanded
+  into four labelled subsections: (1) **the trade-off, named
+  explicitly** — Shekyl trades the zawy12 #17 / zcash/zcash#4021
+  peer-time-Sybil attack class (a ~$1000 attack accessible to
+  anyone with bandwidth to run enough peers) for an operator-side
+  NTP-hygiene requirement plus a coordinated-NTP-infrastructure-
+  compromise threat that requires state-level access; (2) **residual
+  threat-class ranking** — four classes documented from highest-
+  probability/lowest-impact (individual node clock skew, mitigated
+  by standard NTP hygiene, isolates affected node without
+  propagating to peers) through lowest-probability/highest-impact
+  (coordinated NTP-infrastructure compromise at scale, requiring
+  state-level access, not consensus-protocol-mitigated); (3)
+  **operator obligations** — validators are responsible for
+  keeping local clocks within ±540 s of network truth via standard
+  NTP discipline (multiple time sources, drift monitoring); NTP
+  failure is a liveness failure for the affected node, not a
+  safety failure that propagates; (4) **Y2038-adjacent note** —
+  `time(NULL)` returns `time_t`, which on 64-bit platforms (the
+  only Shekyl-supported platforms per the 32-bit retirement chore
+  landed at commit `e06ee37d96af`, recorded in `docs/FOLLOWUPS.md`)
+  is 64-bit signed and Y2038 is not a concern; if 32-bit platforms
+  ever return to scope, both the FTL comparison and the FTL/2
+  forward-looking peer-time constraint must be revisited. `DAA_LWMA1.md` §1.2 (Commitment 1) gains a
+  closing observation: "The FTL-disposition choice (local-time-
+  only, no peer-time-derived clock) reflects a deliberate
+  threat-model preference for closing low-bar consensus attacks
+  at the cost of slightly higher operator NTP-hygiene
+  responsibility — consistent with Shekyl's broader posture on
+  operator autonomy per `75-system-autonomy.mdc`." The trade
+  itself, ranking observation, and the "safe because" framing on
+  the FTL value reduction (7200 → 540) are now consistently
+  cross-referenced from §1.2, §5.5, and this CHANGELOG entry.
+  (j) **Round 10 zawy12 issue #24 item-number reconciliation +
+  issue pin + reference-file enumeration + commit-hash
+  cite-stabilization.** Round 10 review identified one
+  load-bearing finding and three robustness improvements:
+  - **Item-number drift sweep (load-bearing).** The Round 9
+    body edits used item numbers that did not match the live
+    zawy12 issue #24 numbering: 11 was used for the September
+    2018 selfish-mine attack (live: item 14), 14 for the May
+    2019 33% Sybil (live: item 17), 6 for the Jagerman MTP
+    patch (live: item 7), 8 for the post-FTL `±7xT`
+    disposition (live: item 9), and 13 for the January 2019
+    LWMA-2/3/4 deprecation (live: item 16). The pattern was
+    not a uniform offset but a cluster of mistranscriptions
+    during Round 9's body edits while the status block was
+    checked separately. The Round 10 sweep corrected 14 sites
+    in `DAA_LWMA1.md` body, 2 sites in `DAA_LWMA1_PLAN.md`
+    body, and 2 sites in this CHANGELOG entry — all now
+    consistent with the live issue and with the status block's
+    "items 3, 7, 9, 14, 17" enumeration. The discipline going
+    forward: cite by date + description as the primary
+    identifier (e.g., "September 2018 selfish-mine attack
+    class") so renumbering by the upstream author does not
+    silently invalidate cross-references; the item number is
+    a redundant cross-reference resolving against the §3 pin
+    (next item).
+  - **zawy12 issue #24 pin (audit-trail-stable).**
+    `DAA_LWMA1.md` §3 gains a "zawy12 issue #24 pin
+    (Round 10 addition)" bullet pinning the raw `.body` of
+    [`zawy12/difficulty-algorithms#24`](https://github.com/zawy12/difficulty-algorithms/issues/24)
+    via `docs/design/refs/zawy12_issue_24_history.md` at
+    Phase 2 PR time, using the same `gh api` + `jq -r .body`
+    mechanism as the existing issue-#3 pin. Every "zawy12
+    issue #24 item N" cross-reference downstream now resolves
+    against this pin's numbered list, not against the live
+    GitHub-rendered issue. The pin's SHA-256 and capture
+    timestamp land in §3's pin record at Phase 2 commit time.
+    `DAA_LWMA1_PLAN.md` Phase 2 task content extends to commit
+    the issue-#24 pin alongside the existing issue-#3 pin.
+  - **Phase 2 reference-file enumeration clarified.**
+    `DAA_LWMA1.md` §3's Round-9 disposition paragraph is
+    expanded into an explicit three-file enumeration making
+    clear that `zawy12_issue_3_lwma1.md` (raw issue-#3
+    `.body`, the canonical pin),
+    `zawy12_issue_3_lwma3.md` (convenience extraction of just
+    the LWMA3_() function, *not* the canonical pin), and
+    `zawy12_issue_3_lwma1_with_lwma3_step2.md` (Shekyl-composed
+    hybrid, a derived file used by the cross-check harness)
+    are three distinct files with distinct purposes. The
+    "snapshot pinned per §3" cross-reference at §5.3 step 2
+    now resolves unambiguously. `DAA_LWMA1_PLAN.md` Phase 2
+    body section gains a "Round 9 + Round 10 supplementary
+    reference files" subsection enumerating all four
+    Phase-2-committed files (three issue-#3 derivatives plus
+    the issue-#24 pin) and extending the anchors-file schema
+    with the LWMA3_() byte-offset anchors.
+  - **Commit-hash cite for 32-bit-retirement chore.**
+    `DAA_LWMA1.md` §5.5's Y2038-adjacent note and this
+    CHANGELOG's Round 9 supplement entry both previously cited
+    the chore by branch name (`chore/retire-32bit-targets`),
+    which is a deleted post-merge branch and not a stable cite
+    target. Both citations are now anchored on the merge
+    commit `e06ee37d96af` ("Merge pull request #15 from
+    Shekyl-Foundation/chore/retire-32bit-targets") with the
+    rationale named in §5.5.
+
+  Status block on line 3 updates from "Round 9" to "Round 10"
+  recording the cumulative review pass. No algorithm-level or
+  consensus-rule changes in Round 10; the round is documentation
+  drift remediation and audit-trail-stability improvements.
+  (k) **Round 11 consumer-count drift reconciliation (Copilot
+  review of PR #49).** Copilot's first review pass on the
+  ready-for-review PR flagged two count-mismatch findings of the
+  same shape as Round 10's item-number drift — prose totals that
+  did not match their adjacent enumerations. The Round 11 sweep
+  reconciles both flagged sites plus the adjacent sites Copilot
+  did not flag but that exhibit the same drift pattern (per the
+  Round 10 discipline: fix the pattern, not just the flagged
+  instances).
+  - **MTP consumer count (§9.6 in `DAA_LWMA1.md`, propagated to
+    `DAA_LWMA1_PLAN.md` Phase 4 work item 6 and the breakdown
+    paragraph).** The §9.6 prose said "**seven** direct
+    consumers ... plus **two** test-suite consumers" but the
+    enumeration immediately below has always listed:
+    `blockchain.cpp:1981, 1985` (2 daemon sites) +
+    `blockchain.cpp:4223, 4230, 4240, 4259, 4285, 4293`
+    (6 daemon sites) +
+    `tests/core_tests/block_validation.h:92, 97`
+    (2 test sites) +
+    `tests/core_tests/block_validation.cpp:106, 120, 122`
+    (3 test sites) — **8 daemon + 5 test = 13 total sites across
+    3 files**. The prose now matches the enumeration: "eight
+    direct consumers ... plus five test-suite consumers —
+    thirteen total sites across three files." Downstream
+    propagation: the Phase 4 work item 6 in
+    `DAA_LWMA1_PLAN.md` previously read "the **nine** MTP
+    consumers ... (seven in `blockchain.cpp`, two in
+    `block_validation.{h,cpp}`)"; it now reads "the **thirteen**
+    MTP consumers ... (eight in `blockchain.cpp`, five in
+    `block_validation.{h,cpp}`)." The Phase 4 file-change
+    breakdown paragraph previously read "9 MTP consumer rewires
+    across 4 files (§9.6)" and now reads "13 MTP consumer rewires
+    across 3 files (§9.6)" — the file count was also wrong
+    (`blockchain.cpp` + `block_validation.h` + `block_validation.cpp`
+    is 3 files, not 4; the prior "4" likely double-counted
+    `cryptonote_config.h` where the `#define` lives, but that's
+    already counted in the adjacent "1 MTP `#define` removed"
+    item).
+  - **`DIFFICULTY_*` count (§9.2 in `DAA_LWMA1.md` and Phase 4
+    work item 3 + YAML phase4-cpp-cutover todo in
+    `DAA_LWMA1_PLAN.md`).** Copilot flagged the plan's Phase 4
+    work item 3 ("six constants" but enumerating seven names);
+    the same drift exists in `DAA_LWMA1.md` §9.2 line 1973
+    ("all five inherited `DIFFICULTY_*` `#define`s and the two
+    timestamp-validation `#define`s") and in the plan's YAML
+    todo block (line 18: "Delete the 6 inherited
+    DIFFICULTY_*"). The §9.2 enumeration has always listed
+    seven `DIFFICULTY_*` defines plus two timestamp-validation
+    defines, and the §9.3 cross-reference at line 2022
+    ("the seven `DIFFICULTY_*` defines plus FTL plus MTP")
+    and the plan's breakdown at line 789 ("7 `DIFFICULTY_*`
+    defines removed") have always been correct. The prose at
+    line 1973, the plan's work item 3 body, and the plan's
+    YAML todo are now reconciled to "seven" everywhere.
+  - **Forward-looking discipline.** Both drift instances share
+    the same pattern as Round 10's item-number drift: prose
+    totals composed by hand on top of enumerations that
+    accumulated incrementally across review rounds. The fix
+    going forward, per the Round 10 discipline, is the same: a
+    pre-PR scan for "prose says N, enumeration says M" mismatches
+    catches the class before it lands as a Copilot finding.
+
+  Status block on line 3 updates from "Round 10" to "Round 11"
+  recording the cumulative review pass. No algorithm-level or
+  consensus-rule changes in Round 11; the round is documentation
+  drift remediation surfaced by the first AI-reviewer pass on the
+  ready-for-review PR.
+  (l) **Phase 0 closeout (Round 12): §5.3 step 2 pseudocode
+  reorder, Phase 1 pre-flight execution, hybrid-reference
+  rename.** (2026-05-18 UTC). Phase 0 ratified after 12 review
+  rounds. Three load-bearing closeout actions in a single
+  commit:
+  - **Status block transition.** `DAA_LWMA1.md` line 3 transitions
+    from "Status: DRAFT — Round 11 …" to "Status: RATIFIED —
+    Phase 0 close (2026-05-18 UTC) — 12 review rounds. Round 12
+    was the final round; the status reflects ratification, not
+    'round 12 of N.'" The status block now records the Round 12
+    findings inline (pseudocode reorder, pre-flight execution,
+    hybrid-reference rename, three reference pins landed) so that
+    a future reader of the design doc sees the closeout summary
+    without needing to read the CHANGELOG.
+  - **§5.3 step 2 pseudocode reorder (load-bearing correctness
+    fix).** Round 12 review identified an order-of-operations bug
+    in the §5.3 step 2 pseudocode that contradicted the
+    surrounding prose at lines 957–960 and 994–996. The
+    pre-Round-12 pseudocode read `prev_max = max(prev_max,
+    timestamps[i-1]); solvetime[i] = timestamps[i] - prev_max;`
+    which, on the first loop iteration (`i=1`), executes
+    `prev_max = max(timestamps[0] - T, timestamps[0])`, evaluating
+    to `timestamps[0]` since `T > 0`. This overwrites the `-T`
+    anchor the surrounding prose claims is preserved, producing
+    `solvetime[1] = timestamps[1] - timestamps[0]` rather than the
+    intended `solvetime[1] = timestamps[1] - (timestamps[0] - T)
+    = T + T = 2T` on the stable input. The pseudocode is now
+    reordered to subtract-then-max:
+    `solvetime[i] = timestamps[i] - prev_max; prev_max =
+    max(prev_max, timestamps[i]);`. On the first iteration this
+    correctly evaluates `solvetime[1] = timestamps[1] - (t0 - T)
+    = 2T` (using the `-T` anchor), then updates `prev_max =
+    max(t0 - T, t1) = t1`. The prose at §5.3 lines 957–960 and
+    994–996 is updated to make the subtract-then-max semantics
+    explicit, including the empirical observation (from the
+    pre-flight harness, below) that the canonical zawy12
+    `LWMA1_()` reference behaves equivalently to the corrected
+    Shekyl pseudocode on monotonic inputs (both produce 990_000
+    on the §8.1 stable vector) but diverges on out-of-sequence
+    inputs (canonical 990_000 vs Shekyl-corrected 992_000 on the
+    Round 12 regression vector), confirming the running-max
+    mechanism's security property is load-bearing rather than
+    cosmetic.
+  - **Phase 1 pre-flight verification (executed at Phase 0 close
+    per §5.3 step 7).** Built a minimal C++ harness from the
+    canonical `LWMA1_()` reference transcribed verbatim from
+    `docs/design/refs/zawy12_issue_3_lwma1.md` (lines 77–119 of
+    the pinned `.body`), compiled with `g++ -std=c++17 -O2`, and
+    ran against the §8.1 "perfectly stable hashrate" input vector
+    with `avg_D = 1_000_000`, `N = 90`, `T = 120`, and
+    `timestamps[i] = 1_700_000_000 + i*T` for `i ∈ 0..=N`. Result:
+    canonical output `990_000` (matches §8.1 expected value).
+    An initial harness run with `timestamps[i] = i*T` produced
+    `10_000_000` due to `uint64_t(0) - uint64_t(120)` underflow at
+    `timestamps[0] - T`; corrected to realistic Unix epoch
+    timestamps and re-ran with the expected result. The
+    Shekyl-corrected algorithm (transcribed from
+    `docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md`)
+    was also compiled and run against the same stable input,
+    producing byte-identical `990_000` (confirming §8.2's
+    cross-check assertion that monotonic inputs match canonical
+    byte-for-byte). An out-of-sequence regression vector (the
+    same stable timestamps with `timestamps[2] = timestamps[1] -
+    5*T`) produced canonical `990_000` (attack neutralized to
+    `+1` via canonical's `previous_timestamp+1` floor; no
+    penalty) versus Shekyl-corrected `992_000` (attacker's
+    negative-solvetime contribution to `L` produces higher
+    `next_D`, denying the attack). The §5.3 step 7 stochastic-vs-
+    deterministic framing and §8.1's stable-vector expected
+    value are both empirically confirmed; the running-max
+    mechanism's load-bearing security property in §5.3 step 2 is
+    empirically verified by the regression vector. `DAA_LWMA1.md`
+    §5.3 step 7 and §8.1 record the inputs, the actual outputs,
+    and the divergence on the out-of-sequence vector;
+    `DAA_LWMA1_PLAN.md`'s Phase 1 pre-flight subsection records
+    the executed result and preserves the reversion-clause
+    triggers for any Phase 1 re-run that produces a different
+    number.
+  - **Hybrid-reference rename
+    (`zawy12_issue_3_lwma1_with_lwma3_step2.md` →
+    `shekyl_lwma1_running_max_symmetric_clamp.md`).** The Round 9
+    working name attributed the running-max + symmetric-clamp
+    mechanism to canonical LWMA-3 ("with_lwma3_step2"), but
+    canonical LWMA-3 (per the
+    `docs/design/refs/zawy12_issue_3_lwma3.md` extraction
+    referenced in the Phase 2 plan) does not actually implement
+    running-max, signed-solvetimes, or symmetric clamping in the
+    form §5.3 step 2 specifies — these are Shekyl-specific
+    refinements drawing on the *idea* of LWMA-3's out-of-sequence
+    handling but composed independently. The file is renamed to
+    `shekyl_lwma1_running_max_symmetric_clamp.md` to reflect the
+    Shekyl-specific construction; the file's preamble documents
+    the naming rationale, the empirical equivalence on monotonic
+    inputs, and the divergence on the regression vector. All
+    cross-references in `DAA_LWMA1.md` §3 and `DAA_LWMA1_PLAN.md`
+    are updated to the new name. The `zawy12_issue_3_lwma3.md`
+    convenience extraction (verbatim LWMA-3 reference, *not* a
+    pin) remains a Phase 2 work item per `DAA_LWMA1_PLAN.md`; it
+    is not load-bearing for Phase 1.
+  - **Three reference pins landed at Phase 0 close.** Per the
+    Phase 0 close discipline obligation, the three Phase 2 spec-
+    pin files landed as a Phase 1 precondition:
+    `docs/design/refs/zawy12_issue_3_lwma1.md` (canonical LWMA-1
+    pin, SHA-256
+    `14c68aee9780ca1b1fb8ca28ac43f7956996859f5281ef166cc0634b2cc50df9`,
+    captured-at 2026-05-18T05:25:21Z),
+    `docs/design/refs/zawy12_issue_24_history.md` (LWMA history
+    issue pin, SHA-256
+    `94a6fc8f10b57cf7d0731f62d07c0b4bbdf65d969d7c8679755b22eace76891d`,
+    same capture timestamp), and
+    `docs/design/refs/shekyl_lwma1_running_max_symmetric_clamp.md`
+    (Shekyl hybrid reference, SHA-256
+    `f16f62695ae74b2ca47d15227b79035cdc349609d9fc73db2b7a3c57c0dfcc4a`,
+    same capture timestamp). `DAA_LWMA1.md` §3's pin records
+    embed the SHA-256s and timestamps; the `LWMA1_()` byte-offset
+    anchors and the LWMA3_() convenience extraction remain Phase
+    2 work per `DAA_LWMA1_PLAN.md` (not load-bearing for Phase 1).
+
+  Status block on line 3 updates from "DRAFT — Round 11" to
+  "RATIFIED — Phase 0 close (2026-05-18 UTC) — 12 review
+  rounds." Phase 0 is closed; Phase 1 (`shekyl-difficulty` crate
+  scaffold per `DAA_LWMA1_PLAN.md`) opens against ratified spec.
+  The pre-flight harness source (transcribed from the pinned
+  `zawy12_issue_3_lwma1.md` LWMA1_() function) is available at
+  this commit and is reproducible via
+  `g++ -std=c++17 -O2 preflight.cpp -o preflight && ./preflight`.
+
+  (m) **Round 13 post-Phase-0-close cleanup (§5.3 step 9
+  canonical-rounding-step documentation, §8.1 base-anchor
+  convention and arithmetic correction, harness commit).**
+  (2026-05-18 UTC.) Addresses Copilot PR #49 findings 3, 4, 5
+  surfaced after the Phase 0 close commit. Phase 0 stays
+  ratified; Round 13 is post-ratification cleanup against the
+  same design intent. Four load-bearing changes:
+  - **§5.3 new step 9 — canonical zawy12 LWMA-1 trailing
+    rounding step.** Documents the previously-undocumented
+    `((next_D + r/2) / r) * r` rounding-to-3-significant-decimal-
+    digits step from canonical `LWMA1_()` (`zawy12_issue_3_lwma1.md`
+    lines 116–119 of the pinned `.body`). The §8.1 expected
+    values all depend on this step; without it, the raw outputs
+    are `989_758` (stable), `1_035_252` (out-of-sequence), etc.
+    — close but not byte-equal to the canonical 3-significant-
+    digit values. Round 13 adds the step explicitly so the
+    §8.2 canonical-reference byte-cross-check is well-defined,
+    and includes a reversion clause requiring a §10 disposition
+    for any future PR proposing to drop or alter it.
+  - **§8.1 timestamp base-anchor convention (Copilot finding
+    5).** All §8.1 vectors are now specified as
+    `timestamps[i] = B + f(i)` with `B = 1_700_000_000` (Unix
+    epoch base). The pre-Round-13 specification used `i*T` or
+    `(i-1)*T` formulas with `B` implicit; the latter produced
+    `timestamps[0] = -T`, unrepresentable as `u64` (wraps to
+    `~1.8e19`) and the cause of the pre-flight harness's
+    initial `10_000_000` mis-output before the Round 12
+    correction. Base-anchoring is now a §8.1 invariant rather
+    than a harness-side workaround.
+  - **§8.1 out-of-sequence and minimum-L-floor vectors — full
+    arithmetic rederivation (Copilot findings 3, 4).** The
+    pre-Round-13 out-of-sequence vector's worked arithmetic
+    inflated the numerator by ~1000× and omitted the
+    rounding step entirely (numerator `97_297_560 * 10^7`
+    instead of `97_297_200_000_000`; quotient `1_035_521_504`
+    instead of step-9-rounded `1_040_000`). Round 13 rederives
+    `L = T*(N-1)*(N-2)/2 = 469_920`, computes raw `next_D =
+    1_035_252`, applies step 9 to round to `1_040_000`, and
+    cross-checks against the harness output. The minimum-L
+    floor vector's expected output drops from `10_010_000`
+    (analytic, missing step 9) to `10_000_000` (step-9-rounded);
+    the analytic intermediate is preserved in the prose so
+    the rounding-step contribution is auditable.
+  - **§8.1 selfish-mine attack regression — pinned numerical
+    outputs.** The Round-9-era assertion was relational only
+    ("Shekyl > kyuupichan output," "Shekyl > all-monotonic-T
+    reference"). Round 13 pins the empirical values: canonical
+    `911_000`, Shekyl `1_040_000`. Canonical's `911_000` is
+    *below* the `990_000` stable reference, surfacing the
+    load-bearing property that canonical LWMA-1 actually
+    *rewards* this attack class (lower difficulty post-attack
+    means cheaper subsequent mining) — the regression Shekyl's
+    running-max + symmetric-clamp formulation exists to fix.
+    The §8.1 entry is rewritten to specify the canonical-and-
+    Shekyl outputs side-by-side, the divergence ratio
+    (~1.14×), and the four-part assertion the test vector
+    must verify.
+  - **Pre-flight harness committed to `tests/phase0/`.** The
+    three C++ harnesses produced during Phase 0 close and
+    Round 13 (`preflight.cpp`, `preflight_corrected.cpp`,
+    `preflight_outofseq.cpp`) are now committed alongside the
+    design doc as authoritative reproducibility artifacts,
+    with `README.md` explaining build/run/license. The MIT
+    SPDX identifier covers the canonical `LWMA1_()`
+    transcription; the Shekyl variant header documents
+    Shekyl Foundation origin. The `DAA_LWMA1.md` §3 reference
+    list and §8.1 vector-derivation footer point at the
+    harness directory; the Phase 1 implementer reproduces the
+    pinned values via `g++ -std=c++17 -O2
+    preflight_outofseq.cpp -o p && ./p` before opening
+    Phase 1's first commit.
+
+  Round 13 leaves the `RATIFIED — Phase 0 close (2026-05-18
+  UTC)` line on `DAA_LWMA1.md` line 3 unchanged — Phase 0
+  closed at Round 12; Round 13 is post-ratification cleanup of
+  finding-classes that surfaced after PR #49 was marked
+  merge-ready. The summary paragraphs below line 3 are
+  extended with a "Round 13 applied:" block listing the four
+  changes above. Phase 1 remains unblocked.
+
+- **`07-consensus-atomic-cutovers.mdc` — named exception to
+  branching policy for consensus-atomic cutovers**
+  (`feat/consensus-atomic-cutovers-rule`, 2026-05-17). New rule
+  ratifying the "consensus-atomic cutover" exception class
+  drafted during PR #49's Round 5 review
+  (`DAA_LWMA1_PLAN.md` Phase 4) and refined through Round 7
+  before landing. `06-branching.mdc`'s 5-working-day / 10-commit
+  splitting guidance defends against unreviewable PRs
+  accumulating; this rule names the small class of PRs that
+  genuinely cannot split because every intermediate state would
+  be a non-canonical consensus configuration. The rule is
+  **opt-in** (`alwaysApply: false`) — a PR that does not
+  explicitly cite the rule cannot invoke it. Four
+  objectively-testable criteria, all required:
+
+  1. **Consensus-rule boundary.** The PR changes behavior all
+     correctly-implementing nodes must reproduce byte-identically
+     on the same input. Refactors, RPC formatting, internal
+     caches, renames, and file reorganizations of consensus code
+     that preserve the rule do not qualify.
+  2. **Indivisible under flag decomposition.** Met whenever
+     criterion 1 is met, for structural rather than contingent
+     reasons. A flag decomposition only counts as consensus-safe
+     if both flag states are simultaneously valid (build-system
+     flags, performance-tuning flags, instrumentation flags
+     qualify). For a consensus rule, simultaneous validity is
+     impossible by definition: the flag would have to dispatch
+     identically regardless of state, which means it doesn't
+     gate consensus behavior at all. Hard-fork activations are
+     the consensus event the PR ratifies, not a decomposition of
+     it; Shekyl's `60-no-monero-legacy.mdc` no-version-dispatch
+     posture forecloses any other interpretation. This shape
+     closes the loophole where a PR author argues "yes, this is
+     a consensus change, but splitting would be inconvenient":
+     either the change affects consensus output (criteria 1+2
+     both met) or it does not (neither met).
+  3. **Surface enumerated in advance, with evidence.** A
+     grep-result-derived enumeration of every consensus-affecting
+     symbol/file/constant pasted into the PR description, **run
+     against the PR's base commit and timestamped at PR-open**
+     so reviewers re-run the same grep against the same base
+     commit to verify the surface hasn't shifted.
+  4. **Disposition documented in PR.** Numbered sub-clauses:
+     4.1 rule citation; 4.2 per-criterion justification; 4.3
+     reviewer-map (with enforcement: substantive consensus
+     changes found outside the map's "consensus-affecting"
+     subsection are grounds for rejecting the PR — the response
+     is re-opening with a corrected enumeration, not patching
+     the map); 4.4 rollback procedure (with enforcement:
+     procedure must be executable by a reviewer who has not
+     seen the PR; tacit-knowledge rollback procedures fail 4.4).
+
+  A "what this is not" section explicitly disqualifies
+  convenience, velocity, reviewer bandwidth, and retroactive
+  citation as justifications. A "compensating discipline"
+  section names scope-creep within an exception-invoking PR as
+  itself grounds for rejection. The rule records LWMA-1 Phase
+  4 as its first approved instance under "Approved invocations,"
+  and RandomX v2 Phase 3 under a separate "Cases that might
+  appear analogous but are not" subsection — Phase 3 ships
+  implementation routing (the 3a flag is a build-system /
+  FFI-routing flag, not a consensus flag; the algorithm body is
+  byte-identical on both sides), so criterion 1 is not met and
+  the exception is **structurally inapplicable**, not
+  "evaluated and rejected" (the latter framing would invite
+  precedent-erosion arguments against future invocations). The
+  mechanism for future invocations is self-anchoring: the
+  invoking PR must include a commit that adds its own entry to
+  the rule's history-of-application section, so the audit trail
+  cannot be reconstructed retrospectively. Per
+  `21-reversion-clause-discipline.mdc`'s named-criteria
+  principle, the exception is auditable mechanically against
+  the four criteria, not against LWMA-1-specific precedent
+  erosion.
+- **RandomX v2 Rust port — Phase 0 design docs**
+  (`feat/randomx-v2-phase0-design`, 2026-05-16). Adds three Phase 0
+  design documents under `docs/design/`:
+  [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) (the primary
+  design),
+  [`RANDOMX_V1_FALLBACK.md`](./design/RANDOMX_V1_FALLBACK.md) (the
+  contingency design), and
+  [`RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md) (the phased
+  execution plan with sub-PR breakdown and gating diagram). The
+  primary design pins the permanent C-miner / Rust-verifier split,
+  derived-first verifier architecture under `18-type-placement.mdc`,
+  the one-function FFI target, no-prewarm disposition, performance
+  budgets, C-library symbol-isolation invariant, and the wallet V3.2
+  gate before Track B. The Grover-bound argument scaffold is recorded
+  in [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §10; the
+  concrete release-checklist target-range calculation is explicitly
+  deferred to Phase 0 review per §10's closing sentence rather than
+  shipped in this PR. The fallback doc records the late-binding
+  unpin-and-revert recovery path (`102f8acf` pin plus verifier
+  toggle) for any time between Phase 0 and genesis release if the
+  algorithm-review gate fails per `RANDOMX_V2_RUST.md` §1.4.
+
+- **LWMA-1 difficulty-adjustment migration — Phase 2 cross-check
+  harness + FFI export (absorbs original Phase 3)**
+  (`feat/daa-lwma1-phase2`, 2026-05-18). Lands the C++ cross-check
+  harness that validates the Phase 1 Rust implementation against
+  both the canonical zawy12 LWMA-1 reference and the Shekyl hybrid
+  (running-max + symmetric-clamp) reference across the §8.1 test
+  corpus per `docs/design/DAA_LWMA1_PLAN.md` Phase 2, and lands the
+  `shekyl_difficulty_lwma1_next` FFI export the harness consumes.
+
+  **Phase 2/3 absorption.** The original plan separated Phase 2
+  ("harness only") from Phase 3 ("FFI export only"). The "or" clause
+  in Phase 2 ("via FFI declared in Phase 3, or via a tiny test-only
+  C++ wrapper") collapsed to a single architectural disposition on
+  audit: any C++ caller into Rust requires `extern "C"` symbols, and
+  the only architecturally clean place to host them is `shekyl-ffi`
+  (hosting in `shekyl-difficulty` itself would violate the Phase 1
+  `#![deny(unsafe_code)]` posture; hosting as a throwaway test shim
+  would be torn down by the original Phase 3 anyway). The two paths
+  collapsed: land the production FFI export in Phase 2 alongside the
+  harness, and have Phase 3 collapse to a "see Phase 2" plan-doc
+  note. The Phase 2 PR is correspondingly larger but produces zero
+  throwaway code; the harness is the integration test for the
+  production FFI surface.
+
+  **`catch_unwind` panic-safety wrapper dropped.** The original
+  Phase 3 prescription wrapped the FFI body in `std::panic::catch_unwind`.
+  The workspace runs `panic = "abort"` in both `dev` and `release`
+  profiles (`rust/Cargo.toml` lines 103, 106); under `panic = "abort"`,
+  `catch_unwind` is a no-op because panics terminate the process
+  before any catch can engage. The Rust algorithm body is panic-free
+  by construction (returns `Result<u128, Error>` for every spec error
+  path; uses explicit `checked_*` / `try_from` overflow guards), and
+  the §8.1 corpus exercises both branches. The FFI shim calls
+  `lwma1_next` directly. `SHEKYL_DIFFICULTY_ERR_INTERNAL` (-4)
+  remains reserved in the C header for forward compatibility but is
+  not currently emitted.
+
+  **Reference pinning.** Three pin records land:
+
+  - `docs/design/refs/zawy12_issue_3_lwma1.anchors.json` — byte-offset
+    + first/last-line anchors for `LWMA1_()` and the upstream LWMA-3
+    function inside the pinned `.body`, plus the pinned-body SHA-256
+    cross-reference (`14c68aee9780ca1b1fb8ca28ac43f7956996859f5281ef166cc0634b2cc50df9`).
+    The anchors file's own SHA-256 (`406320ca29e67e564b7c13eb0fd706b393f0af7558fd99bac391a73542250783`)
+    and capture timestamp (`2026-05-18T18:22:42Z`) land in
+    `DAA_LWMA1.md` §3 as the pin record.
+  - `docs/design/refs/zawy12_issue_3_lwma3.md` — convenience
+    extraction of the canonical LWMA-3 (`next_difficulty_v3`)
+    function from the pinned body. Shekyl-authored header (SPDX
+    `BSD-3-Clause AND MIT`) plus byte-identical extraction against
+    the anchors above. The pinned upstream LWMA-3 contains malformed
+    C++ at upstream lines 376-381 (incomplete `next_D =` assignment
+    and an unbalanced `)` in the jump-rule branch); the extraction
+    preserves the malformation as-is, documented in both the file
+    header and `DAA_LWMA1.md` §3. The closing-brace anchor at
+    upstream line 384 is a textual delimiter, not a balanced-brace
+    marker. SHA-256:
+    `9e2db49a7e2151177cced1748a3d0a4e7cb68ed2b0ecd0c2995cf86f38323671`.
+
+  **FFI surface (`rust/shekyl-ffi/src/difficulty_ffi.rs`).** New
+  module exposing `shekyl_difficulty_lwma1_next` as a
+  `pub unsafe extern "C" fn` with the `ShekylU128` two-u64
+  decomposition ABI per `DAA_LWMA1.md` §6.1 (Round 5's disposition
+  against target-defined Rust `u128` C ABI). Error codes wire-stable
+  at `0` / `-1` / `-2` / `-3` / `-4`; null-input pointers permitted
+  iff `count == 0` (genesis short-circuit). Five unit tests cover
+  the `ShekylU128` round-trip, the genesis path, the null-pointer
+  rejection paths (both `out` and inputs-with-nonzero-count), and
+  the `ERR_INVALID_COUNT` mapping.
+
+  **C header (`src/shekyl/shekyl_ffi.h`).** Adds the
+  `shekyl_difficulty_lwma1_next` declaration, the `struct shekyl_u128`
+  definition, and the `SHEKYL_DIFFICULTY_OK` /
+  `SHEKYL_DIFFICULTY_ERR_NULL_PTR` / `_ERR_INVALID_COUNT` /
+  `_ERR_OVERFLOW` / `_ERR_INTERNAL` macros. The struct lives inside
+  the existing top-of-file `extern "C"` block; macros sit at file
+  scope below the block per the C++ rule that `extern "C"` applies
+  to linkage of declarations, not to preprocessor symbols.
+
+  **Cross-check harness (`tests/difficulty/lwma1_cross_check.cpp`
+  + `tests/difficulty/zawy12_lwma1_reference.h` +
+  `tests/difficulty/shekyl_lwma1_hybrid_reference.h`).** Iterates
+  the seven §8.1 vectors and asserts the documented cross-
+  implementation relations:
+
+  - Vectors 1-5 (monotonic): canonical ≡ hybrid ≡ Rust (byte-equal
+    at the §8.1 pinned outputs).
+  - Vectors 6-7 (out-of-sequence): hybrid ≡ Rust (byte-equal at
+    `1_040_000`), both strictly different from canonical
+    (`1_010_000` for vector 6, `911_000` for vector 7 — the
+    load-bearing security divergence per zawy12 issue #24 item 14).
+
+  The canonical reference header carries the MIT SPDX header citing
+  the pinned-body byte-offset anchor; the hybrid reference header
+  is BSD-3-Clause-MIT dual-licensed (canonical portions are MIT;
+  the step-2/3 refinement is BSD-3-Clause per the Shekyl Foundation
+  copyright). The harness uses `SHEKYL_DAA_*` constants from
+  `shekyl/consensus_constants_generated.h` (Phase 1's
+  JSON-authoritative emit) so any drift between the JSON authority
+  and the harness expectations fails the build.
+
+  **CMake / ctest integration.** Extends
+  `tests/difficulty/CMakeLists.txt` with the `lwma1-cross-check`
+  target (linked against `${SHEKYL_FFI_LINK_LIBS}`) and the
+  `lwma1_cross_check` ctest registration. Harness reports 100 %
+  passing across the §8.1 corpus; failure aborts the test.
+
+- **LWMA-1 difficulty-adjustment migration — Phase 1 crate scaffold
+  + spec-vector tests** (`feat/daa-lwma1-phase1-crate`, 2026-05-18).
+  Lands the Rust crate `rust/shekyl-difficulty` per
+  `docs/design/DAA_LWMA1.md` and `DAA_LWMA1_PLAN.md` Phase 1. Pure-
+  arithmetic `#![no_std]` + `#![deny(unsafe_code)]` leaf crate with
+  zero internal workspace deps; the FFI export
+  (`shekyl_difficulty_lwma1_next` with the `ShekylU128` ABI per
+  `DAA_LWMA1.md` §6.1) is deferred to Phase 3 in `shekyl-ffi`.
+
+  **Public surface.** `lwma1_next(chain_height, &timestamps,
+  &cumulative_difficulties) -> Result<u128, Error>` transcribes the
+  §5.3 algorithm verbatim (running-max + signed-solvetime per the
+  §5.3 step-2 Shekyl refinement, symmetric ±6T clamp per step 3, i128
+  weighted-sum accumulation per step 4, min-L floor at N²T/20 per
+  step 5, bias-corrected `99/200` formula per step 7, overflow guard
+  per step 8, and the canonical rounding-to-3-significant-decimal-
+  digits step 9 added in Round 13). Coupled timestamp predicates
+  `is_timestamp_below_ftl` and `is_above_mtp` co-located in the same
+  crate per `DAA_LWMA1.md` §2.5. Window-shape constants `N`,
+  `T_SECONDS`, `FTL_SECONDS`, `MTP_WINDOW`, `GENESIS_DIFFICULTY` flow
+  through the existing `config/consensus_constants.json` JSON
+  authority (extended with five `daa_*` keys); the bias factor
+  `99/200`, the solvetime clamp `6`, and the min-L floor divisor `20`
+  deliberately stay as bare integer literals inside `src/lwma1.rs`
+  per the Round 3 disposition (`DAA_LWMA1.md` §4) because changing
+  them is a deviation from canonical zawy12 LWMA-1, not a tunable
+  parameter.
+
+  **JSON-authority extension.** `config/consensus_constants.json`
+  adds `daa_window_n=90`, `daa_target_seconds=120`,
+  `daa_ftl_seconds=540`, `daa_mtp_window=11`,
+  `daa_genesis_difficulty=100`. `cmake/generate_consensus_constants.py`
+  extends `KEYS_INTEGER` and the emitted header with five
+  `SHEKYL_DAA_*` macros; until Phase 4 lands, these macros are
+  emitted but have no C++ consumer (the Phase 4 cutover replaces
+  inherited `DIFFICULTY_TARGET_V2`, `CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT`,
+  and `BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW`). `rust/shekyl-difficulty/build.rs`
+  reads the same JSON and emits the Rust mirrors to `OUT_DIR` (Round 3's
+  Option A; extending `shekyl-engine-core/build.rs` would have broken
+  the leaf-crate property). The build script also emits `usize` mirrors
+  of `N` and `MTP_WINDOW` as plain `usize` literals rather than via
+  `usize::try_from(u64)` in a const block, because `TryFrom::try_from`
+  is not yet const-trait-stable in rustc 1.95.0 (issue #143874); this
+  keeps the workspace's `cast_possible_truncation = "deny"` lint clean
+  without per-site `#[allow]` annotations.
+
+  **Test corpus.** 18 tests all pass with the workspace's full lint
+  suite under `-D warnings`. The 7 §8.1 spec vectors reproduce the
+  Phase 0 C++ harness outputs byte-for-byte: `990_000` (stable),
+  `1_980_000` (2× up), `495_000` (2× down), `892_000` (clamp
+  engagement), `10_000_000` (min-L floor), `1_040_000` (out-of-
+  sequence single back-step, Shekyl ≠ canonical's `1_010_000`),
+  `1_040_000` (selfish-mine attack regression, Shekyl ≠ canonical's
+  `911_000`). Edge cases: genesis short-circuit across `chain_height
+  ∈ 0..N` returns `GENESIS_DIFFICULTY`, the §5.3 step-1 boundary
+  surfaces `Error::InvalidCount` on length mismatch, a non-
+  monotonic cumulative-difficulty input surfaces `Error::Overflow`,
+  both branches of the §5.3 step-8 overflow guard execute cleanly,
+  the `solvetime[1] = -T` regression computes without overflow, and
+  the FTL/MTP predicates cover their respective boundaries.
+
+  **Gates.** Per `45-rust-lint-checks.mdc`, `cargo test --package
+  shekyl-difficulty`, `cargo clippy --package shekyl-difficulty
+  --all-targets -- -D warnings`, and `cargo fmt --package
+  shekyl-difficulty -- --check` all pass. `cargo check --workspace`
+  passes (the JSON authority extension does not affect existing
+  consumers; `shekyl-engine-core/build.rs` continues to read only
+  the FCMP/RCT keys it already consumed).
+
+### Changed
+
+- **Stage 1 PR 5 — `Engine` parameterized over `P: PendingTxEngine`
+  (fifth type parameter)** (`feat/stage-1-pr5-pending-tx-engine`,
+  C6 = `0713591bf`; default `P = LocalPendingTx<LocalSigner,
+  WalletGreedyOutputSelector, DaemonFeeEstimator>`). Orchestrator
+  methods `build_pending_tx` / `submit_pending_tx` /
+  `discard_pending_tx` / `outstanding_reservations` dispatch through
+  `self.pending` rather than reading `Engine`'s former inline
+  reservation map. `Engine::replace_pending_tx` (test-helpers) mirrors
+  PR 4's `replace_refresh` pattern.
+
+- **Stage 1 PR 5 — `Engine::discard_pending_tx` reason-parameter
+  drop at orchestrator boundary** (C6). The orchestrator-facing
+  `discard_pending_tx(id)` no longer accepts `DiscardReason`; the
+  trait surface retains `discard(id, reason)` for V3.x consumer
+  actors (`ReservationTTLActor`, etc.). Test call sites narrowed per
+  the PR 4 precedent.
+
+- **Stage 1 PR 5 — reservation / pending-tx data-shape augmentation**
+  (C2γ). `Reservation` gains `snapshot_id`, `extensions`, and
+  collection-membership encoding (no `ReservationState` enum under
+  segment 2h); `PendingTx` gains `snapshot_id`. Submit snapshot
+  staleness returns `SubmitError::SnapshotInvalidated` with rich ids;
+  terminal daemon failures emit `Discarded { DaemonRejectedTerminal }`;
+  ambiguous failures emit `SubmitPendingResolution` and keep the
+  reservation `in_flight`.
+
+- **Stage 1 PR 5 — `engine/pending.rs` free-function extraction**
+  (C5β). Production paths live on `LocalPendingTx`; legacy
+  `build_pending_tx_in_state` / `submit_pending_tx_in_state` /
+  `discard_pending_tx_in_state` remain under `#[cfg(test)]` for
+  migrated unit tests.
+
+- **Stage 1 PR 4 — `Engine` parameterized over `R: RefreshEngine`
+  (fourth type parameter)** (`feat/stage-1-pr4-refresh-engine`,
+  PR 4 C5a = `553d70139`; default `R = LocalRefresh` per the
+  Round 4 turnkey-default discipline). `Engine<S: Signer>`
+  becomes `Engine<S: Signer, D: DaemonEngine = DaemonClient, L:
+  LedgerEngine = LocalLedger, R: RefreshEngine = LocalRefresh>`
+  at
+  [`engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs).
+  The orchestrator retry loop in
+  [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  migrates from a free-function `produce_scan_result(...)` to
+  trait dispatch on `R` via `self.refresh.produce_scan_result(...)`
+  per PR 4 C5 = `7140f726a`; the legacy producer scaffolding
+  (`produce_scan_result` free function + `ProduceError` +
+  `ProgressEmitter` + duplicated helpers + constants) is deleted
+  from `engine/refresh.rs` per PR 4 C5β = `b6a1274de`. The new
+  `Engine::replace_refresh` test-only constructor (consume-and-
+  rebuild; refactored at PR 4 C7 = `c9e65bbc6` from its initial
+  `&mut self` setter form per PR 4 C6α = `e9310542a`) lets the
+  `R` type parameter change between construction and replacement
+  so test orchestration can build the engine with `LocalRefresh`
+  at assemble time and rewire to `FaultInjecting<LocalRefresh>`
+  for failure-injection scenarios. `ViewMaterial::try_from_keys`
+  at
+  [`engine/view_material.rs`](../rust/shekyl-engine-core/src/engine/view_material.rs)
+  derives the trait-required view-and-spend material from the
+  `KeyEngine` at engine-assemble time, populating the
+  `LocalRefresh` constructor argument. Crate-level public APIs
+  consuming the engine type alias (`Wallet`,
+  `WalletWithLedger<L>` test helpers, `RefreshHandle`, the
+  benchmark fixtures) thread the additional type parameters
+  forward with appropriate defaults; no consumer outside the
+  `shekyl-engine-core` crate is required to name `R`
+  explicitly under the default-parameter discipline.
+
+- **Stage 1 PR 4 — `RefreshError::InternalInvariantViolation
+  { context: &'static str }` variant addition** (PR 4 C3 =
+  `c45894ffe`; Phase 0c amendment per
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R6 close-out). Resolves the Round 2 R6 "(a) extend
+  `ConcurrentMutation` or (b) introduce
+  `InternalInvariantViolation`" cleanup pin at the design layer.
+  Disposition (b): conflating "wallet under sustained merge
+  contention" and "wallet hit an internal bug" into
+  `ConcurrentMutation` would deny downstream consumers
+  (`PeerReputationActor`, telemetry, user-facing error surface)
+  the structural distinction they need to respond correctly.
+  The retry-loop call sites in
+  [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  (per PR 4 C5 = `7140f726a`) and the `RefreshHandle::join`
+  dropped-sender site surface state-machine invariant
+  violations as `InternalInvariantViolation { context }` with
+  compile-time-fixed developer content; `&'static str` is
+  appropriate at the orchestrator-internal site because the
+  field carries no attacker-influenced data (the memory-
+  amplifier and log-exfiltration vectors the producer-trait
+  unit-variant discipline closes do not apply here). The
+  variant is one of three `RefreshError` variants reachable
+  from a `RefreshEngine` impl's `Self::Error` via `Into`
+  (alongside `Cancelled` unit and `Io(IoError)`); the other
+  three variants (`MalformedScanResult`, `ConcurrentMutation`,
+  `AlreadyRunning`) are orchestrator-constructed only per
+  the §6.1.1 two-enum architecture pin and the
+  F-Mock-3-sharpening trait-reachable-variant enumeration.
+
+### Removed
+
+- **Electrum-words subsystem — Phase 2: JSON-RPC surface deletion**
+  (`feat/electrum-words-removal-phase2-rpc-deletion`, 2026-05-19).
+  Deletes the inherited CryptoNote 25-word seed surface from the
+  wallet JSON-RPC layer per
+  `docs/design/ELECTRUM_WORDS_REMOVAL_PLAN.md` Phase 2 and
+  `docs/design/ELECTRUM_WORDS_REMOVAL.md` substrate §2.4. Closes
+  Phase 0 Mission Audit Lens B finding B-1 at the RPC layer (FFI +
+  `wallet2` core deletions follow in Phase 3 / Phase 4 / Phase 5).
+  Landed across the commit list below (the bullet list is the
+  source of truth; explicit count omitted because review iterations
+  add closeout commits). All in `src/wallet/wallet_rpc_server*`
+  plus `tests/`:
+
+  - `restore_deterministic_wallet` JSON-RPC method + handler +
+    `COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET` request/response
+    structs deleted. The method took a 25-word Electrum seed +
+    optional `seed_offset` + `language` and reconstructed an
+    account; Shekyl wallets restore from raw seeds via the
+    `shekyl_account_generate_from_raw_seed` FFI surface
+    (testnet/fakechain only per
+    `rust/shekyl-crypto-pq/src/account.rs`'s permitted
+    network/seed-format matrix), not from word lists.
+  - `get_languages` JSON-RPC method + handler +
+    `COMMAND_RPC_GET_LANGUAGES` request/response structs
+    deleted. The method enumerated Electrum-word language packs
+    that have no analogue in the Shekyl seed flow.
+  - `language` request field + `is_valid_language(req.language)`
+    validation branch + `wal->set_seed_language(req.language)`
+    call removed from `COMMAND_RPC_CREATE_WALLET` and
+    `COMMAND_RPC_GENERATE_FROM_KEYS`. The request-schema change
+    drops the field from the deserializer surface. **epee
+    KV-serialization is pull-based**: keys the consumer struct
+    does not declare are silently ignored, so callers that still
+    send `language="English"` do not see a parse error — the
+    value is dropped on the floor and `wallet2::generate()` runs
+    with the wallet2 default seed language. The §4.3 hard-error
+    discipline is enforced at the **FFI surface** (Phase 1
+    `wallet2_ffi_create_wallet` / `wallet2_ffi_generate_from_keys`
+    reject non-empty `language` per
+    `src/wallet/wallet2_ffi.cpp:309–320, 485–495`); the
+    wallet-RPC handler reaches `wallet2::generate()` directly,
+    so the FFI's hard-error gate is not on this code path. The
+    load-bearing property at the wallet-RPC layer is therefore
+    **structural unreachability** of the field from request
+    parsing — no read path from JSON to behavior — rather than
+    runtime rejection. Phase 3 deletes the FFI parameter
+    entirely, collapsing both surfaces. The underlying
+    `wallet2::set_seed_language` and
+    `crypto::ElectrumWords::is_valid_language` symbols still
+    exist (called from `wallet2_ffi.cpp` and `wallet2`
+    internals); their full removal lands with the mnemonics
+    module in Phase 5.
+  - `seed` and `seed_offset` request fields + the entire
+    seed-recovery branch (the
+    `if (!req.seed.empty()) { words_to_bytes / decrypt_key /
+    account.generate(...) / spend-key match check }` block at
+    `wallet_rpc_server.cpp:2316–2366`) removed from
+    `COMMAND_RPC_STOP_BACKGROUND_SYNC`. The branch was P0-broken
+    on mainnet/stagenet under the legacy 3-arg
+    `account.generate()` overload (constant-drift audit
+    `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`);
+    password-only `stop_background_sync` survives unchanged. A
+    BIP39 / raw-seed replacement is a `docs/FOLLOWUPS.md` V3.2
+    item, not Phase 2 scope.
+  - `#include "mnemonics/electrum-words.h"` removed from
+    `wallet_rpc_server.cpp` (no remaining ElectrumWords callers
+    in the file).
+  - `tests/functional_tests/` (29 files, 6,786 lines) deleted
+    outright. The plan-doc draft proposed migrating 12
+    (actually 28) `restore_deterministic_wallet` and 3
+    (actually 4) `stop_background_sync(seed=...)` call sites to
+    surviving RPC methods. Pre-flight investigation
+    (2026-05-19) surfaced four blockers that flipped the
+    disposition from migrate to delete: (a) the harness invokes
+    `monerod` / `monero-wallet-rpc` binaries that don't exist
+    in the Shekyl tree; (b) `functional_tests_rpc` and
+    `check_missing_rpc_methods` were silently skipped in CI
+    because the build environment lacked the
+    `requests` / `psutil` / `monotonic` / `deepdiff` Python
+    deps at `cmake` configure time — inherited dead code with
+    no live caller; (c) `shekyl-wallet-rpc` lacks a
+    `--regtest` / `--fakechain` flag and defaults to mainnet,
+    so the FFI rejects raw-seed restore on the regtest
+    daemon's fakechain network; (d) the harness is
+    Monero-shaped end-to-end and warrants a Shekyl-native
+    rewrite under its own design doc, not a "while we're here"
+    revival here. Per `15-deletion-and-debt.mdc`'s
+    default-delete posture, deletion is the disposition.
+    `add_subdirectory(functional_tests)` removed from
+    `tests/CMakeLists.txt`; the Functional tests section of
+    `tests/README.md` is rewritten to record the deletion +
+    the planning posture for a Shekyl-native replacement.
+
+  Build verification: `wallet_rpc_server`, `wallet`, `shekyld`,
+  and `unit_tests` targets all build clean; `unit_tests` ctest
+  pass (306s, 0 failures).
+
+- **Vestigial CLSAG-era `ring_size` field (Phase 0 Mission Audit
+  Lens E finding E.2-A; Batch α PR 2)**
+  (`chore/audit-batch-alpha-pr2-ring-size-cleanup`, 2026-05-17).
+  Removes the surviving CLSAG-era "ring signature size"
+  parameter from the C++ wallet RPC surface and from two
+  blockchain-utility residue sites. Under FCMP++ with
+  full-chain membership proofs, there is no user-tunable
+  ring size; the anonymity set is the entire UTXO set.
+  This entry completes the cleanup begun by the prior
+  Rust-side `ring_size` removal recorded above ("Decoy and
+  `ring_size` removal from Rust RPC") by deleting the
+  remaining C++ residue that pre-genesis audit reviewers
+  would otherwise read as semantically live.
+
+  **Wallet RPC surface (`src/wallet/wallet_rpc_server_commands_defs.h`).**
+  Deleted `ring_size` field + serializer from four request
+  structs (`COMMAND_RPC_TRANSFER`, `COMMAND_RPC_TRANSFER_SPLIT`,
+  `COMMAND_RPC_SWEEP_ALL`, `COMMAND_RPC_SWEEP_SINGLE`; all
+  four were accepted-and-ignored via `KV_SERIALIZE_OPT(...,
+  (uint64_t)0)` with zero readers in the post-FCMP++
+  codepath) and from one response struct
+  (`transfer_description` inside `COMMAND_RPC_DESCRIBE_TRANSFER`;
+  `KV_SERIALIZE(ring_size)` mandatory in response, populated
+  by the now-meaningless min-across-sources walk below).
+
+  **Wallet RPC handler (`src/wallet/wallet_rpc_server.cpp`).**
+  Deleted the L1503–1505 `min(cd.sources[s].outputs.size())`
+  walk that populated `desc.ring_size`; under FCMP++,
+  `cd.sources[s].outputs.size()` does not represent a CLSAG
+  ring and the computed value has no consensus meaning.
+  Adjusted the `res.desc.push_back({...})` brace-init at
+  L1471 to drop the corresponding `std::numeric_limits<uint32_t>::max()`
+  third element.
+
+  **Blockchain logging (`src/cryptonote_core/blockchain.cpp`).**
+  Removed the `ring_size` local at L3192 and reformatted the
+  `MINFO` log line from `I/M/O` to `I/O` (inputs/outputs).
+  Under FCMP++ the "M" (mixin / ring-member count) field
+  pulled from `txin_to_key.key_offsets.size()` no longer
+  represents a CLSAG ring and was a vestigial logging
+  residue.
+
+  **Blockchain-usage analysis utility
+  (`src/blockchain_utilities/blockchain_usage.cpp`).**
+  Removed the `ring_size` field from the `reference` struct,
+  the corresponding constructor parameter (`uint64_t rs`),
+  and updated the sole call site at L216 from
+  `reference(height, txin.key_offsets.size(), n)` to
+  `reference(height, n)`. The field was write-only across
+  the utility's lifetime; the per-output frequency
+  accounting at the loop's tail (L222–236) counts
+  `out.second.size()` only.
+
+  **Scope and rationale.** Pre-genesis Rule-60 residue
+  cleanup per `.cursor/rules/60-no-monero-legacy.mdc`. The
+  standalone-PR disposition (rather than folding into the
+  V3.1+ Legacy `wallet_rpc_server` Rust cutover) was
+  selected because folding means vestigial `ring_size`
+  ships at genesis = concrete audit-confusion vector for
+  genesis-audit reviewers (5 RPC structs + desc calc +
+  log line + utility struct all look semantically live
+  without reading FCMP++ disambiguators). Bisectable,
+  mechanical, no architectural implications. Production-
+  source diff (excluding this CHANGELOG entry, which adds
+  ~70 lines of documentation delta):
+  `4 files changed, 4 insertions(+), 19 deletions(-)`.
+  Not RingCT proper — `rct::*` types, output commitments,
+  Bulletproofs+ range proofs, and the wider RCT machinery
+  remain load-bearing under `RCTTypeFcmpPlusPlusPqc`.
+
+### Changed
+
+- **RandomX v2 Phase 0 — Copilot PR #45 Round 2 findings addressed
+  (5 inline + 16 low-confidence suppressed)**
+  (`feat/randomx-v2-phase0-design`, 2026-05-17). Round 2 of
+  Copilot's inline review surfaced 5 inline comments and 16
+  low-confidence suppressed findings against the four design
+  documents. Triage and disposition follow; all 21 were accepted
+  with fixes (no rejections). The findings clustered into seven
+  themes:
+
+  1. **Error-taxonomy ambiguity** (RUST.md:776, PLAN.md:290).
+     `ERR_CACHE_DERIVE_FAILED` and `ERR_INTERNAL` both claimed
+     coverage of "Rust panic caught at FFI shim," making the
+     taxonomy ambiguous for implementers. Resolved by assigning
+     panics uniformly to `ERR_INTERNAL (-4)` via
+     `catch_unwind` at the shim, while
+     `ERR_CACHE_DERIVE_FAILED (-3)` covers only structured
+     VM-level failures the derivation deliberately returns
+     (e.g., debug_assert paths). The two codes are now disjoint
+     by construction; the PLAN.md §2e prose mirrors the §17
+     taxonomy verbatim so future drift is impossible.
+
+  2. **Reviewer-rule misattribution** (RUST.md:934, FOLLOWUPS
+     reviewer-discipline rules-queue entry). Both entries cited
+     `.cursor/rules/06-branching.mdc` as the source of an "at
+     least one reviewer who is not the author" rule. Verified
+     against the file: `06-branching.mdc` governs branch flow
+     and release operations and contains no reviewer-count
+     rule. Rewrote both to acknowledge the requirement is an
+     aspirational project convention, not a codified rule, and
+     to record that the V3.1 `24-reviewer-discipline.mdc`
+     rules-queue entry is the *introducing* rule rather than a
+     promotion of an existing one.
+
+  3. **`cncrypto` PUBLIC-link survey gaps** (RUST.md:499,
+     PLAN.md:338/402, CHANGELOG.md:98). The Round 1 survey
+     expansion (from 4 to 9 targets) was still incomplete and
+     misnamed `monero_fcmp_pp_crypto`. Re-ran the survey
+     against the pinned tree: corrected `monero_fcmp_pp_crypto`
+     → `fcmp_basic` (with `fcmp` as the second `src/fcmp/`
+     target); added `src/blockchain_db/`, `src/checkpoints/`,
+     `src/device/`, and `src/wallet/` (wallet_rpc_server) to
+     the production-`src/` direct-consumer list; added
+     `tests/wallet_bench/`, `tests/daemon_tests/`,
+     `tests/functional_tests/` (two targets), `tests/hash/`,
+     and `tests/performance_tests/` to the test-target list.
+     Total direct-consumer count grew from 9 to 19 (13
+     production + 6 test). Also clarified the §10 vs §11
+     citation in PLAN.md: the survey is RUST.md §11, not §10
+     (§10 is the Grover-bound section); two PLAN.md references
+     corrected.
+
+  4. **Phase 3c / Phase 4 ordering hazard** (PLAN.md:338).
+     Phase 3c deletes `slow-hash.c` / `rx-slow-hash.c` / 
+     `pow_cryptonight.cpp` together, but `src/cryptonote_basic/miner.cpp`
+     still declares `slow_hash_allocate_state` / 
+     `slow_hash_free_state` `extern "C"` and
+     `src/cryptonote_basic/cryptonote_format_utils.cpp` still
+     calls `crypto::rx_slow_hash` and `crypto::cn_slow_hash`
+     (PoW and KDF). Phase 4 was scheduled to remove these
+     callers, so the intermediate state between 3c-landed and
+     4-landed would not build. Added an explicit ordering
+     precondition: Phase 3c assumes §15 (RPC payments delete)
+     and Phase 4 (version-gate + IPowSchema deletion) have
+     already cleared the `miner.cpp` and `cryptonote_format_utils.cpp`
+     call sites; if any caller remains at 3c open-time, the
+     ordering is to pull that caller's removal forward into
+     the 3c PR. Also noted that
+     `cryptonote_format_utils.cpp`'s `cn_slow_hash` calls at
+     lines 1465/1473 are non-PoW KDFs that need a Rust-side
+     replacement before 3c — a Phase 4 deliverable.
+
+  5. **RPC-payments §15.4 incompleteness** (RUST.md:642). The
+     deletion checklist omitted three surfaces:
+     `src/rpc/core_rpc_ffi.cpp` (registers the six
+     `rpc_access_*` JSON-RPC dispatch entries),
+     `src/rpc/core_rpc_server_commands_defs.h` (defines the
+     `COMMAND_RPC_ACCESS_*` request/response structs), and
+     `tests/functional_tests/functional_tests_rpc.py` (includes
+     `'rpc_payment'` in `DEFAULT_TESTS` at line 13). All three
+     added to the checklist.
+
+  6. **Section-number drift** (CHANGELOG.md:23 inline + multiple
+     §10 vs §11 references in PLAN.md). The May-16 changelog
+     said "Grover-bound argument scaffold is recorded in
+     `RANDOMX_V2_RUST.md` §9," but the actual section is §10
+     (§9 is "Environment and Consensus Constants"). The
+     PLAN.md Phase 3c step and its corresponding Risk
+     acknowledgement said "Phase 0 §10 PUBLIC-link survey"
+     where the survey is RUST.md §11. All corrected to RUST.md
+     §10 (Grover) and §11 (cncrypto) respectively.
+
+  7. **Smaller items.** (a) `#[export_name]` CI grep
+     extended in PLAN.md §2f to cover both bare and
+     `#[unsafe(export_name = "...")]` forms, mirroring the
+     existing `no_mangle` pattern; the RUST.md §7.2 prose now
+     names both spellings explicitly so the design doc and the
+     CI grep cite the same patterns. (b) PLAN.md §6 "5 hours
+     of baseline PoW work" rewritten to match RUST.md §8's
+     canonical numbers: 2-hour C baseline (12 ms × 600k),
+     4-hour delta at 3.0× ratio, 6-hour Rust-target total.
+     (c) PLAN.md §9 Grover "√2 speedup" corrected to "square-
+     root speedup against unstructured preimage search, ~2²⁵⁶
+     → ~2¹²⁸" matching RUST.md §10. (d) PLAN.md §15
+     "rewrite or delete" reframed as the resolved-to-delete
+     disposition. (e) PLAN.md §5 (and RUST.md §5)
+     `seedheight(height) -> u64` discretionary export
+     reshaped to the same `i32`-return + out-parameter
+     discipline as the committed hash export, per
+     `40-ffi-discipline.mdc`. (f) FALLBACK.md §2's
+     "`external/randomx-v2` is not added in fallback mode"
+     framing split into pre-Phase-1 and post-Phase-1 cases so
+     §1's late-binding framing is honored. (g) FALLBACK.md §4
+     "filled after RUST.md §1" placeholder replaced with the
+     concrete list of v2-deferred improvements drawn from
+     RUST.md §1.3 (CFROUND throttling, F/E AES mix, program
+     size, prefetch lookahead, efficiency-per-watt aggregate).
+     (h) CHANGELOG.md May-16 entry's "six places" replaced
+     with "eight places" so the count matches the
+     enumeration that follows.
+
+  Files touched: `docs/CHANGELOG.md`,
+  `docs/design/RANDOMX_V2_PLAN.md`,
+  `docs/design/RANDOMX_V2_RUST.md`,
+  `docs/design/RANDOMX_V1_FALLBACK.md`,
+  `docs/FOLLOWUPS.md`.
+
+- **RandomX v2 Phase 0 — Copilot PR-review-bot findings triaged and addressed (PR #45)**
+  (`feat/randomx-v2-phase0-design`, 2026-05-16). Copilot's inline
+  review of PR #45 surfaced 13 findings against the Phase 0 design
+  docs. Triage and disposition follow; 12 accepted with fixes, 1
+  accepted as a CHANGELOG-only softening (the Grover §9 placeholder
+  is intentional Phase 0 work, but the CHANGELOG previously
+  overpromised that it was shipped).
+  
+  Fixes in this commit:
+  
+  - **CHANGELOG**: PLAN.md added to the "Added" entry alongside
+    RUST.md and FALLBACK.md (PLAN.md was added in this PR but the
+    Added entry only named two of the three design docs). The
+    Grover-bound claim softened to "scaffold recorded in §9;
+    concrete release-checklist calculation deferred to Phase 0
+    review per §9's closing sentence."
+  - **PLAN.md frontmatter**: `overview:` value wrapped in double-
+    quotes per the WALLET_REWRITE_PLAN.md precedent so the unquoted
+    `: ` sequences (`No prewarm: lazy`, etc.) no longer break YAML
+    parsing. Confirmed parsing via `python3 -c "import yaml; ..."`.
+  - **PLAN.md Decision #6 cost analysis + §6 perf budget**: rewrote
+    the "below Nielsen's 100 ms threshold" claim (mathematically
+    wrong: 150 ms > 100 ms). New framing: "above 100 ms by ~50 ms
+    but well below the 1 s continuous-flow threshold, and invisible
+    in practical RPC-round-trip context."
+  - **PLAN.md root-relative links**: 32 cross-references rewritten
+    from repo-root-relative (`](src/...)`, `](rust/...)`, etc.) to
+    proper relative paths (`](../../src/...)`) so GitHub renders
+    them correctly from `docs/design/`. Verified each rewritten
+    link resolves to a real path (29 OK; 2 intentional forward
+    references: `external/randomx-v2` is added by Phase 1,
+    `RANDOMX_V2_PHASE_3B_DELETED_CALL_AUDIT.md` by Phase 3b).
+  - **PLAN.md Phase 2f C-ABI exports invariant**: the existing
+    `extern\s*"C"\s*\{` grep matches only foreign import blocks,
+    not the `pub extern "C" fn` shape the invariant is supposed to
+    forbid. Replaced with three explicit patterns: `#[no_mangle]`
+    (both spellings), `extern "C" fn` (any function declaration),
+    and `#[export_name = "..."]` (the bypass shape). The intent of
+    each pattern is documented inline.
+  - **PLAN.md Phase 3 caller-survey scope**: added an explicit
+    clarifying paragraph noting that the "six C++ daemon-side
+    caller files" is the Phase 3 *rewire* set, not the full repo-
+    wide `rx_*` footprint. The four additional files Copilot's
+    grep surfaced (`miner.cpp`, `cryptonote_format_utils.cpp`,
+    `rpc_payment.cpp`, `wallet_rpc_payments.cpp`) are intentionally
+    handled by §15 (RPC payments deletion) and Phase 4 (version-
+    gate + IPowSchema deletion), not by Phase 3.
+  - **PLAN.md Phase 2e allocation guidance**: softened the
+    misleading OOM coverage. The Phase 2e allocation APIs
+    (`Box::new_zeroed_slice`, `vec![]`) are infallible: they abort
+    on OOM rather than return an error, so the FFI shim never sees
+    a result it could map to `ERR_CACHE_DERIVE_FAILED`. The plan
+    now records that OOM at cache derivation aborts and that a
+    fallible-allocation path with an `ERR_CACHE_ALLOC_FAILED`
+    taxonomy entry is V3.x work if any future caller needs OOM-
+    recoverable derivation.
+  - **RUST.md §1.2 reference clone**: removed the
+    contributor-specific absolute path
+    `/home/torvaldsl/shekyl/RandomX/` (committing a single
+    developer's `$HOME` path is non-reproducible). Replaced with a
+    portable description noting that Phase 0 contributors may keep
+    a sibling clone at the same pin as a contributor-local
+    convention, with a fork URL for those who prefer not to.
+  - **RUST.md §11 cncrypto PUBLIC-link survey**: expanded the
+    direct-consumer list from 4 targets to 9, adding the load-
+    bearing `common` link (which sits below most subsystems and
+    transitively re-exports `randomx_*` to everything depending on
+    `common`) plus `cryptonote_basic` (two targets), `cryptonote_core`,
+    `daemon`, and `fcmp` (two targets). Also recorded that
+    `tests/crypto/CMakeLists.txt`'s `cncrypto-tests` does **not**
+    link `cncrypto` directly (it links `common` and gets cncrypto
+    transitively); the test name is historical. Phase 3 link-drop
+    checklist is now accurate.
+  - **RUST.md §19 audit doc filename**: renamed
+    `RANDOMX_V2_PHASE3B_AUDIT.md` (RUST.md's spelling) to
+    `RANDOMX_V2_PHASE_3B_DELETED_CALL_AUDIT.md` (PLAN.md's
+    canonical spelling). Single canonical filename across both
+    design docs.
+  - **RUST.md §17 ERR_CACHE_DERIVE_FAILED semantics**: clarified
+    that this code covers VM-level failures and Rust panics caught
+    at the FFI shim, **not** allocation failure. OOM during cache
+    derivation aborts the process via `handle_alloc_error` per
+    Rust's default allocator; this is consistent with PLAN.md
+    §2e's infallible-allocation choice. A future
+    `ERR_CACHE_ALLOC_FAILED (-5)` entry is sketched as V3.x work
+    if a caller ever needs OOM-recoverable derivation.
+  - **FALLBACK.md status block**: rewrote the L6 status block to
+    match §1's late-binding framing. The previous text ("invoked
+    only if Phase 0 review concludes RandomX v2 is not ready")
+    contradicted the §1 round-1 revision that made the fallback
+    invocable any time between Phase 0 and genesis release.
+  
+  Findings rejected or partially addressed:
+  
+  - **Grover §9 placeholder (RUST.md L481)**: Copilot flagged §9
+    as incomplete because it ends with "Phase 0 review must fill
+    this section with the concrete target-range calculation." The
+    placeholder is intentional — concrete numbers depend on
+    Shekyl's final difficulty-target tuning, which is a Phase 0
+    review item, not implementation. Disposition: keep §9 as-is;
+    soften the CHANGELOG's claim about Grover-bound coverage (done
+    in this commit) so the doc-vs-changelog asymmetry resolves.
+  
+  Files touched: `docs/CHANGELOG.md`,
+  `docs/design/RANDOMX_V2_PLAN.md`,
+  `docs/design/RANDOMX_V2_RUST.md`,
+  `docs/design/RANDOMX_V1_FALLBACK.md`.
+
+- **RandomX v2 Phase 0 — plan-vs-design-doc drift fix and four smaller items**
+  (`feat/randomx-v2-phase0-design`, 2026-05-16). The previous round
+  moved the algorithm-review gate from "before Phase 2" to release-
+  time in [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §1.4,
+  but [`RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md) still
+  carried the old Phase-2-gate framing in eight places: frontmatter
+  `algorithm-review-gate` todo, frontmatter `overview` text,
+  frontmatter `phase5-docs` todo, body §"Algorithm-review gate
+  (Track A intra-track)", body §"Track A — Algorithm-review gate",
+  body §"Track A — Phase 2 (gated on algorithm review)" title, body
+  §"Risk acknowledgments" v2-algorithm-posture entry, and the
+  mermaid diagram. This commit aligns the plan with the design doc:
+  the gate is release-time, Phase 2 proceeds in parallel with
+  Monero's audit, and the mermaid diagram redrawn so the release
+  gate sits after Phase 5 with `MonAudit`/`MonDeploy` as parallel
+  external inputs that don't block Track A or Track B.
+  Also folds in four smaller items from the same review pass:
+  (a) [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §16 gains
+  a `const _: () = assert!(...)` compile-time assertion that
+  `SEEDHASH_EPOCH_BLOCKS.is_power_of_two()`, because the
+  `& !(SEEDHASH_EPOCH_BLOCKS - 1)` mask in the `seedheight()`
+  formula silently produces the wrong consensus result if the
+  constant is ever changed to a non-power-of-2. (b) §17 adds an
+  explicit four-case table for the `data` / `data_len` pairing so
+  the `data == NULL && data_len == 0` empty-input case is no longer
+  ambiguous at the FFI boundary. (c) §23 gains §23.1 recording the
+  per-gate reviewer-discipline calibration pattern as a candidate
+  for promotion to `.cursor/rules/24-reviewer-discipline.mdc`. (d)
+  Two new V3.1 FOLLOWUPS entries in
+  [`FOLLOWUPS.md`](./FOLLOWUPS.md): one tracking the §22 Guix
+  reproducible-build obligation pickup (fires when Guix integration
+  lands; closes when the Guix-integration design doc rewrites §22
+  to point at the actual manifest), and one tracking the §23.1
+  reviewer-discipline rule promotion (sibling to the existing
+  rules-queue entries).
+  Softens the previous round's framing: the RandomX v2 work is
+  primarily **fresh debt clearance** (`IPowSchema`/`pow_registry`,
+  `shekyl-consensus`, RPC payments, and the `rx-slow-hash.c`
+  stateful core were not previously tracked in FOLLOWUPS), so the
+  Phase 5 FOLLOWUPS pass is mostly forward-looking close-records
+  rather than closure of pre-existing items. The V3.0 pre-genesis
+  queue's accumulation/resolution trajectory is unaffected by this
+  work.
+
+- **RandomX v2 Phase 0 — algorithm-review gate moves from Phase-2 to release**
+  (`feat/randomx-v2-phase0-design`, 2026-05-16). Rewrites
+  [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §1.4 to record
+  that the two Phase-0 open questions ("who else deploys v2?" and
+  "who funds the v1→v2 delta audit?") both resolve to **Monero**.
+  Monero is in the process of deploying upstream RandomX v2 (PR #317)
+  in parallel with Shekyl's implementation, and is funding the delta
+  audit. Because Shekyl is non-divergent from upstream (§1.1) the
+  audit's scope covers Shekyl's pinned code byte-for-byte; Shekyl
+  inherits the audit result without coordinating it. The
+  previously-listed "algorithm-review gate before Phase 2" is
+  **removed** — Phase 2 is faithful spec implementation, not an
+  algorithm-soundness decision, and gating it on external work
+  Shekyl does not control would either delay or duplicate effort.
+  §1.4 introduces the explicit **release-time gate**: before genesis,
+  Monero's production v2 deployment must have had meaningful
+  observation-window exposure AND the Monero-funded delta audit must
+  have completed without contraindicating findings. §1.1 records
+  that non-divergence is a load-bearing strategic posture — what
+  buys Shekyl audit inheritance and the unpin-and-revert v1 fallback
+  — not an accident. §23 reviewer-discipline updated to reflect the
+  release-time gate and to distinguish inherited external review
+  (via non-divergence) from Shekyl-direct external review.
+  [`RANDOMX_V1_FALLBACK.md`](./design/RANDOMX_V1_FALLBACK.md) §1
+  reframes the fallback as **late-binding** (any time between Phase
+  0 and release), unpin-to-`102f8acf` rather than stop-and-restart,
+  with explicit Production-deployment-failure and Inheritance-
+  failure trigger classes added to the existing list. Plan todo
+  `algorithm-review-gate` rewritten from a Phase-2 blocker to a
+  release-time gate that runs in parallel with implementation work.
+
+- **RandomX v2 Phase 0 — fork relationship and pinned source recorded**
+  (`feat/randomx-v2-phase0-design`, 2026-05-16). Rewrites
+  [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §1 from a
+  forward-looking "Shekyl-controlled divergence" framing to the
+  empirical picture: the `Shekyl-Foundation/RandomX` fork tracks
+  upstream `tevador/RandomX` without divergence; RandomX v2 is the
+  upstream tevador algorithm landed in PR #317 (commit `bb6ed2c`);
+  and the fork's pinned commit is `aaafe71` ("Prepare v2.0.1
+  release", 2026-05-10). (The original draft of §1.2 named a
+  contributor-local sibling-clone path; that path was removed in
+  the same review round per the portable-path rule, see the later
+  Changed entry. The path is intentionally not quoted here either.)
+  §1.3 distills the four concrete
+  v1→v2 changes from the fork's `doc/design_v2.md` (CFROUND
+  throttling, F/E AES mix replacing XOR, program-size 256→384,
+  two-iteration dataset prefetch lookahead) and their ~130-165 %
+  efficiency improvement on Zen 3/4/5 silicon. §1.4 records the
+  algorithm-review status: the four 2019 audits in the fork's
+  `audits/` directory (Trail of Bits, X41, Kudelski, Quarkslab) cover
+  v1 and bound the Phase 2 review scope to the v1→v2 delta rather
+  than RandomX from scratch. §3 names the three normative spec files
+  (`doc/specs.md`, `doc/design_v2.md`, `doc/configuration.md`) as the
+  Rust port's source-of-truth references. §11 records that the
+  current `external/randomx` submodule is at v1-era `102f8acf` and
+  Phase 1 adds `external/randomx-v2` at `aaafe71` as a **new**
+  submodule alongside it (not a repoint) so the v1→v2 swap is a
+  single reviewable commit later. [`RANDOMX_V1_FALLBACK.md`](./design/RANDOMX_V1_FALLBACK.md)
+  §2 records that v1 lives at any pre-PR-#317 commit on the same
+  fork (default fallback pin: `102f8acf`, already in the existing
+  submodule), and §3 records that the four 2019 audits already ship
+  in the fork's `audits/` directory at the pinned v1 commit.
+
+- **RandomX v2 Phase 0 — RPC-payments disposition resolved to delete**
+  (`feat/randomx-v2-phase0-design`, 2026-05-16). Rewrites
+  [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §15 from the
+  open "rewrite or delete" question to an explicit **delete** decision
+  with the rationale recorded (no users pre-genesis per
+  `60-no-monero-legacy.mdc`; the feature shipped with essentially zero
+  Monero production adoption; a future monetization story is better
+  designed fresh against 2026+ options than inherited from 2020). Adds
+  §15.4 with the concrete deletion checklist — five `rpc_payment*`
+  files plus `wallet_rpc_payments.cpp` plus a functional test deleted
+  whole, surgical hook removal across `core_rpc_server`,
+  `bootstrap_daemon`, `node_rpc_proxy`, `wallet2`, `wallet_args`,
+  `wallet_rpc_helpers`, `wallet_rpc_server`, the daemon CLI command
+  files, `cryptonote_config.h`, and the two CMakeLists — so Phase 4
+  inherits a checklist rather than a question. Tightens Phase 4 scope
+  materially: the v2 verifier FFI export is consumed by daemon block
+  verification only, with no wallet wiring.
+  [`RANDOMX_V1_FALLBACK.md`](./design/RANDOMX_V1_FALLBACK.md) §2
+  records the deletion as algorithm-independent and inherits the same
+  checklist under fallback.
+
+- **RandomX v2 Phase 0 — Round 1 review-feedback revisions**
+  (`feat/randomx-v2-phase0-design`, 2026-05-16). Expands
+  [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) with new sections
+  §16 (genesis-block seedhash handling, including the `rx_seedheight`
+  early-block branch and a canonical Rust `seedheight()` form), §17
+  (FFI error-code taxonomy with stable negative codes), §18 (thread-
+  safety contract for `shekyl_pow_randomx_v2_hash`), §19
+  (`block.major_version` field disposition after PoW dispatch
+  deletion), §20 (BSD-3-Clause licensing and attribution), §21 (MSRV
+  pin proposal and `#[no_mangle]` / `#[unsafe(no_mangle)]` grep
+  coverage), §22 (Guix reproducible-build forward-looking impact), and
+  §23 (reviewer discipline under the project's solo-architect reality).
+  Tightens §3 with test-vector provenance rules (`tests/vectors/spec/`
+  vs `tests/vectors/reference/`), §8 with the synthetic pre-genesis
+  600k-block release-gate harness, and §15 with a checked-in grep
+  result narrowing wallet-tree PoW touchpoints to
+  `wallet_rpc_payments.cpp:156/158/163`.
+  [`RANDOMX_V1_FALLBACK.md`](./design/RANDOMX_V1_FALLBACK.md) §2
+  records the upstream-`tevador/RandomX`-vs-Shekyl-fork v1 source
+  choice and the `BUILD_RANDOMX_V2_MINER_LIB` rename, §4 fixes the
+  cross-reference to `RANDOMX_V2_RUST.md` §1, §6 corrects the same
+  cross-reference, and §7 mirrors the reviewer-discipline section.
+
+- **Stage 1 PR 3 — close-out: `engine_trait_bench_key_account_public_address`
+  pair** (`chore/stage-1-pr3-closeout`, 2026-05-12). Introduces the
+  criterion + iai-callgrind sibling pair for the
+  `KeyEngine::account_public_address` trait method, classified under
+  the `engine_trait_bench_*` threshold class via `compare.py`'s
+  `classify()` function-name routing. The fixture is `Box<LocalKeys>`
+  rather than the canonical `(Box<Engine<...>>, TempDir)` shape per
+  the substrate-forced divergence documented in
+  [`STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md)
+  §1.2 — `Engine` does not yet hold a `LocalKeys` field;
+  orchestrator integration is `KeyEngine` PR-5 territory per
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §2.1.1 (Round 4a workflow-shape pivot). Workload class is
+  **trivial pure-read** (cached `AccountPublicAddress` borrow);
+  iai-callgrind is the load-bearing signal because criterion
+  `median_ns` reflects optimizer amortization across the iteration
+  loop (§4.4 hoisting caveat). The bench-internals visibility
+  expansion adds only `LocalKeys` to the `pub` surface (following
+  the exact precedent of `LocalLedger` at Stage 1 PR 2 — name-only
+  expansion; fields stay private). `LocalKeys::from_test_seed`
+  becomes `pub` under `#[cfg(any(test, feature = "bench-internals"))]`
+  matching `LocalLedger::populate_for_bench`'s gating.
+  `AccountPublicAddress` stays `pub(crate)` — the bench helper
+  returns a primitive `usize` summary (sum of address-field
+  byte-lengths) rather than the natural `&AccountPublicAddress`
+  return type, sidestepping the API-widening Copilot's PR review
+  flagged. Closes two of four deferred-bench slots from
+  [`FOLLOWUPS.md`](./FOLLOWUPS.md)'s Stage-1-performance-baseline
+  entry (`ledger_balance` previously satisfied at Stage 1 PR 2,
+  `key_account_public_address` here); two EconomicsEngine slots
+  remain pinned to the EconomicsEngine trait-introducing PR.
+
+### Changed
+
+- **Stage 1 PR 4 — Round 4 review pass meta-review amendment
+  (review of F1–F9 disposition substrate; three additional
+  findings F11–F13 dispositioned without reopening
+  Round 1–4)** (`feat/stage-1-pr4-round-4`, 2026-05-15).
+  Doc-only meta-review of the F1–F9 disposition substrate
+  itself, asking "do the dispositions create new attack
+  surface or leave under-specifications that would surface
+  at Phase 1 commit-authoring as substrate decisions?" Three
+  additional findings emerged, each targeting an under-
+  specification *introduced by* an F1–F9 disposition rather
+  than a substrate decision Rounds 1–4 settled; none reopens
+  a Round 1–4 disposition; the F1–F9 dispositions remain
+  unchanged. **F11 (per-transaction cancellation safe-point
+  pin; meta-review of F2).** F2's five-checkpoint discipline
+  pinned *that* a per-transaction cancellation check fires
+  but did not pin *where* in the per-transaction body. F11
+  pins the check fires *between* transactions, *after* the
+  prior iteration's `Zeroizing<…>`-wrapped per-output
+  materials have left scope, *before* the next transaction's
+  view-tag / hybrid-decap / key-image derivation begins
+  (forbidding mid-derivation firing that would defeat F2's
+  lock-latency property by exposing partial-derivation
+  state on the unwound stack to memory-disclosure
+  adversaries). C7's `AssertionSink` / coherence-pair test
+  substrate gains a safe-point fixture asserting no partial-
+  derivation state at the observed cancellation point.
+  **F12 (cross-emitter ordering contract-gap; meta-review
+  of F4).** F4's seventh contract pin (per-emitter FIFO
+  preserved; cross-emitter ordering undefined) is enforced
+  procedurally; consumer-actor authors who depend on
+  cross-emitter arrival order produce code that compiles
+  cleanly, passes per-emitter FIFO tests, and silently
+  misbehaves under reordering at audit. F12 closes the gap
+  at the discipline level (V3.0: §5.4.6 amendment binding
+  consumer actors to derive cross-emitter ordering from
+  causal-context fields like `SnapshotId`, `ReservationId`
+  + version, `BlockHeight`) and at the lint level (V3.1+:
+  scope-extending the FOLLOWUPS F5 entry to a unified
+  `diagnostic_consumer_discipline` lint covering both
+  recursive-trust-boundary and cross-emitter-ordering misuse
+  sub-scopes). PR 5 §5.0.3 carries the parallel amendment.
+  **F13 (`SuppressedRateLimit` field-shape pin; meta-review
+  of F6).** F6 added the `SuppressedRateLimit` variant
+  without pinning its field shape; counts, timestamps, and
+  original-event payloads are each attacker-relevant signal
+  (counts are a covert channel back from the producer's
+  internal state; timestamps add scheduling side-channels;
+  payloads defeat the projection-type discipline). F13
+  pins the variant carries `class: SuppressedClass` only,
+  where `SuppressedClass` is a project-defined
+  `#[non_exhaustive]` enum at the same crate-root scope
+  with arms one-per-rate-limited event class; consumer
+  actors derive the suppression count from absence-of-
+  further-events within the attempt boundary. C2's
+  `SuppressedClass` enum addition lifts the flat-crate-root
+  re-export list from eight items to nine. The
+  implementation-branch authorization continues to hold;
+  the meta-review amendment shapes Phase 1's substrate
+  without reopening it or extending its scope. The
+  meta-review pattern itself is recorded as a forward-
+  template under
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  "audits-are-clean-so-compress" anti-pattern framing:
+  clean F1–F9 dispositions invite declaring victory; the
+  discipline asks whether the dispositions themselves
+  carry the property they claim before implementation cuts
+  against them.
+
+  **Post-amendment sub-pins (F11-S, F12-S, F13-S, 2026-05-15).**
+  A third-pass review of the F11–F13 dispositions themselves
+  surfaced three Phase-1-author-aware sub-pins. Each sharpens
+  the corresponding F-finding's disposition without reopening
+  it; none reopens a Round 1–4 substrate decision; none
+  reopens an F1–F9 disposition. The recursive structure
+  (review pass → meta-review → post-amendment) is the
+  closure rule's reopening mechanism operating at each level
+  of the substrate hierarchy. **F13-S
+  (`SuppressedRateLimit` emission-cadence sub-pin; the
+  substantive one).** F13's field-shape pin (carries class
+  only) closed the payload covert channel but left the
+  emission-cadence covert channel open: if the producer
+  emits one notice per suppression-fire, an attacker
+  reconstructs suppression frequency by counting notice
+  arrivals in their own emit-arrival timeline regardless of
+  payload shape. F13-S pins emission cadence at "at most one
+  `SuppressedRateLimit { class }` per class per attempt" —
+  the producer's per-attempt `emit_state` carries a per-class
+  `notice_emitted: bool` latch, cleared at attempt start,
+  never cleared mid-attempt; subsequent in-class budget
+  exceedances drop events but do not emit further notices.
+  Cross-attempt cadence (attacker forcing many attempts via
+  `ConcurrentMutation`-driven retries) is bounded at the
+  orchestrator's existing retry-loop policy layer; no
+  producer-side state survives across attempts (the
+  zeroization scope for `ViewMaterial` and `Scanner`
+  forecloses producer-side cross-attempt state). **F11-S
+  (per-output safe-point escalation criterion).** F11's
+  per-transaction safe-point closes the mid-derivation
+  residency window for typical transactions but may not hold
+  under hostile transactions carrying many outputs (FCMP++
+  permits some upper bound; the §3.1 lock-latency property's
+  content-independence becomes content-dependent if
+  `recover_outputs_in_tx`'s per-output cost grows linearly
+  with output count above the lock-latency target). F11-S
+  pins the escalation criterion: Phase 1 commit-author
+  verifies against benchmarked cost on reference hardware
+  and against the protocol-parameter upper bound on outputs
+  per transaction; if worst-case per-tx scan time exceeds the
+  §3.1 lock-latency target, the safe-point escalates to
+  per-output granularity (check between consecutive per-output
+  decap iterations). The C4 commit message records the
+  measurement and the chosen granularity. **F12-S
+  (`diagnostic_consumer_discipline` lint conceptual
+  unification).** F12's unification is at the contract level
+  (one named discipline, two related properties); the
+  implementation strategy follows each property's nature (F5
+  sub-scope likely as a compile-time trait-bound or `clippy`
+  lint over consumer constructors; F12 sub-scope likely as an
+  AST-level pattern-match over event-handler bodies). F12-S
+  pins the conceptual-not-monolithic clarification in the
+  FOLLOWUPS entry, foreclosing a future "the lint doesn't
+  exist as a single pass" finding from invalidating a
+  multi-check implementation that delivers the unified
+  discipline. The post-amendment pattern compounds the
+  closure-rule discipline (PR 5 §7): each level closes the
+  wargaming surface known at its own closure time;
+  reopening is explicit at the level of the surface that
+  surfaced. The implementation-branch authorization continues
+  to hold; the sub-pins shape Phase 1's substrate without
+  reopening it or extending its scope.
+
+- **Stage 1 PR 4 — Round 4 review pass
+  (adversarial review of post-Round-4 substrate; nine
+  findings dispositioned)**
+  (`feat/stage-1-pr4-round-4-review`, 2026-05-15). Doc-only
+  pre-implementation adversarial review of the post-Round-4
+  substrate before Phase 1 cuts. Two reviewers exercised
+  the diagnostic-stream seam, the encrypted-persistence
+  opt-in language at PR 4 §5.4.8 #1, and the resilience
+  surface from a hostile-daemon perspective; the pass
+  produced **nine actionable findings**, all dispositioned
+  and applied as substrate hardening rather than reopening
+  any Round 1–4 question. Full writeup at PR 4 §5.4.9.
+  Findings cluster across three threat-model surfaces.
+  **Feature-soft-commitment hardening (F1, F7).** F1
+  rewrites the §5.4.8 #1 R17 encrypted-persistence opt-in
+  language from "V3.x evaluates" to a hard rejection at
+  V3.0 with strict conditional reopening criteria (six
+  attack vectors named: crypto code-path expansion,
+  deserialization-on-startup, metadata side-channel,
+  cross-wallet correlation, adversary-controlled DoS,
+  forensic-artifact); F7 adds a parallel new §5.4.8 #6
+  rejecting "encrypted cache for RPC recovery" V3.x
+  candidates at V3.0 under symmetric criteria. PR 5
+  §5.4 R17 carries the F1 hardening symmetrically;
+  the FOLLOWUPS `PersistenceConsumerActor` entry is
+  rewritten as a conditional-reopening bookmark with no
+  version target. **Checkpoint-discipline tightening (F2).**
+  §3.1 wallet-lock-latency property refines from
+  "single-block scan time, typically tens of ms" to
+  "per-transaction scan time, sub-block-bounded; millisecond-
+  scale even under adversarial daemon block crafting"; §7
+  checkpoint discipline extends from four to **five**
+  checkpoints with a per-transaction inner cancellation
+  check inside the per-block scan loop (closing the
+  adversarial-block-crafting / extended-spend-secret-
+  residency vector). **Diagnostic-stream contract
+  pinning (F3, F4, F5, F6, F8, F9).** F3 pins
+  `AssertionSink` / `PanickingSink` as permanent CI
+  regression coverage rather than one-shot landing tests;
+  F4 adds a **seventh contract pin** at §5.4.6
+  (per-emitter FIFO ordering preserved; cross-emitter
+  ordering undefined) — the same pin lands symmetrically
+  in PR 5 §5.0.3; F5 strengthens §5.4.8 #4's
+  aggregator-republisher recursive-leak framing with a
+  V3.x forward-template (per-consumer external-surface
+  audit, projection-or-rejection, future CI-lint
+  enforcement) and gets a new V3.1+ FOLLOWUPS entry
+  (consumer-actor-PR aggregator-republisher CI lint);
+  F6 adds a producer-side per-class emission rate budget
+  to §5.4.8 #5 (per-block ceilings per event class plus a
+  `RefreshDiagnostic::SuppressedRateLimit` variant); F8
+  adds a new §5.4.8 #7 acknowledging emit-timing variance
+  as a microarchitectural side-channel residual with a
+  Phase 1 implementation note for bounded-variance
+  lock-free queues; F9 adds a §6 projection-type audit
+  per event class with explicit V3.0 per-class projections
+  for `TracingDiagnosticSink` and gets a new V3.x
+  FOLLOWUPS entry (diagnostic-stream spec-doc projection-
+  type formalization). The §7.X commit decomposition
+  absorbs the substrate hardening: C2 carries the
+  `SuppressedRateLimit` variant + per-class projections +
+  7th contract pin; C4 carries the per-transaction inner
+  cancellation check + producer-side per-class emission
+  rate budget enforcement; C7 carries `AssertionSink` /
+  `PanickingSink` as permanent CI fixtures. The
+  α-disposition still holds; all Round 1–4 dispositions
+  still hold; the review pass hardens contract pins and
+  attack-surface dispositions without reopening any
+  design question. Implementation-branch authorization
+  (per §6 Round 4 readiness gate) is unchanged;
+  Phase 1 cuts against the hardened substrate. The
+  review-pass shape is recorded as a forward-template
+  artifact under
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  "discovery cadence" framing — substrate hardening ahead
+  of implementation is reusable for PR 5+ pre-implementation
+  substrate review.
+
+- **Stage 1 PR 4 — Round 4 close
+  (commit decomposition + Phase 1 commit list)**
+  (`feat/stage-1-pr4-round-4`, 2026-05-14). Single-commit
+  doc-only Round 4 close on
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  per the PR 1 / PR 2 / PR 3 / PR 5 precedent. §4 Phase 0
+  candidates (0a–0e, with 0d struck) finalize as
+  binding-pinned at the type-signature level; Round 4 audit
+  confirms `DaemonOp` two-variant and `ProtocolErrorKind`
+  five-variant refresh-reachable subset against the producer's
+  actual call sites. §6 review checklist fills in following
+  PR 5's shape (binding-check matrix against
+  `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.3, test-substrate
+  preservation list, call-site sweep audit, Round 4 readiness
+  gate authorizing Phase 1 cut). §7 extends with the Round-4
+  retrospective + a new §7.X Phase 1 commit decomposition
+  subsection — eight load-bearing-ordered commits (C0 doc-only
+  spec amendment + C1 trait declaration + `ViewMaterial` type;
+  C2 `RefreshDiagnostic` + `DiagnosticSink` + Stage 1 sink
+  impls; C3 `RefreshError::InternalInvariantViolation` variant
+  addition; C4 `LocalRefresh` aggregate + producer-body
+  migration; C5 `Engine` parameterization + retry-loop call-site
+  migration + `RpcError` classification; C6 `MockRefresh` test
+  substrate + `replace_refresh`; C7 hybrid retry test +
+  `AssertionSink` / `PanickingSink` property tests; C8 docs +
+  CHANGELOG). §8 closes out the five "Remaining for Round 4"
+  items (each marked Round-4-deliverable or
+  Phase-1-commit-target) and updates the round trajectory
+  banner — all PR-4-internal design rounds are closed.
+  Implementation branch (`feat/stage-1-pr4-refresh-engine`)
+  is authorized to cut off the post-Round-4 dev tip per the
+  §6 Round 4 readiness gate; no further design rounds open
+  unless Phase 1 commit-authoring surfaces a structural
+  finding (the closure rule per
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §7 governs reopening if it does).
+
+- **Stage 1 PR 4 — Round 3 confirmation
+  (α confirmed by PR 5 Round 1's actor-mesh-framed disposition)**
+  (`feat/stage-1-pr4-round-3-confirmation`, 2026-05-14). Single-commit
+  doc-only Round 3 closure on
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md).
+  PR 5 Round 1's disposition under the actor-mesh framing (per
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0 / §5.2 / §5.5) confirmed shape (1) — *snapshot-ID pinning* —
+  with the reservation tracker holding monotone semantics under
+  PR 4's α; PR 4 advances directly to Round 4 (commit decomposition
+  + Phase 1 commit list). The
+  *provisionally-load-bearing* qualifier on Round 1's α
+  (per §5.3 / §5.4.7 R1 / §8) is closed; the re-evaluation gate
+  collapsed without firing. Four housekeeping items land alongside
+  the closure: (1) §3.1 acknowledges the V3.0 *dual spend-material
+  holder* state — `LocalRefresh` / `Scanner` (PR 4 R4 (a),
+  inheritance-asymmetry justification) and `LocalSigner` (PR 5 R11
+  (b), architectural-integrity-now justification), convergent to
+  one holder via R4 (c) in V3.x; (2) §8 / FOLLOWUPS R4 (c) entry
+  cross-references PR 5 R11 (b)'s `Signer` trait substrate as the
+  V3.x migration target — the R4 (c) migration becomes *"`Scanner`
+  stops holding spend material; delegates key-image generation
+  via the existing `Signer` trait"* rather than designing the
+  split from scratch, shrinking the V3.x cost to a producer-side
+  shape change (no architectural change); (3) the
+  `REFRESH_DIAGNOSTIC_STREAM.md` → `DIAGNOSTIC_STREAM.md` rename
+  housekeeping was already covered by PR 5 segment 2g — no PR 4
+  doc references remain to sweep (confirmed by `rg`); (4) §5.4.8
+  #1's drop-on-close-by-default rule is acknowledged as
+  project-wide rather than refresh-specific per PR 5 R17's
+  closure — V3.0 ships drop-on-close across all diagnostic
+  streams; per-stream wallet-internal encrypted-persistence
+  opt-in is a V3.x refinement evaluated at the diagnostic-stream
+  spec doc. The discovery-cadence prediction in
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  ("PR 4 onward's audits are increasingly likely to be
+  confirmations") holds at the Round 1 / Round 3 boundary on the
+  load-bearing question; the Round 2 reframe and PR 5 R11 (b)'s
+  reframe are the two structural-density events that surfaced
+  inside this PR's design rounds.
+
+- **Stage 1 PR 3 — close-out: `STAGE_1_PR_*` design-doc past-tensing
+  + plan-vs-state-divergence rules-queue input sharpening**
+  (`chore/stage-1-pr3-closeout`, 2026-05-12). Three-commit close-out
+  PR consolidating audit findings from PR #40 under the trinary
+  rule-15 reading per
+  [`STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md`](./design/STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md):
+  - **A1 commit (mechanical past-tensing sweep)**: reconciled
+    17-reference enumeration across
+    [`STAGE_0_HARNESS.md`](./design/STAGE_0_HARNESS.md),
+    [`STAGE_1_PR_1_DAEMON_ENGINE.md`](./design/STAGE_1_PR_1_DAEMON_ENGINE.md),
+    and [`STAGE_1_PR_2_LEDGER_ENGINE.md`](./design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+    to 13 in-scope references; `PERFORMANCE_BASELINE.md`'s four
+    references were deferred to the A2 commit which rewrites those
+    sections wholesale. Mode-2 closing-out residue under the trinary
+    rule-15 reading, swept inline rather than deferred.
+  - **B1+B2 + lemma commit (rules-queue input sharpening for V3.1)**:
+    extends `FOLLOWUPS.md` §19 (plan-vs-state-divergence) with the
+    commit-history-level fourth-precedent instance (PR #40's
+    4-vs-6-vs-8 commit divergence between planned logical units,
+    pre-review commit count, and final merged commit count). Extends
+    the rule-15 trinary entry with PR #40's applied-disposition
+    table (eight dispositions across two review-response cycles,
+    classified by mode 1/2/3). Adds a new V3.1 entry — "Rules-queue:
+    encode the pre-flight-FOLLOWUP-scope discipline" — generalizing
+    the recurrence that FOLLOWUP items naming target PRs as
+    resolution points orphan when target pre-flights don't claim
+    them; cites L353-379 KeyEngine slot's M-series-wide skip as
+    precedent.
+  - **A2 commit (KeyEngine bench introduction)**: see the "Added"
+    section above for full detail.
+  - **C1-C3 audit verifications (recorded in PR description)**:
+    `TransferDetails` field removal structurally complete; M3-series
+    naming sweep complete (preserved-as-history or false-positive);
+    `42-serialization-policy.mdc` stale globs closed in M3e. Three
+    clean-as-found invariants from PR #40's audit pass.
+
+- **Stage 1 PR 3 — M3e: documentation realignment to post-M3d
+  architecture** (`feat/stage-1-pr3-m3e`; six commits cut off `dev`
+  post-M3d, landing the four logical units planned at amendment-cycle
+  time per
+  [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  §4: the "preflight + review-response + amendment" logical unit
+  landed across three actual commits — original preflight at
+  `82693bab7`, forward-templates capture at `4b931b1b5`, amendment
+  at `1f9a7ad59` — followed by three substantive commits at
+  `8e6780062` / `582c19caf` / `c61f0d38f`. The plan-vs-state
+  divergence between the four-logical-unit framing and the six-actual-
+  commit landing is recorded inline in §4 of the preflight as an
+  instance of the §19 plan-vs-state-divergence pattern at the commit-
+  history level). Closes the M3-series migration of `TransferDetails`
+  per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3.5 (M3e — documentation realignment-of-the-whole) and
+  [`docs/design/STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+  §6 (Success criteria). The M3-series (M3a–M3e) is complete; the
+  "secrets confined to engine" property activated by M3d is now
+  reflected throughout the design-doc and rules-corpus surfaces.
+
+  - **Design-doc realignment.**
+    [`KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md) carries a
+    post-migration status banner and past-tensed forward-looking
+    framing in §1.1, §1.2, §5.2; open questions in §7 are annotated
+    per-question with `[Closed at M3<X>; see <ref>]` or `[Remains
+    open / Forward-looking record]` while preserving original
+    framing as historical record.
+    [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+    replaces the pre-migration `KeyEngine` trait block with the
+    post-M3 4-method shape (`account_public_address`,
+    `derive_subaddress`, `try_claim_output`, `sign_transaction` per
+    `rust/shekyl-engine-core/src/engine/traits/key.rs:616`),
+    refactors the per-method classification table and retry-safety
+    enumeration, and updates 13 scattered narrative references to
+    `sign_with_spend` → `sign_transaction` while preserving the
+    "Round 2 dispositions" section's original Q9.1/Q9.2/Q9.3
+    framings as historical record.
+    [`MIGRATION_AUDIT.md`](./design/STAGE_1_PR_3_MIGRATION_AUDIT.md)
+    gains a post-M3 status banner clarifying that the audit's
+    commit hashes (`ffcaa62e9` and `e6efaf5b5`) are immutable
+    historical anchors and are not to be refreshed to post-M3d
+    state. The discrepancy between the M3e preflight's D2 count
+    (claimed "0 references to old `KeyEngine` method names outside
+    the trait block") and the actual surface (17 references found)
+    is documented in the commit message; the surface was classified
+    as mode-2 mechanical-residue under the rule-15 trinary reading
+    (per
+    [`STAGE_1_PR_3_M3E_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3E_PREFLIGHT.md)
+    §11.1) and swept inline rather than deferred.
+  - **Rules realignment.**
+    [`.cursor/rules/42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc)
+    underwent a mechanical rename of all 11 stale crate-path
+    references (`shekyl-wallet-state` → `shekyl-engine-state`;
+    `shekyl-wallet-file` → `shekyl-engine-file`) across the `globs`
+    frontmatter, intro paragraph, pairing table, mechanical
+    enforcement subsections, and procedure section. The stale
+    `globs` field previously prevented the rule from auto-applying
+    to any file under the workspace's renamed crate trees; the
+    realignment restores the auto-application surface. Closes the
+    M3d-surfaced rule-realignment FOLLOWUP (relocated to the
+    "Recently resolved (audit trail)" section in
+    [`FOLLOWUPS.md`](./FOLLOWUPS.md)).
+  - **FOLLOWUPS structuring.**
+    [`FOLLOWUPS.md`](./FOLLOWUPS.md) gains a "Queue structure"
+    preamble that splits the queue into V3.0 pre-genesis
+    (load-bearing; per-PR overhead compounds the pre-genesis
+    trajectory) and V3.1+ post-genesis (sustainable backlog)
+    queues. The Stage 2 `KeyEngine`-actor entry is updated to
+    reflect the post-M3 trait surface. Two new V3.1 rules-queue
+    entries are added: "Encode the rule-15 trinary reading in
+    `15-deletion-and-debt.mdc`" (codifying the M3e §11.1
+    calibration shift that distinguishes in-scope mechanical-
+    residue from out-of-scope structural-tangent) and
+    "Consolidate the rules-queue itself into 1–2 PRs" (pinning the
+    consolidation target from M3e §11.3 against the current
+    six-deep rules-queue accumulation).
+  - **Path-rename residue sweep.** The 34-occurrence path-rename
+    residue surfaced by the M3d → M3e D5 audit (path-rename
+    surface across 12 files) was swept inline per the rule-15
+    trinary-reading calibration shift. Per-category disposition:
+
+    - **Active narrative documents updated** (current-state
+      references, no append-only constraint): 8 adversarial test
+      fixture markdown files + their README; 2 crate-internal
+      READMEs (`shekyl-engine-state/fuzz`, `shekyl-scanner`); 3
+      benchmark prose documents (`benchmarks/README.md`,
+      `shekyl_rust_v0.manifest.md`,
+      `wallet2_baseline_v0.manifest.md`); the
+      `V3_WALLET_DECISION_LOG.md` intro paragraph only (dated
+      entries preserved per append-only discipline); and the
+      `WALLET_REWRITE_PLAN.md` current-state architecture
+      descriptions (Mermaid diagrams, inventory section, gap
+      section, locked-design section, code-block comment, narrative
+      paragraphs at §3.2 and Phase 1 audit; PR-0.X sections
+      preserved as historical PR descriptions).
+    - **References preserved as historical anchors** (49
+      occurrences across 6 files):
+      [`CHANGELOG.md`](./CHANGELOG.md) (6 occurrences: rename-event
+      entries plus this M3d entry's historical reference to the
+      pre-realignment rule state, which this M3e entry now closes);
+      [`FOLLOWUPS.md`](./FOLLOWUPS.md) (8 occurrences across
+      historical audit-trail entries plus the new M3e entries that
+      reference the rename event);
+      [`V3_WALLET_DECISION_LOG.md`](./V3_WALLET_DECISION_LOG.md)
+      (16 occurrences across dated decision-log entries protected
+      by the file's append-only discipline);
+      [`WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
+      (6 occurrences inside PR-0.X historical descriptions);
+      [`shekyl_rust_v0.json`](./benchmarks/shekyl_rust_v0.json) (10
+      occurrences; captured baseline pinned to `git_rev` anchor
+      `a2bf417e4b7985ed2097dc5d3fb53affef306d1a`); and
+      [`shekyl_rust_v0.iai.snapshot`](./benchmarks/shekyl_rust_v0.iai.snapshot)
+      (3 occurrences; historical iai-callgrind capture). Refreshing
+      these would falsify their respective historical anchors.
+
+    The trinary-reading calibration anchors the sweep: substrate-
+    change mechanical-residue (the rename was the substrate
+    change; the path references inside active documents are its
+    residue) folds into the closing PR; historical anchors and
+    append-only entries are preserved by construction. The
+    discriminating tests (derivability + boundedness + traceability
+    + surface-during-review) are satisfied by the sweep's
+    discoverability via single `rg` invocation and by surface
+    during the M3e preflight's D5 audit.
+
+### Removed
+
+- **Stage 1 PR 3 — M3d: legacy secret-bearing fields removed from
+  `TransferDetails`** (`feat/stage-1-pr3-m3d`; one pre-flight commit +
+  one pre-flight-review-amendment commit + four implementation
+  commits cut off `dev` post-M3c). Activates the **"secrets confined
+  to engine" property** for the orchestrator/engine boundary per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3.4 (and §3.4.1's M3d landing-notes cross-reference),
+  [`docs/design/STAGE_1_PR_3_M3D_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3D_PREFLIGHT.md)
+  §3.3, and the audit migration table at
+  [`docs/design/STAGE_1_PR_3_MIGRATION_AUDIT.md`](./design/STAGE_1_PR_3_MIGRATION_AUDIT.md)
+  §2.1 row 1 (now marked "Removed at M3d (landed 2026-05-11)").
+
+  - **Schema change:** five `Option<Zeroizing<[u8; N]>>` fields
+    deleted from `shekyl_engine_state::TransferDetails`:
+    `combined_shared_secret` (64 bytes), `ho`, `y`, `z`, `k_amount`
+    (32 bytes each). Corresponding entries in the
+    `TransferDetailsSchema` mirror struct, the `impl Zeroize for
+    TransferDetails` block, and the
+    `rust/shekyl-engine-state/.zeroize-allowlist` schema-mirror
+    entries were removed in the same commit.
+  - **Version bumps (paired per the in-source rule at
+    `rust/shekyl-engine-state/src/wallet_ledger.rs:67`):**
+    `LEDGER_BLOCK_VERSION`: 3 → 4; `WALLET_LEDGER_FORMAT_VERSION`:
+    3 → 4. The `wallet_ledger.rs` docstring is the authoritative
+    in-source statement of the pairing rule ("Each per-block bump
+    implies a `WALLET_LEDGER_FORMAT_VERSION` bump") — the
+    workspace-wide rule `.cursor/rules/42-serialization-policy.mdc`
+    still carries pre-rename `shekyl-wallet-state` /
+    `shekyl-wallet-file` path references (tracked as a focused
+    FOLLOWUP for path-rename realignment). Per the workspace's
+    `15-deletion-and-debt.mdc` "no in-Shekyl migration code" rule,
+    v4 stores refuse v3 loads rather than migrate; pre-genesis
+    users `rm -rf ~/.shekyl` and re-sync.
+  - **Property activated:** orchestrator-side `TransferDetails` no
+    longer carries derived per-output secrets. The engine
+    re-derives them inside its signing-session boundary from
+    `(view_secret, source_ciphertext)` via
+    `LocalKeys::derive_source_secrets_bundle` (per
+    `STAGE_1_PR_3_KEY_ENGINE.md` §7.10–§7.12) and wipes them on
+    drop. Orchestrator memory disclosure no longer exposes
+    output-secret material; capability disclosure is unchanged
+    (per Round 3 §7.10 / §7.11 framing).
+  - **Snapshot regeneration:** the two `.snap` files that
+    transitively serialize `TransferDetails`
+    (`schemas/ledger_block.snap`, `schemas/wallet_ledger.snap`)
+    drift; the three others
+    (`bookkeeping_block.snap`, `tx_meta_block.snap`,
+    `sync_state_block.snap`) are unchanged, confirming
+    pre-flight invariant 8 (snapshot universe verification).
+  - **Production write-site removed:** the five
+    `td.<field> = Some(Zeroizing::new(...))` write lines at
+    `shekyl-scanner/src/ledger_ext.rs::process_scanned_outputs`
+    deleted; the M3b deterministic-handle pathway
+    (`source_ciphertext`, `output_handle` populated by
+    `engine::merge::populate_engine_handle_fields`) is the only
+    write path post-M3d.
+  - **Test/bench fixture rewrites:**
+    `shekyl-engine-state` (`transfer.rs::tests`, `ledger_block.rs::tests`,
+    `ledger_indexes.rs::tests`, `invariants.rs::tests`, four
+    `benches/*.rs`),
+    `shekyl-scanner::balance.rs::tests`, and the engine-core
+    bench fixtures
+    (`benches/common/engine_fixture.rs`,
+    `benches/refresh_snapshot.rs`) updated to the post-M3d shape.
+    Where the prior fixtures populated the five legacy secrets,
+    the replacement populates `source_ciphertext` (via direct
+    `HybridCiphertext` construction) and `output_handle` (via
+    `shekyl_crypto_pq::handle::derive_output_handle`) so
+    `Option`-valued roundtrip / snapshot benches continue
+    exercising non-default payloads representative of post-M3d
+    transfers. The `postcard_roundtrip_with_secrets` test was
+    renamed to `postcard_roundtrip_with_handle_fields`.
+  - **Documentation cleanup (carve-out per
+    `91-documentation-after-plans.mdc`):** the past-tensing edits
+    to `STAGE_1_PR_3_KEY_ENGINE.md` §3.5 ("residue of that direct
+    port" paragraph), `STAGE_1_PR_3_MIGRATION_AUDIT.md` §2.1 row 1
+    (five legacy-field disposition column), and
+    `docs/benchmarks/shekyl_rust_v0.manifest.md` (the two §3
+    paragraphs referencing the five legacy fields) landed in
+    M3d's final docs commit alongside the plan §3.4 amendment.
+    The broader M3e doc sweep remains scope-bounded to whole-doc
+    realignment.
+
+  - **Commit decomposition (five commits, matching pre-flight's
+    planned count but with a different load distribution):** the
+    per-commit-CI-green gate forced consolidation of pre-flight
+    commits 1 + 3 plus the scanner's `from_wallet_output` cleanup
+    into a single cross-crate schema-migration commit (commit 2);
+    a fifth slot was reused for a small bench-fixture-fix commit
+    (commit 4) feature-gating two `shekyl_crypto_pq` imports under
+    `bench-internals` in the engine-core common bench fixture
+    after `cargo clippy --all-targets` surfaced them as unused
+    when included from the default-feature `synced_height` bench
+    pair. See plan §3.4.1 for the forward-template framing
+    (pre-flight wording may strengthen during implementation if
+    the underlying property is preserved).
+
+### Added
+
+- **Stage 1 PR 3 — M3c: additive end-to-end engine-bundle signing
+  test** (`feat/stage-1-pr3-m3c`; one pre-flight commit + two
+  implementation commits + one cross-reference commit cut off `dev`
+  at `ea1df2539`). Lands the validation milestone per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3.3 (with §3.3.1 cross-reference to the implementation
+  disposition) and the pre-flight in
+  [`docs/design/STAGE_1_PR_3_M3C_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3C_PREFLIGHT.md)
+  §2.1 (Option C disposition; §2.1.1 Trim-1 amendment). Property
+  delivery: **complete for the bundle → SpendInput → SignedProofs
+  cryptographic chain at the `tx_builder::sign_transaction`
+  surface** — the precondition M3d depends on for removing the
+  legacy `TransferDetails`-secret-bearing-fields fallback.
+
+  - **New unit test:**
+    `engine_derived_bundle_signs_through_tx_builder_end_to_end`,
+    inline in `rust/shekyl-engine-core/src/engine/local_keys.rs`'s
+    `mod tests` as a peer to M3b D5. Constructs a `LocalKeys` from
+    `TEST_SEED`; for each of 9 fixtures (3 input counts {1, 2, 3}
+    × 3 subaddress indices {`PRIMARY`, `SubaddressIndex::new(1)`,
+    `SubaddressIndex::new(42)`} — `SubaddressIndex` is a flat
+    `u32`, not a `(major, minor)` pair) synthesizes
+    *n_in* outputs paid to `subaddress_keys(idx)` for every idx
+    (including PRIMARY — see the test docstring's
+    relationship-to-M3b-D5 section for why bare primary spend keys
+    cannot recover here); recovers each output via
+    `scan_output_recover` to compose a hand-derived legacy bundle;
+    derives the engine bundle via
+    `LocalKeys::derive_source_secrets_bundle`; asserts engine and
+    legacy `SpendInput`s are byte-identical field-by-field at the
+    input layer (12 fields per input including per-`leaf_chunk`-
+    entry equality); calls `tx_builder::sign_transaction(...)`
+    *once* on the engine path; asserts BP+ deserializes via
+    `Bulletproof::read_plus` and verifies via
+    `Bulletproof::verify` against un-cofactored output commitment
+    points; asserts FCMP++ verifies via
+    `shekyl_fcmp::proof::verify` against engine-derived key
+    images, the proof's pseudo-outputs, the synthetic h_pqc Selene
+    scalars, the synthetic single-leaf-chunk tree root, and the
+    same `signable_tx_hash` passed to the prover; asserts
+    `reference_block` and `tree_depth` echo unchanged.
+  - **Inline cryptographic tree-fixture helpers.** Replicates the
+    recipe from `shekyl-fcmp::proof::tests::prove_verify_roundtrip`
+    inline in `local_keys.rs::tests` (single-leaf chunk; depth = 1;
+    `tree_root = SELENE_HASH_INIT + multiexp_vartime` over Selene
+    generators × leaf scalars; h_pqc derived deterministically via
+    `dalek_ff_group::FieldElement::wide_reduce` for
+    reproducibility; recipient `output_index` offset by `n_in + 100`
+    to avoid the input/output commitment-mask collision that
+    collapses FCMP++'s rerandomization scalar to zero in
+    single-input/single-output sweeps with shared `combined_ss`).
+    Helpers: `build_synthetic_single_chunk_tree_root`,
+    `make_synthetic_h_pqc_bytes`, `make_recipient_output_info`,
+    `compute_test_key_image`. New `[dev-dependencies]` on
+    `shekyl-tx-builder`, `shekyl-fcmp`, `shekyl-bulletproofs`,
+    `shekyl-fcmp-plus-plus`, `shekyl-generators`, `shekyl-io`,
+    `shekyl-primitives`, `multiexp`, `ec-divisors`, `ciphersuite`,
+    `helioselene`, `dalek-ff-group`, `rand_core` per
+    `17-dependency-discipline.mdc`.
+  - **Layered framing.** The test docstring records three layers:
+    Layer 1 — cryptographic chain `bundle → SpendInput →
+    tx_builder::sign_transaction → BP+ verify + FCMP++ verify`
+    (this test's scope); Layer 2 — `KeyEngine::sign_transaction`
+    trait method (PR-5+ scope; today returns
+    `KeyEngineError::SignTransactionTraitSurfaceIncomplete` because
+    `TxToSign`'s `outputs` and `fcmp_plus_plus_context` are
+    PR-5-pinned forward-declared stubs); Layer 3 — orchestrator-
+    engine message envelope / actor mailbox (PR-5+ scope;
+    cryptographic chain in Layer 1 is invariant under that
+    decision). The test docstring also records the relationship to
+    M3b D5 as intentional layered coverage (M3b D5 pins bundle-
+    byte identity without exercising recovery; M3c-via-C pins
+    recovery-correctness which forces the recipient subaddress
+    consistency M3b D5 doesn't enforce — the two pin complementary
+    properties at adjacent layers).
+  - **Trim-1 disposition (post-implementation amendment).** An
+    earlier draft issued a parallel sign call with legacy-derived
+    `SpendInput`s for `commitments` / `enc_amounts` byte-equality
+    at the signer-output layer. Pre-flight review surfaced that
+    `SpendInput` byte-equality at the input layer is strictly
+    stronger (subsumes the original property by signer
+    determinism, and additionally guards regressions in
+    `SpendInput` fields irrelevant to commitments / enc_amounts
+    but relevant to signature behavior or future field additions).
+    Substituting the parallel sign call for input-layer byte-
+    equality + sign-once on the engine path halves the test
+    runtime (32s → 17.65s debug; 12s → 6.87s release). Pre-flight
+    §2.1.1 records the discovery and names it as a forward
+    template: implementation may strengthen pre-flight properties
+    post-implementation; weakening requires explicit revisit. The
+    named coverage gap (workspace sole-coverage of
+    `tx_builder::sign_transaction` end-to-end success goes from
+    2× to 1×) is named-and-accepted given M3d removes the legacy
+    bundle-derivation chain entirely; the engine path is the
+    load-bearing path going forward and the redundant second
+    exercise of the same signer would only have decaying value.
+    Workspace-coverage note: pre-PR-3 this end-to-end success path
+    had **0×** coverage anywhere (`shekyl-tx-builder/src/tests.rs`
+    only validation-error paths; `transfer_e2e[_iai].rs` benches
+    explicitly elide full sign pending a checked-in tree-fixture;
+    `shekyl-fcmp::proof::tests::prove_verify_roundtrip` exercises
+    FCMP++ in isolation only; FFI / engine-rpc are production
+    callers without in-file tests; BP+ fuzz target only fuzzes BP+
+    in isolation). Post-Trim-1 the test is the workspace's sole
+    end-to-end successful-execution coverage of
+    `tx_builder::sign_transaction`.
+  - **Migration plan + FOLLOWUPS updates.**
+    `STAGE_1_PR_3_MIGRATION_PLAN.md` §3.3.1 records the Option C
+    disposition + Trim-1 amendment so a reader of the original
+    §3.3 wording reaches the implementation-side disposition in
+    one hop. `docs/FOLLOWUPS.md`'s M3b-D5 re-location entry is
+    refactored to cover both M3b D5 and M3c-via-C under the same
+    `KeyEngine`-widens-to-`pub` trigger (one re-location PR
+    bundles both tests; the visibility flip is the trigger for
+    both, and bundling them keeps the migration-tail discipline
+    cost bounded).
+
+- **Stage 1 PR 3 — M3b: scanner reroute + bridge source switch**
+  (`feat/stage-1-pr3-m3b`; ten substantive commits + one mechanical
+  rustfmt fix + one docs commit cut off `dev` at `647f82d59` on
+  2026-05-09). Lands the `KeyEngine`-mediated source-secrets
+  derivation path per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3.2 and the pre-flight dispositions in
+  [`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md`](./design/STAGE_1_PR_3_M3B_PREFLIGHT.md)
+  §2 / §3 / §5. Property delivery: **partial** — every output the
+  scanner ingests now carries a deterministic `OutputHandle` and the
+  `HybridCiphertext` it was decapsulated from on its
+  `TransferDetails`; the legacy secret-bearing `TransferDetails`
+  fields remain populated transitionally to keep the bridge-impl
+  fallback live until M3d removes them.
+
+  - **Two-layer derivation primitive split (D1).**
+    `shekyl_crypto_pq::output::recover_combined_ss(view_x25519_sk,
+    ml_kem_dk, kem_ct_x25519, kem_ct_ml_kem) -> Result<SharedSecret,
+    CryptoError>` (Layer 1, transform-shaped, in `shekyl-crypto-pq`)
+    extracts the X25519 + ML-KEM-768 + HKDF-SHA-512 re-decap chain
+    from `scan_output_recover`'s prefix; `LocalKeys::derive_source_secrets_bundle(
+    source_ciphertext, output_index, subaddress_idx) ->
+    Result<SourceSecretsBundle, KeyEngineError>` (Layer 2, state-shaped,
+    in `shekyl-engine-core::engine::local_keys`) composes Layer 1's
+    output with the engine-owned `b` (spend secret) and `m_i`
+    (subaddress derivation scalar). Placement per
+    `18-type-placement.mdc`: transform-shaped lives with its
+    function; state-shaped lives with its owner.
+  - **`TransferDetails` schema extension (D3).** Two `Option<…>`
+    fields — `source_ciphertext: Option<HybridCiphertext>` (the
+    on-chain hybrid X25519 + ML-KEM-768 ciphertext the scanner
+    detected) and `output_handle: Option<OutputHandle>` (the
+    deterministic 16-byte handle from cSHAKE256 keyed by the view
+    secret). `Zeroize` impl skips the new non-secret fields per
+    `35-secure-memory.mdc`'s redaction discipline. Both fields land
+    behind an `Option` so the bridge-impl fallback is feature-detected
+    (presence of `source_ciphertext` ↔ primary path; `None` ↔ legacy
+    field path). `LEDGER_BLOCK_VERSION` and
+    `WALLET_LEDGER_FORMAT_VERSION` bumped 2 → 3; both schema
+    snapshots regenerated. The new fields' wire stability is
+    locked by extending the `postcard` round-trip test;
+    `postcard-schema = "0.2"` added as a direct dep on
+    `shekyl-crypto-pq` per `17-dependency-discipline.mdc` (matches
+    the existing `shekyl-engine-state` direct-dep pin).
+  - **`TxInputSigningContext` field swap (D2).** Drops
+    `source_secrets: SourceSecretsBundle` (the by-value secret
+    carrier that contradicted the engine-confined-secrets property)
+    in favor of `source_ciphertext: HybridCiphertext` +
+    `output_index: u64`. The trait-surface input is now the public
+    on-chain ciphertext; the engine derives the secrets internally
+    via `LocalKeys::derive_source_secrets_bundle`. `Debug` impl
+    simplified; redaction tests updated.
+  - **Engine post-pass at the orchestrator layer (Q2 δ disposition).**
+    `Engine::apply_scan_result` becomes a three-step body inside
+    one `LocalLedger` write guard: `collect_detection_residue`
+    (pre-collects a `HashMap<(tx_hash, internal_output_index),
+    HybridCiphertext>` from the `ScanResult`'s new transfers) →
+    `apply_scan_result_to_state` (the existing sync bookkeeping
+    merge, unchanged) → `populate_engine_handle_fields` (walks the
+    freshly-merged `TransferDetails` and binds each to its
+    `source_ciphertext` + deterministic `output_handle` from the
+    residue map). Atomic against external readers — concurrent
+    reads either see pre-merge or post-population, never an
+    intermediate state. Idempotent. The sync helper is async-ready
+    by design: M3b derives the handle directly via
+    `shekyl_crypto_pq::handle::derive_output_handle` (a synchronous
+    pure function that requires only `(view_secret, tx_hash,
+    output_index)`); M3c+ wires `LocalKeys` onto `Engine` and
+    re-routes the helper through `KeyEngine::try_claim_output`,
+    at which point the helper signature becomes `async fn` and
+    `Engine::apply_scan_result` takes the corresponding `.await`.
+    The two-step trajectory is intentional and pinned in the
+    helper's doc-comment; M3b's architectural property (every
+    output gets a deterministic handle) does not require the
+    audit's "engine sole authority on handles" framing to activate,
+    which lands at M3d.
+  - **Scanner residue plumbing.** `RecoveredWalletOutput` extended
+    with four public on-chain residue fields (`source_ciphertext:
+    HybridCiphertext`, `view_tag: u8`, `enc_amount: [u8; 8]`,
+    `amount_tag: u8`, all `#[zeroize(skip)]` per the type's
+    redaction discipline) so the engine post-pass has the structured
+    input it needs. The pre-flight estimated this commit as "~0–10
+    lines, may be no-op," but inspection revealed
+    `RecoveredWalletOutput` was discarding the on-chain residue at
+    construction time. Reordered to land before the engine post-pass
+    commit so each commit leaves the workspace
+    `cargo check`-green; the layering is honest about producer
+    (scanner) and consumer (engine).
+  - **Named failure mode (D6).**
+    `KeyEngineError::SourceCiphertextDecapsulationFailed(#[from]
+    CryptoError)` for re-decap rejection. The variant carries the
+    inner `CryptoError` so audit logs distinguish whether the
+    rejection was at the X25519 layer (`LowOrderPoint`), the
+    ML-KEM-768 layer (`DecapsulationFailed`), or the input-shape
+    layer (`InvalidKeyMaterial`); all three indicate the same
+    operational class (corrupted or tampered persisted state) but
+    name which step rejected the input. The expected operational
+    case for this variant is **none** — re-decap runs only on
+    outputs the wallet itself scanned and persisted; a failure
+    implies storage corruption or malicious local actor.
+  - **Byte-identical-derivation property test (D5).** Two unit
+    tests in `local_keys.rs::tests`: (a) `derive_source_secrets_bundle_byte_identical_against_legacy_chain`
+    asserts field-by-field byte-equality between the new
+    Layer 2 chain (`derive_source_secrets_bundle`) and a hand-rolled
+    bundle from `scan_output_recover`'s `RecoveredOutput` across 24
+    derivations (8 distinct (output_index, tx_hash) pairs × 3
+    subaddress indices — PRIMARY, idx=1, idx=42); (b)
+    `derive_source_secrets_bundle_diverges_across_distinct_seeds`
+    exercises cross-seed isolation. The second test's docstring
+    pins a subtle property: ML-KEM-768 implements implicit
+    rejection per FIPS 203, so a wrong-wallet decap *succeeds* with
+    a junk bundle (the IND-CCA2 oracle defense); the isolation
+    property is "junk bundle differs byte-for-byte," not "function
+    refuses." Located alongside C6's smoke tests in
+    `local_keys.rs::tests` rather than the pre-flight's planned
+    `tests/byte_identical_derivation.rs` integration test, due to
+    the M3a Round 4a `pub(crate)` lock on `LocalKeys`,
+    `SourceSecretsBundle`, and `KeyEngineError`; tracked for
+    re-location in `docs/FOLLOWUPS.md` § V3.2 if the visibility
+    lock relaxes at the wallet-RPC cutover.
+
+  Property-delivery framing: structural — no consensus rule, no
+  wire format on-chain, no FFI layout changes. The `TransferDetails`
+  schema bumps `WALLET_LEDGER_FORMAT_VERSION` from 2 to 3, which is
+  a wallet-state schema change handled by the pre-V3-launch
+  `rm -rf ~/.shekyl` migration path per `15-deletion-and-debt.mdc`
+  (no in-Shekyl format-detection code; pre-genesis users have no
+  real state to preserve). M3c–M3e land the additive test caller
+  (M3c), the legacy-fallback removal (M3d), and the audit closure
+  (M3e).
+
+- **Stage 1 PR 3 — Phase 0: `AllKeysBlob` zeroize-discipline
+  realignment** (`chore/allkeysblob-zeroize-realignment`; closes
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §3.5 (Phase 0e) and §7.5). Three rule-grounded edits that landed
+  together as a focused chore PR before the M3b implementation, each
+  closing an audit finding cited to a rule with a concrete failure
+  mode prevented:
+
+  - **F1 / `35-secure-memory.mdc:21–22`.** `AllKeysBlob.ml_kem_dk`
+    (the ML-KEM-768 decap secret key, 2400 bytes) was the lone
+    unwrapped secret-bearing array on the struct; wrapped in a new
+    `MlKem768DecapKey` typed newtype in
+    [`rust/shekyl-crypto-pq/src/keys.rs`](../rust/shekyl-crypto-pq/src/keys.rs)
+    that mirrors the established `ViewSecret` / `SpendSecret` shape
+    (`#[repr(transparent)]`, `Clone + Zeroize + ZeroizeOnDrop`, no
+    `Copy`, no `Debug`, `pub(crate)` constructor, public
+    `as_canonical_bytes()` accessor). Sweeps eight in-Rust read sites
+    (`account.rs`'s field/zeroed/rederive/test, `local_keys.rs:344`,
+    `refresh.rs:1283`, `account_ffi.rs:531`); the FFI mirror keeps
+    raw `[u8; ML_KEM_768_DK_LEN]` and the bit-for-bit layout
+    invariant (size, alignment, per-field offsets) is preserved by
+    `#[repr(transparent)]` and asserted directly by
+    `account_ffi::tests::struct_layout_matches`. The producer
+    [`crate::account::ml_kem_keypair_from_d_z`] returns the typed
+    `MlKem768DecapKey` directly (constructed via `from_zeroizing`
+    consuming a `Zeroizing<[u8; N]>` source) — the secret travels
+    through the type system from producer to consumer without any
+    call site materialising an untracked stack `Copy` of the
+    2400-byte buffer between them.
+  - **F2 / `35-secure-memory.mdc:23–25`.** `AllKeysBlob` migrated
+    from a hand-written `Drop` impl (which the design doc itself
+    characterized as "documenting the lie" — the spec asserted
+    `AllKeysBlob: ZeroizeOnDrop` while the trait was not implemented)
+    to `#[derive(Zeroize, ZeroizeOnDrop)]`. With every field now
+    `Zeroize`-bearing (typed wrappers + zeroize-crate blanket impls
+    on `[u8; N]`), the structural condition for the derive holds
+    and the manual impl is replaced wholesale. The derived
+    `Drop::drop` calls `self.zeroize()` once on every field;
+    field-drop-glue then re-invokes each `ZeroizeOnDrop` field's
+    destructor independently — an idempotent double-wipe documented
+    in the struct rust-doc so future `ZeroizeOnDrop`-grep audits do
+    not mistake the pattern for a discipline violation.
+  - **F3 / `KEY_ENGINE.md` §7.5.** `AllKeysBlob: Clone` derive deleted.
+    Workspace audit (`rg 'AllKeysBlob.*\.clone\(\)'` + per-call-site
+    read; `cargo build --workspace --all-targets` is the locking
+    gate that compiles every `#[cfg(test)]` block) surfaced zero
+    callers in production *or* test code; per `30-cryptography.mdc`
+    and `35-secure-memory.mdc:26-28`, `Clone` on a secret-bearing
+    struct requires explicit justification, and none surfaced. The
+    `traits/key.rs:581` doc-comment ("Not Clone — implementors wrap
+    `AllKeysBlob`") becomes literally enforced.
+
+  **`ml_kem_ek` deliberately stays raw `[u8; ML_KEM_768_EK_LEN]`.**
+  Public encap key, broadcast in the address; outside
+  `35-secure-memory.mdc:21–22`'s reach as public material. Wrapping
+  it would be uniformity-driven completionism without rule grounding
+  (per `15-deletion-and-debt.mdc`'s "while we're here is the enemy")
+  and would create a permanent type-system signal collision
+  (`Zeroize` semantics on a public type as a distractor for any
+  future grep-for-secrets audit). Five-reason disposition recorded
+  inline at
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §3.5's "Closed (post-M3a, post-Phase-0)" subsection
+  against re-litigation.
+
+  **Closure-path narrative.** The originally-specified §3.5 sequencing
+  was "Phase 0e lands first, before PR 3 cuts." The actual landing
+  was post-M3a, via this chore. The deviation is **substrate-change**,
+  not extension: §3.5 was specced when `AllKeysBlob` carried raw
+  `[u8; N]` fields (where `derive(ZeroizeOnDrop)` would have been a
+  literal one-line addition). The intervening
+  `chore/allkeysblob-typed-wrappers-monero-sweep` (which closed the
+  inheritance audit's `spend_sk` / `view_sk` secret-flow finding)
+  left `ml_kem_dk` as the residual raw secret-bearing array, which
+  prevented the parent derive from taking. This chore re-anchors
+  §3.5's load-bearing goal (Q9.3 precondition true; `AllKeysBlob:
+  ZeroizeOnDrop` literally implemented) to the post-sweep substrate;
+  the work-shape adapted to the post-sweep state rather than
+  extended from the original 5–10-line plan.
+
+  Property-delivery framing: structural — no consensus rule, no
+  wire format, no FFI layout changes. The deliverable is rule
+  alignment between code and spec on the `AllKeysBlob` zeroize
+  discipline, restoring the precondition that Q9.3 / Phase 0d's
+  cross-reference language now resolves cleanly against. M3b cuts
+  off the post-merge `dev` tip with the precondition true.
+
+- **Single-source-of-truth JSON authority for the consensus-affecting
+  constant subset: `config/consensus_constants.json`.** Mirrors the
+  existing `config/economics_params.json` pattern. The JSON is the
+  authority; `cmake/generate_consensus_constants.py` emits
+  `shekyl/consensus_constants_generated.h` for the C++ build, and
+  `rust/shekyl-engine-core/build.rs` reads the same file and emits
+  a `consensus_constants_generated.rs` module that
+  `rust/shekyl-engine-core/src/multisig/v31/intent.rs` consumes via
+  `include!()`. Closes the C++/Rust drift class for the constants
+  where drift causes silent wrong-output (vs. fail-closed-on-load).
+
+  Constants in scope (per `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`):
+
+  - `FCMP_REFERENCE_BLOCK_MIN_AGE = 5` — reorg-safety margin locked
+    by Decision 14. Pre-fix, hand-defined as `5` in
+    `src/cryptonote_config.h` and as `10` in
+    `rust/shekyl-engine-core/src/multisig/v31/intent.rs`. The
+    drift was Bug 3 of the audit and silently rejected legitimate
+    multisig intents at the wallet layer.
+  - `FCMP_REFERENCE_BLOCK_MAX_AGE = 100` — same shape, no observed
+    drift but in the same value class and migrated together.
+  - `RCT_TYPE_FCMP_PLUS_PLUS_PQC = 7` — single-source on each side
+    today (`enum RCTType` in C++; `ProofType::FcmpPlusPlusPqc => 7`
+    in `shekyl-oxide`); both sides now stamped against the JSON via
+    `static_assert` (C++ in `src/fcmp/rctTypes.cpp`) and a runtime
+    test (Rust, in `intent.rs::tests::shekyl_oxide_proof_type_matches_consensus_authority`).
+
+  **Sentinel discipline:** every consumption site that previously
+  hand-defined a value now carries either a `static_assert` (C++) or
+  a `const _: () = assert!(...)` (Rust) sentinel pinning the value
+  to a Decision-14-era baseline. Bumping the sentinel requires
+  updating both the JSON and the consumption-site comment, so a
+  silent value drift through the JSON alone fails the build with a
+  clear message.
+
+  **Fixture update:** `intent.rs::tests::validate_temporal_rejects_ref_block_too_fresh`
+  changed from `tip = 905` (age = 5, the boundary value `age < 5`
+  evaluates false under the post-fix `MIN_AGE = 5`) to `tip = 903`
+  (age = 3, unambiguously rejected). The test exercises the
+  rejection branch (`age < MIN_AGE`) and stays correct as long as
+  `MIN_AGE > 3` — i.e. it survives any tightening (`MIN_AGE`
+  increasing above 5) and any loosening down to and including
+  `MIN_AGE = 4`. Only a loosening to `MIN_AGE = 3` or lower would
+  invalidate the fixture, which itself would warrant the consensus
+  re-review the sentinel demands.
+
+  **Out of scope:** `ADDRESS_VERSION_V1` is single-source in Rust
+  with no C++ duplicate, so there's nothing to align. The
+  full-migration follow-up for the remaining `SHEKYL_*` fail-closed-
+  on-misuse constants (~40) stays as FOLLOWUPS V3.0.
+
+### Documentation
+
+- **Stage 1 PR 5 — address PR #43 Copilot review findings,
+  Round 2 (post-Round-2-close follow-up cycle).** Doc-only
+  commit on `feat/stage-1-pr5-pending-tx-engine-design`.
+  Addresses nine additional Copilot review findings surfaced
+  against the Round-2-close-out commit (`b85edec9a`), the
+  first Copilot-fix commit (`871efa40c`), and the Round-1
+  CHANGELOG entries. The fixes consolidate hash-primitive
+  dependency-discipline correctness, cryptographic-security-
+  rationale framing, sink-binding shape alignment across
+  segments, variant-name alignment in V3.x FOLLOWUPS entries,
+  and architectural soundness of the V3.x `TimeoutResolverActor`
+  correlation contract.
+  - **Findings A + E + H — `SnapshotId` hash primitive
+    correction (covers three Copilot comments on §4
+    Phase 0b, §5.4 R2 sketch, CHANGELOG segment-2g entry,
+    §5.5 Round 2 summary, and the doc header).**
+    Segment-2g's prior binding pinned `SnapshotId` to
+    SHA-256 via `sha2 = "0.10"`, citing
+    `rust/shekyl-engine-core/Cargo.toml` line 115 as the
+    workspace-state-reuse anchor. That citation was a
+    dependency-discipline error:
+    [`Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+    line 115 is in `[dev-dependencies]` (test-only), and
+    the production `sha2` at line 33 is `optional = true`
+    (gated behind a feature flag). The Copilot-fix
+    follow-up switches the primitive to
+    `shekyl-crypto-hash::cn_fast_hash` (Keccak-256, original
+    padding) — `shekyl-crypto-hash` is an unconditional
+    `[dependencies]` entry per Cargo.toml line 28, the
+    consensus-audited Keccak primitive Shekyl already uses
+    throughout its codebase. Strictly better disposition
+    against the
+    [`17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc)
+    workspace-state reuse rule against the actual
+    production-dependency graph. The §5.4 R2 sketch also
+    still showed a prior `blake3::hash` form from
+    segment-2d's open-shape-not-primitive disposition; the
+    sketch is updated to the binding `cn_fast_hash` form.
+
+    The security rationale is also reframed. Segment-2g's
+    prior framing was "128-bit collision resistance gives
+    ~2⁶⁴ classical work and ~2³² quantum work via Grover-
+    doubled width." Two errors: (i) Grover's algorithm
+    gives 2^(n/2) work against **preimage** attacks, not
+    collision attacks — quantum collision is governed by
+    BHT (Brassard–Høyer–Tapp), ~2^(n/3) ≈ 2⁴³ for 128-bit
+    outputs; (ii) the use-case framing is incorrect —
+    `SnapshotId` is a wallet-internal equality token over
+    a bounded snapshot population, not a collision-
+    resistance primitive against arbitrary inputs.
+
+    Corrected framing: **second-preimage resistance over
+    bounded snapshot population**. The wallet observes
+    ≪ 2⁴⁰ snapshots over its operational lifetime
+    (≤ ~10⁷ snapshots over 100 years; one snapshot per
+    refresh merge). Classical second-preimage on 128-bit
+    truncated hash is ~2¹²⁸ work; quantum Grover second-
+    preimage is ~2⁶⁴ work — large but bounded under
+    aggressive quantum-adversary assumptions. The impact
+    bound under successful attack is also constrained: a
+    daemon-forged colliding `LedgerSnapshot` merely makes
+    the wallet submit a tx valid against the prior
+    snapshot; the daemon could have rejected the tx anyway
+    via `DoubleSpend` if the prior snapshot's outputs are
+    now spent on-chain. No consensus violation; no wallet-
+    state corruption that refresh cannot reconcile. The
+    versioned domain-separation prefix
+    (`b"shekyl-snapshot-id-v1"`) permits V3.x migration to
+    a wider output or different hash family without cross-
+    stage rebuild.
+
+    Sites updated: `docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`
+    §4 Phase 0b binding, §5.4 R2 sketch + prose, §5.5
+    Round 2 summary, §6 review-checklist `SnapshotId` item,
+    and the header status block; this CHANGELOG segment-2g
+    entry with a Copilot-fix forward-pointer.
+  - **Finding B — §5.4 R2 cross-reference to rejected option
+    (b).** §5.4 R2 prose referenced
+    `DIAGNOSTIC_STREAM_CONTRACTS.md` (the parent-doc
+    factoring option (b) considered in §5.0.3), but
+    segment 2g's diagnostic-stream-doc generalization
+    closed as **option (a) — rename
+    `REFRESH_DIAGNOSTIC_STREAM.md` →
+    `DIAGNOSTIC_STREAM.md`**. The cross-reference is
+    updated to the chosen doc name with the closure
+    rationale.
+  - **Finding F — `&dyn DiagnosticSink` vs
+    `Arc<dyn DiagnosticSink>` inconsistency.** §5.0.2.1
+    (the segment-2f sink-binding-closure section) used the
+    earlier `&dyn DiagnosticSink` form when the closure
+    section itself pins `Arc<dyn DiagnosticSink>`; this is
+    corrected for self-consistency. The Round-1-close
+    CHANGELOG entry's `&dyn DiagnosticSink` description
+    receives a forward-pointer noting that segment 2f
+    tightened the form to `Arc<dyn>` for reference-shape
+    ergonomics during R11 closure (the earlier wording
+    remains historically accurate at Round 1 close).
+  - **Findings C + D — V3.x FOLLOWUPS
+    `SubmitFailureAnalyzer` variant-name alignment.** The
+    `SubmitFailureAnalyzer` FOLLOWUPS entry referenced
+    `SnapshotInvalidated` in two places and
+    `SubmitFailed { kind: Timeout }` in one place; the
+    binding variant names per segment 2f / Phase 0a /
+    Phase 0f are `SubmitSnapshotInvalidated` and
+    `SubmitFailed { kind: DaemonTimeout | DaemonUnavailable }`
+    respectively. All three sites updated; the timeout
+    bullet is also expanded to cover both ambiguous-failure
+    variants per segment-2f's daemon-side authority
+    disposition (both carry the same operational signal for
+    pattern-detection purposes).
+  - **Finding G — `TimeoutResolverActor` chain-observation
+    correlation contract architectural mismatch.** The
+    `TimeoutResolverActor` FOLLOWUPS entry described
+    subscribing to `LedgerDiagnostic::SnapshotMerged` to
+    observe whether the timed-out `tx_hash` landed on
+    chain — but `SnapshotMerged` is pinned by Phase 0g as
+    `{ new: SnapshotId, prior: SnapshotId, height:
+    BlockHeight }` and carries no `tx_hash` field, so the
+    actor cannot implement the correlation from the stated
+    event stream. The §5.4 R9 disposition prose carried the
+    same mismatch. Disposition: soften both prose surfaces
+    to defer the chain-observation mechanism to the V3.x
+    consumer-actor PR's own design — the actor needs
+    either (i) an additive `LedgerDiagnostic` variant
+    carrying tx-confirmation payloads, or (ii) an additive
+    `LedgerEngine` chain-query accessor, or (iii) both
+    (event-driven for low-latency notification, polling
+    for restart-amnesia catch-up). Pinning the mechanism
+    in PR 5 would overspecify a V3.x consumer-actor that
+    doesn't ship in V3.0; the `LedgerEngine` and
+    `LedgerDiagnostic` surfaces have their own additive-
+    extension discipline that the consumer-actor PR
+    composes against. Wallet-correctness is preserved by
+    R8's `ReservationTTLActor` safety net regardless of
+    when `TimeoutResolverActor` lands.
+  - **Finding I — PR #43 title + description scope
+    correction.** The PR title and body still framed PR
+    #43 as a Round-1-only doc-only PR with three commits,
+    but the branch now contains all seven Round 2 segments
+    (segments 2a–2g) plus two Copilot-review follow-up
+    commits. PR metadata updated to reflect the actual
+    Round 1 + Round 2 closed scope, with the seven-segment
+    summary and Phase 0 binding enumeration mirroring the
+    design doc's §5.5 closure. The earlier "Round 1 only,
+    Round 2 out of scope" wording is replaced.
+
+  **Markdownlint baseline parity confirmed** after edits
+  (no new violations introduced). Round 2 remains closed;
+  Round 3 (commit decomposition + Phase 1 commit list) is
+  the next forward step pending user authorization.
+
+- **Stage 1 PR 5 — address PR #43 Copilot review findings
+  (Round 2 close-out follow-up).** Doc-only commit on
+  `feat/stage-1-pr5-pending-tx-engine-design`. Addresses three
+  Copilot review findings surfaced against the Round 2
+  segments and segment 2g close-out:
+  - **Finding 1 — §3.3 pre-flight checklist staleness
+    (raised against b85edec9a, line 609 of design doc;
+    re-raised on the same line).** The pre-flight checklist at
+    §3.3 still marked R1 disposition / Phase 0 spec
+    amendments / PR 4 Round 3 input bundle as pending, even
+    though Round 1 closed those items (R1 in §5.5; Phase 0 in
+    segment 2g §4; PR 4 Round 3 bundle as confirmation per
+    §5.2 + §6). **Fix**: marked R1 / Phase 0 / PR 4 Round 3
+    items as `[x]` with cross-references to the closure
+    sections; Phase 1 commit decomposition remains `[ ]`
+    pending Round 3.
+  - **Finding 2 — R8 `ReservationTTLActor` subscription
+    contract incomplete (raised against 2f177a0c3, line
+    987 of design doc).** Segment 2e's R8 closure named only
+    `PendingTxDiagnostic::BuildSucceeded` as the actor's
+    subscription, with no terminal events. This would leak
+    closed reservations into the actor's in-memory
+    age-tracking map indefinitely, producing stale
+    `ReservationOutstanding` warnings on already-terminated
+    reservations and spurious `AutoDiscardMessage` round-trips
+    to `PendingTxActor`. **Fix**: §5.4 R8 prose expanded with
+    a full subscription contract section pinning
+    `BuildSucceeded` (insert), `SubmitSucceeded` (remove —
+    terminal success), and `Discarded` (remove regardless of
+    `reason` — covers all four `DiscardReason` variants
+    including the segment-2f `DaemonRejectedTerminal` and
+    the segment-2e `TTLAutoDiscard` self-cleanup). Explicit
+    "what `SubmitFailed` does *not* close" note per
+    segment-2f R9's two-stage submit-flow + Finding-2
+    daemon-side authority disposition: `SubmitFailed` on
+    `DaemonTimeout` / `DaemonUnavailable` keeps the
+    reservation in `SubmitPendingDaemonAck` and the actor
+    keeps tracking. Memory-bound property pinned:
+    actor's map size is bounded by
+    `PendingTxActor::outstanding()`, not by cumulative
+    reservation count.
+  - **Finding 3 — FOLLOWUPS `ReservationTTLActor` entry has
+    the same subscription gap (raised against 2f177a0c3,
+    FOLLOWUPS line 3029).** Identical finding to Finding 2,
+    in the FOLLOWUPS entry rather than the design doc.
+    **Fix**: same subscription-contract expansion applied to
+    the FOLLOWUPS entry; cross-reference to the design-doc
+    §5.4 R8 closure preserved.
+  - **Finding 4 — CHANGELOG Round 1 close entry residuals
+    count predates R12 (raised against b85edec9a, CHANGELOG
+    line 1449).** The Round 1 close entry says "four carry to
+    Round 2; one new (R11)"; R12 was added in a subsequent
+    Round 1 follow-up commit (the immediately-following
+    CHANGELOG entry). **Fix**: added a parenthetical
+    forward-pointer to the Round 1 close entry noting R12's
+    addition in the follow-up; preserves the entry's
+    historical accuracy at commit time while resolving the
+    in-isolation reader's apparent inconsistency. The
+    follow-up entry's existing R12 documentation is
+    unchanged.
+
+  No segment-2g substrate is revised; all four fixes are
+  contract-clarification / status-update edits. Round 3
+  readiness gate per segment 2g §8 fenceposts is unaffected.
+  Updates docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md (§3.3
+  checklist; §5.4 R8 subscription-contract subsection);
+  docs/FOLLOWUPS.md (`ReservationTTLActor` entry subscription-
+  contract subsection); docs/CHANGELOG.md (this entry +
+  forward-pointer note on the Round 1 close entry). No code
+  changes; no test impact.
+
+- **Stage 1 PR 5 — Round 2 segment 2g (Round 2 close-out:
+  §4 Phase 0 binding-form enumeration; `SnapshotId` hash
+  primitive pin; §5.0.3 diagnostic-stream-doc generalization
+  closure; §6 review checklist filled).** Doc-only commit on
+  `feat/stage-1-pr5-pending-tx-engine-design`. Segment 2g
+  closes Round 2 — the final segment that pins all Phase 0
+  binding-form type-signature detail, fills the review
+  checklist, and finalizes the diagnostic-stream-doc
+  generalization disposition. Round 3 (commit decomposition +
+  Phase 1 commit list) is the next forward step. **§4 Phase 0
+  binding-form enumeration finalized**: Phase 0a
+  (`SubmitError` and `SubmitErrorKind` enums per segment 2f);
+  Phase 0b
+  (`SnapshotId` opaque type with binding hash primitive — see
+  below); Phase 0c (REMOVED at the trait surface per segment
+  2d's R12 (a) closure); Phase 0d (`Reservation` struct shape
+  with `extensions: Vec<ReservationExtension>` per segment 2b
+  R14); Phase 0e (reservation-lifecycle prose with R5 / R9
+  segment-2f / R10 closure cross-references); Phase 0f
+  (`PendingTxDiagnostic` enum + constructor-bound
+  `DiagnosticSink` per segment-2f §5.0.2.1); Phase 0g
+  (`LedgerDiagnostic::SnapshotMerged` deferred to consumer-PR
+  per segment-2g introduction-PR disposition — avoids
+  speculative-introduction-without-consumer violation of the
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  no-live-caller rule); **four new Phase 0 candidates** from
+  segment-2b / segment-2c residual closures: Phase 0h
+  (`Signer` trait surface per R11 (b) segment-2b closure);
+  Phase 0i (`OutputSelector` trait surface per R13 segment-2c
+  closure); Phase 0j (`FeeEstimator` trait surface +
+  `FeePriority` enum per R16 segment-2c closure with
+  segment-2d V3.0-lift evaluation); Phase 0k
+  (`SubmissionStrategyActor` topology slot per R15 segment-2c
+  closure — V3.x introduction; no V3.0 trait amendment).
+  **`SnapshotId` hash primitive pinned** as Keccak-256 via
+  `shekyl-crypto-hash::cn_fast_hash` (original padding,
+  consensus-audited) truncated to the first 128 bits with
+  versioned domain-separation prefix
+  (`b"shekyl-snapshot-id-v1"`). *(Forward-pointer: the
+  Copilot-fix follow-up entry below revised this binding from
+  segment-2g's prior `sha2`-based form to the Keccak-based
+  form. The prior `sha2` citation referenced
+  `rust/shekyl-engine-core/Cargo.toml` line 115, which is in
+  `[dev-dependencies]` and therefore unavailable to production
+  code; the production `sha2` at line 33 is `optional = true`.
+  `shekyl-crypto-hash` is the consensus-audited Keccak
+  primitive already unconditional in `shekyl-engine-core`
+  production deps at line 28 — the strictly better
+  dependency-discipline disposition.)* Selection rationale
+  (revised form): `shekyl-crypto-hash` is an unconditional
+  `[dependencies]` entry per
+  [`17-dependency-discipline.mdc`](../.cursor/rules/17-dependency-discipline.mdc)
+  workspace-state reuse rule against the actual
+  production-dependency graph; security framing reset from
+  collision-resistance / Grover-doubled-width (technically
+  incorrect — Grover applies to preimage, not collision;
+  quantum collision is governed by BHT, ~2⁴³ for 128 bits)
+  to **second-preimage resistance over bounded snapshot
+  population** (wallet observes ≪ 2⁴⁰ snapshots over its
+  operational lifetime; classical second-preimage ~2¹²⁸
+  work; quantum Grover second-preimage ~2⁶⁴ work; impact
+  bound by adversary-controlled-daemon design-center per
+  §5.3); versioned prefix permits V3.x migration to a wider
+  output or different hash family without cross-stage
+  rebuild because `SnapshotId` is a wallet-internal token
+  that does not cross the wire. **§5.0.3 diagnostic-stream-doc generalization
+  closure**: option (a) — rename
+  `REFRESH_DIAGNOSTIC_STREAM.md` → `DIAGNOSTIC_STREAM.md`
+  (general). Existing FOLLOWUPS entry amended with rename
+  rationale (shared contracts modest in volume relative to
+  per-stream taxonomies; single doc with shared-then-per-
+  stream structure lower cross-reference cost than
+  parent-and-children factoring) and doc-structure
+  prescription for V3.x introduction PR (shared contracts at
+  top; per-stream sections for `RefreshDiagnostic` /
+  `PendingTxDiagnostic` + `DiscardReason` / `LedgerDiagnostic`
+  pending the consumer-actor PR). Option (b) — parent
+  `DIAGNOSTIC_STREAM_CONTRACTS.md` factoring — preserved as
+  retroactively-applicable if growth justifies. **§6 review
+  checklist filled**: binding-check matrix against the §2.4
+  spec (trait surface methods unchanged; engine-type
+  parameter additions `S: Signer`, `O: OutputSelector`,
+  `F: FeeEstimator`); test-substrate preservation list
+  (`AssertionSink` / `PanickingSink` property-test
+  infrastructure inherited from PR 4 pattern; per-error-class
+  R9 coverage; Finding-2 daemon-side authority coverage);
+  call-site sweep audit enumeration (Phase 1 confirms every
+  diagnostic-event emission site); PR 4 Round 3 input bundle
+  resolved as confirmation per §5.2. **Round 3 readiness
+  gate**: all §4 Phase 0 candidates binding-pinned; §6
+  filled; FOLLOWUPS amended for the segment-2g rename;
+  Round 3 ready to proceed. Updates §4 Phase 0 enumeration
+  (full rewrite with binding-form signatures for all
+  candidates 0a–0k); §5.0.3 generalization-question section
+  (closes as (a) rename); §5.5 "What Round 2 carried"
+  inventory (seven-segment summary; Round 2 final form);
+  §6 review checklist (filled with all sub-checklists);
+  §8 fenceposts (segment 2g moves to "Round 2 — completed";
+  Round 3 named as next forward step); header status
+  (Round 2 closed); CHANGELOG; FOLLOWUPS. No code changes;
+  no test impact.
+- **Stage 1 PR 5 — Round 2 segment 2f (R9 two-stage submit-flow
+  closure with daemon-side authority for Finding 2 ambiguous
+  outcomes; `SubmitError` + `SubmitErrorKind` enum pins;
+  sink-binding constructor-bound closure for Finding 4).**
+  Doc-only commit on `feat/stage-1-pr5-pending-tx-engine-design`.
+  Segment 2f closes the last residual on the load-bearing
+  submit path and the constructor-vs-per-method sink-binding
+  question, leaving only Round 2 close-out work for segment 2g.
+  **R9 closure** pins the two-stage submit flow with explicit
+  internal `ReservationState` machine (`Active |
+  SubmitPendingDaemonAck | Resolved`); trait surface unchanged
+  (`outstanding()` counts `Active + SubmitPendingDaemonAck`).
+  Self-continuation message pattern pinned: `PendingTxActor`
+  defers reply until `SubmitCompleted` self-message arrives,
+  preserving mailbox throughput. Per-error-class disposition
+  table pins state-transition + diagnostic-event-sequence +
+  trait-return tuples for `Accepted` / `AlreadyInMempool` /
+  `DoubleSpend` / `FeeTooLow` / `Malformed` / `Timeout` /
+  `NetworkError`. **Finding 2 closes as (B) — daemon-side
+  authority**: on `Timeout` or `DaemonUnavailable`, reservation
+  stays in `SubmitPendingDaemonAck`; consumer-explicit
+  `discard(id, ConsumerExplicit)` is the resolution path; R8's
+  `ReservationTTLActor` (per-state TTL with shorter TTL on
+  `SubmitPendingDaemonAck`) is the safety net for forgotten
+  resolutions. (A) actor-state authority rejected because the
+  phantom-spent-output window violates the monotonicity
+  property the tracker delivers per §3.4.5 (the same "consumer
+  checking does work the trait should be doing structurally"
+  anti-pattern PR 4 named). **`SubmitError` + `SubmitErrorKind`
+  enums** pinned in §5.0.2 (both `#[non_exhaustive]`):
+  `SubmitError = SnapshotInvalidated{..} | DaemonRejected{kind:
+  SubmitErrorKind}`; `SubmitErrorKind = DoubleSpend | FeeTooLow
+  | Malformed | DaemonTimeout | DaemonUnavailable`. **R5 ↔ R8
+  ↔ R9 coherence verified** — reactive cleanup
+  (`SnapshotRotationAutoDiscard`), proactive cleanup
+  (`TTLAutoDiscard`), and daemon-authority cleanup
+  (`DaemonRejectedTerminal`) share the
+  `DiscardReason`/`Discarded` event infrastructure. **No new
+  `PendingTxDiagnostic` variants needed** (existing variant set
+  sufficient for R9 state machine); **no new trait surface
+  methods needed** (`discard(id, ConsumerExplicit)` is
+  sufficient for consumer-explicit resolution of Finding-2
+  ambiguity; `resolve_pending(id, chain_observation)` preserved
+  as a V3.x ergonomic-API candidate). **Sink-binding closure
+  (Finding 4)**: new §5.0.2.1 pins `LocalPendingTx::new(...,
+  sink: Arc<dyn DiagnosticSink>, ...)` as constructor-bound
+  under PR 4 §3.4.5 / R4 (a) consistency. R11's segment-2b
+  closure as (b) made the sink-binding question independent of
+  spend-material disposition; the two close separately.
+  Rationale: engine-identity coupling (1-to-1 mapping load-
+  bearing at the type level); Stage 4 actor wiring alignment
+  (spawn-time DI); call-site cleanliness; runtime-swap surface
+  preserved via sink-side indirection; no load-bearing reason
+  for per-method override in production engines. Existing
+  `SubmitFailureAnalyzer` FOLLOWUPS entry amended with
+  segment-2f closure status; new `TimeoutResolverActor`
+  FOLLOWUPS entry added naming the V3.x ergonomic-complement
+  surface for Finding 2's daemon-side authority disposition.
+  Updates §5.0.2 (`SubmitError` + `SubmitErrorKind` enum
+  sketches); new §5.0.2.1 (sink-binding closure rationale);
+  §5.4 R9 (closure prose with state-transition table); §5.5
+  "What Round 2 carries" inventory; §8 fenceposts (segment 2f
+  moves to "Round 2 — completed"); header status; CHANGELOG;
+  FOLLOWUPS. No code changes; no test impact.
+- **Stage 1 PR 5 — Round 2 segment 2e (R8 `ReservationTTLActor`
+  composition closure; `DiscardReason::TTLAutoDiscard` variant
+  pin).** Doc-only commit on
+  `feat/stage-1-pr5-pending-tx-engine-design`. Segment 2e closes
+  R8 (reservation TTL / leak prevention) by pinning all V3.0
+  deliverables explicitly so V3.x's `ReservationTTLActor`
+  introduction is additive-only — no V3.x trait revision, no
+  V3.x enum revision, no V3.x consumer-side breaking change per
+  the
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  continuous-discipline corollary. The Round 1 reframe already
+  named `ReservationTTLActor` as the consumer-actor composition
+  shape (same pattern as PR 4's `PeerReputationActor` /
+  `RecoveryActor`); segment 2e pins the V3.0 deliverables: (1)
+  `PendingTxDiagnostic::BuildSucceeded` emitted at the
+  `build`-success path in `LocalPendingTx::build` /
+  `PendingTxActor::handle_build` (Phase 1 call-site review
+  confirms); (2) `PendingTxDiagnostic::Discarded { reason:
+  SnapshotRotationAutoDiscard }` emitted at `submit`'s
+  snapshot-mismatch path (R5's lazy-discard semantics); (3)
+  `PendingTxDiagnostic::ReservationOutstanding` variant exists
+  in the `#[non_exhaustive]` enum (no V3.0 emitter; V3.x
+  `ReservationTTLActor` is the first emitter); (4) **new in
+  segment 2e:** `DiscardReason::TTLAutoDiscard` variant added
+  to the `#[non_exhaustive] DiscardReason` set so V3.x's
+  `ReservationTTLActor` can trigger `PendingTxActor` to emit
+  `Discarded { reason: TTLAutoDiscard }` events without a V3.x
+  enum revision. **R5 ↔ R8 coherence verified** — R5's
+  `SnapshotRotationAutoDiscard` is the reactive cleanup path
+  (cleanup-on-use); R8's `TTLAutoDiscard` is the proactive
+  complement (age-based policy on never-used reservations);
+  both share the `DiscardReason`/`Discarded` event
+  infrastructure. **Hard mitigation pins inherited verbatim
+  from PR 4 §5.4.8** (restart-amnesia per #1; recursive trust
+  boundary per #4; bounded mailbox per #5) bind on the V3.x
+  consumer-actor PR via §5.0.3 — no PR 5 amendments needed.
+  Existing `ReservationTTLActor` FOLLOWUPS entry amended with
+  segment-2e closure-status confirmation and the new
+  `DiscardReason::TTLAutoDiscard` variant pin; no new
+  FOLLOWUPS entry needed. The R1 disposition still holds;
+  segment 2e is residual-closure work that finalizes R8's
+  disposition for design purposes. Updates §5.0.2 `DiscardReason`
+  enum sketch (adds `TTLAutoDiscard` variant); §5.4 R8 (closure
+  prose); §5.5 "What Round 2 carries" inventory; §8 fenceposts;
+  header status; CHANGELOG; FOLLOWUPS. No code changes; no test
+  impact.
+- **Stage 1 PR 5 — Round 2 segment 2d (R2 + R12 co-disposition;
+  Phase 0c truly collapses; `SnapshotId` opacity closed as
+  16-byte content-addressed digest).** Doc-only commit on
+  `feat/stage-1-pr5-pending-tx-engine-design`. Segment 2d
+  closes the two remaining `SnapshotId`-adjacent residuals
+  against the actual shape of the `LedgerSnapshot` substrate
+  landed in PR 2. **R12 closes as (a)** — content-derived
+  `SnapshotId` from existing `LedgerSnapshot` data; substrate
+  inspection confirmed `LedgerSnapshot` carries
+  `synced_height: u64` + `reorg_blocks: ReorgBlocks`
+  (deterministic by construction; sufficient for content-
+  addressed derivation). Stage 1's `LocalPendingTx` derives
+  `SnapshotId` from `LedgerEngine::snapshot()` (existing trait
+  method); Stage 4's `PendingTxActor` receives identical
+  values via `LedgerDiagnostic::SnapshotMerged` events using
+  the same digest function. No `LedgerEngine` trait amendment;
+  Phase 0c truly collapses. **R2 closes as opaque 16-byte
+  content-addressed digest** (`pub struct SnapshotId([u8;
+  16])`); domain-separated hash over `LedgerSnapshot`'s
+  deterministic fields; specific hash primitive pinned at
+  Phase 0 review (segment 2g) per §3.1 PQC-discipline
+  alignment. Determinism required by §5.0's submit-handler
+  field-comparison contract; height-leak side-channel closed
+  by construction. **§5.5 ground-1 prose softening** — drop
+  "(pending R12)" qualifier; ground 1 is now closure-confirmed
+  alongside grounds 2 and 3. **§4 Phase 0c prose softening**
+  — drop "(pending R12)" qualifier; Phase 0c is REMOVED at the
+  trait surface, full stop. **Projection-type discipline
+  preserved-as-pattern** — no V3.0 PR 5 call-site introduces a
+  cross-trust-boundary `SnapshotId` or `SnapshotMerged`
+  consumer; the projection-type implementation lands in the
+  V3.x consumer-actor PR per PR 4 §5.4.8 #4's recursive-
+  trust-boundary discipline. **R16 conditional V3.0 lift
+  evaluation** (segment-2c trigger): `LedgerBlock` carries no
+  per-block fee data today; lifting R16 (c) to V3.0 would
+  require either a storage-layout amendment (persistence-
+  layer migration) or an unbounded historical-block walk per
+  estimator call — neither is bounded cost; **R16 (c) does
+  not lift to V3.0**, the conservative segment-2c default
+  holds, and R16 (c) lands in V3.x behind a coordinated
+  `LedgerEngine` + `FeeEstimator` PR. The R1 disposition
+  still holds; segment 2d is segment-2c follow-through
+  (closure-rule operational discipline applied to the
+  conditional-V3.0-lift surface) plus the
+  `SnapshotId`-substrate co-disposition the §8 fenceposts
+  sequenced for this slot. Updates §5.4 R2, §5.4 R12, §5.4
+  R16, §4 Phase 0c, §5.5 ground 1, §5.5 "What Round 2
+  carries" inventory, §8 fenceposts, header status, and
+  CHANGELOG. No code changes; no test impact.
+- **Stage 1 PR 5 — Round 2 segment 2c (closure-rule and
+  lens-applicability refinements paired with R13 / R15 / R16 /
+  R17 named with dispositions).** Doc-only commit on
+  `feat/stage-1-pr5-pending-tx-engine-design`. Segment 2c lands
+  two project-wide discipline refinements (lens-applicability
+  structural-conditions test; closure-rule wargaming-surface-
+  known-at-closure-time qualifier) alongside four named-with-
+  disposition R-residuals (R13 output-selection algorithm; R15
+  submission-strategy as composable actor; R16 wallet-side fee
+  estimation; R17 event-sourced recovery as user-controlled
+  tradeoff). All four R-residuals close their V3.0 vs V3.x
+  decisions with seam-design implications for Phase 0
+  (`OutputSelector` / `SubmissionStrategyActor` / `FeeEstimator`
+  / refined diagnostic-stream contract).
+
+  **§5.0.4 lens-applicability discipline.** Section expanded
+  with structured "Lens-applicability discipline" subsection
+  establishing three structural conditions that govern when
+  the actor-mesh lens applies to a per-engine extraction:
+  (1) trait surface mediates state-mutation across actors,
+  (2) adversarial review surfaces a cross-actor liveness or
+  quiescence dependency, (3) Stage 4 actor-migration target
+  is non-trivial. Per-engine PR pre-flights test
+  applicability rather than presume it; the lens compounds
+  across PRs **whose structure admits it**, not uniformly.
+  Closure-rule cross-reference and fourth-shape adversarial-
+  test record (Round 1 closure-review log: (1)-build paired
+  with (3)-submit hybrid tested and rejected on criterion 5).
+  Forward-template content for V3.1 rules-queue PR.
+
+  **§7 closure-rule strengthening.** Restructured into
+  "Closure rule (strengthened)" + "Round 1 closure rule
+  (applied to PR 5)". General rule pinned: Round-N closes
+  when the wargaming surface **known at closure time** is
+  genuinely exhausted; new shapes surfacing in Round-N+1
+  reopen Round N rather than slipping past closure (the
+  closure rule pins what was known, not what could ever be
+  known). Lens-applicability cross-reference: closure rule's
+  "exhausted" criterion is satisfied differently depending
+  on whether the lens applies. Round 1 fourth-shape
+  closure-review test recorded as instance of the
+  strengthened rule. Forward-template content for V3.1
+  rules-queue PR.
+
+  **§5.4 R13 — output selection algorithm.** Added with
+  threat-model framing (deterministic-correlation, change-
+  reuse, order-leak independent of FCMP++ ring semantics);
+  options enumerated; disposition closed as V3.0 ships
+  wallet2-greedy under `OutputSelector` trait-parameter seam
+  (`LocalPendingTx<S: Signer, O: OutputSelector>`); V3.x
+  lands `RandomizedSelector` / `EntropyMaximizingSelector`
+  alternatives.
+
+  **§5.4 R15 — submission strategy as composable actor.**
+  Added with threat-model framing
+  (transaction-network-entry-point timing / routing as
+  wallet-layer privacy weakness against
+  `ANONYMITY_NETWORKS.md` adversary); options enumerated;
+  disposition closed as V3.0 ships `SubmissionStrategyActor`
+  seam with `DirectStrategy` default; V3.x lands
+  `JitteredSubmissionStrategy` / `CircuitRotationStrategy` /
+  `BroadcastStrategy` / `BatchedStrategy`.
+
+  **§5.4 R16 — wallet-side fee estimation.** Added with
+  threat-model framing (daemon-recommendation on-chain
+  fingerprint exploitable by malicious daemon per §5.3
+  threat-model anchor); options enumerated; disposition
+  closed as V3.0 ships
+  daemon-recommendation-with-explicit-override under
+  `FeeEstimator` trait seam; V3.x lands `WalletSideEstimator`
+  analyzing `LedgerEngine` historical block fee
+  distribution. **Conditional V3.0 lift** noted: if
+  segment-2d Phase 0 review confirms bounded `LedgerEngine`-
+  accessor cost, R16 (c) lifts to V3.0.
+
+  **§5.4 R17 — event-sourced recovery as user-controlled
+  tradeoff.** Added with threat-model framing (PR 4 §5.4.8
+  #1 restart-amnesia rule's privacy property =
+  diagnostic-event persistence does not leak across trust
+  boundaries; refinement narrows prohibition to
+  cross-boundary persistence specifically); options
+  enumerated; disposition closed as V3.0 ships PR 4 §5.4.8
+  #1 carryover (drop-on-close); V3.x optionally lands
+  encrypted-persistence consumer for institutional /
+  long-running / multi-day workflows. Diagnostic-stream
+  contract pin refined: in-memory-by-default plus
+  permitted user-controlled encrypted-persistence opt-in
+  for consumers entirely within wallet's own
+  encrypted-state surface (no cross-trust-boundary leak per
+  PR 4 §5.4.8 #4).
+
+  **FOLLOWUPS update.** Four V3.x entries added (output-
+  selection alternatives under `OutputSelector` trait seam;
+  submission-strategy actors under `SubmissionStrategyActor`
+  seam; wallet-side fee estimator under `FeeEstimator`
+  trait seam; encrypted-persistence
+  `PersistenceConsumerActor` for long-running deployments).
+  Each names the V3.x trigger and the seam-design
+  implication that segment 2c lands at V3.0.
+
+  **What Round 2 carries (§5.5).** Inventory updated to
+  reflect R13 / R15 / R16 / R17 named-with-dispositions in
+  segment 2c; §5.0.4 lens-applicability discipline + §7
+  closure-rule strengthening landed in segment 2c; pending
+  segments (2d / 2e / 2f / 2g) unchanged in scope.
+
+  **§8 fenceposts.** Segment 2c moved from "Round 2 —
+  pending" to "Round 2 — completed" with structured prose
+  (six sub-bullets: §5.0.4 + §7 + R13 + R15 + R16 + R17 +
+  CHANGELOG forward-template note).
+
+  **V3.1 rules-queue inputs (forward-template content).**
+  Two forward-template patterns this segment surfaces
+  belong in the consolidated V3.1 rules-queue PR:
+  - **Closure-rule wargaming-surface-known-at-closure-time
+    qualifier.** "Round-N closes when the wargaming surface
+    known at closure time is genuinely exhausted; new shapes
+    surfacing in Round-N+1 reopen Round N rather than
+    slipping past closure." Lift to a project-wide
+    `16-architectural-inheritance.mdc` amendment (or
+    standalone closure-discipline rule) when the rules-
+    queue PR consolidates.
+  - **Lens-applicability structural-conditions test.** The
+    actor-mesh lens compounds across PRs whose structure
+    admits it (three conditions: (1) trait mediates
+    state-mutation across actors; (2) adversarial review
+    surfaces cross-actor liveness/quiescence dependency;
+    (3) Stage 4 actor-migration target non-trivial). Per-
+    engine PR pre-flights test applicability rather than
+    presume it. Lift to `16-architectural-inheritance.mdc`
+    or a new `discipline.mdc` rule when the rules-queue PR
+    consolidates.
+
+  **Discipline note (forward-template).** Segment 2c is
+  discipline-strengthening + opportunity-surface naming
+  work that compounds project-wide design discipline
+  without reopening the load-bearing question. Where
+  segment 2a was audit-readiness and segment 2b was
+  architectural-integrity-now at the residual level (R11),
+  segment 2c lifts the project-wide pattern that makes
+  future per-engine PR pre-flights answer the same
+  questions methodically rather than adversarially.
+
+- **Stage 1 PR 5 — Round 2 segment 2b (R11 signing-actor split
+  reframe to (b); R14 reservation extensibility seam).**
+  Doc-only commit on `feat/stage-1-pr5-pending-tx-engine-design`.
+  The post-Round-1-closure adversarial review's primary finding
+  surfaced an architectural-integrity-now item that the Round 1
+  R11 working disposition deferred under PR 4 R4-consistency
+  grounds; segment 2b reframes R11 to (b) — separate
+  `LocalSigner` / `SigningActor` from Stage 1 — and adds R14 as
+  a near-zero-cost reservation extensibility seam in the same
+  commit.
+
+  - **R11 reframe to (b) (architectural-integrity-now).** §5.4
+    R11 prose replaced. Round 1's working disposition leaned
+    (a) — `PendingTxActor` holds spend material, "matches PR 4
+    R4's instance-scoped pattern" — with shape (b) (separate
+    `SigningActor`) deferred to V3.x with the HW-wallet
+    trigger. The cost-asymmetry argument that justified PR 4
+    R4's tactical (a) (Scanner already existed in C++ holding
+    view + spend material; restructuring Scanner was the
+    deferral trigger) does **not** apply to PR 5 R11: PR 5 is
+    opening the trait surface; `LocalPendingTx` does not yet
+    exist; the choice between (a) and (b) is the same cost
+    either way (we are designing one or the other from scratch,
+    not moving from one to the other). R4-consistency cuts the
+    other way: PR 4 R4's (a) explicitly named (c) as the
+    long-term shape with the HW-wallet trigger; PR 5 R11 lands
+    that long-term shape from the start. HW wallets are core,
+    not edge, per `00-mission.mdc` §1; designing the trait
+    surface so spend material never enters `PendingTxActor` is
+    the threat-model-correct shape; deferring it to V3.x treats
+    the architecturally-cleaner shape as an optimization rather
+    than the baseline. Audit surface narrows under (b) (one
+    actor whose sole job is signing); Stage 4 actor-migration
+    cost is asymmetric (splitting an existing actor is harder
+    than designing actors split). §5.0.1 sketches updated to
+    add `signer: Arc<S>` (Stage 1) and `signer:
+    ActorRef<SigningActor>` (Stage 4) fields plus prose pinning
+    the spend-material-locality discipline.
+
+  - **R14 reservation extensibility seam.** New §5.4 R14 entry.
+    `Reservation` shape gains an `extensions:
+    Vec<ReservationExtension>` field; `ReservationExtension` is
+    `#[non_exhaustive]` with empty V3.0 variant set; same
+    extensibility pattern as `RefreshDiagnostic` /
+    `PendingTxDiagnostic`. Forecloses V3.x trait revision when
+    coinjoin / atomic-swap / time-locked / multi-stage /
+    composable reservation variants land in V3.x consumer-actor
+    PRs. Round 2 hygiene at near-zero cost; large optionality
+    preservation.
+
+  - **FOLLOWUPS update.** The pre-segment-2b
+    `PendingTxEngine`-(b)-signing-actor-split V3.x deferral
+    entry in [`FOLLOWUPS.md`](./FOLLOWUPS.md) is replaced by
+    a V3.x entry tracking HW-wallet integration as a
+    `Signer`-impl substitution against the existing
+    architecture. PR 4 R4 V3.x deferred-(c)
+    (split-producer/recoverer for view-tag matching vs. final
+    hybrid-decap) remains V3.x-deferred but benefits from PR 5
+    R11 (b)'s `SigningActor` infrastructure: the spend-key-
+    isolated actor R4 (c) needs has a precedent in PR 5's
+    `SigningActor`; lifting R4 (c) at the V3.x trigger becomes
+    simpler.
+
+  - **Discipline note (forward-template).** R11's reframe is
+    the architectural-integrity-now discipline applied at the
+    residual-disposition level — R-residual dispositions
+    inherit the same architectural-integrity-now discipline
+    that PR 3 / PR 4 established at the load-bearing question.
+    The cost-benefit-defer-to-later anti-pattern per
+    `16-architectural-inheritance.mdc` recurred in a residual
+    disposition rather than a load-bearing question; segment
+    2b's reframe makes future per-engine PRs subject to the
+    same discipline at the R-residual level.
+
+  - **Header status + §8 fenceposts updated.** Header acquires
+    a Round 2 segment 2b paragraph documenting the R11 reframe
+    rationale and the R14 extensibility seam. §8 fenceposts:
+    segment 2b moves to "Round 2 — completed" with a per-item
+    breakdown; pending segments renumber as 2c (closure-rule +
+    lens-applicability + R13 / R15 / R16 / R17 named with
+    dispositions), 2d (R2 + R12 co-disposition), 2e (R8), 2f
+    (R9 + sink-binding decouple from R11), 2g (close-out).
+
+- **Stage 1 PR 5 — Round 2 segment 2a (audit-readiness): §5.3
+  criterion 5 strengthening + threat-model anchor explicit
+  defense + §5.5 scorecard rationale clarification.** Doc-only
+  commit on `feat/stage-1-pr5-pending-tx-engine-design`. The
+  post-Round-1-closure adversarial review surfaced five
+  refinements for Round 2; segment 2a lands the three audit-
+  relevant items (3 / 4 / 5 from the outcomes summary) in one
+  commit ahead of the R-residual dispositions per the
+  audit-blocking sequencing decision so audit-prep does not
+  sequence behind R2 / R8 / R9 / R11 / R12.
+
+  - **Item 4 (audit-blocking) — §5.3 criterion 5 strengthening.**
+    Reframes the rejection ground for shapes (2)/(3) from
+    "cross-actor liveness query" to **"contract dependency on
+    refresh quiescence at any point in the build/submit flow."**
+    Documents the stream-subscription steelman implementation
+    (PR 4 `RefreshDiagnostic::AttemptStarted` /
+    `AttemptCompleted` events push-driving a
+    `refresh_in_flight: bool` rather than a synchronous query)
+    and explains why it still fails: the daemon controls when
+    `AttemptCompleted` fires, the bool stays `true`
+    indefinitely under drip-feed responses, and the build (or
+    submit) stalls regardless of which mechanism observes
+    quiescence. The load-bearing property is the contract
+    dependency, not the observation channel — synchronous
+    query, push-driven bool, mailbox await, polling, or any
+    other mechanism delivering the "quiescent" signal carries
+    the same daemon-controllable failure mode.
+
+  - **Item 5 — §5.3 threat-model anchor explicit defense.**
+    Adversary-controlled-daemon-as-design-center made explicit
+    (not citation-only). References
+    [`ANONYMITY_NETWORKS.md`](./ANONYMITY_NETWORKS.md) plus
+    the structural property "daemon outside the wallet's trust
+    boundary by **design choice**, not as a hardened edge
+    case." The Tor/I2P-first deployment posture means
+    adversary-controlled daemons are the **expected
+    deployment**, not an exception. Designs that admit
+    structural single-peer DoS of transaction submission are
+    rejected as **structurally incompatible with the project's
+    primary deployment model** — the rejection is not "we can
+    tolerate this in some deployments and harden against it in
+    others"; it is "this contract shape contradicts the
+    deployment model the design serves."
+
+  - **Item 3 — §5.5 scorecard rationale clarification.**
+    One-line clarification expanded into structured prose
+    explaining criteria 4 and 5 share **underlying mechanism**
+    (the contract dependency on refresh quiescence) but score
+    **distinct consequences**: criterion 4
+    (implementation-feasibility / actor-migration
+    compatibility) evaluates "the implementation creates the
+    vulnerability"; criterion 5 (threat-model-survival /
+    adversarial-daemon resistance) evaluates "the threat model
+    exercises the vulnerability." Both ✗s correctly scored;
+    the shared mechanism is one structural property; the
+    criteria evaluate distinct consequence axes; not
+    double-counting.
+
+  - **Propagation: §5.1 (2)/(3) + §5.5 ground 3.** Updated to
+    use the contract-dependency reframe consistently with §5.3's
+    strengthened framing. The standard implementation and
+    stream-subscription steelman share the same fatal property
+    (contract dependency on refresh quiescence); the prose says
+    so explicitly; the rejection ground is named as
+    "contract-level, not implementation-level."
+
+  - **Header status + §8 Round 2 fenceposts updated.** Header
+    acquires a Round 2 segment 2a paragraph documenting what
+    landed and why the audit-blocking sequencing puts items
+    3/4/5 ahead of the R-residual dispositions. §8 restructured
+    into "Round 2 — completed" / "Round 2 — pending"
+    sub-sections with segment 2a marked completed and segments
+    2b/2c/2d enumerated as pending.
+
+  R1 disposition still holds — the strengthening sharpens the
+  audit-blocking defense without reopening the disposition.
+  Segments 2b (closure-rule + lens-applicability), 2c
+  (R2/R12, R8, R9, R11 dispositions), and 2d (Phase 0
+  enumeration + close-out) follow at normal cadence.
+
+  **V3.1 rules-queue inputs (forward-template content).** Two
+  patterns this adversarial pass surfaced belong in the
+  consolidated rules-queue PR alongside the §19 /
+  rule-15-trinary / pre-flight-FOLLOWUP-scope items already
+  queued from PR #41 Commit 2: (i) **closure-rule scope
+  qualifier** ("Round-N closes when the wargaming surface
+  known at closure time is exhausted; new shapes surfacing in
+  Round-N+1 reopen Round N rather than slipping past
+  closure"), generalizes from PR 5's specific instance to any
+  project-wide design discipline using round-by-round
+  wargaming closure; (ii) **lens-applicability discipline**
+  ("project-wide design lenses compound across PRs whose
+  structure admits the lens; future per-trait PRs test
+  applicability rather than presume it"), tempers PR 4
+  §5.4.6 / PR 5 §5.0.4's projection without weakening the
+  institutional payoff claim. Both land in segment 2b's
+  doc edits to §5.0.4 and §7; the V3.1 rules-queue PR will
+  consolidate them with the other queued inputs.
+
+- **Stage 1 PR 5 — PR #43 Copilot review-pass disposition: two
+  R12-enumeration-consistency findings.** Doc-only follow-up
+  commit on `feat/stage-1-pr5-pending-tx-engine-design`.
+  `copilot-pull-request-reviewer` surfaced two valid findings
+  on PR #43, both at the same audit-time question ("does R12
+  appear in every Round 2 residual enumeration?"): §5.1 closure
+  summary at line 429 ("R3 / R5 / R10 dissolve by composition
+  under §5.0; R2 / R8 / R9 / R11 carry to Round 2") and §7
+  discipline budget revised estimate at line 1294 ("Round 2
+  disposes residuals (R2 / R8 / R9 / R11)"). Both omitted R12
+  despite the surrounding sections (§1, §5.2, §5.4, §5.5 "What
+  Round 2 carries", §8 fenceposts) consistently including it.
+  Both fixed verbatim per Copilot's suggestions; defensive sweep
+  via grep confirmed all six R-residual enumerations now
+  consistently carry R12, and the four "what dissolves"
+  enumerations correctly remain on R3 / R5 / R10. Doc-only;
+  no Rust or C++ code touched.
+
+- **Stage 1 PR 5 — Round 1 follow-up: R12 (Stage 1
+  `current_snapshot` acquisition mechanism) added; §5.5 ground-1
+  prose softened against implicit overclaim.** Doc-only follow-up
+  commit on `feat/stage-1-pr5-pending-tx-engine-design`. Round 1
+  review surfaced one R1-adjacent finding the closure commit
+  implicitly overclaimed: §5.0.1's `LocalPendingTx` sketch holds
+  `ledger: L` "for `current_snapshot` reads in Stage 1," but
+  §5.5's first structural ground claimed Phase 0c collapses
+  without naming Stage 1's actual snapshot-acquisition mechanism.
+  Adding R12 names the three options without resolving them
+  (deferred to Round 2 alongside R2's `SnapshotId` opacity
+  disposition); the §5.5 ground-1 prose is softened from
+  "Phase 0c collapses" to "Phase 0c collapses at the trait
+  surface (pending R12)" to match the mechanism uncertainty.
+
+  **Three options enumerated in R12 (no resolution).**
+  - **(a) Content-derived `SnapshotId` from existing
+    `LedgerSnapshot` data (working hypothesis).** Stage 1 reads
+    snapshot identity via existing `LedgerEngine` /
+    `LedgerSnapshot` surface; computes content-addressed ID
+    locally. **Phase 0c truly collapses** in this disposition;
+    no new trait surface.
+  - **(b) Stage 1 subscribes to the `LedgerDiagnostic` stream.**
+    Stage 1 implementation symmetric with Stage 4; modest
+    implementation-symmetry cost in `LocalPendingTx`. Phase 0c
+    still collapses at the trait surface.
+  - **(c) `LedgerEngine` grows a small additive accessor.**
+    Phase 0c partially restored, but **additive only** — read-
+    only and idempotent; not the load-bearing coupling the
+    original Phase 0c projected.
+
+  Round 2 confirms by inspecting `LedgerSnapshot`'s actual
+  shape against the working hypothesis. Disposition's outcome
+  triggers a small mechanical softening of §5.5 ground-1 prose
+  (drop "pending R12" qualifier on (a); reword for (b)/(c) as
+  needed) and the matching §4 Phase 0c hedge.
+
+  **Round 1 disposition unchanged.** Grounds 2 and 3 (CAS-isn't-CAS
+  / adversarial-daemon-resistance-as-structural) are
+  **independently sufficient** to defeat shapes (2) and (3) under
+  the actor-mesh framing per
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.5. Ground 1 is expected confirmation, not load-bearing for
+  the disposition.
+
+  **Findings deferred to Round 2 (review-pass scoping).**
+  - Finding 2 — mailbox-ordering vs daemon-side authority for
+    R9 (terminal-rejection visibility): R9 contract clarification
+    in Round 2.
+  - Finding 3 — criterion 5 strengthening from "cross-actor
+    liveness query" framing to "contract-dependency-on-refresh-
+    quiescence" framing: closes a steelman attack ("but you
+    could implement (2) via stream subscription, no synchronous
+    query") without changing the disposition. Round 2 prose pass.
+  - Finding 4 — sink-binding decoupling from R11 in §5.0.2:
+    constructor-bound is the right answer on PR 4 §3.1 / R4
+    consistency grounds, independent of R11's spend-material
+    disposition. Round 2 hygiene.
+
+  This is the architectural-integrity-now disposition per
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  applied to documentation honesty: cheap residual addition +
+  one prose softening preserves the discipline against the
+  cost-benefit-defer-to-later anti-pattern (the Round 2 commit
+  would otherwise have to correct an overclaim that lived in
+  the Round 1 commit's prose). Doc-only; no Rust or C++ code
+  touched.
+
+- **Stage 1 PR 5 — Round 1 close: actor-mesh reframe + shape (1)
+  disposition (snapshot-ID pinning).** Doc-only commit on
+  `feat/stage-1-pr5-pending-tx-engine-design` (off `dev` at
+  PR-#42 merge `6de8335d5`). Closes the load-bearing open
+  question
+  [`docs/design/STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5 in **one round** rather than the seed's
+  three-to-four-rounds projection because the §5.0 actor-mesh
+  framing exhausts the wargaming surface in this round per the
+  §7 closure rule. Shape (1) — build-against-current-snapshot +
+  snapshot-ID pinning — wins on **structural** grounds; shapes
+  (2) and (3) fail criterion 5 (adversarial-daemon resistance)
+  by construction under the actor framing; no fourth shape
+  survives. **Two rounds saved against the seed projection.**
+
+  **The §5.0 actor-mesh reframe.** PR 4's Round 2 reframe
+  established a project-wide design lens: the trait surface is
+  the synchronous decision point that consumers branch on; the
+  rich semantic surface lives on the diagnostic-stream seam
+  (`DiagnosticSink` parameter; typed event enum). PR 5 inherits
+  the lens from Round 1 — the cost-benefit-defer-to-later
+  anti-pattern PR 4 named has its cure now structurally
+  available per
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc),
+  applied at the load-bearing question rather than discovered
+  in Round 2+.
+
+  **Three structural grounds shape (1) wins on (§5.1).**
+  - **Phase 0c collapses (§5.5 ground 1).** Under the seed's
+    synchronous framing, `LedgerEngine` had to grow
+    `current_snapshot_id() -> SnapshotId` so
+    `PendingTxEngine::build` could read it inline. Under the
+    actor framing, snapshot identity flows through the
+    diagnostic-stream surface as
+    `LedgerDiagnostic::SnapshotMerged { new, prior, height }`
+    events emitted at the merge gate's normal operation. Phase
+    0c (load-bearing cross-trait surface coupling) collapses to
+    Phase 0g (additive event-variant amendment).
+  - **The CAS isn't a CAS (§5.5 ground 2).** Under the actor
+    mesh, `submit` is a mailbox message; the actor processes
+    one message at a time; "check `reservation.snapshot_id`
+    against `current_snapshot`" is a **field comparison in the
+    message handler**, not a compare-and-swap. There is no
+    concurrency to swap against — the actor is the
+    serialization point. R3 / R10 dissolve as trait-surface
+    contract questions.
+  - **Adversarial-daemon resistance is structural (§5.5 ground
+    3, criterion 5).** Under the actor mesh, `PendingTxActor`
+    is decoupled from `RefreshActor`'s liveness by mailbox.
+    Hostile daemon stalling refresh keeps `RefreshActor` busy
+    in `produce_scan_result`; `PendingTxActor`'s mailbox
+    continues processing build/submit/discard against the
+    most-recently-merged snapshot regardless. **Shapes (2) and
+    (3) require `PendingTxActor` to query `RefreshActor`'s
+    state**, which is what creates the DoS surface; shape (1)
+    has no such query. Per
+    [`00-mission.mdc`](../.cursor/rules/00-mission.mdc) §1
+    (security as precondition) and
+    [`ANONYMITY_NETWORKS.md`](./ANONYMITY_NETWORKS.md) (adversary-
+    controlled daemons in privacy-wallet topologies), a shape
+    that admits structural single-peer DoS of transaction
+    submission is rejected even when its UX and trait surface
+    are otherwise minimal.
+
+  **Five-criteria scorecard (§5.5).** Shape (1) passes all five;
+  (2)/(3) pass criteria 1–3 but fail criteria 4 (Stage 4
+  actor-migration compatibility — their cross-actor query
+  introduces the DoS surface) and 5 (adversarial-daemon
+  resistance, structurally).
+
+  **Implications for PR 4 (§5.2 — resolved as confirmation).**
+  PR 4 §5.3 deferred PR 4 Round 3 to PR 5 R1. Resolution: PR 4
+  α confirms; the "provisionally load-bearing" qualifier on
+  PR 4 §5.3's α is withdrawn. PR 4 Round 3 is a
+  **confirmation-shape round**, not a re-evaluation round —
+  α holds and PR 4 advances directly to Round 4 (commit
+  decomposition + Phase 1 commit list). No γ-style
+  consumer-driven refresh-progress streaming is required: under
+  the actor framing, `PendingTxActor` already gets
+  refresh-progress state push-driven from the diagnostic stream;
+  γ becomes a redundant pattern the framing makes superfluous.
+
+  **The diagnostic-stream seam for PR 5 (§5.0.2).** Parallel to
+  PR 4's `RefreshDiagnostic`, PR 5 defines `PendingTxDiagnostic`
+  (`#[non_exhaustive]`) carrying `BuildSucceeded` /
+  `BuildFailed` / `SubmitAttempted` / `SubmitSucceeded` /
+  `SubmitFailed` / `SubmitSnapshotInvalidated` / `Discarded` /
+  `ReservationOutstanding` plus the `DiscardReason` enum
+  (`#[non_exhaustive]`: `ConsumerExplicit` /
+  `SnapshotRotationAutoDiscard` (R5 lazy-discard) /
+  `DaemonRejectedTerminal` (R9 terminal disposition)). The trait
+  surface adds a `&dyn DiagnosticSink` parameter on
+  `LocalPendingTx::new` (constructor-bound, matching PR 4
+  §3.1 / R4 preference; constructor-vs-per-method shape jointly
+  disposed with R11 in Round 2). *(Forward-pointer: Round 2
+  segment 2f tightened the constructor parameter from
+  `&dyn DiagnosticSink` to `Arc<dyn DiagnosticSink>` for
+  reference-shape ergonomics during the R11 closure; see the
+  segment-2f and segment-2g CHANGELOG entries below for the
+  final binding form.)* The cross-cutting
+  `DiagnosticSink` contracts from PR 4 §5.4.6 / §5.4.7 R6
+  reframe / §5.4.8 (non-blocking emit, recursive trust boundary,
+  restart-amnesia detection, panic safety, concurrent emit,
+  emission/return coherence) bind verbatim per §5.0.3.
+
+  **Residuals (§5.4).** Five residuals dissolve by composition
+  under §5.0; four carry to Round 2; one new (R11) surfaces.
+  (R12 — Stage 1 `current_snapshot` acquisition mechanism — was
+  identified in a subsequent Round 1 follow-up commit and added
+  to the Round 2 carry list; see the immediately-following
+  Round 1 follow-up changelog entry. Round 2 thus carries five
+  residuals in total: R2 / R8 / R9 / R11 / R12.)
+  - **Dissolved by §5.0:** R3 (build-during-refresh-during-reorg
+    — mailbox FIFO orders structurally), R5-trait-surface-aspect
+    (outstanding-reservations-on-rotation policy is local to
+    `PendingTxActor`, not a trait-surface question), R10
+    (concurrent build/submit/discard — mailbox FIFO is the
+    actor-system contract).
+  - **Carry to Round 2:** R2 (`SnapshotId` opacity / projection
+    types; recursive trust boundary), R8 (reservation TTL /
+    leak prevention — reframed as `ReservationTTLActor`
+    composition + V3.x FOLLOWUPS), R9 (daemon-side submit
+    failure — reframed as two-stage submit flow with
+    intermediate `submitted-pending-daemon-ack` state and
+    self-continuation message), R11 (signing-actor split — new
+    under §5.0; Stage 1 keeps option (a) instance-scoped per
+    PR 4 R4; V3.x FOLLOWUPS for option (b) `SigningActor`
+    isolation, same trigger as PR 4 R4 deferred-(c) HW-wallet
+    integration).
+  - **Retained but lower-priority hygiene:** R4 (discard
+    semantics under invalidation), R5-policy-aspect, R6
+    (`outstanding()` semantics), R7 (`Send + Sync + 'static`
+    on `P`).
+
+  **Phase 0 net change (§4).** One amendment removed: 0c
+  (load-bearing cross-trait synchronous query →
+  `LedgerEngine`). Two added: 0f (`PendingTxDiagnostic` enum +
+  `DiagnosticSink` parameter on `LocalPendingTx`); 0g
+  (`LedgerDiagnostic::SnapshotMerged` variant addition —
+  cross-trait but additive only, lives in the diagnostic-stream
+  surface not in `LedgerEngine`'s trait surface). **Net effect:
+  load-bearing surface coupling collapses to additive-only
+  event-surface coupling**, which is exactly the kind of
+  structural cleanup
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  continuous-discipline corollary predicts.
+
+  **V3.x FOLLOWUPS landed in this commit.**
+  - `ReservationTTLActor` consumer actor (closes R8 by
+    composition; subscribes to `BuildSucceeded` / `Discarded`
+    events; restart-amnesia constraint per PR 4 §5.4.8 #1).
+  - `SubmitFailureAnalyzer` consumer actor (subscribes to
+    `SubmitFailed` / `SubmitSnapshotInvalidated`; pattern
+    detection — many `SnapshotInvalidated` in a row →
+    adversarial reorg-churn; recurring `FeeTooLow` → fee
+    estimator drift; recursive trust boundary applies).
+  - `ReservationAuditActor` consumer actor (subscribes to all
+    `PendingTxDiagnostic` events; in-memory wallet-action audit
+    log; falls under recursive trust boundary discipline if it
+    persists or exports — projections only).
+  - `SigningActor` migration entry (R11 option (b); Stage 4
+    spend-secret isolation; same HW-wallet-trigger language as
+    PR 4 R4 deferred-(c)).
+
+  **Cross-cutting `DiagnosticSink` contract-doc generalization
+  (Round 2 disposition).** The contracts are now used by both
+  PR 4 and PR 5; they are cross-cutting design invariants.
+  PR 4's FOLLOWUPS named `docs/design/REFRESH_DIAGNOSTIC_STREAM.md`
+  as the spec doc; Round 2 disposes whether to rename to
+  `DIAGNOSTIC_STREAM.md` (general) or factor a parent
+  `DIAGNOSTIC_STREAM_CONTRACTS.md` that PR 4 / PR 5 inherit
+  from. Doc-only.
+
+  Doc-only; no Rust or C++ code touched. Cross-references:
+  [`STAGE_1_PR_5_PENDING_TX_ENGINE.md`](./design/STAGE_1_PR_5_PENDING_TX_ENGINE.md)
+  §5.0 (actor-mesh framing as Round 1 substrate), §5.1
+  (three-shape comparison under the lens), §5.2 (PR 4 α
+  confirmed), §5.3 (five criteria), §5.4 (residuals), §5.5
+  (Round 1 disposition + scorecard);
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.6 / §5.4.7 R6 reframe / §5.4.8 (the cross-cutting
+  `DiagnosticSink` contracts inherited by PR 5);
+  [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.4 (PR 5's binding trait surface — unchanged by Round 1).
+
+- **Stage 1 PR 4 — PR #42 Copilot review-pass disposition:
+  two typos, one stale work-list row, two CHANGELOG link
+  retargets, one CHANGELOG ordering correction.** Six
+  findings surfaced by `copilot-pull-request-reviewer` on
+  PR #42's design-branch open. Validated each at source;
+  five fixes landed verbatim, one fixed in the
+  opposite-direction-from-Copilot-suggested (CHANGELOG
+  ordering — Copilot suggested oldest-first; the file's
+  established `[Unreleased]` convention is newest-first
+  within substantive groupings, so the §5.5 hygiene entry
+  moved to the **top** of the PR 4 cluster rather than to
+  the bottom). Concrete dispositions:
+  - Typo `Forecloseing` → `Foreclosing` in
+    [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    §5.4.6 (R6 reframe, concurrent-emit pin discussion).
+  - Typo `dispositon` → `disposition` in
+    [`REFRESH_DESIGN_LANDSCAPE.md`](./design/REFRESH_DESIGN_LANDSCAPE.md)
+    §6 (bandwidth/pruning interplay paragraph).
+  - §5.5 work-list row for β internal-batching updated
+    from pre-Round-2 staleness (`V3.x (R2)` /
+    "promotion to FOLLOWUPS pending Round 2 R2 disposition")
+    to the settled Round 2 R2 disposition (**closed —
+    kept as §2.2 future-scaling note; not promoted to
+    FOLLOWUPS yet; revisit if V3.0 RC stabilization
+    bandwidth profiling identifies β as the remediation
+    over alternatives**).
+  - Two CHANGELOG citation links retargeted from
+    self-references to
+    [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    over to the actual
+    [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+    source. The link **text** named the source file; the
+    link **target** pointed to the design doc. Audit
+    readers couldn't follow the citation to code; that
+    misled the audit trail.
+  - PR 4 CHANGELOG cluster reordered so the newest commit
+    (§5.5 hygiene) sits at the top, matching the file's
+    `[Unreleased]` newest-first convention. The Round 1
+    chronological pair (disposition above review pass) is
+    preserved as a narrative — moving them to the bottom
+    of the cluster would have required two cross-reference
+    rewrites (`above` → `below`) for marginal benefit;
+    the minimal-invasive disposition is correct here. The
+    Round 2 sub-cluster was already newest-first; only the
+    §5.5 hygiene's position needed correction. PR #42
+    test plan updated to describe the resolved layout.
+  Doc-only; no Rust or C++ code touched.
+
+- **Stage 1 PR 4 — §5.5 work-list hygiene: P3
+  `apply_scan_result_to_state` `Vec<usize>`-discard row
+  added.** Single-row addition to the
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.5 work-list against the dev-side FOLLOWUPS entry
+  ("P3: `apply_scan_result_to_state` allocates `Vec<usize>`
+  even for trait-impl callers that discard it") that landed
+  via PR #37 (commit `0a0d46b38`, 2026-05-10) during the
+  design branch's pre-M3-tail window. The design branch was
+  cut at `9e53c82fa` (pre-PR-#37); PR #37 reshaped the merge
+  pipeline (`LedgerIndexes::ingest_block`,
+  `process_scanned_outputs`, `apply_scan_result_to_state`
+  carry insertion-index ranges) and added P3 to FOLLOWUPS as
+  a PR 4-triggered deferral. The work-list row closes the
+  audit delta between the design doc's enumeration and the
+  dev-side FOLLOWUPS state before the design branch lands
+  onto `dev`. P3's disposition under α (Round 1) plus
+  (a-instance-scoped) view-material (Round 2 R4) remains
+  Round 3 / Round 4 trait-surface enumeration: either
+  `LedgerEngine::apply_scan_result` grows to surface the
+  insertion-range carryout (Vec consumed, optimization dead
+  code) or `RefreshEngine` owns the post-pass directly and
+  the trait method is removed (discard sites disappear).
+  Doc-only; no Rust or C++ code touched.
+
+- **Stage 1 PR 4 — Round 1 disposition: α (preserved current
+  shape) for the `RefreshEngine` producer-redesign question.**
+  Doc-only commit on `feat/stage-1-pr4-refresh-engine-design`
+  (off `dev` at `9e53c82fa`). Closes the load-bearing open
+  question
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5 named in the seed; α is the disposition because it satisfies
+  all four review criteria — PR 4 extraction cleanliness, PR 5
+  two-phase build/submit/discard contract over reorg events,
+  reservation-tracker reorg surfacing, Stage 4 actor-migration
+  compatibility — without forcing additional discipline into the
+  per-trait PR or its consumers. β (internal batching) and γ
+  (consumer-driven streaming) are separated as independent
+  validation surfaces per
+  [`19-validation-surface-discipline.mdc`](../.cursor/rules/19-validation-surface-discipline.mdc)
+  (named on `dev` 2026-05-10) and recorded as residual questions
+  R2 (β as V3.x FOLLOWUPS) and a hypothetical follow-up PR (γ
+  if R1's PR 5 design surfaces correctness need).
+
+  - Adds [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+    §5.4 (Round 1 disposition with four-criteria rationale and
+    R1 / R2 / R3 residuals) and §5.5 (work-list table for every
+    refresh-adjacent item with its target version and "where
+    documented" pointer); marks the producer-redesign decision
+    complete on §3.3's pre-flight checklist; rewrites §5.3's
+    rounds trajectory to reflect Round 1's convergence on α and
+    the resulting compression of Rounds 2–4.
+  - Adds [`docs/design/REFRESH_DESIGN_LANDSCAPE.md`](./design/REFRESH_DESIGN_LANDSCAPE.md):
+    refresh-design-space substrate covering the privacy-by-default
+    precondition (§2), the operational view-tag pre-filter from
+    [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+    §3.1.1 (§3), FMD as a V4 research direction (§4 — negative
+    result for V3.0), OMR as a V3.x research direction (§5 —
+    negative result for V3.0), and the pruning-vocabulary
+    sidebar (§7) disambiguating daemon-side
+    `--prune-blockchain` / archival `--no-prune` / RPC-server
+    prune / wallet-side prune-by-birthday / prune-by-skip-to-height.
+  - Adds a V3.0 [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md) entry
+    ("Refresh bandwidth tradeoff under α") naming the cost-benefit
+    artifact PR 4's α-disposition consumed; entry pinned to V3.0
+    RC stabilization (per the user's 2026-05-12 sequencing
+    decision) so the cold-sync bandwidth tradeoff is load-bearing
+    on RC stabilization rather than open-ended on the post-genesis
+    backlog.
+
+  Doc-only; no Rust or C++ code touched. Branch posture:
+  `feat/stage-1-pr4-refresh-engine-design` stays on `dev`-rooted
+  doc-only commits until M3e closes per
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)'s
+  branch policy.
+
+- **Stage 1 PR 4 — Round 1 review pass: more carefully-specified
+  α (view-material flow, atomicity, error taxonomy).** Same-day
+  follow-up to the Round 1 disposition above. The review pass
+  corrected
+  [`STAGE_1_PR_4_REFRESH_ENGINE.md`](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §3.1's materially-wrong "no secret-touching surface" framing
+  to **master-secret isolation** routed through R4 — the existing
+  producer
+  ([`engine/refresh.rs:1254`](../rust/shekyl-engine-core/src/engine/refresh.rs))
+  builds a `Scanner` carrying both the view secret (X25519
+  view-tag pre-filter + hybrid-decap chain) and the spend secret
+  (key-image computation) per attempt, so the load-bearing
+  threat-model property is "no per-output derived secrets cross
+  the trait surface," not "no secrets." The review pass
+  surfaced four additional residual questions and three
+  trait-contract observations:
+
+  - **R4 — view-material flow** (constructor-bound vs. per-call
+    vs. split-producer/recoverer). Load-bearing; affects
+    `LocalRefresh::new` constructor shape and Stage 4 actor
+    envelope. §4 Phase 0a / 0b candidate. Round 2 disposition.
+  - **R5 — mid-scan reorg-abort at checkpoint 3**. Mitigation
+    for the reorg-amplification adversarial scenario (§5.4.5).
+    Trade-off: extra daemon RPC cost vs. hostile-daemon work
+    amplification. §4 Phase 0d (conditional). Discipline-budget
+    gated. Round 2 disposition.
+  - **R6 — `RefreshError::ConcurrentMutation` boundary**. Pinned
+    as orchestrator-internal translation of `LedgerEngine`
+    errors; **excluded** from `RefreshEngine::produce_scan_result`'s
+    error type. §4 Phase 0c variant set: `Cancelled`,
+    `DaemonError(D::Error)`, `ScannerContractViolation { kind,
+    evidence }`, `ReorgTooDeep { fork_height, max_rewind }`.
+    Round 2 hygiene disposition.
+  - **R7 — `ScanResult` atomicity-under-cancellation contract**.
+    Confirmed against the existing implementation (cancel
+    checks at lines 980 / 1140 / 1186 return `Cancelled`
+    immediately; partial state drops via the function frame).
+    Pinned in the trait contract per
+    [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §2.3 / §7. §4 Phase 0a candidate.
+  - Refines **R1**'s working hypothesis to
+    *build-against-current-snapshot with snapshot-ID pinning*
+    — the reservation tracker carries a snapshot ID per
+    reservation; the submit path becomes a CAS against
+    `current_snapshot == reservation.snapshot_id`. PR 5's
+    design rounds open with this as the working hypothesis.
+
+  **§5.4.4 three-call-mode constraint.** Cold open / restore,
+  steady-state poll (~10–30 s), and post-submit confirmation
+  have very different cost and cancellation profiles; per-call
+  setup must be near-zero for steady-state. Phase 1's commit
+  decomposition (Round 4) must not introduce per-call setup
+  the inherent method did not have.
+
+  **§5.4.5 adversarial scenarios under α.** Four daemon-attack
+  vectors recorded with their dispositions: reorg amplification
+  (mitigation = R5), view-tag DoS (Scanner implementation
+  property; constant-time framing assumes non-adversarial input
+  rates), withholding / partial responses (inherited from PR 1's
+  `DaemonEngine` contract), snapshot poisoning via
+  `LedgerSnapshot` (confirmed value-typed at lines 147–156),
+  and `ScannerContractViolation.evidence` as memory-amplifier
+  vector (bounded shape required).
+
+  **§5.4.6 trait-surface contract pins.** `Send + Sync + 'static`
+  bound on `R: RefreshEngine` (Stage 4 `kameo` actor wrap
+  predicate); `Progress`-channel trust-boundary pin (consumers
+  must be inside the wallet trust boundary; refused as a design
+  question if not).
+
+  The α-disposition holds against all of the review pass'
+  findings — none argue for β or γ. They argue for a more
+  carefully-specified α. Doc-only; no Rust or C++ code touched.
+
+- **Stage 1 PR 4 — Round 2 close-out: Phase 0c
+  `InternalInvariantViolation` + Phase 0e `DaemonOp` /
+  `ProtocolErrorKind` seed enums.** Same-day follow-up to
+  the Round 2 reframe contract-pin refinements
+  (immediately-following bullet) that resolves two items
+  the refinements had flagged as "Round 4 vs Round 2
+  hygiene" questions. Both worth settling in Round 2
+  because of downstream impact: deferring to Round 4
+  re-opens a phase Round 2 was supposed to close.
+
+  **Phase 0c amendment — `InternalInvariantViolation
+  { context: &'static str }` on the orchestrator-side
+  `RefreshError` enum.** Resolves the §5.4.7 R6
+  "(a) extend `ConcurrentMutation` or (b) introduce
+  `InternalInvariantViolation`" cleanup pin at the design
+  layer, not Round 4 commit-decomposition. The retry-loop
+  call sites at
+  [`engine/refresh.rs:1672–1680`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  and `:2055–2065` are **state-machine invariant
+  violations** ("loop body itself is broken" per the
+  existing site comments), not retry-budget exhaustion.
+  Conflating both into `ConcurrentMutation` would route
+  "wallet under sustained merge contention" (back off and
+  retry) and "wallet hit an internal bug" (report and
+  stop) through the same variant; downstream consumers
+  (`PeerReputationActor`, telemetry, user-facing error
+  surface) need the structural distinction. `&'static
+  str` for `context` is appropriate at this site —
+  compile-time-fixed developer content, not attacker-
+  influenced data; the memory-amplifier and log-
+  exfiltration vectors the producer-trait unit-variant
+  discipline closes do not apply. The variant also bounds
+  future migrations: future "state machine reached a
+  should-never-happen path" findings route here. **Round 4
+  migration target**: the two call sites migrate from
+  `MalformedScanResult { reason: "..." }` to
+  `InternalInvariantViolation { context: "..." }`; existing
+  reason strings become `context` values.
+
+  **Phase 0e seed enums — `DaemonOp` and `ProtocolErrorKind`
+  initial variant sets, audited against the producer's
+  actual call-site surface.** Two ground-truth findings:
+
+  - `DaemonOp` narrows to two variants per the
+    [`engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+    audit. The producer issues exactly two daemon RPCs:
+    `daemon.get_height()` (tip fetch; lines 1480 / 1958)
+    and `rpc.get_scannable_block_by_number(...)` (per-block
+    fetch; line 1190). Under FCMP++ with view-tag
+    pre-filtering, `get_scannable_block_by_number` returns
+    the full per-block payload; no separate `GetBlocks` /
+    `GetTransactions` / `GetOutputs` / `GetChainHashes`
+    are issued. `GetFeeEstimates` and `SubmitTransaction`
+    are `PendingTxEngine`-issued (PR 5), not refresh-issued.
+  - `ProtocolErrorKind` is **fresh-defined**, not a
+    re-export of upstream `shekyl_rpc::RpcError`. Upstream
+    `RpcError` is a flat enum carrying `String` payloads
+    in three of its eight variants (`InternalError(String)`
+    / `ConnectionError(String)` / `InvalidNode(String)`)
+    and is not a bounded re-export candidate. The producer
+    must classify upstream into the bounded enum at the
+    `RefreshDiagnostic`-emission boundary; the `String`
+    payload elision is the load-bearing classification
+    step per §5.4.7 R6's memory-amplifier closure.
+    Initial variant set seeded against the call-site-
+    reachable subset for the refresh producer:
+    `{ ConnectionError, InternalError, InvalidNode,
+    InvalidTransaction, PrunedTransaction }`. The other
+    upstream variants (`TransactionsNotFound`, `InvalidFee`,
+    `InvalidPriority`) are not reachable from refresh-issued
+    RPCs.
+
+  Round 4 commit-decomposition re-audits both seeds (the
+  audit may surface additional reachable variants the seed
+  missed, or paths the seed listed that aren't actually
+  reachable); the audit is authoritative. The seeds serve
+  as design-doc completeness and as an audit checklist.
+
+  Doc-only; no Rust or C++ code touched.
+
+- **Stage 1 PR 4 — Round 2 reframe contract-pin refinements:
+  concurrent-emit clarification, producer-panic-safety property,
+  and test-as-canonical-reference pin.** Same-day follow-up to
+  the Round 2 reframe follow-up (immediately-following bullet)
+  that closes three smaller remaining holes before Phase 0
+  closes. None re-open the reframe; each closes a class of
+  drift / failure-mode that would otherwise propagate to the
+  V3.x consumer-actor PR.
+
+  **Concurrent-emit clarification on the non-blocking pin
+  (§5.4.6 + `DiagnosticSink` docstring).** The `Send + Sync`
+  bound permits concurrent `emit` from multiple tasks; the
+  non-blocking contract **holds under concurrent emission**,
+  not merely per call. Serializing internal synchronization
+  that admits unbounded contention — `Mutex<VecDeque<_>>`,
+  `RwLock`-wrapped state, any shared mutable structure without
+  bounded-wait guarantees — violates the contract even when
+  each `emit` call returns promptly in isolation. Conforming
+  implementations use lock-free queueing (`crossbeam::queue::ArrayQueue`,
+  `flume` non-blocking sends), atomic counters, or sharded
+  mailboxes. Forecloses a class of implementation that
+  type-checks against the literal per-call non-blocking
+  property and still re-introduces the producer-liveness
+  hazard at scale — load-bearing under any future
+  producer-side parallelism shape or Stage 4 actor-mesh
+  topology where multiple `LocalRefresh` instances share a
+  sink.
+
+  **Producer-panic-safety property and Round 4 `PanickingSink`
+  test deliverable (§5.4.6).** The non-blocking pin closes the
+  producer-liveness hazard from a *blocking* `emit`. It does
+  not close the adjacent hazard from a *panicking* `emit` —
+  a buggy or third-party sink implementation that panics
+  (null pointer dereference in a logger, allocator failure in
+  a metrics consumer, panic-on-overflow in an aggregator)
+  propagates unwind through the producer's call stack while
+  the `Scanner` (holding spend material) is live across the
+  `emit` call. **Pinning "MUST NOT panic" on `emit` as a hard
+  trait contract is rejected** — it is unenforceable at the
+  type system and pushes development cost onto every sink
+  author for limited gain. The load-bearing property lives on
+  the producer side: any panic propagating out of `emit`
+  results in a predictable refresh-attempt failure with
+  `Scanner` cleanly zeroized via `Drop`, no leaked half-state,
+  and the cancellation token consistently in either
+  fired-or-not state. **Phase 1 test deliverable:** the
+  `AssertionSink` coherence property test grows a
+  `PanickingSink` variant that panics on configured event
+  variants; the test asserts (a) `Scanner` is dropped before
+  the panic crosses the producer frame (visible via a
+  `Zeroize` observer wrapper in the test harness), (b) no
+  inconsistent producer state remains observable after the
+  unwind, and (c) the panic propagates without `Drop`-chain
+  corruption or double-panic. Round 4 commit-decomposition
+  pass records this alongside the `AssertionSink` coherence
+  test as a Phase 1 deliverable.
+
+  **Test-as-canonical-reference pin on the coherence contract
+  (§5.4.6 + `DiagnosticSink` docstring).** When the
+  `AssertionSink` coherence property test lands in Round 4 it
+  becomes **executable documentation of what coherence means**.
+  If a future implementer reads §5.4.6 prose and is uncertain
+  about an edge case (e.g., "does a `ScanProgress` emission
+  count toward coherence for a `MalformedScanResult` return?"
+  or "do two distinct error-class events from the same scan
+  span count as one emission or two?"), the test's behavior is
+  the authoritative answer. Prose ambiguities resolve against
+  test behavior, not the other way around; if the test is
+  wrong, the test is fixed and the prose follows, never the
+  reverse. Per
+  [`19-validation-surface-discipline.mdc`](../.cursor/rules/19-validation-surface-discipline.mdc),
+  the property test is one of the validation surfaces for the
+  coherence rule; naming it as authoritative makes prose / test
+  drift impossible without explicit re-examination — a future
+  PR landing prose changes to the coherence contract is
+  required to re-examine the test, and vice versa.
+
+  **§5.5 work-list amendments and §8 Round 4 deliverable
+  update.** New work-list rows record the four-part
+  contract-pin bundle (`non-blocking` + concurrent-emit
+  clarification + coherence + canonical-reference) and the
+  producer-panic-safety Round 4 test deliverable. §8's
+  "Remaining for Round 4" prose names the paired
+  `AssertionSink` (coherence) and `PanickingSink`
+  (panic-safety) test deliverables as Phase 1 test-design
+  outputs.
+
+  Doc-only; no Rust or C++ code touched.
+
+- **Stage 1 PR 4 — Round 2 reframe follow-up: `DiagnosticSink`
+  contract pins and §5.4.8 refinements.** Follow-up to the
+  Round 2 reframe (immediately-following bullet) that pins
+  load-bearing contracts the V3.x consumer-actor PR would
+  otherwise have to re-derive from first principles, and
+  tightens two §5.4.8 attack-surface dispositions whose
+  Round 2 framing was correct but underspecified.
+
+  **Two contract pins added at §5.4.6 / §5.4.7 R6 / Phase 0e
+  docstring.**
+  - **Non-blocking `emit` contract.** `DiagnosticSink::emit`
+    MUST NOT block. Implementations use `try_send`-shaped
+    semantics; on a full bounded channel, unavailable
+    consumer, or any other back-pressure condition, `emit`
+    drops the event silently and returns promptly. Pinned
+    to close the producer-liveness hazard: a blocked sink
+    would pin the producer at the emission call holding the
+    Scanner's spend material and would block observation of
+    the cancellation token at checkpoints 2 and 3 —
+    defeating both the §5.4.4 invocation-overhead
+    constraint and the §3.1 wallet-lock-latency property.
+    Without the trait-surface pin, a hostile or buggy
+    consumer-actor sink in V3.x can introduce the hazard
+    post-hoc with no structural reason for the consumer-
+    actor author to know they did.
+  - **Emission/return coherence contract.** `RefreshEngine`
+    implementations MUST emit at least one corresponding
+    `RefreshDiagnostic` event to the sink for every
+    non-`Cancelled` `RefreshError` returned, before
+    returning the error. Pinned to close the silent-error
+    failure mode (orchestrator rotates peer with no
+    telemetry; reputation actor blind) and the phantom-error
+    failure mode (telemetry attributes a defect to a peer
+    but the wallet then merges that peer's scan result as
+    authoritative). Both fail open at the type-system
+    level; only a contract pin closes them. Phase 1
+    delivers a property-test CI invariant: an
+    `AssertionSink` wraps `LocalRefresh` and asserts
+    coherence on fuzzed inputs (Round 4 test-design
+    deliverable).
+
+  **§5.4.8 #1 — restart-amnesia named explicitly as a
+  deliberate threat-model consequence.** The no-persistence
+  posture is correct privacy-first, but an adversary who can
+  observe or trigger wallet restarts (process kill,
+  RPC-daemon restart, scheduled rotation, OOM, user
+  quit-and-restart cycles) can rate-limit hostile behavior
+  to evade reputation accumulation. **Pinned forward to the
+  V3.x consumer-actor PR design:** detection logic is
+  **coarse-window-based**, not credit-history-based; no
+  "trust accumulation" over time. Forecloses the
+  evasion-via-restart-cycle and the dual evasion-via-trust-
+  accumulation patterns. Binding on `PeerReputationActor`
+  and `ViewTagAnomalyDetector` design.
+
+  **§5.4.8 #4 — trust-boundary framing re-phrased
+  recursively.** The current text targeted obvious
+  network-bound consumers (analytics, crash reporters,
+  remote tracing); the subtler case is the *in-process
+  aggregator-republisher* — a consumer in-process by
+  topology but trust-boundary-crossing by publication
+  (metrics-export actors with HTTP endpoints, debug UI
+  actors over IPC, logger actors writing files collected by
+  remote infrastructure, developer-mode flags dumping to
+  off-host log collectors). The principle reframed: full-
+  fidelity events flow only to actors whose **external
+  surface is itself inside the wallet trust boundary,
+  recursively**. The recursion creates a continuous audit
+  obligation that binds on every PR touching the consumer-
+  actor topology, anchored procedurally to
+  `19-validation-surface-discipline.mdc`.
+
+  **Phase 0e seed — `MalformedKind` initial variants
+  recorded.** Six daemon-attributable variants
+  (`NonEmptyForEmptyRange`, `RangeLengthMismatch`,
+  `RangeMembershipViolation`, `DuplicateHeight`,
+  `MissingHeightEntry`, `ResidualAfterApply`) covering the
+  current `MalformedScanResult { reason: &'static str }`
+  call sites in `engine/merge.rs` and `engine/refresh.rs`,
+  so the unit-variant migration has a straightforward
+  mapping at Round 4 commit decomposition. Non-daemon-
+  attributable call sites (the retry-loop-exhaustion
+  reasons in `engine/refresh.rs:1678–1680` and
+  `:2061–2064`) are flagged for Round 4 cleanup — they
+  don't belong on `MalformedScanResult`'s "peer rotation
+  decision needed" structural branch.
+
+  **Variant-ordering / serialization forward-note.** Under
+  the §5.4.6 / §5.4.8 #4 in-process trust-boundary pin, the
+  diagnostic stream is not serialized to any stable external
+  format and variant ordering is not load-bearing; the
+  `#[non_exhaustive]` attribute preserves additive evolution.
+  The note exists for a hypothetical future PR that records
+  diagnostic streams to disk for test replay — at that
+  point, on-disk-format stability becomes load-bearing and
+  the additive-evolution discipline acquires a backward-
+  compatibility constraint. **No PR 4 action required;** the
+  note is forward-recorded so the future PR has the
+  constraint named.
+
+  **FOLLOWUPS amendments.**
+  - Added `ViewTagAnomalyDetector` V3.x entry with the
+    explicit producer-side dependency: before the detector
+    lands, the producer must grow a `ViewTagFalsePositive
+    { observed_rate, expected_rate }` (or equivalent)
+    variant. `#[non_exhaustive]` makes the addition
+    additive without trait-surface revision.
+  - Extended the diagnostic-stream spec-doc FOLLOWUPS entry
+    (`docs/design/REFRESH_DIAGNOSTIC_STREAM.md`) to record
+    the four binding contract pins (non-blocking,
+    coherence, recursive trust-boundary, restart-amnesia
+    detection discipline) as load-bearing spec content that
+    consumer-actor PRs reference rather than re-deriving.
+
+  Doc-only; no Rust or C++ code touched.
+
+- **Stage 1 PR 4 — Round 2 reframe: diagnostic-stream seam
+  supersedes Round 2 first-pass R5 / R6 dispositions.** This
+  bullet supersedes the immediately-following bullet's R5 and
+  R6 dispositions per the
+  [Round 2 reframe section](./design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  §5.4.7 R5 reframe / §5.4.7 R6 reframe / §5.4.8. The
+  immediately-following bullet's R1 / R2 / R3 / R4 / R7
+  dispositions are unchanged and still hold.
+
+  **Why the reframe.** Round 2's first-pass R5 (defer to V3.x
+  with telemetry trigger) and R6 (keep `MalformedScanResult {
+  reason: &'static str }`) reasoned about `RefreshEngine` in a
+  synchronous function-call graph where the error is a single
+  isolated event and the payload question is "what does this
+  caller branch on." The design target is an actor-mesh fabric
+  (Stage 4) where the error is a stream event with temporal
+  context, and the same event routes to multiple consumers
+  with different security properties per consumer. The
+  first-pass disposition is the cost-benefit-defer-to-later
+  anti-pattern per
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc);
+  the reframe is the architectural-integrity-now answer —
+  lay the seam now, defer only the consumer implementations.
+
+  **The two-channel shape (R6 reframe).** The synchronous
+  trait return and the actor-mesh diagnostic stream are
+  different artifacts with different consumers and different
+  security properties; they get different types.
+  - **Channel 1: synchronous trait return `RefreshError` —
+    unit variants only.** Three variants: `Cancelled`, `Io`,
+    `MalformedScanResult`. **No string, no evidence, no
+    payload of any kind.** The orchestrator's branch table is
+    structural (cancel-propagate / retry-with-backoff /
+    peer-rotation); the decision needs zero information
+    beyond the variant tag. **Closes the memory-amplifier
+    vector by construction** — there is no attacker-controlled
+    data anywhere on the producer trait error surface.
+  - **Channel 2: `RefreshDiagnostic` event stream emitted via
+    `DiagnosticSink`.** Rich structured events fan out to
+    specialized consumer actors with per-consumer trust
+    posture and sanitization rules. `produce_scan_result`
+    gains a `diagnostics: &dyn DiagnosticSink` parameter
+    (per-call; runtime-dispatch; locked now so Stage 4
+    doesn't re-rev the trait). Stage 1 emits a minimal seed
+    variant set (`DaemonMalformed { kind: MalformedKind }`,
+    `DaemonTimeout { op, elapsed }`, `DaemonProtocolError
+    { kind }`, `ReorgObserved { fork_height, depth }`,
+    `ScanProgress { height, candidates }`); Stage 1 sinks
+    are `NoopDiagnosticSink` / `TracingDiagnosticSink`; the
+    actor-mesh sink lands in V3.x. The enum is
+    `#[non_exhaustive]` so the variant set grows additively
+    with PR 1's peer-aware `DaemonEngine` surface and
+    future-PR consumer patterns.
+  - **Sanitization is a property of the consumer, not the
+    stream.** Full-fidelity events stay in-process per the
+    §3.1 / §5.4.6 trust-boundary pin (extended from the
+    Progress-channel pin to the broader diagnostic-stream
+    pin); persisted or exported projections are lossy by
+    design.
+
+  **R5 dissolved by composition (R5 reframe).** The
+  reorg-amplification scenario resolves via a
+  `ReorgAmplificationDetector` consumer actor that subscribes
+  to `RefreshDiagnostic::ReorgObserved` events, maintains a
+  windowed count, and signals cancellation back through the
+  existing `CancellationToken` checkpoint-3 plumbing. **The
+  producer's §7 checkpoint discipline does not grow.** No
+  per-checkpoint-3 daemon RPC; no §7 amendment. The
+  capability is added by composition of the actor mesh's
+  consumers; the implementation deferred to the V3.x
+  actor-mesh PR. **Trigger is policy-driven, not
+  evidence-driven** — the previous "if hostile-daemon
+  work-amplification scenarios become measurable" gate is
+  withdrawn.
+
+  **What the reframe unlocks (consumer-side; deferred
+  implementations).** Fail2ban-style intra-session mitigation
+  via `PeerReputationActor` (per-peer event history with
+  decay; threshold-based graduated response); pattern-based
+  recovery via `RecoveryActor` (Byzantine-fault-tolerance-flavored
+  N-of-M agreement on contested data); reorg-amplification
+  detection via `ReorgAmplificationDetector` (R5's natural
+  home); future variant additions as the consumer-pattern
+  surfaces mature.
+
+  **Five new attack surfaces honestly enumerated (§5.4.8).**
+  The reframe is not free; the diagnostic-stream seam
+  introduces five attack surfaces, each with a mitigation
+  pinnable now and a deferred consumer-actor implementation.
+  - **Peer-reputation fingerprint** → in-memory only, scoped
+    to wallet session, drop on close. Privacy-first wins
+    over classical fail2ban's cross-session memory.
+  - **`PeerId` stability under Tor/I2P** → `PeerId` is a
+    transport-defined opaque token; decay calibrated to
+    circuit-rotation cadence; Stage 1 variants omit peer
+    attribution entirely until PR 1's peer-aware
+    `DaemonEngine` surface lands.
+  - **Rotation-timing side-channel** → jittered rotation,
+    batched decisions, temporal decoupling of
+    event-observation-time from rotation-action-time inside
+    the `PeerReputationActor`.
+  - **Diagnostic stream as covert channel** → trait-contract
+    pin (§5.4.6 / §3.1): full-fidelity events flow only to
+    in-process consumers inside the wallet trust boundary;
+    cross-process or network-bound consumers receive only
+    explicitly-sanitized projection types.
+  - **Mailbox saturation as DoS** → bounded consumer
+    mailboxes with explicit overflow policies (drop-oldest
+    for diagnostics consumers; aggregate-on-overflow for
+    reputation; event-sequence-aware drop for recovery).
+    Producer-side: emit at natural rate; lossless delivery
+    is not promised.
+
+  **Phase 0 finalized under the reframe.**
+  - Phase 0a: trait-surface contract pins + `ViewMaterial`
+    type definition (R4) + diagnostic-stream trust-boundary
+    pin (Round 2 reframe).
+  - Phase 0b: `LocalRefresh::new(view_material: ViewMaterial)`
+    constructor + flat-crate-root exports (R3 confirmation +
+    `ViewMaterial`).
+  - Phase 0c: **reframed** — unit-variant `RefreshError`
+    (`Cancelled` / `Io` / `MalformedScanResult`; no payload).
+    Orchestrator-side `RefreshError` retained with
+    backward-compat content constructed orchestrator-side;
+    no attacker-controlled trait payload.
+  - Phase 0d: **retired** — R5 resolves by composition, not
+    by deferral.
+  - Phase 0e (**new**): `RefreshDiagnostic` enum +
+    `DiagnosticSink` trait + `produce_scan_result` signature
+    change (`diagnostics: &dyn DiagnosticSink` parameter).
+    Stage 1 sinks: `NoopDiagnosticSink`, `TracingDiagnosticSink`.
+
+  **FOLLOWUPS amended.** The previous Round 2 "extend
+  checkpoint 3" V3.x FOLLOWUPS entry is **withdrawn** and
+  replaced by the `ReorgAmplificationDetector` entry. Three
+  new V3.x FOLLOWUPS entries added: `PeerReputationActor`
+  (with §5.4.8 #1 / #2 / #3 mitigation pins binding on the
+  implementation), `RecoveryActor`, and
+  `docs/design/REFRESH_DIAGNOSTIC_STREAM.md` spec doc (seeded
+  by PR 4's §5.4.7 R6 / §5.4.8 content; grows additively as
+  consumers are designed).
+
+  **Trajectory after the reframe.** Only Round 4 remains as
+  PR-4-internal work (Phase 0 commit decomposition + §6
+  review checklist); PR 5's design rounds carry R1 forward
+  with the snapshot-ID-pinning working hypothesis. The
+  α-disposition's *provisionally load-bearing* status remains
+  the re-evaluation gate.
+
+  **Meta-observation recorded.** The reframe is the
+  recurrence pattern named by
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  "the cost-benefit-defer-to-later anti-pattern" working
+  against itself — Round 2's first pass defaulted to deferral
+  and minimal-surface; the architectural-integrity-now answer
+  was to lay the structural seam (one parameter, one enum,
+  one trait) and defer only the consumer implementations.
+  The compounded benefit is what
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)'s
+  "continuous discipline as inheritance prevention" framing
+  predicts: the seam landed now removes the need for V3.x to
+  re-litigate the trait surface.
+
+  Doc-only; no Rust or C++ code touched.
+
+- **Stage 1 PR 4 — Round 2 dispositions: R2 / R3 / R4 / R5 / R6 /
+  R7 settled.** Same-day follow-up to the Round 1 review pass
+  above. Round 2 closes all seven residuals named by Round 1 +
+  the review pass; the more-carefully-specified-α frame is now
+  closed and PR 4's design surface is Phase-0-ready.
+
+  - **R1 — `PendingTxEngine::build` during long refresh.**
+    Carried into PR 5's design rounds as the working hypothesis
+    *build-against-current-snapshot + snapshot-ID pinning* — the
+    reservation tracker carries a snapshot ID per reservation;
+    the submit path becomes a CAS against
+    `current_snapshot == reservation.snapshot_id`. Of the three
+    sub-options, the only one that gives the reservation tracker
+    monotone snapshot semantics + low-latency UI without
+    serializing user input behind background work.
+  - **R2 — β internal-batching.** Stays as the §2.2 "future
+    scaling refinement" note; not promoted to FOLLOWUPS. The V3.0
+    bandwidth FOLLOWUP entry already names α's bandwidth cost;
+    V3.0 RC stabilization profiles cold-sync; if β is the right
+    remediation, promote then. Premature promotion overspecifies
+    against alternatives (daemon-side prefix matching, view-tag
+    pre-filter improvements, wallet-side prune-by-birthday).
+  - **R3 — `RefreshOptions` / `RefreshProgress` public-module
+    promotion.** Confirmation, not discovery: `RefreshOptions`,
+    `RefreshProgress`, `RefreshSummary`, `RefreshHandle`,
+    `RefreshReorgEvent`, `RefreshPhase` are already crate-publicly
+    re-exported from
+    [`shekyl_engine_core/src/lib.rs:25–30`](../rust/shekyl-engine-core/src/lib.rs)
+    at the flat crate root, matching the `DaemonEngine` /
+    `LedgerEngine` convention. Stage 4's `kameo` actor implementor
+    imports them as Stage 1 callers do today; no module promotion
+    needed.
+  - **R4 — view-material flow to the producer (load-bearing).**
+    Disposition: **(a-instance-scoped)** —
+    `LocalRefresh::new(view_material: ViewMaterial)`. New public
+    `Zeroize + ZeroizeOnDrop` type carrying `{ spend_pub,
+    view_scalar, x25519_sk, ml_kem_dk, spend_secret }` — exactly
+    the fields `build_scanner_from_keys` extracts from
+    `&AllKeysBlob` today. One `Scanner` held for `LocalRefresh`'s
+    lifetime; per-attempt cost drops to snapshot+daemon RPC
+    (no scanner construction). Stage 4 actor mailbox carries no
+    secrets. Wallet-lock semantics drop `LocalRefresh` and
+    zeroize via the existing `ZeroizeOnDrop` chain.
+    **(c) split-producer/recoverer deferred to V3.x FOLLOWUPS**
+    with trigger "HW-wallet-backed signing or post-V3 threat-
+    model refinement requires producer-side spend-key isolation."
+    (b) per-call rejected (hostile to actor migration).
+  - **R5 — mid-scan reorg-abort at checkpoint 3.** Deferred to
+    V3.x FOLLOWUPS. The per-checkpoint-3-hit `get_height` RPC
+    cost (~per-block; ~10K+/wallet-day in steady-state) is
+    non-trivial; the reorg-amplification attack is mitigated at
+    a higher layer by PR 1's `DaemonEngine` peer-rotation
+    contract; the discipline-budget cost of extending §7's
+    checkpoint discipline is non-trivial. **Trigger for V3.x:**
+    "hostile-daemon work-amplification scenarios become
+    measurable in V3.0 RC stabilization or post-genesis
+    production telemetry."
+  - **R6 — `RefreshError::ConcurrentMutation` boundary + variant
+    set.** Promote the existing crate-internal `ProduceError`
+    ([`engine/refresh.rs:202`](../rust/shekyl-engine-core/src/engine/refresh.rs))
+    to public `RefreshEngineError`; use it as
+    `RefreshEngine::Error: Into<RefreshError>`. Variant set:
+    `Cancelled`, `Io(IoError)`, `MalformedScanResult { reason:
+    &'static str }` — the existing name and bounded payload are
+    kept; the user-proposed `ScannerContractViolation { kind,
+    evidence }` rename declined for V3.0 since `&'static str` is
+    the strictest possible memory-amplifier-mitigation bound.
+    **Excluded** from producer trait error: `ConcurrentMutation`
+    (orchestrator-internal merge-gate concern), `AlreadyRunning`
+    (orchestrator-internal handle-racing concern), `ReorgTooDeep`
+    (kept as Ok-with-rewind merge-layer detection per §1.5
+    actor-identity reasoning). The trait/orchestrator split is
+    a Phase 0c spec amendment.
+  - **R7 — `ScanResult` atomicity-under-cancellation contract.**
+    Pinned in
+    [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §2.3 / §7 prose: a `produce_scan_result` call returns either
+    a `ScanResult` covering the full span scanned, or
+    `RefreshError::Cancelled`; no partial-span `ScanResult`.
+    Already true in the existing implementation per the cancel
+    checks at
+    [`engine/refresh.rs:980 / :1140 / :1186`](../rust/shekyl-engine-core/src/engine/refresh.rs);
+    the contract pin prevents future drift.
+
+  **§4 Phase 0 finalized.** Phase 0a: trait-surface contract
+  pins (`Send + Sync + 'static` on `R`; Progress-channel trust
+  boundary; `ScanResult` atomicity per R7; `LedgerSnapshot`
+  value-typed contract; `ViewMaterial` type definition per R4).
+  Phase 0b: `LocalRefresh::new(view_material: ViewMaterial)`
+  constructor + flat-crate-root export of `ViewMaterial`.
+  Phase 0c: `RefreshEngineError` promotion per R6. Phase 0d:
+  retired (R5 deferred).
+
+  **Two new V3.x FOLLOWUPS entries** in
+  [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md): R5 mid-scan reorg-abort
+  deferral; R4 (c) split-producer/recoverer deferral. Both have
+  named triggers per
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc).
+
+  **Trajectory after Round 2.** Only Round 4 remains as
+  PR-4-internal work (Phase 0 commit decomposition + §6 review
+  checklist). PR 5's design rounds carry R1 forward with the
+  snapshot-ID-pinning working hypothesis. The α-disposition's
+  *provisionally load-bearing* status remains the re-evaluation
+  gate: if PR 5's R1 resolution requires γ for correctness,
+  PR 4 re-opens; otherwise PR 4 advances directly to Round 4.
+
+  Doc-only; no Rust or C++ code touched.
+
+### Fixed
+
+- **CI bench gate no longer false-fails on `baseline=0` capture
+  anomalies; the anomaly is surfaced as informational rather than
+  silenced.** Discovered on PR #34: the `bench-baseline` branch's
+  most-recent refresh (from dev-tip `647f82d5`) recorded
+  `instructions=0` for six `hot_path_bench_ledger_postcard_*`
+  entries that the prior nine baselines measured at ~4.4M / 44M /
+  444M instructions each, with no causal code change between
+  snapshots and iai-callgrind's own run summary embedded in
+  `baseline.iai.snapshot` reporting `6 without regressions; 0
+  regressed; 6 benchmarks finished` — the capture ran to
+  completion. Cause is unknown (runner-image drift,
+  iai-callgrind-runner version skew, build-flag drift, or a
+  transient anomaly in the measurement layer are all candidates);
+  investigation lives on
+  `chore/investigate-bench-baseline-flake-2026-05-09`.
+  [`scripts/bench/compare.py`](../scripts/bench/compare.py) now
+  routes `(base_val == 0 && pr_val != 0)` into a distinct
+  `baseline_zero` bucket — informational, not gating — that
+  preserves the PR-side measurement for diagnosis.
+  [`scripts/bench/post_comment.py`](../scripts/bench/post_comment.py)
+  renders the bucket under its own header line ("Baseline anomaly
+  (informational, not gated)") and table rows with a `_baseline=0_`
+  verdict badge distinct from `ok` / `FAIL` / `added` / `missing`,
+  so the anomaly surfaces to reviewers rather than being silently
+  masked under the "new in PR" label. The post-merge
+  `update-baseline` job re-captures from the next push to `dev`;
+  if the next refresh produces real numbers the anomaly was
+  transient and self-heals, if zeros persist the investigation
+  branch has a fresh signal. Regression guards: real regressions
+  still trip `fail` (validated with a +39% hot_path fixture); the
+  `(base=0, pr=0)` edge case is preserved as a 0% delta `ok`
+  rather than getting routed away. Lock-down:
+  [`scripts/bench/test_compare.py`](../scripts/bench/test_compare.py)
+  pins the routing logic with four regression tests
+  (baseline-zero-bucket, real-regression-still-fails,
+  both-zero-stays-ok, added-in-pr-distinct-from-baseline-zero);
+  stdlib-only, runs via `python3 scripts/bench/test_compare.py`.
+
+- **Bench-capture producer guard rejects `instructions=0` rows at
+  source so the anomaly cannot reach `bench-baseline` again.**
+  Paired defense-in-depth with the consumer-side `baseline_zero`
+  bucket (above): the consumer routes around already-corrupted
+  baseline data; the producer prevents new corruption from being
+  written. Implemented in
+  [`scripts/bench/capture_rust_baseline.sh`](../scripts/bench/capture_rust_baseline.sh)
+  inside the JSON-assembly heredoc, post-parse / pre-write: any iai
+  entry with `metrics.instructions == 0` causes the script to
+  exit `2` with a structured error that lists the offending
+  `(crate, bench_target, group, function, run_id)` tuples and
+  points operators at `docs/investigation/2026-05-09-bench-baseline-flake.md`.
+  The canonical `shekyl_rust_v0.json` is **not** written when the
+  guard trips, so the prior good `bench-baseline` content is
+  preserved across both pipeline arms — `update-baseline` (push to
+  `dev`) and `capture-pr` (per-PR baseline). The raw stdout
+  snapshot at `shekyl_rust_v0.iai.snapshot` is still written
+  unconditionally as bisection evidence, and a diagnostic side-file
+  at `shekyl_rust_v0.json.flake.json` carries the parsed envelope
+  plus a `flake` block enumerating the zero entries — investigators
+  can `gh run download`-style fetch it without re-running the
+  harness. Bypass: `SHEKYL_BENCH_ALLOW_ZERO=1` skips the check
+  with a loud `WARNING` line for local debugging of the capture-zero
+  phenomenon itself; CI workflows must not set this. Validated
+  with three smoke-tests against the heredoc body in isolation:
+  mixed-healthy-and-zero rejects with exit 2 and writes only the
+  flake side-file; bypass env var allows write-through with the
+  warning; clean capture flows normally with no flake side-file.
+  The guard's error message frames a workflow rerun as the
+  expected operator response, matching the empirically observed
+  flake rate (the same runner class typically produces a healthy
+  capture on retry).
+
+- **`account_base::generate(...)` no longer hardcodes `FAKECHAIN`;
+  the legacy 3-arg overload is deleted entirely and every caller
+  spells its network out explicitly.**
+  Pre-fix, the 3-arg `account_base::generate(recovery_key, recover,
+  two_random)` overload (with default args `secret_key{} / false /
+  false`) hardcoded `DerivationNetwork::Fakechain` as the raw-seed
+  derivation salt regardless of the wallet's actual `network_type`.
+  Three production callers reached it via the implicit FAKECHAIN
+  default: `wallet2::generate(name, password, recovery, recover,
+  ...)` (the CLI / RPC wallet-creation and recovery entry),
+  `wallet2`'s 0-change dummy-destination address generator
+  (`transfer_selected_rct`), and
+  `wallet_rpc_server::on_stop_background_sync`'s seed-recovery
+  path. On TESTNET, every from-seed wallet creation produced a
+  FAKECHAIN-salted account that failed `wallet2::load`'s rederive
+  (which uses `m_nettype`, not FAKECHAIN). On MAINNET / STAGENET,
+  the call was doubly broken: the FAKECHAIN-derived keys disagreed
+  with the rederive salt, and RAW32 isn't a permitted seed format
+  on those networks anyway. This footgun was masked for the entire
+  window during which Bug 1's off-by-one was preventing any wallet
+  from loading. Bug 4-adjacent in the 2026-05-05 FFI constant-
+  drift audit.
+
+  **Fix:** the new
+  `account_base::generate(recovery_key, recover, two_random,
+  network_type nettype)` overload threads the caller's network
+  through `generate_from_raw_seed`, and is now the **only**
+  `generate(...)` overload — the legacy 3-arg form is deleted
+  entirely. `wallet2::generate(...)` and
+  `wallet_rpc_server::on_stop_background_sync` migrated to pass
+  `m_nettype` / `m_wallet->nettype()`. The 0-change dummy-
+  destination caller in `wallet2::transfer_selected_rct` migrated
+  to the same 4-arg form with `cryptonote::FAKECHAIN` hardcoded —
+  it's a transient one-shot whose secret keys are discarded;
+  properly network-matching the dummy address requires a BIP-39
+  path on MAINNET / STAGENET (RAW32 isn't permitted there) and is
+  filed under FOLLOWUPS V3.2. All 28 test callers across
+  `tests/{unit_tests,core_tests,performance_tests,trezor,
+  functional_tests,wallet_bench}` migrated to pass
+  `cryptonote::FAKECHAIN` explicitly. The structural deletion
+  eliminates the "one omitted argument away from FAKECHAIN"
+  footgun class entirely — there is no longer a `generate(...)`
+  overload that can pick a network silently.
+
+  **Failure-mode change:** on MAINNET / STAGENET, every
+  `wallet2`-routed raw-seed creation path now throws cleanly via
+  the FFI's `permitted_seed_format` check instead of silently
+  producing FAKECHAIN-salted unspendable wallets. The throw scope
+  is wider than just the recovery path: `wallet_rpc_server::on_create_wallet`
+  (fresh CSPRNG-seed wallet creation) and `wallet2_ffi::create`
+  (FFI wallet creation) also throw on MAINNET / STAGENET. Both
+  paths were already silently broken pre-fix — the post-fix
+  behaviour is a strict improvement (fail-loud over fail-silent),
+  but neither becomes a finished feature: fresh-seed wallet
+  creation on MAINNET / STAGENET via `wallet2` simply does not
+  work by design until the wallet2 BIP-39 entry point lands (Bug
+  4 in the audit, deferred per the Rust wallet migration). On
+  TESTNET / FAKECHAIN, every migrated caller produces correctly-
+  network-salted accounts that round-trip through `wallet2::load`.
+
+  **New regression test:** `tests/unit_tests/account.cpp` ::
+  `generate_uses_explicit_nettype_argument` pins (a) `generate(...,
+  TESTNET)` matches `generate_from_raw_seed(..., TESTNET)`, (b)
+  `generate(..., FAKECHAIN)` produces a distinct account (different
+  HKDF salt), and (c) `generate(..., MAINNET / STAGENET)` throws
+  for **both** `recover=true` (recovery) and `recover=false` (fresh
+  CSPRNG seed). See
+  `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` Bug
+  4-adjacent.
+- **`FCMP_REFERENCE_BLOCK_MIN_AGE` aligned to consensus authority (5).**
+  `rust/shekyl-engine-core/src/multisig/v31/intent.rs` defined
+  `FCMP_REFERENCE_BLOCK_MIN_AGE = 10` while
+  `src/cryptonote_config.h` defines it as `5` (locked by Decision 14
+  in commit `6561278d9`, asserted by `tests/unit_tests/fcmp.cpp:668`,
+  documented in `docs/FCMP_PLUS_PLUS.md:432`). The Rust multisig
+  `SpendIntent` was added in `744ab6407` 23 days after Decision 14
+  and copied the pre-Decision-14 value `10`. Bug 3 of the 2026-05-05
+  FFI constant-drift audit. Failure mode: a multisig wallet would
+  reject reference blocks at heights `tip-9..tip-5` that the daemon
+  consensus accepts — fail-closed at the wallet's own pre-broadcast
+  validation, no path to silent acceptance, but still a real bug
+  (UX: legitimate intents rejected by the proposer's own check).
+  Fixed by aligning the Rust value to `5`, with a doc-comment that
+  cross-references the C++ authority and the audit. Test
+  `validate_temporal_rejects_ref_block_too_fresh` updated to use
+  `tip = 903` (age = 3) instead of `tip = 905` (age = 5, which was
+  the boundary value that masked the regression — age = 5 is not
+  `< 5`). `docs/SHEKYL_MULTISIG_WIRE_FORMAT.md` aligned. The
+  `chore/cbindgen-consensus-constants` follow-up generates this
+  value from the Rust authority into the C++ build to prevent
+  recurrence. See `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+
+- **C++/Rust FFI constant disagreement broke every wallet round-trip
+  on every network.** `src/shekyl/shekyl_ffi.h` defined
+  `SHEKYL_CLASSICAL_ADDRESS_BYTES = 64` while authoritative
+  `rust/shekyl-crypto-pq/src/account.rs::CLASSICAL_ADDRESS_BYTES =
+  1 + 32 + 32 = 65`. Because `ShekylAllKeysBlob` is `#[repr(C)]` with
+  byte-aligned `[u8; N]` arrays, the 1-byte deficit shifted every
+  later field's offset by one. C++ `populate_account_from_blob` read
+  `spend_sk` and `view_sk` from the wrong bytes; the resulting
+  non-canonical Ed25519 scalars failed `sc_check` inside
+  `secret_key_to_public_key`, so `verify_keys` returned false and
+  every `wallet2::load` threw `error::wallet_files_doesnt_correspond`.
+  Header constant set to `65`. **Bug 1 of 2 surfaced by
+  `wallet_storage.{store_to_mem2file, change_password_mem2file}`.**
+  See `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+
+- **C++/Rust FFI constant disagreement caused every RAW32 wallet to
+  silently mis-encode its `seed_format` byte.** `src/shekyl/shekyl_ffi.h`
+  defined `SHEKYL_SEED_FORMAT_BIP39 = 0` / `_RAW32 = 1` while
+  authoritative `rust/shekyl-crypto-pq/src/account.rs` defines
+  `SEED_FORMAT_BIP39 = 0x01` / `SEED_FORMAT_RAW32 = 0x02` (with `0`
+  reserved for "unset"). C++ wrote `m_seed_format = 1` to disk
+  meaning RAW32; on `wallet2::load`, the FFI received `seed_format =
+  1` and Rust decoded it as `Bip39`; `permitted_seed_format(Fakechain,
+  Bip39)` returned `false`; the rederive returned `false` with
+  `"(network, seed_format) pair disallowed or derivation
+  inconsistent"`. The BIP-39 path was equally broken (both sides
+  held `0`, which Rust rejected as "unset") but had no test
+  exercising it at the C++/FFI layer — the bug went undetected for
+  the entire window during which Bug 1 was masking it. Header
+  constants set to `1` / `2`. **Bug 2 of 2.** Pre-V3 launch: no
+  on-disk wallets exist, so no migration code is required. See
+  `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+
+- **`wallet_storage` round-trip tests now construct `wallet2` with
+  `cryptonote::FAKECHAIN`.** `wallet2::generate(name, password)`
+  routes through the legacy `account_base::generate()` test wrapper,
+  which hardcodes `FAKECHAIN` for raw-seed derivation regardless of
+  the wallet's `m_nettype`. The default-constructed `wallet2`
+  inherited `MAINNET`, so the rederive on `load` passed `MAINNET`,
+  which doesn't permit `RAW32`. Tests now use `tools::wallet2
+  w(cryptonote::FAKECHAIN, 1, true)` to keep the in-memory derivation
+  network and the on-disk rederive network aligned. The same
+  hardcoded-FAKECHAIN footgun in `account_base::generate()`'s callers
+  (the `wallet2::generate("", password)` test path and
+  `wallet_rpc_server::stop_background_sync`) is the **Bug 4-adjacent**
+  finding in
+  `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`, slated for
+  the sibling branch `fix/legacy-account-generate-network-guard`.
+
+### Performance
+
+- **Refresh post-pass cost drops from O(n × B) to O(k × B).** The
+  engine post-pass at
+  `shekyl-engine-core::engine::merge::populate_engine_handle_fields`
+  previously scanned the full `ledger.transfers` Vec on every
+  `Engine::apply_scan_result` invocation, even though only
+  `result.new_transfers.len()` entries can match the residue map.
+  At a 100k-transfer ledger refreshed across 1k batches with
+  k≈10 new transfers per batch, the post-pass alone executed
+  ~10⁸ HashMap probes against `residue` that found nothing —
+  ~5 s of refresh-time wallclock. The merge pipeline now threads
+  the inserted-index list out of `LedgerIndexes::ingest_block`
+  (now `Range<usize>`), through `LedgerIndexesExt::process_scanned_outputs`
+  (now `Range<usize>`) and `apply_scan_result_to_state` (now
+  `Result<Vec<usize>, RefreshError>`); the post-pass walks only
+  the freshly-merged indices. Trait-impl wrappers
+  (`LocalLedger::apply_scan_result`,
+  `EngineFixture::apply_scan_result`) discard the Vec via
+  `.map(|_| ())` so the orchestrator-public surface is
+  unchanged. Closes the FOLLOWUPS V3.0 entry
+  *"`populate_engine_handle_fields` O(n) → O(k) per scan"*.
+  Pre-flight: `docs/design/PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md`.
+
+### Removed
+
+- **Monero-era keys-file fixtures and unconditionally-skipped
+  `wallet_storage` tests deleted.** The `tests/data/wallet_00fd416a*`
+  and `tests/data/wallet_9svHk1*` fixtures were inherited from
+  upstream Monero and predate the SHKW1 master-seed envelope
+  entirely; they cannot be loaded under any version of the
+  v3-from-genesis keystore. The three tests that referenced them
+  (`wallet_storage.{store_to_file2file, change_password_same_file,
+  change_password_different_file}`) had been gated behind
+  `GTEST_SKIP()` for that reason and were providing zero coverage.
+  Per `.cursor/rules/15-deletion-and-debt.mdc`'s "default: delete":
+  4 fixture files (~2.3 MB) and 3 skipped tests removed.
+
+### Added
+
+- **Rust-internal FFI constant equality-assertion tests
+  (`rust/shekyl-ffi/src/account_ffi.rs::tests`).**
+  `ffi_classical_address_bytes_matches_rust_authority` and
+  `ffi_seed_format_constants_match_rust_authority` pin the FFI
+  re-exports to the authoritative
+  `rust/shekyl-crypto-pq/src/account.rs` constants. **Scope (honest):**
+  these tests compare two Rust-side values; they do not read
+  `src/shekyl/shekyl_ffi.h`. A hand-edit to the C++ `#define` alone —
+  the exact drift that produced Bugs 1 and 2 — would still leave
+  them green. They catch a different and narrower bug class:
+  divergence introduced inside the Rust workspace between
+  authoritative and re-exported constants, before the C++ build
+  runs. Cross-boundary detection (catching C++-side drift) is the
+  explicit job of the reduced-scope generator in the sibling branch
+  `chore/cbindgen-consensus-constants`, which generates a header
+  from the Rust constants for `RCTTypeFcmpPlusPlusPqc`,
+  `FCMP_REFERENCE_BLOCK_*_AGE`, and `ADDRESS_VERSION_V1`. Full
+  migration of the remaining ~40 fail-closed-on-misuse constants is
+  filed as FOLLOWUPS V3.0 (target pre-audit-final).
+
+- **`tests/unit_tests/account.cpp` — BIP-39 + MAINNET coverage.**
+  Four new tests close the only path Bug 2 broke that the existing
+  test surface didn't exercise:
+  `rederive_from_bip39_reproduces_account_mainnet` (full BIP-39
+  derive + rederive round-trip via `account_base`),
+  `bip39_passphrase_changes_account_mainnet` (passphrase isolation),
+  `generate_from_bip39_rejects_fakechain_and_testnet`,
+  `generate_from_raw_seed_rejects_mainnet_and_stagenet`,
+  `rederive_from_bip39_reproduces_account_stagenet`, and
+  `rederive_from_raw_seed_reproduces_account_testnet` (consensus-level
+  `(network, format)` matrix invariants). The `wallet2`-level
+  BIP-39 entry point that would let the test use the production API
+  end-to-end does not exist **by design** — see Bug 4 below.
+
+- **CI tripwire defending the `wallet2::generate_from_bip39` absence
+  (`tests/unit_tests/wallet_storage.cpp`).** Three SFINAE detectors +
+  one combined `static_assert` that fires at build time if a future
+  contributor adds `wallet2::generate_from_bip39` with any of the
+  three most plausible signatures (`(std::string&, std::string&,
+  network_type)`, `(epee::wipeable_string&, epee::wipeable_string&,
+  network_type)`, or `(std::string&, network_type)` — the
+  defaulted-passphrase shorthand). The honest scope: an exotic
+  signature could still slip past the detectors, so the
+  load-bearing artifact remains the FOLLOWUPS architectural decision,
+  not the tripwire itself. Includes per-detector positive-control
+  self-tests (`tripwire_self_test::synthetic_has_member_*`) so a
+  refactor that breaks any detector fails its own assertion rather
+  than silently letting the negative one pass for the wrong reason.
+  Tripwire deletes itself with `wallet2.cpp` at Phase 5 of the Rust
+  rewrite. Architectural decision recorded in `docs/FOLLOWUPS.md`
+  §"V3.1+ Legacy C++ → Rust rewrite scope". See
+  `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` Bug 4.
+
+- **Cross-reference comment in
+  `shekyl-crypto-pq::tests::generate_from_bip39_mainnet_roundtrips_to_rederive`.**
+  Identifies the Rust test as the primary functional guarantee for
+  BIP-39 wallet creation on Mainnet and points forward at the C++
+  tripwire and the FOLLOWUPS architectural-decision entry. A future
+  investigator asking "where is BIP-39 wallet creation tested?"
+  finds the answer here, not in C++.
+
+- **`docs/audit_trail/2026-05-ffi-constant-drift-audit.md` — one-page
+  audit record.** Documents the wallet_storage failure trace, the
+  Bug 1 / Bug 2 / Bug 3 / Bug 4 findings, the 43 constants confirmed
+  aligned, and the prevention work pattern (per-PR equality
+  assertions in this branch, reduced-scope generated header in the
+  cbindgen sibling, full migration in V3.0). Audit-quality artifact
+  for the August external review.
+
+- **`AllKeysBlob` and `KeyImage` typed-wrapper sweep (between Stage 1
+  PR 3 M3a and M3b; short-lived sweep branch off the M3a PR head per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3 "Landing notes (M3a closed)").** Closes the deferred-from-M3a
+  typed-wrapper migration that the M3a `ViewSecret` work pre-announced
+  in `shekyl-crypto-pq::keys`'s "near-term workstream" docstring.
+  Three new newtypes plus two API extensions, no consensus or wire
+  format changes (every wrapper is `#[repr(transparent)]`; serde
+  formats use `#[serde(transparent)]`).
+
+  **`shekyl-crypto-pq::keys` newtypes:**
+  - **`SpendSecret`** — secret-bearing scalar mirroring `ViewSecret`'s
+    discipline exactly: `#[repr(transparent)]`, `Clone + Zeroize +
+    ZeroizeOnDrop`, no `Copy`, no `Debug`, `pub(crate) fn from_bytes`,
+    `as_canonical_bytes()` accessor for raw-byte consumers at the
+    boundary.
+  - **`SpendPublicKey` / `ViewPublicKey`** — public-key identity
+    values: `Copy + PartialEq + Eq + Hash + PartialOrd + Ord +
+    Zeroize` for use as registry keys (`LocalKeys`'s
+    `HashMap<SpendPublicKey, SubaddressIndex>` reverse-lookup
+    registry); manual truncated `Debug` matching `KeyImage`'s
+    privacy-correlation discipline (first two bytes only); `pub fn
+    from_canonical_bytes` constructor — engine boundaries outside this
+    crate (`shekyl-engine-core::engine::local_keys::derive_subaddress`)
+    are legitimate construction sites, mirroring `KeyImage`'s pattern.
+    No `ZeroizeOnDrop` because that conflicts with `Copy` (Rust trait
+    coherence rule); the surrounding `AllKeysBlob::drop` clears these
+    public fields explicitly via `.zeroize()` for the same uniform-
+    write-pattern reason raw `[u8; 32]` fields had.
+
+  **`AllKeysBlob` field migration:**
+  - `spend_pk: [u8; 32]` → `spend_pk: SpendPublicKey`
+  - `view_pk:  [u8; 32]` → `view_pk:  ViewPublicKey`
+  - `spend_sk: [u8; 32]` → `spend_sk: SpendSecret`
+  - `view_sk: ViewSecret` (already typed in M3a Commit 2; unchanged)
+
+  The `Drop` implementation simplifies: `spend_sk` and `view_sk` now
+  wipe via field-drop-glue (`ZeroizeOnDrop`), only public-key +
+  composite fields remain in the manual zeroization block. The
+  `#[repr(transparent)]` invariant continues to be asserted by
+  `shekyl-ffi`'s `size_of::<...>()` test against
+  `ShekylAllKeysBlob`.
+
+  **`shekyl-crypto-pq::key_image::KeyImage` API extensions:**
+  - Now derives `Zeroize`, `Serialize`, `Deserialize`, with
+    `#[serde(transparent)]`. Wire format remains byte-identical to
+    `[u8; 32]`.
+  - `Zeroize` (without `ZeroizeOnDrop`, which would conflict with
+    `Copy`) lets containers that hold a `KeyImage` alongside genuinely-
+    secret material (`shekyl_engine_state::TransferDetails`,
+    `shekyl_scanner::RecoveredWalletOutput`) wipe every field on
+    `Drop` for uniform-write-pattern hygiene — the same `Copy +
+    Zeroize` pairing the new public-key newtypes use. The manual
+    `Debug` and absence-of-`Display` privacy discipline is unchanged.
+
+  **`KeyImage` call-site sweep across the workspace:**
+  - **`shekyl-engine-state::TransferDetails.key_image`:** `Option<[u8;
+    32]>` → `Option<KeyImage>`. The on-disk and postcard-schema
+    layouts are preserved by `KeyImage`'s `#[serde(transparent)]`.
+    `TransferDetails::zeroize` continues to wipe the field; `Zeroize`
+    on `KeyImage` removes the special-case `Option`-then-bytes
+    accessor previously needed at the wipe site.
+  - **`shekyl-engine-state::LedgerIndexes.key_images`:** `HashMap<[u8;
+    32], usize>` → `HashMap<KeyImage, usize>`. Method signatures on
+    `mark_spent`, `unmark_spent`, `detect_spends`, `set_key_image`,
+    `freeze_by_key_image`, `thaw_by_key_image` updated to take
+    `&KeyImage` / `KeyImage` / `&[KeyImage]`. The `[0u8; 32]` filter
+    on rebuild/ingest is removed: the runtime-scanner path always
+    produces a real key image, and `Option<KeyImage>` already encodes
+    "not yet computed" — sentinel-byte gating was redundant in the
+    on-disk path. (See FOLLOWUPS for the matching deferred promotion
+    of `RecoveredWalletOutput.key_image` to `Option<KeyImage>` in
+    V3.1.)
+  - **`shekyl-scanner::RecoveredWalletOutput.key_image`:** `[u8; 32]`
+    → `KeyImage` with `#[zeroize(skip)]`. The boundary in
+    `ledger_ext.rs` retains a `[0u8; 32]` test-fixture filter so
+    `RecoveredWalletOutput::new_for_test`'s zero placeholder maps to
+    `td.key_image = None` (preserving the offline-derivation /
+    `set_key_image` fill-in semantics view-only wallets rely on); a
+    FOLLOWUPS V3.1 entry tracks promoting the field itself to
+    `Option<KeyImage>` and deleting the boundary filter.
+  - **`shekyl-engine-core::scan::KeyImageObserved.key_image`:** `[u8;
+    32]` → `KeyImage`. Constructor sites in `refresh.rs`'s per-block
+    input-walk wrap raw bytes via `KeyImage::from_canonical_bytes`.
+  - **`shekyl-proofs::reserve_proof::{ReserveOutputEntry,
+    VerifiedReserveOutput}.key_image`:** `[u8; 32]` → `KeyImage`. The
+    192-byte per-output wire layout is unchanged — the proof's
+    `write_per_output` consumes via `key_image.as_bytes()` and the
+    verifier wraps the on-wire bytes back into `KeyImage` at the
+    return boundary.
+  - **`shekyl-engine-core::multisig::v31::prover::ProverInputProof.key_image`:**
+    `[u8; 32]` → `KeyImage`. `signable_bytes()` consumes via
+    `key_image.as_bytes()`; serde wire format unchanged.
+  - **`shekyl-engine-core::multisig::v31::counter_proof::CounterProof.consumed_inputs`:**
+    `Vec<[u8; 32]>` → `Vec<KeyImage>`; `CounterProofChainView::is_tracked_unspent`
+    signature updated to take `&KeyImage`.
+  - **`shekyl-engine-core::engine::traits::key::SubaddressKeyPair`:**
+    `spend_pk` / `view_pk` typed as `SpendPublicKey` / `ViewPublicKey`.
+  - **`shekyl-engine-rpc::handlers::parse_key_image`:** now returns
+    `KeyImage` (constructor site at the wallet-RPC boundary).
+  - All `[u8; 32]` test fixtures across `shekyl-engine-state`,
+    `shekyl-engine-core` (including bench fixtures and adversarial
+    multisig tests), and `shekyl-scanner` updated to construct
+    `KeyImage::from_canonical_bytes(...)` explicitly.
+
+  **Cascade closure (verify API + tests).** Final pass on the
+  cascade — the public verifier surface and the last test-helper
+  seams:
+  - **`shekyl-fcmp::proof::verify`:** `key_images: &[[u8; 32]]` →
+    `&[KeyImage]`. `pseudo_outs: &[[u8; 32]]` stays raw — pseudo-
+    output commitments are a different concept, and the type-system
+    protection is specifically for the key-image slot. The verifier
+    consumes typed inputs via `.as_bytes()` exactly once at the
+    point where the function downcasts to the upstream FCMP++
+    library's byte-shaped API. New `shekyl-fcmp` regular dependency
+    on `shekyl-crypto-pq` (cycle-free: `shekyl-crypto-pq` references
+    `shekyl-fcmp` only as a `[dev-dependencies]` entry). The type is
+    re-exported as `pub use shekyl_crypto_pq::key_image::KeyImage`
+    from `shekyl-fcmp::proof` so callers (fuzz harnesses) can name
+    it without taking a direct dep.
+  - **`shekyl-ffi::lib`'s `shekyl_fcmp_verify` marshaling:** rebuilds
+    `Vec<KeyImage>` via `KeyImage::from_canonical_bytes` from the
+    C-supplied `*const u8` buffer; `pseudo_outs` marshaling is
+    unchanged.
+  - **`shekyl-fcmp` fuzz targets** (`fuzz_tx_deserialize_fcmp_type7`,
+    `fuzz_fcmp_proof_deserialize`) updated their key-image
+    generators to `Vec<KeyImage>` since they call `verify` directly.
+  - **`shekyl-engine-core::engine::refresh::tests::make_block_with_spending_tx`:**
+    `key_image: [u8; 32]` → `key_image: KeyImage`; the typed value
+    is unwrapped via `.as_bytes()` exactly once at the
+    `Input::ToKey { key_image: CompressedPoint(...) }` construction
+    site (the on-wire `CompressedPoint` is the raw-byte boundary).
+  - **`shekyl-ffi/tests/signing_round_trip::ScannedSecrets.key_image`:**
+    intentionally remains `[u8; 32]`. This is a C-ABI scratch
+    buffer: `shekyl_scan_and_recover` writes via
+    `key_image.as_mut_ptr()` and the bytes are re-handed to a later
+    FFI call via `.as_ptr()`. The C ABI is the authoritative raw-
+    byte boundary on both sides; wrapping in `KeyImage` here would
+    inject `from_canonical_bytes` / `as_bytes` shuffles at every
+    seam without adding type protection. A doc-comment on the
+    struct records the rationale.
+
+  **Property-delivery framing.** This sweep is structural — no
+  consensus rule, no wire format, no FFI layout changes. The
+  type-system protection is the deliverable: every secret-bearing
+  32-byte field and every per-output `KeyImage` field now refuses
+  accidental cross-wiring through Rust's nominal type system, which
+  is what M3d's "secrets confined to engine" property is later
+  going to lean on. M3a alone landed `ViewSecret` and the
+  `KeyEngine` trait; this sweep extends the typed-wrapper coverage
+  to every remaining call site so M3b–M3e don't have to revisit
+  the same surface.
+
+- **Monero-reference rename for Shekyl-genesis primitives (sweep
+  branch follow-on; analogous to M3a Commit 5's `classical-Monero`
+  → `classical Edwards-curve` rename per `60-no-monero-legacy.mdc`).**
+  Three call sites in Shekyl-first crates framed Shekyl-genesis-locked
+  primitives as Monero-side artifacts; reframed to put Shekyl
+  primary, with the upstream/CryptoNote provenance noted as
+  context rather than ownership.
+
+  - `rust/shekyl-ffi/Cargo.toml` description: `"FFI bridge between
+    C++ Monero core and Rust modules"` → `"FFI bridge between
+    Shekyl's C++ core and Shekyl's Rust crates"`. The C++ daemon is
+    Shekyl's (forked-and-renamed); the FFI does not bridge to
+    upstream Monero.
+  - `rust/shekyl-crypto-pq/src/derivation.rs` test-helper varint
+    comment: `// Monero varint encoding` → "Shekyl wire varint
+    (7-bit continuation, CryptoNote-style; same shape as upstream
+    Monero's varint, but Shekyl-genesis-locked)". The varint format
+    is the standard 7-bit-continuation shape inherited from
+    CryptoNote, not a Monero-specific construct.
+  - `rust/shekyl-crypto-hash/src/lib.rs` module doc-comment:
+    `Keccak-256 hashing matching Monero/Shekyl's cn_fast_hash` →
+    `Keccak-256 hashing for Shekyl's cn_fast_hash primitive
+    (byte-identical to upstream Monero's; that compatibility is
+    incidental to the genesis-locked Shekyl spec, not a
+    Monero-compatibility requirement)`.
+
+  Out of scope: legitimate provenance pointers (`monero-oxide`'s
+  `hash_to_point`, fork-attribution license headers in
+  `shekyl-scanner`, "Monero mainnet" empirical comparisons,
+  `60-no-monero-legacy.mdc` exclusion notices documenting what
+  Shekyl deliberately rejects from Monero) are preserved as-is —
+  those describe the fork relationship correctly. The earlier
+  M3a Commit 5 sweep cleared the design-doc misframings; this
+  pass closes the remaining Rust-side residue.
+
+- **`KeyEngine` trait surface and `LocalKeys` in-process implementor
+  introduced (Stage 1 PR 3 — M3a; the third trait-boundaries PR per
+  [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.3).** The M3a slice of the five-PR Stage-1 PR 3 migration
+  (M3a–M3e per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §3) lands as `pub(crate)` on `shekyl-engine-core`. M3a is the
+  architectural foundation against which the "secrets confined to
+  engine" structural property activates at M3d's merge; M3a itself
+  delivers no user-visible behavior change. The trait owns
+  `AllKeysBlob` privately and exposes a workflow-shape surface
+  (no per-output secret material crosses the trait boundary).
+
+  - **`pub(crate) trait KeyEngine`** in
+    [`engine::traits::key`](../rust/shekyl-engine-core/src/engine/traits/key.rs).
+    Four workflow-shaped methods per
+    [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+    §4: `account_public_address(&self) -> &AccountPublicAddress`
+    (sync borrowed read); `derive_subaddress(&self, idx,
+    purpose) -> Result<SubaddressFor, Self::Error>` (sync, two
+    purposes — `Audit` returns the classical Edwards-curve
+    `(spend_pk, view_pk)` pair, `Recipient` returns the encoded
+    address + hybrid KEM PK pair); `try_claim_output(&self,
+    input) -> impl Future<Output = Result<OutputClaimResult,
+    Self::Error>> + Send` (async; bundles X25519 view-tag
+    pre-filter, hybrid decap, HKDF chain, key-image computation,
+    deterministic `OutputHandle` derivation behind a single trait
+    boundary); `sign_transaction(&self, tx) -> impl
+    Future<Output = Result<TxSignatures, Self::Error>> + Send`
+    (async; resolves per-input handles to per-output spending
+    material and produces hybrid signatures + FCMP++ witnesses).
+    The associated `type Error: Into<KeyEngineError>` lets
+    orchestration code propagate uniform errors regardless of
+    implementor.
+  - **`pub(crate) struct LocalKeys`** in
+    [`engine::local_keys`](../rust/shekyl-engine-core/src/engine/local_keys.rs).
+    Owns `AllKeysBlob` privately; caches `AccountPublicAddress`
+    and pre-computes `(view_scalar, spend_public)` cryptographic
+    forms at construction; guards a reverse-lookup subaddress
+    registry under `RwLock` (the `LocalLedger` precedent for
+    `&self` async with synchronous interior mutation). Real
+    implementations of `account_public_address`,
+    `derive_subaddress(_, Audit)`, and `try_claim_output`;
+    named-infrastructure-gap stubs for
+    `derive_subaddress(_, Recipient)` and `sign_transaction`.
+    Constructors: `from_keys_blob(keys, network)` (production)
+    and `#[cfg(test)] from_test_seed(seed)` (raw32 testnet
+    derivation for unit/integration fixtures); 11 tests cover
+    cached-address stability, audit-derivation determinism,
+    recipient-stub validation, claim happy path, deterministic-
+    handle property, varying `tx_hash`, other-wallet rejection,
+    unregistered-subaddress rejection, register-then-claim
+    sequence, and `sign_transaction` stub validation.
+  - **Two named-infrastructure-gap `KeyEngineError` variants:**
+    `RecipientSubaddressKemKeygenNotImplemented` (per-subaddress
+    hybrid X25519+ML-KEM-768 keygen,
+    `shekyl_crypto_pq::subaddress::derive_subaddress_kem_keypair`,
+    is unbuilt; lands per
+    [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+    §6.4 / §3.1.3) and `SignTransactionTraitSurfaceIncomplete`
+    (`TxToSign`'s public-on-chain per-input data and FCMP++
+    tree-branch context are PR-5-pinned forward-declared; the
+    bridge to `shekyl_tx_builder::sign_transaction` lands when
+    the `PendingTxEngine` PR finalizes the shape). Both variants
+    are `#[non_exhaustive]`-shaped accretions; existing call
+    sites stay source-compatible as the surface evolves.
+  - **`OutputHandle` newtype + `derive_output_handle`** in
+    [`shekyl_crypto_pq::handle`](../rust/shekyl-crypto-pq/src/handle.rs).
+    16-byte opaque reference deterministically derived via
+    cSHAKE256 over `view_secret || tx_hash || output_index_le8`
+    with customization `"shekyl/output-handle-v1"` per
+    [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md)
+    §7.12. The deterministic-handle pathway (Round 4 pre-flight
+    closure of §7.11=(3)) replaces the originally-considered
+    cached `HandleTable` data structure: re-derivation at spend
+    time is cheap (one cSHAKE256 invocation) and dissolves the
+    A6 (memory pressure) and Pattern-5 (concurrent-access)
+    Round-3 attack-surface clusters by construction. Reference
+    vectors locked in the module's test substrate.
+  - **`KeyImage` newtype** in
+    [`shekyl_crypto_pq::key_image`](../rust/shekyl-crypto-pq/src/key_image.rs).
+    32-byte canonical compressed Ed25519 encoding of `I = x ·
+    H_p(O)`; the per-output public on-chain double-spend
+    identifier. Carries the same privacy-correlation discipline
+    as `OutputHandle` (truncated `Debug` exposing the first two
+    bytes only; no `Display`; no `Zeroize` because key images are
+    publicly derivable from on-chain data). Per
+    [`.cursor/rules/18-type-placement.mdc`](../.cursor/rules/18-type-placement.mdc),
+    `KeyImage` is **transform-shaped** — defined by its
+    derivation function — so it lives with the function rather
+    than with any state-shaped consumer that happens to store it.
+  - **`ViewSecret` newtype** in
+    [`shekyl_crypto_pq::keys`](../rust/shekyl-crypto-pq/src/keys.rs).
+    `#[repr(transparent)]` 32-byte wrapper preserving the
+    bit-for-bit FFI layout invariant with
+    `shekyl_ffi::ShekylAllKeysBlob.view_sk: [u8; 32]`. Manual
+    truncated `Debug`; structural `ZeroizeOnDrop`. Wraps
+    `AllKeysBlob::view_sk`; downstream call sites consume the
+    canonical bytes via `.as_canonical_bytes()`. The remaining
+    `AllKeysBlob` typed-wrapper migration (`spend_sk` →
+    `SpendSecret`, `view_pk` → `ViewPublicKey`, `spend_pk` →
+    `SpendPublicKey`) lands as a separate short-lived branch
+    between M3a and M3b.
+  - **Subaddress derivation primitives relocated to
+    [`shekyl_crypto_pq::subaddress`](../rust/shekyl-crypto-pq/src/subaddress.rs).**
+    Classical Edwards-curve `subaddress_derivation_scalar` and
+    `subaddress_keys` (formerly methods on
+    `shekyl_scanner::ViewPair`) move to a dedicated module per the
+    path-stateless discipline (extension to the stateless-actor
+    framing): paths from trait surface to cryptographic primitive
+    must be stateless end-to-end, not just at their endpoints.
+    The module is positioned to also house the future
+    `derive_subaddress_kem_keypair` (per-subaddress hybrid X25519
+    + ML-KEM-768 keygen, §6.4) when its infrastructure lands —
+    the canonical home for **all** Shekyl subaddress derivation.
+    `ViewPair::subaddress_keys` is preserved as a thin call-
+    through; `ViewPair::subaddress_derivation` was deleted (no
+    live caller after the relocation, per
+    [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)).
+    `SubaddressIndex::to_canonical_bytes` accessor and the
+    `PRIMARY` constant added to
+    [`shekyl_engine_state::SubaddressIndex`](../rust/shekyl-engine-state/src/subaddress.rs)
+    per
+    [`.cursor/rules/18-type-placement.mdc`](../.cursor/rules/18-type-placement.mdc):
+    state-shaped types whose serialization is cryptographically
+    load-bearing carry a single canonical-bytes accessor at the
+    type definition; the cryptographic functions take pre-converted
+    bytes rather than the typed index.
+  - **`SourceSecretsBundle` transitional contract type** in
+    [`engine::traits::key`](../rust/shekyl-engine-core/src/engine/traits/key.rs).
+    Documents the per-input secret material
+    `KeyEngine::sign_transaction` needs — `(spend_key_x,
+    spend_key_y, commitment_mask, combined_ss, output_index)`,
+    each `Zeroizing`-wrapped — independent of where the secrets
+    originate. The bundle's *shape* is stable across the migration
+    (M3a populates from `TransferDetails`'s legacy fields; M3b+
+    derives internally from `(view_secret, source_ciphertext,
+    output_index)`); only the *source* evolves. Localizing the
+    M3b churn to bundle-population sites (rather than across the
+    trait surface and every implementor) is the load-bearing
+    property of this transitional field.
+
+  Property-delivery framing: M3a alone does not activate the
+  "secrets confined to engine" property — `TransferDetails`
+  still carries its 5 secret-bearing fields, and the bridge
+  reads from them transitionally. The property activates at
+  M3d's merge per
+  [`docs/design/STAGE_1_PR_3_MIGRATION_PLAN.md`](./design/STAGE_1_PR_3_MIGRATION_PLAN.md)
+  §4.1, when those fields are deleted. M3a is what makes the
+  activation possible: the `KeyEngine` trait is the boundary the
+  property eventually attaches to, and the deterministic
+  `OutputHandle` is the stateless-shape that replaces a per-call
+  handle table by re-deriving spending material at spend time.
+
+  Post-merge fix-ups against the M3a PR's review feedback (PR #32
+  Copilot review, landed before merge):
+
+  - **Redacted `Debug` on secret-bearing message shapes.**
+    `SourceSecretsBundle`, `TxInputSigningContext`, and `TxToSign`
+    each now carry a manual `Debug` impl (no `derive(Debug)`)
+    redacting the four `Zeroizing<…>` secret fields under
+    `[REDACTED]`. Per `35-secure-memory.mdc`, `Zeroizing<T>: Debug`
+    delegates to `T: Debug`, so deriving `Debug` on a secret-bearing
+    struct prints raw secret bytes through `tracing` fields, panic
+    backtraces, or `dbg!()` calls. Three new sentinel-byte tests in
+    `engine::traits::key::tests` pin the redaction.
+  - **PRIMARY special-cased in `derive_subaddress(_, Audit)`.**
+    The encoded primary address packs the wallet's *base* keys
+    (`spend_pk = D`, `view_pk = a*G`) into `classical_address_bytes`
+    directly, and the reverse-lookup registry pre-registers
+    `keys.spend_pk` against `SubaddressIndex::PRIMARY`. The trait
+    method previously routed `PRIMARY` through `subaddress_keys`,
+    returning `(D + m_0*G, a*(D + m_0*G))` — a different point that
+    matched neither the encoded address nor the registry. Special-
+    casing `idx.is_primary()` to return the base account keys
+    aligns the trait with the encoded address; for `idx >= 1`, the
+    per-index derivation is unchanged. New
+    `derive_subaddress_primary_audit_returns_base_account_keys`
+    test pins the contract; docstrings on
+    `shekyl_engine_state::SubaddressIndex`,
+    `shekyl_crypto_pq::subaddress`, and the `subaddress_keys`
+    primitive itself updated to spell out the special-case truth.
+  - **Hard-coded pinned vector for `subaddress_derivation_scalar`.**
+    The prior `derivation_scalar_pinned_vector` test re-ran the
+    same `keccak256_to_scalar` primitive on both sides of the
+    equality, so any drift inside that primitive flowed through
+    both arms. Replaced with a true known-answer test (32-byte
+    expected vector hard-coded for
+    `(view = 0x0102_0304_0506_0708, idx = 1)`) plus a renamed
+    formula-lock companion test that retains the prior coverage.
+    The pair fails in different classes of regression and pins
+    both the spec output bytes and the implementation composition.
+  - **Type-placement rule corrected.** `.cursor/rules/18-type-placement.mdc`
+    named `SubaddressIndex`'s home as `shekyl-engine-core` (twice);
+    the type actually lives in `shekyl-engine-state`. Updated.
+
+- **`LedgerEngine` trait extracted; `Engine<S, D>` parameterized
+  over `L: LedgerEngine` with default `LocalLedger` (Stage 1 PR 2,
+  the second trait-boundaries PR per
+  [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.2).** The Phase 2a `LedgerEngine` slice of the Stage 1
+  trait-extraction work lands as `pub(crate)` on
+  `shekyl-engine-core`. The PR's primary surface — the
+  `LedgerEngine` trait, the `LocalLedger` aggregate, and the
+  `Engine<S, D, L>` / `OpenedEngine<S, D, L>` parameterization.
+  The new type parameters carry default arguments (`D =
+  DaemonClient, L = LocalLedger`) so non-test consumers continue
+  to name `Engine<S>` / `OpenedEngine<S>` exactly as before; the
+  default-argument shape preserves the *names* of the public
+  types, not every method signature underneath them. The one
+  observable public-API signature change is `Engine::ledger()`,
+  which now returns `LedgerReadGuard<'_>` (a wrapper around
+  `RwLockReadGuard<'_, LedgerState>`) instead of `&WalletLedger`;
+  `LedgerReadGuard` derefs to `WalletLedger`, so call-style read
+  access (`engine.ledger().balance()`, etc.) is
+  source-compatible. Code that named the previous return type
+  explicitly (`let r: &WalletLedger = engine.ledger();`) or
+  stored the method as a function item must update — see the
+  `Engine::ledger()` doc-comment in
+  [`rust/shekyl-engine-core/src/engine/mod.rs`](../rust/shekyl-engine-core/src/engine/mod.rs)
+  for the explicit upgrade path.
+  The PR's lifecycle threaded three pre-flight doc-only spec
+  amendments (PRs #22, #23, #25) before the implementation work
+  began — see
+  [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](./design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+  §1.1 / §2.2 for the discipline pattern.
+
+  - **`pub(crate) trait LedgerEngine`** in
+    [`engine::traits::ledger`](../rust/shekyl-engine-core/src/engine/traits/ledger.rs).
+    Post-Phase-0c four-method surface: `synced_height(&self) ->
+    u64`, `snapshot(&self) -> LedgerSnapshot`, `balance(&self) ->
+    BalanceSummary` (sync, infallible reads), and
+    `apply_scan_result(&self, ScanResult) -> Result<(),
+    RefreshError>` (async, mutating; signals
+    `RefreshError::ConcurrentMutation` for the §5.2 retry
+    contract). The async `&self` mutation is enabled by interior
+    `RwLock<LedgerState>` per §2.2's Round 3 disposition; this is
+    the Stage-4-correct call shape, landed Stage-1-early so the
+    actor cutover becomes a no-op for this concern. `LedgerError`
+    is reserved as an empty starter type for Phase-2a-specific
+    error variants the trait does not currently emit.
+  - **`pub struct LocalLedger { state: RwLock<LedgerState> }`** in
+    [`engine::local_ledger`](../rust/shekyl-engine-core/src/engine/local_ledger.rs).
+    `LedgerState` bundles `WalletLedger` + `LedgerIndexes` (the
+    two fields previously held flat on `Engine`); reservations
+    stay on `Engine` for now and migrate to `LocalPendingTx` when
+    the `PendingTxEngine` PR ships. The aggregate is `pub` (not
+    the originally-planned `pub(crate)`) because Rust requires
+    every default type parameter on a `pub` type to be at least as
+    visible as the type itself; the trait `LedgerEngine` itself
+    stays `pub(crate)` per §1.4 of the contract. See
+    [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](./design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+    §3.4 for the visibility-lift rationale.
+  - **`Engine<S, D: DaemonEngine = DaemonClient, L: LedgerEngine
+    = LocalLedger>`** and **`OpenedEngine<S, D, L>`**. The ledger
+    component becomes a third generic parameter with a default
+    that preserves the existing concrete-typed shape for
+    production callers, while making the ledger surface
+    substitutable for hybrid tests. The trait-dispatch shape
+    monomorphizes away as expected, but the parameterization
+    intentionally pairs with the `LocalLedger` interior-mutability
+    refactor below; the measured iai-callgrind cost of the
+    combined change on `engine_trait_bench_ledger_synced_height`
+    is `+390%` (10 → 49 instructions, sourced entirely from the
+    `RwLock::read()` acquisition in `LocalLedger::read()`, not
+    from trait dispatch). Per the
+    [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §3.3.1 disposition (a) — intrinsic to Stage 1's interior-
+    mutability shape and retiring at Stage 4 when Path B replaces
+    `RwLock<LedgerState>` with `Arc`-published snapshots for read
+    paths — the cumulative-delta breach is acknowledged as
+    structural rather than as a regression to optimize within
+    PR 2; full reasoning in
+    [`docs/PERFORMANCE_BASELINE.md`](./PERFORMANCE_BASELINE.md)'s
+    `engine_trait_bench_ledger_synced_height` cumulative-delta
+    footnote. Each `pub` item bounded by the `pub(crate)`
+    `LedgerEngine` trait carries an `#[allow(private_bounds)]`
+    annotation paralleling the `DaemonEngine` annotations from
+    PR 1; both clear at Stage 4 when both traits promote to `pub`
+    per §1.4.
+  - **Refresh path migrated to `&self` interior mutation.**
+    `Engine::synced_height` now dispatches through
+    `LedgerEngine::synced_height`; `Engine::apply_scan_result`,
+    `Engine::refresh`, and `Engine::refresh_with` flip from
+    `&mut self` to `&self`; the producer task `run_refresh_task`'s
+    outer `Arc<RwLock<Engine>>` write-lock guard becomes a
+    read-lock per the §3.3 over-serialization framing. The
+    synchronous wrappers `refresh` / `refresh_with` retain their
+    `LocalLedger`-specialized impl block because the trait method
+    `apply_scan_result` is `async fn` and the sync entry points
+    use `LocalLedger::write()` directly without a Tokio runtime
+    in scope (queued at V3.x in
+    [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md) for full sync-wrapper
+    generalization). `Engine::start_refresh` and
+    `run_refresh_task` *are* generalized over `L: LedgerEngine`,
+    sufficient for the hybrid retry test to dispatch through the
+    trait against `MockLedger`.
+  - **`MockLedger` deterministic in-memory `LedgerEngine`
+    implementor** in
+    [`engine::test_support`](../rust/shekyl-engine-core/src/engine/test_support.rs).
+    Holds `WalletLedger` + `LedgerIndexes` + a queued-failure
+    pump (`ConcurrentMutation`) + a `ChaCha20Rng` reserved for
+    future RNG-driven fixtures. Constructors mirror PR 1's
+    `MockDaemon`: `with_seed(master, ROLE_LEDGER)`,
+    `with_seed_and_state`, plus a `queue_concurrent_mutation`
+    helper for failure injection. `ROLE_LEDGER` was reserved in
+    PR 1's `test_support.rs` and is now consumed.
+  - **`Engine::replace_ledger<L2: LedgerEngine>(self, ledger: L2)
+    -> Engine<S, D, L2>`** mirrors `Engine::replace_daemon` from
+    PR 1. `#[cfg(test)] pub(crate)` for now; retires alongside the
+    Stage 4 trait-promotion / production-constructor
+    generalization at V3.2 per the
+    [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §1.2 row.
+  - **Hybrid retry test
+    `hybrid_apply_scan_result_retries_on_concurrent_mutation`** —
+    end-to-end coverage of the §5.2 retry contract via
+    `MockLedger.queue_concurrent_mutation`. PR 1 covered the §5.2
+    happy path (`hybrid_linear_scan_5_blocks_advances_synced_
+    height`); PR 2 covers the failure-path retry contract; PR 3+
+    pick up the remaining §5.2 properties under the
+    "each per-trait PR exercises one §5.2 property predecessors
+    have not yet covered" template pinned in
+    [`docs/design/STAGE_1_PR_2_LEDGER_ENGINE.md`](./design/STAGE_1_PR_2_LEDGER_ENGINE.md)
+    §2.3.
+  - **`engine_trait_bench_ledger_balance` criterion +
+    iai-callgrind bench pair** under
+    `rust/shekyl-engine-core/benches/`, gated on the existing
+    `bench-internals` Cargo feature. Measures the
+    `LedgerEngine::balance` trait method against a 1024-
+    `TransferDetails` state-populated fixture
+    (`LocalLedger::populate_for_bench` injects state through a
+    `bench-internals`-only escape hatch; production state remains
+    behind the trait-dispatched mutating path). The
+    `engine_trait_bench_ledger_synced_height` pair from Stage 0
+    PR-2 carries forward and gains a cumulative-delta row at the
+    PR-tip SHA `8efae3a40` per §3.3.1 of the trait-boundaries
+    spec. Frozen-baseline source, iai-callgrind gate metric,
+    iai informational metrics, criterion metrics, and capture-
+    environment cross-references for
+    `engine_trait_bench_ledger_balance` (instructions=20580 on
+    a 1024-`TransferDetails` fixture) are now transcribed into
+    [`docs/PERFORMANCE_BASELINE.md`](./PERFORMANCE_BASELINE.md)
+    from N=3-invariant CI `workflow_dispatch` runs `25307774464`,
+    `25307777614`, `25307781436` against PR-tip `8efae3a40`,
+    following the "do-not-transcribe-laptop-captures" discipline
+    established during Stage 0 PR-2. The PR-tip SHA
+    `8efae3a40` includes two preparatory script commits
+    (`80d913ea2`: extend `BENCHES` row format to thread cargo
+    `--features`; `8efae3a40`: append the balance bench row with
+    `:bench-internals`) that landed after the design doc's nine-
+    commit plan to surface the new bench to the rolling-baseline
+    harness.
+
+- **`DaemonEngine` trait extracted; `Engine<S>` parameterized over
+  the daemon implementor (Stage 1 PR 1, the first
+  trait-boundaries PR per
+  [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §2.5).** The Phase 2a `DaemonEngine` slice of the Stage 1
+  trait-extraction work lands as `pub(crate)` on
+  `shekyl-engine-core`. The PR's primary surface — the
+  `DaemonEngine` trait and the `Engine<S, D>` /
+  `OpenedEngine<S, D>` parameterization — is `pub(crate)` and
+  only visible to crate-internal callers; existing public types
+  (`Engine`, `OpenedEngine`, `DaemonClient`, the lifecycle /
+  refresh / pending re-exports in `lib.rs`) keep their existing
+  shapes for non-test consumers via the `D = DaemonClient`
+  default. The one externally-visible surface change is the
+  removal of the previously-public `DaemonClient::inner()`
+  accessor (called out under "Removed" below); cross-workspace
+  audit found zero remaining callers, and the functionality is
+  preserved via `DaemonClient`'s direct `Rpc` impl.
+
+  - **`pub(crate) trait DaemonEngine: Rpc + Clone + Send + Sync +
+    'static`** in
+    [`engine::traits::daemon`](../rust/shekyl-engine-core/src/engine/traits/daemon.rs).
+    `type Error: Into<IoError>`. Stage 1 surface per §2.5: two
+    method signatures (`get_fee_estimates`,
+    `submit_transaction`) defined as `impl Future` (the
+    in-trait-async stable form) so the trait is dyn-incompatible
+    by design and every consumer monomorphizes against a concrete
+    `D`. Method bodies on `DaemonClient` are `todo!()` stubs
+    pending Phase 2a fee-policy / submit-policy work; the trait
+    surface is what's load-bearing for this PR.
+  - **`#[non_exhaustive] FeeEstimates { economy, standard,
+    priority: FeeRate }`** and **`#[non_exhaustive] enum
+    TxSubmitOutcome { Submitted { hash }, AlreadyKnown { hash }
+    }`** colocated with the trait. Both types are `pub(crate)`
+    and grow additively; Phase 2a may extend `FeeEstimates` with
+    `estimated_block_height` / `estimation_timestamp` etc. and
+    `TxSubmitOutcome` with richer dedup context without breaking
+    callers.
+  - **`Engine<S, D: DaemonEngine = DaemonClient>` and
+    `OpenedEngine<S, D: DaemonEngine = DaemonClient>`.** The
+    daemon component becomes a generic parameter with a default
+    that preserves the existing concrete-typed shape for
+    production callers (`shekyl-cli`, `shekyl-engine-rpc`, the
+    forthcoming Rust JSON-RPC server), while making the
+    daemon-touching surface substitutable for hybrid tests. The
+    parameterization compiles to identical code via monomorphization;
+    expected iai-callgrind delta on
+    `engine_trait_bench_ledger_synced_height` is 0% (10 → 10
+    instructions) since the bench's call path doesn't observe
+    the daemon parameter.
+    Each `pub` item bounded by the `pub(crate)` `DaemonEngine`
+    trait carries an `#[allow(private_bounds)]` annotation with a
+    centralized rationale on the `Engine` struct definition; the
+    annotations clear at Stage 4 when the trait promotes to `pub`
+    per `V3_ENGINE_TRAIT_BOUNDARIES.md` §1.4.
+  - **`DaemonClient` now implements `Rpc` directly** by
+    delegating each method to its inner `SimpleRequestRpc`. The
+    previous `DaemonClient::inner()` accessor is removed; in-tree
+    callers (`engine::refresh::*`) bind against `DaemonEngine`
+    or `Rpc` instead of reaching through to the wrapped
+    transport. `From<RpcError> for IoError` lands in
+    [`engine::error`](../rust/shekyl-engine-core/src/engine/error.rs)
+    to satisfy `DaemonEngine::Error: Into<IoError>` for the
+    `DaemonClient` impl.
+  - **`MockDaemon` (renamed from `MockRpc`) extends to a full
+    `DaemonEngine` implementor** in
+    [`engine::test_support`](../rust/shekyl-engine-core/src/engine/test_support.rs).
+    Adds `submit_transaction` deduplication by deterministic tx
+    hash, `get_fee_estimates` returning a fixed snapshot
+    (configurable via `set_fee_estimates`), fee-error queueing,
+    submit-error queueing, and the `with_seed` /
+    `with_seed_and_chain` constructors that carry a
+    `ChaCha20Rng` reserved for future RNG-driven affordances per
+    §6.2 (fee jitter, synthetic-fork randomization) — held but
+    not yet consumed at this PR's contract surface.
+    Failure-injection contract fidelity per §6.1 is exercised
+    by a new test suite in the same module (deterministic
+    submit hashing across clones, submit dedup behaviour,
+    fee-snapshot-override persistence, queued-error drain
+    semantics).
+  - **`MockDaemon` chain-indexing convention now matches the
+    real-daemon protocol** (`chain[0]` is genesis at height 0;
+    `chain[h]` is the block at height `h`; `get_height` returns
+    `chain.len()`). The previous off-by-one convention
+    (`chain[i]` was the block at height `i + 1`) was a latent
+    contradiction that surfaced as soon as a hybrid test
+    composed `MockDaemon` with the production producer's range
+    derivation. Aligning the conventions removes the
+    bug-attractor; the existing `refresh_driver_tests` were
+    re-arithmetic'd in the same commit so the test substrate has
+    one convention going forward.
+  - **`derive_seed(master: &[u8; 32], role: &[u8]) -> [u8; 32]`**
+    in `engine::test_support` (HKDF-SHA256 per
+    `V3_ENGINE_TRAIT_BOUNDARIES.md` §6.2). The first role tag
+    `ROLE_DAEMON = b"role/daemon"` lands in this PR; per-trait
+    roles join as their owning trait extracts. Pinned by a
+    fixture-based unit test so accidental changes to the role
+    tag or KDF construction surface as test failures.
+  - **`#[cfg(test)] pub(crate) Engine::replace_daemon<D2>(self,
+    daemon: D2) -> Engine<S, D2>`** in
+    [`engine::lifecycle`](../rust/shekyl-engine-core/src/engine/lifecycle.rs).
+    Move-rebuild helper for the §6.3 hybrid-construction
+    discipline: real `Engine::create` with a dummy `DaemonClient`
+    pays the lifecycle cost once (file lock, KDF, ledger init,
+    refresh slot), then `replace_daemon(mock)` swaps in the
+    `MockDaemon` for the measured region. Test-only visibility;
+    cleanup target is V3.2 alongside the production-constructor
+    generalization over `D: DaemonEngine` (documented at the
+    method site).
+  - **First end-to-end hybrid test under
+    `start_refresh_integration_tests::hybrid_linear_scan_5_blocks_advances_synced_height`.**
+    Wires `MockDaemon` as the engine's daemon component for a
+    real `start_refresh` invocation (fresh wallet at
+    `synced_height = 0`, six-block chain at heights 0..=5),
+    asserting (a) the producer derives `processed_height_range
+    == 1..6`, (b) `blocks_processed == 5` (post-genesis only),
+    (c) post-refresh `synced_height() == 5`, (d) the refresh
+    slot releases within 5s of `join().await` returning. This
+    is the §5.2 retry-contract reachability proof — the slot
+    release timing observation is the first coverage of the
+    success-path lifecycle for the refresh slot (the existing
+    `start_refresh_integration_tests` module exercises only the
+    unreachable-daemon error path).
+  - **Closes the FOLLOWUPS.md V3.1 row "Generic `DaemonClient`
+    so `MockRpc` can drive `start_refresh`".** The row's
+    close-condition (handle-layer end-to-end scenarios against
+    a synthetic block batch via a substitutable daemon
+    transport) is satisfied by the parameterization plus the
+    hybrid test above.
+
+  Performance gate per `V3_ENGINE_TRAIT_BOUNDARIES.md` §3.3.1:
+  the `engine_trait_bench_ledger_synced_height` cumulative-delta
+  row for this PR's tip is captured via GHA `workflow_dispatch`
+  (N=3 invariance) and appended to
+  [`docs/PERFORMANCE_BASELINE.md`](./PERFORMANCE_BASELINE.md) in
+  a follow-up commit on this branch before merge per the
+  "do-not-transcribe-laptop-captures" discipline established
+  during Stage 0 PR-2.
+
+### Removed
+
+- **Chaingen-dependent C++ test surface (`tx_validation`,
+  `fcmp_tests`, `staking`).** Test hygiene Δ1 (2026-05-05) deletes
+  `tests/core_tests/{tx_validation,fcmp_tests,staking}.{cpp,h}`
+  (~2200 lines, 32 registered tests + 7 already-disabled struct
+  decls), the `chaingen_main.cpp` registrations, and the dead
+  helpers `apply_fcmp_pipeline` / `construct_fcmp_tx` /
+  `construct_fcmp_staked_tx` in `chaingen.cpp` (no callers remain
+  after the test deletion). Root cause: the chaingen synthetic-block
+  mining infrastructure (`MAKE_GENESIS_BLOCK`, `REWIND_BLOCKS_N`,
+  `MAKE_NEXT_BLOCK`) produces v1 coinbase transactions that
+  `cryptonote_format_utils.cpp:295` rejects under v3-from-genesis
+  ("Shekyl requires tx version >= 3"); no chain ever materializes
+  on the synthetic side, so `fill_tx_sources_and_destinations`
+  returns no spendable outputs and every test that needs to construct
+  a user transaction fails at chain setup. The CI baseline previously
+  flagged 19 failures (cluster C); a full survey (this PR) confirmed
+  the same root cause hits all 32 chaingen-dependent tests including
+  `gen_fcmp_tx_valid`. The invariants those tests covered migrate to
+  Rust per [`docs/FOLLOWUPS.md`](./FOLLOWUPS.md) — three target-V3.x
+  entries (tx-validation, FCMP++ tx-pool, staking lifecycle), each
+  landing with the corresponding Rust port of the daemon-side
+  validation path. Per `.cursor/rules/20-rust-vs-cpp-policy.mdc`, tx
+  validation defines a cryptographic contract → Rust. Per
+  `.cursor/rules/15-deletion-and-debt.mdc` "default: delete," dead
+  code goes; the V3.1 disposition that previously deferred this work
+  to "wallet2 hardening / V3.2 wallet2 removal" is closed by this
+  deletion. Closes
+  [`docs/CI_BASELINE.md`](./CI_BASELINE.md) cluster C.
+
+- **`DaemonClient::inner()` accessor** in
+  [`engine::daemon`](../rust/shekyl-engine-core/src/engine/daemon.rs).
+  The method exposed the wrapped `SimpleRequestRpc` so callers
+  could invoke `Rpc` methods through it; with the Stage 1 PR 1
+  parameterization, `DaemonClient` implements `Rpc` directly and
+  the indirection is dead. Cross-workspace audit
+  (`shekyl-core`, `shekyl-gui-wallet`, `shekyl-dev`, `shekyl-web`,
+  `shekyl-mobile-wallet`, `monero-oxide`) found zero remaining
+  callers; per `15-deletion-and-debt.mdc` "default: delete" and
+  the no-`#[deprecated]`-without-deletion-target rule, the
+  accessor is removed outright rather than retained as a
+  deprecation shim.   Any downstream caller can replace
+  `client.inner().get_height()` with `client.get_height()`
+  (the `Rpc` supertrait is in scope wherever `DaemonClient` is)
+  with no functional difference.
+
+### Changed
+
+- **Rust workspace clippy and rustfmt CI gates** in
+  [`.github/workflows/build.yml`](../.github/workflows/build.yml)
+  (`Rust: audit, test, determinism` job, immediately after `cargo
+  audit`). Two gates added:
+
+  - `cargo fmt --all -- --check` — fails CI on any unformatted
+    Rust file across the 14-crate workspace.
+  - `cargo clippy --workspace --all-targets --keep-going --
+    -D warnings` — fails CI on any clippy finding of any
+    severity. The workspace already configured many lints at
+    deny-level via [`rust/Cargo.toml`](../rust/Cargo.toml)
+    `[workspace.lints.clippy]` (`let_underscore_must_use`,
+    `cast_possible_truncation`, `uninlined_format_args`, et al.);
+    `-D warnings` extends enforcement to the default-warn lints
+    (`clone_on_copy`, `type_complexity`, `dead_code`,
+    `bound_in_more_than_one_place`, …).
+
+  The pre-existing fmt and clippy debt was discharged in this PR's
+  preceding commits before the gates were wired:
+
+  - `cargo fmt --all` over 15 Rust files (mechanical
+    import-sort and module-declaration reordering, zero behavior
+    change).
+  - 12 machine-applicable clippy auto-fixes (9 `clone_on_copy`
+    deref + 3 `uninlined_format_args` inlines).
+  - 19 `let_underscore_must_use` cures via destructuring
+    assignment (`let _ = expr;` → `_ = expr;`) at best-effort
+    channel-send and join-drain sites.
+  - 7 substantive clippy findings cured with per-site rationale:
+    bound consolidation in `run_refresh_task`, `usize::try_from`
+    at the test-loop cast site, `RefreshHandleFixture` typedef,
+    and per-item `#[allow(dead_code)]` on the Phase 2a-stub
+    `DaemonEngine` trait surface.
+
+- **`.cursor/rules/15-deletion-and-debt.mdc` "While we're here"
+  carve-out.** New paragraph in the rule clarifying that the
+  "while we're here is the enemy" prohibition does not preclude
+  the disciplined practice of leaving files you are *already*
+  editing for substantive reasons in fmt-clean and clippy-clean
+  shape. The carve-out distinguishes:
+
+  - Undisciplined "while we're here" creep (still prohibited):
+    fixing arbitrary out-of-scope issues in unrelated files.
+  - Disciplined "leave the file you touched in good shape" (now
+    explicitly permitted): mechanical fmt/clippy cleanup *within
+    the substantive-edit set* such that the post-PR file is
+    fmt-clean and clippy-clean.
+
+  The cleanup-PR pattern this project ran for Stage 1 PR 1's
+  fmt-debt is now a one-time discharge, not a recurring practice.
+  Going forward, every file your PR touches is fmt-clean and
+  clippy-clean by the time the PR lands; mechanical findings in
+  files your PR does not otherwise touch remain out-of-scope.
+
+- **`docs/CONTRIBUTING.md` Rust style and lints section.** New
+  section between "CI baseline" and "Branch protection on `dev`"
+  documenting the two new gates, the workspace-vs-per-item-vs-
+  module suppression hierarchy (`[workspace.lints.clippy] allow`
+  in `rust/Cargo.toml` for project-wide misleading lints;
+  `#[allow(lint_name)]` with one-line rationale comment for
+  site-specific suppressions matching the existing project
+  convention; module-level allows reserved for explicit
+  reviewer sign-off), and the carve-out reference. The
+  "Status checks must pass" bullet under "Branch protection on
+  `dev`" was updated to enumerate the two new gates explicitly.
+
+  Discipline reversal recorded for future readers: from this PR
+  forward, the previous practice of noting "pre-existing fmt
+  debt in <files> is unmodified per the deletion-and-debt rule"
+  is no longer applicable. Fmt-clean is the gate, not a per-PR
+  option to defer.
+
+- **`Swatinem/rust-cache@v2` replaces `actions/cache@v5` in the
+  `rust-audit-and-test` CI job** in
+  [`.github/workflows/build.yml`](../.github/workflows/build.yml).
+  The prior cache strategy had three documented waste modes
+  measured against dev tip `1155c1abe`:
+
+  - ~8m44s post-job cache UPLOAD on every run, regardless of
+    whether the cache key changed (see
+    [`docs/CI_TIMING_BASELINE.md`](./CI_TIMING_BASELINE.md)
+    "Per-step breakdown"). `actions/cache@v5` re-uploads the
+    full path set when the cache key differs from what was
+    restored; `Swatinem/rust-cache@v2` writes deltas only.
+  - No `rustc` version component in the cache key, so a
+    toolchain bump (e.g. 1.94.0 → 1.95.0 as occurred mid-cycle
+    on the `ubuntu-latest` runner) would have silently restored
+    a 1.94-built `target/`. Swatinem's default key includes
+    `rustc --version`.
+  - No `~/.cargo/bin` caching, so `cargo install cargo-audit
+    --locked` recompiled from source every run (~2m34s).
+    Swatinem caches `~/.cargo/bin` by default; combined with
+    `--locked` idempotency, the install becomes a few-second
+    metadata check on cache hits.
+
+  The `install cargo-audit` step also moved from pre-checkout
+  (where the cache had no chance to populate `~/.cargo/bin`) to
+  immediately after the Swatinem step, so the cache restore
+  reaches it first.
+
+  Measured impact (GHA run id `25265761303`,
+  `chore/ci-cache-tightening` branch tip `911989b24`,
+  toolchain 1.95.0; full breakdown in
+  `docs/CI_TIMING_BASELINE.md`):
+
+  - **Post-run cache UPLOAD**: 8m 44s before → **1m 30s cold**,
+    **0s hot**. Structural; reliably reproduces every run.
+  - **`install cargo-audit`**: 2m 34s before → **0s on hot-cache**.
+    Structural; reliably reproduces every hot-cache run.
+  - **Rust job total wall clock**: 48m 22s before (run
+    `25263753443`, dev tip `1155c1abe`) → 37m 24s cold, 35m 57s
+    hot. Headline numbers are noisy because `cargo test` swings
+    ±~3m run-to-run independently of the cache (24m 20s cold vs
+    27m 16s hot on the same SHA). The structural cache savings
+    above are the durable component of the wall-clock delta.
+
+  The PR scope is intentionally tight per the
+  `tight_then_iterate` disposition (2026-05-02). APT package
+  caching, extending Swatinem to the C++ build matrix's Rust
+  half (`Ubuntu 22.04`, `Ubuntu 24.04`, `Arch Linux`), ccache
+  effectiveness audits, and `cargo-binstall` migration are
+  enumerated as deferred follow-ups in
+  `docs/CI_TIMING_BASELINE.md` "Out of scope". Each of those is
+  a >1 commit change with its own baseline-then-after capture
+  cycle and lands as its own PR after the Swatinem deltas are
+  observed and documented.
+
+- **`docs/CI_TIMING_BASELINE.md` introduced** to record CI
+  wall-clock per job per dev tip, anchored on the metric being
+  recorded (job-level wall clock, not step durations) so deltas
+  across caching changes are reproducibly comparable. The
+  document captures the `chore/ci-cache-tightening` baseline
+  before/after pair and is the going-forward home for similar
+  captures (CI cache strategy changes, runner-image upgrades,
+  toolchain bumps that affect compile time, etc.). Per
+  `91-documentation-after-plans.mdc`, this file lives under
+  `docs/` rather than scratch so future readers don't have to
+  re-derive baselines from `gh run` logs.
+
+### Fixed
+
+- **CI Post Run cleanup no longer surfaces `##[error]ENOENT` on
+  `rust/target/tests/target` for the `Rust: audit, test, determinism`
+  job.** The `Swatinem/rust-cache@v2` post-run cleanup walker
+  ([`src/cleanup.ts` `cleanProfileTarget`](https://github.com/Swatinem/rust-cache/blob/v2.7.5/src/cleanup.ts#L41-L51))
+  treats any `target/` subdirectory named `tests` as a
+  [`kaos`](https://github.com/vertexclique/kaos) /
+  [`macrotest`](https://github.com/eupn/macrotest) /
+  [`trybuild`](https://github.com/dtolnay/trybuild)
+  nested-workspace layout and recursively cleans both
+  `tests/target/` and `tests/trybuild/`. The recursive
+  `cleanTargetDir` calls are not awaited, so async ENOENT
+  rejections on missing paths escape the synchronous `try`/`catch`
+  and surface as `##[error]ENOENT: opendir
+  rust/target/tests/target` annotations in the run summary. The
+  job concludes success (the action continues), but the
+  annotation pollutes the run summary and obscures real errors.
+
+  Why we hit it:
+  [`rust/shekyl-logging/tests/trybuild.rs`](../rust/shekyl-logging/tests/trybuild.rs)
+  uses `dtolnay/trybuild`, which creates
+  `rust/target/tests/trybuild/`. We do not use `kaos`/`macrotest`,
+  so `rust/target/tests/target/` never gets created — the walker
+  tries it anyway. Confirmed against
+  [Swatinem/rust-cache#144](https://github.com/Swatinem/rust-cache/issues/144)
+  (open since 2023; the user-proposed
+  `if (e.code === "ENOENT") continue;` patch never landed).
+
+  Workaround: a defensive `mkdir -p rust/target/tests/target`
+  step runs as the last pre-cleanup step in the job, ensuring the
+  walker's `opendir` call succeeds and finds an empty directory
+  to clean. Cache cost: a single empty directory entry,
+  negligible. The new step's comment documents the upstream
+  issue, the removal condition (delete the step in the same PR
+  that bumps the action pin once Swatinem merges either the
+  ENOENT-skip patch or adds `await` to the recursive
+  `cleanTargetDir` calls), and the dependency chain
+  (`shekyl-logging` `trybuild` test → `target/tests/trybuild/`
+  → walker → `target/tests/target/` ENOENT). Files touched:
+  [`.github/workflows/build.yml`](../.github/workflows/build.yml)
+  in the `Rust: audit, test, determinism` job (one new step
+  after `determinism check`).
+
+- **Workspace clippy gate green on Rust toolchain 1.95.0.** Three
+  newly-deny-able clippy 1.95 findings cured with mechanical,
+  behavior-identical fixes after the toolchain on the
+  `ubuntu-latest` GitHub Actions runner advanced past 1.94.0 (which
+  is what the preceding `chore/workspace-fmt-clippy-baseline` PR
+  was triaged against). Without this fix the
+  `cargo clippy --workspace --all-targets --keep-going --
+  -D warnings` gate added in that PR rejects every push to `dev`.
+
+  - `clippy::useless_conversion` (×3 in vendored
+    `rust/shekyl-oxide/`):
+    `for (a, b) in xs.into_iter().zip(ys.into_iter())` →
+    `for (a, b) in xs.into_iter().zip(ys)`. `Iterator::zip`
+    accepts any `IntoIterator`, so the inner `.into_iter()` was
+    redundant. Sites:
+    - [`rust/shekyl-oxide/crypto/generalized-bulletproofs/src/inner_product.rs`](../rust/shekyl-oxide/crypto/generalized-bulletproofs/src/inner_product.rs)
+      lines 216 and 220 (BP++ inner-product reduction
+      `g_bold` / `h_bold` recursion).
+    - [`rust/shekyl-oxide/shekyl-oxide/fcmp/bulletproofs/src/plus/weighted_inner_product.rs`](../rust/shekyl-oxide/shekyl-oxide/fcmp/bulletproofs/src/plus/weighted_inner_product.rs)
+      line 380 (verifier folding loop over commitment pairs
+      `(L_i, R_i)`).
+  - `clippy::unnecessary_sort_by` (×2 in Shekyl-native
+    `shekyl-scanner`):
+    [`rust/shekyl-scanner/src/coin_select.rs`](../rust/shekyl-scanner/src/coin_select.rs)
+    lines 114–115. Both calls sort descending by the second
+    tuple element; rewrote to
+    `sort_by_key(|b| std::cmp::Reverse(b.1))` per clippy's
+    suggestion. Behavior-identical sort key, no change in
+    coin-selection ordering.
+
+  Vendored-divergence framing (in keeping with `10-shekyl-first.mdc`):
+  the vendored copies under `rust/shekyl-oxide/` are already
+  Shekyl-modified relative to the `monero-oxide` fork pin
+  (`UPSTREAM_MONERO_OXIDE_COMMIT=3933664`, sync 2026-04-25); a
+  prior commit (`44fe03453 chore: resolve all clippy warnings
+  across the Rust workspace`) rewrote `inner_product.rs` with
+  +360/-332 against upstream for clippy compliance under
+  toolchain 1.94. There is no upstream fix to cherry-pick — the
+  same pattern exists at the same lines in upstream
+  (`monero-oxide` `crypto/generalized-bulletproofs/src/inner_product.rs:204,208`),
+  last touched 2025-08-30, and would fail the same lint under
+  clippy 1.95. This PR continues the precedent of treating
+  `rust/shekyl-oxide/` as Shekyl-customized vendored code rather
+  than a frozen mirror.
+
+  Affected-crate test runs locally (release profile, toolchain
+  1.95.0):
+
+  | Crate | Tests passing |
+  | --- | --- |
+  | `generalized-bulletproofs` (with `--features tests`) | 5 / 5 |
+  | `shekyl-bulletproofs` | 5 / 5 |
+  | `shekyl-scanner` | 47 / 47 (1 ignored, pre-existing) |
+
+  Local `cargo clippy --workspace --all-targets --keep-going --
+  -D warnings` on toolchain 1.95.0 returns exit 0 after the fixes.
+
+### Changed (BREAKING)
+
+- **Wallet → Engine rename across Rust workspace** (decision log
+  *"Wallet → Engine rename"*, 2026-04-27). Mechanical rename of the
+  domain orchestrator type and its supporting crates and modules to
+  consistently use "engine" terminology. The on-chain consensus rules
+  and wire formats are unaffected; this is a source-only API churn.
+
+  - **Crates renamed.** Workspace members and on-disk paths:
+    `shekyl-wallet-core` → `shekyl-engine-core`,
+    `shekyl-wallet-state` → `shekyl-engine-state`,
+    `shekyl-wallet-file` → `shekyl-engine-file`,
+    `shekyl-wallet-prefs` → `shekyl-engine-prefs`,
+    `shekyl-wallet-rpc` → `shekyl-engine-rpc`. The `shekyl-cli`,
+    `shekyl-ffi`, `shekyl-scanner`, `shekyl-tx-builder`,
+    `shekyl-daemon-rpc`, `shekyl-fcmp`, `shekyl-crypto-pq`,
+    `shekyl-proofs`, `shekyl-address`, `shekyl-shard-visual`, and the
+    `monero-oxide` family (`shekyl-oxide`) are unchanged.
+  - **Module renamed.**
+    `shekyl-engine-core::wallet` → `shekyl-engine-core::engine`. The
+    module re-exports retain their semantics through the new path.
+  - **Types renamed.** Orchestrator-shaped types now use `Engine*`:
+    `Wallet<S>` → `Engine<S>`, `WalletSignerKind` → `EngineSignerKind`,
+    `WalletCoreError` → `EngineCoreError`,
+    `OpenedWallet` → `OpenedEngine`,
+    `WalletCreateParams` → `EngineCreateParams`. Domain-shaped types
+    that name file format primitives or generic envelope concepts
+    (`WalletFile`, `WalletLedger`, `WalletPrefs`, `WalletEnvelopeError`,
+    `WalletOutput`) are intentionally retained — they describe a
+    user's set of secrets, not the orchestrator.
+  - **CLI surfaces.** `shekyl-cli` user-facing strings, help text,
+    REPL prompts (`shekyl-cli [engine]>`), and command names
+    (`engine_info` replaces `wallet_info`) now use "engine" terminology
+    throughout per Option α. The `--wallet-dir` / `--wallet-file`
+    flags are renamed to `--engine-dir` / `--engine-file`.
+  - **Filesystem layout.** Default home directory subtree
+    `~/.shekyl/wallets/` is renamed to `~/.shekyl/engines/`. The
+    `.wallet` and `.wallet.keys` file extensions are retained so that
+    existing tooling and the file format documentation in
+    [`docs/WALLET_FILE_FORMAT_V1.md`](WALLET_FILE_FORMAT_V1.md) stay
+    valid.
+  - **What is *not* renamed in this release.**
+    1. **FFI C ABI symbols.** `shekyl_wallet_*` `#[no_mangle]` exports
+       and the `ShekylWallet` opaque-handle struct retain their names.
+       The internal Rust types backing those handles are renamed; the
+       C ABI is held stable until the C++ `wallet2.cpp` retirement
+       work in V3.2 lets us cut both at once. See FOLLOWUPS V3.2.
+    2. **C++ JSON-RPC method names.** `wallet_*` JSON-RPC method
+       strings exposed by the C++ `shekyl-wallet-rpc.exe` binary are
+       not renamed here. They are deleted, not aliased, when the
+       Rust-native JSON-RPC server lands as part of Phase 4b's
+       Shekyl-native RPC method-set work in V3.2. See FOLLOWUPS V3.2.
+    3. **C++ binary names** (`shekyl-wallet-rpc`, `shekyl-wallet-cli`,
+       `shekyl-wallet-bench`) and references to them in
+       `.github/workflows/build.yml`, `scripts/bench/`, and stress-net
+       harnesses. Tied to the same C++ retirement work.
+  - **Migration guidance.** No on-disk migration code is shipped or
+    needed pre-V3 launch (per `15-deletion-and-debt.mdc`). Pre-launch
+    users re-sync from genesis. Tooling that depends on the renamed
+    Rust crates updates `[dependencies]` paths and import paths in
+    one mechanical pass; the FFI C ABI and JSON-RPC wire surfaces are
+    intentionally unchanged.
+
+### Added
+
+- **`Engine::refresh` driver and `produce_scan_result` producer
+  (Phase 2a `refresh_scan_loop` bundle, Branch 1).** The
+  [`shekyl_engine_core::engine::refresh`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  module ships the snapshot-merge-with-retry sync driver that
+  replaces the standalone `shekyl-scanner::sync::run_sync_loop`.
+  Public surface:
+
+  - `Engine::refresh(&mut self, opts: &RefreshOptions, runtime:
+    &tokio::runtime::Handle) -> Result<RefreshSummary, RefreshError>`
+    — synchronous entry point on `Engine<S>`. Captures a
+    `LedgerSnapshot` of the wallet's current `(synced_height,
+    reorg_blocks)` under a brief read borrow, drops the borrow,
+    drives the async producer on `runtime`, and merges the result
+    back via `apply_scan_result_to_state` under `&mut self`. On
+    `RefreshError::ConcurrentMutation` the snapshot is re-taken
+    and the call retries up to `RefreshOptions::max_retries`.
+  - `produce_scan_result(rpc, scanner, &LedgerSnapshot,
+    height_range, cancel) -> Result<ScanResult, ProduceError>` —
+    `pub(crate)` async producer that fetches blocks via the `Rpc`
+    trait, scans them with `shekyl_scanner::Scanner`, detects
+    reorgs by comparing `header.previous` against the snapshot's
+    `reorg_blocks` (with a `find_fork_point` walk on mismatch),
+    and returns a typed `ScanResult` envelope rather than mutating
+    wallet state in place. Reorgs surface as
+    `ScanResult::reorg_rewind: Some(_)`; the merge applies the
+    rewind atomically before applying forward-progress events.
+  - `LedgerSnapshot { synced_height: u64, reorg_blocks: ReorgBlocks
+    }` — minimal read-only view of the pieces of
+    `(LedgerBlock, LedgerIndexes)` the producer needs to detect
+    reorgs and resume scanning. Cloned (not `Arc`-wrapped) per the
+    snapshot benchmark in
+    `rust/shekyl-engine-core/benches/refresh_snapshot.rs`, which
+    measures clone cost across realistic reorg-window sizes so any
+    future `Arc` switch has an empirical baseline.
+  - `RefreshOptions { max_retries: u32 }` — caller-supplied knobs
+    for the snapshot-merge retry loop. Default `8`; rationale on
+    the bound is in the decision-log entry
+    *"Snapshot-merge-with-retry semantics for `Wallet::refresh`"*
+    (2026-04-26). `#[non_exhaustive]` so Branch 2 can add the
+    cancel-token / progress-channel / batch-size knobs without a
+    breaking change.
+  - `RefreshSummary { processed_height_range, blocks_processed,
+    transfers_detected, key_images_observed, stake_events,
+    reorg: Option<RefreshReorgEvent>, merge_attempts }` —
+    caller-visible result of a successful refresh.
+    `#[non_exhaustive]`; `stake_events` is reserved for Phase 2b's
+    richer event vocabulary and is always `0` today.
+  - `RefreshError` — typed failure surface:
+    `ConcurrentMutation { wallet, result }` (snapshot drifted under
+    the producer; safe retry), `AlreadyRunning` (single-flight
+    enforcement at the binary layer; reserved for Branch 2's
+    handle path), `MalformedScanResult { reason }` (producer-bug
+    signal: scan-result invariants violated; not a race),
+    `Cancelled` (cooperative shutdown), `Io` (RPC failure surfaced
+    from `ProduceError::MaxRetriesExhausted`). The variant set is
+    `#[non_exhaustive]`.
+
+  The driver is the snapshot-merge realization of the cross-cutting
+  locking decision: queries take `&self`, mutations take
+  `&mut self`, and refresh threads the long-running scan
+  *between* borrow points so the wallet is never held across an
+  `await`. The contract is locked in
+  `docs/V3_WALLET_DECISION_LOG.md` *"`Wallet::refresh`
+  snapshot-merge-with-retry"* (2026-04-26),
+  *"`MalformedScanResult`: producer-bug signal vs.
+  `ConcurrentMutation`"* (2026-04-26), and *"Retire
+  `shekyl-scanner::sync::run_sync_loop` (Phase 2a/4b boundary)"*
+  (2026-04-27).
+
+  The `RefreshHandle` async surface (cancel-on-drop, watch-based
+  `RefreshProgress`, `AlreadyRunning` enforcement, `start_refresh`
+  spawning) lands in Branch 2 of the bundle (immediately below);
+  this branch is the synchronous entry point and the producer /
+  merge contract that the handle wraps.
+
+  Test coverage lives in `rust/shekyl-engine-core/src/engine/refresh.rs`'s
+  `mod tests` (producer-side: smoke / linear-scan / reorg-shallow /
+  reorg-deep / reorg-at-tip / RPC-failure-fetch / RPC-failure-tip /
+  scanner-failure / cancellation-mid-scan /
+  cancellation-between-blocks / empty-range / range-validation;
+  driver-side: round-trip, reorg-merge, retry-on-concurrent-mutation,
+  retry-budget-exhausted, malformed-scan-result-bypass-retry,
+  cancellation-end-to-end, no-progress-when-tip-equal,
+  reorg-rewind-then-apply). The `MockRpc` test scaffold and
+  `make_synthetic_block` helper live in
+  `rust/shekyl-engine-core/src/engine/test_support.rs` for
+  deterministic fault injection across producer and driver suites.
+
+- **`Engine::start_refresh` async refresh handle (Phase 2a
+  `refresh_scan_loop` bundle, Branch 2).** The
+  [`shekyl_engine_core::engine::refresh`](../rust/shekyl-engine-core/src/engine/refresh.rs)
+  module ships the cancel-on-drop / one-at-a-time / progress-
+  channel handle that wraps the snapshot-merge driver from Branch
+  1. The handle spawns the long-running scan onto a tokio runtime
+  the caller does not have to manage, and threads cancellation
+  and progress through typed channels. Public surface:
+
+  - `Engine::start_refresh(self_arc: Arc<tokio::sync::RwLock<Self>>,
+    opts: RefreshOptions) -> Result<RefreshHandle, RefreshError>` —
+    async constructor on `Engine<S>`. Claims a `RefreshSlot` under
+    a brief read borrow, spawns a producer task, and returns a
+    handle observing the running task. A second call while a
+    handle is alive returns `RefreshError::AlreadyRunning`. The
+    `Arc<RwLock<Engine<S>>>` shape is the transitional shared-
+    handle realization of the message-passing boundary decided in
+    *2026-04-27 — Engine binary boundary: pure message-passing
+    over shared handle*; the actor migration replaces the
+    parameter without changing the handle's external surface.
+  - `RefreshHandle` — RAII handle for the running refresh.
+    Methods: `progress() -> watch::Receiver<RefreshProgress>`
+    (clonable observer of phase / height / blocks-processed /
+    blocks-total updates), `cancel()` (idempotent; fires the
+    shared `CancellationToken`), `is_running() -> bool` (non-
+    blocking poll of the producer's `JoinHandle::is_finished`),
+    `async fn join(self) -> Result<RefreshSummary, RefreshError>`
+    (push-completion via internal `oneshot`; consumes the handle).
+    `Drop for RefreshHandle` is cancel-only — slot release lives
+    on producer task exit, not on handle drop, so the cancel
+    contract is `Drop`-scoped while the slot is self-healing
+    across success / error / cancellation paths.
+  - `RefreshProgress { height, blocks_processed, blocks_total,
+    phase: RefreshPhase }` — `#[non_exhaustive]` snapshot
+    delivered through a `tokio::sync::watch` channel. Per-attempt
+    semantics: `blocks_total` is the per-retry total, not a
+    cumulative running count. The watch channel is seeded by
+    `Engine::start_refresh` with the wallet's current
+    `synced_height` (and zeroed counters) so subscribers observe
+    a baseline matching the wallet state before the producer
+    publishes its first per-attempt update.
+  - `RefreshPhase { Scanning, Merging, Retrying, Cancelled }` —
+    coarse-grained producer state. `Scanning` covers fetch + scan
+    of a per-block batch; `Merging` covers the brief write-locked
+    `apply_scan_result` call; `Retrying` is published when the
+    merge returned `ConcurrentMutation` and the loop is about to
+    retake the snapshot; `Cancelled` is published before the
+    handle's completion `oneshot` fires `Err(Cancelled)`.
+  - `RefreshOptions` extended with no new fields in Branch 2;
+    `max_retries` (Branch 1) is the only public knob.
+    `#[non_exhaustive]` so future progress / batching knobs do
+    not break call sites.
+  - `RefreshError::AlreadyRunning` becomes load-bearing in this
+    branch (Branch 1 reserved the variant); other variants
+    propagate unchanged.
+
+  Test coverage lives in three new modules:
+  `mod refresh_handle_tests` (six unit tests pinning the handle's
+  channel-shaped surface in isolation: progress baseline,
+  progress propagation, cancel + is_running flip, join success,
+  join error, dropped-sender → `MalformedScanResult`),
+  `mod refresh_slot_tests` (four unit tests pinning single-flight
+  semantics: claim-when-unheld, claim-fails-when-held, release-on-
+  guard-drop, clone-shares-flag), and `mod start_refresh_integration_tests`
+  (three integration tests against the real engine + unreachable-
+  daemon: `start_refresh` propagates `IoError::Daemon` via `join`,
+  concurrent `start_refresh` returns `AlreadyRunning`, drop
+  releases the slot for a subsequent `start_refresh`). A
+  `pub(crate) fn for_test(...)` constructor on `RefreshHandle`
+  is the testability seam that lets the surface tests run without
+  spinning up an `Engine<S>`.
+
+  The decision-log scope-closing entry is *2026-04-27 —
+  `RefreshHandle` (Phase 2a Branch 2) ships transitional
+  `Arc<RwLock<Engine>>` under Path B*; the upstream handle-shape
+  entry is *2026-04-25 — `RefreshHandle`: cancel-on-drop RAII,
+  one-at-a-time, scanner checkpoints between blocks*. Wider
+  scenario coverage of `start_refresh` against synthetic block
+  batches lands when `DaemonClient` is generic (deferred outside
+  Branch 2; tracked under V3.1 in `docs/FOLLOWUPS.md`).
+
+- **`Engine::create` / `Engine::open_full` / `Engine::change_password` /
+  `Engine::close` lifecycle methods on `shekyl-engine-core` (Phase 1
+  `lifecycle` task).** The new
+  [`shekyl_engine_core::engine::lifecycle`](../rust/shekyl-engine-core/src/engine/lifecycle.rs)
+  module composes
+  [`shekyl-engine-file`](../rust/shekyl-engine-file/src/),
+  [`shekyl-crypto-pq::account::rederive_account`](../rust/shekyl-crypto-pq/src/account.rs),
+  [`shekyl-engine-prefs`](../rust/shekyl-engine-prefs/src/),
+  [`shekyl-engine-state::WalletLedger`](../rust/shekyl-engine-state/src/wallet_ledger.rs),
+  and
+  [`shekyl-engine-state::LedgerIndexes`](../rust/shekyl-engine-state/src/ledger_indexes.rs)
+  into the `Engine<S>` orchestrator's open / create / rotate / close
+  surface. Public API:
+
+  - `Credentials<'a>` — forward-compatible authentication parameter.
+    V3.0 has a private `password: &'a [u8]` field reachable through
+    `Credentials::password_only(&[u8])` and `Credentials::password()`;
+    V3.1 adds `authenticator: Option<AuthenticatorRequest<'a>>` and
+    `Credentials::password_with_authenticator(pwd, auth)` without
+    breaking existing call sites. See `docs/V3_WALLET_DECISION_LOG.md`
+    *"Wallet authentication: V3.0 password-only; MFA is V3.1 via
+    format-version bump"* (2026-04-26) for the API shape rationale.
+  - `OpenedEngine<S>` typed-sum return for `open_full`.
+    `Loaded(Engine<S>)` indicates the persisted ledger file decoded
+    cleanly; `Restored { wallet, from_height }` indicates the keys
+    file was intact but the ledger file was missing or unreadable —
+    the wallet was reconstructed against an empty ledger anchored at
+    `from_height = restore_height_hint` and the caller must drive a
+    refresh to rebuild state. See `docs/V3_WALLET_DECISION_LOG.md`
+    *"`Wallet::open_full`: lost-state surfacing via typed
+    `OpenedWallet` sum"* (2026-04-26).
+  - `EngineCreateParams<'a>` (9 public fields) and
+    `CapabilityInput<'a>::Full { master_seed_64, seed_format }` for
+    `Engine::create`. ViewOnly / HardwareOffload `CapabilityInput`
+    variants are deferred alongside the matching `open_*` bodies;
+    the FULL variant ships end-to-end. A `#[cfg(test)]
+    EngineCreateParams::for_test_full(base_path, password,
+    master_seed_64)` helper pins all eight non-essential fields to
+    known-good defaults for unit-test fixtures; production callers
+    (CLI / RPC) construct the struct literal so the field set is
+    explicit at every call site.
+  - `Engine::create(params) -> Result<Engine<SoloSigner>, OpenError>` —
+    delegates to `WalletFile::create` with derived
+    `DerivationNetwork` / `SeedFormat`, runs `rederive_account` to
+    populate `AllKeysBlob`, cross-checks
+    `blob.classical_address_bytes` against the envelope's
+    `expected_classical_address` (failure → `KeyError::PublicBytesMismatch`),
+    initializes `WalletLedger::empty()` and `LedgerIndexes::empty()`,
+    persists initial prefs via `WalletFile::save_prefs`, and assembles
+    the `Engine<SoloSigner>` instance.
+  - `Engine::open_full(base_path, &credentials, network, daemon,
+    overrides) -> Result<OpenedEngine<SoloSigner>, OpenError>` — opens
+    the envelope (mapping `WalletEnvelopeError::InvalidPasswordOrCorrupt`
+    to `OpenError::IncorrectPassword`,
+    `RequiresMultisigSupport` to `OpenError::RequiresMultisig`, and
+    capability / network mismatches to the corresponding typed
+    variants), enforces FULL-only on this entry point
+    (`OpenError::CapabilityMismatch` if the disk envelope is
+    ViewOnly or HardwareOffload), runs the same rederive +
+    public-bytes-cross-check sequence as `create`, surfaces tampered
+    prefs as a structured `tracing::warn!` and falls back to defaults
+    per `docs/WALLET_PREFS.md §5`'s advisory failure policy, rebuilds
+    `LedgerIndexes` from the persisted `LedgerBlock`, and returns
+    `Loaded` or `Restored { from_height }` based on the
+    `WalletFile::open` outcome.
+  - `Engine::open_view_only(...)` / `Engine::open_hardware_offload(...)`
+    — signature-only stubs that return
+    `OpenError::CapabilityNotYetImplemented { capability }` pending
+    the matching `shekyl-crypto-pq` `AllKeysBlob` constructors. The
+    error variant is deletion-tracked at the code site and in
+    `docs/FOLLOWUPS.md` *V3.0 → "View/HW lifecycle bodies in
+    `shekyl-engine-core`"*. See `docs/V3_WALLET_DECISION_LOG.md`
+    *"`Wallet<S>` lifecycle: capability scoping for V3.0"* (2026-04-26)
+    for the stub-shape rationale.
+  - `Engine::change_password(&old, &new, new_kdf) -> Result<(), OpenError>`
+    — delegates to `WalletFile::rotate_password`, mapping
+    `WalletEnvelopeError::InvalidPasswordOrCorrupt` to
+    `OpenError::IncorrectPassword`. Available on every signer kind
+    (FULL / ViewOnly / HardwareOffload / multisig) since the
+    underlying envelope rewrap is capability-agnostic.
+  - `Engine::close(self, &credentials) -> Result<(), OpenError>` —
+    refuses with `OpenError::OutstandingPendingTx { count }` when
+    `outstanding_pending_txs() > 0` (drives cross-cutting lock 4's
+    "no clean close while reservations are live" invariant).
+    Otherwise saves state via `WalletFile::save_state`, saves prefs
+    via `WalletFile::save_prefs`, and consumes `self`. The
+    method's doc comment names the zeroization chain explicitly:
+    `WalletFile::Drop` releases the advisory lock on `<base>.keys`;
+    `AllKeysBlob::Drop` zeroizes `spend_sk` / `view_sk` /
+    `ml_kem_dk` and the public-key fields. The chain is
+    single-level (`Engine<S>.keys: AllKeysBlob` directly, no
+    wrapper), and the underlying `Drop` semantics are tested in
+    `shekyl-crypto-pq`'s own unit tests.
+
+  Eleven unit tests cover the round-trip create / open path, password
+  rotation followed by reopen-with-new-password and refusal of the
+  old, `OpenError::IncorrectPassword`, `OpenError::NetworkMismatch`,
+  the `Restored { from_height }` lost-state path (state file deleted
+  between create and open), `OpenError::OutstandingPendingTx` (close
+  refused while a synthetic reservation is in `Engine::reservations`),
+  the structured `tracing::warn!` on prefs HMAC tamper events, and
+  the typed `OpenError::CapabilityNotYetImplemented` returns from
+  the view-only and hardware-offload stubs. The
+  `apply_scan_result_post_open_works` lifecycle ↔ scan-result
+  composition test is deferred to the Phase 2a `refresh` commit
+  where it can exercise a real `ScanResult` against the lifecycle's
+  `LedgerIndexes::rebuild_from_ledger` output.
+
+  The lifecycle commit ships `tracing = "0.1"` as a runtime
+  dependency on `shekyl-engine-core` (used for the prefs-tamper
+  warn log only) and `tempfile = "3"` plus `tokio = { version = "1",
+  features = ["macros", "rt"] }` as dev-dependencies (lifecycle
+  tests construct on-disk fixtures and instantiate a
+  `SimpleRequestRpc` against an unreachable URL for the dummy
+  `DaemonClient`).
+
+- **`Engine::build_pending_tx` / `submit_pending_tx` / `discard_pending_tx`
+  three-method `PendingTx` lifecycle (Phase 1 `pending_tx` task).** The
+  new
+  [`shekyl_engine_core::engine::pending`](../rust/shekyl-engine-core/src/engine/pending.rs)
+  module lands the runtime-only side of cross-cutting lock 4. Public
+  surface:
+
+  - `PendingTx { id, built_at_height, built_at_tip_hash, fee_atomic_units,
+    tx_bytes, recipients }` — the chain-state-tagged handle returned by
+    `build_pending_tx`. `tx_bytes` is `Vec::new()` in Phase 1 and is
+    explicitly documented as Phase-2a's integration point for
+    `shekyl-tx-builder`.
+  - `TxRequest { recipients, priority, from_subaddress }`,
+    `TxRecipient { address, amount_atomic_units }`,
+    `FeePriority { Economy, Standard, Priority, Custom(NonZeroU64) }`,
+    `TxRecipientSummary`, `ReservationId(u64)`, `TxHash([u8; 32])` —
+    the strongly-typed input/handle/summary newtypes.
+  - `Engine::build_pending_tx(&request) -> Result<PendingTx, SendError>` —
+    selects largest-amount-first spendable outputs from
+    `LedgerIndexes`/`LedgerBlock` (excluding outputs already reserved
+    by another in-flight `PendingTx`), captures real chain state
+    (`synced_height` + `block_hash_at(synced_height)`), bumps a
+    monotonic `next_reservation_id`, and inserts a `Reservation` into
+    `Engine::reservations`. Phase 1 uses a fixed
+    `STUB_FEE_ATOMIC_UNITS = 1_000` stub fee; Phase 2a will replace
+    it with a `daemon.get_fee_estimates()` call.
+  - `Engine::submit_pending_tx(id) -> Result<TxHash, PendingTxError>` —
+    runs the cross-cutting-lock-4 invariants
+    (`PendingTxError::TooOld { built, current, max_reorg }` against
+    `NetworkSafetyConstants::for_network(network).max_reorg_depth`,
+    `PendingTxError::ChainStateChanged { height }` against the stored
+    `built_at_tip_hash`, `PendingTxError::UnknownHandle` for unknown
+    `id`s), and on success removes the reservation, marks each
+    selected `TransferDetails` as `spent = true` with
+    `spent_height = None` (the "unconfirmed-spent" Phase-1 state, made
+    proper in Phase 2a once daemon broadcast confirmation arrives),
+    and returns a stub `TxHash` whose first 8 bytes encode the
+    `ReservationId`.
+  - `Engine::discard_pending_tx(id) -> Result<(), PendingTxError>` —
+    idempotent: returns `Ok(())` regardless of whether `id` is
+    currently recognized, releases the reservation entry so the
+    referenced outputs become selectable by a subsequent build.
+  - `Engine::outstanding_pending_txs() -> usize` — count accessor used
+    by `Engine::close` (lifecycle commit) to refuse closing while any
+    reservation is active.
+
+  Reservations live exclusively on `Engine<S>` as a runtime-only
+  `BTreeMap<ReservationId, Reservation>` field alongside the
+  existing runtime-only `indexes: LedgerIndexes`. They are not
+  persisted in `WalletLedger.bookkeeping`; `BOOKKEEPING_BLOCK_VERSION`
+  does not change. Process crash between build and submit/discard
+  drops reservations along with the in-memory `PendingTx` handle —
+  which is the correct behavior, since the tx never broadcast and the
+  outputs are correctly spendable again on next open.
+
+  The full lifecycle body is exposed as `pub(crate)`
+  free helpers (`build_pending_tx_in_state`,
+  `submit_pending_tx_in_state`, `discard_pending_tx_in_state`)
+  operating on `(&LedgerBlock, &mut BTreeMap<ReservationId,
+  Reservation>, ...)` so unit tests can drive the full lifecycle
+  without standing up an `Engine<S>` (whose constructors land in the
+  lifecycle commit). Twelve unit tests cover output reservation, the
+  reserved-output filter, insufficient-funds, the no-block-yet
+  `SendError::CannotSign`, all three `PendingTxError` paths, the
+  spent-state mutation on submit, the rebuild-after-discard path,
+  discard idempotency on unknown handles, and `FeePriority::Custom`
+  preservation.
+
+  See `docs/V3_WALLET_DECISION_LOG.md` *"Reservation tracker:
+  runtime-only on `Wallet`, never persisted"* (2026-04-26 sub-section
+  of the `Wallet<S>` struct entry) for the runtime-vs-persisted
+  decision and the supersession of the original cross-cutting-lock-4
+  draft phrasing.
+
+- **`shekyl_engine_core::scan::ScanResult` typed scanner-output value
+  and `Engine::apply_scan_result` merge surface (Phase 1 `scan_result`
+  task).** A new
+  [`shekyl_engine_core::scan`](../rust/shekyl-engine-core/src/scan.rs)
+  module defines the additive event vocabulary the Phase 2a
+  `Engine::refresh()` pipeline produces from a scanner pass:
+
+  - `ScanResult { processed_height_range, parent_hash, block_hashes,
+    new_transfers, spent_key_images, stake_events, reorg_rewind }`.
+  - `DetectedTransfer { block_height, output: RecoveredWalletOutput }`
+    — the secret-bearing variant; `RecoveredWalletOutput` already
+    `ZeroizeOnDrop`, so dropping the enclosing `ScanResult` wipes
+    PQC re-derivation material in place.
+  - `KeyImageObserved { block_height, key_image }` — drives
+    `LedgerIndexes::detect_spends` per height.
+  - `StakeEvent::Accrual { height, record }`, `#[non_exhaustive]` so
+    Phase 2b `StakeInstance` variants can land additively.
+  - `ReorgRewind { fork_height }` — drives
+    `LedgerIndexes::handle_reorg` before per-height events.
+  - `ScanResult::empty_at(start, parent_hash)` for the
+    nothing-changed-at-tip case and tests.
+
+  The companion `Engine::apply_scan_result(&mut self, ScanResult) ->
+  Result<(), RefreshError>` lives in
+  [`engine::merge`](../rust/shekyl-engine-core/src/engine/merge.rs) and
+  is the only audited code path that mutates the scanner-derived slice
+  of `WalletLedger` plus `LedgerIndexes` during refresh. It enforces
+  two snapshot-consistency invariants before applying any events,
+  rejecting with `RefreshError::ConcurrentMutation` on either failure:
+
+  1. **Start-height equality.** `processed_height_range.start` must
+     equal `synced_height + 1` (or `fork_height` when `reorg_rewind`
+     is present, since the rewind sets `synced_height` to
+     `fork_height - 1` first).
+  2. **Parent-hash chain.** `parent_hash` must match
+     `LedgerBlock::block_hash_at(start - 1)`, with `None` matching
+     `None` at genesis (`start == 1`).
+
+  The merge runs in a fixed order: optional reorg rewind first, then
+  per-height ingest (`process_scanned_outputs` + `detect_spends`)
+  driven by `block_hashes` so `synced_height` advances exactly once
+  per scanned block — even when the block had no events — then
+  staker-pool aggregate events. `Engine<S>` now carries
+  `indexes: LedgerIndexes` as a direct field so the merge can mutate
+  both the persisted `LedgerBlock` (via `WalletLedger.ledger`) and
+  the runtime indexes under a single `&mut self` borrow without
+  needing an inner lock. The full merge body is exposed `pub(crate)`
+  as `apply_scan_result_to_state(&mut LedgerBlock, &mut LedgerIndexes,
+  ScanResult)` so tests can drive it without standing up a full
+  `Engine<S>` (whose lifecycle methods land in a follow-up commit).
+
+  See `docs/V3_WALLET_DECISION_LOG.md` *"`ScanResult` type"*
+  (2026-04-25, **crate location: `shekyl-engine-core::scan`**) and
+  *"`Wallet::apply_scan_result` invariants and Wallet-side
+  `LedgerIndexes`"* (2026-04-26).
+
+### Changed
+
+- **`RuntimeWalletState` folded into `LedgerBlock` + `LedgerIndexes`
+  (Phase 1 `runtime_state_audit` task).** The `RuntimeWalletState`
+  type and the transitional `pub use ... as WalletState` re-export
+  are deleted. Its responsibilities split along the persistence
+  boundary:
+
+  - **Persisted, on-disk state** — `transfers`, `synced_height`,
+    `reorg_blocks`, claim watermarks — was already covered by
+    `WalletLedger.ledger` (`LedgerBlock`). Read-only queries
+    (`height`, `transfers`, `unspent_transfers`, `staked_outputs`,
+    `matured_staked_outputs`, `locked_staked_outputs`,
+    `claimable_outputs`, `unstakeable_outputs`, `spendable_outputs`,
+    `block_hash_at`) and transfer-only mutators (`set_staking_info`,
+    `update_claim_watermark`, `freeze`, `thaw`, `transfer_mut`) move
+    to inherent methods on `LedgerBlock`.
+  - **Runtime-only derived state** — the `key_images` and `pub_keys`
+    lookup maps plus the `staker_pool` accrual aggregate — moves to
+    a new `pub struct LedgerIndexes` in
+    `rust/shekyl-engine-state/src/ledger_indexes.rs`. `LedgerIndexes`
+    is **never serialized**, has no `Serialize` / `Deserialize`
+    derives, and is rebuilt by scanner replay at every wallet open
+    via `LedgerIndexes::rebuild_from_ledger`. Cross-cutting
+    mutations (`ingest_block`, `mark_spent`, `unmark_spent`,
+    `detect_spends`, `set_key_image`, `freeze_by_key_image`,
+    `thaw_by_key_image`, `handle_reorg`, `insert_accrual`) take
+    `&mut self, ledger: &mut LedgerBlock, …` so a single call
+    updates ledger and indexes atomically. Invariant:
+    `LedgerIndexes` is reconstructible from `LedgerBlock` plus
+    daemon block replay; this is enforced by convention (struct
+    doc-comment) rather than by the type system.
+
+  Live wallet state behind a single mutex is the tuple
+  `pub type LiveLedger = (LedgerBlock, LedgerIndexes)` in both
+  `shekyl-engine-rpc::scanner_state` and the (cfg `rust-scanner`)
+  `shekyl-scanner::sync` background loop. Scanner-specific behavior
+  that needs `Timelocked` / `RecoveredWalletOutput` /
+  `BalanceSummary` / `ClaimableInfo` lives in extension traits in
+  `shekyl-scanner::ledger_ext` (`TransferDetailsExt`,
+  `LedgerIndexesExt`, `LedgerBlockExt`); the canonical
+  `shekyl-engine-state` crate stays scanner-free. The old
+  `shekyl-scanner::runtime_ext` and `shekyl-scanner::wallet_state`
+  modules are deleted.
+
+  See `docs/V3_WALLET_DECISION_LOG.md` *"`RuntimeWalletState` audit:
+  full fold, derived indexes rebuilt at open"* (2026-04-25); the
+  same commit also corrects two errata in that entry: the persisted
+  transfer path is `WalletLedger.ledger.transfers` (not
+  `bookkeeping.transfers`), and `staker_pool`'s home on
+  `LedgerIndexes` is now pinned explicitly.
+
+### Documentation
+
+- **Performance baseline document restructured for per-bench
+  frozen baselines + §3.3.1 spec amendment + responsibility-
+  allocation and toolchain-bump policies (Stage 0 PR-B).**
+  [`docs/PERFORMANCE_BASELINE.md`](./PERFORMANCE_BASELINE.md) is
+  rewritten from the Round 4b template stub into the per-bench
+  frozen-baseline shape that
+  [`docs/design/STAGE_0_HARNESS.md`](./design/STAGE_0_HARNESS.md)
+  §4.5 operationalizes (one populated section for
+  `engine_trait_bench_ledger_synced_height` frozen at Stage 0
+  PR-2's merge SHA; four deferred-bench placeholder sections for
+  `engine_trait_bench_ledger_balance`,
+  `engine_trait_bench_economics_current_emission`,
+  `engine_trait_bench_economics_parameters_snapshot`, and
+  `engine_trait_bench_key_account_public_address`, each pinned to
+  its introducing per-trait PR per §4.6's per-bench deferred
+  assignment). The new document shape carries: per-bench
+  frozen-baseline source (introducing PR + merge SHA), workload
+  class (per §4.2 hoisting rule), iai-callgrind gate metric
+  (`instructions`) isolated in its own table from the
+  hardware-dependent informational rows (`l1_hits`, `ll_hits`,
+  `ram_hits`, `total_read_write`, `estimated_cycles`), criterion
+  metrics (`median_ns`, `std_dev_ns`) with hoisting-rule note,
+  capture-environment cross-reference (`env-<short-SHA>`), and a
+  cumulative-delta table with one row representing the introducing
+  capture itself. The threshold-of-concern disposition is restated
+  to apply per-bench (cumulative deltas do not sum across benches)
+  and to the iai-instructions gate metric only (criterion
+  `median_ns` is informational and does not gate). Two new policy
+  sections close gaps surfaced during PR-B drafting:
+  **responsibility allocation** pins that the PR which pushes
+  cumulative delta past 10% (warn) or 25% (fail) is responsible
+  for the breach regardless of its own per-PR contribution size
+  (closes the slow-bleed failure mode where N PRs each at +9%
+  cumulatively breach +25%); **toolchain-bump policy** pins that
+  rustc / valgrind / iai-callgrind-runner version changes during
+  Stage 1 trigger a per-bench rebaseline (re-capture each in-scope
+  bench at its introducing PR's tree state under the new toolchain;
+  reset the cumulative-delta column; CHANGELOG entry; the
+  rebaseline commit is itself a non-Stage-1 change and does not
+  count toward any bench's cumulative-delta column). A new in-tree
+  reference capture
+  ([`docs/benchmarks/reference-captures/stage-0-pr-2-c4c-shekyl_rust_v0.json`](./benchmarks/reference-captures/stage-0-pr-2-c4c-shekyl_rust_v0.json),
+  with explanatory README) supports PR-B's review-surface
+  verification gate against a stable in-tree artifact rather than
+  a transient GHA artifact path.
+  [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
+  §3.3.1 Component 1 is amended to match: replaces the
+  single-SHA / "first Stage 1 PR" / "cumulative-is-sum" framing
+  with per-bench introducing-PR-merge-SHA framing, per-bench
+  cumulative-delta independence, and a §4.5 back-pointer for
+  operational details. The amendment bundles with the
+  `PERFORMANCE_BASELINE.md` rewrite per the bundling exception
+  codified in §4.6 of the design doc (correction of existing
+  wrong text, fully derived from already-merged design content,
+  ~27 lines within an existing ~36-line component — above the
+  ~15-line soft anchor but below the 50-line "structural rewrite"
+  cutoff, with content qualifying as mechanical-derivation rather
+  than re-framing per the codification's allowance). Numbers and
+  in-tree iai-callgrind snapshot refresh are deferred to Stage 0
+  PR-2 commit 5 per the framing-vs-numbers split.
+  [`FOLLOWUPS.md`](./FOLLOWUPS.md) §"V3.0" gets two updates:
+  the existing Stage 1 baseline-measurement row is rewritten to
+  the per-bench framing (replacing the single-SHA / 30-day-tip
+  language with the four-deferred-benches close-condition); a new
+  row tracks the CHANGELOG-backfill discipline gap surfaced during
+  PR-B (PR-A `3d313256c`, PR-A-extension `2e5309ad3`, and PR-C
+  `93d515123` merged without `## [Unreleased] / ### Documentation`
+  entries). The CHANGELOG-backfill row is targeted at V3.0 and can
+  land any time before V3.0 cut.
+- **`engine_trait_bench_ledger_synced_height` frozen baseline
+  transcribed (Stage 0 PR-2 commit 5).** The validated CI capture
+  values (iai `instructions=10`, hardware-dependent informational
+  rows `l1_hits=16` / `ll_hits=0` / `ram_hits=2` /
+  `total_read_write=18` / `estimated_cycles=86`, criterion
+  `median_ns=0.6221` / `std_dev_ns=0.005864`) are recorded in
+  [`docs/PERFORMANCE_BASELINE.md`](./PERFORMANCE_BASELINE.md) under
+  the bench's frozen-baseline source, gate metric, informational
+  metric, and cumulative-delta tables. The `env-0276d210` capture
+  environment is populated with the toolchain (`rustc 1.95.0` /
+  `cargo 1.95.0` / `valgrind-3.22.0` / `iai-callgrind-runner 0.16.1`)
+  and runner state (`AMD EPYC 7763` / `Linux 6.17.0-1010-azure`)
+  from the GHA `workflow_dispatch` run `25239954863`, one of the
+  three N=3 invariance-verification captures (runs `25239954863`,
+  `25239956447`, `25239958016`) that produced byte-identical
+  iai-callgrind output (±0% variance on the gate metric per
+  [`STAGE_0_HARNESS.md`](./design/STAGE_0_HARNESS.md) §4.4 dynamic
+  check). The bench's "frozen at" SHA is the capture SHA
+  `0276d210e` (PR-2 commit 4c, post-Q `Box<Engine<S>>` fixture);
+  the in-tree
+  [`reference-captures/stage-0-pr-2-c4c-shekyl_rust_v0.json`](./benchmarks/reference-captures/stage-0-pr-2-c4c-shekyl_rust_v0.json)
+  remains the stable artifact citation. The four deferred bench
+  sections (`balance`, `current_emission`, `parameters_snapshot`,
+  `account_public_address`) are unchanged — each will be populated
+  by its introducing per-trait PR per §4.6's per-bench deferred
+  assignment. Closes Stage 0 PR-2's measurement work.
+- **Stage 1 trait-boundaries spec, Round 1 draft
+  ([`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)).**
+  First draft of the Stage 1 design document called for by the
+  decision-log entry *"Engine architecture: actor model with staged
+  migration from composition"* (2026-04-27) and the
+  `phase_2b_prep_stage_1_trait_boundaries` plan. Pins six trait
+  surfaces (`KeyEngine`, `LedgerEngine`, `RefreshEngine`,
+  `PendingTxEngine`, `DaemonEngine`, `PersistenceEngine`), the
+  composition shape (`Engine<S, K, L, R, P, D, F>` with default type
+  parameters; concrete fields, generic-bounded methods, no
+  `Box<dyn>`), the per-trait async story, the per-trait error model
+  (per-trait families with a single shared `EngineError` aggregate),
+  the test boundary unlocked by `MockKeyEngine` /
+  `MockDaemonEngine` / etc. (closes today's gap that there is no way
+  to plug `MockRpc` into `start_refresh` end-to-end), the Stage 4
+  transition guarantee (the trait surface in §2 does not change at
+  Stage 4; `kameo` actors implement the same traits with the same
+  signatures), the Stage 1 migration order (`DaemonEngine` first to
+  unlock integration tests; `LedgerEngine` second; the other four
+  in any reviewer-convenient order), and a consolidated 15-item
+  open-questions list as the Round 2 agenda. **Markdown-only; no
+  code changes.** Per
+  [`.cursor/rules/20-rust-vs-cpp-policy.mdc`](../.cursor/rules/20-rust-vs-cpp-policy.mdc),
+  the document runs through 4–6 review rounds against `dev` before
+  any Rust lands. Round 1 draft only — open questions are written
+  down with tentative answers, not closed.
+- **Engine binary boundary pinned as pure message-passing
+  (decision log *"Engine binary boundary: pure message-passing
+  over shared handle"*, 2026-04-27).** The post-Stage-4 binary
+  boundary in `shekyl-engine-rpc` is settled as
+  `HashMap<EngineId, ActorRef<EngineActor>>`, not
+  `Arc<RwLock<Engine>>`. Per-engine concurrency control is the
+  `kameo` mailbox; the registry holds actor handles directly. The
+  new entry documents the rationale (Shape B retired the
+  synchronous-blocking caller; actors handle concurrency
+  internally; kameo's API targets the wrapper-free model), the
+  three honest costs (test ergonomics, re-entrancy discipline,
+  pure-CPU operations on the actor-dispatch path), and the
+  resolutions (free-function vs message boundary criterion;
+  cross-leaf immutable-data construction-time pattern with an
+  enumerated immutable-fields list; no-cycle DAG topology;
+  kameo-specific constraints including issue #306 forward-chain
+  avoidance and bounded mailboxes). The same commit amends the
+  prior 2026-04-27 *"Engine architecture: actor model with staged
+  migration from composition"* entry: the RPC boundary paragraph
+  gains an `Update (2026-04-27):` supersession block, and Stage 4's
+  description picks up the wrapper removal and the no-cycle-DAG /
+  kameo-constraints / cross-leaf-immutable-data implementation
+  requirements. A FOLLOWUPS entry under V3.0 gates Stage 2 on
+  `kameo >= 0.20.0` version pin, MSRV `>= 1.88` verification, and
+  a workspace-wide bounded-mailbox default.
+
+- **Phase 1 sub-decision log entries appended (Phase 1
+  `decision_log_entries` task).** Three new dated entries land in
+  `docs/V3_WALLET_DECISION_LOG.md` to lock the Phase 1 surface
+  decisions whose defaults were taken from the Phase 0
+  `surface_decisions` review:
+
+  - *"`RuntimeWalletState` audit: full fold, derived indexes
+    rebuilt at open"* — `RuntimeWalletState` ceases to exist;
+    `key_images` / `pub_keys` indexes promote into a `pub(crate)
+    LedgerIndexes` owned by `Wallet`, rebuilt from the
+    authoritative ledger at open time, never persisted. Schema
+    unchanged. Closes the `runtime_state_audit` Phase 1 task and
+    the `pub use ... as WalletState` transitional alias deletion.
+  - *"`tx_keys` storage: persist in `TxMetaBlock`, never
+    re-derived"* — pins the rule that per-tx randomness lives in
+    `TxMetaBlock::tx_keys: BTreeMap<TxHash, TxSecretKeys>`
+    (already shipped in schema), is never reconstructed from any
+    other state, and that `Engine::tx_proof` /
+    `Engine::reserve_proof` (Phase 2) read it by `txid` lookup
+    with a typed `ProofError::TxKeyNotPersisted` on miss.
+  - *"Daemon-side `tracing` install:
+    `shekyl_log_install_tracing_forwarder` under
+    `shekyl-logging::ffi`"* — locks the FFI export name, signature
+    (`pub unsafe extern "C" fn() -> i32`, idempotent, returns
+    typed `ALREADY_INSTALLED` / `NOT_INITIALIZED`), home
+    (`shekyl-logging::ffi`, **not** `shekyl-daemon-rpc::ffi`), and
+    the rule that `shekyl-daemon-rpc`'s `tracing::*` call sites
+    are kept verbatim — the forwarder routes them through
+    `shekyl-logging` automatically. Closes the `docs/FOLLOWUPS.md`
+    V3.2 entry *"`shekyl-daemon-rpc` staticlib: `tracing::*` calls
+    silently dropped"* by absorption into the Phase 1 logging
+    deliverable.
+
+  No code changes ship in this entry; each decision is realized
+  by a subsequent Phase 1 commit (the `RuntimeWalletState` fold
+  is the next task in line per the todo list).
+
+- **Engine rename, actor-architecture, and pending-tx protocol
+  decision-log entries appended (2026-04-27).** Three new dated
+  entries land in `docs/V3_WALLET_DECISION_LOG.md` to pin major
+  Phase-2-and-beyond architectural commitments whose rationale
+  must be in tree before the supporting code commits land:
+
+  - *"`Wallet<S>` renamed to `Engine<S>`: privacy-correct framing
+    for the local artifact"* — pins the renaming of the
+    orchestrator type, all related types, all crate paths
+    (`shekyl-wallet-core` → `shekyl-engine-core`,
+    `shekyl-wallet-file` → `shekyl-engine-file`,
+    `shekyl-wallet-state` → `shekyl-engine-state`,
+    `shekyl-wallet-rpc` → `shekyl-engine-rpc`,
+    `shekyl-wallet-prefs` → `shekyl-engine-prefs`), JSON-RPC
+    method strings (`wallet_*` → `engine_*`), CLI subcommand
+    names, file paths (`~/.shekyl/wallets/` → `~/.shekyl/engines/`),
+    and CLI user-facing language ("engine" used consistently in
+    CLI help text). GUI/mobile user-facing language stays a
+    separate marketing decision deferred to post-V3 user-
+    interaction testing. Domain-primitive crates
+    (`shekyl-shard-visual`) and binary/product crates remain as-
+    is. The decision is realized by the immediately-following
+    mechanical rename commit on `shekyl-core` `dev`.
+  - *"Engine architecture: actor model with staged migration from
+    composition"* — pins the migration of `Engine<S>` from
+    composition to an actor model with `kameo` as the framework,
+    over five staged actor builds plus a Stage 1 framework-
+    agnostic preparation pass. Stage 2 introduces `kameo` and
+    builds `KeyEngine` first (smallest internal state, cleanest
+    privacy boundary, framework-friction surfaces with bounded
+    blast radius). Stage 3 builds `StakeEngine` native-as-actor
+    in Phase 2b for consensus-bond responsibilities only. Stage 4
+    migrates remaining subsystems (`DaemonEngine`,
+    `PersistenceEngine`, `PendingTxEngine`, `RefreshEngine`,
+    `LedgerEngine`) one at a time. Stage 5 (V3.x, simulation-
+    gated) builds `ArchivalEngine` as a sibling to `StakeEngine`
+    (not a child) for slashing-domain integrity, failure
+    isolation, and the Hayekian shard-market property. The entry
+    pins the locked stage sequence end-to-end, the framework
+    choice (`kameo`), the privacy benefits realized (view-key vs
+    spend-key separation across actors becomes enforceable), the
+    horizontal-scaling benefits enabled (V4+, stateless actor
+    pools), and the long-tier staker upgradability shape (V5+,
+    signed actor-patch distribution; V3 and V4 use restart-based
+    upgrades). The entry rejects the alternatives explicitly:
+    pure composition (privacy weaker), Stage-1-as-`kameo`
+    (premature framework lock-in), single-cutover migration
+    (review-undeliverable), `ArchivalEngine`-as-child-of-
+    `StakeEngine` (slashing-domain integrity violation).
+  - *"Pending-tx protocol: two-phase build/submit/discard over
+    single-phase callback"* — pins the canonical transaction-
+    sending API as the two-phase pending-transaction protocol
+    (`build` / `submit` / `discard`, with `inspect`,
+    `adjust_fee`, `sign_partial`, `aggregate_signatures`,
+    `export` as additional pending-tx operations). The single-
+    phase `send(request, confirm_fn) -> Result<TxHash>` callback
+    model is rejected. Rationale: explicit lifecycle for
+    multisig and air-gapped signing flows, RPC-friendly across
+    the JSON-RPC boundary, fee-adjustment without rebuild,
+    audit/inspect surface, recovery from partial failure.
+
+  Companion `docs/FOLLOWUPS.md` updates land in the same commit:
+
+  - V3.0 — Stage 2 `KeyEngine` migration; Stage 3 `StakeEngine`
+    native build; Stage 4 remaining-subsystem migrations
+    (`DaemonEngine`, `PersistenceEngine`, `PendingTxEngine`,
+    `RefreshEngine`, `LedgerEngine` in suggested order); RPC
+    boundary refinements (idle eviction with TBD-at-implementation
+    rationale, `engine_lock` JSON-RPC method, multi-engine
+    registry, snapshot reads from `LedgerEngine`, multi-peer
+    archival routing client surface).
+  - V3.1 — sibling resolution entry for the `assemble_tree_path_for_output`
+    bug, locking the resolution architecture (foundation
+    `--no-prune` archival as floor; staker-distributed archival
+    via `ArchivalEngine` as primary path; multi-peer routing
+    against per-block root snapshots). The original bug entry is
+    preserved untouched as historical record.
+  - V3.x — Stage 5 `ArchivalEngine` native build (simulation-
+    gated); no-tradeability invariant codification placeholder
+    cross-referencing `docs/V3_SHARD_VISUALIZATION.md` and
+    `docs/V3_STAKER_ARCHIVAL.md`.
+  - V4+ — horizontal scaling via stateless actor pools.
+  - V5+ — signed actor-patch distribution over staker P2P.
+
+  The 2026-04-25 *"Locking discipline: `RwLock<Wallet>` over
+  `RefCell` / sharded locks / actor model"* sub-section receives a
+  one-line forward-pointer noting that it is partially superseded
+  by the new actor-architecture entry from Stage 2 onward; lock-
+  discipline reasoning still applies during Phase 2b composition.
+
+  This commit is documentation-only. No code, schema, or
+  protocol surface changes here. The mechanical rename commit
+  ships separately as the immediately-following commit on
+  `shekyl-core` `dev`; Stage 1 and beyond ship over subsequent
+  PRs per the locked stage sequence in the actor-architecture
+  decision-log entry.
+
+- **`docs/V3_STAKER_ARCHIVAL.md` and `docs/V3_SHARD_VISUALIZATION.md`
+  added under `shekyl-core/docs/` (relocated and rescoped from
+  `shekyl-dev/docs/V4_*`).** Two design documents covering the
+  staker-distributed chain-history archival mechanism and the
+  deterministic shard visualization surface relocate from the
+  `shekyl-dev` planning workspace to the `shekyl-core` canonical
+  documentation tree, content-checked to reflect their V3 ship
+  scope rather than the V4 ship scope they originally drafted
+  against. Status blocks at the top of each document pin the new
+  ship target and reference the 2026-04-27 actor-architecture
+  decision-log entry that established `ArchivalEngine` as a
+  sibling to `StakeEngine` and `shekyl-shard-visual` as a
+  domain-primitive library crate. The earlier
+  `docs/V4_STAKER_ARCHIVAL.md` and `docs/V4_SHARD_VISUALIZATION.md`
+  copies in `shekyl-core/docs/` (added in commit 9dc44687d) are
+  removed in this commit; the V3-named documents are the canonical
+  homes going forward. The companion `git rm` of the V4-named
+  drafts from `shekyl-dev/docs/` ships as a separate commit on
+  `shekyl-dev` `dev` that references this commit's shekyl-core
+  SHA.
+
+- **Phase 2b prep — Track 1 audit-hygiene pass (2026-04-28).** Five
+  small editorial / re-export commits close the loose ends surfaced
+  by the Phase 2a Branch 2 audit before Stage 1 spec work begins.
+  None of the five touch consensus, secret-handling, persisted
+  format, or wire format; they are pure plumbing / docs / re-exports.
+
+  1. **`shekyl-engine-core` crate-root re-exports for `Refresh*`
+     types.** [`rust/shekyl-engine-core/src/lib.rs`](../rust/shekyl-engine-core/src/lib.rs)
+     now re-exports `RefreshHandle`, `RefreshOptions`, `RefreshPhase`,
+     `RefreshProgress`, `RefreshReorgEvent`, and `RefreshSummary`
+     alongside the `RefreshError` it already re-exported.
+     Downstream callers (CLI, JSON-RPC server, benches, FFI) no
+     longer have to reach through `engine::refresh::*`. The
+     `engine` module itself already re-exported the full set
+     ([`engine/mod.rs:168–170`](../rust/shekyl-engine-core/src/engine/mod.rs)).
+
+  2. **CHANGELOG `[Unreleased]` editorial sweep — `Wallet` →
+     `Engine` running prose.** Phase 1 and Phase 2a Branch 1 bullets
+     (lifecycle, pending-tx, scan-result, refresh-driver, struct,
+     module-skeleton) carried `Wallet<S>` / `Wallet::*` /
+     `OpenedWallet` / `WalletSignerKind` / `WalletCreateParams` /
+     `shekyl_engine_core::wallet::*` references that pre-dated the
+     2026-04-27 rename bullet at the top of `[Unreleased]`. The sweep
+     normalizes the running prose. Decision-log title citations and
+     the rename bullet's mapping enumeration are intentionally
+     preserved verbatim — the cited
+     `docs/V3_WALLET_DECISION_LOG.md` entries still carry their
+     historical titles.
+
+  3. **`docs/FOLLOWUPS.md` V3.1 row added — `transfer_details` Rust
+     migration.** [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+     cites `transfer_details` Rust migration as V3.1 scope; the row
+     now exists. Rewrites each C++ consumer of `struct
+     transfer_details` (balance, output selection, key-image / spend
+     tracking, payment-id surface, password rotation, persistent
+     wallet-cache I/O) to drive
+     `shekyl-engine-state::TransferDetails` through FFI, then deletes
+     the C++ struct from
+     [`src/wallet/wallet2.h`](../src/wallet/wallet2.h) and
+     [`src/wallet/wallet_rpc_server_commands_defs.h`](../src/wallet/wallet_rpc_server_commands_defs.h).
+     Closes either at V3.1 or by superseding deletion in the V3.2
+     `wallet2.cpp` retirement.
+
+  4. **`docs/FOLLOWUPS.md` V3.2 row added — *"Re-examine
+     `/FIiso646.h` and `rct::` → `ct::` deferrals."*** Reconciles a
+     dead citation in [`docs/STRUCTURAL_TODO.md`](STRUCTURAL_TODO.md):17–18,
+     37–38. Both deferrals rest on the same upstream-cherry-pick-risk
+     framing the STRUCTURAL_TODO calls "largely notional"; the V3.2
+     row pins per-item disposition rules (`/FIiso646.h`: `/permissive-`
+     vs. mechanical replacement vs. stay-on-workaround;
+     `rct::`→`ct::`: confirm or compress the V4 target).
+
+  5. **`Engine::refresh` cancellation contract pinned in the
+     docstring at
+     [`rust/shekyl-engine-core/src/engine/refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs)**
+     (lines 1815–1827 in the pre-edit revision). Sync path stays
+     cancel-internal (the token is created fresh per call and never
+     fires); async path (`Engine::start_refresh` returning
+     `RefreshHandle`) owns cooperative cancellation. The split is
+     deliberate, not a TBD: threading a token through every sync
+     caller is design churn for no win, and the async surface
+     already exists for callers that need shutdown.
+
+  Audit reference:
+  [`.cursor/plans/phase_2b_prep_stage_1_trait_boundaries_0d37a30e.plan.md`](
+  ../.cursor/plans/phase_2b_prep_stage_1_trait_boundaries_0d37a30e.plan.md)
+  Track B items 1–5. Track 2 (Stage 1 trait-boundaries spec, V3.2)
+  begins after this hygiene pass lands.
+
+### Removed
+
+- **`shekyl-scanner::sync` module and `shekyl-scanner::rust-scanner`
+  Cargo feature retired (Phase 2a `refresh_scan_loop` bundle,
+  Branch 1).** The standalone background-sync surface
+  (`run_sync_loop`, `LiveLedger`, `SyncProgress`, `SyncError`) and
+  its feature flag are deleted in favor of the
+  `shekyl-engine-core::Engine::refresh` driver. `shekyl-scanner`
+  becomes a pure scanning library — `Scanner`, extra-field parsing,
+  KEM rederivation, the `LedgerBlock` / `LedgerIndexes` extension
+  traits, balance, and coin selection — and drops its `tokio` /
+  `tokio-util` optional dependencies along with the feature.
+  `shekyl-engine-rpc::rust-scanner` is **not** affected by this
+  change; that feature gates a JSON-RPC-side
+  `(LedgerBlock, LedgerIndexes)` cache (`scanner_state::LiveLedger`,
+  a *local* type alias unrelated to the deleted scanner-side
+  alias) which retires in Phase 4b alongside `shekyl-engine-rpc`'s
+  Rust cutover. See `docs/V3_WALLET_DECISION_LOG.md`
+  *"Retire `shekyl-scanner::sync::run_sync_loop` (Phase 2a/4b
+  boundary)"* (2026-04-27) for the rationale and Phase boundary.
+  The `sync_bookkeeping` test module in `shekyl-scanner` is
+  retained: it exercises the `(LedgerBlock, LedgerIndexes)`
+  state-management primitives (progress monotonicity, reorg
+  handling, spend-detection tracking) that the producer side of
+  `Engine::refresh` now drives, and remains load-bearing
+  regardless of who owns the outer loop.
+
+- **`rust/shekyl-ffi/src/wallet_ledger_ffi.rs` deleted as a Phase 5
+  pre-emption.** The typed cache-handle FFI surface from sub-commit
+  2l.a — `ShekylTransferDetailsC` / `ShekylBlockchainTipC` /
+  `ShekylReorgBlockEntryC` / `ShekylSubaddressRegistryEntryC` /
+  `ShekylSubaddressLabelEntryC` / `ShekylAddressBookEntryC` /
+  `ShekylTxKeyEntryC` / `ShekylTxNoteEntryC` /
+  `ShekylTxAttributeEntryC` / `ShekylScannedPoolTxEntryC` /
+  `ShekylSyncStateScalarsC` and their
+  `shekyl_wallet_{get,set,free}_*` trios plus
+  `shekyl_wallet_ledger_preflight` — is gone. The corresponding
+  declarations in `src/shekyl/shekyl_ffi.h` are stripped; the
+  reserved `SHEKYL_WALLET_ERR_BLOCK_NOT_HYDRATED` (codepoint 29)
+  retires alongside the surface that produced it. `save_as`
+  (the in-scope C-ABI export from `wallet_file_ffi.rs`) and its
+  refusal codes (`SAVE_AS_CROSS_FILESYSTEM` / `SAVE_AS_TARGET_EXISTS`)
+  remain unchanged. The `shekyl-primitives` main- and dev-dep are
+  also removed from `rust/shekyl-ffi/Cargo.toml`; the only consumer
+  was the deleted file's `Commitment` reconstruction path.
+
+  **Caller evidence (commit message body).** Pre-flight `git grep`
+  against `*.cpp` / `*.cc` / `*.h` / `*.hpp` for every export of the
+  deleted surface returned only `src/shekyl/shekyl_ffi.h` itself
+  (the prototypes that this commit removes). Zero `.cpp` consumers
+  ever materialized — the original consumer
+  (`wallet2_handle_views.h/.cpp`) was scheduled but never written,
+  and Phase 5 will delete the enclosing `wallet2.cpp` shim
+  wholesale. Full `git grep` transcript pinned in the deletion
+  commit's message body for reproducibility.
+
+  **Decision rule.** This deletion establishes the *Phase 5
+  pre-emption rule* in `docs/V3_WALLET_DECISION_LOG.md`: an
+  individual Phase 5 inventory item may be deleted early when (1)
+  zero current `.cpp` callers, (2) grep evidence in the deletion
+  commit's message body, and (3) atomic update of
+  `docs/FOLLOWUPS.md` / Phase-5-inventory metadata in the same
+  commit. Pre-empting items with surviving callers is
+  not acceptable. The Decision Log entry locks the rule so future
+  pre-emptions follow a precedent rather than an ad-hoc precedent.
+
+  **Inventory hygiene.** `docs/FOLLOWUPS.md` (sub-bullet *"Phase 5
+  inventory pre-emptions"* under the *wallet2.cpp absorption*
+  entry) records this file as already pre-empted; the eventual
+  Phase 5 commit's deletion list excludes it. The pre-existing
+  clippy lints in the now-deleted file (`as u8` casts, explicit
+  `iter()` loop, `_keep_imports` arg count) close by absorption —
+  the file holding them no longer exists.
+
+### Changed
+
+- **Subaddress namespace flattened to `SubaddressIndex(u32)` across the
+  wallet stack and the typed-ledger FFI surface (Phase 1 of the
+  [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
+  `primitives` task).** `SubaddressIndex` is now a `u32` newtype with
+  `index == 0` reserved for the primary address; the legacy
+  `{account, address}` pair is gone everywhere — `WalletLedger`,
+  `BookkeepingBlock::subaddress_registry` /
+  `subaddress_labels.per_index`, scanner outputs, transfer records,
+  `RuntimeWalletState::filter`, and the typed-ledger FFI in
+  `rust/shekyl-ffi/src/wallet_ledger_ffi.rs`. Account-level concepts
+  inherited from wallet2 (`AccountTags`, the `tag_descriptions` /
+  `account_tags` FFI trios) are removed wholesale; the Decision Log
+  entry "Subaddress hierarchy: flat, no account level" pins the
+  rationale (most users use one account; account-level tags were
+  wallet2 baggage; multi-wallet-file isolation is genuinely stronger
+  than account-level subaddresses). A separate
+  `SubaddressLabels::primary` slot is gone too — the primary label is
+  the `index == 0` entry of `per_index` like every other label.
+
+  **FFI surface delta (this commit).** `shekyl_ffi.h` mirrors the Rust:
+  `ShekylSubaddressRegistryEntryC` and `ShekylSubaddressLabelEntryC`
+  carry a single `index: u32` field (sizes 36 and 24 respectively, no
+  trailing pad — there are zero `.cpp` callers in tree, so preserving
+  the legacy stride for hypothetical future callers would be a
+  defensive measure for nobody); the
+  `ShekylTagDescriptionEntryC` /
+  `ShekylAccountTagAssignmentEntryC` typedefs and their
+  `static_assert`s, plus the
+  `shekyl_wallet_{get,set,free}_{tag_descriptions,account_tags,primary_label}`
+  prototypes, are removed. The FFI file
+  `wallet_ledger_ffi.rs` itself is scheduled for outright deletion in
+  the immediate follow-up commit (Phase 5 pre-emption); this commit
+  lands the field-rename half of the migration so the deletion commit
+  is a one-concern review.
+
+  **Behavioral delta.** `shekyl_wallet_set_subaddress_registry` now
+  rejects an entry with `index == 0` by returning
+  `SHEKYL_WALLET_ERR_LEDGER`. The primary address is reconstructed
+  from the wallet keys at every load and is not registry-managed; an
+  attempted insert at index 0 is structurally impossible rather than
+  benign overwrite. wallet2 silently accepted such inserts; the V3
+  surface fails loudly. Belt-and-suspenders unit test
+  `wallet_ledger_ffi::tests::registry_set_rejects_index_zero` pins
+  the contract.
+
+  **On-disk schema.** All three persisted-block version constants are
+  bumped from `1` to `2`: `BOOKKEEPING_BLOCK_VERSION` (the direct
+  field-shape changes — `subaddress_registry` /
+  `subaddress_labels.per_index` flatten and `account_tags` removal),
+  `LEDGER_BLOCK_VERSION` (transitive — every `TransferDetails` in
+  `LedgerBlock::transfers` now carries the flattened newtype), and
+  `WALLET_LEDGER_FORMAT_VERSION` (transitive — the bundle's serialized
+  bytes shift wherever any nested `SubaddressIndex` or
+  `SubaddressLabels` appears). The strict pairing of "snap drift ↔
+  paired version-constant bump" is enforced by the
+  `ci/schema-snapshot` workflow per
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.4 and
+  [`.cursor/rules/42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc);
+  the gate caught the original commit shipping only the bookkeeping
+  bump, and the missing two were folded in atop the existing branch
+  rather than rewriting history. Legacy v1 ledgers have no live
+  readers — pre-V3 launch, `rm -rf ~/.shekyl` is the migration path
+  per
+  [`.cursor/rules/15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc).
+  The `bookkeeping_block.snap` / `ledger_block.snap` /
+  `wallet_ledger.snap` schema fixtures are regenerated; the
+  `SubaddressIndex` shape went from a two-field struct to a
+  `NewtypeStruct(u32)`, and `BookkeepingBlock::account_tags` is gone.
+
+  **JSON shape factoring.** Transfer records expose subaddress
+  indices as `{"index": u32}` (bare form, no label); address-list
+  responses expose them as `{"index": u32, "label": Option<String>}`
+  (joined form, label looked up at handler time). Decision Log entry
+  "Subaddress JSON shapes: two schemas, no label join in transfer
+  records" pins the factoring for Phase 4b OpenAPI work.
+
+### Added
+
+- **`shekyl-engine-core::Engine<S>` struct + `DaemonClient` thin wrapper
+  (Phase 1 of the [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
+  cross-cutting locks 1, 3, 4 type-layer realization).** Lands the
+  `Engine<S: EngineSignerKind>` struct itself with its full dependency
+  graph wired in: `file: shekyl_engine_file::WalletFile`, `keys:
+  shekyl_crypto_pq::account::AllKeysBlob`, `ledger:
+  shekyl_engine_state::WalletLedger`, `prefs:
+  shekyl_engine_prefs::WalletPrefs`, `daemon: DaemonClient`, `network:
+  Network`, `capability: Capability`, plus `_signer: PhantomData<S>`
+  for compile-time signer-kind dispatch. `network` and `capability` are
+  cached from `WalletFile`'s region 1 (which is write-once after
+  `create`) so the hot accessors are infallible and O(1). Read-only
+  accessors (`network()`, `capability()`, `file()`, `ledger()`,
+  `prefs()`, `daemon()`) plus a `pub(crate) keys()` for in-crate sign /
+  proof code paths. Redacted `Debug` impl: `keys` prints as
+  `<redacted: AllKeysBlob>`, `ledger` / `prefs` print as `<…>`, `file`
+  and `daemon` delegate to their own already-redacting impls. No
+  `Drop` impl on `Engine<S>` itself: `AllKeysBlob` and `WalletFile`
+  each ship their own `Drop` for the secret bytes / KEK / advisory
+  lock; composing types that already wipe correctly is sound, and a
+  wrapper `Drop` would risk shadowing the inner ones. New
+  `DaemonClient` thin wrapper around
+  `shekyl_simple_request_rpc::SimpleRequestRpc` insulates `Engine`'s
+  public API from the transport choice and gives Phase 2a a single
+  audited site for `get_info` network verification, `get_fee_estimates`
+  fee-priority resolution, and tx submission. The six lifecycle methods
+  (`create`, `open_full`, `open_view_only`, `open_hardware_offload`,
+  `change_password`, `close`), `RefreshHandle`, `PendingTx`, and
+  `ScanResult` each land in their own follow-up commits on this same
+  Phase 1 branch. Cargo dependency graph: `shekyl-crypto-pq` is now a
+  non-optional dependency of `shekyl-engine-core` (the `multisig`
+  feature flag previously gated it; with `keys: AllKeysBlob` on the
+  struct it is mandatory regardless of feature). Full rationale and
+  field-by-field justification recorded in
+  [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
+  §"`Wallet<S>` struct shape and accessor surface".
+
+- **`shekyl-engine-core::engine` module skeleton (Phase 1 of the
+  [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
+  cross-cutting locks 2, 4, 5, 6, 7, 8 type-layer realization).** New
+  module `rust/shekyl-engine-core/src/engine/` ships the type-layer
+  foundations of the V3 wallet orchestrator without yet introducing the
+  `Engine` struct itself: per-domain error enums (`OpenError`,
+  `RefreshError`, `SendError`, `PendingTxError`, `KeyError`, `IoError`,
+  `TxError`) with the plan-locked variants pinned by name
+  (`OpenError::NetworkMismatch`, `RefreshError::ConcurrentMutation`,
+  `PendingTxError::TooOld`, `PendingTxError::ChainStateChanged`,
+  `TxError::DaemonFeeUnreasonable`, etc.); a re-export of
+  `shekyl_address::Network` (the fourth `Fakechain` variant lands in a
+  separate scoped commit on the same branch); a re-export of
+  `shekyl_engine_file::Capability` (canonical spelling — the plan's
+  "`CapabilityMode`" reference is satisfied); and a sealed
+  `EngineSignerKind` trait with `SoloSigner` ZST as the V3.0 default.
+  V3.1's `MultisigSigner<N, K>` will join behind the existing `multisig`
+  Cargo feature without changing call sites. `#[from]` impls for upstream
+  errors (`WalletFileError`, `CryptoError`, `WalletLedgerError`, etc.)
+  are deliberately deferred to the lifecycle / refresh / send commits
+  that introduce the call sites needing them, so an `#[from]` impl never
+  exists without a caller. Full rationale recorded in
+  [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
+  §"Per-domain `Wallet` error enums + sealed `WalletSignerKind`".
+
+- **`shekyl-engine-state::LocalLabel` and `SecretStr<'a>` (Phase 1 of the
+  [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
+  cross-cutting lock 9 type-layer realization).** Locally-sensitive
+  UTF-8 wrappers for every user-supplied string the wallet persists
+  but never transmits — address-book descriptions, subaddress labels,
+  transaction notes. `LocalLabel` is `Zeroizing<String>` with redacting
+  `Debug` / `Display` (`"<redacted N bytes>"`); no derived
+  `Serialize` / `Deserialize`. Persistence routes through the explicit
+  `serde_helpers::local_label` adapter, which is wire-byte-identical
+  to a plain `String` (test
+  `serde_helpers::tests::local_label_postcard_wire_matches_plain_string`
+  pins this), so the upcoming bookkeeping_block / tx_meta_block retypes
+  will not bump `BOOKKEEPING_BLOCK_VERSION` or
+  `TX_META_BLOCK_VERSION`. Borrowed in-process inspection goes through
+  `LocalLabel::expose() -> SecretStr<'_>`, whose only `Display` /
+  `Debug` output is the redaction marker; callers that need raw bytes
+  call `SecretStr::as_str()` explicitly so the call site is the audit
+  point. Full rationale (including why the value-typed `SecretStr<'a>`
+  shape rather than the literal `&SecretStr` shorthand from the
+  decision log — `unsafe_code` is forbidden workspace-wide) recorded
+  in
+  [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
+  §"`LocalLabel` / `SecretStr` typing for locally-sensitive UTF-8".
+
+### Changed
+
+- **`monero-oxide` vendor-bump `87acb57` → `3933664` (PR 0.6 of the
+  [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md),
+  closing Operation A of the `monero-oxide` un-pin question).**
+  Updated [`rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT`](../rust/shekyl-oxide/UPSTREAM_MONERO_OXIDE_COMMIT)
+  from `87acb57e0c3935c8834c8a270bd3bdcbbe36bcde` (sync_date 2026-04-06)
+  to `3933664d0851871c976f07298b862373d1c6fec0` (sync_date 2026-04-25),
+  the current Shekyl fork tip on `Shekyl-Foundation/monero-oxide`
+  `fcmp++`. **No vendored source files changed.** Of the five fork
+  commits between the two pins, the only ones with code-content deltas
+  (`182b648` Cargo profiles + base58 decoder hardening) touched
+  `shekyl-oxide/wallet/base58/`, a Monero-shaped wallet path that is
+  not vendored in shekyl-core per `60-no-monero-legacy.mdc` — Shekyl
+  uses native Bech32m via `shekyl-address` instead. The umbrella
+  `shekyl-oxide/Cargo.toml` is byte-identical between the vendored
+  copy and fork tip; `182b648`'s Cargo profile changes live in the
+  fork's workspace-root `Cargo.toml`, which we do not vendor either.
+  Workspace grep for `monero_base58 | shekyl-oxide.*base58 |
+  ::base58::` returns zero matches across `rust/`, confirming that
+  `shekyl-address` (Bech32m via the `bech32` crate) and no other
+  Shekyl crate imports the fork's base58 module. The hardening itself
+  is strictly more restrictive — `checked_add` overflow detection plus
+  non-canonical-encoding rejection — so even a hypothetical downstream
+  consumer would only see additional `None` returns, never different
+  `Some(_)` payloads. Verification per
+  [`docs/SHEKYL_OXIDE_VENDORING.md`](SHEKYL_OXIDE_VENDORING.md):
+  `cd rust && cargo build --locked -p shekyl-fcmp` clean, `cd rust &&
+  cargo test --locked --workspace` **900 passed, 0 failed, 6 ignored**
+  (exit 0). `ninja shekyld` skipped because PR 0.6 does not touch the
+  C++ side and `docs/SHEKYLD_PREREQUISITES.md` already certifies the
+  C++ daemon as ready. The `.github/workflows/shekyl-oxide-divergence.yml`
+  CI guard now compares against the new pin and reports zero divergence
+  until the fork advances again. Operation B (40-commit fork ↔ upstream
+  merge, including the cypherstack `generalized-bulletproofs-fix`
+  audit response and the Veridise `HelioseleneField::invert`
+  correctness cluster) remains a separate V3.1.x follow-up per
+  [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) § "V3.1+ — Legacy C++ → Rust
+  rewrite scope" and is unaffected by this PR. Half-day review gate
+  (PR 0.4 / 0.5 findings, FOLLOWUPS V3.1+ rewrite interactions,
+  cross-cutting locks confirmation, un-merged-upstream impact on
+  Phase 1 Wallet API shape) cleared cleanly before this PR;
+  conclusions recorded in
+  [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md). With
+  PR 0.6 merged, Phase 0 of the V3 wallet rewrite is complete (six PRs
+  for six PRs); Phase 1 (Wallet API + cross-cutting locks) is now
+  unblocked. Audit doc
+  [`docs/MONERO_OXIDE_VENDOR_STATUS.md`](MONERO_OXIDE_VENDOR_STATUS.md)
+  amended with a "PR 0.6 vendor-bump execution (2026-04-25)" section
+  recording the metadata-only finding so future readers don't replay
+  the base58-content review against vendored paths that don't have it.
+
+- **`shekyl-engine-file::WalletFileHandle` → `WalletFile`** (PR 0.2 of
+  the [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)).
+  Mechanical rename across all call sites in `shekyl-engine-file`,
+  `shekyl-engine-prefs`, `shekyl-ffi`, and the C FFI doc-comment in
+  `src/shekyl/shekyl_ffi.h`. No ABI change (the C-ABI symbols use the
+  `shekyl_wallet_*` prefix, not the Rust type name). Frees the
+  `Engine` identifier for the Phase 1 `shekyl-engine-core::Engine`
+  orchestrator and aligns the file-orchestrator type name with what it
+  actually is — envelope, atomic IO, advisory locking, payload
+  framing. Rationale and decision archive in
+  [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
+  ("Wallet stack greenfield Rust rewrite", 2026-04-25).
+
+### Documentation
+
+- **`shekyld` Phase 0 prerequisites audit (PR 0.3 of the
+  [shekyl-v3-wallet-rust-rewrite plan](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)).**
+  New file [`docs/SHEKYLD_PREREQUISITES.md`](SHEKYLD_PREREQUISITES.md)
+  consolidating the audit of three daemon-side prerequisites against
+  the rewrite plan's later phases:
+
+  1. **Instant-mining regtest mode** (Phase 6 prereq):
+     PRESENT — `--regtest --offline --fixed-difficulty 1` +
+     `generateblocks` JSON-RPC works as inherited from Monero;
+     V3-specific caveats documented (FCMP++ tx-type and
+     `curve_tree_root` header checks bypassed on `FAKECHAIN`,
+     reference-block age rules still enforced). No daemon change
+     required.
+  2. **`get_fee_estimate(s)` RPC** (Phase 2a prereq):
+     PRESENT as singular `get_fee_estimate` returning a positional
+     4-element `fees` vector matching HF 2021-scaling tiers; no
+     name-keyed buckets on the wire — priority-name binding is
+     wallet-side. Decision-log entry adjusted: wallet supplies the
+     names, daemon supplies the numbers. No daemon change required.
+  3. **Fee policy / rules version exposure**:
+     ABSENT entirely — no `fee_version` / `fee_policy_id` on
+     `get_fee_estimate`, on `get_info`, or as a separate RPC. Filed
+     as a V3.1 daemon-side follow-up; not a Phase 0 blocker. The
+     rewrite's Phase 2a builds a forward-compatible client that
+     consumes the field gracefully if it appears later.
+
+  Phase 6 and Phase 2a unblocked against the existing daemon
+  surface.
+
+- **`monero-oxide` vendor freshness audit (PR 0.4 of the V3 wallet
+  rewrite plan,
+  [`docs/MONERO_OXIDE_VENDOR_STATUS.md`](MONERO_OXIDE_VENDOR_STATUS.md)).**
+  Point-in-time (2026-04-25) record of where the vendored
+  `shekyl-oxide` snapshot (`87acb57e`) sits relative to the Shekyl
+  fork tip (`Shekyl-Foundation/monero-oxide` `fcmp++` `3933664d`,
+  +5 commits, all non-crypto) and the original upstream
+  (`monero-oxide/monero-oxide` `fcmp++` `0e438ae`, +40 commits since
+  the 2025-11-22 merge base, including the cypherstack
+  `generalized-bulletproofs-fix` audit response, the Veridise
+  `HelioseleneField::invert` correctness cluster, and a major
+  upstream restructure that the fork has not adopted). The doc is a
+  freshness audit only — it does not re-vendor or un-pin. The actual
+  un-pin / merge-from-upstream operation is a separate plan; this
+  audit produces its input queue (substantive upstream commits the
+  fork is missing) and baseline (the eight Shekyl-only fork commits,
+  of which only `416d8d1` rename and `87acb57` extra leaf scalars
+  are crypto-substantive). Audit lifecycle: append-only — refresh
+  runs add a new dated section rather than editing in place, so the
+  rewrite plan's Phase 0 record stays intelligible after the un-pin
+  lands.
+
+- **Mid-rewire hardening plan (`docs/MID_REWIRE_HARDENING.md`)
+  amended in §3.1 and §4.3.** §3.1 updated to reflect the
+  architecturally honest scope for the C++ baseline capture: path
+  relocated to `tests/wallet_bench/` (repo convention for
+  benchmarks; `src/` is product code), coverage reduced to three
+  of the Five with explicit per-benchmark C++/Rust availability
+  table and the daemon-coupling rationale spelled out for the two
+  Rust-only paths (`scan_block_K`, `transfer_e2e_1in_2out`). §4.3
+  gained a "Benchmarks Rust-only by necessity" subsection
+  capturing the asymmetry so the bench-comparison script (§3.3)
+  and the PR-comment format can handle it deterministically rather
+  than treating missing C++ numbers as a regression. The
+  acknowledgment is explicit: two paths have no pre-deletion C++
+  baseline and will never have one; regression detection across
+  the rewire for those paths relies on the Rust rolling baseline
+  plus human order-of-magnitude sanity, not on a pre-deletion
+  comparator.
+
+- **Mid-rewire hardening plan (`docs/MID_REWIRE_HARDENING.md`).**
+  New design spec pinning the eight-commit instrumentation pass
+  that lands between the Rust-side wallet-file FFI (commits
+  `2a`…`2k.4`, merged) and the C++ consumer rewire (commits
+  `2k.5a` onward, deferred). Covers: Google Benchmark C++ baseline
+  capture against the existing `wallet2.cpp` hot paths;
+  criterion + iai-callgrind Rust benchmark harness mirroring the
+  same five paths; GitHub Actions CI integration with
+  bidirectional thresholds for `crypto_bench_*` (any drift is
+  suspicious — constant-time property defense) and slowdown-only
+  thresholds for `hot_path_bench_*`; rolling baseline on a
+  dedicated `bench-baseline` branch; `postcard-schema` snapshot
+  files with CI-enforced `block_version` bump on every drift;
+  ripgrep + allowlist secret-wipe discipline for
+  `shekyl-engine-state` blocks; `WalletLedger::check_invariants()`
+  with five cross-block tripwires and a new
+  `WalletFileError::InvariantFailed { invariant, detail }` variant;
+  adversarial wallet-file corpus covering the three capability-
+  mode attack shapes (tamper-in-place, declared-FULL-with-VIEW_ONLY-
+  shape, declared-VIEW_ONLY-with-trailing-bytes); proptest fuzz
+  harness on stable plus checked-in (non-CI) `cargo-fuzz` targets.
+  Also captures the dual-path output-equivalence requirement for
+  `2k.5b`…`2l` as a structural commit-message template line, not a
+  reviewer convention. No code or CI changes in this commit — spec
+  only; the eight follow-up commits each cite a section.
+
+### Added
+
+- **Mid-rewire benchmark warning window (commit 2k.c of the
+  wallet-state-promotion plan,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.3.1).**
+  Closes the structural-noise loophole that the 2k.a / 2k.b
+  dual-stack rewire would otherwise punch through the
+  `ci/benchmarks` gate. New sentinel file
+  [`docs/benchmarks/MID_REWIRE_WARNING_WINDOW.active`](benchmarks/MID_REWIRE_WARNING_WINDOW.active)
+  toggles warning-only mode — when present, the `fail job on
+  threshold trip` step in
+  [`.github/workflows/benchmarks.yml`](../.github/workflows/benchmarks.yml)
+  downgrades the would-be `::error::` annotation to a
+  `::warning::` and exits 0, preserving the upstream
+  `compare` / PR comment / `profile-on-fail` observability
+  chain without blocking merges. Policy paragraph in
+  `MID_REWIRE_HARDENING.md` §3.3.1 pins *why* the window is
+  needed (pre-rewire baseline vs. post-rewire gate calibration
+  vs. structurally-slower-during-dual-stack middle state),
+  *how* the sentinel beats workflow-level flags / Actions
+  secrets / branch-name matching on grep discoverability and
+  git-authored toggle trail, and *when* it must close (2m-cache
+  commit, with a mandatory post-rotation of `bench-baseline`).
+  The sentinel path is included in the workflow's `paths:`
+  filters for both `pull_request` and `push` triggers, so
+  opening and closing the window self-triggers the gate.
+  Reviewers still see every delta and every samply profile
+  during the window; what they lose is the automated merge
+  block, which would otherwise fire on structural noise the
+  rewire *is* expected to produce.
+
+- **2k.b — refuse legacy `store_keys` writes on SHKW1 wallets
+  (commit 2k.b of the wallet-state-promotion plan,
+  [`.cursor/plans/wallet-state-promotion_ab273bfe.plan.md`](../.cursor/plans/wallet-state-promotion_ab273bfe.plan.md)
+  §2k.b).** Installs the keys-layer fault line in
+  `wallet2::store_to` so SHKW1-backed wallets cannot silently
+  corrupt their on-disk file by falling back to the legacy
+  `store_keys` JSON path. The two triggers that would otherwise
+  reach the legacy save branch — save-as (`path` differs from
+  the current `m_wallet_file`) and password change
+  (`force_rewrite_keys=true`, as routed from
+  `wallet2::change_password`) — now throw a typed
+  [`tools::error::wallet_shkw1_operation_unsupported`](../src/wallet/wallet_errors.h)
+  before any wallet-state mutation (no `trim_hashchain` cache
+  touch, no `prepare_file_names` path rewrite, no cache
+  serialization). Both flows require FFI that doesn't exist
+  yet (`shekyl_wallet_save_as`, `shekyl_wallet_rotate_password`)
+  and land in 2l alongside the cache-side rewire. The common
+  `store()` → `store_to("", "")` path (same file, no forced
+  keys rewrite) is *not* refused — it never touches the keys
+  file, and its cache save still works through the legacy
+  `shekyl_encrypt_wallet_cache` path until 2l. Callers audited:
+  `wallet2::change_password` (exposed via `wallet2_ffi.cpp`
+  and `wallet_rpc_server.cpp`) and direct `store_to(path, pw)`
+  invocations in `tests/wallet_bench/` and
+  `tests/unit_tests/wallet_storage.cpp` — all refused for
+  SHKW1-backed wallets during the 2k.a → 2l window, revalidated
+  in the rewrite-testing phase. `wallet_errors.h` hierarchy
+  extended with the new `wallet_logic_error` subclass carrying
+  both the operation name and the keys file path for UX
+  rendering. Verified locally: full shekyl-core C++ rebuild
+  clean across `wallet`, `daemon`, `shekyl-engine-rpc`,
+  `unit_tests`, `core_tests`, `functional_tests`; no new
+  lints introduced.
+
+- **2k.a — rewire `wallet2` load/verify/rewrite onto the SHKW1
+  handle (commit 2k.a of the wallet-state-promotion plan,
+  [`.cursor/plans/wallet-state-promotion_ab273bfe.plan.md`](../.cursor/plans/wallet-state-promotion_ab273bfe.plan.md)
+  §2k.a).** The keys-side half of the wallet2 → Rust rewire.
+  `wallet2::load_keys` now magic-sniffs via
+  `shekyl_wallet_keys_inspect`; on an SHKW1 match it routes
+  through `shekyl_wallet_open`, gates **before** any secret
+  material leaves Rust on capability
+  (`tools::error::wallet_keys_unsupported_capability`) and
+  derivation network
+  (`tools::error::wallet_keys_wrong_network`), then extracts
+  only the 64-byte master seed into a scrubbing file-local
+  `TransitionalRederivationInputs` RAII wrapper
+  (`epee::mlocked<tools::scrubbed_arr<uint8_t, 64>>`).
+  `m_account.load_from_shkw1` rebuilds every derived field
+  (classical SK/PK, view SK/PK, ML-KEM decap key, account
+  address) from the seed; `m_account.forget_master_seed`
+  immediately scrubs the C++ copy (Option β — the
+  `ShekylWallet` handle is the single in-memory source of
+  truth for the master seed post-load). An AAD-bound
+  address-match sanity check against
+  `ShekylWalletMetadata::expected_classical_address` catches
+  corruption, HKDF policy drift, and handle-repoint bugs
+  via a distinct
+  `tools::error::wallet_keys_aad_address_mismatch`; `init_type`
+  and `set_createtime` land atomically with the handle-stash
+  on `m_shekyl_wallet`. `wallet2::load_keys_buf` refuses SHKW1
+  inputs with `error::wallet_internal_error` — the envelope
+  requires the file-lock path and cannot be driven through a
+  raw buffer. Both `verify_password` overloads route SHKW1
+  verification through `shekyl_wallet_keys_open` with a sizing
+  probe for the capability payload; the instance overload runs
+  the same address-match sanity check against the opened
+  handle's metadata so a future migration tool that repoints
+  `m_keys_file` without re-opening the handle surfaces as a
+  typed error rather than silently returning keys from the
+  wrong handle. The static overload logs an L1 warning if a
+  caller passes `no_spend_key=false` (no in-tree caller does
+  today; the log guarantees any future regression trips test
+  output). `wallet2::rewrite` becomes a logged L1 no-op for
+  SHKW1 wallets — settings writes land in 2k.b's `store_to`
+  rewire. `wallet2::deinit` resets `m_shekyl_wallet` *before*
+  `m_account.deinit()` so the Rust handle's final state write
+  runs while C++ secrets are still live, and the C++ wipe
+  happens after the handle drops. Three new typed refusals
+  in
+  [`src/wallet/wallet_errors.h`](../src/wallet/wallet_errors.h)
+  discriminate structural failure modes (wrong network vs.
+  AAD-bound cryptographic inconsistency vs. unsupported
+  capability) so CLI, wallet RPC, and tests can render
+  targeted messages without parsing log strings. Security
+  invariants: the 64-byte master seed lives in C++ only for
+  the duration of `load_from_shkw1`, under `mlock`; the
+  address-match check fires before any scalar is materialized
+  in C++; `xor_with_key_stream` / `rederive_from_master_seed`
+  / `decrypt` are all length-gated, so the post-scrub empty
+  vector state is a no-op everywhere it's read. Verified
+  locally: full shekyl-core C++ rebuild clean across `wallet`,
+  `daemon`, `shekyl-engine-rpc`, `unit_tests`, `core_tests`,
+  `functional_tests`; `cargo check -p shekyl-engine-file -p
+  shekyl-ffi` clean. Test regeneration / wallet2 fixture
+  migration deferred to the rewrite-testing phase per the
+  user-approved scope split.
+
+- **Region-2 parser fuzz harnesses (commit 8 of the mid-rewire
+  hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.8).**
+  Closes the gap the adversarial corpus (commit 7) structurally
+  cannot cover: the corpus pins *specific* typed refusals against
+  *specific* malformations it was written to check, which says
+  nothing about byte patterns nobody thought to enumerate. New
+  [`rust/shekyl-engine-state/tests/fuzz_region2.rs`](../rust/shekyl-engine-state/tests/fuzz_region2.rs)
+  is a stable-Rust proptest harness that drives randomized input
+  into `WalletLedger::from_postcard_bytes` — the canonical region-2
+  decoder used by the wallet-file orchestrator — and asserts the
+  single load-bearing property: **the parser never panics and
+  always terminates with a typed result** (either `Ok`, or one of
+  the four enumerated `WalletLedgerError` variants). Five
+  strategies at 128 cases each cover every relevant mutation
+  shape: point mutation of a valid empty bundle, truncation,
+  random byte insertion, random byte deletion, and entirely-random
+  bytes up to 4 KiB. The error-classification match in
+  `assert_typed_or_ok` is deliberately exhaustive with distinct
+  classification tags per arm, so adding a new `WalletLedgerError`
+  variant without updating the harness is a compile-time error —
+  the harness stays in lockstep with the error taxonomy
+  mechanically rather than culturally. Total wall-clock is ≈0.06 s
+  per run (three orders of magnitude under the plan's 30 s-per-PR
+  exit criterion); cases = 640 total (128 × 5), comfortably inside
+  the plan's ~500-iteration budget. Companion local-only
+  coverage-guided harness at
+  [`rust/shekyl-engine-state/fuzz/`](../rust/shekyl-engine-state/fuzz/):
+  a minimal `fuzz_target!` wrapping
+  `let _ = WalletLedger::from_postcard_bytes(data)`, excluded from
+  the workspace via new `exclude = ["shekyl-engine-state/fuzz"]`
+  in [`rust/Cargo.toml`](../rust/Cargo.toml) so stable CI never
+  tries to resolve `libfuzzer-sys`. Runnable locally with
+  `cargo +nightly fuzz run region2_parser`; its README documents
+  the two-condition graduation plan (nightly stabilisation OR
+  mainnet-freeze proximity) and why nightly is not in CI today.
+  The harness is kept trivial by design so that it cannot itself
+  panic and mask a parser regression. Verified locally: 96
+  existing `shekyl-engine-state` unit tests remain green; 5-test
+  proptest harness passes in 0.06 s; `cargo check --workspace
+  --tests` on stable ignores the fuzz crate entirely; clippy is
+  clean with `-D warnings`; fmt is clean.
+
+- **Adversarial wallet-file corpus (commit 7 of the mid-rewire
+  hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.7).**
+  Locks in the "every layer refuses with a typed error, not a panic
+  or a silent fallback" posture at the integration boundary. New
+  [`rust/shekyl-engine-file/tests/adversarial_corpus.rs`](../rust/shekyl-engine-file/tests/adversarial_corpus.rs)
+  drives 16 programmatic attack shapes through
+  `WalletFile::open` and asserts the exact `WalletFileError`
+  variant each one must surface: envelope header attacks on
+  `.wallet.keys` (wrong magic → `UnknownMagic`, truncated header
+  → `FileTooShort`, `file_version = 0xFF` → `FormatVersionTooNew`,
+  region-1 ciphertext bit flip → `InvalidPasswordOrCorrupt`);
+  envelope header attacks on `.wallet` (wrong magic, future
+  `state_version`, region-2 ciphertext bit flip →
+  `StateSeedBlockMismatch` as currently mapped, cross-wallet
+  companion swap → `StateSeedBlockMismatch`); SWSP frame attacks
+  (`BadMagic`, `UnsupportedPayloadVersion`, `BodyLenMismatch`);
+  `WalletLedger` body attacks (bundle `format_version` bump →
+  `UnsupportedFormatVersion`, per-block `block_version` bump →
+  `UnsupportedBlockVersion`, truncated postcard → `Postcard`);
+  the cross-block invariant gate from commit 6
+  (`INV_TX_KEYS_NO_ORPHANS` → `InvariantFailed`); and a wiring
+  assertion that capability-shape mismatches (plan rows B / C) flow
+  through the existing envelope-level
+  `CapContentLenMismatch { mode, len }` variant unchanged — the
+  plan's proposed new `CapabilityPayloadMismatch` was dropped on
+  review because `validate_cap_content` in
+  `shekyl-crypto-pq::wallet_envelope` already enforces the entire
+  intended `(mode, cap_content_len)` shape, and adding a second
+  variant with identical semantics would duplicate the gate. The
+  corpus is programmatic rather than binary-pinned: each test
+  builds a real wallet pair via `WalletFile::create(...)`,
+  then performs narrow byte surgery (on ciphertext-protected
+  regions via the public
+  `shekyl_crypto_pq::wallet_envelope::seal_state_file` helper) so
+  it stays green across future format-field renames and AEAD
+  parameter changes. New
+  [`docs/WALLET_FILE_FORMAT_V1.md`](WALLET_FILE_FORMAT_V1.md) §2.5
+  writes up the capability decode posture the corpus enforces —
+  mode first, then `cap_content_len`, then per-capability
+  interpretation, each step refusing rather than tolerating — so
+  reviewers encountering a "why no new variant?" test can follow
+  the trail. New
+  [`rust/shekyl-engine-file/tests/fixtures/adversarial/`](../rust/shekyl-engine-file/tests/fixtures/adversarial/)
+  holds a README + one `.md` per attack row documenting the
+  construction and the rationale behind each typed refusal
+  (including the deliberate
+  `region-2-bit-flip → StateSeedBlockMismatch` collapse rather than
+  `InvalidPasswordOrCorrupt`, which the envelope cannot
+  distinguish from a seed-block-tag mismatch without running the
+  full region-2 verification twice). Verified locally: all 16
+  corpus tests pass; the rest of the `shekyl-engine-file` suite
+  remains green; clippy clean with `-D warnings`; fmt clean.
+
+- **`WalletLedger::check_invariants()` aggregator-level gate (commit 6
+  of the mid-rewire hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.6).**
+  Closes the gap that neither single-block schemas (commit 4) nor the
+  zeroizing-field grep (commit 5) structurally cover: a `.wallet`
+  bundle whose every block decoded cleanly and whose every field is
+  correctly wrapped can still be *semantically* impossible (a scanner
+  tip below a recorded transfer; a key image shared between two
+  transfers; an orphan per-tx secret whose transaction has been
+  garbage-collected from every live reference). New
+  [`rust/shekyl-engine-state/src/invariants.rs`](../rust/shekyl-engine-state/src/invariants.rs)
+  owns the closed set of five cross-block invariants with stable
+  machine-readable names: `tip-height-not-below-transfer`,
+  `tx-keys-no-orphans`, `subaddress-registry-dense`,
+  `reorg-trail-monotonic`, `spent-state-consistent`. Each check is
+  O(n) in the number of transfers or map keys with a single
+  `HashSet<[u8; 32]>` allocation, well under 100 µs for a 10 k-transfer
+  bundle. New
+  [`WalletLedgerError::InvariantFailed { invariant, detail }`](../rust/shekyl-engine-state/src/error.rs)
+  variant carries the stable name plus a pointed diagnostic ("missing
+  minor index 3 in [1, 4]" rather than "file is corrupt"), which flows
+  through `shekyl-engine-file`'s `WalletFileError::Ledger` by existing
+  `#[from]`. Two call sites wire the checks in: `WalletLedger::from_postcard_bytes`
+  runs them after the per-block version gates pass (typed refusal on
+  load), and `WalletLedger::preflight_save` runs them ahead of every
+  `save_state` in `shekyl-engine-file/src/handle.rs` — `debug_assert!`
+  in debug so a runtime-induced invariant break aborts tests loudly,
+  typed `Err` in release so a user save never panics mid-write. Two
+  invariants (subaddress density, key-image uniqueness) replace the
+  plan's §3.6 `spent_images` and `transfer_index` proposals with shapes
+  that match the actual blocks (`BookkeepingBlock::subaddress_registry`
+  and `TransferDetails::key_image` — there is no separate spent-image
+  set and no transfer-index join); the plan explicitly sanctions such
+  adjustment on landing, and the machine-readable names are chosen to
+  outlive any future shape refactor. Verified locally: 16 unit tests
+  (one positive + at least one negative per invariant, plus alternate
+  reference paths for I-2 proving a pool- or pending-referenced tx
+  passes) all pass; the pre-existing 96-test `shekyl-engine-state`
+  suite and 51-test `shekyl-engine-file` suite remain green; clippy
+  clean with `-D warnings`; fmt clean.
+- **Zeroizing-field grep + allowlist CI guard (commit 5 of the
+  mid-rewire hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.5).**
+  Closes the gap that the wire-schema snapshot from commit 4
+  structurally cannot cover: `Zeroizing<[u8; 32]>` and `[u8; 32]`
+  produce byte-identical postcard output, so unwrapping a zeroize
+  wrapper leaves the snapshot green while silently breaking the
+  runtime secret-wipe contract. New
+  [`scripts/ci/check_zeroize.sh`](../scripts/ci/check_zeroize.sh)
+  walks `rust/shekyl-engine-state/src/**/*.rs` and emits every
+  `[u8; N]` or `Vec<u8>` field declaration: production code only
+  (`#[cfg(test)]` modules and everything past the first
+  `#[cfg(test)]` in a file are elided), with paren-depth tracking
+  across multi-line `fn` signatures so `pub fn new(x: [u8; 32], …)`
+  parameters are not mistaken for struct fields, and with standard
+  filters on `//`, `///`, `use`, `type`, `impl`, `let`, `for`,
+  `match`, `->` , and `assert` lines. Every hit must either carry a
+  `Zeroizing<...>` / `SecretKey<...>` wrapper on the same line
+  (auto-pass, no allowlist entry needed) or be enumerated verbatim —
+  `<relative-path>|<normalized decl>` — in
+  [`rust/shekyl-engine-state/.zeroize-allowlist`](../rust/shekyl-engine-state/.zeroize-allowlist).
+  The allowlist is bi-directional: a new unwrapped field with no
+  entry fails with `FATAL: unwrapped byte-shaped field(s) without
+  allowlist entry`, and an allowlist line whose field no longer
+  exists fails with `FATAL: stale allowlist entry — field no longer
+  exists`, so the file cannot rot with ghost entries that would
+  silently re-admit a future field of the same spelling. Initial
+  allowlist encodes 27 deliberate public-bytes entries across six
+  files (`bookkeeping_block`, `ledger_block`, `payment_id`,
+  `runtime_state`, `sync_state_block`, `transfer`, `tx_meta_block`),
+  grouped by category with per-entry comments: (a) public chain
+  hashes (tip/reorg/creation-anchor/pending-tx/reference-block),
+  (b) public key-image markers on `TransferDetails`, (c) 32-byte
+  map keys keying per-tx metadata (tx hashes are public lookup
+  handles; values that carry secrets, like `TxSecretKey`, are wrapped
+  on their own line), (d) the clear `PaymentId([u8; 8])` handle
+  (obfuscation is applied by the tx-builder, not the storage type),
+  (e) FCMP++ `path_blob: Vec<u8>` (public-input proof bytes; leaks
+  anonymity-set choice but not spender secrets), (f) mirror-struct
+  schema fields on `TransferDetailsSchema` / `TxSecretKeySchema` that
+  exist only to drive the `postcard_schema::Schema` derive and never
+  allocate at runtime, (g) `runtime_state.rs` in-memory indexes
+  that are rebuilt from `LedgerBlock` on every load and never
+  persisted. New
+  [`.github/workflows/zeroize-check.yml`](../.github/workflows/zeroize-check.yml)
+  runs the script on PRs into `dev` that touch the wallet-state
+  source tree, the allowlist, the script itself, or this workflow.
+  Policy captured in
+  [`.cursor/rules/42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc)'s
+  enforcement section (§3.4 schema snapshot + §3.5 zeroize grep
+  together form the mechanical half of the wire-format and
+  secret-wipe discipline). Verified locally: script exits 0 on
+  the current tree ("33 candidate field(s) scanned, all wrapped or
+  allowlisted"); the three failure modes — adding an unwrapped
+  `scratch_field: [u8; 32]`, adding a stale allowlist entry,
+  unwrapping an `Option<Zeroizing<[u8; 32]>>` to `Option<[u8; 32]>`
+  — each produce the expected pinpoint error.
+- **Wire-schema snapshot + paired `block_version` CI guard (commit 4 of
+  the mid-rewire hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.4).**
+  Converts the `block_version` discipline from cultural invariant
+  (previously policed only by reviewer attention and the prose rule in
+  `.cursor/rules/42-serialization-policy.mdc`) into a mechanical check
+  that fires on every PR. Adds a `postcard-schema = "0.2"` dependency
+  to `shekyl-engine-state` (pinned at the same major as the on-disk
+  `postcard = "1"` wire-format crate, stable schema representation),
+  derives `postcard_schema::Schema` on every persisted block
+  (`WalletLedger`, `LedgerBlock`, `BookkeepingBlock`, `TxMetaBlock`,
+  `SyncStateBlock`, plus the nested `BlockchainTip`, `ReorgBlocks`,
+  `FcmpPrecomputedPath`, `SubaddressLabels`, `AddressBookEntry`,
+  `AccountTags`, `TxSecretKeys`, `ScannedPoolTx`, `SubaddressIndex`,
+  `PaymentId` types), and hand-rolls `Schema` for the two leaf types
+  whose fields use `#[serde(with = "…")]` helpers the derive macro
+  cannot introspect (`TransferDetails`, `TxSecretKey`). The hand-rolled
+  impls use the mirror-struct pattern: a compile-only
+  `TransferDetailsSchema` / `TxSecretKeySchema` that mirrors the wire
+  layout with `Vec<u8>` for byte sequences, then lifts
+  `NamedType.ty` out of its derived `Schema` impl under the
+  domain-facing type name. This is wire-identical to the original types
+  (both produce length-prefixed byte sequences under postcard) but
+  participates in `postcard-schema`'s `NamedType` tree, which is the
+  load-bearing part of the check.
+  [`rust/shekyl-engine-state/src/schema_snapshot.rs`](../rust/shekyl-engine-state/src/schema_snapshot.rs)
+  is a new test module that renders each block's `NamedType` tree as
+  pretty JSON (via `OwnedNamedType` — `NamedType` holds `&'static`
+  references that `serde_json` cannot roundtrip through) and
+  diff-compares against a committed `.snap` file under
+  [`rust/shekyl-engine-state/schemas/`](../rust/shekyl-engine-state/schemas/).
+  Seven tests: one per block (5) plus a self-parseability roundtrip
+  guard and a canonicality check on the schemas-dir path. Running
+  `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-engine-state schema_snapshot`
+  regenerates; running without the env var asserts. Mismatches print a
+  line-oriented unified diff, name the file that moved, and spell out
+  the three-step fix (bump the constant, regenerate, review).
+  [`.github/workflows/schema-snapshot.yml`](../.github/workflows/schema-snapshot.yml)
+  wires two jobs. The first runs
+  `cargo test -p shekyl-engine-state schema_snapshot --no-fail-fast`
+  against the PR head. The second diffs the PR against the `dev`
+  merge-base and, for every `.snap` that changed, insists that both
+  (a) the paired source file was touched, and (b) the `pub const` line
+  that declares the matching version constant appears on either side of
+  the file's unified diff. Pairing is canonical in both the workflow
+  (`PAIRS` array) and the `schema_snapshot.rs` module docs:
+  `wallet_ledger.snap ↔ WALLET_LEDGER_FORMAT_VERSION`,
+  `ledger_block.snap ↔ LEDGER_BLOCK_VERSION`,
+  `bookkeeping_block.snap ↔ BOOKKEEPING_BLOCK_VERSION`,
+  `tx_meta_block.snap ↔ TX_META_BLOCK_VERSION`,
+  `sync_state_block.snap ↔ SYNC_STATE_BLOCK_VERSION`. Workflow paths
+  filter is scoped to the wallet-state crate plus the workflow file
+  itself, so unrelated PRs skip the job entirely. Design choices
+  surfaced in §3.4: (a) the snapshot is schema JSON, not postcard
+  bytes — a hex diff is opaque to a reviewer, whereas a `NamedType`
+  diff names every field and spells out its `DataModelType`; (b) the
+  schema-stability contract leans on `postcard-schema`'s SemVer
+  (pinned `0.2`), because the `NamedType` representation is part of
+  the crate's public API; (c) the mirror-struct pattern is preferred
+  over upstream-patching `postcard_schema` to understand
+  `#[serde(with)]` because it is local, reviewable, and does not couple
+  us to an upstream release cadence. Exit criteria met: five snapshot
+  files exist, the assert-test passes on a clean checkout, a deliberate
+  field rename produced a unified diff pointing at the exact node
+  (verified locally against a scratch `#[serde(rename = "restore_height")]`
+  on `SyncStateBlock::restore_from_height`), and the workflow's
+  grep-logic dry-run correctly accepts a `pub const … = N → N+1` diff
+  and rejects source-file edits that leave the declaration line
+  untouched.
+- **CI benchmark gate — iai-callgrind per-PR + rolling baseline on
+  `bench-baseline` (commit 3 of the mid-rewire hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.3).**
+  New `ci/benchmarks` workflow
+  ([`.github/workflows/benchmarks.yml`](../.github/workflows/benchmarks.yml))
+  running on PRs into `dev` (the gate) and pushes to `dev` (the
+  rolling-baseline updater). On a PR: `ubuntu-latest` runs the
+  full five-bench iai-callgrind harness via
+  `scripts/bench/capture_rust_baseline.sh` (~8-10 min, cached
+  cargo registry + target dir), diffs the resulting
+  `shekyl_rust_v0.json` against the tip of the orphan
+  `bench-baseline` branch's `baseline.json` via
+  [`scripts/bench/compare.py`](../scripts/bench/compare.py), and
+  upserts a Markdown PR comment via
+  [`scripts/bench/post_comment.py`](../scripts/bench/post_comment.py).
+  Threshold table enforced mechanically: `crypto_bench_*` ±5% warn
+  / ±15% fail (bidirectional — speed-ups are suspicious on
+  constant-time paths too), `hot_path_bench_*` +5% warn / +15%
+  fail (slowdown-only), missing-bench-in-PR = fail. On any fail a
+  second job re-runs the criterion sibling of the tripped bench
+  under `samply record` and uploads a `profile.json` artifact for
+  flamegraph review. Bootstrap: the first PR before the
+  `bench-baseline` branch exists gets a `bootstrap-pending`
+  comment and the gate passes; the first subsequent push to `dev`
+  creates the branch with a bot-authored orphan commit. Design
+  choices documented in §3.3 "Implementation notes": (a) Tier 1
+  only — criterion wall-clock numbers are rendered in the comment
+  as an informational table but do not trip the gate (the Tier 2
+  upgrade to dedicated-runner wall-clock is tracked in §6.1);
+  (b) C++ Google Benchmark is **not** wired in this commit
+  because only `BM_balance_compute` ships live on the C++ side and
+  it is wall-clock (same Tier-2 bucket as criterion); (c) the gate
+  diffs against `bench-baseline/baseline.json` directly rather
+  than re-running the bench on the baseline commit, because
+  iai-callgrind instruction counts are machine-independent for
+  deterministic code (Valgrind VEX IR, not native cycles) — saves
+  ~8 min of CI per PR and the rolling baseline is always at most
+  one dev-merge cycle stale. The compare report schema
+  (`shekyl_rust_v0_compare_v1`) is its own versioned envelope so a
+  future schema bump on the capture side does not silently drift
+  the comparator. Companion documentation:
+  [`docs/benchmarks/README.md`](benchmarks/README.md) gains a
+  full "CI integration" section with per-PR flow, threshold
+  routing, rolling-baseline semantics, and a "When a gate trips"
+  triage runbook. Permissions are scoped per-job (read-only at
+  top level; `pull-requests: write` only on the comment-posting
+  job; `contents: write` only on the baseline-updater job), using
+  the default `GITHUB_TOKEN` — no PAT, no self-hosted runner, no
+  secret provisioning required.
+- **Provisional laptop-captured `shekyl_rust_v0` baseline
+  (follow-up to hardening-pass commit 2).** The harness commit's
+  CHANGELOG entry deferred the frozen `shekyl_rust_v0.json` +
+  `shekyl_rust_v0.iai.snapshot` to a reference-machine capture. To
+  unblock commit 3 (CI threshold gate), those two files are landed
+  here as a **laptop capture** on the commit author's host; the
+  envelope records the exact CPU model, kernel, and toolchain
+  (`captured_on.*` fields) so the "provisional" status is
+  self-documenting. The iai-callgrind instruction-count columns are
+  stable across back-to-back runs on that host (the §3.2 determinism
+  criterion is met), so the baseline is a valid slowdown detector
+  for same-host re-captures; the criterion wall-clock columns are
+  soft numbers that CPU frequency scaling and background load will
+  drift, and the reference-machine re-capture will overwrite them.
+  Schema is stable across the swap (`shekyl_rust_v0`), so commit 3's
+  comparison script does not need to branch. The capture-script
+  probe for `iai-callgrind-runner` is also fixed in the same
+  landing: the tool's `--version` flag exits 1 outside the
+  cargo-bench handshake protocol, so the envelope's
+  `iai_callgrind_runner_version` field was previously `"unknown"`;
+  it now resolves via `cargo install --list` with a fallback through
+  the runner's own error banner.
+  [`docs/benchmarks/README.md`](benchmarks/README.md) gains a
+  "Provisional laptop baseline" subsection naming the policy
+  relaxation and the exit condition for it.
+- **Rust wallet-state benchmark harness — criterion + iai-callgrind
+  (commit 2 of the mid-rewire hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.2).**
+  Five hot paths from the §3.1 list, each shipped with a
+  `criterion` binary (wall-clock, Tier-2 metric) and an
+  `iai-callgrind` sibling (deterministic instruction-count + cache-
+  miss metrics, Tier-1 metric that CI will gate on in commit 3):
+  `shekyl-engine-state::{ledger, balance}`,
+  `shekyl-engine-file::open`, `shekyl-scanner::scan_block`,
+  `shekyl-tx-builder::transfer_e2e`. Naming convention enforced:
+  `crypto_bench_*` (bidirectional ±5% warn / ±15% fail) for
+  anything touching curve25519, ML-DSA-65, Argon2id, or ChaCha20-
+  Poly1305; `hot_path_bench_*` (slowdown-only) for postcard serde,
+  balance compute, and scanner bookkeeping. All ten harnesses
+  compile under `cargo check --benches`, run locally under
+  `cargo bench -p <crate> --bench <name>`, and — on a host with
+  `valgrind` + `iai-callgrind-runner` on `PATH` — produce
+  byte-identical instruction counts across back-to-back runs
+  (§3.2 exit criterion). One deliberate deviation from production
+  code is documented: the `transfer_e2e_iai` bench bypasses
+  `HybridEd25519MlDsa::sign` and inlines the two sign steps with
+  `fips204::ml_dsa_65::try_sign_with_seed` +
+  `try_keygen_with_rng(seeded)` because the production wrapper's
+  `OsRng` draws inside ML-DSA-65 keygen + rejection-sampling loop
+  produced ~16% instruction-count variance on the sign call and
+  ~66% variance once keygen was accounted for, both violating the
+  determinism criterion. The FIPS-204 deterministic variant
+  exercises the identical signing primitives (same NTT, same
+  rejection predicates, same packing); the criterion sibling
+  preserves the randomized production path so the human-facing
+  wall-clock number is honest. Known gap: the full
+  `sign_transaction` call including the FCMP++ membership proof is
+  **not** benched, because a deterministic curve-tree path fixture
+  keyed to a synthetic tree root is its own scope of work; the
+  manifest §6.1 tracks this and names the un-gap conditions for a
+  future `shekyl_rust_v1` schema bump. Companion artifacts:
+  [`docs/benchmarks/shekyl_rust_v0.manifest.md`](benchmarks/shekyl_rust_v0.manifest.md)
+  (per-bench operation lists, fixture shapes, six documented known
+  gaps, apples-to-oranges notes against the C++ baseline),
+  [`scripts/bench/capture_rust_baseline.sh`](../scripts/bench/capture_rust_baseline.sh)
+  (reference-machine capture wrapper — sibling of
+  `capture_cpp_baseline.sh` from commit 1 — emits a schema-versioned
+  `shekyl_rust_v0.json` envelope with toolchain + host CPU +
+  git-rev metadata alongside a raw `shekyl_rust_v0.iai.snapshot`
+  text artifact),
+  [`docs/benchmarks/README.md`](benchmarks/README.md) updated with
+  a "Capturing the Rust baseline" section and the shipped
+  file-layout listing. Workspace impact is dev-dep-only:
+  `criterion` + `iai-callgrind` land as `[dev-dependencies]` on
+  the four crates that own a bench (`shekyl-engine-state`,
+  `shekyl-engine-file`, `shekyl-scanner`, `shekyl-tx-builder`);
+  the `shekyl-scanner` bench gains a self-referential
+  `shekyl-scanner = { path = ".", features = ["test-utils"] }`
+  dev-dep so `WalletOutput::new_for_test` +
+  `RecoveredWalletOutput::new_for_test` are available in the
+  bench without exposing them to downstream consumers. The frozen
+  `shekyl_rust_v0.json` is captured on a reference machine by the
+  commit author and landed as a follow-up — this commit ships the
+  harness, not the numbers, because the reference machine is part
+  of the measurement (same discipline as commit 1).
+- **Wallet2 C++ baseline benchmark harness
+  (`tests/wallet_bench/`, commit 1 of the mid-rewire hardening pass,
+  [`docs/MID_REWIRE_HARDENING.md`](MID_REWIRE_HARDENING.md) §3.1).**
+  Google Benchmark v1.9.1 harness fetched via `FetchContent`,
+  opt-in behind `-DBUILD_SHEKYL_WALLET_BENCH=ON` (OFF by default so
+  normal contributors do not pay the cold-build cost). Of the five
+  hot paths identified in §3.1, **one ships live on this tree**
+  (`BM_balance_compute`, N ∈ {100, 1000, 10000}, O(n) `balance()`
+  iteration over a seeded synthetic transfer set) and **two are
+  scaffolded-but-gated** with `state.SkipWithError(...)`
+  (`BM_open_cold`, `BM_cache_roundtrip`): those two depend on
+  `wallet2::generate` → `store_to` → `load` round-tripping, which
+  is broken on this tree and reproduced by the already-failing unit
+  test `wallet_storage.store_to_mem2file`. Root-causing the
+  wallet2 regression is the work scope of hardening-pass commits
+  `2l` / `2m-keys` / `2m-cache`; patching it here would violate the
+  "clear separations" invariant. Un-skipping is a one-line change
+  in each bench function when those commits land. Fixtures use a
+  pinned seed (`0xBEEFF00DCAFEBABE`) so two runs produce
+  byte-identical inputs; the bench defines its own
+  `wallet_accessor_test` in `tests/wallet_bench/bench_fixtures.h`
+  (matching the existing friend declaration in `src/wallet/wallet2.h`,
+  disjoint from the same-named class in `tests/core_tests/wallet_tools.h`
+  — the two headers are never included in the same TU) with a minimal
+  surface: `m_transfers` get, `get_cache_file_data`, `load_wallet_cache`. Two of the Five (`scan_block_K`,
+  `transfer_e2e_1in_2out`) ship only in the Rust harness from
+  commit 3.2: wallet2's scanner and FCMP++ proof paths are
+  daemon-coupled and have no hermetic provisioning path; the
+  architecturally honest move is to acknowledge the gap in
+  `docs/MID_REWIRE_HARDENING.md` §3.1 and §4.3 rather than
+  reimplement daemon-side synthetic-tree logic in code that is
+  deleted in 2m-cache.
+  Companion artifacts:
+  [`docs/benchmarks/wallet2_baseline_v0.manifest.md`](benchmarks/wallet2_baseline_v0.manifest.md)
+  (prose manifest: every operation in each live bench's hot loop,
+  every I/O boundary, apples-to-oranges notes against Rust, and the
+  un-skip criteria for the two gated paths),
+  [`docs/benchmarks/README.md`](benchmarks/README.md) (capture
+  procedure + baseline-update policy),
+  [`scripts/bench/capture_cpp_baseline.sh`](../scripts/bench/capture_cpp_baseline.sh)
+  (reference-machine capture wrapper emitting a schema-versioned
+  JSON envelope with toolchain + host CPU + git-rev metadata),
+  [`tests/wallet_bench/README.md`](../tests/wallet_bench/README.md)
+  (local build + run instructions + known gaps). The frozen
+  `wallet2_baseline_v0.json` is captured on a reference machine by
+  the commit author and landed as a follow-up — this commit ships
+  the harness, not the numbers, because the reference machine is
+  part of the measurement.
+- **Boost `program_options` link-time dep on `libcommon`
+  (`src/common/CMakeLists.txt`).** `removed_flags.cpp` calls
+  `boost::program_options::error_with_option_name::get_option_name()`,
+  which inlines `get_canonical_option_name` and therefore requires
+  the `libboost_program_options` symbol to resolve at link time
+  (`libcommon.so` is linked with `-Wl,--no-undefined`). The dep was
+  missing since `removed_flags` landed and only surfaced during a
+  clean rebuild triggered by the benchmark harness above. Fix is a
+  one-line `PRIVATE ${Boost_PROGRAM_OPTIONS_LIBRARY}` in
+  `src/common/CMakeLists.txt`. No behavior change outside CMake.
+
+### Chore
+
+- **Workspace `cargo fmt --all` baseline (PR 0.5 of the V3 wallet
+  rewrite plan,
+  [`.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)
+  Phase 0).** Five files (`rust/shekyl-ffi/src/wallet_file_ffi.rs`,
+  `rust/shekyl-ffi/src/wallet_ledger_ffi.rs`,
+  `rust/shekyl-scanner/benches/scan_block.rs`,
+  `rust/shekyl-tx-builder/benches/transfer_e2e.rs`,
+  `rust/shekyl-engine-file/src/handle.rs`) had accumulated hand-edited
+  formatting drift before this plan started; `cargo fmt --all --check`
+  flagged them on `dev`. Mechanical, fmt-only run; no logic, behaviour,
+  or API change. Lands before Phase 1 begins so subsequent rewrite PRs
+  can use `cargo fmt --all --check` as a cheap branch-hygiene signal
+  without wading through pre-existing drift. Drift cause was hand-edits
+  bypassing fmt (verified: `git log --follow` on each file shows the
+  drifting hunks were introduced under the same `rustfmt` toolchain in
+  use today), so unconditional `cargo fmt --all` is the correct fix —
+  no `#[rustfmt::skip]` warranted.
+
+- **Phase 0 PR 0.6 planning + FOLLOWUPS scope adjustments
+  (`chore/phase0-pr06-vendor-bump-planning`).** Split the
+  `monero-oxide` re-pin question into two distinct operations and
+  scoped them differently:
+  - **Operation A — vendor-bump `87acb57` → `3933664` (fork tip).**
+    Mechanical, cheap, none crypto-substantive except `182b648`'s
+    base58 decoder hardening. **Added as PR 0.6 to Phase 0 of the V3
+    wallet rewrite plan.** Total Phase 0 grows from five PRs to six.
+  - **Operation B — un-pin / 40-commit upstream merge.** Stays as a
+    V3.1.x peer plan, **not** scoped to Phase 0. The active correctness
+    bug `00bafcf` (`HelioseleneField::invert` Veridise edge case) does
+    not change this assessment: the bug exists today on `dev`, it is
+    below the wallet stack's API surface, and the rewrite's Phase 1
+    API shape does not depend on it. The un-pin runs in parallel with
+    rewrite Phases 1–3 if bandwidth allows.
+
+  Plan adjustments
+  ([`.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md`](../.cursor/plans/shekyl_v3_wallet_rust_rewrite_3ecef1fb.plan.md)):
+  (1) new PR 0.6 section with cost-ceiling discipline (bail out if
+  base58 review or workspace verification surfaces concerns); (2)
+  half-day review gate expanded from one item to five (PR 0.4 vendor
+  status, PR 0.3 daemon-side findings, FOLLOWUPS V3.1+ section,
+  cross-cutting locks confirmation, and **new item 5** confirming
+  whether un-merged-upstream commits affect Phase 1 Wallet API shape);
+  (3) Phase 1 logging deliverable now absorbs the daemon-side
+  staticlib `tracing` silently-dropped follow-up — the same subscriber
+  init solves both the wallet stack and the daemon staticlib in one
+  deliverable; (4) Phase 5 commit message inventory now explicitly
+  closes two V3.2 follow-ups (`shekyl-cli` key image binary format —
+  no Monero binary-format port; `wallet_tools.cpp` mixin/decoy — swept
+  with `tests/unit_tests/wallet*.cpp`); (5) Phase 3b deliverables
+  flag an optional `--format=qr-chunks` on the typed bundles for
+  air-gapped UX, replacing the V3.2 hex-blob QR follow-up;
+  (6) bumped Phase 0 PR count in the Branching cadence section.
+
+  FOLLOWUPS adjustments ([`docs/FOLLOWUPS.md`](FOLLOWUPS.md)): the
+  V3.1+ section gains an at-a-glance index table (absorbed /
+  closed-by-Phase-5 / cross-linked / independent) used by review-gate
+  item 3; the `monero-oxide` un-pin entry rewritten to describe
+  Operation A vs Operation B with cross-links in both directions; the
+  three V3.2 entries that get explicit closure (shekyl-cli key image
+  binary, `wallet_tools.cpp` mixin, daemon staticlib `tracing`) carry
+  inline closure notes pointing to the rewrite phase that absorbs or
+  closes them; the V3.2 hex-blob QR entry annotated to die with the
+  hex format in favour of the typed bundles.
+
+  Decision-log entry
+  ([`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)):
+  new entry "monero-oxide re-pin: split into Operation A (Phase 0)
+  and Operation B (un-pin V3.1.x plan)" pinning the rationale for why
+  the active correctness bug doesn't force Operation B into Phase 0,
+  and naming the alternatives considered (fold both into Phase 0,
+  defer both to V3.1.x, fold Operation A into PR 0.4) and why each
+  was rejected.
+
+  No code changes in this PR — planning + cross-link maintenance
+  only. PR 0.6 (the actual vendor-bump) lands in a subsequent PR.
+
+- **Phase 0 audit cleanup (`chore/phase0-audit-cleanup`).** Three
+  small follow-ups surfaced by the post-merge comprehensive audit of
+  `dev` against the V3 wallet rewrite plan's Phase 0 expectations:
+  (1) consolidated the duplicate `### Documentation` heading under
+  `[Unreleased]` that was a rebase artefact across PR 0.2 / PR 0.3 /
+  PR 0.4 — three entries moved up into the canonical section, no
+  content lost; (2) added a back-link in
+  [`docs/SHEKYLD_PREREQUISITES.md`](SHEKYLD_PREREQUISITES.md)
+  pointing forward to the two consuming
+  [`docs/V3_WALLET_DECISION_LOG.md`](V3_WALLET_DECISION_LOG.md)
+  entries (positional fee mapping, `fee_policy_version` absence) and
+  the daemon-side V3.1 follow-up in
+  [`docs/FOLLOWUPS.md`](FOLLOWUPS.md), so the audit's downstream
+  consumers are reachable from the audit doc itself; (3) fixed a
+  pre-existing `clippy::needless_return` lint in
+  `rust/shekyl-engine-file/src/handle.rs::is_cross_device_error`
+  (introduced under commit `2l.a`, not by Phase 0) for readability.
+  Recorded a follow-up in
+  [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) noting that the workspace as a
+  whole is **not** `clippy --workspace -- -D warnings` clean
+  (`shekyl-ffi` carries ~12 inherited warnings from its FFI shape)
+  and that a dedicated cleanup pass + CI gate belongs to V3.1.x.
+
+### Fixed
+
+- **`shekyl_account_public_address_check` argument-order mismatch
+  between Rust definition and C-side declaration** (Track 0a CI
+  triage, 2026-04-28). The Rust definition in
+  [`rust/shekyl-ffi/src/account_ffi.rs`](../rust/shekyl-ffi/src/account_ffi.rs)
+  takes `(pqc_pk_ptr, view_pk_ptr)`; the C header in
+  [`src/shekyl/shekyl_ffi.h`](../src/shekyl/shekyl_ffi.h) declared
+  `(view_pub_ptr, pqc_public_key_ptr)`, and the one C++ caller in
+  [`src/cryptonote_basic/cryptonote_basic_impl.cpp`](../src/cryptonote_basic/cryptonote_basic_impl.cpp)
+  followed the wrong order. Every decode therefore ran the FIPS-203
+  well-formedness check on garbage bytes, surfacing in CI as 14
+  `uri.*` unit_tests failures with the log line
+  `cn: Address failed v1 canonical invariant check (view_pub <->
+  X25519 prefix or malformed ML-KEM-768 encapsulation key)`.
+  Introduced in commit `0092a8da1` ("ffi,cryptonote_basic: pin
+  m_pqc_public_key format and publish v1 account FFI"); reached
+  `dev` only at the `feat/wallet-account-rewire` merge `30db140fe`
+  (2026-04-22). The Rust unit tests at
+  `rust/shekyl-ffi/src/account_ffi.rs:954,975` use the correct
+  `(pqc, view)` order and never caught the C-side divergence. Per
+  `.cursor/rules/10-shekyl-first.mdc`, Rust is the source of truth;
+  the fix aligns the C header and the C++ caller. Two files
+  touched, no fixture regeneration; the previously-failing 14
+  `uri.*` tests are themselves the regression test (FAIL → PASS).
+  Local verification: 858/870 unit_tests passing after the fix
+  (was 854/870), the 2 remaining failures are
+  `wallet_storage.{store_to_mem2file, change_password_mem2file}`
+  tracked in `docs/CI_BASELINE.md` Cluster B and
+  `docs/FOLLOWUPS.md` (V3.1, wallet2 hardening-pass close).
+
+- **CI baseline established as
+  [`docs/CI_BASELINE.md`](./CI_BASELINE.md)** (Track 0e CI triage,
+  2026-04-28). Records the documented list of known-failing C++
+  tests with diagnoses, close conditions, and FOLLOWUPS row
+  pointers (Cluster A — `uri.*`, fixed; Cluster B —
+  `wallet_storage`, deferred to V3.1 wallet2 hardening-pass;
+  Cluster C — `core_tests gen_*`, deferred to V3.1 chaingen-harness
+  rewrite or V3.2 `wallet2.cpp` removal; Cluster D —
+  `shekyl-oxide divergence` canary, currently green). The document
+  also pins the interim `shekyl-oxide` divergence-sync policy
+  (explicit trust assumption + spot-check discipline scaling with
+  window size) and the **pre-enforcement noise-floor rule** that
+  reviewers apply today: any failure outside the documented list
+  blocks PR merges to `dev` until investigated, with mechanical
+  enforcement (a required-status-check on the failing-test set)
+  tracked separately as a follow-up. Linked from
+  [`docs/CONTRIBUTING.md`](./CONTRIBUTING.md) under "CI baseline";
+  CI status is contributor surface, not first-impression surface,
+  so the link does not appear in the top-level README. The full
+  Track 0 plan (CI triage ahead of audit hygiene and Stage 1 spec)
+  is the source of these entries.
+
+- **`apply_scan_result_to_state` strict-contract enforcement (Phase
+  2a `refresh_scan_loop` bundle, Branch 1).** Closes the PR #16
+  Copilot-review finding tracked in `docs/FOLLOWUPS.md` *V3.0 →
+  "`apply_scan_result` strict-contract enforcement (refresh
+  commit)"* (now retired to *Recently resolved*). The merge in
+  [`rust/shekyl-engine-core/src/engine/merge.rs`](../rust/shekyl-engine-core/src/engine/merge.rs)
+  previously had two defensive-coding gaps:
+  1. `block_hashes` was collected via `BTreeMap::insert`, silently
+     overwriting duplicate height entries instead of rejecting them.
+  2. `new_transfers` / `spent_key_images` / `block_hashes` entries
+     with heights outside `processed_height_range` were silently
+     dropped at scope end (the per-height `BTreeMap::remove` loop
+     consumed only in-range entries; out-of-range residue fell off
+     the stack uninspected).
+
+  Both are producer-bug signals, not concurrent-mutation races.
+  `apply_scan_result_to_state` now pre-validates `block_hashes`
+  for length-matches-range, in-range, no-duplicates, every covered
+  height present, and post-loop drains the per-height per-hash
+  maps to assert no out-of-range residue remains. Contract
+  violations surface as the new
+  `RefreshError::MalformedScanResult { reason: &'static str }`
+  variant; this is distinct from
+  `RefreshError::ConcurrentMutation` (which signals "the wallet
+  moved under the producer; safe to retry") because a malformed
+  scan result indicates the producer itself is broken and retry
+  cannot help. Decision Log entry
+  *"`MalformedScanResult`: producer-bug signal vs.
+  `ConcurrentMutation`"* (2026-04-26) pins the boundary. New
+  tests: `block_hashes_length_mismatch`,
+  `block_hashes_duplicate_height`, `block_hashes_out_of_range`,
+  `block_hashes_missing_height`,
+  `transfer_out_of_range_block_height`,
+  `key_image_out_of_range_block_height`.
+
+- **`shekyl-engine-state` `ledger` / `ledger_iai` benches: pin
+  `BlockchainTip.synced_height` to the synthetic transfers' max
+  `block_height`.** The benches under
+  [`rust/shekyl-engine-state/benches/ledger.rs`](../rust/shekyl-engine-state/benches/ledger.rs)
+  and
+  [`rust/shekyl-engine-state/benches/ledger_iai.rs`](../rust/shekyl-engine-state/benches/ledger_iai.rs)
+  were authored against `WalletLedger::empty()` (commit `a9a81a17e`)
+  before invariant I-1 (`tip-height-not-below-transfer`) was wired
+  into `WalletLedger::from_postcard_bytes` by hardening-pass commit 6
+  (`def7d3379`, "feat(wallet-state):
+  WalletLedger::check_invariants"). `build_ledger` was inheriting
+  `tip.synced_height = 0` from the empty constructor while the
+  synthetic transfers carried `block_height ∈ [1_000, 1_000 + N)`,
+  so the deserialize half of the round-trip panicked with
+  `WalletLedgerError::InvariantFailed { invariant:
+  "tip-height-not-below-transfer", … }` on every iteration. The fix
+  reconstructs the `LedgerBlock` with `tip.synced_height =
+  max(transfers[*].block_height)` (and a non-`None` `tip_hash`) so
+  the fixture is invariant-coherent before postcard sees it. The
+  outdated `docs/FOLLOWUPS.md` entry that claimed four iai-callgrind
+  targets failed to *compile* against the post-`RuntimeWalletState`
+  fold has been replaced with a re-review entry capturing the actual
+  finding (see *"Phase 1 bench harness re-review post-`RuntimeWalletState`
+  fold (April 26, 2026)"*). All ten core benches under
+  `capture_rust_baseline.sh` now build and smoke-run cleanly.
+
+- **`source archive` CI job: pin `git describe` to release tags
+  (`v*`).** The branch-archival policy in
+  [`.cursor/rules/06-branching.mdc`](../.cursor/rules/06-branching.mdc)
+  rule 5 has accumulated seven `archive/<branch>-<date>` annotated
+  tags since 2026-04-13 (four of them on 2026-04-25, on commits that
+  are merge-ancestors of `dev`). The `source-archive` job in
+  [`.github/workflows/build.yml`](../.github/workflows/build.yml)
+  was calling plain `git describe`, which returns the *closest
+  reachable tag*. Once an `archive/*` tag became the closest tag to
+  `dev`, `VERSION="shekyl-$(git describe)"` started resolving to
+  e.g. `shekyl-archive/phase0-pr06-oxide-vendor-bump-2026-04-25`,
+  whose `/` was interpreted as a directory by `git-archive-all`,
+  failing with `[Errno 2] No such file or directory:
+  '…/shekyl-archive/<branch>-<date>.tar'`. The job had failed on
+  every push for ~2 hours before this fix, including PR #16's
+  source-archive run. Fix is a one-line filter
+  (`git describe --match 'v*'`) that ignores branch-archival tags
+  and keeps `VERSION` shaped like `shekyl-vX.Y.Z-N-gSHA`. Verified
+  locally: `git describe origin/dev` returns
+  `archive/phase0-pr06-oxide-vendor-bump-2026-04-25` (broken),
+  `git describe --match 'v*' origin/dev` returns
+  `v3.1.0-alpha.3-135-g39981643f` (correct). No behavior change for
+  branches with a `v*` tag in their ancestry, which is every branch
+  off `dev` since the first release tag.
+
+### Security
+
+- **`rand` 0.8.5 → 0.8.6** in
+  [`rust/Cargo.lock`](../rust/Cargo.lock) (RUSTSEC-2026-0097 /
+  GHSA-cq8v-f236-94qc, severity Low). The advisory describes an
+  unsoundness in `ThreadRng::TryRng` that can produce aliased
+  mutable references — Undefined Behaviour — when all of the
+  following hold simultaneously: (a) the `log` and `thread_rng`
+  features are enabled, (b) a custom `log::Logger` is installed,
+  (c) the custom logger calls `rand::rng()` /
+  `rand::thread_rng()` and any `TryRng` (formerly `RngCore`)
+  method on it, and (d) `ThreadRng` reseeds while called from
+  inside the logger.
+
+  This bump is **defense-in-depth, not active-vulnerability fix**:
+  the project's custom logger lives in
+  [`shekyl-logging`](../rust/shekyl-logging/) and a workspace-wide
+  audit confirmed it does not call `rand::rng()` or
+  `rand::thread_rng()` from any logger code path. The exploit
+  precondition (c) is therefore not reachable from current shekyl
+  code. The bump still lands so that future logger work does not
+  accidentally reach into the unsoundness window.
+
+  Application is a one-line `Cargo.lock` change
+  (`cargo update --precise 0.8.6 -p rand@0.8.5`) plus the
+  cascading edge updates in seven downstream consumers'
+  dependency blocks (`monero-rpc-utils`, `chacha20poly1305`,
+  `shekyl-crypto-pq`, `shekyl-engine-core`, `shekyl-fcmp`,
+  `shekyl-staking`, `fcmp_pp`). No source changes; the workspace
+  constraints (`rand = "0.8"`, caret-bounded) accept the bump
+  without Cargo.toml edits.
+
+  The companion advisory `RUSTSEC-2026-0097` against the
+  fuzz-only lockfile
+  ([`rust/shekyl-crypto-pq/fuzz/Cargo.lock`](../rust/shekyl-crypto-pq/fuzz/Cargo.lock))
+  is intentionally **not** addressed in this PR. That lockfile
+  is stale relative to the workspace (path-dep version markers
+  still at `v2.0.0` pre-Wallet→Engine rename); a precise rand
+  bump there cascades into ~50 lines of unrelated lockfile
+  refresh churn. The exploit precondition is equally
+  unreachable from fuzz harness code, and the cleanup belongs
+  with the next routine fuzz-Cargo.lock hygiene pass rather
+  than slipped into this focused security bump.
+
+  `cargo audit` exits clean against the bumped lockfile (the
+  RUSTSEC entry no longer matches any resolved version);
+  Cargo.toml constraints unchanged; `cargo check --workspace
+  --tests`, `cargo fmt --all -- --check`, and
+  `cargo clippy --workspace --all-targets --keep-going --
+  -D warnings` all exit 0.
+
+  Two further open dependabot alerts on
+  `Shekyl-Foundation/shekyl-core` are stale and self-clear on the
+  next `main` rescan: `rustls-webpki` GHSA-82j2-j2ch-gfr8
+  (already at the patched `0.103.13` in the workspace lockfile)
+  and `cryptography` (pip) CVE-2026-39892 (the alert points at
+  `tools/reference/requirements.txt`, which no longer exists in
+  the repo). Neither requires a code change.
+
+### Documentation
+
+- **Stage 1 PR 4 (`RefreshEngine`) — Round 5 substrate-decision
+  amendment (no-Mock substrate for C6).**
+  (`feat/stage-1-pr4-refresh-engine`, 2026-05-20). Doc-only
+  amendment to
+  [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](design/STAGE_1_PR_4_REFRESH_ENGINE.md)
+  landed mid-Phase-1 between C5β (legacy producer scaffolding
+  deletion) and C6 (test substrate). The Round 4 §7.X C6 plan
+  ("`MockRefresh` test substrate; mirrors `MockDaemon` /
+  `MockLedger` from PR 1 / PR 2") is **stale prose** from before
+  PR 3 §2.1.2's Mock-X rejection landed; building `MockRefresh`
+  would re-instantiate the parallel-implementation anti-pattern
+  PR 3 rejected as a category and compound the Mock-X debt that
+  [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) already scheduled to be
+  paid down. The amendment dispositions:
+
+  1. **C6 replaces `MockRefresh` with `FaultInjecting<R:
+     RefreshEngine>`.** Composable wrapper around the production
+     `LocalRefresh` (landed at C4); queues `RefreshError::Cancelled`
+     / `Io` / `InternalInvariantViolation` for failure injection
+     at the trait boundary; composes against any current or future
+     `R` implementor without per-impl parallel-Mock proliferation.
+
+  2. **Retroactive Mock-X cleanup of `MockLedger` lands in PR 4
+     C6β** (not deferred to PR 5). Extracts the existing
+     `MockLedger` body into `FaultInjecting<L: LedgerEngine>`;
+     adds `LocalLedger::from_test_blocks(...)` constructor
+     replacing the parallel-implementation `MockLedger::new(...)`
+     surface. Current `MockLedger` is structurally already a
+     `FaultInjecting<LocalLedger>`-shaped wrapper (delegating to
+     the canonical `apply_scan_result_to_state`); the cleanup is
+     mostly extraction-and-rename, not a re-implementation.
+     Closes [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) lines 578–604.
+
+  3. **`MockDaemon` → `TestDaemon` rename lands in PR 4 C6γ**
+     alongside C6β. Mechanical rename only — the structural
+     shape is already correct (alternative real implementation
+     serving canned / cached test responses without network
+     connectivity); only the `Mock` naming was the bug. Closes
+     [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) lines 606–620.
+
+  The amendment is **not** a round reopening per the §7 amendment
+  framing: it does not revisit any trait-surface contract pin,
+  attack-surface disposition, or commit-decomposition ordering
+  decision; it replaces stale C6 substrate prose with the binding
+  no-Mock shape PR 3 §2.1.2 settled. The α-disposition, the
+  F1–F13 dispositions, and the C0–C5 / C7 / C8 commit prose are
+  all unchanged.
+
+  The no-Mock rationale is re-iterated explicitly in §6 of the
+  design doc (new "Test-substrate discipline — no-Mock substrate
+  inheritance from PR 3 §2.1.2" subsection) and in the §7.X C6
+  prose, naming the five failure modes the Mock-X pattern
+  instantiates: (1) attack surface from test-only types in
+  production code; (2) conflation of test-controlled inputs to
+  real implementations with substitute implementations; (3)
+  inherited-Monero pattern that has produced real bugs in the
+  inherited codebase; (4) foreclosure of composition with future
+  trait implementors; (5) tests verifying against fake semantics
+  rather than real semantics, degrading the coverage claim.
+
+  Rationale anchor:
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  §"cost-benefit-defer-to-later anti-pattern" names the
+  architectural-integrity-now disposition as the default for
+  security-load-bearing substrate work pre-genesis;
+  [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
+  pre-genesis discount applies. Cross-references:
+  [`docs/design/STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md)
+  §2.1.2 (Mock-X rejection rationale + five named failure modes),
+  §2.1.5 (four-pattern pre-flight checklist future per-trait PRs
+  inherit).
+
+  Files touched (doc-only):
+  `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` (Status banner;
+  new §6 no-Mock substrate inheritance discipline subsection;
+  test-substrate preservation list rewritten; §7.X C6/C7/C8 prose
+  updated), `docs/FOLLOWUPS.md` (two retroactive Mock-X cleanup
+  entries pinned to PR 4 C6β/C6γ; fix the prior bug that called
+  PR 4 `PendingTxEngine` — PR 4 is `RefreshEngine`; PR 5 is
+  `PendingTxEngine`), and this CHANGELOG entry.
+
+- **Stage 1 PR 4 (`RefreshEngine`) — Round 5 sub-pin extension
+  + amendment-layering coherence pass (F-Mock-1 through F-Mock-8
+  + Option (i) wrapper API + two-enum architecture pin).**
+  (`feat/stage-1-pr4-refresh-engine`, 2026-05-20). Doc-only
+  follow-up to the Round 5 substrate-decision amendment above.
+  Same-day review pass surfaced eight Mock-X-substrate findings
+  (F-Mock-1 through F-Mock-8) on the Round 5 amendment, then
+  ran an amendment-layering coherence pass against the
+  post-Round-5 substrate to surface forward-pointer gaps and
+  paradigm-language conflations. The pass landed four
+  substantive sharpenings, four minor audit-trail notes, a new
+  §6.1 "Test-substrate paradigm pin" subsection, and a new
+  §6.1.1 "Two-enum architecture (RefreshEngine-specific positive
+  pattern)" sub-section pinning the producer-internal /
+  trait-surface error-enum split as a positive architectural
+  reference and forward-template for future per-trait PRs.
+  None reopen any Round 1–4 disposition or the Round 5
+  amendment itself; the sub-pin refines the Round 5 C6
+  substrate so the Phase 1 author implements against an
+  explicit pin rather than reverse-engineering from tests.
+
+  **Substantive dispositions (F-Mock-1 through F-Mock-4 +
+  Option (i) wrapper API + two-enum architecture).**
+
+  1. **F-Mock-1 — `cfg`-gating symmetry (Option (a)).** All four
+     C6 surfaces (`FaultInjecting<R: RefreshEngine>`,
+     `Engine::replace_refresh`, `FaultInjecting<L: LedgerEngine>`,
+     `LocalLedger::from_test_blocks`) are gated uniformly
+     `#[cfg(any(test, feature = "test-helpers"))]`. The
+     `test-helpers` feature is introduced as part of C6α's
+     scope per the F-Mock-7 disposition, with a rationale
+     comment matching the existing `bench-internals` precedent
+     at [`rust/shekyl-engine-core/Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml)
+     lines 223–227.
+
+  2. **F-Mock-2 — `FaultInjecting` queue contract.** Wrapper-
+     internal queue (not actor mailbox) holding `RefreshError`
+     values directly per Option (i) below. Contract: FIFO
+     ordering; `queued_failures(&self) -> usize` drain
+     inspector per the existing
+     [`MockLedger::queued_failures`](../rust/shekyl-engine-core/src/engine/test_support.rs)
+     precedent; `debug_assert!`-on-Drop for non-empty queue
+     (panic-on-leftover in test/debug builds); reentrance pops
+     the head per the "pop head if non-empty" semantics.
+
+  3. **F-Mock-3 + F-Mock-3-sharpening + Option (i) wrapper
+     API.** The wrapper carries `type Error = RefreshError`
+     (not `R::Error`) and queues `RefreshError` values
+     directly, uniform across all `R`. Cross-wrapper symmetry
+     justifies the choice:
+     `FaultInjecting<L: LedgerEngine>` must queue `RefreshError`
+     by trait necessity (per
+     [`engine/traits/ledger.rs:270–273`](../rust/shekyl-engine-core/src/engine/traits/ledger.rs)
+     — `apply_scan_result` returns `Result<(), RefreshError>`
+     with no `Self::Error` indirection), so
+     `FaultInjecting<R>` queuing `RefreshError` matches.
+
+     **Empirical variant enumeration (per source).** Of the
+     six `RefreshError` variants at
+     [`engine/error.rs:148`](../rust/shekyl-engine-core/src/engine/error.rs),
+     three are reachable from a `RefreshEngine` impl's
+     `Self::Error` via the `From` conversion: `Cancelled`
+     (unit), `Io(IoError)` (payload), and
+     `InternalInvariantViolation { context: &'static str }`
+     (payload constructed at the `From` impl site per
+     [`engine/local_refresh.rs:368–384`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)).
+     Three are orchestrator-constructed only:
+     `MalformedScanResult { reason }` (constructed
+     **exclusively** by the merge layer at
+     [`engine/merge.rs:315–451`](../rust/shekyl-engine-core/src/engine/merge.rs)
+     when scan-result internal-shape invariants fail —
+     superseding the doc's prior framing that grouped it with
+     `Cancelled` / `Io` as trait-reachable),
+     `ConcurrentMutation { wallet, result }` (constructed at
+     the merge gate), and `AlreadyRunning` (constructed at the
+     binary-layer single-flight). Under Option (i) direct
+     injection the wrapper can inject any of the six variants
+     into the orchestrator surface; for
+     `InternalInvariantViolation` both direct injection
+     (testing producer-returned-then-orchestrator-propagated
+     path) and **cause injection** (driving causes through
+     `FaultInjecting<LocalLedger>::queue_concurrent_mutation`
+     per F-Mock-2 to exhaust the retry budget at orchestrator-
+     side construction sites in `engine/refresh.rs`) are
+     legitimate test classes.
+
+  4. **F-Mock-4 — `MockLedger`-structurally-already-`FaultInjecting`
+     verification gate anchored.** The Round 5 amendment's
+     load-bearing claim ("current `MockLedger` is structurally
+     already a `FaultInjecting<LocalLedger>`-shaped wrapper") is
+     anchored to source at
+     [`engine/test_support.rs:773–812`](../rust/shekyl-engine-core/src/engine/test_support.rs):
+     `MockLedger::apply_scan_result` (line 792) pops from
+     `concurrent_mutation_queue` (line 794); on empty-queue,
+     delegates to the canonical `apply_scan_result_to_state`
+     (line 810). Future re-readers don't have to re-verify;
+     C6β scope is bounded as anticipated.
+
+  **Two-enum architecture pin (§6.1.1).** The `RefreshEngine`
+  trait carries a deliberate two-enum architecture worth
+  pinning as a positive architectural reference and forward-
+  template for future per-trait PRs. Producer-internal
+  [`LocalRefreshError`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+  is `pub(crate)`, unit-variant-only by convention, four
+  variants (`Cancelled`, `Io`, `Malformed`, `Internal`).
+  Orchestrator-facing
+  [`RefreshError`](../rust/shekyl-engine-core/src/engine/error.rs)
+  is `pub`, payload-bearing throughout. The `From` impl
+  boundary at
+  [`engine/local_refresh.rs:368–384`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+  is where payload information is constructed or discarded.
+  The architectural cleanness this delivers — payload
+  guarantees enforced by the type system at the conversion
+  boundary, not by convention at every producer return site —
+  makes the trait surface auditable in a way single-enum
+  architectures cannot match. The pattern is shape-applicable
+  to traits whose canonical method signatures return
+  `Result<_, Self::Error>` with `Self::Error: Into<OrchestratorError>`;
+  it is **not** load-bearing for traits whose canonical method
+  signatures return `Result<_, OrchestratorError>` directly
+  (per the `LedgerEngine` precedent). Per-trait PR pre-flight
+  checks include "does this trait have an impl-side
+  `Self::Error` indirection, and if so, is the producer-internal
+  enum unit-variant-only?" as a substrate-application check
+  alongside the four-pattern no-Mock pre-flight per PR 3
+  §2.1.5.
+
+  **Test-substrate implications (two test classes named
+  explicitly).** Two test classes follow from the two-enum
+  architecture, both load-bearing for C6α's smoke-test coverage:
+
+  - **Class 1 — wrapper-based trait-surface tests.** Tests
+    use `FaultInjecting<R: RefreshEngine>` to inject
+    `RefreshError` values directly (per Option (i) wrapper
+    API); verify the orchestrator handles each variant
+    correctly. Lives in C6α's new
+    `fault_injecting_refresh.rs` test module plus the
+    trait-dispatched `Engine` integration tests.
+    Sub-properties: empty-queue passthrough; single-injection-
+    then-delegation; multi-injection FIFO ordering;
+    queue-drain-on-teardown (with Drop-time `debug_assert!`
+    `#[should_panic]` separately verified).
+
+  - **Class 2 — From-conversion tests against `LocalRefresh`.**
+    Tests drive `LocalRefresh` directly via the `pub(crate)`
+    producer-internal surface to produce each
+    `LocalRefreshError` variant; verify the
+    `From<LocalRefreshError>` impl produces the correct
+    `RefreshError` variant. Lives in
+    [`local_refresh.rs`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)'s
+    existing tests module per the
+    [`local_refresh_error_maps_to_refresh_error`](../rust/shekyl-engine-core/src/engine/local_refresh.rs)
+    test precedent; **sibling to Class 1, not a replacement**
+    because the wrapper bypasses the `From` conversion by
+    injecting `RefreshError` directly under Option (i).
+
+  **Amendment-forward-pointer convention (recorded as
+  meta-discipline).** The coherence pass surfaced the
+  pre-Phase-0c forward-pointer gap as a **recurrence pattern**
+  — the same class of finding F-Mock-3 surfaced from one
+  angle, present at three sites (the Status banner's Round 2
+  reframe paragraph; §3.1's two-channel error surface prose;
+  §4 Phase 0c's inline comment) all carrying the Round 2
+  reframe's "unit-variant-only; no payload of any kind"
+  framing that the Phase 0c amendment later refined. Three
+  additive forward-pointers added at those sites preserve
+  each round's historical record (what was decided at that
+  round) while resolving the ambiguity (what the current
+  binding contract is). The convention is recorded as a
+  **meta-discipline** alongside
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc)'s
+  named-criteria principle: any future amendment that narrows
+  or refines an earlier round's contract lands its own
+  forward-pointer at the earlier site. The two disciplines
+  are complementary — reversion-clauses make rejection-
+  dispositions readable across substrate changes;
+  forward-pointers make narrowing-amendments readable across
+  layered rounds. Both are about making layered prose
+  readable across time.
+
+  **Minor dispositions (F-Mock-5 through F-Mock-8).** F-Mock-5
+  adds an explicit C6β migration table mapping `MockLedger`'s
+  four public test-affordance methods (`with_seed`,
+  `with_seed_and_state`, `queue_concurrent_mutation`,
+  `queued_failures`) to their post-migration homes and corrects
+  the prior "replaces `MockLedger::new(...)`" prose error (the
+  constructor is `with_seed` / `with_seed_and_state`, not
+  `new`). F-Mock-6 adds a Phase 1 author commit-message-template
+  note to C6γ enumerating the `MockDaemon` test affordances
+  surviving the rename unchanged. F-Mock-7 confirms the
+  `test-helpers` feature does not currently exist in
+  [`Cargo.toml`](../rust/shekyl-engine-core/Cargo.toml) and pins
+  the introduction as part of C6α's scope. F-Mock-8 enumerates
+  C6α smoke-test property classes by name across the two
+  test-class structure above.
+
+  **V3.1 ledger-generator FOLLOWUPS entry (sub-pin extension
+  Decision 4: coordinated `TestLedgerBuilder` substrate
+  design).** The three V3.x invariant-test FOLLOWUPS entries
+  (tx-validation, FCMP++ tx-pool, staking lifecycle at
+  [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) lines 2411–2438) share a
+  common test-infrastructure need beyond what PR 4 C6β's
+  `LocalLedger::from_test_blocks` covers. The sub-pin lands a
+  new V3.1 substrate-design FOLLOWUPS entry pinning the
+  coordinated-design disposition: build one `TestLedgerBuilder`
+  / `TestBlockBuilder` / `TestTransactionBuilder` substrate
+  designed **before** the first daemon Rust port lands (cost
+  asymmetry from
+  [`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)
+  "cost-benefit-defer-to-later anti-pattern"); design to be
+  forward-composable with PR 4 C6β's
+  `LocalLedger::from_test_blocks` signature; flag the
+  structurally-valid-but-semantically-stubbed middle-ground
+  option in the V3.1 design conversation rather than defaulting
+  to a binary "Need A or full Need B" framing.
+
+  The sub-pin extension is **not** a round reopening: no
+  Round 1–4 disposition, attack-surface pin, or commit-
+  decomposition ordering is touched; only the Round 5 C6
+  substrate and the layered-amendment prose are refined.
+  α-disposition, F1–F13 dispositions, Round 5 amendment, and
+  C0–C5 / C7 / C8 commit prose remain unchanged; the C6
+  sub-decomposition (C6α / C6β / C6γ) gains the F-Mock
+  dispositions inline.
+
+  Files touched (doc-only):
+  `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` (Status banner
+  Round 5 sub-pin extension paragraph + coherence-pass
+  paragraph + amendment-forward-pointer convention recording;
+  three forward-pointer additions at the layered-amendment
+  sites; new §6.1 paradigm pin + §6.1.1 two-enum architecture
+  pin; §6 preservation list `FaultInjecting<R>` /
+  `FaultInjecting<L>` / `TestDaemon` entries updated; §7.X
+  C6α wrapper-definition / F-Mock-3-sharpening / F-Mock-2
+  queue contract / F-Mock-7 `test-helpers` feature /
+  F-Mock-8 smoke-test prose all updated; §7.X C6β migration
+  table added; §7.X C6γ commit-message template note added),
+  `docs/FOLLOWUPS.md` (new V3.1 coordinated `TestLedgerBuilder`
+  substrate-design entry), and this CHANGELOG entry.
+
+- **Stage 1 PR 3 (`KeyEngine`) M3a pre-flight closures landed.**
+  The four open `STAGE_1_PR_3_KEY_ENGINE.md` dispositions Round 4
+  deliberately deferred — the handle-model emergent attack
+  surface Round 3 surfaced — closed as a coupled disposition
+  cluster:
+
+  - **§7.11 (handle persistence) = option (3) deterministic from
+    ciphertext.** Handle is `cSHAKE256(view_secret || tx_hash ||
+    output_index_le_bytes(8))` with customization
+    `"shekyl/output-handle-v1"`, 16-byte output. The Round-3 lean
+    toward (1) ephemeral was amended; the four-question coupled
+    cluster collapses from this one disposition.
+  - **§7.12 (handle unforgeability / A7) = cSHAKE256-based
+    deterministic derivation.** A7 closes by construction
+    (cSHAKE256 with `view_secret` in the input phase is a PRF in
+    `view_secret` under standard assumptions). Implementation
+    crate: `sha3 = "0.10"` (already a workspace dep) with the
+    `zeroize` feature flag enabled, giving `Sha3State`
+    wipe-on-drop discipline structurally per `35-secure-memory.mdc`.
+  - **§7.10 (memory-pressure / A6) = dissolved by §7.11=(3).** No
+    table; no growth target; no eviction policy.
+  - **§7.13 (concurrency / Pattern-5) = dissolved by §7.11=(3).**
+    No shared mutable state; pure per-call sponge-state mutation
+    only.
+
+  `STAGE_1_PR_3_MIGRATION_PLAN.md` §3.1 amended to cite the
+  closures and revise the M3a scope (no `HandleTable` data
+  structure; `derive_output_handle` pure function instead;
+  `source_ciphertext` + `output_handle` added to
+  `TransferDetails` at M3b alongside the legacy fields, with
+  legacy fields removed at M3d). M3a feat branch cleared to cut.
+  Documentation-only change; no code shipped.
+
+## [3.1.0-alpha.5] - 2026-04-22
+
+### Security
+
+- **Retired 32-bit build targets (`v3.1.0-alpha.5`, Chore #3). Shekyl is
+  now 64-bit only, on security grounds — not on maintenance grounds.**
+  Shekyl's Post-Quantum primitives — `fips203` (ML-KEM-768) and
+  `fips204` (ML-DSA-65), consumed on the hot path by `shekyl-crypto-pq`
+  and `shekyl-tx-builder` — state their constant-time guarantees
+  against native 64-bit arithmetic. On 32-bit targets the compiler
+  lowers `u64` operations through compiler-emitted libgcc helpers
+  (`__muldi3`, `__udivdi3`, `__ashldi3`) with no constant-time
+  guarantee, plus variable-latency `u64` multiply on common 32-bit ARM
+  cores (Cortex-A series). That is a CT violation introduced by the
+  code generator, not the source — exactly the class source-level CT
+  audits cannot catch. **KyberSlash (Bernstein et al., 2024)**
+  demonstrates remote-timing key recovery against ostensibly
+  constant-time Kyber implementations broken by non-CT division; the
+  Cortex-M4 Kyber timing-attack line (2022–2024) is supporting
+  context. **The X25519+ML-KEM hybrid does not save us**: "hybrid is
+  secure if either half is secure" protects against algorithmic
+  breaks, not side-channel breaks — if ML-KEM leaks its secret via
+  timing on 32-bit, X25519 is offline-attackable against captured
+  ciphertexts with unlimited attacker time. **FCMP++ proof generation
+  has not been audited for constant-time properties on 32-bit
+  targets, and Shekyl will not take responsibility for that audit
+  across all 32-bit toolchains we would otherwise ship** (policy
+  framing, not speculation). `MDB_VL32` (LMDB's 32-bit paged-mmap
+  mode) and the `src/crypto/slow-hash.c` 32-bit software fallback are
+  untested consensus-adjacent storage and PoW paths respectively.
+
+  **32-bit Shekyl wallet users were at meaningfully elevated risk of
+  key extraction compared to 64-bit users; supporting the platform
+  was a tacit lie about the security posture of users on it.** This
+  is the correction.
+
+  **Node-only operation is also retired.** A future contributor will
+  argue "I just want to run a 32-bit pruned node on a Pi, I'm not
+  doing wallet operations, the CT argument doesn't apply." That is
+  partially true — node code does not touch secret PQC keys. But
+  `MDB_VL32` paging against a multi-GB chain makes sync time measured
+  in weeks (not a supported posture), and shipping a 32-bit daemon
+  binary creates a reasonable user expectation that wallet operation
+  is supported, which it is not. The operational complexity of
+  splitting "32-bit daemon supported, 32-bit wallet refused"
+  outweighs any benefit.
+
+  **Four independent tripwires (defense-in-depth):**
+
+  1. **Tripwire D — `CMakeLists.txt`.** C++-side configure gate:
+     `message(FATAL_ERROR …)` on `NOT CMAKE_SIZEOF_VOID_P EQUAL 8`,
+     placed before any `find_package` / `include` /
+     `add_subdirectory` so configure fails early with the CT
+     argument in the message. Exercised on every PR to `dev` by
+     `.github/workflows/cmake-gate-test.yml` + `tests/cmake-gate-test/`,
+     which drives CMake with a fake 32-bit toolchain and asserts
+     non-zero exit, gate message + KyberSlash citation in stderr,
+     and no `find_package` chatter (so a PR that moves the gate
+     below a probe also fails the test).
+  2. **Tripwire A — `rust/shekyl-crypto-pq/src/lib.rs`.** Primary
+     `compile_error!` on `not(target_pointer_width = "64")`, since
+     this crate is the ML-KEM-768 / ML-DSA-65 consumer. The gate
+     that fires in practice on a 32-bit Rust build.
+  3. **Tripwire B — `rust/shekyl-ffi/src/lib.rs`.**
+     Structural-not-observable: duplicated by design to preserve
+     the refusal at the FFI seam under a future refactor that
+     might split this crate from `shekyl-crypto-pq`. **Do not
+     delete this gate on the grounds that it "never fires" — its
+     value is structural, not observable**; see the comment block
+     on the tripwire and `docs/audit_trail/RESOLVED_260419.md`
+     §"Chore #3".
+  4. **Tripwire C — `rust/shekyl-tx-builder/src/lib.rs`.** Direct
+     `fips204` (ML-DSA-65) consumer on the transaction-signing hot
+     path; independent of Tripwire A so a future refactor that
+     narrows the dependency shape cannot silently drop the
+     refusal.
+
+  **Deleted, not `#if 1`-ed out.** Every 32-bit-conditional block
+  removed in this chore was deleted outright. Dead
+  `#if ARCH_WIDTH == 64` / `#ifdef __i386__` / `#ifdef __arm__`
+  scaffolding invites future contributors to assume a meaningful
+  32-bit alternative exists somewhere and reason about it; the
+  whole point of the retirement is to foreclose that reasoning.
+
+  **What went away.** Build system:
+  `cmake/32-bit-toolchain.cmake`; the six 32-bit `Makefile` targets
+  that actually existed on `dev` (`release-static-win32`,
+  `debug-static-win32`, `release-static-linux-i686`,
+  `release-static-linux-armv6`, `release-static-linux-armv7`,
+  `release-static-android-armv7`); `BUILD_64` / `DEFAULT_BUILD_64` /
+  `ARCH_WIDTH` / `ARM_TEST` / `ARM6` / `ARM7` machinery and the
+  Clang+32 `libatomic` workaround in the root `CMakeLists.txt`; the
+  `-D BUILD_64=ON` argument on all remaining 64-bit `Makefile`
+  targets; `ARCH_WIDTH != 32` conditional in
+  `src/blockchain_utilities/blockchain_import.cpp` (body retained,
+  guard deleted); `-D MDB_VL32` in
+  `external/db_drivers/liblmdb/CMakeLists.txt` (vendored `mdb.c`
+  `MDB_VL32` code paths are now unreachable in Shekyl builds and
+  deliberately left unpatched in-tree — see
+  `docs/VENDORED_DEPENDENCIES.md` §"`MDB_VL32` — 32-bit retirement
+  note" for the future-update drill); `contrib/depends/` toolchain
+  template `i686` / `armv7` / `BUILD_64` / `LINUX_32` branches,
+  package recipes for `boost` / `openssl` / `android_ndk` / the
+  arch-asymmetric `_cflags_mingw32+="-D_WIN32_WINNT=0x600"` line in
+  `unbound.mk`, `README.md` host list, `.gitignore` `i686*` / `arm*`
+  entries, `packages.md` example; `cmake/BuildRust.cmake` all
+  non-64-bit `CMAKE_SYSTEM_PROCESSOR` branches; gitian configs
+  (`gitian-linux.yml`, `gitian-android.yml`, `gitian-win.yml`)
+  32-bit hosts and MinGW alternatives.
+
+  C/C++ conditionals: `src/common/compat/glibc_compat.cpp`
+  `__wrap___divmoddi4` block and `__i386__`/`__arm__` glob symver
+  arms (plus the corresponding `-Wl,--wrap=__divmoddi4` linker flag
+  in the root `CMakeLists.txt`); `src/crypto/slow-hash.c` outer
+  guard narrowed from `__arm__ || __aarch64__` to `__aarch64__` and
+  the 32-bit fallback `cn_slow_hash_{allocate,free}_state` stubs
+  removed; `src/crypto/CryptonightR_JIT.{c,h}`,
+  `src/crypto/CryptonightR_template.h` x86 gates narrowed from
+  `__i386 || __x86_64__` to `__x86_64__`;
+  `src/cryptonote_basic/miner.cpp` FreeBSD APM gates narrowed from
+  `__amd64__ || __i386__ || __x86_64__` to
+  `__amd64__ || __x86_64__`;
+  `src/blockchain_db/lmdb/db_lmdb.h` `__arm__` `DEFAULT_MAPSIZE`
+  branch removed; `src/blockchain_db/lmdb/db_lmdb.cpp`
+  `MISALIGNED_OK` gate narrowed to `__x86_64` only.
+  **Disambiguation:** `tests/hash/main.cpp:192,206`
+  `<emmintrin.h>` SSE-intrinsic gates are x86_64 arch gates, not
+  32-bit gates, and are **not** deleted — an earlier draft of
+  `STRUCTURAL_TODO.md` lumped them with the 32-bit retirement
+  imprecisely.
+
+  Rust: three `compile_error!` tripwires (A/B/C, above);
+  `rust/shekyl-oxide/crypto/helioselene/benches/helioselene.rs`
+  `target_arch = "x86"` branches collapsed to `x86_64` only.
+
+  CI: `.github/workflows/depends.yml` ARM v7 stub replaced with a
+  pointer to this chore; new `.github/workflows/cmake-gate-test.yml`
+  + `tests/cmake-gate-test/` enforcing Tripwire D placement.
+
+  Docs: `README.md`, `docs/INSTALLATION_GUIDE.md`,
+  `docs/RELEASING.md`, and `docs/COMPILING_DEBUGGING_TESTING.md`
+  are now 64-bit-only; `docs/VENDORED_DEPENDENCIES.md` carries the
+  `MDB_VL32` future-update note; `docs/STRUCTURAL_TODO.md` §"32-bit
+  targets cannot safely run Shekyl" is the canonical reviewer-facing
+  copy; `docs/audit_trail/RESOLVED_260419.md` §"Chore #3
+  (v3.1.0-alpha.5) — 32-bit target retirement: security closure"
+  carries the closure narrative.
+
+  **Supported architectures going forward:** `x86_64`, `aarch64`
+  (Linux and Apple Silicon), `riscv64` (Gitian). `armhf`, `armv7`,
+  `armv6`, `i686`, `i386` are out of scope — not deferred, not
+  "maybe later," out of scope. Users on 32-bit hardware must not
+  run Shekyl wallets; node operation on 32-bit hardware is not
+  supported either. Operators on ARM32 / i686 hardware should plan
+  a migration to 64-bit before upgrading past `v3.1.0-alpha.5`.
+
+  *Maintenance benefits are real but secondary:* every 32-bit
+  carve-out in `STRUCTURAL_TODO.md` §"bit-width carve-out without
+  coverage" is eliminated in one chore, closing the dead-scaffolding
+  pattern that motivated the §.
+
+### Changed
+
+- **Shekyl Foundation institutional release-signing key adopted.**
+  `v3.1.0-alpha.5` is the first release signed by the Shekyl Foundation
+  institutional signing key (subkey fingerprint `3778 B4C8 63C6 1512
+  B5FC 2203 6914 D748 23DD A8DC`, long ID `6914D74823DDA8DC`; primary
+  fingerprint `F5F7 5A47 70C9 4FE1 D5A5 AE59 844E 424F 9866 4F44`,
+  long ID `844E424F98664F44`). The primary certification key is held
+  offline; the signing subkey is hardware-backed (OpenPGP applet) with
+  a two-year expiry (2028-04-18) enforcing a rotation cadence.
+
+  Previous alphas (`v3.1.0-alpha.3`, `v3.1.0-alpha.4`) were signed with
+  Rick Dawson's personal maintainer key and remain verifiable against
+  that key — prior signatures are not invalidated. Going forward,
+  maintainer keys remain a valid *additive* fallback for release-tag
+  signing when the institutional key is unavailable (documented
+  exception, not default path); they continue to be the right tool for
+  commit signing, where authorship-attribution is the question.
+
+  `docs/SIGNING.md` is rewritten as the canonical, self-contained
+  reference: both key blocks inline (no loose `.asc` files), an
+  explicit step-by-step release-tag signing ceremony with pre-flight
+  checks, expected-output annotations, a failure-mode table, and a
+  separate downstream-verification path. `docs/RELEASING.md` §3
+  (tag creation) now points at the SIGNING.md ceremony and captures
+  the minimum command sequence (`gpg --card-status` → `git tag -u
+  6914D74823DDA8DC -a -s …` → `git verify-tag` before push) as a
+  summary, not a replacement. Resolves the `docs/SIGNING.md`
+  §"Future: Foundation institutional signing key" deferral that had
+  been carried forward from V3.1 on the premise that institutional
+  signing required ceremony (offline primary, hardware-backed subkey,
+  bounded expiry) before it added value over a plain personal-key
+  setup; those prerequisites are now in place.
 
 - **Logging output format (breaking change, all binaries).**
   Chore #2 of the `easylogging++` retirement completes the
@@ -92,6 +12485,24 @@
   can pass `--log-file` explicitly; the override path is
   unchanged.
 
+- **CMake Python discovery modernized (Chore #3 follow-up).**
+  `include(FindPythonInterp)` at the top of `CMakeLists.txt` is
+  replaced with `find_package(Python3 COMPONENTS Interpreter REQUIRED)`
+  as a single, early, authoritative discovery pass; two downstream
+  shadowing call sites (`find_package(Python3 ...)` before the
+  economics-params generator and `find_package(PythonInterp)` before
+  the tests subdir) are deleted. The legacy `PYTHON_EXECUTABLE` and
+  `PYTHONINTERP_FOUND` variables are aliased post-discovery so
+  consumers under `tests/difficulty/CMakeLists.txt`,
+  `tests/block_weight/CMakeLists.txt`, and the `cmake/CheckTrezor.cmake`
+  fallback arm continue to work without a cascading migration. The
+  `cmake_policy(SET CMP0148 OLD)` migration-debt carve-out that
+  preserved the deprecated module on CMake ≥ 3.27 is removed in the
+  same commit — there is no legacy module left to un-deprecate.
+  Resolves the Copilot review comment on PR #15; addresses
+  `docs/CHANGELOG.md` V3.1.0-alpha.3 entry's own callout of the
+  same migration debt.
+
 ### Removed
 
 - **`MONERO_LOG_FORMAT` env var (no replacement).** The custom
@@ -154,6 +12565,44 @@
   shipped with the daemon, wallet, and source archive built cleanly,
   but its tag-push CI ran red on this single unit test; `v3.1.0-alpha.4`
   will be the first alpha whose tag-push CI is green end-to-end.
+
+- **Tripwire D processor regex broadened; gate-test probe assertion
+  tightened (Chore #3 fixup).** The `CMAKE_SYSTEM_PROCESSOR` arm of
+  the 64-bit-only gate in `CMakeLists.txt` previously used
+  `armv[67]l?`, which only matches `armv[67]` and `armv[67]l` exactly —
+  real toolchains also emit `armv7-a`, `armv7a`, `armv7ve`, `armv7hf`,
+  `armv6kz`, `armv5te`, etc., which are all 32-bit ARM profiles.
+  Broadened to `armv[567].*` so the "defense-in-depth" half of the
+  predicate (which fires when `CMAKE_SIZEOF_VOID_P` is misreported as 8
+  on a 32-bit target) actually covers those variants. 64-bit names
+  (`aarch64`, `arm64`, `armv8*` in AArch64 mode) remain outside the
+  pattern by construction. Companion tightening in
+  `tests/cmake-gate-test/run.sh`: the probe-chatter assertion now
+  also catches `-- Performing Test ...` (from `CheckCCompilerFlag` /
+  `CheckCXXCompilerFlag` / `CheckLinkerFlag`), matching the set of
+  modules actually relocated below the gate; `-- Detecting C/CXX
+  compiler ABI info` is deliberately NOT caught because those lines
+  come from `project()` itself, which runs before the gate by
+  construction (the gate's `CMAKE_SIZEOF_VOID_P` predicate is
+  populated by `project()`'s own compiler probe). Resolves the
+  second Copilot review on PR #15.
+
+- **`contrib/depends` Win64 unbound build restored (Chore #3 fixup).**
+  The `$(package)_cflags_mingw32+=-D_WIN32_WINNT=0x600` line in
+  `contrib/depends/packages/unbound.mk` was deleted in the Chore #3
+  build-system commit under the mistaken framing of "arch-asymmetric
+  32-bit MinGW carve-out." The `_mingw32` suffix in `contrib/depends`
+  is the OS segment of the host triple, not an architecture gate: it
+  matches every `*-w64-mingw32` host including `x86_64-w64-mingw32`.
+  Unbound 1.19.1's `util/netevent.c` uses `WSAPoll` / `POLLOUT` /
+  `POLLERR` / `POLLHUP` unconditionally and requires
+  `_WIN32_WINNT >= 0x0600` to be defined before `<winsock2.h>` is
+  included; the vendored `x86_64-w64-mingw32` toolchain does not
+  default this the way MSYS2 pacman toolchains do, so the deletion
+  broke the `depends.yml` Win64 lane (the `build.yml` MSYS2 and MSVC
+  lanes use different toolchain pathways and stayed green). Line
+  restored with the scope unchanged — only one MinGW host remains
+  after Chore #3, and the flag belongs on it.
 
 ### Known regressions
 

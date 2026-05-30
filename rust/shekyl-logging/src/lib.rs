@@ -286,9 +286,6 @@ pub fn __test_only_reset_init_flag() {
 ///
 /// No-op on non-Unix targets.
 #[doc(hidden)]
-pub fn __test_only_reapply_file_modes(
-    dir: &std::path::Path,
-    prefix: &str,
-) -> std::io::Result<()> {
+pub fn __test_only_reapply_file_modes(dir: &std::path::Path, prefix: &str) -> std::io::Result<()> {
     appender::__test_only_reapply_file_modes(dir, prefix)
 }

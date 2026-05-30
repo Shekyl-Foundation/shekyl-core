@@ -1448,8 +1448,17 @@ namespace cryptonote
     res.active = lMiner.is_mining();
     res.is_background_mining_enabled = lMiner.get_is_background_mining_enabled();
     store_difficulty(m_core.get_blockchain_storage().get_difficulty_for_next_block(), res.difficulty, res.wide_difficulty, res.difficulty_top64);
-    
-    res.block_target = DIFFICULTY_TARGET_V2;
+
+    // RPC wire contract: mining_status.block_target is part of the public
+    // JSON-RPC surface. The literal 120 (seconds per block) is pinned by
+    // the contract. The round-trip regression test that pins the wire
+    // bytes lives at tests/unit_tests/rpc_target_wire_contract.cpp; see
+    // docs/design/DAA_LWMA1_PHASE4_PREFLIGHT.md §16.4 for the rationale.
+    static_assert(SHEKYL_DAA_TARGET_SECONDS == 120,
+        "RPC wire contract: mining_status.block_target carries the block "
+        "target time in seconds; 120 is pinned by the public JSON-RPC "
+        "contract.");
+    res.block_target = SHEKYL_DAA_TARGET_SECONDS;
     if ( lMiner.is_mining() ) {
       res.speed = lMiner.get_speed();
       res.threads_count = lMiner.get_threads_count();

@@ -8,6 +8,7 @@ name = "shekyl-encoding"
 description = "General-purpose Bech32m blob encoding for Shekyl"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

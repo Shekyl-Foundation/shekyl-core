@@ -16,32 +16,78 @@
 //!
 //! The scanner core is adapted from the monero-oxide wallet library,
 //! extended to handle Shekyl's 3-key HKDF model and staking economy.
+//!
+//! ### Runtime-state types
+//!
+//! [`TransferDetails`], [`LedgerBlock`], [`LedgerIndexes`],
+//! [`SubaddressIndex`], [`PaymentId`], [`StakerPoolState`], [`AccrualRecord`],
+//! [`FcmpPrecomputedPath`], and [`SPENDABLE_AGE`] are owned by the
+//! [`shekyl_engine_state`] crate; this crate re-exports them explicitly (no glob)
+//! so existing `use shekyl_scanner::…` imports keep resolving. Scanner-only
+//! methods on those types (`TransferDetails::from_wallet_output`,
+//! `LedgerIndexes::process_scanned_outputs`, `LedgerBlock::balance`,
+//! `LedgerBlock::claimable_rewards_summary`) are provided by the extension
+//! traits in [`ledger_ext`] and require the trait to be in scope at the
+//! call site:
+//!
+//! ```ignore
+//! use shekyl_scanner::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt};
+//! use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
+//!
+//! let mut ledger = LedgerBlock::empty();
+//! let mut indexes = LedgerIndexes::empty();
+//! indexes.process_scanned_outputs(&mut ledger, h, block_hash, outputs);
+//! let balance = ledger.balance(ledger.height());
+//! ```
+//!
+//! The pair `(LedgerBlock, LedgerIndexes)` replaces the `RuntimeWalletState`
+//! shape used through commit 2m. See `docs/V3_WALLET_DECISION_LOG.md`
+//! ("`RuntimeWalletState` audit", 2026-04-25) for the rationale and the
+//! invariant that pins the split.
 
 pub mod balance;
 pub mod claim;
 pub mod coin_select;
 pub mod extra;
+pub mod ledger_ext;
 pub mod output;
 pub mod scan;
 pub mod shared_key;
 pub mod staker_pool;
 pub mod subaddress;
-pub mod sync;
 pub mod transfer;
 pub mod view_pair;
-pub mod wallet_state;
+
+/// Bench fixture helpers for the [`scan::Scanner::scan`] per-output
+/// cost measurement (PR 4 §3.1 / F11-S substrate). Gated behind
+/// `#[cfg(any(test, feature = "test-utils"))]` so the production
+/// crate surface stays free of bench-only constructors; the two
+/// `benches/scan_transaction*.rs` harnesses both consume this
+/// module via the existing self-dep with `features = ["test-utils"]`.
+#[cfg(any(test, feature = "test-utils"))]
+pub mod bench_fixtures;
 
 #[cfg(test)]
 pub(crate) mod tests;
 
 pub use balance::BalanceSummary;
 pub use claim::ClaimableInfo;
-pub use extra::{Extra, ExtraField, PaymentId};
+pub use extra::{Extra, ExtraField};
+pub use ledger_ext::{LedgerBlockExt, LedgerIndexesExt, TransferDetailsExt};
 pub use output::WalletOutput;
-pub use scan::{GuaranteedScanner, RecoveredWalletOutput, ScanError, Scanner, Timelocked};
+pub use scan::{
+    GuaranteedScanner, RecoveredWalletOutput, ScanError, ScanOutcome, Scanner, Timelocked,
+    MAX_OUTPUTS,
+};
 pub use shared_key::SharedKeyDerivations;
-pub use staker_pool::{AccrualRecord, ConservationCheck, StakerPoolState};
-pub use subaddress::SubaddressIndex;
-pub use transfer::TransferDetails;
 pub use view_pair::{GuaranteedViewPair, ViewPair, ViewPairError};
-pub use wallet_state::WalletState;
+
+// ── Explicit (non-glob) re-exports of types moved to `shekyl-engine-state`. ──
+//
+// Listing them by name (rather than `pub use shekyl_engine_state::*;`) pins the
+// scanner's public API surface in commit-diffable form: adding a new type in
+// `shekyl-engine-state` does NOT silently expand the scanner's API.
+pub use shekyl_engine_state::{
+    AccrualRecord, ConservationCheck, FcmpPrecomputedPath, LedgerBlock, LedgerIndexes, PaymentId,
+    StakerPoolState, SubaddressIndex, TransferDetails, SPENDABLE_AGE,
+};

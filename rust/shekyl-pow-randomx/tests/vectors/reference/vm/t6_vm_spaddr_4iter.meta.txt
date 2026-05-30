@@ -1,0 +1,86 @@
+Phase 2c reference vector — t6_vm_spaddr_4iter.bin
+===================================================
+
+Spec attestation
+----------------
+T6 attests Rust per-iteration `spAddr0` / `spAddr1` derivation
+byte-for-byte parity with the v2 RandomX fork's interpreted-loop
+spAddr computation under stub-NOP dispatch over the first 4
+iterations of the 2048-iteration program loop.
+
+Per-iteration spAddr derivation (vm_interpreted.cpp lines 70-74):
+
+    spMix   = nreg.r[config.readReg0] ^ nreg.r[config.readReg1]
+    spAddr0 ^= spMix
+    spAddr0 &= ScratchpadL3Mask64       // (2 MiB - 64) bitmask
+    spAddr1 ^= spMix >> 32
+    spAddr1 &= ScratchpadL3Mask64
+
+The snapshot fires BEFORE the iteration's register-load and AES
+mix — capturing the spAddr values that the iteration uses to
+index the scratchpad. A T6 divergence isolates the `readReg0/1`
+indexing, the scratchpad-mask alignment, and the spMix XOR
+sequence from the AES-mix substrate (T7).
+
+The 4-iteration window is chosen because the spAddr derivation
+reads `nreg.r[readReg0/1]` mutated by the previous iteration's
+work, so the per-iteration values diverge after iteration 1
+(iteration 0 uses the post-`initialize` zero registers; iteration
+1 uses the iteration-0 dataset-read writeback; etc.). 4 iterations
+covers (initial zero-state, post-AES-mix, post-second-AES-mix,
+post-third-AES-mix) — enough to detect any per-iteration drift
+that would compound over the full 2048.
+
+Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 (F7 T6) + §5.6 (stub-NOP
+dispatch rationale).
+
+Inputs (hardcoded in `_generator/phase2c/gen.cpp`)
+--------------------------------------------------
+seedhash  = [0x01, 0x02, ..., 0x20]  (32-byte canonical, for cache)
+temp_hash = CANONICAL_TEMP_HASH (64 B, see T3 .meta.txt)
+flag      = RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_V2
+softAes   = true                     (portability pin)
+iter_count = 4
+
+Output layout
+-------------
+4 × (spAddr0 u32 LE, spAddr1 u32 LE) = 32 B, in iteration order:
+
+  +0   spAddr0[iter=0]  (4 B)
+  +4   spAddr1[iter=0]  (4 B)
+  +8   spAddr0[iter=1]  (4 B)
+  +12  spAddr1[iter=1]  (4 B)
+  +16  spAddr0[iter=2]  (4 B)
+  +20  spAddr1[iter=2]  (4 B)
+  +24  spAddr0[iter=3]  (4 B)
+  +28  spAddr1[iter=3]  (4 B)
+
+Total bytes for this vector: 32 (= 4 × 8).
+
+Generator
+---------
+source      = ./_generator/phase2c/gen.cpp (mode t6)
+build       = ./_generator/phase2c/Makefile (`make gen`)
+command     = ./gen t6 > t6_vm_spaddr_4iter.bin
+output_size = 32 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/vm_interpreted.cpp (interpreted iteration loop —
+                spAddr derivation lines),
+              src/vm_interpreted_light.cpp (datasetRead),
+              src/aes_hash.cpp (fillAes4Rx4),
+              src/virtual_machine.cpp (initialize, generateProgram)
+function    = (composite — see "Spec attestation"); replicated by
+              the Phase 2c generator's `StubNopInterpretedLightVm`
+              with bytecode dispatch skipped.
+
+Phase
+-----
+Phase 2c (`docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.7 / F7 T6,
+§5.6 stub-NOP dispatch, §9 commit 7) — per-iteration spAddr
+parity. Consumed by Rust test
+`t6_vm_spaddr_4iter_matches_fork_reference` in
+`rust/shekyl-pow-randomx/src/vm.rs#mod tests`.

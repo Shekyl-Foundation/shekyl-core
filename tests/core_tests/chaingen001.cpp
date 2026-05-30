@@ -51,7 +51,7 @@ using namespace cryptonote;
 
 one_block::one_block()
 {
-  alice.generate();
+  alice.generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
   REGISTER_CALLBACK("verify_1", one_block::verify_1);
 }
 

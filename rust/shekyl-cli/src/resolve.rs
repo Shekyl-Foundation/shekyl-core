@@ -168,7 +168,7 @@ pub enum ResolvedCommand {
         hard: bool,
     },
     Version,
-    WalletInfo,
+    EngineInfo,
 
     // -- Unknown --
     Unknown {
@@ -181,7 +181,7 @@ pub enum ResolvedCommand {
 /// The session's `default_account` is used when `--account` is not explicitly
 /// specified. Destructive operations that require `--account` explicitly will
 /// be validated by their handlers, not here (since we can't know the full
-/// semantics at parse time without querying wallet state).
+/// semantics at parse time without querying engine state).
 pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
     let tokens: Vec<&str> = input.split_whitespace().collect();
     if tokens.is_empty() {
@@ -556,7 +556,7 @@ pub fn parse(input: &str, session: &ReplSession) -> ResolvedCommand {
             ResolvedCommand::Rescan { hard }
         }
         "version" => ResolvedCommand::Version,
-        "wallet_info" => ResolvedCommand::WalletInfo,
+        "engine_info" => ResolvedCommand::EngineInfo,
         other => ResolvedCommand::Unknown {
             cmd: other.to_string(),
         },

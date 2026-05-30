@@ -8,6 +8,7 @@ name = "shekyl-scanner"
 description = "Transaction scanner for the Shekyl protocol with FCMP++, PQC, and staking support"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
@@ -18,8 +19,6 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json = "1"
 tracing = "0.1"
-tokio = { version = "1", features = ["sync", "time", "macros"], optional = true }
-tokio-util = { version = "0.7", optional = true }
 
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc" }
@@ -28,16 +27,58 @@ shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-staking = { path = "../shekyl-staking" }
 shekyl-address = { path = "../shekyl-address" }
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-engine-state = { path = "../shekyl-engine-state" }
 
 [features]
 default = ["std"]
 std = ["shekyl-oxide/std", "shekyl-rpc/std"]
-rust-scanner = ["tokio", "tokio-util"]
 test-utils = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }
 proptest = "1"
+
+# Hardening-pass commit 2 (`docs/MID_REWIRE_HARDENING.md` §3.2):
+# criterion + iai-callgrind harness for the `scan_block_K` path.
+# Benches exercise `LedgerIndexes::process_scanned_outputs` — the
+# scanner's non-crypto bookkeeping path — over K synthetic owned
+# outputs built via the crate's own `test-utils` constructors,
+# operating on a fresh `(LedgerBlock, LedgerIndexes)` pair. The
+# FCMP++/KEM output-recovery portion is separately covered by
+# `shekyl-crypto-pq/benches/pqc_rederivation.rs`; the two together span
+# the "owned output lands in wallet state" pipeline.
+#
+# Uses `dev-dependencies` self-dep pattern to enable the `test-utils`
+# feature during bench compilation without leaking it into the crate's
+# default feature set.
+shekyl-scanner = { path = ".", features = ["test-utils"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+iai-callgrind = "0.16"
+
+[[bench]]
+name = "scan_block"
+harness = false
+
+[[bench]]
+name = "scan_block_iai"
+harness = false
+
+# PR 4 §3.1 / F11-S substrate: per-output cost measurement for
+# `Scanner::scan` against worst-case (all view tags match — F11-S
+# binding) and typical-case (view-tag-filtered — contextual) fixtures.
+# The wall-clock harness (`scan_transaction.rs`) sweeps N ∈ {1,4,8,16}
+# in warm/cold-cache variants and reports quantiles; the iai-callgrind
+# companion (`scan_transaction_iai.rs`) cross-validates with
+# deterministic instruction counts. Both bench files share fixture
+# helpers via `shekyl_scanner::bench_fixtures::*` (gated by the
+# `test-utils` feature on the self-dep above).
+[[bench]]
+name = "scan_transaction"
+harness = false
+
+[[bench]]
+name = "scan_transaction_iai"
+harness = false
 
 [lints]
 workspace = true

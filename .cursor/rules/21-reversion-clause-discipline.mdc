@@ -1,0 +1,188 @@
+---
+description: When the disposition for a question is "we don't need this now," the right shape is reject-now-with-named-reopening-criteria, not refuse-forever and not pre-provision-for-flexibility. Optionality without concrete need is debt, not flexibility.
+alwaysApply: true
+---
+
+# Reversion-clause discipline
+
+When the disposition for a question is "we don't need this now," the
+right shape is not "refused forever" and not "kept open for future
+flexibility." It is **rejected now, with explicit named criteria
+under which the rejection reverts to a positive decision.**
+
+The discipline applies at every altitude where a decision rejects
+optionality. Without a name, it gets re-derived under pressure each
+time the pattern recurs; with a name, design rounds and review
+cycles can reach for the shape directly.
+
+## Where the pattern appears
+
+The discipline is in active use across at least five altitudes of
+Shekyl's decision-making:
+
+- **Type-derivation.** A `derive(Clone)` rejected because no caller
+  needs it. **Landed:** `AllKeysBlob`
+  (`rust/shekyl-crypto-pq/src/account.rs` §"Not Clone"). **Planned
+  (V3.0 / Cluster 2 PR A):** `HybridSecretKey` and the remaining
+  Cluster 2.5 Classification-C Hybrid types, per the `Hybrid*` secret
+  types entry in `docs/FOLLOWUPS.md`'s V3.0 queue — the AllKeysBlob
+  Not-Clone shape is the canonical template these types adopt when
+  the work lands. Reopened in any of these cases if a caller emerges,
+  with documented justification, not by reflex re-derivation.
+- **Feature shape.** An encrypted-persistence opt-in rejected at
+  V3.0 (`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §5.4.8 #1 F1
+  R17 hardening); reopened conditional on demonstrated need +
+  threat-model review + `AUDIT_SCOPE.md` amendment. The encrypted
+  RPC cache rejection at F7 carries the same shape.
+- **Design-round closure.** A round closed (PR 5 §7 closure rule);
+  reopened only on substrate findings, not sequential numbering. A
+  substrate-completeness amendment is not a new round; an under-
+  specification surfaced post-closure does not reopen the round it
+  belonged to but is named explicitly as a post-closure pin.
+- **Work-item placement.** A FOLLOWUPS item rejected from V3.0
+  (`docs/FOLLOWUPS.md` §"V3.0 pre-genesis queue"); reopened if
+  rechecking surfaces "this still needs to land before genesis."
+  Structural deferral V3.0 → V3.1+ requires explicit decision and
+  brief rationale, not silent migration.
+- **Inherited-architecture migration.** A deferral rejected as
+  cost-benefit-defer-to-later anti-pattern
+  (`16-architectural-inheritance.mdc` §"The 'cost-benefit-defer-to-
+  later' anti-pattern"); reopened only on genuinely-prohibitive
+  cost (multi-quarter scope; cross-component coordination breaking
+  the discipline budget).
+
+## Why the shape
+
+Optionality without concrete need is **debt, not flexibility.** Pre-
+provisioning for hypothetical callers, hypothetical attack surfaces,
+or hypothetical reviewers spreads attack surface and review-attention
+cost forever to handle states that may never occur. Speculative
+extensibility is the failure mode that loads `[[deprecated]]`
+annotations without target versions (`15-deletion-and-debt.mdc`'s
+"FOLLOWUPS.md is not a graveyard"), accumulates `Clone` derives that
+no caller uses, and shapes APIs around imagined future consumers
+instead of actual current ones.
+
+Refusal-forever is the other failure: it commits the project to
+positions whose justifications may dissolve as the substrate
+changes. M3d Finding 5 caught exactly this — `TransferDetails`'
+non-`Clone` rationale ("`Zeroizing` second allocation the compiler
+can't track") was load-bearing under the pre-M3d schema; M3d's
+substrate change made the rationale vacuous; the discipline
+survived but needed re-anchoring. A rule whose disposition is
+"refuse forever" with no reopening clause cannot re-anchor when
+its substrate shifts; it either survives by accident (the discipline
+still makes sense under the new substrate, by coincidence) or
+becomes residual drift (the discipline persists as a vestigial
+constraint nobody can justify).
+
+The reversion clause threads the needle: the current state's
+disposition is fixed by current criteria; the future state's
+disposition is conditional on named, substrate-anchored criteria.
+Substrate change triggers re-evaluation; substrate stasis preserves
+the disposition. The discipline neither over-commits (pre-
+provisioning) nor under-commits (refusing-forever).
+
+## The shape itself
+
+A reversion-clause-shaped disposition records three things:
+
+1. **The rejection.** What is being rejected and why under current
+   conditions. Cite the substrate and the criteria that drive the
+   rejection.
+2. **The reopening criteria.** What specific, observable, substrate-
+   anchored change would trigger re-evaluation. "If we ever need X"
+   is not a criterion; "if a production caller emerges that requires
+   X" is. "If circumstances change" is not a criterion; "if the
+   ml-dsa upstream crate's API is structurally incompatible with
+   `from_zeroizing`" is.
+3. **The re-evaluation shape.** What the re-evaluation looks like —
+   a new design round, a doc-comment update, a rules amendment, an
+   `AUDIT_SCOPE.md` addition, a threat-model review, a fresh
+   per-trait PR's pre-flight, etc. The shape names who decides and
+   what evidence they need. "Reopen if needed" is not a re-evaluation
+   shape; "Reopen via design-round 1 of the per-trait PR following
+   the §6 readiness gate" is.
+
+The discipline does *not* require predicting future state; it
+requires naming what the current substrate is and what kind of
+substrate-change would matter. A reversion clause without a named
+substrate-change-class is equivalent to "we'll think about it
+later" and fails the discipline.
+
+## Anti-patterns
+
+- **"Keep it for flexibility."** Optionality without a named caller
+  is debt. If you can't name the reopening criteria, the disposition
+  is reject-with-no-reopening-clause (delete-now per
+  `15-deletion-and-debt.mdc`'s default).
+- **"Refuse forever."** Disposition without reopening criteria is
+  brittle to substrate change. If the substrate shifts and the
+  refusal's rationale dissolves, the refusal becomes residual drift
+  rather than load-bearing discipline.
+- **"The audits keep coming back clean, so we can relax the
+  check."** The audits come back clean because the discipline is
+  continuous; relaxing the check is the failure mode that produces
+  the next audit's discovery (per `16-architectural-inheritance.mdc`
+  §"The 'audits-are-clean-so-compress' anti-pattern"). The
+  reopening criterion for relaxing a discipline check is *not*
+  "the discipline has been working"; it is a substrate-anchored
+  reason the discipline is no longer load-bearing.
+- **"We'll think about it later."** "Later" without named criteria
+  is indefinite. The reversion clause must be specific enough that
+  a future maintainer can determine, without re-deriving the
+  original reasoning, whether the criteria have been met.
+- **"Reopen on request."** Disposition that allows reopening on
+  the request of any future commit-author is no discipline at all;
+  the reopening criteria must be substrate-anchored, not author-
+  preference-anchored.
+
+## Recurrence pattern
+
+The discipline's failure mode is the same shape regardless of
+altitude: a disposition that should be reject-now-with-reopening-
+criteria gets recorded as either pre-provision-for-flexibility
+(too lax; debt accumulates) or refuse-forever (too tight; brittle
+to substrate change). Both failures are caught by the same
+question: **"if the substrate that drives this disposition shifts,
+what would re-trigger evaluation?"** If the answer is "nothing
+in particular" the disposition is refuse-forever and should be
+reshaped. If the answer is "any future contributor's preference"
+the disposition is pre-provision-for-flexibility and should be
+tightened.
+
+This is the question every reject-disposition should be paired
+with at write time, not at review time. By review time, the
+reviewer may not have the substrate context to validate the
+reopening criteria; the author does.
+
+## Related rules
+
+- **`15-deletion-and-debt.mdc`** — the work-item disposition
+  altitude. "FOLLOWUPS items have target versions; items without
+  get one within 30 days or are closed as 'won't fix'" is the
+  reversion-clause discipline applied to deferred work. The "When
+  to use `[[deprecated]]`" rule is its application to API surfaces.
+- **`16-architectural-inheritance.mdc`** — the architectural-
+  disposition altitude. The cost-benefit-defer-to-later anti-pattern
+  is the negative form; the architectural-integrity-now disposition
+  is the positive form's application to migration decisions. The
+  "audits-are-clean-so-compress" anti-pattern is the reversion-
+  clause failure applied to discipline maintenance.
+- **`17-dependency-discipline.mdc`** — the dependency-recommendation
+  altitude. Recommendations are not reopened on training-data
+  recall; they are re-verified at source when the substrate
+  (workspace version, feature flags, audit posture) changes. The
+  rule's verification cadence is a reversion-clause shape — the
+  "good for the version's lifetime" disposition has named substrate-
+  change triggers.
+- **`19-validation-surface-discipline.mdc`** — the bundling-
+  decision altitude. The reversion criterion for bundling is whether
+  the validation surfaces have collapsed; substrate change (a new
+  reviewer-facing property emerging) triggers re-evaluation.
+- **`00-mission.mdc`** — the priority-hierarchy altitude. When a
+  reject-disposition cites the priority hierarchy, the reopening
+  criterion is typically "substrate-change that re-orders the
+  priority calculus" rather than "preference-change that re-orders
+  the priority calculus." The priority hierarchy is the substrate;
+  preferences are not.

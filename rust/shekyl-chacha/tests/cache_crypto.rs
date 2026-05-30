@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Gate 2: Wallet cache AEAD round-trip and version-mismatch ordering tests.
+//! Gate 2: Engine cache AEAD round-trip and version-mismatch ordering tests.
 //!
 //! Tests the encrypt_with_aad / decrypt_with_aad pipeline that underpins
 //! shekyl_encrypt_wallet_cache / shekyl_decrypt_wallet_cache FFI.

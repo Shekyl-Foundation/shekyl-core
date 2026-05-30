@@ -5,7 +5,6 @@ globs:
   - src/crypto/**
   - src/wallet/**
   - src/device/**
-  - src/ringct/**
   - src/fcmp/**
   - src/shekyl/**
 ---
@@ -30,6 +29,117 @@ deallocation.
   exist in a local that gets moved into a wrapper later.
 - `#[deny(unsafe_code)]` at crate level (except `shekyl-ffi`). All wiping
   goes through `zeroize`, which guarantees the write is not elided.
+
+## Hand-off discipline for secrets across producer/consumer boundaries
+
+The `Zeroize` / `ZeroizeOnDrop` discipline from the previous section
+covers the *shape* of secret-bearing types. This section covers the
+*mechanics* of moving secret bytes between two such types without
+materialising an untracked stack `Copy` of the secret along the way.
+
+The recurrence pattern: when a secret is held in
+`Zeroizing<[u8; N]>` (or in a `ZeroizeOnDrop`-bearing typed wrapper)
+and needs to flow into another `ZeroizeOnDrop`-bearing wrapper or
+into an FFI-shaped `[u8; N]` buffer at a documented audit boundary,
+*how* the bytes cross matters. Two anti-patterns recur in code that
+otherwise passes the type-shape rules above:
+
+### Anti-pattern: deref-into-temporary at hand-off
+
+```rust
+// WRONG — produces an untracked [u8; N] Copy on the stack:
+dst_buffer = *src_wrapper.as_canonical_bytes();
+
+// or, equivalently, at a typed-wrapper construction site:
+let dst = MlKem768DecapKey::from_bytes(*src_zeroizing);
+```
+
+The `*x.as_canonical_bytes()` deref produces a `[u8; N]: Copy`
+value. That value lives on the caller's stack outside any
+`Zeroize` wrapper. Under `--release`, the compiler typically
+elides the temporary into a direct memcpy; under `--debug`,
+panic-unwind paths, and unfortunate codegen, the stack slot is
+real and observable to post-return memory reuse.
+
+For small `N` (e.g. 32-byte Ed25519 scalars) the exposure window
+is tens of nanoseconds and a few stack bytes — still under the
+discipline, but rarely the load-bearing case. For large `N` (e.g.
+the 2400-byte ML-KEM-768 decap key) the temporary is a real
+half-page that persists across the function and is observable to
+any post-return frame reuse.
+
+**Correct shape** at the secret-write site:
+
+```rust
+// memcpy from borrow to destination buffer; no intermediate value.
+dst_buffer.copy_from_slice(src_wrapper.as_canonical_bytes());
+```
+
+`as_canonical_bytes()` returns a `&[u8; N]` borrow; the source
+stays inside its `Zeroize` wrapper for the duration of the copy.
+
+### Anti-pattern: producer returns raw bytes when a typed wrapper exists
+
+```rust
+// WRONG — every consumer must repeat the wrapping decision:
+pub fn derive_secret(...) -> Zeroizing<[u8; N]> { ... }
+
+// ...causing call sites that look like:
+blob.field = TypedWrapper::from_bytes(*derived);   // and now we're
+                                                    // back in the
+                                                    // deref anti-pattern.
+```
+
+If a `TypedWrapper` exists for the secret kind the producer
+generates, the producer returns the typed form. Pushing the
+wrapping decision out to every consumer means one of them will
+forget — or, more likely, will repeat the deref pattern above
+because the natural shape of moving `Zeroizing<[u8; N]>` into a
+typed-wrapper field is `wrapper.field = T::from_bytes(*z)`, which
+re-introduces the temporary the type was supposed to eliminate.
+
+**Correct shape** at the producer:
+
+```rust
+pub fn derive_secret(...) -> Result<TypedWrapper, CryptoError> {
+    // Construct the wrapper from a `Zeroizing` source via a
+    // consume-shaped constructor (`from_zeroizing(z: Zeroizing<[u8; N]>)`)
+    // that takes the source by value and copies into the wrapper's
+    // inner buffer. Both the source and destination remain inside
+    // `Zeroize` discipline through the hand-off.
+    ...
+}
+
+// Call site:
+blob.field = derive_secret(...)?;   // direct move, no copies.
+```
+
+The `from_zeroizing(z: Zeroizing<[u8; N]>)`-shaped constructor is
+a load-bearing security API: the by-value parameter guarantees
+the source `Zeroizing` is dropped (and wiped) at the end of the
+constructor call rather than at some arbitrary later point in the
+caller's lifetime. This is exactly the case where
+`#[allow(clippy::needless_pass_by_value)]` is appropriate — annotate
+with a comment citing this rule so the next reviewer can see why
+the lint is being overridden.
+
+### Recurrence
+
+Both anti-patterns surfaced as Copilot review findings on PR #33's
+"AllKeysBlob zeroize-discipline realignment" chore (rounds 4 and
+5). Round 4 was the producer/consumer hand-off case (Option D
+disposition: producer returns the typed wrapper); round 5 was the
+FFI-mirror write path (`copy_from_slice` disposition for all
+secret-bearing fields). Both surface because the type-shape rules
+above are necessary but not sufficient: the *flow* across boundaries
+is the second half of the discipline.
+
+When reviewing a PR that touches secret-bearing data flows, ask:
+"does any byte of the secret exist as a `[u8; N]: Copy` value on
+the stack outside a `Zeroize` wrapper at any point between
+producer and consumer?" If yes, name which of the two
+anti-patterns above is operative and apply the corresponding
+correct shape.
 
 ## C++
 

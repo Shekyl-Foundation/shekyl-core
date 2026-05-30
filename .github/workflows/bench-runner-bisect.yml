@@ -1,0 +1,208 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+#
+# Runner-bisection workflow for the bench-baseline `instructions=0` flake
+# observed on PR #34's compare run (CI run 25591054624). See
+# `docs/investigation/2026-05-09-bench-baseline-flake.md` for the
+# investigation history and `docs/CHANGELOG.md` Unreleased entry for
+# the corresponding tooling response.
+#
+# What this workflow IS:
+#
+#   - A `workflow_dispatch`-only experiment that runs a single iai
+#     benchmark target on a matrix of GitHub-hosted runner classes
+#     (`ubuntu-22.04`, an explicit `ubuntu-24.04` pin, and the ARM
+#     variant) to test whether the flake is reproducible on any
+#     specific runner and absent on others.
+#   - Self-contained: it does not touch `bench-baseline`, does not
+#     push anywhere, does not gate any PR. Outputs are uploaded as
+#     workflow artifacts and read off by hand.
+#   - Pinned to `iai-callgrind 0.16.x` (inherited from this branch's
+#     `Cargo.toml`) so the bisection is apples-to-apples with the bad
+#     CI run; the gungraun upgrade (per the investigation note's §5)
+#     is on a separate branch and does not contaminate the experiment.
+#
+# What this workflow is NOT:
+#
+#   - It is not a replacement for `ci/benchmarks` and is not meant to
+#     land on `dev` long-term. The host branch
+#     (`chore/bench-runner-bisect-2026-05-10`) is short-lived; once
+#     the experiment has produced a conclusion the bisect commits get
+#     squashed (or the branch closes without a merge) per the user's
+#     "preserving the original for auditability" framing.
+#   - It does not run the full bench sweep. Default target is
+#     `ledger_iai` because that is the bench that flaked; widening
+#     the matrix is cheap once the runner-axis answer is in.
+#
+# Iteration shape:
+#
+#   - `bench` / `crate` inputs let us retarget without editing the
+#     YAML between runs.
+#   - `iterations` controls how many times the bench runs on each
+#     runner per dispatch; default `3` is a reasonable first pass for
+#     a flake whose underlying rate is unknown. Bump to `10` once we
+#     have an initial signal and want to estimate frequency.
+#   - `fail-fast: false` so partial data still lands when one runner
+#     class blows up unrelated to the question we are asking.
+
+name: ci/bench-runner-bisect
+
+on:
+  workflow_dispatch:
+    inputs:
+      bench:
+        description: 'iai bench target to run (e.g. ledger_iai)'
+        required: true
+        default: 'ledger_iai'
+      crate:
+        description: 'cargo crate hosting the bench (e.g. shekyl-engine-state)'
+        required: true
+        default: 'shekyl-engine-state'
+      iterations:
+        description: 'how many times to repeat the run on each runner (1-20)'
+        required: true
+        default: '3'
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  bisect:
+    name: ${{ matrix.runner }} × ${{ inputs.bench }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-22.04
+          - ubuntu-24.04
+          - ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: dump runner provenance
+        run: |
+          set -x
+          uname -a
+          cat /etc/os-release
+          nproc
+          free -m
+          df -h /
+          # Toolchain versions are captured *after* install in a
+          # later step; this section is the bare runner image.
+
+      - name: install apt deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            valgrind build-essential pkg-config libssl-dev python3 jq
+
+      - name: install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: dump toolchain provenance
+        run: |
+          set -x
+          gcc --version | head -1
+          valgrind --version
+          rustc --version
+          cargo --version
+
+      - name: cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: bench-bisect-${{ matrix.runner }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: bench-bisect-${{ matrix.runner }}-
+
+      - name: install iai-callgrind-runner (0.16.x — matches PR #34 run)
+        run: cargo install iai-callgrind-runner --version '^0.16' --locked
+
+      - name: run bench (${{ inputs.iterations }} iterations)
+        env:
+          BENCH: ${{ inputs.bench }}
+          CRATE: ${{ inputs.crate }}
+          ITERS: ${{ inputs.iterations }}
+        working-directory: rust
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/runs
+          # Sanitize ANSI sequences so the captured stdout matches
+          # what `capture_rust_baseline.sh` would persist.
+          export IAI_CALLGRIND_COLOR=never
+          for i in $(seq 1 "$ITERS"); do
+            echo "::group::iteration $i / $ITERS"
+            STDOUT_FILE=/tmp/runs/iter${i}.stdout
+            STDERR_FILE=/tmp/runs/iter${i}.stderr
+            START=$(date +%s)
+            RC=0
+            cargo bench --bench "$BENCH" -p "$CRATE" \
+                > "$STDOUT_FILE" 2> "$STDERR_FILE" || RC=$?
+            END=$(date +%s)
+            DUR=$((END - START))
+            echo "iteration $i: rc=$RC duration=${DUR}s"
+
+            # Per-iteration summary: count `Instructions:` lines and
+            # whether any of them parsed to 0. This is the same line
+            # shape the bad CI run printed.
+            INSTR_LINES=$(grep -E '^\s*Instructions:' "$STDOUT_FILE" || true)
+            ZEROS=$(printf '%s\n' "$INSTR_LINES" \
+                | awk '/^[[:space:]]*Instructions:/ { gsub(",", "", $2); if ($2+0 == 0) c++ } END { print c+0 }')
+            TOTAL=$(printf '%s\n' "$INSTR_LINES" | grep -c '^' || true)
+            echo "iteration $i: instr_lines=$TOTAL zero_lines=$ZEROS"
+            if [[ "$ZEROS" -gt 0 ]]; then
+              echo "::warning::iteration $i on ${{ matrix.runner }} produced $ZEROS zero-instruction lines"
+            fi
+            echo "--- last 80 lines of stdout ---"
+            tail -n 80 "$STDOUT_FILE" || true
+            echo "::endgroup::"
+          done
+
+      - name: aggregate per-runner summary
+        if: always()
+        env:
+          BENCH: ${{ inputs.bench }}
+          ITERS: ${{ inputs.iterations }}
+        run: |
+          set -euo pipefail
+          SUMMARY=/tmp/runs/SUMMARY.txt
+          {
+            echo "runner=${{ matrix.runner }}"
+            echo "bench=${BENCH}"
+            echo "iterations=${ITERS}"
+            for i in $(seq 1 "$ITERS"); do
+              STDOUT_FILE=/tmp/runs/iter${i}.stdout
+              if [[ ! -f "$STDOUT_FILE" ]]; then
+                echo "iter${i}: MISSING"
+                continue
+              fi
+              INSTR_LINES=$(grep -cE '^\s*Instructions:' "$STDOUT_FILE" || true)
+              ZEROS=$(awk '/^[[:space:]]*Instructions:/ { gsub(",", "", $2); if ($2+0 == 0) c++ } END { print c+0 }' "$STDOUT_FILE")
+              echo "iter${i}: instr_lines=${INSTR_LINES} zero_lines=${ZEROS}"
+            done
+          } > "$SUMMARY"
+          cat "$SUMMARY"
+
+      - name: upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bisect-${{ matrix.runner }}-${{ inputs.bench }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/runs/**
+          retention-days: 14
+          if-no-files-found: warn

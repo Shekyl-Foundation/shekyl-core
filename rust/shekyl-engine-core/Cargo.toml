@@ -1,0 +1,284 @@
+[package]
+name = "shekyl-engine-core"
+version = "2.0.0"
+edition = "2021"
+rust-version.workspace = true
+license = "BSD-3-Clause"
+description = "Shekyl engine core: orchestrator and transaction builders for stake, unstake, and claim operations"
+# Build script reads `config/consensus_constants.json` (the same JSON
+# the C++ generator at `cmake/generate_consensus_constants.py` reads)
+# and emits a Rust constants module. Closes the C++/Rust drift class
+# that produced Bug 3 of the 2026-05-05 FFI constant-drift audit;
+# see `docs/audit_trail/2026-05-ffi-constant-drift-audit.md`.
+build = "build.rs"
+
+[build-dependencies]
+serde_json = "1"
+
+[dependencies]
+shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-scanner = { path = "../shekyl-scanner" }
+shekyl-staking = { path = "../shekyl-staking" }
+shekyl-address = { path = "../shekyl-address" }
+shekyl-engine-file = { path = "../shekyl-engine-file" }
+shekyl-engine-state = { path = "../shekyl-engine-state" }
+shekyl-engine-prefs = { path = "../shekyl-engine-prefs" }
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
+shekyl-simple-request-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc/simple-request" }
+shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
+shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+shekyl-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc", features = ["std"] }
+modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
+chacha20poly1305 = { version = "0.10", optional = true }
+hkdf = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+hex = { version = "0.4", optional = true }
+thiserror = "2"
+tracing = "0.1"
+# `produce_scan_result` (the snapshot-merge producer driving
+# `Engine::refresh`) is async and uses `tokio::time::sleep` for retry
+# backoff and `tokio::select!` for cancel-or-sleep races. Refresh is
+# inherently async because it polls the daemon, so tokio is an
+# unconditional wallet-core dep (not feature-gated).
+#
+# `sync` enables `watch`, `oneshot`, and `RwLock` used by
+# `Engine::start_refresh` (Branch 2): progress emission to subscribers,
+# completion delivery to the `RefreshHandle::join` future, and the
+# transitional `Arc<RwLock<Engine<S>>>` wrapper that lets the producer
+# task hold the engine across `await` points (replaced by actor message
+# passing at Stage 4). `rt` enables `tokio::spawn` for the producer
+# task.
+tokio = { version = "1", features = ["time", "macros", "sync", "rt"] }
+# Cancellation token for cooperative shutdown of the refresh producer
+# between blocks. `Engine::start_refresh` constructs and owns the token
+# internally; callers fire it through `RefreshHandle::cancel` (or by
+# dropping the handle, which delegates to the same token).
+# `CancellationToken` is part of the unconditional surface in
+# tokio-util 0.7 (no feature gate); no explicit feature list needed.
+tokio-util = { version = "0.7" }
+# `Engine::refresh` constructs a `shekyl_scanner::Scanner` from
+# `AllKeysBlob`, which requires assembling a `ViewPair` over
+# `(EdwardsPoint, Scalar, [u8; 32], Vec<u8>)`. Decompressing the
+# stored 32-byte spend public key into an `EdwardsPoint` and
+# parsing the view secret as a `Scalar` are the only direct uses;
+# the rest of curve arithmetic stays inside the scanner / fcmp
+# crates. `curve25519-dalek` is transitively present through
+# `shekyl-scanner` already, so promoting it to a direct dep adds no
+# new crate to the build graph.
+curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
+# `Engine::refresh` wraps spend / view / KEM secret material in
+# `Zeroizing<…>` for the brief window between unpacking from
+# `AllKeysBlob` and handing ownership to `Scanner` / `ViewPair`.
+# `AllKeysBlob` already wipes its own copy on `Drop`; the wrapper
+# ensures the scanner's local copies do the same.
+zeroize = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
+shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+# `iai-callgrind` is the deterministic-instructions sibling for the
+# criterion wall-clock benches in this crate. The CI gate
+# (`ci/benchmarks` workflow) routes through iai-callgrind
+# `instructions` for percentage-threshold checking; criterion stays
+# as the Tier-2 informational column. Engine-surface benches
+# (`engine_trait_bench_*`) ship as criterion + iai-callgrind pairs
+# per `docs/design/STAGE_0_HARNESS.md`. Pinned to "0.16" matching
+# the workspace consensus (shekyl-engine-state, shekyl-engine-file,
+# shekyl-scanner, shekyl-tx-builder) and the runner version the
+# `ci/benchmarks` workflow installs (`^0.16`).
+iai-callgrind = "0.16"
+tempfile = "3"
+# `test-util` enables `#[tokio::test(start_paused = true)]` and the
+# in-test `tokio::time` virtualization that `wallet::refresh`'s
+# retry-backoff tests use to make exponential delays instantaneous
+# without sacrificing determinism.
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "test-util"] }
+# `TestDaemon` (in `engine::test_support`) holds an internal
+# `ChaCha20Rng` seeded from its constructor seed per
+# `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.2 (deterministic RNG
+# injection). The seed plus a stable PRNG implementation is what
+# makes hybrid-test reproducibility a function of the master seed
+# alone. Workspace consensus version is `0.3` (matches
+# `shekyl-crypto-pq`, `shekyl-fcmp`, `shekyl-oxide/.../fcmp++`).
+rand_chacha = "0.3"
+# `derive_seed` (in `engine::test_support`) implements the §6.2
+# master-seed-derivation contract via HKDF-SHA256: hybrid tests
+# pass a literal master seed plus a role tag to derive each
+# `Mock*::with_seed` argument deterministically, so cross-run
+# reproducibility depends on the master seed alone. The same
+# versions are already gated behind the `multisig` feature for
+# production paths; dev-deps coexist without conflict and don't
+# affect the production crate graph.
+hkdf = "0.12"
+sha2 = "0.10"
+# PR 4 C7 property tests pin §5.4.6 emission/return coherence and the
+# §5.4.6 producer-panic-safety property as permanent CI regression
+# coverage. `proptest = "1"` is the workspace consensus version
+# (matches `shekyl-crypto-pq`'s `prop_round_trip` gate); enabling it as
+# a dev-dep keeps the production crate graph unaffected while letting
+# the per-attempt coherence invariant be fuzzed across the producer's
+# failure-injection space (RpcError → DaemonProtocolError, malformed
+# block → DaemonMalformed, clean path → no error event).
+proptest = "1"
+# Stage 1 PR 3 M3c-via-C dev-deps. The
+# `engine_derived_bundle_signs_through_tx_builder_end_to_end` test
+# (in `engine::local_keys::tests`) drives an engine-derived
+# `SourceSecretsBundle` through `tx_builder::sign_transaction`
+# end-to-end, asserting verifier acceptance plus deterministic-
+# component byte-identity against a hand-composed legacy bundle.
+# Per `STAGE_1_PR_3_M3C_PREFLIGHT.md` Option C disposition: the
+# trait method `KeyEngine::sign_transaction` is currently a
+# named-gap stub (`TxToSign.outputs` and `.fcmp_plus_plus_context`
+# are PR-5-pinned forward-declares); the test bypasses the trait
+# surface and calls `tx_builder::sign_transaction` directly.
+#
+# Dependency-discipline note (per `17-dependency-discipline.mdc`):
+# no novel third-party crates enter the workspace lockfile here.
+# Two categories below:
+#   - **Workspace path-deps newly pulled into this crate's dev-
+#     deps:** `shekyl-tx-builder`, `shekyl-fcmp`,
+#     `shekyl-bulletproofs`, `shekyl-fcmp-plus-plus`,
+#     `shekyl-generators`, `shekyl-io`, `shekyl-primitives`,
+#     `ec-divisors`, `helioselene`. All are first-party Shekyl /
+#     Shekyl-vendored crates.
+#   - **Crates.io versions reused from the workspace lockfile:**
+#     `multiexp = "0.4"`, `ciphersuite = "0.4"`,
+#     `dalek-ff-group = "0.5"`, `rand_core = "0.6"`. Each is
+#     already present at the same pin in `shekyl-fcmp`,
+#     `shekyl-tx-builder`, `shekyl-ffi`, and/or `shekyl-crypto-pq`;
+#     no new third-party supply-chain surface enters here.
+#
+# `shekyl-fcmp` is currently `optional = true` in production
+# `[dependencies]` for the multisig feature only; the
+# unconditional dev-dep does not alter the production crate graph.
+shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+shekyl-fcmp = { path = "../shekyl-fcmp" }
+shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }
+shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
+shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
+shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
+shekyl-primitives = { path = "../shekyl-oxide/shekyl-oxide/primitives" }
+multiexp = "0.4"
+ec-divisors = { path = "../shekyl-oxide/crypto/divisors", features = ["ed25519"] }
+ciphersuite = "0.4"
+helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
+dalek-ff-group = "0.5"
+rand_core = "0.6"
+
+[[bench]]
+name = "multisig_v31"
+harness = false
+required-features = ["multisig"]
+
+[[bench]]
+name = "refresh_snapshot"
+harness = false
+required-features = ["bench-internals"]
+
+# `engine_trait_bench_*` benches: the Stage 0 frozen-baseline pair for
+# the future `LedgerEngine::synced_height` trait method's today-
+# equivalent call path. See `docs/design/STAGE_0_HARNESS.md` §4.2.
+# Both benches share `benches/common/engine_fixture.rs`, which is a
+# helper module (not a bench target — cargo does not auto-discover
+# subdirectories of `benches/`).
+[[bench]]
+name = "engine_trait_bench_ledger_synced_height"
+harness = false
+
+[[bench]]
+name = "engine_trait_bench_ledger_synced_height_iai"
+harness = false
+
+# Stage 1 PR 2 commit 8: state-populated `LedgerEngine::balance`
+# pair. Workload class is "state-dependent compute" (1024-transfer
+# fixture + per-call walk through `BalanceSummary::compute`); the
+# bench-internals feature unlocks `LocalLedger::populate_for_bench`
+# for state injection without expanding production visibility.
+[[bench]]
+name = "engine_trait_bench_ledger_balance"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_ledger_balance_iai"
+harness = false
+required-features = ["bench-internals"]
+
+# Stage 1 PR 3 close-out: trivial pure-read `KeyEngine::
+# account_public_address` pair. Workload class is "trivial pure-read"
+# (returns a borrow into a cached `AccountPublicAddress` field on
+# `LocalKeys` with no per-call derivation); iai-callgrind is the
+# load-bearing signal because criterion `median_ns` reflects
+# optimizer amortization across the iteration loop. The fixture is
+# `Box<LocalKeys>` rather than `(Box<Engine<...>>, TempDir)` per the
+# substrate-forced divergence documented in the close-out PR's
+# pre-flight §1.2 — `Engine` does not yet hold a `LocalKeys` field;
+# orchestrator integration is `KeyEngine` PR-5 territory.
+[[bench]]
+name = "engine_trait_bench_key_account_public_address"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_key_account_public_address_iai"
+harness = false
+required-features = ["bench-internals"]
+
+[features]
+default = []
+multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "serde_json", "hex", "chacha20poly1305", "hkdf", "sha2"]
+# Internal feature: re-exports otherwise-`pub(crate)` types under a
+# `__bench_internals` module so external Criterion harnesses can
+# measure them. Not part of the public API; consumers must not depend
+# on this feature.
+bench-internals = []
+# Internal feature: gates compilation of `pub(crate)` failure-injection
+# wrappers (`FaultInjecting<R: RefreshEngine>` per C6α,
+# `FaultInjecting<P: PendingTxEngine>` per C7,
+# `Engine::replace_refresh` test-only setter per C6α,
+# `LocalLedger::from_test_blocks` constructor per C6β) so they
+# build under the test substrate without bleeding into production.
+# These surfaces are `#[cfg(any(test, feature = "test-helpers"))]`-
+# gated AT THE DEFINITION SITE; the feature flag is the external
+# half of that gate (the `test` cfg is the internal half).
+#
+# Symmetric with `bench-internals` (above) in name and shape, but
+# NOT in re-export posture: `bench-internals` actually re-exports
+# its `pub(crate)` types under a `__bench_internals` module
+# (`pub use` gated on the feature) so external Criterion harnesses
+# can name them; `test-helpers` does NOT currently re-export
+# anything. These surfaces remain `pub(crate)` even with the
+# feature enabled — downstream crates cannot reach them through
+# the public API regardless of feature posture.
+#
+# Why no public re-exports yet (`21-reversion-clause-discipline.mdc`):
+# pre-genesis no downstream consumer crate exists; speculative re-
+# exports without a named caller would be the "pre-provisioning
+# for hypothetical consumers" anti-pattern the discipline rejects.
+# The current shape (compile-gate-only) is the minimum surface
+# that lets the test substrate exist; the public-re-export half
+# lands when the first downstream consumer emerges, at which point
+# the disposition is reopened via a focused PR adding
+# `#[cfg(feature = "test-helpers")] pub use ...` re-exports under
+# a `__test_helpers` module (matching the `__bench_internals`
+# precedent), the V3.0-targeted FOLLOWUPS item naming that
+# downstream crate, and an `AUDIT_SCOPE.md` amendment if the
+# crate exposes any production-surface implications.
+#
+# Production-build safety property (the load-bearing claim): the
+# `#[cfg(any(test, feature = "test-helpers"))]` gating at the
+# definition site ensures NONE of the four failure-injection
+# surfaces link into a default-feature production build. The
+# feature flag's external half is what lets a downstream crate
+# (when one exists) opt into the test-substrate surface without
+# patching the upstream crate.
+#
+# See `docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md` §7.X C6α /
+# F-Mock-1 / F-Mock-7.
+test-helpers = []
+
+[lints]
+workspace = true

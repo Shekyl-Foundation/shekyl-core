@@ -1,0 +1,58 @@
+AES chained-round encryption derived test vector — chained_enc.bin
+==================================================================
+
+Spec attestation
+----------------
+F6 supplement vector per `docs/design/RANDOMX_V2_PHASE2B_PLAN.md`
+§§5.6, 6.1. Pins the byte-level identity of three successive
+applications of `cipher_round` (= `soft_aesenc` =
+`_mm_aesenc_si128` =
+`SubBytes → ShiftRows → MixColumns → AddRoundKey`) starting from a
+fixed initial state and reusing a fixed round key across all three
+rounds.
+
+The reason for a *multi-round* parity test in addition to the
+single-round vectors (`round_enc.bin`) is that the equivalent-
+inverse-cipher form and the FIPS-197 standard inverse form happen
+to agree on some degenerate inputs (e.g., zero state + zero key)
+but diverge by round 2. Chaining three rounds and pinning each
+intermediate state forces any wrong-form-selection bug to surface
+at the round-2 intermediate rather than escape to a downstream
+test that might inadvertently re-degenerate the state.
+
+The shared-key shape across rounds is intentional: the F6 attack
+vector cares about cumulative diffusion across rounds, not about
+per-round key novelty. A single key literal keeps the test
+reproducible from minimal state.
+
+Inputs (hardcoded in `_generator/gen.cpp`)
+-------------------------------------------
+initial state = [0x00, 0x01, 0x02, ..., 0x0f]
+shared key    = [0xa5; 16]
+rounds        = 3 (state output after each round is committed)
+
+Output layout
+-------------
+48 bytes = 3 × 16 bytes:
+  bytes [0..16)  = state after round 1 = soft_aesenc(initial, key)
+  bytes [16..32) = state after round 2 = soft_aesenc(round_1_out, key)
+  bytes [32..48) = state after round 3 = soft_aesenc(round_2_out, key)
+
+Generator
+---------
+source      = ./_generator/gen.cpp
+build       = ./_generator/Makefile (`make gen`)
+command     = ./gen chained_enc
+output_size = 48 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/soft_aes.cpp
+function    = soft_aesenc(rx_vec_i128 in, rx_vec_i128 key)
+
+Phase
+-----
+Phase 2b (`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §§5.6, 6.1, 7
+commit 4).

@@ -29,6 +29,7 @@
 # Parts of this file are originally copyright (c) 2012-2013 The Cryptonote developers
 
 set(MONERO_WALLET_CRYPTO_BENCH "auto" CACHE STRING "Select wallet crypto libraries for benchmarking")
+option(BUILD_SHEKYL_WALLET_BENCH "Build the wallet2 C++ baseline benchmark harness (tests/wallet_bench)" OFF)
 
 # The docs say this only affects grouping in IDEs
 set(folder "tests")
@@ -71,7 +72,6 @@ else ()
   add_subdirectory(core_tests)
   add_subdirectory(fuzz)
   add_subdirectory(crypto)
-  add_subdirectory(functional_tests)
   add_subdirectory(performance_tests)
   add_subdirectory(unit_tests)
   add_subdirectory(difficulty)
@@ -83,6 +83,10 @@ endif()
 
 if (TREZOR_DEBUG)
   add_subdirectory(trezor)
+endif()
+
+if (BUILD_SHEKYL_WALLET_BENCH)
+  add_subdirectory(wallet_bench)
 endif()
 
 # add_subdirectory(daemon_tests)

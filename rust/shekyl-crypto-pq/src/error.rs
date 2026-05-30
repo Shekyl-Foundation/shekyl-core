@@ -17,6 +17,9 @@ pub enum CryptoError {
     #[error("invalid key material")]
     InvalidKeyMaterial,
 
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+
     #[error("low-order Montgomery point rejected")]
     LowOrderPoint,
 

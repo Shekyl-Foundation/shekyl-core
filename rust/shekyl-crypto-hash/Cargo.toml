@@ -3,6 +3,7 @@ name = "shekyl-crypto-hash"
 description = "Keccak-256 (original, non-SHA3) hashing for Shekyl consensus"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

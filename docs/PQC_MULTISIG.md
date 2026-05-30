@@ -221,7 +221,7 @@ Specifically:
 - CI MUST verify that release builds do not contain simple-mode symbols.
 
 The DKG ceremony uses the existing `dkg-pedpop` infrastructure already
-present in `shekyl-wallet-core/src/multisig/dkg.rs`. The DKG output is
+present in `shekyl-engine-core/src/multisig/dkg.rs`. The DKG output is
 the 32-byte `group_shared_secret` from which per-message encryption keys
 are derived (see §12.3).
 
@@ -1673,7 +1673,7 @@ scheme transitions.
 ### 16.1 New Rust modules
 
 ```
-shekyl-wallet-core/src/multisig/v31/
+shekyl-engine-core/src/multisig/v31/
 ├── intent.rs              — SpendIntent type, canonical serialization
 ├── construction.rs        — canonical_construct() deterministic function
 ├── prover.rs              — ProverOutput; rotating prover assignment

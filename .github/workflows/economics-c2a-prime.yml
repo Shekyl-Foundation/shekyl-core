@@ -1,0 +1,251 @@
+# C2a′ economics dual-leg + accumulation CI gates.
+#
+# Per `docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md` §5.8 (H1–H3) + §7.4 E1:
+#
+# * One build job produces test binaries; three layer jobs run tests in
+#   parallel against a shared artifact (avoids triple redundant builds).
+# * Preflight (JSON oracle + stale-constant grep) is fast and merge-blocking.
+# * Layer jobs fail with pinpoint messages until the 7-base harness registers.
+#
+# Container `--privileged` is required by `tests/create_test_disks.sh` (loop
+# devices for core_tests). Tighten to `--device=/dev/loop-control` +
+# `--cap-add=SYS_ADMIN` if that script's requirements narrow.
+#
+# After 7-base merges, mark all jobs required on `dev` in branch protection.
+
+name: ci/economics-c2a-prime
+
+on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "config/economics_params.json"
+      - "cmake/generate_economics_params.py"
+      - "src/cryptonote_basic/**"
+      - "src/cryptonote_core/blockchain.cpp"
+      - "src/cryptonote_core/blockchain.h"
+      - "rust/shekyl-economics/**"
+      - "rust/shekyl-economics-sim/**"
+      - "rust/shekyl-ffi/**"
+      - "tests/unit_tests/**"
+      - "tests/core_tests/**"
+      - "scripts/ci/run_economics_c2a_prime.sh"
+      - ".github/workflows/economics-c2a-prime.yml"
+  push:
+    branches: [dev]
+    paths:
+      - "config/economics_params.json"
+      - "cmake/generate_economics_params.py"
+      - "src/cryptonote_basic/**"
+      - "src/cryptonote_core/blockchain.cpp"
+      - "src/cryptonote_core/blockchain.h"
+      - "rust/shekyl-economics/**"
+      - "rust/shekyl-economics-sim/**"
+      - "rust/shekyl-ffi/**"
+      - "tests/unit_tests/**"
+      - "tests/core_tests/**"
+      - "scripts/ci/run_economics_c2a_prime.sh"
+      - ".github/workflows/economics-c2a-prime.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: economics-c2a-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  BUILD_DIR: ${{ github.workspace }}/build
+  BUILD_DEFAULT_LINUX: >-
+    cmake -S . -B build -D ARCH="default" -D BUILD_TESTS=ON
+    -D CMAKE_BUILD_TYPE=Release
+    && cmake --build build --target unit_tests core_tests
+  APT_INSTALL_LINUX: >-
+    apt -y install build-essential cmake libboost-all-dev miniupnpc
+    libunbound-dev graphviz doxygen libunwind8-dev pkg-config libssl-dev
+    libsodium-dev libhidapi-dev libusb-1.0-0-dev libprotobuf-dev
+    protobuf-compiler ccache git curl ripgrep python3
+  INSTALL_RUST: |
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+  CCACHE_SETTINGS: |
+    ccache --max-size=150M
+    ccache --set-config=compression=true
+
+jobs:
+  preflight:
+    name: "Economics C2a′ preflight (oracle constants)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install ripgrep
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep
+      - name: Run C2a′ preflight guards
+        run: scripts/ci/run_economics_c2a_prime.sh preflight
+
+  build:
+    name: "Economics C2a′ build (unit_tests + core_tests)"
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container:
+      image: ubuntu:22.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+        CCACHE_TEMPDIR: /tmp/.ccache-temp
+        CCACHE_DIR: ~/.ccache
+      # create_test_disks.sh sets up loop-backed block devices for core_tests.
+      options: --privileged
+    steps:
+      - name: set apt conf
+        run: |
+          tee -a /etc/apt/apt.conf.d/80-custom << EOF
+          Acquire::Retries "3";
+          Acquire::http::Timeout "120";
+          Acquire::ftp::Timeout "120";
+          EOF
+      - name: update apt
+        run: apt update
+      - name: install build dependencies
+        run: ${{ env.APT_INSTALL_LINUX }}
+      - name: install Rust
+        run: ${{ env.INSTALL_RUST }}
+      - name: configure git
+        run: git config --global --add safe.directory '*'
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: actions/cache@v5
+        with:
+          path: ~/.ccache
+          key: ccache-economics-c2a-build-${{ github.sha }}
+          restore-keys: ccache-economics-c2a-build-
+      - name: create dummy disk drives for testing
+        run: tests/create_test_disks.sh >> $GITHUB_ENV
+      - uses: ./.github/actions/set-make-job-count
+      - name: build test binaries (unit_tests + core_tests)
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: ${{ env.MAKE_JOB_COUNT }}
+        run: |
+          ${{ env.CCACHE_SETTINGS }}
+          ${{ env.BUILD_DEFAULT_LINUX }}
+      - name: Pack build tree for layer jobs
+        run: |
+          tar --exclude='**/CMakeFiles' --exclude='**/*.o' --exclude='**/*.a' \
+            -czf economics-c2a-build.tar.gz build/
+      - name: Verify artifact manifest (test binaries)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The CALIBRATION build is CMAKE_BUILD_TYPE=Release, so BUILD_SHARED_LIBS
+          # defaults OFF (it only flips ON for Debug, CMakeLists.txt:608-612). Internal
+          # libraries are therefore static .a archives and the test binaries are
+          # statically linked against them — no internal .so files exist, and the
+          # binaries are self-contained for the layer jobs. The deliverable to verify
+          # is the two test binaries themselves; the tar already excludes *.a and *.o.
+          required=(
+            build/tests/unit_tests/unit_tests
+            build/tests/core_tests/core_tests
+          )
+          listing="$(tar tzf economics-c2a-build.tar.gz)"
+          for path in "${required[@]}"; do
+            if ! grep -qx "$path" <<< "$listing"; then
+              echo "FATAL: economics-c2a-build.tar.gz missing $path" >&2
+              echo "tar tf (first 40 entries):" >&2
+              head -40 <<< "$listing" >&2
+              exit 1
+            fi
+          done
+          echo "OK: artifact contains statically-linked unit_tests + core_tests binaries"
+          echo "Note: tests/data/ is repo-tracked — layer jobs read it from checkout, not tarball"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: economics-c2a-build
+          path: economics-c2a-build.tar.gz
+          retention-days: 2
+
+  layer:
+    name: "Economics C2a′ Layer ${{ matrix.layer }} (${{ matrix.label }})"
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - layer: 1
+            label: dual-leg per-quantity KAT
+            subcommand: layer1
+            needs_rust: true
+            needs_disks: false
+          - layer: 2
+            label: accumulation + cap invariant
+            subcommand: layer2
+            needs_rust: true
+            needs_disks: false
+          - layer: 3
+            label: pop-replay reorg coupling
+            subcommand: layer3
+            needs_rust: false
+            needs_disks: true
+    container:
+      image: ubuntu:22.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      options: --privileged
+    steps:
+      - name: set apt conf
+        run: |
+          tee -a /etc/apt/apt.conf.d/80-custom << EOF
+          Acquire::Retries "3";
+          Acquire::http::Timeout "120";
+          Acquire::ftp::Timeout "120";
+          EOF
+      - name: update apt
+        run: apt update
+      - name: install runtime dependencies
+        run: |
+          # git is required by the "configure git" step and actions/checkout@v5
+          # (submodules: recursive). The build job gets it via APT_INSTALL_LINUX;
+          # the layer jobs install a minimal runtime set and must add it here.
+          apt -y install git ripgrep python3 libboost-system1.74.0 libboost-filesystem1.74.0 \
+            libboost-thread1.74.0 libboost-chrono1.74.0 libboost-regex1.74.0 \
+            libssl3 libsodium23 libunbound8 libprotobuf23
+      - name: install build toolchain for Rust tests
+        if: matrix.needs_rust
+        run: apt -y install build-essential pkg-config libssl-dev
+      - name: install Rust
+        if: matrix.needs_rust
+        run: ${{ env.INSTALL_RUST }}
+      - name: configure git
+        run: git config --global --add safe.directory '*'
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: actions/download-artifact@v4
+        with:
+          name: economics-c2a-build
+      - name: Unpack build tree
+        run: tar -xzf economics-c2a-build.tar.gz
+      - name: create dummy disk drives for testing
+        if: matrix.needs_disks
+        run: tests/create_test_disks.sh >> $GITHUB_ENV
+      - name: Run C2a′ Layer ${{ matrix.layer }}
+        id: layer_run
+        env:
+          CTEST_OUTPUT_ON_FAILURE: ON
+        run: |
+          scripts/ci/run_economics_c2a_prime.sh ${{ matrix.subcommand }} \
+            2>&1 | tee "economics-c2a-layer${{ matrix.layer }}.log"
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: economics-c2a-layer${{ matrix.layer }}-failure-${{ github.run_id }}
+          path: economics-c2a-layer${{ matrix.layer }}.log
+          retention-days: 14

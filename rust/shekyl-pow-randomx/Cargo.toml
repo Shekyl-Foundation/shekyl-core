@@ -1,0 +1,170 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-pow-randomx"
+description = "Pure-software RandomX v2 verifier for Shekyl daemon block validation (docs/design/RANDOMX_V2_PLAN.md, RANDOMX_V2_RUST.md)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+# Enables the cfg-gated `VmStatePool` + `compute_hash_with_pool` shim
+# per `docs/design/RANDOMX_V2_PHASE2F_PLAN.md` §3.3 Round 3. The pool
+# body is implemented behind `#[cfg(any(test, feature = "internal-pool-bench"))]`
+# regardless of the §3.4 R1-D4 outcome; the bench harness measures
+# both the no-pool path (always) and the pool path (only when this
+# feature is enabled). Branch A (per §3.4 Round 3) keeps the pool
+# bench-only; Branch C (per the same section) flips the cfg-gate to
+# default-on, at which point this feature flag is removed by §8
+# commit 5.
+#
+# Production builds NEVER enable this feature. The feature does not
+# carry any reverse-dependency: nothing in the workspace's
+# `[dependencies]` graph activates it. Phase 2F's CI grep gate
+# (`scripts/ci/check_randomx_crate_invariants.sh`) does not need to
+# match-against this gate, because the pool body's internal state
+# stays inside `VmStatePool`. The type is `#[doc(hidden)] pub` (so
+# the criterion bench in `benches/compute_hash_alloc.rs`, a separate
+# cargo target, can name `VmStatePool::new` and
+# `compute_hash_with_pool` across the crate boundary; `pub(crate)`
+# would forbid that). The whole `vm_pool` module is gated by
+# `#[cfg(any(test, feature = "internal-pool-bench"))]`, so the
+# no-feature production build never compiles the type at all. When
+# the type *does* compile and `Default::default()` is called outside
+# `#[cfg(test)]`, it `panic!`s to enforce the §3.5 Round 3
+# discipline that Phase 3a's FFI shim must pass an explicit
+# R1-D5-derived capacity rather than silently inheriting a stale
+# impl-PR-baked default.
+internal-pool-bench = []
+
+# `test-internals` exposes a feature-gated accessor on
+# `PreparedCache` for use by the Phase 2g Rust/C differential
+# harness (`rust/shekyl-randomx-differential/`). Per the
+# `RANDOMX_V2_PHASE2G_PLAN.md` Round 5 R5-D1 amendment, this
+# feature carves out a cfg-gated test-infrastructure surface that
+# is invisible in default-features builds and exists exclusively to
+# satisfy R1-D14's SHA-256 cache-equivalence precondition.
+#
+# Production builds NEVER enable this feature. The §5.3.1
+# "zero new production surfaces" discipline is preserved by the
+# gate: the only item gated by the feature is a visitor-style
+# iterator (`PreparedCache::cache_block_bytes_for_testing`)
+# returning by-value `[u8; 1024]` chunks; no static, no
+# `OnceLock`, no FFI export — Patterns A/B/C in
+# `scripts/ci/check_randomx_crate_invariants.sh` are unaffected.
+# The sole consumer is `shekyl-randomx-differential`; any further
+# downstream activation requires a plan-doc amendment (§5.3
+# carve-out reopening criteria).
+test-internals = []
+
+[dependencies]
+# AES round primitive for AesGenerator1R/4R + AesHash1R per `specs.md`
+# §§3.2-3.4. See workspace `Cargo.toml` for the verification record.
+aes = { workspace = true }
+
+# Blake2b for the BlakeGenerator's "S = Hash512(S)" rebuild step per
+# `specs.md` §3.5. Direct dep per the workspace-Cargo.toml rationale.
+blake2 = { workspace = true }
+
+
+# Argon2d "memory fill" primitive used by Cache::derive (Phase 2e wraps
+# this). Pinned at workspace minor (0.5) matching shekyl-crypto-pq's
+# direct dep; Cargo's feature unification means the final feature set
+# is (alloc + zeroize) regardless of which crate declares which.
+#
+# Verified at source against argon2-0.5.3
+# (~/.cargo/registry/src/.../argon2-0.5.3/src/lib.rs:268-318):
+# `Argon2::fill_memory(pwd, salt, &mut [Block])` performs exactly the
+# RandomX-required "omit finalizer; output is the filled memory array"
+# semantics from specs.md §7.1. The `output_len=0` path inside
+# `initial_hash` (lib.rs:526) reproduces dataset.cpp:76's
+# `context.outlen = 0`. Argon2d (algorithm.rs:54, discriminant 0) +
+# Version::V0x13 (version.rs default) match the C fork's pin.
+# See src/argon2d.rs module rustdoc for the complete dispositions.
+#
+# Feature notes:
+# - `alloc`: required for `Argon2::fill_memory`'s internal Vec usage.
+# - `zeroize`: activates `impl Zeroize for Block`. RandomX Cache
+#   contents are PUBLIC (deterministic function of the seedhash, a
+#   block-header value); zeroize is defense-in-depth rather than
+#   load-bearing for our threat model, but enabling it here keeps
+#   the feature union identical to shekyl-crypto-pq's, avoiding
+#   a duplicate argon2 build with a different feature set.
+argon2 = { version = "0.5", default-features = false, features = ["alloc", "zeroize"] }
+
+[dev-dependencies]
+# Criterion for the two Phase 2c informational benches per
+# `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.8 + §8: `cache_derive`
+# (sample_size=100 per §5.8) and `compute_hash_alloc` (sample_size=100
+# per the bench's runtime-economics observation; §5.8's nominal
+# N=10000 is intractable at the empirical ~hundreds-of-ms per-call
+# cost — see the bench harness rustdoc). Version + feature set match
+# `shekyl-crypto-pq`'s existing dev-dep (`rust/shekyl-crypto-pq/Cargo.toml`)
+# so workspace dep-resolution stays unified rather than building a
+# second criterion variant for this crate. No production code path
+# depends on criterion.
+#
+# §5.8's "PR fails if median > X" budget shapes (≤200 ms for
+# `cache_derive`, ≤100 µs for `compute_hash_alloc`) are recorded as
+# planned targets in the plan doc; the empirical baselines on the
+# reference machine exceed both (`cache_derive` ~341 ms,
+# `compute_hash_alloc` ~296 ms end-to-end full-pipeline). The
+# reconciliation — re-baseline the budgets to hardware-class
+# measurements vs. introduce an allocation-only sub-bench vs. defer
+# the per-hash latency check to Phase 2g's Rust-vs-C ratio — is
+# tracked at `RANDOMX_V2_PHASE2C_PLAN.md` §14 (R0-D12). At Phase 2c
+# both benches are **informational baselines** (recorded in
+# `BENCH_RESULTS.md`), not enforced PR gates.
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+# `Cache::derive(&KEY)` end-to-end (Argon2d 256 MiB + 8 ×
+# `generateSuperscalar`). Phase 2c informational baseline (~341 ms
+# median on the reference machine per `BENCH_RESULTS.md`); §5.8's
+# planned ≤200 ms budget is unmet pending the R0-D12 reconciliation
+# in `RANDOMX_V2_PHASE2C_PLAN.md` §14. See `benches/cache_derive.rs`
+# for the harness rationale and the threshold-enforcement disposition.
+name = "cache_derive"
+harness = false
+
+[[bench]]
+# `compute_hash(&prepared, &DATA)` end-to-end. Measures the *full
+# pipeline* (`VmState` alloc + scratchpad init + 8 chains × 2048-iter
+# execution + Blake2b chaining + final hash). Phase 2c informational
+# baseline (~296 ms median per call on the reference machine per
+# `BENCH_RESULTS.md`); Phase 2d real-dispatch update (~303 ms). Phase
+# 2F §6.3 Round 3 extends this file with B-pool-off / B-pool-on
+# A/B benches (B-pool-on requires `--features internal-pool-bench`).
+# §5.8's planned ≤100 µs budget targeted the allocation-only
+# sub-bench (B-2 / B-3 in `per_call_alloc.rs`); full-pipeline numbers
+# include the per-chain hash math + AES f/e mix + Blake2b chaining,
+# all of which dominate the one-shot allocation. R0-D12
+# reconciliation in `RANDOMX_V2_PHASE2C_PLAN.md` §14 tracks the
+# disposition. See `benches/compute_hash_alloc.rs` for the harness
+# rationale.
+name = "compute_hash_alloc"
+harness = false
+
+[[bench]]
+# Phase 2F §3.3 Round 3 component-floor benches (B-2 + B-3): per-call
+# allocation cost of the two heap allocations performed by
+# `VmState::new` — the 2 MiB zero-init scratchpad (B-2) and the
+# `Box<Program>` register-file synth (B-3). Their sum is the §3.4
+# R1-D4 component-floor (the "no-pool path's per-call allocation
+# cost lower bound"). Always runs; Branch A vs. Branch C disposition
+# in `BENCH_RESULTS.md` is decided by the A/B delta from
+# `compute_hash_alloc`'s `with_no_pool` vs. `with_pool` numbers, not
+# by these component benches in isolation. The component benches
+# survive Round 3 as a sanity cross-check that the no-pool A/B
+# measurement does not undercut the floor (which would indicate
+# bench misconfiguration). See `benches/per_call_alloc.rs` for the
+# harness rationale.
+name = "per_call_alloc"
+harness = false
+
+[lints]
+workspace = true

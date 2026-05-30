@@ -75,8 +75,8 @@ namespace cryptonote {
   }
   //-----------------------------------------------------------------------------------------------
   bool get_block_reward(size_t median_weight, size_t current_block_weight, uint64_t already_generated_coins, uint64_t &reward, uint8_t version) {
-    static_assert(DIFFICULTY_TARGET_V2%60==0,"difficulty target must be a multiple of 60");
-    const int target = DIFFICULTY_TARGET_V2;
+    static_assert(SHEKYL_DAA_TARGET_SECONDS%60==0,"difficulty target must be a multiple of 60");
+    const int target = SHEKYL_DAA_TARGET_SECONDS;
     const int target_minutes = target / 60;
     const int emission_speed_factor = EMISSION_SPEED_FACTOR_PER_MINUTE - (target_minutes-1);
 
@@ -147,22 +147,29 @@ namespace cryptonote {
     )
   {
     uint8_t net = nettype_to_ffi_network(nettype);
-    // Wallet stores hybrid KEM pubkey as x25519_pk[32] || ml_kem_ek[1184] (see shekyl_kem_keypair_generate).
-    // Bech32m address body carries only the ML-KEM-768 encapsulation key (1184 bytes).
-    static constexpr size_t X25519_PK_BYTES = 32;
-    static constexpr size_t ML_KEM768_EK_BYTES = 1184;
+    // Canonical m_pqc_public_key layout is pinned at SHEKYL_PQC_PUBLIC_KEY_BYTES
+    // (X25519_pub[32] || ML-KEM-768_ek[1184]) by a static_assert in shekyl_ffi.h
+    // and by get_account_address_from_str, which is the only v1 assembler. Any
+    // other length is a programming error — we fall through and let the
+    // bech32m encoder refuse a malformed input rather than silently patch up
+    // legacy 1184-byte blobs that predate the freeze. The old "ML-KEM-only"
+    // fallback was a footgun: it let partially-initialized addresses round-
+    // trip through the encoder with the X25519 prefix missing and no check on
+    // the other side.
     const std::vector<uint8_t>& pq = adr.m_pqc_public_key;
     const uint8_t* ml_ptr = nullptr;
     size_t ml_len = 0;
-    if (pq.size() >= X25519_PK_BYTES + ML_KEM768_EK_BYTES)
+    if (pq.size() == SHEKYL_PQC_PUBLIC_KEY_BYTES)
     {
-      ml_ptr = pq.data() + X25519_PK_BYTES;
-      ml_len = ML_KEM768_EK_BYTES;
+      ml_ptr = pq.data() + SHEKYL_X25519_PK_BYTES;
+      ml_len = SHEKYL_ML_KEM_768_EK_BYTES;
     }
-    else if (pq.size() == ML_KEM768_EK_BYTES)
+    else if (!pq.empty())
     {
-      ml_ptr = pq.data();
-      ml_len = ML_KEM768_EK_BYTES;
+      LOG_PRINT_L1("Refusing to encode address with non-canonical m_pqc_public_key size "
+          << pq.size() << " (expected " << SHEKYL_PQC_PUBLIC_KEY_BYTES
+          << " or zero for legacy address-only wallets)");
+      return {};
     }
     ShekylBuffer buf = shekyl_address_encode(
         net,
@@ -256,6 +263,26 @@ namespace cryptonote {
       CHECK_AND_ASSERT_MES(info.address.m_pqc_public_key.size() == SHEKYL_PQC_PUBLIC_KEY_BYTES,
         false, "m_pqc_public_key assembly error: expected " << SHEKYL_PQC_PUBLIC_KEY_BYTES
         << " bytes, got " << info.address.m_pqc_public_key.size());
+
+      // Post-assembly tripwire. Delegates to the authoritative Rust check
+      // (X25519 prefix is the Edwards→Montgomery image of view_pub; ML-KEM
+      // suffix is a well-formed FIPS-203 encapsulation key). If this fails
+      // the decoded bytes look syntactically valid but the triple is not a
+      // legal canonical address, so we must not hand it to the wallet.
+      //
+      // Argument order: pqc_public_key (1216 B) first, view_pub (32 B)
+      // second — matches the Rust definition. The original landing of this
+      // call site (commit 0092a8da1) had the order reversed, which let
+      // every decode trip the FIPS-203 well-formedness check on garbage
+      // bytes; the 14 `uri.*` regressions were the symptom.
+      if (!shekyl_account_public_address_check(
+              info.address.m_pqc_public_key.data(),
+              reinterpret_cast<const uint8_t*>(&info.address.m_view_public_key)))
+      {
+        LOG_PRINT_L1("Address failed v1 canonical invariant check (view_pub ↔ "
+                     "X25519 prefix or malformed ML-KEM-768 encapsulation key)");
+        return false;
+      }
     }
     else
     {

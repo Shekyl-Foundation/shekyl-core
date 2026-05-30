@@ -8,9 +8,15 @@ name = "shekyl-fcmp"
 description = "FCMP++ full-chain membership proofs with Shekyl PQC extensions (4-scalar leaf)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+# Shekyl-first typed primitives. `KeyImage` is the canonical typed wrapper
+# for 32-byte key-image bytes; `verify` takes `&[KeyImage]` so callers
+# cannot accidentally pass arbitrary `[u8; 32]` payloads (commitments,
+# pseudo-outs, hashes) where a key image is required.
+shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # Vendored shekyl-oxide crates (tracked upstream in Shekyl-Foundation/monero-oxide).
 shekyl-fcmp-plus-plus = { path = "../shekyl-oxide/shekyl-oxide/fcmp/fcmp++", default-features = false, features = ["std", "compile-time-generators"] }
 shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }

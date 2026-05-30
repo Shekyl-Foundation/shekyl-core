@@ -56,10 +56,10 @@ bool gen_bpp_tx_validation_base::generate_with(std::vector<test_event_entry>& ev
   const cryptonote::block *prev_block = &blk_0;
   cryptonote::block blocks[12 + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW];
   for (size_t n = 0; n < 12; ++n) {
-    miner_accounts[n].generate();
+    miner_accounts[n].generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
     CHECK_AND_ASSERT_MES(generator.construct_block_manually(blocks[n], *prev_block, miner_accounts[n],
         test_generator::bf_major_ver | test_generator::bf_minor_ver | test_generator::bf_timestamp | test_generator::bf_hf_version,
-        1, 1, prev_block->timestamp + DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN * 2,
+        1, 1, prev_block->timestamp + SHEKYL_DAA_TARGET_SECONDS,
           crypto::hash(), 0, transaction(), std::vector<crypto::hash>(), 0, 0, 1),
         false, "Failed to generate block");
     events.push_back(blocks[n]);
@@ -74,7 +74,7 @@ bool gen_bpp_tx_validation_base::generate_with(std::vector<test_event_entry>& ev
     {
       CHECK_AND_ASSERT_MES(generator.construct_block_manually(blocks[12+i], blk_last, miner_account,
           test_generator::bf_major_ver | test_generator::bf_minor_ver | test_generator::bf_timestamp | test_generator::bf_hf_version,
-          1, 1, blk_last.timestamp + DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN * 2,
+          1, 1, blk_last.timestamp + SHEKYL_DAA_TARGET_SECONDS,
           crypto::hash(), 0, transaction(), std::vector<crypto::hash>(), 0, 0, 1),
           false, "Failed to generate block");
       events.push_back(blocks[12+i]);
@@ -203,7 +203,7 @@ bool gen_bpp_tx_validation_base::generate_with(std::vector<test_event_entry>& ev
 
   CHECK_AND_ASSERT_MES(generator.construct_block_manually(blk_txes, blk_last, miner_account,
       test_generator::bf_major_ver | test_generator::bf_minor_ver | test_generator::bf_timestamp | test_generator::bf_tx_hashes | test_generator::bf_hf_version | test_generator::bf_max_outs | test_generator::bf_tx_fees,
-      hf_version, hf_version, blk_last.timestamp + DIFFICULTY_BLOCKS_ESTIMATE_TIMESPAN * 2, // v2 has blocks twice as long
+      hf_version, hf_version, blk_last.timestamp + SHEKYL_DAA_TARGET_SECONDS,
       crypto::hash(), 0, transaction(), starting_rct_tx_hashes, 0, 6, hf_version, fees),
       false, "Failed to generate block");
   if (!valid)

@@ -1,0 +1,77 @@
+Phase 2d reference vector — t9_vm_single_int_smoke.bin
+=======================================================
+
+Spec attestation
+----------------
+T9 attests Rust `dispatch_instruction` byte-for-byte parity with the
+v2 RandomX fork's `randomx::BytecodeMachine::executeInstruction`
+under stub-static `compileInstruction` for the integer-arithmetic
+opcode classes. Four single-opcode probes cover the four integer
+shapes that the per-class dispatch arms must implement byte-faithfully:
+
+  - IADD_RS  : opcode  0,  dst=2, src=3, mod=0, imm32=0x12345678
+               — register-reg-shifted-add with imm32 ignored (dst ≠
+                 RegisterNeedsDisplacement)
+  - IMULH_R  : opcode 66,  dst=4, src=5
+               — unsigned multiply-high, no scratchpad touch
+  - IROR_R   : opcode 106, dst=6, src=7, imm32=11
+               — variable rotate-right by `src & 63`
+  - ISTORE   : opcode 240, dst=0, src=1, mod=0xE0, imm32=0xCAFE0007
+               — scratchpad write with `mod>>4 = 14 -> L3 mask`
+
+Each probe applies a fresh canonical NativeRegisterFile + scratchpad
+pattern, runs one `executeInstruction` call under MXCSR mode 0 (RN),
+and emits the post-execution `NativeRegisterFile` in the T4 256-byte
+layout (r[8] u64 LE || f[4] [f64;2] LE || e[4] [f64;2] LE || a[4]
+[f64;2] LE).
+
+A T9 divergence isolates a bug in one of the integer dispatch arms
+or in the canonical FP-register-init contract — the FP/E/A blocks of
+each probe must be byte-identical to T4's canonical FP init (since
+integer opcodes don't touch FP state). T11-T14 cover the FP arms.
+
+Per `docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2.
+
+Inputs (hardcoded in `_generator/phase2d/gen.cpp`)
+--------------------------------------------------
+Canonical NativeRegisterFile per execute_one():
+  r[i]  = 0x_i_(i+1)(i+2)(i+3)(i+4)(i+5)(i+6)(i+7)(i+8) for i in 0..8
+          where _i_ = 0x_i_×0x10 (distinct bytes per lane).
+  f, e, a = pinned IEEE 754 doubles documented in gen.cpp's
+            CANONICAL_F / CANONICAL_E / CANONICAL_A tables.
+
+Scratchpad: `(i * 0x9E + 0x37) & 0xff` for i in 0..ScratchpadSize
+(covers all 256 byte values).
+
+Output layout
+-------------
+4 × 256-byte NativeRegisterFile snapshots, one per probe in the order
+listed above. Total: 1024 bytes.
+
+Generator
+---------
+source      = ./_generator/phase2d/gen.cpp (mode t9)
+build       = ./_generator/phase2d/Makefile (`make`)
+command     = ./gen t9 > t9_vm_single_int_smoke.bin
+output_size = 1024 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/bytecode_machine.cpp (compileInstruction +
+                executeInstruction switch),
+              src/bytecode_machine.hpp (exe_* inline kernels),
+              src/instructions_portable.cpp (mulh / smulh /
+                signExtend2sCompl),
+              src/reciprocal.c (IMUL_RCP — not used by T9 but
+                linked for completeness)
+function    = randomx::BytecodeMachine::executeInstruction with
+              flags=RANDOMX_FLAG_V2
+
+Phase
+-----
+Phase 2d (`docs/design/RANDOMX_V2_PHASE2D_PLAN.md` §6.2 / §8 commit
+5a). Consumed by Rust test
+`t9_vm_single_int_smoke_matches_fork_reference` in
+`rust/shekyl-pow-randomx/src/vm.rs#mod tests`.

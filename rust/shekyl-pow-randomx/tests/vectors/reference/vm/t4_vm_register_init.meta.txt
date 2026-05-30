@@ -1,0 +1,72 @@
+Phase 2c reference vector — t4_vm_register_init.bin
+====================================================
+
+Spec attestation
+----------------
+T4 attests Rust register initialization byte-for-byte parity with
+the v2 RandomX fork's `randomx_vm::initialize()` for a canonical
+128-byte entropy buffer derived from CANONICAL_TEMP_HASH via
+`fillAes4Rx4`. Captures the post-`initialize()` RegisterFile
+snapshot BEFORE any iterations execute — so `r[8]`, `f[4]`, `e[4]`
+are zero-initialized and only `a[4]` is populated (from entropy
+slots 0..8 via `getSmallPositiveFloatBits`).
+
+A T4 divergence isolates `getSmallPositiveFloatBits` (the
+entropy → f64 reinterpretation) and the entropy-slot-to-register
+mapping from any iteration-loop bugs (those land in T6 / T7 / T8).
+
+Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 (F7 T4).
+
+Inputs (hardcoded in `_generator/phase2c/gen.cpp`)
+--------------------------------------------------
+seedhash  = [0x01, 0x02, ..., 0x20]  (32-byte canonical, for cache)
+temp_hash = CANONICAL_TEMP_HASH (64 B, see T3 .meta.txt)
+flag      = RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_V2
+softAes   = true                     (portability pin)
+
+The cache is required because the stub-NOP VM holds a `cachePtr`
+even though the iteration loop is not executed; `setCache` +
+`allocate` populate the scratchpad pointer that `initialize` depends
+on indirectly. Cache contents do not affect the T4 output.
+
+Output layout
+-------------
+NativeRegisterFile snapshot, 256 bytes total, little-endian:
+
+  +0     r[0..8]  × u64                              (64 B)
+  +64    f[0..4]  × {lo: f64 LE bits, hi: f64 LE bits} (64 B)
+  +128   e[0..4]  × {lo: f64 LE bits, hi: f64 LE bits} (64 B)
+  +192   a[0..4]  × {lo: f64 LE bits, hi: f64 LE bits} (64 B)
+
+Pre-iteration state expected:
+  - r[0..8] = all zeros            (set per-iteration via XOR-load)
+  - f[0..4] = all zeros            (set per-iteration via cvt+mask)
+  - e[0..4] = all zeros            (set per-iteration via cvt+mask)
+  - a[0..4] = getSmallPositiveFloatBits(entropy[0..8])
+
+Total bytes for this vector: 256.
+
+Generator
+---------
+source      = ./_generator/phase2c/gen.cpp (mode t4)
+build       = ./_generator/phase2c/Makefile (`make gen`)
+command     = ./gen t4 > t4_vm_register_init.bin
+output_size = 256 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/virtual_machine.cpp (randomx_vm::initialize),
+              src/vm_interpreted.cpp (InterpretedVm::generateProgram via
+                base VmBase::generateProgram),
+              src/aes_hash.cpp (fillAes4Rx4),
+              src/program.hpp (getSmallPositiveFloatBits)
+function    = (composite — generateProgram → initialize)
+
+Phase
+-----
+Phase 2c (`docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.7 / F7 T4,
+§9 commit 7) — register init parity. Consumed by Rust test
+`t4_vm_register_init_matches_fork_reference` in
+`rust/shekyl-pow-randomx/src/vm.rs#mod tests`.

@@ -34,12 +34,10 @@ set(core_tests_sources
   chaingen.cpp
   chaingen001.cpp
   chaingen_main.cpp
+  economics_c2a_prime.cpp
   integer_overflow.cpp
   transaction_tests.cpp
-  tx_validation.cpp
   tx_pool.cpp
-  staking.cpp
-  fcmp_tests.cpp
   bulletproof_plus.cpp
   wallet_tools.cpp)
 
@@ -50,12 +48,10 @@ set(core_tests_headers
   chain_switch_1.h
   chaingen.h
   chaingen_tests_list.h
+  economics_c2a_prime.h
   integer_overflow.h
   tx_pool.h
-  staking.h
-  fcmp_tests.h
   transaction_tests.h
-  tx_validation.h
   bulletproof_plus.h
   wallet_tools.h)
 

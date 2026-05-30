@@ -66,6 +66,7 @@
 #include "serialization/containers.h"
 
 #include "memwipe.h"
+#include "mlocker.h"
 #include "wallet_errors.h"
 #include "common/password.h"
 #include "node_rpc_proxy.h"
@@ -89,10 +90,28 @@
 class Serialization_portability_wallet_Test;
 class wallet_accessor_test;
 
+// Forward declaration of the opaque Rust-owned wallet handle. The full
+// definition is an `#[repr(C)]` struct inside the Rust shekyl-ffi crate
+// exposed to C++ through `src/shekyl/shekyl_ffi.h`. Forward-declaring
+// here avoids transitively pulling that C header into every translation
+// unit that includes `wallet2.h`; the concrete `shekyl_wallet_free`
+// symbol is referenced only from the out-of-line deleter definition in
+// `wallet2.cpp`, which does include the FFI header directly.
+struct ShekylWallet;
+
 namespace tools
 {
   class wallet2;
   class Notify;
+
+  // Custom deleter for `std::unique_ptr<::ShekylWallet, ...>`. Defined
+  // out-of-line in `wallet2.cpp` so `shekyl_wallet_free` stays confined
+  // to the .cpp translation unit. The deleter is a no-throw functor per
+  // the standard `unique_ptr` contract.
+  struct shekyl_wallet_deleter
+  {
+    void operator()(::ShekylWallet *h) const noexcept;
+  };
 
   class wallet_keys_unlocker
   {
@@ -206,12 +225,47 @@ namespace tools
   };
 
   class wallet_keys_unlocker;
+
+  // Forward declarations for the Phase-1 BIP-39 restore-from-phrase
+  // access surface per `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10.1.
+  // `wallet_args_options` (defined in `wallet2.cpp`'s `namespace tools`
+  // body) and `generate_from_json` (likewise defined in `wallet2.cpp`)
+  // are forward-declared here so the friend declaration inside
+  // `class wallet2` below has the matching signature in scope.
+  //
+  // The friendship grants `tools::generate_from_json` access to the
+  // private members `wallet2::m_account`, `wallet2::m_bip39_entropy`,
+  // `wallet2::m_nettype`, and the private setup methods
+  // (`clear`, `prepare_file_names`, `init_type`, `setup_keys`,
+  // `create_keys_file`, `setup_new_blockchain`,
+  // `estimate_blockchain_height`) required to inline the BIP-39
+  // orchestration chain (validate → entropy-extract → account-generate
+  // → entropy-persist → keys-file-create) into the existing JSON-
+  // restore call site without expanding `wallet2`'s public surface.
+  // The CI tripwire at `tests/unit_tests/wallet_storage.cpp:42-144`
+  // refuses a public `wallet2::generate_from_bip39` method; this
+  // friendship is the access mechanism that lets the orchestration
+  // proceed via the namespace-scope function instead.
+  struct wallet_args_options;
+  std::pair<std::unique_ptr<wallet2>, password_container> generate_from_json(
+      const std::string& json_file,
+      const boost::program_options::variables_map& vm,
+      bool unattended,
+      const wallet_args_options& opts,
+      const std::function<std::optional<password_container>(const char *, bool)> &password_prompter);
+
   class wallet2
   {
     friend class ::Serialization_portability_wallet_Test;
     friend class ::wallet_accessor_test;
     friend class wallet_keys_unlocker;
     friend class wallet_device_callback;
+    friend std::pair<std::unique_ptr<wallet2>, password_container> generate_from_json(
+        const std::string& json_file,
+        const boost::program_options::variables_map& vm,
+        bool unattended,
+        const wallet_args_options& opts,
+        const std::function<std::optional<password_container>(const char *, bool)> &password_prompter);
   public:
     static constexpr const std::chrono::seconds rpc_timeout = std::chrono::minutes(3) + std::chrono::seconds(30);
 
@@ -984,6 +1038,26 @@ namespace tools
     bool get_seed(epee::wipeable_string& electrum_words, const epee::wipeable_string &passphrase = epee::wipeable_string()) const;
 
     /*!
+     * \brief Read-only accessor for the persisted 32-byte BIP-39 entropy.
+     *
+     * Returns a const reference to the optional `m_bip39_entropy` field,
+     * which is populated when the wallet was created via the BIP-39
+     * JSON-restore-from-phrase path (the orchestration block inlined
+     * into `tools::generate_from_json` per
+     * `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10.1) and unset for
+     * wallets created via the raw-seed / restore-from-keys / device
+     * paths per §4.10 "The field is not set during".
+     *
+     * The accessor returns a reference (not a copy) to avoid duplicating
+     * the entropy bytes on the caller's stack; callers that need the
+     * underlying 32 bytes read them via `entropy->data()`. The wallet's
+     * `query_key("mnemonic")` dispatch is the canonical consumer
+     * (`wallet2_ffi.cpp:643` and `wallet_rpc_server.cpp:2204`).
+     */
+    const std::optional<epee::mlocked<tools::scrubbed_arr<uint8_t, 32>>>& bip39_entropy() const
+    { return m_bip39_entropy; }
+
+    /*!
      * \brief Gets the seed language
      */
     const std::string &get_seed_language() const;
@@ -1708,6 +1782,25 @@ namespace tools
     cryptonote::network_type m_nettype;
     uint64_t m_kdf_rounds;
     std::string seed_language; /*!< Language of the mnemonics (seed). */
+    // Persisted 32-byte BIP-39 entropy for wallets created from a BIP-39
+    // phrase. Populated by the BIP-39 orchestration block inlined into
+    // `tools::generate_from_json` (the friend function granted access
+    // to this private member per §4.10.1); round-trips through the
+    // store_keys-encrypted keyfile JSON envelope (see `store_keys` /
+    // `load_keys` for the encrypted-blob ser/de path). The phrase itself
+    // is never persisted in long-lived state; `query_key("mnemonic")`
+    // regenerates it on demand via `shekyl_bip39_mnemonic_from_entropy`.
+    // See `docs/design/ELECTRUM_WORDS_REMOVAL.md` §4.10 for the entropy-
+    // persistence rationale and the `m_bip39_entropy` field-shape
+    // disposition (32-byte fixed-length scrubbed array under mlock; the
+    // canonical source-of-truth for the wallet's BIP-39 phrase), and
+    // §4.10.1 for the orchestration-shape disposition (no public
+    // `wallet2::generate_from_bip39` method; the CI tripwire at
+    // `tests/unit_tests/wallet_storage.cpp:42-144` enforces this).
+    // Unset for wallets created via raw-seed / from-keys /
+    // hardware-device paths, in which case `query_key("mnemonic")`
+    // hard-errors per §4.10 "The field is not set during".
+    std::optional<epee::mlocked<tools::scrubbed_arr<uint8_t, 32>>> m_bip39_entropy;
     bool m_watch_only; /*!< no spend key */
     bool m_always_confirm_transfers;
     bool m_store_tx_info; /*!< request txkey to be returned in RPC, and store in the wallet cache file */
@@ -1861,6 +1954,23 @@ namespace tools
     crypto::hash m_pqc_multisig_group_id;
     uint8_t m_pqc_multisig_n = 0;
     uint8_t m_pqc_multisig_m = 0;
+
+    // Rust-owned wallet handle (transitional 2k.a -> 2m-keys). Opened
+    // lazily by `load_keys` when the on-disk file has the SHKW1 magic;
+    // null for legacy wallets still being opened via the JSON path.
+    // The 2k.a design treats this member as a write-target (populated
+    // from `load_keys`, consumed by `verify_password` / `rewrite` /
+    // the transitional secret-extraction FFI); it becomes a read
+    // source for `m_account` fields in 2l alongside the cache rewire.
+    //
+    // Declared last in the private block so reverse member-destruction
+    // order drops the handle BEFORE any wallet2 state that might
+    // legitimately want to touch it during its own destructor. The
+    // explicit `m_shekyl_wallet.reset()` in `deinit()` makes the drop
+    // order deterministic regardless of whether `deinit()` is invoked
+    // by the caller or implicitly by `~wallet2()`. See 2k.a design
+    // pin 10 in docs/wallet-state-promotion_ab273bfe.plan.md.
+    std::unique_ptr<::ShekylWallet, shekyl_wallet_deleter> m_shekyl_wallet;
   };
 }
 BOOST_CLASS_VERSION(tools::wallet2, 3)

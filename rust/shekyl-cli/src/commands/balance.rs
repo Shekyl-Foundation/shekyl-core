@@ -5,9 +5,9 @@
 
 //! Balance and address commands.
 
-use crate::wallet::WalletContext;
+use crate::engine::EngineContext;
 
-pub fn cmd_address(ctx: &WalletContext, account_index: u32) {
+pub fn cmd_address(ctx: &EngineContext, account_index: u32) {
     if !super::require_open(ctx) {
         return;
     }
@@ -23,7 +23,7 @@ pub fn cmd_address(ctx: &WalletContext, account_index: u32) {
     }
 }
 
-pub fn cmd_balance(ctx: &WalletContext, account_index: u32) {
+pub fn cmd_balance(ctx: &EngineContext, account_index: u32) {
     if !super::require_open(ctx) {
         return;
     }

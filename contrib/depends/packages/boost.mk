@@ -15,7 +15,6 @@ $(package)_config_opts_android=threadapi=pthread runtime-link=static target-os=a
 $(package)_config_opts_darwin=--toolset=darwin runtime-link=shared
 $(package)_config_opts_mingw32=binary-format=pe target-os=windows threadapi=win32 runtime-link=static
 $(package)_config_opts_x86_64_mingw32=address-model=64
-$(package)_config_opts_i686_mingw32=address-model=32
 $(package)_toolset_$(host_os)=gcc
 $(package)_archiver_$(host_os)=$($(package)_ar)
 $(package)_toolset_darwin=darwin

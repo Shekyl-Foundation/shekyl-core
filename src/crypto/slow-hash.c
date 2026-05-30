@@ -1012,8 +1012,7 @@ void cn_slow_hash(const void *data, size_t length, char *hash, int variant, int 
     extra_hashes[state.hs.b[0] & 3](&state, 200, hash);
 }
 
-#elif !defined NO_AES && (defined(__arm__) || defined(__aarch64__))
-#ifdef __aarch64__
+#elif !defined NO_AES && defined(__aarch64__)
 #include <sys/mman.h>
 THREADV uint8_t *hp_state = NULL;
 THREADV int hp_malloced = 0;
@@ -1050,19 +1049,6 @@ void cn_slow_hash_free_state(void)
     hp_state = NULL;
     hp_malloced = 0;
 }
-#else
-void cn_slow_hash_allocate_state(void)
-{
-  // Do nothing, this is just to maintain compatibility with the upgraded slow-hash.c
-  return;
-}
-
-void cn_slow_hash_free_state(void)
-{
-  // As above
-  return;
-}
-#endif
 
 #if defined(__GNUC__)
 #define RDATA_ALIGN16 __attribute__ ((aligned(16)))

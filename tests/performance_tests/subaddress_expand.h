@@ -61,5 +61,8 @@ public:
   }
 
 private:
-  tools::wallet2 wallet;
+  // FAKECHAIN nettype: `wallet.generate(..., spendkey, true, false)` routes
+  // through `account_base::generate(..., m_nettype)` which now correctly
+  // throws on (MAINNET, RAW32). Bug 4-adjacent.
+  tools::wallet2 wallet{cryptonote::FAKECHAIN, 1, false};
 };

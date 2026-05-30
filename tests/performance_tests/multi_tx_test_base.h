@@ -55,7 +55,7 @@ public:
     std::vector<tx_source_entry::output_entry> output_entries;
     for (size_t i = 0; i < ring_size; ++i)
     {
-      m_miners[i].generate();
+      m_miners[i].generate(crypto::secret_key{}, false, false, cryptonote::FAKECHAIN);
 
       if (!construct_miner_tx(0, 0, 0, 2, 0, m_miners[i].get_keys().m_account_address, m_miner_txs[i]))
         return false;

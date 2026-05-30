@@ -32,6 +32,7 @@ set(unit_tests_sources
   blockchain_db.cpp
   block_queue.cpp
   block_reward.cpp
+  economics_c2a_prime.cpp
   bootstrap_node_selector.cpp
   bulletproofs_plus.cpp
   canonical_amounts.cpp
@@ -77,11 +78,13 @@ set(unit_tests_sources
   parse_amount.cpp
   pruning.cpp
   random.cpp
+  rpc_target_wire_contract.cpp
   rolling_median.cpp
   scaling_2021.cpp
   serialization.cpp
   sha256.cpp
   slow_memmem.cpp
+  stall_detection_calibration.cpp
   stack_trace.cpp
   subaddress.cpp
   test_tx_utils.cpp
@@ -96,6 +99,8 @@ set(unit_tests_sources
   fcmp.cpp
   vercmp.cpp
   wallet_storage.cpp
+  wallet_bip39.cpp
+  wallet_bip39_residency.cpp
   wipeable_string.cpp
   is_hdd.cpp
   aligned.cpp

@@ -31,7 +31,7 @@ files: []
 script: |
 
   WRAP_DIR=$HOME/wrapped
-  HOSTS="arm-linux-android aarch64-linux-android"
+  HOSTS="aarch64-linux-android"
   FAKETIME_HOST_PROGS="clang clang++ ar nm"
   FAKETIME_PROGS="date"
   HOST_CFLAGS="-O2 -g"
@@ -92,7 +92,7 @@ script: |
 
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
   export PATH="$HOME/.cargo/bin:$PATH"
-  rustup target add aarch64-linux-android armv7-linux-androideabi
+  rustup target add aarch64-linux-android
 
   git config --global core.abbrev 9
   cd shekyl

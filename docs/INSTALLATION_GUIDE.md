@@ -151,19 +151,23 @@ cd Shekyl
 make release-static-win64
 ```
 
-> **Do not build 32-bit Shekyl.** `make release-static-win32` is
-> still present in the `Makefile` but is scheduled for removal in
-> V3.2 (Chore #3). Shekyl's post-quantum primitives (ML-KEM-768,
-> ML-DSA-65) rely on 64-bit arithmetic for their constant-time
-> guarantees; on 32-bit targets the compiler decomposes every
-> `u64` operation into variable-time 32-bit sequences with
-> operand-dependent carry propagation, opening a published
-> timing-side-channel surface against which a Shekyl wallet's
-> private key is extractable by any attacker who can measure
-> operation timing. See `docs/STRUCTURAL_TODO.md` §"32-bit targets
-> cannot safely run Shekyl" for the full analysis. If your
-> hardware cannot run 64-bit Windows, Shekyl is not appropriate
-> for your machine.
+> **Shekyl is 64-bit only.** 32-bit build targets
+> (`release-static-win32`, `release-static-linux-i686`,
+> `release-static-android-armv7`, and the corresponding `depends`
+> triples) were permanently retired in v3.1.0-alpha.5 (Chore #3).
+> The C++-side configure refuses non-64-bit hosts via a top-level
+> `CMAKE_SIZEOF_VOID_P` gate, and the Rust workspace carries three
+> independent `compile_error!` tripwires against `target_pointer_width
+> != 64`. Shekyl's post-quantum primitives (ML-KEM-768 via `fips203`,
+> ML-DSA-65 via `fips204`) state their constant-time guarantees
+> against native 64-bit arithmetic; on 32-bit targets the compiler
+> emits libgcc helpers (`__muldi3`, `__udivdi3`, `__ashldi3`) with no
+> CT guarantee, plus variable-latency `u64` multiply on common
+> 32-bit ARM cores — the exact threat model exploited by KyberSlash
+> (Bernstein et al., 2024). See `docs/CHANGELOG.md` entry "Retired
+> 32-bit build targets" and the audit-trail closure for the full
+> argument. If your hardware cannot run 64-bit, Shekyl is not
+> appropriate for your machine.
 
 ---
 

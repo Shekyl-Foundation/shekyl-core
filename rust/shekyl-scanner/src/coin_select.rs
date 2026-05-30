@@ -111,8 +111,8 @@ pub fn select_outputs(
     }
 
     // Sort non-dust by amount descending (greedy: big outputs first)
-    non_dust.sort_by(|a, b| b.1.cmp(&a.1));
-    dust.sort_by(|a, b| b.1.cmp(&a.1));
+    non_dust.sort_by_key(|b| std::cmp::Reverse(b.1));
+    dust.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     let mut selected: Vec<usize> = Vec::new();
     let mut total: u64 = 0;
@@ -173,8 +173,9 @@ pub fn select_outputs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ledger_ext::TransferDetailsExt;
     use crate::tests::staking::make_wallet_output;
-    use crate::transfer::TransferDetails;
+    use shekyl_engine_state::TransferDetails;
 
     fn make_candidate(global_idx: u64, amount: u64, height: u64) -> TransferDetails {
         let mut tx_hash = [0u8; 32];

@@ -61,7 +61,8 @@ using namespace epee;
 #include "string_coding.h"
 #include "string_tools.h"
 #include "crypto/hash.h"
-#include "mnemonics/electrum-words.h"
+#include "memwipe.h"
+#include "shekyl/shekyl_ffi.h"
 #include "rpc/rpc_args.h"
 #include "rpc/core_rpc_server_commands_defs.h"
 #include "fee_priority.h"
@@ -160,7 +161,7 @@ namespace
     {
       const uint64_t now = time(NULL);
       if (unlock_time > now)
-        entry.suggested_confirmations_threshold = std::max(entry.suggested_confirmations_threshold, (unlock_time - now + DIFFICULTY_TARGET_V2 - 1) / DIFFICULTY_TARGET_V2);
+        entry.suggested_confirmations_threshold = std::max(entry.suggested_confirmations_threshold, (unlock_time - now + SHEKYL_DAA_TARGET_SECONDS - 1) / SHEKYL_DAA_TARGET_SECONDS);
     }
   }
 }
@@ -1468,7 +1469,7 @@ namespace tools
       for (size_t n = 0; n < tx_constructions.size(); ++n)
       {
         const tools::wallet2::tx_construction_data &cd = tx_constructions[n];
-        res.desc.push_back({0, 0, std::numeric_limits<uint32_t>::max(), 0, {}, "", 0, "", 0, 0, ""});
+        res.desc.push_back({0, 0, 0, {}, "", 0, "", 0, 0, ""});
         wallet_rpc::COMMAND_RPC_DESCRIBE_TRANSFER::transfer_description &desc = res.desc.back();
         // Clear the recipients collection ready for this loop iteration
         tx_dests.clear();
@@ -1500,9 +1501,6 @@ namespace tools
         for (size_t s = 0; s < cd.sources.size(); ++s)
         {
           desc.amount_in += cd.sources[s].amount;
-          size_t ring_size = cd.sources[s].outputs.size();
-          if (ring_size < desc.ring_size)
-            desc.ring_size = ring_size;
         }
         for (size_t d = 0; d < cd.splitted_dsts.size(); ++d)
         {
@@ -2206,7 +2204,14 @@ namespace tools
 
       if (req.key_type.compare("mnemonic") == 0)
       {
-        epee::wipeable_string seed;
+        // Phase 1 rewire per `docs/design/ELECTRUM_WORDS_REMOVAL.md`
+        // §4.5: the dispatch reads the persisted 32-byte BIP-39
+        // entropy via `wallet2::bip39_entropy()` and calls
+        // `shekyl_bip39_mnemonic_from_entropy` directly. The legacy
+        // `wallet2::get_seed` (Electrum-words) is no longer reachable
+        // from this site (it is dead-but-extant until Phase 4
+        // Commit A). The RPC layer does not expose a passphrase
+        // parameter, so the §4.5.1 Surface B hard-error is FFI-only.
         if (m_wallet->watch_only())
         {
           er.code = WALLET_RPC_ERROR_CODE_WATCH_ONLY;
@@ -2214,19 +2219,35 @@ namespace tools
           return false;
         }
         CHECK_IF_BACKGROUND_SYNCING();
-        if (!m_wallet->is_deterministic())
-        {
-          er.code = WALLET_RPC_ERROR_CODE_NON_DETERMINISTIC;
-          er.message = "The wallet is non-deterministic. Cannot display seed.";
-          return false;
-        }
-        if (!m_wallet->get_seed(seed))
+        const auto& entropy_opt = m_wallet->bip39_entropy();
+        if (!entropy_opt)
         {
           er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-          er.message = "Failed to get seed.";
+          er.message = "this wallet was not created from a BIP-39 mnemonic; the mnemonic phrase is not available";
           return false;
         }
-        res.key = std::string(seed.data(), seed.size()); // send to the network, then wipe RAM :D
+        uint8_t phrase_buf[512] = {0};
+        size_t phrase_len = 0;
+        const bool ok = shekyl_bip39_mnemonic_from_entropy(
+            entropy_opt->data(),
+            phrase_buf, sizeof(phrase_buf), &phrase_len);
+        if (!ok)
+        {
+          memwipe(phrase_buf, sizeof(phrase_buf));
+          er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
+          er.message = "Failed to recover BIP-39 mnemonic from entropy";
+          return false;
+        }
+        {
+          epee::wipeable_string phrase_wipe(
+              reinterpret_cast<const char*>(phrase_buf), phrase_len);
+          // send to the network, then wipe RAM :D (the RPC layer
+          // copies the phrase into `res.key` which is a plain
+          // `std::string` and is wipe-deferred per §4.7's documented
+          // residue at the RPC boundary).
+          res.key = std::string(phrase_wipe.data(), phrase_wipe.size());
+        }
+        memwipe(phrase_buf, sizeof(phrase_buf));
       }
       else if(req.key_type.compare("view_key") == 0)
       {
@@ -2316,31 +2337,7 @@ namespace tools
     try
     {
       PRE_VALIDATE_BACKGROUND_SYNC();
-      crypto::secret_key spend_secret_key = crypto::null_skey;
-
-      // Load the spend key from seed if seed is provided
-      if (!req.seed.empty())
-      {
-        crypto::secret_key recovery_key;
-        std::string language;
-
-        if (!crypto::ElectrumWords::words_to_bytes(req.seed, recovery_key, language))
-        {
-          er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-          er.message = "Electrum-style word list failed verification";
-          return false;
-        }
-
-        if (!req.seed_offset.empty())
-          recovery_key = cryptonote::decrypt_key(recovery_key, req.seed_offset);
-
-        // generate spend key
-        cryptonote::account_base account;
-        account.generate(recovery_key, true, false);
-        spend_secret_key = account.get_keys().m_spend_secret_key;
-      }
-
-      m_wallet->stop_background_sync(req.wallet_password, spend_secret_key);
+      m_wallet->stop_background_sync(req.wallet_password, crypto::null_skey);
     }
     catch (...)
     {
@@ -3600,13 +3597,6 @@ namespace tools
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------
-  bool wallet_rpc_server::on_get_languages(const wallet_rpc::COMMAND_RPC_GET_LANGUAGES::request& req, wallet_rpc::COMMAND_RPC_GET_LANGUAGES::response& res, epee::json_rpc::error& er, const connection_context *ctx)
-  {
-    crypto::ElectrumWords::get_language_list(res.languages, true);
-    crypto::ElectrumWords::get_language_list(res.languages_local, false);
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
   bool wallet_rpc_server::on_create_wallet(const wallet_rpc::COMMAND_RPC_CREATE_WALLET::request& req, wallet_rpc::COMMAND_RPC_CREATE_WALLET::response& res, epee::json_rpc::error& er, const connection_context *ctx)
   {
     if (m_wallet_dir.empty())
@@ -3633,14 +3623,6 @@ namespace tools
     }
     std::string wallet_file = req.filename.empty() ? "" : (m_wallet_dir + "/" + req.filename);
     {
-      if (!crypto::ElectrumWords::is_valid_language(req.language))
-      {
-        er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-        er.message = "Unknown language: " + req.language;
-        return false;
-      }
-    }
-    {
       po::options_description desc("dummy");
       const command_line::arg_descriptor<std::string, true> arg_password = {"password", "password"};
       const char *argv[4];
@@ -3660,7 +3642,6 @@ namespace tools
       er.message = "Failed to create wallet";
       return false;
     }
-    wal->set_seed_language(req.language);
     cryptonote::COMMAND_RPC_GET_HEIGHT::request hreq;
     cryptonote::COMMAND_RPC_GET_HEIGHT::response hres;
     hres.height = 0;
@@ -4052,17 +4033,6 @@ namespace tools
       return false;
     }
 
-    if (!req.language.empty())
-    {
-      if (!crypto::ElectrumWords::is_valid_language(req.language))
-      {
-        er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-        er.message = "The specified seed language is invalid.";
-        return false;
-      }
-      wal->set_seed_language(req.language);
-    }
-
     // set blockheight if given
     try
     {
@@ -4079,188 +4049,6 @@ namespace tools
       delete m_wallet;
     m_wallet = wal.release();
     res.address = m_wallet->get_account().get_public_address_str(m_wallet->nettype());
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool wallet_rpc_server::on_restore_deterministic_wallet(const wallet_rpc::COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET::request &req, wallet_rpc::COMMAND_RPC_RESTORE_DETERMINISTIC_WALLET::response &res, epee::json_rpc::error &er, const connection_context *ctx)
-  {
-    if (m_wallet_dir.empty())
-    {
-      er.code = WALLET_RPC_ERROR_CODE_NO_WALLET_DIR;
-      er.message = "No wallet dir configured";
-      return false;
-    }
-
-    // early check for mandatory fields
-    if (req.seed.empty())
-    {
-      er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-      er.message = "field 'seed' is mandatory. Please provide a seed you want to restore from.";
-      return false;
-    }
-
-    namespace po = boost::program_options;
-    po::variables_map vm2;
-    const char *ptr = strchr(req.filename.c_str(), '/');
-  #ifdef _WIN32
-    if (!ptr)
-      ptr = strchr(req.filename.c_str(), '\\');
-    if (!ptr)
-      ptr = strchr(req.filename.c_str(), ':');
-  #endif
-    if (ptr)
-    {
-      er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-      er.message = "Invalid filename";
-      return false;
-    }
-    std::string wallet_file = req.filename.empty() ? "" : (m_wallet_dir + "/" + req.filename);
-    // check if wallet file already exists
-    if (!wallet_file.empty())
-    {
-      try
-      {
-        std::error_code ignored_ec;
-        THROW_WALLET_EXCEPTION_IF(std::filesystem::exists(wallet_file, ignored_ec), error::file_exists, wallet_file);
-      }
-      catch (const std::exception &e)
-      {
-        er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-        er.message = "Wallet already exists.";
-        return false;
-      }
-    }
-    crypto::secret_key recovery_key;
-    std::string old_language;
-
-    // check the given seed
-    if (!crypto::ElectrumWords::words_to_bytes(req.seed, recovery_key, old_language))
-    {
-      er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-      er.message = "Electrum-style word list failed verification";
-      return false;
-    }
-    if (m_wallet && req.autosave_current)
-    {
-      try
-      {
-        m_wallet->store();
-      }
-      catch (const std::exception &e)
-      {
-        handle_rpc_exception(std::current_exception(), er, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
-        return false;
-      }
-    }
-
-    // process seed_offset if given
-    {
-      if (!req.seed_offset.empty())
-      {
-        recovery_key = cryptonote::decrypt_key(recovery_key, req.seed_offset);
-      }
-    }
-    {
-      po::options_description desc("dummy");
-      const command_line::arg_descriptor<std::string, true> arg_password = {"password", "password"};
-      const char *argv[4];
-      int argc = 3;
-      argv[0] = "wallet-rpc";
-      argv[1] = "--password";
-      argv[2] = req.password.c_str();
-      argv[3] = NULL;
-      vm2 = *m_vm;
-      command_line::add_arg(desc, arg_password);
-      po::store(po::parse_command_line(argc, argv, desc), vm2);
-    }
-
-    auto rc = tools::wallet2::make_new(vm2, true, nullptr);
-    std::unique_ptr<wallet2> wal;
-    wal = std::move(rc.first);
-    if (!wal)
-    {
-      er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-      er.message = "Failed to create wallet";
-      return false;
-    }
-
-    epee::wipeable_string password = rc.second.password();
-
-    bool was_deprecated_wallet = ((old_language == crypto::ElectrumWords::old_language_name) ||
-                                  crypto::ElectrumWords::get_is_old_style_seed(req.seed));
-
-    std::string mnemonic_language = old_language;
-    if (was_deprecated_wallet)
-    {
-      // The user had used an older version of the wallet with old style mnemonics.
-      res.was_deprecated = true;
-    }
-
-    if (old_language == crypto::ElectrumWords::old_language_name)
-    {
-      if (req.language.empty())
-      {
-        er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-        er.message = "Wallet was using the old seed language. You need to specify a new seed language.";
-        return false;
-      }
-      if (!crypto::ElectrumWords::is_valid_language(req.language))
-      {
-        er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-        er.message = "Wallet was using the old seed language, and the specified new seed language is invalid.";
-        return false;
-      }
-      mnemonic_language = req.language;
-    }
-
-    wal->set_seed_language(mnemonic_language);
-
-    crypto::secret_key recovery_val;
-    try
-    {
-      recovery_val = wal->generate(wallet_file, std::move(rc.second).password(), recovery_key, true, false, false);
-      MINFO("Wallet has been restored.\n");
-    }
-    catch (const std::exception &e)
-    {
-      handle_rpc_exception(std::current_exception(), er, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
-      return false;
-    }
-
-    // // Convert the secret key back to seed
-    epee::wipeable_string electrum_words;
-    if (!crypto::ElectrumWords::bytes_to_words(recovery_val, electrum_words, mnemonic_language))
-    {
-      er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-      er.message = "Failed to encode seed";
-      return false;
-    }
-    res.seed = std::string(electrum_words.data(), electrum_words.size());
-
-    if (!wal)
-    {
-      er.code = WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR;
-      er.message = "Failed to generate wallet";
-      return false;
-    }
-
-    // set blockheight if given
-    try
-    {
-      wal->set_refresh_from_block_height(req.restore_height);
-      wal->rewrite(wallet_file, password);
-    }
-    catch (const std::exception &e)
-    {
-      handle_rpc_exception(std::current_exception(), er, WALLET_RPC_ERROR_CODE_UNKNOWN_ERROR);
-      return false;
-    }
-
-    if (m_wallet)
-      delete m_wallet;
-    m_wallet = wal.release();
-    res.address = m_wallet->get_account().get_public_address_str(m_wallet->nettype());
-    res.info = "Wallet has been restored successfully.";
     return true;
   }
   //------------------------------------------------------------------------------------------------------------------------------

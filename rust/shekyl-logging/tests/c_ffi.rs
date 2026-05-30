@@ -250,8 +250,8 @@ fn c_harness_links_and_runs_against_staticlib() {
     std::fs::write(&c_src, C_HARNESS).expect("write harness source");
     let exe = tmp.path().join("harness");
 
-    let status = compile_and_link_harness(&c_src, &static_lib, &exe, &cc_path)
-        .expect("invoke C compiler");
+    let status =
+        compile_and_link_harness(&c_src, &static_lib, &exe, &cc_path).expect("invoke C compiler");
     assert!(status.success(), "C compiler+linker failed: {status}");
 
     let output = Command::new(&exe)

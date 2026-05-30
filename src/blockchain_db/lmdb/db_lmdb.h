@@ -586,15 +586,10 @@ private:
   mdb_txn_cursors m_wcursors;
   mutable boost::thread_specific_ptr<mdb_threadinfo> m_tinfo;
 
-#if defined(__arm__)
-  // force a value so it can compile with 32-bit ARM
-  constexpr static uint64_t DEFAULT_MAPSIZE = 1LL << 31;
-#else
 #if defined(ENABLE_AUTO_RESIZE)
   constexpr static uint64_t DEFAULT_MAPSIZE = 1LL << 30;
 #else
   constexpr static uint64_t DEFAULT_MAPSIZE = 1LL << 33;
-#endif
 #endif
 
   constexpr static float RESIZE_PERCENT = 0.9f;

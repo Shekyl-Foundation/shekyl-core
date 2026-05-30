@@ -40,16 +40,36 @@ jobs:
       - uses: actions/checkout@v5
       - name: reject eprintln!/dbg!/println! in production Rust
         run: |
+          # Strip line-comments (`//`, `///`, `//!`) before grepping so
+          # doc-comments referencing the macros for *educational* reasons
+          # — e.g. `/// would print bytes via dbg!() calls` — do not trip
+          # the lint. The script's intent is "no debug-macro *invocations*
+          # in production code"; a literal call requires `macro!(` and is
+          # uneditable through comment text. False negatives from a
+          # `dbg!(` substring inside a string literal are accepted as a
+          # contrived corner case.
+          # `*/src/bin/*` excluded because tooling binaries (e.g.
+          # `shekyl-randomx-differential::src/bin/gen_canonical_outputs.rs`,
+          # per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.1.5) emit
+          # operator-facing diagnostics + canonical Rust source on stdout;
+          # the lint's "no debug macros in production Rust" framing is
+          # designed against library code, not CLI tools whose contract is
+          # to print. The exclusion is the same shape as `main.rs` (also
+          # excluded above): binary-target source whose `println!` /
+          # `eprintln!` calls are part of the documented surface.
           FOUND=0
           for f in $(find rust/shekyl-*/src -name '*.rs' \
                      ! -name 'build.rs' ! -name 'main.rs' ! -path '*/examples/*' \
+                     ! -path '*/src/bin/*' \
                      ! -path '*/shekyl-cli/*'); do
             TEST_LINE=$(grep -n '#\[cfg(test)\]' "$f" | head -1 | cut -d: -f1)
             if [ -n "$TEST_LINE" ]; then
               HITS=$(head -n "$((TEST_LINE - 1))" "$f" \
-                     | grep -n 'eprintln!\|dbg!\|println!' || true)
+                     | sed 's|//.*||' \
+                     | grep -n 'eprintln!(\|dbg!(\|println!(' || true)
             else
-              HITS=$(grep -n 'eprintln!\|dbg!\|println!' "$f" || true)
+              HITS=$(sed 's|//.*||' "$f" \
+                     | grep -n 'eprintln!(\|dbg!(\|println!(' || true)
             fi
             if [ -n "$HITS" ]; then
               echo "$f:"
@@ -62,6 +82,10 @@ jobs:
             exit 1
           fi
           echo "No debug macros in production Rust — OK"
+      - name: enforce RandomX FPU rounding primitive scope
+        run: scripts/ci/check_randomx_fpu_rounding.sh
+      - name: enforce RandomX crate-level isolation invariants
+        run: scripts/ci/check_randomx_crate_invariants.sh
       - name: reject BOOST_FOREACH in C++
         run: |
           HITS=$(grep -rn 'BOOST_FOREACH' src/ tests/ --include='*.cpp' --include='*.h' --include='*.hpp' || true)
@@ -126,7 +150,7 @@ jobs:
         run: |
           brew uninstall cmake
           brew update
-          brew install --quiet cmake boost hidapi openssl libpgm miniupnpc expat libunwind-headers protobuf abseil ccache zstd
+          brew install --quiet cmake boost hidapi openssl unbound libpgm miniupnpc expat libunwind-headers protobuf abseil ccache zstd
       - uses: dtolnay/rust-toolchain@stable
       - name: build
         run: |
@@ -423,7 +447,15 @@ jobs:
       - name: archive
         run: |
           pip install git-archive-all
-          export VERSION="shekyl-$(git describe)"
+          # Restrict `git describe` to release tags (`v*`). Otherwise the
+          # `archive/<branch>-<date>` annotated tags created by the
+          # branch-archival policy in `.cursor/rules/06-branching.mdc` rule 5
+          # become the closest reachable tag once they land on a commit
+          # ancestor of the branch under test, and `VERSION` ends up
+          # containing a `/` (e.g. `shekyl-archive/<branch>-<date>`), which
+          # makes `git-archive-all` write to a non-existent directory and
+          # fails the job with `[Errno 2] No such file or directory`.
+          export VERSION="shekyl-$(git describe --match 'v*')"
           export OUTPUT="$VERSION.tar"
           echo "OUTPUT=$OUTPUT" >> $GITHUB_ENV
           git-archive-all --prefix "$VERSION/" --force-submodules "$OUTPUT"
@@ -448,8 +480,6 @@ jobs:
         run: apt -y install build-essential git curl pkg-config libssl-dev
       - name: install Rust
         run: ${{env.INSTALL_RUST}}
-      - name: install cargo-audit
-        run: cargo install cargo-audit --locked
       - name: configure git
         run: git config --global --add safe.directory '*'
       - uses: actions/checkout@v5
@@ -506,26 +536,126 @@ jobs:
             exit 1
           fi
           echo "Fuzz harness inventory smoke gate passed (${#REQUIRED_TARGETS[@]} targets present)."
-      - uses: actions/cache@v5
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            rust/target
-          key: rust-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: rust-
+          # Workspace at rust/ with target dir at rust/target/.
+          # Swatinem auto-caches ~/.cargo/{registry,git,bin} plus the
+          # workspace target/. The default cache key already mixes
+          # rustc version + Cargo.lock hash + a per-job component, so
+          # toolchain bumps (e.g. 1.94.0 -> 1.95.0) and lockfile-only
+          # diffs (e.g. deps/bump-rand-to-0.8.6) get correctly-scoped
+          # invalidation. Replaces the prior actions/cache@v5 block,
+          # which had three known waste modes documented in
+          # docs/CI_TIMING_BASELINE.md:
+          #   - ~8m post-job upload of the entire target/ even when
+          #     only a few crates changed (Swatinem only writes deltas).
+          #   - No rustc-version key component (so a 1.94 -> 1.95 bump
+          #     would have silently restored a 1.94-built target/).
+          #   - No ~/.cargo/bin caching (cargo-audit reinstalled from
+          #     source every run, ~2m30s).
+          workspaces: rust -> target
+      - name: install cargo-audit
+        # `cargo install --locked` is idempotent: on Swatinem cache
+        # hits the binary is already present in ~/.cargo/bin and this
+        # step exits in a few seconds rather than recompiling from
+        # source. Moved here from pre-checkout so the cache restore
+        # has a chance to populate ~/.cargo/bin first.
+        run: cargo install cargo-audit --locked
       - name: cargo audit
         working-directory: rust
-        run: cargo audit
+        run: |
+          # Retry wrapper: `cargo audit` fetches the RustSec advisory DB
+          # from https://github.com/RustSec/advisory-db.git on every run.
+          # That endpoint occasionally returns HTTP 500 under load; the
+          # failure is transient and unrelated to our Cargo.lock.
+          # Three attempts with backoff cover the common infra-flake window.
+          # A genuine advisory hit will still fail every attempt (the audit
+          # logic is deterministic given a successful DB fetch), so this
+          # does not mask real findings — it only burns ~30s extra CI time
+          # before re-reporting the hit on a permanent fail.
+          for attempt in 1 2 3; do
+            if cargo audit; then
+              exit 0
+            fi
+            echo "cargo audit attempt ${attempt} failed; retrying in $((attempt * 10))s" >&2
+            sleep $((attempt * 10))
+          done
+          echo "cargo audit failed after 3 attempts" >&2
+          exit 1
+      - name: cargo fmt --check (workspace)
+        working-directory: rust
+        # Fails CI on any unformatted Rust file. Pairs with the clippy
+        # gate below; both land together in chore/workspace-fmt-clippy-
+        # baseline. Pre-existing fmt debt was discharged in that PR's
+        # first commit (`cargo fmt --all` over the whole workspace) and
+        # the .cursor/rules/15-deletion-and-debt.mdc carve-out
+        # (refined in the same commit) makes "leave the file you
+        # touched fmt-clean" the going-forward expectation.
+        run: cargo fmt --all -- --check
+      - name: cargo clippy -D warnings (workspace, all targets)
+        working-directory: rust
+        # Fails CI on any clippy finding (warning or error). The
+        # workspace's [lints.clippy] section in rust/Cargo.toml already
+        # configures many lints at deny-level (let_underscore_must_use,
+        # cast_possible_truncation, uninlined_format_args, …); this
+        # gate adds `-D warnings` so the remaining default-warn lints
+        # (clone_on_copy, type_complexity, dead_code, …) are equally
+        # enforced. `--keep-going` collects findings across the whole
+        # workspace in one pass instead of stopping at the first crate's
+        # first error, so reviewers see the full triage in one log.
+        run: cargo clippy --workspace --all-targets --keep-going -- -D warnings
       - name: build shekyl-fcmp crate
         working-directory: rust
         run: cargo build --locked -p shekyl-fcmp
       - name: cargo test (all workspace crates)
         working-directory: rust
-        run: cargo test --locked --workspace
+        # `shekyl-randomx-differential` excluded from the workspace-wide
+        # test because its `c_oracle` module links against the C
+        # reference's `librandomx.a` via `randomx-v2-sys`, which requires
+        # the `RANDOMX_V2_INSTALL_DIR` env var to point at a CMake-built
+        # install prefix (per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md`
+        # §5.1.16 + §5.2.2 R5-D2). The `rust-audit-and-test` job does not
+        # configure CMake or build the C library; that work lives in the
+        # dedicated `.github/workflows/randomx-v2-differential.yml`
+        # workflow (per §5.5.1 + R1-D12), which builds the C library and
+        # runs `cargo test -p shekyl-randomx-differential` with the env
+        # var set. Excluding here is the discipline-correct shape:
+        # workspace-wide test asserts every crate that builds in the
+        # bare-Rust environment passes; the differential harness asserts
+        # under its own substrate-correct environment.
+        run: cargo test --locked --workspace --exclude shekyl-randomx-differential
       - name: "Gate 1: proptest (--release for speed)"
         working-directory: rust
         run: cargo test --locked --release -p shekyl-crypto-pq --test prop_round_trip
+      - name: "Gate 2: shekyl-pow-randomx debug-vs-release equivalence"
+        # Per `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.11.3 R4:
+        # Rust integer-overflow semantics differ between debug (panic)
+        # and release (wrapping). The verifier ships release. Any 2c
+        # arithmetic that accidentally uses `+`/`*` where it should use
+        # `wrapping_add`/`wrapping_mul` is invisible to debug-mode
+        # `cargo test` but produces a different hash for overflow
+        # inputs in release. The T1-T8 spec-vector tests (commit 7)
+        # contain byte-equality assertions against fork-generated
+        # fixtures; re-running them under `--release` asserts that
+        # release-profile output matches debug-profile output (both
+        # match the fork). Any divergence fails the PR.
+        #
+        # Cost: ~50 s additional CI wall-clock (measured on the
+        # i9-11950H reference machine; CI hardware likely differs).
+        # The §5.11.3 cost estimate was ~30 s under the planned ~200 ms
+        # per-`Cache::derive` budget; R0-D12 (see
+        # `docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §14 + `BENCH_RESULTS.md`)
+        # measured ~341 ms median, which inflates T1''s 100-iteration
+        # determinism property test from ~26 s → ~34 s and pushes total
+        # release-test wall-clock to ~47 s. The cost increase is
+        # acceptable: T1'/T2'/T3'–T8' determinism properties are
+        # plan-doc-mandated per §5.11.1 with an explicit reopening
+        # criterion that names the audits-are-clean-so-compress anti-
+        # pattern, i.e. "remove the non-determinism source, not the
+        # property test." Acceptable for the consensus-split-bug class
+        # this gate catches.
+        working-directory: rust
+        run: cargo test --locked --release -p shekyl-pow-randomx
       - name: Bech32m address encoding tests
         working-directory: rust
         run: cargo test --locked -p shekyl-crypto-pq -- address
@@ -602,7 +732,7 @@ jobs:
             echo "$DIRECT"
           fi
           # Fail if any shekyl crate has a normal dependency on the 0.4 line
-          for crate in shekyl-ffi shekyl-fcmp shekyl-crypto-pq shekyl-proofs shekyl-tx-builder shekyl-scanner shekyl-wallet-rpc shekyl-daemon-rpc; do
+          for crate in shekyl-ffi shekyl-fcmp shekyl-crypto-pq shekyl-proofs shekyl-tx-builder shekyl-scanner shekyl-engine-rpc shekyl-daemon-rpc; do
             if cargo tree -p "$crate" --edges normal 2>/dev/null \
                | grep 'dalek-ff-group v0\.4'; then
               echo "FATAL: $crate has a normal (non-dev) dependency on dalek-ff-group 0.4"
@@ -622,3 +752,36 @@ jobs:
           echo "=== Build 2 ===" && cat /tmp/build2.sha256
           diff /tmp/build1.sha256 /tmp/build2.sha256 || (echo "FATAL: non-deterministic Rust build" && exit 1)
           echo "Determinism check PASSED"
+      - name: "rust-cache post-run ENOENT workaround (Swatinem/rust-cache#144)"
+        # Swatinem/rust-cache@v2's post-run cleanup walker
+        # (src/cleanup.ts cleanProfileTarget) treats any subdirectory
+        # of `target/` named `tests` as a kaos/macrotest/trybuild
+        # nested-workspace layout and recursively cleans both
+        # `tests/target/` and `tests/trybuild/`. The recursive
+        # cleanTargetDir calls are NOT awaited, so async ENOENT
+        # rejections on missing paths escape the synchronous
+        # try/catch and surface as `##[error]ENOENT: opendir
+        # rust/target/tests/target` annotations in the job summary.
+        #
+        # The error is non-fatal (the action continues, the job
+        # concludes success), but the annotation pollutes the run
+        # summary and obscures real errors. Upstream issue:
+        #   https://github.com/Swatinem/rust-cache/issues/144 (open
+        #   since 2023, no merged fix)
+        #
+        # Why we hit it: rust/shekyl-logging/tests/trybuild.rs uses
+        # dtolnay/trybuild, which creates rust/target/tests/trybuild/.
+        # We do NOT use kaos/macrotest, so rust/target/tests/target/
+        # never gets created. Swatinem's walker tries it anyway.
+        #
+        # Workaround: pre-create the empty directory so the action's
+        # opendir call succeeds (and finds nothing to clean). Cache
+        # cost: a single empty directory entry, negligible.
+        #
+        # Removal condition: when Swatinem/rust-cache merges either
+        # the proposed `if (e.code === "ENOENT") continue;` patch or
+        # adds `await` to the recursive cleanTargetDir calls in
+        # cleanProfileTarget, this step can be deleted in the same
+        # PR that bumps the action pin.
+        if: always()
+        run: mkdir -p rust/target/tests/target

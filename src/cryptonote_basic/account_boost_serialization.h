@@ -44,7 +44,13 @@ namespace boost
       a & x.m_account_address;
       a & x.m_spend_secret_key;
       a & x.m_view_secret_key;
-      a & x.m_pqc_secret_key;
+      // v1 persistent derivation state. Pre-v1 archives that still carry
+      // the legacy m_pqc_secret_key field (appended after m_view_secret_key
+      // on disk in any wallet saved by an earlier commit of this branch)
+      // cannot be read here; wallet2.cpp::load_keys refuses such archives
+      // with a clear "please restore from seed" error.
+      a & x.m_master_seed_64;
+      a & x.m_seed_format;
     }
 
     template <class Archive>

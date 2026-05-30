@@ -3,6 +3,7 @@ name = "shekyl-daemon-rpc"
 description = "Rust daemon RPC server over C++ core_rpc_server via FFI"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [lib]

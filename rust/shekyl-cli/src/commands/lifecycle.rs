@@ -3,12 +3,12 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Wallet lifecycle commands: create, open, close, restore.
+//! Engine lifecycle commands: create, open, close, restore.
 
-use crate::wallet::WalletContext;
+use crate::engine::EngineContext;
 use zeroize::Zeroize;
 
-pub fn cmd_create(ctx: &WalletContext, args: &[&str]) {
+pub fn cmd_create(ctx: &EngineContext, args: &[&str]) {
     if !super::require_closed(ctx) {
         return;
     }
@@ -19,7 +19,7 @@ pub fn cmd_create(ctx: &WalletContext, args: &[&str]) {
             return;
         }
     };
-    let Some(mut password) = super::read_password("New wallet password: ") else {
+    let Some(mut password) = super::read_password("New engine password: ") else {
         return;
     };
     let Some(confirm) = super::read_password("Confirm password: ") else {
@@ -34,13 +34,13 @@ pub fn cmd_create(ctx: &WalletContext, args: &[&str]) {
     drop(confirm);
 
     match ctx.create(filename, &password, "English") {
-        Ok(()) => println!("Wallet created: {filename}"),
-        Err(e) => eprintln!("Failed to create wallet: {e}"),
+        Ok(()) => println!("Engine created: {filename}"),
+        Err(e) => eprintln!("Failed to create engine: {e}"),
     }
     password.zeroize();
 }
 
-pub fn cmd_open(ctx: &WalletContext, args: &[&str]) {
+pub fn cmd_open(ctx: &EngineContext, args: &[&str]) {
     if !super::require_closed(ctx) {
         return;
     }
@@ -51,28 +51,28 @@ pub fn cmd_open(ctx: &WalletContext, args: &[&str]) {
             return;
         }
     };
-    let Some(mut password) = super::read_password("Wallet password: ") else {
+    let Some(mut password) = super::read_password("Engine password: ") else {
         return;
     };
 
     match ctx.open(filename, &password) {
-        Ok(()) => println!("Opened wallet: {filename}"),
-        Err(e) => eprintln!("Failed to open wallet: {e}"),
+        Ok(()) => println!("Opened engine: {filename}"),
+        Err(e) => eprintln!("Failed to open engine: {e}"),
     }
     password.zeroize();
 }
 
-pub fn cmd_close(ctx: &WalletContext) {
+pub fn cmd_close(ctx: &EngineContext) {
     if !super::require_open(ctx) {
         return;
     }
     match ctx.close() {
-        Ok(()) => println!("Wallet closed."),
-        Err(e) => eprintln!("Failed to close wallet: {e}"),
+        Ok(()) => println!("Engine closed."),
+        Err(e) => eprintln!("Failed to close engine: {e}"),
     }
 }
 
-pub fn cmd_restore(ctx: &WalletContext, args: &[&str]) {
+pub fn cmd_restore(ctx: &EngineContext, args: &[&str]) {
     if !super::require_closed(ctx) {
         return;
     }
@@ -83,7 +83,7 @@ pub fn cmd_restore(ctx: &WalletContext, args: &[&str]) {
     let filename = args[0];
     let seed = args[1..].join(" ");
 
-    let Some(mut password) = super::read_password("New wallet password: ") else {
+    let Some(mut password) = super::read_password("New engine password: ") else {
         return;
     };
 
@@ -99,18 +99,18 @@ pub fn cmd_restore(ctx: &WalletContext, args: &[&str]) {
     match ctx.restore_from_seed(filename, &seed, &password, "English", restore_height, "") {
         Ok(val) => {
             if let Some(addr) = val.get("address").and_then(|a| a.as_str()) {
-                println!("Wallet restored: {filename}");
+                println!("Engine restored: {filename}");
                 println!("Address: {addr}");
             } else {
-                println!("Wallet restored: {filename}");
+                println!("Engine restored: {filename}");
             }
         }
-        Err(e) => eprintln!("Failed to restore wallet: {e}"),
+        Err(e) => eprintln!("Failed to restore engine: {e}"),
     }
     password.zeroize();
 }
 
-pub fn cmd_refresh(ctx: &WalletContext) {
+pub fn cmd_refresh(ctx: &EngineContext) {
     if !super::require_open(ctx) {
         return;
     }
@@ -121,26 +121,26 @@ pub fn cmd_refresh(ctx: &WalletContext) {
     }
 }
 
-pub fn cmd_save(ctx: &WalletContext) {
+pub fn cmd_save(ctx: &EngineContext) {
     if !super::require_open(ctx) {
         return;
     }
     match ctx.store() {
-        Ok(()) => println!("Wallet saved."),
-        Err(e) => eprintln!("Failed to save wallet: {e}"),
+        Ok(()) => println!("Engine saved."),
+        Err(e) => eprintln!("Failed to save engine: {e}"),
     }
 }
 
-pub fn cmd_status(ctx: &WalletContext) {
+pub fn cmd_status(ctx: &EngineContext) {
     if ctx.is_open() {
-        println!("Wallet: open");
+        println!("Engine: open");
         println!("Height: {}", ctx.get_height());
     } else {
-        println!("Wallet: not open");
+        println!("Engine: not open");
     }
 }
 
-pub fn cmd_password(ctx: &WalletContext) {
+pub fn cmd_password(ctx: &EngineContext) {
     if !super::require_open(ctx) {
         return;
     }
@@ -190,14 +190,14 @@ pub fn cmd_password(ctx: &WalletContext) {
     new_pw.zeroize();
 }
 
-pub fn cmd_rescan(ctx: &WalletContext, hard: bool) {
+pub fn cmd_rescan(ctx: &EngineContext, hard: bool) {
     if !super::require_open(ctx) {
         return;
     }
 
     if hard {
         eprintln!(
-            "WARNING: Hard rescan will reset the wallet's transaction history metadata.\n\
+            "WARNING: Hard rescan will reset the engine's transaction history metadata.\n\
              Balances will be recalculated but labels and notes will be lost."
         );
         if !super::confirm_dangerous(

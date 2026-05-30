@@ -1,0 +1,51 @@
+AesHash1R derived test vector — hash_1r_uniform128.bin
+======================================================
+
+Spec attestation
+----------------
+Cross-checks shekyl-pow-randomx's `aes::hash_aes_1r_x4` against the
+v2 RandomX fork's `hashAes1Rx4<softAes=true>`. Per
+`external/randomx-v2/doc/specs.md` §3.4 (=
+`external/randomx-v2/src/aes_hash.cpp:67`), AesHash1R produces a
+512-bit hash of `input` by treating it as a stream of 64-byte
+chunks, absorbing each chunk into four lanes initialised from the
+`AES_HASH_1R_STATE0..STATE3` spec constants, then applying two
+extra rounds with `AES_HASH_1R_XKEY0` and `AES_HASH_1R_XKEY1` to
+achieve full diffusion. Per-64-byte-chunk per-lane operations:
+
+  lane 0 absorbs input[ 0..16) via cipher_round
+  lane 1 absorbs input[16..32) via equiv_inv_cipher_round
+  lane 2 absorbs input[32..48) via cipher_round
+  lane 3 absorbs input[48..64) via equiv_inv_cipher_round
+
+This vector exercises the uniform-input case: the same byte value
+in every position, with a 128-byte input (= 2 chunks) so both the
+absorb-loop body and the two-extra-rounds finalisation are on the
+critical path.
+
+Inputs (hardcoded in `_generator/gen.cpp` and the Rust test side)
+------------------------------------------------------------------
+input = [0x11; 128]
+
+Output layout
+-------------
+64 bytes = lane0 ‖ lane1 ‖ lane2 ‖ lane3 (each 16 bytes), in the
+order they were `rx_store_vec_i128`'d at `aes_hash.cpp:124-127`.
+
+Generator
+---------
+source      = ./_generator/gen.cpp
+build       = ./_generator/Makefile (`make gen`)
+command     = ./gen hash_1r_uniform128
+output_size = 64 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/aes_hash.cpp, src/soft_aes.cpp
+function    = hashAes1Rx4<true>(input, input_size, hash)
+
+Phase
+-----
+Phase 2b (`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §§6.1, 7 commit 4).

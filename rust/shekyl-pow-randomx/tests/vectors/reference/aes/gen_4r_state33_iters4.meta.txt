@@ -1,0 +1,59 @@
+AesGenerator4R derived test vector — gen_4r_state33_iters4.bin
+==============================================================
+
+Spec attestation
+----------------
+Cross-checks shekyl-pow-randomx's `aes::fill_aes_4r_x4` against the
+v2 RandomX fork's `fillAes4Rx4<softAes=true>`. Per
+`external/randomx-v2/doc/specs.md` §3.3 (=
+`external/randomx-v2/src/aes_hash.cpp:220`), AesGenerator4R fills
+its `output` buffer with PRNG bytes derived from a 64-byte state
+using **four** AES rounds per 64 bytes of output in four parallel
+lanes. Lane 0/1 use keys 0..3; lane 2/3 use keys 4..7; lanes 0/2
+apply `equiv_inv_cipher_round` and lanes 1/3 apply `cipher_round`.
+Per-iteration body (`aes_hash.cpp:255-274`):
+
+  for round in 0..4:
+    lane0 = equiv_inv_cipher_round(lane0, key[round + 0])
+    lane1 = cipher_round(           lane1, key[round + 0])
+    lane2 = equiv_inv_cipher_round(lane2, key[round + 4])
+    lane3 = cipher_round(           lane3, key[round + 4])
+  emit (lane0, lane1, lane2, lane3) as the next 64 bytes
+
+Per `aes_hash.cpp:282`, the final state is **NOT** written back; the
+Rust signature takes `state: &[u8; 64]` (shared, not mutable) to
+express this at the type level. This vector pins only the produced
+PRNG output; there is no `final_state` segment.
+
+Inputs (hardcoded in `_generator/gen.cpp` and the Rust test side)
+------------------------------------------------------------------
+initial state = [0x33; 64]
+iterations    = 4 (output size = 4 × 64 = 256 bytes)
+
+The KEY0..KEY7 constants come from `specs.md` §3.3 / `aes_hash.cpp:
+210-217` and are the two Blake2b-512-derived sequences already
+encoded in `src/aes.rs` as `AES_GEN_4R_KEY0..KEY7` via the
+`pack_le_u32x4` helper.
+
+Output layout
+-------------
+256 bytes = the 4 iterations' output bytes in emission order. No
+trailing `final_state` segment (cf. `gen_1r_state42_iters4.bin`).
+
+Generator
+---------
+source      = ./_generator/gen.cpp
+build       = ./_generator/Makefile (`make gen`)
+command     = ./gen gen_4r_state33_iters4
+output_size = 256 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/aes_hash.cpp, src/soft_aes.cpp
+function    = fillAes4Rx4<true>(state, output_size, buffer)
+
+Phase
+-----
+Phase 2b (`docs/design/RANDOMX_V2_PHASE2B_PLAN.md` §§6.1, 7 commit 4).

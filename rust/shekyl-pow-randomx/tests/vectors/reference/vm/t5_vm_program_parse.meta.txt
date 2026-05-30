@@ -1,0 +1,70 @@
+Phase 2c reference vector — t5_vm_program_parse.bin
+====================================================
+
+Spec attestation
+----------------
+T5 attests Rust program parsing byte-for-byte parity with the v2
+RandomX fork's `VmBase::generateProgram` for the 384-instruction
+Program parsed from `fillAes4Rx4(CANONICAL_TEMP_HASH)` output. The
+output buffer is the 3200 B fillAes4Rx4 output of which the first
+128 B is the entropy buffer (consumed by `initialize` per T4) and
+the trailing 3072 B is the 384 × 8-byte instruction stream.
+
+A T5 divergence isolates the per-instruction wire-format
+serialization (opcode / dst / src / mod / imm32 LE) from any
+downstream dispatch logic. T5 covers the parse-only path; T6 / T7 /
+T8 cover the iteration-loop substrate that consumes the parsed
+program.
+
+Per RANDOMX_V2_PHASE2C_PLAN.md §5.7 (F7 T5).
+
+Inputs (hardcoded in `_generator/phase2c/gen.cpp`)
+--------------------------------------------------
+seedhash  = [0x01, 0x02, ..., 0x20]  (32-byte canonical, for cache)
+temp_hash = CANONICAL_TEMP_HASH (64 B, see T3 .meta.txt)
+flag      = RANDOMX_FLAG_DEFAULT | RANDOMX_FLAG_V2
+softAes   = true                     (portability pin)
+
+Output layout
+-------------
+384 instructions × 8 bytes per instruction = 3072 B, in program
+order:
+
+  +0:    instr[0]  → +0 opcode u8 / +1 dst u8 / +2 src u8 /
+                     +3 mod u8 / +4..+8 imm32 u32 LE
+  +8:    instr[1]  → (same layout)
+  ...
+  +3064: instr[383] → (same layout)
+
+Per-instruction layout mirrors `randomx::Instruction`'s C struct
+(opcode, dst, src, mod, imm32) so a byte diff between C and Rust
+serializations attributes to a predictable offset. `imm32` is
+stored explicitly little-endian rather than as host-order memory
+bytes for portability.
+
+Total bytes for this vector: 3072 (= 384 × 8).
+
+Generator
+---------
+source      = ./_generator/phase2c/gen.cpp (mode t5)
+build       = ./_generator/phase2c/Makefile (`make gen`)
+command     = ./gen t5 > t5_vm_program_parse.bin
+output_size = 3072 bytes
+
+Reference impl
+--------------
+fork        = external/randomx-v2/
+pin         = aaafe71322df6602c21a5c72937ac284724ae561 (v2.0.1)
+sources     = src/virtual_machine.cpp (VmBase::generateProgram),
+              src/aes_hash.cpp (fillAes4Rx4),
+              src/program.hpp (Program::operator(int)),
+              src/instruction.hpp (Instruction::getImm32)
+function    = VmBase<...>::generateProgram(seed) →
+              the 384-Instruction array Program::programBuffer
+
+Phase
+-----
+Phase 2c (`docs/design/RANDOMX_V2_PHASE2C_PLAN.md` §5.7 / F7 T5,
+§9 commit 7) — program parse parity. Consumed by Rust test
+`t5_vm_program_parse_matches_fork_reference` in
+`rust/shekyl-pow-randomx/src/vm.rs#mod tests`.

@@ -1,0 +1,85 @@
+# Copyright (c) 2025-2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-randomx-differential"
+description = "Phase 2g Rust/C differential test harness: shekyl-pow-randomx vs external/randomx-v2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# Phase 2g C4 skeleton (per `docs/design/RANDOMX_V2_PHASE2G_PLAN.md`
+# §5.1 + §8.1). This crate is a leaf workspace member that owns the
+# differential harness comparing the `shekyl-pow-randomx` Rust verifier
+# against the `external/randomx-v2` C reference (via the
+# `randomx-v2-sys` extern-"C" wrapper crate). Per §5.6 + R1-D13 it has
+# no downstream consumers — it is a binary-only harness, with an
+# `#[doc(hidden)]` `[lib]` surface that exists solely so integration
+# tests under `tests/` and the `src/bin/gen_canonical_outputs.rs`
+# binary (a separately-compiled crate per Cargo convention) can
+# reach the harness's modules. Items are declared `pub` rather than
+# `pub(crate)` because integration tests and binaries consume the
+# library as a separate crate; the §5.6 sole-binary invariant + the
+# crate-level `#![doc(hidden)]` attribute preserve the spirit of
+# `pub(crate)` (no production consumer outside the harness; T14
+# asserts via `cargo metadata`). The plan-doc's `pub(crate)` text
+# in §5.1.5–§5.1.14 / §5.1.17 / §5.1.18 is a minor imprecision
+# corrected in `src/lib.rs`'s "Visibility note" docstring at C5a.
+# Modules land at C5+ per §8.1; the C4 skeleton's `src/lib.rs` is
+# intentionally empty per §5.1.4.
+#
+# §5.1.15 dep wiring:
+#   - `shekyl-pow-randomx = { path = "...", features = ["test-internals"] }`
+#     enables the R5-D1 cache-byte-access accessor (§3.17 + §5.3.3)
+#     needed by §5.1.7's R1-D14 cache-equivalence precondition.
+#     **Path-dep, not workspace-dep**: `shekyl-pow-randomx` is a
+#     workspace member, not an external crate registered in
+#     `[workspace.dependencies]`; the path form parallels
+#     `randomx-v2-sys = { path = "..." }` below. The plan-doc row
+#     for §5.1.15 was substrate-corrected at C4 close per the same
+#     substrate-reading discipline that closed Copilot PR #75's R4-D1
+#     finding (rule-17 + rule-26 forward-action queue).
+#   - `randomx-v2-sys = { path = "../randomx-v2-sys" }` is the C
+#     reference's Rust binding; the path-dep form is required because
+#     §5.6 forbids any other workspace member from depending on this
+#     crate (sole-consumer invariant; asserted by T14 §6.6).
+#   - `rand_chacha`, `sha2`, `serde_json` are workspace deps promoted at
+#     C0 (per R4-D1 + Copilot PR #75 correction); they are widely used
+#     direct deps elsewhere in the workspace, and the harness inherits
+#     the workspace-level pin for consistency.
+#   - `serde` (with `derive` feature, workspace-pinned) added at C9 for
+#     the §5.1.14 `FailureOutput` `#[derive(Serialize, Deserialize)]`
+#     surface (T11 round-trip). The workspace dep is already pinned at
+#     `serde = { version = "1", features = ["derive"] }`; no new
+#     supply-chain surface is added by enabling it here.
+#
+# Per §5.3 the harness does NOT enable the `internal-pool-bench`
+# feature on `shekyl-pow-randomx`; only `test-internals`.
+
+[lib]
+name = "shekyl_randomx_differential"
+path = "src/lib.rs"
+
+[[bin]]
+name = "shekyl-randomx-differential"
+path = "src/main.rs"
+
+[dependencies]
+shekyl-pow-randomx = { path = "../shekyl-pow-randomx", features = ["test-internals"] }
+randomx-v2-sys = { path = "../randomx-v2-sys" }
+rand_chacha = { workspace = true }
+sha2 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Workspace clippy lint set per `rust/Cargo.toml`. The C4 skeleton has
+# no FFI, no unsafe, no consensus-coupling — the workspace defaults
+# (verified at C4 close by `cargo clippy --workspace --all-targets
+# --keep-going -- -D warnings`) are sufficient. Per-crate `[lints]`
+# overrides may land later if specific modes (e.g., `--mode=concurrent`
+# at C9) introduce per-module exemptions.
+[lints]
+workspace = true

@@ -1,0 +1,328 @@
+{
+  "name": "SyncStateBlock",
+  "ty": {
+    "Struct": [
+      {
+        "name": "block_version",
+        "ty": {
+          "name": "u32",
+          "ty": "U32"
+        }
+      },
+      {
+        "name": "restore_from_height",
+        "ty": {
+          "name": "u64",
+          "ty": "U64"
+        }
+      },
+      {
+        "name": "creation_anchor_hash",
+        "ty": {
+          "name": "Option<T>",
+          "ty": {
+            "Option": {
+              "name": "[T; N]",
+              "ty": {
+                "Tuple": [
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "scan_completed",
+        "ty": {
+          "name": "bool",
+          "ty": "Bool"
+        }
+      },
+      {
+        "name": "pending_tx_hashes",
+        "ty": {
+          "name": "Vec<T>",
+          "ty": {
+            "Seq": {
+              "name": "[T; N]",
+              "ty": {
+                "Tuple": [
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  },
+                  {
+                    "name": "u8",
+                    "ty": "U8"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "confirmations_required",
+        "ty": {
+          "name": "u32",
+          "ty": "U32"
+        }
+      },
+      {
+        "name": "trusted_daemon",
+        "ty": {
+          "name": "bool",
+          "ty": "Bool"
+        }
+      }
+    ]
+  }
+}

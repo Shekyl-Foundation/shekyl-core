@@ -6,7 +6,7 @@
 >
 > **Parent spec:** `PQC_MULTISIG.md`
 >
-> **Reference implementation:** `rust/shekyl-wallet-core/src/multisig/v31/`
+> **Reference implementation:** `rust/shekyl-engine-core/src/multisig/v31/`
 
 This document defines the portable binary wire format for Shekyl V3.1
 multisig inter-participant communication. A third-party wallet
@@ -87,7 +87,7 @@ determines cross-implementation compatibility.
 |------|-------|-------------|
 | `SPEND_INTENT_VERSION` | `0x01` | Current version |
 | `MAX_VALIDITY_SECS` | `86400` | Maximum validity window (24h) |
-| `FCMP_REFERENCE_BLOCK_MIN_AGE` | `10` | Minimum ref block age in blocks |
+| `FCMP_REFERENCE_BLOCK_MIN_AGE` | `5` | Minimum ref block age in blocks (matches `src/cryptonote_config.h`; reduced from `10` in Decision 14) |
 | `FCMP_REFERENCE_BLOCK_MAX_AGE` | `100` | Maximum ref block age in blocks |
 | `MAX_RECIPIENTS` | `16` | Maximum recipients per intent |
 | `MAX_INPUTS` | `128` | Maximum inputs per intent |

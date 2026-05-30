@@ -1,0 +1,992 @@
+// Copyright (c) 2025-2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! Shekyl engine domain orchestrator.
+//!
+//! `shekyl-engine-core::engine` is the home of the [`Engine`](Engine) type
+//! that composes the file envelope ([`shekyl_engine_file::WalletFile`]),
+//! identity material ([`shekyl_crypto_pq::account::AllKeysBlob`]), the
+//! ledger ([`crate::engine::local_ledger::LocalLedger`] aggregating
+//! [`shekyl_engine_state::WalletLedger`] and
+//! [`shekyl_engine_state::LedgerIndexes`] under interior-mutability
+//! `RwLock` per the `LedgerEngine` trait contract — the trait itself
+//! is `pub(crate)` per `V3_ENGINE_TRAIT_BOUNDARIES.md` §1.4),
+//! preferences ([`shekyl_engine_prefs::WalletPrefs`]), the daemon RPC
+//! client (via the `DaemonEngine` trait, default `D = DaemonClient`,
+//! also `pub(crate)` per §1.4), and the per-process scanning
+//! surface into a single audited domain orchestrator. `Engine<S, D, L>`
+//! is generic over signer / daemon / ledger trait implementors, with
+//! defaults that preserve the existing concrete-typed shape for
+//! production callers — the CLI ([`shekyl-cli`]) and the JSON-RPC
+//! server ([`shekyl-engine-rpc`]) sit on top of this surface, never
+//! reaching around it.
+//!
+//! # What this module rejects on purpose
+//!
+//! The Phase 1 design log
+//! ([`docs/V3_WALLET_DECISION_LOG.md`]) names every monero-era pattern
+//! that is *not* being carried forward; the briefest summary, kept here
+//! so the rejection survives "while we're here" temptations:
+//!
+//! - **Integrated addresses and `payment_id`s.** Subaddresses provide
+//!   per-recipient tracking with strictly stronger privacy properties.
+//!   `TxRequest` carries no `payment_id` field and the `IntegratedAddress`
+//!   type is not modeled.
+//! - **The two-level account / subaddress hierarchy.** Shekyl ships a
+//!   single flat [`SubaddressIndex`](shekyl_engine_state::SubaddressIndex)
+//!   namespace; index 0 is the primary address. Exchanges that need
+//!   stronger isolation use multiple wallet files (separate keys are a
+//!   strictly stronger boundary than wallet2's account-shared keys).
+//! - **The `export_outputs` / `import_outputs` / `export_key_images` /
+//!   `import_key_images` four-call dance.** Air-gapped flows use two
+//!   typed bundle types (`UnsignedTxBundle`, `SignedTxBundle`) — see
+//!   Phase 2d.
+//! - **A god-object `Engine` with hundreds of public members.** Every
+//!   [`Engine`] member's mutability and locking discipline is explicit;
+//!   the type is *composition*, not *inheritance*.
+//! - **Background-sync as a wallet-internal feature.** Refresh is
+//!   `tokio::spawn`'d by the caller; cancellation is RAII via
+//!   `RefreshHandle` (lands in a follow-up commit).
+//!
+//! # Cross-cutting locks honored
+//!
+//! Every cross-cutting lock recorded in the in-tree decision log
+//! ([`docs/V3_WALLET_DECISION_LOG.md`]) is enforced at the type layer
+//! in this module:
+//!
+//! 1. **Async runtime** — caller-provided multi-threaded `tokio`. IO-bound
+//!    methods are `async`; pure compute stays sync.
+//! 2. **Error types** — per-domain enums in [`error`], unified at the
+//!    RPC boundary by [`shekyl-engine-rpc`].
+//! 3. **Locking discipline** — `&self` queries / `&mut self` mutations.
+//!    The RPC binary wraps in [`Arc<RwLock<Engine>>`].
+//! 4. **`PendingTx` lifetime** — process-local, chain-state-tagged,
+//!    reservation-bearing. Lands with the build/submit/discard methods.
+//! 5. **`Network`** — closed enum re-exported as [`Network`] from
+//!    [`shekyl_address`]; daemon mismatch is `OpenError::NetworkMismatch`.
+//! 6. **Subaddress hierarchy** — flat
+//!    [`SubaddressIndex`](shekyl_engine_state::SubaddressIndex). No
+//!    account level.
+//! 7. **`RefreshHandle`** — cancel-on-drop RAII, single-flight via
+//!    `&mut self`. Lands with `Engine::refresh`.
+//! 8. **Fee priority** — `FeePriority { Economy | Standard | Priority |
+//!    Custom(NonZeroU64) }` over daemon `get_fee_estimates`. Lands with
+//!    `build_pending_tx`.
+//! 9. **Logging** — `tracing` spans throughout, two-layer secret
+//!    redaction via [`shekyl_engine_state::LocalLabel`] (type layer) and
+//!    a redacting subscriber field formatter (subscriber layer). Lands
+//!    with the `tracing` wiring commit.
+//! 10. **KAT regression** — plain `cargo test --workspace`,
+//!     [`docs/test_vectors/`] under `CODEOWNERS`.
+//! 11. **Decision Log** — every binding sub-decision in this module
+//!     ships an entry in [`docs/V3_WALLET_DECISION_LOG.md`].
+//!
+//! # Status (as of this commit)
+//!
+//! Type-layer foundations + the [`Engine<S>`](Engine) struct itself with
+//! its accessor surface, the [`DaemonClient`] thin wrapper, and the
+//! lifecycle methods on `Engine<SoloSigner>`. [`Engine::create`] and
+//! [`Engine::open_full`] ship end-to-end against the
+//! [`shekyl_engine_file::WalletFile`] envelope and the
+//! [`shekyl_crypto_pq::account::AllKeysBlob`] re-derivation path;
+//! [`Engine::open_view_only`] and [`Engine::open_hardware_offload`]
+//! ship as signature stubs that return
+//! [`OpenError::CapabilityNotYetImplemented`](error::OpenError::CapabilityNotYetImplemented)
+//! pending the matching `shekyl-crypto-pq` constructors.
+//! [`Engine::change_password`] and [`Engine::close`] ship for every
+//! signer kind. The struct is composition over field type — every
+//! member's purpose, mutability discipline, and ownership are
+//! explicit:
+//!
+//! | Field                 | Type                                                 | Provenance                              |
+//! | --------------------- | ---------------------------------------------------- | --------------------------------------- |
+//! | `file`                | [`shekyl_engine_file::WalletFile`]                   | `.wallet.keys` envelope IO              |
+//! | `keys`                | [`shekyl_crypto_pq::account::AllKeysBlob`]           | rederived from master seed              |
+//! | `ledger`              | [`shekyl_engine_state::WalletLedger`]                | aggregator over the four blocks         |
+//! | `indexes`             | [`shekyl_engine_state::LedgerIndexes`]               | rebuilt at open from `ledger`           |
+//! | `reservations`        | `BTreeMap<ReservationId, Reservation>`               | runtime-only `PendingTx` tracker        |
+//! | `next_reservation_id` | `u64`                                                | process-local monotonic counter         |
+//! | `prefs`               | [`shekyl_engine_prefs::WalletPrefs`]                 | plaintext-with-HMAC layer 2             |
+//! | `daemon`              | [`DaemonClient`]                                     | thin wrapper around `SimpleRequestRpc`  |
+//! | `network`             | [`Network`]                                          | cached from `file.network()`            |
+//! | `capability`          | [`Capability`]                                       | cached from `file.capability()`         |
+//! | `_signer`             | `PhantomData<S>`                                     | compile-time signer dispatch            |
+//!
+//! `network` and `capability` are cached on the struct so the hot
+//! `Engine::network()` / `Engine::capability()` accessors are infallible
+//! and O(1). The cache is established at construction and never drifts:
+//! `WalletFile`'s region 1 is write-once after `create`, and region 1 is
+//! the only place either field is sourced from.
+//!
+//! # Runtime-only state on `Engine`
+//!
+//! Two fields on `Engine<S>` are deliberately runtime-only and are
+//! never serialized to disk:
+//!
+//! - [`indexes`](Engine) (`LedgerIndexes`): key-image / pubkey lookup
+//!   maps and the staker-pool aggregate. Rebuilt at every
+//!   `Engine::open*` from `self.ledger.ledger`.
+//! - [`reservations`](Engine) (`BTreeMap<ReservationId, Reservation>`):
+//!   the in-flight transaction reservation tracker. Cross-cutting
+//!   lock 4 binds the *behavioral* shape (build reserves, discard
+//!   releases, submit consumes, close errors with outstanding); the
+//!   2026-04-26 follow-up Decision Log entry refines the storage
+//!   location to a runtime field rather than the persisted
+//!   bookkeeping block. See [`pending`] for the full rationale.
+//!
+//! Per cross-cutting lock 7, the cancel-on-drop refresh handle is
+//! **not** a `Engine` field; it is *returned* by `Engine::refresh`
+//! and held by the caller, so its `Drop` implementation drives the
+//! cancellation token. A `Engine`-internal handle would defeat the
+//! single-flight `&mut self` borrow that enforces no concurrent
+//! refresh.
+//!
+//! # Constructors land next
+//!
+//! This commit defines the struct and its accessor surface only. The
+//! six lifecycle methods (`create`, `open_full`, `open_view_only`,
+//! `open_hardware_offload`, `change_password`, `close`) and the
+//! [`RefreshHandle`], `PendingTx`, and `ScanResult` types each land in
+//! their own follow-up commits on this same Phase 1 branch. Splitting
+//! along behavioral seams keeps each commit reviewable on its own.
+
+pub mod capability;
+pub mod daemon;
+pub(crate) mod diagnostics;
+pub mod error;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) mod fault_injecting_pending_tx;
+#[cfg(any(test, feature = "test-helpers"))]
+pub(crate) mod fault_injecting_refresh;
+pub mod fee_estimator;
+pub mod lifecycle;
+pub(crate) mod local_keys;
+pub(crate) mod local_ledger;
+pub mod local_pending_tx;
+pub(crate) mod local_persistence;
+pub(crate) mod local_refresh;
+pub mod merge;
+pub mod network;
+pub mod output_selector;
+pub mod pending;
+pub mod refresh;
+pub(crate) mod scan_floor;
+pub(crate) mod sealing_keys;
+pub mod signer;
+pub(crate) mod traits;
+pub mod view_material;
+
+#[cfg(test)]
+pub(crate) mod test_support;
+
+pub use capability::Capability;
+pub use daemon::DaemonClient;
+pub use diagnostics::{
+    BuildErrorKind, BuildRequestSummary, DaemonOp, DiagnosticSink, DiscardReason, MalformedKind,
+    NoopDiagnosticSink, PendingTxDiagnostic, ProtocolErrorKind, RefreshDiagnostic, SuppressedClass,
+    TracingDiagnosticSink,
+};
+pub use error::{
+    ChangePasswordError, IoError, KeyError, OpenError, PendingTxError, PersistenceError,
+    RefreshError, SendError, SubmitError, TxError,
+};
+pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
+pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
+pub use local_ledger::LocalLedger;
+pub use local_pending_tx::LocalPendingTx;
+pub use local_refresh::LocalRefresh;
+pub use network::Network;
+pub use output_selector::{
+    OutputCandidate, OutputSelector, SelectedOutputs, WalletGreedyOutputSelector,
+};
+pub use pending::{
+    FeePriority, PendingTx, ReservationExtension, ReservationId, ReservationTTLConfig, SnapshotId,
+    TxHash, TxRecipient, TxRecipientSummary, TxRequest, DEFAULT_RESERVATION_TTL,
+};
+pub use refresh::{
+    RefreshHandle, RefreshOptions, RefreshPhase, RefreshProgress, RefreshReorgEvent, RefreshSummary,
+};
+pub use sealing_keys::StateWrapKey;
+pub use signer::{
+    EngineSignerKind, LocalSigner, SignedTransfer, Signer, SoloSigner, TransferSigningContext,
+};
+pub use view_material::ViewMaterial;
+
+use std::marker::PhantomData;
+use std::sync::Arc;
+
+use shekyl_crypto_pq::account::AllKeysBlob;
+use shekyl_engine_file::WalletFile;
+use shekyl_engine_prefs::WalletPrefs;
+use shekyl_engine_state::WalletLedger;
+
+use crate::engine::local_ledger::LedgerState;
+use crate::engine::traits::{
+    DaemonEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
+};
+
+/// The Shekyl V3 wallet domain orchestrator.
+///
+/// `Engine<S>` composes the file envelope, identity material, persistent
+/// ledger, user preferences, and daemon RPC connection into a single
+/// audited surface. The CLI and JSON-RPC server both sit on top of
+/// this type; neither reaches around it to the underlying crates.
+///
+/// # Type parameter `S`
+///
+/// `S: EngineSignerKind` selects between the V3.0
+/// [`SoloSigner`] (in-process signing, single spend secret) and the
+/// V3.1 multisig path (`MultisigSigner<N, K>`, lands behind the
+/// existing `multisig` Cargo feature). V3.0 only constructs
+/// `Engine<SoloSigner>`. The trait is sealed; see [`signer`].
+///
+/// # Lifecycle
+///
+/// Construction goes through one of the lifecycle methods:
+///
+/// - [`Engine::create`] — fresh wallet (BIP-39 seed for mainnet/stagenet,
+///   raw 32-byte seed for testnet/fakechain).
+/// - [`Engine::open_full`] — open an existing `Capability::Full`
+///   wallet with the user's password.
+/// - [`Engine::open_view_only`] — open an existing `Capability::ViewOnly`
+///   wallet (no spend material).
+/// - [`Engine::open_hardware_offload`] — open an existing
+///   `Capability::HardwareOffload` wallet (signing happens out-of-band).
+/// - [`Engine::change_password`] — rotate the user-supplied password
+///   without rederiving the master seed.
+/// - [`Engine::close`] — flush state to disk and release the advisory
+///   lock; refuses if any [`PendingTx`] is in flight.
+///
+/// All six methods land in the lifecycle commit; this commit defines
+/// the struct shape and the read-only accessor surface that those
+/// methods produce.
+///
+/// # Locking discipline
+///
+/// Per cross-cutting lock 3, this type's methods follow the
+/// `&self` for queries / `&mut self` for mutations split. The
+/// JSON-RPC server binary wraps a `Engine<S>` in
+/// `std::sync::Arc<tokio::sync::RwLock<Engine<S>>>`; the lock is the
+/// caller's responsibility, not `Engine`'s. CLI and tests can hold a
+/// `Engine<S>` directly without any lock.
+///
+/// # Drop semantics
+///
+/// `Engine<S>` does not implement `Drop`. The secret-bearing field
+/// [`AllKeysBlob`] has its own `Drop` impl that zeroizes spend / view /
+/// ML-KEM-DK material; [`WalletFile`] has its own `Drop` for the file
+/// KEK and lock release. Composing types that already wipe correctly
+/// is sound; adding a wrapper `Drop` here would risk shadowing the
+/// inner ones at compile time without changing behavior at run time.
+///
+/// [`PendingTx`]: error::PendingTxError
+// `D: DaemonEngine` and `L: LedgerEngine` are more private than this
+// `pub` item: per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2 preamble,
+// the Stage 1 trait surfaces are `pub(crate)` for V3.0 and revisable
+// to `pub` at V3.2 alongside the JSON-RPC server cutover. External
+// callers reach the daemon and ledger surfaces via inherent methods
+// on `Engine<S>` (the defaults `D = DaemonClient` and
+// `L = LocalLedger` plug in transparently); they cannot name `D` or
+// `L` themselves and never need to. Stage 4's trait promotion
+// deletes this allow attribute together with the sibling annotations
+// (mod.rs inherent impls; lifecycle.rs's `OpenedEngine` / its
+// inherent impl / signer-agnostic `Engine` impl; merge.rs /
+// pending.rs / refresh.rs inherent impls) in a single sweep —
+// they're all the same architectural relationship surfacing at each
+// `pub` site.
+#[allow(private_bounds)]
+pub struct Engine<
+    S: EngineSignerKind,
+    D: DaemonEngine = DaemonClient,
+    L: LedgerEngine = LocalLedger,
+    R: RefreshEngine = LocalRefresh,
+    P: PendingTxEngine = LocalPendingTx<
+        LocalSigner,
+        WalletGreedyOutputSelector,
+        DaemonFeeEstimator,
+        LocalLedger,
+    >,
+    F: PersistenceEngine = WalletFile,
+> {
+    /// On-disk persistence: `.wallet.keys` (region 1) + `.wallet` (region 2).
+    /// Stage 1 implementor: [`WalletFile`]; Stage 4: actor-backed `F`.
+    persistence: F,
+
+    /// HKDF-derived `wrap_key_region_2` for steady-state ledger seals (F5(b)).
+    state_wrap_key: StateWrapKey,
+
+    /// HKDF-derived prefs integrity key; copied from the open path before
+    /// [`WalletFile::zeroize_transient_file_kek`].
+    prefs_hmac_key: shekyl_engine_prefs::PrefsHmacKey,
+
+    /// Identity material rederived from the master seed at every open.
+    /// Holds Ed25519 spend / view scalars and the ML-KEM-768 decap key;
+    /// these are wiped on drop by [`AllKeysBlob`]'s own `Drop` impl.
+    /// Never serialized; persistence happens via the `master_seed_64`
+    /// in region 1 of the wallet file.
+    ///
+    /// Read by [`Engine::keys`]; that accessor is `pub(crate)` and used
+    /// by `Engine::refresh` (to assemble a `Scanner` per attempt) and
+    /// by Phase 2 sign / proof code paths inside this crate.
+    keys: Arc<AllKeysBlob>,
+
+    /// Persistent wallet state plus its runtime-only index projection,
+    /// aggregated under a single [`std::sync::RwLock`] by [`LocalLedger`].
+    ///
+    /// The aggregate carries:
+    ///
+    /// - The [`shekyl_engine_state::WalletLedger`] — scanner-derived
+    ///   transfers, bookkeeping (subaddress registry, labels, address
+    ///   book, account tags), tx metadata (`tx_keys`, scanned pool
+    ///   txs), and the sync-state block. **Reservations do not live
+    ///   here** — see [`local_pending_tx`](crate::engine::local_pending_tx)
+    ///   below (reservations live in `LocalPendingTx`, not in the ledger).
+    /// - The [`shekyl_engine_state::LedgerIndexes`] — runtime-only
+    ///   indexes derived from chain replay (key-image / pubkey lookup
+    ///   maps, staker-pool accrual aggregate). Per the
+    ///   `RuntimeWalletState audit` Decision Log entry (2026-04-25),
+    ///   these fields are reconstructible from the [`WalletLedger`]
+    ///   plus daemon block replay and are never persisted; they are
+    ///   rebuilt at every `Engine::open*` and mutated together with
+    ///   the `WalletLedger` by `apply_scan_result`.
+    ///
+    /// Stage 1 PR 2 promotes this aggregate from two `&mut self`-gated
+    /// fields to a single `RwLock`-gated [`LocalLedger`] so the
+    /// in-process orchestration can call into [`LedgerEngine`] methods
+    /// through `&self`. The trait surface (commit 1) and the field
+    /// shape (this commit) are co-aligned: [`LocalLedger`] is the
+    /// Stage 1 implementor.
+    ///
+    /// [`LedgerEngine`]: traits::LedgerEngine
+    ledger: Arc<L>,
+
+    /// [`PendingTxEngine`] implementor for the build / submit / discard
+    /// lifecycle. Shares the same [`Arc`] ledger handle as
+    /// [`Engine::ledger`] at assembly time (C6).
+    ///
+    /// `Engine::close` consults `outstanding_pending_txs()` and refuses
+    /// with
+    /// [`OpenError::OutstandingPendingTx`](error::OpenError::OutstandingPendingTx)
+    /// when any reservation is in flight.
+    pub(crate) pending: P,
+
+    /// User preferences per the layer-2 plaintext+HMAC contract in
+    /// [`docs/WALLET_PREFS.md`]. Loaded at open, saved on
+    /// [`Engine::change_password`] / [`Engine::close`].
+    prefs: WalletPrefs,
+
+    /// Engine → daemon connection. Cloneable; shared by clone with the
+    /// scanner and the tx-submission paths so each can issue daemon
+    /// RPCs without touching the wallet's state.
+    ///
+    /// Generic over `D: DaemonEngine`. Production code defaults `D` to
+    /// [`DaemonClient`] (a thin wrapper over
+    /// `shekyl_simple_request_rpc::SimpleRequestRpc`); crate-internal
+    /// tests substitute `TestDaemon` to drive failure-injection and
+    /// deduplication scenarios against the same orchestration logic.
+    /// See `crate::engine::traits::daemon` for the trait contract.
+    daemon: D,
+
+    /// Cached from `file.network()` for O(1) accessor speed. The
+    /// wallet-file region 1 is the source of truth and never changes
+    /// after `create`; this cache is therefore stable for the life of
+    /// the open `Engine<S>`.
+    network: Network,
+
+    /// Cached from `file.capability()` for O(1) accessor speed. Same
+    /// stability argument as `network`. Used by the lifecycle
+    /// constructors to decide which `open_*` is appropriate (mismatched
+    /// capability surfaces as
+    /// [`OpenError::CapabilityMismatch`](error::OpenError::CapabilityMismatch))
+    /// and by call sites that gate spend operations on
+    /// [`Capability::can_spend_locally`].
+    capability: Capability,
+
+    /// Single-flight slot for [`Engine::start_refresh`]. Held by the
+    /// engine for the lifetime of the open wallet; claimed (and
+    /// guarded) by the producer task `run_refresh_task` for the
+    /// duration of one refresh. A racing `start_refresh` finds the
+    /// flag set and returns
+    /// [`RefreshError::AlreadyRunning`](error::RefreshError::AlreadyRunning).
+    ///
+    /// Independent of the cross-cutting RwLock around `Engine<S>`:
+    /// the slot is its own `Arc<AtomicBool>` so the slot-claim path
+    /// only needs a brief shared read of the engine to clone the
+    /// flag, not a write borrow. The producer task holds a
+    /// [`SlotGuard`](refresh::SlotGuard) that releases the flag on
+    /// task exit (RAII).
+    refresh_slot: refresh::RefreshSlot,
+
+    /// Producer-side [`RefreshEngine`] implementor.
+    ///
+    /// Per [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §7.X C5
+    /// (`Engine<S, D, L, R>` parameterization), the engine owns one
+    /// `R: RefreshEngine` for the lifetime of the open wallet; the
+    /// orchestrator's refresh paths (`Engine::start_refresh` /
+    /// `Engine::refresh`) dispatch the per-attempt producer body
+    /// through the trait surface. Production callers default
+    /// `R = LocalRefresh`, constructed at every `Engine::create` /
+    /// `Engine::open_*` site by moving a freshly-derived
+    /// [`ViewMaterial`](view_material::ViewMaterial) into
+    /// `LocalRefresh::new`.
+    ///
+    /// # Why `Arc<R>` rather than `R`
+    ///
+    /// `run_refresh_task` takes an `Arc<RwLock<Engine<...>>>` because
+    /// the orchestrator and the merge path share the same engine
+    /// instance. The producer body (`produce_scan_result`) is long-
+    /// running — network round-trips plus per-block scan — and must
+    /// **not** hold any engine borrow across its `.await` boundary:
+    /// the merge path needs the write half of the `RwLock` to land
+    /// the scan result, and a read-borrow held through the scan
+    /// would deadlock the merge.
+    ///
+    /// Holding the implementor as `Arc<R>` lets the orchestrator
+    /// `Arc::clone` it out of the read-lock in a single brief borrow
+    /// and then dispatch the trait call lock-free. The `&self`
+    /// receiver on the trait method composes naturally: the cloned
+    /// `Arc<R>` keeps `R` alive for the future's lifetime, the trait
+    /// implementor's interior state is accessed through `&*arc` (free
+    /// of borrow-on-Engine). `LocalRefresh`'s `ViewMaterial` remains
+    /// owned-and-non-Clone at the implementor level; the Arc wraps
+    /// the implementor, not the secret.
+    ///
+    /// # Visibility for trait-dispatch (Stage 4)
+    ///
+    /// Holding the implementor by-Arc on `Engine` makes the producer
+    /// wipe-on-drop chain run when the last `Arc<R>` reference drops
+    /// — typically at wallet close (today: `Engine::close`; Stage 4:
+    /// actor shutdown). The Arc's strong count is exactly 1 in
+    /// steady state (engine owns the only handle); the producer
+    /// briefly bumps it to 2 for the duration of one
+    /// `produce_scan_result` call, then drops back to 1 when the
+    /// future settles. The Stage 4 actor cutover replaces this field
+    /// with an actor handle; the trait surface stays the same.
+    ///
+    /// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
+    pub(crate) refresh: std::sync::Arc<R>,
+
+    /// Compile-time signer-kind dispatch. The actual key material lives
+    /// in [`Engine::keys`] (for `SoloSigner`); this marker exists so
+    /// the V3.1 multisig type can name distinct method signatures via
+    /// associated items on [`EngineSignerKind`] without the V3.0 build
+    /// paying a runtime branch on every send.
+    _signer: PhantomData<S>,
+}
+
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine + std::fmt::Debug,
+        L: LedgerEngine,
+        R: RefreshEngine,
+        P: PendingTxEngine,
+    > std::fmt::Debug for Engine<S, D, L, R, P>
+{
+    /// Redacted debug output. Specific reasons each field is or is not
+    /// printed:
+    ///
+    /// - `file` — passes through to [`WalletFile`]'s own `Debug`, which
+    ///   already redacts sealed material and prints only filesystem
+    ///   paths and the public `network` / `capability`.
+    /// - `keys` — never printed. [`AllKeysBlob`] holds spend / view
+    ///   secret scalars; the type does not implement `Debug` and
+    ///   we do not want a stringly-typed leak path here.
+    /// - `ledger`, `prefs` — printed as opaque `<…>` markers. The
+    ///   `ledger` field is the [`LocalLedger`] aggregate (the
+    ///   [`shekyl_engine_state::WalletLedger`] plus the rebuilt-on-open
+    ///   [`shekyl_engine_state::LedgerIndexes`]); both halves contain
+    ///   user labels (already typed as
+    ///   [`shekyl_engine_state::LocalLabel`] with redacting `Debug`,
+    ///   per cross-cutting lock 9), but a wallet-level dump would be
+    ///   noisy and add nothing not already available via the per-block
+    ///   accessors.
+    /// - `daemon` — passes through to [`DaemonClient`]'s `Debug`, which
+    ///   includes the daemon URL but no auth credentials (see
+    ///   [`shekyl_simple_request_rpc::SimpleRequestRpc`]).
+    /// - `network`, `capability` — printed verbatim; these are cached
+    ///   public values from region 1 of the wallet file.
+    /// - `pending` — printed as an outstanding-count via
+    ///   [`PendingTxEngine::outstanding`], not reservation contents.
+    /// - `refresh` — printed as an opaque `<redacted: RefreshEngine>`
+    ///   marker. The producer holds view-and-spend material per
+    ///   §5.4.7 R4; surfacing the implementor's `Debug` would risk
+    ///   leaking that material through a downstream sink. The
+    ///   producer's identity type is also printed for diagnostic
+    ///   purposes (e.g., distinguishing `LocalRefresh` from a future
+    ///   actor-backed implementor at Stage 4); `type_name` is
+    ///   secret-free.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Engine")
+            .field("persistence", &"<redacted>")
+            .field("state_wrap_key", &self.state_wrap_key)
+            .field("prefs_hmac_key", &self.prefs_hmac_key)
+            .field("keys", &"<redacted: AllKeysBlob>")
+            .field("ledger", &"<…>")
+            .field("outstanding_pending_txs", &self.pending.outstanding())
+            .field("prefs", &"<…>")
+            .field("daemon", &self.daemon)
+            .field("network", &self.network)
+            .field("capability", &self.capability)
+            .field("refresh_running", &self.refresh_slot.is_claimed())
+            .field("refresh", &"<redacted: RefreshEngine>")
+            .field("refresh_kind", &std::any::type_name::<R>())
+            .field("signer_kind", &std::any::type_name::<S>())
+            .finish()
+    }
+}
+
+/// RAII guard returned by [`Engine::ledger`]: holds a read lock on
+/// the wallet's [`LocalLedger`] and derefs transparently to
+/// [`WalletLedger`].
+///
+/// The guard is opaque: external callers cannot observe the
+/// crate-private `LedgerState` aggregate or the `LedgerIndexes`
+/// half — the [`Deref`] impl projects to `WalletLedger`, the only
+/// type the public surface exposes. The `inner` field is private,
+/// so even though its type names the `pub(crate)` `LedgerState`,
+/// the `private_interfaces` lint does not fire (the type only
+/// appears in private positions). The lint *would* fire if the
+/// field were `pub`; it is deliberately not. Source compatibility
+/// with the pre-Stage-1 `&WalletLedger` accessor is preserved by
+/// the [`Deref`] impl, so calls of the form
+/// `engine.ledger().some_wallet_ledger_method()` continue to compile
+/// and behave identically.
+///
+/// A future refactor may project directly to `WalletLedger` via
+/// `std::sync::RwLockReadGuard::map` (currently
+/// `mapped_lock_guards`-feature-gated) or `parking_lot::RwLock`,
+/// which would remove `LedgerState` from the field type entirely
+/// and eliminate the rustdoc "private item" warning on the doc
+/// comment below. Tracked under V3.x in `docs/FOLLOWUPS.md` →
+/// "`LedgerReadGuard` field type leaks crate-private `LedgerState`".
+///
+/// Hold the guard for the minimum span necessary; concurrent writers
+/// (`apply_scan_result` and the [`pending`]-module mutators) cannot
+/// acquire the write lock while any reader is live.
+///
+/// [`Deref`]: std::ops::Deref
+pub struct LedgerReadGuard<'a> {
+    inner: std::sync::RwLockReadGuard<'a, LedgerState>,
+}
+
+impl std::ops::Deref for LedgerReadGuard<'_> {
+    type Target = WalletLedger;
+
+    fn deref(&self) -> &WalletLedger {
+        &self.inner.ledger
+    }
+}
+
+// `D: DaemonEngine` and `L: LedgerEngine` private-bound: see the
+// rationale on the `pub struct Engine` definition in this file.
+#[allow(private_bounds)]
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        L: LedgerEngine,
+        R: RefreshEngine,
+        P: PendingTxEngine,
+        F: PersistenceEngine,
+    > Engine<S, D, L, R, P, F>
+{
+    /// Network this wallet is bound to. Cached from
+    /// [`WalletFile`]'s region 1 at construction; stable for the life
+    /// of the open wallet.
+    pub fn network(&self) -> Network {
+        self.network
+    }
+
+    /// Capability mode of this wallet (full / view-only /
+    /// hardware-offload). Cached from [`WalletFile`]'s region 1 at
+    /// construction; stable for the life of the open wallet.
+    pub fn capability(&self) -> Capability {
+        self.capability
+    }
+
+    /// Borrow the [`PersistenceEngine`] implementor.
+    pub fn persistence(&self) -> &F {
+        &self.persistence
+    }
+
+    /// Steady-state region-2 sealing key for this session.
+    pub(crate) fn state_wrap_key(&self) -> &StateWrapKey {
+        &self.state_wrap_key
+    }
+
+    /// Session prefs HMAC key (orchestrator copy; see [`WalletFile`] for the
+    /// handle's cached copy used by inherent prefs I/O).
+    pub(crate) fn prefs_hmac_key(&self) -> &shekyl_engine_prefs::PrefsHmacKey {
+        &self.prefs_hmac_key
+    }
+
+    /// Borrow user preferences. Read-only; preference rotation goes
+    /// through dedicated methods that re-HMAC the body and atomic-write
+    /// both files together.
+    pub fn prefs(&self) -> &WalletPrefs {
+        &self.prefs
+    }
+
+    /// Test-only: mutate in-memory prefs before `change_password` flush tests.
+    #[cfg(test)]
+    pub(crate) fn prefs_mut(&mut self) -> &mut WalletPrefs {
+        &mut self.prefs
+    }
+
+    /// Borrow the daemon RPC client. Cloneable for handing to the
+    /// scanner / tx-submission paths.
+    ///
+    /// The return type is `&D`, the type-parameter slot for the
+    /// daemon. The production default `D = DaemonClient` resolves
+    /// this to `&DaemonClient`; crate-internal tests substitute
+    /// `TestDaemon` and observe the same accessor shape.
+    pub fn daemon(&self) -> &D {
+        &self.daemon
+    }
+
+    /// Crate-internal access to the rederived identity material.
+    ///
+    /// **Not** part of the public API. Spend / sign / proof code paths
+    /// inside `shekyl-engine-core` go through this accessor; the
+    /// returned reference must not escape the crate. Phase 2 will add
+    /// dedicated method-level surfaces (`sign_transfer`, `tx_proof`,
+    /// `reserve_proof`) that take borrowed inputs and return finished
+    /// artifacts, so call sites elsewhere never need a borrow on
+    /// [`AllKeysBlob`] directly.
+    // After C5's trait-dispatch migration AND C5β's
+    // producer-scaffolding deletion, no production reader of
+    // `keys()` survives: the legacy `build_scanner_from_keys` /
+    // `produce_scan_result` free functions in `engine/refresh.rs`
+    // were deleted in C5β (`b6a1274de`); `LocalRefresh::build_scanner`
+    // (`engine/local_refresh.rs:283`) constructs the scanner from
+    // `ViewMaterial` derived at `Engine::assemble` time via
+    // `ViewMaterial::try_from_keys(&self.keys)`. The remaining
+    // live consumer is the `Engine::replace_refresh` test-only
+    // setter (`mod.rs:695`), which re-derives `ViewMaterial` from
+    // `engine.keys()` for hybrid tests composing `LocalRefresh` /
+    // `FaultInjecting<R>` post-construction; that surface is
+    // `#[cfg(any(test, feature = "test-helpers"))]`-gated, hence
+    // the `#[allow(dead_code)]` below remains load-bearing for
+    // default-feature production builds where no consumer fires.
+    //
+    // Phase 2's `sign_transfer` / `tx_proof` / `reserve_proof`
+    // will introduce production consumers (either re-using this
+    // accessor or via dedicated method-level surfaces), at which
+    // point `#[allow(dead_code)]` is reopened for deletion per
+    // `21-reversion-clause-discipline.mdc`'s named-criterion
+    // shape.
+    #[allow(dead_code)]
+    pub(crate) fn keys(&self) -> &AllKeysBlob {
+        self.keys.as_ref()
+    }
+
+    /// Test-only constructor: rebuild the engine with `refresh`
+    /// substituted in place of the existing
+    /// [`RefreshEngine`](super::traits::RefreshEngine) implementor,
+    /// leaving every other field unchanged.
+    ///
+    /// Mirrors [`super::Engine::replace_daemon`] for the
+    /// `R: RefreshEngine` slot added in PR 4 C5a. Hybrid tests that
+    /// need a fully-constructed `Engine<SoloSigner>` but want to wrap
+    /// the production [`super::local_refresh::LocalRefresh`] in a
+    /// [`super::fault_injecting_refresh::FaultInjecting`] failure-
+    /// injection wrapper compose this with `replace_daemon`:
+    ///
+    /// ```ignore
+    /// let real = Engine::<SoloSigner>::create(params, dummy_daemon())?;
+    /// // Re-derive ViewMaterial from the engine's keys (the same path
+    /// // Engine::create uses internally at assemble time):
+    /// let vm = ViewMaterial::try_from_keys(real.keys())?;
+    /// let refresh = FaultInjecting::new(LocalRefresh::new(vm, 0));
+    /// let hybrid: Engine<SoloSigner, TestDaemon, LocalLedger, FaultInjecting<LocalRefresh>> =
+    ///     real
+    ///         .replace_daemon(test_daemon)
+    ///         .replace_refresh(refresh);
+    /// ```
+    ///
+    /// The original `R1` refresh implementor is dropped (its
+    /// `Arc<R1>` strong count goes to zero, firing the wipe-on-drop
+    /// chain on any view material the implementor held); the
+    /// returned engine's `refresh` field is a fresh `Arc<R2>` over
+    /// the supplied implementor. Per the C6α "Arc replacement
+    /// semantics" rationale, tests must not call this method while
+    /// a refresh is in flight — the engine's single-flight slot
+    /// guards against concurrent `start_refresh` but not against
+    /// setter-during-refresh races.
+    ///
+    /// # Visibility
+    ///
+    /// `pub(crate)` and gated by `#[cfg(any(test, feature =
+    /// "test-helpers"))]` per the C6α F-Mock-1 symmetry pin (asymmetric
+    /// with sibling `replace_daemon`, which is
+    /// `#[cfg(test)]`-only: that method predates the `test-helpers`
+    /// feature and exist purely for crate-internal tests, while
+    /// `replace_refresh` lands alongside the `FaultInjecting<R>`
+    /// wrapper that is itself `test-helpers`-feature-callable for
+    /// downstream consumers). Production builds do not compile this
+    /// method.
+    ///
+    /// # API shape change from C6α
+    ///
+    /// C6α introduced `replace_refresh` as a `&mut self` setter that
+    /// could only swap one `R` for another `R` of the same type. C7's
+    /// hybrid test requires changing the type parameter from
+    /// `LocalRefresh` to `FaultInjecting<LocalRefresh>`, which the
+    /// `&mut self` shape cannot express. The consume-and-rebuild
+    /// signature here matches the precedent set by `replace_daemon`
+    /// and lets the four-parameter
+    /// `Engine<S, D, L, R>` compose cleanly across the daemon and
+    /// refresh slot substitutions. Per the C6α docstring's "Phase 1 author
+    /// commitment note", `replace_refresh` had no consumers in
+    /// C6α/C6β/C6γ, so the signature change is non-breaking; C7 is
+    /// the first consumer.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[allow(dead_code)]
+    pub(crate) fn replace_refresh<R2: RefreshEngine>(
+        self,
+        refresh: R2,
+    ) -> Engine<S, D, L, R2, P, F> {
+        let Engine {
+            persistence,
+            state_wrap_key,
+            prefs_hmac_key,
+            keys,
+            ledger,
+            pending,
+            prefs,
+            daemon,
+            network,
+            capability,
+            refresh_slot,
+            refresh: _old,
+            _signer,
+        } = self;
+        Engine {
+            persistence,
+            state_wrap_key,
+            prefs_hmac_key,
+            keys,
+            ledger,
+            pending,
+            prefs,
+            daemon,
+            network,
+            capability,
+            refresh_slot,
+            refresh: std::sync::Arc::new(refresh),
+            _signer,
+        }
+    }
+
+    /// Test-only constructor: rebuild the engine with `pending`
+    /// substituted, leaving every other field unchanged.
+    ///
+    /// Mirrors [`Self::replace_refresh`] for the `P: PendingTxEngine`
+    /// slot (PR 5 C6). Hybrid tests that need a
+    /// [`super::fault_injecting_pending::FaultInjecting`] wrapper
+    /// (C7) compose this with the other `replace_*` helpers.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[allow(dead_code)]
+    pub(crate) fn replace_pending_tx<P2: PendingTxEngine>(
+        self,
+        pending: P2,
+    ) -> Engine<S, D, L, R, P2, F> {
+        let Engine {
+            persistence,
+            state_wrap_key,
+            prefs_hmac_key,
+            keys,
+            ledger,
+            pending: _old,
+            prefs,
+            daemon,
+            network,
+            capability,
+            refresh_slot,
+            refresh,
+            _signer,
+        } = self;
+        Engine {
+            persistence,
+            state_wrap_key,
+            prefs_hmac_key,
+            keys,
+            ledger,
+            pending,
+            prefs,
+            daemon,
+            network,
+            capability,
+            refresh_slot,
+            refresh,
+            _signer,
+        }
+    }
+}
+
+#[allow(private_bounds)]
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        L: LedgerEngine,
+        R: RefreshEngine,
+        P: PendingTxEngine,
+    > Engine<S, D, L, R, P, WalletFile>
+{
+    /// Borrow the Stage 1 [`WalletFile`] implementor. Prefer
+    /// [`Self::persistence`] for trait-shaped save/rotate paths.
+    pub fn file(&self) -> &WalletFile {
+        &self.persistence
+    }
+}
+
+// `D: DaemonEngine` private-bound: see the rationale on the `pub
+// struct Engine` definition in this file. The `L = LocalLedger`
+// specialization is intentional: [`Engine::ledger`] returns a
+// [`LedgerReadGuard`] tied to the in-process [`LocalLedger`]'s
+// [`std::sync::RwLockReadGuard`]; once Stage 4 promotes the trait
+// `LedgerEngine` to a richer surface (or replaces this accessor
+// with a trait-level read-state method), this block dissolves.
+#[allow(private_bounds)]
+impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine, P: PendingTxEngine>
+    Engine<S, D, LocalLedger, R, P>
+{
+    /// Borrow the persistent ledger for read-only queries (transfers,
+    /// bookkeeping entries, tx metadata, sync cursor). Mutation goes
+    /// through the methods on [`Engine`] that the lifecycle / refresh /
+    /// send commits add — never through this borrow.
+    ///
+    /// The return value is a [`LedgerReadGuard`] that holds a
+    /// [`std::sync::RwLockReadGuard`] over [`LocalLedger`]'s state
+    /// for the borrow's lifetime; the guard derefs transparently to
+    /// `&WalletLedger` so existing call sites that read through this
+    /// accessor are source-compatible. Drop the guard to release the
+    /// read lock and allow concurrent writers to acquire it.
+    ///
+    /// # Public-API signature change vs. pre-Stage-1
+    ///
+    /// Pre-Stage-1 this method returned `&WalletLedger`; Stage 1 PR 2
+    /// changes the return type to `LedgerReadGuard<'_>` so the borrow
+    /// is tied to a [`std::sync::RwLock`] read guard rather than a
+    /// flat field. Source-compatible upgrade paths:
+    ///
+    /// - **Call-style read access** (`engine.ledger().balance()`,
+    ///   `engine.ledger().transfers()`, …) keeps working unchanged
+    ///   via the [`std::ops::Deref`] impl on [`LedgerReadGuard`].
+    /// - **Code that named the old return type explicitly** — e.g.
+    ///   `let l: &WalletLedger = engine.ledger();` or `fn(&WalletLedger)
+    ///   = Engine::ledger;` — must change either to bind the guard
+    ///   (`let l = engine.ledger(); let l: &WalletLedger = &*l;`) or
+    ///   accept `LedgerReadGuard<'_>` as the named type.
+    /// - **Long-lived borrows held across `.await`** are no longer
+    ///   sound: holding the guard across an await blocks writers, so
+    ///   refactor such call sites to drop the guard before awaiting.
+    ///
+    /// Specialized to `L = LocalLedger` because the guard is tied
+    /// to that implementor's lock; mocked-`L` tests (commit 6) do
+    /// not exercise this accessor.
+    pub fn ledger(&self) -> LedgerReadGuard<'_> {
+        LedgerReadGuard {
+            inner: self.ledger.read(),
+        }
+    }
+}
+
+// ── Bench-internals helpers (gated; see `lib.rs`'s `__bench_internals`)
+//
+// These free functions live in this module so they can name the
+// otherwise-private `Engine.ledger` field; they are re-exported through
+// `crate::__bench_internals` for `engine_trait_bench_ledger_balance{,_iai}.rs`
+// without widening the field's production visibility. The pattern is
+// the same one PR 1 uses for `LedgerSnapshot::from_ledger_for_bench`:
+// the hot-path code stays in its production module while the bench
+// surface is unlocked with a focused feature flag.
+
+/// Borrow the engine's [`LocalLedger`] field directly. See
+/// [`crate::__bench_internals::engine_local_ledger_for_bench`] for the
+/// public-facing wrapper and the use-site rationale.
+#[cfg(feature = "bench-internals")]
+pub fn engine_local_ledger_for_bench(
+    engine: &Engine<SoloSigner, DaemonClient, LocalLedger>,
+) -> &LocalLedger {
+    &engine.ledger
+}
+
+/// Project the wallet's balance through the
+/// [`LedgerEngine::balance`](traits::LedgerEngine::balance) trait
+/// method, dispatched on `engine.ledger`. See
+/// [`crate::__bench_internals::engine_balance_for_bench`] for the
+/// public-facing wrapper and the use-site rationale.
+///
+/// The trait surface is `pub(crate)`, so this thin wrapper performs
+/// the trait call inside the crate (where the trait is visible) and
+/// surfaces the [`shekyl_scanner::BalanceSummary`] result across the
+/// bench-target boundary.
+#[cfg(feature = "bench-internals")]
+pub fn engine_balance_for_bench(
+    engine: &Engine<SoloSigner, DaemonClient, LocalLedger>,
+) -> shekyl_scanner::BalanceSummary {
+    use crate::engine::traits::LedgerEngine;
+    engine.ledger.balance()
+}
+
+/// Project a wallet's account public address through the
+/// `KeyEngine::account_public_address` trait method (the trait is
+/// `pub(crate)` so rustdoc intra-doc links to it from a `pub`
+/// item would render as private-link warnings; plain backticks
+/// throughout match the convention used in the bench files'
+/// module-level docstrings), dispatched on a standalone
+/// [`local_keys::LocalKeys`] fixture. See
+/// [`crate::__bench_internals::engine_account_public_address_for_bench`]
+/// for the public-facing wrapper and the use-site rationale.
+///
+/// # Why this takes `&LocalKeys` and not `&Engine<...>`
+///
+/// `Engine<S, D, L>` holds `keys: AllKeysBlob` (the wallet key
+/// material) but does not yet hold the `KeyEngine`-implementing
+/// [`local_keys::LocalKeys`] as a field — that orchestrator
+/// integration is `KeyEngine` PR-5 territory per
+/// `docs/design/STAGE_1_PR_3_KEY_ENGINE.md` §2.1.1 (the Round 4a
+/// workflow-shape pivot). The post-M3-series state preserves
+/// `LocalKeys` as the `KeyEngine` implementor
+/// (`#[allow(dead_code)]` per the orchestrator-integration
+/// deferral) without wiring it into the `Engine` struct.
+///
+/// Given the substrate, the bench fixture is a standalone
+/// `Box<LocalKeys>` rather than the unified
+/// `(Box<Engine<SoloSigner, DaemonClient, LocalLedger>>, TempDir)`
+/// shape the LedgerEngine bench uses. This divergence from the
+/// canonical `engine_trait_bench_*` fixture shape is forced by the
+/// substrate, not chosen for convenience; it is documented in the
+/// bench module's file-level docstring and in the close-out PR's
+/// pre-flight §1.2.
+///
+/// The bench still classifies under the `engine_trait_bench_*`
+/// threshold class via the function-name routing discipline (per
+/// `STAGE_0_HARNESS.md` §3.3.1's `classify()` rule, which routes on
+/// the `#[library_benchmark]` function name, not on fixture shape).
+///
+/// # Why this returns `usize` rather than `&AccountPublicAddress`
+///
+/// The natural return type of the trait method is
+/// `&AccountPublicAddress`, but that type is `pub(crate)` — exposing
+/// it through this `pub fn`'s signature would widen the crate's
+/// public API beyond the `bench-internals` gate. The helper instead
+/// returns a `usize` summary (the sum of both field byte-lengths),
+/// which is a primitive `pub` type. The trait call itself is
+/// preserved against compiler elision by the internal
+/// `std::hint::black_box(...)` around the address reference; the
+/// returned length sum is a small additional load (two `Vec::len()`
+/// metadata reads — the field bytes themselves are not touched) that
+/// gives the criterion / iai-callgrind bench loops something
+/// observable to consume so the bench function's overall result is
+/// not elided. The measurement surface is unchanged from the natural
+/// shape; only the API-widening footprint differs (zero added types
+/// in `__bench_internals`).
+#[cfg(feature = "bench-internals")]
+pub fn engine_account_public_address_for_bench(keys: &local_keys::LocalKeys) -> usize {
+    use crate::engine::traits::key::KeyEngine;
+    let addr = std::hint::black_box(keys.account_public_address());
+    addr.pqc_public_key.len() + addr.classical_address_bytes.len()
+}
