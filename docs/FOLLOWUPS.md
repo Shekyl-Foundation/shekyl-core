@@ -387,9 +387,14 @@ sustainability is unaffected by the recalibration.
   `sync_state.restore_from_height` plus
   `WalletFile::effective_skip_to_height` /
   `effective_refresh_from_block_height`; `scan_start_floor` on
-  `LocalRefresh::new`; `ensure_birthday_anchor` before refresh;
-  producer `scan_range_start` and progress `blocks_total` use the
-  effective start. `Engine::create` seeds
+  `LocalRefresh::new`; `ensure_birthday_anchor` before refresh.
+  The producer derives its scan start from the anchored snapshot
+  (`snapshot.synced_height + 1`) rather than re-deriving a floor at
+  producer time, and progress `blocks_total` reflects the post-anchor
+  range — this closed the residual TOCTOU race between the anchor's
+  daemon-height read and the producer's start computation (the
+  earlier `scan_range_start` / `effective_floor_at_tip` helpers were
+  removed in commit `87264a3a2`). `Engine::create` seeds
   `sync_state.restore_from_height` from `restore_height_hint`.
 
   **Reopening criteria (unchanged).** Reopens as P1 if a binary
@@ -4323,8 +4328,8 @@ one place to confirm each item's relationship to the wallet stack.
 - **Re-examine `/FIiso646.h` and `rct::` → `ct::` deferrals.** Both
   deferrals rest on the same "upstream cherry-pick preservation"
   framing that
-  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md) §"Why this matters
-  more than it used to" calls largely notional given Shekyl's actual
+  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md)'s framing note
+  (top of file) calls largely notional given Shekyl's actual
   divergence from Monero (~3 substantive commits across 8 inherited
   files in the last 2 years; several files 88–100% diverged by line
   count). At V3.2 the question is no longer "cherry-pick risk vs.
@@ -4348,7 +4353,8 @@ one place to confirm each item's relationship to the wallet stack.
 
   2. **`rct::` → `ct::` namespace rename** — the type-alias bridge
      `using ct_signatures = rct::rctSig;` ships today
-     ([`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md):578–584); the
+     ([`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md) §"`rct_signatures`
+     field name is a Monero-era misnomer — partially addressed"); the
      full caller migration and the namespace rename in
      `src/fcmp/rctTypes.h` / `rctOps.h` / `rctSigs.h` are currently
      V4-targeted on the same "end of Monero upstream activity"
@@ -4359,16 +4365,52 @@ one place to confirm each item's relationship to the wallet stack.
      rename's deferral cost is rising and the V4 target should
      compress to V3.x.
 
-  Cross-references:
-  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md):17–18 (framing
-  note),
-  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md):24–38 (alternative
-  tokens decision),
-  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md):565–600 (rct/ct
-  rename status). Exit criteria: each of the two items has a written
-  V3.2 disposition (do, defer-with-reason, or stay-on-workaround); the
-  STRUCTURAL_TODO citations point at a real section header. Target:
-  V3.2.
+  Cross-references (by section header, robust against line drift):
+  [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md) framing note (top of
+  file; cousin-not-downstream premise),
+  §"C++ alternative tokens (`not`, `and`, `or`) used extensively"
+  (alternative-tokens decision),
+  §"`rct_signatures` field name is a Monero-era misnomer — partially
+  addressed" (rct/ct rename status). Exit criteria: each of the two
+  items has a written V3.2 disposition (do, defer-with-reason, or
+  stay-on-workaround); the STRUCTURAL_TODO citations point at a real
+  section header. Target: V3.2.
+
+- **MSVC / Windows build-debt cluster (migrated from
+  `STRUCTURAL_TODO.md`, 2026-05-30).** Consolidated here so open debt
+  lives in one tracker; `STRUCTURAL_TODO.md` is now a structural-
+  reference doc (32-bit security argument, migration-on-touch rubric,
+  naming reference), not an open-todo list. Three Windows/MSVC items:
+
+  1. **`libunbound` stubbed on MSVC (V3.2).** `dns_utils.cpp` is wrapped
+     in `#ifdef HAVE_DNS_UNBOUND` with no-op stubs in the `#else`
+     branch, so wallet DNS resolution (OpenAlias lookup, DNS checkpoint
+     fetch) silently does nothing on MSVC/Windows builds. Options:
+     (a) port `libunbound` to vcpkg; (b) Windows-native DNS backend
+     (`DnsQuery_A` / `DnsQueryEx`); (c) accept the limitation
+     (GUI-wallet-first posture; Tor/I2P transports are independent).
+     Option (c) is lowest-effort and likely correct, but unratified.
+     Whichever wins, the `#else` stubs must declare the contract
+     explicitly rather than silently returning empty strings. Target:
+     V3.2.
+
+  2. **MSVC warnings in vendored dependencies (V3.2).**
+     `liblmdb/mdb.c:1745` (C4172: returning address of local `buf` —
+     genuine dangling-pointer bug, debug-only path) is the only one with
+     correctness risk and deserves an upstream report + local patch;
+     `mdb.c:8417` (C4333), `mdb.c:939,7840` (C4146),
+     `randomx/blake2.h:82,84` (C4804) are cosmetic. None are in
+     wallet-core hot paths. Target: V3.2 (address the dangling-pointer
+     case; cosmetic ones may stay open).
+
+  3. **vcpkg builds take 45+ minutes — partially resolved (V3.3).** Even
+     with `actions/cache`, vcpkg install is 45+ min cold / 10–15 min
+     warm. A root `vcpkg.json` manifest was attempted (April 2026) but
+     broke MSVC CI and was reverted; packages are listed explicitly in
+     `.github/workflows/build.yml`. Manifest-mode migration remains
+     possible but low priority — CI timing is acceptable with warm
+     caches and the explicit YAML list is easier to audit. No action
+     unless CI times degrade or the package list grows. Target: V3.3.
 
 ---
 

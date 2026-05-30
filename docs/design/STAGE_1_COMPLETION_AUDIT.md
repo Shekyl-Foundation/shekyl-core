@@ -57,6 +57,35 @@ Tracked in `docs/FOLLOWUPS.md` and/or `docs/design/WALLET_REWRITE_PLAN.md`:
 - optional persistence/economics trait PRs
 - economics §3.3 benchmark follow-through
 
+## Closure checkpoint — 2026-05-30 (RefreshEngine P1/P2/P3 + tracker consolidation)
+
+Post-PR-#88 audit re-run after the RefreshEngine follow-ups landed on `dev`.
+Ground-truthed against code, not doc claims (per the inter-stage cleanup PR).
+
+| Item | Status on `dev` | Evidence |
+| --- | --- | --- |
+| P1 - async-path refresh post-pass skipped | Closed (2026-05-29) | `refresh/p1-async-path-post-pass`; `LedgerEngine::apply_scan_result` trait method + `LocalLedger` impl removed; async path routes through `Engine::apply_scan_result` |
+| P3 - `apply_scan_result_to_state` `Vec<usize>` discard | Closed (2026-05-29) | Same commit as P1 (shape (b)); discard sites disappeared with the removed trait method |
+| P2 - wallet-birthday plumbing into producer start-height | Closed (2026-05-30) | merged PR #91 (`refresh/p2-wallet-birthday-plumbing`); Shape A ledger anchor — `effective_scan_floor` + `ensure_birthday_anchor` in `engine/scan_floor.rs`; producer derives start from anchored `snapshot.synced_height + 1` (TOCTOU-safe; `scan_range_start`/`effective_floor_at_tip` helpers removed in `87264a3a2`) |
+| C2c economics cutover (`get_block_reward` -> Rust FFI) | **Still open** | `src/cryptonote_basic/cryptonote_basic_impl.cpp:77-122` still computes base reward in C++; `shekyl_base_block_reward` (`rust/shekyl-ffi/src/lib.rs:797`) exists but no consensus call site wires it. Remains a **standalone 7-cutover PR** per `STAGE_1_PR_7_ECONOMICS_ENGINE.md` §6.2 Option B (bundling rejected); H1-H3 hazards apply |
+
+**Stage 1 disposition unchanged:** critical-path trait extraction is complete;
+the sole remaining V3.0 pre-genesis economics item is the C2c cutover, which is
+explicitly scoped as its own consensus-path PR (not eligible for doc/chore
+bundling per `20-rust-vs-cpp-policy.mdc` and `07-consensus-atomic-cutovers.mdc`).
+
+**Tech-debt tracker consolidation (this PR):** open structural-debt
+*tracking* now lives in a single place — `docs/FOLLOWUPS.md`. The three
+orphan MSVC/Windows build items (`libunbound` stub, vendored-code warnings,
+vcpkg manifest-mode) migrated from `docs/STRUCTURAL_TODO.md` into the
+FOLLOWUPS V3.2 section. `STRUCTURAL_TODO.md` is **repurposed** (not deleted)
+as a structural-reference / reviewer-rubric doc — it retains the 32-bit
+"bit-width carve-out" security argument and migration-on-touch rubric that
+`CHANGELOG.md`, `USER_GUIDE.md`, `contrib/depends/README.md`,
+`CPP_INHERITANCE_INVENTORY.md`, the four 32-bit tripwire comment blocks, and
+`FOLLOWUPS.md` cite as canonical. Git history remains the authoritative
+archive.
+
 ## Notes for future edits
 
 - Keep this document append-only for closure checkpoints.

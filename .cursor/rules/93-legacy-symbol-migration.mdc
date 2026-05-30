@@ -53,8 +53,10 @@ transitional window. Do **not** touch them:
 
 - The `MONERO_VERSION*` macro aliases in [`src/version.h`](src/version.h)
   exist so un-migrated files and upstream cherry-picks keep compiling.
-- Any future alias that is documented in a `docs/STRUCTURAL_TODO.md` entry
-  with an explicit retirement PR queued.
+- Any future alias that is documented in a `docs/FOLLOWUPS.md` entry
+  with an explicit retirement PR queued (open structural-debt tracking
+  lives there; `docs/STRUCTURAL_TODO.md` is reference-only as of
+  2026-05-30).
 
 These aliases are removed in a single cleanup PR per alias after their
 retirement conditions are met (typically after a hard-fork stabilizes or a
