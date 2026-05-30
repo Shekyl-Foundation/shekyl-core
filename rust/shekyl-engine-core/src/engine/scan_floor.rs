@@ -59,17 +59,6 @@ pub(crate) fn effective_scan_floor(
     floor
 }
 
-/// First block height the producer should scan given the wallet tip and
-/// floor. When `scan_start_floor` is zero, returns `synced_height + 1`.
-pub(crate) fn scan_range_start(synced_height: u64, scan_start_floor: u64) -> u64 {
-    let incremental = synced_height.saturating_add(1);
-    if scan_start_floor > 0 && incremental < scan_start_floor {
-        scan_start_floor
-    } else {
-        incremental
-    }
-}
-
 /// Whether the ledger must be anchored before scanning so the merge gate
 /// sees `synced_height + 1 == scan_start_floor`.
 pub(crate) const fn needs_birthday_anchor(synced_height: u64, scan_start_floor: u64) -> bool {
@@ -97,18 +86,6 @@ pub(crate) fn anchor_target(scan_start_floor: u64, daemon_height: u64) -> Option
     }
     let highest_block = daemon_height - 1;
     Some((scan_start_floor - 1).min(highest_block))
-}
-
-/// Clamp the scan floor to the daemon tip for the producer's range.
-///
-/// A birthday above the chain end has no blocks to scan yet, so the
-/// producer must fall back to the incremental start rather than skipping
-/// past the tip. Skipping past the tip would emit an empty `ScanResult`
-/// whose start exceeds `synced_height + 1` (the anchor can only reach the
-/// daemon's highest block), breaking the merge gate. Clamping keeps the
-/// producer's start aligned with the anchor.
-pub(crate) fn effective_floor_at_tip(scan_start_floor: u64, tip: u64) -> u64 {
-    scan_start_floor.min(tip)
 }
 
 /// Advance an empty ledger's tip to `anchor_synced` with `tip_hash`.
@@ -240,32 +217,6 @@ mod tests {
     }
 
     #[test]
-    fn scan_range_start_respects_floor_and_steady_state() {
-        assert_eq!(scan_range_start(0, 1000), 1000);
-        assert_eq!(
-            scan_range_start(500, 1000),
-            1000,
-            "below floor starts at floor"
-        );
-        assert_eq!(
-            scan_range_start(999, 1000),
-            1000,
-            "one below floor starts at floor"
-        );
-        assert_eq!(
-            scan_range_start(1000, 1000),
-            1001,
-            "at floor stays incremental"
-        );
-        assert_eq!(
-            scan_range_start(1500, 1000),
-            1501,
-            "past floor stays incremental"
-        );
-        assert_eq!(scan_range_start(0, 0), 1);
-    }
-
-    #[test]
     fn anchor_target_clamps_to_daemon_highest_block() {
         // Floor below the daemon tip: anchor at floor - 1.
         assert_eq!(anchor_target(1000, 1010), Some(999));
@@ -275,14 +226,6 @@ mod tests {
         assert_eq!(anchor_target(1000, 500), Some(499));
         // Empty chain: nothing to anchor against.
         assert_eq!(anchor_target(1000, 0), None);
-    }
-
-    #[test]
-    fn effective_floor_at_tip_clamps_above_tip() {
-        assert_eq!(effective_floor_at_tip(1000, 1010), 1000);
-        assert_eq!(effective_floor_at_tip(1000, 500), 500);
-        assert_eq!(effective_floor_at_tip(1000, 1000), 1000);
-        assert_eq!(effective_floor_at_tip(0, 1010), 0);
     }
 
     #[test]
