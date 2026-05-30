@@ -34,27 +34,6 @@ impl ScanStartFloorProvider for LocalRefresh {
     }
 }
 
-/// Ledger implementors that support pre-scan birthday anchoring.
-pub(crate) trait BirthdayAnchorHost {
-    /// Advance an empty ledger to `floor - 1` when required. No-op
-    /// when `floor` does not exceed `synced_height + 1`.
-    fn ensure_birthday_anchor<D: DaemonEngine>(
-        &self,
-        daemon: &D,
-        scan_start_floor: u64,
-    ) -> impl std::future::Future<Output = Result<(), RefreshError>> + Send;
-}
-
-impl BirthdayAnchorHost for LocalLedger {
-    async fn ensure_birthday_anchor<D: DaemonEngine>(
-        &self,
-        daemon: &D,
-        scan_start_floor: u64,
-    ) -> Result<(), RefreshError> {
-        ensure_birthday_anchor(self, daemon, scan_start_floor).await
-    }
-}
-
 /// Resolve the effective scan floor from persisted and session hints.
 ///
 /// Each argument is already resolved against network defaults where

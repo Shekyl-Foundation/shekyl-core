@@ -325,6 +325,12 @@ mod tests {
     /// delegation; it has no consumer outside this test module.
     struct DelegationStub;
 
+    impl crate::engine::scan_floor::ScanStartFloorProvider for DelegationStub {
+        fn scan_start_floor(&self) -> u64 {
+            0
+        }
+    }
+
     impl RefreshEngine for DelegationStub {
         type Error = RefreshError;
 

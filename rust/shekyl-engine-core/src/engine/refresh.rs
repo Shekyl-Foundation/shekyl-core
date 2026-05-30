@@ -905,7 +905,8 @@ async fn run_refresh_task<S, D: DaemonEngine, R, P>(
         let g = engine_arc.read().await;
         let floor = g.refresh.scan_start_floor();
         let daemon = g.daemon().clone();
-        if let Err(e) = g.ledger.ensure_birthday_anchor(&daemon, floor).await {
+        if let Err(e) = super::scan_floor::ensure_birthday_anchor(&g.ledger, &daemon, floor).await
+        {
             _ = completion.send(Err(e));
             return;
         }
@@ -1169,8 +1170,12 @@ fn summarize(result: &ScanResult, merge_attempts: u32) -> RefreshSummary {
 // share the same `LocalLedger` specialization and the same
 // `Engine::apply_scan_result` merge entry point.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine, P: super::traits::PendingTxEngine>
-    Engine<S, D, LocalLedger, R, P>
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        R: RefreshEngine + super::scan_floor::ScanStartFloorProvider,
+        P: super::traits::PendingTxEngine,
+    > Engine<S, D, LocalLedger, R, P>
 {
     /// Spawn an async refresh task and return a [`RefreshHandle`]
     /// for observing and controlling it.
@@ -2901,6 +2906,15 @@ mod start_refresh_integration_tests {
         }
     }
 
+    impl<R> crate::engine::scan_floor::ScanStartFloorProvider for StaleThenRealRefresh<R>
+    where
+        R: RefreshEngine + crate::engine::scan_floor::ScanStartFloorProvider,
+    {
+        fn scan_start_floor(&self) -> u64 {
+            self.inner.scan_start_floor()
+        }
+    }
+
     impl<R: RefreshEngine> RefreshEngine for StaleThenRealRefresh<R> {
         type Error = RefreshError;
 
@@ -3112,7 +3126,7 @@ mod start_refresh_integration_tests {
                 .into_inner();
             let vm = ViewMaterial::try_from_keys(engine.keys())
                 .expect("ViewMaterial::try_from_keys against engine keys");
-            let refresh = StaleThenRealRefresh::new(LocalRefresh::new(vm));
+            let refresh = StaleThenRealRefresh::new(LocalRefresh::new(vm, 0));
             let hybrid = engine.replace_refresh(refresh);
             Arc::new(RwLock::new(hybrid))
         };
@@ -3281,9 +3295,8 @@ mod start_refresh_integration_tests {
             // `StaleThenRealRefresh` to drive the one-shot retry.
             let vm = ViewMaterial::try_from_keys(engine.keys())
                 .expect("ViewMaterial::try_from_keys against engine keys");
-            let refresh = StaleThenRealRefresh::new(FaultInjectingRefresh::new(
-                LocalRefresh::new(vm, 0),
-            ));
+            let refresh =
+                StaleThenRealRefresh::new(FaultInjectingRefresh::new(LocalRefresh::new(vm, 0)));
             let hybrid = engine.replace_refresh(refresh);
             Arc::new(RwLock::new(hybrid))
         };
