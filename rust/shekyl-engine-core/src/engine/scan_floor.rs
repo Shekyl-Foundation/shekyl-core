@@ -86,15 +86,23 @@ pub(crate) fn anchor_ledger_block(
     anchor_synced: u64,
     tip_hash: [u8; 32],
 ) -> Result<(), RefreshError> {
+    // The ledger already being past the anchor height is a satisfied
+    // anchor with nothing to do. This must be checked *before* the
+    // empty-transfer precondition: a concurrent refresh may have advanced
+    // the ledger past `anchor_synced` and inserted transfers between this
+    // preflight's unlocked `synced_height` read and the write guard. That
+    // is a benign stale-preflight race, not an invariant violation, so it
+    // must short-circuit to a no-op rather than reject the non-empty
+    // transfer set.
+    let current = ledger.height();
+    if current > anchor_synced {
+        return Ok(());
+    }
+
     if !ledger.transfers.is_empty() {
         return Err(RefreshError::InternalInvariantViolation {
             context: "birthday anchor requires an empty transfer set",
         });
-    }
-
-    let current = ledger.height();
-    if current > anchor_synced {
-        return Ok(());
     }
 
     if current == anchor_synced {

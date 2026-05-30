@@ -590,12 +590,21 @@ impl RefreshEngine for LocalRefresh {
             let mut effective_start = original_start;
             let mut effective_parent_hash = parent_hash_for_start(&snapshot, original_start);
             if original_start > 1 && effective_parent_hash.is_none() {
-                effective_parent_hash = Some(
-                    match super::scan_floor::fetch_block_hash_at(daemon, original_start - 1).await {
-                        Ok(h) => h,
-                        Err(_) => return Err(LocalRefreshError::Io),
-                    },
-                );
+                // Boundary parent-hash fetch for a floored/birthday-anchored
+                // start: the snapshot's reorg window doesn't carry the hash
+                // at `original_start - 1`. Route through the same retry /
+                // cancellation / diagnostic helper the per-block scan uses so
+                // a transient failure here is retried with backoff rather than
+                // terminating refresh as `Io` on the first error.
+                let parent = fetch_block_with_retry(
+                    daemon,
+                    original_start - 1,
+                    &cancel,
+                    &mut emit_state,
+                    diagnostics,
+                )
+                .await?;
+                effective_parent_hash = Some(parent.block.hash());
             }
             let mut block_hashes: Vec<(u64, [u8; 32])> = Vec::new();
             let mut new_transfers: Vec<DetectedTransfer> = Vec::new();
