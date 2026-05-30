@@ -253,6 +253,12 @@ pub struct LocalRefresh {
     /// [`ZeroizeOnDrop`](zeroize::ZeroizeOnDrop) chain wipes the
     /// secret bytes when the implementor drops.
     view_material: ViewMaterial,
+    /// Minimum block height for the producer scan loop (wallet
+    /// birthday + session overrides). Zero means scan from
+    /// `synced_height + 1` only. The orchestrator anchors the ledger
+    /// when this exceeds `synced_height + 1` before taking a
+    /// snapshot; see [`super::scan_floor`].
+    scan_start_floor: u64,
 }
 
 impl LocalRefresh {
@@ -263,9 +269,16 @@ impl LocalRefresh {
     /// per §5.4.7 R4 a-instance-scoped; on drop the embedded
     /// [`ViewMaterial`]'s [`ZeroizeOnDrop`](zeroize::ZeroizeOnDrop)
     /// chain wipes the secret bytes.
-    #[allow(dead_code)] // C5 lands the first orchestrator-side construction site.
-    pub const fn new(view_material: ViewMaterial) -> Self {
-        Self { view_material }
+    pub const fn new(view_material: ViewMaterial, scan_start_floor: u64) -> Self {
+        Self {
+            view_material,
+            scan_start_floor,
+        }
+    }
+
+    /// Persisted/session scan floor wired at wallet open.
+    pub(crate) const fn scan_start_floor(&self) -> u64 {
+        self.scan_start_floor
     }
 
     /// Build a fresh [`Scanner`](shekyl_scanner::Scanner) from
@@ -559,10 +572,17 @@ impl RefreshEngine for LocalRefresh {
 
             let mut scanner = self.build_scanner()?;
 
-            // Compute height range: scan (synced_height + 1)..tip.
-            // Empty range → typed no-op with parent_hash anchored
-            // to the snapshot's recorded hash so the merge gate
-            // validates.
+            // Scan from the snapshot's `synced_height + 1`. The birthday
+            // floor skip is realized entirely by the orchestrator's pre-scan
+            // anchor (`scan_floor::ensure_birthday_anchor`), which advances
+            // `synced_height` to the floor boundary — clamped to the daemon's
+            // highest block — before this snapshot is taken. Deriving the
+            // start from the anchored `synced_height` rather than re-applying
+            // the floor against a freshly fetched tip keeps the start
+            // gate-consistent (`start == synced_height + 1`) by construction:
+            // a re-derivation could disagree with the anchored height if the
+            // daemon advanced between the anchor's height read and this one,
+            // breaking the merge gate.
             let original_start = snapshot.synced_height.saturating_add(1);
             let end = tip;
             if original_start >= end {
@@ -574,6 +594,23 @@ impl RefreshEngine for LocalRefresh {
             // cancellation via Scanner::scan_with_cancel.
             let mut effective_start = original_start;
             let mut effective_parent_hash = parent_hash_for_start(&snapshot, original_start);
+            if original_start > 1 && effective_parent_hash.is_none() {
+                // Boundary parent-hash fetch for a floored/birthday-anchored
+                // start: the snapshot's reorg window doesn't carry the hash
+                // at `original_start - 1`. Route through the same retry /
+                // cancellation / diagnostic helper the per-block scan uses so
+                // a transient failure here is retried with backoff rather than
+                // terminating refresh as `Io` on the first error.
+                let parent = fetch_block_with_retry(
+                    daemon,
+                    original_start - 1,
+                    &cancel,
+                    &mut emit_state,
+                    diagnostics,
+                )
+                .await?;
+                effective_parent_hash = Some(parent.block.hash());
+            }
             let mut block_hashes: Vec<(u64, [u8; 32])> = Vec::new();
             let mut new_transfers: Vec<DetectedTransfer> = Vec::new();
             let mut spent_key_images: Vec<KeyImageObserved> = Vec::new();
@@ -1337,7 +1374,14 @@ mod producer_property_tests {
         .expect("rederive_account against fakechain raw32 seed");
         let vm = ViewMaterial::try_from_keys(&blob)
             .expect("ViewMaterial::try_from_keys against deterministic test blob");
-        LocalRefresh::new(vm)
+        LocalRefresh::new(vm, 0)
+    }
+
+    fn snapshot_at_anchor(synced: u64, hash: [u8; 32]) -> LedgerSnapshot {
+        let mut ledger = LedgerBlock::empty();
+        crate::engine::scan_floor::anchor_ledger_block(&mut ledger, synced, hash)
+            .expect("test anchor");
+        LedgerSnapshot::from_ledger(&ledger)
     }
 
     /// Construct a `(height, parent_hash)`-chained linear chain of `n`
@@ -1401,6 +1445,91 @@ mod producer_property_tests {
     /// Used by the `LocalRefreshError::Malformed` coherence check.
     fn is_daemon_malformed(event: &RefreshDiagnostic) -> bool {
         matches!(event, RefreshDiagnostic::DaemonMalformed { .. })
+    }
+
+    // ── Birthday floor (P2 producer start-height) ───────────────
+
+    /// Wallet birthday floor 1000 with ledger anchored at 999: producer
+    /// scans only `1000..tip`, not from genesis.
+    #[tokio::test(start_paused = true)]
+    async fn produce_scan_respects_birthday_floor_when_ledger_anchored() {
+        const FLOOR: u64 = 1000;
+        const TIP: u64 = 1010;
+        let blob = rederive_account(
+            &PROPERTY_TEST_MASTER_SEED,
+            DerivationNetwork::Fakechain,
+            SeedFormat::Raw32,
+        )
+        .expect("rederive_account against fakechain raw32 seed");
+        let vm = ViewMaterial::try_from_keys(&blob)
+            .expect("ViewMaterial::try_from_keys against deterministic test blob");
+        let refresh = LocalRefresh::new(vm, FLOOR);
+        let chain = linear_chain(TIP);
+        let parent_at_999 = chain[usize::try_from(FLOOR - 1).unwrap()].block.hash();
+        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
+        let snapshot = snapshot_at_anchor(FLOOR - 1, parent_at_999);
+        let sink = AssertionSink::new();
+        let cancel = CancellationToken::new();
+        let (progress_tx, _progress_rx) = fresh_progress_channel();
+
+        let result = refresh
+            .produce_scan_result(
+                snapshot,
+                &daemon,
+                RefreshOptions::default(),
+                cancel,
+                progress_tx,
+                &sink,
+            )
+            .await
+            .expect("anchored birthday scan succeeds");
+
+        assert_eq!(result.processed_height_range.start, FLOOR);
+        assert_eq!(result.processed_height_range.end, TIP);
+        assert_eq!(
+            result.block_hashes.len(),
+            usize::try_from(TIP - FLOOR).unwrap()
+        );
+        assert_eq!(result.parent_hash, Some(parent_at_999));
+    }
+
+    /// When the wallet is already synced past the floor, scanning
+    /// continues incrementally from `synced_height + 1`.
+    #[tokio::test(start_paused = true)]
+    async fn produce_scan_floor_noop_when_synced_past_birthday() {
+        const FLOOR: u64 = 100;
+        const SYNCED: u64 = 500;
+        const TIP: u64 = 505;
+        let blob = rederive_account(
+            &PROPERTY_TEST_MASTER_SEED,
+            DerivationNetwork::Fakechain,
+            SeedFormat::Raw32,
+        )
+        .expect("rederive_account against fakechain raw32 seed");
+        let vm = ViewMaterial::try_from_keys(&blob)
+            .expect("ViewMaterial::try_from_keys against deterministic test blob");
+        let refresh = LocalRefresh::new(vm, FLOOR);
+        let chain = linear_chain(TIP);
+        let parent = chain[usize::try_from(SYNCED).unwrap()].block.hash();
+        let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, chain);
+        let snapshot = snapshot_at_anchor(SYNCED, parent);
+        let sink = AssertionSink::new();
+        let cancel = CancellationToken::new();
+        let (progress_tx, _progress_rx) = fresh_progress_channel();
+
+        let result = refresh
+            .produce_scan_result(
+                snapshot,
+                &daemon,
+                RefreshOptions::default(),
+                cancel,
+                progress_tx,
+                &sink,
+            )
+            .await
+            .expect("incremental scan past floor succeeds");
+
+        assert_eq!(result.processed_height_range, (SYNCED + 1)..TIP);
     }
 
     // ── Coherence: clean path (Ok → no error-class events) ─────

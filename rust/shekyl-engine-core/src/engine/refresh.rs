@@ -850,8 +850,14 @@ const _: fn() = || {
 ///
 /// # Cancellation
 ///
-/// The cancellation token is checked at four points:
+/// The cancellation token is checked at five points:
 ///
+/// 0. **Pre-anchor** — before the birthday-anchor preflight. The
+///    anchor fetches a block hash from the daemon and advances
+///    `LocalLedger` to `floor - 1`; both are refresh-side side
+///    effects. A cancel observed here short-circuits to `Cancelled`
+///    without committing them, so an already-cancelled task does not
+///    mutate wallet state.
 /// 1. **Top of each attempt** — covers the boundary between attempts,
 ///    including the gap between a `Retrying` publish and the next
 ///    snapshot.
@@ -873,7 +879,7 @@ const _: fn() = || {
 ///    the work that produced it. This is the trade-off cancellation
 ///    asks us to make.
 ///
-/// On observation at any of the four points, a final `Cancelled`
+/// On observation at any of these points, a final `Cancelled`
 /// progress update is best-effort emitted — preserving the last
 /// published `height` / `blocks_processed` / `blocks_total` so
 /// subscribers don't observe a misleading rollback to zero — and
@@ -888,7 +894,7 @@ const _: fn() = || {
 /// abandon a successful refresh in flight have to drop the handle
 /// and reconcile against the next `progress().borrow()`.
 #[allow(clippy::type_complexity)]
-async fn run_refresh_task<S, D: DaemonEngine, R: RefreshEngine, P>(
+async fn run_refresh_task<S, D: DaemonEngine, R, P>(
     engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S, D, LocalLedger, R, P>>>,
     opts: RefreshOptions,
     cancel: CancellationToken,
@@ -897,9 +903,44 @@ async fn run_refresh_task<S, D: DaemonEngine, R: RefreshEngine, P>(
     _slot_guard: SlotGuard,
 ) where
     S: EngineSignerKind + Send + Sync + 'static,
+    R: RefreshEngine + super::scan_floor::ScanStartFloorProvider + Send + Sync + 'static,
     P: super::traits::PendingTxEngine + Send + Sync + 'static,
     Engine<S, D, LocalLedger, R, P>: Send + Sync,
 {
+    // Pre-anchor cancellation checkpoint (point 0 in the cancellation
+    // contract above). The birthday anchor fetches a block hash from
+    // the daemon and advances `LocalLedger` to `floor - 1`; both are
+    // refresh-side side effects. A cancel observed before the anchor
+    // must short-circuit to `Cancelled` without committing them, so a
+    // handle dropped or cancelled before the task runs does not mutate
+    // wallet state.
+    if cancel.is_cancelled() {
+        let mut terminal = *progress.borrow();
+        terminal.phase = RefreshPhase::Cancelled;
+        _ = progress.send(terminal);
+        _ = completion.send(Err(RefreshError::Cancelled));
+        return;
+    }
+    // Clone the ledger handle and daemon under a brief read guard, then
+    // drop the guard before the network-bound anchor await. The rest of
+    // this driver follows the same clone-then-drop discipline so daemon
+    // I/O never holds the outer `engine_arc` read lock and never blocks
+    // a writer for the duration of an RPC round-trip.
+    {
+        let (ledger, daemon, floor) = {
+            let g = engine_arc.read().await;
+            (
+                std::sync::Arc::clone(&g.ledger),
+                g.daemon().clone(),
+                g.refresh.scan_start_floor(),
+            )
+        };
+        if let Err(e) = super::scan_floor::ensure_birthday_anchor(&ledger, &daemon, floor).await {
+            _ = completion.send(Err(e));
+            return;
+        }
+    }
+
     // Producer-side observability sink. `TracingDiagnosticSink` is the
     // V3.0 canonical projection per `engine/diagnostics.rs` F9: each
     // RefreshDiagnostic variant is routed to a typed `tracing` span
@@ -1158,8 +1199,12 @@ fn summarize(result: &ScanResult, merge_attempts: u32) -> RefreshSummary {
 // share the same `LocalLedger` specialization and the same
 // `Engine::apply_scan_result` merge entry point.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine, P: super::traits::PendingTxEngine>
-    Engine<S, D, LocalLedger, R, P>
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        R: RefreshEngine + super::scan_floor::ScanStartFloorProvider,
+        P: super::traits::PendingTxEngine,
+    > Engine<S, D, LocalLedger, R, P>
 {
     /// Spawn an async refresh task and return a [`RefreshHandle`]
     /// for observing and controlling it.
@@ -1293,8 +1338,12 @@ impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine, P: super::traits::P
 // sync entry points here and the async `start_refresh` path share this
 // `Engine::apply_scan_result` merge entry point.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine, P: super::traits::PendingTxEngine>
-    Engine<S, D, LocalLedger, R, P>
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        R: RefreshEngine + super::scan_floor::ScanStartFloorProvider,
+        P: super::traits::PendingTxEngine,
+    > Engine<S, D, LocalLedger, R, P>
 {
     /// Drive a refresh against the configured daemon: pull a snapshot
     /// of the wallet's ledger, ask the producer to scan
@@ -1383,7 +1432,16 @@ impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine, P: super::traits::P
         &self,
         opts: &RefreshOptions,
         runtime: &tokio::runtime::Handle,
-    ) -> Result<RefreshSummary, RefreshError> {
+    ) -> Result<RefreshSummary, RefreshError>
+    where
+        R: super::scan_floor::ScanStartFloorProvider,
+    {
+        let floor = self.refresh.scan_start_floor();
+        runtime.block_on(super::scan_floor::ensure_birthday_anchor(
+            &self.ledger,
+            &self.daemon,
+            floor,
+        ))?;
         // Producer dispatch via the [`RefreshEngine`] trait surface
         // (`R: RefreshEngine`, default `LocalRefresh`). The trait
         // implementor owns scanner construction, daemon-tip read,
@@ -2877,6 +2935,15 @@ mod start_refresh_integration_tests {
         }
     }
 
+    impl<R> crate::engine::scan_floor::ScanStartFloorProvider for StaleThenRealRefresh<R>
+    where
+        R: RefreshEngine + crate::engine::scan_floor::ScanStartFloorProvider,
+    {
+        fn scan_start_floor(&self) -> u64 {
+            self.inner.scan_start_floor()
+        }
+    }
+
     impl<R: RefreshEngine> RefreshEngine for StaleThenRealRefresh<R> {
         type Error = RefreshError;
 
@@ -3088,7 +3155,7 @@ mod start_refresh_integration_tests {
                 .into_inner();
             let vm = ViewMaterial::try_from_keys(engine.keys())
                 .expect("ViewMaterial::try_from_keys against engine keys");
-            let refresh = StaleThenRealRefresh::new(LocalRefresh::new(vm));
+            let refresh = StaleThenRealRefresh::new(LocalRefresh::new(vm, 0));
             let hybrid = engine.replace_refresh(refresh);
             Arc::new(RwLock::new(hybrid))
         };
@@ -3258,7 +3325,7 @@ mod start_refresh_integration_tests {
             let vm = ViewMaterial::try_from_keys(engine.keys())
                 .expect("ViewMaterial::try_from_keys against engine keys");
             let refresh =
-                StaleThenRealRefresh::new(FaultInjectingRefresh::new(LocalRefresh::new(vm)));
+                StaleThenRealRefresh::new(FaultInjectingRefresh::new(LocalRefresh::new(vm, 0)));
             let hybrid = engine.replace_refresh(refresh);
             Arc::new(RwLock::new(hybrid))
         };

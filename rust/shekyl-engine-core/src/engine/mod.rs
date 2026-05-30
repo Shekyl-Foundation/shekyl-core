@@ -172,6 +172,7 @@ pub mod network;
 pub mod output_selector;
 pub mod pending;
 pub mod refresh;
+pub(crate) mod scan_floor;
 pub(crate) mod sealing_keys;
 pub mod signer;
 pub(crate) mod traits;
@@ -697,7 +698,7 @@ impl<
     /// // Re-derive ViewMaterial from the engine's keys (the same path
     /// // Engine::create uses internally at assemble time):
     /// let vm = ViewMaterial::try_from_keys(real.keys())?;
-    /// let refresh = FaultInjecting::new(LocalRefresh::new(vm));
+    /// let refresh = FaultInjecting::new(LocalRefresh::new(vm, 0));
     /// let hybrid: Engine<SoloSigner, TestDaemon, LocalLedger, FaultInjecting<LocalRefresh>> =
     ///     real
     ///         .replace_daemon(test_daemon)
