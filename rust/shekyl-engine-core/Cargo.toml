@@ -237,11 +237,11 @@ multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "serde_json", "hex
 bench-internals = []
 # Internal feature: gates compilation of `pub(crate)` failure-injection
 # wrappers (`FaultInjecting<R: RefreshEngine>` per C6α,
-# `FaultInjecting<L: LedgerEngine>` per C6β,
+# `FaultInjecting<P: PendingTxEngine>` per C7,
 # `Engine::replace_refresh` test-only setter per C6α,
 # `LocalLedger::from_test_blocks` constructor per C6β) so they
 # build under the test substrate without bleeding into production.
-# The four surfaces are `#[cfg(any(test, feature = "test-helpers"))]`-
+# These surfaces are `#[cfg(any(test, feature = "test-helpers"))]`-
 # gated AT THE DEFINITION SITE; the feature flag is the external
 # half of that gate (the `test` cfg is the internal half).
 #
@@ -250,7 +250,7 @@ bench-internals = []
 # its `pub(crate)` types under a `__bench_internals` module
 # (`pub use` gated on the feature) so external Criterion harnesses
 # can name them; `test-helpers` does NOT currently re-export
-# anything. The four surfaces remain `pub(crate)` even with the
+# anything. These surfaces remain `pub(crate)` even with the
 # feature enabled — downstream crates cannot reach them through
 # the public API regardless of feature posture.
 #

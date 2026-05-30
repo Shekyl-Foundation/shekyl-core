@@ -7,8 +7,8 @@
 //! wrapper for the [`PendingTxEngine`] trait surface (Stage 1 PR 5
 //! C7 test substrate).
 //!
-//! Mirrors [`super::fault_injecting_refresh::FaultInjecting`] and
-//! [`super::fault_injecting_ledger::FaultInjecting`]: three independent
+//! Mirrors [`super::fault_injecting_refresh::FaultInjecting`]: three
+//! independent
 //! FIFO queues for the injectable fallible paths (`build`, `submit`,
 //! `discard`), pop-before-delegate semantics, drain inspector, and
 //! `debug_assert!` on [`Drop`]. [`PendingTxEngine::signal_mempool_evicted`]

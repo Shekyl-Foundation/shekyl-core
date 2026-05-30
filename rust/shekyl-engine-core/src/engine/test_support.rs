@@ -100,10 +100,12 @@ pub(crate) const DEFAULT_TEST_SEED: [u8; 32] = [0u8; 32];
 // don't re-bind a tag to a different component slot.
 //
 // PR 1 lands `ROLE_DAEMON` only. PR 4 C6β retired `ROLE_LEDGER` along
-// with `MockLedger`: the `FaultInjecting<LocalLedger>` no-Mock substrate
-// (per the Round 5 amendment, commit `8484e669a`) wraps the production
-// [`super::local_ledger::LocalLedger`] directly, and that production
-// type is deterministic by construction — no per-role seed is needed.
+// with `MockLedger`: hybrid tests use the production
+// [`super::local_ledger::LocalLedger`] directly, which is deterministic
+// by construction — no per-role seed is needed. As of the FOLLOWUPS P1
+// async-post-pass fix the `LedgerEngine` trait is read-only, so there is
+// no ledger-side failure-injection wrapper at all; merge-race injection
+// is driven producer-side (a stale `ScanResult` the real merge rejects).
 // Subsequent Stage 1 PRs add `ROLE_KEY`, `ROLE_ECONOMICS`,
 // `ROLE_PERSISTENCE`, `ROLE_REFRESH`, `ROLE_PENDING_TX` alongside their
 // corresponding `Mock*` / `FaultInjecting*` types.

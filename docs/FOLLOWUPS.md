@@ -58,9 +58,10 @@ sustainability is unaffected by the recalibration.
   §1 status banner; per-PR design docs under `docs/design/STAGE_1_PR_*`.
   **Dedicated audit markdown landed:**
   [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](./design/STAGE_1_COMPLETION_AUDIT.md).
-  **Still V3.0 pre-genesis but not “missing Stage 1 PR”:** P1 async
-  refresh post-pass, wallet BIP-39 FFI, optional persistence/economics
-  trait PRs, economics §3.3 benches. **Rewrite plan:**
+  **Still V3.0 pre-genesis but not “missing Stage 1 PR”:** wallet
+  BIP-39 FFI, optional persistence/economics trait PRs, economics
+  §3.3 benches (P1 async refresh post-pass closed 2026-05-29 by
+  `refresh/p1-async-path-post-pass`). **Rewrite plan:**
   [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   Phases 0–6; Stage 1 was prerequisite, Phase 1+ continues `Engine`.
 
@@ -257,12 +258,34 @@ sustainability is unaffected by the recalibration.
   **Target.** V3.0, RC stabilization window (or earlier
   follow-up PR if cold-sync profile escalates the disposition).
 
-- **P1 (latent): refresh post-pass skipped on async path —
+- ~~**P1 (latent): refresh post-pass skipped on async path —
   `populate_engine_handle_fields` does not run when refresh
   dispatches through `LedgerEngine::apply_scan_result` (re-anchored
   2026-05-20 after PR 4 Phase 1 landed without absorption; **hard
   precondition: P1 closes before any binary integrates
-  `RefreshHandle`**; pre-RC1).** The async refresh task in
+  `RefreshHandle`**; pre-RC1).**~~ **CLOSED 2026-05-29 by shape (b)
+  (`refresh/p1-async-path-post-pass`).** The `LedgerEngine`
+  trait's `apply_scan_result` mutator was removed (the trait is now
+  read-only: `synced_height` / `snapshot` / `balance`), and
+  `run_refresh_task` / `Engine::start_refresh` were specialized to
+  `LocalLedger`. The async refresh path now merges through the
+  `LocalLedger`-specialized inherent `Engine::apply_scan_result`
+  (`engine/merge.rs`), which runs `apply_scan_result_to_state`
+  **and** the M3b post-pass `populate_engine_handle_fields` under a
+  single `LocalLedger` write guard — the same path the synchronous
+  `Engine::refresh_with` already used. Newly-merged transfers on the
+  async path now get `output_handle` / `source_ciphertext`
+  populated. Shape (b) was chosen over shape (a) because routing the
+  carryout `Vec<usize>` back through a trait method would split the
+  merge and post-pass across the trait boundary, violating the
+  single-write-guard atomicity the M3b disposition requires
+  (`docs/design/STAGE_1_PR_3_M3B_PREFLIGHT.md` §3 rejected
+  alternative (ζ)). The ledger-side `FaultInjecting<LocalLedger>`
+  test wrapper (whose only purpose was injecting `ConcurrentMutation`
+  at the removed trait seam) and the now-dead `replace_ledger`
+  test helper were deleted; the hybrid retry tests now drive the
+  retry producer-side via a stale `ScanResult` the real merge
+  rejects. P3 closes in the same commit. The async refresh task in
   `rust/shekyl-engine-core/src/engine/refresh.rs` calls
   `g.ledger.apply_scan_result(result).await` (trait dispatch on
   `L: LedgerEngine`, generalized in PR 4 C5β / C6β so the
@@ -422,10 +445,19 @@ sustainability is unaffected by the recalibration.
   and the PR 4 design doc §5.5 named-home table row for P2 for
   the substrate-post-Phase-1 cross-ref.
 
-- **P3: `apply_scan_result_to_state` allocates `Vec<usize>` even
+- ~~**P3: `apply_scan_result_to_state` allocates `Vec<usize>` even
   for trait-impl callers that discard it (re-anchored 2026-05-20
   after PR 4 Phase 1 retained the discard shape; downstream of
-  P1; pre-RC1).** PR #37 (perf interim) changed
+  P1; pre-RC1).**~~ **CLOSED 2026-05-29 by shape (b)
+  (`refresh/p1-async-path-post-pass`), same commit as P1.** The
+  discard sites disappeared with the removed
+  `LedgerEngine::apply_scan_result` trait method and its
+  `LocalLedger` impl. `apply_scan_result_to_state` retains its
+  `Vec<usize>` return, but the only remaining callers
+  (`Engine::apply_scan_result` and the merge unit tests) consume the
+  indices — the async refresh path now routes through
+  `Engine::apply_scan_result`, so no caller constructs-then-discards
+  the Vec. PR #37 (perf interim) changed
   `apply_scan_result_to_state`'s return from `()` to `Vec<usize>`
   so the engine post-pass can walk inserted indices in O(k). The
   trait-impl callers (`LocalLedger::apply_scan_result` at
