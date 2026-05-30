@@ -577,8 +577,16 @@ impl RefreshEngine for LocalRefresh {
             // The orchestrator anchors the ledger when
             // `scan_start_floor > synced_height + 1` before snapshot;
             // see `scan_floor::ensure_birthday_anchor`.
+            // Clamp the floor to the daemon tip: a birthday above the chain
+            // end has nothing to scan yet, so the producer falls back to the
+            // incremental start rather than skipping past the tip (which
+            // would break the merge gate against an anchor that can only
+            // reach the daemon's highest block). See
+            // `scan_floor::effective_floor_at_tip`.
+            let effective_floor =
+                super::scan_floor::effective_floor_at_tip(self.scan_start_floor, tip);
             let original_start =
-                super::scan_floor::scan_range_start(snapshot.synced_height, self.scan_start_floor);
+                super::scan_floor::scan_range_start(snapshot.synced_height, effective_floor);
             let end = tip;
             if original_start >= end {
                 let parent_hash = parent_hash_for_start(&snapshot, original_start);

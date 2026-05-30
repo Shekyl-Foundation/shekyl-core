@@ -76,6 +76,41 @@ pub(crate) const fn needs_birthday_anchor(synced_height: u64, scan_start_floor: 
     scan_start_floor > 0 && scan_start_floor > synced_height.saturating_add(1)
 }
 
+/// Block height to anchor at, given the floor and the daemon's current
+/// height (block count; a genesis-only chain has height 1).
+///
+/// The natural anchor sits at `floor - 1`, but the daemon may not have
+/// that block yet — a restored wallet whose birthday is above a
+/// still-syncing or behind daemon's current height. Anchoring to a
+/// nonexistent block would fail refresh with daemon I/O even though there
+/// is simply nothing at or above the floor to scan yet. The anchor is
+/// clamped to the daemon's highest block (`daemon_height - 1`); a later
+/// refresh advances it once the daemon reaches the floor.
+///
+/// Returns `None` when the daemon has no blocks (`daemon_height == 0`), in
+/// which case there is nothing to anchor against and refresh is a clean
+/// no-op. Callers must only invoke this when [`needs_birthday_anchor`]
+/// holds, so `scan_start_floor >= 2` and `scan_start_floor - 1 >= 1`.
+pub(crate) fn anchor_target(scan_start_floor: u64, daemon_height: u64) -> Option<u64> {
+    if daemon_height == 0 {
+        return None;
+    }
+    let highest_block = daemon_height - 1;
+    Some((scan_start_floor - 1).min(highest_block))
+}
+
+/// Clamp the scan floor to the daemon tip for the producer's range.
+///
+/// A birthday above the chain end has no blocks to scan yet, so the
+/// producer must fall back to the incremental start rather than skipping
+/// past the tip. Skipping past the tip would emit an empty `ScanResult`
+/// whose start exceeds `synced_height + 1` (the anchor can only reach the
+/// daemon's highest block), breaking the merge gate. Clamping keeps the
+/// producer's start aligned with the anchor.
+pub(crate) fn effective_floor_at_tip(scan_start_floor: u64, tip: u64) -> u64 {
+    scan_start_floor.min(tip)
+}
+
 /// Advance an empty ledger's tip to `anchor_synced` with `tip_hash`.
 ///
 /// Used when jumping over a genesis→birthday prefix without ingesting
@@ -106,22 +141,31 @@ pub(crate) fn anchor_ledger_block(
     }
 
     if current == anchor_synced {
-        match ledger.tip.tip_hash {
-            Some(stored) if stored == tip_hash => return Ok(()),
-            Some(_stored) => {
-                return Err(RefreshError::ConcurrentMutation {
-                    wallet: current,
-                    result: anchor_synced,
-                });
-            }
-            None => {
-                ledger.tip.tip_hash = Some(tip_hash);
-                if ledger.block_hash_at(anchor_synced).is_none() {
-                    ledger.reorg_blocks.blocks.push((anchor_synced, tip_hash));
-                }
-                return Ok(());
-            }
+        // Fast path: the anchor already matches the daemon.
+        if ledger.tip.tip_hash == Some(tip_hash)
+            && ledger.block_hash_at(anchor_synced) == Some(&tip_hash)
+        {
+            return Ok(());
         }
+        // The transfer set is verified empty above, so the anchor carries
+        // no scanned outputs. A stored hash that disagrees with the daemon
+        // (a reorg at `anchor_synced` since an earlier anchor) is therefore
+        // safe to overwrite with the freshly fetched hash. Treating it as
+        // an unrecoverable `ConcurrentMutation` instead would wedge every
+        // subsequent refresh at the merge gate, because the producer has no
+        // block below the anchor to rewind the stale hash against.
+        ledger.tip.tip_hash = Some(tip_hash);
+        if let Some(entry) = ledger
+            .reorg_blocks
+            .blocks
+            .iter_mut()
+            .find(|(h, _)| *h == anchor_synced)
+        {
+            entry.1 = tip_hash;
+        } else {
+            ledger.reorg_blocks.blocks.push((anchor_synced, tip_hash));
+        }
+        return Ok(());
     }
 
     ledger.tip = BlockchainTip::new(anchor_synced, tip_hash);
@@ -160,7 +204,20 @@ pub(crate) async fn ensure_birthday_anchor<D: DaemonEngine>(
         return Ok(());
     }
 
-    let anchor_synced = scan_start_floor - 1;
+    // Gate the anchor on the daemon's current height so a floor above the
+    // chain end does not request a nonexistent `floor - 1` block.
+    let daemon_height = daemon.get_height().await.map_err(|e| {
+        RefreshError::Io(IoError::Daemon {
+            detail: e.to_string(),
+        })
+    })? as u64;
+    let Some(anchor_synced) = anchor_target(scan_start_floor, daemon_height) else {
+        return Ok(());
+    };
+    if synced >= anchor_synced {
+        return Ok(());
+    }
+
     let tip_hash = fetch_block_hash_at(daemon, anchor_synced).await?;
 
     let mut guard = ledger.write();
@@ -209,6 +266,26 @@ mod tests {
     }
 
     #[test]
+    fn anchor_target_clamps_to_daemon_highest_block() {
+        // Floor below the daemon tip: anchor at floor - 1.
+        assert_eq!(anchor_target(1000, 1010), Some(999));
+        // Floor at the daemon tip exactly: floor - 1 is the highest block.
+        assert_eq!(anchor_target(500, 500), Some(499));
+        // Floor above the daemon tip: clamp to the highest available block.
+        assert_eq!(anchor_target(1000, 500), Some(499));
+        // Empty chain: nothing to anchor against.
+        assert_eq!(anchor_target(1000, 0), None);
+    }
+
+    #[test]
+    fn effective_floor_at_tip_clamps_above_tip() {
+        assert_eq!(effective_floor_at_tip(1000, 1010), 1000);
+        assert_eq!(effective_floor_at_tip(1000, 500), 500);
+        assert_eq!(effective_floor_at_tip(1000, 1000), 1000);
+        assert_eq!(effective_floor_at_tip(0, 1010), 0);
+    }
+
+    #[test]
     fn needs_anchor_only_when_floor_above_incremental() {
         assert!(!needs_birthday_anchor(0, 0));
         assert!(!needs_birthday_anchor(0, 1));
@@ -223,5 +300,28 @@ mod tests {
         assert_eq!(ledger.height(), 999);
         assert_eq!(ledger.tip.tip_hash, Some([0xAB; 32]));
         assert_eq!(ledger.block_hash_at(999), Some(&[0xAB; 32]));
+    }
+
+    #[test]
+    fn anchor_ledger_block_overwrites_stale_hash_at_anchor_height() {
+        // An empty anchor at `999` reorgs to a new hash at the same height.
+        // The transfer set is empty, so re-anchoring must overwrite the
+        // stale hash rather than fail with `ConcurrentMutation`.
+        let mut ledger = LedgerBlock::empty();
+        anchor_ledger_block(&mut ledger, 999, [0xAB; 32]).expect("first anchor");
+        anchor_ledger_block(&mut ledger, 999, [0xCD; 32]).expect("re-anchor overwrites");
+        assert_eq!(ledger.height(), 999);
+        assert_eq!(ledger.tip.tip_hash, Some([0xCD; 32]));
+        assert_eq!(ledger.block_hash_at(999), Some(&[0xCD; 32]));
+        // No duplicate reorg-window entry for the anchor height.
+        assert_eq!(
+            ledger
+                .reorg_blocks
+                .blocks
+                .iter()
+                .filter(|(h, _)| *h == 999)
+                .count(),
+            1
+        );
     }
 }
