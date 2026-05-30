@@ -655,6 +655,26 @@ mod tests {
     }
 
     #[test]
+    fn apply_scan_result_accepts_birthday_anchored_start() {
+        let (mut ledger, mut indexes) = empty_state();
+        let parent = [0x55; 32];
+        super::super::scan_floor::anchor_ledger_block(&mut ledger, 999, parent)
+            .expect("anchor at birthday boundary");
+
+        let result = ScanResult {
+            processed_height_range: 1000..1001,
+            parent_hash: Some(parent),
+            block_hashes: vec![(1000, [0x66; 32])],
+            new_transfers: vec![],
+            spent_key_images: vec![],
+            stake_events: vec![],
+            reorg_rewind: None,
+        };
+        apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("birthday merge");
+        assert_eq!(ledger.height(), 1000);
+    }
+
+    #[test]
     fn apply_empty_at_start_one_succeeds() {
         let (mut ledger, mut indexes) = empty_state();
         let result = ScanResult::empty_at(1, None);
