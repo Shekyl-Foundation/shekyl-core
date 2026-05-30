@@ -8,6 +8,7 @@ name = "shekyl-engine-prefs"
 description = "Plaintext-with-HMAC user preferences (Layer 2 of docs/WALLET_PREFS.md): strict TOML schema, HMAC-SHA256 integrity over file bytes, atomic writes, and quarantine-on-tamper semantics."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

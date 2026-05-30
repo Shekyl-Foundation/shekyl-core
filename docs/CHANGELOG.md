@@ -10,7 +10,10 @@
   (1) exact-patch pin of the actor framework in `[workspace.dependencies]`
   (declared-only; no consumer yet, so inert in the build graph),
   (2) MSRV bump to kameo 0.20.0's required 1.88.0 (verified at source via
-  the crates.io index), and (3) the workspace bounded-mailbox default
+  the crates.io index), propagated per-crate via `rust-version.workspace =
+  true` across all first-party members so the gate is enforced workspace-wide
+  rather than declared only on the virtual root, and (3) the workspace
+  bounded-mailbox default
   (`mailbox(64)`, overrides documented at the actor site). No
   `rust-toolchain.toml` added — CI builds on `@stable` (≥ 1.88); the gate's
   intent is the MSRV declaration, not a pinned channel. Stage 2's first

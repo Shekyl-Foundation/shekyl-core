@@ -3,6 +3,7 @@ name = "shekyl-ffi"
 description = "FFI bridge between Shekyl's C++ core and Shekyl's Rust crates"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [lib]

@@ -8,6 +8,7 @@ name = "shekyl-tx-builder"
 description = "Native Rust transaction signing for Shekyl FCMP++ (BP+, membership proof, PQC auth)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

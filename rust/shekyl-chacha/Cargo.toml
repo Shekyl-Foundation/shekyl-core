@@ -3,6 +3,7 @@ name = "shekyl-chacha"
 description = "XChaCha20 stream cipher for Shekyl wallet encryption"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

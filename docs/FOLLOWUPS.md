@@ -854,11 +854,17 @@ sustainability is unaffected by the recalibration.
      CHANGELOG entry under "Changed").
      **Satisfied (chore/stage_1_cleanup, 2026-05-29):** workspace
      `rust-version` raised 1.85 → 1.88; CHANGELOG "Changed" entry
-     added. `rust-toolchain.toml` intentionally *not* added — CI
-     builds on `dtolnay/rust-toolchain@stable` (≥ 1.88 in 2026); a
-     pinned channel file would change CI/local build behavior without
-     serving the gate's intent (the MSRV declaration), and no such
-     file exists today.
+     added. The declaration is inherited per-crate via
+     `rust-version.workspace = true` in every first-party member's
+     `[package]` (not only the 3 RandomX crates that previously opted
+     in) — cargo enforces a crate's MSRV only when the crate declares
+     `rust-version`, so the propagation is what makes the gate real
+     rather than a virtual-root annotation. `rust-toolchain.toml`
+     intentionally *not* added — CI builds on
+     `dtolnay/rust-toolchain@stable` (≥ 1.88 in 2026); a pinned
+     channel file would change CI/local build behavior without serving
+     the gate's intent (the MSRV declaration), and no such file exists
+     today.
   3. **Bounded-mailbox sizing default.** Choose a workspace-wide
      bounded-mailbox default (e.g., `mailbox(64)`) with documented
      rationale, and capture the per-actor override convention. Pure

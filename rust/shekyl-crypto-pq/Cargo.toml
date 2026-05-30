@@ -3,6 +3,7 @@ name = "shekyl-crypto-pq"
 description = "Post-quantum cryptographic primitives for Shekyl (ML-DSA, ML-KEM, hybrid signatures)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]

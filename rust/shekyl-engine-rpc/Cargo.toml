@@ -3,6 +3,7 @@ name = "shekyl-engine-rpc"
 description = "Rust engine RPC server over C++ wallet2 via FFI"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [lib]

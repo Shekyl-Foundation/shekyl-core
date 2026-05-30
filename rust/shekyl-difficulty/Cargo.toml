@@ -8,6 +8,7 @@ name = "shekyl-difficulty"
 description = "LWMA-1 difficulty adjustment for Shekyl (docs/design/DAA_LWMA1.md)"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 # Leaf crate per DAA_LWMA1.md §2.1: zero internal workspace

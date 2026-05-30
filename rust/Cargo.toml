@@ -105,6 +105,14 @@ edition = "2021"
 # does not exist today per `RANDOMX_V2_RUST.md` §22 ("forward work");
 # when Guix lands, its rustc must already be ≥ 1.88 to build this
 # workspace.
+#
+# Enforcement: this declaration is inherited by every first-party crate
+# via `rust-version.workspace = true` in each member's `[package]`. The
+# `[workspace.package]` value alone does not gate member crates —
+# cargo only enforces a crate's MSRV when that crate declares
+# `rust-version` (literal or `.workspace = true`). Propagating the
+# inherit to all members makes the gate real per-crate rather than a
+# virtual-root annotation; a future bump touches only the value here.
 rust-version = "1.88"
 license = "BSD-3-Clause"
 repository = "https://github.com/radawson/Shekyl"
