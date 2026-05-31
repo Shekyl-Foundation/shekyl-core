@@ -635,6 +635,13 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     ///
     /// **Yes.** A snapshot read of the implementor's stored public
     /// material; repeated calls observe equivalent values.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic — the Stage 1 `LocalKeys` implementor returns a
+    /// borrowed reference to an [`AccountPublicAddress`] field cached
+    /// at construction (`&self.account_public_address`), acquiring no
+    /// lock.
     fn account_public_address(&self) -> &AccountPublicAddress;
 
     /// Derive a subaddress for a specific purpose.
@@ -672,6 +679,17 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// **Yes.** Deterministic in `(view_secret, subaddress_index,
     /// purpose)`; repeated calls produce equivalent
     /// `SubaddressFor` values.
+    ///
+    /// # Panics
+    ///
+    /// The Stage 1 `LocalKeys` implementor panics on `RwLock`
+    /// poisoning — the `Audit` path takes
+    /// `self.state.write().expect("LocalKeys lock not poisoned")` to
+    /// register the derived subaddress in the reverse-lookup
+    /// registry. Sync infallible-on-poison by design, matching
+    /// [`LedgerEngine`](super::ledger::LedgerEngine)'s `RwLock`
+    /// disposition: poisoning indicates an upstream invariant
+    /// violation, not a recoverable error.
     fn derive_subaddress(
         &self,
         idx: SubaddressIndex,
@@ -731,6 +749,18 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// returns a fresh handle on each call (counter-based pathway,
     /// not adopted). The deterministic-handle pathway is the
     /// committed direction.
+    ///
+    /// # Panics
+    ///
+    /// The Stage 1 `LocalKeys` implementor panics on `RwLock`
+    /// poisoning via the `lookup_subaddress` helper
+    /// (`self.state.read().expect("LocalKeys lock not poisoned")`),
+    /// reached on the subaddress-registry lookup after a successful
+    /// recover. Sync infallible-on-poison by design. Cryptographic
+    /// rejections (X25519 view-tag pre-filter miss, hybrid-decap
+    /// failure, post-decap validity check) are **not** panics — they
+    /// map to `OutputClaimResult::NotMine` per the claim contract
+    /// above.
     fn try_claim_output(
         &self,
         input: &OutputDetectionInput,
@@ -749,17 +779,25 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// per-output spending material needed to produce the per-input
     /// signature.
     ///
-    /// # M3a transitional bridge
+    /// # M3a stub status
     ///
-    /// Per the module-level "`SourceSecretsBundle` is transitional"
-    /// section, M3a Commit 4's `LocalKeys::sign_transaction`
-    /// extracts secrets from each
-    /// `TxInputSigningContext::source_secrets` and routes them into
-    /// [`shekyl_tx_builder::sign_transaction`]. M3b's
-    /// deterministic-handle pathway replaces `source_secrets` with
-    /// `source_ciphertext` and derives the bundle internally; the
-    /// trait's contract for what secrets `sign_transaction` needs
-    /// stays stable.
+    /// The Stage 1 implementor `LocalKeys::sign_transaction` is an
+    /// **M3a stub**: it returns
+    /// [`KeyEngineError::SignTransactionTraitSurfaceIncomplete`]
+    /// without producing signatures. The bridge into
+    /// [`shekyl_tx_builder::sign_transaction`] is PR-5-pinned — it
+    /// waits on [`TxToSign`]'s shape finalizing the per-input public
+    /// on-chain carriers and FCMP++ tree-branch context the builder's
+    /// `SpendInput` construction requires. The per-input secret
+    /// material is never supplied as a populated bundle crossing the
+    /// trait boundary; per the module-level "secrets stay
+    /// engine-internal" section, the committed direction reconstructs
+    /// it inside the engine from each
+    /// [`TxInputSigningContext::source_ciphertext`] +
+    /// [`output_index`](TxInputSigningContext::output_index) via the
+    /// engine-internal `LocalKeys::derive_source_secrets_bundle`
+    /// helper. The trait's contract for what `sign_transaction`
+    /// consumes stays stable across the stub-to-PR-5 transition.
     ///
     /// # Validation contract
     ///
@@ -778,9 +816,19 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     ///
     /// # Cancellation
     ///
-    /// Class **b** (computational; produces signature material).
-    /// Implementors complete or fail atomically — partial signature
-    /// material is never returned.
+    /// Class **a** per §4: the M3a stub is side-effect-free (returns
+    /// an error without touching state), and even the committed
+    /// signing contract produces only the returned signature material
+    /// — a dropped future leaves no observable trace for other
+    /// actors. **Forward note (reversion clause).** PR 5 pins the
+    /// final class. If PR 5's signing body consumes handles from the
+    /// workflow-internal handle table as a replay-rejection side
+    /// effect (the committed direction; see
+    /// [`Self::try_claim_output`]'s idempotency note) and that
+    /// consumption is *not* enqueue-survivable, the class is
+    /// reclassified to **b** in both this rustdoc and §4 of
+    /// `V3_ENGINE_TRAIT_BOUNDARIES.md`. Until that body lands, the
+    /// classification is **a** and the §4 table agrees.
     ///
     /// # Idempotency
     ///
@@ -789,6 +837,14 @@ pub(crate) trait KeyEngine: Send + Sync + 'static {
     /// may reject double-spend attempts at the handle layer; the
     /// counter-based pathway treats each call independently. The
     /// committed direction is replay-rejection at handle resolution.
+    ///
+    /// # Panics
+    ///
+    /// **Does not panic.** The M3a stub returns
+    /// [`KeyEngineError::SignTransactionTraitSurfaceIncomplete`]; it
+    /// acquires no lock and asserts no invariant. PR 5's signing body
+    /// will document its own panic surface (handle-table access,
+    /// builder invariants) when it lands.
     fn sign_transaction(
         &self,
         tx: &TxToSign,

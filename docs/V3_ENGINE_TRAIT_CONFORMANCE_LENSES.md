@@ -219,67 +219,89 @@ deliberate-absence discipline in §3.2).
 
 ## 2. Conformance scorecard (current `dev` state)
 
-State as of the post-PR7 `dev` HEAD. ✓ = at or above bar; ◑ = partial;
-✗ = below bar; n/a = lens does not apply (documented exemption);
-— = not yet audited (folded into the relevant remediation).
+State after the seven-lens conformance pass on the three remediated
+surfaces (`PersistenceEngine`, `PendingTxEngine`, `KeyEngine`), on
+post-PR7 `dev`. ✓ = at or above bar; ◑ = partial; ✗ = below bar;
+n/a = lens does not apply (documented exemption); — = not yet audited
+(folded into the relevant remediation / tracked deferral).
 
 | Trait | CL-1 owns | CL-2 bounds | CL-3 err pad | CL-4 C/I/P | CL-5 swap-in | CL-6 dead_code | CL-7 fwd-compat | Verdict |
 |---|---|---|---|---|---|---|---|---|
 | `LedgerEngine` | ✓ | ✓ | ✓ | ✓ 3/3 | ✓ | ✓ | n/a¹ | **reference** |
 | `DaemonEngine` | ✓ | ✓ | ✓ | ✓ 2/2 | ✓ | ✓ | ✓ | **conformant / exceeds** |
 | `RefreshEngine` | ✓ | ✓ | ✓ | ✓ (trait-level 5-checkpoint + per-method I/P) | ✓ | ✓ | ✓ (unit-variant pin) | **conformant / exceeds** |
-| `PendingTxEngine` | ✓ | ✓ | ✓ (documented absence) | ◑ 1/5² | ✓ | ✓ | —³ | **partial** |
-| `PersistenceEngine` | ✗⁴ | ✗⁴ | ✓ | ✗ 0/6 | ◑⁵ | ◑⁶ | —³ | **laggard** |
-| `KeyEngine` | ✓ | ✓ | ✓ | ◑ 4/4 C/I, 0 Panics | ✓ | ✓ | — | **in-flight⁷** |
+| `PendingTxEngine` | ✓ | ✓ | ✓ (documented absence) | ✓ 5/5² | ✓ | ✓ | —³ | **conformant** |
+| `PersistenceEngine` | ✓⁴ | ✓⁴ | ✓ | ✓ 6/6 | ✓⁵ | ✓⁶ | —³ | **conformant** |
+| `KeyEngine` | ✓ | ✓ | ✓ | ✓ 4/4⁷ | ✓ | ✓ | — | **conformant** |
 | `EconomicsEngine` | — | — | — | — | — | — | — | **not yet extracted⁸** |
 
 1. `LedgerEngine` returns pre-existing aggregates (`BalanceSummary`,
    `LedgerSnapshot`, `u64`) rather than trait-owned value types, so
    CL-7's `#[non_exhaustive]` requirement does not apply; the exemption
    is documented per the CL-7 pass criterion.
-2. Only `outstanding` carries `# Cancellation` + `# Idempotency`;
-   `build` / `submit` / `discard` / `signal_mempool_evicted` carry
-   `# Errors` but no C/I/P. The coverage is *inverted from the threat
-   model* — the safe sync read is documented while the side-effecting
-   async mutators are not. Note the `# Panics` precision requirement:
-   the mutators map `Mutex` poisoning to a domain error; only
-   `outstanding` panics on poisoning.
+2. All five methods now carry the C/I/P triad. `build` / `submit` are
+   class **b** async; `discard` / `signal_mempool_evicted` are sync
+   (`n/a` cancel — they cannot be cancelled mid-call — and **not**
+   idempotent: a second call returns `ReservationNotFound`);
+   `outstanding` is the sync read. The `# Panics` precision requirement
+   is satisfied: the mutators map `Mutex` poisoning to a domain error
+   (`SendError` / `SubmitError` / `PendingTxError`) and only
+   `outstanding` panics on poisoning — the deliberate asymmetry is
+   stated in the module-level rustdoc.
 3. CL-7 for `PendingTxEngine` / `PersistenceEngine` covers error/value
-   types defined off the trait file (`engine/error.rs`,
-   `engine/pending.rs`); the audit is folded into the F1/F2 remediation
-   rather than asserted here.
-4. CL-1 + CL-2 (the two ✗ cells). The module doc cites §2.6 and states
-   hydration (`open` / `create`) stays on `Engine` (not the trait), but
-   lacks the §-anchored owns-vs-deliberately-off-trait framing the
-   reference surfaces carry (CL-1), and there is no `# Supertrait
-   bounds` section justifying `Send + Sync + 'static` or stating the
-   `Clone` disposition (CL-2).
-5. CL-5 is **partial, not absent**: the module doc carries a brief
-   inline swap-in note (`Stage 4: ActorRef<PersistenceActor> with the
-   same trait`) but not the fuller `# Stage-4 swap-in` section the
-   reference surfaces use (which also states signatures are unchanged
-   and callers get the swap-in for free).
-6. `base_path` / `network` / `capability` share one collective reason
-   comment above the block rather than a per-attribute inline reason
-   (below the CL-6 bar); `save_prefs` has no rustdoc at all.
-7. `KeyEngine` is declared (`traits/mod.rs`) but **not re-exported**,
-   pending its M3c+ consumers. Its four methods carry C/I but no
-   `# Panics` (the implementor `LocalKeys` panics on `RwLock`
-   poisoning in `derive_subaddress` and `try_claim_output`). Per the
-   "do it now, don't backfill" posture (§3.1), land the `# Panics`
-   sections with the methods rather than reconstructing them later.
+   types defined **off** the trait file (`engine/error.rs`,
+   `engine/pending.rs`), outside the doc-only trait-file scope of this
+   conformance pass. The `#[non_exhaustive]` / unit-variant audit of
+   those trait-owned types is a tracked deferral — see
+   [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) ("CL-7 forward-compat audit of
+   trait-owned value/error types") — not a silent gap.
+4. CL-1 + CL-2 landed in this pass. The trait-item doc now carries the
+   §2.6-anchored owns-vs-deliberately-off-trait framing (owns
+   state/prefs flush + password rotation; hydration `open` / `create`
+   stays off-trait on `Engine` per Q9.11), and a `# Supertrait bounds`
+   section justifying `Send + Sync + 'static` (driven from the sync
+   lifecycle via `drive_persistence`'s `block_in_place` + `block_on`,
+   shared by `Arc`; Stage 4 `ActorRef<PersistenceActor>` satisfies the
+   same bounds) and the **not** `Clone` disposition (single-owner
+   on-disk artifact + advisory lock).
+5. CL-5 upgraded from the brief inline note to the full
+   `# Stage-4 swap-in` section (`WalletFile` →
+   `ActorRef<PersistenceActor>`, signatures unchanged, callers binding
+   against `P: PersistenceEngine` get the swap-in for free), matching
+   the reference surfaces.
+6. `base_path` / `network` / `capability` now each carry a
+   per-attribute inline `#[allow(dead_code)]` reason (replacing the
+   single collective comment), and `save_prefs` carries full rustdoc
+   including its C/I/P triad — documented as **not** panicking on mutex
+   poisoning, since the implementor routes through
+   `shekyl_engine_prefs::save_prefs` and never acquires the
+   `WalletFile` mutex.
+7. `KeyEngine` is declared (`traits/mod.rs`) but **still not
+   re-exported**, pending its M3c+ consumers — the conformance flip is
+   to the documentation surface, not the visibility. Its four methods
+   now carry `# Panics`: `account_public_address` does not panic
+   (lockless cached borrow); `derive_subaddress` / `try_claim_output`
+   panic on `RwLock` poisoning (sync-infallible-on-poison by design);
+   `sign_transaction` is the M3a stub (returns
+   `SignTransactionTraitSurfaceIncomplete`, does not panic), with its
+   cancellation class reconciled to **a** to match §4 plus a PR-5
+   reversion-clause forward note.
 8. The `EconomicsEngine` *trait surface* is not yet a file under
    `traits/` on `dev`. PR7 landed the C2c `get_block_reward` consensus
    cutover (C++ ESF → Rust FFI), not the trait extraction. Audit
    `EconomicsEngine` against CL-1…CL-7 when its surface lands per
    §1.5 / §2.7.
 
-**Disposition.** `Daemon` / `Refresh` are at or above the
-`LedgerEngine` bar — no action. `PersistenceEngine` (laggard) and
-`PendingTxEngine` (partial, inverted) are the two that need
-remediation; `KeyEngine` lands its `# Panics` sections in-flight. The
-remediation is documentation-only and is tracked separately (it does
-not change behavior, signatures, or `#[allow]` scope).
+**Disposition.** Every landed surface is now at or above the
+`LedgerEngine` bar. `Daemon` / `Refresh` needed no action;
+`PersistenceEngine` (was laggard) and `PendingTxEngine` (was partial,
+inverted) were remediated in this documentation-only pass, and
+`KeyEngine` landed its `# Panics` sections. The pass changed no
+behavior, signatures, or `#[allow]` scope (it only added
+`#[allow(dead_code)]` *reasons*). `EconomicsEngine` remains pending its
+trait-surface extraction (footnote 8). The CL-7 forward-compat audit
+for the `PendingTxEngine` / `PersistenceEngine` off-trait value/error
+types remains a tracked deferral (footnote 3).
 
 ---
 

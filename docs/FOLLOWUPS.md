@@ -1786,6 +1786,36 @@ sustainability is unaffected by the recalibration.
   the next `26-sub-pr-design-discipline.mdc` amendment PR (sibling off
   `dev`, separate from 2g implementation PR).
 
+- **CL-7 forward-compat audit of trait-owned value/error types
+  (`PendingTxEngine` / `PersistenceEngine`).** The seven-lens
+  conformance pass on the three trait surfaces (branch
+  `docs/engine-trait-cip-triad`) brought `PersistenceEngine`,
+  `PendingTxEngine`, and `KeyEngine` to CL-1…CL-6 conformance, but
+  was scoped doc-only to the three **trait files**. CL-7
+  (forward-compat on public value/error types — `#[non_exhaustive]`
+  on value structs/enums, the unit-variant-only pin on error types
+  intended to stay payload-free) covers types defined **off** the
+  trait files: `PendingTxEngine`'s `SendError` / `SubmitError` /
+  `PendingTxError` / `DiscardReason` (in
+  [`engine/error.rs`](../rust/shekyl-engine-core/src/engine/error.rs)
+  and [`engine/pending.rs`](../rust/shekyl-engine-core/src/engine/pending.rs))
+  and `PersistenceEngine`'s `PersistenceError`. The audit: for each
+  trait-owned value/error type, confirm it carries the appropriate
+  forward-compat attribute **with a documented rationale** per CL-7's
+  pass criterion, or document why it is exempt. Tracked as the
+  `—³` cells in the
+  [`V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md`](./V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md)
+  §2 scorecard (footnote 3).
+
+  **Target.** V3.0 pre-genesis. Forward-compat attributes are a
+  pre-genesis-cheap / post-genesis-forever decision (per
+  `16-architectural-inheritance.mdc`'s pre-genesis discount): adding
+  `#[non_exhaustive]` before the API ossifies is bounded work, while
+  retrofitting it after external consumers exist is a breaking change.
+  Scoped as its own doc/attribute PR (touches `engine/error.rs` +
+  `engine/pending.rs`, outside the trait-file-only scope of the
+  conformance pass that surfaced it).
+
 ---
 
 ## V3.1 — audit response and stressnet gates
