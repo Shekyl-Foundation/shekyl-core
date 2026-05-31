@@ -65,29 +65,35 @@ sustainability is unaffected by the recalibration.
   [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   Phases 0–6; Stage 1 was prerequisite, Phase 1+ continues `Engine`.
 
-- **Base emission migration (Stage 1 PR 7 §5.8) — C2/C2a′ landed; C2c still
-  open (updated 2026-05-29).** PR #88 landed C2 and C2a′ on `dev`:
-  Rust `base_block_reward` + `projected_already_generated`, dual-leg KAT
-  harnesses (`tests/unit_tests/economics_c2a_prime.cpp`,
-  `tests/core_tests/economics_c2a_prime.cpp`), and required CI checks.
-  `shekyl_base_block_reward` FFI now exists
-  (`rust/shekyl-ffi/src/lib.rs`, `src/shekyl/shekyl_ffi.h`).
+- **Base emission migration (Stage 1 PR 7 §5.8) — CLOSED 2026-05-30 by
+  C2c cutover.** PR #88 landed C2 and C2a′ on `dev` (Rust `base_block_reward`
+  + `projected_already_generated`, dual-leg KAT harnesses
+  `tests/unit_tests/economics_c2a_prime.cpp` /
+  `tests/core_tests/economics_c2a_prime.cpp`, required CI checks, and the
+  `shekyl_base_block_reward` FFI). C2c (`feat/stage-1-pr7-economics-cutover`,
+  off the post–7-base `dev` tip; 7-base merge `fed6f594b`, C2a′ ancestor by
+  topology) completes the migration:
 
-  **Still open:** C2c cutover. Live consensus path
-  `cryptonote::get_block_reward` in
-  `src/cryptonote_basic/cryptonote_basic_impl.cpp` still computes base subsidy
-  in C++; production callsites do not yet route through
-  `shekyl_base_block_reward`.
+  - `cryptonote::get_block_reward` (4-arg) now delegates the base subsidy to
+    `shekyl_base_block_reward` via the `shekyl::base_subsidy_before_penalty`
+    thin wrapper in `src/shekyl/economics.h` (same shape as
+    `compute_fee_burn` / `compute_emission_split`);
+  - the duplicated C++ ESF body (`(MONEY_SUPPLY - already_generated) >> esf`
+    + tail floor) is deleted from
+    `src/cryptonote_basic/cryptonote_basic_impl.cpp`;
+  - the weight penalty (`mul128` / `div128_64`) and the 5-arg release
+    multiplier path stay in C++ (per §5.8, behavior-identical to C2a′
+    witnesses);
+  - fix α (`:1608–1609` un-overwrite) was already landed in 7-base.
 
-  **Disposition (unchanged):** migration path; C++ cutover in V3.0.
-  `base_block_reward` in `shekyl-economics` is canonical; `get_block_reward`
-  becomes a thin wrapper (`shekyl_base_block_reward` + release multiplier).
-  Wallet-only permanent cross-check bridge remains rejected.
+  No production path computes the ESF curve in C++ after this cutover. The
+  C2a′ dual-leg KAT (`leg A` compares `get_block_reward` to
+  `shekyl_base_block_reward`) remains bit-identical post-cutover.
 
-  **Close this FOLLOWUPS item when:** C2c is merged on `dev` with C2a′
-  ancestor and duplicated C++ base-subsidy body removed. **Design:**
+  **Design:**
   [`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](./design/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
-  §5.8. **Target:** V3.0 (PR 7 completion).
+  §5.8 / §6.2 item 1 (7-cutover). **Delivered:** V3.0 (PR 7 base-emission
+  completion). Wallet-only permanent cross-check bridge remains rejected.
 
 - **Post-2g adversarial-corpus methodology + implementation
   (trigger: RandomX v2 Phase 2g Round 7 R7-D1/R7-D2 reopening

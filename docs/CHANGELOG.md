@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **economics: C2c cutover — `get_block_reward` base subsidy delegates to
+  Rust (Stage 1 PR 7 §5.8).** The duplicated C++ ESF base-subsidy formula
+  (`(MONEY_SUPPLY − already_generated) >> esf` + tail floor) in
+  `cryptonote::get_block_reward` (`src/cryptonote_basic/cryptonote_basic_impl.cpp`)
+  is deleted; the 4-arg path now calls the canonical Rust primitive
+  `shekyl_base_block_reward` (7-base) through the new
+  `shekyl::base_subsidy_before_penalty` thin wrapper in
+  [`src/shekyl/economics.h`](../src/shekyl/economics.h), mirroring the
+  `compute_fee_burn` / `compute_emission_split` shape. The weight penalty
+  (`mul128` / `div128_64`) and the 5-arg release-multiplier path stay in C++
+  and are behavior-identical to the C2a′ witnesses; production call sites
+  1–7 are unchanged (signatures untouched), and fix α was already landed in
+  7-base. This is a consensus-atomic cutover
+  (`07-consensus-atomic-cutovers.mdc`): no production path computes the ESF
+  curve in C++ afterward, and the C2a′ dual-leg KAT remains bit-identical.
+  Branched off the post–7-base `dev` tip (7-base merge `fed6f594b`; C2a′
+  ancestor by topology). Closes the `docs/FOLLOWUPS.md` base-emission
+  migration item.
+
 ### Fixed
 
 - **refresh: async path no longer skips the engine post-pass

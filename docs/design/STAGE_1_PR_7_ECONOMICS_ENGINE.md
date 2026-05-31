@@ -852,13 +852,16 @@ binding pins for C2/C4 and segment **2i**.
 |---------|-------------------|-----------|
 | DAA (LWMA-1) | Rust `shekyl-difficulty` | Yes — cross-checked (`tests/difficulty/lwma1_cross_check.cpp`) |
 | Burn / emission-share / release | Rust `shekyl-economics` | Yes — C++ orchestrates |
-| **Base CryptoNote subsidy** | **C++ only** today (`get_block_reward` in `cryptonote_basic_impl.cpp`); **no FFI seam yet** | **After C2c:** thin wrapper like `compute_fee_burn` — `get_block_reward` → `shekyl_base_block_reward` (+ release-multiplier FFI) |
+| **Base CryptoNote subsidy** | **Rust `shekyl-economics`** (canonical `base_block_reward`) — **C2c landed 2026-05-30**; the C++ ESF body is deleted | Yes — `get_block_reward` → `shekyl::base_subsidy_before_penalty` → `shekyl_base_block_reward` (+ 5-arg release-multiplier FFI), thin wrapper like `compute_fee_burn` |
 
-**Target end-state (C2c, reviewable pattern).** After cutover, `get_block_reward`
+**End-state (C2c, landed 2026-05-30).** After cutover, `get_block_reward`
 is structurally identical to `shekyl::compute_fee_burn` / `compute_emission_split`
-in [`economics.h`](../../src/shekyl/economics.h): C++ gathers inputs, calls Rust
-FFI, returns the result. The duplicated `(MONEY_SUPPLY − ag) >> ESF` body in
-`cryptonote_basic_impl.cpp` is deleted only after KAT legs pass (H1).
+in [`economics.h`](../../src/shekyl/economics.h): C++ gathers inputs, calls the
+Rust FFI (`shekyl::base_subsidy_before_penalty` → `shekyl_base_block_reward`),
+applies the weight penalty / 5-arg release multiplier, and returns the result.
+The duplicated `(MONEY_SUPPLY − ag) >> ESF` body in
+`cryptonote_basic_impl.cpp` was deleted after the C2a′ KAT legs passed (H1) and
+7-base merged to `dev` (H3).
 
 `already_generated` accumulation also runs C++-side (`blockchain.cpp` — accept
 path, fee estimate, `bei.already_generated_coins` at ~2293, **pop_block**
