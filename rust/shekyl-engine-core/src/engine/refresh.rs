@@ -1683,8 +1683,24 @@ mod refresh_driver_tests {
             *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(11);
         }
         let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
-        let wallet = Engine::<SoloSigner>::create(params, dummy_daemon())
-            .expect("create FULL wallet for refresh_with tests");
+        // `Engine::create` → `assemble` spawns the `KeyActor`, which
+        // (post Stage-2 require-ambient) asserts an ambient Tokio
+        // runtime. Build the daemon first (`dummy_daemon` drives its
+        // own `shared_runtime().block_on`, which must not run inside a
+        // runtime context), then enter `shared_runtime` only for the
+        // `create` call so the actor spawns onto the live shared
+        // runtime. The guard is dropped before the fixture returns, so
+        // the synchronous `refresh`/`refresh_with` bodies — and in
+        // particular `production_refresh_*`'s `refresh(&opts,
+        // rt.handle())`, which drives `Handle::block_on` and must not
+        // be inside a runtime — run with no ambient runtime, exactly as
+        // before.
+        let daemon = dummy_daemon();
+        let wallet = {
+            let _rt_guard = shared_runtime().enter();
+            Engine::<SoloSigner>::create(params, daemon)
+                .expect("create FULL wallet for refresh_with tests")
+        };
         EngineFixture { wallet, _tmp: tmp }
     }
 

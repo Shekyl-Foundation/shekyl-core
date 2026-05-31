@@ -26,12 +26,18 @@
   Ledger-actor lock cutover). `KeyActor` is **fail-stop by construction**:
   a handler panic runs `on_panic` → stop (not restart), `on_stop` wipes
   the blob, and the handle maps every `kameo::SendError` to the terminal,
-  non-retryable `KeyEngineError::KeyActorUnavailable`. The actor is hosted
-  on the ambient Tokio runtime when one exists, else on an engine-owned
-  single-worker multi-thread runtime built in `KeyEngineHandle::spawn`
-  (sync-open / plain-`#[test]` path); `tokio`'s `rt-multi-thread` feature
-  is promoted to production `[dependencies]` accordingly (also
-  de-fragilizing the pre-existing `block_in_place` dependency). §5.2
+  non-retryable `KeyEngineError::KeyActorUnavailable`. `KeyEngineHandle::spawn`
+  **requires an ambient Tokio runtime and asserts it** (panics with a contract
+  message if absent) rather than self-hosting an engine-owned runtime: an
+  owned, long-lived runtime would panic on drop inside the production async
+  context, and `kameo`'s spawn is `tokio::spawn`, which any flavor hosts, so
+  the spawn needs no `rt-multi-thread`. Tests that reach `spawn` use
+  `#[tokio::test]`; sync tests driving a post-create method that forbids an
+  ambient runtime enter a leaked runtime only around `create`. `tokio`'s
+  `rt-multi-thread` feature is promoted to production `[dependencies]` as an
+  **independent** fix for the pre-existing `drive_persistence::block_in_place`
+  feature-unification bug (decoupled from the spawn decision, which does not
+  need it). §5.2
   contract/protocol tests landed; the §5.3 B9 dispatch-overhead benchmark
   remains the one open DoD item (tracked in `FOLLOWUPS.md`). No consensus
   or wire-format change. Design:

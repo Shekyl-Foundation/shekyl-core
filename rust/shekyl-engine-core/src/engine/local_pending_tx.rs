@@ -973,8 +973,9 @@ mod tests {
     /// handle. Stage-2 replacement for the old `test_keys() ->
     /// Arc<AllKeysBlob>` helper: `LocalSigner` now holds a
     /// [`KeyEngineHandle`], not the blob (`STAGE_2_KEY_ENGINE_ACTOR.md`
-    /// §6 step 4). These are plain `#[test]`s with no ambient runtime,
-    /// so the spawn takes the engine-owned-runtime path (§4.2).
+    /// §6 step 4). `KeyEngineHandle::spawn` is require-ambient (§4.2), so
+    /// every caller runs under `#[tokio::test]`; the default current-thread
+    /// runtime hosts the actor task.
     fn test_signer_handle() -> KeyEngineHandle {
         let blob = rederive_account(
             &PENDING_TX_TEST_MASTER_SEED,
@@ -991,8 +992,8 @@ mod tests {
 
     /// Smoke test: constructor succeeds and the engine's state
     /// initializes to the (γ) empty-collections baseline.
-    #[test]
-    fn local_pending_tx_new_constructs() {
+    #[tokio::test]
+    async fn local_pending_tx_new_constructs() {
         let key = test_signer_handle();
         let pending = LocalPendingTx::new(
             Arc::new(LocalSigner::new(key)),

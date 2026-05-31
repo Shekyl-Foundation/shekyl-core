@@ -680,40 +680,77 @@ sync `#[test]` suite and on any no-runtime production open path. The Engine
 owns no runtime (verified: no `Runtime`/`Handle` field in
 `shekyl-engine-core/src`).
 
-**Disposition (locked): host the actor on the ambient runtime if one exists,
-else on an engine-owned runtime** — the same flavor-branch shape
-`drive_persistence` already uses, so the engine's runtime-agnostic contract is
-preserved rather than forcing the sync public API async (rejected: a
-frozen-surface change with FFI + all-caller ripple, contradicting the
-deliberately-sync lifecycle). Concretely, `KeyEngineHandle::spawn`:
+**Disposition (locked, Round 8 — reverses the Round-7 owned-runtime
+decision): require an ambient runtime and assert it.** `KeyEngineHandle::spawn`
+calls `Handle::try_current()`; present → spawn the actor onto it; absent →
+`panic!` with a contract message naming the requirement (`#[tokio::test]` for
+tests; production wallet-RPC / async-CLI / GUI already run inside a runtime).
+There is no engine-owned runtime, no `KeyActorRuntimeHost`, no `Drop`-time
+runtime teardown.
 
-- `Handle::try_current()` **Ok** (production wallet-RPC multi-thread runtime
-  per `drive_persistence`'s `MultiThread` branch, or a `#[tokio::test]`):
-  spawn the actor onto it. `tokio::spawn` detaches the task from the spawning
-  task, so the actor outlives the (possibly `spawn_blocking`) open call. No
-  engine-owned runtime is created.
-- `Handle::try_current()` **Err** (sync open path / plain `#[test]`): build a
-  dedicated **single-worker multi-thread** runtime, `enter()` it for the
-  spawn, and store it in an `Arc`-shared `KeyActorRuntimeHost` carried by the
-  `Clone` handle. A single-worker *multi-thread* runtime (not current-thread)
-  is required so the actor task is driven on its own worker thread independent
-  of the non-async caller; a current-thread runtime makes no progress unless
-  something blocks on it. The host's `Drop` calls `Runtime::shutdown_background`
-  (never the blocking default), so dropping the last handle clone tears the
-  runtime down without risking the "drop a runtime inside a runtime" panic.
-  This is the §4.3 "dropping the last `ActorRef` stops the actor" path, with
-  the owned runtime's teardown bundled in.
+*Why the Round-7 ambient-or-owned path was rejected.* The owned-runtime path
+mirrored `drive_persistence`'s flavor-branch, but the resemblance is a false
+friend: `drive_persistence` is **one-shot** (run a future to completion on a
+worker thread, tear the runtime down, return), and its owned runtime lives and
+dies inside a single synchronous call, never stored. The `KeyActor` is
+**long-lived** — it lives for the whole session and never completes, so it
+cannot be `block_on`'d to completion. A long-lived owned runtime must be stored
+on the handle and dropped when the handle drops, and **a Tokio runtime cannot
+be dropped from within an async context** ("Cannot drop a runtime in a context
+where blocking is not allowed"). In production the `Engine` is created and
+dropped *inside* the ambient runtime (the async RPC server / CLI), so an
+`Engine` owning a nested runtime would panic on drop in exactly the production
+scenario the owned path was meant to serve. The flavor-branch made it worse: a
+current-thread ambient (every `#[tokio::test]`) fell into the owned branch and
+built a runtime while already inside an async context — a nested-runtime panic.
 
-**Cargo consequence.** Both the owned-runtime path (`new_multi_thread`) and the
-pre-existing `drive_persistence::block_in_place` require tokio's
-`rt-multi-thread` feature. Today that feature is enabled only in
-`[dev-dependencies]`, so `cargo build -p shekyl-engine-core` (lib, default
-features) **does not compile in isolation** — it has been relying on a
-downstream consumer enabling `rt-multi-thread` via Cargo feature unification.
-This PR promotes `rt-multi-thread` into the production `[dependencies]` tokio
-feature list. That is a direct precondition of the runtime-hosting decision
-(not "while we're here" scope creep), and it incidentally makes the lib
-buildable standalone, de-fragilizing the latent `block_in_place` dependency.
+*Why require-ambient is the honest shape.* An actor is an async task by
+definition; it cannot be spawned without a runtime. Introducing the `KeyActor`
+does not break a preservable runtime-agnosticism — it makes runtime-agnosticism
+impossible for the open path. The owned-runtime machinery existed to preserve a
+property the architecture had already foreclosed. Asserting the requirement is
+the truthful reflection of "we now have an actor," it preserves the
+§binding-constraint by-construction property (spawn at construction, blob moves
+in immediately, no `&AllKeysBlob` escapes), and it carries no drop-panic
+landmine. `kameo`'s `Spawn::spawn` is `tokio::spawn`, which any runtime flavor
+hosts, so the spawn needs no `rt-multi-thread`.
+
+*Test/caller migration.* Plain `#[test]`s that reach `spawn` migrate to
+`#[tokio::test]`. Where a sync test must drive a post-create method that itself
+forbids an ambient runtime (e.g. `refresh(&opts, handle)` calls
+`Handle::block_on`, which panics inside a runtime), the test stays a plain
+`#[test]` and the fixture enters a leaked process-wide runtime *only* around the
+`create` call (the actor spawns onto a live runtime; the `enter` guard drops
+before the test body), so the post-create method runs with no ambient runtime.
+This is the shape used by `refresh.rs`'s `make_wallet` and the bench fixture's
+`build_engine_fixture`. Production has no caller of the orchestrator `Engine`
+yet (the CLI/RPC wiring lands in a later stage); the require-ambient assertion
+is the contract that future production wiring must satisfy — and the wallet-RPC
+server, async CLI, and GUI all create the engine from inside their runtime, so
+the contract is met by construction there.
+
+**Reversion clause** (per `21-reversion-clause-discipline.mdc`). Require-ambient
+is rejected-forever only against the *owned-runtime* alternative; it reopens
+if a hard sync-API constraint emerges (a sync entry point that genuinely cannot
+be moved inside a runtime). The substrate-anchored reopening criterion is "a
+production caller must construct the `Engine` from a context where no runtime
+exists and cannot be made to exist"; the re-evaluation shape is the **lazy-spawn
+fallback** (store the `Zeroizing` blob + projections in the handle at sync
+`assemble`; spawn the actor on the ambient runtime at first async use), recorded
+explicitly as a by-construction → by-timing weakening of the §binding-constraint,
+not adopted silently.
+
+**Cargo consequence (decoupled).** `rt-multi-thread` is **not** an entailment of
+the spawn decision under require-ambient — the spawn needs only `rt`. It is
+load-bearing on exactly one path: `drive_persistence`'s multi-thread branch
+calls `tokio::task::block_in_place`, which is gated behind `rt-multi-thread` and
+does not even resolve as a symbol without it. Today that feature is enabled only
+in `[dev-dependencies]`, so `cargo build -p shekyl-engine-core` (lib, default
+features) **does not compile in isolation** — it has relied on a downstream
+consumer enabling `rt-multi-thread` via Cargo feature unification. This PR
+promotes `rt-multi-thread` into the production `[dependencies]` tokio feature
+list as an independent `block_in_place` compile-correctness fix, justified on
+its own merits and not bundled with the runtime-hosting decision.
 
 ### 4.3 Shutdown, drop ordering, and zeroization
 

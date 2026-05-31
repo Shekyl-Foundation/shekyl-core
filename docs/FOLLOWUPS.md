@@ -1068,6 +1068,11 @@ sustainability is unaffected by the recalibration.
   blob; no `&AllKeysBlob` escapes the actor. The §5.2 contract/protocol
   tests landed (equivalence vs `LocalKeys`, no-secret-crosses, post-stop
   handle resolution, panic→fail-stop→zeroize, terminal-non-retryable).
+  Runtime hosting took the **require-ambient** disposition (§4.2, Round 8):
+  `KeyEngineHandle::spawn` asserts an ambient runtime rather than self-hosting
+  an owned one (an owned long-lived runtime panics on drop inside the
+  production async context); `rt-multi-thread` is promoted to production deps
+  as an *independent* `block_in_place` fix, decoupled from the spawn decision.
   **Remaining DoD residue:** the §5.3 **B9 dispatch-overhead benchmark**
   (criterion + iai pair: baseline `LocalKeys::try_claim_output` vs actor
   `KeyEngineHandle::try_claim_output`, plus the 6-i merge-path bench),

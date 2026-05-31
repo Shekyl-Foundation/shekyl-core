@@ -67,17 +67,24 @@ tracing = "0.1"
 # passing at Stage 4). `rt` enables `tokio::spawn` for the producer
 # task.
 #
-# `rt-multi-thread` is load-bearing on two production paths
-# (`STAGE_2_KEY_ENGINE_ACTOR.md` §4.2): (1) the `KeyActor` owned-runtime
-# spawn path (`KeyEngineHandle::spawn` builds a single-worker
-# multi-thread runtime when `assemble` runs with no ambient runtime —
-# the sync-open / plain-`#[test]` case), and (2) the pre-existing
-# `drive_persistence::block_in_place` (`lifecycle.rs:791`). Until Stage 2
-# this feature was enabled only in `[dev-dependencies]`, so the lib did
-# not compile standalone (`cargo build -p shekyl-engine-core`) and
-# relied on a downstream consumer's feature unification. Promoting it
-# here is a precondition of the actor spawn and de-fragilizes that
-# latent dependency.
+# `rt-multi-thread` is load-bearing on exactly one production path:
+# `drive_persistence`'s multi-thread branch (`lifecycle.rs`), which calls
+# `tokio::task::block_in_place` to bridge the sync `Engine::close` /
+# `change_password` entry points onto an ambient multi-thread runtime
+# without a nested-`block_on` panic. `block_in_place` is gated behind
+# `rt-multi-thread`, so the symbol does not even resolve without this
+# feature; until Stage 2 it was enabled only in `[dev-dependencies]`, so
+# the lib did not compile standalone (`cargo build -p shekyl-engine-core`)
+# and relied on a downstream consumer's feature unification. Promoting it
+# here de-fragilizes that latent `block_in_place` feature-unification bug.
+#
+# This feature is **not** an entailment of the `KeyActor` spawn decision.
+# Per `STAGE_2_KEY_ENGINE_ACTOR.md` §4.2, `KeyEngineHandle::spawn` takes
+# the require-ambient path (it asserts an ambient runtime rather than
+# building an owned one); `kameo`'s spawn is `tokio::spawn`, which any
+# runtime flavor hosts, so the actor spawn needs only `rt`. The
+# `rt-multi-thread` justification stands or falls on `block_in_place`
+# alone.
 tokio = { version = "1", features = ["time", "macros", "sync", "rt", "rt-multi-thread"] }
 # Cancellation token for cooperative shutdown of the refresh producer
 # between blocks. `Engine::start_refresh` constructs and owns the token

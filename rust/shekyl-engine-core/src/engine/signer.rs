@@ -343,10 +343,10 @@ mod tests {
     //!   returns `Ok` for any well-formed context.
     //!
     //! Each test spawns a real [`KeyActor`](super::super::key_actor::KeyActor)
-    //! over a real [`AllKeysBlob`]. These are plain `#[test]`s with no
-    //! ambient Tokio runtime, so `KeyEngineHandle::spawn` takes the
-    //! engine-owned-runtime path (§4.2) — exercising that path from the
-    //! signer's vantage as a side effect.
+    //! over a real [`AllKeysBlob`]. `KeyEngineHandle::spawn` is require-ambient
+    //! (§4.2 — a [`KeyActor`] is an async task and must be spawned inside a
+    //! runtime), so these are `#[tokio::test]`s; the default current-thread
+    //! runtime hosts the actor task fine (`kameo`'s spawn is `tokio::spawn`).
     use super::*;
     use crate::engine::traits::key::KeyEngine;
     use shekyl_crypto_pq::account::{
@@ -377,8 +377,8 @@ mod tests {
         .expect("rederive_account against fakechain raw32 seed")
     }
 
-    #[test]
-    fn local_signer_holds_handle_not_blob() {
+    #[tokio::test]
+    async fn local_signer_holds_handle_not_blob() {
         // The engine builds the handle, then hands the signer a clone
         // (mirrors `assemble`: `LocalSigner::new(key.clone())`).
         let engine_handle = KeyEngineHandle::spawn(deterministic_keys());
@@ -404,8 +404,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn local_signer_phase1_stub_succeeds() {
+    #[tokio::test]
+    async fn local_signer_phase1_stub_succeeds() {
         let signer = LocalSigner::new(KeyEngineHandle::spawn(deterministic_keys()));
         let context = TransferSigningContext::phase1_stub();
         let result = signer.sign_transfer(&context);

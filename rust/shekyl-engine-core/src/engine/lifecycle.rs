@@ -1093,14 +1093,21 @@ mod tests {
     /// lifecycle methods covered here do not issue any RPC calls;
     /// the daemon is held on the `Engine<S>` for refresh / submit
     /// paths that land in later commits.
+    ///
+    /// **Runs inside the ambient test runtime.** Since `KeyEngineHandle::spawn`
+    /// became require-ambient (§4.2), every engine-building lifecycle test is a
+    /// `#[tokio::test(flavor = "multi_thread")]`. This helper therefore must not
+    /// build a *nested* runtime (`block_on` inside a runtime panics); it bridges
+    /// the async `SimpleRequestRpc::new` to the sync test body via
+    /// `block_in_place` + the ambient handle — the same shape as
+    /// [`super::drive_persistence`]'s multi-thread branch, and the reason the
+    /// tests pin `flavor = "multi_thread"`.
     fn dummy_daemon() -> DaemonClient {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime");
-        let rpc = rt
-            .block_on(SimpleRequestRpc::new("http://127.0.0.1:1".to_string()))
-            .expect("construct SimpleRequestRpc (no actual connection attempted)");
+        let rpc = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(SimpleRequestRpc::new("http://127.0.0.1:1".to_string()))
+        })
+        .expect("construct SimpleRequestRpc (no actual connection attempted)");
         DaemonClient::new(rpc)
     }
 
@@ -1160,8 +1167,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn create_full_then_open_full_round_trips_state() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn create_full_then_open_full_round_trips_state() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse battery staple";
         let creds = Credentials::password_only(password);
@@ -1191,8 +1198,8 @@ mod tests {
         assert_eq!(wallet.capability(), Capability::Full);
     }
 
-    #[test]
-    fn open_full_with_wrong_password_returns_incorrect_password() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_full_with_wrong_password_returns_incorrect_password() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);
@@ -1218,8 +1225,8 @@ mod tests {
         assert!(matches!(err, OpenError::IncorrectPassword), "got {err:?}");
     }
 
-    #[test]
-    fn open_full_with_wrong_network_returns_network_mismatch() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_full_with_wrong_network_returns_network_mismatch() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);
@@ -1251,8 +1258,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn change_password_rewraps_envelope_then_reopen_uses_new_password() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn change_password_rewraps_envelope_then_reopen_uses_new_password() {
         let fix = make_create_fixture();
         let p_old: &[u8] = b"old password";
         let p_new: &[u8] = b"new password";
@@ -1291,8 +1298,8 @@ mod tests {
         .expect("reopen with new password");
     }
 
-    #[test]
-    fn open_full_after_state_file_deleted_returns_restored_from_height() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_full_after_state_file_deleted_returns_restored_from_height() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);
@@ -1337,8 +1344,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn close_with_outstanding_reservation_returns_outstanding_pending_tx() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn close_with_outstanding_reservation_returns_outstanding_pending_tx() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);
@@ -1381,8 +1388,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn open_view_only_returns_capability_not_yet_implemented() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_view_only_returns_capability_not_yet_implemented() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);
@@ -1415,8 +1422,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn open_hardware_offload_returns_capability_not_yet_implemented() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_hardware_offload_returns_capability_not_yet_implemented() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);
@@ -1445,8 +1452,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn tampered_prefs_are_recovered_and_warned_about() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tampered_prefs_are_recovered_and_warned_about() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);
@@ -1510,8 +1517,8 @@ mod tests {
     use shekyl_crypto_pq::wallet_envelope::WalletEnvelopeError;
     use shekyl_engine_file::WalletFileError;
 
-    #[test]
-    fn persistence_trait_save_state_round_trip() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn persistence_trait_save_state_round_trip() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse battery staple";
         let creds = Credentials::password_only(password);
@@ -1542,8 +1549,8 @@ mod tests {
         assert!(matches!(opened, OpenedEngine::Loaded(_)));
     }
 
-    #[test]
-    fn change_password_flushes_prefs() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn change_password_flushes_prefs() {
         let fix = make_create_fixture();
         let p_old: &[u8] = b"old password";
         let p_new: &[u8] = b"new password";
@@ -1573,8 +1580,8 @@ mod tests {
         assert_eq!(reopened.prefs().cosmetic.default_decimal_point, 9);
     }
 
-    #[test]
-    fn password_rotate_preserves_state_wrap_key_bytes() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn password_rotate_preserves_state_wrap_key_bytes() {
         let fix = make_create_fixture();
         let p_old: &[u8] = b"old password";
         let p_new: &[u8] = b"new password";
@@ -1598,8 +1605,8 @@ mod tests {
 
     /// Design §2c / F-R3.8: open → save_state(k) ok → rotate ok → save_state(k_stale)
     /// without re-derive must fail loud when keys-file bytes used for AAD drift.
-    #[test]
-    fn stale_state_wrap_key_fails_after_rotate_without_rederive() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stale_state_wrap_key_fails_after_rotate_without_rederive() {
         use shekyl_engine_file::paths::keys_path_from;
 
         let fix_a = make_create_fixture();
@@ -1665,8 +1672,8 @@ mod tests {
         assert_open_state_aead_failure(err);
     }
 
-    #[test]
-    fn wrong_state_wrap_key_sealed_state_fails_on_reopen() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wrong_state_wrap_key_sealed_state_fails_on_reopen() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse battery staple";
         let creds = Credentials::password_only(password);
@@ -1710,8 +1717,8 @@ mod tests {
         assert_open_state_aead_failure(err);
     }
 
-    #[test]
-    fn rederived_state_wrap_key_succeeds_after_rotate() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rederived_state_wrap_key_succeeds_after_rotate() {
         let fix = make_create_fixture();
         let p_old: &[u8] = b"old password";
         let p_new: &[u8] = b"new password";
@@ -1746,8 +1753,8 @@ mod tests {
         .expect("save with re-derived wrap key");
     }
 
-    #[test]
-    fn open_does_not_retain_file_kek() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn open_does_not_retain_file_kek() {
         let fix = make_create_fixture();
         let password: &[u8] = b"correct horse";
         let creds = Credentials::password_only(password);
