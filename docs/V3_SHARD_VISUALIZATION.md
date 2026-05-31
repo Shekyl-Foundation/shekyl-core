@@ -199,6 +199,67 @@ the shard rather than being a pure hash visualization. A shard from a
 high-activity chain period looks visibly different from a quiet-period
 shard; experienced stakers learn to read this.
 
+## Candidate compositor (candidate.v1) — leading V3.x design
+
+Empirical exploration in `shekyl-dev/visualization/` (2026-05) converged on a
+**two-stage difference compositor** rather than the single-algorithm 3-bit
+bucket assignment described below. This pipeline is the **leading design** for
+the V3.x `shekyl-shard-visual` reference implementation pending formal palette
+closure:
+
+1. **Foreground composite** — `aperiodic_tile` ⊖ `phyllotaxis`, difference
+   blend, opacity from `candidate.v1.fg.opacity` (bell curve, mean 0.5).
+2. **Background composite** — `truchet` ⊖ `crystalline`, difference blend,
+   opacity from `candidate.v1.bg.opacity` (same bell shape).
+3. **Final composite** — background ⊖ foreground, difference blend, opacity
+   from `candidate.v1.final.opacity` (high bell, mean ~0.80).
+
+Palettes and per-layer opacities are hash-derived via SHAKE256 namespaces
+(`candidate.v1.fg`, `candidate.v1.bg`, `candidate.v1.*.opacity`). Feature
+scalars from the shard aggregate drive renderer aesthetics inside each
+algorithm. The single-algorithm palette in the sections below remains the
+**fallback spec shape** if candidate.v1 fails mobile budget or continuity
+review; disposition closes during V3.x implementation.
+
+#### Structural entropy: one SHAKE256 namespace per renderer
+
+Each of the four renderers draws its **structural** parameters (orientation,
+divergence perturbation, foreground tone, circle-map ω/K/phase, scatter seed,
+palette-spread jitter) from its own namespaced stream:
+
+| Renderer         | Namespace                        | Indices used        |
+|------------------|----------------------------------|---------------------|
+| `aperiodic_tile` | `shard.v1.render.aperiodic_tile` | `unit(0)`, `unit(1)`|
+| `phyllotaxis`    | `shard.v1.render.phyllotaxis`    | `unit(0..2)`        |
+| `truchet`        | `shard.v1.render.truchet`        | `unit(0)` + per-cell `Sha256`|
+| `crystalline`    | `shard.v1.render.crystalline`    | `unit(0..2)`, `uint32(3..4)`|
+
+Rationale: the legacy layout carved the 256-bit hash into eight little-endian
+`uint32` words and let every renderer index the *same* pool, so renderers that
+both read word 0 produced structurally-correlated geometry for the same shard,
+and the eight-word budget did not stretch across all four algorithms without
+reuse. SHAKE256 is an XOF, so each `(shard_hash ‖ 0x01 ‖ namespace)` seed
+yields an independent, unbounded stream — distinct indices in distinct
+namespaces are statistically uncorrelated. `aperiodic_tile` previously consumed
+**zero** hash entropy (identical feature vectors produced identical geometry);
+it now draws a rosette rotation and palette-spread jitter so every shard is
+visually distinct. The Rust reference and the Python explorer use byte-identical
+derivation (same primitive, same domain separator, same little-endian word
+layout), so the two implementations agree on the structural draws.
+
+### Pre-archival preview exception (GUI wallet)
+
+Before `ArchivalEngine` (Stage 5) ships, the GUI wallet may expose a
+**beta preview** on the Staking page that renders **fixture aggregates**
+(illustrative fake-chain samples) and optional user-supplied shard hashes with
+preset feature vectors. This is **not** production archival UI; it validates
+the `shekyl-shard-visual` library and gives stakers a tangible preview of
+deterministic shard identity. Production cutover replaces fixtures with real
+archived shards from `ArchivalEngine`; cache keys use `(shard_id,
+shard_content_hash)` per below.
+
+---
+
 ### Visualization palette: hybrid approach
 
 A single visualization algorithm risks "they all look the same kind
@@ -602,9 +663,11 @@ begins.
 These gate the V3.x ship dot-version. Each closes against design
 review and performance testing during the V3.x implementation cycle.
 
-**Final algorithm palette.** The candidate list above is a starting
-set; the actual palette ships after performance testing and continuity
-review. Some candidates may drop; others may be added.
+**Final algorithm palette.** The **candidate.v1** two-stage difference
+compositor (see above) is the leading design from empirical exploration.
+The single-algorithm list below remains the documented fallback if
+candidate.v1 fails review. Final disposition closes during V3.x
+implementation against mobile budget and continuity testing.
 
 **Color palette specifications.** The exact RGB values for each palette
 family. Candidates: hand-curated by a designer; algorithmically

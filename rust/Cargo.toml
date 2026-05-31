@@ -76,6 +76,7 @@ members = [
     # `shekyl-pow-randomx` `test-internals` feature (per R5-D1).
     # See `docs/design/RANDOMX_V2_PHASE2G_PLAN.md` §5.1 + §8.
     "shekyl-randomx-differential",
+    "shekyl-shard-visual",
 ]
 # Local-only harnesses that must not participate in the parent
 # workspace. Excluded here (rather than relying on the nested

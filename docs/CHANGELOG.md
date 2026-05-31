@@ -38,6 +38,31 @@
 
 ### Changed
 
+- **shard-visual: type-safe renderer dispatch (no panic fallback).**
+  `render::render` now dispatches on a closed `Algorithm` enum
+  (`AperiodicTile` / `Phyllotaxis` / `Truchet` / `Crystalline`) instead of a
+  `&str` match with a `panic!("Unknown algorithm: …")` fallback. Dispatch is
+  compile-time exhaustive, so an unknown algorithm is unrepresentable rather
+  than a runtime panic. `candidate.rs` carries the layer identities as
+  `Algorithm` constants and derives the serialized `CandidateRecipe` strings
+  via `Algorithm::as_str()`, so the frontend-facing recipe JSON is unchanged.
+
+- **shard-visual: per-renderer structural SHAKE256 namespaces
+  (`docs/V3_SHARD_VISUALIZATION.md` §"Structural entropy").** The four
+  `candidate.v1` renderers (`aperiodic_tile`, `phyllotaxis`, `truchet`,
+  `crystalline`) now draw their structural parameters from a dedicated
+  per-algorithm namespace (`shard.v1.render.<algorithm>`) rather than sharing
+  the legacy eight-word `hash_words` pool. Two renderers reading the same word
+  index previously produced structurally-correlated geometry for one shard, and
+  eight 32-bit words did not stretch across four algorithms without reuse;
+  SHAKE256's XOF gives each `(shard_hash ‖ 0x01 ‖ namespace)` an independent,
+  unbounded stream. `aperiodic_tile` previously consumed zero hash entropy
+  (identical features → identical geometry) and now draws a rosette rotation and
+  palette-spread jitter. The now-dead `RenderParameters::hash_unit` /
+  `hash_words` accessor and field are removed from the crate. The Python
+  explorer (`shekyl-dev/visualization`) is updated byte-identically. Pre-genesis
+  / pre-release: no archived shard images depend on the old layout.
+
 - **economics: C2c cutover — `get_block_reward` base subsidy delegates to
   Rust (Stage 1 PR 7 §5.8).** The duplicated C++ ESF base-subsidy formula
   (`(MONEY_SUPPLY − already_generated) >> esf` + tail floor) in
@@ -58,6 +83,22 @@
   migration item.
 
 ### Fixed
+
+- **build: cargo-audit ignore config relocated to the path cargo-audit
+  actually reads.** The advisory-ignore config lived at `rust/audit.toml`,
+  but cargo-audit only auto-loads `.cargo/audit.toml` (no `--config` flag
+  exists), so the file was inert — the existing `RUSTSEC-2026-0097` (rand)
+  ignore never applied. The config now lives at `rust/.cargo/audit.toml`,
+  making both ignores live (verified under `cargo audit --deny warnings`).
+  Added `RUSTSEC-2024-0436` (`paste` unmaintained) to the ignore list with
+  rationale: `paste` is a compile-time-only proc-macro pulled transitively
+  by `shekyl-shard-visual`'s `imageproc` dependency, emits no runtime code,
+  and is not security- or consensus-load-bearing; reopen if `imageproc` /
+  `nalgebra` drop `paste` or if the crate replaces `imageproc` with
+  hand-rolled rasterization. Pre-existing `atomic-polyfill` / `bincode`
+  unmaintained notices and the `aes` yanked notice are unrelated to this
+  change and left untouched (plain `cargo audit`, which CI runs, does not
+  fail on them).
 
 - **refresh: async path no longer skips the engine post-pass
   (FOLLOWUPS P1/P3).** The asynchronous refresh path
