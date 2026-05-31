@@ -4,6 +4,22 @@
 
 ### Changed
 
+- **shard-visual: per-renderer structural SHAKE256 namespaces
+  (`docs/V3_SHARD_VISUALIZATION.md` §"Structural entropy").** The four
+  `candidate.v1` renderers (`aperiodic_tile`, `phyllotaxis`, `truchet`,
+  `crystalline`) now draw their structural parameters from a dedicated
+  per-algorithm namespace (`shard.v1.render.<algorithm>`) rather than sharing
+  the legacy eight-word `hash_words` pool. Two renderers reading the same word
+  index previously produced structurally-correlated geometry for one shard, and
+  eight 32-bit words did not stretch across four algorithms without reuse;
+  SHAKE256's XOF gives each `(shard_hash ‖ 0x01 ‖ namespace)` an independent,
+  unbounded stream. `aperiodic_tile` previously consumed zero hash entropy
+  (identical features → identical geometry) and now draws a rosette rotation and
+  palette-spread jitter. The now-dead `RenderParameters::hash_unit` /
+  `hash_words` accessor and field are removed from the crate. The Python
+  explorer (`shekyl-dev/visualization`) is updated byte-identically. Pre-genesis
+  / pre-release: no archived shard images depend on the old layout.
+
 - **economics: C2c cutover — `get_block_reward` base subsidy delegates to
   Rust (Stage 1 PR 7 §5.8).** The duplicated C++ ESF base-subsidy formula
   (`(MONEY_SUPPLY − already_generated) >> esf` + tail floor) in

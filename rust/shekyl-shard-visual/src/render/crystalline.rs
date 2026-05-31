@@ -5,15 +5,19 @@ use crate::params::RenderParameters;
 const BASE_POINTS: usize = 6_000;
 const TRANSIENT_ITERATIONS: usize = 200;
 
+/// Per-algorithm SHAKE256 namespace (see `entropy.rs`).
+const NS: &str = "shard.v1.render.crystalline";
+
 pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
     let f = params.features;
-    let omega = params.hash_unit(0);
-    let k_base = 0.62 + 0.33 * params.hash_unit(1);
+    let mut ent = params.entropy(NS);
+    let omega = ent.unit(0);
+    let k_base = 0.62 + 0.33 * ent.unit(1);
     let k_jitter = 0.20 * (f.value_dispersion - 0.5);
     let k = (k_base + k_jitter).clamp(0.0, 2.0);
 
     let plasma_freq = 6.0 + 8.0 * f.coinbase_ratio;
-    let phase_shift = 2.0 * std::f64::consts::PI * params.hash_unit(2);
+    let phase_shift = 2.0 * std::f64::consts::PI * ent.unit(2);
 
     let n_points = ((BASE_POINTS as f64) * (0.6 + 1.4 * f.activity_density)).round() as usize;
 
@@ -42,7 +46,7 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
         .map(|c| [c.0 as u16, c.1 as u16, c.2 as u16])
         .collect();
 
-    let seed = u64::from_le_bytes(params.shard_hash[..8].try_into().unwrap());
+    let seed = (u64::from(ent.uint32(3)) << 32) | u64::from(ent.uint32(4));
     let mut theta: Vec<f64> = (0..n_points)
         .map(|i| splitmix64(seed.wrapping_add(i as u64)) as f64 / u64::MAX as f64)
         .collect();

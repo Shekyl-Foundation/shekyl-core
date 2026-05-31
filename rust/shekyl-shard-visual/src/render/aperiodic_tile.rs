@@ -10,6 +10,12 @@ const PHI: f64 = 1.618_033_988_749_895;
 const BASE_DEPTH: i32 = 4;
 const MAX_DEPTH: i32 = 6;
 
+/// Per-algorithm SHAKE256 namespace (see `entropy.rs`). Before this stream
+/// existed the tiling drew zero hash entropy — identical feature vectors
+/// produced identical geometry. The rosette rotation and spread jitter below
+/// give every shard a distinct orientation and palette cut.
+const NS: &str = "shard.v1.render.aperiodic_tile";
+
 #[derive(Clone, Copy)]
 struct Triangle {
     kind: u8,
@@ -20,14 +26,16 @@ struct Triangle {
 
 pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
     let f = params.features;
+    let mut ent = params.entropy(NS);
+    let rotation = 2.0 * PI * ent.unit(0);
     let depth = (BASE_DEPTH + (f.output_richness * (MAX_DEPTH - BASE_DEPTH) as f64).round() as i32)
         .clamp(BASE_DEPTH, MAX_DEPTH);
 
     let mut triangles = Vec::new();
     let n_rosette = 10;
     for i in 0..n_rosette {
-        let angle1 = 2.0 * PI * (i as f64 - 0.5) / n_rosette as f64;
-        let angle2 = 2.0 * PI * (i as f64 + 0.5) / n_rosette as f64;
+        let angle1 = 2.0 * PI * (i as f64 - 0.5) / n_rosette as f64 + rotation;
+        let angle2 = 2.0 * PI * (i as f64 + 0.5) / n_rosette as f64 + rotation;
         let (mut v1x, mut v1y) = (angle1.cos(), angle1.sin());
         let (mut v2x, mut v2y) = (angle2.cos(), angle2.sin());
         if i % 2 == 0 {
@@ -52,7 +60,7 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
     let cx_off = (size as f64 - (x_hi - x_lo) * scale) / 2.0 - x_lo * scale;
     let cy_off = (size as f64 - (y_hi - y_lo) * scale) / 2.0 - y_lo * scale;
 
-    let spread = 0.4 + 0.5 * f.value_dispersion;
+    let spread = (0.4 + 0.5 * f.value_dispersion + 0.1 * (ent.unit(1) - 0.5)).clamp(0.1, 0.95);
     let margin_t = (1.0 - spread) / 2.0;
     let sharp_t = margin_t;
     let robust_t = margin_t + spread;

@@ -214,12 +214,38 @@ closure:
 3. **Final composite** — background ⊖ foreground, difference blend, opacity
    from `candidate.v1.final.opacity` (high bell, mean ~0.80).
 
-Palettes per layer are hash-derived via SHAKE256 namespaces
-(`candidate.v1.fg`, `candidate.v1.bg`). Feature scalars from the shard
-aggregate drive renderer aesthetics inside each algorithm. The single-algorithm
-palette in the sections below remains the **fallback spec shape** if
-candidate.v1 fails mobile budget or continuity review; disposition closes during
-V3.x implementation.
+Palettes and per-layer opacities are hash-derived via SHAKE256 namespaces
+(`candidate.v1.fg`, `candidate.v1.bg`, `candidate.v1.*.opacity`). Feature
+scalars from the shard aggregate drive renderer aesthetics inside each
+algorithm. The single-algorithm palette in the sections below remains the
+**fallback spec shape** if candidate.v1 fails mobile budget or continuity
+review; disposition closes during V3.x implementation.
+
+#### Structural entropy: one SHAKE256 namespace per renderer
+
+Each of the four renderers draws its **structural** parameters (orientation,
+divergence perturbation, foreground tone, circle-map ω/K/phase, scatter seed,
+palette-spread jitter) from its own namespaced stream:
+
+| Renderer         | Namespace                        | Indices used        |
+|------------------|----------------------------------|---------------------|
+| `aperiodic_tile` | `shard.v1.render.aperiodic_tile` | `unit(0)`, `unit(1)`|
+| `phyllotaxis`    | `shard.v1.render.phyllotaxis`    | `unit(0..2)`        |
+| `truchet`        | `shard.v1.render.truchet`        | `unit(0)` + per-cell `Sha256`|
+| `crystalline`    | `shard.v1.render.crystalline`    | `unit(0..2)`, `uint32(3..4)`|
+
+Rationale: the legacy layout carved the 256-bit hash into eight little-endian
+`uint32` words and let every renderer index the *same* pool, so renderers that
+both read word 0 produced structurally-correlated geometry for the same shard,
+and the eight-word budget did not stretch across all four algorithms without
+reuse. SHAKE256 is an XOF, so each `(shard_hash ‖ 0x01 ‖ namespace)` seed
+yields an independent, unbounded stream — distinct indices in distinct
+namespaces are statistically uncorrelated. `aperiodic_tile` previously consumed
+**zero** hash entropy (identical feature vectors produced identical geometry);
+it now draws a rosette rotation and palette-spread jitter so every shard is
+visually distinct. The Rust reference and the Python explorer use byte-identical
+derivation (same primitive, same domain separator, same little-endian word
+layout), so the two implementations agree on the structural draws.
 
 ### Pre-archival preview exception (GUI wallet)
 

@@ -5,13 +5,20 @@ use crate::params::RenderParameters;
 
 const BASE_GRID: i32 = 8;
 
+/// Per-algorithm SHAKE256 namespace (see `entropy.rs`). The per-cell `Sha256`
+/// draws below are already domain-separated by the `"truchet"` tag and the
+/// cell indices, so they stay; only the top-level foreground tone moves onto
+/// this dedicated stream.
+const NS: &str = "shard.v1.render.truchet";
+
 pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
     let f = params.features;
+    let mut ent = params.entropy(NS);
     let max_depth = (1 + (2.0 * f.output_richness).round() as i32).clamp(1, 3);
 
     let bg_t = 0.04 + 0.18 * f.coinbase_ratio;
     let bg = params.palette.sample(bg_t);
-    let fg_t = 0.65 + 0.30 * params.hash_unit(0);
+    let fg_t = 0.65 + 0.30 * ent.unit(0);
     let fg = params.palette.sample(fg_t);
 
     let mut image = RgbImage::from_pixel(size, size, Rgb([bg.0, bg.1, bg.2]));
