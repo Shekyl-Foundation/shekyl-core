@@ -664,6 +664,57 @@ spawn happens in `assemble`, in exactly one place, so future open paths
 inherit it. `KeyActor::spawn(blob)` (default bounded-64 mailbox, §4.4) is
 called after the view/public projections are derived (§4.1).
 
+**Runtime hosting — where the actor task actually runs (Round-7 substrate
+finding).** The original §4.2 said "the spawn happens in `assemble`" without
+reconciling a structural fact: `assemble` is a **synchronous** `fn` reached
+from the sync `pub fn create` / `open_full`, and the engine's lifecycle layer
+is *deliberately runtime-agnostic* — `drive_persistence` (`lifecycle.rs:784`)
+exists precisely to branch on "multi-thread runtime present / current-thread
+present / no runtime at all." The existing test suite proves the no-runtime
+case is live: `Engine::<SoloSigner>::create(...)` is called inside plain
+`#[test]` functions (`refresh.rs:1686` driving the `#[test]`s at 1744+), which
+have **no** ambient Tokio runtime. But `kameo`'s `Spawn::spawn` schedules the
+actor with `tokio::spawn`, which **panics outside a runtime** ("there is no
+reactor running"). A naive spawn-in-`assemble` would therefore panic in the
+sync `#[test]` suite and on any no-runtime production open path. The Engine
+owns no runtime (verified: no `Runtime`/`Handle` field in
+`shekyl-engine-core/src`).
+
+**Disposition (locked): host the actor on the ambient runtime if one exists,
+else on an engine-owned runtime** — the same flavor-branch shape
+`drive_persistence` already uses, so the engine's runtime-agnostic contract is
+preserved rather than forcing the sync public API async (rejected: a
+frozen-surface change with FFI + all-caller ripple, contradicting the
+deliberately-sync lifecycle). Concretely, `KeyEngineHandle::spawn`:
+
+- `Handle::try_current()` **Ok** (production wallet-RPC multi-thread runtime
+  per `drive_persistence`'s `MultiThread` branch, or a `#[tokio::test]`):
+  spawn the actor onto it. `tokio::spawn` detaches the task from the spawning
+  task, so the actor outlives the (possibly `spawn_blocking`) open call. No
+  engine-owned runtime is created.
+- `Handle::try_current()` **Err** (sync open path / plain `#[test]`): build a
+  dedicated **single-worker multi-thread** runtime, `enter()` it for the
+  spawn, and store it in an `Arc`-shared `KeyActorRuntimeHost` carried by the
+  `Clone` handle. A single-worker *multi-thread* runtime (not current-thread)
+  is required so the actor task is driven on its own worker thread independent
+  of the non-async caller; a current-thread runtime makes no progress unless
+  something blocks on it. The host's `Drop` calls `Runtime::shutdown_background`
+  (never the blocking default), so dropping the last handle clone tears the
+  runtime down without risking the "drop a runtime inside a runtime" panic.
+  This is the §4.3 "dropping the last `ActorRef` stops the actor" path, with
+  the owned runtime's teardown bundled in.
+
+**Cargo consequence.** Both the owned-runtime path (`new_multi_thread`) and the
+pre-existing `drive_persistence::block_in_place` require tokio's
+`rt-multi-thread` feature. Today that feature is enabled only in
+`[dev-dependencies]`, so `cargo build -p shekyl-engine-core` (lib, default
+features) **does not compile in isolation** — it has been relying on a
+downstream consumer enabling `rt-multi-thread` via Cargo feature unification.
+This PR promotes `rt-multi-thread` into the production `[dependencies]` tokio
+feature list. That is a direct precondition of the runtime-hosting decision
+(not "while we're here" scope creep), and it incidentally makes the lib
+buildable standalone, de-fragilizing the latent `block_in_place` dependency.
+
 ### 4.3 Shutdown, drop ordering, and zeroization
 
 The load-bearing property is that `AllKeysBlob`'s `Drop`
