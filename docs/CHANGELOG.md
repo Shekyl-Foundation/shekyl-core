@@ -50,6 +50,22 @@
 
 ### Fixed
 
+- **build: cargo-audit ignore config relocated to the path cargo-audit
+  actually reads.** The advisory-ignore config lived at `rust/audit.toml`,
+  but cargo-audit only auto-loads `.cargo/audit.toml` (no `--config` flag
+  exists), so the file was inert — the existing `RUSTSEC-2026-0097` (rand)
+  ignore never applied. The config now lives at `rust/.cargo/audit.toml`,
+  making both ignores live (verified under `cargo audit --deny warnings`).
+  Added `RUSTSEC-2024-0436` (`paste` unmaintained) to the ignore list with
+  rationale: `paste` is a compile-time-only proc-macro pulled transitively
+  by `shekyl-shard-visual`'s `imageproc` dependency, emits no runtime code,
+  and is not security- or consensus-load-bearing; reopen if `imageproc` /
+  `nalgebra` drop `paste` or if the crate replaces `imageproc` with
+  hand-rolled rasterization. Pre-existing `atomic-polyfill` / `bincode`
+  unmaintained notices and the `aes` yanked notice are unrelated to this
+  change and left untouched (plain `cargo audit`, which CI runs, does not
+  fail on them).
+
 - **refresh: async path no longer skips the engine post-pass
   (FOLLOWUPS P1/P3).** The asynchronous refresh path
   (`Engine::start_refresh` → `run_refresh_task`) merged scan results
