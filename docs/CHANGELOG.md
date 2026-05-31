@@ -49,6 +49,22 @@
 
 ### Documentation
 
+- **Codify the seven engine-trait conformance lenses.** Added
+  [`docs/V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md`](V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md),
+  which enumerates the documentation-as-contract discipline previously
+  implicit in the `LedgerEngine` / `DaemonEngine` reference surfaces and
+  scattered across `V3_ENGINE_TRAIT_BOUNDARIES.md` §§1.4–1.6: CL-1
+  ownership boundary, CL-2 supertrait bounds, CL-3 error landing pad,
+  CL-4 per-method C/I/P triad (= §1.6's documentation discipline), CL-5
+  Stage-4 swap-in invariance, CL-6 justified `#[allow(dead_code)]`, CL-7
+  value/error-type forward-compat. The doc disambiguates these
+  *conformance* lenses (trait documentation) from §8.3.1's *design*
+  lenses (trait shape), carries a current-`dev` conformance scorecard
+  for all seven traits, and pins the add/remove-a-lens discipline per
+  `21-reversion-clause-discipline.mdc`. Cross-referenced from
+  `V3_ENGINE_TRAIT_BOUNDARIES.md` §1.6 and hooked into the per-trait PR
+  pre-flight via `STAGE_1_PER_PR_TEMPLATE.md` §3.6. Documentation-only;
+  no code or behavior change.
 - **Inter-stage cleanup: tech-debt tracker consolidation + stale-ref fixes.**
   Post-P2 audit of Stage 1 (trait-extraction) closure. (1) Consolidated open
   structural-debt tracking into a single file: the three orphan MSVC/Windows

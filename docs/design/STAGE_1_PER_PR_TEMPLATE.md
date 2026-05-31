@@ -161,6 +161,39 @@ For each of §8.3.1 through §8.3.5, cite applicability:
   (`feat/stage-1-prN-<engine>-engine-design`); implementation cuts
   from `dev` after Round 3 closes.
 
+### 3.6 Trait-surface conformance lenses
+
+Test the trait surface against the seven **conformance lenses** per
+[`docs/V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md`](../V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md)
+(distinct from the §3.3 *design* lenses — conformance lenses govern
+the documentation contract, not trait shape). Record each as ✓ /
+documented-exemption / deferred-with-pointer:
+
+- [ ] **CL-1 Ownership boundary** — module doc cites the contract §
+  and states owns vs. deliberately-off-trait (+ why).
+- [ ] **CL-2 Supertrait bounds** — `# Supertrait bounds` justifies
+  `Send + Sync + 'static` (+ any extra) and states the `Clone`
+  disposition with reason.
+- [ ] **CL-3 Error landing pad** — `type Error: Into<…>` documented,
+  or a documented deliberate absence (PendingTx precedent).
+- [ ] **CL-4 Per-method C/I/P triad** — every method carries
+  `# Cancellation` / `# Idempotency` / `# Panics`; `# Panics` states
+  what the implementor *actually* does (poison-mapped-to-error vs.
+  panic). Cross-method cancellation (RefreshEngine) may live at trait
+  level.
+- [ ] **CL-5 Stage-4 swap-in invariance** — `# Stage-4 swap-in` note
+  pins signature stability across `Local* → ActorRef<*Actor>`.
+- [ ] **CL-6 Justified `#[allow(dead_code)]`** — each attribute names
+  its deletion/relaxation trigger inline; no bare allows; no
+  collective block comment.
+- [ ] **CL-7 Forward-compat value/error types** — trait-owned public
+  value/error types carry `#[non_exhaustive]` (+ rationale) or the
+  unit-variant-only pin, or document the exemption.
+
+This is independent of §3.3: a trait may decline a design lens
+(synchronous framing correct) while still satisfying all seven
+conformance lenses.
+
 ---
 
 ## 4. Round 1 — Load-bearing question

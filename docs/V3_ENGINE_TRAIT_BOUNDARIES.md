@@ -606,6 +606,17 @@ the implementation swap. Round 4b's mechanical fill-in
 applies these disciplines per-method as the per-method
 classifications land in §4 (Item 1).
 
+**These three documentation disciplines are CL-4 (the per-method
+C/I/P triad) of the seven *conformance lenses*** enumerated in
+[`docs/V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md`](V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md).
+That document is the consolidated checklist for reviewing a trait
+surface's documentation contract (ownership boundary, supertrait
+bounds, error landing pad, the C/I/P triad, Stage-4 swap-in
+invariance, justified `#[allow(dead_code)]`, and value/error-type
+forward-compat). The conformance lenses are distinct from the §8.3.1
+*design* lenses, which govern trait *shape* rather than
+documentation; see that doc's §0 for the disambiguation.
+
 ---
 
 ## 2. The seven traits (Stage 1 surface, pinned for Stage 4)
