@@ -47,21 +47,27 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **Stage 1 trait-extraction chain — closeout audit (2026-05-29;
-  post–PR #88 update).** The §8.1 critical-path chain is landed on `dev`:
+- **Stage 1 trait-extraction chain — closeout audit (2026-05-29,
+  post–PR #88; economics-trait update 2026-05-31, post–PR #94).** The
+  §8.1 critical-path chain is landed on `dev`:
   `DaemonEngine` → `LedgerEngine` → (`RefreshEngine` ∥
-  `PendingTxEngine`), with `KeyEngine` trait + `LocalKeys` implementor
-  in parallel; `PersistenceEngine` substrate also landed (PR #83).
-  Inventory, orchestrator shape (`Engine<S, D, L, R, P>`), ordered
+  `PendingTxEngine`), with the `KeyEngine` trait + `LocalKeys`
+  implementor in parallel (landed but **not** orchestrator-wired —
+  deferred to Stage 2; see the `KeyEngine` inline-integration entry
+  below); `PersistenceEngine` landed (PR #83) and `EconomicsEngine`
+  landed (PR #94), so the orchestrator is now the seven-parameter
+  `Engine<S, D, L, E, R, P, F>`.
+  Inventory, orchestrator shape (`Engine<S, D, L, E, R, P, F>`), ordered
   next steps, and off-critical-path trait status:
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md) §8.1 /
   §1 status banner; per-PR design docs under `docs/design/STAGE_1_PR_*`.
   **Dedicated audit markdown landed:**
   [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](./design/STAGE_1_COMPLETION_AUDIT.md).
   **Still V3.0 pre-genesis but not “missing Stage 1 PR”:** wallet
-  BIP-39 FFI, optional persistence/economics trait PRs, economics
-  §3.3 benches (P1 async refresh post-pass closed 2026-05-29 by
-  `refresh/p1-async-path-post-pass`). **Rewrite plan:**
+  BIP-39 FFI, economics §3.3 benches (the persistence and economics
+  trait PRs both landed — PR #83 / PR #94; P1 async refresh post-pass
+  closed 2026-05-29 by `refresh/p1-async-path-post-pass`).
+  **Rewrite plan:**
   [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   Phases 0–6; Stage 1 was prerequisite, Phase 1+ continues `Engine`.
 

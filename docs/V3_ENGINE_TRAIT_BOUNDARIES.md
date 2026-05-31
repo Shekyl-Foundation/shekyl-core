@@ -31,9 +31,13 @@ that this drift count surfaced. **Stage 1 PR 3 (`KeyEngine`, PRs
 (`PendingTxEngine`, PR #81) landed 2026-05-27** — completing the
 §8.1 critical-path chain `DaemonEngine` → `LedgerEngine` →
 (`RefreshEngine` ∥ `PendingTxEngine`) on `dev` (merge
-`b9c03dc24`). `PersistenceEngine` Phase 0–2c landed on `dev` (trait module + file layer;
-`WalletFile` wiring follows). **`EconomicsEngine` remains spec-only**
-(no `engine/traits/economics.rs` yet); §8.1 permits it off the critical path.
+`b9c03dc24`). `PersistenceEngine` landed on `dev` (trait module + file layer +
+`WalletFile` wiring; the `F = WalletFile` slot and `persistence` field in
+`engine/mod.rs`). **`EconomicsEngine` landed** (PR #94,
+`feat/stage-1-pr7-economics-engine`, merge `24a342529`;
+`engine/traits/economics.rs` + the `engine/traits/mod.rs` re-export), growing
+the orchestrator to the `Engine<S, D, L, E, R, P, F>` seven-parameter shape —
+the `E` slot is carried for struct-shape stability with zero V3.0 consumer (R6).
 Post-closeout inventory: [`docs/FOLLOWUPS.md`](FOLLOWUPS.md) and
 [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](design/STAGE_1_COMPLETION_AUDIT.md).
 Subsequent per-trait PRs follow §8.1's within-stage-1 ordering and
