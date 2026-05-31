@@ -90,6 +90,14 @@ curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
 # `AllKeysBlob` already wipes its own copy on `Drop`; the wrapper
 # ensures the scanner's local copies do the same.
 zeroize = { version = "1", features = ["derive"] }
+# `kameo` actor framework — Stage 2 `KeyEngine` actor migration
+# (`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`). `KeyActor` owns
+# `AllKeysBlob` inside its task; `Engine` holds a `KeyEngineHandle`
+# wrapping `ActorRef<KeyActor>`. Pinned `=0.20.0` in
+# `[workspace.dependencies]` (coordination-load-bearing dep; an
+# unreviewed minor bump could alter mailbox/supervision semantics).
+# This is the first live consumer (closes the FOLLOWUP kameo pin).
+kameo = { workspace = true }
 
 [dev-dependencies]
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }

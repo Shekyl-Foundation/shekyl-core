@@ -168,6 +168,7 @@ pub(crate) mod fault_injecting_pending_tx;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_refresh;
 pub mod fee_estimator;
+pub(crate) mod key_actor;
 pub mod lifecycle;
 pub(crate) mod local_economics;
 pub(crate) mod local_keys;
