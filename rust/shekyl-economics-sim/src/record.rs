@@ -136,9 +136,13 @@ fn sample_heights(blocks_per_year: u64, sim_years: u64) -> Vec<u64> {
 /// primitives.
 ///
 /// The per-block accumulation loop mirrors
-/// [`crate::engine::run_scenario`]'s integer math (so `already_generated`
-/// / `total_burned` track identically); rows are captured at
-/// [`sample_heights`].
+/// [`crate::engine::run_scenario`]'s integer reward/emission math (so
+/// `already_generated` tracks identically). It deliberately does **not**
+/// adopt that modeling tool's emitted-minus-burned `circulating`: the
+/// recorded `circulating_supply` is the **consensus burn-site quantity** —
+/// prev-block `already_generated` (== `ag_start`) — per §5.3 R1 / design
+/// §608–612, **not** `already_generated − total_burned`. Rows are captured
+/// at [`sample_heights`].
 #[must_use]
 pub fn record_baseline_fixture() -> RecordedChainFixture {
     let sim = SimParams::default();
@@ -163,7 +167,6 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
     let samples = sample_heights(blocks_per_year, config.sim_years);
 
     let mut already_generated: u128 = 0;
-    let mut total_burned: u128 = 0;
     let mut records: Vec<RecordedRow> = Vec::with_capacity(samples.len());
 
     for block in 0..total_blocks {
@@ -176,7 +179,13 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
             .expect("sim neutral trajectory stays within supply bounds");
 
         let tx_volume = (config.volume.get_volume)(block, blocks_per_year);
-        let circulating = (already_generated as u64).saturating_sub(total_burned as u64);
+        // `circulating_supply` is the consensus burn-site quantity:
+        // prev-block `already_generated` (== `ag_start`), matching
+        // `validate_miner_transaction` — NOT `already_generated −
+        // total_burned` (§5.3 R1 / design §608–612). stake_ratio,
+        // total_staked, burn input, and the recorded row all use this
+        // same quantity so the fixture exercises the consensus input.
+        let circulating = ag_start;
         let stake_ratio = (config.stake.get_stake_ratio)(block, blocks_per_year, circulating);
 
         let multiplier = calc_release_multiplier(
@@ -249,7 +258,6 @@ pub fn record_baseline_fixture() -> RecordedChainFixture {
         if already_generated > money_supply {
             already_generated = money_supply;
         }
-        total_burned += u128::from(fee_split.actually_destroyed);
     }
 
     let neutral_milestones = [
