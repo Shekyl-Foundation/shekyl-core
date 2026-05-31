@@ -71,9 +71,20 @@ sustainability is unaffected by the recalibration.
   [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   Phases 0–6; Stage 1 was prerequisite, Phase 1+ continues `Engine`.
 
-- **`KeyEngine` inline orchestrator integration — rejected for Stage 1
-  (reversion-clause; reopens at the Stage 2 actor migration).** Shape per
+- **`KeyEngine` inline orchestrator integration — rejected for Stage 1;
+  RESOLVED 2026-05-31 by the Stage 2 actor migration.** Shape per
   [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc).
+
+  *Resolution (2026-05-31).* The reversion clause's positive decision was
+  taken exactly as specified: the orchestrator now holds
+  `key: KeyEngineHandle` (not an inline `K: KeyEngine` parameter) — `Engine`
+  stays seven-parameter `Engine<S, D, L, E, R, P, F>`, the
+  `Arc<AllKeysBlob>` field is gone, and the blob lives solely in the
+  `KeyActor`. See `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` §6 (steps 3–4)
+  and the "Stage 2 — `KeyEngine` migration to actor" entry below for the
+  remaining DoD residue (B9 dispatch-overhead benchmark). The
+  reject-the-inline-shape rationale below is retained as the historical
+  record of why the deferral was correct.
 
   *Rejection (current substrate).* `KeyEngine` is the one extracted Stage 1
   trait deliberately **not** wired into the orchestrator. `Engine` holds
@@ -924,15 +935,19 @@ sustainability is unaffected by the recalibration.
      default + per-actor override convention documented inline at the
      `kameo` `[workspace.dependencies]` entry.
 
-  **Status (2026-05-29).** All three preconditions are satisfied by
-  the `chore/stage_1_cleanup` verification commit. The pin is
-  declared-only (no workspace member consumes `kameo` yet, so it is
-  inert in the build graph). **This entry stays open** until Stage 2's
-  first commit adds the live `kameo = { workspace = true }` consumer
-  (the `KeyEngine` actor crate), verifies the supervision/mailbox API
-  surface at source per `17-dependency-discipline.mdc` at that
-  consumption point, and closes this follow-up. Target: V3.0,
-  pre-Stage-2.
+  **CLOSED 2026-05-31 (Stage 2 `KeyActor` migration).** All three
+  preconditions were satisfied by the `chore/stage_1_cleanup`
+  verification commit; the close condition — Stage 2's first commit
+  adds the live `kameo = { workspace = true }` consumer and verifies
+  the supervision/mailbox API surface at source — is now met.
+  `shekyl-engine-core` consumes `kameo` via the `KeyActor`
+  (`rust/shekyl-engine-core/src/engine/key_actor.rs`), so the pin is
+  no longer inert in the build graph. The API surface was verified at
+  source per `17-dependency-discipline.mdc` and the `#[actor(mailbox =
+  …)]` convention drift corrected (kameo 0.20.0 has no such attribute;
+  `spawn` is bounded-64 by default, overrides via `spawn_with_mailbox`)
+  — recorded at `STAGE_2_KEY_ENGINE_ACTOR.md` §0.5 (B6 finding) and the
+  `rust/Cargo.toml` `kameo` note.
 
 - **View/HW lifecycle bodies in `shekyl-wallet-core`.**
   `Wallet::open_view_only` and `Wallet::open_hardware_offload` ship as
@@ -1042,7 +1057,26 @@ sustainability is unaffected by the recalibration.
 
   *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
   Engine architecture: actor model with staged migration from
-  composition*.
+  composition*. Design: `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`.
+
+  **Status (2026-05-31) — migration landed; one DoD item open.** The
+  actor migration is on the branch (`torvaldsl/stage-2-key-engine-actor`):
+  `KeyActor` owns `AllKeysBlob` in its own task with fail-stop-on-panic
+  zeroization (`key_actor.rs`); `Engine<S, …>` holds `key:
+  KeyEngineHandle` plus the construction-time `HandleDerivationViewSecret`
+  for the 6-i merge post-pass; `LocalSigner` holds the handle, not the
+  blob; no `&AllKeysBlob` escapes the actor. The §5.2 contract/protocol
+  tests landed (equivalence vs `LocalKeys`, no-secret-crosses, post-stop
+  handle resolution, panic→fail-stop→zeroize, terminal-non-retryable).
+  **Remaining DoD residue:** the §5.3 **B9 dispatch-overhead benchmark**
+  (criterion + iai pair: baseline `LocalKeys::try_claim_output` vs actor
+  `KeyEngineHandle::try_claim_output`, plus the 6-i merge-path bench),
+  with `compare.py` threshold-class registration and a frozen baseline
+  transcribed to `docs/PERFORMANCE_BASELINE.md`. The bench is its own
+  deliverable per this repo's bench-pairing discipline (its own
+  `__bench_internals` exports + CI `workflow_dispatch` baseline capture),
+  not a tail-end addition to the migration commit. *This entry stays open
+  until B9 lands.* Target: V3.0, before Phase 2b.
 
 - **Subaddress mechanism under PQC — dedicated design round (2026-05-31,
   surfaced during Stage 2 `KeyEngine`-actor pre-flight).** The scanner and

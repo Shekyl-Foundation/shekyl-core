@@ -209,20 +209,23 @@ serde_json = "1"
 # framework is a coordination-load-bearing dependency where a silent
 # minor bump could alter mailbox/supervision semantics under us.
 #
-# Declared here only; no workspace member consumes it yet, so it is
-# inert in the build graph. Stage 2's first commit adds the live
-# `kameo = { workspace = true }` consumer (the `KeyEngine` actor crate)
-# and closes the FOLLOWUP. The supervision/mailbox API surface is
+# Live consumer (Stage 2): `shekyl-engine-core` consumes
+# `kameo = { workspace = true }` as of the `KeyActor` migration
+# (`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`); the pin is no longer
+# inert in the build graph. The supervision/mailbox API surface was
 # verified at source at that consumption point per
-# `17-dependency-discipline.mdc` (the pin alone calls no API).
+# `17-dependency-discipline.mdc` (§0.5 B6 finding below).
 #
 # Bounded-mailbox default convention (FOLLOWUP precondition 3): every
-# actor declares a bounded mailbox; the workspace default is
-# `mailbox(64)` unless an actor documents a measured reason to differ.
+# actor uses a bounded mailbox; the workspace default is **capacity 64**.
 # Unbounded mailboxes are forbidden under Path B for memory-pressure
-# reasons. Per-actor overrides carry an inline rationale at the
-# `#[actor(mailbox = ...)]` site naming the back-pressure or
-# throughput measurement that justifies the deviation.
+# reasons. The *mechanism*, verified at source in kameo 0.20.0 (§0.5 B6):
+# `Spawn::spawn(args)` is already bounded at 64 by default — there is **no
+# `#[actor(mailbox = ...)]` attribute** (the earlier convention text named
+# one that does not exist). Per-actor overrides pass an explicit mailbox to
+# `spawn_with_mailbox(args, kameo::mailbox::bounded(n))` with an inline
+# rationale naming the back-pressure or throughput measurement that
+# justifies the deviation. `KeyActor` takes the default-64 `spawn` path.
 kameo = "=0.20.0"
 
 # Compile crypto-heavy crates with optimizations even in dev

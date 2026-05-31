@@ -2715,7 +2715,12 @@ when"):**
    message protocol; remaining subsystems continue as composition.
    **Stage 2 must complete before Phase 2b cuts** because Phase
    2b's StakeEngine work (Stage 3) depends on the actor framework
-   being present.
+   being present. *(Implementation status, 2026-05-31: landed on
+   `torvaldsl/stage-2-key-engine-actor` — `KeyActor` owns the blob,
+   `Engine` holds `KeyEngineHandle`, `kameo` is now a live
+   `shekyl-engine-core` consumer; design and remaining DoD residue
+   (the §5.3 B9 dispatch-overhead benchmark) tracked in
+   `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` and `docs/FOLLOWUPS.md`.)*
 6. **Phase 2b begins.**
 7. **Stage 3 — `StakeEngine` native-as-actor**, lands within Phase
    2b. Built actor-shaped from inception (not
