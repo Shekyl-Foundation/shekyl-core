@@ -167,7 +167,7 @@ impl ReservationId {
     /// Construct a [`ReservationId`] from a raw counter value. Crate-
     /// internal; production code goes through `build_pending_tx` (which
     /// owns the monotonic counter on `Engine<S>`) or
-    /// [`super::local_pending_tx::LocalPendingTx`] (C5β). Tests in
+    /// [`super::local_pending_tx::LocalPendingTx`]. Tests in
     /// sibling modules use this to synthesize a recognizable id without
     /// running the full build pipeline.
     pub(crate) fn new(v: u64) -> Self {
@@ -709,7 +709,7 @@ pub(crate) fn discard_pending_tx_in_state(
 }
 
 // ---------------------------------------------------------------------------
-// `Engine<S, D, L, R, P>` pending dispatch (C6).
+// `Engine<S, D, L, E, R, P, F>` pending dispatch.
 // ---------------------------------------------------------------------------
 
 use std::future::Future;

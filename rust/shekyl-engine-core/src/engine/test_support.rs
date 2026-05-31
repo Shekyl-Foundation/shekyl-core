@@ -35,12 +35,12 @@
 //!
 //! # Determinism contract
 //!
-//! Per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.2, every `Mock*`
-//! constructor takes an explicit 32-byte seed which initializes
-//! a `ChaCha20Rng` internal to the mock. Tests that don't
-//! exercise RNG-driven mock behavior (e.g. producer-only chain
-//! serving) pass [`DEFAULT_TEST_SEED`]; tests that do (future
-//! fee-jitter, synthetic-fork randomization) pass a recorded
+//! Per `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §6.2, every seeded
+//! test-substrate component (here, [`TestDaemon`]) takes an explicit
+//! 32-byte seed which initializes a `ChaCha20Rng` internal to that
+//! component. Tests that don't exercise RNG-driven behavior (e.g.
+//! producer-only chain serving) pass [`DEFAULT_TEST_SEED`]; tests that
+//! do (future fee-jitter, synthetic-fork randomization) pass a recorded
 //! literal seed and embed it in the test name so reproduction
 //! across CI runs is unambiguous.
 //!
@@ -92,23 +92,24 @@ pub(crate) const DEFAULT_TEST_SEED: [u8; 32] = [0u8; 32];
 
 // ---- Role-tag registry for §6.2 master-seed derivation -------------------
 //
-// Each `Mock*` slot in a hybrid composition gets a stable byte string
-// that names its role. Hybrid tests pass `(master_seed, ROLE_X)` to
-// [`derive_seed`] to produce the per-component seed that goes into
-// `MockX::with_seed(...)`. The registry pins the role-tag-to-component
-// mapping in one audited site so reviewers can confirm hybrid tests
-// don't re-bind a tag to a different component slot.
+// Each seeded test-substrate component in a hybrid composition gets a
+// stable byte string that names its role. Hybrid tests pass
+// `(master_seed, ROLE_X)` to [`derive_seed`] to produce the per-component
+// seed that goes into that component's `with_seed(...)` constructor. The
+// registry pins the role-tag-to-component mapping in one audited site so
+// reviewers can confirm hybrid tests don't re-bind a tag to a different
+// component slot.
 //
-// PR 1 lands `ROLE_DAEMON` only. PR 4 C6β retired `ROLE_LEDGER` along
-// with `MockLedger`: hybrid tests use the production
-// [`super::local_ledger::LocalLedger`] directly, which is deterministic
-// by construction — no per-role seed is needed. As of the FOLLOWUPS P1
-// async-post-pass fix the `LedgerEngine` trait is read-only, so there is
-// no ledger-side failure-injection wrapper at all; merge-race injection
-// is driven producer-side (a stale `ScanResult` the real merge rejects).
-// Subsequent Stage 1 PRs add `ROLE_KEY`, `ROLE_ECONOMICS`,
-// `ROLE_PERSISTENCE`, `ROLE_REFRESH`, `ROLE_PENDING_TX` alongside their
-// corresponding `Mock*` / `FaultInjecting*` types.
+// `ROLE_DAEMON` (for [`TestDaemon`]) is the only role tag, and Stage 1
+// kept it that way: the no-Mock substrate discipline (PR 3 §2.1.2)
+// settled that the other engines compose from their production
+// implementors (`LocalLedger`, `LocalKeys`, …) plus `FaultInjecting*`
+// wrappers rather than seeded `Mock*` components, so no further role tags
+// were needed. Production `LocalLedger` is deterministic by construction
+// (no per-role seed); and as of the FOLLOWUPS P1 async-post-pass fix the
+// `LedgerEngine` trait is read-only, so there is no ledger-side
+// failure-injection wrapper at all — merge-race injection is driven
+// producer-side (a stale `ScanResult` the real merge rejects).
 
 /// Role tag for the [`TestDaemon`] slot in §6.2 master-seed derivation.
 pub(crate) const ROLE_DAEMON: &[u8] = b"role/daemon";
@@ -118,7 +119,7 @@ pub(crate) const ROLE_DAEMON: &[u8] = b"role/daemon";
 /// master-seed-derivation contract.
 ///
 /// Hybrid tests own a single literal `master_seed` (recorded in the
-/// test name or CI logs); each `Mock*` they construct gets its
+/// test name or CI logs); each seeded component they construct gets its
 /// `with_seed` argument from `derive_seed(&master, ROLE_X)`. This
 /// keeps cross-run reproducibility a function of the master seed
 /// alone — changing the master re-derives every component

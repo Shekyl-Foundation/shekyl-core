@@ -180,7 +180,7 @@ pub trait FeeEstimator: Send + Sync + 'static {
     /// `priority` and structural shape (`context`).
     ///
     /// Returns the fee in atomic units. The caller
-    /// (`LocalPendingTx::build`, C5β) adds this to the
+    /// (`LocalPendingTx::build`) adds this to the
     /// request's total amount to compute the
     /// [`OutputSelector::select_outputs`](super::OutputSelector::select_outputs)
     /// target.

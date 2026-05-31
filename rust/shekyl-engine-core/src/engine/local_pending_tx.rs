@@ -16,18 +16,14 @@
 //! three-collection lean shape (`output_locks` / `consumer_held` /
 //! `in_flight`).
 //!
-//! # C5α skeleton
+//! # `PendingTxEngine` impl
 //!
-//! This commit lands the struct shape and a stubbed `PendingTxEngine`
-//! impl whose method bodies return `unimplemented!("filled in C5β")`.
-//! The skeleton compiles green so C5β's diff is a body-fill rather
-//! than a structural change — the load-bearing extraction commit (C5β)
-//! ports the free-function bodies from
+//! The trait-method bodies port the build / submit / discard logic from
 //! [`super::pending`]'s
 //! `build_pending_tx_in_state` / `submit_pending_tx_in_state` /
-//! `discard_pending_tx_in_state` triple into the trait-method bodies
-//! with the segment-2h (γ) collection-moves shape replacing the
-//! enum-state-mutation shape per §5.6.8 C5β.
+//! `discard_pending_tx_in_state` triple, using the segment-2h (γ)
+//! collection-moves shape (`output_locks` / `consumer_held` /
+//! `in_flight`) rather than an enum-state-mutation shape (per §5.6.8).
 //!
 //! # Handler-atomicity discipline (segment-2h P7 pin)
 //!
@@ -73,9 +69,9 @@ use super::traits::{LedgerEngine, PendingTxEngine};
 
 /// Per-output identifier used as the `output_locks` map key.
 ///
-/// **C5α placeholder.** Stage 1 currently identifies outputs by their
-/// `usize` transfer-index within `LedgerBlock::transfers()`. C5β's
-/// body extraction confirms this alias matches the existing
+/// **Stage 1 placeholder.** Stage 1 identifies outputs by their
+/// `usize` transfer-index within `LedgerBlock::transfers()`. The
+/// body extraction confirmed this alias matches the existing
 /// `Reservation::selected_transfer_indices` semantics; if subsequent
 /// work needs a richer identifier (e.g., a `(height, tx_index,
 /// output_index)` triple), the alias is upgraded to a newtype with
@@ -106,7 +102,7 @@ pub(crate) struct ConsumerHeldEntry {
 /// Stage 1 ledger access for spendable-output enumeration.
 ///
 /// `LedgerEngine` does not yet expose matured-output enumeration;
-/// Stage 1's sole production implementor is [`LocalLedger`]. C5β
+/// Stage 1's sole production implementor is [`LocalLedger`]. `LocalPendingTx`
 /// reaches `LedgerBlock::spendable_outputs` through this trait rather
 /// than widening the public `LedgerEngine` surface.
 trait Stage1LedgerSpendableAccess: LedgerEngine {
@@ -176,14 +172,6 @@ where
 ///   transition timestamp.
 /// - `next_id` — monotone counter that mints fresh
 ///   [`ReservationId`]s at `build` entry.
-///
-/// # `dead_code` allow
-///
-/// C5α stubs all `PendingTxEngine` method bodies with
-/// `unimplemented!()`; the fields are read by C5β's extraction.
-/// Pattern matches the [`InFlightSubmit`] /
-/// [`ReservationTTLConfig`] `dead_code` allows pinned at C2γ
-/// landing time.
 #[derive(Debug)]
 pub(crate) struct PendingTxState {
     /// Engine's current view of the ledger [`SnapshotId`].
@@ -847,16 +835,16 @@ where
     /// **Pre-condition (Stage 1).** The constructor reads
     /// `ledger.snapshot()` once to seed the engine's
     /// `current_snapshot` field; the seed is refreshed on every
-    /// mutating call's first step at C5β (so an opener that
+    /// mutating call's first step (so an opener that
     /// constructs the engine before applying scan results
     /// observes an outdated seed only until the first call, not
     /// indefinitely).
     ///
-    /// # `dead_code` allow
+    /// # Construction site
     ///
-    /// C5α lands the constructor; C6 wires the first orchestrator-
-    /// side construction site (`Engine::create` / `Engine::open_*`
-    /// in `engine/lifecycle.rs`).
+    /// The orchestrator constructs `LocalPendingTx` in
+    /// `Engine::create` / `Engine::open_*` (`engine/lifecycle.rs`),
+    /// which is the production assembly site.
     pub fn new(
         signer: Arc<S>,
         output_selector: O,
@@ -902,7 +890,7 @@ where
 }
 
 // ============================================================================
-// PendingTxEngine impl (C5α stub bodies)
+// PendingTxEngine impl
 // ============================================================================
 
 impl<S, O, F, L> PendingTxEngine for LocalPendingTx<S, O, F, L>
@@ -995,7 +983,7 @@ mod tests {
         LocalLedger::from_test_blocks(Vec::new())
     }
 
-    /// C5α smoke test: constructor succeeds and the engine's state
+    /// Smoke test: constructor succeeds and the engine's state
     /// initializes to the (γ) empty-collections baseline.
     #[test]
     fn local_pending_tx_new_constructs() {

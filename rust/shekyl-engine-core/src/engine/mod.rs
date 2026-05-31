@@ -432,8 +432,8 @@ pub struct Engine<
 
     /// Producer-side [`RefreshEngine`] implementor.
     ///
-    /// Per [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §7.X C5
-    /// (`Engine<S, D, L, R>` parameterization), the engine owns one
+    /// Per [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`] §7.X C5,
+    /// the engine owns one
     /// `R: RefreshEngine` for the lifetime of the open wallet; the
     /// orchestrator's refresh paths (`Engine::start_refresh` /
     /// `Engine::refresh`) dispatch the per-attempt producer body
@@ -784,9 +784,8 @@ impl<
     /// `LocalRefresh` to `FaultInjecting<LocalRefresh>`, which the
     /// `&mut self` shape cannot express. The consume-and-rebuild
     /// signature here matches the precedent set by `replace_daemon`
-    /// and lets the four-parameter
-    /// `Engine<S, D, L, R>` compose cleanly across the daemon and
-    /// refresh slot substitutions. Per the C6α docstring's "Phase 1 author
+    /// and lets the `Engine` orchestrator compose cleanly across the
+    /// daemon and refresh slot substitutions. Per the C6α docstring's "Phase 1 author
     /// commitment note", `replace_refresh` had no consumers in
     /// C6α/C6β/C6γ, so the signature change is non-breaking; C7 is
     /// the first consumer.
