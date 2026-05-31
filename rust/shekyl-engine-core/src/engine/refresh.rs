@@ -2995,12 +2995,13 @@ mod start_refresh_integration_tests {
     /// - `Engine<SoloSigner, TestDaemon>` is a real, callable shape —
     ///   the `D: DaemonEngine` parameterization isn't a phantom type;
     ///   `TestDaemon` actually drives the producer.
-    /// - The mock's `Rpc` impl (`get_height`,
+    /// - `TestDaemon`'s `Rpc` impl (`get_height`,
     ///   `get_scannable_block_by_number`) is wired through every
     ///   layer that the real `start_refresh` traverses (handle →
-    ///   producer task → scanner → merge), so future Stage 1 PRs can
-    ///   add scenario coverage by composing additional `Mock*`
-    ///   components without re-validating the wiring itself.
+    ///   producer task → scanner → merge), so scenario coverage can be
+    ///   added by composing the production implementors and
+    ///   `FaultInjecting*` wrappers without re-validating the wiring
+    ///   itself.
     /// - `replace_daemon` preserves engine state across the swap:
     ///   ledger, indexes, reservations, refresh slot, and capability
     ///   come through the move-rebuild unchanged. Successful
@@ -3234,8 +3235,8 @@ mod start_refresh_integration_tests {
     ///   [`FaultInjectingRefresh<LocalRefresh>`](FaultInjectingRefresh).
     ///   The inner `FaultInjectingRefresh` carries no queued failures
     ///   (it delegates to [`LocalRefresh`] every call), exercising its
-    ///   delegation path and keeping the four-slot
-    ///   `Engine<S, D, L, R>` shape with a real `RefreshEngine`
+    ///   delegation path and keeping the full
+    ///   `Engine<S, D, L, E, R, P, F>` shape with a real `RefreshEngine`
     ///   wrapper in the `R` position. The outer `StaleThenRealRefresh`
     ///   emits one stale result so the real merge rejects attempt 1
     ///   with [`RefreshError::ConcurrentMutation`] and the orchestrator
@@ -3372,7 +3373,7 @@ mod start_refresh_integration_tests {
             );
         }
 
-        // Slot release: same shape as the C6β hybrid retry test.
+        // Slot release: same shape as the hybrid retry test.
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             tokio::task::yield_now().await;

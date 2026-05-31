@@ -63,8 +63,7 @@
 //!   assert per-call return-discriminant ordering from failing
 //!   unhelpfully against a LIFO or unordered implementation.
 //! - **Drain inspector.** [`queued_failures`] reports the current
-//!   queue length per the existing
-//!   [`MockLedger::queued_failures`](super::test_support) precedent.
+//!   queue length.
 //!   Tests verify queue-drain by asserting
 //!   `wrapper.queued_failures() == 0` at teardown, closing the
 //!   false-positive class where a test injects a failure, runs the
@@ -131,8 +130,7 @@ pub(crate) struct FaultInjecting<R: RefreshEngine> {
     ///
     /// `Mutex` rather than `RwLock` because every access mutates
     /// (push at queue, pop at consume, len at drain inspector); the
-    /// short-lived lock matches the [`MockLedger::queue_concurrent_mutation`](super::test_support)
-    /// precedent.
+    /// lock is short-lived (no `.await` is held across it).
     queue: Mutex<VecDeque<RefreshError>>,
 }
 

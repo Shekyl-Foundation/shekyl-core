@@ -47,23 +47,78 @@ sustainability is unaffected by the recalibration.
 
 ## V3.0 — wallet stack greenfield Rust rewrite
 
-- **Stage 1 trait-extraction chain — closeout audit (2026-05-29;
-  post–PR #88 update).** The §8.1 critical-path chain is landed on `dev`:
+- **Stage 1 trait-extraction chain — closeout audit (2026-05-29,
+  post–PR #88; economics-trait update 2026-05-31, post–PR #94).** The
+  §8.1 critical-path chain is landed on `dev`:
   `DaemonEngine` → `LedgerEngine` → (`RefreshEngine` ∥
-  `PendingTxEngine`), with `KeyEngine` trait + `LocalKeys` implementor
-  in parallel; `PersistenceEngine` substrate also landed (PR #83).
-  Inventory, orchestrator shape (`Engine<S, D, L, R, P>`), ordered
+  `PendingTxEngine`), with the `KeyEngine` trait + `LocalKeys`
+  implementor in parallel (landed but **not** orchestrator-wired —
+  deferred to Stage 2; see the `KeyEngine` inline-integration entry
+  below); `PersistenceEngine` landed (PR #83) and `EconomicsEngine`
+  landed (PR #94), so the orchestrator is now the seven-parameter
+  `Engine<S, D, L, E, R, P, F>`.
+  Inventory, orchestrator shape (`Engine<S, D, L, E, R, P, F>`), ordered
   next steps, and off-critical-path trait status:
   [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md) §8.1 /
   §1 status banner; per-PR design docs under `docs/design/STAGE_1_PR_*`.
   **Dedicated audit markdown landed:**
   [`docs/design/STAGE_1_COMPLETION_AUDIT.md`](./design/STAGE_1_COMPLETION_AUDIT.md).
   **Still V3.0 pre-genesis but not “missing Stage 1 PR”:** wallet
-  BIP-39 FFI, optional persistence/economics trait PRs, economics
-  §3.3 benches (P1 async refresh post-pass closed 2026-05-29 by
-  `refresh/p1-async-path-post-pass`). **Rewrite plan:**
+  BIP-39 FFI, economics §3.3 benches (the persistence and economics
+  trait PRs both landed — PR #83 / PR #94; P1 async refresh post-pass
+  closed 2026-05-29 by `refresh/p1-async-path-post-pass`).
+  **Rewrite plan:**
   [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   Phases 0–6; Stage 1 was prerequisite, Phase 1+ continues `Engine`.
+
+- **`KeyEngine` inline orchestrator integration — rejected for Stage 1
+  (reversion-clause; reopens at the Stage 2 actor migration).** Shape per
+  [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc).
+
+  *Rejection (current substrate).* `KeyEngine` is the one extracted Stage 1
+  trait deliberately **not** wired into the orchestrator. `Engine` holds
+  `keys: Arc<AllKeysBlob>`
+  (`rust/shekyl-engine-core/src/engine/mod.rs:344`) rather than a
+  `K: KeyEngine` generic parameter with a `LocalKeys` field, and `KeyEngine`
+  is the only `engine/traits/` module not re-exported from
+  `engine/traits/mod.rs`. `LocalKeys` exists and is exercised by tests but
+  carries `#[allow(dead_code)]` in production builds. Wiring an inline
+  `K: KeyEngine = LocalKeys` parameter now is rejected on two
+  substrate-anchored grounds:
+  1. *Throwaway shape.* The Stage 2 end-state holds key material behind a
+     `KeyEngineHandle` actor handle, **not** an inline field (see the
+     "Stage 2 — `KeyEngine` migration to actor" entry below). An inline `K`
+     parameter would be added in Stage 1 and deleted in Stage 2 — the
+     pre-provision-for-flexibility failure mode the discipline rejects, and
+     the cost-benefit-defer inversion `16-architectural-inheritance.mdc`
+     names.
+  2. *No production work to dispatch.* The two workflow methods that would
+     make an integrated `KeyEngine` load-bearing — `try_claim_output` and
+     `sign_transaction` — depend on Phase 2 tx-construction/signing that
+     does not exist yet (`sign_transaction` is a stub; output-claim is
+     currently served by `derive_output_handle` on the scanner merge path).
+
+  *Reopening criteria (substrate-anchored).* The rejection reverts to a
+  positive decision when **all** of: (a) the Stage 1 actor-friendly
+  trait-boundary refactor lands (between Branch 2 close and Phase 2b); (b)
+  `kameo` becomes a live workspace consumer (pin / MSRV / bounded-mailbox
+  preconditions already satisfied — see the `kameo` dependency-pin entry
+  below); and (c) Stage 2 opens the `KeyEngine`→actor migration. The
+  orchestrator then gains a `KeyEngineHandle`, **not** an inline `K`
+  parameter — the deferral is against the inline shape specifically, not
+  against integration as such.
+
+  *Re-evaluation shape.* The Stage 2 `KeyEngine`-actor PR (design-doc-first
+  per `05-system-thinking.mdc`, reviewed against the `00-mission.mdc`
+  security hierarchy) takes the decision; its definition of done is the
+  "Stage 2 — `KeyEngine` migration to actor" entry below. The trait surface
+  is frozen now precisely so the migration swaps in-process composition for
+  an actor-mailbox dispatcher without touching method signatures (per
+  [`STAGE_1_PR_3_KEY_ENGINE.md`](./design/STAGE_1_PR_3_KEY_ENGINE.md) §3.1.2
+  handle-indirected workflow contract).
+
+  *Target:* before Phase 2b stake-lifecycle work begins (same gate as the
+  Stage 2 actor migration it reopens into).
 
 - **Base emission migration (Stage 1 PR 7 §5.8) — CLOSED 2026-05-30 by
   C2c cutover.** PR #88 landed C2 and C2a′ on `dev` (Rust `base_block_reward`

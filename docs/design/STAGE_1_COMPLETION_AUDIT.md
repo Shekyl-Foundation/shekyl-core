@@ -113,6 +113,32 @@ all` green (preflight + Layer 1–3, including pop-replay reorg); `block_reward`
 `gen_block_low_coinbase` core test green. Leg A of the Layer 1 dual-leg KAT
 (`get_block_reward` vs `shekyl_base_block_reward`) remains bit-identical.
 
+## Closure checkpoint — 2026-05-31 (EconomicsEngine trait + 7-parameter orchestrator)
+
+Post-#88 landing recorded per the append-only checkpoint discipline: the
+Objective Matrix above is an "as of PR #88" snapshot, so the `EconomicsEngine`
+row (then "Open / optional per §8.1 off critical path") is **closed here**
+rather than rewritten in place.
+
+| Item | Status on `dev` | Evidence |
+| --- | --- | --- |
+| `EconomicsEngine` trait module (`engine/traits/economics.rs`) | Closed — Landed (PR #94) | merge `24a342529` (`feat/stage-1-pr7-economics-engine`); `rust/shekyl-engine-core/src/engine/traits/economics.rs`; re-export at `engine/traits/mod.rs:49,57`; `E: EconomicsEngine = LocalEconomics` slot + `economics: E` field at `engine/mod.rs:314,514` |
+| Orchestrator type shape | Updated — `Engine<S, D, L, E, R, P, F>` (7 params) | `engine/mod.rs:310-323`; `E` = PR #94 economics slot, `F = WalletFile` = persistence slot |
+| "optional persistence/economics trait PRs" (still-open list above) | Closed | persistence trait wired as `F` (PR #83); economics trait wired as `E` (PR #94) |
+
+The economics `E` slot is **added, not wired**: no V3.0 production path invokes
+the `EconomicsEngine` trait through the `economics` field (R6 — the base-subsidy
+consensus cutover #93 routes `get_block_reward` to the Rust *primitive*
+`shekyl_base_block_reward`, not through this trait). The field is carried under
+`#[allow(dead_code)]` for struct-shape stability and the eventual Stage 4
+`EconomicsActor` handle that replaces it behind the same trait surface.
+
+`KeyEngine` remains the one extracted trait **not** wired into the orchestrator
+(`engine/mod.rs` holds `keys: Arc<AllKeysBlob>`, no `K` parameter; `KeyEngine`
+is the only `engine/traits/` module not re-exported in `traits/mod.rs`). This is
+a deliberate Stage 2 deferral, not missing Stage 1 work — see the `KeyEngine`
+inline-integration reversion-clause entry in `docs/FOLLOWUPS.md`.
+
 ## Notes for future edits
 
 - Keep this document append-only for closure checkpoints.

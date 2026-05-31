@@ -42,7 +42,7 @@
 //! # F4 caller-side subset re-verification discipline
 //!
 //! Per `STAGE_1_PR_5_PENDING_TX_ENGINE.md` §5.6.5 F4 closure,
-//! the caller (`LocalPendingTx::build`, C5β) MUST re-verify
+//! the caller (`LocalPendingTx::build`) MUST re-verify
 //! that each index returned in [`SelectedOutputs::indices`] is
 //! present in the [`OutputCandidate`] slice passed to
 //! `select_outputs`. A faulty or malicious selector returning
@@ -60,7 +60,7 @@ use super::error::OutputSelectorError;
 /// Per-output candidate record consumed by
 /// [`OutputSelector::select_outputs`].
 ///
-/// The caller (`LocalPendingTx::build`, C5β) builds these
+/// The caller (`LocalPendingTx::build`) builds these
 /// from the engine's snapshot of spendable outputs, filtered
 /// against the engine's `output_locks` map (per §5.6.6 P6
 /// / γ three-collection lean shape's per-output lock
@@ -91,7 +91,7 @@ pub struct OutputCandidate {
 
 /// Successful selection result.
 ///
-/// The caller (`LocalPendingTx::build`, C5β) consumes both
+/// The caller (`LocalPendingTx::build`) consumes both
 /// fields: `indices` to construct the
 /// `Reservation::selected_transfer_indices` vector and
 /// `total_covered` to validate the selector's own coverage
@@ -160,7 +160,7 @@ pub trait OutputSelector: Send + Sync + 'static {
     /// The trait surface cannot syntactically enforce that
     /// the indices returned in [`SelectedOutputs::indices`]
     /// are a subset of `candidates`. **The caller**
-    /// (`LocalPendingTx::build`, C5β) MUST verify that each
+    /// (`LocalPendingTx::build`) MUST verify that each
     /// returned index is present in `candidates` and reject
     /// via
     /// [`OutputSelectorError::ReturnedIndicesNotSubset { offending_index }`]
