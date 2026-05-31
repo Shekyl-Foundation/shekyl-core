@@ -7,12 +7,12 @@ use crate::compositor::{composite, BlendMode};
 use crate::entropy::EntropyStream;
 use crate::palette::{palette_by_index, Palette};
 use crate::params::RenderParameters;
-use crate::render;
+use crate::render::{self, Algorithm};
 
-const FG_TILE: &str = "aperiodic_tile";
-const FG_PHYLLOTAXIS: &str = "phyllotaxis";
-const BG_TRUCHET: &str = "truchet";
-const BG_CRYSTALLINE: &str = "crystalline";
+const FG_TILE: Algorithm = Algorithm::AperiodicTile;
+const FG_PHYLLOTAXIS: Algorithm = Algorithm::Phyllotaxis;
+const BG_TRUCHET: Algorithm = Algorithm::Truchet;
+const BG_CRYSTALLINE: Algorithm = Algorithm::Crystalline;
 const CANDIDATE_BLEND: BlendMode = BlendMode::Difference;
 
 #[derive(Clone, Debug, Serialize, PartialEq)]
@@ -96,8 +96,8 @@ pub fn recipe_from_params(params: &RenderParameters) -> CandidateRecipe {
     );
 
     CandidateRecipe {
-        fg_tile: FG_TILE.into(),
-        fg_phyllotaxis: FG_PHYLLOTAXIS.into(),
+        fg_tile: FG_TILE.as_str().into(),
+        fg_phyllotaxis: FG_PHYLLOTAXIS.as_str().into(),
         fg_opacity: opacity_from_params(
             params,
             "candidate.v1.fg.opacity",
@@ -108,8 +108,8 @@ pub fn recipe_from_params(params: &RenderParameters) -> CandidateRecipe {
         ),
         fg_tile_palette: fg_tile_palette.name.into(),
         fg_phyllotaxis_palette: fg_phyllotaxis_palette.name.into(),
-        bg_truchet: BG_TRUCHET.into(),
-        bg_crystalline: BG_CRYSTALLINE.into(),
+        bg_truchet: BG_TRUCHET.as_str().into(),
+        bg_crystalline: BG_CRYSTALLINE.as_str().into(),
         bg_opacity: opacity_from_params(
             params,
             "candidate.v1.bg.opacity",
@@ -127,7 +127,7 @@ pub fn recipe_from_params(params: &RenderParameters) -> CandidateRecipe {
 
 fn render_algorithm(
     params: &RenderParameters,
-    algorithm: &str,
+    algorithm: Algorithm,
     palette: Palette,
     size: u32,
 ) -> RgbImage {
@@ -146,13 +146,13 @@ fn render_foreground_composite(
 ) -> RgbImage {
     let tile = render_algorithm(
         params,
-        &recipe.fg_tile,
+        FG_TILE,
         crate::palette::palette_by_name(&recipe.fg_tile_palette),
         size,
     );
     let phyllotaxis = render_algorithm(
         params,
-        &recipe.fg_phyllotaxis,
+        FG_PHYLLOTAXIS,
         crate::palette::palette_by_name(&recipe.fg_phyllotaxis_palette),
         size,
     );
@@ -166,13 +166,13 @@ fn render_background_composite(
 ) -> RgbImage {
     let truchet = render_algorithm(
         params,
-        &recipe.bg_truchet,
+        BG_TRUCHET,
         crate::palette::palette_by_name(&recipe.bg_truchet_palette),
         size,
     );
     let crystalline = render_algorithm(
         params,
-        &recipe.bg_crystalline,
+        BG_CRYSTALLINE,
         crate::palette::palette_by_name(&recipe.bg_crystalline_palette),
         size,
     );

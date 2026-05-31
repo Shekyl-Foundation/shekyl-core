@@ -4,6 +4,15 @@
 
 ### Changed
 
+- **shard-visual: type-safe renderer dispatch (no panic fallback).**
+  `render::render` now dispatches on a closed `Algorithm` enum
+  (`AperiodicTile` / `Phyllotaxis` / `Truchet` / `Crystalline`) instead of a
+  `&str` match with a `panic!("Unknown algorithm: …")` fallback. Dispatch is
+  compile-time exhaustive, so an unknown algorithm is unrepresentable rather
+  than a runtime panic. `candidate.rs` carries the layer identities as
+  `Algorithm` constants and derives the serialized `CandidateRecipe` strings
+  via `Algorithm::as_str()`, so the frontend-facing recipe JSON is unchanged.
+
 - **shard-visual: per-renderer structural SHAKE256 namespaces
   (`docs/V3_SHARD_VISUALIZATION.md` §"Structural entropy").** The four
   `candidate.v1` renderers (`aperiodic_tile`, `phyllotaxis`, `truchet`,
