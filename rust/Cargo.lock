@@ -3038,6 +3038,7 @@ dependencies = [
 name = "shekyl-engine-core"
 version = "2.0.0"
 dependencies = [
+ "blake2",
  "chacha20poly1305",
  "ciphersuite",
  "criterion",

@@ -43,7 +43,9 @@ use shekyl_economics::params::mul_scale;
 use shekyl_economics::{ActivityMetric, EconomicParams, CALIBRATION_GENERATION};
 
 use super::chain_economics_source::{ChainEconomicsSource, LedgerChainEconomicsSource};
-use super::economics_snapshot::{CalibrationStamp, EconomicsParametersSnapshot};
+use super::economics_snapshot::{
+    snapshot_calibration_digest, CalibrationStamp, EconomicsParametersSnapshot,
+};
 use super::error::EconomicsError;
 use super::traits::economics::EconomicsEngine;
 
@@ -189,7 +191,16 @@ impl<S: ChainEconomicsSource> EconomicsEngine for LocalEconomics<S> {
             tiers: shekyl_staking::TIERS,
             as_of: CalibrationStamp {
                 generation: CALIBRATION_GENERATION,
-                params_digest: shekyl_economics::params_digest(p),
+                // Full-surface digest: covers `EconomicParams` *and* the
+                // staker-emission consts and tier table this snapshot also
+                // exposes (§6.3 G5) — not just the `EconomicParams`
+                // sub-digest `shekyl_economics::params_digest` produces.
+                params_digest: snapshot_calibration_digest(
+                    p,
+                    shekyl_economics::STAKER_EMISSION_SHARE,
+                    shekyl_economics::STAKER_EMISSION_DECAY,
+                    &shekyl_staking::TIERS,
+                ),
             },
         }
     }

@@ -416,8 +416,9 @@ per §4.4 checklist item 5).
 The bench drives `EconomicsEngine::parameters_snapshot()` through the
 engine's `economics` field. Per §6.3 G5 the snapshot is rebuilt fresh
 on every call (no process-wide cache) and computes a Blake2b-256
-`params_digest` over the fixed-width parameter layout — the digest
-dominates per-call cost, so the workload is **not** a trivial
+`params_digest` over the snapshot's full calibration surface
+(EconomicParams sub-digest + staker-emission consts + tier table) —
+the digest dominates per-call cost, so the workload is **not** a trivial
 pure-read despite the parameter set being build-time-constant. The
 count is height-independent. The method reads nothing from
 `ChainEconomicsSource`; the shim returns the snapshot's
@@ -429,21 +430,6 @@ without surfacing the `pub(crate)` snapshot type, and an internal
 well above the trivial-pure-read amortized range — corroborating the
 "pure compute with a digest" classification. The canonical iai
 `instructions` figure is captured by CI.*
-
-## Bench: `engine_trait_bench_economics_parameters_snapshot`
-
-**Status:** Deferred to EconomicsEngine PR.
-
-This bench section is authored when the EconomicsEngine PR's
-introducing commit lands; same template as
-`engine_trait_bench_ledger_synced_height` above.
-
-Per §4.6's per-bench deferred assignment, this bench is introduced
-alongside the `EconomicsEngine::parameters_snapshot()` trait method.
-Expected workload class: trivial pure-read if the snapshot returns
-the same value every iteration (criterion median_ns reflects
-optimizer amortization); confirmed at authoring time per §4.4's
-checklist item 5.
 
 ## Bench: `engine_trait_bench_key_account_public_address`
 

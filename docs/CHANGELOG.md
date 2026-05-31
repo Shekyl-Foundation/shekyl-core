@@ -12,7 +12,13 @@
   `EconomicsEngine` trait with the `LocalEconomics` Stage 1 implementor,
   its `ChainEconomicsSource` read-abstraction (`LedgerChainEconomicsSource`
   adapter), and the `EconomicsParametersSnapshot` / `CalibrationStamp`
-  return types (canonical Blake2b-256 `params_digest`). The `Engine`
+  return types. The snapshot's `CalibrationStamp.params_digest` is a
+  canonical Blake2b-256 over the **full calibration surface the snapshot
+  exposes** — the `EconomicParams` sub-digest plus the staker-emission
+  consts and the `shekyl-staking` tier table — so a staker/tier
+  recalibration that omits a `generation` bump cannot false-accept a stale
+  snapshot (`shekyl_economics::params_digest` stays `EconomicParams`-scoped
+  for the C4 fixture lineage). The `Engine`
   generic list grows the `E` slot
   (`Engine<S, D, L, E, R, P, F>`); the `economics` field is carried for
   struct-shape stability with **zero V3.0 consumer call sites** (R6) —

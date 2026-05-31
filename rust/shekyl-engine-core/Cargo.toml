@@ -27,6 +27,14 @@ shekyl-staking = { path = "../shekyl-staking" }
 # `shekyl-economics`, so this promotes a transitive dep to direct; no
 # new crate enters the build graph.
 shekyl-economics = { path = "../shekyl-economics" }
+# `EconomicsParametersSnapshot`'s `CalibrationStamp` digest must cover the
+# full calibration surface the snapshot exposes (EconomicParams +
+# staker-emission consts + the `shekyl-staking` tier table), so the
+# composed digest is computed here, where the tier table is visible.
+# `shekyl_economics::params_digest` stays the EconomicParams-only encoder
+# (it backs the C4 fixture lineage). Same `blake2 0.10` the EconomicParams
+# digest already uses; promotes the transitive dep to direct.
+blake2 = { workspace = true }
 shekyl-address = { path = "../shekyl-address" }
 shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
