@@ -492,18 +492,24 @@ pub struct Engine<
     /// # Not yet consumed (PR 7 R6)
     ///
     /// The slot is **added, not wired**: no V3.0 production path invokes
-    /// the [`EconomicsEngine`] trait through this
-    /// field yet. The C++ consensus path remains the live fee/burn/emission
-    /// authority until the separate `7-cutover` (C2c) PR performs the FFI
-    /// swap. Carrying the field now keeps the struct shape stable for
-    /// that cutover and for the Stage 4 `EconomicsActor` handle that
-    /// replaces it behind the same trait surface.
+    /// the [`EconomicsEngine`] trait through this field. The base-subsidy
+    /// consensus cutover already landed (`7-cutover` / C2c, #93), but it
+    /// routes `cryptonote::get_block_reward` to the Rust *primitive*
+    /// (`shekyl_base_block_reward`) directly — **not** through this trait
+    /// — and the burn / release-multiplier paths stay in C++. So this
+    /// engine field remains unconsumed regardless of #93. Carrying it now
+    /// keeps the struct shape stable for the eventual orchestrator-side
+    /// adoption of the trait and for the Stage 4 `EconomicsActor` handle
+    /// that replaces it behind the same trait surface.
     ///
     /// `LocalEconomics` is stateless at V3.0, so this is a value field
     /// (not `Arc<E>` like [`Engine::refresh`]); the V3.x adaptive-burn
     /// `Mutex<AdaptiveBurnState>` lives *inside* the implementor, and
     /// the Stage 4 cutover swaps the field type to an actor handle.
-    // R6: carried for struct-shape stability, no V3.0 reader (§5.5); reopens at the 7-cutover (C2c).
+    // R6: carried for struct-shape stability, no V3.0 reader (§5.5);
+    // reopens when an orchestrator path consumes the trait through this
+    // field (not C2c/#93, which cut consensus over to the Rust primitive,
+    // not this trait).
     #[allow(dead_code)]
     pub(crate) economics: E,
 

@@ -75,28 +75,35 @@ pub enum ActivityInvariantViolation {
 /// Raw chain-derived observables for the adaptive fee burn at a height.
 ///
 /// Construct via [`ActivityMetric::new`]; there is **no** field-literal
-/// or `#[cfg(test)]` backdoor constructor (§6.3 G4). Tests use the same
-/// `new` over `RecordedChainFixture` rows — "real path, real fixture."
+/// or `#[cfg(test)]` backdoor constructor (§6.3 G4). The fields are
+/// **private** with read-only accessors precisely so that every
+/// in-memory `ActivityMetric` has passed `new`'s invariant check —
+/// `pub` fields would let a caller build a struct literal with
+/// `total_staked > circulating_supply` (or non-zero genesis / over-supply
+/// values) and bypass the invariants that
+/// [`burn_amount`](crate::burn) relies on. Tests use the same `new` over
+/// `RecordedChainFixture` rows — "real path, real fixture."
 ///
 /// `Serialize` is derived (debug-log / fixture-emit parity with
-/// production); `Deserialize` is deliberately **not** derived so that
-/// every in-memory `ActivityMetric` has passed `new`'s invariant check.
+/// production; the derive sees the private fields and preserves their
+/// names); `Deserialize` is deliberately **not** derived so that the only
+/// in-memory construction path is `new`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ActivityMetric {
     /// Rolling `SHEKYL_TX_VOLUME_WINDOW` (720-block) mean transaction
     /// count, daemon-reported (`get_tx_volume_avg(as_of_height)`).
-    pub tx_volume: u64,
+    tx_volume: u64,
     /// Prev-block `already_generated` at `as_of_height` — the
     /// consensus burn-site quantity (`validate_miner_transaction`),
     /// **not** `already_generated − total_burned`.
-    pub circulating_supply: u64,
+    circulating_supply: u64,
     /// Principal-pool total staked amount from the chain mirror
     /// (`u128` per Bug 7), **not** a wallet-local registry.
-    pub total_staked: u128,
+    total_staked: u128,
     /// Height all four fields were sampled for (`0` = genesis). The
     /// coherence anchor: consumers compare against the chain tip to
     /// decide whether the estimate is stale.
-    pub as_of_height: u64,
+    as_of_height: u64,
 }
 
 impl ActivityMetric {
@@ -137,6 +144,31 @@ impl ActivityMetric {
             total_staked,
             as_of_height,
         })
+    }
+
+    /// Rolling-window mean transaction count (see field docs).
+    #[must_use]
+    pub const fn tx_volume(&self) -> u64 {
+        self.tx_volume
+    }
+
+    /// Consensus burn-site circulating supply (see field docs).
+    #[must_use]
+    pub const fn circulating_supply(&self) -> u64 {
+        self.circulating_supply
+    }
+
+    /// Principal-pool total staked amount (see field docs).
+    #[must_use]
+    pub const fn total_staked(&self) -> u128 {
+        self.total_staked
+    }
+
+    /// Height all observables were sampled for; the coherence anchor a
+    /// consumer compares against the chain tip for staleness (§6.3 G4).
+    #[must_use]
+    pub const fn as_of_height(&self) -> u64 {
+        self.as_of_height
     }
 }
 

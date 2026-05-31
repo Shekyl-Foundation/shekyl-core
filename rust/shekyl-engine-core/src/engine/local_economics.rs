@@ -149,11 +149,11 @@ impl<S: ChainEconomicsSource> EconomicsEngine for LocalEconomics<S> {
         // to `circulating_supply` is the proven upper bound and is never
         // reached in practice; it keeps the path panic-free regardless.
         let total_staked =
-            u64::try_from(activity.total_staked).unwrap_or(activity.circulating_supply);
+            u64::try_from(activity.total_staked()).unwrap_or(activity.circulating_supply());
         let burn_pct = shekyl_economics::calc_burn_pct_from_activity(
-            activity.tx_volume,
+            activity.tx_volume(),
             self.params.tx_volume_baseline,
-            activity.circulating_supply,
+            activity.circulating_supply(),
             total_staked,
             &self.params,
         );
