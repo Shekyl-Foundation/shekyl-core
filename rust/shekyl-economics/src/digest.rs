@@ -1,8 +1,25 @@
-//! Canonical [`EconomicParams`] digest for [`CalibrationStamp`].
+//! Canonical [`EconomicParams`] digest (fixture lineage + snapshot
+//! sub-digest).
 //!
-//! [`CalibrationStamp`]: the `params_digest` field surfaced through
-//! `EconomicsParametersSnapshot` (`shekyl-engine-core`); see
-//! `docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md` §5.3 R2 / §6.3 G5.
+//! This Blake2b-256 over the ten `EconomicParams` fields is
+//! **EconomicParams-scoped** and serves two roles:
+//!
+//! - the **C4 `RecordedChainFixture` lineage guard** — the committed
+//!   fixture pins this digest, so a fixture produced under a different
+//!   `EconomicParams` fails the staleness check; and
+//! - the **EconomicParams leg** of `snapshot_calibration_digest`
+//!   (`shekyl-engine-core`), which is what
+//!   `CalibrationStamp.params_digest` actually stores.
+//!
+//! `CalibrationStamp.params_digest` is **not** this digest directly: it
+//! is the full-surface `snapshot_calibration_digest`, which composes this
+//! `EconomicParams` digest with the staker-emission constants and the
+//! staking tier table (calibration values that live outside
+//! `EconomicParams`). Keeping this function EconomicParams-only is
+//! deliberate — the C4 fixtures depend only on `EconomicParams`, so their
+//! lineage guard must not move when an unrelated calibration constant
+//! changes. See `docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md` §5.3 R2 /
+//! §6.3 G5.
 //!
 //! # Why a hand-rolled canonical encoder
 //!
@@ -94,10 +111,13 @@ fn canonical_preimage(params: &EconomicParams) -> [u8; DIGEST_PREIMAGE_LEN] {
 
 /// Blake2b-256 over the canonical [`EconomicParams`] byte layout.
 ///
-/// This is the **single** canonical encoder shared between the
-/// `CalibrationStamp` runtime path (C1) and the `RecordedChainFixture`
-/// staleness guard (C4). See the [module docs](self) for the layout
-/// contract and the rejected alternatives (raw JSON, bincode).
+/// This is the **single** canonical `EconomicParams` encoder, shared by
+/// the C4 `RecordedChainFixture` lineage guard and the EconomicParams leg
+/// of `snapshot_calibration_digest` (`shekyl-engine-core`) that
+/// `CalibrationStamp.params_digest` stores. It is **not** the full
+/// `CalibrationStamp` digest itself — that also covers the staker-emission
+/// constants and the staking tier table. See the [module docs](self) for
+/// the layout contract and the rejected alternatives (raw JSON, bincode).
 #[must_use]
 pub fn params_digest(params: &EconomicParams) -> [u8; 32] {
     let preimage = canonical_preimage(params);
