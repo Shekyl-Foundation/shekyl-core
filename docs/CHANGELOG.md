@@ -38,6 +38,30 @@
 
 ### Changed
 
+- **engine/docs: Stage 1 cleanup + status-doc reconciliation.**
+  Closed Stage 1 trait extraction's accumulated debt without touching
+  Phase 2 functional stubs. (1) Reconciled the status docs to the
+  ground-truthed `dev` reality: the orchestrator is the seven-parameter
+  `Engine<S, D, L, E, R, P, F>` and `EconomicsEngine` is landed (PR #94),
+  not the pre-#94 five-parameter / "economics spec-only" shape — updated
+  `V3_ENGINE_TRAIT_BOUNDARIES.md`, `FOLLOWUPS.md`, and appended a dated
+  closure checkpoint to `STAGE_1_COMPLETION_AUDIT.md`. (2) Recorded the
+  deliberate `KeyEngine` inline-orchestrator-integration deferral as an
+  explicit reversion-clause `FOLLOWUPS.md` entry (reopen criterion: the
+  Stage 2 `KeyEngineHandle` actor migration). (3) Removed obsolete
+  `#[allow(dead_code)]` annotations on the now-production-dispatched
+  `LedgerEngine::synced_height` / `snapshot` and
+  `RefreshEngine::produce_scan_result` trait methods (the
+  `bench-internals`-only `LedgerEngine::balance` allow is retained with an
+  updated rationale). (4) Swept stale in-code narrative across the engine
+  crate: dropped dangling deleted-`MockLedger` precedent references,
+  rewrote the obsolete `Mock*` test-substrate framing to the actual
+  no-Mock substrate, normalized current-behavior `C5α`/`C5β` stage labels
+  into behavior descriptions (preserving genuinely-historical notes), and
+  fixed stale four-/five-parameter `Engine<…>` shape references in
+  comments. Docs/comments plus one annotation removal; no behavior,
+  consensus, or wire-format change.
+
 - **shard-visual: type-safe renderer dispatch (no panic fallback).**
   `render::render` now dispatches on a closed `Algorithm` enum
   (`AperiodicTile` / `Phyllotaxis` / `Truchet` / `Crystalline`) instead of a
