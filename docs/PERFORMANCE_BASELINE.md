@@ -94,8 +94,8 @@ Per [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
 |---|---|---|---|
 | `LedgerEngine` | `synced_height` | `engine_trait_bench_ledger_synced_height` | Stage 0 PR-2 |
 | `LedgerEngine` | `balance` | `engine_trait_bench_ledger_balance` | Stage 1 PR 2 |
-| `EconomicsEngine` | `base_emission_at` | `engine_trait_bench_economics_base_emission_at` | Deferred to EconomicsEngine PR |
-| `EconomicsEngine` | `parameters_snapshot` | `engine_trait_bench_economics_parameters_snapshot` | Deferred to EconomicsEngine PR |
+| `EconomicsEngine` | `base_emission_at` | `engine_trait_bench_economics_base_emission_at` | Stage 1 PR 7 (numbers via CI) |
+| `EconomicsEngine` | `parameters_snapshot` | `engine_trait_bench_economics_parameters_snapshot` | Stage 1 PR 7 (numbers via CI) |
 | `KeyEngine` | `account_public_address` | `engine_trait_bench_key_account_public_address` | Deferred to KeyEngine PR |
 
 Reviewers may identify additional hot paths during Stage 1 PR
@@ -365,34 +365,71 @@ optimizer-amortization noise floor.
 
 ## Bench: `engine_trait_bench_economics_base_emission_at`
 
-**Status:** Deferred to EconomicsEngine PR.
+**Status:** Introduced at Stage 1 PR 7 (EconomicsEngine) C6; iai
+gate-metric numbers deferred to CI `workflow_dispatch` capture at the
+PR's merge SHA (per §4.5/§4.6 frozen-baseline discipline, N=3
+invariance). The bench code, the `[[bench]]` manifest rows, and the
+`__bench_internals` shim land in C6; the cumulative-delta table below
+is populated from the canonical runner's iai-callgrind output (the
+gate metric) — not from local criterion numbers, which are
+non-portable across hardware/toolchain.
 
-This bench section is authored when the EconomicsEngine PR's
-introducing commit lands; same template as
-`engine_trait_bench_ledger_synced_height` above.
+**Workload class:** State-independent compute, **O(height)** (confirmed
+at authoring per §4.4 checklist item 5).
 
-Per §4.6's per-bench deferred assignment, this bench is introduced
-alongside the `EconomicsEngine::base_emission_at(height)` trait
-method. At V3.0 interpretation **(A)** the workload is
-`projected_already_generated(height)` + `base_block_reward` — likely
-**O(height)** naive iteration from genesis (§3.8 / PR 7 §5.2 B.6);
-capture median at authoring. Checkpoint/memoization is a FOLLOWUPS
-optimization if a hot consumer lands — not pre-provisioned now.
+The bench drives
+`EconomicsEngine::base_emission_at(ECONOMICS_BENCH_HEIGHT)` through the
+engine's `economics` field. Under V3.0 interpretation **(A)** the
+method walks `projected_already_generated(height)` block-by-block from
+genesis (`shekyl-economics::emission`) then applies `base_block_reward`
+— per-call cost scales linearly with the bench height
+(`ECONOMICS_BENCH_HEIGHT = 262_800`, ≈1 yr of 120 s blocks, the same
+anchor the C4 fixture's early neutral milestone uses). This is **not**
+a trivial pure-read: the §4.4 hoisting-rule amortization caveat does
+not apply, and the `black_box` around the height argument prevents the
+loop from being constant-folded. The method reads nothing from
+`ChainEconomicsSource`.
+
+The naive O(height) projection is deliberate at V3.0 (§5.2 B.6);
+checkpoint/memoization is a FOLLOWUPS optimization if a hot consumer
+lands — not pre-provisioned now. The frozen baseline pins to the
+naive-loop workload at the merge SHA; a future workload-characterization
+PR that changes the height adds a sibling bench rather than mutating
+`ECONOMICS_BENCH_HEIGHT`.
+
+*Local criterion sanity observation (not the baseline): ~350 µs/call
+at height 262 800, consistent with ~262 800 iterations of checked
+arithmetic — corroborating the O(height) classification. The canonical
+iai `instructions` figure is captured by CI.*
 
 ## Bench: `engine_trait_bench_economics_parameters_snapshot`
 
-**Status:** Deferred to EconomicsEngine PR.
+**Status:** Introduced at Stage 1 PR 7 (EconomicsEngine) C6; iai
+gate-metric numbers deferred to CI `workflow_dispatch` capture at the
+PR's merge SHA (per §4.5/§4.6 frozen-baseline discipline, N=3
+invariance). Same authoring/capture split as
+`engine_trait_bench_economics_base_emission_at` above.
 
-This bench section is authored when the EconomicsEngine PR's
-introducing commit lands; same template as
-`engine_trait_bench_ledger_synced_height` above.
+**Workload class:** Pure compute with a digest (confirmed at authoring
+per §4.4 checklist item 5).
 
-Per §4.6's per-bench deferred assignment, this bench is introduced
-alongside the `EconomicsEngine::parameters_snapshot()` trait method.
-Expected workload class: trivial pure-read if the snapshot returns
-the same value every iteration (criterion median_ns reflects
-optimizer amortization); confirmed at authoring time per §4.4's
-checklist item 5.
+The bench drives `EconomicsEngine::parameters_snapshot()` through the
+engine's `economics` field. Per §6.3 G5 the snapshot is rebuilt fresh
+on every call (no process-wide cache) and computes a Blake2b-256
+`params_digest` over the snapshot's full calibration surface
+(EconomicParams sub-digest + staker-emission consts + tier table) —
+the digest dominates per-call cost, so the workload is **not** a trivial
+pure-read despite the parameter set being build-time-constant. The
+count is height-independent. The method reads nothing from
+`ChainEconomicsSource`; the shim returns the snapshot's
+`money_supply_atomic` (`u64`) so the bench consumes an observable
+without surfacing the `pub(crate)` snapshot type, and an internal
+`black_box` around the snapshot prevents digest elision.
+
+*Local criterion sanity observation (not the baseline): ~135 ns/call,
+well above the trivial-pure-read amortized range — corroborating the
+"pure compute with a digest" classification. The canonical iai
+`instructions` figure is captured by CI.*
 
 ## Bench: `engine_trait_bench_key_account_public_address`
 

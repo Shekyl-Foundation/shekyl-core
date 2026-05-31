@@ -693,6 +693,28 @@ does **not** reopen §2.7 (implementor-side 0d layout).
   burn may bind calibration to heights (FOLLOWUPS). `ActivityMetric.as_of_height` and
   `CalibrationStamp.generation` are formally independent staleness surfaces.
 
+**Post-closure correctness pin (C7 implementation, 2026-05-30 — full-surface
+digest scope).** Not a Round-2 reopen (`21-reversion-clause-discipline.mdc`): an
+under-specification surfaced in PR-94 review. The 2i pin above scoped
+`params_digest` to the **resolved `EconomicParams` struct**, but
+`EconomicsParametersSnapshot` also surfaces `staker_emission_share`,
+`staker_emission_decay` (`shekyl-economics` calibration consts, **not**
+`EconomicParams` fields), and the `shekyl-staking` tier table — all driven by
+`config/economics_params.json`. An `EconomicParams`-only digest would
+**false-accept** a snapshot after a staker-share / decay / tier recalibration
+that omitted a `generation` bump (and `CALIBRATION_GENERATION` is a
+hand-maintained constant — exactly the human-error case the digest backstops).
+The snapshot's `CalibrationStamp.params_digest` is therefore the **full-surface
+digest** (`snapshot_calibration_digest`, computed in `shekyl-engine-core` where
+the tier table is visible): a format-tagged Blake2b-256 over the
+`EconomicParams` sub-digest (`shekyl_economics::params_digest`) **plus** the two
+staker consts (u64 LE) **plus** each tier's `id` / `lock_blocks` /
+`yield_multiplier`. `shekyl_economics::params_digest` is **unchanged** and stays
+`EconomicParams`-scoped; it continues to back the C4 fixture lineage guard, whose
+tested emission/burn values depend only on `EconomicParams` (see the §5.4 note
+below — fixture lineage and snapshot stamp are now deliberately distinct
+surfaces, not one shared digest).
+
 **Dashboard alternative (rejected for this method):** a one-shot "current economic
 state" readout (live burn %, release multiplier, yield) is a **composed UX view**
 from `base_emission_at` + `burn_amount` + `pool_weighted_total` + chain inputs —
@@ -1651,7 +1673,11 @@ change and **silently use poisoned constants** despite `as_of`?
 | **`LocalEconomics` V3.0 shape** | Stateless pure wrappers — no mutable param cache
   (§2.7 Stage 1 note) |
 | **Fixture staleness guard** | `RecordedChainFixture.params_digest` + `calibration_generation`
-  (§5.4) — same lineage as snapshot `CalibrationStamp` |
+  (§5.4) — `EconomicParams`-scoped (`shekyl_economics::params_digest`); since the C7
+  full-surface-digest pin (§6.3 2i post-closure note) this is **deliberately distinct**
+  from the snapshot `CalibrationStamp.params_digest`, which additionally covers the
+  staker consts + tier table. The fixture's tested emission/burn values depend only on
+  `EconomicParams`, so its guard stays `EconomicParams`-scoped. |
 
 #### Threat-model pivot (2026-05-28 design comments)
 
@@ -1679,7 +1705,7 @@ gate on freshness.
 | Field | Type | Answers |
 |-------|------|---------|
 | `generation` | `u32` | "Is this snapshot from the current calibration epoch?" Cheap compare; human-readable logging ("estimate from generation 7; current is 8"). |
-| `params_digest` | `[u8; 32]` | "Is this snapshot bit-exact identical to current?" Blake2b-256 of **custom canonical `EconomicParams` bytes** (fixed-width LE field order in module rustdoc — not JSON, not bincode). Catches generation increment with no param change; catches silent serialization drift. |
+| `params_digest` | `[u8; 32]` | "Is this snapshot bit-exact identical to current?" Blake2b-256 of the snapshot's **full calibration surface** — `EconomicParams` sub-digest + staker-emission consts + tier table (format-tagged custom LE layout, not JSON/bincode; see the §6.3 2i post-closure full-surface pin). Catches generation increment with no param change; catches silent serialization drift. |
 
 **Consumer comparison rule (rustdoc):** stale if `generation` differs (likely real
 change); suspicious if `generation` matches but `params_digest` differs (build-system
@@ -1946,6 +1972,7 @@ external audit. That is the intended return on the foundation split.
 | **Round 2 closed** | `Round 2 closed 2026-05-28; §6.2 close-out complete — §4.4 binding matrix, §7.2 per-PR commits, implementation review gate §6.2 item 5; segment 2g + 2i closed.` |
 | **Round 3 open** | `Round 3 open 2026-05-28; §7.X binding — 7-base (C2+C2a′+fix α) → 7-cutover (C2c) ∥ 7-trait (C0–C7); Phase 0 C0 may co-land; Round 3 closes when all three implementation PRs + PR 6 land on dev.` |
 | **Round 3 entry items** | `§7.4 E1: ci/economics-c2a-prime workflow + run_economics_c2a_prime.sh (preflight green; layer jobs await harness). E2: Engine<S,D,L,E,R,P,F> parallel PR6/7-trait. E3: leg-B oracle from economics_params.json only.` |
+| **7-trait landed (C0→C7)** | `7-trait landed; EconomicsEngine trait + LocalEconomics + ChainEconomicsSource/LedgerChainEconomicsSource + snapshot/CalibrationStamp + E slot (Engine<S,D,L,E,R,P,F>). Zero V3.0 consumer (R6); economics field + methods carried #[allow(dead_code)]. G4/G5 rustdoc pins added (burn_amount as_of_height point-estimate; parameters_snapshot generation/digest re-compare). Differential ChainMirrorSource tests + Criterion/iai benches (base_emission_at, parameters_snapshot). C2c cutover NOT in this PR; 7-cutover (C2c) landed separately as #93 (base subsidy → Rust primitive shekyl_base_block_reward, not this trait). Round 3 stays open until this 7-trait PR + PR 6 land on dev.` |
 
 ---
 

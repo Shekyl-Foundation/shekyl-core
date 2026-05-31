@@ -19,6 +19,22 @@ serde_json = "1"
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-scanner = { path = "../shekyl-scanner" }
 shekyl-staking = { path = "../shekyl-staking" }
+# `EconomicsEngine` / `LocalEconomics` (PR 7 §2.7) compose the
+# `shekyl-economics` C2 primitives directly (`base_emission_at`,
+# `calc_burn_pct_from_activity`, `params_digest`) and re-export its
+# `ActivityMetric` / `ActivityInvariantViolation` / `EmissionError`
+# types through the trait surface. `shekyl-staking` already depends on
+# `shekyl-economics`, so this promotes a transitive dep to direct; no
+# new crate enters the build graph.
+shekyl-economics = { path = "../shekyl-economics" }
+# `EconomicsParametersSnapshot`'s `CalibrationStamp` digest must cover the
+# full calibration surface the snapshot exposes (EconomicParams +
+# staker-emission consts + the `shekyl-staking` tier table), so the
+# composed digest is computed here, where the tier table is visible.
+# `shekyl_economics::params_digest` stays the EconomicParams-only encoder
+# (it backs the C4 fixture lineage). Same `blake2 0.10` the EconomicParams
+# digest already uses; promotes the transitive dep to direct.
+blake2 = { workspace = true }
 shekyl-address = { path = "../shekyl-address" }
 shekyl-engine-file = { path = "../shekyl-engine-file" }
 shekyl-engine-state = { path = "../shekyl-engine-state" }
@@ -78,6 +94,16 @@ zeroize = { version = "1", features = ["derive"] }
 [dev-dependencies]
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
+# PR 7 C4 `EconomicsEngine` differential
+# (`engine::economics_differential`): deserialize the sim-recorded
+# `RecordedChainFixture` (`docs/test_vectors/economics/*.json`, §5.4) and
+# replay it through the real `LocalEconomics` path. Both are already in
+# the workspace lockfile (production `[dependencies]` carry them
+# `optional = true` under the `multisig` feature); pulling them into
+# dev-deps adds no new third-party supply-chain surface and does not
+# alter the default-feature production crate graph.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
 # `iai-callgrind` is the deterministic-instructions sibling for the
 # criterion wall-clock benches in this crate. The CI gate
@@ -224,6 +250,33 @@ required-features = ["bench-internals"]
 
 [[bench]]
 name = "engine_trait_bench_key_account_public_address_iai"
+harness = false
+required-features = ["bench-internals"]
+
+# Stage 1 PR 7 (EconomicsEngine) C6: the two deferred economics-trait
+# bench pairs named in §3.8. `base_emission_at` is a state-independent
+# O(height) compute (the naive `projected_already_generated` loop per
+# §5.2 B.6); `parameters_snapshot` is pure compute dominated by the
+# Blake2b-256 `params_digest`. Both dispatch through the engine's
+# `economics` field via `__bench_internals` shims (the trait is
+# `pub(crate)`), so the targets require the `bench-internals` feature.
+[[bench]]
+name = "engine_trait_bench_economics_base_emission_at"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_economics_base_emission_at_iai"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_economics_parameters_snapshot"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_economics_parameters_snapshot_iai"
 harness = false
 required-features = ["bench-internals"]
 

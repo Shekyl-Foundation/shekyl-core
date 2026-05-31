@@ -13,7 +13,13 @@ pub struct StakeTier {
     pub name: &'static str,
 }
 
-pub const TIERS: [StakeTier; 3] = [
+/// The fixed three-tier stake table. Type alias so consumers (e.g.
+/// `EconomicsParametersSnapshot` in `shekyl-engine-core`) can name the
+/// table by reference without redefining the tier set — `shekyl-staking`
+/// remains the single source of truth for tier parameters.
+pub type TierTable = [StakeTier; 3];
+
+pub const TIERS: TierTable = [
     StakeTier {
         id: 0,
         lock_blocks: GENERATED_STAKE_TIER_SHORT_BLOCKS,

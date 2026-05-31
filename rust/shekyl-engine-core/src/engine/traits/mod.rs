@@ -46,6 +46,7 @@
 //! [`docs/FOLLOWUPS.md`]: ../../../../../docs/FOLLOWUPS.md
 
 pub(crate) mod daemon;
+pub(crate) mod economics;
 pub(crate) mod key;
 pub(crate) mod ledger;
 pub(crate) mod pending_tx;
@@ -53,6 +54,7 @@ pub(crate) mod persistence;
 pub(crate) mod refresh;
 
 pub(crate) use daemon::{DaemonEngine, FeeEstimates, TxSubmitOutcome};
+pub(crate) use economics::EconomicsEngine;
 pub(crate) use ledger::LedgerEngine;
 pub(crate) use pending_tx::PendingTxEngine;
 pub(crate) use persistence::PersistenceEngine;

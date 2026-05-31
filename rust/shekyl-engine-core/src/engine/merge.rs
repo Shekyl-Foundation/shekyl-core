@@ -113,9 +113,10 @@ use crate::{
 impl<
         S: EngineSignerKind,
         D: DaemonEngine,
+        E: super::traits::EconomicsEngine,
         R: super::traits::RefreshEngine,
         P: super::traits::PendingTxEngine,
-    > Engine<S, D, LocalLedger, R, P>
+    > Engine<S, D, LocalLedger, E, R, P>
 {
     /// Current scanned-chain height: the highest block height the
     /// wallet's persisted ledger has fully ingested. `0` for a

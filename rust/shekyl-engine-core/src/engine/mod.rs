@@ -153,8 +153,15 @@
 //! along behavioral seams keeps each commit reviewable on its own.
 
 pub mod capability;
+pub(crate) mod chain_economics_source;
 pub mod daemon;
 pub(crate) mod diagnostics;
+// C4 engine-vs-sim `EconomicsEngine` differential (§5.4 / §7.1); replays
+// the sim-recorded `RecordedChainFixture` through the real
+// `LocalEconomics` path. Test-substrate only.
+#[cfg(test)]
+mod economics_differential;
+pub(crate) mod economics_snapshot;
 pub mod error;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_pending_tx;
@@ -162,6 +169,7 @@ pub(crate) mod fault_injecting_pending_tx;
 pub(crate) mod fault_injecting_refresh;
 pub mod fee_estimator;
 pub mod lifecycle;
+pub(crate) mod local_economics;
 pub(crate) mod local_keys;
 pub(crate) mod local_ledger;
 pub mod local_pending_tx;
@@ -182,6 +190,7 @@ pub mod view_material;
 pub(crate) mod test_support;
 
 pub use capability::Capability;
+pub use chain_economics_source::LedgerChainEconomicsSource;
 pub use daemon::DaemonClient;
 pub use diagnostics::{
     BuildErrorKind, BuildRequestSummary, DaemonOp, DiagnosticSink, DiscardReason, MalformedKind,
@@ -194,6 +203,7 @@ pub use error::{
 };
 pub use fee_estimator::{DaemonFeeEstimator, FeeEstimationContext, FeeEstimator};
 pub use lifecycle::{CapabilityInput, Credentials, EngineCreateParams, OpenedEngine};
+pub use local_economics::LocalEconomics;
 pub use local_ledger::LocalLedger;
 pub use local_pending_tx::LocalPendingTx;
 pub use local_refresh::LocalRefresh;
@@ -224,7 +234,7 @@ use shekyl_engine_state::WalletLedger;
 
 use crate::engine::local_ledger::LedgerState;
 use crate::engine::traits::{
-    DaemonEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
+    DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
 };
 
 /// The Shekyl V3 wallet domain orchestrator.
@@ -301,6 +311,7 @@ pub struct Engine<
     S: EngineSignerKind,
     D: DaemonEngine = DaemonClient,
     L: LedgerEngine = LocalLedger,
+    E: EconomicsEngine = LocalEconomics,
     R: RefreshEngine = LocalRefresh,
     P: PendingTxEngine = LocalPendingTx<
         LocalSigner,
@@ -468,6 +479,40 @@ pub struct Engine<
     /// [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`]: ../../../../docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md
     pub(crate) refresh: std::sync::Arc<R>,
 
+    /// Canonical economic-derivation implementor
+    /// ([`EconomicsEngine`]).
+    ///
+    /// Production callers default `E = LocalEconomics`
+    /// ([`LocalEconomics<LedgerChainEconomicsSource>`](local_economics::LocalEconomics)),
+    /// constructed at every `Engine::create` / `Engine::open_*` site
+    /// over an [`Arc::clone`] of [`Engine::ledger`] so the one chain
+    /// read (`pool_weighted_total`) observes the same state the rest of
+    /// the engine sees.
+    ///
+    /// # Not yet consumed (PR 7 R6)
+    ///
+    /// The slot is **added, not wired**: no V3.0 production path invokes
+    /// the [`EconomicsEngine`] trait through this field. The base-subsidy
+    /// consensus cutover already landed (`7-cutover` / C2c, #93), but it
+    /// routes `cryptonote::get_block_reward` to the Rust *primitive*
+    /// (`shekyl_base_block_reward`) directly — **not** through this trait
+    /// — and the burn / release-multiplier paths stay in C++. So this
+    /// engine field remains unconsumed regardless of #93. Carrying it now
+    /// keeps the struct shape stable for the eventual orchestrator-side
+    /// adoption of the trait and for the Stage 4 `EconomicsActor` handle
+    /// that replaces it behind the same trait surface.
+    ///
+    /// `LocalEconomics` is stateless at V3.0, so this is a value field
+    /// (not `Arc<E>` like [`Engine::refresh`]); the V3.x adaptive-burn
+    /// `Mutex<AdaptiveBurnState>` lives *inside* the implementor, and
+    /// the Stage 4 cutover swaps the field type to an actor handle.
+    // R6: carried for struct-shape stability, no V3.0 reader (§5.5);
+    // reopens when an orchestrator path consumes the trait through this
+    // field (not C2c/#93, which cut consensus over to the Rust primitive,
+    // not this trait).
+    #[allow(dead_code)]
+    pub(crate) economics: E,
+
     /// Compile-time signer-kind dispatch. The actual key material lives
     /// in [`Engine::keys`] (for `SoloSigner`); this marker exists so
     /// the V3.1 multisig type can name distinct method signatures via
@@ -480,9 +525,10 @@ impl<
         S: EngineSignerKind,
         D: DaemonEngine + std::fmt::Debug,
         L: LedgerEngine,
+        E: EconomicsEngine,
         R: RefreshEngine,
         P: PendingTxEngine,
-    > std::fmt::Debug for Engine<S, D, L, R, P>
+    > std::fmt::Debug for Engine<S, D, L, E, R, P>
 {
     /// Redacted debug output. Specific reasons each field is or is not
     /// printed:
@@ -532,6 +578,7 @@ impl<
             .field("refresh_running", &self.refresh_slot.is_claimed())
             .field("refresh", &"<redacted: RefreshEngine>")
             .field("refresh_kind", &std::any::type_name::<R>())
+            .field("economics_kind", &std::any::type_name::<E>())
             .field("signer_kind", &std::any::type_name::<S>())
             .finish()
     }
@@ -586,10 +633,11 @@ impl<
         S: EngineSignerKind,
         D: DaemonEngine,
         L: LedgerEngine,
+        E: EconomicsEngine,
         R: RefreshEngine,
         P: PendingTxEngine,
         F: PersistenceEngine,
-    > Engine<S, D, L, R, P, F>
+    > Engine<S, D, L, E, R, P, F>
 {
     /// Network this wallet is bound to. Cached from
     /// [`WalletFile`]'s region 1 at construction; stable for the life
@@ -699,8 +747,9 @@ impl<
     /// // Engine::create uses internally at assemble time):
     /// let vm = ViewMaterial::try_from_keys(real.keys())?;
     /// let refresh = FaultInjecting::new(LocalRefresh::new(vm, 0));
-    /// let hybrid: Engine<SoloSigner, TestDaemon, LocalLedger, FaultInjecting<LocalRefresh>> =
-    ///     real
+    /// let hybrid: Engine<
+    ///     SoloSigner, TestDaemon, LocalLedger, LocalEconomics, FaultInjecting<LocalRefresh>,
+    /// > = real
     ///         .replace_daemon(test_daemon)
     ///         .replace_refresh(refresh);
     /// ```
@@ -746,7 +795,7 @@ impl<
     pub(crate) fn replace_refresh<R2: RefreshEngine>(
         self,
         refresh: R2,
-    ) -> Engine<S, D, L, R2, P, F> {
+    ) -> Engine<S, D, L, E, R2, P, F> {
         let Engine {
             persistence,
             state_wrap_key,
@@ -760,6 +809,7 @@ impl<
             capability,
             refresh_slot,
             refresh: _old,
+            economics,
             _signer,
         } = self;
         Engine {
@@ -775,6 +825,7 @@ impl<
             capability,
             refresh_slot,
             refresh: std::sync::Arc::new(refresh),
+            economics,
             _signer,
         }
     }
@@ -791,7 +842,7 @@ impl<
     pub(crate) fn replace_pending_tx<P2: PendingTxEngine>(
         self,
         pending: P2,
-    ) -> Engine<S, D, L, R, P2, F> {
+    ) -> Engine<S, D, L, E, R, P2, F> {
         let Engine {
             persistence,
             state_wrap_key,
@@ -805,6 +856,7 @@ impl<
             capability,
             refresh_slot,
             refresh,
+            economics,
             _signer,
         } = self;
         Engine {
@@ -820,6 +872,7 @@ impl<
             capability,
             refresh_slot,
             refresh,
+            economics,
             _signer,
         }
     }
@@ -830,9 +883,10 @@ impl<
         S: EngineSignerKind,
         D: DaemonEngine,
         L: LedgerEngine,
+        E: EconomicsEngine,
         R: RefreshEngine,
         P: PendingTxEngine,
-    > Engine<S, D, L, R, P, WalletFile>
+    > Engine<S, D, L, E, R, P, WalletFile>
 {
     /// Borrow the Stage 1 [`WalletFile`] implementor. Prefer
     /// [`Self::persistence`] for trait-shaped save/rotate paths.
@@ -849,8 +903,13 @@ impl<
 // `LedgerEngine` to a richer surface (or replaces this accessor
 // with a trait-level read-state method), this block dissolves.
 #[allow(private_bounds)]
-impl<S: EngineSignerKind, D: DaemonEngine, R: RefreshEngine, P: PendingTxEngine>
-    Engine<S, D, LocalLedger, R, P>
+impl<
+        S: EngineSignerKind,
+        D: DaemonEngine,
+        E: EconomicsEngine,
+        R: RefreshEngine,
+        P: PendingTxEngine,
+    > Engine<S, D, LocalLedger, E, R, P>
 {
     /// Borrow the persistent ledger for read-only queries (transfers,
     /// bookkeeping entries, tx metadata, sync cursor). Mutation goes
@@ -989,4 +1048,68 @@ pub fn engine_account_public_address_for_bench(keys: &local_keys::LocalKeys) -> 
     use crate::engine::traits::key::KeyEngine;
     let addr = std::hint::black_box(keys.account_public_address());
     addr.pqc_public_key.len() + addr.classical_address_bytes.len()
+}
+
+/// Project `base_emission_at(height)` through the `EconomicsEngine`
+/// trait method (the trait is `pub(crate)`, so this thin wrapper
+/// performs the trait call inside the crate where the trait is
+/// visible), dispatched on the engine's `economics` field. See
+/// [`crate::__bench_internals::engine_economics_base_emission_at_for_bench`]
+/// for the public-facing wrapper and the use-site rationale.
+///
+/// # Workload class — state-independent compute, O(height)
+///
+/// `base_emission_at` is a pure projection that does **not** read
+/// `ChainEconomicsSource`; under interpretation (A) it iterates
+/// `projected_already_generated(height)` block-by-block from genesis
+/// (`shekyl-economics::emission`), so per-call cost is **O(height)**,
+/// not a trivial pure-read. The bench drives a representative height
+/// (`ECONOMICS_BENCH_HEIGHT` in the bench `common` module) so the loop
+/// dominates; if a hot consumer ever lands, the FOLLOWUPS checkpoint-table
+/// disposition (§5.2 B.6) replaces the naive loop with an O(1)
+/// checkpoint lookup. The `Err` arm is overflow-only (B.7) and the
+/// neutral trajectory does not overflow at the bench height, so the
+/// `expect` is unreachable in practice.
+#[cfg(feature = "bench-internals")]
+pub fn engine_economics_base_emission_at_for_bench(
+    engine: &Engine<SoloSigner, DaemonClient, LocalLedger>,
+    height: u64,
+) -> u64 {
+    use crate::engine::traits::EconomicsEngine;
+    engine
+        .economics
+        .base_emission_at(height)
+        .expect("neutral-trajectory base_emission_at does not overflow at the bench height")
+}
+
+/// Project `parameters_snapshot()` through the `EconomicsEngine` trait
+/// method, dispatched on the engine's `economics` field. See
+/// [`crate::__bench_internals::engine_economics_parameters_snapshot_for_bench`]
+/// for the public-facing wrapper and the use-site rationale.
+///
+/// # Why this returns `u64` rather than `EconomicsParametersSnapshot`
+///
+/// The natural return type is `pub(crate)`
+/// `EconomicsParametersSnapshot`; surfacing it through this `pub fn`
+/// would widen the crate's public API beyond the `bench-internals`
+/// gate. The helper returns the snapshot's `money_supply_atomic`
+/// (`u64`, a primitive `pub` type) instead — the same API-narrowing
+/// pattern the `KeyEngine` bench's `usize`-summary uses. The trait
+/// call is preserved against compiler elision by the internal
+/// `black_box` around the snapshot before the field is read.
+///
+/// # Workload class — pure compute with a digest
+///
+/// `parameters_snapshot` rebuilds the snapshot fresh on every call
+/// (§6.3 G5, no process-wide cache) and computes a Blake2b-256
+/// `params_digest` over the fixed-width parameter layout — it is
+/// **not** a trivial pure-read; the digest is the dominant per-call
+/// cost. `parameters_snapshot` does not read `ChainEconomicsSource`.
+#[cfg(feature = "bench-internals")]
+pub fn engine_economics_parameters_snapshot_for_bench(
+    engine: &Engine<SoloSigner, DaemonClient, LocalLedger>,
+) -> u64 {
+    use crate::engine::traits::EconomicsEngine;
+    let snapshot = std::hint::black_box(engine.economics.parameters_snapshot());
+    snapshot.money_supply_atomic
 }

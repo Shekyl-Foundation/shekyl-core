@@ -222,6 +222,26 @@ use shekyl_oxide::primitives::Commitment;
 /// the temp directory the fixture cleans up on drop.
 const BENCH_PASSWORD: &[u8] = b"shekyl-bench-fixture-password";
 
+/// Representative height for the `engine_trait_bench_economics_base_emission_at`
+/// pair (§3.8 / §5.2 B.6).
+///
+/// `EconomicsEngine::base_emission_at` is **O(height)** under
+/// interpretation (A): it walks `projected_already_generated(height)`
+/// block-by-block from genesis. `262_800` is ≈1 year of 120 s blocks —
+/// the same "≈1 yr" anchor the C4 fixture's early neutral milestone
+/// uses (`docs/test_vectors/economics/baseline_steady_state.json`) — so
+/// the recorded loop length is a meaningful, reviewable workload rather
+/// than an arbitrary magnitude. The frozen baseline pins to the workload
+/// at the merge SHA, not to this constant's identifier; a future
+/// workload-characterization PR that needs a different height adds a
+/// sibling bench rather than mutating this constant.
+///
+/// Per-bench-target `mod common;` inclusion means each target uses only
+/// a subset of this module's items; `#[allow(dead_code)]` on the unused
+/// side is the same discipline applied to `drop_fixture`.
+#[allow(dead_code)]
+pub const ECONOMICS_BENCH_HEIGHT: u64 = 262_800;
+
 /// Construct a freshly-created `Engine<SoloSigner>` with deterministic
 /// state, returning the boxed engine and a `TempDir` guard.
 ///

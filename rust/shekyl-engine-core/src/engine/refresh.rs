@@ -894,8 +894,8 @@ const _: fn() = || {
 /// abandon a successful refresh in flight have to drop the handle
 /// and reconcile against the next `progress().borrow()`.
 #[allow(clippy::type_complexity)]
-async fn run_refresh_task<S, D: DaemonEngine, R, P>(
-    engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S, D, LocalLedger, R, P>>>,
+async fn run_refresh_task<S, D: DaemonEngine, E, R, P>(
+    engine_arc: std::sync::Arc<tokio::sync::RwLock<Engine<S, D, LocalLedger, E, R, P>>>,
     opts: RefreshOptions,
     cancel: CancellationToken,
     progress: tokio::sync::watch::Sender<RefreshProgress>,
@@ -903,9 +903,10 @@ async fn run_refresh_task<S, D: DaemonEngine, R, P>(
     _slot_guard: SlotGuard,
 ) where
     S: EngineSignerKind + Send + Sync + 'static,
+    E: super::traits::EconomicsEngine,
     R: RefreshEngine + super::scan_floor::ScanStartFloorProvider + Send + Sync + 'static,
     P: super::traits::PendingTxEngine + Send + Sync + 'static,
-    Engine<S, D, LocalLedger, R, P>: Send + Sync,
+    Engine<S, D, LocalLedger, E, R, P>: Send + Sync,
 {
     // Pre-anchor cancellation checkpoint (point 0 in the cancellation
     // contract above). The birthday anchor fetches a block hash from
@@ -1202,9 +1203,10 @@ fn summarize(result: &ScanResult, merge_attempts: u32) -> RefreshSummary {
 impl<
         S: EngineSignerKind,
         D: DaemonEngine,
+        E: super::traits::EconomicsEngine,
         R: RefreshEngine + super::scan_floor::ScanStartFloorProvider,
         P: super::traits::PendingTxEngine,
-    > Engine<S, D, LocalLedger, R, P>
+    > Engine<S, D, LocalLedger, E, R, P>
 {
     /// Spawn an async refresh task and return a [`RefreshHandle`]
     /// for observing and controlling it.
@@ -1341,9 +1343,10 @@ impl<
 impl<
         S: EngineSignerKind,
         D: DaemonEngine,
+        E: super::traits::EconomicsEngine,
         R: RefreshEngine + super::scan_floor::ScanStartFloorProvider,
         P: super::traits::PendingTxEngine,
-    > Engine<S, D, LocalLedger, R, P>
+    > Engine<S, D, LocalLedger, E, R, P>
 {
     /// Drive a refresh against the configured daemon: pull a snapshot
     /// of the wallet's ledger, ask the producer to scan
