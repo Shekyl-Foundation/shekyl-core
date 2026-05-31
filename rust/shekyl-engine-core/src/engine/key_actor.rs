@@ -400,15 +400,45 @@ pub(crate) struct KeyEngineHandle {
     public: Arc<KeyPublicProjection>,
     /// Secret projection for non-primary audit derivation (§2.4).
     audit_secret: Arc<AuditSubaddressSecret>,
+    /// Keeps the engine-owned actor runtime alive when `spawn` ran with **no**
+    /// ambient Tokio runtime (sync open path / plain `#[test]`). `None` when the
+    /// actor was spawned onto an ambient runtime (production wallet-RPC
+    /// multi-thread runtime, or a `#[tokio::test]`). `Arc` so every `Clone` of
+    /// the handle shares the one host; the last clone's drop shuts the runtime
+    /// down in the background (§4.2 / §4.3).
+    runtime_host: Option<Arc<KeyActorRuntimeHost>>,
+}
+
+/// Owns the dedicated Tokio runtime that drives the [`KeyActor`] task on the
+/// no-ambient-runtime spawn path (§4.2). Its `Drop` tears the runtime down with
+/// [`tokio::runtime::Runtime::shutdown_background`] — **never** the blocking
+/// default drop, which panics if it ever runs inside another runtime's context.
+struct KeyActorRuntimeHost {
+    /// `Option` so `Drop` can move the runtime out by value (the
+    /// `shutdown_background` consumer) under the exclusive `&mut self` the last
+    /// `Arc` drop provides.
+    rt: Option<tokio::runtime::Runtime>,
+}
+
+impl Drop for KeyActorRuntimeHost {
+    fn drop(&mut self) {
+        if let Some(rt) = self.rt.take() {
+            rt.shutdown_background();
+        }
+    }
 }
 
 impl KeyEngineHandle {
     /// Derive the handle's projections from `&keys`, then spawn the actor
     /// (consuming `keys` so no `&AllKeysBlob` escapes the actor task).
     ///
-    /// Must be called within a `tokio` runtime context (the spawn schedules a
-    /// task). In Stage 2 this is the only constructor; the orchestrator's
-    /// `assemble`-site wiring lands in a later step.
+    /// **Runtime hosting (§4.2).** Callable from *either* a Tokio runtime
+    /// context or a thread with no runtime at all — `assemble` is sync and the
+    /// engine's lifecycle layer is runtime-agnostic (`drive_persistence`). If an
+    /// ambient runtime exists (production wallet-RPC multi-thread runtime, or a
+    /// `#[tokio::test]`), the actor is spawned onto it. Otherwise a dedicated
+    /// single-worker multi-thread runtime is built and carried by the handle so
+    /// the actor task is driven independently of the non-async caller.
     ///
     /// # Panics
     ///
@@ -441,12 +471,34 @@ impl KeyEngineHandle {
             spend_public,
         });
 
-        let actor = KeyActor::spawn(keys);
+        // §4.2: host the actor on the ambient runtime if there is one, else on
+        // a dedicated engine-owned runtime. `KeyActor::spawn` (kameo) schedules
+        // via `tokio::spawn`, which panics outside a runtime.
+        let (actor, runtime_host) = match tokio::runtime::Handle::try_current() {
+            Ok(_) => (KeyActor::spawn(keys), None),
+            Err(_) => {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .thread_name("shekyl-key-actor")
+                    .enable_time()
+                    .build()
+                    .expect("key-actor runtime build");
+                // `enter()` makes `rt` the current runtime for the `tokio::spawn`
+                // inside `KeyActor::spawn`; the guard drops immediately after,
+                // but `rt`'s worker thread keeps driving the detached task.
+                let actor = {
+                    let _guard = rt.enter();
+                    KeyActor::spawn(keys)
+                };
+                (actor, Some(Arc::new(KeyActorRuntimeHost { rt: Some(rt) })))
+            }
+        };
 
         Self {
             actor,
             public,
             audit_secret,
+            runtime_host,
         }
     }
 }
@@ -697,6 +749,58 @@ mod tests {
             .await
             .expect("actor claim succeeds");
         assert!(matches!(actor_result, OutputClaimResult::NotMine));
+    }
+
+    // §4.2 — owned-runtime spawn path. Constructed from a thread with **no**
+    // ambient Tokio runtime (a plain `#[test]` — exactly the sync-open / test
+    // shape that broke a naive spawn-in-`assemble`), the handle builds and
+    // carries its own runtime. Sync methods resolve with no runtime at all, and
+    // the actor still serves async `ask`s driven from a throwaway runtime,
+    // byte-equivalent to the `LocalKeys` oracle. On drop, the owned runtime is
+    // torn down via `shutdown_background` (no panic on the runtime-less thread).
+    #[test]
+    fn spawn_without_ambient_runtime_self_hosts_and_serves() {
+        let tx_hash = [6u8; 32];
+        let actor_blob = make_blob(TEST_SEED);
+        let input = build_output_paid_to(&actor_blob, 0, 2_024, tx_hash);
+
+        // No ambient runtime in a plain `#[test]` → owned-runtime branch.
+        let handle = KeyEngineHandle::spawn(actor_blob);
+        assert!(
+            handle.runtime_host.is_some(),
+            "no ambient runtime: the handle must own one"
+        );
+
+        // Sync handle method resolves from the public projection — no runtime.
+        let oracle = LocalKeys::from_test_seed(TEST_SEED);
+        assert_eq!(
+            handle.account_public_address().pqc_public_key,
+            oracle.account_public_address().pqc_public_key,
+            "account address resolves with no runtime present"
+        );
+
+        // Async method: the actor runs on its OWN runtime; drive the `ask` from
+        // a throwaway current-thread runtime in this otherwise-runtime-less
+        // thread (cross-runtime mailbox round-trip).
+        let driver = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("driver runtime");
+        let actor_claim = expect_mine(
+            driver
+                .block_on(handle.try_claim_output(&input))
+                .expect("owned-runtime actor serves the claim"),
+        );
+        assert_eq!(actor_claim.amount_atomic_units, 2_024);
+
+        // Equivalence with the oracle, same pins as the ambient-runtime test.
+        let local_claim = expect_mine(
+            driver
+                .block_on(LocalKeys::from_test_seed(TEST_SEED).try_claim_output(&input))
+                .expect("LocalKeys claim succeeds"),
+        );
+        assert_eq!(actor_claim.handle, local_claim.handle);
+        assert_eq!(actor_claim.key_image, local_claim.key_image);
     }
 
     // §5.2 test 2 — No-secret-crosses (structural): the message + reply types

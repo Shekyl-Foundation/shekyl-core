@@ -66,7 +66,19 @@ tracing = "0.1"
 # task hold the engine across `await` points (replaced by actor message
 # passing at Stage 4). `rt` enables `tokio::spawn` for the producer
 # task.
-tokio = { version = "1", features = ["time", "macros", "sync", "rt"] }
+#
+# `rt-multi-thread` is load-bearing on two production paths
+# (`STAGE_2_KEY_ENGINE_ACTOR.md` §4.2): (1) the `KeyActor` owned-runtime
+# spawn path (`KeyEngineHandle::spawn` builds a single-worker
+# multi-thread runtime when `assemble` runs with no ambient runtime —
+# the sync-open / plain-`#[test]` case), and (2) the pre-existing
+# `drive_persistence::block_in_place` (`lifecycle.rs:791`). Until Stage 2
+# this feature was enabled only in `[dev-dependencies]`, so the lib did
+# not compile standalone (`cargo build -p shekyl-engine-core`) and
+# relied on a downstream consumer's feature unification. Promoting it
+# here is a precondition of the actor spawn and de-fragilizes that
+# latent dependency.
+tokio = { version = "1", features = ["time", "macros", "sync", "rt", "rt-multi-thread"] }
 # Cancellation token for cooperative shutdown of the refresh producer
 # between blocks. `Engine::start_refresh` constructs and owns the token
 # internally; callers fire it through `RefreshHandle::cancel` (or by
