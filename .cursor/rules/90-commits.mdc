@@ -40,3 +40,7 @@ commits. Bisection requires small, scope-respecting commits.
 
 Imperative mood, ≤72 chars. Prefix with the affected subsystem when useful
 (`fcmp:`, `wallet:`, `rpc:`, `crypto-pq:`, `economics:`).
+
+## No Batch and Bisect
+
+Each commit is planned as a unit of woirk, and should be commited that way. As the cork is completed, it is committed locally. This creates a clear developmenmt path. We DO NOT wait until the end, and then spend time re-bisecting commits to parcel them back out into their respective elements.
