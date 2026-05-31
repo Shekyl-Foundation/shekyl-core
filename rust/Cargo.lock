@@ -3011,6 +3011,7 @@ dependencies = [
 name = "shekyl-economics"
 version = "3.1.0"
 dependencies = [
+ "blake2",
  "serde",
  "serde_json",
  "thiserror",
@@ -3059,6 +3060,7 @@ dependencies = [
  "shekyl-bulletproofs",
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
+ "shekyl-economics",
  "shekyl-engine-file",
  "shekyl-engine-prefs",
  "shekyl-engine-state",

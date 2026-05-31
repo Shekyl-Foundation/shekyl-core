@@ -1,4 +1,11 @@
 mod engine;
+// The `RecordedChainFixture` recorder is test-substrate only: it
+// generates / verifies `docs/test_vectors/economics/*.json` for the
+// `EconomicsEngine` C4 differential (`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`
+// §5.4). Gated `#[cfg(test)]` so its `pub` surface does not become
+// dead code in the production `sim` binary.
+#[cfg(test)]
+mod record;
 mod scenarios;
 
 use engine::{run_scenario, ScenarioResult, SimParams};

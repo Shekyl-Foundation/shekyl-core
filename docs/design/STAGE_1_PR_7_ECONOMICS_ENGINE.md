@@ -1946,6 +1946,7 @@ external audit. That is the intended return on the foundation split.
 | **Round 2 closed** | `Round 2 closed 2026-05-28; §6.2 close-out complete — §4.4 binding matrix, §7.2 per-PR commits, implementation review gate §6.2 item 5; segment 2g + 2i closed.` |
 | **Round 3 open** | `Round 3 open 2026-05-28; §7.X binding — 7-base (C2+C2a′+fix α) → 7-cutover (C2c) ∥ 7-trait (C0–C7); Phase 0 C0 may co-land; Round 3 closes when all three implementation PRs + PR 6 land on dev.` |
 | **Round 3 entry items** | `§7.4 E1: ci/economics-c2a-prime workflow + run_economics_c2a_prime.sh (preflight green; layer jobs await harness). E2: Engine<S,D,L,E,R,P,F> parallel PR6/7-trait. E3: leg-B oracle from economics_params.json only.` |
+| **7-trait landed (C0→C7)** | `7-trait landed; EconomicsEngine trait + LocalEconomics + ChainEconomicsSource/LedgerChainEconomicsSource + snapshot/CalibrationStamp + E slot (Engine<S,D,L,E,R,P,F>). Zero V3.0 consumer (R6); economics field + methods carried #[allow(dead_code)]. G4/G5 rustdoc pins added (burn_amount as_of_height point-estimate; parameters_snapshot generation/digest re-compare). Differential ChainMirrorSource tests + Criterion/iai benches (base_emission_at, parameters_snapshot). C2c cutover NOT in this PR — Round 3 stays open until 7-cutover + PR 6 land.` |
 
 ---
 

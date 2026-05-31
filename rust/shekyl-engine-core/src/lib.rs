@@ -52,6 +52,7 @@ pub mod __bench_internals {
     pub use crate::engine::refresh::LedgerSnapshot;
     pub use crate::engine::{
         engine_account_public_address_for_bench, engine_balance_for_bench,
-        engine_local_ledger_for_bench,
+        engine_economics_base_emission_at_for_bench,
+        engine_economics_parameters_snapshot_for_bench, engine_local_ledger_for_bench,
     };
 }

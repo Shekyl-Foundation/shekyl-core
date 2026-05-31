@@ -762,10 +762,11 @@ impl<
         S: EngineSignerKind,
         D: DaemonEngine,
         L: LedgerEngine,
+        E: super::traits::EconomicsEngine,
         R: RefreshEngine,
         P: PendingTxEngine,
         F: super::traits::PersistenceEngine,
-    > Engine<S, D, L, R, P, F>
+    > Engine<S, D, L, E, R, P, F>
 {
     /// Number of in-flight reservations on this wallet handle.
     ///

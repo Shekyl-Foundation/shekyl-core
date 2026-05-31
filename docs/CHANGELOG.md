@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+### Added
+
+- **engine: `EconomicsEngine` trait surface (Stage 1 PR 7).** Extracted
+  the canonical economic-derivation surface — `base_emission_at` (base
+  subsidy on the neutral trajectory), `burn_amount` (absolute adaptive
+  fee burn), `pool_weighted_total` (the `u128` pool-weighted stake
+  denominator), and `parameters_snapshot` — as the `pub(crate)`
+  `EconomicsEngine` trait with the `LocalEconomics` Stage 1 implementor,
+  its `ChainEconomicsSource` read-abstraction (`LedgerChainEconomicsSource`
+  adapter), and the `EconomicsParametersSnapshot` / `CalibrationStamp`
+  return types (canonical Blake2b-256 `params_digest`). The `Engine`
+  generic list grows the `E` slot
+  (`Engine<S, D, L, E, R, P, F>`); the `economics` field is carried for
+  struct-shape stability with **zero V3.0 consumer call sites** (R6) —
+  production fee/burn/supply computation is not yet wired through the
+  trait. Method rustdoc carries the §6.3 G4 (`burn_amount` point-estimate
+  / `as_of_height` staleness) and G5 (`parameters_snapshot`
+  generation/digest re-compare) consumer contracts. Differential tests
+  replay `RecordedChainFixture` vectors through a `ChainMirrorSource`
+  against `shekyl-economics`; Criterion + iai-callgrind benches cover
+  `base_emission_at` and `parameters_snapshot`. This is the **7-trait**
+  PR (C0, C1, C2b–C7); the sibling **7-cutover** (C2c) that delegates the
+  C++ ESF base subsidy to Rust landed separately (PR #93) and wires the
+  consensus path to the `shekyl_base_block_reward` primitive, **not** to
+  this trait — the trait remains consumer-free until its own cutover per
+  [`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](design/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
+  §6.2. No consensus or wire-format change.
+
 ### Changed
 
 - **economics: C2c cutover — `get_block_reward` base subsidy delegates to

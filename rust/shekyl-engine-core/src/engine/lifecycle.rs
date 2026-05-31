@@ -136,6 +136,7 @@ pub enum OpenedEngine<
     S: EngineSignerKind,
     D: DaemonEngine = DaemonClient,
     L: LedgerEngine = LocalLedger,
+    E: super::traits::EconomicsEngine = super::local_economics::LocalEconomics,
     R: RefreshEngine = LocalRefresh,
     P: super::traits::PendingTxEngine = super::LocalPendingTx<
         super::LocalSigner,
@@ -146,7 +147,7 @@ pub enum OpenedEngine<
 > {
     /// `.wallet` was present and decoded successfully. The wallet is
     /// fully loaded against the persisted ledger.
-    Loaded(Engine<S, D, L, R, P>),
+    Loaded(Engine<S, D, L, E, R, P>),
 
     /// `.wallet` was missing. The keys file was intact and the wallet
     /// was reconstructed with an empty ledger anchored at
@@ -154,7 +155,7 @@ pub enum OpenedEngine<
     /// state, then `save_state` the rebuilt ledger.
     Restored {
         /// The reconstructed wallet, ready for refresh.
-        wallet: Engine<S, D, L, R, P>,
+        wallet: Engine<S, D, L, E, R, P>,
         /// Block height the synthesized ledger anchors at; equals the
         /// keys-file's `restore_height_hint` widened to `u64`.
         from_height: u64,
@@ -165,9 +166,10 @@ impl<
         S: EngineSignerKind,
         D: DaemonEngine + std::fmt::Debug,
         L: LedgerEngine,
+        E: super::traits::EconomicsEngine,
         R: RefreshEngine,
         P: super::traits::PendingTxEngine,
-    > std::fmt::Debug for OpenedEngine<S, D, L, R, P>
+    > std::fmt::Debug for OpenedEngine<S, D, L, E, R, P>
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -191,12 +193,13 @@ impl<
         S: EngineSignerKind,
         D: DaemonEngine,
         L: LedgerEngine,
+        E: super::traits::EconomicsEngine,
         R: RefreshEngine,
         P: super::traits::PendingTxEngine,
-    > OpenedEngine<S, D, L, R, P>
+    > OpenedEngine<S, D, L, E, R, P>
 {
     /// Borrow the underlying wallet regardless of the variant.
-    pub fn wallet(&self) -> &Engine<S, D, L, R, P> {
+    pub fn wallet(&self) -> &Engine<S, D, L, E, R, P> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -204,7 +207,7 @@ impl<
     }
 
     /// Mutably borrow the underlying wallet regardless of the variant.
-    pub fn wallet_mut(&mut self) -> &mut Engine<S, D, L, R, P> {
+    pub fn wallet_mut(&mut self) -> &mut Engine<S, D, L, E, R, P> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -214,7 +217,7 @@ impl<
     /// Consume the outcome and return the wallet, discarding the
     /// recovery-path signal. Use only when the caller has already
     /// surfaced the lost-state branch through some other channel.
-    pub fn into_wallet(self) -> Engine<S, D, L, R, P> {
+    pub fn into_wallet(self) -> Engine<S, D, L, E, R, P> {
         match self {
             Self::Loaded(w) => w,
             Self::Restored { wallet, .. } => wallet,
@@ -726,6 +729,18 @@ impl Engine<SoloSigner> {
             network,
         );
 
+        // Economics reads the **same** `Arc<LocalLedger>` the ledger and
+        // pending engines share, so `pool_weighted_total` observes the
+        // identical mirrored state (PR 7 §5.2 R3 read contract). The slot
+        // is assembled but not consumed by any production path at V3.0
+        // (PR 7 R6); the C++ consensus path remains the fee/burn/emission
+        // authority until the separate `7-cutover` PR.
+        let economics = super::local_economics::LocalEconomics::new(
+            super::chain_economics_source::LedgerChainEconomicsSource::new(std::sync::Arc::clone(
+                &ledger,
+            )),
+        );
+
         Ok(Self {
             persistence: file,
             state_wrap_key,
@@ -739,6 +754,7 @@ impl Engine<SoloSigner> {
             capability,
             refresh_slot: super::refresh::RefreshSlot::new(),
             refresh,
+            economics,
             _signer: std::marker::PhantomData,
         })
     }
@@ -793,10 +809,11 @@ impl<
         S: EngineSignerKind,
         D1: DaemonEngine,
         L: LedgerEngine,
+        E: super::traits::EconomicsEngine,
         R: RefreshEngine,
         P: super::traits::PendingTxEngine,
         F: super::traits::PersistenceEngine,
-    > Engine<S, D1, L, R, P, F>
+    > Engine<S, D1, L, E, R, P, F>
 {
     /// Test-only constructor: rebuild the engine with `daemon`
     /// substituted in place of the existing one, leaving every
@@ -844,7 +861,10 @@ impl<
     /// test surface; production paths cannot reach it because
     /// `pub(crate) #[cfg(test)]` excludes them from the published
     /// API and from the non-test build.
-    pub(crate) fn replace_daemon<D2: DaemonEngine>(self, daemon: D2) -> Engine<S, D2, L, R, P, F> {
+    pub(crate) fn replace_daemon<D2: DaemonEngine>(
+        self,
+        daemon: D2,
+    ) -> Engine<S, D2, L, E, R, P, F> {
         let Engine {
             persistence,
             state_wrap_key,
@@ -858,6 +878,7 @@ impl<
             capability,
             refresh_slot,
             refresh,
+            economics,
             _signer,
         } = self;
         Engine {
@@ -873,6 +894,7 @@ impl<
             capability,
             refresh_slot,
             refresh,
+            economics,
             _signer,
         }
     }
@@ -928,9 +950,10 @@ fn is_default_overrides(overrides: &SafetyOverrides) -> bool {
 impl<
         S: EngineSignerKind,
         D: DaemonEngine,
+        E: super::traits::EconomicsEngine,
         P: super::traits::PendingTxEngine,
         F: super::traits::PersistenceEngine,
-    > Engine<S, D, LocalLedger, super::LocalRefresh, P, F>
+    > Engine<S, D, LocalLedger, E, super::LocalRefresh, P, F>
 {
     /// Rotate the wallet password, optionally also rotating the KDF
     /// parameters of the on-disk envelope wrap.
