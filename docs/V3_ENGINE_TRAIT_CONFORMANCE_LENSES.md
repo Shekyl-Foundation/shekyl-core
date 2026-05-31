@@ -229,9 +229,9 @@ State as of the post-PR7 `dev` HEAD. ✓ = at or above bar; ◑ = partial;
 | `DaemonEngine` | ✓ | ✓ | ✓ | ✓ 2/2 | ✓ | ✓ | ✓ | **conformant / exceeds** |
 | `RefreshEngine` | ✓ | ✓ | ✓ | ✓ (trait-level 5-checkpoint + per-method I/P) | ✓ | ✓ | ✓ (unit-variant pin) | **conformant / exceeds** |
 | `PendingTxEngine` | ✓ | ✓ | ✓ (documented absence) | ◑ 1/5² | ✓ | ✓ | —³ | **partial** |
-| `PersistenceEngine` | ✗⁴ | ✗ | ✓ | ✗ 0/6 | ◑ | ◑⁵ | —³ | **laggard** |
-| `KeyEngine` | ✓ | ✓ | ✓ | ◑ 4/4 C/I, 0 Panics | ✓ | ✓ | — | **in-flight⁶** |
-| `EconomicsEngine` | — | — | — | — | — | — | — | **not yet extracted⁷** |
+| `PersistenceEngine` | ✗⁴ | ✗⁴ | ✓ | ✗ 0/6 | ◑⁵ | ◑⁶ | —³ | **laggard** |
+| `KeyEngine` | ✓ | ✓ | ✓ | ◑ 4/4 C/I, 0 Panics | ✓ | ✓ | — | **in-flight⁷** |
+| `EconomicsEngine` | — | — | — | — | — | — | — | **not yet extracted⁸** |
 
 1. `LedgerEngine` returns pre-existing aggregates (`BalanceSummary`,
    `LedgerSnapshot`, `u64`) rather than trait-owned value types, so
@@ -248,19 +248,27 @@ State as of the post-PR7 `dev` HEAD. ✓ = at or above bar; ◑ = partial;
    types defined off the trait file (`engine/error.rs`,
    `engine/pending.rs`); the audit is folded into the F1/F2 remediation
    rather than asserted here.
-4. No `# Supertrait bounds` section and no Stage-4 swap-in note;
-   ownership boundary is partial (body docs without the §-anchored
-   owns/off-trait framing).
-5. `base_path` / `network` / `capability` share one collective reason
+4. CL-1 + CL-2 (the two ✗ cells). The module doc cites §2.6 and states
+   hydration (`open` / `create`) stays on `Engine` (not the trait), but
+   lacks the §-anchored owns-vs-deliberately-off-trait framing the
+   reference surfaces carry (CL-1), and there is no `# Supertrait
+   bounds` section justifying `Send + Sync + 'static` or stating the
+   `Clone` disposition (CL-2).
+5. CL-5 is **partial, not absent**: the module doc carries a brief
+   inline swap-in note (`Stage 4: ActorRef<PersistenceActor> with the
+   same trait`) but not the fuller `# Stage-4 swap-in` section the
+   reference surfaces use (which also states signatures are unchanged
+   and callers get the swap-in for free).
+6. `base_path` / `network` / `capability` share one collective reason
    comment above the block rather than a per-attribute inline reason
    (below the CL-6 bar); `save_prefs` has no rustdoc at all.
-6. `KeyEngine` is declared (`traits/mod.rs`) but **not re-exported**,
+7. `KeyEngine` is declared (`traits/mod.rs`) but **not re-exported**,
    pending its M3c+ consumers. Its four methods carry C/I but no
    `# Panics` (the implementor `LocalKeys` panics on `RwLock`
    poisoning in `derive_subaddress` and `try_claim_output`). Per the
    "do it now, don't backfill" posture (§3.1), land the `# Panics`
    sections with the methods rather than reconstructing them later.
-7. The `EconomicsEngine` *trait surface* is not yet a file under
+8. The `EconomicsEngine` *trait surface* is not yet a file under
    `traits/` on `dev`. PR7 landed the C2c `get_block_reward` consensus
    cutover (C++ ESF → Rust FFI), not the trait extraction. Audit
    `EconomicsEngine` against CL-1…CL-7 when its surface lands per
