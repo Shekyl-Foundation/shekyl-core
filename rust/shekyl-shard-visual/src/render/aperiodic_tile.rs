@@ -48,8 +48,7 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
 
     let (x_lo, x_hi, y_lo, y_hi) = bounds(&triangles);
     let margin = 0.04;
-    let scale =
-        (size as f64 * (1.0 - 2.0 * margin)) / (x_hi - x_lo).max(y_hi - y_lo).max(1e-9);
+    let scale = (size as f64 * (1.0 - 2.0 * margin)) / (x_hi - x_lo).max(y_hi - y_lo).max(1e-9);
     let cx_off = (size as f64 - (x_hi - x_lo) * scale) / 2.0 - x_lo * scale;
     let cy_off = (size as f64 - (y_hi - y_lo) * scale) / 2.0 - y_lo * scale;
 
@@ -98,11 +97,7 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
             Point::new(poly[1].0, poly[1].1),
             Point::new(poly[2].0, poly[2].1),
         ];
-        draw_polygon_mut(
-            &mut image,
-            &points,
-            Rgb([fill.0, fill.1, fill.2]),
-        );
+        draw_polygon_mut(&mut image, &points, Rgb([fill.0, fill.1, fill.2]));
     }
 
     image

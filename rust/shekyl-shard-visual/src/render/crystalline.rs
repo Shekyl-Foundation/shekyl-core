@@ -25,8 +25,7 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
         for x in 0..size {
             let xf = x as f64 / size as f64;
             let yf = y as f64 / size as f64;
-            let z = (2.0 * std::f64::consts::PI * (xf - 0.5) + phase_shift).sin()
-                * yf.powf(1.8)
+            let z = (2.0 * std::f64::consts::PI * (xf - 0.5) + phase_shift).sin() * yf.powf(1.8)
                 + 0.3 * (plasma_freq * std::f64::consts::PI * xf + phase_shift).cos();
             z_min = z_min.min(z);
             z_max = z_max.max(z);
@@ -50,8 +49,9 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
 
     for _ in 0..TRANSIENT_ITERATIONS {
         for t in &mut theta {
-            *t = (*t + omega - (k / (2.0 * std::f64::consts::PI)) * (2.0 * std::f64::consts::PI * *t).sin())
-                .rem_euclid(1.0);
+            *t = (*t + omega
+                - (k / (2.0 * std::f64::consts::PI)) * (2.0 * std::f64::consts::PI * *t).sin())
+            .rem_euclid(1.0);
         }
     }
 

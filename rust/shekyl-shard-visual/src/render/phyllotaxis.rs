@@ -9,8 +9,8 @@ const GOLDEN_DIVERGENCE: f64 = 137.507_764_084_4_f64.to_radians();
 
 pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
     let f = params.features;
-    let n_seeds = (MIN_SEEDS as f64 + (MAX_SEEDS - MIN_SEEDS) as f64 * f.output_richness).round()
-        as i32;
+    let n_seeds =
+        (MIN_SEEDS as f64 + (MAX_SEEDS - MIN_SEEDS) as f64 * f.output_richness).round() as i32;
 
     let angle_perturbation = 0.06 * (params.hash_unit(0) - 0.5);
     let divergence = GOLDEN_DIVERGENCE + angle_perturbation;

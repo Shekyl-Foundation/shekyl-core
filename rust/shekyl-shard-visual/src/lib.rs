@@ -15,7 +15,7 @@ mod params;
 mod render;
 
 pub use aggregate::ShardAggregate;
-pub use candidate::{render_candidate, CandidateRecipe, recipe_from_params};
+pub use candidate::{recipe_from_params, render_candidate, CandidateRecipe};
 pub use features::{features_from_aggregate, Features};
 pub use params::{parameters_from_aggregate, parameters_with_hash_override, RenderParameters};
 

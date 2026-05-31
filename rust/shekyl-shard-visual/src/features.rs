@@ -27,26 +27,20 @@ fn saturate(value: f64) -> f64 {
 
 pub fn features_from_aggregate(agg: &ShardAggregate) -> Features {
     let blocks = agg.block_count.max(1);
-    let user_outputs = agg
-        .output_count
-        .saturating_sub(agg.coinbase_output_count);
+    let user_outputs = agg.output_count.saturating_sub(agg.coinbase_output_count);
 
     let activity_density = saturate(agg.tx_count as f64 / (blocks as f64 * EXPECTED_TX_PER_BLOCK));
     let output_richness = if agg.tx_count > 0 {
-        saturate(
-            (user_outputs as f64 / agg.tx_count as f64) / EXPECTED_OUTPUTS_PER_TX,
-        )
+        saturate((user_outputs as f64 / agg.tx_count as f64) / EXPECTED_OUTPUTS_PER_TX)
     } else {
         0.0
     };
     let coinbase_ratio = saturate(agg.coinbase_ratio);
     let value_dispersion = saturate(agg.value_log_variance / EXPECTED_VALUE_LOG_VARIANCE);
-    let value_magnitude = saturate(
-        (agg.value_log_mean - 12.0).max(0.0) / (EXPECTED_VALUE_LOG_MEAN - 12.0).max(1.0),
-    );
-    let stake_intensity = saturate(
-        agg.stake_events_created as f64 / (blocks as f64 * EXPECTED_STAKES_PER_BLOCK),
-    );
+    let value_magnitude =
+        saturate((agg.value_log_mean - 12.0).max(0.0) / (EXPECTED_VALUE_LOG_MEAN - 12.0).max(1.0));
+    let stake_intensity =
+        saturate(agg.stake_events_created as f64 / (blocks as f64 * EXPECTED_STAKES_PER_BLOCK));
     let total_tier: u64 = agg.tier_distribution.iter().sum();
     let tier_skew_high = if total_tier > 0 {
         agg.tier_distribution[2] as f64 / total_tier as f64
@@ -54,9 +48,7 @@ pub fn features_from_aggregate(agg: &ShardAggregate) -> Features {
         0.0
     };
     let claim_create_ratio = if agg.stake_events_created > 0 {
-        saturate(
-            agg.stake_events_claimed as f64 / agg.stake_events_created as f64,
-        )
+        saturate(agg.stake_events_claimed as f64 / agg.stake_events_created as f64)
     } else {
         0.0
     };
