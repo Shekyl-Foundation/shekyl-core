@@ -310,14 +310,42 @@ path is independent of actor liveness.
 `derive_subaddress` is **synchronous** (`key.rs:693`); a sync method cannot
 `.await` a mailbox `ask`. Disposition that preserves the signature:
 
-- **Audit purpose** — pure function of immutable public spend/view keys
-  (`local_keys.rs:459-460`). The handle owns the public-key projection
-  (§3.2) and computes the audit subaddress synchronously, no actor round-trip.
-  (The Stage-1 `LocalKeys` also registers the derived subaddress in a reverse-
-  lookup registry under a write lock, `key.rs:685-692`; that registry is
-  scan-side bookkeeping, not key material, and is addressed in §6/§8.3 — it is
-  *not* a reason to route the public derivation through the secret-owning
-  actor.)
+- **Audit purpose** — synchronous, handle-resolved, **but secret-touching for
+  `idx >= 1`** (corrected post-Round-7; the earlier "pure function of public
+  keys" framing was verified false at source). Two sub-cases:
+  - **Primary (`idx.is_primary()`)** — returns the bare account
+    `(spend_pk, view_pk)` directly (`local_keys.rs:459-460`); genuinely
+    public-only, served from the handle's `KeyPublicProjection` (§3.1).
+  - **Non-primary (`idx >= 1`)** — `local_keys.rs:462-471` calls
+    `subaddress_keys(&self.derived.view_scalar, &self.derived.spend_public,
+    idx_bytes)`, and `subaddress_keys` takes `view_scalar: &Zeroizing<Scalar>`
+    — the **view secret** (`subaddress.rs:152-160`; `m_i =
+    keccak256_to_scalar(SUBADDR_DERIVATION_DOMAIN || view_scalar_le32 ||
+    idx_le32)`). So non-primary audit derivation is **secret-touching**, not a
+    public-key function. The handle serves it synchronously from a **second,
+    secret-bearing construction-time projection** — `AuditSubaddressSecret`
+    (non-`Clone`, `Zeroizing`, wipe-on-drop; `view_scalar` + `spend_public`),
+    held alongside the public `KeyPublicProjection` (§3.1). This is the same
+    cross-leaf-immutable shape as `ViewMaterial` / the §6
+    `HandleDerivationViewSecret`: a derived view secret living in a
+    construction-time projection, **not** `&AllKeysBlob`. The public/secret
+    boundary stays type-checked because the two projections are distinct types.
+  - **Registry mutation drops on the handle path.** The Stage-1 `LocalKeys`
+    also registers the derived subaddress in a reverse-lookup registry under a
+    write lock (`key.rs:685-692`). The handle-resolved path does **not**
+    maintain a registry: the actor owns the registry, and the registry only
+    feeds `try_claim_output`, which is cold in Stage 2 (zero production
+    callers, §3.5). Handle-side audit derivation is therefore a pure read of
+    the secret projection with no side effect — an accepted Stage-2 behavioral
+    narrowing relative to `LocalKeys`, not a regression on any live path.
+  - **The deeper question this surfaces.** Even the "read-only inspection"
+    purpose cannot be served from public material alone, because ML-KEM has no
+    account-level secret that composes across subaddresses the way Monero's
+    ECDH `a·R` does. That is a PQC-specific divergence from the inherited
+    Monero subaddress design and is filed as a dedicated design round in
+    `docs/FOLLOWUPS.md` ("Subaddress mechanism under PQC"); it is **out of
+    scope for Stage 2** (the actor migration takes the faithful Option-(a) fix
+    and does not reshape the subaddress mechanism).
 - **Recipient purpose** — returns `RecipientSubaddressKemKeygenNotImplemented`
   synchronously (stub; `error.rs`). No actor needed to return an error.
 
@@ -397,6 +425,29 @@ KeyActorUnavailable,
 pub(crate) struct KeyEngineHandle {
     actor: kameo::actor::ActorRef<KeyActor>,   // Clone + Send + Sync
     public: Arc<KeyPublicProjection>,          // immutable, public-only
+    audit_secret: Arc<AuditSubaddressSecret>,  // immutable, secret-bearing (non-primary audit, §2.4)
+}
+```
+
+**Two projections, not one (Option (a), per the Round-7+ correction in §2.4).**
+The handle carries *both* a public projection and a secret projection because
+non-primary audit derivation is secret-touching (§2.4). The split keeps the
+public/secret boundary type-checked: `KeyPublicProjection` is `Clone + Debug`
+*because* it is public-only; `AuditSubaddressSecret` is non-`Clone`, `Zeroizing`,
+wipe-on-drop, and has **no** `Debug` (the `ViewMaterial` discipline,
+`view_material.rs`). Both are `Arc`-shared so the handle stays `Clone`; the
+secret allocation is wiped when the last handle clone drops. `AuditSubaddressSecret`
+is deliberately a distinct type from both `ViewMaterial` and the §6
+`HandleDerivationViewSecret`, so the type system forbids the "it's just a view
+secret, I'll clone/reuse it" mistake (same rationale as §6's "name the merge
+projection distinctly").
+
+```rust
+// Secret-bearing; serves non-primary audit-subaddress derivation only.
+// Non-`Clone`, no `Debug`, wipe-on-drop — the ViewMaterial discipline.
+pub(crate) struct AuditSubaddressSecret {
+    view_scalar: Zeroizing<Scalar>,  // the view secret `a` (subaddress_keys input)
+    spend_public: EdwardsPoint,      // base spend point `D` (public; defense-in-depth zeroize)
 }
 ```
 
@@ -415,22 +466,27 @@ pub(crate) struct KeyEngineHandle {
   #[derive(Clone, Debug)]   // Clone+Debug are sound: public-only, no secret bytes
   pub(crate) struct KeyPublicProjection {
       account_public_address: AccountPublicAddress, // cached &-return source (§2.3)
-      spend_pub: EdwardsPoint,                       // audit-subaddress derivation (§2.4)
-      view_pub: EdwardsPoint,                        // audit-subaddress derivation (§2.4)
+      spend_pk: SpendPublicKey,                      // PRIMARY audit (local_keys.rs:459-460)
+      view_pk: ViewPublicKey,                        // PRIMARY audit (local_keys.rs:459-460)
   }
   ```
 
-  (Exact field set is pinned by what `local_keys.rs:459-460`'s audit branch
-  reads; the load-bearing point is *public-only*.) It contains **no secret
-  bytes**, derives `Clone + Debug` *because* it is public-only, and is
-  `Arc`-shared in the handle (cheap clone). It is deliberately **not**
-  `ViewMaterial` (which is secret-bearing, non-`Clone`, wipe-on-drop) and not
-  the §6 merge view-secret projection — the three are distinct types precisely
-  so the public/secret boundary is type-checked.
+  (Exact field set is pinned by what `local_keys.rs:459-460`'s **primary** audit
+  branch reads — the bare account `spend_pk`/`view_pk`, the typed
+  `SpendPublicKey`/`ViewPublicKey`, returned verbatim for `idx.is_primary()`.
+  The **non-primary** audit branch is *not* served from this projection — it is
+  secret-touching and served from `AuditSubaddressSecret`, per the §2.4
+  correction.) `KeyPublicProjection` contains **no secret bytes**, derives
+  `Clone + Debug` *because* it is public-only, and is `Arc`-shared in the handle
+  (cheap clone). It is deliberately **not** `ViewMaterial`, **not**
+  `AuditSubaddressSecret`, and **not** the §6 merge view-secret projection — all
+  four are distinct types precisely so the public/secret boundary is
+  type-checked.
 - `KeyEngineHandle` implements `pub(crate) trait KeyEngine` (the same trait
   `LocalKeys` implements) with `type Error = KeyEngineError`:
   - `account_public_address` → `&self.public.account_public_address` (sync).
-  - `derive_subaddress` → sync, from `self.public` (Audit) / stub (Recipient).
+  - `derive_subaddress` → sync; primary Audit from `self.public`, non-primary
+    Audit from `self.audit_secret` (§2.4), Recipient → stub error.
   - `try_claim_output` → `self.actor.ask(ClaimOutput { … }).await` then flatten.
   - `sign_transaction` → `self.actor.ask(SignTransaction { … }).await` (stub).
 

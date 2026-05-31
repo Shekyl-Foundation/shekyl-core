@@ -1044,6 +1044,106 @@ sustainability is unaffected by the recalibration.
   Engine architecture: actor model with staged migration from
   composition*.
 
+- **Subaddress mechanism under PQC — dedicated design round (2026-05-31,
+  surfaced during Stage 2 `KeyEngine`-actor pre-flight).** The scanner and
+  the address format have made *incoherent* choices about where the KEM lives,
+  and the incoherence is currently masked only because the recipient-context
+  subaddress path is an unimplemented stub
+  (`KeyEngineError::RecipientSubaddressKemKeygenNotImplemented`,
+  `error.rs:615`). This round must resolve the incoherence **before** that stub
+  is implemented.
+
+  *The finding.* Monero's subaddress scheme is cheap because ECDH composes: the
+  scanner computes `a·R` with the single account view secret `a` regardless of
+  which subaddress an output targeted (one scalar-mult per output, then recover
+  `B'`, then table lookup; scan cost is independent of subaddress count).
+  ML-KEM has **no** such homomorphism — each KEM keypair is independent, and a
+  ciphertext encapsulated against `pk_i` requires exactly `sk_i` to decapsulate.
+  There is no account-level secret that decapsulates ciphertexts for all
+  subaddress public keys. This forces a choice with no clean Monero analogue:
+  - **Option A — account-level KEM + classical subaddress diversity** (what the
+    scanner implements today, `scan.rs:525-528`): one decap per output
+    (account-level `ml_kem_dk`), then `B' = O − ho·G − y·T` recovery gives the
+    subaddress via the `HashMap<CompressedPoint, Option<SubaddressIndex>>`
+    lookup. Scan cost is independent of subaddress count; on-chain
+    unlinkability holds (distinct `B'_i = D + m_i·G`). But every subaddress
+    encoding shares the *same* account ML-KEM PK bytes, so two of the wallet's
+    own addresses are linkable by byte comparison.
+  - **Option B — per-subaddress KEM** (what `RecipientSubaddress` /
+    `STAGE_1_PR_3_KEY_ENGINE.md` §3.1.3 currently assume, and what the address
+    layer already decided — "carrying a wallet-level ML-KEM PK… would make any
+    two encodings… trivially linkable; per-subaddress derivation is rule-forced
+    by `00-mission.mdc`"): each subaddress gets its own KEM keypair from
+    `(view_secret, idx)`; addresses are byte-unlinkable. But scanning must try
+    **every active subaddress's `sk_i`** per output — `O(active_subaddresses)`
+    ML-KEM decaps per output, with no Monero-style shortcut and no help from
+    the X25519 view-tag pre-filter unless it too is made per-subaddress (which
+    re-introduces the cost). **Unpriced, unbounded per-output scan-cost
+    multiplier.**
+
+  *The sharp question to put on the table.* The threat Option B closes —
+  comparing two of *your own* addresses byte-for-byte — requires an adversary
+  who already holds two addresses you handed out (an off-chain, weaker
+  adversary than the chain observer). The on-chain threat is already closed by
+  classical `B'` diversity under Option A. So: is per-subaddress KEM buying
+  privacy worth an unbounded scan-cost multiplier, or is it hardening an
+  out-of-scope (address-collection) threat model? Monero gets address-byte
+  distinctness for free because ECDH composes; Shekyl cannot, so it must decide
+  whether it actually wants it. At least three coherent end-states exist and the
+  current design assumes the most expensive one without pricing it:
+  1. Classical-only subaddresses + account KEM (Option A): cheap,
+     on-chain-unlinkable, accept address-byte linkability.
+  2. Per-subaddress KEM with a bounded active-window (Option B, mitigated):
+     pre-derive KEM keys only for the last N issued subaddresses; scan tries
+     those N. Bounds cost but caps concurrent active subaddresses — a real
+     merchant-UX constraint.
+  3. Drop subaddresses entirely; recipient diversity via a different primitive
+     (one-address-per-wallet + out-of-band channel, or stealth-address-style
+     diversity needing no per-recipient KEM key). Most "not just copying
+     Monero."
+
+  *Scope boundary with Stage 2.* This round is **explicitly out of scope** for
+  the Stage 2 `KeyEngine`-actor migration. Stage 2 takes the faithful
+  Option-(a) handle fix (the handle serves non-primary audit derivation from a
+  secret-bearing `AuditSubaddressSecret` projection; see
+  `STAGE_2_KEY_ENGINE_ACTOR.md` §2.4/§3.1) and does **not** reshape the
+  subaddress mechanism. `derive_subaddress` is cold (zero production callers),
+  so a faithful actor port is correct regardless of how this round resolves.
+  The Stage-2 pre-flight surfaced the finding (even "read-only inspection"
+  cannot be served from public material alone, because the view secret enters
+  the non-primary derivation); it does not own the fix.
+
+  *Why a dedicated round (not a mechanical port).* This is the same shape as the
+  Stage 1 "do we copy Monero's subaddresses?" question, but sharper: *the
+  cryptographic property that made Monero's subaddresses cheap does not exist in
+  our KEM, so the inherited design is quietly buying something expensive.* That
+  is exactly the inherited-assumption interrogation that
+  `05-system-thinking.mdc` ("why is this here?") and
+  `16-architectural-inheritance.mdc` (inheriting code ≠ inheriting
+  architecture) require, and it deserves its own adversarial round.
+
+  *Blocks:* implementation of `RecipientSubaddress` / per-subaddress KEM keygen
+  (`derive_subaddress(_, Recipient)`); the `RecipientSubaddressKemKeygenNotImplemented`
+  stub stays until this round resolves.
+
+  *Target:* V3.0 pre-genesis — the choice is structural and the cost is bounded
+  pre-genesis, unbounded after launch (a subaddress reshape or drop is a
+  consensus-and-wallet-format decision). Must resolve before the Recipient stub
+  is implemented; does not block the Stage 2 actor migration.
+
+  *Definition of done:* a design doc (spec-first per `05-system-thinking.mdc`)
+  that (a) prices each of the three end-states against scan cost, on-chain
+  unlinkability, address-byte linkability, and merchant UX; (b) names the
+  binding `00-mission.mdc` priority and why the alternatives were rejected;
+  (c) reconciles the scanner (`scan.rs`) and address-format choices so they are
+  coherent; (d) pins the disposition for the `RecipientSubaddress` stub. Carries
+  its own review cycle (4–6 rounds) per `20-rust-vs-cpp-policy.mdc`'s
+  migration-is-a-planning-activity discipline.
+
+  *Reference:* `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` §2.4 (the
+  secret-touching audit finding that surfaced this); `STAGE_1_PR_3_KEY_ENGINE.md`
+  §3.1.3 (the per-subaddress KEM assumption being interrogated).
+
 - **Stage 3 — `StakeEngine` native actor build.** Build the Phase
   2b stake-lifecycle subsystem as a native actor from inception,
   not as composition-then-migrate. The `StakeEngine` owns the
