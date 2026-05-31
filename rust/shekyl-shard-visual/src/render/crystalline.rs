@@ -60,8 +60,8 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
         let px = ((t * (size - 1) as f64).round() as u32).min(size - 1);
         let py = (((1.0 - ys) * (size - 1) as f64).round() as u32).min(size - 1);
         let idx = (py * size + px) as usize;
-        for c in 0..3 {
-            canvas[idx][c] = canvas[idx][c] / 4 + 255 * 3 / 4;
+        for channel in &mut canvas[idx] {
+            *channel = *channel / 4 + 255 * 3 / 4;
         }
     }
 

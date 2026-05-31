@@ -36,15 +36,14 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
 
     let max_rp = radii_pix.last().copied().unwrap_or(1.0).max(1e-6);
 
-    for i in 0..n_seeds as usize {
+    for (i, r_pix) in radii_pix.iter().enumerate() {
         let angle = i as f64 * divergence;
-        let r_pix = radii_pix[i];
         let t_norm = i as f64 / (n_seeds - 1).max(1) as f64;
         let seed_r = (seed_radius_base + seed_radius_grow * t_norm).max(0.5) as i32;
-        let color_t = r_pix / max_rp;
+        let color_t = *r_pix / max_rp;
         let color = params.palette.sample(color_t);
-        let x = cx + (r_pix * angle.cos()) as f32;
-        let y = cy + (r_pix * angle.sin()) as f32;
+        let x = cx + (*r_pix * angle.cos()) as f32;
+        let y = cy + (*r_pix * angle.sin()) as f32;
         draw_filled_circle_mut(
             &mut image,
             (x.round() as i32, y.round() as i32),

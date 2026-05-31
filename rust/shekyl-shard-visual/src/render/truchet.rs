@@ -20,6 +20,7 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
     let line_width_base =
         ((cell_size / 6.0 * (0.6 + 1.4 * f.tier_skew_high)).round() as i32).max(2);
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_cell(
         image: &mut RgbImage,
         params: &RenderParameters,
@@ -123,6 +124,7 @@ pub fn render(params: &RenderParameters, size: u32) -> RgbImage {
     image
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_arc(
     image: &mut RgbImage,
     cx: f64,

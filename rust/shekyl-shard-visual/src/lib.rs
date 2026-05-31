@@ -5,6 +5,15 @@
 //! recipe once `ArchivalEngine` (Stage 5) lands; until then the wallet exposes
 //! fixture aggregates on the Staking tab.
 
+// Pixel compositing and feature normalization use intentional float/int casts;
+// values are aesthetic scalars, not consensus amounts.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless
+)]
+
 mod aggregate;
 mod candidate;
 mod compositor;
