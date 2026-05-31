@@ -49,6 +49,47 @@
 
 ### Documentation
 
+- **engine: seven-lens conformance pass on `PersistenceEngine` /
+  `PendingTxEngine` / `KeyEngine` trait surfaces.** Documentation-only
+  rustdoc work bringing the three trait files to the
+  `LedgerEngine`/`DaemonEngine` bar per
+  [`docs/V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md`](V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md).
+  No signatures, behavior, or implementor changes; no `#[allow]` scope
+  change beyond adding per-attribute reasons.
+  - `persistence.rs`: added the CL-1 owns-vs-deliberately-off-trait
+    framing (§2.6; hydration `open`/`create` stays on `Engine` per
+    Q9.11), the CL-2 `# Supertrait bounds` section (`Send + Sync +
+    'static` driven from the sync lifecycle via `drive_persistence`,
+    shared by `Arc`; **not** `Clone` — single-owner artifact + advisory
+    lock), the full CL-5 `# Stage-4 swap-in` section, the CL-4 C/I/P
+    triad on all six methods (including a new `save_prefs` body), and
+    per-attribute CL-6 `#[allow(dead_code)]` reasons on
+    `base_path`/`network`/`capability`. `save_prefs` is documented as
+    **not** panicking on mutex poisoning — verified against the
+    implementor, which routes through `shekyl_engine_prefs::save_prefs`
+    and never acquires the `WalletFile` mutex.
+  - `pending_tx.rs`: added the CL-4 C/I/P triad to
+    `build`/`submit`/`discard`/`signal_mempool_evicted` and `# Panics`
+    to `outstanding`, plus a module-level note on the deliberate
+    poison-handling asymmetry (mutators map `Mutex` poisoning to a
+    domain error; `outstanding` panics on it).
+  - `key.rs`: added `# Panics` to all four methods
+    (`account_public_address` lockless; `derive_subaddress` /
+    `try_claim_output` `RwLock`-poison; `sign_transaction` M3a stub does
+    not panic), reconciled `sign_transaction`'s `# Cancellation` from
+    **b** to **a** to match the §4 table (with a PR-5 reversion-clause
+    forward note), and rewrote the stale `# M3a transitional bridge`
+    section (which referenced the removed `TxInputSigningContext::source_secrets`
+    field) to state the M3a stub reality.
+  - Reconciled [`docs/V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
+    §4: `discard` `async → sync` (cancel `b → n/a`, idempotency
+    `yes → no`), added the missing `signal_mempool_evicted` row, and
+    appended the PR-5 forward trigger to the `sign_transaction` cancel
+    cell. Flipped the
+    [`docs/V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md`](V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md)
+    §2 scorecard (the three surfaces → **conformant**) with past-tensed
+    footnotes, and tracked the deferred CL-7 forward-compat audit of the
+    off-trait value/error types in `docs/FOLLOWUPS.md` (V3.0).
 - **Codify the seven engine-trait conformance lenses.** Added
   [`docs/V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md`](V3_ENGINE_TRAIT_CONFORMANCE_LENSES.md),
   which enumerates the documentation-as-contract discipline previously

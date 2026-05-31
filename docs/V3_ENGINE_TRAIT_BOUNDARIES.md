@@ -3702,7 +3702,7 @@ not the cancellation surface; the token is).
 | `KeyEngine` | `account_public_address` | sync | yes (read-only) | n/a |
 | `KeyEngine` | `derive_subaddress` | sync | yes (deterministic in `(view_secret, subaddress_index, purpose)`; pure derivation) | n/a |
 | `KeyEngine` | `try_claim_output` | async | **conditionally** — `NotMine` is fully idempotent; `Mine` re-binds the same `OutputHandle` deterministically under the M3b+ handle pathway (`handle = cSHAKE256(view_secret \|\| tx_hash \|\| output_index)`) | **b** (post-M3b workflow-internal handle-table insertion on `Mine`; deterministic handle so re-call observes the existing entry) |
-| `KeyEngine` | `sign_transaction` | async | **implementation-defined per replay-rejection contract** (Pattern-6 cluster, [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md) §7.14) — committed direction is replay-rejection at handle resolution | **a** (no observable side effect outside the returned signature material; signing-then-not-using is invisible to others) |
+| `KeyEngine` | `sign_transaction` | async | **implementation-defined per replay-rejection contract** (Pattern-6 cluster, [`STAGE_1_PR_3_KEY_ENGINE.md`](design/STAGE_1_PR_3_KEY_ENGINE.md) §7.14) — committed direction is replay-rejection at handle resolution | **a** (M3a stub is side-effect-free; even the committed signing body produces only the returned signature material, so signing-then-not-using is invisible to others). **PR-5 forward trigger:** reclassify to **b** if PR 5's signing body consumes handle-table entries as a replay-rejection side effect that is *not* enqueue-survivable. |
 | `LedgerEngine` | `synced_height` | sync | yes (read-only) | n/a |
 | `LedgerEngine` | `snapshot` | sync | yes (read-only; returns owned snapshot) | n/a |
 | `LedgerEngine` | `balance` | sync | yes (read-only) | n/a |
@@ -3710,7 +3710,8 @@ not the cancellation surface; the token is).
 | `RefreshEngine` | `produce_scan_result` | async | no (each call observes the daemon's current tip; tip advances over time) | **c** (explicit `CancellationToken` parameter; five-checkpoint cancellation per §7) |
 | `PendingTxEngine` | `build` | async | no (each build picks fresh decoys; reservation IDs are monotonic) | **b** (allocates a reservation and mutates the reservation tracker; Stage 4 drop after enqueue is observation-only) |
 | `PendingTxEngine` | `submit` | async | **conditionally** — daemon dedupes by tx hash; calling `submit` twice on the same `ReservationId` produces one mempool submission | **b** (network side effect via `DaemonEngine`; Stage 4 drop after enqueue is observation-only) |
-| `PendingTxEngine` | `discard` | async | yes (discarding an already-discarded reservation is a no-op error variant the caller can treat as success) | **b** (mutates reservation tracker) |
+| `PendingTxEngine` | `discard` | sync | no (a second `discard` of the same rid returns `ReservationNotFound`; the end state is unchanged but the return value is not a success the caller can ignore without mapping it) | n/a (synchronous `fn`; cannot be cancelled mid-call) |
+| `PendingTxEngine` | `signal_mempool_evicted` | sync | no (a second call for the same rid returns `ReservationNotFound`; end state unchanged) | n/a (synchronous `fn`; cannot be cancelled mid-call) |
 | `PendingTxEngine` | `outstanding` | sync | yes (read-only) | n/a |
 | `DaemonEngine` | `get_fee_estimates` | async | yes (read-only; fee state is a snapshot at call time) | **a** (network read; no wallet-side side effect) |
 | `DaemonEngine` | `submit_transaction` | async | **conditionally** — daemon dedupes by tx hash (same tx bytes → same submission outcome) | **b** (network side effect; daemon may receive and act on the transaction even if the wallet drops the await) |

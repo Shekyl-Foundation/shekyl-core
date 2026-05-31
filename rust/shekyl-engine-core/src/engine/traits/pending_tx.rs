@@ -32,6 +32,22 @@
 //! with mailbox-FIFO serialization; the trait surface is identical
 //! across both stages.
 //!
+//! # Poisoning-handling asymmetry (deliberate)
+//!
+//! The Stage 1 implementor handles a poisoned `Mutex<PendingTxState>`
+//! two different ways by method, and the split is intentional. The
+//! mutators (`build` / `submit` / `discard` / `signal_mempool_evicted`)
+//! map a poisoned lock to a domain error
+//! (`SendError::CannotSign`, `SubmitError::ReservationNotFound`,
+//! `PendingTxError::ReservationNotFound`) so the failure surfaces on
+//! the fallible path the caller is already handling. `outstanding` —
+//! an infallible `usize` read with no error channel — instead panics
+//! on poisoning (`.expect("pending-tx state lock poisoned")`). A
+//! poisoned lock means a prior holder panicked mid-mutation; the read
+//! cannot invent a meaningful count from torn state, so it fails
+//! loudly rather than returning a number computed from it. Each
+//! method's `# Panics` section states which disposition it takes.
+//!
 //! # Concrete-typed returns (segment-2h `Self::Error` retirement)
 //!
 //! The trait does NOT declare an associated `Error` type. The
@@ -143,6 +159,38 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     /// through monomorphization). Matches the
     /// [`RefreshEngine`](super::refresh::RefreshEngine) and
     /// [`LedgerEngine`](super::ledger::LedgerEngine) precedents.
+    ///
+    /// # Cancellation
+    ///
+    /// Class **b** per §4: `build` allocates a reservation and
+    /// mutates the (γ) tracker. The Stage 1 implementor's
+    /// `build_sync` runs fully synchronously under one
+    /// `Mutex<PendingTxState>` guard, wrapped in eager
+    /// [`std::future::ready`], so the reservation is created at call
+    /// time with no torn-state window. A future dropped/abandoned
+    /// before the returned [`PendingTx`] handle is consumed leaves a
+    /// reservation with no holder; the **R8 TTL safety-net**
+    /// (`ReservationTTLConfig`, keyed off each entry's `created_at`)
+    /// reclaims it — see [`submit`](Self::submit)'s staleness note.
+    /// At Stage 4 a drop after the message reaches the mailbox is
+    /// observation-only.
+    ///
+    /// # Idempotency
+    ///
+    /// **No** per §4: each call mints a fresh, monotonic
+    /// [`ReservationId`] and reserves inputs anew. Repeated builds do
+    /// not coalesce.
+    ///
+    /// # Panics
+    ///
+    /// **Does not panic on mutex poisoning** — the Stage 1
+    /// implementor maps a poisoned `Mutex<PendingTxState>` to
+    /// [`SendError::CannotSign`]. The only panic is the
+    /// `state.next_id` `u64`-overflow `.expect(...)`, unreachable in
+    /// practice (a single engine handle cannot mint 2⁶⁴
+    /// reservations). Contrast [`outstanding`](Self::outstanding),
+    /// which panics on poisoning; the asymmetry is deliberate (see
+    /// the module-level rustdoc).
     fn build(
         &self,
         request: TxRequest,
@@ -182,6 +230,35 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     ///
     /// Returns [`SubmitError`] for the full submit-time outcome
     /// taxonomy; see [`SubmitError`]'s rustdoc.
+    ///
+    /// # Cancellation
+    ///
+    /// Class **b** per §4: the system's network-side-effecting method
+    /// alongside `DaemonEngine::submit_transaction`. Before dispatch
+    /// the rid moves `consumer_held → in_flight`; a drop *after*
+    /// dispatch does **not** un-send — the rid stays `in_flight` and
+    /// the daemon owns resolution authority (R9). The Stage 1 body is
+    /// synchronous under eager [`std::future::ready`]; at Stage 4 a
+    /// drop after the message reaches the mailbox is observation-only.
+    ///
+    /// # Idempotency
+    ///
+    /// **Conditionally** per §4: a second `submit` on a rid already
+    /// `in_flight` returns [`SubmitError::SubmitAlreadyPending`] (P2)
+    /// rather than re-dispatching, and the daemon de-duplicates by tx
+    /// hash downstream. Caller-driven retry is therefore safe.
+    ///
+    /// # Panics
+    ///
+    /// **Does not panic on mutex poisoning** — the Stage 1
+    /// implementor maps a poisoned `Mutex<PendingTxState>` to
+    /// [`SubmitError::ReservationNotFound`]. The only panic is the
+    /// at-most-one-collection internal invariant
+    /// (`panic!("invariant: rid is in at most one of consumer_held /
+    /// in_flight")`), unreachable unless the collection-move
+    /// discipline above is violated. Contrast
+    /// [`outstanding`](Self::outstanding), which panics on poisoning;
+    /// the asymmetry is deliberate (see the module-level rustdoc).
     fn submit(&self, id: ReservationId)
         -> impl Future<Output = Result<TxHash, SubmitError>> + Send;
 
@@ -205,6 +282,32 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     ///   resolved).
     /// - [`PendingTxError::DiscardBlockedPendingDaemonAck`] if
     ///   `id` is in `in_flight` (F2 ownership-boundary rejection).
+    ///
+    /// # Cancellation
+    ///
+    /// **Not a concept** per §4: `discard` is a synchronous `fn` (not
+    /// `async`), so it cannot be cancelled mid-call. Listed as `n/a`
+    /// in the async-story table.
+    ///
+    /// # Idempotency
+    ///
+    /// **No** per §4: a second `discard` of the same rid returns
+    /// [`PendingTxError::ReservationNotFound`] (the rid left
+    /// `consumer_held` on the first call). The *end state* is
+    /// unchanged across the repeat, but the return value is not a
+    /// success — callers that treat "already gone" as success must
+    /// map [`ReservationNotFound`](PendingTxError::ReservationNotFound)
+    /// themselves.
+    ///
+    /// # Panics
+    ///
+    /// **Does not panic on mutex poisoning** — the Stage 1
+    /// implementor maps a poisoned `Mutex<PendingTxState>` to
+    /// [`PendingTxError::ReservationNotFound`]. The only panic is the
+    /// at-most-one-collection internal invariant
+    /// (`panic!("invariant: rid is in at most one of consumer_held /
+    /// in_flight")`), unreachable unless the collection-move
+    /// discipline is violated.
     fn discard(&self, id: ReservationId, reason: DiscardReason) -> Result<(), PendingTxError>;
 
     /// Signal that a previously-submitted reservation's tx has
@@ -242,6 +345,28 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     ///   `in_flight` — including rids in `consumer_held` (eviction
     ///   is meaningful only for in-flight reservations; consumer-
     ///   held reservations were never submitted to the daemon).
+    ///
+    /// # Cancellation
+    ///
+    /// **Not a concept** per §4: a synchronous `fn` (not `async`);
+    /// listed as `n/a` in the async-story table.
+    ///
+    /// # Idempotency
+    ///
+    /// **No** per §4: a second call for the same rid returns
+    /// [`PendingTxError::ReservationNotFound`] (the rid left
+    /// `in_flight` on the first call). The end state is unchanged
+    /// across the repeat.
+    ///
+    /// # Panics
+    ///
+    /// **Does not panic.** The Stage 1 implementor maps a poisoned
+    /// `Mutex<PendingTxState>` to
+    /// [`PendingTxError::ReservationNotFound`] and otherwise returns a
+    /// domain error for a missing rid; there is no `panic!` or
+    /// poisoning-`expect` on this path (eviction targets `in_flight`
+    /// only, so it has no at-most-one collection-move branch to
+    /// assert).
     #[allow(dead_code)] // V3.x mempool-eviction surface; no production caller at C6.
     fn signal_mempool_evicted(&self, rid: ReservationId) -> Result<(), PendingTxError>;
 
@@ -258,5 +383,16 @@ pub(crate) trait PendingTxEngine: Send + Sync + 'static {
     /// **Yes**: a snapshot read of the current `consumer_held +
     /// in_flight` cardinality. Repeated calls observe whatever
     /// value the last mutating call left in place.
+    ///
+    /// # Panics
+    ///
+    /// The Stage 1 implementor panics on mutex poisoning
+    /// (`.expect("pending-tx state lock poisoned")`). This is the
+    /// **one** method that genuinely panics on poisoning — the
+    /// mutators ([`build`](Self::build), [`submit`](Self::submit),
+    /// [`discard`](Self::discard),
+    /// [`signal_mempool_evicted`](Self::signal_mempool_evicted)) map
+    /// poisoning to a domain error instead. The asymmetry is
+    /// deliberate; see the module-level rustdoc.
     fn outstanding(&self) -> usize;
 }
