@@ -376,6 +376,54 @@ impl Drop for AuditSubaddressSecret {
 
 impl ZeroizeOnDrop for AuditSubaddressSecret {}
 
+/// Construction-time view-secret projection for the **merge post-pass**
+/// (§6 option 6-i). `Engine::apply_scan_result` (`merge.rs`) must derive the
+/// deterministic per-output `OutputHandle` from the wallet's view secret, but
+/// after Stage 2 the full [`AllKeysBlob`] lives only in the [`KeyActor`] task —
+/// no `&AllKeysBlob` is reachable from the synchronous, `RwLock`-write-guarded
+/// merge path. Routing the post-pass through the actor (6-ii) would await an
+/// `ask` inside that guard (the forbidden pattern, §6); it is foreclosed until
+/// the Ledger actor lands (§8.1). So the merge owner holds this narrow
+/// projection instead.
+///
+/// **Distinct type by intent.** It carries *only* the view-secret canonical
+/// bytes the handle-derivation needs — narrower than
+/// [`ViewMaterial`](super::view_material::ViewMaterial) (a five-field
+/// view-and-spend bundle for refresh scanning) and distinct from it and from
+/// [`AuditSubaddressSecret`], so the type system forbids the "it's just a view
+/// secret, I'll clone/reuse it" mistake. Non-`Clone`, no `Debug`, wipe-on-drop.
+#[derive(Zeroize)]
+#[allow(dead_code)] // read by `Engine::apply_scan_result`; today exercised by tests only.
+pub(crate) struct HandleDerivationViewSecret {
+    /// View secret `view_sk` canonical bytes, fed to `populate_engine_handle_fields`.
+    view_sk: Zeroizing<[u8; 32]>,
+}
+
+impl HandleDerivationViewSecret {
+    /// Project the merge view-secret out of `&keys` at construction time,
+    /// before the blob is consumed by [`KeyEngineHandle::spawn`].
+    #[allow(dead_code)] // constructed in `assemble`; today exercised by tests only.
+    pub(crate) fn from_keys(keys: &AllKeysBlob) -> Self {
+        Self {
+            view_sk: Zeroizing::new(*keys.view_sk.as_canonical_bytes()),
+        }
+    }
+
+    /// Borrow the view-secret canonical bytes for handle derivation.
+    #[allow(dead_code)] // read by `Engine::apply_scan_result`; today: tests only.
+    pub(crate) fn as_canonical_bytes(&self) -> &[u8; 32] {
+        &self.view_sk
+    }
+}
+
+impl Drop for HandleDerivationViewSecret {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for HandleDerivationViewSecret {}
+
 // ---------------------------------------------------------------------------
 // Handle
 // ---------------------------------------------------------------------------

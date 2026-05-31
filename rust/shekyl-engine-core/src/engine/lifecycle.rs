@@ -712,15 +712,31 @@ impl Engine<SoloSigner> {
             file.effective_skip_to_height(),
             file.effective_refresh_from_block_height(),
         );
+        // §6 step 3(a): derive the merge-path view-secret projection from the
+        // owned blob *while it is still borrowable* — before `KeyActor::spawn`
+        // consumes it below. This is the (6-i) construction-time projection;
+        // the full blob then lives only in the actor.
+        let merge_view_secret = super::key_actor::HandleDerivationViewSecret::from_keys(&keys);
         let refresh = std::sync::Arc::new(super::local_refresh::LocalRefresh::new(
             view_material,
             scan_start_floor,
         ));
 
-        let keys = std::sync::Arc::new(keys);
+        // §6 step 3(b): spawn the `KeyActor`, which takes the `AllKeysBlob` by
+        // value. After this point no `&AllKeysBlob` is reachable from the
+        // orchestrator — every public read resolves from the handle's
+        // construction-time projections, and every secret-touching op routes
+        // through the actor's message protocol (§4.1–4.2). The spawn uses the
+        // ambient runtime if one exists, else hosts an engine-owned runtime
+        // (§4.2 ambient-or-owned disposition). `merge_view_secret` was derived
+        // above (step 3(a)) before this consuming spawn.
+        let key = super::key_actor::KeyEngineHandle::spawn(keys);
         let ledger = std::sync::Arc::new(super::local_ledger::LocalLedger::new(ledger, indexes));
         let pending = super::LocalPendingTx::new(
-            std::sync::Arc::new(super::LocalSigner::new(std::sync::Arc::clone(&keys))),
+            // §6 step 4: the signer no longer holds `Arc<AllKeysBlob>`; it
+            // carries a `KeyEngineHandle` clone and the future signing path
+            // routes through the actor's `SignTransaction` message.
+            std::sync::Arc::new(super::LocalSigner::new(key.clone())),
             super::WalletGreedyOutputSelector,
             super::DaemonFeeEstimator,
             std::sync::Arc::clone(&ledger),
@@ -747,7 +763,8 @@ impl Engine<SoloSigner> {
             persistence: file,
             state_wrap_key,
             prefs_hmac_key,
-            keys,
+            key,
+            merge_view_secret,
             ledger,
             pending,
             prefs,
@@ -871,7 +888,8 @@ impl<
             persistence,
             state_wrap_key,
             prefs_hmac_key,
-            keys,
+            key,
+            merge_view_secret,
             ledger,
             pending,
             prefs,
@@ -887,7 +905,8 @@ impl<
             persistence,
             state_wrap_key,
             prefs_hmac_key,
-            keys,
+            key,
+            merge_view_secret,
             ledger,
             pending,
             prefs,

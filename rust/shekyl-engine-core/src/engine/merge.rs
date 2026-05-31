@@ -217,7 +217,7 @@ impl<
         // PERF_MERGE_INSERTION_INDICES_PREFLIGHT.md §1.
         populate_engine_handle_fields(
             &mut state.ledger.ledger,
-            self.keys.view_sk.as_canonical_bytes(),
+            self.merge_view_secret.as_canonical_bytes(),
             &detection_residue,
             &inserted,
         );

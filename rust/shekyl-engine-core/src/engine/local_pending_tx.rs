@@ -943,13 +943,14 @@ mod tests {
         AmbiguousErrorKind, PendingTxError, SubmitError, TerminalErrorKind,
     };
     use crate::engine::fee_estimator::DaemonFeeEstimator;
+    use crate::engine::key_actor::KeyEngineHandle;
     use crate::engine::output_selector::WalletGreedyOutputSelector;
     use crate::engine::pending::{FeePriority, TxRecipient, STUB_FEE_ATOMIC_UNITS};
     use crate::engine::signer::LocalSigner;
     use crate::engine::traits::PendingTxEngine;
     use crate::engine::LocalLedger;
     use shekyl_crypto_pq::account::{
-        rederive_account, AllKeysBlob, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
+        rederive_account, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
     };
     use shekyl_scanner::RecoveredWalletOutput;
 
@@ -968,15 +969,20 @@ mod tests {
         seed
     };
 
-    fn test_keys() -> Arc<AllKeysBlob> {
-        Arc::new(
-            rederive_account(
-                &PENDING_TX_TEST_MASTER_SEED,
-                DerivationNetwork::Fakechain,
-                SeedFormat::Raw32,
-            )
-            .expect("rederive_account against fakechain raw32 seed"),
+    /// Spawn a `KeyActor` over a deterministic test blob and return its
+    /// handle. Stage-2 replacement for the old `test_keys() ->
+    /// Arc<AllKeysBlob>` helper: `LocalSigner` now holds a
+    /// [`KeyEngineHandle`], not the blob (`STAGE_2_KEY_ENGINE_ACTOR.md`
+    /// §6 step 4). These are plain `#[test]`s with no ambient runtime,
+    /// so the spawn takes the engine-owned-runtime path (§4.2).
+    fn test_signer_handle() -> KeyEngineHandle {
+        let blob = rederive_account(
+            &PENDING_TX_TEST_MASTER_SEED,
+            DerivationNetwork::Fakechain,
+            SeedFormat::Raw32,
         )
+        .expect("rederive_account against fakechain raw32 seed");
+        KeyEngineHandle::spawn(blob)
     }
 
     fn test_ledger() -> LocalLedger {
@@ -987,9 +993,9 @@ mod tests {
     /// initializes to the (γ) empty-collections baseline.
     #[test]
     fn local_pending_tx_new_constructs() {
-        let keys = test_keys();
+        let key = test_signer_handle();
         let pending = LocalPendingTx::new(
-            Arc::new(LocalSigner::new(keys)),
+            Arc::new(LocalSigner::new(key)),
             WalletGreedyOutputSelector,
             DaemonFeeEstimator,
             Arc::new(test_ledger()),
@@ -1074,7 +1080,7 @@ mod tests {
     ) -> LocalPendingTx<LocalSigner, WalletGreedyOutputSelector, DaemonFeeEstimator, LocalLedger>
     {
         LocalPendingTx::new(
-            Arc::new(LocalSigner::new(test_keys())),
+            Arc::new(LocalSigner::new(test_signer_handle())),
             WalletGreedyOutputSelector,
             DaemonFeeEstimator,
             ledger,
@@ -1090,7 +1096,7 @@ mod tests {
     ) -> LocalPendingTx<LocalSigner, WalletGreedyOutputSelector, DaemonFeeEstimator, LocalLedger>
     {
         LocalPendingTx::new(
-            Arc::new(LocalSigner::new(test_keys())),
+            Arc::new(LocalSigner::new(test_signer_handle())),
             WalletGreedyOutputSelector,
             DaemonFeeEstimator,
             ledger,
