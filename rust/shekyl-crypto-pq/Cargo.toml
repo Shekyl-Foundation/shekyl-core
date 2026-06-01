@@ -14,7 +14,13 @@ rand = "0.8"
 rand_chacha = "0.3"
 helioselene = { path = "../shekyl-oxide/crypto/helioselene" }
 ciphersuite = "0.4"
-curve25519-dalek = "4"
+# `zeroize` feature gates `impl Zeroize for Scalar` (verified at source:
+# curve25519-dalek-4.1.3 `src/scalar.rs:555` `#[cfg(feature = "zeroize")]`).
+# Required so secret-derived `Scalar` locals in `output.rs::scan_output_recover`
+# (the view scalar, per-output `ho`/`y`/`z`) can be `Zeroizing`-wrapped and wiped
+# on every exit path. Without the feature `Scalar: Zeroize` does not exist and
+# the secrets are guaranteed-resident on the stack.
+curve25519-dalek = { version = "4", features = ["zeroize"] }
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 fips204 = "0.4.6"

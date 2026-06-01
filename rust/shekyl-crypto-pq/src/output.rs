@@ -597,7 +597,15 @@ pub fn scan_output_recover(
     output_index: u64,
 ) -> Result<RecoveredOutput, CryptoError> {
     // --- X25519 view tag pre-filter ---
-    let view_scalar = Scalar::from_bytes_mod_order(*x25519_sk);
+    //
+    // `view_scalar` is the view secret in Ed25519-scalar form, reconstructed on
+    // every output iteration; `x25519_raw_ss` is the raw ECDH shared secret.
+    // Both are `Zeroizing` so they wipe on every exit path — including the early
+    // view-tag / decap / commitment `Err` returns below. `curve25519-dalek`'s
+    // `Scalar` and `MontgomeryPoint` impl `Zeroize` (the `zeroize` feature,
+    // enabled in this crate's `Cargo.toml`) but not `ZeroizeOnDrop`, so the
+    // `Zeroizing` wrapper is what actually wipes them at scope end.
+    let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*x25519_sk));
     let eph_mont = MontgomeryPoint(*kem_ct_x25519);
 
     // kem_ct_x25519 arrives from tx_extra on a network transaction — attacker-controlled.
@@ -609,7 +617,7 @@ pub fn scan_output_recover(
     // View secret is an Ed25519 scalar already reduced mod l; clamping would mutate it
     // and desynchronize from sender-side derivation. Low-order points are rejected above.
     // Constant-time: curve25519-dalek scalar * MontgomeryPoint is always constant-time.
-    let x25519_raw_ss = view_scalar * eph_mont;
+    let x25519_raw_ss = Zeroizing::new(*view_scalar * eph_mont);
 
     let expected_view_tag = derive_view_tag_x25519(&x25519_raw_ss.0, output_index);
     if expected_view_tag != view_tag_on_chain {
@@ -641,30 +649,43 @@ pub fn scan_output_recover(
     }
 
     // --- Amount decryption ---
-    let mut amount_le = [0u8; 8];
+    // `amount_le` is the decrypted cleartext amount — a secret; `Zeroizing` wipes
+    // it on drop. (The `u64` `amount` is moved into the returned `RecoveredOutput`,
+    // whose own zeroization covers the copy that lives there.)
+    let mut amount_le = Zeroizing::new([0u8; 8]);
     for i in 0..8 {
         amount_le[i] = enc_amount[i] ^ secrets.k_amount[i];
     }
-    let amount = u64::from_le_bytes(amount_le);
+    let amount = u64::from_le_bytes(*amount_le);
 
     // --- Recover spend key: B' = O - ho*G - y*T ---
     let o_point = CompressedEdwardsY(*output_key)
         .decompress()
         .ok_or_else(|| CryptoError::DecapsulationFailed("invalid output key point".into()))?;
 
-    let ho: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.ho))
-        .expect("ho from wide_reduce is always canonical");
-    let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.y))
-        .expect("y from wide_reduce is always canonical");
-    let z_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.z))
-        .expect("z from wide_reduce is always canonical");
+    // `ho`, `y`, `z` are per-output secret scalars derived from the combined
+    // shared secret; `Zeroizing` wipes their limbs on drop. `curve25519-dalek`'s
+    // `Scalar` is `Zeroize` but not `ZeroizeOnDrop`, so the bare locals would
+    // otherwise be left resident on the stack on every exit path.
+    let ho: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.ho))
+            .expect("ho from wide_reduce is always canonical"),
+    );
+    let y_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.y))
+            .expect("y from wide_reduce is always canonical"),
+    );
+    let z_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.z))
+            .expect("z from wide_reduce is always canonical"),
+    );
 
-    let recovered_b = o_point - (G * ho) - (*T * y_scalar);
+    let recovered_b = o_point - (G * *ho) - (*T * *y_scalar);
     let recovered_spend_key = recovered_b.compress().to_bytes();
 
     // --- Commitment verification: C == z*G + amount*H ---
     let amount_scalar = Scalar::from(amount);
-    let expected_c = (G * z_scalar) + (*H * amount_scalar);
+    let expected_c = (G * *z_scalar) + (*H * amount_scalar);
     if expected_c.compress().to_bytes() != *commitment {
         return Err(CryptoError::DecapsulationFailed(
             "commitment mismatch — amount or mask corrupted".into(),
