@@ -1257,103 +1257,127 @@ namespace {
 
 bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins,
                                  const account_public_address& miner_address, transaction& tx, uint64_t fee,
-                                 uint8_t hf_version/* = 1*/, keypair* p_txkey/* = 0*/)
+                                 uint8_t hf_version/* = 1*/, keypair* p_txkey/* = 0*/,
+                                 size_t median_block_weight/* = 0*/, size_t txs_weight/* = 0*/)
 {
-  tx.vin.clear();
-  tx.vout.clear();
-  tx.extra.clear();
-  tx.rct_signatures = {};
-
-  keypair txkey = keypair::generate(hw::get_device("default"));
-  add_tx_pub_key_to_extra(tx, txkey.pub);
-  if (!sort_tx_extra(tx.extra, tx.extra))
-    return false;
-
-  if (p_txkey)
-    *p_txkey = txkey;
-
-  txin_gen in;
-  in.height = height;
-
-  uint64_t block_reward;
-  if (!get_block_reward(0, 0, already_generated_coins, block_reward, hf_version, 0))
-    return false;
-
-  shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, 0, hf_version);
-  block_reward = em_split.miner_emission;
-
-  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, 0, 0, hf_version);
-  block_reward += burn.miner_fee_income;
-
   CHECK_AND_ASSERT_MES(miner_address.m_pqc_public_key.size() == SHEKYL_PQC_PUBLIC_KEY_BYTES, false,
     "construct_miner_tx_manually: miner PQC public key size "
     << miner_address.m_pqc_public_key.size() << " != " << SHEKYL_PQC_PUBLIC_KEY_BYTES);
+
+  keypair txkey = keypair::generate(hw::get_device("default"));
+  if (p_txkey)
+    *p_txkey = txkey;
 
   const uint8_t* pk_x25519 = miner_address.m_pqc_public_key.data();
   const uint8_t* pk_ml_kem = miner_address.m_pqc_public_key.data() + SHEKYL_X25519_PK_BYTES;
   const size_t pk_ml_kem_len = miner_address.m_pqc_public_key.size() - SHEKYL_X25519_PK_BYTES;
 
-  tx_extra_pqc_kem_ciphertext kem_field;
-  kem_field.blob.reserve(HYBRID_KEM_CT_BYTES);
-  tx_extra_pqc_leaf_hashes leaf_hash_field;
-  leaf_hash_field.blob.reserve(PQC_LEAF_HASH_BYTES);
-
-  tx.rct_signatures.outPk.resize(1);
-  tx.rct_signatures.enc_amounts.resize(1);
-
-  ShekylOutputData od = shekyl_construct_output(
-    reinterpret_cast<const uint8_t*>(&txkey.sec),
-    pk_x25519, pk_ml_kem, pk_ml_kem_len,
-    reinterpret_cast<const uint8_t*>(&miner_address.m_spend_public_key),
-    block_reward, 0);
-  CHECK_AND_ASSERT_MES(od.success, false, "shekyl_construct_output failed for manual coinbase");
-
-  crypto::public_key out_key;
-  memcpy(out_key.data, od.output_key, 32);
-  crypto::view_tag vt;
-  vt.data = od.view_tag_x25519;
-
-  tx_out out;
-  cryptonote::set_tx_out(block_reward, out_key, true, vt, out);
-  tx.vout.push_back(out);
-
-  memcpy(tx.rct_signatures.outPk[0].mask.bytes, od.commitment, 32);
-  memcpy(tx.rct_signatures.enc_amounts[0].data(), od.enc_amount, 8);
-  tx.rct_signatures.enc_amounts[0][8] = od.amount_tag;
-
-  kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
-  if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
-    kem_field.blob.append(
-      reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
-      od.kem_ciphertext_ml_kem.len);
-  leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.h_pqc), PQC_LEAF_HASH_BYTES);
-
-  ShekylOutputData tmp = od;
-  shekyl_output_data_free(&tmp);
-
+  size_t target_block_weight = txs_weight;
+  while (true)
   {
-    std::ostringstream oss;
-    binary_archive<true> oar(oss);
-    tx_extra_field variant_field = kem_field;
-    if (!::do_serialize(oar, variant_field)) return false;
-    std::string blob = oss.str();
-    tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
-  }
-  {
-    std::ostringstream oss;
-    binary_archive<true> oar(oss);
-    tx_extra_field variant_field = leaf_hash_field;
-    if (!::do_serialize(oar, variant_field)) return false;
-    std::string blob = oss.str();
-    tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
-  }
-  if (!sort_tx_extra(tx.extra, tx.extra))
-    return false;
+    tx.vin.clear();
+    tx.vout.clear();
+    tx.extra.clear();
+    tx.rct_signatures = {};
 
-  tx.version = 3;
-  tx.unlock_time = height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
-  tx.vin.push_back(in);
-  tx.invalidate_hashes();
+    add_tx_pub_key_to_extra(tx, txkey.pub);
+    if (!sort_tx_extra(tx.extra, tx.extra))
+      return false;
+
+    txin_gen in;
+    in.height = height;
+
+    uint64_t block_reward;
+    if (!get_block_reward(median_block_weight, target_block_weight, already_generated_coins, block_reward, hf_version, 0))
+      return false;
+
+    shekyl::EmissionSplit em_split = shekyl::compute_emission_split(block_reward, height, 0, hf_version);
+    block_reward = em_split.miner_emission;
+
+    shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, 0, 0, 0, hf_version);
+    block_reward += burn.miner_fee_income;
+
+    tx_extra_pqc_kem_ciphertext kem_field;
+    kem_field.blob.reserve(HYBRID_KEM_CT_BYTES);
+    tx_extra_pqc_leaf_hashes leaf_hash_field;
+    leaf_hash_field.blob.reserve(PQC_LEAF_HASH_BYTES);
+
+    tx.rct_signatures.outPk.resize(1);
+    tx.rct_signatures.enc_amounts.resize(1);
+    tx.rct_signatures.enc_labels.resize(1);
+
+    ShekylOutputData od = shekyl_construct_output(
+      reinterpret_cast<const uint8_t*>(&txkey.sec),
+      pk_x25519, pk_ml_kem, pk_ml_kem_len,
+      reinterpret_cast<const uint8_t*>(&miner_address.m_spend_public_key),
+      block_reward, 0);
+    CHECK_AND_ASSERT_MES(od.success, false, "shekyl_construct_output failed for manual coinbase");
+
+    crypto::public_key out_key;
+    memcpy(out_key.data, od.output_key, 32);
+    crypto::view_tag vt;
+    vt.data = od.view_tag_x25519;
+
+    tx_out out;
+    cryptonote::set_tx_out(block_reward, out_key, true, vt, out);
+    tx.vout.push_back(out);
+
+    memcpy(tx.rct_signatures.outPk[0].mask.bytes, od.commitment, 32);
+    memcpy(tx.rct_signatures.enc_amounts[0].data(), od.enc_amount, 8);
+    tx.rct_signatures.enc_amounts[0][8] = od.amount_tag;
+    memcpy(tx.rct_signatures.enc_labels[0].data(), od.enc_label, 8);
+    tx.rct_signatures.enc_labels[0][8] = od.label_tag;
+
+    kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
+    if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
+      kem_field.blob.append(
+        reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
+        od.kem_ciphertext_ml_kem.len);
+    leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.h_pqc), PQC_LEAF_HASH_BYTES);
+
+    ShekylOutputData tmp = od;
+    shekyl_output_data_free(&tmp);
+
+    {
+      std::ostringstream oss;
+      binary_archive<true> oar(oss);
+      tx_extra_field variant_field = kem_field;
+      if (!::do_serialize(oar, variant_field)) return false;
+      std::string blob = oss.str();
+      tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+    }
+    {
+      std::ostringstream oss;
+      binary_archive<true> oar(oss);
+      tx_extra_field variant_field = leaf_hash_field;
+      if (!::do_serialize(oar, variant_field)) return false;
+      std::string blob = oss.str();
+      tx.extra.insert(tx.extra.end(), blob.begin(), blob.end());
+    }
+    if (!sort_tx_extra(tx.extra, tx.extra))
+      return false;
+
+    tx.version = 3;
+    tx.unlock_time = height + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW;
+    tx.vin.push_back(in);
+    tx.invalidate_hashes();
+
+    const size_t actual_block_weight = txs_weight + get_transaction_weight(tx);
+    if (target_block_weight < actual_block_weight)
+      target_block_weight = actual_block_weight;
+    else if (actual_block_weight < target_block_weight)
+    {
+      const size_t delta = target_block_weight - actual_block_weight;
+      tx.extra.resize(tx.extra.size() + delta, 0);
+      const size_t adjusted = txs_weight + get_transaction_weight(tx);
+      if (adjusted == target_block_weight)
+        break;
+      CHECK_AND_ASSERT_MES(target_block_weight < adjusted, false, "Unexpected block size");
+      target_block_weight += adjusted - target_block_weight;
+    }
+    else
+      break;
+  }
 
   return true;
 }
@@ -1395,6 +1419,11 @@ bool append_v3_output_to_miner_tx(transaction& tx, const crypto::secret_key& txk
   memcpy(enc_amt.data(), od.enc_amount, 8);
   enc_amt[8] = od.amount_tag;
   tx.rct_signatures.enc_amounts.push_back(enc_amt);
+
+  std::array<uint8_t, 9> enc_label{};
+  memcpy(enc_label.data(), od.enc_label, 8);
+  enc_label[8] = od.label_tag;
+  tx.rct_signatures.enc_labels.push_back(enc_label);
 
   std::vector<tx_extra_field> extra_fields;
   CHECK_AND_ASSERT_MES(parse_tx_extra(tx.extra, extra_fields), false, "failed to parse tx.extra");

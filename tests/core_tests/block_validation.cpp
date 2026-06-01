@@ -363,6 +363,9 @@ bool gen_block_miner_tx_has_no_out::generate(std::vector<test_event_entry>& even
   miner_tx.vout.clear();
   miner_tx.rct_signatures.outPk.clear();
   miner_tx.rct_signatures.enc_amounts.clear();
+  miner_tx.rct_signatures.enc_labels.clear();
+  miner_tx.extra.clear();
+  miner_tx.invalidate_hashes();
 
   block blk_1;
   generator.construct_block_manually(blk_1, blk_0, miner_account, test_generator::bf_miner_tx, 0, 0, 0, crypto::hash(), 0, miner_tx);
@@ -426,6 +429,7 @@ bool gen_block_is_too_big::generate(std::vector<test_event_entry>& events) const
   miner_tx.vout.clear();
   miner_tx.rct_signatures.outPk.clear();
   miner_tx.rct_signatures.enc_amounts.clear();
+  miner_tx.rct_signatures.enc_labels.clear();
   for (size_t i = 0; i < tx_out_count; ++i)
   {
     tx_out o;
@@ -434,6 +438,7 @@ bool gen_block_is_too_big::generate(std::vector<test_event_entry>& events) const
     miner_tx.vout.push_back(o);
     miner_tx.rct_signatures.outPk.push_back({});
     miner_tx.rct_signatures.enc_amounts.push_back({});
+    miner_tx.rct_signatures.enc_labels.push_back({});
   }
   if (0 < remainder)
   {
@@ -443,6 +448,7 @@ bool gen_block_is_too_big::generate(std::vector<test_event_entry>& events) const
     miner_tx.vout.push_back(o);
     miner_tx.rct_signatures.outPk.push_back({});
     miner_tx.rct_signatures.enc_amounts.push_back({});
+    miner_tx.rct_signatures.enc_labels.push_back({});
   }
 
   block blk_1;
