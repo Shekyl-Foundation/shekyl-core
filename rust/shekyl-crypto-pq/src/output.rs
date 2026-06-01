@@ -536,6 +536,28 @@ pub fn scan_output(
 /// recovered spend key B' = O - ho*G - y*T (for subaddress lookup).
 /// Does NOT verify the spend key — caller must look up B' in a subaddress
 /// table and decide ownership.
+///
+/// # Zeroization
+///
+/// `#[derive(ZeroizeOnDrop)]` wipes **every** field on drop with no
+/// per-field enumeration. This is deliberate, and replaces a hand-written
+/// `Zeroize` that silently omitted `recovered_spend_key`, `amount`,
+/// `amount_tag`, `pqc_public_key`, and `h_pqc` — the exact maintenance
+/// landmine the derive macro exists to prevent (a field added later is
+/// wiped automatically, and a non-`Zeroize` field is a compile error
+/// rather than a silent leak).
+///
+/// The field set spans three secrecy classes and the derive wipes all of
+/// them:
+/// - **Secrets:** `ho`, `y`, `z`, `k_amount`, `combined_ss`,
+///   `pqc_secret_key`, and `amount` (the decrypted cleartext amount).
+/// - **Privacy-linkable artifacts:** `recovered_spend_key` (the per-wallet,
+///   per-subaddress spend point B') and `h_pqc` — public-ish but a wallet
+///   fingerprint if they linger in a core dump or swap.
+/// - **Public:** `pqc_public_key`, `amount_tag` — wiped too, because the
+///   cost is nil and wiping unconditionally removes the "is this field
+///   secret?" judgment from an editable function body.
+#[derive(ZeroizeOnDrop)]
 pub struct RecoveredOutput {
     pub ho: [u8; 32],
     pub y: [u8; 32],
@@ -548,18 +570,6 @@ pub struct RecoveredOutput {
     pub pqc_public_key: Vec<u8>,
     pub pqc_secret_key: Vec<u8>,
     pub h_pqc: [u8; 32],
-}
-
-impl ZeroizeOnDrop for RecoveredOutput {}
-impl Zeroize for RecoveredOutput {
-    fn zeroize(&mut self) {
-        self.ho.zeroize();
-        self.y.zeroize();
-        self.z.zeroize();
-        self.k_amount.zeroize();
-        self.combined_ss.zeroize();
-        self.pqc_secret_key.zeroize();
-    }
 }
 
 // CLIPPY: omitted fields are secrets intentionally redacted for safe debug output.
