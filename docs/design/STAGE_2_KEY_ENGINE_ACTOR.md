@@ -1023,12 +1023,20 @@ threads onto one simulated core), so there is no iai actor sibling — a
 reasoned, reversion-claused deviation from the criterion+iai pairing
 discipline (reopen if a deterministic async-dispatch measurement method
 lands). Only the deterministic-crypto baseline and the synchronous
-merge-path projection get iai siblings. Frozen baselines are captured at
+merge-path projection get iai siblings. The baseline iai drives its
+single (synchronously-completing) `try_claim_output` future with a
+**no-op-waker poll**, not a Tokio `block_on`: a current-thread `block_on`
+under Callgrind did not drive the future body to completion (it collapsed
+the count to ≈4.8k runtime-handshake instructions instead of the ≈15M
+decap), so the bench polls once and asserts `Ready` — zero runtime noise
+in the deterministic count. Frozen baselines are captured at
 this PR's merge SHA via CI `workflow_dispatch`; placeholder sections live
 in [`docs/PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md). Local
-smoke runs (`--sample-size 10`): actor-mine/baseline ≈ 1.04 (inside the
-5% envelope); merge projection ≈ 1.3 µs/output over a 256-output batch
-(negligible — corroborates the eager-6-i / §8.1-6-ii-deferred disposition).
+smoke runs: actor-mine/baseline ≈ 1.04 wall-clock (`--sample-size 10`,
+inside the 5% envelope); baseline iai ≈ 15.16 M instructions
+(ML-KEM-768-dominated); merge projection ≈ 1.3 µs/output over a
+256-output batch (negligible — corroborates the eager-6-i /
+§8.1-6-ii-deferred disposition).
 
 The DoD's "within 5% of the composition baseline" is **bench-vs-bench against
 a measured baseline**, not an absolute latency gate. Because signing does not

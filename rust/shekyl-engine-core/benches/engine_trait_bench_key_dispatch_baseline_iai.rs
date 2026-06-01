@@ -22,11 +22,15 @@
 //! [`KeyBaselineBenchFixture`] holds just the `LocalKeys` and a prebuilt
 //! `Mine` input — no `KeyEngineHandle`, no spawned `KeyActor` — so it
 //! constructs without an ambient multi-thread runtime, and the Callgrind
-//! run never simulates one. The single async call is driven by a leaked
-//! **current-thread** runtime; `LocalKeys::try_claim_output` completes
-//! synchronously inside its future (per `local_keys.rs`), so
-//! `block_on`-of-an-immediately-`Ready`-future contributes only a small
-//! constant, leaving the count dominated by the ML-KEM-768 decap.
+//! run never simulates one. The single async call is driven by a
+//! **no-op-waker poll** (see `poll_ready` below), not a Tokio
+//! `block_on`: `LocalKeys::try_claim_output` completes inside its first
+//! poll (per `local_keys.rs`), so one `poll` returns `Ready` and the
+//! count is exactly the ML-KEM-768 decap + HKDF + key-image work with no
+//! runtime machinery folded in. A current-thread Tokio `block_on` was
+//! tried first and rejected — under Callgrind it did not drive the body
+//! to completion, collapsing the count to ≈4.8k handshake instructions
+//! rather than the ≈15M decap.
 //!
 //! # Workload class
 //!
@@ -55,24 +59,47 @@
 //! the 64-byte cutoff). `teardown = drop_key_baseline_fixture` lifts the
 //! `LocalKeys` zeroize-on-drop out of the measured region (symmetry rule).
 
+use std::future::Future;
 use std::hint::black_box;
+use std::pin::pin;
+use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 use iai_callgrind::{library_benchmark, library_benchmark_group, main};
 use shekyl_engine_core::__bench_internals::{
     build_key_baseline_fixture, drop_key_baseline_fixture, KeyBaselineBenchFixture,
 };
 
-/// Leaked current-thread runtime that drives the single synchronously-
-/// completing `claim_mine` future. Current-thread (not multi-thread) so
-/// no worker threads exist for Valgrind to serialize; its `block_on`
-/// overhead for a `Ready` future is a small constant.
-fn baseline_runtime() -> &'static tokio::runtime::Runtime {
-    static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
-    RT.get_or_init(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .expect("build current-thread tokio runtime for baseline iai bench")
-    })
+/// Drive a synchronously-completing future to its value with a no-op
+/// waker — no Tokio runtime in the measured region.
+///
+/// `LocalKeys::try_claim_output` is `async` for Stage-4 trait-surface
+/// flexibility but completes inside the first poll (per `local_keys.rs`).
+/// A Tokio `block_on` would either (a) fold reactor/scheduler machinery
+/// into the Callgrind count, or (b) — as observed for a current-thread
+/// runtime — fail to drive the body to completion under Callgrind,
+/// collapsing the measured count to the runtime-handshake instructions
+/// only (≈4.8k) instead of the ML-KEM-768 decap (millions). Polling with
+/// a no-op waker is the honest deterministic-crypto measurement: one
+/// poll, asserted `Ready`, zero runtime noise.
+fn poll_ready<F: Future>(fut: F) -> F::Output {
+    const VTABLE: RawWakerVTable = RawWakerVTable::new(
+        |_| RawWaker::new(std::ptr::null(), &VTABLE),
+        |_| {},
+        |_| {},
+        |_| {},
+    );
+    // SAFETY: the vtable's clone/wake/wake_by_ref/drop are all no-ops over
+    // a null data pointer, so the waker is never dereferenced; it satisfies
+    // the `RawWaker` contract trivially.
+    let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
+    let mut cx = Context::from_waker(&waker);
+    match pin!(fut).poll(&mut cx) {
+        Poll::Ready(v) => v,
+        Poll::Pending => {
+            panic!("baseline iai bench future did not complete in one poll; \
+                    LocalKeys::try_claim_output is expected to be synchronous")
+        }
+    }
 }
 
 #[library_benchmark]
@@ -83,8 +110,7 @@ fn baseline_runtime() -> &'static tokio::runtime::Runtime {
 fn engine_trait_bench_key_dispatch_baseline_claim_mine(
     fixture: Box<KeyBaselineBenchFixture>,
 ) -> Box<KeyBaselineBenchFixture> {
-    let rt = baseline_runtime();
-    black_box(rt.block_on(async { fixture.claim_mine().await }));
+    black_box(poll_ready(fixture.claim_mine()));
     fixture
 }
 

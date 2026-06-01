@@ -514,9 +514,15 @@ deferred to CI `workflow_dispatch` capture at the PR's merge SHA (per
 This is the iai-callgrind sibling for the B9 **composition baseline**
 only (`LocalKeys::try_claim_output` over a `Mine` output), driven via an
 actor-free fixture (`KeyBaselineBenchFixture` — no spawned `KeyActor`,
-so no multi-thread runtime under Callgrind) and a leaked current-thread
-runtime whose `block_on`-of-a-`Ready`-future overhead is a small
-constant.
+so no multi-thread runtime under Callgrind). The single async call is
+driven by a **no-op-waker poll** (`std::task::Waker` over a null vtable),
+not a Tokio `block_on`: `LocalKeys::try_claim_output` completes inside
+its first poll, so one `poll` returns `Ready` and the count is exactly
+the crypto work with zero runtime machinery folded in. A current-thread
+Tokio `block_on` was tried first and rejected — under Callgrind it did
+**not** drive the future body to completion, collapsing the measured
+count to ≈4.8k runtime-handshake instructions instead of the real decap;
+the no-op-waker poll is both correct and cleaner.
 
 **Workload class:** Crypto-bound, allocation-present (confirmed at
 authoring per §4.4 checklist item 5). A full hybrid ML-KEM-768
@@ -525,6 +531,11 @@ decapsulation + HKDF expansion + key-image scalar-mult; expected
 §4.4 hoisting caveat does not apply. This is the stable regression
 signal for the baseline crypto cost; the criterion ratio above carries
 the B9 envelope check.
+
+*Local iai sanity observation (not the frozen baseline; smoke run on the
+authoring host): `instructions` ≈ 15.16 M, estimated cycles ≈ 19.84 M —
+consistent with an ML-KEM-768-dominated decap. The canonical figure is
+captured by CI at the merge SHA.*
 
 ## Bench: `engine_trait_bench_key_merge_projection`
 

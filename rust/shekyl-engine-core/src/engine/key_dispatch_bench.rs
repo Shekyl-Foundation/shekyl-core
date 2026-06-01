@@ -245,11 +245,14 @@ impl KeyDispatchBenchHarness {
 /// under Callgrind is both unnecessary and noisy. This fixture holds
 /// just the `LocalKeys` and a `Mine` input — no actor, no spawn, so it
 /// constructs without an ambient runtime. The single async call is
-/// driven by the iai bench's own current-thread runtime; that
-/// `block_on`-of-an-immediately-`Ready`-future overhead is small and
-/// constant (the `LocalKeys` body completes synchronously inside the
-/// future), so the measured instruction count stays dominated by the
-/// hybrid ML-KEM-768 decap.
+/// driven by the iai bench's no-op-waker poll (no Tokio runtime in the
+/// measured region): `LocalKeys::try_claim_output` completes inside the
+/// first poll, so one `poll` returns `Ready` and the measured
+/// instruction count is exactly the hybrid ML-KEM-768 decap + HKDF +
+/// key-image work, with zero runtime machinery folded in. (A Tokio
+/// `block_on` was tried first and rejected: a current-thread runtime
+/// under Callgrind did not drive the body to completion — it collapsed
+/// the count to ≈4.8k handshake instructions instead of the ≈15M decap.)
 pub struct KeyBaselineBenchFixture {
     local: LocalKeys,
     mine_input: OutputDetectionInput,
