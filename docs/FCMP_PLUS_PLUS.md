@@ -1660,6 +1660,20 @@ the legacy `ecdhInfo` (`ecdhTuple`):
 - Production signing uses `shekyl_sign_fcmp_transaction` which receives
   pre-computed 9-byte `enc_amount` values from `shekyl_construct_output`
 
+### Encrypted Labels Wire Format (5-T, FA-11)
+
+Per-output logical labels use `enc_labels` in `rctSigBase` (9 bytes each),
+serialized immediately after `enc_amounts` and before `outPk`:
+
+```
+[8 bytes: label_plaintext XOR k_label[..8]] [1 byte: label_tag]
+```
+
+- Launch default: plaintext is the sentinel block `0xFF…` (never cleartext on wire).
+- `label_tag` is HKDF-derived (`shekyl-output-label-tag`); verified at scan like `amount_tag`.
+- Included in `serialize_rctsig_base` (transaction binding / prehash). **Not** part of the FCMP++ leaf witness.
+- `construct_output` / wallet signing supply pre-computed 9-byte values parallel to `enc_amount`.
+
 ### Witness Header (256 bytes)
 
 ```
