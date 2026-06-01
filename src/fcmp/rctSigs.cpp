@@ -80,6 +80,17 @@ namespace
 
         return BulletproofPlus{keyV(n_outs, I), I, I, I, I, I, I, keyV(nrl, I), keyV(nrl, I)};
     }
+
+    /// Stub builder zero-fills `enc_labels`; production signing must use
+    /// `construct_output` precomputed values. `genRctFcmpPlusPlus` rejects
+    /// all-zero enc_labels outside TRANSACTION_CREATE_FAKE device mode.
+    static bool enc_label_is_stub_zeroed(const std::array<uint8_t, 9> &enc)
+    {
+        for (uint8_t b : enc)
+            if (b != 0)
+                return false;
+        return true;
+    }
 }
 
     void fill_construct_tx_rct_stub(rctSig &rv, const key &message, xmr_amount txnFee,
@@ -341,12 +352,18 @@ namespace
                 outSk[i].mask = masks[i];
             }
 
-            // Use pre-computed enc_amounts (HKDF k_amount XOR + amount_tag) from construct_output.
+            // Use pre-computed enc_amounts / enc_labels from construct_output.
             key sumout = zero();
             for (size_t i = 0; i < outSk.size(); ++i)
             {
                 sc_add(sumout.bytes, outSk[i].mask.bytes, sumout.bytes);
                 rv.enc_amounts[i] = enc_amounts_precomputed[i];
+                if (hwdev.get_mode() != hw::device::TRANSACTION_CREATE_FAKE)
+                {
+                    CHECK_AND_ASSERT_THROW_MES(
+                        !enc_label_is_stub_zeroed(enc_labels_precomputed[i]),
+                        "enc_labels must be construct_output precomputed values, not stub zero-fill");
+                }
                 rv.enc_labels[i] = enc_labels_precomputed[i];
             }
 
