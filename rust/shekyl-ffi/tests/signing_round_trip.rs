@@ -378,11 +378,16 @@ fn build_test_case(iteration: u32) {
     enc_amount_9[..8].copy_from_slice(&change_out.enc_amount);
     enc_amount_9[8] = change_out.amount_tag;
 
+    let mut enc_label_9 = [0u8; 9];
+    enc_label_9[..8].copy_from_slice(&change_out.enc_label);
+    enc_label_9[8] = change_out.label_tag;
+
     let outputs_json = serde_json::json!([{
         "dest_key": hex_encode(&change_out.output_key),
         "amount": output_amount,
         "commitment_mask": hex_encode(&change_out.z),
         "enc_amount": hex_encode(&enc_amount_9),
+        "enc_label": hex_encode(&enc_label_9),
     }]);
 
     let inputs_bytes = serde_json::to_vec(&inputs_json).unwrap();

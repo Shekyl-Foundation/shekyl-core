@@ -46,10 +46,10 @@ use crate::derivation::{
     derive_kem_seed, derive_output_secrets, derive_view_tag_x25519, hash_pqc_public_key,
     keygen_from_seed, OutputSecrets,
 };
-use crate::label::{decrypt_label_plaintext, encrypt_label_plaintext, sentinel_plaintext};
 use crate::kem::{
     combine_shared_secrets, SharedSecret, ML_KEM_768_CT_LEN, ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN,
 };
+use crate::label::{decrypt_label_plaintext, encrypt_label_plaintext, sentinel_plaintext};
 use crate::CryptoError;
 
 /// All data produced by output construction that the sender needs to build the tx.
