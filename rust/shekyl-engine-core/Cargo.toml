@@ -307,6 +307,41 @@ name = "engine_trait_bench_economics_parameters_snapshot_iai"
 harness = false
 required-features = ["bench-internals"]
 
+# Stage 2 (KeyEngine actor) §5.3 B9 dispatch-overhead bench. Measures the
+# actor `ask` round-trip (`KeyEngineHandle::try_claim_output`) against the
+# in-process composition baseline (`LocalKeys::try_claim_output`) for a
+# `Mine` output, plus the cheap `NotMine` case. B9 is a bench-vs-bench
+# ratio (actor ≤ 1.05 × baseline), not an absolute gate. The actor paths
+# are criterion-(wall-clock)-only: the `ask` is a cross-thread async
+# round-trip whose Callgrind instruction count folds in nondeterministic
+# runtime-scheduling machinery, so there is no `_iai` actor sibling (a
+# reasoned, reversion-claused deviation from the criterion+iai pairing
+# discipline). Only the deterministic-crypto baseline gets an iai sibling.
+[[bench]]
+name = "engine_trait_bench_key_dispatch"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_key_dispatch_baseline_iai"
+harness = false
+required-features = ["bench-internals"]
+
+# Stage 2 §5.3 / §8.1 merge-path bench: the 6-i construction-time
+# view-secret projection (`populate_engine_handle_fields`) over a batch of
+# 256 freshly-merged outputs. Evidence for (not a gate on) the §8.1 6-ii
+# deferral decision. Synchronous + runtime-free, so it gets a full
+# criterion + iai-callgrind pair (unlike the actor dispatch paths).
+[[bench]]
+name = "engine_trait_bench_key_merge_projection"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_key_merge_projection_iai"
+harness = false
+required-features = ["bench-internals"]
+
 [features]
 default = []
 multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "serde_json", "hex", "chacha20poly1305", "hkdf", "sha2"]

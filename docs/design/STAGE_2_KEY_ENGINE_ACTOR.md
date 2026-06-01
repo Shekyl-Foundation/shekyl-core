@@ -1005,6 +1005,31 @@ directly.
 
 ### 5.3 Benchmark plan (B9, bench-vs-bench)
 
+**Status (landed).** The B9 benches exist in the engine bench harness,
+gated behind `bench-internals`:
+
+- `engine_trait_bench_key_dispatch` (criterion) — the three measured IDs
+  below (`baseline_claim_mine`, `actor_claim_mine`, `actor_claim_not_mine`).
+- `engine_trait_bench_key_dispatch_baseline_iai` (iai-callgrind) — the
+  deterministic-crypto baseline only.
+- `engine_trait_bench_key_merge_projection` (criterion) +
+  `engine_trait_bench_key_merge_projection_iai` (iai-callgrind) — the
+  6-i merge-path projection pair.
+
+The actor `ask` paths are **criterion-(wall-clock)-only**: the `ask` is a
+cross-thread async round-trip whose Callgrind instruction count folds in
+nondeterministic runtime-scheduling machinery (Valgrind serializes
+threads onto one simulated core), so there is no iai actor sibling — a
+reasoned, reversion-claused deviation from the criterion+iai pairing
+discipline (reopen if a deterministic async-dispatch measurement method
+lands). Only the deterministic-crypto baseline and the synchronous
+merge-path projection get iai siblings. Frozen baselines are captured at
+this PR's merge SHA via CI `workflow_dispatch`; placeholder sections live
+in [`docs/PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md). Local
+smoke runs (`--sample-size 10`): actor-mine/baseline ≈ 1.04 (inside the
+5% envelope); merge projection ≈ 1.3 µs/output over a 256-output batch
+(negligible — corroborates the eager-6-i / §8.1-6-ii-deferred disposition).
+
 The DoD's "within 5% of the composition baseline" is **bench-vs-bench against
 a measured baseline**, not an absolute latency gate. Because signing does not
 exist (§0.4), the baseline is `try_claim_output`'s real cryptographic cost:

@@ -555,7 +555,14 @@ fn collect_detection_residue(result: &ScanResult) -> DetectionResidue {
 /// future maintainer reading "why two helpers?" finds the
 /// load-bearing answer here rather than re-litigating it as
 /// transitional drift.
-fn populate_engine_handle_fields(
+///
+/// **Visibility.** `pub(crate)` (rather than module-private) so the
+/// §5.3 B9 merge-path bench fixture (`key_dispatch_bench`, gated behind
+/// `bench-internals`) can drive this exact post-pass over a synthetic
+/// batch — the bench measures the real 6-i projection, not a
+/// re-implementation. Production callers still reach it only through
+/// [`Engine::apply_scan_result`].
+pub(crate) fn populate_engine_handle_fields(
     ledger: &mut LedgerBlock,
     view_secret: &[u8; 32],
     residue: &DetectionResidue,

@@ -169,6 +169,11 @@ pub(crate) mod fault_injecting_pending_tx;
 pub(crate) mod fault_injecting_refresh;
 pub mod fee_estimator;
 pub(crate) mod key_actor;
+/// §5.3 B9 dispatch-overhead bench support. Gated behind
+/// `bench-internals`; re-exported through [`crate::__bench_internals`]
+/// for the external Criterion / iai-callgrind targets.
+#[cfg(feature = "bench-internals")]
+pub(crate) mod key_dispatch_bench;
 pub mod lifecycle;
 pub(crate) mod local_economics;
 pub(crate) mod local_keys;

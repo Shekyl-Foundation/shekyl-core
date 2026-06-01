@@ -1073,15 +1073,30 @@ sustainability is unaffected by the recalibration.
   an owned one (an owned long-lived runtime panics on drop inside the
   production async context); `rt-multi-thread` is promoted to production deps
   as an *independent* `block_in_place` fix, decoupled from the spawn decision.
-  **Remaining DoD residue:** the §5.3 **B9 dispatch-overhead benchmark**
-  (criterion + iai pair: baseline `LocalKeys::try_claim_output` vs actor
-  `KeyEngineHandle::try_claim_output`, plus the 6-i merge-path bench),
-  with `compare.py` threshold-class registration and a frozen baseline
-  transcribed to `docs/PERFORMANCE_BASELINE.md`. The bench is its own
-  deliverable per this repo's bench-pairing discipline (its own
-  `__bench_internals` exports + CI `workflow_dispatch` baseline capture),
-  not a tail-end addition to the migration commit. *This entry stays open
-  until B9 lands.* Target: V3.0, before Phase 2b.
+  **DoD residue — RESOLVED 2026-05-31 (B9 benches landed).** The §5.3
+  **B9 dispatch-overhead benchmark** is in the harness behind
+  `bench-internals`: `engine_trait_bench_key_dispatch` (criterion — three
+  IDs: `baseline_claim_mine`, `actor_claim_mine`, `actor_claim_not_mine`),
+  `engine_trait_bench_key_dispatch_baseline_iai` (iai, deterministic-crypto
+  baseline only), and the 6-i merge-path pair
+  `engine_trait_bench_key_merge_projection` (criterion) +
+  `engine_trait_bench_key_merge_projection_iai` (iai). The
+  `KeyDispatchBenchHarness` / `KeyBaselineBenchFixture` /
+  `MergeProjectionBenchFixture` shims are exported through
+  `__bench_internals`. The actor `ask` paths are **criterion-only** (no iai
+  actor sibling — a cross-thread async round-trip's Callgrind count folds in
+  nondeterministic scheduling; reversion-claused: reopen if a deterministic
+  async-dispatch measurement method lands); only the synchronous crypto
+  baseline and the merge projection get iai siblings. `compare.py` routes
+  all five IDs into the `engine_trait_bench` class by prefix (no script
+  change). Placeholder baseline sections are in
+  `docs/PERFORMANCE_BASELINE.md`; **frozen numbers are captured at the merge
+  SHA via CI `workflow_dispatch`** (the one remaining mechanical step, per
+  the §4.5/§4.6 deferred-capture discipline shared with the economics
+  benches). Local smoke runs: actor-mine/baseline ≈ 1.04 (inside the 5%
+  envelope); merge projection ≈ 1.3 µs/output over 256 outputs. *Entry
+  resolved; the CI baseline capture rides the merge per the deferred-capture
+  pattern.* Target: V3.0, before Phase 2b.
 
 - **Subaddress mechanism under PQC — dedicated design round (2026-05-31,
   surfaced during Stage 2 `KeyEngine`-actor pre-flight).** The scanner and

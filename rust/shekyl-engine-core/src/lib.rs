@@ -55,4 +55,10 @@ pub mod __bench_internals {
         engine_economics_base_emission_at_for_bench,
         engine_economics_parameters_snapshot_for_bench, engine_local_ledger_for_bench,
     };
+    // §5.3 B9 dispatch-overhead + merge-path bench support.
+    pub use crate::engine::key_dispatch_bench::{
+        build_key_baseline_fixture, build_merge_projection_fixture, drop_key_baseline_fixture,
+        drop_merge_projection_fixture, KeyBaselineBenchFixture, KeyDispatchBenchHarness,
+        MergeProjectionBenchFixture, MERGE_BENCH_OUTPUT_COUNT,
+    };
 }

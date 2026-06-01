@@ -40,10 +40,36 @@
   **independent** fix for the pre-existing `drive_persistence::block_in_place`
   feature-unification bug (decoupled from the spawn decision, which does not
   need it). §5.2
-  contract/protocol tests landed; the §5.3 B9 dispatch-overhead benchmark
-  remains the one open DoD item (tracked in `FOLLOWUPS.md`). No consensus
-  or wire-format change. Design:
+  contract/protocol tests landed, as did the §5.3 B9 dispatch-overhead
+  benchmark (see the next entry). No consensus or wire-format change. Design:
   [`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`](design/STAGE_2_KEY_ENGINE_ACTOR.md).
+
+- **bench: Stage 2 §5.3 B9 dispatch-overhead + merge-path benchmarks.**
+  Five `bench-internals`-gated bench targets in `shekyl-engine-core`:
+  `engine_trait_bench_key_dispatch` (criterion; three IDs —
+  `baseline_claim_mine` direct `LocalKeys::try_claim_output`,
+  `actor_claim_mine` via the `KeyEngineHandle` `ask`, and the cheap
+  `actor_claim_not_mine`), `engine_trait_bench_key_dispatch_baseline_iai`
+  (iai-callgrind for the deterministic crypto baseline only), and the 6-i
+  merge-path projection pair `engine_trait_bench_key_merge_projection`
+  (criterion) + `engine_trait_bench_key_merge_projection_iai`
+  (iai-callgrind). B9 is a **bench-vs-bench ratio** (actor ≤ 1.05 ×
+  baseline), not an absolute gate. The actor `ask` paths are
+  **criterion-(wall-clock)-only** — a cross-thread async round-trip's
+  Callgrind instruction count folds in nondeterministic runtime-scheduling
+  machinery, so there is no iai actor sibling (reversion-claused: reopen if
+  a deterministic async-dispatch measurement method lands); only the
+  synchronous crypto baseline and the synchronous merge projection get iai
+  siblings. The merge-path bench is decision evidence for the §8.1 6-ii
+  deferral. New `KeyDispatchBenchHarness`, `KeyBaselineBenchFixture`, and
+  `MergeProjectionBenchFixture` shims are exported through
+  `__bench_internals`; `populate_engine_handle_fields` was widened to
+  `pub(crate)` so the merge bench drives the real post-pass.
+  `compare.py` routes all five IDs into the `engine_trait_bench` threshold
+  class by prefix (no script change). Placeholder baseline sections added to
+  [`docs/PERFORMANCE_BASELINE.md`](PERFORMANCE_BASELINE.md); frozen numbers
+  are captured at the merge SHA via CI `workflow_dispatch` per the
+  deferred-capture discipline. No production-path or consensus change.
 
 - **engine: `EconomicsEngine` trait surface (Stage 1 PR 7).** Extracted
   the canonical economic-derivation surface — `base_emission_at` (base

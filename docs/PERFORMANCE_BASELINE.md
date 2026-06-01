@@ -97,6 +97,16 @@ Per [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
 | `EconomicsEngine` | `base_emission_at` | `engine_trait_bench_economics_base_emission_at` | Stage 1 PR 7 (numbers via CI) |
 | `EconomicsEngine` | `parameters_snapshot` | `engine_trait_bench_economics_parameters_snapshot` | Stage 1 PR 7 (numbers via CI) |
 | `KeyEngine` | `account_public_address` | `engine_trait_bench_key_account_public_address` | Deferred to KeyEngine PR |
+| `KeyEngine` | `try_claim_output` (dispatch) | `engine_trait_bench_key_dispatch` | Stage 2 §5.3 B9 (numbers via CI) |
+| `KeyEngine` | `try_claim_output` (baseline) | `engine_trait_bench_key_dispatch_baseline_claim_mine` | Stage 2 §5.3 B9 (numbers via CI) |
+| `Engine` (merge) | 6-i projection | `engine_trait_bench_key_merge_projection` | Stage 2 §5.3 / §8.1 (numbers via CI) |
+
+The last three rows are Stage 2 (KeyEngine-actor) benches, not
+§3.3.1 Stage 1 hot paths; they share this document's harness and the
+`engine_trait_bench_*` threshold class. The dispatch bench is a
+bench-vs-bench **ratio** (B9), and its actor paths are
+criterion-(wall-clock)-only — see that section for why there is no
+iai gate row for the `ask` paths.
 
 Reviewers may identify additional hot paths during Stage 1 PR
 review; new benches enter the harness per §4.6's harness-update
@@ -444,6 +454,114 @@ alongside the `KeyEngine::account_public_address()` trait method on
 a fixture appropriate to key-layer state. Expected workload class:
 trivial pure-read (the address is stable across iterations);
 confirmed at authoring time per §4.4's checklist item 5.
+
+## Bench: `engine_trait_bench_key_dispatch`
+
+**Status:** Introduced at Stage 2 (KeyEngine actor) §5.3 B9; criterion
+wall-clock numbers deferred to CI `workflow_dispatch` capture at the
+PR's merge SHA. The bench code, the `[[bench]]` manifest row, and the
+`KeyDispatchBenchHarness` shim (gated behind `bench-internals`) land in
+this PR.
+
+**What B9 is: a bench-vs-bench ratio, not an absolute gate.** This
+bench reports three criterion IDs:
+
+- `engine_trait_bench_key_dispatch_baseline_claim_mine` — direct
+  `LocalKeys::try_claim_output` on a `Mine` output (the composition
+  baseline; full X25519 view-tag + hybrid ML-KEM-768 decap + HKDF +
+  key-image + handle insert).
+- `engine_trait_bench_key_dispatch_actor_claim_mine` — the same output
+  via `KeyEngineHandle::try_claim_output` (an `ask` round-trip through
+  the mailbox).
+- `engine_trait_bench_key_dispatch_actor_claim_not_mine` — a `NotMine`
+  output via the `ask` (X25519 pre-filter only, the cheap common case).
+
+The **B9 signal** is `actor_claim_mine / baseline_claim_mine ≤ 1.05`
+(§5.3 "within 5%"): the mailbox round-trip overhead should be lost in
+the ML-KEM-768 decap noise. The `not_mine` ID records the dispatch cost
+against the *cheapest* real op as evidence for (not a gate on) the §8.3
+view-scan split.
+
+**Workload class:** Crypto-bound async dispatch (confirmed at authoring
+per §4.4 checklist item 5). The `b.iter` body drives the async surface
+through `rt.block_on`; that driver cost is symmetric across the baseline
+and actor IDs, so it cancels in the B9 ratio.
+
+**No iai gate row for the actor paths.** The `ask` is a cross-thread
+async round-trip; iai-callgrind runs under Callgrind (Valgrind
+serializes all threads onto one simulated core), so an `ask`'s
+instruction count folds in nondeterministic runtime-scheduling
+machinery rather than a clean deterministic signal. The actor paths are
+**criterion-only by design** — a reasoned, reversion-claused deviation
+from the criterion+iai pairing discipline
+([`docs/design/STAGE_0_HARNESS.md`](design/STAGE_0_HARNESS.md)):
+**reopen** the iai actor sibling if a deterministic async-dispatch
+measurement method lands. Only the deterministic-crypto baseline gets an
+iai sibling (`engine_trait_bench_key_dispatch_baseline_claim_mine`,
+below).
+
+*Local criterion sanity observation (not the baseline; smoke run at
+`--sample-size 10`): baseline ≈ 878 µs, actor-mine ≈ 916 µs
+(ratio ≈ 1.04, inside the 5% envelope), actor-not-mine ≈ 90 µs. The
+canonical wall-clock figures are captured by CI at the merge SHA.*
+
+## Bench: `engine_trait_bench_key_dispatch_baseline_claim_mine` (iai)
+
+**Status:** Introduced at Stage 2 §5.3 B9; iai gate-metric numbers
+deferred to CI `workflow_dispatch` capture at the PR's merge SHA (per
+§4.5/§4.6 frozen-baseline discipline, N=3 invariance).
+
+This is the iai-callgrind sibling for the B9 **composition baseline**
+only (`LocalKeys::try_claim_output` over a `Mine` output), driven via an
+actor-free fixture (`KeyBaselineBenchFixture` — no spawned `KeyActor`,
+so no multi-thread runtime under Callgrind) and a leaked current-thread
+runtime whose `block_on`-of-a-`Ready`-future overhead is a small
+constant.
+
+**Workload class:** Crypto-bound, allocation-present (confirmed at
+authoring per §4.4 checklist item 5). A full hybrid ML-KEM-768
+decapsulation + HKDF expansion + key-image scalar-mult; expected
+`instructions` count is large (millions, ML-KEM-768-dominated) and the
+§4.4 hoisting caveat does not apply. This is the stable regression
+signal for the baseline crypto cost; the criterion ratio above carries
+the B9 envelope check.
+
+## Bench: `engine_trait_bench_key_merge_projection`
+
+**Status:** Introduced at Stage 2 §5.3 / §8.1; iai gate-metric and
+criterion numbers deferred to CI `workflow_dispatch` capture at the PR's
+merge SHA (per §4.5/§4.6 frozen-baseline discipline, N=3 invariance).
+Unlike the actor dispatch paths, this post-pass is synchronous and
+runtime-free, so it gets a full criterion + iai-callgrind pair
+(`engine_trait_bench_key_merge_projection_iai.rs`).
+
+The bench drives `populate_engine_handle_fields` — the 6-i
+construction-time view-secret projection `Engine::apply_scan_result`
+runs over every newly-inserted output — across a synthetic batch of
+`MERGE_BENCH_OUTPUT_COUNT` (256) unpopulated transfers. Per output:
+a `HashMap` lookup (detection residue → on-chain ciphertext), a
+`derive_output_handle` (cSHAKE256 PRF over the view secret), and a
+~1.1 KiB hybrid-ciphertext clone into `TransferDetails`.
+
+**This bench is evidence for (not a gate on) the §8.1 6-ii deferral
+decision.** 6-i does this projection eagerly at merge time; 6-ii would
+defer it to first spend. If the per-output cost is negligible against a
+refresh's other work, eager 6-i stays and 6-ii remains deferred; a
+surprise here reopens §8.1.
+
+**Workload class:** Batch-bound, per-output crypto (confirmed at
+authoring per §4.4 checklist item 5). The count scales with the 256
+batch size and is dominated by the per-output cSHAKE256; non-hoistable,
+so criterion's `median_ns` approximates per-call cost. The criterion
+sibling uses `iter_batched` with a fresh fixture per invocation (the
+projection is idempotent-once — it only populates `None` fields), and
+the iai sibling measures one `run_projection` over a `setup`-built
+fixture, matching shapes.
+
+*Local criterion sanity observation (not the baseline; smoke run at
+`--sample-size 10`): ≈ 326 µs for the 256-output batch (≈ 1.3 µs/output)
+— negligible per-output, corroborating the eager-6-i disposition. The
+canonical figures are captured by CI at the merge SHA.*
 
 ## Capture environments
 
