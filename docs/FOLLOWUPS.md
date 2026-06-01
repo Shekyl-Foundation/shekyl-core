@@ -1117,6 +1117,8 @@ sustainability is unaffected by the recalibration.
   `error.rs:615`). This round must resolve the incoherence **before** that stub
   is implemented.
 
+  *Design doc (when the round opens):* `docs/design/SUBADDRESS_UNDER_PQC.md`.
+
   *The finding.* Monero's subaddress scheme is cheap because ECDH composes: the
   scanner computes `a·R` with the single account view secret `a` regardless of
   which subaddress an output targeted (one scalar-mult per output, then recover
