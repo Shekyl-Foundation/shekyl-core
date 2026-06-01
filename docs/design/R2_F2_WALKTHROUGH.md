@@ -24,7 +24,9 @@ with facilitator + product owner. Each UX section ends with **Pass / Revise / Bl
 ## 0. Wire/crypto pre-flight (before UX sign-off)
 
 **Why first.** A UX walkthrough cannot detect fatal wire mistakes (sentinel written
-as a wire constant, or `label_tag` used as a category flag). If §0 fails, **stop**
+as a wire constant, or `label_tag` used as a category flag, or **`enc_label` absent
+from the transaction prehash** (relay malleability — worse than cooperative-sender
+misattribution). If §0 fails, **stop**
 — fix PR #100 / spec before product sign-off.
 
 **Normative spec:** `SUBADDRESS_UNDER_PQC.md` §5.7.11 **Wire invariants**.  
@@ -36,9 +38,11 @@ as a wire constant, or `label_tag` used as a category flag). If §0 fails, **sto
 | W1 | **Sentinel is plaintext, not wire constant.** `SENTINEL_PLAINTEXT = 0xFF…` is encrypted with `enc_label[i] = pt[i] XOR k_label[i]` per output. | Read `construct_output` + `encrypt_label_plaintext`; grep production paths for forbidden `memset(enc_label, 0xFF)` (test stubs may zero — must not ship on wire). KAT: same sentinel, different outputs → different `enc_label` octets when `k_label` differs. | ☐ |
 | W2 | **`label_tag` is HKDF integrity only** (first byte of `shekyl-output-label-tag` ‖ index), **not** `0=sentinel / 1=tag`. | Read `derive_output_secrets`; confirm scan compares derived tag then **decrypts** before `is_sentinel_plaintext` / `REQUEST` classify. | ☐ |
 | W3 | **Consensus: presence + 9-byte size, not content.** | `rctSigBase` serialization + size checks; no validator branch on sentinel vs cooperative plaintext. | ☐ |
-| W4 | **`rid` opaque random** — never sequential in URI/store assignment. | Spec §5.7.11 rid pin; FA-8 must use CSPRNG (not monotonic counter). | ☐ |
+| W4 | **`enc_label` prehash binding (blocking).** On-wire label octets are XOR-only (malleable); unlike amounts (Pedersen self-check), label integrity is **solely** from inclusion in `serialize_rctsig_base` → second component of `get_tx_prehash` — same discipline as `enc_amounts`. | Read `rctTypes.h` (`enc_labels` after `enc_amounts`); confirm `get_tx_prehash` hashes that blob. **Not** satisfied by size/presence checks alone. | ☐ |
+| W5 | **Tamper test locks prehash binding.** One-byte flip of `enc_labels[0]` changes the rctSigBase hash (and must break full tx verification when wired end-to-end). | CI: `fcmp.enc_label_binds_rctsig_base_prehash` green on FA-11 branch. | ☐ |
+| W6 | **`rid` opaque random** — never sequential in URI/store assignment. | Spec §5.7.11 rid pin; FA-8 must use CSPRNG (not monotonic counter). | ☐ |
 
-**Engineer attestation (sign below or in PR #100):** I confirm W1–W3 against FA-11
+**Engineer attestation (sign below or in PR #100):** I confirm W1–W5 against FA-11
 at commit: _______________
 
 | Result | Notes |
@@ -49,7 +53,7 @@ at commit: _______________
 
 ## 1. Facilitator checklist (before you start)
 
-- [ ] **§0 wire/crypto pre-flight passed** (W1–W3 minimum).
+- [ ] **§0 wire/crypto pre-flight passed** (W1–W5 minimum).
 
 - [ ] Attendees read §5.7.8 (pit of success — no “generate new address” default).
 - [ ] Attendees accept **money never depends on the label** (§5.7.9 UX assertion).
