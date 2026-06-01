@@ -117,6 +117,11 @@ def derive_output_secrets(combined_ss: bytes, output_index: int) -> dict:
     # ml_dsa_seed: 32-byte expand, raw
     ml_dsa_seed = hkdf_expand_sha512(prk, make_info(LABEL_ML_DSA_SEED, output_index), 32)
 
+    # On-wire sentinel label (FA-11): SENTINEL_PLAINTEXT XOR k_label[..8] + label_tag
+    sentinel_pt = b"\xff" * 8
+    enc_label = bytes(p ^ k for p, k in zip(sentinel_pt, k_label[:8]))
+    enc_label_9 = enc_label + bytes([label_tag])
+
     return {
         "ho": ho.hex(),
         "y": y.hex(),
@@ -126,6 +131,8 @@ def derive_output_secrets(combined_ss: bytes, output_index: int) -> dict:
         "amount_tag": amount_tag,
         "k_label": k_label.hex(),
         "label_tag": label_tag,
+        "enc_label_sentinel": enc_label.hex(),
+        "enc_label_sentinel_9": enc_label_9.hex(),
         "ml_dsa_seed": ml_dsa_seed.hex(),
     }
 

@@ -537,6 +537,8 @@ mod tests {
         amount_tag: u8,
         k_label: String,
         label_tag: u8,
+        enc_label_sentinel: String,
+        enc_label_sentinel_9: String,
         ml_dsa_seed: String,
         x25519_ss: String,
         view_tag_x25519: u8,
@@ -553,6 +555,8 @@ mod tests {
             serde_json::from_str(json).expect("failed to parse PQC_OUTPUT_SECRETS.json");
         file.vectors
     }
+
+    use crate::label::{encrypt_label_plaintext, sentinel_plaintext};
 
     #[test]
     fn output_secrets_known_answer_vectors() {
@@ -607,6 +611,22 @@ mod tests {
                 secrets.label_tag, v.label_tag,
                 "vector {i}: label_tag mismatch"
             );
+
+            let enc = encrypt_label_plaintext(&sentinel_plaintext(), &secrets.k_label);
+            let expected_enc: [u8; 8] = hex::decode(&v.enc_label_sentinel)
+                .unwrap()
+                .try_into()
+                .unwrap();
+            assert_eq!(enc, expected_enc, "vector {i}: enc_label_sentinel mismatch");
+            let mut wire9_arr = [0u8; 9];
+            wire9_arr[..8].copy_from_slice(&enc);
+            wire9_arr[8] = secrets.label_tag;
+            let expected_wire9: [u8; 9] = hex::decode(&v.enc_label_sentinel_9)
+                .unwrap()
+                .try_into()
+                .unwrap();
+            assert_eq!(wire9_arr, expected_wire9, "vector {i}: enc_label_sentinel_9 mismatch");
+
             assert_eq!(
                 secrets.ml_dsa_seed.as_slice(),
                 expected_seed.as_slice(),
