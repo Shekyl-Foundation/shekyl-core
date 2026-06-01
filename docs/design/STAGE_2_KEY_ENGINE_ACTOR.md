@@ -17,10 +17,13 @@ message protocol (§2) falls out of the trait spec, not the reverse.
 
 **Binding constraint when arbitrating:**
 [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) priority-1
-(security/PQC). The load-bearing property is *no secret material crosses the
-trait boundary* (M3-series). This migration must preserve it **by
-construction**, not by discipline: the full `AllKeysBlob` lives only inside
-the actor task; the mailbox carries non-secret request/reply values only.
+(security/PQC). The load-bearing property is *the master secret material — the
+full `AllKeysBlob` and the handle table — never crosses the trait boundary*
+(M3-series). This migration preserves it **by construction**, not by
+discipline: the blob lives only inside the actor task and the mailbox never
+carries it. The narrower per-output secrets that *do* cross in replies (the
+decrypted amount; privacy-linkable identifiers) are `ZeroizeOnDrop`, so they
+wipe on drop even inside kameo's channel buffers (§4.3.1, audit Finding 4).
 
 ---
 
@@ -239,25 +242,36 @@ substrate does not have.
 ### 2.2 Actor message types
 
 ```rust
-// Crate-internal; non-secret request/reply only.
+// Crate-internal. Requests non-secret; secret-bearing replies are ZeroizeOnDrop (§4.3.1).
 pub(crate) enum KeyActorMsg { /* one zero-or-more-field struct per variant */ }
 
 // try_claim_output(&self, input: &OutputDetectionInput)
 struct ClaimOutput { input: OutputDetectionInput }      // owned, non-secret
 //   reply: Result<OutputClaimResult, KeyEngineError>
 //   OutputClaimResult::Mine(OutputClaim { handle: OutputHandle, key_image,
-//                                         amount_atomic_units }) — opaque
-//   handle + non-secret on-chain metadata only (key.rs:721-734).
+//                                         amount_atomic_units }) — SECRET-BEARING,
+//   ZeroizeOnDrop (decrypted amount + privacy-linkable handle/key_image;
+//   key.rs).
 
 // sign_transaction(&self, tx: &TxToSign)
 struct SignTransaction { tx: TxToSign }                 // owned, public-data carriers
-//   reply: Result<TxSignatures, KeyEngineError>  (stub today)
+//   reply: Result<TxSignatures, KeyEngineError>  (stub today; no live secret)
 ```
 
 `OutputDetectionInput` is `#[derive(Clone, Debug)] #[non_exhaustive]` and
-documented as carrying no `Zeroize`-required material (`key.rs:142-146`);
-`OutputClaim` carries the opaque `OutputHandle` plus public metadata. Both are
-`Send` (plain data) and cross the mailbox by value. The actor's `handle`
+documented as carrying no `Zeroize`-required material (`key.rs:142-146`); it is
+the non-secret request half. The **reply** half is not non-secret:
+`OutputClaim` carries the decrypted `amount_atomic_units` (cleartext amount —
+a secret, reversing an earlier "balance-display, non-secret" disposition) and
+the privacy-linkable `OutputHandle` / `KeyImage` per-output identifiers, so it
+is `#[derive(ZeroizeOnDrop)]` with a hand-written `Debug` that redacts the
+amount. This is the Stage-2 mailbox-zeroization contract (audit Finding 4,
+§4.3): a secret-bearing reply traverses kameo's bounded request mailbox and
+oneshot reply channel — allocations this crate neither owns nor zeroizes — so
+a copy left in a freed channel buffer (e.g. a cancelled `ask` whose un-taken
+reply the channel drops) is a leak unless the reply type wipes on its own
+`Drop`. Both `ClaimOutput` and `OutputClaim` are `Send` (plain data) and cross
+the mailbox by value. The actor's `handle`
 takes `&mut self`; kameo serialization means the Stage-1 interior-mutability
 handle-table (`RwLock`-guarded, for the `&self` trait surface) **collapses to
 plain `&mut self` ownership inside the actor** — a simplification the actor
@@ -776,6 +790,55 @@ Drop ordering relative to `WalletFile` (`lifecycle.rs:996-998`) is unchanged:
 the actor's blob is independent of the file handle; both zeroize on their own
 `Drop`.
 
+#### 4.3.1 Derived-value and mailbox zeroization contract (audit findings)
+
+The blob-layer property above (`AllKeysBlob: ZeroizeOnDrop`, every secret
+field a `#[repr(transparent)]` `Zeroize`/`ZeroizeOnDrop` wrapper, accessors
+returning borrows) is sound and unchanged. A zeroization audit run while this
+PR was touching the scan/sign code found that the discipline protecting the
+blob did **not** extend to the *values derived from it* on the per-output hot
+path. Stage 2 fixed all four findings, because three are pre-existing in the
+scan path and the fourth is introduced by the actor boundary — and this PR is
+the cheap moment to fix them while the code is open:
+
+- **Finding 1 — `RecoveredOutput` field-omission (must-fix).** The hand-rolled
+  `Zeroize` enumerated fields and silently omitted `recovered_spend_key`
+  (`B' = D + m_i·G`, a per-wallet per-subaddress linkable identifier — the
+  exact value subaddress unlinkability exists to protect) and `h_pqc`.
+  Replaced with `#[derive(ZeroizeOnDrop)]` so field coverage is
+  compiler-enforced, not implicit in an editable function body; the
+  "which field is public, skip" decision is made explicit at the type.
+- **Finding 2 — view secret on the stack, per output (highest severity).**
+  `scan_output_recover` built bare `curve25519-dalek::Scalar` locals (the view
+  secret in scalar form, per-output `ho`/`y`/`z`, the raw ECDH shared secret)
+  and a bare decrypted-`amount` byte array. `Scalar`/`MontgomeryPoint` impl
+  `Zeroize` but **not** `ZeroizeOnDrop`, so these were left resident on the
+  stack on every exit path — including early `Err` returns — once per scanned
+  output, on a daemon-drivable path. Fixed by enabling the `zeroize` feature on
+  `curve25519-dalek` (`shekyl-crypto-pq/Cargo.toml`) and `Zeroizing`-wrapping
+  the locals so they wipe on all exits.
+- **Finding 3 — secret-derived scalar sweep (audit-priority).** The same
+  bare-`Scalar` pattern across the rest of `output.rs`'s production
+  scan/construct/key-image paths (`scan_output`, `construct_output`,
+  `rederive_combined_ss`, `recover_combined_ss`, `derive_output_key`,
+  `recover_recipient_spend_pubkey`, `decrypt_amount`,
+  `compute_output_key_image{,_from_ho}`) was swept and `Zeroizing`-wrapped.
+  Public points (`eph_mont_pub`, output/commitment points, `recovered_b`,
+  `expected_o`/`expected_c`) are deliberately left unwrapped — public values.
+- **Finding 4 — actor mailbox/reply surface (Stage-2-specific).** Moving
+  `try_claim_output` behind the mailbox makes the reply traverse kameo's
+  bounded request mailbox and oneshot reply channel — allocations this crate
+  neither owns nor zeroizes. **Contract: every actor message/reply type that
+  carries secret-derived bytes is `ZeroizeOnDrop`.** `OutputClaim` now is
+  (§2.2): its `amount_atomic_units` is treated as a secret, and its
+  `OutputHandle`/`KeyImage` are privacy-linkable. The contract closes the
+  `ask`-cancellation leak — a future cancelled after the actor computed the
+  reply but before the caller took it leaves the reply for the channel to
+  drop; `ZeroizeOnDrop` is what makes that drop wipe. The sign reply
+  (`TxSignatures`) carries no live secret today (PR-5 stub); the contract binds
+  any future secret-bearing message/reply field. §5.2's reply-path-wipe test
+  asserts the drop runs.
+
 ### 4.4 Mailbox sizing
 
 **Default `mailbox(64)` (kameo `spawn` default), no override.** Rationale,
@@ -871,12 +934,19 @@ directly.
    same blob and input — both `Mine` (handle resolves to the same key-image /
    amount) and `NotMine` cases. This pins "the actor is the same engine,
    reached differently."
-2. **No-secret-crosses (structural):** a test asserts the message and reply
-   types (`ClaimOutput`, `OutputClaimResult`, `OutputClaim`) contain no
-   secret-bearing field — enforced by a `static_assertions`-style check that
-   the reply is `Send` *and* a doc-pinned review that `OutputClaim` carries
-   only `OutputHandle` + public metadata (`key.rs:721-734`). The opaque
-   `OutputHandle` is meaningless without the actor's internal table
+2. **Secret-bearing replies wipe (structural + behavioral):** the reply
+   `OutputClaim` *does* carry secret-derived bytes (the decrypted
+   `amount_atomic_units`; the privacy-linkable `OutputHandle`/`KeyImage`), so
+   the property under test is not "no secret crosses" but "every secret-bearing
+   reply is `ZeroizeOnDrop`" (Finding 4, §4.3.1). A compile-time check
+   (`zeroize_on_drop_contract`) asserts `OutputClaim: ZeroizeOnDrop`, and a
+   `Send` check covers the message/reply types crossing the mailbox. A
+   behavioral test (`reply_path_wipes_on_drop`) routes an instrumented
+   `ZeroizeOnDrop` reply through the actor and asserts that dropping the reply
+   runs the zeroizing `Drop` — the same `Drop` the channel runs on an
+   `ask`-cancellation that discards the un-taken reply — without distorting
+   `KeyActor`'s production shape. The opaque `OutputHandle` is additionally
+   meaningless without the actor's internal table
    (`STAGE_1_PR_3_KEY_ENGINE.md:1069-1077`).
 3. **Handle-resolved methods:** `account_public_address` returns the cached
    public address with no actor interaction (assert by exercising the handle
@@ -1073,7 +1143,7 @@ discipline-note / forward-action.
 
 | # | Attacker objective | Vector | Disposition |
 |---|---|---|---|
-| T1 | **Secret exfiltration via the mailbox** | Read a secret out of a request/reply value. | **In-scope, closed by construction.** Only non-secret types cross (`OutputDetectionInput`, `OutputClaim`+opaque `OutputHandle`, `TxToSign`/`TxSignatures` public-data carriers, `KeyEngineError`). The full blob and the handle-table never leave the task. §2.2 / §5.2 test 2. |
+| T1 | **Secret exfiltration via the mailbox** | Read a secret out of a request/reply value. | **In-scope, closed by construction + wipe.** The master secret — the full blob and the handle-table — never leaves the task (by construction). The narrower per-output secrets that *do* cross in replies (`OutputClaim`'s decrypted amount + privacy-linkable handle/key_image) are `ZeroizeOnDrop`, so a copy left in a freed channel buffer wipes on its own `Drop` (Finding 4, §4.3.1). Request types (`OutputDetectionInput`, `TxToSign`) and error / stub-reply types (`KeyEngineError`, `TxSignatures`) carry no secret. §2.2 / §4.3.1 / §5.2 test 2. |
 | T2 | **Panic-leak** | A handler panic leaves secret bytes in a recoverable/loggable state, or `PanicError` carries secret bytes. | **In-scope.** `on_panic` → `Break` (fail-stop, §4.5); `self.blob` drops → zeroize. `KeyEngineError`/panic payloads carry no secret (F3 discipline, §2.5). Discipline-note: the implementation must not `panic!` with secret-bearing context. |
 | T3 | **Restart-leak** | Supervisor restart re-runs `on_start`, requiring a retained secret `Args`/factory the attacker can target. | **In-scope, closed by construction.** Fail-stop, not restart (§4.5): `supervise` needs `AllKeysBlob: Clone` (rejected), `supervise_with` retains a secret closure (rejected). No retained external secret exists to target. |
 | T4 | **Mailbox DoS** | Flood `ask`s to exhaust memory or stall the actor. | **In-scope (bounded).** Bounded mailbox (64) provides backpressure (§4.4); a flooder blocks on send rather than growing memory. Cross-actor flooding is the orchestrator/RPC tier's concern (DAG root rate-limits), not the leaf's. |

@@ -10,10 +10,12 @@
   `KeyEngineHandle` instead of `keys: Arc<AllKeysBlob>`. `Engine<S, …>`
   stays seven-parameter `Engine<S, D, L, E, R, P, F>` (no inline `K:
   KeyEngine` generic — the deferred-inline-shape reversion clause
-  resolved in favor of the handle). Actor messages carry public
-  material only (`OutputDetectionInput` → `OutputClaimResult`/
-  `OutputClaim`-of-`OutputHandle`); the `SignTransaction` message exists
-  but its reply is a Phase-1 stub. Handle-resolved reads
+  resolved in favor of the handle). The request half of the actor
+  protocol is public (`OutputDetectionInput` → `OutputClaimResult`);
+  the reply `OutputClaim` carries secret-derived bytes (the decrypted
+  amount plus the privacy-linkable handle/key_image) and is
+  `ZeroizeOnDrop` (see **Security** below); the `SignTransaction`
+  message exists but its reply is a Phase-1 stub. Handle-resolved reads
   (`account_public_address`, primary `derive_subaddress`) serve from an
   immutable `KeyPublicProjection` with no mailbox round-trip; non-primary
   `derive_subaddress(Audit)` is served from a construction-time
@@ -74,6 +76,41 @@
   this trait — the trait remains consumer-free until its own cutover per
   [`docs/design/STAGE_1_PR_7_ECONOMICS_ENGINE.md`](design/STAGE_1_PR_7_ECONOMICS_ENGINE.md)
   §6.2. No consensus or wire-format change.
+
+### Security
+
+- **crypto-pq/engine: zeroize secret-derived values on the scan/sign hot
+  path (Stage 2 zeroization audit, Findings 1–4).** A memory-disclosure
+  audit run while Stage 2 was touching the scan/sign code found that the
+  zeroization discipline protecting `AllKeysBlob` (sound and unchanged —
+  `ZeroizeOnDrop`, `#[repr(transparent)]` wrappers, borrow-returning
+  accessors) did **not** extend to the values *derived* from it.
+  - *Finding 1:* `RecoveredOutput`'s hand-rolled `Zeroize` silently omitted
+    `recovered_spend_key` (a per-wallet, per-subaddress linkable identifier)
+    and `h_pqc`. Replaced with `#[derive(ZeroizeOnDrop)]` so field coverage
+    is compiler-enforced, not implicit in an editable function body.
+  - *Finding 2 (highest severity):* the wallet view secret — reconstructed
+    as a bare `curve25519-dalek::Scalar` once per scanned output on a
+    daemon-drivable path — and the per-output `ho`/`y`/`z` scalars and the
+    decrypted-amount bytes were left resident on the stack on every exit
+    path (`Scalar`/`MontgomeryPoint` are `Zeroize` but not `ZeroizeOnDrop`).
+    Enabled the `zeroize` feature on `curve25519-dalek` and `Zeroizing`-
+    wrapped the locals in `scan_output_recover`.
+  - *Finding 3:* swept the same bare-scalar pattern across the rest of
+    `output.rs`'s production scan/construct/key-image paths and `Zeroizing`-
+    wrapped every secret-derived scalar / cleartext-amount local (public
+    points left unwrapped).
+  - *Finding 4 (Stage-2-specific):* the actor mailbox introduces a new
+    non-zeroized surface — replies traverse kameo channel buffers this crate
+    does not own. Established the contract that **every actor message/reply
+    type carrying secret-derived bytes is `ZeroizeOnDrop`**: `OutputClaim`
+    now is (its decrypted `amount_atomic_units` is treated as a secret,
+    reversing an earlier "balance-display, non-secret" disposition), closing
+    the `ask`-cancellation leak where the channel drops an un-taken reply. A
+    `reply_path_wipes_on_drop` test asserts the reply's `Drop` wipes.
+  No consensus or wire-format change. Design:
+  [`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`](design/STAGE_2_KEY_ENGINE_ACTOR.md)
+  §4.3.1.
 
 ### Changed
 
