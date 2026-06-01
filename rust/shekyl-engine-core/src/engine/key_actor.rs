@@ -795,8 +795,10 @@ mod tests {
         let _handle = KeyEngineHandle::spawn(make_blob(TEST_SEED));
     }
 
-    // §5.2 test 2 — No-secret-crosses (structural): the message + reply types
-    // are `Send` (kameo requires it) and carry only public/opaque material.
+    // §5.2 test 2 — Mailbox `Send` contract (structural): message + reply types
+    // are `Send` as kameo requires. `OutputClaim` is not public-only — it
+    // carries secret-bearing `amount_atomic_units` (zeroized per
+    // `zeroize_on_drop_contract` below).
     #[test]
     fn message_and_reply_types_are_send() {
         fn assert_send<T: Send>() {}

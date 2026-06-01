@@ -514,7 +514,7 @@ pub fn scan_output(
     for i in 0..8 {
         amount_le[i] = enc_amount[i] ^ secrets.k_amount[i];
     }
-    let amount = u64::from_le_bytes(*amount_le);
+    let amount = Zeroizing::new(u64::from_le_bytes(*amount_le));
 
     // --- Output key verification: O == ho*G + B + y*T ---
 
@@ -548,7 +548,7 @@ pub fn scan_output(
     // --- Commitment verification: C == z*G + amount*H ---
 
     // `amount_scalar` carries the cleartext amount; `Zeroizing` wipes its limbs.
-    let amount_scalar = Zeroizing::new(Scalar::from(amount));
+    let amount_scalar = Zeroizing::new(Scalar::from(*amount));
     let expected_c = (G * *z_scalar) + (*H * *amount_scalar);
     if expected_c.compress().to_bytes() != *commitment {
         return Err(CryptoError::DecapsulationFailed(
@@ -565,7 +565,7 @@ pub fn scan_output(
         y: secrets.y,
         z: secrets.z,
         k_amount: secrets.k_amount,
-        amount,
+        amount: *amount,
         amount_tag: secrets.amount_tag,
         pqc_public_key: pqc_pk,
         pqc_secret_key: pqc_sk,
@@ -701,13 +701,14 @@ pub fn scan_output_recover(
 
     // --- Amount decryption ---
     // `amount_le` is the decrypted cleartext amount — a secret; `Zeroizing` wipes
-    // it on drop. (The `u64` `amount` is moved into the returned `RecoveredOutput`,
-    // whose own zeroization covers the copy that lives there.)
+    // it on drop. The cleartext `u64` is likewise `Zeroizing` so early returns on
+    // commitment mismatch do not leave amount on the stack; the value moved into
+    // `RecoveredOutput` is a separate copy wiped by that struct's `ZeroizeOnDrop`.
     let mut amount_le = Zeroizing::new([0u8; 8]);
     for i in 0..8 {
         amount_le[i] = enc_amount[i] ^ secrets.k_amount[i];
     }
-    let amount = u64::from_le_bytes(*amount_le);
+    let amount = Zeroizing::new(u64::from_le_bytes(*amount_le));
 
     // --- Recover spend key: B' = O - ho*G - y*T ---
     let o_point = CompressedEdwardsY(*output_key)
@@ -736,7 +737,7 @@ pub fn scan_output_recover(
 
     // --- Commitment verification: C == z*G + amount*H ---
     // `amount_scalar` carries the cleartext amount; `Zeroizing` wipes its limbs.
-    let amount_scalar = Zeroizing::new(Scalar::from(amount));
+    let amount_scalar = Zeroizing::new(Scalar::from(*amount));
     let expected_c = (G * *z_scalar) + (*H * *amount_scalar);
     if expected_c.compress().to_bytes() != *commitment {
         return Err(CryptoError::DecapsulationFailed(
@@ -753,7 +754,7 @@ pub fn scan_output_recover(
         y: secrets.y,
         z: secrets.z,
         k_amount: secrets.k_amount,
-        amount,
+        amount: *amount,
         amount_tag: secrets.amount_tag,
         recovered_spend_key,
         combined_ss: combined_ss.0,
