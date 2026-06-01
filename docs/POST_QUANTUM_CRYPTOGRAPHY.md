@@ -342,9 +342,12 @@ The sender can re-derive `combined_ss` at proof time without storing it:
 - **`decrypt_amount(combined_ss, enc_amount, amount_tag, output_index)`**:
   Decrypts the amount and verifies the `amount_tag`.
 
-- **Label encryption (5-T, FA-11):** `construct_output` always encrypts an
-  8-byte plaintext under `k_label` (sentinel `0xFF…` at V3.0 launch). Scan
-  paths verify `label_tag` and decrypt `enc_label`; cooperative tags use
+- **Label encryption (5-T, FA-11):** `construct_output` always XOR-encrypts an
+  8-byte **plaintext** under per-output `k_label`. Launch default plaintext is
+  the sentinel block `0xFF…` (`SENTINEL_PLAINTEXT`); on-wire `enc_label` bytes
+  are **unique per output** (never literal `0xFF` on wire). Scan verifies
+  HKDF-derived `label_tag` (integrity tag, same role as `amount_tag` — not a
+  sentinel/category flag), then decrypts `enc_label`; cooperative tags use
   `wire_version = 0x01` per `docs/design/SUBADDRESS_UNDER_PQC.md` §5.7.11.
 
 - **`compute_output_key_image(combined_ss, output_index, spend_secret, hp_of_O)`**:

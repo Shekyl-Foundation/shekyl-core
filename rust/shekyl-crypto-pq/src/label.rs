@@ -5,8 +5,16 @@
 
 //! Per-output logical label encryption (5-T substrate, §5.7.11).
 //!
-//! Every output carries a fixed 8-byte plaintext XOR-encrypted under `k_label`,
-//! with a 1-byte `label_tag` integrity check — same discipline as amounts.
+//! Every output carries a fixed 8-byte **plaintext** XOR-encrypted under
+//! per-output `k_label`, with a 1-byte `label_tag` integrity check — same
+//! discipline as amounts.
+//!
+//! **Normative:** `SENTINEL_PLAINTEXT` (`0xFF…`) is the plaintext when no
+//! cooperative tag is sent. On-wire `enc_label` bytes are `plaintext XOR
+//! k_label[..8]` and **differ per output** even for sentinel sends. There is
+//! **no** cleartext-constant wire path (writing `0xFF` directly into `enc_label`
+//! is forbidden). `label_tag` is HKDF-derived like `amount_tag`; it is **not**
+//! a sentinel-vs-tag category flag — classification happens only after decrypt.
 
 use zeroize::Zeroizing;
 

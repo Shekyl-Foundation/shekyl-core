@@ -1669,8 +1669,12 @@ serialized immediately after `enc_amounts` and before `outPk`:
 [8 bytes: label_plaintext XOR k_label[..8]] [1 byte: label_tag]
 ```
 
-- Launch default: plaintext is the sentinel block `0xFF…` (never cleartext on wire).
-- `label_tag` is HKDF-derived (`shekyl-output-label-tag`); verified at scan like `amount_tag`.
+- Launch default **plaintext** is the sentinel block `0xFF…` (`SENTINEL_PLAINTEXT`);
+  on-wire `enc_label` is `plaintext XOR k_label[..8]` per output — **never**
+  a fixed `0xFF` wire constant (that would fingerprint all non-merchant pays).
+- `label_tag` is the first byte of HKDF-Expand(`shekyl-output-label-tag` ‖ index);
+  verified at scan like `amount_tag` (integrity / fast-reject only — **not** a
+  cleartext sentinel-vs-tag discriminator).
 - Included in `serialize_rctsig_base` (transaction binding / prehash). **Not** part of the FCMP++ leaf witness.
 - `construct_output` / wallet signing supply pre-computed 9-byte values parallel to `enc_amount`.
 
