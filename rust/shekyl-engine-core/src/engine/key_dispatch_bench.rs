@@ -130,6 +130,8 @@ fn build_output_paid_to(
         view_tag: ViewTag([constructed.view_tag_x25519]),
         enc_amount: constructed.enc_amount,
         amount_tag_on_chain: constructed.amount_tag,
+        enc_label: constructed.enc_label,
+        label_tag_on_chain: constructed.label_tag,
         output_index,
         tx_hash,
     }

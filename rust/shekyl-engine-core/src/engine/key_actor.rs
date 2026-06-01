@@ -261,6 +261,8 @@ impl Message<ClaimOutput> for KeyActor {
             &input.commitment,
             &input.enc_amount,
             input.amount_tag_on_chain,
+            &input.enc_label,
+            input.label_tag_on_chain,
             input.view_tag.0[0],
             input.output_index,
         ) else {
@@ -706,6 +708,8 @@ mod tests {
             view_tag: ViewTag([constructed.view_tag_x25519]),
             enc_amount: constructed.enc_amount,
             amount_tag_on_chain: constructed.amount_tag,
+            enc_label: constructed.enc_label,
+            label_tag_on_chain: constructed.label_tag,
             output_index,
             tx_hash,
         }

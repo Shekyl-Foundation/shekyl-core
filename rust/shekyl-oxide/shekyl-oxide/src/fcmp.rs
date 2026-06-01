@@ -43,6 +43,34 @@ impl EncryptedAmount {
     }
 }
 
+/// An encrypted logical label (9 bytes: 8 XOR-encrypted plaintext + 1 HKDF tag).
+///
+/// Launch-default outputs encrypt the sentinel plaintext; cooperative tags use
+/// `LABEL_WIRE_VERSION` in `shekyl-crypto-pq::label`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct EncryptedLabel {
+    /// XOR-encrypted 8-byte label plaintext.
+    pub label: [u8; 8],
+    /// HKDF-derived integrity tag.
+    pub label_tag: u8,
+}
+
+impl EncryptedLabel {
+    /// Read an EncryptedLabel from a reader (9 bytes).
+    pub fn read<R: Read>(r: &mut R) -> io::Result<EncryptedLabel> {
+        Ok(EncryptedLabel {
+            label: read_bytes(r)?,
+            label_tag: read_byte(r)?,
+        })
+    }
+
+    /// Write the EncryptedLabel to a writer (9 bytes).
+    pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        w.write_all(&self.label)?;
+        w.write_all(&[self.label_tag])
+    }
+}
+
 /// The proof type used by a transaction.
 ///
 /// Shekyl only accepts `FcmpPlusPlusPqc` from genesis. Legacy Monero types (MLSAG, Borromean,
@@ -82,6 +110,8 @@ pub struct ProofBase {
     pub fee: u64,
     /// The encrypted amounts for the recipients to decrypt.
     pub encrypted_amounts: Vec<EncryptedAmount>,
+    /// Per-output encrypted logical labels (sentinel at launch).
+    pub encrypted_labels: Vec<EncryptedLabel>,
     /// The output commitments.
     pub commitments: Vec<CompressedPoint>,
 }
@@ -93,6 +123,9 @@ impl ProofBase {
         write_varint(&self.fee, w)?;
         for encrypted_amount in &self.encrypted_amounts {
             encrypted_amount.write(w)?;
+        }
+        for encrypted_label in &self.encrypted_labels {
+            encrypted_label.write(w)?;
         }
         write_raw_vec(CompressedPoint::write, &self.commitments, w)
     }
@@ -116,6 +149,9 @@ impl ProofBase {
                 fee: read_varint(r)?,
                 encrypted_amounts: (0..outputs)
                     .map(|_| EncryptedAmount::read(r))
+                    .collect::<Result<_, _>>()?,
+                encrypted_labels: (0..outputs)
+                    .map(|_| EncryptedLabel::read(r))
                     .collect::<Result<_, _>>()?,
                 commitments: read_raw_vec(CompressedPoint::read, outputs, r)?,
             },

@@ -98,7 +98,7 @@ use shekyl_crypto_pq::{
 };
 use shekyl_oxide::{
     block::{Block, BlockHeader},
-    fcmp::{EncryptedAmount, ProofBase, PrunedProofs},
+    fcmp::{EncryptedAmount, EncryptedLabel, ProofBase, PrunedProofs},
     io::CompressedPoint,
     transaction::{Input, Output, Pruned, Timelock, Transaction, TransactionPrefix},
 };
@@ -275,6 +275,7 @@ fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey)
     let mut outputs: Vec<Output> = Vec::with_capacity(n_outputs);
     let mut commitments: Vec<CompressedPoint> = Vec::with_capacity(n_outputs);
     let mut encrypted_amounts: Vec<EncryptedAmount> = Vec::with_capacity(n_outputs);
+    let mut encrypted_labels: Vec<EncryptedLabel> = Vec::with_capacity(n_outputs);
     let mut kem_ct_blob: Vec<u8> = Vec::with_capacity(n_outputs * HYBRID_KEM_CT_BYTES);
 
     let spend_key = fake_spend_key_bytes();
@@ -303,6 +304,10 @@ fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey)
         encrypted_amounts.push(EncryptedAmount {
             amount: out.enc_amount,
             amount_tag: out.amount_tag,
+        });
+        encrypted_labels.push(EncryptedLabel {
+            label: out.enc_label,
+            label_tag: out.label_tag,
         });
         // Per `scan.rs::scan_transaction`, the KEM ciphertext blob
         // for output `o` is read at offset `o * HYBRID_KEM_CT_BYTES`
@@ -344,6 +349,7 @@ fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey)
             base: ProofBase {
                 fee: 0,
                 encrypted_amounts,
+                encrypted_labels,
                 commitments,
             },
         }),
@@ -494,6 +500,8 @@ mod tests {
             &out.commitment,
             &out.enc_amount,
             out.amount_tag,
+            &out.enc_label,
+            out.label_tag,
             out.view_tag_x25519,
             /* output_index */ 0,
         )
@@ -530,6 +538,8 @@ mod tests {
             &out.commitment,
             &out.enc_amount,
             out.amount_tag,
+            &out.enc_label,
+            out.label_tag,
             out.view_tag_x25519,
             /* output_index */ 0,
         );
