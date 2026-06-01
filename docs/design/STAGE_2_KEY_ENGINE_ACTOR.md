@@ -786,6 +786,24 @@ The load-bearing property is that `AllKeysBlob`'s `Drop`
   wipe is `Drop`; `on_stop` is defense-in-depth.
 - **Panic** — see §4.5.
 
+**`ZeroizeOnDrop` is the guarantee; `on_stop` is a strictly-earlier bonus —
+never invert this.** The security property rests on `AllKeysBlob`'s `Drop`
+running, *not* on `on_stop`. `Drop` fires on **every** teardown: graceful
+stop, last-`ActorRef`-dropped, and runtime-abort all drop the parked actor
+future and run its destructor. `on_stop` fires **only** on the graceful /
+signal paths, **never** on an abort (a runtime drop aborts the task — `Drop`
+runs, `on_stop` does not). So `on_stop`'s explicit `self.blob.zeroize()` is a
+strictly-earlier defense-in-depth wipe, and the require-ambient disposition is
+robust precisely because the *guarantee* (`Drop`) covers the abort case that
+`on_stop` does not. A future change must **never** "optimize" by treating
+`on_stop` as the primary wipe and weakening or removing the blob's
+`ZeroizeOnDrop` — that silently loses the wipe on the abort path. (This is also
+a retrospective mark against the rejected owned-runtime path of §4.2: its
+`shutdown_background()` teardown left "does the abandoned task's future
+actually get dropped, and when?" murkier than a clean abort — i.e. murkier
+about whether the guarantee even fires — which is one more reason
+require-ambient is the correct disposition.)
+
 Drop ordering relative to `WalletFile` (`lifecycle.rs:996-998`) is unchanged:
 the actor's blob is independent of the file handle; both zeroize on their own
 `Drop`.
@@ -953,13 +971,30 @@ directly.
    after the actor is `stop`ped — the address still resolves; an `ask` would
    fail). `derive_subaddress(Audit)` likewise resolves post-stop;
    `derive_subaddress(Recipient)` returns the stub error.
-4. **Lifecycle + terminal-fault path:**
-   - **Clean stop** drops the blob — zeroize observable via a test-only drop
-     counter on the fixture (not on production `AllKeysBlob`).
-   - **Panic → fail-stop → zeroize** (T2/T8): inject a panic in a test message
-     handler; assert (a) the actor is dead, (b) the fixture drop counter fired
-     (blob zeroized on unwind, §4.5), and (c) the next `ask` returns
-     `KeyActorUnavailable`.
+4. **Lifecycle + terminal-fault path:** the blob wipe itself rests on
+   `AllKeysBlob: ZeroizeOnDrop` (the guarantee, §4.3) and is byte-level tested
+   in `shekyl-crypto-pq`. These unit tests deliberately do **not** re-observe
+   the blob wipe via a fixture drop-counter — that would force `KeyActor`
+   generic over the blob type and distort the production shape for a property
+   the dependency already covers (`key_actor.rs` test-module docstring). They
+   pin instead (a) the *type-level* `ZeroizeOnDrop` contract
+   (`zeroize_on_drop_contract`), and (b) the *lifecycle behavior that triggers
+   the drop*:
+   - **Clean stop** (`handle_resolved_methods_resolve_after_stop`): an explicit
+     `actor.stop_gracefully().await` + `wait_for_shutdown().await` ends the
+     task; handle-resolved reads still serve post-stop. Graceful stop is also
+     the *only* path that runs `on_stop`: a test that wanted to observe the
+     `on_stop` wipe specifically must use `stop_gracefully`, **not** rely on
+     runtime-teardown — a runtime drop aborts the task, which fires `Drop` but
+     not `on_stop` (§4.3). The guarantee is unaffected either way.
+   - **Panic → fail-stop** (`panic_fail_stops_and_asks_are_terminally_unavailable`,
+     T2/T8): inject a panic; assert the actor is dead and the next `ask`
+     returns `KeyActorUnavailable`. The blob wipe on this path is `Drop` on
+     unwind (§4.5) — the guarantee, not `on_stop`.
+   - **Reply-path wipe** (`reply_path_wipes_on_drop`, Finding 4 / §4.3.1): the
+     one place a dedicated instrumented `ZeroizeOnDrop` counter *is* used —
+     routing a probe reply through the mailbox observes the channel-drop wipe
+     without touching `KeyActor`'s production shape.
    - **Terminal, non-retryable** (§2.6 contract): assert that *repeated* `ask`s
      after death all return `KeyActorUnavailable` (a retry never recovers),
      pinning the "abort, don't retry" contract.

@@ -1265,6 +1265,35 @@ sustainability is unaffected by the recalibration.
   *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
   Engine architecture: actor model with staged migration*.
 
+  *Named landmine — `drive_persistence` owned-runtime vs. the ambient
+  `KeyActor` (cross-runtime `ask`).* Surfaced during the Stage 2
+  `KeyEngine`-actor runtime-hosting round (`STAGE_2_KEY_ENGINE_ACTOR.md`
+  §4.2). In Stage 2 it is **latent**: `try_claim_output` is cold and the
+  scanner-merge post-pass reads the synchronous `HandleDerivationViewSecret`
+  projection (the 6-i disposition), so the `KeyActor` and `drive_persistence`
+  never interact. But `drive_persistence`'s *else*-branch
+  (`lifecycle.rs:811-822`, the non-multi-thread / sync-`close` path reached
+  when no ambient runtime or a current-thread one is present) spawns an
+  **owned current-thread runtime on a scoped thread**, while the `KeyActor`
+  lives on the **outer ambient runtime**. When a Stage-4 migration makes the
+  actor path hot and a persistence-driven path needs to `ask` the
+  `KeyActor` (or any other actor), an `ask` issued from inside the owned
+  scoped runtime targets an `ActorRef` whose task is parked on the *outer*
+  runtime — the cross-runtime-`ask` mismatch (`block_on` waiting on a oneshot
+  that only the other runtime drives). This is the same substrate-contract
+  mismatch the Stage 2 runtime round was about (sync entry point vs. async
+  actor), one altitude up. Stage 4 must reconcile it explicitly — e.g. route
+  the sync `close`/`change_password` path's actor interactions through the
+  ambient runtime rather than the owned scoped one, or eliminate the
+  owned-runtime else-branch entirely once the `PersistenceEngine` actor
+  migration (sequence item 2) removes the sync-driven flush. Open Stage 4
+  with this named, not rediscovered.
+
+  *Blocks on (this sub-item):* nothing in Stage 2 (latent); becomes live the
+  first time a Stage-4 actor `ask` is reachable from a `drive_persistence`
+  else-branch caller. *Target:* reconcile in the Stage 4 `PersistenceEngine`
+  migration (sequence item 2) at the latest.
+
 - **RPC boundary refinements — idle eviction, `engine_lock`,
   multi-engine registry, snapshot reads, multi-peer archival
   routing.** Implement the refinements to the shared-handle model
