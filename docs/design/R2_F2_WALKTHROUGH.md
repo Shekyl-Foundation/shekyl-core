@@ -9,19 +9,47 @@ minimal design. Implementation tracks **FA-8** (payment requests + reconcile UI)
 
 | Layer | V3.0 at genesis | This walkthrough |
 |-------|-----------------|------------------|
-| Wire `enc_label` + `label_tag` | **Yes** — FA-11; sentinel `0xFF…` every output | Assumed landed or in review (PR #100) |
+| Wire `enc_label` + `label_tag` | **Yes** — FA-11; **sentinel plaintext** `0xFF…` XOR-encrypted **per output** (wire bytes unique; never literal `0xFF` on wire) | PR #100 + §0 engineer sign-off |
 | Meaningful `REQUEST` tags on wire | **No** — product flag later | Walk **(b)** accepts sentinel-only launch |
 | `PaymentRequest` store + GUI | **No** — FA-8 | Use **spec walkthrough** (mockups / paper prototype) |
 | `shekyl-proofs` dispute APIs | **Exists** — cite in S5 | Reference only |
 
-**How to run.** 60–90 minutes, one facilitator + product owner (+ optional engineer
-for “can we build this?” notes). Each section ends with **Pass / Revise / Block**
-— only **Pass** on all **(a)–(d)** and **S1–S6** closes R2-F2 per
+**How to run.** **§0 first** (wire/crypto — engineer, ~15 min). Then 60–90 minutes UX
+with facilitator + product owner. Each UX section ends with **Pass / Revise / Block**
+— only **Pass** on §0 + **(a)–(d)** + **S1–S6** closes R2-F2 per
 `SUBADDRESS_UNDER_PQC.md` §11(e).
 
 ---
 
+## 0. Wire/crypto pre-flight (before UX sign-off)
+
+**Why first.** A UX walkthrough cannot detect fatal wire mistakes (sentinel written
+as a wire constant, or `label_tag` used as a category flag). If §0 fails, **stop**
+— fix PR #100 / spec before product sign-off.
+
+**Normative spec:** `SUBADDRESS_UNDER_PQC.md` §5.7.11 **Wire invariants**.  
+**Reference code (FA-11):** `rust/shekyl-crypto-pq/src/label.rs`, `output.rs`
+(`construct_output` / `scan_output_recover`), `derivation.rs` (`label_tag`).
+
+| # | Invariant | Verification (engineer attests) | Pass |
+|---|-----------|-----------------------------------|------|
+| W1 | **Sentinel is plaintext, not wire constant.** `SENTINEL_PLAINTEXT = 0xFF…` is encrypted with `enc_label[i] = pt[i] XOR k_label[i]` per output. | Read `construct_output` + `encrypt_label_plaintext`; grep production paths for forbidden `memset(enc_label, 0xFF)` (test stubs may zero — must not ship on wire). KAT: same sentinel, different outputs → different `enc_label` octets when `k_label` differs. | ☐ |
+| W2 | **`label_tag` is HKDF integrity only** (first byte of `shekyl-output-label-tag` ‖ index), **not** `0=sentinel / 1=tag`. | Read `derive_output_secrets`; confirm scan compares derived tag then **decrypts** before `is_sentinel_plaintext` / `REQUEST` classify. | ☐ |
+| W3 | **Consensus: presence + 9-byte size, not content.** | `rctSigBase` serialization + size checks; no validator branch on sentinel vs cooperative plaintext. | ☐ |
+| W4 | **`rid` opaque random** — never sequential in URI/store assignment. | Spec §5.7.11 rid pin; FA-8 must use CSPRNG (not monotonic counter). | ☐ |
+
+**Engineer attestation (sign below or in PR #100):** I confirm W1–W3 against FA-11
+at commit: _______________
+
+| Result | Notes |
+|--------|-------|
+| ☐ Pass ☐ Block | |
+
+---
+
 ## 1. Facilitator checklist (before you start)
+
+- [ ] **§0 wire/crypto pre-flight passed** (W1–W3 minimum).
 
 - [ ] Attendees read §5.7.8 (pit of success — no “generate new address” default).
 - [ ] Attendees accept **money never depends on the label** (§5.7.9 UX assertion).
@@ -42,14 +70,16 @@ is absent (Tier 4 on label dimension only).
 
 | Tier | Name | Label + books condition | UX one-liner |
 |------|------|-------------------------|--------------|
-| **1** | Auto-reconciled | Label echo matches **one** open request; amount in tolerance; not expired | Silent — already on invoice |
+| **1** | Auto-reconciled | Label echo matches **one** open request; amount in tolerance; not expired (or expired + rid echo with confirm — feature build) | Silent — already on invoice |
 | **2** | Probable | Single open request fits amount+window; label missing or amount slightly off | “Likely invoice X — confirm” (one tap) |
 | **3** | Ambiguous | Multiple open requests fit amount+window | Pick candidate or ask for tx proof |
 | **4** | Unattributed | No request matches | “Received — not linked to an invoice” (not an error) |
 
-**Launch posture (5-T).** All cooperative Shekyl→Shekyl sends write **uniform**
-`enc_label` ciphertext; minimal wallet writes **sentinel** only → receiver sees
-Tier **4** on the label axis until FA-8 + feature flag enable `REQUEST` tags.
+**Launch posture (5-T).** Every output carries 9 bytes of **opaque ciphertext**
+(`enc_label` + `label_tag`); sentinel sends XOR-encrypt the `0xFF…` **plaintext**
+per output (wire bytes are not constant). Minimal wallet writes sentinel plaintext
+only → receiver sees Tier **4** on the label axis until FA-8 + feature flag enable
+`REQUEST` tags.
 
 ---
 
@@ -66,19 +96,19 @@ Tier **4** on the label axis until FA-8 + feature flag enable `REQUEST` tags.
 2. Hero shows **one reusable address** + copy: *“Reuse freely — on-chain private.”*
 3. Merchant taps **Create payment request** (not “new address”).
 4. Enters: amount `0.15 SKYL`, label `INV-2026-0042`, expiry optional.
-5. Wallet shows QR + string:
-   `shekyl:<primary>?amount=150000000000&rid=42&label=INV-2026-0042`
+5. Wallet shows QR + string ( **`rid` opaque random**, not sequential — e.g.):
+   `shekyl:<primary>?amount=150000000000&rid=9182736450192837461&label=INV-2026-0042`
 
 **Customer path (mock GUI).**
 
 6. Customer scans QR in Shekyl wallet (feature-flag build **or** narrate future).
 7. Confirm screen: amount + *“Invoice: INV-2026-0042.”*
-8. Send → tx includes `enc_label` with `REQUEST` + `rid=42` (**feature on**)
+8. Send → tx includes `enc_label` with `REQUEST` + echoed `rid` (**feature on**)
    **or** sentinel only at launch — facilitator states which build is being signed off.
 
 **Receiver path (mock GUI).**
 
-9. Refresh detects output; decrypt label → match `PaymentRequest` id 42.
+9. Refresh detects output; decrypt label → match `PaymentRequest` by opaque `rid`.
 10. **Tier 1:** request → **Matched**; payment appears under **History → Matched**.
 11. Optional notification: “Invoice INV-2026-0042 paid.”
 
@@ -215,18 +245,20 @@ or integrate: S1=(a), S2=(c), S3=(b), S4=(d).
 |--------|-------|
 | ☐ Pass ☐ Revise ☐ Block | |
 
-### S3 — Non-Shekyl sender (no meaningful label)
+### S3 — Third-party / non-cooperative sender
 
 | Step | Action | Expected |
 |------|--------|----------|
-| 1 | External wallet sends to primary address | Sentinel or valid uniform ciphertext |
-| 2 | Merchant reconcile | Unattributed; amount visible |
-| 3 | Optional | Hint if exactly one pending amount match |
+| 1 | External wallet sends valid FCMP++ PQC tx to primary address | **9-byte label slot present**; content opaque to consensus |
+| 2 | Merchant reconcile | Label dimension Tier **4** if plaintext is sentinel after decrypt; amount visible |
+| 3 | Optional | Hint if exactly one pending amount match (amount+window) |
 | **Pass** | | Reconcile without support ticket |
 
-**Note.** Under **5-T**, wallets that **omit** the fixed-size label slot are
-**consensus-invalid**, not “unattributed inter-wallet.” This scenario is
-**non-Shekyl but valid FCMP++ PQC tx** (sentinel-shaped label).
+**Precision (5-T).** Consensus enforces **presence and exact size** of `enc_label`
+per output; it does **not** validate plaintext. Wallets that **omit** the slot or
+wrong the size produce **invalid** txs — they are not a fingerprinted “skipped label”
+class. This scenario is a **valid** third-party tx that still carries a correctly
+sized encrypted slot (typically sentinel plaintext after decrypt).
 
 | Result | Notes |
 |--------|-------|
@@ -260,12 +292,14 @@ or integrate: S1=(a), S2=(c), S3=(b), S4=(d).
 
 ### S6 — Expired request, late payment
 
-| Step | Action | Expected |
-|------|--------|----------|
-| 1 | Request expires | State **Expired** |
-| 2 | Customer pays stale QR later | Payment **Unattributed** |
-| 3 | Merchant | Manual match available; expired row unchanged |
-| **Pass** | | Stale QR does not break wallet |
+| Step | Action | Expected (sentinel launch) | Expected (feature build + rid echo) |
+|------|--------|---------------------------|-------------------------------------|
+| 1 | Request expires | State **Expired** | Same |
+| 2 | Customer pays stale QR later | **Unattributed** (no rid on wire) | **Matched + warning** if rid matches; confirm required |
+| 3 | Merchant | Manual match available | Expired row unchanged; books need explicit confirm |
+| **Pass** | | Stale QR does not break wallet | Rid overrides expiry per §5.7.9 precedence pin |
+
+**Product pin:** Accept both rows for R2-F2; FA-8 re-walk implements feature column.
 
 | Result | Notes |
 |--------|-------|
@@ -306,6 +340,7 @@ in repo (check boxes, date, initials) or attach meeting notes link.
 
 | Gate | ID | Pass | Owner initials | Date |
 |------|-----|------|----------------|------|
+| Wire/crypto | §0 W1–W4 | ☐ | | |
 | Walkthrough | (a) | ☐ | | |
 | Walkthrough | (b) | ☐ | | |
 | Walkthrough | (c) | ☐ | | |
