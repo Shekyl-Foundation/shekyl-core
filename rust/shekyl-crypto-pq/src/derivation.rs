@@ -625,7 +625,10 @@ mod tests {
                 .unwrap()
                 .try_into()
                 .unwrap();
-            assert_eq!(wire9_arr, expected_wire9, "vector {i}: enc_label_sentinel_9 mismatch");
+            assert_eq!(
+                wire9_arr, expected_wire9,
+                "vector {i}: enc_label_sentinel_9 mismatch"
+            );
 
             assert_eq!(
                 secrets.ml_dsa_seed.as_slice(),
