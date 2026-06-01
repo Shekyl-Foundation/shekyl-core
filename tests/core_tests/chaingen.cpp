@@ -506,6 +506,7 @@ static bool try_v3_scan_output(const cryptonote::account_base& from, const trans
     if (tx.version < 3) return false;
     if (j >= tx.rct_signatures.outPk.size()) return false;
     if (j >= tx.rct_signatures.enc_amounts.size()) return false;
+    if (j >= tx.rct_signatures.enc_labels.size()) return false;
 
     std::vector<tx_extra_field> extra_fields;
     if (!parse_tx_extra(tx.extra, extra_fields)) return false;
@@ -633,6 +634,7 @@ static bool compute_v3_key_image(const cryptonote::account_base& from,
     if (keys.m_ml_kem_decap_key.empty() || tx.version < 3) return false;
     if (out_no >= tx.rct_signatures.outPk.size()) return false;
     if (out_no >= tx.rct_signatures.enc_amounts.size()) return false;
+    if (out_no >= tx.rct_signatures.enc_labels.size()) return false;
 
     std::vector<tx_extra_field> extra_fields;
     if (!parse_tx_extra(tx.extra, extra_fields)) return false;
