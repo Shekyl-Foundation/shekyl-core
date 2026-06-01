@@ -18,8 +18,8 @@ fn domain_entropy(label: &str) -> [u8; 32] {
 
 fn encode_bip39(network: Network, label: &str) -> String {
     let entropy = domain_entropy(label);
-    let mnemonic = shekyl_crypto_pq::bip39::mnemonic_from_entropy(&entropy)
-        .expect("mnemonic_from_entropy");
+    let mnemonic =
+        shekyl_crypto_pq::bip39::mnemonic_from_entropy(&entropy).expect("mnemonic_from_entropy");
     let net = match network {
         Network::Mainnet => DerivationNetwork::Mainnet,
         Network::Stagenet => DerivationNetwork::Stagenet,
@@ -54,11 +54,17 @@ fn encode_raw32(network: Network, label: &str) -> String {
 fn main() {
     println!(
         "mainnet_treasury={}",
-        encode_bip39(Network::Mainnet, "shekyl-v3-genesis-treasury-mainnet-placeholder-v1")
+        encode_bip39(
+            Network::Mainnet,
+            "shekyl-v3-genesis-treasury-mainnet-placeholder-v1"
+        )
     );
     println!(
         "stagenet_treasury={}",
-        encode_bip39(Network::Stagenet, "shekyl-v3-genesis-treasury-stagenet-placeholder-v1")
+        encode_bip39(
+            Network::Stagenet,
+            "shekyl-v3-genesis-treasury-stagenet-placeholder-v1"
+        )
     );
     for i in 1..=5 {
         println!(
