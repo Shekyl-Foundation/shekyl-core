@@ -1117,7 +1117,17 @@ sustainability is unaffected by the recalibration.
   `error.rs:615`). This round must resolve the incoherence **before** that stub
   is implemented.
 
-  *Design doc (when the round opens):* `docs/design/SUBADDRESS_UNDER_PQC.md`.
+  *Design doc:* `docs/design/SUBADDRESS_UNDER_PQC.md` — **Round 3** (2026-05-31).
+  **T2 PINNED (§4.6):** counterparty collusion **out of mandatory V3.0
+  scope** — pit of success. **Ship decision: End-state 5 minimal** — one
+  account + payment requests; **no subaddresses at V3.0** (R2-F2 **closed** —
+  `R2_F2_WALKTHROUGH.md` §6). **R2-F9 closed** (§5.7.12): address-knowledge /
+  phishing pin; classical dust-tracking oracle **rejected** (FCMP++); T6 harvest
+  via phishing named (§4.8). **5-T adopted** (§6.4): mandatory `enc_label`;
+  sentinel-only wallet at launch. FA-11 RCT wire landed. **Active parallel:**
+  **FA-6 / FA-9** — T6 view-tag scoping + threat-model propagation. **Remaining:**
+  Round 4 doc sweep; FA-2 subaddress deletion impl PR; FA-7 `WALLET_REWRITE_PLAN`
+  amendment.
 
   *The finding.* Monero's subaddress scheme is cheap because ECDH composes: the
   scanner computes `a·R` with the single account view secret `a` regardless of
