@@ -2868,10 +2868,6 @@ mod start_refresh_integration_tests {
     //    dropped.
     // 3. Wrap in `Arc<RwLock<…>>` and call `Engine::start_refresh`.
 
-    /// Build an `Engine<SoloSigner, TestDaemon>` ready for hybrid
-    /// `start_refresh` tests. Returns the `TempDir` alongside so the
-    /// caller keeps the wallet file alive for the lifetime of the
-    /// engine.
     /// Deterministic master seed shared by every hybrid engine built
     /// via [`make_hybrid_engine_arc`]. Pulled out as a constant (Stage 2)
     /// so tests can re-derive the wallet's [`ViewMaterial`] without an
@@ -2913,6 +2909,9 @@ mod start_refresh_integration_tests {
             .expect("ViewMaterial::try_from_keys against re-derived hybrid blob")
     }
 
+    /// Build an `Engine<SoloSigner, TestDaemon>` ready for hybrid
+    /// `start_refresh` tests. Returns the `TempDir` alongside so the
+    /// caller keeps the wallet file alive for the lifetime of the engine.
     async fn make_hybrid_engine_arc(
         mock: TestDaemon,
     ) -> (Arc<RwLock<Engine<SoloSigner, TestDaemon>>>, TempDir) {

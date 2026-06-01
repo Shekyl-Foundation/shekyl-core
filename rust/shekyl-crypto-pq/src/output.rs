@@ -114,8 +114,7 @@ pub struct ScannedOutput {
     pub z: [u8; 32],
     /// HKDF-derived amount encryption key.
     pub k_amount: [u8; 32],
-    /// Decrypted amount.
-    #[zeroize(skip)]
+    /// Decrypted cleartext amount (secret; wiped on drop with the other fields).
     pub amount: u64,
     /// Verified amount tag.
     #[zeroize(skip)]
@@ -135,7 +134,7 @@ pub struct ScannedOutput {
 impl std::fmt::Debug for ScannedOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScannedOutput")
-            .field("amount", &self.amount)
+            .field("amount", &"[REDACTED]")
             .field("amount_tag", &self.amount_tag)
             .field("h_pqc", &self.h_pqc)
             .field("y", &"[REDACTED]")
