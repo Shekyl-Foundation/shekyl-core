@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Genesis `GENESIS_TX` regen (FA-11 `enc_labels`).** Rebuilt mainnet,
+  testnet, and stagenet genesis coinbase hex with current
+  `build_genesis_coinbase_from_destinations` so `enc_labels` matches
+  `enc_amounts` on load. Mainnet and stagenet use a single treasury output
+  (100_000 SKL combined founder allocation) with deterministic placeholder
+  Bech32m keys until production wallet addresses land; testnet keeps five
+  developer outputs (20_000 SKL each) with deterministic raw-seed keys.
+  Recipient JSON and reference hex live under
+  `shekyl-dev/tools/genesis_builder/`; address generation:
+  `rust/shekyl-crypto-pq/examples/gen_genesis_addrs.rs`.
+
 ### Added
 
 - **engine: `KeyEngine` migrated into a `kameo` actor (Stage 2).**
