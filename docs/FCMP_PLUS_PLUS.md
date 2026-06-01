@@ -1676,6 +1676,9 @@ serialized immediately after `enc_amounts` and before `outPk`:
   verified at scan like `amount_tag` (integrity / fast-reject only — **not** a
   cleartext sentinel-vs-tag discriminator).
 - Included in `serialize_rctsig_base` (transaction binding / prehash). **Not** part of the FCMP++ leaf witness.
+- Label ciphertext has **no** Pedersen commitment backstop (unlike amounts). Prehash binding is the sole relay-tamper defense; AEAD is redundant once bound. CI: `fcmp.enc_label_binds_rctsig_base_prehash`.
+- `genRctFcmpPlusPlus` rejects all-zero `enc_labels` outside fake/test device mode (stub builder must not reach production).
+- KAT: `PQC_OUTPUT_SECRETS.json` includes `enc_label_sentinel` / `enc_label_sentinel_9` wire octets.
 - `construct_output` / wallet signing supply pre-computed 9-byte values parallel to `enc_amount`.
 
 ### Witness Header (256 bytes)
