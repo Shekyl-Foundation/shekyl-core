@@ -636,16 +636,23 @@ mod tests {
     //! The actor owns a real `AllKeysBlob` directly (not a test fixture
     //! wrapper), so the byte-level wipe-on-drop is owned by `shekyl-crypto-pq`'s
     //! `AllKeysBlob` tests, not re-tested here. What these tests pin is (a) the
-    //! *type-level* wipe contract ([`zeroize_on_drop_contract`]) and (b) the
+    //! *type-level* wipe contract ([`zeroize_on_drop_contract`]); (b) the
     //! *lifecycle* behavior that triggers the drop — clean stop and
     //! panic-fail-stop both terminate the actor task, at which point
-    //! `AllKeysBlob`'s `ZeroizeOnDrop` (plus the explicit `on_stop` wipe) runs.
-    //! A fixture-drop-counter that observed the wipe firing at actor-stop would
-    //! require making `KeyActor` generic over the blob type, distorting the
-    //! production shape for a property the dependency already tests; that is
-    //! deliberately not done.
+    //! `AllKeysBlob`'s `ZeroizeOnDrop` (plus the explicit `on_stop` wipe) runs;
+    //! and (c) the *reply-path* wipe ([`reply_path_wipes_on_drop`]), the
+    //! Stage-2-specific surface where a secret-bearing reply traverses kameo's
+    //! channel and must wipe when the channel drops it (e.g. ask-cancellation).
+    //! A fixture-drop-counter that observed the *blob* wipe firing at actor-stop
+    //! would require making `KeyActor` generic over the blob type, distorting
+    //! the production shape for a property the dependency already tests; that is
+    //! deliberately not done. The reply-path observation does *not* need that —
+    //! it routes a dedicated instrumented `ZeroizeOnDrop` reply through the
+    //! mailbox without touching `KeyActor`'s production shape.
 
     use super::*;
+
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
     use shekyl_crypto_pq::kem::HybridCiphertext;
@@ -806,6 +813,11 @@ mod tests {
         fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
         assert_zeroize_on_drop::<AllKeysBlob>();
         assert_zeroize_on_drop::<AuditSubaddressSecret>();
+        // Finding 4: the `try_claim_output` reply carries the decrypted amount
+        // (a secret) plus per-output privacy-linkable identifiers across the
+        // actor channel. The wipe-on-drop contract is what makes a
+        // channel-internal drop (cancelled `ask`) safe.
+        assert_zeroize_on_drop::<OutputClaim>();
     }
 
     // §5.2 test 3 — Handle-resolved methods resolve *after the actor is stopped*
@@ -913,6 +925,78 @@ mod tests {
         ) -> Self::Reply {
             panic!("test-injected panic: exercise fail-stop");
         }
+    }
+
+    // --- Finding 4 reply-path wipe probe ---------------------------------
+    //
+    // The Stage-2-specific zeroization surface is the reply channel: a
+    // secret-bearing reply moved through kameo's bounded mailbox / oneshot can
+    // leave a copy in a freed channel allocation if the type does not wipe on
+    // drop. `OutputClaim: ZeroizeOnDrop` (asserted in `zeroize_on_drop_contract`)
+    // guarantees the wipe; this harness proves the *mechanism* the channel
+    // relies on — that routing a `ZeroizeOnDrop` reply through the actor and
+    // dropping it (exactly what the channel does to an un-taken reply on
+    // ask-cancellation) runs the zeroizing `Drop`.
+    static PROBE_REPLY_WIPED: AtomicBool = AtomicBool::new(false);
+
+    /// Observable stand-in for `OutputClaim`'s secret fields: its `Zeroize`
+    /// flips the global flag, so the derived `ZeroizeOnDrop` `Drop` is visible.
+    struct ProbeDropFlag;
+    impl Zeroize for ProbeDropFlag {
+        fn zeroize(&mut self) {
+            PROBE_REPLY_WIPED.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[derive(ZeroizeOnDrop)]
+    struct ProbeReplyVal {
+        // The `ZeroizeOnDrop` derive's `Drop` calls `flag.zeroize()`.
+        flag: ProbeDropFlag,
+    }
+
+    struct ProbeReply;
+    impl Message<ProbeReply> for KeyActor {
+        // `Result<T, E>` is `kameo::Reply` for any `T: Send + 'static`, so the
+        // probe reply need not implement `Reply` itself — mirroring the
+        // `Result<OutputClaimResult, _>` shape of the real claim reply.
+        type Reply = Result<ProbeReplyVal, KeyEngineError>;
+
+        async fn handle(
+            &mut self,
+            _msg: ProbeReply,
+            _ctx: &mut Context<Self, Self::Reply>,
+        ) -> Self::Reply {
+            Ok(ProbeReplyVal {
+                flag: ProbeDropFlag,
+            })
+        }
+    }
+
+    // §5.2 test 4 (Finding 4) — the actor reply path wipes on drop. Routes a
+    // `ZeroizeOnDrop` reply through the mailbox, confirms it is intact while the
+    // caller holds it, then drops it (modelling the channel dropping an un-taken
+    // reply on `ask`-cancellation) and asserts the zeroizing `Drop` ran.
+    #[tokio::test]
+    async fn reply_path_wipes_on_drop() {
+        PROBE_REPLY_WIPED.store(false, Ordering::SeqCst);
+        let handle = KeyEngineHandle::spawn(make_blob(TEST_SEED));
+
+        let reply = handle
+            .actor
+            .ask(ProbeReply)
+            .await
+            .expect("probe reply resolves");
+        assert!(
+            !PROBE_REPLY_WIPED.load(Ordering::SeqCst),
+            "reply must not be wiped while the caller still holds it"
+        );
+
+        drop(reply);
+        assert!(
+            PROBE_REPLY_WIPED.load(Ordering::SeqCst),
+            "dropping the reply runs its zeroizing Drop — the same Drop the \
+             channel runs on an un-taken reply at ask-cancellation"
+        );
     }
 
     // §5.2 test 4 — Panic → fail-stop → terminal, non-retryable
