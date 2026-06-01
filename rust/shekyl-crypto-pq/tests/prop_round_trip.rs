@@ -69,6 +69,8 @@ fn run_round_trip(
         &out.commitment,
         &out.enc_amount,
         out.amount_tag,
+        &out.enc_label,
+        out.label_tag,
         out.view_tag_x25519,
         output_index,
     )
