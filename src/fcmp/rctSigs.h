@@ -81,6 +81,7 @@ namespace rct {
                                const std::vector<xmr_amount> &outamounts,
                                const keyV &commitment_masks,
                                const std::vector<std::array<uint8_t, 9>> &enc_amounts_precomputed,
+                               const std::vector<std::array<uint8_t, 9>> &enc_labels_precomputed,
                                const keyV &spend_key_y,
                                xmr_amount txnFee, const crypto::hash &referenceBlock,
                                const key &tree_root, uint8_t tree_depth,

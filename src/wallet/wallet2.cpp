@@ -2446,6 +2446,11 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
           if (!enc_amount_ptr) continue;
           uint8_t amount_tag_on_chain = (i < tx.rct_signatures.enc_amounts.size())
               ? tx.rct_signatures.enc_amounts[i][8] : 0;
+          const uint8_t* enc_label_ptr = (i < tx.rct_signatures.enc_labels.size())
+              ? tx.rct_signatures.enc_labels[i].data() : nullptr;
+          if (!enc_label_ptr) continue;
+          uint8_t label_tag_on_chain = (i < tx.rct_signatures.enc_labels.size())
+              ? tx.rct_signatures.enc_labels[i][8] : 0;
 
           std::optional<crypto::view_tag> vt_opt = get_output_view_tag(tx.vout[i]);
           uint8_t view_tag_on_chain = vt_opt ? vt_opt->data : 0;
@@ -2469,7 +2474,8 @@ void wallet2::process_new_transaction(const crypto::hash &txid, const cryptonote
             ct_x25519, ct_ml_kem, cryptonote::ML_KEM_768_CT_BYTES,
             reinterpret_cast<const uint8_t*>(&output_public_key),
             commitment_ptr, enc_amount_ptr,
-            amount_tag_on_chain, view_tag_on_chain,
+            amount_tag_on_chain, enc_label_ptr,
+            label_tag_on_chain, view_tag_on_chain,
             static_cast<uint64_t>(i),
             want_ki ? reinterpret_cast<const uint8_t*>(&m_account.get_keys().m_spend_secret_key) : nullptr,
             want_ki ? reinterpret_cast<const uint8_t*>(&hp_of_O) : nullptr,
@@ -8945,6 +8951,12 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
               std::string(reinterpret_cast<const char*>(ea.data()), ea.size()));
           out.AddMember("enc_amount", rapidjson::Value(hex.c_str(), oalloc), oalloc);
         }
+        {
+          const auto& el = tx.rct_signatures.enc_labels[i];
+          std::string hex = epee::string_tools::buff_to_hex_nodelimer(
+              std::string(reinterpret_cast<const char*>(el.data()), el.size()));
+          out.AddMember("enc_label", rapidjson::Value(hex.c_str(), oalloc), oalloc);
+        }
         outputs_doc.PushBack(out, oalloc);
       }
 
@@ -9073,6 +9085,18 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
           epee::string_tools::parse_hexstr_to_binbuff(ea_arr[i].GetString(), bin);
           tx.rct_signatures.enc_amounts[i].fill(0);
           memcpy(tx.rct_signatures.enc_amounts[i].data(), bin.data(), std::min<size_t>(bin.size(), 9));
+        }
+      }
+
+      // enc_labels (9 bytes each)
+      if (proofs_doc.HasMember("enc_labels") && proofs_doc["enc_labels"].IsArray()) {
+        const auto& el_arr = proofs_doc["enc_labels"];
+        tx.rct_signatures.enc_labels.resize(el_arr.Size());
+        for (rapidjson::SizeType i = 0; i < el_arr.Size(); ++i) {
+          std::string bin;
+          epee::string_tools::parse_hexstr_to_binbuff(el_arr[i].GetString(), bin);
+          tx.rct_signatures.enc_labels[i].fill(0);
+          memcpy(tx.rct_signatures.enc_labels[i].data(), bin.data(), std::min<size_t>(bin.size(), 9));
         }
       }
 
@@ -10173,6 +10197,7 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
 
   rct::keyV claim_commitment_masks(2);
   std::vector<std::array<uint8_t, 9>> claim_enc_amounts(2);
+  std::vector<std::array<uint8_t, 9>> claim_enc_labels(2);
 
   for (size_t oi = 0; oi < 2; ++oi)
   {
@@ -10196,6 +10221,8 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
     memcpy(claim_commitment_masks[oi].bytes, od.z, 32);
     memcpy(claim_enc_amounts[oi].data(), od.enc_amount, 8);
     claim_enc_amounts[oi][8] = od.amount_tag;
+    memcpy(claim_enc_labels[oi].data(), od.enc_label, 8);
+    claim_enc_labels[oi][8] = od.label_tag;
 
     kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
     if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
@@ -10248,6 +10275,7 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
   rv.txnFee = 0;
   rv.outPk.resize(2);
   rv.enc_amounts.resize(2);
+  rv.enc_labels.resize(2);
   rv.p.pseudoOuts.resize(num_inputs);
 
   // Pseudo-outs use zeroCommit (mask = scalar 1), so output masks must
@@ -10283,6 +10311,8 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
 
   for (size_t i = 0; i < 2; ++i)
     rv.enc_amounts[i] = claim_enc_amounts[i];
+  for (size_t i = 0; i < 2; ++i)
+    rv.enc_labels[i] = claim_enc_labels[i];
 
   for (size_t i = 0; i < num_inputs; ++i)
   {

@@ -180,12 +180,15 @@ namespace rct {
         //
         // Replaces the old ecdhInfo vector. Serialized as 9-byte blob per output.
         std::vector<std::array<uint8_t, 9>> enc_amounts;
+        // Per-output encrypted label: bytes [0..8) = label_plaintext XOR k_label[..8],
+        // byte [8] = label_tag (HKDF-derived AAD; same discipline as amount_tag).
+        std::vector<std::array<uint8_t, 9>> enc_labels;
         ctkeyV outPk;
         xmr_amount txnFee; // contains b
         crypto::hash referenceBlock; // FCMP++: block hash anchoring the tree root for proof
 
         rctSigBase() :
-          type(RCTTypeNull), message{}, pseudoOuts{}, enc_amounts{}, outPk{}, txnFee(0), referenceBlock{}
+          type(RCTTypeNull), message{}, pseudoOuts{}, enc_amounts{}, enc_labels{}, outPk{}, txnFee(0), referenceBlock{}
         {}
 
         template<bool W, template <bool> class Archive>
@@ -233,6 +236,34 @@ namespace rct {
           }
           ar.end_array();
 
+          ar.tag("enc_labels");
+          ar.begin_array();
+          PREPARE_CUSTOM_VECTOR_SERIALIZATION(outputs, enc_labels);
+          if (enc_labels.size() != outputs)
+            return false;
+          for (size_t i = 0; i < outputs; ++i)
+          {
+            ar.begin_object();
+            crypto::hash8 trunc_label;
+            uint8_t label_tag;
+            if (typename Archive<W>::is_saving())
+            {
+              memcpy(trunc_label.data, enc_labels[i].data(), 8);
+              label_tag = enc_labels[i][8];
+            }
+            FIELD_N("label", trunc_label);
+            FIELD_N("label_tag", label_tag);
+            if (!typename Archive<W>::is_saving())
+            {
+              memcpy(enc_labels[i].data(), trunc_label.data, 8);
+              enc_labels[i][8] = label_tag;
+            }
+            ar.end_object();
+            if (outputs - i > 1)
+              ar.delimit_array();
+          }
+          ar.end_array();
+
           ar.tag("outPk");
           ar.begin_array();
           PREPARE_CUSTOM_VECTOR_SERIALIZATION(outputs, outPk);
@@ -271,6 +302,24 @@ namespace rct {
               enc_amounts.resize(enc_amounts_blob.size() / 9);
               for (size_t i = 0; i < enc_amounts.size(); ++i)
                 memcpy(enc_amounts[i].data(), &enc_amounts_blob[i * 9], 9);
+            }
+          }
+          {
+            std::string enc_labels_blob;
+            if (typename Archive<W>::is_saving())
+            {
+              enc_labels_blob.resize(enc_labels.size() * 9);
+              for (size_t i = 0; i < enc_labels.size(); ++i)
+                memcpy(&enc_labels_blob[i * 9], enc_labels[i].data(), 9);
+            }
+            FIELD(enc_labels_blob)
+            if (!typename Archive<W>::is_saving())
+            {
+              if (enc_labels_blob.size() % 9 != 0)
+                return false;
+              enc_labels.resize(enc_labels_blob.size() / 9);
+              for (size_t i = 0; i < enc_labels.size(); ++i)
+                memcpy(enc_labels[i].data(), &enc_labels_blob[i * 9], 9);
             }
           }
           FIELD(outPk)

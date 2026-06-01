@@ -100,8 +100,12 @@ namespace
 
         rv.outPk.resize(n_out);
         rv.enc_amounts.resize(n_out);
+        rv.enc_labels.resize(n_out);
         for (size_t i = 0; i < n_out; ++i)
+        {
             rv.outPk[i].dest = copy(destinations[i]);
+            memset(rv.enc_labels[i].data(), 0, rv.enc_labels[i].size());
+        }
 
         keyV C, masks;
         rv.p.bulletproofs_plus.clear();
@@ -114,6 +118,7 @@ namespace
         {
             sc_add(sumout.bytes, masks[i].bytes, sumout.bytes);
             memset(rv.enc_amounts[i].data(), 0, rv.enc_amounts[i].size());
+            memset(rv.enc_labels[i].data(), 0, rv.enc_labels[i].size());
         }
 
         rv.p.pseudoOuts.resize(n_in);
@@ -202,6 +207,7 @@ namespace
           CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus), false, "Mismatched sizes of outPk and bulletproofs_plus");
           CHECK_AND_ASSERT_MES(rv.pseudoOuts.empty(), false, "rv.pseudoOuts is not empty");
           CHECK_AND_ASSERT_MES(rv.outPk.size() == rv.enc_amounts.size(), false, "Mismatched sizes of outPk and rv.enc_amounts");
+          CHECK_AND_ASSERT_MES(rv.enc_labels.size() == rv.enc_amounts.size(), false, "Mismatched sizes of enc_labels and rv.enc_amounts");
         }
 
         for (const rctSig *rvp: rvv)
@@ -276,6 +282,7 @@ namespace
         const std::vector<xmr_amount> &outamounts,
         const keyV &commitment_masks,
         const std::vector<std::array<uint8_t, 9>> &enc_amounts_precomputed,
+        const std::vector<std::array<uint8_t, 9>> &enc_labels_precomputed,
         const keyV &spend_key_y,
         xmr_amount txnFee,
         const crypto::hash &referenceBlock,
@@ -292,6 +299,7 @@ namespace
         CHECK_AND_ASSERT_THROW_MES(outamounts.size() == destinations.size(), "Different number of amounts/destinations");
         CHECK_AND_ASSERT_THROW_MES(commitment_masks.size() == destinations.size(), "Different number of commitment_masks/destinations");
         CHECK_AND_ASSERT_THROW_MES(enc_amounts_precomputed.size() == destinations.size(), "Different number of enc_amounts_precomputed/destinations");
+        CHECK_AND_ASSERT_THROW_MES(enc_labels_precomputed.size() == destinations.size(), "Different number of enc_labels_precomputed/destinations");
         CHECK_AND_ASSERT_THROW_MES(pqc_pk_hashes.size() == inamounts.size(), "Different number of pqc_pk_hashes/inputs");
         CHECK_AND_ASSERT_THROW_MES(spend_key_y.size() == inamounts.size(), "Different number of spend_key_y/inputs");
         CHECK_AND_ASSERT_THROW_MES(tree_paths.size() == inamounts.size(), "Different number of tree_paths/inputs");
@@ -307,6 +315,7 @@ namespace
         // --- Outputs: destinations + enc_amounts ---
         rv.outPk.resize(destinations.size());
         rv.enc_amounts.resize(destinations.size());
+        rv.enc_labels.resize(destinations.size());
         for (size_t i = 0; i < destinations.size(); i++)
             rv.outPk[i].dest = copy(destinations[i]);
 
@@ -341,6 +350,7 @@ namespace
             {
                 sc_add(sumout.bytes, outSk[i].mask.bytes, sumout.bytes);
                 rv.enc_amounts[i] = enc_amounts_precomputed[i];
+                rv.enc_labels[i] = enc_labels_precomputed[i];
             }
 
             // --- Pseudo-out blinding factors (balance proof) ---

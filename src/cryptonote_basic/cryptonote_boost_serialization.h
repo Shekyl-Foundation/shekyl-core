@@ -377,6 +377,7 @@ namespace boost
     if (x.type != rct::RCTTypeFcmpPlusPlusPqc)
       throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
     a & x.enc_amounts;
+    a & x.enc_labels;
     serializeOutPk(a, x.outPk, ver);
     a & x.txnFee;
   }
@@ -397,6 +398,7 @@ namespace boost
     if (x.type != rct::RCTTypeFcmpPlusPlusPqc)
       throw boost::archive::archive_exception(boost::archive::archive_exception::other_exception, "Unsupported rct type");
     a & x.enc_amounts;
+    a & x.enc_labels;
     serializeOutPk(a, x.outPk, ver);
     a & x.txnFee;
     //--------------

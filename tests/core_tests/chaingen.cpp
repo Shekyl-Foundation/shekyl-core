@@ -524,6 +524,7 @@ static bool try_v3_scan_output(const cryptonote::account_base& from, const trans
     auto vt_opt = cryptonote::get_output_view_tag(tx.vout[j]);
     uint8_t view_tag = vt_opt ? vt_opt->data : 0;
     uint8_t amount_tag = tx.rct_signatures.enc_amounts[j][8];
+    uint8_t label_tag = tx.rct_signatures.enc_labels[j][8];
 
     uint8_t ho_buf[32], y_buf[32], z_buf[32], k_amount_buf[32], recovered_bprime[32];
     uint64_t recovered_amount = 0;
@@ -538,7 +539,10 @@ static bool try_v3_scan_output(const cryptonote::account_base& from, const trans
         reinterpret_cast<const uint8_t*>(&output_public_key),
         tx.rct_signatures.outPk[j].mask.bytes,
         tx.rct_signatures.enc_amounts[j].data(),
-        amount_tag, view_tag,
+        amount_tag,
+        tx.rct_signatures.enc_labels[j].data(),
+        label_tag,
+        view_tag,
         static_cast<uint64_t>(j),
         ho_buf, y_buf, z_buf, k_amount_buf, &recovered_amount,
         recovered_bprime, &pqc_pk_buf, &pqc_sk_buf, h_pqc_buf);
@@ -647,6 +651,7 @@ static bool compute_v3_key_image(const cryptonote::account_base& from,
     auto vt_opt = cryptonote::get_output_view_tag(tx.vout[out_no]);
     uint8_t view_tag = vt_opt ? vt_opt->data : 0;
     uint8_t amount_tag = tx.rct_signatures.enc_amounts[out_no][8];
+    uint8_t label_tag = tx.rct_signatures.enc_labels[out_no][8];
 
     uint8_t ho_buf[32], y_buf[32], z_buf[32], k_amount_buf[32], recovered_bprime[32];
     uint64_t recovered_amount = 0;
@@ -661,7 +666,10 @@ static bool compute_v3_key_image(const cryptonote::account_base& from,
         reinterpret_cast<const uint8_t*>(&output_public_key),
         tx.rct_signatures.outPk[out_no].mask.bytes,
         tx.rct_signatures.enc_amounts[out_no].data(),
-        amount_tag, view_tag,
+        amount_tag,
+        tx.rct_signatures.enc_labels[out_no].data(),
+        label_tag,
+        view_tag,
         static_cast<uint64_t>(out_no),
         ho_buf, y_buf, z_buf, k_amount_buf, &recovered_amount,
         recovered_bprime, &pqc_pk_buf, &pqc_sk_buf, h_pqc_buf);

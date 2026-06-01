@@ -155,6 +155,7 @@ namespace cryptonote
 
       tx.rct_signatures.outPk.resize(out_amounts.size());
       tx.rct_signatures.enc_amounts.resize(out_amounts.size());
+      tx.rct_signatures.enc_labels.resize(out_amounts.size());
 
       for (size_t i = 0; i < out_amounts.size(); ++i)
       {
@@ -179,6 +180,8 @@ namespace cryptonote
 
         memcpy(tx.rct_signatures.enc_amounts[i].data(), od.enc_amount, 8);
         tx.rct_signatures.enc_amounts[i][8] = od.amount_tag;
+        memcpy(tx.rct_signatures.enc_labels[i].data(), od.enc_label, 8);
+        tx.rct_signatures.enc_labels[i][8] = od.label_tag;
 
         kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
         if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
@@ -438,6 +441,7 @@ namespace cryptonote
     struct v3_output_rct {
       uint8_t commitment[32];
       std::array<uint8_t, 9> enc_amount_with_tag;
+      std::array<uint8_t, 9> enc_label_with_tag;
       uint8_t commitment_mask[32]; // HKDF z scalar
     };
     std::vector<v3_output_rct> v3_rct_data;
@@ -487,6 +491,8 @@ namespace cryptonote
         memcpy(v3_rct_data[output_index].commitment, od.commitment, 32);
         memcpy(v3_rct_data[output_index].enc_amount_with_tag.data(), od.enc_amount, 8);
         v3_rct_data[output_index].enc_amount_with_tag[8] = od.amount_tag;
+        memcpy(v3_rct_data[output_index].enc_label_with_tag.data(), od.enc_label, 8);
+        v3_rct_data[output_index].enc_label_with_tag[8] = od.label_tag;
         memcpy(v3_rct_data[output_index].commitment_mask, od.z, 32);
 
         kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
@@ -607,6 +613,7 @@ namespace cryptonote
         {
           memcpy(tx.rct_signatures.outPk[i].mask.bytes, v3_rct_data[i].commitment, 32);
           tx.rct_signatures.enc_amounts[i] = v3_rct_data[i].enc_amount_with_tag;
+          tx.rct_signatures.enc_labels[i] = v3_rct_data[i].enc_label_with_tag;
         }
         if (out_commitment_masks)
         {
@@ -702,6 +709,7 @@ namespace cryptonote
     tx.rct_signatures.type = rct::RCTTypeNull;
     tx.rct_signatures.outPk.resize(destinations.size());
     tx.rct_signatures.enc_amounts.resize(destinations.size());
+    tx.rct_signatures.enc_labels.resize(destinations.size());
 
     uint64_t summary_amounts = 0;
     for (size_t i = 0; i < destinations.size(); ++i)
@@ -735,6 +743,8 @@ namespace cryptonote
       memcpy(tx.rct_signatures.outPk[i].mask.bytes, od.commitment, 32);
       memcpy(tx.rct_signatures.enc_amounts[i].data(), od.enc_amount, 8);
       tx.rct_signatures.enc_amounts[i][8] = od.amount_tag;
+      memcpy(tx.rct_signatures.enc_labels[i].data(), od.enc_label, 8);
+      tx.rct_signatures.enc_labels[i][8] = od.label_tag;
 
       kem_field.blob.append(reinterpret_cast<const char*>(od.kem_ciphertext_x25519), 32);
       if (od.kem_ciphertext_ml_kem.ptr && od.kem_ciphertext_ml_kem.len > 0)
