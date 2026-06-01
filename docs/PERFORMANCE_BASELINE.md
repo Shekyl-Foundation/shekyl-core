@@ -97,9 +97,9 @@ Per [`V3_ENGINE_TRAIT_BOUNDARIES.md`](V3_ENGINE_TRAIT_BOUNDARIES.md)
 | `EconomicsEngine` | `base_emission_at` | `engine_trait_bench_economics_base_emission_at` | Stage 1 PR 7 (numbers via CI) |
 | `EconomicsEngine` | `parameters_snapshot` | `engine_trait_bench_economics_parameters_snapshot` | Stage 1 PR 7 (numbers via CI) |
 | `KeyEngine` | `account_public_address` | `engine_trait_bench_key_account_public_address` | Deferred to KeyEngine PR |
-| `KeyEngine` | `try_claim_output` (dispatch) | `engine_trait_bench_key_dispatch` | Stage 2 §5.3 B9 (numbers via CI) |
-| `KeyEngine` | `try_claim_output` (baseline) | `engine_trait_bench_key_dispatch_baseline_claim_mine` | Stage 2 §5.3 B9 (numbers via CI) |
-| `Engine` (merge) | 6-i projection | `engine_trait_bench_key_merge_projection` | Stage 2 §5.3 / §8.1 (numbers via CI) |
+| `KeyEngine` | `try_claim_output` (dispatch) | `engine_trait_bench_key_dispatch` | Stage 2 §5.3 B9 (B9 ratio 1.039 — PASS) |
+| `KeyEngine` | `try_claim_output` (baseline) | `engine_trait_bench_key_dispatch_baseline_claim_mine` | Stage 2 §5.3 B9 (iai 15,163,668) |
+| `Engine` (merge) | 6-i projection | `engine_trait_bench_key_merge_projection` | Stage 2 §5.3 / §8.1 (iai 5,160,059) |
 
 The last three rows are Stage 2 (KeyEngine-actor) benches, not
 §3.3.1 Stage 1 hot paths; they share this document's harness and the
@@ -457,11 +457,13 @@ confirmed at authoring time per §4.4's checklist item 5.
 
 ## Bench: `engine_trait_bench_key_dispatch`
 
-**Status:** Introduced at Stage 2 (KeyEngine actor) §5.3 B9; criterion
-wall-clock numbers deferred to CI `workflow_dispatch` capture at the
-PR's merge SHA. The bench code, the `[[bench]]` manifest row, and the
-`KeyDispatchBenchHarness` shim (gated behind `bench-internals`) land in
-this PR.
+**Status:** Introduced at Stage 2 (KeyEngine actor) §5.3 B9. Wall-clock
+numbers below captured by CI `workflow_dispatch` (run 26732235292) on a
+GitHub-hosted `ubuntu-latest` runner at SHA `d377edfdb` (AMD EPYC 9V74,
+rustc 1.96.0). Re-confirm at the merge SHA if the branch tip advances
+materially before merge. The bench code, the `[[bench]]` manifest row,
+and the `KeyDispatchBenchHarness` shim (gated behind `bench-internals`)
+land in this PR.
 
 **What B9 is: a bench-vs-bench ratio, not an absolute gate.** This
 bench reports three criterion IDs:
@@ -500,16 +502,28 @@ measurement method lands. Only the deterministic-crypto baseline gets an
 iai sibling (`engine_trait_bench_key_dispatch_baseline_claim_mine`,
 below).
 
-*Local criterion sanity observation (not the baseline; smoke run at
-`--sample-size 10`): baseline ≈ 878 µs, actor-mine ≈ 916 µs
-(ratio ≈ 1.04, inside the 5% envelope), actor-not-mine ≈ 90 µs. The
-canonical wall-clock figures are captured by CI at the merge SHA.*
+**Captured wall-clock baseline (CI run 26732235292, SHA `d377edfdb`):**
+
+| criterion ID | mean | median |
+| --- | --- | --- |
+| `baseline_claim_mine` | 1,333,918 ns | 1,330,067 ns |
+| `actor_claim_mine` | 1,386,043 ns | 1,384,646 ns |
+| `actor_claim_not_mine` | 166,793 ns | 165,949 ns |
+
+**B9 verdict: PASS.** `actor_claim_mine / baseline_claim_mine =
+1,386,043 / 1,333,918 = 1.039` (median 1.041) — inside the ≤ 1.05
+envelope; the mailbox `ask` round-trip (~52 µs here) is lost in the
+ML-KEM-768 decap. The `not_mine` figure (167 µs) records the dispatch
+cost against the cheapest real op — evidence for the §8.3 view-scan
+split, not a gate.
 
 ## Bench: `engine_trait_bench_key_dispatch_baseline_claim_mine` (iai)
 
 **Status:** Introduced at Stage 2 §5.3 B9; iai gate-metric numbers
-deferred to CI `workflow_dispatch` capture at the PR's merge SHA (per
-§4.5/§4.6 frozen-baseline discipline, N=3 invariance).
+captured by CI `workflow_dispatch` (run 26732235292, SHA `d377edfdb`,
+valgrind 3.22.0): **`instructions` = 15,163,668**, estimated cycles =
+19,847,252. ML-KEM-768-dominated, as expected; matches the authoring-host
+smoke (~15.16 M). Re-confirm at the merge SHA if the tip advances.
 
 This is the iai-callgrind sibling for the B9 **composition baseline**
 only (`LocalKeys::try_claim_output` over a `Mine` output), driven via an
@@ -539,11 +553,13 @@ captured by CI at the merge SHA.*
 
 ## Bench: `engine_trait_bench_key_merge_projection`
 
-**Status:** Introduced at Stage 2 §5.3 / §8.1; iai gate-metric and
-criterion numbers deferred to CI `workflow_dispatch` capture at the PR's
-merge SHA (per §4.5/§4.6 frozen-baseline discipline, N=3 invariance).
-Unlike the actor dispatch paths, this post-pass is synchronous and
-runtime-free, so it gets a full criterion + iai-callgrind pair
+**Status:** Introduced at Stage 2 §5.3 / §8.1. Numbers captured by CI
+`workflow_dispatch` (run 26732235292, SHA `d377edfdb`): iai
+**`instructions` = 5,160,059** (estimated cycles = 7,174,412) and
+criterion **mean = 437,561 ns** (median 428,632 ns) over the 256-output
+batch — ≈ 20,156 instructions and ≈ 1.71 µs per output. Unlike the actor
+dispatch paths, this post-pass is synchronous and runtime-free, so it
+gets a full criterion + iai-callgrind pair
 (`engine_trait_bench_key_merge_projection_iai.rs`).
 
 The bench drives `populate_engine_handle_fields` — the 6-i
@@ -558,7 +574,10 @@ a `HashMap` lookup (detection residue → on-chain ciphertext), a
 decision.** 6-i does this projection eagerly at merge time; 6-ii would
 defer it to first spend. If the per-output cost is negligible against a
 refresh's other work, eager 6-i stays and 6-ii remains deferred; a
-surprise here reopens §8.1.
+surprise here reopens §8.1. **Verdict: eager 6-i confirmed.** At
+≈ 1.71 µs / output the projection is ~780× cheaper than the per-output
+`Mine` claim it rides alongside (1.33 ms baseline above); deferring it to
+first spend buys nothing, so 6-ii stays deferred.
 
 **Workload class:** Batch-bound, per-output crypto (confirmed at
 authoring per §4.4 checklist item 5). The count scales with the 256
@@ -569,10 +588,10 @@ projection is idempotent-once — it only populates `None` fields), and
 the iai sibling measures one `run_projection` over a `setup`-built
 fixture, matching shapes.
 
-*Local criterion sanity observation (not the baseline; smoke run at
-`--sample-size 10`): ≈ 326 µs for the 256-output batch (≈ 1.3 µs/output)
-— negligible per-output, corroborating the eager-6-i disposition. The
-canonical figures are captured by CI at the merge SHA.*
+*Captured by CI (run 26732235292, SHA `d377edfdb`): criterion mean
+437,561 ns / median 428,632 ns over the 256-output batch (≈ 1.71 µs /
+output); iai 5,160,059 instructions (≈ 20,156 / output). Negligible
+per-output — corroborates the eager-6-i disposition.*
 
 ## Capture environments
 

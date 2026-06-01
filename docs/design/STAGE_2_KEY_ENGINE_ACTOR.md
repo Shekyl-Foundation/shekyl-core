@@ -1029,14 +1029,20 @@ single (synchronously-completing) `try_claim_output` future with a
 under Callgrind did not drive the future body to completion (it collapsed
 the count to ≈4.8k runtime-handshake instructions instead of the ≈15M
 decap), so the bench polls once and asserts `Ready` — zero runtime noise
-in the deterministic count. Frozen baselines are captured at
-this PR's merge SHA via CI `workflow_dispatch`; placeholder sections live
-in [`docs/PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md). Local
-smoke runs: actor-mine/baseline ≈ 1.04 wall-clock (`--sample-size 10`,
-inside the 5% envelope); baseline iai ≈ 15.16 M instructions
-(ML-KEM-768-dominated); merge projection ≈ 1.3 µs/output over a
-256-output batch (negligible — corroborates the eager-6-i /
-§8.1-6-ii-deferred disposition).
+in the deterministic count. Baselines captured by CI `workflow_dispatch`
+(run 26732235292, SHA `d377edfdb`, AMD EPYC 9V74 / rustc 1.96.0 /
+valgrind 3.22.0); full figures in
+[`docs/PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md).
+
+**B9 verdict: PASS.** `actor_claim_mine / baseline_claim_mine =
+1,386,043 ns / 1,333,918 ns = 1.039` (median 1.041), inside the ≤ 1.05
+envelope — the mailbox `ask` round-trip (~52 µs) is lost in the
+ML-KEM-768 decap. Cheap-case `actor_claim_not_mine` ≈ 167 µs (dispatch
+cost against the cheapest real op — §8.3 evidence, not a gate). Baseline
+iai = 15,163,668 instructions (ML-KEM-768-dominated). Merge projection ≈
+1.71 µs/output (iai 5,160,059 over 256) — ~780× cheaper than the
+per-output claim it accompanies, confirming the eager-6-i /
+§8.1-6-ii-deferred disposition.
 
 The DoD's "within 5% of the composition baseline" is **bench-vs-bench against
 a measured baseline**, not an absolute latency gate. Because signing does not

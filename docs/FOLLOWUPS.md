@@ -1089,12 +1089,16 @@ sustainability is unaffected by the recalibration.
   async-dispatch measurement method lands); only the synchronous crypto
   baseline and the merge projection get iai siblings. `compare.py` routes
   all five IDs into the `engine_trait_bench` class by prefix (no script
-  change). Placeholder baseline sections are in
-  `docs/PERFORMANCE_BASELINE.md`; **frozen numbers are captured at the merge
-  SHA via CI `workflow_dispatch`** (the one remaining mechanical step, per
-  the §4.5/§4.6 deferred-capture discipline shared with the economics
-  benches). Local smoke runs: actor-mine/baseline ≈ 1.04 (inside the 5%
-  envelope); merge projection ≈ 1.3 µs/output over 256 outputs. *Entry
+  change). Baselines **captured by CI `workflow_dispatch`** (run
+  26732235292, SHA `d377edfdb`, AMD EPYC 9V74 / rustc 1.96.0 / valgrind
+  3.22.0) and transcribed into `docs/PERFORMANCE_BASELINE.md`: **B9 ratio =
+  1.039 — PASS** (actor 1.386 ms / baseline 1.334 ms, ≤ 1.05); baseline iai
+  15,163,668 instr; merge projection ≈ 1.71 µs/output (iai 5,160,059),
+  confirming eager-6-i. The baseline iai driver was corrected from a
+  current-thread Tokio `block_on` (which collapsed the Callgrind count to
+  ~4.8k handshake instructions under valgrind) to a no-op-waker single
+  poll. Re-confirm at the merge SHA if the branch tip advances materially.
+  *Entry
   resolved; the CI baseline capture rides the merge per the deferred-capture
   pattern.* Target: V3.0, before Phase 2b.
 

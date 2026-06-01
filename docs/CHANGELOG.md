@@ -66,10 +66,16 @@
   `__bench_internals`; `populate_engine_handle_fields` was widened to
   `pub(crate)` so the merge bench drives the real post-pass.
   `compare.py` routes all five IDs into the `engine_trait_bench` threshold
-  class by prefix (no script change). Placeholder baseline sections added to
-  [`docs/PERFORMANCE_BASELINE.md`](PERFORMANCE_BASELINE.md); frozen numbers
-  are captured at the merge SHA via CI `workflow_dispatch` per the
-  deferred-capture discipline. No production-path or consensus change.
+  class by prefix (no script change). The baseline iai drives its
+  synchronously-completing future with a no-op-waker poll (a current-thread
+  Tokio `block_on` under Callgrind collapsed the count to ~4.8k handshake
+  instructions instead of the ~15.2M decap); the three B9 rows were added
+  to `scripts/bench/capture_rust_baseline.sh` so CI captures them. Baselines
+  captured by CI `workflow_dispatch` (run 26732235292, SHA `d377edfdb`) and
+  transcribed into [`docs/PERFORMANCE_BASELINE.md`](PERFORMANCE_BASELINE.md):
+  **B9 ratio 1.039 — PASS** (actor 1.386 ms / baseline 1.334 ms; ≤ 1.05);
+  baseline iai 15,163,668 instr; merge projection ≈ 1.71 µs/output (iai
+  5,160,059), confirming eager-6-i. No production-path or consensus change.
 
 - **engine: `EconomicsEngine` trait surface (Stage 1 PR 7).** Extracted
   the canonical economic-derivation surface — `base_emission_at` (base
