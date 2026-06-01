@@ -102,10 +102,7 @@ namespace
         rv.enc_amounts.resize(n_out);
         rv.enc_labels.resize(n_out);
         for (size_t i = 0; i < n_out; ++i)
-        {
             rv.outPk[i].dest = copy(destinations[i]);
-            memset(rv.enc_labels[i].data(), 0, rv.enc_labels[i].size());
-        }
 
         keyV C, masks;
         rv.p.bulletproofs_plus.clear();
