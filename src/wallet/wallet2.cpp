@@ -9088,8 +9088,11 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
         }
       }
 
-      // enc_labels (9 bytes each)
-      if (proofs_doc.HasMember("enc_labels") && proofs_doc["enc_labels"].IsArray()) {
+      // enc_labels (9 bytes each) — mandatory for v3 FCMP++ PQC (FA-11)
+      THROW_WALLET_EXCEPTION_IF(
+          !proofs_doc.HasMember("enc_labels") || !proofs_doc["enc_labels"].IsArray(),
+          error::wallet_internal_error, "enc_labels missing from signed proofs");
+      {
         const auto& el_arr = proofs_doc["enc_labels"];
         tx.rct_signatures.enc_labels.resize(el_arr.Size());
         for (rapidjson::SizeType i = 0; i < el_arr.Size(); ++i) {
@@ -9099,6 +9102,9 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
           memcpy(tx.rct_signatures.enc_labels[i].data(), bin.data(), 9);
         }
       }
+      THROW_WALLET_EXCEPTION_IF(
+          tx.rct_signatures.enc_labels.size() != tx.rct_signatures.enc_amounts.size(),
+          error::wallet_internal_error, "enc_labels count must match enc_amounts");
 
       // pseudo_outs
       if (proofs_doc.HasMember("pseudo_outs") && proofs_doc["pseudo_outs"].IsArray()) {

@@ -197,7 +197,7 @@ reserved or earmarked for this purpose at launch.
 can emit final founder addresses, genesis allocates the full 100_000 SKL
 founder pool to a single on-chain treasury output per network. Keys are
 deterministic placeholders (domain-separated BIP-39 entropy; see
-`shekyl-dev/tools/genesis_builder/GENESIS_BUILD_INFO.txt` and
+the `shekyl-dev` repository (`tools/genesis_builder/GENESIS_BUILD_INFO.txt`) and
 `rust/shekyl-crypto-pq/examples/gen_genesis_addrs.rs`), not operational
 founder wallets. Testnet continues to use five separate developer outputs
 for integration testing.

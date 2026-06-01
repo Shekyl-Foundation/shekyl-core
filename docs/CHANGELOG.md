@@ -11,8 +11,8 @@
   (100_000 SKL combined founder allocation) with deterministic placeholder
   Bech32m keys until production wallet addresses land; testnet keeps five
   developer outputs (20_000 SKL each) with deterministic raw-seed keys.
-  Recipient JSON and reference hex live under
-  `shekyl-dev/tools/genesis_builder/`; address generation:
+  Recipient JSON and reference hex live in the `shekyl-dev` repo
+  (`tools/genesis_builder/`); address generation:
   `rust/shekyl-crypto-pq/examples/gen_genesis_addrs.rs`.
 
 ### Added

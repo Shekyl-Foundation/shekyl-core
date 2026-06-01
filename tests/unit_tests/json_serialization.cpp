@@ -525,6 +525,8 @@ namespace test
 
         // enc_amounts (9 bytes each)
         {
+            if (!proofs_doc.HasMember("enc_amounts") || !proofs_doc["enc_amounts"].IsArray())
+                throw std::runtime_error("enc_amounts missing or not an array in signed proofs JSON");
             const auto& ea_arr = proofs_doc["enc_amounts"].GetArray();
             tx.rct_signatures.enc_amounts.resize(ea_arr.Size());
             for (rapidjson::SizeType i = 0; i < ea_arr.Size(); ++i)
@@ -538,6 +540,8 @@ namespace test
 
         // enc_labels (9 bytes each)
         {
+            if (!proofs_doc.HasMember("enc_labels") || !proofs_doc["enc_labels"].IsArray())
+                throw std::runtime_error("enc_labels missing or not an array in signed proofs JSON");
             const auto& el_arr = proofs_doc["enc_labels"].GetArray();
             tx.rct_signatures.enc_labels.resize(el_arr.Size());
             for (rapidjson::SizeType i = 0; i < el_arr.Size(); ++i)

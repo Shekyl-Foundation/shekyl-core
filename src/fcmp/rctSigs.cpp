@@ -358,13 +358,22 @@ namespace
             {
                 sc_add(sumout.bytes, outSk[i].mask.bytes, sumout.bytes);
                 rv.enc_amounts[i] = enc_amounts_precomputed[i];
-                if (hwdev.get_mode() != hw::device::TRANSACTION_CREATE_FAKE)
-                {
-                    CHECK_AND_ASSERT_THROW_MES(
-                        !enc_label_is_stub_zeroed(enc_labels_precomputed[i]),
-                        "enc_labels must be construct_output precomputed values, not stub zero-fill");
-                }
                 rv.enc_labels[i] = enc_labels_precomputed[i];
+            }
+            if (hwdev.get_mode() != hw::device::TRANSACTION_CREATE_FAKE)
+            {
+                bool all_stub = true;
+                for (const auto &enc : enc_labels_precomputed)
+                {
+                    if (!enc_label_is_stub_zeroed(enc))
+                    {
+                        all_stub = false;
+                        break;
+                    }
+                }
+                CHECK_AND_ASSERT_THROW_MES(
+                    !all_stub,
+                    "enc_labels must be construct_output precomputed values, not stub zero-fill");
             }
 
             // --- Pseudo-out blinding factors (balance proof) ---

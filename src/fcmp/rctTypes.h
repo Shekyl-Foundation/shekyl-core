@@ -317,6 +317,8 @@ namespace rct {
             {
               if (enc_labels_blob.size() % 9 != 0)
                 return false;
+              if (!enc_amounts.empty() && enc_labels_blob.size() != enc_amounts.size() * 9)
+                return false;
               enc_labels.resize(enc_labels_blob.size() / 9);
               for (size_t i = 0; i < enc_labels.size(); ++i)
                 memcpy(enc_labels[i].data(), &enc_labels_blob[i * 9], 9);

@@ -38,6 +38,11 @@ fn encode_bip39(network: Network, label: &str) -> String {
 }
 
 fn encode_raw32(network: Network, label: &str) -> String {
+    assert_eq!(
+        network,
+        Network::Testnet,
+        "encode_raw32 is testnet-only: keys are derived with DerivationNetwork::Testnet"
+    );
     let seed = domain_entropy(label);
     let (_, blob) = generate_account_from_raw_seed(&seed, DerivationNetwork::Testnet)
         .expect("generate_account_from_raw_seed");
