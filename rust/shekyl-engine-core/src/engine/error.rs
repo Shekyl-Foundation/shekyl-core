@@ -647,6 +647,37 @@ pub(crate) enum KeyEngineError {
     /// step rejected the input.
     #[error("source ciphertext re-decapsulation failed: {0}")]
     SourceCiphertextDecapsulationFailed(#[from] shekyl_crypto_pq::CryptoError),
+
+    /// The key actor task has stopped — clean shutdown, panic, or
+    /// fail-stop (`on_panic` → `ControlFlow::Break`). Surfaced by
+    /// [`KeyEngineHandle`](super::key_actor::KeyEngineHandle) when a
+    /// `kameo` `ask` against the actor returns a transport failure
+    /// (`SendError::ActorNotRunning` / `ActorStopped` / `Timeout`, and
+    /// — though unreachable on the awaiting `ask` path —
+    /// `MailboxFull`), as opposed to a `HandlerError` carrying a real
+    /// crypto/engine failure.
+    ///
+    /// **Terminal and non-retryable.** The actor is fail-stop by
+    /// construction (`STAGE_2_KEY_ENGINE_ACTOR.md` §4.5): a stopped key
+    /// actor is unrecoverable in-session because its `AllKeysBlob` is
+    /// already zeroized. The only recovery is a full wallet close +
+    /// re-open (`open_full` re-derives the blob from the encrypted
+    /// envelope). Callers must **propagate**, not retry: every
+    /// subsequent `ask` on the same handle returns this same error, so
+    /// a retry loop against a dead actor spins forever. This is the
+    /// inverse of the live-actor bounded-mailbox backpressure case,
+    /// where the `ask` future simply blocks the sender until capacity
+    /// frees (recoverable, and never surfaces as this variant).
+    ///
+    /// Distinguishable from crypto faults by being its own variant
+    /// (not folded into a `CryptoError` wrapper), so the refresh/RPC
+    /// tier can branch on "session-ended" vs "operation-failed." Per
+    /// `35-secure-memory.mdc`, the variant carries only a discriminant
+    /// — no secret material in its `Debug`/`Display`.
+    #[error(
+        "key actor unavailable: the key actor task has stopped (terminal, non-retryable; recover via wallet close + re-open)"
+    )]
+    KeyActorUnavailable,
 }
 
 // --- IO --------------------------------------------------------------------

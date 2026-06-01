@@ -168,6 +168,12 @@ pub(crate) mod fault_injecting_pending_tx;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_refresh;
 pub mod fee_estimator;
+pub(crate) mod key_actor;
+/// §5.3 B9 dispatch-overhead bench support. Gated behind
+/// `bench-internals`; re-exported through [`crate::__bench_internals`]
+/// for the external Criterion / iai-callgrind targets.
+#[cfg(feature = "bench-internals")]
+pub(crate) mod key_dispatch_bench;
 pub mod lifecycle;
 pub(crate) mod local_economics;
 pub(crate) mod local_keys;
@@ -227,11 +233,11 @@ pub use view_material::ViewMaterial;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_prefs::WalletPrefs;
 use shekyl_engine_state::WalletLedger;
 
+use crate::engine::key_actor::{HandleDerivationViewSecret, KeyEngineHandle};
 use crate::engine::local_ledger::LedgerState;
 use crate::engine::traits::{
     DaemonEngine, EconomicsEngine, LedgerEngine, PendingTxEngine, PersistenceEngine, RefreshEngine,
@@ -285,7 +291,7 @@ use crate::engine::traits::{
 /// # Drop semantics
 ///
 /// `Engine<S>` does not implement `Drop`. The secret-bearing field
-/// [`AllKeysBlob`] has its own `Drop` impl that zeroizes spend / view /
+/// [`AllKeysBlob`](shekyl_crypto_pq::account::AllKeysBlob) has its own `Drop` impl that zeroizes spend / view /
 /// ML-KEM-DK material; [`WalletFile`] has its own `Drop` for the file
 /// KEK and lock release. Composing types that already wipe correctly
 /// is sound; adding a wrapper `Drop` here would risk shadowing the
@@ -332,16 +338,42 @@ pub struct Engine<
     /// [`WalletFile::zeroize_transient_file_kek`].
     prefs_hmac_key: shekyl_engine_prefs::PrefsHmacKey,
 
-    /// Identity material rederived from the master seed at every open.
-    /// Holds Ed25519 spend / view scalars and the ML-KEM-768 decap key;
-    /// these are wiped on drop by [`AllKeysBlob`]'s own `Drop` impl.
-    /// Never serialized; persistence happens via the `master_seed_64`
-    /// in region 1 of the wallet file.
+    /// Handle to the wallet's [`KeyActor`](super::key_actor::KeyActor), which
+    /// owns the full [`AllKeysBlob`](shekyl_crypto_pq::account::AllKeysBlob) inside its own task (Stage 2,
+    /// `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`). No `&AllKeysBlob` is
+    /// reachable from the orchestrator after `assemble`: secret-touching key
+    /// operations route through the actor's message protocol; public reads
+    /// (`account_public_address`, audit `derive_subaddress`) resolve from the
+    /// handle's construction-time projections. The blob is wiped when the last
+    /// handle clone drops (which stops the actor — `KeyActor::on_stop` plus
+    /// `AllKeysBlob`'s own `ZeroizeOnDrop`).
     ///
-    /// Read by [`Engine::keys`]; that accessor is `pub(crate)` and used
-    /// by `Engine::refresh` (to assemble a `Scanner` per attempt) and
-    /// by Phase 2 sign / proof code paths inside this crate.
-    keys: Arc<AllKeysBlob>,
+    /// Named `key` (singular), not `keys`: it is a single handle, not the
+    /// key *blob* the old `keys: Arc<AllKeysBlob>` field held. The rename is
+    /// the type-system signal that the orchestrator no longer owns key
+    /// material (§6 step 3(c)).
+    //
+    // `#[allow(dead_code)]`: at Stage 2 the field is held but not *read* on
+    // the production path — its load-bearing role is ownership (its `Drop`
+    // stops the actor and zeroizes the blob; `LocalSigner` carries a clone).
+    // Read sites land when the orchestrator routes key operations through the
+    // handle (Stage 4, per `STAGE_2_KEY_ENGINE_ACTOR.md` §8). The allow is
+    // reopened for deletion then, per `21-reversion-clause-discipline.mdc`.
+    #[allow(dead_code)]
+    key: KeyEngineHandle,
+
+    /// Construction-time view-secret projection for the merge post-pass
+    /// ([`Engine::apply_scan_result`]), per `STAGE_2_KEY_ENGINE_ACTOR.md` §6
+    /// option 6-i. That path is synchronous and runs under the ledger
+    /// `RwLock` write guard, so it cannot `ask` the actor (6-ii is foreclosed
+    /// until the Ledger actor lands, §8.1); it derives the per-output
+    /// `OutputHandle` from the view secret carried here instead. This is the
+    /// *second* construction-time view-secret holder — the first is
+    /// [`ViewMaterial`](super::view_material::ViewMaterial), moved into
+    /// [`LocalRefresh`](super::local_refresh::LocalRefresh) for scanning. The
+    /// two are deliberately distinct types so neither is mistaken for a clone
+    /// of the other; both are Stage-2-minimal pending the 6-ii re-route.
+    merge_view_secret: HandleDerivationViewSecret,
 
     /// Persistent wallet state plus its runtime-only index projection,
     /// aggregated under a single [`std::sync::RwLock`] by [`LocalLedger`].
@@ -536,9 +568,12 @@ impl<
     /// - `file` — passes through to [`WalletFile`]'s own `Debug`, which
     ///   already redacts sealed material and prints only filesystem
     ///   paths and the public `network` / `capability`.
-    /// - `keys` — never printed. [`AllKeysBlob`] holds spend / view
-    ///   secret scalars; the type does not implement `Debug` and
-    ///   we do not want a stringly-typed leak path here.
+    /// - `key` — never printed. The [`KeyEngineHandle`] transitively
+    ///   reaches the [`AllKeysBlob`](shekyl_crypto_pq::account::AllKeysBlob) (in the actor) and a view-secret
+    ///   projection; neither implements `Debug` and we do not want a
+    ///   stringly-typed leak path here.
+    /// - `merge_view_secret` — never printed. Carries a raw view scalar
+    ///   ([`HandleDerivationViewSecret`]); redacted for the same reason.
     /// - `ledger`, `prefs` — printed as opaque `<…>` markers. The
     ///   `ledger` field is the [`LocalLedger`] aggregate (the
     ///   [`shekyl_engine_state::WalletLedger`] plus the rebuilt-on-open
@@ -568,7 +603,8 @@ impl<
             .field("persistence", &"<redacted>")
             .field("state_wrap_key", &self.state_wrap_key)
             .field("prefs_hmac_key", &self.prefs_hmac_key)
-            .field("keys", &"<redacted: AllKeysBlob>")
+            .field("key", &"<redacted: KeyEngineHandle>")
+            .field("merge_view_secret", &"<redacted: view secret>")
             .field("ledger", &"<…>")
             .field("outstanding_pending_txs", &self.pending.outstanding())
             .field("prefs", &"<…>")
@@ -693,42 +729,6 @@ impl<
         &self.daemon
     }
 
-    /// Crate-internal access to the rederived identity material.
-    ///
-    /// **Not** part of the public API. Spend / sign / proof code paths
-    /// inside `shekyl-engine-core` go through this accessor; the
-    /// returned reference must not escape the crate. Phase 2 will add
-    /// dedicated method-level surfaces (`sign_transfer`, `tx_proof`,
-    /// `reserve_proof`) that take borrowed inputs and return finished
-    /// artifacts, so call sites elsewhere never need a borrow on
-    /// [`AllKeysBlob`] directly.
-    // After C5's trait-dispatch migration AND C5β's
-    // producer-scaffolding deletion, no production reader of
-    // `keys()` survives: the legacy `build_scanner_from_keys` /
-    // `produce_scan_result` free functions in `engine/refresh.rs`
-    // were deleted in C5β (`b6a1274de`); `LocalRefresh::build_scanner`
-    // (`engine/local_refresh.rs:283`) constructs the scanner from
-    // `ViewMaterial` derived at `Engine::assemble` time via
-    // `ViewMaterial::try_from_keys(&self.keys)`. The remaining
-    // live consumer is the `Engine::replace_refresh` test-only
-    // setter (`mod.rs:695`), which re-derives `ViewMaterial` from
-    // `engine.keys()` for hybrid tests composing `LocalRefresh` /
-    // `FaultInjecting<R>` post-construction; that surface is
-    // `#[cfg(any(test, feature = "test-helpers"))]`-gated, hence
-    // the `#[allow(dead_code)]` below remains load-bearing for
-    // default-feature production builds where no consumer fires.
-    //
-    // Phase 2's `sign_transfer` / `tx_proof` / `reserve_proof`
-    // will introduce production consumers (either re-using this
-    // accessor or via dedicated method-level surfaces), at which
-    // point `#[allow(dead_code)]` is reopened for deletion per
-    // `21-reversion-clause-discipline.mdc`'s named-criterion
-    // shape.
-    #[allow(dead_code)]
-    pub(crate) fn keys(&self) -> &AllKeysBlob {
-        self.keys.as_ref()
-    }
-
     /// Test-only constructor: rebuild the engine with `refresh`
     /// substituted in place of the existing
     /// [`RefreshEngine`](super::traits::RefreshEngine) implementor,
@@ -743,9 +743,10 @@ impl<
     ///
     /// ```ignore
     /// let real = Engine::<SoloSigner>::create(params, dummy_daemon())?;
-    /// // Re-derive ViewMaterial from the engine's keys (the same path
-    /// // Engine::create uses internally at assemble time):
-    /// let vm = ViewMaterial::try_from_keys(real.keys())?;
+    /// // Post Stage 2 the engine no longer exposes its keys (the blob lives
+    /// // in the KeyActor), so re-derive ViewMaterial from the same seed +
+    /// // derivation params the engine was created with:
+    /// let vm = ViewMaterial::try_from_keys(&rederive_test_blob())?;
     /// let refresh = FaultInjecting::new(LocalRefresh::new(vm, 0));
     /// let hybrid: Engine<
     ///     SoloSigner, TestDaemon, LocalLedger, LocalEconomics, FaultInjecting<LocalRefresh>,
@@ -799,7 +800,8 @@ impl<
             persistence,
             state_wrap_key,
             prefs_hmac_key,
-            keys,
+            key,
+            merge_view_secret,
             ledger,
             pending,
             prefs,
@@ -815,7 +817,8 @@ impl<
             persistence,
             state_wrap_key,
             prefs_hmac_key,
-            keys,
+            key,
+            merge_view_secret,
             ledger,
             pending,
             prefs,
@@ -846,7 +849,8 @@ impl<
             persistence,
             state_wrap_key,
             prefs_hmac_key,
-            keys,
+            key,
+            merge_view_secret,
             ledger,
             pending: _old,
             prefs,
@@ -862,7 +866,8 @@ impl<
             persistence,
             state_wrap_key,
             prefs_hmac_key,
-            keys,
+            key,
+            merge_view_secret,
             ledger,
             pending,
             prefs,
@@ -1001,15 +1006,19 @@ pub fn engine_balance_for_bench(
 ///
 /// # Why this takes `&LocalKeys` and not `&Engine<...>`
 ///
-/// `Engine<S, D, L>` holds `keys: AllKeysBlob` (the wallet key
-/// material) but does not yet hold the `KeyEngine`-implementing
-/// [`local_keys::LocalKeys`] as a field — that orchestrator
-/// integration is `KeyEngine` PR-5 territory per
-/// `docs/design/STAGE_1_PR_3_KEY_ENGINE.md` §2.1.1 (the Round 4a
-/// workflow-shape pivot). The post-M3-series state preserves
-/// `LocalKeys` as the `KeyEngine` implementor
-/// (`#[allow(dead_code)]` per the orchestrator-integration
-/// deferral) without wiring it into the `Engine` struct.
+/// Since Stage 2 (`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` §6) the
+/// `Engine` holds `key: KeyEngineHandle` — a handle to the `KeyActor`
+/// that owns the `AllKeysBlob`. Its `KeyEngine::account_public_address`
+/// resolves synchronously from a projection, but the secret-touching
+/// surface routes through the actor mailbox. This bench deliberately
+/// measures the **synchronous in-process** trait dispatch over a
+/// standalone [`local_keys::LocalKeys`] fixture (the same crypto bodies
+/// the actor replicates), isolating the trait-call cost from the actor
+/// task / mailbox overhead. Benchmarking through `&Engine` would
+/// conflate the two; the standalone `LocalKeys` fixture is the correct
+/// measurement substrate. `LocalKeys` is retained as the `KeyEngine`
+/// implementor for exactly this in-process bench/oracle use
+/// (`#[allow(dead_code)]` on the production path).
 ///
 /// Given the substrate, the bench fixture is a standalone
 /// `Box<LocalKeys>` rather than the unified

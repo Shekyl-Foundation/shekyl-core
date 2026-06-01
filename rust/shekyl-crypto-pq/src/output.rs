@@ -114,8 +114,7 @@ pub struct ScannedOutput {
     pub z: [u8; 32],
     /// HKDF-derived amount encryption key.
     pub k_amount: [u8; 32],
-    /// Decrypted amount.
-    #[zeroize(skip)]
+    /// Decrypted cleartext amount (secret; wiped on drop with the other fields).
     pub amount: u64,
     /// Verified amount tag.
     #[zeroize(skip)]
@@ -135,7 +134,7 @@ pub struct ScannedOutput {
 impl std::fmt::Debug for ScannedOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScannedOutput")
-            .field("amount", &self.amount)
+            .field("amount", &"[REDACTED]")
             .field("amount_tag", &self.amount_tag)
             .field("h_pqc", &self.h_pqc)
             .field("y", &"[REDACTED]")
@@ -185,16 +184,23 @@ pub fn construct_output(
 
     let per_output_seed = derive_kem_seed(tx_key_secret, x25519_pk, ml_kem_ek, output_index);
 
-    let x25519_eph_secret_bytes: [u8; 32] = per_output_seed[..32]
-        .try_into()
-        .expect("per_output_seed is 64 bytes");
-    let eph_scalar = Scalar::from_bytes_mod_order(x25519_eph_secret_bytes);
-    let eph_mont_pub = eph_scalar * X25519_BASEPOINT;
+    // `eph_scalar` is the per-output X25519 ephemeral secret (sender side) and
+    // `x25519_raw_ss` the raw ECDH shared secret; both are secret-derived and
+    // wrapped in `Zeroizing` so their limbs wipe on drop / early `Err`. `Scalar`
+    // and `MontgomeryPoint` impl `Zeroize` (the `zeroize` feature, enabled in
+    // this crate's `Cargo.toml`) but not `ZeroizeOnDrop`.
+    let x25519_eph_secret_bytes: Zeroizing<[u8; 32]> = Zeroizing::new(
+        per_output_seed[..32]
+            .try_into()
+            .expect("per_output_seed is 64 bytes"),
+    );
+    let eph_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*x25519_eph_secret_bytes));
+    let eph_mont_pub = *eph_scalar * X25519_BASEPOINT;
     let recipient_mont = MontgomeryPoint(*x25519_pk);
     if crate::montgomery::is_low_order_montgomery(&recipient_mont) {
         return Err(CryptoError::LowOrderPoint);
     }
-    let x25519_raw_ss = eph_scalar * recipient_mont;
+    let x25519_raw_ss = Zeroizing::new(*eph_scalar * recipient_mont);
 
     let ek_bytes: [u8; ML_KEM_768_EK_LEN] = ml_kem_ek
         .try_into()
@@ -220,16 +226,25 @@ pub fn construct_output(
 
     let secrets: OutputSecrets = derive_output_secrets(&combined_ss.0, output_index);
 
-    let ho: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.ho))
-        .expect("ho from wide_reduce is always canonical");
-    let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.y))
-        .expect("y from wide_reduce is always canonical");
-    let z_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.z))
-        .expect("z from wide_reduce is always canonical");
+    // `ho`, `y`, `z` are per-output secret scalars derived from the combined
+    // shared secret; `Zeroizing` wipes their limbs on drop (`Scalar` is
+    // `Zeroize` but not `ZeroizeOnDrop`).
+    let ho: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.ho))
+            .expect("ho from wide_reduce is always canonical"),
+    );
+    let y_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.y))
+            .expect("y from wide_reduce is always canonical"),
+    );
+    let z_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.z))
+            .expect("z from wide_reduce is always canonical"),
+    );
 
     // --- Output key: O = ho*G + B + y*T ---
 
-    let output_point = (G * ho) + b_point + (*T * y_scalar);
+    let output_point = (G * *ho) + b_point + (*T * *y_scalar);
     if !output_point.is_torsion_free() {
         return Err(CryptoError::KeyGenerationFailed(
             "constructed O is not in prime-order subgroup".into(),
@@ -239,13 +254,16 @@ pub fn construct_output(
 
     // --- Pedersen commitment: C = z*G + amount*H ---
 
-    let amount_scalar = Scalar::from(amount);
-    let commitment_point = (G * z_scalar) + (*H * amount_scalar);
+    // `amount_scalar` carries the cleartext amount; `Zeroizing` wipes its limbs.
+    let amount_scalar = Zeroizing::new(Scalar::from(amount));
+    let commitment_point = (G * *z_scalar) + (*H * *amount_scalar);
     let commitment = commitment_point.compress().to_bytes();
 
     // --- Amount encryption ---
 
-    let amount_le = amount.to_le_bytes();
+    // `amount_le` is the cleartext amount being sent — a secret; `Zeroizing`
+    // wipes it on drop.
+    let amount_le = Zeroizing::new(amount.to_le_bytes());
     let mut enc_amount = [0u8; 8];
     for i in 0..8 {
         enc_amount[i] = amount_le[i] ^ secrets.k_amount[i];
@@ -338,14 +356,18 @@ pub fn recover_combined_ss(
     kem_ct_x25519: &[u8; 32],
     kem_ct_ml_kem: &[u8],
 ) -> Result<SharedSecret, CryptoError> {
-    let view_scalar = Scalar::from_bytes_mod_order(*view_x25519_sk);
+    // `view_scalar` is the wallet view secret in scalar form and `x25519_raw_ss`
+    // the raw ECDH shared secret; both are wrapped in `Zeroizing` so their limbs
+    // wipe on drop / early `Err` (`Scalar`/`MontgomeryPoint` are `Zeroize` but
+    // not `ZeroizeOnDrop`).
+    let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*view_x25519_sk));
     let eph_mont = MontgomeryPoint(*kem_ct_x25519);
 
     if crate::montgomery::is_low_order_montgomery(&eph_mont) {
         return Err(CryptoError::LowOrderPoint);
     }
 
-    let x25519_raw_ss = view_scalar * eph_mont;
+    let x25519_raw_ss = Zeroizing::new(*view_scalar * eph_mont);
 
     decap_ml_kem_and_combine(&x25519_raw_ss.0, ml_kem_dk, kem_ct_ml_kem)
 }
@@ -414,7 +436,14 @@ pub fn scan_output(
 ) -> Result<ScannedOutput, CryptoError> {
     // --- X25519 view tag pre-filter ---
 
-    let view_scalar = Scalar::from_bytes_mod_order(*x25519_sk);
+    // `view_scalar` is the wallet view secret in scalar form, reconstructed once
+    // per scanned output on a daemon-drivable path; `x25519_raw_ss` is the raw
+    // ECDH shared secret. Both are wrapped in `Zeroizing` so their limbs wipe on
+    // every exit path (view-tag / amount-tag / commitment mismatch `Err`s
+    // included). `curve25519-dalek`'s `Scalar`/`MontgomeryPoint` impl `Zeroize`
+    // (the `zeroize` feature, enabled in this crate's `Cargo.toml`) but not
+    // `ZeroizeOnDrop`, so the wrapper is what actually wipes them.
+    let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*x25519_sk));
     let eph_mont = MontgomeryPoint(*kem_ct_x25519);
 
     // kem_ct_x25519 arrives from tx_extra on a network transaction — attacker-controlled.
@@ -426,7 +455,7 @@ pub fn scan_output(
     // View secret is an Ed25519 scalar already reduced mod l; clamping would mutate it
     // and desynchronize from sender-side derivation. Low-order points are rejected above.
     // Constant-time: curve25519-dalek scalar * MontgomeryPoint is always constant-time.
-    let x25519_raw_ss = view_scalar * eph_mont;
+    let x25519_raw_ss = Zeroizing::new(*view_scalar * eph_mont);
 
     let expected_view_tag = derive_view_tag_x25519(&x25519_raw_ss.0, output_index);
     if expected_view_tag != view_tag_on_chain {
@@ -479,11 +508,13 @@ pub fn scan_output(
 
     // --- Amount decryption ---
 
-    let mut amount_le = [0u8; 8];
+    // `amount_le` is the decrypted cleartext amount — a secret; `Zeroizing`
+    // wipes it on drop.
+    let mut amount_le = Zeroizing::new([0u8; 8]);
     for i in 0..8 {
         amount_le[i] = enc_amount[i] ^ secrets.k_amount[i];
     }
-    let amount = u64::from_le_bytes(amount_le);
+    let amount = Zeroizing::new(u64::from_le_bytes(*amount_le));
 
     // --- Output key verification: O == ho*G + B + y*T ---
 
@@ -491,14 +522,23 @@ pub fn scan_output(
         .decompress()
         .ok_or(CryptoError::InvalidKeyMaterial)?;
 
-    let ho: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.ho))
-        .expect("ho from wide_reduce is always canonical");
-    let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.y))
-        .expect("y from wide_reduce is always canonical");
-    let z_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.z))
-        .expect("z from wide_reduce is always canonical");
+    // `ho`, `y`, `z` are per-output secret scalars derived from the combined
+    // shared secret; `Zeroizing` wipes their limbs on drop (`Scalar` is
+    // `Zeroize` but not `ZeroizeOnDrop`).
+    let ho: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.ho))
+            .expect("ho from wide_reduce is always canonical"),
+    );
+    let y_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.y))
+            .expect("y from wide_reduce is always canonical"),
+    );
+    let z_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.z))
+            .expect("z from wide_reduce is always canonical"),
+    );
 
-    let expected_o = (G * ho) + b_point + (*T * y_scalar);
+    let expected_o = (G * *ho) + b_point + (*T * *y_scalar);
     if expected_o.compress().to_bytes() != *output_key {
         return Err(CryptoError::DecapsulationFailed(
             "output key mismatch — not for this spend key".into(),
@@ -507,8 +547,9 @@ pub fn scan_output(
 
     // --- Commitment verification: C == z*G + amount*H ---
 
-    let amount_scalar = Scalar::from(amount);
-    let expected_c = (G * z_scalar) + (*H * amount_scalar);
+    // `amount_scalar` carries the cleartext amount; `Zeroizing` wipes its limbs.
+    let amount_scalar = Zeroizing::new(Scalar::from(*amount));
+    let expected_c = (G * *z_scalar) + (*H * *amount_scalar);
     if expected_c.compress().to_bytes() != *commitment {
         return Err(CryptoError::DecapsulationFailed(
             "commitment mismatch — amount or mask corrupted".into(),
@@ -524,7 +565,7 @@ pub fn scan_output(
         y: secrets.y,
         z: secrets.z,
         k_amount: secrets.k_amount,
-        amount,
+        amount: *amount,
         amount_tag: secrets.amount_tag,
         pqc_public_key: pqc_pk,
         pqc_secret_key: pqc_sk,
@@ -536,6 +577,28 @@ pub fn scan_output(
 /// recovered spend key B' = O - ho*G - y*T (for subaddress lookup).
 /// Does NOT verify the spend key — caller must look up B' in a subaddress
 /// table and decide ownership.
+///
+/// # Zeroization
+///
+/// `#[derive(ZeroizeOnDrop)]` wipes **every** field on drop with no
+/// per-field enumeration. This is deliberate, and replaces a hand-written
+/// `Zeroize` that silently omitted `recovered_spend_key`, `amount`,
+/// `amount_tag`, `pqc_public_key`, and `h_pqc` — the exact maintenance
+/// landmine the derive macro exists to prevent (a field added later is
+/// wiped automatically, and a non-`Zeroize` field is a compile error
+/// rather than a silent leak).
+///
+/// The field set spans three secrecy classes and the derive wipes all of
+/// them:
+/// - **Secrets:** `ho`, `y`, `z`, `k_amount`, `combined_ss`,
+///   `pqc_secret_key`, and `amount` (the decrypted cleartext amount).
+/// - **Privacy-linkable artifacts:** `recovered_spend_key` (the per-wallet,
+///   per-subaddress spend point B') and `h_pqc` — public-ish but a wallet
+///   fingerprint if they linger in a core dump or swap.
+/// - **Public:** `pqc_public_key`, `amount_tag` — wiped too, because the
+///   cost is nil and wiping unconditionally removes the "is this field
+///   secret?" judgment from an editable function body.
+#[derive(ZeroizeOnDrop)]
 pub struct RecoveredOutput {
     pub ho: [u8; 32],
     pub y: [u8; 32],
@@ -550,24 +613,12 @@ pub struct RecoveredOutput {
     pub h_pqc: [u8; 32],
 }
 
-impl ZeroizeOnDrop for RecoveredOutput {}
-impl Zeroize for RecoveredOutput {
-    fn zeroize(&mut self) {
-        self.ho.zeroize();
-        self.y.zeroize();
-        self.z.zeroize();
-        self.k_amount.zeroize();
-        self.combined_ss.zeroize();
-        self.pqc_secret_key.zeroize();
-    }
-}
-
 // CLIPPY: omitted fields are secrets intentionally redacted for safe debug output.
 #[allow(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for RecoveredOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RecoveredOutput")
-            .field("amount", &self.amount)
+            .field("amount", &"[REDACTED]")
             .field("amount_tag", &self.amount_tag)
             .field("recovered_spend_key", &"[REDACTED]")
             .field("y", &"[REDACTED]")
@@ -597,7 +648,15 @@ pub fn scan_output_recover(
     output_index: u64,
 ) -> Result<RecoveredOutput, CryptoError> {
     // --- X25519 view tag pre-filter ---
-    let view_scalar = Scalar::from_bytes_mod_order(*x25519_sk);
+    //
+    // `view_scalar` is the view secret in Ed25519-scalar form, reconstructed on
+    // every output iteration; `x25519_raw_ss` is the raw ECDH shared secret.
+    // Both are `Zeroizing` so they wipe on every exit path — including the early
+    // view-tag / decap / commitment `Err` returns below. `curve25519-dalek`'s
+    // `Scalar` and `MontgomeryPoint` impl `Zeroize` (the `zeroize` feature,
+    // enabled in this crate's `Cargo.toml`) but not `ZeroizeOnDrop`, so the
+    // `Zeroizing` wrapper is what actually wipes them at scope end.
+    let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*x25519_sk));
     let eph_mont = MontgomeryPoint(*kem_ct_x25519);
 
     // kem_ct_x25519 arrives from tx_extra on a network transaction — attacker-controlled.
@@ -609,7 +668,7 @@ pub fn scan_output_recover(
     // View secret is an Ed25519 scalar already reduced mod l; clamping would mutate it
     // and desynchronize from sender-side derivation. Low-order points are rejected above.
     // Constant-time: curve25519-dalek scalar * MontgomeryPoint is always constant-time.
-    let x25519_raw_ss = view_scalar * eph_mont;
+    let x25519_raw_ss = Zeroizing::new(*view_scalar * eph_mont);
 
     let expected_view_tag = derive_view_tag_x25519(&x25519_raw_ss.0, output_index);
     if expected_view_tag != view_tag_on_chain {
@@ -641,30 +700,45 @@ pub fn scan_output_recover(
     }
 
     // --- Amount decryption ---
-    let mut amount_le = [0u8; 8];
+    // `amount_le` is the decrypted cleartext amount — a secret; `Zeroizing` wipes
+    // it on drop. The cleartext `u64` is likewise `Zeroizing` so early returns on
+    // commitment mismatch do not leave amount on the stack; the value moved into
+    // `RecoveredOutput` is a separate copy wiped by that struct's `ZeroizeOnDrop`.
+    let mut amount_le = Zeroizing::new([0u8; 8]);
     for i in 0..8 {
         amount_le[i] = enc_amount[i] ^ secrets.k_amount[i];
     }
-    let amount = u64::from_le_bytes(amount_le);
+    let amount = Zeroizing::new(u64::from_le_bytes(*amount_le));
 
     // --- Recover spend key: B' = O - ho*G - y*T ---
     let o_point = CompressedEdwardsY(*output_key)
         .decompress()
         .ok_or_else(|| CryptoError::DecapsulationFailed("invalid output key point".into()))?;
 
-    let ho: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.ho))
-        .expect("ho from wide_reduce is always canonical");
-    let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.y))
-        .expect("y from wide_reduce is always canonical");
-    let z_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.z))
-        .expect("z from wide_reduce is always canonical");
+    // `ho`, `y`, `z` are per-output secret scalars derived from the combined
+    // shared secret; `Zeroizing` wipes their limbs on drop. `curve25519-dalek`'s
+    // `Scalar` is `Zeroize` but not `ZeroizeOnDrop`, so the bare locals would
+    // otherwise be left resident on the stack on every exit path.
+    let ho: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.ho))
+            .expect("ho from wide_reduce is always canonical"),
+    );
+    let y_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.y))
+            .expect("y from wide_reduce is always canonical"),
+    );
+    let z_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.z))
+            .expect("z from wide_reduce is always canonical"),
+    );
 
-    let recovered_b = o_point - (G * ho) - (*T * y_scalar);
+    let recovered_b = o_point - (G * *ho) - (*T * *y_scalar);
     let recovered_spend_key = recovered_b.compress().to_bytes();
 
     // --- Commitment verification: C == z*G + amount*H ---
-    let amount_scalar = Scalar::from(amount);
-    let expected_c = (G * z_scalar) + (*H * amount_scalar);
+    // `amount_scalar` carries the cleartext amount; `Zeroizing` wipes its limbs.
+    let amount_scalar = Zeroizing::new(Scalar::from(*amount));
+    let expected_c = (G * *z_scalar) + (*H * *amount_scalar);
     if expected_c.compress().to_bytes() != *commitment {
         return Err(CryptoError::DecapsulationFailed(
             "commitment mismatch — amount or mask corrupted".into(),
@@ -680,7 +754,7 @@ pub fn scan_output_recover(
         y: secrets.y,
         z: secrets.z,
         k_amount: secrets.k_amount,
-        amount,
+        amount: *amount,
         amount_tag: secrets.amount_tag,
         recovered_spend_key,
         combined_ss: combined_ss.0,
@@ -820,16 +894,23 @@ pub fn rederive_combined_ss(
 
     let per_output_seed = derive_kem_seed(tx_key_secret, x25519_pk, ml_kem_ek, output_index);
 
-    let x25519_eph_secret_bytes: [u8; 32] = per_output_seed[..32]
-        .try_into()
-        .expect("per_output_seed is 64 bytes");
-    let eph_scalar = Scalar::from_bytes_mod_order(x25519_eph_secret_bytes);
-    let eph_mont_pub = eph_scalar * X25519_BASEPOINT;
+    // `eph_scalar` is the per-output X25519 ephemeral secret (sender side) and
+    // `x25519_raw_ss` the raw ECDH shared secret; both are secret-derived and
+    // wrapped in `Zeroizing` so their limbs wipe on drop / early `Err`. `Scalar`
+    // and `MontgomeryPoint` impl `Zeroize` (the `zeroize` feature, enabled in
+    // this crate's `Cargo.toml`) but not `ZeroizeOnDrop`.
+    let x25519_eph_secret_bytes: Zeroizing<[u8; 32]> = Zeroizing::new(
+        per_output_seed[..32]
+            .try_into()
+            .expect("per_output_seed is 64 bytes"),
+    );
+    let eph_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*x25519_eph_secret_bytes));
+    let eph_mont_pub = *eph_scalar * X25519_BASEPOINT;
     let recipient_mont = MontgomeryPoint(*x25519_pk);
     if crate::montgomery::is_low_order_montgomery(&recipient_mont) {
         return Err(CryptoError::LowOrderPoint);
     }
-    let x25519_raw_ss = eph_scalar * recipient_mont;
+    let x25519_raw_ss = Zeroizing::new(*eph_scalar * recipient_mont);
 
     let ek_bytes: [u8; ML_KEM_768_EK_LEN] = ml_kem_ek
         .try_into()
@@ -889,12 +970,17 @@ pub fn derive_output_key(
 
     let secrets = derive_output_secrets(combined_ss, output_index);
 
-    let ho: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.ho))
-        .expect("ho from wide_reduce is always canonical");
-    let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.y))
-        .expect("y from wide_reduce is always canonical");
+    // Per-output secret scalars; `Zeroizing` wipes their limbs on drop.
+    let ho: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.ho))
+            .expect("ho from wide_reduce is always canonical"),
+    );
+    let y_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.y))
+            .expect("y from wide_reduce is always canonical"),
+    );
 
-    let output_point = (G * ho) + b_point + (*T * y_scalar);
+    let output_point = (G * *ho) + b_point + (*T * *y_scalar);
     Ok(output_point.compress().to_bytes())
 }
 
@@ -913,12 +999,17 @@ pub fn recover_recipient_spend_pubkey(
 
     let secrets = derive_output_secrets(combined_ss, output_index);
 
-    let ho: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.ho))
-        .expect("ho from wide_reduce is always canonical");
-    let y_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.y))
-        .expect("y from wide_reduce is always canonical");
+    // Per-output secret scalars; `Zeroizing` wipes their limbs on drop.
+    let ho: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.ho))
+            .expect("ho from wide_reduce is always canonical"),
+    );
+    let y_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.y))
+            .expect("y from wide_reduce is always canonical"),
+    );
 
-    let recovered_b = o_point - (G * ho) - (*T * y_scalar);
+    let recovered_b = o_point - (G * *ho) - (*T * *y_scalar);
 
     if recovered_b == EdwardsPoint::default() {
         return Err(CryptoError::InvalidKeyMaterial);
@@ -948,11 +1039,13 @@ pub fn decrypt_amount(
         ));
     }
 
-    let mut amount_le = [0u8; 8];
+    // `amount_le` is the decrypted cleartext amount — a secret; `Zeroizing`
+    // wipes it on drop.
+    let mut amount_le = Zeroizing::new([0u8; 8]);
     for i in 0..8 {
         amount_le[i] = enc_amount[i] ^ secrets.k_amount[i];
     }
-    Ok(u64::from_le_bytes(amount_le))
+    Ok(u64::from_le_bytes(*amount_le))
 }
 
 /// Result of key image computation.
@@ -1004,16 +1097,24 @@ pub fn compute_output_key_image(
         return Err(CryptoError::InvalidKeyMaterial);
     }
 
+    // `ho`, the spend secret `b`, and the output spend secret `x = ho + b` are
+    // all secret scalars; `Zeroizing` wipes their limbs on drop. `x.to_bytes()`
+    // is already wiped via `x_bytes` below; these wrappers cover the `Scalar`
+    // limbs themselves (`Scalar` is `Zeroize` but not `ZeroizeOnDrop`).
     let secrets = derive_output_secrets(combined_ss, output_index);
-    let ho: Scalar = Option::from(Scalar::from_canonical_bytes(secrets.ho))
-        .expect("ho from wide_reduce is always canonical");
+    let ho: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(secrets.ho))
+            .expect("ho from wide_reduce is always canonical"),
+    );
 
-    let b_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*spend_secret))
-        .ok_or(CryptoError::InvalidKeyMaterial)?;
+    let b_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(*spend_secret))
+            .ok_or(CryptoError::InvalidKeyMaterial)?,
+    );
 
-    let x = ho + b_scalar;
+    let x = Zeroizing::new(*ho + *b_scalar);
     let key_image =
-        crate::key_image::KeyImage::from_canonical_bytes((x * hp_point).compress().to_bytes());
+        crate::key_image::KeyImage::from_canonical_bytes((*x * hp_point).compress().to_bytes());
 
     let mut x_bytes = zeroize::Zeroizing::new(x.to_bytes());
 
@@ -1047,14 +1148,19 @@ pub fn compute_output_key_image_from_ho(
         return Err(CryptoError::InvalidKeyMaterial);
     }
 
-    let ho_scalar: Scalar =
-        Option::from(Scalar::from_canonical_bytes(*ho)).ok_or(CryptoError::InvalidKeyMaterial)?;
-    let b_scalar: Scalar = Option::from(Scalar::from_canonical_bytes(*spend_secret))
-        .ok_or(CryptoError::InvalidKeyMaterial)?;
+    // `ho`, the spend secret `b`, and the output spend secret `x = ho + b` are
+    // all secret scalars; `Zeroizing` wipes their limbs on drop.
+    let ho_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(*ho)).ok_or(CryptoError::InvalidKeyMaterial)?,
+    );
+    let b_scalar: Zeroizing<Scalar> = Zeroizing::new(
+        Option::from(Scalar::from_canonical_bytes(*spend_secret))
+            .ok_or(CryptoError::InvalidKeyMaterial)?,
+    );
 
-    let x = ho_scalar + b_scalar;
+    let x = Zeroizing::new(*ho_scalar + *b_scalar);
     let key_image =
-        crate::key_image::KeyImage::from_canonical_bytes((x * hp_point).compress().to_bytes());
+        crate::key_image::KeyImage::from_canonical_bytes((*x * hp_point).compress().to_bytes());
 
     let mut x_bytes = zeroize::Zeroizing::new(x.to_bytes());
 

@@ -66,7 +66,26 @@ tracing = "0.1"
 # task hold the engine across `await` points (replaced by actor message
 # passing at Stage 4). `rt` enables `tokio::spawn` for the producer
 # task.
-tokio = { version = "1", features = ["time", "macros", "sync", "rt"] }
+#
+# `rt-multi-thread` is load-bearing on exactly one production path:
+# `drive_persistence`'s multi-thread branch (`lifecycle.rs`), which calls
+# `tokio::task::block_in_place` to bridge the sync `Engine::close` /
+# `change_password` entry points onto an ambient multi-thread runtime
+# without a nested-`block_on` panic. `block_in_place` is gated behind
+# `rt-multi-thread`, so the symbol does not even resolve without this
+# feature; until Stage 2 it was enabled only in `[dev-dependencies]`, so
+# the lib did not compile standalone (`cargo build -p shekyl-engine-core`)
+# and relied on a downstream consumer's feature unification. Promoting it
+# here de-fragilizes that latent `block_in_place` feature-unification bug.
+#
+# This feature is **not** an entailment of the `KeyActor` spawn decision.
+# Per `STAGE_2_KEY_ENGINE_ACTOR.md` §4.2, `KeyEngineHandle::spawn` takes
+# the require-ambient path (it asserts an ambient runtime rather than
+# building an owned one); `kameo`'s spawn is `tokio::spawn`, which any
+# runtime flavor hosts, so the actor spawn needs only `rt`. The
+# `rt-multi-thread` justification stands or falls on `block_in_place`
+# alone.
+tokio = { version = "1", features = ["time", "macros", "sync", "rt", "rt-multi-thread"] }
 # Cancellation token for cooperative shutdown of the refresh producer
 # between blocks. `Engine::start_refresh` constructs and owns the token
 # internally; callers fire it through `RefreshHandle::cancel` (or by
@@ -90,6 +109,14 @@ curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
 # `AllKeysBlob` already wipes its own copy on `Drop`; the wrapper
 # ensures the scanner's local copies do the same.
 zeroize = { version = "1", features = ["derive"] }
+# `kameo` actor framework — Stage 2 `KeyEngine` actor migration
+# (`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`). `KeyActor` owns
+# `AllKeysBlob` inside its task; `Engine` holds a `KeyEngineHandle`
+# wrapping `ActorRef<KeyActor>`. Pinned `=0.20.0` in
+# `[workspace.dependencies]` (coordination-load-bearing dep; an
+# unreviewed minor bump could alter mailbox/supervision semantics).
+# This is the first live consumer (closes the FOLLOWUP kameo pin).
+kameo = { workspace = true }
 
 [dev-dependencies]
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
@@ -277,6 +304,41 @@ required-features = ["bench-internals"]
 
 [[bench]]
 name = "engine_trait_bench_economics_parameters_snapshot_iai"
+harness = false
+required-features = ["bench-internals"]
+
+# Stage 2 (KeyEngine actor) §5.3 B9 dispatch-overhead bench. Measures the
+# actor `ask` round-trip (`KeyEngineHandle::try_claim_output`) against the
+# in-process composition baseline (`LocalKeys::try_claim_output`) for a
+# `Mine` output, plus the cheap `NotMine` case. B9 is a bench-vs-bench
+# ratio (actor ≤ 1.05 × baseline), not an absolute gate. The actor paths
+# are criterion-(wall-clock)-only: the `ask` is a cross-thread async
+# round-trip whose Callgrind instruction count folds in nondeterministic
+# runtime-scheduling machinery, so there is no `_iai` actor sibling (a
+# reasoned, reversion-claused deviation from the criterion+iai pairing
+# discipline). Only the deterministic-crypto baseline gets an iai sibling.
+[[bench]]
+name = "engine_trait_bench_key_dispatch"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_key_dispatch_baseline_iai"
+harness = false
+required-features = ["bench-internals"]
+
+# Stage 2 §5.3 / §8.1 merge-path bench: the 6-i construction-time
+# view-secret projection (`populate_engine_handle_fields`) over a batch of
+# 256 freshly-merged outputs. Evidence for (not a gate on) the §8.1 6-ii
+# deferral decision. Synchronous + runtime-free, so it gets a full
+# criterion + iai-callgrind pair (unlike the actor dispatch paths).
+[[bench]]
+name = "engine_trait_bench_key_merge_projection"
+harness = false
+required-features = ["bench-internals"]
+
+[[bench]]
+name = "engine_trait_bench_key_merge_projection_iai"
 harness = false
 required-features = ["bench-internals"]
 

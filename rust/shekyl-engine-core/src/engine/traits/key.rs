@@ -73,7 +73,7 @@ use shekyl_crypto_pq::kem::{HybridCiphertext, HybridKemPublicKey};
 use shekyl_crypto_pq::key_image::KeyImage;
 use shekyl_crypto_pq::keys::{SpendPublicKey, ViewPublicKey};
 use shekyl_engine_state::SubaddressIndex;
-use zeroize::Zeroizing;
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::engine::error::KeyEngineError;
 
@@ -185,10 +185,13 @@ pub(crate) struct OutputDetectionInput {
 
 /// Result of a [`KeyEngine::try_claim_output`] call.
 ///
-/// `Mine` carries the structured non-secret claim payload; `NotMine`
-/// carries no data. Most outputs are `NotMine` in real scanning; the
-/// X25519 pre-filter rejects them cheaply inside `try_claim_output`'s
-/// impl without entering the handle-table insertion path.
+/// `Mine` carries the secret-bearing [`OutputClaim`] payload (see its
+/// docs); `NotMine` carries no data. Most outputs are `NotMine` in real
+/// scanning; the X25519 pre-filter rejects them cheaply inside
+/// `try_claim_output`'s impl without entering the handle-table insertion
+/// path. As the actor reply type, dropping a `Mine` value runs
+/// [`OutputClaim`]'s wipe-on-drop — including the channel-internal drop
+/// when a cancelled `ask` discards the un-taken reply.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
@@ -197,18 +200,34 @@ pub(crate) enum OutputClaimResult {
     NotMine,
 }
 
-/// Structured non-secret claim payload from a successful output
-/// detection.
+/// Structured claim payload from a successful output detection.
 ///
-/// **No fields are secret-bearing.** The per-output spending secrets
-/// (the secret-key derivative, the amount-blinding factor, and HKDF-
-/// derived intermediate material) live inside the implementor's
-/// workflow-internal handle table keyed by `handle`; they are not
-/// exposed to the orchestrator. The fields below are public on-chain
-/// data ([`OutputClaim::key_image`]) and balance-display data
-/// ([`OutputClaim::amount_atomic_units`]); neither imposes a
-/// `Zeroize` discipline on the receiver.
-#[derive(Clone, Debug)]
+/// # Secret-bearing; wipes on drop because it travels the actor channel
+///
+/// Stage 2 serves `try_claim_output` from the [`KeyActor`] mailbox, so
+/// this reply is moved through kameo's bounded request mailbox and its
+/// oneshot reply channel — allocations this crate neither owns nor
+/// zeroizes. A copy left in a freed channel buffer (e.g. when an `ask`
+/// future is cancelled after the actor computed the reply but before the
+/// caller takes it) is a leak unless the value wipes on drop. The type is
+/// therefore `#[derive(ZeroizeOnDrop)]`: every field wipes when the value
+/// drops, including the channel-internal drop the in-process call never
+/// had.
+///
+/// The per-output *spending* secrets (the secret-key derivative `x`, the
+/// amount-blinding factor, HKDF intermediates) do **not** live here — they
+/// stay inside the implementor's workflow-internal handle table keyed by
+/// `handle`. The fields that are here span two secrecy classes, both
+/// wiped:
+/// - **Secret:** `amount_atomic_units` — the decrypted cleartext amount.
+///   This reverses the pre-Stage-2 disposition that classified the amount
+///   as non-secret balance-display data; the decrypted amount is a secret.
+/// - **Privacy-linkable:** `handle` and `key_image` — per-output
+///   identifiers that fingerprint the wallet if they linger in freed
+///   memory, even though `key_image` becomes public on-chain after spend.
+///
+/// [`KeyActor`]: super::super::key_actor::KeyActor
+#[derive(Clone, ZeroizeOnDrop)]
 #[non_exhaustive]
 #[allow(dead_code)] // M3a Commit 4 introduces the implementor; consumers land in M3c+.
 pub(crate) struct OutputClaim {
@@ -219,13 +238,28 @@ pub(crate) struct OutputClaim {
     /// [`OutputHandle`] for the unforgeability and privacy
     /// considerations.
     pub handle: OutputHandle,
-    /// The output's key image. Public on-chain after spend.
+    /// The output's key image. Public on-chain after spend; a per-output
+    /// privacy fingerprint before then.
     pub key_image: KeyImage,
-    /// The decrypted output amount (atomic units). Non-secret; the
-    /// orchestrator displays it as part of the wallet's balance
-    /// presentation and uses it to drive transaction-build amount
-    /// accounting.
+    /// The decrypted output amount (atomic units). **Secret** — wiped on
+    /// drop with the rest of the claim. The orchestrator reads it for
+    /// balance presentation and transaction-build amount accounting while
+    /// the claim is held.
     pub amount_atomic_units: u64,
+}
+
+// CLIPPY: `amount_atomic_units` is redacted (it is the decrypted cleartext
+// amount, a secret); `handle` and `key_image` render through their own
+// truncated `Debug`. All fields appear, so `missing_fields_in_debug` does
+// not apply.
+impl std::fmt::Debug for OutputClaim {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OutputClaim")
+            .field("handle", &self.handle)
+            .field("key_image", &self.key_image)
+            .field("amount_atomic_units", &"[REDACTED]")
+            .finish()
+    }
 }
 
 // --- Subaddress derivation message shapes ----------------------------------

@@ -1,10 +1,12 @@
 # Stage 2 — `KeyEngine` → `kameo` actor migration (design)
 
-**Status:** design-only. No implementation, no wiring, no field edits to
-`Engine`. This document and its §9 round record are the deliverable; the
-implementation lands as its own PR(s) per
-[`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) once this design
-closes.
+**Status:** landed on branch `torvaldsl/stage-2-key-engine-actor`, pending
+merge to `dev`. The design closed at Round 6 (§9) and the implementation
+followed on the same branch: `KeyActor` + `KeyEngineHandle`, the `Engine`
+field swap, the require-ambient runtime disposition (§4.2), the zeroization
+audit (Findings 1–4), the §5.2 contract/protocol tests, and the §5.3 B9
+dispatch bench (PASS, ratio 1.039). All six §10 DoD items are met. This
+document and its §9 round record remain the design-of-record.
 
 **Process discipline:** authored under
 [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
@@ -17,10 +19,13 @@ message protocol (§2) falls out of the trait spec, not the reverse.
 
 **Binding constraint when arbitrating:**
 [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) priority-1
-(security/PQC). The load-bearing property is *no secret material crosses the
-trait boundary* (M3-series). This migration must preserve it **by
-construction**, not by discipline: the full `AllKeysBlob` lives only inside
-the actor task; the mailbox carries non-secret request/reply values only.
+(security/PQC). The load-bearing property is *the master secret material — the
+full `AllKeysBlob` and the handle table — never crosses the trait boundary*
+(M3-series). This migration preserves it **by construction**, not by
+discipline: the blob lives only inside the actor task and the mailbox never
+carries it. The narrower per-output secrets that *do* cross in replies (the
+decrypted amount; privacy-linkable identifiers) are `ZeroizeOnDrop`, so they
+wipe on drop even inside kameo's channel buffers (§4.3.1, audit Finding 4).
 
 ---
 
@@ -239,25 +244,36 @@ substrate does not have.
 ### 2.2 Actor message types
 
 ```rust
-// Crate-internal; non-secret request/reply only.
+// Crate-internal. Requests non-secret; secret-bearing replies are ZeroizeOnDrop (§4.3.1).
 pub(crate) enum KeyActorMsg { /* one zero-or-more-field struct per variant */ }
 
 // try_claim_output(&self, input: &OutputDetectionInput)
 struct ClaimOutput { input: OutputDetectionInput }      // owned, non-secret
 //   reply: Result<OutputClaimResult, KeyEngineError>
 //   OutputClaimResult::Mine(OutputClaim { handle: OutputHandle, key_image,
-//                                         amount_atomic_units }) — opaque
-//   handle + non-secret on-chain metadata only (key.rs:721-734).
+//                                         amount_atomic_units }) — SECRET-BEARING,
+//   ZeroizeOnDrop (decrypted amount + privacy-linkable handle/key_image;
+//   key.rs).
 
 // sign_transaction(&self, tx: &TxToSign)
 struct SignTransaction { tx: TxToSign }                 // owned, public-data carriers
-//   reply: Result<TxSignatures, KeyEngineError>  (stub today)
+//   reply: Result<TxSignatures, KeyEngineError>  (stub today; no live secret)
 ```
 
 `OutputDetectionInput` is `#[derive(Clone, Debug)] #[non_exhaustive]` and
-documented as carrying no `Zeroize`-required material (`key.rs:142-146`);
-`OutputClaim` carries the opaque `OutputHandle` plus public metadata. Both are
-`Send` (plain data) and cross the mailbox by value. The actor's `handle`
+documented as carrying no `Zeroize`-required material (`key.rs:142-146`); it is
+the non-secret request half. The **reply** half is not non-secret:
+`OutputClaim` carries the decrypted `amount_atomic_units` (cleartext amount —
+a secret, reversing an earlier "balance-display, non-secret" disposition) and
+the privacy-linkable `OutputHandle` / `KeyImage` per-output identifiers, so it
+is `#[derive(ZeroizeOnDrop)]` with a hand-written `Debug` that redacts the
+amount. This is the Stage-2 mailbox-zeroization contract (audit Finding 4,
+§4.3): a secret-bearing reply traverses kameo's bounded request mailbox and
+oneshot reply channel — allocations this crate neither owns nor zeroizes — so
+a copy left in a freed channel buffer (e.g. a cancelled `ask` whose un-taken
+reply the channel drops) is a leak unless the reply type wipes on its own
+`Drop`. Both `ClaimOutput` and `OutputClaim` are `Send` (plain data) and cross
+the mailbox by value. The actor's `handle`
 takes `&mut self`; kameo serialization means the Stage-1 interior-mutability
 handle-table (`RwLock`-guarded, for the `&self` trait surface) **collapses to
 plain `&mut self` ownership inside the actor** — a simplification the actor
@@ -310,14 +326,42 @@ path is independent of actor liveness.
 `derive_subaddress` is **synchronous** (`key.rs:693`); a sync method cannot
 `.await` a mailbox `ask`. Disposition that preserves the signature:
 
-- **Audit purpose** — pure function of immutable public spend/view keys
-  (`local_keys.rs:459-460`). The handle owns the public-key projection
-  (§3.2) and computes the audit subaddress synchronously, no actor round-trip.
-  (The Stage-1 `LocalKeys` also registers the derived subaddress in a reverse-
-  lookup registry under a write lock, `key.rs:685-692`; that registry is
-  scan-side bookkeeping, not key material, and is addressed in §6/§8.3 — it is
-  *not* a reason to route the public derivation through the secret-owning
-  actor.)
+- **Audit purpose** — synchronous, handle-resolved, **but secret-touching for
+  `idx >= 1`** (corrected post-Round-7; the earlier "pure function of public
+  keys" framing was verified false at source). Two sub-cases:
+  - **Primary (`idx.is_primary()`)** — returns the bare account
+    `(spend_pk, view_pk)` directly (`local_keys.rs:459-460`); genuinely
+    public-only, served from the handle's `KeyPublicProjection` (§3.1).
+  - **Non-primary (`idx >= 1`)** — `local_keys.rs:462-471` calls
+    `subaddress_keys(&self.derived.view_scalar, &self.derived.spend_public,
+    idx_bytes)`, and `subaddress_keys` takes `view_scalar: &Zeroizing<Scalar>`
+    — the **view secret** (`subaddress.rs:152-160`; `m_i =
+    keccak256_to_scalar(SUBADDR_DERIVATION_DOMAIN || view_scalar_le32 ||
+    idx_le32)`). So non-primary audit derivation is **secret-touching**, not a
+    public-key function. The handle serves it synchronously from a **second,
+    secret-bearing construction-time projection** — `AuditSubaddressSecret`
+    (non-`Clone`, `Zeroizing`, wipe-on-drop; `view_scalar` + `spend_public`),
+    held alongside the public `KeyPublicProjection` (§3.1). This is the same
+    cross-leaf-immutable shape as `ViewMaterial` / the §6
+    `HandleDerivationViewSecret`: a derived view secret living in a
+    construction-time projection, **not** `&AllKeysBlob`. The public/secret
+    boundary stays type-checked because the two projections are distinct types.
+  - **Registry mutation drops on the handle path.** The Stage-1 `LocalKeys`
+    also registers the derived subaddress in a reverse-lookup registry under a
+    write lock (`key.rs:685-692`). The handle-resolved path does **not**
+    maintain a registry: the actor owns the registry, and the registry only
+    feeds `try_claim_output`, which is cold in Stage 2 (zero production
+    callers, §3.5). Handle-side audit derivation is therefore a pure read of
+    the secret projection with no side effect — an accepted Stage-2 behavioral
+    narrowing relative to `LocalKeys`, not a regression on any live path.
+  - **The deeper question this surfaces.** Even the "read-only inspection"
+    purpose cannot be served from public material alone, because ML-KEM has no
+    account-level secret that composes across subaddresses the way Monero's
+    ECDH `a·R` does. That is a PQC-specific divergence from the inherited
+    Monero subaddress design and is filed as a dedicated design round in
+    `docs/FOLLOWUPS.md` ("Subaddress mechanism under PQC"); it is **out of
+    scope for Stage 2** (the actor migration takes the faithful Option-(a) fix
+    and does not reshape the subaddress mechanism).
 - **Recipient purpose** — returns `RecipientSubaddressKemKeygenNotImplemented`
   synchronously (stub; `error.rs`). No actor needed to return an error.
 
@@ -397,6 +441,29 @@ KeyActorUnavailable,
 pub(crate) struct KeyEngineHandle {
     actor: kameo::actor::ActorRef<KeyActor>,   // Clone + Send + Sync
     public: Arc<KeyPublicProjection>,          // immutable, public-only
+    audit_secret: Arc<AuditSubaddressSecret>,  // immutable, secret-bearing (non-primary audit, §2.4)
+}
+```
+
+**Two projections, not one (Option (a), per the Round-7+ correction in §2.4).**
+The handle carries *both* a public projection and a secret projection because
+non-primary audit derivation is secret-touching (§2.4). The split keeps the
+public/secret boundary type-checked: `KeyPublicProjection` is `Clone + Debug`
+*because* it is public-only; `AuditSubaddressSecret` is non-`Clone`, `Zeroizing`,
+wipe-on-drop, and has **no** `Debug` (the `ViewMaterial` discipline,
+`view_material.rs`). Both are `Arc`-shared so the handle stays `Clone`; the
+secret allocation is wiped when the last handle clone drops. `AuditSubaddressSecret`
+is deliberately a distinct type from both `ViewMaterial` and the §6
+`HandleDerivationViewSecret`, so the type system forbids the "it's just a view
+secret, I'll clone/reuse it" mistake (same rationale as §6's "name the merge
+projection distinctly").
+
+```rust
+// Secret-bearing; serves non-primary audit-subaddress derivation only.
+// Non-`Clone`, no `Debug`, wipe-on-drop — the ViewMaterial discipline.
+pub(crate) struct AuditSubaddressSecret {
+    view_scalar: Zeroizing<Scalar>,  // the view secret `a` (subaddress_keys input)
+    spend_public: EdwardsPoint,      // base spend point `D` (public; defense-in-depth zeroize)
 }
 ```
 
@@ -415,22 +482,27 @@ pub(crate) struct KeyEngineHandle {
   #[derive(Clone, Debug)]   // Clone+Debug are sound: public-only, no secret bytes
   pub(crate) struct KeyPublicProjection {
       account_public_address: AccountPublicAddress, // cached &-return source (§2.3)
-      spend_pub: EdwardsPoint,                       // audit-subaddress derivation (§2.4)
-      view_pub: EdwardsPoint,                        // audit-subaddress derivation (§2.4)
+      spend_pk: SpendPublicKey,                      // PRIMARY audit (local_keys.rs:459-460)
+      view_pk: ViewPublicKey,                        // PRIMARY audit (local_keys.rs:459-460)
   }
   ```
 
-  (Exact field set is pinned by what `local_keys.rs:459-460`'s audit branch
-  reads; the load-bearing point is *public-only*.) It contains **no secret
-  bytes**, derives `Clone + Debug` *because* it is public-only, and is
-  `Arc`-shared in the handle (cheap clone). It is deliberately **not**
-  `ViewMaterial` (which is secret-bearing, non-`Clone`, wipe-on-drop) and not
-  the §6 merge view-secret projection — the three are distinct types precisely
-  so the public/secret boundary is type-checked.
+  (Exact field set is pinned by what `local_keys.rs:459-460`'s **primary** audit
+  branch reads — the bare account `spend_pk`/`view_pk`, the typed
+  `SpendPublicKey`/`ViewPublicKey`, returned verbatim for `idx.is_primary()`.
+  The **non-primary** audit branch is *not* served from this projection — it is
+  secret-touching and served from `AuditSubaddressSecret`, per the §2.4
+  correction.) `KeyPublicProjection` contains **no secret bytes**, derives
+  `Clone + Debug` *because* it is public-only, and is `Arc`-shared in the handle
+  (cheap clone). It is deliberately **not** `ViewMaterial`, **not**
+  `AuditSubaddressSecret`, and **not** the §6 merge view-secret projection — all
+  four are distinct types precisely so the public/secret boundary is
+  type-checked.
 - `KeyEngineHandle` implements `pub(crate) trait KeyEngine` (the same trait
   `LocalKeys` implements) with `type Error = KeyEngineError`:
   - `account_public_address` → `&self.public.account_public_address` (sync).
-  - `derive_subaddress` → sync, from `self.public` (Audit) / stub (Recipient).
+  - `derive_subaddress` → sync; primary Audit from `self.public`, non-primary
+    Audit from `self.audit_secret` (§2.4), Recipient → stub error.
   - `try_claim_output` → `self.actor.ask(ClaimOutput { … }).await` then flatten.
   - `sign_transaction` → `self.actor.ask(SignTransaction { … }).await` (stub).
 
@@ -608,6 +680,94 @@ spawn happens in `assemble`, in exactly one place, so future open paths
 inherit it. `KeyActor::spawn(blob)` (default bounded-64 mailbox, §4.4) is
 called after the view/public projections are derived (§4.1).
 
+**Runtime hosting — where the actor task actually runs (Round-7 substrate
+finding).** The original §4.2 said "the spawn happens in `assemble`" without
+reconciling a structural fact: `assemble` is a **synchronous** `fn` reached
+from the sync `pub fn create` / `open_full`, and the engine's lifecycle layer
+is *deliberately runtime-agnostic* — `drive_persistence` (`lifecycle.rs:784`)
+exists precisely to branch on "multi-thread runtime present / current-thread
+present / no runtime at all." The existing test suite proves the no-runtime
+case is live: `Engine::<SoloSigner>::create(...)` is called inside plain
+`#[test]` functions (`refresh.rs:1686` driving the `#[test]`s at 1744+), which
+have **no** ambient Tokio runtime. But `kameo`'s `Spawn::spawn` schedules the
+actor with `tokio::spawn`, which **panics outside a runtime** ("there is no
+reactor running"). A naive spawn-in-`assemble` would therefore panic in the
+sync `#[test]` suite and on any no-runtime production open path. The Engine
+owns no runtime (verified: no `Runtime`/`Handle` field in
+`shekyl-engine-core/src`).
+
+**Disposition (locked, Round 8 — reverses the Round-7 owned-runtime
+decision): require an ambient runtime and assert it.** `KeyEngineHandle::spawn`
+calls `Handle::try_current()`; present → spawn the actor onto it; absent →
+`panic!` with a contract message naming the requirement (`#[tokio::test]` for
+tests; production wallet-RPC / async-CLI / GUI already run inside a runtime).
+There is no engine-owned runtime, no `KeyActorRuntimeHost`, no `Drop`-time
+runtime teardown.
+
+*Why the Round-7 ambient-or-owned path was rejected.* The owned-runtime path
+mirrored `drive_persistence`'s flavor-branch, but the resemblance is a false
+friend: `drive_persistence` is **one-shot** (run a future to completion on a
+worker thread, tear the runtime down, return), and its owned runtime lives and
+dies inside a single synchronous call, never stored. The `KeyActor` is
+**long-lived** — it lives for the whole session and never completes, so it
+cannot be `block_on`'d to completion. A long-lived owned runtime must be stored
+on the handle and dropped when the handle drops, and **a Tokio runtime cannot
+be dropped from within an async context** ("Cannot drop a runtime in a context
+where blocking is not allowed"). In production the `Engine` is created and
+dropped *inside* the ambient runtime (the async RPC server / CLI), so an
+`Engine` owning a nested runtime would panic on drop in exactly the production
+scenario the owned path was meant to serve. The flavor-branch made it worse: a
+current-thread ambient (every `#[tokio::test]`) fell into the owned branch and
+built a runtime while already inside an async context — a nested-runtime panic.
+
+*Why require-ambient is the honest shape.* An actor is an async task by
+definition; it cannot be spawned without a runtime. Introducing the `KeyActor`
+does not break a preservable runtime-agnosticism — it makes runtime-agnosticism
+impossible for the open path. The owned-runtime machinery existed to preserve a
+property the architecture had already foreclosed. Asserting the requirement is
+the truthful reflection of "we now have an actor," it preserves the
+§binding-constraint by-construction property (spawn at construction, blob moves
+in immediately, no `&AllKeysBlob` escapes), and it carries no drop-panic
+landmine. `kameo`'s `Spawn::spawn` is `tokio::spawn`, which any runtime flavor
+hosts, so the spawn needs no `rt-multi-thread`.
+
+*Test/caller migration.* Plain `#[test]`s that reach `spawn` migrate to
+`#[tokio::test]`. Where a sync test must drive a post-create method that itself
+forbids an ambient runtime (e.g. `refresh(&opts, handle)` calls
+`Handle::block_on`, which panics inside a runtime), the test stays a plain
+`#[test]` and the fixture enters a leaked process-wide runtime *only* around the
+`create` call (the actor spawns onto a live runtime; the `enter` guard drops
+before the test body), so the post-create method runs with no ambient runtime.
+This is the shape used by `refresh.rs`'s `make_wallet` and the bench fixture's
+`build_engine_fixture`. Production has no caller of the orchestrator `Engine`
+yet (the CLI/RPC wiring lands in a later stage); the require-ambient assertion
+is the contract that future production wiring must satisfy — and the wallet-RPC
+server, async CLI, and GUI all create the engine from inside their runtime, so
+the contract is met by construction there.
+
+**Reversion clause** (per `21-reversion-clause-discipline.mdc`). Require-ambient
+is rejected-forever only against the *owned-runtime* alternative; it reopens
+if a hard sync-API constraint emerges (a sync entry point that genuinely cannot
+be moved inside a runtime). The substrate-anchored reopening criterion is "a
+production caller must construct the `Engine` from a context where no runtime
+exists and cannot be made to exist"; the re-evaluation shape is the **lazy-spawn
+fallback** (store the `Zeroizing` blob + projections in the handle at sync
+`assemble`; spawn the actor on the ambient runtime at first async use), recorded
+explicitly as a by-construction → by-timing weakening of the §binding-constraint,
+not adopted silently.
+
+**Cargo consequence (decoupled).** `rt-multi-thread` is **not** an entailment of
+the spawn decision under require-ambient — the spawn needs only `rt`. It is
+load-bearing on exactly one path: `drive_persistence`'s multi-thread branch
+calls `tokio::task::block_in_place`, which is gated behind `rt-multi-thread` and
+does not even resolve as a symbol without it. Today that feature is enabled only
+in `[dev-dependencies]`, so `cargo build -p shekyl-engine-core` (lib, default
+features) **does not compile in isolation** — it has relied on a downstream
+consumer enabling `rt-multi-thread` via Cargo feature unification. This PR
+promotes `rt-multi-thread` into the production `[dependencies]` tokio feature
+list as an independent `block_in_place` compile-correctness fix, justified on
+its own merits and not bundled with the runtime-hosting decision.
+
 ### 4.3 Shutdown, drop ordering, and zeroization
 
 The load-bearing property is that `AllKeysBlob`'s `Drop`
@@ -628,9 +788,76 @@ The load-bearing property is that `AllKeysBlob`'s `Drop`
   wipe is `Drop`; `on_stop` is defense-in-depth.
 - **Panic** — see §4.5.
 
+**`ZeroizeOnDrop` is the guarantee; `on_stop` is a strictly-earlier bonus —
+never invert this.** The security property rests on `AllKeysBlob`'s `Drop`
+running, *not* on `on_stop`. `Drop` fires on **every** teardown: graceful
+stop, last-`ActorRef`-dropped, and runtime-abort all drop the parked actor
+future and run its destructor. `on_stop` fires **only** on the graceful /
+signal paths, **never** on an abort (a runtime drop aborts the task — `Drop`
+runs, `on_stop` does not). So `on_stop`'s explicit `self.blob.zeroize()` is a
+strictly-earlier defense-in-depth wipe, and the require-ambient disposition is
+robust precisely because the *guarantee* (`Drop`) covers the abort case that
+`on_stop` does not. A future change must **never** "optimize" by treating
+`on_stop` as the primary wipe and weakening or removing the blob's
+`ZeroizeOnDrop` — that silently loses the wipe on the abort path. (This is also
+a retrospective mark against the rejected owned-runtime path of §4.2: its
+`shutdown_background()` teardown left "does the abandoned task's future
+actually get dropped, and when?" murkier than a clean abort — i.e. murkier
+about whether the guarantee even fires — which is one more reason
+require-ambient is the correct disposition.)
+
 Drop ordering relative to `WalletFile` (`lifecycle.rs:996-998`) is unchanged:
 the actor's blob is independent of the file handle; both zeroize on their own
 `Drop`.
+
+#### 4.3.1 Derived-value and mailbox zeroization contract (audit findings)
+
+The blob-layer property above (`AllKeysBlob: ZeroizeOnDrop`, every secret
+field a `#[repr(transparent)]` `Zeroize`/`ZeroizeOnDrop` wrapper, accessors
+returning borrows) is sound and unchanged. A zeroization audit run while this
+PR was touching the scan/sign code found that the discipline protecting the
+blob did **not** extend to the *values derived from it* on the per-output hot
+path. Stage 2 fixed all four findings, because three are pre-existing in the
+scan path and the fourth is introduced by the actor boundary — and this PR is
+the cheap moment to fix them while the code is open:
+
+- **Finding 1 — `RecoveredOutput` field-omission (must-fix).** The hand-rolled
+  `Zeroize` enumerated fields and silently omitted `recovered_spend_key`
+  (`B' = D + m_i·G`, a per-wallet per-subaddress linkable identifier — the
+  exact value subaddress unlinkability exists to protect) and `h_pqc`.
+  Replaced with `#[derive(ZeroizeOnDrop)]` so field coverage is
+  compiler-enforced, not implicit in an editable function body; the
+  "which field is public, skip" decision is made explicit at the type.
+- **Finding 2 — view secret on the stack, per output (highest severity).**
+  `scan_output_recover` built bare `curve25519-dalek::Scalar` locals (the view
+  secret in scalar form, per-output `ho`/`y`/`z`, the raw ECDH shared secret)
+  and a bare decrypted-`amount` byte array. `Scalar`/`MontgomeryPoint` impl
+  `Zeroize` but **not** `ZeroizeOnDrop`, so these were left resident on the
+  stack on every exit path — including early `Err` returns — once per scanned
+  output, on a daemon-drivable path. Fixed by enabling the `zeroize` feature on
+  `curve25519-dalek` (`shekyl-crypto-pq/Cargo.toml`) and `Zeroizing`-wrapping
+  the locals so they wipe on all exits.
+- **Finding 3 — secret-derived scalar sweep (audit-priority).** The same
+  bare-`Scalar` pattern across the rest of `output.rs`'s production
+  scan/construct/key-image paths (`scan_output`, `construct_output`,
+  `rederive_combined_ss`, `recover_combined_ss`, `derive_output_key`,
+  `recover_recipient_spend_pubkey`, `decrypt_amount`,
+  `compute_output_key_image{,_from_ho}`) was swept and `Zeroizing`-wrapped.
+  Public points (`eph_mont_pub`, output/commitment points, `recovered_b`,
+  `expected_o`/`expected_c`) are deliberately left unwrapped — public values.
+- **Finding 4 — actor mailbox/reply surface (Stage-2-specific).** Moving
+  `try_claim_output` behind the mailbox makes the reply traverse kameo's
+  bounded request mailbox and oneshot reply channel — allocations this crate
+  neither owns nor zeroizes. **Contract: every actor message/reply type that
+  carries secret-derived bytes is `ZeroizeOnDrop`.** `OutputClaim` now is
+  (§2.2): its `amount_atomic_units` is treated as a secret, and its
+  `OutputHandle`/`KeyImage` are privacy-linkable. The contract closes the
+  `ask`-cancellation leak — a future cancelled after the actor computed the
+  reply but before the caller took it leaves the reply for the channel to
+  drop; `ZeroizeOnDrop` is what makes that drop wipe. The sign reply
+  (`TxSignatures`) carries no live secret today (PR-5 stub); the contract binds
+  any future secret-bearing message/reply field. §5.2's reply-path-wipe test
+  asserts the drop runs.
 
 ### 4.4 Mailbox sizing
 
@@ -727,25 +954,49 @@ directly.
    same blob and input — both `Mine` (handle resolves to the same key-image /
    amount) and `NotMine` cases. This pins "the actor is the same engine,
    reached differently."
-2. **No-secret-crosses (structural):** a test asserts the message and reply
-   types (`ClaimOutput`, `OutputClaimResult`, `OutputClaim`) contain no
-   secret-bearing field — enforced by a `static_assertions`-style check that
-   the reply is `Send` *and* a doc-pinned review that `OutputClaim` carries
-   only `OutputHandle` + public metadata (`key.rs:721-734`). The opaque
-   `OutputHandle` is meaningless without the actor's internal table
+2. **Secret-bearing replies wipe (structural + behavioral):** the reply
+   `OutputClaim` *does* carry secret-derived bytes (the decrypted
+   `amount_atomic_units`; the privacy-linkable `OutputHandle`/`KeyImage`), so
+   the property under test is not "no secret crosses" but "every secret-bearing
+   reply is `ZeroizeOnDrop`" (Finding 4, §4.3.1). A compile-time check
+   (`zeroize_on_drop_contract`) asserts `OutputClaim: ZeroizeOnDrop`, and a
+   `Send` check covers the message/reply types crossing the mailbox. A
+   behavioral test (`reply_path_wipes_on_drop`) routes an instrumented
+   `ZeroizeOnDrop` reply through the actor and asserts that dropping the reply
+   runs the zeroizing `Drop` — the same `Drop` the channel runs on an
+   `ask`-cancellation that discards the un-taken reply — without distorting
+   `KeyActor`'s production shape. The opaque `OutputHandle` is additionally
+   meaningless without the actor's internal table
    (`STAGE_1_PR_3_KEY_ENGINE.md:1069-1077`).
 3. **Handle-resolved methods:** `account_public_address` returns the cached
    public address with no actor interaction (assert by exercising the handle
    after the actor is `stop`ped — the address still resolves; an `ask` would
    fail). `derive_subaddress(Audit)` likewise resolves post-stop;
    `derive_subaddress(Recipient)` returns the stub error.
-4. **Lifecycle + terminal-fault path:**
-   - **Clean stop** drops the blob — zeroize observable via a test-only drop
-     counter on the fixture (not on production `AllKeysBlob`).
-   - **Panic → fail-stop → zeroize** (T2/T8): inject a panic in a test message
-     handler; assert (a) the actor is dead, (b) the fixture drop counter fired
-     (blob zeroized on unwind, §4.5), and (c) the next `ask` returns
-     `KeyActorUnavailable`.
+4. **Lifecycle + terminal-fault path:** the blob wipe itself rests on
+   `AllKeysBlob: ZeroizeOnDrop` (the guarantee, §4.3) and is byte-level tested
+   in `shekyl-crypto-pq`. These unit tests deliberately do **not** re-observe
+   the blob wipe via a fixture drop-counter — that would force `KeyActor`
+   generic over the blob type and distort the production shape for a property
+   the dependency already covers (`key_actor.rs` test-module docstring). They
+   pin instead (a) the *type-level* `ZeroizeOnDrop` contract
+   (`zeroize_on_drop_contract`), and (b) the *lifecycle behavior that triggers
+   the drop*:
+   - **Clean stop** (`handle_resolved_methods_resolve_after_stop`): an explicit
+     `actor.stop_gracefully().await` + `wait_for_shutdown().await` ends the
+     task; handle-resolved reads still serve post-stop. Graceful stop is also
+     the *only* path that runs `on_stop`: a test that wanted to observe the
+     `on_stop` wipe specifically must use `stop_gracefully`, **not** rely on
+     runtime-teardown — a runtime drop aborts the task, which fires `Drop` but
+     not `on_stop` (§4.3). The guarantee is unaffected either way.
+   - **Panic → fail-stop** (`panic_fail_stops_and_asks_are_terminally_unavailable`,
+     T2/T8): inject a panic; assert the actor is dead and the next `ask`
+     returns `KeyActorUnavailable`. The blob wipe on this path is `Drop` on
+     unwind (§4.5) — the guarantee, not `on_stop`.
+   - **Reply-path wipe** (`reply_path_wipes_on_drop`, Finding 4 / §4.3.1): the
+     one place a dedicated instrumented `ZeroizeOnDrop` counter *is* used —
+     routing a probe reply through the mailbox observes the channel-drop wipe
+     without touching `KeyActor`'s production shape.
    - **Terminal, non-retryable** (§2.6 contract): assert that *repeated* `ask`s
      after death all return `KeyActorUnavailable` (a retry never recovers),
      pinning the "abort, don't retry" contract.
@@ -755,6 +1006,45 @@ directly.
      (§2.6), not the actor-unit tests here.
 
 ### 5.3 Benchmark plan (B9, bench-vs-bench)
+
+**Status (landed).** The B9 benches exist in the engine bench harness,
+gated behind `bench-internals`:
+
+- `engine_trait_bench_key_dispatch` (criterion) — the three measured IDs
+  below (`baseline_claim_mine`, `actor_claim_mine`, `actor_claim_not_mine`).
+- `engine_trait_bench_key_dispatch_baseline_iai` (iai-callgrind) — the
+  deterministic-crypto baseline only.
+- `engine_trait_bench_key_merge_projection` (criterion) +
+  `engine_trait_bench_key_merge_projection_iai` (iai-callgrind) — the
+  6-i merge-path projection pair.
+
+The actor `ask` paths are **criterion-(wall-clock)-only**: the `ask` is a
+cross-thread async round-trip whose Callgrind instruction count folds in
+nondeterministic runtime-scheduling machinery (Valgrind serializes
+threads onto one simulated core), so there is no iai actor sibling — a
+reasoned, reversion-claused deviation from the criterion+iai pairing
+discipline (reopen if a deterministic async-dispatch measurement method
+lands). Only the deterministic-crypto baseline and the synchronous
+merge-path projection get iai siblings. The baseline iai drives its
+single (synchronously-completing) `try_claim_output` future with a
+**no-op-waker poll**, not a Tokio `block_on`: a current-thread `block_on`
+under Callgrind did not drive the future body to completion (it collapsed
+the count to ≈4.8k runtime-handshake instructions instead of the ≈15M
+decap), so the bench polls once and asserts `Ready` — zero runtime noise
+in the deterministic count. Baselines captured by CI `workflow_dispatch`
+(run 26732235292, SHA `d377edfdb`, AMD EPYC 9V74 / rustc 1.96.0 /
+valgrind 3.22.0); full figures in
+[`docs/PERFORMANCE_BASELINE.md`](../PERFORMANCE_BASELINE.md).
+
+**B9 verdict: PASS.** `actor_claim_mine / baseline_claim_mine =
+1,386,043 ns / 1,333,918 ns = 1.039` (median 1.041), inside the ≤ 1.05
+envelope — the mailbox `ask` round-trip (~52 µs) is lost in the
+ML-KEM-768 decap. Cheap-case `actor_claim_not_mine` ≈ 167 µs (dispatch
+cost against the cheapest real op — §8.3 evidence, not a gate). Baseline
+iai = 15,163,668 instructions (ML-KEM-768-dominated). Merge projection ≈
+1.71 µs/output (iai 5,160,059 over 256) — ~780× cheaper than the
+per-output claim it accompanies, confirming the eager-6-i /
+§8.1-6-ii-deferred disposition.
 
 The DoD's "within 5% of the composition baseline" is **bench-vs-bench against
 a measured baseline**, not an absolute latency gate. Because signing does not
@@ -929,7 +1219,7 @@ discipline-note / forward-action.
 
 | # | Attacker objective | Vector | Disposition |
 |---|---|---|---|
-| T1 | **Secret exfiltration via the mailbox** | Read a secret out of a request/reply value. | **In-scope, closed by construction.** Only non-secret types cross (`OutputDetectionInput`, `OutputClaim`+opaque `OutputHandle`, `TxToSign`/`TxSignatures` public-data carriers, `KeyEngineError`). The full blob and the handle-table never leave the task. §2.2 / §5.2 test 2. |
+| T1 | **Secret exfiltration via the mailbox** | Read a secret out of a request/reply value. | **In-scope, closed by construction + wipe.** The master secret — the full blob and the handle-table — never leaves the task (by construction). The narrower per-output secrets that *do* cross in replies (`OutputClaim`'s decrypted amount + privacy-linkable handle/key_image) are `ZeroizeOnDrop`, so a copy left in a freed channel buffer wipes on its own `Drop` (Finding 4, §4.3.1). Request types (`OutputDetectionInput`, `TxToSign`) and error / stub-reply types (`KeyEngineError`, `TxSignatures`) carry no secret. §2.2 / §4.3.1 / §5.2 test 2. |
 | T2 | **Panic-leak** | A handler panic leaves secret bytes in a recoverable/loggable state, or `PanicError` carries secret bytes. | **In-scope.** `on_panic` → `Break` (fail-stop, §4.5); `self.blob` drops → zeroize. `KeyEngineError`/panic payloads carry no secret (F3 discipline, §2.5). Discipline-note: the implementation must not `panic!` with secret-bearing context. |
 | T3 | **Restart-leak** | Supervisor restart re-runs `on_start`, requiring a retained secret `Args`/factory the attacker can target. | **In-scope, closed by construction.** Fail-stop, not restart (§4.5): `supervise` needs `AllKeysBlob: Clone` (rejected), `supervise_with` retains a secret closure (rejected). No retained external secret exists to target. |
 | T4 | **Mailbox DoS** | Flood `ask`s to exhaust memory or stall the actor. | **In-scope (bounded).** Bounded mailbox (64) provides backpressure (§4.4); a flooder blocks on send rather than growing memory. Cross-actor flooding is the orchestrator/RPC tier's concern (DAG root rate-limits), not the leaf's. |
@@ -1236,13 +1526,13 @@ premises were flipped by the substrate.
 
 ## 10. Definition of done (design targets these — `FOLLOWUPS.md:1028-1040`)
 
-- [ ] `KeyActor` runs as a `kameo` actor with its own task (§1, §4).
-- [ ] `Engine<S>` holds `KeyEngineHandle`, not `keys: AllKeysBlob`; no inline
+- [x] `KeyActor` runs as a `kameo` actor with its own task (§1, §4).
+- [x] `Engine<S>` holds `KeyEngineHandle`, not `keys: AllKeysBlob`; no inline
       `K` generic (§3.2).
-- [ ] All cross-subsystem key access routes through the message protocol or a
+- [x] All cross-subsystem key access routes through the message protocol or a
       sanctioned construction-time projection (§2.1, §6).
-- [ ] Full `AllKeysBlob` contained in the actor task; no `&AllKeysBlob` escapes
+- [x] Full `AllKeysBlob` contained in the actor task; no `&AllKeysBlob` escapes
       (§0.2 holders disposed in §6).
-- [ ] Actor-protocol tests (real actor + recorded messages; receivers) (§5).
-- [ ] Message-overhead bench within 5% of the `try_claim_output` crypto
-      baseline, bench-vs-bench, no absolute gate (§5.3).
+- [x] Actor-protocol tests (real actor + recorded messages; receivers) (§5).
+- [x] Message-overhead bench within 5% of the `try_claim_output` crypto
+      baseline, bench-vs-bench, no absolute gate (§5.3) — **PASS, ratio 1.039**.

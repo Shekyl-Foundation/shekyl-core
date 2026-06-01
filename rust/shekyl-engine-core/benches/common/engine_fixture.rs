@@ -152,9 +152,11 @@
 //! [`build_engine_fixture`] returns `(Box<Engine<SoloSigner>>,
 //! TempDir)` per the boundary rule above. The `TempDir` lives
 //! across the bench function's measured region, holding the wallet's
-//! filesystem footprint until measurement completes. The Tokio
-//! runtime is fixture-internal — dropped before return — and is
-//! **not** part of the guard tuple.
+//! filesystem footprint until measurement completes. The daemon's
+//! RPC-construction runtime is fixture-internal (dropped before
+//! return); the `KeyActor`'s host runtime is the leaked process-wide
+//! [`bench_runtime`] (it must outlive the actor). Neither runtime is
+//! part of the guard tuple.
 //!
 //! Per the symmetry rule (§4.2), the iai-callgrind bench function
 //! takes the tuple by value, performs its measured workload, and
@@ -292,10 +294,42 @@ pub fn build_engine_fixture() -> (Box<Engine<SoloSigner>>, TempDir) {
     };
 
     let daemon = construct_dummy_daemon();
-    let engine = Engine::<SoloSigner>::create(params, daemon)
-        .expect("Engine::create succeeded for the bench fixture");
+    // `Engine::create` → `assemble` spawns the `KeyActor`, which (post
+    // Stage-2 require-ambient) asserts an ambient Tokio runtime. Build
+    // the daemon first (its own throwaway runtime), then enter the
+    // leaked process-wide `bench_runtime` only for `create`, so the
+    // actor spawns onto a runtime that outlives the fixture. The guard
+    // drops here; the actor task continues on the never-dropped
+    // runtime for the bench's lifetime.
+    let engine = {
+        let _rt_guard = bench_runtime().enter();
+        Engine::<SoloSigner>::create(params, daemon)
+            .expect("Engine::create succeeded for the bench fixture")
+    };
 
     (Box::new(engine), tmp)
+}
+
+/// Process-wide multi-thread Tokio runtime for the bench fixture,
+/// built once and intentionally leaked for the duration of the bench
+/// binary.
+///
+/// The `KeyActor` spawned by [`Engine::create`] is an async task that
+/// must live on a runtime that outlasts [`build_engine_fixture`]'s
+/// return. A one-shot runtime dropped at fixture-build time would tear
+/// the actor down immediately. Leaking one runtime for the whole bench
+/// binary is the same shape `refresh.rs`'s test module uses, and keeps
+/// the fixture guard tuple (`(Box<Engine<SoloSigner>>, TempDir)`) free
+/// of a runtime handle.
+fn bench_runtime() -> &'static tokio::runtime::Runtime {
+    static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(1)
+            .build()
+            .expect("build multi-thread tokio runtime for bench fixture")
+    })
 }
 
 /// Teardown helper for iai-callgrind's `teardown = drop_fixture`

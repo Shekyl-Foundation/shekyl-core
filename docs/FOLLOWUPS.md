@@ -52,9 +52,9 @@ sustainability is unaffected by the recalibration.
   §8.1 critical-path chain is landed on `dev`:
   `DaemonEngine` → `LedgerEngine` → (`RefreshEngine` ∥
   `PendingTxEngine`), with the `KeyEngine` trait + `LocalKeys`
-  implementor in parallel (landed but **not** orchestrator-wired —
-  deferred to Stage 2; see the `KeyEngine` inline-integration entry
-  below); `PersistenceEngine` landed (PR #83) and `EconomicsEngine`
+  implementor in parallel (landed but not orchestrator-wired at Stage 1
+  closeout — **wired in Stage 2, RESOLVED 2026-05-31**; see the `KeyEngine`
+  inline-integration entry below); `PersistenceEngine` landed (PR #83) and `EconomicsEngine`
   landed (PR #94), so the orchestrator is now the seven-parameter
   `Engine<S, D, L, E, R, P, F>`.
   Inventory, orchestrator shape (`Engine<S, D, L, E, R, P, F>`), ordered
@@ -71,9 +71,20 @@ sustainability is unaffected by the recalibration.
   [`docs/design/WALLET_REWRITE_PLAN.md`](./design/WALLET_REWRITE_PLAN.md)
   Phases 0–6; Stage 1 was prerequisite, Phase 1+ continues `Engine`.
 
-- **`KeyEngine` inline orchestrator integration — rejected for Stage 1
-  (reversion-clause; reopens at the Stage 2 actor migration).** Shape per
+- **`KeyEngine` inline orchestrator integration — rejected for Stage 1;
+  RESOLVED 2026-05-31 by the Stage 2 actor migration.** Shape per
   [`21-reversion-clause-discipline.mdc`](../.cursor/rules/21-reversion-clause-discipline.mdc).
+
+  *Resolution (2026-05-31).* The reversion clause's positive decision was
+  taken exactly as specified: the orchestrator now holds
+  `key: KeyEngineHandle` (not an inline `K: KeyEngine` parameter) — `Engine`
+  stays seven-parameter `Engine<S, D, L, E, R, P, F>`, the
+  `Arc<AllKeysBlob>` field is gone, and the blob lives solely in the
+  `KeyActor`. See `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` §6 (steps 3–4)
+  and the "Stage 2 — `KeyEngine` migration to actor" entry below, which
+  records the completed DoD (including the B9 dispatch-overhead benchmark —
+  PASS, ratio 1.039). The reject-the-inline-shape rationale below is retained
+  as the historical record of why the deferral was correct.
 
   *Rejection (current substrate).* `KeyEngine` is the one extracted Stage 1
   trait deliberately **not** wired into the orchestrator. `Engine` holds
@@ -864,6 +875,11 @@ sustainability is unaffected by the recalibration.
     `STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md` §1.2. Baseline transcription
     to `PERFORMANCE_BASELINE.md` deferred to first CI
     workflow_dispatch capture under N=3 invariance.
+    **Capture-script gap (noted 2026-05-31, Stage 2 close-out audit):**
+    this pair is absent from `scripts/bench/capture_rust_baseline.sh`'s
+    `BENCHES` array, so the CI captures to date (incl. run 26732235292)
+    did not include it. Closing this slot requires adding the row before
+    a capture run — out of Stage 2 scope, owned by this entry.
 
   Remaining slots:
   - `engine_trait_bench_economics_current_emission` — pinned to
@@ -924,15 +940,19 @@ sustainability is unaffected by the recalibration.
      default + per-actor override convention documented inline at the
      `kameo` `[workspace.dependencies]` entry.
 
-  **Status (2026-05-29).** All three preconditions are satisfied by
-  the `chore/stage_1_cleanup` verification commit. The pin is
-  declared-only (no workspace member consumes `kameo` yet, so it is
-  inert in the build graph). **This entry stays open** until Stage 2's
-  first commit adds the live `kameo = { workspace = true }` consumer
-  (the `KeyEngine` actor crate), verifies the supervision/mailbox API
-  surface at source per `17-dependency-discipline.mdc` at that
-  consumption point, and closes this follow-up. Target: V3.0,
-  pre-Stage-2.
+  **CLOSED 2026-05-31 (Stage 2 `KeyActor` migration).** All three
+  preconditions were satisfied by the `chore/stage_1_cleanup`
+  verification commit; the close condition — Stage 2's first commit
+  adds the live `kameo = { workspace = true }` consumer and verifies
+  the supervision/mailbox API surface at source — is now met.
+  `shekyl-engine-core` consumes `kameo` via the `KeyActor`
+  (`rust/shekyl-engine-core/src/engine/key_actor.rs`), so the pin is
+  no longer inert in the build graph. The API surface was verified at
+  source per `17-dependency-discipline.mdc` and the `#[actor(mailbox =
+  …)]` convention drift corrected (kameo 0.20.0 has no such attribute;
+  `spawn` is bounded-64 by default, overrides via `spawn_with_mailbox`)
+  — recorded at `STAGE_2_KEY_ENGINE_ACTOR.md` §0.5 (B6 finding) and the
+  `rust/Cargo.toml` `kameo` note.
 
 - **View/HW lifecycle bodies in `shekyl-wallet-core`.**
   `Wallet::open_view_only` and `Wallet::open_hardware_offload` ship as
@@ -1019,11 +1039,12 @@ sustainability is unaffected by the recalibration.
   if framework limitations surface here, the cost of switching is
   bounded because only one actor exists.
 
-  *Blocks on:* Stage 1 actor-friendly trait boundaries (the
-  framework-agnostic refactor that lands between Branch 2 closing
-  and Phase 2b cutting).
+  *Blocks on:* Stage 1 actor-friendly trait boundaries — **satisfied**
+  (the framework-agnostic trait refactor landed on `dev`; see STAGE_2
+  §0.3).
 
-  *Target:* before Phase 2b stake-lifecycle work begins.
+  *Target:* before Phase 2b stake-lifecycle work begins — **met** (this
+  entry RESOLVED; see status below).
 
   *Definition of done:* `KeyEngine` runs as a `kameo` actor with
   its own task; `Engine<S>` holds a `KeyEngineHandle` instead of
@@ -1042,7 +1063,197 @@ sustainability is unaffected by the recalibration.
 
   *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
   Engine architecture: actor model with staged migration from
-  composition*.
+  composition*. Design: `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`.
+
+  **Status (2026-05-31) — RESOLVED; all six §10 DoD items met; pending merge
+  to `dev`.** The actor migration is on the branch (`torvaldsl/stage-2-key-engine-actor`):
+  `KeyActor` owns `AllKeysBlob` in its own task with fail-stop-on-panic
+  zeroization (`key_actor.rs`); `Engine<S, …>` holds `key:
+  KeyEngineHandle` plus the construction-time `HandleDerivationViewSecret`
+  for the 6-i merge post-pass; `LocalSigner` holds the handle, not the
+  blob; no `&AllKeysBlob` escapes the actor. The §5.2 contract/protocol
+  tests landed (equivalence vs `LocalKeys`, no-secret-crosses, post-stop
+  handle resolution, panic→fail-stop→zeroize, terminal-non-retryable).
+  Runtime hosting took the **require-ambient** disposition (§4.2, Round 8):
+  `KeyEngineHandle::spawn` asserts an ambient runtime rather than self-hosting
+  an owned one (an owned long-lived runtime panics on drop inside the
+  production async context); `rt-multi-thread` is promoted to production deps
+  as an *independent* `block_in_place` fix, decoupled from the spawn decision.
+  **DoD residue — RESOLVED 2026-05-31 (B9 benches landed).** The §5.3
+  **B9 dispatch-overhead benchmark** is in the harness behind
+  `bench-internals`: `engine_trait_bench_key_dispatch` (criterion — three
+  IDs: `baseline_claim_mine`, `actor_claim_mine`, `actor_claim_not_mine`),
+  `engine_trait_bench_key_dispatch_baseline_iai` (iai, deterministic-crypto
+  baseline only), and the 6-i merge-path pair
+  `engine_trait_bench_key_merge_projection` (criterion) +
+  `engine_trait_bench_key_merge_projection_iai` (iai). The
+  `KeyDispatchBenchHarness` / `KeyBaselineBenchFixture` /
+  `MergeProjectionBenchFixture` shims are exported through
+  `__bench_internals`. The actor `ask` paths are **criterion-only** (no iai
+  actor sibling — a cross-thread async round-trip's Callgrind count folds in
+  nondeterministic scheduling; reversion-claused: reopen if a deterministic
+  async-dispatch measurement method lands); only the synchronous crypto
+  baseline and the merge projection get iai siblings. `compare.py` routes
+  all five IDs into the `engine_trait_bench` class by prefix (no script
+  change). Baselines **captured by CI `workflow_dispatch`** (run
+  26732235292, SHA `d377edfdb`, AMD EPYC 9V74 / rustc 1.96.0 / valgrind
+  3.22.0) and transcribed into `docs/PERFORMANCE_BASELINE.md`: **B9 ratio =
+  1.039 — PASS** (actor 1.386 ms / baseline 1.334 ms, ≤ 1.05); baseline iai
+  15,163,668 instr; merge projection ≈ 1.71 µs/output (iai 5,160,059),
+  confirming eager-6-i. The baseline iai driver was corrected from a
+  current-thread Tokio `block_on` (which collapsed the Callgrind count to
+  ~4.8k handshake instructions under valgrind) to a no-op-waker single
+  poll. Re-confirm at the merge SHA if the branch tip advances materially.
+  *Entry
+  resolved; the CI baseline capture rides the merge per the deferred-capture
+  pattern.* Target: V3.0, before Phase 2b.
+
+- **Subaddress mechanism under PQC — dedicated design round (2026-05-31,
+  surfaced during Stage 2 `KeyEngine`-actor pre-flight).** The scanner and
+  the address format have made *incoherent* choices about where the KEM lives,
+  and the incoherence is currently masked only because the recipient-context
+  subaddress path is an unimplemented stub
+  (`KeyEngineError::RecipientSubaddressKemKeygenNotImplemented`,
+  `error.rs:615`). This round must resolve the incoherence **before** that stub
+  is implemented.
+
+  *Design doc (when the round opens):* `docs/design/SUBADDRESS_UNDER_PQC.md`.
+
+  *The finding.* Monero's subaddress scheme is cheap because ECDH composes: the
+  scanner computes `a·R` with the single account view secret `a` regardless of
+  which subaddress an output targeted (one scalar-mult per output, then recover
+  `B'`, then table lookup; scan cost is independent of subaddress count).
+  ML-KEM has **no** such homomorphism — each KEM keypair is independent, and a
+  ciphertext encapsulated against `pk_i` requires exactly `sk_i` to decapsulate.
+  There is no account-level secret that decapsulates ciphertexts for all
+  subaddress public keys. This forces a choice with no clean Monero analogue:
+  - **Option A — account-level KEM + classical subaddress diversity** (what the
+    scanner implements today, `scan.rs:525-528`): one decap per output
+    (account-level `ml_kem_dk`), then `B' = O − ho·G − y·T` recovery gives the
+    subaddress via the `HashMap<CompressedPoint, Option<SubaddressIndex>>`
+    lookup. Scan cost is independent of subaddress count; on-chain
+    unlinkability holds (distinct `B'_i = D + m_i·G`). But every subaddress
+    encoding shares the *same* account ML-KEM PK bytes, so two of the wallet's
+    own addresses are linkable by byte comparison.
+  - **Option B — per-subaddress KEM** (what `RecipientSubaddress` /
+    `STAGE_1_PR_3_KEY_ENGINE.md` §3.1.3 currently assume, and what the address
+    layer already decided — "carrying a wallet-level ML-KEM PK… would make any
+    two encodings… trivially linkable; per-subaddress derivation is rule-forced
+    by `00-mission.mdc`"): each subaddress gets its own KEM keypair from
+    `(view_secret, idx)`; addresses are byte-unlinkable. But scanning must try
+    **every active subaddress's `sk_i`** per output — `O(active_subaddresses)`
+    ML-KEM decaps per output, with no Monero-style shortcut and no help from
+    the X25519 view-tag pre-filter unless it too is made per-subaddress (which
+    re-introduces the cost). **Unpriced, unbounded per-output scan-cost
+    multiplier.**
+
+  *The sharp question to put on the table.* The threat Option B closes —
+  comparing two of *your own* addresses byte-for-byte — requires an adversary
+  who already holds two addresses you handed out (an off-chain, weaker
+  adversary than the chain observer). The on-chain threat is already closed by
+  classical `B'` diversity under Option A. So: is per-subaddress KEM buying
+  privacy worth an unbounded scan-cost multiplier, or is it hardening an
+  out-of-scope (address-collection) threat model? Monero gets address-byte
+  distinctness for free because ECDH composes; Shekyl cannot, so it must decide
+  whether it actually wants it. At least three coherent end-states exist and the
+  current design assumes the most expensive one without pricing it:
+  1. Classical-only subaddresses + account KEM (Option A): cheap,
+     on-chain-unlinkable, accept address-byte linkability.
+  2. Per-subaddress KEM with a bounded active-window (Option B, mitigated):
+     pre-derive KEM keys only for the last N issued subaddresses; scan tries
+     those N. Bounds cost but caps concurrent active subaddresses — a real
+     merchant-UX constraint.
+  3. Drop subaddresses entirely; recipient diversity via a different primitive
+     (one-address-per-wallet + out-of-band channel, or stealth-address-style
+     diversity needing no per-recipient KEM key). Most "not just copying
+     Monero."
+
+  *Scope boundary with Stage 2.* This round is **explicitly out of scope** for
+  the Stage 2 `KeyEngine`-actor migration. Stage 2 takes the faithful
+  Option-(a) handle fix (the handle serves non-primary audit derivation from a
+  secret-bearing `AuditSubaddressSecret` projection; see
+  `STAGE_2_KEY_ENGINE_ACTOR.md` §2.4/§3.1) and does **not** reshape the
+  subaddress mechanism. `derive_subaddress` is cold (zero production callers),
+  so a faithful actor port is correct regardless of how this round resolves.
+  The Stage-2 pre-flight surfaced the finding (even "read-only inspection"
+  cannot be served from public material alone, because the view secret enters
+  the non-primary derivation); it does not own the fix.
+
+  *Why a dedicated round (not a mechanical port).* This is the same shape as the
+  Stage 1 "do we copy Monero's subaddresses?" question, but sharper: *the
+  cryptographic property that made Monero's subaddresses cheap does not exist in
+  our KEM, so the inherited design is quietly buying something expensive.* That
+  is exactly the inherited-assumption interrogation that
+  `05-system-thinking.mdc` ("why is this here?") and
+  `16-architectural-inheritance.mdc` (inheriting code ≠ inheriting
+  architecture) require, and it deserves its own adversarial round.
+
+  *Blocks:* implementation of `RecipientSubaddress` / per-subaddress KEM keygen
+  (`derive_subaddress(_, Recipient)`); the `RecipientSubaddressKemKeygenNotImplemented`
+  stub stays until this round resolves.
+
+  *Target:* V3.0 pre-genesis — the choice is structural and the cost is bounded
+  pre-genesis, unbounded after launch (a subaddress reshape or drop is a
+  consensus-and-wallet-format decision). Must resolve before the Recipient stub
+  is implemented; does not block the Stage 2 actor migration.
+
+  *Sequencing (decided 2026-05-31, post–Stage 2 close-out).* This round runs
+  **before Stage 3 / Phase 2b**, ahead of the Phase 2b planning session. The
+  rationale: `StakeEngine` and the stake-lifecycle wallet surface assume a
+  settled recipient/subaddress model; resolving the Option-A/B/3 incoherence
+  first avoids designing the Phase 2b state machine and persistence against a
+  subaddress shape that may still change. Pre-genesis the cost is bounded; doing
+  it after Stage 3 risks reworking Phase 2b's wallet-format decisions.
+
+  *Definition of done:* a design doc (spec-first per `05-system-thinking.mdc`)
+  that (a) prices each of the three end-states against scan cost, on-chain
+  unlinkability, address-byte linkability, and merchant UX; (b) names the
+  binding `00-mission.mdc` priority and why the alternatives were rejected;
+  (c) reconciles the scanner (`scan.rs`) and address-format choices so they are
+  coherent; (d) pins the disposition for the `RecipientSubaddress` stub. Carries
+  its own review cycle (4–6 rounds) per `20-rust-vs-cpp-policy.mdc`'s
+  migration-is-a-planning-activity discipline.
+
+  *Reference:* `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` §2.4 (the
+  secret-touching audit finding that surfaced this); `STAGE_1_PR_3_KEY_ENGINE.md`
+  §3.1.3 (the per-subaddress KEM assumption being interrogated).
+
+- **Phase 2b planning session — stake state-machine shape (gate for
+  Stage 3).** Pin the design of the stake lifecycle before any `StakeEngine`
+  code lands. This is named as a *Blocks on* in the Stage 3 entry below but had
+  no tracked row of its own; this entry is that row (added 2026-05-31, Stage 2
+  close-out audit).
+
+  *Scope.* Spec-first (per `05-system-thinking.mdc`): the explicit
+  `StakeState` enum and its transitions (`PendingBroadcast` → `Unconfirmed` →
+  `Locked` → `Accruing` → `Claimable` → `Unstaking` → `FullyUnstaked`);
+  refresh-time reconciliation in `apply_scan_result` (scanned-height vs
+  lock/accrual rules advance each `StakeInstance.state`); `StakeInstance` as a
+  first-class persisted type in `WalletLedger`; the user-facing surface
+  (`Wallet::stakes(filter)`, `claimable_rewards`, `stake`/`claim`/`unstake`
+  each returning `PendingTx`, not a finalized tx); and the `StakeEvent` merge
+  protocol into `LedgerEngine`. Per `WALLET_REWRITE_PLAN.md` Phase 2b this is
+  "the largest single sub-phase by scope" — *not* thin wrappers — so budget the
+  review accordingly (4–6 rounds per `20-rust-vs-cpp-policy.mdc`).
+
+  *Consumes:* `EconomicsEngine` (trait landed, PR #94) for stake parameters and
+  derived yield values — a dependency, not a sub-trait (per
+  `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.7).
+
+  *Blocks on:* (1) Stage 2 merged to `dev` (validates `kameo`); (2) the
+  **subaddress-under-PQC design round** above — decided 2026-05-31 to run
+  before Stage 3, so the stake state machine and `WalletLedger` persistence are
+  designed against a settled recipient/subaddress model.
+
+  *Target:* before the first Stage 3 / Phase 2b commit.
+
+  *Definition of done:* a Phase 2b stake-lifecycle design doc whose spec the
+  Stage 3 `StakeEngine` implementation targets; the `StakeState` FSM,
+  reconciliation rules, persistence schema, and user-facing method signatures
+  are pinned and reviewed before code.
+
+  *Reference:* `docs/design/WALLET_REWRITE_PLAN.md` Phase 2b;
+  `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.7 / §10.5.1.
 
 - **Stage 3 — `StakeEngine` native actor build.** Build the Phase
   2b stake-lifecycle subsystem as a native actor from inception,
@@ -1060,9 +1271,12 @@ sustainability is unaffected by the recalibration.
   actor-shaped from the start avoids a redundant migration later
   and lets Phase 2b's design surface inform Stage 4 sequencing.
 
-  *Blocks on:* Stage 2 `KeyEngine` migration complete (validates
-  the pattern); Phase 2b planning session pinning stake
-  state-machine shape.
+  *Blocks on:* (1) Stage 2 `KeyEngine` migration complete (validates
+  the pattern) — RESOLVED, pending merge to `dev`; (2) the **Phase 2b
+  planning session** row above (stake state-machine shape); (3) the
+  **subaddress-under-PQC design round** above (sequenced before Stage 3
+  per the 2026-05-31 decision, so Phase 2b designs against a settled
+  subaddress model).
 
   *Target:* as the first major commit in Phase 2b.
 
@@ -1125,6 +1339,35 @@ sustainability is unaffected by the recalibration.
 
   *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
   Engine architecture: actor model with staged migration*.
+
+  *Named landmine — `drive_persistence` owned-runtime vs. the ambient
+  `KeyActor` (cross-runtime `ask`).* Surfaced during the Stage 2
+  `KeyEngine`-actor runtime-hosting round (`STAGE_2_KEY_ENGINE_ACTOR.md`
+  §4.2). In Stage 2 it is **latent**: `try_claim_output` is cold and the
+  scanner-merge post-pass reads the synchronous `HandleDerivationViewSecret`
+  projection (the 6-i disposition), so the `KeyActor` and `drive_persistence`
+  never interact. But `drive_persistence`'s *else*-branch
+  (`lifecycle.rs:811-822`, the non-multi-thread / sync-`close` path reached
+  when no ambient runtime or a current-thread one is present) spawns an
+  **owned current-thread runtime on a scoped thread**, while the `KeyActor`
+  lives on the **outer ambient runtime**. When a Stage-4 migration makes the
+  actor path hot and a persistence-driven path needs to `ask` the
+  `KeyActor` (or any other actor), an `ask` issued from inside the owned
+  scoped runtime targets an `ActorRef` whose task is parked on the *outer*
+  runtime — the cross-runtime-`ask` mismatch (`block_on` waiting on a oneshot
+  that only the other runtime drives). This is the same substrate-contract
+  mismatch the Stage 2 runtime round was about (sync entry point vs. async
+  actor), one altitude up. Stage 4 must reconcile it explicitly — e.g. route
+  the sync `close`/`change_password` path's actor interactions through the
+  ambient runtime rather than the owned scoped one, or eliminate the
+  owned-runtime else-branch entirely once the `PersistenceEngine` actor
+  migration (sequence item 2) removes the sync-driven flush. Open Stage 4
+  with this named, not rediscovered.
+
+  *Blocks on (this sub-item):* nothing in Stage 2 (latent); becomes live the
+  first time a Stage-4 actor `ask` is reachable from a `drive_persistence`
+  else-branch caller. *Target:* reconcile in the Stage 4 `PersistenceEngine`
+  migration (sequence item 2) at the latest.
 
 - **RPC boundary refinements — idle eviction, `engine_lock`,
   multi-engine registry, snapshot reads, multi-peer archival

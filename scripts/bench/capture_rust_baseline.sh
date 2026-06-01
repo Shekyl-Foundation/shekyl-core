@@ -82,6 +82,15 @@ BENCHES=(
   "shekyl-tx-builder:transfer_e2e:transfer_e2e_iai"
   "shekyl-engine-core:engine_trait_bench_ledger_synced_height:engine_trait_bench_ledger_synced_height_iai"
   "shekyl-engine-core:engine_trait_bench_ledger_balance:engine_trait_bench_ledger_balance_iai:bench-internals"
+  # Stage 2 §5.3 B9. The dispatch row's criterion target carries all
+  # three IDs (baseline_claim_mine / actor_claim_mine /
+  # actor_claim_not_mine); its iai sibling measures the deterministic
+  # crypto baseline only (the actor `ask` paths are criterion-only by
+  # design — a cross-thread async round-trip has no deterministic
+  # Callgrind signal). The merge-path row is a full criterion+iai pair
+  # (the 6-i projection is synchronous + runtime-free).
+  "shekyl-engine-core:engine_trait_bench_key_dispatch:engine_trait_bench_key_dispatch_baseline_iai:bench-internals"
+  "shekyl-engine-core:engine_trait_bench_key_merge_projection:engine_trait_bench_key_merge_projection_iai:bench-internals"
 )
 
 # Clean criterion output so the envelope reflects this run only.

@@ -1683,8 +1683,24 @@ mod refresh_driver_tests {
             *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(11);
         }
         let params = EngineCreateParams::for_test_full(&base_path, &creds, &seed);
-        let wallet = Engine::<SoloSigner>::create(params, dummy_daemon())
-            .expect("create FULL wallet for refresh_with tests");
+        // `Engine::create` → `assemble` spawns the `KeyActor`, which
+        // (post Stage-2 require-ambient) asserts an ambient Tokio
+        // runtime. Build the daemon first (`dummy_daemon` drives its
+        // own `shared_runtime().block_on`, which must not run inside a
+        // runtime context), then enter `shared_runtime` only for the
+        // `create` call so the actor spawns onto the live shared
+        // runtime. The guard is dropped before the fixture returns, so
+        // the synchronous `refresh`/`refresh_with` bodies — and in
+        // particular `production_refresh_*`'s `refresh(&opts,
+        // rt.handle())`, which drives `Handle::block_on` and must not
+        // be inside a runtime — run with no ambient runtime, exactly as
+        // before.
+        let daemon = dummy_daemon();
+        let wallet = {
+            let _rt_guard = shared_runtime().enter();
+            Engine::<SoloSigner>::create(params, daemon)
+                .expect("create FULL wallet for refresh_with tests")
+        };
         EngineFixture { wallet, _tmp: tmp }
     }
 
@@ -2663,7 +2679,9 @@ mod start_refresh_integration_tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
+    use shekyl_crypto_pq::account::{
+        rederive_account, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
+    };
     use shekyl_simple_request_rpc::SimpleRequestRpc;
     use tempfile::TempDir;
     use tokio::sync::{watch, RwLock};
@@ -2850,20 +2868,57 @@ mod start_refresh_integration_tests {
     //    dropped.
     // 3. Wrap in `Arc<RwLock<…>>` and call `Engine::start_refresh`.
 
+    /// Deterministic master seed shared by every hybrid engine built
+    /// via [`make_hybrid_engine_arc`]. Pulled out as a constant (Stage 2)
+    /// so tests can re-derive the wallet's [`ViewMaterial`] without an
+    /// `Engine::keys()` accessor — that accessor was removed when the
+    /// key blob moved into the `KeyActor` (`STAGE_2_KEY_ENGINE_ACTOR.md`
+    /// §6). `seed[i] = (i & 0xff) * 17`, matching the prior inline loop.
+    const HYBRID_WALLET_SEED: [u8; MASTER_SEED_BYTES] = {
+        let mut seed = [0u8; MASTER_SEED_BYTES];
+        let mut i = 0usize;
+        while i < MASTER_SEED_BYTES {
+            // `i & 0xff` is masked to 0..=255, so the `as u8` cast is
+            // exact, never truncating. `u8::try_from` (the runtime form
+            // this const replaced) is not const-stable, so the masked
+            // cast is the const-compatible equivalent.
+            #[allow(clippy::cast_possible_truncation)]
+            let byte = (i & 0xff) as u8;
+            seed[i] = byte.wrapping_mul(17);
+            i += 1;
+        }
+        seed
+    };
+
+    /// Re-derive the hybrid wallet's [`ViewMaterial`] from
+    /// [`HYBRID_WALLET_SEED`] using the **same** derivation parameters
+    /// [`EngineCreateParams::for_test_full`] pins (`Network::Stagenet` →
+    /// [`DerivationNetwork::Stagenet`], [`SeedFormat::Bip39`]). This is
+    /// the Stage-2 replacement for `ViewMaterial::try_from_keys(engine.keys())`:
+    /// the orchestrator no longer exposes its keys (they live in the
+    /// `KeyActor`), so the test re-derives the byte-identical view
+    /// material from the known seed instead.
+    fn hybrid_engine_view_material() -> ViewMaterial {
+        let blob = rederive_account(
+            &HYBRID_WALLET_SEED,
+            DerivationNetwork::Stagenet,
+            SeedFormat::Bip39,
+        )
+        .expect("rederive_account for hybrid wallet seed (stagenet/bip39)");
+        ViewMaterial::try_from_keys(&blob)
+            .expect("ViewMaterial::try_from_keys against re-derived hybrid blob")
+    }
+
     /// Build an `Engine<SoloSigner, TestDaemon>` ready for hybrid
     /// `start_refresh` tests. Returns the `TempDir` alongside so the
-    /// caller keeps the wallet file alive for the lifetime of the
-    /// engine.
+    /// caller keeps the wallet file alive for the lifetime of the engine.
     async fn make_hybrid_engine_arc(
         mock: TestDaemon,
     ) -> (Arc<RwLock<Engine<SoloSigner, TestDaemon>>>, TempDir) {
         let tmp = tempfile::tempdir().expect("tempdir");
         let base_path = tmp.path().join("wallet");
         let creds = Credentials::password_only(b"start-refresh hybrid integration tests");
-        let mut wallet_seed = [0u8; MASTER_SEED_BYTES];
-        for (i, b) in wallet_seed.iter_mut().enumerate() {
-            *b = u8::try_from(i & 0xff).unwrap_or(0).wrapping_mul(17);
-        }
+        let wallet_seed = HYBRID_WALLET_SEED;
         let params = EngineCreateParams::for_test_full(&base_path, &creds, &wallet_seed);
 
         let dummy_rpc = SimpleRequestRpc::new("http://127.0.0.1:1".to_string())
@@ -3149,16 +3204,15 @@ mod start_refresh_integration_tests {
 
         // Swap the producer slot for the stale-then-real wrapper. The
         // consume-and-rebuild `replace_refresh` needs an owned engine,
-        // so unwrap the single-strong-reference arc, derive
-        // `ViewMaterial` from the engine's own keys (the same path
-        // `Engine::create` uses to build the default `LocalRefresh`),
-        // wrap it, and re-wrap the arc.
+        // so unwrap the single-strong-reference arc, re-derive
+        // `ViewMaterial` from the known hybrid seed (the engine no longer
+        // exposes its keys — they live in the `KeyActor`, §6), wrap it,
+        // and re-wrap the arc.
         let arc = {
             let engine = std::sync::Arc::into_inner(arc)
                 .expect("arc has one strong reference at this point")
                 .into_inner();
-            let vm = ViewMaterial::try_from_keys(engine.keys())
-                .expect("ViewMaterial::try_from_keys against engine keys");
+            let vm = hybrid_engine_view_material();
             let refresh = StaleThenRealRefresh::new(LocalRefresh::new(vm, 0));
             let hybrid = engine.replace_refresh(refresh);
             Arc::new(RwLock::new(hybrid))
@@ -3321,13 +3375,12 @@ mod start_refresh_integration_tests {
             let engine = std::sync::Arc::into_inner(arc)
                 .expect("arc has one strong reference at this point")
                 .into_inner();
-            // Derive ViewMaterial from the engine's own keys — the same
-            // path `Engine::create` uses internally to construct the
-            // default `LocalRefresh`. Wrap it in the (no-failure)
+            // Re-derive ViewMaterial from the known hybrid seed — the
+            // engine no longer exposes its keys (they live in the
+            // `KeyActor`, §6). Wrap it in the (no-failure)
             // `FaultInjectingRefresh` for four-slot composition, then in
             // `StaleThenRealRefresh` to drive the one-shot retry.
-            let vm = ViewMaterial::try_from_keys(engine.keys())
-                .expect("ViewMaterial::try_from_keys against engine keys");
+            let vm = hybrid_engine_view_material();
             let refresh =
                 StaleThenRealRefresh::new(FaultInjectingRefresh::new(LocalRefresh::new(vm, 0)));
             let hybrid = engine.replace_refresh(refresh);

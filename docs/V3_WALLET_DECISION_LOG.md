@@ -2715,7 +2715,12 @@ when"):**
    message protocol; remaining subsystems continue as composition.
    **Stage 2 must complete before Phase 2b cuts** because Phase
    2b's StakeEngine work (Stage 3) depends on the actor framework
-   being present.
+   being present. *(Implementation status, 2026-05-31: landed on
+   `torvaldsl/stage-2-key-engine-actor` — `KeyActor` owns the blob,
+   `Engine` holds `KeyEngineHandle`, `kameo` is now a live
+   `shekyl-engine-core` consumer; design and remaining DoD residue
+   (the §5.3 B9 dispatch-overhead benchmark) tracked in
+   `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` and `docs/FOLLOWUPS.md`.)*
 6. **Phase 2b begins.**
 7. **Stage 3 — `StakeEngine` native-as-actor**, lands within Phase
    2b. Built actor-shaped from inception (not
@@ -3955,6 +3960,60 @@ method). Phase 0c is **removed** (R12 (a) closure).
   G8 wallet-locked-during-`in_flight`; G5 `LedgerEngine`
   maturity-filter forward-template; G2 `LedgerDiagnostic::TxReorgedOut`
   amendment).
+
+---
+
+## 2026-05-31 — KeyActor runtime hosting: require-ambient, not engine-owned
+
+**Decision.** `KeyEngineHandle::spawn` (the Stage-2 `KeyActor` spawn point in
+`assemble`) **requires an ambient Tokio runtime and asserts it** — present →
+`tokio::spawn` the actor onto it; absent → `panic!` with a contract message.
+The engine owns no runtime. This reverses the same-day Round-7 "ambient-or-owned"
+disposition, which built and stored a single-worker multi-thread runtime in a
+`KeyActorRuntimeHost` when no ambient runtime existed.
+
+**Rationale.** The owned-runtime path mirrored `drive_persistence`'s
+flavor-branch, but that resemblance is a false friend: `drive_persistence` is
+**one-shot** (run a future to completion on a worker thread, drop the runtime,
+return), so its owned runtime lives and dies inside one synchronous call. The
+`KeyActor` is **long-lived** — it never completes, so its runtime must be stored
+and dropped when the handle drops. A Tokio runtime **cannot be dropped from
+within an async context** ("Cannot drop a runtime in a context where blocking is
+not allowed"), and in production the `Engine` is created and dropped *inside* the
+ambient runtime (async RPC server / CLI), so an `Engine` owning a nested runtime
+would panic on drop in exactly the production scenario the owned path was meant
+to serve. The flavor-branch also mis-handled current-thread ambients (every
+`#[tokio::test]`): they fell into the owned branch and built a runtime while
+already inside an async context — a nested-runtime panic. An actor is an async
+task by definition; introducing it makes the open path's runtime-agnosticism
+impossible rather than breaking a preservable property, so asserting the
+requirement is the honest shape. It preserves the by-construction
+no-`&AllKeysBlob`-escapes property and carries no drop-panic landmine.
+
+**Alternatives rejected.** (a) *Owned runtime* — the drop-panic above. (b)
+*Force the sync `create`/`open_full` API async* — a frozen-surface change with
+FFI + all-caller ripple, contradicting the deliberately-sync lifecycle. (c)
+*Lazy-spawn at first async use* — retained only as the **reversion clause**: it
+reopens if a production caller must construct the `Engine` from a context where
+no runtime exists and cannot be made to exist, and is recorded explicitly as a
+by-construction → by-timing weakening of the §binding-constraint, not adopted
+silently.
+
+**Cargo consequence (decoupled).** Under require-ambient the spawn needs only
+`rt` (`kameo`'s spawn is `tokio::spawn`, hosted by any flavor). `rt-multi-thread`
+is promoted to production `[dependencies]` as an **independent** fix for the
+pre-existing `drive_persistence::block_in_place` feature-unification bug, not as
+a spawn entailment.
+
+**Caller/test migration.** Tests reaching `spawn` use `#[tokio::test]`; sync
+tests that drive a post-create method forbidding an ambient runtime (e.g.
+`refresh(&opts, handle)` → `Handle::block_on`) stay plain `#[test]` and enter a
+leaked runtime only around `create` (`refresh.rs::make_wallet`, the bench
+`build_engine_fixture`). No production caller of the orchestrator `Engine` exists
+yet; the assertion is the contract future CLI/RPC wiring must satisfy.
+
+**Reference.** `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` §4.2 (Round-8
+disposition); supersedes the §4.2 Round-7 ambient-or-owned text.
 
 ---
 
