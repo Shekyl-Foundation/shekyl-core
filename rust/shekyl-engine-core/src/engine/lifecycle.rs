@@ -726,10 +726,11 @@ impl Engine<SoloSigner> {
         // value. After this point no `&AllKeysBlob` is reachable from the
         // orchestrator — every public read resolves from the handle's
         // construction-time projections, and every secret-touching op routes
-        // through the actor's message protocol (§4.1–4.2). The spawn uses the
-        // ambient runtime if one exists, else hosts an engine-owned runtime
-        // (§4.2 ambient-or-owned disposition). `merge_view_secret` was derived
-        // above (step 3(a)) before this consuming spawn.
+        // through the actor's message protocol (§4.1–4.2). The spawn requires an
+        // ambient runtime (`KeyEngineHandle::spawn` asserts `Handle::try_current`;
+        // §4.2 require-ambient disposition — no engine-owned nested runtime).
+        // `merge_view_secret` was derived above (step 3(a)) before this
+        // consuming spawn.
         let key = super::key_actor::KeyEngineHandle::spawn(keys);
         let ledger = std::sync::Arc::new(super::local_ledger::LocalLedger::new(ledger, indexes));
         let pending = super::LocalPendingTx::new(

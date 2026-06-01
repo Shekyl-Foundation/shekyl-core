@@ -59,15 +59,15 @@
 //! into [`KeyEngineError::KeyActorUnavailable`] — terminal and non-retryable
 //! (§2.6). The only recovery is a full wallet close + re-open.
 //!
-//! # Stage 2 scope
+//! # Integration (Stage 2 landed)
 //!
-//! This module is self-contained: it defines the actor, the handle, the two
-//! projections, the message types, and the error mapping, with its own tests.
-//! It does **not** wire into [`Engine`](super::Engine) — the `keys` field swap,
-//! the merge-path rewire, and the signer sever land in later steps per
-//! `STAGE_2_KEY_ENGINE_ACTOR.md` §6. Until then the items here are exercised
-//! only by this module's tests, hence the `#[allow(dead_code)]` annotations
-//! (the same pattern [`LocalKeys`](super::local_keys::LocalKeys) used pre-wiring).
+//! This module is wired into production: [`Engine`](super::Engine) holds a
+//! [`KeyEngineHandle`] (the `key` field, replacing `keys: Arc<AllKeysBlob>` per
+//! `STAGE_2_KEY_ENGINE_ACTOR.md` §6), [`LocalSigner`](super::signer::LocalSigner)
+//! holds a handle clone, and the merge post-pass reads
+//! [`HandleDerivationViewSecret`] (the 6-i construction-time projection). The
+//! `#[allow(dead_code)]` on [`SignTransaction`] and related items marks surfaces
+//! that remain cold until PR 5 / signing-engine work — not "unwired."
 //!
 //! [`docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`]: ../../../../../docs/design/STAGE_2_KEY_ENGINE_ACTOR.md
 //! [`AllKeysBlob`]: shekyl_crypto_pq::account::AllKeysBlob

@@ -96,8 +96,10 @@ fn poll_ready<F: Future>(fut: F) -> F::Output {
     match pin!(fut).poll(&mut cx) {
         Poll::Ready(v) => v,
         Poll::Pending => {
-            panic!("baseline iai bench future did not complete in one poll; \
-                    LocalKeys::try_claim_output is expected to be synchronous")
+            panic!(
+                "baseline iai bench future did not complete in one poll; \
+                    LocalKeys::try_claim_output is expected to be synchronous"
+            )
         }
     }
 }

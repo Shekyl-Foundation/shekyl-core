@@ -338,7 +338,9 @@ mod tests {
     //!   The secret-locality invariant is now structural: the signer
     //!   holds a [`KeyEngineHandle`], and dropping the engine's own
     //!   handle clone does **not** stop the actor while the signer's
-    //!   clone is alive (the actor lives until the last handle drops).
+    //!   clone is alive. Liveness is asserted via an actor-routed
+    //!   `sign_transaction` `ask` (not `account_public_address`, which
+    //!   is projection-served and would pass even after actor stop).
     //! - `local_signer_phase1_stub_succeeds` — the Phase 1 stub
     //!   returns `Ok` for any well-formed context.
     //!
@@ -348,7 +350,8 @@ mod tests {
     //! runtime), so these are `#[tokio::test]`s; the default current-thread
     //! runtime hosts the actor task fine (`kameo`'s spawn is `tokio::spawn`).
     use super::*;
-    use crate::engine::traits::key::KeyEngine;
+    use crate::engine::error::KeyEngineError;
+    use crate::engine::traits::key::{FcmpPlusPlusContext, KeyEngine, TxToSign};
     use shekyl_crypto_pq::account::{
         rederive_account, AllKeysBlob, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
     };
@@ -377,30 +380,34 @@ mod tests {
         .expect("rederive_account against fakechain raw32 seed")
     }
 
+    fn empty_tx_to_sign() -> TxToSign {
+        TxToSign {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            fcmp_plus_plus_context: FcmpPlusPlusContext {},
+        }
+    }
+
     #[tokio::test]
     async fn local_signer_holds_handle_not_blob() {
         // The engine builds the handle, then hands the signer a clone
         // (mirrors `assemble`: `LocalSigner::new(key.clone())`).
         let engine_handle = KeyEngineHandle::spawn(deterministic_keys());
-        let expected_addr = engine_handle.account_public_address().clone();
         let signer = LocalSigner::new(engine_handle.clone());
 
         // Dropping the engine's own clone must NOT stop the actor: the
-        // signer's clone keeps it alive. A public read through the
-        // signer's handle still resolves (served from the handle's
-        // projection, but its match proves the handle is intact and the
-        // actor was not torn down with the engine clone).
-        // `AccountPublicAddress` is not `PartialEq`; compare its public
-        // byte fields directly.
+        // signer's clone keeps it alive. Use an actor-routed `ask`
+        // (`sign_transaction`), not `account_public_address` (projection-
+        // served and would still resolve after actor stop).
         drop(engine_handle);
-        let got = signer.key.account_public_address();
-        assert_eq!(
-            got.classical_address_bytes, expected_addr.classical_address_bytes,
-            "signer's handle clone resolves the same classical address",
-        );
-        assert_eq!(
-            got.pqc_public_key, expected_addr.pqc_public_key,
-            "signer's handle clone resolves the same PQC public key",
+        let err = signer
+            .key
+            .sign_transaction(&empty_tx_to_sign())
+            .await
+            .expect_err("live actor must return the stub error, not transport failure");
+        assert!(
+            matches!(err, KeyEngineError::SignTransactionTraitSurfaceIncomplete),
+            "expected stub error from live actor, got {err:?}",
         );
     }
 

@@ -619,7 +619,7 @@ pub struct RecoveredOutput {
 impl std::fmt::Debug for RecoveredOutput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RecoveredOutput")
-            .field("amount", &self.amount)
+            .field("amount", &"[REDACTED]")
             .field("amount_tag", &self.amount_tag)
             .field("recovered_spend_key", &"[REDACTED]")
             .field("y", &"[REDACTED]")
