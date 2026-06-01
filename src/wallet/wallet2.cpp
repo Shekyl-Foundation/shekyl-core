@@ -9083,8 +9083,8 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
         for (rapidjson::SizeType i = 0; i < ea_arr.Size(); ++i) {
           std::string bin;
           epee::string_tools::parse_hexstr_to_binbuff(ea_arr[i].GetString(), bin);
-          tx.rct_signatures.enc_amounts[i].fill(0);
-          memcpy(tx.rct_signatures.enc_amounts[i].data(), bin.data(), std::min<size_t>(bin.size(), 9));
+          THROW_WALLET_EXCEPTION_IF(bin.size() != 9, error::wallet_internal_error, "enc_amount size mismatch");
+          memcpy(tx.rct_signatures.enc_amounts[i].data(), bin.data(), 9);
         }
       }
 
@@ -9095,8 +9095,8 @@ void wallet2::transfer_selected_rct(std::vector<cryptonote::tx_destination_entry
         for (rapidjson::SizeType i = 0; i < el_arr.Size(); ++i) {
           std::string bin;
           epee::string_tools::parse_hexstr_to_binbuff(el_arr[i].GetString(), bin);
-          tx.rct_signatures.enc_labels[i].fill(0);
-          memcpy(tx.rct_signatures.enc_labels[i].data(), bin.data(), std::min<size_t>(bin.size(), 9));
+          THROW_WALLET_EXCEPTION_IF(bin.size() != 9, error::wallet_internal_error, "enc_label size mismatch");
+          memcpy(tx.rct_signatures.enc_labels[i].data(), bin.data(), 9);
         }
       }
 

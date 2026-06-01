@@ -530,9 +530,9 @@ namespace test
             for (rapidjson::SizeType i = 0; i < ea_arr.Size(); ++i)
             {
                 std::vector<uint8_t> bin = hex_decode(ea_arr[i].GetString());
-                tx.rct_signatures.enc_amounts[i].fill(0);
-                memcpy(tx.rct_signatures.enc_amounts[i].data(), bin.data(),
-                       std::min<size_t>(bin.size(), 9));
+                if (bin.size() != 9)
+                    throw std::runtime_error("enc_amount must decode to 9 bytes");
+                memcpy(tx.rct_signatures.enc_amounts[i].data(), bin.data(), 9);
             }
         }
 
@@ -543,9 +543,9 @@ namespace test
             for (rapidjson::SizeType i = 0; i < el_arr.Size(); ++i)
             {
                 std::vector<uint8_t> bin = hex_decode(el_arr[i].GetString());
-                tx.rct_signatures.enc_labels[i].fill(0);
-                memcpy(tx.rct_signatures.enc_labels[i].data(), bin.data(),
-                       std::min<size_t>(bin.size(), 9));
+                if (bin.size() != 9)
+                    throw std::runtime_error("enc_label must decode to 9 bytes");
+                memcpy(tx.rct_signatures.enc_labels[i].data(), bin.data(), 9);
             }
         }
 
