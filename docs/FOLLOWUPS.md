@@ -52,9 +52,9 @@ sustainability is unaffected by the recalibration.
   §8.1 critical-path chain is landed on `dev`:
   `DaemonEngine` → `LedgerEngine` → (`RefreshEngine` ∥
   `PendingTxEngine`), with the `KeyEngine` trait + `LocalKeys`
-  implementor in parallel (landed but **not** orchestrator-wired —
-  deferred to Stage 2; see the `KeyEngine` inline-integration entry
-  below); `PersistenceEngine` landed (PR #83) and `EconomicsEngine`
+  implementor in parallel (landed but not orchestrator-wired at Stage 1
+  closeout — **wired in Stage 2, RESOLVED 2026-05-31**; see the `KeyEngine`
+  inline-integration entry below); `PersistenceEngine` landed (PR #83) and `EconomicsEngine`
   landed (PR #94), so the orchestrator is now the seven-parameter
   `Engine<S, D, L, E, R, P, F>`.
   Inventory, orchestrator shape (`Engine<S, D, L, E, R, P, F>`), ordered
@@ -81,10 +81,10 @@ sustainability is unaffected by the recalibration.
   stays seven-parameter `Engine<S, D, L, E, R, P, F>`, the
   `Arc<AllKeysBlob>` field is gone, and the blob lives solely in the
   `KeyActor`. See `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` §6 (steps 3–4)
-  and the "Stage 2 — `KeyEngine` migration to actor" entry below for the
-  remaining DoD residue (B9 dispatch-overhead benchmark). The
-  reject-the-inline-shape rationale below is retained as the historical
-  record of why the deferral was correct.
+  and the "Stage 2 — `KeyEngine` migration to actor" entry below, which
+  records the completed DoD (including the B9 dispatch-overhead benchmark —
+  PASS, ratio 1.039). The reject-the-inline-shape rationale below is retained
+  as the historical record of why the deferral was correct.
 
   *Rejection (current substrate).* `KeyEngine` is the one extracted Stage 1
   trait deliberately **not** wired into the orchestrator. `Engine` holds
@@ -875,6 +875,11 @@ sustainability is unaffected by the recalibration.
     `STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md` §1.2. Baseline transcription
     to `PERFORMANCE_BASELINE.md` deferred to first CI
     workflow_dispatch capture under N=3 invariance.
+    **Capture-script gap (noted 2026-05-31, Stage 2 close-out audit):**
+    this pair is absent from `scripts/bench/capture_rust_baseline.sh`'s
+    `BENCHES` array, so the CI captures to date (incl. run 26732235292)
+    did not include it. Closing this slot requires adding the row before
+    a capture run — out of Stage 2 scope, owned by this entry.
 
   Remaining slots:
   - `engine_trait_bench_economics_current_emission` — pinned to
@@ -1034,11 +1039,12 @@ sustainability is unaffected by the recalibration.
   if framework limitations surface here, the cost of switching is
   bounded because only one actor exists.
 
-  *Blocks on:* Stage 1 actor-friendly trait boundaries (the
-  framework-agnostic refactor that lands between Branch 2 closing
-  and Phase 2b cutting).
+  *Blocks on:* Stage 1 actor-friendly trait boundaries — **satisfied**
+  (the framework-agnostic trait refactor landed on `dev`; see STAGE_2
+  §0.3).
 
-  *Target:* before Phase 2b stake-lifecycle work begins.
+  *Target:* before Phase 2b stake-lifecycle work begins — **met** (this
+  entry RESOLVED; see status below).
 
   *Definition of done:* `KeyEngine` runs as a `kameo` actor with
   its own task; `Engine<S>` holds a `KeyEngineHandle` instead of
@@ -1059,8 +1065,8 @@ sustainability is unaffected by the recalibration.
   Engine architecture: actor model with staged migration from
   composition*. Design: `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md`.
 
-  **Status (2026-05-31) — migration landed; one DoD item open.** The
-  actor migration is on the branch (`torvaldsl/stage-2-key-engine-actor`):
+  **Status (2026-05-31) — RESOLVED; all six §10 DoD items met; pending merge
+  to `dev`.** The actor migration is on the branch (`torvaldsl/stage-2-key-engine-actor`):
   `KeyActor` owns `AllKeysBlob` in its own task with fail-stop-on-panic
   zeroization (`key_actor.rs`); `Engine<S, …>` holds `key:
   KeyEngineHandle` plus the construction-time `HandleDerivationViewSecret`
@@ -1189,6 +1195,14 @@ sustainability is unaffected by the recalibration.
   consensus-and-wallet-format decision). Must resolve before the Recipient stub
   is implemented; does not block the Stage 2 actor migration.
 
+  *Sequencing (decided 2026-05-31, post–Stage 2 close-out).* This round runs
+  **before Stage 3 / Phase 2b**, ahead of the Phase 2b planning session. The
+  rationale: `StakeEngine` and the stake-lifecycle wallet surface assume a
+  settled recipient/subaddress model; resolving the Option-A/B/3 incoherence
+  first avoids designing the Phase 2b state machine and persistence against a
+  subaddress shape that may still change. Pre-genesis the cost is bounded; doing
+  it after Stage 3 risks reworking Phase 2b's wallet-format decisions.
+
   *Definition of done:* a design doc (spec-first per `05-system-thinking.mdc`)
   that (a) prices each of the three end-states against scan cost, on-chain
   unlinkability, address-byte linkability, and merchant UX; (b) names the
@@ -1201,6 +1215,43 @@ sustainability is unaffected by the recalibration.
   *Reference:* `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` §2.4 (the
   secret-touching audit finding that surfaced this); `STAGE_1_PR_3_KEY_ENGINE.md`
   §3.1.3 (the per-subaddress KEM assumption being interrogated).
+
+- **Phase 2b planning session — stake state-machine shape (gate for
+  Stage 3).** Pin the design of the stake lifecycle before any `StakeEngine`
+  code lands. This is named as a *Blocks on* in the Stage 3 entry below but had
+  no tracked row of its own; this entry is that row (added 2026-05-31, Stage 2
+  close-out audit).
+
+  *Scope.* Spec-first (per `05-system-thinking.mdc`): the explicit
+  `StakeState` enum and its transitions (`PendingBroadcast` → `Unconfirmed` →
+  `Locked` → `Accruing` → `Claimable` → `Unstaking` → `FullyUnstaked`);
+  refresh-time reconciliation in `apply_scan_result` (scanned-height vs
+  lock/accrual rules advance each `StakeInstance.state`); `StakeInstance` as a
+  first-class persisted type in `WalletLedger`; the user-facing surface
+  (`Wallet::stakes(filter)`, `claimable_rewards`, `stake`/`claim`/`unstake`
+  each returning `PendingTx`, not a finalized tx); and the `StakeEvent` merge
+  protocol into `LedgerEngine`. Per `WALLET_REWRITE_PLAN.md` Phase 2b this is
+  "the largest single sub-phase by scope" — *not* thin wrappers — so budget the
+  review accordingly (4–6 rounds per `20-rust-vs-cpp-policy.mdc`).
+
+  *Consumes:* `EconomicsEngine` (trait landed, PR #94) for stake parameters and
+  derived yield values — a dependency, not a sub-trait (per
+  `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.7).
+
+  *Blocks on:* (1) Stage 2 merged to `dev` (validates `kameo`); (2) the
+  **subaddress-under-PQC design round** above — decided 2026-05-31 to run
+  before Stage 3, so the stake state machine and `WalletLedger` persistence are
+  designed against a settled recipient/subaddress model.
+
+  *Target:* before the first Stage 3 / Phase 2b commit.
+
+  *Definition of done:* a Phase 2b stake-lifecycle design doc whose spec the
+  Stage 3 `StakeEngine` implementation targets; the `StakeState` FSM,
+  reconciliation rules, persistence schema, and user-facing method signatures
+  are pinned and reviewed before code.
+
+  *Reference:* `docs/design/WALLET_REWRITE_PLAN.md` Phase 2b;
+  `docs/V3_ENGINE_TRAIT_BOUNDARIES.md` §2.7 / §10.5.1.
 
 - **Stage 3 — `StakeEngine` native actor build.** Build the Phase
   2b stake-lifecycle subsystem as a native actor from inception,
@@ -1218,9 +1269,12 @@ sustainability is unaffected by the recalibration.
   actor-shaped from the start avoids a redundant migration later
   and lets Phase 2b's design surface inform Stage 4 sequencing.
 
-  *Blocks on:* Stage 2 `KeyEngine` migration complete (validates
-  the pattern); Phase 2b planning session pinning stake
-  state-machine shape.
+  *Blocks on:* (1) Stage 2 `KeyEngine` migration complete (validates
+  the pattern) — RESOLVED, pending merge to `dev`; (2) the **Phase 2b
+  planning session** row above (stake state-machine shape); (3) the
+  **subaddress-under-PQC design round** above (sequenced before Stage 3
+  per the 2026-05-31 decision, so Phase 2b designs against a settled
+  subaddress model).
 
   *Target:* as the first major commit in Phase 2b.
 

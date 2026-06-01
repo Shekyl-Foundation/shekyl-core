@@ -1,10 +1,12 @@
 # Stage 2 — `KeyEngine` → `kameo` actor migration (design)
 
-**Status:** design-only. No implementation, no wiring, no field edits to
-`Engine`. This document and its §9 round record are the deliverable; the
-implementation lands as its own PR(s) per
-[`06-branching.mdc`](../../.cursor/rules/06-branching.mdc) once this design
-closes.
+**Status:** landed on branch `torvaldsl/stage-2-key-engine-actor`, pending
+merge to `dev`. The design closed at Round 6 (§9) and the implementation
+followed on the same branch: `KeyActor` + `KeyEngineHandle`, the `Engine`
+field swap, the require-ambient runtime disposition (§4.2), the zeroization
+audit (Findings 1–4), the §5.2 contract/protocol tests, and the §5.3 B9
+dispatch bench (PASS, ratio 1.039). All six §10 DoD items are met. This
+document and its §9 round record remain the design-of-record.
 
 **Process discipline:** authored under
 [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
@@ -1524,13 +1526,13 @@ premises were flipped by the substrate.
 
 ## 10. Definition of done (design targets these — `FOLLOWUPS.md:1028-1040`)
 
-- [ ] `KeyActor` runs as a `kameo` actor with its own task (§1, §4).
-- [ ] `Engine<S>` holds `KeyEngineHandle`, not `keys: AllKeysBlob`; no inline
+- [x] `KeyActor` runs as a `kameo` actor with its own task (§1, §4).
+- [x] `Engine<S>` holds `KeyEngineHandle`, not `keys: AllKeysBlob`; no inline
       `K` generic (§3.2).
-- [ ] All cross-subsystem key access routes through the message protocol or a
+- [x] All cross-subsystem key access routes through the message protocol or a
       sanctioned construction-time projection (§2.1, §6).
-- [ ] Full `AllKeysBlob` contained in the actor task; no `&AllKeysBlob` escapes
+- [x] Full `AllKeysBlob` contained in the actor task; no `&AllKeysBlob` escapes
       (§0.2 holders disposed in §6).
-- [ ] Actor-protocol tests (real actor + recorded messages; receivers) (§5).
-- [ ] Message-overhead bench within 5% of the `try_claim_output` crypto
-      baseline, bench-vs-bench, no absolute gate (§5.3).
+- [x] Actor-protocol tests (real actor + recorded messages; receivers) (§5).
+- [x] Message-overhead bench within 5% of the `try_claim_output` crypto
+      baseline, bench-vs-bench, no absolute gate (§5.3) — **PASS, ratio 1.039**.

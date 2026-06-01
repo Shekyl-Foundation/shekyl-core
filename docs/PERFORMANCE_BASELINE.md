@@ -443,17 +443,20 @@ well above the trivial-pure-read amortized range — corroborating the
 
 ## Bench: `engine_trait_bench_key_account_public_address`
 
-**Status:** Deferred to KeyEngine PR.
+**Status:** Bench pair landed (Stage 1 PR 3 close-out,
+`chore/stage-1-pr3-closeout`, commit `595bb1bed`, 2026-05-12); criterion +
+iai-callgrind targets are `[[bench]]`-registered. Canonical baseline numbers
+**not yet captured** and tracked under the Stage 1 performance-baseline
+FOLLOWUPS entry (stays open until the two `EconomicsEngine` bench slots
+populate). **Capture-script gap:** this pair is *not* in
+`scripts/bench/capture_rust_baseline.sh`'s `BENCHES` array, so the
+CI `workflow_dispatch` runs to date did not capture it; closing the FOLLOWUPS
+entry requires adding the row first. This is **not** Stage 2 scope — Stage 2
+did not introduce this bench.
 
-This bench section is authored when the KeyEngine PR's introducing
-commit lands; same template as
-`engine_trait_bench_ledger_synced_height` above.
-
-Per §4.6's per-bench deferred assignment, this bench is introduced
-alongside the `KeyEngine::account_public_address()` trait method on
-a fixture appropriate to key-layer state. Expected workload class:
-trivial pure-read (the address is stable across iterations);
-confirmed at authoring time per §4.4's checklist item 5.
+Expected workload class: trivial pure-read (the address is stable across
+iterations); confirmed at authoring time per §4.4's checklist item 5.
+Fixture is `Box<LocalKeys>` per `STAGE_1_PR_3_CLOSEOUT_PREFLIGHT.md` §1.2.
 
 ## Bench: `engine_trait_bench_key_dispatch`
 
