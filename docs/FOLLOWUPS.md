@@ -1124,11 +1124,14 @@ sustainability is unaffected by the recalibration.
   `R2_F2_WALKTHROUGH.md` §6). **R2-F9 closed** (§5.7.12): address-knowledge /
   phishing pin; classical dust-tracking oracle **rejected** (FCMP++); T6 harvest
   via phishing named (§4.8). **5-T adopted** (§6.4): mandatory `enc_label`;
-  sentinel-only wallet at launch. FA-11 RCT wire landed. **FA-6 spec:**
-  `docs/design/FA-6_VIEW_TAG_ML_KEM.md` (ML-KEM-keyed view tag at genesis).
-  **Active parallel:** FA-9 threat-model propagation; FA-6 implementation after
-  spec §11 sign-off. **Remaining:** Round 4 doc sweep; FA-2 subaddress deletion
-  impl PR; FA-7 `WALLET_REWRITE_PLAN` amendment.
+  sentinel-only wallet at launch. FA-11 RCT wire landed (PR #100). **FA-6 spec
+  (revised 2026-06-01):** `docs/design/FA-6_VIEW_TAG_ML_KEM.md` — re-key
+  on-wire **pre-filter** (`view_tag_prefilter` from `ml_kem_ss`; §3.1
+  per-output wire inventory must be **verified**, not tag-only). **Active
+  parallel:** FA-9 threat-model propagation; FA-6 implementation after spec
+  §11 sign-off; **FA-6b** multisig `view_tag_hints` audit (§3.2, separate from
+  account-path T6 closure). **Remaining:** Round 4 doc sweep; FA-2 subaddress
+  deletion impl PR; FA-7 `WALLET_REWRITE_PLAN` amendment.
 
   *The finding.* Monero's subaddress scheme is cheap because ECDH composes: the
   scanner computes `a·R` with the single account view secret `a` regardless of
@@ -1228,6 +1231,30 @@ sustainability is unaffected by the recalibration.
   *Reference:* `docs/design/STAGE_2_KEY_ENGINE_ACTOR.md` §2.4 (the
   secret-touching audit finding that surfaced this); `STAGE_1_PR_3_KEY_ENGINE.md`
   §3.1.3 (the per-subaddress KEM assumption being interrogated).
+
+- **FA-6 — PQ-safe view-tag pre-filter (T6 closure, V3.0 genesis).**
+  Adversary-track work parallel to the subaddress round; not closed by End-state
+  5 or 5-T. **Spec:** `docs/design/FA-6_VIEW_TAG_ML_KEM.md` (revised 2026-06-01).
+
+  *Closure condition.* No per-output wire byte computable from quantum-recoverable
+  view material on the **account-output** main path — §3.1 inventory table is the
+  completeness artifact (`view_tag` re-key + verify `amount_tag` / FA-11
+  `label_tag` are post-decap hybrid-leg; no second classical pre-filter).
+
+  *Implementation (post spec §11 sign-off).* Scanner leg-swap (universal ML-KEM
+  decap → `derive_view_tag_prefilter` → X25519 on match); HKDF
+  `shekyl-view-tag-prefilter-v1`; genesis-locked (coinbase tags affect genesis
+  hash). **Merge gate (§8):** initial-sync **wall-clock** on worst wallet target
+  at realistic chain size — not per-op ratio alone. Bench failure ⇒ **slow sync**
+  or documented **T6 waiver** in threat model — not “defer FA-6.”
+
+  *Target:* V3.0 pre-genesis, separate PR from FA-11 / FA-2.
+
+- **FA-6b — v31 multisig `tx_extra_pqc_view_tag_hints` (V3.0).** Separate from
+  FA-6 account-path closure. Audit whether hints are classical-linkable today
+  (including per-wallet-constant clustering without view key). Spec pointer:
+  `FA-6_VIEW_TAG_ML_KEM.md` §3.2, §5.1. **Target:** V3.0 pre-genesis before
+  multisig receive path is production-load-bearing (or explicit waiver).
 
 - **Phase 2b planning session — stake state-machine shape (gate for
   Stage 3).** Pin the design of the stake lifecycle before any `StakeEngine`

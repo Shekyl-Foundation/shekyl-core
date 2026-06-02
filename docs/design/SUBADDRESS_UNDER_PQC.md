@@ -3,7 +3,8 @@
 **Status.** Round 3 in progress. **5-T-substrate adopted** (§6.4, 2026-05-31).
 **Logical tag system** specified (§5.7.11). **V3.0 wallet:** sentinel-only
 at launch; payment-request / meaningful-tag UX behind product flag (later).
-**FA-1** confirmed (§3.7). **FA-6** spec drafted (`FA-6_VIEW_TAG_ML_KEM.md`).
+**FA-1** confirmed (§3.7). **FA-6** spec revised (`FA-6_VIEW_TAG_ML_KEM.md` —
+§3.1 wire inventory, initial-sync gate).
 **R2-F2 CLOSED** (2026-05-31): product sign-off — **no subaddresses at V3.0**;
 End-state 5 minimal; §5.7.9 + `R2_F2_WALKTHROUGH.md` §6. **R2-F9 CLOSED**
 (pin): address-knowledge / phishing tier (§5.7.12) — dust-tracking class
@@ -207,23 +208,32 @@ amount-matching underpins confidence tiers 2–3.
 receive + account-level scan** (End-state 5). Reward disbursement credits
 outputs scanned like any other inbound; no `B'` registry.
 
-#### FA-6 — T6 view-tag (parallel adversary track)
+#### FA-6 — T6 view-tag pre-filter (parallel adversary track)
 
-**Spec:** `docs/design/FA-6_VIEW_TAG_ML_KEM.md` (2026-06-01). **Disposition:**
-re-key on-wire 1-byte view tag from `x25519_ss` → `ml_kem_ss` at V3.0
-genesis; implementation PR after spec sign-off (§11).
+**Spec:** `docs/design/FA-6_VIEW_TAG_ML_KEM.md` (2026-06-01, revised).
+**Disposition:** re-key on-wire 1-byte **pre-filter** (`view_tag_prefilter`
+derivation from `ml_kem_ss`) at V3.0 genesis; implementation PR after spec
+sign-off (§11).
+
+**Closure condition:** T6 closes only when **no** per-output wire byte is
+computable from quantum-recoverable view material — not when the view tag
+alone is re-keyed. FA-6 spec §3.1 is the **inventory table** (view tag,
+`amount_tag`, FA-11 `label_tag` / `enc_label`, multisig hints); each row must
+be **verified** in code before merge.
 
 **Confirmed:** T6 is **not** closed by End-state 5 or the 5-T pin; it stays
-on the **adversary** track (§4.7–§4.8) until FA-6 lands.
+on the **adversary** track (§4.7–§4.8) until FA-6 lands with §3.1 verified.
 
 | Item | Status |
 |------|--------|
-| View-tag pre-filter | **FA-6** — ML-KEM-keyed tag; scanner leg-swap (decap → tag → X25519 on match). |
-| Same impossibility shape as R1-F2 | Load-bearing (§4.4); FA-6 is the chosen resolution. |
+| Account-output pre-filter | **FA-6** — leg-swap (decap → tag → X25519 on match); genesis-locked. |
+| Per-output wire inventory | **FA-6 §3.1** — verify `amount_tag` / `label_tag` are post-decap hybrid-leg. |
+| Multisig `view_tag_hints` | **FA-6b** — separate audit (classical linkability risk; not FA-6 closure). |
+| Initial-sync benchmark | **FA-6 §8** — wall-clock on worst target; bench fail ⇒ slow sync **or** T6 waiver, not defer. |
 | Threat-model wargaming | FA-9 propagates §2.2 residuals after FA-6 implementation. |
 
 End-state 5 **does not** relax T6. Sentinel-only launch **does not** change
-the view-tag surface.
+the pre-filter surface.
 
 ### 3.4 Send / test path (account hybrid + subaddress spend target)
 
@@ -1848,7 +1858,7 @@ V4 removes hybrid KEM from addresses entirely.
 | FA-3 | `STAGE_1_PR_3_KEY_ENGINE.md` | §3.1.3 superseded banner → this doc |
 | FA-4 | `POST_QUANTUM_CRYPTOGRAPHY.md` / user docs | **Reusable-address privacy** product principle (R2-F1); drop subaddress-per-invoice narrative; T2 disclosure if multi-account |
 | FA-5 | `STAGE_2_KEY_ENGINE_ACTOR.md` §2.4 / §8.2 | **Delete** `AuditSubaddressSecret` disposition — moot under End-state 5 |
-| FA-6 | `docs/design/FA-6_VIEW_TAG_ML_KEM.md` | **Spec drafted** — implementation after §11 sign-off; FA-9 propagation |
+| FA-6 | `docs/design/FA-6_VIEW_TAG_ML_KEM.md` | **Spec revised** — §3.1 wire inventory; `view_tag_prefilter`; §8 initial-sync gate; impl after §11; **FA-6b** multisig hints |
 | FA-7 | `WALLET_REWRITE_PLAN.md` Phase 1–2 | Amend: drop flat `SubaddressIndex` / `create_subaddress`; add payment requests + optional seed-derived accounts; reconcile payment-ID rejection with URI labels (§5.7.2) |
 | FA-8 | Payment URI + ledger (Round 3 PR) | **5-T:** `enc_label` + §5.7.11; **launch = sentinel-only**; `rid`/`REQUEST` + §5.7.9 UI behind flag; R2-F2 gates |
 | FA-9 | Threat-model / user docs (`POST_QUANTUM_CRYPTOGRAPHY.md` or new `docs/THREAT_MODEL_WALLET.md` §) | **In progress.** Propagate §4.6–§4.8, **R2-F9** (§5.7.12): pit-of-success vs adversary; marketing split; address substitution; dust non-oracle; **T6 ↔ phishing harvest** framing; liveness + label-injection hygiene |
