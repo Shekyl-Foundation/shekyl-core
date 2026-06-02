@@ -41,7 +41,25 @@ use fips203::{
 };
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use shekyl_generators::{H, T};
+
+/// Set by `ml_kem_decap_prefilter` when a tag mismatch runs an explicit
+/// `ml_kem_ss` wipe before returning `Err` (test-only observability).
+#[cfg(test)]
+static ML_KEM_SS_WIPED_ON_PREFILTER_REJECT: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+pub(crate) fn reset_ml_kem_ss_wipe_probe() {
+    ML_KEM_SS_WIPED_ON_PREFILTER_REJECT.store(false, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn ml_kem_ss_wiped_on_last_prefilter_reject() -> bool {
+    ML_KEM_SS_WIPED_ON_PREFILTER_REJECT.load(Ordering::SeqCst)
+}
 
 use crate::derivation::{
     derive_kem_seed, derive_output_secrets, derive_view_tag_prefilter, hash_pqc_public_key,
@@ -436,6 +454,11 @@ fn decap_ml_kem_and_combine(
 }
 
 /// ML-KEM decap + FA-6 pre-filter tag compare (universal scan path).
+///
+/// `ml_kem_ss` is held in `Zeroizing<[u8; 32]>` for the whole function. On tag
+/// mismatch (the dominant path during chain scan), the buffer is explicitly
+/// zeroized before `Err` — the early-return-leaves-secrets-unwiped failure mode
+/// that FA-6 promotes from rare to common.
 fn ml_kem_decap_prefilter(
     ml_kem_dk: &[u8],
     kem_ct_ml_kem: &[u8],
@@ -466,10 +489,13 @@ fn ml_kem_decap_prefilter(
     let ml_ss = dk
         .try_decaps(&ct)
         .map_err(|e| CryptoError::DecapsulationFailed(format!("ML-KEM-768 decaps: {e}")))?;
-    let ml_ss_bytes = Zeroizing::new(ml_ss.into_bytes());
+    let mut ml_ss_bytes = Zeroizing::new(ml_ss.into_bytes());
 
     let expected = derive_view_tag_prefilter(&ml_ss_bytes, output_index);
     if expected != view_tag_on_chain {
+        ml_ss_bytes.zeroize();
+        #[cfg(test)]
+        ML_KEM_SS_WIPED_ON_PREFILTER_REJECT.store(true, Ordering::SeqCst);
         return Err(CryptoError::DecapsulationFailed(
             "view tag pre-filter mismatch — output not for this key".into(),
         ));
@@ -1393,7 +1419,15 @@ mod tests {
     }
 
     #[test]
-    fn scan_wrong_kem_key_view_tag_mismatch() {
+    fn ml_kem_ss_buffer_is_zeroize_on_drop() {
+        fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<Zeroizing<[u8; 32]>>();
+    }
+
+    #[test]
+    fn ml_kem_ss_wiped_on_view_tag_prefilter_mismatch() {
+        reset_ml_kem_ss_wipe_probe();
+
         let kem = HybridX25519MlKem;
         let (recipient_pk, _) = kem.keypair_generate().unwrap();
         let (_, wrong_sk) = kem.keypair_generate().unwrap();
@@ -1430,6 +1464,15 @@ mod tests {
         );
 
         assert!(result.is_err(), "scan with wrong KEM key must fail");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("view tag pre-filter mismatch"),
+            "wrong KEM key must fail at pre-filter, not later: {err_msg}"
+        );
+        assert!(
+            ml_kem_ss_wiped_on_last_prefilter_reject(),
+            "ml_kem_ss must be wiped on tag-mismatch reject (universal decap path)"
+        );
     }
 
     #[test]
