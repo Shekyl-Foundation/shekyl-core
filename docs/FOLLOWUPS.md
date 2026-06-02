@@ -1244,11 +1244,12 @@ sustainability is unaffected by the recalibration.
   *Implementation (post spec §11 sign-off).* Scanner leg-swap (universal ML-KEM
   decap → `derive_view_tag_prefilter` → X25519 on match); HKDF
   `shekyl-view-tag-prefilter-v1`; genesis-locked (coinbase tags affect genesis
-  hash). **Merge gate (§8):** pre-committed **absolute** UX budgets (scenarios A/B)
-  on **Raspberry Pi 4 4GB** floor vs **forward-dated mature chain** `N_outputs` —
-  not “N× baseline.” Measurer ≠ budget acceptor; FA-6b multisig sync budgeted
-  separately. §3.1.1 code verification on `dev` post–PR #100. Bench failure ⇒
-  explicit ship-slow **or** §10.1 T6 waiver — not “defer FA-6.”
+  hash). **Merge gate (§8):** absolute UX budgets (A/B) on **Pi 4 4GB** vs
+  forward-dated `N_outputs`; `O_per_block` pinned pessimistically **before**
+  restore-time math (§8.3.1); `M_margin` for clean vs marginal pass (§8.7);
+  scenario B = genesis restore worst case. Measurer ≠ acceptor; chain scenario
+  ≠ bench author. FA-6b budgeted separately. §3.1.1 verified post–PR #100.
+  Fail ⇒ ship-slow or §10.1 waiver; marginal ⇒ §10.2 record — not “defer FA-6.”
 
   *Target:* V3.0 pre-genesis, separate PR from FA-11 / FA-2.
 

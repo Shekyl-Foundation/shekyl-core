@@ -445,6 +445,8 @@ from whatever the benchmark returns.
 | Genesis-era chain size only | Cost is ~linear in outputs scanned; benching a tiny chain hides year-3 pain. |
 | “Non-AVX2 mobile” without a floor | ~10× spread; passes on a flagship, fails on the low-end device privacy users actually carry. |
 | Single sync number for all cases | FA-6 cost hits **deep restore** hardest; incremental sync stays cheap. One number over-constrains restore or under-protects incremental. |
+| `O_per_block` chosen to make bench pass | Same gravity as N× baseline, relocated: lowering chain size after seeing restore time protects the budget while leaving the scenario soft. |
+| Computing implied restore time before ratifying `O_per_block` | Lets chain assumptions absorb bench results. Pin `O_per_block` **blind**, same as §8.4 ceilings. |
 
 ### 8.2 Reference device (conservative floor)
 
@@ -485,27 +487,55 @@ Bench against a **synthetic mature chain**, not genesis size. Privacy cost
 scales with outputs the wallet must scan; the chain users restore against in
 year 3+ is the honest workload.
 
-**Pinned parameters** (ratify at S5 sign-off; worked example uses Shekyl HF1
-`T_block = 120` s block target per `DIFFICULTY_TARGET_V2`):
+**Illustrative arithmetic only (not load-bearing):** 5-year horizon and
+`T_block = 120` s (Shekyl HF1 `DIFFICULTY_TARGET_V2`) imply
+`N_blocks ≈ 1.31×10⁶`. The **ratified** values are `H_horizon`, `T_block`, and
+`O_per_block` in the S5 record — not this worked example.
 
-| Symbol | Meaning | Example (illustrative) |
-|--------|---------|----------------------|
-| `H_horizon` | Calendar horizon from genesis | 5 years post-launch |
-| `T_block` | Target block time | 120 s |
-| `N_blocks` | `⌊ H_horizon_seconds / T_block ⌋` | ≈ 1.31×10⁶ blocks |
-| `O_per_block` | Conservative mean **v3 outputs scanned per block** (stress) | **Pin at sign-off** from projected throughput / blocks-fullness model — must err high, not optimistic |
+| Symbol | Meaning | Ratification |
+|--------|---------|--------------|
+| `H_horizon` | Calendar horizon from genesis | S5 sign-off |
+| `T_block` | Target block time (consensus) | S5 sign-off (must match HF1) |
+| `N_blocks` | `⌊ H_horizon_seconds / T_block ⌋` | Derived from above |
+| `O_per_block` | **Stress** v3 outputs scanned per block (see §8.3.1) | S5 sign-off **before** any restore-time back-calculation |
 
 **Total outputs in mature scenario:** `N_outputs = N_blocks × O_per_block`.
 
-Document the derivation in the bench report. Revisit `O_per_block` if consensus
-or mempool models change before genesis — the **method** is load-bearing, not
-a single immortal constant.
+#### 8.3.1 `O_per_block` — same hindsight-proofing as §8.4
 
-**Birthday / restore-height mitigation (scope note):** Normal wallets scan from
-`restore_height`, not genesis. The **binding** FA-6 stress case is **deep
-restore** — wallet created near genesis, restored years later, must scan
-`N_outputs` from birthday ≈ 0. Incremental sync scans only outputs since
-last-seen (small `ΔN`). The gate uses **both** scenarios below.
+The wall-clock ceilings are armored against rewrite; **`O_per_block` is the
+soft underbelly** if it can be tuned after bench results. It must be pinned with
+the **same discipline** as the 60 s / 25 min budgets.
+
+**Required at S5 (chain-scenario acceptor — may be same meeting as budget
+acceptor, but a separate written record):**
+
+1. **Independent derivation** — `O_per_block` comes from an external basis,
+   documented in the S5 ratification artifact, e.g.:
+   - Shekyl economic / throughput projections (`docs/` economics models,
+     block-fullness assumptions), **stress-inflated**; and/or
+   - A stated multiple of a **comparable chain’s mature** outputs-per-block
+     (cite source + multiple).
+   Not a round number chosen because it makes restore math pass.
+
+2. **Pessimistic pin, not median** — The chain only grows; the tag is
+   genesis-locked; you cannot tighten `O_per_block` later without a hard fork.
+   **Underestimating** `O_per_block` ⇒ budget violated by year 3 with no
+   fork-free fix. **Overestimating** ⇒ headroom you did not strictly need.
+   Asymmetry favors the **high stress** value.
+
+3. **Blind ordering** — Ratify `O_per_block` and derive `N_outputs` **before**
+   anyone computes “implied restore time on Pi 4” from FA-6 micro-benches.
+   Same rule as §8.4: scenario inputs are not reverse-engineered from outcomes.
+
+4. **Measurer ≠ chain-scenario author** — The benchmark producer must **not**
+   be the sole author of `O_per_block` derivation (same separation principle as
+   §8.6).
+
+**Birthday / restore-height (product mitigation, not gate assumption):** Normal
+wallets default to scanning from `restore_height` / wallet birthday — far
+fewer outputs than scenario B. That mitigation **reduces** user-visible restore
+time but **does not** replace pinning the gate to the worst case (§8.4 B).
 
 ### 8.4 Pre-committed absolute budgets (before FA-6 numbers exist)
 
@@ -520,11 +550,17 @@ must be chosen deliberately, not copied from first bench run):
 | Scenario | What it models | Who cares | Provisional ceiling (Pi 4, mature `N_outputs`) |
 |----------|----------------|-----------|-----------------------------------------------|
 | **A — Incremental sync** | Outputs since last successful sync (e.g. 1 day of chain activity: `ΔN ≈ (86400/T_block) × O_per_block`) | Every app open | **≤ 60 s** wall-clock |
-| **B — Deep restore** | First-time / lost-state restore from near-genesis birthday over full `N_outputs` | Rare, one-time | **≤ 25 min** wall-clock |
+| **B — Deep restore (genesis worst case)** | **`restore_height = 0`** (genesis-era wallet): scan **all** `N_outputs` from chain start — true genesis restore, not a recent birthday | Rare, one-time; worst case for FA-6 | **≤ 25 min** wall-clock |
 
 Scenario A must remain “snappy”; scenario B may be minutes because users
 tolerate one-time restore but not per-open delay. FA-6’s universal decap targets
 **B**; **A** should pass with margin if `ΔN` is small.
+
+**Scenario B is intentionally the conservative floor** (parallel to Pi 4):
+pin “genesis wallet, restore from genesis on Pi 4.” A wallet created recently
+with a high birthday scans less — that is a **named product mitigation**, not
+an assumption baked into B. Under-protecting B by silently assuming recent
+birthday would leave genesis-era restores unbounded at year 3+.
 
 **Scope — account path only (FA-6):** These ceilings apply to **single-sig
 account-output** scan (`construct_output` / `scan_output*`). **FA-6b**
@@ -556,17 +592,32 @@ Run **both**; neither alone is sufficient.
 
 | Role | Responsibility |
 |------|----------------|
-| **Benchmark producer** (engineering) | Runs §8.5 on Pi 4 per pinned environment; publishes raw times + `N_outputs` / `ΔN` + config hash. |
-| **Budget acceptor** (product + security — **not** the same individual as producer) | Compares results to §8.4 **without** rewriting §8.4 to fit. Accept → proceed FA-6 merge. Reject → explicit §10 branch (slow-sync ship **or** T6 waiver), both requiring sign-off per §10. |
+| **Chain-scenario author** (economics / product — **not** bench engineer alone) | Writes §8.3.1 `O_per_block` derivation + `N_outputs` **before** FA-6 restore bench is interpreted. |
+| **Benchmark producer** (engineering) | Runs §8.5 on Pi 4 per pinned environment; publishes raw times + `N_outputs` / `ΔN` + config hash. **Does not** revise `O_per_block` after seeing results. |
+| **Budget acceptor** (product + security — **not** the same individual as producer) | Compares results to §8.4 **without** rewriting §8.4 or §8.3.1 to fit. |
 
-Self-justification gravity is the reason for separation.
+Self-justification gravity is the reason for separation on **both** inputs
+(budgets and chain size).
 
-### 8.7 Gate outcome
+### 8.7 Gate outcome (clean pass, marginal pass, fail)
 
-| Result | Action |
-|--------|--------|
-| Scenarios A **and** B ≤ ceilings | FA-6 merge permitted; record measurements in `PERFORMANCE_BASELINE.md` + `CHANGELOG.md`. |
-| Either scenario exceeds ceiling | **Not** “defer FA-6.” Choose §10: ship FA-6 (accept cost) **or** T6 waiver (documented). |
+Pin **`M_margin`** at S5 (provisional **20%** — replace at ratification): required
+headroom below the ceiling so a “pass” is not a deferred failure as the chain
+grows past `H_horizon` or under throttled hardware.
+
+For each scenario, let `T_meas` = measured wall-clock, `T_ceil` = §8.4 ceiling.
+
+| Outcome | Condition | Action |
+|---------|-----------|--------|
+| **Clean pass** | `T_meas ≤ T_ceil × (1 − M_margin)` | FA-6 merge permitted (both scenarios). |
+| **Marginal pass** | `T_ceil × (1 − M_margin) < T_meas ≤ T_ceil` | **Not** a silent green. Requires **margin-acceptance record** on file (same formality as §10.1): states measured time, ceiling, `M_margin`, `N_outputs` / `O_per_block` pinned, and that thin headroom is **consciously accepted** because chain growth past horizon may exceed budget without fork-free remedy. Security + product sign-off. |
+| **Fail** | `T_meas > T_ceil` | **Not** “defer FA-6.” Choose §10: ship FA-6 (accept cost) **or** §10.1 T6 waiver. |
+
+Both scenarios A and B must be **clean pass** for an unqualified FA-6 merge.
+**One marginal pass** ⇒ margin-acceptance record **before** merge (genesis
+irreversibility: a 96%-of-budget pass is a decision, not a default).
+
+Record outcomes in `PERFORMANCE_BASELINE.md` + `CHANGELOG.md`.
 
 Update `scripts/bench/capture_rust_baseline.sh` with new row names when the
 bench harness exists.
@@ -598,7 +649,8 @@ must be equally deliberate** so neither is the path of least resistance.
 | Choice | Consequence | Sign-off |
 |--------|-------------|----------|
 | **Ship FA-6** | Accept §8.4 sync cost on Pi 4 floor (and documented headroom for node co-residence); T6 closed on verified §3.1 account path. | Budget acceptor + security reviewer on record. |
-| **Ship without FA-6 (T6 waiver)** | Classical pre-filter remains; T6 **open** on account path until coordinated HF. | **T6 waiver document** (below) — not an informal default. |
+| **Ship without FA-6 (T6 waiver)** | Classical pre-filter remains; T6 **open** on account path until coordinated HF. | **T6 waiver document** (§10.1) — not an informal default. |
+| **Ship FA-6 with marginal pass** | At or under ceiling but below `M_margin` headroom (§8.7). | **Margin-acceptance record** (§10.2) — not a silent merge. |
 
 ### 10.1 T6 waiver document (required if bench fails and fast-sync wins)
 
@@ -629,6 +681,21 @@ Reopen FA-6 disposition only with:
 
 **Does not reopen** on anecdotal slowness without §8.5 measurements.
 
+### 10.2 Margin-acceptance record (required for §8.7 marginal pass)
+
+If any scenario is **marginal pass** (under ceiling, below `M_margin` headroom),
+merge requires a **named artifact** (same homes as §10.1) stating:
+
+1. **Measured vs committed:** `T_meas`, `T_ceil`, `M_margin`, scenario (A or B).
+2. **Pinned scenario:** `N_outputs`, `O_per_block` derivation reference (§8.3.1),
+   scenario B = genesis restore.
+3. **Conscious thin headroom:** explicit acceptance that chain growth past
+   `H_horizon`, node co-residence, or thermal throttle may exceed the budget
+   without a fork-free remedy — not a default “pass.”
+4. **Sign-off:** budget acceptor + security reviewer (same bar as §10 ship-FA-6).
+
+Marginal pass is **not** a T6 waiver; FA-6 still ships and T6 closes on §3.1.
+
 ---
 
 ## 11. Sign-off checklist (spec review)
@@ -639,16 +706,18 @@ Reopen FA-6 disposition only with:
 | S2 | §3.1 **Verify** rows closed — §3.1.1 on `dev` post–PR #100 | ☐ |
 | S3 | HKDF constants §4.2 + **domain separation** §4.5 | ☐ |
 | S4 | Scanner order §4.7; **no** `view_tag_combined` post-check §4.4 | ☐ |
-| S5 | §8 **absolute** budgets ratified: mature `N_outputs`, Pi 4 floor, scenarios A/B, `O_per_block`; measurer ≠ acceptor named | ☐ |
-| S6 | §10 both branches explicit; §10.1 waiver shape if fast-sync path | ☐ |
+| S5 | §8 ratified: §8.4 ceilings + §8.3.1 `O_per_block` derivation (pessimistic, blind), `M_margin`, scenario B = genesis restore; roles named | ☐ |
+| S6 | §10 branches explicit (ship / waiver / marginal §10.2) | ☐ |
 | S7 | **FA-6b** sync budget **not** inherited — §8.4 scope note | ☐ |
 | S8 | Decap totality / fuzz §4.9, §6.4 | ☐ |
 | S9 | FA-9 owner for propagation PR | ☐ |
 
-**S5 work before implementation:** Product/security ratifies §8.4 numbers
-(replace placeholders), `O_per_block`, and acceptor identity — **without**
-reference to FA-6 bench results. Engineering may run exploratory benches in
-parallel, but those do not set the ceiling.
+**S5 ratification artifact (minimum contents):** Signed record with §8.4
+ceilings, `M_margin`, `H_horizon` / `T_block` / `O_per_block` + **derivation
+citation**, `N_outputs`, scenario B = genesis `restore_height`, acceptor names,
+and explicit statement that `O_per_block` was fixed **before** implied restore
+time was computed. Engineering may run exploratory benches in parallel; benches
+do not set ceilings or chain inputs.
 
 **After S1–S9:** Implementation PR permitted. FA-6 merge to `dev` requires §8.7
 gate pass against pre-committed §8.4. Section-scoped re-review on implementation
