@@ -869,6 +869,15 @@ record.
 **Reopen when:** rescan refill exceeds the UX budget on mainnet-class history on V3.0
 hardware — evidence in `PERFORMANCE_BASELINE.md`.
 
+**Account-scan ceilings (FA-6, separate budget):** Per-output refresh cost for
+`txout_to_tagged_key` receives (including claim-reward mints) is governed by
+[`FA-6_VIEW_TAG_ML_KEM.md`](FA-6_VIEW_TAG_ML_KEM.md) §8.4.1 (45 s incremental /
+20 min genesis-restore on the Pi 4 reference device). That gate does **not**
+include stake-specific resync work: confidential stake/claim tx parsing,
+`claimed_epochs` rebuild from the stake-claim nullifier set (§5.2, §8.5), or
+rate/band cache refill (above). Full-wallet resync UX must be measured as
+**FA-6 account scan + Phase 2b stake mirror** when evaluating §8.1 reopen criteria.
+
 ### 8.2 `EconomicsEngine` per-stake methods
 
 **Rejection:** per [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
