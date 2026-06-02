@@ -15,7 +15,7 @@ use curve25519_dalek::{constants::X25519_BASEPOINT, montgomery::MontgomeryPoint,
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha512;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use fips203::ml_kem_768;
 use fips203::traits::{Decaps, Encaps, KeyGen, SerDes};
@@ -42,7 +42,10 @@ pub const KEM_DOMAIN_SALT: &[u8] = b"shekyl-kem-v1";
 /// [`crate::output::scan_output_with_ml_kem_dk`] /
 /// [`crate::output::scan_output_recover_with_ml_kem_dk`]. The byte-slice
 /// entrypoints re-parse the key per call (FFI and one-off callers only).
-#[derive(Clone)]
+///
+/// Not `Clone` — decapsulation keys are secret material; duplicate via
+/// [`Self::from_bytes`] on the canonical byte form when needed.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct MlKemDecapsKey(ml_kem_768::DecapsKey);
 
 impl MlKemDecapsKey {

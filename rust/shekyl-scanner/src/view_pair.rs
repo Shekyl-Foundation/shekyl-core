@@ -31,7 +31,7 @@ pub enum ViewPairError {
 ///
 /// Composed of the public spend key, the private view key, and the hybrid
 /// KEM secret keys (X25519 + ML-KEM-768) needed for PQC output recovery.
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct ViewPair {
     spend: EdwardsPoint,
     pub(crate) view: Zeroizing<Scalar>,
@@ -40,8 +40,6 @@ pub struct ViewPair {
     /// ML-KEM-768 decapsulation key (2400 bytes).
     pub(crate) ml_kem_dk: Zeroizing<Vec<u8>>,
     /// Parsed once at construction for FA-6 universal-decap scan hot path.
-    /// Wipe contract is on `ml_kem_dk` above; this is a non-secret parse cache.
-    #[zeroize(skip)]
     parsed_ml_kem_dk: MlKemDecapsKey,
 }
 
@@ -51,6 +49,20 @@ impl PartialEq for ViewPair {
     }
 }
 impl Eq for ViewPair {}
+
+impl Clone for ViewPair {
+    fn clone(&self) -> Self {
+        Self {
+            spend: self.spend,
+            view: self.view.clone(),
+            x25519_sk: self.x25519_sk.clone(),
+            ml_kem_dk: self.ml_kem_dk.clone(),
+            // Re-parse from canonical bytes; `MlKemDecapsKey` is intentionally not `Clone`.
+            parsed_ml_kem_dk: MlKemDecapsKey::from_bytes(&self.ml_kem_dk)
+                .expect("ml_kem_dk was valid at construction"),
+        }
+    }
+}
 
 impl ViewPair {
     /// Create a new ViewPair with KEM keys for hybrid PQC scanning.

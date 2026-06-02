@@ -175,7 +175,8 @@ const LABEL_VIEW_TAG_PREFILTER: &[u8] = b"shekyl-view-tag-prefilter";
 ///
 /// Derivation:
 /// ```text
-/// combined_ss = X25519(eph_sk, view_pk) || ML-KEM-768.Decap(kem_sk, ct)
+/// combined_ss = HKDF-SHA-512(salt="shekyl-kem-v1", ikm=x25519_ss||ml_kem_ss, info="", L=64)
+///   (see [`crate::kem::combine_shared_secrets`]; not raw concatenation)
 /// prk = HKDF-Extract(salt="shekyl-output-derive-v1", ikm=combined_ss)
 ///
 /// ho              = wide_reduce(HKDF-Expand(prk, "shekyl-output-x"              || idx_le64, 64))
@@ -215,9 +216,9 @@ pub struct OutputSecrets {
 
 /// Derive all per-output secrets from the combined KEM shared secret.
 ///
-/// `combined_ss` is the concatenation of X25519 and ML-KEM-768 shared secrets.
-/// Any length is accepted (HKDF-Extract handles variable-length IKM), but the
-/// expected production length is 64 bytes (32 X25519 + 32 ML-KEM).
+/// `combined_ss` is the 64-byte OKM from [`crate::kem::combine_shared_secrets`]
+/// on the production scan path. Any length is accepted here (HKDF-Extract
+/// handles variable-length IKM); test vectors may supply synthetic IKM directly.
 pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSecrets {
     let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_OUTPUT_DERIVE), combined_ss);
 

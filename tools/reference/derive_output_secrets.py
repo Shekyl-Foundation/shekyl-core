@@ -258,7 +258,11 @@ def print_registry_tables():
     print("### Instance 1: Combined Shared Secret Derivation")
     print()
     print(f"- **Salt**: `{SALT_COMBINED.decode()}`")
-    print(f"- **IKM**: `combined_ss` = X25519(eph_sk, view_pk) || ML-KEM-768.Decap(kem_sk, ct)")
+    print(
+        "- **IKM**: `combined_ss` = 64-byte OKM from `combine_shared_secrets` "
+        "(HKDF-SHA-512, salt `shekyl-kem-v1`, ikm=x25519_ss||ml_kem_ss); "
+        "vectors supply arbitrary bytes for Instance-1 KAT"
+    )
     print()
     print("| Info String | Expand Size | Post-Processing | Consuming Field |")
     print("|-------------|-------------|-----------------|-----------------|")
@@ -300,9 +304,10 @@ def main():
         "hkdf_instance_1": {
             "salt": SALT_COMBINED.decode(),
             "ikm_description": (
-                "combined_ss = X25519(eph_sk, view_pk) || ML-KEM-768.Decap(kem_sk, ct) "
-                "when 64 B; Group 5 vectors use synthetic 32-byte combined_ss for "
-                "Instance-1 edge coverage (see per-vector description)"
+                "combined_ss = 64-byte OKM from combine_shared_secrets "
+                "(HKDF-SHA-512, salt shekyl-kem-v1, ikm=x25519_ss||ml_kem_ss, info=\"\", L=64); "
+                "vectors supply arbitrary IKM for Instance-1 KAT (Group 5: synthetic 32 B — "
+                "see per-vector description)"
             ),
         },
         "hkdf_instance_2": {
