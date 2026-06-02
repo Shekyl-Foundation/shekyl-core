@@ -253,6 +253,14 @@ view_tag_prefilter = first_byte(
 **Input `ml_kem_ss`:** 32-byte ML-KEM-768 shared secret (FIPS 203), same
 encoding as `combine_shared_secrets`.
 
+**Byte identity (encaps vs decaps):** The wire tag uses the raw 32-byte
+`SharedSecret::into_bytes()` from FIPS 203 ML-KEM-768 — the same encoding
+`construct_output` takes from `encaps_from_seed` / encaps and `ml_kem_decap_prefilter`
+takes from `try_decaps`. `combine_shared_secrets` already requires encaps and
+decaps halves to match; FA-6 now keys the pre-filter on that half **independently**,
+so the encoding must stay identical across construct, scan, and KAT vectors (not
+an inherited assumption from `combined_ss` alone).
+
 **Rust API:** `derive_view_tag_prefilter(ml_kem_ss, output_index) -> u8`.
 
 ### 4.3 Deprecated (wire path)
@@ -400,6 +408,56 @@ computability, present-day linking without view key.
 | `shekyl_derive_view_tag_x25519` | → `shekyl_derive_view_tag_prefilter` |
 | `shekyl_construct_output` / `shekyl_scan_and_recover` | Emit / consume new derivation |
 
+### 5.3 Derivation single-site (Rust) — no C++ re-derive
+
+Per Shekyl policy: new crypto lives in Rust; C++ orchestrates via FFI and must
+**not** hold a second derivation of the wire tag.
+
+**Canonical Rust sites (construct, scan, genesis must all use these):**
+
+| Operation | Site | Notes |
+|-----------|------|-------|
+| Wire tag derivation | `shekyl_crypto_pq::derivation::derive_view_tag_prefilter` | Only HKDF definition |
+| Construct path | `output::construct_output` | After ML-KEM encaps |
+| Scan path | `output::ml_kem_decap_prefilter` → `scan_output` / `scan_output_recover` | Universal decap first |
+| C++ coinbase / transfer | `shekyl_construct_output` (FFI) | Returns `view_tag_prefilter` in `ShekylOutputData` |
+| C++ wallet scan | Rust engine / `shekyl_scan_*` FFI | Consumes wire tag; no local HKDF |
+| Test reference | `tools/reference/derive_output_secrets.py` | Must match Rust byte-for-byte |
+
+**C++ must not** call `local_derive_view_tag` / Keccak view-tag paths for v3
+account outputs. Production coinbase and transfer construction use
+`shekyl_construct_output` and copy `od.view_tag_prefilter` onto the wire
+(`cryptonote_tx_utils.cpp`, `chaingen` manual coinbase). A genesis builder that
+re-derived in C++ with the old salt would produce tags the FA-6 scanner rejects —
+genesis regen is only valid when construction goes through the Rust FFI path above.
+
+**Drift class:** Same failure mode as `FCMP_REFERENCE_BLOCK_MIN_AGE` /
+cbindgen-constant skew — Rust writes new tag, C++ checks old tag. Grep gate:
+no production `derive_view_tag` / `HKDF_SALT_VIEW_TAG_X25519` outside deletion
+targets and test-only legacy.
+
+### 5.4 Multisig genesis posture (FA-6 vs FA-6b)
+
+FA-6 closes T6 on the **account-output** path only. **FA-6b**
+(`tx_extra_pqc_view_tag_hints`) remains open.
+
+**V3.0 genesis posture (conscious acceptance, not silent inheritance):**
+
+- **Single-sig / account outputs:** T6 closed by FA-6 at genesis (PQ-keyed
+  `view_tag` pre-filter).
+- **Multisig:** Full FROST multisig ship-readiness is **V3.1** per
+  `WALLET_REWRITE_PLAN.md` and `AUDIT_SCOPE.md` (multisig-specific audit surface
+  post-genesis). V3.0 may carry scaffold / non-user-facing multisig code, but
+  **no genesis asymmetry** for end-user multisig wallets at launch — there is no
+  “multisig wallet type” shipping at V3.0 with a weaker T6 surface than
+  single-sig.
+- **FA-6b** must land **before** multisig is user-shippable (V3.1), not before
+  single-sig genesis.
+
+If multisig were ever promoted to V3.0 user-shippable without FA-6b, that would
+be an explicit product/security decision recorded in `V3_WALLET_DECISION_LOG.md`,
+not an accident of scheduling.
+
 ---
 
 ## 6. Verification and test vectors
@@ -421,6 +479,7 @@ computability, present-day linking without view key.
 | View-half only (simulated) | Cannot predict tag without decap |
 | Low-order Montgomery point | Rejected on match path |
 | §3.1 verification tests | `amount_tag` / `label_tag` checked only after decap in code |
+| §6.5 tag-mismatch wipe | `ml_kem_ss` zeroized on universal-decap reject |
 
 ### 6.3 Negative tests (production guard)
 
@@ -434,6 +493,27 @@ Stub all-zero wire tag must not ship from production `construct_output`.
 | Fuzz target extension | Align with `fuzz_kem_decapsulate`; document scan entry |
 | Wrong-length CT | Rejected before decap (existing) |
 
+### 6.5 Universal-decap path zeroization (merge gate — not §6.4)
+
+§6.4 covers panic-freedom on adversarial ML-KEM ciphertext. It does **not**
+cover the FA-6-specific residue regression: after FA-6, **every** scanned output
+runs ML-KEM decap; **~255/256** reject at the tag compare. Pre-FA-6, decap ran
+on ~1/256 outputs — an early-return that skipped wiping `ml_kem_ss` was rare;
+post-FA-6 it is the **dominant** path.
+
+**Requirement (implementation PR, before merge):**
+
+1. `ml_kem_ss` on the universal-decap path is `Zeroizing<[u8; 32]>` (or
+   equivalent `ZeroizeOnDrop`).
+2. Tag-mismatch `Err` **explicitly** zeroizes `ml_kem_ss` before return (not
+   only reliance on drop order).
+3. Test: wrong-key / tag-mismatch scan asserts pre-filter `Err` **and**
+   observability that wipe ran (`output.rs`:
+   `ml_kem_ss_wiped_on_view_tag_prefilter_mismatch`).
+
+Functional tests still pass if wipe is broken; this gate is memory-discipline,
+not correctness.
+
 ---
 
 ## 7. Documentation updates (implementation PR)
@@ -444,6 +524,7 @@ Stub all-zero wire tag must not ship from production `construct_output`.
 | `docs/design/SUBADDRESS_UNDER_PQC.md` | §3.7 — T6 closed on **verified** §3.1 + FA-6 |
 | `docs/FOLLOWUPS.md` | Close FA-6; FA-6b multisig hints; FA-9 propagation |
 | `CHANGELOG.md` | Initial-sync / privacy tradeoff (user-visible) |
+| `docs/design/WALLET_REWRITE_PLAN.md` | Genesis-affecting wire lock before Phase 7.7 stressnet (§ cross-cutting) |
 
 ---
 
@@ -782,7 +863,7 @@ requires §8.7 against §11.1 pins when benches are run.
 | S5 | §8 ratified: §8.4 ceilings + §8.3.1 `O_per_block`, `M_margin`, scenario B | ✅ | Chain pins + ceilings ratified §8.4.1 / §11.1 (2026-06-02); §8.7 bench outcome still pending. |
 | S6 | §10 branches explicit (ship / waiver / marginal §10.2) | ✅ | Machinery ratified; branch choice = §8.7 outcome vs S5 numbers (not pre-selected). |
 | S7 | **FA-6b** sync budget **not** inherited — §8.4 scope note | ✅ | Account path only; multisig hints separate (§2.2, §5.1). |
-| S8 | Decap totality / fuzz §4.9, §6.4 | ✅* | *Requirement correctly specified; **merge gate** confirms `fips203` decap totality on arbitrary 1088-byte CT + scan-path §6.4 KAT (not spec-review proof). |
+| S8 | Decap totality / fuzz §4.9, §6.4; §6.5 universal-decap wipe | ✅* | *§6.4/§6.5 merge gates: decap totality on adversarial CT + `ml_kem_ss` wipe on tag-mismatch reject (`output.rs` tests). |
 | S9 | FA-9 owner for propagation PR | ✅ | **Rick Dawson**, ClockWorX LLC. |
 
 ### 11.1 S5 pins (ratified 2026-06-02 — §8.4.1)
@@ -812,5 +893,25 @@ parallel; they do **not** set these pins.
 | Gate | When |
 |------|------|
 | **Implementation PR** | After S5 artifact filed and S5 row → ✅ |
-| **Merge to `dev`** | §8.7 vs S5 numbers (clean / marginal §10.2 / fail §10) + S8 merge deliverables (§6.4 fuzz/KAT, decap totality check) |
+| **Merge to `dev`** | §8.7 vs S5 numbers (clean / marginal §10.2 / fail §10) + S8 merge deliverables (§6.4 fuzz/KAT, decap totality check, §6.5 wipe test) |
 | **Re-review** | Implementation deltas only — section-scoped |
+
+### 11.3 Implementation checklist (blind spots — ranked)
+
+Not duplicated as S1–S9 sign-off rows; these are **merge gates** and
+**do-not-refactor** invariants for the implementation PR.
+
+| Rank | Item | Gate / disposition |
+|------|------|------------------|
+| **1** | **Universal-decap zeroization** | §6.5 — `Zeroizing` + explicit wipe on tag-mismatch `Err`; test required. **Must-fix in PR** (invisible to functional tests). |
+| **2** | **Rust/C++ derivation coherence** | §5.3 — single Rust HKDF site; C++ only via `shekyl_construct_output` / scan FFI; genesis regen through same path. |
+| **3** | **Genesis → stressnet sequencing** | Program: `WALLET_REWRITE_PLAN.md` cross-cutting — FA-6 (and any genesis-affecting wire change) locks before Phase 7.7 stressnet genesis. |
+| **4** | **Prefilter IKM = `ml_kem_ss` only** | **Do not refactor** tag derivation to use `derive_output_secrets(combined_ss, …)` — defeats leg-swap silently (still scans, just slow). §8 bench: per-output cost ≈ decap-only on reject path, not decap+X25519 on every output. |
+| **5** | **Reference tool + byte-exact KAT** | `derive_output_secrets.py` updated in same PR as Rust; `PQC_OUTPUT_SECRETS.json` carries `view_tag_prefilter` per vector (byte-exact wire convention). |
+| **6** | **Multisig genesis posture** | §5.4 — V3.0: single-sig T6 closed; multisig user-ship V3.1+ with FA-6b before multisig ships. |
+
+**Clerical confirmations (cheap):**
+
+- `T_block = 120 s` citation: `config/consensus_constants.json` →
+  `daa_target_seconds` (§8.4.1).
+- `ml_kem_ss` byte encoding identical on encaps and decaps paths (§4.2).
