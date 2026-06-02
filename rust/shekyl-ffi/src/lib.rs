@@ -122,6 +122,8 @@ pub struct ShekylOutputData {
     pub commitment: [u8; 32],
     pub enc_amount: [u8; 8],
     pub amount_tag: u8,
+    pub enc_label: [u8; 8],
+    pub label_tag: u8,
     pub view_tag_x25519: u8,
     pub kem_ciphertext_x25519: [u8; 32],
     pub kem_ciphertext_ml_kem: ShekylBuffer,
@@ -3423,6 +3425,8 @@ pub unsafe extern "C" fn shekyl_construct_output(
         commitment: [0; 32],
         enc_amount: [0; 8],
         amount_tag: 0,
+        enc_label: [0; 8],
+        label_tag: 0,
         view_tag_x25519: 0,
         kem_ciphertext_x25519: [0; 32],
         kem_ciphertext_ml_kem: ShekylBuffer::null(),
@@ -3454,6 +3458,8 @@ pub unsafe extern "C" fn shekyl_construct_output(
             commitment: out.commitment,
             enc_amount: out.enc_amount,
             amount_tag: out.amount_tag,
+            enc_label: out.enc_label,
+            label_tag: out.label_tag,
             view_tag_x25519: out.view_tag_x25519,
             kem_ciphertext_x25519: out.kem_ciphertext_x25519,
             kem_ciphertext_ml_kem: ShekylBuffer::from_vec(out.kem_ciphertext_ml_kem.clone()),
@@ -3512,6 +3518,8 @@ pub unsafe extern "C" fn shekyl_scan_output(
     commitment: *const u8,
     enc_amount: *const u8,
     amount_tag_on_chain: u8,
+    enc_label: *const u8,
+    label_tag_on_chain: u8,
     view_tag_on_chain: u8,
     spend_key: *const u8,
     output_index: u64,
@@ -3549,6 +3557,14 @@ pub unsafe extern "C" fn shekyl_scan_output(
         }
         None => return false,
     };
+    let el = match unsafe { slice_from_ptr(enc_label, 8) } {
+        Some(v) => {
+            let mut arr = [0u8; 8];
+            arr.copy_from_slice(v);
+            arr
+        }
+        None => return false,
+    };
     let Some(sk) = arr32_from_ptr(spend_key) else {
         return false;
     };
@@ -3574,6 +3590,8 @@ pub unsafe extern "C" fn shekyl_scan_output(
         &c,
         &ea,
         amount_tag_on_chain,
+        &el,
+        label_tag_on_chain,
         view_tag_on_chain,
         &sk,
         output_index,
@@ -3614,6 +3632,8 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
     commitment: *const u8,
     enc_amount: *const u8,
     amount_tag_on_chain: u8,
+    enc_label: *const u8,
+    label_tag_on_chain: u8,
     view_tag_on_chain: u8,
     output_index: u64,
     ho_out: *mut u8,
@@ -3652,6 +3672,14 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
         }
         None => return false,
     };
+    let el = match unsafe { slice_from_ptr(enc_label, 8) } {
+        Some(v) => {
+            let mut arr = [0u8; 8];
+            arr.copy_from_slice(v);
+            arr
+        }
+        None => return false,
+    };
 
     if ho_out.is_null()
         || y_out.is_null()
@@ -3676,6 +3704,8 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
         &c,
         &ea,
         amount_tag_on_chain,
+        &el,
+        label_tag_on_chain,
         view_tag_on_chain,
         output_index,
     ) {
@@ -3791,6 +3821,8 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
     commitment: *const u8,
     enc_amount: *const u8,
     amount_tag_on_chain: u8,
+    enc_label: *const u8,
+    label_tag_on_chain: u8,
     view_tag_on_chain: u8,
     output_index: u64,
     spend_secret_key: *const u8,
@@ -3834,6 +3866,14 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
         }
         None => return false,
     };
+    let el = match unsafe { slice_from_ptr(enc_label, 8) } {
+        Some(v) => {
+            let mut arr = [0u8; 8];
+            arr.copy_from_slice(v);
+            arr
+        }
+        None => return false,
+    };
     let have_spend_key = !spend_secret_key.is_null() && !hp_of_O.is_null();
 
     if ho_out.is_null()
@@ -3864,6 +3904,8 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
         &c,
         &ea,
         amount_tag_on_chain,
+        &el,
+        label_tag_on_chain,
         view_tag_on_chain,
         output_index,
     ) else {

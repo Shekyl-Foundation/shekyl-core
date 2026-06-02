@@ -93,6 +93,8 @@ namespace
         uint8_t commitment[32];
         uint8_t enc_amount[8];
         uint8_t amount_tag;
+        uint8_t enc_label[8];
+        uint8_t label_tag;
         uint8_t view_tag;
         uint8_t kem_ct_x25519[32];
         std::vector<uint8_t> kem_ct_ml_kem;
@@ -123,6 +125,8 @@ namespace
         memcpy(out.commitment, data.commitment, 32);
         memcpy(out.enc_amount, data.enc_amount, 8);
         out.amount_tag = data.amount_tag;
+        memcpy(out.enc_label, data.enc_label, 8);
+        out.label_tag = data.label_tag;
         out.view_tag = data.view_tag_x25519;
         memcpy(out.kem_ct_x25519, data.kem_ciphertext_x25519, 32);
         out.kem_ct_ml_kem.assign(
@@ -179,6 +183,8 @@ namespace
             out.commitment,
             out.enc_amount,
             out.amount_tag,
+            out.enc_label,
+            out.label_tag,
             out.view_tag,
             output_index,
             wallet.spend_secret,
@@ -327,11 +333,16 @@ namespace test
         memcpy(enc_amount_9, change_out.enc_amount, 8);
         enc_amount_9[8] = change_out.amount_tag;
 
+        uint8_t enc_label_9[9];
+        memcpy(enc_label_9, change_out.enc_label, 8);
+        enc_label_9[8] = change_out.label_tag;
+
         std::string outputs_json = "[{"
             "\"dest_key\":\"" + hex_encode(change_out.output_key, 32) + "\","
             "\"amount\":" + std::to_string(output_amount) + ","
             "\"commitment_mask\":\"" + hex_encode(change_out.z, 32) + "\","
-            "\"enc_amount\":\"" + hex_encode(enc_amount_9, 9) + "\""
+            "\"enc_amount\":\"" + hex_encode(enc_amount_9, 9) + "\","
+            "\"enc_label\":\"" + hex_encode(enc_label_9, 9) + "\""
         "}]";
 
         // --- 8. Sign ---
@@ -514,14 +525,31 @@ namespace test
 
         // enc_amounts (9 bytes each)
         {
+            if (!proofs_doc.HasMember("enc_amounts") || !proofs_doc["enc_amounts"].IsArray())
+                throw std::runtime_error("enc_amounts missing or not an array in signed proofs JSON");
             const auto& ea_arr = proofs_doc["enc_amounts"].GetArray();
             tx.rct_signatures.enc_amounts.resize(ea_arr.Size());
             for (rapidjson::SizeType i = 0; i < ea_arr.Size(); ++i)
             {
                 std::vector<uint8_t> bin = hex_decode(ea_arr[i].GetString());
-                tx.rct_signatures.enc_amounts[i].fill(0);
-                memcpy(tx.rct_signatures.enc_amounts[i].data(), bin.data(),
-                       std::min<size_t>(bin.size(), 9));
+                if (bin.size() != 9)
+                    throw std::runtime_error("enc_amount must decode to 9 bytes");
+                memcpy(tx.rct_signatures.enc_amounts[i].data(), bin.data(), 9);
+            }
+        }
+
+        // enc_labels (9 bytes each)
+        {
+            if (!proofs_doc.HasMember("enc_labels") || !proofs_doc["enc_labels"].IsArray())
+                throw std::runtime_error("enc_labels missing or not an array in signed proofs JSON");
+            const auto& el_arr = proofs_doc["enc_labels"].GetArray();
+            tx.rct_signatures.enc_labels.resize(el_arr.Size());
+            for (rapidjson::SizeType i = 0; i < el_arr.Size(); ++i)
+            {
+                std::vector<uint8_t> bin = hex_decode(el_arr[i].GetString());
+                if (bin.size() != 9)
+                    throw std::runtime_error("enc_label must decode to 9 bytes");
+                memcpy(tx.rct_signatures.enc_labels[i].data(), bin.data(), 9);
             }
         }
 
@@ -657,6 +685,8 @@ TEST(JsonSerialization, FcmpPlusPlusTransaction)
               tx.rct_signatures.p.pseudoOuts.size());
     EXPECT_EQ(tx_copy.rct_signatures.enc_amounts.size(),
               tx.rct_signatures.enc_amounts.size());
+    EXPECT_EQ(tx_copy.rct_signatures.enc_labels.size(),
+              tx.rct_signatures.enc_labels.size());
 
     cryptonote::blobdata tx_bytes{};
     cryptonote::blobdata tx_copy_bytes{};

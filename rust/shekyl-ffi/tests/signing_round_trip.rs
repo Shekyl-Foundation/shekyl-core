@@ -104,6 +104,8 @@ struct ConstructedOutput {
     commitment: [u8; 32],
     enc_amount: [u8; 8],
     amount_tag: u8,
+    enc_label: [u8; 8],
+    label_tag: u8,
     view_tag: u8,
     kem_ct_x25519: [u8; 32],
     kem_ct_ml_kem: Vec<u8>,
@@ -144,6 +146,8 @@ fn construct_output_ffi(
         commitment: data.commitment,
         enc_amount: data.enc_amount,
         amount_tag: data.amount_tag,
+        enc_label: data.enc_label,
+        label_tag: data.label_tag,
         view_tag: data.view_tag_x25519,
         kem_ct_x25519: data.kem_ciphertext_x25519,
         kem_ct_ml_kem,
@@ -227,6 +231,8 @@ fn scan_output_ffi(
             out.commitment.as_ptr(),
             out.enc_amount.as_ptr(),
             out.amount_tag,
+            out.enc_label.as_ptr(),
+            out.label_tag,
             out.view_tag,
             output_index,
             wallet.spend_secret.as_ptr(),
@@ -372,11 +378,16 @@ fn build_test_case(iteration: u32) {
     enc_amount_9[..8].copy_from_slice(&change_out.enc_amount);
     enc_amount_9[8] = change_out.amount_tag;
 
+    let mut enc_label_9 = [0u8; 9];
+    enc_label_9[..8].copy_from_slice(&change_out.enc_label);
+    enc_label_9[8] = change_out.label_tag;
+
     let outputs_json = serde_json::json!([{
         "dest_key": hex_encode(&change_out.output_key),
         "amount": output_amount,
         "commitment_mask": hex_encode(&change_out.z),
         "enc_amount": hex_encode(&enc_amount_9),
+        "enc_label": hex_encode(&enc_label_9),
     }]);
 
     let inputs_bytes = serde_json::to_vec(&inputs_json).unwrap();

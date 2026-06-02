@@ -295,6 +295,10 @@ pub struct OutputInfo {
     /// Created by `shekyl_construct_output`.
     #[serde(with = "hex_bytes9")]
     pub enc_amount: [u8; 9],
+    /// Pre-computed encrypted label (9 bytes): [0..8] = plaintext XOR k_label,
+    /// [8] = label_tag. Sentinel plaintext at V3.0 launch.
+    #[serde(with = "hex_bytes9")]
+    pub enc_label: [u8; 9],
 }
 
 /// Curve tree context at the reference block height.
@@ -349,6 +353,9 @@ pub struct SignedProofs {
     /// Per-output encrypted amounts (9 bytes each: [0..8] = XOR-encrypted, [8] = HKDF tag).
     #[serde(with = "hex_vec9")]
     pub enc_amounts: Vec<[u8; 9]>,
+    /// Per-output encrypted labels (9 bytes each).
+    #[serde(with = "hex_vec9")]
+    pub enc_labels: Vec<[u8; 9]>,
     /// Per-input pseudo-output commitments (from FCMP prover).
     #[serde(with = "hex_vec32")]
     pub pseudo_outs: Vec<[u8; 32]>,

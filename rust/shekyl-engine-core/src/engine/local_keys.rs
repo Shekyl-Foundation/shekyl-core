@@ -510,6 +510,8 @@ impl KeyEngine for LocalKeys {
             &input.commitment,
             &input.enc_amount,
             input.amount_tag_on_chain,
+            &input.enc_label,
+            input.label_tag_on_chain,
             input.view_tag.0[0],
             input.output_index,
         ) else {
@@ -644,6 +646,8 @@ mod tests {
             view_tag: ViewTag([constructed.view_tag_x25519]),
             enc_amount: constructed.enc_amount,
             amount_tag_on_chain: constructed.amount_tag,
+            enc_label: constructed.enc_label,
+            label_tag_on_chain: constructed.label_tag,
             output_index,
             tx_hash,
         };
@@ -813,6 +817,12 @@ mod tests {
                 let mut enc = [0u8; 9];
                 enc[..8].copy_from_slice(&constructed.enc_amount);
                 enc[8] = constructed.amount_tag;
+                enc
+            },
+            enc_label: {
+                let mut enc = [0u8; 9];
+                enc[..8].copy_from_slice(&constructed.enc_label);
+                enc[8] = constructed.label_tag;
                 enc
             },
         }
@@ -1060,6 +1070,8 @@ mod tests {
             view_tag: ViewTag([constructed.view_tag_x25519]),
             enc_amount: constructed.enc_amount,
             amount_tag_on_chain: constructed.amount_tag,
+            enc_label: constructed.enc_label,
+            label_tag_on_chain: constructed.label_tag,
             output_index: 0,
             tx_hash: [0u8; 32],
         };
@@ -1106,6 +1118,8 @@ mod tests {
             view_tag: ViewTag([constructed.view_tag_x25519]),
             enc_amount: constructed.enc_amount,
             amount_tag_on_chain: constructed.amount_tag,
+            enc_label: constructed.enc_label,
+            label_tag_on_chain: constructed.label_tag,
             output_index: 0,
             tx_hash: [4u8; 32],
         };
@@ -1314,6 +1328,8 @@ mod tests {
                 &constructed.commitment,
                 &constructed.enc_amount,
                 constructed.amount_tag,
+                &constructed.enc_label,
+                constructed.label_tag,
                 constructed.view_tag_x25519,
                 output_index,
             )
@@ -1631,6 +1647,8 @@ mod tests {
                         &constructed.commitment,
                         &constructed.enc_amount,
                         constructed.amount_tag,
+                        &constructed.enc_label,
+                        constructed.label_tag,
                         constructed.view_tag_x25519,
                         output_index,
                     )

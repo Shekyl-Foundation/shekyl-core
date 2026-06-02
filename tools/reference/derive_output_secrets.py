@@ -66,6 +66,8 @@ LABEL_Z              = "shekyl-output-mask"
 LABEL_K_AMOUNT       = "shekyl-output-amount-key"
 LABEL_VIEW_TAG_COMB  = "shekyl-output-view-tag-combined"
 LABEL_AMOUNT_TAG     = "shekyl-output-amount-tag"
+LABEL_K_LABEL        = "shekyl-output-label-key"
+LABEL_LABEL_TAG      = "shekyl-output-label-tag"
 LABEL_ML_DSA_SEED    = "shekyl-pqc-output"
 
 # Instance 2: X25519-only view tag
@@ -105,8 +107,20 @@ def derive_output_secrets(combined_ss: bytes, output_index: int) -> dict:
     at_raw = hkdf_expand_sha512(prk, make_info(LABEL_AMOUNT_TAG, output_index), 32)
     amount_tag = at_raw[0]
 
+    # k_label: 32-byte expand, raw
+    k_label = hkdf_expand_sha512(prk, make_info(LABEL_K_LABEL, output_index), 32)
+
+    # label_tag: 32-byte expand, first byte
+    lt_raw = hkdf_expand_sha512(prk, make_info(LABEL_LABEL_TAG, output_index), 32)
+    label_tag = lt_raw[0]
+
     # ml_dsa_seed: 32-byte expand, raw
     ml_dsa_seed = hkdf_expand_sha512(prk, make_info(LABEL_ML_DSA_SEED, output_index), 32)
+
+    # On-wire sentinel label (FA-11): SENTINEL_PLAINTEXT XOR k_label[..8] + label_tag
+    sentinel_pt = b"\xff" * 8
+    enc_label = bytes(p ^ k for p, k in zip(sentinel_pt, k_label[:8]))
+    enc_label_9 = enc_label + bytes([label_tag])
 
     return {
         "ho": ho.hex(),
@@ -115,6 +129,10 @@ def derive_output_secrets(combined_ss: bytes, output_index: int) -> dict:
         "k_amount": k_amount.hex(),
         "view_tag_combined": view_tag_combined,
         "amount_tag": amount_tag,
+        "k_label": k_label.hex(),
+        "label_tag": label_tag,
+        "enc_label_sentinel": enc_label.hex(),
+        "enc_label_sentinel_9": enc_label_9.hex(),
         "ml_dsa_seed": ml_dsa_seed.hex(),
     }
 
@@ -237,6 +255,8 @@ def print_registry_tables():
     print(f"| `{LABEL_K_AMOUNT}` \\|\\| index_le64 | 32 B | raw | `OutputSecrets.k_amount` |")
     print(f"| `{LABEL_VIEW_TAG_COMB}` \\|\\| index_le64 | 32 B | first byte | `OutputSecrets.view_tag_combined` |")
     print(f"| `{LABEL_AMOUNT_TAG}` \\|\\| index_le64 | 32 B | first byte | `OutputSecrets.amount_tag` |")
+    print(f"| `{LABEL_K_LABEL}` \\|\\| index_le64 | 32 B | raw | `OutputSecrets.k_label` |")
+    print(f"| `{LABEL_LABEL_TAG}` \\|\\| index_le64 | 32 B | first byte | `OutputSecrets.label_tag` |")
     print(f"| `{LABEL_ML_DSA_SEED}` \\|\\| index_le64 | 32 B | raw | `OutputSecrets.ml_dsa_seed` |")
     print()
     print("### Instance 2: X25519-Only View Tag")

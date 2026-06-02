@@ -47,6 +47,7 @@ fn dummy_output(amount: u64) -> OutputInfo {
         amount,
         commitment_mask: [21u8; 32],
         enc_amount: [0u8; 9],
+        enc_label: [0u8; 9],
     }
 }
 

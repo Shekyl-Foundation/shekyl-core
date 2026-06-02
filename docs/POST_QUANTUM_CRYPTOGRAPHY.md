@@ -342,6 +342,14 @@ The sender can re-derive `combined_ss` at proof time without storing it:
 - **`decrypt_amount(combined_ss, enc_amount, amount_tag, output_index)`**:
   Decrypts the amount and verifies the `amount_tag`.
 
+- **Label encryption (5-T, FA-11):** `construct_output` always XOR-encrypts an
+  8-byte **plaintext** under per-output `k_label`. Launch default plaintext is
+  the sentinel block `0xFF…` (`SENTINEL_PLAINTEXT`); on-wire `enc_label` bytes
+  are **unique per output** (never literal `0xFF` on wire). Scan verifies
+  HKDF-derived `label_tag` (integrity tag, same role as `amount_tag` — not a
+  sentinel/category flag), then decrypts `enc_label`; cooperative tags use
+  `wire_version = 0x01` per `docs/design/SUBADDRESS_UNDER_PQC.md` §5.7.11.
+
 - **`compute_output_key_image(combined_ss, output_index, spend_secret, hp_of_O)`**:
   Derives `ho` internally and computes `I = x * Hp(O)` where `x = ho + b`.
   Returns both the key image and spend secret `x`. `Hp(O)` is provided by
@@ -375,8 +383,10 @@ fast wallet scanning.
 | `y` (T-component) | `shekyl-output-derive-v1` | `shekyl-output-y` &#124;&#124; index\_le64 | 64 B | mod l (wide) |
 | `z` (commitment mask) | `shekyl-output-derive-v1` | `shekyl-output-mask` &#124;&#124; index\_le64 | 64 B | mod l (wide) |
 | `k_amount` | `shekyl-output-derive-v1` | `shekyl-output-amount-key` &#124;&#124; index\_le64 | 32 B | raw |
-| `view_tag_combined` | `shekyl-output-derive-v1` | `shekyl-output-view-tag` &#124;&#124; index\_le64 | 1 B | first byte |
+| `k_label` | `shekyl-output-derive-v1` | `shekyl-output-label-key` &#124;&#124; index\_le64 | 32 B | raw |
+| `view_tag_combined` | `shekyl-output-derive-v1` | `shekyl-output-view-tag-combined` &#124;&#124; index\_le64 | 1 B | first byte |
 | `amount_tag` | `shekyl-output-derive-v1` | `shekyl-output-amount-tag` &#124;&#124; index\_le64 | 1 B | first byte |
+| `label_tag` | `shekyl-output-derive-v1` | `shekyl-output-label-tag` &#124;&#124; index\_le64 | 1 B | first byte |
 | `ml_dsa_seed` | `shekyl-output-derive-v1` | `shekyl-pqc-output` &#124;&#124; index\_le64 | 32 B | raw |
 
 **Secondary derivation (X25519 shared secret only, for fast scan):**

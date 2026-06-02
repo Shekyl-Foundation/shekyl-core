@@ -193,8 +193,18 @@ governed institution funded voluntarily — whether through founder donations,
 community fundraising, or other means decided at that time. No coins are
 reserved or earmarked for this purpose at launch.
 
-The specific genesis addresses for each founder will be published in
-`docs/GENESIS_ALLOCATIONS.md` at the time of mainnet launch.
+**Pre-launch treasury (mainnet and stagenet).** Until production wallets
+can emit final founder addresses, genesis allocates the full 100_000 SKL
+founder pool to a single on-chain treasury output per network. Keys are
+deterministic placeholders (domain-separated BIP-39 entropy; see
+the `shekyl-dev` repository (`tools/genesis_builder/GENESIS_BUILD_INFO.txt`) and
+`rust/shekyl-crypto-pq/examples/gen_genesis_addrs.rs`), not operational
+founder wallets. Testnet continues to use five separate developer outputs
+for integration testing.
+
+The specific genesis addresses for each founder on mainnet/stagenet will
+be published in `docs/GENESIS_ALLOCATIONS.md` when production wallet
+addresses replace the treasury placeholders.
 
 ---
 

@@ -49,6 +49,7 @@ use crate::derivation::{
 use crate::kem::{
     combine_shared_secrets, SharedSecret, ML_KEM_768_CT_LEN, ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN,
 };
+use crate::label::{decrypt_label_plaintext, encrypt_label_plaintext, sentinel_plaintext};
 use crate::CryptoError;
 
 /// All data produced by output construction that the sender needs to build the tx.
@@ -66,6 +67,12 @@ pub struct OutputData {
     /// 1-byte AAD tag for amount integrity.
     #[zeroize(skip)]
     pub amount_tag: u8,
+    /// XOR-encrypted 8-byte label plaintext (sentinel at launch).
+    #[zeroize(skip)]
+    pub enc_label: [u8; 8],
+    /// 1-byte AAD tag for label integrity.
+    #[zeroize(skip)]
+    pub label_tag: u8,
     /// X25519-only view tag for scanner pre-filtering.
     #[zeroize(skip)]
     pub view_tag_x25519: u8,
@@ -87,6 +94,8 @@ pub struct OutputData {
     pub z: [u8; 32],
     /// HKDF-derived amount encryption key.
     pub k_amount: [u8; 32],
+    /// HKDF-derived label encryption key.
+    pub k_label: [u8; 32],
 }
 
 // CLIPPY: omitted fields are intentionally redacted (secrets or bulky ciphertexts).
@@ -97,6 +106,7 @@ impl std::fmt::Debug for OutputData {
             .field("output_key", &self.output_key)
             .field("commitment", &self.commitment)
             .field("amount_tag", &self.amount_tag)
+            .field("label_tag", &self.label_tag)
             .field("view_tag_x25519", &self.view_tag_x25519)
             .field("y", &"[REDACTED]")
             .field("z", &"[REDACTED]")
@@ -119,6 +129,11 @@ pub struct ScannedOutput {
     /// Verified amount tag.
     #[zeroize(skip)]
     pub amount_tag: u8,
+    /// Decrypted label plaintext (8 bytes; sentinel = no cooperative label).
+    pub label_plaintext: [u8; 8],
+    /// Verified label tag.
+    #[zeroize(skip)]
+    pub label_tag: u8,
     /// ML-DSA-65 public key for this output.
     #[zeroize(skip)]
     pub pqc_public_key: Vec<u8>,
@@ -269,6 +284,11 @@ pub fn construct_output(
         enc_amount[i] = amount_le[i] ^ secrets.k_amount[i];
     }
 
+    // --- Label encryption (sentinel-only at V3.0 launch) ---
+
+    let label_pt = sentinel_plaintext();
+    let enc_label = encrypt_label_plaintext(&label_pt, &secrets.k_label);
+
     // --- PQC keypair ---
 
     let (pqc_pk, _pqc_sk) = keygen_from_seed_bytes(&secrets.ml_dsa_seed)?;
@@ -279,6 +299,8 @@ pub fn construct_output(
         commitment,
         enc_amount,
         amount_tag: secrets.amount_tag,
+        enc_label,
+        label_tag: secrets.label_tag,
         view_tag_x25519,
         kem_ciphertext_x25519: eph_mont_pub.0,
         kem_ciphertext_ml_kem: ml_ct_bytes.to_vec(),
@@ -287,6 +309,7 @@ pub fn construct_output(
         y: secrets.y,
         z: secrets.z,
         k_amount: secrets.k_amount,
+        k_label: secrets.k_label,
     })
 }
 
@@ -430,6 +453,8 @@ pub fn scan_output(
     commitment: &[u8; 32],
     enc_amount: &[u8; 8],
     amount_tag_on_chain: u8,
+    enc_label: &[u8; 8],
+    label_tag_on_chain: u8,
     view_tag_on_chain: u8,
     spend_key: &[u8; 32],
     output_index: u64,
@@ -506,6 +531,12 @@ pub fn scan_output(
         ));
     }
 
+    if secrets.label_tag != label_tag_on_chain {
+        return Err(CryptoError::DecapsulationFailed(
+            "label_tag mismatch — possible KEM ciphertext corruption or tampering".into(),
+        ));
+    }
+
     // --- Amount decryption ---
 
     // `amount_le` is the decrypted cleartext amount — a secret; `Zeroizing`
@@ -515,6 +546,8 @@ pub fn scan_output(
         amount_le[i] = enc_amount[i] ^ secrets.k_amount[i];
     }
     let amount = Zeroizing::new(u64::from_le_bytes(*amount_le));
+
+    let label_plaintext = decrypt_label_plaintext(enc_label, &secrets.k_label);
 
     // --- Output key verification: O == ho*G + B + y*T ---
 
@@ -567,6 +600,8 @@ pub fn scan_output(
         k_amount: secrets.k_amount,
         amount: *amount,
         amount_tag: secrets.amount_tag,
+        label_plaintext,
+        label_tag: secrets.label_tag,
         pqc_public_key: pqc_pk,
         pqc_secret_key: pqc_sk,
         h_pqc,
@@ -606,6 +641,8 @@ pub struct RecoveredOutput {
     pub k_amount: [u8; 32],
     pub amount: u64,
     pub amount_tag: u8,
+    pub label_plaintext: [u8; 8],
+    pub label_tag: u8,
     pub recovered_spend_key: [u8; 32],
     pub combined_ss: [u8; 64],
     pub pqc_public_key: Vec<u8>,
@@ -644,6 +681,8 @@ pub fn scan_output_recover(
     commitment: &[u8; 32],
     enc_amount: &[u8; 8],
     amount_tag_on_chain: u8,
+    enc_label: &[u8; 8],
+    label_tag_on_chain: u8,
     view_tag_on_chain: u8,
     output_index: u64,
 ) -> Result<RecoveredOutput, CryptoError> {
@@ -699,6 +738,12 @@ pub fn scan_output_recover(
         ));
     }
 
+    if secrets.label_tag != label_tag_on_chain {
+        return Err(CryptoError::DecapsulationFailed(
+            "label_tag mismatch — possible KEM ciphertext corruption or tampering".into(),
+        ));
+    }
+
     // --- Amount decryption ---
     // `amount_le` is the decrypted cleartext amount — a secret; `Zeroizing` wipes
     // it on drop. The cleartext `u64` is likewise `Zeroizing` so early returns on
@@ -709,6 +754,8 @@ pub fn scan_output_recover(
         amount_le[i] = enc_amount[i] ^ secrets.k_amount[i];
     }
     let amount = Zeroizing::new(u64::from_le_bytes(*amount_le));
+
+    let label_plaintext = decrypt_label_plaintext(enc_label, &secrets.k_label);
 
     // --- Recover spend key: B' = O - ho*G - y*T ---
     let o_point = CompressedEdwardsY(*output_key)
@@ -756,6 +803,8 @@ pub fn scan_output_recover(
         k_amount: secrets.k_amount,
         amount: *amount,
         amount_tag: secrets.amount_tag,
+        label_plaintext,
+        label_tag: secrets.label_tag,
         recovered_spend_key,
         combined_ss: combined_ss.0,
         pqc_public_key: pqc_pk,
@@ -1256,6 +1305,8 @@ mod tests {
             &out.commitment,
             &out.enc_amount,
             out.amount_tag,
+            &out.enc_label,
+            out.label_tag,
             out.view_tag_x25519,
             &spend_key,
             output_index,
@@ -1310,6 +1361,8 @@ mod tests {
                 &out.commitment,
                 &out.enc_amount,
                 out.amount_tag,
+                &out.enc_label,
+                out.label_tag,
                 out.view_tag_x25519,
                 &spend_key,
                 idx,
@@ -1352,6 +1405,8 @@ mod tests {
             &out.commitment,
             &out.enc_amount,
             out.amount_tag,
+            &out.enc_label,
+            out.label_tag,
             out.view_tag_x25519,
             &wrong_spend_key,
             0,
@@ -1395,6 +1450,8 @@ mod tests {
             &out.commitment,
             &out.enc_amount,
             out.amount_tag,
+            &out.enc_label,
+            out.label_tag,
             out.view_tag_x25519,
             &spend_key,
             0,
@@ -1433,6 +1490,8 @@ mod tests {
             &out.commitment,
             &out.enc_amount,
             bad_tag,
+            &out.enc_label,
+            out.label_tag,
             out.view_tag_x25519,
             &spend_key,
             0,
@@ -1489,6 +1548,8 @@ mod tests {
             &out.commitment,
             &out.enc_amount,
             out.amount_tag,
+            &out.enc_label,
+            out.label_tag,
             out.view_tag_x25519,
             &spend_key,
             0,
@@ -1520,6 +1581,8 @@ mod tests {
             &out.commitment,
             &out.enc_amount,
             out.amount_tag,
+            &out.enc_label,
+            out.label_tag,
             out.view_tag_x25519,
             &spend_key,
             0,
@@ -1581,6 +1644,8 @@ mod tests {
             &out.commitment,
             &out.enc_amount,
             out.amount_tag,
+            &out.enc_label,
+            out.label_tag,
             out.view_tag_x25519,
             &spend_key,
             0,
@@ -1660,6 +1725,8 @@ mod tests {
             &out.commitment,
             &out.enc_amount,
             out.amount_tag,
+            &out.enc_label,
+            out.label_tag,
             out.view_tag_x25519,
             &spend_key,
             0,
@@ -2138,6 +2205,8 @@ mod tests {
             &out.commitment,
             &out.enc_amount,
             out.amount_tag,
+            &out.enc_label,
+            out.label_tag,
             out.view_tag_x25519,
             &spend_key,
             idx,
@@ -2287,6 +2356,8 @@ mod tests {
             &out.commitment,
             &out.enc_amount,
             out.amount_tag,
+            &out.enc_label,
+            out.label_tag,
             out.view_tag_x25519,
             idx,
         )
@@ -2338,6 +2409,8 @@ mod tests {
                 &out.commitment,
                 &out.enc_amount,
                 out.amount_tag,
+                &out.enc_label,
+                out.label_tag,
                 out.view_tag_x25519,
                 idx,
             )
@@ -2413,6 +2486,8 @@ mod tests {
                 &[0u8; 32], // dummy commitment
                 &[0u8; 8],  // dummy enc_amount
                 0,          // dummy amount_tag
+                &[0u8; 8],  // dummy enc_label
+                0,          // dummy label_tag
                 0,          // dummy view_tag
                 0,          // output_index
             );
@@ -2451,6 +2526,8 @@ mod tests {
             &vec![0u8; 1088],
             &[0u8; 32],
             &[0u8; 32],
+            &[0u8; 8],
+            0,
             &[0u8; 8],
             0,
             0,

@@ -492,6 +492,8 @@ struct ShekylOutputData {
     uint8_t commitment[32];
     uint8_t enc_amount[8];
     uint8_t amount_tag;
+    uint8_t enc_label[8];
+    uint8_t label_tag;
     uint8_t view_tag_x25519;
     uint8_t kem_ciphertext_x25519[32];
     ShekylBuffer kem_ciphertext_ml_kem;
@@ -531,6 +533,8 @@ bool shekyl_scan_output(
     const uint8_t* commitment,
     const uint8_t* enc_amount,
     uint8_t amount_tag_on_chain,
+    const uint8_t* enc_label,
+    uint8_t label_tag_on_chain,
     uint8_t view_tag_on_chain,
     const uint8_t* spend_key,
     uint64_t output_index,
@@ -555,6 +559,8 @@ bool shekyl_scan_output_recover(
     const uint8_t* commitment,
     const uint8_t* enc_amount,
     uint8_t amount_tag_on_chain,
+    const uint8_t* enc_label,
+    uint8_t label_tag_on_chain,
     uint8_t view_tag_on_chain,
     uint64_t output_index,
     uint8_t* ho_out,
@@ -589,6 +595,8 @@ bool shekyl_scan_and_recover(
     const uint8_t* commitment,
     const uint8_t* enc_amount,
     uint8_t amount_tag_on_chain,
+    const uint8_t* enc_label,
+    uint8_t label_tag_on_chain,
     uint8_t view_tag_on_chain,
     uint64_t output_index,
     const uint8_t* spend_secret_key,

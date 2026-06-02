@@ -469,29 +469,35 @@ impl InternalScanner {
 
             let view_tag_on_chain: u8 = output.view_tag.unwrap_or(0);
 
-            let (enc_amount, amount_tag_on_chain, commitment_bytes) = match &tx {
-                Transaction::V2 {
-                    proofs: Some(ref proofs),
-                    ..
-                } => match proofs.base.encrypted_amounts.get(o) {
-                    Some(ea) => {
-                        let c = proofs.base.commitments.get(o).ok_or(
-                            ScanError::InvalidScannableBlock(
-                                "proofs without a commitment per output",
-                            ),
-                        )?;
-                        (ea.amount, ea.amount_tag, c.0)
+            let (enc_amount, amount_tag_on_chain, enc_label, label_tag_on_chain, commitment_bytes) =
+                match &tx {
+                    Transaction::V2 {
+                        proofs: Some(ref proofs),
+                        ..
+                    } => match proofs.base.encrypted_amounts.get(o) {
+                        Some(ea) => {
+                            let el = proofs.base.encrypted_labels.get(o).ok_or(
+                                ScanError::InvalidScannableBlock(
+                                    "proofs without an encrypted label per output",
+                                ),
+                            )?;
+                            let c = proofs.base.commitments.get(o).ok_or(
+                                ScanError::InvalidScannableBlock(
+                                    "proofs without a commitment per output",
+                                ),
+                            )?;
+                            (ea.amount, ea.amount_tag, el.label, el.label_tag, c.0)
+                        }
+                        None => continue,
+                    },
+                    _ => {
+                        if output.amount.is_some() {
+                            ([0u8; 8], 0u8, [0u8; 8], 0u8, [0u8; 32])
+                        } else {
+                            continue;
+                        }
                     }
-                    None => continue,
-                },
-                _ => {
-                    if output.amount.is_some() {
-                        ([0u8; 8], 0u8, [0u8; 32])
-                    } else {
-                        continue;
-                    }
-                }
-            };
+                };
 
             // --- Try KEM path (tag 0x06) ---
             let Some(blob) = kem_ct_blob else { continue };
@@ -516,6 +522,8 @@ impl InternalScanner {
                 &commitment_bytes,
                 &enc_amount,
                 amount_tag_on_chain,
+                &enc_label,
+                label_tag_on_chain,
                 view_tag_on_chain,
                 o as u64,
             ) else {

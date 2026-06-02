@@ -167,6 +167,10 @@ pub(crate) struct OutputDetectionInput {
     /// Amount-tag byte from the on-chain encrypted-amounts proof; used
     /// by `scan_output_recover` to validate amount integrity.
     pub amount_tag_on_chain: u8,
+    /// Encrypted label bytes (8-byte XOR-encrypted plaintext).
+    pub enc_label: [u8; 8],
+    /// Label-tag byte from the on-chain encrypted-labels proof.
+    pub label_tag_on_chain: u8,
     /// The output's index within its containing transaction. Used for
     /// HKDF context binding inside `try_claim_output`'s impl and as
     /// part of the `OutputHandle` derivation context.

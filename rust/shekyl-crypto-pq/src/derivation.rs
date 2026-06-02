@@ -165,6 +165,8 @@ const LABEL_OUTPUT_MASK: &[u8] = b"shekyl-output-mask";
 const LABEL_OUTPUT_AMOUNT_KEY: &[u8] = b"shekyl-output-amount-key";
 const LABEL_OUTPUT_VIEW_TAG_COMBINED: &[u8] = b"shekyl-output-view-tag-combined";
 const LABEL_OUTPUT_AMOUNT_TAG: &[u8] = b"shekyl-output-amount-tag";
+const LABEL_OUTPUT_LABEL_KEY: &[u8] = b"shekyl-output-label-key";
+const LABEL_OUTPUT_LABEL_TAG: &[u8] = b"shekyl-output-label-tag";
 const LABEL_OUTPUT_PQC: &[u8] = b"shekyl-pqc-output";
 const LABEL_OUTPUT_PQC_ED25519: &[u8] = b"shekyl-pqc-ed25519";
 const LABEL_VIEW_TAG_X25519: &[u8] = b"shekyl-view-tag-x25519";
@@ -182,6 +184,8 @@ const LABEL_VIEW_TAG_X25519: &[u8] = b"shekyl-view-tag-x25519";
 /// k_amount        =             HKDF-Expand(prk, "shekyl-output-amount-key"     || idx_le64, 32)
 /// view_tag_combined = first_byte(HKDF-Expand(prk, "shekyl-output-view-tag-combined" || idx_le64, 32))
 /// amount_tag      = first_byte(HKDF-Expand(prk, "shekyl-output-amount-tag"     || idx_le64, 32))
+/// k_label         =             HKDF-Expand(prk, "shekyl-output-label-key"      || idx_le64, 32)
+/// label_tag       = first_byte(HKDF-Expand(prk, "shekyl-output-label-tag"      || idx_le64, 32))
 /// ml_dsa_seed     =             HKDF-Expand(prk, "shekyl-pqc-output"           || idx_le64, 32)
 /// ed25519_pqc_seed=             HKDF-Expand(prk, "shekyl-pqc-ed25519"          || idx_le64, 32)
 /// ```
@@ -199,6 +203,10 @@ pub struct OutputSecrets {
     pub view_tag_combined: u8,
     /// 1-byte AAD checked at decode to detect KEM corruption
     pub amount_tag: u8,
+    /// Label encryption key (XOR with 8-byte label plaintext)
+    pub k_label: [u8; 32],
+    /// 1-byte AAD for label integrity at scan
+    pub label_tag: u8,
     /// ML-DSA-65 deterministic keygen seed
     pub ml_dsa_seed: [u8; 32],
     /// Ed25519 PQC component seed (for hybrid signing)
@@ -219,6 +227,8 @@ pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSec
     let k_amount = expand_32(&hk, LABEL_OUTPUT_AMOUNT_KEY, output_index);
     let view_tag_combined = expand_first_byte(&hk, LABEL_OUTPUT_VIEW_TAG_COMBINED, output_index);
     let amount_tag = expand_first_byte(&hk, LABEL_OUTPUT_AMOUNT_TAG, output_index);
+    let k_label = expand_32(&hk, LABEL_OUTPUT_LABEL_KEY, output_index);
+    let label_tag = expand_first_byte(&hk, LABEL_OUTPUT_LABEL_TAG, output_index);
     let ml_dsa_seed = expand_32(&hk, LABEL_OUTPUT_PQC, output_index);
     let ed25519_pqc_seed = expand_32(&hk, LABEL_OUTPUT_PQC_ED25519, output_index);
 
@@ -238,6 +248,8 @@ pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSec
         k_amount,
         view_tag_combined,
         amount_tag,
+        k_label,
+        label_tag,
         ml_dsa_seed,
         ed25519_pqc_seed,
     }
@@ -523,6 +535,10 @@ mod tests {
         k_amount: String,
         view_tag_combined: u8,
         amount_tag: u8,
+        k_label: String,
+        label_tag: u8,
+        enc_label_sentinel: String,
+        enc_label_sentinel_9: String,
         ml_dsa_seed: String,
         x25519_ss: String,
         view_tag_x25519: u8,
@@ -540,6 +556,8 @@ mod tests {
         file.vectors
     }
 
+    use crate::label::{encrypt_label_plaintext, sentinel_plaintext};
+
     #[test]
     fn output_secrets_known_answer_vectors() {
         let vectors = load_test_vectors();
@@ -553,6 +571,7 @@ mod tests {
             let expected_y = hex::decode(&v.y).unwrap();
             let expected_z = hex::decode(&v.z).unwrap();
             let expected_k = hex::decode(&v.k_amount).unwrap();
+            let expected_k_label = hex::decode(&v.k_label).unwrap();
             let expected_seed = hex::decode(&v.ml_dsa_seed).unwrap();
 
             assert_eq!(
@@ -583,6 +602,34 @@ mod tests {
                 secrets.amount_tag, v.amount_tag,
                 "vector {i}: amount_tag mismatch"
             );
+            assert_eq!(
+                secrets.k_label.as_slice(),
+                expected_k_label.as_slice(),
+                "vector {i}: k_label mismatch"
+            );
+            assert_eq!(
+                secrets.label_tag, v.label_tag,
+                "vector {i}: label_tag mismatch"
+            );
+
+            let enc = encrypt_label_plaintext(&sentinel_plaintext(), &secrets.k_label);
+            let expected_enc: [u8; 8] = hex::decode(&v.enc_label_sentinel)
+                .unwrap()
+                .try_into()
+                .unwrap();
+            assert_eq!(enc, expected_enc, "vector {i}: enc_label_sentinel mismatch");
+            let mut wire9_arr = [0u8; 9];
+            wire9_arr[..8].copy_from_slice(&enc);
+            wire9_arr[8] = secrets.label_tag;
+            let expected_wire9: [u8; 9] = hex::decode(&v.enc_label_sentinel_9)
+                .unwrap()
+                .try_into()
+                .unwrap();
+            assert_eq!(
+                wire9_arr, expected_wire9,
+                "vector {i}: enc_label_sentinel_9 mismatch"
+            );
+
             assert_eq!(
                 secrets.ml_dsa_seed.as_slice(),
                 expected_seed.as_slice(),
@@ -616,6 +663,8 @@ mod tests {
         assert_eq!(s1.k_amount, s2.k_amount);
         assert_eq!(s1.view_tag_combined, s2.view_tag_combined);
         assert_eq!(s1.amount_tag, s2.amount_tag);
+        assert_eq!(s1.k_label, s2.k_label);
+        assert_eq!(s1.label_tag, s2.label_tag);
         assert_eq!(s1.ml_dsa_seed, s2.ml_dsa_seed);
         assert_eq!(s1.ed25519_pqc_seed, s2.ed25519_pqc_seed);
     }

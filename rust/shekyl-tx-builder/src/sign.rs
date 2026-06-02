@@ -99,6 +99,7 @@ pub fn sign_transaction(
 
     // ── 4. Pre-computed encrypted amounts (HKDF k_amount XOR + tag) ─
     let enc_amounts: Vec<[u8; 9]> = outputs.iter().map(|out| out.enc_amount).collect();
+    let enc_labels: Vec<[u8; 9]> = outputs.iter().map(|out| out.enc_label).collect();
 
     // ── 5. Pseudo-output balancing ───────────────────────────────────
     // Generate random blindings for all-but-last input; the last mask is
@@ -174,6 +175,7 @@ pub fn sign_transaction(
         bulletproof_plus: bp_bytes,
         commitments: out_commitments,
         enc_amounts,
+        enc_labels,
         pseudo_outs: prove_result.pseudo_outs,
         fcmp_proof: prove_result.proof.data,
         pqc_auths: Vec::new(),

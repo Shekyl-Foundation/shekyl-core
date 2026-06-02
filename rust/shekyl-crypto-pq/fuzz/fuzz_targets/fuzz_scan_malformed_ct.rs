@@ -59,6 +59,8 @@ fuzz_target!(|data: &[u8]| {
         &od.commitment,
         &od.enc_amount,
         od.amount_tag,
+        &od.enc_label,
+        od.label_tag,
         od.view_tag_x25519,
         output_index,
     );
@@ -77,6 +79,8 @@ fuzz_target!(|data: &[u8]| {
                 &od.commitment,
                 &od.enc_amount,
                 od.amount_tag,
+                &od.enc_label,
+                od.label_tag,
                 od.view_tag_x25519,
                 output_index,
             );
@@ -99,6 +103,8 @@ fuzz_target!(|data: &[u8]| {
         &od.commitment,
         &od.enc_amount,
         od.amount_tag,
+        &od.enc_label,
+        od.label_tag,
         od.view_tag_x25519,
         output_index,
     );
@@ -115,6 +121,8 @@ fuzz_target!(|data: &[u8]| {
             &od.commitment,
             &od.enc_amount,
             od.amount_tag,
+            &od.enc_label,
+            od.label_tag,
             od.view_tag_x25519,
             output_index,
         );

@@ -1232,6 +1232,8 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const rct::rctSig& 
   INSERT_INTO_JSON_OBJECT(dest, message, sig.message);
   if (!sig.enc_amounts.empty())
     INSERT_INTO_JSON_OBJECT(dest, enc_amounts, sig.enc_amounts);
+  if (!sig.enc_labels.empty())
+    INSERT_INTO_JSON_OBJECT(dest, enc_labels, sig.enc_labels);
   if (!sig.outPk.empty())
     INSERT_INTO_JSON_OBJECT(dest, commitments, transform(sig.outPk, just_mask));
   if (sig.type == rct::RCTTypeFcmpPlusPlusPqc)
@@ -1272,6 +1274,8 @@ void fromJsonValue(const rapidjson::Value& val, rct::rctSig& sig)
     GET_FROM_JSON_OBJECT(val, sig.message, message);
   if (val.HasMember("enc_amounts"))
     GET_FROM_JSON_OBJECT(val, sig.enc_amounts, enc_amounts);
+  if (val.HasMember("enc_labels"))
+    GET_FROM_JSON_OBJECT(val, sig.enc_labels, enc_labels);
   if (val.HasMember("commitments"))
     GET_FROM_JSON_OBJECT(val, sig.outPk, commitments);
   if (sig.type == rct::RCTTypeFcmpPlusPlusPqc)
