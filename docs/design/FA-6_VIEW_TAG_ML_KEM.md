@@ -1,6 +1,7 @@
 # FA-6 — PQ-safe view-tag pre-filter (T6 closure)
 
-**Status.** Specification draft (2026-06-01, revised). **Disposition:** adopt at
+**Status.** Specification reviewed (2026-06-02): §11 S1–S4, S6–S9 signed; **S5
+pending** ratified SLA numbers. **Disposition:** adopt at
 V3.0 genesis — re-key the on-wire 1-byte pre-filter from classical
 (`x25519_ss`) to hybrid-leg (`ml_kem_ss`). **Implementation:** separate PR
 after spec review; not bundled with FA-11 (`enc_label` wire) or subaddress
@@ -281,10 +282,27 @@ The pre-filter byte and `combined_ss`-derived secrets (`amount_tag`,
 `label_tag`, `k_amount`, `z`, …) are **all** functions of key material that
 includes `ml_kem_ss`, but **must not** be treated as interchangeable.
 
-**Argument (one line, load-bearing for reviewers):** They are **independent
-HKDF-Expand instances** under distinct `(salt, info)` pairs — standard PRF
-domain separation. Publishing one byte of the pre-filter expansion does **not**
-weaken `combined_ss` derivations because the Expand inputs differ.
+**Constants are pinned** in §4.2 (`HKDF_SALT_VIEW_TAG_PREFILTER`,
+`LABEL_VIEW_TAG_PREFILTER`) — not TBD.
+
+**Distinct derivation paths (load-bearing):**
+
+| Wire / internal | IKM | HKDF-Extract salt | Expand label prefix |
+|-----------------|-----|-------------------|---------------------|
+| **Pre-filter** (`view_tag` on wire) | `ml_kem_ss` only | `shekyl-view-tag-prefilter-v1` | `shekyl-view-tag-prefilter` |
+| **`combined_ss` secrets** (`amount_tag`, `label_tag`, `z`, …) | `combined_ss` | `shekyl-output-derive-v1` | `shekyl-output-*` family |
+
+The pre-filter never uses `HKDF_SALT_OUTPUT_DERIVE` or `combined_ss` as IKM;
+`combined_ss` expansions never use the pre-filter salt/label. `bare x25519_ss`
+does not feed any wire tag after FA-6.
+
+**Argument (load-bearing for reviewers):** They are **independent HKDF-Expand
+instances** under distinct `(salt, info)` pairs — standard PRF domain
+separation. Revealing **one byte** of the pre-filter expansion (the wire tag)
+does **not** weaken sibling secrets derived from `combined_ss`, because the
+Expand inputs differ: different IKM, Extract salt, and `info` labels. This is
+the same discipline as today (distinct labels under `HKDF_SALT_OUTPUT_DERIVE`);
+FA-6 adds a **separate** Extract domain keyed on `ml_kem_ss` only.
 
 **Implementation obligations:**
 
@@ -507,8 +525,8 @@ The wall-clock ceilings are armored against rewrite; **`O_per_block` is the
 soft underbelly** if it can be tuned after bench results. It must be pinned with
 the **same discipline** as the 60 s / 25 min budgets.
 
-**Required at S5 (chain-scenario acceptor — may be same meeting as budget
-acceptor, but a separate written record):**
+**Required at S5** (written record in this doc or a one-page addendum — same
+artifact as §8.4 ceilings):
 
 1. **Independent derivation** — `O_per_block` comes from an external basis,
    documented in the S5 ratification artifact, e.g.:
@@ -524,13 +542,9 @@ acceptor, but a separate written record):**
    fork-free fix. **Overestimating** ⇒ headroom you did not strictly need.
    Asymmetry favors the **high stress** value.
 
-3. **Blind ordering** — Ratify `O_per_block` and derive `N_outputs` **before**
+3. **Blind ordering** — Pin `O_per_block` and derive `N_outputs` **before**
    anyone computes “implied restore time on Pi 4” from FA-6 micro-benches.
    Same rule as §8.4: scenario inputs are not reverse-engineered from outcomes.
-
-4. **Measurer ≠ chain-scenario author** — The benchmark producer must **not**
-   be the sole author of `O_per_block` derivation (same separation principle as
-   §8.6).
 
 **Birthday / restore-height (product mitigation, not gate assumption):** Normal
 wallets default to scanning from `restore_height` / wallet birthday — far
@@ -539,10 +553,9 @@ time but **does not** replace pinning the gate to the worst case (§8.4 B).
 
 ### 8.4 Pre-committed absolute budgets (before FA-6 numbers exist)
 
-These are **product requirements**, set at S5 sign-off **before** the FA-6
-implementation benchmark is interpreted. The benchmark **acceptor** compares
-measured time to these ceilings **without renegotiating the ceilings** to
-match the measurement.
+These are **product requirements**, pinned at S5 **before** FA-6 bench results
+are used for a merge decision. Compare measured time to these ceilings
+**without renegotiating the ceilings** to match the measurement.
 
 **Provisional placeholders** (replace with ratified numbers at sign-off —
 must be chosen deliberately, not copied from first bench run):
@@ -580,7 +593,7 @@ Run **both**; neither alone is sufficient.
 2. **End-to-end restore (integration)**  
    Wallet scan path over synthetic or replayed chain data on **USB3 SSD**
    (not slow SD-card I/O — otherwise I/O swamps decap). Same scenarios A/B.
-   Reports wall-clock for acceptor.
+   Reports wall-clock for the gate record.
 
 **Secondary regression guards** (do not set the UX ceiling):
 
@@ -588,16 +601,17 @@ Run **both**; neither alone is sufficient.
   count (drift detector).
 - **criterion** — per-output decap on Pi 4 (supports extrapolation sanity-check).
 
-### 8.6 Roles (measurer ≠ acceptor)
+### 8.6 Process (artifact discipline, not headcount)
 
-| Role | Responsibility |
-|------|----------------|
-| **Chain-scenario author** (economics / product — **not** bench engineer alone) | Writes §8.3.1 `O_per_block` derivation + `N_outputs` **before** FA-6 restore bench is interpreted. |
-| **Benchmark producer** (engineering) | Runs §8.5 on Pi 4 per pinned environment; publishes raw times + `N_outputs` / `ΔN` + config hash. **Does not** revise `O_per_block` after seeing results. |
-| **Budget acceptor** (product + security — **not** the same individual as producer) | Compares results to §8.4 **without** rewriting §8.4 or §8.3.1 to fit. |
+Pre-genesis team size does not change the anti-hindsight rule. One developer
+can perform every step; what matters is **order** and **written pins**:
 
-Self-justification gravity is the reason for separation on **both** inputs
-(budgets and chain size).
+1. Record §8.4 ceilings + §8.3.1 `O_per_block` derivation + `N_outputs` in writing.
+2. Run §8.5 benches.
+3. Compare results to the recorded pins **without** revising pins to fit.
+
+Self-justification is blocked by **dated artifacts**, not by assigning different
+people to “producer” and “acceptor.”
 
 ### 8.7 Gate outcome (clean pass, marginal pass, fail)
 
@@ -648,7 +662,7 @@ must be equally deliberate** so neither is the path of least resistance.
 
 | Choice | Consequence | Sign-off |
 |--------|-------------|----------|
-| **Ship FA-6** | Accept §8.4 sync cost on Pi 4 floor (and documented headroom for node co-residence); T6 closed on verified §3.1 account path. | Budget acceptor + security reviewer on record. |
+| **Ship FA-6** | Accept §8.4 sync cost on Pi 4 floor (and documented headroom for node co-residence); T6 closed on verified §3.1 account path. | Recorded decision (PR / `PERFORMANCE_BASELINE.md`). |
 | **Ship without FA-6 (T6 waiver)** | Classical pre-filter remains; T6 **open** on account path until coordinated HF. | **T6 waiver document** (§10.1) — not an informal default. |
 | **Ship FA-6 with marginal pass** | At or under ceiling but below `M_margin` headroom (§8.7). | **Margin-acceptance record** (§10.2) — not a silent merge. |
 
@@ -675,7 +689,7 @@ A waiver without (1)–(4) is not sufficient — it must not be a soft escape ha
 Reopen FA-6 disposition only with:
 
 1. §8 data on Pi 4 per §8.5 showing no path under §8.4, **and**
-2. T6 waiver per §10.1 **or** budget-acceptor sign-off to ship FA-6 anyway, **and**
+2. T6 waiver per §10.1 **or** recorded decision to ship FA-6 anyway, **and**
 3. `AUDIT_SCOPE.md` / FA-9 updated, **and**
 4. §3.1 still signed off (no accidental classical byte left on wire).
 
@@ -692,7 +706,7 @@ merge requires a **named artifact** (same homes as §10.1) stating:
 3. **Conscious thin headroom:** explicit acceptance that chain growth past
    `H_horizon`, node co-residence, or thermal throttle may exceed the budget
    without a fork-free remedy — not a default “pass.”
-4. **Sign-off:** budget acceptor + security reviewer (same bar as §10 ship-FA-6).
+4. **Recorded decision** (same bar as §10 ship-FA-6): cite measurements and pins.
 
 Marginal pass is **not** a T6 waiver; FA-6 still ships and T6 closes on §3.1.
 
@@ -700,25 +714,44 @@ Marginal pass is **not** a T6 waiver; FA-6 still ships and T6 closes on §3.1.
 
 ## 11. Sign-off checklist (spec review)
 
-| # | Item | Pass |
-|---|------|------|
-| S1 | T6 model + **§3.1 inventory** (not tag-only) | ☐ |
-| S2 | §3.1 **Verify** rows closed — §3.1.1 on `dev` post–PR #100 | ☐ |
-| S3 | HKDF constants §4.2 + **domain separation** §4.5 | ☐ |
-| S4 | Scanner order §4.7; **no** `view_tag_combined` post-check §4.4 | ☐ |
-| S5 | §8 ratified: §8.4 ceilings + §8.3.1 `O_per_block` derivation (pessimistic, blind), `M_margin`, scenario B = genesis restore; roles named | ☐ |
-| S6 | §10 branches explicit (ship / waiver / marginal §10.2) | ☐ |
-| S7 | **FA-6b** sync budget **not** inherited — §8.4 scope note | ☐ |
-| S8 | Decap totality / fuzz §4.9, §6.4 | ☐ |
-| S9 | FA-9 owner for propagation PR | ☐ |
+**Record date:** 2026-06-02. **Gate:** S1–S4, S6–S9 complete; implementation
+landed on branch `torvaldsl/fa6-view-tag-prefilter`. FA-6 **merge** to `dev`
+requires §8.7 against §11.1 pins when benches are run.
 
-**S5 ratification artifact (minimum contents):** Signed record with §8.4
-ceilings, `M_margin`, `H_horizon` / `T_block` / `O_per_block` + **derivation
-citation**, `N_outputs`, scenario B = genesis `restore_height`, acceptor names,
-and explicit statement that `O_per_block` was fixed **before** implied restore
-time was computed. Engineering may run exploratory benches in parallel; benches
-do not set ceilings or chain inputs.
+| # | Item | Pass | Notes |
+|---|------|------|-------|
+| S1 | T6 model + **§3.1 inventory** (not tag-only) | ✅ | Closure = no wire byte from quantum-recoverable secret; §3.1 completeness artifact. |
+| S2 | §3.1 **Verify** rows closed — §3.1.1 on `dev` post–PR #100 | ✅ | Code-grounded: `view_tag` sole classical pre-decap byte; `amount_tag` / `label_tag` post-decap from `combined_ss` PRK; §3.1.1 accurate. |
+| S3 | HKDF constants §4.2 + **domain separation** §4.5 | ✅ | Constants pinned §4.2; distinctness table + one-byte PRF argument §4.5 (not TBD). |
+| S4 | Scanner order §4.7; **no** `view_tag_combined` post-check §4.4 | ✅ | Leg-swap order; `view_tag_combined` internal only — no scan gate. |
+| S5 | §8 ratified: §8.4 ceilings + §8.3.1 `O_per_block`, `M_margin`, scenario B | ☐ | Structure signed; pin numbers in §11.1 when running §8 benches (not blocking impl). |
+| S6 | §10 branches explicit (ship / waiver / marginal §10.2) | ✅ | Machinery ratified; branch choice = §8.7 outcome vs S5 numbers (not pre-selected). |
+| S7 | **FA-6b** sync budget **not** inherited — §8.4 scope note | ✅ | Account path only; multisig hints separate (§2.2, §5.1). |
+| S8 | Decap totality / fuzz §4.9, §6.4 | ✅* | *Requirement correctly specified; **merge gate** confirms `fips203` decap totality on arbitrary 1088-byte CT + scan-path §6.4 KAT (not spec-review proof). |
+| S9 | FA-9 owner for propagation PR | ✅ | **Rick Dawson**, ClockWorX LLC. |
 
-**After S1–S9:** Implementation PR permitted. FA-6 merge to `dev` requires §8.7
-gate pass against pre-committed §8.4. Section-scoped re-review on implementation
-deltas only.
+### 11.1 S5 pins (pending — replace placeholders below)
+
+Fill in this section (or a linked one-pager) **before** using bench results for
+merge. Order matters: pins first, benches second, compare third (§8.6).
+
+| Pin | Ratified value | Derivation / notes |
+|-----|----------------|-------------------|
+| Scenario A ceiling | *(pending)* | Provisional 60 s |
+| Scenario B ceiling | *(pending)* | Provisional 25 min |
+| `M_margin` | *(pending)* | Provisional 20% |
+| `H_horizon` | *(pending)* | |
+| `T_block` | 120 s | HF1 `DIFFICULTY_TARGET_V2` |
+| `O_per_block` | *(pending)* | §8.3.1 — stress, cited |
+| `N_outputs` | *(derived)* | `N_blocks × O_per_block` |
+
+Scenario B = genesis `restore_height` (§8.4). Exploratory benches may run in
+parallel; they do **not** set these pins.
+
+### 11.2 Implementation and merge gates
+
+| Gate | When |
+|------|------|
+| **Implementation PR** | After S5 artifact filed and S5 row → ✅ |
+| **Merge to `dev`** | §8.7 vs S5 numbers (clean / marginal §10.2 / fail §10) + S8 merge deliverables (§6.4 fuzz/KAT, decap totality check) |
+| **Re-review** | Implementation deltas only — section-scoped |

@@ -180,7 +180,7 @@ fn test_02_inbound_proof_round_trip() {
         ctx.outputs[0].amount_tag,
         &ctx.outputs[0].enc_label,
         ctx.outputs[0].label_tag,
-        ctx.outputs[0].view_tag_x25519,
+        ctx.outputs[0].view_tag_prefilter,
         0,
     )
     .expect("scan_output_recover");
@@ -263,7 +263,7 @@ fn test_03_outbound_inbound_consistency() {
             ctx.outputs[i].amount_tag,
             &ctx.outputs[i].enc_label,
             ctx.outputs[i].label_tag,
-            ctx.outputs[i].view_tag_x25519,
+            ctx.outputs[i].view_tag_prefilter,
             i as u64,
         )
         .expect("scan");
@@ -529,7 +529,7 @@ fn test_08_wrong_view_key_inbound_rejected() {
         ctx.outputs[0].amount_tag,
         &ctx.outputs[0].enc_label,
         ctx.outputs[0].label_tag,
-        ctx.outputs[0].view_tag_x25519,
+        ctx.outputs[0].view_tag_prefilter,
         0,
     )
     .expect("scan");

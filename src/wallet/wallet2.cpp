@@ -10218,7 +10218,7 @@ std::vector<wallet2::pending_tx> wallet2::create_claim_transaction(const std::ve
     crypto::public_key out_key;
     memcpy(out_key.data, od.output_key, 32);
     crypto::view_tag vt;
-    vt.data = od.view_tag_x25519;
+    vt.data = od.view_tag_prefilter;
 
     cryptonote::tx_out out;
     cryptonote::set_tx_out(out_amounts[oi], out_key, true, vt, out);

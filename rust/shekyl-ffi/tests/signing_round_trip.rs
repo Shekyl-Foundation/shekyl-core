@@ -148,7 +148,7 @@ fn construct_output_ffi(
         amount_tag: data.amount_tag,
         enc_label: data.enc_label,
         label_tag: data.label_tag,
-        view_tag: data.view_tag_x25519,
+        view_tag: data.view_tag_prefilter,
         kem_ct_x25519: data.kem_ciphertext_x25519,
         kem_ct_ml_kem,
         h_pqc: data.h_pqc,

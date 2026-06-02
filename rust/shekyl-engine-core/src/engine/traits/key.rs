@@ -83,11 +83,9 @@ use crate::engine::error::KeyEngineError;
 /// `STAGE_1_PR_3_KEY_ENGINE.md` §3.3 Sub-bundle A's
 /// `VIEW_TAG_BYTES` row (A4 disposition Round 3 §3.1.4).
 ///
-/// 1 byte matches `shekyl_crypto_pq::derivation::derive_view_tag_x25519`'s
-/// `u8` return type and bounds the X25519-only pre-filter false-positive
-/// rate to 2⁻⁸ per output. A future widening migration would bump this
-/// constant and the underlying HKDF salt suffix
-/// (`HKDF_SALT_VIEW_TAG_X25519`'s `-v1`) together.
+/// 1 byte matches `shekyl_crypto_pq::derivation::derive_view_tag_prefilter`'s
+/// `u8` return type (FA-6 ML-KEM-keyed pre-filter). A future widening migration
+/// would bump this constant and `HKDF_SALT_VIEW_TAG_PREFILTER`'s `-v1` together.
 pub(crate) const VIEW_TAG_BYTES: usize = 1;
 
 // --- Address aliases -------------------------------------------------------

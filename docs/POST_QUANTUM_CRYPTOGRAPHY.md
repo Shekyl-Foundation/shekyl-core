@@ -389,11 +389,11 @@ fast wallet scanning.
 | `label_tag` | `shekyl-output-derive-v1` | `shekyl-output-label-tag` &#124;&#124; index\_le64 | 1 B | first byte |
 | `ml_dsa_seed` | `shekyl-output-derive-v1` | `shekyl-pqc-output` &#124;&#124; index\_le64 | 32 B | raw |
 
-**Secondary derivation (X25519 shared secret only, for fast scan):**
+**Secondary derivation (ML-KEM shared secret only, wire pre-filter — FA-6):**
 
 | Secret | Salt | Info string | Output | Reduction |
 |--------|------|-------------|--------|-----------|
-| `view_tag_x25519` | `shekyl-view-tag-x25519-v1` | `shekyl-view-tag` &#124;&#124; index\_le64 | 1 B | first byte |
+| `view_tag_prefilter` (wire `view_tag`) | `shekyl-view-tag-prefilter-v1` | `shekyl-view-tag-prefilter` &#124;&#124; index\_le64 | 1 B | first byte |
 
 - `index_le64` is the output index as a little-endian 8-byte integer.
 - "wide reduce" means expanding 64 bytes via HKDF-Expand, then reducing
@@ -479,22 +479,23 @@ X25519 ephemeral key (ensuring the view-tag pre-filter matches) so the fuzzer re
 ML-KEM decapsulation and downstream algebraic checks. Test 3 corrupts the X25519 key to
 separately exercise the view-tag rejection path.
 
-#### View-Tag Pre-Filter
+#### View-Tag Pre-Filter (FA-6)
 
-The X25519-only view tag (`derive_view_tag_x25519`) is a cheap O(1) pre-filter that
-rejects ~255/256 of non-owned outputs before the expensive ML-KEM decapsulation. On a
-view-tag match, the **full** verification chain runs without abbreviation:
+The wire `view_tag` is `derive_view_tag_prefilter(ml_kem_ss, output_index)` — keyed on
+ML-KEM shared secret only (T6). The scanner runs **ML-KEM decap on every output**, compares
+the pre-filter byte, then on match runs X25519 ECDH and the full recovery chain:
 
-1. Full ML-KEM-768 decapsulation
-2. HKDF derivation of ALL output secrets (ho, y, z, k_amount, amount_tag, ml_dsa_seed)
-3. Amount tag verification (probabilistic rejection)
-4. Amount decryption
-5. Output key / commitment algebraic verification
-6. PQC keypair derivation
+1. ML-KEM-768 decapsulation (universal)
+2. View-tag pre-filter compare
+3. X25519 ECDH (on match)
+4. HKDF / amount_tag / label_tag / decrypt / commitment open / PQC keygen
 
-An attacker grinding view tags to match a victim's X25519 tag wastes only their own CPU.
-Each successful tag match triggers the complete verification chain including two independent
-algebraic checks. The view tag reveals no information beyond what the attacker already has
+~255/256 outputs still pay decap but skip X25519 and downstream work. The tag is not
+computable from view-half or quantum-recovered view scalar alone.
+
+An attacker grinding tags without `ml_kem_dk` cannot predict the filter byte. Each match
+triggers the complete verification chain including commitment opening. The tag reveals no
+information beyond what the attacker already has
 (the X25519 ephemeral key is on-chain).
 
 **Independence of algebraic checks**: The two verification equations use different HKDF

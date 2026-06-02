@@ -297,7 +297,7 @@ fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey)
         outputs.push(Output {
             amount: None,
             key: CompressedPoint(out.output_key),
-            view_tag: Some(out.view_tag_x25519),
+            view_tag: Some(out.view_tag_prefilter),
             staking: None,
         });
         commitments.push(CompressedPoint(out.commitment));
@@ -502,7 +502,7 @@ mod tests {
             out.amount_tag,
             &out.enc_label,
             out.label_tag,
-            out.view_tag_x25519,
+            out.view_tag_prefilter,
             /* output_index */ 0,
         )
         .expect(
@@ -540,7 +540,7 @@ mod tests {
             out.amount_tag,
             &out.enc_label,
             out.label_tag,
-            out.view_tag_x25519,
+            out.view_tag_prefilter,
             /* output_index */ 0,
         );
 

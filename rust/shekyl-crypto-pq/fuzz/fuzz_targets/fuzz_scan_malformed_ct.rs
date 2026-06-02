@@ -61,7 +61,7 @@ fuzz_target!(|data: &[u8]| {
         od.amount_tag,
         &od.enc_label,
         od.label_tag,
-        od.view_tag_x25519,
+        od.view_tag_prefilter,
         output_index,
     );
 
@@ -81,7 +81,7 @@ fuzz_target!(|data: &[u8]| {
                 od.amount_tag,
                 &od.enc_label,
                 od.label_tag,
-                od.view_tag_x25519,
+                od.view_tag_prefilter,
                 output_index,
             );
         }
@@ -105,7 +105,7 @@ fuzz_target!(|data: &[u8]| {
         od.amount_tag,
         &od.enc_label,
         od.label_tag,
-        od.view_tag_x25519,
+        od.view_tag_prefilter,
         output_index,
     );
 
@@ -123,7 +123,7 @@ fuzz_target!(|data: &[u8]| {
             od.amount_tag,
             &od.enc_label,
             od.label_tag,
-            od.view_tag_x25519,
+            od.view_tag_prefilter,
             output_index,
         );
     }

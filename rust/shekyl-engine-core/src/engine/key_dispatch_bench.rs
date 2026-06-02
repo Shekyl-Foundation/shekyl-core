@@ -127,7 +127,7 @@ fn build_output_paid_to(
         },
         output_key: constructed.output_key,
         commitment: constructed.commitment,
-        view_tag: ViewTag([constructed.view_tag_x25519]),
+        view_tag: ViewTag([constructed.view_tag_prefilter]),
         enc_amount: constructed.enc_amount,
         amount_tag_on_chain: constructed.amount_tag,
         enc_label: constructed.enc_label,
