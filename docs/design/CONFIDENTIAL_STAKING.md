@@ -101,16 +101,28 @@ coupling (§8), rate denominator (§4), supply-safety reference (§9).
 
 ## 2. The confidential staked output
 
+**Pedersen scalar names** (Shekyl / [`proof.rs`](../../rust/shekyl-fcmp/src/proof.rs);
+same symbols at stake, spend, and claim):
+
+| Symbol | Meaning | Not |
+|--------|---------|-----|
+| `amount` | Committed value (atomic units) on `H` | — |
+| `z` | Commitment mask on `G` (`OutputSecrets.z`, witness `z`) | — |
+| `a` | Pseudo-out blinding (`pseudo_out_blind`, witness `a`) | **Never** the staked amount |
+| `x` | Spend secret `ho + b` (witness `x`) | — |
+
+**Commitment form (uniform for regular, coinbase, and staked outputs):**
+
+`C = z·G + amount·H` (equivalently `amount·H + z·G`; mask on `G`, value on `H`).
+
 A stake is created by a transaction that produces a `txout_to_staked_key` output
 carrying, **instead of a cleartext amount** (current `blockchain.cpp:3476–3478`):
 
-- **`C_stake = a·H + z·G`** — Pedersen commitment to the staked amount `a` with mask
-  `z` (Shekyl convention: amount on `H`, mask on `G`, matching the regular output
-  commitment `C = z·G + amount·H`). The stake tx's RCT balance prevents committing to
-  more than is locked; the commitment form is **uniform** with regular and coinbase
-  outputs (preserving the single output-format anonymity posture).
-- **range proof** on `C_stake` (Bulletproof+) — `a ∈ [0, 2^k)` — bounding the amount
-  so the supply-safety reference in §9 is real.
+- **`C_stake = z·G + amount·H`** — Pedersen commitment to principal `amount` with mask
+  `z`. The stake tx's RCT balance prevents committing to more than is locked; the form
+  matches regular outputs (single output-format anonymity posture).
+- **range proof** on `C_stake` (Bulletproof+) — `amount ∈ [0, 2^k)` — bounding the
+  principal so the supply-safety reference in §9 is real.
 - **`tier`** (public; one of 3) and **`creation_height`** (public; block height).
 - **`band`** (public; §4.4) — a coarse band with a **range proof binding the band to
   `C_stake`** (anti-lie; the staker cannot declare a band their commitment is not in).
@@ -119,12 +131,13 @@ carrying, **instead of a cleartext amount** (current `blockchain.cpp:3476–3478
   and `G_S` is a public per-settlement-epoch base — not a new HKDF field on
   `OutputSecrets`.
 
-**Weight.** `w = a · tier_num / SCALE`, `tier_num ∈ {1_000_000, 1_500_000,
+**Weight.** `w = amount · tier_num / SCALE`, `tier_num ∈ {1_000_000, 1_500_000,
 2_000_000}` (the existing `yield_multiplier` fixed point, `SCALE = 1e6`,
 [`shekyl-staking/src/tiers.rs`](../rust/shekyl-staking/src/tiers.rs)). Tier is public,
 so the **weight commitment** is the public scalar multiple `tier_num · C_stake`
-(committing to `tier_num·a`); the `/SCALE` is folded into the rate (§3) so the
-per-claim entitlement scalar is an exact integer (no division inside the proof).
+(committing to `tier_num·amount` homomorphically); the `/SCALE` is folded into the
+rate (§3) so the per-claim entitlement scalar is an exact integer (no division inside
+the proof).
 
 **Decision (pinned): tier public.** Committing the tier would turn the entitlement
 scalar-mult into a multiplication gadget for a ~1.6-bit privacy gain that lock
@@ -286,8 +299,11 @@ watermark/`staked_output_index` machinery (`check_stake_claim_input`,
 
 ### 6.1 Statement of knowledge
 
-A claim transaction proves, in zero knowledge, knowledge of `(a, z, x, z_claim)` and a
-membership witness such that:
+A claim transaction proves, in zero knowledge, knowledge of the stake/claim scalars
+`(z, amount, x, a, z_claim)` — where **`amount`** is the hidden principal,
+**`z`** the stake commitment mask, **`x`** the spend secret, **`a`** the membership
+pseudo-out blinding (`C~ = a·G + amount·H`; §6.4.1), **`z_claim`** the claim-output mask
+— and a membership witness such that:
 
 1. **Membership.** `C_stake` is a leaf under the staked-output tree root (FCMP++
    membership over the same 4-scalar leaf as spends — §6.4) — does **not** reveal which.
@@ -306,7 +322,8 @@ membership witness such that:
 5. **Range.** `C_claim` carries a Bulletproof+ range proof (non-negative, bounded).
 6. **Mint.** the claim mints `C_claim` as a normal, self-addressed FCMP++ reward
    output (two-component `O = ho·G + B + y·T`, KEM-self-encap; the staker opens it
-   from the public `M` and known `a`), entering the unified deferred-insertion tree.
+   from the public `M` and the proven principal `amount`), entering the unified
+   deferred-insertion tree.
 
 Settlement is **pull**: the staker builds the claim and the reward output and proves
 entitlement; consensus verifies. The membership proof hides which stake funds the
@@ -339,7 +356,8 @@ Because `G_S ≠ Hp(O)`, publishing `N_S` does **not** reveal the principal key 
 The nullifier set is a **new consensus table** (distinct from spent key images), is
 **reorg-state** (§11), and is deterministically **recomputable on rescan** from `x` and
 public `S` (wallet: intersect chain set with `{ x·G_S : S ∈ accrued_epochs }` — §4.2
-there).
+there). Wallet **does not persist `x`** in `StakeOpening`; derives `x = ho + b`
+transiently ([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §3.3.1).
 
 **Rejected alternative (Round 1 review):** `N_S = PRF(nullifier_seed, S)` with a new
 HKDF-derived `nullifier_seed` on `OutputSecrets`. Superseded by the key-image-variant
@@ -372,9 +390,17 @@ the proof class for **(A)** entitlement.
 #### 6.4.1 (A) Entitlement — **solved off-circuit**
 
 **Pin:** Membership already exposes the rerandomized pseudo-out `C~` per input
-(`shekyl_fcmp_prove` → `pseudo_outs`; verifier checks them). With public integer `M`,
-prove `C_claim − M·C~ ∈ ⟨G⟩` via a **commitment-to-zero Schnorr** (knowledge of
-`z_claim − M·a` in the Shekyl `C = z·G + a·H` convention). Same auditable family as
+(`shekyl_fcmp_prove` → `pseudo_outs`; verifier checks them). Scalar names match
+[`proof.rs`](../../rust/shekyl-fcmp/src/proof.rs) (`ProveInput`, lines 156–166):
+
+- `C~ = a·G + amount·H` where **`a`** is `pseudo_out_blind` (witness field `a`), not
+  the staked amount.
+- `C_claim = z_claim·G + (M·amount)·H` where **`z_claim`** is the claim output's
+  Pedersen mask.
+
+With public integer `M`, prove `C_claim − M·C~ ∈ ⟨G⟩` via a **commitment-to-zero
+Schnorr** proving knowledge of **`d = z_claim − M·a`** (one scalar; `a` is the same
+pseudo-out blinding the membership witness used for `C~`). Same auditable family as
 reserve DLEQ; **no FCMP++ circuit extension required** for v1.
 
 In-circuit entitlement remains a future hardening option, not the Round 1 blocker.
