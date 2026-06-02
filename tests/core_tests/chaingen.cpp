@@ -1316,7 +1316,7 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     crypto::public_key out_key;
     memcpy(out_key.data, od.output_key, 32);
     crypto::view_tag vt;
-    vt.data = od.view_tag_x25519;
+    vt.data = od.view_tag_prefilter;
 
     tx_out out;
     cryptonote::set_tx_out(block_reward, out_key, true, vt, out);
@@ -1405,7 +1405,7 @@ bool append_v3_output_to_miner_tx(transaction& tx, const crypto::secret_key& txk
   crypto::public_key out_key;
   memcpy(out_key.data, od.output_key, 32);
   crypto::view_tag vt;
-  vt.data = od.view_tag_x25519;
+  vt.data = od.view_tag_prefilter;
 
   tx_out out;
   cryptonote::set_tx_out(amount, out_key, true, vt, out);

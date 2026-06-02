@@ -127,7 +127,7 @@ namespace
         out.amount_tag = data.amount_tag;
         memcpy(out.enc_label, data.enc_label, 8);
         out.label_tag = data.label_tag;
-        out.view_tag = data.view_tag_x25519;
+        out.view_tag = data.view_tag_prefilter;
         memcpy(out.kem_ct_x25519, data.kem_ciphertext_x25519, 32);
         out.kem_ct_ml_kem.assign(
             data.kem_ciphertext_ml_kem.ptr,

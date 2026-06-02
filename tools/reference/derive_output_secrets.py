@@ -70,9 +70,9 @@ LABEL_K_LABEL        = "shekyl-output-label-key"
 LABEL_LABEL_TAG      = "shekyl-output-label-tag"
 LABEL_ML_DSA_SEED    = "shekyl-pqc-output"
 
-# Instance 2: X25519-only view tag
-SALT_X25519_VT = b"shekyl-view-tag-x25519-v1"
-LABEL_VIEW_TAG_X25519 = "shekyl-view-tag-x25519"
+# Instance 2: ML-KEM-keyed view-tag pre-filter (FA-6)
+SALT_VIEW_TAG_PREFILTER = b"shekyl-view-tag-prefilter-v1"
+LABEL_VIEW_TAG_PREFILTER = "shekyl-view-tag-prefilter"
 
 
 def derive_output_secrets(combined_ss: bytes, output_index: int) -> dict:
@@ -137,15 +137,25 @@ def derive_output_secrets(combined_ss: bytes, output_index: int) -> dict:
     }
 
 
-def derive_view_tag_x25519(x25519_ss: bytes, output_index: int) -> int:
-    """
-    Derive the X25519-only view tag (wire/scanner pre-filter).
-
-    Uses a separate HKDF instance with its own salt.
-    """
-    prk = hkdf_extract_sha512(SALT_X25519_VT, x25519_ss)
-    raw = hkdf_expand_sha512(prk, make_info(LABEL_VIEW_TAG_X25519, output_index), 32)
+def derive_view_tag_prefilter(ml_kem_ss: bytes, output_index: int) -> int:
+    """Derive the ML-KEM-keyed view-tag pre-filter byte (FA-6 wire tag)."""
+    prk = hkdf_extract_sha512(SALT_VIEW_TAG_PREFILTER, ml_kem_ss)
+    raw = hkdf_expand_sha512(prk, make_info(LABEL_VIEW_TAG_PREFILTER, output_index), 32)
     return raw[0]
+
+
+def ml_kem_ss_for_vector(combined_ss: bytes) -> bytes:
+    """Synthetic IKM for Instance-2 / pre-filter KAT rows (not wire decap output).
+
+    Production `ml_kem_ss` is the ML-KEM decap output; it is **not** embedded in
+    the 64-byte `combine_shared_secrets` OKM used as Instance-1 IKM. For KAT
+    rows with a 64-byte `combined_ss` field, uses that field's last 32 bytes as
+    an independent synthetic `ml_kem_ss` paired with the same row's Instance-1
+    IKM. For 32-byte rows (Group 5), uses the full field.
+    """
+    if len(combined_ss) >= 64:
+        return combined_ss[32:64]
+    return combined_ss[:32]
 
 
 # ── Test vector generation ────────────────────────────────────────────────────
@@ -157,30 +167,30 @@ def generate_vectors() -> list:
     for idx in [0, 1]:
         css = b"\x00" * 64
         secrets = derive_output_secrets(css, idx)
-        x25519_ss = b"\x00" * 32
-        vt_x = derive_view_tag_x25519(x25519_ss, idx)
+        ml_ss = ml_kem_ss_for_vector(css)
+        vt = derive_view_tag_prefilter(ml_ss, idx)
         vectors.append({
             "description": f"all-zero combined_ss, index={idx}",
             "combined_ss": css.hex(),
             "output_index": idx,
             **secrets,
-            "x25519_ss": x25519_ss.hex(),
-            "view_tag_x25519": vt_x,
+            "ml_kem_ss": ml_ss.hex(),
+            "view_tag_prefilter": vt,
         })
 
     # Group 2: All-0xFF combined_ss
     for idx in [0, 1]:
         css = b"\xff" * 64
         secrets = derive_output_secrets(css, idx)
-        x25519_ss = b"\xff" * 32
-        vt_x = derive_view_tag_x25519(x25519_ss, idx)
+        ml_ss = ml_kem_ss_for_vector(css)
+        vt = derive_view_tag_prefilter(ml_ss, idx)
         vectors.append({
             "description": f"all-FF combined_ss, index={idx}",
             "combined_ss": css.hex(),
             "output_index": idx,
             **secrets,
-            "x25519_ss": x25519_ss.hex(),
-            "view_tag_x25519": vt_x,
+            "ml_kem_ss": ml_ss.hex(),
+            "view_tag_prefilter": vt,
         })
 
     # Group 3: Random combined_ss with various indices
@@ -188,50 +198,54 @@ def generate_vectors() -> list:
     for i, idx in enumerate([0, 1, 2**32, 2**64 - 1]):
         seed = hl.sha512(f"test-vector-random-{i}".encode()).digest()
         css = seed[:64]
-        x25519_ss = seed[:32]
+        ml_ss = ml_kem_ss_for_vector(css)
         secrets = derive_output_secrets(css, idx)
-        vt_x = derive_view_tag_x25519(x25519_ss, idx)
+        vt = derive_view_tag_prefilter(ml_ss, idx)
         vectors.append({
             "description": f"random combined_ss seed={i}, index={idx}",
             "combined_ss": css.hex(),
             "output_index": idx,
             **secrets,
-            "x25519_ss": x25519_ss.hex(),
-            "view_tag_x25519": vt_x,
+            "ml_kem_ss": ml_ss.hex(),
+            "view_tag_prefilter": vt,
         })
 
     # Group 4: Edge cases — varied combined_ss lengths and boundary indices
     for i in range(4):
         seed = hl.sha512(f"edge-case-{i}".encode()).digest()
         css = (seed + seed)[:64]
-        x25519_ss = seed[:32]
+        ml_ss = ml_kem_ss_for_vector(css)
         idx = [0, 255, 65535, 2**63][i]
         secrets = derive_output_secrets(css, idx)
-        vt_x = derive_view_tag_x25519(x25519_ss, idx)
+        vt = derive_view_tag_prefilter(ml_ss, idx)
         vectors.append({
             "description": f"edge-case seed={i}, index={idx}",
             "combined_ss": css.hex(),
             "output_index": idx,
             **secrets,
-            "x25519_ss": x25519_ss.hex(),
-            "view_tag_x25519": vt_x,
+            "ml_kem_ss": ml_ss.hex(),
+            "view_tag_prefilter": vt,
         })
 
-    # Group 5: Short combined_ss (32 bytes — X25519 only, no ML-KEM)
+    # Group 5: 32-byte combined_ss — HKDF Instance 1 edge case only; synthetic
+    # ml_kem_ss for Instance-2 pre-filter KAT (not a real decap output).
     for i in range(4):
         seed = hl.sha512(f"short-ss-{i}".encode()).digest()
         css = seed[:32]
-        x25519_ss = seed[:32]
+        ml_ss = ml_kem_ss_for_vector(css)
         idx = i
         secrets = derive_output_secrets(css, idx)
-        vt_x = derive_view_tag_x25519(x25519_ss, idx)
+        vt = derive_view_tag_prefilter(ml_ss, idx)
         vectors.append({
-            "description": f"short 32-byte combined_ss seed={i}, index={idx}",
+            "description": (
+                f"synthetic pre-filter KAT: 32-byte combined_ss seed={i}, "
+                f"index={idx} (ml_kem_ss is test IKM, not decap output)"
+            ),
             "combined_ss": css.hex(),
             "output_index": idx,
             **secrets,
-            "x25519_ss": x25519_ss.hex(),
-            "view_tag_x25519": vt_x,
+            "ml_kem_ss": ml_ss.hex(),
+            "view_tag_prefilter": vt,
         })
 
     return vectors
@@ -245,7 +259,11 @@ def print_registry_tables():
     print("### Instance 1: Combined Shared Secret Derivation")
     print()
     print(f"- **Salt**: `{SALT_COMBINED.decode()}`")
-    print(f"- **IKM**: `combined_ss` = X25519(eph_sk, view_pk) || ML-KEM-768.Decap(kem_sk, ct)")
+    print(
+        "- **IKM**: `combined_ss` = 64-byte OKM from `combine_shared_secrets` "
+        "(HKDF-SHA-512, salt `shekyl-kem-v1`, ikm=x25519_ss||ml_kem_ss); "
+        "vectors supply arbitrary bytes for Instance-1 KAT"
+    )
     print()
     print("| Info String | Expand Size | Post-Processing | Consuming Field |")
     print("|-------------|-------------|-----------------|-----------------|")
@@ -259,14 +277,17 @@ def print_registry_tables():
     print(f"| `{LABEL_LABEL_TAG}` \\|\\| index_le64 | 32 B | first byte | `OutputSecrets.label_tag` |")
     print(f"| `{LABEL_ML_DSA_SEED}` \\|\\| index_le64 | 32 B | raw | `OutputSecrets.ml_dsa_seed` |")
     print()
-    print("### Instance 2: X25519-Only View Tag")
+    print("### Instance 2: ML-KEM View-Tag Pre-Filter (FA-6)")
     print()
-    print(f"- **Salt**: `{SALT_X25519_VT.decode()}`")
-    print(f"- **IKM**: `x25519_ss` = X25519(eph_sk, view_pk) (first 32 bytes of combined_ss)")
+    print(f"- **Salt**: `{SALT_VIEW_TAG_PREFILTER.decode()}`")
+    print(
+        "- **IKM**: `ml_kem_ss` = ML-KEM-768 decap output (32 B) on-wire; "
+        "Group 5 rows use synthetic 32-byte test IKM"
+    )
     print()
     print("| Info String | Expand Size | Post-Processing | Consuming Field |")
     print("|-------------|-------------|-----------------|-----------------|")
-    print(f"| `{LABEL_VIEW_TAG_X25519}` \\|\\| index_le64 | 32 B | first byte | `derive_view_tag_x25519()` return |")
+    print(f"| `{LABEL_VIEW_TAG_PREFILTER}` \\|\\| index_le64 | 32 B | first byte | `derive_view_tag_prefilter()` return |")
     print()
 
 
@@ -283,11 +304,20 @@ def main():
         ),
         "hkdf_instance_1": {
             "salt": SALT_COMBINED.decode(),
-            "ikm_description": "combined_ss = X25519(eph_sk, view_pk) || ML-KEM-768.Decap(kem_sk, ct)",
+            "ikm_description": (
+                "combined_ss = 64-byte OKM from combine_shared_secrets "
+                "(HKDF-SHA-512, salt shekyl-kem-v1, ikm=x25519_ss||ml_kem_ss, info=\"\", L=64); "
+                "vectors supply arbitrary IKM for Instance-1 KAT (Group 5: synthetic 32 B — "
+                "see per-vector description)"
+            ),
         },
         "hkdf_instance_2": {
-            "salt": SALT_X25519_VT.decode(),
-            "ikm_description": "x25519_ss = X25519(eph_sk, view_pk)",
+            "salt": SALT_VIEW_TAG_PREFILTER.decode(),
+            "ikm_description": (
+                "ml_kem_ss = ML-KEM-768.Decap(ml_kem_dk, kem_ct) on-wire; Group 5 "
+                "vectors use synthetic 32-byte test IKM for pre-filter KAT only "
+                "(see per-vector description)"
+            ),
         },
         "vectors": vectors,
     }

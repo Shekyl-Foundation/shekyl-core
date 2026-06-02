@@ -59,6 +59,7 @@ isProject: false
 - **Key signature:** master_seed_64 → HKDF with `shekyl-master-derive-v1-<network>-<format>` salt → wide-reduce Ed25519 scalars → ML-KEM-768 via SHA3-256(`shekyl-mlkem-chacha-seed` || d_z) → ChaCha20Rng. BIP-39 mainnet/stagenet (passphrase opt-in only), raw 32-byte seed testnet/fakechain. Already landed in `rust/shekyl-crypto-pq` per [stabilize_key_signature_15d8e48a](../plans/stabilize_key_signature_15d8e48a.plan.md).
 - **Transaction shape:** `RCTTypeFcmpPlusPlusPqc` only (and `RCTTypeNull` for coinbase). FCMP++ membership proofs from genesis, hybrid PQC (Ed25519 + ML-DSA-65) on signing, ML-KEM-768 in addresses.
 - **Multisig:** modified FROST scaffold lives behind `shekyl-wallet-core/multisig` feature; full V3.1 ship-readiness is a separate plan. The Rust wallet API is shaped FROST-aware from day 1 so V3.1 is a feature flip, not a refactor.
+- **Genesis-affecting wire lock before stressnet (Phase 7.7):** Any change that alters genesis block bytes — including FA-6 `view_tag` re-key (`docs/design/FA-6_VIEW_TAG_ML_KEM.md`) — must land on `dev` and genesis must be regenerated **before** the Phase 7.7 stressnet genesis is cut. A stressnet built on pre-FA-6 tags does not exercise the mainnet wallet scan wire format and cannot serve as the representative 4-week privacy/wire validation gate. Track genesis-affecting PRs explicitly in release/stressnet planning; the FA-6 spec is correctly scoped to FA-6 internals and does not own this sequencing, but the program plan does.
 
 ## Inventory: what exists, what's the gap
 

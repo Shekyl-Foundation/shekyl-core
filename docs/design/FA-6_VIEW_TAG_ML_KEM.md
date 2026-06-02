@@ -1,6 +1,8 @@
 # FA-6 — PQ-safe view-tag pre-filter (T6 closure)
 
-**Status.** Specification draft (2026-06-01, revised). **Disposition:** adopt at
+**Status.** Specification reviewed (2026-06-02): §11 S1–S4, S6–S9 signed; **S5
+ratified** (§8.4.1 / §11.1 pins, 2026-06-02). **§8.7 bench gate still pending**
+(merge requires clean / marginal / fail vs S5 ceilings). **Disposition:** adopt at
 V3.0 genesis — re-key the on-wire 1-byte pre-filter from classical
 (`x25519_ss`) to hybrid-leg (`ml_kem_ss`). **Implementation:** separate PR
 after spec review; not bundled with FA-11 (`enc_label` wire) or subaddress
@@ -252,6 +254,14 @@ view_tag_prefilter = first_byte(
 **Input `ml_kem_ss`:** 32-byte ML-KEM-768 shared secret (FIPS 203), same
 encoding as `combine_shared_secrets`.
 
+**Byte identity (encaps vs decaps):** The wire tag uses the raw 32-byte
+`SharedSecret::into_bytes()` from FIPS 203 ML-KEM-768 — the same encoding
+`construct_output` takes from `encaps_from_seed` / encaps and `derive_view_tag_prefilter`
+takes from `try_decaps`. `combine_shared_secrets` already requires encaps and
+decaps halves to match; FA-6 now keys the pre-filter on that half **independently**,
+so the encoding must stay identical across construct, scan, and KAT vectors (not
+an inherited assumption from `combined_ss` alone).
+
 **Rust API:** `derive_view_tag_prefilter(ml_kem_ss, output_index) -> u8`.
 
 ### 4.3 Deprecated (wire path)
@@ -281,10 +291,27 @@ The pre-filter byte and `combined_ss`-derived secrets (`amount_tag`,
 `label_tag`, `k_amount`, `z`, …) are **all** functions of key material that
 includes `ml_kem_ss`, but **must not** be treated as interchangeable.
 
-**Argument (one line, load-bearing for reviewers):** They are **independent
-HKDF-Expand instances** under distinct `(salt, info)` pairs — standard PRF
-domain separation. Publishing one byte of the pre-filter expansion does **not**
-weaken `combined_ss` derivations because the Expand inputs differ.
+**Constants are pinned** in §4.2 (`HKDF_SALT_VIEW_TAG_PREFILTER`,
+`LABEL_VIEW_TAG_PREFILTER`) — not TBD.
+
+**Distinct derivation paths (load-bearing):**
+
+| Wire / internal | IKM | HKDF-Extract salt | Expand label prefix |
+|-----------------|-----|-------------------|---------------------|
+| **Pre-filter** (`view_tag` on wire) | `ml_kem_ss` only | `shekyl-view-tag-prefilter-v1` | `shekyl-view-tag-prefilter` |
+| **`combined_ss` secrets** (`amount_tag`, `label_tag`, `z`, …) | `combined_ss` | `shekyl-output-derive-v1` | `shekyl-output-*` family |
+
+The pre-filter never uses `HKDF_SALT_OUTPUT_DERIVE` or `combined_ss` as IKM;
+`combined_ss` expansions never use the pre-filter salt/label. `bare x25519_ss`
+does not feed any wire tag after FA-6.
+
+**Argument (load-bearing for reviewers):** They are **independent HKDF-Expand
+instances** under distinct `(salt, info)` pairs — standard PRF domain
+separation. Revealing **one byte** of the pre-filter expansion (the wire tag)
+does **not** weaken sibling secrets derived from `combined_ss`, because the
+Expand inputs differ: different IKM, Extract salt, and `info` labels. This is
+the same discipline as today (distinct labels under `HKDF_SALT_OUTPUT_DERIVE`);
+FA-6 adds a **separate** Extract domain keyed on `ml_kem_ss` only.
 
 **Implementation obligations:**
 
@@ -382,6 +409,56 @@ computability, present-day linking without view key.
 | `shekyl_derive_view_tag_x25519` | → `shekyl_derive_view_tag_prefilter` |
 | `shekyl_construct_output` / `shekyl_scan_and_recover` | Emit / consume new derivation |
 
+### 5.3 Derivation single-site (Rust) — no C++ re-derive
+
+Per Shekyl policy: new crypto lives in Rust; C++ orchestrates via FFI and must
+**not** hold a second derivation of the wire tag.
+
+**Canonical Rust sites (construct, scan, genesis must all use these):**
+
+| Operation | Site | Notes |
+|-----------|------|-------|
+| Wire tag derivation | `shekyl_crypto_pq::derivation::derive_view_tag_prefilter` | Only HKDF definition |
+| Construct path | `output::construct_output` | After ML-KEM encaps |
+| Scan path | `output::ml_kem_decap_prefilter_with_parsed_dk` → `scan_output_with_ml_kem_dk` / `scan_output_recover_with_ml_kem_dk` | Universal decap first |
+| C++ coinbase / transfer | `shekyl_construct_output` (FFI) | Returns `view_tag_prefilter` in `ShekylOutputData` |
+| C++ wallet scan | Rust engine / `shekyl_scan_*` FFI | Consumes wire tag; no local HKDF |
+| Test reference | `tools/reference/derive_output_secrets.py` | Must match Rust byte-for-byte |
+
+**C++ must not** call `local_derive_view_tag` / Keccak view-tag paths for v3
+account outputs. Production coinbase and transfer construction use
+`shekyl_construct_output` and copy `od.view_tag_prefilter` onto the wire
+(`cryptonote_tx_utils.cpp`, `chaingen` manual coinbase). A genesis builder that
+re-derived in C++ with the old salt would produce tags the FA-6 scanner rejects —
+genesis regen is only valid when construction goes through the Rust FFI path above.
+
+**Drift class:** Same failure mode as `FCMP_REFERENCE_BLOCK_MIN_AGE` /
+cbindgen-constant skew — Rust writes new tag, C++ checks old tag. Grep gate:
+no production `derive_view_tag` / `HKDF_SALT_VIEW_TAG_X25519` outside deletion
+targets and test-only legacy.
+
+### 5.4 Multisig genesis posture (FA-6 vs FA-6b)
+
+FA-6 closes T6 on the **account-output** path only. **FA-6b**
+(`tx_extra_pqc_view_tag_hints`) remains open.
+
+**V3.0 genesis posture (conscious acceptance, not silent inheritance):**
+
+- **Single-sig / account outputs:** T6 closed by FA-6 at genesis (PQ-keyed
+  `view_tag` pre-filter).
+- **Multisig:** Full FROST multisig ship-readiness is **V3.1** per
+  `WALLET_REWRITE_PLAN.md` and `AUDIT_SCOPE.md` (multisig-specific audit surface
+  post-genesis). V3.0 may carry scaffold / non-user-facing multisig code, but
+  **no genesis asymmetry** for end-user multisig wallets at launch — there is no
+  “multisig wallet type” shipping at V3.0 with a weaker T6 surface than
+  single-sig.
+- **FA-6b** must land **before** multisig is user-shippable (V3.1), not before
+  single-sig genesis.
+
+If multisig were ever promoted to V3.0 user-shippable without FA-6b, that would
+be an explicit product/security decision recorded in `V3_WALLET_DECISION_LOG.md`,
+not an accident of scheduling.
+
 ---
 
 ## 6. Verification and test vectors
@@ -403,6 +480,7 @@ computability, present-day linking without view key.
 | View-half only (simulated) | Cannot predict tag without decap |
 | Low-order Montgomery point | Rejected on match path |
 | §3.1 verification tests | `amount_tag` / `label_tag` checked only after decap in code |
+| §6.5 tag-mismatch wipe | `ml_kem_ss` zeroized on universal-decap reject |
 
 ### 6.3 Negative tests (production guard)
 
@@ -416,6 +494,27 @@ Stub all-zero wire tag must not ship from production `construct_output`.
 | Fuzz target extension | Align with `fuzz_kem_decapsulate`; document scan entry |
 | Wrong-length CT | Rejected before decap (existing) |
 
+### 6.5 Universal-decap path zeroization (merge gate — not §6.4)
+
+§6.4 covers panic-freedom on adversarial ML-KEM ciphertext. It does **not**
+cover the FA-6-specific residue regression: after FA-6, **every** scanned output
+runs ML-KEM decap; **~255/256** reject at the tag compare. Pre-FA-6, decap ran
+on ~1/256 outputs — an early-return that skipped wiping `ml_kem_ss` was rare;
+post-FA-6 it is the **dominant** path.
+
+**Requirement (implementation PR, before merge):**
+
+1. `ml_kem_ss` on the universal-decap path is `Zeroizing<[u8; 32]>` (or
+   equivalent `ZeroizeOnDrop`).
+2. Tag-mismatch `Err` **explicitly** zeroizes `ml_kem_ss` before return (not
+   only reliance on drop order).
+3. Test: wrong-key / tag-mismatch scan asserts pre-filter `Err` **and**
+   observability that wipe ran (`output.rs`:
+   `ml_kem_ss_wiped_on_view_tag_prefilter_mismatch`).
+
+Functional tests still pass if wipe is broken; this gate is memory-discipline,
+not correctness.
+
 ---
 
 ## 7. Documentation updates (implementation PR)
@@ -426,6 +525,7 @@ Stub all-zero wire tag must not ship from production `construct_output`.
 | `docs/design/SUBADDRESS_UNDER_PQC.md` | §3.7 — T6 closed on **verified** §3.1 + FA-6 |
 | `docs/FOLLOWUPS.md` | Close FA-6; FA-6b multisig hints; FA-9 propagation |
 | `CHANGELOG.md` | Initial-sync / privacy tradeoff (user-visible) |
+| `docs/design/WALLET_REWRITE_PLAN.md` | Genesis-affecting wire lock before Phase 7.7 stressnet (§ cross-cutting) |
 
 ---
 
@@ -505,10 +605,10 @@ year 3+ is the honest workload.
 
 The wall-clock ceilings are armored against rewrite; **`O_per_block` is the
 soft underbelly** if it can be tuned after bench results. It must be pinned with
-the **same discipline** as the 60 s / 25 min budgets.
+the **same discipline** as the §8.4.1 ceilings (45 s / 20 min).
 
-**Required at S5 (chain-scenario acceptor — may be same meeting as budget
-acceptor, but a separate written record):**
+**Required at S5** (written record in this doc or a one-page addendum — same
+artifact as §8.4 ceilings):
 
 1. **Independent derivation** — `O_per_block` comes from an external basis,
    documented in the S5 ratification artifact, e.g.:
@@ -524,13 +624,9 @@ acceptor, but a separate written record):**
    fork-free fix. **Overestimating** ⇒ headroom you did not strictly need.
    Asymmetry favors the **high stress** value.
 
-3. **Blind ordering** — Ratify `O_per_block` and derive `N_outputs` **before**
+3. **Blind ordering** — Pin `O_per_block` and derive `N_outputs` **before**
    anyone computes “implied restore time on Pi 4” from FA-6 micro-benches.
    Same rule as §8.4: scenario inputs are not reverse-engineered from outcomes.
-
-4. **Measurer ≠ chain-scenario author** — The benchmark producer must **not**
-   be the sole author of `O_per_block` derivation (same separation principle as
-   §8.6).
 
 **Birthday / restore-height (product mitigation, not gate assumption):** Normal
 wallets default to scanning from `restore_height` / wallet birthday — far
@@ -539,22 +635,76 @@ time but **does not** replace pinning the gate to the worst case (§8.4 B).
 
 ### 8.4 Pre-committed absolute budgets (before FA-6 numbers exist)
 
-These are **product requirements**, set at S5 sign-off **before** the FA-6
-implementation benchmark is interpreted. The benchmark **acceptor** compares
-measured time to these ceilings **without renegotiating the ceilings** to
-match the measurement.
+These are **product requirements**, pinned at S5 **before** FA-6 bench results
+are used for a merge decision. Compare measured time to these ceilings
+**without renegotiating the ceilings** to match the measurement.
 
-**Provisional placeholders** (replace with ratified numbers at sign-off —
-must be chosen deliberately, not copied from first bench run):
+**Ratified ceilings** (§8.4.1 — pinned 2026-06-02 before any FA-6 decap bench):
 
-| Scenario | What it models | Who cares | Provisional ceiling (Pi 4, mature `N_outputs`) |
-|----------|----------------|-----------|-----------------------------------------------|
-| **A — Incremental sync** | Outputs since last successful sync (e.g. 1 day of chain activity: `ΔN ≈ (86400/T_block) × O_per_block`) | Every app open | **≤ 60 s** wall-clock |
-| **B — Deep restore (genesis worst case)** | **`restore_height = 0`** (genesis-era wallet): scan **all** `N_outputs` from chain start — true genesis restore, not a recent birthday | Rare, one-time; worst case for FA-6 | **≤ 25 min** wall-clock |
+| Scenario | What it models | Who cares | Ratified ceiling (Pi 4, mature `N_outputs`) |
+|----------|----------------|-----------|---------------------------------------------|
+| **A — Incremental sync** | Outputs since last successful sync (`W_offline = 7` days → `A_outputs = 5,040 × O_per_block`; see §8.4.1) | Every app open | **≤ 45 s** wall-clock |
+| **B — Deep restore (genesis worst case)** | **`restore_height = 0`** (genesis-era wallet): scan **all** `N_outputs` from chain start — true genesis restore, not a recent birthday | Rare, one-time; worst case for FA-6 | **≤ 20 min** wall-clock |
 
 Scenario A must remain “snappy”; scenario B may be minutes because users
 tolerate one-time restore but not per-open delay. FA-6’s universal decap targets
 **B**; **A** should pass with margin if `ΔN` is small.
+
+**Note (A only, not ratified):** A **20 s** ceiling for scenario A was flagged
+for consideration if daily-reopen UX matters more than the 7-day offline window;
+the ratified value remains **45 s** until an explicit S5 amendment.
+
+#### 8.4.1 Ratification record — FA-6 sync budgets (pinned before bench harness)
+
+**Pinned by:** radawson  
+**Date:** 2026-06-02
+
+**Sequencing attestation:** These values were fixed **before** any FA-6 decap
+benchmark existed. They were **not** derived from, adjusted to, or anchored
+against any measured FA-6 cost. Amendment after this date requires a dated note
+stating the reason; “the benchmark exceeded the ceiling” is **not** a valid
+reason to raise a ceiling or lower `O_per_block`.
+
+**Chain inputs**
+
+| Symbol | Ratified value | Citation / derivation |
+|--------|----------------|---------------------|
+| `T_block` | **120 s** | `config/consensus_constants.json` → `daa_target_seconds`; generated `SHEKYL_DAA_TARGET_SECONDS` (`static_assert` in `tests/core_tests/block_reward.cpp`, RPC wire contract in `tests/unit_tests/rpc_target_wire_contract.cpp`) |
+| `H_horizon` | **5 years** | S5 calendar horizon (forward-dated mature chain) |
+| `N_blocks` | **1,314,900** | `⌊ (5 × 365.25 × 86,400) / T_block ⌋` |
+| `B_cap` | **600,000 B** | Sustained cumulative block-weight cap at long-term median floor: `m_current_block_cumul_weight_limit = 2 × effective_median` (`src/cryptonote_core/blockchain.cpp` ~5195); at HF1 minimum median `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` = **300,000** B (`src/cryptonote_config.h` ~60) ⇒ **600 KiB** stress cap |
+| `W_out` | **1,500 B** | **Stress lower bound** on marginal **scanned** bytes per v3 account output in a full block (pin-high-`O_per_block` direction per §8.3.1): hybrid KEM material **1,120 B** per output in `tx_extra` tag `0x06` (`docs/CHANGELOG.md`, `docs/POST_QUANTUM_CRYPTOGRAPHY.md`) plus `txout` + RCT row lower bound — **not** a measured prototype tx; revisit only via dated S5 amendment if FA-11 wire audit shows higher marginal |
+| `O_per_block` | **400** | `⌊ B_cap / W_out ⌋` = `⌊ 600,000 / 1,500 ⌋` |
+| `N_outputs` (scenario B) | **525,960,000** | `N_blocks × O_per_block` |
+
+**Scenario A — incremental**
+
+| Symbol | Value |
+|--------|-------|
+| `W_offline` | **7 days** |
+| `A_outputs` | **2,016,000** (= `5,040 × O_per_block`; `5,040 = ⌊ 7 × 86,400 / T_block ⌋`) |
+| `T_ceil_A` | **45 s** |
+
+**Scenario B — deep restore (true genesis, no birthday)**
+
+| Symbol | Value |
+|--------|-------|
+| Outputs | Full `N_outputs` = **525,960,000** |
+| `T_ceil_B` | **20 min** |
+
+Birthday / `restore_height` is a named mitigation for the common case; **B**’s
+budget must hold for genesis restore regardless.
+
+**Gate**
+
+| Symbol | Value |
+|--------|-------|
+| `M_margin` | **20%** (clean pass: `T_meas ≤ T_ceil × 0.80`; marginal: `0.80 < T_meas / T_ceil ≤ 1.00` → §10.2 record) |
+| Reference device | §8.2 Pi 4 4GB, active cooling, USB3 SSD, stock 1.5 GHz, pinned toolchain, wallet-only; node co-residence headroom in `M_margin` |
+| Measure / accept separation | **Temporal** — this record predates the harness |
+
+**Implied clean-pass targets (derived, not separate pins):** scenario A **≤ 36 s**;
+scenario B **≤ 16 min** wall-clock.
 
 **Scenario B is intentionally the conservative floor** (parallel to Pi 4):
 pin “genesis wallet, restore from genesis on Pi 4.” A wallet created recently
@@ -580,7 +730,7 @@ Run **both**; neither alone is sufficient.
 2. **End-to-end restore (integration)**  
    Wallet scan path over synthetic or replayed chain data on **USB3 SSD**
    (not slow SD-card I/O — otherwise I/O swamps decap). Same scenarios A/B.
-   Reports wall-clock for acceptor.
+   Reports wall-clock for the gate record.
 
 **Secondary regression guards** (do not set the UX ceiling):
 
@@ -588,22 +738,23 @@ Run **both**; neither alone is sufficient.
   count (drift detector).
 - **criterion** — per-output decap on Pi 4 (supports extrapolation sanity-check).
 
-### 8.6 Roles (measurer ≠ acceptor)
+### 8.6 Process (artifact discipline, not headcount)
 
-| Role | Responsibility |
-|------|----------------|
-| **Chain-scenario author** (economics / product — **not** bench engineer alone) | Writes §8.3.1 `O_per_block` derivation + `N_outputs` **before** FA-6 restore bench is interpreted. |
-| **Benchmark producer** (engineering) | Runs §8.5 on Pi 4 per pinned environment; publishes raw times + `N_outputs` / `ΔN` + config hash. **Does not** revise `O_per_block` after seeing results. |
-| **Budget acceptor** (product + security — **not** the same individual as producer) | Compares results to §8.4 **without** rewriting §8.4 or §8.3.1 to fit. |
+Pre-genesis team size does not change the anti-hindsight rule. One developer
+can perform every step; what matters is **order** and **written pins**:
 
-Self-justification gravity is the reason for separation on **both** inputs
-(budgets and chain size).
+1. Record §8.4 ceilings + §8.3.1 `O_per_block` derivation + `N_outputs` in writing.
+2. Run §8.5 benches.
+3. Compare results to the recorded pins **without** revising pins to fit.
+
+Self-justification is blocked by **dated artifacts**, not by assigning different
+people to “producer” and “acceptor.”
 
 ### 8.7 Gate outcome (clean pass, marginal pass, fail)
 
-Pin **`M_margin`** at S5 (provisional **20%** — replace at ratification): required
-headroom below the ceiling so a “pass” is not a deferred failure as the chain
-grows past `H_horizon` or under throttled hardware.
+**`M_margin`** ratified at **20%** (§8.4.1): required headroom below the ceiling
+so a “pass” is not a deferred failure as the chain grows past `H_horizon` or
+under throttled hardware.
 
 For each scenario, let `T_meas` = measured wall-clock, `T_ceil` = §8.4 ceiling.
 
@@ -648,7 +799,7 @@ must be equally deliberate** so neither is the path of least resistance.
 
 | Choice | Consequence | Sign-off |
 |--------|-------------|----------|
-| **Ship FA-6** | Accept §8.4 sync cost on Pi 4 floor (and documented headroom for node co-residence); T6 closed on verified §3.1 account path. | Budget acceptor + security reviewer on record. |
+| **Ship FA-6** | Accept §8.4 sync cost on Pi 4 floor (and documented headroom for node co-residence); T6 closed on verified §3.1 account path. | Recorded decision (PR / `PERFORMANCE_BASELINE.md`). |
 | **Ship without FA-6 (T6 waiver)** | Classical pre-filter remains; T6 **open** on account path until coordinated HF. | **T6 waiver document** (§10.1) — not an informal default. |
 | **Ship FA-6 with marginal pass** | At or under ceiling but below `M_margin` headroom (§8.7). | **Margin-acceptance record** (§10.2) — not a silent merge. |
 
@@ -675,7 +826,7 @@ A waiver without (1)–(4) is not sufficient — it must not be a soft escape ha
 Reopen FA-6 disposition only with:
 
 1. §8 data on Pi 4 per §8.5 showing no path under §8.4, **and**
-2. T6 waiver per §10.1 **or** budget-acceptor sign-off to ship FA-6 anyway, **and**
+2. T6 waiver per §10.1 **or** recorded decision to ship FA-6 anyway, **and**
 3. `AUDIT_SCOPE.md` / FA-9 updated, **and**
 4. §3.1 still signed off (no accidental classical byte left on wire).
 
@@ -692,7 +843,7 @@ merge requires a **named artifact** (same homes as §10.1) stating:
 3. **Conscious thin headroom:** explicit acceptance that chain growth past
    `H_horizon`, node co-residence, or thermal throttle may exceed the budget
    without a fork-free remedy — not a default “pass.”
-4. **Sign-off:** budget acceptor + security reviewer (same bar as §10 ship-FA-6).
+4. **Recorded decision** (same bar as §10 ship-FA-6): cite measurements and pins.
 
 Marginal pass is **not** a T6 waiver; FA-6 still ships and T6 closes on §3.1.
 
@@ -700,25 +851,68 @@ Marginal pass is **not** a T6 waiver; FA-6 still ships and T6 closes on §3.1.
 
 ## 11. Sign-off checklist (spec review)
 
-| # | Item | Pass |
-|---|------|------|
-| S1 | T6 model + **§3.1 inventory** (not tag-only) | ☐ |
-| S2 | §3.1 **Verify** rows closed — §3.1.1 on `dev` post–PR #100 | ☐ |
-| S3 | HKDF constants §4.2 + **domain separation** §4.5 | ☐ |
-| S4 | Scanner order §4.7; **no** `view_tag_combined` post-check §4.4 | ☐ |
-| S5 | §8 ratified: §8.4 ceilings + §8.3.1 `O_per_block` derivation (pessimistic, blind), `M_margin`, scenario B = genesis restore; roles named | ☐ |
-| S6 | §10 branches explicit (ship / waiver / marginal §10.2) | ☐ |
-| S7 | **FA-6b** sync budget **not** inherited — §8.4 scope note | ☐ |
-| S8 | Decap totality / fuzz §4.9, §6.4 | ☐ |
-| S9 | FA-9 owner for propagation PR | ☐ |
+**Record date:** 2026-06-02. **Gate:** S1–S4, S6–S9 complete; implementation
+landed on branch `torvaldsl/fa6-view-tag-prefilter`. FA-6 **merge** to `dev`
+requires §8.7 against §11.1 pins when benches are run.
 
-**S5 ratification artifact (minimum contents):** Signed record with §8.4
-ceilings, `M_margin`, `H_horizon` / `T_block` / `O_per_block` + **derivation
-citation**, `N_outputs`, scenario B = genesis `restore_height`, acceptor names,
-and explicit statement that `O_per_block` was fixed **before** implied restore
-time was computed. Engineering may run exploratory benches in parallel; benches
-do not set ceilings or chain inputs.
+| # | Item | Pass | Notes |
+|---|------|------|-------|
+| S1 | T6 model + **§3.1 inventory** (not tag-only) | ✅ | Closure = no wire byte from quantum-recoverable secret; §3.1 completeness artifact. |
+| S2 | §3.1 **Verify** rows closed — §3.1.1 on `dev` post–PR #100 | ✅ | Code-grounded: `view_tag` sole classical pre-decap byte; `amount_tag` / `label_tag` post-decap from `combined_ss` PRK; §3.1.1 accurate. |
+| S3 | HKDF constants §4.2 + **domain separation** §4.5 | ✅ | Constants pinned §4.2; distinctness table + one-byte PRF argument §4.5 (not TBD). |
+| S4 | Scanner order §4.7; **no** `view_tag_combined` post-check §4.4 | ✅ | Leg-swap order; `view_tag_combined` internal only — no scan gate. |
+| S5 | §8 ratified: §8.4 ceilings + §8.3.1 `O_per_block`, `M_margin`, scenario B | ✅ | Chain pins + ceilings ratified §8.4.1 / §11.1 (2026-06-02); §8.7 bench outcome still pending. |
+| S6 | §10 branches explicit (ship / waiver / marginal §10.2) | ✅ | Machinery ratified; branch choice = §8.7 outcome vs S5 numbers (not pre-selected). |
+| S7 | **FA-6b** sync budget **not** inherited — §8.4 scope note | ✅ | Account path only; multisig hints separate (§2.2, §5.1). |
+| S8 | Decap totality / fuzz §4.9, §6.4; §6.5 universal-decap wipe | ✅* | *§6.4/§6.5 merge gates: decap totality on adversarial CT + `ml_kem_ss` wipe on tag-mismatch reject (`output.rs` tests). |
+| S9 | FA-9 owner for propagation PR | ✅ | **Rick Dawson**, ClockWorX LLC. |
 
-**After S1–S9:** Implementation PR permitted. FA-6 merge to `dev` requires §8.7
-gate pass against pre-committed §8.4. Section-scoped re-review on implementation
-deltas only.
+### 11.1 S5 pins (ratified 2026-06-02 — §8.4.1)
+
+Pins are fixed **before** bench results are used for merge (§8.6). Full record:
+§8.4.1.
+
+| Pin | Ratified value | Derivation / notes |
+|-----|----------------|-------------------|
+| Scenario A ceiling (`T_ceil_A`) | **45 s** | 7-day offline window; clean pass ≤ **36 s** |
+| Scenario B ceiling (`T_ceil_B`) | **20 min** | Genesis `restore_height = 0`; clean pass ≤ **16 min** |
+| `M_margin` | **20%** | §8.4.1 |
+| `H_horizon` | **5 years** | §8.4.1 |
+| `T_block` | **120 s** | `config/consensus_constants.json` → `daa_target_seconds` |
+| `N_blocks` | **1,314,900** | `⌊ H_horizon_seconds / T_block ⌋` |
+| `B_cap` | **600,000 B** | `2 × CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` at median floor |
+| `W_out` | **1,500 B** | Stress marginal lower bound (§8.4.1) |
+| `O_per_block` | **400** | `⌊ B_cap / W_out ⌋` — §8.3.1 pessimistic pin |
+| `N_outputs` | **525,960,000** | `N_blocks × O_per_block` |
+| `W_offline` (scenario A) | **7 days** | `A_outputs` = **2,016,000** |
+
+Scenario B = genesis `restore_height` (§8.4). Exploratory benches may run in
+parallel; they do **not** set these pins.
+
+### 11.2 Implementation and merge gates
+
+| Gate | When |
+|------|------|
+| **Implementation PR** | After S5 artifact filed and S5 row → ✅ |
+| **Merge to `dev`** | §8.7 vs S5 numbers (clean / marginal §10.2 / fail §10) + S8 merge deliverables (§6.4 fuzz/KAT, decap totality check, §6.5 wipe test) |
+| **Re-review** | Implementation deltas only — section-scoped |
+
+### 11.3 Implementation checklist (blind spots — ranked)
+
+Not duplicated as S1–S9 sign-off rows; these are **merge gates** and
+**do-not-refactor** invariants for the implementation PR.
+
+| Rank | Item | Gate / disposition |
+|------|------|------------------|
+| **1** | **Universal-decap zeroization** | §6.5 — `Zeroizing` + explicit wipe on tag-mismatch `Err`; test required. **Must-fix in PR** (invisible to functional tests). |
+| **2** | **Rust/C++ derivation coherence** | §5.3 — single Rust HKDF site; C++ only via `shekyl_construct_output` / scan FFI; genesis regen through same path. |
+| **3** | **Genesis → stressnet sequencing** | Program: `WALLET_REWRITE_PLAN.md` cross-cutting — FA-6 (and any genesis-affecting wire change) locks before Phase 7.7 stressnet genesis. |
+| **4** | **Prefilter IKM = `ml_kem_ss` only** | **Do not refactor** tag derivation to use `derive_output_secrets(combined_ss, …)` — defeats leg-swap silently (still scans, just slow). §8 bench: per-output cost ≈ decap-only on reject path, not decap+X25519 on every output. |
+| **5** | **Reference tool + byte-exact KAT** | `derive_output_secrets.py` updated in same PR as Rust; `PQC_OUTPUT_SECRETS.json` carries `view_tag_prefilter` per vector (byte-exact wire convention). |
+| **6** | **Multisig genesis posture** | §5.4 — V3.0: single-sig T6 closed; multisig user-ship V3.1+ with FA-6b before multisig ships. |
+
+**Clerical confirmations (cheap):**
+
+- `T_block = 120 s` citation: `config/consensus_constants.json` →
+  `daa_target_seconds` (§8.4.1).
+- `ml_kem_ss` byte encoding identical on encaps and decaps paths (§4.2).

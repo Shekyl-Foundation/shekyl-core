@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- **crypto-pq: FA-6 ML-KEM-keyed view-tag pre-filter (T6 account path).**
+  Re-key on-wire `view_tag` from `derive_view_tag_x25519` to
+  `derive_view_tag_prefilter(ml_kem_ss)`; scanner leg-swap (universal decap →
+  tag compare → X25519 on match). HKDF salt `shekyl-view-tag-prefilter-v1`.
+  Regenerated `docs/test_vectors/PQC_OUTPUT_SECRETS.json`. Regenerated
+  mainnet/testnet/stagenet `GENESIS_TX` in `cryptonote_config.h` (coinbase
+  `view_tag_prefilter`; block 0 hash changes). Reference hex in the
+  `shekyl-dev` repo at `tools/genesis_builder/genesis_tx_*.hex`. Spec:
+  `docs/design/FA-6_VIEW_TAG_ML_KEM.md`.
+
 ### Fixed
 
 - **Genesis `GENESIS_TX` regen (FA-11 `enc_labels`).** Rebuilt mainnet,

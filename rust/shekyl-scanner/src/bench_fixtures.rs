@@ -54,18 +54,15 @@
 //! ### `build_typical_case_scannable_block` — contextual, NOT F11-S
 //!
 //! Outputs are encapsulated against a *different* wallet's hybrid
-//! public keys. The scanner's X25519 ECDH against the on-chain
-//! ephemeral produces a different shared secret than the encapsulator
-//! used, so the wallet-side view tag derivation diverges from the
-//! on-chain value and every output exits via fast-path filter
-//! rejection (the wire-format byte compare after view-tag derivation
-//! returns false, short-circuiting before ML-KEM decap).
+//! public keys. After universal ML-KEM decap with the bench wallet's DK,
+//! the FA-6 pre-filter tag does not match and every output exits before
+//! X25519 ECDH (wire-byte compare after `derive_view_tag_prefilter`).
 //!
 //! This documents the typical-case UX cost (which dominates real
 //! wallet refresh time, since most outputs aren't for the wallet) and
 //! provides a sanity-check ratio against the worst-case measurement:
 //! if `worst_case_p99 / typical_case_p99` falls outside the expected
-//! ML-KEM-decap-to-view-tag-check cost ratio, the methodology is
+//! post-decap prefilter-to-full-recovery cost ratio, the methodology is
 //! suspect and the F11-S decision should not bind until the anomaly
 //! is investigated.
 //!
@@ -297,7 +294,7 @@ fn assemble_scannable_block(n_outputs: usize, recipient_pk: &HybridKemPublicKey)
         outputs.push(Output {
             amount: None,
             key: CompressedPoint(out.output_key),
-            view_tag: Some(out.view_tag_x25519),
+            view_tag: Some(out.view_tag_prefilter),
             staking: None,
         });
         commitments.push(CompressedPoint(out.commitment));
@@ -502,7 +499,7 @@ mod tests {
             out.amount_tag,
             &out.enc_label,
             out.label_tag,
-            out.view_tag_x25519,
+            out.view_tag_prefilter,
             /* output_index */ 0,
         )
         .expect(
@@ -521,10 +518,9 @@ mod tests {
 
     #[test]
     fn typical_case_first_output_exits_via_view_tag_mismatch() {
-        // The on-chain view tag was computed from the OTHER wallet's
-        // X25519 SS; the bench wallet's view-pair derives a different
-        // view tag, so the wire-byte compare in scan_output_recover
-        // fails and the function returns Err before ML-KEM decap.
+        // The on-chain pre-filter tag was derived from the OTHER wallet's
+        // ML-KEM SS; after universal decap with the bench wallet's DK the
+        // tag compare fails and scan_output_recover returns Err before X25519.
         let wallet = make_bench_wallet();
         let other = make_bench_wallet();
         let out = first_output_data(&other.wallet_kem_pk);
@@ -540,7 +536,7 @@ mod tests {
             out.amount_tag,
             &out.enc_label,
             out.label_tag,
-            out.view_tag_x25519,
+            out.view_tag_prefilter,
             /* output_index */ 0,
         );
 
@@ -577,8 +573,8 @@ mod tests {
             );
         };
         assert!(
-            msg.contains("X25519 view tag mismatch"),
-            "expected view-tag-mismatch in DecapsulationFailed inner message; \
+            msg.contains("view tag pre-filter mismatch"),
+            "expected pre-filter mismatch in DecapsulationFailed inner message; \
              got {msg:?} — if this is a sibling DecapsulationFailed reason \
              (invalid ML-KEM ciphertext length, invalid decap key, ML-KEM \
              decap rejection) the typical-case fixture is mis-classified"

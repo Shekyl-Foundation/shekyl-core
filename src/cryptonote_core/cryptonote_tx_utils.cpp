@@ -170,7 +170,7 @@ namespace cryptonote
         crypto::public_key out_key;
         memcpy(out_key.data, od.output_key, 32);
         crypto::view_tag vt;
-        vt.data = od.view_tag_x25519;
+        vt.data = od.view_tag_prefilter;
 
         tx_out out;
         cryptonote::set_tx_out(out_amounts[i], out_key, true, vt, out);
@@ -479,7 +479,7 @@ namespace cryptonote
         crypto::public_key out_key;
         memcpy(out_key.data, od.output_key, 32);
         crypto::view_tag vt;
-        vt.data = od.view_tag_x25519;
+        vt.data = od.view_tag_prefilter;
 
         tx_out out;
         if (dst_entr.is_staking)
@@ -734,7 +734,7 @@ namespace cryptonote
       crypto::public_key out_key;
       memcpy(out_key.data, od.output_key, 32);
       crypto::view_tag vt;
-      vt.data = od.view_tag_x25519;
+      vt.data = od.view_tag_prefilter;
 
       tx_out out;
       cryptonote::set_tx_out(dest.amount, out_key, true, vt, out);

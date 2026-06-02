@@ -9,7 +9,7 @@
 //! `LedgerIndexes::process_scanned_outputs` ingesting `K` synthetic
 //! `RecoveredWalletOutput`s for a single block into a fresh
 //! `(LedgerBlock, LedgerIndexes)` pair. The cryptographic half —
-//! `scan_output_recover` (X25519 view-tag pre-filter + ML-KEM-768 decap +
+//! `scan_output_recover_with_ml_kem_dk` (ML-KEM decap + FA-6 pre-filter, then
 //! HKDF + leaf-hash rederivation) — lives in
 //! `shekyl-crypto-pq/benches/pqc_rederivation.rs`; the two together span
 //! the "owned output lands in wallet state" pipeline.

@@ -17,10 +17,11 @@
 //!   pqc_kp = ML-DSA-65.KeyGen(ml_dsa_seed)
 //!   h_pqc = PqcLeafHash(pqc_kp.pk)
 //!
-//! Scanning (recipient):
-//!   x25519_ss = X25519(sk, kem_ct.x25519)
-//!   view_tag check (fast pre-filter)
-//!   combined_ss = HybridKEM.Decap(sk, kem_ct)
+//! Scanning (recipient, FA-6):
+//!   ml_kem_ss = ML-KEM.Decap(ml_kem_dk, kem_ct.ml_kem)  [every output]
+//!   view_tag pre-filter check (ml_kem_ss)
+//!   x25519_ss = X25519(sk, kem_ct.x25519)  [on tag match]
+//!   combined_ss = combine(x25519_ss, ml_kem_ss)
 //!   secrets = derive_output_secrets(combined_ss, output_index)
 //!   verify amount_tag
 //!   recover amount = decrypt(enc_amount, k_amount)
@@ -40,12 +41,31 @@ use fips203::{
 };
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use shekyl_generators::{H, T};
 
+/// Set by `ml_kem_decap_prefilter_with_dk` when a tag mismatch runs an explicit
+/// `ml_kem_ss` wipe before returning `Err` (test-only observability).
+#[cfg(test)]
+static ML_KEM_SS_WIPED_ON_PREFILTER_REJECT: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+pub(crate) fn reset_ml_kem_ss_wipe_probe() {
+    ML_KEM_SS_WIPED_ON_PREFILTER_REJECT.store(false, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn ml_kem_ss_wiped_on_last_prefilter_reject() -> bool {
+    ML_KEM_SS_WIPED_ON_PREFILTER_REJECT.load(Ordering::SeqCst)
+}
+
 use crate::derivation::{
-    derive_kem_seed, derive_output_secrets, derive_view_tag_x25519, hash_pqc_public_key,
+    derive_kem_seed, derive_output_secrets, derive_view_tag_prefilter, hash_pqc_public_key,
     keygen_from_seed, OutputSecrets,
 };
+use crate::kem::MlKemDecapsKey;
 use crate::kem::{
     combine_shared_secrets, SharedSecret, ML_KEM_768_CT_LEN, ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN,
 };
@@ -73,9 +93,9 @@ pub struct OutputData {
     /// 1-byte AAD tag for label integrity.
     #[zeroize(skip)]
     pub label_tag: u8,
-    /// X25519-only view tag for scanner pre-filtering.
+    /// ML-KEM-keyed view tag for scanner pre-filtering (wire: `view_tag`).
     #[zeroize(skip)]
-    pub view_tag_x25519: u8,
+    pub view_tag_prefilter: u8,
     /// Ephemeral X25519 public key (part of KEM ciphertext).
     #[zeroize(skip)]
     pub kem_ciphertext_x25519: [u8; 32],
@@ -107,7 +127,7 @@ impl std::fmt::Debug for OutputData {
             .field("commitment", &self.commitment)
             .field("amount_tag", &self.amount_tag)
             .field("label_tag", &self.label_tag)
-            .field("view_tag_x25519", &self.view_tag_x25519)
+            .field("view_tag_prefilter", &self.view_tag_prefilter)
             .field("y", &"[REDACTED]")
             .field("z", &"[REDACTED]")
             .field("k_amount", &"[REDACTED]")
@@ -231,11 +251,9 @@ pub fn construct_output(
     let ml_ss_bytes = Zeroizing::new(ml_ss.into_bytes());
     let ml_ct_bytes = ml_ct.into_bytes();
 
+    let view_tag_prefilter = derive_view_tag_prefilter(&ml_ss_bytes, output_index);
+
     let combined_ss: SharedSecret = combine_shared_secrets(&x25519_raw_ss.0, &*ml_ss_bytes)?;
-
-    // --- View tag (X25519-only, pre-filter) ---
-
-    let view_tag_x25519 = derive_view_tag_x25519(&x25519_raw_ss.0, output_index);
 
     // --- Output secrets derivation ---
 
@@ -301,7 +319,7 @@ pub fn construct_output(
         amount_tag: secrets.amount_tag,
         enc_label,
         label_tag: secrets.label_tag,
-        view_tag_x25519,
+        view_tag_prefilter,
         kem_ciphertext_x25519: eph_mont_pub.0,
         kem_ciphertext_ml_kem: ml_ct_bytes.to_vec(),
         pqc_public_key: pqc_pk,
@@ -436,11 +454,73 @@ fn decap_ml_kem_and_combine(
     combine_shared_secrets(x25519_ss, &*ml_ss_bytes)
 }
 
+/// ML-KEM decap + FA-6 pre-filter tag compare (universal scan path).
+///
+/// `ml_kem_ss` is held in `Zeroizing<[u8; 32]>` for the whole function. On tag
+/// mismatch (the dominant path during chain scan), the buffer is explicitly
+/// zeroized before `Err` — the early-return-leaves-secrets-unwiped failure mode
+/// that FA-6 promotes from rare to common.
+fn ml_kem_decap_prefilter_with_dk(
+    ml_kem_dk: &ml_kem_768::DecapsKey,
+    kem_ct_ml_kem: &[u8],
+    view_tag_on_chain: u8,
+    output_index: u64,
+) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+    if kem_ct_ml_kem.len() != ML_KEM_768_CT_LEN {
+        return Err(CryptoError::DecapsulationFailed(
+            "invalid ML-KEM ciphertext length".into(),
+        ));
+    }
+
+    let ct_bytes: [u8; ML_KEM_768_CT_LEN] = kem_ct_ml_kem
+        .try_into()
+        .map_err(|_| CryptoError::DecapsulationFailed("invalid ciphertext".into()))?;
+    let ct = ml_kem_768::CipherText::try_from_bytes(ct_bytes)
+        .map_err(|e| CryptoError::DecapsulationFailed(format!("invalid ciphertext: {e}")))?;
+
+    let ml_ss = ml_kem_dk
+        .try_decaps(&ct)
+        .map_err(|e| CryptoError::DecapsulationFailed(format!("ML-KEM-768 decaps: {e}")))?;
+    let mut ml_ss_bytes = Zeroizing::new(ml_ss.into_bytes());
+
+    let expected = derive_view_tag_prefilter(&ml_ss_bytes, output_index);
+    if expected != view_tag_on_chain {
+        ml_ss_bytes.zeroize();
+        #[cfg(test)]
+        ML_KEM_SS_WIPED_ON_PREFILTER_REJECT.store(true, Ordering::SeqCst);
+        return Err(CryptoError::DecapsulationFailed(
+            "view tag pre-filter mismatch — output not for this key".into(),
+        ));
+    }
+
+    Ok(ml_ss_bytes)
+}
+
+/// ML-KEM decap + FA-6 pre-filter using a parsed decapsulation key (batch scan).
+pub fn ml_kem_decap_prefilter_with_parsed_dk(
+    ml_kem_dk: &MlKemDecapsKey,
+    kem_ct_ml_kem: &[u8],
+    view_tag_on_chain: u8,
+    output_index: u64,
+) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+    ml_kem_decap_prefilter_with_dk(
+        ml_kem_dk.as_decaps_key(),
+        kem_ct_ml_kem,
+        view_tag_on_chain,
+        output_index,
+    )
+}
+
 /// Scan an output to determine ownership and recover secrets.
 ///
 /// Returns `Err` for outputs that don't belong to this key, or for
-/// cryptographic integrity failures. View-tag mismatch returns early
-/// (cheap rejection). Amount-tag mismatch is a loud cryptographic failure.
+/// cryptographic integrity failures. Pre-filter tag mismatch returns after
+/// ML-KEM decap (skips X25519 and downstream derivation; not the legacy
+/// X25519-only prefilter cost model). Amount-tag mismatch is a loud failure.
+///
+/// Re-parses `ml_kem_dk` on every call. For batch chain scan, parse once with
+/// [`crate::kem::MlKemDecapsKey::from_bytes`] and call
+/// [`scan_output_with_ml_kem_dk`].
 // CLIPPY: parameters correspond 1:1 to on-chain output fields plus recipient
 // keys; bundling into a struct would just move the field list elsewhere.
 #[allow(clippy::too_many_arguments)]
@@ -459,63 +539,60 @@ pub fn scan_output(
     spend_key: &[u8; 32],
     output_index: u64,
 ) -> Result<ScannedOutput, CryptoError> {
-    // --- X25519 view tag pre-filter ---
+    let parsed = MlKemDecapsKey::from_bytes(ml_kem_dk)?;
+    scan_output_with_ml_kem_dk(
+        x25519_sk,
+        &parsed,
+        kem_ct_x25519,
+        kem_ct_ml_kem,
+        output_key,
+        commitment,
+        enc_amount,
+        amount_tag_on_chain,
+        enc_label,
+        label_tag_on_chain,
+        view_tag_on_chain,
+        spend_key,
+        output_index,
+    )
+}
 
-    // `view_scalar` is the wallet view secret in scalar form, reconstructed once
-    // per scanned output on a daemon-drivable path; `x25519_raw_ss` is the raw
-    // ECDH shared secret. Both are wrapped in `Zeroizing` so their limbs wipe on
-    // every exit path (view-tag / amount-tag / commitment mismatch `Err`s
-    // included). `curve25519-dalek`'s `Scalar`/`MontgomeryPoint` impl `Zeroize`
-    // (the `zeroize` feature, enabled in this crate's `Cargo.toml`) but not
-    // `ZeroizeOnDrop`, so the wrapper is what actually wipes them.
+/// Like [`scan_output`] but reuses a parsed ML-KEM decapsulation key.
+#[allow(clippy::too_many_arguments)]
+pub fn scan_output_with_ml_kem_dk(
+    x25519_sk: &[u8; 32],
+    ml_kem_dk: &MlKemDecapsKey,
+    kem_ct_x25519: &[u8; 32],
+    kem_ct_ml_kem: &[u8],
+    output_key: &[u8; 32],
+    commitment: &[u8; 32],
+    enc_amount: &[u8; 8],
+    amount_tag_on_chain: u8,
+    enc_label: &[u8; 8],
+    label_tag_on_chain: u8,
+    view_tag_on_chain: u8,
+    spend_key: &[u8; 32],
+    output_index: u64,
+) -> Result<ScannedOutput, CryptoError> {
+    // --- ML-KEM decap + PQ pre-filter (every output) ---
+
+    let ml_ss_bytes = ml_kem_decap_prefilter_with_parsed_dk(
+        ml_kem_dk,
+        kem_ct_ml_kem,
+        view_tag_on_chain,
+        output_index,
+    )?;
+
+    // --- X25519 ECDH (tag match only) ---
+
     let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*x25519_sk));
     let eph_mont = MontgomeryPoint(*kem_ct_x25519);
 
-    // kem_ct_x25519 arrives from tx_extra on a network transaction — attacker-controlled.
-    // Without clamping, view_scalar * low_order_point leaks view_scalar mod 8.
     if crate::montgomery::is_low_order_montgomery(&eph_mont) {
         return Err(CryptoError::LowOrderPoint);
     }
 
-    // View secret is an Ed25519 scalar already reduced mod l; clamping would mutate it
-    // and desynchronize from sender-side derivation. Low-order points are rejected above.
-    // Constant-time: curve25519-dalek scalar * MontgomeryPoint is always constant-time.
     let x25519_raw_ss = Zeroizing::new(*view_scalar * eph_mont);
-
-    let expected_view_tag = derive_view_tag_x25519(&x25519_raw_ss.0, output_index);
-    if expected_view_tag != view_tag_on_chain {
-        return Err(CryptoError::DecapsulationFailed(
-            "X25519 view tag mismatch — output not for this key".into(),
-        ));
-    }
-
-    // --- Full KEM decapsulation ---
-
-    if ml_kem_dk.len() != ML_KEM_768_DK_LEN {
-        return Err(CryptoError::InvalidKeyMaterial);
-    }
-    if kem_ct_ml_kem.len() != ML_KEM_768_CT_LEN {
-        return Err(CryptoError::DecapsulationFailed(
-            "invalid ML-KEM ciphertext length".into(),
-        ));
-    }
-
-    let dk_bytes: [u8; ML_KEM_768_DK_LEN] = ml_kem_dk
-        .try_into()
-        .map_err(|_| CryptoError::InvalidKeyMaterial)?;
-    let dk = ml_kem_768::DecapsKey::try_from_bytes(dk_bytes)
-        .map_err(|e| CryptoError::DecapsulationFailed(format!("invalid decap key: {e}")))?;
-
-    let ct_bytes: [u8; ML_KEM_768_CT_LEN] = kem_ct_ml_kem
-        .try_into()
-        .map_err(|_| CryptoError::DecapsulationFailed("invalid ciphertext".into()))?;
-    let ct = ml_kem_768::CipherText::try_from_bytes(ct_bytes)
-        .map_err(|e| CryptoError::DecapsulationFailed(format!("invalid ciphertext: {e}")))?;
-
-    let ml_ss = dk
-        .try_decaps(&ct)
-        .map_err(|e| CryptoError::DecapsulationFailed(format!("ML-KEM-768 decaps: {e}")))?;
-    let ml_ss_bytes = Zeroizing::new(ml_ss.into_bytes());
 
     let combined_ss: SharedSecret = combine_shared_secrets(&x25519_raw_ss.0, &*ml_ss_bytes)?;
 
@@ -670,6 +747,9 @@ impl std::fmt::Debug for RecoveredOutput {
 /// This avoids iterating over subaddresses in Rust. The caller checks
 /// `B'` against its subaddress table to determine ownership. Commitment
 /// verification (`C == z*G + amount*H`) IS performed here.
+///
+/// Re-parses `ml_kem_dk` on every call. For batch chain scan, use
+/// [`scan_output_recover_with_ml_kem_dk`].
 // CLIPPY: parameters correspond 1:1 to on-chain output fields plus recipient keys.
 #[allow(clippy::too_many_arguments)]
 pub fn scan_output_recover(
@@ -686,47 +766,56 @@ pub fn scan_output_recover(
     view_tag_on_chain: u8,
     output_index: u64,
 ) -> Result<RecoveredOutput, CryptoError> {
-    // --- X25519 view tag pre-filter ---
-    //
-    // `view_scalar` is the view secret in Ed25519-scalar form, reconstructed on
-    // every output iteration; `x25519_raw_ss` is the raw ECDH shared secret.
-    // Both are `Zeroizing` so they wipe on every exit path — including the early
-    // view-tag / decap / commitment `Err` returns below. `curve25519-dalek`'s
-    // `Scalar` and `MontgomeryPoint` impl `Zeroize` (the `zeroize` feature,
-    // enabled in this crate's `Cargo.toml`) but not `ZeroizeOnDrop`, so the
-    // `Zeroizing` wrapper is what actually wipes them at scope end.
+    let parsed = MlKemDecapsKey::from_bytes(ml_kem_dk)?;
+    scan_output_recover_with_ml_kem_dk(
+        x25519_sk,
+        &parsed,
+        kem_ct_x25519,
+        kem_ct_ml_kem,
+        output_key,
+        commitment,
+        enc_amount,
+        amount_tag_on_chain,
+        enc_label,
+        label_tag_on_chain,
+        view_tag_on_chain,
+        output_index,
+    )
+}
+
+/// Like [`scan_output_recover`] but reuses a parsed ML-KEM decapsulation key.
+#[allow(clippy::too_many_arguments)]
+pub fn scan_output_recover_with_ml_kem_dk(
+    x25519_sk: &[u8; 32],
+    ml_kem_dk: &MlKemDecapsKey,
+    kem_ct_x25519: &[u8; 32],
+    kem_ct_ml_kem: &[u8],
+    output_key: &[u8; 32],
+    commitment: &[u8; 32],
+    enc_amount: &[u8; 8],
+    amount_tag_on_chain: u8,
+    enc_label: &[u8; 8],
+    label_tag_on_chain: u8,
+    view_tag_on_chain: u8,
+    output_index: u64,
+) -> Result<RecoveredOutput, CryptoError> {
+    let ml_ss_bytes = ml_kem_decap_prefilter_with_parsed_dk(
+        ml_kem_dk,
+        kem_ct_ml_kem,
+        view_tag_on_chain,
+        output_index,
+    )?;
+
     let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*x25519_sk));
     let eph_mont = MontgomeryPoint(*kem_ct_x25519);
 
-    // kem_ct_x25519 arrives from tx_extra on a network transaction — attacker-controlled.
-    // Without clamping, view_scalar * low_order_point leaks view_scalar mod 8.
     if crate::montgomery::is_low_order_montgomery(&eph_mont) {
         return Err(CryptoError::LowOrderPoint);
     }
 
-    // View secret is an Ed25519 scalar already reduced mod l; clamping would mutate it
-    // and desynchronize from sender-side derivation. Low-order points are rejected above.
-    // Constant-time: curve25519-dalek scalar * MontgomeryPoint is always constant-time.
     let x25519_raw_ss = Zeroizing::new(*view_scalar * eph_mont);
 
-    let expected_view_tag = derive_view_tag_x25519(&x25519_raw_ss.0, output_index);
-    if expected_view_tag != view_tag_on_chain {
-        return Err(CryptoError::DecapsulationFailed(
-            "X25519 view tag mismatch — output not for this key".into(),
-        ));
-    }
-
-    // --- Full KEM decapsulation + HKDF combine ---
-    //
-    // Delegated to [`decap_ml_kem_and_combine`] so that this chain has one
-    // canonical implementation shared with [`recover_combined_ss`] (the engine's
-    // re-decap entry point on the deterministic-handle pathway). The inline
-    // X25519 ECDH above is kept (rather than calling `recover_combined_ss`
-    // directly) so that view-tag rejection short-circuits before the more
-    // expensive ML-KEM decap, preserving the scan-time fast-path the legacy
-    // pipeline relied on.
-    let combined_ss: SharedSecret =
-        decap_ml_kem_and_combine(&x25519_raw_ss.0, ml_kem_dk, kem_ct_ml_kem)?;
+    let combined_ss: SharedSecret = combine_shared_secrets(&x25519_raw_ss.0, &*ml_ss_bytes)?;
 
     // --- Output secrets derivation ---
     let secrets: OutputSecrets = derive_output_secrets(&combined_ss.0, output_index);
@@ -1307,7 +1396,7 @@ mod tests {
             out.amount_tag,
             &out.enc_label,
             out.label_tag,
-            out.view_tag_x25519,
+            out.view_tag_prefilter,
             &spend_key,
             output_index,
         )
@@ -1363,7 +1452,7 @@ mod tests {
                 out.amount_tag,
                 &out.enc_label,
                 out.label_tag,
-                out.view_tag_x25519,
+                out.view_tag_prefilter,
                 &spend_key,
                 idx,
             )
@@ -1407,7 +1496,7 @@ mod tests {
             out.amount_tag,
             &out.enc_label,
             out.label_tag,
-            out.view_tag_x25519,
+            out.view_tag_prefilter,
             &wrong_spend_key,
             0,
         );
@@ -1421,7 +1510,15 @@ mod tests {
     }
 
     #[test]
-    fn scan_wrong_kem_key_view_tag_mismatch() {
+    fn ml_kem_ss_buffer_is_zeroize_on_drop() {
+        fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<Zeroizing<[u8; 32]>>();
+    }
+
+    #[test]
+    fn ml_kem_ss_wiped_on_view_tag_prefilter_mismatch() {
+        reset_ml_kem_ss_wipe_probe();
+
         let kem = HybridX25519MlKem;
         let (recipient_pk, _) = kem.keypair_generate().unwrap();
         let (_, wrong_sk) = kem.keypair_generate().unwrap();
@@ -1452,12 +1549,21 @@ mod tests {
             out.amount_tag,
             &out.enc_label,
             out.label_tag,
-            out.view_tag_x25519,
+            out.view_tag_prefilter,
             &spend_key,
             0,
         );
 
         assert!(result.is_err(), "scan with wrong KEM key must fail");
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("view tag pre-filter mismatch"),
+            "wrong KEM key must fail at pre-filter, not later: {err_msg}"
+        );
+        assert!(
+            ml_kem_ss_wiped_on_last_prefilter_reject(),
+            "ml_kem_ss must be wiped on tag-mismatch reject (universal decap path)"
+        );
     }
 
     #[test]
@@ -1492,7 +1598,7 @@ mod tests {
             bad_tag,
             &out.enc_label,
             out.label_tag,
-            out.view_tag_x25519,
+            out.view_tag_prefilter,
             &spend_key,
             0,
         );
@@ -1550,7 +1656,7 @@ mod tests {
             out.amount_tag,
             &out.enc_label,
             out.label_tag,
-            out.view_tag_x25519,
+            out.view_tag_prefilter,
             &spend_key,
             0,
         )
@@ -1583,7 +1689,7 @@ mod tests {
             out.amount_tag,
             &out.enc_label,
             out.label_tag,
-            out.view_tag_x25519,
+            out.view_tag_prefilter,
             &spend_key,
             0,
         )
@@ -1646,7 +1752,7 @@ mod tests {
             out.amount_tag,
             &out.enc_label,
             out.label_tag,
-            out.view_tag_x25519,
+            out.view_tag_prefilter,
             &spend_key,
             0,
         )
@@ -1727,7 +1833,7 @@ mod tests {
             out.amount_tag,
             &out.enc_label,
             out.label_tag,
-            out.view_tag_x25519,
+            out.view_tag_prefilter,
             &spend_key,
             0,
         )
@@ -1782,7 +1888,7 @@ mod tests {
             "amount_tag must be deterministic"
         );
         assert_eq!(
-            out1.view_tag_x25519, out2.view_tag_x25519,
+            out1.view_tag_prefilter, out2.view_tag_prefilter,
             "view_tag must be deterministic"
         );
         assert_eq!(
@@ -2207,7 +2313,7 @@ mod tests {
             out.amount_tag,
             &out.enc_label,
             out.label_tag,
-            out.view_tag_x25519,
+            out.view_tag_prefilter,
             &spend_key,
             idx,
         )
@@ -2358,7 +2464,7 @@ mod tests {
             out.amount_tag,
             &out.enc_label,
             out.label_tag,
-            out.view_tag_x25519,
+            out.view_tag_prefilter,
             idx,
         )
         .unwrap();
@@ -2411,7 +2517,7 @@ mod tests {
                 out.amount_tag,
                 &out.enc_label,
                 out.label_tag,
-                out.view_tag_x25519,
+                out.view_tag_prefilter,
                 idx,
             )
             .unwrap();
@@ -2422,13 +2528,21 @@ mod tests {
 
     #[test]
     fn scan_output_recover_rejects_low_order_x25519_ephemeral() {
-        use crate::montgomery::ed25519_sk_as_montgomery_scalar;
-
         let kem = HybridX25519MlKem;
-        let (_, full_sk) = kem.keypair_generate().unwrap();
-
-        let view_scalar = Scalar::random(&mut rand::rngs::OsRng);
-        let x25519_sec = ed25519_sk_as_montgomery_scalar(&view_scalar.to_bytes());
+        let (recipient_pk, recipient_sk) = kem.keypair_generate().unwrap();
+        let tx_key = [0x11u8; 32];
+        let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
+            .compress()
+            .to_bytes();
+        let out = construct_output(
+            &tx_key,
+            &recipient_pk.x25519,
+            &recipient_pk.ml_kem,
+            &spend_key,
+            100,
+            0,
+        )
+        .unwrap();
 
         // All known low-order u-coordinates on Curve25519
         let low_order_u_coords: Vec<[u8; 32]> = {
@@ -2474,22 +2588,20 @@ mod tests {
             pts
         };
 
-        let dummy_ml_kem_ct = vec![0u8; 1088]; // will never be reached
-
         for (i, low_order_u) in low_order_u_coords.iter().enumerate() {
             let result = scan_output_recover(
-                &x25519_sec.to_bytes(),
-                &full_sk.ml_kem,
+                &recipient_sk.x25519,
+                &recipient_sk.ml_kem,
                 low_order_u,
-                &dummy_ml_kem_ct,
-                &[0u8; 32], // dummy output key
-                &[0u8; 32], // dummy commitment
-                &[0u8; 8],  // dummy enc_amount
-                0,          // dummy amount_tag
-                &[0u8; 8],  // dummy enc_label
-                0,          // dummy label_tag
-                0,          // dummy view_tag
-                0,          // output_index
+                &out.kem_ciphertext_ml_kem,
+                &out.output_key,
+                &out.commitment,
+                &out.enc_amount,
+                out.amount_tag,
+                &out.enc_label,
+                out.label_tag,
+                out.view_tag_prefilter,
+                0,
             );
             assert!(
                 result.is_err(),
@@ -2538,5 +2650,40 @@ mod tests {
             result.is_err(),
             "zero ephemeral must be rejected by scan_output"
         );
+    }
+
+    /// FA-6 §6.4: universal decap must not panic on attacker-authored CT.
+    #[test]
+    fn scan_output_garbage_ml_kem_ct_no_panic() {
+        use crate::montgomery::ed25519_sk_as_montgomery_scalar;
+
+        let kem = HybridX25519MlKem;
+        let (pk, full_sk) = kem.keypair_generate().unwrap();
+        let tx_key = [0x42u8; 32];
+        let spend_key = (G * Scalar::random(&mut rand::rngs::OsRng))
+            .compress()
+            .to_bytes();
+        let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 100, 0).unwrap();
+
+        let view_scalar = Scalar::random(&mut rand::rngs::OsRng);
+        let x25519_sec = ed25519_sk_as_montgomery_scalar(&view_scalar.to_bytes());
+        let garbage_ct = vec![0xABu8; ML_KEM_768_CT_LEN];
+
+        let result = scan_output(
+            &x25519_sec.to_bytes(),
+            &full_sk.ml_kem,
+            &out.kem_ciphertext_x25519,
+            &garbage_ct,
+            &out.output_key,
+            &out.commitment,
+            &out.enc_amount,
+            out.amount_tag,
+            &out.enc_label,
+            out.label_tag,
+            out.view_tag_prefilter,
+            &spend_key,
+            0,
+        );
+        assert!(result.is_err());
     }
 }

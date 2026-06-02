@@ -763,12 +763,15 @@ closure:
   Ed25519 spend/view + independent ML-KEM-768 keypair per index — **not**
   `D + m_i·G` algebraic offsets.
 - Each account = one address string, byte-unlinkable from other accounts.
-- **Scan (proposed):** per output, `k` cheap classical view-tag checks
-  (one view scalar per account); ML-KEM decap only on tag hit
-  (~`k/256` false-positive rate per account). For **small `k`** (2–5
-  contexts: personal / merchant / donation) cost is negligible — unlike
-  End-state 2's **thousands** of per-subaddress keys each forcing a
-  decap attempt.
+- **Scan (proposed — must be FA-6-aware):** V3.0 genesis locks the wire
+  pre-filter to `derive_view_tag_prefilter(ml_kem_ss, …)` per
+  [`FA-6_VIEW_TAG_ML_KEM.md`](FA-6_VIEW_TAG_ML_KEM.md) (universal ML-KEM decap
+  → tag compare per account key, then X25519 only on match). A pre-FA-6 sketch of
+  "`k` cheap **classical** view-tag checks; decap only on hit" is **obsolete** —
+  the tag is PQ-keyed and cannot be filtered with a classical view scalar alone.
+  For small `k` (2–5 contexts), cost is **`k` decaps per output** in the worst case
+  (still far cheaper than End-state 2's thousands of per-subaddress keys). Design
+  multi-account scan when that capability is picked up, not at V3.0 genesis.
 
 **Conceptual model:** "Want an unlinkable context? Create another account."
 Most users: **one account** → one address → O(1) scan → paste once.

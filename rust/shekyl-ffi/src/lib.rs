@@ -124,7 +124,7 @@ pub struct ShekylOutputData {
     pub amount_tag: u8,
     pub enc_label: [u8; 8],
     pub label_tag: u8,
-    pub view_tag_x25519: u8,
+    pub view_tag_prefilter: u8,
     pub kem_ciphertext_x25519: [u8; 32],
     pub kem_ciphertext_ml_kem: ShekylBuffer,
     pub pqc_public_key: ShekylBuffer,
@@ -1182,27 +1182,27 @@ pub unsafe extern "C" fn shekyl_derive_output_secrets(
     true
 }
 
-/// Derive the X25519-only view tag for scanner pre-filtering.
+/// Derive the ML-KEM-keyed view-tag pre-filter byte (FA-6).
 ///
-/// `x25519_ss_ptr` must point to exactly 32 bytes. Returns the 1-byte tag.
+/// `ml_kem_ss_ptr` must point to exactly 32 bytes. Returns the 1-byte wire tag.
 /// Returns 0 if the pointer is null (callers should check for null separately).
 ///
 /// # Safety
 /// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_derive_view_tag_x25519(
-    x25519_ss_ptr: *const u8,
+pub unsafe extern "C" fn shekyl_derive_view_tag_prefilter(
+    ml_kem_ss_ptr: *const u8,
     output_index: u64,
 ) -> u8 {
-    if x25519_ss_ptr.is_null() {
+    if ml_kem_ss_ptr.is_null() {
         return 0;
     }
     let ss: [u8; 32] = unsafe {
         let mut buf = [0u8; 32];
-        std::ptr::copy_nonoverlapping(x25519_ss_ptr, buf.as_mut_ptr(), 32);
+        std::ptr::copy_nonoverlapping(ml_kem_ss_ptr, buf.as_mut_ptr(), 32);
         buf
     };
-    shekyl_crypto_pq::derivation::derive_view_tag_x25519(&ss, output_index)
+    shekyl_crypto_pq::derivation::derive_view_tag_prefilter(&ss, output_index)
 }
 
 /// Compute the expected FCMP++ proof size given input count and tree depth.
@@ -3427,7 +3427,7 @@ pub unsafe extern "C" fn shekyl_construct_output(
         amount_tag: 0,
         enc_label: [0; 8],
         label_tag: 0,
-        view_tag_x25519: 0,
+        view_tag_prefilter: 0,
         kem_ciphertext_x25519: [0; 32],
         kem_ciphertext_ml_kem: ShekylBuffer::null(),
         pqc_public_key: ShekylBuffer::null(),
@@ -3460,7 +3460,7 @@ pub unsafe extern "C" fn shekyl_construct_output(
             amount_tag: out.amount_tag,
             enc_label: out.enc_label,
             label_tag: out.label_tag,
-            view_tag_x25519: out.view_tag_x25519,
+            view_tag_prefilter: out.view_tag_prefilter,
             kem_ciphertext_x25519: out.kem_ciphertext_x25519,
             kem_ciphertext_ml_kem: ShekylBuffer::from_vec(out.kem_ciphertext_ml_kem.clone()),
             pqc_public_key: ShekylBuffer::from_vec(out.pqc_public_key.clone()),

@@ -98,7 +98,7 @@ fn scan_output_recover_prefix_byte_identical() {
         out.amount_tag,
         &out.enc_label,
         out.label_tag,
-        out.view_tag_x25519,
+        out.view_tag_prefilter,
         output_index,
     )
     .expect("scan_output_recover against own keys");

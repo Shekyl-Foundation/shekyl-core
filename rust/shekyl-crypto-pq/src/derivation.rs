@@ -148,8 +148,8 @@ use curve25519_dalek::scalar::Scalar;
 /// HKDF salt for the combined shared secret derivation (Instance 1).
 const HKDF_SALT_OUTPUT_DERIVE: &[u8] = b"shekyl-output-derive-v1";
 
-/// HKDF salt for X25519-only view tag derivation (Instance 2).
-const HKDF_SALT_VIEW_TAG_X25519: &[u8] = b"shekyl-view-tag-x25519-v1";
+/// HKDF salt for ML-KEM-keyed view-tag pre-filter (Instance 2).
+const HKDF_SALT_VIEW_TAG_PREFILTER: &[u8] = b"shekyl-view-tag-prefilter-v1";
 
 /// HKDF salt for deterministic KEM seed derivation from tx_key (Instance 3).
 ///
@@ -169,13 +169,14 @@ const LABEL_OUTPUT_LABEL_KEY: &[u8] = b"shekyl-output-label-key";
 const LABEL_OUTPUT_LABEL_TAG: &[u8] = b"shekyl-output-label-tag";
 const LABEL_OUTPUT_PQC: &[u8] = b"shekyl-pqc-output";
 const LABEL_OUTPUT_PQC_ED25519: &[u8] = b"shekyl-pqc-ed25519";
-const LABEL_VIEW_TAG_X25519: &[u8] = b"shekyl-view-tag-x25519";
+const LABEL_VIEW_TAG_PREFILTER: &[u8] = b"shekyl-view-tag-prefilter";
 
 /// All per-output secrets derived from a combined KEM shared secret.
 ///
 /// Derivation:
 /// ```text
-/// combined_ss = X25519(eph_sk, view_pk) || ML-KEM-768.Decap(kem_sk, ct)
+/// combined_ss = HKDF-SHA-512(salt="shekyl-kem-v1", ikm=x25519_ss||ml_kem_ss, info="", L=64)
+///   (see [`crate::kem::combine_shared_secrets`]; not raw concatenation)
 /// prk = HKDF-Extract(salt="shekyl-output-derive-v1", ikm=combined_ss)
 ///
 /// ho              = wide_reduce(HKDF-Expand(prk, "shekyl-output-x"              || idx_le64, 64))
@@ -215,9 +216,9 @@ pub struct OutputSecrets {
 
 /// Derive all per-output secrets from the combined KEM shared secret.
 ///
-/// `combined_ss` is the concatenation of X25519 and ML-KEM-768 shared secrets.
-/// Any length is accepted (HKDF-Extract handles variable-length IKM), but the
-/// expected production length is 64 bytes (32 X25519 + 32 ML-KEM).
+/// `combined_ss` is the 64-byte OKM from [`crate::kem::combine_shared_secrets`]
+/// on the production scan path. Any length is accepted here (HKDF-Extract
+/// handles variable-length IKM); test vectors may supply synthetic IKM directly.
 pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSecrets {
     let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_OUTPUT_DERIVE), combined_ss);
 
@@ -255,14 +256,13 @@ pub fn derive_output_secrets(combined_ss: &[u8], output_index: u64) -> OutputSec
     }
 }
 
-/// Derive the X25519-only view tag for scanner pre-filtering.
+/// Derive the on-wire view-tag pre-filter byte from ML-KEM shared secret only.
 ///
-/// This tag goes on the wire and lets the scanner reject non-matching outputs
-/// without performing ML-KEM decapsulation. Uses a separate HKDF instance
-/// with its own salt.
-pub fn derive_view_tag_x25519(x25519_ss: &[u8; 32], output_index: u64) -> u8 {
-    let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_VIEW_TAG_X25519), x25519_ss);
-    expand_first_byte(&hk, LABEL_VIEW_TAG_X25519, output_index)
+/// FA-6 (T6): the wire tag must not be computable from quantum-recoverable
+/// view material. Scanner compares this **after** universal ML-KEM decap.
+pub fn derive_view_tag_prefilter(ml_kem_ss: &[u8; 32], output_index: u64) -> u8 {
+    let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_VIEW_TAG_PREFILTER), ml_kem_ss);
+    expand_first_byte(&hk, LABEL_VIEW_TAG_PREFILTER, output_index)
 }
 
 /// Derive the per-output KEM seed from `tx_key` and recipient public keys.
@@ -540,8 +540,8 @@ mod tests {
         enc_label_sentinel: String,
         enc_label_sentinel_9: String,
         ml_dsa_seed: String,
-        x25519_ss: String,
-        view_tag_x25519: u8,
+        ml_kem_ss: String,
+        view_tag_prefilter: u8,
     }
 
     #[derive(serde::Deserialize)]
@@ -639,15 +639,15 @@ mod tests {
     }
 
     #[test]
-    fn view_tag_x25519_known_answer_vectors() {
+    fn view_tag_prefilter_known_answer_vectors() {
         let vectors = load_test_vectors();
         for (i, v) in vectors.iter().enumerate() {
-            let x_ss_bytes = hex::decode(&v.x25519_ss).unwrap();
-            let x_ss: [u8; 32] = x_ss_bytes.as_slice().try_into().unwrap();
-            let tag = derive_view_tag_x25519(&x_ss, v.output_index);
+            let ml_ss_bytes = hex::decode(&v.ml_kem_ss).unwrap();
+            let ml_ss: [u8; 32] = ml_ss_bytes.as_slice().try_into().unwrap();
+            let tag = derive_view_tag_prefilter(&ml_ss, v.output_index);
             assert_eq!(
-                tag, v.view_tag_x25519,
-                "vector {i}: view_tag_x25519 mismatch"
+                tag, v.view_tag_prefilter,
+                "vector {i}: view_tag_prefilter mismatch"
             );
         }
     }

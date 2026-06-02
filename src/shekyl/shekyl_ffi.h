@@ -318,10 +318,10 @@ bool shekyl_derive_output_secrets(
     uint8_t* out_amount_tag,
     uint8_t* out_ml_dsa_seed);
 
-/// Derive X25519-only view tag for scanner pre-filtering.
-/// x25519_ss_ptr: exactly 32 bytes. Returns 1-byte tag.
-uint8_t shekyl_derive_view_tag_x25519(
-    const uint8_t* x25519_ss_ptr,
+/// Derive ML-KEM-keyed view-tag pre-filter byte (FA-6).
+/// ml_kem_ss_ptr: exactly 32 bytes. Returns 1-byte wire tag.
+uint8_t shekyl_derive_view_tag_prefilter(
+    const uint8_t* ml_kem_ss_ptr,
     uint64_t output_index);
 
 /// Expected proof size for given inputs and tree depth.
@@ -494,7 +494,7 @@ struct ShekylOutputData {
     uint8_t amount_tag;
     uint8_t enc_label[8];
     uint8_t label_tag;
-    uint8_t view_tag_x25519;
+    uint8_t view_tag_prefilter;
     uint8_t kem_ciphertext_x25519[32];
     ShekylBuffer kem_ciphertext_ml_kem;
     ShekylBuffer pqc_public_key;
