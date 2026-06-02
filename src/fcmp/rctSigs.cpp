@@ -81,9 +81,9 @@ namespace
         return BulletproofPlus{keyV(n_outs, I), I, I, I, I, I, I, keyV(nrl, I), keyV(nrl, I)};
     }
 
-    /// Stub builder zero-fills `enc_labels`; production signing must use
+    /// Stub builder leaves `enc_labels` zeroed; production signing must use
     /// `construct_output` precomputed values. `genRctFcmpPlusPlus` rejects
-    /// all-zero enc_labels outside TRANSACTION_CREATE_FAKE device mode.
+    /// any stub all-zero `enc_label` outside TRANSACTION_CREATE_FAKE mode.
     static bool enc_label_is_stub_zeroed(const std::array<uint8_t, 9> &enc)
     {
         for (uint8_t b : enc)
@@ -123,11 +123,7 @@ namespace
 
         key sumout = zero();
         for (size_t i = 0; i < n_out; ++i)
-        {
             sc_add(sumout.bytes, masks[i].bytes, sumout.bytes);
-            memset(rv.enc_amounts[i].data(), 0, rv.enc_amounts[i].size());
-            memset(rv.enc_labels[i].data(), 0, rv.enc_labels[i].size());
-        }
 
         rv.p.pseudoOuts.resize(n_in);
         keyV a(n_in);
@@ -362,18 +358,12 @@ namespace
             }
             if (hwdev.get_mode() != hw::device::TRANSACTION_CREATE_FAKE)
             {
-                bool all_stub = true;
                 for (const auto &enc : enc_labels_precomputed)
                 {
-                    if (!enc_label_is_stub_zeroed(enc))
-                    {
-                        all_stub = false;
-                        break;
-                    }
+                    CHECK_AND_ASSERT_THROW_MES(
+                        !enc_label_is_stub_zeroed(enc),
+                        "enc_labels must be construct_output precomputed values, not stub zero-fill");
                 }
-                CHECK_AND_ASSERT_THROW_MES(
-                    !all_stub,
-                    "enc_labels must be construct_output precomputed values, not stub zero-fill");
             }
 
             // --- Pseudo-out blinding factors (balance proof) ---

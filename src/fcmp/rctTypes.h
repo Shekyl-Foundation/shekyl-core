@@ -322,6 +322,8 @@ namespace rct {
               enc_labels.resize(enc_labels_blob.size() / 9);
               for (size_t i = 0; i < enc_labels.size(); ++i)
                 memcpy(enc_labels[i].data(), &enc_labels_blob[i * 9], 9);
+              if (enc_labels.size() != enc_amounts.size())
+                return false;
             }
           }
           FIELD(outPk)

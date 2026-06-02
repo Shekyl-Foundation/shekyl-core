@@ -384,7 +384,7 @@ fast wallet scanning.
 | `z` (commitment mask) | `shekyl-output-derive-v1` | `shekyl-output-mask` &#124;&#124; index\_le64 | 64 B | mod l (wide) |
 | `k_amount` | `shekyl-output-derive-v1` | `shekyl-output-amount-key` &#124;&#124; index\_le64 | 32 B | raw |
 | `k_label` | `shekyl-output-derive-v1` | `shekyl-output-label-key` &#124;&#124; index\_le64 | 32 B | raw |
-| `view_tag_combined` | `shekyl-output-derive-v1` | `shekyl-output-view-tag` &#124;&#124; index\_le64 | 1 B | first byte |
+| `view_tag_combined` | `shekyl-output-derive-v1` | `shekyl-output-view-tag-combined` &#124;&#124; index\_le64 | 1 B | first byte |
 | `amount_tag` | `shekyl-output-derive-v1` | `shekyl-output-amount-tag` &#124;&#124; index\_le64 | 1 B | first byte |
 | `label_tag` | `shekyl-output-derive-v1` | `shekyl-output-label-tag` &#124;&#124; index\_le64 | 1 B | first byte |
 | `ml_dsa_seed` | `shekyl-output-derive-v1` | `shekyl-pqc-output` &#124;&#124; index\_le64 | 32 B | raw |
