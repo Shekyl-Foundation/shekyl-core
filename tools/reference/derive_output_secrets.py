@@ -145,12 +145,13 @@ def derive_view_tag_prefilter(ml_kem_ss: bytes, output_index: int) -> int:
 
 
 def ml_kem_ss_for_vector(combined_ss: bytes) -> bytes:
-    """Synthetic IKM for Instance-2 / pre-filter KAT rows.
+    """Synthetic IKM for Instance-2 / pre-filter KAT rows (not wire decap output).
 
-    For 64-byte `combined_ss`, uses the ML-KEM half (bytes 32..64). For
-    shorter rows (Group 5), uses the 32-byte `combined_ss` as synthetic
-    `ml_kem_ss` input to `derive_view_tag_prefilter` only — **not** an
-    on-wire ML-KEM decap output (V3.0 outputs are always hybrid).
+    Production `ml_kem_ss` is the ML-KEM decap output; it is **not** embedded in
+    the 64-byte `combine_shared_secrets` OKM used as Instance-1 IKM. For KAT
+    rows with a 64-byte `combined_ss` field, uses that field's last 32 bytes as
+    an independent synthetic `ml_kem_ss` paired with the same row's Instance-1
+    IKM. For 32-byte rows (Group 5), uses the full field.
     """
     if len(combined_ss) >= 64:
         return combined_ss[32:64]

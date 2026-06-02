@@ -1,7 +1,8 @@
 # FA-6 — PQ-safe view-tag pre-filter (T6 closure)
 
 **Status.** Specification reviewed (2026-06-02): §11 S1–S4, S6–S9 signed; **S5
-pending** ratified SLA numbers. **Disposition:** adopt at
+ratified** (§8.4.1 / §11.1 pins, 2026-06-02). **§8.7 bench gate still pending**
+(merge requires clean / marginal / fail vs S5 ceilings). **Disposition:** adopt at
 V3.0 genesis — re-key the on-wire 1-byte pre-filter from classical
 (`x25519_ss`) to hybrid-leg (`ml_kem_ss`). **Implementation:** separate PR
 after spec review; not bundled with FA-11 (`enc_label` wire) or subaddress
@@ -255,7 +256,7 @@ encoding as `combine_shared_secrets`.
 
 **Byte identity (encaps vs decaps):** The wire tag uses the raw 32-byte
 `SharedSecret::into_bytes()` from FIPS 203 ML-KEM-768 — the same encoding
-`construct_output` takes from `encaps_from_seed` / encaps and `ml_kem_decap_prefilter`
+`construct_output` takes from `encaps_from_seed` / encaps and `derive_view_tag_prefilter`
 takes from `try_decaps`. `combine_shared_secrets` already requires encaps and
 decaps halves to match; FA-6 now keys the pre-filter on that half **independently**,
 so the encoding must stay identical across construct, scan, and KAT vectors (not
@@ -419,7 +420,7 @@ Per Shekyl policy: new crypto lives in Rust; C++ orchestrates via FFI and must
 |-----------|------|-------|
 | Wire tag derivation | `shekyl_crypto_pq::derivation::derive_view_tag_prefilter` | Only HKDF definition |
 | Construct path | `output::construct_output` | After ML-KEM encaps |
-| Scan path | `output::ml_kem_decap_prefilter` → `scan_output` / `scan_output_recover` | Universal decap first |
+| Scan path | `output::ml_kem_decap_prefilter_with_parsed_dk` → `scan_output_with_ml_kem_dk` / `scan_output_recover_with_ml_kem_dk` | Universal decap first |
 | C++ coinbase / transfer | `shekyl_construct_output` (FFI) | Returns `view_tag_prefilter` in `ShekylOutputData` |
 | C++ wallet scan | Rust engine / `shekyl_scan_*` FFI | Consumes wire tag; no local HKDF |
 | Test reference | `tools/reference/derive_output_secrets.py` | Must match Rust byte-for-byte |

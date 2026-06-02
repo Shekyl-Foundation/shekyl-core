@@ -46,7 +46,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use shekyl_generators::{H, T};
 
-/// Set by `ml_kem_decap_prefilter` when a tag mismatch runs an explicit
+/// Set by `ml_kem_decap_prefilter_with_dk` when a tag mismatch runs an explicit
 /// `ml_kem_ss` wipe before returning `Err` (test-only observability).
 #[cfg(test)]
 static ML_KEM_SS_WIPED_ON_PREFILTER_REJECT: AtomicBool = AtomicBool::new(false);
