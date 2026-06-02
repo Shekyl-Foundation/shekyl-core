@@ -10,8 +10,8 @@
   tag compare → X25519 on match). HKDF salt `shekyl-view-tag-prefilter-v1`.
   Regenerated `docs/test_vectors/PQC_OUTPUT_SECRETS.json`. Regenerated
   mainnet/testnet/stagenet `GENESIS_TX` in `cryptonote_config.h` (coinbase
-  `view_tag_prefilter`; block 0 hash changes). Reference hex:
-  `shekyl-dev/tools/genesis_builder/genesis_tx_*.hex`. Spec:
+  `view_tag_prefilter`; block 0 hash changes). Reference hex in the
+  `shekyl-dev` repo at `tools/genesis_builder/genesis_tx_*.hex`. Spec:
   `docs/design/FA-6_VIEW_TAG_ML_KEM.md`.
 
 ### Fixed

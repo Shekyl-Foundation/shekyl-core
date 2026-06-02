@@ -65,6 +65,7 @@ use crate::derivation::{
     derive_kem_seed, derive_output_secrets, derive_view_tag_prefilter, hash_pqc_public_key,
     keygen_from_seed, OutputSecrets,
 };
+use crate::kem::MlKemDecapsKey;
 use crate::kem::{
     combine_shared_secrets, SharedSecret, ML_KEM_768_CT_LEN, ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN,
 };
@@ -459,26 +460,17 @@ fn decap_ml_kem_and_combine(
 /// mismatch (the dominant path during chain scan), the buffer is explicitly
 /// zeroized before `Err` — the early-return-leaves-secrets-unwiped failure mode
 /// that FA-6 promotes from rare to common.
-fn ml_kem_decap_prefilter(
-    ml_kem_dk: &[u8],
+fn ml_kem_decap_prefilter_with_dk(
+    ml_kem_dk: &ml_kem_768::DecapsKey,
     kem_ct_ml_kem: &[u8],
     view_tag_on_chain: u8,
     output_index: u64,
 ) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
-    if ml_kem_dk.len() != ML_KEM_768_DK_LEN {
-        return Err(CryptoError::InvalidKeyMaterial);
-    }
     if kem_ct_ml_kem.len() != ML_KEM_768_CT_LEN {
         return Err(CryptoError::DecapsulationFailed(
             "invalid ML-KEM ciphertext length".into(),
         ));
     }
-
-    let dk_bytes: [u8; ML_KEM_768_DK_LEN] = ml_kem_dk
-        .try_into()
-        .map_err(|_| CryptoError::InvalidKeyMaterial)?;
-    let dk = ml_kem_768::DecapsKey::try_from_bytes(dk_bytes)
-        .map_err(|e| CryptoError::DecapsulationFailed(format!("invalid decap key: {e}")))?;
 
     let ct_bytes: [u8; ML_KEM_768_CT_LEN] = kem_ct_ml_kem
         .try_into()
@@ -486,7 +478,7 @@ fn ml_kem_decap_prefilter(
     let ct = ml_kem_768::CipherText::try_from_bytes(ct_bytes)
         .map_err(|e| CryptoError::DecapsulationFailed(format!("invalid ciphertext: {e}")))?;
 
-    let ml_ss = dk
+    let ml_ss = ml_kem_dk
         .try_decaps(&ct)
         .map_err(|e| CryptoError::DecapsulationFailed(format!("ML-KEM-768 decaps: {e}")))?;
     let mut ml_ss_bytes = Zeroizing::new(ml_ss.into_bytes());
@@ -504,11 +496,30 @@ fn ml_kem_decap_prefilter(
     Ok(ml_ss_bytes)
 }
 
+/// ML-KEM decap + FA-6 pre-filter using a parsed decapsulation key (batch scan).
+pub fn ml_kem_decap_prefilter_with_parsed_dk(
+    ml_kem_dk: &MlKemDecapsKey,
+    kem_ct_ml_kem: &[u8],
+    view_tag_on_chain: u8,
+    output_index: u64,
+) -> Result<Zeroizing<[u8; 32]>, CryptoError> {
+    ml_kem_decap_prefilter_with_dk(
+        ml_kem_dk.as_decaps_key(),
+        kem_ct_ml_kem,
+        view_tag_on_chain,
+        output_index,
+    )
+}
+
 /// Scan an output to determine ownership and recover secrets.
 ///
 /// Returns `Err` for outputs that don't belong to this key, or for
 /// cryptographic integrity failures. View-tag mismatch returns early
 /// (cheap rejection). Amount-tag mismatch is a loud cryptographic failure.
+///
+/// Re-parses `ml_kem_dk` on every call. For batch chain scan, parse once with
+/// [`crate::kem::MlKemDecapsKey::from_bytes`] and call
+/// [`scan_output_with_ml_kem_dk`].
 // CLIPPY: parameters correspond 1:1 to on-chain output fields plus recipient
 // keys; bundling into a struct would just move the field list elsewhere.
 #[allow(clippy::too_many_arguments)]
@@ -527,10 +538,49 @@ pub fn scan_output(
     spend_key: &[u8; 32],
     output_index: u64,
 ) -> Result<ScannedOutput, CryptoError> {
+    let parsed = MlKemDecapsKey::from_bytes(ml_kem_dk)?;
+    scan_output_with_ml_kem_dk(
+        x25519_sk,
+        &parsed,
+        kem_ct_x25519,
+        kem_ct_ml_kem,
+        output_key,
+        commitment,
+        enc_amount,
+        amount_tag_on_chain,
+        enc_label,
+        label_tag_on_chain,
+        view_tag_on_chain,
+        spend_key,
+        output_index,
+    )
+}
+
+/// Like [`scan_output`] but reuses a parsed ML-KEM decapsulation key.
+#[allow(clippy::too_many_arguments)]
+pub fn scan_output_with_ml_kem_dk(
+    x25519_sk: &[u8; 32],
+    ml_kem_dk: &MlKemDecapsKey,
+    kem_ct_x25519: &[u8; 32],
+    kem_ct_ml_kem: &[u8],
+    output_key: &[u8; 32],
+    commitment: &[u8; 32],
+    enc_amount: &[u8; 8],
+    amount_tag_on_chain: u8,
+    enc_label: &[u8; 8],
+    label_tag_on_chain: u8,
+    view_tag_on_chain: u8,
+    spend_key: &[u8; 32],
+    output_index: u64,
+) -> Result<ScannedOutput, CryptoError> {
     // --- ML-KEM decap + PQ pre-filter (every output) ---
 
-    let ml_ss_bytes =
-        ml_kem_decap_prefilter(ml_kem_dk, kem_ct_ml_kem, view_tag_on_chain, output_index)?;
+    let ml_ss_bytes = ml_kem_decap_prefilter_with_parsed_dk(
+        ml_kem_dk,
+        kem_ct_ml_kem,
+        view_tag_on_chain,
+        output_index,
+    )?;
 
     // --- X25519 ECDH (tag match only) ---
 
@@ -696,6 +746,9 @@ impl std::fmt::Debug for RecoveredOutput {
 /// This avoids iterating over subaddresses in Rust. The caller checks
 /// `B'` against its subaddress table to determine ownership. Commitment
 /// verification (`C == z*G + amount*H`) IS performed here.
+///
+/// Re-parses `ml_kem_dk` on every call. For batch chain scan, use
+/// [`scan_output_recover_with_ml_kem_dk`].
 // CLIPPY: parameters correspond 1:1 to on-chain output fields plus recipient keys.
 #[allow(clippy::too_many_arguments)]
 pub fn scan_output_recover(
@@ -712,8 +765,45 @@ pub fn scan_output_recover(
     view_tag_on_chain: u8,
     output_index: u64,
 ) -> Result<RecoveredOutput, CryptoError> {
-    let ml_ss_bytes =
-        ml_kem_decap_prefilter(ml_kem_dk, kem_ct_ml_kem, view_tag_on_chain, output_index)?;
+    let parsed = MlKemDecapsKey::from_bytes(ml_kem_dk)?;
+    scan_output_recover_with_ml_kem_dk(
+        x25519_sk,
+        &parsed,
+        kem_ct_x25519,
+        kem_ct_ml_kem,
+        output_key,
+        commitment,
+        enc_amount,
+        amount_tag_on_chain,
+        enc_label,
+        label_tag_on_chain,
+        view_tag_on_chain,
+        output_index,
+    )
+}
+
+/// Like [`scan_output_recover`] but reuses a parsed ML-KEM decapsulation key.
+#[allow(clippy::too_many_arguments)]
+pub fn scan_output_recover_with_ml_kem_dk(
+    x25519_sk: &[u8; 32],
+    ml_kem_dk: &MlKemDecapsKey,
+    kem_ct_x25519: &[u8; 32],
+    kem_ct_ml_kem: &[u8],
+    output_key: &[u8; 32],
+    commitment: &[u8; 32],
+    enc_amount: &[u8; 8],
+    amount_tag_on_chain: u8,
+    enc_label: &[u8; 8],
+    label_tag_on_chain: u8,
+    view_tag_on_chain: u8,
+    output_index: u64,
+) -> Result<RecoveredOutput, CryptoError> {
+    let ml_ss_bytes = ml_kem_decap_prefilter_with_parsed_dk(
+        ml_kem_dk,
+        kem_ct_ml_kem,
+        view_tag_on_chain,
+        output_index,
+    )?;
 
     let view_scalar = Zeroizing::new(Scalar::from_bytes_mod_order(*x25519_sk));
     let eph_mont = MontgomeryPoint(*kem_ct_x25519);

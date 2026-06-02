@@ -521,10 +521,9 @@ mod tests {
 
     #[test]
     fn typical_case_first_output_exits_via_view_tag_mismatch() {
-        // The on-chain view tag was computed from the OTHER wallet's
-        // X25519 SS; the bench wallet's view-pair derives a different
-        // view tag, so the wire-byte compare in scan_output_recover
-        // fails and the function returns Err before ML-KEM decap.
+        // The on-chain pre-filter tag was derived from the OTHER wallet's
+        // ML-KEM SS; after universal decap with the bench wallet's DK the
+        // tag compare fails and scan_output_recover returns Err before X25519.
         let wallet = make_bench_wallet();
         let other = make_bench_wallet();
         let out = first_output_data(&other.wallet_kem_pk);
@@ -577,8 +576,8 @@ mod tests {
             );
         };
         assert!(
-            msg.contains("X25519 view tag mismatch"),
-            "expected view-tag-mismatch in DecapsulationFailed inner message; \
+            msg.contains("view tag pre-filter mismatch"),
+            "expected pre-filter mismatch in DecapsulationFailed inner message; \
              got {msg:?} — if this is a sibling DecapsulationFailed reason \
              (invalid ML-KEM ciphertext length, invalid decap key, ML-KEM \
              decap rejection) the typical-case fixture is mis-classified"

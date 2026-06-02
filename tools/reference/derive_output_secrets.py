@@ -145,7 +145,13 @@ def derive_view_tag_prefilter(ml_kem_ss: bytes, output_index: int) -> int:
 
 
 def ml_kem_ss_for_vector(combined_ss: bytes) -> bytes:
-    """Test-vector IKM for pre-filter: ML-KEM half of combined_ss when 64 B."""
+    """Synthetic IKM for Instance-2 / pre-filter KAT rows.
+
+    For 64-byte `combined_ss`, uses the ML-KEM half (bytes 32..64). For
+    shorter rows (Group 5), uses the 32-byte `combined_ss` as synthetic
+    `ml_kem_ss` input to `derive_view_tag_prefilter` only — **not** an
+    on-wire ML-KEM decap output (V3.0 outputs are always hybrid).
+    """
     if len(combined_ss) >= 64:
         return combined_ss[32:64]
     return combined_ss[:32]
@@ -220,7 +226,8 @@ def generate_vectors() -> list:
             "view_tag_prefilter": vt,
         })
 
-    # Group 5: Short combined_ss (32 bytes — X25519 only, no ML-KEM)
+    # Group 5: 32-byte combined_ss — HKDF Instance 1 edge case only; synthetic
+    # ml_kem_ss for Instance-2 pre-filter KAT (not a real decap output).
     for i in range(4):
         seed = hl.sha512(f"short-ss-{i}".encode()).digest()
         css = seed[:32]
@@ -229,7 +236,10 @@ def generate_vectors() -> list:
         secrets = derive_output_secrets(css, idx)
         vt = derive_view_tag_prefilter(ml_ss, idx)
         vectors.append({
-            "description": f"short 32-byte combined_ss seed={i}, index={idx}",
+            "description": (
+                f"synthetic pre-filter KAT: 32-byte combined_ss seed={i}, "
+                f"index={idx} (ml_kem_ss is test IKM, not decap output)"
+            ),
             "combined_ss": css.hex(),
             "output_index": idx,
             **secrets,
