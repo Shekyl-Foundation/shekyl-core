@@ -1,8 +1,11 @@
 # Confidential staking — consensus & economics design
 
-**Status:** Round 0 pre-flight / Round 1 entry. **Proposed pins, not closed.**
+**Status:** Round 1 in progress. **§6.4 source review closed** (2026-06-02): **(A)**
+entitlement dispositioned off-circuit; **(B)** claim nullifier surface + `N_S = x·G_S`;
+**(C)** tier/creation on hidden leaf remains the architectural gate. Other §13 items
+open.
 This is the **upstream consensus/economics truth** that
-[`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §2.3 mirrors. It
+[`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.3 mirrors. It
 **supersedes the reward/claim mechanism** of
 [`STAKER_REWARD_DISBURSEMENT.md`](STAKER_REWARD_DISBURSEMENT.md) (proportional
 pool-division, cleartext amounts, public `staked_output_index`, monotonic watermark),
@@ -16,8 +19,8 @@ to be launch-final.
 
 **Origin:** design session 2026-06-02. Code-site citations are to `blockchain.cpp`
 (6322 lines) and the `shekyl-staking` / `shekyl-economics` FFI verified that session;
-FCMP++ circuit internals (`shekyl-fcmp`) were **not** re-read and are flagged where
-the construction depends on them (§6.4, §13).
+FCMP++ / SAL / witness layout were **source-reviewed** for §6.4 (2026-06-02;
+`main` @ `34b2b3c`); **(C)** and claim wire format remain open (§13).
 
 ---
 
@@ -111,8 +114,10 @@ carrying, **instead of a cleartext amount** (current `blockchain.cpp:3476–3478
 - **`tier`** (public; one of 3) and **`creation_height`** (public; block height).
 - **`band`** (public; §4.4) — a coarse band with a **range proof binding the band to
   `C_stake`** (anti-lie; the staker cannot declare a band their commitment is not in).
-- a **`nullifier_seed`** commitment: the per-output secret from which claim nullifiers
-  derive (§6.3) is bound to the output's spend authority, not stored in clear.
+- **No extra nullifier secret on the output.** Claim anti-double-spend uses per-epoch
+  tags `N_S = x·G_S` (§6.3–§6.4), where `x` is the existing spend secret (`ho + b`)
+  and `G_S` is a public per-settlement-epoch base — not a new HKDF field on
+  `OutputSecrets`.
 
 **Weight.** `w = a · tier_num / SCALE`, `tier_num ∈ {1_000_000, 1_500_000,
 2_000_000}` (the existing `yield_multiplier` fixed point, `SCALE = 1e6`,
@@ -281,20 +286,23 @@ watermark/`staked_output_index` machinery (`check_stake_claim_input`,
 
 ### 6.1 Statement of knowledge
 
-A claim transaction proves, in zero knowledge, knowledge of `(a, z, nullifier_seed,
-z_claim)` and a membership witness such that:
+A claim transaction proves, in zero knowledge, knowledge of `(a, z, x, z_claim)` and a
+membership witness such that:
 
-1. **Membership.** `C_stake` (with its public `tier` and `creation_height`) is a leaf
-   under the staked-output tree root (FCMP++ membership) — does **not** reveal which.
+1. **Membership.** `C_stake` is a leaf under the staked-output tree root (FCMP++
+   membership over the same 4-scalar leaf as spends — §6.4) — does **not** reveal which.
 2. **Window.** every claimed settlement-epoch `S` satisfies `S ⊆ (creation, eff_lock]`,
-   `eff_lock = creation + tier_lock_blocks`.
-3. **Nullifiers.** for each claimed `S`, `N_S = PRF(nullifier_seed, S)` with
-   `nullifier_seed` bound to the membership-proven output's spend authority; each `N_S`
-   is **absent** from the on-chain nullifier set (no double-claim).
+   `eff_lock = creation + tier_lock_blocks` (§6.4 **(C)** binds tier/creation to the
+   hidden leaf).
+3. **Nullifiers.** for each claimed `S`, `N_S = x·G_S` with `G_S =
+   hash_to_ec("shekyl-stake-nullifier-base" ‖ S_le64)` (public base, distinct from
+   `Hp(O)`); each `N_S` is filed in the **stake-claim nullifier set** (not the spent
+   key-image set) and must be absent before inclusion (no double-claim). Principal
+   `x·Hp(O)` is **not** published on claim (§7).
 4. **Entitlement.** `C_claim ≡ M · C_stake`, where `M = tier_num · Σ_S K_S` is a
-   **public** integer scalar (§3). Equivalently `C_claim − M·C_stake ∈ ⟨G⟩`, proven by
-   a Schnorr proof of knowledge of `(z_claim − M·z)` — a **commitment-to-zero**: no
-   division, no `TWS`.
+   **public** integer scalar (§3). Implemented via the membership-exposed rerandomized
+   commitment `C~` (§6.4 **(A)**): prove `C_claim − M·C~ ∈ ⟨G⟩` by an off-circuit
+   commitment-to-zero Schnorr (same proof class as reserve DLEQ — §6.4).
 5. **Range.** `C_claim` carries a Bulletproof+ range proof (non-negative, bounded).
 6. **Mint.** the claim mints `C_claim` as a normal, self-addressed FCMP++ reward
    output (two-component `O = ho·G + B + y·T`, KEM-self-encap; the staker opens it
@@ -315,31 +323,147 @@ tier/window (L4-adjacent) and is a §13 open.
 
 ### 6.3 Nullifiers
 
-`N_S = PRF(nullifier_seed, S)`. **The `nullifier_seed` derivation is unspecified today
-and is a blocking Round 0 item (R0-D1), not a verification debt.** `OutputSecrets`
-(`derivation.rs`) currently has `ho, y, z, k_amount`, label keys, and PQC seeds — **no
-`nullifier_seed`**. Pinning it requires a **new labeled HKDF expansion** in the
-info-string registry ([`30-cryptography.mdc`](../.cursor/rules/30-cryptography.mdc),
-e.g. `shekyl-stake-nullifier`), **KAT vectors** (`PQC_OUTPUT_SECRETS.json` row), and an
-explicit **stake-vs-normal-output rule** (shared derivation namespace or a stake-only
-label). It must derive from the output's hybrid-KEM shared secret so it is PQ-protected
-and deterministically **recomputable on rescan** (required by the wallet resync
-reconciliation, [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md)
-§4.2, §8.5). PRF candidate: keyed CShake256 (`sha3 0.10`, already vendored). The
-nullifier set is a **new consensus table** and is **reorg-state** (§11).
+`N_S = x · G_S`, where:
 
-### 6.4 The construction gap (open, audit-scoping)
+- `x = ho + b` is the per-output spend secret already in the FCMP witness (`x` in
+  [`WITNESS_HEADER.json`](../test_vectors/WITNESS_HEADER.json)) and in
+  `OutputSecrets` (`derivation.rs` — no new secret field).
+- `G_S = hash_to_ec(domain ‖ S_le64)` with domain separator
+  `shekyl-stake-nullifier-base` (C++ `crypto::hash_to_ec`, same family as `Hp(O)`).
 
-Constraint (4) must bind to the **membership-proven, unrevealed** `C_stake`. Two
-bindings are possible: (i) an **in-circuit** scalar-mult-and-compare constraint inside
-the FCMP++ proof (keeps unlinkability; extends the circuit), or (ii) composition with
-the membership proof's commitment **rerandomization** (if `shekyl-fcmp` exposes the
-committed `C` suitably). The exact mechanism **cannot be closed without reading
-`shekyl-fcmp`'s proof structure** and is the highest-risk open. Either way, the claim
-circuit is a **derivative** of upstream FCMP++ and must be **explicitly in the audit
-scope** ([`AUDIT_SCOPE.md`](AUDIT_SCOPE.md)) alongside the x-only leaf flattening and
-transcript-ordering changes — the Veridise lineage covers base primitives, not this
-relation.
+Because `G_S ≠ Hp(O)`, publishing `N_S` does **not** reveal the principal key image
+`x·Hp(O)`; unstake still uses a normal FCMP spend that publishes `x·Hp(O)` separately
+(§7). `G_S` must be domain-separated and KAT-locked (§13 item 7; wallet §8.5 in
+[`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md)).
+
+The nullifier set is a **new consensus table** (distinct from spent key images), is
+**reorg-state** (§11), and is deterministically **recomputable on rescan** from `x` and
+public `S` (wallet: intersect chain set with `{ x·G_S : S ∈ accrued_epochs }` — §4.2
+there).
+
+**Rejected alternative (Round 1 review):** `N_S = PRF(nullifier_seed, S)` with a new
+HKDF-derived `nullifier_seed` on `OutputSecrets`. Superseded by the key-image-variant
+construction above unless claim-mode SAL extension (§6.4 **(B)**) proves infeasible —
+then reopen §13 item 7 as fallback only.
+
+### 6.4 Claim proof bindings (Round 1 source review)
+
+**Status:** Review closed on source (2026-06-02; verified on `main` @ `34b2b3c` and
+equivalent on `dev`). §6.4 decomposes the old monolithic "entitlement-binding gap" into
+three bindings to one hidden staked leaf. **(C)** remains the architectural gate;
+**(A)** and **(B)** have pinned dispositions.
+
+#### 6.4.0 Source facts (consensus-locked; any change is a consensus change)
+
+| Fact | Source | Claim use |
+|------|--------|-----------|
+| Witness `[O][I][C][h_pqc][x][y][z][a]` | [`WITNESS_HEADER.json`](../test_vectors/WITNESS_HEADER.json) | Opening material for membership |
+| `r_c = a − z`, `C~ = a·G + amount·H` | `rust/shekyl-fcmp/src/proof.rs` (`ProveInput` docs) | **(A)** uses public `C~` as `pseudo_outs` |
+| `I = Hp(O)` in witness; SAL uses rerandomized `I~` | `rctSigs.cpp`, `sal/mod.rs` | Linkability algebra |
+| `L = (I~·x) − (U·(r_i·x)) = x·Hp(O)` ∀ `r_i` | `shekyl-oxide/.../fcmp/fcmp++/src/sal/mod.rs:233` with `I~ = I + U·r_i` (`:65`) | **(B)** tag is **not** re-baseable by tweaking `r_i` |
+| `FcmpPlusPlus::verify` always runs `spend_auth_and_linkability.verify(…, key_image)` | `shekyl-oxide/.../fcmp/fcmp++/src/lib.rs` | No membership-only mode today |
+| Staked leaf = same 4-scalar `{O.x, I.x, C.x, H(pqc)}` | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §15 | **(C)** tier/creation not in leaf |
+| Cleartext claims today: `txin_stake_claim`, no FCMP | `cryptonote_basic.h`, wallet stake-claim path | Confidential claim is **new** tx + verifier surface |
+
+Reserve proofs already ship a standalone two-base Schnorr DLEQ (`rust/shekyl-proofs/src/dleq.rs`,
+domain `shekyl-reserve-proof-dleq-v1`; [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §21) —
+the proof class for **(A)** entitlement.
+
+#### 6.4.1 (A) Entitlement — **solved off-circuit**
+
+**Pin:** Membership already exposes the rerandomized pseudo-out `C~` per input
+(`shekyl_fcmp_prove` → `pseudo_outs`; verifier checks them). With public integer `M`,
+prove `C_claim − M·C~ ∈ ⟨G⟩` via a **commitment-to-zero Schnorr** (knowledge of
+`z_claim − M·a` in the Shekyl `C = z·G + a·H` convention). Same auditable family as
+reserve DLEQ; **no FCMP++ circuit extension required** for v1.
+
+In-circuit entitlement remains a future hardening option, not the Round 1 blocker.
+
+#### 6.4.2 (B) Nullifiers — **new claim prove/verify surface** (not a parameter tweak)
+
+**Pin:** `N_S = x·G_S` with public `G_S` (§6.3). This **dissolves** the wallet R0-D1
+`nullifier_seed` / HKDF-stream requirement ([`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md)
+§8.5).
+
+**Why SAL cannot be re-based:** Spend-Authorization and Linkability proves tag
+`L = x·Hp(O)` algebraically (§6.4.0). The vendored `FcmpPlusPlus` bundle is
+`(Input, SpendAuthAndLinkability) + Fcmp`; verify **unconditionally** couples SAL to the
+supplied `key_images`. There is no branch for "membership only" or alternate linkability
+base. Emitting `x·G_S` in the nullifier table while reusing today's spend verifier would
+incorrectly treat claim nullifiers as spent key images or fail verification.
+
+**Required:** a **claim-specific** prove/verify path that:
+
+1. Runs FCMP **membership** on a **referenced, unspent** staked leaf (same tree).
+2. Exposes **`C~`** for **(A)**.
+3. Proves / checks **`N_S = x·G_S`** against the **stake-claim nullifier set** without
+   inserting `x·Hp(O)` into the spent-key-image set.
+
+**Disposition options** (Round 1 — prefer **B1**):
+
+| ID | Shape | Disposition |
+|----|-------|-------------|
+| **B1** | Extend SAL (or sibling `ClaimLinkability`) so the proved tag is `x·G_S` for public `G_S`, keeping SAL's existing `x ↔ O` spend-authority binding | **Preferred** — preserves spend-authority guarantee instead of reconstructing it |
+| **B2** | Omit/weaken SAL; membership + standalone DLEQ rebinding `x` to `O` | **Rejected as primary** — splits spend-authority out of SAL then forces a sibling proof that re-derives most of what SAL already delivers; "faster to prototype" is not a design axis (§6.4.3) |
+| **B3** | In-circuit scalar-mult vs public `G_S` inside FCMP | Heavier audit surface; fallback if B1 infeasible |
+
+**Still to pin for (B):** `G_S` domain separator + `S_le64` encoding + KAT; claim-tx
+wire layout (nullifier vector, proof blob); C++ verifier hook parallel to
+`shekyl_fcmp_verify`.
+
+#### 6.4.3 (C) Tier + creation-height — **real residual** (architectural fork)
+
+Tier and `creation_height` are **public on the staked output** (§2), but the claim is
+membership-unlinkable: the verifier sees public `tier` / `M` on the claim tx but not
+**which** leaf. Without a binding, a prover could open stake A (tier 1) while claiming
+with tier-3 `M`.
+
+The FCMP leaf is only `{O.x, I.x, C.x, H(pqc_pk)}` (§6.4.0). **Rejected cheap routes:**
+
+- Fold tier/creation into `h_pqc` and reveal preimage — exposes `ml_dsa_pk`, deanonymizes
+  claims.
+- In-ZK hash of metadata only — heavy.
+
+**Viable paths (pick one in Round 1):**
+
+1. **Extended staked leaf** — fifth scalar or committed metadata hash in the unified tree.
+2. **Separate staking Merkle tree** — leaf carries `{C, tier, creation, band, h_pqc}`.
+3. **Rerandomizable tier/creation commitment** at stake time, opened at claim via an
+   **(A)-class** Schnorr (still requires a stake-time commitment in output or leaf).
+
+**(C) blocks closing §6.4** even when **(A)** and **(B)** are implemented.
+
+#### 6.4.4 Rejected: claim as ordinary FCMP spend + re-stake
+
+**Considered:** Model claim as a normal FCMP spend; use `x·Hp(O)` in the key-image set
+for double-claim prevention; re-stake principal in the same tx — avoids new SAL mode and
+a separate nullifier table.
+
+**Rejected (Round 1):**
+
+- Makes **(C) strictly harder:** the new staked output must provably inherit the **hidden**
+  spent stake's tier and original `eff_lock` (consistency between a public new output and
+  a hidden spent leaf).
+- Remodels accrual (principal moves; `(creation, eff_lock]` semantics break).
+- Collapses claim/unstake decoupling (§7).
+
+Claims remain **non-spending** membership proofs; unstake remains a full SAL spend
+publishing `x·Hp(O)`.
+
+#### 6.4.5 Design discipline (security over velocity)
+
+**Pin:** Shekyl does **not** accept dispositions of the form "weaken this
+security/privacy property to ship faster." Options that omit spend-authority binding,
+skip nullifier separation, or defer **(C)** while claiming §6.4 closed are **out of
+scope** regardless of prototype convenience. "Get it right, not get it now" applies to
+claim-circuit work the same as consensus work.
+
+#### 6.4.6 Audit scope
+
+The claim verifier (membership + **(A)** Schnorr + **(B)** claim linkability + **(C)**
+binding) is a **derivative** of upstream FCMP++ and must be listed in
+[`AUDIT_SCOPE.md`](../AUDIT_SCOPE.md) alongside x-only leaf flattening and transcript
+ordering — Veridise lineage covers base primitives, not this relation.
 
 ### 6.5 Timing
 
@@ -362,7 +486,7 @@ Fully **decoupled** (the disposition the prior disbursement doc wanted):
   claimable after unstake (the reward accrued during the lock), bounded by the window
   and gated by nullifiers.
 
-**Wallet FSM pin:** [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §3.1
+**Wallet FSM pin:** [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §3.1
 `FullyUnstaked` + R0-D6 — claims allowed while `principal_spent`; `claimed_epochs`
 unchanged.
 
@@ -417,8 +541,10 @@ A clean split, consistent with the project's existing stance:
   post-quantum.** A future quantum adversary could unblind committed amounts; this is
   the *same* caveat as all FCMP++/RingCT amount privacy and is stated, not hidden.
 - **Nullifier derivation & claim authorization** ride the **hybrid PQC** layer
-  (`nullifier_seed` behind the hybrid KEM; spend authority via ML-DSA-65 + Ed25519),
-  so theft-resistance and nullifier-forgery-resistance are PQ-hybrid.
+  (spend secret `x` is PQ-protected via the output's hybrid KEM derivation; claim tags
+  `N_S = x·G_S` are distinct from principal key images `x·Hp(O)`; spend authority via
+  ML-DSA-65 + Ed25519), so theft-resistance and nullifier-forgery-resistance are
+  PQ-hybrid.
 
 **Supply-auditability consequence:** because staker rewards are committed (hidden), the
 **exact** circulating supply is no longer publicly summable — only the miner stream
@@ -474,15 +600,17 @@ member.
    representative (§4.4).
 5. **Cold-start floor** — participation threshold below which `band_sum` / the burn
    signal is suppressed or floored (§4.4).
-6. **Entitlement-binding mechanism** (§6.4) — in-circuit constraint vs membership-proof
-   rerandomization composition; **requires reading `shekyl-fcmp`**; gates audit scope.
-   *Highest risk.*
-7. **Nullifier PRF** — confirm keyed CShake256 and the `nullifier_seed` derivation path
-   from the hybrid output-secret domain (must be deterministically recomputable on
-   rescan). **Wallet mirror:** [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md)
-   §8.5 (R0-D1) — `OutputSecrets` does not yet carry `nullifier_seed`; blocked until
-   this item closes with HKDF label + KAT.
-8. **Claim anonymity widening** (§6.2) — accept the tier+window-scoped set for v1, or
+6. **Entitlement binding** (§6.4.1 **(A)**) — **disposition closed:** off-circuit
+   commitment-to-zero Schnorr vs membership `C~` (reserve-DLEQ class). Implement + KAT;
+   in-circuit optional hardening only.
+7. **Stake nullifier base + claim linkability** (§6.4.2 **(B)**) — `G_S` domain
+   separator + `S_le64` encoding + KAT; claim-specific prove/verify (**B1** preferred:
+   claim-mode SAL / sibling emitting `x·G_S` while preserving `x ↔ O` binding). **Wallet
+   mirror:** [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §8.5 (R0-D1).
+   **Supersedes** `nullifier_seed` HKDF unless B1 proves infeasible (§6.3 fallback).
+8. **Tier/creation binding on hidden leaf** (§6.4.3 **(C)**) — extended leaf vs staking
+   subtree vs tier/creation commitment; **blocks** claim circuit closure. *Highest risk.*
+9. **Claim anonymity widening** (§6.2) — accept the tier+window-scoped set for v1, or
    pursue L4 (hide tier/window) later.
 
 ---
@@ -491,11 +619,12 @@ member.
 
 | Doc / site | Use |
 |-----------|-----|
-| [`PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) | Wallet-side mirror (§2.3); R0-D1–D7 pins in §0.11; `nullifier_seed` §8.5 |
+| [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) | Wallet mirror (§2.3); R0-D1–D7; `N_S = x·G_S` §8.5; §6.4 review pins |
 | [`STAKER_REWARD_DISBURSEMENT.md`](STAKER_REWARD_DISBURSEMENT.md) | **Superseded** reward/claim mechanism (retained for history) |
 | [`DESIGN_CONCEPTS.md`](DESIGN_CONCEPTS.md) | Four-component economic model (Components 2–4) |
-| [`FCMP_PLUS_PLUS.md`](FCMP_PLUS_PLUS.md) | Membership proof / leaf structure (entitlement binding, §6.4) |
-| [`AUDIT_SCOPE.md`](AUDIT_SCOPE.md) | Must add the claim circuit + §9 inflation-safety targets |
+| [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | Membership proof / leaf structure; SAL linkability (§6.4) |
+| [`WITNESS_HEADER.json`](../test_vectors/WITNESS_HEADER.json) | Consensus-locked witness layout |
+| [`AUDIT_SCOPE.md`](../AUDIT_SCOPE.md) | Claim verifier (§6.4.6) + §9 inflation-safety targets |
 | `blockchain.cpp` (`:800–822`, `:3476`, `:4214–4247`, `:4366–4376`, `:5045–5051`) | Code sites superseded (§12) |
 | `shekyl-staking` (`tiers.rs`, `registry.rs`, `rewards.rs`), `shekyl-economics`, FFI `lib.rs` | Tier/economics primitives; retirements (§12) |
 | [`00-mission.mdc`](../.cursor/rules/00-mission.mdc), [`26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc) | Priority hierarchy; round discipline |
