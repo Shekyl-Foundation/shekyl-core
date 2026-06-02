@@ -1244,9 +1244,11 @@ sustainability is unaffected by the recalibration.
   *Implementation (post spec §11 sign-off).* Scanner leg-swap (universal ML-KEM
   decap → `derive_view_tag_prefilter` → X25519 on match); HKDF
   `shekyl-view-tag-prefilter-v1`; genesis-locked (coinbase tags affect genesis
-  hash). **Merge gate (§8):** initial-sync **wall-clock** on worst wallet target
-  at realistic chain size — not per-op ratio alone. Bench failure ⇒ **slow sync**
-  or documented **T6 waiver** in threat model — not “defer FA-6.”
+  hash). **Merge gate (§8):** pre-committed **absolute** UX budgets (scenarios A/B)
+  on **Raspberry Pi 4 4GB** floor vs **forward-dated mature chain** `N_outputs` —
+  not “N× baseline.” Measurer ≠ budget acceptor; FA-6b multisig sync budgeted
+  separately. §3.1.1 code verification on `dev` post–PR #100. Bench failure ⇒
+  explicit ship-slow **or** §10.1 T6 waiver — not “defer FA-6.”
 
   *Target:* V3.0 pre-genesis, separate PR from FA-11 / FA-2.
 
