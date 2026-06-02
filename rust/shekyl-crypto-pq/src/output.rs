@@ -514,8 +514,9 @@ pub fn ml_kem_decap_prefilter_with_parsed_dk(
 /// Scan an output to determine ownership and recover secrets.
 ///
 /// Returns `Err` for outputs that don't belong to this key, or for
-/// cryptographic integrity failures. View-tag mismatch returns early
-/// (cheap rejection). Amount-tag mismatch is a loud cryptographic failure.
+/// cryptographic integrity failures. Pre-filter tag mismatch returns after
+/// ML-KEM decap (skips X25519 and downstream derivation; not the legacy
+/// X25519-only prefilter cost model). Amount-tag mismatch is a loud failure.
 ///
 /// Re-parses `ml_kem_dk` on every call. For batch chain scan, parse once with
 /// [`crate::kem::MlKemDecapsKey::from_bytes`] and call

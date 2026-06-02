@@ -275,7 +275,10 @@ def print_registry_tables():
     print("### Instance 2: ML-KEM View-Tag Pre-Filter (FA-6)")
     print()
     print(f"- **Salt**: `{SALT_VIEW_TAG_PREFILTER.decode()}`")
-    print(f"- **IKM**: `ml_kem_ss` = ML-KEM-768 decap output (32 B)")
+    print(
+        "- **IKM**: `ml_kem_ss` = ML-KEM-768 decap output (32 B) on-wire; "
+        "Group 5 rows use synthetic 32-byte test IKM"
+    )
     print()
     print("| Info String | Expand Size | Post-Processing | Consuming Field |")
     print("|-------------|-------------|-----------------|-----------------|")
@@ -296,11 +299,19 @@ def main():
         ),
         "hkdf_instance_1": {
             "salt": SALT_COMBINED.decode(),
-            "ikm_description": "combined_ss = X25519(eph_sk, view_pk) || ML-KEM-768.Decap(kem_sk, ct)",
+            "ikm_description": (
+                "combined_ss = X25519(eph_sk, view_pk) || ML-KEM-768.Decap(kem_sk, ct) "
+                "when 64 B; Group 5 vectors use synthetic 32-byte combined_ss for "
+                "Instance-1 edge coverage (see per-vector description)"
+            ),
         },
         "hkdf_instance_2": {
             "salt": SALT_VIEW_TAG_PREFILTER.decode(),
-            "ikm_description": "ml_kem_ss = ML-KEM-768.Decap(ml_kem_dk, ct)",
+            "ikm_description": (
+                "ml_kem_ss = ML-KEM-768.Decap(ml_kem_dk, kem_ct) on-wire; Group 5 "
+                "vectors use synthetic 32-byte test IKM for pre-filter KAT only "
+                "(see per-vector description)"
+            ),
         },
         "vectors": vectors,
     }

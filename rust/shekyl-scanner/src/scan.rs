@@ -9,8 +9,8 @@
 //! using the Shekyl V3 two-component key derivation:
 //!
 //! 1. Parse `tx_extra` for PQC KEM ciphertext (tag 0x06)
-//! 2. X25519 DH pre-filter via view tag (rejects ~99.6% of non-matching outputs)
-//! 3. Full hybrid KEM decap + HKDF via `scan_output_recover`
+//! 2. ML-KEM decap + FA-6 pre-filter tag compare (every output; rejects non-mine)
+//! 3. X25519 ECDH + HKDF + recovery via `scan_output_recover_with_ml_kem_dk` on match
 //! 4. Subaddress lookup via recovered spend key `B' = O - ho*G - y*T`
 //! 5. Key image computation via native Rust (no FFI)
 
@@ -28,7 +28,7 @@ use shekyl_rpc::ScannableBlock;
 use shekyl_crypto_pq::{
     kem::{HybridCiphertext, ML_KEM_768_CT_LEN},
     key_image::KeyImage,
-    output::{compute_output_key_image, scan_output_recover},
+    output::{compute_output_key_image, scan_output_recover_with_ml_kem_dk},
 };
 use shekyl_generators::hash_to_point;
 
@@ -513,9 +513,9 @@ impl InternalScanner {
             let ct_ml_kem = &ct_slice[X25519_CT_BYTES..];
             debug_assert_eq!(ct_ml_kem.len(), ML_KEM_768_CT_LEN);
 
-            let Ok(recovered) = scan_output_recover(
+            let Ok(recovered) = scan_output_recover_with_ml_kem_dk(
                 self.pair.x25519_sk(),
-                self.pair.ml_kem_dk(),
+                self.pair.parsed_ml_kem_dk(),
                 ct_x25519,
                 ct_ml_kem,
                 &output_key_bytes,
@@ -864,6 +864,17 @@ impl GuaranteedScanner {
     }
 }
 
+#[cfg(test)]
+fn test_placeholder_ml_kem_dk() -> Zeroizing<Vec<u8>> {
+    use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
+
+    let kem = HybridX25519MlKem;
+    let (_pk, sk) = kem
+        .keypair_generate()
+        .expect("HybridX25519MlKem::keypair_generate is infallible under OsRng");
+    Zeroizing::new(sk.ml_kem.clone())
+}
+
 /// Tests for the scanner-side defense-in-depth size gate on
 /// [`InternalScanner::scan_transaction_with_cancel`] (PR 4 §3.1 /
 /// F11-S substrate). The gate skips any transaction whose output
@@ -930,14 +941,14 @@ mod gate_tests {
     /// Build an [`InternalScanner`] with placeholder keys. The gate
     /// fires before any cryptographic state is touched, so the
     /// scanner only needs to construct successfully — the
-    /// [`ViewPair`] torsion check is satisfied by the basepoint, and
-    /// the empty PQC key material is never read on the gate path.
+    /// [`ViewPair`] torsion check is satisfied by the basepoint; valid
+    /// ML-KEM DK bytes are required at construction but not read on the gate path.
     fn placeholder_scanner() -> InternalScanner {
         let pair = ViewPair::new(
             ED25519_BASEPOINT_POINT,
             Zeroizing::new(Scalar::ONE),
             Zeroizing::new([0u8; 32]),
-            Zeroizing::new(Vec::new()),
+            test_placeholder_ml_kem_dk(),
         )
         .expect("basepoint is torsion-free");
         InternalScanner::new(pair, Zeroizing::new([0u8; 32]))
@@ -1119,7 +1130,7 @@ mod cancel_tests {
             ED25519_BASEPOINT_POINT,
             Zeroizing::new(Scalar::ONE),
             Zeroizing::new([0u8; 32]),
-            Zeroizing::new(Vec::new()),
+            test_placeholder_ml_kem_dk(),
         )
         .expect("basepoint is torsion-free");
         InternalScanner::new(pair, Zeroizing::new([0u8; 32]))
@@ -1299,7 +1310,7 @@ mod cancel_tests {
             ED25519_BASEPOINT_POINT,
             Zeroizing::new(Scalar::ONE),
             Zeroizing::new([0u8; 32]),
-            Zeroizing::new(Vec::new()),
+            test_placeholder_ml_kem_dk(),
         )
         .expect("basepoint is torsion-free");
         let mut scanner = InternalScanner::new(pair, Zeroizing::new([0u8; 32]));

@@ -54,18 +54,15 @@
 //! ### `build_typical_case_scannable_block` — contextual, NOT F11-S
 //!
 //! Outputs are encapsulated against a *different* wallet's hybrid
-//! public keys. The scanner's X25519 ECDH against the on-chain
-//! ephemeral produces a different shared secret than the encapsulator
-//! used, so the wallet-side view tag derivation diverges from the
-//! on-chain value and every output exits via fast-path filter
-//! rejection (the wire-format byte compare after view-tag derivation
-//! returns false, short-circuiting before ML-KEM decap).
+//! public keys. After universal ML-KEM decap with the bench wallet's DK,
+//! the FA-6 pre-filter tag does not match and every output exits before
+//! X25519 ECDH (wire-byte compare after `derive_view_tag_prefilter`).
 //!
 //! This documents the typical-case UX cost (which dominates real
 //! wallet refresh time, since most outputs aren't for the wallet) and
 //! provides a sanity-check ratio against the worst-case measurement:
 //! if `worst_case_p99 / typical_case_p99` falls outside the expected
-//! ML-KEM-decap-to-view-tag-check cost ratio, the methodology is
+//! post-decap prefilter-to-full-recovery cost ratio, the methodology is
 //! suspect and the F11-S decision should not bind until the anomaly
 //! is investigated.
 //!
