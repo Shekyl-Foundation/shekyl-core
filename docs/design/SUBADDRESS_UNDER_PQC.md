@@ -3,12 +3,12 @@
 **Status.** Round 3 in progress. **5-T-substrate adopted** (§6.4, 2026-05-31).
 **Logical tag system** specified (§5.7.11). **V3.0 wallet:** sentinel-only
 at launch; payment-request / meaningful-tag UX behind product flag (later).
-**FA-1 / FA-6** confirmed (§3.7). **R2-F2 CLOSED** (2026-05-31): product
-sign-off — **no subaddresses at V3.0**; End-state 5 minimal; §5.7.9 +
-`R2_F2_WALKTHROUGH.md` §6. **R2-F9 CLOSED** (pin): address-knowledge /
-phishing tier (§5.7.12) — dust-tracking class closed; T6 harvest path named.
-**FA-9 / T6 wargaming** is the active parallel track (§4.4, §4.8, FA-6).
-Spec-first.
+**FA-1** confirmed (§3.7). **FA-6** spec drafted (`FA-6_VIEW_TAG_ML_KEM.md`).
+**R2-F2 CLOSED** (2026-05-31): product sign-off — **no subaddresses at V3.0**;
+End-state 5 minimal; §5.7.9 + `R2_F2_WALKTHROUGH.md` §6. **R2-F9 CLOSED**
+(pin): address-knowledge / phishing tier (§5.7.12) — dust-tracking class
+closed; T6 harvest path named. FA-9 propagates FA-6 residuals
+post-implementation. Spec-first.
 Target: V3.0 pre-genesis.
 
 **Provenance.** Surfaced during Stage 2 `KeyEngine` actor pre-flight
@@ -209,14 +209,18 @@ outputs scanned like any other inbound; no `B'` registry.
 
 #### FA-6 — T6 view-tag (parallel adversary track)
 
+**Spec:** `docs/design/FA-6_VIEW_TAG_ML_KEM.md` (2026-06-01). **Disposition:**
+re-key on-wire 1-byte view tag from `x25519_ss` → `ml_kem_ss` at V3.0
+genesis; implementation PR after spec sign-off (§11).
+
 **Confirmed:** T6 is **not** closed by End-state 5 or the 5-T pin; it stays
-on the **adversary** track (§4.7–§4.8), separate from pit-of-success / T2.
+on the **adversary** track (§4.7–§4.8) until FA-6 lands.
 
 | Item | Status |
 |------|--------|
-| View-tag pre-filter before ML-KEM decap | Unchanged — `output.rs` / `POST_QUANTUM_CRYPTOGRAPHY.md` derivation table. |
-| Same impossibility shape as R1-F2 | Still load-bearing (§4.4). |
-| Threat-model wargaming | **Deferred** until 5-T pin + tag system + launch posture + FA-1 are set (2026-05-31). FA-9 / FA-6 deep pin lands in that pass. |
+| View-tag pre-filter | **FA-6** — ML-KEM-keyed tag; scanner leg-swap (decap → tag → X25519 on match). |
+| Same impossibility shape as R1-F2 | Load-bearing (§4.4); FA-6 is the chosen resolution. |
+| Threat-model wargaming | FA-9 propagates §2.2 residuals after FA-6 implementation. |
 
 End-state 5 **does not** relax T6. Sentinel-only launch **does not** change
 the view-tag surface.
@@ -492,7 +496,8 @@ flexibility** (`21-reversion-clause-discipline.mdc`).
 ### 4.4 View-tag leak — same structural shape as R1-F2 (not a footnote)
 
 The X25519 view tag is derived from `x25519_ss` **before** hybrid combine
-(`output.rs:674-678`), using only classical material. It is cheap because
+(`output.rs` construct path ~236–238; scanner pre-filter ~462–490 /
+`scan_output_recover` ~689–717), using only classical material. It is cheap because
 it avoids ML-KEM — and that is exactly why it leaks post-quantum: an
 adversary who holds your address (off-chain) recovers the view scalar,
 recomputes each output's 1-byte tag, and partitions the chain into
@@ -1843,7 +1848,7 @@ V4 removes hybrid KEM from addresses entirely.
 | FA-3 | `STAGE_1_PR_3_KEY_ENGINE.md` | §3.1.3 superseded banner → this doc |
 | FA-4 | `POST_QUANTUM_CRYPTOGRAPHY.md` / user docs | **Reusable-address privacy** product principle (R2-F1); drop subaddress-per-invoice narrative; T2 disclosure if multi-account |
 | FA-5 | `STAGE_2_KEY_ENGINE_ACTOR.md` §2.4 / §8.2 | **Delete** `AuditSubaddressSecret` disposition — moot under End-state 5 |
-| FA-6 | `docs/FOLLOWUPS.md` + PQ threat-model docs | **Confirmed open §3.7** — not closed by 5-T; wargaming after 1–4 |
+| FA-6 | `docs/design/FA-6_VIEW_TAG_ML_KEM.md` | **Spec drafted** — implementation after §11 sign-off; FA-9 propagation |
 | FA-7 | `WALLET_REWRITE_PLAN.md` Phase 1–2 | Amend: drop flat `SubaddressIndex` / `create_subaddress`; add payment requests + optional seed-derived accounts; reconcile payment-ID rejection with URI labels (§5.7.2) |
 | FA-8 | Payment URI + ledger (Round 3 PR) | **5-T:** `enc_label` + §5.7.11; **launch = sentinel-only**; `rid`/`REQUEST` + §5.7.9 UI behind flag; R2-F2 gates |
 | FA-9 | Threat-model / user docs (`POST_QUANTUM_CRYPTOGRAPHY.md` or new `docs/THREAT_MODEL_WALLET.md` §) | **In progress.** Propagate §4.6–§4.8, **R2-F9** (§5.7.12): pit-of-success vs adversary; marketing split; address substitution; dust non-oracle; **T6 ↔ phishing harvest** framing; liveness + label-injection hygiene |

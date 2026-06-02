@@ -1124,10 +1124,11 @@ sustainability is unaffected by the recalibration.
   `R2_F2_WALKTHROUGH.md` §6). **R2-F9 closed** (§5.7.12): address-knowledge /
   phishing pin; classical dust-tracking oracle **rejected** (FCMP++); T6 harvest
   via phishing named (§4.8). **5-T adopted** (§6.4): mandatory `enc_label`;
-  sentinel-only wallet at launch. FA-11 RCT wire landed. **Active parallel:**
-  **FA-6 / FA-9** — T6 view-tag scoping + threat-model propagation. **Remaining:**
-  Round 4 doc sweep; FA-2 subaddress deletion impl PR; FA-7 `WALLET_REWRITE_PLAN`
-  amendment.
+  sentinel-only wallet at launch. FA-11 RCT wire landed. **FA-6 spec:**
+  `docs/design/FA-6_VIEW_TAG_ML_KEM.md` (ML-KEM-keyed view tag at genesis).
+  **Active parallel:** FA-9 threat-model propagation; FA-6 implementation after
+  spec §11 sign-off. **Remaining:** Round 4 doc sweep; FA-2 subaddress deletion
+  impl PR; FA-7 `WALLET_REWRITE_PLAN` amendment.
 
   *The finding.* Monero's subaddress scheme is cheap because ECDH composes: the
   scanner computes `a·R` with the single account view secret `a` regardless of
