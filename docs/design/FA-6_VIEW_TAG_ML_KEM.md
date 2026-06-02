@@ -523,7 +523,7 @@ year 3+ is the honest workload.
 
 The wall-clock ceilings are armored against rewrite; **`O_per_block` is the
 soft underbelly** if it can be tuned after bench results. It must be pinned with
-the **same discipline** as the 60 s / 25 min budgets.
+the **same discipline** as the §8.4.1 ceilings (45 s / 20 min).
 
 **Required at S5** (written record in this doc or a one-page addendum — same
 artifact as §8.4 ceilings):
@@ -557,17 +557,72 @@ These are **product requirements**, pinned at S5 **before** FA-6 bench results
 are used for a merge decision. Compare measured time to these ceilings
 **without renegotiating the ceilings** to match the measurement.
 
-**Provisional placeholders** (replace with ratified numbers at sign-off —
-must be chosen deliberately, not copied from first bench run):
+**Ratified ceilings** (§8.4.1 — pinned 2026-06-02 before any FA-6 decap bench):
 
-| Scenario | What it models | Who cares | Provisional ceiling (Pi 4, mature `N_outputs`) |
-|----------|----------------|-----------|-----------------------------------------------|
-| **A — Incremental sync** | Outputs since last successful sync (e.g. 1 day of chain activity: `ΔN ≈ (86400/T_block) × O_per_block`) | Every app open | **≤ 60 s** wall-clock |
-| **B — Deep restore (genesis worst case)** | **`restore_height = 0`** (genesis-era wallet): scan **all** `N_outputs` from chain start — true genesis restore, not a recent birthday | Rare, one-time; worst case for FA-6 | **≤ 25 min** wall-clock |
+| Scenario | What it models | Who cares | Ratified ceiling (Pi 4, mature `N_outputs`) |
+|----------|----------------|-----------|---------------------------------------------|
+| **A — Incremental sync** | Outputs since last successful sync (`W_offline = 7` days → `A_outputs = 5,040 × O_per_block`; see §8.4.1) | Every app open | **≤ 45 s** wall-clock |
+| **B — Deep restore (genesis worst case)** | **`restore_height = 0`** (genesis-era wallet): scan **all** `N_outputs` from chain start — true genesis restore, not a recent birthday | Rare, one-time; worst case for FA-6 | **≤ 20 min** wall-clock |
 
 Scenario A must remain “snappy”; scenario B may be minutes because users
 tolerate one-time restore but not per-open delay. FA-6’s universal decap targets
 **B**; **A** should pass with margin if `ΔN` is small.
+
+**Note (A only, not ratified):** A **20 s** ceiling for scenario A was flagged
+for consideration if daily-reopen UX matters more than the 7-day offline window;
+the ratified value remains **45 s** until an explicit S5 amendment.
+
+#### 8.4.1 Ratification record — FA-6 sync budgets (pinned before bench harness)
+
+**Pinned by:** radawson  
+**Date:** 2026-06-02
+
+**Sequencing attestation:** These values were fixed **before** any FA-6 decap
+benchmark existed. They were **not** derived from, adjusted to, or anchored
+against any measured FA-6 cost. Amendment after this date requires a dated note
+stating the reason; “the benchmark exceeded the ceiling” is **not** a valid
+reason to raise a ceiling or lower `O_per_block`.
+
+**Chain inputs**
+
+| Symbol | Ratified value | Citation / derivation |
+|--------|----------------|---------------------|
+| `T_block` | **120 s** | `config/consensus_constants.json` → `daa_target_seconds`; generated `SHEKYL_DAA_TARGET_SECONDS` (`static_assert` in `tests/core_tests/block_reward.cpp`, RPC wire contract in `tests/unit_tests/rpc_target_wire_contract.cpp`) |
+| `H_horizon` | **5 years** | S5 calendar horizon (forward-dated mature chain) |
+| `N_blocks` | **1,314,900** | `⌊ (5 × 365.25 × 86,400) / T_block ⌋` |
+| `B_cap` | **600,000 B** | Sustained cumulative block-weight cap at long-term median floor: `m_current_block_cumul_weight_limit = 2 × effective_median` (`src/cryptonote_core/blockchain.cpp` ~5195); at HF1 minimum median `CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` = **300,000** B (`src/cryptonote_config.h` ~60) ⇒ **600 KiB** stress cap |
+| `W_out` | **1,500 B** | **Stress lower bound** on marginal **scanned** bytes per v3 account output in a full block (pin-high-`O_per_block` direction per §8.3.1): hybrid KEM material **1,120 B** per output in `tx_extra` tag `0x06` (`docs/CHANGELOG.md`, `docs/POST_QUANTUM_CRYPTOGRAPHY.md`) plus `txout` + RCT row lower bound — **not** a measured prototype tx; revisit only via dated S5 amendment if FA-11 wire audit shows higher marginal |
+| `O_per_block` | **400** | `⌊ B_cap / W_out ⌋` = `⌊ 600,000 / 1,500 ⌋` |
+| `N_outputs` (scenario B) | **525,960,000** | `N_blocks × O_per_block` |
+
+**Scenario A — incremental**
+
+| Symbol | Value |
+|--------|-------|
+| `W_offline` | **7 days** |
+| `A_outputs` | **2,016,000** (= `5,040 × O_per_block`; `5,040 = ⌊ 7 × 86,400 / T_block ⌋`) |
+| `T_ceil_A` | **45 s** |
+
+**Scenario B — deep restore (true genesis, no birthday)**
+
+| Symbol | Value |
+|--------|-------|
+| Outputs | Full `N_outputs` = **525,960,000** |
+| `T_ceil_B` | **20 min** |
+
+Birthday / `restore_height` is a named mitigation for the common case; **B**’s
+budget must hold for genesis restore regardless.
+
+**Gate**
+
+| Symbol | Value |
+|--------|-------|
+| `M_margin` | **20%** (clean pass: `T_meas ≤ T_ceil × 0.80`; marginal: `0.80 < T_meas / T_ceil ≤ 1.00` → §10.2 record) |
+| Reference device | §8.2 Pi 4 4GB, active cooling, USB3 SSD, stock 1.5 GHz, pinned toolchain, wallet-only; node co-residence headroom in `M_margin` |
+| Measure / accept separation | **Temporal** — this record predates the harness |
+
+**Implied clean-pass targets (derived, not separate pins):** scenario A **≤ 36 s**;
+scenario B **≤ 16 min** wall-clock.
 
 **Scenario B is intentionally the conservative floor** (parallel to Pi 4):
 pin “genesis wallet, restore from genesis on Pi 4.” A wallet created recently
@@ -615,9 +670,9 @@ people to “producer” and “acceptor.”
 
 ### 8.7 Gate outcome (clean pass, marginal pass, fail)
 
-Pin **`M_margin`** at S5 (provisional **20%** — replace at ratification): required
-headroom below the ceiling so a “pass” is not a deferred failure as the chain
-grows past `H_horizon` or under throttled hardware.
+**`M_margin`** ratified at **20%** (§8.4.1): required headroom below the ceiling
+so a “pass” is not a deferred failure as the chain grows past `H_horizon` or
+under throttled hardware.
 
 For each scenario, let `T_meas` = measured wall-clock, `T_ceil` = §8.4 ceiling.
 
@@ -724,26 +779,30 @@ requires §8.7 against §11.1 pins when benches are run.
 | S2 | §3.1 **Verify** rows closed — §3.1.1 on `dev` post–PR #100 | ✅ | Code-grounded: `view_tag` sole classical pre-decap byte; `amount_tag` / `label_tag` post-decap from `combined_ss` PRK; §3.1.1 accurate. |
 | S3 | HKDF constants §4.2 + **domain separation** §4.5 | ✅ | Constants pinned §4.2; distinctness table + one-byte PRF argument §4.5 (not TBD). |
 | S4 | Scanner order §4.7; **no** `view_tag_combined` post-check §4.4 | ✅ | Leg-swap order; `view_tag_combined` internal only — no scan gate. |
-| S5 | §8 ratified: §8.4 ceilings + §8.3.1 `O_per_block`, `M_margin`, scenario B | ☐ | Structure signed; pin numbers in §11.1 when running §8 benches (not blocking impl). |
+| S5 | §8 ratified: §8.4 ceilings + §8.3.1 `O_per_block`, `M_margin`, scenario B | ✅ | Chain pins + ceilings ratified §8.4.1 / §11.1 (2026-06-02); §8.7 bench outcome still pending. |
 | S6 | §10 branches explicit (ship / waiver / marginal §10.2) | ✅ | Machinery ratified; branch choice = §8.7 outcome vs S5 numbers (not pre-selected). |
 | S7 | **FA-6b** sync budget **not** inherited — §8.4 scope note | ✅ | Account path only; multisig hints separate (§2.2, §5.1). |
 | S8 | Decap totality / fuzz §4.9, §6.4 | ✅* | *Requirement correctly specified; **merge gate** confirms `fips203` decap totality on arbitrary 1088-byte CT + scan-path §6.4 KAT (not spec-review proof). |
 | S9 | FA-9 owner for propagation PR | ✅ | **Rick Dawson**, ClockWorX LLC. |
 
-### 11.1 S5 pins (pending — replace placeholders below)
+### 11.1 S5 pins (ratified 2026-06-02 — §8.4.1)
 
-Fill in this section (or a linked one-pager) **before** using bench results for
-merge. Order matters: pins first, benches second, compare third (§8.6).
+Pins are fixed **before** bench results are used for merge (§8.6). Full record:
+§8.4.1.
 
 | Pin | Ratified value | Derivation / notes |
 |-----|----------------|-------------------|
-| Scenario A ceiling | *(pending)* | Provisional 60 s |
-| Scenario B ceiling | *(pending)* | Provisional 25 min |
-| `M_margin` | *(pending)* | Provisional 20% |
-| `H_horizon` | *(pending)* | |
-| `T_block` | 120 s | HF1 `DIFFICULTY_TARGET_V2` |
-| `O_per_block` | *(pending)* | §8.3.1 — stress, cited |
-| `N_outputs` | *(derived)* | `N_blocks × O_per_block` |
+| Scenario A ceiling (`T_ceil_A`) | **45 s** | 7-day offline window; clean pass ≤ **36 s** |
+| Scenario B ceiling (`T_ceil_B`) | **20 min** | Genesis `restore_height = 0`; clean pass ≤ **16 min** |
+| `M_margin` | **20%** | §8.4.1 |
+| `H_horizon` | **5 years** | §8.4.1 |
+| `T_block` | **120 s** | `config/consensus_constants.json` → `daa_target_seconds` |
+| `N_blocks` | **1,314,900** | `⌊ H_horizon_seconds / T_block ⌋` |
+| `B_cap` | **600,000 B** | `2 × CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5` at median floor |
+| `W_out` | **1,500 B** | Stress marginal lower bound (§8.4.1) |
+| `O_per_block` | **400** | `⌊ B_cap / W_out ⌋` — §8.3.1 pessimistic pin |
+| `N_outputs` | **525,960,000** | `N_blocks × O_per_block` |
+| `W_offline` (scenario A) | **7 days** | `A_outputs` = **2,016,000** |
 
 Scenario B = genesis `restore_height` (§8.4). Exploratory benches may run in
 parallel; they do **not** set these pins.
