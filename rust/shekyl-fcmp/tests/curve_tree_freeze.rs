@@ -266,32 +266,46 @@ fn freeze_under_grow_g1_level2() {
 }
 
 // ===========================================================================
-// TIER 2 — daemon-incremental ↔ wallet-batch agreement
+// TIER 2 — the daemon's incremental reorg primitive reproduces the canonical
+// tree under REPLACEMENT (consensus-grade de-risking)
 //
-// These prove the stateful primitives (incremental hash_grow, hash_trim) that
-// the *daemon* runs produce node values byte-identical to the wallet's batch
-// build_layers composition. Required so a daemon-built segment and a wallet-built
-// segment share the same R_k (content-addressing) and so CT-2's KAT is sound.
+// Whose path this is: the daemon maintains the *consensus* curve tree in C++ and
+// calls these Rust primitives over FFI, so incremental `hash_trim` IS the
+// consensus reorg primitive. If it ever produces a tree whose root diverges from
+// a rebuild, every membership proof anchored after that reorg is invalid — a
+// consensus catastrophe, not a wallet inconvenience. (The *wallet* reorgs by
+// truncate-and-rebuild, covered by `freeze_under_prefix_rebuild`; this section
+// owns the *daemon's* incremental path. Both paths get coverage.)
+//
+// The sharp point: reorgs REPLACE, they do not truncate. A reorg orphans
+// B_{k+1..tip} and substitutes B'_{k+1..tip'}; the orphaned leaves are removed
+// and new leaves are written at the same vacated positions with different
+// values. So the consensus-relevant chunk operation is trim-to-offset-then-grow-
+// different, and the consensus-relevant tree operation is undeepen-and-reopen.
+// All of this is writable today against the real primitives, no maintainer.
 // ===========================================================================
 
-/// Build a Selene chunk hash one child at a time via the *incremental*
-/// prev/offset/old/new grow signature (the daemon's append path).
-fn incremental_grow_selene(scalars: &[[u8; 32]]) -> [u8; 32] {
-    let mut h = selene_hash_init();
-    for (i, s) in scalars.iter().enumerate() {
-        h = hash_grow_selene(&h, i, &ZERO, &[*s]).expect("incremental selene grow");
+// --- small primitive wrappers (batch-compose one chunk / convert one node) ---
+
+fn selene_chunk(scalars: &[[u8; 32]]) -> [u8; 32] {
+    if scalars.is_empty() {
+        return selene_hash_init(); // an empty chunk is the init point
     }
-    h
+    hash_grow_selene(&selene_hash_init(), 0, &ZERO, scalars).expect("selene chunk")
+}
+fn helios_chunk(scalars: &[[u8; 32]]) -> [u8; 32] {
+    if scalars.is_empty() {
+        return helios_hash_init();
+    }
+    hash_grow_helios(&helios_hash_init(), 0, &ZERO, scalars).expect("helios chunk")
+}
+fn s2h(selene_point: &[u8; 32]) -> [u8; 32] {
+    selene_point_to_helios_scalar(selene_point).expect("selene->helios")
 }
 
-/// Build a Helios chunk hash one child at a time (incremental append path).
-fn incremental_grow_helios(scalars: &[[u8; 32]]) -> [u8; 32] {
-    let mut h = helios_hash_init();
-    for (i, s) in scalars.iter().enumerate() {
-        h = hash_grow_helios(&h, i, &ZERO, &[*s]).expect("incremental helios grow");
-    }
-    h
-}
+// ---------------------------------------------------------------------------
+// Tier 2a — chunk-level algebra (replace / to-empty / path-independence)
+// ---------------------------------------------------------------------------
 
 #[test]
 fn incremental_grow_equals_batch_selene() {
@@ -300,11 +314,16 @@ fn incremental_grow_equals_batch_selene() {
     for trial in 0..16u64 {
         let mut rng = seeded(10_000 + trial);
         let n = 1 + (rng.next_u32() as usize % LEAF_CHUNK_SCALARS); // partial chunk
-        let s: Vec<[u8; 32]> = (0..n).map(|_| rand_scalar(&mut rng)).collect();
-        let batch = hash_grow_selene(&selene_hash_init(), 0, &ZERO, &s).expect("batch");
+        let mut h = selene_hash_init();
+        let mut s = Vec::with_capacity(n);
+        for i in 0..n {
+            let c = rand_scalar(&mut rng);
+            s.push(c);
+            h = hash_grow_selene(&h, i, &ZERO, &[c]).expect("incremental selene grow");
+        }
         assert_eq!(
-            incremental_grow_selene(&s),
-            batch,
+            h,
+            selene_chunk(&s),
             "selene incremental != batch (trial={trial}, n={n})"
         );
     }
@@ -315,11 +334,16 @@ fn incremental_grow_equals_batch_helios() {
     for trial in 0..16u64 {
         let mut rng = seeded(16_000 + trial);
         let n = 1 + (rng.next_u32() as usize % HELIOS_CHUNK_WIDTH);
-        let s: Vec<[u8; 32]> = (0..n).map(|_| rand_helios_scalar(&mut rng)).collect();
-        let batch = hash_grow_helios(&helios_hash_init(), 0, &ZERO, &s).expect("batch");
+        let mut h = helios_hash_init();
+        let mut s = Vec::with_capacity(n);
+        for i in 0..n {
+            let c = rand_helios_scalar(&mut rng);
+            s.push(c);
+            h = hash_grow_helios(&h, i, &ZERO, &[c]).expect("incremental helios grow");
+        }
         assert_eq!(
-            incremental_grow_helios(&s),
-            batch,
+            h,
+            helios_chunk(&s),
             "helios incremental != batch (trial={trial}, n={n})"
         );
     }
@@ -336,99 +360,304 @@ fn grow_update_equals_rebatch_selene() {
         let mut s: Vec<[u8; 32]> = (0..n).map(|_| rand_scalar(&mut rng)).collect();
         let off = rng.next_u32() as usize % n;
         let old = s[off];
-        let grown = hash_grow_selene(&selene_hash_init(), 0, &ZERO, &s).expect("grow");
+        let grown = selene_chunk(&s);
         let new_val = rand_scalar(&mut rng);
         let updated = hash_grow_selene(&grown, off, &old, &[new_val]).expect("in-place update");
         s[off] = new_val;
-        let rebatch = hash_grow_selene(&selene_hash_init(), 0, &ZERO, &s).expect("rebatch");
         assert_eq!(
-            updated, rebatch,
+            updated,
+            selene_chunk(&s),
             "in-place child update != rebatch (trial={trial}, off={off})"
         );
     }
 }
 
 #[test]
-fn trim_inverts_partial_grow_selene() {
-    // The daemon's reorg primitive: trimming children [m..n) at offset m (grow
-    // back zero) must equal the batch build of the surviving prefix [0..m).
-    for trial in 0..16u64 {
-        let mut rng = seeded(12_000 + trial);
+fn chunk_replace_equals_fresh_selene() {
+    // THE reorg, at chunk level: orphan the suffix [fork..n), then write a
+    // DIFFERENT suffix at the same positions. trim-to-fork-then-grow-different
+    // must equal a fresh build of prefix ++ new_suffix. The single-scalar inverse
+    // and pure-truncation cases never reach this.
+    for trial in 0..32u64 {
+        let mut rng = seeded(20_000 + trial);
         let n = 2 + (rng.next_u32() as usize % (LEAF_CHUNK_SCALARS - 1));
-        let m = 1 + (rng.next_u32() as usize % (n - 1)); // 1..=n-1
+        let fork = rng.next_u32() as usize % n; // first replaced offset (< n)
         let s: Vec<[u8; 32]> = (0..n).map(|_| rand_scalar(&mut rng)).collect();
-        let full = hash_grow_selene(&selene_hash_init(), 0, &ZERO, &s).expect("grow");
-        let trimmed = hash_trim_selene(&full, m, &s[m..], &ZERO).expect("trim");
-        let prefix = hash_grow_selene(&selene_hash_init(), 0, &ZERO, &s[..m]).expect("prefix");
+        let full = selene_chunk(&s);
+
+        // orphan the suffix
+        let trimmed = hash_trim_selene(&full, fork, &s[fork..], &ZERO).expect("trim suffix");
         assert_eq!(
-            trimmed, prefix,
-            "selene trim to m != batch prefix (trial={trial}, n={n}, m={m})"
+            trimmed,
+            selene_chunk(&s[..fork]),
+            "trim-to-fork != prefix (trial={trial}, fork={fork})"
+        );
+        // write a different suffix at the vacated positions
+        let new_suffix: Vec<[u8; 32]> = (fork..n).map(|_| rand_scalar(&mut rng)).collect();
+        let replaced = hash_grow_selene(&trimmed, fork, &ZERO, &new_suffix).expect("regrow");
+        let mut fresh = s[..fork].to_vec();
+        fresh.extend_from_slice(&new_suffix);
+        assert_eq!(
+            replaced,
+            selene_chunk(&fresh),
+            "replace != fresh build (trial={trial}, n={n}, fork={fork})"
         );
     }
 }
 
 #[test]
-fn trim_inverts_partial_grow_helios() {
-    for trial in 0..16u64 {
-        let mut rng = seeded(17_000 + trial);
+fn chunk_replace_equals_fresh_helios() {
+    for trial in 0..32u64 {
+        let mut rng = seeded(21_000 + trial);
         let n = 2 + (rng.next_u32() as usize % (HELIOS_CHUNK_WIDTH - 1));
-        let m = 1 + (rng.next_u32() as usize % (n - 1));
+        let fork = rng.next_u32() as usize % n;
         let s: Vec<[u8; 32]> = (0..n).map(|_| rand_helios_scalar(&mut rng)).collect();
-        let full = hash_grow_helios(&helios_hash_init(), 0, &ZERO, &s).expect("grow");
-        let trimmed = hash_trim_helios(&full, m, &s[m..], &ZERO).expect("trim");
-        let prefix = hash_grow_helios(&helios_hash_init(), 0, &ZERO, &s[..m]).expect("prefix");
+        let full = helios_chunk(&s);
+        let trimmed = hash_trim_helios(&full, fork, &s[fork..], &ZERO).expect("trim suffix");
+        assert_eq!(trimmed, helios_chunk(&s[..fork]), "trim-to-fork != prefix");
+        let new_suffix: Vec<[u8; 32]> = (fork..n).map(|_| rand_helios_scalar(&mut rng)).collect();
+        let replaced = hash_grow_helios(&trimmed, fork, &ZERO, &new_suffix).expect("regrow");
+        let mut fresh = s[..fork].to_vec();
+        fresh.extend_from_slice(&new_suffix);
         assert_eq!(
-            trimmed, prefix,
-            "helios trim to m != batch prefix (trial={trial}, n={n}, m={m})"
+            replaced,
+            helios_chunk(&fresh),
+            "helios replace != fresh build (trial={trial}, n={n}, fork={fork})"
         );
     }
 }
 
 #[test]
-fn trim_undeepen_returns_to_prefix() {
-    // Tree-level deepen/undeepen via the real hash_trim primitive — the most
-    // divergence-prone point (a layer collapsing from 2 chunks back to 1). Grow
-    // exactly one output past the first deepen (leaf layer 1->2 chunks), trim it
-    // back via hash_trim, and confirm the tree returns to its pre-deepen state.
-    // E = SELENE_CHUNK_WIDTH outputs == one full leaf chunk == a depth-1 tree.
-    let mut rng = seeded(13_000);
-    let e = SELENE_CHUNK_WIDTH; // 38 outputs
-    let base = rand_leaves(&mut rng, e); // depth-1 tree (single full leaf chunk)
-    let extra = rand_leaves(&mut rng, 1); // 1 more output -> deepen to depth 2
+fn chunk_trim_to_empty_and_multi_selene() {
+    // Multi-element trim and trim-to-empty (the latter is what undeepen needs at
+    // the chunk level): the chunk must return to init when fully trimmed.
+    let mut rng = seeded(22_000);
+    let s: Vec<[u8; 32]> = (0..3).map(|_| rand_scalar(&mut rng)).collect();
+    let full = selene_chunk(&s);
+    // trim [1..3) (multi-element) -> prefix [0]
+    let one = hash_trim_selene(&full, 1, &s[1..], &ZERO).expect("multi trim");
+    assert_eq!(one, selene_chunk(&s[..1]), "multi-element trim != prefix");
+    // trim all -> init
+    let empty = hash_trim_selene(&full, 0, &s, &ZERO).expect("trim all");
+    assert_eq!(empty, selene_hash_init(), "trim-to-empty != init");
+}
 
-    let root_38 = build_layers(&base)[0][0]; // pre-deepen root == the single leaf node
-    let chunk0 = hash_grow_selene(&selene_hash_init(), 0, &ZERO, &base).expect("chunk0");
+#[test]
+fn chunk_path_independence_selene() {
+    // A stateful primitive could carry grow-history into its result; a rebuild
+    // cannot. Reaching the same final children by different grow schedules must
+    // yield the same hash, and the same subsequent trim must too.
+    for trial in 0..16u64 {
+        let mut rng = seeded(23_000 + trial);
+        let final_children: Vec<[u8; 32]> = (0..6).map(|_| rand_scalar(&mut rng)).collect();
+        // path A: one shot
+        let a = selene_chunk(&final_children);
+        // path B: [0..2], then [2..5], then [5..6]
+        let mut b = selene_chunk(&final_children[..2]);
+        b = hash_grow_selene(&b, 2, &ZERO, &final_children[2..5]).expect("b grow 1");
+        b = hash_grow_selene(&b, 5, &ZERO, &final_children[5..6]).expect("b grow 2");
+        assert_eq!(a, b, "grow path-dependence in chunk hash (trial={trial})");
+        // same trim of the [3..6) suffix from both must agree and equal prefix[..3]
+        let ta = hash_trim_selene(&a, 3, &final_children[3..], &ZERO).expect("trim a");
+        let tb = hash_trim_selene(&b, 3, &final_children[3..], &ZERO).expect("trim b");
+        assert_eq!(ta, tb, "trim carries grow history (trial={trial})");
+        assert_eq!(ta, selene_chunk(&final_children[..3]), "trim != prefix");
+    }
+}
+
+#[test]
+fn chunk_path_independence_helios() {
+    for trial in 0..16u64 {
+        let mut rng = seeded(24_000 + trial);
+        let final_children: Vec<[u8; 32]> = (0..6).map(|_| rand_helios_scalar(&mut rng)).collect();
+        let a = helios_chunk(&final_children);
+        let mut b = helios_chunk(&final_children[..1]);
+        b = hash_grow_helios(&b, 1, &ZERO, &final_children[1..4]).expect("b grow 1");
+        b = hash_grow_helios(&b, 4, &ZERO, &final_children[4..6]).expect("b grow 2");
+        assert_eq!(a, b, "helios grow path-dependence (trial={trial})");
+        let ta = hash_trim_helios(&a, 2, &final_children[2..], &ZERO).expect("trim a");
+        let tb = hash_trim_helios(&b, 2, &final_children[2..], &ZERO).expect("trim b");
+        assert_eq!(ta, tb, "helios trim carries grow history (trial={trial})");
+        assert_eq!(
+            ta,
+            helios_chunk(&final_children[..2]),
+            "helios trim != prefix"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tier 2b — tree-level undeepen (both collapse types) + compound + capstone.
+// Asserts the FULL layer vector against build_layers, not just the root: a
+// structural mismatch that coincidentally agrees at the root is exactly what a
+// deepen/undeepen test should catch.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn undeepen_helios_collapse_39_to_38() {
+    // First deepen (39 outputs) adds a Helios layer over two leaf chunks; the
+    // root is that Helios node. Trimming the 39th output empties the second leaf
+    // chunk, the Helios layer is dropped, and the root reverts to the (Selene)
+    // leaf node — a HELIOS collapse with a Selene-curve root.
+    let mut rng = seeded(30_000);
+    let base = rand_leaves(&mut rng, SELENE_CHUNK_WIDTH); // 38 outputs (one full leaf chunk)
+    let o38 = rand_leaves(&mut rng, 1); // the 39th output
+
+    let leaf0 = selene_chunk(&base);
+    let leaf1 = selene_chunk(&o38);
+    let root39 = helios_chunk(&[s2h(&leaf0), s2h(&leaf1)]);
+
+    let mut all39 = base.clone();
+    all39.extend_from_slice(&o38);
     assert_eq!(
-        chunk0, root_38,
-        "pre-deepen root must be the single full leaf chunk"
+        build_layers(&all39),
+        vec![vec![leaf0, leaf1], vec![root39]],
+        "forward 39 via primitives != build_layers (full layers)"
     );
 
-    // Deepen: a second (partial) leaf chunk holds output 38, with a Helios parent.
-    let chunk1 = hash_grow_selene(&selene_hash_init(), 0, &ZERO, &extra).expect("chunk1");
-    let c0_h = selene_point_to_helios_scalar(&chunk0).expect("s->h c0");
-    let c1_h = selene_point_to_helios_scalar(&chunk1).expect("s->h c1");
-    let root_39 = hash_grow_helios(&helios_hash_init(), 0, &ZERO, &[c0_h, c1_h]).expect("root39");
-    let mut all = base.clone();
-    all.extend_from_slice(&extra);
+    // reorg: trim the 39th output out of leaf1 via the real primitive
+    let leaf1_t = hash_trim_selene(&leaf1, 0, &o38, &ZERO).expect("trim leaf1");
     assert_eq!(
-        root_39,
-        build_layers(&all)[1][0],
-        "deepened root via primitives != batch build_layers"
-    );
-
-    // Undeepen via real hash_trim: remove output 38's scalars from chunk1, which
-    // must return it to the empty-chunk init. The leaf layer then has one
-    // non-empty chunk, so the tree depth returns to 1 and the root reverts to
-    // chunk0 (the Helios parent is structurally dropped, not kept as a 1-child
-    // node) — matching build_layers(base), which stops while-deepening at len==1.
-    let chunk1_trimmed = hash_trim_selene(&chunk1, 0, &extra, &ZERO).expect("trim chunk1");
-    assert_eq!(
-        chunk1_trimmed,
+        leaf1_t,
         selene_hash_init(),
-        "trimmed frontier chunk did not return to init"
+        "Helios-collapse: leaf1 did not empty"
+    );
+
+    // undeepen target == build_layers(38): single Selene leaf node, depth 1
+    assert_eq!(
+        build_layers(&base),
+        vec![vec![leaf0]],
+        "undeepen target != build_layers(38) (full layers)"
     );
     assert_eq!(
-        chunk0, root_38,
-        "undeepen: root did not return to the pre-deepen value"
+        build_layers(&all39).len(),
+        2,
+        "39 should be depth 2 (Helios root)"
+    );
+    assert_eq!(
+        build_layers(&base).len(),
+        1,
+        "38 should be depth 1 (Helios layer dropped)"
+    );
+}
+
+#[test]
+fn undeepen_selene_collapse_685_to_684() {
+    // Second deepen (685 outputs) adds a SELENE layer (layer 2) over two Helios
+    // nodes; the root is that Selene node. Trimming the 685th output empties the
+    // 19th leaf chunk, the layer-2 Selene node is dropped, and the root reverts to
+    // a Helios (layer-1) node — a SELENE collapse with a Helios-curve root. This
+    // is a distinct code path from the 39->38 Helios collapse.
+    let e1 = outputs_per_node(1); // 684 = 18 full leaf chunks under one Helios node
+    let mut rng = seeded(31_000);
+    let leaves684 = rand_leaves(&mut rng, e1);
+    let o684 = rand_leaves(&mut rng, 1); // the 685th output (opens leaf chunk 18)
+
+    let mut all685 = leaves684.clone();
+    all685.extend_from_slice(&o684);
+    let big = build_layers(&all685);
+    let small = build_layers(&leaves684);
+
+    assert_eq!(big.len(), 3, "685 should be depth 3 (Selene layer 2 added)");
+    assert_eq!(
+        small.len(),
+        2,
+        "684 should be depth 2 (Selene layer 2 dropped)"
+    );
+
+    // The frontier leaf chunk (index 18) holds exactly output 684; trim it.
+    let leaf18 = big[0][18];
+    assert_eq!(leaf18, selene_chunk(&o684), "frontier leaf != fresh build");
+    let leaf18_t = hash_trim_selene(&leaf18, 0, &o684, &ZERO).expect("trim leaf18");
+    assert_eq!(
+        leaf18_t,
+        selene_hash_init(),
+        "Selene-collapse: leaf18 did not empty"
+    );
+
+    // The 18 completed leaf chunks are frozen across the undeepen, and the
+    // surviving root is the single Helios layer-1 node.
+    assert_eq!(
+        big[0][..18],
+        small[0][..],
+        "first 18 leaf nodes not frozen across Selene collapse"
+    );
+    assert_eq!(small[1].len(), 1, "684 root should be a single Helios node");
+}
+
+#[test]
+fn reorg_compound_45_to_35() {
+    // A real multi-block reorg, not a clean tip removal: 45 -> 35 trims away the
+    // partial frontier chunk (outputs 38..44), undeepens (drops the Helios
+    // parent), AND re-opens the first leaf chunk from full (38) down to partial
+    // (35). The undeepen-and-reopen compound logic lives here.
+    let mut rng = seeded(32_000);
+    let l45 = rand_leaves(&mut rng, 45);
+    let sp = SCALARS_PER_LEAF;
+
+    let leaf0 = selene_chunk(&l45[..38 * sp]); // outputs 0..37 (full)
+    let frontier = &l45[38 * sp..45 * sp]; // outputs 38..44 (partial, 7 outputs)
+    let leaf1 = selene_chunk(frontier);
+    let root45 = helios_chunk(&[s2h(&leaf0), s2h(&leaf1)]);
+    assert_eq!(
+        build_layers(&l45),
+        vec![vec![leaf0, leaf1], vec![root45]],
+        "forward 45 via primitives != build_layers"
+    );
+
+    // empty the frontier chunk
+    let leaf1_t = hash_trim_selene(&leaf1, 0, frontier, &ZERO).expect("empty leaf1");
+    assert_eq!(leaf1_t, selene_hash_init(), "frontier chunk did not empty");
+    // shrink the first chunk 38 -> 35: remove outputs 35,36,37 at offset 35*4
+    let removed = &l45[35 * sp..38 * sp]; // 12 scalars
+    let leaf0_t = hash_trim_selene(&leaf0, 35 * sp, removed, &ZERO).expect("shrink leaf0");
+
+    // undeepen (drop Helios): result is a single partial Selene leaf node == 35
+    assert_eq!(
+        build_layers(&l45[..35 * sp]),
+        vec![vec![leaf0_t]],
+        "compound reorg 45->35 != build_layers(35) (full layers)"
+    );
+}
+
+#[test]
+fn reorg_capstone_replace_at_boundary_39() {
+    // The nastiest structural case: a reorg landing exactly on a deepen boundary
+    // with DIFFERENT new content. Grow to 39 (deepened) -> trim the 39th
+    // (undeepen to 38) -> grow a different 39' (re-deepen). The frozen leaf0 is
+    // carried untouched through the whole deepen/undeepen/re-deepen cycle; the
+    // result must equal a fresh build of base ++ 39'.
+    let mut rng = seeded(33_000);
+    let base = rand_leaves(&mut rng, SELENE_CHUNK_WIDTH); // 38 outputs
+    let o38_a = rand_leaves(&mut rng, 1); // original 39th output
+    let o38_b = rand_leaves(&mut rng, 1); // replacement 39th output (different)
+
+    let leaf0 = selene_chunk(&base); // computed ONCE, carried through the cycle
+    let leaf1_a = selene_chunk(&o38_a);
+    let _root39_a = helios_chunk(&[s2h(&leaf0), s2h(&leaf1_a)]); // deepened with original
+
+    // reorg: orphan the original 39th -> leaf1 empties, tree undeepens to 38
+    let leaf1_empty = hash_trim_selene(&leaf1_a, 0, &o38_a, &ZERO).expect("trim a");
+    assert_eq!(
+        leaf1_empty,
+        selene_hash_init(),
+        "undeepen: leaf1 did not empty"
+    );
+
+    // re-deepen with the DIFFERENT 39th, written into the vacated chunk
+    let leaf1_b = hash_grow_selene(&leaf1_empty, 0, &ZERO, &o38_b).expect("regrow b");
+    assert_eq!(
+        leaf1_b,
+        selene_chunk(&o38_b),
+        "re-grown chunk carries stale state"
+    );
+    let root39_b = helios_chunk(&[s2h(&leaf0), s2h(&leaf1_b)]);
+
+    let mut all_b = base.clone();
+    all_b.extend_from_slice(&o38_b);
+    assert_eq!(
+        build_layers(&all_b),
+        vec![vec![leaf0, leaf1_b], vec![root39_b]],
+        "capstone: deepen->undeepen->re-deepen with different content != fresh build"
     );
 }

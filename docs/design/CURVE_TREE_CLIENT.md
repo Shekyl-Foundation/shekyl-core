@@ -169,6 +169,15 @@ absorbs reorg churn, and freezing lags the tip. The reference block at
 `tip − REF_ANCHOR_AGE` (§5) is within this unfrozen frontier by construction; a
 reorg deeper than the margin forces ref-block re-selection (§5.3).
 
+**Reorg strategy (coverage attribution).** The wallet `LeafStore` reorgs by
+**truncate-the-leaf-array + rebuild the surviving prefix** via `build_layers` — it
+carries no stateful frontier and never calls the incremental `hash_trim` primitive
+(§7.7 pin). The *daemon* maintains the consensus tree incrementally and `hash_trim`
+*is* its reorg primitive. Both paths are tested, so the question is attribution,
+not coverage: `freeze_under_prefix_rebuild` exercises the **wallet's** actual code;
+the Tier-2 `chunk_replace_*` / `undeepen_*` / `reorg_*` tests (§7.7) exercise the
+**daemon's** incremental path.
+
 ### 3.5 Public API (the contract 2A codes against)
 
 ```rust
@@ -759,26 +768,66 @@ consensus scale, and prefix-rebuild is simpler than stateful rollback — freeze
   (both deepen types: Helios-over-Selene and Selene-over-Helios); level-2 is
   shard-size realism for CT-2's KAT, deliberately out of the fast gate. ✓
 
-**Tier 2 (daemon-incremental ↔ wallet-batch agreement — what `R_k` content-addressing
-and CT-2's KAT rest on):**
+**Tier 2 (the daemon's incremental reorg primitive reproduces the canonical tree
+under *replacement* — consensus-grade de-risking).** This is **higher-stakes than
+CT-1 hygiene**: the daemon maintains the consensus curve tree in C++ and calls
+these Rust primitives over FFI, so incremental `hash_trim` **is** the consensus
+reorg primitive. If it ever produces a tree whose root diverges from a rebuild,
+every membership proof anchored after that reorg is invalid — a consensus
+catastrophe. So Tier 2 is worth landing on its own merits, co-located with the
+freeze harness in `rust/shekyl-fcmp/tests/`. It is **complementary to, not
+redundant with**, the wallet's path: the wallet's truncate-and-rebuild reorg is
+gated by `freeze_under_prefix_rebuild`; Tier 2 owns the daemon's incremental path.
+
+The load-bearing correction: **reorgs replace, they do not truncate.** A reorg
+orphans `B_{k+1..tip}` and substitutes `B'_{k+1..tip'}`; orphaned leaves are
+removed and new leaves are written at the same vacated positions with *different*
+values. So the consensus-relevant chunk op is trim-to-offset-then-grow-different,
+and the tree op is undeepen-and-reopen — not "remove the tip."
+
+*Tier 2a — chunk-level algebra:*
 
 - `incremental_grow_equals_batch_selene` / `..._helios` — appending children one
   at a time via the stateful grow signature equals the batch chunk hash. ✓
 - `grow_update_equals_rebatch_selene` — the non-zero old-child (in-place update)
   path equals rebuilding the chunk with the new child. ✓
-- `trim_inverts_partial_grow_selene` / `..._helios` — `hash_trim` of children
-  `[m..n)` equals the batch build of the surviving prefix `[0..m)`. ✓
-- `trim_undeepen_returns_to_prefix` — tree-level deepen→undeepen via the real
-  `hash_trim`: grow one output past the first deepen, trim it back, and the tree
-  returns to its pre-deepen state (the most divergence-prone transition). ✓
+- `chunk_replace_equals_fresh_selene` / `..._helios` — **the actual reorg**: trim
+  suffix `[fork..n)`, grow a *different* suffix at the vacated positions, assert
+  byte-equal to a fresh build of `prefix ++ new_suffix` (32 trials, swept fork).
+  The single-scalar-inverse and pure-truncation cases never reach this. ✓
+- `chunk_trim_to_empty_and_multi_selene` — multi-element trim → prefix, and
+  trim-all → `init` (the to-empty case undeepen needs at the chunk level). ✓
+- `chunk_path_independence_selene` / `..._helios` — two different grow schedules
+  to the same final children give the same hash, and the same subsequent trim
+  agrees. Catches a primitive that carries grow-history into the trim result —
+  exactly the bug class a stateful primitive can have and a rebuild cannot. ✓
+
+*Tier 2b — tree-level undeepen (both collapse types) + compound + capstone, all
+asserting the **full layer vector** against `build_layers`, not just the root:*
+
+- `undeepen_helios_collapse_39_to_38` — 39→38 drops a **Helios** layer; root
+  reverts to a Selene leaf node. ✓
+- `undeepen_selene_collapse_685_to_684` — 685→684 drops a **Selene** layer
+  (layer 2) over two Helios nodes; root reverts to a Helios node. Distinct curve
+  at the dropped layer and at the resulting root — a separate code path. ✓
+- `reorg_compound_45_to_35` — the realistic multi-block reorg: trims away the
+  partial frontier chunk, undeepens (drops the Helios parent), **and** re-opens
+  the first leaf chunk from full (38) to partial (35). `== build_layers(35)`. ✓
+- `reorg_capstone_replace_at_boundary_39` — the nastiest case: grow to 39
+  (deepened) → trim the 39th (undeepen to 38) → grow a *different* 39′
+  (re-deepen), carrying the frozen `leaf0` untouched through the whole cycle;
+  `== build_layers(base ++ 39′)`. A reorg landing exactly on a deepen boundary
+  with different new content. ✓
 
 Outcome is **branch 3**: §7 position-aligned segment boundary stands; CT-1 schema
 is unblocked with no `shekyl-fcmp` accessor dependency. Under the batch pin there
 is **no separate "Tier 3" wallet-incremental fuzz** — the wallet has no stateful
-path to fuzz (its reorg is prefix-rebuild, already gated). The daemon's full
-incremental↔batch agreement is owned end-to-end by **CT-2's reconstruct-root KAT**
-(Rust `build_layers` root == C++ consensus header root); Tier 2 above is the
-within-Rust down-payment on that agreement.
+path to fuzz (its reorg is prefix-rebuild, already gated by
+`freeze_under_prefix_rebuild`). The daemon's *full* incremental↔batch agreement
+against the live C++ tree is owned end-to-end by **CT-2's reconstruct-root KAT**
+(Rust `build_layers` root == C++ consensus header root); Tier 2 is the within-Rust
+proof, against the real primitives, that the incremental path reproduces the
+canonical tree under replacement at both deepen boundaries.
 
 ---
 
@@ -832,7 +881,7 @@ within-Rust down-payment on that agreement.
 
 | PR | Scope | Key files |
 |----|-------|-----------|
-| **CT-0** | **Gate spike — DONE, G1 PASSES.** 12-test harness proved **G1** value-invariance + exact-boundary freeze + within-Rust extractability + conversion totality (batch path) **and** daemon-incremental↔batch agreement (Tier 2: incremental-grow/trim == batch) against the real fork; layer-2 scale included. Branch 3: §7 stands, no accessor, CT-1 unblocked. Pinned **batch/prefix-rebuild** wallet strategy; **promoted `build_layers` into `shekyl-fcmp::tree`** as the single composition; renamed trim test → `freeze_under_prefix_rebuild`. | `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (landed) + `rust/shekyl-fcmp/src/tree.rs` (`build_layers`) |
+| **CT-0** | **Gate spike — DONE, G1 PASSES.** 18-test harness proved **G1** value-invariance + exact-boundary freeze + within-Rust extractability + conversion totality (batch path) **and** consensus-grade daemon-reorg de-risking (Tier 2: incremental `hash_grow`/`hash_trim` reproduce `build_layers` under *replacement* — chunk replace/to-empty/path-independence + tree undeepen at **both** collapse types (39→38 Helios, 685→684 Selene) + compound 45→35 + replace-at-boundary capstone, full-layer asserts) against the real fork; layer-2 scale included. Branch 3: §7 stands, no accessor, CT-1 unblocked. Pinned **batch/prefix-rebuild** wallet strategy; **promoted `build_layers` into `shekyl-fcmp::tree`** as the single composition; renamed trim test → `freeze_under_prefix_rebuild`. | `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (landed) + `rust/shekyl-fcmp/src/tree.rs` (`build_layers`) |
 | **CT-1** | `shekyl-curve-tree` crate skeleton + **subtree-aligned segment** `LeafStore` keyed by `R_k` (pin/prune seam, §7.6) + types (`AssembledPath`, `OutputIdentity`, `ReferenceBlock`) + no-secrets structural test. Segment assembler + truncate-and-rebuild reorg call `shekyl-fcmp::tree::build_layers` (no reimplementation). | new crate |
 | **CT-2** | Path extraction (`assemble`) over a **synthetic** leaf set composed via the promoted `build_layers`; **reconstruct-root KAT** = Rust `build_layers` root == C++ consensus header root (owns end-to-end daemon-incremental↔batch agreement, subsuming "Tier 3"); C3-shape invariant | `assemble`, `shekyl-fcmp::tree` |
 | **CT-3** | **Source-agnostic** bulk-segment fetch + delta sync + per-segment root verify against header; reorg rollback by segment | `sync`, peer-pluggable client |
@@ -895,8 +944,9 @@ is the only forward requirement).
 ## Appendix A. CT-0 harness (G1 + within-Rust extractability)
 
 **LANDED and PASSING (2026-06). The authoritative artifact is the file
-`rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (12 tests, lint-clean) — not the
-snapshot below.** It uses `rand` + `rand_chacha` (already dev-deps); `proptest` is
+`rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (18 tests + 1 `#[ignore]`,
+lint-clean) — not the snapshot below.** It uses `rand` + `rand_chacha` (already
+dev-deps); `proptest` is
 **not** a workspace dep, so this is `rand`-driven and seeded for reproducibility
 (add `proptest` only if input shrinking is wanted — a dependency-discipline
 decision, not a requirement). The test run was the law (§7.7) and confirmed the
@@ -909,9 +959,13 @@ prior: G1 holds.
 > `freeze_under_prefix_rebuild`** (it is truncate-and-rebuild, the wallet's reorg
 > path — not the `hash_trim` primitive); (3) the file adds `freeze_at_exact_boundaries`,
 > `node_conversions_are_total`, a looped `extract_matches_in_tree`, the `#[ignore]`
-> level-2 test, and the **Tier-2** daemon-incremental↔batch agreement tests
-> (`incremental_grow_equals_batch_{selene,helios}`, `grow_update_equals_rebatch_selene`,
-> `trim_inverts_partial_grow_{selene,helios}`, `trim_undeepen_returns_to_prefix`).
+> level-2 test, and the **Tier-2** daemon-incremental↔batch *replacement* tests:
+> chunk-level `incremental_grow_equals_batch_{selene,helios}`,
+> `grow_update_equals_rebatch_selene`, `chunk_replace_equals_fresh_{selene,helios}`,
+> `chunk_trim_to_empty_and_multi_selene`, `chunk_path_independence_{selene,helios}`;
+> tree-level `undeepen_helios_collapse_39_to_38`,
+> `undeepen_selene_collapse_685_to_684`, `reorg_compound_45_to_35`,
+> `reorg_capstone_replace_at_boundary_39` (full-layer asserts).
 > Read the file for the current harness; the snapshot is retained only to show the
 > minimal G1 core. Run the heavy level-2 case with
 > `cargo test -p shekyl-fcmp --test curve_tree_freeze -- --ignored`.
