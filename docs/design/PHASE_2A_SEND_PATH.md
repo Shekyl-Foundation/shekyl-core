@@ -1333,32 +1333,102 @@ crate, not `shekyl-engine-core`, not `shekyl-io`.** `sign_transaction` returns
 `SignedProofs`, which is *intentionally format-agnostic* ("does not know about
 the full transaction format" — `types.rs`); that property of the **struct** is
 preserved. The **crate** gains a `wire` module owning the adapter
-`SignedProofs (+ TransactionPrefix + fee) → shekyl_oxide::Transaction::V2`,
-because the builder alone holds both halves: it owns `SignedProofs` and already
-depends on `shekyl-bulletproofs`, so it is the only crate that can parse its own
-serialized `bulletproof_plus: Vec<u8>` back into oxide's typed
-`PrunableProof.bulletproof: Bulletproof`. It gains a dependency on the top
+`(typed proof components + TransactionPrefix + fee) → shekyl_oxide::Transaction::V2`,
+because the builder alone holds both halves: it owns the signing output **and**
+produces the typed `shekyl_bulletproofs::Bulletproof` that `PrunableProof`
+expects (see "Typed handoff" below). It gains a dependency on the top
 `shekyl-oxide` crate; this is **cycle-free** (`shekyl-oxide`'s `Cargo.toml`
 depends only on its own sub-crates, never on `shekyl-tx-builder`).
+
+**Ownership note (`shekyl-oxide` is first-party).** `shekyl-oxide` is an
+**in-tree path dependency** under `rust/shekyl-oxide/`, authored "Shekyl
+Foundation" (+ upstream `monero-oxide` attribution), repo
+`github.com/Shekyl-Foundation/shekyl-oxide`. Its lower layers track audited
+upstream **primitives** (dalek, generators, bulletproofs); its
+transaction/FCMP++/PQC-auth/fee layer (`transaction.rs`, `fcmp.rs`,
+`RCTTypeFcmpPlusPlusPqc`, `pqc_auths`, sentinel `encrypted_labels`) is Shekyl's
+own divergence. So `shekyl-tx-builder → shekyl-oxide` is a first-party in-tree
+edge, **not** a `10-shekyl-first.mdc` "depend on the fork" violation — that rule
+governs the separate `monero-oxide` repo, not this vendored-but-owned copy.
 
 - **Reject a dedicated `shekyl-tx-wire` crate** (the §4-Round-0 alternative):
   per `15-deletion-and-debt.mdc`, a crate for a single ~one-function adapter
   over a near-1:1 field map is ceremony without a second consumer. Reopen only
   if a second non-builder producer of `SignedProofs`-shaped material emerges.
 - **Reject `shekyl-engine-core`/`LocalSigner` ownership:** that would put
-  tx-format knowledge **and** the BP+ parse into the orchestrator, the
-  duplication §4-Round-0 set out to avoid. `LocalSigner` *invokes* the adapter;
-  it does not host the layout.
+  tx-format knowledge and the typed-`Bulletproof` → `PrunableProof` mapping into
+  the orchestrator, the duplication §4-Round-0 set out to avoid. `LocalSigner`
+  *invokes* the adapter; it does not host the layout.
 - **Reject `shekyl-io`:** `io` owns serialization **primitives** (`write_varint`
   etc.) that `shekyl-oxide` already consumes; it does not own tx layout.
 
-**The one non-trivial mapping step** (and the reason the adapter is a named,
-tested function rather than scattered struct-fill): builder emits the BP+ range
-proof as opaque `bulletproof_plus: Vec<u8>`, but `PrunableProof.bulletproof` is
-oxide's typed `Bulletproof`. The adapter parses bytes → `Bulletproof`; the
-adapter's test asserts the round-trip (`serialize(assemble(signed)) ==
-expected`) so a layout drift fails loudly. `SignedProofs.tree_depth` is FCMP
-context (echoed for proof deserialization), **not** a separate wire field.
+**Typed handoff — no serialize→parse→serialize round-trip (Round-1 finding).**
+The BP+ "parse" the Round-0 draft worried about is a tell, and chasing it to
+source dissolves it. Verified facts:
+
+- **Same type, not two impls.** `shekyl-oxide`'s `PrunableProof.bulletproof`
+  is `shekyl_bulletproofs::Bulletproof` (`fcmp.rs`: `pub use shekyl_bulletproofs
+  as bulletproofs;`), the **same** type `shekyl-tx-builder` produces
+  (`sign.rs`: `shekyl_bulletproofs::Bulletproof::prove_plus(...)`). Both crates
+  point `shekyl-bulletproofs` at the one path `…/fcmp/bulletproofs`. There is
+  **no cross-implementation interchange** at this seam, so **no
+  `SHEKYL_OXIDE_VENDORING` note and no load-bearing parse-guard** are warranted
+  — that branch is closed.
+- **The byte shape is the FFI projection, not the 2A path's.**
+  `SignedProofs.bulletproof_plus: Vec<u8>` (and the `hex_blob`/`hex_vec32` serde
+  shaping) exists for the **C++ wallet JSON crossing**: `shekyl-ffi`'s
+  `shekyl_sign_transaction` calls `sign_transaction(...)` then
+  `serde_json::to_vec(&proofs)`. The 2A in-process path (`shekyl-engine-core`
+  `KeyActor`/`LocalSigner`) consumes `sign_transaction` as a **typed Rust
+  `ask`** and never serializes it to JSON.
+
+**Disposition:** on the 2A Rust→Rust path the adapter takes the **typed**
+`shekyl_bulletproofs::Bulletproof` (and the other typed components) straight
+into `PrunableProof`; the serialize→parse→serialize round-trip is **deleted, not
+guarded** (`15-deletion-and-debt.mdc`: delete the round-trip you can). The
+byte-shaped `SignedProofs` is retained **only** as the FFI projection. The
+mechanism for giving the actor typed components (a typed builder result whose
+FFI edge serializes to JSON, vs. a typed accessor alongside `SignedProofs`) is a
+**2a-3 implementation detail**; the pin is "**no re-parse on the 2A path**."
+`SignedProofs.tree_depth` is FCMP context (echoed for proof deserialization),
+**not** a separate wire field.
+
+**Two distinct test artifacts (don't conflate them).**
+
+1. **Determinism (testable now, backs the F7 agreement claim).** F7's "phase-1
+   actor skeleton and phase-2 `LocalSigner` blob agree" rests on
+   `Transaction::serialize()` being a **pure** function: serialize the same
+   value twice ⇒ byte-identical. The artifact is a **serialize-twice-equal**
+   assertion — *not* a serialize↔parse symmetry check; those are different
+   properties and F7 needs this one. The deeper consensus-binding form
+   (`prover-skeleton-bytes == verifier-reconstructed-skeleton-bytes`, the
+   payload the verifier rebuilds by stripping `pqc_auths`) is gated on real
+   proofs, but the determinism half stands alone and lands now.
+2. **Internal consistency ≠ consensus validity (relocated F10, still alive).**
+   Any wallet-internal check (determinism, or the gated full-`Transaction::V2`
+   assembly KAT) proves the wallet reproduces **its own** bytes; it does **not**
+   prove the daemon accepts the blob. "Determinism passes" must not be
+   over-credited as "valid tx." Consensus validity rides the **real-blob KAT**
+   gated on the curve-tree client + Phase 6 (§3.0.5, §6) — F10 relocated here,
+   not closed. State this beside the test so the next reader doesn't conflate
+   them.
+
+**Module-boundary invariant (issue 5).** The `wire` module is the **sole**
+`shekyl_oxide::transaction::Transaction`-aware site in the crate; `sign.rs` stays
+format-agnostic per its docstring. This is what keeps the rule-15 "thin adapter"
+honest — if tx-format knowledge bleeds into `sign.rs`, the crate has grown a
+second format-aware site. Enforce structurally (a `wire`-module-only import
+guard / grep-lint over `shekyl_oxide::transaction`), not by intent alone.
+
+**Dependency-surface check (issue 4 — builder is 64-bit-gated, Tripwire-C,
+hot-signing-path).** The new top-`shekyl-oxide` edge drags only crypto/
+serialization deps (`std-shims`, `zeroize`, `curve25519-dalek`, its own
+sub-crates, `hex-literal`) — **no network/IO/async**, and the **same** workspace
+`curve25519-dalek` the builder already pulls transitively via
+`shekyl-bulletproofs` (no second copy for the dalek-ff-group version-isolation
+lane to flag). 2a-3 pre-flight confirms the full transitive surface and that the
+oxide dep is taken with the builder's `no_std`/feature posture (no unintended
+`std` widening).
 
 **Not a one-shot encode — the PQC ordering is two-phase.** "Single owner" means
 one crate owns the layout, **not** that one function call produces the final
@@ -1408,7 +1478,7 @@ producer of `SignedProofs`-shaped material).
 |----|-------|-------------------|----------|
 | **2a-1** | Daemon fee snapshot + broadcast | `daemon.rs`, `fee_estimator.rs`, `local_pending_tx.rs`, `lifecycle.rs`, `test_support.rs` tests | Atomic single-RPC fee snapshot + `submit_transaction` (local hash, `ProofStale`); async build/submit; capability-narrowed fee-source + submitter on pending engine |
 | **2a-2** | Signing context + fee/change directive plumbing | `signer.rs`, `traits/key.rs`, `local_pending_tx.rs`, `fee_estimator.rs`, `coin_select.rs`, `shekyl-engine-state` only if public fields needed | Populated `TransferSigningContext`/`TxToSign` per §3.7.2 (tx-level `FcmpPlusPlusContext { tree }`; per-input public path on `TxInputSigningContext`); `TxOutputContext` reshape (payment-amount confidential-on-message, change-amount engine-side); C5 per-field locality assertion (§3.7.8). **F4/F8 orchestrator side (§3.10):** `predict_weight` predictor + `FeeEstimationContext` output-shape input; `FeeDirective` population (`fee_no_change`/`fee_with_change`/`dust_threshold`); one canonical `dust()` fn + `K_DUST`/`MARGINAL_INPUT_WEIGHT`; migrate `coin_select` nominal `1_000_000` → `dust()` |
-| **2a-3** | KeyActor sign + tx-builder + wire encode | `key_actor.rs`, `local_keys.rs`, `shekyl-tx-builder` (new `wire` module: `SignedProofs → shekyl_oxide::Transaction::V2` adapter + BP+ parse + round-trip test; gains top `shekyl-oxide` dep, §4) | Non-empty `tx_bytes`; one-round-trip two-phase sign (§3.7.7); `TxSignatures`/`TxInputSignature` reshape + delete `FcmpPlusPlusWitness` + `OutputInfo` `ZeroizeOnDrop` fix (§3.7.3); C3 path precondition + C5 structural test; remove `SignTransactionTraitSurfaceIncomplete` on transfer path. **F4/F8 engine side (§3.10):** pre-prove variant decision + dust-fold (§3.8.2) + `InsufficientFunds`; `fcmp_proof_size` KAT over `[1,8]×[1,24]` + `predict_weight == tx.weight()` self-consistency test |
+| **2a-3** | KeyActor sign + tx-builder + wire encode | `key_actor.rs`, `local_keys.rs`, `shekyl-tx-builder` (new `wire` module: typed-component → `shekyl_oxide::Transaction::V2` adapter, **no** serialize↔parse round-trip; serialize-twice determinism test; `wire`-only `shekyl_oxide::transaction` import guard; gains top `shekyl-oxide` dep, §4) | Non-empty `tx_bytes`; one-round-trip two-phase sign (§3.7.7); `TxSignatures`/`TxInputSignature` reshape + delete `FcmpPlusPlusWitness` + `OutputInfo` `ZeroizeOnDrop` fix (§3.7.3); C3 path precondition + C5 structural test; remove `SignTransactionTraitSurfaceIncomplete` on transfer path. **F4/F8 engine side (§3.10):** pre-prove variant decision + dust-fold (§3.8.2) + `InsufficientFunds`; `fcmp_proof_size` KAT over `[1,8]×[1,24]` + `predict_weight == tx.weight()` self-consistency test |
 | **2a-4** | Hybrid send test + doc closeout | `local_pending_tx.rs` / `lifecycle.rs` tests, `WALLET_REWRITE_PLAN.md`, `FOLLOWUPS.md`, `CHANGELOG.md` | End-to-end `TestDaemon` build→submit; checklist §10 |
 
 **Dependency:** 2a-2 and 2a-1 can overlap only if 2a-3 gates on both; default
@@ -1481,7 +1551,9 @@ step 2), never read from a daemon field.
    single-owned by `shekyl-oxide`** (`Transaction::serialize` + `fcmp::{ProofBase,
    PrunableProof}::write`); 2a adds only a thin assembly adapter
    `SignedProofs → Transaction::V2` in a new `shekyl-tx-builder` `wire` module
-   (the only crate holding both `SignedProofs` and the BP+ parse). Dedicated
+   (the only crate holding both the signing output and the typed
+   `shekyl_bulletproofs::Bulletproof` it produced — no cross-impl parse).
+   Dedicated
    `shekyl-tx-wire` crate, `shekyl-engine-core`, and `shekyl-io` ownership all
    rejected with named reopening criteria (§4).
 3. **`TransferDetails` FCMP fields (reframed by §3.0):** branch layers
