@@ -2186,6 +2186,24 @@ sustainability is unaffected by the recalibration.
   `engine/pending.rs`, outside the trait-file-only scope of the
   conformance pass that surfaced it).
 
+- **`shekyl-tx-builder::SpendInput` derives plain `#[derive(Debug)]` over
+  secret scalars.** `SpendInput` (in
+  [`rust/shekyl-tx-builder/src/types.rs`](../rust/shekyl-tx-builder/src/types.rs))
+  has an explicit `Drop` wiping `spend_key_x` / `spend_key_y` /
+  `commitment_mask` / `combined_ss`, but its derived `Debug` renders those
+  secret scalars verbatim — any `{:?}` or panic-formatting of a `SpendInput`
+  prints the spend secrets. The CI debug-macro lint does **not** catch a derived
+  `Debug` impl invoked indirectly (e.g. via a panic message or an enclosing
+  struct's `Debug`). `key.rs` redacts its secret-bearing message shapes; the
+  builder-side `SpendInput` does not. **Fix:** a manual redacted `Debug` on
+  `SpendInput` (`[REDACTED]` for the four secret fields, public fields verbatim)
+  matching the `35-secure-memory.mdc` discipline, plus a redaction test.
+
+  **Target.** V3.0 pre-genesis. Surfaced during Phase 2a F2's source review of
+  the builder (per `docs/design/PHASE_2A_SEND_PATH.md` §3.7); kept **out** of the
+  2A edit per "while we're here" — separate small item in the builder crate, not
+  the 2A type-design PR.
+
 ---
 
 ## V3.1 — audit response and stressnet gates
