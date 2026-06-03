@@ -268,6 +268,11 @@ me a verified, locally-computed `{leaf_chunk, c1_layers, c2_layers, TreeContext}
 for output X at reference block B" — satisfied by synthetic vectors in 2A tests
 and by the curve-tree client in production.
 
+**Design opened:** `docs/design/CURVE_TREE_CLIENT.md` (Round 0) carries the
+client's architecture, the #3 data-source field enumeration (two disjoint
+field sets), the #5 reference-block selection + validity horizon, and the bulk
+RPC contract. 2A consumes its §3.5 public contract.
+
 #### 3.0.5 DoD #1 reframe (honest scoping)
 
 - **2A delivers** assemble + sign + encode against a **locally-computed**
@@ -1565,6 +1570,10 @@ step 2), never read from a daemon field.
    Round 1 enumerates (grep-driven) exactly which `TransferDetails` fields feed
    (a) the curve-tree client's path lookup and (b) the actor's secret derivation
    — these are now two distinct field sets, not one `ProveInput` blob.
+   **Opened in `CURVE_TREE_CLIENT.md` §4:** Set A (client, public —
+   `{O, C, block_height, eligible_height}`, leaf located by content-match, no
+   stored tree-position) / Set B (actor, secret, via `output_handle`); the
+   grep-driven Set-B confirmation is that doc's Round-1 task.
 4. **Change output (F4 + F8 — handshake shape pinned in §3.8):** Phase 2a
    includes one change output when the inputs exceed `sent + fee` by at least the
    change-fold threshold. The change **value** is computed **engine-side**
@@ -1592,8 +1601,12 @@ step 2), never read from a daemon field.
    This is now coupled to **reference-block selection** in the curve-tree client
    (§3.0.4): which checkpoint/block the wallet anchors the path to directly
    determines how stale the proof is at submit. Owner: curve-tree-client phase
-   (with a Phase 2b cross-check — stake lifecycle has the same exposure). Round 1
-   decides whether to model a horizon or rely solely on the reactive signal.
+   (with a Phase 2b cross-check — stake lifecycle has the same exposure).
+   **Opened in `CURVE_TREE_CLIENT.md` §5:** reference block selected at
+   `tip − REF_ANCHOR_AGE` (= `MIN_AGE + 1 = 6`, canonical convention); proactive
+   horizon = `MAX_AGE − REF_ANCHOR_AGE = 94` blocks with a `REBUILD_AT ≈ 47`
+   re-anchor rule, complementing 2A's reactive `ProofStale` (§3.6). That doc's
+   §5.4 also flags a C2 terminology correction here (§3.7.6 — two ages, not one).
 
 **Closed by §3.0 (no longer open):**
 
