@@ -275,6 +275,20 @@ its path. All public; the client holds nothing else.
 the client does **not** derive it. So Set A is `{O, C, block_height,
 eligible_height}` — pure public identity/position metadata.
 
+**Block-derived path — `h_pqc` is an additional public input.** Under the
+bulk-leaf RPC path the daemon hands the client finished 128-byte leaves, so
+`h_pqc` arrives inside the tuple as above. Under the **block-derived** default
+(`CT2_DRAIN_ORDER.md`; the wallet reconstructs leaves from blocks it already
+syncs), the client *builds* the leaf itself and therefore needs `h_pqc` as an
+input. `h_pqc` is **not derivable from the bare public output** — it is the hash
+of the *hybrid public key*, carried **on-chain in `tx_extra` tag `0x07`**
+(vout-indexed; zero-fallback when the tag is absent). It is fully public
+(already on the chain), so it **joins Set A** for the block-derived path — but as
+a *parsed `tx_extra` input*, not a `TransferDetails` field and not a secret. The
+leaf itself is then built by the shared `construct_leaf` FFI primitive
+(`CT2_DRAIN_ORDER.md` §3.2), identical to the daemon. (Bulk-leaf path
+unaffected.)
+
 ### 4.2 Set B — actor secret-derivation inputs (SECRET, engine-side; NOT this crate)
 
 What the **`KeyActor`** needs to derive spend secrets and reconstruct the leaf
@@ -882,19 +896,34 @@ a *different* root). So Tier 2 proves the per-chunk primitives compose to
 **CT-2 reconstruct-root KAT obligation**.
 
 The sharpest corner is the **empty / early-height** case, and the two notions of
-"empty" already disagree:
+"empty" disagree — **now resolved by reading the daemon** (see
+`CT2_DRAIN_ORDER.md` §5):
 
 - An emptied *chunk* equals the init point — the **real** `hash_trim` result
   (driven, not shimmed; see `chunk_trim_to_empty_and_multi_selene`).
-- An empty *tree* is `build_layers([]) == [[]]` — a **zero-node** structure that
-  panics on `[j][0]`, **not** an init-valued node.
+- An empty *tree* is **not** `build_layers([]) == [[]]`. The daemon emits the
+  **`selene_hash_init` point** for an empty tree — `get_curve_tree_root()`
+  returns it on `MDB_NOTFOUND` and the genesis header is pre-set to it
+  (`db_lmdb.cpp:5909-5921`, `cryptonote_tx_utils.cpp:821`). `build_layers([]) ==
+  [[]]` is a zero-node structure that panics on `[j][0]` and **must never be
+  indexed for a root**. The wallet special-cases `if leaf_count == 0 { root =
+  selene_hash_init() }`.
 
-Early in the chain (heights `0..SPENDABLE_AGE`, before the genesis founder
-allocations drain) the tree is empty, so the empty-tree `curve_tree_root` the
-daemon emits is a **real consensus value**. Whatever that value is must be the
-*single* definition production and tests share, **verified against the daemon at
-an early height in CT-2's KAT — not assumed to be init**. `empty_tree_is_a_ct2_boundary`
-pins this disagreement in the suite so it cannot be silently papered over.
+The empty-tree window is heights **0..59**, **not** `0..SPENDABLE_AGE` (0..9).
+The genesis founder allocations are **coinbase** outputs (`RCTTypeNull`,
+`unlock_time = 60`), so they mature at `+60`
+(`CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW`), draining on connect of block **60** —
+that is the first non-empty tree
+and the first `R_0` material, not height 10. No regular tx can exist before 60
+(spending needs a non-empty tree for FCMP membership, which doesn't exist until
+the founder coinbase matures), so the window is **structural**, not
+chain-content-dependent. The regular-output `+10` rule (`SPENDABLE_AGE`) is
+unchanged and correct; the early-height empty window is specifically the
+coinbase case. CT-2's KAT confirms the `selene_hash_init` root at an early
+height (e.g. 5 and 59) against the live header.
+`empty_tree_is_a_ct2_boundary` keeps the chunk-empty/tree-empty distinction
+executable in the suite; its consensus resolution is now pinned in
+`CT2_DRAIN_ORDER.md` §5.
 
 Outcome is **branch 3**: §7 position-aligned segment boundary stands; CT-1 schema
 is unblocked with no `shekyl-fcmp` accessor dependency. Under the batch pin there
@@ -961,15 +990,23 @@ canonical tree under replacement at both deepen boundaries.
     so factor `build_upper_layers(layer_j_nodes) → root` out of `build_layers` and
     have the cached path call it directly — otherwise the two-impls hazard reopens
     above the leaf layer. On the CT-1 list (§9), not a CT-0 blocker.
-13. **CT-2 is the block-derived correctness rock, not just a KAT (§7.7, §9 CT-2).**
+13. **CT-2 is the block-derived correctness rock, not just a KAT (§7.7, §9 CT-2).
+    Round-0 spike LANDED → [`CT2_DRAIN_ORDER.md`](./CT2_DRAIN_ORDER.md).**
     The privacy-maximal block-derived default commits the wallet to replicating
-    the C++ drain ordering (`{eligible_height, global_output_index}`); that
-    replication is where the wallet tree can silently diverge from consensus and
-    is currently untested. CT-2's reconstruct-root KAT against real headers is the
-    proof, and it absorbs the undeepen drop-model and the empty/early-height root
-    (the genesis corner of the same "wallet composition == C++ consensus"
-    question). The drain-order divergence surfaces to enumerate in the spike:
-    reorg reordering, intra-block ties, and the `eligible_height` boundary.
+    the C++ drain ordering (`{maturity, global_output_index}`); that replication
+    is where the wallet tree can silently diverge from consensus. CT-2's
+    reconstruct-root KAT against real headers is the proof, and it absorbs the
+    undeepen drop-model and the empty/early-height root (the genesis corner of the
+    same "wallet composition == C++ consensus" question). The Round-0 enumeration
+    pinned every divergence surface to source in `CT2_DRAIN_ORDER.md`: S1 (index
+    assignment), S1-leaf (coinbase/`h_pqc` on-chain in `tx_extra 0x07`), S2 (drain
+    trigger + `(maturity, gindex)` batch, all three maturity classes, empty-tree
+    root = `selene_hash_init`), S3 (reorg, which **folds into S1/S2** for the
+    wallet via derive-don't-accumulate — no journal replica). Two framing
+    corrections landed (coinbase `+60`, empty-root resolution) and the torsion
+    concern was **resolved as not-a-divergence-surface** (shared `construct_leaf`
+    FFI; `Hp(O)` clears cofactor). Round 1 implements the replication + the
+    fixture-chain KAT.
 
 ---
 
@@ -979,7 +1016,7 @@ canonical tree under replacement at both deepen boundaries.
 |----|-------|-----------|
 | **CT-0** | **Gate spike — DONE, G1 PASSES.** 19-test harness (+1 `#[ignore]`) proved **G1** value-invariance + exact-boundary freeze + within-Rust extractability + conversion totality (batch path) **and** consensus-grade daemon-reorg de-risking (Tier 2: incremental `hash_grow`/`hash_trim` reproduce `build_layers` under *replacement* — chunk replace/to-empty/path-independence + tree undeepen at **both** collapse types (39→38 Helios, 685→684 Selene) + compound 45→35 + replace-at-boundary capstone, full-layer asserts) against the real fork; layer-2 scale included. Branch 3: §7 stands, no accessor, CT-1 unblocked. Pinned **batch/prefix-rebuild** wallet strategy; **promoted `build_layers` into `shekyl-fcmp::tree`** as the single composition; renamed trim test → `freeze_under_prefix_rebuild`. | `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (landed) + `rust/shekyl-fcmp/src/tree.rs` (`build_layers`) |
 | **CT-1** | `shekyl-curve-tree` crate skeleton + **subtree-aligned segment** `LeafStore` keyed by `R_k` (pin/prune seam, §7.6) + types (`AssembledPath`, `OutputIdentity`, `ReferenceBlock`) + no-secrets structural test. Segment assembler + truncate-and-rebuild reorg call `shekyl-fcmp::tree::build_layers` (no reimplementation). **Factor `build_upper_layers(layer_j_nodes) → root` out of `build_layers`** so the wallet's steady-state from-cached-`R_k` hot path hashes frozen sub-roots up the upper layers via the *same* function (single-composition end-to-end, not just from-leaves; §7.7). LeafStore engine decision (flat-mmap vs heed/redb). | new crate, `shekyl-fcmp::tree` |
-| **CT-2** | Path extraction (`assemble`) over a **synthetic** leaf set composed via the promoted `build_layers`; **reconstruct-root KAT** = Rust `build_layers` root == C++ consensus header root. This KAT now also owns: (a) end-to-end daemon-incremental↔batch agreement (subsuming "Tier 3"); (b) the **undeepen drop-model** (emptied chunk = removed node, not init-valued child — §7.7) confirmed against real headers spanning a deepen/undeepen boundary; (c) the **empty / early-height** root (heights `0..SPENDABLE_AGE`; `build_layers([]) == [[]]` ≠ init — single definition KAT'd against the daemon); (d) **`R_k` content-addressing equality** (daemon-built segment hash == wallet-built); (e) **block-derived drain-order replication** — the wallet's `{eligible_height, global_output_index}` sort byte-equals the C++ drain (the privacy-maximal default's correctness foundation; the divergence surfaces are reorg reordering, intra-block ties, and the `eligible_height` boundary). C3-shape invariant. | `assemble`, `shekyl-fcmp::tree` |
+| **CT-2** | Path extraction (`assemble`) over a **synthetic** leaf set composed via the promoted `build_layers`; **reconstruct-root KAT** = Rust `build_layers` root == C++ consensus header root. This KAT now also owns: (a) end-to-end daemon-incremental↔batch agreement (subsuming "Tier 3"); (b) the **undeepen drop-model** (emptied chunk = removed node, not init-valued child — §7.7) confirmed against real headers spanning a deepen/undeepen boundary; (c) the **empty / early-height** root — **resolved**: daemon emits `selene_hash_init` for the empty tree (`leaf_count == 0`; heights **0..59**, founder coinbase drains at `+60`); `build_layers([])` is **never** indexed for a root (`CT2_DRAIN_ORDER.md` §5); (d) **`R_k` content-addressing equality** (daemon-built segment hash == wallet-built); (e) **block-derived drain-order replication** — the wallet's `{maturity, global_output_index}` sort byte-equals the C++ drain across **all three maturity classes** (`+10` / `+60` / staked) including the mixed-maturity collision, enumerated to source in **`CT2_DRAIN_ORDER.md`** (CT-2 Round 0). C3-shape invariant. | `assemble`, `shekyl-fcmp::tree` |
 | **CT-3** | **Source-agnostic** bulk-segment fetch + delta sync + per-segment root verify against header; reorg rollback by segment | `sync`, peer-pluggable client |
 | **CT-4** | Reference-block selection + horizon/rebuild (§5); `select_reference_block` | `client` |
 | **CT-5** | Wire into 2A signer behind the §3.5 contract (replaces synthetic vectors); 2A §3.7.6 terminology correction (§5.4) | `shekyl-engine-core`, `PHASE_2A_SEND_PATH.md` |
@@ -1060,8 +1097,9 @@ prior: G1 holds.
 > `grow_update_equals_rebatch_selene`, `chunk_replace_equals_fresh_{selene,helios}`,
 > `chunk_trim_to_empty_and_multi_selene`, `chunk_path_independence_{selene,helios}`,
 > `empty_tree_is_a_ct2_boundary` (the chunk-empty == init / tree-empty == `[[]]`
-> disagreement made executable; the empty/early-height root is a CT-2 obligation,
-> not assumed init); tree-level `undeepen_helios_collapse_39_to_38`,
+> disagreement made executable; the empty/early-height root is now **resolved** to
+> the daemon's `selene_hash_init` per `CT2_DRAIN_ORDER.md` §5, confirmed by the
+> CT-2 KAT — never `build_layers([])`); tree-level `undeepen_helios_collapse_39_to_38`,
 > `undeepen_selene_collapse_685_to_684`, `reorg_compound_45_to_35`,
 > `reorg_capstone_replace_at_boundary_39` (full-layer asserts).
 > Read the file for the current harness; the snapshot is retained only to show the
