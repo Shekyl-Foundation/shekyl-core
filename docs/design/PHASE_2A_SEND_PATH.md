@@ -511,11 +511,11 @@ yields a mixed-snapshot witness — invalid at best, subtly wrong at worst.
 The defence is **type shape, not validation**: `TreeContext { reference_block,
 tree_root, tree_depth }` lives **once** on the tx-level `FcmpPlusPlusContext`,
 **never** per-input. `reference_block` is selected a single time by the F1
-curve-tree client (= `tip − MIN_AGE`, per C2/§3.6 horizon) and threaded
-immutably downward; nothing below the client re-reads the tip. Divergent-snapshot
-inputs become **impossible to construct**, which is stronger than catching them.
-This is the anchor point for F5's validity-horizon (§3.6, §9 #5) and the
-`MIN_AGE` spendability bound (C2).
+curve-tree client (= `tip − REF_ANCHOR_AGE`, per C2/§3.6 horizon; CT client §5.1)
+and threaded immutably downward; nothing below the client re-reads the tip.
+Divergent-snapshot inputs become **impossible to construct**, which is stronger
+than catching them. This is the anchor point for F5's validity-horizon (§3.6,
+§9 #5) and the reference-block spendability bound (C2).
 
 #### 3.7.2 Concrete field sets (pinned under C1)
 
@@ -649,11 +649,14 @@ guarantee C7 requires).
 
 #### 3.7.5 C2 — spendability gate threads selection → assembly → actor
 
-A leaf is in the tree at the reference block only if `eligible_height ≤
-reference_block_height`. Combined with C1, the precise rule is
-**`eligible_height ≤ tip − MIN_AGE`** — an output received in the last `MIN_AGE`
-blocks is eligible at the tip but **not** at the reference block, so it is not
-yet spendable. Enforced at **three** points:
+A leaf is in the tree at the reference block only if **`eligible_height ≤
+reference_height`**, where `reference_height = tip − REF_ANCHOR_AGE` (the C1
+snapshot anchor; CT client §5.1). Two ages must not be conflated: `SPENDABLE_AGE`
+governs **tree insertion** (`eligible_height = block_height + SPENDABLE_AGE`),
+while `REF_ANCHOR_AGE` governs **reference-block depth** — the gate is the latter,
+not the bare `MIN_AGE` token. An output whose `eligible_height` lands after the
+reference block is eligible at the tip but **not** at the reference block, so it
+is not yet spendable. Enforced at **three** points:
 
 1. **Selection** (output selector, F3/F4 territory): never pick outputs with
    `eligible_height > reference_block_height`.
@@ -1518,7 +1521,7 @@ synthetic vectors satisfy that seam without the client existing yet.
 | Daemon fee RPC down | `SendError::Io` / `FeeEstimatorError::DaemonUnreachable` |
 | Absurd priority fee | `SendError::Tx(TxError::DaemonFeeUnreasonable { ... })` |
 | Signer / builder failure | `SendError::Tx` or `SendError::CannotSign` |
-| Output not yet spendable at reference block (`eligible_height > tip − MIN_AGE`) | `BuildError::OutputNotYetSpendable { eligible_height, reference_block_height, wait_blocks }` (C2, §3.7.5) — clean wait-N-blocks signal, **not** an opaque assembly miss |
+| Output not yet spendable at reference block (`eligible_height > reference_height`) | `BuildError::OutputNotYetSpendable { eligible_height, reference_block_height, wait_blocks }` (C2, §3.7.5) — clean wait-N-blocks signal, **not** an opaque assembly miss |
 | Locally-assembled path malformed (length/shape) | `SendError::CannotSign` via the C3 precondition (§3.7.6) — distinguishes local-assembly bug from prover bug **before** committing prover effort |
 | Malformed tx at submit | `SubmitError::DaemonRejectedTerminal` |
 | Ambiguous daemon | `SubmitError::DaemonAmbiguous` (existing R9 discipline) |
@@ -1627,7 +1630,7 @@ step 2), never read from a daemon field.
 - **C7 key-image owner** — single computation at claim time; downstream consumes
   the typed `KeyImage`, never re-normalizes (one confirm-at-2a-3 item: verify the
   crypto-pq derivation emits the sign-bit-canonical encoding).
-- **C2 / C3 / C5** — spendability gate (`eligible_height ≤ tip − MIN_AGE`,
+- **C2 / C3 / C5** — spendability gate (`eligible_height ≤ reference_height`,
   clean error), actor path-precondition check (robustness, not secrecy), and the
   secret-free boundary assertion + scratch-zeroization requirement are pinned.
 

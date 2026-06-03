@@ -292,9 +292,29 @@ carry only Set-A / public-layer data; no `output_handle`, no `Scalar`, no mask.
 The curve-tree client and the `KeyActor` meet only at the **public**
 `AssembledPath`. This is the §3.0.6 pin made enforceable here.
 
-**Round-1 task (grep-driven):** enumerate the exact engine-side fields feeding
-Set B at the `key.rs` derivation site, to confirm none leak onto Set A. (The
-enumeration is the audit evidence; the split above is the design.)
+**Landed (Round-1 grep-driven enumeration).** Audited the derivation surface at
+`rust/shekyl-engine-core/src/engine/traits/key.rs`. The complete engine-side
+secret set is:
+
+- `SourceSecretsBundle` (engine-internal; post-M3b never crosses the trait
+  boundary): `spend_key_x`, `spend_key_y`, `commitment_mask`, `combined_ss` —
+  all `Zeroizing` — plus `output_index` (the lone non-secret).
+- `OutputClaim` reply (`ZeroizeOnDrop`): `amount_atomic_units` (secret),
+  `handle` (`OutputHandle`, opaque + privacy-linkable), `key_image`
+  (privacy-linkable / public after spend).
+- Stack-frame-only intermediates inside `try_claim_output` / `sign_transaction`
+  (per the trait's "no secret material crosses the boundary" docstring): the
+  X25519 raw shared secret, the 64-byte hybrid shared secret, HKDF intermediate
+  keying material, the per-output secret-key derivative, and the amount-blinding
+  factor.
+
+**Result — no leak.** Set A = `{O, C, block_height, eligible_height}` is sourced
+entirely from `TransferDetails` public identity/position fields; it is **disjoint**
+from the secret set above. The only claim-time → spend-time carrier is the opaque
+`OutputHandle`, and it routes to `TxInputSigningContext.handle` (the `KeyActor`),
+**never** to the curve-tree client. The client therefore cannot hold, and is not
+on a path to, any Set-B field. (The enumeration is the audit evidence; the split
+above is the design.)
 
 ### 4.3 Locating the leaf without a query or a stored position — the key move
 
@@ -392,19 +412,23 @@ rare; it is handled, not assumed away.
 
 ### 5.4 Terminology correction surfaced for `PHASE_2A_SEND_PATH.md`
 
-2A §3.7.6 (C2) writes the spendability bound as `eligible_height ≤ tip − MIN_AGE`,
-using "`MIN_AGE`" loosely. There are **two** ages (§2):
+2A's C2 (spendability gate, §3.7.5) originally wrote the bound as
+`eligible_height ≤ tip − MIN_AGE`, using "`MIN_AGE`" loosely. There are **two**
+ages (§2):
 
 - `SPENDABLE_AGE = 10` governs **tree insertion** (`eligible_height =
   block_height + 10`).
 - `REF_ANCHOR_AGE = MIN_AGE + 1 = 6` governs **reference-block depth**.
 
 The correct C2 bound is `eligible_height ≤ reference_height` where
-`reference_height = tip − REF_ANCHOR_AGE` (§4.4), **not** `tip − SPENDABLE_AGE`.
-Numerically `tip − 6`, not `tip − 10`. **Action:** correct 2A §3.7.6 to reference
-`reference_height` (and this doc's §5.1) rather than the bare "`MIN_AGE`" token,
-so the two ages don't read as one. Tracked as a Round-1 cross-edit, not silently
-changed here.
+`reference_height = tip − REF_ANCHOR_AGE` (§5.1), **not** `tip − SPENDABLE_AGE`.
+Numerically `tip − 6`, not `tip − 10`.
+
+**Landed (Round-1 cross-edit).** 2A now references `reference_height` /
+`REF_ANCHOR_AGE` at all four C2-gate sites — the §3.7.1 snapshot-locality note,
+the §3.7.5 gate prose (with the explicit "two ages must not be conflated"
+caveat), the error table, and the §9 C2 summary — so the two ages no longer read
+as one. The gate lives in §3.7.5 (C2); §3.7.6 is C3 (actor path precondition).
 
 ---
 
@@ -897,8 +921,12 @@ canonical tree under replacement at both deepen boundaries.
    leaks nothing; it is a perf/΅memory tradeoff, not a privacy one.
 3. **`REBUILD_AT` default (§5.2).** `MAX_AGE/2 = 47` is a first cut; confirm
    against expected propagation + confirmation latency.
-4. **Set-B enumeration (§4.2).** Grep-driven confirmation at the `key.rs`
-   derivation site that no secret field leaks onto Set A.
+4. **Set-B enumeration (§4.2). CLOSED (2026-06).** Grep-driven audit at
+   `key.rs` enumerated the full engine-side secret set (`SourceSecretsBundle`
+   fields, `OutputClaim`'s `amount`/`handle`/`key_image`, plus the stack-frame
+   X25519/HKDF/blinding intermediates); all are disjoint from Set A, and the sole
+   claim→spend carrier (`OutputHandle`) routes to the `KeyActor`, not the client.
+   No leak.
 5. **Phase 2b cross-check.** Stake/unstake proofs share the reference-block
    horizon (§5); confirm `PHASE_2B_STAKE_LIFECYCLE.md` consumes the same client
    contract (§3.5) rather than re-deriving selection.
