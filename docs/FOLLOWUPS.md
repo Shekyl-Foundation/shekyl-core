@@ -1262,6 +1262,18 @@ sustainability is unaffected by the recalibration.
   `FA-6_VIEW_TAG_ML_KEM.md` §3.2, §5.1. **Target:** V3.0 pre-genesis before
   multisig receive path is production-load-bearing (or explicit waiver).
 
+- **Phase 2a send path — real build / sign / broadcast on `Engine<S>`
+  (2026-05-31).** Stage 1 PR 5 landed the `PendingTxEngine` pipeline with
+  Phase 1 stubs (empty `tx_bytes`, `STUB_FEE_ATOMIC_UNITS`, synthetic submit
+  hash). Stage 2 landed `KeyActor`; `sign_transaction` remains incomplete.
+  **Design doc:** `docs/design/PHASE_2A_SEND_PATH.md` (Round 0). **Target:**
+  V3.0 pre-genesis. **Definition of done:** §1 of that doc (daemon fees,
+  `shekyl-tx-builder` wire bytes, real `submit_transaction`, hybrid
+  `TestDaemon` test). **Implementation PRs:** 2a-1 daemon path, 2a-2 signing
+  context, 2a-3 KeyActor + builder encode, 2a-4 tests + doc closeout.
+  **Blocks:** nothing in 2b/2c; subaddress round blocks Recipient KEM stub
+  only, not single-address sends. **Does not block:** Phase 2b design (parallel).
+
 - **Phase 2b planning session — stake state-machine shape (gate for
   Stage 3).** Pin the design of the stake lifecycle before any `StakeEngine`
   code lands. This is named as a *Blocks on* in the Stage 3 entry below but had
@@ -1337,6 +1349,22 @@ sustainability is unaffected by the recalibration.
 
   *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
   Engine architecture: actor model with staged migration*.
+
+- **Confidential stake-UTXO transfer (privacy-compatible; compounds (C)).**
+  FCMP spend of staked principal + re-insert as staked output — **not** receipt-token
+  liquid staking (public fungible receipts remain out of scope). **`creation_height` is
+  inherited** across transfer (accrual window follows the original bond). **Decision 3C**
+  (consensus-stamped `h_bind` at first inclusion) requires spend continuity for
+  `(tier, creation)` in the new staking-subtree leaf. Spec:
+  [`docs/design/CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §6.4.3
+  transfer note.
+
+  *Blocks on:* Round 2 close of Decision **3A/3C**; confidential claim verifier on `dev`.
+
+  *Target:* **V3.2** wallet surface (after Stage 3 `StakeEngine` + claim path land).
+
+  *Definition of done:* wallet + consensus spec for staked-output FCMP spend with
+  creation inheritance; claim verifier accepts re-inserted leaves; no receipt-token mint.
 
 - **Stage 4 — Remaining-subsystem migrations.** Migrate
   `LedgerEngine`, `RefreshEngine`, `PendingTxEngine`,

@@ -993,11 +993,30 @@ previously in the mempool) pay the full verification cost.
 
 ## 15. Staking and FCMP++
 
-Staked outputs (`txout_to_staked_key`) use the same 4-scalar leaf format:
+Staked outputs (`txout_to_staked_key`) use the same **128-byte / 4-scalar** leaf layout as
+other outputs. The leaf label is still `{ O.x, I.x, C.x, h_pqc }`; the **preferred**
+confidential-staking binding extends **`C.x`** to a three-base Pedersen commitment
+([`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §2, §6.4.3 **(C_tier)**):
 
 ```text
-Leaf = { O.x, I.x, C.x, H(pqc_pk) }
+C_stake = z·G + amount·H + τ·H_t
+H_t     = hash_to_ec("shekyl-stake-tier")
+
+Leaf[96:128]  = h_pqc = shekyl_fcmp_pqc_leaf_hash(ml_dsa_pk)   // unchanged 4th scalar
 ```
+
+**Tier** is bound by the CA-style generator (`τ` vs public claim tier `T`, then `C~_amt`
+at claim — §6.4.1). **Creation height** is bound by **historical-root membership** at the
+earliest claimed settlement-epoch (lower bound); **`eff_lock` upper** is a Round 2 open
+(§6.4.3 **(C_window)**).
+
+**Fallback (demoted):** type-dependent `leaf[96:128] = h_stake_bind` hash binding both tier
+and `creation_height` — documented in [`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md)
+§6.4.3; use only if **(C_tier)+(C_window)** cannot land. No compatibility shim for
+pre-genesis implementations.
+
+**Legacy note:** cleartext-claim code compared `H(pqc_pk)` on all output types; confidential
+claims require the preferred or fallback binding above.
 
 **Universal deferred curve-tree insertion:** All outputs (coinbase, regular,
 and staked) are deferred: they enter a pending table at creation time and
@@ -1042,11 +1061,14 @@ claim is rejected. After retrieval, the stored leaf is bytewise-compared
 to a recomputed leaf from the output's `(output_key, commitment, h_pqc)`
 to bind the claim to the actual output data in the tree.
 
-**PQC ownership cross-check:** For each stake claim input `i`, the
-`H(pqc_pk)` stored at bytes 96–128 of the curve tree leaf must match
-`shekyl_fcmp_pqc_leaf_hash(pqc_auths[i].hybrid_public_key)`. This
-prevents an attacker from claiming rewards for an output they do not
-control the PQC key for.
+**PQC ownership cross-check:** For staked outputs and claim inputs:
+
+1. Assert `h_pqc == shekyl_fcmp_pqc_leaf_hash(pqc_auths[i].hybrid_public_key)`.
+2. Assert `leaf[96:128] == h_pqc` (fourth scalar unchanged under **(C_tier)**).
+3. **(C_tier):** verify opened `C~` tier leg matches public claim `tier` via `C~_amt` path
+   (upstream §6.4.1) — not raw `h_stake_bind` unless **(C1)** fallback is active.
+
+For **regular** outputs, `leaf[96:128] == shekyl_fcmp_pqc_leaf_hash(pqc_pk)` unchanged.
 
 **Claim reward outputs must be indistinguishable from regular outputs.**
 Claim reward outputs MUST be regular `txout_to_tagged_key` outputs (not

@@ -377,6 +377,10 @@ Default lean: option 3 unless the audit surfaces a behavioral distinction. Which
 
 ## Phase 2 — Core operations
 
+**Phase 2a implementation spec:** [`docs/design/PHASE_2A_SEND_PATH.md`](PHASE_2A_SEND_PATH.md)
+(Round 0, 2026-05-31) — PR sequence 2a-1…2a-4, definition of done, daemon/sign/build
+wiring against the landed `LocalPendingTx` / `KeyActor` substrate.
+
 Each operation is a method on `Wallet` with a focused signature. No mode flags; if behavior diverges meaningfully (full vs view-only), it lives in different methods.
 
 - **Refresh / scan:** `Wallet::refresh()` drives `shekyl-scanner`. Returns `RefreshSummary { blocks_scanned, transfers_added, reorg_height }`. Async; cancellable. Implements the brief-write-lock pattern from the cross-cutting locks (read snapshot → release → scan → brief write to merge → release).

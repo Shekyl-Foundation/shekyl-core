@@ -303,6 +303,84 @@ This scope overlaps with Phase 5 (adversarial review) and Phase 6
 
 ---
 
+## Confidential stake claim verifier (Round 1 pin)
+
+> **Status:** Round 1 closed on economics and **(B)**; **(C)** mechanism Round 2 per
+> [`design/CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §6.4.3. Pre-mainnet
+> review gate (same class as 4-scalar leaf audit).
+
+### Summary
+
+Shekyl's confidential staking model replaces cleartext `txin_stake_claim` + watermark
+validation with **non-spending** claim transactions (`txin_stake_claim_v2`) that prove
+FCMP++ membership (current + **historical roots**), per-epoch **stake-claim nullifiers**
+`N_S = x·G_S`, **(C_tier)** binding via `H_t` / `C~_amt`, **(C_window)** accrual
+binding, and **verifier-recomputed `M`**.
+
+The verifier is a **derivative** of upstream FCMP++ + SAL machinery; it must not
+weaken soundness, zero-knowledge, or inflation bounds established for spends.
+**(A) alone is not an inflation closure** — entitlement is **sound modulo (C_tier)**.
+
+### In-scope (review targets)
+
+1. **`M` integrity (P1)** — Recompute `M = tier_num(tier) · Σ_S K_S`; reject wire `M`
+   before **(A)** ([`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §9).
+
+2. **(C_tier) — preferred** — Staked `C_stake = z·G + amount·H + τ·H_t`; membership
+   `C~`; claim subtracts public `T·H_t` → `C~_amt`; Schnorr `C_claim − M·C~_amt ∈ ⟨G⟩`.
+   Lineage: Confidential Assets / Zarcanum; curve-tree commit-and-prove.
+
+3. **(C_window)** — **lb closed** (historical root at `S_min`); **ub open** (Decision 3:
+   **3A** non-membership vs **3C** staking subtree + consensus-stamped creation — co-equal;
+   **3B coarse window rejected** as P1 inflation). Round 2 default lean **3C** on crypto
+   maturity. See [`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §6.4.3.
+
+4. **Entitlement (A) — off-circuit, sound modulo (C_tier)** — Standalone Schnorr on
+   `C~_amt` after items 1–3; in-circuit is reversion-only (§6.4.1).
+
+5. **Claim linkability (B1)** — `G_S`, `S_le64`, `MAX_EPOCHS_PER_CLAIM = 15`,
+   ClaimLinkability vs SAL separation. **DDH split** (§6.3): `x·G_S` unlinkable from
+   `x·Hp(O)` across independent NUMS bases — explicit audit assumption.
+
+6. **Nullifier set separation** — Stake-claim table; reorg rewind.
+
+7. **Inflation backstop (layered)** — Range proof; **(A)**; **`ρ_cap`** — separate failure
+   modes; **`ρ_cap` does not fix tier/`M` forgery**.
+
+8. **Rejected paths** — **3B** coarse window; spend-and-restake; B2-primary; **(A)** on
+   full `C~` without `H_t` strip; wire `M` without recompute; persist `x` in wallet
+   sealed blob; receipt-token liquid staking (distinct from confidential stake-UTXO
+   transfer — see upstream §6.4.3 transfer note).
+
+### Out-of-scope
+
+- Full re-audit of upstream Veridise FCMP++ (reference their report; review delta only).
+- Economics calibration (LWMA window length, band count) — engineering/simulation, not
+  proof soundness.
+- Wallet actor FSM (see Phase 2b design doc); except where wallet bugs could broadcast
+  structurally invalid claims caught by consensus.
+
+### Deliverables
+
+- Threat model + proof sketches for **`M`**, **(C_tier)**, **(C_window)**, **(A) modulo
+  (C_tier)**, **(B1)** with verifier ordering.
+- Test vectors: `STAKE_CLAIM_GS.json`, `H_t` / `τ` encoding, historical-root checkpoints
+  (Round 2).
+- C++ verifier entry point (name TBD Round 2, e.g. `shekyl_fcmp_verify_stake_claim`)
+  listed in release checklist when implemented.
+
+### Related design pins
+
+| Pin | Doc |
+|-----|-----|
+| Wire sketch | `CONFIDENTIAL_STAKING.md` §6.4.8 |
+| Wallet mirror | `PHASE_2B_STAKE_LIFECYCLE.md` §8.5, §3.3.1 (R0-D8) |
+| Staked leaf amendment | `FCMP_PLUS_PLUS.md` §15 |
+| Inflation / `M` | `CONFIDENTIAL_STAKING.md` §9 |
+| **(C) tier/window** | `CONFIDENTIAL_STAKING.md` §6.4.3 |
+
+---
+
 ## Related Documents
 
 - `docs/FCMP_PLUS_PLUS.md` — Full FCMP++ specification
