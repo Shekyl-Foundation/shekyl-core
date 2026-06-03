@@ -287,16 +287,24 @@ fn freeze_under_grow_g1_level2() {
 
 // --- small primitive wrappers (batch-compose one chunk / convert one node) ---
 
+// Batch-compose ONE NON-EMPTY chunk from init. The production primitive cannot
+// express a zero-child chunk (`hash_grow` returns `None` on empty input), so the
+// empty-chunk value is NOT defined by this helper — it is `*_hash_init()`,
+// established by driving the real `hash_trim` to empty (see
+// `chunk_trim_to_empty_and_multi_selene` and `empty_tree_is_a_ct2_boundary`).
+// Passing an empty slice here is a caller bug, not "the empty chunk."
 fn selene_chunk(scalars: &[[u8; 32]]) -> [u8; 32] {
-    if scalars.is_empty() {
-        return selene_hash_init(); // an empty chunk is the init point
-    }
+    assert!(
+        !scalars.is_empty(),
+        "empty chunk is selene_hash_init(), not a grow target"
+    );
     hash_grow_selene(&selene_hash_init(), 0, &ZERO, scalars).expect("selene chunk")
 }
 fn helios_chunk(scalars: &[[u8; 32]]) -> [u8; 32] {
-    if scalars.is_empty() {
-        return helios_hash_init();
-    }
+    assert!(
+        !scalars.is_empty(),
+        "empty chunk is helios_hash_init(), not a grow target"
+    );
     hash_grow_helios(&helios_hash_init(), 0, &ZERO, scalars).expect("helios chunk")
 }
 fn s2h(selene_point: &[u8; 32]) -> [u8; 32] {
@@ -387,9 +395,15 @@ fn chunk_replace_equals_fresh_selene() {
 
         // orphan the suffix
         let trimmed = hash_trim_selene(&full, fork, &s[fork..], &ZERO).expect("trim suffix");
+        // fork == 0 drives the REAL primitive to zero children; its result is the
+        // init point (grounded in chunk_trim_to_empty_*, not a helper shim).
+        let expected_prefix = if fork == 0 {
+            selene_hash_init()
+        } else {
+            selene_chunk(&s[..fork])
+        };
         assert_eq!(
-            trimmed,
-            selene_chunk(&s[..fork]),
+            trimmed, expected_prefix,
             "trim-to-fork != prefix (trial={trial}, fork={fork})"
         );
         // write a different suffix at the vacated positions
@@ -414,7 +428,12 @@ fn chunk_replace_equals_fresh_helios() {
         let s: Vec<[u8; 32]> = (0..n).map(|_| rand_helios_scalar(&mut rng)).collect();
         let full = helios_chunk(&s);
         let trimmed = hash_trim_helios(&full, fork, &s[fork..], &ZERO).expect("trim suffix");
-        assert_eq!(trimmed, helios_chunk(&s[..fork]), "trim-to-fork != prefix");
+        let expected_prefix = if fork == 0 {
+            helios_hash_init()
+        } else {
+            helios_chunk(&s[..fork])
+        };
+        assert_eq!(trimmed, expected_prefix, "trim-to-fork != prefix");
         let new_suffix: Vec<[u8; 32]> = (fork..n).map(|_| rand_helios_scalar(&mut rng)).collect();
         let replaced = hash_grow_helios(&trimmed, fork, &ZERO, &new_suffix).expect("regrow");
         let mut fresh = s[..fork].to_vec();
@@ -440,6 +459,42 @@ fn chunk_trim_to_empty_and_multi_selene() {
     // trim all -> init
     let empty = hash_trim_selene(&full, 0, &s, &ZERO).expect("trim all");
     assert_eq!(empty, selene_hash_init(), "trim-to-empty != init");
+}
+
+#[test]
+fn empty_tree_is_a_ct2_boundary() {
+    // The two notions of "empty" DISAGREE, and that disagreement is a CONSENSUS
+    // boundary, not a test detail:
+    //   (1) An emptied *chunk* equals the init point — the REAL primitive's result
+    //       (driven here, not a helper shim).
+    //   (2) An empty *tree* is `build_layers([]) == [[]]` — a ZERO-node structure,
+    //       NOT an init-valued node.
+    // Early in the chain (heights 0..SPENDABLE_AGE, before the genesis founder
+    // allocations drain) the tree is empty, so the empty-tree `curve_tree_root` the
+    // daemon emits is a real consensus value. Whatever that value is must be the
+    // SINGLE definition production and tests share, verified against the daemon at
+    // an early height in CT-2's KAT — it is NOT assumed to be init here.
+    let mut rng = seeded(25_000);
+    let s: Vec<[u8; 32]> = (0..5).map(|_| rand_scalar(&mut rng)).collect();
+    let chunk = selene_chunk(&s);
+    let emptied = hash_trim_selene(&chunk, 0, &s, &ZERO).expect("trim all");
+    assert_eq!(
+        emptied,
+        selene_hash_init(),
+        "emptied chunk != init (real primitive)"
+    );
+
+    // (2): the empty tree is a zero-node structure, distinct from an init node.
+    assert_eq!(
+        build_layers(&[]),
+        vec![Vec::<[u8; 32]>::new()],
+        "empty-tree shape changed; CT-2 must re-establish the empty root"
+    );
+    assert_ne!(
+        build_layers(&[]),
+        vec![vec![selene_hash_init()]],
+        "empty tree must NOT be modeled as an init-valued node absent a CT-2 KAT"
+    );
 }
 
 #[test]

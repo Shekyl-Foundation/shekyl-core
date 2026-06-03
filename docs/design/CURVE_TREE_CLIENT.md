@@ -736,9 +736,33 @@ consensus scale, and prefix-rebuild is simpler than stateful rollback — freeze
 `hash_grow`/`hash_trim` primitives are the **daemon's** path. Two consequences:
 
 1. **`build_layers` is promoted into `shekyl-fcmp::tree`** (no longer a test-local
-   fn) as the *single* composition. The wallet's segment assembler, the CT-0 gate,
-   and CT-2's reconstruct-root KAT all call this one function — it must not be
-   reimplemented, or the "two implementations must agree" trap reopens.
+   fn) as the *single canonical* composition. The wallet's segment assembler, the
+   CT-0 gate, and CT-2's reconstruct-root KAT all call this one function rather
+   than reimplementing it.
+
+   **This is canonical-composition + agreement-tested, NOT a type-level lock — do
+   not bank false structural confidence.** Single-composition cannot be enforced
+   by the type system here: the per-chunk primitives (`hash_grow_*`, `hash_trim_*`)
+   must stay `pub` because the daemon's incremental path needs them over FFI, so a
+   future maintainer *can* compose them into a second path and nothing in the types
+   prevents it. What actually prevents silent divergence is (a) `build_layers`
+   existing as the obvious canonical `pub` function so no one reaches for a
+   hand-roll, and (b) the cross-impl agreement tests (`incremental_grow_equals_batch`,
+   the Tier-2 trim/replace tests, CT-2's KAT) catching divergence between the two
+   paths that exist. The limit, stated honestly: a *third* composition is not
+   caught by the agreement tests (they compare only the two known paths) — it is
+   caught by review, or not at all. Per "code is law, not docs," the guarantee is
+   the test suite; the doc-comment is a signpost.
+
+   **Scope limit — single-composition holds for from-leaves consumers only.** The
+   wallet's steady-state hot path is rebuild-from-cached-`R_k` (hash frozen
+   sub-roots up the *upper* layers), which reuses only the upper half of
+   `build_layers`'s loop. Calling `build_layers(all_leaves)` per root is O(whole
+   tree) — untenable at mainnet scale. Until that upper half is factored into a
+   shared `build_upper_layers(layer_j_nodes) → root` the wallet calls directly, the
+   wallet must re-implement the upper walk and the two-impls hazard reopens *above*
+   the leaf layer. **`build_upper_layers` factor is a CT-1 item** (the assembler),
+   not a CT-0 blocker — recorded in the §9 CT-1 row and §8 open questions.
 2. **`freeze_under_trim_g1` is renamed `freeze_under_prefix_rebuild`** — it is the
    wallet's actual reorg path (truncate + rebuild), and deliberately does **not**
    exercise the `hash_trim` primitive. A reviewer must not read CT-0 as "trim is
@@ -818,6 +842,35 @@ asserting the **full layer vector** against `build_layers`, not just the root:*
   (re-deepen), carrying the frozen `leaf0` untouched through the whole cycle;
   `== build_layers(base ++ 39′)`. A reorg landing exactly on a deepen boundary
   with different new content. ✓
+- `empty_tree_is_a_ct2_boundary` — makes the empty disagreement executable
+  (below). ✓
+
+**What Tier 2 does NOT verify (folds into CT-2, not assumed here).** Tier 2b
+asserts the undeepened tree against `build_layers`, which bakes in the **drop**
+model: an emptied trailing chunk is a *removed node* (the layer drops it, and
+when a layer reduces to one node the layer collapses), not an *init-valued node*
+kept as a child. That is the standard curve-tree model and almost certainly the
+daemon's, but it is a **C++ maintainer choice the Rust primitive does not fix** —
+nothing here rules out a daemon that keeps an init-valued child (which would give
+a *different* root). So Tier 2 proves the per-chunk primitives compose to
+`build_layers` and that `build_layers`'s drop-model is self-consistent; it does
+**not** prove `build_layers`'s drop-model equals consensus. That equality is a
+**CT-2 reconstruct-root KAT obligation**.
+
+The sharpest corner is the **empty / early-height** case, and the two notions of
+"empty" already disagree:
+
+- An emptied *chunk* equals the init point — the **real** `hash_trim` result
+  (driven, not shimmed; see `chunk_trim_to_empty_and_multi_selene`).
+- An empty *tree* is `build_layers([]) == [[]]` — a **zero-node** structure that
+  panics on `[j][0]`, **not** an init-valued node.
+
+Early in the chain (heights `0..SPENDABLE_AGE`, before the genesis founder
+allocations drain) the tree is empty, so the empty-tree `curve_tree_root` the
+daemon emits is a **real consensus value**. Whatever that value is must be the
+*single* definition production and tests share, **verified against the daemon at
+an early height in CT-2's KAT — not assumed to be init**. `empty_tree_is_a_ct2_boundary`
+pins this disagreement in the suite so it cannot be silently papered over.
 
 Outcome is **branch 3**: §7 position-aligned segment boundary stands; CT-1 schema
 is unblocked with no `shekyl-fcmp` accessor dependency. Under the batch pin there
@@ -874,6 +927,21 @@ canonical tree under replacement at both deepen boundaries.
     Tor/I2P routing layer so non-forward catch-up fetches inherit mandatory
     anonymization; confirm the seam against `ANONYMITY_NETWORKS.md` rather than
     bolting it on at V3.x.
+12. **`build_upper_layers` factor (§7.7, CT-1).** Single-composition holds today
+    only for from-leaves consumers. The wallet's steady-state hot path is
+    from-cached-`R_k` (O(whole tree) per root if it calls `build_layers(all_leaves)`),
+    so factor `build_upper_layers(layer_j_nodes) → root` out of `build_layers` and
+    have the cached path call it directly — otherwise the two-impls hazard reopens
+    above the leaf layer. On the CT-1 list (§9), not a CT-0 blocker.
+13. **CT-2 is the block-derived correctness rock, not just a KAT (§7.7, §9 CT-2).**
+    The privacy-maximal block-derived default commits the wallet to replicating
+    the C++ drain ordering (`{eligible_height, global_output_index}`); that
+    replication is where the wallet tree can silently diverge from consensus and
+    is currently untested. CT-2's reconstruct-root KAT against real headers is the
+    proof, and it absorbs the undeepen drop-model and the empty/early-height root
+    (the genesis corner of the same "wallet composition == C++ consensus"
+    question). The drain-order divergence surfaces to enumerate in the spike:
+    reorg reordering, intra-block ties, and the `eligible_height` boundary.
 
 ---
 
@@ -881,9 +949,9 @@ canonical tree under replacement at both deepen boundaries.
 
 | PR | Scope | Key files |
 |----|-------|-----------|
-| **CT-0** | **Gate spike — DONE, G1 PASSES.** 18-test harness proved **G1** value-invariance + exact-boundary freeze + within-Rust extractability + conversion totality (batch path) **and** consensus-grade daemon-reorg de-risking (Tier 2: incremental `hash_grow`/`hash_trim` reproduce `build_layers` under *replacement* — chunk replace/to-empty/path-independence + tree undeepen at **both** collapse types (39→38 Helios, 685→684 Selene) + compound 45→35 + replace-at-boundary capstone, full-layer asserts) against the real fork; layer-2 scale included. Branch 3: §7 stands, no accessor, CT-1 unblocked. Pinned **batch/prefix-rebuild** wallet strategy; **promoted `build_layers` into `shekyl-fcmp::tree`** as the single composition; renamed trim test → `freeze_under_prefix_rebuild`. | `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (landed) + `rust/shekyl-fcmp/src/tree.rs` (`build_layers`) |
-| **CT-1** | `shekyl-curve-tree` crate skeleton + **subtree-aligned segment** `LeafStore` keyed by `R_k` (pin/prune seam, §7.6) + types (`AssembledPath`, `OutputIdentity`, `ReferenceBlock`) + no-secrets structural test. Segment assembler + truncate-and-rebuild reorg call `shekyl-fcmp::tree::build_layers` (no reimplementation). | new crate |
-| **CT-2** | Path extraction (`assemble`) over a **synthetic** leaf set composed via the promoted `build_layers`; **reconstruct-root KAT** = Rust `build_layers` root == C++ consensus header root (owns end-to-end daemon-incremental↔batch agreement, subsuming "Tier 3"); C3-shape invariant | `assemble`, `shekyl-fcmp::tree` |
+| **CT-0** | **Gate spike — DONE, G1 PASSES.** 19-test harness (+1 `#[ignore]`) proved **G1** value-invariance + exact-boundary freeze + within-Rust extractability + conversion totality (batch path) **and** consensus-grade daemon-reorg de-risking (Tier 2: incremental `hash_grow`/`hash_trim` reproduce `build_layers` under *replacement* — chunk replace/to-empty/path-independence + tree undeepen at **both** collapse types (39→38 Helios, 685→684 Selene) + compound 45→35 + replace-at-boundary capstone, full-layer asserts) against the real fork; layer-2 scale included. Branch 3: §7 stands, no accessor, CT-1 unblocked. Pinned **batch/prefix-rebuild** wallet strategy; **promoted `build_layers` into `shekyl-fcmp::tree`** as the single composition; renamed trim test → `freeze_under_prefix_rebuild`. | `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (landed) + `rust/shekyl-fcmp/src/tree.rs` (`build_layers`) |
+| **CT-1** | `shekyl-curve-tree` crate skeleton + **subtree-aligned segment** `LeafStore` keyed by `R_k` (pin/prune seam, §7.6) + types (`AssembledPath`, `OutputIdentity`, `ReferenceBlock`) + no-secrets structural test. Segment assembler + truncate-and-rebuild reorg call `shekyl-fcmp::tree::build_layers` (no reimplementation). **Factor `build_upper_layers(layer_j_nodes) → root` out of `build_layers`** so the wallet's steady-state from-cached-`R_k` hot path hashes frozen sub-roots up the upper layers via the *same* function (single-composition end-to-end, not just from-leaves; §7.7). LeafStore engine decision (flat-mmap vs heed/redb). | new crate, `shekyl-fcmp::tree` |
+| **CT-2** | Path extraction (`assemble`) over a **synthetic** leaf set composed via the promoted `build_layers`; **reconstruct-root KAT** = Rust `build_layers` root == C++ consensus header root. This KAT now also owns: (a) end-to-end daemon-incremental↔batch agreement (subsuming "Tier 3"); (b) the **undeepen drop-model** (emptied chunk = removed node, not init-valued child — §7.7) confirmed against real headers spanning a deepen/undeepen boundary; (c) the **empty / early-height** root (heights `0..SPENDABLE_AGE`; `build_layers([]) == [[]]` ≠ init — single definition KAT'd against the daemon); (d) **`R_k` content-addressing equality** (daemon-built segment hash == wallet-built); (e) **block-derived drain-order replication** — the wallet's `{eligible_height, global_output_index}` sort byte-equals the C++ drain (the privacy-maximal default's correctness foundation; the divergence surfaces are reorg reordering, intra-block ties, and the `eligible_height` boundary). C3-shape invariant. | `assemble`, `shekyl-fcmp::tree` |
 | **CT-3** | **Source-agnostic** bulk-segment fetch + delta sync + per-segment root verify against header; reorg rollback by segment | `sync`, peer-pluggable client |
 | **CT-4** | Reference-block selection + horizon/rebuild (§5); `select_reference_block` | `client` |
 | **CT-5** | Wire into 2A signer behind the §3.5 contract (replaces synthetic vectors); 2A §3.7.6 terminology correction (§5.4) | `shekyl-engine-core`, `PHASE_2A_SEND_PATH.md` |
@@ -944,7 +1012,7 @@ is the only forward requirement).
 ## Appendix A. CT-0 harness (G1 + within-Rust extractability)
 
 **LANDED and PASSING (2026-06). The authoritative artifact is the file
-`rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (18 tests + 1 `#[ignore]`,
+`rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (19 tests + 1 `#[ignore]`,
 lint-clean) — not the snapshot below.** It uses `rand` + `rand_chacha` (already
 dev-deps); `proptest` is
 **not** a workspace dep, so this is `rand`-driven and seeded for reproducibility
@@ -962,8 +1030,10 @@ prior: G1 holds.
 > level-2 test, and the **Tier-2** daemon-incremental↔batch *replacement* tests:
 > chunk-level `incremental_grow_equals_batch_{selene,helios}`,
 > `grow_update_equals_rebatch_selene`, `chunk_replace_equals_fresh_{selene,helios}`,
-> `chunk_trim_to_empty_and_multi_selene`, `chunk_path_independence_{selene,helios}`;
-> tree-level `undeepen_helios_collapse_39_to_38`,
+> `chunk_trim_to_empty_and_multi_selene`, `chunk_path_independence_{selene,helios}`,
+> `empty_tree_is_a_ct2_boundary` (the chunk-empty == init / tree-empty == `[[]]`
+> disagreement made executable; the empty/early-height root is a CT-2 obligation,
+> not assumed init); tree-level `undeepen_helios_collapse_39_to_38`,
 > `undeepen_selene_collapse_685_to_684`, `reorg_compound_45_to_35`,
 > `reorg_capstone_replace_at_boundary_39` (full-layer asserts).
 > Read the file for the current harness; the snapshot is retained only to show the
