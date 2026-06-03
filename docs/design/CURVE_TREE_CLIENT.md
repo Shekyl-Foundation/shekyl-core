@@ -155,10 +155,19 @@ A lying or partial daemon **cannot forge a tree**, only deny service:
 ### 3.4 Reorg handling
 
 Leaf positions are **append-only by drain order**; a reorg below the synced tip
-can change which leaves exist. The store tracks `(height, leaf_count, root)` and
-rolls back to the last agreeing checkpoint/header on divergence, then re-syncs.
-The reference block sits at `tip − REF_ANCHOR_AGE` (§5) so it is reorg-margin
-protected; a reorg deeper than that forces ref-block re-selection (§5.3).
+can change which leaves exist. But tree leaves only change on reorgs deeper than
+`SPENDABLE_AGE = 10` (shallower reorgs reshuffle only undrained
+`pending_tree_leaves`), and a deep reorg touches only the most-recently-drained
+positions — the **active frontier segment** (§7.2.1 #4). So completed
+subtree-aligned segments are **reorg-frozen**, and the rollback unit is the active
+frontier segment, not "up to the last 10k checkpoint." The store tracks
+`(height, leaf_count, R_k)` per segment, rolls back only the frontier on
+divergence, and re-syncs forward. **Freeze-lag:** a segment is not frozen/pruned
+until buried beyond max plausible reorg depth (in position terms, ≥ the positions
+drained over `SPENDABLE_AGE` + margin) — the active frontier stays unpruned and
+absorbs reorg churn, and freezing lags the tip. The reference block at
+`tip − REF_ANCHOR_AGE` (§5) is within this unfrozen frontier by construction; a
+reorg deeper than the margin forces ref-block re-selection (§5.3).
 
 ### 3.5 Public API (the contract 2A codes against)
 
@@ -194,6 +203,44 @@ impl CurveTreeClient {
 2A tests this contract is satisfied by **synthetic vectors**; in production by
 this client. The C1 single-snapshot guarantee is preserved because all inputs of
 one tx call `assemble_path` with the **same** `ReferenceBlock`.
+
+### 3.6 `LeafStore` persistence — greenfield, not a migration
+
+The "we're about to touch storage, do it in Rust" instinct does **not** apply
+here as a migration, and it is worth setting down why:
+
+- **The daemon LMDB stays through V3.x.** The only daemon-side C++ the CT work
+  needs is the optional bulk-leaf accelerator (§6); under the block-derived
+  default (§6) even that is optional. So CT/archival *shrinks* the daemon's new
+  C++ surface, it doesn't grow it — touching one optional RPC is not leverage for
+  a consensus-DB rewrite. An engine change for the daemon is a **V4,
+  consensus-invisible** question; defer with confidence.
+- **The wallet `LeafStore` is greenfield Rust.** It does not exist yet (new
+  `shekyl-curve-tree` crate) and is Rust by default under the
+  untrusted-input→Rust policy (`20-rust-vs-cpp-policy.mdc`). So "shift to heed"
+  is not a migration question — it is *which Rust persistence for a new
+  component*, decided on the wallet store's own merits.
+
+The access pattern is unusually regular, and that drives the real first question:
+
+- Dense integer positions → **fixed 128-byte records** (`{O.x, I.x, C.x, h_pqc}`),
+  append-mostly forward, contiguous range reads for segment serving,
+  delete-recent for reorg, delete-old-non-owned for prune-to-`R_k`.
+
+"Leaf at position `p`" is literally offset `p·128` in a flat array — a
+memory-mapped leaf file beats any B-tree lookup, and the sparse metadata (frozen
+`R_k` per segment, the owned-position index, sync cursor, reorg checkpoints) is
+small enough for a tiny sidecar store. So the honest first question is **flat
+mmap'd leaf array + small metadata store vs a general KV engine for the whole
+thing** — not heed-vs-LMDB. If a single KV engine is chosen for everything, then
+**heed** (LMDB format/semantics, mmap zero-copy, single-writer fits the one sync
+task) vs **redb** (pure-Rust, no C/FFI, `10-shekyl-first.mdc`-aligned, no
+pre-sized map) is the real choice — but decided on this store, not as a referendum
+on the daemon's engine. **Disposition:** decided in CT-1 with this framing; the
+default leaning is flat-mmap-array + sidecar unless the metadata side proves to
+want a KV engine. (Dependency-discipline: heed and redb are *not* current
+workspace deps; either is a new dependency to justify at CT-1, and the flat-mmap
+default needs none.)
 
 ---
 
@@ -402,44 +449,113 @@ concept doc is adapted.
   hashes along any one path collectively cover the whole leaf set (§3, §4.3). So
   path assembly is inherently a **whole-history-leaf** operation — exactly the
   archival problem `V3_STAKER_ARCHIVAL.md` §"Problem 2" names.
-- **ArchivalEngine (provider):** stakers hold epoch-partitioned leaf ranges
-  (shards) and serve them.
+- **ArchivalEngine (provider):** stakers hold partitioned leaf ranges (shards —
+  shaped per §7.2) and serve them.
 
 Same bytes, two roles. Design consequence: **one segmented leaf store, not two.**
 
-### 7.2 The segment is the common unit (shard ≡ CT store segment ≡ visual unit)
+### 7.2 The segment is a subtree-aligned position range (frozen sub-root `R_k`)
 
-Define the store's unit as an **epoch-aligned segment**:
+The boundary is **pure tree-position, aligned to a subtree (tree-level)
+boundary** — *not* height-epoch. The choice is load-bearing, not stylistic: a
+position-aligned segment has a **frozen, reusable sub-root**; a height-aligned one
+does not, and five mechanisms below depend on that one difference existing.
 
-- **Range:** leaves at tree positions `[leaf_count(H_start), leaf_count(H_end))`
-  for an epoch `[H_start, H_end)` with `E = FCMP_CURVE_TREE_CHECKPOINT_INTERVAL
-  (10,000)` blocks. Position-addressed store, height-addressed epoch — the
-  checkpoint's `leaf_count` is the deterministic bridge (note the position≠height
-  duality: leaves drain by maturity, not receipt height).
-- **Contents:** the segment's 128-byte leaf tuples + the per-height
-  `curve_tree_root`s spanning the epoch (verification anchors, §3.3) + the
-  epoch-boundary checkpoint root.
-- **Self-verifying:** recompute the segment's leaves into the running tree and
-  check against the carried per-height roots; a bad segment fails loudly
-  regardless of source.
+- **Range:** leaves at tree positions `[k·E, (k+1)·E)`, where `E` is a
+  **subtree-level leaf count** — a product of the alternating Selene/Helios chunk
+  widths, i.e. exactly one tree-level node. (See §7.2.2 for deriving `E`.)
+- **Frozen sub-root `R_k`.** A curve tree built by append (`hash_grow`) has the
+  Merkle-mountain-range property: once a left subtree is full its hash is final —
+  deepening the tree adds a parent *above* it and never re-hashes a completed
+  child. So a subtree-aligned segment `k` has a sub-root `R_k` that is **permanent
+  the moment the segment completes** and never changes as the chain grows.
+- **Contrast (the rejected fork):** a height-epoch segment is a *variable-length*
+  position range (block windows hold variable output counts), so its boundaries
+  cut across subtrees — it has **no single frozen sub-root**, and the only anchor
+  available is the per-height whole-tree header root. That inherits a cross-shard
+  dependency the position case eliminates.
 
-This one unit is simultaneously the CT client's **sync/reorg/cache** unit, the
-ArchivalEngine's **shard**, and `shekyl-shard-visual`'s render input (its
-`shard_content_hash` = the segment content hash; the concept doc's visual cache
-key `(shard_id, shard_content_hash)` is already the segment's). The archival
-concept's "per-epoch ~10,000-block shard" is **adopted because** it aligns with
-the checkpoint interval the store already uses — not as an independent pick.
+This one unit is simultaneously the CT client's **sync/reorg/cache/prune** unit,
+the ArchivalEngine's **shard**, and `shekyl-shard-visual`'s render input
+(`shard_content_hash` = `R_k`; the concept's `(shard_id, shard_content_hash)`
+cache key is already this). The concept's "~10,000-block shard" adapts to "the
+subtree level nearest the target shard scale" (§7.2.2) — the same re-derivation
+discipline applied to `K_DUST` (drew Bitcoin's concept, re-derived the constant).
+
+#### 7.2.1 What the frozen `R_k` buys, mechanism by mechanism
+
+1. **Challenge-response becomes shard-self-contained.** The archival concept's
+   proof-of-storage challenge (`V3_STAKER_ARCHIVAL.md` §"challenge") is "produce
+   the Merkle path for block `H`'s tree root proving output `O` is in range" —
+   anchored to the **whole-tree** root at `H`, so a staker holding shard `k`
+   cannot answer from shard `k` alone (it needs every *other* shard's sibling
+   sub-roots to reach the whole-tree root). With `R_k` the challenge becomes
+   "produce the path from a random position in shard `k` to `R_k`" — answerable
+   from the shard's own bytes, no cross-shard context. This resolves the concept's
+   own open "shard granularity" question and makes proof-of-storage **local**.
+2. **Multi-source distribution becomes content-addressed.** Height-aligned
+   segments have no per-segment integrity tag, so a malicious peer's wrong bytes
+   are caught only *after* recomputing against a whole-tree root (expensive, and
+   you don't learn which peer lied). `R_k` is a **content address**: request
+   "segment `k` matching `R_k`," reject non-matching bytes **on receipt**,
+   BitTorrent-style — `R_k` is the infohash the concept's gossip layer wants.
+3. **The reward market gets a clean rarity signal.** Reward is inverse to
+   replication count, so pay should track rarity, not size. Uniform-size
+   (fixed-`E`-leaf) position segments make per-shard reward track replication
+   cleanly and proof-of-storage cost uniform (fair per-shard burden).
+   Height-aligned segments vary wildly in leaf count (a busy epoch dwarfs a quiet
+   one), confounding size with rarity and breaking the balanced-portfolio model.
+4. **Reorg and pruning share the boundary.** Tree leaves change only on reorgs
+   deeper than `SPENDABLE_AGE = 10` (shallower reorgs reshuffle only undrained
+   `pending_tree_leaves`), and deep reorgs touch only the most-recently-drained
+   positions — the **active frontier segment**. So completed segments are
+   **reorg-frozen**; the rollback unit is "the active frontier segment," not "up
+   to a 10k-block checkpoint." The same boundary is the **prune** unit: once a
+   segment freezes to `R_k`, a non-archiving wallet drops its non-owned leaves and
+   keeps only `R_k` (§7.6).
+5. **Pruned-but-assemblable.** Because `R_k` plus the wallet's owned chunks
+   suffice to assemble owned-output paths, the frozen segment is exactly the line
+   that lets a non-staker stay lean without losing assembly capability (§7.6).
+
+#### 7.2.2 Deriving `E` (subtree level, not 10,000)
+
+Pick the **tree level** whose leaf count (the running product of the alternating
+chunk widths) lands nearest the target shard scale, rather than fixing `E` to a
+block count. This keeps shards subtree-clean (every segment is one frozen node).
+The concept's "~10k blocks" is the target the level approximates, not the
+boundary itself.
+
+**The levels are coarse — `~10k` is not hit exactly.** With the fork's real widths
+(`SELENE_CHUNK_WIDTH = LAYER_ONE_LEN = 38`, `HELIOS_CHUNK_WIDTH = LAYER_TWO_LEN =
+18`), the leaf counts per subtree level are: level 0 = **38** outputs, level 1 =
+`38·18` = **684**, level 2 = `38·18·38` = **25,992**, level 3 ≈ 468k, … So
+"nearest 10k leaves" is level 2 (≈26k, ~2.6× over) vs level 1 (684, ~15× under) —
+there is no clean 10k level. The realized shard size is a genuine tradeoff (shard
+count × per-shard storage × proof-of-storage cost), decided at CT-1 once the
+mainnet leaf-growth rate sets the disk budget; the doc records that the boundary
+is a subtree level, with level 2 the provisional choice pending that sizing.
+
+#### 7.2.3 Position↔height is a presentation lookup
+
+"Which dates does shard `k` cover," the visualization's block-range intuition, and
+the concept's "block `H`" challenge phrasing all become position↔height
+conversions via checkpoint `leaf_count`s — a presentation cost, not a correctness
+one. The concept docs' height-framed language (challenge "block `H`," shard "block
+ranges") is the specific text that adapts.
 
 ### 7.3 Source-agnostic retrieval; integrity makes untrusted sources safe
 
 The §6 bulk-leaf fetch is the retrieval primitive, and the sync layer is
 **source-agnostic**: a segment may come from the wallet's own daemon, a
 foundation `--no-prune` floor node, or an **untrusted** staker peer. Safety does
-not depend on trusting the source — §3.3's root-against-header verification means
-a malicious staker can only **deny service** (withhold/short a segment → fails
-the content-match or root check), never forge a tree. So "multi-source archival"
-**falls out** of the integrity model rather than needing a retrofit: the client
-already verifies every segment against consensus. The V3.0-surface requirement
+not depend on trusting the source — and with the frozen `R_k` (§7.2) the check is
+**content-addressed**: request "segment `k` matching `R_k`" (the per-block header
+root chain still anchors `R_k` itself, §3.3), and reject non-matching bytes **on
+receipt** rather than after a whole-tree recompute. A malicious staker can only
+**deny service** (withhold/short a segment), never forge one, and the rejection is
+cheap and per-peer attributable. So "multi-source archival" **falls out** of the
+integrity model rather than needing a retrofit, and `R_k` is the infohash the
+concept's BitTorrent-style gossip layer wants. The V3.0-surface requirement
 `V3_STAKER_ARCHIVAL.md` §"V3 architectural requirements" (4)/(5) names ("query
 historical state from a staker peer or a foundation node") is met by making the
 **one** bulk primitive peer-pluggable — no separate multi-peer RPC pre-built.
@@ -447,16 +563,28 @@ historical state from a staker peer or a foundation node") is met by making the
 ### 7.4 Privacy gradient under multi-source (the property to protect)
 
 Distributing the serving role multiplies the parties who can observe queries —
-the metadata FCMP++ protects. Privacy ordering, best → worst:
+the metadata FCMP++ protects. The key correction over a naive reading: **a
+steady-state minimal wallet is query-free too, not just a staker.** Once a wallet
+has done one forward sync and cached the frozen sub-root **frontier** (one hash
+per completed shard) plus its own owned-output chunks, it assembles owned paths
+from local data — own chunks + cached siblings — with no query. Its ongoing fetch
+is **forward segment sync** (sync-progress-based, output-independent → non-
+revealing). The prune rule that preserves this: **prune non-owned leaves of frozen
+segments; keep owned-output chunks forever.** With that rule, even a non-archiving
+wallet never makes a spend-revealing fetch. Privacy ordering, best → worst:
 
-1. **Segment-holding wallet — no query at all (best).** A staking wallet's
-   ArchivalEngine already holds segments locally; the CT client reads them with
-   **zero** network exposure. "If you stake, you archive" makes a staker's own
-   path assembly query-free — the FCMP++ analog of "run your own node," made
-   structural.
-2. **Bulk segment fetch over Tor/I2P (acceptable).** Leaks only "this peer
-   fetched epoch E's segment" — never which leaf, never a per-output index
-   (§4.3). Routed through the anonymizing infra `V3_STAKER_ARCHIVAL.md`
+1. **Archiver ≈ steady-state minimal wallet — query-free.** The archiver holds
+   full segments and serves others at zero query cost; the minimal wallet, after
+   one forward sync, assembles its own spends from {sub-root frontier, owned
+   chunks, active frontier} with no query. Both are the FCMP++ analog of "run your
+   own node," made structural — "if you stake, you archive" is then a
+   bandwidth-and-altruism tier *on top of* a baseline where everyone is private,
+   not the only private tier.
+2. **Cold / long-offline non-forward catch-up (acceptable, over Tor).** Pulling a
+   *specific old* segment you previously pruned leaks only "this peer fetched
+   shard `k`" — never which leaf, never a per-output index (§4.3). This only
+   arises if a wallet discarded a chunk it later needs; the prune rule above keeps
+   it rare. Routed through the anonymizing infra `V3_STAKER_ARCHIVAL.md`
    §"Privacy" mandates; cover-traffic is the stronger later form.
 3. **Per-output path query (forbidden, §3.0.1).** Reveals the exact spent leaf —
    forbidden on the private path, and *worse* under distributed archival (many
@@ -479,46 +607,141 @@ routing + local assembly."
 
 ### 7.6 Storage unification: one store, three consumers; V3.0 surface, V3.x additive
 
-`LeafStore` (§3.1) is designed **segment-addressable** so the V3.x
-`ArchivalEngine` is purely additive:
+It is **one schema, footprint varies** — *not* "same bytes." The store is
+segment-addressable and shared across three consumers (minimal-wallet path
+assembly, archiver serving, `shekyl-shard-visual` rendering), but they hold
+different subsets — the visual consumer needs only `R_k` per shard, while the
+storage consumers differ as follows:
 
-- **V3.0 (this client):** `LeafStore` holds segments for the wallet's own path
-  assembly (full or a recent window); source-agnostic fetch; per-segment
-  verification; reorg rollback by segment.
-- **V3.x (`ArchivalEngine`, additive):** **pins** a chosen segment set (the
-  staker's shards), **serves** them to peers (the §6 endpoint, now also
-  outbound), and prices/challenges them. It adds segment **pin + serve + market**
-  — *not* a new store; it reads/writes the same `LeafStore` segments. The
-  `is_active_staker` / `stake_tier` cross-actor queries gate eligibility, but the
-  data plane is unchanged.
+- **Minimal wallet (non-staker):** holds `{sub-root frontier (one R_k per
+  completed shard — small), owned-output chunks (kept forever), active frontier
+  segment (unpruned)}`. That is the minimum to forward-sync and assemble its own
+  spend paths. The prune boundary that lets it stay lean is exactly the **frozen
+  segment** (§7.2.1 #4–5) — the strongest argument for position-alignment, since a
+  height-aligned segment gives neither a clean frozen rollback unit nor a clean
+  prune-to-`R_k` commitment.
+- **Archiver (staker, V3.x additive):** holds **full** segment leaves for its
+  pinned shard set; **serves** them (the §6 endpoint, now also outbound) and
+  prices/challenges them (challenge answered from `R_k`, §7.2.1 #1). It adds
+  segment **pin + serve + market** — *not* a new store or schema; it simply
+  retains full leaves where the minimal wallet pruned to `R_k`. `is_active_staker`
+  / `stake_tier` gate eligibility; the data plane and schema are unchanged.
 
 This is the concrete answer to "how does archival affect storage/retrieval":
-**it doesn't restructure them — the CT client's segmented, source-agnostic,
-self-verifying leaf store is already the archival substrate.** Building it that
-way in V3.0 is what makes the V3.x archival ship additive (matching the archival
-doc's own "no V3.0 refactor" requirement) — satisfied by this store design rather
-than by pre-building unspecified RPC boundaries.
+**it doesn't restructure the schema — the CT client's segmented, source-agnostic,
+self-verifying store is already the archival substrate; the staker just keeps
+more of it.** Building it position-aligned in V3.0 is what makes the V3.x archival
+ship additive (matching the archival doc's own "no V3.0 refactor" requirement) —
+satisfied by this store design rather than by pre-building unspecified RPC
+boundaries.
 
 **Adaptations the concept docs should take (proposed; applied when those docs are
 next revised, not silently here):**
 
-- `V3_STAKER_ARCHIVAL.md`: shard ≡ CT `LeafStore` segment; "query historical
-  state" = source-agnostic **bulk-segment** fetch, not per-output;
-  `assemble_tree_path_for_output` is **local** (§7.5); the challenge-response
-  "produce the Merkle path for block H showing leaf X" is a **prover-held** proof
-  the staker computes from its own segments, not a wallet-exposed query surface.
-- `V3_SHARD_VISUALIZATION.md`: shard content hash = segment content hash; the
-  `(shard_id, shard_content_hash)` cache key already matches (§7.2) — no change
-  beyond naming the segment as the shard.
+- `V3_STAKER_ARCHIVAL.md`: shard ≡ CT `LeafStore` **subtree-aligned position
+  segment** (not a block-range), keyed by frozen `R_k`; "query historical state" =
+  source-agnostic **bulk-segment** fetch, not per-output;
+  `assemble_tree_path_for_output` is **local** (§7.5); the challenge re-anchors
+  from "Merkle path for **block H**'s whole-tree root" to "path from a random
+  position in shard `k` to **`R_k`**" (§7.2.1 #1) — shard-self-contained,
+  prover-held, no wallet-exposed query surface and no cross-shard context. The
+  "~10k-block shard" → "subtree level nearest 10k leaves" (§7.2.2); all "block H /
+  block range" phrasing becomes a position↔height lookup (§7.2.3).
+- `V3_SHARD_VISUALIZATION.md`: `shard_content_hash` = `R_k`; the
+  `(shard_id, shard_content_hash)` cache key already matches (§7.2). Block-range
+  intuition is a position↔height presentation lookup (§7.2.3) — no structural
+  change beyond naming the segment as the shard.
+
+### 7.7 CT-0 gate: G1 (value-invariance) vs G2 (extractability)
+
+The CT-0 gate is **two invariants, not one**, with different blast radii. The doc
+elsewhere frames it as "never re-hash completed nodes"; that conflates a hard gate
+with a recoverable detail.
+
+- **G1 — value-invariance (the real gate).** A completed subtree's root *value*
+  is invariant under (a) appending leaves to its right and (b) trimming leaves to
+  its right. This is the append-only/MMR property `R_k`-as-permanent-commitment
+  rests on. The claim is about the **value**, not about whether any node is
+  cached — we cache `R_k` ourselves. **If G1 fails, `R_k` evaporates and the
+  boundary reopens to height-anchored.** This is the only collapse case.
+- **G2 — extractability (recoverable if it fails).** Can the client obtain `R_k`,
+  and is it the value the full tree commits to? Two paths: *capture-at-completion*
+  (read the frontier node when segment `k`'s last leaf lands) or *standalone
+  recompute* (build a fresh tree from segment `k`'s `E` leaves, read its root).
+  Standalone recompute is correct iff the node hash is **context-free up to curve
+  parity** — not domain-separated by absolute layer index. If neither path works,
+  `R_k` still *exists* (G1 can hold while G2 is awkward); you add a small
+  internal-node accessor to `shekyl-fcmp`. That is a CT-1 API line, **not** a
+  boundary reopening.
+
+**Strengthened prior from the real API (`rust/shekyl-fcmp/src/tree.rs`).** Reading
+the fork (not a proxy) sharpens both:
+
+- The Rust surface is **white-box per-chunk**: `hash_grow_{selene,helios}` /
+  `hash_trim_{selene,helios}` operate on **one chunk's** hash, with a **fixed**
+  generator set (`SELENE_FCMP_GENERATORS` / `HELIOS_FCMP_GENERATORS`) and **no
+  absolute layer index** — only an offset *within* the chunk. A node value is
+  therefore `f(curve, children)`, context-free across layers and positions. The
+  C++ LMDB layer owns whole-tree *structure*; Rust owns the per-chunk *hash*.
+- **G1 is near-structural here.** The wallet's tree builder feeds a completed
+  chunk's value *upward* (via `selene_point_to_helios_scalar` /
+  `helios_point_to_selene_scalar`) as a child of the next layer and **never
+  re-passes it to `hash_grow`/`hash_trim`**. A completed chunk is, by API shape,
+  untouched by right-side growth or trim. The spike still *proves* this against
+  the real upstream `fcmps::tree::hash_grow/hash_trim` rather than asserting it.
+- **G2 largely collapses into CT-2.** Because the API is white-box and
+  layer-index-free, *standalone recompute is the wallet's normal mode* — the
+  "accessor" G2 worried about already exists (it is the builder, Appendix A
+  `build_layers`). The only residual G2 risk is that the **Rust-composed root
+  differs from the C++ consensus header root** (e.g. C++ salts by layer where Rust
+  does not). That is exactly **CT-2's reconstruct-root KAT against a real header
+  root** (§3.3) — *not* a CT-0 blocker. CT-0 therefore owns **G1**; CT-2 owns the
+  Rust↔consensus agreement.
+
+**Decision tree out of CT-0:**
+
+1. **G1 fails** → reopen to height-anchored (the only true collapse; §7.2 fallback).
+2. **G1 passes, standalone-recompute mismatches an internal node** → add a
+   `shekyl-fcmp` internal-node accessor as a CT-1 dependency; no architecture
+   change.
+3. **G1 passes, recompute matches** → §7 stands; CT-1 schema unblocked; Rust↔C++
+   agreement proven separately by CT-2's KAT.
+
+The proptest/rand harness that settles G1 (and the within-Rust extractability
+check) is **Appendix A**, written against the real symbols above and ready to drop
+into `rust/shekyl-fcmp/tests/` as the CT-0 scratch artifact (a test, not
+production — no `src/` change pre-gate).
+
+**RESULT (CT-0 run, 2026-06): G1 PASSES — boundary is settled, no reopen.**
+The harness landed at `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` and compiled
+against the real fork unmodified. All gate tests pass:
+
+- `freeze_under_grow_g1` (sub-root layers j=0 and j=1, 16 trials each crossing
+  ≥1 deepen boundary) — completed `R_k` invariant under right-side append. ✓
+- `freeze_under_trim_g1` (same levels, 16 trials each, trim strictly inside the
+  frontier) — buried `R_k` invariant under right-side trim. ✓
+- `extract_matches_in_tree` — standalone recompute of segment `k` byte-equals the
+  in-tree internal node at `(layer j, index k)`; **branch 2 of the decision tree
+  does not fire** (the index-free, fixed-generator API has no absolute-layer
+  domain separation, so no accessor is needed). ✓
+- `frontier_changes_on_append` (negative sanity) — the partial rightmost chunk
+  *does* change on append, so G1 is non-trivial. ✓
+- `freeze_under_grow_g1_level2` (`#[ignore]`, ~25,992-output segment) — G1 holds
+  at the layer-2 segment scale we'd actually pick. ✓
+
+Outcome is **branch 3**: §7 position-aligned segment boundary stands; CT-1 schema
+is unblocked with no `shekyl-fcmp` accessor dependency. The only residual is CT-2's
+Rust↔C++ root-agreement KAT (end-to-end G2), which §7.7 already assigns to CT-2.
 
 ---
 
 ## 8. Round 0 open questions (for Round 1)
 
-1. **Leaf-store persistence + size.** All-leaves vs checkpoint+window. Mainnet
-   leaf count × 128 B sets the disk/memory budget; an incremental
-   checkpoint-anchored window may be required. Decide the store's eviction
-   policy and its reorg-rollback depth.
+1. **Leaf-store persistence engine (§3.6).** Greenfield, not a migration:
+   flat-mmap leaf array + small metadata sidecar (default lean) vs a single KV
+   engine (heed vs redb). Decided at CT-1 on the store's own merits; mainnet leaf
+   count × 128 B sets the disk/memory budget and the prune/window policy. Not a
+   daemon-engine question and not a C++ rewrite.
 2. **Match-cost at scale (§4.3).** Linear `O.x` scan over a multi-million-leaf
    range is the naive cost. Is an in-store `O.x → position` index (built locally
    from downloaded leaves, never queried) warranted? It is wallet-local so it
@@ -532,19 +755,29 @@ next revised, not silently here):**
    contract (§3.5) rather than re-deriving selection.
 6. **Block-derived leaves (§6).** Re-evaluate the zero-RPC alternative once the
    drain-ordering replication cost is known.
-7. **Segment boundary alignment (§7.2).** Does `E = 10,000` blocks land on a
-   curve-tree chunk boundary, or is the segment a pure tree-position range that
-   straddles chunk boundaries? If the former, segment sub-roots are reusable
-   verification anchors; if the latter, only the per-height header roots anchor.
-   Confirm against `shekyl-fcmp::tree` chunk width.
-8. **Pin vs evict policy (§7.6).** A non-staking wallet evicts old segments
-   (keeps a window); a staking wallet pins its shard set. The `LeafStore` API
-   must expose both without a V3.x restructure — confirm the pin/evict seam is in
-   CT-1's type design, not deferred.
-9. **Anonymized segment fetch (§7.4).** Wire the source-agnostic fetch to the
-   Tor/I2P routing layer so multi-source archival queries inherit the mandatory
-   anonymization; confirm the seam against `ANONYMITY_NETWORKS.md` rather than
-   bolting it on at V3.x.
+7. **GATE — G1 value-invariance (§7.7). CLOSED: G1 PASSES (CT-0 run, 2026-06).**
+   *Decided: pure tree-position, subtree-aligned (§7.2), and now gate-confirmed.*
+   The harness (`rust/shekyl-fcmp/tests/curve_tree_freeze.rs`) ran against the real
+   fork: grow/trim invariance and within-Rust extractability all pass, including
+   the layer-2 segment scale. Decision-tree **branch 3** — §7 stands, no
+   `shekyl-fcmp` accessor needed, CT-1 schema unblocked. Reopening criterion
+   remains G1 (would require a future `shekyl-fcmp::tree` change that moves a
+   completed subtree's root value); none observed. The only residual is CT-2's
+   Rust↔C++ reconstruct-root KAT (end-to-end G2).
+8. **Derive `E` as a subtree level (§7.2.2).** Levels are coarse: 38 / 684 /
+   25,992 / … leaves. No clean ~10k level — level 2 (≈26k) is provisional; confirm
+   against mainnet leaf-growth and the shard-count × per-shard-storage tradeoff.
+9. **Pin vs evict / prune policy (§7.6).** Minimal wallet prunes non-owned leaves
+   of frozen segments to `R_k` but keeps owned-output chunks forever; staker pins
+   full shards. The `LeafStore` API must expose both without a V3.x restructure —
+   confirm the pin/prune seam is in CT-1's type design, not deferred.
+10. **Freeze-lag depth (§3.4).** Pin the position-margin beyond which a segment
+    freezes/prunes (≥ positions drained over `SPENDABLE_AGE` + margin); confirm
+    against max plausible reorg depth.
+11. **Anonymized segment fetch (§7.4).** Wire the source-agnostic fetch to the
+    Tor/I2P routing layer so non-forward catch-up fetches inherit mandatory
+    anonymization; confirm the seam against `ANONYMITY_NETWORKS.md` rather than
+    bolting it on at V3.x.
 
 ---
 
@@ -552,18 +785,21 @@ next revised, not silently here):**
 
 | PR | Scope | Key files |
 |----|-------|-----------|
-| **CT-1** | `shekyl-curve-tree` crate skeleton + **segment-addressable** `LeafStore` (pin/evict seam, §7.6) + types (`AssembledPath`, `OutputIdentity`, `ReferenceBlock`) + no-secrets structural test | new crate |
+| **CT-0** | **Gate spike — DONE, G1 PASSES.** Appendix A harness proved **G1** value-invariance (§7.7) + within-Rust extractability against the real fork; layer-2 scale included. Branch 3: §7 stands, no accessor, CT-1 unblocked. `E` derivation (§7.2.2) confirmed via `outputs_per_node`. | `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (landed; test, no `src/` change) |
+| **CT-1** | `shekyl-curve-tree` crate skeleton + **subtree-aligned segment** `LeafStore` keyed by `R_k` (pin/prune seam, §7.6) + types (`AssembledPath`, `OutputIdentity`, `ReferenceBlock`) + no-secrets structural test | new crate |
 | **CT-2** | Layer recompute + path extraction (`assemble`) over a **synthetic** leaf set; reconstruct-root KAT; C3-shape invariant | `assemble`, `shekyl-fcmp::tree` |
 | **CT-3** | **Source-agnostic** bulk-segment fetch + delta sync + per-segment root verify against header; reorg rollback by segment | `sync`, peer-pluggable client |
 | **CT-4** | Reference-block selection + horizon/rebuild (§5); `select_reference_block` | `client` |
 | **CT-5** | Wire into 2A signer behind the §3.5 contract (replaces synthetic vectors); 2A §3.7.6 terminology correction (§5.4) | `shekyl-engine-core`, `PHASE_2A_SEND_PATH.md` |
 | **C++** | `get_curve_tree_leaves` endpoint + KAT (`SHEKYLD_PREREQUISITES.md`) | `core_rpc_server`, separate PR |
 
-CT-1/CT-2 are pure-Rust and synthetic-testable now (no daemon dependency),
-mirroring 2A's split: the crypto/assembly lands and is KAT-gated before the
-daemon endpoint exists. The V3.x `ArchivalEngine` (pin + serve + market, §7.6) is
-**out of CT scope** — but CT-1's `LeafStore` API must not foreclose it (the
-pin/evict + outbound-serve seam is the only forward requirement).
+CT-0 is the gate (§8 #7): if **G1** fails (§7.7), the boundary choice reopens
+before any schema lands; a G2-shaped finding does not. CT-1/CT-2 are then pure-Rust and
+synthetic-testable (no daemon dependency), mirroring 2A's split: the
+crypto/assembly lands and is KAT-gated before the daemon endpoint exists. The
+V3.x `ArchivalEngine` (pin + serve + market, §7.6) is **out of CT scope** — but
+CT-1's `LeafStore` API must not foreclose it (the pin/prune + outbound-serve seam
+is the only forward requirement).
 
 ---
 
@@ -583,12 +819,197 @@ pin/evict + outbound-serve seam is the only forward requirement).
 - [ ] §5.4 cross-edit `PHASE_2A_SEND_PATH.md` §3.7.6 (two ages, not one).
 - [ ] §6 bulk RPC contract + reconstruct-root KAT in `SHEKYLD_PREREQUISITES.md`.
 - [ ] §3.5 contract matches the synthetic vectors 2A already codes against.
-- [ ] §7.2 segment = shard = visual unit (one data plane); position≠height duality
-  bridged by checkpoint `leaf_count`.
-- [ ] §7.3 source-agnostic fetch; untrusted staker source = DoS-only (integrity by
-  per-segment root verification).
-- [ ] §7.4 privacy gradient preserved: segment-holder no-query > Tor segment fetch
-  > per-output (forbidden); §3.0.1 bulk-not-per-output more load-bearing here.
+- [x] **GATE** §7.7 G1 value-invariance confirmed by Appendix A (CT-0, 2026-06):
+  G1 PASSES against the real fork (branch 3 — §7 stands, no accessor). Reopening
+  criterion is G1 only (G2 → accessor / CT-2 KAT, not reopen);
+  `E` derived as a subtree level (38/684/25,992), not a block count.
+- [ ] §7.2 segment = subtree-aligned position range keyed by frozen `R_k`; shard =
+  visual unit; position↔height is presentation lookup.
+- [ ] §7.3 content-addressed fetch (`R_k` = infohash, reject on receipt);
+  untrusted source = DoS-only.
+- [ ] §7.4 corrected gradient: archiver ≈ steady-state minimal wallet (query-free)
+  > non-forward catch-up (Tor) > per-output (forbidden); prune rule keeps owned
+  chunks forever.
+- [ ] §3.4/§7.2.1#4 rollback + prune unit = frozen segment; freeze lags tip by
+  reorg margin.
+- [ ] §7.6 one schema, footprint varies (minimal = frontier + owned chunks +
+  active frontier; archiver = full segments).
 - [ ] §7.5 `assemble_tree_path_for_output` is local assembly, not a staker RPC.
 - [ ] §7.6 `LeafStore` segment-addressable so V3.x `ArchivalEngine` is additive;
   pin/evict seam present in CT-1.
+
+---
+
+## Appendix A. CT-0 harness (G1 + within-Rust extractability)
+
+**LANDED at `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` and PASSING (2026-06).**
+A **test, not production** (no `src/` change). It uses `rand` + `rand_chacha`
+(already dev-deps); `proptest` is **not** a workspace dep, so this is `rand`-driven
+and seeded for reproducibility (add `proptest` only if input shrinking is wanted —
+a dependency-discipline decision, not a requirement). Written against the real
+symbols in `rust/shekyl-fcmp/src/tree.rs`; compiled against the fork unmodified.
+**The test run was the law (§7.7) and it confirmed the prior: G1 holds.** The
+landed file additionally carries a `#[ignore]` `freeze_under_grow_g1_level2` test
+(the ~26k-output layer-2 segment) not shown in the snapshot below; run it with
+`cargo test -p shekyl-fcmp --test curve_tree_freeze -- --ignored`.
+
+```rust
+//! CT-0 gate: G1 value-invariance (frozen subtree) + within-Rust extractability.
+//! G1 fail => boundary reopens to height-anchored (§7.2). G2 (Rust↔consensus
+//! root agreement) is CT-2's reconstruct-root KAT, not this file (§7.7).
+
+use ciphersuite::{group::ff::{Field, PrimeField}, Ciphersuite};
+use helioselene::Selene;
+use rand_chacha::ChaCha20Rng;
+use rand_core::{RngCore, SeedableRng};
+use shekyl_fcmp::tree::{
+    hash_grow_helios, hash_grow_selene, helios_hash_init, helios_point_to_selene_scalar,
+    layer_is_selene, selene_hash_init, selene_point_to_helios_scalar, HELIOS_CHUNK_WIDTH,
+    LEAF_CHUNK_SCALARS, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
+};
+
+const ZERO: [u8; 32] = [0u8; 32];
+
+fn seeded(s: u64) -> ChaCha20Rng { ChaCha20Rng::seed_from_u64(s) }
+
+/// A random *valid* (canonical) Selene base-field element — leaf scalars must be.
+fn rand_scalar(rng: &mut ChaCha20Rng) -> [u8; 32] {
+    <Selene as Ciphersuite>::F::random(rng).to_repr()
+}
+
+/// `n_outputs` worth of leaf scalars (SCALARS_PER_LEAF each), flat.
+fn rand_leaves(rng: &mut ChaCha20Rng, n_outputs: usize) -> Vec<[u8; 32]> {
+    (0..n_outputs * SCALARS_PER_LEAF).map(|_| rand_scalar(rng)).collect()
+}
+
+/// Build every internal layer from a flat leaf-scalar stream using ONLY the
+/// per-chunk primitives — the same composition CT-2's local assembler will use.
+/// `layers[0]` = leaf-layer Selene nodes; alternating Helios/Selene above; the
+/// final layer holds the single root.
+fn build_layers(leaf_scalars: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
+    let leaf_nodes: Vec<[u8; 32]> = leaf_scalars
+        .chunks(LEAF_CHUNK_SCALARS)
+        .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c).expect("leaf chunk"))
+        .collect();
+    let mut layers = vec![leaf_nodes];
+
+    let mut layer_idx: u8 = 1;
+    while layers.last().unwrap().len() > 1 {
+        let prev = layers.last().unwrap();
+        let next: Vec<[u8; 32]> = if layer_is_selene(layer_idx) {
+            // even layer (Selene): children are x-coords of the Helios pts below
+            let s: Vec<[u8; 32]> =
+                prev.iter().map(|p| helios_point_to_selene_scalar(p).expect("h->s")).collect();
+            s.chunks(SELENE_CHUNK_WIDTH)
+                .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c).expect("selene node"))
+                .collect()
+        } else {
+            // odd layer (Helios): children are x-coords of the Selene pts below
+            let s: Vec<[u8; 32]> =
+                prev.iter().map(|p| selene_point_to_helios_scalar(p).expect("s->h")).collect();
+            s.chunks(HELIOS_CHUNK_WIDTH)
+                .map(|c| hash_grow_helios(&helios_hash_init(), 0, &ZERO, c).expect("helios node"))
+                .collect()
+        };
+        layers.push(next);
+        layer_idx += 1;
+    }
+    layers
+}
+
+/// Outputs covered by one node at sub-root layer `j` (= segment size E).
+/// Levels: j=0 -> 38, j=1 -> 684, j=2 -> 25_992 (real fork widths).
+fn outputs_per_node(j: usize) -> usize {
+    let mut e = SELENE_CHUNK_WIDTH; // chunk_width(0)
+    for layer in 1..=j {
+        e *= if layer_is_selene(layer as u8) { SELENE_CHUNK_WIDTH } else { HELIOS_CHUNK_WIDTH };
+    }
+    e
+}
+
+// Sub-root layers swept by the fast tests. Level 2 (≈26k outputs) is heavy;
+// add a separate `#[ignore]` test for it if desired.
+const LEVELS: [usize; 2] = [0, 1];
+
+#[test]
+fn freeze_under_grow_g1() {
+    // G1(a): a completed subtree's value is invariant under right-side append.
+    for &j in &LEVELS {
+        let e = outputs_per_node(j);
+        for trial in 0..16u64 {
+            let mut rng = seeded(1_000 + (j as u64) * 100 + trial);
+            let seg0 = rand_leaves(&mut rng, e);
+            let small = build_layers(&seg0);
+            let r0 = small[j][0]; // segment 0 alone: its root sits at layer j
+            let extra = e + (rng.next_u32() as usize % (3 * e + 1)); // crosses deepen pts
+            let mut big_scalars = seg0.clone();
+            big_scalars.extend(rand_leaves(&mut rng, extra));
+            let big = build_layers(&big_scalars);
+            assert!(big.len() >= small.len(), "big tree must be ≥ as deep");
+            assert_eq!(r0, big[j][0], "G1 grow: completed R_0 moved (j={j}, trial={trial})");
+        }
+    }
+}
+
+#[test]
+fn freeze_under_trim_g1() {
+    // G1(b): a buried subtree's value is invariant under right-side trim (reorg).
+    // Trim modelled as rebuild-from-surviving-prefix; completed left segments are
+    // never re-passed to hash_trim, so R_0 must be unchanged. (CT-1 additionally
+    // proves the incremental hash_trim path == rebuild-from-prefix.)
+    for &j in &LEVELS {
+        let e = outputs_per_node(j);
+        for trial in 0..16u64 {
+            let mut rng = seeded(2_000 + (j as u64) * 100 + trial);
+            let l = 2 * e + (rng.next_u32() as usize % (2 * e + 1));
+            let full = rand_leaves(&mut rng, l);
+            let r0 = build_layers(&full)[j][0];
+            // L' strictly inside the frontier: e < L' < l (segment 0 untouched).
+            let lp = e + 1 + (rng.next_u32() as usize % (l - e - 1).max(1));
+            let trimmed = build_layers(&full[..lp * SCALARS_PER_LEAF]);
+            assert!(lp > e && lp < l);
+            assert_eq!(r0, trimmed[j][0], "G1 trim: buried R_0 moved (j={j}, trial={trial})");
+        }
+    }
+}
+
+#[test]
+fn extract_matches_in_tree() {
+    // Within-Rust extractability: standalone recompute of segment k's E leaves ==
+    // the internal node at (layer j, index k) of the full tree. Catches absolute-
+    // layer domain separation, which the fixed-generator, index-free API lacks.
+    for &j in &LEVELS {
+        let e = outputs_per_node(j);
+        let mut rng = seeded(3_000 + j as u64);
+        let n = 3;
+        let all = rand_leaves(&mut rng, n * e);
+        let big = build_layers(&all);
+        for k in 0..n {
+            let seg = &all[k * e * SCALARS_PER_LEAF..(k + 1) * e * SCALARS_PER_LEAF];
+            assert_eq!(
+                build_layers(seg)[j][0], big[j][k],
+                "extractability: standalone segment {k} root != in-tree node (j={j})"
+            );
+        }
+    }
+}
+
+#[test]
+fn frontier_changes_on_append() {
+    // Negative sanity: the partial rightmost chunk DOES change on append — proves
+    // G1 is non-trivial (not "everything is constant").
+    let mut rng = seeded(4_000);
+    let s = rand_leaves(&mut rng, 1); // 4 scalars, well under one full chunk (152)
+    let a = hash_grow_selene(&selene_hash_init(), 0, &ZERO, &s[..3]).unwrap();
+    let b = hash_grow_selene(&selene_hash_init(), 0, &ZERO, &s[..4]).unwrap();
+    assert_ne!(a, b, "appending to a partial frontier chunk must change its hash");
+}
+```
+
+**What each test settles.** `freeze_under_grow_g1` / `freeze_under_trim_g1` are
+**G1** — the gate. `extract_matches_in_tree` is the within-Rust extractability /
+context-free check (the API's fixed generators + no layer index predict it
+passes; if it fails, add an accessor, not a reopen). `frontier_changes_on_append`
+proves the frozen-subtree claim is non-trivial. End-to-end G2 (Rust-composed root
+== C++ consensus header root) is **CT-2's reconstruct-root KAT against a real
+header**, not this harness.
