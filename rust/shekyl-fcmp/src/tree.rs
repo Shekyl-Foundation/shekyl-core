@@ -223,6 +223,74 @@ pub fn helios_point_to_selene_scalar(helios_point: &[u8; 32]) -> Option<[u8; 32]
 }
 
 // ---------------------------------------------------------------------------
+// Batch layer composition
+// ---------------------------------------------------------------------------
+
+/// Compose every curve-tree layer from a flat leaf-scalar stream, batch-style.
+///
+/// Each node is built from its init point over its full child set via
+/// [`hash_grow_selene`] / [`hash_grow_helios`] (offset 0, zero old-child) — no
+/// stateful frontier is carried. `layers[0]` is the leaf (Selene) layer; layers
+/// alternate Helios (odd) and Selene (even) above; the final layer holds the
+/// single root. The leaf layer chunks the scalar stream by [`LEAF_CHUNK_SCALARS`];
+/// internal layers chunk the converted child nodes by [`SELENE_CHUNK_WIDTH`] /
+/// [`HELIOS_CHUNK_WIDTH`].
+///
+/// # Single-composition discipline
+///
+/// This is the canonical wallet-side composition. The wallet's segment assembler
+/// (forward sync and truncate-and-rebuild reorg), the CT-0 freeze gate, and
+/// CT-2's reconstruct-root KAT all call this exact function rather than
+/// reimplementing the composition — otherwise the "two implementations must
+/// agree" trap reopens (see `docs/design/CURVE_TREE_CLIENT.md` §7.7). Agreement
+/// with the daemon's *incremental* `hash_grow`/`hash_trim` path is a separate
+/// property, proven within Rust by the `curve_tree_freeze` integration test and
+/// end-to-end by CT-2's KAT against a real header root.
+///
+/// Returns `vec![vec![]]` for an empty input; callers handle the empty tree. The
+/// point↔scalar conversions are total for legitimately-occurring nodes (asserted
+/// by the `node_conversions_are_total` test), so the internal `expect`s do not
+/// fire on valid leaf sets.
+pub fn build_layers(leaf_scalars: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
+    const ZERO: [u8; 32] = [0u8; 32];
+
+    let leaf_nodes: Vec<[u8; 32]> = leaf_scalars
+        .chunks(LEAF_CHUNK_SCALARS)
+        .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c).expect("leaf chunk"))
+        .collect();
+    let mut layers = vec![leaf_nodes];
+
+    let mut layer_idx: u8 = 1;
+    while layers.last().expect("layers non-empty").len() > 1 {
+        let prev = layers.last().expect("layers non-empty");
+        let next: Vec<[u8; 32]> = if layer_is_selene(layer_idx) {
+            // even layer (Selene): children are x-coords of the Helios pts below
+            let scalars: Vec<[u8; 32]> = prev
+                .iter()
+                .map(|p| helios_point_to_selene_scalar(p).expect("helios->selene"))
+                .collect();
+            scalars
+                .chunks(SELENE_CHUNK_WIDTH)
+                .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c).expect("selene node"))
+                .collect()
+        } else {
+            // odd layer (Helios): children are x-coords of the Selene pts below
+            let scalars: Vec<[u8; 32]> = prev
+                .iter()
+                .map(|p| selene_point_to_helios_scalar(p).expect("selene->helios"))
+                .collect();
+            scalars
+                .chunks(HELIOS_CHUNK_WIDTH)
+                .map(|c| hash_grow_helios(&helios_hash_init(), 0, &ZERO, c).expect("helios node"))
+                .collect()
+        };
+        layers.push(next);
+        layer_idx += 1;
+    }
+    layers
+}
+
+// ---------------------------------------------------------------------------
 // Hash initialization points
 // ---------------------------------------------------------------------------
 

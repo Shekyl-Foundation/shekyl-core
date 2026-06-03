@@ -713,25 +713,72 @@ into `rust/shekyl-fcmp/tests/` as the CT-0 scratch artifact (a test, not
 production — no `src/` change pre-gate).
 
 **RESULT (CT-0 run, 2026-06): G1 PASSES — boundary is settled, no reopen.**
-The harness landed at `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` and compiled
-against the real fork unmodified. All gate tests pass:
+The harness landed at `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (12 tests,
+lint-clean) and compiled against the real fork unmodified.
 
-- `freeze_under_grow_g1` (sub-root layers j=0 and j=1, 16 trials each crossing
-  ≥1 deepen boundary) — completed `R_k` invariant under right-side append. ✓
-- `freeze_under_trim_g1` (same levels, 16 trials each, trim strictly inside the
-  frontier) — buried `R_k` invariant under right-side trim. ✓
-- `extract_matches_in_tree` — standalone recompute of segment `k` byte-equals the
-  in-tree internal node at `(layer j, index k)`; **branch 2 of the decision tree
-  does not fire** (the index-free, fixed-generator API has no absolute-layer
-  domain separation, so no accessor is needed). ✓
+**Pinned assembly strategy (this is what the harness encodes).** The **wallet**
+assembles segments by *batch composition* (`build_layers`) and reorgs by
+*truncate-the-leaf-array + rebuild the surviving prefix*. It carries no stateful
+frontier and never calls the incremental `hash_grow`(prev/offset/old/new) or
+`hash_trim` primitives. A wallet is not the daemon: it is not perf-bound at
+consensus scale, and prefix-rebuild is simpler than stateful rollback — freeze
+(G1) guarantees the buried `R_k` survive a right-side truncation, so prefix-rebuild
+*is* freeze-under-grow restricted to a shorter input. The incremental
+`hash_grow`/`hash_trim` primitives are the **daemon's** path. Two consequences:
+
+1. **`build_layers` is promoted into `shekyl-fcmp::tree`** (no longer a test-local
+   fn) as the *single* composition. The wallet's segment assembler, the CT-0 gate,
+   and CT-2's reconstruct-root KAT all call this one function — it must not be
+   reimplemented, or the "two implementations must agree" trap reopens.
+2. **`freeze_under_trim_g1` is renamed `freeze_under_prefix_rebuild`** — it is the
+   wallet's actual reorg path (truncate + rebuild), and deliberately does **not**
+   exercise the `hash_trim` primitive. A reviewer must not read CT-0 as "trim is
+   covered"; incremental trim is daemon-side and covered by the Tier-2 agreement
+   tests + CT-2's KAT.
+
+**Gate (batch composition — the wallet's path):**
+
+- `freeze_under_grow_g1` (j=0, j=1; 16 trials each crossing ≥1 deepen) — completed
+  `R_k` invariant under right-side append. ✓
+- `freeze_at_exact_boundaries` — `R_0` invariant at the exact-boundary totals
+  `{E, E+1, 2E, 2E+1, 3E}` (deepen off-by-ones live exactly here). ✓
+- `freeze_under_prefix_rebuild` (j=0, j=1; 16 trials, prefix strictly inside the
+  frontier) — buried `R_k` invariant under truncate-and-rebuild. ✓
+- `extract_matches_in_tree` (looped: j=0 ×16, j=1 ×4) — standalone recompute of
+  segment `k` byte-equals the in-tree node at `(layer j, index k)`; **decision-tree
+  branch 2 does not fire** (index-free, fixed-generator API → no absolute-layer
+  domain separation → no accessor). ✓
+- `node_conversions_are_total` — over a size sweep spanning several deepen
+  boundaries, every point↔scalar conversion the assembler relies on returns
+  `Some` (the `expect`s in `build_layers` cannot fire on valid leaf sets — no
+  tree-assembly liveness bug). ✓
 - `frontier_changes_on_append` (negative sanity) — the partial rightmost chunk
   *does* change on append, so G1 is non-trivial. ✓
 - `freeze_under_grow_g1_level2` (`#[ignore]`, ~25,992-output segment) — G1 holds
-  at the layer-2 segment scale we'd actually pick. ✓
+  at the layer-2 segment scale. Mechanism-complete coverage is `LEVELS = [0,1]`
+  (both deepen types: Helios-over-Selene and Selene-over-Helios); level-2 is
+  shard-size realism for CT-2's KAT, deliberately out of the fast gate. ✓
+
+**Tier 2 (daemon-incremental ↔ wallet-batch agreement — what `R_k` content-addressing
+and CT-2's KAT rest on):**
+
+- `incremental_grow_equals_batch_selene` / `..._helios` — appending children one
+  at a time via the stateful grow signature equals the batch chunk hash. ✓
+- `grow_update_equals_rebatch_selene` — the non-zero old-child (in-place update)
+  path equals rebuilding the chunk with the new child. ✓
+- `trim_inverts_partial_grow_selene` / `..._helios` — `hash_trim` of children
+  `[m..n)` equals the batch build of the surviving prefix `[0..m)`. ✓
+- `trim_undeepen_returns_to_prefix` — tree-level deepen→undeepen via the real
+  `hash_trim`: grow one output past the first deepen, trim it back, and the tree
+  returns to its pre-deepen state (the most divergence-prone transition). ✓
 
 Outcome is **branch 3**: §7 position-aligned segment boundary stands; CT-1 schema
-is unblocked with no `shekyl-fcmp` accessor dependency. The only residual is CT-2's
-Rust↔C++ root-agreement KAT (end-to-end G2), which §7.7 already assigns to CT-2.
+is unblocked with no `shekyl-fcmp` accessor dependency. Under the batch pin there
+is **no separate "Tier 3" wallet-incremental fuzz** — the wallet has no stateful
+path to fuzz (its reorg is prefix-rebuild, already gated). The daemon's full
+incremental↔batch agreement is owned end-to-end by **CT-2's reconstruct-root KAT**
+(Rust `build_layers` root == C++ consensus header root); Tier 2 above is the
+within-Rust down-payment on that agreement.
 
 ---
 
@@ -785,9 +832,9 @@ Rust↔C++ root-agreement KAT (end-to-end G2), which §7.7 already assigns to CT
 
 | PR | Scope | Key files |
 |----|-------|-----------|
-| **CT-0** | **Gate spike — DONE, G1 PASSES.** Appendix A harness proved **G1** value-invariance (§7.7) + within-Rust extractability against the real fork; layer-2 scale included. Branch 3: §7 stands, no accessor, CT-1 unblocked. `E` derivation (§7.2.2) confirmed via `outputs_per_node`. | `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (landed; test, no `src/` change) |
-| **CT-1** | `shekyl-curve-tree` crate skeleton + **subtree-aligned segment** `LeafStore` keyed by `R_k` (pin/prune seam, §7.6) + types (`AssembledPath`, `OutputIdentity`, `ReferenceBlock`) + no-secrets structural test | new crate |
-| **CT-2** | Layer recompute + path extraction (`assemble`) over a **synthetic** leaf set; reconstruct-root KAT; C3-shape invariant | `assemble`, `shekyl-fcmp::tree` |
+| **CT-0** | **Gate spike — DONE, G1 PASSES.** 12-test harness proved **G1** value-invariance + exact-boundary freeze + within-Rust extractability + conversion totality (batch path) **and** daemon-incremental↔batch agreement (Tier 2: incremental-grow/trim == batch) against the real fork; layer-2 scale included. Branch 3: §7 stands, no accessor, CT-1 unblocked. Pinned **batch/prefix-rebuild** wallet strategy; **promoted `build_layers` into `shekyl-fcmp::tree`** as the single composition; renamed trim test → `freeze_under_prefix_rebuild`. | `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (landed) + `rust/shekyl-fcmp/src/tree.rs` (`build_layers`) |
+| **CT-1** | `shekyl-curve-tree` crate skeleton + **subtree-aligned segment** `LeafStore` keyed by `R_k` (pin/prune seam, §7.6) + types (`AssembledPath`, `OutputIdentity`, `ReferenceBlock`) + no-secrets structural test. Segment assembler + truncate-and-rebuild reorg call `shekyl-fcmp::tree::build_layers` (no reimplementation). | new crate |
+| **CT-2** | Path extraction (`assemble`) over a **synthetic** leaf set composed via the promoted `build_layers`; **reconstruct-root KAT** = Rust `build_layers` root == C++ consensus header root (owns end-to-end daemon-incremental↔batch agreement, subsuming "Tier 3"); C3-shape invariant | `assemble`, `shekyl-fcmp::tree` |
 | **CT-3** | **Source-agnostic** bulk-segment fetch + delta sync + per-segment root verify against header; reorg rollback by segment | `sync`, peer-pluggable client |
 | **CT-4** | Reference-block selection + horizon/rebuild (§5); `select_reference_block` | `client` |
 | **CT-5** | Wire into 2A signer behind the §3.5 contract (replaces synthetic vectors); 2A §3.7.6 terminology correction (§5.4) | `shekyl-engine-core`, `PHASE_2A_SEND_PATH.md` |
@@ -819,10 +866,15 @@ is the only forward requirement).
 - [ ] §5.4 cross-edit `PHASE_2A_SEND_PATH.md` §3.7.6 (two ages, not one).
 - [ ] §6 bulk RPC contract + reconstruct-root KAT in `SHEKYLD_PREREQUISITES.md`.
 - [ ] §3.5 contract matches the synthetic vectors 2A already codes against.
-- [x] **GATE** §7.7 G1 value-invariance confirmed by Appendix A (CT-0, 2026-06):
-  G1 PASSES against the real fork (branch 3 — §7 stands, no accessor). Reopening
-  criterion is G1 only (G2 → accessor / CT-2 KAT, not reopen);
-  `E` derived as a subtree level (38/684/25,992), not a block count.
+- [x] **GATE** §7.7 G1 value-invariance confirmed by CT-0 (2026-06): G1 PASSES
+  against the real fork (branch 3 — §7 stands, no accessor). Reopening criterion is
+  G1 only (G2 → accessor / CT-2 KAT, not reopen); `E` derived as a subtree level
+  (38/684/25,992), not a block count.
+- [x] **Assembly strategy pinned (CT-0):** wallet = batch `build_layers` +
+  truncate-and-rebuild reorg; daemon = incremental `hash_grow`/`hash_trim`.
+  `build_layers` promoted into `shekyl-fcmp::tree` as the single composition (CT-1
+  assembler / CT-2 KAT / production all call it). Tier-2 tests prove
+  incremental↔batch agreement; CT-2 KAT owns it end-to-end (no separate Tier 3).
 - [ ] §7.2 segment = subtree-aligned position range keyed by frozen `R_k`; shard =
   visual unit; position↔height is presentation lookup.
 - [ ] §7.3 content-addressed fetch (`R_k` = infohash, reject on receipt);
@@ -842,16 +894,27 @@ is the only forward requirement).
 
 ## Appendix A. CT-0 harness (G1 + within-Rust extractability)
 
-**LANDED at `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` and PASSING (2026-06).**
-A **test, not production** (no `src/` change). It uses `rand` + `rand_chacha`
-(already dev-deps); `proptest` is **not** a workspace dep, so this is `rand`-driven
-and seeded for reproducibility (add `proptest` only if input shrinking is wanted —
-a dependency-discipline decision, not a requirement). Written against the real
-symbols in `rust/shekyl-fcmp/src/tree.rs`; compiled against the fork unmodified.
-**The test run was the law (§7.7) and it confirmed the prior: G1 holds.** The
-landed file additionally carries a `#[ignore]` `freeze_under_grow_g1_level2` test
-(the ~26k-output layer-2 segment) not shown in the snapshot below; run it with
-`cargo test -p shekyl-fcmp --test curve_tree_freeze -- --ignored`.
+**LANDED and PASSING (2026-06). The authoritative artifact is the file
+`rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (12 tests, lint-clean) — not the
+snapshot below.** It uses `rand` + `rand_chacha` (already dev-deps); `proptest` is
+**not** a workspace dep, so this is `rand`-driven and seeded for reproducibility
+(add `proptest` only if input shrinking is wanted — a dependency-discipline
+decision, not a requirement). The test run was the law (§7.7) and confirmed the
+prior: G1 holds.
+
+> **The fenced snapshot below is the pre-review draft and is SUPERSEDED.** The
+> landed file differs in three ways pinned during CT-0 review (see §7.7 RESULT):
+> (1) `build_layers` was **promoted into `shekyl-fcmp::tree`** and is imported, not
+> defined locally; (2) `freeze_under_trim_g1` was **renamed
+> `freeze_under_prefix_rebuild`** (it is truncate-and-rebuild, the wallet's reorg
+> path — not the `hash_trim` primitive); (3) the file adds `freeze_at_exact_boundaries`,
+> `node_conversions_are_total`, a looped `extract_matches_in_tree`, the `#[ignore]`
+> level-2 test, and the **Tier-2** daemon-incremental↔batch agreement tests
+> (`incremental_grow_equals_batch_{selene,helios}`, `grow_update_equals_rebatch_selene`,
+> `trim_inverts_partial_grow_{selene,helios}`, `trim_undeepen_returns_to_prefix`).
+> Read the file for the current harness; the snapshot is retained only to show the
+> minimal G1 core. Run the heavy level-2 case with
+> `cargo test -p shekyl-fcmp --test curve_tree_freeze -- --ignored`.
 
 ```rust
 //! CT-0 gate: G1 value-invariance (frozen subtree) + within-Rust extractability.
@@ -1006,10 +1069,15 @@ fn frontier_changes_on_append() {
 }
 ```
 
-**What each test settles.** `freeze_under_grow_g1` / `freeze_under_trim_g1` are
-**G1** — the gate. `extract_matches_in_tree` is the within-Rust extractability /
-context-free check (the API's fixed generators + no layer index predict it
-passes; if it fails, add an accessor, not a reopen). `frontier_changes_on_append`
-proves the frozen-subtree claim is non-trivial. End-to-end G2 (Rust-composed root
-== C++ consensus header root) is **CT-2's reconstruct-root KAT against a real
-header**, not this harness.
+**What each test settles (current landed file).** `freeze_under_grow_g1`,
+`freeze_at_exact_boundaries`, and `freeze_under_prefix_rebuild` are **G1** — the
+gate (append, exact-boundary, and the wallet's truncate-and-rebuild reorg).
+`extract_matches_in_tree` (looped) is the within-Rust extractability / context-free
+check (the API's fixed generators + no layer index predict it passes; if it failed,
+add an accessor, not a reopen — it passed, so no accessor). `node_conversions_are_total`
+rules out an assembler liveness bug in the point↔scalar `expect`s.
+`frontier_changes_on_append` proves the frozen-subtree claim is non-trivial. The
+**Tier-2** tests prove the daemon's incremental `hash_grow`/`hash_trim` agree
+byte-for-byte with the wallet's batch `build_layers` (what `R_k` content-addressing
+needs). End-to-end G2 (Rust-composed root == C++ consensus header root) is **CT-2's
+reconstruct-root KAT against a real header**, not this harness.
