@@ -25,9 +25,66 @@
   Stage 5 `ArchivalEngine` disbursement is the live third-consumer candidate (archival
   is otherwise additive and does not reopen the FSM). Ratified: `Accruing`/`Claimable`
   stay separate; `PendingBroadcast` discard drops the instance (no terminal
-  `Discarded`); R0-D6 post-unstake claims confirmed. Backstop dependency for any future
+  `Discarded`); R0-D6 post-unstake claims confirmed.   Backstop dependency for any future
   nullifier-set pruning workstream flagged in `FOLLOWUPS.md` (only out-of-claim-window
-  nullifiers prunable).
+  nullifiers prunable). **§5.2 reorg reconciliation collapsed to a single authoritative
+  full-rebuild** (`claimed_epochs = {S ∈ window : x·G_S ∈ post-reorg chain set}`):
+  removes the prior incremental "un-claim epochs observed at/above `fork_height`" step,
+  which presumed a per-epoch observation height the `EpochSet` does not carry. The collapse
+  is **forcing, not preferential**: the incremental path requires a field that does not
+  exist and should not (storing it would foreclose the bitset encoding the roaring-vs-bitset
+  wire choice is weighing), so the height-free rebuild is the only implementable mechanism —
+  in-session reorg and post-`Restore` resync are now one operation, `claimed_epochs` stays a
+  pure (payload-free) index set, and `claim_pending_epochs` (runtime-only) is never
+  repopulated by reorg. The reorg path persists `ledger → stake → persist` (§5.3 parity)
+  with **no transactional atomicity** — a crash mid-rewind self-heals on reopen via the
+  rebuild, which runs before any claimable balance is exposed. §5 is **designed-complete**
+  but box-pending two forward-dependencies. **§4.7 message protocol now pinned (D1–D4):**
+  reorg is **folded onto `ApplyStakeEvents { reorg_rewind }`** rather than a separate
+  `RewindTo` — handled rewind-first in one uninterruptible actor turn (atomicity: nothing
+  interleaves between rewind and forward replay; mirrors the ledger's `reorg_rewind` field).
+  Reorg semantics are **clear-all / replay-all of the full surviving own-nullifier set
+  across the whole post-reorg chain** (a windowed `[fork_height, tip]` replay would drop the
+  below-fork survivors of a lock that straddles the fork), with **heights living in the
+  scanner**, never in the payload-free `claimed_epochs`. The `claim_pending_epochs` lifecycle
+  is wired as a `PrepareClaimBuild` side-effect (set, idempotent under union) + a new
+  `AbandonClaim` message (clear on staleness/discard, **touching `claim_pending_epochs` only,
+  never `claimed_epochs`** — whose sole authority is the on-chain nullifier). `Snapshot`
+  excludes `claim_pending_epochs` and `Restore` starts it empty. This **discharges §5's
+  first forward-dependency (§4.7)**; only the consensus-track `pop_block` nullifier-revert
+  (cross-tree atomicity) the wallet reorg mirror assumes still holds the §5 box open.
+  **`EpochSet` wire/sealed encoding pinned (§3.3.2):** a fixed **`u16` relative bitmask**
+  anchored at the public `creation_height` (2 fixed bytes, one set per stake), **not
+  roaring/croaring**. Consensus bounds `claimed_epochs` to ≤15 elements over a contiguous
+  ≤15-wide window (tier-3 = 150,000 blocks ÷ 10,000 blocks/settlement-epoch = 15
+  settlement-epochs = `MAX_EPOCHS_PER_CLAIM`), so roaring's large-sparse-domain compression
+  has nothing to compress and would only add overhead + a crate dependency. The bitmask is
+  payload-free by construction — the anchor is the public creation height and the mask is
+  purely relative, so there is no field in which a per-epoch height could live, which is
+  what forecloses the incremental reorg path (§5.2) structurally rather than by discipline.
+  **`StakeId` derivation pinned (§3.3.3):** `cSHAKE256(customization = "shekyl/stake-id-v1",
+  input = tx_hash ‖ le_u64(index_in_transaction))`, full 32-byte XOF read, mirroring the
+  in-workspace `derive_output_handle` (`shekyl-crypto-pq/handle.rs`) idiom — **cSHAKE256, not
+  `cn_fast_hash`, not BLAKE3.** `cn_fast_hash` (`shekyl-crypto-hash`) is **inherited**
+  Keccak-256 with CryptoNote 0x01 padding, a consensus-critical primitive whose purpose is
+  byte-identity with `src/crypto/keccak.c` / upstream Monero; deriving a new wallet-local id
+  with it drags inherited legacy crypto into post-CryptoNote code, against the
+  `00-mission.mdc` modern-not-inherited / PQC-hardened posture (an intermediate pass had
+  "corrected" the Round-1 BLAKE3 placeholder to `cn_fast_hash` on reuse grounds — that read
+  the intent backwards). cSHAKE256 (FIPS 202 / SP 800-185) is the workspace's PQC-aligned
+  hash (already used by `key_actor`/`local_keys`/`traits::key`/`handle`) **and**
+  dependency-clean: `sha3 = "0.10"` (exposing `CShake256`) is already a workspace dependency
+  (verified at source: `shekyl-crypto-pq`, `shekyl-shard-visual`), whereas `blake3` is not —
+  so modern-not-inherited and `17-dependency-discipline.mdc` select the *same* primitive, and
+  BLAKE3 would add a crate for no gain. Domain separation is native via cSHAKE's
+  `customization` parameter (no hand-rolled input prefix; `"shekyl/stake-id-v1"` is distinct
+  from `"shekyl/output-handle-v1"`, so no collision despite both absorbing `tx_hash`); input
+  fields are fixed-width so no length prefix is needed; no `view_secret` (the id is
+  non-secret, not a secret-keyed handle). The id derives only from the on-chain
+  `(tx_hash, index)` and is therefore rescan-stable (load-bearing for mapping
+  `StakedOutputConfirmed` / `OwnNullifierObserved` events back to the same persisted
+  instance); the `v1` customization + a wallet-internal KAT guard persistence stability (a
+  bump is a pre-genesis `rm -rf` migration).
 - **staking: confidential-claim entitlement `D` pinned + remainder range-proof
   construction closed (Round 2, §6.4.1 decisions 1(a)/1(b)).** Corrected the
   underspecified `D = SCALE` to `D = D_tier · SCALE_rate = 2^(k+1)`: `D_tier = 2`

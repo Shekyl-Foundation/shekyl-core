@@ -6934,6 +6934,18 @@ one place to confirm each item's relationship to the wallet stack.
   consumes `ArchivalEvent` values via the merge protocol the same
   way it consumes `StakeEvent` values.
 
+  *E-factoring trigger breadcrumb (Phase 2b §8.9):* when designing
+  the **archival-yield disbursement** path, check whether it adds a
+  **staker-initiated claim tx**. If it does, that is the first clause
+  of the `PHASE_2B_STAKE_LIFECYCLE.md` §8.9 reversion trigger firing
+  (third claim-tx-type) — factor the shared staleness/broadcast
+  primitive then, which the wallet duplicated (E shape) precisely to
+  defer until a third consumer appeared. A pointer, not a task:
+  archival is otherwise additive and does not reopen the stake FSM;
+  this only flags the staleness-gate factoring as coming due if
+  disbursement is claim-tx-shaped (protocol-side `ArchivalEvent`
+  merge with no staker-initiated tx does not trip it).
+
   *Why sibling, not child of `StakeEngine`:* slashing-domain
   integrity (a bug in archival logic that slashes archival-yield
   cannot be misrouted to slash principal-yield if the engines
