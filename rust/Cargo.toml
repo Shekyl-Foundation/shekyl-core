@@ -35,6 +35,10 @@ members = [
     # Shekyl-native scanner crate
     "shekyl-scanner",
 
+    # Wallet-side FCMP++ curve-tree client (docs/design/CURVE_TREE_CLIENT.md):
+    # local membership-path assembly and block-derived root reconstruction.
+    "shekyl-curve-tree",
+
     # Canonical engine state types (transfers, runtime state, staker pool)
     "shekyl-engine-state",
 

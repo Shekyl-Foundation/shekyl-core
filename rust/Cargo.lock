@@ -3742,6 +3742,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-curve-tree"
+version = "3.1.0"
+dependencies = [
+ "shekyl-fcmp",
+ "shekyl-oxide",
+]
+
+[[package]]
 name = "shekyl-daemon-rpc"
 version = "3.1.0"
 dependencies = [

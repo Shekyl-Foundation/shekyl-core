@@ -258,12 +258,50 @@ pub fn build_layers(leaf_scalars: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
         .chunks(LEAF_CHUNK_SCALARS)
         .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c).expect("leaf chunk"))
         .collect();
-    let mut layers = vec![leaf_nodes];
+    // The leaf layer is layer 0 (Selene); `build_upper_layers` is given that
+    // layer along with its own index (0) and builds layer 1 upward.
+    build_upper_layers(leaf_nodes, 0)
+}
 
-    let mut layer_idx: u8 = 1;
+/// Hash a layer of nodes up to the root, returning every layer from
+/// `initial_layer` (inclusive) to the root.
+///
+/// Factored out of [`build_layers`] so the two consumers share one composition
+/// (`docs/design/CURVE_TREE_CLIENT.md` §7.7, open question #12): the from-leaves
+/// path calls `build_layers` (which computes the leaf layer then delegates
+/// here), and the wallet's steady-state from-cached-`R_k` hot path calls this
+/// directly with its cached frozen sub-roots as `initial_layer`. Keeping a
+/// single upper-layer composition prevents the "two implementations must agree"
+/// trap from reopening above the leaf layer.
+///
+/// `start_layer_idx` is the absolute tree-layer index of `initial_layer`
+/// itself; it determines the Selene/Helios parity of each layer built on top
+/// (the layer constructed directly above `initial_layer` is layer
+/// `start_layer_idx + 1`, and its parity selects the hash). For the from-leaves
+/// path the leaf layer is layer 0, so `build_layers` passes 0. A caller passing
+/// cached sub-roots must pass the layer index those sub-roots occupy.
+///
+/// Returns `vec![initial_layer]` (a single layer) when `initial_layer` already
+/// has `<= 1` node — the root is then `result.last()[0]` (or the empty-tree
+/// case is handled by the caller; see `build_layers`).
+pub fn build_upper_layers(initial_layer: Vec<[u8; 32]>, start_layer_idx: u8) -> Vec<Vec<[u8; 32]>> {
+    const ZERO: [u8; 32] = [0u8; 32];
+
+    let mut layers = vec![initial_layer];
+    // Index of the layer currently on top of `layers` (initially `initial_layer`).
+    let mut current_layer_idx = start_layer_idx;
     while layers.last().expect("layers non-empty").len() > 1 {
+        // The layer about to be built sits one level above the current top.
+        // `checked_add` makes overflow an explicit panic rather than a release-
+        // mode wrap that would silently flip the Selene/Helios parity. Real
+        // trees are only a handful of layers deep (branching factor in the tens
+        // to low hundreds), so this is unreachable in practice and guards only
+        // against a pathological `start_layer_idx`.
+        let built_layer_idx = current_layer_idx.checked_add(1).expect(
+            "curve-tree layer index overflowed u8 (tree depth exceeds any real configuration)",
+        );
         let prev = layers.last().expect("layers non-empty");
-        let next: Vec<[u8; 32]> = if layer_is_selene(layer_idx) {
+        let next: Vec<[u8; 32]> = if layer_is_selene(built_layer_idx) {
             // even layer (Selene): children are x-coords of the Helios pts below
             let scalars: Vec<[u8; 32]> = prev
                 .iter()
@@ -285,7 +323,7 @@ pub fn build_layers(leaf_scalars: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
                 .collect()
         };
         layers.push(next);
-        layer_idx += 1;
+        current_layer_idx = built_layer_idx;
     }
     layers
 }
