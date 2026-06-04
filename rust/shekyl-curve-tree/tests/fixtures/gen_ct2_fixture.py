@@ -169,12 +169,19 @@ def _read_varint(buf: bytes, pos: int) -> tuple[int, int]:
     val = 0
     shift = 0
     while True:
+        if pos >= len(buf):
+            raise RuntimeError(f"truncated tx_extra varint at offset {pos}")
         b = buf[pos]
         pos += 1
         val |= (b & 0x7F) << shift
         if (b & 0x80) == 0:
             break
         shift += 7
+        # A 64-bit value needs at most 10 continuation bytes; anything longer
+        # is a malformed/oversized varint. Fail loudly per the "raise rather
+        # than guess" discipline instead of shifting unboundedly.
+        if shift > 63:
+            raise RuntimeError(f"oversized tx_extra varint ending at offset {pos}")
     return val, pos
 
 
