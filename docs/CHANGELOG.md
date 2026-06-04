@@ -24,7 +24,11 @@
   **floor-dominated knee** **`k = 48 ⇒ D = 2⁴⁹`** (`SCALE_RATE_K`): the precision
   sweep's worst-case relative rate-quantization error falls until `k = 48`
   (`2.1e-5`) and then plateaus (the irreducible reward floor, not the rate scale,
-  dominates), with a 139-bit margin and 132-bit `N·amount` overflow headroom.
+  dominates), with a 139-bit margin and 132-bit `N·amount` overflow headroom. The
+  knee is **lifetime-invariant**: it is set by the smallest *meaningful* rate,
+  floored by the era-independent meaningful-yield cutoff, and the sweep grid spans
+  down to the terminal tail subsidy — so emission decay (0.90/yr) does not move it
+  (`knee_is_lifetime_invariant_not_genesis_only`).
   New integer core + de-risking bundle in
   `rust/shekyl-staking/src/entitlement.rs` (`tier_num_reduced`, `denominator`,
   `SCALE_RATE_K`, `reward_and_remainder`, `precision_sweep`, `recommend_k_knee`,

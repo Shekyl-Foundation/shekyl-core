@@ -30,16 +30,31 @@ const MAX_EPOCHS_PER_CLAIM: u128 = 15;
 /// A rate producing less than this per-unit yield over the claim window is
 /// economically negligible (here: < 1e-5 = 0.001% yield), so its quantization
 /// precision does not gate the `D` recommendation.
+///
+/// This is a **yield** threshold (`rate · window`), hence **era-independent**: it
+/// bounds the smallest *meaningful* rate at `MIN_MEANINGFUL_YIELD / window`
+/// regardless of *when* that rate occurs. Emission decays 0.90/yr, so the
+/// rate range shrinks over the emission lifetime — but the knee
+/// ([`SCALE_RATE_K`]) is set by the smallest meaningful rate, and decay only
+/// changes *which* `(budget, band)` realize a given rate, not this floor. A rate
+/// below the floor is sub-meaningful by definition. See
+/// `knee_is_lifetime_invariant_not_genesis_only` — the constant is the lifetime
+/// knee, not the genesis knee. The lever that *would* move it is this cutoff,
+/// not the era.
 const MIN_MEANINGFUL_YIELD: f64 = 1e-5;
 
 /// Realistic `ρ_e = budget_e/band_sum_e` operating points spanning the rate
 /// range: (per-block staker emission, weighted staked). High rate = small band
 /// + early emission; low rate = large band + tail emission.
 fn rate_grid() -> Vec<RateOperatingPoint> {
-    // Per-block staker emission ≈ 0.15 · block_emission.
-    let emit_early: u128 = 153_000_000_000; // 0.15 · 1.02e12
-    let emit_mid: u128 = 10_000_000_000; // 0.15 · ~6.7e10
-    let emit_tail: u128 = 90_000_000; // 0.15 · 6e8
+    // Per-block staker emission ≈ 0.15 · block_emission. Spans the emission
+    // lifetime: `emit_early` is genesis; `emit_mid` is ~15× lower (≈ 26 yr out at
+    // 0.90/yr decay); `emit_tail` is the *terminal* tail subsidy (the asymptotic
+    // emission floor — maximally far future, past any 3-decade point). So the
+    // rate range is lifetime-spanning, not near-term.
+    let emit_early: u128 = 153_000_000_000; // 0.15 · 1.02e12  (genesis)
+    let emit_mid: u128 = 10_000_000_000; // 0.15 · ~6.7e10  (~26 yr out)
+    let emit_tail: u128 = 90_000_000; // 0.15 · 6e8  (terminal tail subsidy)
                                       // Weighted staked band: participation × circulating × tier_mult.
     let band_small: u128 = 10_000_000_000_000; // ~1% early circulating, low mult
     let band_mid: u128 = 10_000_000_000_000_000; // ~mid chain
@@ -378,6 +393,73 @@ fn precision_sweep_recommends_a_k() {
             knee_err
         );
     }
+}
+
+/// The knee is **lifetime-invariant**, not a genesis artifact. Emission decays
+/// 0.90/yr (~25× over three decades), shrinking rates over the emission
+/// lifetime; rate-quantization error is worst for the smallest rate, so a knee
+/// computed against near-term rates only would undershoot. This test confirms
+/// the committed sweep does not undershoot:
+///
+/// 1. the rate grid spans down to the **terminal tail subsidy** (far-future,
+///    past any 3-decade point), not just genesis/near-term rates; and
+/// 2. the meaningful-yield cutoff is a *yield* threshold, hence era-independent —
+///    it floors the smallest meaningful rate at `MIN_MEANINGFUL_YIELD / window`
+///    regardless of era — and at the pinned `SCALE_RATE_K` the rate-quantization
+///    error **even at that floor rate** already sits below the floor-dominated
+///    plateau. So the rate term has crossed under the reward floor for *every*
+///    meaningful rate; a lower-emission era cannot lift it back (it would only
+///    produce sub-meaningful rates). The knee is therefore `SCALE_RATE_K` across
+///    the lifetime, and the lever that *would* move it is the cutoff, not time.
+#[test]
+fn knee_is_lifetime_invariant_not_genesis_only() {
+    // (1) The grid reaches the terminal-subsidy regime — far below any near-term
+    // rate, so the knee is computed against lifetime rates, not genesis.
+    let smallest_grid_rate = rate_grid()
+        .iter()
+        .map(|p| {
+            #[allow(clippy::cast_precision_loss)]
+            let r = p.budget_e as f64 / p.band_sum_e as f64;
+            r
+        })
+        .fold(f64::INFINITY, f64::min);
+    assert!(
+        smallest_grid_rate < 1e-10,
+        "grid must span the far-future tail regime (smallest rate {smallest_grid_rate:e})"
+    );
+
+    // (2) The era-independent meaningful-rate floor: smaller rates are
+    // sub-meaningful by definition of the yield cutoff, regardless of era.
+    #[allow(clippy::cast_precision_loss)]
+    let window = (MAX_EPOCHS_PER_CLAIM * RATE_EPOCH_BLOCKS) as f64;
+    let rate_floor = MIN_MEANINGFUL_YIELD / window;
+
+    // Rate-quantization rel. error at the floor rate ≈ 1/ρ_scaled, ρ_scaled =
+    // rate · 2^k. At the pinned knee this must already be below the plateau.
+    #[allow(clippy::cast_precision_loss)]
+    let two_pow_k = (1u128 << SCALE_RATE_K) as f64;
+    let rho_scaled_floor = rate_floor * two_pow_k;
+    let rate_quant_err_at_floor = 1.0 / rho_scaled_floor;
+
+    let rows = precision_sweep(
+        &SWEEP_KS,
+        &rate_grid(),
+        &stake_grid(),
+        MAX_EPOCHS_PER_CLAIM * RATE_EPOCH_BLOCKS,
+        MIN_MEANINGFUL_YIELD,
+    );
+    let plateau = rows
+        .iter()
+        .find(|r| r.k == SCALE_RATE_K)
+        .expect("SCALE_RATE_K is swept")
+        .max_relative_error;
+
+    assert!(
+        rate_quant_err_at_floor < plateau,
+        "lifetime knee exceeds SCALE_RATE_K: rate-quant at the meaningful-rate \
+         floor ({rate_quant_err_at_floor:e}) ≥ floor-dominated plateau ({plateau:e}) \
+         — re-pin k or revisit MIN_MEANINGFUL_YIELD"
+    );
 }
 
 /// Recorder: emits the sweep to `docs/test_vectors/staking/entitlement_precision_sweep.json`.
