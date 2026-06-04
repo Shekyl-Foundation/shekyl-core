@@ -472,6 +472,23 @@ level-0/1 segment. **This is the Round-1 KAT and the TDD oracle.**
   `(maturity, gindex)`;
 - a **reorg whose churned span contains `+10`/staked leaves** — S3 on the full
   leaf mix.
+- **seam-parity: scanner `Extra` `0x07` extraction == daemon `parse_tx_extra`**
+  on adversarial `tx_extra` — duplicate `0x07` tags, malformed/truncated tags,
+  and tag ordering. The lean-crate split (CT-1) is faithful to the daemon's own
+  two-stage structure: scanner `Extra` owns the **parse** stage (find the `0x07`
+  blob), `shekyl-curve-tree::recon::extract_leaf_hashes` owns the **validate**
+  stage (absent / `len % 32 != 0` → empty, slice). The validate half is mirrored
+  and tested (CT-1); the **parse half's parity is unverified** and is the
+  remaining seam obligation — scanner's `Extra::read` must extract the `0x07`
+  blob byte-identically to `blockchain_db.cpp`'s `parse_tx_extra` +
+  `find_tx_extra_field_by_type` (both return the **first** matching field; the
+  parity question is malformed/duplicate/ordering behavior, not the happy path).
+  A well-formed coinbase `tx_extra` (Tier A) never exercises it, and a crafted
+  duplicate/malformed `tx_extra` needs a spend to construct, so it rides the same
+  spend-dependent reversion as the malformed-length validate case (§9 #2). Until
+  verified, the parse-stage assumption is: **scanner `Extra` is the sole parser
+  and matches the daemon** — a silent divergence here shifts `h_pqc` per output
+  and breaks every leaf.
 
 Tier B's assertions are **written now** (the rule is enumerated and correct) but
 **`#[ignore]`-gated** pending its fixture, so Gap 1/Gap 2 do not become false
@@ -572,9 +589,16 @@ same artifact when the send path can generate them.
    `PqcLeafHashes` with a `pqc_leaf_hashes()` accessor; the leaf builder layers
    the `extract_leaf_hashes` validation on top. No new parser (Shekyl-first
    reuse). Layering (curve-tree depends on scanner vs factor `Extra` lower) is a
-   CT-1 crate-skeleton decision. The malformed-length / parse-rejection parity
-   edge is Tier B (needs a crafted extra ⇒ a spend); the V3-genesis
-   absent-fallback never fires, so Tier A under-exercises it for daemon-parity.
+   CT-1 crate-skeleton decision — **landed lean** (`shekyl-curve-tree` does not
+   depend on scanner; the seam is parse-stage = scanner `Extra`, validate-stage =
+   `recon::extract_leaf_hashes`, faithful to the daemon's own two-stage
+   structure). The **validate** half's parity is mirrored and tested; the
+   **parse** half's parity (scanner `Extra` `0x07` extraction == daemon
+   `parse_tx_extra` on duplicate/malformed/ordered tags) is the **seam-parity
+   Tier-B obligation** recorded in §8.2 — not closed by this resolution. The
+   malformed-length / parse-rejection edge needs a crafted extra ⇒ a spend; the
+   V3-genesis absent-fallback never fires, so Tier A under-exercises it for
+   daemon-parity.
 3. **Torsion in x-extraction — RESOLVED (§3.2).** Not a divergence surface: the
    leaf primitive is shared FFI (`construct_leaf`), and `Hp(O)` clears the
    cofactor (`hash_to_point.rs:86`). No engineered-torsion vector in the KAT;
