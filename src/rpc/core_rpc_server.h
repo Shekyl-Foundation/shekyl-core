@@ -91,7 +91,12 @@ namespace cryptonote
         const bool restricted,
         const std::string& port,
         bool allow_rpc_payment,
-        const std::string& proxy = {}
+        const std::string& proxy = {},
+        // When false, skip binding the epee HTTP listener. RPC is served by the
+        // Rust/Axum transport (see daemon.cpp), which binds the configured port
+        // itself; the epee handlers are still reachable via the direct dispatch
+        // shim in core_rpc_ffi.cpp, which never touches m_net_server's acceptor.
+        bool bind_http_listener = true
       );
     network_type nettype() const { return m_core.get_nettype(); }
 

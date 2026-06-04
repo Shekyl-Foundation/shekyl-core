@@ -70,6 +70,10 @@ namespace {
   struct rpc_instance final {
     std::unique_ptr<cryptonote::core_rpc_server> server;
     std::string description;
+    // Configured listen port for this instance. When the epee acceptor is not
+    // bound (Rust/Axum transport active), get_binded_port() returns 0, so the
+    // port is recorded here for the Axum server to bind. Empty when unset.
+    std::string bind_port;
 
     rpc_instance(cryptonote::core & core, t_node_server & p2p, std::string desc)
       : server(new cryptonote::core_rpc_server{core, p2p})
@@ -160,16 +164,22 @@ struct t_internals {
     auto const & restricted_rpc_port_arg = cryptonote::core_rpc_server::arg_rpc_restricted_bind_port;
     const bool has_restricted_rpc_port_arg = !command_line::is_arg_defaulted(vm, restricted_rpc_port_arg);
 
+    // When the Rust/Axum transport is enabled it owns the HTTP listener, so the
+    // epee acceptor must not bind (or it would hold the port and Axum's bind
+    // would fail with EADDRINUSE). Pass bind_http_listener accordingly and
+    // record the configured port for run() to hand to Axum.
+    const bool bind_epee_listener = !rust_rpc_enabled;
     {
       rpcs.emplace_back(core, p2p, "core");
+      rpcs.back().bind_port = main_rpc_port;
       auto const & proxy = command_line::get_arg(vm, daemon_args::arg_proxy);
       MGINFO("Initializing " << rpcs.back().description << " RPC server...");
-      if (!rpcs.back().server->init(vm, restricted, main_rpc_port, !has_restricted_rpc_port_arg, proxy))
+      if (!rpcs.back().server->init(vm, restricted, main_rpc_port, !has_restricted_rpc_port_arg, proxy, bind_epee_listener))
       {
         throw std::runtime_error("Failed to initialize " + rpcs.back().description + " RPC server.");
       }
-      MGINFO(rpcs.back().description << " RPC server initialized OK on port: "
-        << rpcs.back().server->get_binded_port());
+      MGINFO(rpcs.back().description << " RPC server initialized OK on port: " << main_rpc_port
+        << (bind_epee_listener ? "" : " (epee acceptor not bound; served by Axum)"));
     }
 
     if (has_restricted_rpc_port_arg)
@@ -177,13 +187,14 @@ struct t_internals {
       auto const restricted_rpc_port = command_line::get_arg(vm, restricted_rpc_port_arg);
       auto const & proxy = command_line::get_arg(vm, daemon_args::arg_proxy);
       rpcs.emplace_back(core, p2p, "restricted");
+      rpcs.back().bind_port = restricted_rpc_port;
       MGINFO("Initializing " << rpcs.back().description << " RPC server...");
-      if (!rpcs.back().server->init(vm, true, restricted_rpc_port, true, proxy))
+      if (!rpcs.back().server->init(vm, true, restricted_rpc_port, true, proxy, bind_epee_listener))
       {
         throw std::runtime_error("Failed to initialize " + rpcs.back().description + " RPC server.");
       }
-      MGINFO(rpcs.back().description << " RPC server initialized OK on port: "
-        << rpcs.back().server->get_binded_port());
+      MGINFO(rpcs.back().description << " RPC server initialized OK on port: " << restricted_rpc_port
+        << (bind_epee_listener ? "" : " (epee acceptor not bound; served by Axum)"));
     }
   }
 
@@ -266,24 +277,24 @@ bool Daemon::run(bool interactive)
       for (auto & rpc : mp_internals->rpcs)
       {
         auto * server = rpc.server.get();
-        std::string bind_addr = "127.0.0.1:" + std::to_string(server->get_binded_port());
+        // The epee acceptor was deliberately not bound at init time (Axum owns
+        // the listener), so get_binded_port() would return 0; use the configured
+        // port recorded on the instance instead.
+        std::string bind_addr = "127.0.0.1:" + rpc.bind_port;
         auto * rust_handle = shekyl_daemon_rpc_start(
           static_cast<void*>(server), bind_addr.c_str(), false);
-        if (rust_handle)
+        if (!rust_handle)
         {
-          MGINFO("Axum RPC listening on " << bind_addr << " (epee HTTP skipped)");
-          mp_internals->rust_rpc_handles.push_back(rust_handle);
+          // Axum is the sole RPC transport when rust_rpc_enabled; there is no
+          // bound epee listener to fall back to (the fallback was interim
+          // scaffolding for the migration and has been removed). Treat a start
+          // failure as fatal rather than leaving the daemon silently without RPC.
+          throw std::runtime_error(
+            "Failed to start Axum RPC for " + rpc.description + " on " + bind_addr);
         }
-        else
-        {
-          MERROR("Failed to start Axum RPC on " << bind_addr << ", falling back to epee");
-          MGINFO("Starting " << rpc.description << " RPC server...");
-          if (!rpc.server->run(2, false))
-          {
-            throw std::runtime_error("Failed to start " + rpc.description + " RPC server.");
-          }
-          MGINFO(rpc.description << " RPC server started ok");
-        }
+        MGINFO("Axum RPC listening on " << bind_addr << " for " << rpc.description
+          << " (epee acceptor not bound)");
+        mp_internals->rust_rpc_handles.push_back(rust_handle);
       }
     }
     else
