@@ -31,14 +31,39 @@
 //!   are `{1.0, 1.5, 2.0}` ([`crate::tiers`]), whose LCD is **2**, so
 //!   `tier_num_reduced ∈ {2, 3, 4}` represents them *exactly*
 //!   ([`tier_num_reduced`]). `D_TIER = 2` contributes exactly one bit.
-//! - **`SCALE_rate = 2^k`** is the sole precision dial; [`precision_sweep`]
-//!   finds the smallest `k` whose rate quantization is economically negligible.
+//! - **`SCALE_rate = 2^k`** is the sole precision dial; post-fold (decision
+//!   1(b)) precision is free up to the field-wrap margin, so [`precision_sweep`]
+//!   locates the **floor-dominated knee** and [`SCALE_RATE_K`] pins `k = 48`
+//!   there (not the obsolete "smallest k clearing 0.1%").
 //!
-//! Both being powers of two makes `D = 2^(k+1)` a power of two, so the remainder
-//! range proof `0 ≤ ρ < D` is a **native `(k+1)`-bit power-of-two range** that
-//! bounds `ρ < D` *exactly* — important because the reward output's Monero
-//! `AggregateRangeProof` is fixed at 64 bits and a 64-bit slot would only prove
-//! `ρ < 2^64`, which does not close the rounding-over-claim trap (§6.4.1 (a)).
+//! Both being powers of two makes `D = 2^(k+1)` a power of two, so `[0, D)` is a
+//! native power-of-two range. `D = 2^49` is the **value** bound on the honest
+//! remainder; it is *not* the width of the range proof (see below).
+//!
+//! # The remainder range proof's width — decision 1(b)
+//!
+//! The inflation-critical content of the remainder bound is the **lower** bound
+//! `ρ ≥ 0`, **not** a tight upper bound `ρ < D`. Over-claiming `reward+k`
+//! (`k ≥ 1`) forces the integer remainder `ρ' = N·amount − D·(reward+k) < 0`;
+//! a field-wrap to a non-negative `ρ' < 2^64` would require
+//! `reward+k > (ℓ − 2^64)/D ≈ 2^203`, but the reward output's own range proof
+//! bounds it `< 2^64` — a **139-bit margin** at the pinned `k = 48`
+//! ([`wraparound_over_claim_margin_bits`]). So **any** range width
+//! `w ∈ [⌈log2 D⌉, ~203]` is inflation-sound; the honest `ρ < D < 2^64` always
+//! fits.
+//!
+//! Therefore `C_ρ` is **folded into the claim tx's existing reward-output
+//! `AggregateRangeProof`** (native 64-bit, `mask·G + amount·H` matches
+//! `C_ρ = ρ_blind·G + ρ·H`, `ρ < 2^49` fits `u64`) as one additional aggregated
+//! commitment — cheapest (no new proof system, marginal cost ≈ one commitment in
+//! an aggregate that already exists) and sound. The folded `C_ρ` is the **same
+//! group element** the entitlement relation consumes, bound in one transcript
+//! (§6.4.1 decision 3) — not a free-floating commitment. A *tight* `⌈log2 D⌉`-bit
+//! range would only additionally forbid **under**-claim (`reward < floor`),
+//! which mints *less*, is the prover's own loss, preserves `Σ reward ≤ budget`,
+//! and is **not** load-bearing. See
+//! [`CONFIDENTIAL_STAKING.md`](../../../docs/design/CONFIDENTIAL_STAKING.md)
+//! §6.4.1 decision 1(b).
 //!
 //! # Floor loss is always sub-atomic
 //!
@@ -51,6 +76,8 @@
 use crate::tiers::tier_by_id;
 use shekyl_economics::params::SCALE;
 
+pub mod transcript;
+
 /// Reduced tier-factor denominator: the LCD of the pinned tier multipliers
 /// `{1.0, 1.5, 2.0}`. `D = D_TIER · SCALE_rate`.
 ///
@@ -60,6 +87,35 @@ use shekyl_economics::params::SCALE;
 /// be re-derived from the new LCD. Pre-genesis the tier set is launch-final, so
 /// this is a constant.
 pub const D_TIER: u64 = 2;
+
+/// The pinned rate-precision exponent: `SCALE_rate = 2^SCALE_RATE_K`, hence
+/// `D = D_TIER · SCALE_rate = 2^(SCALE_RATE_K + 1)`.
+///
+/// **Chosen by the floor-dominated knee, not a precision threshold.** Decision
+/// 1(b) folded `C_ρ` into the reward output's native 64-bit range proof, so the
+/// remainder only has to fit `2^64` and rate precision is **free** up to the
+/// field-wrap margin `wraparound_over_claim_margin_bits(k) = 187 − k`. The
+/// precision sweep ([`precision_sweep`]) shows the worst-case *relative*
+/// rate-quantization error falling until `k = 48` (≈ 2.1e-5) and then
+/// **plateauing** (identical at `k = 48, 52, 56, 60`): past the knee the
+/// irreducible reward floor `floor(N·amount/D)`, not the rate scale, sets the
+/// worst-case error, so finer quantization cannot improve payout accuracy.
+/// `k = 48` is the smallest `k` at that knee — rate quantization is as fine as
+/// it can matter — with a **139-bit** field-wrap margin and ~130-bit `N·amount`
+/// overflow headroom ([`overflow_headroom_bits`]), both far from binding.
+///
+/// The earlier `k = 38` was the smallest `k` clearing an *arbitrary* 0.1%
+/// relative-error floor — the correct rule when precision traded against proof
+/// width, obsolete the moment the fold fixed the width at 64.
+///
+/// **Reversion (`21-reversion-clause-discipline.mdc`):** re-pin only if (a) the
+/// realistic rate range (`config/economics_params.json`) moves the knee, or
+/// (b) the reward-output range width changes (it sets the margin via
+/// [`OUTPUT_RANGE_PROOF_BITS`]). Safe band: any `k` with a comfortably positive
+/// margin (`≥ ~64`); below the knee wastes free precision, above it erodes
+/// margin for no fidelity gain. (The u128 sweep harness is faithful only to
+/// `k ≈ 60`; the real upper bound is the analytic margin, not the simulation.)
+pub const SCALE_RATE_K: u32 = 48;
 
 /// The Ed25519 scalar-field order `ℓ = 2^252 + 27742317777372353535851937790883648493`.
 /// The cancel relation `N·amount − D·reward − ρ = 0` must hold over the
@@ -101,10 +157,40 @@ pub fn denominator(k: u32) -> u128 {
     u128::from(D_TIER) * scale_rate(k)
 }
 
-/// Bit-width of the remainder range proof: `⌈log2 D⌉ = k + 1`.
+/// Bit-width of the honest remainder's **value** bound `⌈log2 D⌉ = k + 1`.
+///
+/// Note this is the bound on the *value* `ρ < D`, not the width of the range
+/// proof actually used: `C_ρ` is folded into the native 64-bit reward-output
+/// `AggregateRangeProof` (decision 1(b); [`OUTPUT_RANGE_PROOF_BITS`]).
 #[must_use]
 pub fn remainder_proof_bits(k: u32) -> u32 {
     k + 1
+}
+
+/// Approximate bit-length of the Ed25519 scalar-field order `ℓ ≈ 2^252`.
+pub const SCALAR_FIELD_BITS: u32 = 252;
+
+/// Width of the reward-output range proof Monero's `AggregateRangeProof` uses
+/// (`COMMITMENT_BITS`). `C_ρ` is folded into this aggregate (decision 1(b)), and
+/// the reward commitment is itself bounded to this width by the same proof.
+pub const OUTPUT_RANGE_PROOF_BITS: u32 = 64;
+
+/// Margin (bits) protecting the native-64-bit fold against a **field-wrap
+/// over-claim**.
+///
+/// To mint `reward+k` (`k ≥ 1`) the integer remainder `ρ' = N·amount −
+/// D·(reward+k)` is negative; the only way past a non-negative range proof is a
+/// field wrap `ρ' + ℓ < 2^64`, which needs `D·(reward+k) > ℓ − 2^64`, i.e.
+/// `reward+k > (ℓ − 2^64)/D ≈ 2^(SCALAR_FIELD_BITS − ⌈log2 D⌉)`. But the reward
+/// output's own range proof bounds `reward+k < 2^OUTPUT_RANGE_PROOF_BITS`. The
+/// gap between those exponents is the margin; positive ⇒ no reachable wrap, so
+/// the 64-bit fold is inflation-sound. For the pinned `k = 48` ([`SCALE_RATE_K`],
+/// `D = 2^49`) it is `252 − 49 − 64 = 139` bits.
+#[must_use]
+pub fn wraparound_over_claim_margin_bits(k: u32) -> i32 {
+    i32::try_from(SCALAR_FIELD_BITS).expect("252 fits i32")
+        - i32::try_from(remainder_proof_bits(k)).expect("k+1 fits i32")
+        - i32::try_from(OUTPUT_RANGE_PROOF_BITS).expect("64 fits i32")
 }
 
 /// The consensus rate-quantization step: `ρ_e_scaled = floor(numer · 2^k / denom)`,
@@ -182,6 +268,11 @@ pub struct PrecisionRow {
     pub min_nonzero_rho_scaled: u128,
     /// True iff some operating rate floored to a zero scaled rate at this `k`.
     pub any_rate_underflowed: bool,
+    /// Field-wrap over-claim margin at this `k` ([`wraparound_over_claim_margin_bits`]):
+    /// `187 − k` bits. This is the **only ceiling** on `k` post-fold (decision
+    /// 1(b)) — precision is otherwise free, so the sweep reports error *and*
+    /// margin side by side to make the threshold choice auditable.
+    pub margin_bits: i32,
 }
 
 /// A single realistic operating point for the rate `ρ_e = budget_e / band_sum_e`.
@@ -292,18 +383,38 @@ pub fn precision_sweep(
                 min_nonzero
             },
             any_rate_underflowed: underflowed,
+            margin_bits: wraparound_over_claim_margin_bits(k),
         });
     }
     rows
 }
 
-/// The decision rule: smallest `k` such that (a) no operating rate underflowed
-/// to zero, and (b) the worst relative rate-quantization error is below
-/// `rel_threshold`. Returns the chosen row, or `None` if no swept `k` passes.
+/// The **post-fold** decision rule (decision 1(b) dissolved the precision-vs-width
+/// tradeoff): the smallest `k` at the **floor-dominated knee** — where the
+/// worst-case relative rate-quantization error reaches within `slack`× of its
+/// asymptotic minimum across the swept range. Beyond the knee the irreducible
+/// reward floor, not the rate scale, sets the error, so finer quantization
+/// cannot improve accuracy; below it, free precision is left unused.
+///
+/// Only non-underflowed rows are eligible (an underflowed `k` cannot represent
+/// the smallest operating rate at all). Returns the knee row, or `None` if no
+/// row is eligible.
+///
+/// This **replaces** the obsolete "smallest `k` clearing an arbitrary relative
+/// threshold" rule, which optimized for minimum precision because more
+/// precision was assumed to cost proof width — a cost the fold removed.
 #[must_use]
-pub fn recommend_k(rows: &[PrecisionRow], rel_threshold: f64) -> Option<&PrecisionRow> {
+pub fn recommend_k_knee(rows: &[PrecisionRow], slack: f64) -> Option<&PrecisionRow> {
+    let floor = rows
+        .iter()
+        .filter(|r| !r.any_rate_underflowed)
+        .map(|r| r.max_relative_error)
+        .fold(f64::INFINITY, f64::min);
+    if !floor.is_finite() {
+        return None;
+    }
     rows.iter()
-        .filter(|r| !r.any_rate_underflowed && r.max_relative_error < rel_threshold)
+        .filter(|r| !r.any_rate_underflowed && r.max_relative_error <= floor * slack)
         .min_by_key(|r| r.k)
 }
 

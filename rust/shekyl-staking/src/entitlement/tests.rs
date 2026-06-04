@@ -137,9 +137,12 @@ fn rounding_is_toward_under_claim() {
 }
 
 #[test]
-fn forged_over_claim_has_no_valid_remainder() {
-    // Claiming reward+1 forces ρ' = N·amount − D·(reward+1) < 0, which no
-    // unsigned remainder in [0, D) can satisfy — exactly trap (a) closed.
+fn forged_over_claim_forces_negative_remainder_for_any_k() {
+    // Claiming reward+j (j ≥ 1) forces ρ' = N·amount − D·(reward+j) < 0 as an
+    // integer — so no non-negative remainder exists, for ANY over-claim step,
+    // independent of the range-proof width. The lower bound ρ ≥ 0 is the
+    // inflation-critical half of the bound (decision 1(b)); trap (a) is closed
+    // by ρ ≥ 0, not by a tight upper bound.
     let mut rng = Lcg(0xFEED_FACE);
     for _ in 0..200_000 {
         let k = 16 + (rng.next() % 24) as u32;
@@ -148,12 +151,88 @@ fn forged_over_claim_has_no_valid_remainder() {
         let d = denominator(k);
         let (reward, _rho) = reward_and_remainder(n, amount, k);
         let product = n.saturating_mul(amount);
-        // The honest reward is the unique one with a valid remainder.
-        let forged = reward + 1;
+        for j in 1u128..=4 {
+            let forged = reward + j;
+            assert!(
+                forged.saturating_mul(d) > product,
+                "reward+{j} must exceed N·amount, leaving no non-negative ρ"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_64bit_fold_is_sound_no_reachable_field_wrap() {
+    // Decision 1(b): C_ρ folds into the reward output's native 64-bit
+    // AggregateRangeProof. Soundness rests on the field-wrap over-claim being
+    // unreachable: a wrap needs reward+k ≥ 2^(252−⌈log2 D⌉), but the reward
+    // output's range proof bounds it < 2^64. The margin must be comfortably
+    // positive across every operating k (here the swept and pinned range).
+    for k in 10u32..=64 {
+        let margin = wraparound_over_claim_margin_bits(k);
         assert!(
-            forged * d > product,
-            "reward+1 must exceed N·amount, leaving no ρ ∈ [0,D)"
+            margin > 0,
+            "k={k}: field-wrap over-claim margin is {margin} bits (≤ 0 ⇒ 64-bit \
+             fold unsound; would need a tighter range)"
         );
+    }
+    // Fixed check on the margin arithmetic itself (187 − k), independent of the
+    // pinned k.
+    assert_eq!(wraparound_over_claim_margin_bits(0), 187);
+    // The pinned operating point (SCALE_RATE_K, the floor-dominated knee) keeps
+    // a wide margin (defense in depth): 187 − 48 = 139.
+    assert_eq!(wraparound_over_claim_margin_bits(SCALE_RATE_K), 139);
+    assert_eq!(SCALE_RATE_K, 48);
+}
+
+#[test]
+fn honest_remainder_always_fits_the_64bit_slot() {
+    // The honest remainder ρ < D = 2^(k+1) ≤ 2^64 for every k ≤ 63, so honest
+    // provers can always produce the folded 64-bit range proof. (For the pinned
+    // k=48, ρ < 2^49, with 15 bits to spare in the 64-bit slot.)
+    let mut rng = Lcg(0x5EED_1B0B);
+    for _ in 0..200_000 {
+        let k = 16 + (rng.next() % 24) as u32; // k ∈ [16, 40) ⇒ D ≤ 2^40
+        let n = rng.in_range(0, 1u128 << 50);
+        let amount = rng.in_range(0, MONEY_SUPPLY);
+        let (_reward, rho) = reward_and_remainder(n, amount, k);
+        assert!(rho < (1u128 << OUTPUT_RANGE_PROOF_BITS));
+        assert!(rho < denominator(k));
+    }
+}
+
+#[test]
+fn under_claim_is_representable_but_not_inflationary() {
+    // A *tight* ρ<D range would forbid under-claim; the 64-bit fold permits it.
+    // This test documents that the permitted under-claim mints strictly LESS
+    // than the honest floor (prover's own loss), so it is not load-bearing to
+    // forbid it: reward' = floor − t (t ≥ 1) with ρ' = honest_ρ + t·D < 2^64.
+    for k in [30u32, 38, 40] {
+        let d = denominator(k);
+        let n = 7u128; // N·amount = 7·amount
+        let amount = 1_000_000u128;
+        let (floor_reward, honest_rho) = reward_and_remainder(n, amount, k);
+        let product = n * amount;
+        // Largest under-claim still fitting the 64-bit remainder slot.
+        let max_t = ((1u128 << OUTPUT_RANGE_PROOF_BITS) - 1 - honest_rho) / d;
+        if max_t >= 1 && floor_reward >= 1 {
+            let t = max_t.min(floor_reward);
+            let under_reward = floor_reward - t;
+            let under_rho = product - under_reward * d;
+            assert_eq!(
+                under_reward * d + under_rho,
+                product,
+                "relation still holds"
+            );
+            assert!(
+                under_rho < (1u128 << OUTPUT_RANGE_PROOF_BITS),
+                "ρ' fits 64-bit"
+            );
+            assert!(
+                under_reward < floor_reward,
+                "under-claim mints strictly less"
+            );
+        }
     }
 }
 
@@ -205,7 +284,7 @@ fn aggregate_floor_never_over_pays_budget() {
 fn overflow_headroom_is_comfortable() {
     // Worst-case N·amount uses the capped scaled rate. Even a generously high
     // scaled-rate cap stays far below the Ed25519 scalar field.
-    for k in [24u32, 32, 40, 48] {
+    for k in [24u32, 32, 40, SCALE_RATE_K, 56] {
         // A high scaled-rate cap: ρ_cap_scaled ≈ ρ_cap·2^k. Take ρ_cap ≈ 1e-2
         // (extreme) ⇒ scaled ≈ 0.01·2^k.
         let rho_cap_scaled = scale_rate(k) / 100;
@@ -216,6 +295,10 @@ fn overflow_headroom_is_comfortable() {
             MONEY_SUPPLY,
         );
         let headroom = overflow_headroom_bits(maxna);
+        eprintln!(
+            "  k={k}: max N·amount ≈ 2^{}, overflow headroom {headroom} bits",
+            128 - maxna.leading_zeros()
+        );
         assert!(
             headroom > 64,
             "k={k}: N·amount headroom to ℓ is only {headroom} bits (maxna≈2^{})",
@@ -228,7 +311,12 @@ fn overflow_headroom_is_comfortable() {
 
 // ── Precision sweep: let the data pick k ──
 
-const SWEEP_KS: [u32; 11] = [20, 24, 28, 30, 32, 34, 36, 38, 40, 44, 48];
+// Faithful range of the u128 sweep harness: at k ≳ 60 the *simulation's*
+// `N·amount` saturates u128 (a harness limit, not a consensus property — real
+// arithmetic runs in the ~2^252 scalar field). The post-fold ceiling on k is
+// the analytic field-wrap margin (`wraparound_over_claim_margin_bits`), not the
+// sweep, so the sweep need only span the rise + the floor-dominated plateau.
+const SWEEP_KS: [u32; 11] = [20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60];
 
 #[test]
 fn precision_sweep_recommends_a_k() {
@@ -240,33 +328,56 @@ fn precision_sweep_recommends_a_k() {
         MIN_MEANINGFUL_YIELD,
     );
 
-    // Print the full curve so the human sees where "negligible" begins.
-    eprintln!("\n  k | D bits | max rel err | max abs atomic | min ρ_scaled | underflow");
-    eprintln!("  --+--------+-------------+----------------+--------------+----------");
+    // Print the full curve so the human sees where "negligible" begins and
+    // where the field-wrap margin (the only post-fold ceiling) starts to bite.
+    eprintln!("\n  k | D bits | max rel err | max abs atomic | min ρ_scaled | margin | underflow");
+    eprintln!("  --+--------+-------------+----------------+--------------+--------+----------");
     for r in &rows {
         eprintln!(
-            "  {:>2}| {:>6} | {:>11.3e} | {:>14} | {:>12} | {}",
+            "  {:>2}| {:>6} | {:>11.3e} | {:>14} | {:>12} | {:>6} | {}",
             r.k,
             r.d_bits,
             r.max_relative_error,
             r.max_abs_atomic_error,
             r.min_nonzero_rho_scaled,
+            r.margin_bits,
             r.any_rate_underflowed
         );
     }
 
-    // Decision rule: smallest k with no rate underflow and worst relative
-    // rate-quantization error < 0.1% across the realistic operating range.
-    let chosen = recommend_k(&rows, 1e-3).expect("some swept k must pass");
+    // Post-fold decision rule (decision 1(b)): the floor-dominated knee — the
+    // smallest k whose worst-case relative error is within 2× of its asymptotic
+    // minimum. Past the knee the reward floor, not the rate scale, dominates;
+    // below it, free precision is unused. (The pre-fold "smallest k clearing
+    // 0.1%" rule is retired — it optimized against a proof-width cost the fold
+    // removed.)
+    let chosen = recommend_k_knee(&rows, 2.0).expect("some swept k must be eligible");
     eprintln!(
-        "\n  → recommended k = {} ⇒ SCALE_rate = 2^{}, D = 2^{} ({}-bit remainder range proof)\n",
+        "\n  → knee at k = {} ⇒ SCALE_rate = 2^{}, D = 2^{}; margin {} bits; ρ folds into the 64-bit slot\n",
         chosen.k,
         chosen.k,
         chosen.k + 1,
-        chosen.d_bits
+        chosen.margin_bits
     );
-    // The recommendation must be a real, bounded width (sanity rails).
-    assert!(chosen.d_bits >= 21 && chosen.d_bits <= 49);
+    // The knee is the pinned SCALE_RATE_K, and it sits at the error plateau with
+    // a wide field-wrap margin (the only post-fold ceiling).
+    assert_eq!(
+        chosen.k, SCALE_RATE_K,
+        "knee must match the pinned constant"
+    );
+    assert!(chosen.margin_bits >= 100, "knee must retain a wide margin");
+    // The plateau is real: every k past the knee has the same worst-case
+    // relative error (the reward floor, not rate precision, is binding).
+    let knee_err = chosen.max_relative_error;
+    for r in rows.iter().filter(|r| r.k > chosen.k) {
+        assert!(
+            (r.max_relative_error - knee_err).abs() < knee_err * 1e-6,
+            "k={} error {:e} differs from the knee plateau {:e}",
+            r.k,
+            r.max_relative_error,
+            knee_err
+        );
+    }
 }
 
 /// Recorder: emits the sweep to `docs/test_vectors/staking/entitlement_precision_sweep.json`.
@@ -291,9 +402,9 @@ fn regen_precision_sweep() {
     let mut json = String::from("{\n  \"rows\": [\n");
     for (i, r) in rows.iter().enumerate() {
         json.push_str(&format!(
-            "    {{ \"k\": {}, \"d_bits\": {}, \"max_relative_error\": {:e}, \"max_abs_atomic_error\": {}, \"min_nonzero_rho_scaled\": {}, \"any_rate_underflowed\": {} }}{}\n",
+            "    {{ \"k\": {}, \"d_bits\": {}, \"max_relative_error\": {:e}, \"max_abs_atomic_error\": {}, \"min_nonzero_rho_scaled\": {}, \"margin_bits\": {}, \"any_rate_underflowed\": {} }}{}\n",
             r.k, r.d_bits, r.max_relative_error, r.max_abs_atomic_error,
-            r.min_nonzero_rho_scaled, r.any_rate_underflowed,
+            r.min_nonzero_rho_scaled, r.margin_bits, r.any_rate_underflowed,
             if i + 1 < rows.len() { "," } else { "" }
         ));
     }

@@ -345,25 +345,54 @@ weaken soundness, zero-knowledge, or inflation bounds established for spends.
    block), §4.1, §9 step 2.
 
 3. **Multiplier integrity (P1)** — Recompute `N = tier_num_reduced(tier)·Σ_S K_S_scaled`,
-   `D = D_tier·SCALE_rate = 2³⁹` (**not** `D = SCALE` — `D` is a product of the tier-LCD
-   `D_tier = 2` and the rate-precision scale `SCALE_rate = 2³⁸`, both powers of two; Round-2
-   correction, data-determined `k = 38` by precision sweep);
+   `D = D_tier·SCALE_rate = 2⁴⁹` (**not** `D = SCALE` — `D` is a product of the tier-LCD
+   `D_tier = 2` and the rate-precision scale `SCALE_rate = 2⁴⁸`, both powers of two; Round-2
+   correction, data-determined `k = 48` at the **floor-dominated knee** of the precision sweep —
+   post-1(b) the proof width is fixed at 64, so precision is free up to the field-wrap margin
+   and `k` is pinned where rate quantization stops improving, not at the obsolete 0.1 % floor
+   that gave the former `k = 38`; `entitlement.rs::SCALE_RATE_K`);
    `reward = floor(N·amount/D)` ([`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md)
    §6.4.1, §9). **`D` is a consensus constant** with a reversion clause (re-pin only on
-   tier-set or rate-magnitude change).
+   tier-set or rate-magnitude change, or a reward-output range-width change).
 
 4. **Entitlement (A) — reserve-DLEQ class + bounded remainder** — Relation
-   `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩` with **committed** remainder `C_ρ`, **native 39-bit
-   power-of-two range** `0 ≤ ρ < D` (`D = 2³⁹`; construction per §6.4.1 decision 1(b) —
-   `generalized-bulletproofs` circuit range **or** dedicated 39-bit BP+, **not** the
-   reward output's fixed-64-bit `AggregateRangeProof`, which would only prove `ρ < 2⁶⁴`),
-   rounding toward under-claim, FS domain `shekyl-stake-entitlement-v1`. **Two traps:**
-   (a) omitting `C_ρ` → rounding over-claim (P1 inflation); (b) revealing `ρ` →
-   `amount mod (D/gcd)` deanonymization (P2). Both closed by commit-and-range (§6.4.1).
+   `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩` with **committed** remainder `C_ρ`. **Decision 1(b):**
+   `C_ρ` is **folded into the reward output's native 64-bit `AggregateRangeProof`** as one
+   additional aggregated commitment (`mask·G + amount·H` matches `C_ρ = ρ_blind·G + ρ·H`,
+   `ρ < 2⁴⁹` fits `u64`), **not** a separate/tight proof; the folded `C_ρ` is the **same group
+   element** the entitlement relation consumes, bound across both sub-proofs in one transcript
+   (decision 3), not a free-floating commitment. The inflation-critical bound is the
+   **lower** bound `ρ ≥ 0` — over-claim forces `ρ < 0`, and a field-wrap escape needs
+   `reward > 2²⁰³` while the reward output's own range proof bounds it `< 2⁶⁴` (**139-bit
+   margin** at the pinned `k = 48`; `entitlement.rs::wraparound_over_claim_margin_bits`,
+   test-locked). A *tight*
+   `ρ < D` is **not load-bearing** — it would only forbid under-claim (mints less; self-harm;
+   `Σ reward ≤ budget` preserved). Rounding toward under-claim, FS domain
+   `shekyl-stake-entitlement-v1`. **Audit the soundness chain:** integer cancel (no field
+   wrap, `N·amount ≈ 2¹⁰⁶ ≪ ℓ`) ⇒ `max mint = floor`. **Two traps:** (a) omitting `C_ρ` →
+   rounding over-claim (P1 inflation), closed by `ρ ≥ 0`; (b) revealing `ρ` →
+   `amount mod (D/gcd)` deanonymization (P2), closed by committing `C_ρ` (the looser 64-bit
+   range leaks strictly less about `ρ` than a tight one). (§6.4.1)
 
 5. **Claim linkability (B1)** — `G_S`, `S_le64`, `MAX_EPOCHS_PER_CLAIM = 15`,
    ClaimLinkability vs SAL separation. **DDH split** (§6.3): `x·G_S` unlinkable from
    `x·Hp(O)` across independent NUMS bases — explicit audit assumption.
+
+5a. **Transcript composition / anti-splicing (P1) — decision 3.** All four claim components
+   (subtree membership, ClaimLinkability, entitlement Schnorr, folded remainder range proof)
+   bind to **one shared root `μ_claim = signable_tx_hash`** — not a monolithic transcript.
+   `μ_claim` must cover the full claim: `txin_stake_claim_v2` prefix (`tier`, `creation`,
+   `settlement_epochs`, the **nullifier vector**, subtree **root**), rct base (`C~`, `C_claim`,
+   `C_ρ`), and the folded BP+ hash; it excludes the three signing responses (no circularity).
+   The entitlement Schnorr challenge is
+   `keccak256_to_scalar("shekyl-stake-entitlement-v1" ‖ G ‖ H ‖ N_le ‖ D_le ‖ C~ ‖ C_claim ‖ C_ρ ‖ R ‖ μ_claim)`;
+   its **field set and order** are locked in
+   [`entitlement::transcript`](../rust/shekyl-staking/src/entitlement/transcript.rs) (KAT) so the
+   prover and C++/FFI verifier cannot drift. **Audit:** (i) every public input and `μ_claim` is
+   absorbed by each component (a dropped field is a splice hole); (ii) distinct domain separators
+   prevent cross-component challenge reuse; (iii) `C~`/`C_claim`/`C_ρ` are single public points
+   referenced by all consuming components (no second copy to disagree); (iv) verifier recomputes
+   `μ_claim` and binds all three signing proofs to it (§6.4.8 ordering). (§6.4.1)
 
 6. **Nullifier set separation + cross-tree atomicity** — Stake-claim table; reorg rewind;
    cross-tree stake/unstake `pop_block` atomicity (append-only leaves; claim-after-unstake).
@@ -390,9 +419,15 @@ weaken soundness, zero-knowledge, or inflation bounds established for spends.
 ### Deliverables
 
 - Threat model + proof sketches for **`h_bind` binding**, **window arithmetic**, **rational
-  multiplier**, **(A) bounded-remainder**, **(B1)** with verifier ordering.
+  multiplier**, **(A) bounded-remainder**, **(B1)**, and **transcript composition /
+  anti-splicing** (decision 3) with verifier ordering.
 - Test vectors: `STAKE_CLAIM_GS.json`, **`h_bind` / `creation` encoding**, 5th-position
-  Selene generator + `SCALARS_PER_LEAF=5`, bounded-remainder entitlement vectors (Round 2).
+  Selene generator + `SCALARS_PER_LEAF=5`, bounded-remainder entitlement vectors, and the
+  **entitlement challenge-preimage KAT** (domain ‖ field order ‖ `μ_claim`; field set/order
+  already locked in `entitlement::transcript`, Round 2). **Negative anti-splice vectors
+  (must reject):** (i) entitlement from claim A spliced onto claim B's membership; (ii)
+  mutated nullifier vector with unchanged proofs; (iii) `C_ρ` mismatched between the
+  entitlement and the range proof; (iv) cross-component challenge reuse.
   **Drop:** former `τ·H_t` / `C~_amt` encoding and historical-root-checkpoint vectors (3C
   supersedes).
 - C++ verifier entry point (name TBD Round 2, e.g. `shekyl_fcmp_verify_stake_claim`)

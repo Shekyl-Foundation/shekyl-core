@@ -4,6 +4,54 @@
 
 ### Added
 
+- **staking: confidential-claim entitlement `D` pinned + remainder range-proof
+  construction closed (Round 2, §6.4.1 decisions 1(a)/1(b)).** Corrected the
+  underspecified `D = SCALE` to `D = D_tier · SCALE_rate = 2^(k+1)`: `D_tier = 2`
+  is the LCD of the pinned tier multipliers `{1.0, 1.5, 2.0}` (so
+  `tier_num_reduced ∈ {2,3,4}` exact, one bit) and `SCALE_rate = 2^k` is the
+  precision dial. **Decision 1(b):** the remainder commitment `C_ρ` is **folded
+  into the reward output's existing native 64-bit `AggregateRangeProof`** as one
+  aggregated commitment — *not* a separate or tight `⌈log2 D⌉`-bit proof — and is
+  the **same group element** the entitlement relation consumes, bound across both
+  sub-proofs in one transcript (decision 3). The inflation-critical bound is the
+  **lower** bound `ρ ≥ 0` (over-claim forces `ρ < 0`; the field-wrap escape needs
+  `reward > 2²⁰³` while the reward output's own range proof bounds it `< 2⁶⁴` —
+  a 139-bit margin at the pinned `k`), so any width `∈ [⌈log2 D⌉ … ~203]` is sound
+  and the cheapest is the one already on the wire; a tight `ρ < D` would only
+  forbid harmless under-claim. Because the fold fixes the proof width at 64,
+  precision became **free** up to the field-wrap margin, so `k` is re-pinned from
+  the obsolete "smallest `k` clearing a 0.1 % floor" (`k = 38`) to the
+  **floor-dominated knee** **`k = 48 ⇒ D = 2⁴⁹`** (`SCALE_RATE_K`): the precision
+  sweep's worst-case relative rate-quantization error falls until `k = 48`
+  (`2.1e-5`) and then plateaus (the irreducible reward floor, not the rate scale,
+  dominates), with a 139-bit margin and 132-bit `N·amount` overflow headroom.
+  New integer core + de-risking bundle in
+  `rust/shekyl-staking/src/entitlement.rs` (`tier_num_reduced`, `denominator`,
+  `SCALE_RATE_K`, `reward_and_remainder`, `precision_sweep`, `recommend_k_knee`,
+  `wraparound_over_claim_margin_bits`) with soundness/overflow/fold proptests;
+  committed sweep (with margin column)
+  `docs/test_vectors/staking/entitlement_precision_sweep.json`. Spec:
+  `docs/design/CONFIDENTIAL_STAKING.md` §6.4.1; audit: `docs/AUDIT_SCOPE.md`.
+- **staking: confidential-claim transcript composition / anti-splicing closed
+  (Round 2, §6.4.1 decision 3).** All four claim components (subtree membership,
+  ClaimLinkability, entitlement Schnorr, folded remainder range proof) bind to
+  **one shared root `μ_claim = signable_tx_hash`** — reusing the existing FCMP++
+  message rather than a monolithic transcript (the proof systems are
+  heterogeneous and the BP+ is self-contained; a single transcript would
+  re-architect upstream proofs for zero soundness gain). `μ_claim` covers the
+  full claim — prefix (`tier`, `creation`, `settlement_epochs`, the **nullifier
+  vector**, subtree **root**), rct base (`C~`, `C_claim`, `C_ρ`), and the folded
+  BP+ hash — so moving any component onto another claim, mutating the nullifier
+  set, or swapping `C_ρ` flips the challenge and rejects. The entitlement Schnorr
+  challenge is
+  `keccak256_to_scalar("shekyl-stake-entitlement-v1" ‖ G ‖ H ‖ N_le ‖ D_le ‖ C~ ‖ C_claim ‖ C_ρ ‖ R ‖ μ_claim)`;
+  its consensus-critical **field set + order** are locked dependency-free in
+  `rust/shekyl-staking/src/entitlement/transcript.rs` (`EntitlementChallengeInputs`,
+  `entitlement_challenge_preimage` via `offset` constants) with KAT /
+  field-presence / `μ_claim`-load-bearing tests, so the prover and C++/FFI
+  verifier cannot drift on what is hashed. Spec:
+  `docs/design/CONFIDENTIAL_STAKING.md` §6.4.1 (decision 3) + §6.4.8 verifier
+  ordering; audit: `docs/AUDIT_SCOPE.md` (item 5a + negative anti-splice vectors).
 - **crypto-pq: FA-6 ML-KEM-keyed view-tag pre-filter (T6 account path).**
   Re-key on-wire `view_tag` from `derive_view_tag_x25519` to
   `derive_view_tag_prefilter(ml_kem_ss)`; scanner leg-swap (universal decap →
