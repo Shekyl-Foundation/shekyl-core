@@ -258,9 +258,38 @@ pub fn build_layers(leaf_scalars: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
         .chunks(LEAF_CHUNK_SCALARS)
         .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c).expect("leaf chunk"))
         .collect();
-    let mut layers = vec![leaf_nodes];
+    // The leaf layer is layer 0 (Selene); the upper layers start at layer 1.
+    build_upper_layers(leaf_nodes, 1)
+}
 
-    let mut layer_idx: u8 = 1;
+/// Hash a layer of nodes up to the root, returning every layer from
+/// `initial_layer` (inclusive) to the root.
+///
+/// Factored out of [`build_layers`] so the two consumers share one composition
+/// (`docs/design/CURVE_TREE_CLIENT.md` §7.7, open question #12): the from-leaves
+/// path calls `build_layers` (which computes the leaf layer then delegates
+/// here), and the wallet's steady-state from-cached-`R_k` hot path calls this
+/// directly with its cached frozen sub-roots as `initial_layer`. Keeping a
+/// single upper-layer composition prevents the "two implementations must agree"
+/// trap from reopening above the leaf layer.
+///
+/// `start_layer_idx` is the absolute tree-layer index of `initial_layer`; it
+/// determines the Selene/Helios parity of each layer built on top. For the
+/// from-leaves path the leaf layer is layer 0, so the upper layers start at 1.
+/// A caller passing cached sub-roots must pass the layer index those sub-roots
+/// occupy.
+///
+/// Returns `vec![initial_layer]` (a single layer) when `initial_layer` already
+/// has `<= 1` node — the root is then `result.last()[0]` (or the empty-tree
+/// case is handled by the caller; see `build_layers`).
+pub fn build_upper_layers(
+    initial_layer: Vec<[u8; 32]>,
+    start_layer_idx: u8,
+) -> Vec<Vec<[u8; 32]>> {
+    const ZERO: [u8; 32] = [0u8; 32];
+
+    let mut layers = vec![initial_layer];
+    let mut layer_idx = start_layer_idx;
     while layers.last().expect("layers non-empty").len() > 1 {
         let prev = layers.last().expect("layers non-empty");
         let next: Vec<[u8; 32]> = if layer_is_selene(layer_idx) {
