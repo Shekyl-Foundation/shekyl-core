@@ -292,7 +292,14 @@ pub fn build_upper_layers(initial_layer: Vec<[u8; 32]>, start_layer_idx: u8) -> 
     let mut current_layer_idx = start_layer_idx;
     while layers.last().expect("layers non-empty").len() > 1 {
         // The layer about to be built sits one level above the current top.
-        let built_layer_idx = current_layer_idx + 1;
+        // `checked_add` makes overflow an explicit panic rather than a release-
+        // mode wrap that would silently flip the Selene/Helios parity. Real
+        // trees are only a handful of layers deep (branching factor in the tens
+        // to low hundreds), so this is unreachable in practice and guards only
+        // against a pathological `start_layer_idx`.
+        let built_layer_idx = current_layer_idx.checked_add(1).expect(
+            "curve-tree layer index overflowed u8 (tree depth exceeds any real configuration)",
+        );
         let prev = layers.last().expect("layers non-empty");
         let next: Vec<[u8; 32]> = if layer_is_selene(built_layer_idx) {
             // even layer (Selene): children are x-coords of the Helios pts below
