@@ -4,6 +4,30 @@
 
 ### Added
 
+- **wallet: Phase 2b stake-FSM pending-claim model pinned (Round 2,
+  `PHASE_2B_STAKE_LIFECYCLE.md` §3.4).** A confidential claim is non-spending, so it
+  has no `OutputId` and nothing for `PendingTxEngine`'s output-keyed reservation
+  (`selected_transfer_indices`, verified at `engine/pending.rs`) to lock; the resource
+  a claim reserves is the epoch-nullifier set. Pin: the stake actor gains a
+  **runtime-only** `claim_pending_epochs` reservation (not persisted, not on the
+  wire/sealed region — so the `EpochSet` encoding carries one set per stake, not two),
+  mirroring `PendingTxEngine`'s own crash-self-heal model. `PendingTxEngine` stays
+  **spend-pure** (Hybrid-B): confirm/reorg is already shared via RefreshEngine scan +
+  §5.2 (nullifier marker; verification carried by the still-open §5 reconciliation box),
+  and the only spend-engine-specific sliver — the submit-time staleness gate — is
+  **duplicated** on the claim path (~10 lines) rather than abstracted (E shape),
+  because the gate is a consensus-backstopped UX optimization (a stale claim is rejected
+  at consensus regardless), so copy drift is benign. Rejected: Hybrid-A (lockless
+  `PendingTxEngine` entry) and Option C (generalize the reservation to abstract
+  resources) — both re-merge claim/spend separation or drag staking-domain semantics
+  into the spend engine. Reversion trigger (§8.9): factor a shared staleness/broadcast
+  primitive on the **third claim-tx-type OR a non-backstopped check, whichever first**;
+  Stage 5 `ArchivalEngine` disbursement is the live third-consumer candidate (archival
+  is otherwise additive and does not reopen the FSM). Ratified: `Accruing`/`Claimable`
+  stay separate; `PendingBroadcast` discard drops the instance (no terminal
+  `Discarded`); R0-D6 post-unstake claims confirmed. Backstop dependency for any future
+  nullifier-set pruning workstream flagged in `FOLLOWUPS.md` (only out-of-claim-window
+  nullifiers prunable).
 - **staking: confidential-claim entitlement `D` pinned + remainder range-proof
   construction closed (Round 2, §6.4.1 decisions 1(a)/1(b)).** Corrected the
   underspecified `D = SCALE` to `D = D_tier · SCALE_rate = 2^(k+1)`: `D_tier = 2`
