@@ -173,6 +173,32 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT CMAKE_CROSSCOMPILING)
     endif()
 endif()
 
+# ── Source-change tracking for the cargo custom commands ─────────────────────
+#
+# Each cargo invocation below is wrapped in an `add_custom_command(OUTPUT …)`.
+# Without an explicit `DEPENDS` list, the generator (Ninja/Make) treats the
+# output `.a` as up-to-date for as long as the file exists on disk — it never
+# re-invokes cargo when a `.rs` source or a manifest changes. The result is a
+# silently stale archive: the C++ side relinks against a `libshekyl_*.a` that
+# predates the current Rust sources, which is exactly the failure that linked a
+# month-old FFI into the daemon. We therefore feed cargo's inputs (every `.rs`,
+# every `Cargo.toml`, and the lockfile) into `DEPENDS` so the generator runs
+# cargo whenever they change; cargo's own fingerprinting then decides whether to
+# rewrite each archive (so a no-op change does not force a C++ relink).
+#
+# `CONFIGURE_DEPENDS` makes the generator re-glob at build time, so newly added
+# source files are picked up without a manual re-configure. The `/target/`
+# filter keeps cargo's own build artifacts out of the dependency set.
+file(GLOB_RECURSE _shekyl_rust_sources CONFIGURE_DEPENDS "${RUST_SOURCE_DIR}/*.rs")
+list(FILTER _shekyl_rust_sources EXCLUDE REGEX "/target/")
+file(GLOB_RECURSE _shekyl_rust_manifests CONFIGURE_DEPENDS "${RUST_SOURCE_DIR}/*Cargo.toml")
+list(FILTER _shekyl_rust_manifests EXCLUDE REGEX "/target/")
+set(_shekyl_rust_deps
+    ${_shekyl_rust_sources}
+    ${_shekyl_rust_manifests}
+    "${RUST_SOURCE_DIR}/Cargo.lock"
+)
+
 # ── shekyl-ffi (crypto, staking, economics — linked by all targets) ──────────
 
 add_custom_command(
@@ -181,6 +207,7 @@ add_custom_command(
         ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
         -p shekyl-ffi
     WORKING_DIRECTORY ${RUST_SOURCE_DIR}
+    DEPENDS ${_shekyl_rust_deps}
     COMMENT "${_rust_comment} (shekyl-ffi + shekyl-fcmp)"
     VERBATIM
 )
@@ -231,6 +258,7 @@ add_custom_command(
         ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
         -p shekyl-logging
     WORKING_DIRECTORY ${RUST_SOURCE_DIR}
+    DEPENDS ${_shekyl_rust_deps}
     COMMENT "${_rust_comment} (shekyl-logging)"
     VERBATIM
 )
@@ -273,6 +301,7 @@ add_custom_command(
         ${CARGO_EXECUTABLE} build --locked ${RUST_BUILD_FLAG} ${RUST_TARGET_FLAG}
         -p shekyl-daemon-rpc --lib
     WORKING_DIRECTORY ${RUST_SOURCE_DIR}
+    DEPENDS ${_shekyl_rust_deps}
     COMMENT "${_rust_comment} (shekyl-daemon-rpc)"
     VERBATIM
 )
