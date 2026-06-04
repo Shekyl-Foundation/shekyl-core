@@ -70,9 +70,11 @@ namespace {
   struct rpc_instance final {
     std::unique_ptr<cryptonote::core_rpc_server> server;
     std::string description;
-    // Configured listen port for this instance. When the epee acceptor is not
-    // bound (Rust/Axum transport active), get_binded_port() returns 0, so the
-    // port is recorded here for the Axum server to bind. Empty when unset.
+    // Configured listen host:port for this instance. When the epee acceptor is
+    // not bound (Rust/Axum transport active), get_binded_port() returns 0 and
+    // the bound host is unavailable, so both are recorded here (from the
+    // resolved RPC config) for the Axum server to bind. Empty when unset.
+    std::string bind_host;
     std::string bind_port;
 
     rpc_instance(cryptonote::core & core, t_node_server & p2p, std::string desc)
@@ -178,6 +180,7 @@ struct t_internals {
       {
         throw std::runtime_error("Failed to initialize " + rpcs.back().description + " RPC server.");
       }
+      rpcs.back().bind_host = rpcs.back().server->get_rpc_bind_ip();
       MGINFO(rpcs.back().description << " RPC server initialized OK on port: " << main_rpc_port
         << (bind_epee_listener ? "" : " (epee acceptor not bound; served by Axum)"));
     }
@@ -193,6 +196,7 @@ struct t_internals {
       {
         throw std::runtime_error("Failed to initialize " + rpcs.back().description + " RPC server.");
       }
+      rpcs.back().bind_host = rpcs.back().server->get_rpc_bind_ip();
       MGINFO(rpcs.back().description << " RPC server initialized OK on port: " << restricted_rpc_port
         << (bind_epee_listener ? "" : " (epee acceptor not bound; served by Axum)"));
     }
@@ -278,9 +282,16 @@ bool Daemon::run(bool interactive)
       {
         auto * server = rpc.server.get();
         // The epee acceptor was deliberately not bound at init time (Axum owns
-        // the listener), so get_binded_port() would return 0; use the configured
-        // port recorded on the instance instead.
-        std::string bind_addr = "127.0.0.1:" + rpc.bind_port;
+        // the listener), so get_binded_port()/bound-host would be unavailable;
+        // use the resolved host and port recorded on the instance instead. This
+        // honors --rpc-bind-ip / --rpc-restricted-bind-ip rather than forcing
+        // loopback. (IPv6 dual-bind parity with epee is tracked in FOLLOWUPS;
+        // Axum binds the single configured IPv4 host here.)
+        std::string host = rpc.bind_host.empty() ? "127.0.0.1" : rpc.bind_host;
+        // Bracket IPv6 literals for the host:port form.
+        std::string bind_addr = (host.find(':') != std::string::npos)
+          ? ("[" + host + "]:" + rpc.bind_port)
+          : (host + ":" + rpc.bind_port);
         auto * rust_handle = shekyl_daemon_rpc_start(
           static_cast<void*>(server), bind_addr.c_str(), false);
         if (!rust_handle)

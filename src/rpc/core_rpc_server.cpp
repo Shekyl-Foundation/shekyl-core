@@ -298,6 +298,9 @@ namespace cryptonote
         bind_ipv6_str = rpc_config->restricted_bind_ipv6_address;
       }
     }
+    // Record the resolved host so the daemon can hand it to the Rust/Axum
+    // transport when the epee acceptor is skipped (see daemon.cpp run()).
+    m_rpc_bind_ip = bind_ip_str;
     disable_rpc_ban = rpc_config->disable_rpc_ban;
     const std::string data_dir{command_line::get_arg(vm, cryptonote::arg_data_dir)};
     std::string address = command_line::get_arg(vm, arg_rpc_payment_address);

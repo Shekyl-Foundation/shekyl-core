@@ -99,6 +99,10 @@ namespace cryptonote
         bool bind_http_listener = true
       );
     network_type nettype() const { return m_core.get_nettype(); }
+    // Resolved listen host for this server, valid after init(). Used by the
+    // daemon to build the Rust/Axum bind address when the epee acceptor is not
+    // bound. Empty until init() runs.
+    const std::string& get_rpc_bind_ip() const { return m_rpc_bind_ip; }
 
     CHAIN_HTTP_TO_MAP2(connection_context); //forward http requests to uri map
 
@@ -315,6 +319,11 @@ private:
     std::unique_ptr<rpc_payment> m_rpc_payment;
     bool disable_rpc_ban;
     bool m_rpc_payment_allow_free_loopback;
+    // Resolved listen host for this server (the IP epee would have bound; the
+    // restricted variant resolves to its own bind IP). Recorded in init() so the
+    // Rust/Axum transport can bind the configured address even when the epee
+    // acceptor is skipped and get_binded_port()/host are unavailable.
+    std::string m_rpc_bind_ip;
   };
 }
 
