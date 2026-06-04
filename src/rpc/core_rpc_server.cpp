@@ -274,6 +274,7 @@ namespace cryptonote
       , const std::string& port
       , bool allow_rpc_payment
       , const std::string& proxy
+      , bool bind_http_listener
     )
   {
     m_bootstrap_daemon_proxy = proxy;
@@ -297,6 +298,9 @@ namespace cryptonote
         bind_ipv6_str = rpc_config->restricted_bind_ipv6_address;
       }
     }
+    // Record the resolved host so the daemon can hand it to the Rust/Axum
+    // transport when the epee acceptor is skipped (see daemon.cpp run()).
+    m_rpc_bind_ip = bind_ip_str;
     disable_rpc_ban = rpc_config->disable_rpc_ban;
     const std::string data_dir{command_line::get_arg(vm, cryptonote::arg_data_dir)};
     std::string address = command_line::get_arg(vm, arg_rpc_payment_address);
@@ -390,6 +394,18 @@ namespace cryptonote
     {
       MFATAL(arg_rpc_max_connections_per_private_ip.name << " is bigger than " << arg_rpc_max_connections.name);
       return false;
+    }
+
+    if (!bind_http_listener)
+    {
+      // RPC has been migrated to the Rust/Axum transport, which owns the HTTP
+      // listener and binds the configured port itself (see daemon.cpp run()).
+      // Binding the epee acceptor here too would hold the port and make Axum's
+      // bind fail with EADDRINUSE. All handler/bootstrap/payment state above is
+      // still configured, and the on_* handlers remain reachable through the
+      // direct dispatch shim in core_rpc_ffi.cpp, which never uses m_net_server's
+      // acceptor — so skipping the bind is safe.
+      return true;
     }
 
     auto rng = [](size_t len, uint8_t *ptr){ return crypto::rand(len, ptr); };

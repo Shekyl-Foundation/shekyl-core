@@ -2208,6 +2208,20 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1 — audit response and stressnet gates
 
+- **Axum daemon RPC: IPv6 dual-bind parity with epee (PR #103).** When the
+  Rust/Axum transport is the sole RPC server, `daemon.cpp` `run()` binds a
+  single listener on the resolved IPv4 host (`--rpc-bind-ip` /
+  `--rpc-restricted-bind-ip`, now honored). The epee acceptor additionally bound
+  the IPv6 address (`--rpc-bind-ipv6-address`, default `::1`) when `use_ipv6`;
+  the Axum path drops that second listener. **Work:** start a second Axum
+  listener (or dual-stack bind) for the configured IPv6 address when IPv6 is
+  enabled, and plumb the resolved IPv6 host the way `get_rpc_bind_ip()` plumbs
+  the IPv4 host. **Target:** V3.1. **Reopen when:** the daemon-RPC hardening
+  pass runs, or a user reports the missing IPv6 listener.
+  **Ref:** [`src/daemon/daemon.cpp`](../src/daemon/daemon.cpp) `run()`;
+  [`src/rpc/core_rpc_server.cpp`](../src/rpc/core_rpc_server.cpp)
+  `core_rpc_server::init` (bind-IP resolution).
+
 - **Wallet file backup-exclusion markers (PR 6 lessons canvass §5.12 F1).**
   Users sync `~/.shekyl` via Dropbox/iCloud; encrypted blobs still leak to
   third-party storage. **Work:** at `WalletFile::create`, set platform markers

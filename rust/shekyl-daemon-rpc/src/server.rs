@@ -195,10 +195,22 @@ impl AppState {
     }
 }
 
-/// Start the Axum daemon RPC server. Blocks until the shutdown signal fires.
-pub async fn run_server(
+/// Bind the daemon RPC TCP listener.
+///
+/// Separated from serving so a caller (the FFI start path) can validate the
+/// bind synchronously and fail loudly — surfacing EADDRINUSE before any handle
+/// is handed back — rather than discovering the failure asynchronously inside a
+/// spawned serve task.
+pub async fn bind_listener(bind_address: &str) -> std::io::Result<tokio::net::TcpListener> {
+    tokio::net::TcpListener::bind(bind_address).await
+}
+
+/// Serve the daemon RPC on an already-bound listener. Blocks until the shutdown
+/// signal fires.
+pub async fn serve_with_listener(
     core: Arc<CoreRpc>,
     config: ServerConfig,
+    listener: tokio::net::TcpListener,
     shutdown: Arc<Notify>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let state = Arc::new(AppState {
@@ -208,7 +220,6 @@ pub async fn run_server(
     });
 
     let app = build_router(state);
-    let listener = tokio::net::TcpListener::bind(&config.bind_address).await?;
     info!(
         "shekyl-daemon-rpc ({}) listening on {}",
         if config.restricted {
@@ -224,4 +235,15 @@ pub async fn run_server(
         .await?;
 
     Ok(())
+}
+
+/// Start the Axum daemon RPC server (bind + serve). Blocks until the shutdown
+/// signal fires.
+pub async fn run_server(
+    core: Arc<CoreRpc>,
+    config: ServerConfig,
+    shutdown: Arc<Notify>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let listener = bind_listener(&config.bind_address).await?;
+    serve_with_listener(core, config, listener, shutdown).await
 }

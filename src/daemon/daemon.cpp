@@ -70,6 +70,16 @@ namespace {
   struct rpc_instance final {
     std::unique_ptr<cryptonote::core_rpc_server> server;
     std::string description;
+    // Configured listen host:port for this instance. When the epee acceptor is
+    // not bound (Rust/Axum transport active), get_binded_port() returns 0 and
+    // the bound host is unavailable, so both are recorded here (from the
+    // resolved RPC config) for the Axum server to bind. Empty when unset.
+    std::string bind_host;
+    std::string bind_port;
+    // Whether this instance serves the restricted command set. Passed to the
+    // Rust/Axum transport so it enforces restricted-mode filtering; a separately
+    // bound --rpc-restricted-bind-port must not expose admin-only endpoints.
+    bool restricted = false;
 
     rpc_instance(cryptonote::core & core, t_node_server & p2p, std::string desc)
       : server(new cryptonote::core_rpc_server{core, p2p})
@@ -160,16 +170,24 @@ struct t_internals {
     auto const & restricted_rpc_port_arg = cryptonote::core_rpc_server::arg_rpc_restricted_bind_port;
     const bool has_restricted_rpc_port_arg = !command_line::is_arg_defaulted(vm, restricted_rpc_port_arg);
 
+    // When the Rust/Axum transport is enabled it owns the HTTP listener, so the
+    // epee acceptor must not bind (or it would hold the port and Axum's bind
+    // would fail with EADDRINUSE). Pass bind_http_listener accordingly and
+    // record the configured port for run() to hand to Axum.
+    const bool bind_epee_listener = !rust_rpc_enabled;
     {
       rpcs.emplace_back(core, p2p, "core");
+      rpcs.back().bind_port = main_rpc_port;
+      rpcs.back().restricted = restricted;
       auto const & proxy = command_line::get_arg(vm, daemon_args::arg_proxy);
       MGINFO("Initializing " << rpcs.back().description << " RPC server...");
-      if (!rpcs.back().server->init(vm, restricted, main_rpc_port, !has_restricted_rpc_port_arg, proxy))
+      if (!rpcs.back().server->init(vm, restricted, main_rpc_port, !has_restricted_rpc_port_arg, proxy, bind_epee_listener))
       {
         throw std::runtime_error("Failed to initialize " + rpcs.back().description + " RPC server.");
       }
-      MGINFO(rpcs.back().description << " RPC server initialized OK on port: "
-        << rpcs.back().server->get_binded_port());
+      rpcs.back().bind_host = rpcs.back().server->get_rpc_bind_ip();
+      MGINFO(rpcs.back().description << " RPC server initialized OK on port: " << main_rpc_port
+        << (bind_epee_listener ? "" : " (epee acceptor not bound; served by Axum)"));
     }
 
     if (has_restricted_rpc_port_arg)
@@ -177,13 +195,16 @@ struct t_internals {
       auto const restricted_rpc_port = command_line::get_arg(vm, restricted_rpc_port_arg);
       auto const & proxy = command_line::get_arg(vm, daemon_args::arg_proxy);
       rpcs.emplace_back(core, p2p, "restricted");
+      rpcs.back().bind_port = restricted_rpc_port;
+      rpcs.back().restricted = true;
       MGINFO("Initializing " << rpcs.back().description << " RPC server...");
-      if (!rpcs.back().server->init(vm, true, restricted_rpc_port, true, proxy))
+      if (!rpcs.back().server->init(vm, true, restricted_rpc_port, true, proxy, bind_epee_listener))
       {
         throw std::runtime_error("Failed to initialize " + rpcs.back().description + " RPC server.");
       }
-      MGINFO(rpcs.back().description << " RPC server initialized OK on port: "
-        << rpcs.back().server->get_binded_port());
+      rpcs.back().bind_host = rpcs.back().server->get_rpc_bind_ip();
+      MGINFO(rpcs.back().description << " RPC server initialized OK on port: " << restricted_rpc_port
+        << (bind_epee_listener ? "" : " (epee acceptor not bound; served by Axum)"));
     }
   }
 
@@ -266,24 +287,33 @@ bool Daemon::run(bool interactive)
       for (auto & rpc : mp_internals->rpcs)
       {
         auto * server = rpc.server.get();
-        std::string bind_addr = "127.0.0.1:" + std::to_string(server->get_binded_port());
+        // The epee acceptor was deliberately not bound at init time (Axum owns
+        // the listener), so get_binded_port()/bound-host would be unavailable;
+        // use the resolved host and port recorded on the instance instead. This
+        // honors --rpc-bind-ip / --rpc-restricted-bind-ip rather than forcing
+        // loopback. (IPv6 dual-bind parity with epee is tracked in FOLLOWUPS;
+        // Axum binds the single configured IPv4 host here.)
+        std::string host = rpc.bind_host.empty() ? "127.0.0.1" : rpc.bind_host;
+        // Bracket IPv6 literals for the host:port form.
+        std::string bind_addr = (host.find(':') != std::string::npos)
+          ? ("[" + host + "]:" + rpc.bind_port)
+          : (host + ":" + rpc.bind_port);
         auto * rust_handle = shekyl_daemon_rpc_start(
-          static_cast<void*>(server), bind_addr.c_str(), false);
-        if (rust_handle)
+          static_cast<void*>(server), bind_addr.c_str(), rpc.restricted);
+        if (!rust_handle)
         {
-          MGINFO("Axum RPC listening on " << bind_addr << " (epee HTTP skipped)");
-          mp_internals->rust_rpc_handles.push_back(rust_handle);
+          // Axum is the sole RPC transport when rust_rpc_enabled; there is no
+          // bound epee listener to fall back to (the fallback was interim
+          // scaffolding for the migration and has been removed). The FFI binds
+          // the socket synchronously before returning, so a null handle means
+          // the bind/start genuinely failed — treat it as fatal rather than
+          // leaving the daemon silently without RPC.
+          throw std::runtime_error(
+            "Failed to start Axum RPC for " + rpc.description + " on " + bind_addr);
         }
-        else
-        {
-          MERROR("Failed to start Axum RPC on " << bind_addr << ", falling back to epee");
-          MGINFO("Starting " << rpc.description << " RPC server...");
-          if (!rpc.server->run(2, false))
-          {
-            throw std::runtime_error("Failed to start " + rpc.description + " RPC server.");
-          }
-          MGINFO(rpc.description << " RPC server started ok");
-        }
+        MGINFO("Axum RPC listening on " << bind_addr << " for " << rpc.description
+          << " (epee acceptor not bound)");
+        mp_internals->rust_rpc_handles.push_back(rust_handle);
       }
     }
     else
