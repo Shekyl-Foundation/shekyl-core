@@ -13,6 +13,7 @@
 //! secret has leaked into the curve-tree client — it belongs behind the
 //! engine boundary (`36-secret-locality.mdc`), not here.
 
+use shekyl_curve_tree::recon::TxOutputs;
 use shekyl_curve_tree::{LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
 
 fn assert_copy<T: Copy>() {}
@@ -23,4 +24,7 @@ fn public_types_are_non_secret_copy() {
     assert_copy::<OutputIdentity>();
     assert_copy::<LeafEntry>();
     assert_copy::<ReferenceBlock>();
+    // `recon::TxOutputs<'a>` borrows a slice of `OutputIdentity`; it carries no
+    // owned secret material, so it is `Copy` like the rest of the surface.
+    assert_copy::<TxOutputs<'static>>();
 }
