@@ -1350,16 +1350,38 @@ sustainability is unaffected by the recalibration.
   *Reference:* `docs/V3_WALLET_DECISION_LOG.md` *2026-04-27 —
   Engine architecture: actor model with staged migration*.
 
+- **Confidential staking subtree + 5-scalar leaf (Decision 3C — spawned 2026-06-04).**
+  Decision 3 closed on **3C** ([`docs/design/CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md)
+  §6.4.3), which spawns this **bounded state/ops** deliverable (not a novel pre-genesis crypto
+  primitive — 3A's non-membership obligation was rejected). Scope: separate staking curve
+  tree (own root, deferred insertion, LMDB tables); 5-scalar / 160-byte leaf
+  `{O, I, C, h_pqc, h_bind}`; `SCALARS_PER_LEAF` const → per-tree parameter; 5th-position
+  Selene NUMS generator under the cbindgen consensus-constant guard + KAT; `h_bind`
+  hash-to-field canonical/collision-safe KAT; cross-tree stake/unstake `pop_block` atomicity;
+  entitlement FS domain `shekyl-stake-entitlement-v1` + bounded-remainder relation. Amends
+  [`docs/FCMP_PLUS_PLUS.md`](FCMP_PLUS_PLUS.md) §15.
+
+  *Blocks on:* nothing (decision closed); pairs with the confidential claim verifier impl.
+
+  *Target:* **V3.0 pre-genesis** — bounded, reviewable state engineering; lands with the
+  Stage 3 claim verifier.
+
+  *Definition of done:* staking subtree + 5-scalar leaf implemented with consensus-constant
+  KATs; verifier does subtree membership + `h_bind` arithmetic; witness header
+  `[O][I][C][h_pqc][x][y][z][a]` confirmed untouched; `AUDIT_SCOPE.md` vectors updated
+  (drop `τ·H_t`/historical-root, add `h_bind`/creation + bounded-remainder).
+
 - **Confidential stake-UTXO transfer (privacy-compatible; compounds (C)).**
   FCMP spend of staked principal + re-insert as staked output — **not** receipt-token
   liquid staking (public fungible receipts remain out of scope). **`creation_height` is
   inherited** across transfer (accrual window follows the original bond). **Decision 3C**
   (consensus-stamped `h_bind` at first inclusion) requires spend continuity for
-  `(tier, creation)` in the new staking-subtree leaf. Spec:
+  `(tier, creation)` in the new staking-subtree leaf — a naive fresh consensus stamp would
+  reset the window. Spec:
   [`docs/design/CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §6.4.3
   transfer note.
 
-  *Blocks on:* Round 2 close of Decision **3A/3C**; confidential claim verifier on `dev`.
+  *Blocks on:* confidential claim verifier + staking subtree on `dev`.
 
   *Target:* **V3.2** wallet surface (after Stage 3 `StakeEngine` + claim path land).
 

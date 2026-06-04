@@ -993,30 +993,42 @@ previously in the mempool) pay the full verification cost.
 
 ## 15. Staking and FCMP++
 
-Staked outputs (`txout_to_staked_key`) use the same **128-byte / 4-scalar** leaf layout as
-other outputs. The leaf label is still `{ O.x, I.x, C.x, h_pqc }`; the **preferred**
-confidential-staking binding extends **`C.x`** to a three-base Pedersen commitment
-([`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §2, §6.4.3 **(C_tier)**):
+Staked outputs (`txout_to_staked_key`) live in a **separate staking subtree** with a
+**160-byte / 5-scalar** leaf (Decision 3C —
+[`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §2, §6.4.3). The **main tree**
+(all non-staked outputs) keeps the **128-byte / 4-scalar** leaf, unchanged.
 
 ```text
-C_stake = z·G + amount·H + τ·H_t
-H_t     = hash_to_ec("shekyl-stake-tier")
-
-Leaf[96:128]  = h_pqc = shekyl_fcmp_pqc_leaf_hash(ml_dsa_pk)   // unchanged 4th scalar
+Staking-subtree leaf (160 B):
+  [  0: 32]  O.x
+  [ 32: 64]  I.x
+  [ 64: 96]  C.x       // C_stake = z·G + amount·H   (plain Pedersen — no τ·H_t)
+  [ 96:128]  h_pqc      = shekyl_fcmp_pqc_leaf_hash(ml_dsa_pk)
+  [128:160]  h_bind     = H("stake-bind" ‖ tier ‖ creation_height)   // consensus-set at inclusion
 ```
 
-**Tier** is bound by the CA-style generator (`τ` vs public claim tier `T`, then `C~_amt`
-at claim — §6.4.1). **Creation height** is bound by **historical-root membership** at the
-earliest claimed settlement-epoch (lower bound); **`eff_lock` upper** is a Round 2 open
-(§6.4.3 **(C_window)**).
+**Tier + creation** are bound by `h_bind` (5th scalar): consensus stamps exact
+`creation_height` at inclusion (the staker does not know mining height at build time), and
+the claim proves subtree membership + `h_bind` equality against the **revealed**
+`(tier, creation)`. The accrual window is then **pure arithmetic**
+(`creation < S ≤ creation + tier_lock`) — no historical-root checkpointing.
 
-**Fallback (demoted):** type-dependent `leaf[96:128] = h_stake_bind` hash binding both tier
-and `creation_height` — documented in [`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md)
-§6.4.3; use only if **(C_tier)+(C_window)** cannot land. No compatibility shim for
-pre-genesis implementations.
+**Implementation notes (Round 2):**
+
+- `SCALARS_PER_LEAF` generalizes from a const to a **per-tree parameter** (`=5` for the
+  staking subtree, `=4` for the main tree); the 5th-position Selene generator is a **NUMS
+  consensus constant** under the cbindgen consensus-constant guard, with a KAT.
+- The leaf-layer Selene MSM grows from `4·W` to `5·W` terms **for the staking subtree only**
+  (~+25% on that hash); main-tree hashing and all Helios/Selene layers above the leaf are
+  untouched. Off the wallet-scan/decap path (no block-loading impact).
+- The **locked witness header** `[O][I][C][h_pqc][x][y][z][a]` is **untouched** — `h_bind` is
+  a public membership input recomputed by the verifier, **not** a witness field.
+- Stake-creation and unstake are **cross-tree transitions** (main↔subtree); `pop_block`
+  rewinds both atomically. Leaves are append-only, so claim-after-unstake works.
 
 **Legacy note:** cleartext-claim code compared `H(pqc_pk)` on all output types; confidential
-claims require the preferred or fallback binding above.
+claims require the staking-subtree `h_bind` binding above. No compatibility shim for
+pre-genesis implementations.
 
 **Universal deferred curve-tree insertion:** All outputs (coinbase, regular,
 and staked) are deferred: they enter a pending table at creation time and

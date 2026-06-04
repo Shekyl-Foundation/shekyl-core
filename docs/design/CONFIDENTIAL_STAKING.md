@@ -1,8 +1,9 @@
 # Confidential staking — consensus & economics design
 
-**Status:** **Round 1 closed** (2026-06-02) on economics and **(B)**. **(C)** §6.4.3
-(tier + window lb **closed**; `eff_lock` ub **open**, **3A/3C** co-equal, **3B rejected**).
-**(A)** off-circuit, sound modulo **(C_tier)**. Round 2: close Decision 3, byte wire, KATs.
+**Status:** **Round 1 closed** (2026-06-02) on economics and **(B)**. **(C)** **closed on 3C**
+(2026-06-04, §6.4.3) — staking subtree + 5-scalar `h_bind` (tier+creation), window arithmetic;
+Decisions 1 (`H_t`) & 2 (historical root) superseded. **(A)** collapsed to reserve-DLEQ class
++ bounded remainder (§6.4.1). Round 2: byte wire, KATs, tree/leaf implementation.
 This is the **upstream consensus/economics truth** that
 [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) §2.3 mirrors. It
 **supersedes the reward/claim mechanism** of
@@ -108,22 +109,29 @@ same symbols at stake, spend, and claim):
 | `amount` | Committed value (atomic units) on `H` | — |
 | `z` | Commitment mask on `G` (`OutputSecrets.z`, witness `z`) | — |
 | `a` | Pseudo-out blinding (`pseudo_out_blind`, witness `a`) | **Never** the staked amount |
-| `τ` | Tier scalar committed on `H_t` at stake time (matches public `tier`; §6.4.3 **(C_tier)**) | — |
 | `x` | Spend secret `ho + b` (witness `x`) | — |
 
-**Commitment form:**
+**Commitment form (Decision 3C — §6.4.3):**
 
 - **Regular / coinbase:** `C = z·G + amount·H`
-- **Staked (`txout_to_staked_key`):** extend the generator basis (Confidential Assets /
-  typed-output pattern — §6.4.3):
+- **Staked (`txout_to_staked_key`):** **plain Pedersen, identical basis** —
+  `C_stake = z·G + amount·H`. No `τ·H_t` term.
 
 ```text
-C_stake = z·G + amount·H + τ·H_t
-H_t     = hash_to_ec("shekyl-stake-tier")   // NUMS; single generator, discrete τ ∈ {τ₁,τ₂,τ₃}
+C_stake = z·G + amount·H          // staked C commits value + mask only
 ```
 
-`τ` is fixed when the staker builds the tx (they choose tier). The **128-byte curve-tree
-leaf is unchanged:** `{ O.x, I.x, C.x, h_pqc }` — only `C.x` commits to one more base.
+Tier and creation are **not** in the commitment. They live in the staking-subtree leaf's
+**5th scalar** `h_bind = H("stake-bind" ‖ tier ‖ creation_height)`, set by **consensus at
+inclusion** (Decision 3C; [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §15). Membership in the
+**staking subtree** *is* the "is-staked" marker that the demoted `H_t` term used to carry;
+subtree membership + `h_bind` hash-equality replace `(C_tier)`/`H_t` entirely.
+
+**Staking subtree leaf (5-scalar, 160 B):** `{ O.x, I.x, C.x, h_pqc, h_bind }`. The main
+tree (all non-staked outputs) keeps the **128-byte / 4-scalar** leaf, unchanged. The locked
+witness header `[O][I][C][h_pqc][x][y][z][a]` is **untouched** — `h_bind` is public claim
+data (verifier-recomputable from revealed `(tier, creation)`) entering membership as a
+**public input**, not a witness field.
 
 A stake is created by a transaction that produces a `txout_to_staked_key` output
 carrying, **instead of a cleartext amount** (current `blockchain.cpp:3476–3478`):
@@ -139,13 +147,28 @@ carrying, **instead of a cleartext amount** (current `blockchain.cpp:3476–3478
   and `G_S` is a public per-settlement-epoch base — not a new HKDF field on
   `OutputSecrets`.
 
-**Weight / entitlement scalar `M`.** Public `tier` on the output and claim tx determines
-`tier_num`; accrual uses `M = tier_num · Σ_S K_S` (§3). **(C_tier)** binds the **hidden**
-opened commitment to the same `τ` as the public tier used in `M` (§6.4.1, §9) — tier
-stays **public on the wire** (lock duration already leaks tier class; §2 prior pin).
+> **Canonical stake-creation height (single source of truth — load-bearing).**
+> `creation_height ≜ eligible_height` — the height at which the stake **matures** (clears
+> the `MIN_AGE = 5` reorg buffer after its including block), not the mining height of that
+> block. This **one** definition is referenced by **both** the claim verifier (accrual
+> window start, stamped into `h_bind`) **and** the servo / economics path (the height a
+> stake enters `band_sum`). They **must not** carry independent height formulas: a
+> definitional drift between them silently breaks the §9 conservation argument with no
+> reject (§9, §4.1). The pattern mirrors `00-mission.mdc`'s single-source priority
+> hierarchy — one named definition, two consumers, no drift. **`accrual-before-counted`
+> (accrual anchored earlier than `band_sum` entry) is forbidden outright** (§9). Rationale,
+> alternatives, and the deterministic-deferral reversion clause: §6.4.3.
 
-**Decision (pinned): tier public on wire.** The CA-style generator binds the **membership
-opening** to the claimed tier for inflation safety; it does not re-hide tier on-chain.
+**Weight / entitlement scalar.** Public `tier` on the output and claim tx determines
+`tier_num`; accrual uses the rational multiplier `N/D = tier_num · Σ_S K_S / SCALE` (§3,
+§6.4.1). Tier is bound to the **hidden** leaf by `h_bind` (subtree membership + hash
+equality, §6.4.3 Decision 3C); the **single revealed `tier`** scalar drives **both** the
+`h_bind` recompute and `tier_num` in `N` — this single-source rule is the load-bearing
+tier-forgery bind that the demoted `H_t` residual used to provide (§6.4.1).
+
+**Decision (pinned): tier + creation public on wire.** Lock duration already leaks tier
+class; `h_bind` binds the public `(tier, creation)` to the hidden leaf for inflation
+safety without re-hiding either on-chain.
 
 ---
 
@@ -187,7 +210,13 @@ as `budget/band_sum` (§4), it falls as participation rises, restoring the propo
   for the rate-epoch. `target_share_e = STAKER_EMISSION_SHARE · 0.90^year` carries the
   existing Component-4 decay (`emission_share.rs`).
 - **`band_sum_e`** = the **windowed** sum of active stakes' band representatives
-  (§4.4), the public `TWS` proxy.
+  (§4.4), the public `TWS` proxy. A stake enters `band_sum` at its canonical
+  **`eligible_height`** — the **same** height that anchors its accrual window (§2 canonical
+  definition). This identity is what makes the §9 step-2 conservation bound hold:
+  `band_sum_S` counts **precisely** the stakes accruing in `S`. Counting from an earlier
+  height (e.g. mining) is **safe only** if accrual also starts no earlier (it under-pays
+  during the deferral); the reverse — accrual before counting — over-pays and is forbidden
+  (§9).
 - **`ρ_cap_e`** = the supply-safety backstop (§4.2).
 
 The servo makes total staker emission `≈ budget_e` at any participation level (closes
@@ -271,10 +300,11 @@ Global boundaries make claims cluster at shared boundaries, **growing** the temp
 anonymity set rather than giving each stake a unique offset.
 
 **One claim may batch many settlement-epochs (`MAX_EPOCHS_PER_CLAIM`).** The entitlement
-is **O(1)** in epoch count — a single Schnorr on `M = tier_num · Σ_S K_S` after `C~_amt`
-strip (§6.4.1) — so only the nullifier count scales (one `N_S` per epoch; ~15 for a
-tier-3 full drain). **`MAX_EPOCHS_PER_CLAIM = 15`** is pinned with **(B)** (§6.4.2:
-bounds wire vectors and ClaimLinkability size).
+is **O(1)** in epoch count — a **single floor** over the batched `N = tier_num · Σ_S K_S`
+(one remainder, one Schnorr + one range proof; §6.4.1) — so only the nullifier count scales
+(one `N_S` per epoch; ~15 for a tier-3 full drain). Per-epoch flooring would break O(1).
+**`MAX_EPOCHS_PER_CLAIM = 15`** is pinned with **(B)** (§6.4.2: bounds wire vectors and
+ClaimLinkability size).
 
 **Default: batch the full unclaimed window in one tx** when `|epochs| ≤ 15`. This is not
 only cheaper — piecemeal claims emit a **per-stake sequence** of `(tier, contiguous
@@ -304,25 +334,26 @@ watermark/`staked_output_index` machinery (`check_stake_claim_input`,
 ### 6.1 Statement of knowledge
 
 A claim transaction proves, in zero knowledge, knowledge of the stake/claim scalars
-`(z, amount, x, a, z_claim)` — where **`amount`** is the hidden principal,
+`(z, amount, x, a, z_claim, ρ_blind)` — where **`amount`** is the hidden principal,
 **`z`** the stake commitment mask, **`x`** the spend secret, **`a`** the membership
-pseudo-out blinding (`C~ = a·G + amount·H + τ·H_t` for staked leaves; §6.4.3), **`z_claim`**
-the claim-output mask — and a membership witness such that:
+pseudo-out blinding (`C~ = a·G + amount·H` for staked leaves under 3C; §6.4.3),
+**`z_claim`** the claim-output mask, **`ρ_blind`** the remainder commitment blind
+(§6.4.1) — and a membership witness such that:
 
-1. **Membership.** `C_stake` is a leaf under the unified curve-tree root (FCMP++
-   commit-and-prove; standard 128-byte leaf — §6.4.3) — does **not** reveal which.
-2. **Window.** every claimed settlement-epoch `S` satisfies `S ⊆ (creation, eff_lock]`
-   (`eff_lock = creation + tier_lock_blocks`); **(C_window)** binds `creation` from below
-   via historical-root membership; **upper bound on `eff_lock`** is Round 2 open (§6.4.3).
+1. **Membership.** `C_stake` is a leaf under the **staking-subtree** root (FCMP++
+   commit-and-prove; 5-scalar 160-byte leaf — §6.4.3) — does **not** reveal which.
+2. **Window.** every claimed settlement-epoch `S` satisfies `creation < S ≤ creation +
+   tier_lock(tier)` by **arithmetic** on the `h_bind`-bound `creation` (both bounds; no
+   historical root — §6.4.3 Decision 3C).
 3. **Nullifiers.** for each claimed `S`, `N_S = x·G_S` with `G_S =
    hash_to_ec("shekyl-stake-nullifier-base" ‖ S_le64)` (public base, distinct from
    `Hp(O)`); each `N_S` is filed in the **stake-claim nullifier set** (not the spent
    key-image set) and must be absent before inclusion (no double-claim). Principal
    `x·Hp(O)` is **not** published on claim (§7).
-4. **Entitlement.** `C_claim ≡ M · C_stake` (homomorphic sense on opened amount leg).
-   Consensus **recomputes `M`** from **(C)**-validated `tier` and `settlement_epochs`
-   (§9). **(C_tier)** then **(A)** on the amount leg: define `C~_amt := C~ − T·H_t` for
-   public claim tier scalar `T`; prove `C_claim − M·C~_amt ∈ ⟨G⟩` (§6.4.1).
+4. **Entitlement.** Consensus **recomputes** `N = tier_num(tier)·Σ_S K_S`, `D = SCALE`
+   from `h_bind`-validated `tier` and `settlement_epochs` (§9). **(A)** bounded-remainder
+   relation: `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩` with `0 ≤ ρ < D` range-proven,
+   `reward = floor(N·amount/D)` (§6.4.1).
 5. **Range.** `C_claim` carries a Bulletproof+ range proof (non-negative, bounded).
 6. **Mint.** the claim mints `C_claim` as a normal, self-addressed FCMP++ reward
    output (two-component `O = ho·G + B + y·T`, KEM-self-encap; the staker opens it
@@ -395,8 +426,8 @@ then reopen §13 item 7 as fallback only.
 ### 6.4 Claim proof bindings (Round 1 source review)
 
 **Status:** Round 1 **closed** on economics and **(B)**. **(C)** decision record §6.4.3
-(tier + window lb **closed**; `eff_lock` ub **open**, 3A/3C co-equal). **(A)** off-circuit
-on `C~_amt` — **closed** (sound modulo **(C_tier)**).
+**closed on 3C** (staking subtree + `h_bind`; Decisions 1–2 superseded). **(A)** collapsed to
+reserve-DLEQ class + bounded remainder (§6.4.1), coupled to 3C.
 
 #### 6.4.0 Source facts (consensus-locked; any change is a consensus change)
 
@@ -407,53 +438,80 @@ on `C~_amt` — **closed** (sound modulo **(C_tier)**).
 | `I = Hp(O)` in witness; SAL uses rerandomized `I~` | `rctSigs.cpp`, `sal/mod.rs` | Linkability algebra |
 | `L = (I~·x) − (U·(r_i·x)) = x·Hp(O)` ∀ `r_i` | `shekyl-oxide/.../fcmp/fcmp++/src/sal/mod.rs:233` with `I~ = I + U·r_i` (`:65`) | **(B)** tag is **not** re-baseable by tweaking `r_i` |
 | `FcmpPlusPlus::verify` always runs `spend_auth_and_linkability.verify(…, key_image)` | `shekyl-oxide/.../fcmp/fcmp++/src/lib.rs` | No membership-only mode today |
-| Staked leaf (4-scalar, 128 B) | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §15 | `C.x` may use **`H_t`** basis (§2); **(C_tier)** preferred over type-dependent 4th scalar |
+| Staked subtree leaf (5-scalar, 160 B) | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §15 | 5th scalar `h_bind` binds `(tier, creation)`; tier no longer in `C.x` (Decision 3C) |
 | Cleartext claims today: `txin_stake_claim`, no FCMP | `cryptonote_basic.h`, wallet stake-claim path | Confidential claim is **new** tx + verifier surface |
 
 Reserve proofs already ship a standalone two-base Schnorr DLEQ (`rust/shekyl-proofs/src/dleq.rs`,
 domain `shekyl-reserve-proof-dleq-v1`; [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §21) —
-the proof class for **(A)** entitlement.
+the **audit class and transcript discipline** for **(A)** entitlement (the entitlement uses
+its own FS domain, not this string — see below).
 
-#### 6.4.1 (A) Entitlement — off-circuit (**sound modulo (C_tier)**)
+#### 6.4.1 (A) Entitlement — off-circuit (reserve-DLEQ class + bounded remainder)
 
-**Round 1 status:** The commitment-to-zero Schnorr is **not** a standalone inflation
-closure. It is **sound only when `M` is verifier-recomputed** and the membership
-pseudo-out's tier leg matches the claim's public tier **(C_tier)** (§9). Wire `M` is
-checked against the recompute **before** **(A)**.
+**Decided (Decision 3C, §6.4.3):** Under 3C the staking subtree carries the "is-staked"
+marker (subtree membership) and `h_bind` carries `(tier, creation)`, so **`C_stake` is
+plain Pedersen** (`z·G + amount·H`, no `τ·H_t`) and the entitlement **collapses** to a
+reserve-DLEQ-class relation on `C~`. **Coupling (rule 21):** this collapse is sound **only
+because 3C** moved the is-staked marker into subtree membership; in a unified tree, dropping
+`H_t` would leave no way to prove a hidden leaf is a stake. **The collapse reverts if 3C
+reverts.**
 
-**Pin (staked pseudo-out).** Membership exposes rerandomized `C~`. FCMP pseudo-out
-rerandomization acts on the **`G` mask only**, so for a staked leaf:
+**Tier binding moves to `h_bind`.** The membership proof proves the leaf's 5th scalar equals
+`H("stake-bind" ‖ tier ‖ creation)` recomputed from the **revealed** `tier`. The **same
+single revealed `tier`** scalar feeds `tier_num` in the multiplier. This **single-source-of-
+tier** rule is the load-bearing tier-forgery bind that `H_t`'s residual used to provide; the
+verifier **must** assert one tier source for both `h_bind` recompute and the multiplier
+(loud reject on mismatch; KAT-locked — §6.4.3 mechanical pins).
+
+**The multiplier is rational — the relation is not a plain integer-scalar Schnorr.** The
+four-component yield makes
+`M_frac = N / D`, with `N = tier_num(tier) · Σ_{S} K_S` and `D = SCALE`
+(tier-1.5 alone forces a denominator). The reward is an **integer atomic amount**:
 
 ```text
-C~ = a·G + amount·H + τ·H_t
+reward = floor( N · amount / D )           // single floor over the BATCHED sum N
+N · amount = D · reward + ρ,    0 ≤ ρ < D   // bounded remainder
 ```
 
-At claim, public tier scalar **`T`** (from wire `tier`, maps to committed `τ`):
+**Batching pin:** one floor over the summed `N` (one remainder `ρ`), **not** per-epoch
+floors — this preserves the O(1)-in-epochs single proof. Per-epoch flooring would force a
+remainder vector and change the statement.
+
+**Entitlement relation (commit the remainder; do not reveal it):**
 
 ```text
-C~_amt := C~ − T·H_t = a·G + amount·H     // amount leg only
+N · C~  −  D · C_claim  −  C_ρ  ∈  ⟨G⟩
+  C~     = a·G + amount·H            (public, from membership; G-leg only rerandomized)
+  C_claim= z_claim·G + reward·H      (the claimed reward output commitment)
+  C_ρ    = ρ_blind·G + ρ·H           (committed remainder), with range proof 0 ≤ ρ < D
 ```
 
-Prove `C_claim − M·C~_amt ∈ ⟨G⟩` via commitment-to-zero Schnorr with
-**`d = z_claim − M·a`** (`a` = `pseudo_out_blind`; **`amount`** is the hidden principal on
-`H`, not `a`). If a prover asserts **`T′ ≠ τ`**, then `C~_amt` retains `(τ−T′)·H_t`, the
-difference is not in `⟨G⟩`, and the Schnorr **fails** — tier forgery for **(A)** is
-algebraically excluded without a new FCMP++ circuit.
+Prove the difference is in `⟨G⟩` via a Schnorr on the residual `G`-exponent
+(`d = N·a − D·z_claim − ρ_blind`); the `H`-components cancel exactly
+(`N·amount − D·reward − ρ = 0`).
 
-Scalar names match [`proof.rs`](../../rust/shekyl-fcmp/src/proof.rs) on the **amount**
-leg; staked outputs add **`H_t`** to the commitment basis only (§2).
+**Two traps the "plain reserve-DLEQ" framing hides — both closed here:**
 
-**Why off-circuit (not in-circuit).** Membership already exposes public `C~` as
-`pseudo_outs`; entitlement is a **linear relation on public Pedersen points**. The
-mature disposition is a standalone two-base Schnorr (reserve-DLEQ class in
-`shekyl-proofs`) — **no FCMP++ circuit delta**. In-circuit entitlement would re-prove
-inside the membership ZK what the verifier already holds, expanding the Veridise-scoped
-circuit surface for zero privacy gain on `C~`. Same **minimize novel consensus crypto**
-discipline that ranks Decision **3C** ahead of **3A** for the window upper bound (§6.4.3):
-spend the ZK budget on membership + **(B)**, not on a redundant linear check.
+- **(a) Rounding over-claim (P1 inflation).** Omitting `C_ρ` lets a prover absorb the
+  remainder into `reward`. The remainder term + its range proof `0 ≤ ρ < D` is **mandatory**;
+  **rounding is defined toward under-claim** (`floor`), so the chain never over-mints.
+- **(b) Remainder-disclosure deanonymization (P2).** Revealing `ρ` instead of committing it
+  leaks `amount mod (D/gcd(N,D))` — partial deanonymization of the hidden principal. `ρ`
+  **must** be committed (`C_ρ`) and range-proven, never revealed.
 
-**Reopen in-circuit (A)** only if pseudo-outs cease to be public inputs or a monolithic
-single-blob proof becomes a hard audit requirement — not for leaf-format elegance.
+So the entitlement is **reserve-DLEQ class + a bounded-remainder range proof** (piggybacks
+Bulletproofs+ machinery but is a **distinct relation**), under a **fresh Fiat-Shamir
+domain** `shekyl-stake-entitlement-v1` — it reuses the reserve-DLEQ **audit class and
+transcript discipline**, **not** the literal `shekyl-reserve-proof-dleq-v1` string (sharing
+a transcript domain across two statements is a soundness footgun).
+
+**Why off-circuit (not in-circuit).** Membership already exposes public `C~`; entitlement is
+a **linear relation on public Pedersen points** plus a range proof. The mature disposition is
+standalone (reserve-DLEQ class + BP+ remainder) — **no FCMP++ circuit delta**. Same
+**minimize novel consensus crypto** discipline that chose Decision **3C** over **3A**
+(§6.4.3): spend the ZK budget on membership + **(B)** + the remainder range proof, not on a
+redundant in-circuit re-derivation. **Reopen in-circuit (A)** only if `C~` ceases to be a
+public input or a monolithic single-blob proof becomes a hard audit requirement.
 
 #### 6.4.2 (B) Nullifiers — **new claim prove/verify surface** (not a parameter tweak)
 
@@ -490,7 +548,7 @@ incorrectly treat claim nullifiers as spent key images or fail verification.
 | **`G_S` domain** | UTF-8 `"shekyl-stake-nullifier-base"` concatenated with **`S_le64`** (settlement-epoch index, **uint64 little-endian**), then `crypto::hash_to_ec` (Category 2 Keccak path — same family as `Hp(O)`) |
 | **`N_S` encoding** | 32-byte compressed Ed25519 point (same as key images) |
 | **B1 surface** | New **`ClaimLinkability`** proof (sibling to SAL): proves `x ↔ O` spend-authority **and** emits tag `L_claim = x·G_S` for the tx's public `G_S` values; **does not** publish `x·Hp(O)` |
-| **Verifier entry** | `shekyl_fcmp_verify_stake_claim(...)` (name TBD Round 2): membership + historical-root membership + ClaimLinkability + `C~_amt` entitlement Schnorr (§6.4.1–§6.4.3); **not** spend path |
+| **Verifier entry** | `shekyl_fcmp_verify_stake_claim(...)` (name TBD Round 2): staking-subtree membership + `h_bind` hash-equality + ClaimLinkability + entitlement (reserve-DLEQ class + bounded remainder, §6.4.1); **not** spend path. **No historical-root membership** (3C: window is `h_bind` arithmetic — Decision 2 subsumed) |
 | **KAT** | `docs/test_vectors/STAKE_CLAIM_GS.json` (Stage 2); Round 1 pins domain + `S_le64` only |
 | **`MAX_EPOCHS_PER_CLAIM`** | **`15`** — pins `|settlement_epochs| = |nullifiers|` on wire; tier-3 full-window drain; bounds **(B1)** ClaimLinkability + nullifier-vector size (not a separate economics constant). Wallets default to batching all unclaimed epochs when `≤ 15`; `= 1` is conservative test-mode only (partial-timing tell, §6.2) |
 
@@ -498,150 +556,155 @@ Wire layout: §6.4.8.
 
 #### 6.4.3 (C) Tier + creation — **decision record**
 
-**Record ID:** `CONFIDENTIAL_STAKING.md` §6.4.3 (2026-06-02).  
-**Status:** **Tier + creation lower bound — decided.** **`eff_lock` upper — open fork**
-(Round 2: **3A/3C** co-equal, lean **3C**; **3B rejected**).  
-**Unblocks:** §9 premise (validated `M` requires honest tier + admissible accrual window;
-tier closed; window closed from below; upper pending).
+**Record ID:** `CONFIDENTIAL_STAKING.md` §6.4.3 (2026-06-02; **Decision 3 closed 2026-06-04**).  
+**Status:** **Tier + creation window — decided (3C).** Decision 3 closes on **3C** (separate
+staking subtree + consensus-stamped creation; **3A** and **3B** rejected). Decision 1's
+`(C_tier)`/`H_t` and Decision 2's historical-root lower bound are **superseded** by 3C
+(`h_bind` carries `(tier, creation)`; window is pure arithmetic).  
+**Unblocks:** §9 premise (validated multiplier requires honest tier + admissible accrual
+window — both now closed via `h_bind`).
 
 ---
 
 ##### Requirement (why (C) exists)
 
 Membership-unlinkable claims hide **which** staked leaf is opened. Without **(C)**, a
-prover can satisfy **(A)** on a **forged wire `M`** (e.g. tier-1 witness, tier-3 `M`) while
-the range proof still passes moderate inflation. §9 step 1 therefore **requires** consensus
-to validate **`M`** against bindings on the opened leaf — not merely check a Schnorr on
-wire `M`. **(C)** is **P1 inflation-safety** ([`00-mission.mdc`](../.cursor/rules/00-mission.mdc)),
-not a yield-correctness optional.
+prover can satisfy **(A)** on a **forged multiplier** (e.g. tier-1 leaf, tier-3 `tier_num`)
+while the range proof still passes moderate inflation. §9 step 1 therefore **requires**
+consensus to bind the multiplier and accrual window to the opened leaf — not merely check a
+proof on a wire-supplied multiplier. **(C)** is **P1 inflation-safety**
+([`00-mission.mdc`](../.cursor/rules/00-mission.mdc)), not a yield-correctness optional.
 
-**Verifier order (load-bearing):** **`M` recompute** ← **(C_tier)** + **(C_window)** →
-**(B)** → **(A)** on `C~_amt` (§6.4.8).
+**Verifier order (load-bearing):** staking-subtree **membership** + **`h_bind`
+hash-equality** (binds `tier`, `creation`) → **window arithmetic**
+(`creation < S ≤ creation + tier_lock`) → **multiplier recompute** (`N = tier_num(tier)·ΣK_S`,
+**same revealed `tier`**) → **(B)** → **(A)** entitlement (§6.4.1, §6.4.8).
 
 ---
 
-##### Pinned commitment construction (staked outputs)
+##### Pinned commitment construction (staked outputs, Decision 3C)
 
 **Generators (Ed25519 curve):**
 
 | Symbol | Definition |
 |--------|------------|
 | `G`, `H` | Standard Pedersen bases (value on `H`, mask on `G`) |
-| `H_t` | `hash_to_ec("shekyl-stake-tier")` — NUMS; single tier-type generator |
 
-**At stake (staker knows `τ`, not `creation_height`):**
+**At stake (consensus stamps `creation` at inclusion):**
 
 ```text
-C_stake = z·G + amount·H + τ·H_t
+C_stake = z·G + amount·H                       // plain Pedersen — no τ·H_t
+h_bind  = H("stake-bind" ‖ tier ‖ creation_height)   // consensus-set, 5th leaf scalar
 ```
 
-- `τ ∈ {τ₁, τ₂, τ₃}` — tier scalars KAT-locked to `StakeTier` wire enum (Round 2).
-- **Curve-tree leaf unchanged:** `Leaf = { O.x, I.x, C.x, h_pqc }` with
-  `h_pqc = shekyl_fcmp_pqc_leaf_hash(ml_dsa_pk)` at bytes `[96:128]`.
+- Staking-subtree leaf (5-scalar, 160 B): `Leaf = { O.x, I.x, C.x, h_pqc, h_bind }` with
+  `h_pqc` at `[96:128]`, `h_bind` at `[128:160]`.
+- Main tree (all non-staked outputs): **4-scalar, 128 B, unchanged.**
+- Locked witness header `[O][I][C][h_pqc][x][y][z][a]` **unchanged** — `h_bind` is a public
+  membership input, not a witness field.
 
 **At membership (pseudo-out rerandomization on `G` only):**
 
 ```text
-C~ = a·G + amount·H + τ·H_t
+C~ = a·G + amount·H
 ```
 
-**At claim (public tier scalar `T` from wire `tier`):**
+**At claim (public `(tier, creation)` from wire):** verifier recomputes `h_bind`, proves
+subtree membership against the **current** root, checks the window arithmetically, then runs
+the bounded-remainder entitlement (§6.4.1). No `C~_amt` strip; no historical root.
+
+**Entitlement (A):** bounded-remainder reserve-DLEQ relation `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩`
+with `0 ≤ ρ < D` range-proven (§6.4.1). Tier forgery is excluded by the **single revealed
+`tier`** driving both `h_bind` and `N` (below).
+
+**Multiplier (public, recomputed by verifier):**
 
 ```text
-C~_amt := C~ − T·H_t = a·G + amount·H
+N = tier_num(tier) · Σ_{S ∈ settlement_epochs} K_S ,    D = SCALE
+reward = floor(N · amount / D)              // rounding toward under-claim
 ```
 
-**Entitlement (A), sound modulo (C_tier):** prove `C_claim − M·C~_amt ∈ ⟨G⟩` (Schnorr on
-`d = z_claim − M·a`). If `τ ≠ T`, residual `(τ−T)·H_t ∉ ⟨G⟩` → Schnorr fails.
-
-**`M` (public, recomputed by verifier):**
-
-```text
-M = tier_num(T) · Σ_{S ∈ settlement_epochs} K_S
-```
-
-Reject if wire `M ≠ M_recomputed` before **(A)**.
+Verifier reads **one** `tier` scalar; uses it for the `h_bind` recompute **and** `tier_num`.
+Reject on any mismatch before entitlement.
 
 ---
 
-##### Decision 1 — Tier binding **(C_tier)** ✅ **CLOSED**
+##### Decision 1 — Tier binding ✅ **CLOSED → superseded by 3C**
 
-**Chosen:** CA-style typed generator in `C_stake` (above). No leaf-format fork.
+**Originally chosen (pre-3C):** CA-style `τ·H_t` generator in `C_stake`. **Superseded by
+Decision 3C:** tier is bound by `h_bind` (subtree membership + hash equality), `C_stake` is
+plain Pedersen, and the entitlement collapses to the §6.4.1 form. The `H_t` term is **dropped**.
 
-| Alternative | Why not |
-|-------------|---------|
-| **(C1) `h_stake_bind` in unified-tree `leaf[96:128]`** | Binds tier+creation via hash equality after opening — works on the **128-byte** leaf, but type-dependent 4th scalar and dual drain logic. **Demoted:** reserve for unified-tree fallback only; **not** the same as Decision **3C** (separate subtree, §6.4.3). |
-| **Fifth scalar / 160-byte leaf in unified tree** | Breaks universal 128-byte curve-tree leaf; chunk geometry fork for one output class. **Rejected for Decision 1** (tier lives in `C.x`). **Reconsidered under Decision 3C** on a **separate staking subtree** where 5-scalar leaves are the norm. |
-| **Separate staking Merkle tree (tier-only)** | Second accumulator for tier alone — disproportionate when `H_t` in `C_stake` suffices (Decision 1). **Not rejected** when the tree carries **consensus-stamped creation** (Decision 3C). |
-| **Metadata Schnorr only** | Cannot tie a **hidden** opening to `(tier, creation)` without revealing index or changing leaf/commitment bytes. |
+| Alternative | Disposition |
+|-------------|-------------|
+| **`τ·H_t` in `C_stake`** (original C_tier) | Worked, but **superseded by 3C** — redundant once subtree membership marks "is-staked" and `h_bind` binds tier. Removing it collapses (A) to reserve-DLEQ (§6.4.1). |
+| **`(C1)` `h_stake_bind` in unified-tree `leaf[96:128]`** | Unified-tree fallback only; **not** 3C (which uses a separate subtree + 5th scalar). |
+| **Metadata Schnorr only** | Cannot tie a **hidden** opening to `(tier, creation)` without revealing index or changing leaf bytes. |
 
 **Lineage (not shipping Zarcanum):** Shekyl inherits **RingCT-era Pedersen machinery**
 (`G`, `H`, mask `z`/`a`, pseudo-outs `C~`, output derivation) and SAL spend paths —
 still load-bearing. **Not inherited:** MLSAG/CLSAG rings, decoys, Borromean proofs.
-The **`H_t` typed-generator fragment** follows Confidential Assets / Elements / Zano
-Zarcanum-adjacent **commitment** patterns; **membership is FCMP++ curve trees**, not
-Zarcanum ring proofs.
 
 ---
 
-##### Decision 2 — Creation binding lower bound **(C_window, lb)** ✅ **CLOSED**
+##### Decision 2 — Creation lower bound ✅ **CLOSED → subsumed by 3C**
 
-**Chosen:** **Historical-root membership** at earliest claimed settlement-epoch `S_min`.
+**Originally chosen (pre-3C):** historical-root membership at `S_min` ⇒ `creation ≤ S_min`.
+That mechanism existed **only because** the unified tree could not carry creation in the leaf
+(staker doesn't know mining height at build time). **3C dissolves that constraint:** consensus
+stamps **exact** `creation` into `h_bind` at inclusion, so the lower bound (and the upper) are
+**pure arithmetic** on the revealed, leaf-bound `creation`. **The historical-root mechanism is
+no longer needed** — the claim proves only **current**-root subtree membership.
 
-Prove the same leaf is a member of the curve-tree root **checkpointed as of `S_min`**
-(per-height roots from deferred insertion — [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §15).
-Leaves appear in roots only from insertion height onward ⇒ **`creation_height ≤ S_min`**
-(accrual window bounded from below).
-
-| Alternative | Why not (for lower bound) |
-|-------------|---------------------------|
-| **Commit `creation` in `C_stake`** | Staker does not know mining height at tx build time — attribute is determined at **inclusion**, not commit time (unlike `τ`). |
-| **`(C1)` hash bind only** | Can bind `creation` in `leaf[96:128]`, but forfeits uniform leaf + clean tier story; reserve for upper-bound fallback (Decision 3). |
-| **Public `creation_height` on wire alone** | No link to hidden opening under unlinkable membership — inflation path unchanged. |
+**Rule-21 note:** this is a substrate-change supersession (the M3d-Finding-5 pattern) — the
+chosen mechanism's rationale went vacuous when 3C landed; it is recorded as subsumed, not
+silently dropped. Per-epoch historical-root checkpointing leaves the consensus surface
+entirely under 3C (it was a 3A cost).
 
 ---
 
-##### Decision 3 — Creation binding upper bound (`eff_lock`) ⚠️ **OPEN FORK (Round 2)**
+##### Decision 3 — Creation window (`eff_lock`) ✅ **CLOSED → 3C (2026-06-04)**
 
 **Requirement:** every claimed `S` must satisfy `S ⊆ (creation_height, eff_lock]` with
-`eff_lock = creation_height + tier_lock_blocks(tier)` (§6.1). Lower bound is Decision 2;
-**this decision is the top of the window.**
+`eff_lock = creation_height + tier_lock_blocks(tier)`, where
+**`creation_height ≜ eligible_height`** (§2 canonical definition).
 
-| Option | Mechanism | Status / lean |
-|--------|-----------|---------------|
-| **3A — Non-membership** | Prove leaf **not** in root at `eff_lock` (Curve Forests-style extension; eprint 2024/1647) | **Co-equal fork.** Strongest semantics on the **unified** 128-byte tree. **Cost:** novel non-membership ZK in consensus — no audited production path in Shekyl today. **If chosen:** spawns a **V3.0 pre-genesis** follow-up (non-membership primitive + audit scope + KATs before genesis) — see queue corollary below. |
-| **3B — Coarse public window** | Cap claims by tier-class max lock or policy without per-stake `creation` on wire | **❌ REJECTED (P1).** A stake created late in its tier class can claim epochs **after** its true `eff_lock` while still passing Decision 2's lower bound: wire `M` and **(A)** use full `band_sum` weight, but only a subset of epochs are legitimately accrual-eligible → **§9 step 2 inflation** (delay-proportional over-claim), not merely a weaker anonymity story. Not a utility floor — a consensus soundness break. |
-| **3C — Separate staking subtree + consensus-stamped creation** | **Second curve tree** for staked outputs only. **5-scalar leaf** (160 B): `{O, I, C, h_pqc, h_bind}` where `h_bind = H("stake-bind" ‖ tier ‖ creation_height)` is set by **consensus at inclusion** (not by the staker at commit time). Claim proves membership + `h_bind` matches revealed `(tier, creation)` + Decision 2 lb. **ZK surface:** Pedersen + FCMP membership + hash equality — no new proof system. **Cost:** second accumulator, dual historical roots, reorg journals — **state/ops**, not novel crypto. **Perf ([`FA-6`](FA-6_VIEW_TAG_ML_KEM.md)):** 5th scalar is staking-subtree leaf-layer only (~+25% on that Selene MSM per [`tree.rs`](../../rust/shekyl-fcmp/src/tree.rs) `SCALARS_PER_LEAF`); main tree unchanged; off wallet-scan/decap path — **no FA-6 block-loading impact**. | **Co-equal fork; Round 2 default lean** on crypto maturity + queue trajectory ([`FOLLOWUPS.md`](../FOLLOWUPS.md) preamble). Distinct from **(C1)**. **If chosen:** §15 staking-subtree amendment — bounded state/ops (see queue corollary). |
+**Chosen: 3C — separate staking subtree + consensus-stamped creation.** Both window bounds
+become **arithmetic** on the `h_bind`-bound `creation`; Decision 2's historical root and
+Decision 1's `H_t` are subsumed.
 
-**Performance corollary (FA-6):** Wallet block-loading is dominated by per-output hybrid
-ownership (ML-KEM decap + view tag) — [`FA-6_VIEW_TAG_ML_KEM.md`](FA-6_VIEW_TAG_ML_KEM.md).
-3C's leaf-layer delta is daemon insertion/validation and infrequent claim-time work; 3A's
-non-membership and checkpointed roots sit on the same non-scan paths. **FA-6 does not break
-the 3A/3C tie** — crypto-maturity vs state-surface still governs; the 5-scalar leaf is not
-a reason to reconsider 3C.
+| Option | Mechanism | Disposition |
+|--------|-----------|-------------|
+| **3A — Non-membership** | Prove leaf **not** in root at `eff_lock` (Curve Forests, eprint 2024/1647) | **❌ Rejected.** Introduces a **novel consensus ZK primitive** with no production audit trail + per-epoch historical-root checkpointing; spawns a V3.0 pre-genesis crypto obligation. Loses lenses 2/4/5; silent-fail (inflation) on a subtle bug. |
+| **3B — Coarse public window** | Cap claims by tier-class max lock without per-stake `creation` | **❌ Rejected (P1).** Late-created stake in a tier class claims epochs **past** its true `eff_lock` → **§9 step 2 inflation** (delay-proportional over-claim). Consensus soundness break, not a privacy tradeoff. |
+| **3C — Separate staking subtree** | **Second curve tree** for staked outputs. **5-scalar leaf** (160 B): `{O, I, C, h_pqc, h_bind}`, `h_bind = H("stake-bind" ‖ tier ‖ creation_height)` **consensus-set at inclusion**. Claim: subtree membership + `h_bind` equality + arithmetic window. **ZK surface:** Pedersen + existing membership + hash — **no new primitive**. **Cost:** second accumulator + cross-tree stake/unstake atomicity — **state/ops**. | **✅ CHOSEN.** Wins/ties 6 of 7 lenses (privacy wash); the contested consensus-complexity lens is a state-vs-crypto trade the discipline resolves toward **state** (pattern-replicates the main tree's deferred-insertion + atomic pop). Fail-loud (rejected claim). |
 
-**Queue-trajectory corollary (FOLLOWUPS):** Round 2's **(C_window) ub** choice spawns
-**different queue items** — neither is listed in [`FOLLOWUPS.md`](../FOLLOWUPS.md) yet,
-correctly, while the fork is open. Per the preamble's **V3.0 pre-genesis queue**
-discipline (load-bearing; accumulation compounds the genesis trajectory):
+**7-lens summary:** 1 security (tight, loud-fail) **3C**; 2 cryptography (no new primitive)
+**3C**; 3 consensus/atomicity (2 trees vs 1 tree + non-membership + hist-roots) **leans 3C**;
+4 dependency (reuses existing) **3C**; 5 debt/pre-genesis (bounded state vs novel crypto)
+**3C**; 6 privacy **wash** (both anonymize within staked-tier-in-window — the entitlement
+already scoped the set); 7 UX/failure-mode (marginal proof, loud-fail) **3C**.
 
-| If Round 2 picks | Spawned item (added on close) | Queue class |
-|------------------|-------------------------------|-------------|
-| **3A** | Land Curve Forests-style **non-membership** in consensus with explicit audit scope + KATs **before genesis** | **V3.0 pre-genesis** — new load-bearing crypto obligation |
-| **3C** | Amend [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §15 for **staking subtree** (5-scalar leaf, dual accumulator, dual historical roots) | **Bounded state/ops** — reviewable implementation work, not a novel pre-genesis primitive |
+**Performance corollary (FA-6):** the 5th scalar is staking-subtree leaf-layer only
+(~+25% on that Selene MSM per [`tree.rs`](../../rust/shekyl-fcmp/src/tree.rs)
+`SCALARS_PER_LEAF`); main tree unchanged; **off the wallet-scan/decap path** — no
+block-loading impact ([`FA-6_VIEW_TAG_ML_KEM.md`](FA-6_VIEW_TAG_ML_KEM.md)).
 
-This **reinforces the 3C lean** alongside crypto maturity and FA-6: 3C adds bounded,
-reviewable state work; 3A adds a pre-genesis crypto deliverable the queue preamble warns
-against accumulating casually. **Round 2 should decide with this queue cost visible.**
+**Cross-tree atomicity:** stake-creation (spend main-tree input → append subtree leaf) and
+unstake (publish subtree-leaf key image → append main-tree principal output) are **symmetric
+cross-tree transitions**; `pop_block` must rewind both directions atomically with the
+nullifier set and `band_sum` (§11). Curve-tree leaves are **append-only**, so
+**claim-after-unstake (R0-D6) survives** — the subtree leaf persists; the nullifier set
+prevents epoch re-claim.
 
-**Round 2 must close 3A or 3C** before the claim verifier is inflation-complete on the
-window upper bound. Until then, §9 treats **tier/`M` forgery** as closed (Decision 1) and
-flags **post-`eff_lock` epoch claims** as the residual soundness gap.
+**Entitlement collapse (coupled to 3C, rule 21):** with the is-staked marker in subtree
+membership and tier in `h_bind`, `C_stake` drops `τ·H_t` and **(A)** collapses to the
+reserve-DLEQ-class + bounded-remainder relation (§6.4.1). **Reverts if 3C reverts.**
 
-**Reopen criteria (reversion-clause):** audited Curve Forests non-membership lands with
-consensus-grade test vectors **and** review shows ops cost ≤ separate subtree; or
-empirical claim-fuzzing shows a simpler cap closes the 3B inflation class without
-per-stake binding (unlikely — 3B is designed-closed).
+**Reopen criteria (reversion-clause):** reopen only if implementation surfaces a cross-tree
+atomicity hazard that cannot be closed with the main tree's existing pop discipline, or if a
+later audited non-membership primitive makes a unified tree strictly cheaper end-to-end
+(unlikely — 3C is now the substrate).
 
 ---
 
@@ -665,30 +728,60 @@ either way.
 
 ##### §9 premise — what this record establishes
 
-| §9 assumption | Satisfied by |
+| §9 assumption | Satisfied by (3C) |
 |---------------|--------------|
-| Wire `M` matches tier used in entitlement | **Decision 1** — `T` on wire + `C~_amt` + recompute |
-| Claimed epochs relate to **this** stake's life | **Decision 2** — `creation ≤ S_min`; **Decision 3** — `S ≤ eff_lock` (pending) |
-| **(A)** closes per-claim mint given honest `M` | **Decision 1** — Schnorr on `C~_amt` |
+| Multiplier's `tier_num` matches the opened leaf's tier | **`h_bind`** equality + **single revealed `tier`** drives both `h_bind` and `N` |
+| Claimed epochs relate to **this** stake's life | **`h_bind`** exact `creation` → `creation < S ≤ creation + tier_lock` (pure arithmetic; both bounds) |
+| Per-claim mint bounded given honest multiplier | **(A)** bounded-remainder relation `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩`, `0 ≤ ρ < D` (§6.4.1) |
 
-§9 steps 2–3 (`ρ_cap`, lifetime) unchanged. **Pin:** per-claim inflation from tier/`M`
-forgery is **designed closed**; window **top** remains the audit focus until Decision 3
-lands.
+§9 steps 2–3 (`ρ_cap`, lifetime) unchanged. **Pin:** per-claim inflation from tier/window
+forgery and rounding over-claim is **designed closed** under 3C; no residual window gap.
 
 ---
 
-##### Implementation disposition
+##### Implementation disposition (3C)
 
 | Item | Status |
 |------|--------|
-| **(C) P1** | Closed (this record) |
-| **(C_tier)** commitment + `C~_amt` + KAT | Round 2 implementation |
-| **(C_window) lb** historical root | Round 2 implementation |
-| **(C_window) ub** | **Open** — Decision 3 (**3A** or **3C**; 3B rejected) |
-| **(C1) unified-tree fallback** | Only if both 3A and 3C blocked |
+| **(C) P1** | Closed (this record; 3C) |
+| **Staking subtree** (own root, deferred insertion, LMDB tables; cross-tree stake/unstake atomicity) | Round 2 implementation |
+| **5-scalar leaf** + `h_bind` (consensus-set at inclusion) | Round 2 implementation |
+| **`SCALARS_PER_LEAF`** const → per-tree param (`=5` staking subtree) + 5th-position Selene NUMS generator | Round 2; cbindgen consensus-constant guard + KAT |
+| **Window arithmetic** `creation < S ≤ creation + tier_lock`, `creation ≜ eligible_height` | Round 2 (replaces historical-root lb); canonical height shared with servo (§2, §9) |
+| **Entitlement** reserve-DLEQ class + bounded remainder, FS domain `shekyl-stake-entitlement-v1` | Round 2 (§6.4.1) |
+| ~~`H_t` / `C~_amt` / historical-root lb~~ | **Dropped** — superseded by 3C |
 
-**Amendment targets:** §2; [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §15 (`C.x` basis);
-§6.4.8 wire (`fcmp_membership_at_Smin`).
+**Round 2 mechanical pins (bundle):**
+
+- `SCALARS_PER_LEAF` const → per-tree parameter; 5th-position Selene generator is a NUMS
+  consensus constant → cbindgen guard + KAT.
+- **`creation_h = eligible_height` (RESOLVED).** The accrual-window start (stamped into
+  `h_bind`) **and** the `band_sum`-entry height are **one canonical definition**
+  (§2 canonical block), referenced by both the claim verifier and the servo so they cannot
+  drift. **`accrual-before-counted` is forbidden** (§9 step 2 — silent over-pay). Chosen on
+  three independent grounds: **(i) conservation** — the safe direction is to start accrual no
+  earlier than the stake is counted, the same conservatism as round-toward-under-claim
+  (§6.4.1); **(ii) tree-consistency** — the claim proves staking-subtree membership, so
+  "in the tree ⟺ accruing ⟺ counted" is **one** fact, not three that can drift;
+  **(iii) reorg-stability** — `eligible_height` sits past the `MIN_AGE = 5` buffer, so the
+  anchor doesn't churn on shallow reorgs the way a mining-height anchor would. **UX cost:**
+  effective lock = `tier_lock + deferral` (~5-block warm-up, <0.5% even on the 1,000-block
+  tier) — disclose "lock begins when the stake matures, ~N blocks after confirmation"; not a
+  reason to anchor on mining. **Reversion clause (rule 21):** if exact advertised-lock
+  duration ever becomes a hard UX requirement, the deferral is deterministic, so `eff_lock`
+  may derive from `mining_h + tier_lock` **while accrual stays on `eligible_height`** — but
+  do **not** split the two roles unless that UX genuinely matters, since one bound height
+  with one canonical definition is the lower-drift design.
+- `h_bind` hash-to-field reduction canonical / collision-safe (KAT).
+- Verifier uses the **single revealed `tier`** for both the `h_bind` recompute and `N`
+  (loud-reject invariant; KAT).
+- Entitlement: single floor over batched `N`; remainder **committed** (`C_ρ`), range-proven
+  `0 ≤ ρ < D`, **never revealed**; rounding toward under-claim.
+
+**Amendment targets:** §2 (plain `C_stake`); [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §15
+(staking subtree + 5-scalar leaf, witness header untouched); §6.4.8 wire;
+[`AUDIT_SCOPE.md`](../AUDIT_SCOPE.md) (drop `τ·H_t` vectors, add `h_bind`/`creation` +
+bounded-remainder vectors).
 
 #### 6.4.4 Rejected: claim as ordinary FCMP spend + re-stake
 
@@ -717,9 +810,9 @@ claim-circuit work the same as consensus work.
 
 #### 6.4.6 Audit scope
 
-The claim verifier ( **`M` recompute + (C_tier) + (C_window)** + **(A)** + **(B)** ) is a
-**derivative** of upstream FCMP++ and is listed in
-[`AUDIT_SCOPE.md`](../AUDIT_SCOPE.md) §Confidential stake claim verifier (Round 1).
+The claim verifier ( subtree membership + **`h_bind`** + window arithmetic + multiplier
+recompute + **(A)** bounded-remainder + **(B)** ) is a **derivative** of upstream FCMP++ and
+is listed in [`AUDIT_SCOPE.md`](../AUDIT_SCOPE.md) §Confidential stake claim verifier.
 
 #### 6.4.8 Claim transaction wire sketch (Round 1)
 
@@ -730,25 +823,24 @@ Round 2; structural fields:
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `tier` | u8 | Public; **(C_tier)** via `C~_amt` (§6.4.1) |
-| `creation_height` | u64 | Public metadata; **(C_window)** via historical-root membership (lower bound); upper bound Round 2 open |
+| `tier` | u8 | Public; **single source** for `h_bind` recompute **and** `tier_num` (§6.4.1) |
+| `creation_height` | u64 | Public; `h_bind` recompute + window arithmetic (both bounds) |
 | `settlement_epochs` | `u64[]` | `|·| ≤ MAX_EPOCHS_PER_CLAIM` (15) |
 | `nullifiers` | `point[32][]` | `N_S = x·G_S` per epoch; stake-claim set |
-| `M` | u128 or le-int | **Verifier-recomputed** `tier_num · Σ_S K_S`; wire value checked (§9) |
-| `fcmp_membership` | blob | Unified-tree membership at **current** root |
-| `fcmp_membership_at_Smin` | blob | **(C_window)** — same leaf at root checkpoint for earliest claimed `S` (Round 2 layout) |
+| `fcmp_membership` | blob | **Staking-subtree** membership at **current** root (5-scalar leaf); `h_bind` public input |
 | `claim_linkability` | blob | **(B1)** ClaimLinkability |
-| `entitlement_schnorr` | blob | **(A)** on `C~_amt` |
-| `tier_surjection` | blob | Optional explicit CA surjection step if not folded into membership (Round 2) |
+| `entitlement` | blob | **(A)** `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩` (Schnorr) + `C_ρ` BP+ range `0 ≤ ρ < D`; FS domain `shekyl-stake-entitlement-v1` |
+
+`N = tier_num(tier)·Σ_S K_S` and `D = SCALE` are **verifier-recomputed**, not wired.
 
 **Transaction body (unchanged shape):** one `C_claim` reward output + BP+ range proof;
 RCT balance ties `C_claim` mint to pseudo-outs; **no** principal spend / **no** key image
 in spent set.
 
-**Consensus checks (ordered):** nullifier absence → **(C_window)** lower bound →
-**`M` recompute** vs wire → membership (current root) → **(C_tier)** / **(A)** on
-`C~_amt` → **(B)** → range → mint → `band_sum` / rate accounting. **`eff_lock` upper**
-when Round 2 closes (§6.4.3).
+**Consensus checks (ordered):** nullifier absence → subtree membership (current root) +
+**`h_bind`** equality (from revealed `tier`,`creation`) → **window arithmetic** → multiplier
+recompute (`N`,`D`; same `tier`) → **(A)** entitlement + remainder range → **(B)** → range →
+mint → `band_sum` / rate accounting.
 
 ### 6.5 Timing
 
@@ -800,32 +892,46 @@ This is the argument an auditor will attack; it is now the *only* thing standing
 between the design and silent inflation (the staker stream is no longer publicly
 summable — §10).
 
-**Premise (P1 — §6.4.3 decision record):** Before **(A)**, the verifier:
+**Premise (P1 — §6.4.3 decision record, 3C):** Before **(A)**, the verifier:
 
-1. **(C_tier)** — forms `C~_amt = C~ − T·H_t`; wire `tier` → `T` (Decision 1).
-2. **(C_window)** — historical-root membership at `S_min` (Decision 2); **`eff_lock`
-   upper** per Decision 3 when closed (until then: residual window-top gap only).
-3. **Recomputes** `M = tier_num(T) · Σ_S K_S`; rejects wire `M` on mismatch.
+1. **Subtree membership + `h_bind`** — proves the opened leaf is in the staking subtree and
+   its 5th scalar equals `H("stake-bind" ‖ tier ‖ creation)` for the **revealed**
+   `(tier, creation)`.
+2. **Window arithmetic** — `creation < S ≤ creation + tier_lock(tier)` for every claimed `S`
+   (both bounds; no historical root).
+3. **Recomputes** `N = tier_num(tier) · Σ_S K_S` using the **same revealed `tier`**;
+   `reward = floor(N·amount/D)`.
 
-Step 1 below assumes validated **`M`** and tier bind; window top is explicit in Decision 3.
+Step 1 below assumes validated multiplier + window.
 
-1. **Per-claim bound (given validated `M` and (C_tier)).** Each claim mints against the
-   amount leg; entitlement **(A)** on `C~_amt` forbids minting more than `M · amount` for
-   the membership-proven principal. **Latent path without (C_tier):** open tier-1 witness,
-   assert tier-3 `M`, run **(A)** on full `C~` (or wrong `T`) — Schnorr can still close.
-   **`ρ_cap` (step 2)** caps epoch-total emission but does not repair per-claim tier/`M`
-   forgery.
+1. **Per-claim bound (given validated multiplier and window).** Entitlement **(A)** — the
+   bounded-remainder relation `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩` with `0 ≤ ρ < D` — forbids
+   minting more than `floor(N·amount/D)` for the membership-proven principal, and the
+   committed remainder closes the **rounding over-claim** path. **Tier forgery** (tier-1 leaf,
+   tier-3 `tier_num`) is excluded by `h_bind` + the single-revealed-tier rule.
+   **`ρ_cap` (step 2)** caps epoch-total emission independently.
 2. **Per-epoch bound.** `total staker emission_e = ρ_e · TWS_actual ≤ budget_e` by the
-   cap (§4.2), for **any** `band_sum` (honest, stale, or manipulated).
+   cap (§4.2), for **any** `band_sum` (honest, stale, or manipulated). This is the bound
+   `Σ_S accrued_S = ρ_e · (Σ accruing weights) ≤ budget_S`, which holds **only if
+   `band_sum_S` counts precisely the stakes accruing in `S`** — i.e. the accrual-window
+   start and the `band_sum`-entry height are the **same** canonical `eligible_height` (§2,
+   §4.1). **Forbidden configuration (asymmetric, silent):** *accrual-before-counted* —
+   accrual anchored at a height earlier than `band_sum` entry (e.g. accrue from mining,
+   count from eligible). Stakes in `[earlier, entry)` then draw `ρ_e·weight` while **absent
+   from the denominator** → `Σ accrued > budget` → **silent over-pay (inflation)**, no
+   reject. The reverse (counted-before-accrued) merely inflates the denominator → safe
+   under-pay. The canonical single-source height (§2) is the **structural** defense: the
+   claim verifier and the servo reference one definition and cannot drift independently.
 3. **Lifetime bound.** `Σ_e budget_e ≤ Σ_e target_share_e · block_emission_e ≤
    STAKER_EMISSION_SHARE · (total emission) < MONEY_SUPPLY` (since `target_share < 1`
    and total emission ≤ ceiling).
 
 The miner stream (coinbase) remains publicly summable (§10), so total supply is
-**auditably bounded** even though the staker stream is hidden. Per-claim **(A)** on
-`C~_amt` + range (1), epoch **`ρ_cap`** (2), and **(C)** tier/window integrity are
-therefore all consensus-critical. **Pin:** **(C)** is P1; **(C_tier)** + **(C_window)**
-preferred Round 2; **`eff_lock` upper** open; **(A)** is **sound modulo (C_tier)** (§6.4.1).
+**auditably bounded** even though the staker stream is hidden. Per-claim **(A)**
+bounded-remainder relation + range (1), epoch **`ρ_cap`** (2), and **(C)** tier/window
+integrity via `h_bind` are therefore all consensus-critical. **Pin:** **(C)** is P1, closed
+on **3C** (§6.4.3); **(A)** is the reserve-DLEQ-class + bounded-remainder relation, coupled
+to 3C (§6.4.1).
 
 ---
 
@@ -897,13 +1003,13 @@ calibration refinements.
 | 3 | `ρ_cap` decay handling | **Closed R1** — decay on budget only (§14.3) |
 | 4 | Band scheme (count, spacing) | **Closed R1** — 5 decade-log bands, geometric midpoint (§14.1) |
 | 5 | Cold-start floor | **Closed R1** — cross-cutting: servo (§14.1) + **P2** `band_sum` differencing gate (§14.4) |
-| 6 | Entitlement **(A)** | **Closed R1 modulo (C_tier)** — `C~_amt` Schnorr (§6.4.1) |
+| 6 | Entitlement **(A)** | **Closed** — reserve-DLEQ class + bounded remainder (§6.4.1); coupled to 3C |
 | 7 | Nullifier **(B)** + `G_S` + `MAX_EPOCHS_PER_CLAIM` | **Closed R1** — pins §6.4.2; **KAT** Stage 2 |
-| 8 | Tier/creation **(C)** | **Partial close** — §6.4.3 (tier + window lb ✅); **open:** Decision 3 ub (**3A/3C**; **3B rejected**) |
+| 8 | Tier/creation **(C)** | **Closed** — §6.4.3 **3C** (subtree + `h_bind`); Decisions 1–2 superseded; impl Round 2 |
 | 9 | Claim anonymity widening | **Closed R1** — accept v1 scope (§14.4) |
 | — | Byte-exact claim/stake serialization | **Round 2** |
-| — | `STAKE_CLAIM_GS.json` / `H_t` / historical-root KATs | **Round 2** |
-| — | **`eff_lock` upper bound** | **Round 2 open** — **3A** (non-membership) vs **3C** (staking subtree + stamped creation); **3B rejected** (§6.4.3) |
+| — | `STAKE_CLAIM_GS.json` / `h_bind` / 5-scalar-leaf + Selene-generator KATs | **Round 2** |
+| — | **`eff_lock` window** | **Closed — 3C** (staking subtree + `h_bind` arithmetic, both bounds; 3A/3B rejected; §6.4.3). Impl Round 2. |
 
 ---
 
@@ -949,11 +1055,10 @@ close in Round 2 (§6.4.3). Wallet mirror: [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE
 
 | Binding | Round 1 disposition |
 |---------|---------------------|
-| **(A)** | Off-circuit Schnorr on `C~_amt` — **closed**; sound modulo **(C_tier)**; in-circuit = reversion only (§6.4.1) |
+| **(A)** | Off-circuit reserve-DLEQ class + bounded remainder `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩`, `0≤ρ<D`; FS domain `shekyl-stake-entitlement-v1`; coupled to 3C (§6.4.1) |
 | **(B)** | `N_S = x·G_S`; ClaimLinkability (B1); `MAX_EPOCHS_PER_CLAIM = 15`; DDH split §6.3 |
-| **(C)** | **P1** — §6.4.3: **(C_tier)** ✅; **(C_window) lb** ✅; **ub** open (**3A/3C** co-equal, lean **3C**) |
-| **Rejected** | **3B** coarse window (P1 inflation); spend-and-restake; B2-primary; `nullifier_seed` HKDF; persist `x` in wallet; wire `M` without recompute |
-| **Fallback** | **(C1)** unified-tree `h_stake_bind` if **both** 3A and 3C blocked |
+| **(C)** | **P1** — §6.4.3 **3C**: staking subtree + 5-scalar `h_bind` (tier+creation); window arithmetic. Decisions 1 (`H_t`) & 2 (historical root) superseded |
+| **Rejected** | **3A** non-membership (novel ZK); **3B** coarse window (P1 inflation); spend-and-restake; B2-primary; `nullifier_seed` HKDF; persist `x` in wallet; reveal remainder `ρ` (deanon) |
 
 ---
 
@@ -964,7 +1069,7 @@ close in Round 2 (§6.4.3). Wallet mirror: [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE
 | [`PHASE_2B_STAKE_LIFECYCLE.md`](PHASE_2B_STAKE_LIFECYCLE.md) | Wallet mirror (§2.3); R0-D1–D7; `N_S = x·G_S` §8.5; §6.4 review pins |
 | [`STAKER_REWARD_DISBURSEMENT.md`](STAKER_REWARD_DISBURSEMENT.md) | **Superseded** reward/claim mechanism (retained for history) |
 | [`DESIGN_CONCEPTS.md`](DESIGN_CONCEPTS.md) | Four-component economic model (Components 2–4) |
-| [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | Membership / curve trees; staked `C.x` + `H_t` (§15); CA lineage §6.4.3 |
+| [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | Membership / curve trees; staking subtree + 5-scalar `h_bind` leaf (§15) |
 | [`WITNESS_HEADER.json`](../test_vectors/WITNESS_HEADER.json) | Consensus-locked witness layout |
 | [`AUDIT_SCOPE.md`](../AUDIT_SCOPE.md) | Claim verifier (§6.4.6); Confidential stake claim verifier section (Round 1) |
 | `blockchain.cpp` (`:800–822`, `:3476`, `:4214–4247`, `:4366–4376`, `:5045–5051`) | Code sites superseded (§12) |
