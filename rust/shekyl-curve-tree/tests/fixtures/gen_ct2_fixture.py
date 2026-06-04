@@ -44,9 +44,11 @@ from pathlib import Path
 COINBASE_LOCK = 60
 SPENDABLE_AGE = 10
 
-# Tier-A chain shape. MAIN runs far enough past the +60 founder drain
-# (height 60) to freeze a level-0 subtree and reach into level-1 (one
-# coinbase leaf per block => MAIN-59 leaves at the tip).
+# Tier-A chain shape. The founder coinbase matures at +60 but a matured leaf
+# enters the tree on connection of the next block (drained_through = H - 1), so
+# the first non-empty tree is at height 61. MAIN runs far enough past that to
+# freeze a level-0 subtree and reach into level-1 (one coinbase leaf per block
+# => MAIN-60 leaves at the tip).
 MAIN_TIP = 210
 DEEP_POP = 70   # >= COINBASE_LOCK+1: trims already-drained leaves (§6 trim branch)
 DEEP_REGEN = 72
@@ -263,7 +265,7 @@ def main() -> int:
         print(f"starting regtest daemon (workdir={daemon.workdir})")
         daemon.start()
 
-        # MAIN: empty window 0..59, founder drain at 60, segment freeze.
+        # MAIN: empty window 0..=60, first founder drain at 61, segment freeze.
         print(f"mining MAIN to height {MAIN_TIP}")
         daemon.generate(MAIN_TIP - (daemon.height() - 1), address)
         chains.append(record_chain(daemon, "main"))

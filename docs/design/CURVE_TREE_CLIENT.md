@@ -934,9 +934,10 @@ leaf enters the tree on connection of the **next** block
 (`drained_through = H − 1`), so the **first non-empty tree and first `R_0`
 material is at height 61**, not height 10. (The CT-2 KAT pins this boundary
 exactly — `recon_kat::empty_window_then_first_drain_at_61`; an earlier draft
-said "height 60".) No regular tx can exist before 60
+said "height 60".) No regular tx can exist before height 61
 (spending needs a non-empty tree for FCMP membership, which doesn't exist until
-the founder coinbase matures), so the window is **structural**, not
+the founder coinbase first drains into the tree at 61), so the window is
+**structural**, not
 chain-content-dependent. The regular-output `+10` rule (`SPENDABLE_AGE`) is
 unchanged and correct; the early-height empty window is specifically the
 coinbase case. CT-2's KAT confirms the `selene_hash_init` root at an early

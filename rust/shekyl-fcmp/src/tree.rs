@@ -291,9 +291,19 @@ pub fn build_layers(leaf_scalars: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
 /// path the leaf layer is layer 0, so `build_layers` passes 0. A caller passing
 /// cached sub-roots must pass the layer index those sub-roots occupy.
 ///
-/// Returns `vec![initial_layer]` (a single layer) when `initial_layer` already
-/// has `<= 1` node — the root is then `result.last()[0]` (or the empty-tree
-/// case is handled by the caller; see `build_layers`).
+/// The Selene leaf layer (`start_layer_idx == 0`) is never the root: a single
+/// node at layer 0 is promoted into the layer-1 Helios root rather than
+/// returned bare, matching the daemon's `grow_curve_tree` (see the module-level
+/// "Tree topology" note and `docs/design/CT2_DRAIN_ORDER.md` §5). The stop
+/// condition is therefore "single node at layer `>= 1`", so:
+/// - a non-empty `initial_layer` at layer 0 yields depth `>= 2`;
+/// - an `initial_layer` already at layer `>= 1` with `<= 1` node returns
+///   `vec![initial_layer]` (the caller's cached sub-root is already a root);
+/// - the empty tree returns `vec![initial_layer]` with an empty top layer and
+///   its root is the `selene_hash_init` sentinel handled by the caller (see
+///   `build_layers`).
+///
+/// In the non-empty cases the root is `result.last()[0]`.
 pub fn build_upper_layers(initial_layer: Vec<[u8; 32]>, start_layer_idx: u8) -> Vec<Vec<[u8; 32]>> {
     const ZERO: [u8; 32] = [0u8; 32];
 
