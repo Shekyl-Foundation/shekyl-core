@@ -344,11 +344,19 @@ weaken soundness, zero-knowledge, or inflation bounds established for spends.
    formulas. See [`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §2 (canonical
    block), §4.1, §9 step 2.
 
-3. **Multiplier integrity (P1)** — Recompute `N = tier_num(tier)·Σ_S K_S`, `D = SCALE`;
-   `reward = floor(N·amount/D)` ([`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §9).
+3. **Multiplier integrity (P1)** — Recompute `N = tier_num_reduced(tier)·Σ_S K_S_scaled`,
+   `D = D_tier·SCALE_rate = 2³⁹` (**not** `D = SCALE` — `D` is a product of the tier-LCD
+   `D_tier = 2` and the rate-precision scale `SCALE_rate = 2³⁸`, both powers of two; Round-2
+   correction, data-determined `k = 38` by precision sweep);
+   `reward = floor(N·amount/D)` ([`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md)
+   §6.4.1, §9). **`D` is a consensus constant** with a reversion clause (re-pin only on
+   tier-set or rate-magnitude change).
 
 4. **Entitlement (A) — reserve-DLEQ class + bounded remainder** — Relation
-   `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩` with **committed** remainder `C_ρ`, BP+ range `0 ≤ ρ < D`,
+   `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩` with **committed** remainder `C_ρ`, **native 39-bit
+   power-of-two range** `0 ≤ ρ < D` (`D = 2³⁹`; construction per §6.4.1 decision 1(b) —
+   `generalized-bulletproofs` circuit range **or** dedicated 39-bit BP+, **not** the
+   reward output's fixed-64-bit `AggregateRangeProof`, which would only prove `ρ < 2⁶⁴`),
    rounding toward under-claim, FS domain `shekyl-stake-entitlement-v1`. **Two traps:**
    (a) omitting `C_ρ` → rounding over-claim (P1 inflation); (b) revealing `ρ` →
    `amount mod (D/gcd)` deanonymization (P2). Both closed by commit-and-range (§6.4.1).

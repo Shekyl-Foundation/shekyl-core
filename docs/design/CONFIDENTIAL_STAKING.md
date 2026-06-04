@@ -160,7 +160,7 @@ carrying, **instead of a cleartext amount** (current `blockchain.cpp:3476–3478
 > alternatives, and the deterministic-deferral reversion clause: §6.4.3.
 
 **Weight / entitlement scalar.** Public `tier` on the output and claim tx determines
-`tier_num`; accrual uses the rational multiplier `N/D = tier_num · Σ_S K_S / SCALE` (§3,
+`tier_num`; accrual uses the rational multiplier `N/D = tier_num_reduced · Σ_S K_S_scaled / D`, `D = D_tier·SCALE_rate = 2³⁹` (§3,
 §6.4.1). Tier is bound to the **hidden** leaf by `h_bind` (subtree membership + hash
 equality, §6.4.3 Decision 3C); the **single revealed `tier`** scalar drives **both** the
 `h_bind` recompute and `tier_num` in `N` — this single-source rule is the load-bearing
@@ -350,10 +350,10 @@ pseudo-out blinding (`C~ = a·G + amount·H` for staked leaves under 3C; §6.4.3
    `Hp(O)`); each `N_S` is filed in the **stake-claim nullifier set** (not the spent
    key-image set) and must be absent before inclusion (no double-claim). Principal
    `x·Hp(O)` is **not** published on claim (§7).
-4. **Entitlement.** Consensus **recomputes** `N = tier_num(tier)·Σ_S K_S`, `D = SCALE`
-   from `h_bind`-validated `tier` and `settlement_epochs` (§9). **(A)** bounded-remainder
-   relation: `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩` with `0 ≤ ρ < D` range-proven,
-   `reward = floor(N·amount/D)` (§6.4.1).
+4. **Entitlement.** Consensus **recomputes** `N = tier_num_reduced(tier)·Σ_S K_S_scaled`,
+   `D = D_tier·SCALE_rate = 2³⁹` from `h_bind`-validated `tier` and `settlement_epochs` (§9).
+   **(A)** bounded-remainder relation: `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩` with `0 ≤ ρ < D`
+   range-proven (native 39-bit power-of-two range), `reward = floor(N·amount/D)` (§6.4.1).
 5. **Range.** `C_claim` carries a Bulletproof+ range proof (non-negative, bounded).
 6. **Mint.** the claim mints `C_claim` as a normal, self-addressed FCMP++ reward
    output (two-component `O = ho·G + B + y·T`, KEM-self-encap; the staker opens it
@@ -464,18 +464,57 @@ verifier **must** assert one tier source for both `h_bind` recompute and the mul
 (loud reject on mismatch; KAT-locked — §6.4.3 mechanical pins).
 
 **The multiplier is rational — the relation is not a plain integer-scalar Schnorr.** The
-four-component yield makes
-`M_frac = N / D`, with `N = tier_num(tier) · Σ_{S} K_S` and `D = SCALE`
-(tier-1.5 alone forces a denominator). The reward is an **integer atomic amount**:
+four-component yield makes `M_frac = N / D`. The reward is an **integer atomic amount**:
 
 ```text
-reward = floor( N · amount / D )           // single floor over the BATCHED sum N
-N · amount = D · reward + ρ,    0 ≤ ρ < D   // bounded remainder
+N          = tier_num_reduced(tier) · Σ_{S} K_S_scaled        (public scalar)
+D          = D_tier · SCALE_rate = 2 · 2^k = 2^(k+1)           (power of two)
+reward     = floor( N · amount / D )         // single floor over the BATCHED sum N
+N · amount = D · reward + ρ,    0 ≤ ρ < D     // bounded remainder
 ```
+
+**`D` is a product of two scales — the "`D = SCALE`" earlier framing was underspecified
+(Round 2 correction).** It is only `= SCALE` if `Σ_S K_S` is a plain integer, which it is
+**not**: the per-weighted-atomic rate `ρ_e = budget_e/band_sum_e ≈ 1e-8 … 1e-3` (atomic per
+weighted-atomic per block) is **sub-integer**, so `Σ_S K_S` must carry a rate-precision scale
+`SCALE_rate` or every reward floors to zero. The tier factor carries its own scale. Hence
+`D = D_tier · SCALE_rate` intrinsically. Two levers minimize `D` (and the range-proof width):
+
+- **`D_tier = 2`** — the LCD of the pinned tier multipliers `{1.0, 1.5, 2.0}` (§3 /
+  [`tiers.rs`](../../rust/shekyl-staking/src/tiers.rs)); `tier_num_reduced ∈ {2, 3, 4}`
+  represents them **exactly** (one bit). The 1e6 fixed-point tier scale is a representation
+  artifact, not a denominator the entitlement needs.
+- **`SCALE_rate = 2^k`** — the **sole** precision dial. Both being powers of two makes
+  `D = 2^(k+1)` a power of two, so the remainder range proof `0 ≤ ρ < D` is a **native
+  `(k+1)`-bit power-of-two range** that bounds `ρ < D` *exactly*.
+
+**Floor loss is always sub-atomic.** `floor(N·amount/D)` discards `< 1` atomic unit
+**regardless of `D`**, so `D` does **not** govern payout rounding (always sub-atomic); it
+governs **rate quantization** — the smallest representable `ρ_e` increment.
+
+**`D = 2³⁹` (k = 38) — data-determined.** The precision sweep
+([`shekyl-staking/src/entitlement.rs`](../../rust/shekyl-staking/src/entitlement.rs),
+`precision_sweep`) sweeps `SCALE_rate` over the realistic rate range (per-block staker
+emission ÷ weighted band, from `config/economics_params.json` magnitudes), excluding rates
+below 0.001 % per-unit yield as economically negligible. The smallest `k` with no
+meaningful-rate underflow and worst-case rate-quantization error `< 0.1 %` is **`k = 38 ⇒
+D = 2³⁹`, a 39-bit remainder range proof** (worst-case error `9.7e-4`; `k=40`→41-bit at
+`3.3e-4`; `k=44`→45-bit at `5.2e-5`). Committed sweep:
+[`docs/test_vectors/staking/entitlement_precision_sweep.json`](../test_vectors/staking/entitlement_precision_sweep.json).
+
+**Reversion (`21-reversion-clause-discipline.mdc`):** `D` is a consensus constant. Re-run
+the sweep and re-pin `k` **only if** the tier multiplier set changes (re-derive `D_tier` from
+the new LCD; `tier_num_reduced` rejects non-exact tiers loudly) **or** the rate magnitudes in
+`economics_params.json` shift enough to move the meaningful-rate floor.
 
 **Batching pin:** one floor over the summed `N` (one remainder `ρ`), **not** per-epoch
 floors — this preserves the O(1)-in-epochs single proof. Per-epoch flooring would force a
 remainder vector and change the statement.
+
+**Overflow:** at the extremes (tier-2, capped scaled rate over `MAX_EPOCHS_PER_CLAIM ·
+rate_epoch_blocks`, `amount ≤ money_supply`), `N · amount ≈ 2¹⁰⁶` — `> 64` bits of headroom
+below the Ed25519 scalar order `ℓ ≈ 2²⁵²`, so the cancel relation never wraps
+(`entitlement.rs::overflow_headroom_bits`, test-locked).
 
 **Entitlement relation (commit the remainder; do not reveal it):**
 
@@ -499,11 +538,28 @@ Prove the difference is in `⟨G⟩` via a Schnorr on the residual `G`-exponent
   leaks `amount mod (D/gcd(N,D))` — partial deanonymization of the hidden principal. `ρ`
   **must** be committed (`C_ρ`) and range-proven, never revealed.
 
-So the entitlement is **reserve-DLEQ class + a bounded-remainder range proof** (piggybacks
-Bulletproofs+ machinery but is a **distinct relation**), under a **fresh Fiat-Shamir
-domain** `shekyl-stake-entitlement-v1` — it reuses the reserve-DLEQ **audit class and
-transcript discipline**, **not** the literal `shekyl-reserve-proof-dleq-v1` string (sharing
-a transcript domain across two statements is a soundness footgun).
+So the entitlement is **reserve-DLEQ class + a bounded-remainder range proof** (a **distinct
+relation**), under a **fresh Fiat-Shamir domain** `shekyl-stake-entitlement-v1` — it reuses
+the reserve-DLEQ **audit class and transcript discipline**, **not** the literal
+`shekyl-reserve-proof-dleq-v1` string (sharing a transcript domain across two statements is a
+soundness footgun).
+
+**Remainder range-proof construction (decision 1(b) — Round-2 finding).** The `ρ < D` bound
+is a **native `(k+1)`-bit (=39-bit) power-of-two range** (`D = 2³⁹`). It **cannot** ride the
+reward output's range proof as a free aggregate slot: that proof is Monero's
+`AggregateRangeProof`, **fixed at 64 bits per commitment**
+([`fcmp/bulletproofs/.../aggregate_range_proof.rs`](../../rust/shekyl-oxide/shekyl-oxide/fcmp/bulletproofs/src/plus/aggregate_range_proof.rs)),
+so a 64-bit slot would only prove `ρ < 2⁶⁴` — which does **not** close trap (a). The two
+viable constructions, to be pinned in Round 2 against a `generalized-bulletproofs`
+proof-cost benchmark (currently blocked on this choice):
+  - **(i) `generalized-bulletproofs` arithmetic-circuit range** at width 39 — the natural
+    home (it already proves arbitrary linear/range constraints; the FCMP++ machinery); the
+    `C_ρ` term then batches with the membership/entitlement transcript, not the 64-bit
+    output BP+ batch.
+  - **(ii) a dedicated 39-bit BP+ range** distinct from the 64-bit output proof. Cheaper per
+    proof but a second BP+ statement on the wire.
+  Both are sound (power-of-two `D` makes either a tight bound); the benchmark decides on
+  size/verify. **Folding into the 64-bit output batch is rejected** — wrong bound.
 
 **Why off-circuit (not in-circuit).** Membership already exposes public `C~`; entitlement is
 a **linear relation on public Pedersen points** plus a range proof. The mature disposition is
@@ -620,8 +676,9 @@ with `0 ≤ ρ < D` range-proven (§6.4.1). Tier forgery is excluded by the **si
 **Multiplier (public, recomputed by verifier):**
 
 ```text
-N = tier_num(tier) · Σ_{S ∈ settlement_epochs} K_S ,    D = SCALE
-reward = floor(N · amount / D)              // rounding toward under-claim
+N = tier_num_reduced(tier) · Σ_{S ∈ settlement_epochs} K_S_scaled
+D = D_tier · SCALE_rate = 2 · 2³⁸ = 2³⁹      // power of two (§6.4.1)
+reward = floor(N · amount / D)               // rounding toward under-claim
 ```
 
 Verifier reads **one** `tier` scalar; uses it for the `h_bind` recompute **and** `tier_num`.
@@ -829,9 +886,10 @@ Round 2; structural fields:
 | `nullifiers` | `point[32][]` | `N_S = x·G_S` per epoch; stake-claim set |
 | `fcmp_membership` | blob | **Staking-subtree** membership at **current** root (5-scalar leaf); `h_bind` public input |
 | `claim_linkability` | blob | **(B1)** ClaimLinkability |
-| `entitlement` | blob | **(A)** `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩` (Schnorr) + `C_ρ` BP+ range `0 ≤ ρ < D`; FS domain `shekyl-stake-entitlement-v1` |
+| `entitlement` | blob | **(A)** `N·C~ − D·C_claim − C_ρ ∈ ⟨G⟩` (Schnorr) + `C_ρ` native 39-bit power-of-two range `0 ≤ ρ < D` (construction per §6.4.1 decision 1(b)); FS domain `shekyl-stake-entitlement-v1` |
 
-`N = tier_num(tier)·Σ_S K_S` and `D = SCALE` are **verifier-recomputed**, not wired.
+`N = tier_num_reduced(tier)·Σ_S K_S_scaled` and `D = D_tier·SCALE_rate = 2³⁹` are
+**verifier-recomputed**, not wired.
 
 **Transaction body (unchanged shape):** one `C_claim` reward output + BP+ range proof;
 RCT balance ties `C_claim` mint to pseudo-outs; **no** principal spend / **no** key image
