@@ -200,16 +200,17 @@ fn reorg_prefix_and_freeze_lag_are_frozen() {
     let deep = decode_chain(chain(&f, "reorg_deep"));
     let shallow = decode_chain(chain(&f, "reorg_shallow"));
 
-    // Deep reorg (pop > SPENDABLE_AGE) forked from main after
-    // `main_tip - deep_pop`: re-mined leaves exist but drain only past the
-    // freeze-lag, so the frozen window extends `fork + 61` deep.
+    // Deep reorg (pop > COINBASE_LOCK_WINDOW, i.e. pops blocks whose coinbase
+    // had already drained) forked from main after `main_tip - deep_pop`:
+    // re-mined leaves exist but drain only past the freeze-lag, so the frozen
+    // window extends `fork + 61` deep.
     let fork_deep = usize::try_from(main_tip - deep_pop).expect("fork height fits usize");
     assert_frozen_through_lag(&main, &deep, fork_deep, "main/reorg_deep");
 
-    // Shallow reorg (pop < SPENDABLE_AGE) forked from reorg_deep after its
-    // tip - shallow_pop: popped blocks' coinbase never drained in range, so
-    // the pending-only branch mutates nothing — roots identical across the
-    // entire overlap.
+    // Shallow reorg (pop < COINBASE_LOCK_WINDOW, so every popped block's
+    // coinbase was still pending) forked from reorg_deep after its
+    // tip - shallow_pop: nothing had drained, so the pending-only branch
+    // mutates nothing — roots identical across the entire overlap.
     let deep_tip = deep.last().unwrap().height;
     let fork_shallow = usize::try_from(deep_tip - shallow_pop).expect("fork height fits usize");
     assert_frozen_through_lag(&shallow, &deep, fork_shallow, "reorg_deep/reorg_shallow");
@@ -220,7 +221,8 @@ fn reorg_prefix_and_freeze_lag_are_frozen() {
 /// re-mined leaf at `fork + 1` drains at `fork + 62`, so this window is
 /// reconstructed from shared-prefix leaves alone.
 fn assert_frozen_through_lag(a: &[Block], b: &[Block], fork: usize, label: &str) {
-    // SPENDABLE_AGE (60) coinbase maturity + 1 (drain enters at next block).
+    // COINBASE_LOCK_WINDOW (60, coinbase maturity) + 1 (a matured leaf enters
+    // the tree on connection of the next block).
     const FREEZE_LAG: usize = 61;
     let common_tip = a.len().min(b.len()) - 1;
     let frozen_through = (fork + FREEZE_LAG).min(common_tip);
