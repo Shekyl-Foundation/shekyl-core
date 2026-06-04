@@ -1371,6 +1371,19 @@ sustainability is unaffected by the recalibration.
   `[O][I][C][h_pqc][x][y][z][a]` confirmed untouched; `AUDIT_SCOPE.md` vectors updated
   (drop `τ·H_t`/historical-root, add `h_bind`/creation + bounded-remainder).
 
+  *Backstop dependency to flag if a nullifier-set-bounded-state / pruning workstream
+  opens (spawned 2026-06-04, Phase 2b §3.4):* the wallet's runtime-only
+  `claim_pending_epochs` model leans on the **active stake-claim nullifier set** as the
+  double-claim source of truth — a forgotten in-flight claim self-heals because a
+  duplicate is rejected at consensus. That backstop is **orthogonal to shard archival**
+  (`V3_STAKER_ARCHIVAL.md` prunes historical membership-reference data —
+  `assemble_tree_path_for_output` paths — not the active nullifier set). It *would* be
+  load-bearing for any future nullifier-set bounding/pruning: the safe boundary is
+  **only out-of-claim-window nullifiers are prunable** (once an epoch's claim window
+  closes, no valid claim can re-spend it, so its nullifier can leave the active set
+  without opening a double-claim). Different conversation; recorded here so the
+  dependency is on file if that workstream opens.
+
 - **Confidential stake-UTXO transfer (privacy-compatible; compounds (C)).**
   FCMP spend of staked principal + re-insert as staked output — **not** receipt-token
   liquid staking (public fungible receipts remain out of scope). **`creation_height` is
@@ -6920,6 +6933,18 @@ one place to confirm each item's relationship to the wallet stack.
   gate is the message, not shared state). The `LedgerEngine`
   consumes `ArchivalEvent` values via the merge protocol the same
   way it consumes `StakeEvent` values.
+
+  *E-factoring trigger breadcrumb (Phase 2b §8.9):* when designing
+  the **archival-yield disbursement** path, check whether it adds a
+  **staker-initiated claim tx**. If it does, that is the first clause
+  of the `PHASE_2B_STAKE_LIFECYCLE.md` §8.9 reversion trigger firing
+  (third claim-tx-type) — factor the shared staleness/broadcast
+  primitive then, which the wallet duplicated (E shape) precisely to
+  defer until a third consumer appeared. A pointer, not a task:
+  archival is otherwise additive and does not reopen the stake FSM;
+  this only flags the staleness-gate factoring as coming due if
+  disbursement is claim-tx-shaped (protocol-side `ArchivalEvent`
+  merge with no staker-initiated tx does not trip it).
 
   *Why sibling, not child of `StakeEngine`:* slashing-domain
   integrity (a bug in archival logic that slashes archival-yield

@@ -432,12 +432,13 @@ settlement-epoch index.
 |------|-------------------|-----|
 | — | `Wallet::stake` builds `PendingTx` (commitment + range proof + band) | `PendingBroadcast` |
 | `PendingBroadcast` | submit + mempool observe | `Unconfirmed` |
-| `PendingBroadcast` | discard pending tx | *(remove instance or terminal — Round 2)* |
+| `PendingBroadcast` | discard pending tx | **remove instance** — no terminal `Discarded` (§3.4 ratification): the stake never broadcast, left no chain trace; "you discarded a stake" is a transient UX notification, not FSM state |
 | `Unconfirmed` | scan finds the staked commitment output | `Locked` → auto-advance to `Accruing` if `height <= effective_lock_until` |
 | `Locked` | next scan `height > confirmed_at` and `<= effective_lock_until` | `Accruing` |
 | `Accruing` | scan height `> effective_lock_until` | `Claimable` (set `frozen_accrual_since`) |
-| `Accruing` / `Claimable` / `FullyUnstaked` | scan observes **own nullifier** `N_{i,S}` on-chain | mark epoch `S` claimed in `claimed_epochs`; stay in state |
-| `Accruing` / `Claimable` / `FullyUnstaked` | `Wallet::claim` builds pending claim tx for epoch set | *(pending-claim sub-state — Round 2; mirrors PendingBroadcast)* |
+| `Accruing` / `Claimable` / `FullyUnstaked` | `Wallet::claim` builds + broadcasts claim tx for epoch set `S` | **add `S` to `claim_pending_epochs`** (runtime-only reservation, §3.4); stay in state |
+| `Accruing` / `Claimable` / `FullyUnstaked` | scan observes **own nullifier** `N_{i,S}` on-chain | mark epoch `S` in `claimed_epochs`; **clear `S` from `claim_pending_epochs`**; stay in state |
+| `Accruing` / `Claimable` / `FullyUnstaked` | claim tx discarded / staleness-rejected / reorged **before** confirm | **clear `S` from `claim_pending_epochs`** → epoch claimable again (§3.4); no chain trace, nullifier never landed |
 | `*` | `Wallet::unstake` submitted | `Unstaking` |
 | `Unstaking` | scan spends the principal commitment (key image observed) | `FullyUnstaked { principal_spent: true, … }` |
 | `FullyUnstaked` | `ClaimConfirmed` (partial) | `FullyUnstaked` |
@@ -467,7 +468,7 @@ settlement-epoch index.
 
 ```rust
 /// Stable wallet-local identifier. Derived from the staked output identity.
-pub struct StakeId(pub [u8; 32]); // BLAKE3(domain, tx_hash || le(index)) — domain sep Round 2
+pub struct StakeId(pub [u8; 32]); // cSHAKE256(cust="shekyl/stake-id-v1", tx_hash ‖ le_u64(index)); §3.3.3
 
 /// SECRET — sealed at rest (§4.1). Never serialized to RPC; never in actor messages
 /// as plaintext.
@@ -487,7 +488,13 @@ pub struct StakeInstance {
     pub stake_tx: Option<TxHash>,
     /// Settlement-epochs already claimed (own nullifiers observed on-chain).
     /// Reorg-editable; not monotonic.
-    pub claimed_epochs: EpochSet,    // e.g. roaring/bitset over settlement-epoch indices
+    pub claimed_epochs: EpochSet,    // fixed u16 relative bitmask, §3.3.2
+    /// Settlement-epochs with a claim tx in flight (built/broadcast, not yet
+    /// confirmed). **Runtime-only** — never persisted, never on the wire/sealed
+    /// region (§3.4, §4.1). Conflict-prevention reservation only: blocks building
+    /// a second claim for in-flight epochs. Folds into `claimed_epochs` on confirm;
+    /// clears on discard / staleness-reject / reorg-before-confirm.
+    pub claim_pending_epochs: EpochSet, // runtime-only; NOT serialized
     /// Secret opening material (sealed). Boxed/zeroized; see §4.1.
     pub opening: Secret<StakeOpening>,
 }
@@ -496,6 +503,9 @@ pub struct StakeInstance {
 `band: StakeBand` is the public coarse band (4–6 decade-log values). `opening` is the
 new secret payload; its presence is what flips the secret-locality posture in §0.8 /
 §4.1. `claimed_epochs` replaces the watermark and is the reorg-edited set in §5.2.
+`claim_pending_epochs` is the runtime-only claim reservation pinned in §3.4 — it is
+**not** a second persisted set, so the `EpochSet` wire/sealed encoding carries one set
+per stake (`claimed_epochs`), not two.
 
 ### 3.3.1 `StakeOpening` excludes spend secret `x` (Round 1 pin — R0-D8)
 
@@ -527,6 +537,199 @@ not principal-spend grade.
 dominates UX budget *and* cannot be batched — evidence in `PERFORMANCE_BASELINE.md`,
 not convenience argument alone.
 
+### 3.3.2 `EpochSet` wire/sealed encoding (Round 2 pin — fixed relative bitmask, not roaring)
+
+**Decision: a fixed-width bitmask relative to the stake's creation settlement-epoch.
+Reject roaring/croaring.**
+
+**Size envelope (consensus-bounded).** `claimed_epochs ⊆ (creation, eff_lock]`, and the
+lock window is consensus-pinned ([`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md)
+§5–§6): tier-3 (longest) = 150,000 blocks ÷ 10,000 blocks/settlement-epoch =
+**15 settlement-epochs**; tier-2 ≤ 3; tier-1 = 1–2. `MAX_EPOCHS_PER_CLAIM = 15` and
+consensus rejects `|epochs| > 15`. So for **every** stake, `claimed_epochs` holds **≤15
+elements drawn from a contiguous ≤15-wide window** — never sparse, never large.
+
+**Encoding.** A **`u16` bitmask** anchored at the stake's first accrued settlement-epoch:
+bit `i` set ⟺ settlement-epoch `(anchor + i)` is claimed, where `anchor` derives from the
+canonical public `creation_height ≜ eligible_height` (§3.2 consensus pins; recoverable as
+`effective_lock_until − tier_lock_blocks` and carried in `StakedOutputConfirmed`, §4.3) and
+the §6.4 window arithmetic — **not stored in the set**. 16 bits ≥
+the 15-epoch tier-3 maximum (one bit of headroom). Net: **2 fixed bytes per stake — no
+base, no length prefix, no per-element payload.** (Width is the smallest standard integer
+≥ the tier-3 window = `MAX_EPOCHS_PER_CLAIM`; if that constant grows, widen the fixed mask,
+not the scheme.)
+
+**Why not roaring.** Roaring/croaring compresses large *sparse* sets over a wide u32/u64
+domain (thousands–millions of elements) via per-2¹⁶-chunk containers. At ≤15 elements over
+a ≤15-wide window it is **pure overhead** — a container directory + header dwarfing the
+data — plus a crate dependency (supply-chain + audit surface per
+[`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)) bought
+for nothing. The fixed mask is smaller, dependency-free, and constant-size.
+
+**Properties this buys.**
+
+- **Payload-free (D2/D4 closure).** The absolute settlement-epoch index never enters the
+  set: the anchor is the public `creation_height ≜ eligible_height`, the mask is purely
+  relative. This is the
+  concrete form of "heights live in the scanner, not `claimed_epochs`" (§4.7 D2) — there is
+  literally no field in which a per-epoch height *could* be stored, which is what foreclosed
+  the incremental reorg path (§5.2) by construction rather than by discipline.
+- **Constant-size at rest.** The 2-byte mask does not vary with claimed-count, so the
+  sealed-blob size leaks no claimed-epoch cardinality (sealed regardless — a clean bonus,
+  not load-bearing).
+- **Trivial reorg rebuild.** §5.2's clear-all/replay-all recomputes the mask from scratch
+  (set bit `i` for each surviving `x·G_(anchor+i)` ∈ post-reorg chain) — no structural edit,
+  no per-epoch height to reconcile.
+
+`claim_pending_epochs` (runtime-only) shares the in-memory `EpochSet` type but never
+serializes (§3.4, D4), so this encoding governs exactly one set per stake.
+
+**Reopen criterion.** A future tier whose lock exceeds the chosen mask width (widen the
+fixed mask to `u32`/`u64`/`[u8; N]`, **same scheme** — still contiguous, still bounded),
+**or** a redesign that makes `claimed_epochs` genuinely large-and-sparse over a wide domain
+(it is not — the §6.4 lock arithmetic makes the window contiguous and ≤15). Roaring is
+reconsidered only in the second case, which the consensus lock bounds currently forbid.
+
+### 3.3.3 `StakeId` derivation (Round 2 pin — cSHAKE256, not cn_fast_hash, not BLAKE3)
+
+**Decision:** `StakeId = cSHAKE256(customization = "shekyl/stake-id-v1",
+input = tx_hash ‖ le_u64(index_in_transaction))`, **full 32-byte** output. Mirror the
+in-workspace template `derive_output_handle`
+([`shekyl-crypto-pq/handle.rs`](../../rust/shekyl-crypto-pq/src/handle.rs)) exactly:
+`CShake256Core::new(cust)` → `update(tx_hash)` → `update(&index.to_le_bytes())` →
+`finalize_xof` → read 32 bytes.
+
+**Hash choice — modern, not inherited.** The Round-1 placeholder said BLAKE3; an
+intermediate pass wrongly "corrected" it to `cn_fast_hash` on reuse grounds. Both are wrong.
+`cn_fast_hash` ([`shekyl-crypto-hash`](../../rust/shekyl-crypto-hash/src/lib.rs)) is
+**Keccak-256 with original CryptoNote padding (0x01, not SHA3's 0x06)** — a
+**consensus-critical *inherited* primitive** whose stated purpose is byte-identity with
+`src/crypto/keccak.c` / upstream Monero. Deriving a **new** wallet-local id with it drags
+inherited legacy crypto into post-CryptoNote code, against the
+[`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) PQC-hardened / modern-not-inherited
+posture. The correct primitive is **cSHAKE256** (FIPS 202 / SP 800-185), which is:
+
+- **PQC-aligned.** SHAKE/Keccak-sponge is the hash family the PQC stack already uses
+  (ML-KEM, SLH-DSA); cSHAKE256 is the workspace's established modern hash — `key_actor.rs`,
+  `local_keys.rs`, `traits/key.rs`, and `handle.rs`'s `derive_output_handle` all use it.
+- **Dependency-discipline-clean ([`17-dependency-discipline.mdc`](../../.cursor/rules/17-dependency-discipline.mdc)).**
+  `sha3 = "0.10"` (exposing `CShake256` / `CShake256Core`) is **already a workspace
+  dependency** (verified at source: `shekyl-crypto-pq`, `shekyl-shard-visual`), so no new
+  crate. **`blake3` is *not* a workspace dependency** — adding it would incur a supply-chain
+  / audit cost for *no* gain over the PQC-aligned primitive already in use. So the modern
+  choice and the dependency-clean choice are the **same** choice; they only diverged in the
+  intermediate cn_fast_hash misstep, which optimized reuse and ignored modern-not-inherited.
+
+**Native domain separation (no hand-rolled prefix).** cSHAKE's `customization` parameter is
+the SP 800-185 slot for application separation, so the domain lives there, not in a
+`"domain ‖ …"` input prefix. `"shekyl/stake-id-v1"` is distinct from
+`"shekyl/output-handle-v1"`, so `StakeId` cannot collide with `derive_output_handle` even
+though both absorb `tx_hash`. Input fields are fixed-width (`OutputRef`'s index is a `u64`,
+[`shekyl-scanner/output.rs`](../../rust/shekyl-scanner/src/output.rs)), so no length prefix
+is needed. Output is the **full 32-byte** XOF read (`StakeId` is `[u8; 32]`; the primary key,
+not a truncated dedup key). No `view_secret` in the input — `StakeId` is a non-secret
+wallet-local key, not a secret-keyed handle.
+
+**Stability is load-bearing.** The id derives **only** from the on-chain output identity
+`(tx_hash, index)`, so re-derivation across rescans/sessions is byte-stable — which is what
+lets `StakedOutputConfirmed` / `OwnNullifierObserved` events and the R0-D2 rebuild (§5.2)
+map back to the **same** persisted `StakeInstance`. A derivation change silently orphans
+persisted instances; the `v1` customization is the guard, pinned by a **wallet-internal KAT**
+(the `customization_bump_produces_distinct_handle` pattern in `handle.rs`) — distinct from a
+consensus KAT, as `StakeId` never reaches the wire or consensus.
+
+**Reopen criterion.** A `v2` customization bump requires a persistence migration; pre-genesis
+that is `rm -rf ~/.shekyl` + re-sync
+([`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc)), so the bump is
+cheap now and costly post-genesis — pin v1 deliberately.
+
+### 3.4 Pending-claim model (Round 2 pin — Hybrid-B / E)
+
+**Substrate (verified at source).** A claim is **non-spending** (§8.7) — it consumes no
+output and has no `OutputId`. `PendingTxEngine`'s reservation is output-UTXO-keyed: the
+runtime-only `BTreeMap<ReservationId, Reservation>` locks `selected_transfer_indices`
+(spend outputs), and a concurrent build filters out indices "already cited by an existing
+reservation" ([`engine/pending.rs`](../../rust/shekyl-engine-core/src/engine/pending.rs)
+`Reservation`, `build_pending_tx_in_state`). A claim has no `selected_transfer_indices`,
+so there is nothing for the output-reservation to lock. The resource a claim actually
+reserves is the **epoch-nullifier set** (don't build a second claim for epochs already
+in flight) — a staking-domain object, not an output. This rules out the three Round-1
+options as written: track-in-`PendingTxEngine` (no lock exists for a non-spending tx),
+sub-state-mirroring-`PendingBroadcast` (duplicates a lifecycle that, see below, is not
+one thing), and per-claim mini-FSM (over-built).
+
+**Pin — the reservation is domain-local and runtime-only.** The stake actor gains
+`claim_pending_epochs` (§3.3): add `S` on claim broadcast, fold into `claimed_epochs` on
+confirm, clear on discard / staleness-reject / reorg-before-confirm. It is **runtime-only**,
+mirroring `PendingTxEngine`'s own reservation crash model ([`engine/pending.rs`](../../rust/shekyl-engine-core/src/engine/pending.rs)
+"Why runtime-only", lines 15–27): a built-but-unconfirmed tx self-heals on reopen because
+it left no authoritative chain trace. On resync `claim_pending_epochs` starts empty; the
+R0-D2 rebuild (§4.2, §5.2) re-derives `claimed_epochs` from the chain nullifier set ∩
+`{x·G_S}`. A claim that landed → its nullifier is on-chain → folded into `claimed_epochs`
+(not rebuilt); a claim broadcast-but-unlanded → epoch claimable again → wallet may rebuild
+→ **consensus rejects the duplicate nullifier-spend**. This is the *identical* self-heal +
+consensus-backstop posture the engine already accepts for forgotten output reservations
+(double-spend attempt → rejected). Consequence: only `claimed_epochs` persists / reaches
+the sealed region / wire; `claim_pending_epochs` is ephemeral, so the `EpochSet` encoding
+carries **one set per stake, not two**.
+
+**Privacy residual (checked, contained, not claim-specific).** A crash-rebroadcast of an
+unlanded claim re-emits an **identical** nullifier `N_S = x·G_S` (deterministic; DDH only
+hides *distinct-epoch* nullifiers), so the two attempts are trivially linkable. This is
+**not** a claim-specific wrinkle: a duplicate spend re-exposes an identical key image with
+the same trivially-linkable structure, a residual the engine already accepts. It is
+contained — it links one claim's two attempts, never the stake's other (distinct-epoch,
+DDH-unlinkable) claims. The spend analogy extends cleanly to privacy.
+
+**Where the lifecycle lives — Hybrid-B, in the E shape.** `PendingTxEngine` stays
+**spend-pure** (its `output_locks`-equivalent remains the single source of truth for
+*output* ownership). The "broadcast→confirm→reorg lifecycle" is **not one thing** in
+`PendingTxEngine`: its lifecycle is `build → submit → done`, and `in_flight` is only the
+daemon-round-trip window ([`engine/pending.rs`](../../rust/shekyl-engine-core/src/engine/pending.rs)
+`ReservationTTLConfig::in_flight`, "`submit` is mid-flight"), with the reservation removed
+at submit. Decompose:
+
+1. **Reservation / conflict-prevention** — `claim_pending_epochs`, stake actor (above).
+   Forced domain-local.
+2. **Confirm + reorg** — *already shared, by construction*: RefreshEngine scan observes
+   the marker (key image for spends, **nullifier** for claims) and §5.2 rewinds it. The
+   transition table (§3.2) and §5.2 already encode the claim side. **Zero duplication.**
+   This leg's verification lives in the still-open §5 box (the R0-D2 rebuild re-run against
+   the post-reorg nullifier set) — §3.4 leans on §5, the two are coupled, and §5 carries
+   the sign-off of the leg, not a new mechanism.
+3. **Submit-time staleness gate** — the *only* `PendingTxEngine`-specific pre-broadcast
+   sliver (`built_at_height` / `built_at_tip_hash` / `snapshot_id` → `TooOld` /
+   `ChainStateChanged` / `SnapshotInvalidated`). Those staleness tags are already cleanly
+   separable from the output-lock part in the `Reservation` struct. The claim path
+   **duplicates this ~10-line gate** rather than abstracting it (E shape) — see §8.9 for
+   the factoring trigger.
+
+**Rejected — Hybrid-A** (admit a lockless in-flight entry to `PendingTxEngine`): re-merges
+at the wallet layer the claim/spend separation we drew at consensus (non-spending claim vs.
+SAL spend), eroding "outputs = single source of truth for output ownership." **Rejected —
+Option C** (the *honest* generalization of A: generalize the reservation to abstract
+resources): drags epoch-nullifier-conflict semantics (staking-domain) into the spend
+engine — a worse boundary break than A's exception. C is named to show A was not hiding a
+clean form. Both reject; B preserves the separation.
+
+**Consensus-backstop principle (why E and runtime-only are both safe).** Both decisions
+ride one fact: **consensus is the source of truth; the wallet-side checks are best-effort.**
+The staleness gate is a consensus-backstopped UX optimization — a stale claim is rejected
+at consensus regardless, so the gate exists only to avoid wasting a broadcast, and drift
+between a duplicated copy and `PendingTxEngine`'s is benign (worst case: one path
+occasionally broadcasts a doomed tx). The same backstop makes runtime-only
+`claim_pending_epochs` safe (forgotten reservation → duplicate → consensus rejects). The
+corollary is the §8.9 reversion condition: the moment a future tx-type puts a
+**soundness-load-bearing check with no consensus backstop** on that path, drift stops being
+benign and the shared primitive earns its keep.
+
+**Ratifications (not shape):** `Accruing` / `Claimable` stay separate (§8.3 — the
+drain-backlog window is a genuine "earning, not yet claimable" state; collapsing it would
+let the UI offer a claim the verifier rejects for an unsettled epoch). `PendingBroadcast`
+discard drops the instance (transition table — a discarded pending stake/claim is a
+non-event on-chain; a terminal `Discarded` would persist a non-event). R0-D6 (post-unstake
+claims) is confirmed in the table, not re-decided.
+
 ---
 
 ## 4. Persistence and engine ownership
@@ -539,7 +742,8 @@ not convenience argument alone.
 | Public rate / band-sum observation (per epoch) | `LedgerEngine` / `LedgerIndexes` (repurposed `StakerPoolState`) | **No** (rebuilt on scan) | No |
 | Per-stake FSM (`StakeInstance`, incl. `band`, `claimed_epochs`) | **`StakeEngine` actor** | **Yes** — `LedgerBlock` field (§4.2) | Mixed |
 | Per-stake **opening** (`amount`, `z` only) | **`StakeEngine` actor** | **Yes — sealed region** | **Yes** (claim-grade; not `x`) |
-| Pending stake/claim/unstake intents | `PendingTxEngine` | `TxMetaBlock` / pending metadata | partial |
+| **Claim reservation** (`claim_pending_epochs`) | **`StakeEngine` actor** | **No — runtime-only** (§3.4) | No (epoch indices only) |
+| Pending stake/unstake **spend** intents | `PendingTxEngine` (spend-pure, §3.4) | `TxMetaBlock` / pending metadata | partial |
 | Public rate schedule `ρ_e` / band params | `EconomicsEngine` + chain mirror | N/A (derived) | No |
 
 **Secret-locality pin** ([`36-secret-locality.mdc`](../../.cursor/rules/36-secret-locality.mdc),
@@ -686,10 +890,16 @@ pub(crate) trait StakeEngine: Send + Sync + 'static {
     fn register_pending_stake(&self, instance: StakeInstance) -> Result<(), Self::Error>;
 
     /// Apply scan-derived events after ledger merge (ordered — §5.3).
+    /// `reorg_rewind: Some(_)` is handled **rewind-first within this one call** (D1/D2,
+    /// §5.2): one uninterruptible actor turn, so nothing interleaves between the rewind
+    /// and the forward replay and `claimed_epochs` is never observed half-rebuilt. No
+    /// separate rewind entry point exists — mirrors the ledger's `reorg_rewind` field
+    /// (`merge.rs::apply_scan_result_to_state`), not a standalone message.
     fn apply_stake_events(
         &self,
         tip_height: u64,
         events: Vec<StakeEvent>,
+        reorg_rewind: Option<ReorgRewind>,
     ) -> Result<StakeApplySummary, Self::Error>;
 
     /// Query API backing `Wallet::stakes(filter)`. Public fields + derived amounts only.
@@ -704,11 +914,28 @@ pub(crate) trait StakeEngine: Send + Sync + 'static {
 
     /// Single-use witness bundle for claim tx construction (R0-D4). Zeroized on drop;
     /// consumed by `PendingTxEngine` + `KeyEngine` — never persisted outside the actor.
+    /// **Side-effect (D3):** unions `epochs` into the runtime-only `claim_pending_epochs`
+    /// reservation (§3.4) — the one point already holding `(stake_id, epochs)`. Idempotent
+    /// under set-union; a leaked reservation (build fails after prepare) self-heals.
     fn prepare_claim_build(
         &self,
         stake_id: &StakeId,
         epochs: EpochSet,
     ) -> Result<ClaimBuildSecrets, Self::Error>;
+
+    /// Release a claim reservation when the orchestrator abandons the build/broadcast
+    /// (staleness gate §8.9, or `PendingTxEngine` discard). Without it a discarded claim's
+    /// epochs stay pending until restart. **Touches `claim_pending_epochs` ONLY — never
+    /// `claimed_epochs`** (D3): the latter's sole authority is the on-chain nullifier via
+    /// `OwnNullifierObserved`, so a mistimed abandon (declared stale while the claim
+    /// actually lands) is harmless — it clears a reservation that would have cleared on
+    /// confirm anyway. Wiring this to un-mark `claimed_epochs` would reintroduce a
+    /// double-claim seam the consensus backstop would then have to catch.
+    fn abandon_claim(
+        &self,
+        stake_id: &StakeId,
+        epochs: EpochSet,
+    ) -> Result<(), Self::Error>;
 
     /// Projected yield for UI (divide-by-zero N/A under fixed rate; guarded anyway).
     fn projected_yield(
@@ -733,15 +960,35 @@ Mirror [`KeyEngineHandle`](../../rust/shekyl-engine-core/src/engine/key_actor.rs
 | Message | Direction | Notes |
 |---------|-----------|-------|
 | `RegisterPendingStake(SealedStakeRegistration)` | orchestrator → actor | after `build_pending_tx`; sealed blob unsealed in-task (R0-D3) |
-| `ApplyStakeEvents { tip_height, events }` | orchestrator → actor | post-ledger-merge |
+| `ApplyStakeEvents { tip_height, events, reorg_rewind: Option<ReorgRewind> }` | orchestrator → actor | post-ledger-merge; **`reorg_rewind: Some(_)` handled rewind-first in one uninterruptible turn** (D1/D2) — no separate `RewindTo` |
 | `ListStakes(StakeFilter)` | orchestrator → actor | read-only; returns `StakeView` |
 | `ClaimableRewardsAtomic { tip_height }` | orchestrator → actor | read-only |
 | `UnclaimedEpochs { stake_id, tip_height }` | orchestrator → actor | read-only; feeds claim builder |
-| `PrepareClaimBuild { stake_id, epochs }` | orchestrator → actor | returns zeroized `ClaimBuildSecrets` (R0-D4) |
+| `PrepareClaimBuild { stake_id, epochs }` | orchestrator → actor | returns zeroized `ClaimBuildSecrets` (R0-D4); **side-effect: unions `epochs` into `claim_pending_epochs`** (D3) |
+| `AbandonClaim { stake_id, epochs }` | orchestrator → actor | release reservation on staleness/discard; **`claim_pending_epochs` ONLY, never `claimed_epochs`** (D3) |
 | `ProjectedYield { stake_id, horizon }` | orchestrator → actor | uses rate snapshot — Round 2 plumbing |
 | `IsActiveStaker(EntityId)` | orchestrator → actor | public for archival |
-| `Restore(SealedStakeSnapshot)` | orchestrator → actor | wallet open; unseals openings in-task |
-| `Snapshot()` | orchestrator → actor | wallet save; returns sealed snapshot |
+| `Restore(SealedStakeSnapshot)` | orchestrator → actor | wallet open; unseals openings in-task; **`claim_pending_epochs` starts empty** (D4) |
+| `Snapshot()` | orchestrator → actor | wallet save; returns sealed snapshot — `(amount, z)` + `claimed_epochs` only, **excludes `claim_pending_epochs`** (D4; one payload-free `EpochSet`/stake) |
+
+**Reorg semantics (D1/D2) — fold, then clear-all/replay-all.** `reorg_rewind` rides on
+`ApplyStakeEvents`, not a separate message: handled rewind-first in one actor turn it buys
+**atomicity** — nothing interleaves between rewind and forward replay, so `claimed_epochs`
+is never observed half-rebuilt (the race a standalone `RewindTo` would admit). The rewind
+is **not** a height-selective trim: `claimed_epochs` is payload-free (§3.3), so there is no
+per-epoch height to trim on (same forcing argument as §5.2). It is **clear-all / replay-all
+of the full surviving own-nullifier set across the *whole* post-reorg chain** — *not* just
+the re-scanned `[fork_height, tip]` window. An instance created below `fork_height` whose
+lock straddles it has claimed epochs on **both** sides; replaying only the window would
+clear-and-never-re-emit its below-fork survivors, leaving the wallet to build a doomed
+re-claim (consensus rejects it, but at the cost of a wasted tx and the duplicate-nullifier
+linkage residual). The full re-emit is affordable for the same reason the rebuild is: the
+own-nullifier set is bounded by the wallet's own claim activity (≤15 tier-3/instance).
+**Heights live in the scanner, not the actor:** the scanner is block-indexed, trims its
+observation log to the post-reorg chain, and re-emits the surviving `OwnNullifierObserved`
+set — which is exactly why `claimed_epochs` stays payload-free and the D4 wire is a clean
+size/encoding call (a scanner-computed height-free epoch-index delta is possible, but not
+worth the bug surface given the set is small).
 
 **Fail-stop:** **mandatory** for the stake actor (Stage 2 §4.5) — a panic could leave
 the claimed-epoch set or opening material inconsistent.
@@ -791,19 +1038,59 @@ sequenceDiagram
 When `ScanResult.reorg_rewind` is `Some(fork_height)`:
 
 1. Ledger merge runs `handle_reorg` (existing); the rate/band cache truncates.
-2. Stake actor receives `RewindTo { fork_height }` and must:
+2. Stake actor receives `ApplyStakeEvents { reorg_rewind: Some(ReorgRewind { fork_height }), .. }`
+   (D1 — folded onto the apply call, **not** a separate `RewindTo`; handled rewind-first in
+   one uninterruptible turn so `claimed_epochs` is never half-rebuilt, §4.7) and must:
    - drop/rewind instances confirmed at or above `fork_height`; reset pending states
      tied to the abandoned chain;
-   - **un-claim epochs whose nullifier was observed at or above `fork_height`** —
-     remove those settlement-epochs from `claimed_epochs`. This mirrors the consensus
-     requirement that the on-chain nullifier set is reorg-state; a reorged-then-
-     re-mined claim must be re-claimable, so the wallet must not leave the epoch
-     marked claimed.
-3. The exact yield re-derives automatically from the (now rewound) `claimed_epochs`
+   - **rebuild `claimed_epochs` against the post-reorg nullifier set** — recompute
+     `claimed_epochs = { S ∈ accrued_window : x·G_S ∈ post-reorg on-chain stake-claim
+     nullifier set }` per affected instance. This is the **single authoritative un-claim
+     mechanism**, *not* an incremental "remove epochs observed at/above `fork_height`":
+     `claimed_epochs` is a pure settlement-epoch index set (§3.3) carrying **no per-epoch
+     observation height**, so there is no field to filter incrementally on — and adding
+     one would **foreclose the fixed `u16` relative bitmask** the wire encoding pins (§3.3.2;
+     a height-carrying set is not a plain bitmask). The collapse is
+     therefore **forcing, not preferential**: the incremental path requires a field that
+     does not exist and should not, and the rebuild is the height-free operation §3.4
+     already names; the wire de-risk is a consequence, not the rationale. The rebuild
+     is the *same* operation as step 5 / R0-D2 — a surviving nullifier stays claimed; one
+     reorged out (absent from the post-reorg set) returns to claimable. Mirrors the
+     consensus requirement that the on-chain nullifier set is reorg-state; a
+     reorged-then-re-mined claim must be re-claimable. Cost is the §3.3.1 derivation
+     budget (one scalar mult per accrued epoch checked, ≤15 tier-3) per active instance —
+     same posture as resync, bounded. The rebuild is **clear-all / replay-all of the full
+     surviving set across the whole post-reorg chain**, never just `[fork_height, tip]`: a
+     below-`fork_height` instance whose lock straddles the fork has claimed epochs on both
+     sides, and a windowed replay would drop its below-fork survivors (§4.7 D2). The
+     scanner supplies the surviving set — it is block-indexed, trims its observation log to
+     the post-reorg chain, and re-emits `OwnNullifierObserved`; the heights live there, not
+     in `claimed_epochs`.
+   - **`claim_pending_epochs` (runtime-only) is never populated by reorg.** Both reorg
+     sub-cases land at **claimable**, not at the reservation: (a) a *confirmed* epoch
+     whose nullifier was reorged out drops from `claimed_epochs` (the rebuild above) →
+     claimable; (b) an *in-flight* claim whose build the reorg invalidated (reference
+     block reorged before its nullifier confirmed) clears from `claim_pending_epochs`
+     (§3.2 row) → claimable. The reservation is set only by an active local
+     build/broadcast (§3.4), never reconstructed by reorg or `Restore` (on `Restore` it
+     starts empty). Self-heal is per §3.4: re-observed → claimed again; not re-mined →
+     claimable and re-buildable, with consensus duplicate-nullifier rejection as backstop.
+3. The exact yield re-derives automatically from the (now rebuilt) `claimed_epochs`
    and the public rate schedule.
-4. **Post-resync reconciliation (R0-D2):** after `Restore`, recompute `claimed_epochs`
-   from the chain nullifier set ∩ locally derived `N_{i,S}` before exposing claimable
-   balances — do not treat the persisted set as authoritative.
+4. **Persist last — same ordering as §5.3, no transaction needed.** Snapshot the rewound
+   actor → `persist.save_stakes`, in the `ledger → stake → persist` order the forward path
+   pins (§5.3; the §3.3.4 stale-snapshot anti-pattern applies identically). The reorg path
+   needs **no transactional atomicity** across the rewind: a crash mid-rewind self-heals on
+   reopen because the R0-D2 rebuild (step 5) re-runs before any claimable balance is
+   exposed, regardless of how the prior session died. Do **not** harden the reorg path with
+   transaction machinery it does not need — same falls-out-of-the-rebuild logic as the
+   step-2 collapse.
+5. **Post-resync reconciliation (R0-D2):** after `Restore`, the **same rebuild** runs —
+   recompute `claimed_epochs` from the post-reorg/post-resync chain nullifier set ∩
+   locally derived `{ x·G_S }` before exposing claimable balances; the persisted set is
+   cache, not authority. In-session reorg (step 2) and post-`Restore` (step 5) are **one
+   operation**, differing only in trigger — so there is no incremental-vs-rebuild
+   divergence to reconcile.
 
 > This is the wallet mirror of the consensus nullifier-reorg requirement. If the
 > consensus pop path fails to revert nullifiers, a re-mined claim is permanently
@@ -860,8 +1147,8 @@ backlog requires multiple txs, avoid fixed epoch-boundary broadcast cadence; Dan
 | **Nullifier / key-image cross-link** | **DDH split:** `N_S = x·G_S` vs unstake `x·Hp(O)` unlinkable under independent NUMS bases (upstream §6.3). Load-bearing for claim/unstake decoupling. |
 | **Commitment-opening disclosure** | `StakeOpening` holds `(amount, z)` only — **not** `x` (§3.3.1); sealed at rest, zeroized on drop, never in RPC or actor-message plaintext. Spend secret derived transiently for nullifier match / claim prove. |
 | **Band cohort-size leakage** | Band is coarse (4–6 decade bands); at cold start, thin cohorts make even a coarse band revealing — wallet UI may warn early stakers; consensus may floor/suppress the signal at low participation (upstream). |
-| **Nullifier-reorg desync** | Ordered §5.2 `RewindTo`; wallet un-claims epochs whose nullifier was reorged out; mirrors consensus pop reverting the nullifier set. |
-| Reorg desync between ledger and stake actor | Ordered §5.3; explicit `RewindTo` message |
+| **Nullifier-reorg desync** | Ordered §5.2 reorg folded onto `ApplyStakeEvents { reorg_rewind }` (D1); wallet rebuilds `claimed_epochs` clear-all/replay-all against the post-reorg nullifier set; mirrors consensus pop reverting the nullifier set. |
+| Reorg desync between ledger and stake actor | Ordered §5.3; `reorg_rewind` field on `ApplyStakeEvents`, rewind-first in one uninterruptible turn (D1) — no separate message to race against the forward apply |
 | Fake `StakeEvent` injection | Events originate from scanner parsing blocks tied to daemon headers; `OwnNullifierObserved` requires matching a locally derived nullifier (a forged event cannot fabricate the wallet's own nullifier) |
 | **Silent inflation** | **`h_bind`** (tier+creation) + window arithmetic + recomputed `N/D` + **(A)** bounded-remainder (committed `ρ`, range `0≤ρ<D`) + `ρ_cap` (upstream §9) |
 
@@ -992,6 +1279,39 @@ fn rate_at_epoch(&self, rate_epoch: u64) -> Result<u64, EconomicsEngineError>;
 
 **Reversion:** per §8.2 — no per-stake methods on `EconomicsEngine`.
 
+### 8.9 Claim-tx staleness-gate factoring (E reversion trigger)
+
+**Pin (E shape, §3.4):** the claim path **duplicates** `PendingTxEngine`'s ~10-line
+submit-time staleness gate (`built_at_height` / `built_at_tip_hash` / `snapshot_id`
+checks) rather than extracting a shared broadcast/staleness primitive. Building a shared
+abstraction for exactly two consumers — when the substantial sharing (scan-driven
+confirm/reorg, §3.4 leg 2) already exists elsewhere — is speculative extraction
+([`15-deletion-and-debt.mdc`](../../.cursor/rules/15-deletion-and-debt.mdc),
+[`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)).
+
+**Why duplication is safe:** the staleness gate is a **consensus-backstopped UX
+optimization** (§3.4 consensus-backstop principle) — a stale claim is rejected at
+consensus regardless; the gate only avoids wasting a broadcast. Drift between the two
+copies is therefore benign (worst case: one path occasionally broadcasts a doomed tx).
+
+**Reopen when (whichever first):**
+
+1. **A third claim-tx-type appears.** Live candidate: **Stage 5 `ArchivalEngine`**
+   ([`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md)). Archival is additive by design
+   (no V3.0 refactor; sibling actor, independent `ArchivalEvent` stream, read-only
+   `is_active_staker` query), so it does **not** reopen this FSM. But archival
+   *disbursement* is unpinned (the doc's open-questions cover granularity/routing/pricing,
+   not "is the reward a staker-initiated claim tx"). If Stage 5 lands archival reward as a
+   staker-initiated claim tx, that is a third consumer of the staleness gate, and the
+   shared primitive gets factored **then** — which is exactly why E was chosen over
+   building the abstraction speculatively. *Carry into Stage 5: when designing archival
+   disbursement, check whether it adds a claim-tx-type; if so, that is this factoring
+   coming due — not an FSM reopen.*
+2. **A non-backstopped check appears on the path.** If a future tx-type puts a
+   **soundness-load-bearing check with no consensus backstop** on the broadcast path,
+   drift stops being benign and the shared primitive earns its keep. This is the sharper
+   trigger than "third consumer": it is *third consumer OR non-backstopped check*.
+
 ---
 
 ## 9. Round record
@@ -1000,7 +1320,7 @@ fn rate_at_epoch(&self, rate_epoch: u64) -> Result<u64, EconomicsEngineError>;
 |-------|--------|---------|
 | **0** | **Closed** (2026-06-04) | Confidential redesign is a substrate finding (Principle 5). Re-pre-flight §0.1–§0.8 re-walked against the locked 3C / `h_bind` / `creation ≜ eligible` / collapsed-(A) consensus; §0.10 signed off; **R0-D1–D8 dispositioned in §0.11** (2026-06-02). Re-walk fixed two stale-text gates (Drift 1 stake-actor secrets → `(amount, z)`-only; Drift 2 inflation-safety framing → `N/D`-recompute primary) + two completeness notes (§0.4 lock-view, §0.7 3C scanner scope); no design reopen. Blast radius: stake-actor openings `(amount, z)` only (R0-D8), claim prove surface, two-tree scanner parsing, `AccrualRecord` retirement. |
 | **1** | **Closed** (2026-06-02; **(C) 3C** 2026-06-04) | **§6.4:** **(C)** closed on **3C** (staking subtree + 5-scalar `h_bind`; Decisions 1–2 superseded); **(B)**; **(A)** collapsed to reserve-DLEQ + bounded remainder; R0-D8. Round 2: byte wire, tree/leaf impl, cross-tree atomicity. |
-| **2** | Open | R-residuals: `StakeId` domain sep, pending-claim sub-state, `EpochSet` wire type, sealed-region layout for `opening`, async trait |
+| **2** | Open | **Pending-claim model pinned (2026-06-04, §3.4):** Hybrid-B/E — runtime-only `claim_pending_epochs` on the stake actor; `PendingTxEngine` stays spend-pure; confirm/reorg already shared via scan + §5.2 (verification carried by the §5 box); staleness gate duplicated (E), factoring trigger §8.9. **§5.2 collapsed to a single full-rebuild** reorg-unclaim (`claimed_epochs = {S ∈ window : x·G_S ∈ post-reorg chain set}`, no per-epoch height — in-session reorg == post-`Restore`), which also keeps `claimed_epochs` a pure index set for the roaring-vs-bitset decision; `claim_pending_epochs` never repopulated by reorg. The full-rebuild collapse is **forcing, not preferential** (the incremental "observed ≥ fork_height" path needs a per-epoch height `claimed_epochs` does not carry and that would foreclose the bitset encoding); reorg persists `ledger → stake → persist` (§5.3 parity) with **no transactional atomicity** (self-heals via rebuild-on-reopen). `EpochSet` now one persisted set, not two. `Accruing`/`Claimable` + discard-drops-instance ratified. **`EpochSet` wire type pinned (§3.3.2):** fixed **`u16` relative bitmask** anchored at the public `creation_height` (2 bytes, one set/stake), **not roaring** — consensus bounds `claimed_epochs` to ≤15 elements over a contiguous ≤15-wide window (tier-3 = 150k blocks / 10k = 15 settlement-epochs = `MAX_EPOCHS_PER_CLAIM`), so roaring's sparse-domain compression has nothing to compress; payload-free by construction (no field for a per-epoch height). **`StakeId` derivation pinned (§3.3.3):** `cSHAKE256(cust="shekyl/stake-id-v1", tx_hash ‖ le_u64(index))`, full 32 bytes, mirroring `derive_output_handle` (`handle.rs`) — **cSHAKE256, not `cn_fast_hash`, not BLAKE3.** `cn_fast_hash` is **inherited** Keccak-256 (CryptoNote 0x01 padding, consensus byte-identity with `keccak.c`); using it for new wallet-local code violates the modern-not-inherited posture. cSHAKE256 (FIPS 202/SP 800-185) is the workspace's PQC-aligned hash (already used by `key_actor`/`local_keys`/`handle`) **and** dependency-clean (`sha3` already in-tree; `blake3` is not), so modern and dependency-discipline agree — they only split in the intermediate cn_fast_hash misstep. Native domain sep via `customization` (no input prefix; distinct from `shekyl/output-handle-v1`); fixed-width input (no length prefix); derives only from on-chain `(tx_hash, index)` so rescan-stable (load-bearing for event→instance mapping); wallet-local/non-consensus; `v1` customization + wallet-internal KAT guard persistence stability. **Remaining R-residuals:** sealed-region layout for `opening`, async trait. **§4.7 message protocol pinned (D1–D4):** reorg **folded** onto `ApplyStakeEvents { reorg_rewind }` (no `RewindTo`; rewind-first in one uninterruptible turn — atomicity, not just ledger-mirror symmetry); reorg semantics **clear-all/replay-all of the full surviving own-nullifier set across the whole post-reorg chain** (windowed replay drops below-fork survivors of a straddling lock), **heights live in the scanner** not `claimed_epochs`; `claim_pending_epochs` lifecycle = `PrepareClaimBuild` side-effect (set) + `AbandonClaim` (clear, **claim_pending only, never claimed**); `Snapshot` excludes `claim_pending_epochs` / `Restore` starts it empty. **§5's §4.7 carry is thereby discharged; only the consensus-track `pop_block` nullifier-revert** (cross-tree atomicity) **holds the §5 box open.** |
 | **3** | Open | Threat-model exhaustion (§7) + §6 wider-substrate audit (after upstream Round 1) |
 | **4** | Open | Binding pins (trait signatures, error enums, persistence version, sealed-region format) |
 | **5** | Open | Closure + Stage 3 PR decomposition |
@@ -1014,11 +1334,11 @@ fn rate_at_epoch(&self, rate_epoch: u64) -> Result<u64, EconomicsEngineError>;
 
 - [x] §0 re-pre-flight complete against confidential consensus shapes (2026-06-04, §0.9)
 - [x] **R0-D1–D8** dispositioned (§0.11) — implementation gates named in §8.5–§8.8
-- [ ] `StakeState` FSM + transition table signed off (Rounds 1–2), incl. post-unstake claims (R0-D6)
-- [ ] Reconciliation rules incl. **nullifier-reorg rewind** signed off (§5)
+- [x] `StakeState` FSM + transition table signed off (Rounds 1–2), incl. post-unstake claims (R0-D6) — pending-claim model + discard + `Accruing`/`Claimable` pinned in **§3.4** (2026-06-04)
+- [ ] Reconciliation rules incl. **nullifier-reorg rewind** signed off (§5) — **coupled carry:** verifies the §3.4 claim confirm/reorg leg via the **single full-rebuild** mechanism (§5.2: `claimed_epochs = {S ∈ window : x·G_S ∈ post-reorg chain set}`, no per-epoch height; in-session reorg and post-`Restore` are one operation; reorg persists `ledger → stake → persist` with no transactional atomicity, self-healing via rebuild-on-reopen). **One forward-dependency now holds this box open:** **(1) §4.7 message-protocol pin — DISCHARGED (2026-06-04):** the §5 flow's reorg leg is folded onto `ApplyStakeEvents { reorg_rewind }` (D1) with clear-all/replay-all full-surviving-set semantics (D2), `OwnNullifierObserved` re-delivered by the scanner; D1–D4 pinned in §4.7. **(2) consensus-track `pop_block` nullifier-revert (REMAINS, cross-tree atomicity, §5.2 note)** — the wallet reorg mirror assumes the consensus pop path atomically reverts the stake-claim nullifier set; if it does not, a re-mined claim is permanently rejected and the wallet cannot fix that. §5 is **designed-complete**, box-pending only the consensus `pop_block` carry.
 - [ ] Persistence schema incl. **sealed `opening` region** signed off (§4.2) with version-bump plan
 - [ ] User method signatures signed off (§6)
-- [ ] `StakeEngine` message protocol signed off (§4.7), incl. sealed transport + `PrepareClaimBuild` (R0-D3, R0-D4)
+- [x] `StakeEngine` message protocol signed off (§4.7), incl. sealed transport + `PrepareClaimBuild` (R0-D3, R0-D4) — **D1–D4 pinned (2026-06-04):** reorg folded onto `ApplyStakeEvents { reorg_rewind }` (no `RewindTo`; rewind-first, one uninterruptible turn); clear-all/replay-all full-surviving-set, heights in scanner; `claim_pending_epochs` lifecycle = `PrepareClaimBuild` side-effect + `AbandonClaim` (claim_pending only, never claimed); `Snapshot` excludes `claim_pending_epochs`, `Restore` starts it empty
 - [x] **`StakeOpening` excludes `x`** (§3.3.1 / §8.8, R0-D8)
 - [x] **`G_S` + claim linkability + `MAX_EPOCHS_PER_CLAIM`** pinned with **(B)** (§8.5 / upstream §6.4.2)
 - [x] **Tier/window / multiplier integrity** — upstream **(C)** closed on **3C** (staking subtree + `h_bind`, window arithmetic); **(A)** reserve-DLEQ + bounded remainder; impl Round 2
