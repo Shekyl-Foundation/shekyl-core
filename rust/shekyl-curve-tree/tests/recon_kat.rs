@@ -31,7 +31,7 @@ use shekyl_curve_tree::{OutputIdentity, TargetKind};
 const FIXTURE: &str = include_str!("fixtures/ct2_tier_a.json");
 
 fn decode_hex(s: &str) -> Vec<u8> {
-    assert!(s.len() % 2 == 0, "odd-length hex: {s}");
+    assert!(s.len().is_multiple_of(2), "odd-length hex: {s}");
     (0..s.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("valid hex"))
@@ -169,8 +169,8 @@ fn empty_window_then_first_drain_at_61() {
     let blocks = decode_chain(chain(&f, "main"));
     let recon = reconstruct_roots(&blocks);
     let empty = recon[0];
-    for h in 0..=60usize {
-        assert_eq!(recon[h], empty, "height {h} must be the empty-tree root");
+    for (h, root) in recon.iter().enumerate().take(61) {
+        assert_eq!(*root, empty, "height {h} must be the empty-tree root");
     }
     assert_ne!(recon[61], empty, "height 61 is the first drained leaf");
     // And it matches consensus (covered by the per-height test, asserted
@@ -203,7 +203,7 @@ fn reorg_prefix_and_freeze_lag_are_frozen() {
     // Deep reorg (pop > SPENDABLE_AGE) forked from main after
     // `main_tip - deep_pop`: re-mined leaves exist but drain only past the
     // freeze-lag, so the frozen window extends `fork + 61` deep.
-    let fork_deep = (main_tip - deep_pop) as usize;
+    let fork_deep = usize::try_from(main_tip - deep_pop).expect("fork height fits usize");
     assert_frozen_through_lag(&main, &deep, fork_deep, "main/reorg_deep");
 
     // Shallow reorg (pop < SPENDABLE_AGE) forked from reorg_deep after its
@@ -211,7 +211,7 @@ fn reorg_prefix_and_freeze_lag_are_frozen() {
     // the pending-only branch mutates nothing — roots identical across the
     // entire overlap.
     let deep_tip = deep.last().unwrap().height;
-    let fork_shallow = (deep_tip - shallow_pop) as usize;
+    let fork_shallow = usize::try_from(deep_tip - shallow_pop).expect("fork height fits usize");
     assert_frozen_through_lag(&shallow, &deep, fork_shallow, "reorg_deep/reorg_shallow");
 }
 
