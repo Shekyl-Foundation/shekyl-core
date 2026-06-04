@@ -26,10 +26,14 @@ construction). Round 1 turns this into the replication code + KAT.
 §9 carries the full disposition):
 
 1. **Coinbase matures at `+60`, not `+10`.** The founder allocations are
-   genesis **coinbase** outputs, so they drain at height **60**, and the
-   empty-tree window is heights **0..59**, not 0..9. The spike prompt and
-   `CURVE_TREE_CLIENT.md` §8 #/early-height prose said "drain at 10 / empty
-   0..9"; that is wrong for coinbase. Corrected here and to be cross-edited.
+   genesis **coinbase** outputs (block 0), so they mature at height **60**
+   and first appear in the tree at height **61** — a matured leaf enters on
+   connection of the *next* block (`drained_through = H − 1`, pinned by the
+   CT-2 KAT). The empty-tree window is therefore heights **0..=60**, not 0..9.
+   The spike prompt and `CURVE_TREE_CLIENT.md` §8 #/early-height prose said
+   "drain at 10 / empty 0..9"; that is wrong for coinbase. (An earlier draft
+   of §5 below estimated "first non-empty at 60"; the KAT corrects the
+   inclusive/exclusive boundary to 61.) Corrected here and cross-edited.
 2. **The empty-tree root is `selene_hash_init`, not `build_layers([])`.** The
    daemon emits the Selene `hash_init` point for an empty tree
    (`db_lmdb.cpp:5909-5921`), **not** the `[[]]` zero-node structure CT-0's
@@ -258,8 +262,9 @@ inclusively (`maturity <= height`), never one block early or late.
 | Corner | Rule | Source |
 |--------|------|--------|
 | Genesis creation | Generated when DB is empty; founder pool = genesis **coinbase** outputs (`build_genesis_coinbase_from_destinations`, `txin_gen`, `version=3`, `RCTTypeNull`, `unlock_time = 60`). | `blockchain.cpp:465-472`, `cryptonote_tx_utils.cpp:683-709`, `GENESIS_TRANSPARENCY.md:122-198` |
-| Founder drain height | Height-0 coinbase ⇒ maturity `1 + 60 = 61` ⇒ drains on connect of 0-indexed block **60**. **First non-empty tree / first `R_0` material is at height 60**, not 10. | `blockchain_db.cpp:372-374` + coinbase rule above |
-| Empty-tree window | Heights **0..59** have an empty tree. (No regular tx can exist earlier — spending needs a non-empty tree for FCMP membership, and the first spendable outputs are the founder coinbase maturing at 60.) | derived from the two rows above |
+| Founder drain height | Height-0 coinbase ⇒ maturity `0 + 60 = 60`. A matured leaf enters the tree on connection of the *next* block (`drained_through = H − 1`), so the **first non-empty tree / first `R_0` material is at height 61**, not 10. (Pinned by the CT-2 KAT, `recon_kat::empty_window_then_first_drain_at_61`; supersedes this row's earlier "60" estimate.) | `blockchain_db.cpp:372-374` + coinbase rule above + CT-2 KAT |
+| Empty-tree window | Heights **0..=60** have an empty tree. (No regular tx can exist earlier — spending needs a non-empty tree for FCMP membership, and the first spendable outputs are the founder coinbase maturing at 60, first visible at 61.) | derived from the two rows above + CT-2 KAT |
+| **Small-tree root: leaf layer is never the root** | A non-empty tree of `1..=SELENE_CHUNK_WIDTH` leaves roots at the **single-child layer-1 Helios node**, not the layer-0 Selene leaf node: `grow_curve_tree` builds the Helios layer before its root-stop check. The wallet's `build_layers` reproduces this (every non-empty tree is depth ≥ 2). Pinned by the CT-2 KAT at height 61 (one leaf). | `db_lmdb.cpp` `grow_curve_tree`; `shekyl-fcmp::tree::build_upper_layers`; CT-2 KAT |
 | **Empty-tree root** | `get_curve_tree_root()` returns **`selene_hash_init`** when no leaves (`MDB_NOTFOUND`); the genesis header is pre-set to `shekyl_curve_tree_selene_hash_init`. Distinguish empty via `get_curve_tree_leaf_count() == 0`. **NOT** `null_hash`, **NOT** all-zeros, **NOT** `build_layers([]) == [[]]`. | `db_lmdb.cpp:5909-5921`, `cryptonote_tx_utils.cpp:821`, `core_rpc_server.cpp:3875-3877` |
 | `selene_hash_init` definition | `rejection_sampling_hash_to_curve(b"Monero Selene Hash Initializer")`, compressed (32 B). Computed at runtime via FFI; not inlined in C++. | `rust/shekyl-oxide/.../generators/src/lib.rs:157-159` |
 | Genesis root check | Header-root verification is skipped at `new_height == 0` (`blockchain.cpp:4989-4990`). | `blockchain.cpp:4989-4990` |
@@ -269,10 +274,11 @@ of (init-valued node) vs (`build_layers([]) == [[]]` zero-node structure) the
 daemon emits. **Answer: neither as a `build_layers` artifact — the daemon emits
 the `selene_hash_init` point.** The wallet's reconstruct path therefore must:
 `if leaf_count == 0 { root = selene_hash_init() }` and never index
-`build_layers([])`. CT-2's KAT hits an early height (e.g. 5 and 59) to pin this
-against the live header, and height **60** as the first non-empty checkpoint
-(founder allocations drain in `(maturity, gindex)` order as tree positions
-`0..N`).
+`build_layers([])`. CT-2's KAT hits early heights (e.g. 5 and 59, both within
+the `0..=60` empty window) to pin this against the live header, and height
+**61** as the first non-empty checkpoint (the founder allocation, maturity 60,
+enters as tree position 0 — a single leaf wrapped into the layer-1 Helios
+root per the small-tree convention above).
 
 ---
 
@@ -422,15 +428,17 @@ what is drivable **today**:
 
 **Tier A — coinbase-only, landable in Round 1 (no spend path required):**
 
-- an **early/empty height** (e.g. 5 and 59) — pins empty-tree root =
-  `selene_hash_init` against the live header (§5);
-- **height 60** — first non-empty checkpoint; founder allocations drain as
-  positions `0..N` (the first `R_0`);
+- an **early/empty height** (e.g. 5 and 59, both in the `0..=60` empty window)
+  — pins empty-tree root = `selene_hash_init` against the live header (§5);
+- **height 61** — first non-empty checkpoint; the founder allocation (maturity
+  60) drains as position `0`, a single leaf wrapped into the layer-1 Helios
+  root (the first `R_0`);
 - a **coinbase-heavy** stretch — every miner output drains at `+60` with on-chain
   `h_pqc` (§3); confirms coinbase leaf construction and the `+60` rule;
 - **both reorg depths**, both coinbase-generatable, because §6's
   journal-membership split has two branches and a coinbase reorg reaches each by
-  depth. A popped block `h`'s coinbase has drained iff `h ≤ T − 60`, so:
+  depth. A popped block `h`'s coinbase (maturity `h + 60`) has drained at tip
+  `T` iff `h + 60 ≤ T − 1`, i.e. `h ≤ T − 61`, so:
   - a **deep coinbase reorg (≥ 61)** pops blocks whose coinbase **has drained**
     ⇒ the **trim** branch: tree leaves removed and re-drained, survivors frozen,
     indices position-stable by derive-don't-accumulate;
