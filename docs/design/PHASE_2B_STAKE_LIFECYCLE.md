@@ -54,12 +54,14 @@ mirrors that truth and owns only the wallet lifecycle.
 
 ## 0. Round 0 pre-flight — substrate audit
 
-**Re-pre-flight required.** The prior §0 was verified at `dev @ 5f10af243`
-(post–PR #99) against the cleartext model. The confidential redesign changes the
+**Re-pre-flight complete (2026-06-04).** The prior §0 was verified at `dev @ 5f10af243`
+(post–PR #99) against the cleartext model. The confidential redesign changed the
 blast radius (new secret material in the stake actor; new consensus tx shapes the
-scanner must parse), so §0.1–§0.9 below are **carried forward as structure** but
-must be re-walked against the confidential consensus before Round 1 closes. New
-material is in §0.10.
+scanner must parse), so §0.1–§0.9 below were **carried forward as structure** and
+have now been **re-walked against the locked confidential consensus** (3C / `h_bind` /
+`creation ≜ eligible` / collapsed-(A) / R0-D8). The re-walk reconciled clean except for
+two stale-text gates and two completeness notes, all fixed in place; the close
+disposition is §0.9. New material is in §0.10.
 
 ### 0.1 Engine identification ([`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) §3.1)
 
@@ -69,9 +71,10 @@ material is in §0.10.
   `.await` sequencing); §8.3 lens table row for `StakeEngine`.
 - [ ] **§1.5 three-condition test (additive trait):**
   - **(1) Distinct state ownership:** per-stake FSM + wallet-side stake registry **+
-    per-stake commitment-opening secrets and nullifier-derivation material**;
-    distinct from `LedgerEngine` and `EconomicsEngine`. **Pass (re-confirm secret
-    ownership).**
+    per-stake commitment-opening secrets (`amount`, `z`) only**; distinct from
+    `LedgerEngine` and `EconomicsEngine`. **No nullifier-derivation material in the
+    stake actor** — `N_S = x·G_S` uses spend secret `x` (KeyEngine-owned, derived
+    transiently at claim/resync; R0-D8, §0.10). **Pass (re-confirm secret ownership).**
   - **(2) Failure isolation:** stake actor crash must not take down ledger or keys;
     recoverable via re-hydration from persisted stake records + chain replay.
     **Re-verify under fail-stop now that the actor holds secrets (§0.10).**
@@ -93,7 +96,11 @@ material is in §0.10.
   daemon + memory-disclosure now also covers commitment-opening secrets and
   claim↔stake linkage (§7).
 - [x] **Principle 8 (priority hierarchy):** applies — privacy posture materially
-  changes (§1); inflation-safety now rests on consensus range proofs + `ρ_cap` (§7).
+  changes (§1). **Inflation-safety primary defense** (3C locked; §9 premise established):
+  verifier **`N/D` recompute** + **`h_bind`** tier/creation binding + **bounded-remainder
+  entitlement** (upstream §6.4.1, §9). Consensus **range proofs + `ρ_cap` are the layered
+  backstops**, not the primary argument (the pre-(C)-close "rests on range proofs + ρ_cap"
+  framing is superseded).
 
 ### 0.3 §8.3 design lenses
 
@@ -117,6 +124,13 @@ material is in §0.10.
 **Audit shape:** *confirmation with bounded new persistence **and new secret
 material*** — no Monero-shaped migration (none exists), but the secret-locality
 posture changes (§0.10).
+
+**Lock-view pin (canonical-height alignment).** The wallet's `stake_lock_until` /
+`eff_lock` view **must derive from `eligible_height`** — the canonical
+`creation_height ≜ eligible_height` ([`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md)
+§2 canonical block), **not** the mining height — or the wallet's local lock view drifts
+from consensus by the `MIN_AGE` deferral. UX disclosure: "lock begins when the stake
+matures, ~`MIN_AGE` blocks after confirmation" (upstream §6.4.3 warm-up).
 
 ### 0.5 Branch posture
 
@@ -149,12 +163,27 @@ intent unchanged: `StakeEngine::Error: Into<StakeEngineError>` (CL-3),
 `ScanResult` / merge / refresh; **and** the scanner must learn the confidential
 stake-output and claim-tx wire shapes (owned upstream by the consensus design).
 
+**3C-specific scanner/merge scope (re-run targets — now concrete).** Under the locked
+separate-staking-subtree design ([`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md)
+§6.4.3, [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §15):
+
+- The scanner path-tracks membership in a **second tree** — the staking subtree — in
+  addition to the main output tree (a separate set of membership paths to maintain and
+  re-root on growth).
+- For each owned stake leaf the wallet **recomputes the 5th leaf scalar
+  `h_bind = H("stake-bind" ‖ tier ‖ eligible_height)`** from public `(tier,
+  eligible_height)` — no secret input; must match the consensus-stamped value (KAT,
+  R0-D# / Round 2).
+- The **unstake flow spans two trees**: consume a staking-subtree leaf → emit a
+  main-tree output. Merge/`ScanResult` must reconcile a cross-tree transition, not a
+  single-tree spend.
+
 ### 0.8 Stage 2 actor template (reference only — [`STAGE_2_KEY_ENGINE_ACTOR.md`](STAGE_2_KEY_ENGINE_ACTOR.md))
 
 | Pattern | Stage 2 pin | Phase 2b application (confidential) |
 |---------|-------------|-------------------------------------|
 | Handle vs actor | `KeyEngineHandle` + `KeyActor` | `StakeEngineHandle` + `StakeActor`; stake registry **+ opening secrets** inside task |
-| Fail-stop | §4.5 — `Break` on panic; no restart with stale secrets | **Adopt — now mandatory**: actor holds commitment openings + nullifier secrets (§0.10) |
+| Fail-stop | §4.5 — `Break` on panic; no restart with stale secrets | **Adopt — now mandatory**: actor holds commitment openings (`amount`, `z`) only; nullifier derivation is a transient `KeyEngine` operation (`x·G_S`), not sealed stake-actor state (§0.10, R0-D8) |
 | Require-ambient runtime | §4.2 | Same for `StakeEngineHandle::spawn` |
 | `pub(crate)` handles | Orchestrator-only | Same |
 | Forward actions | §8 | §8 below |
@@ -169,9 +198,19 @@ spend/view keys route through `KeyEngine`; signing through `PendingTxEngine` +
 
 ### 0.9 Round 0 disposition
 
-**Re-pre-flight in progress.** Round 0 closes only after §0.1–§0.8 are re-walked
-against the confidential consensus shapes, §0.10 is signed off, and the **R0-D
-pre-flight findings** (§0.11) are dispositioned.
+**Round 0 closed (re-walk complete — 2026-06-04).** §0.1–§0.8 re-walked against the
+locked confidential consensus (3C / `h_bind` / `creation ≜ eligible` / collapsed-(A) /
+R0-D8); §0.10 delta signed off; the **R0-D pre-flight findings** (§0.11) dispositioned;
+§8.0 blocking posture confirmed. The re-walk surfaced two stale-text gates — the
+stake-actor "nullifier-derivation material" contradiction (Drift 1, §0.1(1) + §0.8,
+fixed to `(amount, z)`-only per R0-D8) and the inverted inflation-safety framing
+(Drift 2, §0.2 Principle 8, fixed to `N/D`-recompute + `h_bind` + bounded-remainder as
+primary, range proofs + `ρ_cap` as backstop) — plus two completeness notes (§0.4
+lock-view → `eligible_height`; §0.7 3C scanner/merge scope). All four landed; no design
+decision reopened. **Wallet is clear into Round 1–2** — the `StakeState` FSM + transition
+table sign-off (§10.1) is the next wallet milestone, distinct from this Round 0 close.
+Implementation (Stage 3 code merge) remains gated on Round 3 (threat-model exhaustion
+§7 + wider-substrate audit), not on this close.
 
 ### 0.10 Confidential-rebase delta (new)
 
@@ -959,7 +998,7 @@ fn rate_at_epoch(&self, rate_epoch: u64) -> Result<u64, EconomicsEngineError>;
 
 | Round | Status | Summary |
 |-------|--------|---------|
-| **0** | **Reopened** | Confidential redesign is a substrate finding (Principle 5). Re-pre-flight §0.1–§0.8; sign off §0.10; **R0-D1–D8 dispositioned in §0.11** (2026-06-02). Blast radius: stake-actor openings `(amount, z)` only (R0-D8), claim prove surface, scanner parsing, `AccrualRecord` retirement. Closes when checklist in §0.11 is satisfied. |
+| **0** | **Closed** (2026-06-04) | Confidential redesign is a substrate finding (Principle 5). Re-pre-flight §0.1–§0.8 re-walked against the locked 3C / `h_bind` / `creation ≜ eligible` / collapsed-(A) consensus; §0.10 signed off; **R0-D1–D8 dispositioned in §0.11** (2026-06-02). Re-walk fixed two stale-text gates (Drift 1 stake-actor secrets → `(amount, z)`-only; Drift 2 inflation-safety framing → `N/D`-recompute primary) + two completeness notes (§0.4 lock-view, §0.7 3C scanner scope); no design reopen. Blast radius: stake-actor openings `(amount, z)` only (R0-D8), claim prove surface, two-tree scanner parsing, `AccrualRecord` retirement. |
 | **1** | **Closed** (2026-06-02; **(C) 3C** 2026-06-04) | **§6.4:** **(C)** closed on **3C** (staking subtree + 5-scalar `h_bind`; Decisions 1–2 superseded); **(B)**; **(A)** collapsed to reserve-DLEQ + bounded remainder; R0-D8. Round 2: byte wire, tree/leaf impl, cross-tree atomicity. |
 | **2** | Open | R-residuals: `StakeId` domain sep, pending-claim sub-state, `EpochSet` wire type, sealed-region layout for `opening`, async trait |
 | **3** | Open | Threat-model exhaustion (§7) + §6 wider-substrate audit (after upstream Round 1) |
@@ -973,7 +1012,7 @@ fn rate_at_epoch(&self, rate_epoch: u64) -> Result<u64, EconomicsEngineError>;
 
 ### 10.1 Planning (this document)
 
-- [ ] §0 re-pre-flight complete against confidential consensus shapes
+- [x] §0 re-pre-flight complete against confidential consensus shapes (2026-06-04, §0.9)
 - [x] **R0-D1–D8** dispositioned (§0.11) — implementation gates named in §8.5–§8.8
 - [ ] `StakeState` FSM + transition table signed off (Rounds 1–2), incl. post-unstake claims (R0-D6)
 - [ ] Reconciliation rules incl. **nullifier-reorg rewind** signed off (§5)

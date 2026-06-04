@@ -4,6 +4,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod entitlement;
 pub mod error;
 pub mod registry;
 pub mod rewards;
