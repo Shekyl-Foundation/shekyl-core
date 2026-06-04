@@ -510,11 +510,17 @@ is the smallest `k` at that knee — rate quantization as fine as it can matter 
 field-wrap margin and a **132-bit** `N·amount` overflow headroom (both test-locked,
 [`SCALE_RATE_K`](../../rust/shekyl-staking/src/entitlement.rs)). `2⁴⁹ < 2⁶⁴` folds into the
 64-bit slot with 15 bits to spare. The `9.7e-4` error at the former `k = 38` is now a stale
-optimum — the right call only while precision traded against proof width. **Reversion:** re-pin
-only if the realistic rate range moves the knee or the reward-output range width (hence the
-margin) changes; band is any `k` with comfortably-positive margin (the sweep harness is
-faithful to `k ≈ 60`, above which the analytic margin governs). Committed sweep (with margin
-column):
+optimum — the right call only while precision traded against proof width. **Lifetime
+invariance:** the knee is set by the smallest *meaningful* rate, floored by the
+**era-independent** meaningful-yield cutoff (`rate · window ≥ 1e-5`). Emission decays 0.90/yr,
+but the sweep grid already spans down to the terminal tail subsidy and the cutoff admits no
+meaningful rate below the floor regardless of era — so `k = 48` is the **lifetime** knee, not
+the genesis knee (`entitlement.rs::knee_is_lifetime_invariant_not_genesis_only`). **Reversion:**
+re-pin only if (a) the meaningful-yield cutoff is lowered to admit a far-future low-budget
+regime currently deemed negligible (the cutoff, not the passage of time, is the lever), or
+(b) the reward-output range width (hence the margin) changes; band is any `k` with
+comfortably-positive margin (the sweep harness is faithful to `k ≈ 60`, above which the
+analytic margin governs). Committed sweep (with margin column):
 [`docs/test_vectors/staking/entitlement_precision_sweep.json`](../test_vectors/staking/entitlement_precision_sweep.json).
 
 **Reversion (`21-reversion-clause-discipline.mdc`):** `D` is a consensus constant. Re-run

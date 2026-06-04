@@ -108,8 +108,18 @@ pub const D_TIER: u64 = 2;
 /// relative-error floor — the correct rule when precision traded against proof
 /// width, obsolete the moment the fold fixed the width at 64.
 ///
+/// The knee is set by the **smallest meaningful rate**, which is floored by the
+/// `MIN_MEANINGFUL_YIELD` *yield* cutoff — an **era-independent** bound. Emission
+/// decays 0.90/yr, so the rate range shrinks over the lifetime, but the sweep
+/// grid already spans down to the terminal tail subsidy and the cutoff admits no
+/// meaningful rate below `MIN_MEANINGFUL_YIELD / window` regardless of era. So
+/// `k = 48` is the **lifetime** knee, not the genesis knee
+/// (`knee_is_lifetime_invariant_not_genesis_only` test-locks this).
+///
 /// **Reversion (`21-reversion-clause-discipline.mdc`):** re-pin only if (a) the
-/// realistic rate range (`config/economics_params.json`) moves the knee, or
+/// **meaningful-yield cutoff** is lowered to admit a far-future low-budget regime
+/// the current cutoff deems negligible (this — not the passage of time — is the
+/// lever that moves the knee, since emission decay is already spanned), or
 /// (b) the reward-output range width changes (it sets the margin via
 /// [`OUTPUT_RANGE_PROOF_BITS`]). Safe band: any `k` with a comfortably positive
 /// margin (`≥ ~64`); below the knee wastes free precision, above it erodes
