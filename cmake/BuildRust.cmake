@@ -178,18 +178,30 @@ endif()
 # Each cargo invocation below is wrapped in an `add_custom_command(OUTPUT …)`.
 # Without an explicit `DEPENDS` list, the generator (Ninja/Make) treats the
 # output `.a` as up-to-date for as long as the file exists on disk — it never
-# re-invokes cargo when a `.rs` source or a manifest changes. The result is a
-# silently stale archive: the C++ side relinks against a `libshekyl_*.a` that
-# predates the current Rust sources, which is exactly the failure that linked a
-# month-old FFI into the daemon. We therefore feed cargo's inputs (every `.rs`,
-# every `Cargo.toml`, and the lockfile) into `DEPENDS` so the generator runs
-# cargo whenever they change; cargo's own fingerprinting then decides whether to
+# re-invokes cargo when a source under `rust/` changes. The result is a silently
+# stale archive: the C++ side relinks against a `libshekyl_*.a` that predates
+# the current Rust sources, which is exactly the failure that linked a month-old
+# FFI into the daemon.
+#
+# The dependency set below tracks the inputs that live under `rust/`: every
+# `.rs`, every `Cargo.toml`, the lockfile, and `.md` files (which feed the build
+# via `#![doc = include_str!("../README.md")]`). It is deliberately *not* a
+# complete model of cargo's inputs — `include_str!` / `include_bytes!` targets
+# that live outside `rust/` (e.g. test vectors under `docs/`, `config/*.json`)
+# are not tracked here. Those are test/doc inputs that affect test binaries and
+# rustdoc, not the linked production archives this file builds (shekyl-ffi,
+# shekyl-logging, shekyl-daemon-rpc), whose `include_*!` uses are confined to
+# `#[cfg(test)]`. A tracked change still triggers a cargo run, and cargo's own
+# fingerprinting then re-checks the full input set and decides whether to
 # rewrite each archive (so a no-op change does not force a C++ relink).
 #
 # `CONFIGURE_DEPENDS` makes the generator re-glob at build time, so newly added
 # source files are picked up without a manual re-configure. The `/target/`
 # filter keeps cargo's own build artifacts out of the dependency set.
-file(GLOB_RECURSE _shekyl_rust_sources CONFIGURE_DEPENDS "${RUST_SOURCE_DIR}/*.rs")
+file(GLOB_RECURSE _shekyl_rust_sources CONFIGURE_DEPENDS
+    "${RUST_SOURCE_DIR}/*.rs"
+    "${RUST_SOURCE_DIR}/*.md"
+)
 list(FILTER _shekyl_rust_sources EXCLUDE REGEX "/target/")
 file(GLOB_RECURSE _shekyl_rust_manifests CONFIGURE_DEPENDS "${RUST_SOURCE_DIR}/*Cargo.toml")
 list(FILTER _shekyl_rust_manifests EXCLUDE REGEX "/target/")
