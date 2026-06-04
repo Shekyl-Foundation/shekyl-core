@@ -86,24 +86,47 @@ the daemon's exact order.
 at genesis. The Rust scanner already follows this shape
 (`rust/shekyl-scanner/src/scan.rs:736-738`, `shekyl-oxide/rpc/src/lib.rs:672-678`).
 
-### 2.2 Divergence surface — leaf-set ⊆ indexed-set (FLAG for Round 1)
+### 2.2 Divergence surface — leaf-set ⊆ indexed-set (RESOLVED at source)
 
-`collect_outputs` advances `next_output_seq++` for **every** vout, but **skips
-pending-leaf registration** (`continue`) when any of:
+`collect_outputs` consumes one global index per vout **before** any skip
+(`const OutputIndex this_output{next_output_seq++}` at `blockchain_db.cpp:360`,
+top of the per-vout loop), then **skips pending-leaf registration** (`continue`,
+or the leaf simply not added) when any of:
 
-- output target ∉ {`txout_to_tagged_key`, `txout_to_key`, `txout_to_staked_key`};
-- `i >= tx.rct_signatures.outPk.size()`;
-- `shekyl_construct_curve_tree_leaf(...)` returns false.
+- (a) output target ∉ {`txout_to_tagged_key`, `txout_to_key`,
+  `txout_to_staked_key`} — `else { continue; }` at `:392-393`;
+- (b) `i >= tx.rct_signatures.outPk.size()` — `continue` at `:395-396`;
+- (c) `shekyl_construct_curve_tree_leaf(...)` returns false — the `if` at
+  `:401-403` guards `add_pending_tree_leaf`, so a decompress-failure output is
+  silently not a leaf.
 
-Source: `blockchain_db.cpp:369-407`. Consequence: a consensus-valid output can
-hold a global index **without** a tree leaf, so `global_index → tree_position`
-is not surjective in general. Under v3 rules all outputs are tagged/staked keys
-with `outPk`, so the skip set is expected empty — **but the wallet's
-reconstruction must apply the identical skip predicate, not assume every indexed
-output is a leaf.** The KAT (§8) confirms emptiness on the test chain; the
-predicate is replicated regardless. No separate consensus check forces leaf
-construction to succeed, so this is the surface most likely to bite if the
-wallet's leaf builder and the daemon's disagree on a malformed-but-valid output.
+**The leaf-skip predicate is therefore: `include iff (a-target-ok) ∧ (b-has-outPk)
+∧ (c-construct-ok)`.** `gindex` is assigned to *every* vout regardless of the
+predicate, so `global_index → tree_position` is **not surjective** in general: a
+skipped output consumes a `gindex` (keeping the index space gap-free) but
+produces no leaf, and the surviving leaves carry their (possibly
+non-contiguous) `gindex` values as the S2 drain tiebreaker. Source:
+`blockchain_db.cpp:355-409`.
+
+**Coinbase is trivially include-all (the Tier-A-relevant case).**
+`construct_miner_tx` populates `outPk` with real commitments
+(`cryptonote_tx_utils.cpp:156` `outPk.resize`, `:179` `memcpy(...mask...,
+od.commitment...)`), and even the explicit-`RCTTypeNull` path does the same
+(`:709-743`). So (b) never fires for coinbase; coinbase outputs are
+`txout_to_tagged_key`/`txout_to_key` so (a) passes; and (c) is the shared
+`construct_leaf`. **A coinbase-only chain produces a leaf per coinbase output —
+this is what keeps Tier A non-empty** (and confirms the §5 `C = zG + aH` row: a
+coinbase commitment is real, never `zeroCommit`).
+
+**Round-1 disposition.** The wallet's reconstruction **implements the real
+predicate (a)∧(b)∧(c), not a hardcoded include-all** — even though Tier A
+(coinbase, V3-genesis) under-exercises it (the skip set is empty there). A
+hardcoded include-all is exactly the kind of thing Tier B reveals late. No
+separate consensus check forces leaf construction to succeed, so (c) is the
+surface most likely to bite on a malformed-but-valid output; the
+hard-error-vs-skip-match decision for that case stays a reversion (open
+question #1), with the default being **skip-match the daemon** (replicate, do
+not diverge).
 
 ---
 
@@ -121,7 +144,7 @@ x-coords are Wei25519 via `ed25519_point_to_selene_scalar`
 | Coinbase commitment `C` | **Real** `C = z*G + amount*H` (`z` from HKDF in `shekyl_construct_output`); `RCTTypeNull` still serializes real `outPk`. | `output.rs:288-293`, `rctTypes.h:207-210`, `cryptonote_tx_utils.cpp:179`,`743` |
 | Trivial-commitment rejection | Consensus **rejects** `C == zeroCommit(amount)` (mask=1), `C == identity()`, `C == G` for coinbase. So a coinbase leaf is **never** a zero/identity commitment. | `blockchain.cpp:3402-3425`, `rctOps.cpp:322-333` |
 | Coinbase `h_pqc` | **Real per-output hybrid hash**, `Blake2b-512("shekyl-pqc-leaf" ‖ hybrid_pk) wide-reduced`, computed by `shekyl_construct_output` (miner self-KEM, per-output) and stored **on-chain in `tx_extra` tag `0x07`** (`TX_EXTRA_TAG_PQC_LEAF_HASHES`, `N×32` in vout order). | `derivation.rs:53-71`, `cryptonote_tx_utils.cpp:162-192`,`726-755`, `tx_extra.h:45` |
-| Where the tree reads `h_pqc` | `collect_outputs` reads it from the parsed `0x07` blob at `i*32`; **falls back to 32 zero bytes only if the tag is absent** (legacy/pre-tag outputs). | `blockchain_db.cpp:362-364` (`zero_pqc` at `332`), `FCMP_PLUS_PLUS.md:222-225` |
+| Where the tree reads `h_pqc` | `extract_leaf_hashes` parses `tx.extra`, finds the **single** `tx_extra_pqc_leaf_hashes` field (one `0x07` field, blob `N×32` in vout order), and returns it **only if** `blob.size() % 32 == 0`; `collect_outputs` then slices `blob + i*32`. **Falls back to 32 zero bytes** when: parse fails, the tag is absent, `blob.size() % 32 != 0` (malformed length → whole field dropped), **or** `i >= num_leaf_hashes` (blob present but shorter than vout count). | `blockchain_db.cpp:341-364` (`extract_leaf_hashes`, `zero_pqc` at `:332`), `tx_extra.h:45,219-228`, `FCMP_PLUS_PLUS.md:222-225` |
 | Leaf branch on rct type? | **No.** `collect_outputs` uses one path for miner and normal txs; only `is_miner` changes maturity. | `blockchain_db.cpp:369-407` |
 | Accepted rct types | Only `RCTTypeNull = 0` (coinbase) and `RCTTypeFcmpPlusPlusPqc = 7`. | `rctTypes.h:161-166`, `blockchain.cpp:3451-3456`,`1523` |
 
@@ -130,10 +153,29 @@ x-coords are Wei25519 via `ed25519_point_to_selene_scalar`
 The load-bearing finding: **`h_pqc` cannot be recomputed from the bare public
 output** — it is the hash of the *hybrid public key*, carried in `tx_extra`
 `0x07`. The wallet's block-derived leaf builder **must parse `tx_extra` `0x07`**
-(vout-indexed) for both coinbase and regular outputs, applying the **exact**
-zero-fallback rule when the tag is absent. This is a new S1-leaf input the
-block-derived pipeline must thread; it was not in the spike prompt's
-`{O.x, I.x, C.x, h_pqc}` description (which read as if `h_pqc` were derivable).
+(vout-indexed) for both coinbase and regular outputs, replicating the **exact**
+`extract_leaf_hashes` semantics: validate `blob.size() % 32 == 0` (else treat
+the whole field as absent → zeros), then per-output `h_pqc = i < num_leaf_hashes
+? blob[i*32 .. i*32+32] : zeros`. This is a new S1-leaf input the block-derived
+pipeline must thread; it was not in the spike prompt's `{O.x, I.x, C.x, h_pqc}`
+description (which read as if `h_pqc` were derivable).
+
+**Parser ownership — RESOLVED: reuse `shekyl_scanner::extra::Extra`.** The Rust
+`tx_extra` parser already exists and **already decodes tag `0x07`**:
+`ExtraField::PqcLeafHashes(Vec<u8>)` with accessor
+`Extra::pqc_leaf_hashes() -> Option<&[u8]>`
+(`rust/shekyl-scanner/src/extra.rs:40,60,98-101,146-148,226-233`). The
+block-derived leaf builder **reuses this parser** and layers the
+`extract_leaf_hashes` *post-parse* validation/slicing (`%32` check,
+absent→zeros, per-output `i<N` slice) on top — no new `tx_extra` parser is
+written (Shekyl-first reuse; dependency-discipline). One layering nuance for
+CT-1: the new curve-tree crate either depends on `shekyl-scanner` for `Extra`
+or `Extra`/`ExtraField` is factored to a lower shared crate; decided when the
+crate skeleton lands, not pre-provisioned here. One parity nuance parked in Tier
+B: the scanner's `Extra::read` breaks on the first unparseable field and returns
+the prefix, whereas the daemon's `parse_tx_extra`-returns-false path drops to
+zeros; this only diverges on a **crafted/malformed** extra (which needs a spend
+to construct), so it rides Tier B's reversion with the malformed-length case.
 
 ### 3.2 Torsion in x-extraction — **resolved: not a divergence surface**
 
@@ -277,14 +319,20 @@ The block-derived wallet pipeline (Round 1 implementation) is:
 
 1. For each synced block, run **S1** (assign global indices: coinbase-first,
    `tx_hashes` order, vout order).
-2. For each indexed output, run the **S1-leaf** builder: `O`, `C` from
-   `outPk[i].mask`, `h_pqc` **parsed from `tx_extra` `0x07`** (zero-fallback if
-   absent), applying the **leaf-skip predicate** (§2.2).
+2. For each indexed output, apply the **leaf-skip predicate** (§2.2:
+   target-variant ∧ `i < outPk.size()` ∧ `construct_leaf`-ok); for included
+   outputs run the **S1-leaf** builder: `O`, `C` from `outPk[i].mask`, `h_pqc`
+   parsed via `shekyl_scanner::extra::Extra` from `tx_extra` `0x07` with the
+   `extract_leaf_hashes` validation/slice (§3.1).
 3. Register each leaf as pending with maturity `+10`/`+60`/staked.
 4. At each connect height, **drain** inclusively (`maturity <= height`) in
    `(maturity, gindex)` order, appending to the leaf array.
 5. Compute the root: `leaf_count == 0 → selene_hash_init()`, else
-   `build_layers` / `build_upper_layers` over the drained leaves.
+   **`build_layers` over the drained leaves** — the rebuild-from-leaves
+   composition is the Round-1 oracle; the cached-`R_k` `build_upper_layers` hot
+   path stays CT-1 (open question #5). A few-hundred-leaf coinbase chain rebuilds
+   cheaply, so the monolith is the right tool for the KAT; do not build the
+   cached hot path before the correctness baseline exists.
 6. On reorg: truncate the leaf array to the surviving-drained prefix and rebuild
    (the wallet's pinned strategy; §6 carry).
 
@@ -324,64 +372,164 @@ each reference height:
 > wallet-reconstructed `curve_tree_root` at reference height `H`
 > **==** the C++ block-header `curve_tree_root` at `H`.
 
-The test chain must exercise **all three maturity classes** (§4 documents
-`+10` / `+60` / staked) and a mixed-maturity drain collision, not just the two
-maturity classes the early draft hit. It must include:
+The chain must eventually exercise **all three maturity classes** (§4: `+10` /
+`+60` / staked) plus a mixed-maturity collision and a deep reorg. But the cases
+**split by a generation dependency** the enumeration did not flag (§8.1): some
+need only coinbase blocks, the rest need a working **FCMP++ spend path**. The KAT
+therefore lands in two tiers.
 
-- an **early/empty height** (e.g. 5 and 59) — pins the empty-tree root =
+That capstone equality is what proves S1+S2+S3 are bit-exact and that
+block-derived is sound. It is also where the **empty-tree root** and the
+**undeepen drop-model** (CT-0 Tier 2) get pinned against **consensus**, not
+self-consistency — closing the `empty_tree_is_a_ct2_boundary` obligation and the
+Tier-2 "what Tier 2 does NOT verify" note in `CURVE_TREE_CLIENT.md` §7.7.
+
+### 8.1 The fixture has a generation dependency: spend-path, not staking
+
+A fixture is only as generatable as the chain it records. Two source reads pin
+what is drivable **today**:
+
+- **Coinbase outputs need no spend.** A regtest daemon mining empty blocks
+  produces the founder coinbase (genesis, matures `+60`) and a coinbase-heavy
+  stretch with no wallet involved.
+- **Every non-coinbase leaf needs an FCMP++ spend.** A regular (`+10`) output
+  exists only as the output of some transaction, and any non-coinbase tx spends
+  a prior output — which needs an FCMP++ membership proof. This is the *same*
+  structural argument that makes the empty-window 0..59 structural (§5): no
+  non-coinbase leaf can exist until spending works.
+- **A staked output is a spend.** `wallet2::create_staking_transaction`
+  (`wallet/wallet2.cpp:9974`) routes through `create_transactions_2` — it
+  **spends** the staker's existing outputs into a `txout_to_staked_key`
+  (`cryptonote_tx_utils.cpp:484`). Cleartext staking is **consensus-live from
+  HF1** (`txout_to_staked_key`, tag `0x4`; `cryptonote_config.h:189`), so the
+  staked class is **not** gated on Phase 2b — but minting one is gated on the
+  spend path exactly like a `+10` output. *(This corrects the Gap-1 framing: the
+  staked case is not "deferred pending staking ships"; staking has shipped. It
+  is deferred pending the **send path**, in the same tier as Gap 2.)*
+- **Reorg.** The production reorg engine (`switch_to_alternative_blockchain`,
+  `blockchain.cpp:1316`) works; a regtest daemon can drive competing chains. A
+  **coinbase-only** deep reorg (deep pop + alt coinbase chain) trims/re-drains
+  `+60` leaves with no spend. A reorg whose churned span contains `+10`/staked
+  leaves inherits the spend dependency.
+- **In-process chaingen is not the generator.** `chaingen`'s FCMP++ tx
+  construction was removed (`tests/core_tests/chaingen_main.cpp:106-110`) and its
+  `TestDB` stubs the curve tree to no-ops (`chaingen.cpp:160-171`); the fork
+  tests are disabled. So the recommended generator is a **real regtest daemon**
+  (§8.3), which sidesteps chaingen entirely and is the only path that can build
+  real spends/stakes/reorgs.
+
+### 8.2 The two KAT tiers
+
+**Tier A — coinbase-only, landable in Round 1 (no spend path required):**
+
+- an **early/empty height** (e.g. 5 and 59) — pins empty-tree root =
   `selene_hash_init` against the live header (§5);
 - **height 60** — first non-empty checkpoint; founder allocations drain as
   positions `0..N` (the first `R_0`);
-- a **coinbase-heavy** stretch — every block's miner output drains at `+60` with
-  on-chain `h_pqc` (§3); confirms coinbase leaf construction and the `+60` rule;
-- a **multi-tx block** — confirms S1 intra-block ordering (coinbase-first,
-  `tx_hashes` order, vout order) and the batch `(maturity, gindex)` drain;
-- **at least one staked output** (post-60, since staking also needs a non-empty
-  tree for its membership proof) — exercises the **third maturity class**:
+- a **coinbase-heavy** stretch — every miner output drains at `+60` with on-chain
+  `h_pqc` (§3); confirms coinbase leaf construction and the `+60` rule;
+- **both reorg depths**, both coinbase-generatable, because §6's
+  journal-membership split has two branches and a coinbase reorg reaches each by
+  depth. A popped block `h`'s coinbase has drained iff `h ≤ T − 60`, so:
+  - a **deep coinbase reorg (≥ 61)** pops blocks whose coinbase **has drained**
+    ⇒ the **trim** branch: tree leaves removed and re-drained, survivors frozen,
+    indices position-stable by derive-don't-accumulate;
+  - a **shallow coinbase reorg (< 61)** pops blocks whose coinbase is **still
+    pending** ⇒ the **no-mutation** branch: `drained_count == 0`, the tree is
+    untouched, only pending entries churn.
+  The wallet's per-block-journal re-derivation must get **both** right (it folds
+  to S1+S2 truncate-and-rebuild either way; §6, §7.1). No wallet journal replica
+  under test;
+- **enough length to freeze a segment.** Coinbase-only yields one leaf per
+  block, so the chain must run far enough past 60 to complete at least one
+  **level-0 subtree** (~38 leaves ⇒ ~height 100), ideally into a **level-1**
+  segment, or there is no frozen `R_k` to content-address. A few hundred
+  coinbase blocks suffice; the **level-2 shard size is not needed** — CT-0
+  established the freeze mechanism is level-agnostic and settled on
+  `LEVELS = [0,1]`, so the KAT inherits that and does not need the ~26k-block
+  shard chain.
+
+Tier A is generatable by a plain regtest daemon and validates the
+block-derived path's structural core: empty-root special-case, `+60` coinbase
+leaf, drain-trigger off-by-one, **both** S3 branches on coinbase leaves
+(trim + no-mutation), and `R_k` content-addressing on a genuinely-frozen
+level-0/1 segment. **This is the Round-1 KAT and the TDD oracle.**
+
+**Tier B — spend-dependent, deferred pending the FCMP++ send path (2A):**
+
+- a **multi-tx block** — S1 intra-block ordering (coinbase-first, `tx_hashes`
+  order, vout order) and the batch `(maturity, gindex)` drain;
+- the **`+10`/`+60` mixed-maturity collision** (Gap 2) — a single drain height
+  where a `+10` normal output and a `+60` coinbase **from different source
+  blocks** interleave by `gindex` (coinbase from 60 back, lower `gindex`, orders
+  ahead of the normal output from 10 back, higher `gindex`). Sustained normal-tx
+  activity past ~height 120 produces it; the KAT **asserts the interleaved
+  order**. Catches a wallet sorting `gindex`-only or `maturity`-only — both pass
+  Tier A and fail exactly here;
+- a **staked output** (Gap 1, post-60) — the third maturity class,
   `N = max(block_height + shekyl_stake_lock_blocks(tier), block_height + 10)`
-  (§4, `blockchain_db.cpp:387-390`). The staked leaf drains at a tier-dependent
-  height (1,000 / 25,000 / 150,000 blocks) and interleaves with `+10`/`+60` by
-  `(maturity, gindex)` like any other leaf. Without this the KAT proves only two
-  of three classes the drain path handles;
-- a **mixed-maturity drain collision** — the case where *tree-position ≠ gindex*
-  actually bites, which "coinbase-heavy" (coinbase-only, no interleaving) and
-  "multi-tx block" (intra-block gindex, not cross-source-height order) do **not**
-  produce. Engineer a single drain height where a `+10` normal output and a
-  `+60` coinbase **from different source blocks** mature together: the coinbase
-  from 60 blocks back (lower `gindex`) must order **ahead of** the normal output
-  from 10 blocks back (higher `gindex`). Sustained normal-tx activity past
-  ~height 120 produces this naturally; the chain must carry a stretch with it and
-  the KAT must **assert the interleaved order**. This is the case that catches a
-  wallet sorting `gindex`-only (ignores maturity) or `maturity`-only
-  (mis-orders within a maturity) — both pass every other bullet and fail exactly
-  here;
-- a **reorg deeper than `SPENDABLE_AGE`** (and one shallower) — confirms S3
-  *folds into S1/S2* (§6, §7.1): survivors frozen, tail re-drained via
-  truncate-and-rebuild, indices position-stable by derive-don't-accumulate, and
-  the pending-vs-drained split. No wallet journal replica is under test.
+  (§4, `blockchain_db.cpp:387-390`), interleaving with `+10`/`+60` by
+  `(maturity, gindex)`;
+- a **reorg whose churned span contains `+10`/staked leaves** — S3 on the full
+  leaf mix.
 
-That single equality is what proves S1+S2+S3 are bit-exact across all three
-maturity classes and that block-derived is sound. It is also where the
-**empty-tree root** and the **undeepen drop-model** (CT-0 Tier 2) get pinned
-against **consensus**, not self-consistency — closing the
-`empty_tree_is_a_ct2_boundary` obligation and the Tier-2 "what Tier 2 does NOT
-verify" note in `CURVE_TREE_CLIENT.md` §7.7.
+Tier B's assertions are **written now** (the rule is enumerated and correct) but
+**`#[ignore]`-gated** pending its fixture, so Gap 1/Gap 2 do not become false
+Round-1 blockers. **Reversion criterion (`21-`):** the gate lifts when 2A's send
+path can mint a regular (and staked) output on a regtest fixture; **re-evaluation
+shape:** the deferred assertions un-ignore and run as a regression net (below).
 
-**Source of the consensus root for the KAT — recommendation: a checked-in
-fixture chain.** Per-height roots are stored by the daemon
+**Acyclicity is load-bearing, not luck — the bootstrap spend is structurally
+coinbase-only.** The founder allocations are coinbase and are the first and only
+spendable outputs at height 60 (§5), so 2A's *first* spend necessarily proves
+FCMP membership against a **coinbase-only tree**. Tier A is therefore not merely
+"what a plain regtest daemon can generate without spends" — it is **exactly the
+tree shape the bootstrap spend proves against**. That is why the chain Tier-A →
+CT-core → 2A → Tier-B has no hidden cycle: 2A does not need full CT-2, it needs
+the coinbase-tree correctness Tier A validates, because the first spend cannot be
+anything but a coinbase spend. Once it lands and mints the first non-coinbase
+outputs, Tier B becomes both generatable and meaningful. The genesis structure
+and the dependency graph are the **same shape** — a sign the split is real and
+not engineered.
+
+**Tier B is the regression/completeness net, not what makes 2A work.** 2A
+working is already a **coarse** CT-correctness signal on the spend path: a wrong
+tree means the daemon **rejects** the spend (the membership proof fails against
+the real `curve_tree_root`), so no Tier-B fixture even generates. Tier B is the
+**fine-grained root-equality check layered on top of daemon-acceptance** — it
+validates *more* (byte-exact per-height roots across the full leaf mix), but its
+**absence does not hold 2A hostage**. The deferral is honest in both directions:
+Tier B is not a 2A blocker, and 2A is not blocked on Tier B. The deferral is
+**bounded by 2A** (when sends mint non-coinbase outputs) yet **not gating** it.
+
+### 8.3 Source of the consensus root — checked-in fixture from a real daemon
+
+Per-height roots are stored by the daemon
 (`store_curve_tree_root_at_height(prev_height+1, ct_root)`,
 `blockchain_db.cpp:436-437`) and exposed via RPC
-(`core_rpc_server.cpp:3875-3877`). The recommended source is a **checked-in
-fixture chain** — `{block, header.curve_tree_root}` per height, **generated once
-from a real daemon run** (the chain engineered to carry all three maturity
-classes + the §8 collision + a deep reorg) and **replayed hermetically** in the
-KAT. This is preferred over a live-daemon/regtest dependency in CI: it matches
-the determinism discipline (seeded proptest, Guix-reproducible builds — `30-` /
-testing rules), needs no running node, and makes the KAT a **stable regression
-artifact** rather than something that flakes on daemon availability. The
-generation step is one-time and out-of-band; CI only replays the fixture. (An
-in-process `BlockchainDB` over the fixture is a viable generator, but the
-checked-in `{block, root}` vector is the artifact CI consumes.)
+(`core_rpc_server.cpp:3875-3877`). The source is a **checked-in fixture chain** —
+`{block, header.curve_tree_root}` per height, **generated once from a real
+regtest daemon run** and **replayed hermetically** in the KAT.
+
+**Oracle hygiene — the header field is the source of truth.** The
+**header-committed `curve_tree_root`** (per-block consensus commitment, what the
+wallet's recomputed root must match) is recorded as truth, **cross-checked
+against the `get_curve_tree_root` RPC** at generation time so the two are
+confirmed equal (the RPC reads the stored per-height root; agreement proves the
+fixture captures the consensus value, not an off-by-one). Note **height 0 is an
+unverified constant** — the genesis header-root check is *skipped*
+(`blockchain.cpp:4989-4990`, §5), so a height-0 assertion would test a
+self-asserted value, not consensus. The meaningful empty-window assertions are
+at **heights 5 and 59**: both are consensus-verified empty roots
+(`selene_hash_init`), which is exactly why Tier A picks them over height 0. A real daemon
+(not in-process `chaingen`, §8.1) is required because only it can build the real
+coinbase chain now (Tier A) and, once 2A ships, real spends/stakes/reorgs
+(Tier B). This matches the determinism discipline (seeded, Guix-reproducible),
+needs no running node in CI, and makes the KAT a **stable regression artifact**
+rather than something that flakes on daemon availability. Generation is one-time
+and out-of-band; CI only replays the fixture. The fixture is **additive**: the
+Tier-A `{block, root}` vector lands in Round 1; the Tier-B heights append to the
+same artifact when the send path can generate them.
 
 ---
 
@@ -409,21 +557,38 @@ checked-in `{block, root}` vector is the artifact CI consumes.)
 
 ### Open questions for Round 1
 
-1. **Leaf-skip predicate parity (§2.2).** Confirm via the KAT that the skip set
-   is empty on a v3 chain, and decide whether the wallet hard-errors or
-   skip-matches if it ever sees a consensus-valid output the daemon did not make
-   a leaf. Reversion criterion: a non-empty skip set on any real chain.
-2. **`tx_extra` `0x07` parser ownership.** Does the block-derived path reuse the
-   C++ `tx_extra` parse via FFI, or a Rust `tx_extra` parser
-   (`shekyl-oxide`)? Dependency-discipline check at Round 1.
+1. **Leaf-skip predicate parity (§2.2) — RESOLVED at source.** The predicate is
+   `(target ∈ {tagged_key, key, staked_key}) ∧ (i < outPk.size()) ∧
+   (construct_leaf ok)` (`blockchain_db.cpp:355-409`); `gindex` is assigned to
+   every vout regardless. Coinbase is trivially include-all (`outPk` populated,
+   `cryptonote_tx_utils.cpp:156,179,709-743`), so Tier A under-exercises the
+   skip with an empty skip set. The wallet **implements the real predicate**, not
+   a hardcoded include-all. Remaining decision (deferred to Tier B): hard-error
+   vs skip-match if a consensus-valid output the daemon did not leaf ever
+   appears; default **skip-match**. Reversion criterion: a non-empty skip set on
+   any real chain.
+2. **`tx_extra` `0x07` parser ownership — RESOLVED: reuse
+   `shekyl_scanner::extra::Extra`** (§3.1). It already decodes `0x07` →
+   `PqcLeafHashes` with a `pqc_leaf_hashes()` accessor; the leaf builder layers
+   the `extract_leaf_hashes` validation on top. No new parser (Shekyl-first
+   reuse). Layering (curve-tree depends on scanner vs factor `Extra` lower) is a
+   CT-1 crate-skeleton decision. The malformed-length / parse-rejection parity
+   edge is Tier B (needs a crafted extra ⇒ a spend); the V3-genesis
+   absent-fallback never fires, so Tier A under-exercises it for daemon-parity.
 3. **Torsion in x-extraction — RESOLVED (§3.2).** Not a divergence surface: the
    leaf primitive is shared FFI (`construct_leaf`), and `Hp(O)` clears the
    cofactor (`hash_to_point.rs:86`). No engineered-torsion vector in the KAT;
    leaf-builder totality on adversarial points is a CT-1 unit concern. Reopens
    only if the wallet's leaf construction forks off the shared primitive.
-4. **KAT root source — RECOMMENDED: checked-in fixture chain (§8).** Generated
-   once from a real daemon run, replayed hermetically; no live-daemon CI
-   dependency. Round 1 confirms the fixture format and generation script.
+4. **KAT root source — RECOMMENDED: checked-in fixture from a real regtest
+   daemon (§8.3), NOT in-process `chaingen`** (chaingen lacks FCMP++ tx
+   construction and stubs the curve tree — §8.1). Generated once, replayed
+   hermetically. The fixture is **additive and two-tier (§8.2)**: Tier A
+   (coinbase-only: empty / 60 / coinbase-heavy / coinbase-only reorg) lands in
+   Round 1 as the TDD oracle; Tier B (multi-tx, `+10`/`+60` collision, staked,
+   mixed reorg) is spend-path-dependent and appends when 2A can mint regular and
+   staked outputs. Round 1 confirms the fixture format and the regtest generation
+   script for Tier A.
 5. **`build_upper_layers` factor (carried from CT-1).** The KAT computes the
    root from leaves via `build_layers`; the wallet's steady-state hot path
    computes it from cached `R_k` via `build_upper_layers`. CT-2 validates the
@@ -438,5 +603,11 @@ The enumeration is complete: S1 (index assignment), S1-leaf (coinbase/`h_pqc`),
 S2 (drain trigger + batch + empty root), S3 (reorg) are each pinned to source
 with the genesis corners named. The two framing corrections (coinbase `+60`,
 empty root = `selene_hash_init`) and the `h_pqc`-on-chain obligation are the
-Round-0 findings that change the implementation shape. Round 1 implements §7 and
-writes the §8 KAT; the §9 cross-edits land alongside.
+Round-0 findings that change the implementation shape.
+
+The two Tier-A critical-path items are also resolved at source ahead of
+implementation, so they do not surface as mid-build churn: the **leaf-skip
+predicate** (§2.2, coinbase include-all confirmed via `outPk` population) and
+**`tx_extra` `0x07` parser ownership** (§3.1, reuse `shekyl_scanner`'s `Extra`).
+Round 1 implements §7 with `build_layers` and writes the §8 Tier-A KAT against a
+real-regtest-daemon fixture; the §9 cross-edits land alongside.

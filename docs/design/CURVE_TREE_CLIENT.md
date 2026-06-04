@@ -131,11 +131,21 @@ substrate (§7). Designing it segment-aware now is what keeps the archival
 
 ```text
 shekyl-curve-tree
+├── recon      block-derived leaf reconstruction: S1 index, leaf-skip predicate,
+│              tx_extra 0x07 parse (reuse shekyl-scanner Extra), S2 drain
+│              (maturity, gindex) → ordered leaf stream (CT2_DRAIN_ORDER.md §7)
 ├── store      LeafStore: segment-addressable leaves + anchors (§7.2 unit)
 ├── sync       source-agnostic segment fetch; reorg rollback; root verify
-├── assemble   layer recompute (shekyl-fcmp::tree) → path extraction
+├── assemble   layer recompute (shekyl-fcmp::tree build_layers) → path extraction
 └── client     public API (§3.5): select ref block, assemble path
 ```
+
+`recon` is the block-derived default's heart (`CT2_DRAIN_ORDER.md`): it replays
+the C++ drain ordering bit-exactly. Its leaf-skip predicate (target-variant ∧
+`i < outPk.size()` ∧ `construct_leaf`-ok) and `tx_extra` `0x07` parser are both
+**resolved at source** ahead of CT-2 (CT2 §2.2, §3.1) so they don't churn
+mid-build; coinbase is trivially include-all (`outPk` populated), which is what
+keeps the Tier-A coinbase tree non-empty.
 
 ### 3.3 Integrity model (load-bearing)
 
@@ -281,13 +291,20 @@ bulk-leaf RPC path the daemon hands the client finished 128-byte leaves, so
 (`CT2_DRAIN_ORDER.md`; the wallet reconstructs leaves from blocks it already
 syncs), the client *builds* the leaf itself and therefore needs `h_pqc` as an
 input. `h_pqc` is **not derivable from the bare public output** — it is the hash
-of the *hybrid public key*, carried **on-chain in `tx_extra` tag `0x07`**
-(vout-indexed; zero-fallback when the tag is absent). It is fully public
-(already on the chain), so it **joins Set A** for the block-derived path — but as
-a *parsed `tx_extra` input*, not a `TransferDetails` field and not a secret. The
-leaf itself is then built by the shared `construct_leaf` FFI primitive
-(`CT2_DRAIN_ORDER.md` §3.2), identical to the daemon. (Bulk-leaf path
-unaffected.)
+of the *hybrid public key*, carried **on-chain in a single `tx_extra` `0x07`
+field** (`tx_extra_pqc_leaf_hashes`: one concatenated blob, `32` bytes per
+output in vout order), sliced per-output at `i*32` with a **zero-fallback** when
+the field is absent, the blob length is not a multiple of 32, or the blob is
+shorter than the vout count (`CT2_DRAIN_ORDER.md` §3, `blockchain_db.cpp:341-364`).
+It is fully public (already on the chain), so it **joins Set A** for the
+block-derived path — but as a *parsed `tx_extra` input*, not a `TransferDetails`
+field and not a secret. **Parser ownership is resolved: reuse
+`shekyl_scanner::extra::Extra`** (it already decodes `0x07` →
+`PqcLeafHashes`, `extra.rs:40,60,226`); the leaf builder layers the daemon's
+`extract_leaf_hashes` validation on top — no new parser
+(`CT2_DRAIN_ORDER.md` §3.1). The leaf itself is then built by the shared
+`construct_leaf` FFI primitive (`CT2_DRAIN_ORDER.md` §3.2), identical to the
+daemon. (Bulk-leaf path unaffected.)
 
 ### 4.2 Set B — actor secret-derivation inputs (SECRET, engine-side; NOT this crate)
 
@@ -958,7 +975,12 @@ canonical tree under replacement at both deepen boundaries.
    No leak.
 5. **Phase 2b cross-check.** Stake/unstake proofs share the reference-block
    horizon (§5); confirm `PHASE_2B_STAKE_LIFECYCLE.md` consumes the same client
-   contract (§3.5) rather than re-deriving selection.
+   contract (§3.5) rather than re-deriving selection. **`CONFIDENTIAL_STAKING.md`
+   is registered but off the Tier-A path** — the staked maturity class is the
+   Tier-B KAT case (spend-dependent; `CT2_DRAIN_ORDER.md` §8.2), and the
+   confidential redesign is 2b-adjacent. A proper adversarial pass on it belongs
+   at the confidential redesign or when the Tier-B staked case is wired, **not at
+   Round-1 readiness**.
 6. **Block-derived leaves (§6).** Re-evaluate the zero-RPC alternative once the
    drain-ordering replication cost is known.
 7. **GATE — G1 value-invariance (§7.7). CLOSED: G1 PASSES (CT-0 run, 2026-06).**
@@ -1005,8 +1027,12 @@ canonical tree under replacement at both deepen boundaries.
     wallet via derive-don't-accumulate — no journal replica). Two framing
     corrections landed (coinbase `+60`, empty-root resolution) and the torsion
     concern was **resolved as not-a-divergence-surface** (shared `construct_leaf`
-    FFI; `Hp(O)` clears cofactor). Round 1 implements the replication + the
-    fixture-chain KAT.
+    FFI; `Hp(O)` clears cofactor). The two Tier-A critical-path items are also
+    **resolved at source** ahead of build (CT2 §2.2, §3.1): the **leaf-skip
+    predicate** (coinbase include-all via `outPk` population) and **`tx_extra`
+    `0x07` parser ownership** (reuse `shekyl_scanner::extra::Extra`). Round 1
+    implements the replication with `build_layers` + the Tier-A fixture-chain KAT
+    (header root = truth, RPC-cross-checked; assert at 5/59, not unverified h0).
 
 ---
 
@@ -1016,7 +1042,7 @@ canonical tree under replacement at both deepen boundaries.
 |----|-------|-----------|
 | **CT-0** | **Gate spike — DONE, G1 PASSES.** 19-test harness (+1 `#[ignore]`) proved **G1** value-invariance + exact-boundary freeze + within-Rust extractability + conversion totality (batch path) **and** consensus-grade daemon-reorg de-risking (Tier 2: incremental `hash_grow`/`hash_trim` reproduce `build_layers` under *replacement* — chunk replace/to-empty/path-independence + tree undeepen at **both** collapse types (39→38 Helios, 685→684 Selene) + compound 45→35 + replace-at-boundary capstone, full-layer asserts) against the real fork; layer-2 scale included. Branch 3: §7 stands, no accessor, CT-1 unblocked. Pinned **batch/prefix-rebuild** wallet strategy; **promoted `build_layers` into `shekyl-fcmp::tree`** as the single composition; renamed trim test → `freeze_under_prefix_rebuild`. | `rust/shekyl-fcmp/tests/curve_tree_freeze.rs` (landed) + `rust/shekyl-fcmp/src/tree.rs` (`build_layers`) |
 | **CT-1** | `shekyl-curve-tree` crate skeleton + **subtree-aligned segment** `LeafStore` keyed by `R_k` (pin/prune seam, §7.6) + types (`AssembledPath`, `OutputIdentity`, `ReferenceBlock`) + no-secrets structural test. Segment assembler + truncate-and-rebuild reorg call `shekyl-fcmp::tree::build_layers` (no reimplementation). **Factor `build_upper_layers(layer_j_nodes) → root` out of `build_layers`** so the wallet's steady-state from-cached-`R_k` hot path hashes frozen sub-roots up the upper layers via the *same* function (single-composition end-to-end, not just from-leaves; §7.7). LeafStore engine decision (flat-mmap vs heed/redb). | new crate, `shekyl-fcmp::tree` |
-| **CT-2** | Path extraction (`assemble`) over a **synthetic** leaf set composed via the promoted `build_layers`; **reconstruct-root KAT** = Rust `build_layers` root == C++ consensus header root. This KAT now also owns: (a) end-to-end daemon-incremental↔batch agreement (subsuming "Tier 3"); (b) the **undeepen drop-model** (emptied chunk = removed node, not init-valued child — §7.7) confirmed against real headers spanning a deepen/undeepen boundary; (c) the **empty / early-height** root — **resolved**: daemon emits `selene_hash_init` for the empty tree (`leaf_count == 0`; heights **0..59**, founder coinbase drains at `+60`); `build_layers([])` is **never** indexed for a root (`CT2_DRAIN_ORDER.md` §5); (d) **`R_k` content-addressing equality** (daemon-built segment hash == wallet-built); (e) **block-derived drain-order replication** — the wallet's `{maturity, global_output_index}` sort byte-equals the C++ drain across **all three maturity classes** (`+10` / `+60` / staked) including the mixed-maturity collision, enumerated to source in **`CT2_DRAIN_ORDER.md`** (CT-2 Round 0). C3-shape invariant. | `assemble`, `shekyl-fcmp::tree` |
+| **CT-2** | Path extraction (`assemble`) over a **synthetic** leaf set composed via the promoted `build_layers`; **reconstruct-root KAT** = Rust `build_layers` root == C++ consensus header root. This KAT now also owns: (a) end-to-end daemon-incremental↔batch agreement (subsuming "Tier 3"); (b) the **undeepen drop-model** (emptied chunk = removed node, not init-valued child — §7.7) confirmed against real headers spanning a deepen/undeepen boundary; (c) the **empty / early-height** root — **resolved**: daemon emits `selene_hash_init` for the empty tree (`leaf_count == 0`; heights **0..59**, founder coinbase drains at `+60`); `build_layers([])` is **never** indexed for a root (`CT2_DRAIN_ORDER.md` §5); (d) **`R_k` content-addressing equality** (daemon-built segment hash == wallet-built); (e) **block-derived drain-order replication** — the wallet's `{maturity, global_output_index}` sort byte-equals the C++ drain across all three maturity classes (`+10` / `+60` / staked) incl. the mixed-maturity collision, enumerated to source in **`CT2_DRAIN_ORDER.md`** (CT-2 Round 0). The KAT fixture is **two-tier** (`CT2_DRAIN_ORDER.md` §8.2): **Tier A** (coinbase-only: empty/5/59, height-60 founder drain, coinbase-heavy `+60`, **shallow & deep** coinbase reorg testing both §6 journal branches, run long enough to freeze a level-0/1 segment for `R_k`) lands in Round 1 as the TDD oracle from a regtest daemon — it is exactly the coinbase-only tree shape 2A's bootstrap spend proves against (`CT2_DRAIN_ORDER.md` §8.2 acyclicity); **Tier B** (multi-tx, `+10`/`+60` collision, staked, mixed reorg) is **spend-path-dependent** and co-lands with 2A as the fine-grained regression net (not a 2A gate — daemon-acceptance is the coarse signal). C3-shape invariant. | `assemble`, `shekyl-fcmp::tree` |
 | **CT-3** | **Source-agnostic** bulk-segment fetch + delta sync + per-segment root verify against header; reorg rollback by segment | `sync`, peer-pluggable client |
 | **CT-4** | Reference-block selection + horizon/rebuild (§5); `select_reference_block` | `client` |
 | **CT-5** | Wire into 2A signer behind the §3.5 contract (replaces synthetic vectors); 2A §3.7.6 terminology correction (§5.4) | `shekyl-engine-core`, `PHASE_2A_SEND_PATH.md` |
