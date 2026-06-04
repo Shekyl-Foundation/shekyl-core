@@ -32,7 +32,5 @@ shekyl-fcmp = { path = "../shekyl-fcmp" }
 # crate rather than re-declared, per `17-dependency-discipline.mdc`.
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 
-thiserror.workspace = true
-
 [lints]
 workspace = true
