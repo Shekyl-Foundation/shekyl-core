@@ -1,0 +1,236 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! CT-2 reconstruct-root KAT (Tier A): the wallet's block-derived
+//! `build_layers` root byte-equals the C++ consensus header root.
+//!
+//! The oracle is `tests/fixtures/ct2_tier_a.json`, generated offline from
+//! a regtest `shekyld` by `gen_ct2_fixture.py` (see the fixtures README).
+//! Each chain carries, per block, the header `curve_tree_root` and the
+//! coinbase leaf inputs (`O`, `C`, and the `tx_extra 0x07` blob). This
+//! test replays each chain through `recon` and asserts equality at every
+//! height — pinning S1 (index order), the S2 drain boundary, and S3
+//! (reorg position-stability) against consensus (`CT2_DRAIN_ORDER.md` §8).
+//!
+//! What is exercised end-to-end here: the real `0x07` blob validation
+//! ([`extract_leaf_hashes`]), per-output `h_pqc` resolution, leaf
+//! construction via the shared `construct_leaf` FFI, the `(maturity,
+//! gindex)` drain sort, and `build_layers`. The raw `tx_extra` → blob
+//! *parse* (scanner `Extra`) is the decode boundary (CT-3) and its
+//! adversarial parity is a Tier-B obligation (`CT2_DRAIN_ORDER.md` §3.1).
+
+use serde_json::Value;
+use shekyl_curve_tree::recon::{
+    assemble_leaf_stream, collect_block_leaves, extract_leaf_hashes, per_output_h_pqc,
+    root_from_scalars, TxOutputs,
+};
+use shekyl_curve_tree::{OutputIdentity, TargetKind};
+
+const FIXTURE: &str = include_str!("fixtures/ct2_tier_a.json");
+
+fn decode_hex(s: &str) -> Vec<u8> {
+    assert!(s.len().is_multiple_of(2), "odd-length hex: {s}");
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("valid hex"))
+        .collect()
+}
+
+fn decode_hex32(s: &str) -> [u8; 32] {
+    let v = decode_hex(s);
+    assert_eq!(v.len(), 32, "expected 32 bytes, got {}", v.len());
+    let mut a = [0u8; 32];
+    a.copy_from_slice(&v);
+    a
+}
+
+fn target_kind(s: &str) -> TargetKind {
+    match s {
+        "tagged_key" => TargetKind::TaggedKey,
+        "key" => TargetKind::Key,
+        other => panic!("unexpected Tier-A target kind: {other}"),
+    }
+}
+
+/// One decoded block: its height, the recorded consensus root, and the
+/// coinbase outputs with `h_pqc` already resolved from the `0x07` blob.
+struct Block {
+    height: u64,
+    root: [u8; 32],
+    outputs: Vec<OutputIdentity>,
+}
+
+fn decode_block(b: &Value) -> Block {
+    let height = b["height"].as_u64().expect("height");
+    let root = decode_hex32(b["curve_tree_root"].as_str().expect("root hex"));
+    let mt = &b["miner_tx"];
+    let blob = decode_hex(mt["pqc_leaf_hashes"].as_str().expect("0x07 blob hex"));
+    // Real post-parse validation/slicing — the recon-owned half of the
+    // daemon's extract_leaf_hashes (the %32 check + per-output slice).
+    let leaf_hashes = extract_leaf_hashes(Some(&blob));
+    let outputs = mt["outputs"]
+        .as_array()
+        .expect("outputs array")
+        .iter()
+        .enumerate()
+        .map(|(i, o)| OutputIdentity {
+            output_key: decode_hex32(o["output_key"].as_str().expect("O hex")),
+            commitment: o["commitment"].as_str().map(decode_hex32),
+            h_pqc: per_output_h_pqc(&leaf_hashes, i),
+            target: target_kind(o["target"].as_str().expect("target")),
+        })
+        .collect();
+    Block {
+        height,
+        root,
+        outputs,
+    }
+}
+
+fn decode_chain(chain: &Value) -> Vec<Block> {
+    chain["blocks"]
+        .as_array()
+        .expect("blocks array")
+        .iter()
+        .map(decode_block)
+        .collect()
+}
+
+/// Reconstruct the per-height roots for one chain by replaying its blocks
+/// in order, threading the global output index and accumulating leaves.
+///
+/// The reference-height → drain-cutoff mapping is `drained_through =
+/// height - 1`: a coinbase at block `b` matures at `b + 60` but only
+/// enters the tree at the *next* block (`b + 61`). The founder coinbase
+/// (block 0) is therefore first visible at height 61, not 60 — the S2
+/// inclusive/exclusive boundary, pinned here against consensus.
+fn reconstruct_roots(blocks: &[Block]) -> Vec<[u8; 32]> {
+    let mut entries = Vec::new();
+    let mut gindex = 0u64;
+    let mut roots = Vec::with_capacity(blocks.len());
+    for blk in blocks {
+        let txs = [TxOutputs {
+            is_miner: true,
+            outputs: &blk.outputs,
+        }];
+        gindex = collect_block_leaves(blk.height, &txs, gindex, &mut entries);
+        let drained_through = blk.height.saturating_sub(1);
+        let scalars = assemble_leaf_stream(&entries, drained_through);
+        roots.push(root_from_scalars(&scalars));
+    }
+    roots
+}
+
+fn fixture() -> Value {
+    serde_json::from_str(FIXTURE).expect("fixture parses")
+}
+
+fn chain<'a>(f: &'a Value, name: &str) -> &'a Value {
+    f["chains"]
+        .as_array()
+        .expect("chains")
+        .iter()
+        .find(|c| c["name"].as_str() == Some(name))
+        .unwrap_or_else(|| panic!("chain {name} not in fixture"))
+}
+
+/// The core obligation: for every chain and every height, the
+/// reconstructed root equals the recorded consensus header root.
+#[test]
+fn reconstructed_root_matches_consensus_at_every_height() {
+    let f = fixture();
+    for c in f["chains"].as_array().expect("chains") {
+        let name = c["name"].as_str().unwrap();
+        let blocks = decode_chain(c);
+        let recon = reconstruct_roots(&blocks);
+        let mut mismatches = Vec::new();
+        for (blk, got) in blocks.iter().zip(&recon) {
+            if blk.root != *got {
+                mismatches.push(blk.height);
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "chain {name}: root mismatch at heights {:?} (first {} shown)",
+            &mismatches[..mismatches.len().min(10)],
+            mismatches.len().min(10),
+        );
+    }
+}
+
+/// S2 boundary pin: heights 0..=60 are the empty tree (founder coinbase
+/// matures at +60 but drains at +61); height 61 is the first non-empty
+/// root. Guards against an off-by-one in the drain trigger.
+#[test]
+fn empty_window_then_first_drain_at_61() {
+    let f = fixture();
+    let blocks = decode_chain(chain(&f, "main"));
+    let recon = reconstruct_roots(&blocks);
+    let empty = recon[0];
+    for (h, root) in recon.iter().enumerate().take(61) {
+        assert_eq!(*root, empty, "height {h} must be the empty-tree root");
+    }
+    assert_ne!(recon[61], empty, "height 61 is the first drained leaf");
+    // And it matches consensus (covered by the per-height test, asserted
+    // explicitly here as the boundary's consensus anchor).
+    assert_eq!(recon[61], blocks[61].root);
+}
+
+/// S3 position-stability + freeze-lag: a reorg leaves the pre-fork prefix
+/// frozen, and the re-mined tail cannot perturb the root until its first
+/// coinbase *drains*. A re-mined block at height `fork + 1` carries a
+/// coinbase that matures at `+60` and enters the tree at `+61`, so every
+/// reference height through `fork + 61` reconstructs from shared-prefix
+/// leaves only and is byte-identical across the two chains — the freeze-lag
+/// rule (`CT2_DRAIN_ORDER.md` §6) made executable. (A coinbase-only regtest
+/// reorg re-mines deterministic outputs, so the tail beyond the lag is *not*
+/// guaranteed to diverge; "tail churns" is fixture-dependent and therefore
+/// not asserted. Consensus-equality of each reorg chain at every height is
+/// covered by `reconstructed_root_matches_consensus_at_every_height`.)
+#[test]
+fn reorg_prefix_and_freeze_lag_are_frozen() {
+    let f = fixture();
+    let main_tip = f["main_tip"].as_u64().unwrap();
+    let deep_pop = f["deep_pop"].as_u64().unwrap();
+    let shallow_pop = f["shallow_pop"].as_u64().unwrap();
+
+    let main = decode_chain(chain(&f, "main"));
+    let deep = decode_chain(chain(&f, "reorg_deep"));
+    let shallow = decode_chain(chain(&f, "reorg_shallow"));
+
+    // Deep reorg (pop > COINBASE_LOCK_WINDOW, i.e. pops blocks whose coinbase
+    // had already drained) forked from main after `main_tip - deep_pop`:
+    // re-mined leaves exist but drain only past the freeze-lag, so the frozen
+    // window extends `fork + 61` deep.
+    let fork_deep = usize::try_from(main_tip - deep_pop).expect("fork height fits usize");
+    assert_frozen_through_lag(&main, &deep, fork_deep, "main/reorg_deep");
+
+    // Shallow reorg (pop < COINBASE_LOCK_WINDOW, so every popped block's
+    // coinbase was still pending) forked from reorg_deep after its
+    // tip - shallow_pop: nothing had drained, so the pending-only branch
+    // mutates nothing — roots identical across the entire overlap.
+    let deep_tip = deep.last().unwrap().height;
+    let fork_shallow = usize::try_from(deep_tip - shallow_pop).expect("fork height fits usize");
+    assert_frozen_through_lag(&shallow, &deep, fork_shallow, "reorg_deep/reorg_shallow");
+}
+
+/// Assert `a` and `b` have byte-identical roots from genesis through the end
+/// of the freeze-lag window (`fork + 61`), clamped to the shorter chain. A
+/// re-mined leaf at `fork + 1` drains at `fork + 62`, so this window is
+/// reconstructed from shared-prefix leaves alone.
+fn assert_frozen_through_lag(a: &[Block], b: &[Block], fork: usize, label: &str) {
+    // COINBASE_LOCK_WINDOW (60, coinbase maturity) + 1 (a matured leaf enters
+    // the tree on connection of the next block).
+    const FREEZE_LAG: usize = 61;
+    let common_tip = a.len().min(b.len()) - 1;
+    let frozen_through = (fork + FREEZE_LAG).min(common_tip);
+    for h in 0..=frozen_through {
+        assert_eq!(
+            a[h].root, b[h].root,
+            "{label}: root differs at height {h} (≤ fork {fork} + freeze-lag); \
+             position/freeze-lag not honored",
+        );
+    }
+}

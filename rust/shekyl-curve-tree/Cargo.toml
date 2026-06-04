@@ -32,5 +32,12 @@ shekyl-fcmp = { path = "../shekyl-fcmp" }
 # crate rather than re-declared, per `17-dependency-discipline.mdc`.
 shekyl-oxide = { path = "../shekyl-oxide/shekyl-oxide" }
 
+# Parses the checked-in CT-2 Tier-A KAT oracle
+# (`tests/fixtures/ct2_tier_a.json`, generated offline by
+# `gen_ct2_fixture.py` from a regtest daemon). Test-only; not in the
+# wallet/mobile production graph.
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [lints]
 workspace = true

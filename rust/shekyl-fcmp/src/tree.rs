@@ -16,6 +16,16 @@
 //! - Odd layers: Helios. Children are x-coordinates of Selene points from the layer below.
 //! - Even layers (>0): Selene. Children are x-coordinates of Helios points from the layer below.
 //! - Root: the single point at the topmost layer.
+//!
+//! The Selene leaf layer (layer 0) is never itself the root: the daemon's
+//! `grow_curve_tree` always propagates the leaf chunk into at least the
+//! layer-1 Helios node before its root-stop check, so every non-empty tree is
+//! depth ≥ 2 (a `1..=SELENE_CHUNK_WIDTH`-leaf tree roots at the single-child
+//! layer-1 Helios node). Reconstruction must match this convention; it is
+//! pinned against a real consensus header root by the CT-2 reconstruct-root
+//! KAT (`shekyl-curve-tree`, `docs/design/CT2_DRAIN_ORDER.md` §5). The empty
+//! tree is the sole layer-0 case and is the `selene_hash_init()` sentinel,
+//! handled by the caller, not an indexed `build_layers` result.
 
 use crate::leaf::ShekylLeaf;
 
@@ -281,16 +291,45 @@ pub fn build_layers(leaf_scalars: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
 /// path the leaf layer is layer 0, so `build_layers` passes 0. A caller passing
 /// cached sub-roots must pass the layer index those sub-roots occupy.
 ///
-/// Returns `vec![initial_layer]` (a single layer) when `initial_layer` already
-/// has `<= 1` node — the root is then `result.last()[0]` (or the empty-tree
-/// case is handled by the caller; see `build_layers`).
+/// The Selene leaf layer (`start_layer_idx == 0`) is never the root: a single
+/// node at layer 0 is promoted into the layer-1 Helios root rather than
+/// returned bare, matching the daemon's `grow_curve_tree` (see the module-level
+/// "Tree topology" note and `docs/design/CT2_DRAIN_ORDER.md` §5). The stop
+/// condition is therefore "single node at layer `>= 1`", so:
+/// - a non-empty `initial_layer` at layer 0 yields depth `>= 2`;
+/// - an `initial_layer` already at layer `>= 1` with `<= 1` node returns
+///   `vec![initial_layer]` (the caller's cached sub-root is already a root);
+/// - the empty tree returns `vec![initial_layer]` with an empty top layer and
+///   its root is the `selene_hash_init` sentinel handled by the caller (see
+///   `build_layers`).
+///
+/// In the non-empty cases the root is `result.last()[0]`.
 pub fn build_upper_layers(initial_layer: Vec<[u8; 32]>, start_layer_idx: u8) -> Vec<Vec<[u8; 32]>> {
     const ZERO: [u8; 32] = [0u8; 32];
 
     let mut layers = vec![initial_layer];
     // Index of the layer currently on top of `layers` (initially `initial_layer`).
     let mut current_layer_idx = start_layer_idx;
-    while layers.last().expect("layers non-empty").len() > 1 {
+    loop {
+        let top_len = layers.last().expect("layers non-empty").len();
+        // Empty tree: a zero-node structure. The caller (`build_layers`)
+        // handles the empty-tree root (`selene_hash_init`); return as-is.
+        if top_len == 0 {
+            break;
+        }
+        // A single node at a layer *above* the leaf layer is the root. The
+        // leaf layer (Selene, layer 0) is NEVER itself the root: the daemon's
+        // `grow_curve_tree` (`db_lmdb.cpp`) seeds its propagation loop with the
+        // leaf chunk, builds the layer-1 Helios node, and only *then* checks
+        // its root-stop condition — so a 1..=`SELENE_CHUNK_WIDTH`-leaf tree
+        // roots at the layer-1 Helios node, not the layer-0 Selene node. The
+        // wallet's reconstruction must reproduce this consensus convention
+        // (pinned by CT-2's reconstruct-root KAT against a real header root,
+        // `docs/design/CT2_DRAIN_ORDER.md` §5). Hence the stop condition is
+        // "single node at layer ≥ 1", not "single node".
+        if top_len == 1 && current_layer_idx >= 1 {
+            break;
+        }
         // The layer about to be built sits one level above the current top.
         // `checked_add` makes overflow an explicit panic rather than a release-
         // mode wrap that would silently flip the Selene/Helios parity. Real

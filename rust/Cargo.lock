@@ -3745,6 +3745,7 @@ dependencies = [
 name = "shekyl-curve-tree"
 version = "3.1.0"
 dependencies = [
+ "serde_json",
  "shekyl-fcmp",
  "shekyl-oxide",
 ]

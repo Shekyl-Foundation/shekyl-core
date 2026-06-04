@@ -549,11 +549,14 @@ fn chunk_path_independence_helios() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn undeepen_helios_collapse_39_to_38() {
-    // First deepen (39 outputs) adds a Helios layer over two leaf chunks; the
-    // root is that Helios node. Trimming the 39th output empties the second leaf
-    // chunk, the Helios layer is dropped, and the root reverts to the (Selene)
-    // leaf node — a HELIOS collapse with a Selene-curve root.
+fn helios_root_shrinks_39_to_38_without_undeepening() {
+    // The Selene leaf layer is NEVER the root: a single leaf chunk is always
+    // wrapped into a layer-1 Helios node (daemon `grow_curve_tree` convention,
+    // pinned against a real header root by the CT-2 reconstruct-root KAT in
+    // `shekyl-curve-tree`). So a non-empty tree is depth ≥ 2, and trimming 39
+    // outputs down to 38 does NOT drop the Helios layer — both trees are
+    // depth 2. The Helios root's fan-in shrinks from two leaf children to one
+    // as the second leaf chunk empties; the layer is recomputed, not removed.
     let mut rng = seeded(30_000);
     let base = rand_leaves(&mut rng, SELENE_CHUNK_WIDTH); // 38 outputs (one full leaf chunk)
     let o38 = rand_leaves(&mut rng, 1); // the 39th output
@@ -572,17 +575,15 @@ fn undeepen_helios_collapse_39_to_38() {
 
     // reorg: trim the 39th output out of leaf1 via the real primitive
     let leaf1_t = hash_trim_selene(&leaf1, 0, &o38, &ZERO).expect("trim leaf1");
-    assert_eq!(
-        leaf1_t,
-        selene_hash_init(),
-        "Helios-collapse: leaf1 did not empty"
-    );
+    assert_eq!(leaf1_t, selene_hash_init(), "leaf1 did not empty");
 
-    // undeepen target == build_layers(38): single Selene leaf node, depth 1
+    // 38 outputs is still depth 2: one leaf node under a single-child Helios
+    // root. The root is the Helios node recomputed over the surviving leaf.
+    let root38 = helios_chunk(&[s2h(&leaf0)]);
     assert_eq!(
         build_layers(&base),
-        vec![vec![leaf0]],
-        "undeepen target != build_layers(38) (full layers)"
+        vec![vec![leaf0], vec![root38]],
+        "38 outputs != build_layers(38): single leaf wrapped to layer-1 Helios"
     );
     assert_eq!(
         build_layers(&all39).len(),
@@ -591,8 +592,8 @@ fn undeepen_helios_collapse_39_to_38() {
     );
     assert_eq!(
         build_layers(&base).len(),
-        1,
-        "38 should be depth 1 (Helios layer dropped)"
+        2,
+        "38 should also be depth 2 (single leaf chunk still Helios-wrapped)"
     );
 }
 
@@ -643,9 +644,12 @@ fn undeepen_selene_collapse_685_to_684() {
 #[test]
 fn reorg_compound_45_to_35() {
     // A real multi-block reorg, not a clean tip removal: 45 -> 35 trims away the
-    // partial frontier chunk (outputs 38..44), undeepens (drops the Helios
-    // parent), AND re-opens the first leaf chunk from full (38) down to partial
-    // (35). The undeepen-and-reopen compound logic lives here.
+    // partial frontier chunk (outputs 38..44) AND re-opens the first leaf chunk
+    // from full (38) down to partial (35). The Helios root's fan-in shrinks from
+    // two leaf children to one as the frontier chunk empties; the tree stays
+    // depth 2 (the single surviving leaf chunk is still Helios-wrapped — the
+    // leaf layer is never the root). The frontier-empty-and-reopen compound
+    // logic lives here.
     let mut rng = seeded(32_000);
     let l45 = rand_leaves(&mut rng, 45);
     let sp = SCALARS_PER_LEAF;
@@ -667,10 +671,12 @@ fn reorg_compound_45_to_35() {
     let removed = &l45[35 * sp..38 * sp]; // 12 scalars
     let leaf0_t = hash_trim_selene(&leaf0, 35 * sp, removed, &ZERO).expect("shrink leaf0");
 
-    // undeepen (drop Helios): result is a single partial Selene leaf node == 35
+    // 35 outputs: one partial leaf chunk, still wrapped into a single-child
+    // Helios root (depth 2 — the leaf layer is never the root).
+    let root35 = helios_chunk(&[s2h(&leaf0_t)]);
     assert_eq!(
         build_layers(&l45[..35 * sp]),
-        vec![vec![leaf0_t]],
+        vec![vec![leaf0_t], vec![root35]],
         "compound reorg 45->35 != build_layers(35) (full layers)"
     );
 }

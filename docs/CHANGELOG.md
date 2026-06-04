@@ -4,6 +4,16 @@
 
 ### Added
 
+- **curve-tree: CT-2 reconstruct-root KAT (Tier A) against consensus.**
+  New `shekyl-curve-tree` test `recon_kat` replays a checked-in regtest
+  fixture (`tests/fixtures/ct2_tier_a.json`, generated offline by
+  `gen_ct2_fixture.py`, never run in CI) and asserts the wallet's
+  block-derived `build_layers` root byte-equals the C++ consensus header
+  `curve_tree_root` at every height across three chains (main + deep/shallow
+  coinbase reorgs). Pins S1 (index order), the S2 drain boundary
+  (`drained_through = height − 1`; empty window 0..=60, first founder drain
+  at 61), and S3 reorg position-stability + freeze-lag. Spec:
+  `docs/design/CT2_DRAIN_ORDER.md` §8.
 - **wallet: Phase 2b stake-FSM pending-claim model pinned (Round 2,
   `PHASE_2B_STAKE_LIFECYCLE.md` §3.4).** A confidential claim is non-spending, so it
   has no `OutputId` and nothing for `PendingTxEngine`'s output-keyed reservation
@@ -148,6 +158,19 @@
   `docs/design/FA-6_VIEW_TAG_ML_KEM.md`.
 
 ### Fixed
+
+- **fcmp: the Selene leaf layer is never the curve-tree root.**
+  `build_layers`/`build_upper_layers` returned the bare layer-0 Selene leaf
+  node as the root for any `1..=SELENE_CHUNK_WIDTH`-leaf tree, diverging from
+  the daemon's `grow_curve_tree`, which always wraps the leaf chunk into the
+  layer-1 Helios node before its root-stop check. The wallet's reconstructed
+  root therefore mismatched consensus at every height with a small tree (e.g.
+  the founder coinbase at height 61). `build_upper_layers` now stops at
+  "single node at layer ≥ 1" — every non-empty tree is depth ≥ 2; the empty
+  tree remains the `selene_hash_init()` sentinel. Proven by the new CT-2 KAT;
+  corrects the CT-0 freeze model (`undeepen_helios_collapse_39_to_38` renamed
+  to `helios_root_shrinks_39_to_38_without_undeepening`; `reorg_compound_45_to_35`
+  target re-wrapped). Docs: `CT2_DRAIN_ORDER.md` §5, `CURVE_TREE_CLIENT.md`.
 
 - **Genesis `GENESIS_TX` regen (FA-11 `enc_labels`).** Rebuilt mainnet,
   testnet, and stagenet genesis coinbase hex with current
