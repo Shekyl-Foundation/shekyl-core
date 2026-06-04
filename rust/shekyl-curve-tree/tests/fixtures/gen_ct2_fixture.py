@@ -78,9 +78,10 @@ class Daemon:
         self.base = f"http://127.0.0.1:{port}"
         self.workdir = tempfile.mkdtemp(prefix="ct2_fixture_")
         self.proc: subprocess.Popen | None = None
+        self.log = None
 
     def start(self) -> None:
-        log = open(os.path.join(self.workdir, "daemon.log"), "w")
+        self.log = open(os.path.join(self.workdir, "daemon.log"), "w")
         self.proc = subprocess.Popen(
             [
                 self.binary,
@@ -96,7 +97,7 @@ class Daemon:
                 "--log-level",
                 "0",
             ],
-            stdout=log,
+            stdout=self.log,
             stderr=subprocess.STDOUT,
         )
         # Wait for RPC readiness.
@@ -115,6 +116,11 @@ class Daemon:
                 self.proc.wait(timeout=20)
             except subprocess.TimeoutExpired:
                 self.proc.kill()
+        # Close the parent's handle on the daemon log before removing the
+        # workdir; an open FD can make rmtree fail under stricter file-locking.
+        if self.log is not None:
+            self.log.close()
+            self.log = None
         shutil.rmtree(self.workdir, ignore_errors=True)
 
     def json_rpc(self, method: str, params: dict | None = None) -> dict:
