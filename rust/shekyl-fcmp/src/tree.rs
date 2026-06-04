@@ -258,8 +258,9 @@ pub fn build_layers(leaf_scalars: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
         .chunks(LEAF_CHUNK_SCALARS)
         .map(|c| hash_grow_selene(&selene_hash_init(), 0, &ZERO, c).expect("leaf chunk"))
         .collect();
-    // The leaf layer is layer 0 (Selene); the upper layers start at layer 1.
-    build_upper_layers(leaf_nodes, 1)
+    // The leaf layer is layer 0 (Selene); `build_upper_layers` is given that
+    // layer along with its own index (0) and builds layer 1 upward.
+    build_upper_layers(leaf_nodes, 0)
 }
 
 /// Hash a layer of nodes up to the root, returning every layer from
@@ -273,26 +274,27 @@ pub fn build_layers(leaf_scalars: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
 /// single upper-layer composition prevents the "two implementations must agree"
 /// trap from reopening above the leaf layer.
 ///
-/// `start_layer_idx` is the absolute tree-layer index of `initial_layer`; it
-/// determines the Selene/Helios parity of each layer built on top. For the
-/// from-leaves path the leaf layer is layer 0, so the upper layers start at 1.
-/// A caller passing cached sub-roots must pass the layer index those sub-roots
-/// occupy.
+/// `start_layer_idx` is the absolute tree-layer index of `initial_layer`
+/// itself; it determines the Selene/Helios parity of each layer built on top
+/// (the layer constructed directly above `initial_layer` is layer
+/// `start_layer_idx + 1`, and its parity selects the hash). For the from-leaves
+/// path the leaf layer is layer 0, so `build_layers` passes 0. A caller passing
+/// cached sub-roots must pass the layer index those sub-roots occupy.
 ///
 /// Returns `vec![initial_layer]` (a single layer) when `initial_layer` already
 /// has `<= 1` node — the root is then `result.last()[0]` (or the empty-tree
 /// case is handled by the caller; see `build_layers`).
-pub fn build_upper_layers(
-    initial_layer: Vec<[u8; 32]>,
-    start_layer_idx: u8,
-) -> Vec<Vec<[u8; 32]>> {
+pub fn build_upper_layers(initial_layer: Vec<[u8; 32]>, start_layer_idx: u8) -> Vec<Vec<[u8; 32]>> {
     const ZERO: [u8; 32] = [0u8; 32];
 
     let mut layers = vec![initial_layer];
-    let mut layer_idx = start_layer_idx;
+    // Index of the layer currently on top of `layers` (initially `initial_layer`).
+    let mut current_layer_idx = start_layer_idx;
     while layers.last().expect("layers non-empty").len() > 1 {
+        // The layer about to be built sits one level above the current top.
+        let built_layer_idx = current_layer_idx + 1;
         let prev = layers.last().expect("layers non-empty");
-        let next: Vec<[u8; 32]> = if layer_is_selene(layer_idx) {
+        let next: Vec<[u8; 32]> = if layer_is_selene(built_layer_idx) {
             // even layer (Selene): children are x-coords of the Helios pts below
             let scalars: Vec<[u8; 32]> = prev
                 .iter()
@@ -314,7 +316,7 @@ pub fn build_upper_layers(
                 .collect()
         };
         layers.push(next);
-        layer_idx += 1;
+        current_layer_idx = built_layer_idx;
     }
     layers
 }
