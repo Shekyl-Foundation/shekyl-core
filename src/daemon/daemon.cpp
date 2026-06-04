@@ -76,6 +76,10 @@ namespace {
     // resolved RPC config) for the Axum server to bind. Empty when unset.
     std::string bind_host;
     std::string bind_port;
+    // Whether this instance serves the restricted command set. Passed to the
+    // Rust/Axum transport so it enforces restricted-mode filtering; a separately
+    // bound --rpc-restricted-bind-port must not expose admin-only endpoints.
+    bool restricted = false;
 
     rpc_instance(cryptonote::core & core, t_node_server & p2p, std::string desc)
       : server(new cryptonote::core_rpc_server{core, p2p})
@@ -174,6 +178,7 @@ struct t_internals {
     {
       rpcs.emplace_back(core, p2p, "core");
       rpcs.back().bind_port = main_rpc_port;
+      rpcs.back().restricted = restricted;
       auto const & proxy = command_line::get_arg(vm, daemon_args::arg_proxy);
       MGINFO("Initializing " << rpcs.back().description << " RPC server...");
       if (!rpcs.back().server->init(vm, restricted, main_rpc_port, !has_restricted_rpc_port_arg, proxy, bind_epee_listener))
@@ -191,6 +196,7 @@ struct t_internals {
       auto const & proxy = command_line::get_arg(vm, daemon_args::arg_proxy);
       rpcs.emplace_back(core, p2p, "restricted");
       rpcs.back().bind_port = restricted_rpc_port;
+      rpcs.back().restricted = true;
       MGINFO("Initializing " << rpcs.back().description << " RPC server...");
       if (!rpcs.back().server->init(vm, true, restricted_rpc_port, true, proxy, bind_epee_listener))
       {
@@ -293,13 +299,15 @@ bool Daemon::run(bool interactive)
           ? ("[" + host + "]:" + rpc.bind_port)
           : (host + ":" + rpc.bind_port);
         auto * rust_handle = shekyl_daemon_rpc_start(
-          static_cast<void*>(server), bind_addr.c_str(), false);
+          static_cast<void*>(server), bind_addr.c_str(), rpc.restricted);
         if (!rust_handle)
         {
           // Axum is the sole RPC transport when rust_rpc_enabled; there is no
           // bound epee listener to fall back to (the fallback was interim
-          // scaffolding for the migration and has been removed). Treat a start
-          // failure as fatal rather than leaving the daemon silently without RPC.
+          // scaffolding for the migration and has been removed). The FFI binds
+          // the socket synchronously before returning, so a null handle means
+          // the bind/start genuinely failed — treat it as fatal rather than
+          // leaving the daemon silently without RPC.
           throw std::runtime_error(
             "Failed to start Axum RPC for " + rpc.description + " on " + bind_addr);
         }
