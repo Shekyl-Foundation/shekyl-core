@@ -57,10 +57,19 @@ jobs:
           # to print. The exclusion is the same shape as `main.rs` (also
           # excluded above): binary-target source whose `println!` /
           # `eprintln!` calls are part of the documented surface.
+          # `tests.rs` and any file under a `src/**/tests/` directory are
+          # excluded: these are test modules gated at the parent via
+          # `#[cfg(test)] mod tests;`, so the file itself carries no in-file
+          # `#[cfg(test)]` marker for the scan below to key on and would
+          # otherwise be scanned as production. The `#[cfg(test)] mod tests;`
+          # declaration is the out-of-file equivalent of the in-file
+          # `#[cfg(test)]` gate the scan already honors; both mean "test code,
+          # debug macros allowed".
           FOUND=0
           for f in $(find rust/shekyl-*/src -name '*.rs' \
                      ! -name 'build.rs' ! -name 'main.rs' ! -path '*/examples/*' \
                      ! -path '*/src/bin/*' \
+                     ! -name 'tests.rs' ! -path '*/tests/*' \
                      ! -path '*/shekyl-cli/*'); do
             TEST_LINE=$(grep -n '#\[cfg(test)\]' "$f" | head -1 | cut -d: -f1)
             if [ -n "$TEST_LINE" ]; then
