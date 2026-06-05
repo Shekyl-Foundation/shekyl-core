@@ -728,6 +728,31 @@
 
 ### Documentation
 
+- **stake-lifecycle: reframe the `pop_block` nullifier-revert from a
+  special open §5 carry to an ordinary consensus-implementation
+  dependency.** `docs/design/PHASE_2B_STAKE_LIFECYCLE.md` previously
+  singled out the consensus `pop_block` stake-claim-nullifier revert as
+  "the sole remaining §5 dependency" / a standing "cross-track carry"
+  holding the §5 box open. This over-weighted one line item: the
+  behavior §5 mirrors is **already committed upstream** in
+  [`CONFIDENTIAL_STAKING.md`](design/CONFIDENTIAL_STAKING.md) §11 item 3
+  (nullifier-table per-block journal + atomic revert), so the wallet's
+  §5 *design* dependency is **satisfied** — it mirrors a committed spec,
+  not an unbacked assumption. The *implementation* of §11 is part of the
+  **general** confidential-consensus implementation gate (§8.0; §12
+  code-site map) the entire Phase 2b waits on — the whole stake /
+  claim / unstake mechanism (subtree, nullifier table, `h_bind`,
+  rate-epoch records, and their `pop_block` reversal) is unimplemented
+  together and gated together. Edits: §10.1 closed the open carry box
+  (now design-discharged); §9 Round-2 cell, §8.0 (new normalizing
+  note), §5.2 closing note, and the §7.4 T6/G7 + cross-track-deps lines
+  all demote "carry" to "committed-spec dependency, implementation rides
+  the general §8.0 gate." The wallet-cannot-fix-it property is recorded
+  as ordinary consensus-correctness reliance, verified end-to-end at
+  Stage-3 integration via the T6/G7 wargame. No wallet design change;
+  no disposition reversal — §5 wallet design remains signed off.
+  (2A is confirmed *not* the owner: `PHASE_2A_SEND_PATH.md` §3.0.4
+  explicitly defers reorg/tree handling to the curve-tree-client phase.)
 - **engine: seven-lens conformance pass on `PersistenceEngine` /
   `PendingTxEngine` / `KeyEngine` trait surfaces.** Documentation-only
   rustdoc work bringing the three trait files to the
