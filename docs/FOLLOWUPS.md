@@ -1384,33 +1384,66 @@ sustainability is unaffected by the recalibration.
   without opening a double-claim). Different conversation; recorded here so the
   dependency is on file if that workstream opens.
 
-- **`AtomicUnits` amount-newtype — interim PR before broad wallet wiring (spawned
-  2026-06-05, Phase 2b §6 sign-off).** The wallet uniformly carries amounts as raw
-  `amount_atomic_units: u64` (`OutputClaim`, `TxRecipient`/`TxRecipientSummary`,
-  `PendingTx.fee_atomic_units`, and Phase 2b's `StakeOpening.amount` / `claimable_rewards` /
-  `StakeView.claimable` / `Accruing.accrued_rewards`) — the inherited Monero raw-`uint64`
-  pattern. Phase 2b §6 commits to an `AtomicUnits` domain newtype (type-distinct from epoch
-  indices and block heights; one place for checked / overflow arithmetic) as the in-Rust
-  amount type across trait / orchestrator / computation, with raw `u64` only at the true
-  edges. The newtype does **not** yet exist anywhere in `rust/` (verified at source,
-  rule 17) — the `AtomicUnits` already referenced in `PHASE_2B_STAKE_LIFECYCLE.md` §4.6/§6 is
-  forward intent.
+- ~~**`AtomicUnits` amount-newtype — interim PR before broad wallet wiring (spawned
+  2026-06-05, Phase 2b §6 sign-off).**~~ **CLOSED 2026-06-05 by the `AtomicUnits`
+  interim PR.** The `shekyl-units` crate now owns `AtomicUnits(u64)` — checked-only
+  arithmetic (no operator traits; `a + b` does not compile), `serde`/`repr(transparent)`
+  wire- and ABI-identical to the `u64` it replaced (no format-version bump), `Zeroize`,
+  unit-marker `Display`/`Debug`, and `to_skl_string`/`from_skl_str` single-sourcing the
+  `10^9` denomination from `config/economics_params.json` via `build.rs`. The amount
+  domain (`shekyl-engine-state`, `-prefs`, `-scanner`, `-staking`, `-engine-core` incl.
+  the `OutputClaim` secret site, `-tx-builder`, `-engine-rpc`) carries `AtomicUnits`;
+  raw `u64` survives only at the enumerated edges (oxide `Commitment`/fee/outputs,
+  multisig signed-hash sites, FFI `#[repr(C)]`, postcard `commitment_bytes`, the verified
+  JSON-number RPC field). The CLI's inherited `10^12` `format_amount`/`parse_amount` is
+  reconciled to `10^9` through the newtype. Design + complete edge inventory:
+  [`docs/design/ATOMIC_UNITS_NEWTYPE.md`](design/ATOMIC_UNITS_NEWTYPE.md). Spawned the
+  three follow-ups below.
 
-  *Why interim / why now:* bounded-cost-now. The wallet is pre-genesis and not yet broadly
-  wired; every raw-`u64` amount site that accretes during Stage 3+ wiring raises the
-  migration blast radius. A tight interim PR **before** broad wiring is strictly cheaper than
-  after, and the cost is bounded precisely because wiring hasn't happened — "do it now in
-  force" with a cost argument, not a convenience call.
+- **Owned `AtomicUnits::mul_div_rem` — deferred (rule-21 reversion clause; spawned
+  2026-06-05 by the `AtomicUnits` interim PR).** The interim PR ships a consumer-driven
+  operation set (`checked_add`/`checked_sub`/`checked_sum`); it deliberately omits a
+  `mul_div_rem` primitive. The exact reward+remainder math already exists, u128-native and
+  power-of-two-`D`-exact, in the consensus module `entitlement.rs::reward_and_remainder`
+  (out of the interim PR's file set), and `rewards.rs` does a *different* proportional split
+  that keeps its existing u128 intermediate with `to_raw`/`from_raw` at the boundary. Adding
+  a duplicate `mul_div_rem` to `AtomicUnits` now would be pre-provisioning + a rule-18
+  consensus-surface duplication.
 
-  *Scope to settle first (this is what bounds the PR):* (1) the migration blast radius —
-  enumerate every `amount_atomic_units: u64` / amount-typed `u64` site across the workspace;
-  (2) the exact `From`/`Into` (or `to_u64`/`try_from`) **edge list** — postcard
-  (de)serialization, FFI, the consensus amount boundary — which is what determines whether
-  "short interim" is actually short.
+  *Reopening criterion (substrate-anchored):* introduce an owned
+  `AtomicUnits::mul_div_rem` when the entitlement / confidential-staking reward path is
+  migrated to `AtomicUnits` — at that point the u128 intermediate becomes an `AtomicUnits`
+  internal and the primitive earns its place. *Re-evaluation shape:* design round of the
+  reward-path migration PR. *Target:* **V3.0 pre-genesis**, paired with that migration.
 
-  *Target:* **V3.0**, interim PR before Stage 3 broad wiring. Until it lands, the Phase 2b §6
-  amount returns read as `u64` with the type-safety intent recorded
-  ([`docs/design/PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §6).
+- **Consolidate hand-copied `10^9` / decimal-point constants onto the `shekyl-units`
+  single source (spawned 2026-06-05 by the `AtomicUnits` interim PR).** `shekyl-units` is
+  now the canonical Rust owner of the `coin = 10^9` / `display_decimal_point = 9`
+  relationship (generated from `config/economics_params.json`). Remaining hand-copies and
+  inherited-Monero `12`s should route through it: `entitlement/tests` `COIN: u128`,
+  `DEFAULT_DISPLAY_DECIMAL_POINT = 12` (`wallet_state/settings.rs:74`), and prefs
+  `default_decimal_point` (inherited `12` → JSON's `9`). **`economics-sim` `COIN: f64` is a
+  float on a money path** (violates the design's no-float rule): source the value from the
+  generated constant *and* separately assess whether the sim's `f64` modeling math is
+  acceptable at all.
+
+  *Liveness (verified):* no live Rust formatter reads `default_decimal_point` or
+  `DEFAULT_DISPLAY_DECIMAL_POINT`; every reference is a store/default/test-assert, and the
+  sole live Rust display path (CLI `format_amount`) is already corrected to `10^9` by the
+  interim PR — so this is hygiene against a future formatter picking up the inherited `12`,
+  not a live display bug. *Target:* **V3.0 pre-genesis** — inherited-`12` reconciliation is
+  cheapest before genesis.
+
+- **JSON-RPC large-amount precision — string-amount serde at the RPC edge (spawned
+  2026-06-05 by the `AtomicUnits` interim PR).** `TransferDestination.amount` and the other
+  RPC amount fields serialize as JSON **numbers**; amounts up to `~4.29e18` atomic units
+  exceed JavaScript's `2^53` safe-integer ceiling, so a JS client silently loses precision.
+  This is a **pre-existing latent bug** — `#[serde(transparent)]` on `AtomicUnits` preserves
+  the JSON-number representation exactly, so the interim PR neither introduced nor fixed it.
+  *Disposition:* serialize amounts as decimal strings at the RPC edge (the Monero/Bitcoin
+  mitigation). That is a wire-format change, so it gets its own PR; `AtomicUnits` is the
+  natural home for the string serializer when it lands. *Target:* **V3.0 pre-genesis** —
+  format changes are cheapest before there are clients to migrate.
 
 - **Confidential stake-UTXO transfer (privacy-compatible; compounds (C)).**
   FCMP spend of staked principal + re-insert as staked output — **not** receipt-token

@@ -3143,7 +3143,13 @@ pub unsafe extern "C" fn shekyl_sign_transaction(
         tree_depth,
     };
 
-    match shekyl_tx_builder::sign_transaction(tx_prefix_hash, &inputs, &outputs, fee, &tree) {
+    match shekyl_tx_builder::sign_transaction(
+        tx_prefix_hash,
+        &inputs,
+        &outputs,
+        shekyl_units::AtomicUnits::from_raw(fee),
+        &tree,
+    ) {
         Ok(proofs) => match serde_json::to_vec(&proofs) {
             Ok(json) => ShekylSignResult::ok(json),
             Err(e) => ShekylSignResult::err(-3, format!("result serialization error: {e}")),
@@ -3324,7 +3330,7 @@ pub unsafe extern "C" fn shekyl_sign_fcmp_transaction(
         spend_inputs.push(shekyl_tx_builder::SpendInput {
             output_key: inp.output_key,
             commitment: inp.commitment,
-            amount: inp.amount,
+            amount: shekyl_units::AtomicUnits::from_raw(inp.amount),
             spend_key_x: x_bytes,
             spend_key_y: secrets.y,
             commitment_mask: inp.commitment_mask,
@@ -3351,7 +3357,7 @@ pub unsafe extern "C" fn shekyl_sign_fcmp_transaction(
         tx_prefix_hash,
         &spend_inputs,
         &outputs,
-        fee,
+        shekyl_units::AtomicUnits::from_raw(fee),
         &tree,
     ) {
         Ok(proofs) => match serde_json::to_vec(&proofs) {

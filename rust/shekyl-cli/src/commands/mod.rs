@@ -507,33 +507,29 @@ pub(crate) fn read_password(prompt: &str) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Amount formatting and parsing (12-digit piconero precision)
+// Amount formatting and parsing (9-decimal SKL precision, 10^9 atomic units)
 // ---------------------------------------------------------------------------
 
+/// Render a raw atomic-unit amount as a fixed-precision SKL string.
+///
+/// Routes through [`shekyl_units::AtomicUnits::to_skl_string`] so the
+/// atomic-units-per-SKL relationship (`10^9`) is single-sourced from
+/// `config/economics_params.json`. This replaces the inherited Monero `10^12`
+/// constant, which overflowed `u64` on Shekyl's `2^32` whole-SKL supply.
 pub fn format_amount(atomic: u64) -> String {
-    let whole = atomic / 1_000_000_000_000;
-    let frac = atomic % 1_000_000_000_000;
-    if frac == 0 {
-        format!("{whole}.000000000000")
-    } else {
-        format!("{whole}.{frac:012}")
-    }
+    shekyl_units::AtomicUnits::from_raw(atomic).to_skl_string()
 }
 
+/// Parse a user-entered SKL string into raw atomic units.
+///
+/// Routes through [`shekyl_units::AtomicUnits::from_skl_str`], which rejects
+/// (rather than truncates) over-precise input and errors on overflow. Returns
+/// `None` on any parse error to preserve the existing `Option`-based call
+/// sites.
 pub fn parse_amount(s: &str) -> Option<u64> {
-    if let Some(dot_pos) = s.find('.') {
-        let whole: u64 = s[..dot_pos].parse().ok()?;
-        let frac_str = &s[dot_pos + 1..];
-        if frac_str.len() > 12 {
-            return None;
-        }
-        let padded = format!("{frac_str:0<12}");
-        let frac: u64 = padded.parse().ok()?;
-        whole.checked_mul(1_000_000_000_000)?.checked_add(frac)
-    } else {
-        let whole: u64 = s.parse().ok()?;
-        whole.checked_mul(1_000_000_000_000)
-    }
+    shekyl_units::AtomicUnits::from_skl_str(s)
+        .ok()
+        .map(|a| a.to_raw())
 }
 
 #[cfg(test)]
@@ -542,31 +538,26 @@ mod tests {
 
     #[test]
     fn test_format_amount() {
-        assert_eq!(format_amount(0), "0.000000000000");
-        assert_eq!(format_amount(1_000_000_000_000), "1.000000000000");
-        assert_eq!(format_amount(1_500_000_000_000), "1.500000000000");
-        assert_eq!(format_amount(123_456_789), "0.000123456789");
+        // 9-decimal (10^9) SKL display, single-sourced via `shekyl-units`.
+        assert_eq!(format_amount(0), "0.000000000");
+        assert_eq!(format_amount(1_000_000_000), "1.000000000");
+        assert_eq!(format_amount(1_500_000_000), "1.500000000");
+        assert_eq!(format_amount(123_456_789), "0.123456789");
     }
 
     #[test]
     fn test_parse_amount() {
-        assert_eq!(parse_amount("1"), Some(1_000_000_000_000));
-        assert_eq!(parse_amount("1.5"), Some(1_500_000_000_000));
-        assert_eq!(parse_amount("0.000000000001"), Some(1));
-        assert_eq!(parse_amount("1.0"), Some(1_000_000_000_000));
+        assert_eq!(parse_amount("1"), Some(1_000_000_000));
+        assert_eq!(parse_amount("1.5"), Some(1_500_000_000));
+        assert_eq!(parse_amount("0.000000001"), Some(1));
+        assert_eq!(parse_amount("1.0"), Some(1_000_000_000));
         assert_eq!(parse_amount("abc"), None);
-        assert_eq!(parse_amount("1.0000000000001"), None); // >12 decimal places
+        assert_eq!(parse_amount("1.0000000001"), None); // >9 decimal places
     }
 
     #[test]
     fn test_parse_format_roundtrip() {
-        for val in [
-            0,
-            1,
-            999_999_999_999,
-            1_000_000_000_000,
-            123_456_789_012_345,
-        ] {
+        for val in [0, 1, 999_999_999, 1_000_000_000, 123_456_789_012_345] {
             let formatted = format_amount(val);
             let parsed = parse_amount(&formatted).expect("roundtrip should succeed");
             assert_eq!(val, parsed, "roundtrip failed for {val}");

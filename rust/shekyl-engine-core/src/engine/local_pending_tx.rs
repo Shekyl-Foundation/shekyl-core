@@ -46,6 +46,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use shekyl_engine_state::LedgerBlock;
+use shekyl_units::AtomicUnits;
 
 use super::diagnostics::{
     emit_pending_tx_diagnostic, BuildErrorKind, BuildRequestSummary, DiagnosticSink, DiscardReason,
@@ -532,7 +533,7 @@ where
             return Err(err);
         };
 
-        let mut total_amount: u64 = 0;
+        let mut total_amount = AtomicUnits::ZERO;
         for recipient in &request.recipients {
             total_amount = total_amount
                 .checked_add(recipient.amount_atomic_units)
@@ -1069,7 +1070,7 @@ mod tests {
         TxRequest {
             recipients: vec![TxRecipient {
                 address: "test_address".to_string(),
-                amount_atomic_units: amount,
+                amount_atomic_units: AtomicUnits::from_raw(amount),
             }],
             priority: FeePriority::Standard,
             from_subaddress: None,

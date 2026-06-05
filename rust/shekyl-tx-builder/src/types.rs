@@ -8,6 +8,7 @@
 //! JSON (via the `hex_bytes` module), matching the C++ FFI convention.
 
 use serde::{Deserialize, Serialize};
+use shekyl_units::AtomicUnits;
 use zeroize::Zeroize;
 
 /// Serde helper: hex-encode/decode `[u8; 32]`.
@@ -236,7 +237,7 @@ pub struct SpendInput {
     #[serde(with = "hex_bytes32")]
     pub commitment: [u8; 32],
     /// Cleartext amount in atomic units. Must be non-zero.
-    pub amount: u64,
+    pub amount: AtomicUnits,
     /// Ephemeral spend secret key x where O = x*G + y*T.
     #[serde(with = "hex_bytes32")]
     pub spend_key_x: [u8; 32],
@@ -285,7 +286,7 @@ pub struct OutputInfo {
     #[serde(with = "hex_bytes32")]
     pub dest_key: [u8; 32],
     /// Amount in atomic units. Must be non-zero.
-    pub amount: u64,
+    pub amount: AtomicUnits,
     /// HKDF-derived commitment mask z where C = z*G + amount*H.
     /// Pre-derived by `shekyl_construct_output` via HKDF from the shared secret.
     #[serde(with = "hex_bytes32")]

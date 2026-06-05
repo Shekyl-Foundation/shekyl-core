@@ -91,6 +91,7 @@ use shekyl_crypto_pq::output::{compute_output_key_image, scan_output_recover};
 use shekyl_crypto_pq::subaddress::subaddress_keys;
 use shekyl_engine_state::SubaddressIndex;
 use shekyl_oxide::generators::hash_to_point;
+use shekyl_units::AtomicUnits;
 
 use super::error::KeyEngineError;
 use super::traits::key::{
@@ -305,7 +306,9 @@ impl Message<ClaimOutput> for KeyActor {
         Ok(OutputClaimResult::Mine(OutputClaim {
             handle,
             key_image,
-            amount_atomic_units: recovered.amount,
+            // `recovered.amount` is the cleartext amount off the crypto-pq
+            // decryption edge (raw `u64`); wrap it at the boundary.
+            amount_atomic_units: AtomicUnits::from_raw(recovered.amount),
         }))
     }
 }
@@ -760,7 +763,10 @@ mod tests {
             actor_claim.amount_atomic_units, local_claim.amount_atomic_units,
             "actor and LocalKeys recover the same amount"
         );
-        assert_eq!(actor_claim.amount_atomic_units, 1_337);
+        assert_eq!(
+            actor_claim.amount_atomic_units,
+            AtomicUnits::from_raw(1_337)
+        );
     }
 
     // §5.2 test 1 — Equivalence: actor-via-`ask` == direct `LocalKeys`, NotMine.

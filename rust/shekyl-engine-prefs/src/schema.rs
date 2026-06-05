@@ -30,6 +30,7 @@
 //!   produces a clear parse error rather than a silent fallback.
 
 use serde::{Deserialize, Serialize};
+use shekyl_units::AtomicUnits;
 
 /// Fee priority used when the user does not pick one explicitly.
 /// Listed in ascending fee order so `Default` picking `Medium` lands
@@ -205,9 +206,9 @@ pub struct OperationalPrefs {
     #[serde(default)]
     pub min_output_count: u64,
 
-    /// Coin-selection minimum output value in atomic units.
+    /// Coin-selection minimum output value.
     #[serde(default)]
-    pub min_output_value: u64,
+    pub min_output_value: AtomicUnits,
 
     /// Coin-selection upper cap: ignore outputs above this value.
     /// `None` (the default, or `ignore_outputs_above = 0` as a
@@ -218,11 +219,11 @@ pub struct OperationalPrefs {
     /// `u64::MAX` fails to serialize. An explicit `None` is both
     /// simpler to express in the schema and clearer to read on disk.
     #[serde(default)]
-    pub ignore_outputs_above: Option<u64>,
+    pub ignore_outputs_above: Option<AtomicUnits>,
 
     /// Coin-selection lower cap: ignore outputs below this value.
     #[serde(default)]
-    pub ignore_outputs_below: u64,
+    pub ignore_outputs_below: AtomicUnits,
 
     /// Combine multiple outputs to the same destination. Off by
     /// default because it is a privacy regression.
@@ -245,9 +246,9 @@ impl Default for OperationalPrefs {
             track_uses: false,
             store_tx_info: true,
             min_output_count: 0,
-            min_output_value: 0,
+            min_output_value: AtomicUnits::ZERO,
             ignore_outputs_above: None,
-            ignore_outputs_below: 0,
+            ignore_outputs_below: AtomicUnits::ZERO,
             merge_destinations: false,
             inactivity_lock_timeout: 0,
         }
@@ -278,15 +279,14 @@ pub struct RpcPrefs {
     #[serde(default)]
     pub persistent_rpc_client_id: String,
 
-    /// Auto-mine-for-credits threshold in atomic shekyl units. Zero
-    /// disables. Non-zero enables bounded auto-mining up to the
-    /// threshold.
+    /// Auto-mine-for-credits threshold. Zero disables. Non-zero enables
+    /// bounded auto-mining up to the threshold.
     #[serde(default)]
-    pub auto_mine_for_rpc_payment_threshold: u64,
+    pub auto_mine_for_rpc_payment_threshold: AtomicUnits,
 
     /// Target RPC credit balance.
     #[serde(default)]
-    pub credits_target: u64,
+    pub credits_target: AtomicUnits,
 }
 
 /// Subaddress-lookahead prefs (Bucket 6). Visibility trade-off: too
@@ -463,7 +463,7 @@ mod tests {
         prefs.cosmetic.default_decimal_point = 10;
         prefs.operational.refresh_type = RefreshType::Full;
         prefs.subaddress_lookahead.major = 50;
-        prefs.rpc.credits_target = 1_000_000;
+        prefs.rpc.credits_target = AtomicUnits::from_raw(1_000_000);
 
         let encoded = toml::to_string(&prefs).expect("serialize");
         let decoded: WalletPrefs = toml::from_str(&encoded).expect("parse");

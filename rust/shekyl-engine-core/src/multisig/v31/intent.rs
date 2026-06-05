@@ -9,6 +9,7 @@
 //! pipeline before proceeding to sign.
 
 use serde::{Deserialize, Serialize};
+use shekyl_units::AtomicUnits;
 
 /// Current SpendIntent version.
 pub const SPEND_INTENT_VERSION: u8 = 1;
@@ -132,7 +133,7 @@ pub enum SpendIntentError {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntentRecipient {
     pub address: Vec<u8>,
-    pub amount: u64,
+    pub amount: AtomicUnits,
 }
 
 impl PartialOrd for IntentRecipient {
@@ -167,7 +168,7 @@ pub struct SpendIntent {
     pub reference_block_hash: [u8; 32],
 
     pub recipients: Vec<IntentRecipient>,
-    pub fee: u64,
+    pub fee: AtomicUnits,
     pub input_global_indices: Vec<u64>,
 
     pub kem_randomness_seed: [u8; 32],
@@ -203,10 +204,10 @@ impl SpendIntent {
         for r in &self.recipients {
             buf.extend_from_slice(&(r.address.len() as u32).to_le_bytes());
             buf.extend_from_slice(&r.address);
-            buf.extend_from_slice(&r.amount.to_le_bytes());
+            buf.extend_from_slice(&r.amount.to_raw().to_le_bytes());
         }
 
-        buf.extend_from_slice(&self.fee.to_le_bytes());
+        buf.extend_from_slice(&self.fee.to_raw().to_le_bytes());
 
         buf.extend_from_slice(&(self.input_global_indices.len() as u32).to_le_bytes());
         for idx in &self.input_global_indices {
@@ -235,10 +236,10 @@ impl SpendIntent {
         for r in &self.recipients {
             buf.extend_from_slice(&(r.address.len() as u32).to_le_bytes());
             buf.extend_from_slice(&r.address);
-            buf.extend_from_slice(&r.amount.to_le_bytes());
+            buf.extend_from_slice(&r.amount.to_raw().to_le_bytes());
         }
 
-        buf.extend_from_slice(&self.fee.to_le_bytes());
+        buf.extend_from_slice(&self.fee.to_raw().to_le_bytes());
 
         buf.extend_from_slice(&(self.input_global_indices.len() as u32).to_le_bytes());
         for idx in &self.input_global_indices {
@@ -346,25 +347,18 @@ impl SpendIntent {
     }
 
     /// Validate balance (check 12 from SS9.2).
-    pub fn validate_balance(&self, input_amounts: &[u64]) -> Result<(), SpendIntentError> {
-        let inputs_sum: u64 = input_amounts
-            .iter()
-            .copied()
-            .try_fold(0u64, |acc, x| acc.checked_add(x))
+    pub fn validate_balance(&self, input_amounts: &[AtomicUnits]) -> Result<(), SpendIntentError> {
+        let inputs_sum = AtomicUnits::checked_sum(input_amounts.iter().copied())
             .ok_or_else(|| SpendIntentError::Serialization("input amounts overflow u64".into()))?;
-        let outputs_sum: u64 = self
-            .recipients
-            .iter()
-            .map(|r| r.amount)
-            .try_fold(0u64, |acc, x| acc.checked_add(x))
+        let outputs_sum = AtomicUnits::checked_sum(self.recipients.iter().map(|r| r.amount))
             .ok_or_else(|| SpendIntentError::Serialization("output amounts overflow u64".into()))?;
         let outputs_plus_fee = outputs_sum
             .checked_add(self.fee)
             .ok_or_else(|| SpendIntentError::Serialization("outputs + fee overflow u64".into()))?;
         if inputs_sum != outputs_plus_fee {
             return Err(SpendIntentError::BalanceMismatch {
-                inputs: inputs_sum,
-                outputs_plus_fee,
+                inputs: inputs_sum.to_raw(),
+                outputs_plus_fee: outputs_plus_fee.to_raw(),
             });
         }
         Ok(())
@@ -379,7 +373,7 @@ pub struct ChainStateFingerprint {
     pub reference_block_hash: [u8; 32],
     pub input_global_indices: Vec<u64>,
     pub input_eligible_heights: Vec<u64>,
-    pub input_amounts: Vec<u64>,
+    pub input_amounts: Vec<AtomicUnits>,
     pub input_assigned_prover_indices: Vec<u8>,
 }
 
@@ -404,7 +398,7 @@ impl ChainStateFingerprint {
         let mut sorted_amounts = self.input_amounts.clone();
         sorted_amounts.sort();
         for a in &sorted_amounts {
-            preimage.extend_from_slice(&a.to_le_bytes());
+            preimage.extend_from_slice(&a.to_raw().to_le_bytes());
         }
 
         let mut sorted_provers = self.input_assigned_prover_indices.clone();
@@ -436,14 +430,14 @@ mod tests {
             recipients: vec![
                 IntentRecipient {
                     address: vec![1, 2, 3],
-                    amount: 100,
+                    amount: AtomicUnits::from_raw(100),
                 },
                 IntentRecipient {
                     address: vec![4, 5, 6],
-                    amount: 200,
+                    amount: AtomicUnits::from_raw(200),
                 },
             ],
-            fee: 10,
+            fee: AtomicUnits::from_raw(10),
             input_global_indices: vec![42, 99],
             kem_randomness_seed: [0xDD; 32],
             chain_state_fingerprint: [0; 32],
@@ -463,7 +457,7 @@ mod tests {
     fn intent_hash_changes_with_content() {
         let i1 = make_test_intent();
         let mut i2 = make_test_intent();
-        i2.fee = 20;
+        i2.fee = AtomicUnits::from_raw(20);
         assert_ne!(i1.intent_hash(), i2.intent_hash());
     }
 
@@ -649,14 +643,16 @@ mod tests {
     #[test]
     fn validate_balance_passes() {
         let intent = make_test_intent();
-        intent.validate_balance(&[210, 100]).unwrap();
+        intent
+            .validate_balance(&[AtomicUnits::from_raw(210), AtomicUnits::from_raw(100)])
+            .unwrap();
     }
 
     #[test]
     fn validate_balance_rejects_mismatch() {
         let intent = make_test_intent();
         assert!(matches!(
-            intent.validate_balance(&[100, 100]),
+            intent.validate_balance(&[AtomicUnits::from_raw(100), AtomicUnits::from_raw(100)]),
             Err(SpendIntentError::BalanceMismatch { .. })
         ));
     }
@@ -667,7 +663,7 @@ mod tests {
             reference_block_hash: [0xAA; 32],
             input_global_indices: vec![42, 99],
             input_eligible_heights: vec![800, 850],
-            input_amounts: vec![100, 200],
+            input_amounts: vec![AtomicUnits::from_raw(100), AtomicUnits::from_raw(200)],
             input_assigned_prover_indices: vec![0, 1],
         };
         let h1 = fp.compute();
@@ -681,7 +677,7 @@ mod tests {
             reference_block_hash: [0xAA; 32],
             input_global_indices: vec![42],
             input_eligible_heights: vec![800],
-            input_amounts: vec![100],
+            input_amounts: vec![AtomicUnits::from_raw(100)],
             input_assigned_prover_indices: vec![0],
         };
         let fp2 = ChainStateFingerprint {

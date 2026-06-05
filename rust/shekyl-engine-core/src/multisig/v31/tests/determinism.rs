@@ -13,6 +13,7 @@ use crate::multisig::v31::{
     intent::{ChainStateFingerprint, IntentRecipient, SpendIntent, SPEND_INTENT_VERSION},
     messages::MessageType,
 };
+use shekyl_units::AtomicUnits;
 
 #[test]
 fn intent_hash_canary() {
@@ -29,9 +30,9 @@ fn intent_hash_canary() {
         reference_block_hash: [0xCC; 32],
         recipients: vec![IntentRecipient {
             address: vec![0x01, 0x02, 0x03, 0x04],
-            amount: 1_000_000_000,
+            amount: AtomicUnits::from_raw(1_000_000_000),
         }],
-        fee: 1_000_000,
+        fee: AtomicUnits::from_raw(1_000_000),
         input_global_indices: vec![12345],
         kem_randomness_seed: [0xDD; 32],
         chain_state_fingerprint: [0xEE; 32],
@@ -52,7 +53,11 @@ fn chain_state_fingerprint_canary() {
         reference_block_hash: [0xAA; 32],
         input_global_indices: vec![100, 200, 300],
         input_eligible_heights: vec![900, 910, 920],
-        input_amounts: vec![1_000_000, 2_000_000, 3_000_000],
+        input_amounts: vec![
+            AtomicUnits::from_raw(1_000_000),
+            AtomicUnits::from_raw(2_000_000),
+            AtomicUnits::from_raw(3_000_000),
+        ],
         input_assigned_prover_indices: vec![0, 1, 2],
     };
 
@@ -93,7 +98,7 @@ fn canonical_serialization_length_canary() {
         reference_block_height: 0,
         reference_block_hash: [0; 32],
         recipients: vec![],
-        fee: 0,
+        fee: AtomicUnits::ZERO,
         input_global_indices: vec![],
         kem_randomness_seed: [0; 32],
         chain_state_fingerprint: [0; 32],

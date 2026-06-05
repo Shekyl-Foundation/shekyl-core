@@ -171,7 +171,7 @@ pub struct QueryKeyParams {
 #[derive(Deserialize, Serialize)]
 pub struct TransferDestination {
     pub address: String,
-    pub amount: u64,
+    pub amount: shekyl_units::AtomicUnits,
 }
 
 #[derive(Deserialize)]

@@ -12,6 +12,7 @@ use crate::multisig::v31::{
     prover::{EquivocationProof, ProverInputProof, ProverOutput, SignatureShare},
     state::{IntentState, TrackedIntent},
 };
+use shekyl_units::AtomicUnits;
 
 #[test]
 fn replay_detection_via_kem_seed() {
@@ -28,9 +29,9 @@ fn replay_detection_via_kem_seed() {
         reference_block_hash: [0xCC; 32],
         recipients: vec![IntentRecipient {
             address: vec![1],
-            amount: 100,
+            amount: AtomicUnits::from_raw(100),
         }],
-        fee: 10,
+        fee: AtomicUnits::from_raw(10),
         input_global_indices: vec![42],
         kem_randomness_seed: [0xDD; 32],
         chain_state_fingerprint: [0; 32],
@@ -219,9 +220,9 @@ fn structural_validation_rejects_all_bad_inputs() {
         reference_block_hash: [0; 32],
         recipients: vec![IntentRecipient {
             address: vec![1],
-            amount: 100,
+            amount: AtomicUnits::from_raw(100),
         }],
-        fee: 10,
+        fee: AtomicUnits::from_raw(10),
         input_global_indices: vec![42],
         kem_randomness_seed: [0; 32],
         chain_state_fingerprint: [0; 32],

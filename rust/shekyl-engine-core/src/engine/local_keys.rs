@@ -107,6 +107,7 @@ use shekyl_crypto_pq::output::{
 use shekyl_crypto_pq::subaddress::{subaddress_derivation_scalar, subaddress_keys};
 use shekyl_engine_state::SubaddressIndex;
 use shekyl_oxide::generators::hash_to_point;
+use shekyl_units::AtomicUnits;
 
 use super::error::KeyEngineError;
 use super::traits::key::{
@@ -558,7 +559,9 @@ impl KeyEngine for LocalKeys {
         Ok(OutputClaimResult::Mine(OutputClaim {
             handle,
             key_image,
-            amount_atomic_units: recovered.amount,
+            // `recovered.amount` is the cleartext amount off the crypto-pq
+            // decryption edge (raw `u64`); wrap it at the boundary.
+            amount_atomic_units: AtomicUnits::from_raw(recovered.amount),
         }))
     }
 
@@ -811,7 +814,7 @@ mod tests {
         .expect("construct_output succeeds for synthetic recipient");
         OutputInfo {
             dest_key: constructed.output_key,
-            amount,
+            amount: AtomicUnits::from_raw(amount),
             commitment_mask: constructed.z,
             enc_amount: {
                 let mut enc = [0u8; 9];
@@ -965,7 +968,10 @@ mod tests {
 
         match result {
             OutputClaimResult::Mine(claim) => {
-                assert_eq!(claim.amount_atomic_units, expected_amount);
+                assert_eq!(
+                    claim.amount_atomic_units,
+                    AtomicUnits::from_raw(expected_amount)
+                );
                 assert_ne!(claim.key_image.as_bytes(), &[0u8; 32]);
             }
             _ => panic!("OutputClaimResult::Mine expected for self-paid output"),
@@ -1126,7 +1132,9 @@ mod tests {
 
         let result = keys.try_claim_output(&input).await.unwrap();
         match result {
-            OutputClaimResult::Mine(claim) => assert_eq!(claim.amount_atomic_units, 777),
+            OutputClaimResult::Mine(claim) => {
+                assert_eq!(claim.amount_atomic_units, AtomicUnits::from_raw(777))
+            }
             _ => panic!("Mine expected after subaddress registration"),
         }
     }
@@ -1759,7 +1767,7 @@ mod tests {
                     SpendInput {
                         output_key: leaf_chunk[i].output_key,
                         commitment: leaf_chunk[i].commitment,
-                        amount: input_amounts[i],
+                        amount: AtomicUnits::from_raw(input_amounts[i]),
                         spend_key_x,
                         spend_key_y,
                         commitment_mask,
@@ -1924,11 +1932,16 @@ mod tests {
 
                 // ── Sign engine path (sole sign call; legacy parallel
                 //    sign call removed per the Trim-1 disposition) ───
-                let signed_engine =
-                    sign_transaction(signable_tx_hash, &engine_inputs, &outputs, fee, &tree)
-                        .unwrap_or_else(|e| {
-                            panic!("engine-bundle sign_transaction must succeed ({context}): {e:?}")
-                        });
+                let signed_engine = sign_transaction(
+                    signable_tx_hash,
+                    &engine_inputs,
+                    &outputs,
+                    AtomicUnits::from_raw(fee),
+                    &tree,
+                )
+                .unwrap_or_else(|e| {
+                    panic!("engine-bundle sign_transaction must succeed ({context}): {e:?}")
+                });
 
                 // ── Echo-passthrough ────────────────────────────────
                 assert_eq!(
@@ -1951,7 +1964,7 @@ mod tests {
                     .map(|out| {
                         let mask = Scalar::from_canonical_bytes(out.commitment_mask)
                             .expect("commitment_mask from OutputInfo is canonical");
-                        let c = Commitment::new(mask, out.amount);
+                        let c = Commitment::new(mask, out.amount.to_raw());
                         CompressedPoint::from(c.calculate().compress().to_bytes())
                     })
                     .collect();
