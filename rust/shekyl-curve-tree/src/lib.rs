@@ -45,4 +45,5 @@ pub mod recon;
 pub mod store;
 pub mod types;
 
+pub use client::{BlockLeaves, ClientError, CurveTreeClient, RawOutput, TxLeafInputs};
 pub use types::{LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
