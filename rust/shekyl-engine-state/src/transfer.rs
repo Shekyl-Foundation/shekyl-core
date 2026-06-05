@@ -12,6 +12,7 @@ use curve25519_dalek::{EdwardsPoint, Scalar};
 
 use shekyl_crypto_pq::{handle::OutputHandle, kem::HybridCiphertext, key_image::KeyImage};
 use shekyl_oxide::primitives::Commitment;
+use shekyl_units::AtomicUnits;
 
 use crate::{
     payment_id::PaymentId,
@@ -204,9 +205,13 @@ impl TransferDetails {
         watermark < accrual_cap
     }
 
-    /// The amount (in atomic units) held in this output.
-    pub fn amount(&self) -> u64 {
-        self.commitment.amount
+    /// The amount held in this output.
+    ///
+    /// The stored `commitment.amount` is the vendored fork's raw `u64`
+    /// (`10-shekyl-first.mdc`); this accessor is the edge that lifts it into
+    /// the typed [`AtomicUnits`] domain (`ATOMIC_UNITS_NEWTYPE.md` §4.1).
+    pub fn amount(&self) -> AtomicUnits {
+        AtomicUnits::from_raw(self.commitment.amount)
     }
 
     /// Whether this is a staked output still within its lock period.
