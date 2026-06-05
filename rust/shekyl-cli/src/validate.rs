@@ -112,7 +112,7 @@ mod tests {
         ) {
             let s = format!("{whole}.{frac}");
             let result = crate::commands::parse_amount(&s);
-            assert!(result.is_none(), ">12 decimal places should be rejected: {s:?}");
+            assert!(result.is_none(), ">9 decimal places should be rejected: {s:?}");
         }
     }
 
