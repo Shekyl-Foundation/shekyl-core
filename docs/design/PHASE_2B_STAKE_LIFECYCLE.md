@@ -65,24 +65,46 @@ disposition is §0.9. New material is in §0.10.
 
 ### 0.1 Engine identification ([`STAGE_1_PER_PR_TEMPLATE.md`](STAGE_1_PER_PR_TEMPLATE.md) §3.1)
 
-- [ ] **§2 trait binding (re-verify):** [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
+- [x] **§2 trait binding (re-verified 2026-06-05):** [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
   §10.5.1 (`StakeEngine` additive trait); §2.7 (`EconomicsEngine` consumer framing —
   now consumes the **rate schedule**, not the pool denominator); §3.3 (cross-engine
-  `.await` sequencing); §8.3 lens table row for `StakeEngine`.
-- [ ] **§1.5 three-condition test (additive trait):**
+  `.await` sequencing); §8.3 lens table row for `StakeEngine`. **Disposition:** §2.7 and
+  §3.3 discharged by the §8.6 landing — `rate_at_epoch` is listed in §3.3.6's pure-read
+  tuple (`base_emission_at`, `burn_amount`, `rate_at_epoch`, `parameters_snapshot`), so it
+  carries no cross-engine `.await`-ordering obligation (pure-snapshot read, LedgerSnapshot
+  pattern). §8.3 lens row clean (reorg + adaptive-burn quiescence; no pool-denominator
+  claim). **One residual fixed in place:** §10.5.1's description still carried the stale
+  "principal-pool aggregation state at Stage 4" — a dead pool-denominator reference the
+  7-site `pool_weighted_total` sweep missed (it doesn't use the literal method name).
+  Corrected to "per-stake commitment-opening secrets (`amount`, `z`), in-memory only; **no**
+  network principal-pool aggregation — exact yield = `rate_at_epoch` × own (secret) weight
+  (§7, §8.6)."
+- [x] **§1.5 three-condition test (additive trait) — re-confirmed 2026-06-05:**
   - **(1) Distinct state ownership:** per-stake FSM + wallet-side stake registry **+
     per-stake commitment-opening secrets (`amount`, `z`) only**; distinct from
     `LedgerEngine` and `EconomicsEngine`. **No nullifier-derivation material in the
     stake actor** — `N_S = x·G_S` uses spend secret `x` (KeyEngine-owned, derived
-    transiently at claim/resync; R0-D8, §0.10). **Pass (re-confirm secret ownership).**
+    transiently at claim/resync; R0-D8, §0.10). **Pass — secret ownership confirmed:**
+    `(amount, z)` is the actor's *only* secret state (in-memory, re-derived on hydration,
+    never sealed — §3.3.1 / §4.2); `x` stays KeyEngine-transient (R0-D8 rejected persisting
+    it). The ownership is genuinely distinct, not a slice of `LedgerEngine`/`EconomicsEngine`.
   - **(2) Failure isolation:** stake actor crash must not take down ledger or keys;
     recoverable via re-hydration from persisted stake records + chain replay.
-    **Re-verify under fail-stop now that the actor holds secrets (§0.10).**
+    **Pass under fail-stop (§0.10, §4.5 row):** the actor `Break`s on panic and never
+    restarts with stale secrets; the in-memory opening is re-derived on the next hydration
+    (it was never at rest), so a crash loses no durable secret and the survivable state
+    (`StakeInstance` records + `claimed_epochs`) rebuilds from persistence + chain replay
+    (§5.2). Holding secrets does **not** weaken isolation because the secrets are
+    reconstructable, not authoritative-at-rest.
   - **(3) Cross-cutting consumers:** `Engine<S>` orchestration, future
     `ArchivalEngine` via `is_active_staker(entity_id)`, JSON-RPC at V3.2+. **Pass.**
-- [ ] **Surface amendment:** introduces `StakeEngine` (eighth trait slot); amends
-  `ScanResult` / merge per §4; **new:** stake actor now holds secret opening
-  material (changes the Stage 2 "no secrets in stake actor" inheritance — §0.10).
+- [x] **Surface amendment — confirmed 2026-06-05:** introduces `StakeEngine` (eighth trait
+  slot, per §10.5.1 / boundaries-doc §10.5); amends `ScanResult` / merge per §4; **new:**
+  stake actor now holds secret opening material (changes the Stage 2 "no secrets in stake
+  actor" inheritance — §0.10). **Disposition:** the inheritance change is real and recorded —
+  Stage 2's "no secrets in stake actor" no longer holds; the replacement invariant is
+  "secrets are **in-memory-only, re-derived, never sealed**" (§0.10, §3.3.1, §4.2), which the
+  fail-stop posture (§4.5 row) and condition (2) above are the load-bearing guards for.
 
 ### 0.2 Plan-altitude principles ([`WALLET_REWRITE_PLAN.md`](WALLET_REWRITE_PLAN.md) op. 4–8)
 
@@ -1690,7 +1712,7 @@ transient-per-claim (theft-grade), `(amount, z)` is display-read on every poll a
 at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen clauses
 (§3.3.1): measured-`x`-cost, and claim-completion-gated pruning of spent staked outputs.
 **Async trait RESOLVED (§4.6):** RPITIT-`+ Send` across all methods, five-engine idiom.
-**Both Round-2 R-residuals now closed.** **§4.7 message protocol pinned (D1–D4):** reorg **folded** onto `ApplyStakeEvents { reorg_rewind }` (no `RewindTo`; rewind-first in one uninterruptible turn — atomicity, not just ledger-mirror symmetry); reorg semantics **clear-all/replay-all of the full surviving own-nullifier set across the whole post-reorg chain** (windowed replay drops below-fork survivors of a straddling lock), **heights live in the scanner** not `claimed_epochs`; `claim_pending_epochs` lifecycle = `PrepareClaimBuild` side-effect (set) + `AbandonClaim` (clear, **claim_pending only, never claimed**); `Snapshot` excludes `claim_pending_epochs` / `Restore` starts it empty. **§5's §4.7 carry is thereby discharged; only the consensus-track `pop_block` nullifier-revert** (cross-tree atomicity) **holds the §5 box open.** **§6 user API signed off (2026-06-05):** owner-grade `StakeView` pinned (per-stake `claimable` / `claimed_epochs` / `unlock_height`) **distinct** from the §7 lens-3 redaction (one struct cannot serve both trust grades); amounts are `AtomicUnits` end-to-end (engine/orchestrator/computation; `u64` only at postcard/FFI/consensus edges; `_atomic` suffix dropped); `StakeFilter` declared as a closed by-state enum; abandon-claim discard wiring pinned (§3.4/§6 — general pending-tx discard dispatches `AbandonClaim` for claim-type txs); pre-stake yield projection omitted by decision (§8.6 forward-uncertain); FA-1 regrounded to the single static address with an independent-accounts reopen-pointer (rule 21); stale §3.3 opening doc-comment fixed. **§8.6 `rate_at_epoch` finalized (2026-06-05):** the EconomicsEngine yield surface is pinned (7 pins — rate-epoch index in, public fixed-point `ρ_e` out, fallible with `Ok(0)`≠`Err`, consensus-`band_sum`-derived, `AtomicUnits` crossing at the yield product, no per-stake state); `pool_weighted_total` **retired** (rule 15 delete — sole consumer was the redesign-eliminated `projected_yield` denominator, verified at source in both docs) across all 7 `V3_ENGINE_TRAIT_BOUNDARIES.md` sites, code removal deferred to Stage 3. **Both wallet-design Round-2 boxes now closed; the only remaining open box (§5 reconciliation) is designed-complete and held open solely by the consensus-track `pop_block` nullifier-revert cross-track dependency — no further wallet design work blocks Round 3.** |
+**Both Round-2 R-residuals now closed.** **§4.7 message protocol pinned (D1–D4):** reorg **folded** onto `ApplyStakeEvents { reorg_rewind }` (no `RewindTo`; rewind-first in one uninterruptible turn — atomicity, not just ledger-mirror symmetry); reorg semantics **clear-all/replay-all of the full surviving own-nullifier set across the whole post-reorg chain** (windowed replay drops below-fork survivors of a straddling lock), **heights live in the scanner** not `claimed_epochs`; `claim_pending_epochs` lifecycle = `PrepareClaimBuild` side-effect (set) + `AbandonClaim` (clear, **claim_pending only, never claimed**); `Snapshot` excludes `claim_pending_epochs` / `Restore` starts it empty. **§5's §4.7 carry is thereby discharged; only the consensus-track `pop_block` nullifier-revert** (cross-tree atomicity) **holds the §5 box open.** **§6 user API signed off (2026-06-05):** owner-grade `StakeView` pinned (per-stake `claimable` / `claimed_epochs` / `unlock_height`) **distinct** from the §7 lens-3 redaction (one struct cannot serve both trust grades); amounts are `AtomicUnits` end-to-end (engine/orchestrator/computation; `u64` only at postcard/FFI/consensus edges; `_atomic` suffix dropped); `StakeFilter` declared as a closed by-state enum; abandon-claim discard wiring pinned (§3.4/§6 — general pending-tx discard dispatches `AbandonClaim` for claim-type txs); pre-stake yield projection omitted by decision (§8.6 forward-uncertain); FA-1 regrounded to the single static address with an independent-accounts reopen-pointer (rule 21); stale §3.3 opening doc-comment fixed. **§8.6 `rate_at_epoch` finalized (2026-06-05):** the EconomicsEngine yield surface is pinned (7 pins — rate-epoch index in, public fixed-point `ρ_e` out, fallible with `Ok(0)`≠`Err`, consensus-`band_sum`-derived, `AtomicUnits` crossing at the yield product, no per-stake state); `pool_weighted_total` **retired** (rule 15 delete — sole consumer was the redesign-eliminated `projected_yield` denominator, verified at source in both docs) across all 7 `V3_ENGINE_TRAIT_BOUNDARIES.md` sites, code removal deferred to Stage 3. **Both wallet-design Round-2 boxes now closed; the only remaining open box (§5 reconciliation) is designed-complete and held open solely by the consensus-track `pop_block` nullifier-revert cross-track dependency — no further wallet design work blocks Round 3.** **§0.1 pre-flight re-verify trio closed (2026-06-05):** §2 trait-binding, the §1.5 three-condition test, and the surface-amendment re-confirmed against the §0.10 secret-ownership shift (the actor's only secret state is in-memory `(amount, z)`, re-derived on hydration, never sealed; fail-stop isolation holds because the secret is reconstructable, not authoritative-at-rest). §2.7 / §3.3 were discharged by the §8.6 landing (`rate_at_epoch` is a §3.3.6 pure-read, no `.await`-ordering obligation); §8.3 lens row clean. **One residual fixed:** boundaries-doc §10.5.1 still described `StakeEngine` as owning "principal-pool aggregation state at Stage 4" — an 8th dead pool-denominator reference the literal-name `pool_weighted_total` sweep missed — corrected to per-stake in-memory openings with **no** principal-pool aggregation (exact yield = `rate_at_epoch` × own weight). |
 | **3** | Open | Threat-model exhaustion (§7) + §6 wider-substrate audit (after upstream Round 1) |
 | **4** | Open | Binding pins (trait signatures, error enums, persistence version; **no stake sealed-region format** — opening dissolved, §4.2) |
 | **5** | Open | Closure + Stage 3 PR decomposition |

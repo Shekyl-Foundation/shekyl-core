@@ -5973,8 +5973,15 @@ here as additional entries.
 
 *Description.* `StakeEngine` is the canonical
 candidate for Phase 2b's additive trait — it owns per-stake
-records, the stake FSM state, and the principal-pool
-aggregation state at Stage 4; it consumes `EconomicsEngine`
+records, the stake FSM state, and (confidential redesign)
+per-stake commitment-opening secrets (`amount`, `z`) held
+**in memory only** (re-derived on hydration, never sealed).
+It owns **no** network principal-pool aggregation: the
+daemon-supplied pool denominator was eliminated, and exact
+yield derives from `EconomicsEngine::rate_at_epoch` × the
+wallet's own (secret) weight
+([`design/PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md)
+§7, §8.6). It consumes `EconomicsEngine`
 via the canonical-derivation surface (§2.7); it has explicit
 cross-cutting consumers (`Engine<S>` for stake-aware
 operations, future `ArchivalEngine` for sibling-actor

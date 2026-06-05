@@ -344,6 +344,20 @@
   wallet-design boxes (§6, §8.6) are now closed; the only remaining open box (§5 reconciliation)
   is designed-complete and held open solely by the consensus-track `pop_block` nullifier-revert
   cross-track dependency — no further wallet design work blocks Round 3.
+- **staking: §0.1 pre-flight re-verify trio closed; boundaries-doc §10.5.1 pool-denominator
+  residual fixed (`PHASE_2B_STAKE_LIFECYCLE.md` §0.1 + `V3_ENGINE_TRAIT_BOUNDARIES.md` §10.5.1).**
+  Re-walked the three §0.1 engine-identification boxes against the §0.10 secret-ownership shift:
+  (1) §2 trait-binding — §2.7 / §3.3 already discharged by the `rate_at_epoch` landing
+  (`rate_at_epoch` is a §3.3.6 pure-read, carries no cross-engine `.await`-ordering obligation),
+  §8.3 lens row clean; (2) §1.5 three-condition test re-confirmed — the actor's *only* secret
+  state is in-memory `(amount, z)` (re-derived on hydration, never sealed), and fail-stop failure
+  isolation holds precisely because that secret is reconstructable, not authoritative-at-rest;
+  (3) surface-amendment confirmed — the Stage-2 "no secrets in stake actor" inheritance is
+  superseded by the "in-memory-only, re-derived, never-sealed" invariant. **One residual fixed:**
+  §10.5.1 still described `StakeEngine` as owning "principal-pool aggregation state at Stage 4" —
+  an **8th** dead pool-denominator site the literal-name `pool_weighted_total` sweep missed —
+  corrected to per-stake in-memory openings with **no** principal-pool aggregation (exact yield =
+  `rate_at_epoch` × own secret weight, §7 / §8.6).
 - **staking: confidential-claim entitlement `D` pinned + remainder range-proof
   construction closed (Round 2, §6.4.1 decisions 1(a)/1(b)).** Corrected the
   underspecified `D = SCALE` to `D = D_tier · SCALE_rate = 2^(k+1)`: `D_tier = 2`
