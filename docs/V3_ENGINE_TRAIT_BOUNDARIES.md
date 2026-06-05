@@ -2115,7 +2115,9 @@ multipliers, base burn rate, ESF, release bounds, pool-share
 constants, emission-decay constants) and the canonical
 derivations of values from those parameters and from chain
 state (base emission at a height, burn amount for a given fee,
-pool-weighted stake total). At V3.0 these are pure functions
+per-epoch staking rate `ρ_e` for the yield schedule — see Phase
+2b §8.6; this retires the former pool-weighted-stake-total
+surface). At V3.0 these are pure functions
 over `shekyl-economics` constants; at V3.x Component 3 they
 gain internal state for adaptive-burn observation, but the
 trait surface is unchanged.
@@ -2231,30 +2233,38 @@ pub trait EconomicsEngine {
         activity: ActivityMetric,
     ) -> Result<u64, Self::Error>;
 
-    /// Canonical total weighted stake across the principal pool — the
-    /// denominator intended for Phase 2b's `StakeEngine::projected_yield`
-    /// (2026-05-08 disposition). Sourced from chain-mirror state via
-    /// `ChainEconomicsSource::active_weighted_stake`, not from wallet-local
+    /// Public per-epoch staking rate `ρ_e` for the settled rate-epoch
+    /// `rate_epoch` — the sole yield-schedule surface Phase 2b's `StakeEngine`
+    /// consumes (`PHASE_2B_STAKE_LIFECYCLE.md` §8.6). `rate_epoch` is a
+    /// rate-epoch *index* (not a height); the caller converts via the public
+    /// `rate_epoch_blocks` from `parameters_snapshot()`. Consensus-derived from
+    /// the on-chain `band_sum` via chain-mirror state, not from a wallet-local
     /// `shekyl-staking::Registry` (Bug 2 class).
     ///
-    /// **`u128` per Bug 7** — aggregation uses `u128` to prevent overflow at
-    /// large pool sizes.
+    /// **`u64` fixed-point** — `ρ_e` is a rate (reward per unit weight per
+    /// block), not an amount, so it is *not* `AtomicUnits`; the yield product
+    /// `own_weight · K_S` is the crossing into `AtomicUnits`. The fixed-point
+    /// scale is consensus-defined upstream; the wallet consumes it.
     ///
-    /// **Zero is valid, not an error.** A return of `0` means no active stake
-    /// at the mirrored height — consensus burns the block's pool contribution
-    /// rather than carrying it ([`STAKER_REWARD_DISBURSEMENT.md`](STAKER_REWARD_DISBURSEMENT.md)
-    /// §"Empty-staker-set behavior"). Do not treat `0` as a failed read.
+    /// **Fallible — `Ok(0)` vs `Err` are distinct.** `Ok(0)` is a *settled*
+    /// epoch with an empty staker set (no yield that epoch — consensus burns
+    /// rather than carries; [`STAKER_REWARD_DISBURSEMENT.md`](STAKER_REWARD_DISBURSEMENT.md)
+    /// §"Empty-staker-set behavior"). `Err` is "cannot determine": rate-epoch
+    /// not yet settled, mirror unsynced, or defensive overflow. Unlike the
+    /// retired `pool_weighted_total` (`-> u128`, which overloaded `0` as both
+    /// no-stake and not-synced), the `Result` signals "unknown" explicitly.
     ///
-    /// **Callers using this as a denominator must guard division.** `0` is a
-    /// live divide-by-zero for yield-style computations; check before dividing.
-    ///
-    /// **`0` is overloaded.** The same value can mean (a) no active stake at
-    /// the relevant height (legitimate) or (b) wallet not synced to that height
-    /// / stale mirror (must not be used as denominator). This method is
-    /// infallible (`-> u128`) and cannot signal "unknown." Consumers that must
-    /// distinguish the cases must verify sync state separately before
-    /// interpreting `0`.
-    fn pool_weighted_total(&self) -> u128;
+    /// **Retires `pool_weighted_total` (`-> u128`).** That method's sole named
+    /// consumer was `StakeEngine::projected_yield`'s pool denominator; the
+    /// confidential staking redesign eliminated the daemon-supplied denominator
+    /// (`PHASE_2B_STAKE_LIFECYCLE.md` §7, §8.6), so the pool-aggregate surface
+    /// is dead (rule 15). Reopen (rule 21) only for a future consumer needing a
+    /// pool aggregate that cannot be composed from `rate_at_epoch` + chain
+    /// state. The `band_sum` mirror (`ChainEconomicsSource::active_weighted_stake`)
+    /// is repurposed as this method's internal `ρ_e`-derivation input, not a
+    /// public surface. **(Code removal lands with Stage 3; the trait still
+    /// carries `pool_weighted_total` until then.)**
+    fn rate_at_epoch(&self, rate_epoch: u64) -> Result<u64, Self::Error>;
 
     /// Parameter snapshot for governance / display.
     ///
@@ -2313,12 +2323,14 @@ graph's Group A (independent) gains `EconomicsEngine` alongside
 `StakeEngine` (Phase 2b) and `ArchivalEngine` (V3.x) are
 separate traits that consume `EconomicsEngine`:
 
-- `StakeEngine::projected_yield(stake, horizon)` calls
-  `EconomicsEngine::pool_weighted_total()` to get the pool
-  denominator and reads stake's lock-tier multiplier from
-  `EconomicsEngine::parameters_snapshot()` to compute the
-  yield. The canonical derivation lives on `EconomicsEngine`;
-  `StakeEngine` composes it with per-stake state.
+- `StakeEngine::projected_yield(stake_id, horizon)` calls
+  `EconomicsEngine::rate_at_epoch(rate_epoch)` for the public
+  per-epoch rate `ρ_e` and reads the stake's lock-tier multiplier
+  from `EconomicsEngine::parameters_snapshot()`, then composes
+  exact yield as `Σ own_weight · K_S` (no pool denominator — the
+  confidential redesign eliminated it; Phase 2b §8.6). The
+  canonical derivation lives on `EconomicsEngine`; `StakeEngine`
+  composes it with per-stake state.
 - `ArchivalEngine::archival_yield_history()` reads yield-rate
   parameters from `EconomicsEngine::parameters_snapshot()`
   and composes them with per-shard archival state.
@@ -2357,10 +2369,10 @@ New methods proposed for this trait must satisfy both:
   consumers may have to work around. The named-consumer rule
   is workflow discipline, not just ergonomic discipline:
   a method addition that names "Phase 2b's `StakeEngine`
-  needs `pool_weighted_total_at_height(height) -> u128` for
-  historical-yield queries" is a legitimate proposal; a
-  method addition that says "this might be useful to expose"
-  is not.
+  needs `rate_at_epoch(rate_epoch) -> Result<u64, _>` for the
+  per-epoch yield schedule" is a legitimate proposal (and is
+  exactly the §8.6 amendment that landed); a method addition
+  that says "this might be useful to expose" is not.
 
 The four clauses:
 
@@ -3334,7 +3346,7 @@ address it are sent back for amendment.
 #### 3.3.6 EconomicsEngine reads at Stage 4 (Round 4a Resolution C)
 
 `EconomicsEngine` reads (`base_emission_at`, `burn_amount`,
-`pool_weighted_total`, `parameters_snapshot`) are pure-function
+`rate_at_epoch`, `parameters_snapshot`) are pure-function
 or pure-snapshot at V3.0. The trait surface in §2.7 returns the
 **value type** `EconomicsParametersSnapshot` (no `Arc` in the
 trait return); the implementation choice of how to make that
@@ -3469,7 +3481,7 @@ Three classes:
 
 - **Class a** is most read-style methods: `balance`,
   `synced_height`, `get_fee_estimates`,
-  `base_emission_at`, `burn_amount`, `pool_weighted_total`,
+  `base_emission_at`, `burn_amount`, `rate_at_epoch`,
   `parameters_snapshot`. Reading these has no observable effect;
   dropping them at any stage is a no-op. All four
   `EconomicsEngine` methods are class a at V3.0; V3.x's
@@ -3728,7 +3740,7 @@ not the cancellation surface; the token is).
 | `PersistenceEngine` | `rotate_password` | async | no (state changes per call; old credentials are no longer valid after a successful rotation) | **b** (writes file; Stage 4 drop is observation-only — rotation may complete after caller drops) |
 | `EconomicsEngine` | `base_emission_at` | sync | yes (read-only; deterministic given height at V3.0 neutral projection; V3.x adaptive-burn state may affect other methods — not this height-keyed projection) | n/a |
 | `EconomicsEngine` | `burn_amount` | sync | yes (read-only; deterministic given inputs at V3.0; deterministic given inputs plus state at V3.x) | n/a |
-| `EconomicsEngine` | `pool_weighted_total` | sync | yes (read-only; canonical derivation from current pool state) | n/a |
+| `EconomicsEngine` | `rate_at_epoch` | sync | yes (read-only; canonical derivation of `ρ_e` from chain-mirror `band_sum` at the rate-epoch) | n/a |
 | `EconomicsEngine` | `parameters_snapshot` | sync | yes (read-only; returns owned snapshot) | n/a |
 
 The "**conditionally**" entries name the explicit condition for

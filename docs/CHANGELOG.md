@@ -314,6 +314,36 @@
   `docs/FOLLOWUPS.md` (V3.0). Note the most load-bearing constraint for that PR:
   `OutputClaim.amount_atomic_units` is a **secret** (wiped on drop, `[REDACTED]` Debug), so the
   newtype must preserve `Zeroize` + non-leaking `Debug`.
+- **staking: `EconomicsEngine::rate_at_epoch` finalized; `pool_weighted_total` retired
+  (`PHASE_2B_STAKE_LIFECYCLE.md` §8.6 + `V3_ENGINE_TRAIT_BOUNDARIES.md` §2.7).** Closes the
+  R0-D5 Round-2 box. **`rate_at_epoch(rate_epoch) -> Result<u64, Self::Error>`** is pinned as
+  the sole yield-schedule surface `StakeEngine` consumes, with seven semantics pins: (1)
+  `rate_epoch` is a rate-epoch *index*, not a height — the caller converts via the public
+  `rate_epoch_blocks`; (2) returns the public rate `ρ_e` as fixed-point `u64` (a rate, not an
+  amount, so **not** `AtomicUnits`; consensus-defined scale the wallet consumes); (3) **fallible
+  with `Ok(0)` ≠ `Err`** — `Ok(0)` is a settled empty-staker epoch, `Err` is "cannot determine"
+  (unsettled epoch / unsynced mirror / overflow), un-overloading the `0` that the infallible
+  `pool_weighted_total` conflated; (4) consensus-derived from the on-chain `band_sum`, not
+  wallet-recomputed (Bug-2-class avoidance); (5) the **`AtomicUnits` crossing** is the yield
+  product `own_weight · K_S`, not the rate itself (this is the checked-arithmetic centralization
+  site the `shekyl-units` newtype exists for); (6) no per-stake state — index in, no `stake_id`
+  (§8.2 reversion preserved); the signature uses the trait's `Self::Error` convention (the
+  earlier `EconomicsEngineError` sketch was wrong vs `base_emission_at`/`burn_amount`).
+  **`pool_weighted_total` (`-> u128`) retired — delete, not renarrate (rule 15):** verified at
+  source in *both* the trait rustdoc and the boundaries doc that its sole named consumer was
+  `StakeEngine::projected_yield`'s pool denominator, which the confidential redesign eliminated
+  ("no daemon-supplied denominator anymore", §7); zero V3.0 consumers. Reopen-criterion is
+  rule-21-shaped (a future consumer needing a pool aggregate not composable from `rate_at_epoch`
+  + chain state). The `band_sum` mirror (`ChainEconomicsSource::active_weighted_stake`) is
+  repurposed as `rate_at_epoch`'s internal `ρ_e`-derivation input, not deleted. The boundaries
+  doc is amended across **all 7 sites** (§2.7 Ownership list, method sketch, `projected_yield`
+  consumer narrative, discipline-test example, and the 3.3.6 / class-a / blocking-semantics
+  tables), framed "retired pending Stage-3 code removal"; the code swap + grep-retire targets
+  (`economics.rs`, `local_economics.rs`, `economics_differential.rs`, `chain_economics_source.rs`,
+  `mod.rs`, `lifecycle.rs`) are enumerated in §8.6 for Stage 3. **Round-2 status:** both
+  wallet-design boxes (§6, §8.6) are now closed; the only remaining open box (§5 reconciliation)
+  is designed-complete and held open solely by the consensus-track `pop_block` nullifier-revert
+  cross-track dependency — no further wallet design work blocks Round 3.
 - **staking: confidential-claim entitlement `D` pinned + remainder range-proof
   construction closed (Round 2, §6.4.1 decisions 1(a)/1(b)).** Corrected the
   underspecified `D = SCALE` to `D = D_tier · SCALE_rate = 2^(k+1)`: `D_tier = 2`

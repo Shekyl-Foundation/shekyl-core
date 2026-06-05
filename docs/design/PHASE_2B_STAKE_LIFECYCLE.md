@@ -153,7 +153,7 @@ intent unchanged: `StakeEngine::Error: Into<StakeEngineError>` (CL-3),
 | `stake_events` | `scan.rs` (`ScanResult`), `merge.rs` (`apply_stake_events`), `refresh.rs`, `local_refresh.rs` |
 | `StakeEvent` | `scan.rs` — only `Accrual { height, record }` variant today |
 | `StakerPoolState` / `AccrualRecord` | `shekyl-engine-state` — pool-division `estimate_reward()` path; **retire** on confidential cutover (R0-D7) |
-| `pool_weighted_total()` | `EconomicsEngine` trait — **retire** when `rate_at_epoch` lands (R0-D5) |
+| `pool_weighted_total()` | `EconomicsEngine` trait — **retired** (R0-D5 finalized §8.6, 2026-06-05): boundaries-doc surface replaced by `rate_at_epoch`; code removal Stage 3 |
 | **(new) confidential claim / nullifier / band parsing** | **0** — scanner does not yet parse confidential stake/claim tx; Stage 3 adds it |
 | **Claim nullifier `N_S = x·G_S`** | **0** wallet path — uses existing spend secret `x` from witness/`OutputSecrets`; `G_S` domain + claim prove/verify surface pinned upstream §6.4 (R0-D1) |
 
@@ -252,7 +252,7 @@ must be **closed or explicitly deferred** before Round 0 closes.
 | **R0-D3** | Actor secret transport: `RegisterPendingStake(StakeInstance)` with `opening` in `ask` payloads must not be loggable plaintext in the mailbox. | **Pin §4.7** — opening is **never persisted/sealed** (§4.2 dissolution): `Restore` **re-derives** it in-task, `Snapshot` carries **no** opening, and `RegisterPendingStake` moves a `Secret<StakeOpening>` **in-process** from the orchestrator build context (zeroized, non-`Debug`, never logged — an in-RAM secret move, not a sealed disk blob). List/query messages return `StakeView` only. |
 | **R0-D4** | Claim construction needs `x`, `z`, `a`, epoch set `S`, public `M` — must not duplicate openings in `PendingTxEngine`. | **Pin §4.6–§4.7** — `prepare_claim_build` returns stake-side material (`amount`, `z`, …); orchestrator derives **`x` transiently** from `KeyEngine` (`b`) + `ho` (output derivation) and feeds a **single** zeroized prover bundle to `PendingTxEngine` + `KeyEngine`. **`x` not in `StakeOpening`** (§3.3.1). |
 | **R0-D8** | Persisting `x = ho + b` in `StakeOpening` duplicates **theft-grade** spend authority already held by `KeyEngine`; sealed-region compromise escalates from reward-claim forgery to principal spend. | **Rejected** (Round 1). `StakeOpening = (amount, z)` only; `x` derived at claim/resync (§3.3.1, §8.8). Reopen only if measured derivation cost is prohibitive across the full stake set on resync — not expected (§8.8). |
-| **R0-D5** | `EconomicsEngine::rate_at_epoch` is proposed but `pool_weighted_total()` still exists; [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) still cites pool denominator for Phase 2b. | **Stage 3 co-lands** trait extension + boundaries-doc amendment (§8.6); grep-retire `pool_weighted_total` consumers. |
+| **R0-D5** | `EconomicsEngine::rate_at_epoch` is proposed but `pool_weighted_total()` still exists; [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) still cites pool denominator for Phase 2b. | **Finalized Round 2 (§8.6, 2026-06-05):** `rate_at_epoch` semantics pinned (7 pins); `pool_weighted_total` retired across all 7 boundaries-doc sites (delete, not renarrate — rule 15; sole consumer eliminated, verified at source). **Stage 3 co-lands** the code: trait method swap + grep-retire enumeration in §8.6. |
 | **R0-D6** | [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §7: accrued epochs remain claimable **after unstake**; FSM `FullyUnstaked` must not foreclose claims. | **Pin §3.1** — `principal_spent: bool` on instance or remain in claimable-equivalent state until `claimed_epochs` exhausted. |
 | **R0-D7** | `RateEpochObserved { rho, band_sum }` is not a rename of `AccrualRecord` — retire `StakerPoolState::estimate_reward` pool-division path to avoid accidental reintroduction. | **Pin §4.3** — new `RateEpochRecord` type; explicit deletion target in Stage 3 grep plan. |
 
@@ -939,7 +939,8 @@ pub struct RefreshSummary {
 
 The pool-denominator consumption is **removed**. `StakeEngine` now calls:
 
-- `rate_at_epoch(rate_epoch) -> u64` (public `ρ_e`) for **exact** yield computation.
+- `rate_at_epoch(rate_epoch) -> Result<u64, Self::Error>` (public `ρ_e`) for **exact** yield
+  computation — semantics finalized in §8.6 (`rate_epoch` is an index, `Ok(0)` ≠ `Err`).
 - `parameters_snapshot()` for tier multipliers / band parameters / decay display.
 
 The wallet computes its own claimable backlog as
@@ -949,9 +950,9 @@ The wallet computes its own claimable backlog as
 
 **Reversion clause (§8.2):** methods on `EconomicsEngine` that take `stake_id` or
 encode per-stake state remain **rejected** — reopen only via §10.6.1 in the
-trait-boundaries doc. The old `pool_weighted_total()` consumption is **retired** (R0-D5);
-Stage 3 co-lands `rate_at_epoch` + [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
-amendment (§8.6).
+trait-boundaries doc. The old `pool_weighted_total()` consumption is **retired** (R0-D5,
+finalized §8.6): the [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md)
+amendment has landed (all 7 sites); Stage 3 co-lands the corresponding **code** swap.
 
 ### 4.6 `StakeEngine` trait surface (draft)
 
@@ -1545,19 +1546,94 @@ gated** ledger-pruning pass cannot avoid evicting a spent staked output with unc
 accrued epochs (R0-D6 makes accrued epochs claimable indefinitely, so the pruning gate is
 claim-completion, not height). Neither reopens on a convenience argument.
 
-### 8.6 `EconomicsEngine::rate_at_epoch` (trait amendment — R0-D5)
+### 8.6 `EconomicsEngine::rate_at_epoch` (trait amendment — R0-D5, finalized Round 2)
 
-**Stage 3 co-lands:**
+**Signature (Stage 3 co-lands; aligns to the trait's `Self::Error` convention, not a bare
+`EconomicsEngineError` — mirrors `base_emission_at` / `burn_amount`):**
 
 ```rust
-fn rate_at_epoch(&self, rate_epoch: u64) -> Result<u64, EconomicsEngineError>;
+/// Public per-epoch staking rate ρ_e for the settled rate-epoch `rate_epoch`.
+/// The sole yield-schedule surface StakeEngine consumes (§4.5). Canonical-
+/// derivation only — takes a rate-epoch index, never a `stake_id` (§8.2).
+fn rate_at_epoch(&self, rate_epoch: u64) -> Result<u64, Self::Error>;
 ```
 
-- Amend [`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §2.7 /
-  Phase 2b rows: retire `pool_weighted_total()` narrative; document `rate_at_epoch` as
-  the sole yield schedule surface for `StakeEngine`.
-- Grep-retire `pool_weighted_total` production callers (`economics.rs`,
-  `chain_economics_source.rs`, tests).
+**Finalized semantics (the seven pins):**
+
+1. **`rate_epoch` is a rate-epoch *index*, not a block height.** It is 0-based and aligned
+   to the consensus rate-epoch schedule (tier-3 lock = 150k blocks / `rate_epoch_blocks`
+   10k = 15 settlement-epochs, §3.3.2). Height→epoch conversion is the **caller's**
+   (StakeEngine's) job, using the public `rate_epoch_blocks` from `parameters_snapshot()`;
+   the method does not take a height and does not guess the epoch length.
+
+2. **Return is the public rate `ρ_e`, a fixed-point `u64` — not an amount, so not
+   `AtomicUnits`.** `ρ_e` is reward-per-unit-weight-per-block (`K_S = Σ_{e ∈ S} ρ_e ·
+   rate_epoch_blocks`, §4.5). Its fixed-point **scale is consensus-defined upstream**; the
+   wallet consumes the scale, it does not invent it (§8.5 "does not invent consensus
+   constants"). A dedicated `Rate` newtype is **out of scope** for this amendment —
+   reopen-pointer: if a `Rate` newtype lands wallet-wide (sibling to `AtomicUnits`), this
+   return adopts it then, not now (rule 21).
+
+3. **Fallible by design — the improvement over `pool_weighted_total`.** `pool_weighted_total`
+   is infallible (`-> u128`) and so **overloads `0`** (no-stake vs not-synced; see its
+   rustdoc). `rate_at_epoch` returns `Result`, so "unknown" is an explicit `Err`, never an
+   overloaded value: `Err` arms are (a) **rate-epoch not yet settled** (future/in-progress
+   epoch — its rate is not yet consensus-fixed), (b) **mirror not synced** to cover the
+   epoch, (c) defensive arithmetic overflow.
+
+4. **`Ok(0)` is valid and distinct from `Err`.** A *settled* epoch with an empty staker set
+   legitimately has `ρ_e = 0` (no yield that epoch) — consensus burns rather than carries
+   (cf. `pool_weighted_total` zero-semantics). `Ok(0)` = "settled, no yield"; `Err` =
+   "cannot determine." This cleanly un-overloads the two meanings `pool_weighted_total`'s
+   `0` conflated.
+
+5. **Consensus-derived, not wallet-recomputed (Bug-2-class avoidance).** `ρ_e` is derived
+   from the on-chain `band_sum` at the epoch (the denominator the network agrees on),
+   verifiable by full nodes. The V3.0 implementor sources it from chain-mirror economics
+   state (as `base_emission_at` will once a per-height mirror exists), **not** from a
+   wallet-local `shekyl-staking::Registry`. Light clients carry residual trust → warn on
+   stale/inconsistent rate (§7 malicious-daemon row).
+
+6. **The `AtomicUnits` boundary is here (tailwind from the interim PR).** `rate_at_epoch`
+   returns the *rate*; StakeEngine forms yield `own_weight · K_S` and that product is the
+   crossing into `AtomicUnits` — exactly the checked-arithmetic centralization site the
+   `AtomicUnits` newtype exists for. The multiply-then-scale uses `AtomicUnits` checked
+   arithmetic; `ρ_e` (`u64`) and `own_weight` enter, an `AtomicUnits` claimable leaves.
+
+7. **No per-stake state (§8.2 reversion preserved).** The method takes a rate-epoch index;
+   per-stake yield is composed by StakeEngine over the public schedule. Methods on
+   `EconomicsEngine` that take `stake_id` or encode per-stake state remain rejected (reopen
+   only via §10.6.1 of the trait-boundaries doc).
+
+**`pool_weighted_total` disposition — delete, not renarrate (rule 15 + rule 21).** Its
+rustdoc names its **sole** intended consumer as "Phase 2b's `StakeEngine::projected_yield`"
+denominator; the confidential redesign eliminated the daemon-supplied denominator entirely
+(§7: "there is no daemon-supplied denominator anymore"), and it has **zero** V3.0
+consumers today. A method whose only named consumer no longer exists is dead surface, not
+superseded surface — so it is **removed**, not rewritten. **Reopen-criterion (rule 21):**
+re-add a public pool-aggregate method only if a future consumer needs an aggregate
+pool-weighted total that **cannot** be composed from `rate_at_epoch` + chain-mirror state.
+The underlying `band_sum` mirror (`ChainEconomicsSource::active_weighted_stake`) is **not**
+deleted by this — it is repurposed as `rate_at_epoch`'s internal `ρ_e`-derivation input
+(internal state, not a public trait method).
+
+**Stage-3 grep-retire / delete enumeration** (the code action; design is closed now, code
+lands with Stage 3):
+
+- `rust/.../traits/economics.rs` — remove `fn pool_weighted_total(&self) -> u128;` + rustdoc.
+- `rust/.../local_economics.rs` — remove the impl (`:166`) + module-doc bullet (`:21`).
+- `rust/.../economics_differential.rs` — drop the `pool_weighted_total` round-trip assertion
+  (`:154-159`) + module-doc bullet (`:19`).
+- `rust/.../chain_economics_source.rs` — retarget `active_weighted_stake` from "feeds
+  `pool_weighted_total()`" to "feeds `rate_at_epoch`'s `ρ_e` derivation"; update the
+  `:11/:33/:42/:86` doc references.
+- `rust/.../mod.rs` (`:521`), `lifecycle.rs` (`:750`) — update the `pool_weighted_total`
+  shared-state comments to `rate_at_epoch`.
+
+**Boundaries-doc amendment (landed alongside this pin):**
+[`V3_ENGINE_TRAIT_BOUNDARIES.md`](../V3_ENGINE_TRAIT_BOUNDARIES.md) §2.7 "Ownership" — drop
+"pool-weighted stake total" from the canonical-derivation list and name `rate_at_epoch` as
+the per-epoch staking-rate surface that StakeEngine consumes.
 
 **Reversion:** per §8.2 — no per-stake methods on `EconomicsEngine`.
 
@@ -1614,7 +1690,7 @@ transient-per-claim (theft-grade), `(amount, z)` is display-read on every poll a
 at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen clauses
 (§3.3.1): measured-`x`-cost, and claim-completion-gated pruning of spent staked outputs.
 **Async trait RESOLVED (§4.6):** RPITIT-`+ Send` across all methods, five-engine idiom.
-**Both Round-2 R-residuals now closed.** **§4.7 message protocol pinned (D1–D4):** reorg **folded** onto `ApplyStakeEvents { reorg_rewind }` (no `RewindTo`; rewind-first in one uninterruptible turn — atomicity, not just ledger-mirror symmetry); reorg semantics **clear-all/replay-all of the full surviving own-nullifier set across the whole post-reorg chain** (windowed replay drops below-fork survivors of a straddling lock), **heights live in the scanner** not `claimed_epochs`; `claim_pending_epochs` lifecycle = `PrepareClaimBuild` side-effect (set) + `AbandonClaim` (clear, **claim_pending only, never claimed**); `Snapshot` excludes `claim_pending_epochs` / `Restore` starts it empty. **§5's §4.7 carry is thereby discharged; only the consensus-track `pop_block` nullifier-revert** (cross-tree atomicity) **holds the §5 box open.** **§6 user API signed off (2026-06-05):** owner-grade `StakeView` pinned (per-stake `claimable` / `claimed_epochs` / `unlock_height`) **distinct** from the §7 lens-3 redaction (one struct cannot serve both trust grades); amounts are `AtomicUnits` end-to-end (engine/orchestrator/computation; `u64` only at postcard/FFI/consensus edges; `_atomic` suffix dropped); `StakeFilter` declared as a closed by-state enum; abandon-claim discard wiring pinned (§3.4/§6 — general pending-tx discard dispatches `AbandonClaim` for claim-type txs); pre-stake yield projection omitted by decision (§8.6 forward-uncertain); FA-1 regrounded to the single static address with an independent-accounts reopen-pointer (rule 21); stale §3.3 opening doc-comment fixed. |
+**Both Round-2 R-residuals now closed.** **§4.7 message protocol pinned (D1–D4):** reorg **folded** onto `ApplyStakeEvents { reorg_rewind }` (no `RewindTo`; rewind-first in one uninterruptible turn — atomicity, not just ledger-mirror symmetry); reorg semantics **clear-all/replay-all of the full surviving own-nullifier set across the whole post-reorg chain** (windowed replay drops below-fork survivors of a straddling lock), **heights live in the scanner** not `claimed_epochs`; `claim_pending_epochs` lifecycle = `PrepareClaimBuild` side-effect (set) + `AbandonClaim` (clear, **claim_pending only, never claimed**); `Snapshot` excludes `claim_pending_epochs` / `Restore` starts it empty. **§5's §4.7 carry is thereby discharged; only the consensus-track `pop_block` nullifier-revert** (cross-tree atomicity) **holds the §5 box open.** **§6 user API signed off (2026-06-05):** owner-grade `StakeView` pinned (per-stake `claimable` / `claimed_epochs` / `unlock_height`) **distinct** from the §7 lens-3 redaction (one struct cannot serve both trust grades); amounts are `AtomicUnits` end-to-end (engine/orchestrator/computation; `u64` only at postcard/FFI/consensus edges; `_atomic` suffix dropped); `StakeFilter` declared as a closed by-state enum; abandon-claim discard wiring pinned (§3.4/§6 — general pending-tx discard dispatches `AbandonClaim` for claim-type txs); pre-stake yield projection omitted by decision (§8.6 forward-uncertain); FA-1 regrounded to the single static address with an independent-accounts reopen-pointer (rule 21); stale §3.3 opening doc-comment fixed. **§8.6 `rate_at_epoch` finalized (2026-06-05):** the EconomicsEngine yield surface is pinned (7 pins — rate-epoch index in, public fixed-point `ρ_e` out, fallible with `Ok(0)`≠`Err`, consensus-`band_sum`-derived, `AtomicUnits` crossing at the yield product, no per-stake state); `pool_weighted_total` **retired** (rule 15 delete — sole consumer was the redesign-eliminated `projected_yield` denominator, verified at source in both docs) across all 7 `V3_ENGINE_TRAIT_BOUNDARIES.md` sites, code removal deferred to Stage 3. **Both wallet-design Round-2 boxes now closed; the only remaining open box (§5 reconciliation) is designed-complete and held open solely by the consensus-track `pop_block` nullifier-revert cross-track dependency — no further wallet design work blocks Round 3.** |
 | **3** | Open | Threat-model exhaustion (§7) + §6 wider-substrate audit (after upstream Round 1) |
 | **4** | Open | Binding pins (trait signatures, error enums, persistence version; **no stake sealed-region format** — opening dissolved, §4.2) |
 | **5** | Open | Closure + Stage 3 PR decomposition |
@@ -1636,7 +1712,7 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 - [x] **`StakeOpening` excludes `x`** (§3.3.1 / §8.8, R0-D8)
 - [x] **`G_S` + claim linkability + `MAX_EPOCHS_PER_CLAIM`** pinned with **(B)** (§8.5 / upstream §6.4.2)
 - [x] **Tier/window / multiplier integrity** — upstream **(C)** closed on **3C** (staking subtree + `h_bind`, window arithmetic); **(A)** reserve-DLEQ + bounded remainder; impl Round 2
-- [ ] `EconomicsEngine::rate_at_epoch` + boundaries doc amendment (§8.6)
+- [x] `EconomicsEngine::rate_at_epoch` + boundaries doc amendment (§8.6) **— finalized (2026-06-05).** Seven pins: rate-epoch *index* (not height); returns public `ρ_e` as fixed-point `u64` (a rate, not `AtomicUnits`; consensus-defined scale); fallible with `Ok(0)`≠`Err` (un-overloads `pool_weighted_total`'s `0`); consensus-derived from on-chain `band_sum`, not wallet-recomputed; the `AtomicUnits` crossing is the yield product `own_weight·K_S`; no per-stake state (§8.2). **`pool_weighted_total` retired (delete, not renarrate — rule 15):** its sole named consumer (`projected_yield`'s pool denominator) was eliminated by the confidential redesign, verified at source in *both* the trait rustdoc and `V3_ENGINE_TRAIT_BOUNDARIES.md`; reopen-criterion is rule-21-shaped. Boundaries doc amended across all 7 sites (§2.7 Ownership, method sketch, consumer narrative, discipline-test example, three classification tables) — framed "retired pending Stage-3 code removal." Code removal + `active_weighted_stake` repurposing enumerated in §8.6 for Stage 3.
 - [x] **Upstream consensus Round 1 closed** (§8.0; [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §14)
 - [ ] Round 3 design closure recorded in §9
 
