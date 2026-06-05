@@ -1,10 +1,12 @@
 # `AtomicUnits` amount-newtype — design note
 
-**Status:** scope-first design note (pre-implementation). Per
-`05-system-thinking.mdc` ("specification first, code second"), this note
-fixes the scope, the type contract, the complete conversion-edge boundary,
-and the migration discipline **before** any code lands. Sign-off on this
-note gates the implementation.
+**Status:** **implemented** (interim PR, 2026-06-05). This note was written
+scope-first per `05-system-thinking.mdc` ("specification first, code second")
+to fix the scope, type contract, complete conversion-edge boundary, and
+migration discipline before code; it now documents the landed design. The
+`shekyl-units` crate owns `AtomicUnits`; the amount domain carries it; raw
+`u64` survives only at the §4 edges; the CLI display is reconciled to `10^9`.
+`fmt` / `clippy -D warnings` / per-crate `test` are green.
 
 **Timeframe (`05-system-thinking.mdc`):** addresses **now** (pre-genesis
 wallet correctness). The type is forward-compatible with the mining-era and
