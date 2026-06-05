@@ -213,7 +213,7 @@ impl RecoveredWalletOutput {
             y: Zeroizing::new([0u8; 32]),
             z: Zeroizing::new([0u8; 32]),
             k_amount: Zeroizing::new([0u8; 32]),
-                combined_shared_secret: Zeroizing::new([0u8; 64]),
+            combined_shared_secret: Zeroizing::new([0u8; 64]),
             key_image: KeyImage::from_canonical_bytes([0u8; 32]),
             amount: AtomicUnits::from_raw(amount),
             // Synthetic test fixtures don't exercise the engine
