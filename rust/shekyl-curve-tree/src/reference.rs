@@ -171,8 +171,11 @@ pub fn proof_expired(tip_now: u64, reference_height: u64) -> bool {
 /// This is the proactive companion to the reactive `ProofStale` signal
 /// (2A §3.6): reactive catches a root that went stale unexpectedly; this
 /// keeps the wallet from carrying a proof until it hits the hard
-/// [`proof_expired`] boundary. Because `REBUILD_AT < MAX_AGE`,
-/// `should_reanchor` fires strictly before `proof_expired`.
+/// [`proof_expired`] boundary. In the age-based path, because
+/// `REBUILD_AT < MAX_AGE`, `should_reanchor` fires strictly before
+/// [`proof_expired`]; in the reorg path (reference above the tip, age
+/// `None`) both fire together — the anchor is gone, so re-anchor and
+/// expiry coincide.
 #[must_use]
 pub fn should_reanchor(tip_now: u64, reference_height: u64) -> bool {
     match reference_block_age(tip_now, reference_height) {

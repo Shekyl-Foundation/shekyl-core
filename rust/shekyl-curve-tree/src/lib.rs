@@ -36,8 +36,8 @@
 //!   path (CT-1, gated behind the CT-2 KAT baseline).
 //! - [`assemble`]: membership-path assembly (CT-4).
 //! - [`client`]: orchestration over synced blocks (CT-3).
-//! - [`reference`]: reference-block selection + proof validity-horizon
-//!   arithmetic (§5), pure functions over heights.
+//! - [`reference`](mod@reference): reference-block selection + proof
+//!   validity-horizon arithmetic (§5), pure functions over heights.
 
 #![deny(unsafe_code)]
 

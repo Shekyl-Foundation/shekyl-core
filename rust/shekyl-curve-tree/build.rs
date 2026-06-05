@@ -14,8 +14,9 @@
 //! (`CURVE_TREE_CLIENT.md` §3.1, `17-dependency-discipline.mdc`).
 //!
 //! Only the two reference-block ages used by the client's reference-block
-//! selection (`reference::REF_ANCHOR_AGE`) and validity horizon
-//! (`reference::REBUILD_AT`, `proof_within_horizon`) are emitted here.
+//! selection (`reference::REF_ANCHOR_AGE`) and validity-horizon predicates
+//! (`reference::REBUILD_AT`, `proof_submittable`, `proof_expired`,
+//! `should_reanchor`) are emitted here.
 
 use std::collections::BTreeMap;
 use std::env;
