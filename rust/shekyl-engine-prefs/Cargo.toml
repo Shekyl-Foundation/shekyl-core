@@ -52,6 +52,11 @@ rustix = { version = "1", features = ["fs"] }
 # load/save by bytes.
 serde = { version = "1", features = ["derive"] }
 
+# `AtomicUnits` amount newtype for the coin-selection / RPC-credit amount
+# fields (docs/design/ATOMIC_UNITS_NEWTYPE.md). TOML stays byte-identical
+# via `#[serde(transparent)]`.
+shekyl-units = { path = "../shekyl-units" }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.60", features = [
     "Win32_Foundation",
