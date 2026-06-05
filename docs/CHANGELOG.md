@@ -22,11 +22,38 @@
   small-shielded-pool lesson with a tier×exact-creation-height multiplier). F0
   **reframes T1/T2/T3 into one variable** (cohort size), **re-opens**
   `CONFIDENTIAL_STAKING.md` §14.4 item-9, and **re-gates Round 3 closure** on a consensus
-  policy decision: an explicit **`{tier × creation_height}` claim-cohort k-anonymity
-  gate** *or* explicit accept-for-v1 with the cross-claim-linkage consequence on record.
-  **The §14 `band_sum` floor does not close this** — it smooths the public-rate readout (a
-  separate leak); cold-start needs both ("incentivize more staking" fixes absolute size,
-  not the partition). Other synthesis outcomes: inflation **T8 split**
+  policy decision that is **three-way, not binary**: (1) **accept-exact** (a high,
+  eyes-open product bar — P1>P2 licenses the reveal but does not *price* the residual, which
+  is confidentiality materially weaker than the spend path's whole-chain set for stakers);
+  (2) **cleartext `creation` bucketing** (the cheap middle — bind a bucketed creation into
+  `h_bind`; cohort → `{tier × bucket}`; all cleartext, no circuit/primitive; **hard
+  inflation constraint: round creation UP** as the single canonical value for lower-bound +
+  `eff_lock` + lock-enforcement — round-down silently inflates; cost = bounded ≤W lock-shift;
+  tier axis irreducible without V4); or (3) **V4 in-circuit hiding** (removes the tier axis,
+  at 3A circuit + 8a re-audit cost). **The reveal also shrinks the 8a entitlement circuit**
+  (cleartext checks stay out of the circuit → tighter soundness perimeter on the existential
+  item; a V4 hide is therefore *not* security-neutral — it grows the 8a re-audit surface, a
+  named V4 cost). **The §14 `band_sum` floor does not close this** — it smooths the
+  public-rate readout (a separate leak); cold-start needs both ("incentivize more staking"
+  fixes absolute size, not the partition). **T7 (DDH / `G_S`-NUMS-independence) is elevated
+  by F0** to the soundness tier — cohort linkage is now chain-owned, so DDH is the sole
+  on-chain protection for within-cohort claim unlinkability, and per-claim circuit hygiene
+  is re-scoped to "don't let the network undo DDH." **Baseline-budget
+  calibration (2026-06-05) de-escalates the decision:** F0 is the **same category** of cost
+  the project accepted *before* confidential staking (staking is the exposed overlay; the
+  spend path is untouched; the core promise is intact), exceeding baseline only in
+  **scale-resistance** (the block-granular cohort does not dilute with growth — a
+  *steady-state* thinness) and **targeted-cascade**; the marginal delta over the realistic
+  already-linkable counterfactual most penalizes the privacy-conscious staker. So **option 2
+  (bucketing) is the recommended v1 disposition** (restores dilution-with-growth toward the
+  accepted membership-shaped baseline), and the remaining consensus decision **shrinks to
+  ratify bucketing + pick width `W`**. **De-tiering (the economic redesign) is deferred
+  V-future** — reject-now-with-reopening-criterion (a high-value-target threat model on the
+  within-tier within-bucket residual); the economics are a designed counterweight and
+  bucketing likely already closes the gap, so it is **not** a forced move: a *derivative*
+  (uniform) reward would drop the `tier` field from the wire (cohort → `{creation_bucket}`),
+  but `creation`/height stays (time-accrued reward needs a provable accrual-start = the same
+  3C-vs-3A choice). Other synthesis outcomes: inflation **T8 split**
   into **8a entitlement-proof soundness** + **8b band-declaration binding** (co-equal
   silent-inflation surfaces — the band↔`C_stake` range proof must carry the same rigor
   as the value range proof); new adversary **A5** (economic/rational — bank-run /
@@ -42,6 +69,58 @@
   (slashing-griefing, nothing-at-stake, long-range revision, equivocation,
   stake-grinding). §7.4 gains A5; §9 row + §10.1 boxes re-gated on F0; `FOLLOWUPS.md`
   V3.1 entry updated.
+- **stake-lifecycle: F0 bucketing quantified + window-adaptivity + self-advertisement
+  input.** `docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (2026-06-05). **Bucketing
+  math:** cohort `≈ W·λ/3`; exact-height baseline is `W=1` (per-block, scale-resistant);
+  `W>1` is a tunable multiplier *and* restores dilution-with-growth. Cost is a bounded,
+  **tier-relative** lock-shift (flat `W=720` ≈ +72 % on a tier-1 1,000-block lock vs
+  ~0.5 % on tier-3 150k) → **scale `W` per tier**, all publicly derived from the revealed
+  `tier` (no new leak). **Window-adaptivity (open `W`-choice):** sliding the window to a
+  participant floor `k` — *hard* count-closed buckets **rejected** (future-state ceiling →
+  non-causal binding, reorg-unstable membership, cold-start deadlock, new high-resolution
+  `λ(t)` width-leak, Sybil binning-knob, caps cohort at `k`); *soft* DAA-style
+  `W(tier,epoch)=clamp(⌈k·B/λ̂_tier⌉,W_min,W_max)` frozen-at-binding is the **candidate**
+  (past-state → reorg-stable, no new aggregate leak, adapts cost to need) under
+  servo-stability discipline (clamp+lag+slew per `75-system-autonomy.mdc`); honest limit —
+  no scheme makes `k`-anonymity from `<k` total stakers. **`λ̂_tier` estimator reuses the
+  LWMA-1 difficulty algorithm, estimator-half only** (no setpoint/retarget; over per-tier
+  height-keyed creation counts → immune to the timestamp surface difficulty defends;
+  window re-tuned longer than difficulty's, since responsiveness is double-edged —
+  aids cold-start but eases Sybil flood-thinning). **Self-advertisement
+  threat-model input:** Shekyl ships shareable shard-art (`V3_SHARD_VISUALIZATION.md`) and
+  tier↔archival-role legibility (`V3_STAKER_ARCHIVAL.md`) → many stakers self-doxx; for
+  them F0's marginal cost ≈ 0 (reinforces "F0 penalizes the privacy-conscious"), and for
+  the silent tail self-doxx by others **erodes the cohort by elimination** (so `W` must
+  clear `k` *after* attrition). **Cross-track:** share feature + on-chain holder-registry +
+  distinctive held-shard-sets can bridge identity → on-chain-holder → claim-cohort — an
+  archival / `shekyl-shard-visual` privacy-review item, not Phase 2B scope. `FOLLOWUPS.md`
+  V3.1 entry extended.
+- **stake-lifecycle: F-ARCHIVAL — archival commitment binding is the load-bearing
+  whole-system tier/membership question, outranks the F0 `W`-choice.**
+  `docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (new finding, 2026-06-05), with
+  `docs/V3_STAKER_ARCHIVAL.md` + `docs/V3_SHARD_VISUALIZATION.md` updated. Reading the
+  archival + visualization docs together surfaces three couplings the sharing reality
+  activates: **(1) archival *is* staking** ("if you stake, you archive") → archival
+  visibility = membership disclosure, now wired to a virality-engineered feature; **(2) the
+  portfolio is a tier oracle by economic design** (tier-sorted shards → held shards ⇒ tier),
+  a channel *separate from the claim wire* — so **whole-system tier privacy needs both the
+  claim-wire tier (F0) and the archival tier-weighted pricing weakened**, further devaluing
+  de-tiering-alone (reinforces parking it); **(3) gamification selects high-value targets**
+  (rarest = most shareable = most identifying). **Load-bearing undecided question: is the
+  archival commitment public address-bound or privately membership-proof-bound?** Draft
+  mechanisms (on-chain challenge-response, holder registry, identified reward routing) lean
+  **public** — and public + mandatory archival + tier-sorted shards = every staker's
+  membership and tier **public by construction, no sharing required** (dwarfs F0). **Private
+  is the presumption** (architectural consistency with the privacy-first claim/unstake model;
+  public is the inherited "easier to count" convenience); the hard part is **private
+  replication counting** for `1/R` scarcity pricing (private set cardinality). Priority
+  actionable set: (1) resolve public-vs-private binding (gates all); (2) weaken tier-weighted
+  pricing (explicit economics-vs-privacy); (3) HKDF-separate archival identity from
+  claim/spend; (4) share-UX privacy warnings (graceful degradation). **Non-sharer bucketing
+  privacy is conditional on (1)+(2)** — bucketing softens only the last cascade link.
+  Organizing principle: graceful degradation (share discloses only what you chose, no silent
+  cascade to tier/claim-history/amounts). Decide before `ArchivalEngine` ships; `FOLLOWUPS.md`
+  V3.1 entry extended.
 - **stake-lifecycle: Round 3 wargame executed — threat model exhausted against
   privacy-crypto history.** `docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5 drives
   every §7.4 agenda item (T1–T9, G1–G10) to a disposition and **augments** the

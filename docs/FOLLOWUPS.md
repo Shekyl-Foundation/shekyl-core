@@ -2441,12 +2441,46 @@ sustainability is unaffected by the recalibration.
   §6.4.8), revealed-by-design and load-bearing for inflation-safety (§6.4.3 — the single
   revealed `tier` drives both `h_bind` and the multiplier; the 3C-over-3A "no new
   primitive" win). So claim↔claim linkage is **deterministic exact-match** and the open
-  item is a **consensus policy decision**: add an explicit **`{tier × creation_height}`
-  claim-cohort k-anonymity gate** *or* explicitly accept-for-v1 with the cold-start
-  cross-claim-linkage consequence on record (full hiding = V4/L4, co-designed with the
-  entitlement circuit). **The §14 `band_sum` floor does *not* close this** — it smooths
-  the public-rate readout (a different leak); cold-start needs both. This **re-opens**
-  `CONFIDENTIAL_STAKING.md` §14.4 item-9 and re-gates Round 3 closure. Also: the
+  item is a **consensus policy decision — three-way, not binary**: (1) **accept-exact**
+  for v1 (high, eyes-open product bar — P1>P2 licenses the reveal but does *not* price the
+  residual; this is materially weaker than the spend path's whole-chain set for stakers);
+  (2) **cleartext `creation` bucketing** (the cheap middle — bind a bucketed creation into
+  `h_bind`, cohort → `{tier × bucket}`, width `W` = cohort ⇄ cost dial, *all cleartext, no
+  circuit/primitive*; **hard inflation constraint: round creation UP** to the bucket
+  ceiling and make it the single canonical value for lower-bound + `eff_lock` + lock-
+  enforcement — round-down silently inflates by admitting pre-stake epochs; cost = bounded
+  ≤W lock-shift; the **tier axis stays** — irreducible without V4); or (3) **V4 in-circuit
+  hiding** (only path that removes the tier axis, at 3A circuit cost + 8a re-audit cost).
+  **Baseline-budget calibration (2026-06-05) de-escalates the decision:** F0 is the **same
+  category** of cost the project accepted *before* confidential staking (staking is the
+  exposed overlay; spend path untouched; core promise intact); it exceeds baseline only in
+  **scale-resistance** (block-granular cohort does not dilute with growth — a *steady-state*
+  thinness, not just cold-start) and **targeted-cascade** (one foothold cascades to the whole
+  claim history). Marginal delta over the realistic already-linkable counterfactual
+  (timing/fingerprint/circuit-reuse) is "exact-vs-statistical" + the creation-anchor, **most
+  penalizing the privacy-conscious staker**. **So option 2 (bucketing) is the *recommended
+  v1 disposition*** — it restores dilution-with-growth, bringing the cost back toward the
+  membership-shaped baseline; the residual within-tier within-bucket cohort **probably sits
+  inside the accepted budget**. The remaining consensus decision **shrinks to: ratify
+  bucketing + pick width `W`** (the k-anonymity gate and V4 remain available, not the v1 ask).
+  **The §14 `band_sum` floor does *not* close this** — it smooths the public-rate readout (a
+  different leak). **The reveal also shrinks the 8a entitlement circuit** (cleartext checks
+  stay out of the circuit → tighter soundness perimeter on the existential item); a V4 hide
+  grows the 8a re-audit surface — a named security cost on the V4 design. This **re-opens**
+  `CONFIDENTIAL_STAKING.md` §14.4 item-9 and re-gates Round 3 closure. **T7 (DDH /
+  `G_S`-NUMS-independence) is elevated by F0** to the soundness tier — with cohort linkage
+  now chain-owned, DDH is the *sole on-chain protection* for within-cohort claim
+  unlinkability (network circuit-hygiene re-scoped to "don't let the network undo DDH,"
+  not "break the sequence"). **Economic-redesign alternative (de-tiering) — deferred
+  V-future, decided 2026-06-05, *not* a forced move:** if reward were *derivative*
+  (uniform/global rate, not a declared tier) the `tier` field could leave the wire (cohort →
+  `{creation_bucket}`, tier axis gone) — but `creation`/height stays (time-accrued reward
+  needs a provable accrual-start = the same 3C-vs-3A choice); "nothing" only if reward stops
+  being time-accrued. The economics are a **designed counterweight** (not to be unbalanced),
+  and bucketing likely already closes the gap, so per `21-reversion-clause-discipline.mdc`
+  this is **reject-now-with-reopening-criterion: reopen only if a high-value-target threat
+  model shows the within-tier within-bucket residual is unacceptable.** If reopened, spec-first
+  consensus-economics round per `05-system-thinking.mdc`. Also: the
   **band-declaration binding (T8/8b)** — the
   band↔`C_stake` range proof must carry the **same rigor as the value range proof**
   (silent-inflation surface co-equal with entitlement soundness); and the **A5
@@ -2458,6 +2492,55 @@ sustainability is unaffected by the recalibration.
   scan T13; `OutputRef`-keying T12; prover-bundle zeroization T5; **constant-time
   claim-build crypto (Schnorr / membership / nullifier scalar work — new, T5/§7.5.3)**;
   claim via `PendingTxEngine` staleness gate G6; canonical wire ordering G12.
+  **Bucketing quantified (2026-06-05):** cohort `≈ W·λ/3`; the exact-height baseline is
+  `W=1` (per-block, scale-resistant); `W>1` is a tunable multiplier *and* restores
+  dilution-with-growth (cohort rises with `λ`). Cost = bounded, **tier-relative**
+  lock-shift (flat `W=720` ≈ +72 % on a tier-1 1,000-block lock vs ~0.5 % on tier-3
+  150k) → **scale `W` per tier** (smallest for hot-set tier-1, largest for tier-3, all
+  publicly derived from the revealed `tier`, no new leak). **`W`-choice — fixed vs.
+  adaptive (open):** the floor `k` (min participants) is the target; *hard*
+  count-closed buckets are **rejected** (ceiling becomes a future-state function →
+  non-causal binding, reorg-unstable membership, cold-start deadlock, and a new
+  high-resolution `λ(t)` width-leak + Sybil binning-knob); the *soft* DAA-style
+  `W(tier,epoch)=clamp(⌈k·B/λ̂_tier⌉,W_min,W_max)` frozen-at-binding is the **candidate**
+  (past-state → reorg-stable, no new aggregate leak since `λ̂_tier`/`tier` already public,
+  adapts cost to need) but inherits **servo-stability discipline** (clamp+lag+slew per
+  `75-system-autonomy.mdc`); honest limit — no scheme makes `k`-anonymity from `<k`
+  total stakers. **`λ̂_tier` estimator: reuse the LWMA-1 difficulty algorithm,
+  estimator-half only** (no setpoint/retarget; over per-tier *height-keyed creation
+  counts* → immune to the timestamp surface difficulty defends; window `N` re-tuned
+  *longer* than difficulty's since responsiveness is double-edged here — fast tracking
+  aids cold-start but eases Sybil flood-thinning). Defer `k`/clamps/slew/**LWMA-window**
+  to consensus-policy review + the `V3_STAKER_ARCHIVAL.md` population simulation. **Self-advertisement threat-model input
+  (2026-06-05):** Shekyl ships shareable shard-art (`V3_SHARD_VISUALIZATION.md`,
+  "print/share rendering") and tier↔archival-role legibility (`V3_STAKER_ARCHIVAL.md`,
+  tier-3=deep archivist) → a large fraction of stakers will **self-doxx**. For them F0's
+  marginal cost ≈ 0 (reinforces "F0 penalizes the privacy-conscious"); for the silent
+  tail, self-doxx by others **erodes the cohort by elimination** (sharpest in thin
+  cohorts) → `W` must clear the floor *after* self-doxx attrition. **Cross-track:** the
+  share feature + an on-chain holder-registry (archival open question) + distinctive
+  held-shard-sets can bridge real-world-identity → on-chain-holder → (composed with F0)
+  claim-cohort — an **archival / `shekyl-shard-visual` privacy review item** before that
+  ships, not Phase 2B wallet scope. **F-ARCHIVAL (2026-06-05) — outranks and *gates* the F0
+  `W`-choice.** Archival *is* staking ("if you stake, you archive"), so archival visibility =
+  membership disclosure; the **portfolio is a tier oracle by economic design** (tier-sorted shards →
+  held shards ⇒ tier), a channel *separate from the claim wire* → **whole-system tier privacy needs
+  both the claim-wire tier (F0) *and* the archival tier-weighted pricing weakened**, which **further
+  devalues de-tiering-alone** (reinforces parking, does not reopen); gamification selects high-value
+  targets (rarest = most shareable = most identifying). **Undecided load-bearing question: archival
+  commitment *public address-bound* vs. *privately membership-proof-bound*?** Draft mechanisms
+  (on-chain challenge-response, holder registry, identified reward routing) **lean public**; public +
+  mandatory archival + tier-sorted shards = **every staker's membership + tier public by
+  construction, no sharing** (dwarfs F0). **Presumption = private** (consistency with the
+  privacy-first claim/unstake model; public = inherited "easier to count" convenience per
+  `16-architectural-inheritance.mdc`); **hard part = private replication counting** for `1/R`
+  pricing (private set cardinality). Priority actionable set: **(1) resolve public-vs-private binding
+  (gates all)**; (2) weaken tier-weighted pricing (economics-vs-privacy); (3) HKDF-separate archival
+  identity from claim/spend; (4) share-UX privacy warnings. **Non-sharer bucketing privacy is
+  conditional on (1)+(2)** — bucketing softens only the last cascade link, nothing for
+  membership/tier/portfolio. Decide **before `ArchivalEngine` ships** (pre-genesis discount: design
+  private from the start). Cross-track to `V3_STAKER_ARCHIVAL.md` / `V3_SHARD_VISUALIZATION.md`
+  (both updated 2026-06-05).
   **Target:** V3.1. **Ref:**
   [`PHASE_2B_STAKE_LIFECYCLE.md`](./design/PHASE_2B_STAKE_LIFECYCLE.md) §7.5 / §7.5.3.
 

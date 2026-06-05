@@ -204,6 +204,24 @@ for archival, not just the count. Tier-3 stakers become the network's
 long-term archivists; tier-1 stakers are the marginal hot-set. The economy
 already created these tiers; archival uses them.
 
+**Privacy cost of this elegance — the portfolio becomes a tier oracle.**
+Because tier sorts onto shard type (tier-1 → hot/recent, tier-3 →
+deep/historical, reward weighted by tier), **which shards a staker holds is
+strong Bayesian evidence of their tier.** This is a tier-disclosure channel
+*entirely separate from* the confidential-staking claim wire — and it is the
+channel the share feature (`docs/V3_SHARD_VISUALIZATION.md`) gamifies stakers
+into advertising. Two consequences, analyzed in
+`docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (finding **F-ARCHIVAL**): (1)
+the claim-wire tier and this archival tier-weighting are **separable levers** —
+**whole-system tier privacy requires weakening both**, so de-tiering the claim
+alone would *not* close the tier leak while this coupling exists and portfolios
+are observable; (2) whether this fires for *every* staker on-chain or *only* for
+self-sharers depends entirely on the commitment-binding question below. Weakening
+the tier-weighted pricing (toward tier-blind pricing or quick-pick-dominant
+allocation) is an explicit **economics-vs-privacy** choice: it trades the
+tier-archival alignment for portfolio privacy. Tracked as a Stage-5 design-review
+item alongside the binding decision.
+
 ### Privacy: mandatory anonymization on queries
 
 Open concern. A staker serving "wallet at IP X queried block H's curve
@@ -228,6 +246,66 @@ For V3.x ship of the archival mechanism, mandatory Tor/I2P is
 sufficient. The privacy story for distributed archival is *better* than
 foundation-only archival, because trust is distributed across stakers
 (no single trusted operator) rather than concentrated.
+
+**Second-order concern — self-advertisement bridges identity to the
+claim cohort (cross-track to staking privacy).** This is separate from
+query metadata. Two archival-side surfaces compose adversarially with
+the confidential-staking claim-cohort leak analyzed in
+`docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (finding F0): (1) the
+**on-chain holder registry** candidate for "Query routing protocol"
+(below) publishes which staker holds which shard; and (2) a staker's
+**held shard-set is distinctive** for active rare-shard hunters. Because
+shard visualizations are *designed to be shared*
+(`docs/V3_SHARD_VISUALIZATION.md`, "print/share rendering"), a staker who
+posts their portfolio bridges real-world identity → on-chain holder →
+(composed with F0's revealed `tier`/`creation`) their claim cohort.
+Tier-role legibility (tier-3 = deep archivist) lets ordinary bragging
+leak `tier` for free. The mitigation is not more query anonymization;
+it is a **privacy review of the holder-registry shape and the share
+feature against claim-cohort linkage** before `ArchivalEngine` /
+`shekyl-shard-visual` ship. Tracked in `docs/FOLLOWUPS.md` under the
+F0 V3.1 entry. The query-routing design choice (DHT/registry vs. gossip,
+below) should weigh registry-published holder presence as a privacy cost,
+not only a routing-efficiency tradeoff.
+
+**Commitment binding: public address-bound vs. privately membership-proof-bound
+— OPEN, and load-bearing for the whole staking-privacy story.** The section
+above (and the V3 ship default) covers only *query metadata*. It does not decide
+how the archival *commitment* — "I archive shard X, I earn the reward" — binds to
+identity, and that gap is the highest-value open privacy item in the
+staking/archival surface (`docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3,
+finding **F-ARCHIVAL**). The existing draft mechanisms **lean public**: on-chain
+challenge-response to "shards they claim," an on-chain holder registry ("each
+shard's holders publish presence"), and reward routing to identified servers.
+The two outcomes are not close:
+
+- **Public address-bound** ("address A archives shard X, A earns the reward"
+  on-chain): combined with *mandatory* archival and tier-sorted shards (above),
+  **every staker's membership and approximate tier become public by
+  construction**, with no sharing required. This would be a larger staking-privacy
+  leak than the claim wire itself.
+- **Privately membership-proof-bound**: the commitment proves "a bonded stake of
+  mine covers shard X" *without* revealing which stake or address; rewards route to
+  **stealth outputs**; the archival identity is **HKDF-separated** from the
+  claim/spend identity. Only stakers who *choose* to share expose themselves; the
+  chain-side confidential-staking work retains its value.
+
+**Presumption = private**, on architectural consistency: the rest of staking is a
+privacy-first membership-proof + nullifier + stealth model, and public binding
+would be the inherited "easier to count if public" convenience. The pattern is
+not exotic — data availability is a public good answerable by anyone holding the
+shard; only *reward eligibility* needs identity, and that can be proven privately,
+exactly as claims are. **The hard part is private replication counting:** scarcity
+pricing needs a per-shard distinct-holder count (reward ∝ `1/R`), and counting
+holders *without identifying them* (private set cardinality / proof-of-distinct-
+holders) is the non-trivial primitive public binding gets for free. That is the
+cost a private design must solve, and it does not move the presumption.
+
+This decision **gates** the confidential-staking `W`-bucketing `W`-choice (a
+non-sharer's bucketing privacy is undone if archival publishes their membership
+and tier regardless). Decide it **before `ArchivalEngine` ships** and consistent
+with the claim-privacy posture; the pre-genesis discount favors designing private
+binding from the start over retrofitting it. Tracked in `docs/FOLLOWUPS.md`.
 
 ---
 

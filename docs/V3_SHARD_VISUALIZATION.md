@@ -521,6 +521,49 @@ The default should be conservative: start with shard hash + block
 count + time range only, add other parameters only if they pass
 review. This is safer than starting rich and trimming.
 
+**Distinct concern — the *sharing behavior*, not the parameters.** The
+analysis above establishes that the rendered visual leaks nothing the
+chain doesn't already publish. A separate concern is that this feature
+*exists to be shared* ("Print/share rendering," Open design questions),
+so it manufactures a population of stakers who voluntarily reveal they
+stake. That voluntary disclosure composes with the confidential-staking
+**claim-cohort leak** (`docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3,
+finding F0): a shared portfolio bridges real-world identity → "a staker
+holding shard-set `{S}`," and — composed with F0's cleartext
+`(tier, creation)` and a candidate on-chain holder registry
+(`docs/V3_STAKER_ARCHIVAL.md`) — to that staker's claim cohort. The
+elimination effect matters for the privacy-conscious minority: in a thin
+cohort, self-doxxing by other members shrinks the silent members'
+anonymity set. This is **not** a parameter-derivation issue (so it does
+not change the "always safe / never derive from" lists), but it **is** a
+real deanonymization vector that the archival/visualization privacy
+review must weigh against claim-cohort linkage before ship. Tracked in
+`docs/FOLLOWUPS.md` under the F0 V3.1 entry.
+
+Two structural sharpenings make the sharing vector worse than "reveals
+membership" (full analysis: `docs/design/PHASE_2B_STAKE_LIFECYCLE.md`
+§7.5.3, finding **F-ARCHIVAL**):
+
+- **A shared portfolio is a tier oracle.** Archival sorts tiers onto shard
+  types (`docs/V3_STAKER_ARCHIVAL.md`: tier-1 → hot/recent, tier-3 →
+  deep/historical), so *which shards a staker holds is strong evidence of
+  their tier* — the same tier the confidential-staking claim wire reveals,
+  re-exposed through portfolio composition. Sharing a portfolio therefore
+  leaks tier, not just membership.
+- **Rare = shareable = identifying.** "Legible rarity" gamifies showing off
+  the rarest shard, which is by definition the *most* identifying (few others
+  hold it), and rare-shard hunters skew toward larger, engaged stakers — the
+  high-value targets. The feature's social appeal is mechanically a
+  fingerprint disclosure, concentrated where it hurts most.
+
+**Share-UX is a privacy surface (graceful-degradation requirement).** A user
+who shares should disclose only *what they chose* — "I stake, here's cool
+art" — and not have it silently cascade into tier, claim history, and
+inferable amounts. The share/export path should **warn** that posting a
+portfolio links social identity to staking history, and that the rarer the
+shard, the more uniquely it identifies the holder. This is a V3.x share-UX
+design item, gated with the archival commitment-binding decision.
+
 ---
 
 ## Implementation notes
