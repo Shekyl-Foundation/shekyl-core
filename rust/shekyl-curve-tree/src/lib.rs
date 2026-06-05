@@ -46,4 +46,6 @@ pub mod store;
 pub mod types;
 
 pub use client::{BlockLeaves, ClientError, CurveTreeClient, RawOutput, TxLeafInputs};
-pub use types::{LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
+pub use types::{
+    AssembledPath, ChunkLeaf, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind, TreeContext,
+};

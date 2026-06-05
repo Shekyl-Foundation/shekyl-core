@@ -154,6 +154,7 @@ pub fn collect_block_leaves(
                     gindex: this_gindex,
                     maturity,
                     leaf,
+                    identity: *output,
                 });
             }
         }
@@ -338,11 +339,13 @@ mod tests {
 
     #[test]
     fn non_empty_root_differs_from_empty() {
-        let leaf = try_build_leaf(&coinbase_output()).expect("leaf");
+        let id = coinbase_output();
+        let leaf = try_build_leaf(&id).expect("leaf");
         let entry = LeafEntry {
             gindex: 0,
             maturity: 120,
             leaf,
+            identity: id,
         };
         let scalars = assemble_leaf_stream(&[entry], 120);
         assert_eq!(scalars.len(), SCALARS_PER_LEAF, "one leaf → 4 scalars");
@@ -352,23 +355,27 @@ mod tests {
 
     #[test]
     fn assemble_filters_undrained_and_sorts_by_maturity_then_gindex() {
-        let leaf = try_build_leaf(&coinbase_output()).expect("leaf");
+        let id = coinbase_output();
+        let leaf = try_build_leaf(&id).expect("leaf");
         let entries = [
             LeafEntry {
                 gindex: 5,
                 maturity: 70,
                 leaf,
+                identity: id,
             },
             LeafEntry {
                 gindex: 2,
                 maturity: 70,
                 leaf,
+                identity: id,
             },
             // Not yet drained at cutoff 70.
             LeafEntry {
                 gindex: 1,
                 maturity: 71,
                 leaf,
+                identity: id,
             },
         ];
         let scalars = assemble_leaf_stream(&entries, 70);
