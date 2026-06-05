@@ -11,6 +11,7 @@
 //! 2. Unstake transaction to spend the matured staked output
 
 use shekyl_scanner::{LedgerBlock, LedgerIndexes};
+use shekyl_units::AtomicUnits;
 
 use crate::{
     claim_builder::{ClaimTxBuilder, ClaimTxPlan},
@@ -25,7 +26,7 @@ pub struct ClaimAndUnstakePlan {
     /// Transfer indices to unstake (after claim completes).
     pub unstake_indices: Vec<usize>,
     /// Total staked amount that will be recovered.
-    pub total_unstake_amount: u64,
+    pub total_unstake_amount: AtomicUnits,
 }
 
 /// Build a combined claim-and-unstake plan for the given transfer indices.
@@ -45,7 +46,7 @@ where
 {
     let transfers = ledger.transfers();
     let mut needs_claim = Vec::new();
-    let mut total_unstake = 0u64;
+    let mut total_unstake = AtomicUnits::ZERO;
 
     for &idx in indices {
         let td = transfers
@@ -70,7 +71,9 @@ where
             needs_claim.push(idx);
         }
 
-        total_unstake = total_unstake.saturating_add(td.amount());
+        total_unstake = total_unstake
+            .checked_add(td.amount())
+            .expect("unstake amount total overflowed total supply bound");
     }
 
     let claim_plan = if !needs_claim.is_empty() {

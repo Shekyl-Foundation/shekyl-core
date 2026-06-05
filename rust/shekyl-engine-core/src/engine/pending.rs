@@ -93,6 +93,7 @@ use shekyl_address::Network;
 use shekyl_engine_state::SubaddressIndex;
 #[cfg(test)]
 use shekyl_engine_state::{LedgerBlock, NetworkSafetyConstants};
+use shekyl_units::AtomicUnits;
 
 use crate::engine::{
     diagnostics::DiscardReason,
@@ -110,7 +111,7 @@ use crate::engine::refresh::{derive_snapshot_id, LedgerSnapshot};
 /// against the caller's [`FeePriority`]. The constant is non-zero so
 /// that lifecycle tests exercising [`Reservation::fee_atomic_units`]
 /// run against a real value rather than zero-as-special-case.
-pub const STUB_FEE_ATOMIC_UNITS: u64 = 1_000;
+pub const STUB_FEE_ATOMIC_UNITS: AtomicUnits = AtomicUnits::from_raw(1_000);
 
 /// Opaque 16-byte content-derived ledger-snapshot digest.
 ///
@@ -200,7 +201,7 @@ pub struct TxRecipient {
     /// network-checked by [`build_pending_tx_in_state`]).
     pub address: String,
     /// Amount to send to this address in atomic units (no fee).
-    pub amount_atomic_units: u64,
+    pub amount_atomic_units: AtomicUnits,
 }
 
 /// Caller request to [`Engine::build_pending_tx`].
@@ -226,7 +227,7 @@ pub struct TxRecipientSummary {
     pub address: String,
     /// Amount the caller asked to send to this destination, in atomic
     /// units, before fee.
-    pub amount_atomic_units: u64,
+    pub amount_atomic_units: AtomicUnits,
 }
 
 /// R14 reservation-extensibility seam.
@@ -341,7 +342,7 @@ pub(crate) struct Reservation {
     /// this field when reconciling unconfirmed-spend tracking against
     /// the daemon's broadcast response.
     #[allow(dead_code)]
-    pub fee_atomic_units: u64,
+    pub fee_atomic_units: AtomicUnits,
     /// Caller's recipient summary. Carried so a UI can describe an
     /// in-flight tx without reaching into `tx_bytes`. Read only via
     /// `Debug`; the same data lives on [`PendingTx::recipients`] for
@@ -372,7 +373,7 @@ pub struct PendingTx {
     /// time.
     pub built_at_tip_hash: [u8; 32],
     /// Fee in atomic units captured at build time (Phase 1 stub).
-    pub fee_atomic_units: u64,
+    pub fee_atomic_units: AtomicUnits,
     /// [`SnapshotId`] derived at build time from the wallet's
     /// ledger snapshot — mirrors the value stored on the
     /// engine-internal `Reservation` side. Caller-visible so
@@ -544,7 +545,7 @@ pub(crate) fn build_pending_tx_in_state(
         });
     };
 
-    let mut total_amount: u64 = 0;
+    let mut total_amount = AtomicUnits::ZERO;
     for r in &request.recipients {
         total_amount =
             total_amount
@@ -565,7 +566,7 @@ pub(crate) fn build_pending_tx_in_state(
         .flat_map(|r| r.selected_transfer_indices.iter().copied())
         .collect();
 
-    let mut candidates: Vec<(usize, u64)> = ledger
+    let mut candidates: Vec<(usize, AtomicUnits)> = ledger
         .spendable_outputs(synced, request.from_subaddress, None)
         .into_iter()
         .filter(|(idx, _)| !reserved.contains(idx))
@@ -574,18 +575,23 @@ pub(crate) fn build_pending_tx_in_state(
     candidates.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
 
     let mut selected = Vec::new();
-    let mut covered: u64 = 0;
+    let mut covered = AtomicUnits::ZERO;
     for (idx, amount) in candidates.iter().copied() {
         if covered >= needed {
             break;
         }
         selected.push(idx);
-        covered = covered.saturating_add(amount);
+        // Accumulating owned outputs; total wallet balance is bounded by
+        // supply (< u64::MAX), so overflow here is a corrupted-state
+        // invariant violation, not a recoverable condition.
+        covered = covered
+            .checked_add(amount)
+            .expect("selected-output sum overflowed total supply bound");
     }
     if covered < needed {
         return Err(SendError::InsufficientFunds {
-            needed,
-            available: covered,
+            needed: needed.to_raw(),
+            available: covered.to_raw(),
         });
     }
     selected.sort();
@@ -817,6 +823,7 @@ mod tests {
         LedgerBlock, LedgerIndexes, LedgerIndexesExt, RecoveredWalletOutput, Timelocked,
         WalletOutput,
     };
+    use shekyl_units::AtomicUnits;
 
     use super::{
         build_pending_tx_in_state, discard_pending_tx_in_state, submit_pending_tx_in_state,
@@ -870,7 +877,7 @@ mod tests {
         TxRequest {
             recipients: vec![TxRecipient {
                 address: "test_address".to_string(),
-                amount_atomic_units: amount,
+                amount_atomic_units: AtomicUnits::from_raw(amount),
             }],
             priority: FeePriority::Standard,
             from_subaddress: None,
@@ -1281,7 +1288,7 @@ mod tests {
         let req = TxRequest {
             recipients: vec![TxRecipient {
                 address: "addr".into(),
-                amount_atomic_units: 1_000,
+                amount_atomic_units: AtomicUnits::from_raw(1_000),
             }],
             priority: FeePriority::Custom(NonZeroU64::new(42).unwrap()),
             from_subaddress: None,

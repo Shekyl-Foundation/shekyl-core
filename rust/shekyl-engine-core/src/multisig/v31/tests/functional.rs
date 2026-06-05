@@ -11,6 +11,7 @@ use crate::multisig::v31::{
     prover::{ProverReceipt, SignatureShare},
     state::{IntentState, TrackedIntent, TxCounterTracker},
 };
+use shekyl_units::AtomicUnits;
 
 #[test]
 fn full_happy_path_state_transitions() {
@@ -43,9 +44,9 @@ fn intent_roundtrip_through_encryption() {
         reference_block_hash: [0x33; 32],
         recipients: vec![IntentRecipient {
             address: vec![1, 2, 3],
-            amount: 500,
+            amount: AtomicUnits::from_raw(500),
         }],
-        fee: 10,
+        fee: AtomicUnits::from_raw(10),
         input_global_indices: vec![42],
         kem_randomness_seed: [0x44; 32],
         chain_state_fingerprint: [0x55; 32],
@@ -143,7 +144,11 @@ fn chain_state_fingerprint_includes_all_fields() {
         reference_block_hash: [0xAA; 32],
         input_global_indices: vec![1, 2, 3],
         input_eligible_heights: vec![100, 200, 300],
-        input_amounts: vec![10, 20, 30],
+        input_amounts: vec![
+            AtomicUnits::from_raw(10),
+            AtomicUnits::from_raw(20),
+            AtomicUnits::from_raw(30),
+        ],
         input_assigned_prover_indices: vec![0, 1, 2],
     };
 
@@ -155,7 +160,11 @@ fn chain_state_fingerprint_includes_all_fields() {
             reference_block_hash: [0xAA; 32],
             input_global_indices: vec![1, 2, 4],
             input_eligible_heights: vec![100, 200, 300],
-            input_amounts: vec![10, 20, 30],
+            input_amounts: vec![
+                AtomicUnits::from_raw(10),
+                AtomicUnits::from_raw(20),
+                AtomicUnits::from_raw(30),
+            ],
             input_assigned_prover_indices: vec![0, 1, 2],
         }
     };
@@ -165,7 +174,11 @@ fn chain_state_fingerprint_includes_all_fields() {
         reference_block_hash: [0xBB; 32],
         input_global_indices: vec![1, 2, 3],
         input_eligible_heights: vec![100, 200, 300],
-        input_amounts: vec![10, 20, 30],
+        input_amounts: vec![
+            AtomicUnits::from_raw(10),
+            AtomicUnits::from_raw(20),
+            AtomicUnits::from_raw(30),
+        ],
         input_assigned_prover_indices: vec![0, 1, 2],
     };
     assert_ne!(h1, fp3.compute());
