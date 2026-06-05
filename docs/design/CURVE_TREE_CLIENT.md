@@ -242,11 +242,24 @@ pub struct OutputIdentity {           // public; what the client matches on (§4
     pub commitment:  [u8; 32],        // C (compressed) — disambiguation
 }
 
-impl CurveTreeClient {
-    /// Select the single tx-level reference block (§5), once per tx.
-    /// (Deferred to a CT-4 follow-up; not in the assemble_path landing.)
-    pub fn select_reference_block(&self) -> Result<ReferenceBlock, ClientError>;
+// Reference-block selection (§5) is NOT a CurveTreeClient method: the
+// client stores no header roots, so selection is height arithmetic the
+// caller drives against its own chain view (landed in `reference.rs`).
+mod reference {
+    /// Canonical reference height for a proof built at `tip`:
+    /// `tip − REF_ANCHOR_AGE` (§5.1). `None` in the pre-maturity window.
+    pub fn select_reference_height(tip: u64) -> Option<u64>;
+    /// `tip_now − reference_height`; `None` if the ref is above the tip (reorg).
+    pub fn reference_block_age(tip_now: u64, reference_height: u64) -> Option<u64>;
+    /// In the daemon acceptance window `MIN_AGE ≤ age ≤ MAX_AGE` (§5.2).
+    pub fn proof_submittable(tip_now: u64, reference_height: u64) -> bool;
+    /// Aged past `MAX_AGE` (or ref above tip) — daemon rejects as too stale.
+    pub fn proof_expired(tip_now: u64, reference_height: u64) -> bool;
+    /// Reached `REBUILD_AT` (or ref above tip) — re-anchor proactively (§5.2).
+    pub fn should_reanchor(tip_now: u64, reference_height: u64) -> bool;
+}
 
+impl CurveTreeClient {
     /// Assemble the path for one owned output at a chosen reference block.
     /// `c1_layers.len() + c2_layers.len() + 1 == tree.tree_depth` on success.
     pub fn assemble_path(
@@ -443,6 +456,20 @@ A leaf is in the tree at the reference block iff its insertion (drain) height
 
 ## 5. #5 — Proof validity horizon + reference-block selection
 
+**Status: landed** in `rust/shekyl-curve-tree/src/reference.rs` as total,
+side-effect-free arithmetic over heights (`select_reference_height`,
+`reference_block_age`, `proof_submittable`, `proof_expired`,
+`should_reanchor`) plus the constants `REF_ANCHOR_AGE` (6),
+`PROOF_VALIDITY_HORIZON` (94), and `REBUILD_AT` (50).
+`REFERENCE_BLOCK_{MIN,MAX}_AGE` are emitted from
+`config/consensus_constants.json` by the crate's `build.rs` (same JSON
+authority as the C++ header), with const-eval sentinels guarding the
+5/100 baseline. The functions are **not** methods on
+[`CurveTreeClient`]: the client stores no header roots, so selection is
+height arithmetic the caller drives against its own chain view, and
+binding a height to a consensus root stays the caller's responsibility
+(the caller-supplies-root integrity model, §3.5).
+
 ### 5.1 Reference-block selection (canonical convention)
 
 **Rule:** `reference_height = tip − REF_ANCHOR_AGE`, with
@@ -483,7 +510,7 @@ horizon = MAX_AGE − REF_ANCHOR_AGE = 100 − 6 = 94 blocks
 §9 #5 of 2A left "unbounded in Round 0."
 
 **Proactive rebuild rule:** if a built-but-unconfirmed tx reaches a **rebuild
-threshold** of `REBUILD_AT = MAX_AGE / 2 ≈ 47` blocks of reference-block age, the
+threshold** of `REBUILD_AT = MAX_AGE / 2 = 50` blocks of reference-block age, the
 wallet **re-anchors** (re-selects the reference block at the current tip,
 re-assembles paths, re-proves) rather than risk a `MAX_AGE` rejection mid-flight.
 The half-`MAX_AGE` margin leaves room for propagation + a confirmation attempt.

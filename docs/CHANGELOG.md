@@ -29,6 +29,25 @@
   on Shekyl's `2^32` whole-SKL supply) is reconciled to `10^9` through the
   newtype. Design + complete edge inventory:
   `docs/design/ATOMIC_UNITS_NEWTYPE.md`.
+- **curve-tree: reference-block selection + proof validity horizon (§5).**
+  New `shekyl-curve-tree` `reference` module lands the wallet-side anchor
+  arithmetic: `select_reference_height` (`tip − REF_ANCHOR_AGE`, the
+  privacy-canonical `MIN_AGE + 1 = 6` offset every honest wallet shares),
+  the proof validity horizon (`PROOF_VALIDITY_HORIZON = MAX_AGE −
+  REF_ANCHOR_AGE = 94`), and the proactive re-anchor threshold
+  (`REBUILD_AT = MAX_AGE / 2 = 50`), plus total predicates
+  `reference_block_age` / `proof_submittable` / `proof_expired` /
+  `should_reanchor` mirroring the daemon acceptance window
+  (`MIN_AGE ≤ age ≤ MAX_AGE`, `SpendIntent::validate_temporal`). Selection
+  is height arithmetic, not a `CurveTreeClient` method — the client stores
+  no header roots; binding a height to a consensus root stays the caller's
+  job (caller-supplies-root model, §3.5). `REFERENCE_BLOCK_{MIN,MAX}_AGE`
+  are emitted from `config/consensus_constants.json` by a per-crate
+  `build.rs` (same JSON authority as the C++ header; keeps the crate lean,
+  drift-safe per the 2026-05 FFI constant-drift audit), with const-eval
+  sentinels guarding the 5/100 baseline. Resolves
+  `PHASE_2A_SEND_PATH.md` §9 #5 (proof lifetime "unbounded in Round 0").
+  Spec: `docs/design/CURVE_TREE_CLIENT.md` §5.
 - **curve-tree: CT-4 membership-path assembly.** The `shekyl-curve-tree`
   `assemble` module lands `CurveTreeClient::assemble_path`, producing the
   FCMP++ prover's `Path` for one owned output at a reference block: the
