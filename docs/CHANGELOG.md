@@ -155,6 +155,76 @@
   in-flight FCMP references broadly) — no stake-specific new exposure. §3.3.2 sharpened: the
   **hot reorg path pays nothing** (mask base unmoved when only the drain block is popped);
   the deep-reorg re-anchor is a rare-path correctness item, not a common-path cost.
+- **wallet: stake-opening persistence DISSOLVED — `(amount, z)` re-derived, never at rest
+  (`PHASE_2B_STAKE_LIFECYCLE.md` §3.3.1 / §4.1 / §4.2 / §4.7 / §8.8).** The opening was pinned
+  to the `file_kek`-protected sealed wallet region (claim-forgery-grade secret at rest). That
+  persist-half is **redundant with a re-derive-half the doc already specifies and relies on:**
+  source check confirmed `C_stake = z·G + amount·H` is **plain Pedersen with `z = OutputSecrets.z`**
+  — the standard output blinding, **not** a fresh subtree mask and **no** `τ·H_t` term
+  (`CONFIDENTIAL_STAKING.md` §"Pinned commitment construction (staked outputs, Decision 3C)"
+  + the `z` mask-table row) — so `(amount, z)` recover from the staked output alone via
+  `derive_output_secrets`, the same HKDF expand the §4.2 resync row (and every received-output
+  scan) already runs, with no whole-tx-balancing context. **Pin:** the stake record persists
+  **public fields + `claimed_epochs` only**; there is **no sealed stake region**. The opening is
+  **re-derived on hydration** (`Restore`), held in memory for the session (zeroized on drop), and
+  constructed in-process at build-time registration (`Secret<StakeOpening>` move, not a sealed
+  blob); `Snapshot` carries no opening. **Exposure flips** from claim-forgery-grade sealed material
+  to **no claim-grade secret at rest** — the dissolution stops persisting a half already re-derived,
+  it does not invent a recovery path. This generalizes R0-D8 (which already excludes theft-grade
+  `x` from persistence) to claim-grade `(amount, z)`: nothing claim- or theft-grade is at rest.
+  **Held-on-hydration over fully-transient (sub-decision):** `x` stays transient-per-claim
+  (theft-grade, claim path already composes it); `(amount, z)` is re-derived once at `Restore` and
+  **held in memory** rather than re-derived per operation, because (a) it is read on every display
+  poll and holding avoids a per-read `KeyEngine` round-trip, (b) it adds **no** marginal at-rest
+  exposure (nothing persists either way) and **no** marginal in-memory exposure that matters (the
+  view key — root of all derivation — is resident all session regardless), and (c) fully-transient
+  would force a claim-build-flow change (R0-D4 / `PrepareClaimBuild` would move `(amount, z)` from
+  held-and-returned to orchestrator-re-derived-via-`KeyEngine`) for that marginal gain. The §3.3.1
+  severity asymmetry (`x` = principal-theft, `(amount, z)` = claim-forgery) justifies the different
+  treatment; the claim-build flow is **unchanged**. **Two distinct reopen clauses (rule 21), do not
+  conflate:** (1) the original R0-D8 `x`-cost clause (reopen *persist-`x`* only if measured resync
+  derivation dominates UX budget and cannot be batched, `PERFORMANCE_BASELINE.md` evidence); (2) the
+  dissolution's own clause — a future ledger-pruning pass that evicts a **spent** staked output
+  before all its accrued epochs are claimed breaks post-unstake re-derivation, and since accrued
+  epochs are claimable **indefinitely** after unstake (R0-D6, not age-bounded), this reopener is
+  **claim-completion-gated, not height-gated**: a pruning pass MUST check per-spent-output
+  claim-completion before evicting. Landed coherently across §0.8/§0.10 framing, R0-D3 transport
+  (in-process `Secret` move, not sealed blob), the `StakeInstance` doc, the §4.7 message table
+  (`Restore` re-derives, `Snapshot` opening-free), the §7 threat table (in-memory not at-rest),
+  §9 Round-2 record + §10.1 (was decided-in-principle → gate-confirmed-at-source → **now landed**;
+  closes the last two Round-2 R-residuals alongside the async split). `CONFIDENTIAL_STAKING.md`
+  needs no change (consensus-side; it only references `x` non-persistence and defers to §3.3.1).
+- **wallet: `StakeEngine` async/sync split resolved — last Phase 2b field residual
+  (`PHASE_2B_STAKE_LIFECYCLE.md` §4.6).** Verified at source that RPITIT-`+ Send` is the
+  established idiom across **five** engines (`KeyEngine` `key.rs:803/887`, `RefreshEngine`
+  `refresh.rs:268`, `PersistenceEngine` `persistence.rs:204/244/280`, `PendingTxEngine`
+  `pending_tx.rs:197/263`, `DaemonEngine` `daemon.rs:206/235`), each **mixing** sync reads
+  with RPITIT actor ops and carrying the `Send` bound in the trait contract for the async
+  wallet-RPC/CLI/GUI call sites. **Ratified, not chosen:** `StakeEngine` stays
+  `Send + Sync + 'static`; every actor-routed method returns `impl Future<…> + Send` (not
+  bare `async fn`, not `async_trait` — a fifth-engine wart). Marked the §4.6 all-sync draft
+  accordingly. **Forced-async four** (`register_pending_stake`, `apply_stake_events`,
+  `prepare_claim_build`, `abandon_claim`) — architecture-forced by secret-locality +
+  rewind-first atomicity. **Reads all-async now, no `StakeView` cache** (anti-pre-
+  provisioning): safe because `prepare_claim_build` is the authoritative path (stands alone,
+  re-validates against current `claimed_epochs`/`claim_pending_epochs` in-turn), so **no read
+  feeds an unvalidated security decision** — every read is display-grade / stale-tolerant /
+  consensus-backstopped (§8.9 staleness-is-UX-not-soundness). Corrected the prior lean that
+  kept `claimable_rewards_atomic`/`unclaimed_epochs` async "regardless": their own backstop
+  argument makes them display-grade like the rest, so the claim-feeding-vs-public split
+  collapses. **Cache is a measured-performance reversion** (rule 21; `PERFORMANCE_BASELINE.md`
+  evidence, not a passive "snapshot already exists") with a **named Stage-5 candidate**
+  (`ArchivalEngine` cross-actor `is_active_staker`/`stake_tier` polling); its shape (almost
+  certainly **uniform** over all reads, `prepare_claim_build` the single validation point) is
+  **confirmed at build time, not pre-baked**. Closes the field-residual pass without
+  pre-provisioning either the cache or its shape. **Deferred sub-item (now resolved):** the
+  `register_pending_stake` opening-persistence descriptor was held pending a §4.2 review — the
+  source check correctly found the opening **dissolution had not landed** (§4.1/§4.2/§3.3.1/§4.7
+  still persisted `(amount,z)` to the sealed region; an earlier turn had referenced it as done
+  from conversational memory, the document-analogue of the enumeration-brittleness the project
+  guards against in code). That review is now complete and the dissolution **landed** as the
+  coherent multi-section change recorded in the next entry, which turns this descriptor to
+  "runtime-only opening from the build context"; the RPITIT-async signature is unaffected.
 - **staking: confidential-claim entitlement `D` pinned + remainder range-proof
   construction closed (Round 2, §6.4.1 decisions 1(a)/1(b)).** Corrected the
   underspecified `D = SCALE` to `D = D_tier · SCALE_rate = 2^(k+1)`: `D_tier = 2`
