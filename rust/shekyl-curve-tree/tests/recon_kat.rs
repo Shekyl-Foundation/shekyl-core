@@ -26,7 +26,10 @@ use shekyl_curve_tree::recon::{
     assemble_leaf_stream, collect_block_leaves, extract_leaf_hashes, per_output_h_pqc,
     root_from_scalars, TxOutputs,
 };
-use shekyl_curve_tree::{OutputIdentity, TargetKind};
+use shekyl_curve_tree::{
+    BlockLeaves, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock, TargetKind,
+    TxLeafInputs,
+};
 
 const FIXTURE: &str = include_str!("fixtures/ct2_tier_a.json");
 
@@ -214,6 +217,121 @@ fn reorg_prefix_and_freeze_lag_are_frozen() {
     let deep_tip = deep.last().unwrap().height;
     let fork_shallow = usize::try_from(deep_tip - shallow_pop).expect("fork height fits usize");
     assert_frozen_through_lag(&shallow, &deep, fork_shallow, "reorg_deep/reorg_shallow");
+}
+
+/// One decoded block for the *production* client path: like [`Block`] but
+/// keeping the raw `0x07` blob and pre-`h_pqc` [`RawOutput`]s, so the
+/// `CurveTreeClient` (not the test) resolves `h_pqc` and threads the index.
+struct ClientBlock {
+    height: u64,
+    root: [u8; 32],
+    blob: Vec<u8>,
+    outputs: Vec<RawOutput>,
+}
+
+fn decode_client_block(b: &Value) -> ClientBlock {
+    let mt = &b["miner_tx"];
+    let outputs = mt["outputs"]
+        .as_array()
+        .expect("outputs array")
+        .iter()
+        .map(|o| RawOutput {
+            output_key: decode_hex32(o["output_key"].as_str().expect("O hex")),
+            commitment: o["commitment"].as_str().map(decode_hex32),
+            target: target_kind(o["target"].as_str().expect("target")),
+        })
+        .collect();
+    ClientBlock {
+        height: b["height"].as_u64().expect("height"),
+        root: decode_hex32(b["curve_tree_root"].as_str().expect("root hex")),
+        blob: decode_hex(mt["pqc_leaf_hashes"].as_str().expect("0x07 blob hex")),
+        outputs,
+    }
+}
+
+fn decode_client_chain(chain: &Value) -> Vec<ClientBlock> {
+    chain["blocks"]
+        .as_array()
+        .expect("blocks array")
+        .iter()
+        .map(decode_client_block)
+        .collect()
+}
+
+/// End-to-end CT-3 obligation: the **production** `CurveTreeClient` —
+/// ingesting reduced blocks, resolving `h_pqc` from the raw `0x07` blob,
+/// threading the global index, and applying its own reference-height →
+/// drain-cutoff mapping — reproduces the consensus header root at every
+/// height, and its integrity gate (`verify_root`) accepts each one. This
+/// is the same equality the recon-direct test proves, routed through the
+/// wallet-facing API instead of the bare `recon` functions.
+#[test]
+fn client_reconstructs_consensus_root_at_every_height() {
+    let f = fixture();
+    for c in f["chains"].as_array().expect("chains") {
+        let name = c["name"].as_str().unwrap();
+        let blocks = decode_client_chain(c);
+
+        // Ingest block-by-block (the live sync shape) and verify the
+        // integrity gate at each connected height.
+        let mut client = CurveTreeClient::new();
+        let mut mismatches = Vec::new();
+        for blk in &blocks {
+            let txs = [TxLeafInputs {
+                is_miner: true,
+                leaf_hash_blob: Some(&blk.blob),
+                outputs: &blk.outputs,
+            }];
+            client.ingest_block(BlockLeaves {
+                height: blk.height,
+                txs: &txs,
+            });
+            let reference = ReferenceBlock {
+                height: blk.height,
+                curve_tree_root: blk.root,
+            };
+            if client.verify_root(&reference).is_err() {
+                mismatches.push(blk.height);
+            }
+        }
+        assert!(
+            mismatches.is_empty(),
+            "chain {name}: client root mismatch at heights {:?}",
+            &mismatches[..mismatches.len().min(10)],
+        );
+    }
+}
+
+/// The production client path and the bare-`recon` path agree height-for-
+/// height: promoting the KAT to the `CurveTreeClient` API changed the
+/// orchestration surface, not the reconstructed values.
+#[test]
+fn client_path_matches_recon_path() {
+    let f = fixture();
+    for c in f["chains"].as_array().expect("chains") {
+        let recon_blocks = decode_chain(c);
+        let recon = reconstruct_roots(&recon_blocks);
+
+        let client_blocks = decode_client_chain(c);
+        let mut client = CurveTreeClient::new();
+        for (blk, recon_root) in client_blocks.iter().zip(&recon) {
+            let txs = [TxLeafInputs {
+                is_miner: true,
+                leaf_hash_blob: Some(&blk.blob),
+                outputs: &blk.outputs,
+            }];
+            client.ingest_block(BlockLeaves {
+                height: blk.height,
+                txs: &txs,
+            });
+            assert_eq!(
+                client.root_at(blk.height),
+                *recon_root,
+                "client/recon divergence at height {}",
+                blk.height,
+            );
+        }
+    }
 }
 
 /// Assert `a` and `b` have byte-identical roots from genesis through the end
