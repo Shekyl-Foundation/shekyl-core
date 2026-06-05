@@ -4207,6 +4207,7 @@ dependencies = [
  "serde",
  "serde_json",
  "shekyl-economics",
+ "shekyl-units",
  "thiserror",
 ]
 
