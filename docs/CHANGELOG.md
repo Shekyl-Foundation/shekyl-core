@@ -358,6 +358,18 @@
   an **8th** dead pool-denominator site the literal-name `pool_weighted_total` sweep missed —
   corrected to per-stake in-memory openings with **no** principal-pool aggregation (exact yield =
   `rate_at_epoch` × own secret weight, §7 / §8.6).
+- **staking: §5 reconciliation box split — wallet design signed off; consensus `pop_block` carry
+  isolated (`PHASE_2B_STAKE_LIFECYCLE.md` §10.1 / §5 / §9).** The §5 planning box conflated the
+  (discharged) wallet-design legs with the (open, external) consensus dependency. Split into:
+  (a) a **checked** wallet-design box — the single full-rebuild un-claim mechanism (§5.2,
+  in-session reorg == post-`Restore`), no-transaction self-heal-on-reopen, cross-engine ordering
+  (§5.3), and the §4.7 message-protocol leg (D1–D4) — *no further wallet design work remains*; and
+  (b) an explicitly-**external cross-track carry** — §5's reorg correctness assumes the consensus
+  `pop_block` path atomically reverts the stake-claim nullifier set (cross-tree atomicity); the
+  wallet mirror is already maximally correct and cannot fix a consensus pop that fails to revert.
+  The carry closes only by confirming `pop_block` behavior upstream (`CONFIDENTIAL_STAKING.md`,
+  consensus Round 2), not by any wallet change. This makes the consensus `pop_block` nullifier-
+  revert the **sole** remaining open §5 item, and confirms no wallet design work blocks Round 3.
 - **staking: confidential-claim entitlement `D` pinned + remainder range-proof
   construction closed (Round 2, §6.4.1 decisions 1(a)/1(b)).** Corrected the
   underspecified `D = SCALE` to `D = D_tier · SCALE_rate = 2^(k+1)`: `D_tier = 2`
