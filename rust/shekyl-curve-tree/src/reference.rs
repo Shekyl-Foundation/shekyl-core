@@ -153,8 +153,13 @@ pub fn proof_submittable(tip_now: u64, reference_height: u64) -> bool {
 /// `true` also when the reference block is above the tip (age `None`,
 /// reorg §5.3): the anchor is no longer on the chain, so the proof cannot
 /// be submitted as-is. Distinct from "too fresh" (age below `MIN_AGE`),
-/// which is not expiry and cannot arise for a wallet-built proof (built
-/// at age [`REF_ANCHOR_AGE`]).
+/// which is **not** expiry — `proof_expired` stays `false`. A built proof
+/// starts at age [`REF_ANCHOR_AGE`] (above `MIN_AGE`), but "too fresh"
+/// can still arise at runtime after a shallow reorg that lowers `tip_now`
+/// while the reference block remains canonical: age drops below `MIN_AGE`,
+/// [`proof_submittable`] goes `false` transiently, and the wallet waits
+/// for the chain to grow back past the anchor rather than treating it as
+/// expired.
 #[must_use]
 pub fn proof_expired(tip_now: u64, reference_height: u64) -> bool {
     match reference_block_age(tip_now, reference_height) {
