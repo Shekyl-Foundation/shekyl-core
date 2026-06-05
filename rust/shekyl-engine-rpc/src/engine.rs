@@ -450,10 +450,17 @@ impl Wallet2 {
         let mut tx_prefix_hash = [0u8; 32];
         hex_decode(tx_prefix_hash_hex, &mut tx_prefix_hash)?;
 
-        // Phase B: sign (pure Rust, no FFI crossing)
-        let proofs =
-            shekyl_tx_builder::sign_transaction(tx_prefix_hash, &inputs, &outputs, fee, &tree)
-                .map_err(EngineError::from)?;
+        // Phase B: sign (pure Rust, no FFI crossing).
+        // `fee` arrives as a raw JSON number from the prepare response; wrap it
+        // at the `AtomicUnits` edge (`docs/design/ATOMIC_UNITS_NEWTYPE.md` §4.5).
+        let proofs = shekyl_tx_builder::sign_transaction(
+            tx_prefix_hash,
+            &inputs,
+            &outputs,
+            shekyl_units::AtomicUnits::from_raw(fee),
+            &tree,
+        )
+        .map_err(EngineError::from)?;
 
         let proofs_json_str = serde_json::to_string(&proofs).map_err(|e| EngineError {
             code: -1,

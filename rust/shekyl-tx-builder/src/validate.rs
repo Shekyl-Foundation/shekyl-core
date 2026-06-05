@@ -7,6 +7,7 @@
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, SpendInput, TreeContext};
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
+use shekyl_units::AtomicUnits;
 
 /// Prover-side input validation for FCMP++ signing.
 ///
@@ -19,7 +20,7 @@ use crate::{MAX_INPUTS, MAX_OUTPUTS};
 pub(crate) fn validate_inputs(
     inputs: &[SpendInput],
     outputs: &[OutputInfo],
-    fee: u64,
+    fee: AtomicUnits,
     tree: &TreeContext,
 ) -> Result<(), TxBuilderError> {
     // --- Count bounds ---
@@ -37,9 +38,9 @@ pub(crate) fn validate_inputs(
     }
 
     // --- Amount checks ---
-    let mut input_total: u64 = 0;
+    let mut input_total = AtomicUnits::ZERO;
     for (i, inp) in inputs.iter().enumerate() {
-        if inp.amount == 0 {
+        if inp.amount.is_zero() {
             return Err(TxBuilderError::ZeroInputAmount { index: i });
         }
         input_total = input_total
@@ -47,9 +48,9 @@ pub(crate) fn validate_inputs(
             .ok_or(TxBuilderError::InputAmountOverflow)?;
     }
 
-    let mut output_total: u64 = 0;
+    let mut output_total = AtomicUnits::ZERO;
     for (i, out) in outputs.iter().enumerate() {
-        if out.amount == 0 {
+        if out.amount.is_zero() {
             return Err(TxBuilderError::ZeroOutputAmount { index: i });
         }
         output_total = output_total
@@ -61,8 +62,8 @@ pub(crate) fn validate_inputs(
         .ok_or(TxBuilderError::OutputAmountOverflow)?;
     if input_total < output_plus_fee {
         return Err(TxBuilderError::InsufficientFunds {
-            input_total,
-            output_plus_fee,
+            input_total: input_total.to_raw(),
+            output_plus_fee: output_plus_fee.to_raw(),
         });
     }
 

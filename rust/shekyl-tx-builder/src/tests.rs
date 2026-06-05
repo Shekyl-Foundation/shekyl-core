@@ -13,6 +13,7 @@ use crate::sign::{sign_pqc_auths, sign_transaction};
 use crate::types::*;
 use crate::validate::validate_inputs;
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
+use shekyl_units::AtomicUnits;
 
 fn dummy_leaf_entry() -> LeafEntry {
     LeafEntry {
@@ -28,7 +29,7 @@ fn dummy_spend_input(amount: u64) -> SpendInput {
     SpendInput {
         output_key: [1u8; 32],
         commitment: [3u8; 32],
-        amount,
+        amount: AtomicUnits::from_raw(amount),
         spend_key_x: [5u8; 32],
         spend_key_y: [6u8; 32],
         commitment_mask: [7u8; 32],
@@ -44,7 +45,7 @@ fn dummy_spend_input(amount: u64) -> SpendInput {
 fn dummy_output(amount: u64) -> OutputInfo {
     OutputInfo {
         dest_key: [20u8; 32],
-        amount,
+        amount: AtomicUnits::from_raw(amount),
         commitment_mask: [21u8; 32],
         enc_amount: [0u8; 9],
         enc_label: [0u8; 9],
@@ -63,20 +64,38 @@ fn dummy_tree() -> TreeContext {
 
 #[test]
 fn test_no_inputs() {
-    let result = sign_transaction([0u8; 32], &[], &[dummy_output(100)], 0, &dummy_tree());
+    let result = sign_transaction(
+        [0u8; 32],
+        &[],
+        &[dummy_output(100)],
+        AtomicUnits::ZERO,
+        &dummy_tree(),
+    );
     assert!(matches!(result, Err(TxBuilderError::NoInputs)));
 }
 
 #[test]
 fn test_too_many_inputs() {
     let inputs: Vec<SpendInput> = (0..=MAX_INPUTS).map(|_| dummy_spend_input(100)).collect();
-    let result = sign_transaction([0u8; 32], &inputs, &[dummy_output(100)], 0, &dummy_tree());
+    let result = sign_transaction(
+        [0u8; 32],
+        &inputs,
+        &[dummy_output(100)],
+        AtomicUnits::ZERO,
+        &dummy_tree(),
+    );
     assert!(matches!(result, Err(TxBuilderError::TooManyInputs(_))));
 }
 
 #[test]
 fn test_no_outputs() {
-    let result = sign_transaction([0u8; 32], &[dummy_spend_input(100)], &[], 0, &dummy_tree());
+    let result = sign_transaction(
+        [0u8; 32],
+        &[dummy_spend_input(100)],
+        &[],
+        AtomicUnits::ZERO,
+        &dummy_tree(),
+    );
     assert!(matches!(result, Err(TxBuilderError::NoOutputs)));
 }
 
@@ -87,7 +106,7 @@ fn test_too_many_outputs() {
         [0u8; 32],
         &[dummy_spend_input(100 * (MAX_OUTPUTS as u64 + 1))],
         &outputs,
-        0,
+        AtomicUnits::ZERO,
         &dummy_tree(),
     );
     assert!(matches!(result, Err(TxBuilderError::TooManyOutputs(_))));
@@ -99,7 +118,7 @@ fn test_zero_input_amount() {
         [0u8; 32],
         &[dummy_spend_input(0)],
         &[dummy_output(100)],
-        0,
+        AtomicUnits::ZERO,
         &dummy_tree(),
     );
     assert!(matches!(
@@ -114,7 +133,7 @@ fn test_zero_output_amount() {
         [0u8; 32],
         &[dummy_spend_input(100)],
         &[dummy_output(0)],
-        0,
+        AtomicUnits::ZERO,
         &dummy_tree(),
     );
     assert!(matches!(
@@ -126,7 +145,13 @@ fn test_zero_output_amount() {
 #[test]
 fn test_input_amount_overflow() {
     let inputs = vec![dummy_spend_input(u64::MAX), dummy_spend_input(1)];
-    let result = sign_transaction([0u8; 32], &inputs, &[dummy_output(100)], 0, &dummy_tree());
+    let result = sign_transaction(
+        [0u8; 32],
+        &inputs,
+        &[dummy_output(100)],
+        AtomicUnits::ZERO,
+        &dummy_tree(),
+    );
     assert!(matches!(result, Err(TxBuilderError::InputAmountOverflow)));
 }
 
@@ -137,7 +162,7 @@ fn test_output_amount_overflow() {
         [0u8; 32],
         &[dummy_spend_input(u64::MAX)],
         &outputs,
-        0,
+        AtomicUnits::ZERO,
         &dummy_tree(),
     );
     assert!(matches!(result, Err(TxBuilderError::OutputAmountOverflow)));
@@ -149,7 +174,7 @@ fn test_output_plus_fee_overflow() {
         [0u8; 32],
         &[dummy_spend_input(u64::MAX)],
         &[dummy_output(u64::MAX)],
-        1,
+        AtomicUnits::from_raw(1),
         &dummy_tree(),
     );
     assert!(matches!(result, Err(TxBuilderError::OutputAmountOverflow)));
@@ -161,7 +186,7 @@ fn test_insufficient_funds() {
         [0u8; 32],
         &[dummy_spend_input(50)],
         &[dummy_output(100)],
-        0,
+        AtomicUnits::ZERO,
         &dummy_tree(),
     );
     assert!(matches!(
@@ -176,7 +201,7 @@ fn test_insufficient_funds_with_fee() {
         [0u8; 32],
         &[dummy_spend_input(100)],
         &[dummy_output(100)],
-        1,
+        AtomicUnits::from_raw(1),
         &dummy_tree(),
     );
     assert!(matches!(
@@ -189,7 +214,13 @@ fn test_insufficient_funds_with_fee() {
 fn test_empty_leaf_chunk() {
     let mut input = dummy_spend_input(100);
     input.leaf_chunk.clear();
-    let result = sign_transaction([0u8; 32], &[input], &[dummy_output(100)], 0, &dummy_tree());
+    let result = sign_transaction(
+        [0u8; 32],
+        &[input],
+        &[dummy_output(100)],
+        AtomicUnits::ZERO,
+        &dummy_tree(),
+    );
     assert!(matches!(
         result,
         Err(TxBuilderError::EmptyLeafChunk { index: 0 })
@@ -201,7 +232,13 @@ fn test_leaf_chunk_too_large() {
     let mut input = dummy_spend_input(100);
     let width = shekyl_fcmp::SELENE_CHUNK_WIDTH;
     input.leaf_chunk = vec![dummy_leaf_entry(); width + 1];
-    let result = sign_transaction([0u8; 32], &[input], &[dummy_output(100)], 0, &dummy_tree());
+    let result = sign_transaction(
+        [0u8; 32],
+        &[input],
+        &[dummy_output(100)],
+        AtomicUnits::ZERO,
+        &dummy_tree(),
+    );
     assert!(matches!(
         result,
         Err(TxBuilderError::LeafChunkTooLarge { index: 0, .. })
@@ -216,7 +253,7 @@ fn test_zero_tree_depth() {
         [0u8; 32],
         &[dummy_spend_input(100)],
         &[dummy_output(100)],
-        0,
+        AtomicUnits::ZERO,
         &tree,
     );
     assert!(matches!(result, Err(TxBuilderError::ZeroTreeDepth)));
@@ -228,7 +265,13 @@ fn test_branch_layer_mismatch() {
     // c1=2, c2=0 -> c1+c2+1=3, but tree_depth=2 -> mismatch
     input.c1_layers = vec![vec![[10u8; 32]], vec![[11u8; 32]]];
     input.c2_layers = vec![];
-    let result = sign_transaction([0u8; 32], &[input], &[dummy_output(100)], 0, &dummy_tree());
+    let result = sign_transaction(
+        [0u8; 32],
+        &[input],
+        &[dummy_output(100)],
+        AtomicUnits::ZERO,
+        &dummy_tree(),
+    );
     assert!(matches!(
         result,
         Err(TxBuilderError::BranchLayerMismatch { index: 0, .. })
@@ -239,7 +282,13 @@ fn test_branch_layer_mismatch() {
 fn test_invalid_combined_ss_length() {
     let mut input = dummy_spend_input(100);
     input.combined_ss = vec![0u8; 10]; // wrong length
-    let result = sign_transaction([0u8; 32], &[input], &[dummy_output(100)], 0, &dummy_tree());
+    let result = sign_transaction(
+        [0u8; 32],
+        &[input],
+        &[dummy_output(100)],
+        AtomicUnits::ZERO,
+        &dummy_tree(),
+    );
     assert!(matches!(
         result,
         Err(TxBuilderError::InvalidCombinedSsLength { index: 0, .. })
@@ -270,7 +319,7 @@ fn dummy_spend_input_at_depth(depth: u8) -> SpendInput {
     SpendInput {
         output_key: [1u8; 32],
         commitment: [3u8; 32],
-        amount: 100,
+        amount: AtomicUnits::from_raw(100),
         spend_key_x: [5u8; 32],
         spend_key_y: [6u8; 32],
         commitment_mask: [7u8; 32],
@@ -296,7 +345,7 @@ fn validate_accepts_all_legal_depths() {
     for depth in 1..=shekyl_fcmp::MAX_TREE_DEPTH {
         let input = dummy_spend_input_at_depth(depth);
         let tree = dummy_tree_at_depth(depth);
-        let result = validate_inputs(&[input], &[dummy_output(100)], 0, &tree);
+        let result = validate_inputs(&[input], &[dummy_output(100)], AtomicUnits::ZERO, &tree);
         assert!(
             result.is_ok(),
             "depth {} should pass validation (c1={}, c2={}), got: {:?}",
@@ -313,7 +362,7 @@ fn validate_rejects_above_max_depth() {
     let bad_depth = shekyl_fcmp::MAX_TREE_DEPTH + 1;
     let input = dummy_spend_input_at_depth(bad_depth);
     let tree = dummy_tree_at_depth(bad_depth);
-    let result = validate_inputs(&[input], &[dummy_output(100)], 0, &tree);
+    let result = validate_inputs(&[input], &[dummy_output(100)], AtomicUnits::ZERO, &tree);
     assert!(
         matches!(result, Err(TxBuilderError::TreeDepthTooLarge(d)) if d == bad_depth),
         "depth {} should be rejected as exceeding MAX_TREE_DEPTH ({}), got: {:?}",
@@ -353,7 +402,7 @@ fn validate_rejects_wrong_branch_count_for_depth() {
     let mut input = dummy_spend_input_at_depth(3);
     input.c1_layers.push(vec![[13u8; 32]]);
     let tree = dummy_tree_at_depth(3);
-    let result = validate_inputs(&[input], &[dummy_output(100)], 0, &tree);
+    let result = validate_inputs(&[input], &[dummy_output(100)], AtomicUnits::ZERO, &tree);
     assert!(
         matches!(result, Err(TxBuilderError::BranchLayerMismatch { .. })),
         "c1+c2+1 != depth should trigger BranchLayerMismatch, got: {result:?}",
@@ -371,7 +420,7 @@ fn validate_rejects_swapped_c1_c2_alternation() {
     input.c1_layers = vec![vec![[11u8; 32]]; saved_c2.len()]; // was 1, should be 2
     input.c2_layers = vec![vec![[12u8; 32]]; saved_c1.len()]; // was 2, should be 1
     let tree = dummy_tree_at_depth(4);
-    let result = validate_inputs(&[input], &[dummy_output(100)], 0, &tree);
+    let result = validate_inputs(&[input], &[dummy_output(100)], AtomicUnits::ZERO, &tree);
     assert!(
         matches!(result, Err(TxBuilderError::BranchLayerMismatch { .. })),
         "swapped c1/c2 alternation should trigger BranchLayerMismatch, got: {result:?}",

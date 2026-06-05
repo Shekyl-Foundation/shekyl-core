@@ -55,7 +55,7 @@ pub fn sign_transaction(
     tx_prefix_hash: [u8; 32],
     inputs: &[SpendInput],
     outputs: &[OutputInfo],
-    fee: u64,
+    fee: shekyl_units::AtomicUnits,
     tree: &TreeContext,
 ) -> Result<SignedProofs, TxBuilderError> {
     // ── 1. Validate ──────────────────────────────────────────────────
@@ -73,7 +73,7 @@ pub fn sign_transaction(
             let mask = Scalar::from_canonical_bytes(out.commitment_mask)
                 .expect("commitment_mask is not a valid scalar");
             masks.push(mask);
-            Commitment::new(mask, out.amount)
+            Commitment::new(mask, out.amount.to_raw())
         })
         .collect();
 
@@ -90,7 +90,7 @@ pub fn sign_transaction(
         .iter()
         .zip(masks.iter())
         .map(|(out, mask)| {
-            let c = Commitment::new(*mask, out.amount);
+            let c = Commitment::new(*mask, out.amount.to_raw());
             let point = c.calculate();
             let cofactored = point.mul_by_cofactor();
             cofactored.compress().to_bytes()
