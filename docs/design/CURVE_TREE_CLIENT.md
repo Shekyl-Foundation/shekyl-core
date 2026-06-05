@@ -268,16 +268,24 @@ all inputs of one tx call `assemble_path` with the **same** `ReferenceBlock`.
 
 **CT-4 design round (pinned at source).** The membership-path format is the
 FCMP++ prover's `Path` (`shekyl-oxide/crypto/fcmps/src/prover/mod.rs`; canonical
-builder `random_path`, `tests.rs`): `c1_layers`/`c2_layers` are **scalars (node
-x-coordinates), not points**, each layer the **full chunk including the path
-node** (siblings not excluded), `c2` (Selene-node chunks) interleaved with `c1`
-(Helios-node chunks), root layer excluded. **No new `shekyl-fcmp` API is
-needed**: `build_layers` already returns the full layer stack publicly, and
-`layer_is_selene` / `chunk_width` / `selene_point_to_helios_scalar` /
-`helios_point_to_selene_scalar` cover extraction and conversion. `leaf_chunk`
-needs the compressed `O`/`I`/`C` identities (F6), so the client retains the
-per-drained-leaf `OutputIdentity` alongside the x-coord leaf and derives
-`I = Hp(O)` via the same `biased_hash_to_point` used in `construct_leaf`.
+builder `random_path`, `tests.rs`). With `C::C1 = Selene`, `C::C2 = Helios`,
+`C::OC = Ed25519`: `c1_layers`/`c2_layers` are **scalars (node x-coordinates),
+not points**, each layer the **full chunk including the path node** (siblings
+not excluded), root layer excluded. The leaf chunk hashes to a **C1 (Selene)**
+node; its x-coordinates feed a **C2 (Helios)** node; then C1, C2, … alternating.
+So the **odd** tree layers (1, 3, …) are Helios → `c2_layers`, and the **even**
+internal layers (2, 4, …) are Selene → `c1_layers`; the two vectors interleave
+in tree-layer order (`c2_layers[0]`, `c1_layers[0]`, `c2_layers[1]`, …). The
+implementation maps straight onto these field names (`c1_layers ≡
+Path::curve_1_layers`, `c2_layers ≡ Path::curve_2_layers`), so the engine
+adapter is a field copy. Extraction reuses the public `build_layers` (full layer
+stack), `layer_is_selene` / `chunk_width`, and the
+`selene_point_to_helios_scalar` / `helios_point_to_selene_scalar` conversions.
+`leaf_chunk` needs the compressed `O`/`I`/`C` identities (F6), so the client
+retains the per-drained-leaf `OutputIdentity` alongside the x-coord leaf and
+derives the compressed `I = Hp(O)` via `shekyl_fcmp::tree::key_image_generator`
+(a thin wrapper over the same `biased_hash_to_point` `construct_leaf` uses,
+added so the lean crate need not depend on `shekyl-generators` directly).
 
 ### 3.6 `LeafStore` persistence — greenfield, not a migration
 
