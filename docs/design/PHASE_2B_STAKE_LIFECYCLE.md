@@ -580,6 +580,21 @@ for nothing. The fixed mask is smaller, dependency-free, and constant-size.
 - **Trivial reorg rebuild.** §5.2's clear-all/replay-all recomputes the mask from scratch
   (set bit `i` for each surviving `x·G_(anchor+i)` ∈ post-reorg chain) — no structural edit,
   no per-epoch height to reconcile.
+- **Reorg-stable anchor (drain-gate construction).** The anchor `creation_height ≜
+  eligible_height` is consensus-stamped at the staking subtree's deferred-insertion **drain**
+  (`mining + MIN_AGE`, [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §6.4.3 ground
+  iii / §11), and the drain anchor is **source-relative** — computed from the source block,
+  not the drain-time tip (verified in `blockchain_db.cpp`). So the anchor is **stable under
+  every reorg `≤ MIN_AGE` by construction**: a stake caught pre-drain has no anchor to move,
+  and a drained stake's anchor is source-invariant under any reorg shallower than `MIN_AGE`
+  (the same convergence that freezes `h_bind`). The **hot reorg path therefore pays nothing** —
+  the 2-byte relative mask base does not move when only the drain block is popped, so §5.2's
+  clear-all/replay-all recomputes the mask against an *unchanged* anchor. Only a reorg **deeper
+  than `MIN_AGE`** re-mines the source and moves `eligible_height`; there the same §5.2
+  full-rebuild re-derives the mask against the new anchor. That re-anchor is a **rare-path
+  correctness item** — the `> MIN_AGE` catastrophic regime that already invalidates in-flight
+  FCMP references broadly — **not a cost the common reorg path carries**, closing the
+  anchor-mutability seam the `h_bind` re-stamp surfaced.
 
 `claim_pending_epochs` (runtime-only) shares the in-memory `EpochSet` type but never
 serializes (§3.4, D4), so this encoding governs exactly one set per stake.
@@ -619,6 +634,12 @@ posture. The correct primitive is **cSHAKE256** (FIPS 202 / SP 800-185), which i
   / audit cost for *no* gain over the PQC-aligned primitive already in use. So the modern
   choice and the dependency-clean choice are the **same** choice; they only diverged in the
   intermediate cn_fast_hash misstep, which optimized reuse and ignored modern-not-inherited.
+  The same misstep prompted a workspace-wide sweep tracked in
+  [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) (V3.0): the wallet-local `SnapshotId`, the v31
+  multisig / address fingerprints, **and** the consensus primitive itself (block/tx hash,
+  `tree_hash`) — pre-genesis we *are* the hard fork, so the inherited consensus hash is a
+  candidate too, not grandfathered (it earns its own spec-first consensus pass, since
+  Keccak-256 is secure and the change is standards-alignment, not a security fix).
 
 **Native domain separation (no hand-rolled prefix).** cSHAKE's `customization` parameter is
 the SP 800-185 slot for application separation, so the domain lives there, not in a

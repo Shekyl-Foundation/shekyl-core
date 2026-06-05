@@ -856,7 +856,7 @@ Decision 1's `H_t` are subsumed.
 |--------|-----------|-------------|
 | **3A — Non-membership** | Prove leaf **not** in root at `eff_lock` (Curve Forests, eprint 2024/1647) | **❌ Rejected.** Introduces a **novel consensus ZK primitive** with no production audit trail + per-epoch historical-root checkpointing; spawns a V3.0 pre-genesis crypto obligation. Loses lenses 2/4/5; silent-fail (inflation) on a subtle bug. |
 | **3B — Coarse public window** | Cap claims by tier-class max lock without per-stake `creation` | **❌ Rejected (P1).** Late-created stake in a tier class claims epochs **past** its true `eff_lock` → **§9 step 2 inflation** (delay-proportional over-claim). Consensus soundness break, not a privacy tradeoff. |
-| **3C — Separate staking subtree** | **Second curve tree** for staked outputs. **5-scalar leaf** (160 B): `{O, I, C, h_pqc, h_bind}`, `h_bind = H("stake-bind" ‖ tier ‖ creation_height)` **consensus-set at inclusion**. Claim: subtree membership + `h_bind` equality + arithmetic window. **ZK surface:** Pedersen + existing membership + hash — **no new primitive**. **Cost:** second accumulator + cross-tree stake/unstake atomicity — **state/ops**. | **✅ CHOSEN.** Wins/ties 6 of 7 lenses (privacy wash); the contested consensus-complexity lens is a state-vs-crypto trade the discipline resolves toward **state** (pattern-replicates the main tree's deferred-insertion + atomic pop). Fail-loud (rejected claim). |
+| **3C — Separate staking subtree** | **Second curve tree** for staked outputs. **5-scalar leaf** (160 B): `{O, I, C, h_pqc, h_bind}`, `h_bind = H("stake-bind" ‖ tier ‖ creation_height)` **consensus-set at subtree drain** (`creation_height ≜ eligible_height = mining + MIN_AGE`, §6.4.3 — *drain*, not block-inclusion). Claim: subtree membership + `h_bind` equality + arithmetic window. **ZK surface:** Pedersen + existing membership + hash — **no new primitive**. **Cost:** second accumulator + cross-tree stake/unstake atomicity — **state/ops**. | **✅ CHOSEN.** Wins/ties 6 of 7 lenses (privacy wash); the contested consensus-complexity lens is a state-vs-crypto trade the discipline resolves toward **state** (pattern-replicates the main tree's deferred-insertion + atomic pop). Fail-loud (rejected claim). |
 
 **7-lens summary:** 1 security (tight, loud-fail) **3C**; 2 cryptography (no new primitive)
 **3C**; 3 consensus/atomicity (2 trees vs 1 tree + non-membership + hist-roots) **leans 3C**;
@@ -895,9 +895,10 @@ out of scope — public fungible receipts leak cohorts). Transfer **does** compo
 
 - **`creation_height` is inherited**, not reset at re-insert — accrual window follows the
   original bond, not the transfer block.
-- **Decision 3C** (consensus-stamped `h_bind` at **first** inclusion) **conflicts** with
-  naive re-stake-after-transfer unless the spend path carries `(tier, creation)` in the
-  new leaf's 5th scalar (owner-proven continuity, not a fresh consensus stamp).
+- **Decision 3C** (consensus-stamped `h_bind` at **first subtree drain**, `eligible_height`)
+  **conflicts** with naive re-stake-after-transfer unless the spend path carries
+  `(tier, creation)` in the new leaf's 5th scalar (owner-proven continuity, not a fresh
+  consensus stamp).
 
 Spec target: [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) — *confidential stake-UTXO transfer*.
 Round 2 closes Decision 3 before wallet transfer UX; creation inheritance is load-bearing
@@ -942,8 +943,41 @@ forgery and rounding over-claim is **designed closed** under 3C; no residual win
   earlier than the stake is counted, the same conservatism as round-toward-under-claim
   (§6.4.1); **(ii) tree-consistency** — the claim proves staking-subtree membership, so
   "in the tree ⟺ accruing ⟺ counted" is **one** fact, not three that can drift;
-  **(iii) reorg-stability** — `eligible_height` sits past the `MIN_AGE = 5` buffer, so the
-  anchor doesn't churn on shallow reorgs the way a mining-height anchor would. **UX cost:**
+  **(iii) reorg-stability (via deferred insertion, not assertion).** The protection is
+  **structural on the insertion side** (the drain-gate), *not* on the reference side. The
+  staking subtree reuses the main tree's deferred-insertion + journaled-pop **mechanism**
+  (`add_pending_tree_leaf(maturity)` / `drain_pending_tree_leaves` / per-block journals,
+  `blockchain_db.cpp` — **verified source-anchored**: `maturity` is computed from the
+  *source block* height, never the drain-time tip, and the drain fires only at
+  `maturity ≤ current_height`). The staking subtree's drain buffer is its own value,
+  `eligible_height = mining + MIN_AGE` (the live main tree uses larger per-type *spend*
+  maturities — staked outputs drain at `max(effective_lock_until, H + DEFAULT_TX_SPENDABLE_AGE)`
+  in the pre-3C single tree — but by the **same** source-anchored gate; only the buffer
+  constant differs). So a staked output mined at `H` becomes membership-provable **only at
+  `H + MIN_AGE`**, and `h_bind` is frozen at that drain. Because the gate admits only leaves
+  whose source is already `≥ MIN_AGE` deep, **every root — current included — contains only
+  stable-`h_bind` leaves**; that is why claims proving membership against the **current root**
+  (§6.4.3 verifier) and `h_bind`-stability coexist with no tension — the buffer never had to
+  sit on the reference side. **Convergence within bound.** Because the anchor is
+  source-relative, it is invariant under any reorg shallower than `MIN_AGE`: such a reorg
+  cannot touch the source block (already `≥ MIN_AGE` deep by drain), so a pop-then-re-extend
+  re-drains at the **identical** `eligible_height` and re-derives the **identical** `h_bind`.
+  "Restore the stamped leaf" and "recompute on re-insert" are therefore **two spellings of the
+  same value within bound** — pop-correctness is *unobservable* within bound, so the guarantee
+  does not depend on the pop code being careful. A **shallow reorg (`≤ MIN_AGE`) catches the
+  output undrained in `pending_tree_leaves`**; `pop_block` restores/removes the journaled
+  pending entry and re-mine re-derives `h_bind` at the new `eligible_height` on re-drain —
+  **no drained-leaf `h_bind` mutation ever occurs.** (*Beyond* bound — a `> MIN_AGE` reorg
+  re-mining a *drained* leaf's source — `eligible_height` genuinely changes and the two
+  spellings diverge: re-drain-recompute self-heals by re-deriving from the new source;
+  store-stamped would carry an `h_bind` no honest claim ever recomputes = **permanent
+  corruption**. §11 pins re-drain-recompute for exactly this reason. That regime inherits the
+  FCMP reorg envelope — a `> MIN_AGE` reorg already invalidates in-flight FCMP references
+  broadly — so stakes carry no stake-specific new exposure.) The argument is
+  **tier-independent**: the buffer is the `mining → eligible` deferral, which carries no tier
+  term; `tier_lock` governs only the claim *validity* window
+  (`creation < S ≤ creation + tier_lock`), and the smallest tier (~1,000 blocks) is
+  `≫ MIN_AGE`. **UX cost:**
   effective lock = `tier_lock + deferral` (~5-block warm-up, <0.5% even on the 1,000-block
   tier) — disclose "lock begins when the stake matures, ~N blocks after confirmation"; not a
   reason to anchor on mining. **Reversion clause (rule 21):** if exact advertised-lock
@@ -1143,19 +1177,57 @@ is why §9 must be airtight.)
 
 ---
 
-## 11. Reorg / `pop_block` atomicity
+## 11. Reorg / `pop_block` atomicity (unified 3C reversal spec)
 
-The nullifier set is **new reorg-state** (the structural form of the prior C-2
-finding). On `pop_block` (`blockchain.cpp:800–822` accrual-reversal path), a single
-atomic LMDB transaction must revert, for popped claim/stake txs:
+**Status: spec-only.** 3C state (staking subtree, nullifier table, `h_bind`) is **not yet
+implemented** — the live `pop_block_from_blockchain` (`blockchain.cpp`, accrual-reversal
+block) reverts the **pre-3C** accrual/pool/burn model (`get_staker_accrual` →
+`set_staker_pool_balance` → `remove_staker_accrual`), which 3C **replaces**. This section is
+the complete reversal surface to instantiate at Round 2; the atomicity audit re-run is a
+Round-2 task and is **mechanical**, because every element below maps onto a pattern the main
+tree already implements and the `LMDB_WRITE_ATOMICITY_AUDIT.md` already PASSed for one tree.
 
-- nullifier-set **insertions** (so a reorged-then-re-mined claim is re-claimable;
-  failure here = permanent claim rejection);
-- `band_sum` / active-stake changes and the rate-epoch records;
-- minted **reward outputs** (tree insertions) and staked-output insertions.
+**The reusable pattern.** The main tree's deferred-insertion + atomic-pop is the template:
+per-block journals (`m_pending_tree_drain` records what each block drained; the
+block-pending-additions journal records what each block added to `pending_tree_leaves`), so
+`pop_block` trims drained leaves back to pending and deletes block-added pending entries by
+primary key — exact, DUPSORT-free, atomic within the block's write txn. 3C instantiates the
+same shape for a second tree and adds journaled tables.
 
-This extends the existing atomic-reversal discipline; the nullifier table is the new
-member.
+On `pop_block`, **one atomic LMDB transaction** (the existing `batch_start`/`batch_stop`
+wrap, with the `db_wtxn_guard` defensive guard) must revert, for popped claim/stake txs:
+
+1. **Staking subtree leaves** — its own `pending_tree_leaves` / `pending_tree_drain` /
+   block-pending-additions triple, mirroring the main tree. Because `h_bind` is frozen at
+   **drain** (`eligible_height = mining + MIN_AGE`, §6.4.3), a shallow reorg (`≤ MIN_AGE`)
+   touches only **undrained** pending entries — pop restores/removes the journaled entry and
+   re-mine re-derives `h_bind` on re-drain. No drained-leaf `h_bind` mutation (§6.4.3 ground
+   iii). **Pin (load-bearing): re-drain MUST recompute `h_bind` from the re-mined source
+   height — never cache or restore the previously-stamped leaf across a pop.** Within the
+   `MIN_AGE` bound the two are identical (source-anchored convergence, §6.4.3 iii), so the
+   distinction is a within-bound no-op; *beyond* bound (a `> MIN_AGE` reorg re-mining a drained
+   leaf's source) they diverge — recompute self-heals to the new `eligible_height`, while a
+   cached stamped leaf carries an `h_bind` no honest claim ever recomputes (**permanent
+   corruption**). The pin exists precisely so a future implementer does not "optimize" the pop
+   by stashing the stamped leaf in pending — a within-bound no-op that silently becomes a
+   beyond-bound corruption. The beyond-bound regime is **not a stake-specific exposure**: a
+   `> MIN_AGE` reorg already invalidates in-flight FCMP references broadly, so stakes inherit
+   the same envelope the FCMP buffer assumes everywhere.
+2. **Cross-tree stake/unstake transitions, both directions** (§6.4.3): stake = spent
+   main-tree input → appended subtree leaf; unstake = consumed subtree-leaf key image →
+   appended main-tree principal output. `pop_block` rewinds **both** directions atomically
+   with (1).
+3. **Nullifier-set insertions** — the stake-claim nullifier table is **new reorg-state** (the
+   structural form of the prior C-2 finding), reverted via its own per-block journal so a
+   reorged-then-re-mined claim is **re-claimable** (failure here = permanent claim rejection).
+4. **`band_sum` / active-stake changes and rate-epoch records** (`{ρ_e, band_sum}`,
+   replacing the retired accrual/pool fields).
+5. **Minted reward outputs** (main-tree insertions) and staked-output insertions — covered by
+   (1)/(2)'s leaf journals plus the output-table reversal.
+
+Every member is journaled per-block and reverts inside the one block txn; nothing escapes it.
+The audited curve-tree machinery is **live and reused**; only the staking-economics half
+(accrual/pool) is superseded.
 
 ---
 
@@ -1170,7 +1242,7 @@ member.
 | `txout_to_staked_key` `:3476–3478` (cleartext amount) | **Replace** with `C_stake` + range proof + `tier` + `band` |
 | accrual record `:5045–5051` | **Replace** with rate-epoch record `{ρ_e, band_sum}`; pool fields retired |
 | `m_stake_ratio_cache_total_weighted` `:5048–5049` | **Replace** with plaintext `band_sum` maintenance |
-| `pop_block` `:800–822` | **Extend** to revert nullifiers + `band_sum` + minted rewards atomically (§11) |
+| `pop_block_from_blockchain` (accrual-reversal block; re-ground offset at Round 2 — `:800–822` is stale) | **Replace** the pre-3C accrual/pool/burn reversal with the unified 3C reversal: subtree leaves + cross-tree transitions + nullifier table + `band_sum`/rate-epoch + minted rewards, all journaled and atomic (§11) |
 | `distribute_staker_rewards` / `StakeRegistry` (`rewards.rs`, `registry.rs`) | **Confirm sim-only** then **retire** — the direct-distribution model is obsolete under the rate model (was already not on the consensus path; zero `blockchain.cpp` hits) |
 | `tiers.rs` (`TIERS`, `MAX_CLAIM_RANGE`) | **Keep** `TIERS`; **repurpose** `MAX_CLAIM_RANGE` → `MAX_EPOCHS_PER_CLAIM` (proof/nullifier budget, not a block-span; §5) |
 

@@ -2239,6 +2239,82 @@ sustainability is unaffected by the recalibration.
   2A edit per "while we're here" — separate small item in the builder crate, not
   the 2A type-design PR.
 
+- **Migrate inherited `cn_fast_hash` (Keccak / CryptoNote padding) to cSHAKE256 /
+  SHA3-family (modern-not-inherited posture).** `cn_fast_hash`
+  ([`shekyl-crypto-hash`](../rust/shekyl-crypto-hash/src/lib.rs)) is **inherited**
+  Keccak-256 with CryptoNote `0x01` padding — a consensus-compat primitive whose
+  purpose is byte-identity with `src/crypto/keccak.c` / upstream Monero. Per
+  [`00-mission.mdc`](../.cursor/rules/00-mission.mdc)'s modern-not-inherited /
+  PQC-hardened posture, **new** derivations should use **cSHAKE256** (FIPS 202 /
+  SP 800-185) — the workspace's already-present PQC-aligned hash (`sha3 = "0.10"`,
+  `CShake256`; used by `shekyl-crypto-pq/handle.rs`'s `derive_output_handle`,
+  `key_actor`, `local_keys`, `traits::key`). The `StakeId` pin
+  (`docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §3.3.3) is the first derivation to
+  adopt this; the residual `cn_fast_hash` call sites should be evaluated for the
+  same migration, classified by what the hash is a contract *with*:
+
+  - **Wallet-local, non-consensus — clear migration candidate.**
+    `derive_snapshot_id` / `SnapshotId`
+    ([`refresh.rs`](../rust/shekyl-engine-core/src/engine/refresh.rs), doc'd in
+    [`pending.rs`](../rust/shekyl-engine-core/src/engine/pending.rs)). It is a
+    runtime dedup key recomputed from the ledger snapshot on load, so the swap is
+    behavior-local with no persisted-format break — the direct analog of the
+    `StakeId` decision. Migrate to cSHAKE256 with a versioned customization
+    (`"shekyl/snapshot-id-v1"`), updating the `STAGE_1_PR_5_PENDING_TX_ENGINE.md`
+    §4 Phase 0b pin.
+
+  - **Cross-party protocol contracts — migrate *only* via the owning spec, and
+    *only* pre-genesis.** The v31 multisig hashes — `intent_hash`,
+    `fcmp_proof_commitment`
+    ([`multisig/v31/{intent,prover}.rs`](../rust/shekyl-engine-core/src/multisig/v31/)),
+    the key-container / `prover_index` derivations
+    ([`crypto-pq/multisig.rs`](../rust/shekyl-crypto-pq/src/multisig.rs)), and the
+    address fingerprint
+    ([`shekyl-address/multisig_address.rs`](../rust/shekyl-address/src/multisig_address.rs))
+    — are interop contracts pinned in the PQC_MULTISIG / v31 multisig spec
+    (SS6.3, SS9.4, SS12.2.1). All signers and the human address-verification flow
+    must agree byte-for-byte, so a change is a **spec change** requiring its own
+    review, and is only free pre-genesis (post-genesis it breaks exchanged
+    fingerprints). Flagged here so the multisig spec owners decide deliberately,
+    not as a unilateral swap.
+
+  - **Consensus primitive — largest scope, its own spec-first pass; *not* excluded.**
+    Block id, tx id, `tree_hash` (Merkle), any consensus transcript, and the
+    `shekyl_cn_fast_hash` FFI export
+    ([`shekyl-crypto-hash/lib.rs`](../rust/shekyl-crypto-hash/src/lib.rs),
+    [`shekyl-ffi/lib.rs`](../rust/shekyl-ffi/src/lib.rs)). **Pre-genesis we *are*
+    the hard fork** — there is no deployed consensus to break and nothing is
+    grandfathered, so "genesis-locked, change it later" would be the
+    cost-benefit-defer-to-later anti-pattern
+    ([`16-architectural-inheritance.mdc`](../.cursor/rules/16-architectural-inheritance.mdc)):
+    inheriting Keccak-with-CryptoNote-`0x01`-padding as the consensus hash *is*
+    inheriting architecture from CryptoNote, and the cheap window to modernize is
+    now. **Important scoping nuance:** Keccak-256 is *not* cryptographically weak
+    (it is the SHA-3 permutation; quantum posture is Grover-only, same as
+    SHA3/SHAKE), so this is a **priority-3 standards-alignment / modern-not-inherited**
+    decision, **not** a priority-1 security fix — the inherited smell is the
+    non-FIPS `0x01` padding and the `cn_fast_hash`/CryptoNote lineage, not a
+    vulnerability. Because it is a consensus-rule change across the C++
+    (`src/crypto/keccak.c`, `hash.c`, `tree-hash.c`) **and** Rust + FFI surface, it
+    needs its **own design doc + review** (spec-first, `05-system-thinking.mdc`;
+    `20-rust-vs-cpp-policy.mdc`), candidate being SHA3-256 / cSHAKE256 (FIPS 202).
+    The RandomX PoW is a **separate** hash path (its own internal Blake2b/AES) and
+    is unaffected. The `TestDaemon` tx-hash helper
+    ([`test_support.rs`](../rust/shekyl-engine-core/src/engine/test_support.rs))
+    follows whatever the consensus tx hash becomes; it is test-only scaffolding,
+    not an independent decision.
+
+  **Target.** V3.0 pre-genesis. Pre-genesis is the only free window for *all three*
+  buckets (consensus and cross-party contracts both become forever-cost after
+  genesis), and the modern-not-inherited posture is a genesis-defining property.
+  The three buckets do **not** share a PR: the `SnapshotId` swap is a normal small
+  PR, the multisig-contract migration rides its spec, and the consensus-primitive
+  modernization is its own spec-first consensus-design pass. Surfaced during the
+  Phase 2b `StakeId` derivation pin (§3.3.3) when an intermediate pass wrongly
+  reused `cn_fast_hash` for a new wallet-local id; the correction generalized first
+  to the non-consensus sites, then — once the "we are the hard fork" framing was
+  applied — to the consensus primitive itself.
+
 ---
 
 ## V3.1 — audit response and stressnet gates

@@ -95,6 +95,66 @@
   `StakedOutputConfirmed` / `OwnNullifierObserved` events back to the same persisted
   instance); the `v1` customization + a wallet-internal KAT guard persistence stability (a
   bump is a pre-genesis `rm -rf` migration).
+- **staking: `pop_block` reorg-atomicity spec unified for 3C + `h_bind` re-stamp closed
+  in design (`CONFIDENTIAL_STAKING.md` §11 / §6.4.3).** Verified at source that **3C state
+  (staking subtree, nullifier table, `h_bind`) is spec-only** — `grep nullifier|h_bind` in
+  `blockchain.cpp` is empty, and the live `pop_block_from_blockchain` reverts the **pre-3C**
+  accrual/pool/burn model. The Apr-07 `LMDB_WRITE_ATOMICITY_AUDIT.md` PASS is therefore not
+  "for a dead path" wholesale: its **curve-tree half is live and is the reusable pattern**
+  (deferred insertion via `add_pending_tree_leaf(maturity)` / `drain_pending_tree_leaves`,
+  with `m_pending_tree_drain` + block-pending-additions journals giving exact, DUPSORT-free,
+  atomic pop); only the staking-economics half (accrual/pool reversal) is superseded.
+  Rewrote §11 from the C-2-era subset (which cited the stale `blockchain.cpp:800–822` and
+  omitted cross-tree atomicity) into the **complete reversal surface**, mapping each element
+  onto the proven journaled-pop pattern: (1) staking-subtree leaves via their own
+  pending/drain/block-additions triple, (2) cross-tree stake/unstake transitions both
+  directions (§6.4.3), (3) nullifier-table insertions (new reorg-state, C-2), (4)
+  `band_sum`/rate-epoch records, (5) minted rewards + staked-output insertions — all
+  journaled, all inside the one `batch_start`/`batch_stop` block txn; the Round-2 audit
+  re-run is mechanical. **`h_bind` re-stamp concern closed:** the MIN_AGE-buffer composition
+  holds **tier-independently** because the buffer is the `mining → eligible` deferred-insertion
+  drain (no tier term; `tier_lock` governs only the claim-validity window, smallest tier
+  `≫ MIN_AGE`). A leaf is membership-provable only **after drain** (`creation_height ≜
+  eligible_height = mining + MIN_AGE`, where `h_bind` is frozen), and claims prove membership
+  at the **current root**, so re-stamping a drained leaf's `h_bind` requires un-mining its
+  source block = a `≥ MIN_AGE + 1` reorg (catastrophic, out of scope); a shallow reorg
+  (`≤ MIN_AGE`) catches the output **undrained** in `pending_tree_leaves`, where the journaled
+  pop restores/removes it and re-mine re-derives `h_bind` on re-drain — **no drained-leaf
+  `h_bind` mutation ever occurs.** Upgraded §6.4.3 ground (iii) from a one-line assertion to
+  this deferred-insertion argument, and disambiguated "consensus-set at inclusion" (§3C
+  decision / re-stake-after-transfer) to "at subtree **drain**" so it cannot be misread as
+  mining-height stamping. Cross-linked into `PHASE_2B_STAKE_LIFECYCLE.md` §3.3.2: the
+  `EpochSet` 2-byte relative-bitmask **anchor (`creation_height`) is reorg-stable by the same
+  MIN_AGE buffer** (shallow reorg catches a stake pre-drain — no anchor to move; the §5.2
+  full-rebuild re-anchors anything caught early), closing the anchor-mutability seam the
+  `h_bind` re-stamp surfaced. Net: the §5 box's **consensus-track `pop_block` forward-
+  dependency is now a written spec** (Round-2 implementation + mechanical audit re-run), not
+  an open question. **Follow-on (convergence reframing + source verification):** verified
+  at source (`blockchain_db.cpp::collect_outputs` / `db_lmdb.cpp::drain_pending_tree_leaves`)
+  that `maturity` is computed from the **source block height**, never the drain-time tip, and
+  the drain gate is purely `maturity ≤ current_height` — so the drain anchor is
+  **source-relative, transitively**. This **dissolves** the `h_bind` re-stamp concern within
+  bound by *convergence* rather than by getting pop mechanics right: a source-relative anchor
+  is invariant under any reorg `≤ MIN_AGE`, so pop-then-re-extend re-drains at the identical
+  `eligible_height` and re-derives the identical `h_bind` — "restore the stamped leaf" and
+  "recompute on re-insert" are **two spellings of the same value within bound**, making
+  pop-correctness *unobservable* within bound (the guarantee no longer rests on pop carefulness).
+  Corrected two framings: (a) the protection is **structural on the insertion side** (the
+  drain-gate admits only `≥ MIN_AGE`-deep-sourced leaves, so *every* root — current included —
+  holds only stable-`h_bind` leaves), **not** on the reference side, so "membership at the
+  current root" and "`h_bind` stable" coexist with no tension; (b) §6.4.3 no longer conflates
+  the live main tree's lock-based staked maturity (`max(effective_lock_until,
+  H + DEFAULT_TX_SPENDABLE_AGE)`, pre-3C single tree) with the 3C subtree's own
+  `eligible_height = mining + MIN_AGE` buffer — the **mechanism** is reused verbatim, only the
+  buffer constant is 3C-specific, both source-anchored by the same gate. **§11 item 1 now
+  pins re-drain-recompute as load-bearing**: re-drain MUST recompute `h_bind` from the
+  re-mined source height and MUST NOT cache/restore the stamped leaf across a pop — a
+  within-bound no-op (convergence) that silently becomes a **beyond-bound permanent
+  corruption** if a future implementer "optimizes" by stashing the stamped leaf in pending.
+  The beyond-bound (`> MIN_AGE`) regime inherits the FCMP reorg envelope (already invalidates
+  in-flight FCMP references broadly) — no stake-specific new exposure. §3.3.2 sharpened: the
+  **hot reorg path pays nothing** (mask base unmoved when only the drain block is popped);
+  the deep-reorg re-anchor is a rare-path correctness item, not a common-path cost.
 - **staking: confidential-claim entitlement `D` pinned + remainder range-proof
   construction closed (Round 2, §6.4.1 decisions 1(a)/1(b)).** Corrected the
   underspecified `D = SCALE` to `D = D_tier · SCALE_rate = 2^(k+1)`: `D_tier = 2`
