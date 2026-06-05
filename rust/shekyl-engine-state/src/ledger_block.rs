@@ -46,6 +46,7 @@
 //!   will refuse a 1-vs-2 mismatch, forcing users to rescan once).
 
 use serde::{Deserialize, Serialize};
+use shekyl_units::AtomicUnits;
 
 use crate::{error::WalletLedgerError, subaddress::SubaddressIndex, transfer::TransferDetails};
 
@@ -325,7 +326,7 @@ impl LedgerBlock {
         &self,
         current_height: u64,
         subaddress: Option<SubaddressIndex>,
-        min_amount: Option<u64>,
+        min_amount: Option<AtomicUnits>,
     ) -> Vec<(usize, &TransferDetails)> {
         self.transfers
             .iter()

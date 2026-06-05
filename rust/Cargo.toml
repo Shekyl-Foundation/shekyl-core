@@ -16,6 +16,9 @@ members = [
     "shekyl-address",
     "shekyl-difficulty",
 
+    # Foundational monetary-amount newtype (docs/design/ATOMIC_UNITS_NEWTYPE.md)
+    "shekyl-units",
+
     # Vendored monero-oxide protocol crates
     "shekyl-oxide/crypto/helioselene",
     "shekyl-oxide/crypto/divisors",

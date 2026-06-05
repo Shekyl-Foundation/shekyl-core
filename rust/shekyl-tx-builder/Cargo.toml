@@ -13,6 +13,10 @@ license.workspace = true
 
 [dependencies]
 shekyl-fcmp = { path = "../shekyl-fcmp" }
+# `AtomicUnits` amount-newtype (`docs/design/ATOMIC_UNITS_NEWTYPE.md`).
+# Carries `SpendInput`/`OutputInfo` amounts and validate/sign totals; raw
+# `u64` reappears only at the oxide `Commitment::new` edge (§4.1).
+shekyl-units = { path = "../shekyl-units" }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-bulletproofs = { path = "../shekyl-oxide/shekyl-oxide/fcmp/bulletproofs" }

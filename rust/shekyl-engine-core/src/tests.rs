@@ -9,6 +9,7 @@ mod lifecycle {
     use shekyl_scanner::{
         staker_pool::AccrualRecord, LedgerBlock, LedgerIndexes, LedgerIndexesExt,
     };
+    use shekyl_units::AtomicUnits;
 
     use crate::{
         claim_builder::ClaimTxBuilder, error::EngineCoreError, workflow::plan_claim_and_unstake,
@@ -110,7 +111,7 @@ mod lifecycle {
         assert_eq!(plan.claims.len(), 1);
         assert_eq!(plan.claims[0].from_height, 1000);
         assert_eq!(plan.claims[0].to_height, 5000);
-        assert!(plan.total_reward > 0);
+        assert!(plan.total_reward > AtomicUnits::ZERO);
     }
 
     #[test]
@@ -191,7 +192,10 @@ mod lifecycle {
 
         assert!(plan.claim_plan.is_some());
         assert_eq!(plan.unstake_indices, vec![0]);
-        assert_eq!(plan.total_unstake_amount, 5_000_000_000);
+        assert_eq!(
+            plan.total_unstake_amount,
+            AtomicUnits::from_raw(5_000_000_000)
+        );
     }
 
     #[test]
@@ -250,6 +254,6 @@ mod lifecycle {
             .plan_all(&ledger, &indexes, 1010, simple_weight_fn)
             .unwrap();
 
-        assert_eq!(plan.total_reward, 1_500_000);
+        assert_eq!(plan.total_reward, AtomicUnits::from_raw(1_500_000));
     }
 }

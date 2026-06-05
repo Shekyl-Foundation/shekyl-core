@@ -9,15 +9,24 @@
 mod tests {
     use crate::{
         distribute_staker_rewards,
+        rewards::StakerReward,
         tiers::{tier_by_id, MAX_CLAIM_RANGE, TIERS},
         StakeRegistry,
     };
     use shekyl_economics::params::SCALE;
+    use shekyl_units::AtomicUnits;
 
     #[allow(clippy::cast_possible_truncation)] // CLIPPY: product / SCALE fits in u64 by design
     fn weight(amount: u64, tier_id: u8) -> u64 {
         let tier = tier_by_id(tier_id).unwrap();
         ((u128::from(amount) * u128::from(tier.yield_multiplier)) / u128::from(SCALE)) as u64
+    }
+
+    /// Sum reward amounts, surfacing overflow loudly (test invariant: a
+    /// per-block distribution sums to at most the pool, well under u64::MAX).
+    fn total_reward(rewards: &[StakerReward]) -> AtomicUnits {
+        AtomicUnits::checked_sum(rewards.iter().map(|r| r.amount))
+            .expect("reward total overflow in test")
     }
 
     // ── Conservation property ──
@@ -27,7 +36,7 @@ mod tests {
         for tier in &TIERS {
             let n = 10;
             let amount = 5_000_000_000u64;
-            let pool = 10_000_000u64;
+            let pool = AtomicUnits::from_raw(10_000_000);
 
             let mut reg = StakeRegistry::new();
             for _ in 0..n {
@@ -35,7 +44,7 @@ mod tests {
             }
 
             let rewards = distribute_staker_rewards(&reg, pool);
-            let total_distributed: u64 = rewards.iter().map(|r| r.amount).sum();
+            let total_distributed = total_reward(&rewards);
             assert_eq!(
                 total_distributed, pool,
                 "tier {}: total must equal pool",
@@ -53,7 +62,7 @@ mod tests {
             (500_000_000, 0),
             (4_000_000_000, 2),
         ];
-        let pool = 50_000_000u64;
+        let pool = AtomicUnits::from_raw(50_000_000);
 
         let mut reg = StakeRegistry::new();
         for &(amount, tier) in &amounts_tiers {
@@ -61,7 +70,7 @@ mod tests {
         }
 
         let rewards = distribute_staker_rewards(&reg, pool);
-        let total: u64 = rewards.iter().map(|r| r.amount).sum();
+        let total = total_reward(&rewards);
 
         // With dust assignment, total should exactly equal pool
         assert_eq!(total, pool);
@@ -76,9 +85,9 @@ mod tests {
             reg.add_stake(amount, tier, 0).unwrap();
         }
 
-        let pool = 100_000_000u64;
+        let pool = AtomicUnits::from_raw(100_000_000);
         let rewards = distribute_staker_rewards(&reg, pool);
-        let total: u64 = rewards.iter().map(|r| r.amount).sum();
+        let total = total_reward(&rewards);
 
         assert_eq!(total, pool);
     }
@@ -88,7 +97,7 @@ mod tests {
     #[test]
     fn higher_tier_gets_more_reward() {
         let amount = 1_000_000_000u64;
-        let pool = 10_000_000u64;
+        let pool = AtomicUnits::from_raw(10_000_000);
 
         let mut reg = StakeRegistry::new();
         reg.add_stake(amount, 0, 0).unwrap();
@@ -112,7 +121,7 @@ mod tests {
         reg.add_stake(1_000_000_000, 0, 0).unwrap();
         reg.add_stake(2_000_000_000, 0, 0).unwrap();
 
-        let pool = 9_000_000u64;
+        let pool = AtomicUnits::from_raw(9_000_000);
         let rewards = distribute_staker_rewards(&reg, pool);
         assert_eq!(rewards.len(), 2);
 
@@ -121,7 +130,7 @@ mod tests {
         let r2 = rewards[1].amount;
         #[allow(clippy::cast_precision_loss)]
         // CLIPPY: approximate ratio check, precision loss is acceptable
-        let ratio = r2 as f64 / r1 as f64;
+        let ratio = r2.to_raw() as f64 / r1.to_raw() as f64;
         assert!(
             (ratio - 2.0).abs() < 0.1,
             "ratio should be ~2.0, got {ratio}"
@@ -190,16 +199,19 @@ mod tests {
         reg.add_stake(5_000_000_000, 2, 0).unwrap();
 
         let blocks = 1000u64;
-        let per_block_pool = 100_000u64;
-        let mut total_accumulated = 0u64;
+        let per_block_pool_raw = 100_000u64;
+        let per_block_pool = AtomicUnits::from_raw(per_block_pool_raw);
+        let mut total_accumulated = AtomicUnits::ZERO;
 
         for _ in 0..blocks {
             let rewards = distribute_staker_rewards(&reg, per_block_pool);
-            let block_total: u64 = rewards.iter().map(|r| r.amount).sum();
-            total_accumulated += block_total;
+            let block_total = total_reward(&rewards);
+            total_accumulated = total_accumulated
+                .checked_add(block_total)
+                .expect("accumulated reward overflow in test");
         }
 
-        let expected_total = blocks * per_block_pool;
+        let expected_total = AtomicUnits::from_raw(blocks * per_block_pool_raw);
         assert_eq!(
             total_accumulated, expected_total,
             "accumulated ({total_accumulated}) should equal blocks * pool ({expected_total})"
@@ -213,7 +225,7 @@ mod tests {
         let mut reg = StakeRegistry::new();
         reg.add_stake(1_000_000_000, 0, 0).unwrap();
 
-        let pool = 5_000_000u64;
+        let pool = AtomicUnits::from_raw(5_000_000);
         let rewards = distribute_staker_rewards(&reg, pool);
         assert_eq!(rewards.len(), 1);
         assert_eq!(rewards[0].amount, pool);
@@ -227,7 +239,7 @@ mod tests {
         reg.add_stake(1_000_000_000_000, 2, 0).unwrap(); // 1000 SKL whale
         reg.add_stake(1_000, 0, 0).unwrap(); // dust staker
 
-        let pool = 10_000_000_000u64; // 10 SKL pool
+        let pool = AtomicUnits::from_raw(10_000_000_000); // 10 SKL pool
         let rewards = distribute_staker_rewards(&reg, pool);
 
         // The dust staker's weight is tiny but with a large enough pool,
@@ -236,8 +248,8 @@ mod tests {
             .iter()
             .find(|r| r.entry_index == 0)
             .map(|r| r.amount)
-            .unwrap_or(0);
-        assert!(whale_reward > 0, "whale should get rewards");
+            .unwrap_or(AtomicUnits::ZERO);
+        assert!(!whale_reward.is_zero(), "whale should get rewards");
     }
 
     // ── MAX_CLAIM_RANGE sanity ──

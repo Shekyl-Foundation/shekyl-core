@@ -17,6 +17,7 @@
 //! audit", 2026-04-25) for why the split exists.
 
 use shekyl_scanner::{ClaimableInfo, LedgerBlock, LedgerIndexes};
+use shekyl_units::AtomicUnits;
 
 use crate::error::EngineCoreError;
 
@@ -32,7 +33,7 @@ pub struct ClaimInputPlan {
     /// Claim range end (inclusive).
     pub to_height: u64,
     /// Estimated reward for this claim.
-    pub estimated_reward: u64,
+    pub estimated_reward: AtomicUnits,
     /// Staking tier.
     pub tier: u8,
     /// Whether accrual has frozen (past lock_until).
@@ -45,7 +46,7 @@ pub struct ClaimTxPlan {
     /// Individual claim inputs.
     pub claims: Vec<ClaimInputPlan>,
     /// Total estimated reward across all claims.
-    pub total_reward: u64,
+    pub total_reward: AtomicUnits,
 }
 
 /// Builder for constructing claim transaction plans.
@@ -76,7 +77,7 @@ impl ClaimTxBuilder {
 
         let pool = indexes.staker_pool();
         let mut claims = Vec::new();
-        let mut total_reward = 0u64;
+        let mut total_reward = AtomicUnits::ZERO;
 
         for td in &claimable {
             let Some(idx) = ledger
@@ -88,12 +89,18 @@ impl ClaimTxBuilder {
             };
 
             if let Some(info) = ClaimableInfo::from_transfer(td, idx, current_height) {
-                let weight = weight_fn(td.amount(), td.stake_tier);
+                // `weight_fn` derives a governance weight (not a monetary
+                // amount) from the staked amount; it stays `u64`, so convert
+                // the `AtomicUnits` amount at the boundary.
+                let weight = weight_fn(td.amount().to_raw(), td.stake_tier);
 
                 let mut cursor = info.from_height;
                 while cursor < info.to_height {
                     let chunk_end = std::cmp::min(cursor + self.max_claim_range, info.to_height);
-                    let reward = pool.estimate_reward(cursor, chunk_end, weight);
+                    // `estimate_reward` is an economics computation off the
+                    // staker pool returning a raw `u64`; wrap at the edge.
+                    let reward =
+                        AtomicUnits::from_raw(pool.estimate_reward(cursor, chunk_end, weight));
                     claims.push(ClaimInputPlan {
                         transfer_index: idx,
                         global_output_index: td.global_output_index,
@@ -103,13 +110,15 @@ impl ClaimTxBuilder {
                         tier: td.stake_tier,
                         accrual_frozen: info.accrual_frozen,
                     });
-                    total_reward = total_reward.saturating_add(reward);
+                    total_reward = total_reward
+                        .checked_add(reward)
+                        .expect("claim reward total overflowed total supply bound");
                     cursor = chunk_end;
                 }
             }
         }
 
-        if total_reward == 0 {
+        if total_reward.is_zero() {
             return Err(EngineCoreError::ZeroReward);
         }
 
@@ -134,7 +143,7 @@ impl ClaimTxBuilder {
         let transfers = ledger.transfers();
         let pool = indexes.staker_pool();
         let mut claims = Vec::new();
-        let mut total_reward = 0u64;
+        let mut total_reward = AtomicUnits::ZERO;
 
         for &idx in indices {
             let td = transfers
@@ -151,12 +160,17 @@ impl ClaimTxBuilder {
             let info = ClaimableInfo::from_transfer(td, idx, current_height)
                 .ok_or(EngineCoreError::NoBacklog { index: idx })?;
 
-            let weight = weight_fn(td.amount(), td.stake_tier);
+            // `weight_fn` derives a governance weight (not a monetary
+            // amount) from the staked amount; it stays `u64`, so convert
+            // the `AtomicUnits` amount at the boundary.
+            let weight = weight_fn(td.amount().to_raw(), td.stake_tier);
 
             let mut cursor = info.from_height;
             while cursor < info.to_height {
                 let chunk_end = std::cmp::min(cursor + self.max_claim_range, info.to_height);
-                let reward = pool.estimate_reward(cursor, chunk_end, weight);
+                // `estimate_reward` is an economics computation off the
+                // staker pool returning a raw `u64`; wrap at the edge.
+                let reward = AtomicUnits::from_raw(pool.estimate_reward(cursor, chunk_end, weight));
                 claims.push(ClaimInputPlan {
                     transfer_index: idx,
                     global_output_index: td.global_output_index,
@@ -166,12 +180,14 @@ impl ClaimTxBuilder {
                     tier: td.stake_tier,
                     accrual_frozen: info.accrual_frozen,
                 });
-                total_reward = total_reward.saturating_add(reward);
+                total_reward = total_reward
+                    .checked_add(reward)
+                    .expect("claim reward total overflowed total supply bound");
                 cursor = chunk_end;
             }
         }
 
-        if total_reward == 0 {
+        if total_reward.is_zero() {
             return Err(EngineCoreError::ZeroReward);
         }
 

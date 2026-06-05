@@ -209,7 +209,7 @@ mod tests {
                     id: ReservationId::new(0),
                     built_at_height: 0,
                     built_at_tip_hash: [0u8; 32],
-                    fee_atomic_units: 0,
+                    fee_atomic_units: shekyl_units::AtomicUnits::ZERO,
                     snapshot_id: super::super::pending::SnapshotId([0u8; 16]),
                     tx_bytes: Vec::new(),
                     recipients: Vec::new(),
@@ -246,7 +246,7 @@ mod tests {
         TxRequest {
             recipients: vec![super::super::pending::TxRecipient {
                 address: "addr".into(),
-                amount_atomic_units: 1,
+                amount_atomic_units: shekyl_units::AtomicUnits::from_raw(1),
             }],
             priority: FeePriority::Standard,
             from_subaddress: None,

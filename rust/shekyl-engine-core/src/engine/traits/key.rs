@@ -73,6 +73,7 @@ use shekyl_crypto_pq::kem::{HybridCiphertext, HybridKemPublicKey};
 use shekyl_crypto_pq::key_image::KeyImage;
 use shekyl_crypto_pq::keys::{SpendPublicKey, ViewPublicKey};
 use shekyl_engine_state::SubaddressIndex;
+use shekyl_units::AtomicUnits;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::engine::error::KeyEngineError;
@@ -247,7 +248,7 @@ pub(crate) struct OutputClaim {
     /// drop with the rest of the claim. The orchestrator reads it for
     /// balance presentation and transaction-build amount accounting while
     /// the claim is held.
-    pub amount_atomic_units: u64,
+    pub amount_atomic_units: AtomicUnits,
 }
 
 // CLIPPY: `amount_atomic_units` is redacted (it is the decrypted cleartext

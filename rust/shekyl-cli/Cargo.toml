@@ -24,6 +24,7 @@ dirs = "6"
 ureq = { version = "3", default-features = false, features = ["rustls", "socks-proxy"] }
 tracing = "0.1"
 shekyl-logging = { path = "../shekyl-logging" }
+shekyl-units = { path = "../shekyl-units" }
 
 [dev-dependencies]
 proptest = "1"

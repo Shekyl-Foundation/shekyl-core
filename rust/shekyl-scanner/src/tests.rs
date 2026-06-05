@@ -20,6 +20,7 @@ pub(crate) mod staking {
         transfer::TransferDetails,
     };
     use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
+    use shekyl_units::AtomicUnits;
 
     fn tier_lock(tier: u8) -> u64 {
         shekyl_staking::tiers::tier_by_id(tier).unwrap().lock_blocks
@@ -76,7 +77,7 @@ pub(crate) mod staking {
             k_amount: Zeroizing::new([0u8; 32]),
             combined_shared_secret: Zeroizing::new([0u8; 64]),
             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
-            amount,
+            amount: AtomicUnits::from_raw(amount),
             source_ciphertext: shekyl_crypto_pq::kem::HybridCiphertext {
                 x25519: [0u8; 32],
                 ml_kem: Vec::new(),
@@ -552,7 +553,11 @@ pub(crate) mod staking {
         assert!(ledger.transfers()[1].spent);
 
         let balance_before = ledger.balance(1000);
-        assert_eq!(balance_before.total, 0, "both spent → zero total");
+        assert_eq!(
+            balance_before.total,
+            AtomicUnits::ZERO,
+            "both spent → zero total"
+        );
 
         let unmarked = indexes.unmark_spent(&mut ledger, &[ki_0, ki_1]);
         assert_eq!(unmarked, 2);
@@ -562,8 +567,8 @@ pub(crate) mod staking {
         assert!(ledger.transfers()[1].spent_height.is_none());
 
         let balance_after = ledger.balance(1000);
-        assert_eq!(balance_after.total, 3_000_000_000);
-        assert_eq!(balance_after.unlocked, 3_000_000_000);
+        assert_eq!(balance_after.total, AtomicUnits::from_raw(3_000_000_000));
+        assert_eq!(balance_after.unlocked, AtomicUnits::from_raw(3_000_000_000));
     }
 
     #[test]
@@ -629,8 +634,8 @@ pub(crate) mod staking {
         assert!(ledger.transfers()[2].spent);
 
         let balance = ledger.balance(1000);
-        assert_eq!(balance.total, 2_000_000_000);
-        assert_eq!(balance.unlocked, 2_000_000_000);
+        assert_eq!(balance.total, AtomicUnits::from_raw(2_000_000_000));
+        assert_eq!(balance.unlocked, AtomicUnits::from_raw(2_000_000_000));
     }
 
     #[test]
@@ -668,7 +673,10 @@ pub(crate) mod staking {
             .check_invariants(&ledger)
             .expect("invariants after unmark_spent");
 
-        assert_eq!(ledger.balance(1000).total, 1_500_000_000);
+        assert_eq!(
+            ledger.balance(1000).total,
+            AtomicUnits::from_raw(1_500_000_000)
+        );
     }
 
     // ── Gate 5a: immature output rejection (regression) ──
@@ -811,6 +819,7 @@ mod ledger_proptest {
         scan::{RecoveredWalletOutput, Timelocked},
     };
     use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
+    use shekyl_units::AtomicUnits;
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
         let mut bytes = [0u8; 32];
@@ -861,7 +870,7 @@ mod ledger_proptest {
             k_amount: Zeroizing::new([0u8; 32]),
             combined_shared_secret: Zeroizing::new([0u8; 64]),
             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
-            amount,
+            amount: AtomicUnits::from_raw(amount),
             source_ciphertext: shekyl_crypto_pq::kem::HybridCiphertext {
                 x25519: [0u8; 32],
                 ml_kem: Vec::new(),
@@ -1004,6 +1013,7 @@ mod sync_bookkeeping {
         scan::{RecoveredWalletOutput, Timelocked},
     };
     use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
+    use shekyl_units::AtomicUnits;
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
         let mut bytes = [0u8; 32];
@@ -1050,7 +1060,7 @@ mod sync_bookkeeping {
             k_amount: Zeroizing::new([0u8; 32]),
             combined_shared_secret: Zeroizing::new([0u8; 64]),
             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(ki),
-            amount,
+            amount: AtomicUnits::from_raw(amount),
             source_ciphertext: shekyl_crypto_pq::kem::HybridCiphertext {
                 x25519: [0u8; 32],
                 ml_kem: Vec::new(),
@@ -1144,12 +1154,12 @@ mod sync_bookkeeping {
         indexes.process_scanned_outputs(&mut ledger, 10, block_hash(10), Timelocked(vec![o1, o2]));
 
         assert_eq!(ledger.transfers().len(), 2);
-        assert_eq!(ledger.balance(100).total, 8000);
+        assert_eq!(ledger.balance(100).total, AtomicUnits::from_raw(8000));
 
         indexes.detect_spends(&mut ledger, 20, &[ki_100]);
         assert!(ledger.transfers()[0].spent);
         assert!(!ledger.transfers()[1].spent);
-        assert_eq!(ledger.balance(100).total, 3000);
+        assert_eq!(ledger.balance(100).total, AtomicUnits::from_raw(3000));
         indexes
             .check_invariants(&ledger)
             .expect("after spend detection");
@@ -1180,13 +1190,13 @@ mod sync_bookkeeping {
         );
 
         assert_eq!(ledger.transfers().len(), 3);
-        assert_eq!(ledger.balance(100).total, 6000);
+        assert_eq!(ledger.balance(100).total, AtomicUnits::from_raw(6000));
 
         indexes.handle_reorg(&mut ledger, 20);
 
         assert_eq!(ledger.transfers().len(), 1);
         assert_eq!(ledger.height(), 10);
-        assert_eq!(ledger.balance(100).total, 1000);
+        assert_eq!(ledger.balance(100).total, AtomicUnits::from_raw(1000));
         indexes.check_invariants(&ledger).expect("after reorg");
 
         indexes.process_scanned_outputs(
@@ -1197,7 +1207,7 @@ mod sync_bookkeeping {
         );
 
         assert_eq!(ledger.transfers().len(), 2);
-        assert_eq!(ledger.balance(100).total, 8000);
+        assert_eq!(ledger.balance(100).total, AtomicUnits::from_raw(8000));
         indexes
             .check_invariants(&ledger)
             .expect("after re-scan post-reorg");
@@ -1230,11 +1240,11 @@ mod sync_bookkeeping {
 
         let spent = indexes.detect_spends(&mut ledger, 20, &[ki]);
         assert_eq!(spent, 1);
-        assert_eq!(ledger.balance(100).total, 0);
+        assert_eq!(ledger.balance(100).total, AtomicUnits::ZERO);
 
         let unmarked = indexes.unmark_spent(&mut ledger, &[ki]);
         assert_eq!(unmarked, 1);
-        assert_eq!(ledger.balance(100).total, 10_000);
+        assert_eq!(ledger.balance(100).total, AtomicUnits::from_raw(10_000));
 
         indexes
             .check_invariants(&ledger)

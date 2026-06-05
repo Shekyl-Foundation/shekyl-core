@@ -53,6 +53,8 @@
 
 use std::num::NonZeroU64;
 
+use shekyl_units::AtomicUnits;
+
 use super::error::FeeEstimatorError;
 use super::refresh::LedgerSnapshot;
 
@@ -198,7 +200,7 @@ pub trait FeeEstimator: Send + Sync + 'static {
         &self,
         priority: FeePriority,
         context: &FeeEstimationContext<'_>,
-    ) -> Result<u64, Self::Error>;
+    ) -> Result<AtomicUnits, Self::Error>;
 }
 
 /// V3.0 default [`FeeEstimator`] implementor.
@@ -230,7 +232,7 @@ impl FeeEstimator for DaemonFeeEstimator {
         &self,
         _priority: FeePriority,
         _context: &FeeEstimationContext<'_>,
-    ) -> Result<u64, FeeEstimatorError> {
+    ) -> Result<AtomicUnits, FeeEstimatorError> {
         // Phase 1 stub: returns STUB_FEE_ATOMIC_UNITS
         // verbatim. Matches the pre-PR-5
         // `build_pending_tx_in_state` body's `let fee =
