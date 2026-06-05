@@ -1439,7 +1439,9 @@ backlog requires multiple txs, avoid fixed epoch-boundary broadcast cadence; Dan
 | Fake `StakeEvent` injection | Events originate from scanner parsing blocks tied to daemon headers; `OwnNullifierObserved` requires matching a locally derived nullifier (a forged event cannot fabricate the wallet's own nullifier) |
 | **Silent inflation** | **`h_bind`** (tier+creation) + window arithmetic + recomputed `N/D` + **(A)** bounded-remainder (committed `ρ`, range `0≤ρ<D`) + `ρ_cap` (upstream §9) |
 
-**Diagnostic projection (lens 3):** RPC fields are **field-redacted** along *two* classes,
+### 7.3 Diagnostic projection (lens 3)
+
+RPC fields are **field-redacted** along *two* classes,
 not one. (i) The **secret class** — no view/spend, no `z`. (ii) The **derived-value class**,
 which the secret-class redaction does **not** cover and which must therefore be named
 explicitly: **no per-stake `claimable`** (it is a deterministic function of the
@@ -1452,6 +1454,70 @@ correlation), and **claim-unlinkable** (no stake↔claim join key), and carries 
 **global** claimable total + coarse state. **Distinct from the owner-grade `StakeView`
 (§4.6):** `StakeView` carries those two per-stake fields and is owner-only; this lens
 carries **neither**. `StakeView` must not be widened into this lens.
+
+### 7.4 Round 3 agenda (pre-staged 2026-06-05): threat-model exhaustion + wider-substrate audit
+
+Round 3 is the threat-model-exhaustion + wider-substrate-audit round
+([`WALLET_REWRITE_PLAN.md`](WALLET_REWRITE_PLAN.md) op. 5–7). This subsection
+**pre-stages the agenda** — the vectors to wargame to exhaustion and the deployed-system
+failure modes to disposition — but **does not pre-judge outcomes**: each item is `OPEN`
+until Round 3 drives it to a disposition (mitigated-in-design / FOLLOWUP'd with a reopening
+trigger / priority-rejected with reopening criteria, per `21-reversion-clause-discipline.mdc`).
+**Round-3 closure** (§9 row + §10.1 box) requires every T- and G-item below to carry a
+disposition. Pre-staging is **not** a round (Principle 5 closure-rule): it sets the surface;
+it does not close it.
+
+**Adversary models** (Principle 7 anchors; run each T-item against the applicable models):
+
+- **A1 — adversary-controlled daemon** (expected deployment, Tor/I2P-first per
+  [`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md)): rate misreport, block withholding,
+  selective/late delivery, header-timing manipulation.
+- **A2 — passive network observer / chain analyst**: claim linkage, broadcast-timing
+  correlation, band-cohort analysis across the public chain.
+- **A3 — memory-disclosure adversary** (per `35-secure-memory.mdc`): in-memory opening
+  `(amount, z)`, transient spend secret `x`, prover bundles.
+- **A4 — collusion** (A1 + A2): daemon timing oracle composed with chain analysis.
+
+**Threat-model-exhaustion agenda** (carried from the §7 seed table + the §0.10 new surfaces;
+each `OPEN`):
+
+| ID | Vector | Wargame question (drive to exhaustion in Round 3) |
+|----|--------|---------------------------------------------------|
+| **T1** | Per-stake claim-sequence correlation | Is full-window batching (§6 default) sufficient against A2, or does the residual `(tier, contiguous-window)` signal need a **pinned** jitter/Dandelion++ default? Drip vs delay-then-batch (the §7 seed row). |
+| **T2** | Claim↔stake linkage across a sequence | Confirm DDH-unlinkability (`N_{i,S}=x_i·G_S`) holds across the *whole* claim sequence under A2/A4, not only per single claim. |
+| **T3** | Band cohort-size leakage (cold start) | Thin-cohort de-anonymization under A2; wallet-UI early-staker warning vs consensus floor/suppress — **name the cross-track upstream ask** (do not assume the consensus floor). |
+| **T4** | Claim-timing correlation | Broadcast cadence + epoch-boundary clustering under A1/A4; pin the wallet-side timing defaults; Dandelion++/jitter as the network-layer mitigation. |
+| **T5** | In-memory opening exposure | Re-derive-on-hydration window + zeroize-on-drop coverage + no-plaintext-in-message/RPC under A3; confirm the `35-secure-memory.mdc` posture end-to-end (opening `(amount, z)`, transient `x`, prover bundle). |
+| **T6** | Nullifier-reorg desync | Adversarial reorg shapes (straddling-lock, deep reorg, reorg-then-re-mine) against the §5.2 rebuild; confirm the consensus `pop_block` carry (§10.1) is the *only* residual gap. |
+| **T7** | Nullifier / key-image cross-link | Confirm `x·G_S` (claim) vs `x·Hp(O)` (unstake) independent-NUMS-base unlinkability is not weakened by any wallet surface (no shared serial, no correlated broadcast). |
+| **T8** | Silent inflation (wallet role) | Wallet must never construct over-entitlement and must not rely on the consensus range proof to mask a local accounting bug (priority-1); `h_bind` / `N·D`-recompute / bounded-remainder is upstream's argument, the wallet's job is not to undermine it. |
+| **T9** | Fake `StakeEvent` injection | Confirm scanner-origin + own-nullifier-match forecloses forged events under A1 (no path fabricates the wallet's own nullifier). |
+
+**§6 wider-substrate audit seed** (Principle 6 — "what have deployed staking systems / crypto
+wallets taught us about staking-deployment failure modes this design hasn't named?"; each
+candidate `OPEN`, dispositioned substrate-now / FOLLOWUP / priority-reject in Round 3).
+Confidential-claim staking is **not delegated PoS**, so several canonical PoS failure classes
+are expected N/A — recording the non-applicability *is* an audit result, not a skipped item:
+
+| ID | Deployed-system failure mode | Pre-stage note (disposition lands in Round 3) |
+|----|------------------------------|-----------------------------------------------|
+| **G1** | Slashing / penalty tracking | Shekyl staking has **no slashing** (confirm vs [`STAKER_REWARD_DISBURSEMENT.md`](../STAKER_REWARD_DISBURSEMENT.md)); if confirmed, the "wallet tracks slashing risk" class is N/A — document and close. |
+| **G2** | Validator / delegation UX | Not delegated PoS — expected N/A; confirm + document. |
+| **G3** | Lock-up / unbonding surprise | Tier lock windows; wallet surfaces `unlock_height` (`StakeView`, §6). Wargame "funds locked longer than the user expected" — is the surfacing sufficient? |
+| **G4** | Dust-reward / fee-starved claim | Claiming costs a tx fee; if `claimable < fee` the claim is uneconomic (a real Cosmos/ETH-staking failure mode). Does the wallet warn / batch / defer? Likely a substrate-now UX pin or a FOLLOWUP. |
+| **G5** | Resync during in-flight claim | Covered by §3.4 (`claim_pending_epochs` runtime-only; `Restore` starts empty) + §5 — confirm exhaustively, do not assume. |
+| **G6** | Mempool eviction of a claim tx | Does the claim path inherit `PendingTxEngine`'s staleness gate (§8.9)? Confirm the duplicated gate covers claim eviction, not only ordinary spends. |
+| **G7** | Long-range reorg of a confirmed claim | Covered by the §5.2 rebuild + the consensus `pop_block` carry — confirm no *additional* wallet gap beyond the named carry. |
+| **G8** | HW-wallet signing latency (claim/unstake) | Claim prove needs `x` transiently via the `Signer` boundary (anchor 2); confirm the HW-wallet path and its latency posture for the time-sensitive claim window. |
+| **G9** | Wallet-locked during claim window | Does a locked / passphrase-gated wallet block time-sensitive claims? UX-vs-security trade — disposition in Round 3. |
+| **G10** | Fee-bump / replacement of a stuck claim | Expected **priority-3 rejection** mirroring the PR 5 G3 precedent (reopening criteria: FCMP++ fingerprint-unobservability analysis OR telemetry re-classification of stuck-tx-recovery into a higher priority class). Confirm the precedent transfers to claim txs. |
+
+**Round-3 dependencies / cross-track asks:** (1) the consensus `pop_block` nullifier-revert
+carry (§5 / §10.1) feeds **T6** and **G7**; (2) upstream Round 2 wire/KAT gates (§8.0) are
+not blocking the *wargame*, but byte-exact claim/stake wire and entitlement vectors must be
+cited where **T8** / **G7** reference consensus behavior; (3) **T3**'s cold-start cohort floor
+may require an upstream consensus coordination ask — record it as a cross-track item, do not
+assume it exists.
 
 ---
 
@@ -1713,7 +1779,7 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 (§3.3.1): measured-`x`-cost, and claim-completion-gated pruning of spent staked outputs.
 **Async trait RESOLVED (§4.6):** RPITIT-`+ Send` across all methods, five-engine idiom.
 **Both Round-2 R-residuals now closed.** **§4.7 message protocol pinned (D1–D4):** reorg **folded** onto `ApplyStakeEvents { reorg_rewind }` (no `RewindTo`; rewind-first in one uninterruptible turn — atomicity, not just ledger-mirror symmetry); reorg semantics **clear-all/replay-all of the full surviving own-nullifier set across the whole post-reorg chain** (windowed replay drops below-fork survivors of a straddling lock), **heights live in the scanner** not `claimed_epochs`; `claim_pending_epochs` lifecycle = `PrepareClaimBuild` side-effect (set) + `AbandonClaim` (clear, **claim_pending only, never claimed**); `Snapshot` excludes `claim_pending_epochs` / `Restore` starts it empty. **§5's §4.7 carry is thereby discharged; only the consensus-track `pop_block` nullifier-revert** (cross-tree atomicity) **holds the §5 box open.** **§6 user API signed off (2026-06-05):** owner-grade `StakeView` pinned (per-stake `claimable` / `claimed_epochs` / `unlock_height`) **distinct** from the §7 lens-3 redaction (one struct cannot serve both trust grades); amounts are `AtomicUnits` end-to-end (engine/orchestrator/computation; `u64` only at postcard/FFI/consensus edges; `_atomic` suffix dropped); `StakeFilter` declared as a closed by-state enum; abandon-claim discard wiring pinned (§3.4/§6 — general pending-tx discard dispatches `AbandonClaim` for claim-type txs); pre-stake yield projection omitted by decision (§8.6 forward-uncertain); FA-1 regrounded to the single static address with an independent-accounts reopen-pointer (rule 21); stale §3.3 opening doc-comment fixed. **§8.6 `rate_at_epoch` finalized (2026-06-05):** the EconomicsEngine yield surface is pinned (7 pins — rate-epoch index in, public fixed-point `ρ_e` out, fallible with `Ok(0)`≠`Err`, consensus-`band_sum`-derived, `AtomicUnits` crossing at the yield product, no per-stake state); `pool_weighted_total` **retired** (rule 15 delete — sole consumer was the redesign-eliminated `projected_yield` denominator, verified at source in both docs) across all 7 `V3_ENGINE_TRAIT_BOUNDARIES.md` sites, code removal deferred to Stage 3. **Both wallet-design Round-2 boxes now closed; §5 reconciliation is wallet-design signed off (Rounds 1–2) — its box was split (2026-06-05) into a checked wallet-design box and a separate, explicitly-external cross-track carry for the consensus-track `pop_block` nullifier-revert, which is the sole remaining open §5 item and is closeable only upstream. No further wallet design work blocks Round 3.** **§0.1 pre-flight re-verify trio closed (2026-06-05):** §2 trait-binding, the §1.5 three-condition test, and the surface-amendment re-confirmed against the §0.10 secret-ownership shift (the actor's only secret state is in-memory `(amount, z)`, re-derived on hydration, never sealed; fail-stop isolation holds because the secret is reconstructable, not authoritative-at-rest). §2.7 / §3.3 were discharged by the §8.6 landing (`rate_at_epoch` is a §3.3.6 pure-read, no `.await`-ordering obligation); §8.3 lens row clean. **One residual fixed:** boundaries-doc §10.5.1 still described `StakeEngine` as owning "principal-pool aggregation state at Stage 4" — an 8th dead pool-denominator reference the literal-name `pool_weighted_total` sweep missed — corrected to per-stake in-memory openings with **no** principal-pool aggregation (exact yield = `rate_at_epoch` × own weight). |
-| **3** | Open | Threat-model exhaustion (§7) + §6 wider-substrate audit (after upstream Round 1) |
+| **3** | Open — **agenda pre-staged (2026-06-05, §7.4)** | Threat-model exhaustion (§7) + §6 wider-substrate audit. **Pre-stage** enumerated the adversary models (A1 daemon / A2 observer / A3 memory-disclosure / A4 collusion), a **9-item threat-exhaustion agenda** (T1–T9: claim-sequence correlation, claim↔stake linkage, cold-start cohort leakage, claim-timing, in-memory opening exposure, nullifier-reorg shapes, nullifier/key-image cross-link, silent-inflation wallet role, fake-event injection), and a **10-item wider-substrate audit seed** (G1–G10, Principle 6 — slashing N/A, delegation N/A, lock-up surprise, dust/fee-starved claim, resync-in-flight, mempool eviction, long-range reorg, HW-wallet latency, locked-during-claim, fee-bump rejection). Every T/G item is `OPEN`; **pre-staging is not closure** (Principle 5) — Round 3 closes only when each carries a disposition. Cross-track deps: consensus `pop_block` carry (T6/G7), upstream Round 2 wire/KAT (T8/G7), possible cold-start cohort-floor upstream ask (T3). |
 | **4** | Open | Binding pins (trait signatures, error enums, persistence version; **no stake sealed-region format** — opening dissolved, §4.2) |
 | **5** | Open | Closure + Stage 3 PR decomposition |
 | **6** | Open | External critique buffer (optional) |
@@ -1737,6 +1803,8 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 - [x] **Tier/window / multiplier integrity** — upstream **(C)** closed on **3C** (staking subtree + `h_bind`, window arithmetic); **(A)** reserve-DLEQ + bounded remainder; impl Round 2
 - [x] `EconomicsEngine::rate_at_epoch` + boundaries doc amendment (§8.6) **— finalized (2026-06-05).** Seven pins: rate-epoch *index* (not height); returns public `ρ_e` as fixed-point `u64` (a rate, not `AtomicUnits`; consensus-defined scale); fallible with `Ok(0)`≠`Err` (un-overloads `pool_weighted_total`'s `0`); consensus-derived from on-chain `band_sum`, not wallet-recomputed; the `AtomicUnits` crossing is the yield product `own_weight·K_S`; no per-stake state (§8.2). **`pool_weighted_total` retired (delete, not renarrate — rule 15):** its sole named consumer (`projected_yield`'s pool denominator) was eliminated by the confidential redesign, verified at source in *both* the trait rustdoc and `V3_ENGINE_TRAIT_BOUNDARIES.md`; reopen-criterion is rule-21-shaped. Boundaries doc amended across all 7 sites (§2.7 Ownership, method sketch, consumer narrative, discipline-test example, three classification tables) — framed "retired pending Stage-3 code removal." Code removal + `active_weighted_stake` repurposing enumerated in §8.6 for Stage 3.
 - [x] **Upstream consensus Round 1 closed** (§8.0; [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §14)
+- [x] **Round 3 agenda pre-staged (2026-06-05, §7.4):** adversary models A1–A4; threat-exhaustion agenda T1–T9; wider-substrate audit seed G1–G10 (Principle 6). All items `OPEN` — pre-stage sets the surface, does not close it (Principle 5).
+- [ ] **Round 3 wargaming executed** — every §7.4 T1–T9 + G1–G10 item driven to a disposition (mitigated / FOLLOWUP+trigger / priority-reject+criteria)
 - [ ] Round 3 design closure recorded in §9
 
 ### 10.2 Stage 3 implementation (after closure — separate PR(s))

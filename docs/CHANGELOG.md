@@ -370,6 +370,22 @@
   The carry closes only by confirming `pop_block` behavior upstream (`CONFIDENTIAL_STAKING.md`,
   consensus Round 2), not by any wallet change. This makes the consensus `pop_block` nullifier-
   revert the **sole** remaining open §5 item, and confirms no wallet design work blocks Round 3.
+- **staking: Round 3 agenda pre-staged (`PHASE_2B_STAKE_LIFECYCLE.md` §7.4 / §9 / §10.1).** With
+  both wallet-design Round-2 boxes closed, pre-staged the threat-model-exhaustion + wider-substrate-
+  audit round (Principles 5–7). Added §7.4 enumerating: **adversary models** A1–A4 (adversary-
+  controlled daemon / passive observer / memory-disclosure / collusion); a **9-item threat-
+  exhaustion agenda** T1–T9 (per-stake claim-sequence correlation, claim↔stake linkage across a
+  sequence, cold-start band-cohort leakage, claim-timing correlation, in-memory opening exposure,
+  nullifier-reorg shapes, nullifier/key-image cross-link, silent-inflation wallet role, fake-event
+  injection); and a **10-item wider-substrate audit seed** G1–G10 (Principle 6 — slashing N/A,
+  delegation N/A, lock-up surprise, dust/fee-starved claim, resync-in-flight, mempool eviction,
+  long-range reorg, HW-wallet latency, locked-during-claim, fee-bump rejection mirroring the PR 5
+  G3 precedent). **Pre-staging is not closure (Principle 5):** every T/G item is `OPEN` and Round 3
+  closes only when each carries a disposition (mitigated / FOLLOWUP+trigger / priority-reject+
+  criteria, rule 21). Cross-track deps recorded: consensus `pop_block` carry (T6/G7), upstream
+  Round 2 wire/KAT (T8/G7), possible cold-start cohort-floor upstream ask (T3). Also fixed a
+  dangling §7.3 cross-reference (line-134 "§7.3 projection axes") by giving the lens-3 diagnostic
+  projection its §7.3 heading.
 - **staking: confidential-claim entitlement `D` pinned + remainder range-proof
   construction closed (Round 2, §6.4.1 decisions 1(a)/1(b)).** Corrected the
   underspecified `D = SCALE` to `D = D_tier · SCALE_rate = 2^(k+1)`: `D_tier = 2`
