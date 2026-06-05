@@ -2380,6 +2380,87 @@ sustainability is unaffected by the recalibration.
 
 ## V3.1 — audit response and stressnet gates
 
+- **Confidential-staking wallet Round 3 wargame residuals (Phase 2b §7.5.2).**
+  The Round 3 threat-model-exhaustion + wider-substrate wargame
+  ([`PHASE_2B_STAKE_LIFECYCLE.md`](./design/PHASE_2B_STAKE_LIFECYCLE.md) §7.5,
+  executed 2026-06-05) dispositioned every T/G item; seven carry **V3.1**
+  FOLLOWUP dispositions (each with a reopening trigger). **Work:**
+  1. **Broadcast jitter / Dandelion++ / circuit hygiene (T1/T4/T14).** Pin a concrete
+     randomized-delay distribution + Dandelion++ default for claim broadcast;
+     forbid fixed epoch-boundary cadence and chained stake→auto-claim→auto-unstake
+     at deterministic offsets. **Acceptance criteria added by the §7.5.3 synthesis:**
+     (a) origin obfuscation **beyond "send over Tor"** — a Dandelion++-equivalent
+     stem/fluff phase under the anonymity network; (b) **circuit hygiene per-claim** —
+     a fresh circuit per broadcast (circuit reuse re-links the whole claim sequence
+     regardless of on-chain unlinkability). *Reopen when:* testnet shows residual
+     `(tier, contiguous-window)` serial correlation, or same-circuit egress linkage,
+     under a passive observer despite full-window batching.
+  2. **Thin-cohort warning — stake *and* claim (T3 + F0).** Wallet surfaces a warning
+     when the observable cohort is small (estimable from public participation):
+     **(a)** before a stake lands, on the band cohort; **(b) elevated by the §7.5.3
+     synthesis top finding F0** — also before a **claim**, on the `{tier ×
+     creation_height}` cohort, because a claim's effective anonymity set is that cohort
+     (`tier` + `creation_height` are cleartext wire fields, §6.4.8) and at cold start it
+     can approach one. The wallet warning is the honest-UX half and **does not
+     substitute** for the consensus fix. *Cross-track companion:* confirm the consensus
+     cohort-floor/suppression (`CONFIDENTIAL_STAKING.md` §14.1/§14.4) is active at
+     genesis — **do not assume it**; and see the F0 cross-track asks below.
+  3. **Dust / fee-starved claim UX (G4).** Compare `claimable` to the estimated
+     claim-tx fee; never auto-broadcast an uneconomic claim — warn / defer /
+     accrue more epochs.
+  4. **Lock-up surfacing UX (G3).** Show lock duration + `unlock_height` at stake
+     time; warn on long tier-3 locks. *Reopen when:* usability testing shows lock
+     surprise.
+  5. **HW-wallet claim-prove latency measurement (G8).** Measure the `Signer`
+     round-trip for claim-prove (`x` transiently). Not a Stage-3 blocker (claims
+     are not deadline-tight). *Reopen when:* a HW path's claim-prove exceeds a
+     settlement epoch.
+  6. **Locked-wallet claim reminder (G9).** Optional reminder; claims do not
+     expire in v1, so a locked wallet simply claims when next unlocked.
+  7. **Claim-tx canonical-ordering fingerprint pin (G12).** `settlement_epochs[]`
+     / `nullifiers[]` sorted canonically; no wallet-specific padding (Monero
+     wallet2-fingerprint lesson). *Reopen when:* non-canonical ordering or a
+     wallet-specific field appears in the claim/stake wire (cross-ref the upstream
+     byte-exact wire, §8.0).
+  **§7.5.3 dual-wargamer synthesis additions (2026-06-05).**
+  8. **Claim epoch-count leak — accept-vs-pad decision (T10/G12).** A claim's
+     `nullifier count == epoch count`, leaking the stake's age and claim cadence off
+     the wire. Decide explicitly: accept the leak, or pad `nullifiers[]` to a fixed
+     count with dummies (uniform but expensive). *Reopen when:* clustering on
+     epoch-count + timing is demonstrated against a passive observer.
+  9. **Advisory-claimability wallet pin (T9).** Treat any daemon-reported nullifier
+     status as **advisory, never a license to reveal a second nullifier** — a lying
+     daemon that reports `N_S` unused can otherwise induce a duplicate-claim broadcast
+     that re-reveals `N_S` and links the two attempts. Wallet's own derived
+     `{x·G_S} ∩ chain` is authoritative.
+
+  **Cross-track asks** (tracked in the design doc with reopening triggers, not
+  FOLLOWUPS-graveyard items): **F0 (new, gating) — the `{tier × creation_height}`
+  cohort partition**. **Reveal-vs-ZK resolved at source 2026-06-05:** `tier` (u8) and
+  `creation_height` (u64) are **cleartext wire fields** (`CONFIDENTIAL_STAKING.md`
+  §6.4.8), revealed-by-design and load-bearing for inflation-safety (§6.4.3 — the single
+  revealed `tier` drives both `h_bind` and the multiplier; the 3C-over-3A "no new
+  primitive" win). So claim↔claim linkage is **deterministic exact-match** and the open
+  item is a **consensus policy decision**: add an explicit **`{tier × creation_height}`
+  claim-cohort k-anonymity gate** *or* explicitly accept-for-v1 with the cold-start
+  cross-claim-linkage consequence on record (full hiding = V4/L4, co-designed with the
+  entitlement circuit). **The §14 `band_sum` floor does *not* close this** — it smooths
+  the public-rate readout (a different leak); cold-start needs both. This **re-opens**
+  `CONFIDENTIAL_STAKING.md` §14.4 item-9 and re-gates Round 3 closure. Also: the
+  **band-declaration binding (T8/8b)** — the
+  band↔`C_stake` range proof must carry the **same rigor as the value range proof**
+  (silent-inflation surface co-equal with entitlement soundness); and the **A5
+  mass-unstaking simulation** — confirm the burn-servo / decaying-emission / `ρ_cap`
+  self-stabilize under a coordinated rational-exit shock (cross-track to economics).
+  The prior L4-hide-tier/window-for-V4 ask folds into F0. **T11 principal-commitment
+  re-randomization was investigated and resolved at source 2026-06-05 (§7.5.1 #2), so
+  it is not an open ask.** **Stage-3 load-bearing pins:** bulk-fetch-only nullifier
+  scan T13; `OutputRef`-keying T12; prover-bundle zeroization T5; **constant-time
+  claim-build crypto (Schnorr / membership / nullifier scalar work — new, T5/§7.5.3)**;
+  claim via `PendingTxEngine` staleness gate G6; canonical wire ordering G12.
+  **Target:** V3.1. **Ref:**
+  [`PHASE_2B_STAKE_LIFECYCLE.md`](./design/PHASE_2B_STAKE_LIFECYCLE.md) §7.5 / §7.5.3.
+
 - **Axum daemon RPC: IPv6 dual-bind parity with epee (PR #103).** When the
   Rust/Axum transport is the sole RPC server, `daemon.cpp` `run()` binds a
   single listener on the resolved IPv4 host (`--rpc-bind-ip` /

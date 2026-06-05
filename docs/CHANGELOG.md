@@ -4,6 +4,78 @@
 
 ### Added
 
+- **stake-lifecycle: Round 3 dual-wargamer synthesis — top finding F0 re-gates
+  closure.** Two independent adversarial passes over the §7.5 wargame were
+  synthesized into `docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (2026-06-05).
+  Headline **F0**: a confidential **claim does not inherit FCMP++'s whole-chain
+  anonymity set** — its effective set is the **`{tier × creation_height}` cohort**.
+  **The reveal-vs-ZK question is resolved at source: `tier` (u8) and `creation_height`
+  (u64) are cleartext public wire fields** (`CONFIDENTIAL_STAKING.md` §6.4.8; verifier
+  recomputes `h_bind` + multiplier from them, §6.4.3) — not merely brute-forceable,
+  **published directly**. The reveal is **load-bearing for inflation-safety** (the single
+  revealed `tier` excludes tier-forgery by driving both `h_bind` and the multiplier; the
+  3C-over-3A "no new primitive" win), so hiding `(tier, creation)` re-opens the 3C-vs-3A
+  decision — **L4 is V4 co-design, not a v1 bolt-on**. Because every claim of one stake
+  carries the identical cleartext `(tier, creation_height)`, claim↔claim linkage is
+  **deterministic exact-match — not residual** (the DDH split protects claim↔unstake, not
+  claim↔claim), and at cold start the cohort approaches **one** (the Zcash
+  small-shielded-pool lesson with a tier×exact-creation-height multiplier). F0
+  **reframes T1/T2/T3 into one variable** (cohort size), **re-opens**
+  `CONFIDENTIAL_STAKING.md` §14.4 item-9, and **re-gates Round 3 closure** on a consensus
+  policy decision: an explicit **`{tier × creation_height}` claim-cohort k-anonymity
+  gate** *or* explicit accept-for-v1 with the cross-claim-linkage consequence on record.
+  **The §14 `band_sum` floor does not close this** — it smooths the public-rate readout (a
+  separate leak); cold-start needs both ("incentivize more staking" fixes absolute size,
+  not the partition). Other synthesis outcomes: inflation **T8 split**
+  into **8a entitlement-proof soundness** + **8b band-declaration binding** (co-equal
+  silent-inflation surfaces — the band↔`C_stake` range proof must carry the same rigor
+  as the value range proof); new adversary **A5** (economic/rational — bank-run /
+  mass-unstaking, MEV, stake-rental) with a required **mass-unstaking servo-stability
+  simulation**; and sharpenings — **T9** induced-duplicate (daemon claimability is
+  advisory, never a license to reveal a second nullifier), **T1/T4/T14** circuit
+  hygiene (fresh circuit per broadcast + Dandelion++-equivalence as acceptance
+  criteria), **T10/G12** stake-age leak via nullifier-count (accept-vs-pad decision),
+  **T3** public-rate whale/cold-start readout, **T5** constant-time claim-build pin +
+  view-key-resident residual, **T7** `G_S` NUMS independence, **T6** §11 all-five-
+  members-in-one-txn atomicity as load-bearing. Recorded as a **result** (not a gap):
+  confidential-claim staking structurally **excludes** the delegated-PoS attack class
+  (slashing-griefing, nothing-at-stake, long-range revision, equivocation,
+  stake-grinding). §7.4 gains A5; §9 row + §10.1 boxes re-gated on F0; `FOLLOWUPS.md`
+  V3.1 entry updated.
+- **stake-lifecycle: Round 3 wargame executed — threat model exhausted against
+  privacy-crypto history.** `docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5 drives
+  every §7.4 agenda item (T1–T9, G1–G10) to a disposition and **augments** the
+  agenda with vectors that deployed privacy chains actually suffered: **T10**
+  claim-tx-type / staker-set distinguishability (Zcash transparent↔shielded
+  lesson), **T11** stake↔unstake commitment linkage (MimbleWimble graph
+  reconstruction), **T12** one-time-key collision (Monero 2018 burning bug),
+  **T13** remote-node query-pattern leakage (Monero malicious-remote-node), **T14**
+  whole-lifecycle broadcast-origin linkage, **G11** proof-soundness / inflation
+  (Zcash 2018 counterfeiting + Monero 2017 RingCT bug), **G12** wallet/tx-
+  construction fingerprint (Monero wallet2), **G13** claim front-running /
+  censorship (MEV); Janus subaddress-linkage confirmed **N/A** under FA-1's single
+  static address. Each disposition is mitigated-in-design / FOLLOWUP+trigger /
+  cross-track / priority-reject per `21-reversion-clause-discipline.mdc`. Four
+  load-bearing findings (§7.5.1): (1) **inflation is the worst historical class —
+  the wallet's job is non-masking** (derives `claimable` only from its own secret
+  weight × public `ρ_e`, loud-fails local inconsistency; priority-1); (2) **T11
+  stake↔unstake commitment linkage — investigated and resolved at source**: unstake
+  is an unlinkable FCMP++ membership spend appending a *fresh* main-tree output
+  (`CONFIDENTIAL_STAKING.md` §6.3/§6.4.3/§7), so the literal `C_stake` is never
+  re-published and there is no point-equality link — no Priority-2 finding; (3)
+  **bulk-fetch-only nullifier scan** (T13,
+  inherits the curve-tree-client never-per-item-query invariant); (4) staking is
+  publicly observable as a class — v1-accepted with full intra-cohort uniformity
+  (not "privacy as a setting"), structural hide deferred to V4/L4. Residuals
+  (§7.5.2): 7 FOLLOWUPS (V3.1, recorded in `docs/FOLLOWUPS.md`), 2 cross-track
+  upstream asks (T3 cohort floor, T10 L4-for-V4 — T11 resolved at source, no longer
+  an ask), 5 Stage-3 load-bearing implementation pins, 1 priority-reject (G10
+  fee-bump, PR 5 G3 precedent), 3 N/A. **A first clean close was recorded
+  2026-06-05, then re-gated the same day by the dual-wargamer synthesis (see the
+  entry above, §7.5.3) on new top finding F0.** Stage 3 *merge* remains gated on the §8.0
+  confidential-consensus dependency, independent of this round. No wallet design
+  change; no disposition reversal.
+
 - **units: `AtomicUnits` amount-newtype (`shekyl-units` crate).** A new
   foundational `shekyl-units` workspace member owns `AtomicUnits(u64)`, the
   wallet's monetary-amount type, replacing raw `u64` on the money path. It is

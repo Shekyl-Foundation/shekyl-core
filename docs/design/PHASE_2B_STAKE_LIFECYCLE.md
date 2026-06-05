@@ -1477,6 +1477,10 @@ it does not close it.
 - **A3 — memory-disclosure adversary** (per `35-secure-memory.mdc`): in-memory opening
   `(amount, z)`, transient spend secret `x`, prover bundles.
 - **A4 — collusion** (A1 + A2): daemon timing oracle composed with chain analysis.
+- **A5 — economic / rational internal actor** (added in §7.5.3 synthesis): yield-optimizing
+  agents (stake vs. unstake/other uses — bank-run dynamics), MEV extractors, stake-rental
+  markets. Not a confidentiality adversary; an incentive-and-liveness adversary against the
+  economic servo. Run against A5: mass-unstaking shock, claim/unstake MEV.
 
 **Threat-model-exhaustion agenda** (carried from the §7 seed table + the §0.10 new surfaces;
 each `OPEN`):
@@ -1517,6 +1521,303 @@ not blocking the *wargame*, but byte-exact claim/stake wire and entitlement vect
 cited where **T8** / **G7** reference consensus behavior; (2) **T3**'s cold-start cohort floor
 may require an upstream consensus coordination ask — record it as a cross-track item, do not
 assume it exists.
+
+### 7.5 Round 3 wargame (executed 2026-06-05): dispositions
+
+This subsection **executes** the §7.4 agenda — every T- and G-item is driven to a
+disposition — and **augments** it with a survey of attacks that deployed privacy chains
+(Monero, Zcash, Grin/MimbleWimble) and PoS/DeFi staking systems have actually suffered, so
+the threat model is exhausted against history, not only against the design's own internal
+seed. Each disposition is one of (per [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc)):
+**mitigated-in-design** (mechanism cited), **FOLLOWUP** (target version + reopening trigger),
+**cross-track upstream** (consensus ask, not assumed), or **priority-reject** (reopening
+criteria). Adversary models **A1–A4** are §7.4. Real-world analogs are named so a future
+maintainer can see *which* historical failure each pin defends against.
+
+**Threat-model-exhaustion dispositions (T1–T9 from §7.4):**
+
+| ID | Real-world analog | Disposition |
+|----|-------------------|-------------|
+| **T1** Per-stake claim-sequence correlation | Monero temporal analysis + EAE (Eve-Alice-Eve) anonymity-set shrinkage | **Mitigated-in-design (default) + FOLLOWUP (jitter).** Full-window batching (claim all unclaimed ≤ `MAX_EPOCHS_PER_CLAIM=15` in one tx — §6/§6.2) collapses the common case to a single event. Residual: tier-3 backlogs > 15 epochs force multiple txs carrying a `(tier, contiguous-window)` serial signal. Wallet pin: **no fixed epoch-boundary broadcast cadence**; randomized delay + Dandelion++ (network layer). **FOLLOWUP V3.1**: pin the jitter distribution + Dandelion++ default. **Reopen:** testnet shows residual serial correlation under A2 despite batching (mirrors `CONFIDENTIAL_STAKING.md` §14.4 reopen-if). |
+| **T2** Claim↔stake linkage across a sequence | Zcash nullifier-analysis / repeated-shielded-action linkage | **Mitigated-in-design.** `N_{i,S}=x_i·G_S` is pairwise-unlinkable across **independent per-epoch bases** `G_S` (§6.3 DDH split, KAT-locked). Confirmed across the *whole* sequence: the nullifier vector exposes no cross-epoch join key beyond the claimed set `{S}` itself. Residual linkage is **not cryptographic** — it is the tier+window scope (T1) and the claim-tx-type tell (T10). **Reopen:** the DDH/RO heuristic on `hash_to_ec` bases breaks (consensus-crypto event, not wallet). |
+| **T3** Band cohort-size leakage (cold start) | Zcash small-shielded-pool deanonymization | **Cross-track upstream + wallet-UI FOLLOWUP.** Structural fix (floor `band_sum_eff`, suppress burn-signal publication below a cohort threshold) is consensus-owned (`CONFIDENTIAL_STAKING.md` §14.1/§14.4 P2). **Cross-track ask (record, do not assume):** confirm the cohort-floor/suppression is active at genesis. **FOLLOWUP V3.1**: wallet surfaces an early-staker thin-cohort warning before a stake lands (cohort estimable from public participation). **Reopen:** testnet residual fingerprinting despite the consensus floor. |
+| **T4** Claim-timing correlation | Monero broadcast-timing + first-seen origin heuristic | **Mitigated-in-design (network layer) + wallet pin.** Global settlement-epoch boundaries cluster claimers, *growing* the temporal anonymity set (§6.2). Wallet must not undermine it: **no auto-claim at a deterministic height** tied to a stake's unlock; jitter + Dandelion++ + Tor/I2P-first ([`ANONYMITY_NETWORKS.md`](../ANONYMITY_NETWORKS.md)). Folds into the T1 jitter FOLLOWUP. |
+| **T5** In-memory opening exposure | Heap-disclosure / cold-boot / swap-leak of wallet secrets | **Mitigated-in-design.** `(amount, z)` in-memory only, re-derived on hydration, **never sealed** (§3.3.1/§4.2); transient `x` zeroized after claim build; no plaintext opening in messages/RPC (R0-D3). **Stage-3 test (load-bearing):** verify the prover bundle wipes after proof emission — the one place a copy of `(amount, z, x)` transits. **Reopen:** a measured zeroization gap in the prover-bundle path. |
+| **T6** Nullifier-reorg desync | (no external analog — wallet-internal) | **Mitigated-in-design (forward rebuild).** §5.2 clear-all/replay-all recomputes `claimed_epochs` from the post-reorg chain ∩ `{x·G_S}`, height-free, so it self-heals across adversarial shapes; the sharp case — a **straddling-lock reorg** that moves `eligible_height` across a tier boundary — re-derives the window from post-reorg `creation` (§3C arithmetic), so it is correct by construction. Daemon reorg correctness assumed as for spent key images (§5.2). **Stage-3 test:** the three §7.4 shapes. |
+| **T7** Nullifier / key-image cross-link | **Janus attack** (Monero subaddress-linkage); "shared secret across two surfaces" class | **Mitigated-in-design.** `x·G_S` (claim) vs `x·Hp(O)` (unstake/spend) unlinkable under independent NUMS bases (§6.3, KAT-locked, `G_S ≠ Hp(O)`). Wallet must never emit both tags in a correlated context nor expose a join field. **Janus specifically N/A:** FA-1 single static address ⇒ no subaddresses to cross-test; the Janus surface does not exist. **Reopen:** DDH-base independence break (consensus-crypto). |
+| **T8** Silent inflation (wallet role) | **Zcash 2018 counterfeiting vuln**; **Monero 2017 RingCT inflation bug** | **Mitigated-in-design (wallet non-masking) — priority-1.** Soundness of the entitlement relation is consensus-owned (`h_bind` + `N/D`-recompute + bounded-remainder + `ρ_cap`, §9). Wallet obligations: (a) never construct over-entitlement (recompute `N/D` before prove); (b) **never rely on the consensus range proof to mask a local accounting bug**. See G11. **Reopen:** any wallet code deriving claimable from a daemon-supplied figure rather than its own secret weight × public `ρ_e`. |
+| **T9** Fake `StakeEvent` injection | Light-client false-event injection by a malicious server | **Mitigated-in-design.** Events are scanner-origin (blocks tied to daemon headers); `OwnNullifierObserved` requires matching a locally derived `N_{i,S}` — a forged event cannot fabricate the wallet's own nullifier (adversary lacks `x`). A1 can **withhold/delay** (liveness, not safety) but cannot fabricate a claimed epoch. **Reopen:** any path that sets `claimed_epochs` from an event not gated on local nullifier match. |
+
+**Privacy-crypto-survey vectors (new in Round 3 — T10–T14):** vectors that deployed privacy
+systems suffered and the §7.4 seed had not named.
+
+| ID | Real-world analog | Disposition |
+|----|-------------------|-------------|
+| **T10** Claim-tx-type distinguishability / staker-set anonymity | **Zcash transparent↔shielded distinguishability** (the *act* of shielding was observable; low usage collapsed the effective set) | **Accept v1 scope (consensus) + V4/L4 FOLLOWUP + wallet non-worsening.** A claim is a distinct input type (`txin_stake_claim_v2`), so the act of staking/claiming is publicly classifiable and the claim anonymity set is "stakers in the same tier+window," never "all txs." **Mission note (Priority 2):** this is *not* "privacy as a setting" — *within* staking every staker gets identical guarantees; non-participation is a user choice, not a downgrade of the base transfer. Structural hide (conceal tier/window) = **L4, deferred to V4** (`CONFIDENTIAL_STAKING.md` §14.4). Wallet's job: add **no** further fingerprint (T14/G12) and surface to the user that staking is publicly observable as such. **Reopen:** product requires full-staker-set indistinguishability before genesis (§14.4 item-9 reopen-if). |
+| **T11** Stake/unstake/claim amount & commitment linkage | **MimbleWimble tx-graph reconstruction**; Monero pre-RingCT amount correlation | **Mitigated-in-design — confirmed at source (2026-06-05).** Unstake is a **normal post-lock FCMP++ membership spend**: it consumes the staked leaf via a ZK membership proof that **does not reveal which leaf** (`CONFIDENTIAL_STAKING.md` §6.3 step 1) + key image `x·Hp(O)`, and **appends a fresh main-tree principal output** (§6.4.3 cross-tree transition) — the literal `C_stake` is **never re-published**, so there is **no point-equality stake↔unstake link** (the unlinkability an ordinary transfer enjoys; §7 pins the spend "unlinkable"). The "re-stake principal in the same tx" model that *would* have coupled them was explicitly **rejected** (§6.4.5). Residual: the unstake's membership anonymity set is the **staking subtree** (3C separate tree), not the whole main tree — that is the **T10/T3 staker-set/cold-start scoping**, already dispositioned, **not** a commitment-linkage leak. (b) Band→amount bounding = T3/T10. Wallet never surfaces a stake↔unstake/claim join key (lens-3, §7.3). **Reopen:** consensus changes unstake to re-publish or re-stake the principal commitment in-place. |
+| **T12** One-time-key collision / dust-stake | **Monero 2018 burning bug** (multiple outputs to the same one-time key) | **Mitigated-in-design (key by OutputRef) + Stage-3 test.** `StakeInstance` is keyed on `OutputRef=(tx_hash, index)` (§3.3 byte-stable derivation), **not** the one-time key, so two outputs colliding on a one-time key are distinct instances — the burning-bug collision cannot corrupt stake tracking. (An attacker cannot create a stake bearing the victim's spend authority; the staker holds the opening.) **Stage-3 test:** two staked outputs sharing a one-time key resolve to two `StakeInstance`s. **Reopen:** any scanner path that dedups stakes by one-time key. |
+| **T13** Remote-node query-pattern leakage | **Monero malicious-remote-node** key-image/output-query deanonymization | **Mitigated-in-design (bulk-fetch invariant) — load-bearing.** Wallet recomputes `{x·G_S}` locally and intersects the chain nullifier set; it must fetch the **whole** set (bulk/contiguous), **never** query "is *this* nullifier present?" per-item — else A1/A4 learns the wallet's claimed epochs. Adopt [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md)'s "bulk/contiguous only, never per-output query" invariant verbatim for the nullifier set + stake scan. **Stage-3 pin (load-bearing).** **Reopen:** any RPC path querying nullifier membership per-item. |
+| **T14** Whole-lifecycle broadcast-origin linkage | Monero broadcast-origin / IP↔tx correlation across a wallet's activity | **Mitigated-in-design (network layer) + wallet pin.** stake-create / claims / unstake from one wallet over a correlated origin (IP/Tor circuit) or at correlated heights link the whole lifecycle. Tor/I2P-first + Dandelion++ + fresh circuit per tx; **wallet must not chain stake→auto-claim→auto-unstake at deterministic offsets.** Folds into the T1/T4 jitter FOLLOWUP. |
+
+**Wider-substrate audit dispositions (G1–G10 from §7.4):**
+
+| ID | Real-world analog | Disposition |
+|----|-------------------|-------------|
+| **G1** Slashing / penalty tracking | Cosmos/ETH validator slashing | **N/A — confirmed.** Shekyl confidential staking is reward-only; no slashing/penalty. The "wallet tracks slashing risk" class does not exist. Recording N/A *is* the audit result. |
+| **G2** Validator / delegation UX | Delegated-PoS delegation flows | **N/A — confirmed.** Not delegated PoS; no validators, no delegation surface. |
+| **G3** Lock-up / unbonding surprise | Cosmos/ETH unbonding-period confusion | **Mitigated-in-design + FOLLOWUP (UX).** `StakeView.unlock_height` surfaces the lock boundary (§6). **FOLLOWUP V3.1**: GUI/CLI shows lock duration + unlock height at stake time and warns on long tier-3 locks. **Reopen:** usability testing shows lock surprise. |
+| **G4** Dust-reward / fee-starved claim | Cosmos/ETH "claiming costs more than the reward" | **FOLLOWUP V3.1 (UX pin).** Wallet compares `claimable` to the estimated claim-tx fee; if `claimable < fee`, **never auto-broadcast** — warn / defer / accrue more epochs ("not yet worth claiming"). Implemented at Stage 3. |
+| **G5** Resync during in-flight claim | — | **Mitigated-in-design.** `claim_pending_epochs` runtime-only; `Restore` starts empty; R0-D2 rebuild recomputes `claimed_epochs` from chain ∩ `{x·G_S}`; an in-flight claim either landed (folded) or did not (epoch claimable again; consensus rejects a duplicate nullifier). **Reopen:** any persistence of `claim_pending_epochs`. |
+| **G6** Mempool eviction of a claim tx | — | **Mitigated-in-design (inherits staleness gate) + Stage-3 test.** Claim path runs through `PendingTxEngine`'s staleness/eviction handling (§8.9); on eviction the epoch returns to claimable with no chain trace. **Stage-3 test:** evicted claim ⇒ epoch re-claimable. **Reopen:** claim path bypasses the staleness gate. |
+| **G7** Long-range reorg of a confirmed claim | — | **Mitigated-in-design (forward rebuild).** Same as T6; no additional wallet gap. Daemon correctness assumed as for spends. |
+| **G8** HW-wallet signing latency (claim/unstake) | Hardware-wallet round-trip latency | **FOLLOWUP V3.1 + design note.** Claim-prove needs `x` transiently via the `Signer` boundary; HW round-trips add latency. Claims are **not deadline-tight** (settlement epochs are coarse and epochs stay claimable in the accrued window), so this is **not a Stage-3 blocker**. **FOLLOWUP V3.1**: measure HW claim-prove latency. **Reopen:** a HW path where claim-prove exceeds a settlement epoch. |
+| **G9** Wallet-locked during claim window | — | **Mitigated-by-window + FOLLOWUP.** Because claims are not deadline-tight, a locked wallet claims when next unlocked — no loss/expiry in v1. **FOLLOWUP V3.1**: optional reminder. **Reopen:** any v1 mechanism that expires a claim. |
+| **G10** Fee-bump / replacement of a stuck claim | RBF / CPFP fee-bumping | **Priority-3 reject (precedent transfers).** Per the PR 5 G3 precedent: claims inherit the no-RBF posture; a stuck claim is handled by the staleness gate + re-claim (epoch stays claimable). **Reopen criteria (PR 5 G3):** FCMP++ fingerprint-unobservability analysis **OR** telemetry re-classification of stuck-tx recovery into a higher priority class. |
+
+**Privacy-crypto-survey wider-substrate items (new — G11–G13):**
+
+| ID | Real-world analog | Disposition |
+|----|-------------------|-------------|
+| **G11** Proof-system soundness / inflation bug | **Zcash 2018 counterfeiting vuln**; **Monero 2017 inflation bug** | **Consensus-owned; wallet priority-1 non-masking (cross-ref T8).** A soundness break in entitlement/range/membership proofs would mint coins — consensus-track (audit + KATs + §9 conservation). Wallet role: non-masking (T8) + **loud failure** on any local accounting inconsistency rather than trusting the proof. Naming it ensures the worst historical class is on record. **Reopen:** consensus audit finding. |
+| **G12** Wallet/tx-construction fingerprint | **Monero wallet2 fingerprinting** (ordering/fee/extra-field tells partition the anonymity set by wallet) | **FOLLOWUP V3.1 (canonicalization pin) + Stage-3 test.** Claim txs carry `settlement_epochs[]` + `nullifiers[]`; ordering must be **canonical (sorted)**, fee per the 2A canonical model, no wallet-specific padding. **Reopen:** any non-canonical ordering or wallet-specific field in the claim/stake wire (cross-ref the upstream byte-exact wire, §8.0). |
+| **G13** Claim front-running / censorship (MEV) | DeFi claim front-running / miner censorship | **Mitigated-by-construction + retry.** A claim's reward binds to the wallet's own nullifier — no observer extracts value by front-running (idempotent to ordering, non-competitive). Censorship: a miner can omit a claim, but the epoch stays claimable ⇒ retry. **Reopen:** a consensus change that makes claims order-dependent or competitive. |
+
+#### 7.5.1 Load-bearing findings (the four that warrant depth)
+
+1. **Inflation is the worst historical class — the wallet's role is non-masking (T8/G11).**
+   Both major privacy chains shipped silent-inflation vulnerabilities (Zcash's 2018 zk-SNARK
+   counterfeiting flaw; Monero's 2017 RingCT bug). The wallet cannot prevent a consensus
+   soundness break, but it **must not become the layer that hides one**: it derives
+   `claimable` only from its own secret weight × the public, full-node-verifiable `ρ_e`
+   (§8.6) — never from a daemon-supplied figure — and it loud-fails any local accounting
+   inconsistency rather than letting the consensus range proof absorb it (priority-1,
+   `00-mission.mdc`). This is the single most important wallet-side privacy/soundness pin.
+   **The *consensus*-side soundness is the existential surface and must not be scored
+   "strong" on mechanism-presence:** the entitlement proof (8a) and the band-declaration
+   binding (8b), split out in §7.5.3, are **unverified** and carry the round's **top audit
+   rigor** — "the mechanism exists" is not "the mechanism is sound," and a soundness break
+   here is undetectable infinite inflation (the Zcash/Monero lesson). The wallet pin above is
+   necessary but does not discharge 8a/8b.
+2. **Stake↔unstake commitment linkage — investigated and closed (T11, 2026-06-05).** The
+   Round-3 concern was that unstake might re-publish the *literal* `C_stake` (a
+   MimbleWimble-class point-equality link no wallet redaction could close). **Confirmed at
+   source it does not:** unstake is a normal FCMP++ membership spend — the staked leaf is
+   consumed via a ZK membership proof that does not reveal which leaf
+   (`CONFIDENTIAL_STAKING.md` §6.3 step 1), and a **fresh** main-tree principal output is
+   appended (§6.4.3 cross-tree transition); §7 pins the spend "unlinkable," and the coupling
+   "re-stake in the same tx" alternative was explicitly **rejected** (§6.4.5). The only
+   residual is that the unstake's anonymity set is the **staking subtree** (3C), not the
+   whole main tree — already captured as the T10/T3 staker-set/cold-start property, not a
+   linkage bug. **No Priority-2 finding from T11.** (The clean close T11 would have permitted
+   was subsequently re-gated by the §7.5.3 synthesis on the unrelated top finding F0.)
+3. **Remote-node query-pattern leakage is a load-bearing Stage-3 pin (T13).** Monero's
+   malicious-remote-node deanonymization came from light wallets revealing *which* outputs /
+   key images they cared about. The confidential-staking nullifier scan must inherit the
+   curve-tree client's **bulk/contiguous-only, never-per-item-query** invariant verbatim;
+   a per-nullifier "is this present?" RPC would hand A1 the wallet's exact claimed-epoch set.
+   Recorded here as load-bearing so Stage-3 implementation cannot quietly add a per-item query.
+4. **Staking is publicly observable as a class — accepted for v1, hidden in V4 (T10).** The
+   distinct claim input type makes "this wallet stakes" public; the claim anonymity set is
+   tier+window-scoped, not global. This is the Zcash shielded-set lesson applied honestly:
+   v1 accepts it (with full intra-cohort uniformity, so it is not "privacy as a setting"),
+   and the structural hide (L4: conceal tier/window) is a V4 lattice-path gate. The wallet's
+   obligation is to add no *further* fingerprint (T14/G12) and to tell the user the truth
+   about observability.
+
+#### 7.5.2 Residuals and forward actions
+
+- **FOLLOWUPS (target V3.1)** — `docs/FOLLOWUPS.md` entries: jitter/Dandelion++ broadcast
+  default (T1/T4/T14); thin-cohort early-staker warning (T3); dust/fee-starved-claim UX (G4);
+  lock-up surfacing UX (G3); HW-wallet claim-prove latency measurement (G8); locked-wallet
+  claim reminder (G9); claim-tx canonical-ordering fingerprint pin (G12).
+- **Cross-track upstream asks (record, do not assume):** cohort-floor/suppression active at
+  genesis (T3); L4 hide-tier/window for V4 (T10). *(T11 principal-commitment
+  re-randomization was investigated and confirmed at source 2026-06-05 — §7.5.1 #2 — so it
+  is no longer an open ask.)*
+- **Stage-3 implementation pins (load-bearing):** bulk-fetch-only nullifier scan (T13);
+  `OutputRef`-keying not one-time-key (T12); prover-bundle zeroization (T5); claim via the
+  `PendingTxEngine` staleness gate (G6); canonical wire ordering (G12).
+- **Priority-rejects:** fee-bump/RBF of a stuck claim (G10), with the PR 5 G3 reopening
+  criteria.
+- **N/A confirmed (audit results):** slashing (G1), delegation UX (G2), Janus subaddress
+  linkage (T7) — all structurally absent.
+
+**Closure status:** all T1–T14 and G1–G13 carry a disposition; the wargame is **executed**,
+and **T11** (the candidate gating finding) was investigated and **resolved at source**
+(§7.5.1 #2: unstake is an unlinkable FCMP++ membership spend with a fresh output; no
+point-equality link, no Priority-2 finding). A first clean close was recorded 2026-06-05 —
+then **re-gated the same day by the dual-wargamer synthesis in §7.5.3**, which surfaced a new
+top finding **F0** (the claim's effective anonymity set is the `{tier × creation-window}`
+cohort, confirmed at source, which reframes T1/T2/T3 into one structural problem and can
+approach a cohort of one at cold start). **Round 3 design closure is therefore re-gated on
+F0's cross-track disposition** (§7.5.3); the other residuals (FOLLOWUPS V3.1, the remaining
+cross-track asks, Stage-3 pins) are unaffected and carry reopening triggers. Stage 3 *merge*
+remains gated on the confidential-consensus dependency (§8.0), independent of this round.
+
+#### 7.5.3 Round 3 synthesis (dual-wargamer adversarial pass, 2026-06-05)
+
+Two independent adversarial passes over §7.5 (one privacy-crypto-graveyard-led, one
+PoS/economic-research-led) were synthesized. The pass **confirmed** the §7.5 dispositions
+that hold, **sharpened** several, surfaced **one finding that outranks the entire pre-staged
+T-list** (F0), and added an adversary model (**A5**, economic/rational actors). F0 re-gates
+Round 3 closure; everything else lands as a sharpening or a new forward action.
+
+##### F0 — The claim anonymity set is the `{tier × creation-window}` cohort, not the staking subtree (top finding; reframes T1/T2/T3)
+
+FCMP++ gives *spends* a whole-chain anonymity set — the design's crown jewel. A **claim**
+does not inherit it. A claim proves membership in the **staking subtree** (already strictly
+smaller), and the claim-verify surface then narrows it further. **The reveal-vs-ZK question
+is now settled at source — and the answer is the worst case: both partitioning fields are
+transmitted in cleartext.**
+
+- **`tier` and `creation_height` are explicit public wire fields.** `CONFIDENTIAL_STAKING.md`
+  §6.4.8 `txin_stake_claim_v2`: **`tier` (u8, "Public")** and **`creation_height` (u64,
+  "Public")**. §6.4.3 confirms the verifier path — "**At claim (public `(tier, creation)`
+  from wire):** verifier recomputes `h_bind`, … checks the window arithmetically"; "Verifier
+  reads **one** `tier` scalar; uses it for the `h_bind` recompute **and** `tier_num`." So
+  `creation_height` is **not** merely brute-forceable from a published `h_bind` (my earlier
+  §7.5.3 hedge) — it is **published directly**. The membership proof hides *which leaf* (so
+  `C_stake`/principal stays unlinked), but the two partitioning fields are in the clear on
+  every claim.
+
+**Consequence — this reframes three pre-staged threats into one structural variable.** The
+`{tier × creation_height}` **cohort size** is the master variable behind T1 (claim-sequence
+correlation), T2 (claim↔stake linkage), and T3 (cold-start). Because **every claim of one
+stake carries the identical cleartext `(tier, creation_height)`**, a stake's claims **link to
+each other by deterministic exact-match on two public fields, regardless of the DDH-unlinkable
+nullifiers** — so T2 is **structural, not residual** (the §7.5 T2 disposition under-weighted
+this: the §6.3 DDH split protects claim↔*unstake-key-image* linkage, **not** claim↔claim
+linkage within a stake's sequence). The doc's own §6.2 "a weak serial signal that accumulates"
+is **understated**: it is an exact-match join key, not a statistical signal. At cold start the
+cohort of stakes sharing an exact `(tier, creation_height)` approaches **one** — the **Zcash
+small-shielded-pool lesson with a Shekyl-specific multiplier**: the pool is not merely small,
+it is **partitioned by tier and exact creation-height**.
+
+**Why it is revealed — the security/privacy coupling (do not "just add ZK").** The reveal is
+**load-bearing for inflation-safety**, not an oversight. §6.4.3 excludes tier-forgery
+*because* the **single revealed `tier`** drives **both** the `h_bind` hash-equality **and** the
+multiplier `N = tier_num(tier)·ΣK_S` (recompute-and-reject); the revealed `creation_height`
+makes the window check `creation < S ≤ creation + tier_lock` **pure arithmetic** rather than an
+in-circuit relation. This is precisely the **3C** win over **3A** (§6.4.3): "no new primitive."
+Moving `(tier, creation)` into zero knowledge pushes the multiplier-consistency and
+window-membership checks **in-circuit** — reintroducing the **novel-consensus-ZK-primitive cost
+that 3A was rejected for**. So **L4-hide-tier/window is not a bolt-on**; it re-opens the
+3C-vs-3A decision and must be co-designed with the entitlement circuit. Under
+[`00-mission.mdc`](../../.cursor/rules/00-mission.mdc) the hierarchy is explicit: the reveal
+serves **Priority 1** (inflation-safety, cheap + auditable); F0 is a **Priority 2** privacy
+cost. Priority 2 cannot override Priority 1 unless a construction delivers **both** — which is
+the V4/L4 work, not a v1 patch.
+
+**Disposition — confirmed finding; re-opens `§14.4` item-9; cross-track decision (not an open
+factual question).** The reveal-vs-ZK *question* (the merged-list #2, the cheapest existential
+check) is **answered: revealed-by-design, Priority-1-justified.** What remains is a **consensus
+policy decision**, which per `21-reversion-clause-discipline.mdc` **re-opens**
+`CONFIDENTIAL_STAKING.md` §14.4 item 9 ("accept tier+window-scoped anonymity for v1") with the
+scope now known to be **exact `(tier, creation_height)`** — tighter than the pin acknowledges,
+and `cohort → 1` at cold start collides with **Priority 2** (same guarantees for every user).
+**Cross-track ask (the gating item for clean closure):**
+- **The `band_sum_eff` floor (§14) does *not* address this — it is a different leak.** The
+  floor smooths the **public-rate readout** (T3's rate-channel); it does **nothing** for the
+  **cohort-membership collapse**, because flooring the aggregate `band_sum` does not enlarge
+  the `{tier × creation_height}` set a claim narrows to. Cold-start therefore needs **two**
+  mitigations: the band floor (rate channel) **and** a claim-cohort mechanism (reveal channel).
+- Consensus must **either** add an explicit **`{tier × creation_height}` claim-cohort
+  k-anonymity gate** (refuse / defer a claim below a minimum cohort — a *new* mechanism, not
+  the band floor) **or** **explicitly accept** unfloored cohort collapse for v1 with the
+  cold-start **deterministic cross-claim-linkage consequence on record**, deferring full
+  hiding to **V4/L4** (co-designed with the entitlement circuit per the coupling above).
+  "Incentivize more staking" fixes absolute size, **not** the partition.
+
+**Wallet-side forward action (FOLLOWUP V3.1, does not substitute for the consensus decision):**
+surface a **cohort-size warning before a *claim*** when the observable `{tier ×
+creation_height}` cohort is small (estimable from public chain state) — the honest-UX analog of
+the T3 thin-cohort stake warning, elevated to the headline and extended to the claim path.
+
+##### F-INFLATION — split T8: entitlement soundness **and** band-declaration binding are co-equal
+
+Silent inflation is the existential class — the two worst bugs in privacy-crypto history are
+both invisible-inflation (**Zcash's BCTV14 counterfeiting flaw**, patched in secret; **Monero's
+2017 RingCT inflation bug**). When amounts are hidden, a soundness flaw is undetectable
+infinite inflation — you learn it from the price chart, not the chain. Confidential staking
+adds **two** fresh soundness surfaces beyond the spend path; T8 is split along this line and
+gets the round's heaviest rigor (both are consensus-owned; the wallet's role is non-masking
+per §7.5 T8, but the round must name both surfaces so the audit covers them):
+
+- **(8a) Entitlement-proof soundness.** Can a prover make the verifier accept a `C_claim`
+  committing to more than `floor(N·amount/D)`? Bounded-remainder + range proof close `ρ ≥ 0`
+  and `reward < 2⁶⁴`, but **`full reward ≤ entitled` rests on the reserve-DLEQ-class
+  soundness** (§6.4.1). This is the heaviest audit item.
+- **(8b) Band-declaration binding (co-equal, newly elevated).** If a staker can declare a
+  **more-favorable band than the committed amount warrants**, they inflate their `M` / `ρ_e`
+  allocation **at zero cost and invisibly** (the amount is committed). The defense exists —
+  §4.4's "range proof binding the band to `C_stake` (anti-lie)" — but the round's pin is that
+  **this band↔amount range proof must carry the same rigor as the value range proof**, not be
+  treated as a lesser check. Inflation via band-lie is as catastrophic as inflation via
+  entitlement-lie.
+
+##### Sharpenings to existing dispositions
+
+| Item | Sharpening from the synthesis | Added pin / disposition |
+|------|-------------------------------|-------------------------|
+| **T9** (+ A1) | **Induced-duplicate knife.** A lying daemon (A1) reports a nullifier `N_S` as *unused* when it is not, inducing the wallet to broadcast a **duplicate claim**. Consensus rejects it — but the duplicate `N_S` is now **revealed**, which trivially links the two claim attempts (the one thing nullifier-unlinkability was protecting). | **Wallet pin:** daemon-reported claimability is **advisory, never a license to reveal a second nullifier**. The wallet treats its own derived `{x·G_S}` ∩ chain as authoritative and must not re-emit an `N_S` it has already broadcast on daemon say-so. |
+| **T13** (+ A1) | **A1 has three distinct knives:** (i) broadcast **origin** (T1/T4/T14), (ii) **query-leak** (asking "is epoch `S` of this stake claimed?" links the wallet to its stake), (iii) **induced-duplicate** (T9 above). | **Pin (sharpens T13):** full **local scan, no selective per-stake/per-nullifier queries** — already the bulk-fetch invariant; the synthesis confirms it defends knife (ii). |
+| **T1 / T4 / T14** (A1/A2) | **Network layer wins or loses T1.** Tor/I2P-first is necessary, not sufficient: it matters whether the wallet uses a **fresh circuit per broadcast** (reuse re-links the whole sequence) and whether there is **Dandelion++-equivalent stem/fluff origin obfuscation** under the anonymity network. An on-chain-perfect claim that always egresses the same circuit is linked anyway. | **Two questions folded into the T1/T4/T14 FOLLOWUP (V3.1):** (a) does the broadcast path obscure origin **beyond "send over Tor"** (Dandelion++-equivalent)? (b) is **circuit hygiene per-claim** (fresh circuit per broadcast)? Both are now explicit acceptance criteria for the jitter/broadcast FOLLOWUP. |
+| **T10 / G12** (A2) | **The claim tx leaks stake age off the wire.** A claim is structurally distinguishable (membership + per-epoch nullifiers + entitlement + reward output), and **nullifier count = epoch count**, which leaks the stake's **age and claim cadence** directly — "claims every 30 epochs in fixed batches" is a signature. | **Round decision (FOLLOWUP V3.1):** explicitly decide **accept the epoch-count leak vs pad** to a fixed count with dummy nullifiers (uniform but expensive), and **standardize claim construction deterministically** so wallet-version fingerprints don't add a second axis (G12). |
+| **T3** (A2/A4) | **Public-rate whale/cold-start readout.** `band_sum` drives `ρ_e`, so a staker large enough to move `band_sum` makes their entry/exit visible in the public rate; at cold start `ρ_e` is a low-noise readout of a small staker set (dynamics observable, not just the static cohort). | **Cross-track confirm (sharpens T3):** the §14 servo + `band_sum`-differencing gate must be confirmed to **bound single-staker observability**, not merely smooth the aggregate. |
+| **T5** (A3) | **Two named residuals + a constant-time requirement.** (i) `Copy` `AtomicUnits` can leave un-zeroized copies (**accepted**). (ii) the **view key is resident**, so an A3 who reaches `KeyEngine` RAM has everything regardless — the reason full-transient bought less than it seemed (**recorded, not re-solved**). (iii) **claim-build crypto must be constant-time** — a co-located timing/cache side-channel on the Schnorr / membership / nullifier scalar work extracts `x` or `z` directly. | **Stage-3 pin (added):** claim-build scalar operations **constant-time** (`30-cryptography.mdc`). Residuals (i)/(ii) recorded as accepted/known. |
+| **T7** | Re-state the assumption explicitly. | **On record:** `G_S` must be a **verifiable nothing-up-my-sleeve** generator with **no relation to `Hp`**, and DDH must hold for the curve; if independence is fudged, claim and unstake link by construction (`AUDIT_SCOPE.md` load-bearing assumption). |
+| **T6** | The reorg-double-claim defense (claim epoch `S`, induce reorg that keeps the minted reward but reverts the nullifier, re-claim `S`) **rests entirely on §11's all-five-members-in-one-txn atomicity** (reward output + nullifier revert together or not at all). | **Audit pin:** this atomicity is **load-bearing and cannot be hand-waved** — the audit must confirm **no member (reward output, nullifier, `band_sum`, subtree leaf, key image) can revert independently of the nullifier**. |
+
+##### A5 — economic / rational adversary (new model)
+
+Added to A1–A4: **rational agents optimizing yield** (staking vs. unstaking/other uses),
+**MEV extractors**, **stake-rental markets**. Real-world parallels: deep-reorg double-spends
+via hashrate rental (ETC/BTG/VTC), LST depeg/bank-run dynamics, MEV-driven reorgs/sandwiching
+of claims/unstakes, coordinated unstaking waves when yields drop.
+
+- **Mass-unstaking / bank-run dynamics.** Yield-chasing can produce coordinated unstaking
+  waves **without malice**. Shekyl's decaying-emission share + fee-burn servo + `ρ_cap` are
+  designed to self-stabilize, **but this is unverified under a rational mass-unstaking
+  shock**. **Disposition: cross-track to economics + FOLLOWUP (simulation required)** — the
+  burn-servo stability under a coordinated-exit scenario must be **simulated**, not asserted
+  (the economics design docs already call for stability simulation; this names the specific
+  scenario).
+- **MEV on claims/unstakes.** Re-confirms §7.5 G13: claims bind to the staker's own
+  nullifier (non-competitive, idempotent to ordering) → no extractable front-run value;
+  censorship → retry. **No change.**
+
+##### Architectural advantages — recorded, not just N/A
+
+The §7.5 "N/A" results for slashing (G1) and delegation (G2) are not gaps — they are a
+**genuine architectural advantage** worth stating as a result: confidential-claim staking
+(an economic overlay on PoW, not validator-PoS) **structurally excludes an entire class** of
+attacks that delegated-PoS systems spend enormous effort on — **slashing-griefing /
+correlation-penalty backfire, nothing-at-stake / cheap fork-voting, long-range history
+revision, stake-bleeding / equivocation, 33% BFT disruption, and stake-grinding.** There is
+no validator, no cheap fork-vote primitive, and PoW + the `h_bind`/`eligible_height` canonical
+height (§2) make long-range revision expensive and detectable. Naming this tells an auditor
+the classes were **considered and excluded by construction**, not missed.
+
+##### Synthesis closure status
+
+The synthesis **confirms** the §7.5 wargame's dispositions except where sharpened above, and
+surfaces **F0 as the round's top finding**. The merged-list **#2 (the §6.4 reveal-vs-ZK
+check) is now resolved at source** (2026-06-05): `(tier, creation_height)` are **cleartext
+wire fields** (§6.4.8) — revealed-by-design and load-bearing for inflation-safety (§6.4.3) —
+so F0's *factual* question is closed and what remains is a **consensus policy decision** (the
+`{tier × creation_height}` claim-cohort floor vs. explicit-accept-for-v1; distinct from, and
+not closed by, the §14 `band_sum` floor). Closure stays **re-gated on that F0 cohort
+decision.** New forward actions: F0 wallet **claim**-cohort-warning + the F0 consensus
+cohort-floor decision; the T1/T4/T14 FOLLOWUP gains circuit-hygiene + Dandelion++-equivalence
+acceptance criteria; T10/G12 gains the epoch-count accept-vs-pad decision; T5 gains the
+constant-time claim-build Stage-3 pin; T9 gains the advisory-claimability wallet pin; **A5**
+adds the mass-unstaking simulation (cross-track to economics). Ranked priority to chase, with
+#2 now resolved: **(1) entitlement + band-declaration soundness (8a/8b — existential,
+unverified, top rigor — do not wave through on mechanism-presence)**, **(2) the F0 cohort
+decision (reveal confirmed; band floor ≠ claim-cohort floor)**, **(3) network-origin /
+circuit + query-leak + induced-duplicate**, **(4) the A5 mass-unstaking simulation**, **(5)
+reorg property tests + `AtomicUnits`-boundary tests (the agreed correctness closure where
+silent user loss would otherwise hide).**
 
 ---
 
@@ -1712,8 +2013,8 @@ The underlying `band_sum` mirror (`ChainEconomicsSource::active_weighted_stake`)
 deleted by this — it is repurposed as `rate_at_epoch`'s internal `ρ_e`-derivation input
 (internal state, not a public trait method).
 
-**Stage-3 grep-retire / delete enumeration** (the code action; design is closed now, code
-lands with Stage 3):
+**Stage-3 grep-retire / delete enumeration** (the code action; design is essentially
+complete — closure re-gated on F0 per §7.5.3 — code lands with Stage 3):
 
 - `rust/.../traits/economics.rs` — remove `fn pool_weighted_total(&self) -> u128;` + rustdoc.
 - `rust/.../local_economics.rs` — remove the impl (`:166`) + module-doc bullet (`:21`).
@@ -1786,7 +2087,7 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 (§3.3.1): measured-`x`-cost, and claim-completion-gated pruning of spent staked outputs.
 **Async trait RESOLVED (§4.6):** RPITIT-`+ Send` across all methods, five-engine idiom.
 **Both Round-2 R-residuals now closed.** **§4.7 message protocol pinned (D1–D4):** reorg **folded** onto `ApplyStakeEvents { reorg_rewind }` (no `RewindTo`; rewind-first in one uninterruptible turn — atomicity, not just ledger-mirror symmetry); reorg semantics **clear-all/replay-all of the full surviving own-nullifier set across the whole post-reorg chain** (windowed replay drops below-fork survivors of a straddling lock), **heights live in the scanner** not `claimed_epochs`; `claim_pending_epochs` lifecycle = `PrepareClaimBuild` side-effect (set) + `AbandonClaim` (clear, **claim_pending only, never claimed**); `Snapshot` excludes `claim_pending_epochs` / `Restore` starts it empty. **§5's §4.7 carry is thereby discharged; §5 reconciliation is fully wallet-design signed off** — it does **no reversal**, rebuilding `claimed_epochs` forward from the canonical post-reorg chain and relying on daemon reorg correctness exactly as the spend path relies on spent-key-image revert (baseline daemon correctness, not a §5-specific dependency). **§6 user API signed off (2026-06-05):** owner-grade `StakeView` pinned (per-stake `claimable` / `claimed_epochs` / `unlock_height`) **distinct** from the §7 lens-3 redaction (one struct cannot serve both trust grades); amounts are `AtomicUnits` end-to-end (engine/orchestrator/computation; `u64` only at postcard/FFI/consensus edges; `_atomic` suffix dropped); `StakeFilter` declared as a closed by-state enum; abandon-claim discard wiring pinned (§3.4/§6 — general pending-tx discard dispatches `AbandonClaim` for claim-type txs); pre-stake yield projection omitted by decision (§8.6 forward-uncertain); FA-1 regrounded to the single static address with an independent-accounts reopen-pointer (rule 21); stale §3.3 opening doc-comment fixed. **§8.6 `rate_at_epoch` finalized (2026-06-05):** the EconomicsEngine yield surface is pinned (7 pins — rate-epoch index in, public fixed-point `ρ_e` out, fallible with `Ok(0)`≠`Err`, consensus-`band_sum`-derived, `AtomicUnits` crossing at the yield product, no per-stake state); `pool_weighted_total` **retired** (rule 15 delete — sole consumer was the redesign-eliminated `projected_yield` denominator, verified at source in both docs) across all 7 `V3_ENGINE_TRAIT_BOUNDARIES.md` sites, code removal deferred to Stage 3. **Both wallet-design Round-2 boxes now closed; §5 reconciliation is wallet-design signed off (Rounds 1–2).** It does no reversal — forward-rebuild only (clarified 2026-06-05); daemon reorg correctness is assumed as for spent key images, not a §5-specific carry. No further wallet design work blocks Round 3. **§0.1 pre-flight re-verify trio closed (2026-06-05):** §2 trait-binding, the §1.5 three-condition test, and the surface-amendment re-confirmed against the §0.10 secret-ownership shift (the actor's only secret state is in-memory `(amount, z)`, re-derived on hydration, never sealed; fail-stop isolation holds because the secret is reconstructable, not authoritative-at-rest). §2.7 / §3.3 were discharged by the §8.6 landing (`rate_at_epoch` is a §3.3.6 pure-read, no `.await`-ordering obligation); §8.3 lens row clean. **One residual fixed:** boundaries-doc §10.5.1 still described `StakeEngine` as owning "principal-pool aggregation state at Stage 4" — an 8th dead pool-denominator reference the literal-name `pool_weighted_total` sweep missed — corrected to per-stake in-memory openings with **no** principal-pool aggregation (exact yield = `rate_at_epoch` × own weight). |
-| **3** | Open — **agenda pre-staged (2026-06-05, §7.4)** | Threat-model exhaustion (§7) + §6 wider-substrate audit. **Pre-stage** enumerated the adversary models (A1 daemon / A2 observer / A3 memory-disclosure / A4 collusion), a **9-item threat-exhaustion agenda** (T1–T9: claim-sequence correlation, claim↔stake linkage, cold-start cohort leakage, claim-timing, in-memory opening exposure, nullifier-reorg shapes, nullifier/key-image cross-link, silent-inflation wallet role, fake-event injection), and a **10-item wider-substrate audit seed** (G1–G10, Principle 6 — slashing N/A, delegation N/A, lock-up surprise, dust/fee-starved claim, resync-in-flight, mempool eviction, long-range reorg, HW-wallet latency, locked-during-claim, fee-bump rejection). Every T/G item is `OPEN`; **pre-staging is not closure** (Principle 5) — Round 3 closes only when each carries a disposition. Cross-track deps: upstream Round 2 wire/KAT (T8/G7), possible cold-start cohort-floor upstream ask (T3). (Nullifier-reorg is a wallet-side forward-rebuild property — T6 — not a cross-track dep; daemon reorg correctness is assumed as for spent key images.) |
+| **3** | **Executed + synthesized (2026-06-05, §7.5/§7.5.3) — closure re-gated on F0** | Threat-model exhaustion (§7) + §6 wider-substrate audit, **executed** against history (Monero / Zcash / Grin-MimbleWimble / PoS-DeFi), then pressure-tested by a **dual-wargamer adversarial synthesis** (§7.5.3) adding adversary **A5** (economic/rational) and surfacing **top finding F0**: the claim's effective anonymity set is the **`{tier × creation_height}` cohort** (`tier` u8 + `creation_height` u64 are **cleartext wire fields** — §6.4.8; verifier recomputes `h_bind` + multiplier from them — §6.4.3) — **not** the staking subtree, reframing T1/T2/T3 into one structural variable and making claim↔claim linkage **deterministic exact-match** (cold-start cohort → 1). F0 **re-opens** `CONFIDENTIAL_STAKING.md` §14.4 item-9 and **re-gates closure** on its cross-track disposition. **Reveal-vs-ZK resolved at source 2026-06-05:** `tier`/`creation_height` are **cleartext wire fields** (§6.4.8) — revealed-by-design, load-bearing for inflation-safety (§6.4.3, the 3C-over-3A "no new primitive" win) — so claim↔claim linkage is **deterministic exact-match**, and the gating item is now the **`{tier × creation_height}` claim-cohort-floor-vs-explicit-accept** decision (distinct from, and **not** closed by, the §14 `band_sum` floor — two separate leaks). Inflation T8 **split** into 8a entitlement-soundness + 8b band-declaration binding (co-equal). Sharpenings: T9 induced-duplicate, T1/T4/T14 circuit-hygiene, T13 three-knives, T10/G12 stake-age leak, T3 whale/differencing, T5 constant-time + view-key-resident residual, T7 NUMS, T6 §11 atomicity load-bearing. All §7.4 **T1–T9** + **G1–G10** items dispositioned, **plus** privacy-crypto-survey additions **T10–T14** (claim-tx-type/staker-set distinguishability — Zcash shielded-set; stake↔unstake commitment linkage — MimbleWimble; one-time-key collision — Monero burning-bug; remote-node query-pattern leak — Monero malicious-remote-node; whole-lifecycle broadcast-origin) and **G11–G13** (proof-soundness/inflation — Zcash 2018 / Monero 2017; wallet/tx-construction fingerprint — Monero wallet2; claim front-running/censorship MEV). Janus (subaddress linkage) confirmed **N/A** under FA-1. Dispositions per rule 21; residuals (§7.5.2): **7 FOLLOWUPS (V3.1)**, **2 cross-track asks** (T3 cohort floor, T10 L4-for-V4), **5 Stage-3 load-bearing pins**, **1 priority-reject (G10)**, **3 N/A**. Load-bearing findings (§7.5.1): (1) inflation = worst class → wallet non-masking (T8/G11, priority-1); (2) **T11 stake↔unstake commitment linkage — investigated and resolved** (the candidate gating finding under the first close); (3) bulk-fetch-only nullifier scan (T13); (4) staking publicly observable as a class, v1-accepted / V4-L4-hidden (T10). **T11 was resolved at source (§7.5.1 #2: unstake is an unlinkable FCMP++ membership spend appending a fresh output — `CONFIDENTIAL_STAKING.md` §6.3/§6.4.3/§7 — so the literal `C_stake` is never re-published; no point-equality link, no Priority-2 finding). A first clean close was recorded 2026-06-05, then re-gated the same day by the §7.5.3 synthesis on top finding F0;** all other residuals carry reopening triggers and do not block wallet design. (Nullifier-reorg is a wallet-side forward-rebuild property — T6 — not a cross-track dep; daemon reorg correctness is assumed as for spent key images.) Stage 3 *merge* remains gated on the §8.0 confidential-consensus dependency, independent of this round. |
 | **4** | Open | Binding pins (trait signatures, error enums, persistence version; **no stake sealed-region format** — opening dissolved, §4.2) |
 | **5** | Open | Closure + Stage 3 PR decomposition |
 | **6** | Open | External critique buffer (optional) |
@@ -1811,8 +2112,11 @@ at-rest exposure either way; claim flow (R0-D4) unchanged. Two distinct reopen c
 - [x] `EconomicsEngine::rate_at_epoch` + boundaries doc amendment (§8.6) **— finalized (2026-06-05).** Seven pins: rate-epoch *index* (not height); returns public `ρ_e` as fixed-point `u64` (a rate, not `AtomicUnits`; consensus-defined scale); fallible with `Ok(0)`≠`Err` (un-overloads `pool_weighted_total`'s `0`); consensus-derived from on-chain `band_sum`, not wallet-recomputed; the `AtomicUnits` crossing is the yield product `own_weight·K_S`; no per-stake state (§8.2). **`pool_weighted_total` retired (delete, not renarrate — rule 15):** its sole named consumer (`projected_yield`'s pool denominator) was eliminated by the confidential redesign, verified at source in *both* the trait rustdoc and `V3_ENGINE_TRAIT_BOUNDARIES.md`; reopen-criterion is rule-21-shaped. Boundaries doc amended across all 7 sites (§2.7 Ownership, method sketch, consumer narrative, discipline-test example, three classification tables) — framed "retired pending Stage-3 code removal." Code removal + `active_weighted_stake` repurposing enumerated in §8.6 for Stage 3.
 - [x] **Upstream consensus Round 1 closed** (§8.0; [`CONFIDENTIAL_STAKING.md`](../CONFIDENTIAL_STAKING.md) §14)
 - [x] **Round 3 agenda pre-staged (2026-06-05, §7.4):** adversary models A1–A4; threat-exhaustion agenda T1–T9; wider-substrate audit seed G1–G10 (Principle 6). All items `OPEN` — pre-stage sets the surface, does not close it (Principle 5).
-- [ ] **Round 3 wargaming executed** — every §7.4 T1–T9 + G1–G10 item driven to a disposition (mitigated / FOLLOWUP+trigger / priority-reject+criteria)
-- [ ] Round 3 design closure recorded in §9
+- [x] **Round 3 wargaming executed (2026-06-05, §7.5):** every §7.4 T1–T9 + G1–G10 item driven to a disposition, **plus** privacy-crypto-survey additions T10–T14 / G11–G13 (Zcash shielded-set + counterfeiting, Monero burning-bug / malicious-remote-node / temporal-analysis / wallet2-fingerprint, MimbleWimble graph-reconstruction, Janus). Each disposition is mitigated / FOLLOWUP+trigger / cross-track / priority-reject per rule 21. Residuals (§7.5.2): 7 FOLLOWUPS (V3.1), 2 cross-track asks (T3, T10; **T11 resolved at source**), 5 Stage-3 pins, 1 priority-reject (G10), 3 N/A.
+- [x] **First clean close recorded in §9 (2026-06-05).** The candidate gating finding — **T11** (stake↔unstake commitment re-randomization) — was investigated and **resolved at source** (§7.5.1 #2: unstake is an unlinkable FCMP++ membership spend appending a fresh output; the literal `C_stake` is never re-published — no point-equality link, no Priority-2 finding).
+- [x] **Dual-wargamer synthesis executed (2026-06-05, §7.5.3).** Confirmed/sharpened the §7.5 dispositions, added adversary **A5** (economic/rational), split inflation **T8 → 8a entitlement-soundness + 8b band-declaration binding**, and surfaced **top finding F0** (the claim anonymity set is the `{tier × creation-window}` cohort — confirmed at source).
+- [x] **F0 reveal-vs-ZK resolved at source (2026-06-05, §7.5.3 / §6.4).** `tier` (u8) and `creation_height` (u64) are **cleartext public wire fields** (`CONFIDENTIAL_STAKING.md` §6.4.8); the verifier recomputes `h_bind` and the multiplier from them (§6.4.3). Revealed-by-design and **load-bearing for inflation-safety** (single revealed `tier` excludes tier-forgery; the 3C-over-3A "no new primitive" win) — hiding them re-opens 3C-vs-3A, so L4 is V4 co-design, not a v1 bolt-on. Claim↔claim linkage is therefore **deterministic exact-match**, cohort `→ 1` at cold start.
+- [ ] **Round 3 design closure — RE-GATED on F0 (2026-06-05).** F0 re-opens `CONFIDENTIAL_STAKING.md` §14.4 item-9; with the reveal resolved, closure is pending F0's **consensus policy decision**: an explicit **`{tier × creation_height}` claim-cohort-floor / k-anonymity gate** *or* explicit accept-for-v1 with the deterministic cross-claim-linkage consequence on record (the §14 `band_sum` floor does **not** close this — separate leak). All *other* residuals carry reopening triggers (7 FOLLOWUPS V3.1 + F0 wallet claim-cohort-warning + A5 mass-unstaking sim; cross-track asks; Stage-3 pins incl. constant-time claim-build; 1 priority-reject; 3 N/A) and do not block wallet design. Stage 3 *merge* remains gated on the §8.0 confidential-consensus dependency, independent of this round.
 
 ### 10.2 Stage 3 implementation (after closure — separate PR(s))
 
