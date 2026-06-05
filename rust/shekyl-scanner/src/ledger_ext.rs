@@ -34,6 +34,7 @@
 use std::ops::Range;
 
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes, TransferDetails, SPENDABLE_AGE};
+use shekyl_units::AtomicUnits;
 
 use crate::{
     balance::BalanceSummary, claim::ClaimableInfo, output::WalletOutput, scan::Timelocked,
@@ -183,7 +184,12 @@ pub trait LedgerBlockExt {
 
     /// Compute a summary of claimable rewards for all staked outputs.
     ///
-    /// `weight_fn` computes the tier-weighted stake for each output.
+    /// `weight_fn` computes the tier-weighted stake for each output. Its
+    /// amount argument is the raw atomic-unit count (`u64`): tier-weighted
+    /// stake is a derived governance quantity, not spendable money, so it
+    /// stays outside the `AtomicUnits` domain (per ATOMIC_UNITS_NEWTYPE.md
+    /// edge inventory). The per-output `reward` in the returned tuple **is**
+    /// money and is carried as [`AtomicUnits`].
     /// `max_claim_range` is the protocol's `MAX_CLAIM_RANGE` constant.
     /// The accrual aggregate lives on [`LedgerIndexes::staker_pool`] and is
     /// rebuilt by scanner replay at wallet open — see the module-level
@@ -195,7 +201,7 @@ pub trait LedgerBlockExt {
         current_height: u64,
         weight_fn: F,
         max_claim_range: u64,
-    ) -> Vec<(ClaimableInfo, u64)>
+    ) -> Vec<(ClaimableInfo, AtomicUnits)>
     where
         F: Fn(u64, u8) -> u64;
 }
@@ -211,21 +217,26 @@ impl LedgerBlockExt for LedgerBlock {
         current_height: u64,
         weight_fn: F,
         max_claim_range: u64,
-    ) -> Vec<(ClaimableInfo, u64)>
+    ) -> Vec<(ClaimableInfo, AtomicUnits)>
     where
         F: Fn(u64, u8) -> u64,
     {
         let mut results = Vec::new();
         for (idx, td) in self.transfers().iter().enumerate() {
             if let Some(info) = ClaimableInfo::from_transfer(td, idx, current_height) {
-                let weight = weight_fn(td.amount(), td.stake_tier);
+                // Edge: the weight computation operates on the raw atomic-unit
+                // count (tier-weighted stake is a derived quantity, not money).
+                let weight = weight_fn(td.amount().to_raw(), td.stake_tier);
                 let (reward, _chunks) = indexes.staker_pool().estimate_reward_with_splitting(
                     info.from_height,
                     info.to_height,
                     weight,
                     max_claim_range,
                 );
-                results.push((info, reward));
+                // Edge: `estimate_reward_with_splitting` returns a raw `u64`
+                // reward (consensus/entitlement arithmetic stays `u64`). The
+                // reward is money; wrap it as it crosses into wallet domain.
+                results.push((info, AtomicUnits::from_raw(reward)));
             }
         }
         results

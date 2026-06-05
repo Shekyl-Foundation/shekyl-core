@@ -31,6 +31,7 @@ use shekyl_crypto_pq::{
     output::{compute_output_key_image, scan_output_recover_with_ml_kem_dk},
 };
 use shekyl_generators::hash_to_point;
+use shekyl_units::AtomicUnits;
 
 use crate::{extra::Extra, output::*, GuaranteedViewPair, SubaddressIndex, ViewPair};
 
@@ -126,7 +127,7 @@ pub struct RecoveredWalletOutput {
     pub(crate) key_image: KeyImage,
     /// Recovered amount from KEM decryption.
     #[zeroize(skip)]
-    pub(crate) amount: u64,
+    pub(crate) amount: AtomicUnits,
     /// Per-output hybrid ciphertext (X25519 || ML-KEM-768). Public
     /// on-chain residue. The engine post-pass re-decapsulates against
     /// it to produce the deterministic `OutputHandle`.
@@ -181,7 +182,7 @@ impl RecoveredWalletOutput {
     pub fn key_image(&self) -> &KeyImage {
         &self.key_image
     }
-    pub fn amount(&self) -> u64 {
+    pub fn amount(&self) -> AtomicUnits {
         self.amount
     }
     /// The public on-chain hybrid ciphertext (X25519 || ML-KEM-768)
@@ -212,9 +213,9 @@ impl RecoveredWalletOutput {
             y: Zeroizing::new([0u8; 32]),
             z: Zeroizing::new([0u8; 32]),
             k_amount: Zeroizing::new([0u8; 32]),
-            combined_shared_secret: Zeroizing::new([0u8; 64]),
+                combined_shared_secret: Zeroizing::new([0u8; 64]),
             key_image: KeyImage::from_canonical_bytes([0u8; 32]),
-            amount,
+            amount: AtomicUnits::from_raw(amount),
             // Synthetic test fixtures don't exercise the engine
             // post-pass: residue is carried through `RecoveredWalletOutput`
             // → `DetectedTransfer` → `ScanResult` for the post-pass
@@ -600,7 +601,10 @@ impl InternalScanner {
                 k_amount: Zeroizing::new(recovered.k_amount),
                 combined_shared_secret: Zeroizing::new(recovered.combined_ss),
                 key_image,
-                amount,
+                // Edge: `recovered.amount` is the raw `u64` recovered from KEM
+                // decryption (also fed to the fork `Commitment::new` above,
+                // which stays `u64`). Wrap as it enters the wallet domain.
+                amount: AtomicUnits::from_raw(amount),
                 source_ciphertext: HybridCiphertext {
                     x25519: *ct_x25519,
                     ml_kem: ct_ml_kem.to_vec(),

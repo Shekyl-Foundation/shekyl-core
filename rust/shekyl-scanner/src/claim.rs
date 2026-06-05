@@ -5,6 +5,8 @@
 
 //! Claim computation helpers for staked outputs.
 
+use shekyl_units::AtomicUnits;
+
 use crate::transfer::TransferDetails;
 
 /// Summary of claimable reward state for a single staked output.
@@ -23,7 +25,7 @@ pub struct ClaimableInfo {
     /// Whether accrual has frozen (current_height >= lock_until).
     pub accrual_frozen: bool,
     /// The output's staked amount (atomic units).
-    pub staked_amount: u64,
+    pub staked_amount: AtomicUnits,
 }
 
 impl ClaimableInfo {

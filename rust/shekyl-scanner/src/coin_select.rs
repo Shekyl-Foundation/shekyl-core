@@ -9,6 +9,8 @@
 //! fewer metadata fingerprints are preferred together to reduce on-chain
 //! clustering of the wallet's activity.
 
+use shekyl_units::AtomicUnits;
+
 use crate::transfer::TransferDetails;
 
 /// Relatedness score between two transfer details.
@@ -51,22 +53,22 @@ pub fn relatedness(a: &TransferDetails, b: &TransferDetails) -> u32 {
 #[derive(Clone, Debug)]
 pub struct SelectionCriteria {
     /// Target amount to reach (atomic units).
-    pub target_amount: u64,
+    pub target_amount: AtomicUnits,
     /// Minimum number of inputs (for tx privacy, typically >= 1).
     pub min_inputs: usize,
     /// Maximum number of inputs (bounded by tx size limits).
     pub max_inputs: usize,
     /// Dust threshold: outputs below this amount are deprioritized.
-    pub dust_threshold: u64,
+    pub dust_threshold: AtomicUnits,
 }
 
 impl Default for SelectionCriteria {
     fn default() -> Self {
         SelectionCriteria {
-            target_amount: 0,
+            target_amount: AtomicUnits::ZERO,
             min_inputs: 1,
             max_inputs: 16,
-            dust_threshold: 1_000_000, // 0.001 SKL
+            dust_threshold: AtomicUnits::from_raw(1_000_000), // 0.001 SKL
         }
     }
 }
@@ -77,9 +79,9 @@ pub struct SelectionResult {
     /// Indices into the candidate list of selected outputs.
     pub selected_indices: Vec<usize>,
     /// Total amount of selected outputs.
-    pub total_amount: u64,
+    pub total_amount: AtomicUnits,
     /// Change amount (total - target).
-    pub change: u64,
+    pub change: AtomicUnits,
     /// Sum of pairwise relatedness scores (lower = better privacy).
     pub relatedness_score: u64,
 }
@@ -94,13 +96,13 @@ pub fn select_outputs(
     candidates: &[&TransferDetails],
     criteria: &SelectionCriteria,
 ) -> Option<SelectionResult> {
-    if candidates.is_empty() || criteria.target_amount == 0 {
+    if candidates.is_empty() || criteria.target_amount.is_zero() {
         return None;
     }
 
     // Separate dust from non-dust candidates
-    let mut non_dust: Vec<(usize, u64)> = Vec::new();
-    let mut dust: Vec<(usize, u64)> = Vec::new();
+    let mut non_dust: Vec<(usize, AtomicUnits)> = Vec::new();
+    let mut dust: Vec<(usize, AtomicUnits)> = Vec::new();
     for (i, td) in candidates.iter().enumerate() {
         let amt = td.amount();
         if amt < criteria.dust_threshold {
@@ -115,7 +117,7 @@ pub fn select_outputs(
     dust.sort_by_key(|b| std::cmp::Reverse(b.1));
 
     let mut selected: Vec<usize> = Vec::new();
-    let mut total: u64 = 0;
+    let mut total = AtomicUnits::ZERO;
 
     // Phase 1: select from non-dust using min-relatedness
     for &(idx, amt) in &non_dust {
@@ -130,7 +132,7 @@ pub fn select_outputs(
         // For simplicity in the greedy pass, we just check if this candidate has minimal
         // relatedness to the already-selected set
         selected.push(idx);
-        total = total.saturating_add(amt);
+        total = accumulate_selected(total, amt);
     }
 
     // Phase 2: if still short, pull in dust
@@ -143,7 +145,7 @@ pub fn select_outputs(
                 break;
             }
             selected.push(idx);
-            total = total.saturating_add(amt);
+            total = accumulate_selected(total, amt);
         }
     }
 
@@ -162,12 +164,31 @@ pub fn select_outputs(
         }
     }
 
+    // The `total < target_amount` guard above guarantees `total >= target`
+    // here, so the change subtraction cannot underflow. `None` would be a
+    // broken invariant, not an insufficient-funds signal — surface it loudly
+    // rather than collapsing to `ZERO` (ATOMIC_UNITS_NEWTYPE.md §7.2).
+    let change = total
+        .checked_sub(criteria.target_amount)
+        .expect("coin-selection change underflow: total < target after sufficiency check");
+
     Some(SelectionResult {
         selected_indices: selected,
         total_amount: total,
-        change: total.saturating_sub(criteria.target_amount),
+        change,
         relatedness_score: rel_score,
     })
+}
+
+/// Accumulate selected-output value. Selected outputs are a subset of wallet
+/// outputs whose total is bounded by the money supply (`< u64::MAX`), so
+/// overflow is unreachable for valid state; `None` is corrupted-state
+/// evidence and must surface (per ATOMIC_UNITS_NEWTYPE.md §7.2) rather than
+/// be miscategorized as the function's insufficient-funds `None`.
+fn accumulate_selected(total: AtomicUnits, amount: AtomicUnits) -> AtomicUnits {
+    total
+        .checked_add(amount)
+        .expect("coin-selection total overflow: selected outputs exceed u64 atomic units")
 }
 
 #[cfg(test)]
@@ -208,12 +229,12 @@ mod tests {
         let candidates: Vec<&TransferDetails> = vec![&c1, &c2, &c3];
 
         let criteria = SelectionCriteria {
-            target_amount: 4_000_000_000,
+            target_amount: AtomicUnits::from_raw(4_000_000_000),
             ..Default::default()
         };
 
         let result = select_outputs(&candidates, &criteria).unwrap();
-        assert!(result.total_amount >= 4_000_000_000);
+        assert!(result.total_amount >= AtomicUnits::from_raw(4_000_000_000));
         assert!(!result.selected_indices.is_empty());
     }
 
@@ -223,7 +244,7 @@ mod tests {
         let candidates: Vec<&TransferDetails> = vec![&c1];
 
         let criteria = SelectionCriteria {
-            target_amount: 10_000_000_000,
+            target_amount: AtomicUnits::from_raw(10_000_000_000),
             ..Default::default()
         };
 
@@ -237,8 +258,8 @@ mod tests {
         let candidates: Vec<&TransferDetails> = vec![&c1, &c2];
 
         let criteria = SelectionCriteria {
-            target_amount: 1_000_000_000,
-            dust_threshold: 1_000_000,
+            target_amount: AtomicUnits::from_raw(1_000_000_000),
+            dust_threshold: AtomicUnits::from_raw(1_000_000),
             ..Default::default()
         };
 
@@ -255,12 +276,12 @@ mod tests {
         let candidates: Vec<&TransferDetails> = vec![&c1, &c2, &c3];
 
         let criteria = SelectionCriteria {
-            target_amount: 1_000_000,
-            dust_threshold: 1_000_000,
+            target_amount: AtomicUnits::from_raw(1_000_000),
+            dust_threshold: AtomicUnits::from_raw(1_000_000),
             ..Default::default()
         };
 
         let result = select_outputs(&candidates, &criteria).unwrap();
-        assert!(result.total_amount >= 1_000_000);
+        assert!(result.total_amount >= AtomicUnits::from_raw(1_000_000));
     }
 }
