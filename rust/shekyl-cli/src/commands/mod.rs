@@ -507,7 +507,7 @@ pub(crate) fn read_password(prompt: &str) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Amount formatting and parsing (12-digit piconero precision)
+// Amount formatting and parsing (9-decimal SKL precision, 10^9 atomic units)
 // ---------------------------------------------------------------------------
 
 /// Render a raw atomic-unit amount as a fixed-precision SKL string.

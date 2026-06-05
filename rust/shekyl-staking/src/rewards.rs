@@ -56,9 +56,12 @@ pub fn distribute_staker_rewards(
         }
     }
 
-    // Assign rounding dust to first staker (if any). The shares are floors,
-    // so `distributed <= staker_pool_amount`; the subtraction cannot
-    // underflow.
+    // Assign rounding dust to the first *rewarded* staker (the first entry
+    // whose floored share was non-zero), if any. The shares are floors, so
+    // `distributed <= staker_pool_amount`; the subtraction cannot underflow.
+    // Note: when every share floors to zero `rewards` is empty and the pool
+    // is not distributed — a pre-existing edge of this wallet/sim-only path
+    // (not on the consensus path; retirement target per CONFIDENTIAL_STAKING.md).
     let dust = staker_pool_amount
         .checked_sub(distributed)
         .expect("staker-reward dust underflow: distributed exceeds pool (corrupted state)");
