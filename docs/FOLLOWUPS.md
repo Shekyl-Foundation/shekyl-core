@@ -1384,6 +1384,34 @@ sustainability is unaffected by the recalibration.
   without opening a double-claim). Different conversation; recorded here so the
   dependency is on file if that workstream opens.
 
+- **`AtomicUnits` amount-newtype — interim PR before broad wallet wiring (spawned
+  2026-06-05, Phase 2b §6 sign-off).** The wallet uniformly carries amounts as raw
+  `amount_atomic_units: u64` (`OutputClaim`, `TxRecipient`/`TxRecipientSummary`,
+  `PendingTx.fee_atomic_units`, and Phase 2b's `StakeOpening.amount` / `claimable_rewards` /
+  `StakeView.claimable` / `Accruing.accrued_rewards`) — the inherited Monero raw-`uint64`
+  pattern. Phase 2b §6 commits to an `AtomicUnits` domain newtype (type-distinct from epoch
+  indices and block heights; one place for checked / overflow arithmetic) as the in-Rust
+  amount type across trait / orchestrator / computation, with raw `u64` only at the true
+  edges. The newtype does **not** yet exist anywhere in `rust/` (verified at source,
+  rule 17) — the `AtomicUnits` already referenced in `PHASE_2B_STAKE_LIFECYCLE.md` §4.6/§6 is
+  forward intent.
+
+  *Why interim / why now:* bounded-cost-now. The wallet is pre-genesis and not yet broadly
+  wired; every raw-`u64` amount site that accretes during Stage 3+ wiring raises the
+  migration blast radius. A tight interim PR **before** broad wiring is strictly cheaper than
+  after, and the cost is bounded precisely because wiring hasn't happened — "do it now in
+  force" with a cost argument, not a convenience call.
+
+  *Scope to settle first (this is what bounds the PR):* (1) the migration blast radius —
+  enumerate every `amount_atomic_units: u64` / amount-typed `u64` site across the workspace;
+  (2) the exact `From`/`Into` (or `to_u64`/`try_from`) **edge list** — postcard
+  (de)serialization, FFI, the consensus amount boundary — which is what determines whether
+  "short interim" is actually short.
+
+  *Target:* **V3.0**, interim PR before Stage 3 broad wiring. Until it lands, the Phase 2b §6
+  amount returns read as `u64` with the type-safety intent recorded
+  ([`docs/design/PHASE_2B_STAKE_LIFECYCLE.md`](design/PHASE_2B_STAKE_LIFECYCLE.md) §6).
+
 - **Confidential stake-UTXO transfer (privacy-compatible; compounds (C)).**
   FCMP spend of staked principal + re-insert as staked output — **not** receipt-token
   liquid staking (public fungible receipts remain out of scope). **`creation_height` is

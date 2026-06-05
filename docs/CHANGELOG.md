@@ -240,6 +240,64 @@
   guards against in code). That review is now complete and the dissolution **landed** as the
   coherent multi-section change recorded in the next entry, which turns this descriptor to
   "runtime-only opening from the build context"; the RPITIT-async signature is unaffected.
+- **wallet: Phase 2b §6 user-facing orchestrator API signed off (Round 2,
+  `PHASE_2B_STAKE_LIFECYCLE.md` §6 / §4.6 / §7).** Closes the last §6 review residual after a
+  completeness/surplus/inherited-shape pass. **`StakeView` pinned as a concrete owner-grade
+  struct** (`id`, `tier`, `band`, `state`, per-stake `claimable: AtomicUnits`,
+  `claimed_epochs`, `unlock_height`) — it was previously prose-only ("public fields +
+  claimable amount"), so the per-stake `claim(stake_id)` decision had no surfaced bridge from
+  the global `claimable_rewards()` total. **Trust-grade split made explicit:** per-stake
+  `claimable` is a deterministic function of the confidential principal and public params, so
+  it discloses the staked amount (and `claimed_epochs` the claim pattern); `StakeView` is
+  therefore owner-only (owner UI / owner-authenticated RPC) and the §7 lens-3 diagnostic
+  projection is a **distinct, more-redacted shape** (global total + coarse state, no per-stake
+  fields) — one struct cannot serve both grades. **Amounts are `AtomicUnits` end-to-end:**
+  rejected the "wrap-`u64`-at-the-boundary" layering (it Shekyl-ifies the already-safe public
+  return and leaves the engine holding the inherited raw-`uint64` Monero primitive at exactly
+  the cross-instance-sum site where overflow/unit-confusion bugs live). The newtype is the
+  in-Rust domain type across trait/orchestrator/computation; `u64` reappears only at the true
+  edges (postcard, FFI, consensus amount boundary). Consequence: `claimable_rewards_atomic ->
+  u64` becomes `claimable_rewards -> AtomicUnits` (the type carries the "atomic" meaning, so
+  the suffix is redundant), `projected_yield -> AtomicUnits`, `ClaimableRewardsAtomic` message
+  → `ClaimableRewards`, and `StakeOpening.amount_atomic`/`Accruing.accrued_rewards_atomic` drop
+  the suffix. **`StakeFilter` declared** as a closed by-state enum (`All`/`Accruing`/
+  `Claimable`/`FullyUnstaked`) mirroring `StakeState` — the open-ended `filter` param had no
+  named consumer (rule 21). **Abandon-claim wiring pinned (§3.4/§6):** a built `claim()` is an
+  ordinary claim-type `PendingTx`; the orchestrator's general pending-tx discard path
+  dispatches `AbandonClaim` for claim-type txs specifically, so "rides the normal path" does
+  not silently drop the `claim_pending_epochs` clear (`AbandonClaim` touches `claim_pending`
+  only, never `claimed`, D3). **Pre-stake yield projection omitted by decision** (a forward
+  estimate would project the public rate forward and overpromise, §8.6). **FA-1 regrounded:**
+  dropped the inherited "primary account address" framing (which pre-provisions an account/
+  subaddress hierarchy Shekyl does not have) for "the wallet's single static address," with an
+  independent-accounts **reopen-pointer** (rule 21) — when seed-derived independent accounts
+  land, cross-account staking becomes a new opsec decision designed then, not baked into a
+  one-address API now. Also fixed a stale `StakeOpening` doc-comment ("SECRET — sealed at
+  rest") the dissolution's closing grep missed on phrasing drift — verify-by-reading, not
+  re-grepping.
+  **Round-2 confirm pass (2026-06-05) hardened four of the above against source:**
+  (1) **lens-3 redaction now names the derived-value class explicitly** — the old "no
+  view/spend, no `z`, no per-output secret correlation" wording was written for the secret
+  class and does *not* cover `claimable`/`claimed_epochs`, which are *derived* leaks
+  (`claimable` → principal via public params, `claimed_epochs` → claim pattern); the redaction
+  now excludes both **by name**. (2) **Abandon-claim keying located** — `PendingTx`
+  (`engine/pending.rs`) carries **no** claim discriminator and no `(stake_id, epochs)`
+  (verified at source; it stays spend-pure, so threading a claim ref through
+  `Reservation::extensions` is the rejected Option-C boundary break). The discriminator + key
+  therefore live in the **orchestrator** (the one site holding both the `ReservationId` from
+  `PendingTxEngine::build` and the `(stake_id, epochs)` from `prepare_claim_build`), which
+  records `ReservationId → (stake_id, epochs)` for claim builds and consults it on discard.
+  (3) **`StakeFilter` made total** — corrected from the 4-variant subset to a **1:1 mirror of
+  all 7 `StakeState` variants** + an `All` sentinel, both `#[non_exhaustive]` and held in
+  lockstep, so filtering is total (no inexpressible state, no dead variant). (4) **`AtomicUnits`
+  is forward intent, not an existing type** — verified at source (rule 17): the newtype does
+  **not** exist anywhere in `rust/` (the wallet uses raw `amount_atomic_units: u64`). The §6
+  sign-off is therefore recorded **"modulo the `AtomicUnits` convention"** (§10.1 box); the
+  method *set* is signed off, the amount *type* is a dangling dependency introduced by a
+  separate **interim PR before broad wiring** (bounded-cost-now), now tracked in
+  `docs/FOLLOWUPS.md` (V3.0). Note the most load-bearing constraint for that PR:
+  `OutputClaim.amount_atomic_units` is a **secret** (wiped on drop, `[REDACTED]` Debug), so the
+  newtype must preserve `Zeroize` + non-leaking `Debug`.
 - **staking: confidential-claim entitlement `D` pinned + remainder range-proof
   construction closed (Round 2, §6.4.1 decisions 1(a)/1(b)).** Corrected the
   underspecified `D = SCALE` to `D = D_tier · SCALE_rate = 2^(k+1)`: `D_tier = 2`
