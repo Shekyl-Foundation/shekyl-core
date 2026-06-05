@@ -154,6 +154,7 @@ pub fn collect_block_leaves(
                     gindex: this_gindex,
                     maturity,
                     leaf,
+                    identity: *output,
                 });
             }
         }
@@ -161,22 +162,35 @@ pub fn collect_block_leaves(
     gindex
 }
 
-/// Assemble the flat leaf-scalar stream for all leaves drained by
-/// `drained_through`, in canonical drain order `(maturity, gindex)` (S2).
-/// The result feeds [`shekyl_fcmp::tree::build_layers`].
+/// The drained leaves at `drained_through`, in canonical drain order
+/// `(maturity, gindex)` (S2) — the single definition of tree-leaf order.
+///
+/// Both the leaf-scalar stream ([`assemble_leaf_stream`]) and membership-path
+/// assembly ([`crate::assemble`]) consume this ordering, so a leaf's position
+/// in the stream and its position in the returned slice are the same index.
+/// Keeping one ordering avoids the "two orderings must agree" trap
+/// (`CURVE_TREE_CLIENT.md` §7.7).
 ///
 /// `drained_through` is the inclusive maturity cutoff for the reference
 /// height; the reference-height → cutoff mapping (the drain trigger's
 /// inclusive/exclusive boundary) is pinned by the CT-2 KAT and owned by
 /// `client` (CT-3).
 #[must_use]
-pub fn assemble_leaf_stream(entries: &[LeafEntry], drained_through: u64) -> Vec<[u8; 32]> {
+pub fn drained_sorted(entries: &[LeafEntry], drained_through: u64) -> Vec<&LeafEntry> {
     let mut drained: Vec<&LeafEntry> = entries
         .iter()
         .filter(|e| e.maturity <= drained_through)
         .collect();
     drained.sort_by_key(|e| (e.maturity, e.gindex));
+    drained
+}
 
+/// Assemble the flat leaf-scalar stream for all leaves drained by
+/// `drained_through`, in canonical drain order `(maturity, gindex)` (S2).
+/// The result feeds [`shekyl_fcmp::tree::build_layers`].
+#[must_use]
+pub fn assemble_leaf_stream(entries: &[LeafEntry], drained_through: u64) -> Vec<[u8; 32]> {
+    let drained = drained_sorted(entries, drained_through);
     let mut scalars = Vec::with_capacity(drained.len() * SCALARS_PER_LEAF);
     for entry in drained {
         for i in 0..SCALARS_PER_LEAF {
@@ -338,11 +352,13 @@ mod tests {
 
     #[test]
     fn non_empty_root_differs_from_empty() {
-        let leaf = try_build_leaf(&coinbase_output()).expect("leaf");
+        let id = coinbase_output();
+        let leaf = try_build_leaf(&id).expect("leaf");
         let entry = LeafEntry {
             gindex: 0,
             maturity: 120,
             leaf,
+            identity: id,
         };
         let scalars = assemble_leaf_stream(&[entry], 120);
         assert_eq!(scalars.len(), SCALARS_PER_LEAF, "one leaf → 4 scalars");
@@ -352,23 +368,27 @@ mod tests {
 
     #[test]
     fn assemble_filters_undrained_and_sorts_by_maturity_then_gindex() {
-        let leaf = try_build_leaf(&coinbase_output()).expect("leaf");
+        let id = coinbase_output();
+        let leaf = try_build_leaf(&id).expect("leaf");
         let entries = [
             LeafEntry {
                 gindex: 5,
                 maturity: 70,
                 leaf,
+                identity: id,
             },
             LeafEntry {
                 gindex: 2,
                 maturity: 70,
                 leaf,
+                identity: id,
             },
             // Not yet drained at cutoff 70.
             LeafEntry {
                 gindex: 1,
                 maturity: 71,
                 leaf,
+                identity: id,
             },
         ];
         let scalars = assemble_leaf_stream(&entries, 70);

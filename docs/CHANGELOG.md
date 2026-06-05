@@ -4,6 +4,22 @@
 
 ### Added
 
+- **curve-tree: CT-4 membership-path assembly.** The `shekyl-curve-tree`
+  `assemble` module lands `CurveTreeClient::assemble_path`, producing the
+  FCMP++ prover's `Path` for one owned output at a reference block: the
+  `leaf_chunk` as compressed-point tuples (`O`, `I = Hp(O)`, `C`, `h_pqc`)
+  plus the full child chunk of each path node from leaf to root, with the
+  root point excluded (carried as `TreeContext.tree_root`). Layout pinned
+  to the prover at source (`C1 = Selene`, `C2 = Helios`): odd tree layers →
+  `c2_layers`, even internal layers → `c1_layers`. Assembly runs the
+  `verify_root` integrity gate first (`OutputNotDrained` / `RootMismatch`
+  rather than a bad proof). New public types `AssembledPath` / `ChunkLeaf`
+  / `TreeContext` (owned by this crate, mapped to `SpendInput` at the engine
+  boundary); drained leaves retain their `OutputIdentity` so the compressed
+  `I` can be re-derived via the new `shekyl_fcmp::tree::key_image_generator`.
+  A Tier-A KAT (`assemble_kat`) independently re-hashes the assembled
+  branches back to the recorded consensus header root and checks the C3
+  depth invariant. Spec: `docs/design/CURVE_TREE_CLIENT.md` §3.5 / §5.
 - **curve-tree: CT-3 block-derived reconstruction client.** The
   `shekyl-curve-tree` `client` module lands `CurveTreeClient`, the
   wallet-facing orchestrator that ingests synced blocks reduced at the
