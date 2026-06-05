@@ -4,6 +4,21 @@
 
 ### Added
 
+- **curve-tree: CT-3 block-derived reconstruction client.** The
+  `shekyl-curve-tree` `client` module lands `CurveTreeClient`, the
+  wallet-facing orchestrator that ingests synced blocks reduced at the
+  caller's decode boundary (`BlockLeaves`/`TxLeafInputs`/`RawOutput`,
+  carrying the scanner-`Extra`-parsed `tx_extra 0x07` blob), resolves
+  per-output `h_pqc`, threads the global output index, owns the
+  reference-height → drain-cutoff mapping (`drained_through = H − 1`),
+  reconstructs the root, and enforces the integrity gate (`verify_root`
+  → `RootMismatch` on a root the wallet cannot reproduce — loud failure,
+  not a silent bad proof). Reorg is rebuild-from-post-reorg-chain
+  (`from_blocks`), no separate machinery (derive-don't-accumulate,
+  `CT2_DRAIN_ORDER.md` §7.1). The crate stays lean (no `shekyl-scanner`
+  dep). The CT-2 Tier-A KAT now also runs end-to-end through this
+  production path and pins client-path == recon-path height-for-height.
+  Spec: `docs/design/CURVE_TREE_CLIENT.md` §3.
 - **curve-tree: CT-2 reconstruct-root KAT (Tier A) against consensus.**
   New `shekyl-curve-tree` test `recon_kat` replays a checked-in regtest
   fixture (`tests/fixtures/ct2_tier_a.json`, generated offline by

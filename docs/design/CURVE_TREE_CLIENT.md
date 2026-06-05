@@ -147,6 +147,21 @@ the C++ drain ordering bit-exactly. Its leaf-skip predicate (target-variant ∧
 mid-build; coinbase is trivially include-all (`outPk` populated), which is what
 keeps the Tier-A coinbase tree non-empty.
 
+**Implementation status** (module-level milestones per the crate's module
+docstrings; *distinct* from the §9 work-phase `CT-N` sequencing labels, which
+this note does not renumber). `recon` is **landed and KAT-verified** by the
+CT-2 reconstruct-root KAT (`tests/recon_kat.rs`). The `client` orchestration
+is **landed**: `CurveTreeClient` ingests blocks reduced at the caller's
+decode boundary (`BlockLeaves`/`TxLeafInputs`/`RawOutput`, carrying the
+scanner-`Extra`-parsed `0x07` blob), resolves `h_pqc`, threads the global
+output index (derive-don't-accumulate; reorg = rebuild via `from_blocks`),
+owns the reference-height → drain-cutoff mapping (`drained_through = H − 1`),
+and applies the §3.3 integrity gate (`verify_root`). The Tier-A KAT now also
+runs end-to-end through this production path. `store` (frozen-`R_k` cache and
+persistence) and `assemble` (membership-path extraction) remain pending; the
+§3.5 `select_reference_block` / `assemble_path` surface layers onto
+`CurveTreeClient` when those land.
+
 ### 3.3 Integrity model (load-bearing)
 
 A lying or partial daemon **cannot forge a tree**, only deny service:
