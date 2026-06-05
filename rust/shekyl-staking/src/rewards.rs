@@ -20,13 +20,17 @@ pub struct StakerReward {
 /// will equal `staker_pool_amount` minus any dust from rounding.
 ///
 /// The proportional share is computed in `u128` against the raw atomic-unit
-/// count: tier weights (`entry.weight()`, `total_weight`) are derived
-/// governance quantities, not money, and stay `u64` (per
-/// ATOMIC_UNITS_NEWTYPE.md edge inventory). The pool and each share **are**
-/// money. The per-staker shares are floors, so their sum never exceeds the
-/// pool; `distributed` accumulation and the `dust` remainder therefore route
-/// through checked arithmetic whose `None` is corrupted-state evidence that
-/// surfaces loudly (§7.2), never `unwrap_or(ZERO)`.
+/// count: the per-entry tier weight (`entry.weight()` → `u64`) and the summed
+/// `total_weight` (`registry.total_weighted_stake()` → `u128`, kept wide so
+/// the sum across entries cannot overflow) are derived governance quantities,
+/// not money, and stay raw integers (per ATOMIC_UNITS_NEWTYPE.md edge
+/// inventory). The pool and each share **are** money. The per-staker shares
+/// are floors, so their sum never exceeds the pool; the `dust` remainder
+/// therefore routes through checked arithmetic whose `None` is corrupted-state
+/// evidence that surfaces loudly (§7.2), never `unwrap_or(ZERO)`. The
+/// `distributed` accumulator is likewise checked, guarding against `u64`
+/// overflow of the running sum; the `distributed <= pool` invariant itself is
+/// enforced by the `dust` `checked_sub` below.
 #[allow(clippy::cast_possible_truncation)] // CLIPPY: per-staker share < staker_pool_amount which is u64
 pub fn distribute_staker_rewards(
     registry: &StakeRegistry,
@@ -46,9 +50,13 @@ pub fn distribute_staker_rewards(
             (u128::from(staker_pool_amount.to_raw()) * u128::from(weight) / total_weight) as u64;
         if reward_raw > 0 {
             let reward = AtomicUnits::from_raw(reward_raw);
+            // `checked_add` guards `u64` overflow of the running sum. The
+            // tighter `distributed <= staker_pool_amount` invariant is
+            // enforced by the `dust` `checked_sub` after the loop (its `None`
+            // arm is the "distributed exceeds pool" detector).
             distributed = distributed
                 .checked_add(reward)
-                .expect("staker-reward distributed sum exceeds the pool (corrupted state)");
+                .expect("staker-reward distributed accumulator overflowed u64 (corrupted state)");
             rewards.push(StakerReward {
                 entry_index: i,
                 amount: reward,
