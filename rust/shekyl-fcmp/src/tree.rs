@@ -430,6 +430,24 @@ pub fn construct_leaf(
     Some(leaf)
 }
 
+/// Derive the compressed key-image generator `I = Hp(O)` from a compressed
+/// Ed25519 output key, using the same `biased_hash_to_point` that
+/// [`construct_leaf`] hashes into the leaf's `I.x` scalar.
+///
+/// [`construct_leaf`] caches only `I`'s Wei25519 x-coordinate (a Selene
+/// scalar), which cannot be decompressed back to a point. The FCMP++
+/// membership prover's `Path.leaves` consumes `O`/`I`/`C` as compressed
+/// **points**, so path assembly re-derives the compressed `I` here rather
+/// than depending on `shekyl-generators` / `curve25519-dalek` directly
+/// (`17-dependency-discipline.mdc`: reuse the crate that already owns the
+/// primitive). Infallible: `biased_hash_to_point` always yields a point.
+#[must_use]
+pub fn key_image_generator(output_key: &[u8; 32]) -> [u8; 32] {
+    shekyl_generators::biased_hash_to_point(*output_key)
+        .compress()
+        .to_bytes()
+}
+
 // ---------------------------------------------------------------------------
 // Leaf helpers
 // ---------------------------------------------------------------------------
@@ -683,6 +701,18 @@ mod tests {
             0, 0, 0, 0,
         ];
         let _ = construct_leaf(&identity, &identity, &[0u8; 32]);
+    }
+
+    #[test]
+    fn key_image_generator_matches_construct_leaf_i_scalar() {
+        use curve25519_dalek::constants::ED25519_BASEPOINT_COMPRESSED;
+        let o = ED25519_BASEPOINT_COMPRESSED.to_bytes();
+        // The compressed I = Hp(O), reduced to its Selene x-coordinate, must
+        // equal the I.x scalar `construct_leaf` writes at leaf[32..64].
+        let i_compressed = key_image_generator(&o);
+        let i_x = ed25519_point_to_selene_scalar(&i_compressed).expect("I.x");
+        let leaf = construct_leaf(&o, &o, &[0u8; 32]).expect("leaf");
+        assert_eq!(&leaf[32..64], &i_x);
     }
 
     #[test]

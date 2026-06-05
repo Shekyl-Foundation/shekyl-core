@@ -104,6 +104,12 @@ pub enum ClientError {
         /// Root the client reconstructed from its leaves.
         got: [u8; 32],
     },
+    /// The requested output is not a drained leaf at the reference height,
+    /// so no membership path exists for it there (the §4.3 lookup miss).
+    OutputNotDrained {
+        /// Compressed output key that was not found among drained leaves.
+        output_key: [u8; 32],
+    },
 }
 
 /// Block-derived curve-tree reconstruction over synced blocks (CT-3).
@@ -115,8 +121,10 @@ pub enum ClientError {
 /// height.
 #[derive(Clone, Debug, Default)]
 pub struct CurveTreeClient {
-    entries: Vec<LeafEntry>,
-    next_gindex: u64,
+    // `pub(crate)` so the sibling `assemble` module reads the drained-leaf
+    // entries when building a membership path. Not part of the public API.
+    pub(crate) entries: Vec<LeafEntry>,
+    pub(crate) next_gindex: u64,
 }
 
 impl CurveTreeClient {
@@ -184,8 +192,11 @@ impl CurveTreeClient {
     /// matured through `reference_height - 1`
     /// (`drained_through = H - 1`, pinned by the CT-2 KAT). Height 0 has no
     /// predecessor and drains nothing.
+    ///
+    /// `pub(crate)` so the sibling `assemble` module shares the one
+    /// reference-height → drain-cutoff mapping.
     #[must_use]
-    fn drained_through(reference_height: u64) -> u64 {
+    pub(crate) fn drained_through(reference_height: u64) -> u64 {
         reference_height.saturating_sub(1)
     }
 
