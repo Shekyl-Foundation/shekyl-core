@@ -288,7 +288,10 @@ mod tests {
         let outs = [coinbase_raw()];
         let blob = [0x07u8; 32];
         let txs = coinbase_block(&outs, &blob);
-        let blocks = [BlockLeaves { height: 0, txs: &txs }];
+        let blocks = [BlockLeaves {
+            height: 0,
+            txs: &txs,
+        }];
         let client = CurveTreeClient::from_blocks(&blocks);
 
         // Empty through the maturity height itself...
@@ -308,8 +311,14 @@ mod tests {
         let txs0 = coinbase_block(&outs, &blob);
         let txs1 = coinbase_block(&outs, &blob);
         let blocks = [
-            BlockLeaves { height: 0, txs: &txs0 },
-            BlockLeaves { height: 1, txs: &txs1 },
+            BlockLeaves {
+                height: 0,
+                txs: &txs0,
+            },
+            BlockLeaves {
+                height: 1,
+                txs: &txs1,
+            },
         ];
         let client = CurveTreeClient::from_blocks(&blocks);
         assert_eq!(client.next_gindex, 2, "two coinbases consume indices 0,1");
@@ -325,7 +334,10 @@ mod tests {
         let blob = [0x42u8; 32];
         let txs = coinbase_block(&outs, &blob);
         let mut client = CurveTreeClient::new();
-        client.ingest_block(BlockLeaves { height: 0, txs: &txs });
+        client.ingest_block(BlockLeaves {
+            height: 0,
+            txs: &txs,
+        });
         assert_eq!(client.entries.len(), 1);
         assert_eq!(&client.entries[0].leaf[96..128], &[0x42u8; 32]);
     }
@@ -338,7 +350,10 @@ mod tests {
         let outs = [other, coinbase_raw()];
         let blob = [0x01u8; 64]; // one hash per vout
         let txs = coinbase_block(&outs, &blob);
-        let client = CurveTreeClient::from_blocks(&[BlockLeaves { height: 0, txs: &txs }]);
+        let client = CurveTreeClient::from_blocks(&[BlockLeaves {
+            height: 0,
+            txs: &txs,
+        }]);
         assert_eq!(client.next_gindex, 2, "both vouts consume an index");
         assert_eq!(client.entries.len(), 1, "only the valid output is a leaf");
         assert_eq!(client.entries[0].gindex, 1);
@@ -354,15 +369,27 @@ mod tests {
         let txs1 = coinbase_block(&outs, &blob);
 
         let long = CurveTreeClient::from_blocks(&[
-            BlockLeaves { height: 0, txs: &txs0 },
-            BlockLeaves { height: 1, txs: &txs1 },
+            BlockLeaves {
+                height: 0,
+                txs: &txs0,
+            },
+            BlockLeaves {
+                height: 1,
+                txs: &txs1,
+            },
         ]);
         let _ = long; // the long chain is what a reorg pops back from.
 
-        let rebuilt = CurveTreeClient::from_blocks(&[BlockLeaves { height: 0, txs: &txs0 }]);
+        let rebuilt = CurveTreeClient::from_blocks(&[BlockLeaves {
+            height: 0,
+            txs: &txs0,
+        }]);
         let fresh = {
             let mut c = CurveTreeClient::new();
-            c.ingest_block(BlockLeaves { height: 0, txs: &txs0 });
+            c.ingest_block(BlockLeaves {
+                height: 0,
+                txs: &txs0,
+            });
             c
         };
         assert_eq!(rebuilt.next_gindex, fresh.next_gindex);
@@ -378,7 +405,10 @@ mod tests {
         let outs = [coinbase_raw()];
         let blob = [0x07u8; 32];
         let txs = coinbase_block(&outs, &blob);
-        let client = CurveTreeClient::from_blocks(&[BlockLeaves { height: 0, txs: &txs }]);
+        let client = CurveTreeClient::from_blocks(&[BlockLeaves {
+            height: 0,
+            txs: &txs,
+        }]);
 
         // The reconstructed root at height 61 is the consensus value.
         let good = ReferenceBlock {
@@ -392,7 +422,11 @@ mod tests {
             curve_tree_root: [0xFFu8; 32],
         };
         match client.verify_root(&bad) {
-            Err(ClientError::RootMismatch { height, expected, got }) => {
+            Err(ClientError::RootMismatch {
+                height,
+                expected,
+                got,
+            }) => {
                 assert_eq!(height, 61);
                 assert_eq!(expected, [0xFFu8; 32]);
                 assert_eq!(got, client.root_at(61));
