@@ -206,12 +206,35 @@ the Tier-2 `chunk_replace_*` / `undeepen_*` / `reorg_*` tests (§7.7) exercise t
 ### 3.5 Public API (the contract 2A codes against)
 
 ```rust
-/// Public chain data only — no secrets, no ZeroizeOnDrop.
+/// Public chain data only — no secrets, no ZeroizeOnDrop. Owned by this
+/// crate (F2): the secret-bearing `shekyl_tx_builder::SpendInput` is a
+/// *different* struct, and the engine/2A signer maps `AssembledPath` →
+/// `SpendInput` by adding secrets internally. The crate stays lean (no
+/// `shekyl-tx-builder` dependency); the duplicated public `ChunkLeaf` /
+/// `TreeContext` reverts to a shared low-level types crate only if the
+/// duplication causes drift (`21-reversion-clause-discipline.mdc`).
 pub struct AssembledPath {
-    pub leaf_chunk:  Vec<[u8; 32]>,   // the output's Selene chunk peers
-    pub c1_layers:   Vec<Vec<[u8; 32]>>, // Selene sibling hashes, bottom→top
-    pub c2_layers:   Vec<Vec<[u8; 32]>>, // Helios sibling hashes, bottom→top
-    pub tree:        TreeContext,     // { reference_block, tree_root, tree_depth }
+    pub leaf_chunk:  Vec<ChunkLeaf>,     // the path leaf node's outputs, incl. target
+    pub c1_layers:   Vec<Vec<[u8; 32]>>, // Selene-node chunks, x-coords, bottom→top
+    pub c2_layers:   Vec<Vec<[u8; 32]>>, // Helios-node chunks, x-coords, bottom→top
+    pub tree:        TreeContext,        // { reference_block, tree_root, tree_depth }
+}
+
+/// One output in the path's Selene leaf chunk. Mirrors the field names of
+/// `shekyl_tx_builder::types::LeafEntry` so the engine adapter is trivial.
+/// Carries compressed **points** (O, I, C), not x-coordinate scalars: the
+/// FCMP++ prover's `Path.leaves` consumes the points (F1, F6).
+pub struct ChunkLeaf {
+    pub output_key:    [u8; 32],         // O (compressed)
+    pub key_image_gen: [u8; 32],         // I = Hp(O) (compressed; derived in-crate)
+    pub commitment:    [u8; 32],         // C (compressed)
+    pub h_pqc:         [u8; 32],         // per-output PQC leaf hash
+}
+
+pub struct TreeContext {                 // mirrors shekyl_tx_builder::types::TreeContext
+    pub reference_block: [u8; 32],       // reference block hash
+    pub tree_root:       [u8; 32],       // header-committed curve_tree_root
+    pub tree_depth:      u8,             // derived: build_layers(stream).len() (F4)
 }
 
 pub struct OutputIdentity {           // public; what the client matches on (§4.3)
@@ -221,6 +244,7 @@ pub struct OutputIdentity {           // public; what the client matches on (§4
 
 impl CurveTreeClient {
     /// Select the single tx-level reference block (§5), once per tx.
+    /// (Deferred to a CT-4 follow-up; not in the assemble_path landing.)
     pub fn select_reference_block(&self) -> Result<ReferenceBlock, ClientError>;
 
     /// Assemble the path for one owned output at a chosen reference block.
@@ -233,10 +257,27 @@ impl CurveTreeClient {
 }
 ```
 
-`ReferenceBlock = { height, block_hash, tree_root, tree_depth, leaf_count }`. In
-2A tests this contract is satisfied by **synthetic vectors**; in production by
-this client. The C1 single-snapshot guarantee is preserved because all inputs of
-one tx call `assemble_path` with the **same** `ReferenceBlock`.
+`ReferenceBlock = { height, curve_tree_root }` (the implemented shape);
+`tree_depth` is **derived** during assembly (`build_layers(stream).len()`, F4),
+not carried on `ReferenceBlock`, and packed into `TreeContext`. The C3 invariant
+`c1_layers.len() + c2_layers.len() + 1 == tree_depth` is then a self-check (the
+leaf layer is the `+1`; the root layer is excluded — it is the prover's
+`TreeRoot`). In 2A tests this contract is satisfied by **synthetic vectors**; in
+production by this client. The C1 single-snapshot guarantee is preserved because
+all inputs of one tx call `assemble_path` with the **same** `ReferenceBlock`.
+
+**CT-4 design round (pinned at source).** The membership-path format is the
+FCMP++ prover's `Path` (`shekyl-oxide/crypto/fcmps/src/prover/mod.rs`; canonical
+builder `random_path`, `tests.rs`): `c1_layers`/`c2_layers` are **scalars (node
+x-coordinates), not points**, each layer the **full chunk including the path
+node** (siblings not excluded), `c2` (Selene-node chunks) interleaved with `c1`
+(Helios-node chunks), root layer excluded. **No new `shekyl-fcmp` API is
+needed**: `build_layers` already returns the full layer stack publicly, and
+`layer_is_selene` / `chunk_width` / `selene_point_to_helios_scalar` /
+`helios_point_to_selene_scalar` cover extraction and conversion. `leaf_chunk`
+needs the compressed `O`/`I`/`C` identities (F6), so the client retains the
+per-drained-leaf `OutputIdentity` alongside the x-coord leaf and derives
+`I = Hp(O)` via the same `biased_hash_to_point` used in `construct_leaf`.
 
 ### 3.6 `LeafStore` persistence — greenfield, not a migration
 
