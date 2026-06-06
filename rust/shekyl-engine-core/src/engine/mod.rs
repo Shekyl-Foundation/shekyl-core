@@ -168,6 +168,9 @@ pub(crate) mod fault_injecting_pending_tx;
 #[cfg(any(test, feature = "test-helpers"))]
 pub(crate) mod fault_injecting_refresh;
 pub mod fee_estimator;
+pub(crate) mod fee_snapshot;
+pub(crate) mod signing_assembly;
+pub(crate) mod tx_fee_model;
 pub(crate) mod key_actor;
 /// §5.3 B9 dispatch-overhead bench support. Gated behind
 /// `bench-internals`; re-exported through [`crate::__bench_internals`]
@@ -323,6 +326,7 @@ pub struct Engine<
         LocalSigner,
         WalletGreedyOutputSelector,
         DaemonFeeEstimator,
+        fee_snapshot::DaemonFeeSnapshotSource<DaemonClient>,
         LocalLedger,
     >,
     F: PersistenceEngine = WalletFile,

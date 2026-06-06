@@ -49,6 +49,10 @@ shekyl-simple-request-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc/simple-re
 shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc", features = ["std"] }
+shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
+shekyl-tx-builder = { path = "../shekyl-tx-builder" }
+dalek-ff-group = "0.5"
+ciphersuite = "0.4"
 modular-frost = { version = "0.11", features = ["ed25519"], optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
 hkdf = { version = "0.12", optional = true }

@@ -106,17 +106,15 @@ impl EngineSignerKind for SoloSigner {}
 /// decomposition (i.e., here / now).
 #[derive(Debug)]
 pub struct TransferSigningContext {
-    /// Phase 1 stub field. Phase 2a fills the context shape; for
-    /// now the type carries a unit placeholder so the newtype is
-    /// constructible without exposing a public init surface.
-    pub(crate) _phase1_stub: (),
+    /// Populated signing message (§3.4 / §3.9). Phase 2a-3 consumes
+    /// this in `LocalSigner::sign_transfer` via `KeyEngine::sign_transaction`.
+    pub(crate) tx: super::traits::key::TxToSign,
 }
 
 impl TransferSigningContext {
-    /// Construct a Phase 1 stub context. Crate-internal only —
-    /// `LocalPendingTx::build_sync` is the production caller.
-    pub(crate) fn phase1_stub() -> Self {
-        Self { _phase1_stub: () }
+    /// Construct from an assembled [`TxToSign`]. Crate-internal only.
+    pub(crate) fn from_tx(tx: super::traits::key::TxToSign) -> Self {
+        Self { tx }
     }
 }
 
@@ -351,7 +349,8 @@ mod tests {
     //! runtime hosts the actor task fine (`kameo`'s spawn is `tokio::spawn`).
     use super::*;
     use crate::engine::error::KeyEngineError;
-    use crate::engine::traits::key::{FcmpPlusPlusContext, KeyEngine, TxToSign};
+    use crate::engine::traits::key::{FeeDirective, FcmpPlusPlusContext, KeyEngine, TxToSign};
+    use shekyl_tx_builder::TreeContext;
     use shekyl_crypto_pq::account::{
         rederive_account, AllKeysBlob, DerivationNetwork, SeedFormat, MASTER_SEED_BYTES,
     };
@@ -384,7 +383,18 @@ mod tests {
         TxToSign {
             inputs: Vec::new(),
             outputs: Vec::new(),
-            fcmp_plus_plus_context: FcmpPlusPlusContext {},
+            fcmp_plus_plus_context: FcmpPlusPlusContext {
+                tree: TreeContext {
+                    reference_block: [0; 32],
+                    tree_root: [0; 32],
+                    tree_depth: 1,
+                },
+            },
+            fee: FeeDirective {
+                fee_no_change: 0,
+                fee_with_change: 0,
+                dust_threshold: 0,
+            },
         }
     }
 
@@ -414,7 +424,7 @@ mod tests {
     #[tokio::test]
     async fn local_signer_phase1_stub_succeeds() {
         let signer = LocalSigner::new(KeyEngineHandle::spawn(deterministic_keys()));
-        let context = TransferSigningContext::phase1_stub();
+        let context = TransferSigningContext::from_tx(empty_tx_to_sign());
         let result = signer.sign_transfer(&context);
         let signed = result.expect("Phase 1 stub returns Ok unconditionally");
         // Phase 1 stub invariant: body bytes are empty (matches

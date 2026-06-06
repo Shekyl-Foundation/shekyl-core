@@ -57,6 +57,10 @@ use super::error::{
     SignerError, SubmitError, TerminalErrorKind,
 };
 use super::fee_estimator::{FeeEstimationContext, FeeEstimator};
+use super::fee_snapshot::FeeSnapshotSource;
+use super::signing_assembly::assemble_tx_to_sign;
+use super::traits::key::FeeDirective;
+use super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 use super::local_ledger::LocalLedger;
 use super::network::Network;
 use super::output_selector::{OutputCandidate, OutputSelector, SelectedOutputs};
@@ -250,11 +254,12 @@ pub(crate) struct PendingTxState {
 // surface directly. Stage 4's trait promotion deletes this allow.
 //
 #[allow(private_bounds)]
-pub struct LocalPendingTx<S, O, F, L>
+pub struct LocalPendingTx<S, O, F, FS, L>
 where
     S: Signer,
     O: OutputSelector,
     F: FeeEstimator,
+    FS: FeeSnapshotSource,
     L: LedgerEngine + Stage1LedgerSpendableAccess,
 {
     /// Spend-secret holder. `Arc<S>` because the constructor takes
@@ -272,6 +277,8 @@ where
     /// Fee-estimation strategy; held by value for the same reason
     /// as `output_selector`.
     pub(crate) fee_estimator: F,
+    /// Atomic fee-snapshot source (§3.2 / PF2); separate from `F`.
+    pub(crate) fee_snapshot_source: FS,
     /// Shared `LedgerEngine` handle (same `Arc` as [`Engine`](super::Engine)'s
     /// `ledger` field at C6 assembly).
     pub(crate) ledger: Arc<L>,
@@ -360,11 +367,12 @@ fn phase1_tx_hash(id: ReservationId) -> TxHash {
 }
 
 #[allow(private_bounds)]
-impl<S, O, F, L> LocalPendingTx<S, O, F, L>
+impl<S, O, F, FS, L> LocalPendingTx<S, O, F, FS, L>
 where
     S: Signer,
     O: OutputSelector,
     F: FeeEstimator,
+    FS: FeeSnapshotSource,
     L: LedgerEngine + Stage1LedgerSpendableAccess,
 {
     fn refresh_current_snapshot(&self, state: &mut PendingTxState) {
@@ -462,7 +470,11 @@ where
         }
     }
 
-    fn build_sync(&self, request: &TxRequest) -> Result<PendingTx, SendError> {
+    fn build_sync(
+        &self,
+        request: &TxRequest,
+        fee_snapshot: super::traits::FeeEstimates,
+    ) -> Result<PendingTx, SendError> {
         if request.recipients.is_empty() {
             let err = SendError::InvalidRecipient {
                 reason: "TxRequest must carry at least one recipient",
@@ -548,21 +560,32 @@ where
         }
 
         let ledger_snapshot = self.ledger.with_ledger_block(LedgerSnapshot::from_ledger);
-        let fee = self
-            .fee_estimator
-            .estimate_fee(
+        let tree_depth = 1u8;
+        let payment_count = request.recipients.len();
+        let rate = fee_rate_for_priority(request.priority, &fee_snapshot).map_err(|err| {
+            fail_build_after_attempted(self.sink.as_ref(), map_fee_estimator_error(&err))
+        })?;
+
+        let estimate = |input_count: usize, output_count: usize| {
+            self.fee_estimator.estimate_fee(
                 request.priority,
                 &FeeEstimationContext {
                     ledger: &ledger_snapshot,
-                    recipient_count: request.recipients.len(),
-                    input_count: 0,
+                    recipient_count: payment_count,
+                    input_count,
+                    output_count,
+                    fee_snapshot,
+                    tree_depth,
                 },
             )
-            .map_err(|err| {
-                fail_build_after_attempted(self.sink.as_ref(), map_fee_estimator_error(&err.into()))
-            })?;
+            .map_err(|err| map_fee_estimator_error(&err.into()))
+        };
 
-        let needed = total_amount.checked_add(fee).ok_or_else(|| {
+        let fee_pass_a = estimate(1, payment_count + 1).map_err(|err| {
+            fail_build_after_attempted(self.sink.as_ref(), err)
+        })?;
+
+        let needed = total_amount.checked_add(fee_pass_a).ok_or_else(|| {
             fail_build_after_attempted(
                 self.sink.as_ref(),
                 SendError::InvalidRecipient {
@@ -571,7 +594,7 @@ where
             )
         })?;
 
-        let selected: SelectedOutputs = self
+        let mut selected: SelectedOutputs = self
             .output_selector
             .select_outputs(&candidates, needed)
             .map_err(|err| {
@@ -584,6 +607,41 @@ where
                 );
                 mapped
             })?;
+
+        let fee_pass_b = estimate(selected.indices.len(), payment_count + 1).map_err(|err| {
+            fail_build_after_attempted(self.sink.as_ref(), err)
+        })?;
+        if fee_pass_b > fee_pass_a {
+            let needed_b = total_amount.checked_add(fee_pass_b).ok_or_else(|| {
+                fail_build_after_attempted(
+                    self.sink.as_ref(),
+                    SendError::InvalidRecipient {
+                        reason: "amount + refined fee overflowed u64",
+                    },
+                )
+            })?;
+            selected = self
+                .output_selector
+                .select_outputs(&candidates, needed_b)
+                .map_err(|err| {
+                    let mapped = map_output_selector_error(&err.into());
+                    emit_pending_tx_diagnostic(
+                        self.sink.as_ref(),
+                        PendingTxDiagnostic::BuildFailed {
+                            kind: build_error_kind(&mapped),
+                        },
+                    );
+                    mapped
+                })?;
+        }
+        let fee = fee_pass_b;
+
+        let fee_directive = build_fee_directive(
+            &rate,
+            selected.indices.len(),
+            payment_count,
+            tree_depth,
+        );
 
         let candidate_indices: HashSet<OutputId> = candidates.iter().map(|c| c.index).collect();
         for index in &selected.indices {
@@ -602,7 +660,20 @@ where
             }
         }
 
-        let signing_context = TransferSigningContext::phase1_stub();
+        let tx_to_sign = self.ledger.with_ledger_block(|ledger| {
+            assemble_tx_to_sign(
+                request,
+                &selected.indices,
+                ledger.transfers(),
+                tip_hash,
+                FeeDirective {
+                    fee_no_change: fee_directive.fee_no_change,
+                    fee_with_change: fee_directive.fee_with_change,
+                    dust_threshold: fee_directive.dust_threshold,
+                },
+            )
+        })?;
+        let signing_context = TransferSigningContext::from_tx(tx_to_sign);
         let signed = self.signer.sign_transfer(&signing_context).map_err(|err| {
             fail_build_after_attempted(self.sink.as_ref(), map_signer_error(&err.into()))
         })?;
@@ -850,6 +921,7 @@ where
         signer: Arc<S>,
         output_selector: O,
         fee_estimator: F,
+        fee_snapshot_source: FS,
         ledger: Arc<L>,
         sink: Arc<dyn DiagnosticSink>,
         ttl: ReservationTTLConfig,
@@ -867,6 +939,7 @@ where
             signer,
             output_selector,
             fee_estimator,
+            fee_snapshot_source,
             ledger,
             sink,
             ttl,
@@ -894,18 +967,37 @@ where
 // PendingTxEngine impl
 // ============================================================================
 
-impl<S, O, F, L> PendingTxEngine for LocalPendingTx<S, O, F, L>
+impl<S, O, F, FS, L> PendingTxEngine for LocalPendingTx<S, O, F, FS, L>
 where
     S: Signer,
     O: OutputSelector,
     F: FeeEstimator,
+    FS: FeeSnapshotSource,
     L: LedgerEngine + Stage1LedgerSpendableAccess,
 {
     fn build(
         &self,
         request: TxRequest,
     ) -> impl Future<Output = Result<PendingTx, SendError>> + Send {
-        std::future::ready(self.build_sync(&request))
+        async move {
+            if request.recipients.is_empty() {
+                let err = SendError::InvalidRecipient {
+                    reason: "TxRequest must carry at least one recipient",
+                };
+                emit_pending_tx_diagnostic(
+                    self.sink.as_ref(),
+                    PendingTxDiagnostic::BuildFailed {
+                        kind: build_error_kind(&err),
+                    },
+                );
+                return Err(err);
+            }
+
+            let fee_snapshot = self.fee_snapshot_source.fetch().await.map_err(|err| {
+                fail_build_after_attempted(self.sink.as_ref(), map_fee_estimator_error(&err))
+            })?;
+            self.build_sync(&request, fee_snapshot)
+        }
     }
 
     fn submit(
@@ -944,9 +1036,12 @@ mod tests {
         AmbiguousErrorKind, PendingTxError, SubmitError, TerminalErrorKind,
     };
     use crate::engine::fee_estimator::DaemonFeeEstimator;
+    use crate::engine::fee_snapshot::FixedFeeSnapshotSource;
+    use crate::engine::traits::FeeEstimates;
+    use shekyl_rpc::FeeRate;
     use crate::engine::key_actor::KeyEngineHandle;
     use crate::engine::output_selector::WalletGreedyOutputSelector;
-    use crate::engine::pending::{FeePriority, TxRecipient, STUB_FEE_ATOMIC_UNITS};
+    use crate::engine::pending::{FeePriority, TxRecipient};
     use crate::engine::signer::LocalSigner;
     use crate::engine::traits::PendingTxEngine;
     use crate::engine::LocalLedger;
@@ -991,6 +1086,22 @@ mod tests {
         LocalLedger::from_test_blocks(Vec::new())
     }
 
+    fn test_fee_estimates() -> FeeEstimates {
+        // mask=1 keeps `FeeRate`'s fee↔weight roundtrip consistent with the
+        // structural predictor's fee varint term under `converge_fee`.
+        let tiny = FeeRate::new(1, 1).expect("tiny test fee rate is non-zero");
+        FeeEstimates {
+            economy: tiny,
+            standard: tiny,
+            priority: tiny,
+            quantization_mask: 1,
+        }
+    }
+
+    fn test_fee_snapshot_source() -> FixedFeeSnapshotSource {
+        FixedFeeSnapshotSource::new(test_fee_estimates())
+    }
+
     /// Smoke test: constructor succeeds and the engine's state
     /// initializes to the (γ) empty-collections baseline.
     #[tokio::test]
@@ -1000,6 +1111,7 @@ mod tests {
             Arc::new(LocalSigner::new(key)),
             WalletGreedyOutputSelector,
             DaemonFeeEstimator,
+            test_fee_snapshot_source(),
             Arc::new(test_ledger()),
             Arc::new(TracingDiagnosticSink),
             ReservationTTLConfig::default(),
@@ -1064,6 +1176,36 @@ mod tests {
                 Timelocked::from_vec(Vec::new()),
             );
         }
+
+        // Scan-only test paths skip the merge post-pass; seed signing fields
+        // so `assemble_tx_to_sign` can run in build tests.
+        use shekyl_crypto_pq::{
+            handle::derive_output_handle,
+            kem::HybridCiphertext,
+            key_image::KeyImage,
+        };
+        const VIEW_SECRET: [u8; 32] = [0xAB; 32];
+        let transfer_count = ledger_block.transfer_count();
+        for i in 0..transfer_count {
+            let Some(td) = ledger_block.transfer_mut(i) else {
+                continue;
+            };
+            td.source_ciphertext = Some(HybridCiphertext {
+                x25519: [0x11; 32],
+                ml_kem: vec![0x22; 8],
+            });
+            td.output_handle = Some(derive_output_handle(
+                &VIEW_SECRET,
+                &td.tx_hash,
+                td.internal_output_index,
+            ));
+            if td.key_image.is_none() {
+                let mut ki_bytes = [0x33; 32];
+                ki_bytes[0] = u8::try_from(i & 0xFF).unwrap_or(0x33);
+                let ki = KeyImage::from_canonical_bytes(ki_bytes);
+                indexes.set_key_image(ledger_block, i, ki);
+            }
+        }
     }
 
     fn standard_request(amount: u64) -> TxRequest {
@@ -1077,14 +1219,20 @@ mod tests {
         }
     }
 
-    fn test_pending_tx(
-        ledger: Arc<LocalLedger>,
-    ) -> LocalPendingTx<LocalSigner, WalletGreedyOutputSelector, DaemonFeeEstimator, LocalLedger>
-    {
+    type TestPendingTx = LocalPendingTx<
+        LocalSigner,
+        WalletGreedyOutputSelector,
+        DaemonFeeEstimator,
+        FixedFeeSnapshotSource,
+        LocalLedger,
+    >;
+
+    fn test_pending_tx(ledger: Arc<LocalLedger>) -> TestPendingTx {
         LocalPendingTx::new(
             Arc::new(LocalSigner::new(test_signer_handle())),
             WalletGreedyOutputSelector,
             DaemonFeeEstimator,
+            test_fee_snapshot_source(),
             ledger,
             Arc::new(TracingDiagnosticSink),
             ReservationTTLConfig::default(),
@@ -1095,12 +1243,12 @@ mod tests {
     fn test_pending_tx_with_sink(
         ledger: Arc<LocalLedger>,
         sink: Arc<dyn DiagnosticSink>,
-    ) -> LocalPendingTx<LocalSigner, WalletGreedyOutputSelector, DaemonFeeEstimator, LocalLedger>
-    {
+    ) -> TestPendingTx {
         LocalPendingTx::new(
             Arc::new(LocalSigner::new(test_signer_handle())),
             WalletGreedyOutputSelector,
             DaemonFeeEstimator,
+            test_fee_snapshot_source(),
             ledger,
             sink,
             ReservationTTLConfig::default(),
@@ -1114,8 +1262,8 @@ mod tests {
             ledger.as_ref(),
             1,
             vec![
-                make_recovered_output(1, 100, 10_000),
-                make_recovered_output(2, 101, 5_000),
+                make_recovered_output(1, 100, 12_000),
+                make_recovered_output(2, 101, 6_000),
             ],
             20,
         );
@@ -1129,8 +1277,8 @@ mod tests {
             ledger.as_ref(),
             1,
             vec![
-                make_recovered_output(1, 100, 10_000),
-                make_recovered_output(2, 101, 5_000),
+                make_recovered_output(1, 100, 12_000),
+                make_recovered_output(2, 101, 6_000),
             ],
             20,
         );
@@ -1140,7 +1288,10 @@ mod tests {
             .build(standard_request(7_000))
             .await
             .expect("build ok");
-        assert_eq!(built.fee_atomic_units, STUB_FEE_ATOMIC_UNITS);
+        assert!(
+            built.fee_atomic_units > AtomicUnits::ZERO,
+            "fee estimator returns a positive fee from the test snapshot"
+        );
         assert_eq!(pending.outstanding(), 1);
 
         let tx_hash = pending.submit(built.id).await.expect("submit ok");
@@ -1166,7 +1317,7 @@ mod tests {
             ledger.as_ref(),
             1,
             vec![
-                make_recovered_output(1, 100, 10_000),
+                make_recovered_output(1, 100, 12_000),
                 make_recovered_output(2, 101, 6_000),
             ],
             20,
@@ -1420,14 +1571,7 @@ mod tests {
 
     // ── Phase 0m: signal_mempool_evicted (STAGE_1_PR_5 §5.6.12 C5β) ─
 
-    async fn build_in_flight_via_daemon_timeout(
-        pending: &LocalPendingTx<
-            LocalSigner,
-            WalletGreedyOutputSelector,
-            DaemonFeeEstimator,
-            LocalLedger,
-        >,
-    ) -> PendingTx {
+    async fn build_in_flight_via_daemon_timeout(pending: &TestPendingTx) -> PendingTx {
         let built = pending
             .build(standard_request(7_000))
             .await

@@ -24,6 +24,19 @@
   narrowing (§3.1/§3.2) were **re-split** out of 2a-1 to land with their first
   consumers (fee-source in 2a-2, submitter in 2a-3), since both capabilities are
   consumer-less in 2a-1 (see §5 re-split note).
+- **wallet: Phase 2a-2 — signing context + fee plumbing.** Wires the
+  `LocalPendingTx` async build path per `docs/design/PHASE_2A_SEND_PATH.md` §5
+  row 2a-2: `FeeSnapshotSource` / `DaemonFeeSnapshotSource` (PF2) fetch one
+  `FeeEstimates` snapshot per build; `FeeEstimationContext` carries
+  `output_count`, `fee_snapshot`, and `tree_depth` (PF1); structural
+  `predict_weight` / `converge_fee` / `FeeDirective` land in
+  `tx_fee_model`; `assemble_tx_to_sign` builds populated `TxToSign` from
+  ledger `TransferDetails`; `TxInputSigningContext` / `TxOutputContext` /
+  `FcmpPlusPlusContext` reshaped per §3.9. Canonical dust threshold
+  (`shekyl-rpc::tx_fee::dust_threshold`) shared with
+  `shekyl-scanner::coin_select`. Real `sign_transfer` / `tx_bytes` /
+  submitter remain 2a-3; `fcmp_proof_size` KAT and
+  `predict_weight == tx.weight()` grid deferred likewise.
 - **stake-lifecycle: Round 3 dual-wargamer synthesis — top finding F0 re-gates
   closure.** Two independent adversarial passes over the §7.5 wargame were
   synthesized into `docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (2026-06-05).
