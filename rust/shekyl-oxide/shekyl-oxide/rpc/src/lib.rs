@@ -213,50 +213,47 @@ fn hash_hex(hash: &str) -> Result<[u8; 32], RpcError> {
         .map_err(|_| RpcError::InvalidNode("hash wasn't 32-bytes".to_string()))
 }
 
-/// The daemon's reply to a `send_raw_transaction` broadcast.
+/// The daemon's verdict on a `send_raw_transaction` broadcast.
 ///
-/// Mirrors the daemon's `on_send_raw_transaction` response
-/// (`core_rpc_server.cpp`): `status == "OK"` means the transaction was
-/// accepted into the pool (possibly with `not_relayed` set when the
-/// caller asked for it); any other status means rejection, with the
-/// boolean flags identifying the failure class and `reason` carrying a
-/// human-readable note when the daemon supplies one.
+/// This is **not** a full mirror of the daemon's
+/// `on_send_raw_transaction` response (`core_rpc_server.cpp`). The daemon
+/// serializes ~10 rejection-class booleans (`double_spend`, `fee_too_low`,
+/// `invalid_input`, `invalid_output`, `too_big`, `overspend`,
+/// `too_few_outputs`, `sanity_check_failed`, `tx_extra_too_big`,
+/// `nonzero_unlock_time`) plus `not_relayed` and a `reason` string. This
+/// struct models only the **verdict subset the wallet consumes**:
 ///
-/// [`Rpc::publish_transaction`] returns this verbatim — including on
-/// rejection — so callers can map the daemon's decision onto their own
-/// submission-outcome type. The RPC layer does not editorialize: a
-/// transport- or protocol-level failure is an [`RpcError`]; a
-/// daemon-level accept-or-reject is a populated `TxRelayResponse`.
-/// `#[serde(default)]` tolerates a daemon that omits a flag rather than
-/// erroring, so an absent field reads as "not set" instead of failing
-/// the whole parse.
+/// - `status` — `"OK"` (accepted into the pool, possibly relay-local only)
+///   vs. any rejection status (`"Failed"`);
+/// - `double_spend` / `fee_too_low` — the two rejection classes the wallet
+///   maps to distinct terminal outcomes.
+///
+/// Every other daemon rejection class collapses to a generic terminal
+/// `Malformed` in the wallet mapping (no dedicated outcome), so modeling
+/// the corresponding flags here would be unread state — fields without a
+/// consumer (`21-reversion-clause-discipline.mdc`). `#[serde(default)]`
+/// (and the absence of `deny_unknown_fields`) means the daemon's
+/// unmodeled fields deserialize-and-ignore rather than failing the parse;
+/// when a future wallet outcome needs a finer class (e.g. a daemon
+/// stale-FCMP++-root flag, `docs/FOLLOWUPS.md`), the field is added here
+/// **with** its consumer.
+///
+/// [`Rpc::publish_transaction`] returns this for a parsed daemon verdict
+/// (including rejection); a transport- or protocol-level failure — or a
+/// response that omits `status` — is an [`RpcError`] instead, so callers
+/// never see a malformed reply masquerading as a daemon rejection.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct TxRelayResponse {
     /// Daemon status string: `"OK"` on accept, otherwise a rejection
-    /// status (e.g. `"Failed"`).
+    /// status (e.g. `"Failed"`). An empty/absent value is rejected as
+    /// [`RpcError::InvalidNode`] by [`Rpc::publish_transaction`], never
+    /// surfaced as a rejection verdict.
     pub status: String,
     /// The transaction double-spends an output already spent or in-pool.
     pub double_spend: bool,
     /// The offered fee is below the daemon's required minimum.
     pub fee_too_low: bool,
-    /// An input failed validation.
-    pub invalid_input: bool,
-    /// An output failed validation.
-    pub invalid_output: bool,
-    /// The transaction's ring size is below the daemon's minimum.
-    pub low_mixin: bool,
-    /// The transaction was accepted but not relayed (caller opted out of
-    /// relay, or the daemon chose not to relay it).
-    pub not_relayed: bool,
-    /// Inputs exceed outputs plus fee (or otherwise overspend).
-    pub overspend: bool,
-    /// The transaction exceeds the daemon's size limit.
-    pub too_big: bool,
-    /// The transaction has fewer outputs than consensus requires.
-    pub too_few_outputs: bool,
-    /// Human-readable rejection note, when the daemon supplies one.
-    pub reason: String,
 }
 
 /// An RPC connection to a Monero daemon.
@@ -822,15 +819,22 @@ pub trait Rpc: Sync + Clone {
     /// Broadcast a transaction to the daemon, returning the daemon's
     /// accept-or-reject decision.
     ///
-    /// The returned [`TxRelayResponse`] carries the daemon's verdict
-    /// verbatim, including on rejection: an [`Err`] is reserved for
-    /// transport- or protocol-level failures, while a daemon that parses
-    /// the transaction and decides to reject it yields an [`Ok`] with
+    /// The returned [`TxRelayResponse`] carries the daemon's verdict,
+    /// including on rejection: an [`Err`] is reserved for transport- or
+    /// protocol-level failures, while a daemon that parses the
+    /// transaction and decides to reject it yields an [`Ok`] with
     /// `status != "OK"` and the relevant rejection flags set. Callers map
     /// the verdict onto their own submission-outcome type; this method
     /// does not collapse a daemon rejection into an error, because the
     /// rejection class (double-spend, fee-too-low, …) is information the
     /// caller needs.
+    ///
+    /// A reply that **omits `status`** is a protocol-shape failure, not a
+    /// daemon verdict: under `#[serde(default)]` it would otherwise
+    /// deserialize as `status == ""` and be indistinguishable from a
+    /// rejection. Such a reply is rejected as [`RpcError::InvalidNode`]
+    /// so a malformed/incomplete response is never mistaken for a
+    /// terminal daemon rejection by higher layers.
     fn publish_transaction(
         &self,
         tx: &Transaction,
@@ -844,6 +848,12 @@ pub trait Rpc: Sync + Clone {
                     ),
                 )
                 .await?;
+
+            if res.status.is_empty() {
+                Err(RpcError::InvalidNode(
+                    "send_raw_transaction reply omitted status".to_string(),
+                ))?;
+            }
 
             Ok(res)
         }

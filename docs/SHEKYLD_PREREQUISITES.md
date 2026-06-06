@@ -130,7 +130,7 @@ of the curve-tree root is a separate property regtest does not
 exercise.
 
 **FCMP++ reference-block age rules still run.**
-`src/cryptonote_core/blockchain.cpp:3620–3652` is **not** wrapped in a
+`src/cryptonote_core/blockchain.cpp:3801–3855` is **not** wrapped in a
 `FAKECHAIN` skip. V3 spends must reference a curve-tree root from a
 sufficiently-aged block, in regtest just as on mainnet. The harness
 must therefore mine enough blocks before constructing test transfers
@@ -415,11 +415,15 @@ wallet cannot reactively detect the recoverable stale-root case.
 ### Evidence of absence
 
 **Validation sets only the generic flag.** Reference-block age/identity
-validation in `src/cryptonote_core/blockchain.cpp:3620–3652` (the FCMP++
-reference-block rules, **not** wrapped in a `FAKECHAIN` skip per §1) signals
-failure through `tvc.m_verifivation_failed = true` with no dedicated
-sub-flag. There is no `m_stale_root` / `m_reference_block_too_old` member on
-`tx_verification_context`.
+validation in `src/cryptonote_core/blockchain.cpp:3801–3855` (the FCMP++
+reference-block rules, **not** wrapped in a `FAKECHAIN` skip per §1) detects
+the staleness conditions as **distinct** points — not-found (`:3803`),
+too-recent (`:3811`), too-old (`:3822`), depth-out-of-range (`:3846`) — but
+signals every one through `tvc.m_verifivation_failed = true` with no
+dedicated sub-flag. There is no `m_fcmp_root_stale` /
+`m_reference_block_too_old` member on `tx_verification_context`. (Detection
+already exists; only the flag is missing — surfacing the signal is
+mechanical, not a verification rewrite.)
 
 **The RPC reply collapses it.** `on_send_raw_transaction`
 (`src/rpc/core_rpc_server.cpp:1334–1368`) maps the verification context to
@@ -456,11 +460,13 @@ build-path defects as recoverable and drive pointless rebuild loops.
 File a daemon-side follow-up at `docs/FOLLOWUPS.md`:
 
 > **`shekyld` stale-FCMP++-root signal on `send_raw_transaction`.** Add a
-> dedicated rejection flag (e.g. `reference_block_invalid: bool`, optionally
-> with a sub-reason for too-old / too-recent / not-found) to the
-> `send_raw_transaction` reply, set when reference-block validation
-> (`blockchain.cpp:3620–3652`) is the cause of `m_verifivation_failed`. The
-> Rust wallet's `submit_outcome_from_response` then splits
+> `tvc.m_fcmp_root_stale` member and a dedicated rejection flag
+> (`fcmp_root_stale: bool`) to the `send_raw_transaction` reply, set at the
+> **recoverable** reference-block validation points
+> (`blockchain.cpp:3801–3855`) — not-found (`:3803`), too-old (`:3822`),
+> depth-out-of-range (`:3846`) — but **not** too-recent (`:3811`), which is
+> not a rebuild-against-a-fresher-root case. The Rust wallet's
+> `submit_outcome_from_response` then splits
 > `TxSubmitOutcome::ProofStale` out of the generic `Malformed` bucket and
 > drives the §3.6 bounded rebuild loop. Target version: V3.1 (Phase 6
 > end-to-end harness consumes it).

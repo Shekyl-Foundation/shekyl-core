@@ -469,12 +469,23 @@ named FOLLOWUPS row with reversion clause, not a silent stub.
    from step 2). See the **honest-subset mapping** below.
 
 **Honest-subset mapping (verified against `core_rpc_server.cpp`).**
-`on_send_raw_transaction` sets a dedicated boolean flag only for
-`double_spend` and `fee_too_low`. Every other rejection — `invalid_input`,
-`invalid_output`, `overspend`, `too_big`, `too_few_outputs`, an
-**already-known duplicate**, and a **stale FCMP++ root** — collapses into the
-same generic `status == "Failed"` bucket, frequently with an empty `reason`
-(the specific cause is only `LOG_PRINT_L0`'d server-side, never propagated).
+`on_send_raw_transaction` sets a dedicated boolean for ~10 rejection classes
+(`double_spend`, `fee_too_low`, `invalid_input`, `invalid_output`,
+`overspend`, `too_big`, `too_few_outputs`, `sanity_check_failed`,
+`tx_extra_too_big`, `nonzero_unlock_time`). The wallet mapping is narrow by
+**choice**, not daemon limitation: 2a-1 needs only two distinct terminal
+outcomes (`double_spend`, `fee_too_low`); the other flagged classes carry no
+distinct wallet remedy, so they collapse to `Malformed`. `TxRelayResponse`
+models only the consumed subset (`status`, `double_spend`, `fee_too_low`) —
+the unmodeled flags deserialize-and-ignore under `#[serde(default)]` rather
+than becoming unread state (`21-reversion-clause-discipline.mdc`).
+
+The mapping's *genuine* indistinguishability is narrower than "every other
+rejection": it is specifically the **unflagged generics** — an
+**already-known duplicate** and a **stale FCMP++ root** — which set *no*
+dedicated flag and yield `status == "Failed"` with an empty `reason` (the
+specific cause is only `LOG_PRINT_L0`'d server-side, never propagated). These
+are the cases a wallet cannot separate without a daemon-side signal.
 `DaemonClient::submit_transaction` therefore produces only:
 
 | Daemon reply | `TxSubmitOutcome` |

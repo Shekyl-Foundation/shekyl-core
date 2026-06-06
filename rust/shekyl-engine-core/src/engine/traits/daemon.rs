@@ -126,12 +126,14 @@ pub(crate) struct FeeEstimates {
 /// - [`Self::Submitted`] — daemon `status == "OK"`; accepted to the
 ///   pool.
 /// - [`Self::DaemonRejectedTerminal`] — daemon `status != "OK"`; a
-///   final, non-recoverable rejection. The daemon distinguishes only
-///   `double_spend` and `fee_too_low`; every other rejection
-///   (invalid input/output, overspend, too-big, **already-known**, and
-///   a **stale FCMP++ root**) collapses into the same generic
-///   `status == "Failed", reason == ""` bucket and maps to
-///   [`TerminalErrorKind::Malformed`]. Verified against
+///   final, non-recoverable rejection. The daemon flags ~10 rejection
+///   classes; the wallet maps only `double_spend` and `fee_too_low` to
+///   distinct terminal kinds **by choice** (2a-1 needs no finer remedy)
+///   and collapses the rest to [`TerminalErrorKind::Malformed`]. The
+///   cases that are *genuinely* indistinguishable client-side are the
+///   **unflagged** generics — an **already-known** duplicate and a
+///   **stale FCMP++ root** — which set no dedicated flag and yield
+///   `status == "Failed", reason == ""`. Verified against
 ///   `core_rpc_server.cpp::on_send_raw_transaction`.
 /// - [`Self::AlreadyKnown`] — **not** produced by the daemon-verdict
 ///   mapping (the daemon gives no distinguishing signal). It is the

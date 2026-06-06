@@ -4432,13 +4432,19 @@ one place to confirm each item's relationship to the wallet stack.
 - **`shekyld` stale-FCMP++-root signal on `send_raw_transaction`.**
   Surfaced by the Phase 2a send-path audit
   ([`docs/SHEKYLD_PREREQUISITES.md`](SHEKYLD_PREREQUISITES.md) §5,
-  appended 2026-06). The daemon's reference-block-age validation
-  (`src/cryptonote_core/blockchain.cpp:3620–3652`) signals failure
-  through the generic `tvc.m_verifivation_failed` with no dedicated
-  sub-flag, and `on_send_raw_transaction`
-  (`src/rpc/core_rpc_server.cpp:1334–1368`) consequently maps a stale
-  FCMP++ root to `status == "Failed"` with **no flag set and an empty
-  `reason`** — indistinguishable from a genuinely malformed transaction.
+  appended 2026-06; line citations re-verified 2026-06). The daemon
+  **already detects** the staleness conditions as distinct points in
+  `Blockchain::check_tx_inputs`
+  (`src/cryptonote_core/blockchain.cpp:3801–3855`): referenceBlock
+  not-found (`:3803`), too-recent (`:3811`), too-old (`:3822`), and
+  curve-tree-depth out-of-range (`:3846`). It just funnels all of them
+  into the generic `tvc.m_verifivation_failed = true; return false` with
+  **no dedicated sub-flag**, and `on_send_raw_transaction`
+  (`src/rpc/core_rpc_server.cpp`) consequently maps a stale FCMP++ root to
+  `status == "Failed"` with **no flag set and an empty `reason`** —
+  indistinguishable from a genuinely malformed transaction. Because the
+  detection already exists, surfacing the signal is **mechanical** (add a
+  flag + set it at the existing points), not a verification rewrite.
   The wallet therefore cannot reactively detect the *recoverable*
   stale-root case (rebuild-against-fresh-root, re-sign, re-submit) and
   currently maps it to `DaemonRejectedTerminal { Malformed }`
@@ -4449,18 +4455,27 @@ one place to confirm each item's relationship to the wallet stack.
   `21-reversion-clause-discipline.mdc`; the variant exists unconstructed
   from 2a-1).
 
-  Scope of the daemon work:
-  1. Add a dedicated rejection flag to the `send_raw_transaction` reply
-     (`COMMAND_RPC_SEND_RAW_TX::response_t`), e.g.
-     `reference_block_invalid: bool`, optionally with a sub-reason
-     discriminating too-old / too-recent / not-found.
-  2. Set it in `on_send_raw_transaction` when reference-block validation
-     (`blockchain.cpp:3620–3652`) is the cause of `m_verifivation_failed`
-     — additive, no consensus-rule change, no breaking RPC change.
+  Scope of the daemon work (**its own design doc + review cycle** — it
+  touches the consensus-critical `check_tx_inputs` path even though the
+  change is verdict-observability only, not a consensus-rule change, per
+  `20-rust-vs-cpp-policy.mdc` migration-is-a-planning-activity):
+  1. Add a `tvc.m_fcmp_root_stale` flag to `tx_verification_context`
+     (`src/cryptonote_basic/verification_context.h`) and a dedicated
+     rejection flag (`fcmp_root_stale: bool`) to the `send_raw_transaction`
+     reply (`COMMAND_RPC_SEND_RAW_TX::response_t`), optionally with a
+     sub-reason discriminating not-found / too-old / depth-grew.
+  2. Set `tvc.m_fcmp_root_stale` at the **recoverable** staleness points
+     in `blockchain.cpp` — not-found (`:3803`), too-old (`:3822`),
+     depth-out-of-range (`:3846`) — but **not** too-recent (`:3811`),
+     which is a too-fresh reference (rebuilding against a fresher root
+     makes it worse, so it is *not* a `ProofStale` rebuild case). Plumb
+     it through `on_send_raw_transaction`. Additive; no consensus-rule
+     change; no breaking RPC change.
   3. The Rust wallet's `submit_outcome_from_response`
-     (`rust/shekyl-engine-core/src/engine/daemon.rs`) then splits
-     `ProofStale` out of the generic `Malformed` bucket and the
-     orchestrator drives the §3.6 bounded rebuild loop.
+     (`rust/shekyl-engine-core/src/engine/daemon.rs`) adds `fcmp_root_stale`
+     to the consumed `TxRelayResponse` subset and splits `ProofStale` out
+     of the generic `Malformed` bucket; the orchestrator drives the §3.6
+     bounded rebuild loop.
 
   **Not a Phase 2a blocker.** The proactive `reference.rs` validity
   horizon (`select_reference_block`, `PHASE_2A_SEND_PATH.md` §5.4) is the

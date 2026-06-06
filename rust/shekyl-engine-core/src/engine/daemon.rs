@@ -130,16 +130,26 @@ fn fee_estimates_from_value(result: &Value) -> Result<FeeEstimates, RpcError> {
 ///
 /// `hash` is the **locally**-computed transaction id (§3.6 step 2); the
 /// daemon reply is consulted only for the accept/reject verdict, never
-/// for identity. The mapping is deliberately narrow because the daemon
-/// is too: `on_send_raw_transaction` (`core_rpc_server.cpp`) sets a
-/// dedicated flag only for `double_spend` and `fee_too_low`. Every
-/// other rejection — invalid input/output, overspend, too-big,
-/// too-few-outputs, an **already-known** duplicate, and a **stale
-/// FCMP++ root** — lands in the same generic `status == "Failed"`
-/// bucket (frequently with an empty `reason`), so it maps to
+/// for identity.
+///
+/// The daemon (`on_send_raw_transaction`, `core_rpc_server.cpp`) sets a
+/// dedicated boolean for ~10 rejection classes (`double_spend`,
+/// `fee_too_low`, `invalid_input`, `invalid_output`, `too_big`,
+/// `overspend`, `too_few_outputs`, `sanity_check_failed`,
+/// `tx_extra_too_big`, `nonzero_unlock_time`). The mapping is narrow by
+/// **wallet choice**, not daemon limitation: 2a-1 needs only two distinct
+/// terminal outcomes (`double_spend` → [`TerminalErrorKind::DoubleSpend`],
+/// `fee_too_low` → [`TerminalErrorKind::FeeTooLow`]); every other
+/// rejection — the other flagged classes plus the **unflagged** generics
+/// (an **already-known** duplicate and a **stale FCMP++ root**, which set
+/// no dedicated flag and yield an empty `reason`) — collapses to
 /// [`TerminalErrorKind::Malformed`].
 ///
-/// Consequently this function never produces
+/// The indistinguishability that blocks finer wallet handling is
+/// specifically among the **unflagged** generics: an already-known
+/// duplicate and a stale FCMP++ root are not separable client-side
+/// without a daemon-side signal (`docs/FOLLOWUPS.md` —
+/// `fcmp_root_stale`). Consequently this function never produces
 /// [`TxSubmitOutcome::AlreadyKnown`] (the orchestrator derives that
 /// wallet-side per §5.2) nor [`TxSubmitOutcome::ProofStale`] (detection
 /// deferred to Phase 6). Both are documented on the enum.
@@ -378,16 +388,20 @@ mod tests {
         );
     }
 
-    /// `not_relayed` (daemon relayed locally only) is still an accept:
-    /// the broadcast landed in the pool.
+    /// An `OK` reply carrying daemon fields the wallet does **not** model
+    /// (`not_relayed`, `reason`, …) parses without error and still maps to
+    /// `Submitted` — `#[serde(default)]` deserialize-and-ignores the
+    /// unmodeled surface (the F1 trim contract).
     #[test]
-    fn submit_ok_not_relayed_is_still_submitted() {
+    fn submit_ok_tolerates_unmodeled_daemon_fields() {
         let hash = TxHash([1u8; 32]);
-        let resp = TxRelayResponse {
-            status: "OK".to_string(),
-            not_relayed: true,
-            ..Default::default()
-        };
+        let resp: TxRelayResponse = serde_json::from_value(json!({
+            "status": "OK",
+            "not_relayed": true,
+            "reason": "",
+            "sanity_check_failed": false,
+        }))
+        .expect("unmodeled daemon fields tolerated");
         assert_eq!(
             submit_outcome_from_response(&resp, hash),
             TxSubmitOutcome::Submitted { hash }
@@ -399,7 +413,6 @@ mod tests {
         let resp = TxRelayResponse {
             status: "Failed".to_string(),
             double_spend: true,
-            reason: "double spend".to_string(),
             ..Default::default()
         };
         assert_eq!(
@@ -415,7 +428,6 @@ mod tests {
         let resp = TxRelayResponse {
             status: "Failed".to_string(),
             fee_too_low: true,
-            reason: "fee too low".to_string(),
             ..Default::default()
         };
         assert_eq!(
@@ -444,16 +456,18 @@ mod tests {
         );
     }
 
-    /// A non-double-spend, non-fee flag (e.g. `invalid_input`) is not
-    /// individually discriminated — it collapses to `Malformed`.
+    /// A daemon rejection flagged with a class the wallet does **not**
+    /// model (e.g. `invalid_input`) deserialize-and-ignores that flag and
+    /// collapses to `Malformed` — the deliberate honest-subset mapping,
+    /// not a parse failure.
     #[test]
-    fn submit_other_flag_is_terminal_malformed() {
-        let resp = TxRelayResponse {
-            status: "Failed".to_string(),
-            invalid_input: true,
-            reason: "invalid input".to_string(),
-            ..Default::default()
-        };
+    fn submit_unmodeled_rejection_flag_is_terminal_malformed() {
+        let resp: TxRelayResponse = serde_json::from_value(json!({
+            "status": "Failed",
+            "invalid_input": true,
+            "reason": "invalid input",
+        }))
+        .expect("unmodeled rejection flag tolerated");
         assert_eq!(
             submit_outcome_from_response(&resp, TxHash([0u8; 32])),
             TxSubmitOutcome::DaemonRejectedTerminal {
@@ -470,7 +484,6 @@ mod tests {
             status: "Failed".to_string(),
             double_spend: true,
             fee_too_low: true,
-            ..Default::default()
         };
         assert_eq!(
             submit_outcome_from_response(&resp, TxHash([0u8; 32])),
