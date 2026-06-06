@@ -3,7 +3,9 @@
 **Status:** Implementation — §10 pre-implementation checklist agreement items
 signed off (§1 DoD, §5 PR split, §9 open-question owners/targets); remaining
 unchecked §10 boxes are per-PR implementation work (2a-1…2a-4). PR 2a-1
-(daemon fee snapshot + broadcast) in progress.  
+(daemon fee snapshot + broadcast **primitives**) landing; the `LocalPendingTx`
+async boundary + capability narrowing re-split into 2a-2/2a-3 with their first
+consumers (see §5 re-split note).  
 **Scope:** Land a **real** transfer on `Engine<S>`: daemon-backed fees, signed
 `tx_bytes`, daemon broadcast. Excludes Phase **2b** (stake), **2c**
 (addresses/proofs), **2d** (cold bundles), and Phase **6** regtest e2e (tracked
@@ -1538,13 +1540,29 @@ producer of `SignedProofs`-shaped material).
 
 | PR | Title | Files (indicative) | Delivers |
 |----|-------|-------------------|----------|
-| **2a-1** | Daemon fee snapshot + broadcast | `daemon.rs`, `fee_estimator.rs`, `local_pending_tx.rs`, `lifecycle.rs`, `test_support.rs` tests | Atomic single-RPC fee snapshot + `submit_transaction` (local hash, `ProofStale`); async build/submit; capability-narrowed fee-source + submitter on pending engine |
-| **2a-2** | Signing context + fee/change directive plumbing | `signer.rs`, `traits/key.rs`, `local_pending_tx.rs`, `fee_estimator.rs`, `coin_select.rs`, `shekyl-engine-state` only if public fields needed | Populated `TransferSigningContext`/`TxToSign` per §3.7.2 (tx-level `FcmpPlusPlusContext { tree }`; per-input public path on `TxInputSigningContext`); `TxOutputContext` reshape (payment-amount confidential-on-message, change-amount engine-side); C5 per-field locality assertion (§3.7.8). **F4/F8 orchestrator side (§3.10):** `predict_weight` predictor + `FeeEstimationContext` output-shape input; `FeeDirective` population (`fee_no_change`/`fee_with_change`/`dust_threshold`); one canonical `dust()` fn + `K_DUST`/`MARGINAL_INPUT_WEIGHT`; migrate `coin_select` nominal `1_000_000` → `dust()` |
-| **2a-3** | KeyActor sign + tx-builder + wire encode | `key_actor.rs`, `local_keys.rs`, `shekyl-tx-builder` (new `wire` module: typed-component → `shekyl_oxide::Transaction::V2` adapter, **no** serialize↔parse round-trip; serialize-twice determinism test; `wire`-only `shekyl_oxide::transaction` import guard; gains top `shekyl-oxide` dep, §4) | Non-empty `tx_bytes`; one-round-trip two-phase sign (§3.7.7); `TxSignatures`/`TxInputSignature` reshape + delete `FcmpPlusPlusWitness` + `OutputInfo` `ZeroizeOnDrop` fix (§3.7.3); C3 path precondition + C5 structural test; remove `SignTransactionTraitSurfaceIncomplete` on transfer path. **F4/F8 engine side (§3.10):** pre-prove variant decision + dust-fold (§3.8.2) + `InsufficientFunds`; `fcmp_proof_size` KAT over `[1,8]×[1,24]` + `predict_weight == tx.weight()` self-consistency test |
+| **2a-1** | Daemon fee snapshot + broadcast primitives | `daemon.rs`, `traits/daemon.rs`, `shekyl-oxide/rpc/lib.rs` | Atomic single-RPC fee snapshot (`DaemonEngine::get_fee_estimates`) + `DaemonEngine::submit_transaction` (local hash, honest-subset verdict map, `TxSubmitOutcome` variants incl. deferred `ProofStale`); `Rpc::publish_transaction` reshaped to surface the daemon relay verdict. **No `LocalPendingTx` wiring** — these are the `DaemonEngine`-trait primitives that 2a-2/2a-3 consume |
+| **2a-2** | Signing context + fee/change directive plumbing + pending-engine async wiring | `signer.rs`, `traits/key.rs`, `local_pending_tx.rs`, `lifecycle.rs`, `fee_estimator.rs`, `coin_select.rs`, `shekyl-engine-state` only if public fields needed | Populated `TransferSigningContext`/`TxToSign` per §3.7.2 (tx-level `FcmpPlusPlusContext { tree }`; per-input public path on `TxInputSigningContext`); `TxOutputContext` reshape (payment-amount confidential-on-message, change-amount engine-side); C5 per-field locality assertion (§3.7.8). **F4/F8 orchestrator side (§3.10):** `predict_weight` predictor + `FeeEstimationContext` output-shape input; `FeeDirective` population (`fee_no_change`/`fee_with_change`/`dust_threshold`); one canonical `dust()` fn + `K_DUST`/`MARGINAL_INPUT_WEIGHT`; migrate `coin_select` nominal `1_000_000` → `dust()`. **Async boundary + capability narrowing (§3.1/§3.2):** `build`/`submit` stop wrapping `std::future::ready`; capability-narrowed fee-source handle lands **with its first consumer** (the §3.3 snapshot feeding `FeeEstimationContext`) — see re-split note below |
+| **2a-3** | KeyActor sign + tx-builder + wire encode | `key_actor.rs`, `local_keys.rs`, `shekyl-tx-builder` (new `wire` module: typed-component → `shekyl_oxide::Transaction::V2` adapter, **no** serialize↔parse round-trip; serialize-twice determinism test; `wire`-only `shekyl_oxide::transaction` import guard; gains top `shekyl-oxide` dep, §4) | Non-empty `tx_bytes`; one-round-trip two-phase sign (§3.7.7); `TxSignatures`/`TxInputSignature` reshape + delete `FcmpPlusPlusWitness` + `OutputInfo` `ZeroizeOnDrop` fix (§3.7.3); C3 path precondition + C5 structural test; remove `SignTransactionTraitSurfaceIncomplete` on transfer path. **F4/F8 engine side (§3.10):** pre-prove variant decision + dust-fold (§3.8.2) + `InsufficientFunds`; `fcmp_proof_size` KAT over `[1,8]×[1,24]` + `predict_weight == tx.weight()` self-consistency test. **Submit async boundary + submitter capability (§3.1/§3.2):** `submit` routes real `tx_bytes` through the capability-narrowed submitter handle — lands **with its first consumer** (real bytes exist here, not before) |
 | **2a-4** | Hybrid send test + doc closeout | `local_pending_tx.rs` / `lifecycle.rs` tests, `WALLET_REWRITE_PLAN.md`, `FOLLOWUPS.md`, `CHANGELOG.md` | End-to-end `TestDaemon` build→submit; checklist §10 |
 
 **Dependency:** 2a-2 and 2a-1 can overlap only if 2a-3 gates on both; default
 serial order above.
+
+**Re-split note (2a-1 landed as daemon primitives only).** The original 2a-1
+row bundled the `DaemonEngine` primitives *and* the `LocalPendingTx` async
+boundary + capability narrowing (§3.1/§3.2). At implementation, both narrowed
+capabilities proved **consumer-less within 2a-1**: the fee-source snapshot is
+not consumed until 2a-2 reshapes `FeeEstimationContext` (the synchronous
+`estimate_fee` is stubbed until then), and the submitter cannot fire real
+`tx_bytes` until 2a-3 (`build_sync` signs `TransferSigningContext::phase1_stub()`;
+wiring the submitter against stub bytes parse-fails → `Malformed` and breaks the
+existing submit tests). Plumbing two daemon capabilities with no caller is the
+"optionality without a named caller is debt" anti-pattern
+(`21-reversion-clause-discipline.mdc`). Disposition: 2a-1 ships the
+`DaemonEngine`-trait primitives alone; the async boundary + each capability
+land **with their first consumer** — fee-source in 2a-2, submitter in 2a-3.
+This keeps every capability paired with a live caller and keeps each PR
+bisectable.
 
 **FCMP tree fixture:** `transfer_e2e` bench notes missing tree fixture
 (`docs/benchmarks/shekyl_rust_v0.manifest.md`). Per §3.0.5, 2a-3 tests use
