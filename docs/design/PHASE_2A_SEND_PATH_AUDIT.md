@@ -1,0 +1,107 @@
+# Phase 2a — send path: pre-flight audit trail
+
+Sibling audit trail for `docs/design/PHASE_2A_SEND_PATH.md`, per
+`26-sub-pr-design-discipline.mdc` §"Pre-flight pass (Round 0 disposition
+naming)". Records, per sub-PR, the **substrate re-check** and **artifact
+execution** that run between design closure and the first production commit.
+Findings use stable IDs (`<sub-pr> PF#`) that must not be renamed; each maps to
+the rule-26 discipline it instantiates.
+
+The pre-flight pass is **not a redesign**. It catches design-time dispositions
+falsified by impl-time substrate or by running produced artifacts. A
+confirmatory pass (every cited claim still holds) is the expected steady-state
+outcome per `16-architectural-inheritance.mdc` §"Operational implication for
+forward extractions"; the pass's value is catching the cases where the
+expectation breaks.
+
+---
+
+## 2a-2 pre-flight (Round 0) — signing context + fee/change directive + async wiring
+
+**Run:** on `dev` at the 2a-1 merge (`#109`, merge `d78f68baa`), branch `dev`
+up to date with `origin/dev`. Scope = the §5 2a-2 row: §3.7.2 signing-context
+population, §3.10 F4/F8 orchestrator side, §3.1/§3.2 async boundary +
+fee-source capability.
+
+### Substrate re-check
+
+Re-read every source file the 2a-2 dispositions cite, at the audit pin.
+
+| Disposition (doc §) | Claim | Substrate at pin | Verdict |
+|---|---|---|---|
+| §3.1 async boundary | `build`/`submit` wrap `std::future::ready(build_sync/submit_sync)` | `local_pending_tx.rs:904–915` — `build` → `std::future::ready(self.build_sync(&request))`, `submit` → `std::future::ready(self.submit_sync(id))` | **Holds.** 2a-2 replaces the build-side wrap with an `async` block. |
+| §3.2 least-authority | `LocalPendingTx` holds no `Arc<D>` god-object; fee-source/submitter are narrowed handles landing with first consumer | `local_pending_tx.rs:253–296` — fields are `signer: Arc<S>`, `output_selector: O`, `fee_estimator: F`, `ledger: Arc<L>`, `sink`; no daemon handle; submit uses a Phase-1 stub (`submit_daemon_outcome` test override + "daemon always accepts" `:765`) | **Holds.** No god-object present; submitter correctly absent (re-split puts it in 2a-3). |
+| §3.2 2a-1 primitives | `DaemonEngine::{get_fee_estimates, submit_transaction}` exist for 2a-2/2a-3 to consume | `traits/daemon.rs:280, 308` | **Holds** (landed in 2a-1). |
+| §3.7.2 reshape-from-`{}` | `FcmpPlusPlusContext`/`TxOutputContext` still empty; `TxToSign` top shape `{inputs, outputs, fcmp_plus_plus_context}` | `traits/key.rs:579` `TxOutputContext {}`, `:585` `FcmpPlusPlusContext {}`, `:547–553` `TxToSign`; `TxInputSigningContext:399` carries `source_ciphertext`/`output_index`/`handle` (pre-reshape) | **Holds.** Substrate matches the design's documented starting shape. |
+| §3.10.1 W (weight) | `Transaction::weight() = serialize().len() + calculate_clawback(true, n_out).0`; clawback deterministic in `n_out`, 0 unless `n_padded_outputs > 2` | `transaction.rs:550–556` (`blob_size + Bulletproof::calculate_clawback(true, prefix.outputs.len()).0`); `fcmp/bulletproofs/src/lib.rs:80–95` (`if n_padded_outputs > 2`) | **Holds.** 2a `n_out ∈ {1,2}` ⇒ clawback 0 ⇒ `weight == blob_size` (smooth `fee_N→fee_{N+1}`). |
+| §3.10.1 constants | `MAX_INPUTS = 8`, `MAX_TREE_DEPTH = 24`; ml-dsa-65 signature length constant present (~3309 B) | `shekyl-fcmp/src/lib.rs` (`= 8`, `= 24`); `shekyl-crypto-pq/src/signature.rs` `ML_DSA_65_SIGNATURE_LENGTH` | **Holds.** Grid bounds + PQC-auth dominance premise intact. |
+| §3.10.2 dust nominal | `coin_select.rs` carries a nominal `dust_threshold = 1_000_000` to migrate to `dust()` | present (migration target) | **Holds** (migration target unchanged). |
+| §3.10.3 `FeeDirective` | type does not yet exist (2a-2 populates) | no `FeeDirective` / `fee_no_change` / `fee_with_change` symbols in `shekyl-engine-core/src` | **Holds** (greenfield; 2a-2 introduces it). |
+
+**Findings.**
+
+- **2a-2 PF1 — `FeeEstimationContext` delta under-specifies the fee snapshot
+  (rule-26 B6 / under-specification; §3.10.3 vs §5 re-split note).**
+  §3.10.3's enumerated `FeeEstimationContext` surface delta lists **only**
+  `output_count: usize`. But the §5 re-split note (and §3.3's atomic-snapshot
+  decision) require the §3.3 `FeeEstimates` snapshot to **feed**
+  `FeeEstimationContext` so the **synchronous** `FeeEstimator::estimate_fee`
+  (`fee_estimator.rs:199`, frozen trait surface — "the trait surface does not
+  re-open") can compute a daemon-derived (non-stub) fee. The current context
+  (`fee_estimator.rs:120–134`) carries only `ledger`/`recipient_count`/
+  `input_count`; without the snapshot field it cannot produce a real fee or the
+  `Custom` `quantization_mask` (§3.3). **Disposition:** in-scope pin, not a
+  reopen — `estimate_fee`'s signature is preserved; the change is to the
+  `FeeEstimationContext` **struct**, which the §5 2a-2 row already lists as
+  reshaped. 2a-2 adds **both** `output_count` **and** a `fee_snapshot:
+  FeeEstimates` (or `&FeeEstimates`, carrying `quantization_mask`) to the
+  context. `build`'s async block fetches the snapshot once via the §3.2
+  fee-source handle, populates the context, then calls the unchanged sync
+  `estimate_fee`. Fold this into §3.10.3.
+
+- **2a-2 PF2 — fee-source handle placement on `LocalPendingTx` unpinned (§3.2;
+  minor).** §3.2 says the fee-source is "a capability-narrowed handle (cloned
+  from the engine's daemon at `assemble`)," but does not say **where** it lives:
+  a new `LocalPendingTx` field distinct from `fee_estimator: F`, vs. folding the
+  handle into a now-stateful `DaemonFeeEstimator` (currently zero-sized,
+  `#[derive(Copy, Default)]`, `fee_estimator.rs:225`). **Disposition:** in-scope
+  pin. Preferred shape (keeps the frozen sync `FeeEstimator` strategy and the
+  `Copy` zero-sized `DaemonFeeEstimator` intact): the fee-source is a **separate
+  narrowed capability** held alongside `fee_estimator: F` and consumed in
+  `build`'s async block — **not** by making `DaemonFeeEstimator` stateful (that
+  would couple I/O into the strategy trait and break its `Copy`/zero-sized
+  shape). Confirm against `Engine`'s `assemble` site when 2a-2 wires it; record
+  the chosen field in the 2a-2 commit.
+
+- **No falsified dispositions.** Every §3.1 / §3.7.2 / §3.10.1 source-verified
+  claim holds at the pin. The pass is **confirmatory** for the weight model,
+  signing-context starting shapes, and async boundary — the expected
+  forward-extraction outcome.
+
+### Artifact execution
+
+The §3.10.1 `predict_weight == tx.weight()` self-consistency grid and the
+`fcmp_proof_size` KAT (`[1,8]×[1,24]`) are **explicitly 2a-3-gated** (they need
+the 2a-3 encoder for a serializable tx; §3.10.1 "Gated on the 2a-3 encoder
+existing"). They are **not runnable at 2a-2 pre-flight** and are not a 2a-2
+gate. For 2a-2 the in-scope artifact is the substrate baseline the work
+extends:
+
+| Artifact | Result |
+|---|---|
+| `cargo test -p shekyl-engine-core fee_estim` | 11 passed; 0 failed |
+| `cargo test -p shekyl-engine-core --lib engine::local_pending_tx` | 19 passed; 0 failed |
+| `cargo test -p shekyl-engine-core --lib engine::pending` | 12 passed; 0 failed |
+
+Baseline green; no budget/threshold reconciliation applies at 2a-2 (no
+plan-doc numeric **budget** is gated on 2a-2; the measured grid is 2a-3, per
+rule-26 B9 the threshold gate lands with the bench that measures it).
+
+### Verdict
+
+**2a-2 is clear to implement.** Substrate re-check confirmatory; baseline
+green. Two in-scope pins (PF1, PF2) fold into §3.10.3 / §3.2 — neither is a
+frozen-signature reopen (rule-26 A1), so **no design round is required**. The
+`FeeEstimator::estimate_fee` trait surface is preserved; PF1/PF2 reshape the
+`FeeEstimationContext` struct and add a sibling capability, both already named
+in the §5 2a-2 row.

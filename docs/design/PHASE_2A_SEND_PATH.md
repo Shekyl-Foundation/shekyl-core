@@ -3,9 +3,19 @@
 **Status:** Implementation — §10 pre-implementation checklist agreement items
 signed off (§1 DoD, §5 PR split, §9 open-question owners/targets); remaining
 unchecked §10 boxes are per-PR implementation work (2a-1…2a-4). PR 2a-1
-(daemon fee snapshot + broadcast **primitives**) landing; the `LocalPendingTx`
-async boundary + capability narrowing re-split into 2a-2/2a-3 with their first
-consumers (see §5 re-split note).  
+(daemon fee snapshot + broadcast **primitives**) **merged** (`#109`); the
+`LocalPendingTx` async boundary + capability narrowing re-split into 2a-2/2a-3
+with their first consumers (see §5 re-split note).  
+**2a-2 pre-flight (Round 0):** run on `dev` at the 2a-1 merge —
+**confirmatory**, 2a-2 clear to implement. Substrate re-check found every §3.1 /
+§3.7.2 / §3.10.1 source-verified claim holding at the pin; baseline tests green
+(fee_estimator 11, local_pending_tx 19, pending 12). Two **in-scope pins**
+folded into §3.10.3 / §3.2 — **PF1**: `FeeEstimationContext` must carry the §3.3
+`FeeEstimates` snapshot (not only `output_count`) so the frozen *synchronous*
+`estimate_fee` produces a non-stub fee; **PF2**: the fee-source handle is a
+separate narrowed capability beside `fee_estimator: F`, not a stateful
+`DaemonFeeEstimator`. Neither is a frozen-signature reopen (rule-26 A1), so **no
+design round is required**. Full trail: `PHASE_2A_SEND_PATH_AUDIT.md`.  
 **Scope:** Land a **real** transfer on `Engine<S>`: daemon-backed fees, signed
 `tx_bytes`, daemon broadcast. Excludes Phase **2b** (stake), **2c**
 (addresses/proofs), **2d** (cold bundles), and Phase **6** regtest e2e (tracked
@@ -1349,11 +1359,26 @@ canonical. This sub-unit pins the two constants, derived from W:
 
 The concrete surface deltas, now that W and D are pinned:
 
-- **`FeeEstimationContext` gains output shape.** Add `output_count: usize` (the
-  estimator already takes `recipient_count`/`input_count` and is documented
-  "structural counts only"). The orchestrator calls the structural estimator
-  twice — `output_count = N` and `N+1` — to produce both candidate fees. Public;
-  no secret; consistent with the estimator's existing contract.
+- **`FeeEstimationContext` gains output shape *and* the fee snapshot.** Add
+  `output_count: usize` (the estimator already takes `recipient_count`/
+  `input_count` and is documented "structural counts only"). The orchestrator
+  calls the structural estimator twice — `output_count = N` and `N+1` — to
+  produce both candidate fees. Public; no secret; consistent with the
+  estimator's existing contract. **Also add the §3.3 `FeeEstimates` snapshot to
+  the context** (`fee_snapshot: FeeEstimates`, carrying the single
+  `quantization_mask`): the V3.0 `FeeEstimator::estimate_fee` is **synchronous**
+  and `DaemonFeeEstimator` is **zero-sized** (`fee_estimator.rs:199, 225`), so
+  the daemon-derived feerate cannot be fetched *inside* `estimate_fee` without
+  re-opening the frozen sync trait surface. Instead `build`'s async block
+  fetches the atomic snapshot **once** via the §3.2 fee-source handle and rides
+  it on the context; the unchanged sync `estimate_fee` reads `context.fee_snapshot`.
+  This keeps "the trait surface does not re-open" true — only the
+  `FeeEstimationContext` **struct** (already a 2a-2 reshape target, §5) changes.
+  *(2a-2 pre-flight PF1, `PHASE_2A_SEND_PATH_AUDIT.md`.)* The fee-source handle
+  itself is a **separate** narrowed capability held alongside `fee_estimator: F`
+  on `LocalPendingTx` — **not** folded into a now-stateful `DaemonFeeEstimator`
+  (that would couple daemon I/O into the strategy trait and break its
+  `Copy`/zero-sized shape). *(PF2.)*
 - **`FeeDirective` population (§3.9).** Orchestrator-side, from the `FeeRate`
   snapshot (§3.3):
   - `fee_no_change   = quantize(predict_weight(n_in, N,   depth, fee) × rate)`
