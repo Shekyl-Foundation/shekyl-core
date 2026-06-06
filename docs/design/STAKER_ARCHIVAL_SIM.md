@@ -1716,6 +1716,93 @@ sync does). Rendezvous is the slowest configuration Tor has. The consequence for
   on the `L2–L6` curve; everything else in transport selection is downstream of it and does
   not change the sim. See ledger item L16.
 
+## L14×L15 — proof-of-archival in harmony with retrieval (specification)
+
+*Specification first, code second (`05-system-thinking.mdc`). This section is the design
+the L14 (proof-of-archival / free-rider) and L15 (retrieval / correlated-failure) sim
+layers implement; the sim mechanics fall out of it, not the reverse.*
+
+**The unifying observation.** Two questions have been treated separately: *is the replica
+there?* (L14 — proof-of-archival, the free-rider gate) and *can the data be fetched within
+latency?* (L15 — retrieval availability). They are the **same question answered by the same
+wire operation**: a successful, content-bound retrieval of shard `S` from holder `H`
+*proves* `H` holds `S` and *delivers* `S`. So **real read traffic is the proof of archival,
+wherever it exists** — and explicit oversight challenges are needed only where reads do
+*not* exist. That set is precisely the **cold deep tail**: the oldest, least-recently-fetched,
+most-irreplaceable shards (the same band P3 flags and that L13 finding 2 shows failing first).
+The design goal — *minimize non-productive (oversight-only) traffic* — therefore reduces to:
+**make the productive read path double as the proof path, and confine explicit challenges to
+the unread tail, sampled, aggregated, and credited against real reads.**
+
+**The mechanism, in six parts.**
+
+1. **Retrieval-as-proof (the productive path, zero marginal oversight cost).** Every served
+   read is a signed, **content-bound receipt**: `H` returns the requested byte-range *plus*
+   a Merkle opening of that range against `S`'s public commitment, so the response cannot be
+   produced without the bytes. The receipt `(H, S, height, range)` is the proof-of-service.
+   For hot/warm shards (frequently read), natural read traffic produces enough receipts that
+   **no separate challenge is ever issued** — oversight cost is zero, paid entirely by
+   productive traffic.
+
+2. **Challenge-as-fallback (the oversight path, confined to cold shards).** A shard that
+   accrued too few receipts this epoch (the cold tail) is **spot-checked**: a verifier asks
+   `H` to open a *random* byte-range of `S` under a per-epoch public beacon seed — a
+   proof-of-retrievability (PoR) challenge. This is the **only** non-productive traffic, and
+   it exists only for shards real users are not currently reading.
+
+3. **Challenge ≡ retrieval (the L14↔L15 unification).** A challenge is just a retrieval the
+   network performs *against itself* for oversight: same wire operation, differing only in
+   *who initiates* (a verifier vs. a user) and *whether the payload is consumed*. Therefore
+   **the cold-shard challenge cadence (L14) and the retrieval-availability SLA (L15) are one
+   knob** — set the challenge rate for a band to the retrieval availability you want to
+   *guarantee* for it, and the same read-path latency budget bounds both
+   (challengeable-within-latency ⟺ retrievable-within-latency). This is why L14 and L15 are
+   specified together: the challenge *is* the availability probe.
+
+4. **Minimizing the oversight traffic (the three reducers).** Non-productive traffic =
+   challenges on under-read shards, driven to its floor by: **(a) credit** — a shard a real
+   user read this epoch needs no challenge (its receipt already proved it); **(b) sample** —
+   challenge a *random subset* of the cold tail per epoch, sized to bound the *expected time
+   to detect* a vanished replica below the band's risk tolerance, so the oldest /
+   most-irreplaceable band is challenged *more often* (the age-stratification of P3, now on
+   the oversight cadence); **(c) aggregate** — one batched Merkle multiproof (or vector-
+   commitment opening) covers many shards a holder claims at once, so per-shard oversight
+   cost *falls* as a holder's claimed set grows.
+
+5. **Free-rider economics (L14 proper).** Two free-rider variants, both closed: *store-but-
+   refuse-to-serve* is defeated **directly** by retrieval-as-proof (no receipts ⇒ no reward);
+   *claim-without-storing* is defeated by the **unforgeable content-bound opening** (you
+   cannot answer a random-index challenge without the bytes). The **bond** (L2/L8) is the
+   *capital* cost that makes Sybil-spraying claims expensive; the **challenge-rate × penalty**
+   is the *operational* expected cost that makes faking unprofitable. The sim's L14 question
+   is the cadence: find the cold-shard challenge rate `c` at which
+   `E[fake payoff] = (1−p_detect)·reward + storage_saved − p_detect·penalty < E[honest]`,
+   where `p_detect ≈ c` per epoch (per cold shard) and `penalty` is the slashed bond. Because
+   hot shards self-prove from reads, `c` applies *only* to the cold tail, so oversight traffic
+   `∝ c · (cold-shard count)` — minimized subject to `E[fake] < 0` **and** the L15 SLA.
+
+6. **Privacy harmony (mission priority 2).** Retrieval-as-proof must prove **supply, never
+   demand.** A receipt binds `(pseudonym P, shard S, height)` — that `P` *serves* `S` is
+   already public (`P` posted a bond on `S`). It must **not** reveal *who requested* the read:
+   the fetcher's query privacy is preserved by the onion path (L16), and the receipt is a
+   *holder-side* artifact the requester is unlinkable to. Challenges are issued to a
+   *pseudonym*, not a principal. So the oversight traffic is privacy-clean: it measures that
+   `P` holds `S`, never that anyone *wants* `S`. The L15 **diversity axis** (jurisdiction /
+   ASN / implementation, to make correlated loss visible) is the one place this tension bites
+   — diversity must be measured in coarse, privacy-compatible buckets, never per-holder
+   geolocation.
+
+**Net design.** *Productive reads are the proof wherever they exist; explicit challenges are
+cover traffic confined to the unread cold tail — sampled, aggregated, credited against real
+reads, and rate-set by the band's irreplaceability (P3) and its retrieval-availability SLA
+(L15).* Non-productive (oversight-only) traffic is thereby reduced to exactly the
+least-active, most-irreplaceable shards, at the lowest cadence that keeps faking unprofitable
+and the retrieval SLA met. This is the spec the L14/L15 sim layers test: L15 derives
+`R_target` from a retrieval-availability target under per-holder uptime *and correlated
+failure* (the L4 survival arithmetic assumed independence); L14 finds the challenge cadence
+that makes free-riding unprofitable *given* that hot shards self-prove, so the cadence — the
+non-productive traffic — lands only on the cold tail.
+
 ## Adjustment ledger — forward inputs to gates 4 and 5
 
 Running record of model-surfaced design questions and the candidate adjustments they
