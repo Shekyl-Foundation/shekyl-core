@@ -242,6 +242,15 @@ fn hash_hex(hash: &str) -> Result<[u8; 32], RpcError> {
 /// (including rejection); a transport- or protocol-level failure — or a
 /// response that omits `status` — is an [`RpcError`] instead, so callers
 /// never see a malformed reply masquerading as a daemon rejection.
+///
+/// **Intentionally not `#[non_exhaustive]`.** `shekyl-rpc` is a
+/// Shekyl-owned, in-workspace crate with no out-of-workspace consumers;
+/// the only struct-literal constructors are in-workspace tests
+/// (production code only deserializes this). Pre-genesis, adding a field
+/// later is a bounded in-workspace edit, not a downstream break, so
+/// `#[non_exhaustive]` would buy nothing while blocking the cross-crate
+/// test literals (`21-reversion-clause-discipline.mdc`: reject now,
+/// reopen if an out-of-workspace consumer ever constructs this type).
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct TxRelayResponse {

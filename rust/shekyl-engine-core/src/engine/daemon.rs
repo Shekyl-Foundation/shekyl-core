@@ -75,6 +75,12 @@ const GRACE_BLOCKS_FOR_FEE_ESTIMATE: u64 = 10;
 ///   multiplier ladder `[1, 5, 25, 1000]` applies at the same indices,
 ///   i.e. economy `×1`, standard `×5`, priority `×1000`.
 ///
+/// A `fees` field that is **present but not an array** (string, number,
+/// object) is a malformed reply, not an absent one: it is rejected as
+/// [`RpcError::InvalidFee`] rather than silently falling back to the
+/// scalar path. Only an absent field (or explicit JSON `null`) selects
+/// the scalar ladder.
+///
 /// Untrusted-daemon input is parsed defensively (rule
 /// `20-rust-vs-cpp-policy.mdc` §3): every field is validated, missing
 /// or non-numeric fields and `status != "OK"` map to
@@ -94,8 +100,13 @@ fn fee_estimates_from_value(result: &Value) -> Result<FeeEstimates, RpcError> {
     // surface a per-tier rate or the upstream error verbatim.
     let rate = |per_weight: u64| FeeRate::new(per_weight, mask);
 
-    let (economy, standard, priority) = match result.get("fees").and_then(Value::as_array) {
-        Some(fees) => {
+    // Distinguish "`fees` absent" (legacy scalar daemon → multiplier
+    // ladder) from "`fees` present but not an array" (malformed reply).
+    // Collapsing both to the scalar path — as `and_then(as_array)` would —
+    // lets a daemon send `fees: "oops"` and silently get scalar fallback,
+    // violating the validate-every-field contract above.
+    let (economy, standard, priority) = match result.get("fees") {
+        Some(Value::Array(fees)) => {
             // Indices 0/1/3 must exist; a short array is a malformed
             // estimate, not a silently-clamped one.
             let at = |idx: usize| -> Result<u64, RpcError> {
@@ -105,7 +116,8 @@ fn fee_estimates_from_value(result: &Value) -> Result<FeeEstimates, RpcError> {
             };
             (rate(at(0)?)?, rate(at(1)?)?, rate(at(3)?)?)
         }
-        None => {
+        // Absent (`None`) or explicit JSON `null`: legacy scalar `fee`.
+        None | Some(Value::Null) => {
             let fee = result
                 .get("fee")
                 .and_then(Value::as_u64)
@@ -115,6 +127,8 @@ fn fee_estimates_from_value(result: &Value) -> Result<FeeEstimates, RpcError> {
             };
             (rate(scaled(1)?)?, rate(scaled(5)?)?, rate(scaled(1000)?)?)
         }
+        // Present but not an array (string/number/object): malformed.
+        Some(_) => return Err(RpcError::InvalidFee),
     };
 
     Ok(FeeEstimates {
@@ -345,6 +359,38 @@ mod tests {
             fee_estimates_from_value(&result),
             Err(RpcError::InvalidPriority)
         ));
+    }
+
+    /// A present-but-non-array `fees` (e.g. a string) is malformed, not a
+    /// legacy scalar reply: it must not silently fall back to the `fee`
+    /// path (validate-every-field contract).
+    #[test]
+    fn fee_estimates_rejects_non_array_fees() {
+        let result = json!({
+            "status": "OK",
+            "fees": "oops",
+            "fee": 10u64,
+            "quantization_mask": 8u64,
+        });
+        assert!(matches!(
+            fee_estimates_from_value(&result),
+            Err(RpcError::InvalidFee)
+        ));
+    }
+
+    /// Explicit JSON `null` for `fees` is treated as absent → legacy
+    /// scalar ladder (lenient where a string/number/object is rejected).
+    #[test]
+    fn fee_estimates_null_fees_uses_scalar() {
+        let result = json!({
+            "status": "OK",
+            "fees": null,
+            "fee": 10u64,
+            "quantization_mask": 4u64,
+        });
+        let est = fee_estimates_from_value(&result).expect("null fees → scalar");
+        assert_eq!(est.economy, FeeRate::new(10, 4).unwrap());
+        assert_eq!(est.priority, FeeRate::new(10_000, 4).unwrap());
     }
 
     #[test]

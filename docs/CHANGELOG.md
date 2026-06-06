@@ -18,7 +18,7 @@
   (including `Failed` statuses) is always surfaced to the caller. `ProofStale`
   detection is **deferred to Phase 6** — the C++ daemon reports a stale FCMP++ root
   as a generic verification failure with an empty `reason`, indistinguishable
-  client-side; the reopening criterion (a daemon-side `reference_block_invalid`
+  client-side; the reopening criterion (a daemon-side `fcmp_root_stale`
   signal on `send_raw_transaction`) is recorded in `docs/SHEKYLD_PREREQUISITES.md`
   §5 and `docs/FOLLOWUPS.md`. The `LocalPendingTx` async boundary + capability
   narrowing (§3.1/§3.2) were **re-split** out of 2a-1 to land with their first
