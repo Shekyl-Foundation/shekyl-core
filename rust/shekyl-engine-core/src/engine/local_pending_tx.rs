@@ -68,7 +68,6 @@ use super::pending::{
 use super::refresh::{derive_snapshot_id, LedgerSnapshot};
 use super::signer::{Signer, TransferSigningContext};
 use super::signing_assembly::assemble_tx_to_sign;
-use super::traits::key::FeeDirective;
 use super::traits::{LedgerEngine, PendingTxEngine};
 use super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 
@@ -662,11 +661,7 @@ where
                 &selected.indices,
                 ledger.transfers(),
                 tip_hash,
-                FeeDirective {
-                    fee_no_change: fee_directive.fee_no_change,
-                    fee_with_change: fee_directive.fee_with_change,
-                    dust_threshold: fee_directive.dust_threshold,
-                },
+                fee_directive,
             )
         })?;
         let signing_context = TransferSigningContext::from_tx(tx_to_sign);

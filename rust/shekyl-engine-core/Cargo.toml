@@ -50,6 +50,8 @@ shekyl-fcmp = { path = "../shekyl-fcmp", optional = true }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-rpc = { path = "../shekyl-oxide/shekyl-oxide/rpc", features = ["std"] }
 shekyl-io = { path = "../shekyl-oxide/shekyl-oxide/io" }
+# `signing_assembly` computes leaf `key_image_gen = Hp(O)` per tx-builder.
+shekyl-generators = { path = "../shekyl-oxide/shekyl-oxide/generators" }
 shekyl-tx-builder = { path = "../shekyl-tx-builder" }
 dalek-ff-group = "0.5"
 ciphersuite = "0.4"

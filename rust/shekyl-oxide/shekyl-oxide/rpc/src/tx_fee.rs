@@ -21,9 +21,10 @@ pub const K_DUST: u64 = 1;
 /// replaces this. Reopen iff the KAT moves this by more than a token amount.
 pub const MARGINAL_INPUT_WEIGHT: usize = 32 + 32 + 3385 + 8;
 
-/// Fee-relative dust boundary: fold change at or below spend cost.
+/// Fee-relative dust boundary (§3.10.2 / §3.8.5): an amount is dust when it is
+/// strictly below the cost to spend one additional input at `rate`.
 ///
-/// `amount < dust_threshold(rate)` is the canonical dust predicate.
+/// Canonical predicate: `amount < dust_threshold(rate)`.
 #[must_use]
 pub fn dust_threshold(rate: &FeeRate) -> u64 {
     K_DUST * rate.calculate_fee_from_weight(MARGINAL_INPUT_WEIGHT)

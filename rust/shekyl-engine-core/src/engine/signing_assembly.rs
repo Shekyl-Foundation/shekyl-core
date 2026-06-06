@@ -12,6 +12,7 @@
 
 use curve25519_dalek::EdwardsPoint;
 use shekyl_engine_state::{SubaddressIndex, TransferDetails};
+use shekyl_generators::biased_hash_to_point;
 use shekyl_oxide::primitives::Commitment;
 use shekyl_tx_builder::{LeafEntry, TreeContext};
 
@@ -82,7 +83,7 @@ fn input_context_from_transfer(td: &TransferDetails) -> Result<TxInputSigningCon
     let output_key = output_key_bytes(&td.key);
     let commitment = commitment_bytes(&td.commitment);
     let h_pqc = synthetic_h_pqc_bytes(td.internal_output_index);
-    let key_image_gen = key_image_bytes(td)?;
+    let key_image_gen = key_image_gen_bytes(&output_key);
 
     let leaf_entry = LeafEntry {
         output_key,
@@ -111,12 +112,8 @@ fn commitment_bytes(commitment: &Commitment) -> [u8; 32] {
     commitment.calculate().compress().to_bytes()
 }
 
-fn key_image_bytes(td: &TransferDetails) -> Result<[u8; 32], SendError> {
-    td.key_image
-        .map(|ki| *ki.as_bytes())
-        .ok_or(SendError::CannotSign {
-            reason: "transfer missing key_image",
-        })
+fn key_image_gen_bytes(output_key: &[u8; 32]) -> [u8; 32] {
+    biased_hash_to_point(*output_key).compress().to_bytes()
 }
 
 fn synthetic_h_pqc_bytes(seed: u64) -> [u8; 32] {
