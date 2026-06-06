@@ -37,50 +37,68 @@ fn print_summary(results: &[ScenarioResult]) {
     eprintln!("Note: gini_psd is the pseudonym-level (on-chain-observer) read — reported, not");
     eprintln!("  the pass criterion. A splitting whale looks egalitarian there by design.");
     eprintln!();
+    eprintln!("Durability columns: dS/dN = deep bond-slots / deep need (the BINDING empty-window");
+    eprintln!("  condition: <1 => aggregate slot shortage => deep starves); seat = affording_actors");
+    eprintln!("  >= R_target(deepest) (the looser distinct-actor condition; slack except in tiny pops);");
+    eprintln!("  oldU = frac_under in the oldest age band; wB4 = whale share in the oldest band.");
+    eprintln!();
     eprintln!(
-        "{:<22} {:<16} {:>5} {:>4} {:>5} {:>5} {:>3} | {:>9} {:>9} {:>9} {:>9} {:>9} {:>7} | {:>5} {:>5} {:>5} {:>5} {:>5}",
+        "{:<22} {:<18} {:>5} {:>4} {:>5} {:>3} | {:>8} {:>8} {:>8} {:>7} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>4} {:>4} {:>6} {:>5}",
         "scenario",
         "axis",
         "bond",
         "g",
-        "cap",
         "act",
         "whl",
         "frac_und",
         "deep_und",
         "gini_act",
-        "gini_psd",
-        "max_act",
         "churn",
         "cov",
         "sprd",
         "deep",
         "chrn",
         "ALL",
+        "dS/dN",
+        "seat",
+        "oldU",
+        "wB4",
     );
 
     for r in results {
         let m = &r.final_metrics;
+        let old = m.bands.last();
+        let old_under = old.map(|b| b.frac_under).unwrap_or(0.0);
+        let whale_b4 = old.and_then(|b| b.whale_share);
+        let slot_ratio = if m.deep_need_total > 0 {
+            m.deep_slots_total as f64 / m.deep_need_total as f64
+        } else {
+            0.0
+        };
         eprintln!(
-            "{:<22} {:<16} {:>5.2} {:>4.1} {:>5.1} {:>5} {:>3} | {:>9.3} {:>9.3} {:>9.3} {:>9.3} {:>9.3} {:>7.4} | {:>5} {:>5} {:>5} {:>5} {:>5}",
+            "{:<22} {:<18} {:>5.2} {:>4.1} {:>5} {:>3} | {:>8.3} {:>8.3} {:>8.3} {:>7.4} | {:>4} {:>4} {:>4} {:>4} {:>4} | {:>6.2} {:>4} {:>6.3} {:>5}",
             r.name,
             r.axis,
             r.bond_rate,
             r.age_weight,
-            r.cap,
             r.n_actors,
             if r.whale { "Y" } else { "n" },
             m.frac_under_target,
             m.deep_frac_under_target,
             m.gini_actor,
-            m.gini_pseudonym,
-            m.max_actor_share,
             r.churn,
             yn(r.claims.covered),
             yn(r.claims.spread),
             yn(r.claims.deep_history),
             yn(r.claims.churn_stable),
             yn(r.claims.all_pass),
+            slot_ratio,
+            if m.seating_feasible { "Y" } else { "n" },
+            old_under,
+            match whale_b4 {
+                Some(v) => format!("{v:.2}"),
+                None => "-".into(),
+            },
         );
     }
 

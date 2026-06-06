@@ -1,11 +1,18 @@
 # Staker-archival simulation — design spec
 
-**Status: iteration 1 BUILT AND RUN (2026-06-05).** Crate `rust/shekyl-staking-sim`;
-results and findings in §*Iteration 1 — results (first build)* at the end of this
+**Status: iteration 1 BUILT, RUN, and ROBUSTNESS-SWEPT (2026-06-05).** Crate
+`rust/shekyl-staking-sim`; first-build findings in §*Iteration 1 — results (first
+build)*, robustness-sweep refinements in §*Iteration 1b — robustness sweeps and
+residual-by-age*, and the forward worklist in §*Adjustment ledger* at the end of this
 doc. Headline: the sim reproduces the predicted `g=1` deep-history starvation
 (validating it against the equilibrium analysis), `g(age)` clears deep monotonically,
 and the high-bond empty-window threat surfaces under the coarse 3-point sweep exactly
-as designed. Specification (below) reviewed and blessed to build with the review's
+as designed. The 1b sweeps then establish *which findings are structural vs.
+margin-artifacts*: the `deep_und=1.000` corner is a thin-supply artifact (dissolves to
+`0.317` then `0.000` as provisioning rises at `g=1`), the empty-window is a precise
+aggregate-slot condition (`Σ⌊capital/bond⌋ < Σ_deep R_target`), and the residual-by-age
+crux *moves with `g`* (oldest tail at `g≈1`; shoulder at moderate `g`; hot at high `g`).
+Specification (below) reviewed and blessed to build with the review's
 four conditions absorbed into scope (actor-level spread metric; coarse bond sweep;
 age-weighted scarcity incl. `g=1`; whale-under-bond; competitive-share servo
 incentive); later iterations mapped, not yet specified. Spec-first per
@@ -386,3 +393,120 @@ max_actor_share<0.20` (actor-level); `deep = deep_frac_under<0.10`;
 - **`g(age)` near-term pin:** the clearing premium lives near `age_weight ≈ 3–4` at
   this baseline, but it trades against hot coverage; the right value is coupled to
   aggregate supply, so it is pinned *with* the floor, not independently.
+
+## Iteration 1b — robustness sweeps and residual-by-age
+
+**Status: run (2026-06-05), same crate.** Added in response to the review's
+neutralizer ("a single calibrated point is a single regime; report each finding as
+*holds across [range]*, not *at the point*"). New instruments: a **provisioning sweep**
+(`storage_scale ∈ {0.7,1.0,1.3,1.6,2.0}`), a **`g=1`×provisioning cross** (to test
+whether the `deep_und=1.000` corner is structural or thin-supply), **per-age-band
+metrics** (5 bands: mean-R, residual `frac_under`, actor-Gini, whale-share each), and a
+**durability-seating readout** (`dS/dN = Σ⌊capital/bond⌋ / Σ_deep R_target`, the binding
+empty-window ratio; plus the looser distinct-actor `seating_feasible`). Epochs trimmed
+40 (convergence is ~2 epochs; the cut is runtime-only, verified non-substantive).
+
+### What the sweeps establish
+
+1. **The `deep_und=1.000` corner is a thin-supply artifact, not structural — exactly as
+   predicted.** The `g=1`×provisioning cross dissolves the corner monotonically:
+   `deep_und = 1.000 → 0.317 → 0.000 → 0.000` as `storage_scale` climbs
+   `1.0 → 1.3 → 1.6 → 2.0` at `g=1`. With adequate supply and no premium, hot/mid
+   saturate (band mean-R reaches ~8) and deep gets partially then fully held even at
+   `g=1`. **What is structural** (survives the whole sweep) is the *direction*: without a
+   premium, deep is the last class covered; the *quantitative* total starvation is
+   specific to the thin baseline. The review's prediction is confirmed in the sim it
+   pointed at.
+
+2. **The residual-by-age crux *moves with `g`* — sharper than the oldest-tail
+   prediction.** Per-band `frac_under` shows the under-covered shards are not random
+   scatter, and *where* they sit depends on the premium:
+   - **`g=1` (no premium):** residual is the deep half — bands `0.6–0.8` and `0.8–1.0`
+     both 100 % under; the **oldest tail starves worst**. Confirms the prediction *in the
+     no-premium regime*. The cleanest instance is `g1_p13` (adequate supply, `g=1`):
+     residual is *exactly* the oldest band (`0.8–1.0` at 0.776 under, every younger band
+     0.000) — when supply is sufficient but no premium exists, the last-and-only thing to
+     starve is the oldest tail.
+   - **`g=2` (clearing premium):** the oldest band becomes the **best**-covered deep band
+     (mean-R 6.0, 0 % under) and the residual **migrates to the shoulder** — band
+     `0.4–0.6` straddling the deep threshold, 32.6 % under. The premium over-protects the
+     extreme and leaves the boundary-of-deep as the tight point.
+   - **`g≥4`:** the oldest is **wastefully over**-covered (mean-R 6.6–6.7 > target 6)
+     while **hot** starves (band `0.0–0.2` up to 70 % under). The premium over-rewards age
+     past the point of durability need and robs recency.
+
+   So "the single tightest point" is regime-dependent: oldest tail at `g≈1`, shoulder
+   at moderate `g`, hot at high `g`. A total-residual-minimizing `g` (≈2–3 here) parks
+   the residual at the shoulder. The oldest-tail crux is the *no-premium* crux; the
+   premium converts it into a shoulder crux.
+
+3. **The empty-window is an aggregate-slot condition, not a distinct-actor one.**
+   `bond_high` fails with `dS/dN = 0.97` (`Σ⌊capital/bond⌋ = 620 < Σ_deep R_target = 638`)
+   while `seating_feasible = true` (`affording_actors = 80 ≥ R_target_deepest = 6`). The
+   distinct-actor condition (#4's literal "seat `R_target(deep)` affording actors per
+   shard") is **slack** for any populous network — there are always ≥ `R_target` capital-
+   rich actors. The condition that actually binds is the **aggregate bond-budget**: each
+   actor can bond only `⌊capital/bond⌋` deep shards, and the network fails deep when the
+   summed budget drops below the summed deep need. Gate 4's empty-window test is
+   therefore `dS/dN ≥ 1` (capital axis), *separately* from the storage axis.
+
+4. **Capital and storage are orthogonal binding axes.** `dS/dN` cleanly separates the
+   two empty-window causes: `bond_high` fails with `dS/dN = 0.97` (capital/bond-bound;
+   storage is fine), while `pop_thin` fails with `dS/dN = 1.21` (capital is fine;
+   storage/provisioning-bound). A coverage failure is one, the other, or both — and the
+   metric now says which. Gate 4 owns the capital axis (`dS/dN`); gate 5 owns the storage
+   axis (provisioning floor).
+
+5. **Baseline findings hold across the provisioning range (de-artifacted).** The
+   provisioning sweep at `g=2` reproduces the supply story structurally: `prov_p07`
+   (under-provisioned) starves (`frac_under 0.821`, residual at oldest); `prov_p10`
+   = baseline (`0.062`); `prov_p13`+ pass cleanly. The `g(age)`-reallocates-not-
+   manufactures finding (#3 first build) is confirmed structural — it appears wherever
+   storage binds (`p07`, `p10`) and resolves with supply (`p13`+), not only at the
+   calibrated point.
+
+### 1b model-fidelity caveats
+
+- **Bonds are modeled flat across deep shards, not age-scaled.** The review's framing
+  assumed an age-scaled bond ("highest bond at oldest"). Under a *flat* deep bond the
+  affording-actor scarcity (mechanism a) never concentrates at the oldest tail — the
+  aggregate-slot condition (mechanism b) binds uniformly. An **age-scaled bond** would
+  concentrate mechanism-(a) scarcity at the oldest shards (highest bond → fewest
+  affording actors there), potentially making the distinct-actor condition bind exactly
+  at the tail. Whether the bond is flat-on-deep or age-scaled is a **gate-4 design
+  choice** the sim has now framed; iteration 1 tests the flat case.
+- **The whale's deep concentration is visible but bounded in current scenarios.**
+  `bond_high_whale` recovers deep (`0.875 → 0.292`) with the whale at oldest-band share
+  `wB4 ≈ 0.12` — real centralization, but the single whale is not yet large enough to be
+  the *sole* deep holder. A gate-4 stress (whale sized to the only-affording-actor regime
+  under an age-scaled bond) is the sharpened durability test #4 points at.
+
+## Adjustment ledger — forward inputs to gates 4 and 5
+
+Running record of model-surfaced design questions and the candidate adjustments they
+imply, so the eventual gate-4/gate-5 work starts from the sim's evidence rather than a
+blank page. Each item names the **evidence** (sim finding), the **disposition**
+(decided / open), and the **reversion criterion** per `21-reversion-clause-discipline.mdc`
+where a decision is provisional.
+
+| # | Question (gate) | Evidence | Candidate adjustment / disposition |
+|---|---|---|---|
+| L1 | **`g(age)` value** (gate 4 / near-term pin) | Clearing premium ≈ `age_weight 2–4`; raising `g` reallocates hot→deep; residual minimized (parked at shoulder) near `g≈2–3`; `g≥4` wastes replication on the oldest and starves hot. | **Open, leaning `g≈2–3`.** `g` is a genesis-fixed consensus constant: pick it for the *thick steady state* (where `pop_thick` clears all four), not the thin margin. Reopen if the thick-state sweep at the chosen supply moves the residual-minimizing `g`. |
+| L2 | **Bond upper bound** (gate 4) | `bond_high` (rate 8) → `dS/dN=0.97` → deep starves; the binding condition is `Σ⌊capital/bond⌋ ≥ Σ_deep R_target`, **not** distinct-actor count (slack at 80≥6). | **Decided (constraint form):** gate-4's upper bound is a **durability** constraint stated as `dS/dN ≥ 1` over the expected capital distribution — not a fairness limit. Fine sweep pins the rate that is simultaneously Sybil-deterring and `dS/dN ≥ 1`. |
+| L3 | **Empty-window definition** (gate 4) | Two orthogonal binding axes: capital (`dS/dN`) and storage (provisioning). `bond_high` is capital-bound (`dS/dN 0.97`); `pop_thin` is storage-bound (`dS/dN 1.21`). | **Decided (definition):** the window is empty iff *no* bond rate satisfies `dS/dN ≥ 1` **and** Sybil-deterrence simultaneously. Storage adequacy is gate 5's axis, tested separately; the two are not conflated. |
+| L4 | **Flat vs age-scaled bond** (gate 4) | Sim models flat deep bond; mechanism-(a) actor scarcity never concentrates at the tail under flat bonds. | **Open.** An age-scaled bond would move the affording-actor scarcity onto the oldest shards specifically. Decide flat-on-deep vs age-scaled before gate-4 fine sweep; re-run the seating metric under the chosen shape. |
+| L5 | **Oldest-tail provision** (gate 4 + gate 5 jointly) | At `g=1` the residual is *exactly* the oldest tail (`g1_p13`); under a premium the oldest is over-covered. The tail is the crux only absent a premium. | **Open.** Candidates: (a) the age premium itself already covers the tail (sim supports this at `g≥2`), so possibly *no extra* tail mechanism is needed if `g` is set right; (b) permanent foundation floor on the tail as belt-and-suspenders; (c) joint foundation+staker `R_target` for the tail. Decide whether (a) suffices or (b)/(c) is required for irreplaceability margin. |
+| L6 | **Foundation floor sizing** (gate 5) | `pop_thin` fails outright (`frac_under 1.000`, storage-bound, `dS/dN` fine); total coverage is supply-bound; a deep-prioritizing `g` leaves a *hot* shortfall during thin periods (`g≥4` band `0.0–0.2` up to 70 % under). | **Decided (sizing input):** the floor must cover (i) the absolute coverage gap when population is thin, **and** (ii) the *hot* class specifically when a deep-prioritizing `g` de-prioritizes it during the thin handoff window. Gate 5 sizes both. |
+| L7 | **`g`-for-steady-state** (gate 4↔5 coupling) | `g` trades hot↔deep; the foundation floor absorbs whichever class `g` de-prioritizes in thin periods. | **Decided (method):** choose `g` for the thick steady state; let gate-5's floor backstop the thin-period de-prioritized class. `g` and the floor are pinned *together*, not independently. |
+
+### Robustness-sweep verdicts (which findings are structural)
+
+- **Structural (survive the provisioning/endowment sweeps):** deep starves without a
+  premium (direction); `g(age)` reallocates rather than manufactures coverage; total
+  coverage is supply-bound; the empty-window is an aggregate-slot (`dS/dN`) condition on
+  the capital axis distinct from the storage axis; actor-level spread contains the whale
+  the pseudonym metric hides.
+- **Margin-artifacts (regime-specific, do not generalize):** the `deep_und=1.000`
+  *magnitude* (a thin-supply corner that dissolves with provisioning); the specific
+  residual-minimizing `g` value (baseline-supply-dependent); the exact `frac_under`
+  borderline failures (`0.062` at strict `<0.05`).

@@ -23,6 +23,11 @@ pub struct SimConfig {
     /// `age = u^age_skew`, u~U(0,1): >1 hot-heavy, <1 deep-heavy, =1 uniform.
     pub age_skew: f64,
 
+    /// Multiplies every actor's storage capacity (the provisioning axis). 1.0 =
+    /// baseline; >1 = more aggregate storage (tests whether margin findings are
+    /// structural or thin-baseline artifacts).
+    pub storage_scale: f64,
+
     // endowment mix
     pub frac_storage_rich: f64,
     pub storage_rich_storage: usize,
@@ -90,13 +95,15 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
         })
         .collect();
 
+    let scale = |s: usize| ((s as f64 * cfg.storage_scale).round() as usize).max(1);
+
     let mut actors: Vec<Actor> = Vec::with_capacity(cfg.n_actors);
     for _ in 0..cfg.n_actors {
         let storage_rich = rng.next_f64() < cfg.frac_storage_rich;
         let (storage_capacity, capital) = if storage_rich {
-            (cfg.storage_rich_storage, cfg.storage_rich_capital)
+            (scale(cfg.storage_rich_storage), cfg.storage_rich_capital)
         } else {
-            (cfg.capital_rich_storage, cfg.capital_rich_capital)
+            (scale(cfg.capital_rich_storage), cfg.capital_rich_capital)
         };
         actors.push(Actor {
             storage_capacity,
@@ -106,7 +113,7 @@ fn build_world(cfg: &SimConfig, rng: &mut Rng) -> World {
     }
     if cfg.whale {
         actors.push(Actor {
-            storage_capacity: cfg.whale_storage,
+            storage_capacity: scale(cfg.whale_storage),
             capital: cfg.whale_capital,
             is_whale: true,
         });
@@ -135,6 +142,7 @@ pub fn run_sim(cfg: &SimConfig) -> ScenarioResult {
         r_target_hot: cfg.r_target_hot,
         r_target_deep: cfg.r_target_deep,
         deep_threshold: cfg.deep_threshold,
+        bond_rate: cfg.bond_rate,
     };
 
     // Seed price so the first epoch's marginal-value calc is non-degenerate.
@@ -219,6 +227,7 @@ fn baseline() -> SimConfig {
         n_shard: 240,
         n_actors: 80,
         age_skew: 1.0, // uniform age distribution
+        storage_scale: 1.0,
         frac_storage_rich: 0.5,
         storage_rich_storage: 22,
         storage_rich_capital: 20.0,
@@ -237,7 +246,9 @@ fn baseline() -> SimConfig {
         deep_threshold: 0.5,
         r_target_hot: 3.0,
         r_target_deep: 6.0,
-        epochs: 100,
+        // Myopic Gauss–Seidel converges in ~2 epochs; 40 is ample headroom and
+        // keeps the churn window meaningful.
+        epochs: 40,
         churn_window: 20,
         seed: 0x5EED_1234,
     }
@@ -316,6 +327,35 @@ pub fn build_scenarios() -> Vec<SimConfig> {
         c.name = format!("age_dist_{label}");
         c.axis = "age_distribution".into();
         c.age_skew = skew;
+        out.push(c);
+    }
+
+    // --- Provisioning robustness (storage scale). A finding that survives this is
+    // structural; one that only appears at the calibrated margin is an artifact. ---
+    for (label, scale) in [
+        ("p07", 0.7),
+        ("p10", 1.0),
+        ("p13", 1.3),
+        ("p16", 1.6),
+        ("p20", 2.0),
+    ] {
+        let mut c = baseline();
+        c.name = format!("prov_{label}");
+        c.axis = "provisioning".into();
+        c.storage_scale = scale;
+        out.push(c);
+    }
+
+    // --- g=1 × provisioning cross. Tests whether the deep_und=1.000 corner is
+    // structural or a thin-baseline artifact: the prediction is that as provisioning
+    // rises, hot saturates (its marginal 1/R falls) and deep becomes partially held
+    // even at g=1, so deep_und(g=1) should fall below 1.000. ---
+    for (label, scale) in [("p10", 1.0), ("p13", 1.3), ("p16", 1.6), ("p20", 2.0)] {
+        let mut c = baseline();
+        c.name = format!("g1_{label}");
+        c.axis = "g1_x_provisioning".into();
+        c.age_weight = 0.0;
+        c.storage_scale = scale;
         out.push(c);
     }
 

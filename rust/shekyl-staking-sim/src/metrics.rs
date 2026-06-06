@@ -11,6 +11,29 @@ use crate::model::{r_target, World};
 use crate::reward::RewardEval;
 use serde::Serialize;
 
+/// Number of age bands for the per-band breakdowns. The top band is the
+/// oldest-shard tail — the crux where `R_target`, bond, and scarcity all peak.
+pub const N_BANDS: usize = 5;
+
+/// Per-age-band breakdown. The aggregate spread metric masks durability-critical
+/// concentration (a whale at 0.11 aggregate could be 0.4 in the deep band); age
+/// resolution is what exposes it. `frac_under` per band is the residual-by-age
+/// readout (the oldest-tail prediction is that the residual concentrates in the top
+/// band, not random scatter).
+#[derive(Debug, Clone, Serialize)]
+pub struct AgeBandMetrics {
+    pub band_lo: f64,
+    pub band_hi: f64,
+    pub n_shards: usize,
+    pub mean_r: f64,
+    pub frac_under: f64,
+    /// Actor-level Gini of shards-held *within this band*.
+    pub gini_actor: f64,
+    /// Whale's share of all holdings *within this band* (durability-critical
+    /// concentration), if a whale is present.
+    pub whale_share: Option<f64>,
+}
+
 /// Gini coefficient of a non-negative distribution. 0 = perfectly equal, →1 =
 /// maximally concentrated. Empty / all-zero ⇒ 0.
 pub fn gini(values: &[f64]) -> f64 {
@@ -62,12 +85,34 @@ pub struct CoverageMetrics {
     /// Mean replication restricted to hot shards (for the deep-vs-hot comparison
     /// that is the bond-asymmetry signature).
     pub hot_mean_r: f64,
+
+    // --- per-age-band breakdown (residual-by-age + per-band concentration) ---
+    pub bands: Vec<AgeBandMetrics>,
+
+    // --- durability seating (gate-4 empty-window condition) ---
+    /// Number of actors with `capital ≥ bond_rate` (i.e. who can afford at least one
+    /// deep-shard bond). If this drops below `r_target_deepest`, the deepest shards
+    /// *cannot* be seated by enough distinct actors — a durability failure, not a
+    /// fairness one. This is the precise empty-window condition #4 sharpened to.
+    pub affording_actors: usize,
+    /// `R_target` at the deepest age (the seating bar for the oldest tail).
+    pub r_target_deepest: usize,
+    /// `affording_actors ≥ r_target_deepest`: the necessary condition for the oldest
+    /// tail to be durably seatable at this bond rate / capital distribution.
+    pub seating_feasible: bool,
+    /// Aggregate deep-bond slots `Σ floor(capital / bond_rate)` vs aggregate deep
+    /// need `Σ_{deep} R_target(age)` (the aggregate-capacity companion to the
+    /// per-shard seating count).
+    pub deep_slots_total: usize,
+    pub deep_need_total: usize,
 }
 
 pub struct TargetParams {
     pub r_target_hot: f64,
     pub r_target_deep: f64,
     pub deep_threshold: f64,
+    /// Bond rate in force, needed to compute durability seating.
+    pub bond_rate: f64,
 }
 
 pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> CoverageMetrics {
@@ -169,6 +214,78 @@ pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> Coverage
     }
     let gini_pseudonym = gini(&pseudonym_counts);
 
+    // Per-age-band breakdown.
+    let n_actors = world.actors.len();
+    let whale_idx = world.actors.iter().position(|a| a.is_whale);
+    let mut band_n = [0usize; N_BANDS];
+    let mut band_r_sum = [0usize; N_BANDS];
+    let mut band_under = [0usize; N_BANDS];
+    let mut band_actor_counts: Vec<Vec<f64>> = vec![vec![0.0; n_actors]; N_BANDS];
+    #[allow(clippy::needless_range_loop)]
+    for s in 0..n_shard {
+        let age = world.shards[s].age;
+        let band = ((age * N_BANDS as f64) as usize).min(N_BANDS - 1);
+        band_n[band] += 1;
+        band_r_sum[band] += r[s];
+        if r[s] < r_target(age, tp.r_target_hot, tp.r_target_deep) {
+            band_under[band] += 1;
+        }
+        for a in 0..n_actors {
+            if world.holdings[a][s] {
+                band_actor_counts[band][a] += 1.0;
+            }
+        }
+    }
+    let bands: Vec<AgeBandMetrics> = (0..N_BANDS)
+        .map(|b| {
+            let lo = b as f64 / N_BANDS as f64;
+            let hi = (b as f64 + 1.0) / N_BANDS as f64;
+            let n = band_n[b];
+            let counts = &band_actor_counts[b];
+            let band_total: f64 = counts.iter().sum();
+            AgeBandMetrics {
+                band_lo: lo,
+                band_hi: hi,
+                n_shards: n,
+                mean_r: if n > 0 { band_r_sum[b] as f64 / n as f64 } else { 0.0 },
+                frac_under: if n > 0 { band_under[b] as f64 / n as f64 } else { 0.0 },
+                gini_actor: gini(counts),
+                whale_share: whale_idx.map(|w| {
+                    if band_total > 0.0 {
+                        counts[w] / band_total
+                    } else {
+                        0.0
+                    }
+                }),
+            }
+        })
+        .collect();
+
+    // Durability seating (gate-4 empty-window condition).
+    let affording_actors = world
+        .actors
+        .iter()
+        .filter(|a| tp.bond_rate <= 0.0 || a.capital >= tp.bond_rate)
+        .count();
+    let r_target_deepest = r_target(1.0, tp.r_target_hot, tp.r_target_deep);
+    let seating_feasible = affording_actors >= r_target_deepest;
+    let deep_slots_total: usize = if tp.bond_rate > 0.0 {
+        world
+            .actors
+            .iter()
+            .map(|a| (a.capital / tp.bond_rate).floor() as usize)
+            .sum()
+    } else {
+        // No bond: every actor can seat any deep shard up to its storage.
+        world.actors.iter().map(|a| a.storage_capacity).sum()
+    };
+    let deep_need_total: usize = world
+        .shards
+        .iter()
+        .filter(|s| s.is_deep(tp.deep_threshold))
+        .map(|s| r_target(s.age, tp.r_target_hot, tp.r_target_deep))
+        .sum();
+
     CoverageMetrics {
         min_r,
         frac_under_target,
@@ -180,6 +297,12 @@ pub fn coverage(world: &World, eval: &RewardEval, tp: &TargetParams) -> Coverage
         deep_mean_r,
         deep_frac_under_target,
         hot_mean_r,
+        bands,
+        affording_actors,
+        r_target_deepest,
+        seating_feasible,
+        deep_slots_total,
+        deep_need_total,
     }
 }
 
