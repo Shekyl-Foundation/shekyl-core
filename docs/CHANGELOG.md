@@ -4,6 +4,26 @@
 
 ### Added
 
+- **wallet: Phase 2a-1 — daemon fee-snapshot + broadcast primitives.** Implements
+  the `DaemonEngine`-trait primitives on `DaemonClient`
+  (`docs/design/PHASE_2A_SEND_PATH.md` §3.3/§3.6, §5 row 2a-1):
+  `get_fee_estimates` issues **one** `get_fee_estimate` JSON-RPC call and stores a
+  single snapshot-level `quantization_mask` across all tiers (no tier-vs-tier skew);
+  `submit_transaction` parses `tx_bytes`, computes the `TxHash` **locally** (never
+  trusts a daemon-returned hash), and maps the daemon relay verdict onto
+  `TxSubmitOutcome` via the **honest-subset** rule (`status == "OK"` → `Submitted`;
+  `double_spend`/`fee_too_low` → `DaemonRejectedTerminal { DoubleSpend | FeeTooLow }`;
+  every other failure → `Malformed`). `Rpc::publish_transaction` (`shekyl-oxide`,
+  Shekyl-owned) reshaped to return a `TxRelayResponse` so the full daemon verdict
+  (including `Failed` statuses) is always surfaced to the caller. `ProofStale`
+  detection is **deferred to Phase 6** — the C++ daemon reports a stale FCMP++ root
+  as a generic verification failure with an empty `reason`, indistinguishable
+  client-side; the reopening criterion (a daemon-side `fcmp_root_stale`
+  signal on `send_raw_transaction`) is recorded in `docs/SHEKYLD_PREREQUISITES.md`
+  §5 and `docs/FOLLOWUPS.md`. The `LocalPendingTx` async boundary + capability
+  narrowing (§3.1/§3.2) were **re-split** out of 2a-1 to land with their first
+  consumers (fee-source in 2a-2, submitter in 2a-3), since both capabilities are
+  consumer-less in 2a-1 (see §5 re-split note).
 - **stake-lifecycle: Round 3 dual-wargamer synthesis — top finding F0 re-gates
   closure.** Two independent adversarial passes over the §7.5 wargame were
   synthesized into `docs/design/PHASE_2B_STAKE_LIFECYCLE.md` §7.5.3 (2026-06-05).

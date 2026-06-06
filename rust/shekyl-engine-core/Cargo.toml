@@ -54,7 +54,16 @@ chacha20poly1305 = { version = "0.10", optional = true }
 hkdf = { version = "0.12", optional = true }
 sha2 = { version = "0.10", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
+# The daemon JSON-RPC send path (`DaemonClient::get_fee_estimates` /
+# `submit_transaction`, `engine/daemon.rs`) is always-compiled production
+# code that builds `get_fee_estimate` params and parses the response as
+# `serde_json::Value` (defensive untrusted-daemon parsing per
+# `20-rust-vs-cpp-policy.mdc` §3). `serde_json` is already in the workspace
+# lockfile (transitively via `shekyl-rpc`, plus this crate's build- and
+# dev-deps), so making it a direct non-optional dependency adds no new
+# third-party crate (`17-dependency-discipline.mdc`). It is therefore no
+# longer listed under the `multisig` feature.
+serde_json = "1"
 hex = { version = "0.4", optional = true }
 thiserror = "2"
 tracing = "0.1"
@@ -349,7 +358,7 @@ required-features = ["bench-internals"]
 
 [features]
 default = []
-multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "serde_json", "hex", "chacha20poly1305", "hkdf", "sha2"]
+multisig = ["shekyl-fcmp/multisig", "modular-frost", "serde", "hex", "chacha20poly1305", "hkdf", "sha2"]
 # Internal feature: re-exports otherwise-`pub(crate)` types under a
 # `__bench_internals` module so external Criterion harnesses can
 # measure them. Not part of the public API; consumers must not depend

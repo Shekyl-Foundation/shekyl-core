@@ -213,6 +213,58 @@ fn hash_hex(hash: &str) -> Result<[u8; 32], RpcError> {
         .map_err(|_| RpcError::InvalidNode("hash wasn't 32-bytes".to_string()))
 }
 
+/// The daemon's verdict on a `send_raw_transaction` broadcast.
+///
+/// This is **not** a full mirror of the daemon's
+/// `on_send_raw_transaction` response (`core_rpc_server.cpp`). The daemon
+/// serializes ~10 rejection-class booleans (`double_spend`, `fee_too_low`,
+/// `invalid_input`, `invalid_output`, `too_big`, `overspend`,
+/// `too_few_outputs`, `sanity_check_failed`, `tx_extra_too_big`,
+/// `nonzero_unlock_time`) plus `not_relayed` and a `reason` string. This
+/// struct models only the **verdict subset the wallet consumes**:
+///
+/// - `status` — `"OK"` (accepted into the pool, possibly relay-local only)
+///   vs. any rejection status (`"Failed"`);
+/// - `double_spend` / `fee_too_low` — the two rejection classes the wallet
+///   maps to distinct terminal outcomes.
+///
+/// Every other daemon rejection class collapses to a generic terminal
+/// `Malformed` in the wallet mapping (no dedicated outcome), so modeling
+/// the corresponding flags here would be unread state — fields without a
+/// consumer (`21-reversion-clause-discipline.mdc`). `#[serde(default)]`
+/// (and the absence of `deny_unknown_fields`) means the daemon's
+/// unmodeled fields deserialize-and-ignore rather than failing the parse;
+/// when a future wallet outcome needs a finer class (e.g. a daemon
+/// stale-FCMP++-root flag, `docs/FOLLOWUPS.md`), the field is added here
+/// **with** its consumer.
+///
+/// [`Rpc::publish_transaction`] returns this for a parsed daemon verdict
+/// (including rejection); a transport- or protocol-level failure — or a
+/// response that omits `status` — is an [`RpcError`] instead, so callers
+/// never see a malformed reply masquerading as a daemon rejection.
+///
+/// **Intentionally not `#[non_exhaustive]`.** `shekyl-rpc` is a
+/// Shekyl-owned, in-workspace crate with no out-of-workspace consumers;
+/// the only struct-literal constructors are in-workspace tests
+/// (production code only deserializes this). Pre-genesis, adding a field
+/// later is a bounded in-workspace edit, not a downstream break, so
+/// `#[non_exhaustive]` would buy nothing while blocking the cross-crate
+/// test literals (`21-reversion-clause-discipline.mdc`: reject now,
+/// reopen if an out-of-workspace consumer ever constructs this type).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct TxRelayResponse {
+    /// Daemon status string: `"OK"` on accept, otherwise a rejection
+    /// status (e.g. `"Failed"`). An empty/absent value is rejected as
+    /// [`RpcError::InvalidNode`] by [`Rpc::publish_transaction`], never
+    /// surfaced as a rejection verdict.
+    pub status: String,
+    /// The transaction double-spends an output already spent or in-pool.
+    pub double_spend: bool,
+    /// The offered fee is below the daemon's required minimum.
+    pub fee_too_low: bool,
+}
+
 /// An RPC connection to a Monero daemon.
 ///
 /// This is abstract such that users can use an HTTP library (which being their choice), a
@@ -773,40 +825,46 @@ pub trait Rpc: Sync + Clone {
         }
     }
 
-    /// Publish a transaction.
+    /// Broadcast a transaction to the daemon, returning the daemon's
+    /// accept-or-reject decision.
+    ///
+    /// The returned [`TxRelayResponse`] carries the daemon's verdict,
+    /// including on rejection: an [`Err`] is reserved for transport- or
+    /// protocol-level failures, while a daemon that parses the
+    /// transaction and decides to reject it yields an [`Ok`] with
+    /// `status != "OK"` and the relevant rejection flags set. Callers map
+    /// the verdict onto their own submission-outcome type; this method
+    /// does not collapse a daemon rejection into an error, because the
+    /// rejection class (double-spend, fee-too-low, …) is information the
+    /// caller needs.
+    ///
+    /// A reply that **omits `status`** is a protocol-shape failure, not a
+    /// daemon verdict: under `#[serde(default)]` it would otherwise
+    /// deserialize as `status == ""` and be indistinguishable from a
+    /// rejection. Such a reply is rejected as [`RpcError::InvalidNode`]
+    /// so a malformed/incomplete response is never mistaken for a
+    /// terminal daemon rejection by higher layers.
     fn publish_transaction(
         &self,
         tx: &Transaction,
-    ) -> impl Send + Future<Output = Result<(), RpcError>> {
+    ) -> impl Send + Future<Output = Result<TxRelayResponse, RpcError>> {
         async move {
-            #[allow(dead_code)]
-            #[derive(Debug, Deserialize)]
-            struct SendRawResponse {
-                status: String,
-                double_spend: bool,
-                fee_too_low: bool,
-                invalid_input: bool,
-                invalid_output: bool,
-                low_mixin: bool,
-                not_relayed: bool,
-                overspend: bool,
-                too_big: bool,
-                too_few_outputs: bool,
-                reason: String,
+            let res: TxRelayResponse = self
+                .rpc_call(
+                    "send_raw_transaction",
+                    Some(
+                        json!({ "tx_as_hex": hex::encode(tx.serialize()), "do_sanity_checks": false }),
+                    ),
+                )
+                .await?;
+
+            if res.status.is_empty() {
+                Err(RpcError::InvalidNode(
+                    "send_raw_transaction reply omitted status".to_string(),
+                ))?;
             }
 
-            let res: SendRawResponse = self
-        .rpc_call(
-          "send_raw_transaction",
-          Some(json!({ "tx_as_hex": hex::encode(tx.serialize()), "do_sanity_checks": false })),
-        )
-        .await?;
-
-            if res.status != "OK" {
-                Err(RpcError::InvalidTransaction(tx.hash()))?;
-            }
-
-            Ok(())
+            Ok(res)
         }
     }
 

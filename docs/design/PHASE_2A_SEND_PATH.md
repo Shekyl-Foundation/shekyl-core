@@ -1,6 +1,11 @@
 # Phase 2a — refresh + send path (design)
 
-**Status:** Round 0 — specification for implementation.  
+**Status:** Implementation — §10 pre-implementation checklist agreement items
+signed off (§1 DoD, §5 PR split, §9 open-question owners/targets); remaining
+unchecked §10 boxes are per-PR implementation work (2a-1…2a-4). PR 2a-1
+(daemon fee snapshot + broadcast **primitives**) landing; the `LocalPendingTx`
+async boundary + capability narrowing re-split into 2a-2/2a-3 with their first
+consumers (see §5 re-split note).  
 **Scope:** Land a **real** transfer on `Engine<S>`: daemon-backed fees, signed
 `tx_bytes`, daemon broadcast. Excludes Phase **2b** (stake), **2c**
 (addresses/proofs), **2d** (cold bundles), and Phase **6** regtest e2e (tracked
@@ -457,10 +462,50 @@ named FOLLOWUPS row with reversion clause, not a silent stub.
    A remote/untrusted daemon must not be able to influence the id the wallet
    records for its own transaction; the daemon response is consulted only for
    accept/reject/already-known status, not for identity.
-3. `Rpc::publish_transaction(&tx)`.
-4. Map daemon response → `TxSubmitOutcome::Submitted { hash }` /
-   `AlreadyKnown { hash }` (hash = the locally-computed value from step 2) /
-   `ProofStale` (see below) / `DaemonRejectedTerminal` / `DaemonAmbiguous`.
+3. `Rpc::publish_transaction(&tx)` — returns the daemon's verdict as a
+   `TxRelayResponse` (the daemon-level accept/reject, flags, and `reason`);
+   `Err` is reserved for transport/protocol failures.
+4. Map daemon response → `TxSubmitOutcome` (hash = the locally-computed value
+   from step 2). See the **honest-subset mapping** below.
+
+**Honest-subset mapping (verified against `core_rpc_server.cpp`).**
+`on_send_raw_transaction` sets a dedicated boolean for ~10 rejection classes
+(`double_spend`, `fee_too_low`, `invalid_input`, `invalid_output`,
+`overspend`, `too_big`, `too_few_outputs`, `sanity_check_failed`,
+`tx_extra_too_big`, `nonzero_unlock_time`). The wallet mapping is narrow by
+**choice**, not daemon limitation: 2a-1 needs only two distinct terminal
+outcomes (`double_spend`, `fee_too_low`); the other flagged classes carry no
+distinct wallet remedy, so they collapse to `Malformed`. `TxRelayResponse`
+models only the consumed subset (`status`, `double_spend`, `fee_too_low`) —
+the unmodeled flags deserialize-and-ignore under `#[serde(default)]` rather
+than becoming unread state (`21-reversion-clause-discipline.mdc`).
+
+The mapping's *genuine* indistinguishability is narrower than "every other
+rejection": it is specifically the **unflagged generics** — an
+**already-known duplicate** and a **stale FCMP++ root** — which set *no*
+dedicated flag and yield `status == "Failed"` with an empty `reason` (the
+specific cause is only `LOG_PRINT_L0`'d server-side, never propagated). These
+are the cases a wallet cannot separate without a daemon-side signal.
+`DaemonClient::submit_transaction` therefore produces only:
+
+| Daemon reply | `TxSubmitOutcome` |
+|--------------|-------------------|
+| `status == "OK"` (incl. `not_relayed`) | `Submitted { hash }` |
+| `status != "OK"` + `double_spend` | `DaemonRejectedTerminal { DoubleSpend }` |
+| `status != "OK"` + `fee_too_low` | `DaemonRejectedTerminal { FeeTooLow }` |
+| `status != "OK"`, any other / no flag | `DaemonRejectedTerminal { Malformed }` |
+| `tx_bytes` fail to re-parse (our own bytes) | `DaemonRejectedTerminal { Malformed }` (no round-trip) |
+| transport / protocol failure | `Err(Self::Error)` → orchestrator maps to `SubmitError::DaemonAmbiguous` |
+
+`AlreadyKnown` is **not** a daemon-verdict outcome — the daemon gives no
+distinguishing signal. It is the **orchestrator's** wallet-side §5.2
+retry-contract product: on a retry where the wallet already recorded a
+`TxHash` for these exact bytes, a generic daemon rejection is interpreted as
+already-known (best effort). `DaemonAmbiguous` is likewise not a
+`TxSubmitOutcome` variant: ambiguity is the *absence* of a daemon verdict
+(`Err`), mapped to the existing `SubmitError::DaemonAmbiguous` (R9, reservation
+retained) by the orchestrator — representing it as an outcome would duplicate
+the concept across two enums.
 
 **`ProofStale` outcome.** FCMP++ membership proofs are bound to a curve-tree
 `tree_root` snapshot (§3.4). Between build and submit the chain can advance and
@@ -472,10 +517,32 @@ be preserved; only the proof is stale). Phase 2a adds a `ProofStale` variant to
 the submit outcome so the caller can drive a bounded rebuild loop rather than
 discarding the reservation.
 
+**`ProofStale` detection is deferred to Phase 6 (reversion clause,
+`21-reversion-clause-discipline.mdc`).** The `ProofStale` *variant* exists in
+`TxSubmitOutcome` from 2a-1 so the bounded rebuild loop has a stable target,
+but **no code path constructs it yet**: per the honest-subset mapping above, a
+stale root is presently indistinguishable from a generic terminal rejection
+(both are `status == "Failed"`, empty `reason`), so it maps to
+`TerminalErrorKind::Malformed`.
+
+- **Rejection (now).** Wallet-side heuristic detection (e.g. resubmit-and-diff,
+  or treating every generic `Failed` as possibly-stale) is rejected: it would
+  misclassify genuine malformed-tx build bugs as recoverable and drive
+  pointless rebuild loops.
+- **Reopening criterion (substrate-anchored).** A **daemon-side stale-root
+  signal** — a dedicated flag on `send_raw_transaction` (or an equivalent
+  consensus-exposed reason code) that distinguishes "reference block too
+  old/recent/not-found" from generic verification failure. Tracked as a
+  `SHEKYLD_PREREQUISITE` in `docs/FOLLOWUPS.md`.
+- **Interim guard.** The proactive `reference.rs` validity horizon (§5.4 /
+  `select_reference_block`) bounds how stale a built proof can get before the
+  wallet pre-emptively rebuilds, so the reactive signal is a backstop, not the
+  primary defense.
+
 The exact **validity-horizon bound** (how many blocks a built proof stays
 submittable before the wallet should pre-emptively rebuild) is **deferred** — see
-§9 open question. Phase 2a only needs the reactive `ProofStale` signal; the
-proactive horizon is a later refinement.
+§9 open question. Phase 2a only needs the `ProofStale` *variant*; both the
+reactive detection and the proactive horizon tuning are later refinements.
 
 **Privacy note (remote-daemon origin leak).** When the wallet submits to a
 **remote** daemon, that daemon learns the wallet's IP originated this tx, even
@@ -1484,13 +1551,29 @@ producer of `SignedProofs`-shaped material).
 
 | PR | Title | Files (indicative) | Delivers |
 |----|-------|-------------------|----------|
-| **2a-1** | Daemon fee snapshot + broadcast | `daemon.rs`, `fee_estimator.rs`, `local_pending_tx.rs`, `lifecycle.rs`, `test_support.rs` tests | Atomic single-RPC fee snapshot + `submit_transaction` (local hash, `ProofStale`); async build/submit; capability-narrowed fee-source + submitter on pending engine |
-| **2a-2** | Signing context + fee/change directive plumbing | `signer.rs`, `traits/key.rs`, `local_pending_tx.rs`, `fee_estimator.rs`, `coin_select.rs`, `shekyl-engine-state` only if public fields needed | Populated `TransferSigningContext`/`TxToSign` per §3.7.2 (tx-level `FcmpPlusPlusContext { tree }`; per-input public path on `TxInputSigningContext`); `TxOutputContext` reshape (payment-amount confidential-on-message, change-amount engine-side); C5 per-field locality assertion (§3.7.8). **F4/F8 orchestrator side (§3.10):** `predict_weight` predictor + `FeeEstimationContext` output-shape input; `FeeDirective` population (`fee_no_change`/`fee_with_change`/`dust_threshold`); one canonical `dust()` fn + `K_DUST`/`MARGINAL_INPUT_WEIGHT`; migrate `coin_select` nominal `1_000_000` → `dust()` |
-| **2a-3** | KeyActor sign + tx-builder + wire encode | `key_actor.rs`, `local_keys.rs`, `shekyl-tx-builder` (new `wire` module: typed-component → `shekyl_oxide::Transaction::V2` adapter, **no** serialize↔parse round-trip; serialize-twice determinism test; `wire`-only `shekyl_oxide::transaction` import guard; gains top `shekyl-oxide` dep, §4) | Non-empty `tx_bytes`; one-round-trip two-phase sign (§3.7.7); `TxSignatures`/`TxInputSignature` reshape + delete `FcmpPlusPlusWitness` + `OutputInfo` `ZeroizeOnDrop` fix (§3.7.3); C3 path precondition + C5 structural test; remove `SignTransactionTraitSurfaceIncomplete` on transfer path. **F4/F8 engine side (§3.10):** pre-prove variant decision + dust-fold (§3.8.2) + `InsufficientFunds`; `fcmp_proof_size` KAT over `[1,8]×[1,24]` + `predict_weight == tx.weight()` self-consistency test |
+| **2a-1** | Daemon fee snapshot + broadcast primitives | `daemon.rs`, `traits/daemon.rs`, `shekyl-oxide/rpc/lib.rs` | Atomic single-RPC fee snapshot (`DaemonEngine::get_fee_estimates`) + `DaemonEngine::submit_transaction` (local hash, honest-subset verdict map, `TxSubmitOutcome` variants incl. deferred `ProofStale`); `Rpc::publish_transaction` reshaped to surface the daemon relay verdict. **No `LocalPendingTx` wiring** — these are the `DaemonEngine`-trait primitives that 2a-2/2a-3 consume |
+| **2a-2** | Signing context + fee/change directive plumbing + pending-engine async wiring | `signer.rs`, `traits/key.rs`, `local_pending_tx.rs`, `lifecycle.rs`, `fee_estimator.rs`, `coin_select.rs`, `shekyl-engine-state` only if public fields needed | Populated `TransferSigningContext`/`TxToSign` per §3.7.2 (tx-level `FcmpPlusPlusContext { tree }`; per-input public path on `TxInputSigningContext`); `TxOutputContext` reshape (payment-amount confidential-on-message, change-amount engine-side); C5 per-field locality assertion (§3.7.8). **F4/F8 orchestrator side (§3.10):** `predict_weight` predictor + `FeeEstimationContext` output-shape input; `FeeDirective` population (`fee_no_change`/`fee_with_change`/`dust_threshold`); one canonical `dust()` fn + `K_DUST`/`MARGINAL_INPUT_WEIGHT`; migrate `coin_select` nominal `1_000_000` → `dust()`. **Async boundary + capability narrowing (§3.1/§3.2):** `build`/`submit` stop wrapping `std::future::ready`; capability-narrowed fee-source handle lands **with its first consumer** (the §3.3 snapshot feeding `FeeEstimationContext`) — see re-split note below |
+| **2a-3** | KeyActor sign + tx-builder + wire encode | `key_actor.rs`, `local_keys.rs`, `shekyl-tx-builder` (new `wire` module: typed-component → `shekyl_oxide::Transaction::V2` adapter, **no** serialize↔parse round-trip; serialize-twice determinism test; `wire`-only `shekyl_oxide::transaction` import guard; gains top `shekyl-oxide` dep, §4) | Non-empty `tx_bytes`; one-round-trip two-phase sign (§3.7.7); `TxSignatures`/`TxInputSignature` reshape + delete `FcmpPlusPlusWitness` + `OutputInfo` `ZeroizeOnDrop` fix (§3.7.3); C3 path precondition + C5 structural test; remove `SignTransactionTraitSurfaceIncomplete` on transfer path. **F4/F8 engine side (§3.10):** pre-prove variant decision + dust-fold (§3.8.2) + `InsufficientFunds`; `fcmp_proof_size` KAT over `[1,8]×[1,24]` + `predict_weight == tx.weight()` self-consistency test. **Submit async boundary + submitter capability (§3.1/§3.2):** `submit` routes real `tx_bytes` through the capability-narrowed submitter handle — lands **with its first consumer** (real bytes exist here, not before) |
 | **2a-4** | Hybrid send test + doc closeout | `local_pending_tx.rs` / `lifecycle.rs` tests, `WALLET_REWRITE_PLAN.md`, `FOLLOWUPS.md`, `CHANGELOG.md` | End-to-end `TestDaemon` build→submit; checklist §10 |
 
 **Dependency:** 2a-2 and 2a-1 can overlap only if 2a-3 gates on both; default
 serial order above.
+
+**Re-split note (2a-1 landed as daemon primitives only).** The original 2a-1
+row bundled the `DaemonEngine` primitives *and* the `LocalPendingTx` async
+boundary + capability narrowing (§3.1/§3.2). At implementation, both narrowed
+capabilities proved **consumer-less within 2a-1**: the fee-source snapshot is
+not consumed until 2a-2 reshapes `FeeEstimationContext` (the synchronous
+`estimate_fee` is stubbed until then), and the submitter cannot fire real
+`tx_bytes` until 2a-3 (`build_sync` signs `TransferSigningContext::phase1_stub()`;
+wiring the submitter against stub bytes parse-fails → `Malformed` and breaks the
+existing submit tests). Plumbing two daemon capabilities with no caller is the
+"optionality without a named caller is debt" anti-pattern
+(`21-reversion-clause-discipline.mdc`). Disposition: 2a-1 ships the
+`DaemonEngine`-trait primitives alone; the async boundary + each capability
+land **with their first consumer** — fee-source in 2a-2, submitter in 2a-3.
+This keeps every capability paired with a live caller and keeps each PR
+bisectable.
 
 **FCMP tree fixture:** `transfer_e2e` bench notes missing tree fixture
 (`docs/benchmarks/shekyl_rust_v0.manifest.md`). Per §3.0.5, 2a-3 tests use
@@ -1523,9 +1606,9 @@ synthetic vectors satisfy that seam without the client existing yet.
 | Signer / builder failure | `SendError::Tx` or `SendError::CannotSign` |
 | Output not yet spendable at reference block (`eligible_height > reference_height`) | `BuildError::OutputNotYetSpendable { eligible_height, reference_block_height, wait_blocks }` (C2, §3.7.5) — clean wait-N-blocks signal, **not** an opaque assembly miss |
 | Locally-assembled path malformed (length/shape) | `SendError::CannotSign` via the C3 precondition (§3.7.6) — distinguishes local-assembly bug from prover bug **before** committing prover effort |
-| Malformed tx at submit | `SubmitError::DaemonRejectedTerminal` |
-| Ambiguous daemon | `SubmitError::DaemonAmbiguous` (existing R9 discipline) |
-| Stale FCMP++ root at submit | `TxSubmitOutcome::ProofStale` → bounded rebuild/re-sign/re-submit (§3.6); **not** terminal, **not** ambiguous |
+| Malformed tx at submit (incl. generic daemon `Failed`) | `TxSubmitOutcome::DaemonRejectedTerminal { Malformed }` → `SubmitError::DaemonRejectedTerminal` (§3.6 honest-subset mapping) |
+| Ambiguous daemon (transport/protocol failure) | `Err(Self::Error)` → `SubmitError::DaemonAmbiguous` (existing R9 discipline) |
+| Stale FCMP++ root at submit | **Deferred to Phase 6** — currently maps to `DaemonRejectedTerminal { Malformed }` (indistinguishable from generic `Failed`). `TxSubmitOutcome::ProofStale` variant exists for the future bounded rebuild loop; detection reopens on a daemon-side stale-root signal (`SHEKYLD_PREREQUISITE`, §3.6). Interim guard: proactive `reference.rs` horizon |
 
 Pre-genesis: **no** fallback to stub fee or synthetic tx hash on production
 paths. The tx hash is always computed locally from the submitted bytes (§3.6
@@ -1641,7 +1724,7 @@ step 2), never read from a daemon field.
 
 ## 10. Review checklist (pre-implementation)
 
-- [ ] §1 definition of done agreed (incl. locally-computed-path reframe + real-root gating)
+- [x] §1 definition of done agreed (incl. locally-computed-path reframe + real-root gating)
 - [x] §3.0 F1 decided: no per-leaf path query; bulk-leaf RPC + local assembly
 - [x] §3.0.5 F10 closed into F1; real-root validity gated on curve-tree client + Phase 6
 - [ ] §3.0.3 bulk-leaf RPC + KAT added to `SHEKYLD_PREREQUISITES.md`
@@ -1664,8 +1747,8 @@ step 2), never read from a daemon field.
 - [x] §3.6 remote-daemon origin-leak documented in threat model
 - [x] §4 two-phase PQC encode sequence + transfer-kind scope pinned
 - [x] §4 wire encoder owner agreed — byte layout owned by `shekyl-oxide`; thin `SignedProofs → Transaction::V2` adapter in `shekyl-tx-builder` `wire` module (no `shekyl-tx-wire` crate; not engine-core; not `shekyl-io`)
-- [ ] §5 PR split fits branching policy
-- [ ] §9 open questions have owners / Round 1 targets (incl. #5 validity horizon)
+- [x] §5 PR split fits branching policy
+- [x] §9 open questions have owners / Round 1 targets (incl. #5 validity horizon)
 - [ ] `WALLET_REWRITE_PLAN.md` cross-link added when 2a-1 lands
 
 ---

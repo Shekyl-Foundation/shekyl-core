@@ -281,6 +281,7 @@ fn default_fee_estimates() -> FeeEstimates {
         economy: FeeRate::new(1, 1).expect("economy fee rate is non-zero"),
         standard: FeeRate::new(10, 1).expect("standard fee rate is non-zero"),
         priority: FeeRate::new(100, 1).expect("priority fee rate is non-zero"),
+        quantization_mask: 1,
     }
 }
 
@@ -802,6 +803,7 @@ mod tests {
             economy: FeeRate::new(7, 1).unwrap(),
             standard: FeeRate::new(70, 1).unwrap(),
             priority: FeeRate::new(700, 1).unwrap(),
+            quantization_mask: 1,
         };
         daemon.set_fee_estimates(custom);
         for _ in 0..3 {

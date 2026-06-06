@@ -39,7 +39,7 @@
 
 use shekyl_rpc::{FeeRate, Rpc};
 
-use crate::engine::error::IoError;
+use crate::engine::error::{IoError, TerminalErrorKind};
 use crate::engine::pending::TxHash;
 
 /// Multi-priority fee snapshot returned by
@@ -55,25 +55,37 @@ use crate::engine::pending::TxHash;
 ///
 /// # `#[non_exhaustive]`
 ///
-/// Phase 2a is expected to extend this struct with per-snapshot
-/// metadata (e.g. estimation timestamp, daemon-reported
-/// `quantization_mask`, observed mempool weight). `#[non_exhaustive]`
-/// permits the additive growth without a Stage 1 `DaemonEngine`
-/// amendment per §8.2: callers construct via field-by-name and
-/// match exhaustively only on the listed fields.
+/// Phase 2a may extend this struct with further per-snapshot
+/// metadata (e.g. estimation timestamp, observed mempool weight).
+/// `#[non_exhaustive]` permits the additive growth without a Stage 1
+/// `DaemonEngine` amendment per §8.2: callers construct via
+/// field-by-name and match exhaustively only on the listed fields.
 ///
 /// # Per-tier `FeeRate`
 ///
 /// `FeeRate` is the `shekyl_rpc::FeeRate` (per-weight cost + rounding
-/// mask) returned by [`Rpc::get_fee_rate`]. The three fields on this
-/// struct correspond one-to-one with the three non-`Custom`
+/// mask) returned by [`Rpc::get_fee_rate`]. The three tier fields on
+/// this struct correspond one-to-one with the three non-`Custom`
 /// `FeePriority` variants; resolving a `FeePriority` to a `FeeRate`
 /// is a structural projection rather than a fresh daemon call.
+///
+/// # Atomic single-RPC snapshot (§3.3)
+///
+/// Per `PHASE_2A_SEND_PATH.md` §3.3, the whole snapshot derives from
+/// **one** `get_fee_estimate` JSON-RPC call (not three per-tier
+/// `get_fee_rate` calls): the response's fee array maps to the three
+/// tiers (`economy`/`standard`/`priority` → indices `0`/`1`/`3` per
+/// `V3_WALLET_DECISION_LOG.md`) and its single `quantization_mask`
+/// is stored once on [`Self::quantization_mask`]. This guarantees the
+/// tier band and the
+/// [`Custom`](super::super::FeePriority::Custom) feerate's rounding
+/// mask all derive from the same daemon view, with no tier-vs-tier
+/// skew from interleaved calls.
 ///
 /// [`docs/V3_WALLET_DECISION_LOG.md`]: ../../../../../docs/V3_WALLET_DECISION_LOG.md
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Phase 2a-stub: production callers land with §3.1 fee policy.
+#[allow(dead_code)] // tier fields read by the §3.1 fee policy (2a-2); snapshot produced here in 2a-1.
 pub(crate) struct FeeEstimates {
     /// Fee rate corresponding to
     /// [`FeePriority::Economy`](super::super::FeePriority::Economy):
@@ -91,57 +103,121 @@ pub(crate) struct FeeEstimates {
     /// the fastest tier short of fee-spiking, targeting next-block
     /// inclusion under normal mempool conditions.
     pub priority: FeeRate,
+
+    /// The daemon's fee-rounding `quantization_mask` for this
+    /// snapshot, carried **once** so a
+    /// [`Custom`](super::super::FeePriority::Custom) feerate can be
+    /// constructed against the same daemon view as the tier band
+    /// (`FeeRate::new(rate, quantization_mask)`, §3.3). Identical to
+    /// the `mask` already embedded in each tier `FeeRate`; surfaced
+    /// here so the `Custom` path does not need a fresh daemon call.
+    pub quantization_mask: u64,
 }
 
 /// Outcome of a daemon transaction submission via
 /// [`DaemonEngine::submit_transaction`].
 ///
-/// Carries the daemon's view of the submission: whether the daemon
-/// accepted the transaction freshly ([`Self::Submitted`]) or
-/// recognized it as a duplicate of one it already knows
-/// ([`Self::AlreadyKnown`]). Both variants carry the resulting
-/// [`TxHash`] so callers can correlate with the wallet's local
-/// reservation tracking and with §5.2's retry-contract verification:
-/// resubmitting bytes for which the wallet already received a hash
-/// must produce that same hash regardless of which variant the
-/// daemon returned.
+/// Carries the daemon's view of the submission. The variant set is the
+/// **honest subset** the daemon's `send_raw_transaction` reply can
+/// actually distinguish (§3.6, as amended), plus two variants the
+/// orchestrator / a later phase produce rather than the daemon-verdict
+/// mapping:
+///
+/// - [`Self::Submitted`] — daemon `status == "OK"`; accepted to the
+///   pool.
+/// - [`Self::DaemonRejectedTerminal`] — daemon `status != "OK"`; a
+///   final, non-recoverable rejection. The daemon flags ~10 rejection
+///   classes; the wallet maps only `double_spend` and `fee_too_low` to
+///   distinct terminal kinds **by choice** (2a-1 needs no finer remedy)
+///   and collapses the rest to [`TerminalErrorKind::Malformed`]. The
+///   cases that are *genuinely* indistinguishable client-side are the
+///   **unflagged** generics — an **already-known** duplicate and a
+///   **stale FCMP++ root** — which set no dedicated flag and yield
+///   `status == "Failed", reason == ""`. Verified against
+///   `core_rpc_server.cpp::on_send_raw_transaction`.
+/// - [`Self::AlreadyKnown`] — **not** produced by the daemon-verdict
+///   mapping (the daemon gives no distinguishing signal). It is the
+///   orchestrator's wallet-side product: on a §5.2 retry where the
+///   wallet already recorded a [`TxHash`] for these exact bytes, a
+///   generic daemon rejection is interpreted as already-known. Best
+///   effort, by construction.
+/// - [`Self::ProofStale`] — reactive stale-root signal whose
+///   **detection is deferred to Phase 6** (the daemon currently emits
+///   no stale-root-specific flag, so a stale root is presently
+///   indistinguishable from a generic terminal rejection). The variant
+///   exists now so the §3.6 bounded rebuild loop has a stable target;
+///   the proactive `reference.rs` validity horizon is the interim
+///   guard. Reopening criterion: a daemon-side stale-root signal
+///   (`SHEKYLD_PREREQUISITE`, tracked in `docs/FOLLOWUPS.md`).
+///
+/// # Transport failures are not an outcome
+///
+/// A failed daemon round-trip (timeout, connection drop) is **not** a
+/// `TxSubmitOutcome`: it is [`Self::Error`](DaemonEngine::Error), which
+/// the orchestrator maps to
+/// [`SubmitError::DaemonAmbiguous`](crate::engine::error::SubmitError::DaemonAmbiguous)
+/// (R9 discipline — reservation retained). Ambiguity is the *absence*
+/// of a daemon verdict; representing it here too would duplicate the
+/// concept across two enums.
 ///
 /// # `#[non_exhaustive]`
 ///
-/// Phase 2a may add variants for richer daemon outcomes
-/// (mempool-rejected-with-reason, relayed-but-unconfirmed, etc.);
 /// `#[non_exhaustive]` lets the enum extend without a Stage 1
-/// amendment per §8.2.
+/// amendment per §8.2 (e.g. a relayed-but-unconfirmed advisory once
+/// daemon feedback supports it).
 ///
 /// # Retry contract (§5.2)
 ///
 /// Per the §5.2 retry contract, [`DaemonEngine::submit_transaction`]
 /// is conditionally idempotent: same `tx_bytes` produce the same
-/// [`TxHash`] (because the hash is a deterministic function of the
-/// bytes) and the daemon dedupes by hash. A caller may retry on
-/// transient transport failures and observe `AlreadyKnown` on the
-/// second attempt; that is success, not duplicate work.
+/// [`TxHash`] (the hash is a deterministic function of the bytes) and
+/// the daemon dedupes by hash. A caller may retry on transient
+/// transport failures; the wallet-side hash record is what lets the
+/// orchestrator recognize the retry as [`Self::AlreadyKnown`].
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)] // Phase 2a-stub: production callers land with §5.2 retry contract.
 pub(crate) enum TxSubmitOutcome {
-    /// The daemon accepted this transaction as a fresh submission.
-    /// Subsequent submission of the same bytes returns
-    /// [`Self::AlreadyKnown`] with the same hash.
+    /// The daemon accepted this transaction as a fresh submission
+    /// (`status == "OK"`).
     Submitted {
         /// Hash of the submitted transaction. Deterministic in the
-        /// `tx_bytes` argument: the daemon and the caller compute
-        /// the same hash from the same bytes.
+        /// `tx_bytes` argument and computed **locally** from those
+        /// bytes (§3.6 step 2), never read from a daemon field.
         hash: TxHash,
     },
 
-    /// The daemon recognized this transaction as already-known. The
-    /// caller may treat this as a successful idempotent retry per
-    /// §5.2.
+    /// The transaction is already known to the daemon. Produced by the
+    /// orchestrator's §5.2 retry-contract logic (wallet-side dedup by
+    /// local hash), **not** by the daemon-verdict mapping — the daemon
+    /// collapses already-known into the generic terminal bucket.
     AlreadyKnown {
-        /// Hash of the submitted transaction. Equal to the hash the
-        /// daemon returned on the original [`Self::Submitted`].
+        /// Hash of the submitted transaction. Equal to the hash
+        /// recorded on the original [`Self::Submitted`].
         hash: TxHash,
+    },
+
+    /// The transaction's FCMP++ membership proof references a curve-tree
+    /// root the daemon no longer accepts. Recoverable by rebuilding
+    /// against a fresh root, re-signing, and re-submitting (§3.6); the
+    /// spend selection may be preserved. **Detection deferred to Phase
+    /// 6** (see the type-level reopening criterion); no code path
+    /// constructs this variant yet.
+    ProofStale {
+        /// Hash of the (stale) submitted transaction, locally computed.
+        hash: TxHash,
+    },
+
+    /// The daemon rejected the transaction with a final,
+    /// non-recoverable outcome. The orchestrator drops the reservation
+    /// from `in_flight` and releases its `output_locks`; recourse is to
+    /// rebuild against current chain state.
+    DaemonRejectedTerminal {
+        /// The terminal sub-discriminant. The daemon distinguishes only
+        /// [`TerminalErrorKind::DoubleSpend`] and
+        /// [`TerminalErrorKind::FeeTooLow`]; all other terminal
+        /// rejections map to [`TerminalErrorKind::Malformed`].
+        kind: TerminalErrorKind,
     },
 }
 

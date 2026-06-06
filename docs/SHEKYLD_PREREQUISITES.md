@@ -130,7 +130,7 @@ of the curve-tree root is a separate property regtest does not
 exercise.
 
 **FCMP++ reference-block age rules still run.**
-`src/cryptonote_core/blockchain.cpp:3620–3652` is **not** wrapped in a
+`src/cryptonote_core/blockchain.cpp:3801–3855` is **not** wrapped in a
 `FAKECHAIN` skip. V3 spends must reference a curve-tree root from a
 sufficiently-aged block, in regtest just as on mainnet. The harness
 must therefore mine enough blocks before constructing test transfers
@@ -400,3 +400,85 @@ client that gracefully consumes the field if it appears later.
 ---
 
 <!-- Append new Phase 0 audits below this line, each as its own ## section. -->
+
+## 5. Stale FCMP++ root signal on `send_raw_transaction` (Phase 6 prerequisite)
+
+### Verdict: ABSENT — file as daemon-side follow-up, NOT a Phase 2a blocker
+
+`shekyld` does not expose a signal that distinguishes "this transaction's
+FCMP++ membership proof references a curve-tree root I no longer accept"
+(reference block too old / too recent / not found) from a generic
+transaction-verification failure. A stale-root rejection and a genuinely
+malformed transaction produce the **same** `send_raw_transaction` reply, so a
+wallet cannot reactively detect the recoverable stale-root case.
+
+### Evidence of absence
+
+**Validation sets only the generic flag.** Reference-block age/identity
+validation in `src/cryptonote_core/blockchain.cpp:3801–3855` (the FCMP++
+reference-block rules, **not** wrapped in a `FAKECHAIN` skip per §1) detects
+the staleness conditions as **distinct** points — not-found (`:3803`),
+too-recent (`:3811`), too-old (`:3822`), depth-out-of-range (`:3846`) — but
+signals every one through `tvc.m_verifivation_failed = true` with no
+dedicated sub-flag. There is no `m_fcmp_root_stale` /
+`m_reference_block_too_old` member on `tx_verification_context`. (Detection
+already exists; only the flag is missing — surfacing the signal is
+mechanical, not a verification rewrite.)
+
+**The RPC reply collapses it.** `on_send_raw_transaction`
+(`src/rpc/core_rpc_server.cpp:1334–1368`) maps the verification context to
+the reply: it sets dedicated booleans only for `double_spend`, `invalid_input`,
+`invalid_output`, `too_big`, `overspend`, `fee_too_low`, `too_few_outputs`,
+`tx_extra_too_big`, and `nonzero_unlock_time`. A generic
+`m_verifivation_failed` (which a stale root produces) yields
+`status == "Failed"` with **no flag set and an empty `reason`** — the specific
+cause is only `LOG_PRINT_L0`'d server-side (line 1361), never propagated to
+the client.
+
+### Why this matters and why it is deferrable
+
+FCMP++ membership proofs are bound to a curve-tree `tree_root` snapshot
+(`PHASE_2A_SEND_PATH.md` §3.4). Between build and submit the chain advances and
+the daemon can reject a transaction because its proof references a root the
+daemon no longer treats as valid. This is **recoverable** — the remedy is
+rebuild-against-fresh-root, re-sign, re-submit, preserving the spend selection
+— and the wallet would like to drive a bounded rebuild loop
+(`TxSubmitOutcome::ProofStale`) rather than discarding the reservation.
+
+For V3.0 / Phase 2a this gap is **not blocking**. The wallet's
+`DaemonClient::submit_transaction` (§3.6 honest-subset mapping) maps the
+generic `Failed` bucket — which includes a stale root — to
+`DaemonRejectedTerminal { Malformed }`. The **proactive** guard
+(`reference.rs` validity horizon / `select_reference_block`, §5.4) bounds how
+stale a built proof can become before the wallet pre-emptively rebuilds, so the
+reactive signal is a backstop, not the primary defense. Treating every generic
+`Failed` as possibly-stale is explicitly rejected: it would misclassify real
+build-path defects as recoverable and drive pointless rebuild loops.
+
+### Recommendation
+
+File a daemon-side follow-up at `docs/FOLLOWUPS.md`:
+
+> **`shekyld` stale-FCMP++-root signal on `send_raw_transaction`.** Add a
+> `tvc.m_fcmp_root_stale` member and a dedicated rejection flag
+> (`fcmp_root_stale: bool`) to the `send_raw_transaction` reply, set at the
+> **recoverable** reference-block validation points
+> (`blockchain.cpp:3801–3855`) — not-found (`:3803`), too-old (`:3822`),
+> depth-out-of-range (`:3846`) — but **not** too-recent (`:3811`), which is
+> not a rebuild-against-a-fresher-root case. The Rust wallet's
+> `submit_outcome_from_response` then splits
+> `TxSubmitOutcome::ProofStale` out of the generic `Malformed` bucket and
+> drives the §3.6 bounded rebuild loop. Target version: V3.1 (Phase 6
+> end-to-end harness consumes it).
+
+The wallet rewrite plan does **not** wait for this. Phase 2a ships the
+`ProofStale` variant unconstructed and relies on the proactive horizon; the
+reactive path lights up additively when the daemon flag appears, with no
+wallet wire-format break.
+
+### Pre-task verdict (stale-root signal)
+
+**No `shekyld` change required for Phase 2a to start.** The `ProofStale`
+detection is the only thing gated, and it is deferred to Phase 6 behind this
+prerequisite. Phase 2a builds the forward-compatible mapping that consumes the
+flag when it lands.
